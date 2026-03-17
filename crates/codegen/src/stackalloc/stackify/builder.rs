@@ -19,6 +19,7 @@ use super::{
         DefInfo, compute_def_info, compute_dom_depth, compute_phi_out_sources, compute_phi_results,
         function_has_internal_return,
     },
+    terminal_chain::compute_terminal_chain_blocks,
     trace::{NullObserver, StackifyObserver},
 };
 
@@ -253,6 +254,7 @@ impl<'a> StackifyBuilder<'a> {
         };
 
         let mut spill_requests: BitSet<ValueId> = BitSet::default();
+        let terminal_chain_blocks = compute_terminal_chain_blocks(ctx, &templates);
 
         // Blocks that are reached from multi-way branches inherit a dynamic stack and
         // run an entry normalization prologue (single-pred only; critical edges split).
@@ -268,6 +270,7 @@ impl<'a> StackifyBuilder<'a> {
             spill,
             slots,
             &templates,
+            &terminal_chain_blocks,
             &mut alloc,
             &mut spill_requests,
             inherited_stack,

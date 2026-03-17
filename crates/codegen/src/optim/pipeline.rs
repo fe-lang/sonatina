@@ -18,8 +18,13 @@ use crate::{
 
 use super::{
     adce::AdceSolver,
-    aggregate::{AggregateCombine, AggregateScalarize},
+    aggregate::{
+        AggregateCombine, AggregateScalarize, LocalObjectArgMap, ObjectEffectSummaryMap,
+        ObjectLoadStore, ObjectMemoryAnalysis, collect_local_object_arg_info,
+        collect_local_object_arg_info_with_effects, compute_object_effect_summaries,
+    },
     cfg_cleanup::CfgCleanup,
+    dead_arg::{DeadArgElimConfig, run_dead_arg_elim},
     dead_func::{DeadFuncElimConfig, collect_object_roots, run_dead_func_elim},
     egraph::run_egraph_pass,
     gvn::GvnSolver,
@@ -42,6 +47,8 @@ pub enum Pass {
     CfgCleanup,
     /// Local aggregate InstCombine rewrites.
     AggregateCombine,
+    /// Object-space load/store forwarding and dead-store elimination for fresh semantic objects.
+    ObjectLoadStore,
     /// Aggregate scalarization (SROA + closed SSA-web scalarization).
     AggregateScalarize,
     /// Per-space load/store forwarding and dead-store elimination.
@@ -69,6 +76,7 @@ impl Pass {
             Pass::LegalizeMultiResult => "legalize_multi_result",
             Pass::CfgCleanup => "cfg_cleanup",
             Pass::AggregateCombine => "aggregate_combine",
+            Pass::ObjectLoadStore => "object_load_store",
             Pass::AggregateScalarize => "aggregate_scalarize",
             Pass::LoadStore => "load_store",
             Pass::Sccp => "sccp",
@@ -85,13 +93,16 @@ impl Pass {
 ///
 /// Steps execute sequentially. [`Step::Inline`] operates on the whole module;
 /// [`Step::FuncPasses`] runs per-function passes in parallel across all
-/// functions; [`Step::DeadFuncElim`] prunes unreachable function definitions.
+/// functions; [`Step::DeadArgElim`] rewrites dead private formals; [`Step::DeadFuncElim`]
+/// prunes unreachable function definitions.
 #[derive(Debug, Clone)]
 pub enum Step {
     /// Run the inliner across the whole module (cross-function).
     Inline,
     /// Run per-function optimization passes in parallel across all functions.
     FuncPasses(Vec<Pass>),
+    /// Remove dead formal arguments from rewritable functions and update direct callsites.
+    DeadArgElim,
     /// Remove unreachable function definitions rooted at object `entry`/`include` directives.
     DeadFuncElim,
 }
@@ -101,6 +112,7 @@ impl Step {
         match self {
             Step::Inline => "inline",
             Step::FuncPasses(_) => "func_passes",
+            Step::DeadArgElim => "dead_arg_elim",
             Step::DeadFuncElim => "dead_func_elim",
         }
     }
@@ -114,10 +126,9 @@ impl Step {
 /// # Analysis lifecycle
 ///
 /// Each per-function pass that requires analyses (CFG, dominator tree, loop
-/// tree) recomputes them from the current IR state. Standalone
-/// [`run_func_passes`] calls reuse analysis storage within one function's pass
-/// sequence; module pipelines execute pass-major function rounds so
-/// cross-function behavior summaries stay fresh between passes.
+/// tree) recomputes them from the current IR state. Module pipelines execute
+/// pass-major function rounds so cross-function behavior summaries stay fresh
+/// between passes.
 pub struct Pipeline {
     steps: Vec<Step>,
     /// Configuration for all [`Step::Inline`] steps in this pipeline.
@@ -127,6 +138,7 @@ pub struct Pipeline {
 const PRIMARY_FUNC_PASSES: &[Pass] = &[
     Pass::CfgCleanup,
     Pass::AggregateCombine,
+    Pass::ObjectLoadStore,
     Pass::AggregateScalarize,
     Pass::LoadStore,
     Pass::Sccp,
@@ -142,12 +154,15 @@ const PRIMARY_FUNC_PASSES: &[Pass] = &[
 const SECONDARY_FUNC_PASSES: &[Pass] = &[
     Pass::CfgCleanup,
     Pass::AggregateCombine,
+    Pass::ObjectLoadStore,
     Pass::AggregateScalarize,
     Pass::LoadStore,
     Pass::Sccp,
     Pass::Gvn,
     Pass::CfgCleanup,
 ];
+
+const POST_DEAD_ARG_CLEANUP_PASSES: &[Pass] = &[Pass::CfgCleanup, Pass::Sccp, Pass::CfgCleanup];
 
 fn pass_needs_func_behavior(pass: Pass) -> bool {
     matches!(
@@ -161,6 +176,7 @@ fn pass_may_invalidate_func_behavior(pass: Pass) -> bool {
         pass,
         Pass::CfgCleanup
             | Pass::AggregateCombine
+            | Pass::ObjectLoadStore
             | Pass::AggregateScalarize
             | Pass::LoadStore
             | Pass::Sccp
@@ -190,6 +206,11 @@ fn size_inliner_config() -> InlinerConfig {
         single_use_bonus: 8,
         leaf_bonus: 2,
         loop_penalty: 32,
+        max_multi_use_object_helper_blocks: 2,
+        max_multi_use_object_helper_insts: 10,
+        max_multi_use_object_helper_call_count: 3,
+        object_scalarization_bonus_cap: 8,
+        object_helper_cluster_bonus: 3,
         ..InlinerConfig::default()
     }
 }
@@ -212,6 +233,11 @@ fn speed_inliner_config() -> InlinerConfig {
         single_use_bonus: 8,
         leaf_bonus: 2,
         loop_penalty: 32,
+        max_multi_use_object_helper_blocks: 2,
+        max_multi_use_object_helper_insts: 12,
+        max_multi_use_object_helper_call_count: 4,
+        object_scalarization_bonus_cap: 10,
+        object_helper_cluster_bonus: 4,
         ..InlinerConfig::default()
     }
 }
@@ -224,6 +250,8 @@ impl Pipeline {
         p.add_step(Step::FuncPasses(PRIMARY_FUNC_PASSES.to_vec()));
         p.add_step(Step::Inline);
         p.add_step(Step::FuncPasses(SECONDARY_FUNC_PASSES.to_vec()));
+        p.add_step(Step::DeadArgElim);
+        p.add_step(Step::FuncPasses(POST_DEAD_ARG_CLEANUP_PASSES.to_vec()));
         p.add_step(Step::DeadFuncElim);
         p
     }
@@ -282,7 +310,12 @@ impl Pipeline {
     ///    - `Sccp`
     ///    - `Gvn`
     ///    - `CfgCleanup`
-    /// 5. `DeadFuncElim` — prune unreachable private definitions from object roots
+    /// 5. `DeadArgElim` — remove dead private formals and rewrite direct calls
+    /// 6. Per-function cleanup:
+    ///    - `CfgCleanup`
+    ///    - `Sccp`
+    ///    - `CfgCleanup`
+    /// 7. `DeadFuncElim` — prune unreachable private definitions from object roots
     pub fn default_pipeline() -> Self {
         Self::speed()
     }
@@ -354,6 +387,11 @@ impl Pipeline {
                         }
                     }
                 }
+                Step::DeadArgElim => {
+                    let _span = debug_span!("sonatina.optim.pipeline.dead_arg_elim").entered();
+                    run_dead_arg_elim(module, DeadArgElimConfig::default());
+                    func_behavior_dirty = true;
+                }
                 Step::DeadFuncElim => {
                     let _span = debug_span!("sonatina.optim.pipeline.dead_func_elim").entered();
                     let roots = collect_object_roots(module);
@@ -372,26 +410,23 @@ impl Default for Pipeline {
     }
 }
 
-/// Run a sequence of per-function passes on a single function.
-///
-/// This is useful for testing individual pass sequences without a full module.
-///
-/// This helper cannot run module-level analyses. Callers that include
-/// attribute-dependent passes must ensure function attrs are computed first.
-pub fn run_func_passes(passes: &[Pass], func: &mut Function) {
-    let _span = debug_span!(
-        "sonatina.optim.pipeline.run_func_passes",
-        pass_count = passes.len()
-    )
-    .entered();
-    let mut ctx = PassContext::default();
-    for &pass in passes {
-        run_pass(pass, func, &mut ctx);
-    }
-}
-
 fn run_module_pass(pass: Pass, module: &Module) {
     let _span = debug_span!("sonatina.optim.pipeline.pass_round", pass = pass.as_str()).entered();
+    let object_effects = matches!(
+        pass,
+        Pass::ObjectLoadStore | Pass::AggregateScalarize | Pass::Gvn | Pass::Licm
+    )
+    .then(|| compute_object_effect_summaries(module));
+    let local_object_args = object_effects
+        .as_ref()
+        .map(|effects| collect_local_object_arg_info_with_effects(module, effects))
+        .or_else(|| {
+            matches!(
+                pass,
+                Pass::ObjectLoadStore | Pass::AggregateScalarize | Pass::Gvn | Pass::Licm
+            )
+            .then(|| collect_local_object_arg_info(module))
+        });
     module.func_store.par_for_each(|func_ref, func| {
         let _span = debug_span!(
             "sonatina.optim.pipeline.function",
@@ -399,7 +434,14 @@ fn run_module_pass(pass: Pass, module: &Module) {
         )
         .entered();
         let mut ctx = PassContext::default();
-        run_pass(pass, func, &mut ctx);
+        run_pass(
+            pass,
+            Some(func_ref),
+            func,
+            &mut ctx,
+            local_object_args.as_ref(),
+            object_effects.as_ref(),
+        );
     });
 }
 
@@ -417,7 +459,14 @@ struct PassContext {
 
 /// Dispatch a single pass, recomputing any required analyses from the
 /// current function state.
-fn run_pass(pass: Pass, func: &mut Function, ctx: &mut PassContext) {
+fn run_pass(
+    pass: Pass,
+    func_ref: Option<sonatina_ir::module::FuncRef>,
+    func: &mut Function,
+    ctx: &mut PassContext,
+    local_object_args: Option<&LocalObjectArgMap>,
+    object_effects: Option<&ObjectEffectSummaryMap>,
+) {
     let _span = trace_span!("sonatina.optim.pipeline.pass", pass = pass.as_str()).entered();
     match pass {
         Pass::LegalizeMultiResult => {
@@ -432,9 +481,28 @@ fn run_pass(pass: Pass, func: &mut Function, ctx: &mut PassContext) {
             let _span = trace_span!("sonatina.optim.pipeline.pass.aggregate_combine").entered();
             AggregateCombine::default().run(func);
         }
+        Pass::ObjectLoadStore => {
+            let _span = trace_span!("sonatina.optim.pipeline.pass.object_load_store").entered();
+            if let (Some(func_ref), Some(local_object_args), Some(object_effects)) =
+                (func_ref, local_object_args, object_effects)
+            {
+                ObjectLoadStore::default().run_for_func(
+                    func_ref,
+                    func,
+                    local_object_args,
+                    object_effects,
+                );
+            } else {
+                ObjectLoadStore::default().run(func);
+            }
+        }
         Pass::AggregateScalarize => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.aggregate_scalarize").entered();
-            AggregateScalarize::default().run(func);
+            if let (Some(func_ref), Some(local_object_args)) = (func_ref, local_object_args) {
+                AggregateScalarize::default().run_for_func(func_ref, func, local_object_args);
+            } else {
+                AggregateScalarize::default().run(func);
+            }
         }
         Pass::LoadStore => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.load_store").entered();
@@ -485,9 +553,18 @@ fn run_pass(pass: Pass, func: &mut Function, ctx: &mut PassContext) {
                 ctx.lpt.compute(&ctx.cfg, &ctx.domtree);
             }
             let mut solver = LicmSolver::new();
+            let mut object_memory = ObjectMemoryAnalysis::default();
+            let func_local_object_args = func_ref
+                .and_then(|func_ref| local_object_args.and_then(|args| args.get(&func_ref)));
+            object_memory.compute(func, func_local_object_args, object_effects);
             {
                 let _span = trace_span!("sonatina.optim.pipeline.licm.solve").entered();
-                solver.run(func, &mut ctx.cfg, &mut ctx.lpt);
+                solver.run_with_object_memory(
+                    func,
+                    &mut ctx.cfg,
+                    &mut ctx.lpt,
+                    Some(&object_memory),
+                );
             }
             {
                 let _span = trace_span!("sonatina.optim.pipeline.licm.cleanup").entered();
@@ -509,9 +586,18 @@ fn run_pass(pass: Pass, func: &mut Function, ctx: &mut PassContext) {
                 ctx.domtree.compute(&ctx.cfg);
             }
             let mut solver = GvnSolver::new();
+            let mut object_memory = ObjectMemoryAnalysis::default();
+            let func_local_object_args = func_ref
+                .and_then(|func_ref| local_object_args.and_then(|args| args.get(&func_ref)));
+            object_memory.compute(func, func_local_object_args, object_effects);
             {
                 let _span = trace_span!("sonatina.optim.pipeline.gvn.solve").entered();
-                solver.run(func, &mut ctx.cfg, &mut ctx.domtree);
+                solver.run_with_object_memory(
+                    func,
+                    &mut ctx.cfg,
+                    &mut ctx.domtree,
+                    Some(&object_memory),
+                );
             }
         }
         Pass::RebuildUsers => {
@@ -551,6 +637,12 @@ mod tests {
         builder.finish();
 
         mb.build()
+    }
+
+    fn run_test_func_passes(module: &mut sonatina_ir::module::Module, passes: &[Pass]) {
+        let mut pipeline = Pipeline::new();
+        pipeline.add_step(Step::FuncPasses(passes.to_vec()));
+        pipeline.run(module);
     }
 
     #[test]
@@ -609,12 +701,9 @@ mod tests {
     }
 
     #[test]
-    fn func_passes_standalone() {
-        let module = build_test_module();
-        let func_ref = module.funcs()[0];
-        module.func_store.modify(func_ref, |func| {
-            run_func_passes(&[Pass::CfgCleanup, Pass::Sccp, Pass::Egraph], func);
-        });
+    fn func_passes_single_function_module() {
+        let mut module = build_test_module();
+        run_test_func_passes(&mut module, &[Pass::CfgCleanup, Pass::Sccp, Pass::Egraph]);
     }
 
     #[test]
@@ -714,11 +803,12 @@ func private %entry(v0.*i256) -> *i256 {
 }
 "#;
 
-        let module = parse_module(source).expect("parse should succeed").module;
+        let mut module = parse_module(source).expect("parse should succeed").module;
         let func_ref = module.funcs()[0];
-        module.func_store.modify(func_ref, |func| {
-            run_func_passes(&[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup], func);
-        });
+        run_test_func_passes(
+            &mut module,
+            &[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup],
+        );
 
         module.func_store.view(func_ref, |func| {
             let dumped = FuncWriter::new(func_ref, func).dump_string();
@@ -744,11 +834,12 @@ func private %entry(v0.*i256, v1.i256) -> *i256 {
 }
 "#;
 
-        let module = parse_module(source).expect("parse should succeed").module;
+        let mut module = parse_module(source).expect("parse should succeed").module;
         let func_ref = module.funcs()[0];
-        module.func_store.modify(func_ref, |func| {
-            run_func_passes(&[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup], func);
-        });
+        run_test_func_passes(
+            &mut module,
+            &[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup],
+        );
 
         module.func_store.view(func_ref, |func| {
             let dumped = FuncWriter::new(func_ref, func).dump_string();
@@ -756,6 +847,216 @@ func private %entry(v0.*i256, v1.i256) -> *i256 {
             assert_eq!(
                 gep_count, 1,
                 "expected congruent n-ary operands to canonicalize before CSE:\n{dumped}"
+            );
+        });
+    }
+
+    #[test]
+    fn gvn_keeps_distinct_obj_allocs_unique() {
+        let source = r#"
+target = "evm-ethereum-london"
+
+type @box = { i256 };
+
+func private %entry() -> i256 {
+    block0:
+        v0.objref<@box> = obj.alloc @box;
+        v1.objref<i256> = obj.proj v0 0.i8;
+        obj.store v1 1.i256;
+        v2.objref<@box> = obj.alloc @box;
+        v3.objref<i256> = obj.proj v2 0.i8;
+        obj.store v3 2.i256;
+        v4.i256 = obj.load v1;
+        v5.i256 = obj.load v3;
+        v6.i256 = add v4 v5;
+        return v6;
+}
+"#;
+
+        let mut module = parse_module(source).expect("parse should succeed").module;
+        let func_ref = module.funcs()[0];
+        run_test_func_passes(
+            &mut module,
+            &[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup],
+        );
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            let alloc_count = dumped.matches(" = obj.alloc ").count();
+            assert_eq!(
+                alloc_count, 2,
+                "distinct object allocations must not CSE:\n{dumped}"
+            );
+        });
+    }
+
+    #[test]
+    fn gvn_does_not_reuse_obj_load_across_obj_store() {
+        let source = r#"
+target = "evm-ethereum-london"
+
+func private %entry() -> i256 {
+    block0:
+        v0.objref<i256> = obj.alloc i256;
+        obj.store v0 1.i256;
+        v1.i256 = obj.load v0;
+        obj.store v0 2.i256;
+        v2.i256 = obj.load v0;
+        v3.i256 = add v1 v2;
+        return v3;
+}
+"#;
+
+        let mut module = parse_module(source).expect("parse should succeed").module;
+        let func_ref = module.funcs()[0];
+        run_test_func_passes(
+            &mut module,
+            &[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup],
+        );
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            assert!(
+                !dumped.contains(" = obj.load "),
+                "GVN should fold each load to its reaching stored value:\n{dumped}"
+            );
+            assert!(
+                dumped.contains("return 3.i256;"),
+                "intervening store must still keep the two load results distinct:\n{dumped}"
+            );
+        });
+    }
+
+    #[test]
+    fn gvn_does_not_cse_uninitialized_obj_loads_from_fresh_alloc() {
+        let source = r#"
+target = "evm-ethereum-london"
+
+func private %entry() -> i256 {
+    block0:
+        v0.objref<i256> = obj.alloc i256;
+        v1.i256 = obj.load v0;
+        v2.i256 = obj.load v0;
+        v3.i256 = add v1 v2;
+        return v3;
+}
+"#;
+
+        let mut module = parse_module(source).expect("parse should succeed").module;
+        let func_ref = module.funcs()[0];
+        run_test_func_passes(
+            &mut module,
+            &[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup],
+        );
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            let load_count = dumped.matches(" = obj.load ").count();
+            assert_eq!(
+                load_count, 2,
+                "fresh uninitialized loads must remain distinct:\n{dumped}"
+            );
+        });
+    }
+
+    #[test]
+    fn gvn_cses_obj_loads_across_read_only_helper_call() {
+        let mut parsed = parse_module(
+            r#"
+target = "evm-ethereum-london"
+
+func private %peek(v0.objref<i256>) {
+    block0:
+        v1.i256 = obj.load v0;
+        return;
+}
+
+func private %entry(v0.i256) -> i256 {
+    block0:
+        v1.objref<i256> = obj.alloc i256;
+        obj.store v1 v0;
+        call %peek v1;
+        v2.i256 = obj.load v1;
+        v3.i256 = obj.load v1;
+        v4.i256 = add v2 v3;
+        return v4;
+}
+"#,
+        )
+        .expect("parse should succeed");
+        let entry = parsed
+            .module
+            .funcs()
+            .into_iter()
+            .find(|&func_ref| {
+                parsed
+                    .module
+                    .ctx
+                    .func_sig(func_ref, |sig| sig.name() == "entry")
+            })
+            .expect("entry should exist");
+
+        let mut pipeline = Pipeline::new();
+        pipeline.add_step(Step::FuncPasses(vec![
+            Pass::CfgCleanup,
+            Pass::Gvn,
+            Pass::CfgCleanup,
+        ]));
+        pipeline.run(&mut parsed.module);
+
+        let dumped = parsed
+            .module
+            .func_store
+            .view(entry, |func| FuncWriter::new(entry, func).dump_string());
+        assert!(
+            dumped.contains("call %peek v1;"),
+            "helper call should remain visible:\n{dumped}"
+        );
+        assert!(
+            !dumped.contains("obj.load v1"),
+            "summary-aware GVN should eliminate repeated loads after the read-only helper:\n{dumped}"
+        );
+    }
+
+    #[test]
+    fn gvn_cses_repeated_join_obj_loads_through_object_memory_phi() {
+        let source = r#"
+target = "evm-ethereum-london"
+
+func private %entry(v0.i1, v1.i256, v2.i256) -> i256 {
+    block0:
+        v3.objref<i256> = obj.alloc i256;
+        br v0 block1 block2;
+
+    block1:
+        obj.store v3 v1;
+        jump block3;
+
+    block2:
+        obj.store v3 v2;
+        jump block3;
+
+    block3:
+        v4.i256 = obj.load v3;
+        v5.i256 = obj.load v3;
+        v6.i256 = add v4 v5;
+        return v6;
+}
+"#;
+
+        let mut module = parse_module(source).expect("parse should succeed").module;
+        let func_ref = module.funcs()[0];
+        run_test_func_passes(
+            &mut module,
+            &[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup],
+        );
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            let load_count = dumped.matches(" = obj.load ").count();
+            assert_eq!(
+                load_count, 1,
+                "GVN should CSE repeated join loads keyed by the same object-memory phi:\n{dumped}"
             );
         });
     }
@@ -783,11 +1084,12 @@ func private %entry(v0.i1) -> *i256 {
 }
 "#;
 
-        let module = parse_module(source).expect("parse should succeed").module;
+        let mut module = parse_module(source).expect("parse should succeed").module;
         let func_ref = module.funcs()[0];
-        module.func_store.modify(func_ref, |func| {
-            run_func_passes(&[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup], func);
-        });
+        run_test_func_passes(
+            &mut module,
+            &[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup],
+        );
 
         module.func_store.view(func_ref, |func| {
             let dumped = FuncWriter::new(func_ref, func).dump_string();
@@ -798,6 +1100,219 @@ func private %entry(v0.i1) -> *i256 {
             assert!(
                 !dumped.contains(" = phi "),
                 "phi over identical globals should be eliminated:\n{dumped}"
+            );
+        });
+    }
+
+    #[test]
+    fn licm_hoists_initialized_obj_load_out_of_loop() {
+        let source = r#"
+target = "evm-ethereum-london"
+
+func private %entry(v0.i256, v1.i1) -> i256 {
+    block0:
+        v2.objref<i256> = obj.alloc i256;
+        obj.store v2 v0;
+        jump block1;
+
+    block1:
+        br v1 block2 block3;
+
+    block2:
+        v3.i256 = obj.load v2;
+        v4.i256 = add v3 1.i256;
+        jump block1;
+
+    block3:
+        return 0.i256;
+}
+"#;
+
+        let mut module = parse_module(source).expect("parse should succeed").module;
+        let func_ref = module.funcs()[0];
+        module.func_store.view(func_ref, |func| {
+            let mut object_memory = ObjectMemoryAnalysis::default();
+            object_memory.compute(func, None, None);
+            let mut cfg = ControlFlowGraph::new();
+            cfg.compute(func);
+            let mut domtree = DomTree::new();
+            domtree.compute(&cfg);
+            let mut lpt = LoopTree::new();
+            lpt.compute(&cfg, &domtree);
+            let load = func
+                .layout
+                .iter_block()
+                .flat_map(|block| func.layout.iter_inst(block))
+                .find(|&inst| {
+                    sonatina_ir::inst::downcast::<&sonatina_ir::inst::data::ObjLoad>(
+                        func.inst_set(),
+                        func.dfg.inst(inst),
+                    )
+                    .is_some()
+                })
+                .expect("loop load should exist before LICM");
+            let lp = lpt.loops().next().expect("loop should exist");
+            assert!(
+                object_memory.read_is_loop_invariant(func, &cfg, &lpt, lp, load),
+                "object-memory analysis should mark the loop load as invariant before LICM"
+            );
+        });
+        run_test_func_passes(
+            &mut module,
+            &[Pass::CfgCleanup, Pass::Licm, Pass::CfgCleanup],
+        );
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            let block0 = dumped
+                .split("block0:")
+                .nth(1)
+                .and_then(|tail| tail.split("block1:").next())
+                .expect("block0 section should exist");
+            let block2 = dumped
+                .split("block2:")
+                .nth(1)
+                .and_then(|tail| tail.split("block3:").next())
+                .expect("block2 section should exist");
+            assert!(
+                block0.contains("obj.load"),
+                "loop-invariant object load should hoist to the preheader:\n{dumped}"
+            );
+            assert!(
+                !block2.contains("obj.load"),
+                "loop body should no longer contain the hoisted object load:\n{dumped}"
+            );
+        });
+    }
+
+    #[test]
+    fn licm_hoists_initialized_obj_load_out_of_loop_across_read_only_helper_call() {
+        let mut parsed = parse_module(
+            r#"
+target = "evm-ethereum-london"
+
+func private %peek(v0.objref<i256>) {
+    block0:
+        v1.i256 = obj.load v0;
+        return;
+}
+
+func private %entry(v0.i256, v1.i1) -> i256 {
+    block0:
+        v2.objref<i256> = obj.alloc i256;
+        obj.store v2 v0;
+        jump block1;
+
+    block1:
+        br v1 block2 block3;
+
+    block2:
+        call %peek v2;
+        v3.i256 = obj.load v2;
+        v4.i256 = add v3 1.i256;
+        jump block1;
+
+    block3:
+        return 0.i256;
+}
+"#,
+        )
+        .expect("parse should succeed");
+        let entry = parsed
+            .module
+            .funcs()
+            .into_iter()
+            .find(|&func_ref| {
+                parsed
+                    .module
+                    .ctx
+                    .func_sig(func_ref, |sig| sig.name() == "entry")
+            })
+            .expect("entry should exist");
+
+        let mut pipeline = Pipeline::new();
+        pipeline.add_step(Step::FuncPasses(vec![
+            Pass::CfgCleanup,
+            Pass::Licm,
+            Pass::CfgCleanup,
+        ]));
+        pipeline.run(&mut parsed.module);
+
+        let dumped = parsed
+            .module
+            .func_store
+            .view(entry, |func| FuncWriter::new(entry, func).dump_string());
+        let block0 = dumped
+            .split("block0:")
+            .nth(1)
+            .and_then(|tail| tail.split("block1:").next())
+            .expect("block0 section should exist");
+        let block2 = dumped
+            .split("block2:")
+            .nth(1)
+            .and_then(|tail| tail.split("block3:").next())
+            .expect("block2 section should exist");
+        assert!(
+            block0.contains("obj.load"),
+            "LICM should hoist the loop-invariant load into the preheader even across a read-only helper call:\n{dumped}"
+        );
+        assert!(
+            !block2.contains("obj.load"),
+            "loop body should no longer contain the hoisted load:\n{dumped}"
+        );
+    }
+
+    #[test]
+    fn licm_does_not_hoist_obj_load_across_loop_store() {
+        let source = r#"
+target = "evm-ethereum-london"
+
+func private %entry(v0.i256, v1.i1) -> i256 {
+    block0:
+        v2.objref<i256> = obj.alloc i256;
+        obj.store v2 0.i256;
+        jump block1;
+
+    block1:
+        br v1 block2 block3;
+
+    block2:
+        obj.store v2 v0;
+        v3.i256 = obj.load v2;
+        v4.i256 = add v3 1.i256;
+        jump block1;
+
+    block3:
+        return 0.i256;
+}
+"#;
+
+        let mut module = parse_module(source).expect("parse should succeed").module;
+        let func_ref = module.funcs()[0];
+        run_test_func_passes(
+            &mut module,
+            &[Pass::CfgCleanup, Pass::Licm, Pass::CfgCleanup],
+        );
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            let block0 = dumped
+                .split("block0:")
+                .nth(1)
+                .and_then(|tail| tail.split("block1:").next())
+                .expect("block0 section should exist");
+            let block2 = dumped
+                .split("block2:")
+                .nth(1)
+                .and_then(|tail| tail.split("block3:").next())
+                .expect("block2 section should exist");
+            assert!(
+                !block0.contains("obj.load"),
+                "loop-clobbered object load must not hoist:\n{dumped}"
+            );
+            assert!(
+                block2.contains("obj.load"),
+                "loop body should retain the load when the slice is clobbered each iteration:\n{dumped}"
             );
         });
     }
@@ -817,14 +1332,12 @@ func private %entry() -> i256 {
 }
 "#;
 
-        let module = parse_module(source).expect("parse should succeed").module;
+        let mut module = parse_module(source).expect("parse should succeed").module;
         let func_ref = module.funcs()[0];
-        module.func_store.modify(func_ref, |func| {
-            run_func_passes(
-                &[Pass::CfgCleanup, Pass::Sccp, Pass::Gvn, Pass::CfgCleanup],
-                func,
-            );
-        });
+        run_test_func_passes(
+            &mut module,
+            &[Pass::CfgCleanup, Pass::Sccp, Pass::Gvn, Pass::CfgCleanup],
+        );
 
         module.func_store.view(func_ref, |func| {
             let dumped = FuncWriter::new(func_ref, func).dump_string();
@@ -859,11 +1372,12 @@ func private %entry() -> i32 {
 }
 "#;
 
-        let module = parse_module(source).expect("parse should succeed").module;
+        let mut module = parse_module(source).expect("parse should succeed").module;
         let func_ref = module.funcs()[0];
-        module.func_store.modify(func_ref, |func| {
-            run_func_passes(&[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup], func);
-        });
+        run_test_func_passes(
+            &mut module,
+            &[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup],
+        );
 
         module.func_store.view(func_ref, |func| {
             let dumped = FuncWriter::new(func_ref, func).dump_string();
@@ -902,11 +1416,12 @@ func private %entry() -> i32 {
 }
 "#;
 
-        let module = parse_module(source).expect("parse should succeed").module;
+        let mut module = parse_module(source).expect("parse should succeed").module;
         let func_ref = module.funcs()[0];
-        module.func_store.modify(func_ref, |func| {
-            run_func_passes(&[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup], func);
-        });
+        run_test_func_passes(
+            &mut module,
+            &[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup],
+        );
 
         module.func_store.view(func_ref, |func| {
             let dumped = FuncWriter::new(func_ref, func).dump_string();
@@ -939,11 +1454,12 @@ func private %entry() -> i32 {
 }
 "#;
 
-        let module = parse_module(source).expect("parse should succeed").module;
+        let mut module = parse_module(source).expect("parse should succeed").module;
         let func_ref = module.funcs()[0];
-        module.func_store.modify(func_ref, |func| {
-            run_func_passes(&[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup], func);
-        });
+        run_test_func_passes(
+            &mut module,
+            &[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup],
+        );
 
         module.func_store.view(func_ref, |func| {
             let dumped = FuncWriter::new(func_ref, func).dump_string();
@@ -983,14 +1499,12 @@ func private %entry(v0.i1, v1.i32) -> i32 {
 }
 "#;
 
-        let module = parse_module(source).expect("parse should succeed").module;
+        let mut module = parse_module(source).expect("parse should succeed").module;
         let func_ref = module.funcs()[0];
-        module.func_store.modify(func_ref, |func| {
-            run_func_passes(
-                &[Pass::CfgCleanup, Pass::Gvn, Pass::Egraph, Pass::CfgCleanup],
-                func,
-            );
-        });
+        run_test_func_passes(
+            &mut module,
+            &[Pass::CfgCleanup, Pass::Gvn, Pass::Egraph, Pass::CfgCleanup],
+        );
 
         module.func_store.view(func_ref, |func| {
             let dumped = FuncWriter::new(func_ref, func).dump_string();
@@ -1020,11 +1534,12 @@ func private %entry() -> i256 {
 }
 "#;
 
-        let module = parse_module(source).expect("parse should succeed").module;
+        let mut module = parse_module(source).expect("parse should succeed").module;
         let func_ref = module.funcs()[0];
-        module.func_store.modify(func_ref, |func| {
-            run_func_passes(&[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup], func);
-        });
+        run_test_func_passes(
+            &mut module,
+            &[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup],
+        );
 
         module.func_store.view(func_ref, |func| {
             let dumped = FuncWriter::new(func_ref, func).dump_string();
@@ -1059,11 +1574,12 @@ func private %entry() -> i256 {
 }
 "#;
 
-        let module = parse_module(source).expect("parse should succeed").module;
+        let mut module = parse_module(source).expect("parse should succeed").module;
         let func_ref = module.funcs()[0];
-        module.func_store.modify(func_ref, |func| {
-            run_func_passes(&[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup], func);
-        });
+        run_test_func_passes(
+            &mut module,
+            &[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup],
+        );
 
         module.func_store.view(func_ref, |func| {
             let dumped = FuncWriter::new(func_ref, func).dump_string();
@@ -1091,11 +1607,12 @@ func private %entry(v0.i256, v1.i256) -> i256 {
 }
 "#;
 
-        let module = parse_module(source).expect("parse should succeed").module;
+        let mut module = parse_module(source).expect("parse should succeed").module;
         let func_ref = module.funcs()[0];
-        module.func_store.modify(func_ref, |func| {
-            run_func_passes(&[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup], func);
-        });
+        run_test_func_passes(
+            &mut module,
+            &[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup],
+        );
 
         module.func_store.view(func_ref, |func| {
             let dumped = FuncWriter::new(func_ref, func).dump_string();
@@ -1123,11 +1640,12 @@ func private %entry() -> i32 {
 }
 "#;
 
-        let module = parse_module(source).expect("parse should succeed").module;
+        let mut module = parse_module(source).expect("parse should succeed").module;
         let func_ref = module.funcs()[0];
-        module.func_store.modify(func_ref, |func| {
-            run_func_passes(&[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup], func);
-        });
+        run_test_func_passes(
+            &mut module,
+            &[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup],
+        );
 
         module.func_store.view(func_ref, |func| {
             let dumped = FuncWriter::new(func_ref, func).dump_string();
@@ -1166,11 +1684,12 @@ func private %entry(v0.i32, v1.i32) -> i32 {
 }
 "#;
 
-        let module = parse_module(source).expect("parse should succeed").module;
+        let mut module = parse_module(source).expect("parse should succeed").module;
         let func_ref = module.funcs()[0];
-        module.func_store.modify(func_ref, |func| {
-            run_func_passes(&[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup], func);
-        });
+        run_test_func_passes(
+            &mut module,
+            &[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup],
+        );
 
         module.func_store.view(func_ref, |func| {
             let dumped = FuncWriter::new(func_ref, func).dump_string();
@@ -1215,7 +1734,9 @@ func private %entry(v0.i32, v1.i32) -> i32 {
         assert_eq!(size.steps.len(), speed.steps.len());
         for (size_step, speed_step) in size.steps.iter().zip(speed.steps.iter()) {
             match (size_step, speed_step) {
-                (Step::Inline, Step::Inline) | (Step::DeadFuncElim, Step::DeadFuncElim) => {}
+                (Step::Inline, Step::Inline)
+                | (Step::DeadArgElim, Step::DeadArgElim)
+                | (Step::DeadFuncElim, Step::DeadFuncElim) => {}
                 (Step::FuncPasses(size_passes), Step::FuncPasses(speed_passes)) => {
                     assert_eq!(size_passes, speed_passes);
                 }
@@ -1396,6 +1917,61 @@ func public %caller(v0.i1, v1.*i32, v2.i32) -> i32 {
             assert!(
                 dumped.contains("call %pure_after_cleanup"),
                 "helper splicing should leave the still-multi-block inner call in place:\n{dumped}"
+            );
+        });
+    }
+
+    #[test]
+    fn dead_arg_elim_step_is_followed_by_cleanup_that_erases_dead_actual_computation() {
+        let source = r#"
+target = "evm-ethereum-osaka"
+
+func private %sink(v0.i256) -> i256 {
+    block0:
+        return 7.i256;
+}
+
+func private %caller(v0.i256) -> i256 {
+    block0:
+        v1.i256 = add v0 1.i256;
+        v2.i256 = call %sink v1;
+        return v2;
+}
+
+func public %entry(v0.i256) -> i256 {
+    block0:
+        v1.i256 = call %caller v0;
+        return v1;
+}
+"#;
+
+        let mut module = parse_module(source).expect("parse should succeed").module;
+        let caller = module
+            .funcs()
+            .into_iter()
+            .find(|&func_ref| module.ctx.func_sig(func_ref, |sig| sig.name() == "caller"))
+            .expect("caller function should exist");
+        let mut pipeline = Pipeline::new();
+        pipeline
+            .add_step(Step::DeadArgElim)
+            .add_step(Step::FuncPasses(POST_DEAD_ARG_CLEANUP_PASSES.to_vec()));
+
+        pipeline.run(&mut module);
+
+        let sig = module
+            .ctx
+            .get_sig(caller)
+            .expect("caller signature should exist");
+        assert!(sig.args().is_empty(), "caller arg should be eliminated");
+        module.func_store.view(caller, |func| {
+            let dumped = FuncWriter::new(caller, func).dump_string();
+            assert!(
+                !dumped.contains("add "),
+                "cleanup after dead-arg elim should remove dead actual computation:\n{dumped}"
+            );
+            assert!(
+                dumped.contains("call %sink"),
+                "caller should still call sink after cleanup:\n{dumped}"
             );
         });
     }

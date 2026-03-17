@@ -1,0 +1,30 @@
+---
+source: crates/codegen/tests/object_abi.rs
+input_file: test_files/object_abi/get_function_ptr_container.sntn
+---
+target = "evm-ethereum-osaka"
+
+type @pair = {i256, i256};
+type @maker_box = {*(objref<@pair>, i256, i256) -> unit};
+
+func private %make_pair(v7.objref<@pair>, v0.i256, v1.i256) {
+    block0:
+        v3.objref<i256> = obj.proj v7 0.i8;
+        obj.store v3 v0;
+        v4.objref<i256> = obj.proj v7 1.i8;
+        obj.store v4 v1;
+        return;
+}
+
+func private %consume_box(v0.@maker_box) {
+    block0:
+        return;
+}
+
+func private %take_maker() {
+    block0:
+        v0.*(objref<@pair>, i256, i256) -> unit = get_function_ptr %make_pair;
+        v1.@maker_box = insert_value undef.@maker_box 0.i8 v0;
+        call %consume_box v1;
+        return;
+}

@@ -892,7 +892,7 @@ mod tests {
         I256, Linkage, Signature, Type,
         builder::test_util::{test_isa, test_module_builder},
         inst::{
-            cast::{IntToPtr, PtrToInt},
+            cast::{Bitcast, IntToPtr, PtrToInt},
             control_flow::Return,
             data::{Gep, Mstore},
             logic,
@@ -1000,6 +1000,39 @@ mod tests {
             let mut solver = SccpSolver::new();
             solver.run(func, &mut cfg);
             CfgCleanup::new(CleanupMode::Strict).run(func);
+        });
+    }
+
+    #[test]
+    fn sccp_folds_bool_bitcast_with_raw_bits() {
+        let mb = test_module_builder();
+        let sig = Signature::new_single("bool_bitcast", Linkage::Public, &[], Type::I256);
+        let func_ref = mb.declare_function(sig).unwrap();
+
+        let mut fb = mb.func_builder::<InstInserter>(func_ref);
+        let block0 = fb.append_block();
+        fb.switch_to_block(block0);
+
+        let isa = test_isa();
+        let is = isa.inst_set();
+        let one = fb.make_imm_value(Immediate::one(Type::I1));
+        let widened = fb.insert_inst(Bitcast::new(is, one, Type::I256), Type::I256);
+        fb.insert_inst_no_result(Return::new_unchecked(is, smallvec![widened].into()));
+        fb.seal_all();
+        fb.finish();
+
+        let mut cfg = ControlFlowGraph::default();
+        mb.func_store.modify(func_ref, |func| {
+            cfg.compute(func);
+            let mut solver = SccpSolver::new();
+            solver.run(func, &mut cfg);
+            CfgCleanup::new(CleanupMode::Strict).run(func);
+
+            let block = func.layout.entry_block().expect("entry block");
+            let term = func.layout.last_inst_of(block).expect("return");
+            let ret = downcast::<&Return>(func.inst_set(), func.dfg.inst(term)).expect("return");
+            let value = ret.args().iter().next().copied().expect("return value");
+            assert_eq!(func.dfg.value_imm(value), Some(Immediate::one(Type::I256)));
         });
     }
 

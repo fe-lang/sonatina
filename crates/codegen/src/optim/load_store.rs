@@ -569,11 +569,12 @@ mod tests {
         builder::test_util::*,
         effects::FuncEffectSummary,
         inst::{
-            control_flow::Return,
+            arith::Add,
+            control_flow::{Br, Jump, Return},
             data::{Alloca, Mload},
             evm::{
                 EvmCalldataLoad, EvmCreate, EvmCreate2, EvmKeccak256, EvmMalloc, EvmReturn,
-                EvmRevert, EvmSelfDestruct, EvmSload, EvmStaticCall, EvmStop, EvmTload,
+                EvmRevert, EvmSelfDestruct, EvmSload, EvmSstore, EvmStaticCall, EvmStop, EvmTload,
             },
         },
         isa::Isa,
@@ -1274,6 +1275,71 @@ mod tests {
 
         assert!(run_solver(&mut builder.func));
         assert_eq!(count_insts::<EvmCalldataLoad>(&builder.func), 1);
+    }
+
+    #[test]
+    fn repeated_sloads_from_same_dynamic_key_forward_across_branch_and_join() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[Type::I1, Type::I256], Type::I256);
+        let is = evm.inst_set();
+
+        let entry = builder.append_block();
+        let taken = builder.append_block();
+        let join = builder.append_block();
+
+        builder.switch_to_block(entry);
+        let cond = builder.args()[0];
+        let base = builder.args()[1];
+        let one = builder.make_imm_value(I256::from(1));
+        let key = builder.insert_inst_with(|| Add::new(is, one, base), Type::I256);
+        let _first = builder.insert_inst_with(|| EvmSload::new(is, key), Type::I256);
+        builder.insert_inst_no_result_with(|| Br::new(is, cond, taken, join));
+
+        builder.switch_to_block(taken);
+        let _second = builder.insert_inst_with(|| EvmSload::new(is, key), Type::I256);
+        builder.insert_inst_no_result_with(|| Jump::new(is, join));
+
+        builder.switch_to_block(join);
+        let third = builder.insert_inst_with(|| EvmSload::new(is, key), Type::I256);
+        builder.insert_inst_no_result_with(|| Return::new_single(is, third));
+        builder.seal_all();
+
+        assert!(run_solver(&mut builder.func));
+        assert_eq!(count_insts::<EvmSload>(&builder.func), 1);
+    }
+
+    #[test]
+    fn forwards_sload_from_equivalent_dynamic_key_expression() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[Type::I256], Type::I256);
+        let is = evm.inst_set();
+
+        let block = builder.append_block();
+        builder.switch_to_block(block);
+
+        let base = builder.args()[0];
+        let one = builder.make_imm_value(I256::from(1));
+        let seven = builder.make_imm_value(I256::from(7));
+        let store_key = builder.insert_inst_with(|| Add::new(is, one, base), Type::I256);
+        let load_key = builder.insert_inst_with(|| Add::new(is, one, base), Type::I256);
+        builder.insert_inst_no_result_with(|| EvmSstore::new(is, store_key, seven));
+        let loaded = builder.insert_inst_with(|| EvmSload::new(is, load_key), Type::I256);
+        builder.insert_inst_no_result_with(|| Return::new_single(is, loaded));
+        builder.seal_all();
+
+        assert!(run_solver(&mut builder.func));
+        assert_eq!(count_insts::<EvmSload>(&builder.func), 0);
+
+        let ret = builder
+            .func
+            .layout
+            .last_inst_of(block)
+            .and_then(|inst| builder.func.dfg.return_args(inst))
+            .expect("return args");
+        assert_eq!(
+            builder.func.dfg.value_imm(ret[0]),
+            Some(Immediate::I256(I256::from(7)))
+        );
     }
 
     #[test]

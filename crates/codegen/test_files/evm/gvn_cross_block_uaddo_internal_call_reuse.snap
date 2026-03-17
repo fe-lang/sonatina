@@ -6,11 +6,11 @@ input_file: test_files/evm/gvn_cross_block_uaddo_internal_call_reuse.sntn
 evm.config: stack_reach=4 vcode=true bytecode_hex=false stackify_trace=true evm_trace=false emit_observability=false opt=1
 
 object: Contract
-  section runtime: 117 bytes
-  total: 117 bytes
+  section runtime: 110 bytes
+  total: 110 bytes
 
 functions:
-  entry: ir_blocks=14 ir_insts=42 vcode_ops=92 fixups=8 imm_bytes=16
+  entry: ir_blocks=14 ir_insts=42 vcode_ops=87 fixups=7 imm_bytes=16
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
@@ -44,9 +44,8 @@ evm:
     - stack=[v44, v43]
       br [v44] -> [block9, block11]
   block9 P=[] T=[]
-    inherited from block0: [v43x]
     // evm_revert 0.i256 0.i256;
-    - stack=[v43x]
+    - stack=[]
       pre: [PUSH(0), PUSH(0)]
       evm_revert [0, 0]
   block11 P=[] T=[v43]
@@ -55,25 +54,25 @@ evm:
     - stack=[v43]
       pre: [PUSH(10), DUP2]
       lt [v43, 10] -> v20
-    // br v20 block18 block13;
+    // br v20 block18 block21;
     - stack=[v20, v43]
-      br [v20] -> [block18, block13]
-  block13 P=[] T=[v43]
-    inherited from block11: [v43]
-    // jump block10;
-    - stack=[v43]
-      exit(block10): [PUSH(true)]
-      jump -> block10
+      br [v20] -> [block18, block21]
   block18 P=[] T=[v43]
     inherited from block11: [v43]
     // jump block10;
     - stack=[v43]
       exit(block10): [PUSH(false)]
       jump -> block10
+  block21 P=[] T=[v43]
+    inherited from block11: [v43]
+    // jump block10;
+    - stack=[v43]
+      exit(block10): [PUSH(true)]
+      jump -> block10
   block10 P=[v23] T=[v43]
-    // br v23 block19 block15;
+    // br v23 block22 block15;
     - stack=[v23, v43]
-      br [v23] -> [block19, block15]
+      br [v23] -> [block22, block15]
   block15 P=[] T=[v43]
     inherited from block10: [v43]
     // v27.i1 = eq v43 5.i256;
@@ -145,9 +144,9 @@ evm:
     - stack=[v10, v41], last_use=[v10]
       pre: [PUSH(1)]
       eq [1, v10] -> v11
-    // br v11 block4 block20;
+    // br v11 block4 block23;
     - stack=[v11, v41]
-      br [v11] -> [block4, block20]
+      br [v11] -> [block4, block23]
   block4 P=[] T=[v41]
     inherited from block14: [v41]
     // v12.*i256 = gep v41 0.i256 1.i256;
@@ -164,17 +163,13 @@ evm:
     - stack=[]
       pre: [PUSH(32), PUSH(0)]
       evm_return [0, 32]
-  block20 P=[] T=[]
-    inherited from block14: [v41x]
+  block23 P=[] T=[]
     // jump block8;
-    - stack=[v41x]
-      cleanup: [POP]
+    - stack=[]
       jump -> block8
-  block19 P=[] T=[]
-    inherited from block10: [v43x]
+  block22 P=[] T=[]
     // jump block8;
-    - stack=[v43x]
-      cleanup: [POP]
+    - stack=[]
       jump -> block8
   block8 P=[] T=[]
     // mstore 0.i256 0.i256 i256;
@@ -213,20 +208,21 @@ entry:
     PUSH1 0xa (10)  // v20.i1 = lt v43 10.i256;
     DUP2
     LT
-    PUSH1 block18  // br v20 block18 block13;
+    ISZERO  // br v20 block18 block21;
+    PUSH1 block21
     JUMPI
-  block13:
+  block18:
+    PUSH0  // jump block10;
+    PUSH1 block10
+    JUMP
+  block21:
+    JUMPDEST
     PUSH1 0x1 (1)  // jump block10;
     PUSH0
     SIGNEXTEND
-    PUSH1 block10
-    JUMP
-  block18:
-    JUMPDEST
-    PUSH0  // jump block10;
   block10:
     JUMPDEST
-    PUSH1 block19  // br v23 block19 block15;
+    PUSH1 block8  // br v23 block22 block15;
     JUMPI
   block15:
     PUSH1 0x5 (5)  // v27.i1 = eq v43 5.i256;
@@ -266,8 +262,8 @@ entry:
     MLOAD  // v10.i256 = mload v42 i256;
     PUSH1 0x1 (1)  // v11.i1 = eq v10 1.i256;
     EQ
-    ISZERO  // br v11 block4 block20;
-    PUSH1 block20
+    ISZERO  // br v11 block4 block23;
+    PUSH1 block8
     JUMPI
   block4:
     PUSH1 0x20 (32)  // v12.*i256 = gep v41 0.i256 1.i256;
@@ -278,14 +274,6 @@ entry:
     PUSH1 0x20 (32)  // evm_return 0.i256 32.i256;
     PUSH0
     RETURN
-  block20:
-    JUMPDEST
-    POP  // jump block8;
-    PUSH1 block8
-    JUMP
-  block19:
-    JUMPDEST
-    POP  // jump block8;
   block8:
     JUMPDEST
     PUSH0  // mstore 0.i256 0.i256 i256;

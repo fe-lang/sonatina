@@ -2,31 +2,38 @@ use cranelift_entity::SecondaryMap;
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{
-    BlockId, Function, InstId, Type, Value, ValueId,
+    BlockId, Function, I256, Immediate, InstId, Type, Value, ValueId,
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
-    inst::{cast, control_flow, data, downcast},
+    inst::{cast, cmp, control_flow, data, downcast},
+    module::FuncRef,
 };
 
 use crate::cfg_edit::{CfgEditor, CleanupMode};
 
 use super::{
-    cleanup::DeadPureInstCleanup, promotion::SsaBuilder, reconstruct::bitcast_before_inst, shape,
+    LocalObjectArgInfo, LocalObjectArgMap, Projection, RootInit, RootProvenance,
+    cleanup::DeadPureInstCleanup, collect_root_provenance, promotion::SsaBuilder,
+    reconstruct::bitcast_before_inst, shape,
 };
 
 type LeafValues = SmallVec<[ValueId; 4]>;
 
-#[derive(Debug, Clone, Copy)]
-struct Projection {
-    alloca_inst: InstId,
-    slice: shape::AggregateSlice,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum RootKind {
+    Alloca { inst: InstId },
+    ObjAlloc { inst: InstId },
+    Arg { index: usize },
+    SyntheticOutArg { index: usize },
 }
 
 #[derive(Clone)]
-struct PromotedAlloca {
-    inst: InstId,
+struct PromotableRoot {
+    root_value: ValueId,
+    root_kind: RootKind,
     seed_block: BlockId,
     shape: shape::AggregateShape,
     leaf_vars: SmallVec<[sonatina_ir::builder::Variable; 4]>,
+    init: RootInit,
 }
 
 #[derive(Default)]
@@ -38,19 +45,38 @@ pub struct AggregateScalarize {
 
 impl AggregateScalarize {
     pub fn run(&mut self, func: &mut Function) -> bool {
+        self.run_with_local_object_args(func, None)
+    }
+
+    // `local_object_args` must be computed before entering `func_store.modify(...)`.
+    pub(crate) fn run_for_func(
+        &mut self,
+        func_ref: FuncRef,
+        func: &mut Function,
+        local_object_args: &LocalObjectArgMap,
+    ) -> bool {
+        self.run_with_local_object_args(func, local_object_args.get(&func_ref))
+    }
+
+    fn run_with_local_object_args(
+        &mut self,
+        func: &mut Function,
+        local_object_args: Option<&FxHashMap<usize, LocalObjectArgInfo>>,
+    ) -> bool {
         self.changed = false;
         self.layout_cache.clear();
         let module = func.ctx().clone();
         func.rebuild_users();
         self.assert_cfg_cleaned_up(func);
 
-        let (mut promoted_allocas, mut projection_of) = self.find_promotable_allocas(func, &module);
+        let (mut promoted_roots, mut projection_of) =
+            self.find_promotable_roots(func, &module, local_object_args);
         let scalarizable = loop {
             let scalarizable = self.compute_scalarizable_aggregates(func, &module, &projection_of);
-            let removed = self.filter_promotable_allocas(
+            let removed = self.filter_promotable_roots(
                 func,
                 &module,
-                &mut promoted_allocas,
+                &mut promoted_roots,
                 &mut projection_of,
                 &scalarizable,
             );
@@ -58,21 +84,22 @@ impl AggregateScalarize {
                 break scalarizable;
             }
         };
-        if !promoted_allocas.is_empty() || scalarizable.values().any(|v| *v) {
+        if !promoted_roots.is_empty() || scalarizable.values().any(|v| *v) {
             self.changed = true;
         } else {
             return false;
         }
 
-        self.canonicalize_promoted_allocas(func, &mut promoted_allocas);
+        self.canonicalize_promotable_roots(func, &mut promoted_roots);
 
         let mut ssa = SsaBuilder::new();
         self.append_block_preds(func, &mut ssa);
-        self.setup_promoted_leaf_vars(func, &mut ssa, &mut promoted_allocas);
+        self.setup_promoted_leaf_vars(func, &module, &mut ssa, &mut promoted_roots);
 
         let mut scalarized_agg: SecondaryMap<ValueId, Option<LeafValues>> = SecondaryMap::default();
         let mut scalar_phi_results: SecondaryMap<ValueId, Option<LeafValues>> =
             SecondaryMap::default();
+        let mut modified_leaves = FxHashMap::<ValueId, FxHashSet<usize>>::default();
 
         let agg_phi_insts = self.create_scalar_phi_placeholders(
             func,
@@ -82,9 +109,9 @@ impl AggregateScalarize {
             &mut scalar_phi_results,
         );
 
-        let promoted_by_inst: FxHashMap<InstId, PromotedAlloca> = promoted_allocas
+        let promoted_by_root: FxHashMap<ValueId, PromotableRoot> = promoted_roots
             .into_iter()
-            .map(|pa| (pa.inst, pa))
+            .map(|root| (root.root_value, root))
             .collect();
 
         let blocks: Vec<_> = func.layout.iter_block().collect();
@@ -100,10 +127,11 @@ impl AggregateScalarize {
                     block,
                     inst,
                     &projection_of,
-                    &promoted_by_inst,
+                    &promoted_by_root,
                     &scalarizable,
                     &mut scalarized_agg,
                     &mut ssa,
+                    &mut modified_leaves,
                 );
                 if !func.layout.is_inst_inserted(inst) {
                     continue;
@@ -126,6 +154,16 @@ impl AggregateScalarize {
                     &scalarizable,
                     &mut scalarized_agg,
                 );
+                if !func.layout.is_inst_inserted(inst) {
+                    continue;
+                }
+                self.rewrite_scalarizable_enum_ops(
+                    func,
+                    &module,
+                    inst,
+                    &scalarizable,
+                    &mut scalarized_agg,
+                );
             }
         }
 
@@ -137,8 +175,15 @@ impl AggregateScalarize {
             &mut scalarized_agg,
         );
         ssa.seal_all(func);
+        self.write_back_promoted_arg_roots(
+            func,
+            &module,
+            &promoted_by_root,
+            &modified_leaves,
+            &mut ssa,
+        );
         self.simplify_scalar_phi_results(func, &mut scalar_phi_results);
-        self.changed |= self.cleanup_scalarized_artifacts(func, &projection_of, &promoted_by_inst);
+        self.changed |= self.cleanup_scalarized_artifacts(func, &projection_of, &promoted_by_root);
 
         if self.changed {
             func.rebuild_users();
@@ -198,26 +243,32 @@ impl AggregateScalarize {
     fn setup_promoted_leaf_vars(
         &self,
         func: &mut Function,
+        module: &sonatina_ir::module::ModuleCtx,
         ssa: &mut SsaBuilder,
-        promoted_allocas: &mut [PromotedAlloca],
+        promoted_roots: &mut [PromotableRoot],
     ) {
-        for promoted in promoted_allocas {
-            self.assert_promoted_alloca_seed_block(func, promoted);
-            for leaf in &promoted.shape.leaves {
+        for promoted in promoted_roots {
+            self.assert_promotable_root_seed_block(func, promoted);
+            for (leaf_idx, leaf) in promoted.shape.leaves.iter().enumerate() {
                 let var = ssa.declare_var(leaf.ty);
                 promoted.leaf_vars.push(var);
-                let undef = func.dfg.make_undef_value(leaf.ty);
-                ssa.def_var(var, undef, promoted.seed_block);
+                let init = match promoted.init {
+                    RootInit::UndefFresh => func.dfg.make_undef_value(leaf.ty),
+                    RootInit::LoadLiveIn => {
+                        self.insert_live_in_leaf_load(func, module, promoted, leaf_idx)
+                    }
+                };
+                ssa.def_var(var, init, promoted.seed_block);
             }
         }
     }
 
-    fn canonicalize_promoted_allocas(
+    fn canonicalize_promotable_roots(
         &self,
         func: &mut Function,
-        promoted_allocas: &mut Vec<PromotedAlloca>,
+        promoted_roots: &mut Vec<PromotableRoot>,
     ) {
-        if promoted_allocas.is_empty() {
+        if promoted_roots.is_empty() {
             return;
         }
 
@@ -230,261 +281,510 @@ impl AggregateScalarize {
         {
             inst_order.insert(inst, idx);
         }
-        promoted_allocas.sort_by_key(|promoted| inst_order[&promoted.inst]);
+        promoted_roots.sort_by_key(|promoted| {
+            promoted
+                .root_inst()
+                .and_then(|inst| inst_order.get(&inst).copied())
+                .unwrap_or(usize::MAX)
+        });
 
         let mut editor = CfgEditor::new(func, CleanupMode::Strict);
-        for promoted in promoted_allocas {
-            let block = editor.func().layout.inst_block(promoted.inst);
-            promoted.seed_block = if first_non_phi_inst(editor.func(), block) == Some(promoted.inst)
-            {
+        for promoted in promoted_roots {
+            let Some(inst) = promoted.root_inst() else {
+                continue;
+            };
+            let block = editor.func().layout.inst_block(inst);
+            promoted.seed_block = if first_non_phi_inst(editor.func(), block) == Some(inst) {
                 block
             } else {
-                editor.split_block_at(promoted.inst).1
+                editor.split_block_at(inst).1
             };
         }
     }
 
-    fn assert_promoted_alloca_seed_block(&self, func: &Function, promoted: &PromotedAlloca) {
+    fn assert_promotable_root_seed_block(&self, func: &Function, promoted: &PromotableRoot) {
+        let Some(inst) = promoted.root_inst() else {
+            assert_eq!(
+                promoted.seed_block,
+                func.layout
+                    .entry_block()
+                    .expect("function with promoted arg root must have an entry block"),
+                "promoted arg root should seed in the entry block"
+            );
+            return;
+        };
         assert_eq!(
-            func.layout.inst_block(promoted.inst),
+            func.layout.inst_block(inst),
             promoted.seed_block,
-            "promoted alloca {} should live in its seed block {}",
-            promoted.inst.as_u32(),
+            "promoted root {:?} should live in its seed block {}",
+            promoted.root_kind,
             promoted.seed_block.as_u32()
         );
         assert_eq!(
             first_non_phi_inst(func, promoted.seed_block),
-            Some(promoted.inst),
-            "promoted alloca {} should be first non-phi in seed block {}",
-            promoted.inst.as_u32(),
+            Some(inst),
+            "promoted root {:?} should be first non-phi in seed block {}",
+            promoted.root_kind,
             promoted.seed_block.as_u32()
         );
     }
 
-    fn find_promotable_allocas(
+    fn find_promotable_roots(
         &mut self,
         func: &Function,
         module: &sonatina_ir::module::ModuleCtx,
+        local_object_args: Option<&FxHashMap<usize, LocalObjectArgInfo>>,
     ) -> (
-        Vec<PromotedAlloca>,
+        Vec<PromotableRoot>,
         SecondaryMap<ValueId, Option<Projection>>,
     ) {
         let mut promoted = Vec::new();
-        let mut projection_of: SecondaryMap<ValueId, Option<Projection>> = SecondaryMap::default();
 
-        let mut allocas: Vec<(InstId, ValueId, Type, shape::AggregateShape)> = Vec::new();
+        let mut roots: Vec<(ValueId, RootKind, Type, shape::AggregateShape)> = Vec::new();
         for block in func.layout.iter_block() {
             for inst in func.layout.iter_inst(block) {
-                let Some(alloca) = downcast::<&data::Alloca>(func.inst_set(), func.dfg.inst(inst))
+                let Some((ptr_value, root_kind, ty)) =
+                    downcast::<&data::Alloca>(func.inst_set(), func.dfg.inst(inst))
+                        .map(|alloca| {
+                            (
+                                func.dfg.inst_result(inst),
+                                RootKind::Alloca { inst },
+                                *alloca.ty(),
+                            )
+                        })
+                        .or_else(|| {
+                            downcast::<&data::ObjAlloc>(func.inst_set(), func.dfg.inst(inst)).map(
+                                |obj_alloc| {
+                                    (
+                                        func.dfg.inst_result(inst),
+                                        RootKind::ObjAlloc { inst },
+                                        *obj_alloc.ty(),
+                                    )
+                                },
+                            )
+                        })
                 else {
                     continue;
                 };
-                let Some(ptr_value) = func.dfg.inst_result(inst) else {
+                let Some(ptr_value) = ptr_value else {
                     continue;
                 };
-                let ty = *alloca.ty();
                 let Some(shape) = self.aggregate_shape(module, ty) else {
                     continue;
                 };
                 if shape.leaves.len() > 4 {
                     continue;
                 }
-                allocas.push((inst, ptr_value, ty, shape));
+                roots.push((ptr_value, root_kind, ty, shape));
             }
         }
 
-        for (inst, ptr_value, alloca_ty, shape_data) in allocas {
+        if let Some(local_object_args) = local_object_args {
+            for (&idx, &info) in local_object_args {
+                let Some(&root_value) = func.arg_values.get(idx) else {
+                    continue;
+                };
+                let Some(root_ty) = objref_element_ty(module, func.dfg.value_ty(root_value)) else {
+                    continue;
+                };
+                let Some(shape) = self.aggregate_shape(module, root_ty) else {
+                    continue;
+                };
+                if shape.leaves.len() > 4 {
+                    continue;
+                }
+                let kind = if info.fresh_result_out {
+                    RootKind::SyntheticOutArg { index: idx }
+                } else {
+                    RootKind::Arg { index: idx }
+                };
+                roots.push((root_value, kind, root_ty, shape));
+            }
+        }
+
+        let mut candidate_roots = Vec::new();
+        let mut root_slices = FxHashMap::default();
+        for (root_value, root_kind, root_ty, shape_data) in roots {
+            if root_kind.is_arg_like() && shape_contains_enum(&shape_data) {
+                continue;
+            }
+            // Mutated live-in args are semantically scalarizable, but the current
+            // writeback strategy inflates EVM gas by adding entry loads, phis, and
+            // return-path stores. Keep the profitability guard here until writeback
+            // becomes path-sensitive or these locals can stay expanded in SSA.
+            if matches!(root_kind, RootKind::Arg { .. })
+                && self.live_in_arg_root_is_mutated(func, root_value)
+            {
+                continue;
+            }
             let whole_slice = shape::AggregateSlice {
-                ty: alloca_ty,
+                ty: root_ty,
                 first_leaf: 0,
                 leaf_count: shape_data.leaves.len(),
             };
-            let mut local_projection: FxHashMap<ValueId, Projection> = FxHashMap::default();
-            local_projection.insert(
-                ptr_value,
-                Projection {
-                    alloca_inst: inst,
-                    slice: whole_slice,
-                },
-            );
-            let mut queue = vec![ptr_value];
-            let mut rejected = false;
-            let mut dead_use_cache: FxHashMap<InstId, bool> = FxHashMap::default();
+            root_slices.insert(root_value, whole_slice);
+            candidate_roots.push((root_value, root_kind, shape_data));
+        }
 
-            while let Some(ptr) = queue.pop() {
-                let projection = local_projection
-                    .get(&ptr)
-                    .copied()
-                    .expect("projection queue value missing");
-                let users: Vec<_> = func.dfg.users(ptr).copied().collect();
-                for user in users {
-                    if !func.layout.is_inst_inserted(user) {
-                        continue;
-                    }
-
-                    if let Some(gep) = downcast::<&data::Gep>(func.inst_set(), func.dfg.inst(user))
-                    {
-                        let Some(base) = gep.values().first().copied() else {
-                            rejected = true;
-                            break;
-                        };
-                        if base != ptr {
-                            rejected = true;
-                            break;
-                        }
-                        let Some(result) = func.dfg.inst_result(user) else {
-                            rejected = true;
-                            break;
-                        };
-                        let Some(sub) = shape::aggregate_slice_for_gep_path(
-                            module,
-                            projection.slice.ty,
-                            &gep.values()[1..],
-                            &func.dfg,
-                        ) else {
-                            rejected = true;
-                            break;
-                        };
-                        let composed = Projection {
-                            alloca_inst: inst,
-                            slice: shape::AggregateSlice {
-                                ty: sub.ty,
-                                first_leaf: projection.slice.first_leaf + sub.first_leaf,
-                                leaf_count: sub.leaf_count,
-                            },
-                        };
-                        if let Some(prev) = local_projection.insert(result, composed)
-                            && (prev.slice.first_leaf != composed.slice.first_leaf
-                                || prev.slice.leaf_count != composed.slice.leaf_count
-                                || prev.slice.ty != composed.slice.ty)
-                        {
-                            rejected = true;
-                            break;
-                        }
-                        queue.push(result);
-                        continue;
-                    }
-
-                    if let Some(bitcast) =
-                        downcast::<&cast::Bitcast>(func.inst_set(), func.dfg.inst(user))
-                        && *bitcast.from() == ptr
-                        && let Some(result) = func.dfg.inst_result(user)
-                        && let Some(slice) = self.bitcast_projection_slice(
-                            module,
-                            projection.slice,
-                            func.dfg.value_ty(result),
-                        )
-                    {
-                        let composed = Projection {
-                            alloca_inst: inst,
-                            slice,
-                        };
-                        if let Some(prev) = local_projection.insert(result, composed)
-                            && (prev.slice.first_leaf != composed.slice.first_leaf
-                                || prev.slice.leaf_count != composed.slice.leaf_count
-                                || prev.slice.ty != composed.slice.ty)
-                        {
-                            rejected = true;
-                            break;
-                        }
-                        queue.push(result);
-                        continue;
-                    }
-
-                    if let Some(mload) =
-                        downcast::<&data::Mload>(func.inst_set(), func.dfg.inst(user))
-                        && *mload.addr() == ptr
-                    {
-                        let ty = *mload.ty();
-                        if !self.projection_slice_can_view_as(module, projection.slice, ty) {
-                            rejected = true;
-                            break;
-                        }
-                        continue;
-                    }
-
-                    if let Some(mstore) =
-                        downcast::<&data::Mstore>(func.inst_set(), func.dfg.inst(user))
-                        && *mstore.addr() == ptr
-                    {
-                        let ty = *mstore.ty();
-                        if !self.projection_slice_can_view_as(module, projection.slice, ty) {
-                            rejected = true;
-                            break;
-                        }
-                        continue;
-                    }
-
-                    if is_dead_inst_tree(func, user, &mut dead_use_cache, &mut FxHashSet::default())
-                    {
-                        continue;
-                    }
-
-                    rejected = true;
-                    break;
-                }
-                if rejected {
-                    break;
-                }
-            }
-
-            if rejected {
+        let provenance =
+            collect_root_provenance(func, module, &root_slices, &mut self.layout_cache, None);
+        for (root_value, root_kind, shape_data) in candidate_roots {
+            if !self.root_use_chain_is_promotable(func, module, root_value, &provenance) {
                 continue;
             }
-
-            for (value, projection) in local_projection {
-                projection_of[value] = Some(projection);
-            }
-
-            promoted.push(PromotedAlloca {
-                inst,
-                seed_block: func.layout.inst_block(inst),
+            promoted.push(PromotableRoot {
+                root_value,
+                root_kind,
+                seed_block: root_kind.inst().map_or_else(
+                    || {
+                        func.layout
+                            .entry_block()
+                            .expect("promoted arg root requires an entry block")
+                    },
+                    |inst| func.layout.inst_block(inst),
+                ),
                 shape: shape_data,
                 leaf_vars: SmallVec::new(),
+                init: root_kind.default_init(),
             });
         }
 
-        (promoted, projection_of)
+        (promoted, provenance.into_exact_projection())
     }
 
-    fn filter_promotable_allocas(
+    fn root_use_chain_is_promotable(
         &mut self,
         func: &Function,
         module: &sonatina_ir::module::ModuleCtx,
-        promoted_allocas: &mut Vec<PromotedAlloca>,
+        root_value: ValueId,
+        provenance: &super::provenance::RootProvenanceMap,
+    ) -> bool {
+        let mut dead_use_cache = FxHashMap::default();
+
+        for ptr in func.dfg.value_ids() {
+            let Some(projection) = provenance.exact_projection(ptr) else {
+                continue;
+            };
+            if projection.root_value != root_value {
+                continue;
+            }
+
+            for &user in func.dfg.users(ptr) {
+                if !func.layout.is_inst_inserted(user) {
+                    continue;
+                }
+
+                if let Some(gep) = downcast::<&data::Gep>(func.inst_set(), func.dfg.inst(user))
+                    && gep.values().first() == Some(&ptr)
+                {
+                    let Some(result) = func.dfg.inst_result(user) else {
+                        return false;
+                    };
+                    if matches!(
+                        provenance.provenance(result),
+                        RootProvenance::Exact(next) if next.root_value == root_value
+                    ) {
+                        continue;
+                    }
+                }
+
+                if let Some(bitcast) =
+                    downcast::<&cast::Bitcast>(func.inst_set(), func.dfg.inst(user))
+                    && *bitcast.from() == ptr
+                {
+                    let Some(result) = func.dfg.inst_result(user) else {
+                        return false;
+                    };
+                    if matches!(
+                        provenance.provenance(result),
+                        RootProvenance::Exact(next) if next.root_value == root_value
+                    ) {
+                        continue;
+                    }
+                }
+
+                if let Some(obj_proj) =
+                    downcast::<&data::ObjProj>(func.inst_set(), func.dfg.inst(user))
+                    && obj_proj.values().first() == Some(&ptr)
+                {
+                    let Some(result) = func.dfg.inst_result(user) else {
+                        return false;
+                    };
+                    if matches!(
+                        provenance.provenance(result),
+                        RootProvenance::Exact(next) if next.root_value == root_value
+                    ) {
+                        continue;
+                    }
+                }
+
+                if let Some(obj_index) =
+                    downcast::<&data::ObjIndex>(func.inst_set(), func.dfg.inst(user))
+                    && *obj_index.object() == ptr
+                {
+                    let Some(result) = func.dfg.inst_result(user) else {
+                        return false;
+                    };
+                    if matches!(
+                        provenance.provenance(result),
+                        RootProvenance::Exact(next) if next.root_value == root_value
+                    ) {
+                        continue;
+                    }
+                }
+
+                if let Some(enum_proj) =
+                    downcast::<&data::EnumProj>(func.inst_set(), func.dfg.inst(user))
+                    && *enum_proj.object() == ptr
+                {
+                    let Some(result) = func.dfg.inst_result(user) else {
+                        return false;
+                    };
+                    if matches!(
+                        provenance.provenance(result),
+                        RootProvenance::Exact(next) if next.root_value == root_value
+                    ) {
+                        continue;
+                    }
+                }
+
+                if let Some(phi) =
+                    downcast::<&control_flow::Phi>(func.inst_set(), func.dfg.inst(user))
+                    && phi.args().iter().any(|(arg, _)| *arg == ptr)
+                {
+                    let Some(result) = func.dfg.inst_result(user) else {
+                        return false;
+                    };
+                    if provenance.exact_projection(result) == Some(projection) {
+                        continue;
+                    }
+                }
+
+                if let Some(mload) = downcast::<&data::Mload>(func.inst_set(), func.dfg.inst(user))
+                    && *mload.addr() == ptr
+                {
+                    if self.projection_slice_can_view_as(module, projection.slice, *mload.ty()) {
+                        continue;
+                    }
+                    return false;
+                }
+
+                if let Some(obj_load) =
+                    downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(user))
+                    && *obj_load.object() == ptr
+                {
+                    let Some(result) = func.dfg.inst_result(user) else {
+                        return false;
+                    };
+                    if self.projection_slice_can_view_as(
+                        module,
+                        projection.slice,
+                        func.dfg.value_ty(result),
+                    ) {
+                        continue;
+                    }
+                    return false;
+                }
+
+                if let Some(enum_get_tag) =
+                    downcast::<&data::EnumGetTag>(func.inst_set(), func.dfg.inst(user))
+                    && *enum_get_tag.object() == ptr
+                {
+                    let Some(result) = func.dfg.inst_result(user) else {
+                        return false;
+                    };
+                    if self.projection_slice_can_view_as(
+                        module,
+                        projection.slice,
+                        func.dfg.value_ty(result),
+                    ) {
+                        continue;
+                    }
+                    return false;
+                }
+
+                if let Some(mstore) =
+                    downcast::<&data::Mstore>(func.inst_set(), func.dfg.inst(user))
+                    && *mstore.addr() == ptr
+                {
+                    if self.projection_slice_can_view_as(module, projection.slice, *mstore.ty()) {
+                        continue;
+                    }
+                    return false;
+                }
+
+                if let Some(obj_store) =
+                    downcast::<&data::ObjStore>(func.inst_set(), func.dfg.inst(user))
+                    && *obj_store.object() == ptr
+                {
+                    if self.projection_slice_can_view_as(
+                        module,
+                        projection.slice,
+                        func.dfg.value_ty(*obj_store.value()),
+                    ) {
+                        continue;
+                    }
+                    return false;
+                }
+
+                if let Some(enum_assert_ref) =
+                    downcast::<&data::EnumAssertVariantRef>(func.inst_set(), func.dfg.inst(user))
+                    && *enum_assert_ref.object() == ptr
+                {
+                    if matches!(
+                        projection.slice.ty.resolve_compound(module),
+                        Some(sonatina_ir::types::CompoundType::Enum(_))
+                    ) {
+                        continue;
+                    }
+                    return false;
+                }
+
+                if let Some(enum_set_tag) =
+                    downcast::<&data::EnumSetTag>(func.inst_set(), func.dfg.inst(user))
+                    && *enum_set_tag.object() == ptr
+                {
+                    if matches!(
+                        projection.slice.ty.resolve_compound(module),
+                        Some(sonatina_ir::types::CompoundType::Enum(_))
+                    ) {
+                        continue;
+                    }
+                    return false;
+                }
+
+                if let Some(enum_write_variant) =
+                    downcast::<&data::EnumWriteVariant>(func.inst_set(), func.dfg.inst(user))
+                    && *enum_write_variant.object() == ptr
+                {
+                    if matches!(
+                        projection.slice.ty.resolve_compound(module),
+                        Some(sonatina_ir::types::CompoundType::Enum(_))
+                    ) {
+                        continue;
+                    }
+                    return false;
+                }
+
+                if is_dead_inst_tree(func, user, &mut dead_use_cache, &mut FxHashSet::default()) {
+                    continue;
+                }
+
+                return false;
+            }
+        }
+
+        true
+    }
+
+    fn live_in_arg_root_is_mutated(&self, func: &Function, root_value: ValueId) -> bool {
+        let mut worklist = vec![root_value];
+        let mut seen = FxHashSet::default();
+
+        while let Some(value) = worklist.pop() {
+            if !seen.insert(value) {
+                continue;
+            }
+
+            for &user in func.dfg.users(value) {
+                if !func.layout.is_inst_inserted(user) {
+                    continue;
+                }
+
+                if let Some(proj) = downcast::<&data::ObjProj>(func.inst_set(), func.dfg.inst(user))
+                    && proj.values().first() == Some(&value)
+                {
+                    if let Some(result) = func.dfg.inst_result(user) {
+                        worklist.push(result);
+                    }
+                    continue;
+                }
+
+                if let Some(index) =
+                    downcast::<&data::ObjIndex>(func.inst_set(), func.dfg.inst(user))
+                    && *index.object() == value
+                {
+                    if let Some(result) = func.dfg.inst_result(user) {
+                        worklist.push(result);
+                    }
+                    continue;
+                }
+
+                if let Some(enum_proj) =
+                    downcast::<&data::EnumProj>(func.inst_set(), func.dfg.inst(user))
+                    && *enum_proj.object() == value
+                {
+                    if let Some(result) = func.dfg.inst_result(user) {
+                        worklist.push(result);
+                    }
+                    continue;
+                }
+
+                if let Some(phi) =
+                    downcast::<&control_flow::Phi>(func.inst_set(), func.dfg.inst(user))
+                    && phi.args().iter().any(|(arg, _)| *arg == value)
+                {
+                    if let Some(result) = func.dfg.inst_result(user) {
+                        worklist.push(result);
+                    }
+                    continue;
+                }
+
+                if downcast::<&data::ObjStore>(func.inst_set(), func.dfg.inst(user))
+                    .is_some_and(|obj_store| *obj_store.object() == value)
+                    || downcast::<&data::Mstore>(func.inst_set(), func.dfg.inst(user))
+                        .is_some_and(|mstore| *mstore.addr() == value)
+                    || downcast::<&data::EnumSetTag>(func.inst_set(), func.dfg.inst(user))
+                        .is_some_and(|enum_set_tag| *enum_set_tag.object() == value)
+                    || downcast::<&data::EnumWriteVariant>(func.inst_set(), func.dfg.inst(user))
+                        .is_some_and(|enum_write_variant| *enum_write_variant.object() == value)
+                {
+                    return true;
+                }
+            }
+        }
+
+        false
+    }
+
+    fn filter_promotable_roots(
+        &mut self,
+        func: &Function,
+        module: &sonatina_ir::module::ModuleCtx,
+        promoted_roots: &mut Vec<PromotableRoot>,
         projection_of: &mut SecondaryMap<ValueId, Option<Projection>>,
         scalarizable: &SecondaryMap<ValueId, bool>,
     ) -> bool {
-        let before = promoted_allocas.len();
-        promoted_allocas.retain(|promoted| {
-            self.promoted_alloca_can_scalarize(
+        let before = promoted_roots.len();
+        promoted_roots.retain(|promoted| {
+            self.promotable_root_can_scalarize(
                 func,
                 module,
-                promoted.inst,
+                promoted.root_value,
                 projection_of,
                 scalarizable,
             )
         });
 
-        let kept: FxHashSet<InstId> = promoted_allocas
+        let kept: FxHashSet<ValueId> = promoted_roots
             .iter()
-            .map(|promoted| promoted.inst)
+            .map(|promoted| promoted.root_value)
             .collect();
         for value in func.dfg.value_ids() {
             if let Some(projection) = projection_of[value]
-                && !kept.contains(&projection.alloca_inst)
+                && !kept.contains(&projection.root_value)
             {
                 projection_of[value] = None;
             }
         }
-        promoted_allocas.len() != before
+        promoted_roots.len() != before
     }
 
-    fn promoted_alloca_can_scalarize(
+    fn promotable_root_can_scalarize(
         &mut self,
         func: &Function,
         module: &sonatina_ir::module::ModuleCtx,
-        alloca_inst: InstId,
+        root_value: ValueId,
         projection_of: &SecondaryMap<ValueId, Option<Projection>>,
         scalarizable: &SecondaryMap<ValueId, bool>,
     ) -> bool {
@@ -492,7 +792,7 @@ impl AggregateScalarize {
             let Some(projection) = projection_of[ptr] else {
                 continue;
             };
-            if projection.alloca_inst != alloca_inst {
+            if projection.root_value != root_value {
                 continue;
             }
 
@@ -502,7 +802,7 @@ impl AggregateScalarize {
                 }
                 if let Some(mload) = downcast::<&data::Mload>(func.inst_set(), func.dfg.inst(user))
                     && *mload.addr() == ptr
-                    && shape::is_supported_aggregate_ty(module, *mload.ty())
+                    && shape::is_supported_scalar_shape_ty(module, *mload.ty())
                 {
                     let Some(result) = func.dfg.inst_result(user) else {
                         return false;
@@ -511,14 +811,65 @@ impl AggregateScalarize {
                         return false;
                     }
                 }
+                if let Some(obj_load) =
+                    downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(user))
+                    && *obj_load.object() == ptr
+                    && let Some(result) = func.dfg.inst_result(user)
+                    && shape::is_supported_scalar_shape_ty(module, func.dfg.value_ty(result))
+                    && !scalarizable[result]
+                {
+                    return false;
+                }
                 if let Some(mstore) =
                     downcast::<&data::Mstore>(func.inst_set(), func.dfg.inst(user))
                     && *mstore.addr() == ptr
-                    && shape::is_supported_aggregate_ty(module, *mstore.ty())
+                    && shape::is_supported_scalar_shape_ty(module, *mstore.ty())
                     && (!scalarizable[*mstore.value()]
                         || func.dfg.value_ty(*mstore.value()) != *mstore.ty())
                 {
                     return false;
+                }
+                if let Some(obj_store) =
+                    downcast::<&data::ObjStore>(func.inst_set(), func.dfg.inst(user))
+                    && *obj_store.object() == ptr
+                {
+                    let value_ty = func.dfg.value_ty(*obj_store.value());
+                    if shape::is_supported_scalar_shape_ty(module, value_ty)
+                        && !scalarizable[*obj_store.value()]
+                    {
+                        return false;
+                    }
+                }
+                if let Some(enum_get_tag) =
+                    downcast::<&data::EnumGetTag>(func.inst_set(), func.dfg.inst(user))
+                    && *enum_get_tag.object() == ptr
+                {
+                    continue;
+                }
+                if let Some(enum_assert_ref) =
+                    downcast::<&data::EnumAssertVariantRef>(func.inst_set(), func.dfg.inst(user))
+                    && *enum_assert_ref.object() == ptr
+                {
+                    continue;
+                }
+                if let Some(enum_set_tag) =
+                    downcast::<&data::EnumSetTag>(func.inst_set(), func.dfg.inst(user))
+                    && *enum_set_tag.object() == ptr
+                {
+                    continue;
+                }
+                if let Some(enum_write_variant) =
+                    downcast::<&data::EnumWriteVariant>(func.inst_set(), func.dfg.inst(user))
+                    && *enum_write_variant.object() == ptr
+                {
+                    for &payload in enum_write_variant.values() {
+                        let payload_ty = func.dfg.value_ty(payload);
+                        if shape::is_supported_scalar_shape_ty(module, payload_ty)
+                            && !scalarizable[payload]
+                        {
+                            return false;
+                        }
+                    }
                 }
             }
         }
@@ -535,7 +886,7 @@ impl AggregateScalarize {
 
         for value in func.dfg.value_ids() {
             let ty = func.dfg.value_ty(value);
-            if !shape::is_supported_aggregate_ty(module, ty) {
+            if !shape::is_supported_scalar_shape_ty(module, ty) {
                 continue;
             }
             let ok = match func.dfg.value(value) {
@@ -548,6 +899,10 @@ impl AggregateScalarize {
                     } else if downcast::<&data::InsertValue>(func.inst_set(), func.dfg.inst(*inst))
                         .is_some()
                         || downcast::<&data::ExtractValue>(func.inst_set(), func.dfg.inst(*inst))
+                            .is_some()
+                        || downcast::<&data::EnumMake>(func.inst_set(), func.dfg.inst(*inst))
+                            .is_some()
+                        || downcast::<&data::EnumExtract>(func.inst_set(), func.dfg.inst(*inst))
                             .is_some()
                         || downcast::<&control_flow::Phi>(func.inst_set(), func.dfg.inst(*inst))
                             .is_some()
@@ -565,6 +920,10 @@ impl AggregateScalarize {
                         downcast::<&data::Mload>(func.inst_set(), func.dfg.inst(*inst))
                     {
                         projection_of[*mload.addr()].is_some()
+                    } else if let Some(obj_load) =
+                        downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(*inst))
+                    {
+                        projection_of[*obj_load.object()].is_some()
                     } else {
                         false
                     }
@@ -633,17 +992,51 @@ impl AggregateScalarize {
                     if func.dfg.value_ty(*insert.value()) != slice.ty {
                         return false;
                     }
-                    if shape::is_supported_aggregate_ty(module, slice.ty)
+                    if shape::is_supported_scalar_shape_ty(module, slice.ty)
                         && !scalarizable[*insert.value()]
                     {
                         return false;
+                    }
+                    true
+                } else if let Some(enum_make) =
+                    downcast::<&data::EnumMake>(func.inst_set(), func.dfg.inst(*inst))
+                {
+                    let result_ty = func.dfg.value_ty(value);
+                    if result_ty != *enum_make.ty() {
+                        return false;
+                    }
+                    let Type::Compound(enum_ty) = result_ty else {
+                        return false;
+                    };
+                    if enum_ty != enum_make.variant().enum_ty() {
+                        return false;
+                    }
+                    let variant_data = func.ctx().with_ty_store(|store| {
+                        store.enum_variant_data(*enum_make.variant()).cloned()
+                    });
+                    let Some(variant_data) = variant_data else {
+                        return false;
+                    };
+                    if variant_data.fields.len() != enum_make.values().len() {
+                        return false;
+                    }
+                    for (&field_ty, &payload) in variant_data.fields.iter().zip(enum_make.values())
+                    {
+                        if func.dfg.value_ty(payload) != field_ty {
+                            return false;
+                        }
+                        if shape::is_supported_scalar_shape_ty(module, field_ty)
+                            && !scalarizable[payload]
+                        {
+                            return false;
+                        }
                     }
                     true
                 } else if let Some(extract) =
                     downcast::<&data::ExtractValue>(func.inst_set(), func.dfg.inst(*inst))
                 {
                     let src_ty = func.dfg.value_ty(*extract.dest());
-                    if !shape::is_supported_aggregate_ty(module, src_ty)
+                    if !shape::is_supported_scalar_shape_ty(module, src_ty)
                         || !scalarizable[*extract.dest()]
                     {
                         return false;
@@ -652,6 +1045,29 @@ impl AggregateScalarize {
                         return false;
                     };
                     let Some(slice) = shape::aggregate_slice_for_index(module, src_ty, idx) else {
+                        return false;
+                    };
+                    slice.ty == func.dfg.value_ty(value)
+                } else if let Some(enum_extract) =
+                    downcast::<&data::EnumExtract>(func.inst_set(), func.dfg.inst(*inst))
+                {
+                    let src_ty = func.dfg.value_ty(*enum_extract.value());
+                    if !matches!(
+                        src_ty.resolve_compound(module),
+                        Some(sonatina_ir::types::CompoundType::Enum(_))
+                    ) || !scalarizable[*enum_extract.value()]
+                    {
+                        return false;
+                    }
+                    let Some(field_idx) = shape::const_u32(&func.dfg, *enum_extract.field()) else {
+                        return false;
+                    };
+                    let Some(slice) = shape::enum_variant_field_slice(
+                        module,
+                        src_ty,
+                        *enum_extract.variant(),
+                        field_idx,
+                    ) else {
                         return false;
                     };
                     slice.ty == func.dfg.value_ty(value)
@@ -665,9 +1081,15 @@ impl AggregateScalarize {
                 } else if let Some(mload) =
                     downcast::<&data::Mload>(func.inst_set(), func.dfg.inst(*inst))
                 {
-                    shape::is_supported_aggregate_ty(module, *mload.ty())
+                    shape::is_supported_scalar_shape_ty(module, *mload.ty())
                         && projection_of[*mload.addr()].is_some()
                         && *mload.ty() == func.dfg.value_ty(value)
+                } else if let Some(obj_load) =
+                    downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(*inst))
+                {
+                    let value_ty = func.dfg.value_ty(value);
+                    shape::is_supported_scalar_shape_ty(module, value_ty)
+                        && projection_of[*obj_load.object()].is_some()
                 } else if let Some(bitcast) =
                     downcast::<&cast::Bitcast>(func.inst_set(), func.dfg.inst(*inst))
                 {
@@ -679,7 +1101,7 @@ impl AggregateScalarize {
                     ) {
                         return false;
                     }
-                    if shape::is_supported_aggregate_ty(module, from_ty) {
+                    if shape::is_supported_scalar_shape_ty(module, from_ty) {
                         scalarizable[*bitcast.from()]
                     } else {
                         true
@@ -725,7 +1147,7 @@ impl AggregateScalarize {
                     return false;
                 };
                 let res_ty = func.dfg.value_ty(res);
-                if shape::is_supported_aggregate_ty(module, res_ty) && !scalarizable[res] {
+                if shape::is_supported_scalar_shape_ty(module, res_ty) && !scalarizable[res] {
                     return false;
                 }
                 continue;
@@ -743,13 +1165,60 @@ impl AggregateScalarize {
                 continue;
             }
 
+            if let Some(enum_tag) = downcast::<&data::EnumTag>(func.inst_set(), func.dfg.inst(user))
+                && *enum_tag.value() == value
+            {
+                continue;
+            }
+
+            if let Some(enum_is_variant) =
+                downcast::<&data::EnumIsVariant>(func.inst_set(), func.dfg.inst(user))
+                && *enum_is_variant.value() == value
+            {
+                continue;
+            }
+
+            if let Some(enum_assert) =
+                downcast::<&data::EnumAssertVariant>(func.inst_set(), func.dfg.inst(user))
+                && *enum_assert.value() == value
+            {
+                continue;
+            }
+
+            if let Some(enum_extract) =
+                downcast::<&data::EnumExtract>(func.inst_set(), func.dfg.inst(user))
+                && *enum_extract.value() == value
+            {
+                let Some(res) = func.dfg.inst_result(user) else {
+                    return false;
+                };
+                let res_ty = func.dfg.value_ty(res);
+                if shape::is_supported_scalar_shape_ty(module, res_ty) && !scalarizable[res] {
+                    return false;
+                }
+                continue;
+            }
+
             if let Some(mstore) = downcast::<&data::Mstore>(func.inst_set(), func.dfg.inst(user))
                 && *mstore.value() == value
             {
-                if !shape::is_supported_aggregate_ty(module, *mstore.ty()) {
+                if !shape::is_supported_scalar_shape_ty(module, *mstore.ty()) {
                     return false;
                 }
                 if projection_of[*mstore.addr()].is_none() {
+                    return false;
+                }
+                continue;
+            }
+
+            if let Some(obj_store) =
+                downcast::<&data::ObjStore>(func.inst_set(), func.dfg.inst(user))
+                && *obj_store.value() == value
+            {
+                if !shape::is_supported_scalar_shape_ty(module, func.dfg.value_ty(value)) {
+                    return false;
+                }
+                if projection_of[*obj_store.object()].is_none() {
                     return false;
                 }
                 continue;
@@ -766,7 +1235,7 @@ impl AggregateScalarize {
                 {
                     return false;
                 }
-                if shape::is_supported_aggregate_ty(module, res_ty) && !scalarizable[res] {
+                if shape::is_supported_scalar_shape_ty(module, res_ty) && !scalarizable[res] {
                     return false;
                 }
                 continue;
@@ -833,28 +1302,40 @@ impl AggregateScalarize {
         block: BlockId,
         inst: InstId,
         projection_of: &SecondaryMap<ValueId, Option<Projection>>,
-        promoted_by_inst: &FxHashMap<InstId, PromotedAlloca>,
+        promoted_by_root: &FxHashMap<ValueId, PromotableRoot>,
         scalarizable: &SecondaryMap<ValueId, bool>,
         scalarized_agg: &mut SecondaryMap<ValueId, Option<LeafValues>>,
         ssa: &mut SsaBuilder,
+        modified_leaves: &mut FxHashMap<ValueId, FxHashSet<usize>>,
     ) {
-        if let Some(mload) = downcast::<&data::Mload>(func.inst_set(), func.dfg.inst(inst)).cloned()
+        if let Some((projection_value, ty, result)) =
+            downcast::<&data::Mload>(func.inst_set(), func.dfg.inst(inst))
+                .map(|mload| (*mload.addr(), *mload.ty(), func.dfg.inst_result(inst)))
+                .or_else(|| {
+                    downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst)).map(
+                        |obj_load| {
+                            let result = func.dfg.inst_result(inst);
+                            let ty = result
+                                .map(|result| func.dfg.value_ty(result))
+                                .unwrap_or(Type::Unit);
+                            (*obj_load.object(), ty, result)
+                        },
+                    )
+                })
         {
-            let Some(projection) = projection_of[*mload.addr()] else {
+            let Some(projection) = projection_of[projection_value] else {
                 return;
             };
-            let Some(promoted) = promoted_by_inst.get(&projection.alloca_inst) else {
+            let Some(promoted) = promoted_by_root.get(&projection.root_value) else {
                 return;
             };
-
-            let ty = *mload.ty();
-            let Some(result) = func.dfg.inst_result(inst) else {
+            let Some(result) = result else {
                 return;
             };
             let leaf_range = projection.slice.first_leaf
                 ..projection.slice.first_leaf + projection.slice.leaf_count;
             let underlying_leaves = &promoted.shape.leaves[leaf_range.clone()];
-            if shape::is_supported_aggregate_ty(module, ty) {
+            if shape::is_supported_scalar_shape_ty(module, ty) {
                 if !scalarizable[result] {
                     return;
                 }
@@ -894,24 +1375,170 @@ impl AggregateScalarize {
             return;
         }
 
-        let Some(mstore) = downcast::<&data::Mstore>(func.inst_set(), func.dfg.inst(inst)).cloned()
+        if let Some(enum_get_tag) =
+            downcast::<&data::EnumGetTag>(func.inst_set(), func.dfg.inst(inst))
+        {
+            let Some(projection) = projection_of[*enum_get_tag.object()] else {
+                return;
+            };
+            let Some(promoted) = promoted_by_root.get(&projection.root_value) else {
+                return;
+            };
+            let Some(tag_slice) = shape::enum_tag_slice(module, projection.slice.ty) else {
+                return;
+            };
+            let leaf_idx = projection.slice.first_leaf + tag_slice.first_leaf;
+            let Some(result) = func.dfg.inst_result(inst) else {
+                return;
+            };
+            let underlying_leaf = &promoted.shape.leaves[leaf_idx];
+            let value = ssa.use_var(func, promoted.leaf_vars[leaf_idx], block);
+            let replacement = bitcast_before_inst(
+                func,
+                inst,
+                value,
+                underlying_leaf.ty,
+                func.dfg.value_ty(result),
+            );
+            func.dfg.change_to_alias(result, replacement);
+            InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+            return;
+        }
+
+        if let Some(enum_set_tag) =
+            downcast::<&data::EnumSetTag>(func.inst_set(), func.dfg.inst(inst))
+        {
+            let Some(projection) = projection_of[*enum_set_tag.object()] else {
+                return;
+            };
+            let Some(promoted) = promoted_by_root.get(&projection.root_value) else {
+                return;
+            };
+            let Some(tag_slice) = shape::enum_tag_slice(module, projection.slice.ty) else {
+                return;
+            };
+            let leaf_idx = projection.slice.first_leaf + tag_slice.first_leaf;
+            let leaf = &promoted.shape.leaves[leaf_idx];
+            let tag = func
+                .dfg
+                .make_imm_value(enum_variant_tag_imm(*enum_set_tag.variant(), leaf.ty));
+            ssa.def_var(promoted.leaf_vars[leaf_idx], tag, block);
+            record_modified_leaves(
+                modified_leaves,
+                projection.root_value,
+                leaf_idx..leaf_idx + tag_slice.leaf_count,
+            );
+            InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+            return;
+        }
+
+        if let Some(enum_write_variant) =
+            downcast::<&data::EnumWriteVariant>(func.inst_set(), func.dfg.inst(inst)).cloned()
+        {
+            let Some(projection) = projection_of[*enum_write_variant.object()] else {
+                return;
+            };
+            let Some(promoted) = promoted_by_root.get(&projection.root_value) else {
+                return;
+            };
+            let enum_ty = projection.slice.ty;
+            for (field_idx, &payload) in enum_write_variant.values().iter().enumerate() {
+                let field_idx = u32::try_from(field_idx).ok();
+                let Some(field_idx) = field_idx else {
+                    return;
+                };
+                let Some(field_slice) = shape::enum_variant_field_slice(
+                    module,
+                    enum_ty,
+                    *enum_write_variant.variant(),
+                    field_idx,
+                ) else {
+                    return;
+                };
+                let payload_ty = field_slice.ty;
+                let Some(payload_leaves) = self.scalarized_leaves_of_value(
+                    func,
+                    module,
+                    payload,
+                    payload_ty,
+                    scalarized_agg,
+                ) else {
+                    return;
+                };
+                let Some(view_leaf_tys) = self.projection_view_leaf_tys(module, payload_ty) else {
+                    return;
+                };
+                let base_leaf = projection.slice.first_leaf + field_slice.first_leaf;
+                if payload_leaves.len() != field_slice.leaf_count
+                    || view_leaf_tys.len() != field_slice.leaf_count
+                {
+                    return;
+                }
+                for (i, ((payload_leaf, view_ty), underlying_leaf)) in payload_leaves
+                    .into_iter()
+                    .zip(view_leaf_tys)
+                    .zip(
+                        promoted.shape.leaves[base_leaf..base_leaf + field_slice.leaf_count].iter(),
+                    )
+                    .enumerate()
+                {
+                    let leaf_idx = base_leaf + i;
+                    let stored =
+                        bitcast_before_inst(func, inst, payload_leaf, view_ty, underlying_leaf.ty);
+                    ssa.def_var(promoted.leaf_vars[leaf_idx], stored, block);
+                }
+                record_modified_leaves(
+                    modified_leaves,
+                    projection.root_value,
+                    base_leaf..base_leaf + field_slice.leaf_count,
+                );
+            }
+            let Some(tag_slice) = shape::enum_tag_slice(module, enum_ty) else {
+                return;
+            };
+            let tag_leaf_idx = projection.slice.first_leaf + tag_slice.first_leaf;
+            let tag_leaf = &promoted.shape.leaves[tag_leaf_idx];
+            let tag = func.dfg.make_imm_value(enum_variant_tag_imm(
+                *enum_write_variant.variant(),
+                tag_leaf.ty,
+            ));
+            ssa.def_var(promoted.leaf_vars[tag_leaf_idx], tag, block);
+            record_modified_leaves(
+                modified_leaves,
+                projection.root_value,
+                tag_leaf_idx..tag_leaf_idx + tag_slice.leaf_count,
+            );
+            InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+            return;
+        }
+
+        let Some((projection_value, value, ty)) =
+            downcast::<&data::Mstore>(func.inst_set(), func.dfg.inst(inst))
+                .map(|mstore| (*mstore.addr(), *mstore.value(), *mstore.ty()))
+                .or_else(|| {
+                    downcast::<&data::ObjStore>(func.inst_set(), func.dfg.inst(inst)).map(
+                        |obj_store| {
+                            let value = *obj_store.value();
+                            (*obj_store.object(), value, func.dfg.value_ty(value))
+                        },
+                    )
+                })
         else {
             return;
         };
-        let Some(projection) = projection_of[*mstore.addr()] else {
+        let Some(projection) = projection_of[projection_value] else {
             return;
         };
-        let Some(promoted) = promoted_by_inst.get(&projection.alloca_inst) else {
+        let Some(promoted) = promoted_by_root.get(&projection.root_value) else {
             return;
         };
-        let ty = *mstore.ty();
         let leaf_range =
             projection.slice.first_leaf..projection.slice.first_leaf + projection.slice.leaf_count;
         let underlying_leaves = &promoted.shape.leaves[leaf_range.clone()];
 
-        if shape::is_supported_aggregate_ty(module, ty) {
+        if shape::is_supported_scalar_shape_ty(module, ty) {
             let Some(payload_leaves) =
-                self.scalarized_leaves_of_value(func, module, *mstore.value(), ty, scalarized_agg)
+                self.scalarized_leaves_of_value(func, module, value, ty, scalarized_agg)
             else {
                 return;
             };
@@ -933,6 +1560,7 @@ impl AggregateScalarize {
                 let stored = bitcast_before_inst(func, inst, val, view_ty, underlying_leaf.ty);
                 ssa.def_var(var, stored, block);
             }
+            record_modified_leaves(modified_leaves, projection.root_value, leaf_range);
             InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
             return;
         }
@@ -942,8 +1570,9 @@ impl AggregateScalarize {
         }
         let underlying_leaf = &underlying_leaves[0];
         let var = promoted.leaf_vars[projection.slice.first_leaf];
-        let stored = bitcast_before_inst(func, inst, *mstore.value(), ty, underlying_leaf.ty);
+        let stored = bitcast_before_inst(func, inst, value, ty, underlying_leaf.ty);
         ssa.def_var(var, stored, block);
+        record_modified_leaves(modified_leaves, projection.root_value, leaf_range);
         InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
     }
 
@@ -966,8 +1595,8 @@ impl AggregateScalarize {
         let from = *bitcast.from();
         let from_ty = func.dfg.value_ty(from);
         let result_ty = func.dfg.value_ty(result);
-        let from_is_agg = shape::is_supported_aggregate_ty(module, from_ty);
-        let result_is_agg = shape::is_supported_aggregate_ty(module, result_ty);
+        let from_is_agg = shape::is_supported_scalar_shape_ty(module, from_ty);
+        let result_is_agg = shape::is_supported_scalar_shape_ty(module, result_ty);
         if !from_is_agg && !result_is_agg {
             return;
         }
@@ -1094,7 +1723,7 @@ impl AggregateScalarize {
             return;
         };
         let dest_ty = func.dfg.value_ty(*extract.dest());
-        if !shape::is_supported_aggregate_ty(module, dest_ty) {
+        if !shape::is_supported_scalar_shape_ty(module, dest_ty) {
             return;
         }
         let Some(dest_leaves) =
@@ -1109,7 +1738,7 @@ impl AggregateScalarize {
             return;
         };
         let result_ty = func.dfg.value_ty(result);
-        if shape::is_supported_aggregate_ty(module, result_ty) {
+        if shape::is_supported_scalar_shape_ty(module, result_ty) {
             if !scalarizable[result] {
                 return;
             }
@@ -1122,6 +1751,175 @@ impl AggregateScalarize {
         }
 
         let replacement = dest_leaves[slice.first_leaf];
+        func.dfg.change_to_alias(result, replacement);
+        InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+    }
+
+    fn rewrite_scalarizable_enum_ops(
+        &mut self,
+        func: &mut Function,
+        module: &sonatina_ir::module::ModuleCtx,
+        inst: InstId,
+        scalarizable: &SecondaryMap<ValueId, bool>,
+        scalarized_agg: &mut SecondaryMap<ValueId, Option<LeafValues>>,
+    ) {
+        if let Some(enum_make) =
+            downcast::<&data::EnumMake>(func.inst_set(), func.dfg.inst(inst)).cloned()
+        {
+            let Some(result) = func.dfg.inst_result(inst) else {
+                return;
+            };
+            if !scalarizable[result] {
+                return;
+            }
+            let enum_ty = func.dfg.value_ty(result);
+            let Some(shape) = self.aggregate_shape(module, enum_ty) else {
+                return;
+            };
+            let mut leaves = LeafValues::new();
+            for leaf in &shape.leaves {
+                leaves.push(func.dfg.make_undef_value(leaf.ty));
+            }
+            let Some(tag_slice) = shape::enum_tag_slice(module, enum_ty) else {
+                return;
+            };
+            leaves[tag_slice.first_leaf] = func.dfg.make_imm_value(enum_variant_tag_imm(
+                *enum_make.variant(),
+                shape.leaves[tag_slice.first_leaf].ty,
+            ));
+            for (field_idx, &payload) in enum_make.values().iter().enumerate() {
+                let field_idx = u32::try_from(field_idx).ok();
+                let Some(field_idx) = field_idx else {
+                    return;
+                };
+                let Some(field_slice) = shape::enum_variant_field_slice(
+                    module,
+                    enum_ty,
+                    *enum_make.variant(),
+                    field_idx,
+                ) else {
+                    return;
+                };
+                let Some(payload_leaves) = self.scalarized_leaves_of_value(
+                    func,
+                    module,
+                    payload,
+                    field_slice.ty,
+                    scalarized_agg,
+                ) else {
+                    return;
+                };
+                if payload_leaves.len() != field_slice.leaf_count {
+                    return;
+                }
+                for (i, payload_leaf) in payload_leaves.into_iter().enumerate() {
+                    leaves[field_slice.first_leaf + i] = payload_leaf;
+                }
+            }
+            scalarized_agg[result] = Some(leaves);
+            return;
+        }
+
+        if let Some(enum_tag) = downcast::<&data::EnumTag>(func.inst_set(), func.dfg.inst(inst)) {
+            let Some(result) = func.dfg.inst_result(inst) else {
+                return;
+            };
+            let enum_ty = func.dfg.value_ty(*enum_tag.value());
+            let Some(enum_leaves) = self.scalarized_leaves_of_value(
+                func,
+                module,
+                *enum_tag.value(),
+                enum_ty,
+                scalarized_agg,
+            ) else {
+                return;
+            };
+            let Some(tag_slice) = shape::enum_tag_slice(module, enum_ty) else {
+                return;
+            };
+            let replacement = bitcast_before_inst(
+                func,
+                inst,
+                enum_leaves[tag_slice.first_leaf],
+                shape::enum_tag_ty(enum_ty).unwrap_or(func.dfg.value_ty(result)),
+                func.dfg.value_ty(result),
+            );
+            func.dfg.change_to_alias(result, replacement);
+            InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+            return;
+        }
+
+        if let Some(enum_is_variant) =
+            downcast::<&data::EnumIsVariant>(func.inst_set(), func.dfg.inst(inst)).cloned()
+        {
+            let Some(result) = func.dfg.inst_result(inst) else {
+                return;
+            };
+            let enum_ty = func.dfg.value_ty(*enum_is_variant.value());
+            let Some(enum_leaves) = self.scalarized_leaves_of_value(
+                func,
+                module,
+                *enum_is_variant.value(),
+                enum_ty,
+                scalarized_agg,
+            ) else {
+                return;
+            };
+            let Some(tag_slice) = shape::enum_tag_slice(module, enum_ty) else {
+                return;
+            };
+            let tag = enum_leaves[tag_slice.first_leaf];
+            let tag_match = func.dfg.make_imm_value(enum_variant_tag_imm(
+                *enum_is_variant.variant(),
+                func.dfg.value_ty(tag),
+            ));
+            let eq = eq_before_inst(func, inst, tag, tag_match);
+            func.dfg.change_to_alias(result, eq);
+            InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+            return;
+        }
+
+        let Some(enum_extract) =
+            downcast::<&data::EnumExtract>(func.inst_set(), func.dfg.inst(inst)).cloned()
+        else {
+            return;
+        };
+        let Some(result) = func.dfg.inst_result(inst) else {
+            return;
+        };
+        let enum_ty = func.dfg.value_ty(*enum_extract.value());
+        let Some(enum_leaves) = self.scalarized_leaves_of_value(
+            func,
+            module,
+            *enum_extract.value(),
+            enum_ty,
+            scalarized_agg,
+        ) else {
+            return;
+        };
+        let Some(field_idx) = shape::const_u32(&func.dfg, *enum_extract.field()) else {
+            return;
+        };
+        let Some(field_slice) =
+            shape::enum_variant_field_slice(module, enum_ty, *enum_extract.variant(), field_idx)
+        else {
+            return;
+        };
+        if shape::is_supported_scalar_shape_ty(module, func.dfg.value_ty(result)) {
+            if !scalarizable[result] || field_slice.leaf_count == 0 {
+                return;
+            }
+            let mut leaves = LeafValues::new();
+            for i in 0..field_slice.leaf_count {
+                leaves.push(enum_leaves[field_slice.first_leaf + i]);
+            }
+            scalarized_agg[result] = Some(leaves);
+            return;
+        }
+        if field_slice.leaf_count != 1 {
+            return;
+        }
+        let replacement = enum_leaves[field_slice.first_leaf];
         func.dfg.change_to_alias(result, replacement);
         InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
     }
@@ -1236,19 +2034,19 @@ impl AggregateScalarize {
         &mut self,
         func: &mut Function,
         projection_of: &SecondaryMap<ValueId, Option<Projection>>,
-        promoted_by_inst: &FxHashMap<InstId, PromotedAlloca>,
+        promoted_by_root: &FxHashMap<ValueId, PromotableRoot>,
     ) -> bool {
         let mut changed = false;
         loop {
             func.rebuild_users();
             let removed_mloads = self.cleanup_dead_aggregate_mloads_with_current_users(func);
-            let removed_allocas = self.cleanup_dead_promoted_allocas_with_current_users(
+            let removed_promoted_paths = self.cleanup_dead_promoted_paths_with_current_users(
                 func,
                 projection_of,
-                promoted_by_inst,
+                promoted_by_root,
             );
             let removed_pure = self.dead_pure_cleanup.run_with_current_users(func);
-            if !removed_mloads && !removed_allocas && !removed_pure {
+            if !removed_mloads && !removed_promoted_paths && !removed_pure {
                 return changed;
             }
             changed = true;
@@ -1261,16 +2059,27 @@ impl AggregateScalarize {
         for block in blocks {
             let insts: Vec<_> = func.layout.iter_inst(block).collect();
             for inst in insts {
-                let Some(mload) = downcast::<&data::Mload>(func.inst_set(), func.dfg.inst(inst))
+                let Some((result, load_ty)) =
+                    downcast::<&data::Mload>(func.inst_set(), func.dfg.inst(inst))
+                        .and_then(|mload| {
+                            func.dfg
+                                .inst_result(inst)
+                                .map(|result| (result, *mload.ty()))
+                        })
+                        .or_else(|| {
+                            downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst))
+                                .and_then(|_| {
+                                    func.dfg
+                                        .inst_result(inst)
+                                        .map(|result| (result, func.dfg.value_ty(result)))
+                                })
+                        })
                 else {
                     continue;
                 };
-                if !shape::is_supported_aggregate_ty(func.ctx(), *mload.ty()) {
+                if !shape::is_supported_scalar_shape_ty(func.ctx(), load_ty) {
                     continue;
                 }
-                let Some(result) = func.dfg.inst_result(inst) else {
-                    continue;
-                };
                 if func
                     .dfg
                     .users(result)
@@ -1287,55 +2096,91 @@ impl AggregateScalarize {
         changed
     }
 
-    fn cleanup_dead_promoted_allocas_with_current_users(
+    fn cleanup_dead_promoted_paths_with_current_users(
         &self,
         func: &mut Function,
         projection_of: &SecondaryMap<ValueId, Option<Projection>>,
-        promoted_by_inst: &FxHashMap<InstId, PromotedAlloca>,
+        promoted_by_root: &FxHashMap<ValueId, PromotableRoot>,
     ) -> bool {
-        if promoted_by_inst.is_empty() {
+        if promoted_by_root.is_empty() {
             return false;
         }
-        let mut changed = false;
+        let mut candidate_insts = FxHashSet::default();
+        let mut candidate_results = FxHashMap::default();
 
-        loop {
-            let mut removed_any = false;
-            for value in func.dfg.value_ids().collect::<Vec<_>>() {
-                let Some(projection) = projection_of[value] else {
-                    continue;
-                };
-                if !promoted_by_inst.contains_key(&projection.alloca_inst) {
-                    continue;
-                }
-                let Some(inst) = func.dfg.value_inst(value) else {
-                    continue;
-                };
-                if !func.layout.is_inst_inserted(inst) {
-                    continue;
-                }
-                if downcast::<&data::Alloca>(func.inst_set(), func.dfg.inst(inst)).is_none()
-                    && downcast::<&data::Gep>(func.inst_set(), func.dfg.inst(inst)).is_none()
-                {
-                    continue;
-                }
-                if func
-                    .dfg
-                    .users(value)
-                    .copied()
-                    .any(|user| func.layout.is_inst_inserted(user))
-                {
-                    continue;
-                }
+        for value in func.dfg.value_ids() {
+            let Some(projection) = projection_of[value] else {
+                continue;
+            };
+            if !promoted_by_root.contains_key(&projection.root_value) {
+                continue;
+            }
+            let Some(inst) = func.dfg.value_inst(value) else {
+                continue;
+            };
+            if !func.layout.is_inst_inserted(inst) || !is_promoted_path_inst(func, inst) {
+                continue;
+            }
 
-                InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
-                removed_any = true;
-            }
-            if !removed_any {
-                return changed;
-            }
-            changed = true;
-            func.rebuild_users();
+            candidate_insts.insert(inst);
+            candidate_results.insert(value, inst);
         }
+
+        if candidate_insts.is_empty() {
+            return false;
+        }
+
+        let mut live = FxHashSet::default();
+        let mut worklist = Vec::new();
+        for (&value, &inst) in &candidate_results {
+            if func
+                .dfg
+                .users(value)
+                .copied()
+                .any(|user| func.layout.is_inst_inserted(user) && !candidate_insts.contains(&user))
+                && live.insert(inst)
+            {
+                worklist.push(inst);
+            }
+        }
+
+        while let Some(inst) = worklist.pop() {
+            func.dfg.inst(inst).for_each_value(&mut |value| {
+                let Some(&def_inst) = candidate_results.get(&value) else {
+                    return;
+                };
+                if live.insert(def_inst) {
+                    worklist.push(def_inst);
+                }
+            });
+        }
+
+        let dead_insts: Vec<_> = candidate_insts
+            .iter()
+            .copied()
+            .filter(|inst| !live.contains(inst))
+            .collect();
+        if dead_insts.is_empty() {
+            return false;
+        }
+
+        for inst in &dead_insts {
+            if let Some(result) = func.dfg.inst_result(*inst) {
+                let undef = func.dfg.make_undef_value(func.dfg.value_ty(result));
+                func.dfg.change_to_alias(result, undef);
+            }
+        }
+        func.rebuild_users();
+
+        for block in func.layout.iter_block().collect::<Vec<_>>() {
+            for inst in func.layout.iter_inst(block).collect::<Vec<_>>() {
+                if dead_insts.contains(&inst) {
+                    InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+                }
+            }
+        }
+
+        true
     }
 
     fn aggregate_shape(
@@ -1369,7 +2214,7 @@ impl AggregateScalarize {
         module: &sonatina_ir::module::ModuleCtx,
         ty: Type,
     ) -> Option<SmallVec<[Type; 4]>> {
-        if shape::is_supported_aggregate_ty(module, ty) {
+        if shape::is_supported_scalar_shape_ty(module, ty) {
             return Some(
                 self.aggregate_shape(module, ty)?
                     .leaves
@@ -1379,20 +2224,6 @@ impl AggregateScalarize {
             );
         }
         Some(smallvec![ty])
-    }
-
-    fn bitcast_projection_slice(
-        &mut self,
-        module: &sonatina_ir::module::ModuleCtx,
-        slice: shape::AggregateSlice,
-        ptr_ty: Type,
-    ) -> Option<shape::AggregateSlice> {
-        let pointee_ty = module.with_ty_store(|s| s.deref(ptr_ty))?;
-        self.projection_slice_can_view_as(module, slice, pointee_ty)
-            .then_some(shape::AggregateSlice {
-                ty: pointee_ty,
-                ..slice
-            })
     }
 
     fn projection_slice_can_view_as(
@@ -1412,10 +2243,10 @@ impl AggregateScalarize {
             && from_leaf_tys.len() == to_leaf_tys.len()
             && (view_ty == slice.ty
                 || from_leaf_tys.len() == 1
-                    && module.size_of_unchecked(from_leaf_tys[0])
-                        == module.size_of_unchecked(to_leaf_tys[0])
-                || shape::is_supported_aggregate_ty(module, slice.ty)
-                    && shape::is_supported_aggregate_ty(module, view_ty)
+                    && shape::runtime_size_bytes(module, from_leaf_tys[0])
+                        == shape::runtime_size_bytes(module, to_leaf_tys[0])
+                || shape::is_supported_scalar_shape_ty(module, slice.ty)
+                    && shape::is_supported_scalar_shape_ty(module, view_ty)
                     && self
                         .compatible_aggregate_bitcast_runtime_leaves(module, slice.ty, view_ty)
                         .is_some())
@@ -1427,11 +2258,11 @@ impl AggregateScalarize {
         from_ty: Type,
         to_ty: Type,
     ) -> bool {
-        if module.size_of_unchecked(from_ty) != module.size_of_unchecked(to_ty) {
+        if shape::runtime_size_bytes(module, from_ty) != shape::runtime_size_bytes(module, to_ty) {
             return false;
         }
-        let from_is_agg = shape::is_supported_aggregate_ty(module, from_ty);
-        let to_is_agg = shape::is_supported_aggregate_ty(module, to_ty);
+        let from_is_agg = shape::is_supported_scalar_shape_ty(module, from_ty);
+        let to_is_agg = shape::is_supported_scalar_shape_ty(module, to_ty);
         if from_is_agg && to_is_agg {
             return self
                 .compatible_aggregate_bitcast_runtime_leaves(module, from_ty, to_ty)
@@ -1458,7 +2289,7 @@ impl AggregateScalarize {
         ty: Type,
         scalarized_agg: &SecondaryMap<ValueId, Option<LeafValues>>,
     ) -> Option<LeafValues> {
-        if !shape::is_supported_aggregate_ty(module, ty) {
+        if !shape::is_supported_scalar_shape_ty(module, ty) {
             return (func.dfg.value_ty(value) == ty).then(|| smallvec![value]);
         }
 
@@ -1473,6 +2304,217 @@ impl AggregateScalarize {
 
         scalarized_agg[value].clone()
     }
+
+    fn insert_live_in_leaf_load(
+        &self,
+        func: &mut Function,
+        module: &sonatina_ir::module::ModuleCtx,
+        promoted: &PromotableRoot,
+        leaf_idx: usize,
+    ) -> ValueId {
+        let leaf = &promoted.shape.leaves[leaf_idx];
+        let before = first_non_phi_inst(func, promoted.seed_block);
+        let loc = before
+            .and_then(|inst| func.layout.prev_inst_of(inst))
+            .map_or(
+                CursorLocation::BlockTop(promoted.seed_block),
+                CursorLocation::At,
+            );
+        let mut cursor = InstInserter::at_location(loc);
+        let mut object = promoted.root_value;
+        let mut current_ty = promoted.shape.root_ty;
+
+        for &idx in leaf.path.as_slice() {
+            let idx_value = func.dfg.make_imm_value(i64::from(idx));
+            let next_ty = shape::aggregate_slice_for_index(module, current_ty, idx)
+                .map(|slice| slice.ty)
+                .unwrap_or_else(|| panic!("missing aggregate slice for promoted live-in leaf"));
+            let result_ty = func
+                .ctx()
+                .with_ty_store_mut(|store| store.make_obj_ref(next_ty));
+            let proj = cursor.insert_inst_data(
+                func,
+                data::ObjProj::new_unchecked(func.inst_set(), smallvec![object, idx_value]),
+            );
+            let result = cursor.make_result(func, proj, result_ty);
+            cursor.attach_result(func, proj, result);
+            cursor.set_location(CursorLocation::At(proj));
+            object = result;
+            current_ty = next_ty;
+        }
+
+        let load =
+            cursor.insert_inst_data(func, data::ObjLoad::new_unchecked(func.inst_set(), object));
+        let result = cursor.make_result(func, load, leaf.ty);
+        cursor.attach_result(func, load, result);
+        result
+    }
+
+    fn write_back_promoted_arg_roots(
+        &self,
+        func: &mut Function,
+        module: &sonatina_ir::module::ModuleCtx,
+        promoted_by_root: &FxHashMap<ValueId, PromotableRoot>,
+        modified_leaves: &FxHashMap<ValueId, FxHashSet<usize>>,
+        ssa: &mut SsaBuilder,
+    ) {
+        let mut roots: Vec<_> = promoted_by_root
+            .values()
+            .filter(|promoted| {
+                promoted.root_kind.is_arg_like()
+                    && modified_leaves
+                        .get(&promoted.root_value)
+                        .is_some_and(|leaves| !leaves.is_empty())
+            })
+            .cloned()
+            .collect();
+        if roots.is_empty() {
+            return;
+        }
+        roots.sort_by_key(|promoted| promoted.root_value);
+
+        for block in func.layout.iter_block().collect::<Vec<_>>() {
+            let Some(ret_inst) = func.layout.last_inst_of(block) else {
+                continue;
+            };
+            if downcast::<&control_flow::Return>(func.inst_set(), func.dfg.inst(ret_inst)).is_none()
+            {
+                continue;
+            }
+
+            for promoted in &roots {
+                let Some(leaves) = modified_leaves.get(&promoted.root_value) else {
+                    continue;
+                };
+                let mut leaf_indices: Vec<_> = leaves.iter().copied().collect();
+                leaf_indices.sort_unstable();
+                for leaf_idx in leaf_indices {
+                    let value = ssa.use_var(func, promoted.leaf_vars[leaf_idx], block);
+                    let loc = func
+                        .layout
+                        .prev_inst_of(ret_inst)
+                        .map_or(CursorLocation::BlockTop(block), CursorLocation::At);
+                    self.insert_leaf_write_back(func, module, promoted, leaf_idx, value, loc);
+                }
+            }
+        }
+    }
+
+    fn insert_leaf_write_back(
+        &self,
+        func: &mut Function,
+        module: &sonatina_ir::module::ModuleCtx,
+        promoted: &PromotableRoot,
+        leaf_idx: usize,
+        value: ValueId,
+        loc: CursorLocation,
+    ) {
+        let leaf = &promoted.shape.leaves[leaf_idx];
+        let mut cursor = InstInserter::at_location(loc);
+        let mut object = promoted.root_value;
+        let mut current_ty = promoted.shape.root_ty;
+
+        for &idx in leaf.path.as_slice() {
+            let idx_value = func.dfg.make_imm_value(i64::from(idx));
+            let next_ty = shape::aggregate_slice_for_index(module, current_ty, idx)
+                .map(|slice| slice.ty)
+                .unwrap_or_else(|| panic!("missing aggregate slice for promoted write-back leaf"));
+            let result_ty = func
+                .ctx()
+                .with_ty_store_mut(|store| store.make_obj_ref(next_ty));
+            let proj = cursor.insert_inst_data(
+                func,
+                data::ObjProj::new_unchecked(func.inst_set(), smallvec![object, idx_value]),
+            );
+            let result = cursor.make_result(func, proj, result_ty);
+            cursor.attach_result(func, proj, result);
+            cursor.set_location(CursorLocation::At(proj));
+            object = result;
+            current_ty = next_ty;
+        }
+
+        let store = cursor.insert_inst_data(
+            func,
+            data::ObjStore::new_unchecked(func.inst_set(), object, value),
+        );
+        cursor.set_location(CursorLocation::At(store));
+    }
+}
+
+impl RootKind {
+    fn inst(self) -> Option<InstId> {
+        match self {
+            Self::Alloca { inst } | Self::ObjAlloc { inst } => Some(inst),
+            Self::Arg { .. } | Self::SyntheticOutArg { .. } => None,
+        }
+    }
+
+    fn default_init(self) -> RootInit {
+        match self {
+            Self::Alloca { .. } | Self::ObjAlloc { .. } | Self::SyntheticOutArg { .. } => {
+                RootInit::UndefFresh
+            }
+            Self::Arg { .. } => RootInit::LoadLiveIn,
+        }
+    }
+
+    fn is_arg_like(self) -> bool {
+        matches!(self, Self::Arg { .. } | Self::SyntheticOutArg { .. })
+    }
+}
+
+impl PromotableRoot {
+    fn root_inst(&self) -> Option<InstId> {
+        self.root_kind.inst()
+    }
+}
+
+fn objref_element_ty(ctx: &sonatina_ir::module::ModuleCtx, ty: Type) -> Option<Type> {
+    let sonatina_ir::types::CompoundType::ObjRef(elem) = ty.resolve_compound(ctx)? else {
+        return None;
+    };
+    Some(elem)
+}
+
+fn record_modified_leaves(
+    modified_leaves: &mut FxHashMap<ValueId, FxHashSet<usize>>,
+    root_value: ValueId,
+    leaf_range: std::ops::Range<usize>,
+) {
+    modified_leaves
+        .entry(root_value)
+        .or_default()
+        .extend(leaf_range);
+}
+
+fn shape_contains_enum(shape: &shape::AggregateShape) -> bool {
+    shape.leaves.iter().any(|leaf| leaf.ty.is_enum_tag())
+}
+
+fn enum_variant_tag_imm(variant: sonatina_ir::types::EnumVariantRef, ty: Type) -> Immediate {
+    match ty {
+        Type::EnumTag(enum_ty) => Immediate::EnumTag {
+            enum_ty,
+            value: I256::from(u64::from(variant.index())),
+        },
+        _ => Immediate::from_i256(I256::from(u64::from(variant.index())), ty),
+    }
+}
+
+fn eq_before_inst(func: &mut Function, inst: InstId, lhs: ValueId, rhs: ValueId) -> ValueId {
+    let loc = func.layout.prev_inst_of(inst).map_or(
+        CursorLocation::BlockTop(func.layout.inst_block(inst)),
+        CursorLocation::At,
+    );
+    let mut cursor = InstInserter::at_location(loc);
+    let eq_inst = cursor.insert_inst_data(func, cmp::Eq::new_unchecked(func.inst_set(), lhs, rhs));
+    let eq_value = func.dfg.make_value(Value::Inst {
+        inst: eq_inst,
+        result_idx: 0,
+        ty: Type::I1,
+    });
+    cursor.attach_result(func, eq_inst, eq_value);
+    eq_value
 }
 
 fn is_explicit_undef(func: &Function, value: ValueId) -> bool {
@@ -1566,10 +2608,22 @@ fn first_non_phi_inst(func: &Function, block: BlockId) -> Option<InstId> {
         .find(|inst| !func.dfg.is_phi(*inst))
 }
 
+fn is_promoted_path_inst(func: &Function, inst: InstId) -> bool {
+    let inst_data = func.dfg.inst(inst);
+    downcast::<&data::Alloca>(func.inst_set(), inst_data).is_some()
+        || downcast::<&data::Gep>(func.inst_set(), inst_data).is_some()
+        || downcast::<&data::ObjAlloc>(func.inst_set(), inst_data).is_some()
+        || downcast::<&data::ObjProj>(func.inst_set(), inst_data).is_some()
+        || downcast::<&data::ObjIndex>(func.inst_set(), inst_data).is_some()
+        || downcast::<&data::EnumProj>(func.inst_set(), inst_data).is_some()
+        || downcast::<&cast::Bitcast>(func.inst_set(), inst_data).is_some()
+        || downcast::<&control_flow::Phi>(func.inst_set(), inst_data).is_some()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sonatina_ir::{InstDowncast, Module, inst::cast, module::FuncRef};
+    use sonatina_ir::{InstDowncast, Module, inst::cast, ir_writer::FuncWriter, module::FuncRef};
     use sonatina_parser::parse_module;
 
     fn parse_test_module(src: &str) -> Module {
@@ -1584,6 +2638,13 @@ mod tests {
             .expect("function should exist")
     }
 
+    fn run_scalarize_with_local_args(module: &Module, func_ref: FuncRef) {
+        let local_object_args = crate::optim::aggregate::collect_local_object_arg_info(module);
+        module.func_store.modify(func_ref, |func| {
+            AggregateScalarize::default().run_for_func(func_ref, func, &local_object_args);
+        });
+    }
+
     fn assert_no_promoted_aggregate_artifacts(
         func: &Function,
         ctx: &sonatina_ir::module::ModuleCtx,
@@ -1594,20 +2655,53 @@ mod tests {
                     downcast::<&data::Alloca>(func.inst_set(), func.dfg.inst(inst)).is_none(),
                     "promoted alloca should be removed"
                 );
+                assert!(
+                    downcast::<&data::ObjAlloc>(func.inst_set(), func.dfg.inst(inst)).is_none(),
+                    "promoted object root should be removed"
+                );
+                assert!(
+                    downcast::<&data::ObjProj>(func.inst_set(), func.dfg.inst(inst)).is_none(),
+                    "promoted object projection should be removed"
+                );
+                assert!(
+                    downcast::<&data::ObjIndex>(func.inst_set(), func.dfg.inst(inst)).is_none(),
+                    "promoted object index should be removed"
+                );
                 if let Some(mload) =
                     <&data::Mload as InstDowncast>::downcast(func.inst_set(), func.dfg.inst(inst))
                 {
                     assert!(
-                        !shape::is_supported_aggregate_ty(ctx, *mload.ty()),
+                        !shape::is_supported_scalar_shape_ty(ctx, *mload.ty()),
                         "aggregate mload should be gone after scalarization"
+                    );
+                }
+                if let Some(_obj_load) =
+                    <&data::ObjLoad as InstDowncast>::downcast(func.inst_set(), func.dfg.inst(inst))
+                    && let Some(result) = func.dfg.inst_result(inst)
+                {
+                    assert!(
+                        !shape::is_supported_scalar_shape_ty(ctx, func.dfg.value_ty(result)),
+                        "aggregate obj.load should be gone after scalarization"
                     );
                 }
                 if let Some(mstore) =
                     <&data::Mstore as InstDowncast>::downcast(func.inst_set(), func.dfg.inst(inst))
                 {
                     assert!(
-                        !shape::is_supported_aggregate_ty(ctx, *mstore.ty()),
+                        !shape::is_supported_scalar_shape_ty(ctx, *mstore.ty()),
                         "aggregate mstore should be gone after scalarization"
+                    );
+                }
+                if let Some(obj_store) = <&data::ObjStore as InstDowncast>::downcast(
+                    func.inst_set(),
+                    func.dfg.inst(inst),
+                ) {
+                    assert!(
+                        !shape::is_supported_scalar_shape_ty(
+                            ctx,
+                            func.dfg.value_ty(*obj_store.value())
+                        ),
+                        "aggregate obj.store should be gone after scalarization"
                     );
                 }
             }
@@ -1788,6 +2882,491 @@ func private %f(v0.i1, v1.i256, v2.i256) -> i256 {
 
         module.func_store.view(func_ref, |func| {
             assert_no_promoted_aggregate_artifacts(func, &ctx);
+        });
+    }
+
+    #[test]
+    fn scalarize_promotes_obj_alloc_root() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @slice = { i256, i256 };
+
+func private %f(v0.i256, v1.i256) -> i256 {
+    block0:
+        v2.objref<@slice> = obj.alloc @slice;
+        v3.@slice = insert_value undef.@slice 0.i8 v0;
+        v4.@slice = insert_value v3 1.i8 v1;
+        obj.store v2 v4;
+        v5.@slice = obj.load v2;
+        v6.i256 = extract_value v5 1.i8;
+        return v6;
+}
+"#,
+        );
+        let ctx = module.ctx.clone();
+        let func_ref = lookup_func(&module, "f");
+        module.func_store.modify(func_ref, |func| {
+            AggregateScalarize::default().run(func);
+        });
+
+        module.func_store.view(func_ref, |func| {
+            assert_no_promoted_aggregate_artifacts(func, &ctx);
+        });
+    }
+
+    #[test]
+    fn scalarize_promotes_local_object_arg_with_live_in_loads() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @one = { i256 };
+
+func private %f(v0.objref<@one>) -> i256 {
+    block0:
+        v1.@one = obj.load v0;
+        v2.i256 = extract_value v1 0.i8;
+        return v2;
+}
+"#,
+        );
+        let func_ref = lookup_func(&module, "f");
+        run_scalarize_with_local_args(&module, func_ref);
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            assert!(
+                !dumped.contains("extract_value"),
+                "local object arg aggregate extract should be scalarized:\n{dumped}"
+            );
+            assert!(
+                dumped.contains("obj.load"),
+                "live-in local object arg should seed scalar state with entry loads:\n{dumped}"
+            );
+        });
+    }
+
+    #[test]
+    fn scalarize_skips_mutated_local_object_arg_to_avoid_unprofitable_writeback() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @one = { i256 };
+
+func private %f(v0.objref<@one>, v1.i256) -> i256 {
+    block0:
+        v2.objref<i256> = obj.proj v0 0.i8;
+        obj.store v2 v1;
+        v3.i256 = obj.load v2;
+        return v3;
+}
+"#,
+        );
+        let func_ref = lookup_func(&module, "f");
+        run_scalarize_with_local_args(&module, func_ref);
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            assert!(
+                dumped.contains("obj.load v2"),
+                "mutated local object arg should stay in object form until writeback is profitability-aware:\n{dumped}"
+            );
+            assert!(
+                dumped.contains("obj.store v2 v1;"),
+                "mutated local object arg store should remain explicit:\n{dumped}"
+            );
+            assert!(
+                dumped.contains("return v3;"),
+                "without scalarization the explicit object load should remain the returned value:\n{dumped}"
+            );
+        });
+    }
+
+    #[test]
+    fn scalarize_promotes_synthetic_out_arg_with_undef_init() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @one = { i256 };
+
+func private %make(v0.i256) -> objref<@one> {
+    block0:
+        v1.objref<@one> = obj.alloc @one;
+        v2.objref<i256> = obj.proj v1 0.i8;
+        obj.store v2 v0;
+        return v1;
+}
+"#,
+        );
+        let func_ref = lookup_func(&module, "make");
+        let mut local_object_args = crate::optim::aggregate::collect_local_object_arg_info(&module);
+        let synthetic_out_args =
+            crate::optim::aggregate::ObjectReturnOutParam.run_with_synthetic_out_args(&module);
+        crate::optim::aggregate::merge_local_object_arg_info(
+            &mut local_object_args,
+            &synthetic_out_args,
+        );
+        module.func_store.modify(func_ref, |func| {
+            AggregateScalarize::default().run_for_func(func_ref, func, &local_object_args);
+        });
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            assert!(
+                !dumped.contains("obj.alloc"),
+                "synthetic out-arg scalarization should remove the original alloc:\n{dumped}"
+            );
+            assert!(
+                dumped.contains("obj.store"),
+                "synthetic out-arg leaves must be written back before return:\n{dumped}"
+            );
+            assert!(
+                !dumped.contains("obj.load"),
+                "fresh synthetic out-arg should not seed from entry loads:\n{dumped}"
+            );
+        });
+    }
+
+    #[test]
+    fn scalarize_promotes_fresh_equivalent_synthetic_out_arg() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @pair = { i256, i256 };
+
+func private %choose_pair(v0.i1, v1.i256, v2.i256) -> objref<@pair> {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        v3.objref<@pair> = obj.alloc @pair;
+        v4.objref<i256> = obj.proj v3 0.i8;
+        obj.store v4 v1;
+        jump block3;
+
+    block2:
+        v5.objref<@pair> = obj.alloc @pair;
+        v6.objref<i256> = obj.proj v5 0.i8;
+        obj.store v6 v2;
+        jump block3;
+
+    block3:
+        v7.objref<@pair> = phi (v3 block1) (v5 block2);
+        return v7;
+}
+"#,
+        );
+        let func_ref = lookup_func(&module, "choose_pair");
+        let mut local_object_args = crate::optim::aggregate::collect_local_object_arg_info(&module);
+        let synthetic_out_args =
+            crate::optim::aggregate::ObjectReturnOutParam.run_with_synthetic_out_args(&module);
+        crate::optim::aggregate::merge_local_object_arg_info(
+            &mut local_object_args,
+            &synthetic_out_args,
+        );
+        module.func_store.modify(func_ref, |func| {
+            AggregateScalarize::default().run_for_func(func_ref, func, &local_object_args);
+        });
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            assert!(
+                !dumped.contains("obj.alloc"),
+                "fresh-equivalent synthetic out-arg scalarization should remove both branch allocs:\n{dumped}"
+            );
+            assert!(
+                dumped.contains("obj.store"),
+                "fresh-equivalent synthetic out-arg should still write back leaves:\n{dumped}"
+            );
+            assert!(
+                !dumped.contains("obj.load"),
+                "fresh-equivalent synthetic out-arg should not seed from entry loads:\n{dumped}"
+            );
+        });
+    }
+
+    #[test]
+    fn aggregate_object_passes_use_precomputed_local_args_inside_modify() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @one = { i256 };
+
+func private %f(v0.objref<@one>, v1.i256) -> i256 {
+    block0:
+        v2.objref<i256> = obj.proj v0 0.i8;
+        obj.store v2 v1;
+        v3.i256 = obj.load v2;
+        return v3;
+}
+"#,
+        );
+        let func_ref = lookup_func(&module, "f");
+        let object_effects = crate::optim::aggregate::compute_object_effect_summaries(&module);
+        let local_object_args = crate::optim::aggregate::collect_local_object_arg_info(&module);
+
+        module.func_store.modify(func_ref, |func| {
+            crate::optim::aggregate::ObjectLoadStore::default().run_for_func(
+                func_ref,
+                func,
+                &local_object_args,
+                &object_effects,
+            );
+            AggregateScalarize::default().run_for_func(func_ref, func, &local_object_args);
+        });
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            assert!(
+                !dumped.contains("obj.load"),
+                "precomputed local-arg analysis should let aggregate passes run under modify without reloading from the store:\n{dumped}"
+            );
+            assert!(
+                dumped.contains("obj.store v2 v1;"),
+                "caller-visible local object arg mutation must stay explicit:\n{dumped}"
+            );
+            assert!(
+                dumped.contains("return v1;"),
+                "combined aggregate passes should preserve the forwarded scalar result:\n{dumped}"
+            );
+        });
+    }
+
+    #[test]
+    fn scalarize_promotes_obj_proj_and_index_paths() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @pair = { i256, [i256; 2] };
+
+func private %f(v0.i256, v1.i256, v2.i256) -> i256 {
+    block0:
+        v3.objref<@pair> = obj.alloc @pair;
+        v4.objref<i256> = obj.proj v3 0.i8;
+        v5.objref<[i256; 2]> = obj.proj v3 1.i8;
+        v6.objref<i256> = obj.index v5 0.i8;
+        v7.objref<i256> = obj.index v5 1.i8;
+        obj.store v4 v0;
+        obj.store v6 v1;
+        obj.store v7 v2;
+        v8.i256 = obj.load v4;
+        v9.i256 = obj.load v6;
+        v10.i256 = obj.load v7;
+        v11.i256 = add v8 v9;
+        v12.i256 = add v11 v10;
+        return v12;
+}
+"#,
+        );
+        let ctx = module.ctx.clone();
+        let func_ref = lookup_func(&module, "f");
+        module.func_store.modify(func_ref, |func| {
+            AggregateScalarize::default().run(func);
+        });
+
+        module.func_store.view(func_ref, |func| {
+            assert_no_promoted_aggregate_artifacts(func, &ctx);
+        });
+    }
+
+    #[test]
+    fn scalarize_promotes_same_root_whole_object_phi_web() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @pair = { i256, i256 };
+
+func private %f(v0.i1) -> i256 {
+    block0:
+        v1.objref<@pair> = obj.alloc @pair;
+        br v0 block1 block2;
+
+    block1:
+        jump block3;
+
+    block2:
+        jump block3;
+
+    block3:
+        v2.objref<@pair> = phi (v1 block1) (v1 block2);
+        v3.objref<i256> = obj.proj v2 0.i8;
+        obj.store v3 7.i256;
+        v4.i256 = obj.load v3;
+        return v4;
+}
+"#,
+        );
+        let func_ref = lookup_func(&module, "f");
+        module.func_store.modify(func_ref, |func| {
+            AggregateScalarize::default().run(func);
+        });
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            assert!(
+                !dumped.contains("obj.alloc")
+                    && !dumped.contains("obj.proj")
+                    && !dumped.contains("obj.load")
+                    && !dumped.contains("obj.store"),
+                "same-root whole-object phi web should scalarize through the phi:\n{dumped}"
+            );
+            assert!(
+                dumped.contains("return 7.i256;"),
+                "scalarized whole-object phi should fold to the stored scalar:\n{dumped}"
+            );
+        });
+    }
+
+    #[test]
+    fn scalarize_promotes_same_root_projected_field_phi_web() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @pair = { i256, i256 };
+
+func private %f(v0.i1) -> i256 {
+    block0:
+        v1.objref<@pair> = obj.alloc @pair;
+        v2.objref<i256> = obj.proj v1 1.i8;
+        br v0 block1 block2;
+
+    block1:
+        jump block3;
+
+    block2:
+        jump block3;
+
+    block3:
+        v3.objref<i256> = phi (v2 block1) (v2 block2);
+        obj.store v3 9.i256;
+        v4.i256 = obj.load v3;
+        return v4;
+}
+"#,
+        );
+        let func_ref = lookup_func(&module, "f");
+        module.func_store.modify(func_ref, |func| {
+            AggregateScalarize::default().run(func);
+        });
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            assert!(
+                !dumped.contains("obj.alloc")
+                    && !dumped.contains("obj.proj")
+                    && !dumped.contains("obj.load")
+                    && !dumped.contains("obj.store"),
+                "same-root projected-field phi web should scalarize through the phi:\n{dumped}"
+            );
+            assert!(
+                dumped.contains("return 9.i256;"),
+                "scalarized projected-field phi should fold to the stored scalar:\n{dumped}"
+            );
+        });
+    }
+
+    #[test]
+    fn scalarize_promotes_loop_carried_object_phi_web() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @one = { i256 };
+
+func private %f(v0.i1, v1.i256) -> i256 {
+    block0:
+        v2.objref<@one> = obj.alloc @one;
+        jump block1;
+
+    block1:
+        v3.objref<@one> = phi (v2 block0) (v5 block2);
+        v4.objref<i256> = obj.proj v3 0.i8;
+        obj.store v4 v1;
+        br v0 block3 block2;
+
+    block2:
+        v5.objref<@one> = bitcast v3 objref<@one>;
+        jump block1;
+
+    block3:
+        v6.i256 = obj.load v4;
+        return v6;
+}
+"#,
+        );
+        let func_ref = lookup_func(&module, "f");
+        module.func_store.modify(func_ref, |func| {
+            AggregateScalarize::default().run(func);
+        });
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            assert!(
+                !dumped.contains("obj.alloc")
+                    && !dumped.contains("obj.proj")
+                    && !dumped.contains("obj.load")
+                    && !dumped.contains("obj.store"),
+                "loop-carried same-root object phi should scalarize through the backedge:\n{dumped}"
+            );
+            assert!(
+                dumped.contains("return v1;"),
+                "loop-carried same-root object phi should forward the stored scalar:\n{dumped}"
+            );
+        });
+    }
+
+    #[test]
+    fn scalarize_rejects_multi_root_object_phi_web() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @one = { i256 };
+
+func private %f(v0.i1) -> i256 {
+    block0:
+        v1.objref<@one> = obj.alloc @one;
+        v2.objref<@one> = obj.alloc @one;
+        br v0 block1 block2;
+
+    block1:
+        jump block3;
+
+    block2:
+        jump block3;
+
+    block3:
+        v3.objref<@one> = phi (v1 block1) (v2 block2);
+        v4.objref<i256> = obj.proj v3 0.i8;
+        obj.store v4 5.i256;
+        v5.i256 = obj.load v4;
+        return v5;
+}
+"#,
+        );
+        let func_ref = lookup_func(&module, "f");
+        module.func_store.modify(func_ref, |func| {
+            AggregateScalarize::default().run(func);
+        });
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            assert!(
+                dumped.contains("obj.alloc")
+                    && dumped.contains("obj.proj")
+                    && dumped.contains("obj.load")
+                    && dumped.contains("obj.store"),
+                "multi-root phi should stay in object form:\n{dumped}"
+            );
         });
     }
 

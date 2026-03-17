@@ -1,0 +1,57 @@
+target = "evm-ethereum-osaka"
+
+type @OptionI256 = enum {
+    #None,
+    #Some(i256),
+};
+
+func private %write_then_read(v0.i256) -> i256 {
+block0:
+    v1.objref<@OptionI256> = obj.alloc @OptionI256;
+    enum.write_variant v1 #Some (v0);
+    enum.assert_variant_ref v1 #Some;
+    v2.objref<i256> = enum.proj v1 #Some 0.i8;
+    v3.i256 = obj.load v2;
+    return v3;
+}
+
+func private %tag_overwrite(v0.objref<@OptionI256>) -> enumtag(@OptionI256) {
+block0:
+    enum.set_tag v0 #Some;
+    enum.set_tag v0 #None;
+    v1.enumtag(@OptionI256) = enum.get_tag v0;
+    return v1;
+}
+
+func private %branch_store_load(v0.objref<@OptionI256>) -> i256 {
+block0:
+    v1.enumtag(@OptionI256) = enum.get_tag v0;
+    br_table v1 block2 (1.enumtag(@OptionI256) block1) (0.enumtag(@OptionI256) block2);
+
+block1:
+    enum.assert_variant_ref v0 #Some;
+    v2.objref<i256> = enum.proj v0 #Some 0.i8;
+    obj.store v2 7.i256;
+    v3.i256 = obj.load v2;
+    return v3;
+
+block2:
+    return 0.i256;
+}
+
+func public %entry(v0.i256) -> i256 {
+block0:
+    v1.i256 = call %write_then_read v0;
+    v2.objref<@OptionI256> = obj.alloc @OptionI256;
+    enum.write_variant v2 #Some (v0);
+    v3.i256 = call %branch_store_load v2;
+    v4.enumtag(@OptionI256) = call %tag_overwrite v2;
+    v5.i256 = add v1 v3;
+    return v5;
+}
+
+object @Contract {
+    section runtime {
+        entry %entry;
+    }
+}

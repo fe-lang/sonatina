@@ -3,7 +3,6 @@
 
 target = "evm-ethereum-london"
 
-#define unit @llfoo(i32 %arg, i32 %arg1, i32 (i32, i32)* %arg2) {
 # check:  block0:
 # nextln:     jump block1;
 # nextln: 

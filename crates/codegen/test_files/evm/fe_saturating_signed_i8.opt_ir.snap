@@ -1,0 +1,163 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: opt_ir_snapshot
+input_file: test_files/evm/fe_saturating_signed_i8.sntn
+---
+target = "evm-ethereum-osaka"
+
+func private %assert(v0.i1) {
+    block0:
+        v1.i1 = is_zero v0;
+        br v1 block1 block2;
+
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block2:
+        return;
+}
+
+func private %i8_h1bb527fe1af58754_saturatingadd_h7ca6e43aca8f23bb_saturating_add(v0.i8, v1.i8) -> i8 {
+    block0:
+        v2.i8 = add v0 v1;
+        v43.i256 = sext v0 i256;
+        v44.i256 = and 128.i256 v43;
+        v45.i1 = eq v44 0.i256;
+        v25.i1 = is_zero v45;
+        v66.i256 = sext v1 i256;
+        v67.i256 = and 128.i256 v66;
+        v68.i1 = eq v67 0.i256;
+        v69.i1 = is_zero v68;
+        v32.i1 = eq v25 v69;
+        br v32 block3 block7;
+
+    block1:
+        br v25 block7 block9;
+
+    block3:
+        v80.i256 = sext v2 i256;
+        v81.i256 = and 128.i256 v80;
+        v82.i1 = eq v81 0.i256;
+        v83.i1 = is_zero v82;
+        v88.i1 = eq v83 v25;
+        v34.i1 = is_zero v88;
+        br v34 block1 block7;
+
+    block7:
+        v27.i8 = phi (v2 block0) (v2 block3) (-128.i8 block1) (127.i8 block9);
+        return v27;
+
+    block9:
+        jump block7;
+}
+
+func private %i8_h1bb527fe1af58754_saturatingsub_hd0c1c727e69d9468_saturating_sub(v0.i8, v1.i8) -> i8 {
+    block0:
+        v2.i8 = sub v0 v1;
+        v44.i256 = sext v0 i256;
+        v45.i256 = and 128.i256 v44;
+        v46.i1 = eq v45 0.i256;
+        v25.i1 = is_zero v46;
+        v75.i256 = sext v1 i256;
+        v76.i256 = and 128.i256 v75;
+        v77.i1 = eq v76 0.i256;
+        v78.i1 = is_zero v77;
+        v79.i1 = eq v25 v78;
+        v33.i1 = is_zero v79;
+        br v33 block3 block7;
+
+    block1:
+        br v25 block7 block9;
+
+    block3:
+        v90.i256 = sext v2 i256;
+        v91.i256 = and 128.i256 v90;
+        v92.i1 = eq v91 0.i256;
+        v93.i1 = is_zero v92;
+        v98.i1 = eq v93 v25;
+        v35.i1 = is_zero v98;
+        br v35 block1 block7;
+
+    block7:
+        v27.i8 = phi (v2 block0) (v2 block3) (-128.i8 block1) (127.i8 block9);
+        return v27;
+
+    block9:
+        jump block7;
+}
+
+func private %i8_h1bb527fe1af58754_saturatingmul_hf2bc6be7b84ff8f7_saturating_mul(v0.i8, v1.i8) -> i8 {
+    block0:
+        v34.i1 = eq v0 0.i8;
+        br v34 block16 block3;
+
+    block2:
+        v35.i1 = eq v0 -128.i8;
+        br v35 block7 block6;
+
+    block3:
+        v36.i1 = eq v1 0.i8;
+        br v36 block16 block2;
+
+    block5:
+        v17.i8 = mul v0 v1;
+        (v18.i8, v19.i1) = evm_sdivo v17 v0;
+        br v19 block17 block19;
+
+    block6:
+        v37.i1 = eq v1 -128.i8;
+        br v37 block8 block5;
+
+    block7:
+        v38.i1 = eq v1 -1.i8;
+        br v38 block16 block6;
+
+    block8:
+        v39.i1 = eq v0 -1.i8;
+        br v39 block16 block5;
+
+    block9:
+        v40.i256 = sext v0 i256;
+        v41.i256 = sext v1 i256;
+        v34.i256 = xor v40 v41;
+        v35.i256 = and v34 128.i256;
+        v42.i1 = eq v35 0.i256;
+        v43.i1 = is_zero v42;
+        br v43 block16 block20;
+
+    block16:
+        v45.i8 = phi (0.i8 block0) (0.i8 block3) (-128.i8 block9) (v17 block19) (127.i8 block20) (127.i8 block7) (127.i8 block8);
+        return v45;
+
+    block17:
+        evm_revert 0.i256 0.i256;
+
+    block19:
+        v44.i1 = eq v18 v1;
+        v45.i1 = is_zero v44;
+        br v45 block9 block16;
+
+    block20:
+        jump block16;
+}
+
+func private %__fe_sonatina_entry() {
+    block0:
+        v5.i8 = call %i8_h1bb527fe1af58754_saturatingadd_h7ca6e43aca8f23bb_saturating_add 127.i8 1.i8;
+        v6.i1 = eq 127.i8 v5;
+        call %assert v6;
+        v7.i8 = call %i8_h1bb527fe1af58754_saturatingsub_hd0c1c727e69d9468_saturating_sub -128.i8 1.i8;
+        v8.i1 = eq -128.i8 v7;
+        call %assert v8;
+        v9.i8 = call %i8_h1bb527fe1af58754_saturatingmul_hf2bc6be7b84ff8f7_saturating_mul 64.i8 4.i8;
+        v10.i1 = eq 127.i8 v9;
+        call %assert v10;
+        evm_stop;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %__fe_sonatina_entry;
+    }
+}

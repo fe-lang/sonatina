@@ -4,12 +4,13 @@ use sonatina_ir::{
     inst::{arith::Add, control_flow::BrTable, data::Gep},
     isa::evm::Evm,
     module::ModuleCtx,
+    types::CompoundTypeRef,
 };
 use sonatina_parser::parse_module;
 use sonatina_triple::TargetTriple;
 use sonatina_verifier::{
     ModuleBuilderVerifyExt, ParseVerifyError, VerificationLevel, VerifierConfig, build_and_verify,
-    parse_and_verify_module, verify_module,
+    parse_and_verify_module, verify_module, verify_module_invariants,
 };
 
 fn has_code(report: &sonatina_verifier::VerificationReport, code: &str) -> bool {
@@ -39,6 +40,18 @@ fn diagnostic_fingerprint(report: &sonatina_verifier::VerificationReport) -> Vec
             )
         })
         .collect()
+}
+
+fn next_missing_compound_ref(module: &sonatina_ir::Module) -> CompoundTypeRef {
+    module.ctx.with_ty_store(|store| {
+        let next_ref = store
+            .all_compound_refs()
+            .map(|cmpd_ref| cmpd_ref.as_u32())
+            .max()
+            .expect("at least one compound type must exist")
+            + 1;
+        CompoundTypeRef::from_u32(next_ref)
+    })
 }
 
 #[test]
@@ -134,6 +147,240 @@ func public %ok(v0.i32) -> i32 {
 }
 
 #[test]
+fn public_signature_with_enum_is_rejected() {
+    let src = r#"
+target = "evm-ethereum-osaka"
+
+type @OptionI256 = enum {
+    #None,
+    #Some(i256),
+};
+
+func public %bad(v0.@OptionI256) -> @OptionI256 {
+block0:
+    return v0;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&parsed.module, &cfg);
+    assert!(
+        has_code(&report, "IR0610"),
+        "expected invalid signature, got {report}"
+    );
+}
+
+#[test]
+fn enum_extract_without_variant_proof_is_rejected() {
+    let src = r#"
+target = "evm-ethereum-osaka"
+
+type @OptionI256 = enum {
+    #None,
+    #Some(i256),
+};
+
+func private %bad(v0.@OptionI256) -> i256 {
+block0:
+    v1.i256 = enum.extract v0 #Some 0.i8;
+    return v1;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&parsed.module, &cfg);
+    assert!(
+        has_code(&report, "IR0600"),
+        "expected enum.extract verification failure, got {report}"
+    );
+}
+
+#[test]
+fn enum_assert_variant_ref_proves_object_field_load() {
+    let src = r#"
+target = "evm-ethereum-osaka"
+
+type @OptionI256 = enum {
+    #None,
+    #Some(i256),
+};
+
+func private %ok(v0.objref<@OptionI256>) -> i256 {
+block0:
+    enum.assert_variant_ref v0 #Some;
+    v1.objref<i256> = enum.proj v0 #Some 0.i8;
+    v2.i256 = obj.load v1;
+    return v2;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&parsed.module, &cfg);
+    assert!(report.is_ok(), "expected no verifier errors, got {report}");
+}
+
+#[test]
+fn branch_proven_active_variant_does_not_imply_payload_init() {
+    let src = r#"
+target = "evm-ethereum-osaka"
+
+type @OptionI256 = enum {
+    #None,
+    #Some(i256),
+};
+
+func private %bad() -> i256 {
+block0:
+    v0.objref<@OptionI256> = obj.alloc @OptionI256;
+    enum.set_tag v0 #Some;
+    v1.enumtag(@OptionI256) = enum.get_tag v0;
+    br_table v1 block2 (1.enumtag(@OptionI256) block1) (0.enumtag(@OptionI256) block2);
+
+block1:
+    v2.objref<i256> = enum.proj v0 #Some 0.i8;
+    v3.i256 = obj.load v2;
+    return v3;
+
+block2:
+    return 0.i256;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&parsed.module, &cfg);
+    assert!(
+        has_code(&report, "IR0600"),
+        "expected enum payload load verification failure without payload store, got {report}"
+    );
+}
+
+#[test]
+fn branch_proven_variant_with_same_block_store_proves_object_field_load() {
+    let src = r#"
+target = "evm-ethereum-osaka"
+
+type @OptionI256 = enum {
+    #None,
+    #Some(i256),
+};
+
+func private %ok(v0.objref<@OptionI256>, v1.i256) -> i256 {
+block0:
+    v2.enumtag(@OptionI256) = enum.get_tag v0;
+    br_table v2 block2 (1.enumtag(@OptionI256) block1) (0.enumtag(@OptionI256) block2);
+
+block1:
+    v3.objref<i256> = enum.proj v0 #Some 0.i8;
+    obj.store v3 v1;
+    v4.i256 = obj.load v3;
+    return v4;
+
+block2:
+    return 0.i256;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&parsed.module, &cfg);
+    assert!(report.is_ok(), "expected no verifier errors, got {report}");
+}
+
+#[test]
+fn enum_assert_variant_ref_is_invalidated_by_later_tag_write() {
+    let src = r#"
+target = "evm-ethereum-osaka"
+
+type @OptionI256 = enum {
+    #None,
+    #Some(i256),
+};
+
+func private %bad(v0.objref<@OptionI256>) -> i256 {
+block0:
+    enum.assert_variant_ref v0 #Some;
+    enum.set_tag v0 #None;
+    v1.objref<i256> = enum.proj v0 #Some 0.i8;
+    v2.i256 = obj.load v1;
+    return v2;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&parsed.module, &cfg);
+    assert!(
+        has_code(&report, "IR0600"),
+        "expected enum payload load verification failure after tag write, got {report}"
+    );
+}
+
+#[test]
+fn same_block_tag_write_and_field_store_prove_enum_field_load() {
+    let src = r#"
+target = "evm-ethereum-osaka"
+
+type @OptionI256 = enum {
+    #None,
+    #Some(i256),
+};
+
+func private %ok(v0.objref<@OptionI256>, v1.i256) -> i256 {
+block0:
+    enum.set_tag v0 #Some;
+    v2.objref<i256> = enum.proj v0 #Some 0.i8;
+    obj.store v2 v1;
+    v3.i256 = obj.load v2;
+    return v3;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&parsed.module, &cfg);
+    assert!(report.is_ok(), "expected no verifier errors, got {report}");
+}
+
+#[test]
+fn enum_assert_variant_ref_is_invalidated_by_intervening_call() {
+    let src = r#"
+target = "evm-ethereum-osaka"
+
+type @OptionI256 = enum {
+    #None,
+    #Some(i256),
+};
+
+func private %retag(v0.objref<@OptionI256>) -> unit {
+block0:
+    enum.set_tag v0 #None;
+    return;
+}
+
+func private %bad(v0.objref<@OptionI256>) -> i256 {
+block0:
+    enum.assert_variant_ref v0 #Some;
+    call %retag v0;
+    v1.objref<i256> = enum.proj v0 #Some 0.i8;
+    v2.i256 = obj.load v1;
+    return v2;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&parsed.module, &cfg);
+    assert!(
+        has_code(&report, "IR0600"),
+        "expected enum payload load verification failure after call barrier, got {report}"
+    );
+}
+
+#[test]
 fn multi_return_functions_and_calls_verify() {
     let src = r#"
 target = "evm-ethereum-london"
@@ -221,6 +468,134 @@ func public %bad_type() -> (i32, i1) {
     let report = verify_module(&parsed.module, &cfg);
 
     assert!(has_code(&report, "IR0604"), "expected IR0604, got {report}");
+}
+
+#[test]
+fn private_objref_helpers_verify() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+type @pair = { i256, i256 };
+
+func private %make_pair(v0.i256, v1.i256) -> objref<@pair> {
+    block0:
+        v2.objref<@pair> = obj.alloc @pair;
+        v3.objref<i256> = obj.proj v2 0.i8;
+        obj.store v3 v0;
+        v4.objref<i256> = obj.proj v2 1.i8;
+        obj.store v4 v1;
+        return v2;
+}
+
+func private %sum_pair(v0.objref<@pair>) -> i256 {
+    block0:
+        v1.objref<i256> = obj.proj v0 0.i8;
+        v2.i256 = obj.load v1;
+        v3.objref<i256> = obj.proj v0 1.i8;
+        v4.i256 = obj.load v3;
+        v5.i256 = add v2 v4;
+        return v5;
+}
+
+func public %entry(v0.i256, v1.i256) -> i256 {
+    block0:
+        v2.objref<@pair> = call %make_pair v0 v1;
+        v3.i256 = call %sum_pair v2;
+        return v3;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Full);
+    let report = verify_module(&parsed.module, &cfg);
+
+    assert!(report.is_ok(), "expected no verifier errors, got {report}");
+}
+
+#[test]
+fn public_objref_signature_is_rejected() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+type @pair = { i256, i256 };
+
+func public %entry(v0.objref<@pair>) -> i256 {
+    block0:
+        v1.objref<i256> = obj.proj v0 0.i8;
+        v2.i256 = obj.load v1;
+        return v2;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&parsed.module, &cfg);
+
+    assert!(
+        report.diagnostics.iter().any(|diagnostic| diagnostic
+            .message
+            .contains("must not expose object references")),
+        "expected objref signature rejection, got {report}"
+    );
+}
+
+#[test]
+fn private_section_entry_objref_signature_is_rejected() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+type @pair = { i256, i256 };
+
+func private %entry(v0.objref<@pair>) -> i256 {
+    block0:
+        v1.objref<i256> = obj.proj v0 0.i8;
+        v2.i256 = obj.load v1;
+        return v2;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&parsed.module, &cfg);
+
+    assert!(
+        report.diagnostics.iter().any(|diagnostic| diagnostic
+            .message
+            .contains("section entry signatures must not expose object references")),
+        "expected section-entry objref rejection, got {report}"
+    );
+}
+
+#[test]
+fn bitcast_objref_is_rejected() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+type @pair = { i256, i256 };
+
+func private %f(v0.objref<@pair>) -> *@pair {
+    block0:
+        v1.*@pair = bitcast v0 *@pair;
+        return v1;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&parsed.module, &cfg);
+
+    assert!(
+        report.diagnostics.iter().any(|diagnostic| diagnostic
+            .message
+            .contains("bitcast does not allow object-reference types")),
+        "expected objref bitcast rejection, got {report}"
+    );
 }
 
 #[test]
@@ -1152,6 +1527,76 @@ declare external %takes(@node) -> unit;
         let node_ref = store.lookup_struct("node").expect("node type must exist");
         let node_ty = Type::Compound(node_ref);
         store.update_struct_fields("node", &[node_ty]);
+    });
+
+    let cfg = VerifierConfig::for_level(VerificationLevel::Full);
+    let report = verify_module(&module, &cfg);
+
+    assert!(has_code(&report, "IR0004"), "expected IR0004, got {report}");
+}
+
+#[test]
+fn dangling_enum_tag_in_public_signature_is_still_rejected() {
+    let src = r#"
+target = "evm-ethereum-osaka"
+
+type @OptionI256 = enum {
+    #None,
+    #Some(i256),
+};
+
+declare external %bad(enumtag(@OptionI256)) -> unit;
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let module = parsed.module;
+    let func_ref = module.funcs()[0];
+    let missing_enum_ref = next_missing_compound_ref(&module);
+
+    module.ctx.declared_funcs.insert(
+        func_ref,
+        Signature::new(
+            "bad",
+            Linkage::External,
+            &[Type::EnumTag(missing_enum_ref)],
+            &[],
+        ),
+    );
+
+    let cfg = VerifierConfig::for_level(VerificationLevel::Full);
+    let report = verify_module_invariants(&module, &cfg);
+
+    assert!(has_code(&report, "IR0004"), "expected IR0004, got {report}");
+    assert!(has_code(&report, "IR0610"), "expected IR0610, got {report}");
+}
+
+#[test]
+fn dangling_enum_tag_argument_value_is_rejected() {
+    let src = r#"
+target = "evm-ethereum-osaka"
+
+type @OptionI256 = enum {
+    #None,
+    #Some(i256),
+};
+
+func private %bad(v0.enumtag(@OptionI256)) -> unit {
+block0:
+    return;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let module = parsed.module;
+    let func_ref = module.funcs()[0];
+    let missing_enum_ref = next_missing_compound_ref(&module);
+    let arg_value = module.func_store.view(func_ref, |func| func.arg_values[0]);
+
+    module.func_store.modify(func_ref, |func| {
+        let Value::Arg { ty, .. } = &mut func.dfg.values[arg_value] else {
+            panic!("function argument must remain an arg value");
+        };
+        *ty = Type::EnumTag(missing_enum_ref);
     });
 
     let cfg = VerifierConfig::for_level(VerificationLevel::Full);

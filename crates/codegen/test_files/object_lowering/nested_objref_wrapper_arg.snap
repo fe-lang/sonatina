@@ -1,0 +1,16 @@
+---
+source: crates/codegen/tests/object_lowering.rs
+input_file: test_files/object_lowering/nested_objref_wrapper_arg.sntn
+---
+target = "evm-ethereum-osaka"
+
+type @pair = {i256, i256};
+type @wrapper = {*@pair};
+
+func private %sum_wrapper(v0.@wrapper) -> i256 {
+    block0:
+        v1.*@pair = extract_value v0 0.i8;
+        v2.*i256 = gep v1 0.i64 0.i8;
+        v3.i256 = mload v2 i256;
+        return v3;
+}

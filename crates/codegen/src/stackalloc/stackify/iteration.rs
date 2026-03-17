@@ -29,6 +29,7 @@ pub(super) struct IterationPlanner<'a, 'ctx, O: StackifyObserver> {
     spill: SpillSet<'a>,
     slots: &'a mut SpillSlotPools,
     templates: &'a SecondaryMap<BlockId, BlockTemplate>,
+    terminal_chain_blocks: &'a SecondaryMap<BlockId, bool>,
     alloc: &'a mut StackifyAlloc,
     spill_requests: &'a mut BitSet<ValueId>,
     inherited_stack: BTreeMap<BlockId, (BlockId, SymStack)>,
@@ -59,6 +60,7 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
         spill: SpillSet<'a>,
         slots: &'a mut SpillSlotPools,
         templates: &'a SecondaryMap<BlockId, BlockTemplate>,
+        terminal_chain_blocks: &'a SecondaryMap<BlockId, bool>,
         alloc: &'a mut StackifyAlloc,
         spill_requests: &'a mut BitSet<ValueId>,
         inherited_stack: BTreeMap<BlockId, (BlockId, SymStack)>,
@@ -69,6 +71,7 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
             spill,
             slots,
             templates,
+            terminal_chain_blocks,
             alloc,
             spill_requests,
             inherited_stack,
@@ -161,7 +164,10 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
         let mut live_out = self.ctx.liveness.block_live_outs(block).clone();
         live_out.union_with(&self.ctx.phi_out_sources[block]);
 
-        let stack = if let Some((pred, mut inh)) = self.inherited_stack.remove(&block) {
+        let inherited = self.inherited_stack.remove(&block);
+        let stack = if self.terminal_chain_blocks[block] {
+            SymStack::opaque_prefix_empty(self.ctx.has_internal_return)
+        } else if let Some((pred, mut inh)) = inherited {
             // Dynamic entry stack (single predecessor).
             if block != self.ctx.entry {
                 debug_assert_eq!(
@@ -349,7 +355,8 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
             match branch.branch_kind() {
                 BranchKind::Jump(jump) => {
                     let dest = *jump.dest();
-                    if self.ctx.cfg.pred_num_of(dest) == 1
+                    if self.terminal_chain_blocks[dest] {
+                    } else if self.ctx.cfg.pred_num_of(dest) == 1
                         && dest != self.ctx.entry
                         && !self.planned_blocks.contains(dest)
                     {
@@ -1018,5 +1025,6 @@ fn imm_push_data_len(imm: Immediate) -> usize {
         Immediate::I64(v) => shrink_len(&v.to_be_bytes()),
         Immediate::I128(v) => shrink_len(&v.to_be_bytes()),
         Immediate::I256(v) => shrink_len(&v.to_u256().to_big_endian()),
+        Immediate::EnumTag { value, .. } => shrink_len(&value.to_u256().to_big_endian()),
     }
 }

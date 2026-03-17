@@ -1,0 +1,30 @@
+---
+source: crates/codegen/tests/object_abi.rs
+input_file: test_files/object_abi/higher_order_builder.sntn
+---
+target = "evm-ethereum-osaka"
+
+type @pair = {i256, i256};
+type @builder_box = {*(objref<@pair>, *(objref<@pair>, i256, i256) -> unit, i256, i256) -> unit};
+
+func private %make_pair(v7.objref<@pair>, v0.i256, v1.i256) {
+    block0:
+        v3.objref<i256> = obj.proj v7 0.i8;
+        obj.store v3 v0;
+        v4.objref<i256> = obj.proj v7 1.i8;
+        obj.store v4 v1;
+        return;
+}
+
+func private %build_via(v5.objref<@pair>, v0.*(objref<@pair>, i256, i256) -> unit, v1.i256, v2.i256) {
+    block0:
+        call %make_pair v5 v1 v2;
+        return;
+}
+
+func private %take_builder() {
+    block0:
+        v0.*(objref<@pair>, *(objref<@pair>, i256, i256) -> unit, i256, i256) -> unit = get_function_ptr %build_via;
+        v1.@builder_box = insert_value undef.@builder_box 0.i8 v0;
+        return;
+}

@@ -1,0 +1,437 @@
+#! evm.config: { vcode: true, opt: s, stackify_trace: false }
+#! evm.case: ok
+#!   calldata:
+#!   expect: return
+
+target = "evm-ethereum-osaka"
+
+func private %wrapping_unsigned_u8() {
+    block0:
+        v4.i8 = call %u8_hbc9d6eeaea22ffb5_wrappingadd_h14afa79b3047617f_wrapping_add -1.i8 1.i8;
+        v5.i1 = call %u8_hbc9d6eeaea22ffb5_eq_he50383edd273619f_eq v4 0.i8;
+        call %assert v5;
+        v6.i8 = call %u8_hbc9d6eeaea22ffb5_wrappingsub_h6880d1ff91f0a556_wrapping_sub 0.i8 1.i8;
+        v7.i1 = call %u8_hbc9d6eeaea22ffb5_eq_he50383edd273619f_eq v6 -1.i8;
+        call %assert v7;
+        v8.i8 = call %u8_hbc9d6eeaea22ffb5_wrappingmul_h64e6b83610cda761_wrapping_mul 16.i8 16.i8;
+        v9.i1 = call %u8_hbc9d6eeaea22ffb5_eq_he50383edd273619f_eq v8 0.i8;
+        call %assert v9;
+        return;
+}
+
+func private %saturating_unsigned_u8() {
+    block0:
+        v4.i8 = call %u8_hbc9d6eeaea22ffb5_saturatingadd_h7ca6e43aca8f23bb_saturating_add -1.i8 1.i8;
+        v5.i1 = call %u8_hbc9d6eeaea22ffb5_eq_he50383edd273619f_eq v4 -1.i8;
+        call %assert v5;
+        v6.i8 = call %u8_hbc9d6eeaea22ffb5_saturatingsub_hd0c1c727e69d9468_saturating_sub 0.i8 1.i8;
+        v7.i1 = call %u8_hbc9d6eeaea22ffb5_eq_he50383edd273619f_eq v6 0.i8;
+        call %assert v7;
+        v8.i8 = call %u8_hbc9d6eeaea22ffb5_saturatingmul_hf2bc6be7b84ff8f7_saturating_mul 16.i8 16.i8;
+        v9.i1 = call %u8_hbc9d6eeaea22ffb5_eq_he50383edd273619f_eq v8 -1.i8;
+        call %assert v9;
+        return;
+}
+
+func private %wrapping_signed_i8() {
+    block0:
+        v4.i8 = call %i8_h1bb527fe1af58754_wrappingadd_h14afa79b3047617f_wrapping_add 127.i8 1.i8;
+        v5.i1 = call %i8_h1bb527fe1af58754_eq_he50383edd273619f_eq v4 -128.i8;
+        call %assert v5;
+        v6.i8 = call %i8_h1bb527fe1af58754_wrappingsub_h6880d1ff91f0a556_wrapping_sub -128.i8 1.i8;
+        v7.i1 = call %i8_h1bb527fe1af58754_eq_he50383edd273619f_eq v6 127.i8;
+        call %assert v7;
+        v9.i8 = call %i8_h1bb527fe1af58754_wrappingmul_h64e6b83610cda761_wrapping_mul 64.i8 4.i8;
+        v11.i1 = call %i8_h1bb527fe1af58754_eq_he50383edd273619f_eq v9 0.i8;
+        call %assert v11;
+        return;
+}
+
+func private %saturating_signed_i8() {
+    block0:
+        v4.i8 = call %i8_h1bb527fe1af58754_saturatingadd_h7ca6e43aca8f23bb_saturating_add 127.i8 1.i8;
+        v5.i1 = call %i8_h1bb527fe1af58754_eq_he50383edd273619f_eq v4 127.i8;
+        call %assert v5;
+        v6.i8 = call %i8_h1bb527fe1af58754_saturatingsub_hd0c1c727e69d9468_saturating_sub -128.i8 1.i8;
+        v7.i1 = call %i8_h1bb527fe1af58754_eq_he50383edd273619f_eq v6 -128.i8;
+        call %assert v7;
+        v9.i8 = call %i8_h1bb527fe1af58754_saturatingmul_hf2bc6be7b84ff8f7_saturating_mul 64.i8 4.i8;
+        v10.i1 = call %i8_h1bb527fe1af58754_eq_he50383edd273619f_eq v9 127.i8;
+        call %assert v10;
+        return;
+}
+
+func private %u8_hbc9d6eeaea22ffb5_wrappingadd_h14afa79b3047617f_wrapping_add(v0.i8, v1.i8) -> i8 {
+    block0:
+        v2.i8 = add v0 v1;
+        return v2;
+}
+
+func private %u8_hbc9d6eeaea22ffb5_eq_he50383edd273619f_eq(v0.i8, v1.i8) -> i1 {
+    block0:
+        v2.i1 = eq v0 v1;
+        return v2;
+}
+
+func private %assert(v0.i1) {
+    block0:
+        v1.i1 = is_zero v0;
+        br v1 block1 block2;
+
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block2:
+        return;
+}
+
+func private %u8_hbc9d6eeaea22ffb5_wrappingsub_h6880d1ff91f0a556_wrapping_sub(v0.i8, v1.i8) -> i8 {
+    block0:
+        v2.i8 = sub v0 v1;
+        return v2;
+}
+
+func private %u8_hbc9d6eeaea22ffb5_wrappingmul_h64e6b83610cda761_wrapping_mul(v0.i8, v1.i8) -> i8 {
+    block0:
+        v2.i8 = mul v0 v1;
+        return v2;
+}
+
+func private %u8_hbc9d6eeaea22ffb5_saturatingadd_h7ca6e43aca8f23bb_saturating_add(v0.i8, v1.i8) -> i8 {
+    block0:
+        v2.i8 = add v0 v1;
+        v5.i1 = lt v2 v0;
+        br v5 block1 block2;
+
+    block1:
+        v7.i8 = trunc 255.i256 i8;
+        jump block3;
+
+    block2:
+        jump block3;
+
+    block3:
+        v9.i8 = phi (v7 block1) (v2 block2);
+        return v9;
+}
+
+func private %u8_hbc9d6eeaea22ffb5_saturatingsub_hd0c1c727e69d9468_saturating_sub(v0.i8, v1.i8) -> i8 {
+    block0:
+        v4.i1 = gt v1 v0;
+        br v4 block1 block2;
+
+    block1:
+        jump block3;
+
+    block2:
+        v7.i8 = sub v0 v1;
+        jump block3;
+
+    block3:
+        v8.i8 = phi (0.i8 block1) (v7 block2);
+        return v8;
+}
+
+func private %u8_hbc9d6eeaea22ffb5_saturatingmul_hf2bc6be7b84ff8f7_saturating_mul(v0.i8, v1.i8) -> i8 {
+    block0:
+        v4.i1 = call %u8_hbc9d6eeaea22ffb5_eq_he50383edd273619f_eq v0 0.i8;
+        br v4 block1 block3;
+
+    block1:
+        jump block7;
+
+    block2:
+        v7.i8 = mul v0 v1;
+        (v8.i8, v9.i1) = evm_udivo v7 v0;
+        br v9 block8 block9;
+
+    block3:
+        v13.i1 = call %u8_hbc9d6eeaea22ffb5_eq_he50383edd273619f_eq v1 0.i8;
+        br v13 block1 block2;
+
+    block4:
+        v15.i8 = trunc 255.i256 i8;
+        jump block6;
+
+    block5:
+        jump block6;
+
+    block6:
+        v17.i8 = phi (v15 block4) (v7 block5);
+        jump block7;
+
+    block7:
+        v18.i8 = phi (0.i8 block1) (v17 block6);
+        return v18;
+
+    block8:
+        evm_revert 0.i256 0.i256;
+
+    block9:
+        v11.i1 = call %u8_hbc9d6eeaea22ffb5_eq_he50383edd273619f_ne v8 v1;
+        br v11 block4 block5;
+}
+
+func private %i8_h1bb527fe1af58754_wrappingadd_h14afa79b3047617f_wrapping_add(v0.i8, v1.i8) -> i8 {
+    block0:
+        v2.i8 = add v0 v1;
+        return v2;
+}
+
+func private %i8_h1bb527fe1af58754_eq_he50383edd273619f_eq(v0.i8, v1.i8) -> i1 {
+    block0:
+        v2.i1 = eq v0 v1;
+        return v2;
+}
+
+func private %i8_h1bb527fe1af58754_wrappingsub_h6880d1ff91f0a556_wrapping_sub(v0.i8, v1.i8) -> i8 {
+    block0:
+        v2.i8 = sub v0 v1;
+        return v2;
+}
+
+func private %i8_h1bb527fe1af58754_wrappingmul_h64e6b83610cda761_wrapping_mul(v0.i8, v1.i8) -> i8 {
+    block0:
+        v2.i8 = mul v0 v1;
+        return v2;
+}
+
+func private %i8_h1bb527fe1af58754_saturatingadd_h7ca6e43aca8f23bb_saturating_add(v0.i8, v1.i8) -> i8 {
+    block0:
+        v2.i8 = add v0 v1;
+        v3.i256 = call %i8_h1bb527fe1af58754_intword_h9a147c8c32b1323c_to_word v0;
+        v5.i256 = and v3 128.i256;
+        v7.i1 = call %u256_h3271ca15373d4483_eq_he50383edd273619f_ne v5 0.i256;
+        v8.i256 = call %i8_h1bb527fe1af58754_intword_h9a147c8c32b1323c_to_word v1;
+        v9.i256 = and v8 128.i256;
+        v10.i1 = call %u256_h3271ca15373d4483_eq_he50383edd273619f_ne v9 0.i256;
+        v11.i256 = call %i8_h1bb527fe1af58754_intword_h9a147c8c32b1323c_to_word v2;
+        v12.i256 = and v11 128.i256;
+        v13.i1 = call %u256_h3271ca15373d4483_eq_he50383edd273619f_ne v12 0.i256;
+        v15.i1 = call %bool_h947c0c03c59c6f07_eq_he50383edd273619f_eq v7 v10;
+        br v15 block3 block2;
+
+    block1:
+        br v7 block4 block5;
+
+    block2:
+        jump block7;
+
+    block3:
+        v20.i1 = call %bool_h947c0c03c59c6f07_eq_he50383edd273619f_ne v7 v13;
+        br v20 block1 block2;
+
+    block4:
+        v21.i8 = trunc 128.i256 i8;
+        jump block6;
+
+    block5:
+        (v23.i256, v24.i1) = usubo 128.i256 1.i256;
+        br v24 block8 block9;
+
+    block6:
+        v26.i8 = phi (v21 block4) (v25 block9);
+        jump block7;
+
+    block7:
+        v27.i8 = phi (v2 block2) (v26 block6);
+        return v27;
+
+    block8:
+        evm_revert 0.i256 0.i256;
+
+    block9:
+        v25.i8 = trunc v23 i8;
+        jump block6;
+}
+
+func private %i8_h1bb527fe1af58754_saturatingsub_hd0c1c727e69d9468_saturating_sub(v0.i8, v1.i8) -> i8 {
+    block0:
+        v2.i8 = sub v0 v1;
+        v3.i256 = call %i8_h1bb527fe1af58754_intword_h9a147c8c32b1323c_to_word v0;
+        v5.i256 = and v3 128.i256;
+        v7.i1 = call %u256_h3271ca15373d4483_eq_he50383edd273619f_ne v5 0.i256;
+        v8.i256 = call %i8_h1bb527fe1af58754_intword_h9a147c8c32b1323c_to_word v1;
+        v9.i256 = and v8 128.i256;
+        v10.i1 = call %u256_h3271ca15373d4483_eq_he50383edd273619f_ne v9 0.i256;
+        v11.i256 = call %i8_h1bb527fe1af58754_intword_h9a147c8c32b1323c_to_word v2;
+        v12.i256 = and v11 128.i256;
+        v13.i1 = call %u256_h3271ca15373d4483_eq_he50383edd273619f_ne v12 0.i256;
+        v15.i1 = call %bool_h947c0c03c59c6f07_eq_he50383edd273619f_ne v7 v10;
+        br v15 block3 block2;
+
+    block1:
+        br v7 block4 block5;
+
+    block2:
+        jump block7;
+
+    block3:
+        v20.i1 = call %bool_h947c0c03c59c6f07_eq_he50383edd273619f_ne v7 v13;
+        br v20 block1 block2;
+
+    block4:
+        v21.i8 = trunc 128.i256 i8;
+        jump block6;
+
+    block5:
+        (v23.i256, v24.i1) = usubo 128.i256 1.i256;
+        br v24 block8 block9;
+
+    block6:
+        v26.i8 = phi (v21 block4) (v25 block9);
+        jump block7;
+
+    block7:
+        v27.i8 = phi (v2 block2) (v26 block6);
+        return v27;
+
+    block8:
+        evm_revert 0.i256 0.i256;
+
+    block9:
+        v25.i8 = trunc v23 i8;
+        jump block6;
+}
+
+func private %i8_h1bb527fe1af58754_saturatingmul_hf2bc6be7b84ff8f7_saturating_mul(v0.i8, v1.i8) -> i8 {
+    block0:
+        v4.i1 = call %i8_h1bb527fe1af58754_eq_he50383edd273619f_eq v0 0.i8;
+        br v4 block1 block3;
+
+    block1:
+        jump block16;
+
+    block2:
+        v6.i8 = trunc 128.i256 i8;
+        v8.i1 = call %i8_h1bb527fe1af58754_eq_he50383edd273619f_eq v0 v6;
+        br v8 block7 block6;
+
+    block3:
+        v10.i1 = call %i8_h1bb527fe1af58754_eq_he50383edd273619f_eq v1 0.i8;
+        br v10 block1 block2;
+
+    block4:
+        (v12.i256, v13.i1) = usubo 128.i256 1.i256;
+        br v13 block17 block18;
+
+    block5:
+        v17.i8 = mul v0 v1;
+        (v18.i8, v19.i1) = evm_sdivo v17 v0;
+        br v19 block17 block19;
+
+    block6:
+        v24.i1 = call %i8_h1bb527fe1af58754_eq_he50383edd273619f_eq v1 v6;
+        br v24 block8 block5;
+
+    block7:
+        v27.i1 = call %i8_h1bb527fe1af58754_eq_he50383edd273619f_eq v1 -1.i8;
+        br v27 block4 block6;
+
+    block8:
+        v29.i1 = call %i8_h1bb527fe1af58754_eq_he50383edd273619f_eq v0 -1.i8;
+        br v29 block4 block5;
+
+    block9:
+        v31.i256 = call %i8_h1bb527fe1af58754_intword_h9a147c8c32b1323c_to_word v0;
+        v33.i256 = call %i8_h1bb527fe1af58754_intword_h9a147c8c32b1323c_to_word v1;
+        v34.i256 = xor v31 v33;
+        v35.i256 = and v34 128.i256;
+        v36.i1 = call %u256_h3271ca15373d4483_eq_he50383edd273619f_ne v35 0.i256;
+        br v36 block11 block12;
+
+    block10:
+        jump block14;
+
+    block11:
+        v38.i8 = trunc 128.i256 i8;
+        jump block13;
+
+    block12:
+        (v39.i256, v40.i1) = usubo 128.i256 1.i256;
+        br v40 block17 block20;
+
+    block13:
+        v42.i8 = phi (v38 block11) (v41 block20);
+        jump block14;
+
+    block14:
+        v43.i8 = phi (v17 block10) (v42 block13);
+        jump block15;
+
+    block15:
+        v44.i8 = phi (v14 block18) (v43 block14);
+        jump block16;
+
+    block16:
+        v45.i8 = phi (0.i8 block1) (v44 block15);
+        return v45;
+
+    block17:
+        evm_revert 0.i256 0.i256;
+
+    block18:
+        v14.i8 = trunc v12 i8;
+        jump block15;
+
+    block19:
+        v21.i1 = call %i8_h1bb527fe1af58754_eq_he50383edd273619f_ne v18 v1;
+        br v21 block9 block10;
+
+    block20:
+        v41.i8 = trunc v39 i8;
+        jump block13;
+}
+
+func private %u8_hbc9d6eeaea22ffb5_eq_he50383edd273619f_ne(v0.i8, v1.i8) -> i1 {
+    block0:
+        v2.i1 = eq v0 v1;
+        v3.i1 = is_zero v2;
+        return v3;
+}
+
+func private %i8_h1bb527fe1af58754_intword_h9a147c8c32b1323c_to_word(v0.i8) -> i256 {
+    block0:
+        v1.i256 = sext v0 i256;
+        return v1;
+}
+
+func private %u256_h3271ca15373d4483_eq_he50383edd273619f_ne(v0.i256, v1.i256) -> i1 {
+    block0:
+        v2.i1 = eq v0 v1;
+        v3.i1 = is_zero v2;
+        return v3;
+}
+
+func private %bool_h947c0c03c59c6f07_eq_he50383edd273619f_eq(v0.i1, v1.i1) -> i1 {
+    block0:
+        v2.i1 = eq v0 v1;
+        return v2;
+}
+
+func private %bool_h947c0c03c59c6f07_eq_he50383edd273619f_ne(v0.i1, v1.i1) -> i1 {
+    block0:
+        v2.i1 = eq v0 v1;
+        v3.i1 = is_zero v2;
+        return v3;
+}
+
+func private %i8_h1bb527fe1af58754_eq_he50383edd273619f_ne(v0.i8, v1.i8) -> i1 {
+    block0:
+        v2.i1 = eq v0 v1;
+        v3.i1 = is_zero v2;
+        return v3;
+}
+
+func private %__fe_sonatina_entry() {
+    block0:
+        call %saturating_signed_i8;
+        evm_stop;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %__fe_sonatina_entry;
+    }
+}

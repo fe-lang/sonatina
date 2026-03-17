@@ -27,7 +27,7 @@ impl<'a> AggregateValueReconstructor<'a> {
         if source_slice.leaf_count == 0 {
             return Some(func.dfg.make_undef_value(result_ty));
         }
-        if !shape::is_supported_aggregate_ty(func.ctx(), source_ty) {
+        if !shape::is_supported_scalar_shape_ty(func.ctx(), source_ty) {
             return self.cast_aggregate_view_value(func, inst, source, source_ty, result_ty);
         }
         if is_explicit_undef(func, source) {
@@ -51,7 +51,42 @@ impl<'a> AggregateValueReconstructor<'a> {
             return self.cast_aggregate_view_value(func, inst, child_value, child_ty, result_ty);
         }
 
-        if !shape::is_supported_aggregate_ty(func.ctx(), result_ty) {
+        if !shape::is_supported_scalar_shape_ty(func.ctx(), result_ty) {
+            let child_count = shape::aggregate_child_count(func.ctx(), source_ty)?;
+            for idx in 0..child_count {
+                let idx = u32::try_from(idx).ok()?;
+                let child_slice = shape::aggregate_slice_for_index(func.ctx(), source_ty, idx)?;
+                if source_slice.first_leaf < child_slice.first_leaf
+                    || source_slice.first_leaf + source_slice.leaf_count
+                        > child_slice.first_leaf + child_slice.leaf_count
+                {
+                    continue;
+                }
+
+                let child_value =
+                    self.lookup_immediate_child_value(func, inst, source, source_ty, idx)?;
+                let nested_slice = shape::aggregate_slice_for_leaf_range(
+                    func.ctx(),
+                    child_slice.ty,
+                    source_slice.first_leaf - child_slice.first_leaf,
+                    source_slice.leaf_count,
+                )?;
+                return self.rebuild_slice(
+                    func,
+                    inst,
+                    child_value,
+                    child_slice.ty,
+                    nested_slice,
+                    result_ty,
+                );
+            }
+            return None;
+        }
+
+        if matches!(
+            result_ty.resolve_compound(func.ctx()),
+            Some(sonatina_ir::types::CompoundType::Enum(_))
+        ) {
             return None;
         }
 
@@ -96,6 +131,12 @@ impl<'a> AggregateValueReconstructor<'a> {
             return Some(func.dfg.make_undef_value(child_ty));
         }
 
+        if let Some(slot) =
+            enum_child_value_from_source(func, inst, aggregate, aggregate_ty, target_idx, child_ty)
+        {
+            return slot;
+        }
+
         let Some(def_inst) = func.dfg.value_inst(aggregate) else {
             return Some(extract_value_before_inst(
                 func, inst, aggregate, target_idx, child_ty,
@@ -123,7 +164,7 @@ impl<'a> AggregateValueReconstructor<'a> {
         {
             let source = *bitcast.from();
             let source_ty = func.dfg.value_ty(source);
-            if shape::is_supported_aggregate_ty(func.ctx(), source_ty) {
+            if shape::is_supported_scalar_shape_ty(func.ctx(), source_ty) {
                 let source_slice = self.layout_cache.compatible_bitcast_source_slice(
                     func.ctx(),
                     source_ty,
@@ -151,8 +192,8 @@ impl<'a> AggregateValueReconstructor<'a> {
             return Some(value);
         }
 
-        let from_is_agg = shape::is_supported_aggregate_ty(func.ctx(), from_ty);
-        let to_is_agg = shape::is_supported_aggregate_ty(func.ctx(), to_ty);
+        let from_is_agg = shape::is_supported_scalar_shape_ty(func.ctx(), from_ty);
+        let to_is_agg = shape::is_supported_scalar_shape_ty(func.ctx(), to_ty);
         let compatible = if from_is_agg && to_is_agg {
             self.layout_cache
                 .compatible_bitcast_runtime_leaves(func.ctx(), from_ty, to_ty)
@@ -222,6 +263,61 @@ fn immediate_child_index_for_slice(
     })
 }
 
+fn enum_child_value_from_source(
+    func: &mut Function,
+    inst: InstId,
+    aggregate: ValueId,
+    aggregate_ty: Type,
+    target_idx: u32,
+    child_ty: Type,
+) -> Option<Option<ValueId>> {
+    if !matches!(
+        aggregate_ty.resolve_compound(func.ctx()),
+        Some(sonatina_ir::types::CompoundType::Enum(_))
+    ) {
+        return None;
+    }
+
+    let source_value = match func.dfg.value_inst(aggregate) {
+        Some(def_inst)
+            if downcast::<&data::EnumMake>(func.inst_set(), func.dfg.inst(def_inst)).is_some() =>
+        {
+            let enum_make =
+                downcast::<&data::EnumMake>(func.inst_set(), func.dfg.inst(def_inst)).cloned()?;
+            if target_idx == 0 {
+                return Some(Some(enum_tag_before_inst(func, inst, aggregate, child_ty)));
+            }
+            let shape::EnumSlotInfo::VariantField { variant, field, .. } =
+                shape::enum_slot_info(func.ctx(), aggregate_ty, target_idx)?
+            else {
+                return Some(None);
+            };
+            if *enum_make.variant() != variant {
+                return Some(Some(func.dfg.make_undef_value(child_ty)));
+            }
+            return Some(
+                enum_make
+                    .values()
+                    .get(usize::try_from(field).ok()?)
+                    .copied()
+                    .or_else(|| Some(func.dfg.make_undef_value(child_ty))),
+            );
+        }
+        _ => aggregate,
+    };
+
+    if target_idx == 0 {
+        return Some(Some(enum_tag_before_inst(
+            func,
+            inst,
+            source_value,
+            child_ty,
+        )));
+    }
+
+    Some(None)
+}
+
 fn extract_value_before_inst(
     func: &mut Function,
     inst: InstId,
@@ -246,6 +342,23 @@ fn extract_value_before_inst(
     });
     cursor.attach_result(func, extract_inst, extract_value);
     extract_value
+}
+
+fn enum_tag_before_inst(func: &mut Function, inst: InstId, value: ValueId, ty: Type) -> ValueId {
+    let loc = func.layout.prev_inst_of(inst).map_or(
+        CursorLocation::BlockTop(func.layout.inst_block(inst)),
+        CursorLocation::At,
+    );
+    let mut cursor = InstInserter::at_location(loc);
+    let enum_tag_inst =
+        cursor.insert_inst_data(func, data::EnumTag::new_unchecked(func.inst_set(), value));
+    let enum_tag_value = func.dfg.make_value(Value::Inst {
+        inst: enum_tag_inst,
+        result_idx: 0,
+        ty,
+    });
+    cursor.attach_result(func, enum_tag_inst, enum_tag_value);
+    enum_tag_value
 }
 
 fn insert_value_before_inst(

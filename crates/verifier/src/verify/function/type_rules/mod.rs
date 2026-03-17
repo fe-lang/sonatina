@@ -2,7 +2,7 @@ use sonatina_ir::{
     BlockId, GlobalVariableRef, Immediate, Inst, InstArity, InstId, Type, ValueId,
     inst::{data::SymbolRef, downcast},
     module::FuncRef,
-    types::CompoundType,
+    types::{CompoundType, EnumVariantRef},
     visitor::Visitor,
 };
 
@@ -71,6 +71,10 @@ impl FunctionVerifier<'_> {
                 }
 
                 fn visit_gv_ref(&mut self, _item: GlobalVariableRef) {
+                    self.count += 1;
+                }
+
+                fn visit_enum_variant_ref(&mut self, _item: EnumVariantRef) {
                     self.count += 1;
                 }
             }
@@ -211,7 +215,9 @@ impl FunctionVerifier<'_> {
             return;
         };
 
-        if !lhs_ty.is_integral() || !rhs_ty.is_integral() {
+        let allow_enum_tags = matches!(opname, "eq" | "ne");
+        let enum_tag_operands = allow_enum_tags && lhs_ty.is_enum_tag() && lhs_ty == rhs_ty;
+        if !enum_tag_operands && (!lhs_ty.is_integral() || !rhs_ty.is_integral()) {
             self.emit(
                 Diagnostic::error(
                     DiagnosticCode::InstOperandTypeMismatch,
@@ -338,6 +344,22 @@ impl FunctionVerifier<'_> {
             current_ty = match cmpd {
                 CompoundType::Ptr(elem) => elem,
                 CompoundType::Array { elem, .. } => elem,
+                CompoundType::ObjRef(_) => {
+                    self.emit(Diagnostic::error(
+                        DiagnosticCode::GepTypeComputationFailed,
+                        "gep cannot index into object-reference type",
+                        location.clone(),
+                    ));
+                    return None;
+                }
+                CompoundType::Enum(_) => {
+                    self.emit(Diagnostic::error(
+                        DiagnosticCode::GepTypeComputationFailed,
+                        "gep cannot index into enum type",
+                        location.clone(),
+                    ));
+                    return None;
+                }
                 CompoundType::Struct(s) => {
                     let Some(imm) = self.value_imm(idx_value) else {
                         self.emit(Diagnostic::error(
@@ -465,7 +487,15 @@ impl FunctionVerifier<'_> {
 
                 Some(field_ty)
             }
-            CompoundType::Ptr(_) | CompoundType::Func { .. } => {
+            CompoundType::Enum(_) => {
+                self.emit(Diagnostic::error(
+                    DiagnosticCode::InstOperandTypeMismatch,
+                    "aggregate operation destination must be struct or array; enums require enum ops",
+                    location,
+                ));
+                None
+            }
+            CompoundType::Ptr(_) | CompoundType::ObjRef(_) | CompoundType::Func { .. } => {
                 self.emit(Diagnostic::error(
                     DiagnosticCode::InstOperandTypeMismatch,
                     "aggregate operation destination must be struct or array",

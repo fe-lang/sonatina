@@ -224,8 +224,16 @@ impl State for Machine {
                     unreachable!()
                 }
 
+                CompoundType::ObjRef(_) => {
+                    panic!("object references can't be loaded from raw memory");
+                }
+
                 CompoundType::Func { .. } => {
                     panic!("function type can't be placed in memory");
+                }
+
+                CompoundType::Enum(_) => {
+                    panic!("enum values must be lowered before raw-memory loads");
                 }
             }
 
@@ -286,8 +294,16 @@ impl State for Machine {
                     unreachable!()
                 }
 
+                CompoundType::ObjRef(_) => {
+                    panic!("object references can't be stored in raw memory");
+                }
+
                 CompoundType::Func { .. } => {
                     panic!("Function can't be stored in memory");
+                }
+
+                CompoundType::Enum(_) => {
+                    panic!("enum values must be lowered before raw-memory stores");
                 }
             }
 

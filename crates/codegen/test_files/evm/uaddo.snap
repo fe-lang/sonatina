@@ -1,21 +1,20 @@
 ---
 source: crates/codegen/tests/evm.rs
-assertion_line: 412
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/uaddo.sntn
 ---
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 33 bytes
-  total: 33 bytes
+  section runtime: 32 bytes
+  total: 32 bytes
 
 functions:
-  entry: ir_blocks=3 ir_insts=7 vcode_ops=26 fixups=1 imm_bytes=6
+  entry: ir_blocks=3 ir_insts=7 vcode_ops=25 fixups=1 imm_bytes=6
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=21066 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=66
+  case ok: calldata_len=0 success reason=Return gas_used=21064 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=64
 
 
 --------------- DEBUG ---------------
@@ -37,8 +36,7 @@ entry:
     PUSH1 block2
     JUMPI
   block1:
-    POP  // mstore 0.i256 1.i256 i256;
-    PUSH1 0x1 (1)
+    PUSH1 0x1 (1)  // mstore 0.i256 1.i256 i256;
     PUSH0
     MSTORE
     PUSH1 0x20 (32)  // evm_return 0.i256 32.i256;

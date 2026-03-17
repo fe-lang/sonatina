@@ -6,11 +6,20 @@ use crate::{
     cfg_edit::{CfgEditor, CleanupMode},
     domtree::DomTree,
     loop_analysis::{Loop, LoopTree},
+    optim::aggregate::ObjectMemoryAnalysis,
 };
 
 #[derive(Debug)]
 pub struct LicmSolver {
     invariants: Vec<InstId>,
+}
+
+#[derive(Clone, Copy)]
+struct LoopInvariantCtx<'a> {
+    cfg: &'a ControlFlowGraph,
+    lpt: &'a LoopTree,
+    lp: Loop,
+    object_memory: Option<&'a ObjectMemoryAnalysis>,
 }
 
 impl LicmSolver {
@@ -27,6 +36,16 @@ impl LicmSolver {
     /// Run loop invariant code motion ont the function.
     /// This method also modifies `cfg` and `lpt` htt
     pub fn run(&mut self, func: &mut Function, cfg: &mut ControlFlowGraph, lpt: &mut LoopTree) {
+        self.run_with_object_memory(func, cfg, lpt, None);
+    }
+
+    pub(crate) fn run_with_object_memory(
+        &mut self,
+        func: &mut Function,
+        cfg: &mut ControlFlowGraph,
+        lpt: &mut LoopTree,
+        object_memory: Option<&ObjectMemoryAnalysis>,
+    ) {
         self.clear();
         cfg.compute(func);
         let mut domtree = DomTree::new();
@@ -34,7 +53,15 @@ impl LicmSolver {
         lpt.compute(cfg, &domtree);
 
         for lp in lpt.loops() {
-            self.collect_invaliants(func, cfg, lpt, lp);
+            self.collect_invaliants(
+                func,
+                LoopInvariantCtx {
+                    cfg,
+                    lpt,
+                    lp,
+                    object_memory,
+                },
+            );
 
             if !self.invariants.is_empty() {
                 if let Some(preheader) = self.create_preheader(func, cfg, lpt, lp) {
@@ -47,20 +74,15 @@ impl LicmSolver {
 
     /// Collect loop invariants int the `lp`.
     /// The found invariants are inserted to `Self::invariants`.
-    fn collect_invaliants(
-        &mut self,
-        func: &Function,
-        cfg: &ControlFlowGraph,
-        lpt: &LoopTree,
-        lp: Loop,
-    ) {
-        let mut block_in_loop_rpo: Vec<_> = lpt.iter_blocks_post_order(cfg, lp).collect();
+    fn collect_invaliants(&mut self, func: &Function, ctx: LoopInvariantCtx<'_>) {
+        let mut block_in_loop_rpo: Vec<_> =
+            ctx.lpt.iter_blocks_post_order(ctx.cfg, ctx.lp).collect();
         block_in_loop_rpo.reverse();
 
         let mut loop_var = FxHashSet::default();
         for block in block_in_loop_rpo {
             for inst in func.layout.iter_inst(block) {
-                if self.is_invariant(func, &loop_var, inst) {
+                if self.is_invariant(func, ctx, &loop_var, inst) {
                     self.invariants.push(inst);
                 } else {
                     loop_var.extend(func.dfg.inst_results(inst).iter().copied());
@@ -73,10 +95,11 @@ impl LicmSolver {
     fn is_invariant(
         &self,
         func: &Function,
+        ctx: LoopInvariantCtx<'_>,
         loop_var: &FxHashSet<ValueId>,
         inst_id: InstId,
     ) -> bool {
-        if !self.is_safe_to_hoist(func, inst_id) {
+        if !self.is_safe_to_hoist(func, ctx, inst_id) {
             return false;
         }
 
@@ -87,7 +110,18 @@ impl LicmSolver {
     }
 
     /// Returns `true` if the `inst` is safe to hoist.
-    fn is_safe_to_hoist(&self, func: &Function, inst_id: InstId) -> bool {
+    fn is_safe_to_hoist(
+        &self,
+        func: &Function,
+        ctx: LoopInvariantCtx<'_>,
+        inst_id: InstId,
+    ) -> bool {
+        if ctx.object_memory.is_some_and(|object_memory| {
+            object_memory.read_is_loop_invariant(func, ctx.cfg, ctx.lpt, ctx.lp, inst_id)
+        }) {
+            return true;
+        }
+
         !(func.dfg.side_effect(inst_id).has_effect()
             || func.dfg.is_branch(inst_id)
             || func.dfg.is_phi(inst_id)

@@ -1,0 +1,26 @@
+target = "evm-ethereum-osaka"
+
+type @OptionI256 = enum {
+    #None,
+    #Some(i256),
+};
+
+func private %use_object(v0.i256) -> i256 {
+block0:
+    v1.objref<@OptionI256> = obj.alloc @OptionI256;
+    enum.write_variant v1 #Some (v0);
+    v2.enumtag(@OptionI256) = enum.get_tag v1;
+    v3.objref<i256> = enum.proj v1 #Some 0.i8;
+    v4.i256 = obj.load v3;
+    return v4;
+}
+
+func private %set_then_read(v0.i256) -> i256 {
+block0:
+    v1.objref<@OptionI256> = obj.alloc @OptionI256;
+    enum.set_tag v1 #Some;
+    v2.objref<i256> = enum.proj v1 #Some 0.i8;
+    obj.store v2 v0;
+    v3.i256 = obj.load v2;
+    return v3;
+}

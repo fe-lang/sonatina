@@ -1,0 +1,25 @@
+---
+source: crates/codegen/tests/object_lowering.rs
+input_file: test_files/object_lowering/materialize_stack_call_escape.sntn
+---
+target = "evm-ethereum-osaka"
+
+type @pair = {i256, i256};
+
+func private %sink(v0.*@pair) -> i256 {
+    block0:
+        v1.*i256 = gep v0 0.i64 0.i8;
+        v2.i256 = mload v1 i256;
+        return v2;
+}
+
+func private %sum_materialized(v0.i256, v1.i256) -> i256 {
+    block0:
+        v2.*@pair = evm_malloc 64.i256;
+        v3.*i256 = gep v2 0.i64 0.i8;
+        mstore v3 v0 i256;
+        v4.*i256 = gep v2 0.i64 1.i8;
+        mstore v4 v1 i256;
+        v6.i256 = call %sink v2;
+        return v6;
+}

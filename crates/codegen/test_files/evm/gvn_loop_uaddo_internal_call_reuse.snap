@@ -6,15 +6,15 @@ input_file: test_files/evm/gvn_loop_uaddo_internal_call_reuse.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=true evm_trace=false emit_observability=false opt=1
 
 object: Contract
-  section runtime: 186 bytes
-  total: 186 bytes
+  section runtime: 177 bytes
+  total: 177 bytes
 
 functions:
-  entry: ir_blocks=15 ir_insts=53 vcode_ops=142 fixups=12 imm_bytes=29
+  entry: ir_blocks=15 ir_insts=53 vcode_ops=135 fixups=11 imm_bytes=29
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=21498 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=498
+  case ok: calldata_len=0 success reason=Return gas_used=21493 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=493
 
 
 --------------- DEBUG ---------------
@@ -56,9 +56,8 @@ evm:
     - stack=[v54, v53, v3]
       br [v54] -> [block9, block11]
   block9 P=[] T=[]
-    inherited from block1: [v53x, v3x]
     // evm_revert 0.i256 0.i256;
-    - stack=[v53x, v3x]
+    - stack=[]
       pre: [PUSH(0), PUSH(0)]
       evm_revert [0, 0]
   block11 P=[] T=[v53, v3]
@@ -67,25 +66,25 @@ evm:
     - stack=[v53, v3]
       pre: [PUSH(10), DUP2]
       lt [v53, 10] -> v27
-    // br v27 block18 block13;
+    // br v27 block18 block21;
     - stack=[v27, v53, v3]
-      br [v27] -> [block18, block13]
-  block13 P=[] T=[v53, v3]
-    inherited from block11: [v53, v3]
-    // jump block10;
-    - stack=[v53, v3]
-      exit(block10): [PUSH(true)]
-      jump -> block10
+      br [v27] -> [block18, block21]
   block18 P=[] T=[v53, v3]
     inherited from block11: [v53, v3]
     // jump block10;
     - stack=[v53, v3]
       exit(block10): [PUSH(false)]
       jump -> block10
+  block21 P=[] T=[v53, v3]
+    inherited from block11: [v53, v3]
+    // jump block10;
+    - stack=[v53, v3]
+      exit(block10): [PUSH(true)]
+      jump -> block10
   block10 P=[v30] T=[v53, v3]
-    // br v30 block19 block4;
+    // br v30 block22 block4;
     - stack=[v30, v53, v3]
-      br [v30] -> [block19, block4]
+      br [v30] -> [block22, block4]
   block4 P=[] T=[v53, v3]
     inherited from block10: [v53, v3]
     // v9.i256 = mload 512.i256 i256;
@@ -182,9 +181,9 @@ evm:
     - stack=[v13, v48, v3], last_use=[v13]
       pre: [PUSH(1)]
       eq [1, v13] -> v14
-    // br v14 block5 block20;
+    // br v14 block5 block23;
     - stack=[v14, v48, v3]
-      br [v14] -> [block5, block20]
+      br [v14] -> [block5, block23]
   block5 P=[] T=[v48, v3]
     inherited from block14: [v48, v3]
     // v15.*i256 = gep v48 0.i256 1.i256;
@@ -204,17 +203,13 @@ evm:
     // jump block1;
     - stack=[v17]
       jump -> block1
-  block20 P=[] T=[]
-    inherited from block14: [v48x, v3x]
+  block23 P=[] T=[]
     // jump block8;
-    - stack=[v48x, v3x]
-      cleanup: [POP, POP]
+    - stack=[]
       jump -> block8
-  block19 P=[] T=[]
-    inherited from block10: [v53x, v3x]
+  block22 P=[] T=[]
     // jump block8;
-    - stack=[v53x, v3x]
-      cleanup: [POP, POP]
+    - stack=[]
       jump -> block8
   block8 P=[] T=[]
     // evm_return 0.i256 32.i256;
@@ -269,20 +264,21 @@ entry:
     PUSH1 0xa (10)  // v27.i1 = lt v53 10.i256;
     DUP2
     LT
-    PUSH1 block18  // br v27 block18 block13;
+    ISZERO  // br v27 block18 block21;
+    PUSH1 block21
     JUMPI
-  block13:
+  block18:
+    PUSH0  // jump block10;
+    PUSH1 block10
+    JUMP
+  block21:
+    JUMPDEST
     PUSH1 0x1 (1)  // jump block10;
     PUSH0
     SIGNEXTEND
-    PUSH1 block10
-    JUMP
-  block18:
-    JUMPDEST
-    PUSH0  // jump block10;
   block10:
     JUMPDEST
-    PUSH1 block19  // br v30 block19 block4;
+    PUSH1 block8  // br v30 block22 block4;
     JUMPI
   block4:
     PUSH2 0x200 (512)  // v40.i256 = mload 512.i256 i256;
@@ -353,8 +349,8 @@ entry:
     MLOAD  // v10.i256 = mload v52 i256;
     PUSH1 0x1 (1)  // v11.i1 = eq v10 1.i256;
     EQ
-    ISZERO  // br v11 block5 block20;
-    PUSH1 block20
+    ISZERO  // br v11 block5 block23;
+    PUSH1 block8
     JUMPI
   block5:
     PUSH1 0x20 (32)  // v12.*i256 = gep v48 0.i256 1.i256;
@@ -366,16 +362,6 @@ entry:
     ADD
     PUSH1 block1  // jump block1;
     JUMP
-  block20:
-    JUMPDEST
-    POP  // jump block8;
-    POP
-    PUSH1 block8
-    JUMP
-  block19:
-    JUMPDEST
-    POP  // jump block8;
-    POP
   block8:
     JUMPDEST
     PUSH1 0x20 (32)  // evm_return 0.i256 32.i256;

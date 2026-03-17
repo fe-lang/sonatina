@@ -1,0 +1,12 @@
+target = "evm-ethereum-osaka"
+
+type @pair = { i256, i256 };
+
+func private %entry(v0.i256) -> i256 {
+block0:
+    v1.objref<@pair> = obj.alloc @pair;
+    v2.objref<i256> = obj.proj v1 0.i8;
+    obj.store v2 v0;
+    v3.i256 = obj.load v2;
+    return v3;
+}

@@ -48,6 +48,13 @@ impl<'f> CfgEditor<'f> {
         self.cfg.compute(self.func);
     }
 
+    fn value_is_defined_in_block(&self, block: BlockId, value: ValueId) -> bool {
+        self.func.dfg.value_inst(value).is_some_and(|def_inst| {
+            self.func.layout.is_inst_inserted(def_inst)
+                && self.func.layout.inst_block(def_inst) == block
+        })
+    }
+
     pub fn truncate_block_from_inst(&mut self, first_inst: InstId) -> BlockId {
         assert!(self.func.layout.is_inst_inserted(first_inst));
         let block = self.func.layout.inst_block(first_inst);
@@ -382,6 +389,130 @@ impl<'f> CfgEditor<'f> {
         InstInserter::at_location(CursorLocation::BlockTop(block)).remove_block(self.func);
         self.cfg.replace_edge(pred, block, succ);
         self.cfg.remove_edge(block, succ);
+        true
+    }
+
+    pub fn forward_bridge_block(&mut self, block: BlockId) -> bool {
+        if !self.func.layout.is_block_inserted(block)
+            || self.func.layout.entry_block() == Some(block)
+        {
+            return false;
+        }
+
+        let Some(term) = self.func.layout.last_inst_of(block) else {
+            return false;
+        };
+        let Some(jump) = self.func.dfg.cast_jump(term) else {
+            return false;
+        };
+        let succ = *jump.dest();
+        if succ == block || !self.func.layout.is_block_inserted(succ) {
+            return false;
+        }
+
+        let block_phis: Vec<_> = iter_phis_in_block(self.func, block).collect();
+        let first_non_phi = match block_phis.last().copied() {
+            Some(last_phi) => self.func.layout.next_inst_of(last_phi),
+            None => self.func.layout.first_inst_of(block),
+        };
+        if first_non_phi != Some(term) {
+            return false;
+        }
+
+        let preds: Vec<_> = self.cfg.preds_of(block).copied().collect();
+        if preds.is_empty() || preds.iter().any(|&pred| pred == block || pred == succ) {
+            return false;
+        }
+
+        let pred_positions: FxHashMap<_, _> = preds
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(idx, pred)| (pred, idx))
+            .collect();
+        let succ_preds: FxHashSet<_> = self.cfg.preds_of(succ).copied().collect();
+        if preds.iter().any(|pred| succ_preds.contains(pred)) {
+            return false;
+        }
+
+        let succ_phis: Vec<_> = iter_phis_in_block(self.func, succ).collect();
+        let succ_phi_set: FxHashSet<_> = succ_phis.iter().copied().collect();
+        let mut block_phi_inputs = FxHashMap::default();
+        for phi_inst in &block_phis {
+            let phi_res = self
+                .func
+                .dfg
+                .inst_result(*phi_inst)
+                .expect("phi has no result");
+            let phi = self.func.dfg.cast_phi(*phi_inst).unwrap();
+
+            let mut per_pred = vec![None; preds.len()];
+            for &(value, pred) in phi.args() {
+                if self.value_is_defined_in_block(block, value) {
+                    return false;
+                }
+                let Some(&pred_idx) = pred_positions.get(&pred) else {
+                    return false;
+                };
+                if per_pred[pred_idx].replace(value).is_some() {
+                    return false;
+                }
+            }
+            if per_pred.iter().any(Option::is_none) {
+                return false;
+            }
+
+            for user in self.func.dfg.users(phi_res).copied() {
+                if self.func.layout.is_inst_inserted(user) && !succ_phi_set.contains(&user) {
+                    return false;
+                }
+            }
+
+            block_phi_inputs.insert(
+                phi_res,
+                per_pred
+                    .into_iter()
+                    .map(|value| value.expect("bridge phi predecessor input missing"))
+                    .collect::<Vec<_>>(),
+            );
+        }
+
+        let mut succ_inputs_from_block = Vec::with_capacity(succ_phis.len());
+        for phi_inst in succ_phis {
+            let phi = self.func.dfg.cast_phi(phi_inst).unwrap();
+            let Some(incoming_from_block) = phi
+                .args()
+                .iter()
+                .find_map(|&(value, pred)| (pred == block).then_some(value))
+            else {
+                return false;
+            };
+            succ_inputs_from_block.push((phi_inst, incoming_from_block));
+        }
+
+        let mut per_pred_phi_inputs = Vec::with_capacity(preds.len());
+        for (pred_idx, &pred) in preds.iter().enumerate() {
+            let mut phi_inputs = Vec::with_capacity(succ_inputs_from_block.len());
+            for &(succ_phi, incoming_from_block) in &succ_inputs_from_block {
+                let mapped = if let Some(per_pred) = block_phi_inputs.get(&incoming_from_block) {
+                    per_pred[pred_idx]
+                } else {
+                    if self.value_is_defined_in_block(block, incoming_from_block) {
+                        return false;
+                    }
+                    incoming_from_block
+                };
+                phi_inputs.push((succ_phi, mapped));
+            }
+            per_pred_phi_inputs.push((pred, phi_inputs));
+        }
+
+        for (pred, phi_inputs) in per_pred_phi_inputs {
+            self.replace_succ(pred, block, succ, &phi_inputs);
+        }
+
+        let deleted = self.delete_block_unreachable(block);
+        debug_assert!(deleted);
         true
     }
 
@@ -901,7 +1032,7 @@ mod tests {
     use std::collections::BTreeSet;
 
     use sonatina_ir::{
-        Module, Type,
+        Immediate, Module, Type, Value,
         builder::test_util::{dump_func, test_func_builder, test_module_builder},
         inst::{
             arith::{Add, Sub},
@@ -1329,6 +1460,172 @@ mod tests {
 
             let b0_succs: Vec<_> = editor.cfg().succs_of(b0).copied().collect();
             assert!(b0_succs.is_empty());
+        });
+    }
+
+    #[test]
+    fn forward_bridge_block_retargets_multi_pred_jump_only_block() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func private %f(v0.i1, v1.i32) -> i32 {
+block0:
+    br v0 block1 block2;
+
+block1:
+    jump block3;
+
+block2:
+    jump block3;
+
+block3:
+    jump block4;
+
+block4:
+    return v1;
+}
+"#,
+        );
+        let func_ref = module.funcs()[0];
+        module.func_store.modify(func_ref, |func| {
+            let blocks: Vec<_> = func.layout.iter_block().collect();
+            let [b0, b1, b2, b3, b4] = blocks.as_slice() else {
+                panic!("expected five blocks");
+            };
+
+            let mut editor = CfgEditor::new(func, CleanupMode::Strict);
+            assert!(editor.forward_bridge_block(*b3));
+            assert!(!editor.func().layout.is_block_inserted(*b3));
+
+            let b1_term = editor.func().layout.last_inst_of(*b1).unwrap();
+            let b1_jump = editor.func().dfg.cast_jump(b1_term).unwrap();
+            assert_eq!(*b1_jump.dest(), *b4);
+
+            let b2_term = editor.func().layout.last_inst_of(*b2).unwrap();
+            let b2_jump = editor.func().dfg.cast_jump(b2_term).unwrap();
+            assert_eq!(*b2_jump.dest(), *b4);
+
+            let b4_preds: BTreeSet<_> = editor.cfg().preds_of(*b4).copied().collect();
+            assert_eq!(b4_preds, BTreeSet::from([*b1, *b2]));
+            let b0_succs: BTreeSet<_> = editor.cfg().succs_of(*b0).copied().collect();
+            assert_eq!(b0_succs, BTreeSet::from([*b1, *b2]));
+        });
+    }
+
+    #[test]
+    fn forward_bridge_block_composes_phi_inputs_into_successor_phis() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func private %f(v0.i1, v1.i1, v2.i32) -> i32 {
+block0:
+    br v0 block1 block2;
+
+block1:
+    jump block3;
+
+block2:
+    br v1 block3 block4;
+
+block3:
+    v3.i32 = phi (1.i32 block1) (2.i32 block2);
+    jump block5;
+
+block4:
+    jump block5;
+
+block5:
+    v4.i32 = phi (v3 block3) (v2 block4);
+    return v4;
+}
+"#,
+        );
+        let func_ref = module.funcs()[0];
+        module.func_store.modify(func_ref, |func| {
+            let blocks: Vec<_> = func.layout.iter_block().collect();
+            let [b0, b1, b2, b3, b4, b5] = blocks.as_slice() else {
+                panic!("expected six blocks");
+            };
+
+            let mut editor = CfgEditor::new(func, CleanupMode::Strict);
+            assert!(editor.forward_bridge_block(*b3));
+            assert!(!editor.func().layout.is_block_inserted(*b3));
+
+            let phi_inst = editor.func().layout.first_inst_of(*b5).unwrap();
+            let phi = editor.func().dfg.cast_phi(phi_inst).unwrap();
+            assert_eq!(phi.args().len(), 3);
+            assert!(phi.args().iter().any(|&(value, pred)| {
+                matches!(
+                    editor.func().dfg.value(value),
+                    Value::Immediate {
+                        imm: Immediate::I32(1),
+                        ..
+                    }
+                ) && pred == *b1
+            }));
+            assert!(phi.args().iter().any(|&(value, pred)| {
+                matches!(
+                    editor.func().dfg.value(value),
+                    Value::Immediate {
+                        imm: Immediate::I32(2),
+                        ..
+                    }
+                ) && pred == *b2
+            }));
+            assert!(
+                phi.args()
+                    .iter()
+                    .any(|&(value, pred)| value == editor.func().arg_values[2] && pred == *b4)
+            );
+
+            let b5_preds: BTreeSet<_> = editor.cfg().preds_of(*b5).copied().collect();
+            assert_eq!(b5_preds, BTreeSet::from([*b1, *b2, *b4]));
+            let b0_succs: BTreeSet<_> = editor.cfg().succs_of(*b0).copied().collect();
+            assert_eq!(b0_succs, BTreeSet::from([*b1, *b2]));
+        });
+    }
+
+    #[test]
+    fn forward_bridge_block_rejects_phi_results_with_non_phi_users() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func private %f(v0.i1) -> i32 {
+block0:
+    br v0 block1 block2;
+
+block1:
+    jump block3;
+
+block2:
+    jump block3;
+
+block3:
+    v1.i32 = phi (1.i32 block1) (2.i32 block2);
+    jump block4;
+
+block4:
+    v2.i32 = add v1 1.i32;
+    return v2;
+}
+"#,
+        );
+        let func_ref = module.funcs()[0];
+        module.func_store.modify(func_ref, |func| {
+            let blocks: Vec<_> = func.layout.iter_block().collect();
+            let [_, _, _, b3, b4] = blocks.as_slice() else {
+                panic!("expected five blocks");
+            };
+
+            let mut editor = CfgEditor::new(func, CleanupMode::Strict);
+            assert!(!editor.forward_bridge_block(*b3));
+            assert!(editor.func().layout.is_block_inserted(*b3));
+
+            let b4_preds: BTreeSet<_> = editor.cfg().preds_of(*b4).copied().collect();
+            assert_eq!(b4_preds, BTreeSet::from([*b3]));
         });
     }
 

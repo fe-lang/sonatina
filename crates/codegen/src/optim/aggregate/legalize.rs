@@ -287,8 +287,12 @@ impl AggregateLowerToMemoryLegalize {
             return false;
         }
 
-        let from_size = module.size_of_unchecked(from_ty);
-        let to_size = module.size_of_unchecked(to_ty);
+        let Some(from_size) = shape::runtime_size_bytes(module, from_ty) else {
+            return false;
+        };
+        let Some(to_size) = shape::runtime_size_bytes(module, to_ty) else {
+            return false;
+        };
         if from_size != to_size {
             panic!(
                 "bitcast size mismatch in legalizer: {from_ty:?} ({from_size}) -> {to_ty:?} ({to_size})"

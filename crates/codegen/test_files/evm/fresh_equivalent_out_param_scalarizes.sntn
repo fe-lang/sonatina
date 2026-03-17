@@ -1,0 +1,40 @@
+#! evm.config: { vcode: true, bytecode_hex: false, stackify_trace: false, evm_trace: false, opt: 2 }
+
+target = "evm-ethereum-osaka"
+
+type @pair = { i256, i256 };
+
+func private %choose_pair(v0.i1, v1.i256, v2.i256) -> objref<@pair> {
+block0:
+    br v0 block1 block2;
+
+block1:
+    v3.objref<@pair> = obj.alloc @pair;
+    v4.objref<i256> = obj.proj v3 0.i8;
+    obj.store v4 v1;
+    jump block3;
+
+block2:
+    v5.objref<@pair> = obj.alloc @pair;
+    v6.objref<i256> = obj.proj v5 0.i8;
+    obj.store v6 v2;
+    jump block3;
+
+block3:
+    v7.objref<@pair> = phi (v3 block1) (v5 block2);
+    return v7;
+}
+
+func public %entry(v0.i1, v1.i256, v2.i256) -> i256 {
+block0:
+    v3.objref<@pair> = call %choose_pair v0 v1 v2;
+    v4.objref<i256> = obj.proj v3 0.i8;
+    v5.i256 = obj.load v4;
+    return v5;
+}
+
+object @Contract {
+    section runtime {
+        entry %entry;
+    }
+}

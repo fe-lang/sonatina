@@ -372,6 +372,7 @@ fn fmt_immediate(imm: sonatina_ir::Immediate) -> String {
         I64(v) => format!("{v}"),
         I128(v) => format!("{v}"),
         I256(v) => format!("{v}"),
+        EnumTag { value, .. } => format!("{value}"),
     }
 }
 

@@ -18,7 +18,10 @@ use sonatina_codegen::{
     liveness::Liveness,
     machinst::lower::{LowerBackend, LoweredFunction, SectionLoweringCtx},
     object::{CompileOptions, compile_all_objects},
-    optim::pipeline::Pipeline,
+    optim::{
+        dead_func::{collect_object_roots, run_dead_func_elim},
+        pipeline::Pipeline,
+    },
     stackalloc::StackifyBuilder,
 };
 use sonatina_ir::{
@@ -124,6 +127,16 @@ fn run_opt_pipeline(module: &mut Module, opt_pipeline: EvmOptPipeline) {
     }
 }
 
+fn prune_unreachable_funcs_for_optimized_evm_snapshots(
+    module: &mut Module,
+    opt_pipeline: EvmOptPipeline,
+) {
+    if opt_pipeline != EvmOptPipeline::None {
+        let roots = collect_object_roots(module);
+        run_dead_func_elim(module, &roots, Default::default());
+    }
+}
+
 #[dir_test(
     dir: "$CARGO_MANIFEST_DIR/test_files/evm",
     glob: "*.sntn"
@@ -144,6 +157,7 @@ fn test_evm(fixture: Fixture<&str>) {
         .unwrap_or_else(|e| panic!("{}: {e}", fixture.path()));
 
     run_opt_pipeline(&mut parsed.module, opt_pipeline);
+    prune_unreachable_funcs_for_optimized_evm_snapshots(&mut parsed.module, opt_pipeline);
     let opt_ir_snapshot = (opt_pipeline != EvmOptPipeline::None).then(|| {
         let mut writer = ModuleWriter::with_debug_provider(&parsed.module, &parsed.debug);
         writer.dump_string()
@@ -168,7 +182,8 @@ fn test_evm(fixture: Fixture<&str>) {
         vendor: Vendor::Ethereum,
         operating_system: OperatingSystem::Evm(sonatina_triple::EvmVersion::Osaka),
     }))
-    .with_stackify_reach_depth(stackify_reach_depth);
+    .with_stackify_reach_depth(stackify_reach_depth)
+    .with_late_cleanup_optimizations(opt_pipeline != EvmOptPipeline::None);
 
     let object_name = ObjectName::from("Contract");
     let section_name = SectionName::from("snapshot");

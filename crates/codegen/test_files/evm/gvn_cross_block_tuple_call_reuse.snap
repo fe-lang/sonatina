@@ -6,11 +6,11 @@ input_file: test_files/evm/gvn_cross_block_tuple_call_reuse.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=true evm_trace=false emit_observability=false opt=1
 
 object: Contract
-  section runtime: 74 bytes
-  total: 74 bytes
+  section runtime: 68 bytes
+  total: 68 bytes
 
 functions:
-  entry: ir_blocks=8 ir_insts=24 vcode_ops=58 fixups=4 imm_bytes=12
+  entry: ir_blocks=8 ir_insts=24 vcode_ops=53 fixups=3 imm_bytes=12
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
@@ -40,9 +40,9 @@ evm:
     - stack=[v3, v2], last_use=[v3]
       pre: [PUSH(0)]
       eq [0, v3] -> v4
-    // br v4 block1 block14;
+    // br v4 block1 block16;
     - stack=[v4, v2]
-      br [v4] -> [block1, block14]
+      br [v4] -> [block1, block16]
   block1 P=[] T=[v2]
     inherited from block0: [v2]
     // v41.i256 = add v2 1.i256;
@@ -62,11 +62,10 @@ evm:
     - stack=[v41], last_use=[v41]
       pre: [PUSH(5)]
       eq [5, v41] -> v7
-    // br v7 block12 block15;
+    // br v7 block12 block17;
     - stack=[v7]
-      br [v7] -> [block12, block15]
+      br [v7] -> [block12, block17]
   block12 P=[] T=[]
-    inherited from block2: []
     // v29.*i256 = evm_malloc 64.i256;
     - stack=[]
       evm_malloc [] -> v29
@@ -95,22 +94,18 @@ evm:
     - stack=[]
       pre: [PUSH(32), PUSH(0)]
       evm_return [0, 32]
-  block15 P=[] T=[]
-    inherited from block2: []
+  block17 P=[] T=[]
     // jump block8;
     - stack=[]
       jump -> block8
   block9 P=[] T=[]
-    inherited from block1: [v41x]
     // evm_revert 0.i256 0.i256;
-    - stack=[v41x]
+    - stack=[]
       pre: [PUSH(0), PUSH(0)]
       evm_revert [0, 0]
-  block14 P=[] T=[]
-    inherited from block0: [v2x]
+  block16 P=[] T=[]
     // jump block8;
-    - stack=[v2x]
-      cleanup: [POP]
+    - stack=[]
       jump -> block8
   block8 P=[] T=[]
     // mstore 0.i256 0.i256 i256;
@@ -136,8 +131,8 @@ entry:
     AND
     PUSH0  // v4.i1 = eq v3 0.i256;
     EQ
-    ISZERO  // br v4 block1 block14;
-    PUSH1 block14
+    ISZERO  // br v4 block1 block16;
+    PUSH1 block8
     JUMPI
   block1:
     PUSH1 0x1 (1)  // v41.i256 = add v2 1.i256;
@@ -151,8 +146,8 @@ entry:
   block2:
     PUSH1 0x5 (5)  // v7.i1 = eq v41 5.i256;
     EQ
-    ISZERO  // br v7 block12 block15;
-    PUSH1 block15
+    ISZERO  // br v7 block12 block17;
+    PUSH1 block8
     JUMPI
   block12:
     PUSH1 0xa0 (160)  // v29.*i256 = evm_malloc 64.i256;
@@ -170,18 +165,11 @@ entry:
     PUSH1 0x20 (32)  // evm_return 0.i256 32.i256;
     PUSH0
     RETURN
-  block15:
-    JUMPDEST
-    PUSH1 block8  // jump block8;
-    JUMP
   block9:
     JUMPDEST
     PUSH0  // evm_revert 0.i256 0.i256;
     PUSH0
     REVERT
-  block14:
-    JUMPDEST
-    POP  // jump block8;
   block8:
     JUMPDEST
     PUSH0  // mstore 0.i256 0.i256 i256;

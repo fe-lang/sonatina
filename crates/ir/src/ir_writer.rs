@@ -36,6 +36,12 @@ impl<'a> ModuleWriter<'a> {
                 writeln!(w)?;
             }
 
+            for enum_ in s.all_enum_data() {
+                has_type_def = true;
+                enum_.write(w, &self.module.ctx)?;
+                writeln!(w)?;
+            }
+
             if has_type_def {
                 writeln!(w)?;
             }

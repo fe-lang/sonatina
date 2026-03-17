@@ -43,6 +43,7 @@ pub struct Module {
     pub declared_functions: Vec<FuncDeclaration>,
     pub declared_gvs: Vec<GlobalVariable>,
     pub struct_types: Vec<Struct>,
+    pub enum_types: Vec<Enum>,
     pub functions: Vec<Func>,
     pub objects: Vec<ObjectDefinition>,
     pub comments: Vec<String>,
@@ -68,6 +69,7 @@ impl FromSyntax<Error> for Module {
         });
 
         let mut struct_types = vec![];
+        let mut enum_types = vec![];
         let mut declared_functions = vec![];
         let mut declared_gvs = vec![];
         let mut functions = vec![];
@@ -84,6 +86,8 @@ impl FromSyntax<Error> for Module {
 
             if let Some(struct_) = node.single_opt(Rule::struct_declaration) {
                 struct_types.push(struct_);
+            } else if let Some(enum_) = node.single_opt(Rule::enum_declaration) {
+                enum_types.push(enum_);
             } else if let Some(func) = node.single_opt(Rule::function_declaration) {
                 declared_functions.push(func);
             } else if let Some(gv) = node.single_opt(Rule::gv_declaration) {
@@ -110,6 +114,7 @@ impl FromSyntax<Error> for Module {
             declared_functions,
             declared_gvs,
             struct_types,
+            enum_types,
             functions,
             objects,
             comments: module_comments,
@@ -285,12 +290,53 @@ impl FromSyntax<Error> for Struct {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct StructName(pub SmolStr);
 
 impl FromSyntax<Error> for StructName {
     fn from_syntax(node: &mut Node<Error>) -> Self {
         Self(node.single(Rule::struct_name))
+    }
+}
+
+#[derive(Debug)]
+pub struct Enum {
+    pub name: StructName,
+    pub variants: Vec<Variant>,
+}
+
+impl FromSyntax<Error> for Enum {
+    fn from_syntax(node: &mut Node<Error>) -> Self {
+        Self {
+            name: node.single(Rule::struct_identifier),
+            variants: node.descend_into(Rule::enum_variant_list, |n| n.multi(Rule::enum_variant)),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct Variant {
+    pub name: VariantName,
+    pub fields: Vec<Type>,
+}
+
+impl FromSyntax<Error> for Variant {
+    fn from_syntax(node: &mut Node<Error>) -> Self {
+        Self {
+            name: node.single(Rule::variant_identifier),
+            fields: node
+                .descend_into_opt(Rule::enum_variant_fields, |n| n.multi(Rule::type_name))
+                .unwrap_or_default(),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct VariantName(pub SmolStr);
+
+impl FromSyntax<Error> for VariantName {
+    fn from_syntax(node: &mut Node<Error>) -> Self {
+        Self(node.single(Rule::variant_name))
     }
 }
 
@@ -559,6 +605,22 @@ impl<'a> TryFrom<&'a InstArg> for &'a FunctionName {
     }
 }
 
+impl<'a> TryFrom<&'a InstArg> for &'a VariantName {
+    type Error = Box<Error>;
+
+    fn try_from(arg: &'a InstArg) -> Result<Self, Self::Error> {
+        if let InstArgKind::Variant(name) = &arg.kind {
+            Ok(name)
+        } else {
+            Err(Box::new(Error::InstArgKindMismatch {
+                expected: "variant name".into(),
+                actual: arg.kind.discriminant_name().into(),
+                span: arg.span,
+            }))
+        }
+    }
+}
+
 impl FromSyntax<Error> for InstArg {
     fn from_syntax(node: &mut Node<Error>) -> Self {
         let kind = if let Some(value) = node.single_opt(Rule::value) {
@@ -569,6 +631,8 @@ impl FromSyntax<Error> for InstArg {
             InstArgKind::MultiValue(values)
         } else if let Some(ty) = node.single_opt(Rule::type_name) {
             InstArgKind::Ty(ty)
+        } else if let Some(variant) = node.single_opt(Rule::variant_identifier) {
+            InstArgKind::Variant(variant)
         } else if let Some(block) = node.single_opt(Rule::block_ident) {
             InstArgKind::Block(block)
         } else if let Some(vb_map) = node.single_opt(Rule::value_block_map) {
@@ -595,6 +659,7 @@ pub enum InstArgKind {
     Value(Value),
     MultiValue(Vec<Value>),
     Ty(Type),
+    Variant(VariantName),
     Block(BlockId),
     ValueBlockMap((Value, BlockId)),
     FuncRef(FunctionName),
@@ -608,6 +673,7 @@ impl InstArgKind {
             Self::Value(_) => "value",
             Self::MultiValue(_) => "(value, ...)",
             Self::Ty(_) => "type",
+            Self::Variant(_) => "variant name",
             Self::Block(_) => "block",
             Self::ValueBlockMap(_) => "(value, block)",
             Self::FuncRef(_) => "function name",
@@ -637,6 +703,8 @@ impl FromSyntax<Error> for Type {
         let kind = match node.rule {
             Rule::primitive_type => TypeKind::Int(IntType::from_str(node.txt).unwrap()),
             Rule::ptr_type => TypeKind::Ptr(Box::new(node.single(Rule::type_name))),
+            Rule::objref_type => TypeKind::ObjRef(Box::new(node.single(Rule::type_name))),
+            Rule::enumtag_type => TypeKind::EnumTag(node.single(Rule::struct_identifier)),
             Rule::array_type => {
                 let Ok(size) = usize::from_str(node.get(Rule::array_size).as_str()) else {
                     node.error(Error::NumberOutOfBounds(node.span));
@@ -648,7 +716,7 @@ impl FromSyntax<Error> for Type {
                 TypeKind::Array(Box::new(node.single(Rule::type_name)), size)
             }
             Rule::unit_type => TypeKind::Unit,
-            Rule::struct_identifier => TypeKind::Struct(node.parse_str(Rule::struct_name)),
+            Rule::struct_identifier => TypeKind::Named(node.parse_str(Rule::struct_name)),
             Rule::function_type => {
                 let args = node.descend_into(Rule::function_type_arg, |n| n.multi(Rule::type_name));
                 let ret_tys =
@@ -668,8 +736,10 @@ impl FromSyntax<Error> for Type {
 pub enum TypeKind {
     Int(IntType),
     Ptr(Box<Type>),
+    ObjRef(Box<Type>),
+    EnumTag(StructName),
     Array(Box<Type>, usize),
-    Struct(SmolStr),
+    Named(SmolStr),
     Func { args: Vec<Type>, ret_tys: Vec<Type> },
     Unit,
     Error,
@@ -735,6 +805,7 @@ pub struct Value {
 #[derive(Debug)]
 pub enum ValueKind {
     Immediate(Immediate),
+    EnumTagImmediate { enum_ty: StructName, value: I256 },
     Undef(Type),
     Named(ValueName),
     Global(GvName),
@@ -779,12 +850,27 @@ impl FromSyntax<Error> for Value {
         let kind = match node.rule {
             Rule::value_name => ValueKind::Named(ValueName::from_syntax(node)),
             Rule::imm_number => {
-                let ty: IntType = node.parse_str(Rule::primitive_type);
+                let ty = if let Some(ty) = node.parse_str_opt::<IntType>(Rule::primitive_type) {
+                    TypeKind::Int(ty)
+                } else if let Some(enum_ty) = node.get_opt(Rule::enumtag_type) {
+                    let mut enum_ty = Node::new(enum_ty);
+                    TypeKind::EnumTag(enum_ty.single(Rule::struct_identifier))
+                } else {
+                    unreachable!()
+                };
+                let imm_from_i256 = |i256| match &ty {
+                    TypeKind::Int(IntType::I256) => ValueKind::Immediate(Immediate::I256(i256)),
+                    TypeKind::EnumTag(enum_ty) => ValueKind::EnumTagImmediate {
+                        enum_ty: enum_ty.clone(),
+                        value: i256,
+                    },
+                    _ => unreachable!(),
+                };
                 node.descend();
                 let mut txt = node.txt;
                 match node.rule {
                     Rule::decimal => match ty {
-                        IntType::I1 => imm_or_err(
+                        TypeKind::Int(IntType::I1) => imm_or_err(
                             node,
                             || {
                                 let b = match u8::from_str(txt).ok()? {
@@ -796,42 +882,59 @@ impl FromSyntax<Error> for Value {
                             },
                             ValueKind::Error,
                         ),
-                        IntType::I8 => parse_dec!(node, Immediate::I8, i8, u8),
-                        IntType::I16 => parse_dec!(node, Immediate::I16, i16, u16),
-                        IntType::I32 => parse_dec!(node, Immediate::I32, i32, u32),
-                        IntType::I64 => parse_dec!(node, Immediate::I64, i64, u64),
-                        IntType::I128 => parse_dec!(node, Immediate::I128, i128, u128),
-
-                        IntType::I256 => {
+                        TypeKind::Int(IntType::I8) => parse_dec!(node, Immediate::I8, i8, u8),
+                        TypeKind::Int(IntType::I16) => {
+                            parse_dec!(node, Immediate::I16, i16, u16)
+                        }
+                        TypeKind::Int(IntType::I32) => {
+                            parse_dec!(node, Immediate::I32, i32, u32)
+                        }
+                        TypeKind::Int(IntType::I64) => {
+                            parse_dec!(node, Immediate::I64, i64, u64)
+                        }
+                        TypeKind::Int(IntType::I128) => {
+                            parse_dec!(node, Immediate::I128, i128, u128)
+                        }
+                        TypeKind::Int(IntType::I256) | TypeKind::EnumTag(_) => {
                             let s = txt.strip_prefix('-');
                             let is_negative = s.is_some();
                             txt = s.unwrap_or(txt);
 
-                            imm_or_err(
-                                node,
-                                || {
-                                    let mut i256 = U256::from_dec_str(txt).ok()?.into();
-                                    if is_negative {
-                                        i256 = I256::zero().overflowing_sub(i256).0;
-                                    }
-                                    Some(Immediate::I256(i256))
-                                },
-                                ValueKind::Error,
-                            )
+                            let Some(mut i256) = U256::from_dec_str(txt).ok().map(Into::into)
+                            else {
+                                node.error(Error::NumberOutOfBounds(node.span));
+                                return Value {
+                                    kind: ValueKind::Error,
+                                    span: node.span,
+                                };
+                            };
+                            if is_negative {
+                                i256 = I256::zero().overflowing_sub(i256).0;
+                            }
+                            imm_from_i256(i256)
                         }
+                        _ => unreachable!(),
                     },
 
                     Rule::hex => match ty {
-                        IntType::I1 => {
+                        TypeKind::Int(IntType::I1) => {
                             node.error(Error::NumberOutOfBounds(node.span));
                             ValueKind::Error
                         }
-                        IntType::I8 => parse_hex!(node, Immediate::I8, i8),
-                        IntType::I16 => parse_hex!(node, Immediate::I16, i16),
-                        IntType::I32 => parse_hex!(node, Immediate::I32, i32),
-                        IntType::I64 => parse_hex!(node, Immediate::I64, i64),
-                        IntType::I128 => parse_hex!(node, Immediate::I128, i128),
-                        IntType::I256 => {
+                        TypeKind::Int(IntType::I8) => parse_hex!(node, Immediate::I8, i8),
+                        TypeKind::Int(IntType::I16) => {
+                            parse_hex!(node, Immediate::I16, i16)
+                        }
+                        TypeKind::Int(IntType::I32) => {
+                            parse_hex!(node, Immediate::I32, i32)
+                        }
+                        TypeKind::Int(IntType::I64) => {
+                            parse_hex!(node, Immediate::I64, i64)
+                        }
+                        TypeKind::Int(IntType::I128) => {
+                            parse_hex!(node, Immediate::I128, i128)
+                        }
+                        TypeKind::Int(IntType::I256) | TypeKind::EnumTag(_) => {
                             let s = txt.strip_prefix('-');
                             let is_negative = s.is_some();
                             txt = s.unwrap_or(txt);
@@ -841,12 +944,13 @@ impl FromSyntax<Error> for Value {
                                 if is_negative {
                                     i256 = I256::zero().overflowing_sub(i256).0;
                                 }
-                                ValueKind::Immediate(Immediate::I256(i256))
+                                imm_from_i256(i256)
                             } else {
                                 node.error(Error::NumberOutOfBounds(node.span));
                                 ValueKind::Error
                             }
                         }
+                        _ => unreachable!(),
                     },
                     _ => unreachable!(),
                 }

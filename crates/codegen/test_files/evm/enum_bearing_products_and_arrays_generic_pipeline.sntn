@@ -1,0 +1,83 @@
+#! evm.config: { vcode: true, bytecode_hex: false, stackify_trace: false, evm_trace: false, opt: 2 }
+#! evm.case: ok
+#!   calldata:
+#!   expect: return u256(27)
+
+target = "evm-ethereum-osaka"
+
+type @OptionI256 = enum {
+    #None,
+    #Some(i256),
+};
+
+type @Flag = enum {
+    #Off,
+    #On(i256),
+};
+
+type @Wrapper = { @OptionI256, i256 };
+type @TwoEnums = { @OptionI256, @Flag };
+
+func private %struct_case(v0.i256) -> i256 {
+block0:
+    v1.@OptionI256 = enum.make @OptionI256 #Some (v0);
+    v2.@Wrapper = insert_value undef.@Wrapper 0.i8 v1;
+    v3.@Wrapper = insert_value v2 1.i8 1.i256;
+    v4.@OptionI256 = extract_value v3 0.i8;
+    enum.assert_variant v4 #Some;
+    v5.i256 = enum.extract v4 #Some 0.i8;
+    v6.i256 = extract_value v3 1.i8;
+    v7.i256 = add v5 v6;
+    return v7;
+}
+
+func private %array_case(v0.i256) -> i256 {
+block0:
+    v1.@OptionI256 = enum.make @OptionI256 #None;
+    v2.@OptionI256 = enum.make @OptionI256 #Some (v0);
+    v3.[@OptionI256; 2] = insert_value undef.[@OptionI256; 2] 0.i8 v1;
+    v4.[@OptionI256; 2] = insert_value v3 1.i8 v2;
+    v5.@OptionI256 = extract_value v4 1.i8;
+    enum.assert_variant v5 #Some;
+    v6.i256 = enum.extract v5 #Some 0.i8;
+    return v6;
+}
+
+func private %two_enum_case(v0.i256, v1.i256) -> i256 {
+block0:
+    v2.@OptionI256 = enum.make @OptionI256 #Some (v0);
+    v3.@Flag = enum.make @Flag #On (v1);
+    v4.@TwoEnums = insert_value undef.@TwoEnums 0.i8 v2;
+    v5.@TwoEnums = insert_value v4 1.i8 v3;
+    v6.@OptionI256 = extract_value v5 0.i8;
+    enum.assert_variant v6 #Some;
+    v7.i256 = enum.extract v6 #Some 0.i8;
+    v8.@Flag = extract_value v5 1.i8;
+    enum.assert_variant v8 #On;
+    v9.i256 = enum.extract v8 #On 0.i8;
+    v10.i256 = add v7 v9;
+    return v10;
+}
+
+func public %main() -> i256 {
+block0:
+    v0.i256 = call %struct_case 7.i256;
+    v1.i256 = call %array_case 7.i256;
+    v2.i256 = call %two_enum_case 7.i256 5.i256;
+    v3.i256 = add v0 v1;
+    v4.i256 = add v3 v2;
+    return v4;
+}
+
+func public %entry() {
+block0:
+    v0.i256 = call %main;
+    mstore 0.i8 v0 i256;
+    evm_return 0.i8 32.i8;
+}
+
+object @Contract {
+    section runtime {
+        entry %entry;
+    }
+}

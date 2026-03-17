@@ -547,7 +547,7 @@ fn value_to_egglog(func: &Function, v: ValueId) -> String {
                 Type::I32 => 32,
                 Type::I64 => 64,
                 Type::I128 => 128,
-                Type::I256 => 256,
+                Type::I256 | Type::EnumTag(_) => 256,
                 _ => unreachable!("immediates are always integers"),
             };
             if bit_width < 256 {
@@ -575,6 +575,7 @@ fn type_to_egglog(ty: Type) -> String {
         Type::I64 => "(I64)".to_string(),
         Type::I128 => "(I128)".to_string(),
         Type::I256 => "(I256)".to_string(),
+        Type::EnumTag(ty) => format!("(EnumTagRef {})", ty.as_u32()),
         Type::Unit => "(UnitTy)".to_string(),
         Type::Compound(ty) => format!("(CompoundRef {})", ty.as_u32()),
     }

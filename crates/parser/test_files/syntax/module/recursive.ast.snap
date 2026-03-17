@@ -23,7 +23,7 @@ Module {
                 Type {
                     kind: Ptr(
                         Type {
-                            kind: Struct(
+                            kind: Named(
                                 "Node",
                             ),
                             ..
@@ -35,6 +35,7 @@ Module {
             packed: false,
         },
     ],
+    enum_types: [],
     functions: [],
     objects: [],
     comments: [

@@ -1,0 +1,38 @@
+---
+source: crates/codegen/tests/object_lowering.rs
+input_file: test_files/object_lowering/phi_helper_keeps_root_local.sntn
+---
+target = "evm-ethereum-osaka"
+
+type @pair = {i256, i256};
+
+func private %fill_pair(v0.*@pair, v1.i1, v2.i256, v3.i256) {
+    block0:
+        br v1 block1 block2;
+
+    block1:
+        jump block3;
+
+    block2:
+        jump block3;
+
+    block3:
+        v4.*@pair = phi (v0 block1) (v0 block2);
+        v5.*i256 = gep v4 0.i64 0.i8;
+        mstore v5 v2 i256;
+        v6.*i256 = gep v4 0.i64 1.i8;
+        mstore v6 v3 i256;
+        return;
+}
+
+func private %sum_pair(v0.i1, v1.i256, v2.i256) -> i256 {
+    block0:
+        v3.*@pair = alloca @pair;
+        call %fill_pair v3 v0 v1 v2;
+        v4.*i256 = gep v3 0.i64 0.i8;
+        v5.i256 = mload v4 i256;
+        v6.*i256 = gep v3 0.i64 1.i8;
+        v7.i256 = mload v6 i256;
+        v8.i256 = add v5 v7;
+        return v8;
+}

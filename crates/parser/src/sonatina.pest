@@ -2,7 +2,16 @@ module = { SOI ~ NEWLINE* ~ target_specifier ~ (NEWLINE+ ~ declaration)* ~ (NEWL
 object_file = { SOI ~ NEWLINE* ~ (object_definition ~ NEWLINE*)* ~ EOI }
 
 WHITESPACE = _{ " " | "\t" }
-COMMENT    =  { "#" ~ (!NEWLINE ~ ANY)* }
+variant_token_continuation = _{
+    WHITESPACE* ~ ("(" | "," | ";" | ")")
+    | WHITESPACE+ ~ (value | type_name | block_ident | function_identifier | embed_symbol | current_section_symbol)
+}
+COMMENT    =  {
+    "#!" ~ (!NEWLINE ~ ANY)*
+    | "#[" ~ (!NEWLINE ~ ANY)*
+    | "#" ~ (" " | "\t") ~ (!NEWLINE ~ ANY)*
+    | "#" ~ !(ident_start_char ~ ident_body_char* ~ variant_token_continuation) ~ (!NEWLINE ~ ANY)*
+}
 
 ident_start_char = { ASCII_ALPHA | "_" }
 ident_body_char  = { ASCII_ALPHANUMERIC | "_" }
@@ -10,16 +19,23 @@ ident_body_char  = { ASCII_ALPHANUMERIC | "_" }
 target_specifier = _{ "target" ~ "=" ~ "\"" ~ target_triple ~ "\"" }
 target_triple    = @{ ASCII_ALPHA* ~ "-" ~ ASCII_ALPHA* ~ "-" ~ ASCII_ALPHA* }
 
-declaration              = _{ function_declaration | struct_declaration | gv_declaration }
+declaration              = _{ function_declaration | struct_declaration | enum_declaration | gv_declaration }
 function_declaration     =  { "declare" ~ linkage ~ function_identifier ~ function_param_type_list ~ function_ret_type? ~ ";" }
 function_param_type_list =  { "(" ~ (type_name ~ ",")* ~ type_name? ~ ")" }
 struct_declaration       =  { "type" ~ struct_identifier ~ "=" ~ struct_fields ~ ";" }
+enum_declaration         =  { "type" ~ struct_identifier ~ "=" ~ "enum" ~ "{" ~ NEWLINE* ~ enum_variant_list ~ NEWLINE* ~ "}" ~ ";" }
+enum_variant_list        = ${ (NEWLINE* ~ enum_variant_line ~ "," )* ~ NEWLINE* ~ enum_variant_line? }
+enum_variant_line        = _{ WHITESPACE* ~ enum_variant ~ WHITESPACE* }
+enum_variant             =  { variant_identifier ~ enum_variant_fields? }
+enum_variant_fields      =  { "(" ~ type_list ~ ")" }
 struct_identifier        = ${ "@" ~ struct_name }
 struct_fields            = _{ normal_field_list | packed_field_list }
 normal_field_list        =  { "{" ~ type_list ~ "}" }
 packed_field_list        =  { "<{" ~ type_list ~ "}>" }
 type_list                = _{ (type_name ~ ",")* ~ type_name? }
 struct_name              = @{ ident_start_char ~ ident_body_char* }
+variant_identifier       = ${ "#" ~ variant_name }
+variant_name             = @{ ident_start_char ~ ident_body_char* }
 
 
 function            =  { function_signature ~ function_body }
@@ -47,9 +63,11 @@ block_ident  = ${ "block" ~ block_number }
 block_number =  { ASCII_DIGIT+ }
 value_name   = ${ "v" ~ ASCII_DIGIT+ }
 
-type_name          =  { primitive_type | ptr_type | array_type | unit_type | struct_identifier | function_type }
+type_name          =  { primitive_type | ptr_type | objref_type | enumtag_type | array_type | unit_type | struct_identifier | function_type }
 primitive_type     =  { "i8" | "i16" | "i32" | "i64" | "i128" | "i256" | "i1" }
 ptr_type           = ${ "*" ~ type_name }
+objref_type        = ${ "objref" ~ "<" ~ type_name ~ ">" }
+enumtag_type       = ${ "enumtag" ~ "(" ~ struct_identifier ~ ")" }
 array_type         = !{ "[" ~ type_name ~ ";" ~ array_size ~ "]" }
 array_size         =  { ASCII_DIGIT+ }
 function_type      = !{ function_type_arg ~ function_ret_type }
@@ -88,13 +106,13 @@ inst_stmt   = { inst }
 
 inst            = { inst_name ~ inst_arg* }
 inst_name       = { inst_identifier }
-inst_identifier = @{ ident_start_char ~ ident_body_char* }
-inst_arg        = { multi_value_list | value | type_name | block_ident | value_block_map | function_identifier | embed_symbol | current_section_symbol }
-multi_value_list = { "(" ~ value ~ ("," ~ value)+ ~ ")" }
+inst_identifier = @{ ident_start_char ~ (ident_body_char | ".")* }
+inst_arg        = { multi_value_list | value | type_name | variant_identifier | block_ident | value_block_map | function_identifier | embed_symbol | current_section_symbol }
+multi_value_list = { "(" ~ (value ~ ("," ~ value)*)? ~ ")" }
 value_block_map = { "(" ~ value ~ block_ident ~ ")" }
 
 value        =  { value_name | imm_number | undef | global_value }
-imm_number   = ${ number ~ "." ~ primitive_type }
+imm_number   = ${ number ~ "." ~ (primitive_type | enumtag_type) }
 global_value =  { gv_identifier }
 undef        = ${ "undef" ~ "." ~ type_name }
 number       = _{ hex | decimal }

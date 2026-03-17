@@ -1,0 +1,30 @@
+target = "evm-ethereum-osaka"
+
+type @pair = {i256, i256};
+
+func private %sum_pair(v0.objref<@pair>) -> i256 {
+    block0:
+        v1.objref<i256> = obj.proj v0 0.i8;
+        v2.i256 = obj.load v1;
+        v3.objref<i256> = obj.proj v0 1.i8;
+        v4.i256 = obj.load v3;
+        v5.i256 = add v2 v4;
+        return v5;
+}
+
+func private %make_pair_checked(v0.i256, v1.i256) -> objref<@pair> {
+    block0:
+        v2.objref<@pair> = obj.alloc @pair;
+        v3.objref<i256> = obj.proj v2 0.i8;
+        obj.store v3 v0;
+        v4.objref<i256> = obj.proj v2 1.i8;
+        obj.store v4 v1;
+        v5.i256 = call %sum_pair v2;
+        return v2;
+}
+
+func private %forward_checked(v0.i256, v1.i256) -> objref<@pair> {
+    block0:
+        v2.objref<@pair> = call %make_pair_checked v0 v1;
+        return v2;
+}

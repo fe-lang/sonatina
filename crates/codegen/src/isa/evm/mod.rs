@@ -25,6 +25,7 @@ use tracing::{debug_span, info_span, trace_span};
 
 use crate::{
     analysis::func_behavior,
+    cfg_edit::CleanupMode,
     critical_edge::CriticalEdgeSplitter,
     domtree::DomTree,
     liveness::{InstLiveness, Liveness},
@@ -33,14 +34,25 @@ use crate::{
         vcode::{Label, SymFixup, SymFixupKind, VCode, VCodeFixup, VCodeInst},
     },
     module_analysis::{CallGraph, SccBuilder},
-    optim::aggregate::{AggregateLowerToMemoryLegalize, assert_aggregate_legalized, shape},
+    optim::{
+        aggregate::{
+            AggregateCombine, AggregateExpandAbi, AggregateLowerToMemoryLegalize,
+            AggregateScalarize, EnumLowerToProduct, LocalObjectArgMap, ObjectLoadStore,
+            ObjectLowerToMemory, ObjectReturnOutParam, assert_aggregate_legalized,
+            collect_local_object_arg_info_with_effects, compute_object_effect_summaries, shape,
+        },
+        cfg_cleanup::CfgCleanup,
+        dead_arg::{DeadArgElimConfig, run_dead_arg_elim},
+        load_store::LoadStoreSolver,
+        sccp::SccpSolver,
+    },
     stackalloc::{Action, Actions, Allocator, StackifyAlloc, StackifyBuilder},
 };
 use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{
     BlockId, Function, Immediate, InstId, InstSetExt, Module, Type, U256, ValueId,
     cfg::ControlFlowGraph,
-    inst::{data::SymbolRef, evm::inst_set::EvmInstKind},
+    inst::{control_flow::BranchKind, data::SymbolRef, evm::inst_set::EvmInstKind},
     ir_writer::{FuncWriter, IrWrite},
     isa::{Isa, evm::Evm},
     module::{FuncRef, ModuleCtx},
@@ -159,10 +171,12 @@ pub struct EvmBackend {
     isa: Evm,
     stackify_reach_depth: u8,
     arena_cost_model: ArenaCostModel,
+    enable_late_cleanup_optimizations: bool,
     section_state: RefCell<Option<PreparedSection>>,
     current_mem_plan: RefCell<Option<FuncMemPlan>>,
     current_frame_summary: RefCell<Option<FrameSummary>>,
     current_dyn_sp_plan: RefCell<Option<FuncDynSpPlan>>,
+    current_block_aliases: RefCell<Option<FxHashMap<BlockId, BlockId>>>,
 }
 impl EvmBackend {
     pub fn new(isa: Evm) -> Self {
@@ -178,10 +192,12 @@ impl EvmBackend {
             isa,
             stackify_reach_depth: 16,
             arena_cost_model: ArenaCostModel::default(),
+            enable_late_cleanup_optimizations: true,
             section_state: RefCell::new(None),
             current_mem_plan: RefCell::new(None),
             current_frame_summary: RefCell::new(None),
             current_dyn_sp_plan: RefCell::new(None),
+            current_block_aliases: RefCell::new(None),
         }
     }
 
@@ -191,6 +207,11 @@ impl EvmBackend {
             "stackify reach_depth must be in 1..=16"
         );
         self.stackify_reach_depth = reach_depth;
+        self
+    }
+
+    pub fn with_late_cleanup_optimizations(mut self, enable: bool) -> Self {
+        self.enable_late_cleanup_optimizations = enable;
         self
     }
 
@@ -627,6 +648,21 @@ impl EvmBackend {
             .unwrap_or(true)
     }
 
+    fn canonical_block_target(&self, block: BlockId) -> BlockId {
+        self.current_block_aliases
+            .borrow()
+            .as_ref()
+            .and_then(|aliases| aliases.get(&block).copied())
+            .unwrap_or(block)
+    }
+
+    fn is_elided_block(&self, block: BlockId) -> bool {
+        self.current_block_aliases
+            .borrow()
+            .as_ref()
+            .is_some_and(|aliases| aliases.contains_key(&block))
+    }
+
     fn emit_lazy_frame_enter_if_site_matches(
         &self,
         ctx: &mut Lower<OpCode>,
@@ -725,6 +761,11 @@ impl EvmBackend {
             blocks = block_order.len()
         )
         .entered();
+        let alias_plan = module.func_store.view(func, |function| {
+            compute_late_block_alias_plan(function, &alloc, &frame_summary, &block_order)
+        });
+        let emitted_block_order = alias_plan.emitted_block_order;
+        let block_aliases = alias_plan.aliases;
         module.func_store.view(func, |function| {
             assert_aggregate_legalized(function, &module.ctx);
         });
@@ -739,8 +780,12 @@ impl EvmBackend {
                 );
                 let _dyn_sp_plan_guard =
                     CurrentDynSpPlanGuard::new(&self.current_dyn_sp_plan, dyn_sp_plan.clone());
+                let _block_alias_guard = CurrentBlockAliasesGuard::new(
+                    &self.current_block_aliases,
+                    block_aliases.clone(),
+                );
                 let mut alloc = FinalAlloc::new(alloc, mem_plan);
-                let lower = Lower::new(&module.ctx, function, &block_order);
+                let lower = Lower::new(&module.ctx, function, &emitted_block_order);
                 lower.lower(self, &mut alloc).map_err(|e| format!("{e:?}"))
             })?
         };
@@ -748,18 +793,26 @@ impl EvmBackend {
             let _span =
                 trace_span!("sonatina.codegen.evm.lower_prepared_function.prune_redundant_opcodes")
                     .entered();
-            prune_redundant_opcode_sequences(&mut vcode, &block_order);
+            prune_redundant_opcode_sequences(&mut vcode, &emitted_block_order);
         }
         {
             let _span =
                 trace_span!("sonatina.codegen.evm.lower_prepared_function.materialize_jumpdests")
                     .entered();
             module.func_store.view(func, |function| {
-                materialize_jumpdests(&mut vcode, function, &block_order, function_entry_jumpdest);
+                materialize_jumpdests(
+                    &mut vcode,
+                    function,
+                    &emitted_block_order,
+                    function_entry_jumpdest,
+                );
             });
         }
 
-        Ok(LoweredFunction { vcode, block_order })
+        Ok(LoweredFunction {
+            vcode,
+            block_order: emitted_block_order,
+        })
     }
 
     fn try_fold_gep_static_arena_addr(
@@ -911,6 +964,133 @@ fn materialize_jumpdests(
             ensure_block_starts_with_jumpdest(vcode, block);
         }
     }
+}
+
+#[derive(Default)]
+struct LateBlockAliasPlan {
+    aliases: FxHashMap<BlockId, BlockId>,
+    emitted_block_order: Vec<BlockId>,
+}
+
+fn compute_late_block_alias_plan(
+    function: &Function,
+    alloc: &StackifyAlloc,
+    frame_summary: &FrameSummary,
+    block_order: &[BlockId],
+) -> LateBlockAliasPlan {
+    let mut raw_alias_targets: SecondaryMap<BlockId, Option<BlockId>> = SecondaryMap::new();
+    let entry = function.layout.entry_block();
+
+    for &block in block_order {
+        let Some(term) = block_trampoline_jump_inst(function, block) else {
+            continue;
+        };
+
+        if Some(block) == entry
+            || !alloc.read(term, &[]).is_empty()
+            || !alloc.write(term, &[]).is_empty()
+            || lazy_frame_mentions_trampoline_site(frame_summary, block, term)
+        {
+            continue;
+        }
+
+        let dest = match function
+            .dfg
+            .branch_info(term)
+            .expect("trampoline jump missing branch info")
+            .branch_kind()
+        {
+            BranchKind::Jump(jump) => *jump.dest(),
+            BranchKind::Br(_) | BranchKind::BrTable(_) => unreachable!("non-jump trampoline"),
+        };
+        raw_alias_targets[block] = Some(dest);
+    }
+
+    let mut aliases = FxHashMap::default();
+    for &block in block_order {
+        if raw_alias_targets[block].is_none() {
+            continue;
+        }
+
+        let mut seen = FxHashSet::default();
+        let mut cur = block;
+        let canonical = loop {
+            if !seen.insert(cur) {
+                break None;
+            }
+
+            match raw_alias_targets[cur] {
+                Some(next) => cur = next,
+                None => break Some(cur),
+            }
+        };
+
+        if let Some(canonical) = canonical
+            && canonical != block
+        {
+            aliases.insert(block, canonical);
+        }
+    }
+
+    let emitted_block_order = block_order
+        .iter()
+        .copied()
+        .filter(|block| !aliases.contains_key(block))
+        .collect();
+
+    LateBlockAliasPlan {
+        aliases,
+        emitted_block_order,
+    }
+}
+
+fn block_trampoline_jump_inst(function: &Function, block: BlockId) -> Option<InstId> {
+    let term = function.layout.last_inst_of(block)?;
+    if !matches!(
+        function.dfg.branch_info(term)?.branch_kind(),
+        BranchKind::Jump(_)
+    ) {
+        return None;
+    }
+    if function
+        .layout
+        .iter_inst(block)
+        .any(|inst| function.dfg.is_phi(inst))
+    {
+        return None;
+    }
+    if function
+        .layout
+        .iter_inst(block)
+        .filter(|&inst| !function.dfg.is_phi(inst))
+        .count()
+        != 1
+    {
+        return None;
+    }
+
+    Some(term)
+}
+
+fn lazy_frame_mentions_trampoline_site(
+    frame_summary: &FrameSummary,
+    block: BlockId,
+    term: InstId,
+) -> bool {
+    let Some(plan) = frame_summary.lowering.as_ref() else {
+        return false;
+    };
+
+    [
+        FrameSite::BlockEntry(block),
+        FrameSite::PreInst(term),
+        FrameSite::Inst(term),
+        FrameSite::PostInst(term),
+    ]
+    .into_iter()
+    .any(|site| {
+        plan.enter_before_site(site) || plan.exit_before_site(site) || plan.exit_after_site(site)
+    })
 }
 
 fn compute_return_escape_caller_clamp_words(
@@ -1538,10 +1718,31 @@ impl Drop for CurrentDynSpPlanGuard<'_> {
     }
 }
 
+struct CurrentBlockAliasesGuard<'a> {
+    slot: &'a RefCell<Option<FxHashMap<BlockId, BlockId>>>,
+}
+
+impl<'a> CurrentBlockAliasesGuard<'a> {
+    fn new(
+        slot: &'a RefCell<Option<FxHashMap<BlockId, BlockId>>>,
+        aliases: FxHashMap<BlockId, BlockId>,
+    ) -> Self {
+        *slot.borrow_mut() = Some(aliases);
+        Self { slot }
+    }
+}
+
+impl Drop for CurrentBlockAliasesGuard<'_> {
+    fn drop(&mut self) {
+        *self.slot.borrow_mut() = None;
+    }
+}
+
 fn type_is_legalized_evm(ctx: &ModuleCtx, ty: Type, seen: &mut FxHashSet<CompoundTypeRef>) -> bool {
     match ty {
         Type::I1 | Type::I256 | Type::Unit => true,
         Type::I8 | Type::I16 | Type::I32 | Type::I64 | Type::I128 => false,
+        Type::EnumTag(_) => false,
         Type::Compound(compound) => {
             if !seen.insert(compound) {
                 return true;
@@ -1551,6 +1752,7 @@ fn type_is_legalized_evm(ctx: &ModuleCtx, ty: Type, seen: &mut FxHashSet<Compoun
                 CompoundType::Array { elem, .. } | CompoundType::Ptr(elem) => {
                     type_is_legalized_evm(ctx, elem, seen)
                 }
+                CompoundType::ObjRef(_) => false,
                 CompoundType::Func { args, ret_tys } => args
                     .iter()
                     .chain(ret_tys.iter())
@@ -1559,6 +1761,7 @@ fn type_is_legalized_evm(ctx: &ModuleCtx, ty: Type, seen: &mut FxHashSet<Compoun
                     .fields
                     .iter()
                     .all(|&field| type_is_legalized_evm(ctx, field, seen)),
+                CompoundType::Enum(_) => false,
             }
         }
     }
@@ -1612,6 +1815,86 @@ fn collect_call_closure(module: &Module, roots: &[FuncRef]) -> Vec<FuncRef> {
     let mut closure: Vec<_> = closure.into_iter().collect();
     closure.sort_unstable();
     closure
+}
+
+fn run_evm_pre_memory_aggregate_pipeline(module: &Module) -> LocalObjectArgMap {
+    EnumLowerToProduct.run(module);
+    for func_ref in module.funcs() {
+        module.func_store.modify(func_ref, |function| {
+            AggregateCombine::default().run(function)
+        });
+    }
+    let synthetic_out_args = ObjectReturnOutParam.run_with_synthetic_out_args(module);
+    let object_effects = compute_object_effect_summaries(module);
+    let mut local_object_args = collect_local_object_arg_info_with_effects(module, &object_effects);
+    crate::optim::aggregate::merge_local_object_arg_info(
+        &mut local_object_args,
+        &synthetic_out_args,
+    );
+    for func_ref in module.funcs() {
+        module.func_store.modify(func_ref, |function| {
+            ObjectLoadStore::default().run_for_func(
+                func_ref,
+                function,
+                &local_object_args,
+                &object_effects,
+            )
+        });
+    }
+    ObjectLowerToMemory.run(module);
+    AggregateExpandAbi::default().run(module);
+    local_object_args
+}
+
+fn run_evm_post_legalize_cleanup(
+    module: &Module,
+    funcs: &[FuncRef],
+    local_object_args: &LocalObjectArgMap,
+) {
+    for &func in funcs {
+        module.func_store.modify(func, |function| {
+            CfgCleanup::new(CleanupMode::Strict).run(function);
+            AggregateCombine::default().run(function);
+            AggregateScalarize::default().run_for_func(func, function, local_object_args);
+        });
+    }
+
+    run_dead_arg_elim(module, DeadArgElimConfig::default());
+    for &func in funcs {
+        module.func_store.modify(func, |function| {
+            CfgCleanup::new(CleanupMode::Strict).run(function);
+        });
+    }
+
+    func_behavior::analyze_module(module);
+    for &func in funcs {
+        module.func_store.modify(func, |function| {
+            let mut cfg = ControlFlowGraph::new();
+            cfg.compute(function);
+            LoadStoreSolver::new().run(function, &mut cfg);
+            cfg.compute(function);
+            SccpSolver::new().run(function, &mut cfg);
+        });
+    }
+}
+
+fn run_evm_post_memory_legalize_cleanup(module: &Module, funcs: &[FuncRef]) {
+    for &func in funcs {
+        module.func_store.modify(func, |function| {
+            CfgCleanup::new(CleanupMode::Strict).run(function);
+        });
+    }
+
+    func_behavior::analyze_module(module);
+    for &func in funcs {
+        module.func_store.modify(func, |function| {
+            let mut cfg = ControlFlowGraph::new();
+            cfg.compute(function);
+            LoadStoreSolver::new().run(function, &mut cfg);
+            cfg.compute(function);
+            SccpSolver::new().run(function, &mut cfg);
+        });
+    }
 }
 
 fn assert_supported_lowering_ir(func_ref: FuncRef, func: &Function) {
@@ -1738,7 +2021,11 @@ impl LowerBackend for EvmBackend {
 
         let _span =
             info_span!("sonatina.codegen.evm.prepare_section", funcs = funcs.len()).entered();
+        let local_object_args = run_evm_pre_memory_aggregate_pipeline(module);
         legalize_evm_section(module, funcs);
+        if self.enable_late_cleanup_optimizations {
+            run_evm_post_legalize_cleanup(module, funcs, &local_object_args);
+        }
         for &func in funcs {
             module.func_store.view(func, |function| {
                 assert_supported_lowering_ir(func, function)
@@ -1777,6 +2064,9 @@ impl LowerBackend for EvmBackend {
                     assert_aggregate_legalized(function, &module.ctx);
                 });
             }
+        }
+        if self.enable_late_cleanup_optimizations {
+            run_evm_post_memory_legalize_cleanup(module, funcs);
         }
 
         {
@@ -1968,7 +2258,11 @@ impl LowerBackend for EvmBackend {
         }
 
         let closure = collect_call_closure(module, std::slice::from_ref(&func));
+        let local_object_args = run_evm_pre_memory_aggregate_pipeline(module);
         legalize_evm_section(module, &closure);
+        if self.enable_late_cleanup_optimizations {
+            run_evm_post_legalize_cleanup(module, &closure, &local_object_args);
+        }
         module.func_store.view(func, |function| {
             assert_supported_lowering_ir(func, function)
         });
@@ -1994,6 +2288,9 @@ impl LowerBackend for EvmBackend {
                 AggregateLowerToMemoryLegalize::default().run(function, &module.ctx);
                 assert_aggregate_legalized(function, &module.ctx);
             });
+        }
+        if self.enable_late_cleanup_optimizations {
+            run_evm_post_memory_legalize_cleanup(module, std::slice::from_ref(&func));
         }
 
         {
@@ -2121,6 +2418,10 @@ impl LowerBackend for EvmBackend {
         _alloc: &mut dyn Allocator,
         block: BlockId,
     ) {
+        if self.is_elided_block(block) {
+            return;
+        }
+
         self.emit_lazy_frame_enter_if_site_matches(
             ctx,
             _alloc.frame_size_slots(),
@@ -2134,6 +2435,10 @@ impl LowerBackend for EvmBackend {
     }
 
     fn lower(&self, ctx: &mut Lower<Self::MInst>, alloc: &mut dyn Allocator, insn: InstId) {
+        if self.is_elided_block(ctx.insn_block(insn)) {
+            return;
+        }
+
         let frame_size_slots = alloc.frame_size_slots();
         let emit_pre_actions = |ctx: &mut Lower<Self::MInst>, actions: &[Action]| {
             self.emit_actions_for_site(ctx, actions, frame_size_slots, FrameSite::PreInst(insn))
@@ -2279,7 +2584,7 @@ impl LowerBackend for EvmBackend {
             EvmInstKind::Xor(_) => basic_op(ctx, &[OpCode::XOR]),
 
             EvmInstKind::Jump(jump) => {
-                let dest = *jump.dest();
+                let dest = self.canonical_block_target(*jump.dest());
                 emit_pre_actions(ctx, &alloc.read(insn, &[]));
 
                 if !ctx.is_next_block(dest) {
@@ -2289,24 +2594,31 @@ impl LowerBackend for EvmBackend {
                 }
             }
             EvmInstKind::Br(br) => {
-                let nz_dest = *br.nz_dest();
-                let z_dest = *br.z_dest();
+                let nz_dest = self.canonical_block_target(*br.nz_dest());
+                let z_dest = self.canonical_block_target(*br.z_dest());
 
-                // JUMPI: dest is top of stack, bool val is next
                 emit_pre_actions(ctx, &alloc.read(insn, &args));
-
-                if ctx.is_next_block(nz_dest) {
-                    // Prefer fallthrough to the next block.
-                    ctx.push(OpCode::ISZERO);
-                    ctx.push_jump_target(OpCode::PUSH1, Label::Block(z_dest));
-                    ctx.push(OpCode::JUMPI);
-                } else {
-                    ctx.push_jump_target(OpCode::PUSH1, Label::Block(nz_dest));
-                    ctx.push(OpCode::JUMPI);
-
-                    if !ctx.is_next_block(z_dest) {
-                        ctx.push_jump_target(OpCode::PUSH1, Label::Block(z_dest));
+                if nz_dest == z_dest {
+                    ctx.push(OpCode::POP);
+                    if !ctx.is_next_block(nz_dest) {
+                        ctx.push_jump_target(OpCode::PUSH1, Label::Block(nz_dest));
                         ctx.push(OpCode::JUMP);
+                    }
+                } else {
+                    // JUMPI: dest is top of stack, bool val is next
+                    if ctx.is_next_block(nz_dest) {
+                        // Prefer fallthrough to the next block.
+                        ctx.push(OpCode::ISZERO);
+                        ctx.push_jump_target(OpCode::PUSH1, Label::Block(z_dest));
+                        ctx.push(OpCode::JUMPI);
+                    } else {
+                        ctx.push_jump_target(OpCode::PUSH1, Label::Block(nz_dest));
+                        ctx.push(OpCode::JUMPI);
+
+                        if !ctx.is_next_block(z_dest) {
+                            ctx.push_jump_target(OpCode::PUSH1, Label::Block(z_dest));
+                            ctx.push(OpCode::JUMP);
+                        }
                     }
                 }
             }
@@ -2319,7 +2631,7 @@ impl LowerBackend for EvmBackend {
             EvmInstKind::BrTable(br) => {
                 let table = br.table().clone();
                 let scrutinee = *br.scrutinee();
-                let default = *br.default();
+                let default = (*br.default()).map(|dest| self.canonical_block_target(dest));
 
                 // TODO: sanitize br_table ops
                 assert!(!table.is_empty(), "empty br_table");
@@ -2330,6 +2642,7 @@ impl LowerBackend for EvmBackend {
                 );
 
                 for (case_val, dest) in table.iter() {
+                    let dest = self.canonical_block_target(*dest);
                     self.emit_actions_for_site(
                         ctx,
                         &alloc.read(insn, &[scrutinee, *case_val]),
@@ -2338,7 +2651,7 @@ impl LowerBackend for EvmBackend {
                     );
                     ctx.push(OpCode::EQ);
 
-                    ctx.push_jump_target(OpCode::PUSH1, Label::Block(*dest));
+                    ctx.push_jump_target(OpCode::PUSH1, Label::Block(dest));
                     ctx.push(OpCode::JUMPI);
                 }
 
@@ -2560,6 +2873,28 @@ impl LowerBackend for EvmBackend {
 
                 emit_post_actions(ctx, &alloc.write(insn, results.as_slice()));
             }
+            EvmInstKind::ObjAlloc(_)
+            | EvmInstKind::ObjProj(_)
+            | EvmInstKind::ObjIndex(_)
+            | EvmInstKind::ObjLoad(_)
+            | EvmInstKind::ObjStore(_)
+            | EvmInstKind::EnumMake(_)
+            | EvmInstKind::EnumTag(_)
+            | EvmInstKind::EnumIsVariant(_)
+            | EvmInstKind::EnumAssertVariant(_)
+            | EvmInstKind::EnumAssertVariantRef(_)
+            | EvmInstKind::EnumExtract(_)
+            | EvmInstKind::EnumSetTag(_)
+            | EvmInstKind::EnumWriteVariant(_)
+            | EvmInstKind::EnumGetTag(_)
+            | EvmInstKind::EnumProj(_)
+            | EvmInstKind::ObjMaterializeStack(_)
+            | EvmInstKind::ObjMaterializeHeap(_)
+            | EvmInstKind::MemAllocDynamic(_) => {
+                panic!(
+                    "enum/object lowering invariant violated: high-level enum/object instruction reached EVM lowering"
+                )
+            }
 
             EvmInstKind::EvmStop(_) => basic_op(ctx, &[OpCode::STOP]),
 
@@ -2625,7 +2960,6 @@ impl LowerBackend for EvmBackend {
             EvmInstKind::EvmStaticCall(_) => basic_op(ctx, &[OpCode::STATICCALL]),
             EvmInstKind::EvmRevert(_) => basic_op(ctx, &[OpCode::REVERT]),
             EvmInstKind::EvmSelfDestruct(_) => basic_op(ctx, &[OpCode::SELFDESTRUCT]),
-
             EvmInstKind::EvmMalloc(_) => {
                 let needs_dyn_sp_clamp = self.current_malloc_needs_dyn_sp_clamp(insn);
                 let has_persistent_mallocs = self.section_has_persistent_mallocs();
@@ -3124,6 +3458,12 @@ fn build_gep_lower_plan(ctx: &Lower<OpCode>, args: &[ValueId]) -> GepLowerPlan {
             CompoundType::Func { .. } => {
                 panic!("invalid gep: indexing into function type");
             }
+            CompoundType::Enum(_) => {
+                panic!("invalid gep: indexing into enum type");
+            }
+            CompoundType::ObjRef(_) => {
+                panic!("invalid gep: indexing into object-reference type");
+            }
         }
     }
 
@@ -3292,6 +3632,9 @@ fn perform_action(ctx: &mut Lower<OpCode>, action: Action, frame_size_slots: u32
                     Immediate::I64(v) => shrink_bytes(&v.to_be_bytes()),
                     Immediate::I128(v) => shrink_bytes(&v.to_be_bytes()),
                     Immediate::I256(v) => shrink_bytes(&v.to_u256().to_big_endian()),
+                    Immediate::EnumTag { value, .. } => {
+                        shrink_bytes(&value.to_u256().to_big_endian())
+                    }
                 };
                 push_bytes(ctx, &bytes);
 
@@ -3400,6 +3743,7 @@ fn scalar_bit_width(ty: Type, module: &sonatina_ir::module::ModuleCtx) -> Option
         Type::I64 => 64,
         Type::I128 => 128,
         Type::I256 => 256,
+        Type::EnumTag(_) => return None,
         Type::Unit => 0,
         Type::Compound(_) if ty.is_pointer(module) => 256,
         Type::Compound(_) => return None,
@@ -4768,6 +5112,78 @@ object @Contract {
     }
 
     #[test]
+    fn prepare_section_runs_late_dead_arg_elim_on_helpers() {
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func private %helper(v0.i256, v1.i256) -> i256 {
+block0:
+    return v1;
+}
+
+func public %entry(v0.i256) -> i256 {
+block0:
+    v1.i256 = call %helper 0.i256 v0;
+    return v1;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}
+"#,
+        )
+        .unwrap();
+
+        let funcs = parsed.module.funcs();
+        let mut names: FxHashMap<String, FuncRef> = FxHashMap::default();
+        for &func in &funcs {
+            let name = parsed
+                .module
+                .ctx
+                .func_sig(func, |sig| sig.name().to_string());
+            names.insert(name, func);
+        }
+
+        let backend = EvmBackend::new(Evm::new(TargetTriple {
+            architecture: Architecture::Evm,
+            vendor: Vendor::Ethereum,
+            operating_system: OperatingSystem::Evm(EvmVersion::Osaka),
+        }))
+        .with_late_cleanup_optimizations(true);
+        let object = ObjectName::from("Contract");
+        let section = SectionName::from("runtime");
+        let embeds: Vec<EmbedSymbol> = Vec::new();
+        let section_ctx = SectionLoweringCtx {
+            object: &object,
+            section: &section,
+            embed_symbols: &embeds,
+        };
+
+        backend.prepare_section(&parsed.module, &funcs, &section_ctx);
+
+        let helper_sig = parsed
+            .module
+            .ctx
+            .get_sig(names["helper"])
+            .expect("helper signature should exist");
+        assert_eq!(
+            helper_sig.args().len(),
+            1,
+            "late cleanup should prune dead helper arg"
+        );
+        parsed.module.func_store.view(names["entry"], |function| {
+            let dumped = FuncWriter::new(names["entry"], function).dump_string();
+            assert!(
+                dumped.contains("v1.i256 = call %helper v0;"),
+                "entry callsite should be rewritten after late dead-arg elim:\n{dumped}"
+            );
+        });
+    }
+
+    #[test]
     fn lowering_elides_section_entry_jumpdest_for_noreturn_call() {
         let parsed = parse_module(
             r#"
@@ -4956,6 +5372,148 @@ block1:
                 "entry block should remain unpadded without function-entry targeting"
             );
         });
+    }
+
+    #[test]
+    fn lowering_elides_pure_jump_alias_blocks() {
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %main(v0.i1) {
+block0:
+    br v0 block1 block2;
+
+block1:
+    jump block3;
+
+block2:
+    v1.i256 = add 1.i256 2.i256;
+    jump block3;
+
+block3:
+    evm_revert 0.i256 0.i256;
+}
+
+object @Contract {
+  section runtime {
+    entry %main;
+  }
+}
+"#,
+        )
+        .unwrap();
+
+        let func = parsed.module.funcs()[0];
+        let backend = EvmBackend::new(Evm::new(TargetTriple {
+            architecture: Architecture::Evm,
+            vendor: Vendor::Ethereum,
+            operating_system: OperatingSystem::Evm(EvmVersion::Osaka),
+        }));
+        let object = ObjectName::from("Contract");
+        let section = SectionName::from("runtime");
+        let embeds: Vec<EmbedSymbol> = Vec::new();
+        let section_ctx = SectionLoweringCtx {
+            object: &object,
+            section: &section,
+            embed_symbols: &embeds,
+        };
+
+        backend.prepare_section(&parsed.module, &[func], &section_ctx);
+        let lowered = backend
+            .lower_function(&parsed.module, func, &section_ctx)
+            .expect("main lowers");
+
+        assert!(
+            lowered.block_order.iter().all(|block| block.0 != 1),
+            "pure trampoline block should be omitted from final block order"
+        );
+        assert!(
+            lowered
+                .vcode
+                .blocks
+                .get(BlockId(1))
+                .is_none_or(|block| block.is_empty()),
+            "late alias block should not lower any instructions"
+        );
+        assert!(
+            lowered.block_order.iter().all(|block| {
+                let insts: Vec<_> = lowered.vcode.block_insns(*block).collect();
+                !matches!(
+                    insts.as_slice(),
+                    [jumpdest, push, jump]
+                        if (lowered.vcode.insts[*jumpdest] as u8) == (OpCode::JUMPDEST as u8)
+                            && is_push_opcode(lowered.vcode.insts[*push])
+                            && matches!(
+                                lowered.vcode.fixups.get(*push),
+                                Some((_, VCodeFixup::Label(_)))
+                            )
+                            && (lowered.vcode.insts[*jump] as u8) == (OpCode::JUMP as u8)
+                )
+            }),
+            "late lowering should not leave pure jump trampoline blocks behind"
+        );
+    }
+
+    #[test]
+    fn lowering_folds_branch_with_same_canonical_dest() {
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %main(v0.i1) {
+block0:
+    br v0 block1 block2;
+
+block1:
+    jump block3;
+
+block2:
+    jump block3;
+
+block3:
+    evm_revert 0.i256 0.i256;
+}
+
+object @Contract {
+  section runtime {
+    entry %main;
+  }
+}
+"#,
+        )
+        .unwrap();
+
+        let func = parsed.module.funcs()[0];
+        let backend = EvmBackend::new(Evm::new(TargetTriple {
+            architecture: Architecture::Evm,
+            vendor: Vendor::Ethereum,
+            operating_system: OperatingSystem::Evm(EvmVersion::Osaka),
+        }));
+        let object = ObjectName::from("Contract");
+        let section = SectionName::from("runtime");
+        let embeds: Vec<EmbedSymbol> = Vec::new();
+        let section_ctx = SectionLoweringCtx {
+            object: &object,
+            section: &section,
+            embed_symbols: &embeds,
+        };
+
+        backend.prepare_section(&parsed.module, &[func], &section_ctx);
+        let lowered = backend
+            .lower_function(&parsed.module, func, &section_ctx)
+            .expect("main lowers");
+        let entry = lowered.block_order[0];
+        let ops: Vec<_> = lowered
+            .vcode
+            .block_insns(entry)
+            .map(|inst| lowered.vcode.insts[inst] as u8)
+            .collect();
+
+        assert!(
+            !ops.contains(&(OpCode::JUMPI as u8)),
+            "branch with one canonical destination should not lower to JUMPI: {ops:?}"
+        );
     }
 
     #[test]

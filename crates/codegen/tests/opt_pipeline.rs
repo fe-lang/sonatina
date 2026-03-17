@@ -5,7 +5,7 @@ use sonatina_codegen::{
     domtree::DomTree,
     loop_analysis::LoopTree,
     optim::{
-        egraph::run_egraph_pass, gvn::GvnSolver, licm::LicmSolver, pipeline::Pipeline,
+        Pass, Step, egraph::run_egraph_pass, gvn::GvnSolver, licm::LicmSolver, pipeline::Pipeline,
         sccp::SccpSolver,
     },
 };
@@ -219,6 +219,164 @@ func public %complex_loop() -> i8 {
 }
 
 #[test]
+fn function_passes_scalarize_enum_bearing_products_without_lowering_enums() {
+    let (module, func_ref) = parse_test_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+type @option_i256 = enum {
+    #None,
+    #Some(i256),
+};
+
+type @wrapper = {@option_i256, i256};
+
+func private %entry(v0.i256) -> i256 {
+    block0:
+        v1.@option_i256 = enum.make @option_i256 #Some (v0);
+        v2.@wrapper = insert_value undef.@wrapper 0.i8 v1;
+        v3.@wrapper = insert_value v2 1.i8 1.i256;
+        v4.@option_i256 = extract_value v3 0.i8;
+        v5.i1 = enum.is_variant v4 #Some;
+        br v5 block1 block2;
+
+    block1:
+        v6.i256 = enum.extract v4 #Some 0.i8;
+        v7.i256 = extract_value v3 1.i8;
+        v8.i256 = add v6 v7;
+        return v8;
+
+    block2:
+        return 0.i256;
+}
+"#,
+    );
+    let mut pipeline = Pipeline::new();
+    pipeline.add_step(Step::FuncPasses(vec![
+        Pass::CfgCleanup,
+        Pass::AggregateCombine,
+        Pass::AggregateScalarize,
+        Pass::CfgCleanup,
+    ]));
+    let mut module = module;
+    pipeline.run(&mut module);
+    let dumped = module.func_store.view(func_ref, |func| {
+        FuncWriter::new(func_ref, func).dump_string()
+    });
+    assert!(
+        !dumped.contains("@wrapper") && !dumped.contains("__enum_lowered"),
+        "enum-bearing product should scalarize without erasing enum semantics:\n{dumped}"
+    );
+    assert_fast_verified(&module);
+}
+
+#[test]
+fn function_passes_use_object_effect_summaries_across_private_calls() {
+    let mut parsed = parse_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+type @pair = { i256, i256 };
+
+func private %peek(v0.objref<@pair>) {
+    block0:
+        v1.objref<i256> = obj.proj v0 0.i8;
+        v2.i256 = obj.load v1;
+        return;
+}
+
+func private %entry(v0.i256) -> i256 {
+    block0:
+        v1.objref<@pair> = obj.alloc @pair;
+        v2.objref<i256> = obj.proj v1 0.i8;
+        obj.store v2 v0;
+        call %peek v1;
+        v3.i256 = obj.load v2;
+        return v3;
+}
+"#,
+    )
+    .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"));
+    let entry = find_func_by_name(&parsed.module, "entry");
+
+    let mut pipeline = Pipeline::new();
+    pipeline.add_step(Step::FuncPasses(vec![
+        Pass::AggregateCombine,
+        Pass::ObjectLoadStore,
+        Pass::CfgCleanup,
+    ]));
+    pipeline.run(&mut parsed.module);
+
+    let dumped = parsed
+        .module
+        .func_store
+        .view(entry, |func| FuncWriter::new(entry, func).dump_string());
+    assert!(
+        dumped.contains("call %peek v1;"),
+        "read-only helper call should remain visible:\n{dumped}"
+    );
+    assert!(
+        !dumped.contains("obj.load"),
+        "summary-aware object load/store should forward across the call:\n{dumped}"
+    );
+    assert!(
+        dumped.contains("return v0;"),
+        "entry should return the stored value after the read-only call:\n{dumped}"
+    );
+    assert_fast_verified(&parsed.module);
+}
+
+#[test]
+fn pipeline_inlines_multi_use_object_helper_family_before_object_cleanup() {
+    let mut parsed = parse_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+type @triple = { i256, i256, i256 };
+
+func private %write(v0.objref<@triple>, v1.i256, v2.i256, v3.i256) {
+    block0:
+        v4.objref<i256> = obj.proj v0 0.i8;
+        v5.objref<i256> = obj.proj v0 1.i8;
+        v6.objref<i256> = obj.proj v0 2.i8;
+        obj.store v4 v1;
+        obj.store v5 v2;
+        obj.store v6 v3;
+        return;
+}
+
+func public %entry(v0.i256, v1.i256, v2.i256, v3.i256, v4.i256, v5.i256) -> i256 {
+    block0:
+        v6.objref<@triple> = obj.alloc @triple;
+        call %write v6 v0 v1 v2;
+        call %write v6 v3 v4 v5;
+        v7.objref<i256> = obj.proj v6 0.i8;
+        v8.i256 = obj.load v7;
+        return v8;
+}
+"#,
+    )
+    .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"));
+    let entry = find_func_by_name(&parsed.module, "entry");
+
+    Pipeline::size().run(&mut parsed.module);
+
+    let dumped = parsed
+        .module
+        .func_store
+        .view(entry, |func| FuncWriter::new(entry, func).dump_string());
+    assert!(
+        !dumped.contains("call %write"),
+        "object-aware inline budget should inline the multi-use helper:\n{dumped}"
+    );
+    assert!(
+        dumped.contains("return v3;"),
+        "later object cleanup should forward the final stored value:\n{dumped}"
+    );
+    assert_fast_verified(&parsed.module);
+}
+
+#[test]
 fn sccp_deletes_unreachable_region_with_cross_block_uses() {
     let (module, func_ref) = parse_test_module(
         r#"
@@ -389,6 +547,14 @@ fn parse_test_module(src: &str) -> (Module, FuncRef) {
         .next()
         .expect("test module must contain a function");
     (parsed.module, func_ref)
+}
+
+fn find_func_by_name(module: &Module, name: &str) -> FuncRef {
+    module
+        .funcs()
+        .into_iter()
+        .find(|&func_ref| module.ctx.func_sig(func_ref, |sig| sig.name() == name))
+        .unwrap_or_else(|| panic!("function `{name}` should exist"))
 }
 
 fn assert_func_not_contains(module: &Module, func_ref: FuncRef, needle: &str) {

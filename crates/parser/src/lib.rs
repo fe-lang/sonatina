@@ -4,7 +4,7 @@ use ast::{StmtKind, ValueDeclaration};
 use cranelift_entity::SecondaryMap;
 use inst::InstBuild;
 use ir::{
-    self, Function, GlobalVariableData, GlobalVariableRef, Immediate, Signature, Type,
+    self, Function, GlobalVariableData, GlobalVariableRef, I256, Immediate, Signature, Type,
     builder::{FunctionBuilder, ModuleBuilder},
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
     global_variable::GvInitializer,
@@ -55,17 +55,48 @@ pub fn parse_module(input: &str) -> Result<ParsedModule, Vec<Error>> {
     let mut ctx = BuildCtx::default();
 
     {
-        let _span = debug_span!("sonatina.parse.declare_structs").entered();
-        for st in ast.struct_types {
-            let name = &st.name.0;
-            builder.declare_struct_type(name, &[], false);
+        let _span = debug_span!("sonatina.parse.declare_type_placeholders").entered();
+        for st in &ast.struct_types {
+            builder.declare_struct_type(&st.name.0, &[], false);
+        }
+        for enum_ in &ast.enum_types {
+            builder.declare_enum_type(&enum_.name.0, &[], ir::types::EnumReprHint::Default);
+        }
+    }
 
+    {
+        let _span = debug_span!("sonatina.parse.define_structs").entered();
+        for st in &ast.struct_types {
             let fields = st
                 .fields
                 .iter()
                 .map(|t| ctx.type_(&builder, t))
                 .collect::<Vec<_>>();
-            builder.update_struct_fields(name, &fields);
+            builder.update_struct_fields(&st.name.0, &fields);
+        }
+    }
+
+    {
+        let _span = debug_span!("sonatina.parse.define_enums").entered();
+        for enum_ in &ast.enum_types {
+            let variants = enum_
+                .variants
+                .iter()
+                .map(|variant| ir::types::VariantData {
+                    name: variant.name.0.to_string(),
+                    explicit_discriminant: None,
+                    fields: variant
+                        .fields
+                        .iter()
+                        .map(|t| ctx.type_(&builder, t))
+                        .collect(),
+                })
+                .collect::<Vec<_>>();
+            builder.update_enum_variants(
+                &enum_.name.0,
+                &variants,
+                ir::types::EnumReprHint::Default,
+            );
         }
     }
 
@@ -199,6 +230,32 @@ struct BuildCtx {
 }
 
 impl BuildCtx {
+    fn enum_variant(
+        &mut self,
+        mb: &ModuleBuilder,
+        enum_ty: ir::Type,
+        variant: &ast::VariantName,
+        span: Span,
+    ) -> ir::types::EnumVariantRef {
+        let ir::Type::Compound(cmpd_ref) = enum_ty else {
+            self.errors.push(Error::TypeError {
+                expected: "enum type".to_string(),
+                span,
+            });
+            return ir::types::EnumVariantRef::new(ir::types::CompoundTypeRef::from_u32(0), 0);
+        };
+
+        mb.ctx
+            .with_ty_store(|store| store.enum_variant_ref(cmpd_ref, &variant.0))
+            .unwrap_or_else(|| {
+                self.errors.push(Error::Undefined(
+                    UndefinedKind::Variant(variant.0.clone()),
+                    span,
+                ));
+                ir::types::EnumVariantRef::new(cmpd_ref, 0)
+            })
+    }
+
     fn build_func(
         &mut self,
         mut fb: FunctionBuilder<InstInserter>,
@@ -356,6 +413,21 @@ impl BuildCtx {
     fn value(&mut self, fb: &mut FunctionBuilder<InstInserter>, val: &ast::Value) -> ir::ValueId {
         match &val.kind {
             ast::ValueKind::Immediate(imm) => fb.make_imm_value(*imm),
+            ast::ValueKind::EnumTagImmediate { enum_ty, value } => fb.make_imm_value(
+                fb.module_builder
+                    .lookup_enum(&enum_ty.0)
+                    .map(|enum_ty| ir::Immediate::EnumTag {
+                        enum_ty,
+                        value: *value,
+                    })
+                    .unwrap_or_else(|| {
+                        self.errors.push(Error::Undefined(
+                            UndefinedKind::Type(enum_ty.0.clone()),
+                            val.span,
+                        ));
+                        ir::Immediate::I256(I256::zero())
+                    }),
+            ),
             ast::ValueKind::Named(name) => self
                 .func_value_names
                 .get_by_right(&name.string)
@@ -394,13 +466,27 @@ impl BuildCtx {
                 let t = self.type_(mb, t);
                 mb.ptr_type(t)
             }
+            ast::TypeKind::ObjRef(t) => {
+                let t = self.type_(mb, t);
+                mb.objref_type(t)
+            }
+            ast::TypeKind::EnumTag(name) => mb
+                .lookup_enum(&name.0)
+                .map(ir::Type::EnumTag)
+                .unwrap_or_else(|| {
+                    self.errors.push(Error::Undefined(
+                        UndefinedKind::Type(name.0.clone()),
+                        t.span,
+                    ));
+                    ir::Type::Unit
+                }),
             ast::TypeKind::Array(t, n) => {
                 let elem = self.type_(mb, t);
                 mb.declare_array_type(elem, *n)
             }
             ast::TypeKind::Unit => ir::Type::Unit,
-            ast::TypeKind::Struct(name) => mb
-                .lookup_struct(name)
+            ast::TypeKind::Named(name) => mb
+                .lookup_named_type(name)
                 .map(Type::Compound)
                 .unwrap_or_else(|| {
                     self.errors
@@ -684,6 +770,50 @@ func public %foo(v0.i8) -> unit {
     }
 
     #[test]
+    fn test_enumtag_immediates_parse() {
+        let s = r#"
+target = "evm-ethereum-london"
+
+type @E = enum {
+    #A,
+    #B,
+};
+
+func public %entry(v0.enumtag(@E)) -> unit {
+    block0:
+        br_table v0 block2 (1.enumtag(@E) block1) (0.enumtag(@E) block2);
+    block1:
+        return;
+    block2:
+        return;
+}
+"#;
+
+        assert!(parse_module(s).is_ok());
+    }
+
+    #[test]
+    fn test_compact_hash_comments_parse_outside_enum_declarations() {
+        let s = r#"
+target = "evm-ethereum-london"
+
+#legacy_module_note
+type @E = enum {
+    #A,
+    #B,
+};
+
+#legacy_function_note
+func public %entry(v0.enumtag(@E)) -> unit {
+    block0:
+        return;
+}
+"#;
+
+        assert!(parse_module(s).is_ok());
+    }
+
+    #[test]
     fn test_duplicate_name_diff_args_constant_return_panic_order1() {
         let s = r#"
 target = "evm-ethereum-london"
@@ -914,6 +1044,42 @@ func public %caller(v0.i32, v1.i32) -> (i32, i1) {
         assert!(printed.contains("func private %pair_add(v0.i32, v1.i32) -> (i32, i1) {"));
         assert!(printed.contains("(v2.i32, v3.i1) = call %pair_add v0 v1;"));
         assert!(printed.contains("return (v2, v3);"));
+    }
+
+    #[test]
+    fn test_dotted_object_ops_roundtrip() {
+        let s = r#"
+target = "evm-ethereum-london"
+
+type @pair = {i256, [i256; 2]};
+
+func private %ops(v0.i256, v1.i256, v2.i256) -> i256 {
+    block0:
+        v3.objref<@pair> = obj.alloc @pair;
+        v4.objref<i256> = obj.proj v3 0.i8;
+        v5.objref<[i256; 2]> = obj.proj v3 1.i8;
+        v6.objref<i256> = obj.index v5 0.i8;
+        obj.store v4 v0;
+        obj.store v6 v1;
+        v7.i256 = obj.load v6;
+        v8.*@pair = obj.materialize.stack v3;
+        v9.*i8 = mem.alloc_dynamic v2;
+        v10.*@pair = obj.materialize.heap v3;
+        return v7;
+}
+"#;
+
+        let parsed = parse_module(s).unwrap();
+        let mut w = ir::ir_writer::ModuleWriter::with_debug_provider(&parsed.module, &parsed.debug);
+        let printed = w.dump_string();
+        assert!(printed.contains("obj.alloc @pair"));
+        assert!(printed.contains("obj.proj v3 0.i8"));
+        assert!(printed.contains("obj.index v5 0.i8"));
+        assert!(printed.contains("obj.store v4 v0"));
+        assert!(printed.contains("obj.load v6"));
+        assert!(printed.contains("obj.materialize.stack v3"));
+        assert!(printed.contains("mem.alloc_dynamic v2"));
+        assert!(printed.contains("obj.materialize.heap v3"));
     }
 
     #[test]

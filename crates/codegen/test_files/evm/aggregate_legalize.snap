@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/evm.rs
-assertion_line: 412
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/aggregate_legalize.sntn
 ---
@@ -11,7 +10,7 @@ object: Contract
   total: 25 bytes
 
 functions:
-  entry: ir_blocks=4 ir_insts=11 vcode_ops=22 fixups=2 imm_bytes=2
+  entry: ir_blocks=4 ir_insts=11 vcode_ops=23 fixups=2 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
@@ -28,21 +27,20 @@ entry:
     PUSH1 0x20 (32)  // v1.i256 = evm_calldata_load 32.i256;
     CALLDATALOAD
     DUP2  // v19.i1 = is_zero v0;
-    ISZERO
-    PUSH1 block7  // br v19 block7 block4;
+    PUSH1 block8  // br v19 block7 block8;
     JUMPI
-  block4:
-    DUP1  // jump block5;
+  block7:
+    DUP2  // jump block5;
     PUSH1 block5
     JUMP
-  block7:
+  block8:
     JUMPDEST
-    DUP2  // jump block5;
+    DUP1  // jump block5;
   block5:
     JUMPDEST
-    SWAP2  // v50.i256 = add v0 v1;
+    SWAP2  // v41.i256 = add v0 v1;
     ADD
-    ADD  // v4.i256 = add v50 v32;
+    ADD  // v4.i256 = add v41 v32;
     PUSH0  // mstore 0.i256 v4 i256;
     MSTORE
     PUSH1 0x20 (32)  // evm_return 0.i256 32.i256;
