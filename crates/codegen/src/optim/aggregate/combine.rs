@@ -114,7 +114,7 @@ impl AggregateCombine {
         if let Some(enum_get_tag) =
             downcast::<&data::EnumGetTag>(func.inst_set(), func.dfg.inst(inst)).cloned()
         {
-            let object = *enum_get_tag.object();
+            let object = enum_object_root(func, *enum_get_tag.object());
             pending_enum_writes.remove(&object);
 
             let Some(result) = func.dfg.inst_result(inst) else {
@@ -132,14 +132,18 @@ impl AggregateCombine {
         if let Some(enum_assert_ref) =
             downcast::<&data::EnumAssertVariantRef>(func.inst_set(), func.dfg.inst(inst)).cloned()
         {
-            let object = *enum_assert_ref.object();
-            let redundant = enum_facts
-                .get(&object)
-                .is_some_and(|state| state.variant == *enum_assert_ref.variant());
+            let object = enum_object_root(func, *enum_assert_ref.object());
+            let redundant = enum_facts.get(&object).is_some_and(|state| {
+                state.variant == *enum_assert_ref.variant()
+                    && state.payloads.iter().all(Option::is_some)
+            });
             pending_enum_writes.remove(&object);
             update_enum_assert_fact(func, enum_facts, object, *enum_assert_ref.variant());
 
             if redundant {
+                if let Some(result) = func.dfg.inst_result(inst) {
+                    func.dfg.change_to_alias(result, *enum_assert_ref.object());
+                }
                 InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
                 return true;
             }
@@ -150,7 +154,7 @@ impl AggregateCombine {
             downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst)).cloned()
             && let Some(enum_proj) = enum_proj_of_value(func, *obj_load.object())
         {
-            let object = *enum_proj.object();
+            let object = enum_object_root(func, *enum_proj.object());
             pending_enum_writes.remove(&object);
 
             let changed = if let Some(result) = func.dfg.inst_result(inst)
@@ -172,7 +176,7 @@ impl AggregateCombine {
             downcast::<&data::ObjStore>(func.inst_set(), func.dfg.inst(inst)).cloned()
             && let Some(enum_proj) = enum_proj_of_value(func, *obj_store.object())
         {
-            let object = *enum_proj.object();
+            let object = enum_object_root(func, *enum_proj.object());
             if let Some(field_idx) = inst_const_index(func, *enum_proj.field()) {
                 update_enum_store_fact(
                     enum_facts,
@@ -241,7 +245,7 @@ impl AggregateCombine {
         if let Some(enum_proj) =
             downcast::<&data::EnumProj>(func.inst_set(), func.dfg.inst(inst)).cloned()
         {
-            pending_enum_writes.remove(enum_proj.object());
+            pending_enum_writes.remove(&enum_object_root(func, *enum_proj.object()));
             return false;
         }
 
@@ -1017,7 +1021,7 @@ fn transfer_backward_enum_live(
             live,
             local_roots,
             possible_roots,
-            *enum_get_tag.object(),
+            enum_object_root(func, *enum_get_tag.object()),
         );
         return;
     }
@@ -1029,7 +1033,7 @@ fn transfer_backward_enum_live(
             live,
             local_roots,
             possible_roots,
-            *enum_assert_ref.object(),
+            enum_object_root(func, *enum_assert_ref.object()),
         );
         return;
     }
@@ -1442,25 +1446,21 @@ fn transfer_enum_object_facts(
 ) {
     if let Some(enum_get_tag) = downcast::<&data::EnumGetTag>(func.inst_set(), func.dfg.inst(inst))
     {
-        pending_enum_writes.remove(enum_get_tag.object());
+        pending_enum_writes.remove(&enum_object_root(func, *enum_get_tag.object()));
         return;
     }
 
     if let Some(enum_assert_ref) =
         downcast::<&data::EnumAssertVariantRef>(func.inst_set(), func.dfg.inst(inst))
     {
-        pending_enum_writes.remove(enum_assert_ref.object());
-        update_enum_assert_fact(
-            func,
-            enum_facts,
-            *enum_assert_ref.object(),
-            *enum_assert_ref.variant(),
-        );
+        let object = enum_object_root(func, *enum_assert_ref.object());
+        pending_enum_writes.remove(&object);
+        update_enum_assert_fact(func, enum_facts, object, *enum_assert_ref.variant());
         return;
     }
 
     if let Some(enum_proj) = downcast::<&data::EnumProj>(func.inst_set(), func.dfg.inst(inst)) {
-        pending_enum_writes.remove(enum_proj.object());
+        pending_enum_writes.remove(&enum_object_root(func, *enum_proj.object()));
         return;
     }
 
@@ -1506,23 +1506,24 @@ fn transfer_enum_object_facts(
     if let Some(obj_load) = downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst))
         && let Some(enum_proj) = enum_proj_of_value(func, *obj_load.object())
     {
-        pending_enum_writes.remove(enum_proj.object());
+        pending_enum_writes.remove(&enum_object_root(func, *enum_proj.object()));
         return;
     }
 
     if let Some(obj_store) = downcast::<&data::ObjStore>(func.inst_set(), func.dfg.inst(inst))
         && let Some(enum_proj) = enum_proj_of_value(func, *obj_store.object())
     {
+        let object = enum_object_root(func, *enum_proj.object());
         if let Some(field_idx) = inst_const_index(func, *enum_proj.field()) {
             update_enum_store_fact(
                 enum_facts,
-                *enum_proj.object(),
+                object,
                 *enum_proj.variant(),
                 field_idx,
                 *obj_store.value(),
             );
         } else {
-            enum_facts.remove(enum_proj.object());
+            enum_facts.remove(&object);
         }
         return;
     }
@@ -1685,9 +1686,9 @@ fn append_touched_enum_object(
     touched: &mut SmallVec<[ValueId; 4]>,
 ) {
     let object = if is_enum_object_value(func, value) {
-        Some(value)
+        Some(enum_object_root(func, value))
     } else {
-        enum_proj_of_value(func, value).map(|enum_proj| *enum_proj.object())
+        enum_proj_of_value(func, value).map(|enum_proj| enum_object_root(func, *enum_proj.object()))
     };
     let Some(object) = object else {
         return;
@@ -1754,6 +1755,16 @@ fn enum_get_tag_of_value(func: &Function, value: ValueId) -> Option<data::EnumGe
 fn enum_proj_of_value(func: &Function, value: ValueId) -> Option<data::EnumProj> {
     let inst = func.dfg.value_inst(value)?;
     downcast::<&data::EnumProj>(func.inst_set(), func.dfg.inst(inst)).cloned()
+}
+
+fn enum_object_root(func: &Function, value: ValueId) -> ValueId {
+    func.dfg
+        .value_inst(value)
+        .and_then(|inst| {
+            downcast::<&data::EnumAssertVariantRef>(func.inst_set(), func.dfg.inst(inst))
+                .map(|assert_variant_ref| *assert_variant_ref.object())
+        })
+        .unwrap_or(value)
 }
 
 fn append_phi_at_block_top(
@@ -2269,10 +2280,10 @@ func private %f(v0.i256) -> i256 {
 block0:
     v1.objref<@OptionI256> = obj.alloc @OptionI256;
     enum.write_variant v1 #Some (v0);
-    enum.assert_variant_ref v1 #Some;
-    v2.objref<i256> = enum.proj v1 #Some 0.i8;
-    v3.i256 = obj.load v2;
-    return v3;
+    v2.objref<@OptionI256> = enum.assert_variant_ref v1 #Some;
+    v3.objref<i256> = enum.proj v2 #Some 0.i8;
+    v4.i256 = obj.load v3;
+    return v4;
 }
 "#,
         );
@@ -2354,11 +2365,11 @@ block0:
     br_table v1 block2 (1.enumtag(@OptionI256) block1) (0.enumtag(@OptionI256) block2);
 
 block1:
-    enum.assert_variant_ref v0 #Some;
-    v2.objref<i256> = enum.proj v0 #Some 0.i8;
-    obj.store v2 7.i256;
-    v3.i256 = obj.load v2;
-    return v3;
+    v2.objref<@OptionI256> = enum.assert_variant_ref v0 #Some;
+    v3.objref<i256> = enum.proj v2 #Some 0.i8;
+    obj.store v3 7.i256;
+    v4.i256 = obj.load v3;
+    return v4;
 
 block2:
     return 0.i256;
@@ -2371,10 +2382,6 @@ block2:
         });
 
         let dumped = dump_func(&module, func_ref);
-        assert!(
-            !dumped.contains("enum.assert_variant_ref"),
-            "branch-proven enum variant assertions should fold away:\n{dumped}"
-        );
         assert!(
             !dumped.contains("obj.load"),
             "branch-proven enum payload store/load should fold away:\n{dumped}"

@@ -400,6 +400,17 @@ fn walk_object_root_uses_impl<T>(
                 continue;
             }
 
+            if let Some(enum_assert_ref) = downcast::<&data::EnumAssertVariantRef>(
+                function.inst_set(),
+                function.dfg.inst(user),
+            ) && *enum_assert_ref.object() == value
+            {
+                if let Some(result) = function.dfg.inst_result(user) {
+                    worklist.push(result);
+                }
+                continue;
+            }
+
             if let Some(load) =
                 downcast::<&data::ObjLoad>(function.inst_set(), function.dfg.inst(user))
                 && *load.object() == value
@@ -426,6 +437,9 @@ fn walk_object_root_uses_impl<T>(
                 function.dfg.inst(user),
             ) && *enum_assert_ref.object() == value
             {
+                if let Some(result) = function.dfg.inst_result(user) {
+                    worklist.push(result);
+                }
                 continue;
             }
 
@@ -598,9 +612,9 @@ func private %f(v0.objref<@option_i256>) {
 block0:
     enum.write_variant v0 #Some (7.i256);
     v1.enumtag(@option_i256) = enum.get_tag v0;
-    enum.assert_variant_ref v0 #Some;
-    v2.objref<i256> = enum.proj v0 #Some 0.i8;
-    v3.i256 = obj.load v2;
+    v2.objref<@option_i256> = enum.assert_variant_ref v0 #Some;
+    v3.objref<i256> = enum.proj v2 #Some 0.i8;
+    v4.i256 = obj.load v3;
     return;
 }
 "#,
@@ -672,8 +686,8 @@ type @outer = enum {
 
 func private %f(v0.objref<@outer>, v1.i1) {
 block0:
-    enum.assert_variant_ref v0 #Some;
-    v2.objref<@inner> = enum.proj v0 #Some 0.i8;
+    v2.objref<@outer> = enum.assert_variant_ref v0 #Some;
+    v3.objref<@inner> = enum.proj v2 #Some 0.i8;
     br v1 block1 block2;
 
 block1:
@@ -683,8 +697,8 @@ block2:
     jump block3;
 
 block3:
-    v3.objref<@inner> = phi (v2 block1) (v2 block2);
-    enum.set_tag v3 #Off;
+    v4.objref<@inner> = phi (v3 block1) (v3 block2);
+    enum.set_tag v4 #Off;
     return;
 }
 "#,

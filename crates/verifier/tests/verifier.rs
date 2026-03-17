@@ -209,10 +209,10 @@ type @OptionI256 = enum {
 
 func private %ok(v0.objref<@OptionI256>) -> i256 {
 block0:
-    enum.assert_variant_ref v0 #Some;
-    v1.objref<i256> = enum.proj v0 #Some 0.i8;
-    v2.i256 = obj.load v1;
-    return v2;
+    v1.objref<@OptionI256> = enum.assert_variant_ref v0 #Some;
+    v2.objref<i256> = enum.proj v1 #Some 0.i8;
+    v3.i256 = obj.load v2;
+    return v3;
 }
 "#;
 
@@ -302,11 +302,11 @@ type @OptionI256 = enum {
 
 func private %bad(v0.objref<@OptionI256>) -> i256 {
 block0:
-    enum.assert_variant_ref v0 #Some;
+    v1.objref<@OptionI256> = enum.assert_variant_ref v0 #Some;
     enum.set_tag v0 #None;
-    v1.objref<i256> = enum.proj v0 #Some 0.i8;
-    v2.i256 = obj.load v1;
-    return v2;
+    v2.objref<i256> = enum.proj v1 #Some 0.i8;
+    v3.i256 = obj.load v2;
+    return v3;
 }
 "#;
 
@@ -363,11 +363,11 @@ block0:
 
 func private %bad(v0.objref<@OptionI256>) -> i256 {
 block0:
-    enum.assert_variant_ref v0 #Some;
+    v1.objref<@OptionI256> = enum.assert_variant_ref v0 #Some;
     call %retag v0;
-    v1.objref<i256> = enum.proj v0 #Some 0.i8;
-    v2.i256 = obj.load v1;
-    return v2;
+    v2.objref<i256> = enum.proj v1 #Some 0.i8;
+    v3.i256 = obj.load v2;
+    return v3;
 }
 "#;
 

@@ -159,7 +159,7 @@ pub struct EnumAssertVariant {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
-#[inst(side_effect(super::SideEffect::Control))]
+#[inst(side_effect(super::SideEffect::Read))]
 #[inst(text = "enum.assert_variant_ref")]
 pub struct EnumAssertVariantRef {
     object: ValueId,

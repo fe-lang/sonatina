@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/object_load_store.rs
+assertion_line: 41
 input_file: test_files/object_load_store/enum_write_payload_forwards_load.sntn
 ---
 target = "evm-ethereum-osaka"
@@ -13,6 +14,6 @@ func private %entry(v0.i256) -> i256 {
     block0:
         v1.objref<@option_i256> = obj.alloc @option_i256;
         enum.write_variant v1 #Some v0;
-        enum.assert_variant_ref v1 #Some;
+        v2.objref<@option_i256> = enum.assert_variant_ref v1 #Some;
         return v0;
 }

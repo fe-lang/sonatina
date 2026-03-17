@@ -591,6 +591,18 @@ fn same_block_enum_field_load_proof(
     proof
 }
 
+fn enum_assert_variant_ref_of_value(
+    verifier: &FunctionVerifier<'_>,
+    value: ValueId,
+) -> Option<data::EnumAssertVariantRef> {
+    let inst = verifier.func.dfg.value_inst(value)?;
+    sonatina_ir::inst::downcast::<&data::EnumAssertVariantRef>(
+        verifier.ctx.inst_set,
+        verifier.func.dfg.inst(inst),
+    )
+    .cloned()
+}
+
 fn br_table_edge_proves_enum_variant(
     verifier: &FunctionVerifier<'_>,
     pred: sonatina_ir::BlockId,
@@ -1098,10 +1110,16 @@ impl VerifyInst for data::ObjLoad {
                 verifier.func.dfg.inst(proj_inst),
             )
         {
+            let proj_object = *enum_proj.object();
+            let root_object = enum_assert_variant_ref_of_value(verifier, proj_object)
+                .filter(|assert_variant_ref| *assert_variant_ref.variant() == *enum_proj.variant())
+                .map_or(proj_object, |assert_variant_ref| {
+                    *assert_variant_ref.object()
+                });
             let proof = same_block_enum_field_load_proof(
                 verifier,
                 inst_id,
-                *enum_proj.object(),
+                root_object,
                 *self.object(),
                 *enum_proj.variant(),
             );
@@ -1342,7 +1360,13 @@ impl VerifyInst for data::EnumAssertVariantRef {
         {
             return;
         }
-        verifier.expect_no_result(inst_id, location);
+        expect_objref_result(
+            verifier,
+            inst_id,
+            Type::Compound(enum_ty),
+            location,
+            "enum.assert_variant_ref",
+        );
     }
 }
 

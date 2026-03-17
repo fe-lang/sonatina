@@ -314,11 +314,16 @@ pub fn classify_inst_effects(dfg: &DataFlowGraph, inst_id: InstId) -> InstEffect
         };
     }
 
-    if <&data::EnumAssertVariant as InstDowncast>::downcast(is, inst).is_some()
-        || <&data::EnumAssertVariantRef as InstDowncast>::downcast(is, inst).is_some()
-    {
+    if <&data::EnumAssertVariant as InstDowncast>::downcast(is, inst).is_some() {
         return InstEffects {
             other: OtherEffects::OBSERVE | OtherEffects::CONTROL,
+            ..InstEffects::default()
+        };
+    }
+
+    if <&data::EnumAssertVariantRef as InstDowncast>::downcast(is, inst).is_some() {
+        return InstEffects {
+            other: OtherEffects::OBSERVE,
             ..InstEffects::default()
         };
     }
