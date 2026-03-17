@@ -1,4 +1,6 @@
-use rustc_hash::FxHashSet;
+use std::hash::{Hash, Hasher};
+
+use rustc_hash::{FxHashSet, FxHasher};
 use sonatina_ir::{
     AccessLoc, AddressSpaceId, Function, GlobalVariableRef, I256, Immediate, InstDowncast, InstId,
     Type, Value, ValueId,
@@ -7,6 +9,7 @@ use sonatina_ir::{
         cast::{Bitcast, IntToPtr, PtrToInt},
         control_flow::Phi,
         data::{Alloca, Gep},
+        equiv::{InstClassKind, InstKeyExt},
         evm::EvmMalloc,
     },
     types::CompoundType,
@@ -18,6 +21,30 @@ use crate::{isa::evm::STATIC_BASE, optim::aggregate::shape};
 pub enum ValueKey {
     Imm(Immediate),
     Value(ValueId),
+    Expr(Box<KeyExpr>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum KeyExpr {
+    Unary {
+        opcode: &'static str,
+        result_idx: u16,
+        ty: Type,
+        arg: ValueKey,
+    },
+    Binary {
+        opcode: &'static str,
+        result_idx: u16,
+        ty: Type,
+        lhs: ValueKey,
+        rhs: ValueKey,
+    },
+    Cast {
+        opcode: &'static str,
+        result_idx: u16,
+        ty: Type,
+        arg: ValueKey,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -519,10 +546,120 @@ impl MemoryAccessAnalysis {
     }
 
     fn trackable_value_key(&self, func: &Function, value: ValueId) -> Option<ValueKey> {
-        match func.dfg.value(value) {
+        self.trackable_value_key_rec(func, value, &mut FxHashSet::default())
+    }
+
+    fn trackable_value_key_rec(
+        &self,
+        func: &Function,
+        value: ValueId,
+        visiting: &mut FxHashSet<ValueId>,
+    ) -> Option<ValueKey> {
+        if !visiting.insert(value) {
+            return Some(ValueKey::Value(value));
+        }
+
+        let key = match func.dfg.value(value) {
             Value::Immediate { imm, .. } => Some(ValueKey::Imm(*imm)),
-            Value::Arg { .. } | Value::Inst { .. } => Some(ValueKey::Value(value)),
+            Value::Arg { .. } => Some(ValueKey::Value(value)),
+            Value::Inst {
+                inst,
+                result_idx,
+                ty,
+            } => Some(self.inst_value_key(func, value, *inst, *result_idx, *ty, visiting)),
             Value::Global { .. } | Value::Undef { .. } => None,
+        };
+
+        visiting.remove(&value);
+        key
+    }
+
+    fn inst_value_key(
+        &self,
+        func: &Function,
+        value: ValueId,
+        inst: InstId,
+        result_idx: u16,
+        ty: Type,
+        visiting: &mut FxHashSet<ValueId>,
+    ) -> ValueKey {
+        let result_tys: Vec<_> = func
+            .dfg
+            .inst_results(inst)
+            .iter()
+            .map(|&result| func.dfg.value_ty(result))
+            .collect();
+        let key = func.dfg.inst(inst).owned_key(&result_tys);
+
+        match key.kind() {
+            InstClassKind::Unary(_) => {
+                let Some(arg) = key
+                    .unary_arg()
+                    .and_then(|arg| self.trackable_value_key_rec(func, arg, visiting))
+                else {
+                    return ValueKey::Value(value);
+                };
+                ValueKey::Expr(Box::new(KeyExpr::Unary {
+                    opcode: key.opcode_text(),
+                    result_idx,
+                    ty,
+                    arg,
+                }))
+            }
+            InstClassKind::Binary(_) => {
+                let Some((lhs, rhs)) = key.binary_args() else {
+                    return ValueKey::Value(value);
+                };
+                let Some(mut lhs) = self.trackable_value_key_rec(func, lhs, visiting) else {
+                    return ValueKey::Value(value);
+                };
+                let Some(mut rhs) = self.trackable_value_key_rec(func, rhs, visiting) else {
+                    return ValueKey::Value(value);
+                };
+                if key.is_commutative_binary()
+                    && value_key_fingerprint(&rhs) < value_key_fingerprint(&lhs)
+                {
+                    std::mem::swap(&mut lhs, &mut rhs);
+                }
+                ValueKey::Expr(Box::new(KeyExpr::Binary {
+                    opcode: key.opcode_text(),
+                    result_idx,
+                    ty,
+                    lhs,
+                    rhs,
+                }))
+            }
+            InstClassKind::Cast(_) => {
+                let Some((arg, _)) = key.cast_arg_ty() else {
+                    return ValueKey::Value(value);
+                };
+                let Some(arg) = self.trackable_value_key_rec(func, arg, visiting) else {
+                    return ValueKey::Value(value);
+                };
+                ValueKey::Expr(Box::new(KeyExpr::Cast {
+                    opcode: key.opcode_text(),
+                    result_idx,
+                    ty,
+                    arg,
+                }))
+            }
+            InstClassKind::Phi => {
+                let Some(phi_args) = key.phi_args() else {
+                    return ValueKey::Value(value);
+                };
+                let mut args = phi_args
+                    .iter()
+                    .map(|(arg, _)| self.trackable_value_key_rec(func, *arg, visiting));
+                let Some(first) = args.next().flatten() else {
+                    return ValueKey::Value(value);
+                };
+                if args.all(|arg| arg.as_ref() == Some(&first)) {
+                    first
+                } else {
+                    ValueKey::Value(value)
+                }
+            }
+            InstClassKind::Opaque => ValueKey::Value(value),
         }
     }
 
@@ -625,6 +762,12 @@ fn is_allocator_managed_base(base: &BaseObject) -> bool {
 
 fn byte_ranges_overlap(lhs_start: i64, lhs_end: i64, rhs_start: i64, rhs_end: i64) -> bool {
     lhs_start < rhs_end && rhs_start < lhs_end
+}
+
+fn value_key_fingerprint(key: &ValueKey) -> u64 {
+    let mut hasher = FxHasher::default();
+    key.hash(&mut hasher);
+    hasher.finish()
 }
 
 fn immediate_i64(imm: Immediate) -> Option<i64> {
@@ -849,7 +992,7 @@ mod tests {
     }
 
     #[test]
-    fn distinct_dynamic_keyed_accesses_stay_may_alias() {
+    fn structurally_equivalent_dynamic_keyed_accesses_must_alias() {
         let mb = test_module_builder();
         let (evm, mut builder) = test_func_builder(&mb, &[Type::I256, Type::I256], Type::Unit);
         let is = evm.inst_set();
@@ -873,7 +1016,7 @@ mod tests {
 
         assert_eq!(
             MemoryAccessAnalysis::new().alias(&key0, &key1),
-            AliasResult::MayAlias
+            AliasResult::MustAlias
         );
     }
 

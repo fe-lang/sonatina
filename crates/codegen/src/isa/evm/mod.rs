@@ -2597,21 +2597,28 @@ impl LowerBackend for EvmBackend {
                 let nz_dest = self.canonical_block_target(*br.nz_dest());
                 let z_dest = self.canonical_block_target(*br.z_dest());
 
-                // JUMPI: dest is top of stack, bool val is next
                 emit_pre_actions(ctx, &alloc.read(insn, &args));
-
-                if ctx.is_next_block(nz_dest) {
-                    // Prefer fallthrough to the next block.
-                    ctx.push(OpCode::ISZERO);
-                    ctx.push_jump_target(OpCode::PUSH1, Label::Block(z_dest));
-                    ctx.push(OpCode::JUMPI);
-                } else {
-                    ctx.push_jump_target(OpCode::PUSH1, Label::Block(nz_dest));
-                    ctx.push(OpCode::JUMPI);
-
-                    if !ctx.is_next_block(z_dest) {
-                        ctx.push_jump_target(OpCode::PUSH1, Label::Block(z_dest));
+                if nz_dest == z_dest {
+                    ctx.push(OpCode::POP);
+                    if !ctx.is_next_block(nz_dest) {
+                        ctx.push_jump_target(OpCode::PUSH1, Label::Block(nz_dest));
                         ctx.push(OpCode::JUMP);
+                    }
+                } else {
+                    // JUMPI: dest is top of stack, bool val is next
+                    if ctx.is_next_block(nz_dest) {
+                        // Prefer fallthrough to the next block.
+                        ctx.push(OpCode::ISZERO);
+                        ctx.push_jump_target(OpCode::PUSH1, Label::Block(z_dest));
+                        ctx.push(OpCode::JUMPI);
+                    } else {
+                        ctx.push_jump_target(OpCode::PUSH1, Label::Block(nz_dest));
+                        ctx.push(OpCode::JUMPI);
+
+                        if !ctx.is_next_block(z_dest) {
+                            ctx.push_jump_target(OpCode::PUSH1, Label::Block(z_dest));
+                            ctx.push(OpCode::JUMP);
+                        }
                     }
                 }
             }
@@ -5445,6 +5452,67 @@ object @Contract {
                 )
             }),
             "late lowering should not leave pure jump trampoline blocks behind"
+        );
+    }
+
+    #[test]
+    fn lowering_folds_branch_with_same_canonical_dest() {
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %main(v0.i1) {
+block0:
+    br v0 block1 block2;
+
+block1:
+    jump block3;
+
+block2:
+    jump block3;
+
+block3:
+    evm_revert 0.i256 0.i256;
+}
+
+object @Contract {
+  section runtime {
+    entry %main;
+  }
+}
+"#,
+        )
+        .unwrap();
+
+        let func = parsed.module.funcs()[0];
+        let backend = EvmBackend::new(Evm::new(TargetTriple {
+            architecture: Architecture::Evm,
+            vendor: Vendor::Ethereum,
+            operating_system: OperatingSystem::Evm(EvmVersion::Osaka),
+        }));
+        let object = ObjectName::from("Contract");
+        let section = SectionName::from("runtime");
+        let embeds: Vec<EmbedSymbol> = Vec::new();
+        let section_ctx = SectionLoweringCtx {
+            object: &object,
+            section: &section,
+            embed_symbols: &embeds,
+        };
+
+        backend.prepare_section(&parsed.module, &[func], &section_ctx);
+        let lowered = backend
+            .lower_function(&parsed.module, func, &section_ctx)
+            .expect("main lowers");
+        let entry = lowered.block_order[0];
+        let ops: Vec<_> = lowered
+            .vcode
+            .block_insns(entry)
+            .map(|inst| lowered.vcode.insts[inst] as u8)
+            .collect();
+
+        assert!(
+            !ops.contains(&(OpCode::JUMPI as u8)),
+            "branch with one canonical destination should not lower to JUMPI: {ops:?}"
         );
     }
 
