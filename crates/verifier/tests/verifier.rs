@@ -223,7 +223,7 @@ block0:
 }
 
 #[test]
-fn branch_proven_enum_variant_ref_proves_object_field_load() {
+fn branch_proven_active_variant_does_not_imply_payload_init() {
     let src = r#"
 target = "evm-ethereum-osaka"
 
@@ -232,8 +232,10 @@ type @OptionI256 = enum {
     #Some(i256),
 };
 
-func private %ok(v0.objref<@OptionI256>) -> i256 {
+func private %bad() -> i256 {
 block0:
+    v0.objref<@OptionI256> = obj.alloc @OptionI256;
+    enum.set_tag v0 #Some;
     v1.enumtag(@OptionI256) = enum.get_tag v0;
     br_table v1 block2 (1.enumtag(@OptionI256) block1) (0.enumtag(@OptionI256) block2);
 
@@ -241,6 +243,41 @@ block1:
     v2.objref<i256> = enum.proj v0 #Some 0.i8;
     v3.i256 = obj.load v2;
     return v3;
+
+block2:
+    return 0.i256;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&parsed.module, &cfg);
+    assert!(
+        has_code(&report, "IR0600"),
+        "expected enum payload load verification failure without payload store, got {report}"
+    );
+}
+
+#[test]
+fn branch_proven_variant_with_same_block_store_proves_object_field_load() {
+    let src = r#"
+target = "evm-ethereum-osaka"
+
+type @OptionI256 = enum {
+    #None,
+    #Some(i256),
+};
+
+func private %ok(v0.objref<@OptionI256>, v1.i256) -> i256 {
+block0:
+    v2.enumtag(@OptionI256) = enum.get_tag v0;
+    br_table v2 block2 (1.enumtag(@OptionI256) block1) (0.enumtag(@OptionI256) block2);
+
+block1:
+    v3.objref<i256> = enum.proj v0 #Some 0.i8;
+    obj.store v3 v1;
+    v4.i256 = obj.load v3;
+    return v4;
 
 block2:
     return 0.i256;

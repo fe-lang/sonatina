@@ -520,7 +520,7 @@ fn same_block_enum_field_load_proof(
         predecessor_edge_proves_enum_assert_ref(verifier, use_inst, root_object, variant);
     let mut proof = EnumFieldLoadProof {
         active_variant: pred_proof,
-        field_initialized: pred_proof,
+        field_initialized: false,
     };
     let Some(block) = verifier.inst_to_block.get(&use_inst).copied() else {
         return proof;
