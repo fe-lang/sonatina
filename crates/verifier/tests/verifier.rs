@@ -309,6 +309,41 @@ block0:
 }
 
 #[test]
+fn enum_assert_variant_ref_is_invalidated_by_intervening_call() {
+    let src = r#"
+target = "evm-ethereum-osaka"
+
+type @OptionI256 = enum {
+    #None,
+    #Some(i256),
+};
+
+func private %retag(v0.objref<@OptionI256>) -> unit {
+block0:
+    enum.set_tag v0 #None;
+    return;
+}
+
+func private %bad(v0.objref<@OptionI256>) -> i256 {
+block0:
+    enum.assert_variant_ref v0 #Some;
+    call %retag v0;
+    v1.objref<i256> = enum.proj v0 #Some 0.i8;
+    v2.i256 = obj.load v1;
+    return v2;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&parsed.module, &cfg);
+    assert!(
+        has_code(&report, "IR0600"),
+        "expected enum payload load verification failure after call barrier, got {report}"
+    );
+}
+
+#[test]
 fn multi_return_functions_and_calls_verify() {
     let src = r#"
 target = "evm-ethereum-london"

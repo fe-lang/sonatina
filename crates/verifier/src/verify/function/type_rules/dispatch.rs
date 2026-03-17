@@ -581,6 +581,11 @@ fn same_block_enum_field_load_proof(
                 proof.field_initialized = true;
             }
         }
+        if sonatina_ir::inst::downcast::<&control_flow::Call>(verifier.ctx.inst_set, inst_data)
+            .is_some()
+        {
+            proof = EnumFieldLoadProof::default();
+        }
     }
 
     proof
