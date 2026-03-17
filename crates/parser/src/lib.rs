@@ -793,6 +793,27 @@ func public %entry(v0.enumtag(@E)) -> unit {
     }
 
     #[test]
+    fn test_compact_hash_comments_parse_outside_enum_declarations() {
+        let s = r#"
+target = "evm-ethereum-london"
+
+#legacy_module_note
+type @E = enum {
+    #A,
+    #B,
+};
+
+#legacy_function_note
+func public %entry(v0.enumtag(@E)) -> unit {
+    block0:
+        return;
+}
+"#;
+
+        assert!(parse_module(s).is_ok());
+    }
+
+    #[test]
     fn test_duplicate_name_diff_args_constant_return_panic_order1() {
         let s = r#"
 target = "evm-ethereum-london"

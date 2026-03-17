@@ -2,10 +2,15 @@ module = { SOI ~ NEWLINE* ~ target_specifier ~ (NEWLINE+ ~ declaration)* ~ (NEWL
 object_file = { SOI ~ NEWLINE* ~ (object_definition ~ NEWLINE*)* ~ EOI }
 
 WHITESPACE = _{ " " | "\t" }
+variant_token_continuation = _{
+    WHITESPACE* ~ ("(" | "," | ";" | ")")
+    | WHITESPACE+ ~ (value | type_name | block_ident | function_identifier | embed_symbol | current_section_symbol)
+}
 COMMENT    =  {
     "#!" ~ (!NEWLINE ~ ANY)*
     | "#[" ~ (!NEWLINE ~ ANY)*
     | "#" ~ (" " | "\t") ~ (!NEWLINE ~ ANY)*
+    | "#" ~ !(ident_start_char ~ ident_body_char* ~ variant_token_continuation) ~ (!NEWLINE ~ ANY)*
 }
 
 ident_start_char = { ASCII_ALPHA | "_" }
@@ -19,7 +24,8 @@ function_declaration     =  { "declare" ~ linkage ~ function_identifier ~ functi
 function_param_type_list =  { "(" ~ (type_name ~ ",")* ~ type_name? ~ ")" }
 struct_declaration       =  { "type" ~ struct_identifier ~ "=" ~ struct_fields ~ ";" }
 enum_declaration         =  { "type" ~ struct_identifier ~ "=" ~ "enum" ~ "{" ~ NEWLINE* ~ enum_variant_list ~ NEWLINE* ~ "}" ~ ";" }
-enum_variant_list        =  { (NEWLINE* ~ enum_variant ~ "," )* ~ NEWLINE* ~ enum_variant? }
+enum_variant_list        = ${ (NEWLINE* ~ enum_variant_line ~ "," )* ~ NEWLINE* ~ enum_variant_line? }
+enum_variant_line        = _{ WHITESPACE* ~ enum_variant ~ WHITESPACE* }
 enum_variant             =  { variant_identifier ~ enum_variant_fields? }
 enum_variant_fields      =  { "(" ~ type_list ~ ")" }
 struct_identifier        = ${ "@" ~ struct_name }
