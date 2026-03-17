@@ -25,8 +25,16 @@ pub(super) fn iter_nested_types(cmpd: &CompoundType) -> Vec<Type> {
 }
 
 pub(super) fn is_type_valid(ctx: &ModuleCtx, ty: Type) -> bool {
-    let Type::Compound(root) = ty else {
-        return true;
+    let root = match ty {
+        Type::Compound(root) => root,
+        Type::EnumTag(root) => {
+            return ctx.with_ty_store(|store| {
+                store
+                    .get_compound(root)
+                    .is_some_and(|cmpd| matches!(cmpd, CompoundType::Enum(_)))
+            });
+        }
+        _ => return true,
     };
 
     let mut reachable = FxHashSet::default();

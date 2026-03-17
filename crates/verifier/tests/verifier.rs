@@ -42,6 +42,18 @@ fn diagnostic_fingerprint(report: &sonatina_verifier::VerificationReport) -> Vec
         .collect()
 }
 
+fn next_missing_compound_ref(module: &sonatina_ir::Module) -> CompoundTypeRef {
+    module.ctx.with_ty_store(|store| {
+        let next_ref = store
+            .all_compound_refs()
+            .map(|cmpd_ref| cmpd_ref.as_u32())
+            .max()
+            .expect("at least one compound type must exist")
+            + 1;
+        CompoundTypeRef::from_u32(next_ref)
+    })
+}
+
 #[test]
 fn parse_and_verify_module_reports_parse_errors() {
     let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
@@ -1467,15 +1479,7 @@ declare external %bad(enumtag(@OptionI256)) -> unit;
     let parsed = parse_module(src).expect("module should parse");
     let module = parsed.module;
     let func_ref = module.funcs()[0];
-    let missing_enum_ref = module.ctx.with_ty_store(|store| {
-        let next_ref = store
-            .all_compound_refs()
-            .map(|cmpd_ref| cmpd_ref.as_u32())
-            .max()
-            .expect("enum type must exist")
-            + 1;
-        CompoundTypeRef::from_u32(next_ref)
-    });
+    let missing_enum_ref = next_missing_compound_ref(&module);
 
     module.ctx.declared_funcs.insert(
         func_ref,
@@ -1490,7 +1494,43 @@ declare external %bad(enumtag(@OptionI256)) -> unit;
     let cfg = VerifierConfig::for_level(VerificationLevel::Full);
     let report = verify_module_invariants(&module, &cfg);
 
+    assert!(has_code(&report, "IR0004"), "expected IR0004, got {report}");
     assert!(has_code(&report, "IR0610"), "expected IR0610, got {report}");
+}
+
+#[test]
+fn dangling_enum_tag_argument_value_is_rejected() {
+    let src = r#"
+target = "evm-ethereum-osaka"
+
+type @OptionI256 = enum {
+    #None,
+    #Some(i256),
+};
+
+func private %bad(v0.enumtag(@OptionI256)) -> unit {
+block0:
+    return;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let module = parsed.module;
+    let func_ref = module.funcs()[0];
+    let missing_enum_ref = next_missing_compound_ref(&module);
+    let arg_value = module.func_store.view(func_ref, |func| func.arg_values[0]);
+
+    module.func_store.modify(func_ref, |func| {
+        let Value::Arg { ty, .. } = &mut func.dfg.values[arg_value] else {
+            panic!("function argument must remain an arg value");
+        };
+        *ty = Type::EnumTag(missing_enum_ref);
+    });
+
+    let cfg = VerifierConfig::for_level(VerificationLevel::Full);
+    let report = verify_module(&module, &cfg);
+
+    assert!(has_code(&report, "IR0004"), "expected IR0004, got {report}");
 }
 
 #[test]

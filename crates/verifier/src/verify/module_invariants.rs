@@ -520,17 +520,20 @@ fn verify_signature_type(
         ty,
     };
 
-    if !is_type_valid(ctx, ty) {
+    let type_is_valid = is_type_valid(ctx, ty);
+    if !type_is_valid {
         report.push(
             Diagnostic::error(
                 DiagnosticCode::InvalidTypeRef,
                 "function signature contains an invalid type",
-                location,
+                location.clone(),
             )
-            .with_note(usage),
+            .with_note(usage.clone()),
             cfg.max_diagnostics,
         );
-        return;
+        if !ty.is_enum_tag() {
+            return;
+        }
     }
 
     if has_by_value_function_type_in_signature(ctx, ty) {
