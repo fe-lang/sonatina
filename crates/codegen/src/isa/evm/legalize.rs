@@ -4,13 +4,17 @@ use smallvec::SmallVec;
 use sonatina_ir::{
     Function, I256, Immediate, Inst, InstId, Module, Type, U256, Value, ValueId,
     inst::{
-        arith::{self, Add, Mul, Neg, Sdiv, Smod, Sub, Udiv, Umod},
+        arith::{
+            self, Add, Mul, Neg, Saddsat, Sdiv, Smod, Smulsat, Ssubsat, Sub, Uaddsat, Udiv, Umod,
+            Umulsat, Usubsat,
+        },
         cast::{self, Bitcast, IntToPtr, PtrToInt},
         cmp::{self, Eq, IsZero, Ne, Sgt, Slt},
         data::{Alloca, MemAllocDynamic, Mload, Mstore},
         downcast,
         evm::{
-            EvmMalloc, EvmSdiv, EvmSdivo, EvmSmod, EvmSmodo, EvmUdiv, EvmUdivo, EvmUmod, EvmUmodo,
+            EvmMalloc, EvmSaddsat, EvmSdiv, EvmSdivo, EvmSmod, EvmSmodo, EvmSmulsat, EvmSsubsat,
+            EvmUaddsat, EvmUdiv, EvmUdivo, EvmUmod, EvmUmodo, EvmUmulsat, EvmUsubsat,
         },
         logic::{self, And, Or, Xor},
     },
@@ -274,9 +278,21 @@ impl<'a> FunctionLegalizer<'a> {
         let is = self.evm_inst_set();
 
         if let Some((lhs, rhs)) =
+            downcast::<&Uaddsat>(is, self.func.dfg.inst(inst)).map(|i| (*i.lhs(), *i.rhs()))
+        {
+            self.rewrite_uaddsat(inst, lhs, rhs);
+            return;
+        }
+        if let Some((lhs, rhs)) =
             downcast::<&arith::Uaddo>(is, self.func.dfg.inst(inst)).map(|i| (*i.lhs(), *i.rhs()))
         {
             self.rewrite_uaddo(inst, lhs, rhs);
+            return;
+        }
+        if let Some((lhs, rhs)) =
+            downcast::<&Saddsat>(is, self.func.dfg.inst(inst)).map(|i| (*i.lhs(), *i.rhs()))
+        {
+            self.rewrite_saddsat(inst, lhs, rhs);
             return;
         }
         if let Some((lhs, rhs)) =
@@ -286,9 +302,21 @@ impl<'a> FunctionLegalizer<'a> {
             return;
         }
         if let Some((lhs, rhs)) =
+            downcast::<&Usubsat>(is, self.func.dfg.inst(inst)).map(|i| (*i.lhs(), *i.rhs()))
+        {
+            self.rewrite_usubsat(inst, lhs, rhs);
+            return;
+        }
+        if let Some((lhs, rhs)) =
             downcast::<&arith::Usubo>(is, self.func.dfg.inst(inst)).map(|i| (*i.lhs(), *i.rhs()))
         {
             self.rewrite_usubo(inst, lhs, rhs);
+            return;
+        }
+        if let Some((lhs, rhs)) =
+            downcast::<&Ssubsat>(is, self.func.dfg.inst(inst)).map(|i| (*i.lhs(), *i.rhs()))
+        {
+            self.rewrite_ssubsat(inst, lhs, rhs);
             return;
         }
         if let Some((lhs, rhs)) =
@@ -298,9 +326,21 @@ impl<'a> FunctionLegalizer<'a> {
             return;
         }
         if let Some((lhs, rhs)) =
+            downcast::<&Umulsat>(is, self.func.dfg.inst(inst)).map(|i| (*i.lhs(), *i.rhs()))
+        {
+            self.rewrite_umulsat(inst, lhs, rhs);
+            return;
+        }
+        if let Some((lhs, rhs)) =
             downcast::<&arith::Umulo>(is, self.func.dfg.inst(inst)).map(|i| (*i.lhs(), *i.rhs()))
         {
             self.rewrite_umulo(inst, lhs, rhs);
+            return;
+        }
+        if let Some((lhs, rhs)) =
+            downcast::<&Smulsat>(is, self.func.dfg.inst(inst)).map(|i| (*i.lhs(), *i.rhs()))
+        {
+            self.rewrite_smulsat(inst, lhs, rhs);
             return;
         }
         if let Some((lhs, rhs)) =
@@ -568,6 +608,30 @@ impl<'a> FunctionLegalizer<'a> {
         self.imm_i256(U256::from(bits))
     }
 
+    fn scalar_type_for_width(width: ScalarWidth) -> Type {
+        match width {
+            ScalarWidth::Bool => Type::I1,
+            ScalarWidth::Narrow(8) => Type::I8,
+            ScalarWidth::Narrow(16) => Type::I16,
+            ScalarWidth::Narrow(32) => Type::I32,
+            ScalarWidth::Narrow(64) => Type::I64,
+            ScalarWidth::Narrow(128) => Type::I128,
+            ScalarWidth::Narrow(bits) => panic!("unsupported scalar width {bits}"),
+            ScalarWidth::Full256 => Type::I256,
+        }
+    }
+
+    fn saturating_scalar_type(&self, inst: InstId) -> Type {
+        let [result] = self.func.dfg.inst_results(inst) else {
+            panic!("saturating op must have exactly one result");
+        };
+        let width = self
+            .width_of(*result)
+            .expect("missing saturating result width");
+        assert_ne!(width, ScalarWidth::Bool, "saturating ops do not support i1");
+        Self::scalar_type_for_width(width)
+    }
+
     fn min_value_for_width(&mut self, width: ScalarWidth) -> ValueId {
         match width {
             ScalarWidth::Bool => self.imm_for_width(U256::one(), width),
@@ -658,6 +722,64 @@ impl<'a> FunctionLegalizer<'a> {
         }
     }
 
+    fn bool_to_i256(&mut self, before: InstId, value: ValueId) -> ValueId {
+        self.insert_before_one(
+            before,
+            Bitcast::new(self.evm_inst_set(), value, Type::I256),
+            Type::I256,
+            Some(ScalarWidth::Full256),
+        )
+    }
+
+    fn bool_to_mask_i256(&mut self, before: InstId, value: ValueId) -> ValueId {
+        let flag = self.bool_to_i256(before, value);
+        let zero = self.zero_i256();
+        self.insert_before_one(
+            before,
+            Sub::new(self.evm_inst_set(), zero, flag),
+            Type::I256,
+            Some(ScalarWidth::Full256),
+        )
+    }
+
+    fn select_i256(
+        &mut self,
+        before: InstId,
+        keep: ValueId,
+        replace: ValueId,
+        flag: ValueId,
+    ) -> ValueId {
+        let mask = self.bool_to_mask_i256(before, flag);
+        let delta = self.insert_before_one(
+            before,
+            Xor::new(self.evm_inst_set(), keep, replace),
+            Type::I256,
+            Some(ScalarWidth::Full256),
+        );
+        let masked = self.insert_before_one(
+            before,
+            And::new(self.evm_inst_set(), delta, mask),
+            Type::I256,
+            Some(ScalarWidth::Full256),
+        );
+        self.insert_before_one(
+            before,
+            Xor::new(self.evm_inst_set(), keep, masked),
+            Type::I256,
+            Some(ScalarWidth::Full256),
+        )
+    }
+
+    fn sign_mask_i256(&mut self, before: InstId, value: ValueId) -> ValueId {
+        let shift = self.shift_value(255);
+        self.insert_before_one(
+            before,
+            arith::Sar::new(self.evm_inst_set(), shift, value),
+            Type::I256,
+            Some(ScalarWidth::Full256),
+        )
+    }
+
     fn canonicalize_to_width(
         &mut self,
         before: InstId,
@@ -722,6 +844,41 @@ impl<'a> FunctionLegalizer<'a> {
         self.replace_with_aliases(inst, &[sum, overflow]);
     }
 
+    fn rewrite_uaddsat(&mut self, inst: InstId, lhs: ValueId, rhs: ValueId) {
+        let width = self
+            .single_result_width(inst)
+            .expect("missing saturating add result width");
+        if width == ScalarWidth::Full256 {
+            let raw = self.insert_before_one(
+                inst,
+                Add::new(self.evm_inst_set(), lhs, rhs),
+                Type::I256,
+                Some(ScalarWidth::Full256),
+            );
+            let overflow = self.insert_before_one(
+                inst,
+                cmp::Lt::new(self.evm_inst_set(), raw, lhs),
+                Type::I1,
+                Some(ScalarWidth::Bool),
+            );
+            let overflow_mask = self.bool_to_mask_i256(inst, overflow);
+            let result = self.insert_before_one(
+                inst,
+                Or::new(self.evm_inst_set(), raw, overflow_mask),
+                Type::I256,
+                Some(ScalarWidth::Full256),
+            );
+            self.replace_with_aliases(inst, &[result]);
+            return;
+        }
+
+        let ty = self.saturating_scalar_type(inst);
+        self.func.dfg.replace_inst(
+            inst,
+            Box::new(EvmUaddsat::new(self.evm_inst_set(), lhs, rhs, ty)),
+        );
+    }
+
     fn rewrite_usubo(&mut self, inst: InstId, lhs: ValueId, rhs: ValueId) {
         let sum_width = self
             .width_of(self.func.dfg.inst_results(inst)[0])
@@ -740,6 +897,36 @@ impl<'a> FunctionLegalizer<'a> {
             Some(ScalarWidth::Bool),
         );
         self.replace_with_aliases(inst, &[result, overflow]);
+    }
+
+    fn rewrite_usubsat(&mut self, inst: InstId, lhs: ValueId, rhs: ValueId) {
+        let width = self
+            .single_result_width(inst)
+            .expect("missing saturating sub result width");
+        if width == ScalarWidth::Full256 {
+            let raw = self.insert_before_one(
+                inst,
+                Sub::new(self.evm_inst_set(), lhs, rhs),
+                Type::I256,
+                Some(ScalarWidth::Full256),
+            );
+            let underflow = self.insert_before_one(
+                inst,
+                cmp::Lt::new(self.evm_inst_set(), lhs, rhs),
+                Type::I1,
+                Some(ScalarWidth::Bool),
+            );
+            let zero = self.zero_i256();
+            let result = self.select_i256(inst, raw, zero, underflow);
+            self.replace_with_aliases(inst, &[result]);
+            return;
+        }
+
+        let ty = self.saturating_scalar_type(inst);
+        self.func.dfg.replace_inst(
+            inst,
+            Box::new(EvmUsubsat::new(self.evm_inst_set(), lhs, rhs, ty)),
+        );
     }
 
     fn rewrite_umulo(&mut self, inst: InstId, lhs: ValueId, rhs: ValueId) {
@@ -791,6 +978,60 @@ impl<'a> FunctionLegalizer<'a> {
         self.replace_with_aliases(inst, &[result, overflow]);
     }
 
+    fn rewrite_umulsat(&mut self, inst: InstId, lhs: ValueId, rhs: ValueId) {
+        let width = self
+            .single_result_width(inst)
+            .expect("missing saturating mul result width");
+        if width == ScalarWidth::Full256 {
+            let raw = self.insert_before_one(
+                inst,
+                Mul::new(self.evm_inst_set(), lhs, rhs),
+                Type::I256,
+                Some(ScalarWidth::Full256),
+            );
+            let zero = self.zero_i256();
+            let rhs_nonzero = self.insert_before_one(
+                inst,
+                Ne::new(self.evm_inst_set(), rhs, zero),
+                Type::I1,
+                Some(ScalarWidth::Bool),
+            );
+            let div_back = self.insert_before_one(
+                inst,
+                EvmUdiv::new(self.evm_inst_set(), raw, rhs),
+                Type::I256,
+                Some(ScalarWidth::Full256),
+            );
+            let div_mismatch = self.insert_before_one(
+                inst,
+                Ne::new(self.evm_inst_set(), div_back, lhs),
+                Type::I1,
+                Some(ScalarWidth::Bool),
+            );
+            let overflow = self.insert_before_one(
+                inst,
+                And::new(self.evm_inst_set(), rhs_nonzero, div_mismatch),
+                Type::I1,
+                Some(ScalarWidth::Bool),
+            );
+            let overflow_mask = self.bool_to_mask_i256(inst, overflow);
+            let result = self.insert_before_one(
+                inst,
+                Or::new(self.evm_inst_set(), raw, overflow_mask),
+                Type::I256,
+                Some(ScalarWidth::Full256),
+            );
+            self.replace_with_aliases(inst, &[result]);
+            return;
+        }
+
+        let ty = self.saturating_scalar_type(inst);
+        self.func.dfg.replace_inst(
+            inst,
+            Box::new(EvmUmulsat::new(self.evm_inst_set(), lhs, rhs, ty)),
+        );
+    }
+
     fn rewrite_signed_overflow_binary(
         &mut self,
         inst: InstId,
@@ -839,6 +1080,230 @@ impl<'a> FunctionLegalizer<'a> {
                 self.replace_with_aliases(inst, &[result, overflow]);
             }
         }
+    }
+
+    fn rewrite_saddsat(&mut self, inst: InstId, lhs: ValueId, rhs: ValueId) {
+        let width = self
+            .single_result_width(inst)
+            .expect("missing saturating add result width");
+        if width == ScalarWidth::Full256 {
+            let raw = self.insert_before_one(
+                inst,
+                Add::new(self.evm_inst_set(), lhs, rhs),
+                Type::I256,
+                Some(ScalarWidth::Full256),
+            );
+            let raw_lhs = self.insert_before_one(
+                inst,
+                Xor::new(self.evm_inst_set(), raw, lhs),
+                Type::I256,
+                Some(ScalarWidth::Full256),
+            );
+            let raw_rhs = self.insert_before_one(
+                inst,
+                Xor::new(self.evm_inst_set(), raw, rhs),
+                Type::I256,
+                Some(ScalarWidth::Full256),
+            );
+            let sign_test = self.insert_before_one(
+                inst,
+                And::new(self.evm_inst_set(), raw_lhs, raw_rhs),
+                Type::I256,
+                Some(ScalarWidth::Full256),
+            );
+            let zero = self.zero_i256();
+            let overflow = self.insert_before_one(
+                inst,
+                Slt::new(self.evm_inst_set(), sign_test, zero),
+                Type::I1,
+                Some(ScalarWidth::Bool),
+            );
+            let smax = self.imm_i256((U256::one() << 255) - U256::one());
+            let lhs_sign = self.sign_mask_i256(inst, lhs);
+            let clamp = self.insert_before_one(
+                inst,
+                Xor::new(self.evm_inst_set(), smax, lhs_sign),
+                Type::I256,
+                Some(ScalarWidth::Full256),
+            );
+            let result = self.select_i256(inst, raw, clamp, overflow);
+            self.replace_with_aliases(inst, &[result]);
+            return;
+        }
+
+        let ty = self.saturating_scalar_type(inst);
+        self.func.dfg.replace_inst(
+            inst,
+            Box::new(EvmSaddsat::new(self.evm_inst_set(), lhs, rhs, ty)),
+        );
+    }
+
+    fn rewrite_ssubsat(&mut self, inst: InstId, lhs: ValueId, rhs: ValueId) {
+        let width = self
+            .single_result_width(inst)
+            .expect("missing saturating sub result width");
+        if width == ScalarWidth::Full256 {
+            let raw = self.insert_before_one(
+                inst,
+                Sub::new(self.evm_inst_set(), lhs, rhs),
+                Type::I256,
+                Some(ScalarWidth::Full256),
+            );
+            let lhs_rhs = self.insert_before_one(
+                inst,
+                Xor::new(self.evm_inst_set(), lhs, rhs),
+                Type::I256,
+                Some(ScalarWidth::Full256),
+            );
+            let raw_lhs = self.insert_before_one(
+                inst,
+                Xor::new(self.evm_inst_set(), raw, lhs),
+                Type::I256,
+                Some(ScalarWidth::Full256),
+            );
+            let sign_test = self.insert_before_one(
+                inst,
+                And::new(self.evm_inst_set(), lhs_rhs, raw_lhs),
+                Type::I256,
+                Some(ScalarWidth::Full256),
+            );
+            let zero = self.zero_i256();
+            let overflow = self.insert_before_one(
+                inst,
+                Slt::new(self.evm_inst_set(), sign_test, zero),
+                Type::I1,
+                Some(ScalarWidth::Bool),
+            );
+            let smax = self.imm_i256((U256::one() << 255) - U256::one());
+            let lhs_sign = self.sign_mask_i256(inst, lhs);
+            let clamp = self.insert_before_one(
+                inst,
+                Xor::new(self.evm_inst_set(), smax, lhs_sign),
+                Type::I256,
+                Some(ScalarWidth::Full256),
+            );
+            let result = self.select_i256(inst, raw, clamp, overflow);
+            self.replace_with_aliases(inst, &[result]);
+            return;
+        }
+
+        let ty = self.saturating_scalar_type(inst);
+        self.func.dfg.replace_inst(
+            inst,
+            Box::new(EvmSsubsat::new(self.evm_inst_set(), lhs, rhs, ty)),
+        );
+    }
+
+    fn rewrite_smulsat(&mut self, inst: InstId, lhs: ValueId, rhs: ValueId) {
+        let width = self
+            .single_result_width(inst)
+            .expect("missing saturating mul result width");
+        if width == ScalarWidth::Full256 {
+            let raw = self.insert_before_one(
+                inst,
+                Mul::new(self.evm_inst_set(), lhs, rhs),
+                Type::I256,
+                Some(ScalarWidth::Full256),
+            );
+            let zero = self.zero_i256();
+            let rhs_nonzero = self.insert_before_one(
+                inst,
+                Ne::new(self.evm_inst_set(), rhs, zero),
+                Type::I1,
+                Some(ScalarWidth::Bool),
+            );
+            let min = self.imm_i256(U256::one() << 255);
+            let neg_one = self.imm_i256(!U256::zero());
+            let lhs_is_min = self.insert_before_one(
+                inst,
+                Eq::new(self.evm_inst_set(), lhs, min),
+                Type::I1,
+                Some(ScalarWidth::Bool),
+            );
+            let rhs_is_min = self.insert_before_one(
+                inst,
+                Eq::new(self.evm_inst_set(), rhs, min),
+                Type::I1,
+                Some(ScalarWidth::Bool),
+            );
+            let lhs_is_neg_one = self.insert_before_one(
+                inst,
+                Eq::new(self.evm_inst_set(), lhs, neg_one),
+                Type::I1,
+                Some(ScalarWidth::Bool),
+            );
+            let rhs_is_neg_one = self.insert_before_one(
+                inst,
+                Eq::new(self.evm_inst_set(), rhs, neg_one),
+                Type::I1,
+                Some(ScalarWidth::Bool),
+            );
+            let left_special = self.insert_before_one(
+                inst,
+                And::new(self.evm_inst_set(), lhs_is_min, rhs_is_neg_one),
+                Type::I1,
+                Some(ScalarWidth::Bool),
+            );
+            let right_special = self.insert_before_one(
+                inst,
+                And::new(self.evm_inst_set(), rhs_is_min, lhs_is_neg_one),
+                Type::I1,
+                Some(ScalarWidth::Bool),
+            );
+            let special = self.insert_before_one(
+                inst,
+                Or::new(self.evm_inst_set(), left_special, right_special),
+                Type::I1,
+                Some(ScalarWidth::Bool),
+            );
+            let div_back = self.insert_before_one(
+                inst,
+                EvmSdiv::new(self.evm_inst_set(), raw, rhs),
+                Type::I256,
+                Some(ScalarWidth::Full256),
+            );
+            let div_mismatch = self.insert_before_one(
+                inst,
+                Ne::new(self.evm_inst_set(), div_back, lhs),
+                Type::I1,
+                Some(ScalarWidth::Bool),
+            );
+            let problem = self.insert_before_one(
+                inst,
+                Or::new(self.evm_inst_set(), special, div_mismatch),
+                Type::I1,
+                Some(ScalarWidth::Bool),
+            );
+            let overflow = self.insert_before_one(
+                inst,
+                And::new(self.evm_inst_set(), rhs_nonzero, problem),
+                Type::I1,
+                Some(ScalarWidth::Bool),
+            );
+            let sign_bits = self.insert_before_one(
+                inst,
+                Xor::new(self.evm_inst_set(), lhs, rhs),
+                Type::I256,
+                Some(ScalarWidth::Full256),
+            );
+            let smax = self.imm_i256((U256::one() << 255) - U256::one());
+            let sign_mask = self.sign_mask_i256(inst, sign_bits);
+            let clamp = self.insert_before_one(
+                inst,
+                Xor::new(self.evm_inst_set(), smax, sign_mask),
+                Type::I256,
+                Some(ScalarWidth::Full256),
+            );
+            let result = self.select_i256(inst, raw, clamp, overflow);
+            self.replace_with_aliases(inst, &[result]);
+            return;
+        }
+
+        let ty = self.saturating_scalar_type(inst);
+        self.func.dfg.replace_inst(
+            inst,
+            Box::new(EvmSmulsat::new(self.evm_inst_set(), lhs, rhs, ty)),
+        );
     }
 
     fn rewrite_full_width_signed_overflow_binary(

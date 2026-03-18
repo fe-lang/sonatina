@@ -1,0 +1,12 @@
+target = "evm-ethereum-london"
+
+# sameln: func public %saturating_fold() -> i8 {
+# nextln:     block0:
+# nextln:         return 127.i8;
+func public %saturating_fold() -> i8 {
+    block0:
+        v0.i8 = saddsat 120.i8 20.i8;
+        v1.i8 = smulsat v0 1.i8;
+        v2.i8 = ssubsat v1 0.i8;
+        return v2;
+}

@@ -6,7 +6,10 @@ use crate::{
     BlockId, Function, GlobalVariableRef, Immediate, Inst, InstId, InstSetBase, Type, ValueId,
     func_cursor::{CursorLocation, FuncCursor},
     inst::{
-        arith::{Saddo, Smulo, Snego, Ssubo, Uaddo, Umulo, Usubo},
+        arith::{
+            Saddo, Saddsat, Smulo, Smulsat, Snego, Ssubo, Ssubsat, Uaddo, Uaddsat, Umulo, Umulsat,
+            Usubo, Usubsat,
+        },
         control_flow,
         evm::{EvmSdivo, EvmSmodo, EvmUdivo, EvmUmodo},
     },
@@ -249,6 +252,25 @@ where
         self.insert_checked_results(inst, arg_ty)
     }
 
+    fn insert_saturating_binary<I: Inst>(
+        &mut self,
+        inst: I,
+        lhs: ValueId,
+        rhs: ValueId,
+    ) -> ValueId {
+        let lhs_ty = self.type_of(lhs);
+        let rhs_ty = self.type_of(rhs);
+        assert_eq!(
+            lhs_ty, rhs_ty,
+            "saturating binary operands must have the same type"
+        );
+        assert!(
+            lhs_ty.is_integral() && lhs_ty != Type::I1,
+            "saturating binary operands must be non-i1 integers"
+        );
+        self.insert_inst(inst, lhs_ty)
+    }
+
     pub fn insert_uaddo(&mut self, lhs: ValueId, rhs: ValueId) -> [ValueId; 2] {
         self.insert_checked_binary(
             Uaddo::new(
@@ -277,12 +299,54 @@ where
         )
     }
 
+    pub fn insert_uaddsat(&mut self, lhs: ValueId, rhs: ValueId) -> ValueId {
+        self.insert_saturating_binary(
+            Uaddsat::new(
+                self.inst_set()
+                    .has_uaddsat()
+                    .expect("target ISA must support `uaddsat`"),
+                lhs,
+                rhs,
+            ),
+            lhs,
+            rhs,
+        )
+    }
+
+    pub fn insert_saddsat(&mut self, lhs: ValueId, rhs: ValueId) -> ValueId {
+        self.insert_saturating_binary(
+            Saddsat::new(
+                self.inst_set()
+                    .has_saddsat()
+                    .expect("target ISA must support `saddsat`"),
+                lhs,
+                rhs,
+            ),
+            lhs,
+            rhs,
+        )
+    }
+
     pub fn insert_usubo(&mut self, lhs: ValueId, rhs: ValueId) -> [ValueId; 2] {
         self.insert_checked_binary(
             Usubo::new(
                 self.inst_set()
                     .has_usubo()
                     .expect("target ISA must support `usubo`"),
+                lhs,
+                rhs,
+            ),
+            lhs,
+            rhs,
+        )
+    }
+
+    pub fn insert_usubsat(&mut self, lhs: ValueId, rhs: ValueId) -> ValueId {
+        self.insert_saturating_binary(
+            Usubsat::new(
+                self.inst_set()
+                    .has_usubsat()
+                    .expect("target ISA must support `usubsat`"),
                 lhs,
                 rhs,
             ),
@@ -305,6 +369,20 @@ where
         )
     }
 
+    pub fn insert_ssubsat(&mut self, lhs: ValueId, rhs: ValueId) -> ValueId {
+        self.insert_saturating_binary(
+            Ssubsat::new(
+                self.inst_set()
+                    .has_ssubsat()
+                    .expect("target ISA must support `ssubsat`"),
+                lhs,
+                rhs,
+            ),
+            lhs,
+            rhs,
+        )
+    }
+
     pub fn insert_umulo(&mut self, lhs: ValueId, rhs: ValueId) -> [ValueId; 2] {
         self.insert_checked_binary(
             Umulo::new(
@@ -319,12 +397,40 @@ where
         )
     }
 
+    pub fn insert_umulsat(&mut self, lhs: ValueId, rhs: ValueId) -> ValueId {
+        self.insert_saturating_binary(
+            Umulsat::new(
+                self.inst_set()
+                    .has_umulsat()
+                    .expect("target ISA must support `umulsat`"),
+                lhs,
+                rhs,
+            ),
+            lhs,
+            rhs,
+        )
+    }
+
     pub fn insert_smulo(&mut self, lhs: ValueId, rhs: ValueId) -> [ValueId; 2] {
         self.insert_checked_binary(
             Smulo::new(
                 self.inst_set()
                     .has_smulo()
                     .expect("target ISA must support `smulo`"),
+                lhs,
+                rhs,
+            ),
+            lhs,
+            rhs,
+        )
+    }
+
+    pub fn insert_smulsat(&mut self, lhs: ValueId, rhs: ValueId) -> ValueId {
+        self.insert_saturating_binary(
+            Smulsat::new(
+                self.inst_set()
+                    .has_smulsat()
+                    .expect("target ISA must support `smulsat`"),
                 lhs,
                 rhs,
             ),

@@ -1,0 +1,11 @@
+target = "evm-ethereum-london"
+
+# sameln: func public %saturating_dead(v0.i8, v1.i8) -> i8 {
+# nextln:     block0:
+# nextln:         return v0;
+func public %saturating_dead(v0.i8, v1.i8) -> i8 {
+    block0:
+        v2.i8 = uaddsat v0 v1;
+        v3.i8 = smulsat v1 0.i8;
+        return v0;
+}

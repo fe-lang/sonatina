@@ -8,6 +8,12 @@ super::impl_inst_build! {EvmUmod, (lhs: ValueId, rhs:ValueId)}
 super::impl_inst_build! {EvmUmodo, (lhs: ValueId, rhs:ValueId)}
 super::impl_inst_build! {EvmSmod, (lhs: ValueId, rhs:ValueId)}
 super::impl_inst_build! {EvmSmodo, (lhs: ValueId, rhs:ValueId)}
+super::impl_inst_build! {EvmUaddsat, (lhs: ValueId, rhs:ValueId, ty: Type)}
+super::impl_inst_build! {EvmSaddsat, (lhs: ValueId, rhs:ValueId, ty: Type)}
+super::impl_inst_build! {EvmUsubsat, (lhs: ValueId, rhs:ValueId, ty: Type)}
+super::impl_inst_build! {EvmSsubsat, (lhs: ValueId, rhs:ValueId, ty: Type)}
+super::impl_inst_build! {EvmUmulsat, (lhs: ValueId, rhs:ValueId, ty: Type)}
+super::impl_inst_build! {EvmSmulsat, (lhs: ValueId, rhs:ValueId, ty: Type)}
 super::impl_inst_build! {EvmStop, ()}
 super::impl_inst_build! {EvmInvalid, ()}
 super::impl_inst_build! {EvmAddMod, (lhs: ValueId, rhs: ValueId, modulus: ValueId)}

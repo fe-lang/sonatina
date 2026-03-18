@@ -695,6 +695,44 @@ func public %bad_ssubo(v0.i32, v1.i32) -> unit {
 }
 
 #[test]
+fn saturating_result_types_are_checked() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+func public %bad_uaddsat(v0.i32, v1.i32) -> unit {
+    block0:
+        v2.i1 = uaddsat v0 v1;
+        return;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&parsed.module, &cfg);
+
+    assert!(has_code(&report, "IR0601"), "expected IR0601, got {report}");
+}
+
+#[test]
+fn saturating_ops_reject_i1_operands() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+func public %bad_i1(v0.i1, v1.i1) -> unit {
+    block0:
+        v2.i1 = uaddsat v0 v1;
+        return;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&parsed.module, &cfg);
+
+    assert!(has_code(&report, "IR0600"), "expected IR0600, got {report}");
+}
+
+#[test]
 fn evm_checked_divmod_result_types_are_checked() {
     let src = r#"
 target = "evm-ethereum-london"

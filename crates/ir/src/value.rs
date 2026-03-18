@@ -212,6 +212,17 @@ impl Immediate {
         (Self::from_i256(I256::from(sum & mask), ty), overflow)
     }
 
+    pub fn saturating_uadd(self, rhs: Self) -> Self {
+        debug_assert_eq!(self.ty(), rhs.ty());
+
+        let (sum, overflow) = self.overflowing_uadd(rhs);
+        if overflow {
+            Self::all_one(self.ty())
+        } else {
+            sum
+        }
+    }
+
     pub fn overflowing_sadd(self, rhs: Self) -> (Self, bool) {
         debug_assert_eq!(self.ty(), rhs.ty());
 
@@ -230,6 +241,22 @@ impl Immediate {
         (result, result.as_i256() != raw)
     }
 
+    pub fn saturating_sadd(self, rhs: Self) -> Self {
+        debug_assert_eq!(self.ty(), rhs.ty());
+
+        let ty = self.ty();
+        let (sum, overflow) = self.overflowing_sadd(rhs);
+        if !overflow {
+            return sum;
+        }
+
+        if self.is_negative() {
+            Self::signed_min(ty)
+        } else {
+            Self::signed_max(ty)
+        }
+    }
+
     pub fn overflowing_usub(self, rhs: Self) -> (Self, bool) {
         debug_assert_eq!(self.ty(), rhs.ty());
 
@@ -240,6 +267,17 @@ impl Immediate {
         let (diff, borrow) = lhs.overflowing_sub(rhs);
         let overflow = borrow || lhs < rhs;
         (Self::from_i256(I256::from(diff & mask), ty), overflow)
+    }
+
+    pub fn saturating_usub(self, rhs: Self) -> Self {
+        debug_assert_eq!(self.ty(), rhs.ty());
+
+        let (diff, overflow) = self.overflowing_usub(rhs);
+        if overflow {
+            Self::zero(self.ty())
+        } else {
+            diff
+        }
     }
 
     pub fn overflowing_ssub(self, rhs: Self) -> (Self, bool) {
@@ -260,6 +298,22 @@ impl Immediate {
         (result, result.as_i256() != raw)
     }
 
+    pub fn saturating_ssub(self, rhs: Self) -> Self {
+        debug_assert_eq!(self.ty(), rhs.ty());
+
+        let ty = self.ty();
+        let (diff, overflow) = self.overflowing_ssub(rhs);
+        if !overflow {
+            return diff;
+        }
+
+        if self.is_negative() {
+            Self::signed_min(ty)
+        } else {
+            Self::signed_max(ty)
+        }
+    }
+
     pub fn overflowing_umul(self, rhs: Self) -> (Self, bool) {
         debug_assert_eq!(self.ty(), rhs.ty());
 
@@ -268,6 +322,17 @@ impl Immediate {
         let (product, carry) = self.unsigned_value().overflowing_mul(rhs.unsigned_value());
         let overflow = carry || product > mask;
         (Self::from_i256(I256::from(product & mask), ty), overflow)
+    }
+
+    pub fn saturating_umul(self, rhs: Self) -> Self {
+        debug_assert_eq!(self.ty(), rhs.ty());
+
+        let (product, overflow) = self.overflowing_umul(rhs);
+        if overflow {
+            Self::all_one(self.ty())
+        } else {
+            product
+        }
     }
 
     pub fn overflowing_smul(self, rhs: Self) -> (Self, bool) {
@@ -292,6 +357,22 @@ impl Immediate {
         (result, result.as_i256() != raw)
     }
 
+    pub fn saturating_smul(self, rhs: Self) -> Self {
+        debug_assert_eq!(self.ty(), rhs.ty());
+
+        let ty = self.ty();
+        let (product, overflow) = self.overflowing_smul(rhs);
+        if !overflow {
+            return product;
+        }
+
+        if self.is_negative() != rhs.is_negative() {
+            Self::signed_min(ty)
+        } else {
+            Self::signed_max(ty)
+        }
+    }
+
     pub fn overflowing_sneg(self) -> (Self, bool) {
         let ty = self.ty();
         let raw = I256::zero().overflowing_sub(self.as_i256()).0;
@@ -314,6 +395,34 @@ impl Immediate {
 
     pub fn all_one(ty: Type) -> Self {
         Self::from_i256(I256::all_one(), ty)
+    }
+
+    pub fn signed_min(ty: Type) -> Self {
+        match ty {
+            Type::I1 => Self::I1(true),
+            Type::I8 => Self::I8(i8::MIN),
+            Type::I16 => Self::I16(i16::MIN),
+            Type::I32 => Self::I32(i32::MIN),
+            Type::I64 => Self::I64(i64::MIN),
+            Type::I128 => Self::I128(i128::MIN),
+            Type::I256 => Self::from_i256(I256::from(U256::one() << 255), Type::I256),
+            Type::EnumTag(_) | Type::Compound(_) | Type::Unit => unreachable!(),
+        }
+    }
+
+    pub fn signed_max(ty: Type) -> Self {
+        match ty {
+            Type::I1 => Self::I1(false),
+            Type::I8 => Self::I8(i8::MAX),
+            Type::I16 => Self::I16(i16::MAX),
+            Type::I32 => Self::I32(i32::MAX),
+            Type::I64 => Self::I64(i64::MAX),
+            Type::I128 => Self::I128(i128::MAX),
+            Type::I256 => {
+                Self::from_i256(I256::from((U256::one() << 255) - U256::one()), Type::I256)
+            }
+            Type::EnumTag(_) | Type::Compound(_) | Type::Unit => unreachable!(),
+        }
     }
 
     pub fn is_zero(self) -> bool {

@@ -27,13 +27,19 @@ pub enum UnaryInstKind {
 pub enum BinaryInstKind {
     Add,
     Uaddo,
+    Uaddsat,
     Saddo,
+    Saddsat,
     Mul,
     Umulo,
+    Umulsat,
     Smulo,
+    Smulsat,
     Sub,
     Usubo,
+    Usubsat,
     Ssubo,
+    Ssubsat,
     Sdiv,
     Udiv,
     Umod,
@@ -62,6 +68,12 @@ pub enum BinaryInstKind {
     EvmSmod,
     EvmUmodo,
     EvmSmodo,
+    EvmUaddsat,
+    EvmSaddsat,
+    EvmUsubsat,
+    EvmSsubsat,
+    EvmUmulsat,
+    EvmSmulsat,
     EvmExp,
     EvmByte,
 }
@@ -167,10 +179,14 @@ impl OwnedInstKey {
             InstClassKind::Binary(
                 BinaryInstKind::Add
                     | BinaryInstKind::Uaddo
+                    | BinaryInstKind::Uaddsat
                     | BinaryInstKind::Saddo
+                    | BinaryInstKind::Saddsat
                     | BinaryInstKind::Mul
                     | BinaryInstKind::Umulo
+                    | BinaryInstKind::Umulsat
                     | BinaryInstKind::Smulo
+                    | BinaryInstKind::Smulsat
                     | BinaryInstKind::Eq
                     | BinaryInstKind::Ne
                     | BinaryInstKind::And

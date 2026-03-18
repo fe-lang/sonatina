@@ -1,7 +1,7 @@
 use macros::Inst;
 pub mod inst_set;
 
-use crate::value::ValueId;
+use crate::{Type, value::ValueId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 #[inst(kind(binary(EvmUdiv)))]
@@ -57,6 +57,54 @@ pub struct EvmSmod {
 pub struct EvmSmodo {
     lhs: ValueId,
     rhs: ValueId,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(kind(binary(EvmUaddsat)))]
+pub struct EvmUaddsat {
+    lhs: ValueId,
+    rhs: ValueId,
+    ty: Type,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(kind(binary(EvmSaddsat)))]
+pub struct EvmSaddsat {
+    lhs: ValueId,
+    rhs: ValueId,
+    ty: Type,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(kind(binary(EvmUsubsat)))]
+pub struct EvmUsubsat {
+    lhs: ValueId,
+    rhs: ValueId,
+    ty: Type,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(kind(binary(EvmSsubsat)))]
+pub struct EvmSsubsat {
+    lhs: ValueId,
+    rhs: ValueId,
+    ty: Type,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(kind(binary(EvmUmulsat)))]
+pub struct EvmUmulsat {
+    lhs: ValueId,
+    rhs: ValueId,
+    ty: Type,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(kind(binary(EvmSmulsat)))]
+pub struct EvmSmulsat {
+    lhs: ValueId,
+    rhs: ValueId,
+    ty: Type,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]

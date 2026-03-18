@@ -162,11 +162,17 @@ pub(crate) fn simplify_binary_with_known_imm(
             }
         }
         BinaryInstKind::Uaddo
+        | BinaryInstKind::Uaddsat
         | BinaryInstKind::Saddo
+        | BinaryInstKind::Saddsat
         | BinaryInstKind::Umulo
+        | BinaryInstKind::Umulsat
         | BinaryInstKind::Smulo
+        | BinaryInstKind::Smulsat
         | BinaryInstKind::Usubo
+        | BinaryInstKind::Usubsat
         | BinaryInstKind::Ssubo
+        | BinaryInstKind::Ssubsat
         | BinaryInstKind::Lt
         | BinaryInstKind::Gt
         | BinaryInstKind::Slt
@@ -179,6 +185,12 @@ pub(crate) fn simplify_binary_with_known_imm(
         | BinaryInstKind::EvmSdivo
         | BinaryInstKind::EvmUmodo
         | BinaryInstKind::EvmSmodo
+        | BinaryInstKind::EvmUaddsat
+        | BinaryInstKind::EvmSaddsat
+        | BinaryInstKind::EvmUsubsat
+        | BinaryInstKind::EvmSsubsat
+        | BinaryInstKind::EvmUmulsat
+        | BinaryInstKind::EvmSmulsat
         | BinaryInstKind::EvmExp
         | BinaryInstKind::EvmByte => {}
     }

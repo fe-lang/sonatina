@@ -109,6 +109,52 @@ fn verify_binary_overflow_inst(
     verifier.expect_result_tys(inst_id, &[lhs_ty, Type::I1], location);
 }
 
+fn verify_binary_saturating_inst(
+    verifier: &mut FunctionVerifier<'_>,
+    inst_id: InstId,
+    lhs: ValueId,
+    rhs: ValueId,
+    opname: &str,
+) {
+    let location = verifier.inst_location(inst_id);
+    let Some(lhs_ty) = verifier.value_ty(lhs) else {
+        return;
+    };
+    let Some(rhs_ty) = verifier.value_ty(rhs) else {
+        return;
+    };
+
+    if !lhs_ty.is_integral() || !rhs_ty.is_integral() {
+        verifier.emit(
+            Diagnostic::error(
+                DiagnosticCode::InstOperandTypeMismatch,
+                format!("{opname} operands must be integral"),
+                location.clone(),
+            )
+            .with_note(format!("lhs {:?}, rhs {:?}", lhs_ty, rhs_ty)),
+        );
+    }
+    if lhs_ty != rhs_ty {
+        verifier.emit(
+            Diagnostic::error(
+                DiagnosticCode::InstOperandTypeMismatch,
+                format!("{opname} operands must have identical types"),
+                location.clone(),
+            )
+            .with_note(format!("lhs {:?}, rhs {:?}", lhs_ty, rhs_ty)),
+        );
+    }
+    if lhs_ty == Type::I1 {
+        verifier.emit(Diagnostic::error(
+            DiagnosticCode::InstOperandTypeMismatch,
+            format!("{opname} does not support i1 operands"),
+            location.clone(),
+        ));
+    }
+
+    verifier.expect_result_ty(inst_id, lhs_ty, location);
+}
+
 fn verify_unary_overflow_inst(
     verifier: &mut FunctionVerifier<'_>,
     inst_id: InstId,
@@ -157,6 +203,78 @@ impl_binary_overflow_rule!(
     evm::EvmSdivo => "evm_sdivo",
     evm::EvmUmodo => "evm_umodo",
     evm::EvmSmodo => "evm_smodo",
+);
+
+macro_rules! impl_binary_saturating_rule {
+    ($($ty:ty => $opname:literal),+ $(,)?) => {
+        $(
+            impl VerifyInst for $ty {
+                fn verify_inst(&self, verifier: &mut FunctionVerifier<'_>, inst_id: InstId) {
+                    verify_binary_saturating_inst(verifier, inst_id, *self.lhs(), *self.rhs(), $opname);
+                }
+            }
+        )+
+    };
+}
+
+impl_binary_saturating_rule!(
+    arith::Uaddsat => "uaddsat",
+    arith::Saddsat => "saddsat",
+    arith::Usubsat => "usubsat",
+    arith::Ssubsat => "ssubsat",
+    arith::Umulsat => "umulsat",
+    arith::Smulsat => "smulsat",
+);
+
+macro_rules! impl_evm_binary_saturating_rule {
+    ($($ty:ty => $opname:literal),+ $(,)?) => {
+        $(
+            impl VerifyInst for $ty {
+                fn verify_inst(&self, verifier: &mut FunctionVerifier<'_>, inst_id: InstId) {
+                    let location = verifier.inst_location(inst_id);
+                    let Some(lhs_ty) = verifier.value_ty(*self.lhs()) else {
+                        return;
+                    };
+                    let Some(rhs_ty) = verifier.value_ty(*self.rhs()) else {
+                        return;
+                    };
+                    let sat_ty = *self.ty();
+
+                    if lhs_ty != Type::I256 || rhs_ty != Type::I256 {
+                        verifier.emit(
+                            Diagnostic::error(
+                                DiagnosticCode::InstOperandTypeMismatch,
+                                format!("{} operands must be legalized i256 values", $opname),
+                                location.clone(),
+                            )
+                            .with_note(format!("lhs {:?}, rhs {:?}", lhs_ty, rhs_ty)),
+                        );
+                    }
+                    if !sat_ty.is_integral() || sat_ty == Type::I1 {
+                        verifier.emit(
+                            Diagnostic::error(
+                                DiagnosticCode::InstOperandTypeMismatch,
+                                format!("{} type must be a non-i1 integer", $opname),
+                                location.clone(),
+                            )
+                            .with_note(format!("type {:?}", sat_ty)),
+                        );
+                    }
+
+                    verifier.expect_result_ty(inst_id, Type::I256, location);
+                }
+            }
+        )+
+    };
+}
+
+impl_evm_binary_saturating_rule!(
+    evm::EvmUaddsat => "evm_uaddsat",
+    evm::EvmSaddsat => "evm_saddsat",
+    evm::EvmUsubsat => "evm_usubsat",
+    evm::EvmSsubsat => "evm_ssubsat",
+    evm::EvmUmulsat => "evm_umulsat",
+    evm::EvmSmulsat => "evm_smulsat",
 );
 
 impl VerifyInst for arith::Snego {

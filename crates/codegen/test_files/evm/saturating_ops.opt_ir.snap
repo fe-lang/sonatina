@@ -1,0 +1,92 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: opt_ir_snapshot
+input_file: test_files/evm/saturating_ops.sntn
+---
+target = "evm-ethereum-osaka"
+
+func public %entry() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i32;
+        v1.i256 = evm_calldata_load 32.i32;
+        v2.i256 = evm_calldata_load 64.i32;
+        v3.i1 = is_zero v0;
+        br v3 block10 block1;
+
+    block1:
+        v4.i1 = eq 1.i256 v0;
+        br v4 block11 block2;
+
+    block2:
+        v5.i1 = eq 2.i256 v0;
+        br v5 block12 block3;
+
+    block3:
+        v6.i1 = eq 3.i256 v0;
+        br v6 block13 block4;
+
+    block4:
+        v7.i1 = eq 4.i256 v0;
+        br v7 block14 block5;
+
+    block5:
+        v8.i1 = eq 5.i256 v0;
+        br v8 block15 block17;
+
+    block10:
+        v9.i8 = trunc v1 i8;
+        v10.i8 = trunc v2 i8;
+        v11.i8 = uaddsat v9 v10;
+        v12.i1 = eq -1.i8 v11;
+        br v12 block16 block17;
+
+    block11:
+        v13.i8 = trunc v1 i8;
+        v14.i8 = trunc v2 i8;
+        v15.i8 = usubsat v13 v14;
+        v16.i1 = is_zero v15;
+        br v16 block16 block17;
+
+    block12:
+        v17.i128 = trunc v1 i128;
+        v18.i128 = trunc v2 i128;
+        v19.i128 = umulsat v17 v18;
+        v20.i1 = eq -1.i128 v19;
+        br v20 block16 block17;
+
+    block13:
+        v21.i8 = trunc v1 i8;
+        v22.i8 = trunc v2 i8;
+        v23.i8 = saddsat v21 v22;
+        v24.i1 = eq 127.i8 v23;
+        br v24 block16 block17;
+
+    block14:
+        v25.i8 = trunc v1 i8;
+        v26.i8 = trunc v2 i8;
+        v27.i8 = ssubsat v25 v26;
+        v28.i1 = eq -128.i8 v27;
+        br v28 block16 block17;
+
+    block15:
+        v29.i128 = trunc v1 i128;
+        v30.i128 = trunc v2 i128;
+        v31.i128 = smulsat v29 v30;
+        v32.i1 = eq 170141183460469231731687303715884105727.i128 v31;
+        br v32 block16 block17;
+
+    block16:
+        mstore 0.i256 1.i256 i256;
+        evm_return 0.i256 32.i256;
+
+    block17:
+        mstore 0.i256 0.i256 i256;
+        evm_return 0.i256 32.i256;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %entry;
+    }
+}

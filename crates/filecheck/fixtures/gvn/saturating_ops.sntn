@@ -1,0 +1,15 @@
+target = "evm-ethereum-london"
+
+# check: block1:
+# nextln:  v2.i8 = uaddsat v0 v1;
+# nextln:  v5.i8 = ssubsat v0 v1;
+# nextln:  return;
+func public %saturating_ops(v0.i8, v1.i8) -> unit {
+    block1:
+        v2.i8 = uaddsat v0 v1;
+        v3.i8 = uaddsat v1 v0;
+        v4.i8 = uaddsat v0 v1;
+        v5.i8 = ssubsat v0 v1;
+        v6.i8 = ssubsat v0 v1;
+        return;
+}
