@@ -152,6 +152,34 @@ pub(super) fn decide_inline(
         });
     }
 
+    if exceeds_budget(
+        request.caller_growth,
+        predicted_growth,
+        config.max_growth_per_caller,
+    ) || exceeds_budget(
+        request.total_growth,
+        predicted_growth,
+        config.max_total_growth,
+    ) {
+        return InlineDecision::Skip(InlineSkipReason::Budget);
+    }
+
+    if config.max_inline_depth > 0 && request.callee_depth + 1 > config.max_inline_depth {
+        return InlineDecision::Skip(InlineSkipReason::Budget);
+    }
+
+    // A plain inline hint is a strong preference: bypass the local inlinee and
+    // cost heuristics once the callsite has cleared hard legality, recursion,
+    // growth, and depth constraints.
+    if hints.contains(FuncHints::INLINEHINT) {
+        return InlineDecision::Inline(InlinePlan {
+            summary,
+            score: i32::MIN + 2,
+            predicted_growth,
+            forced: true,
+        });
+    }
+
     if exceeds_cap(summary.blocks, config.max_inlinee_blocks)
         || exceeds_cap(summary.insts, config.max_inlinee_insts)
     {
@@ -168,22 +196,6 @@ pub(super) fn decide_inline(
 
     let should_force_single_use =
         config.always_inline_single_use && request.callee_call_count == 1 && summary.blocks > 1;
-
-    if exceeds_budget(
-        request.caller_growth,
-        predicted_growth,
-        config.max_growth_per_caller,
-    ) || exceeds_budget(
-        request.total_growth,
-        predicted_growth,
-        config.max_total_growth,
-    ) {
-        return InlineDecision::Skip(InlineSkipReason::Budget);
-    }
-
-    if config.max_inline_depth > 0 && request.callee_depth + 1 > config.max_inline_depth {
-        return InlineDecision::Skip(InlineSkipReason::Budget);
-    }
 
     if should_force_single_use {
         return InlineDecision::Inline(InlinePlan {

@@ -39,7 +39,7 @@ pub use inst::{
 };
 pub use layout::Layout;
 pub use linkage::Linkage;
-pub use module::Module;
+pub use module::{InlineHint, Module};
 pub use object::{
     Directive, Embed, EmbedSymbol, Object, ObjectName, Section, SectionName, SectionRef,
 };

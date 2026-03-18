@@ -5,7 +5,7 @@ use sonatina_codegen::{
     analysis::func_behavior,
     optim::inliner::{Inliner, InlinerConfig},
 };
-use sonatina_ir::{ir_writer::FuncWriter, module::FuncHints};
+use sonatina_ir::{InlineHint, ir_writer::FuncWriter, module::FuncHints};
 use sonatina_parser::ParsedModule;
 use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module};
 
@@ -1092,6 +1092,99 @@ func public %caller(v0.i1, v1.i32) -> i32 {
         "noinline call should remain:\n{dumped}"
     );
     assert!(stats.full_calls_inlined > 0);
+}
+
+#[test]
+fn full_inliner_treats_inlinehint_as_strong_but_budgeted() {
+    let source = r#"
+target = "evm-ethereum-london"
+
+func private %costly(v0.i1, v1.i32) -> i32 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        return v1;
+
+    block2:
+        v2.i32 = add v1 1.i32;
+        return v2;
+}
+
+func public %caller(v0.i1, v1.i32) -> i32 {
+    block0:
+        v2.i32 = call %costly v0 v1;
+        v3.i32 = call %costly v0 v2;
+        return v3;
+}
+"#;
+
+    let mut parsed = sonatina_parser::parse_module(source)
+        .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"));
+    let module = &mut parsed.module;
+    let costly = find_func(module, "costly");
+
+    let cfg = InlinerConfig {
+        enable_full_inliner: true,
+        always_inline_single_use: false,
+        max_inlinee_blocks: 8,
+        max_inlinee_insts: 32,
+        max_growth_per_caller: 64,
+        max_total_growth: 64,
+        inline_threshold: 4,
+        inline_threshold_cold: 4,
+        ..Default::default()
+    };
+
+    let mut baseline_inliner = Inliner::new(cfg);
+    let baseline_stats = baseline_inliner.run(module);
+    let baseline_dumped = dump_module(module);
+    assert!(
+        baseline_dumped.contains("call %costly"),
+        "costly helper should not inline without an explicit hint:\n{baseline_dumped}"
+    );
+    assert_eq!(baseline_stats.full_calls_inlined, 0);
+
+    module.ctx.set_inline_hint(costly, InlineHint::Inline);
+
+    let mut hinted_inliner = Inliner::new(cfg);
+    let hinted_stats = hinted_inliner.run(module);
+    assert_module_verified(module);
+
+    let hinted_dumped = dump_module(module);
+    assert!(
+        !hinted_dumped.contains("call %costly"),
+        "inline hint should bypass heuristic cost:\n{hinted_dumped}"
+    );
+    assert!(hinted_stats.full_calls_inlined > 0);
+
+    let mut parsed = sonatina_parser::parse_module(source)
+        .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"));
+    let module = &mut parsed.module;
+    let costly = find_func(module, "costly");
+    module.ctx.set_inline_hint(costly, InlineHint::Inline);
+
+    let mut budgeted_inliner = Inliner::new(InlinerConfig {
+        enable_full_inliner: true,
+        always_inline_single_use: false,
+        max_inlinee_blocks: 8,
+        max_inlinee_insts: 32,
+        max_growth_per_caller: 1,
+        max_total_growth: 64,
+        inline_threshold: 4,
+        inline_threshold_cold: 4,
+        ..Default::default()
+    });
+    let budgeted_stats = budgeted_inliner.run(module);
+    assert_module_verified(module);
+
+    let budgeted_dumped = dump_module(module);
+    assert!(
+        budgeted_dumped.contains("call %costly"),
+        "inline hint should still respect hard growth budgets:\n{budgeted_dumped}"
+    );
+    assert_eq!(budgeted_stats.full_calls_inlined, 0);
+    assert!(budgeted_stats.skipped_budget > 0);
 }
 
 #[test]

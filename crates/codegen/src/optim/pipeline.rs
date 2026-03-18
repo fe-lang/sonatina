@@ -615,7 +615,7 @@ mod tests {
         builder::test_util::*,
         inst::{arith::Add, control_flow::Return},
         ir_writer::FuncWriter,
-        module::FuncHints,
+        module::{FuncHints, InlineHint},
         prelude::*,
     };
     use sonatina_parser::parse_module;
@@ -1784,6 +1784,78 @@ func public %caller(v0.i32) -> i32 {
                 assert!(
                     dumped.contains("call %id"),
                     "NOINLINE hint should survive the {name} pipeline:\n{dumped}"
+                );
+            });
+        }
+    }
+
+    #[test]
+    fn optimized_pipelines_treat_inline_hint_as_strong_preference() {
+        let source = r#"
+target = "evm-ethereum-london"
+
+func private %costly(v0.i1, v1.i32) -> i32 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        return v1;
+
+    block2:
+        v2.i32 = add v1 1.i32;
+        return v2;
+}
+
+func public %caller(v0.i1, v1.i32) -> i32 {
+    block0:
+        v2.i32 = call %costly v0 v1;
+        v3.i32 = call %costly v0 v2;
+        return v3;
+}
+"#;
+
+        for (name, pipeline) in [("size", Pipeline::size()), ("speed", Pipeline::speed())] {
+            let mut baseline = parse_module(source).expect("parse should succeed").module;
+            let caller = baseline
+                .funcs()
+                .into_iter()
+                .find(|&func_ref| {
+                    baseline
+                        .ctx
+                        .func_sig(func_ref, |sig| sig.name() == "caller")
+                })
+                .expect("caller function should exist");
+
+            pipeline.run(&mut baseline);
+
+            baseline.func_store.view(caller, |func| {
+                let dumped = FuncWriter::new(caller, func).dump_string();
+                assert!(
+                    dumped.contains("call %costly"),
+                    "baseline {name} pipeline should leave the costly helper uninlined:\n{dumped}"
+                );
+            });
+
+            let mut hinted = parse_module(source).expect("parse should succeed").module;
+            let costly = hinted
+                .funcs()
+                .into_iter()
+                .find(|&func_ref| hinted.ctx.func_sig(func_ref, |sig| sig.name() == "costly"))
+                .expect("costly function should exist");
+            let caller = hinted
+                .funcs()
+                .into_iter()
+                .find(|&func_ref| hinted.ctx.func_sig(func_ref, |sig| sig.name() == "caller"))
+                .expect("caller function should exist");
+
+            hinted.ctx.set_inline_hint(costly, InlineHint::Inline);
+            pipeline.run(&mut hinted);
+
+            hinted.func_store.view(caller, |func| {
+                let dumped = FuncWriter::new(caller, func).dump_string();
+                assert!(
+                    !dumped.contains("call %costly"),
+                    "inline hint should force the {name} pipeline past heuristic cost:\n{dumped}"
                 );
             });
         }

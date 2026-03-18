@@ -37,6 +37,57 @@ bitflags! {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum InlineHint {
+    #[default]
+    Auto,
+    Inline,
+    Always,
+    Never,
+}
+
+impl FuncHints {
+    const INLINE_MASK_BITS: u16 =
+        Self::NOINLINE.bits() | Self::ALWAYSINLINE.bits() | Self::INLINEHINT.bits();
+
+    fn inline_bits(self) -> Self {
+        Self::from_bits_retain(self.bits() & Self::INLINE_MASK_BITS)
+    }
+
+    pub fn inline_hint(self) -> InlineHint {
+        match self.inline_bits() {
+            hints if hints.is_empty() => InlineHint::Auto,
+            hints if hints == Self::INLINEHINT => InlineHint::Inline,
+            hints if hints == Self::ALWAYSINLINE => InlineHint::Always,
+            hints if hints == Self::NOINLINE => InlineHint::Never,
+            hints => {
+                debug_assert!(
+                    false,
+                    "conflicting inline hints stored in FuncHints: {hints:?}"
+                );
+                if hints.contains(Self::NOINLINE) {
+                    InlineHint::Never
+                } else if hints.contains(Self::ALWAYSINLINE) {
+                    InlineHint::Always
+                } else {
+                    InlineHint::Inline
+                }
+            }
+        }
+    }
+
+    pub fn with_inline_hint(mut self, hint: InlineHint) -> Self {
+        self.remove(Self::from_bits_retain(Self::INLINE_MASK_BITS));
+        match hint {
+            InlineHint::Auto => {}
+            InlineHint::Inline => self.insert(Self::INLINEHINT),
+            InlineHint::Always => self.insert(Self::ALWAYSINLINE),
+            InlineHint::Never => self.insert(Self::NOINLINE),
+        }
+        self
+    }
+}
+
 pub struct Module {
     pub func_store: FuncStore,
     pub ctx: ModuleCtx,
@@ -317,6 +368,10 @@ impl ModuleCtx {
         self.func_hints.read().unwrap().contains_key(&func_ref)
     }
 
+    pub fn inline_hint(&self, func_ref: FuncRef) -> InlineHint {
+        self.func_hints(func_ref).inline_hint()
+    }
+
     pub fn set_all_func_hints(&self, new: FxHashMap<FuncRef, FuncHints>) {
         *self.func_hints.write().unwrap() = new;
     }
@@ -330,8 +385,33 @@ impl ModuleCtx {
             .or_insert(hints);
     }
 
+    pub fn set_inline_hint(&self, func_ref: FuncRef, hint: InlineHint) {
+        let mut hints = self.func_hints.write().unwrap();
+        let remove = {
+            let entry = hints.entry(func_ref).or_default();
+            *entry = entry.with_inline_hint(hint);
+            entry.is_empty()
+        };
+        if remove {
+            hints.remove(&func_ref);
+        }
+    }
+
     pub fn clear_func_hints(&self, func_ref: FuncRef) {
         self.func_hints.write().unwrap().remove(&func_ref);
+    }
+
+    pub fn clear_inline_hint(&self, func_ref: FuncRef) {
+        let mut hints = self.func_hints.write().unwrap();
+        let remove = if let Some(entry) = hints.get_mut(&func_ref) {
+            *entry = entry.with_inline_hint(InlineHint::Auto);
+            entry.is_empty()
+        } else {
+            false
+        };
+        if remove {
+            hints.remove(&func_ref);
+        }
     }
 
     pub fn clear_func_metadata(&self, func_ref: FuncRef) {
