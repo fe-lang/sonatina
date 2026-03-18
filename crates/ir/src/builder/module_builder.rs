@@ -236,7 +236,7 @@ mod tests {
             control_flow::{Call, Return},
         },
         isa::Isa,
-        module::{FuncAttrs, FuncHints},
+        module::{FuncAttrs, FuncHints, InlineHint},
         types::Type,
     };
 
@@ -466,5 +466,24 @@ mod tests {
         let hints = builder.ctx.func_hints(func_ref);
         assert!(hints.contains(FuncHints::NOINLINE));
         assert!(hints.contains(FuncHints::INLINEHINT));
+    }
+
+    #[test]
+    fn set_inline_hint_replaces_existing_policy_and_preserves_other_hints() {
+        let builder = test_module_builder();
+        let sig = Signature::new("f", Linkage::Private, &[], &[]);
+        let func_ref = builder.declare_function(sig).unwrap();
+
+        builder.ctx.set_inline_hint(func_ref, InlineHint::Always);
+        assert_eq!(builder.ctx.inline_hint(func_ref), InlineHint::Always);
+        assert_eq!(builder.ctx.func_hints(func_ref), FuncHints::ALWAYSINLINE);
+
+        builder.ctx.set_inline_hint(func_ref, InlineHint::Never);
+        assert_eq!(builder.ctx.func_hints(func_ref), FuncHints::NOINLINE);
+        assert_eq!(builder.ctx.inline_hint(func_ref), InlineHint::Never);
+
+        builder.ctx.clear_inline_hint(func_ref);
+        assert_eq!(builder.ctx.inline_hint(func_ref), InlineHint::Auto);
+        assert_eq!(builder.ctx.func_hints(func_ref), FuncHints::empty());
     }
 }
