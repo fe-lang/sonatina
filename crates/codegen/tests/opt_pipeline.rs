@@ -137,6 +137,34 @@ func public %entry(v0.i256) -> i256 {
 }
 
 #[test]
+fn sccp_folds_width_sensitive_evm_saturating_constants() {
+    let (module, func_ref) = parse_test_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+func public %entry() -> i256 {
+    block0:
+        v0.i256 = evm_uaddsat 255.i256 1.i256 i8;
+        v1.i1 = eq v0 255.i256;
+        br v1 block1 block2;
+
+    block1:
+        return v0;
+
+    block2:
+        return 0.i256;
+}
+"#,
+    );
+    module.func_store.modify(func_ref, |func| {
+        let mut cfg = ControlFlowGraph::new();
+        SccpSolver::new().run(func, &mut cfg);
+    });
+    assert_func_not_contains(&module, func_ref, "evm_uaddsat");
+    assert_fast_verified(&module);
+}
+
+#[test]
 fn sccp_folds_snego_zero_identity() {
     let (module, func_ref) = parse_test_module(
         r#"

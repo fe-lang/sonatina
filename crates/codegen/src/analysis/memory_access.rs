@@ -36,6 +36,7 @@ pub enum KeyExpr {
         opcode: &'static str,
         result_idx: u16,
         ty: Type,
+        extra_ty: Option<Type>,
         lhs: ValueKey,
         rhs: ValueKey,
     },
@@ -625,6 +626,7 @@ impl MemoryAccessAnalysis {
                     opcode: key.opcode_text(),
                     result_idx,
                     ty,
+                    extra_ty: key.extra_ty(),
                     lhs,
                     rhs,
                 }))
@@ -789,7 +791,7 @@ mod tests {
             arith::Add,
             control_flow::Return,
             data::{Alloca, Mload},
-            evm::{EvmMalloc, EvmSload},
+            evm::{EvmMalloc, EvmSload, EvmUaddsat},
         },
         isa::Isa,
     };
@@ -1017,6 +1019,36 @@ mod tests {
         assert_eq!(
             MemoryAccessAnalysis::new().alias(&key0, &key1),
             AliasResult::MustAlias
+        );
+    }
+
+    #[test]
+    fn keyed_access_distinguishes_width_sensitive_evm_saturating_exprs() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[Type::I256, Type::I256], Type::Unit);
+        let is = evm.inst_set();
+
+        let block = builder.append_block();
+        builder.switch_to_block(block);
+
+        let lhs = builder.args()[0];
+        let rhs = builder.args()[1];
+        let key0 = builder.insert_inst_with(|| EvmUaddsat::new(is, lhs, rhs, Type::I8), Type::I256);
+        let key1 =
+            builder.insert_inst_with(|| EvmUaddsat::new(is, lhs, rhs, Type::I16), Type::I256);
+        let load0 = builder.insert_inst_with(|| EvmSload::new(is, key0), Type::I256);
+        let load1 = builder.insert_inst_with(|| EvmSload::new(is, key1), Type::I256);
+        let _ = (load0, load1);
+        builder.insert_inst_no_result_with(|| Return::new_unit(is));
+        builder.seal_all();
+
+        let insts: Vec<_> = builder.func.layout.iter_inst(block).collect();
+        let key0 = single_key(&builder.func, insts[2]);
+        let key1 = single_key(&builder.func, insts[3]);
+
+        assert_eq!(
+            MemoryAccessAnalysis::new().alias(&key0, &key1),
+            AliasResult::MayAlias
         );
     }
 
