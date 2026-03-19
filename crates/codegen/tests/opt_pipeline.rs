@@ -488,6 +488,86 @@ func public %entry(v0.i256, v1.i256) -> i256 {
 }
 
 #[test]
+fn gvn_folds_width_sensitive_evm_saturating_constants() {
+    let (module, func_ref) = parse_test_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+func public %entry() -> i256 {
+    block0:
+        v0.i256 = evm_umulsat 200.i256 2.i256 i8;
+        v1.i256 = evm_ssubsat -128.i256 1.i256 i8;
+        v2.i256 = add v0 v1;
+        return v2;
+}
+"#,
+    );
+    module.func_store.modify(func_ref, |func| {
+        let mut cfg = ControlFlowGraph::new();
+        let mut domtree = DomTree::new();
+        GvnSolver::new().run(func, &mut cfg, &mut domtree);
+    });
+    let dumped = module.func_store.view(func_ref, |func| {
+        FuncWriter::new(func_ref, func).dump_string()
+    });
+    assert!(
+        dumped.contains("return 127.i256;"),
+        "unexpected GVN output:\n{dumped}"
+    );
+    assert_eq!(
+        dumped.matches("evm_umulsat").count(),
+        0,
+        "unexpected GVN output:\n{dumped}"
+    );
+    assert_eq!(
+        dumped.matches("evm_ssubsat").count(),
+        0,
+        "unexpected GVN output:\n{dumped}"
+    );
+    assert_fast_verified(&module);
+}
+
+#[test]
+fn gvn_cses_commutative_evm_saturating_ops() {
+    let (module, func_ref) = parse_test_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+func public %entry(v0.i256, v1.i256) -> i256 {
+    block0:
+        v2.i256 = evm_uaddsat v0 v1 i8;
+        v3.i256 = evm_uaddsat v1 v0 i8;
+        v4.i256 = evm_umulsat v0 v1 i8;
+        v5.i256 = evm_umulsat v1 v0 i8;
+        v6.i256 = add v2 v3;
+        v7.i256 = add v4 v5;
+        v8.i256 = add v6 v7;
+        return v8;
+}
+"#,
+    );
+    module.func_store.modify(func_ref, |func| {
+        let mut cfg = ControlFlowGraph::new();
+        let mut domtree = DomTree::new();
+        GvnSolver::new().run(func, &mut cfg, &mut domtree);
+    });
+    let dumped = module.func_store.view(func_ref, |func| {
+        FuncWriter::new(func_ref, func).dump_string()
+    });
+    assert_eq!(
+        dumped.matches("evm_uaddsat").count(),
+        1,
+        "unexpected GVN output:\n{dumped}"
+    );
+    assert_eq!(
+        dumped.matches("evm_umulsat").count(),
+        1,
+        "unexpected GVN output:\n{dumped}"
+    );
+    assert_fast_verified(&module);
+}
+
+#[test]
 fn standalone_function_passes_support_live_multi_result_input() {
     let (sccp_module, sccp_func) = parse_test_module(STANDALONE_MULTI_RESULT_SRC);
     sccp_module.func_store.modify(sccp_func, |func| {

@@ -188,11 +188,15 @@ impl OwnedInstKey {
                     | BinaryInstKind::Uaddsat
                     | BinaryInstKind::Saddo
                     | BinaryInstKind::Saddsat
+                    | BinaryInstKind::EvmUaddsat
+                    | BinaryInstKind::EvmSaddsat
                     | BinaryInstKind::Mul
                     | BinaryInstKind::Umulo
                     | BinaryInstKind::Umulsat
                     | BinaryInstKind::Smulo
                     | BinaryInstKind::Smulsat
+                    | BinaryInstKind::EvmUmulsat
+                    | BinaryInstKind::EvmSmulsat
                     | BinaryInstKind::Eq
                     | BinaryInstKind::Ne
                     | BinaryInstKind::And

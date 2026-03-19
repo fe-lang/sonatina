@@ -51,6 +51,27 @@ fn inst_to_gvn_key(func: &Function, inst_id: InstId) -> OwnedInstKey {
     inst.owned_key(&result_tys)
 }
 
+fn fold_evm_saturating(
+    kind: BinaryInstKind,
+    lhs: Immediate,
+    rhs: Immediate,
+    sat_ty: Type,
+    result_ty: Type,
+) -> Option<Immediate> {
+    let lhs = lhs.trunc(sat_ty);
+    let rhs = rhs.trunc(sat_ty);
+
+    match kind {
+        BinaryInstKind::EvmUaddsat => Some(lhs.saturating_uadd(rhs).zext(result_ty)),
+        BinaryInstKind::EvmSaddsat => Some(lhs.saturating_sadd(rhs).sext(result_ty)),
+        BinaryInstKind::EvmUsubsat => Some(lhs.saturating_usub(rhs).zext(result_ty)),
+        BinaryInstKind::EvmSsubsat => Some(lhs.saturating_ssub(rhs).sext(result_ty)),
+        BinaryInstKind::EvmUmulsat => Some(lhs.saturating_umul(rhs).zext(result_ty)),
+        BinaryInstKind::EvmSmulsat => Some(lhs.saturating_smul(rhs).sext(result_ty)),
+        _ => None,
+    }
+}
+
 /// A GVN solver.
 #[derive(Debug)]
 pub struct GvnSolver {
@@ -1087,7 +1108,13 @@ impl GvnSolver {
                 | BinaryInstKind::EvmUsubsat
                 | BinaryInstKind::EvmSsubsat
                 | BinaryInstKind::EvmUmulsat
-                | BinaryInstKind::EvmSmulsat => return None,
+                | BinaryInstKind::EvmSmulsat => fold_evm_saturating(
+                    kind,
+                    func.dfg.value_imm(lhs)?,
+                    func.dfg.value_imm(rhs)?,
+                    insn_expr.extra_ty()?,
+                    *insn_expr.result_tys().get(result_idx)?,
+                )?,
                 BinaryInstKind::EvmExp | BinaryInstKind::EvmByte => return None,
             }
         } else if let InstClassKind::Cast(kind) = insn_expr.kind() {
