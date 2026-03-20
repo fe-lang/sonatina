@@ -3910,8 +3910,6 @@ fn emit_narrow_signed_saturating_binary(ctx: &mut Lower<OpCode>, op: OpCode, bit
     ctx.push(OpCode::SAR);
     push_bytes(ctx, &u256_to_be(&smax));
     ctx.push(OpCode::XOR);
-    push_bytes(ctx, &u256_to_be(&low_bits_mask(bits).unwrap()));
-    ctx.push(OpCode::AND);
     ctx.push(OpCode::SWAP1);
     ctx.push(OpCode::POP);
 

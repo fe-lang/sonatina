@@ -31,7 +31,11 @@ func public %entry() {
 
     block5:
         v8.i1 = eq 5.i256 v0;
-        br v8 block15 block17;
+        br v8 block15 block6;
+
+    block6:
+        v35.i1 = eq 6.i256 v0;
+        br v35 block18 block17;
 
     block10:
         v9.i8 = trunc v1 i8;
@@ -74,6 +78,11 @@ func public %entry() {
         v31.i128 = smulsat v29 v30;
         v32.i1 = eq 170141183460469231731687303715884105727.i128 v31;
         br v32 block16 block17;
+
+    block18:
+        v36.i256 = evm_ssubsat v1 v2 i8;
+        v37.i1 = eq -128.i256 v36;
+        br v37 block16 block17;
 
     block16:
         mstore 0.i256 1.i256 i256;

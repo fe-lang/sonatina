@@ -632,6 +632,17 @@ impl<'a> FunctionLegalizer<'a> {
         Self::scalar_type_for_width(width)
     }
 
+    fn replace_with_canonicalized_narrow_signed_sat<I: Inst>(
+        &mut self,
+        inst: InstId,
+        data: I,
+        width: ScalarWidth,
+    ) {
+        let raw = self.insert_before_one(inst, data, Type::I256, Some(ScalarWidth::Full256));
+        let result = self.canonicalize_to_width(inst, raw, width);
+        self.replace_with_aliases(inst, &[result]);
+    }
+
     fn min_value_for_width(&mut self, width: ScalarWidth) -> ValueId {
         match width {
             ScalarWidth::Bool => self.imm_for_width(U256::one(), width),
@@ -1132,9 +1143,10 @@ impl<'a> FunctionLegalizer<'a> {
         }
 
         let ty = self.saturating_scalar_type(inst);
-        self.func.dfg.replace_inst(
+        self.replace_with_canonicalized_narrow_signed_sat(
             inst,
-            Box::new(EvmSaddsat::new(self.evm_inst_set(), lhs, rhs, ty)),
+            EvmSaddsat::new(self.evm_inst_set(), lhs, rhs, ty),
+            width,
         );
     }
 
@@ -1188,9 +1200,10 @@ impl<'a> FunctionLegalizer<'a> {
         }
 
         let ty = self.saturating_scalar_type(inst);
-        self.func.dfg.replace_inst(
+        self.replace_with_canonicalized_narrow_signed_sat(
             inst,
-            Box::new(EvmSsubsat::new(self.evm_inst_set(), lhs, rhs, ty)),
+            EvmSsubsat::new(self.evm_inst_set(), lhs, rhs, ty),
+            width,
         );
     }
 
@@ -1300,9 +1313,10 @@ impl<'a> FunctionLegalizer<'a> {
         }
 
         let ty = self.saturating_scalar_type(inst);
-        self.func.dfg.replace_inst(
+        self.replace_with_canonicalized_narrow_signed_sat(
             inst,
-            Box::new(EvmSmulsat::new(self.evm_inst_set(), lhs, rhs, ty)),
+            EvmSmulsat::new(self.evm_inst_set(), lhs, rhs, ty),
+            width,
         );
     }
 
