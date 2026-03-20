@@ -250,11 +250,11 @@ macro_rules! impl_evm_binary_saturating_rule {
                             .with_note(format!("lhs {:?}, rhs {:?}", lhs_ty, rhs_ty)),
                         );
                     }
-                    if !sat_ty.is_integral() || sat_ty == Type::I1 {
+                    if !sat_ty.is_integral() || matches!(sat_ty, Type::I1 | Type::I256) {
                         verifier.emit(
                             Diagnostic::error(
                                 DiagnosticCode::InstOperandTypeMismatch,
-                                format!("{} type must be a non-i1 integer", $opname),
+                                format!("{} type must be a narrow non-i1 integer", $opname),
                                 location.clone(),
                             )
                             .with_note(format!("type {:?}", sat_ty)),

@@ -752,6 +752,25 @@ func public %bad_evm_sdivo(v0.i32, v1.i32) -> unit {
 }
 
 #[test]
+fn evm_saturating_ops_reject_i256_width_type() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+func public %bad_evm_uaddsat(v0.i256, v1.i256) -> unit {
+    block0:
+        v2.i256 = evm_uaddsat v0 v1 i256;
+        return;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&parsed.module, &cfg);
+
+    assert!(has_code(&report, "IR0600"), "expected IR0600, got {report}");
+}
+
+#[test]
 fn uaddo_missing_results_are_checked() {
     let src = r#"
 target = "evm-ethereum-london"
