@@ -192,6 +192,49 @@ func public %entry() -> i256 {
 }
 
 #[test]
+fn sccp_preserves_maybe_undef_saturating_zero_identities() {
+    let (module, func_ref) = parse_test_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+func public %entry(v0.i1) -> i8 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        jump block3;
+
+    block2:
+        jump block3;
+
+    block3:
+        v1.i8 = phi (undef.i8 block1) (7.i8 block2);
+        v2.i8 = usubsat 0.i8 v1;
+        v3.i8 = umulsat v1 0.i8;
+        v4.i8 = add v2 v3;
+        return v4;
+}
+"#,
+    );
+    module.func_store.modify(func_ref, |func| {
+        let mut cfg = ControlFlowGraph::new();
+        SccpSolver::new().run(func, &mut cfg);
+    });
+    let dumped = module.func_store.view(func_ref, |func| {
+        FuncWriter::new(func_ref, func).dump_string()
+    });
+    assert!(
+        dumped.contains("usubsat"),
+        "maybe-undef usubsat should not fold to zero:\n{dumped}"
+    );
+    assert!(
+        dumped.contains("umulsat"),
+        "maybe-undef umulsat should not fold to zero:\n{dumped}"
+    );
+    assert_fast_verified(&module);
+}
+
+#[test]
 fn sccp_prunes_complex_loop_without_adce_block_delete_panic() {
     let (module, func_ref) = parse_test_module(
         r#"
@@ -563,6 +606,50 @@ func public %entry(v0.i256, v1.i256) -> i256 {
         dumped.matches("evm_umulsat").count(),
         1,
         "unexpected GVN output:\n{dumped}"
+    );
+    assert_fast_verified(&module);
+}
+
+#[test]
+fn gvn_preserves_maybe_undef_saturating_zero_identities() {
+    let (module, func_ref) = parse_test_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+func public %entry(v0.i1) -> i8 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        jump block3;
+
+    block2:
+        jump block3;
+
+    block3:
+        v1.i8 = phi (undef.i8 block1) (7.i8 block2);
+        v2.i8 = usubsat 0.i8 v1;
+        v3.i8 = umulsat v1 0.i8;
+        v4.i8 = add v2 v3;
+        return v4;
+}
+"#,
+    );
+    module.func_store.modify(func_ref, |func| {
+        let mut cfg = ControlFlowGraph::new();
+        let mut domtree = DomTree::new();
+        GvnSolver::new().run(func, &mut cfg, &mut domtree);
+    });
+    let dumped = module.func_store.view(func_ref, |func| {
+        FuncWriter::new(func_ref, func).dump_string()
+    });
+    assert!(
+        dumped.contains("usubsat"),
+        "maybe-undef usubsat should not fold to zero:\n{dumped}"
+    );
+    assert!(
+        dumped.contains("umulsat"),
+        "maybe-undef umulsat should not fold to zero:\n{dumped}"
     );
     assert_fast_verified(&module);
 }

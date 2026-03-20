@@ -415,6 +415,7 @@ fn simplify_saturating_add(
 fn simplify_saturating_sub(
     func: &Function,
     lattice: &SecondaryMap<ValueId, LatticeCell>,
+    may_be_undef: &SecondaryMap<ValueId, bool>,
     lhs: ValueId,
     rhs: ValueId,
     unsigned: bool,
@@ -423,7 +424,10 @@ fn simplify_saturating_sub(
     if known_imm(func, lattice, rhs) == Some(Immediate::zero(ty)) {
         return SimplifyAction::Copy(lhs);
     }
-    if unsigned && known_imm(func, lattice, lhs) == Some(Immediate::zero(ty)) {
+    if unsigned
+        && known_imm(func, lattice, lhs) == Some(Immediate::zero(ty))
+        && !is_may_be_undef(func, may_be_undef, rhs)
+    {
         return SimplifyAction::Const(Immediate::zero(ty));
     }
     SimplifyAction::NoChange
@@ -432,6 +436,7 @@ fn simplify_saturating_sub(
 fn simplify_saturating_mul(
     func: &Function,
     lattice: &SecondaryMap<ValueId, LatticeCell>,
+    may_be_undef: &SecondaryMap<ValueId, bool>,
     lhs: ValueId,
     rhs: ValueId,
 ) -> SimplifyAction {
@@ -439,7 +444,10 @@ fn simplify_saturating_mul(
     let zero = Immediate::zero(ty);
     let one = Immediate::one(ty);
 
-    if known_imm(func, lattice, lhs) == Some(zero) || known_imm(func, lattice, rhs) == Some(zero) {
+    if (known_imm(func, lattice, lhs) == Some(zero) && !is_may_be_undef(func, may_be_undef, rhs))
+        || (known_imm(func, lattice, rhs) == Some(zero)
+            && !is_may_be_undef(func, may_be_undef, lhs))
+    {
         return SimplifyAction::Const(zero);
     }
     if known_imm(func, lattice, lhs) == Some(one) {
@@ -577,6 +585,7 @@ pub(super) fn simplify_inst(
                 return wrap_action(simplify_saturating_sub(
                     func,
                     lattice,
+                    may_be_undef,
                     *lhs,
                     *rhs,
                     matches!(kind, BinaryInstKind::Usubsat),
@@ -586,7 +595,13 @@ pub(super) fn simplify_inst(
                 return simplify_umulo(func, lattice, *lhs, *rhs, results_len);
             }
             if matches!(kind, BinaryInstKind::Umulsat | BinaryInstKind::Smulsat) {
-                return wrap_action(simplify_saturating_mul(func, lattice, *lhs, *rhs));
+                return wrap_action(simplify_saturating_mul(
+                    func,
+                    lattice,
+                    may_be_undef,
+                    *lhs,
+                    *rhs,
+                ));
             }
             if matches!(kind, BinaryInstKind::EvmUdivo | BinaryInstKind::EvmSdivo) {
                 return simplify_evm_divo(func, lattice, *lhs, *rhs, results_len);

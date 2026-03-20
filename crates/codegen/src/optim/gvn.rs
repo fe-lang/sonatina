@@ -1260,7 +1260,7 @@ impl GvnSolver {
                 if rhs_imm == Some(zero) {
                     return Some(GvnInsn::Value(lhs));
                 }
-                if lhs_imm == Some(zero) {
+                if lhs_imm == Some(zero) && !self.may_be_undef(func, rhs) {
                     return Some(GvnInsn::Value(self.make_imm(&mut func.dfg, zero)));
                 }
             }
@@ -1270,7 +1270,9 @@ impl GvnSolver {
                 }
             }
             BinaryInstKind::Umulsat | BinaryInstKind::Smulsat => {
-                if lhs_imm == Some(zero) || rhs_imm == Some(zero) {
+                if (lhs_imm == Some(zero) && !self.may_be_undef(func, rhs))
+                    || (rhs_imm == Some(zero) && !self.may_be_undef(func, lhs))
+                {
                     return Some(GvnInsn::Value(self.make_imm(&mut func.dfg, zero)));
                 }
                 if lhs_imm == Some(one) {
