@@ -3869,7 +3869,16 @@ fn emit_narrow_unsigned_saturating_binary(
     saturated: U256,
 ) {
     debug_assert!((8..256).contains(&bits));
+    let mask = low_bits_mask(bits).unwrap();
     let limit = U256::one() << (bits as usize);
+
+    // Direct EVM saturating ops operate on the truncated narrow-width inputs.
+    push_bytes(ctx, &u256_to_be(&mask));
+    ctx.push(OpCode::AND);
+    ctx.push(OpCode::SWAP1);
+    push_bytes(ctx, &u256_to_be(&mask));
+    ctx.push(OpCode::AND);
+    ctx.push(OpCode::SWAP1);
 
     ctx.push(op);
     ctx.push(OpCode::DUP1);

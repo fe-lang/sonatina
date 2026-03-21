@@ -20,6 +20,15 @@
 #! evm.case: evm_ssubsat_i8_signext_i256
 #!   calldata: u256(6) u256(136) u256(20)
 #!   expect: return u256(1)
+#! evm.case: evm_uaddsat_i8_truncates_i256_inputs
+#!   calldata: u256(7) u256(256) u256(0)
+#!   expect: return u256(1)
+#! evm.case: evm_usubsat_i8_truncates_i256_inputs
+#!   calldata: u256(8) u256(256) u256(1)
+#!   expect: return u256(1)
+#! evm.case: evm_umulsat_i8_truncates_i256_inputs
+#!   calldata: u256(9) u256(256) u256(2)
+#!   expect: return u256(1)
 
 target = "evm-ethereum-osaka"
 
@@ -53,7 +62,19 @@ func public %entry() {
 
     block6:
         v35.i1 = eq v0 6.i256;
-        br v35 block18 block17;
+        br v35 block18 block7;
+
+    block7:
+        v38.i1 = eq v0 7.i256;
+        br v38 block19 block8;
+
+    block8:
+        v39.i1 = eq v0 8.i256;
+        br v39 block20 block9;
+
+    block9:
+        v40.i1 = eq v0 9.i256;
+        br v40 block21 block17;
 
     block10:
         v9.i8 = trunc v1 i8;
@@ -101,6 +122,21 @@ func public %entry() {
         v36.i256 = evm_ssubsat v1 v2 i8;
         v37.i1 = eq v36 -128.i256;
         br v37 block16 block17;
+
+    block19:
+        v41.i256 = evm_uaddsat v1 v2 i8;
+        v42.i1 = eq v41 0.i256;
+        br v42 block16 block17;
+
+    block20:
+        v43.i256 = evm_usubsat v1 v2 i8;
+        v44.i1 = eq v43 0.i256;
+        br v44 block16 block17;
+
+    block21:
+        v45.i256 = evm_umulsat v1 v2 i8;
+        v46.i1 = eq v45 0.i256;
+        br v46 block16 block17;
 
     block16:
         mstore 0.i256 1.i256 i256;
