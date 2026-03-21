@@ -3,13 +3,19 @@ use ir::inst::arith::*;
 super::impl_inst_build! {Neg, (arg: ValueId)}
 super::impl_inst_build! {Add, (lhs: ValueId, rhs: ValueId)}
 super::impl_inst_build! {Uaddo, (lhs: ValueId, rhs: ValueId)}
+super::impl_inst_build! {Uaddsat, (lhs: ValueId, rhs: ValueId)}
 super::impl_inst_build! {Saddo, (lhs: ValueId, rhs: ValueId)}
+super::impl_inst_build! {Saddsat, (lhs: ValueId, rhs: ValueId)}
 super::impl_inst_build! {Mul, (lhs: ValueId, rhs: ValueId)}
 super::impl_inst_build! {Sub, (lhs: ValueId, rhs: ValueId)}
 super::impl_inst_build! {Usubo, (lhs: ValueId, rhs: ValueId)}
+super::impl_inst_build! {Usubsat, (lhs: ValueId, rhs: ValueId)}
 super::impl_inst_build! {Ssubo, (lhs: ValueId, rhs: ValueId)}
+super::impl_inst_build! {Ssubsat, (lhs: ValueId, rhs: ValueId)}
 super::impl_inst_build! {Umulo, (lhs: ValueId, rhs: ValueId)}
+super::impl_inst_build! {Umulsat, (lhs: ValueId, rhs: ValueId)}
 super::impl_inst_build! {Smulo, (lhs: ValueId, rhs: ValueId)}
+super::impl_inst_build! {Smulsat, (lhs: ValueId, rhs: ValueId)}
 super::impl_inst_build! {Snego, (arg: ValueId)}
 super::impl_inst_build! {Sdiv, (lhs: ValueId, rhs: ValueId)}
 super::impl_inst_build! {Udiv, (lhs: ValueId, rhs: ValueId)}

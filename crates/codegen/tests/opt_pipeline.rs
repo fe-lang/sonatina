@@ -137,6 +137,34 @@ func public %entry(v0.i256) -> i256 {
 }
 
 #[test]
+fn sccp_folds_width_sensitive_evm_saturating_constants() {
+    let (module, func_ref) = parse_test_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+func public %entry() -> i256 {
+    block0:
+        v0.i256 = evm_uaddsat 255.i256 1.i256 i8;
+        v1.i1 = eq v0 255.i256;
+        br v1 block1 block2;
+
+    block1:
+        return v0;
+
+    block2:
+        return 0.i256;
+}
+"#,
+    );
+    module.func_store.modify(func_ref, |func| {
+        let mut cfg = ControlFlowGraph::new();
+        SccpSolver::new().run(func, &mut cfg);
+    });
+    assert_func_not_contains(&module, func_ref, "evm_uaddsat");
+    assert_fast_verified(&module);
+}
+
+#[test]
 fn sccp_folds_snego_zero_identity() {
     let (module, func_ref) = parse_test_module(
         r#"
@@ -160,6 +188,49 @@ func public %entry() -> i256 {
         SccpSolver::new().run(func, &mut cfg);
     });
     assert_func_not_contains(&module, func_ref, "snego");
+    assert_fast_verified(&module);
+}
+
+#[test]
+fn sccp_preserves_maybe_undef_saturating_zero_identities() {
+    let (module, func_ref) = parse_test_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+func public %entry(v0.i1) -> i8 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        jump block3;
+
+    block2:
+        jump block3;
+
+    block3:
+        v1.i8 = phi (undef.i8 block1) (7.i8 block2);
+        v2.i8 = usubsat 0.i8 v1;
+        v3.i8 = umulsat v1 0.i8;
+        v4.i8 = add v2 v3;
+        return v4;
+}
+"#,
+    );
+    module.func_store.modify(func_ref, |func| {
+        let mut cfg = ControlFlowGraph::new();
+        SccpSolver::new().run(func, &mut cfg);
+    });
+    let dumped = module.func_store.view(func_ref, |func| {
+        FuncWriter::new(func_ref, func).dump_string()
+    });
+    assert!(
+        dumped.contains("usubsat"),
+        "maybe-undef usubsat should not fold to zero:\n{dumped}"
+    );
+    assert!(
+        dumped.contains("umulsat"),
+        "maybe-undef umulsat should not fold to zero:\n{dumped}"
+    );
     assert_fast_verified(&module);
 }
 
@@ -455,6 +526,130 @@ func public %entry(v0.i256, v1.i256) -> i256 {
         dumped.matches("evm_udivo").count(),
         1,
         "unexpected GVN output:\n{dumped}"
+    );
+    assert_fast_verified(&module);
+}
+
+#[test]
+fn gvn_folds_width_sensitive_evm_saturating_constants() {
+    let (module, func_ref) = parse_test_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+func public %entry() -> i256 {
+    block0:
+        v0.i256 = evm_umulsat 200.i256 2.i256 i8;
+        v1.i256 = evm_ssubsat -128.i256 1.i256 i8;
+        v2.i256 = add v0 v1;
+        return v2;
+}
+"#,
+    );
+    module.func_store.modify(func_ref, |func| {
+        let mut cfg = ControlFlowGraph::new();
+        let mut domtree = DomTree::new();
+        GvnSolver::new().run(func, &mut cfg, &mut domtree);
+    });
+    let dumped = module.func_store.view(func_ref, |func| {
+        FuncWriter::new(func_ref, func).dump_string()
+    });
+    assert!(
+        dumped.contains("return 127.i256;"),
+        "unexpected GVN output:\n{dumped}"
+    );
+    assert_eq!(
+        dumped.matches("evm_umulsat").count(),
+        0,
+        "unexpected GVN output:\n{dumped}"
+    );
+    assert_eq!(
+        dumped.matches("evm_ssubsat").count(),
+        0,
+        "unexpected GVN output:\n{dumped}"
+    );
+    assert_fast_verified(&module);
+}
+
+#[test]
+fn gvn_cses_commutative_evm_saturating_ops() {
+    let (module, func_ref) = parse_test_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+func public %entry(v0.i256, v1.i256) -> i256 {
+    block0:
+        v2.i256 = evm_uaddsat v0 v1 i8;
+        v3.i256 = evm_uaddsat v1 v0 i8;
+        v4.i256 = evm_umulsat v0 v1 i8;
+        v5.i256 = evm_umulsat v1 v0 i8;
+        v6.i256 = add v2 v3;
+        v7.i256 = add v4 v5;
+        v8.i256 = add v6 v7;
+        return v8;
+}
+"#,
+    );
+    module.func_store.modify(func_ref, |func| {
+        let mut cfg = ControlFlowGraph::new();
+        let mut domtree = DomTree::new();
+        GvnSolver::new().run(func, &mut cfg, &mut domtree);
+    });
+    let dumped = module.func_store.view(func_ref, |func| {
+        FuncWriter::new(func_ref, func).dump_string()
+    });
+    assert_eq!(
+        dumped.matches("evm_uaddsat").count(),
+        1,
+        "unexpected GVN output:\n{dumped}"
+    );
+    assert_eq!(
+        dumped.matches("evm_umulsat").count(),
+        1,
+        "unexpected GVN output:\n{dumped}"
+    );
+    assert_fast_verified(&module);
+}
+
+#[test]
+fn gvn_preserves_maybe_undef_saturating_zero_identities() {
+    let (module, func_ref) = parse_test_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+func public %entry(v0.i1) -> i8 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        jump block3;
+
+    block2:
+        jump block3;
+
+    block3:
+        v1.i8 = phi (undef.i8 block1) (7.i8 block2);
+        v2.i8 = usubsat 0.i8 v1;
+        v3.i8 = umulsat v1 0.i8;
+        v4.i8 = add v2 v3;
+        return v4;
+}
+"#,
+    );
+    module.func_store.modify(func_ref, |func| {
+        let mut cfg = ControlFlowGraph::new();
+        let mut domtree = DomTree::new();
+        GvnSolver::new().run(func, &mut cfg, &mut domtree);
+    });
+    let dumped = module.func_store.view(func_ref, |func| {
+        FuncWriter::new(func_ref, func).dump_string()
+    });
+    assert!(
+        dumped.contains("usubsat"),
+        "maybe-undef usubsat should not fold to zero:\n{dumped}"
+    );
+    assert!(
+        dumped.contains("umulsat"),
+        "maybe-undef umulsat should not fold to zero:\n{dumped}"
     );
     assert_fast_verified(&module);
 }

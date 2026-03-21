@@ -36,6 +36,18 @@ impl Interpret for Uaddo {
     }
 }
 
+impl Interpret for Uaddsat {
+    fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
+        state.set_action(Action::Continue);
+
+        let lhs = state.lookup_val(*self.lhs());
+        let rhs = state.lookup_val(*self.rhs());
+        single_result(EvalValue::zip_with_imm(lhs, rhs, |lhs, rhs| {
+            lhs.saturating_uadd(rhs)
+        }))
+    }
+}
+
 impl Interpret for Saddo {
     fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
         state.set_action(Action::Continue);
@@ -48,6 +60,18 @@ impl Interpret for Saddo {
 
         let (sum, overflow) = lhs.overflowing_sadd(rhs);
         smallvec::smallvec![EvalValue::Imm(sum), EvalValue::Imm(overflow.into())]
+    }
+}
+
+impl Interpret for Saddsat {
+    fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
+        state.set_action(Action::Continue);
+
+        let lhs = state.lookup_val(*self.lhs());
+        let rhs = state.lookup_val(*self.rhs());
+        single_result(EvalValue::zip_with_imm(lhs, rhs, |lhs, rhs| {
+            lhs.saturating_sadd(rhs)
+        }))
     }
 }
 
@@ -79,6 +103,18 @@ impl Interpret for Usubo {
     }
 }
 
+impl Interpret for Usubsat {
+    fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
+        state.set_action(Action::Continue);
+
+        let lhs = state.lookup_val(*self.lhs());
+        let rhs = state.lookup_val(*self.rhs());
+        single_result(EvalValue::zip_with_imm(lhs, rhs, |lhs, rhs| {
+            lhs.saturating_usub(rhs)
+        }))
+    }
+}
+
 impl Interpret for Ssubo {
     fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
         state.set_action(Action::Continue);
@@ -91,6 +127,18 @@ impl Interpret for Ssubo {
 
         let (diff, overflow) = lhs.overflowing_ssub(rhs);
         smallvec::smallvec![EvalValue::Imm(diff), EvalValue::Imm(overflow.into())]
+    }
+}
+
+impl Interpret for Ssubsat {
+    fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
+        state.set_action(Action::Continue);
+
+        let lhs = state.lookup_val(*self.lhs());
+        let rhs = state.lookup_val(*self.rhs());
+        single_result(EvalValue::zip_with_imm(lhs, rhs, |lhs, rhs| {
+            lhs.saturating_ssub(rhs)
+        }))
     }
 }
 
@@ -121,6 +169,18 @@ impl Interpret for Umulo {
     }
 }
 
+impl Interpret for Umulsat {
+    fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
+        state.set_action(Action::Continue);
+
+        let lhs = state.lookup_val(*self.lhs());
+        let rhs = state.lookup_val(*self.rhs());
+        single_result(EvalValue::zip_with_imm(lhs, rhs, |lhs, rhs| {
+            lhs.saturating_umul(rhs)
+        }))
+    }
+}
+
 impl Interpret for Smulo {
     fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
         state.set_action(Action::Continue);
@@ -133,6 +193,18 @@ impl Interpret for Smulo {
 
         let (product, overflow) = lhs.overflowing_smul(rhs);
         smallvec::smallvec![EvalValue::Imm(product), EvalValue::Imm(overflow.into())]
+    }
+}
+
+impl Interpret for Smulsat {
+    fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
+        state.set_action(Action::Continue);
+
+        let lhs = state.lookup_val(*self.lhs());
+        let rhs = state.lookup_val(*self.rhs());
+        single_result(EvalValue::zip_with_imm(lhs, rhs, |lhs, rhs| {
+            lhs.saturating_smul(rhs)
+        }))
     }
 }
 
@@ -449,6 +521,59 @@ mod tests {
                 EvalValue::Imm(Immediate::I8(-2)),
                 EvalValue::Imm(Immediate::I1(false))
             ])
+        );
+    }
+
+    #[test]
+    fn saturating_ops_clamp_at_bounds() {
+        let hi = TestHasInst;
+        let lhs = crate::ValueId::from_u32(0);
+        let rhs = crate::ValueId::from_u32(1);
+
+        let mut state = TestState::new([
+            (lhs, EvalValue::Imm(Immediate::I8(120))),
+            (rhs, EvalValue::Imm(Immediate::I8(20))),
+        ]);
+        assert_eq!(
+            Saddsat::new(&hi, lhs, rhs).interpret(&mut state),
+            super::single_result(EvalValue::Imm(Immediate::I8(127)))
+        );
+
+        state.values.insert(lhs, EvalValue::Imm(Immediate::I8(3)));
+        state.values.insert(rhs, EvalValue::Imm(Immediate::I8(5)));
+        assert_eq!(
+            Usubsat::new(&hi, lhs, rhs).interpret(&mut state),
+            super::single_result(EvalValue::Imm(Immediate::I8(0)))
+        );
+
+        state
+            .values
+            .insert(lhs, EvalValue::Imm(Immediate::I8(-120)));
+        state.values.insert(rhs, EvalValue::Imm(Immediate::I8(20)));
+        assert_eq!(
+            Ssubsat::new(&hi, lhs, rhs).interpret(&mut state),
+            super::single_result(EvalValue::Imm(Immediate::I8(-128)))
+        );
+
+        state.values.insert(lhs, EvalValue::Imm(Immediate::I8(-56)));
+        state.values.insert(rhs, EvalValue::Imm(Immediate::I8(3)));
+        assert_eq!(
+            Umulsat::new(&hi, lhs, rhs).interpret(&mut state),
+            super::single_result(EvalValue::Imm(Immediate::I8(-1)))
+        );
+
+        state.values.insert(lhs, EvalValue::Imm(Immediate::I8(100)));
+        state.values.insert(rhs, EvalValue::Imm(Immediate::I8(2)));
+        assert_eq!(
+            Smulsat::new(&hi, lhs, rhs).interpret(&mut state),
+            super::single_result(EvalValue::Imm(Immediate::I8(127)))
+        );
+
+        state.values.insert(lhs, EvalValue::Imm(Immediate::I8(-6)));
+        state.values.insert(rhs, EvalValue::Imm(Immediate::I8(10)));
+        assert_eq!(
+            Uaddsat::new(&hi, lhs, rhs).interpret(&mut state),
+            super::single_result(EvalValue::Imm(Immediate::I8(-1)))
         );
     }
 }

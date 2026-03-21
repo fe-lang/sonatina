@@ -27,13 +27,19 @@ pub enum UnaryInstKind {
 pub enum BinaryInstKind {
     Add,
     Uaddo,
+    Uaddsat,
     Saddo,
+    Saddsat,
     Mul,
     Umulo,
+    Umulsat,
     Smulo,
+    Smulsat,
     Sub,
     Usubo,
+    Usubsat,
     Ssubo,
+    Ssubsat,
     Sdiv,
     Udiv,
     Umod,
@@ -62,6 +68,12 @@ pub enum BinaryInstKind {
     EvmSmod,
     EvmUmodo,
     EvmSmodo,
+    EvmUaddsat,
+    EvmSaddsat,
+    EvmUsubsat,
+    EvmSsubsat,
+    EvmUmulsat,
+    EvmSmulsat,
     EvmExp,
     EvmByte,
 }
@@ -92,6 +104,7 @@ pub struct OwnedInstKey {
     values: SmallVec<[ValueId; 2]>,
     result_tys: SmallVec<[Type; 1]>,
     cast_ty: Option<Type>,
+    extra_ty: Option<Type>,
     phi_args: Vec<(ValueId, BlockId)>,
     callee: Option<FuncRef>,
     opaque_data: Option<OpaqueInstData>,
@@ -114,6 +127,7 @@ impl OwnedInstKey {
             values: inst.collect_values(),
             result_tys: result_tys.iter().copied().collect(),
             cast_ty: cast_ty(inst),
+            extra_ty: inst_extra_ty(inst),
             phi_args: Vec::new(),
             callee: None,
             opaque_data: opaque_data(inst),
@@ -153,6 +167,10 @@ impl OwnedInstKey {
         &self.result_tys
     }
 
+    pub fn extra_ty(&self) -> Option<Type> {
+        self.extra_ty
+    }
+
     pub fn callee(&self) -> Option<FuncRef> {
         self.callee
     }
@@ -167,10 +185,18 @@ impl OwnedInstKey {
             InstClassKind::Binary(
                 BinaryInstKind::Add
                     | BinaryInstKind::Uaddo
+                    | BinaryInstKind::Uaddsat
                     | BinaryInstKind::Saddo
+                    | BinaryInstKind::Saddsat
+                    | BinaryInstKind::EvmUaddsat
+                    | BinaryInstKind::EvmSaddsat
                     | BinaryInstKind::Mul
                     | BinaryInstKind::Umulo
+                    | BinaryInstKind::Umulsat
                     | BinaryInstKind::Smulo
+                    | BinaryInstKind::Smulsat
+                    | BinaryInstKind::EvmUmulsat
+                    | BinaryInstKind::EvmSmulsat
                     | BinaryInstKind::Eq
                     | BinaryInstKind::Ne
                     | BinaryInstKind::And
@@ -301,6 +327,28 @@ fn cast_ty(inst: &dyn Inst) -> Option<Type> {
     None
 }
 
+fn inst_extra_ty(inst: &dyn Inst) -> Option<Type> {
+    if let Some(inst) = downcast_ref::<super::evm::EvmUaddsat>(inst) {
+        return Some(*inst.ty());
+    }
+    if let Some(inst) = downcast_ref::<super::evm::EvmSaddsat>(inst) {
+        return Some(*inst.ty());
+    }
+    if let Some(inst) = downcast_ref::<super::evm::EvmUsubsat>(inst) {
+        return Some(*inst.ty());
+    }
+    if let Some(inst) = downcast_ref::<super::evm::EvmSsubsat>(inst) {
+        return Some(*inst.ty());
+    }
+    if let Some(inst) = downcast_ref::<super::evm::EvmUmulsat>(inst) {
+        return Some(*inst.ty());
+    }
+    if let Some(inst) = downcast_ref::<super::evm::EvmSmulsat>(inst) {
+        return Some(*inst.ty());
+    }
+    None
+}
+
 fn opaque_data(inst: &dyn Inst) -> Option<OpaqueInstData> {
     if let Some(inst) = downcast_ref::<GetFunctionPtr>(inst) {
         return Some(OpaqueInstData::GetFunctionPtr(*inst.func()));
@@ -341,10 +389,11 @@ fn opaque_data(inst: &dyn Inst) -> Option<OpaqueInstData> {
 #[cfg(test)]
 mod tests {
     use crate::{
-        EmbedSymbol, GlobalVariableRef,
+        EmbedSymbol, GlobalVariableRef, Type, ValueId,
         builder::test_util::test_isa,
         inst::{
             data::{GetFunctionPtr, SymAddr, SymSize, SymbolRef},
+            evm::EvmUaddsat,
             inst_set::InstSetBase,
         },
         isa::Isa,
@@ -419,6 +468,21 @@ mod tests {
         assert_ne!(
             OwnedInstKey::from_inst(&by_global, &[]),
             OwnedInstKey::from_inst(&by_embed, &[])
+        );
+    }
+
+    #[test]
+    fn owned_key_distinguishes_width_sensitive_evm_saturating_ops() {
+        let isa = test_isa();
+        let is = isa.inst_set();
+        let lhs = ValueId::from_u32(0);
+        let rhs = ValueId::from_u32(1);
+        let i8 = EvmUaddsat::new(is.has_evm_uaddsat().unwrap(), lhs, rhs, Type::I8);
+        let i16 = EvmUaddsat::new(is.has_evm_uaddsat().unwrap(), lhs, rhs, Type::I16);
+
+        assert_ne!(
+            OwnedInstKey::from_inst(&i8, &[Type::I256]),
+            OwnedInstKey::from_inst(&i16, &[Type::I256])
         );
     }
 }

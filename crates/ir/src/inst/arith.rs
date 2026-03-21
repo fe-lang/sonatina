@@ -23,8 +23,22 @@ pub struct Uaddo {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(kind(binary(Uaddsat)))]
+pub struct Uaddsat {
+    lhs: ValueId,
+    rhs: ValueId,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 #[inst(kind(binary(Saddo)))]
 pub struct Saddo {
+    lhs: ValueId,
+    rhs: ValueId,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(kind(binary(Saddsat)))]
+pub struct Saddsat {
     lhs: ValueId,
     rhs: ValueId,
 }
@@ -51,8 +65,22 @@ pub struct Usubo {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(kind(binary(Usubsat)))]
+pub struct Usubsat {
+    lhs: ValueId,
+    rhs: ValueId,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 #[inst(kind(binary(Ssubo)))]
 pub struct Ssubo {
+    lhs: ValueId,
+    rhs: ValueId,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(kind(binary(Ssubsat)))]
+pub struct Ssubsat {
     lhs: ValueId,
     rhs: ValueId,
 }
@@ -65,8 +93,22 @@ pub struct Umulo {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(kind(binary(Umulsat)))]
+pub struct Umulsat {
+    lhs: ValueId,
+    rhs: ValueId,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 #[inst(kind(binary(Smulo)))]
 pub struct Smulo {
+    lhs: ValueId,
+    rhs: ValueId,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(kind(binary(Smulsat)))]
+pub struct Smulsat {
     lhs: ValueId,
     rhs: ValueId,
 }

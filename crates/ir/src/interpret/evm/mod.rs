@@ -34,6 +34,21 @@ fn u256_to_imm(value: U256, ty: Type) -> Immediate {
     Immediate::from_i256(I256::from(value), ty)
 }
 
+fn narrow_sat_args(lhs: EvalValue, rhs: EvalValue, ty: Type) -> Option<(Immediate, Immediate)> {
+    let (EvalValue::Imm(lhs), EvalValue::Imm(rhs)) = (lhs, rhs) else {
+        return None;
+    };
+    Some((lhs.trunc(ty), rhs.trunc(ty)))
+}
+
+fn zero_extend_i256(value: Immediate) -> EvalValue {
+    EvalValue::Imm(value.zext(Type::I256))
+}
+
+fn sign_extend_i256(value: Immediate) -> EvalValue {
+    EvalValue::Imm(value.sext(Type::I256))
+}
+
 fn evm_addmod(lhs: U256, rhs: U256, modulus: U256) -> U256 {
     if modulus.is_zero() {
         return U256::zero();
@@ -234,6 +249,90 @@ impl Interpret for EvmSmodo {
     }
 }
 
+impl Interpret for EvmUaddsat {
+    fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
+        state.set_action(Action::Continue);
+
+        let lhs = state.lookup_val(*self.lhs());
+        let rhs = state.lookup_val(*self.rhs());
+        let Some((lhs, rhs)) = narrow_sat_args(lhs, rhs, *self.ty()) else {
+            return single_result(EvalValue::Undef);
+        };
+
+        single_result(zero_extend_i256(lhs.saturating_uadd(rhs)))
+    }
+}
+
+impl Interpret for EvmSaddsat {
+    fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
+        state.set_action(Action::Continue);
+
+        let lhs = state.lookup_val(*self.lhs());
+        let rhs = state.lookup_val(*self.rhs());
+        let Some((lhs, rhs)) = narrow_sat_args(lhs, rhs, *self.ty()) else {
+            return single_result(EvalValue::Undef);
+        };
+
+        single_result(sign_extend_i256(lhs.saturating_sadd(rhs)))
+    }
+}
+
+impl Interpret for EvmUsubsat {
+    fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
+        state.set_action(Action::Continue);
+
+        let lhs = state.lookup_val(*self.lhs());
+        let rhs = state.lookup_val(*self.rhs());
+        let Some((lhs, rhs)) = narrow_sat_args(lhs, rhs, *self.ty()) else {
+            return single_result(EvalValue::Undef);
+        };
+
+        single_result(zero_extend_i256(lhs.saturating_usub(rhs)))
+    }
+}
+
+impl Interpret for EvmSsubsat {
+    fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
+        state.set_action(Action::Continue);
+
+        let lhs = state.lookup_val(*self.lhs());
+        let rhs = state.lookup_val(*self.rhs());
+        let Some((lhs, rhs)) = narrow_sat_args(lhs, rhs, *self.ty()) else {
+            return single_result(EvalValue::Undef);
+        };
+
+        single_result(sign_extend_i256(lhs.saturating_ssub(rhs)))
+    }
+}
+
+impl Interpret for EvmUmulsat {
+    fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
+        state.set_action(Action::Continue);
+
+        let lhs = state.lookup_val(*self.lhs());
+        let rhs = state.lookup_val(*self.rhs());
+        let Some((lhs, rhs)) = narrow_sat_args(lhs, rhs, *self.ty()) else {
+            return single_result(EvalValue::Undef);
+        };
+
+        single_result(zero_extend_i256(lhs.saturating_umul(rhs)))
+    }
+}
+
+impl Interpret for EvmSmulsat {
+    fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
+        state.set_action(Action::Continue);
+
+        let lhs = state.lookup_val(*self.lhs());
+        let rhs = state.lookup_val(*self.rhs());
+        let Some((lhs, rhs)) = narrow_sat_args(lhs, rhs, *self.ty()) else {
+            return single_result(EvalValue::Undef);
+        };
+
+        single_result(sign_extend_i256(lhs.saturating_smul(rhs)))
+    }
+}
+
 impl Interpret for EvmAddMod {
     fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
         state.set_action(Action::Continue);
@@ -318,5 +417,173 @@ impl Interpret for EvmByte {
 
         let result = evm_byte(imm_to_u256(pos), imm_to_u256(value), value_bytes);
         single_result(EvalValue::Imm(u256_to_imm(result, ty)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use crate::{
+        DataFlowGraph, HasInst, Immediate, Type,
+        builder::test_util::test_isa,
+        interpret::EvalResults,
+        module::{FuncRef, ModuleCtx},
+    };
+
+    use super::*;
+
+    struct TestHasInst;
+    impl<I: crate::Inst> HasInst<I> for TestHasInst {}
+
+    struct TestState {
+        dfg: DataFlowGraph,
+        values: HashMap<crate::ValueId, EvalValue>,
+    }
+
+    impl TestState {
+        fn new(values: impl IntoIterator<Item = (crate::ValueId, EvalValue)>) -> Self {
+            let isa = test_isa();
+            let dfg = DataFlowGraph::new(ModuleCtx::new(&isa));
+            Self {
+                dfg,
+                values: values.into_iter().collect(),
+            }
+        }
+    }
+
+    impl State for TestState {
+        fn lookup_val(&mut self, value: crate::ValueId) -> EvalValue {
+            self.values.get(&value).cloned().unwrap_or_default()
+        }
+
+        fn call_func(&mut self, _func: FuncRef, _args: Vec<EvalValue>) -> EvalResults {
+            unreachable!()
+        }
+
+        fn set_action(&mut self, action: Action) {
+            assert_eq!(action, Action::Continue);
+        }
+
+        fn prev_block(&mut self) -> crate::BlockId {
+            unreachable!()
+        }
+
+        fn load(&mut self, _addr: EvalValue, _ty: Type) -> EvalValue {
+            unreachable!()
+        }
+
+        fn store(&mut self, _addr: EvalValue, _value: EvalValue, _ty: Type) -> EvalValue {
+            unreachable!()
+        }
+
+        fn alloca(&mut self, _ty: Type) -> EvalValue {
+            unreachable!()
+        }
+
+        fn dfg(&self) -> &DataFlowGraph {
+            &self.dfg
+        }
+    }
+
+    #[test]
+    fn narrow_unsigned_saturating_ops_zero_extend_results() {
+        let hi = TestHasInst;
+        let lhs = crate::ValueId::from_u32(0);
+        let rhs = crate::ValueId::from_u32(1);
+        let mut state = TestState::new([
+            (
+                lhs,
+                EvalValue::Imm(Immediate::from_i256(I256::from(255u16), Type::I256)),
+            ),
+            (
+                rhs,
+                EvalValue::Imm(Immediate::from_i256(I256::from(1u8), Type::I256)),
+            ),
+        ]);
+
+        assert_eq!(
+            EvmUaddsat::new(&hi, lhs, rhs, Type::I8).interpret(&mut state),
+            single_result(EvalValue::Imm(Immediate::from_i256(
+                I256::from(255u16),
+                Type::I256,
+            )))
+        );
+        assert_eq!(
+            EvmUsubsat::new(&hi, rhs, lhs, Type::I8).interpret(&mut state),
+            single_result(EvalValue::Imm(Immediate::from_i256(
+                I256::from(0u8),
+                Type::I256,
+            )))
+        );
+
+        state.values.insert(
+            lhs,
+            EvalValue::Imm(Immediate::from_i256(I256::from(200u16), Type::I256)),
+        );
+        state.values.insert(
+            rhs,
+            EvalValue::Imm(Immediate::from_i256(I256::from(2u8), Type::I256)),
+        );
+        assert_eq!(
+            EvmUmulsat::new(&hi, lhs, rhs, Type::I8).interpret(&mut state),
+            single_result(EvalValue::Imm(Immediate::from_i256(
+                I256::from(255u16),
+                Type::I256,
+            )))
+        );
+    }
+
+    #[test]
+    fn narrow_signed_saturating_ops_sign_extend_results() {
+        let hi = TestHasInst;
+        let lhs = crate::ValueId::from_u32(0);
+        let rhs = crate::ValueId::from_u32(1);
+        let mut state = TestState::new([
+            (
+                lhs,
+                EvalValue::Imm(Immediate::from_i256(I256::from(127u8), Type::I256)),
+            ),
+            (
+                rhs,
+                EvalValue::Imm(Immediate::from_i256(I256::from(1u8), Type::I256)),
+            ),
+        ]);
+
+        assert_eq!(
+            EvmSaddsat::new(&hi, lhs, rhs, Type::I8).interpret(&mut state),
+            single_result(EvalValue::Imm(Immediate::from_i256(
+                I256::from(127u8),
+                Type::I256,
+            )))
+        );
+
+        state.values.insert(
+            lhs,
+            EvalValue::Imm(Immediate::from_i256(I256::from(-128i16), Type::I256)),
+        );
+        assert_eq!(
+            EvmSsubsat::new(&hi, lhs, rhs, Type::I8).interpret(&mut state),
+            single_result(EvalValue::Imm(Immediate::from_i256(
+                I256::from(-128i16),
+                Type::I256,
+            )))
+        );
+
+        state.values.insert(
+            lhs,
+            EvalValue::Imm(Immediate::from_i256(I256::from(100u8), Type::I256)),
+        );
+        state.values.insert(
+            rhs,
+            EvalValue::Imm(Immediate::from_i256(I256::from(2u8), Type::I256)),
+        );
+        assert_eq!(
+            EvmSmulsat::new(&hi, lhs, rhs, Type::I8).interpret(&mut state),
+            single_result(EvalValue::Imm(Immediate::from_i256(
+                I256::from(127u8),
+                Type::I256,
+            )))
+        );
     }
 }

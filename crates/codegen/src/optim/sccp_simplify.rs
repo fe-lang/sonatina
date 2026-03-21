@@ -396,6 +396,69 @@ fn simplify_umulo(
     no_change_results(results_len)
 }
 
+fn simplify_saturating_add(
+    func: &Function,
+    lattice: &SecondaryMap<ValueId, LatticeCell>,
+    lhs: ValueId,
+    rhs: ValueId,
+) -> SimplifyAction {
+    let ty = func.dfg.value_ty(lhs);
+    if known_imm(func, lattice, rhs) == Some(Immediate::zero(ty)) {
+        return SimplifyAction::Copy(lhs);
+    }
+    if known_imm(func, lattice, lhs) == Some(Immediate::zero(ty)) {
+        return SimplifyAction::Copy(rhs);
+    }
+    SimplifyAction::NoChange
+}
+
+fn simplify_saturating_sub(
+    func: &Function,
+    lattice: &SecondaryMap<ValueId, LatticeCell>,
+    may_be_undef: &SecondaryMap<ValueId, bool>,
+    lhs: ValueId,
+    rhs: ValueId,
+    unsigned: bool,
+) -> SimplifyAction {
+    let ty = func.dfg.value_ty(lhs);
+    if known_imm(func, lattice, rhs) == Some(Immediate::zero(ty)) {
+        return SimplifyAction::Copy(lhs);
+    }
+    if unsigned
+        && known_imm(func, lattice, lhs) == Some(Immediate::zero(ty))
+        && !is_may_be_undef(func, may_be_undef, rhs)
+    {
+        return SimplifyAction::Const(Immediate::zero(ty));
+    }
+    SimplifyAction::NoChange
+}
+
+fn simplify_saturating_mul(
+    func: &Function,
+    lattice: &SecondaryMap<ValueId, LatticeCell>,
+    may_be_undef: &SecondaryMap<ValueId, bool>,
+    lhs: ValueId,
+    rhs: ValueId,
+) -> SimplifyAction {
+    let ty = func.dfg.value_ty(lhs);
+    let zero = Immediate::zero(ty);
+    let one = Immediate::one(ty);
+
+    if (known_imm(func, lattice, lhs) == Some(zero) && !is_may_be_undef(func, may_be_undef, rhs))
+        || (known_imm(func, lattice, rhs) == Some(zero)
+            && !is_may_be_undef(func, may_be_undef, lhs))
+    {
+        return SimplifyAction::Const(zero);
+    }
+    if known_imm(func, lattice, lhs) == Some(one) {
+        return SimplifyAction::Copy(rhs);
+    }
+    if known_imm(func, lattice, rhs) == Some(one) {
+        return SimplifyAction::Copy(lhs);
+    }
+    SimplifyAction::NoChange
+}
+
 fn simplify_snego(
     func: &Function,
     lattice: &SecondaryMap<ValueId, LatticeCell>,
@@ -512,11 +575,33 @@ pub(super) fn simplify_inst(
             if matches!(kind, BinaryInstKind::Uaddo | BinaryInstKind::Saddo) {
                 return simplify_uaddo(func, lattice, *lhs, *rhs, results_len);
             }
+            if matches!(kind, BinaryInstKind::Uaddsat | BinaryInstKind::Saddsat) {
+                return wrap_action(simplify_saturating_add(func, lattice, *lhs, *rhs));
+            }
             if matches!(kind, BinaryInstKind::Usubo | BinaryInstKind::Ssubo) {
                 return simplify_usubo(func, lattice, *lhs, *rhs, results_len);
             }
+            if matches!(kind, BinaryInstKind::Usubsat | BinaryInstKind::Ssubsat) {
+                return wrap_action(simplify_saturating_sub(
+                    func,
+                    lattice,
+                    may_be_undef,
+                    *lhs,
+                    *rhs,
+                    matches!(kind, BinaryInstKind::Usubsat),
+                ));
+            }
             if matches!(kind, BinaryInstKind::Umulo | BinaryInstKind::Smulo) {
                 return simplify_umulo(func, lattice, *lhs, *rhs, results_len);
+            }
+            if matches!(kind, BinaryInstKind::Umulsat | BinaryInstKind::Smulsat) {
+                return wrap_action(simplify_saturating_mul(
+                    func,
+                    lattice,
+                    may_be_undef,
+                    *lhs,
+                    *rhs,
+                ));
             }
             if matches!(kind, BinaryInstKind::EvmUdivo | BinaryInstKind::EvmSdivo) {
                 return simplify_evm_divo(func, lattice, *lhs, *rhs, results_len);
@@ -583,15 +668,27 @@ pub(super) fn simplify_inst(
                     simplify_cmp_self(func, lattice, may_be_undef, *lhs, *rhs, true)
                 }
                 BinaryInstKind::Uaddo
+                | BinaryInstKind::Uaddsat
                 | BinaryInstKind::Saddo
+                | BinaryInstKind::Saddsat
                 | BinaryInstKind::Umulo
+                | BinaryInstKind::Umulsat
                 | BinaryInstKind::Smulo
+                | BinaryInstKind::Smulsat
                 | BinaryInstKind::Usubo
+                | BinaryInstKind::Usubsat
                 | BinaryInstKind::Ssubo
+                | BinaryInstKind::Ssubsat
                 | BinaryInstKind::EvmUdivo
                 | BinaryInstKind::EvmSdivo
                 | BinaryInstKind::EvmUmodo
                 | BinaryInstKind::EvmSmodo
+                | BinaryInstKind::EvmUaddsat
+                | BinaryInstKind::EvmSaddsat
+                | BinaryInstKind::EvmUsubsat
+                | BinaryInstKind::EvmSsubsat
+                | BinaryInstKind::EvmUmulsat
+                | BinaryInstKind::EvmSmulsat
                 | BinaryInstKind::EvmExp
                 | BinaryInstKind::EvmByte => SimplifyAction::NoChange,
             })

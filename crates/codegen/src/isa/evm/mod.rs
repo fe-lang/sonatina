@@ -1923,11 +1923,17 @@ fn assert_supported_lowering_ir(func_ref: FuncRef, func: &Function) {
         for inst in func.layout.iter_inst(block) {
             match evm_inst_set.resolve_inst(func.dfg.inst(inst)) {
                 EvmInstKind::Uaddo(_)
+                | EvmInstKind::Uaddsat(_)
                 | EvmInstKind::Saddo(_)
+                | EvmInstKind::Saddsat(_)
                 | EvmInstKind::Usubo(_)
+                | EvmInstKind::Usubsat(_)
                 | EvmInstKind::Ssubo(_)
+                | EvmInstKind::Ssubsat(_)
                 | EvmInstKind::Umulo(_)
+                | EvmInstKind::Umulsat(_)
                 | EvmInstKind::Smulo(_)
+                | EvmInstKind::Smulsat(_)
                 | EvmInstKind::Snego(_)
                 | EvmInstKind::EvmUdivo(_)
                 | EvmInstKind::EvmSdivo(_)
@@ -2462,11 +2468,17 @@ impl LowerBackend for EvmBackend {
             EvmInstKind::Neg(_) => basic_op(ctx, &[OpCode::PUSH0, OpCode::SUB]),
             EvmInstKind::Add(_) => basic_op(ctx, &[OpCode::ADD]),
             EvmInstKind::Uaddo(_)
+            | EvmInstKind::Uaddsat(_)
             | EvmInstKind::Saddo(_)
+            | EvmInstKind::Saddsat(_)
             | EvmInstKind::Usubo(_)
+            | EvmInstKind::Usubsat(_)
             | EvmInstKind::Ssubo(_)
+            | EvmInstKind::Ssubsat(_)
             | EvmInstKind::Umulo(_)
+            | EvmInstKind::Umulsat(_)
             | EvmInstKind::Smulo(_)
+            | EvmInstKind::Smulsat(_)
             | EvmInstKind::Snego(_) => {
                 panic!("overflow instructions must be legalized before EVM lowering")
             }
@@ -2905,6 +2917,82 @@ impl LowerBackend for EvmBackend {
             | EvmInstKind::EvmUmodo(_)
             | EvmInstKind::EvmSmodo(_) => {
                 panic!("checked EVM div/mod instructions must be legalized before EVM lowering")
+            }
+            EvmInstKind::EvmUaddsat(sat) => {
+                let bits = scalar_bit_width(*sat.ty(), ctx.module)
+                    .expect("evm_uaddsat requires scalar type");
+                assert!(
+                    bits < 256,
+                    "full-width saturating add must be legalized earlier"
+                );
+                emit_pre_actions(ctx, &alloc.read(insn, &args));
+                emit_narrow_unsigned_saturating_binary(
+                    ctx,
+                    OpCode::ADD,
+                    bits,
+                    low_bits_mask(bits).unwrap(),
+                );
+                emit_post_actions(ctx, &alloc.write(insn, results.as_slice()));
+            }
+            EvmInstKind::EvmSaddsat(sat) => {
+                let bits = scalar_bit_width(*sat.ty(), ctx.module)
+                    .expect("evm_saddsat requires scalar type");
+                assert!(
+                    bits < 256,
+                    "full-width saturating add must be legalized earlier"
+                );
+                emit_pre_actions(ctx, &alloc.read(insn, &args));
+                emit_narrow_signed_saturating_binary(ctx, OpCode::ADD, bits);
+                emit_post_actions(ctx, &alloc.write(insn, results.as_slice()));
+            }
+            EvmInstKind::EvmUsubsat(sat) => {
+                let bits = scalar_bit_width(*sat.ty(), ctx.module)
+                    .expect("evm_usubsat requires scalar type");
+                assert!(
+                    bits < 256,
+                    "full-width saturating sub must be legalized earlier"
+                );
+                emit_pre_actions(ctx, &alloc.read(insn, &args));
+                emit_narrow_unsigned_saturating_binary(ctx, OpCode::SUB, bits, U256::zero());
+                emit_post_actions(ctx, &alloc.write(insn, results.as_slice()));
+            }
+            EvmInstKind::EvmSsubsat(sat) => {
+                let bits = scalar_bit_width(*sat.ty(), ctx.module)
+                    .expect("evm_ssubsat requires scalar type");
+                assert!(
+                    bits < 256,
+                    "full-width saturating sub must be legalized earlier"
+                );
+                emit_pre_actions(ctx, &alloc.read(insn, &args));
+                emit_narrow_signed_saturating_binary(ctx, OpCode::SUB, bits);
+                emit_post_actions(ctx, &alloc.write(insn, results.as_slice()));
+            }
+            EvmInstKind::EvmUmulsat(sat) => {
+                let bits = scalar_bit_width(*sat.ty(), ctx.module)
+                    .expect("evm_umulsat requires scalar type");
+                assert!(
+                    bits < 256,
+                    "full-width saturating mul must be legalized earlier"
+                );
+                emit_pre_actions(ctx, &alloc.read(insn, &args));
+                emit_narrow_unsigned_saturating_binary(
+                    ctx,
+                    OpCode::MUL,
+                    bits,
+                    low_bits_mask(bits).unwrap(),
+                );
+                emit_post_actions(ctx, &alloc.write(insn, results.as_slice()));
+            }
+            EvmInstKind::EvmSmulsat(sat) => {
+                let bits = scalar_bit_width(*sat.ty(), ctx.module)
+                    .expect("evm_smulsat requires scalar type");
+                assert!(
+                    bits < 256,
+                    "full-width saturating mul must be legalized earlier"
+                );
+                emit_pre_actions(ctx, &alloc.read(insn, &args));
+                emit_narrow_signed_saturating_binary(ctx, OpCode::MUL, bits);
+                emit_post_actions(ctx, &alloc.write(insn, results.as_slice()));
             }
             EvmInstKind::EvmUmod(_) => basic_op(ctx, &[OpCode::MOD]),
             EvmInstKind::EvmSmod(_) => basic_op(ctx, &[OpCode::SMOD]),
@@ -3759,6 +3847,83 @@ fn low_bits_mask(bits: u16) -> Option<U256> {
     } else {
         Some((U256::one() << (bits as usize)) - U256::one())
     }
+}
+
+fn emit_signextend_top(ctx: &mut Lower<OpCode>, bits: u16) {
+    debug_assert!((8..256).contains(&bits) && bits.is_multiple_of(8));
+    push_bytes(ctx, &[((bits / 8) - 1) as u8]);
+    ctx.push(OpCode::SIGNEXTEND);
+}
+
+fn emit_signextend_top_two_operands(ctx: &mut Lower<OpCode>, bits: u16) {
+    emit_signextend_top(ctx, bits);
+    ctx.push(OpCode::SWAP1);
+    emit_signextend_top(ctx, bits);
+    ctx.push(OpCode::SWAP1);
+}
+
+fn emit_narrow_unsigned_saturating_binary(
+    ctx: &mut Lower<OpCode>,
+    op: OpCode,
+    bits: u16,
+    saturated: U256,
+) {
+    debug_assert!((8..256).contains(&bits));
+    let mask = low_bits_mask(bits).unwrap();
+    let limit = U256::one() << (bits as usize);
+
+    // Direct EVM saturating ops operate on the truncated narrow-width inputs.
+    push_bytes(ctx, &u256_to_be(&mask));
+    ctx.push(OpCode::AND);
+    ctx.push(OpCode::SWAP1);
+    push_bytes(ctx, &u256_to_be(&mask));
+    ctx.push(OpCode::AND);
+    ctx.push(OpCode::SWAP1);
+
+    ctx.push(op);
+    ctx.push(OpCode::DUP1);
+    push_bytes(ctx, &u256_to_be(&limit));
+    ctx.push(OpCode::SWAP1);
+    ctx.push(OpCode::LT);
+
+    let keep_push = ctx.push(OpCode::PUSH1);
+    ctx.push(OpCode::JUMPI);
+
+    ctx.push(OpCode::POP);
+    push_bytes(ctx, &u256_to_be(&saturated));
+
+    let keep = ctx.push(OpCode::JUMPDEST);
+    ctx.add_label_reference(keep_push, Label::Insn(keep));
+}
+
+fn emit_narrow_signed_saturating_binary(ctx: &mut Lower<OpCode>, op: OpCode, bits: u16) {
+    debug_assert!((8..256).contains(&bits) && bits.is_multiple_of(8));
+    let limit = U256::one() << (bits as usize);
+    let sign = U256::one() << ((bits - 1) as usize);
+    let smax = sign - U256::one();
+
+    emit_signextend_top_two_operands(ctx, bits);
+    ctx.push(op);
+    ctx.push(OpCode::DUP1);
+    push_bytes(ctx, &u256_to_be(&sign));
+    ctx.push(OpCode::ADD);
+    push_bytes(ctx, &u256_to_be(&limit));
+    ctx.push(OpCode::SWAP1);
+    ctx.push(OpCode::LT);
+
+    let keep_push = ctx.push(OpCode::PUSH1);
+    ctx.push(OpCode::JUMPI);
+
+    ctx.push(OpCode::DUP1);
+    push_bytes(ctx, &[0xff]);
+    ctx.push(OpCode::SAR);
+    push_bytes(ctx, &u256_to_be(&smax));
+    ctx.push(OpCode::XOR);
+    ctx.push(OpCode::SWAP1);
+    ctx.push(OpCode::POP);
+
+    let keep = ctx.push(OpCode::JUMPDEST);
+    ctx.add_label_reference(keep_push, Label::Insn(keep));
 }
 
 fn emit_max_top_two(ctx: &mut Lower<OpCode>) {

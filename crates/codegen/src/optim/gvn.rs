@@ -51,6 +51,27 @@ fn inst_to_gvn_key(func: &Function, inst_id: InstId) -> OwnedInstKey {
     inst.owned_key(&result_tys)
 }
 
+fn fold_evm_saturating(
+    kind: BinaryInstKind,
+    lhs: Immediate,
+    rhs: Immediate,
+    sat_ty: Type,
+    result_ty: Type,
+) -> Option<Immediate> {
+    let lhs = lhs.trunc(sat_ty);
+    let rhs = rhs.trunc(sat_ty);
+
+    match kind {
+        BinaryInstKind::EvmUaddsat => Some(lhs.saturating_uadd(rhs).zext(result_ty)),
+        BinaryInstKind::EvmSaddsat => Some(lhs.saturating_sadd(rhs).sext(result_ty)),
+        BinaryInstKind::EvmUsubsat => Some(lhs.saturating_usub(rhs).zext(result_ty)),
+        BinaryInstKind::EvmSsubsat => Some(lhs.saturating_ssub(rhs).sext(result_ty)),
+        BinaryInstKind::EvmUmulsat => Some(lhs.saturating_umul(rhs).zext(result_ty)),
+        BinaryInstKind::EvmSmulsat => Some(lhs.saturating_smul(rhs).sext(result_ty)),
+        _ => None,
+    }
+}
+
 /// A GVN solver.
 #[derive(Debug)]
 pub struct GvnSolver {
@@ -865,6 +886,10 @@ impl GvnSolver {
                     ),
                     _ => return None,
                 },
+                BinaryInstKind::Uaddsat => func
+                    .dfg
+                    .value_imm(lhs)?
+                    .saturating_uadd(func.dfg.value_imm(rhs)?),
                 BinaryInstKind::Saddo => match result_idx {
                     0 => {
                         func.dfg
@@ -880,6 +905,10 @@ impl GvnSolver {
                     ),
                     _ => return None,
                 },
+                BinaryInstKind::Saddsat => func
+                    .dfg
+                    .value_imm(lhs)?
+                    .saturating_sadd(func.dfg.value_imm(rhs)?),
                 BinaryInstKind::Mul => func.dfg.value_imm(lhs)? * func.dfg.value_imm(rhs)?,
                 BinaryInstKind::Umulo => match result_idx {
                     0 => {
@@ -896,6 +925,10 @@ impl GvnSolver {
                     ),
                     _ => return None,
                 },
+                BinaryInstKind::Umulsat => func
+                    .dfg
+                    .value_imm(lhs)?
+                    .saturating_umul(func.dfg.value_imm(rhs)?),
                 BinaryInstKind::Smulo => match result_idx {
                     0 => {
                         func.dfg
@@ -911,6 +944,10 @@ impl GvnSolver {
                     ),
                     _ => return None,
                 },
+                BinaryInstKind::Smulsat => func
+                    .dfg
+                    .value_imm(lhs)?
+                    .saturating_smul(func.dfg.value_imm(rhs)?),
                 BinaryInstKind::Sub => func.dfg.value_imm(lhs)? - func.dfg.value_imm(rhs)?,
                 BinaryInstKind::Usubo => match result_idx {
                     0 => {
@@ -927,6 +964,10 @@ impl GvnSolver {
                     ),
                     _ => return None,
                 },
+                BinaryInstKind::Usubsat => func
+                    .dfg
+                    .value_imm(lhs)?
+                    .saturating_usub(func.dfg.value_imm(rhs)?),
                 BinaryInstKind::Ssubo => match result_idx {
                     0 => {
                         func.dfg
@@ -942,6 +983,10 @@ impl GvnSolver {
                     ),
                     _ => return None,
                 },
+                BinaryInstKind::Ssubsat => func
+                    .dfg
+                    .value_imm(lhs)?
+                    .saturating_ssub(func.dfg.value_imm(rhs)?),
                 BinaryInstKind::Sdiv => {
                     let lhs = func.dfg.value_imm(lhs)?;
                     let rhs = func.dfg.value_imm(rhs)?;
@@ -1058,6 +1103,18 @@ impl GvnSolver {
                         _ => return None,
                     }
                 }
+                BinaryInstKind::EvmUaddsat
+                | BinaryInstKind::EvmSaddsat
+                | BinaryInstKind::EvmUsubsat
+                | BinaryInstKind::EvmSsubsat
+                | BinaryInstKind::EvmUmulsat
+                | BinaryInstKind::EvmSmulsat => fold_evm_saturating(
+                    kind,
+                    func.dfg.value_imm(lhs)?,
+                    func.dfg.value_imm(rhs)?,
+                    insn_expr.extra_ty()?,
+                    *insn_expr.result_tys().get(result_idx)?,
+                )?,
                 BinaryInstKind::EvmExp | BinaryInstKind::EvmByte => return None,
             }
         } else if let InstClassKind::Cast(kind) = insn_expr.kind() {
@@ -1128,6 +1185,11 @@ impl GvnSolver {
             {
                 return Some(result);
             }
+            if result_idx == 0
+                && let Some(result) = self.perform_saturating_simplification(func, kind, lhs, rhs)
+            {
+                return Some(result);
+            }
             let simplified = simplify_binary_with_known_imm(
                 func,
                 kind,
@@ -1167,6 +1229,60 @@ impl GvnSolver {
                 .map(|(value, _)| *value)
                 .filter(|first| phi_args.iter().all(|(value, _)| value == first))
                 .map(GvnInsn::Value);
+        }
+
+        None
+    }
+
+    fn perform_saturating_simplification(
+        &mut self,
+        func: &mut Function,
+        kind: BinaryInstKind,
+        lhs: ValueId,
+        rhs: ValueId,
+    ) -> Option<GvnInsn> {
+        let ty = func.dfg.value_ty(lhs);
+        let zero = Immediate::zero(ty);
+        let one = Immediate::one(ty);
+        let lhs_imm = func.dfg.value_imm(lhs);
+        let rhs_imm = func.dfg.value_imm(rhs);
+
+        match kind {
+            BinaryInstKind::Uaddsat | BinaryInstKind::Saddsat => {
+                if rhs_imm == Some(zero) {
+                    return Some(GvnInsn::Value(lhs));
+                }
+                if lhs_imm == Some(zero) {
+                    return Some(GvnInsn::Value(rhs));
+                }
+            }
+            BinaryInstKind::Usubsat => {
+                if rhs_imm == Some(zero) {
+                    return Some(GvnInsn::Value(lhs));
+                }
+                if lhs_imm == Some(zero) && !self.may_be_undef(func, rhs) {
+                    return Some(GvnInsn::Value(self.make_imm(&mut func.dfg, zero)));
+                }
+            }
+            BinaryInstKind::Ssubsat => {
+                if rhs_imm == Some(zero) {
+                    return Some(GvnInsn::Value(lhs));
+                }
+            }
+            BinaryInstKind::Umulsat | BinaryInstKind::Smulsat => {
+                if (lhs_imm == Some(zero) && !self.may_be_undef(func, rhs))
+                    || (rhs_imm == Some(zero) && !self.may_be_undef(func, lhs))
+                {
+                    return Some(GvnInsn::Value(self.make_imm(&mut func.dfg, zero)));
+                }
+                if lhs_imm == Some(one) {
+                    return Some(GvnInsn::Value(rhs));
+                }
+                if rhs_imm == Some(one) {
+                    return Some(GvnInsn::Value(lhs));
+                }
+            }
+            _ => {}
         }
 
         None
