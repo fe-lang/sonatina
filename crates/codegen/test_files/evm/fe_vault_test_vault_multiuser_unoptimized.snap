@@ -32,7 +32,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   __VaultUser_runtime: ir_blocks=5 ir_insts=23 vcode_ops=100 fixups=24 imm_bytes=9
     mem: scratch_words=0 stable_words=3 stable_mode=StaticAbs(base=0xa0) entry_abs_words=0 abs_words_end=3
-  assert: ir_blocks=3 ir_insts=4 vcode_ops=10 fixups=1 imm_bytes=0
+  assert: ir_blocks=3 ir_insts=3 vcode_ops=8 fixups=1 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=2 abs_words_end=0
   create2_stor_arg0_root_stor__Evm_hef0af3106e109414_VaultUser_hcb553b593515d281__151df09479dab12a: ir_blocks=5 ir_insts=18 vcode_ops=63 fixups=6 imm_bytes=8
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=2 abs_words_end=0
@@ -657,7 +657,7 @@ __VaultUser_runtime:
 assert:
   block0:
     JUMPDEST
-    PUSH1 block2  // br v1 block1 block2;
+    PUSH1 block2  // br v0 block2 block1;
     JUMPI
   block1:
     PUSH0  // evm_revert 0.i256 0.i256;

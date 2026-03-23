@@ -7,8 +7,7 @@ target = "evm-ethereum-osaka"
 
 func private %assert(v0.i1) {
     block0:
-        v1.i1 = is_zero v0;
-        br v1 block1 block2;
+        br v0 block2 block1;
 
     block1:
         evm_revert 0.i256 0.i256;
@@ -17,66 +16,30 @@ func private %assert(v0.i1) {
         return;
 }
 
-func private %i8_h1bb527fe1af58754_saturatingadd_h7ca6e43aca8f23bb_saturating_add(v0.i8, v1.i8) -> i8 {
-    block0:
-        v2.i8 = add v0 v1;
-        v43.i256 = sext v0 i256;
-        v44.i256 = and 128.i256 v43;
-        v45.i1 = eq v44 0.i256;
-        v25.i1 = is_zero v45;
-        v66.i256 = sext v1 i256;
-        v67.i256 = and 128.i256 v66;
-        v68.i1 = eq v67 0.i256;
-        v69.i1 = is_zero v68;
-        v32.i1 = eq v25 v69;
-        br v32 block3 block7;
-
-    block1:
-        br v25 block7 block9;
-
-    block3:
-        v80.i256 = sext v2 i256;
-        v81.i256 = and 128.i256 v80;
-        v82.i1 = eq v81 0.i256;
-        v83.i1 = is_zero v82;
-        v88.i1 = eq v83 v25;
-        v34.i1 = is_zero v88;
-        br v34 block1 block7;
-
-    block7:
-        v27.i8 = phi (v2 block0) (v2 block3) (-128.i8 block1) (127.i8 block9);
-        return v27;
-
-    block9:
-        jump block7;
-}
-
 func private %i8_h1bb527fe1af58754_saturatingsub_hd0c1c727e69d9468_saturating_sub(v0.i8, v1.i8) -> i8 {
     block0:
         v2.i8 = sub v0 v1;
-        v44.i256 = sext v0 i256;
-        v45.i256 = and 128.i256 v44;
-        v46.i1 = eq v45 0.i256;
-        v25.i1 = is_zero v46;
-        v75.i256 = sext v1 i256;
-        v76.i256 = and 128.i256 v75;
-        v77.i1 = eq v76 0.i256;
-        v78.i1 = is_zero v77;
-        v79.i1 = eq v25 v78;
-        v33.i1 = is_zero v79;
-        br v33 block3 block7;
+        v42.i256 = sext v0 i256;
+        v43.i256 = and 128.i256 v42;
+        v24.i1 = eq v43 0.i256;
+        v66.i1 = is_zero v24;
+        v67.i256 = sext v1 i256;
+        v68.i256 = and 128.i256 v67;
+        v69.i1 = eq v68 0.i256;
+        v70.i1 = is_zero v69;
+        v32.i1 = eq v66 v70;
+        br v32 block7 block3;
 
     block1:
-        br v25 block7 block9;
+        br v24 block9 block7;
 
     block3:
-        v90.i256 = sext v2 i256;
-        v91.i256 = and 128.i256 v90;
-        v92.i1 = eq v91 0.i256;
-        v93.i1 = is_zero v92;
-        v98.i1 = eq v93 v25;
-        v35.i1 = is_zero v98;
-        br v35 block1 block7;
+        v72.i256 = sext v2 i256;
+        v73.i256 = and 128.i256 v72;
+        v74.i1 = eq v73 0.i256;
+        v75.i1 = is_zero v74;
+        v34.i1 = eq v75 v66;
+        br v34 block7 block1;
 
     block7:
         v27.i8 = phi (v2 block0) (v2 block3) (-128.i8 block1) (127.i8 block9);
@@ -122,8 +85,7 @@ func private %i8_h1bb527fe1af58754_saturatingmul_hf2bc6be7b84ff8f7_saturating_mu
         v34.i256 = xor v40 v41;
         v35.i256 = and v34 128.i256;
         v42.i1 = eq v35 0.i256;
-        v43.i1 = is_zero v42;
-        br v43 block16 block20;
+        br v42 block20 block16;
 
     block16:
         v45.i8 = phi (0.i8 block0) (0.i8 block3) (-128.i8 block9) (v17 block19) (127.i8 block20) (127.i8 block7) (127.i8 block8);
@@ -134,8 +96,7 @@ func private %i8_h1bb527fe1af58754_saturatingmul_hf2bc6be7b84ff8f7_saturating_mu
 
     block19:
         v44.i1 = eq v18 v1;
-        v45.i1 = is_zero v44;
-        br v45 block9 block16;
+        br v44 block16 block9;
 
     block20:
         jump block16;
@@ -143,9 +104,7 @@ func private %i8_h1bb527fe1af58754_saturatingmul_hf2bc6be7b84ff8f7_saturating_mu
 
 func private %__fe_sonatina_entry() {
     block0:
-        v5.i8 = call %i8_h1bb527fe1af58754_saturatingadd_h7ca6e43aca8f23bb_saturating_add 127.i8 1.i8;
-        v6.i1 = eq 127.i8 v5;
-        call %assert v6;
+        call %assert 1.i1;
         v7.i8 = call %i8_h1bb527fe1af58754_saturatingsub_hd0c1c727e69d9468_saturating_sub -128.i8 1.i8;
         v8.i1 = eq -128.i8 v7;
         call %assert v8;

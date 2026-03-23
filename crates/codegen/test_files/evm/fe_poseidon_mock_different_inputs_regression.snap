@@ -10,7 +10,7 @@ object: Contract
   total: 2554 bytes
 
 functions:
-  ark: ir_blocks=12 ir_insts=54 vcode_ops=142 fixups=10 imm_bytes=26
+  ark: ir_blocks=12 ir_insts=51 vcode_ops=142 fixups=10 imm_bytes=26
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=7 abs_words_end=0
   sigma_full: ir_blocks=1 ir_insts=22 vcode_ops=60 fixups=0 imm_bytes=13
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=7 abs_words_end=0
@@ -20,7 +20,7 @@ functions:
     mem: scratch_words=0 stable_words=7 stable_mode=StaticAbs(base=0xa0) entry_abs_words=0 abs_words_end=7
   range_known_const_s__usize___unknown__h4e84f6b6b8307914_seq_ha637d2df505bccf2_len__0__fc6647014fb554e5: ir_blocks=4 ir_insts=8 vcode_ops=13 fixups=1 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=7 abs_words_end=0
-  entry: ir_blocks=3 ir_insts=9 vcode_ops=29 fixups=5 imm_bytes=6
+  entry: ir_blocks=3 ir_insts=7 vcode_ops=27 fixups=5 imm_bytes=6
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
@@ -62,8 +62,8 @@ ark:
     PUSH1 0x18 (24)  // v11.i1 = lt v1 24.i256;
     DUP9
     LT
-    ISZERO  // v12.i1 = is_zero v11;
-    PUSH1 block1  // br v12 block12 block2;
+    ISZERO  // br v11 block2 block12;
+    PUSH1 block1
     JUMPI
   block2:
     DUP8  // v13.*i256 = gep v5 0.i256 v1;
@@ -104,8 +104,8 @@ ark:
     PUSH1 0x18 (24)  // v31.i1 = lt v87 24.i256;
     DUP2
     LT
-    ISZERO  // v32.i1 = is_zero v31;
-    PUSH1 block1  // br v32 block14 block4;
+    ISZERO  // br v31 block4 block14;
+    PUSH1 block1
     JUMPI
   block4:
     SWAP1  // v33.*i256 = gep v22 0.i256 v87;
@@ -145,8 +145,8 @@ ark:
     PUSH1 0x18 (24)  // v50.i1 = lt v89 24.i256;
     DUP7
     LT
-    ISZERO  // v51.i1 = is_zero v50;
-    PUSH1 block1  // br v51 block16 block6;
+    ISZERO  // br v50 block6 block16;
+    PUSH1 block1
     JUMPI
   block6:
     SWAP5  // v52.*i256 = gep v41 0.i256 v89;
@@ -340,10 +340,10 @@ mix:
     MUL
     ADD
     MLOAD  // v49.i256 = mload v48 i256;
-    PUSH32 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001 (21888242871839275222246405745257275088548364400416034343698204186575808495617)  // v50.i256 = evm_mul_mod v43 v49 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
+    PUSH32 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001 (21888242871839275222246405745257275088548364400416034343698204186575808495617)  // v48.i256 = evm_mul_mod v43 v49 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
     SWAP2
     MULMOD
-    SWAP1  // v54.i256 = evm_add_mod v50 v29 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
+    SWAP1  // v54.i256 = evm_add_mod v48 v29 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
     PUSH32 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001 (21888242871839275222246405745257275088548364400416034343698204186575808495617)
     SWAP2
     ADDMOD
@@ -592,7 +592,7 @@ entry:
     JUMP
     JUMPDEST
     EQ  // v10.i1 = eq v6 v7;
-    PUSH1 block3  // br v11 block3 block1;
+    PUSH1 block3  // br v10 block3 block1;
     JUMPI
   block1:
     PUSH1 0x1 (1)  // mstore 0.i256 1.i256 i256;

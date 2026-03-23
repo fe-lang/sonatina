@@ -21,7 +21,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   __EnumContract_runtime: ir_blocks=7 ir_insts=23 vcode_ops=84 fixups=15 imm_bytes=10
     mem: scratch_words=0 stable_words=3 stable_mode=StaticAbs(base=0xa0) entry_abs_words=0 abs_words_end=3
-  assert: ir_blocks=3 ir_insts=4 vcode_ops=10 fixups=1 imm_bytes=0
+  assert: ir_blocks=3 ir_insts=3 vcode_ops=8 fixups=1 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=2 abs_words_end=0
   evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__MakeNone_h1a70bbc7ba2867ef__33da4420f6afdeb1: ir_blocks=3 ir_insts=18 vcode_ops=59 fixups=6 imm_bytes=8
     mem: scratch_words=0 stable_words=2 stable_mode=StaticAbs(base=0xe0) entry_abs_words=2 abs_words_end=4
@@ -384,7 +384,7 @@ __EnumContract_runtime:
 assert:
   block0:
     JUMPDEST
-    PUSH1 block2  // br v1 block1 block2;
+    PUSH1 block2  // br v0 block2 block1;
     JUMPI
   block1:
     PUSH0  // evm_revert 0.i256 0.i256;

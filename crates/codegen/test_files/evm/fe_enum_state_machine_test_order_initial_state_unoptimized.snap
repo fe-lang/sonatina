@@ -23,7 +23,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   __Order_runtime: ir_blocks=20 ir_insts=40 vcode_ops=159 fixups=28 imm_bytes=17
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  assert: ir_blocks=3 ir_insts=4 vcode_ops=10 fixups=1 imm_bytes=0
+  assert: ir_blocks=3 ir_insts=3 vcode_ops=8 fixups=1 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=2 abs_words_end=0
   runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2: ir_blocks=3 ir_insts=8 vcode_ops=20 fixups=1 imm_bytes=3
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
@@ -519,7 +519,7 @@ __Order_runtime:
 assert:
   block0:
     JUMPDEST
-    PUSH1 block2  // br v1 block1 block2;
+    PUSH1 block2  // br v0 block2 block1;
     JUMPI
   block1:
     PUSH0  // evm_revert 0.i256 0.i256;

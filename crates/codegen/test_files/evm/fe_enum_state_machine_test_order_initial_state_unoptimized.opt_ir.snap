@@ -60,8 +60,25 @@ func private %test_order_initial_state__StorPtr_Evm___207f35a85ac4062e() {
         v22.i256 = call %decode_returndata__u256__3271ca15373d4483 v20 v18;
         v23.i1 = is_zero v22;
         call %assert v23;
-        v7.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Confirm_h67936812d51d0893__aed46e41f390dba4 v34 100000.i256 0.i256;
-        v24.i1 = is_zero v7;
+        v40.objref<@__fe_obj_tuple_0> = call %encode_calldata__Confirm_h67936812d51d0893__aed46e41f390dba4 1.i32;
+        v41.objref<i256> = obj.proj v40 0.i256;
+        v42.i256 = obj.load v41;
+        v43.objref<i256> = obj.proj v40 1.i256;
+        v44.i256 = obj.load v43;
+        v45.i256 = evm_call 100000.i256 v34 0.i256 v42 v44 0.i256 0.i256;
+        v46.i256 = evm_return_data_size;
+        v47.*i8 = evm_malloc v46;
+        v48.i256 = ptr_to_int v47 i256;
+        evm_return_data_copy v48 0.i256 v46;
+        v49.i1 = is_zero v45;
+        br v49 block13 block14;
+
+    block13:
+        evm_revert v48 v46;
+
+    block14:
+        v50.i256 = call %decode_returndata__u256__3271ca15373d4483 v48 v46;
+        v24.i1 = is_zero v50;
         call %assert v24;
         return;
 }
@@ -172,37 +189,13 @@ func private %__Order_runtime() {
 
 func private %assert(v0.i1) {
     block0:
-        v1.i1 = is_zero v0;
-        br v1 block1 block2;
+        br v0 block2 block1;
 
     block1:
         evm_revert 0.i256 0.i256;
 
     block2:
         return;
-}
-
-func private %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Confirm_h67936812d51d0893__aed46e41f390dba4(v0.i256, v1.i256, v2.i256) -> i256 {
-    block0:
-        v6.objref<@__fe_obj_tuple_0> = call %encode_calldata__Confirm_h67936812d51d0893__aed46e41f390dba4 1.i32;
-        v8.objref<i256> = obj.proj v6 0.i256;
-        v9.i256 = obj.load v8;
-        v11.objref<i256> = obj.proj v6 1.i256;
-        v12.i256 = obj.load v11;
-        v13.i256 = evm_call v1 v0 v2 v9 v12 0.i256 0.i256;
-        v14.i256 = evm_return_data_size;
-        v15.*i8 = evm_malloc v14;
-        v16.i256 = ptr_to_int v15 i256;
-        evm_return_data_copy v16 0.i256 v14;
-        v17.i1 = is_zero v13;
-        br v17 block1 block2;
-
-    block1:
-        evm_revert v16 v14;
-
-    block2:
-        v22.i256 = call %decode_returndata__u256__3271ca15373d4483 v16 v14;
-        return v22;
 }
 
 func private %runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2() -> i32 {
@@ -345,11 +338,11 @@ func private %u256_h3271ca15373d4483_encode_hab7243eccf2714fb_encode__Sol_hfd482
 
 func private %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish(v0.objref<@__fe_obj_SolEncoder_1>) -> objref<@__fe_obj_tuple_0> {
     block0:
-        v30.objref<i256> = obj.proj v0 2.i64;
-        v31.i256 = obj.load v30;
-        v26.objref<i256> = obj.proj v0 0.i64;
-        v27.i256 = obj.load v26;
-        (v7.i256, v8.i1) = usubo v31 v27;
+        v38.objref<i256> = obj.proj v0 2.i64;
+        v39.i256 = obj.load v38;
+        v34.objref<i256> = obj.proj v0 0.i64;
+        v35.i256 = obj.load v34;
+        (v7.i256, v8.i1) = usubo v39 v35;
         br v8 block1 block2;
 
     block1:
@@ -358,7 +351,7 @@ func private %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish(v
     block2:
         v9.objref<@__fe_obj_tuple_0> = obj.alloc @__fe_obj_tuple_0;
         v11.objref<i256> = obj.proj v9 0.i256;
-        obj.store v11 v27;
+        obj.store v11 v35;
         v13.objref<i256> = obj.proj v9 1.i256;
         obj.store v13 v7;
         return v9;
