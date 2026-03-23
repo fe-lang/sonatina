@@ -6,23 +6,21 @@ input_file: test_files/evm/fe_saturating_signed_i8.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=1
 
 object: Contract
-  section runtime: 426 bytes
-  total: 426 bytes
+  section runtime: 320 bytes
+  total: 320 bytes
 
 functions:
   assert: ir_blocks=3 ir_insts=4 vcode_ops=10 fixups=1 imm_bytes=0
-    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  i8_h1bb527fe1af58754_saturatingadd_h7ca6e43aca8f23bb_saturating_add: ir_blocks=8 ir_insts=29 vcode_ops=68 fixups=6 imm_bytes=12
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   i8_h1bb527fe1af58754_saturatingsub_hd0c1c727e69d9468_saturating_sub: ir_blocks=8 ir_insts=30 vcode_ops=69 fixups=6 imm_bytes=12
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   i8_h1bb527fe1af58754_saturatingmul_hf2bc6be7b84ff8f7_saturating_mul: ir_blocks=22 ir_insts=52 vcode_ops=134 fixups=15 imm_bytes=21
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  __fe_sonatina_entry: ir_blocks=1 ir_insts=10 vcode_ops=43 fixups=12 imm_bytes=9
+  __fe_sonatina_entry: ir_blocks=1 ir_insts=8 vcode_ops=37 fixups=10 imm_bytes=7
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Stop gas_used=21890 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=890
+  case ok: calldata_len=0 success reason=Stop gas_used=21685 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=685
 
 
 --------------- DEBUG ---------------
@@ -40,83 +38,6 @@ assert:
   block2:
     JUMPDEST
     JUMP  // return;
-
-// func private %i8_h1bb527fe1af58754_saturatingadd_h7ca6e43aca8f23bb_saturating_add(v0.i256, v1.i256) -> i256
-i8_h1bb527fe1af58754_saturatingadd_h7ca6e43aca8f23bb_saturating_add:
-  block0:
-    JUMPDEST
-    DUP2  // v89.i256 = add v0 v1;
-    DUP2
-    ADD
-    PUSH1 0xff (255)  // v91.i256 = and v89 255.i256;
-    AND
-    SWAP1  // v93.i256 = shl 248.i256 v0;
-    PUSH1 0xf8 (248)
-    SHL
-    PUSH1 0xf8 (248)  // v94.i256 = sar 248.i256 v93;
-    SAR
-    PUSH1 0x80 (128)  // v44.i256 = and 128.i256 v94;
-    AND
-    PUSH0  // v45.i1 = eq v44 0.i256;
-    EQ
-    ISZERO  // v25.i1 = is_zero v45;
-    SWAP2  // v95.i256 = shl 248.i256 v1;
-    PUSH1 0xf8 (248)
-    SHL
-    PUSH1 0xf8 (248)  // v96.i256 = sar 248.i256 v95;
-    SAR
-    PUSH1 0x80 (128)  // v67.i256 = and 128.i256 v96;
-    AND
-    PUSH0  // v68.i1 = eq v67 0.i256;
-    EQ
-    ISZERO  // v69.i1 = is_zero v68;
-    DUP3  // v32.i1 = eq v25 v69;
-    EQ
-    ISZERO  // br v32 block3 block13;
-    PUSH1 block13
-    JUMPI
-  block3:
-    DUP1  // v97.i256 = shl 248.i256 v91;
-    PUSH1 0xf8 (248)
-    SHL
-    PUSH1 0xf8 (248)  // v98.i256 = sar 248.i256 v97;
-    SAR
-    PUSH1 0x80 (128)  // v81.i256 = and 128.i256 v98;
-    AND
-    PUSH0  // v82.i1 = eq v81 0.i256;
-    EQ
-    ISZERO  // v83.i1 = is_zero v82;
-    DUP3  // v88.i1 = eq v83 v25;
-    EQ
-    PUSH1 block15  // br v34 block1 block15;
-    JUMPI
-  block1:
-    POP  // br v25 block14 block9;
-    PUSH1 block14
-    JUMPI
-  block9:
-    PUSH1 0x7f (127)  // jump block7;
-    PUSH1 block7
-    JUMP
-  block14:
-    JUMPDEST
-    PUSH1 0x80 (128)  // jump block7;
-    PUSH1 block7
-    JUMP
-  block15:
-    JUMPDEST
-    SWAP1  // jump block7;
-    POP
-    PUSH1 block7
-    JUMP
-  block13:
-    JUMPDEST
-    SWAP1  // jump block7;
-    POP
-  block7:
-    JUMPDEST
-    SWAP1  // return v27;
-    JUMP
 
 // func private %i8_h1bb527fe1af58754_saturatingsub_hd0c1c727e69d9468_saturating_sub(v0.i256, v1.i256) -> i256
 i8_h1bb527fe1af58754_saturatingsub_hd0c1c727e69d9468_saturating_sub:
@@ -350,16 +271,10 @@ i8_h1bb527fe1af58754_saturatingmul_hf2bc6be7b84ff8f7_saturating_mul:
 // func private %__fe_sonatina_entry()
 __fe_sonatina_entry:
   block0:
-    PUSH1 0x7f (127)  // v5.i256 = call %i8_h1bb527fe1af58754_saturatingadd_h7ca6e43aca8f23bb_saturating_add 127.i256 1.i256;
-    PUSH1 0x1 (1)
+    PUSH1 0x1 (1)  // call %assert 1.i1;
+    PUSH0
+    SIGNEXTEND
     PUSH1 `pc + (4)`
-    SWAP2
-    PUSH1 FuncRef(16)
-    JUMP
-    JUMPDEST
-    PUSH1 0x7f (127)  // v6.i1 = eq 127.i256 v5;
-    EQ
-    PUSH1 `pc + (4)`  // call %assert v6;
     SWAP1
     PUSH1 FuncRef(6)
     JUMP

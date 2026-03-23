@@ -1,3 +1,4 @@
+#! evm.config: { vcode: true, opt: 2 }
 #! evm.case: counter
 #!   calldata: bytes(0xb1f525c6) u256(100)
 #!   expect: return u256(100)

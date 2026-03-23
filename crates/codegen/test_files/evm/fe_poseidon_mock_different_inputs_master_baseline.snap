@@ -6,8 +6,8 @@ input_file: test_files/evm/fe_poseidon_mock_different_inputs_master_baseline.snt
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 2614 bytes
-  total: 2614 bytes
+  section runtime: 2604 bytes
+  total: 2604 bytes
 
 functions:
   ark: ir_blocks=12 ir_insts=59 vcode_ops=156 fixups=11 imm_bytes=31
@@ -20,13 +20,11 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   range_known_const_s__usize___unknown__h4e84f6b6b8307914_seq_ha637d2df505bccf2_len__0__fc6647014fb554e5: ir_blocks=4 ir_insts=7 vcode_ops=13 fixups=1 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  assert: ir_blocks=3 ir_insts=4 vcode_ops=10 fixups=1 imm_bytes=0
-    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  entry: ir_blocks=1 ir_insts=7 vcode_ops=27 fixups=6 imm_bytes=6
+  entry: ir_blocks=3 ir_insts=9 vcode_ops=29 fixups=5 imm_bytes=6
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=50400 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=29400
+  case ok: calldata_len=0 success reason=Return gas_used=50369 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=29369
 
 
 --------------- DEBUG ---------------
@@ -621,20 +619,6 @@ range_known_const_s__usize___unknown__h4e84f6b6b8307914_seq_ha637d2df505bccf2_le
     SWAP1  // return v10;
     JUMP
 
-// func private %assert(v0.i1)
-assert:
-  block0:
-    JUMPDEST
-    PUSH1 block2  // br v1 block1 block2;
-    JUMPI
-  block1:
-    PUSH0  // evm_revert 0.i256 0.i256;
-    PUSH0
-    REVERT
-  block2:
-    JUMPDEST
-    JUMP  // return;
-
 // func public %entry()
 entry:
   block0:
@@ -653,15 +637,17 @@ entry:
     JUMP
     JUMPDEST
     EQ  // v10.i1 = eq v6 v7;
-    ISZERO  // v9.i1 = is_zero v10;
-    PUSH1 `pc + (4)`  // call %assert v9;
-    SWAP1
-    PUSH1 FuncRef(15)
-    JUMP
-    JUMPDEST
+    PUSH1 block3  // br v11 block3 block1;
+    JUMPI
+  block1:
     PUSH1 0x1 (1)  // mstore 0.i256 1.i256 i256;
     PUSH0
     MSTORE
     PUSH1 0x20 (32)  // evm_return 0.i256 32.i256;
     PUSH0
     RETURN
+  block3:
+    JUMPDEST
+    PUSH0  // evm_revert 0.i256 0.i256;
+    PUSH0
+    REVERT

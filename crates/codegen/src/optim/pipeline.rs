@@ -253,6 +253,9 @@ impl Pipeline {
         p.add_step(Step::DeadArgElim);
         p.add_step(Step::FuncPasses(POST_DEAD_ARG_CLEANUP_PASSES.to_vec()));
         p.add_step(Step::DeadFuncElim);
+        p.add_step(Step::Inline);
+        p.add_step(Step::FuncPasses(SECONDARY_FUNC_PASSES.to_vec()));
+        p.add_step(Step::DeadFuncElim);
         p
     }
 
