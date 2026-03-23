@@ -1,0 +1,38 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: "String::from_utf8(out).unwrap()"
+input_file: test_files/evm/loops.sntn
+---
+evm.config: stack_reach=16 vcode=false bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
+
+object: Contract
+  section init: 662 bytes
+  section runtime: 642 bytes
+  total: 1304 bytes
+
+functions:
+  __Bench_recv_0_2: ir_blocks=6 ir_insts=17 vcode_ops=39 fixups=2 imm_bytes=2
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=5 abs_words_end=0
+  __Bench_recv_0_3: ir_blocks=4 ir_insts=7 vcode_ops=17 fixups=2 imm_bytes=1
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=5 abs_words_end=0
+  __Bench_recv_0_4: ir_blocks=4 ir_insts=10 vcode_ops=24 fixups=2 imm_bytes=2
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=5 abs_words_end=0
+  __Bench_recv_0_5: ir_blocks=4 ir_insts=14 vcode_ops=32 fixups=2 imm_bytes=2
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=5 abs_words_end=0
+  __Bench_init: ir_blocks=3 ir_insts=9 vcode_ops=18 fixups=3 imm_bytes=2
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
+  __Bench_runtime: ir_blocks=35 ir_insts=105 vcode_ops=330 fixups=44 imm_bytes=29
+    mem: scratch_words=0 stable_words=5 stable_mode=StaticAbs(base=0xa0) entry_abs_words=0 abs_words_end=5
+  calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_len: ir_blocks=3 ir_insts=6 vcode_ops=17 fixups=1 imm_bytes=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=5 abs_words_end=0
+  u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98: ir_blocks=3 ir_insts=14 vcode_ops=36 fixups=3 imm_bytes=2
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=5 abs_words_end=0
+
+evm:
+  deploy: success reason=Return gas_used=192174 gas_refunded=0 logs=0 output=create len=642 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
+  case counter: calldata_len=36 success reason=Return gas_used=27449 gas_refunded=0 logs=0 output=call len=32 tx_gas=21204 runtime_gas=6245
+  case sum: calldata_len=36 success reason=Return gas_used=30879 gas_refunded=0 logs=0 output=call len=32 tx_gas=21204 runtime_gas=9675
+  case xor_loop: calldata_len=68 success reason=Return gas_used=29318 gas_refunded=0 logs=0 output=call len=32 tx_gas=21344 runtime_gas=7974
+  case counter_unchecked: calldata_len=36 success reason=Return gas_used=25845 gas_refunded=0 logs=0 output=call len=32 tx_gas=21204 runtime_gas=4641
+  case sum_unchecked: calldata_len=36 success reason=Return gas_used=27375 gas_refunded=0 logs=0 output=call len=32 tx_gas=21204 runtime_gas=6171
+  case xor_loop_unchecked: calldata_len=68 success reason=Return gas_used=28071 gas_refunded=0 logs=0 output=call len=32 tx_gas=21344 runtime_gas=6727
