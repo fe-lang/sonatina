@@ -25,6 +25,7 @@ use super::{
     },
     branch_canonicalize::BranchCanonicalize,
     cfg_cleanup::CfgCleanup,
+    checked_arith_elim::{CheckedArithElim, has_supported_checked_arith},
     dead_arg::{DeadArgElimConfig, run_dead_arg_elim},
     dead_func::{DeadFuncElimConfig, collect_object_roots, run_dead_func_elim},
     egraph::run_egraph_pass,
@@ -56,6 +57,8 @@ pub enum Pass {
     AggregateScalarize,
     /// Per-space load/store forwarding and dead-store elimination.
     LoadStore,
+    /// Eliminate checked arithmetic and div/mod overflow flags proven unreachable by range analysis.
+    CheckedArithElim,
     /// Sparse conditional constant propagation (composite: CfgCleanup + SCCP + CfgCleanup + ADCE).
     Sccp,
     /// Standalone aggressive dead code elimination.
@@ -83,6 +86,7 @@ impl Pass {
             Pass::ObjectLoadStore => "object_load_store",
             Pass::AggregateScalarize => "aggregate_scalarize",
             Pass::LoadStore => "load_store",
+            Pass::CheckedArithElim => "checked_arith_elim",
             Pass::Sccp => "sccp",
             Pass::Adce => "adce",
             Pass::Licm => "licm",
@@ -146,6 +150,7 @@ const PRIMARY_FUNC_PASSES: &[Pass] = &[
     Pass::ObjectLoadStore,
     Pass::AggregateScalarize,
     Pass::LoadStore,
+    Pass::CheckedArithElim,
     Pass::Sccp,
     Pass::Gvn,
     Pass::Licm,
@@ -164,6 +169,7 @@ const SECONDARY_FUNC_PASSES: &[Pass] = &[
     Pass::ObjectLoadStore,
     Pass::AggregateScalarize,
     Pass::LoadStore,
+    Pass::CheckedArithElim,
     Pass::Sccp,
     Pass::Gvn,
     Pass::BranchCanonicalize,
@@ -193,6 +199,7 @@ fn pass_may_invalidate_func_behavior(pass: Pass) -> bool {
             | Pass::ObjectLoadStore
             | Pass::AggregateScalarize
             | Pass::LoadStore
+            | Pass::CheckedArithElim
             | Pass::Sccp
             | Pass::Adce
             | Pass::Licm
@@ -324,6 +331,7 @@ impl Pipeline {
     ///    - `AggregateCombine`
     ///    - `AggregateScalarize`
     ///    - `LoadStore`
+    ///    - `CheckedArithElim`
     ///    - `Sccp`
     ///    - `Gvn`
     ///    - `CfgCleanup`
@@ -535,6 +543,34 @@ fn run_pass(
             {
                 let _span = trace_span!("sonatina.optim.pipeline.load_store.solve").entered();
                 solver.run(func, &mut ctx.cfg);
+            }
+        }
+        Pass::CheckedArithElim => {
+            let _span = trace_span!("sonatina.optim.pipeline.pass.checked_arith_elim").entered();
+            if !has_supported_checked_arith(func) {
+                return;
+            }
+            {
+                let _span =
+                    trace_span!("sonatina.optim.pipeline.checked_arith_elim.compute_cfg").entered();
+                ctx.cfg.compute(func);
+            }
+            {
+                let _span =
+                    trace_span!("sonatina.optim.pipeline.checked_arith_elim.compute_domtree")
+                        .entered();
+                ctx.domtree.compute(&ctx.cfg);
+            }
+            {
+                let _span =
+                    trace_span!("sonatina.optim.pipeline.checked_arith_elim.compute_looptree")
+                        .entered();
+                ctx.lpt.compute(&ctx.cfg, &ctx.domtree);
+            }
+            {
+                let _span =
+                    trace_span!("sonatina.optim.pipeline.checked_arith_elim.solve").entered();
+                CheckedArithElim::new().run(func, &ctx.cfg, &ctx.lpt);
             }
         }
         Pass::Sccp => {

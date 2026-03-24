@@ -43,48 +43,48 @@ assert:
 i8_h1bb527fe1af58754_saturatingsub_hd0c1c727e69d9468_saturating_sub:
   block0:
     JUMPDEST
-    DUP2  // v80.i256 = sub v0 v1;
+    DUP2  // v81.i256 = sub v0 v1;
     DUP2
     SUB
-    PUSH1 0xff (255)  // v82.i256 = and v80 255.i256;
+    PUSH1 0xff (255)  // v83.i256 = and v81 255.i256;
     AND
-    SWAP1  // v84.i256 = shl 248.i256 v0;
+    SWAP1  // v85.i256 = shl 248.i256 v0;
     PUSH1 0xf8 (248)
     SHL
-    PUSH1 0xf8 (248)  // v85.i256 = sar 248.i256 v84;
+    PUSH1 0xf8 (248)  // v86.i256 = sar 248.i256 v85;
     SAR
-    PUSH1 0x80 (128)  // v43.i256 = and 128.i256 v85;
+    PUSH1 0x80 (128)  // v44.i256 = and 128.i256 v86;
     AND
-    PUSH0  // v24.i1 = eq v43 0.i256;
+    PUSH0  // v24.i1 = eq v44 0.i256;
     EQ
-    DUP1  // v66.i1 = is_zero v24;
+    DUP1  // v67.i1 = is_zero v24;
     ISZERO
-    SWAP3  // v86.i256 = shl 248.i256 v1;
+    SWAP3  // v87.i256 = shl 248.i256 v1;
     PUSH1 0xf8 (248)
     SHL
-    PUSH1 0xf8 (248)  // v87.i256 = sar 248.i256 v86;
+    PUSH1 0xf8 (248)  // v88.i256 = sar 248.i256 v87;
     SAR
-    PUSH1 0x80 (128)  // v68.i256 = and 128.i256 v87;
+    PUSH1 0x80 (128)  // v69.i256 = and 128.i256 v88;
     AND
-    PUSH0  // v69.i1 = eq v68 0.i256;
+    PUSH0  // v70.i1 = eq v69 0.i256;
     EQ
-    ISZERO  // v70.i1 = is_zero v69;
-    DUP4  // v32.i1 = eq v66 v70;
+    ISZERO  // v71.i1 = is_zero v70;
+    DUP4  // v32.i1 = eq v67 v71;
     EQ
     PUSH1 block13  // br v32 block13 block3;
     JUMPI
   block3:
-    DUP2  // v88.i256 = shl 248.i256 v82;
+    DUP2  // v89.i256 = shl 248.i256 v83;
     PUSH1 0xf8 (248)
     SHL
-    PUSH1 0xf8 (248)  // v89.i256 = sar 248.i256 v88;
+    PUSH1 0xf8 (248)  // v90.i256 = sar 248.i256 v89;
     SAR
-    PUSH1 0x80 (128)  // v73.i256 = and 128.i256 v89;
+    PUSH1 0x80 (128)  // v74.i256 = and 128.i256 v90;
     AND
-    PUSH0  // v74.i1 = eq v73 0.i256;
+    PUSH0  // v75.i1 = eq v74 0.i256;
     EQ
-    ISZERO  // v75.i1 = is_zero v74;
-    SWAP1  // v34.i1 = eq v75 v66;
+    ISZERO  // v76.i1 = is_zero v75;
+    SWAP1  // v34.i1 = eq v76 v67;
     SWAP3
     EQ
     PUSH1 block15  // br v34 block15 block1;
@@ -177,42 +177,42 @@ i8_h1bb527fe1af58754_saturatingmul_hf2bc6be7b84ff8f7_saturating_mul:
     JUMP
   block5:
     JUMPDEST
-    DUP2  // v51.i256 = mul v0 v1;
+    DUP2  // v53.i256 = mul v0 v1;
     DUP2
     MUL
-    PUSH1 0xff (255)  // v52.i256 = and v51 255.i256;
+    PUSH1 0xff (255)  // v54.i256 = and v53 255.i256;
     AND
-    DUP1  // v54.i256 = shl 248.i256 v52;
-    PUSH1 0xf8 (248)
-    SHL
-    PUSH1 0xf8 (248)  // v55.i256 = sar 248.i256 v54;
-    SAR
-    DUP3  // v56.i256 = shl 248.i256 v0;
+    DUP1  // v56.i256 = shl 248.i256 v54;
     PUSH1 0xf8 (248)
     SHL
     PUSH1 0xf8 (248)  // v57.i256 = sar 248.i256 v56;
     SAR
-    DUP1  // v58.i256 = evm_sdiv v55 v57;
+    DUP3  // v58.i256 = shl 248.i256 v0;
+    PUSH1 0xf8 (248)
+    SHL
+    PUSH1 0xf8 (248)  // v59.i256 = sar 248.i256 v58;
+    SAR
+    DUP1  // v60.i256 = evm_sdiv v57 v59;
     SWAP2
     SDIV
-    PUSH1 0xff (255)  // v59.i256 = and v58 255.i256;
+    PUSH1 0xff (255)  // v61.i256 = and v60 255.i256;
     AND
-    PUSH0  // v60.i1 = eq v0 0.i256;
+    PUSH0  // v62.i1 = eq v0 0.i256;
     DUP5
     EQ
-    PUSH1 0x80 (128)  // v61.i1 = eq v52 128.i256;
+    PUSH1 0x80 (128)  // v63.i1 = eq v54 128.i256;
     DUP5
     EQ
-    SWAP5  // v62.i1 = eq v0 255.i256;
+    SWAP5  // v64.i1 = eq v0 255.i256;
     PUSH1 0xff (255)
     EQ
-    SWAP1  // v63.i1 = and v61 v62;
+    SWAP1  // v65.i1 = and v63 v64;
     SWAP5
     AND
-    SWAP1  // v64.i1 = or v60 v63;
+    SWAP1  // v66.i1 = or v62 v65;
     SWAP4
     OR
-    ISZERO  // br v64 block17 block19;
+    ISZERO  // br v66 block17 block19;
     PUSH1 block19
     JUMPI
   block17:
@@ -221,19 +221,19 @@ i8_h1bb527fe1af58754_saturatingmul_hf2bc6be7b84ff8f7_saturating_mul:
     REVERT
   block19:
     JUMPDEST
-    SWAP2  // v44.i1 = eq v59 v1;
+    SWAP2  // v44.i1 = eq v61 v1;
     DUP4
     EQ
     PUSH1 block40  // br v44 block40 block9;
     JUMPI
   block9:
-    POP  // v67.i256 = shl 248.i256 v1;
+    POP  // v69.i256 = shl 248.i256 v1;
     SWAP1
     PUSH1 0xf8 (248)
     SHL
-    PUSH1 0xf8 (248)  // v68.i256 = sar 248.i256 v67;
+    PUSH1 0xf8 (248)  // v70.i256 = sar 248.i256 v69;
     SAR
-    XOR  // v34.i256 = xor v57 v68;
+    XOR  // v34.i256 = xor v59 v70;
     PUSH1 0x80 (128)  // v35.i256 = and v34 128.i256;
     AND
     PUSH0  // v42.i1 = eq v35 0.i256;

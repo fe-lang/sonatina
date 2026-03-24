@@ -344,7 +344,7 @@ assert:
 evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Which_hfc83a4c81bdb00b2__3f276d0d504e07da:
   block0:
     JUMPDEST
-    PUSH1 0x40 (64)  // v43.i256 = mload 64.i32 i256;
+    PUSH1 0x40 (64)  // v44.i256 = mload 64.i32 i256;
     MLOAD
     PUSH1 0xa0 (160)  // v20.*@__fe_obj_SolEncoder_1 = alloca @__fe_obj_SolEncoder_1;
     PUSH0  // mstore v21 0.i256 i256;
@@ -358,6 +358,99 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Which_hfc
     JUMP
     JUMPDEST
     PUSH29 0x500000000000000000000000000000000000000000000000000000000 (134799733335753198973335075435098153368185722112702862405518051246080)  // mstore v25 134799733335753198973335075435098153368185722112702862405518051246080.i256 i256;
+    DUP2
+    MSTORE
+    PUSH1 0x4 (4)  // v41.i256 = add v25 4.i256;
+    DUP2
+    ADD
+    LT  // v42.i1 = lt v41 v25;
+    ISZERO  // br v42 block5 block9;
+    PUSH1 block9
+    JUMPI
+  block5:
+    PUSH0  // evm_revert 0.i256 0.i256;
+    PUSH0
+    REVERT
+  block9:
+    JUMPDEST
+    PUSH2 0x100 (256)  // v39.*@__fe_obj_tuple_0 = alloca @__fe_obj_tuple_0;
+    DUP1  // call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish v39 v20;
+    SWAP2
+    PUSH1 `pc + (4)`
+    SWAP2
+    PUSH1 FuncRef(36)
+    JUMP
+    JUMPDEST
+    DUP1  // v9.i256 = mload v8 i256;
+    MLOAD
+    SWAP1  // v11.*i256 = gep v39 0.i256 1.i256;
+    POP
+    PUSH2 0x120 (288)
+    MLOAD  // v12.i256 = mload v11 i256;
+    SWAP2  // v13.i256 = evm_call v1 v0 v2 v9 v12 0.i256 0.i256;
+    SWAP5
+    PUSH0
+    SWAP4
+    PUSH0
+    SWAP6
+    CALL
+    RETURNDATASIZE  // v14.i256 = evm_return_data_size;
+    DUP1  // v15.*i256 = evm_malloc v14;
+    POP
+    PUSH1 0x40 (64)
+    MLOAD
+    PUSH2 0x1bf (447)
+    DUP2
+    GT
+    PUSH1 `pc + (4)`
+    JUMPI
+    POP
+    PUSH2 0x1c0 (448)
+    JUMPDEST
+    DUP2  // evm_return_data_copy v16 0.i256 v14;
+    PUSH0
+    DUP3
+    RETURNDATACOPY
+    SWAP2  // v33.i1 = eq v13 0.i256;
+    PUSH0
+    EQ
+    ISZERO  // br v33 block1 block2;
+    PUSH1 block2
+    JUMPI
+  block1:
+    SWAP1  // evm_revert v16 v14;
+    REVERT
+  block2:
+    JUMPDEST
+    PUSH1 `pc + (4)`  // v22.i256 = call %decode_returndata__u256__3271ca15373d4483 v16 v14;
+    SWAP2
+    PUSH1 FuncRef(25)
+    JUMP
+    JUMPDEST
+    SWAP1  // mstore 64.i32 v44 i256;
+    PUSH1 0x40 (64)
+    MSTORE
+    SWAP1  // return v22;
+    JUMP
+
+// func private %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Confirm_h67936812d51d0893__aed46e41f390dba4(v0.i256, v1.i256, v2.i256) -> i256
+evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Confirm_h67936812d51d0893__aed46e41f390dba4:
+  block0:
+    JUMPDEST
+    PUSH1 0x40 (64)  // v43.i256 = mload 64.i32 i256;
+    MLOAD
+    PUSH1 0xa0 (160)  // v20.*@__fe_obj_SolEncoder_1 = alloca @__fe_obj_SolEncoder_1;
+    PUSH0  // mstore v21 0.i256 i256;
+    DUP2
+    MSTORE
+    DUP1  // v25.i256 = call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head v20 4.i256;
+    PUSH1 0x4 (4)
+    PUSH1 `pc + (4)`
+    SWAP2
+    PUSH1 FuncRef(34)
+    JUMP
+    JUMPDEST
+    PUSH29 0x100000000000000000000000000000000000000000000000000000000 (26959946667150639794667015087019630673637144422540572481103610249216)  // mstore v25 26959946667150639794667015087019630673637144422540572481103610249216.i256 i256;
     DUP2
     MSTORE
     PUSH1 0x4 (4)  // v40.i256 = add v25 4.i256;
@@ -428,99 +521,6 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Which_hfc
     JUMP
     JUMPDEST
     SWAP1  // mstore 64.i32 v43 i256;
-    PUSH1 0x40 (64)
-    MSTORE
-    SWAP1  // return v22;
-    JUMP
-
-// func private %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Confirm_h67936812d51d0893__aed46e41f390dba4(v0.i256, v1.i256, v2.i256) -> i256
-evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Confirm_h67936812d51d0893__aed46e41f390dba4:
-  block0:
-    JUMPDEST
-    PUSH1 0x40 (64)  // v42.i256 = mload 64.i32 i256;
-    MLOAD
-    PUSH1 0xa0 (160)  // v20.*@__fe_obj_SolEncoder_1 = alloca @__fe_obj_SolEncoder_1;
-    PUSH0  // mstore v21 0.i256 i256;
-    DUP2
-    MSTORE
-    DUP1  // v25.i256 = call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head v20 4.i256;
-    PUSH1 0x4 (4)
-    PUSH1 `pc + (4)`
-    SWAP2
-    PUSH1 FuncRef(34)
-    JUMP
-    JUMPDEST
-    PUSH29 0x100000000000000000000000000000000000000000000000000000000 (26959946667150639794667015087019630673637144422540572481103610249216)  // mstore v25 26959946667150639794667015087019630673637144422540572481103610249216.i256 i256;
-    DUP2
-    MSTORE
-    PUSH1 0x4 (4)  // v39.i256 = add v25 4.i256;
-    DUP2
-    ADD
-    LT  // v40.i1 = lt v39 v25;
-    ISZERO  // br v40 block5 block9;
-    PUSH1 block9
-    JUMPI
-  block5:
-    PUSH0  // evm_revert 0.i256 0.i256;
-    PUSH0
-    REVERT
-  block9:
-    JUMPDEST
-    PUSH2 0x100 (256)  // v37.*@__fe_obj_tuple_0 = alloca @__fe_obj_tuple_0;
-    DUP1  // call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish v37 v20;
-    SWAP2
-    PUSH1 `pc + (4)`
-    SWAP2
-    PUSH1 FuncRef(36)
-    JUMP
-    JUMPDEST
-    DUP1  // v9.i256 = mload v8 i256;
-    MLOAD
-    SWAP1  // v11.*i256 = gep v37 0.i256 1.i256;
-    POP
-    PUSH2 0x120 (288)
-    MLOAD  // v12.i256 = mload v11 i256;
-    SWAP2  // v13.i256 = evm_call v1 v0 v2 v9 v12 0.i256 0.i256;
-    SWAP5
-    PUSH0
-    SWAP4
-    PUSH0
-    SWAP6
-    CALL
-    RETURNDATASIZE  // v14.i256 = evm_return_data_size;
-    DUP1  // v15.*i256 = evm_malloc v14;
-    POP
-    PUSH1 0x40 (64)
-    MLOAD
-    PUSH2 0x1bf (447)
-    DUP2
-    GT
-    PUSH1 `pc + (4)`
-    JUMPI
-    POP
-    PUSH2 0x1c0 (448)
-    JUMPDEST
-    DUP2  // evm_return_data_copy v16 0.i256 v14;
-    PUSH0
-    DUP3
-    RETURNDATACOPY
-    SWAP2  // v33.i1 = eq v13 0.i256;
-    PUSH0
-    EQ
-    ISZERO  // br v33 block1 block2;
-    PUSH1 block2
-    JUMPI
-  block1:
-    SWAP1  // evm_revert v16 v14;
-    REVERT
-  block2:
-    JUMPDEST
-    PUSH1 `pc + (4)`  // v22.i256 = call %decode_returndata__u256__3271ca15373d4483 v16 v14;
-    SWAP2
-    PUSH1 FuncRef(25)
-    JUMP
-    JUMPDEST
-    SWAP1  // mstore 64.i32 v42 i256;
     PUSH1 0x40 (64)
     MSTORE
     SWAP1  // return v22;

@@ -19,26 +19,26 @@ func private %assert(v0.i1) {
 func private %i8_h1bb527fe1af58754_saturatingsub_hd0c1c727e69d9468_saturating_sub(v0.i8, v1.i8) -> i8 {
     block0:
         v2.i8 = sub v0 v1;
-        v42.i256 = sext v0 i256;
-        v43.i256 = and 128.i256 v42;
-        v24.i1 = eq v43 0.i256;
-        v66.i1 = is_zero v24;
-        v67.i256 = sext v1 i256;
-        v68.i256 = and 128.i256 v67;
-        v69.i1 = eq v68 0.i256;
-        v70.i1 = is_zero v69;
-        v32.i1 = eq v66 v70;
+        v43.i256 = sext v0 i256;
+        v44.i256 = and 128.i256 v43;
+        v24.i1 = eq v44 0.i256;
+        v67.i1 = is_zero v24;
+        v68.i256 = sext v1 i256;
+        v69.i256 = and 128.i256 v68;
+        v70.i1 = eq v69 0.i256;
+        v71.i1 = is_zero v70;
+        v32.i1 = eq v67 v71;
         br v32 block7 block3;
 
     block1:
         br v24 block9 block7;
 
     block3:
-        v72.i256 = sext v2 i256;
-        v73.i256 = and 128.i256 v72;
-        v74.i1 = eq v73 0.i256;
-        v75.i1 = is_zero v74;
-        v34.i1 = eq v75 v66;
+        v73.i256 = sext v2 i256;
+        v74.i256 = and 128.i256 v73;
+        v75.i1 = eq v74 0.i256;
+        v76.i1 = is_zero v75;
+        v34.i1 = eq v76 v67;
         br v34 block7 block1;
 
     block7:

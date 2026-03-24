@@ -1,7 +1,8 @@
 use sonatina_filecheck::{
     FileCheckRunner, adce::AdceTransform, aggregate_combine::AggregateCombineTransform,
     aggregate_scalarize::AggregateScalarizeTransform, cfg_cleanup::CfgCleanupTransform,
-    egraph::EgraphTransform, gvn::GvnTransform, licm::LicmTransformer, sccp::SccpTransform,
+    checked_arith_elim::CheckedArithElimTransform, egraph::EgraphTransform, gvn::GvnTransform,
+    licm::LicmTransformer, sccp::SccpTransform,
 };
 
 fn main() {
@@ -18,6 +19,9 @@ fn main() {
     runner.run();
 
     runner.attach_transformer(AdceTransform::default());
+    runner.run();
+
+    runner.attach_transformer(CheckedArithElimTransform::default());
     runner.run();
 
     // TODO: Uncomment here when we implement corresponding egglog optimization

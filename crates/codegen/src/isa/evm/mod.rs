@@ -44,6 +44,7 @@ use crate::{
         },
         branch_canonicalize::BranchCanonicalize,
         cfg_cleanup::CfgCleanup,
+        checked_arith_elim::{CheckedArithElim, has_supported_checked_arith},
         dead_arg::{DeadArgElimConfig, run_dead_arg_elim},
         gvn::GvnSolver,
         licm::LicmSolver,
@@ -2003,9 +2004,12 @@ fn run_evm_post_legalize_cleanup(
     func_behavior::analyze_module(module);
     for &func in funcs {
         module.func_store.modify(func, |function| {
+            BranchCanonicalize::new().run(function);
+
             let mut cfg = ControlFlowGraph::new();
             cfg.compute(function);
             LoadStoreSolver::new().run(function, &mut cfg);
+
             cfg.compute(function);
             SccpSolver::new().run(function, &mut cfg);
         });
@@ -2032,9 +2036,21 @@ fn run_evm_post_memory_legalize_cleanup(module: &Module, funcs: &[FuncRef]) {
     func_behavior::analyze_module(module);
     for &func in funcs {
         module.func_store.modify(func, |function| {
+            BranchCanonicalize::new().run(function);
+
             let mut cfg = ControlFlowGraph::new();
             cfg.compute(function);
             LoadStoreSolver::new().run(function, &mut cfg);
+
+            if has_supported_checked_arith(function) {
+                cfg.compute(function);
+                let mut domtree = DomTree::new();
+                domtree.compute(&cfg);
+                let mut lpt = LoopTree::new();
+                lpt.compute(&cfg, &domtree);
+                CheckedArithElim::new().run(function, &cfg, &lpt);
+            }
+
             cfg.compute(function);
             SccpSolver::new().run(function, &mut cfg);
         });
