@@ -2151,7 +2151,7 @@ impl<'a> ValuePhiFinder<'a> {
             }
         }
 
-        Some(result.canonicalize())
+        result.canonicalize()
     }
 
     fn compute_value_phi_for_binary<F>(
@@ -2249,7 +2249,7 @@ impl<'a> ValuePhiFinder<'a> {
             }
         }
 
-        Some(result.canonicalize())
+        result.canonicalize()
     }
 
     fn compute_value_phi_for_cast<F>(
@@ -2283,7 +2283,7 @@ impl<'a> ValuePhiFinder<'a> {
             }
         }
 
-        Some(result.canonicalize())
+        result.canonicalize()
     }
 
     /// Lookup value phi argument.
@@ -2335,7 +2335,8 @@ impl<'a> ValuePhiFinder<'a> {
     /// is annotated with `ValuePhi`.
     /// The result reflects the reachability of the incoming edges,
     /// i.e. if a phi arg pass through an unreachable incoming edge, then the arg and blocks
-    /// are omitted from the result.
+    /// are omitted from the result. If no incoming edge to the phi remains reachable, returns
+    /// `None`.
     ///
     /// The result is sorted in the block order.
     fn get_phi_of(&mut self, func: &Function, value: ValueId) -> Option<ValuePhi> {
@@ -2364,7 +2365,7 @@ impl<'a> ValuePhiFinder<'a> {
                     }
                 }
 
-                return Some(result.canonicalize());
+                return result.canonicalize();
             };
 
             // If the value is annotated with value phi, then return it.
@@ -2408,8 +2409,8 @@ impl ValuePhiInsn {
     }
 
     /// Canonicalize the value phi insn and convert into value phi.
-    fn canonicalize(mut self) -> ValuePhi {
-        let first_arg = &self.args[0].0;
+    fn canonicalize(mut self) -> Option<ValuePhi> {
+        let first_arg = &self.args.first()?.0;
 
         // If all arguments are the same, then return first argument.
         if self
@@ -2417,11 +2418,11 @@ impl ValuePhiInsn {
             .iter()
             .all(|(value_phi, _)| value_phi == first_arg)
         {
-            first_arg.clone()
+            Some(first_arg.clone())
         } else {
             // Sort arguments in block order.
             self.args.sort_by_key(|(_, block)| *block);
-            ValuePhi::PhiInsn(self)
+            Some(ValuePhi::PhiInsn(self))
         }
     }
 }
@@ -3102,6 +3103,65 @@ func private %entry(v0.i1) -> i32 {
             let mut finder = ValuePhiFinder::new(&mut solver, func.arg_values[0]);
             assert!(finder.get_phi_of(func, phi_value).is_some());
             assert!(finder.get_phi_of(func, phi_value).is_some());
+        });
+    }
+
+    #[test]
+    fn value_phi_finder_returns_none_when_phi_has_no_reachable_args() {
+        let source = r#"
+target = "evm-ethereum-london"
+
+func private %entry(v0.i1) -> i32 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        jump block3;
+
+    block2:
+        jump block3;
+
+    block3:
+        v1.i32 = phi (1.i32 block1) (2.i32 block2);
+        return v1;
+}
+"#;
+
+        let module = parse_module(source).expect("parse should succeed").module;
+        let func_ref = module.funcs()[0];
+        module.func_store.modify(func_ref, |func| {
+            let mut solver = GvnSolver::new();
+            solver.classes.push(ClassData {
+                values: BTreeSet::new(),
+                gvn_insn: GvnInsn::Value(ValueId(u32::MAX)),
+                value_phi: None,
+            });
+
+            let phi_inst = func
+                .layout
+                .iter_block()
+                .flat_map(|block| func.layout.iter_inst(block))
+                .find(|&inst| func.dfg.is_phi(inst))
+                .expect("test function should contain a phi instruction");
+            let phi_value = func
+                .dfg
+                .inst_result(phi_inst)
+                .expect("test function should contain a phi result");
+            let phi_block = func.layout.inst_block(phi_inst);
+            let phi_key = inst_to_gvn_key(func, phi_inst);
+            let phi_args = phi_key
+                .phi_args()
+                .expect("phi instruction should have args");
+
+            for &(_, from) in phi_args {
+                solver.add_edge_info(from, phi_block, None, None, None);
+            }
+
+            let class = solver.make_class(GvnInsn::expr(phi_key, 0), None);
+            solver.assign_class(phi_value, class);
+
+            let mut finder = ValuePhiFinder::new(&mut solver, func.arg_values[0]);
+            assert_eq!(finder.get_phi_of(func, phi_value), None);
         });
     }
 
