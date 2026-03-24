@@ -72,7 +72,7 @@ pub fn run_egraph_pass(func: &mut Function) -> bool {
     let mut extract_names = Vec::new();
 
     // Run rules to apply rewrites
-    full_program.push_str("\n(run 10)");
+    full_program.push_str("\n(run 4)");
 
     for block in func.layout.iter_block() {
         for inst_id in func.layout.iter_inst(block) {
