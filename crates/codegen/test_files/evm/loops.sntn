@@ -1,0 +1,340 @@
+#! evm.config: { vcode: true, opt: 2 }
+#! evm.case: counter
+#!   calldata: bytes(0xb1f525c6) u256(100)
+#!   expect: return u256(100)
+#! evm.case: sum
+#!   calldata: bytes(0x188b85b4) u256(100)
+#!   expect: return u256(5050)
+#! evm.case: xor_loop
+#!   calldata: bytes(0x3c69d758) u256(100) u256(42)
+#!   expect: return u256(42)
+#! evm.case: counter_unchecked
+#!   calldata: bytes(0x99879573) u256(100)
+#!   expect: return u256(100)
+#! evm.case: sum_unchecked
+#!   calldata: bytes(0x859198d6) u256(100)
+#!   expect: return u256(5050)
+#! evm.case: xor_loop_unchecked
+#!   calldata: bytes(0x44c8674a) u256(100) u256(42)
+#!   expect: return u256(42)
+
+target = "evm-ethereum-osaka"
+
+type @__fe_obj_XorLoop_0 = {i256, i256};
+type @__fe_obj_XorLoopUnchecked_1 = {i256, i256};
+type @__fe_obj_Cursor_2 = {i256, i256};
+type @__fe_obj_SolDecoder_3 = {@__fe_obj_Cursor_2, i256};
+type @__fe_obj_SolEncoder_4 = {i256, i256, i256};
+type @__fe_obj_tuple_5 = {i256, i256};
+
+func private %__Bench_recv_0_2(v0.objref<@__fe_obj_XorLoop_0>) -> i256 {
+    block0:
+        v37.objref<i256> = obj.proj v0 1.i64;
+        v38.i256 = obj.load v37;
+        v35.objref<i256> = obj.proj v0 0.i64;
+        v36.i256 = obj.load v35;
+        jump block1;
+
+    block1:
+        v19.i256 = phi (v38 block0) (v14 block2);
+        v7.i256 = phi (0.i256 block0) (v15 block2);
+        v23.i1 = lt v7 v36;
+        br v23 block2 block3;
+
+    block2:
+        v13.i256 = xor v38 v7;
+        v14.i256 = xor v19 v13;
+        (v15.i256, v16.i1) = uaddo v7 1.i256;
+        br v16 block4 block1;
+
+    block3:
+        return v19;
+
+    block4:
+        evm_revert 0.i256 0.i256;
+}
+
+func private %__Bench_recv_0_3(v0.i256) -> i256 {
+    block0:
+        jump block3;
+
+    block3:
+        v4.i256 = phi (0.i256 block0) (v7 block4);
+        v5.i1 = lt v4 v0;
+        br v5 block4 block1;
+
+    block4:
+        v7.i256 = add 1.i256 v4;
+        jump block3;
+
+    block1:
+        return v4;
+}
+
+func private %__Bench_recv_0_4(v0.i256) -> i256 {
+    block0:
+        jump block3;
+
+    block3:
+        v4.i256 = phi (0.i256 block0) (v10 block4);
+        v7.i256 = phi (1.i256 block0) (v11 block4);
+        v16.i1 = gt v7 v0;
+        v9.i1 = is_zero v16;
+        br v9 block4 block1;
+
+    block4:
+        v10.i256 = add v4 v7;
+        v11.i256 = add 1.i256 v7;
+        jump block3;
+
+    block1:
+        return v4;
+}
+
+func private %__Bench_recv_0_5(v0.objref<@__fe_obj_XorLoopUnchecked_1>) -> i256 {
+    block0:
+        v30.objref<i256> = obj.proj v0 1.i64;
+        v31.i256 = obj.load v30;
+        v28.objref<i256> = obj.proj v0 0.i64;
+        v29.i256 = obj.load v28;
+        jump block3;
+
+    block3:
+        v9.i256 = phi (v31 block0) (v14 block4);
+        v11.i256 = phi (0.i256 block0) (v15 block4);
+        v12.i1 = lt v11 v29;
+        br v12 block4 block1;
+
+    block4:
+        v27.i256 = xor v11 v31;
+        v14.i256 = xor v9 v27;
+        v15.i256 = add 1.i256 v11;
+        jump block3;
+
+    block1:
+        return v9;
+}
+
+func private %__Bench_init() {
+    block0:
+        v0.i256 = evm_call_value;
+        v8.i1 = is_zero v0;
+        v3.i1 = is_zero v8;
+        br v3 block1 block2;
+
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block2:
+        v4.i256 = sym_addr &__Bench_runtime;
+        v5.i256 = sym_size &__Bench_runtime;
+        evm_code_copy 0.i256 v4 v5;
+        evm_return 0.i256 v5;
+}
+
+func private %__Bench_runtime() {
+    block0:
+        v45.i256 = call %calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_len 0.i256;
+        v47.i1 = lt v45 4.i256;
+        br v47 block22 block23;
+
+    block22:
+        evm_revert 0.i256 0.i256;
+
+    block23:
+        v50.i256 = evm_calldata_load 0.i256;
+        v52.i256 = shr 224.i256 v50;
+        v53.i32 = trunc v52 i32;
+        v58.objref<@__fe_obj_SolDecoder_3> = obj.alloc @__fe_obj_SolDecoder_3;
+        v61.objref<@__fe_obj_Cursor_2> = obj.proj v58 0.i256;
+        v62.objref<i256> = obj.proj v61 0.i256;
+        obj.store v62 0.i256;
+        v66.objref<i256> = obj.proj v61 1.i256;
+        obj.store v66 4.i256;
+        br_table v53 block1 (-1309334074.i32 block2) (411796916.i32 block5) (1013569368.i32 block8) (-1719167629.i32 block11) (-2054055722.i32 block14) (1153984330.i32 block17);
+
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block2:
+        v8.i256 = evm_call_value;
+        v10.i1 = eq v8 0.i256;
+        v11.i1 = is_zero v10;
+        br v11 block3 block4;
+
+    block3:
+        evm_revert 0.i256 0.i256;
+
+    block4:
+        v13.i256 = call %u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98 v58;
+        jump block26;
+
+    block26:
+        v69.i256 = phi (0.i256 block4) (v71 block27);
+        v70.i1 = lt v69 v13;
+        br v70 block27 block24;
+
+    block27:
+        (v71.i256, v72.i1) = uaddo v69 1.i256;
+        br v72 block29 block26;
+
+    block29:
+        evm_revert 0.i256 0.i256;
+
+    block24:
+        mstore 0.i256 v69 i256;
+        evm_return 0.i256 32.i256;
+
+    block5:
+        v15.i256 = evm_call_value;
+        v16.i1 = eq v15 0.i256;
+        v17.i1 = is_zero v16;
+        br v17 block6 block7;
+
+    block6:
+        evm_revert 0.i256 0.i256;
+
+    block7:
+        v19.i256 = call %u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98 v58;
+        jump block33;
+
+    block33:
+        v88.i256 = phi (0.i256 block7) (v93 block37);
+        v90.i256 = phi (1.i256 block7) (v95 block37);
+        v91.i1 = gt v90 v19;
+        v92.i1 = is_zero v91;
+        br v92 block34 block31;
+
+    block34:
+        (v93.i256, v94.i1) = uaddo v88 v90;
+        br v94 block36 block37;
+
+    block36:
+        evm_revert 0.i256 0.i256;
+
+    block37:
+        (v95.i256, v96.i1) = uaddo v90 1.i256;
+        br v96 block36 block33;
+
+    block31:
+        mstore 0.i256 v88 i256;
+        evm_return 0.i256 32.i256;
+
+    block8:
+        v21.i256 = evm_call_value;
+        v22.i1 = eq v21 0.i256;
+        v23.i1 = is_zero v22;
+        br v23 block9 block10;
+
+    block9:
+        evm_revert 0.i256 0.i256;
+
+    block10:
+        v73.i256 = call %u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98 v58;
+        v74.i256 = call %u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98 v58;
+        v75.objref<@__fe_obj_XorLoop_0> = obj.alloc @__fe_obj_XorLoop_0;
+        v76.objref<i256> = obj.proj v75 0.i256;
+        obj.store v76 v73;
+        v77.objref<i256> = obj.proj v75 1.i256;
+        obj.store v77 v74;
+        v26.i256 = call %__Bench_recv_0_2 v75;
+        mstore 0.i256 v26 i256;
+        evm_return 0.i256 32.i256;
+
+    block11:
+        v27.i256 = evm_call_value;
+        v28.i1 = eq v27 0.i256;
+        v29.i1 = is_zero v28;
+        br v29 block12 block13;
+
+    block12:
+        evm_revert 0.i256 0.i256;
+
+    block13:
+        v31.i256 = call %u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98 v58;
+        v32.i256 = call %__Bench_recv_0_3 v31;
+        mstore 0.i256 v32 i256;
+        evm_return 0.i256 32.i256;
+
+    block14:
+        v33.i256 = evm_call_value;
+        v34.i1 = eq v33 0.i256;
+        v35.i1 = is_zero v34;
+        br v35 block15 block16;
+
+    block15:
+        evm_revert 0.i256 0.i256;
+
+    block16:
+        v37.i256 = call %u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98 v58;
+        v38.i256 = call %__Bench_recv_0_4 v37;
+        mstore 0.i256 v38 i256;
+        evm_return 0.i256 32.i256;
+
+    block17:
+        v39.i256 = evm_call_value;
+        v40.i1 = eq v39 0.i256;
+        v41.i1 = is_zero v40;
+        br v41 block18 block19;
+
+    block18:
+        evm_revert 0.i256 0.i256;
+
+    block19:
+        v78.i256 = call %u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98 v58;
+        v79.i256 = call %u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98 v58;
+        v80.objref<@__fe_obj_XorLoopUnchecked_1> = obj.alloc @__fe_obj_XorLoopUnchecked_1;
+        v81.objref<i256> = obj.proj v80 0.i256;
+        obj.store v81 v78;
+        v82.objref<i256> = obj.proj v80 1.i256;
+        obj.store v82 v79;
+        v44.i256 = call %__Bench_recv_0_5 v80;
+        mstore 0.i256 v44 i256;
+        evm_return 0.i256 32.i256;
+}
+
+func private %calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_len(v0.i256) -> i256 {
+    block0:
+        v1.i256 = evm_calldata_size;
+        (v2.i256, v3.i1) = usubo v1 v0;
+        br v3 block1 block2;
+
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block2:
+        return v2;
+}
+
+func private %u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98(v0.objref<@__fe_obj_SolDecoder_3>) -> i256 {
+    block0:
+        v3.objref<@__fe_obj_Cursor_2> = obj.proj v0 0.i256;
+        v4.objref<i256> = obj.proj v3 0.i256;
+        v5.i256 = obj.load v4;
+        v6.i256 = call %calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_len v5;
+        v9.objref<i256> = obj.proj v3 1.i256;
+        v10.i256 = obj.load v9;
+        v12.i256 = add 32.i256 v10;
+        v13.i1 = gt v12 v6;
+        br v13 block3 block4;
+
+    block3:
+        evm_revert 0.i256 0.i256;
+
+    block4:
+        v21.i256 = add v10 v5;
+        v22.i256 = evm_calldata_load v21;
+        obj.store v9 v12;
+        return v22;
+}
+
+
+object @Contract {
+    section init {
+        entry %__Bench_init;
+        embed .runtime as &__Bench_runtime;
+    }
+    section runtime {
+        entry %__Bench_runtime;
+    }
+}

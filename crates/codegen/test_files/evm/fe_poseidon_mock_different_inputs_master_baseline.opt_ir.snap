@@ -22,8 +22,7 @@ func private %ark(v0.*[i256; 3], v1.i256) -> *[i256; 3] {
         evm_code_copy v9 v7 v8;
         v10.*[i256; 24] = bitcast v6 *[i256; 24];
         v12.i1 = lt v1 24.i256;
-        v13.i1 = is_zero v12;
-        br v13 block1 block2;
+        br v12 block2 block1;
 
     block1:
         evm_revert 0.i256 0.i256;
@@ -43,8 +42,7 @@ func private %ark(v0.*[i256; 3], v1.i256) -> *[i256; 3] {
 
     block3:
         v32.i1 = lt v29 24.i256;
-        v33.i1 = is_zero v32;
-        br v33 block1 block4;
+        br v32 block4 block1;
 
     block4:
         v34.*i256 = gep v27 0.i256 v29;
@@ -61,8 +59,7 @@ func private %ark(v0.*[i256; 3], v1.i256) -> *[i256; 3] {
 
     block5:
         v51.i1 = lt v48 24.i256;
-        v52.i1 = is_zero v51;
-        br v52 block1 block6;
+        br v51 block6 block1;
 
     block6:
         v53.*i256 = gep v46 0.i256 v48;
@@ -145,14 +142,14 @@ func private %mix(v0.*[i256; 3]) -> *[i256; 3] {
         v32.*i8 = evm_malloc 288.i256;
         v35.i256 = ptr_to_int v32 i256;
         evm_code_copy v35 v33 v34;
-        v54.*[[i256; 3]; 3] = bitcast v32 *[[i256; 3]; 3];
-        v55.*[i256; 3] = gep v54 0.i256 v9;
-        v44.*i256 = gep v55 0.i256 v19;
+        v52.*[[i256; 3]; 3] = bitcast v32 *[[i256; 3]; 3];
+        v53.*[i256; 3] = gep v52 0.i256 v9;
+        v44.*i256 = gep v53 0.i256 v19;
         v45.i256 = mload v44 i256;
         v50.*i256 = gep v0 0.i256 v19;
         v51.i256 = mload v50 i256;
-        v56.i256 = evm_mul_mod v45 v51 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
-        v56.i256 = evm_add_mod v56 v30 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
+        v54.i256 = evm_mul_mod v45 v51 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
+        v56.i256 = evm_add_mod v54 v30 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
         mstore v29 v56 i256;
         v63.i256 = add 1.i256 v19;
         jump block5;
@@ -246,25 +243,17 @@ func private %range_known_const_s__usize___unknown__h4e84f6b6b8307914_seq_ha637d
         return v10;
 }
 
-func private %assert(v0.i1) {
-    block0:
-        v1.i1 = is_zero v0;
-        br v1 block1 block2;
-
-    block1:
-        evm_revert 0.i256 0.i256;
-
-    block2:
-        return;
-}
-
 func public %entry() {
     block0:
         v6.i256 = call %poseidon_mock 1.i256 2.i256;
         v7.i256 = call %poseidon_mock 3.i256 4.i256;
         v10.i1 = eq v6 v7;
-        v9.i1 = is_zero v10;
-        call %assert v9;
+        br v10 block3 block1;
+
+    block3:
+        evm_revert 0.i256 0.i256;
+
+    block1:
         mstore 0.i256 1.i256 i256;
         evm_return 0.i256 32.i256;
 }

@@ -29,6 +29,7 @@ use crate::{
     critical_edge::CriticalEdgeSplitter,
     domtree::DomTree,
     liveness::{InstLiveness, Liveness},
+    loop_analysis::LoopTree,
     machinst::{
         lower::{FixupUpdate, Lower, LowerBackend, LoweredFunction, SectionLoweringCtx},
         vcode::{Label, SymFixup, SymFixupKind, VCode, VCodeFixup, VCodeInst},
@@ -764,8 +765,17 @@ impl EvmBackend {
         let alias_plan = module.func_store.view(func, |function| {
             compute_late_block_alias_plan(function, &alloc, &frame_summary, &block_order)
         });
-        let emitted_block_order = alias_plan.emitted_block_order;
-        let block_aliases = alias_plan.aliases;
+        let LateBlockAliasPlan {
+            aliases: block_aliases,
+            emitted_block_order,
+        } = alias_plan;
+        let emitted_block_order = if self.enable_late_cleanup_optimizations {
+            module.func_store.view(func, |function| {
+                rewrite_evm_local_fallthrough_layout(function, &block_aliases, emitted_block_order)
+            })
+        } else {
+            emitted_block_order
+        };
         module.func_store.view(func, |function| {
             assert_aggregate_legalized(function, &module.ctx);
         });
@@ -1042,6 +1052,127 @@ fn compute_late_block_alias_plan(
         aliases,
         emitted_block_order,
     }
+}
+
+fn rewrite_evm_local_fallthrough_layout(
+    function: &Function,
+    aliases: &FxHashMap<BlockId, BlockId>,
+    mut emitted_block_order: Vec<BlockId>,
+) -> Vec<BlockId> {
+    if emitted_block_order.len() < 3 {
+        return emitted_block_order;
+    }
+
+    let mut cfg = ControlFlowGraph::new();
+    cfg.compute(function);
+
+    let mut dom = DomTree::new();
+    dom.compute(&cfg);
+
+    let mut loops = LoopTree::new();
+    loops.compute(&cfg, &dom);
+
+    let mut idx = 0;
+    while idx + 2 < emitted_block_order.len() {
+        let header = emitted_block_order[idx];
+        let exit = emitted_block_order[idx + 1];
+        let body = emitted_block_order[idx + 2];
+        if is_hot_loop_header_fallthrough_candidate(
+            function, &cfg, &loops, aliases, header, exit, body,
+        ) {
+            tracing::trace!(
+                header = header.0,
+                body = body.0,
+                exit = exit.0,
+                "rewrote local EVM fallthrough layout"
+            );
+            emitted_block_order.swap(idx + 1, idx + 2);
+            idx += 3;
+        } else {
+            idx += 1;
+        }
+    }
+
+    emitted_block_order
+}
+
+fn is_hot_loop_header_fallthrough_candidate(
+    function: &Function,
+    cfg: &ControlFlowGraph,
+    loops: &LoopTree,
+    aliases: &FxHashMap<BlockId, BlockId>,
+    header: BlockId,
+    exit: BlockId,
+    body: BlockId,
+) -> bool {
+    if [header, exit, body]
+        .into_iter()
+        .any(|block| canonical_late_alias_target(aliases, block) != block)
+    {
+        return false;
+    }
+
+    let Some(lp) = loops.loop_of_block(header) else {
+        return false;
+    };
+    if loops.loop_header(lp) != header
+        || !loops.is_in_loop(body, lp)
+        || loops.is_in_loop(exit, lp)
+        || cfg.pred_num_of(body) != 1
+        || cfg.preds_as_slice(body) != [header]
+    {
+        return false;
+    }
+
+    let Some(header_term) = function.layout.last_inst_of(header) else {
+        return false;
+    };
+    let Some(body_term) = function.layout.last_inst_of(body) else {
+        return false;
+    };
+    let Some(exit_term) = function.layout.last_inst_of(exit) else {
+        return false;
+    };
+    if !function.dfg.is_exit(exit_term)
+        || function
+            .layout
+            .iter_inst(body)
+            .any(|inst| function.dfg.is_phi(inst))
+    {
+        return false;
+    }
+
+    let Some(header_branch) = function.dfg.branch_info(header_term) else {
+        return false;
+    };
+    let BranchKind::Br(br) = header_branch.branch_kind() else {
+        return false;
+    };
+    if canonical_late_alias_target(aliases, *br.nz_dest()) != exit
+        || canonical_late_alias_target(aliases, *br.z_dest()) != body
+    {
+        return false;
+    }
+
+    let Some(body_branch) = function.dfg.branch_info(body_term) else {
+        return false;
+    };
+    let BranchKind::Jump(jump) = body_branch.branch_kind() else {
+        return false;
+    };
+
+    canonical_late_alias_target(aliases, *jump.dest()) == header
+}
+
+fn canonical_late_alias_target(aliases: &FxHashMap<BlockId, BlockId>, block: BlockId) -> BlockId {
+    let mut block = block;
+    while let Some(&next) = aliases.get(&block) {
+        if next == block {
+            break;
+        }
+        block = next;
+    }
+    block
 }
 
 fn block_trampoline_jump_inst(function: &Function, block: BlockId) -> Option<InstId> {
@@ -4590,6 +4721,264 @@ mod tests {
             names: ctx.names,
             plan: dyn_sp_plan,
         }
+    }
+
+    fn find_func(module: &Module, name: &str) -> FuncRef {
+        module
+            .funcs()
+            .into_iter()
+            .find(|&func| module.ctx.func_sig(func, |sig| sig.name() == name))
+            .expect("function exists")
+    }
+
+    fn rewrite_local_fallthrough_order_from_src(
+        src: &str,
+        func_name: &str,
+        block_order: &[u32],
+    ) -> Vec<u32> {
+        let parsed = parse_module(src).expect("module parses");
+        let func = find_func(&parsed.module, func_name);
+        let block_order: Vec<_> = block_order.iter().copied().map(BlockId).collect();
+
+        parsed.module.func_store.view(func, |function| {
+            rewrite_evm_local_fallthrough_layout(function, &FxHashMap::default(), block_order)
+                .into_iter()
+                .map(|block| block.0)
+                .collect()
+        })
+    }
+
+    const HOT_LOOP_EXIT_LAYOUT_SRC: &str = r#"
+target = "evm-ethereum-osaka"
+
+func public %main(v0.i256) -> i256 {
+block0:
+    jump block3;
+
+block3:
+    v1.i256 = phi (0.i256 block0) (v2 block4);
+    v3.i1 = gt v1 v0;
+    br v3 block1 block4;
+
+block4:
+    v2.i256 = add v1 1.i256;
+    jump block3;
+
+block1:
+    return v1;
+}
+"#;
+
+    const HOT_LOOP_LT_SRC: &str = r#"
+target = "evm-ethereum-osaka"
+
+func public %main(v0.i256) -> i256 {
+block0:
+    jump block3;
+
+block3:
+    v1.i256 = phi (0.i256 block0) (v2 block4);
+    v3.i1 = lt v1 v0;
+    br v3 block4 block1;
+
+block4:
+    v2.i256 = add v1 1.i256;
+    jump block3;
+
+block1:
+    return v1;
+}
+"#;
+
+    const HOT_LOOP_MULTI_PRED_BODY_SRC: &str = r#"
+target = "evm-ethereum-osaka"
+
+func public %main(v0.i1, v1.i256) -> i256 {
+block0:
+    br v0 block2 block3;
+
+block2:
+    jump block4;
+
+block3:
+    v4.i256 = phi (0.i256 block0) (v5 block4);
+    v6.i1 = gt v4 v1;
+    br v6 block1 block4;
+
+block4:
+    v5.i256 = add v4 1.i256;
+    jump block3;
+
+block1:
+    return v4;
+}
+"#;
+
+    const HOT_LOOP_LATCH_SRC: &str = r#"
+target = "evm-ethereum-osaka"
+
+func public %main(v0.i256) -> i256 {
+block0:
+    jump block3;
+
+block3:
+    v1.i256 = phi (0.i256 block0) (v2 block5);
+    v3.i1 = gt v1 v0;
+    br v3 block1 block4;
+
+block4:
+    v4.i256 = add v1 1.i256;
+    jump block5;
+
+block5:
+    v2.i256 = add v4 0.i256;
+    jump block3;
+
+block1:
+    return v1;
+}
+"#;
+
+    const HOT_LOOP_NONTERMINAL_EXIT_SRC: &str = r#"
+target = "evm-ethereum-osaka"
+
+func public %main(v0.i256) -> i256 {
+block0:
+    jump block3;
+
+block3:
+    v1.i256 = phi (0.i256 block0) (v2 block4);
+    v3.i1 = gt v1 v0;
+    br v3 block1 block4;
+
+block4:
+    v2.i256 = add v1 1.i256;
+    jump block3;
+
+block1:
+    jump block2;
+
+block2:
+    return v1;
+}
+"#;
+
+    const HOT_LOOP_NONADJACENT_WINDOW_SRC: &str = r#"
+target = "evm-ethereum-osaka"
+
+func public %main(v0.i1, v1.i256) -> i256 {
+block0:
+    br v0 block2 block3;
+
+block2:
+    return 7.i256;
+
+block3:
+    v4.i256 = phi (0.i256 block0) (v5 block4);
+    v6.i1 = gt v4 v1;
+    br v6 block1 block4;
+
+block4:
+    v5.i256 = add v4 1.i256;
+    jump block3;
+
+block1:
+    return v4;
+}
+"#;
+
+    const NON_LOOP_BRANCH_SRC: &str = r#"
+target = "evm-ethereum-osaka"
+
+func public %main(v0.i1) -> i256 {
+block0:
+    br v0 block1 block2;
+
+block1:
+    return 1.i256;
+
+block2:
+    return 2.i256;
+}
+"#;
+
+    #[test]
+    fn local_fallthrough_layout_rewrites_hot_loop_header_window() {
+        let order = rewrite_local_fallthrough_order_from_src(
+            HOT_LOOP_EXIT_LAYOUT_SRC,
+            "main",
+            &[0, 3, 1, 4],
+        );
+
+        assert_eq!(order, vec![0, 3, 4, 1]);
+    }
+
+    #[test]
+    fn local_fallthrough_layout_skips_lt_loop_headers() {
+        let order =
+            rewrite_local_fallthrough_order_from_src(HOT_LOOP_LT_SRC, "main", &[0, 3, 1, 4]);
+
+        assert_eq!(order, vec![0, 3, 1, 4]);
+    }
+
+    #[test]
+    fn local_fallthrough_layout_skips_multi_pred_bodies() {
+        let order = rewrite_local_fallthrough_order_from_src(
+            HOT_LOOP_MULTI_PRED_BODY_SRC,
+            "main",
+            &[0, 2, 3, 1, 4],
+        );
+
+        assert_eq!(order, vec![0, 2, 3, 1, 4]);
+    }
+
+    #[test]
+    fn local_fallthrough_layout_skips_non_backedge_body_blocks() {
+        let order =
+            rewrite_local_fallthrough_order_from_src(HOT_LOOP_LATCH_SRC, "main", &[0, 3, 1, 4, 5]);
+
+        assert_eq!(order, vec![0, 3, 1, 4, 5]);
+    }
+
+    #[test]
+    fn local_fallthrough_layout_skips_nonterminal_exits() {
+        let order = rewrite_local_fallthrough_order_from_src(
+            HOT_LOOP_NONTERMINAL_EXIT_SRC,
+            "main",
+            &[0, 3, 1, 4, 2],
+        );
+
+        assert_eq!(order, vec![0, 3, 1, 4, 2]);
+    }
+
+    #[test]
+    fn local_fallthrough_layout_skips_nonadjacent_windows() {
+        let order = rewrite_local_fallthrough_order_from_src(
+            HOT_LOOP_NONADJACENT_WINDOW_SRC,
+            "main",
+            &[0, 3, 2, 1, 4],
+        );
+
+        assert_eq!(order, vec![0, 3, 2, 1, 4]);
+    }
+
+    #[test]
+    fn local_fallthrough_layout_skips_already_ideal_order() {
+        let order = rewrite_local_fallthrough_order_from_src(
+            HOT_LOOP_EXIT_LAYOUT_SRC,
+            "main",
+            &[0, 3, 4, 1],
+        );
+
+        assert_eq!(order, vec![0, 3, 4, 1]);
+    }
+
+    #[test]
+    fn local_fallthrough_layout_skips_non_loop_branches() {
+        let order =
+            rewrite_local_fallthrough_order_from_src(NON_LOOP_BRANCH_SRC, "main", &[0, 1, 2]);
+
+        assert_eq!(order, vec![0, 1, 2]);
     }
 
     #[test]

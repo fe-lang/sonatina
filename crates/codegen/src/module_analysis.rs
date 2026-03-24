@@ -102,12 +102,14 @@ pub struct FuncInfo {
 
 #[derive(Debug, Clone, Default)]
 pub struct CallGraph {
+    funcs: Vec<FuncRef>,
     nodes: SecondaryMap<FuncRef, Node>,
 }
 
 impl CallGraph {
     /// Builds a call graph from a module.
     pub fn build_graph(module: &Module) -> Self {
+        let funcs = module.func_store.funcs();
         let d_nodes = DashMap::new();
         module.func_store.par_for_each(|func_ref, func| {
             let mut callees = FxHashSet::default();
@@ -127,10 +129,13 @@ impl CallGraph {
         });
 
         let mut nodes = SecondaryMap::new();
-        for (func_ref, node) in d_nodes {
+        for &func_ref in &funcs {
+            let (_, node) = d_nodes
+                .remove(&func_ref)
+                .expect("call graph node should exist for every function");
             nodes[func_ref] = node;
         }
-        CallGraph { nodes }
+        CallGraph { funcs, nodes }
     }
 
     /// Builds a call graph restricted to `funcs`.
@@ -142,7 +147,7 @@ impl CallGraph {
         let mut ordered: Vec<FuncRef> = funcs.iter().copied().collect();
         ordered.sort_unstable_by_key(|f| f.as_u32());
 
-        for func_ref in ordered {
+        for &func_ref in &ordered {
             let callees = module.func_store.view(func_ref, |func| {
                 let mut callees = FxHashSet::default();
                 for block in func.layout.iter_block() {
@@ -164,11 +169,14 @@ impl CallGraph {
             nodes[func_ref] = Node { callees };
         }
 
-        CallGraph { nodes }
+        CallGraph {
+            funcs: ordered,
+            nodes,
+        }
     }
 
-    pub fn funcs(&self) -> impl Iterator<Item = FuncRef> {
-        self.nodes.keys()
+    pub fn funcs(&self) -> impl Iterator<Item = FuncRef> + '_ {
+        self.funcs.iter().copied()
     }
 
     /// Get the callees of a function.
@@ -235,7 +243,7 @@ impl SccBuilder {
     }
 
     pub fn compute_scc(mut self, call_graph: &CallGraph) -> CallGraphSccs {
-        for func_ref in call_graph.nodes.keys() {
+        for func_ref in call_graph.funcs() {
             if !self.nodes[func_ref].visited {
                 self.strong_component(func_ref, call_graph);
             }
@@ -374,15 +382,16 @@ impl<'a> ModuleAnalyzer<'a> {
     fn determine_access_pattern(&mut self) {
         let mut seen: FxHashSet<FuncRef> = FxHashSet::default();
 
-        for (func_ref, node) in self.call_graph.nodes.iter() {
+        for func_ref in self.call_graph.funcs() {
             if !seen.insert(func_ref) {
                 continue;
             }
 
+            let node = self.call_graph.callee_of(func_ref);
             let access_pattern =
                 DependencyFlow::from_linkage(self.module.ctx.func_linkage(func_ref));
             self.access_pattern = self.access_pattern.join(access_pattern);
-            for &callee in &node.callees {
+            for &callee in node {
                 if !seen.insert(callee) {
                     continue;
                 };
@@ -399,7 +408,7 @@ impl<'a> ModuleAnalyzer<'a> {
         // Traverse the condensation DAG of a call graph to analyze the dependency flow
         // of functions and recursive calls.
         // We start traversing from public functions.
-        for func_ref in self.call_graph.nodes.keys() {
+        for func_ref in self.call_graph.funcs() {
             let sig = self.module.ctx.func_linkage(func_ref);
             if !sig.is_public() | self.func_info.contains_key(&func_ref) {
                 continue;
@@ -410,7 +419,7 @@ impl<'a> ModuleAnalyzer<'a> {
         }
 
         // Traverse the rest of the functions.
-        for func_ref in self.call_graph.nodes.keys() {
+        for func_ref in self.call_graph.funcs() {
             if self.func_info.contains_key(&func_ref) {
                 continue;
             }
@@ -491,5 +500,99 @@ impl<'a> ModuleAnalyzer<'a> {
         }
 
         flow
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use sonatina_ir::Module;
+
+    use super::{CallGraph, analyze_module};
+
+    fn parse_module(input: &str) -> sonatina_parser::ParsedModule {
+        sonatina_parser::parse_module(input).unwrap_or_else(|errs| panic!("parse failed: {errs:?}"))
+    }
+
+    fn find_func(module: &Module, name: &str) -> sonatina_ir::module::FuncRef {
+        module
+            .funcs()
+            .into_iter()
+            .find(|&func_ref| module.ctx.func_sig(func_ref, |sig| sig.name() == name))
+            .unwrap_or_else(|| panic!("missing function {name}"))
+    }
+
+    fn remove_func(module: &Module, func_ref: sonatina_ir::module::FuncRef) {
+        assert!(module.func_store.remove(func_ref).is_some());
+        assert!(module.ctx.declared_funcs.remove(&func_ref).is_some());
+        module.ctx.clear_func_metadata(func_ref);
+    }
+
+    #[test]
+    fn call_graph_funcs_excludes_removed_func_ref_holes() {
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func private %dead() {
+    block0:
+        return;
+}
+
+func public %entry() -> i32 {
+    block0:
+        v0.i32 = call %live;
+        return v0;
+}
+
+func private %live() -> i32 {
+    block0:
+        return 1.i32;
+}
+"#,
+        );
+        let module = &parsed.module;
+        let dead = find_func(module, "dead");
+        let entry = find_func(module, "entry");
+        let live = find_func(module, "live");
+        remove_func(module, dead);
+
+        let funcs: Vec<_> = CallGraph::build_graph(module).funcs().collect();
+        assert_eq!(funcs, vec![entry, live]);
+    }
+
+    #[test]
+    fn module_analysis_handles_sparse_func_ref_space() {
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func private %dead() {
+    block0:
+        return;
+}
+
+func public %entry() -> i32 {
+    block0:
+        v0.i32 = call %live;
+        return v0;
+}
+
+func private %live() -> i32 {
+    block0:
+        return 1.i32;
+}
+"#,
+        );
+        let module = &parsed.module;
+        let dead = find_func(module, "dead");
+        let entry = find_func(module, "entry");
+        let live = find_func(module, "live");
+        remove_func(module, dead);
+
+        let info = analyze_module(module);
+        let funcs: Vec<_> = info.call_graph.funcs().collect();
+        assert_eq!(funcs, vec![entry, live]);
+        assert!(info.func_info.get(&entry).is_some());
+        assert!(info.func_info.get(&live).is_some());
     }
 }

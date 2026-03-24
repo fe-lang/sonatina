@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/evm.rs
-assertion_line: 412
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/array_iter_reverse.sntn
 ---
@@ -11,13 +10,13 @@ object: Contract
   total: 265 bytes
 
 functions:
-  sum_last4: ir_blocks=4 ir_insts=23 vcode_ops=56 fixups=3 imm_bytes=10
+  sum_last4: ir_blocks=4 ir_insts=25 vcode_ops=56 fixups=3 imm_bytes=10
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  sum_first4: ir_blocks=4 ir_insts=22 vcode_ops=54 fixups=3 imm_bytes=9
+  sum_first4: ir_blocks=4 ir_insts=24 vcode_ops=54 fixups=3 imm_bytes=9
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   test_view_param_local_ref_take_reverse: ir_blocks=1 ir_insts=28 vcode_ops=88 fixups=9 imm_bytes=22
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  assert: ir_blocks=3 ir_insts=4 vcode_ops=10 fixups=1 imm_bytes=0
+  assert: ir_blocks=3 ir_insts=6 vcode_ops=10 fixups=1 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
@@ -43,7 +42,7 @@ sum_last4:
     PUSH1 0x4 (4)  // mstore v19 4.i256 i256;
     DUP2
     MSTORE
-    DUP1  // v21.*i256 = gep v54 0.i256 1.i256;
+    DUP1  // v21.*i256 = gep v55 0.i256 1.i256;
     PUSH1 0x20 (32)
     ADD
     SWAP1  // mstore v21 v0 i256;
@@ -56,19 +55,19 @@ sum_last4:
     PUSH0
   block1:
     JUMPDEST
-    PUSH1 0x4 (4)  // v8.i1 = lt v6 4.i256;
+    PUSH1 0x4 (4)  // v58.i1 = lt v6 4.i256;
     DUP3
     LT
-    ISZERO  // br v8 block2 block4;
-    PUSH1 block4
+    ISZERO  // v48.i1 = is_zero v61;
+    PUSH1 block4  // br v48 block4 block2;
     JUMPI
   block2:
     DUP3  // v39.i256 = mload v38 i256;
     MLOAD
-    DUP3  // v56.i256 = sub 7.i256 v6;
+    DUP3  // v60.i256 = sub 7.i256 v6;
     PUSH1 0x7 (7)
     SUB
-    SWAP1  // v46.*i256 = gep v45 0.i256 v56;
+    SWAP1  // v46.*i256 = gep v45 0.i256 v60;
     SWAP1
     PUSH1 0x20 (32)
     MUL
@@ -106,7 +105,7 @@ sum_first4:
     PUSH1 0x4 (4)  // mstore v18 4.i256 i256;
     DUP2
     MSTORE
-    DUP1  // v20.*i256 = gep v45 0.i256 1.i256;
+    DUP1  // v20.*i256 = gep v46 0.i256 1.i256;
     PUSH1 0x20 (32)
     ADD
     SWAP1  // mstore v20 v0 i256;
@@ -119,11 +118,11 @@ sum_first4:
     PUSH0
   block1:
     JUMPDEST
-    PUSH1 0x4 (4)  // v7.i1 = lt v5 4.i256;
+    PUSH1 0x4 (4)  // v49.i1 = lt v5 4.i256;
     DUP3
     LT
-    ISZERO  // br v7 block2 block4;
-    PUSH1 block4
+    ISZERO  // v42.i1 = is_zero v51;
+    PUSH1 block4  // br v42 block4 block2;
     JUMPI
   block2:
     DUP3  // v38.i256 = mload v37 i256;
@@ -246,7 +245,7 @@ test_view_param_local_ref_take_reverse:
 assert:
   block0:
     JUMPDEST
-    PUSH1 block2  // br v2 block1 block2;
+    PUSH1 block2  // br v5 block2 block1;
     JUMPI
   block1:
     PUSH0  // evm_revert 0.i256 0.i256;

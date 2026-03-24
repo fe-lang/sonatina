@@ -23,6 +23,7 @@ use super::{
         ObjectLoadStore, ObjectMemoryAnalysis, collect_local_object_arg_info,
         collect_local_object_arg_info_with_effects, compute_object_effect_summaries,
     },
+    branch_canonicalize::BranchCanonicalize,
     cfg_cleanup::CfgCleanup,
     dead_arg::{DeadArgElimConfig, run_dead_arg_elim},
     dead_func::{DeadFuncElimConfig, collect_object_roots, run_dead_func_elim},
@@ -47,6 +48,8 @@ pub enum Pass {
     CfgCleanup,
     /// Local aggregate InstCombine rewrites.
     AggregateCombine,
+    /// Canonicalize boolean branch conditions and invert expensive compares.
+    BranchCanonicalize,
     /// Object-space load/store forwarding and dead-store elimination for fresh semantic objects.
     ObjectLoadStore,
     /// Aggregate scalarization (SROA + closed SSA-web scalarization).
@@ -76,6 +79,7 @@ impl Pass {
             Pass::LegalizeMultiResult => "legalize_multi_result",
             Pass::CfgCleanup => "cfg_cleanup",
             Pass::AggregateCombine => "aggregate_combine",
+            Pass::BranchCanonicalize => "branch_canonicalize",
             Pass::ObjectLoadStore => "object_load_store",
             Pass::AggregateScalarize => "aggregate_scalarize",
             Pass::LoadStore => "load_store",
@@ -138,6 +142,7 @@ pub struct Pipeline {
 const PRIMARY_FUNC_PASSES: &[Pass] = &[
     Pass::CfgCleanup,
     Pass::AggregateCombine,
+    Pass::BranchCanonicalize,
     Pass::ObjectLoadStore,
     Pass::AggregateScalarize,
     Pass::LoadStore,
@@ -148,21 +153,29 @@ const PRIMARY_FUNC_PASSES: &[Pass] = &[
     Pass::Egraph,
     Pass::RebuildUsers,
     Pass::Sccp,
+    Pass::BranchCanonicalize,
     Pass::CfgCleanup,
 ];
 
 const SECONDARY_FUNC_PASSES: &[Pass] = &[
     Pass::CfgCleanup,
     Pass::AggregateCombine,
+    Pass::BranchCanonicalize,
     Pass::ObjectLoadStore,
     Pass::AggregateScalarize,
     Pass::LoadStore,
     Pass::Sccp,
     Pass::Gvn,
+    Pass::BranchCanonicalize,
     Pass::CfgCleanup,
 ];
 
-const POST_DEAD_ARG_CLEANUP_PASSES: &[Pass] = &[Pass::CfgCleanup, Pass::Sccp, Pass::CfgCleanup];
+const POST_DEAD_ARG_CLEANUP_PASSES: &[Pass] = &[
+    Pass::CfgCleanup,
+    Pass::Sccp,
+    Pass::BranchCanonicalize,
+    Pass::CfgCleanup,
+];
 
 fn pass_needs_func_behavior(pass: Pass) -> bool {
     matches!(
@@ -176,6 +189,7 @@ fn pass_may_invalidate_func_behavior(pass: Pass) -> bool {
         pass,
         Pass::CfgCleanup
             | Pass::AggregateCombine
+            | Pass::BranchCanonicalize
             | Pass::ObjectLoadStore
             | Pass::AggregateScalarize
             | Pass::LoadStore
@@ -252,6 +266,9 @@ impl Pipeline {
         p.add_step(Step::FuncPasses(SECONDARY_FUNC_PASSES.to_vec()));
         p.add_step(Step::DeadArgElim);
         p.add_step(Step::FuncPasses(POST_DEAD_ARG_CLEANUP_PASSES.to_vec()));
+        p.add_step(Step::DeadFuncElim);
+        p.add_step(Step::Inline);
+        p.add_step(Step::FuncPasses(SECONDARY_FUNC_PASSES.to_vec()));
         p.add_step(Step::DeadFuncElim);
         p
     }
@@ -480,6 +497,10 @@ fn run_pass(
         Pass::AggregateCombine => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.aggregate_combine").entered();
             AggregateCombine::default().run(func);
+        }
+        Pass::BranchCanonicalize => {
+            let _span = trace_span!("sonatina.optim.pipeline.pass.branch_canonicalize").entered();
+            BranchCanonicalize::new().run(func);
         }
         Pass::ObjectLoadStore => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.object_load_store").entered();

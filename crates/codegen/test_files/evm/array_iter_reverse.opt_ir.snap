@@ -12,10 +12,10 @@ func private %sum_last4(v0.i256) -> i256 {
     block0:
         v16.*i8 = evm_malloc 64.i256;
         v17.i256 = ptr_to_int v16 i256;
-        v54.*@__fe_Take_0 = bitcast v16 *@__fe_Take_0;
-        v19.*i256 = bitcast v54 *i256;
+        v55.*@__fe_Take_0 = bitcast v16 *@__fe_Take_0;
+        v19.*i256 = bitcast v55 *i256;
         mstore v19 4.i256 i256;
-        v21.*i256 = gep v54 0.i256 1.i256;
+        v21.*i256 = gep v55 0.i256 1.i256;
         mstore v21 v0 i256;
         v37.*@__fe_Take_0 = int_to_ptr v17 *@__fe_Take_0;
         v38.*i256 = gep v37 0.i256 1.i256;
@@ -24,14 +24,16 @@ func private %sum_last4(v0.i256) -> i256 {
     block1:
         v23.i256 = phi (0.i256 block0) (v15 block2);
         v6.i256 = phi (0.i256 block0) (v18 block2);
-        v8.i1 = lt v6 4.i256;
-        br v8 block2 block4;
+        v58.i1 = lt v6 4.i256;
+        v59.i256 = zext v58 i256;
+        v48.i1 = is_zero v59;
+        br v48 block4 block2;
 
     block2:
         v39.i256 = mload v38 i256;
         v45.*[i256; 8] = int_to_ptr v39 *[i256; 8];
-        v56.i256 = sub 7.i256 v6;
-        v46.*i256 = gep v45 0.i256 v56;
+        v60.i256 = sub 7.i256 v6;
+        v46.*i256 = gep v45 0.i256 v60;
         v47.i256 = mload v46 i256;
         v15.i256 = add v47 v23;
         v18.i256 = add 1.i256 v6;
@@ -45,10 +47,10 @@ func private %sum_first4(v0.i256) -> i256 {
     block0:
         v15.*i8 = evm_malloc 64.i256;
         v16.i256 = ptr_to_int v15 i256;
-        v45.*@__fe_Take_1 = bitcast v15 *@__fe_Take_1;
-        v18.*i256 = bitcast v45 *i256;
+        v46.*@__fe_Take_1 = bitcast v15 *@__fe_Take_1;
+        v18.*i256 = bitcast v46 *i256;
         mstore v18 4.i256 i256;
-        v20.*i256 = gep v45 0.i256 1.i256;
+        v20.*i256 = gep v46 0.i256 1.i256;
         mstore v20 v0 i256;
         v36.*@__fe_Take_1 = int_to_ptr v16 *@__fe_Take_1;
         v37.*i256 = gep v36 0.i256 1.i256;
@@ -57,8 +59,10 @@ func private %sum_first4(v0.i256) -> i256 {
     block1:
         v22.i256 = phi (0.i256 block0) (v14 block2);
         v5.i256 = phi (0.i256 block0) (v17 block2);
-        v7.i1 = lt v5 4.i256;
-        br v7 block2 block4;
+        v49.i1 = lt v5 4.i256;
+        v50.i256 = zext v49 i256;
+        v42.i1 = is_zero v50;
+        br v42 block4 block2;
 
     block2:
         v38.i256 = mload v37 i256;
@@ -107,8 +111,10 @@ func private %test_view_param_local_ref_take_reverse() {
 
 func public %assert(v0.i256) {
     block0:
-        v2.i1 = is_zero v0;
-        br v2 block1 block2;
+        v9.i1 = is_zero v0;
+        v10.i256 = zext v9 i256;
+        v5.i1 = is_zero v10;
+        br v5 block2 block1;
 
     block1:
         evm_revert 0.i256 0.i256;

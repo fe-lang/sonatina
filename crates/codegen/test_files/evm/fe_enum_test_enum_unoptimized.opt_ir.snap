@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/evm.rs
-assertion_line: 429
 expression: opt_ir_snapshot
 input_file: test_files/evm/fe_enum_test_enum_unoptimized.sntn
 ---
@@ -67,8 +66,25 @@ func private %test_enum__StorPtr_Evm___207f35a85ac4062e() {
         v26.i256 = call %decode_returndata__u256__3271ca15373d4483 v24 v22;
         v27.i1 = eq 42.i256 v26;
         call %assert v27;
-        v9.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__IsSomeCheck_h24a3280701a16da1__395956188d9a6813 v39 100000.i256 0.i256 99.i256;
-        v28.i1 = eq 1.i256 v9;
+        v45.objref<@__fe_obj_tuple_2> = call %encode_calldata__IsSomeCheck_h24a3280701a16da1__395956188d9a6813 -722541534.i32 99.i256;
+        v46.objref<i256> = obj.proj v45 0.i256;
+        v47.i256 = obj.load v46;
+        v48.objref<i256> = obj.proj v45 1.i256;
+        v49.i256 = obj.load v48;
+        v50.i256 = evm_call 100000.i256 v39 0.i256 v47 v49 0.i256 0.i256;
+        v51.i256 = evm_return_data_size;
+        v52.*i8 = evm_malloc v51;
+        v53.i256 = ptr_to_int v52 i256;
+        evm_return_data_copy v53 0.i256 v51;
+        v54.i1 = is_zero v50;
+        br v54 block13 block14;
+
+    block13:
+        evm_revert v53 v51;
+
+    block14:
+        v55.i256 = call %decode_returndata__u256__3271ca15373d4483 v53 v51;
+        v28.i1 = eq 1.i256 v55;
         call %assert v28;
         v12.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__MakeNone_h1a70bbc7ba2867ef__33da4420f6afdeb1 v39 100000.i256 0.i256;
         v29.i1 = is_zero v12;
@@ -125,37 +141,13 @@ func private %__EnumContract_runtime() {
 
 func private %assert(v0.i1) {
     block0:
-        v1.i1 = is_zero v0;
-        br v1 block1 block2;
+        br v0 block2 block1;
 
     block1:
         evm_revert 0.i256 0.i256;
 
     block2:
         return;
-}
-
-func private %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__IsSomeCheck_h24a3280701a16da1__395956188d9a6813(v0.i256, v1.i256, v2.i256, v3.i256) -> i256 {
-    block0:
-        v6.objref<@__fe_obj_tuple_2> = call %encode_calldata__IsSomeCheck_h24a3280701a16da1__395956188d9a6813 -722541534.i32 v3;
-        v8.objref<i256> = obj.proj v6 0.i256;
-        v9.i256 = obj.load v8;
-        v11.objref<i256> = obj.proj v6 1.i256;
-        v12.i256 = obj.load v11;
-        v13.i256 = evm_call v1 v0 v2 v9 v12 0.i256 0.i256;
-        v14.i256 = evm_return_data_size;
-        v15.*i8 = evm_malloc v14;
-        v16.i256 = ptr_to_int v15 i256;
-        evm_return_data_copy v16 0.i256 v14;
-        v18.i1 = is_zero v13;
-        br v18 block1 block2;
-
-    block1:
-        evm_revert v16 v14;
-
-    block2:
-        v22.i256 = call %decode_returndata__u256__3271ca15373d4483 v16 v14;
-        return v22;
 }
 
 func private %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__MakeNone_h1a70bbc7ba2867ef__33da4420f6afdeb1(v0.i256, v1.i256, v2.i256) -> i256 {
@@ -357,11 +349,11 @@ func private %u256_h3271ca15373d4483_encode_hab7243eccf2714fb_encode__Sol_hfd482
 
 func private %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish(v0.objref<@__fe_obj_SolEncoder_3>) -> objref<@__fe_obj_tuple_2> {
     block0:
-        v30.objref<i256> = obj.proj v0 2.i64;
-        v31.i256 = obj.load v30;
-        v26.objref<i256> = obj.proj v0 0.i64;
-        v27.i256 = obj.load v26;
-        (v7.i256, v8.i1) = usubo v31 v27;
+        v38.objref<i256> = obj.proj v0 2.i64;
+        v39.i256 = obj.load v38;
+        v34.objref<i256> = obj.proj v0 0.i64;
+        v35.i256 = obj.load v34;
+        (v7.i256, v8.i1) = usubo v39 v35;
         br v8 block1 block2;
 
     block1:
@@ -370,7 +362,7 @@ func private %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish(v
     block2:
         v9.objref<@__fe_obj_tuple_2> = obj.alloc @__fe_obj_tuple_2;
         v11.objref<i256> = obj.proj v9 0.i256;
-        obj.store v11 v27;
+        obj.store v11 v35;
         v13.objref<i256> = obj.proj v9 1.i256;
         obj.store v13 v7;
         return v9;
