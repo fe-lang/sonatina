@@ -73,8 +73,10 @@ impl LoadStoreSolver {
 
         let mut in_states = SecondaryMap::<sonatina_ir::BlockId, AvailState>::new();
         let mut out_states = SecondaryMap::<sonatina_ir::BlockId, AvailState>::new();
+        let mut in_valid = SecondaryMap::<sonatina_ir::BlockId, bool>::new();
+        let mut out_valid = SecondaryMap::<sonatina_ir::BlockId, bool>::new();
+        let entry = func.layout.entry_block();
         let mut dataflow_changed = true;
-        let mut changed = false;
 
         while dataflow_changed {
             dataflow_changed = false;
@@ -83,14 +85,34 @@ impl LoadStoreSolver {
                     continue;
                 }
 
-                let in_state = meet_forward(
-                    cfg.preds_of(block)
+                let maybe_in_state = if Some(block) == entry {
+                    Some(AvailState::default())
+                } else {
+                    let pred_states: Vec<_> = cfg
+                        .preds_of(block)
                         .copied()
                         .filter(|pred| reachable[*pred])
-                        .map(|pred| out_states[pred].clone()),
-                );
-                if in_state != in_states[block] {
+                        .filter(|pred| out_valid[*pred])
+                        .map(|pred| out_states[pred].clone())
+                        .collect();
+                    (!pred_states.is_empty()).then(|| meet_forward(pred_states.into_iter()))
+                };
+
+                let Some(in_state) = maybe_in_state else {
+                    if in_valid[block] {
+                        in_valid[block] = false;
+                        dataflow_changed = true;
+                    }
+                    if out_valid[block] {
+                        out_valid[block] = false;
+                        dataflow_changed = true;
+                    }
+                    continue;
+                };
+
+                if !in_valid[block] || in_states[block] != in_state {
                     in_states[block] = in_state.clone();
+                    in_valid[block] = true;
                     dataflow_changed = true;
                 }
 
@@ -100,14 +122,31 @@ impl LoadStoreSolver {
                     if !func.layout.is_inst_inserted(inst) {
                         continue;
                     }
-                    if transfer_forward(func, inst, analysis, &mut state) {
-                        changed = true;
-                    }
+                    transfer_forward(func, inst, analysis, &mut state, false);
                 }
 
-                if state != out_states[block] {
+                if !out_valid[block] || state != out_states[block] {
                     out_states[block] = state;
+                    out_valid[block] = true;
                     dataflow_changed = true;
+                }
+            }
+        }
+
+        let mut changed = false;
+        for &block in &order {
+            if !reachable[block] || !in_valid[block] {
+                continue;
+            }
+
+            let mut state = in_states[block].clone();
+            let insts: Vec<_> = func.layout.iter_inst(block).collect();
+            for inst in insts {
+                if !func.layout.is_inst_inserted(inst) {
+                    continue;
+                }
+                if transfer_forward(func, inst, analysis, &mut state, true) {
+                    changed = true;
                 }
             }
         }
@@ -128,7 +167,6 @@ impl LoadStoreSolver {
         let mut in_states = SecondaryMap::<sonatina_ir::BlockId, LiveState>::new();
         let mut out_states = SecondaryMap::<sonatina_ir::BlockId, LiveState>::new();
         let mut dataflow_changed = true;
-        let mut changed = false;
 
         while dataflow_changed {
             dataflow_changed = false;
@@ -154,20 +192,44 @@ impl LoadStoreSolver {
                     if !func.layout.is_inst_inserted(inst) {
                         continue;
                     }
-                    if transfer_backward(
+                    transfer_backward(
                         func,
                         inst,
                         analysis,
                         &mut live,
                         committing_exit_reachable[block],
-                    ) {
-                        changed = true;
-                    }
+                        false,
+                    );
                 }
 
                 if live != in_states[block] {
                     in_states[block] = live;
                     dataflow_changed = true;
+                }
+            }
+        }
+
+        let mut changed = false;
+        for &block in &order {
+            if !reachable[block] {
+                continue;
+            }
+
+            let mut live = out_states[block].clone();
+            let insts: Vec<_> = func.layout.iter_inst(block).collect();
+            for inst in insts.into_iter().rev() {
+                if !func.layout.is_inst_inserted(inst) {
+                    continue;
+                }
+                if transfer_backward(
+                    func,
+                    inst,
+                    analysis,
+                    &mut live,
+                    committing_exit_reachable[block],
+                    true,
+                ) {
+                    changed = true;
                 }
             }
         }
@@ -217,21 +279,28 @@ fn transfer_forward(
     inst: InstId,
     analysis: &MemoryAccessAnalysis,
     state: &mut AvailState,
+    rewrite: bool,
 ) -> bool {
     let effects = func.dfg.effects(inst);
 
     if let Some(key) = forwardable_read_key(func, inst, analysis, &effects) {
+        if let Some(&known) = state.exact.get(&key) {
+            if rewrite {
+                let result = func
+                    .dfg
+                    .inst_result(inst)
+                    .expect("forwardable reads must produce a result");
+                func.dfg.change_to_alias(result, known);
+                remove_inst(func, inst);
+                return true;
+            }
+            return false;
+        }
+
         let result = func
             .dfg
             .inst_result(inst)
             .expect("forwardable reads must produce a result");
-
-        if let Some(&known) = state.exact.get(&key) {
-            func.dfg.change_to_alias(result, known);
-            remove_inst(func, inst);
-            return true;
-        }
-
         state.exact.insert(key, result);
     }
 
@@ -259,8 +328,11 @@ fn transfer_forward(
         };
 
         if state.exact.get(&key) == Some(&stored_value) && store_is_removable(func, inst) {
-            remove_inst(func, inst);
-            return true;
+            if rewrite {
+                remove_inst(func, inst);
+                return true;
+            }
+            return false;
         }
 
         kill_aliasing_key(state, analysis, &key);
@@ -276,6 +348,7 @@ fn transfer_backward(
     analysis: &MemoryAccessAnalysis,
     live: &mut LiveState,
     committing_exit_reachable: bool,
+    rewrite: bool,
 ) -> bool {
     let effects = func.dfg.effects(inst);
 
@@ -306,8 +379,11 @@ fn transfer_backward(
                     !has_whole_space_live && !has_exact_live && !has_range_live && !live_at_exit;
 
                 if dead && store_is_removable(func, inst) {
-                    remove_inst(func, inst);
-                    return true;
+                    if rewrite {
+                        remove_inst(func, inst);
+                        return true;
+                    }
+                    return false;
                 }
 
                 kill_must_alias_live(&mut live.exact_live, &key, analysis);
@@ -577,6 +653,7 @@ mod tests {
                 EvmRevert, EvmSelfDestruct, EvmSload, EvmSstore, EvmStaticCall, EvmStop, EvmTload,
             },
         },
+        ir_writer::FuncWriter,
         isa::Isa,
     };
 
@@ -627,6 +704,148 @@ mod tests {
             builder.func.dfg.value_imm(ret[0]),
             Some(Immediate::I256(I256::from(7)))
         );
+    }
+
+    #[test]
+    fn forwards_loop_invariant_load_with_initially_unsolved_backedge() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[Type::I1], Type::I256);
+        let is = evm.inst_set();
+        let carried = builder.declare_var(Type::I256);
+
+        let entry = builder.append_block();
+        let header = builder.append_block();
+        let body = builder.append_block();
+        let exit = builder.append_block();
+
+        builder.switch_to_block(entry);
+        let ptr_ty = builder.ptr_type(Type::I256);
+        let addr = builder.insert_inst_with(|| Alloca::new(is, Type::I256), ptr_ty);
+        let seven = builder.make_imm_value(I256::from(7));
+        let zero = builder.make_imm_value(I256::from(0));
+        let one = builder.make_imm_value(I256::from(1));
+        let cond = builder.args()[0];
+        builder.insert_inst_no_result_with(|| Mstore::new(is, addr, seven, Type::I256));
+        builder.def_var(carried, zero);
+        builder.insert_inst_no_result_with(|| Jump::new(is, header));
+
+        builder.switch_to_block(header);
+        builder.insert_inst_no_result_with(|| Br::new(is, cond, exit, body));
+
+        builder.switch_to_block(body);
+        let loop_load = builder.insert_inst_with(|| Mload::new(is, addr, Type::I256), Type::I256);
+        let loop_sum = builder.insert_inst_with(|| Add::new(is, loop_load, one), Type::I256);
+        builder.def_var(carried, loop_sum);
+        builder.insert_inst_no_result_with(|| Jump::new(is, header));
+
+        builder.switch_to_block(exit);
+        let result = builder.use_var(carried);
+        builder.insert_inst_no_result_with(|| Return::new_single(is, result));
+        builder.seal_all();
+
+        assert!(run_solver(&mut builder.func));
+        assert_eq!(count_insts::<Mload>(&builder.func), 0);
+
+        let add_inst = builder
+            .func
+            .dfg
+            .value_inst(loop_sum)
+            .expect("loop sum should stay defined by an add");
+        let add = <&Add as InstDowncast>::downcast(is, builder.func.dfg.inst(add_inst))
+            .expect("loop use should stay as an add");
+        assert_eq!(
+            builder.func.dfg.value_imm(*add.lhs()),
+            Some(Immediate::I256(I256::from(7)))
+        );
+        assert_eq!(
+            builder.func.dfg.value_imm(*add.rhs()),
+            Some(Immediate::I256(I256::from(1)))
+        );
+    }
+
+    #[test]
+    fn loop_backedge_write_prevents_header_forwarding() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::I256);
+        let is = evm.inst_set();
+        let done_var = builder.declare_var(Type::I1);
+
+        let entry = builder.append_block();
+        let header = builder.append_block();
+        let body = builder.append_block();
+        let exit = builder.append_block();
+
+        builder.switch_to_block(entry);
+        let ptr_ty = builder.ptr_type(Type::I256);
+        let addr = builder.insert_inst_with(|| Alloca::new(is, Type::I256), ptr_ty);
+        let seven = builder.make_imm_value(I256::from(7));
+        let eight = builder.make_imm_value(I256::from(8));
+        let one = builder.make_imm_value(I256::from(1));
+        let done_false = builder.make_imm_value(false);
+        let done_true = builder.make_imm_value(true);
+        builder.insert_inst_no_result_with(|| Mstore::new(is, addr, seven, Type::I256));
+        builder.def_var(done_var, done_false);
+        builder.insert_inst_no_result_with(|| Jump::new(is, header));
+
+        builder.switch_to_block(header);
+        let cond = builder.use_var(done_var);
+        builder.insert_inst_no_result_with(|| Br::new(is, cond, exit, body));
+
+        builder.switch_to_block(body);
+        let loop_load = builder.insert_inst_with(|| Mload::new(is, addr, Type::I256), Type::I256);
+        builder.insert_inst_with(|| Add::new(is, loop_load, one), Type::I256);
+        builder.insert_inst_no_result_with(|| Mstore::new(is, addr, eight, Type::I256));
+        builder.def_var(done_var, done_true);
+        builder.insert_inst_no_result_with(|| Jump::new(is, header));
+
+        builder.switch_to_block(exit);
+        let exit_load = builder.insert_inst_with(|| Mload::new(is, addr, Type::I256), Type::I256);
+        builder.insert_inst_no_result_with(|| Return::new_single(is, exit_load));
+        builder.seal_all();
+
+        run_solver(&mut builder.func);
+        let dumped = FuncWriter::new(builder.func_ref, &builder.func).dump_string();
+        assert_eq!(
+            count_insts::<Mload>(&builder.func),
+            2,
+            "both loop and exit loads must remain when the backedge disagrees:\n{dumped}"
+        );
+    }
+
+    #[test]
+    fn join_with_disagreeing_predecessor_values_does_not_forward() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[Type::I1], Type::I256);
+        let is = evm.inst_set();
+
+        let entry = builder.append_block();
+        let left = builder.append_block();
+        let right = builder.append_block();
+        let join = builder.append_block();
+
+        builder.switch_to_block(entry);
+        let ptr_ty = builder.ptr_type(Type::I256);
+        let addr = builder.insert_inst_with(|| Alloca::new(is, Type::I256), ptr_ty);
+        let seven = builder.make_imm_value(I256::from(7));
+        let eight = builder.make_imm_value(I256::from(8));
+        let cond = builder.args()[0];
+        builder.insert_inst_no_result_with(|| Br::new(is, cond, left, right));
+
+        builder.switch_to_block(left);
+        builder.insert_inst_no_result_with(|| Mstore::new(is, addr, seven, Type::I256));
+        builder.insert_inst_no_result_with(|| Jump::new(is, join));
+
+        builder.switch_to_block(right);
+        builder.insert_inst_no_result_with(|| Mstore::new(is, addr, eight, Type::I256));
+        builder.insert_inst_no_result_with(|| Jump::new(is, join));
+
+        builder.switch_to_block(join);
+        let load = builder.insert_inst_with(|| Mload::new(is, addr, Type::I256), Type::I256);
+        builder.insert_inst_no_result_with(|| Return::new_single(is, load));
+        builder.seal_all();
+
+        assert!(!run_solver(&mut builder.func));
+        assert_eq!(count_insts::<Mload>(&builder.func), 1);
     }
 
     #[test]
