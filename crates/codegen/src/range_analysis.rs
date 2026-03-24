@@ -382,6 +382,11 @@ fn compute_block_entry(
         };
         edge_envs.push((pred, refined));
     }
+    let pred_env_index: FxHashMap<_, _> = edge_envs
+        .iter()
+        .enumerate()
+        .map(|(index, (pred, _))| (*pred, index))
+        .collect();
 
     if block != entry && edge_envs.is_empty() {
         return None;
@@ -399,7 +404,7 @@ fn compute_block_entry(
         }
     }
 
-    apply_phi_entry_facts(func, block, &edge_envs, &mut entry_env);
+    apply_phi_entry_facts(func, block, &edge_envs, &pred_env_index, &mut entry_env);
     Some(entry_env)
 }
 
@@ -407,6 +412,7 @@ fn apply_phi_entry_facts(
     func: &Function,
     block: BlockId,
     edge_envs: &[(BlockId, RangeEnv)],
+    pred_env_index: &FxHashMap<BlockId, usize>,
     entry_env: &mut RangeEnv,
 ) {
     for inst in func.layout.iter_inst(block) {
@@ -429,10 +435,10 @@ fn apply_phi_entry_facts(
 
         let mut joined = None;
         for &(incoming, pred) in phi.args() {
-            let Some((_, pred_env)) = edge_envs.iter().find(|(edge_pred, _)| *edge_pred == pred)
-            else {
+            let Some(&pred_env_index) = pred_env_index.get(&pred) else {
                 continue;
             };
+            let pred_env = &edge_envs[pred_env_index].1;
             let incoming_fact = fact_for_value(func, pred_env, incoming);
             joined = Some(match joined {
                 Some(current) => join_facts(current, incoming_fact, ty),

@@ -6,7 +6,7 @@ use sonatina_codegen::{
     loop_analysis::LoopTree,
     optim::{
         branch_canonicalize::BranchCanonicalize, cfg_cleanup::CfgCleanup,
-        checked_arith_elim::CheckedArithElim, sccp::SccpSolver,
+        checked_arith_elim::CheckedArithElim, load_store::LoadStoreSolver, sccp::SccpSolver,
     },
 };
 use sonatina_ir::{ControlFlowGraph, Function};
@@ -24,6 +24,8 @@ impl FuncTransform for CheckedArithElimTransform {
     fn transform(&mut self, func: &mut Function) {
         BranchCanonicalize::new().run(func);
 
+        self.cfg.compute(func);
+        LoadStoreSolver::new().run(func, &mut self.cfg);
         self.cfg.compute(func);
         self.domtree.compute(&self.cfg);
         self.lpt.compute(&self.cfg, &self.domtree);

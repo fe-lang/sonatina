@@ -276,3 +276,131 @@ block1:
 block2:
     return v2;
 }
+
+# regex: USUB=\bv\d+\b
+# check: func public %usubo_safe(v0.i8, v1.i8) -> i8 {
+# check: $USUB.i8 = sub v0 v1;
+# check: return $USUB;
+# not: usubo
+# not: 55.i8
+func public %usubo_safe(v0.i8, v1.i8) -> i8 {
+block0:
+    v2.i1 = ge v0 10.i8;
+    br v2 block1 block4;
+
+block1:
+    v3.i1 = le v1 10.i8;
+    br v3 block2 block4;
+
+block2:
+    (v4.i8, v5.i1) = usubo v0 v1;
+    br v5 block3 block5;
+
+block3:
+    return 55.i8;
+
+block4:
+    return 0.i8;
+
+block5:
+    return v4;
+}
+
+# regex: SADD=\bv\d+\b
+# check: func public %saddo_safe(v0.i8, v1.i8) -> i8 {
+# check: $SADD.i8 = add v0 v1;
+# check: return $SADD;
+# not: saddo
+# not: 66.i8
+func public %saddo_safe(v0.i8, v1.i8) -> i8 {
+block0:
+    v2.i1 = sge v0 0.i8;
+    br v2 block1 block6;
+
+block1:
+    v3.i1 = sge v1 0.i8;
+    br v3 block2 block6;
+
+block2:
+    v4.i1 = sle v0 10.i8;
+    br v4 block3 block6;
+
+block3:
+    v5.i1 = sle v1 10.i8;
+    br v5 block4 block6;
+
+block4:
+    (v6.i8, v7.i1) = saddo v0 v1;
+    br v7 block5 block7;
+
+block5:
+    return 66.i8;
+
+block6:
+    return 0.i8;
+
+block7:
+    return v6;
+}
+
+# regex: SSUB=\bv\d+\b
+# check: func public %ssubo_safe(v0.i8, v1.i8) -> i8 {
+# check: $SSUB.i8 = sub v0 v1;
+# check: return $SSUB;
+# not: ssubo
+# not: 77.i8
+func public %ssubo_safe(v0.i8, v1.i8) -> i8 {
+block0:
+    v2.i1 = sge v0 0.i8;
+    br v2 block1 block6;
+
+block1:
+    v3.i1 = sge v1 0.i8;
+    br v3 block2 block6;
+
+block2:
+    v4.i1 = sle v0 10.i8;
+    br v4 block3 block6;
+
+block3:
+    v5.i1 = sle v1 10.i8;
+    br v5 block4 block6;
+
+block4:
+    (v6.i8, v7.i1) = ssubo v0 v1;
+    br v7 block5 block7;
+
+block5:
+    return 77.i8;
+
+block6:
+    return 0.i8;
+
+block7:
+    return v6;
+}
+
+# regex: SMOD=\bv\d+\b
+# check: func public %smodo_safe(v0.i8, v1.i8) -> i8 {
+# check: $SMOD.i8 = evm_smod v0 v1;
+# check: return $SMOD;
+# not: evm_smodo
+# not: 44.i8
+func public %smodo_safe(v0.i8, v1.i8) -> i8 {
+block0:
+    v2.i1 = sgt v1 0.i8;
+    br v2 block1 block2;
+
+block1:
+    (v3.i8, v4.i1) = evm_smodo v0 v1;
+    br v4 block3 block4;
+
+block2:
+    return 0.i8;
+
+block3:
+    return 44.i8;
+
+block4:
+    return v3;
+}
