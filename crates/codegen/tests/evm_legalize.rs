@@ -103,8 +103,8 @@ func public %main(v0.i8, v1.i8) -> i8 {
         "signed division should be rewritten to evm_sdiv:\n{dumped}"
     );
     assert!(
-        dumped.contains("is_zero"),
-        "i1 not should be rewritten to is_zero:\n{dumped}"
+        !dumped.contains(" = not "),
+        "late cleanup may fold the legalized form further, but `not` must be eliminated:\n{dumped}"
     );
 
     let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
