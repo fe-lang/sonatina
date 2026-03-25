@@ -10,7 +10,7 @@ object: Contract
   total: 324 bytes
 
 functions:
-  assert: ir_blocks=3 ir_insts=3 vcode_ops=8 fixups=1 imm_bytes=0
+  assert: ir_blocks=3 ir_insts=3 vcode_ops=9 fixups=1 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   i8_h1bb527fe1af58754_saturatingsub_hd0c1c727e69d9468_saturating_sub: ir_blocks=8 ir_insts=28 vcode_ops=69 fixups=6 imm_bytes=12
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
@@ -20,7 +20,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Stop gas_used=21700 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=700
+  case ok: calldata_len=0 success reason=Stop gas_used=21706 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=706
 
 
 --------------- DEBUG ---------------
@@ -29,12 +29,9 @@ evm:
 assert:
   block0:
     JUMPDEST
-    PUSH1 block2  // br v0 block2 block1;
+    ISZERO
+    PUSH1 section_unit0  // br v0 block2 block1;
     JUMPI
-  block1:
-    PUSH0  // evm_revert 0.i256 0.i256;
-    PUSH0
-    REVERT
   block2:
     JUMPDEST
     JUMP  // return;
@@ -212,13 +209,8 @@ i8_h1bb527fe1af58754_saturatingmul_hf2bc6be7b84ff8f7_saturating_mul:
     SWAP1  // v66.i1 = or v62 v65;
     SWAP4
     OR
-    ISZERO  // br v66 block17 block19;
-    PUSH1 block19
+    PUSH1 section_unit0  // br v66 block17 block19;
     JUMPI
-  block17:
-    PUSH0  // evm_revert 0.i256 0.i256;
-    PUSH0
-    REVERT
   block19:
     JUMPDEST
     SWAP2  // v44.i1 = eq v61 v1;
@@ -314,3 +306,11 @@ __fe_sonatina_entry:
     JUMP
     JUMPDEST
     STOP  // evm_stop;
+
+// synthetic section unit
+__evm_shared_tail_0:
+  block0:
+    JUMPDEST
+    PUSH0
+    PUSH0
+    REVERT

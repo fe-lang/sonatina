@@ -19,11 +19,16 @@ use std::{collections::HashSet, fmt, io};
 pub struct LabelId(pub u32);
 entity_impl!(LabelId);
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Copy, Hash, PartialOrd, Ord)]
+pub struct SectionCodeUnitId(pub u32);
+entity_impl!(SectionCodeUnitId);
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum Label {
     Insn(VCodeInst),
     Block(BlockId),
     Function(FuncRef),
+    SectionCodeUnit(SectionCodeUnitId),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Copy, Hash, PartialOrd, Ord)]
@@ -138,6 +143,9 @@ where
                             write!(w, " `pc + ({offset})`")
                         }
                         Label::Function(func) => write!(w, " {func:?}"),
+                        Label::SectionCodeUnit(unit) => {
+                            write!(w, " section_unit{}", unit.0)
+                        }
                     }?;
                 }
 

@@ -3,7 +3,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 use sonatina_ir::{BlockId, inst::data::SymbolRef, module::FuncRef};
 
-use crate::machinst::vcode::{Label, VCode, VCodeFixup, VCodeInst};
+use crate::machinst::vcode::{Label, SectionCodeUnitId, VCode, VCodeFixup, VCodeInst};
 
 use super::{
     LateCleanupProfile, is_plain_inst, is_push_opcode, opcode::OpCode,
@@ -11,24 +11,25 @@ use super::{
 };
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-struct StackSummary {
-    min_before: u16,
-    delta: i16,
+pub(crate) struct StackSummary {
+    pub(crate) min_before: u16,
+    pub(crate) delta: i16,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-enum FixupKey {
+pub(crate) enum FixupKey {
     None,
     Block(BlockId),
     Function(FuncRef),
+    SectionCodeUnit(SectionCodeUnitId),
     Sym(crate::machinst::vcode::SymFixupKind, SymbolRef),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-struct InstKey {
-    opcode: u8,
-    imm: SmallVec<[u8; 8]>,
-    fixup: FixupKey,
+pub(crate) struct InstKey {
+    pub(crate) opcode: u8,
+    pub(crate) imm: SmallVec<[u8; 8]>,
+    pub(crate) fixup: FixupKey,
 }
 
 struct RegionAnalysis {
@@ -338,7 +339,7 @@ fn opcode_stack_summary(op: OpCode) -> StackSummary {
     }
 }
 
-fn sequence_summary(vcode: &VCode<OpCode>, insts: &[VCodeInst]) -> StackSummary {
+pub(crate) fn sequence_summary(vcode: &VCode<OpCode>, insts: &[VCodeInst]) -> StackSummary {
     insts
         .iter()
         .copied()
@@ -347,7 +348,7 @@ fn sequence_summary(vcode: &VCode<OpCode>, insts: &[VCodeInst]) -> StackSummary 
         })
 }
 
-fn is_non_fallthrough_terminal(op: OpCode) -> bool {
+pub(crate) fn is_non_fallthrough_terminal(op: OpCode) -> bool {
     matches!(
         op,
         OpCode::JUMP
@@ -359,11 +360,11 @@ fn is_non_fallthrough_terminal(op: OpCode) -> bool {
     )
 }
 
-fn may_fall_through(op: OpCode) -> bool {
+pub(crate) fn may_fall_through(op: OpCode) -> bool {
     !is_non_fallthrough_terminal(op)
 }
 
-fn inst_estimated_size(vcode: &VCode<OpCode>, inst: VCodeInst) -> usize {
+pub(crate) fn inst_estimated_size(vcode: &VCode<OpCode>, inst: VCodeInst) -> usize {
     1 + if vcode.fixups.get(inst).is_some() {
         4
     } else {
@@ -374,13 +375,14 @@ fn inst_estimated_size(vcode: &VCode<OpCode>, inst: VCodeInst) -> usize {
     }
 }
 
-fn inst_key(vcode: &VCode<OpCode>, inst: VCodeInst) -> Option<InstKey> {
+pub(crate) fn inst_key(vcode: &VCode<OpCode>, inst: VCodeInst) -> Option<InstKey> {
     let fixup = match vcode.fixups.get(inst) {
         None => FixupKey::None,
         Some((_, VCodeFixup::Label(label))) => match vcode.labels[*label] {
             Label::Insn(_) => return None,
             Label::Block(block) => FixupKey::Block(block),
             Label::Function(func) => FixupKey::Function(func),
+            Label::SectionCodeUnit(unit) => FixupKey::SectionCodeUnit(unit),
         },
         Some((_, VCodeFixup::Sym(sym))) => FixupKey::Sym(sym.kind.clone(), sym.sym.clone()),
     };
@@ -413,11 +415,11 @@ fn analyze_region(vcode: &VCode<OpCode>, insts: &[VCodeInst]) -> Option<RegionAn
     })
 }
 
-fn block_insts(vcode: &VCode<OpCode>, block: BlockId) -> Vec<VCodeInst> {
+pub(crate) fn block_insts(vcode: &VCode<OpCode>, block: BlockId) -> Vec<VCodeInst> {
     vcode.block_insns(block).collect()
 }
 
-fn replace_block_insts(vcode: &mut VCode<OpCode>, block: BlockId, insts: &[VCodeInst]) {
+pub(crate) fn replace_block_insts(vcode: &mut VCode<OpCode>, block: BlockId, insts: &[VCodeInst]) {
     let mut list: EntityList<VCodeInst> = Default::default();
     for &inst in insts {
         list.push(inst, &mut vcode.insts_pool);
@@ -425,13 +427,13 @@ fn replace_block_insts(vcode: &mut VCode<OpCode>, block: BlockId, insts: &[VCode
     vcode.blocks[block] = list;
 }
 
-fn create_inst(vcode: &mut VCode<OpCode>, op: OpCode) -> VCodeInst {
+pub(crate) fn create_inst(vcode: &mut VCode<OpCode>, op: OpCode) -> VCodeInst {
     let inst = vcode.insts.push(op);
     vcode.inst_ir[inst] = None.into();
     inst
 }
 
-fn clone_inst(vcode: &mut VCode<OpCode>, inst: VCodeInst, block: BlockId) -> VCodeInst {
+pub(crate) fn clone_inst(vcode: &mut VCode<OpCode>, inst: VCodeInst, block: BlockId) -> VCodeInst {
     let new_inst = vcode.add_inst_to_block(vcode.insts[inst], vcode.inst_ir[inst].expand(), block);
     if let Some((_, bytes)) = vcode.inst_imm_bytes.get(inst) {
         vcode.inst_imm_bytes.insert((new_inst, bytes.clone()));
@@ -471,7 +473,7 @@ fn rewrite_block_labels(vcode: &mut VCode<OpCode>, aliases: &FxHashMap<BlockId, 
     }
 }
 
-fn layout_fallthrough_targets(
+pub(crate) fn layout_fallthrough_targets(
     vcode: &VCode<OpCode>,
     block_order: &[BlockId],
 ) -> FxHashSet<BlockId> {

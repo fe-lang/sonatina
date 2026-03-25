@@ -6,9 +6,9 @@ input_file: test_files/evm/loops.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section init: 567 bytes
-  section runtime: 547 bytes
-  total: 1114 bytes
+  section init: 563 bytes
+  section runtime: 543 bytes
+  total: 1106 bytes
 
 functions:
   __Bench_recv_0_3: ir_blocks=4 ir_insts=7 vcode_ops=17 fixups=2 imm_bytes=1
@@ -27,13 +27,13 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=0
 
 evm:
-  deploy: success reason=Return gas_used=171654 gas_refunded=0 logs=0 output=create len=547 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
-  case counter: calldata_len=36 success reason=Return gas_used=25729 gas_refunded=0 logs=0 output=call len=32 tx_gas=21204 runtime_gas=4525
-  case sum: calldata_len=36 success reason=Return gas_used=30859 gas_refunded=0 logs=0 output=call len=32 tx_gas=21204 runtime_gas=9655
-  case xor_loop: calldata_len=68 success reason=Return gas_used=27903 gas_refunded=0 logs=0 output=call len=32 tx_gas=21344 runtime_gas=6559
-  case counter_unchecked: calldata_len=36 success reason=Return gas_used=25825 gas_refunded=0 logs=0 output=call len=32 tx_gas=21204 runtime_gas=4621
-  case sum_unchecked: calldata_len=36 success reason=Return gas_used=26953 gas_refunded=0 logs=0 output=call len=32 tx_gas=21204 runtime_gas=5749
-  case xor_loop_unchecked: calldata_len=68 success reason=Return gas_used=28040 gas_refunded=0 logs=0 output=call len=32 tx_gas=21344 runtime_gas=6696
+  deploy: success reason=Return gas_used=170784 gas_refunded=0 logs=0 output=create len=543 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
+  case counter: calldata_len=36 success reason=Return gas_used=25720 gas_refunded=0 logs=0 output=call len=32 tx_gas=21204 runtime_gas=4516
+  case sum: calldata_len=36 success reason=Return gas_used=30850 gas_refunded=0 logs=0 output=call len=32 tx_gas=21204 runtime_gas=9646
+  case xor_loop: calldata_len=68 success reason=Return gas_used=27888 gas_refunded=0 logs=0 output=call len=32 tx_gas=21344 runtime_gas=6544
+  case counter_unchecked: calldata_len=36 success reason=Return gas_used=25816 gas_refunded=0 logs=0 output=call len=32 tx_gas=21204 runtime_gas=4612
+  case sum_unchecked: calldata_len=36 success reason=Return gas_used=26944 gas_refunded=0 logs=0 output=call len=32 tx_gas=21204 runtime_gas=5740
+  case xor_loop_unchecked: calldata_len=68 success reason=Return gas_used=28025 gas_refunded=0 logs=0 output=call len=32 tx_gas=21344 runtime_gas=6681
 
 
 --------------- DEBUG ---------------
@@ -135,13 +135,8 @@ __Bench_recv_0_5:
 __Bench_init:
   block0:
     CALLVALUE  // v0.i256 = evm_call_value;
-    ISZERO  // v8.i1 = is_zero v0;
-    PUSH1 block2  // br v8 block2 block1;
+    PUSH1 section_unit0  // br v8 block2 block1;
     JUMPI
-  block1:
-    PUSH0  // evm_revert 0.i256 0.i256;
-    PUSH0
-    REVERT
   block2:
     JUMPDEST
     PUSH0 0x0 (0)  // v4.i256 = sym_addr &__Bench_runtime;
@@ -476,13 +471,8 @@ calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_len:
     SWAP2  // v8.i1 = lt v1 v0;
     SWAP1
     LT
-    ISZERO  // br v8 block1 block2;
-    PUSH1 block2
+    PUSH1 section_unit0  // br v8 block1 block2;
     JUMPI
-  block1:
-    PUSH0  // evm_revert 0.i256 0.i256;
-    PUSH0
-    REVERT
   block2:
     JUMPDEST
     SWAP1  // return v7;
@@ -511,13 +501,8 @@ u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_So
     SWAP4  // v13.i1 = gt v12 v6;
     DUP5
     GT
-    ISZERO  // br v13 block3 block4;
-    PUSH1 block4
+    PUSH1 section_unit0  // br v13 block3 block4;
     JUMPI
-  block3:
-    PUSH0  // evm_revert 0.i256 0.i256;
-    PUSH0
-    REVERT
   block4:
     JUMPDEST
     SWAP1  // v21.i256 = add v5 v10;
@@ -529,3 +514,11 @@ u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_So
     MSTORE
     SWAP1  // return v22;
     JUMP
+
+// synthetic section unit
+__evm_shared_tail_0:
+  block0:
+    JUMPDEST
+    PUSH0
+    PUSH0
+    REVERT

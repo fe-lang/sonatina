@@ -6,8 +6,8 @@ input_file: test_files/evm/fenew.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 618 bytes
-  total: 618 bytes
+  section runtime: 610 bytes
+  total: 610 bytes
 
 object: Counter
   section init: 104 bytes
@@ -19,7 +19,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   __Counter_runtime: ir_blocks=12 ir_insts=27 vcode_ops=77 fixups=6 imm_bytes=7
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  assert: ir_blocks=3 ir_insts=3 vcode_ops=8 fixups=1 imm_bytes=0
+  assert: ir_blocks=3 ir_insts=3 vcode_ops=9 fixups=1 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Get_h3927684624c88c53__624197e0d5a47bbd: ir_blocks=9 ir_insts=42 vcode_ops=118 fixups=8 imm_bytes=18
     mem: scratch_words=0 stable_words=6 stable_mode=StaticAbs(base=0xa0) entry_abs_words=0 abs_words_end=6
@@ -31,7 +31,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case test_counter: calldata_len=0 success reason=Return gas_used=94658 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=73658
+  case test_counter: calldata_len=0 success reason=Return gas_used=94655 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=73655
 
 
 --------------- DEBUG ---------------
@@ -40,13 +40,8 @@ evm:
 __Counter_init:
   block0:
     CALLVALUE  // v0.i256 = evm_call_value;
-    ISZERO  // v2.i1 = is_zero v0;
-    PUSH1 block2  // br v2 block2 block1;
+    PUSH1 section_unit0  // br v2 block2 block1;
     JUMPI
-  block1:
-    PUSH0  // evm_revert 0.i256 0.i256;
-    PUSH0
-    REVERT
   block2:
     JUMPDEST
     PUSH0 0x0 (0)  // v4.i256 = sym_addr &__Counter_runtime;
@@ -136,12 +131,9 @@ __Counter_runtime:
 assert:
   block0:
     JUMPDEST
-    PUSH1 block2  // br v0 block2 block1;
+    ISZERO
+    PUSH1 section_unit0  // br v0 block2 block1;
     JUMPI
-  block1:
-    PUSH0  // evm_revert 0.i256 0.i256;
-    PUSH0
-    REVERT
   block2:
     JUMPDEST
     JUMP  // return;
@@ -171,14 +163,8 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Get_h3927
     DUP2  // v55.i1 = lt v54 v32;
     SWAP1
     LT
-    ISZERO  // br v55 block9 block10;
-    PUSH1 block10
+    PUSH1 section_unit0  // br v55 block9 block10;
     JUMPI
-  block9:
-    JUMPDEST
-    PUSH0  // evm_revert 0.i256 0.i256;
-    PUSH0
-    REVERT
   block10:
     JUMPDEST
     PUSH1 0x4 (4)  // v13.i256 = evm_call v1 v0 v2 v32 4.i256 0.i256 0.i256;
@@ -217,7 +203,7 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Get_h3927
     PUSH1 0x20 (32)  // v19.i1 = lt v14 32.i256;
     DUP2
     LT
-    PUSH1 block9  // br v19 block5 block6;
+    PUSH1 section_unit0  // br v19 block5 block6;
     JUMPI
   block6:
     PUSH1 0xa0 (160)  // v20.*@__fe_obj_MemoryBytes_2 = alloca @__fe_obj_MemoryBytes_2;
@@ -251,7 +237,7 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Get_h3927
     SWAP2
     SWAP1
     GT
-    PUSH1 block9  // br v47 block13 block14;
+    PUSH1 section_unit0  // br v47 block13 block14;
     JUMPI
   block14:
     SWAP1  // v49.i256 = mload v48 i256;
@@ -289,14 +275,8 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Increment
     DUP2  // v40.i1 = lt v39 v29;
     SWAP1
     LT
-    ISZERO  // br v40 block9 block10;
-    PUSH1 block10
+    PUSH1 section_unit0  // br v40 block9 block10;
     JUMPI
-  block9:
-    JUMPDEST
-    PUSH0  // evm_revert 0.i256 0.i256;
-    PUSH0
-    REVERT
   block10:
     JUMPDEST
     PUSH1 0x4 (4)  // v13.i256 = evm_call v1 v0 v2 v29 4.i256 0.i256 0.i256;
@@ -335,7 +315,7 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Increment
     PUSH0  // v17.i1 = lt v14 0.i256;
     DUP2
     LT
-    PUSH1 block9  // br v17 block5 block6;
+    PUSH1 section_unit0  // br v17 block5 block6;
     JUMPI
   block6:
     PUSH1 0xa0 (160)  // v18.*@__fe_obj_MemoryBytes_2 = alloca @__fe_obj_MemoryBytes_2;
@@ -417,13 +397,8 @@ entry:
     DUP2  // v26.i1 = lt v25 v15;
     SWAP1
     LT
-    ISZERO  // br v26 block5 block6;
-    PUSH1 block6
+    PUSH1 section_unit0  // br v26 block5 block6;
     JUMPI
-  block5:
-    PUSH0  // evm_revert 0.i256 0.i256;
-    PUSH0
-    REVERT
   block6:
     JUMPDEST
     PUSH0  // v18.i256 = evm_create2 0.i256 v15 v12 0.i256;
@@ -507,3 +482,11 @@ entry:
     DUP3
     RETURNDATACOPY
     REVERT  // evm_revert v22 v20;
+
+// synthetic section unit
+__evm_shared_tail_0:
+  block0:
+    JUMPDEST
+    PUSH0
+    PUSH0
+    REVERT

@@ -6,8 +6,8 @@ input_file: test_files/evm/fe_poseidon_mock_different_inputs_regression.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 2543 bytes
-  total: 2543 bytes
+  section runtime: 2535 bytes
+  total: 2535 bytes
 
 functions:
   ark: ir_blocks=8 ir_insts=45 vcode_ops=134 fixups=8 imm_bytes=26
@@ -63,7 +63,7 @@ ark:
     DUP9
     LT
     ISZERO  // br v11 block2 block10;
-    PUSH1 block1
+    PUSH1 section_unit0
     JUMPI
   block2:
     DUP8  // v13.*i256 = gep v5 0.i256 v1;
@@ -100,7 +100,7 @@ ark:
     DUP2
     LT
     ISZERO  // br v31 block4 block11;
-    PUSH1 block1
+    PUSH1 section_unit0
     JUMPI
   block4:
     SWAP1  // v33.*i256 = gep v22 0.i256 v66;
@@ -136,7 +136,7 @@ ark:
     DUP2
     LT
     ISZERO  // br v50 block6 block12;
-    PUSH1 block1
+    PUSH1 section_unit0
     JUMPI
   block6:
     SWAP1  // v52.*i256 = gep v41 0.i256 v67;
@@ -165,11 +165,6 @@ ark:
     ADD
     MSTORE  // mstore v61 v55 i256;
     JUMP  // return;
-  block1:
-    JUMPDEST
-    PUSH0  // evm_revert 0.i256 0.i256;
-    PUSH0
-    REVERT
 
 // func private %sigma_full(v66.*[i256; 3], v0.*[i256; 3])
 sigma_full:
@@ -452,7 +447,7 @@ poseidon_mock:
     SWAP2  // v64.i1 = lt v63 v63;
     DUP3
     LT
-    PUSH1 block9  // br v64 block18 block3;
+    PUSH1 section_unit0  // br v64 block18 block3;
     JUMPI
   block3:
     SWAP2  // v36.i256 = add v22 1.i256;
@@ -519,7 +514,7 @@ poseidon_mock:
     SWAP2  // v66.i1 = lt v65 v73;
     DUP3
     LT
-    PUSH1 block9  // br v66 block19 block7;
+    PUSH1 section_unit0  // br v66 block19 block7;
     JUMPI
   block7:
     SWAP2  // v55.i256 = add v42 1.i256;
@@ -529,11 +524,6 @@ poseidon_mock:
     SWAP1
     PUSH1 block5
     JUMP
-  block9:
-    JUMPDEST
-    PUSH0  // evm_revert 0.i256 0.i256;
-    PUSH0
-    REVERT
   block8:
     JUMPDEST
     POP  // v58.i256 = mload v57 i256;
@@ -584,7 +574,7 @@ entry:
     JUMP
     JUMPDEST
     EQ  // v10.i1 = eq v6 v7;
-    PUSH1 block3  // br v10 block3 block1;
+    PUSH1 section_unit0  // br v10 block3 block1;
     JUMPI
   block1:
     PUSH1 0x1 (1)  // mstore 0.i256 1.i256 i256;
@@ -593,8 +583,11 @@ entry:
     PUSH1 0x20 (32)  // evm_return 0.i256 32.i256;
     PUSH0
     RETURN
-  block3:
+
+// synthetic section unit
+__evm_shared_tail_0:
+  block0:
     JUMPDEST
-    PUSH0  // evm_revert 0.i256 0.i256;
+    PUSH0
     PUSH0
     REVERT

@@ -1,6 +1,7 @@
 mod heap_plan;
 mod late_alias;
 mod late_block_merge;
+mod late_section_merge;
 mod lazy_frame;
 mod legalize;
 pub use late_alias::canonicalize_alias_value;
@@ -32,7 +33,9 @@ use crate::{
     liveness::{InstLiveness, Liveness},
     loop_analysis::LoopTree,
     machinst::{
-        lower::{FixupUpdate, Lower, LowerBackend, LoweredFunction, SectionLoweringCtx},
+        lower::{
+            FixupUpdate, Lower, LowerBackend, LoweredFunction, SectionCodeUnit, SectionLoweringCtx,
+        },
         vcode::{Label, SymFixup, SymFixupKind, VCode, VCodeFixup, VCodeInst},
     },
     module_analysis::{CallGraph, SccBuilder},
@@ -71,6 +74,7 @@ use sonatina_triple::{EvmVersion, OperatingSystem};
 use cranelift_entity::{EntityList, SecondaryMap};
 use late_alias::compute_evm_late_aliases;
 use late_block_merge::run_late_block_merge;
+use late_section_merge::run_late_section_terminal_outline;
 use lazy_frame::{FrameSite, FrameSummary, LazyFramePlan, compute_frame_summary};
 use legalize::legalize_evm_section;
 use mem_effects::compute_func_mem_effects;
@@ -946,7 +950,7 @@ fn compute_function_entry_jump_targets(module: &Module, funcs: &[FuncRef]) -> Fx
     targets
 }
 
-fn referenced_insn_label_targets(vcode: &VCode<OpCode>) -> FxHashSet<VCodeInst> {
+pub(crate) fn referenced_insn_label_targets(vcode: &VCode<OpCode>) -> FxHashSet<VCodeInst> {
     let mut targets = FxHashSet::default();
     for (_, fixup) in vcode.fixups.values() {
         let VCodeFixup::Label(label) = fixup else {
@@ -1568,7 +1572,7 @@ fn compute_dyn_sp_plan(
     }
 }
 
-fn is_push_opcode(op: OpCode) -> bool {
+pub(crate) fn is_push_opcode(op: OpCode) -> bool {
     let byte = op as u8;
     byte == OpCode::PUSH0 as u8 || (OpCode::PUSH1 as u8..=OpCode::PUSH32 as u8).contains(&byte)
 }
@@ -1634,7 +1638,7 @@ fn is_bool_producer_opcode(op: OpCode) -> bool {
     )
 }
 
-fn is_plain_inst(
+pub(crate) fn is_plain_inst(
     vcode: &VCode<OpCode>,
     label_targets: &FxHashSet<VCodeInst>,
     inst: VCodeInst,
@@ -2567,6 +2571,19 @@ impl LowerBackend for EvmBackend {
             function_entry_jumpdest: true,
         };
         self.lower_prepared_function(module, func, lowering)
+    }
+
+    fn post_lower_section(
+        &self,
+        module: &Module,
+        _funcs: &[FuncRef],
+        lowered: &mut [(FuncRef, LoweredFunction<Self::MInst>)],
+        _section_ctx: &SectionLoweringCtx<'_>,
+    ) -> Result<Vec<SectionCodeUnit<Self::MInst>>, Self::Error> {
+        if self.late_cleanup_profile == LateCleanupProfile::Off {
+            return Ok(Vec::new());
+        }
+        Ok(run_late_section_terminal_outline(module, lowered))
     }
 
     fn apply_sym_fixup(

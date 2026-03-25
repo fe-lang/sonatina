@@ -16,7 +16,10 @@ use sonatina_codegen::{
     domtree::DomTree,
     isa::evm::{EvmBackend, LateCleanupProfile, PushWidthPolicy, canonicalize_alias_value},
     liveness::Liveness,
-    machinst::lower::{LowerBackend, LoweredFunction, SectionLoweringCtx},
+    machinst::{
+        lower::{LowerBackend, LoweredFunction, SectionCodeUnit, SectionLoweringCtx},
+        vcode::{Label, VCodeFixup},
+    },
     object::{CompileOptions, compile_all_objects},
     optim::{
         dead_func::{collect_object_roots, run_dead_func_elim},
@@ -25,7 +28,7 @@ use sonatina_codegen::{
     stackalloc::StackifyBuilder,
 };
 use sonatina_ir::{
-    Function,
+    BlockId, Function, U256 as IrU256,
     cfg::ControlFlowGraph,
     ir_writer::{FuncWriteCtx, FunctionSignature, IrWrite, ModuleWriter},
     isa::evm::Evm,
@@ -37,6 +40,7 @@ use sonatina_triple::{Architecture, OperatingSystem, Vendor};
 use sonatina_verifier::{VerificationLevel, VerifierConfig};
 use std::{
     collections::HashMap,
+    fmt,
     io::{Write, stderr},
 };
 
@@ -203,15 +207,30 @@ fn test_evm(fixture: Fixture<&str>) {
     let mem_plan = backend.snapshot_mem_plan(&parsed.module, &func_order);
     let (mem_plan_header, mem_plan_funcs) = parse_mem_plan_summary(&mem_plan);
 
+    let mut lowered_funcs: Vec<_> = func_order
+        .iter()
+        .copied()
+        .map(|func| {
+            backend
+                .lower_function(&parsed.module, func, &section_ctx)
+                .map(|lowered| (func, lowered))
+                .unwrap()
+        })
+        .collect();
+    let synthetic_units = backend
+        .post_lower_section(
+            &parsed.module,
+            &func_order,
+            &mut lowered_funcs,
+            &section_ctx,
+        )
+        .unwrap();
+
     let mut func_stats: Vec<FuncStats> = Vec::new();
     let mut stackify_out = Vec::new();
     let mut lowered_out = Vec::new();
 
-    for fref in &func_order {
-        let lowered = backend
-            .lower_function(&parsed.module, *fref, &section_ctx)
-            .unwrap();
-
+    for (fref, lowered) in &lowered_funcs {
         let vcode_ops = lowered.vcode.insts.len();
         let vcode_fixups = lowered.vcode.fixups.len();
         let vcode_imm_bytes = lowered.vcode.inst_imm_bytes.len();
@@ -245,7 +264,7 @@ fn test_evm(fixture: Fixture<&str>) {
                 }
 
                 if emit_vcode {
-                    write_vcode_in_emitted_order(&lowered, &mut lowered_out, &ctx);
+                    write_vcode_in_emitted_order(lowered, &mut lowered_out, &ctx);
                     writeln!(&mut lowered_out).unwrap();
                 }
             }
@@ -401,6 +420,12 @@ fn test_evm(fixture: Fixture<&str>) {
 
         out.append(&mut stackify_out);
         out.append(&mut lowered_out);
+        if emit_vcode {
+            for unit in &synthetic_units {
+                write_synthetic_section_unit(unit, &mut out);
+                writeln!(&mut out).unwrap();
+            }
+        }
 
         if emit_bytecode_hex {
             writeln!(&mut out, "\n\n--------------- BYTECODE ---------------\n").unwrap();
@@ -443,6 +468,44 @@ fn write_vcode_in_emitted_order<Op: std::fmt::Debug>(
         .vcode
         .write_with_block_order(out, ctx, &lowered.block_order)
         .unwrap();
+}
+
+fn write_synthetic_section_unit<Op: fmt::Debug>(unit: &SectionCodeUnit<Op>, out: &mut Vec<u8>) {
+    writeln!(out, "// synthetic section unit").unwrap();
+    writeln!(out, "{}:", unit.name).unwrap();
+    for &block in &unit.block_order {
+        let block_insts: Vec<_> = unit.vcode.block_insns(block).collect();
+        if block_insts.is_empty() {
+            continue;
+        }
+        writeln!(out, "  block{}:", block.0).unwrap();
+        for (idx, insn) in block_insts.iter().copied().enumerate() {
+            write!(out, "    {:?}", unit.vcode.insts[insn]).unwrap();
+            if let Some((_, bytes)) = unit.vcode.inst_imm_bytes.get(insn) {
+                let mut be = [0; 32];
+                be[32 - bytes.len()..].copy_from_slice(bytes);
+                let imm = IrU256::from_big_endian(&be);
+                write!(out, " 0x{imm:x} ({imm})").unwrap();
+            } else if let Some((_, fixup)) = unit.vcode.fixups.get(insn)
+                && let VCodeFixup::Label(label) = fixup
+            {
+                match unit.vcode.labels[*label] {
+                    Label::Block(BlockId(n)) => write!(out, " block{n}").unwrap(),
+                    Label::Insn(target_insn) => {
+                        let pos = block_insts
+                            .iter()
+                            .position(|i| *i == target_insn)
+                            .expect("Label::Insn must be in same synthetic block");
+                        let offset = pos as i32 - idx as i32;
+                        write!(out, " `pc + ({offset})`").unwrap();
+                    }
+                    Label::Function(func) => write!(out, " {func:?}").unwrap(),
+                    Label::SectionCodeUnit(unit) => write!(out, " section_unit{}", unit.0).unwrap(),
+                }
+            }
+            writeln!(out).unwrap();
+        }
+    }
 }
 
 fn assert_case(case: &EvmCase, res: &ExecutionResult, fixture_path: &str) {
