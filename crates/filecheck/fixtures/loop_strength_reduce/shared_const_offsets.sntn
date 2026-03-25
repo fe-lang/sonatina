@@ -1,0 +1,47 @@
+target = "evm-ethereum-osaka"
+
+# check: func public %offset_pair
+# check: block0:
+# check:     v14.i256 = ptr_to_int v0 i256
+# check:     jump block1
+# check:
+# check: block1:
+# check:     v1.i256 = phi (0.i256 block0) (v6 block2)
+# check:     v2.i256 = phi (0.i256 block0) (v10 block2)
+# check:     v15.i256 = phi (v14 block0) (v17 block2)
+# check:     v3.i1 = lt v1 4.i256
+# check:     br v3 block2 block3
+# check:
+# check: block2:
+# check:     v5.i256 = mload v15 i256
+# check:     v6.i256 = add v1 1.i256
+# check:     v18.i256 = add v15 32.i256
+# check:     v8.i256 = mload v18 i256
+# check:     v9.i256 = add v5 v8
+# check:     v10.i256 = add v2 v9
+# check:     v17.i256 = add v15 32.i256
+# check:     jump block1
+
+func public %offset_pair(v0.*i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v1.i256 = phi (0.i256 block0) (v6 block2);
+        v2.i256 = phi (0.i256 block0) (v10 block2);
+        v3.i1 = lt v1 4.i256;
+        br v3 block2 block3;
+
+    block2:
+        v4.*i256 = gep v0 v1;
+        v5.i256 = mload v4 i256;
+        v6.i256 = add v1 1.i256;
+        v7.*i256 = gep v0 v6;
+        v8.i256 = mload v7 i256;
+        v9.i256 = add v5 v8;
+        v10.i256 = add v2 v9;
+        jump block1;
+
+    block3:
+        return v2;
+}

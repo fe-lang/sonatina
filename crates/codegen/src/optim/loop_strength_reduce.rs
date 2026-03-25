@@ -43,14 +43,19 @@ struct AddrRecurrencePlan {
     const_bytes: i64,
     coeff_bytes: i64,
     step_bytes: i64,
-    users: SmallVec<[InstId; 8]>,
+    users: SmallVec<[AddrUserPlan; 8]>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct AddrUserPlan {
+    inst: InstId,
+    offset_bytes: i64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct FamilyKey {
     biv: ValueId,
     base: Option<ValueId>,
-    const_bytes: i64,
     coeff_bytes: i64,
     step_bytes: i64,
 }
@@ -194,12 +199,14 @@ impl LoopStrengthReduce {
                     let key = FamilyKey {
                         biv: biv.phi,
                         base: matched.base,
-                        const_bytes: matched.const_bytes,
                         coeff_bytes: matched.coeff_bytes,
                         step_bytes,
                     };
                     if let Some(&idx) = groups.get(&key) {
-                        plans[idx].users.push(inst);
+                        plans[idx].users.push(AddrUserPlan {
+                            inst,
+                            offset_bytes: matched.const_bytes,
+                        });
                     } else {
                         let idx = plans.len();
                         plans.push(AddrRecurrencePlan {
@@ -212,7 +219,10 @@ impl LoopStrengthReduce {
                             const_bytes: matched.const_bytes,
                             coeff_bytes: matched.coeff_bytes,
                             step_bytes,
-                            users: smallvec![inst],
+                            users: smallvec![AddrUserPlan {
+                                inst,
+                                offset_bytes: matched.const_bytes,
+                            }],
                         });
                         groups.insert(key, idx);
                     }
@@ -221,7 +231,16 @@ impl LoopStrengthReduce {
             }
         }
 
-        LoopRewritePlan { plans }
+        let mut finalized = SmallVec::<[AddrRecurrencePlan; 8]>::new();
+        for mut plan in plans {
+            if finalize_recurrence_family(&mut plan) {
+                finalized.push(plan);
+            } else {
+                finalized.extend(split_recurrence_family_by_const(plan));
+            }
+        }
+
+        LoopRewritePlan { plans: finalized }
     }
 
     fn apply_rewrite_plan(
@@ -273,7 +292,9 @@ impl LoopStrengthReduce {
                 .append_phi_arg(phi_inst, addr_next, addr_plan.latch);
 
             for &user in &addr_plan.users {
-                rewrite_mem_addr(func, user, addr_phi);
+                let addr =
+                    emit_addr_offset_before_use(func, user.inst, addr_phi, user.offset_bytes);
+                rewrite_mem_addr(func, user.inst, addr);
             }
             changed = true;
         }
@@ -397,6 +418,91 @@ fn loop_has_rewritable_candidate(
 fn supports_addr_base_ty(func: &Function, value: ValueId) -> bool {
     let ty = func.dfg.value_ty(value);
     ty == Type::I256 || ty.is_pointer(func.ctx())
+}
+
+fn finalize_recurrence_family(plan: &mut AddrRecurrencePlan) -> bool {
+    let Some(const_bytes) = canonical_family_const(&plan.users) else {
+        return false;
+    };
+    if plan
+        .users
+        .iter()
+        .any(|user| user.offset_bytes.checked_sub(const_bytes).is_none())
+    {
+        return false;
+    }
+
+    plan.const_bytes = const_bytes;
+    for user in &mut plan.users {
+        user.offset_bytes = user
+            .offset_bytes
+            .checked_sub(const_bytes)
+            .expect("checked above");
+    }
+
+    true
+}
+
+fn split_recurrence_family_by_const(plan: AddrRecurrencePlan) -> SmallVec<[AddrRecurrencePlan; 8]> {
+    let AddrRecurrencePlan {
+        loop_id,
+        header,
+        latch,
+        preheader,
+        biv,
+        base,
+        coeff_bytes,
+        step_bytes,
+        users,
+        ..
+    } = plan;
+    let mut groups = FxHashMap::<i64, usize>::default();
+    let mut split = SmallVec::<[AddrRecurrencePlan; 8]>::new();
+    for user in users {
+        if let Some(&idx) = groups.get(&user.offset_bytes) {
+            split[idx].users.push(AddrUserPlan {
+                inst: user.inst,
+                offset_bytes: 0,
+            });
+        } else {
+            let idx = split.len();
+            split.push(AddrRecurrencePlan {
+                loop_id,
+                header,
+                latch,
+                preheader,
+                biv: biv.clone(),
+                base,
+                const_bytes: user.offset_bytes,
+                coeff_bytes,
+                step_bytes,
+                users: smallvec![AddrUserPlan {
+                    inst: user.inst,
+                    offset_bytes: 0,
+                }],
+            });
+            groups.insert(user.offset_bytes, idx);
+        }
+    }
+
+    split
+}
+
+fn canonical_family_const(users: &[AddrUserPlan]) -> Option<i64> {
+    let first = users.first()?;
+    let mut best = first.offset_bytes;
+    for user in &users[1..] {
+        if prefers_canonical_const(user.offset_bytes, best) {
+            best = user.offset_bytes;
+        }
+    }
+    Some(best)
+}
+
+fn prefers_canonical_const(candidate: i64, best: i64) -> bool {
+    let candidate_abs = candidate.unsigned_abs();
+    let best_abs = best.unsigned_abs();
+    candidate_abs < best_abs || candidate_abs == best_abs && candidate < best
 }
 
 fn available_at_anchor(
@@ -805,6 +911,19 @@ fn insert_with_result_before_terminator<I: Inst>(
     value
 }
 
+fn insert_with_result_before_inst<I: Inst>(
+    func: &mut Function,
+    before: InstId,
+    inst_data: I,
+    ty: Type,
+) -> ValueId {
+    let mut cursor = InstInserter::at_location(before_inst_loc(func, before));
+    let inst = cursor.insert_inst_data(func, inst_data);
+    let value = cursor.make_result(func, inst, ty);
+    cursor.attach_result(func, inst, value);
+    value
+}
+
 fn before_terminator_loc(func: &Function, block: BlockId) -> CursorLocation {
     let term = func
         .layout
@@ -813,6 +932,41 @@ fn before_terminator_loc(func: &Function, block: BlockId) -> CursorLocation {
     func.layout
         .prev_inst_of(term)
         .map_or(CursorLocation::BlockTop(block), CursorLocation::At)
+}
+
+fn before_inst_loc(func: &Function, inst: InstId) -> CursorLocation {
+    func.layout.prev_inst_of(inst).map_or(
+        CursorLocation::BlockTop(func.layout.inst_block(inst)),
+        CursorLocation::At,
+    )
+}
+
+fn emit_addr_offset_before_use(
+    func: &mut Function,
+    user: InstId,
+    addr_phi: ValueId,
+    offset_bytes: i64,
+) -> ValueId {
+    if offset_bytes == 0 {
+        return addr_phi;
+    }
+
+    let delta = make_i256_imm(func, offset_bytes.unsigned_abs());
+    if offset_bytes >= 0 {
+        insert_with_result_before_inst(
+            func,
+            user,
+            Add::new_unchecked(func.inst_set(), addr_phi, delta),
+            Type::I256,
+        )
+    } else {
+        insert_with_result_before_inst(
+            func,
+            user,
+            Sub::new_unchecked(func.inst_set(), addr_phi, delta),
+            Type::I256,
+        )
+    }
 }
 
 fn rewrite_mem_addr(func: &mut Function, inst: InstId, new_addr: ValueId) {
@@ -1048,6 +1202,50 @@ func public %bump(v0.*i256) -> i256 {
         assert_eq!(dump.matches(" = phi ").count(), 3);
         assert!(dump.contains("mload"));
         assert!(dump.contains("mstore"));
+    }
+
+    #[test]
+    fn shares_one_addr_phi_across_const_offsets() {
+        let src = r#"
+target = "evm-ethereum-osaka"
+
+func public %offset_pair(v0.*i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v1.i256 = phi (0.i256 block0) (v6 block2);
+        v2.i256 = phi (0.i256 block0) (v10 block2);
+        v3.i1 = lt v1 4.i256;
+        br v3 block2 block3;
+
+    block2:
+        v4.*i256 = gep v0 v1;
+        v5.i256 = mload v4 i256;
+        v6.i256 = add v1 1.i256;
+        v7.*i256 = gep v0 v6;
+        v8.i256 = mload v7 i256;
+        v9.i256 = add v5 v8;
+        v10.i256 = add v2 v9;
+        jump block1;
+
+    block3:
+        return v2;
+}
+"#;
+
+        let parsed = parse_module(src).expect("parse");
+        let func_ref = parsed.module.funcs()[0];
+        let dump = parsed
+            .module
+            .func_store
+            .modify(func_ref, |func| run_lsr_pipeline(func_ref, func));
+
+        assert_eq!(dump.matches(" = phi ").count(), 3);
+        assert_eq!(dump.matches("mload").count(), 2);
+        assert!(!dump.contains(" = gep v0 v1"));
+        assert!(!dump.contains(" = gep v0 v6"));
+        assert!(dump.contains("32.i256"));
     }
 
     #[test]
