@@ -724,9 +724,15 @@ fn refine_not_equal_constant_edge(
     }
 
     if updated.signed.lo == signed && updated.signed.lo < updated.signed.hi {
-        updated.signed.lo = updated.signed.lo.overflowing_add(I256::one()).0;
+        let Some(next) = signed_succ(updated.signed.lo) else {
+            return;
+        };
+        updated.signed.lo = next;
     } else if updated.signed.hi == signed && updated.signed.lo < updated.signed.hi {
-        updated.signed.hi = updated.signed.hi.overflowing_sub(I256::one()).0;
+        let Some(prev) = signed_pred(updated.signed.hi) else {
+            return;
+        };
+        updated.signed.hi = prev;
     }
 
     set_env_fact(func, env, value, updated);
@@ -807,15 +813,22 @@ fn refine_unsigned_le(
     }
 }
 
+fn signed_succ(value: I256) -> Option<I256> {
+    (value < signed_max(Type::I256)).then_some(value.overflowing_add(I256::one()).0)
+}
+
+fn signed_pred(value: I256) -> Option<I256> {
+    (value > signed_min(Type::I256)).then_some(value.overflowing_sub(I256::one()).0)
+}
+
 fn refine_signed_lt(
     lhs: SignedInterval,
     rhs: SignedInterval,
     compare_truth: bool,
 ) -> Option<(SignedInterval, SignedInterval)> {
     if compare_truth {
-        let rhs_hi_minus_one = rhs.hi.overflowing_sub(I256::one()).0;
-        let lhs_hi = lhs.hi.min(rhs_hi_minus_one);
-        let rhs_lo = rhs.lo.max(lhs.lo.overflowing_add(I256::one()).0);
+        let lhs_hi = lhs.hi.min(signed_pred(rhs.hi)?);
+        let rhs_lo = rhs.lo.max(signed_succ(lhs.lo)?);
         (lhs.lo <= lhs_hi && rhs_lo <= rhs.hi).then_some((
             SignedInterval {
                 lo: lhs.lo,
@@ -861,8 +874,8 @@ fn refine_signed_le(
             },
         ))
     } else {
-        let lhs_lo = lhs.lo.max(rhs.lo.overflowing_add(I256::one()).0);
-        let rhs_hi = rhs.hi.min(lhs.hi.overflowing_sub(I256::one()).0);
+        let lhs_lo = lhs.lo.max(signed_succ(rhs.lo)?);
+        let rhs_hi = rhs.hi.min(signed_pred(lhs.hi)?);
         (lhs_lo <= lhs.hi && rhs.lo <= rhs_hi).then_some((
             SignedInterval {
                 lo: lhs_lo,
@@ -1955,6 +1968,93 @@ mod tests {
             assert_eq!(fact.unsigned.lo, U256::from(1u8));
             assert_eq!(fact.unsigned.hi, U256::from(255u16));
         });
+    }
+
+    #[test]
+    fn range_signed_lt_extrema() {
+        let min = signed_min(Type::I256);
+        let max = signed_max(Type::I256);
+        let almost_max = signed_pred(max).expect("i256 predecessor");
+
+        assert_eq!(
+            refine_signed_lt(
+                SignedInterval { lo: min, hi: max },
+                SignedInterval { lo: min, hi: min },
+                true
+            ),
+            None
+        );
+        assert_eq!(
+            refine_signed_lt(
+                SignedInterval { lo: max, hi: max },
+                SignedInterval { lo: min, hi: max },
+                true
+            ),
+            None
+        );
+
+        let refined = refine_signed_lt(
+            SignedInterval {
+                lo: almost_max,
+                hi: max,
+            },
+            SignedInterval { lo: max, hi: max },
+            true,
+        )
+        .expect("strict upper edge should remain possible");
+        assert_eq!(
+            refined.0,
+            SignedInterval {
+                lo: almost_max,
+                hi: almost_max,
+            }
+        );
+        assert_eq!(refined.1, SignedInterval { lo: max, hi: max });
+    }
+
+    #[test]
+    fn range_signed_le_extrema() {
+        let min = signed_min(Type::I256);
+        let max = signed_max(Type::I256);
+        let almost_min = signed_succ(min).expect("i256 successor");
+
+        assert_eq!(
+            refine_signed_le(
+                SignedInterval { lo: min, hi: max },
+                SignedInterval { lo: max, hi: max },
+                false
+            ),
+            None
+        );
+        assert_eq!(
+            refine_signed_le(
+                SignedInterval { lo: min, hi: min },
+                SignedInterval { lo: min, hi: max },
+                false
+            ),
+            None
+        );
+
+        let refined = refine_signed_le(
+            SignedInterval {
+                lo: almost_min,
+                hi: almost_min,
+            },
+            SignedInterval {
+                lo: min,
+                hi: almost_min,
+            },
+            false,
+        )
+        .expect("strict lower edge should remain possible");
+        assert_eq!(
+            refined.0,
+            SignedInterval {
+                lo: almost_min,
+                hi: almost_min,
+            }
+        );
+        assert_eq!(refined.1, SignedInterval { lo: min, hi: min });
     }
 
     #[test]
