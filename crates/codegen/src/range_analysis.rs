@@ -790,7 +790,7 @@ fn refine_unsigned_le(
         ))
     } else {
         let lhs_lo = lhs.lo.max(rhs.lo + U256::one());
-        if rhs.hi == U256::zero() {
+        if lhs.hi == U256::zero() {
             return None;
         }
         let rhs_hi = rhs.hi.min(lhs.hi - U256::one());
@@ -1468,23 +1468,24 @@ fn widen_env(func: &Function, old: &RangeEnv, new: &RangeEnv) -> RangeEnv {
             continue;
         }
         let old_fact = old[&value];
-        let mut new_fact = new[&value];
+        let new_fact = new[&value];
+        let mut widened_fact = old_fact;
 
         if new_fact.unsigned.lo < old_fact.unsigned.lo {
-            new_fact.unsigned.lo = U256::zero();
+            widened_fact.unsigned.lo = U256::zero();
         }
         if new_fact.unsigned.hi > old_fact.unsigned.hi {
-            new_fact.unsigned.hi = unsigned_max(ty);
+            widened_fact.unsigned.hi = unsigned_max(ty);
         }
         if new_fact.signed.lo < old_fact.signed.lo {
-            new_fact.signed.lo = signed_min(ty);
+            widened_fact.signed.lo = signed_min(ty);
         }
         if new_fact.signed.hi > old_fact.signed.hi {
-            new_fact.signed.hi = signed_max(ty);
+            widened_fact.signed.hi = signed_max(ty);
         }
 
-        if !new_fact.is_full_for(ty) {
-            widened.insert(value, new_fact);
+        if !widened_fact.is_full_for(ty) {
+            widened.insert(value, widened_fact);
         }
     }
     widened
@@ -1740,6 +1741,56 @@ mod tests {
     }
 
     #[test]
+    fn widening_never_shrinks_a_previous_result() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[Type::I8], Type::I8);
+        let is = evm.inst_set();
+        let block = builder.append_block();
+        builder.switch_to_block(block);
+        let arg = builder.args()[0];
+        builder.insert_inst_no_result_with(|| Return::new_single(is, arg));
+        builder.seal_all();
+        builder.finish();
+
+        let module = mb.build();
+        let func_ref = module.funcs()[0];
+        module.func_store.view(func_ref, |func| {
+            let mut old = RangeEnv::default();
+            old.insert(
+                arg,
+                RangeFact {
+                    unsigned: UnsignedInterval {
+                        lo: U256::zero(),
+                        hi: U256::from(10u8),
+                    },
+                    signed: SignedInterval {
+                        lo: I256::zero(),
+                        hi: I256::from(10i8),
+                    },
+                },
+            );
+
+            let mut new = RangeEnv::default();
+            new.insert(
+                arg,
+                RangeFact {
+                    unsigned: UnsignedInterval {
+                        lo: U256::from(5u8),
+                        hi: U256::from(8u8),
+                    },
+                    signed: SignedInterval {
+                        lo: I256::from(5i8),
+                        hi: I256::from(8i8),
+                    },
+                },
+            );
+
+            let widened = widen_env(func, &old, &new);
+            assert_eq!(widened.get(&arg), old.get(&arg));
+        });
+    }
+
+    #[test]
     fn sparse_joins_and_widens_drop_single_sided_facts() {
         let mb = test_module_builder();
         let (evm, mut builder) = test_func_builder(&mb, &[Type::I8, Type::I8], Type::I8);
@@ -1867,6 +1918,42 @@ mod tests {
             let fact = fact_for_value(func, analysis.entry_env(b2), arg);
             assert_eq!(fact.unsigned.lo, U256::from(1u8));
             assert_eq!(fact.unsigned.hi, U256::from(10u8));
+        });
+    }
+
+    #[test]
+    fn false_edge_of_le_zero_stays_reachable() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[Type::I8], Type::I8);
+        let is = evm.inst_set();
+
+        let b0 = builder.append_block();
+        let b1 = builder.append_block();
+        let b2 = builder.append_block();
+
+        builder.switch_to_block(b0);
+        let arg = builder.args()[0];
+        let zero = builder.make_imm_value(0i8);
+        let cond = builder.insert_inst_with(|| Le::new(is, arg, zero), Type::I1);
+        builder.insert_inst_no_result_with(|| Br::new(is, cond, b1, b2));
+
+        builder.switch_to_block(b1);
+        builder.insert_inst_no_result_with(|| Return::new_single(is, zero));
+
+        builder.switch_to_block(b2);
+        builder.insert_inst_no_result_with(|| Return::new_single(is, arg));
+
+        builder.seal_all();
+        builder.finish();
+
+        let module = mb.build();
+        let func_ref = module.funcs()[0];
+        module.func_store.view(func_ref, |func| {
+            let analysis = compute_analysis(func);
+            assert!(analysis.is_reachable(b2));
+            let fact = fact_for_value(func, analysis.entry_env(b2), arg);
+            assert_eq!(fact.unsigned.lo, U256::from(1u8));
+            assert_eq!(fact.unsigned.hi, U256::from(255u16));
         });
     }
 
