@@ -55,11 +55,14 @@ impl From<&BasicInductionVar> for AffineIv {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct BasicInductionVarProbe {
-    pub loop_id: LoopId,
-    pub header: BlockId,
-    pub latch: BlockId,
-    pub phi: ValueId,
+    pub iv: AffineIv,
     pub step: StepKind,
+}
+
+impl From<&BasicInductionVarProbe> for AffineIv {
+    fn from(probe: &BasicInductionVarProbe) -> Self {
+        probe.iv
+    }
 }
 
 impl StepKind {
@@ -526,10 +529,10 @@ pub(crate) fn detect_basic_iv_probes_for_loop(
         };
 
         probes.push(BasicInductionVarProbe {
-            loop_id,
-            header,
-            latch,
-            phi: phi_value,
+            iv: AffineIv {
+                loop_id,
+                phi: phi_value,
+            },
             step,
         });
     }
