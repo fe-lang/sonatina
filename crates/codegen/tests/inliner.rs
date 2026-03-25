@@ -1095,6 +1095,60 @@ func public %caller(v0.i1, v1.i32) -> i32 {
 }
 
 #[test]
+fn full_inliner_keeps_outer_alwaysinline_callee_verifier_clean_after_nested_inline() {
+    let source = r#"
+target = "evm-ethereum-london"
+
+func private %inner(v0.i1, v1.i32) -> i32 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        return v1;
+
+    block2:
+        v2.i32 = add v1 1.i32;
+        return v2;
+}
+
+func private %outer(v0.i1, v1.i32) -> i32 {
+    block0:
+        v2.i32 = call %inner v0 v1;
+        return v2;
+}
+
+func public %caller(v0.i1, v1.i32) -> i32 {
+    block0:
+        v2.i32 = call %outer v0 v1;
+        return v2;
+}
+"#;
+
+    let mut parsed = sonatina_parser::parse_module(source)
+        .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"));
+    let module = &mut parsed.module;
+
+    let outer = find_func(module, "outer");
+    module.ctx.set_func_hints(outer, FuncHints::ALWAYSINLINE);
+
+    let mut inliner = Inliner::new(full_only_inliner_test_config());
+    let stats = inliner.run(module);
+
+    let report = verify_module(module, &VerifierConfig::default());
+    assert!(!report.has_errors(), "{report}");
+
+    let dumped = dump_module(module);
+    assert!(
+        !dumped.contains("call %outer"),
+        "outer should remain eligible for forced inlining after its nested call is inlined:\n{dumped}"
+    );
+    assert!(
+        stats.full_calls_inlined >= 2,
+        "expected both nested and outer callsites to inline:\n{dumped}"
+    );
+}
+
+#[test]
 fn full_inliner_treats_inlinehint_as_strong_but_budgeted() {
     let source = r#"
 target = "evm-ethereum-london"
