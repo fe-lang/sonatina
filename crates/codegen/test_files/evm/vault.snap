@@ -6,8 +6,8 @@ input_file: test_files/evm/vault.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 4608 bytes
-  total: 4608 bytes
+  section runtime: 4600 bytes
+  total: 4600 bytes
 
 object: Vault
   section init: 919 bytes
@@ -15,9 +15,9 @@ object: Vault
   total: 1667 bytes
 
 object: VaultUser
-  section init: 1193 bytes
-  section runtime: 1182 bytes
-  total: 2375 bytes
+  section init: 1189 bytes
+  section runtime: 1178 bytes
+  total: 2367 bytes
 
 functions:
   __Contract_runtime_entry: ir_blocks=1 ir_insts=85 vcode_ops=310 fixups=65 imm_bytes=50
@@ -94,7 +94,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=529854 gas_refunded=79600 logs=0 output=call len=0 tx_gas=21000 runtime_gas=508854
+  case ok: calldata_len=0 success reason=Return gas_used=528986 gas_refunded=79600 logs=0 output=call len=0 tx_gas=21000 runtime_gas=507986
 
 
 --------------- DEBUG ---------------
@@ -2203,15 +2203,9 @@ decode_returndata__u256__3271ca15373d4483:
     PUSH1 0x20 (32)  // v18.i1 = lt v1 32.i256;
     DUP3
     LT
-    ISZERO  // v14.i1 = is_zero v40;
-    PUSH1 block2  // br v14 block2 block1;
+    PUSH1 block5  // br v14 block2 block1;
     JUMPI
-  block1:
-    PUSH0  // evm_revert 0.i256 0.i256;
-    PUSH0
-    REVERT
   block2:
-    JUMPDEST
     PUSH1 0xa0 (160)  // v7.*@__fe_MemoryBytes_3 = alloca @__fe_MemoryBytes_3;
     SWAP1  // mstore v10 v0 i256;
     DUP2
@@ -2252,6 +2246,7 @@ decode_returndata__u256__3271ca15373d4483:
     PUSH1 block6  // br v35 block6 block5;
     JUMPI
   block5:
+    JUMPDEST
     PUSH0  // evm_revert 0.i256 0.i256;
     PUSH0
     REVERT

@@ -6,13 +6,13 @@ input_file: test_files/evm/fe_enum_state_machine_test_order_initial_state_unopti
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 1170 bytes
-  total: 1170 bytes
+  section runtime: 1161 bytes
+  total: 1161 bytes
 
 object: Order
-  section init: 511 bytes
-  section runtime: 497 bytes
-  total: 1008 bytes
+  section init: 507 bytes
+  section runtime: 493 bytes
+  total: 1000 bytes
 
 functions:
   __Order_recv_0_4: ir_blocks=8 ir_insts=10 vcode_ops=57 fixups=10 imm_bytes=8
@@ -35,13 +35,13 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=5 abs_words_end=0
   solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish: ir_blocks=3 ir_insts=13 vcode_ops=28 fixups=1 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=5 abs_words_end=0
-  soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b: ir_blocks=7 ir_insts=22 vcode_ops=53 fixups=3 imm_bytes=3
+  soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b: ir_blocks=7 ir_insts=22 vcode_ops=52 fixups=3 imm_bytes=3
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=9 abs_words_end=0
   entry: ir_blocks=5 ir_insts=28 vcode_ops=102 fixups=16 imm_bytes=12
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=178576 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=157576
+  case ok: calldata_len=0 success reason=Return gas_used=177760 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=156760
 
 
 --------------- DEBUG ---------------
@@ -136,15 +136,9 @@ __Order_runtime:
     PUSH1 0x4 (4)  // v18.i1 = lt v16 4.i256;
     SWAP1
     LT
-    ISZERO  // br v18 block14 block15;
-    PUSH1 block15
+    PUSH1 block1  // br v18 block14 block15;
     JUMPI
-  block14:
-    PUSH0  // evm_revert 0.i256 0.i256;
-    PUSH0
-    REVERT
   block15:
-    JUMPDEST
     PUSH0  // v19.i256 = evm_calldata_load 0.i256;
     CALLDATALOAD
     PUSH1 0xe0 (224)  // v21.i256 = shr 224.i256 v19;
@@ -177,6 +171,7 @@ __Order_runtime:
     PUSH1 block6
     JUMPI
   block1:
+    JUMPDEST
     PUSH0  // evm_revert 0.i256 0.i256;
     PUSH0
     REVERT
@@ -776,15 +771,9 @@ soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__MemoryBy
     SWAP3  // v42.i1 = lt v41 v30;
     DUP4
     LT
-    ISZERO  // br v42 block8 block9;
-    PUSH1 block9
+    PUSH1 block1  // br v42 block8 block9;
     JUMPI
-  block8:
-    PUSH0  // evm_revert 0.i256 0.i256;
-    PUSH0
-    REVERT
   block9:
-    JUMPDEST
     SWAP2  // v33.i256 = mload v41 i256;
     MLOAD
     SWAP2  // mstore v8 v39 i256;

@@ -6,13 +6,13 @@ input_file: test_files/evm/coin.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=true evm_trace=false emit_observability=false opt=2
 
 object: Coin
-  section init: 898 bytes
-  section runtime: 704 bytes
-  total: 1602 bytes
+  section init: 895 bytes
+  section runtime: 701 bytes
+  total: 1596 bytes
 
 object: Contract
-  section runtime: 2313 bytes
-  total: 2313 bytes
+  section runtime: 2306 bytes
+  total: 2306 bytes
 
 functions:
   __Contract_runtime_entry: ir_blocks=3 ir_insts=75 vcode_ops=264 fixups=39 imm_bytes=52
@@ -63,7 +63,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=280795 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=259795
+  case ok: calldata_len=0 success reason=Return gas_used=280125 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=259125
 
 
 --------------- DEBUG ---------------
@@ -2791,15 +2791,9 @@ __Coin_runtime:
     PUSH1 0x4 (4)  // v93.i1 = lt v19 4.i256;
     SWAP1
     LT
-    ISZERO  // v89.i1 = is_zero v110;
-    PUSH1 block12  // br v89 block12 block11;
+    PUSH1 block1  // br v89 block12 block11;
     JUMPI
-  block11:
-    PUSH0  // evm_revert 0.i256 0.i256;
-    PUSH0
-    REVERT
   block12:
-    JUMPDEST
     PUSH0  // v27.i256 = evm_calldata_load 0.i256;
     CALLDATALOAD
     PUSH1 0x40 (64)  // v33.*i256 = evm_malloc 64.i256;
@@ -3000,6 +2994,7 @@ __Coin_runtime:
     PUSH1 block5  // br v11 block5 block1;
     JUMPI
   block1:
+    JUMPDEST
     PUSH0  // evm_revert 0.i256 0.i256;
     PUSH0
     REVERT
@@ -3505,15 +3500,9 @@ decode_returndata__u256__3271ca15373d4483:
     PUSH1 0x20 (32)  // v21.i1 = lt v1 32.i256;
     DUP4
     LT
-    ISZERO  // v17.i1 = is_zero v45;
-    PUSH1 block2  // br v17 block2 block1;
+    PUSH1 block5  // br v17 block2 block1;
     JUMPI
-  block1:
-    PUSH0  // evm_revert 0.i256 0.i256;
-    PUSH0
-    REVERT
   block2:
-    JUMPDEST
     PUSH1 0x40 (64)  // v8.*i256 = evm_malloc 64.i256;
     MLOAD
     PUSH1 0x9f (159)
@@ -3568,6 +3557,7 @@ decode_returndata__u256__3271ca15373d4483:
     PUSH1 block6  // br v40 block6 block5;
     JUMPI
   block5:
+    JUMPDEST
     PUSH0  // evm_revert 0.i256 0.i256;
     PUSH0
     REVERT

@@ -6,9 +6,9 @@ input_file: test_files/evm/zk.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=true evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section init: 2193 bytes
-  section runtime: 2182 bytes
-  total: 4375 bytes
+  section init: 2187 bytes
+  section runtime: 2176 bytes
+  total: 4363 bytes
 
 functions:
   smt_store_zero_table: ir_blocks=1 ir_insts=33 vcode_ops=100 fixups=0 imm_bytes=64
@@ -21,7 +21,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   smt_root_from_calldata: ir_blocks=18 ir_insts=65 vcode_ops=177 fixups=13 imm_bytes=26
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  smt_update_root_from_calldata: ir_blocks=22 ir_insts=83 vcode_ops=243 fixups=15 imm_bytes=32
+  smt_update_root_from_calldata: ir_blocks=22 ir_insts=83 vcode_ops=244 fixups=15 imm_bytes=32
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   init__StorPtr_Evm___207f35a85ac4062e: ir_blocks=1 ir_insts=4 vcode_ops=8 fixups=2 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
@@ -33,19 +33,19 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  deploy: success reason=Return gas_used=524996 gas_refunded=0 logs=0 output=create len=2182 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
+  deploy: success reason=Return gas_used=523694 gas_refunded=0 logs=0 output=create len=2176 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
   case bench_lean_typical_root: calldata_len=1124 success reason=Return gas_used=30032 gas_refunded=0 logs=0 output=call len=32 tx_gas=28616 runtime_gas=1416
   case bench_lean_typical_verify: calldata_len=1156 success reason=Return gas_used=30615 gas_refunded=0 logs=0 output=call len=32 tx_gas=29128 runtime_gas=1487
-  case bench_lean_typical_update: calldata_len=1188 success reason=Return gas_used=31566 gas_refunded=0 logs=0 output=call len=32 tx_gas=29640 runtime_gas=1926
+  case bench_lean_typical_update: calldata_len=1188 success reason=Return gas_used=31562 gas_refunded=0 logs=0 output=call len=32 tx_gas=29640 runtime_gas=1922
   case bench_lean_32_root: calldata_len=1124 success reason=Return gas_used=44027 gas_refunded=0 logs=0 output=call len=32 tx_gas=38216 runtime_gas=5811
   case bench_lean_32_verify: calldata_len=1156 success reason=Return gas_used=44610 gas_refunded=0 logs=0 output=call len=32 tx_gas=38728 runtime_gas=5882
-  case bench_lean_32_update: calldata_len=1188 success reason=Return gas_used=47071 gas_refunded=0 logs=0 output=call len=32 tx_gas=39240 runtime_gas=7831
+  case bench_lean_32_update: calldata_len=1188 success reason=Return gas_used=47067 gas_refunded=0 logs=0 output=call len=32 tx_gas=39240 runtime_gas=7827
   case bench_smt_typical_root: calldata_len=1124 success reason=Return gas_used=36795 gas_refunded=0 logs=0 output=call len=32 tx_gas=27932 runtime_gas=8863
   case bench_smt_typical_verify: calldata_len=1156 success reason=Return gas_used=37378 gas_refunded=0 logs=0 output=call len=32 tx_gas=28444 runtime_gas=8934
   case bench_smt_typical_update: calldata_len=1188 success reason=Return gas_used=40195 gas_refunded=0 logs=0 output=call len=32 tx_gas=28956 runtime_gas=11239
   case bench_smt_all_enabled_root: calldata_len=1124 success reason=Return gas_used=44180 gas_refunded=0 logs=0 output=call len=32 tx_gas=38300 runtime_gas=5880
   case bench_smt_all_enabled_verify: calldata_len=1156 success reason=Return gas_used=44763 gas_refunded=0 logs=0 output=call len=32 tx_gas=38812 runtime_gas=5951
-  case bench_smt_all_enabled_update: calldata_len=1188 success reason=Return gas_used=47739 gas_refunded=0 logs=0 output=call len=32 tx_gas=39324 runtime_gas=8415
+  case bench_smt_all_enabled_update: calldata_len=1188 success reason=Return gas_used=47741 gas_refunded=0 logs=0 output=call len=32 tx_gas=39324 runtime_gas=8417
 
 
 --------------- DEBUG ---------------
@@ -1519,15 +1519,9 @@ leanimt_update_root_from_calldata:
     PUSH1 0x20 (32)  // v8.i1 = gt v4 32.i256;
     DUP6
     GT
-    ISZERO  // br v8 block1 block12;
-    PUSH1 block12
+    PUSH1 block9  // br v8 block1 block12;
     JUMPI
-  block1:
-    PUSH0  // evm_revert 0.i256 0.i256;
-    PUSH0
-    REVERT
   block12:
-    JUMPDEST
     SWAP5  // jump block3;
     SWAP3
     SWAP1
@@ -1614,6 +1608,7 @@ leanimt_update_root_from_calldata:
     PUSH1 block10
     JUMPI
   block9:
+    JUMPDEST
     PUSH0  // evm_revert 0.i256 0.i256;
     PUSH0
     REVERT
@@ -1975,6 +1970,7 @@ smt_update_root_from_calldata:
     PUSH1 block21
     JUMPI
   block20:
+    JUMPDEST
     PUSH0  // evm_revert 0.i256 0.i256;
     PUSH0
     REVERT
@@ -2077,14 +2073,10 @@ smt_update_root_from_calldata:
     POP
     POP
     POP
-    PUSH1 block10
+    ISZERO
+    PUSH1 block20
     JUMPI
-  block9:
-    PUSH0  // evm_revert 0.i256 0.i256;
-    PUSH0
-    REVERT
   block10:
-    JUMPDEST
     SWAP1  // return v107;
     JUMP
 

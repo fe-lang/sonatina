@@ -6,22 +6,22 @@ input_file: test_files/evm/fenew.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 648 bytes
-  total: 648 bytes
+  section runtime: 618 bytes
+  total: 618 bytes
 
 object: Counter
-  section init: 119 bytes
-  section runtime: 100 bytes
-  total: 219 bytes
+  section init: 104 bytes
+  section runtime: 85 bytes
+  total: 189 bytes
 
 functions:
   __Counter_init: ir_blocks=3 ir_insts=8 vcode_ops=16 fixups=3 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  __Counter_runtime: ir_blocks=12 ir_insts=27 vcode_ops=78 fixups=6 imm_bytes=7
+  __Counter_runtime: ir_blocks=12 ir_insts=27 vcode_ops=77 fixups=6 imm_bytes=7
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   assert: ir_blocks=3 ir_insts=3 vcode_ops=8 fixups=1 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Get_h3927684624c88c53__624197e0d5a47bbd: ir_blocks=9 ir_insts=42 vcode_ops=119 fixups=8 imm_bytes=18
+  evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Get_h3927684624c88c53__624197e0d5a47bbd: ir_blocks=9 ir_insts=42 vcode_ops=118 fixups=8 imm_bytes=18
     mem: scratch_words=0 stable_words=6 stable_mode=StaticAbs(base=0xa0) entry_abs_words=0 abs_words_end=6
   evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Increment_h7f6f99e9615d3007__bcc01f8624c55385: ir_blocks=7 ir_insts=28 vcode_ops=90 fixups=7 imm_bytes=14
     mem: scratch_words=0 stable_words=6 stable_mode=StaticAbs(base=0xa0) entry_abs_words=0 abs_words_end=6
@@ -31,7 +31,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case test_counter: calldata_len=0 success reason=Return gas_used=97694 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=76694
+  case test_counter: calldata_len=0 success reason=Return gas_used=94658 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=73658
 
 
 --------------- DEBUG ---------------
@@ -65,15 +65,9 @@ __Counter_runtime:
     PUSH1 0x4 (4)  // v21.i1 = lt v19 4.i256;
     SWAP1
     LT
-    ISZERO  // br v21 block14 block15;
-    PUSH1 block15
+    PUSH1 block1  // br v21 block14 block15;
     JUMPI
-  block14:
-    PUSH0  // evm_revert 0.i256 0.i256;
-    PUSH0
-    REVERT
   block15:
-    JUMPDEST
     PUSH0  // v22.i256 = evm_calldata_load 0.i256;
     CALLDATALOAD
     PUSH1 0xe0 (224)  // v24.i256 = shr 224.i256 v22;
@@ -91,6 +85,7 @@ __Counter_runtime:
     PUSH1 block5
     JUMPI
   block1:
+    JUMPDEST
     PUSH0  // evm_revert 0.i256 0.i256;
     PUSH0
     REVERT
@@ -100,14 +95,10 @@ __Counter_runtime:
     CALLVALUE
     PUSH0  // v6.i1 = eq v5 0.i256;
     EQ
-    PUSH1 block9  // br v6 block9 block3;
+    ISZERO
+    PUSH1 block1  // br v6 block9 block3;
     JUMPI
-  block3:
-    PUSH0  // evm_revert 0.i256 0.i256;
-    PUSH0
-    REVERT
   block9:
-    JUMPDEST
     PUSH0  // v12.i256 = evm_sload 0.i256;
     SLOAD
     PUSH1 0x1 (1)  // v30.i256 = add v12 1.i256;
@@ -116,15 +107,9 @@ __Counter_runtime:
     SWAP1  // v31.i1 = lt v30 v12;
     DUP2
     LT
-    ISZERO  // br v31 block10 block11;
-    PUSH1 block11
+    PUSH1 block1  // br v31 block10 block11;
     JUMPI
-  block10:
-    PUSH0  // evm_revert 0.i256 0.i256;
-    PUSH0
-    REVERT
   block11:
-    JUMPDEST
     PUSH0  // evm_sstore 0.i256 v30;
     SSTORE
     PUSH0  // evm_return 0.i256 0.i256;
@@ -135,14 +120,10 @@ __Counter_runtime:
     CALLVALUE  // v9.i256 = evm_call_value;
     PUSH0  // v10.i1 = eq v9 0.i256;
     EQ
-    PUSH1 block7  // br v10 block7 block6;
+    ISZERO
+    PUSH1 block1  // br v10 block7 block6;
     JUMPI
-  block6:
-    PUSH0  // evm_revert 0.i256 0.i256;
-    PUSH0
-    REVERT
   block7:
-    JUMPDEST
     PUSH0  // v16.i256 = evm_sload 0.i256;
     SLOAD
     PUSH0  // mstore 0.i256 v16 i256;
@@ -194,6 +175,7 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Get_h3927
     PUSH1 block10
     JUMPI
   block9:
+    JUMPDEST
     PUSH0  // evm_revert 0.i256 0.i256;
     PUSH0
     REVERT
@@ -235,15 +217,9 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Get_h3927
     PUSH1 0x20 (32)  // v19.i1 = lt v14 32.i256;
     DUP2
     LT
-    ISZERO  // br v19 block5 block6;
-    PUSH1 block6
+    PUSH1 block9  // br v19 block5 block6;
     JUMPI
-  block5:
-    PUSH0  // evm_revert 0.i256 0.i256;
-    PUSH0
-    REVERT
   block6:
-    JUMPDEST
     PUSH1 0xa0 (160)  // v20.*@__fe_obj_MemoryBytes_2 = alloca @__fe_obj_MemoryBytes_2;
     SWAP2  // mstore v21 v16 i256;
     DUP3
@@ -275,15 +251,9 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Get_h3927
     SWAP2
     SWAP1
     GT
-    ISZERO  // br v47 block13 block14;
-    PUSH1 block14
+    PUSH1 block9  // br v47 block13 block14;
     JUMPI
-  block13:
-    PUSH0  // evm_revert 0.i256 0.i256;
-    PUSH0
-    REVERT
   block14:
-    JUMPDEST
     SWAP1  // v49.i256 = mload v48 i256;
     MLOAD
     ADD  // v50.i256 = add v49 v45;
@@ -323,6 +293,7 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Increment
     PUSH1 block10
     JUMPI
   block9:
+    JUMPDEST
     PUSH0  // evm_revert 0.i256 0.i256;
     PUSH0
     REVERT
@@ -364,15 +335,9 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Increment
     PUSH0  // v17.i1 = lt v14 0.i256;
     DUP2
     LT
-    ISZERO  // br v17 block5 block6;
-    PUSH1 block6
+    PUSH1 block9  // br v17 block5 block6;
     JUMPI
-  block5:
-    PUSH0  // evm_revert 0.i256 0.i256;
-    PUSH0
-    REVERT
   block6:
-    JUMPDEST
     PUSH1 0xa0 (160)  // v18.*@__fe_obj_MemoryBytes_2 = alloca @__fe_obj_MemoryBytes_2;
     SWAP2  // mstore v19 v16 i256;
     DUP3
