@@ -6,13 +6,13 @@ input_file: test_files/evm/fe_enum_test_enum_unoptimized.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 1345 bytes
-  total: 1345 bytes
+  section runtime: 1339 bytes
+  total: 1339 bytes
 
 object: EnumContract
-  section init: 425 bytes
-  section runtime: 414 bytes
-  total: 839 bytes
+  section init: 422 bytes
+  section runtime: 411 bytes
+  total: 833 bytes
 
 functions:
   __EnumContract_init: ir_blocks=1 ir_insts=4 vcode_ops=8 fixups=2 imm_bytes=2
@@ -49,7 +49,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=142328 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=121328
+  case ok: calldata_len=0 success reason=Return gas_used=141728 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=120728
 
 
 --------------- DEBUG ---------------
@@ -777,7 +777,7 @@ soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallData
     DUP2  // v33.i1 = lt v32 v9;
     DUP2
     LT
-    PUSH1 block4  // br v33 block4 block3;
+    PUSH1 block1  // br v33 block4 block3;
     JUMPI
   block3:
     SWAP4  // v27.i1 = gt v32 v5;
@@ -787,6 +787,7 @@ soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallData
     PUSH1 block2
     JUMPI
   block1:
+    JUMPDEST
     PUSH0  // evm_revert 0.i256 0.i256;
     PUSH0
     REVERT
@@ -806,7 +807,6 @@ soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallData
     SWAP1  // return v25;
     JUMP
   block4:
-    JUMPDEST
     PUSH0  // evm_revert 0.i256 0.i256;
     PUSH0
     REVERT
@@ -830,7 +830,7 @@ soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__MemoryBy
     DUP2  // v40.i1 = lt v39 v9;
     DUP2
     LT
-    PUSH1 block4  // br v40 block4 block3;
+    PUSH1 block1  // br v40 block4 block3;
     JUMPI
   block3:
     SWAP3  // v34.i1 = gt v39 v28;
@@ -840,6 +840,7 @@ soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__MemoryBy
     PUSH1 block2
     JUMPI
   block1:
+    JUMPDEST
     PUSH0  // evm_revert 0.i256 0.i256;
     PUSH0
     REVERT
@@ -869,7 +870,6 @@ soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__MemoryBy
     SWAP1  // return v33;
     JUMP
   block4:
-    JUMPDEST
     PUSH0  // evm_revert 0.i256 0.i256;
     PUSH0
     REVERT

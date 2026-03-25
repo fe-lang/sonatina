@@ -14,7 +14,7 @@ use revm::{
 
 use sonatina_codegen::{
     domtree::DomTree,
-    isa::evm::{EvmBackend, PushWidthPolicy, canonicalize_alias_value},
+    isa::evm::{EvmBackend, LateCleanupProfile, PushWidthPolicy, canonicalize_alias_value},
     liveness::Liveness,
     machinst::lower::{LowerBackend, LoweredFunction, SectionLoweringCtx},
     object::{CompileOptions, compile_all_objects},
@@ -183,7 +183,11 @@ fn test_evm(fixture: Fixture<&str>) {
         operating_system: OperatingSystem::Evm(sonatina_triple::EvmVersion::Osaka),
     }))
     .with_stackify_reach_depth(stackify_reach_depth)
-    .with_late_cleanup_optimizations(opt_pipeline != EvmOptPipeline::None);
+    .with_late_cleanup_profile(match opt_pipeline {
+        EvmOptPipeline::None => LateCleanupProfile::Off,
+        EvmOptPipeline::Size => LateCleanupProfile::Size,
+        EvmOptPipeline::Speed => LateCleanupProfile::Speed,
+    });
 
     let object_name = ObjectName::from("Contract");
     let section_name = SectionName::from("snapshot");

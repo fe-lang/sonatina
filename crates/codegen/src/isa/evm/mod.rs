@@ -1,5 +1,6 @@
 mod heap_plan;
 mod late_alias;
+mod late_block_merge;
 mod lazy_frame;
 mod legalize;
 pub use late_alias::canonicalize_alias_value;
@@ -69,6 +70,7 @@ use sonatina_triple::{EvmVersion, OperatingSystem};
 
 use cranelift_entity::{EntityList, SecondaryMap};
 use late_alias::compute_evm_late_aliases;
+use late_block_merge::run_late_block_merge;
 use lazy_frame::{FrameSite, FrameSummary, LazyFramePlan, compute_frame_summary};
 use legalize::legalize_evm_section;
 use mem_effects::compute_func_mem_effects;
@@ -86,6 +88,13 @@ pub enum PushWidthPolicy {
     #[default]
     Push4,
     MinimalRelax,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LateCleanupProfile {
+    Off,
+    Speed,
+    Size,
 }
 
 #[derive(Clone)]
@@ -177,7 +186,7 @@ pub struct EvmBackend {
     isa: Evm,
     stackify_reach_depth: u8,
     arena_cost_model: ArenaCostModel,
-    enable_late_cleanup_optimizations: bool,
+    late_cleanup_profile: LateCleanupProfile,
     section_state: RefCell<Option<PreparedSection>>,
     current_mem_plan: RefCell<Option<FuncMemPlan>>,
     current_frame_summary: RefCell<Option<FrameSummary>>,
@@ -198,7 +207,7 @@ impl EvmBackend {
             isa,
             stackify_reach_depth: 16,
             arena_cost_model: ArenaCostModel::default(),
-            enable_late_cleanup_optimizations: true,
+            late_cleanup_profile: LateCleanupProfile::Speed,
             section_state: RefCell::new(None),
             current_mem_plan: RefCell::new(None),
             current_frame_summary: RefCell::new(None),
@@ -216,8 +225,17 @@ impl EvmBackend {
         self
     }
 
+    pub fn with_late_cleanup_profile(mut self, profile: LateCleanupProfile) -> Self {
+        self.late_cleanup_profile = profile;
+        self
+    }
+
     pub fn with_late_cleanup_optimizations(mut self, enable: bool) -> Self {
-        self.enable_late_cleanup_optimizations = enable;
+        self.late_cleanup_profile = if enable {
+            LateCleanupProfile::Speed
+        } else {
+            LateCleanupProfile::Off
+        };
         self
     }
 
@@ -774,7 +792,7 @@ impl EvmBackend {
             aliases: block_aliases,
             emitted_block_order,
         } = alias_plan;
-        let emitted_block_order = if self.enable_late_cleanup_optimizations {
+        let mut emitted_block_order = if self.late_cleanup_profile != LateCleanupProfile::Off {
             module.func_store.view(func, |function| {
                 rewrite_evm_local_fallthrough_layout(function, &block_aliases, emitted_block_order)
             })
@@ -809,6 +827,22 @@ impl EvmBackend {
                 trace_span!("sonatina.codegen.evm.lower_prepared_function.prune_redundant_opcodes")
                     .entered();
             prune_redundant_opcode_sequences(&mut vcode, &emitted_block_order);
+        }
+        if self.late_cleanup_profile != LateCleanupProfile::Off {
+            let _span =
+                trace_span!("sonatina.codegen.evm.lower_prepared_function.late_block_merge")
+                    .entered();
+            module.func_store.view(func, |function| {
+                run_late_block_merge(
+                    &mut vcode,
+                    &mut emitted_block_order,
+                    function
+                        .layout
+                        .entry_block()
+                        .expect("prepared lowering requires an entry block"),
+                    self.late_cleanup_profile,
+                );
+            });
         }
         {
             let _span =
@@ -2204,7 +2238,7 @@ impl LowerBackend for EvmBackend {
             info_span!("sonatina.codegen.evm.prepare_section", funcs = funcs.len()).entered();
         let local_object_args = run_evm_pre_memory_aggregate_pipeline(module);
         legalize_evm_section(module, funcs);
-        if self.enable_late_cleanup_optimizations {
+        if self.late_cleanup_profile != LateCleanupProfile::Off {
             run_evm_post_legalize_cleanup(module, funcs, &local_object_args);
         }
         for &func in funcs {
@@ -2246,7 +2280,7 @@ impl LowerBackend for EvmBackend {
                 });
             }
         }
-        if self.enable_late_cleanup_optimizations {
+        if self.late_cleanup_profile != LateCleanupProfile::Off {
             run_evm_post_memory_legalize_cleanup(module, funcs);
         }
 
@@ -2441,7 +2475,7 @@ impl LowerBackend for EvmBackend {
         let closure = collect_call_closure(module, std::slice::from_ref(&func));
         let local_object_args = run_evm_pre_memory_aggregate_pipeline(module);
         legalize_evm_section(module, &closure);
-        if self.enable_late_cleanup_optimizations {
+        if self.late_cleanup_profile != LateCleanupProfile::Off {
             run_evm_post_legalize_cleanup(module, &closure, &local_object_args);
         }
         module.func_store.view(func, |function| {
@@ -2470,7 +2504,7 @@ impl LowerBackend for EvmBackend {
                 assert_aggregate_legalized(function, &module.ctx);
             });
         }
-        if self.enable_late_cleanup_optimizations {
+        if self.late_cleanup_profile != LateCleanupProfile::Off {
             run_evm_post_memory_legalize_cleanup(module, std::slice::from_ref(&func));
         }
 
@@ -5750,7 +5784,7 @@ object @Contract {
             vendor: Vendor::Ethereum,
             operating_system: OperatingSystem::Evm(EvmVersion::Osaka),
         }))
-        .with_late_cleanup_optimizations(true);
+        .with_late_cleanup_profile(LateCleanupProfile::Speed);
         let object = ObjectName::from("Contract");
         let section = SectionName::from("runtime");
         let embeds: Vec<EmbedSymbol> = Vec::new();
@@ -5795,7 +5829,7 @@ object @Contract {
             vendor: Vendor::Ethereum,
             operating_system: OperatingSystem::Evm(EvmVersion::Osaka),
         }))
-        .with_late_cleanup_optimizations(true);
+        .with_late_cleanup_profile(LateCleanupProfile::Speed);
         let local_object_args = run_evm_pre_memory_aggregate_pipeline(&parsed.module);
         legalize_evm_section(&parsed.module, &funcs);
         run_evm_post_legalize_cleanup(&parsed.module, &funcs, &local_object_args);

@@ -6,8 +6,8 @@ input_file: test_files/evm/fe_enum_state_machine_test_order_initial_state_unopti
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 1173 bytes
-  total: 1173 bytes
+  section runtime: 1170 bytes
+  total: 1170 bytes
 
 object: Order
   section init: 511 bytes
@@ -752,7 +752,7 @@ soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__MemoryBy
     DUP2  // v40.i1 = lt v39 v9;
     DUP2
     LT
-    PUSH1 block4  // br v40 block4 block3;
+    PUSH1 block1  // br v40 block4 block3;
     JUMPI
   block3:
     SWAP3  // v34.i1 = gt v39 v28;
@@ -762,6 +762,7 @@ soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__MemoryBy
     PUSH1 block2
     JUMPI
   block1:
+    JUMPDEST
     PUSH0  // evm_revert 0.i256 0.i256;
     PUSH0
     REVERT
@@ -791,7 +792,6 @@ soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__MemoryBy
     SWAP1  // return v33;
     JUMP
   block4:
-    JUMPDEST
     PUSH0  // evm_revert 0.i256 0.i256;
     PUSH0
     REVERT

@@ -1,0 +1,34 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: opt_ir_snapshot
+input_file: test_files/evm/late_tail_merge_revert_after_store.sntn
+---
+target = "evm-ethereum-osaka"
+
+func public %entry() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i32;
+        v1.i1 = is_zero v0;
+        br v1 block1 block2;
+
+    block1:
+        mstore 0.i256 170.i256 i256;
+        mstore 32.i256 17.i256 i256;
+        mstore 64.i256 34.i256 i256;
+        mstore 96.i256 51.i256 i256;
+        evm_revert 0.i256 128.i256;
+
+    block2:
+        mstore 0.i256 187.i256 i256;
+        mstore 32.i256 17.i256 i256;
+        mstore 64.i256 34.i256 i256;
+        mstore 96.i256 51.i256 i256;
+        evm_revert 0.i256 128.i256;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %entry;
+    }
+}

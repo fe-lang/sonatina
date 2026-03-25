@@ -30,7 +30,7 @@ pub enum Label {
 pub struct VCodeInst(pub u32);
 entity_impl!(VCodeInst);
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SymFixupKind {
     Addr,
     Size,
