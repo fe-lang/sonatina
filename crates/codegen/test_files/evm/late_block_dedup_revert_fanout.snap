@@ -43,7 +43,3 @@ entry:
     PUSH0  // evm_revert 0.i256 0.i256;
     PUSH0
     REVERT
-  block4:
-    PUSH0  // evm_revert 0.i256 0.i256;
-    PUSH0
-    REVERT

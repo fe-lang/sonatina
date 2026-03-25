@@ -2162,10 +2162,6 @@ soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallData
     MSTORE
     SWAP1  // return v25;
     JUMP
-  block4:
-    PUSH0  // evm_revert 0.i256 0.i256;
-    PUSH0
-    REVERT
 
 // func private %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_write_word(v0.*@__fe_obj_SolEncoder_5, v1.i256)
 solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_write_word:
@@ -2254,10 +2250,6 @@ soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__MemoryBy
     MSTORE
     SWAP1  // return v33;
     JUMP
-  block4:
-    PUSH0  // evm_revert 0.i256 0.i256;
-    PUSH0
-    REVERT
 
 // func public %entry()
 entry:
