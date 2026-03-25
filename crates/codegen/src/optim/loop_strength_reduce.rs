@@ -1,4 +1,4 @@
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{
     BlockId, ControlFlowGraph, Function, I256, InstDowncast, InstId, Type, Value, ValueId,
@@ -14,7 +14,8 @@ use sonatina_ir::{
 
 use crate::{
     analysis::induction::{
-        BasicInductionVar, LoopId, detect_basic_ivs_for_loop, match_affine_addr_details,
+        AffineIv, BasicInductionVar, LoopId, detect_basic_iv_probes_for_loop,
+        detect_basic_ivs_for_loop, match_affine_addr_details,
     },
     cfg_edit::{CfgEditor, CleanupMode},
     domtree::DomTree,
@@ -125,11 +126,14 @@ impl LoopStrengthReduce {
         lpt: &mut LoopTree,
         loop_id: Loop,
     ) -> LoopRewriteResult {
-        if !has_unique_loop_preheader(cfg, lpt, loop_id)
-            && loop_has_memory_users(func, lpt, loop_id)
-            && ensure_preheader(func, cfg, lpt, loop_id).is_some()
-        {
-            return LoopRewriteResult::Restart;
+        if !has_unique_loop_preheader(cfg, lpt, loop_id) {
+            if !loop_has_rewritable_candidate(func, cfg, domtree, lpt, loop_id) {
+                return LoopRewriteResult::NoChange;
+            }
+            if ensure_preheader(func, cfg, lpt, loop_id).is_some() {
+                return LoopRewriteResult::Restart;
+            }
+            return LoopRewriteResult::NoChange;
         }
 
         let bivs = detect_basic_ivs_for_loop(func, loop_id, cfg, lpt);
@@ -181,7 +185,8 @@ impl LoopStrengthReduce {
                     {
                         continue;
                     }
-                    let Some(matched) = match_affine_addr_details(func, lpt, addr, biv) else {
+                    let Some(matched) = match_affine_addr_details(func, lpt, addr, biv.into())
+                    else {
                         continue;
                     };
                     if !matched.profitable || matched.coeff_bytes == 0 {
@@ -332,6 +337,208 @@ fn has_unique_loop_preheader(cfg: &ControlFlowGraph, lpt: &LoopTree, loop_id: Lo
         .copied()
         .filter(|pred| !lpt.is_in_loop(*pred, loop_id));
     outside_preds.next().is_some() && outside_preds.next().is_none()
+}
+
+fn loop_has_rewritable_candidate(
+    func: &Function,
+    cfg: &ControlFlowGraph,
+    domtree: &DomTree,
+    lpt: &LoopTree,
+    loop_id: Loop,
+) -> bool {
+    let probes = detect_basic_iv_probes_for_loop(func, loop_id, cfg, lpt);
+    if probes.is_empty() {
+        return false;
+    }
+
+    let header = lpt.loop_header(loop_id);
+    for block in func.layout.iter_block() {
+        if !lpt.is_in_loop(block, loop_id) {
+            continue;
+        }
+        for inst in func.layout.iter_inst(block) {
+            let Some(addr) = memory_addr_operand(func, inst) else {
+                continue;
+            };
+            for probe in &probes {
+                if func.dfg.value_ty(probe.phi) != Type::I256 {
+                    continue;
+                }
+
+                let Some(matched) = match_affine_addr_details(
+                    func,
+                    lpt,
+                    addr,
+                    AffineIv {
+                        loop_id: probe.loop_id,
+                        phi: probe.phi,
+                    },
+                ) else {
+                    continue;
+                };
+                if !matched.profitable || matched.coeff_bytes == 0 {
+                    continue;
+                }
+
+                let Some(step) = probe.step.signed_step_i64() else {
+                    continue;
+                };
+                let Some(step_bytes) = matched.coeff_bytes.checked_mul(step) else {
+                    continue;
+                };
+                if step_bytes == 0 {
+                    continue;
+                }
+
+                let Some(base) = matched.base else {
+                    continue;
+                };
+                if !supports_addr_base_ty(func, base)
+                    || !can_materialize_in_preheader_from_anchor(
+                        func,
+                        header,
+                        base,
+                        loop_id,
+                        domtree,
+                        lpt,
+                        &mut FxHashSet::default(),
+                    )
+                {
+                    continue;
+                }
+
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
+fn supports_addr_base_ty(func: &Function, value: ValueId) -> bool {
+    let ty = func.dfg.value_ty(value);
+    ty == Type::I256 || ty.is_pointer(func.ctx())
+}
+
+fn can_materialize_in_preheader_from_anchor(
+    func: &Function,
+    anchor: BlockId,
+    value: ValueId,
+    loop_id: LoopId,
+    domtree: &DomTree,
+    lpt: &LoopTree,
+    visiting: &mut FxHashSet<ValueId>,
+) -> bool {
+    if !visiting.insert(value) {
+        return false;
+    }
+
+    let can_materialize = match func.dfg.value(value) {
+        Value::Immediate { .. } | Value::Arg { .. } | Value::Global { .. } => true,
+        Value::Undef { .. } => false,
+        Value::Inst { inst, .. } => {
+            let inst = *inst;
+            let block = func.layout.inst_block(inst);
+            if block == anchor
+                || domtree.dominates(block, anchor) && !lpt.is_in_loop(block, loop_id)
+            {
+                true
+            } else {
+                let is = func.inst_set();
+                if let Some(cast) = <&Bitcast as InstDowncast>::downcast(is, func.dfg.inst(inst)) {
+                    can_materialize_in_preheader_from_anchor(
+                        func,
+                        anchor,
+                        *cast.from(),
+                        loop_id,
+                        domtree,
+                        lpt,
+                        visiting,
+                    )
+                } else if let Some(cast) =
+                    <&IntToPtr as InstDowncast>::downcast(is, func.dfg.inst(inst))
+                {
+                    can_materialize_in_preheader_from_anchor(
+                        func,
+                        anchor,
+                        *cast.from(),
+                        loop_id,
+                        domtree,
+                        lpt,
+                        visiting,
+                    )
+                } else if let Some(cast) =
+                    <&PtrToInt as InstDowncast>::downcast(is, func.dfg.inst(inst))
+                {
+                    can_materialize_in_preheader_from_anchor(
+                        func,
+                        anchor,
+                        *cast.from(),
+                        loop_id,
+                        domtree,
+                        lpt,
+                        visiting,
+                    )
+                } else if let Some(add) = <&Add as InstDowncast>::downcast(is, func.dfg.inst(inst))
+                {
+                    (value_i64(func, *add.lhs()).is_some() || value_i64(func, *add.rhs()).is_some())
+                        && can_materialize_in_preheader_from_anchor(
+                            func,
+                            anchor,
+                            *add.lhs(),
+                            loop_id,
+                            domtree,
+                            lpt,
+                            visiting,
+                        )
+                        && can_materialize_in_preheader_from_anchor(
+                            func,
+                            anchor,
+                            *add.rhs(),
+                            loop_id,
+                            domtree,
+                            lpt,
+                            visiting,
+                        )
+                } else if let Some(sub) = <&Sub as InstDowncast>::downcast(is, func.dfg.inst(inst))
+                {
+                    (value_i64(func, *sub.lhs()).is_some() || value_i64(func, *sub.rhs()).is_some())
+                        && can_materialize_in_preheader_from_anchor(
+                            func,
+                            anchor,
+                            *sub.lhs(),
+                            loop_id,
+                            domtree,
+                            lpt,
+                            visiting,
+                        )
+                        && can_materialize_in_preheader_from_anchor(
+                            func,
+                            anchor,
+                            *sub.rhs(),
+                            loop_id,
+                            domtree,
+                            lpt,
+                            visiting,
+                        )
+                } else if let Some(gep) = <&Gep as InstDowncast>::downcast(is, func.dfg.inst(inst))
+                {
+                    let Some((&base, indices)) = gep.values().split_first() else {
+                        return false;
+                    };
+                    const_gep_offset(func, base, indices).is_some()
+                        && can_materialize_in_preheader_from_anchor(
+                            func, anchor, base, loop_id, domtree, lpt, visiting,
+                        )
+                } else {
+                    false
+                }
+            }
+        }
+    };
+
+    visiting.remove(&value);
+    can_materialize
 }
 
 fn materialize_invariant_in_preheader(
@@ -709,16 +916,6 @@ fn memory_addr_operand(func: &Function, inst: InstId) -> Option<ValueId> {
     None
 }
 
-fn loop_has_memory_users(func: &Function, lpt: &LoopTree, loop_id: Loop) -> bool {
-    func.layout.iter_block().any(|block| {
-        lpt.is_in_loop(block, loop_id)
-            && func
-                .layout
-                .iter_inst(block)
-                .any(|inst| memory_addr_operand(func, inst).is_some())
-    })
-}
-
 fn const_gep_offset(func: &Function, base: ValueId, indices: &[ValueId]) -> Option<i64> {
     let mut current_ty = func.dfg.value_ty(base);
     if !current_ty.is_pointer(func.ctx()) {
@@ -952,6 +1149,57 @@ func public %branching(v0.i1, v1.*i256) -> i256 {
 
         assert!(dump.contains("mload"));
         assert!(!dump.contains(" = gep v1 v2"));
+    }
+
+    #[test]
+    fn does_not_split_preheader_without_rewrite_candidate() {
+        let src = r#"
+target = "evm-ethereum-osaka"
+
+func public %no_split(v0.i1, v1.*i256) -> i256 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        jump block3;
+
+    block2:
+        jump block3;
+
+    block3:
+        v2.i256 = phi (0.i256 block1) (1.i256 block2) (v6 block4);
+        v3.i256 = phi (0.i256 block1) (0.i256 block2) (v7 block4);
+        v4.i1 = lt v2 4.i256;
+        br v4 block4 block5;
+
+    block4:
+        v5.i256 = mload v1 i256;
+        v7.i256 = add v3 v5;
+        v6.i256 = add v2 1.i256;
+        jump block3;
+
+    block5:
+        return v3;
+}
+"#;
+
+        let parsed = parse_module(src).expect("parse");
+        let func_ref = parsed.module.funcs()[0];
+        parsed.module.func_store.modify(func_ref, |func| {
+            let before_blocks = func.layout.iter_block().count();
+
+            let mut cfg = ControlFlowGraph::default();
+            cfg.compute(func);
+            let mut domtree = DomTree::default();
+            domtree.compute(&cfg);
+            let mut lpt = LoopTree::default();
+            lpt.compute(&cfg, &domtree);
+
+            let changed = LoopStrengthReduce::new().run(func, &mut cfg, &mut domtree, &mut lpt);
+
+            assert!(!changed);
+            assert_eq!(func.layout.iter_block().count(), before_blocks);
+        });
     }
 
     #[test]

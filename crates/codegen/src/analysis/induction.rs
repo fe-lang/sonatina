@@ -38,6 +38,30 @@ pub enum StepKind {
     SubConst(Immediate),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct AffineIv {
+    pub loop_id: LoopId,
+    pub phi: ValueId,
+}
+
+impl From<&BasicInductionVar> for AffineIv {
+    fn from(biv: &BasicInductionVar) -> Self {
+        Self {
+            loop_id: biv.loop_id,
+            phi: biv.phi,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct BasicInductionVarProbe {
+    pub loop_id: LoopId,
+    pub header: BlockId,
+    pub latch: BlockId,
+    pub phi: ValueId,
+    pub step: StepKind,
+}
+
 impl StepKind {
     pub fn signed_step_i64(self) -> Option<i64> {
         match self {
@@ -62,12 +86,7 @@ pub struct InductionAnalysis {
 }
 
 impl InductionAnalysis {
-    pub fn compute(
-        func: &Function,
-        cfg: &ControlFlowGraph,
-        _domtree: &crate::domtree::DomTree,
-        lpt: &LoopTree,
-    ) -> Self {
+    pub fn compute(func: &Function, cfg: &ControlFlowGraph, lpt: &LoopTree) -> Self {
         let mut bivs_by_loop = FxHashMap::default();
         for loop_id in lpt.loops() {
             let bivs = detect_basic_ivs_for_loop(func, loop_id, cfg, lpt);
@@ -143,7 +162,7 @@ pub fn match_affine_addr(
     value: ValueId,
     biv: &BasicInductionVar,
 ) -> Option<AffineAddrExpr> {
-    let matched = match_affine_addr_details(func, lpt, value, biv)?;
+    let matched = match_affine_addr_details(func, lpt, value, biv.into())?;
     let base = matched.base?;
     Some(AffineAddrExpr {
         iv: biv.phi,
@@ -166,7 +185,7 @@ pub(crate) fn match_affine_addr_details(
     func: &Function,
     lpt: &LoopTree,
     value: ValueId,
-    biv: &BasicInductionVar,
+    biv: AffineIv,
 ) -> Option<MatchedAffineAddr> {
     let mut visiting = FxHashSet::default();
     let matched = match_addr_term(func, lpt, biv, value, &mut visiting)?;
@@ -177,7 +196,7 @@ pub(crate) fn match_affine_addr_details(
 fn match_addr_term(
     func: &Function,
     lpt: &LoopTree,
-    biv: &BasicInductionVar,
+    biv: AffineIv,
     value: ValueId,
     visiting: &mut FxHashSet<ValueId>,
 ) -> Option<MatchedAffineAddr> {
@@ -258,7 +277,7 @@ fn match_addr_term(
     matched
 }
 
-fn match_gep(func: &Function, biv: &BasicInductionVar, gep: &Gep) -> Option<MatchedAffineAddr> {
+fn match_gep(func: &Function, biv: AffineIv, gep: &Gep) -> Option<MatchedAffineAddr> {
     let (&base, indices) = gep.values().split_first()?;
     let mut current_ty = func.dfg.value_ty(base);
     if !current_ty.is_pointer(func.ctx()) {
@@ -308,18 +327,14 @@ fn match_gep(func: &Function, biv: &BasicInductionVar, gep: &Gep) -> Option<Matc
     })
 }
 
-fn match_index_expr(
-    func: &Function,
-    value: ValueId,
-    biv: &BasicInductionVar,
-) -> Option<(i64, i64)> {
+fn match_index_expr(func: &Function, value: ValueId, biv: AffineIv) -> Option<(i64, i64)> {
     match_index_expr_rec(func, value, biv, &mut FxHashSet::default())
 }
 
 fn match_index_expr_rec(
     func: &Function,
     value: ValueId,
-    biv: &BasicInductionVar,
+    biv: AffineIv,
     visiting: &mut FxHashSet<ValueId>,
 ) -> Option<(i64, i64)> {
     if !visiting.insert(value) {
@@ -480,10 +495,75 @@ fn unique_latch(
     latches.next().is_none().then_some(latch)
 }
 
+pub(crate) fn detect_basic_iv_probes_for_loop(
+    func: &Function,
+    loop_id: LoopId,
+    cfg: &ControlFlowGraph,
+    lpt: &LoopTree,
+) -> SmallVec<[BasicInductionVarProbe; 4]> {
+    let header = lpt.loop_header(loop_id);
+    let Some(latch) = unique_latch(cfg, lpt, loop_id, header) else {
+        return smallvec![];
+    };
+
+    let mut probes = SmallVec::new();
+    for inst in func.layout.iter_inst(header) {
+        let Some(phi) = func.dfg.cast_phi(inst) else {
+            break;
+        };
+        let Some(phi_value) = func.dfg.inst_result(inst) else {
+            continue;
+        };
+        if !func.dfg.value_ty(phi_value).is_integral() {
+            continue;
+        }
+
+        let Some(backedge) = phi_backedge_with_outside_preds(phi, latch, loop_id, lpt) else {
+            continue;
+        };
+        let Some((_, _, step)) = detect_basic_iv_step(func, latch, phi_value, backedge) else {
+            continue;
+        };
+
+        probes.push(BasicInductionVarProbe {
+            loop_id,
+            header,
+            latch,
+            phi: phi_value,
+            step,
+        });
+    }
+
+    probes
+}
+
+fn phi_backedge_with_outside_preds(
+    phi: &Phi,
+    latch: BlockId,
+    loop_id: LoopId,
+    lpt: &LoopTree,
+) -> Option<ValueId> {
+    let mut backedge = None;
+    let mut has_outside_pred = false;
+    for &(value, block) in phi.args() {
+        if block == latch {
+            if backedge.replace(value).is_some() {
+                return None;
+            }
+        } else if lpt.is_in_loop(block, loop_id) {
+            return None;
+        } else {
+            has_outside_pred = true;
+        }
+    }
+
+    if has_outside_pred { backedge } else { None }
+}
+
 fn is_loop_invariant_value(
     func: &Function,
     lpt: &LoopTree,
-    biv: &BasicInductionVar,
+    biv: AffineIv,
     value: ValueId,
     visiting: &mut FxHashSet<ValueId>,
 ) -> bool {
@@ -1029,7 +1109,7 @@ mod tests {
         domtree.compute(&cfg);
         let mut lpt = crate::loop_analysis::LoopTree::default();
         lpt.compute(&cfg, &domtree);
-        let induction = InductionAnalysis::compute(func, &cfg, &domtree, &lpt);
+        let induction = InductionAnalysis::compute(func, &cfg, &lpt);
         (cfg, domtree, lpt, induction)
     }
 }
