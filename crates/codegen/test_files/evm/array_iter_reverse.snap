@@ -6,17 +6,17 @@ input_file: test_files/evm/array_iter_reverse.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 227 bytes
-  total: 227 bytes
+  section runtime: 228 bytes
+  total: 228 bytes
 
 functions:
-  test_view_param_local_ref_take_reverse: ir_blocks=7 ir_insts=64 vcode_ops=169 fixups=11 imm_bytes=39
+  test_view_param_local_ref_take_reverse: ir_blocks=7 ir_insts=68 vcode_ops=170 fixups=11 imm_bytes=39
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   assert: ir_blocks=3 ir_insts=6 vcode_ops=10 fixups=1 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=22119 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=1119
+  case ok: calldata_len=0 success reason=Return gas_used=22078 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=1078
 
 
 --------------- DEBUG ---------------
@@ -102,6 +102,9 @@ test_view_param_local_ref_take_reverse:
     DUP2  // mstore v51 v3 i256;
     SWAP1
     MSTORE
+    PUSH1 0xe0 (224)  // v89.i256 = add v87 224.i256;
+    DUP2
+    ADD
     PUSH0  // jump block3;
     PUSH0
   block3:
@@ -112,7 +115,8 @@ test_view_param_local_ref_take_reverse:
     PUSH1 block4  // br v59 block1 block4;
     JUMPI
   block1:
-    SWAP1  // v44.i1 = eq 26.i256 v54;
+    SWAP2  // v44.i1 = eq 26.i256 v54;
+    POP
     POP
     PUSH1 0x1a (26)
     EQ
@@ -150,18 +154,17 @@ test_view_param_local_ref_take_reverse:
     PUSH1 block6  // br v78 block6 block9;
     JUMPI
   block9:
-    DUP2  // v79.*i256 = gep v52 0.i256 v75;
-    DUP4
-    SWAP1
-    PUSH1 0x20 (32)
-    MUL
-    ADD
-    MLOAD  // v80.i256 = mload v79 i256;
+    DUP3  // v80.i256 = mload v94 i256;
+    MLOAD
     ADD  // v81.i256 = add v80 v73;
     SWAP1  // v82.i256 = add 1.i256 v75;
     PUSH1 0x1 (1)
     ADD
-    SWAP1  // jump block8;
+    SWAP2  // v95.i256 = add v94 32.i256;
+    PUSH1 0x20 (32)
+    ADD
+    SWAP2  // jump block8;
+    SWAP1
     PUSH1 block8
     JUMP
   block6:
@@ -181,20 +184,18 @@ test_view_param_local_ref_take_reverse:
     RETURN
   block4:
     JUMPDEST
-    DUP2  // v60.i256 = sub 7.i256 v56;
-    PUSH1 0x7 (7)
-    SUB
-    DUP4  // v61.*i256 = gep v52 0.i256 v60;
-    SWAP1
-    PUSH1 0x20 (32)
-    MUL
-    ADD
-    MLOAD  // v62.i256 = mload v61 i256;
+    DUP3  // v62.i256 = mload v90 i256;
+    MLOAD
     ADD  // v63.i256 = add v62 v54;
     SWAP1  // v64.i256 = add 1.i256 v56;
     PUSH1 0x1 (1)
     ADD
-    SWAP1  // jump block3;
+    PUSH1 0x20 (32)  // v92.i256 = sub v90 32.i256;
+    SWAP1
+    SWAP3
+    SUB
+    SWAP2  // jump block3;
+    SWAP1
     PUSH1 block3
     JUMP
 

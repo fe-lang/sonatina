@@ -1,0 +1,56 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: opt_ir_snapshot
+input_file: test_files/evm/lsr_reverse_sum.sntn
+---
+target = "evm-ethereum-osaka"
+
+func public %entry() {
+    block0:
+        v0.*i8 = evm_malloc 256.i256;
+        v36.*[i256; 8] = bitcast v0 *[i256; 8];
+        v2.*i256 = bitcast v36 *i256;
+        mstore v2 1.i256 i256;
+        v3.*i256 = gep v36 0.i256 1.i256;
+        mstore v3 2.i256 i256;
+        v4.*i256 = gep v36 0.i256 2.i256;
+        mstore v4 3.i256 i256;
+        v5.*i256 = gep v36 0.i256 3.i256;
+        mstore v5 4.i256 i256;
+        v6.*i256 = gep v36 0.i256 4.i256;
+        mstore v6 5.i256 i256;
+        v7.*i256 = gep v36 0.i256 5.i256;
+        mstore v7 6.i256 i256;
+        v8.*i256 = gep v36 0.i256 6.i256;
+        mstore v8 7.i256 i256;
+        v9.*i256 = gep v36 0.i256 7.i256;
+        mstore v9 8.i256 i256;
+        v10.i256 = ptr_to_int v0 i256;
+        v29.*[i256; 8] = int_to_ptr v10 *[i256; 8];
+        jump block3;
+
+    block3:
+        v24.i256 = phi (0.i256 block0) (v33 block4);
+        v26.i256 = phi (0.i256 block0) (v32 block4);
+        v27.i1 = lt v24 4.i256;
+        br v27 block4 block1;
+
+    block4:
+        v44.i256 = sub 7.i256 v24;
+        v30.*i256 = gep v29 0.i256 v44;
+        v31.i256 = mload v30 i256;
+        v32.i256 = add v31 v26;
+        v33.i256 = add 1.i256 v24;
+        jump block3;
+
+    block1:
+        mstore 0.i256 v26 i256;
+        evm_return 0.i256 32.i256;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %entry;
+    }
+}

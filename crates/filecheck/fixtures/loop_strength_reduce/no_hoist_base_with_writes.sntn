@@ -1,0 +1,33 @@
+target = "evm-ethereum-osaka"
+
+# check: func public %no_hoist
+# check: block2:
+# check:     v4.i256 = mload v0 i256
+# check:     v5.*i256 = int_to_ptr v4 *i256
+# check:     v6.*i256 = gep v5 v1
+# check:     v7.i256 = mload v6 i256
+# check:     mstore v0 v1 i256
+
+func public %no_hoist(v0.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v1.i256 = phi (0.i256 block0) (v8 block2);
+        v2.i256 = phi (0.i256 block0) (v9 block2);
+        v3.i1 = lt v1 4.i256;
+        br v3 block2 block3;
+
+    block2:
+        v4.i256 = mload v0 i256;
+        v5.*i256 = int_to_ptr v4 *i256;
+        v6.*i256 = gep v5 v1;
+        v7.i256 = mload v6 i256;
+        mstore v0 v1 i256;
+        v9.i256 = add v2 v7;
+        v8.i256 = add v1 1.i256;
+        jump block1;
+
+    block3:
+        return v2;
+}

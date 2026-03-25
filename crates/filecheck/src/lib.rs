@@ -7,6 +7,7 @@ pub mod egraph;
 pub mod gvn;
 pub mod insn_simplify;
 pub mod licm;
+pub mod loop_strength_reduce;
 pub mod sccp;
 
 use std::{

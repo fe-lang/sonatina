@@ -2,7 +2,7 @@ use sonatina_filecheck::{
     FileCheckRunner, adce::AdceTransform, aggregate_combine::AggregateCombineTransform,
     aggregate_scalarize::AggregateScalarizeTransform, cfg_cleanup::CfgCleanupTransform,
     checked_arith_elim::CheckedArithElimTransform, egraph::EgraphTransform, gvn::GvnTransform,
-    licm::LicmTransformer, sccp::SccpTransform,
+    licm::LicmTransformer, loop_strength_reduce::LoopStrengthReduceTransform, sccp::SccpTransform,
 };
 
 fn main() {
@@ -32,6 +32,9 @@ fn main() {
     runner.run();
 
     runner.attach_transformer(LicmTransformer::default());
+    runner.run();
+
+    runner.attach_transformer(LoopStrengthReduceTransform::default());
     runner.run();
 
     runner.attach_transformer(EgraphTransform::default());

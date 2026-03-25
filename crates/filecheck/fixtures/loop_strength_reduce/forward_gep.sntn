@@ -1,0 +1,44 @@
+target = "evm-ethereum-osaka"
+
+# check: func public %forward
+# check: block0:
+# check:     v11.i256 = ptr_to_int v0 i256
+# check:     jump block1
+# check:
+# check: block1:
+# check:     v1.i256 = phi (0.i256 block0) (v5 block2)
+# check:     v2.i256 = phi (0.i256 block0) (v6 block2)
+# check:     v12.i256 = phi (v11 block0) (v14 block2)
+# check:     v3.i1 = lt v1 4.i256
+# check:     br v3 block2 block3
+# check:
+# check: block2:
+# check:     v7.i256 = mload v12 i256
+# check:     v6.i256 = add v2 v7
+# check:     v5.i256 = add v1 1.i256
+# check:     v14.i256 = add v12 32.i256
+# check:     jump block1
+# check:
+# check: block3:
+# check:     return v2
+
+func public %forward(v0.*i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v1.i256 = phi (0.i256 block0) (v5 block2);
+        v2.i256 = phi (0.i256 block0) (v6 block2);
+        v3.i1 = lt v1 4.i256;
+        br v3 block2 block3;
+
+    block2:
+        v4.*i256 = gep v0 v1;
+        v7.i256 = mload v4 i256;
+        v6.i256 = add v2 v7;
+        v5.i256 = add v1 1.i256;
+        jump block1;
+
+    block3:
+        return v2;
+}

@@ -49,6 +49,7 @@ use crate::{
         gvn::GvnSolver,
         licm::LicmSolver,
         load_store::LoadStoreSolver,
+        loop_strength_reduce::LoopStrengthReduce,
         sccp::SccpSolver,
     },
     stackalloc::{Action, Actions, Allocator, StackifyAlloc, StackifyBuilder},
@@ -2053,6 +2054,17 @@ fn run_evm_post_memory_legalize_cleanup(module: &Module, funcs: &[FuncRef]) {
 
             cfg.compute(function);
             SccpSolver::new().run(function, &mut cfg);
+
+            cfg.compute(function);
+            let mut domtree = DomTree::new();
+            domtree.compute(&cfg);
+            let mut lpt = LoopTree::new();
+            lpt.compute(&cfg, &domtree);
+            LoopStrengthReduce::new().run(function, &mut cfg, &mut domtree, &mut lpt);
+
+            cfg.compute(function);
+            SccpSolver::new().run(function, &mut cfg);
+            CfgCleanup::new(CleanupMode::Strict).run(function);
         });
     }
 }

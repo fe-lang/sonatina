@@ -33,6 +33,7 @@ use super::{
     inliner::{Inliner, InlinerConfig},
     licm::LicmSolver,
     load_store::LoadStoreSolver,
+    loop_strength_reduce::LoopStrengthReduce,
     multi_result_legalize::legalize_multi_result,
     sccp::SccpSolver,
 };
@@ -65,6 +66,8 @@ pub enum Pass {
     Adce,
     /// Loop invariant code motion.
     Licm,
+    /// Loop strength reduction for affine memory addresses.
+    LoopStrengthReduce,
     /// E-graph based algebraic simplification and memory forwarding.
     Egraph,
     /// Complete Global Value Numbering (legacy sparse predicated solver).
@@ -90,6 +93,7 @@ impl Pass {
             Pass::Sccp => "sccp",
             Pass::Adce => "adce",
             Pass::Licm => "licm",
+            Pass::LoopStrengthReduce => "loop_strength_reduce",
             Pass::Egraph => "egraph",
             Pass::Gvn => "gvn",
             Pass::RebuildUsers => "rebuild_users",
@@ -203,6 +207,7 @@ fn pass_may_invalidate_func_behavior(pass: Pass) -> bool {
             | Pass::Sccp
             | Pass::Adce
             | Pass::Licm
+            | Pass::LoopStrengthReduce
             | Pass::Egraph
             | Pass::Gvn
     )
@@ -626,6 +631,31 @@ fn run_pass(
             {
                 let _span = trace_span!("sonatina.optim.pipeline.licm.cleanup").entered();
                 CfgCleanup::new(CleanupMode::Strict).run(func);
+            }
+        }
+        Pass::LoopStrengthReduce => {
+            let _span = trace_span!("sonatina.optim.pipeline.pass.loop_strength_reduce").entered();
+            {
+                let _span = trace_span!("sonatina.optim.pipeline.loop_strength_reduce.compute_cfg")
+                    .entered();
+                ctx.cfg.compute(func);
+            }
+            {
+                let _span =
+                    trace_span!("sonatina.optim.pipeline.loop_strength_reduce.compute_domtree")
+                        .entered();
+                ctx.domtree.compute(&ctx.cfg);
+            }
+            {
+                let _span =
+                    trace_span!("sonatina.optim.pipeline.loop_strength_reduce.compute_looptree")
+                        .entered();
+                ctx.lpt.compute(&ctx.cfg, &ctx.domtree);
+            }
+            {
+                let _span =
+                    trace_span!("sonatina.optim.pipeline.loop_strength_reduce.solve").entered();
+                LoopStrengthReduce::new().run(func, &mut ctx.cfg, &mut ctx.domtree, &mut ctx.lpt);
             }
         }
         Pass::Egraph => {
