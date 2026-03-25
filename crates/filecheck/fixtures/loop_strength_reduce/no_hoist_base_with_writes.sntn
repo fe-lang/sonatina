@@ -1,6 +1,7 @@
 target = "evm-ethereum-osaka"
 
-# check: func public %no_hoist
+# current coverage: loop-invariant raw loads are not hoisted yet.
+# check: func public %loads_not_hoisted
 # check: block2:
 # check:     v4.i256 = mload v0 i256
 # check:     v5.*i256 = int_to_ptr v4 *i256
@@ -8,7 +9,7 @@ target = "evm-ethereum-osaka"
 # check:     v7.i256 = mload v6 i256
 # check:     mstore v0 v1 i256
 
-func public %no_hoist(v0.i256) -> i256 {
+func public %loads_not_hoisted(v0.i256) -> i256 {
     block0:
         jump block1;
 

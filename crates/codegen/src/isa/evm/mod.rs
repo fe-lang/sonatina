@@ -2063,6 +2063,9 @@ fn run_evm_post_memory_legalize_cleanup(module: &Module, funcs: &[FuncRef]) {
             LoopStrengthReduce::new().run(function, &mut cfg, &mut domtree, &mut lpt);
 
             cfg.compute(function);
+            LoadStoreSolver::new().run(function, &mut cfg);
+
+            cfg.compute(function);
             SccpSolver::new().run(function, &mut cfg);
             CfgCleanup::new(CleanupMode::Strict).run(function);
         });

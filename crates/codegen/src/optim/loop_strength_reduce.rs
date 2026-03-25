@@ -39,7 +39,7 @@ struct AddrRecurrencePlan {
     latch: BlockId,
     preheader: BlockId,
     biv: BasicInductionVar,
-    base: ValueId,
+    base: Option<ValueId>,
     const_bytes: i64,
     coeff_bytes: i64,
     step_bytes: i64,
@@ -49,7 +49,7 @@ struct AddrRecurrencePlan {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct FamilyKey {
     biv: ValueId,
-    base: ValueId,
+    base: Option<ValueId>,
     const_bytes: i64,
     coeff_bytes: i64,
     step_bytes: i64,
@@ -190,13 +190,10 @@ impl LoopStrengthReduce {
                     else {
                         continue;
                     };
-                    let Some(base) = matched.base else {
-                        continue;
-                    };
 
                     let key = FamilyKey {
                         biv: biv.phi,
-                        base,
+                        base: matched.base,
                         const_bytes: matched.const_bytes,
                         coeff_bytes: matched.coeff_bytes,
                         step_bytes,
@@ -211,7 +208,7 @@ impl LoopStrengthReduce {
                             latch: biv.latch,
                             preheader: biv.preheader,
                             biv: biv.clone(),
-                            base,
+                            base: matched.base,
                             const_bytes: matched.const_bytes,
                             coeff_bytes: matched.coeff_bytes,
                             step_bytes,
@@ -237,15 +234,18 @@ impl LoopStrengthReduce {
         let mut changed = false;
         let mut cache = MaterializeCache::default();
         for addr_plan in &plan.plans {
-            let Some(base_preheader) = materialize_invariant_in_preheader(
-                func,
-                addr_plan.preheader,
-                addr_plan.base,
-                addr_plan.loop_id,
-                domtree,
-                lpt,
-                &mut cache,
-            ) else {
+            let Some(base_preheader) = (match addr_plan.base {
+                Some(base) => materialize_invariant_in_preheader(
+                    func,
+                    addr_plan.preheader,
+                    base,
+                    addr_plan.loop_id,
+                    domtree,
+                    lpt,
+                    &mut cache,
+                ),
+                None => Some(make_i256_imm(func, 0)),
+            }) else {
                 continue;
             };
             let Some(base_i256) =
@@ -371,20 +371,17 @@ fn loop_has_rewritable_candidate(
                 else {
                     continue;
                 };
-
-                let Some(base) = matched.base else {
-                    continue;
-                };
-                if !supports_addr_base_ty(func, base)
-                    || !can_materialize_in_preheader_from_anchor(
-                        func,
-                        header,
-                        base,
-                        loop_id,
-                        domtree,
-                        lpt,
-                        &mut FxHashSet::default(),
-                    )
+                if let Some(base) = matched.base
+                    && (!supports_addr_base_ty(func, base)
+                        || !can_materialize_in_preheader_from_anchor(
+                            func,
+                            header,
+                            base,
+                            loop_id,
+                            domtree,
+                            lpt,
+                            &mut FxHashSet::default(),
+                        ))
                 {
                     continue;
                 }
@@ -1191,6 +1188,46 @@ func public %two_streams(v0.*i256) -> i256 {
         assert!(!dump.contains(" = gep v1 v2"));
     }
 
+    #[test]
+    fn lsr_constant_i256_base() {
+        let src = r#"
+target = "evm-ethereum-osaka"
+
+func public %const_base() -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v0.i256 = phi (0.i256 block0) (v5 block2);
+        v1.i256 = phi (0.i256 block0) (v6 block2);
+        v2.i1 = lt v0 4.i256;
+        br v2 block2 block3;
+
+    block2:
+        v3.i256 = mul v0 32.i256;
+        v4.i256 = add 128.i256 v3;
+        v7.i256 = mload v4 i256;
+        v6.i256 = add v1 v7;
+        v5.i256 = add v0 1.i256;
+        jump block1;
+
+    block3:
+        return v1;
+}
+"#;
+
+        let parsed = parse_module(src).expect("parse");
+        let func_ref = parsed.module.funcs()[0];
+        let dump = parsed
+            .module
+            .func_store
+            .modify(func_ref, |func| run_lsr_pipeline(func_ref, func));
+
+        assert!(dump.contains("mload"));
+        assert_eq!(dump.matches(" = phi ").count(), 3);
+        assert!(!dump.contains(" = mul "));
+    }
+
     fn run_lsr_pipeline(func_ref: FuncRef, func: &mut Function) -> String {
         CfgCleanup::new(CleanupMode::Strict).run(func);
         BranchCanonicalize::new().run(func);
@@ -1213,6 +1250,9 @@ func public %two_streams(v0.*i256) -> i256 {
         domtree.compute(&cfg);
         lpt.compute(&cfg, &domtree);
         LoopStrengthReduce::new().run(func, &mut cfg, &mut domtree, &mut lpt);
+
+        cfg.compute(func);
+        LoadStoreSolver::new().run(func, &mut cfg);
 
         cfg.compute(func);
         SccpSolver::new().run(func, &mut cfg);

@@ -43,6 +43,9 @@ impl FuncTransform for LoopStrengthReduceTransform {
         LoopStrengthReduce::new().run(func, &mut self.cfg, &mut self.domtree, &mut self.lpt);
 
         self.cfg.compute(func);
+        LoadStoreSolver::new().run(func, &mut self.cfg);
+
+        self.cfg.compute(func);
         SccpSolver::new().run(func, &mut self.cfg);
         CfgCleanup::new(CleanupMode::Strict).run(func);
     }
