@@ -313,8 +313,8 @@ pub(super) fn try_inline_callsite_full(
 
     if editor.func().layout.is_inst_inserted(call_inst) {
         let func = editor.func_mut();
-        func.dfg.untrack_inst(call_inst);
         func.layout.remove_inst(call_inst);
+        func.erase_inst(call_inst);
     }
 
     editor.recompute_cfg();
