@@ -645,11 +645,17 @@ fn mul_i256(func: &mut Function, before: InstId, lhs: ValueId, rhs: ValueId) -> 
 #[cfg(test)]
 mod tests {
     use super::ConstDataLower;
+    use crate::{
+        isa::evm::EvmBackend,
+        object::{CompileOptions, compile_all_objects},
+    };
     use sonatina_ir::{
         ir_writer::{FuncWriter, ModuleWriter},
+        isa::evm::Evm,
         module::FuncRef,
     };
     use sonatina_parser::parse_module;
+    use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
 
     fn parse(src: &str) -> sonatina_parser::ParsedModule {
         parse_module(src).unwrap_or_else(|errs| panic!("parse failed: {errs:?}"))
@@ -667,6 +673,15 @@ mod tests {
                     .func_sig(func_ref, |sig| sig.name() == name)
             })
             .unwrap_or_else(|| panic!("function `{name}` should exist"))
+    }
+
+    fn test_backend() -> EvmBackend {
+        let triple = TargetTriple::new(
+            Architecture::Evm,
+            Vendor::Ethereum,
+            OperatingSystem::Evm(EvmVersion::Osaka),
+        );
+        EvmBackend::new(Evm::new(triple))
     }
 
     #[test]
@@ -756,5 +771,32 @@ func private %entry() -> i256 {
         assert!(!dumped.contains("obj.init.const"));
         assert!(dumped.contains("obj.store"));
         assert!(!dumped.contains("const."));
+    }
+
+    #[test]
+    fn dynamic_const_load_object_compile_keeps_synthesized_blob_data_reachable() {
+        let parsed = parse(
+            r#"
+target = "evm-ethereum-osaka"
+
+global private const [i256; 4] $arr = [1, 2, 3, 4];
+
+func private %entry(v0.i256) -> i256 {
+    block0:
+        v1.constref<[i256; 4]> = const.ref $arr;
+        v2.constref<i256> = const.index v1 v0;
+        v3.i256 = const.load v2;
+        return v3;
+}
+
+object @Contract {
+  section runtime { entry %entry; data $arr; }
+}
+"#,
+        );
+
+        let opts = CompileOptions::default();
+        compile_all_objects(&parsed.module, &test_backend(), &opts)
+            .expect("object compilation should include backend-synthesized const blobs");
     }
 }

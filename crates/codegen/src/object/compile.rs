@@ -425,7 +425,7 @@ fn compile_section<B: LowerBackend>(
     let defined_embed_symbol_set: FxHashSet<EmbedSymbol> =
         defined_embed_symbols.iter().cloned().collect();
 
-    let membership = {
+    let mut membership = {
         let _span = trace_span!("sonatina.codegen.object.build_membership").entered();
         build_membership(program, section_id)
     };
@@ -445,9 +445,33 @@ fn compile_section<B: LowerBackend>(
         embed_symbols: &defined_embed_symbols,
     };
 
-    let funcs = {
+    let mut funcs = {
         let _span =
             trace_span!("sonatina.codegen.object.compute_function_emission_order").entered();
+        compute_function_emission_order(program, section, &membership)
+    };
+
+    {
+        let _span = trace_span!("sonatina.codegen.object.prepare_section_for_membership").entered();
+        backend.prepare_section(program.module, &funcs, &section_ctx);
+    }
+
+    membership = {
+        let _span = trace_span!("sonatina.codegen.object.rebuild_membership").entered();
+        build_membership(program, section_id)
+    };
+    for used in &membership.used_embed_symbols {
+        if !defined_embed_symbol_set.contains(used) {
+            return Err(vec![ObjectCompileError::UndefinedEmbedSymbol {
+                object: object_name.clone(),
+                section: section_name.clone(),
+                symbol: used.clone(),
+            }]);
+        }
+    }
+    funcs = {
+        let _span =
+            trace_span!("sonatina.codegen.object.recompute_function_emission_order").entered();
         compute_function_emission_order(program, section, &membership)
     };
 
