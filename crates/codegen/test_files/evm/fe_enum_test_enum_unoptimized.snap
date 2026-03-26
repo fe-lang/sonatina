@@ -6,18 +6,18 @@ input_file: test_files/evm/fe_enum_test_enum_unoptimized.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 1279 bytes
-  total: 1279 bytes
+  section runtime: 1272 bytes
+  total: 1272 bytes
 
 object: EnumContract
-  section init: 400 bytes
-  section runtime: 389 bytes
-  total: 789 bytes
+  section init: 393 bytes
+  section runtime: 382 bytes
+  total: 775 bytes
 
 functions:
   __EnumContract_init: ir_blocks=1 ir_insts=4 vcode_ops=8 fixups=2 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  __EnumContract_runtime: ir_blocks=7 ir_insts=23 vcode_ops=84 fixups=15 imm_bytes=10
+  __EnumContract_runtime: ir_blocks=7 ir_insts=22 vcode_ops=82 fixups=15 imm_bytes=9
     mem: scratch_words=0 stable_words=3 stable_mode=StaticAbs(base=0xa0) entry_abs_words=0 abs_words_end=3
   assert: ir_blocks=3 ir_insts=3 vcode_ops=9 fixups=1 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
@@ -49,7 +49,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=137185 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=116185
+  case ok: calldata_len=0 success reason=Return gas_used=135761 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=114761
 
 
 --------------- DEBUG ---------------
@@ -90,8 +90,6 @@ __EnumContract_runtime:
     JUMPDEST
     PUSH1 0xe0 (224)  // v35.i256 = shr 224.i256 v33;
     SHR
-    PUSH4 0xffffffff (4294967295)  // v45.i256 = and v35 4294967295.i256;
-    AND
     PUSH1 0xa0 (160)  // v21.*@__fe_obj_SolDecoder_1 = alloca @__fe_obj_SolDecoder_1;
     PUSH0  // mstore v25 0.i256 i256;
     DUP2
@@ -102,7 +100,7 @@ __EnumContract_runtime:
     PUSH1 0x4 (4)  // mstore v29 4.i256 i256;
     SWAP1
     MSTORE
-    PUSH4 0x6c56cb0c (1817627404)  // br_table v45 block1 (1817627404.i256 block2) (1163776883.i256 block3) (3572425762.i256 block4);
+    PUSH4 0x6c56cb0c (1817627404)  // br_table v35 block1 (1817627404.i256 block2) (1163776883.i256 block3) (3572425762.i256 block4);
     DUP3
     EQ
     PUSH1 block2

@@ -6,20 +6,20 @@ input_file: test_files/evm/fe_enum_state_machine_test_order_initial_state_unopti
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 1127 bytes
-  total: 1127 bytes
+  section runtime: 1121 bytes
+  total: 1121 bytes
 
 object: Order
-  section init: 498 bytes
-  section runtime: 484 bytes
-  total: 982 bytes
+  section init: 492 bytes
+  section runtime: 478 bytes
+  total: 970 bytes
 
 functions:
   __Order_recv_0_4: ir_blocks=8 ir_insts=10 vcode_ops=57 fixups=10 imm_bytes=8
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   __Order_init: ir_blocks=1 ir_insts=5 vcode_ops=11 fixups=2 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  __Order_runtime: ir_blocks=22 ir_insts=46 vcode_ops=173 fixups=27 imm_bytes=20
+  __Order_runtime: ir_blocks=22 ir_insts=45 vcode_ops=171 fixups=27 imm_bytes=19
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   assert: ir_blocks=3 ir_insts=3 vcode_ops=9 fixups=1 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
@@ -41,7 +41,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=175921 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=154921
+  case ok: calldata_len=0 success reason=Return gas_used=174703 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=153703
 
 
 --------------- DEBUG ---------------
@@ -143,9 +143,7 @@ __Order_runtime:
     CALLDATALOAD
     PUSH1 0xe0 (224)  // v21.i256 = shr 224.i256 v19;
     SHR
-    PUSH4 0xffffffff (4294967295)  // v35.i256 = and v21 4294967295.i256;
-    AND
-    PUSH1 0x1 (1)  // br_table v35 block1 (1.i256 block8) (2.i256 block17) (3.i256 block21) (4.i256 block25) (5.i256 block6);
+    PUSH1 0x1 (1)  // br_table v21 block1 (1.i256 block8) (2.i256 block17) (3.i256 block21) (4.i256 block25) (5.i256 block6);
     DUP2
     EQ
     PUSH1 block8

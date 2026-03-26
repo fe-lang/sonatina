@@ -6,9 +6,9 @@ input_file: test_files/evm/loops.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section init: 563 bytes
-  section runtime: 543 bytes
-  total: 1106 bytes
+  section init: 556 bytes
+  section runtime: 536 bytes
+  total: 1092 bytes
 
 functions:
   __Bench_recv_0_3: ir_blocks=4 ir_insts=7 vcode_ops=17 fixups=2 imm_bytes=1
@@ -19,7 +19,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=0
   __Bench_init: ir_blocks=3 ir_insts=8 vcode_ops=16 fixups=3 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  __Bench_runtime: ir_blocks=36 ir_insts=97 vcode_ops=305 fixups=44 imm_bytes=24
+  __Bench_runtime: ir_blocks=36 ir_insts=96 vcode_ops=303 fixups=44 imm_bytes=23
     mem: scratch_words=0 stable_words=3 stable_mode=StaticAbs(base=0xa0) entry_abs_words=0 abs_words_end=3
   calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_len: ir_blocks=3 ir_insts=6 vcode_ops=17 fixups=1 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=0
@@ -27,13 +27,13 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=0
 
 evm:
-  deploy: success reason=Return gas_used=170784 gas_refunded=0 logs=0 output=create len=543 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
-  case counter: calldata_len=36 success reason=Return gas_used=25720 gas_refunded=0 logs=0 output=call len=32 tx_gas=21204 runtime_gas=4516
-  case sum: calldata_len=36 success reason=Return gas_used=30850 gas_refunded=0 logs=0 output=call len=32 tx_gas=21204 runtime_gas=9646
-  case xor_loop: calldata_len=68 success reason=Return gas_used=27888 gas_refunded=0 logs=0 output=call len=32 tx_gas=21344 runtime_gas=6544
-  case counter_unchecked: calldata_len=36 success reason=Return gas_used=25816 gas_refunded=0 logs=0 output=call len=32 tx_gas=21204 runtime_gas=4612
-  case sum_unchecked: calldata_len=36 success reason=Return gas_used=26944 gas_refunded=0 logs=0 output=call len=32 tx_gas=21204 runtime_gas=5740
-  case xor_loop_unchecked: calldata_len=68 success reason=Return gas_used=28025 gas_refunded=0 logs=0 output=call len=32 tx_gas=21344 runtime_gas=6681
+  deploy: success reason=Return gas_used=169272 gas_refunded=0 logs=0 output=create len=536 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
+  case counter: calldata_len=36 success reason=Return gas_used=25714 gas_refunded=0 logs=0 output=call len=32 tx_gas=21204 runtime_gas=4510
+  case sum: calldata_len=36 success reason=Return gas_used=30844 gas_refunded=0 logs=0 output=call len=32 tx_gas=21204 runtime_gas=9640
+  case xor_loop: calldata_len=68 success reason=Return gas_used=27882 gas_refunded=0 logs=0 output=call len=32 tx_gas=21344 runtime_gas=6538
+  case counter_unchecked: calldata_len=36 success reason=Return gas_used=25810 gas_refunded=0 logs=0 output=call len=32 tx_gas=21204 runtime_gas=4606
+  case sum_unchecked: calldata_len=36 success reason=Return gas_used=26938 gas_refunded=0 logs=0 output=call len=32 tx_gas=21204 runtime_gas=5734
+  case xor_loop_unchecked: calldata_len=68 success reason=Return gas_used=28019 gas_refunded=0 logs=0 output=call len=32 tx_gas=21344 runtime_gas=6675
 
 
 --------------- DEBUG ---------------
@@ -167,8 +167,6 @@ __Bench_runtime:
     CALLDATALOAD
     PUSH1 0xe0 (224)  // v52.i256 = shr 224.i256 v50;
     SHR
-    PUSH4 0xffffffff (4294967295)  // v91.i256 = and v52 4294967295.i256;
-    AND
     PUSH1 0xa0 (160)  // v58.*@__fe_obj_SolDecoder_3 = alloca @__fe_obj_SolDecoder_3;
     PUSH0  // mstore v62 0.i256 i256;
     DUP2
@@ -179,7 +177,7 @@ __Bench_runtime:
     PUSH1 0x4 (4)  // mstore v66 4.i256 i256;
     SWAP1
     MSTORE
-    PUSH4 0xb1f525c6 (2985633222)  // br_table v91 block1 (2985633222.i256 block2) (411796916.i256 block5) (1013569368.i256 block8) (2575799667.i256 block11) (2240911574.i256 block14) (1153984330.i256 block17);
+    PUSH4 0xb1f525c6 (2985633222)  // br_table v52 block1 (2985633222.i256 block2) (411796916.i256 block5) (1013569368.i256 block8) (2575799667.i256 block11) (2240911574.i256 block14) (1153984330.i256 block17);
     DUP3
     EQ
     PUSH1 block2

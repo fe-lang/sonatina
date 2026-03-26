@@ -6,18 +6,18 @@ input_file: test_files/evm/fenew.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 610 bytes
-  total: 610 bytes
+  section runtime: 604 bytes
+  total: 604 bytes
 
 object: Counter
-  section init: 104 bytes
-  section runtime: 85 bytes
-  total: 189 bytes
+  section init: 98 bytes
+  section runtime: 79 bytes
+  total: 177 bytes
 
 functions:
   __Counter_init: ir_blocks=3 ir_insts=8 vcode_ops=16 fixups=3 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  __Counter_runtime: ir_blocks=12 ir_insts=27 vcode_ops=77 fixups=6 imm_bytes=7
+  __Counter_runtime: ir_blocks=12 ir_insts=26 vcode_ops=75 fixups=6 imm_bytes=6
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   assert: ir_blocks=3 ir_insts=3 vcode_ops=9 fixups=1 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
@@ -31,7 +31,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case test_counter: calldata_len=0 success reason=Return gas_used=94655 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=73655
+  case test_counter: calldata_len=0 success reason=Return gas_used=93437 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=72437
 
 
 --------------- DEBUG ---------------
@@ -67,9 +67,7 @@ __Counter_runtime:
     CALLDATALOAD
     PUSH1 0xe0 (224)  // v24.i256 = shr 224.i256 v22;
     SHR
-    PUSH4 0xffffffff (4294967295)  // v29.i256 = and v24 4294967295.i256;
-    AND
-    PUSH4 0xd09de08a (3500007562)  // br_table v29 block1 (3500007562.i256 block2) (1833756220.i256 block5);
+    PUSH4 0xd09de08a (3500007562)  // br_table v24 block1 (3500007562.i256 block2) (1833756220.i256 block5);
     DUP2
     EQ
     PUSH1 block2

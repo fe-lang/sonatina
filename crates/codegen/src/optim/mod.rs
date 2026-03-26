@@ -9,6 +9,7 @@ pub mod dead_func;
 pub mod egraph;
 pub mod gvn;
 pub mod inliner;
+pub mod known_bits_simplify;
 pub mod licm;
 pub mod load_store;
 pub mod loop_strength_reduce;

@@ -6,18 +6,18 @@ input_file: test_files/evm/fe_vault_test_vault_multiuser_unoptimized.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 4415 bytes
-  total: 4415 bytes
+  section runtime: 4403 bytes
+  total: 4403 bytes
 
 object: Vault
-  section init: 861 bytes
-  section runtime: 843 bytes
-  total: 1704 bytes
+  section init: 855 bytes
+  section runtime: 837 bytes
+  total: 1692 bytes
 
 object: VaultUser
-  section init: 1124 bytes
-  section runtime: 1113 bytes
-  total: 2237 bytes
+  section init: 1118 bytes
+  section runtime: 1107 bytes
+  total: 2225 bytes
 
 functions:
   __Vault_recv_0_0: ir_blocks=17 ir_insts=45 vcode_ops=115 fixups=12 imm_bytes=1
@@ -54,7 +54,7 @@ functions:
     mem: scratch_words=0 stable_words=5 stable_mode=StaticAbs(base=0xe0) entry_abs_words=2 abs_words_end=7
   evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__ProxyWithdraw_h1ed1c85115544221__ae5519407fcbbd72: ir_blocks=5 ir_insts=34 vcode_ops=118 fixups=15 imm_bytes=13
     mem: scratch_words=0 stable_words=5 stable_mode=StaticAbs(base=0xe0) entry_abs_words=2 abs_words_end=7
-  runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2: ir_blocks=3 ir_insts=8 vcode_ops=30 fixups=5 imm_bytes=3
+  runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2: ir_blocks=3 ir_insts=7 vcode_ops=28 fixups=5 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=0
   return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f: ir_blocks=1 ir_insts=11 vcode_ops=39 fixups=8 imm_bytes=4
     mem: scratch_words=0 stable_words=5 stable_mode=StaticAbs(base=0x100) entry_abs_words=3 abs_words_end=8
@@ -84,7 +84,7 @@ functions:
     mem: scratch_words=0 stable_words=2 stable_mode=StaticAbs(base=0xa0) entry_abs_words=0 abs_words_end=2
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=534662 gas_refunded=79600 logs=0 output=call len=32 tx_gas=21000 runtime_gas=513662
+  case ok: calldata_len=0 success reason=Return gas_used=532143 gas_refunded=79600 logs=0 output=call len=32 tx_gas=21000 runtime_gas=511143
 
 
 --------------- DEBUG ---------------
@@ -1690,9 +1690,7 @@ runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2:
     JUMPDEST
     PUSH1 0xe0 (224)  // v13.i256 = shr 224.i256 v7;
     SHR
-    PUSH4 0xffffffff (4294967295)  // v16.i256 = and v13 4294967295.i256;
-    AND
-    SWAP1  // return v16;
+    SWAP1  // return v13;
     JUMP
 
 // func private %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f(v0.i256)

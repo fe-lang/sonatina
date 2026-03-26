@@ -51,6 +51,7 @@ use crate::{
         checked_arith_elim::{CheckedArithElim, has_supported_checked_arith},
         dead_arg::{DeadArgElimConfig, run_dead_arg_elim},
         gvn::GvnSolver,
+        known_bits_simplify::KnownBitsSimplify,
         licm::LicmSolver,
         load_store::LoadStoreSolver,
         loop_strength_reduce::LoopStrengthReduce,
@@ -2049,6 +2050,7 @@ fn run_evm_post_legalize_cleanup(
             cfg.compute(function);
             LoadStoreSolver::new().run(function, &mut cfg);
 
+            KnownBitsSimplify::new().run(function);
             cfg.compute(function);
             SccpSolver::new().run(function, &mut cfg);
         });
