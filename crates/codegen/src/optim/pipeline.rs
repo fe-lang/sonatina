@@ -878,6 +878,135 @@ object @O {
     }
 
     #[test]
+    fn sccp_folds_logical_shr_mask_with_known_bits() {
+        let source = r#"
+target = "evm-ethereum-london"
+
+func private %entry(v0.i256) -> i256 {
+    block0:
+        v1.i256 = shr 224.i256 v0;
+        v2.i256 = and v1 4294967295.i256;
+        return v2;
+}
+"#;
+
+        let mut module = parse_module(source).expect("parse should succeed").module;
+        let func_ref = module.funcs()[0];
+        run_test_func_passes(
+            &mut module,
+            &[Pass::CfgCleanup, Pass::Sccp, Pass::CfgCleanup],
+        );
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            assert!(dumped.contains("v1.i256 = shr 224.i256 v0;"), "{dumped}");
+            assert!(!dumped.contains(" and "), "{dumped}");
+            assert!(dumped.contains("return v1;"), "{dumped}");
+        });
+    }
+
+    #[test]
+    fn sccp_keeps_sar_mask_when_sign_is_unknown() {
+        let source = r#"
+target = "evm-ethereum-london"
+
+func private %entry(v0.i256) -> i256 {
+    block0:
+        v1.i256 = sar 224.i256 v0;
+        v2.i256 = and v1 4294967295.i256;
+        return v2;
+}
+"#;
+
+        let mut module = parse_module(source).expect("parse should succeed").module;
+        let func_ref = module.funcs()[0];
+        run_test_func_passes(
+            &mut module,
+            &[Pass::CfgCleanup, Pass::Sccp, Pass::CfgCleanup],
+        );
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            assert!(
+                dumped.contains("v2.i256 = and v1 4294967295.i256;"),
+                "{dumped}"
+            );
+        });
+    }
+
+    #[test]
+    fn sccp_compare_contradiction_requires_defined_operands() {
+        let source = r#"
+target = "evm-ethereum-london"
+
+func private %entry() -> i256 {
+    block0:
+        v1.i8 = and undef.i8 1.i8;
+        v2.i8 = or v1 2.i8;
+        v3.i1 = eq v1 v2;
+        br v3 block1 block2;
+
+    block1:
+        return 1.i256;
+
+    block2:
+        return 2.i256;
+}
+"#;
+
+        let mut module = parse_module(source).expect("parse should succeed").module;
+        let func_ref = module.funcs()[0];
+        run_test_func_passes(
+            &mut module,
+            &[Pass::CfgCleanup, Pass::Sccp, Pass::CfgCleanup],
+        );
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            assert!(dumped.contains("return 1.i256;"), "{dumped}");
+            assert!(dumped.contains("return 2.i256;"), "{dumped}");
+        });
+    }
+
+    #[test]
+    fn sccp_does_not_copy_fold_phi_with_undef_incoming() {
+        let source = r#"
+target = "evm-ethereum-london"
+
+func private %entry(v0.i1) -> i256 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        jump block3;
+
+    block2:
+        jump block3;
+
+    block3:
+        v1.i256 = phi (undef.i256 block1) (7.i256 block2);
+        v2.i256 = and v1 4294967295.i256;
+        return v2;
+}
+"#;
+
+        let mut module = parse_module(source).expect("parse should succeed").module;
+        let func_ref = module.funcs()[0];
+        run_test_func_passes(
+            &mut module,
+            &[Pass::CfgCleanup, Pass::Sccp, Pass::CfgCleanup],
+        );
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            assert!(
+                dumped.contains("v2.i256 = and v1 4294967295.i256;"),
+                "{dumped}"
+            );
+        });
+    }
+
+    #[test]
     fn gvn_cses_pure_opaque_gep_with_identical_operands() {
         let source = r#"
 target = "evm-ethereum-london"
@@ -1638,6 +1767,68 @@ func private %entry() -> i256 {
                 dumped.contains("return 2.i256;"),
                 "else branch should remain reachable when eq compares maybe-undef value:\n{dumped}"
             );
+        });
+    }
+
+    #[test]
+    fn gvn_folds_logical_shr_mask_with_known_bits() {
+        let source = r#"
+target = "evm-ethereum-london"
+
+func private %entry(v0.i256) -> i256 {
+    block0:
+        v1.i256 = shr 224.i256 v0;
+        v2.i256 = and v1 4294967295.i256;
+        return v2;
+}
+"#;
+
+        let mut module = parse_module(source).expect("parse should succeed").module;
+        let func_ref = module.funcs()[0];
+        run_test_func_passes(
+            &mut module,
+            &[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup],
+        );
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            assert!(dumped.contains("v1.i256 = shr 224.i256 v0;"), "{dumped}");
+            assert!(!dumped.contains(" and "), "{dumped}");
+            assert!(dumped.contains("return v1;"), "{dumped}");
+        });
+    }
+
+    #[test]
+    fn gvn_compare_contradiction_requires_defined_operands() {
+        let source = r#"
+target = "evm-ethereum-london"
+
+func private %entry() -> i256 {
+    block0:
+        v1.i8 = and undef.i8 1.i8;
+        v2.i8 = or v1 2.i8;
+        v3.i1 = eq v1 v2;
+        br v3 block1 block2;
+
+    block1:
+        return 1.i256;
+
+    block2:
+        return 2.i256;
+}
+"#;
+
+        let mut module = parse_module(source).expect("parse should succeed").module;
+        let func_ref = module.funcs()[0];
+        run_test_func_passes(
+            &mut module,
+            &[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup],
+        );
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            assert!(dumped.contains("return 1.i256;"), "{dumped}");
+            assert!(dumped.contains("return 2.i256;"), "{dumped}");
         });
     }
 

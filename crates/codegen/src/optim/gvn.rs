@@ -21,12 +21,13 @@ use sonatina_ir::{
 };
 
 use crate::{
+    analysis::known_bits::{KnownBits, KnownBitsQuery},
     cfg_edit::{CfgEditor, CleanupMode, remove_phi_incoming_from, simplify_trivial_phis_in_block},
     domtree::{DomTree, DominatorTreeTraversable},
     optim::{
         aggregate::{ObjectMemoryAnalysis, ObjectReadGvnKey},
         simplify_expr::{
-            SimplifyExprResult, simplify_binary_with_known_imm, simplify_cast,
+            ExprFactProvider, SimplifyExprResult, simplify_binary_with_facts, simplify_cast,
             simplify_unary_with_same_inner,
         },
     },
@@ -96,6 +97,35 @@ pub struct GvnSolver {
     always_avail: Vec<ValueId>,
 
     may_be_undef_cache: RefCell<FxHashMap<ValueId, bool>>,
+}
+
+struct GvnExprFacts<'a, 'b> {
+    func: &'a Function,
+    solver: &'b GvnSolver,
+    known_bits: KnownBitsQuery<'a>,
+}
+
+impl ExprFactProvider for GvnExprFacts<'_, '_> {
+    fn known_imm(&self, v: ValueId) -> Option<Immediate> {
+        self.func.dfg.value_imm(v)
+    }
+
+    fn known_bits(&self, func: &Function, v: ValueId) -> KnownBits {
+        if let Some(imm) = self.known_imm(v) {
+            return KnownBits::from_imm(imm);
+        }
+
+        debug_assert_eq!(func.dfg.value_ty(v), self.func.dfg.value_ty(v));
+        self.known_bits.for_value(v)
+    }
+
+    fn same_non_undef(&self, lhs: ValueId, rhs: ValueId) -> bool {
+        self.solver.same_non_undef(self.func, lhs, rhs)
+    }
+
+    fn may_be_undef(&self, v: ValueId) -> bool {
+        self.solver.may_be_undef(self.func, v)
+    }
 }
 
 impl GvnSolver {
@@ -1190,14 +1220,12 @@ impl GvnSolver {
             {
                 return Some(result);
             }
-            let simplified = simplify_binary_with_known_imm(
+            let facts = GvnExprFacts {
                 func,
-                kind,
-                lhs,
-                rhs,
-                |value| func.dfg.value_imm(value),
-                |lhs, rhs| self.same_non_undef(func, lhs, rhs),
-            );
+                solver: self,
+                known_bits: KnownBitsQuery::new(func),
+            };
+            let simplified = simplify_binary_with_facts(func, kind, lhs, rhs, &facts);
             if !simplified.is_no_change() {
                 return Some(self.simplify_expr_result_to_gvn(func, simplified));
             }

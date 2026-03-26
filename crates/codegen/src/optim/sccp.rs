@@ -304,7 +304,7 @@ impl SccpSolver {
                 };
                 let may_be_undef = operand_may_be_undef
                     || result_may_divide_by_zero
-                    || eval_value.is_some_and(EvalValue::is_undef);
+                    || (eval_value.is_some_and(EvalValue::is_undef) && !cell_state.used_has_top);
                 result_states[idx] = Some((cell, may_be_undef));
             }
         }

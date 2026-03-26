@@ -11,10 +11,11 @@ use sonatina_ir::{
 use super::{
     sccp::LatticeCell,
     simplify_expr::{
-        SimplifyExprResult, simplify_binary_with_known_imm, simplify_cast,
+        ExprFactProvider, SimplifyExprResult, simplify_binary_with_facts, simplify_cast,
         simplify_unary_with_same_inner,
     },
 };
+use crate::analysis::known_bits::{KnownBits, KnownBitsQuery};
 
 #[derive(Clone, Copy)]
 pub(super) enum SimplifyAction {
@@ -52,6 +53,36 @@ fn known_imm(
     })
 }
 
+struct SccpExprFacts<'a, 'b> {
+    func: &'a Function,
+    lattice: &'b SecondaryMap<ValueId, LatticeCell>,
+    may_be_undef: &'b SecondaryMap<ValueId, bool>,
+    known_bits: KnownBitsQuery<'a>,
+}
+
+impl ExprFactProvider for SccpExprFacts<'_, '_> {
+    fn known_imm(&self, v: ValueId) -> Option<Immediate> {
+        known_imm(self.func, self.lattice, v)
+    }
+
+    fn known_bits(&self, func: &Function, v: ValueId) -> KnownBits {
+        if let Some(imm) = self.known_imm(v) {
+            return KnownBits::from_imm(imm);
+        }
+
+        debug_assert_eq!(func.dfg.value_ty(v), self.func.dfg.value_ty(v));
+        self.known_bits.for_value(v)
+    }
+
+    fn same_non_undef(&self, lhs: ValueId, rhs: ValueId) -> bool {
+        same_non_undef(self.func, self.lattice, self.may_be_undef, lhs, rhs)
+    }
+
+    fn may_be_undef(&self, v: ValueId) -> bool {
+        is_may_be_undef(self.func, self.may_be_undef, v)
+    }
+}
+
 fn is_explicit_undef(func: &Function, v: ValueId) -> bool {
     matches!(func.dfg.value(v), Value::Undef { .. })
 }
@@ -86,84 +117,76 @@ fn same_non_undef(
 
 fn simplify_commutative_and(
     func: &Function,
-    lattice: &SecondaryMap<ValueId, LatticeCell>,
-    may_be_undef: &SecondaryMap<ValueId, bool>,
+    facts: &impl ExprFactProvider,
     lhs: ValueId,
     rhs: ValueId,
 ) -> SimplifyAction {
-    from_expr_simplify_result(simplify_binary_with_known_imm(
+    from_expr_simplify_result(simplify_binary_with_facts(
         func,
         BinaryInstKind::And,
         lhs,
         rhs,
-        |v| known_imm(func, lattice, v),
-        |lhs, rhs| same_non_undef(func, lattice, may_be_undef, lhs, rhs),
+        facts,
     ))
 }
 
 fn simplify_commutative_or(
     func: &Function,
-    lattice: &SecondaryMap<ValueId, LatticeCell>,
-    may_be_undef: &SecondaryMap<ValueId, bool>,
+    facts: &impl ExprFactProvider,
     lhs: ValueId,
     rhs: ValueId,
 ) -> SimplifyAction {
-    from_expr_simplify_result(simplify_binary_with_known_imm(
+    from_expr_simplify_result(simplify_binary_with_facts(
         func,
         BinaryInstKind::Or,
         lhs,
         rhs,
-        |v| known_imm(func, lattice, v),
-        |lhs, rhs| same_non_undef(func, lattice, may_be_undef, lhs, rhs),
+        facts,
     ))
 }
 
 fn simplify_commutative_xor(
     func: &Function,
-    lattice: &SecondaryMap<ValueId, LatticeCell>,
-    may_be_undef: &SecondaryMap<ValueId, bool>,
+    facts: &impl ExprFactProvider,
     lhs: ValueId,
     rhs: ValueId,
 ) -> SimplifyAction {
-    from_expr_simplify_result(simplify_binary_with_known_imm(
+    from_expr_simplify_result(simplify_binary_with_facts(
         func,
         BinaryInstKind::Xor,
         lhs,
         rhs,
-        |v| known_imm(func, lattice, v),
-        |lhs, rhs| same_non_undef(func, lattice, may_be_undef, lhs, rhs),
+        facts,
     ))
 }
 
 fn simplify_commutative_mul(
     func: &Function,
-    lattice: &SecondaryMap<ValueId, LatticeCell>,
+    facts: &impl ExprFactProvider,
     lhs: ValueId,
     rhs: ValueId,
 ) -> SimplifyAction {
-    from_expr_simplify_result(simplify_binary_with_known_imm(
+    from_expr_simplify_result(simplify_binary_with_facts(
         func,
         BinaryInstKind::Mul,
         lhs,
         rhs,
-        |v| known_imm(func, lattice, v),
-        |_lhs, _rhs| false,
+        facts,
     ))
 }
 
 fn simplify_commutative_add(
     func: &Function,
-    lattice: &SecondaryMap<ValueId, LatticeCell>,
+    facts: &impl ExprFactProvider,
     lhs: ValueId,
     rhs: ValueId,
 ) -> SimplifyAction {
-    from_expr_simplify_result(simplify_binary_with_known_imm(
+    from_expr_simplify_result(simplify_binary_with_facts(
         func,
         BinaryInstKind::Add,
         lhs,
         rhs,
-        |v| known_imm(func, lattice, v),
-        |_lhs, _rhs| false,
+        facts,
     ))
 }
 
@@ -188,18 +211,16 @@ fn simplify_gep_all_zero(
 
 fn simplify_sub(
     func: &Function,
-    lattice: &SecondaryMap<ValueId, LatticeCell>,
-    may_be_undef: &SecondaryMap<ValueId, bool>,
+    facts: &impl ExprFactProvider,
     lhs: ValueId,
     rhs: ValueId,
 ) -> SimplifyAction {
-    from_expr_simplify_result(simplify_binary_with_known_imm(
+    from_expr_simplify_result(simplify_binary_with_facts(
         func,
         BinaryInstKind::Sub,
         lhs,
         rhs,
-        |v| known_imm(func, lattice, v),
-        |lhs, rhs| same_non_undef(func, lattice, may_be_undef, lhs, rhs),
+        facts,
     ))
 }
 
@@ -264,35 +285,21 @@ fn simplify_ne_zext_i1_zero(
 fn simplify_div_by_one(
     func: &Function,
     kind: BinaryInstKind,
-    lattice: &SecondaryMap<ValueId, LatticeCell>,
+    facts: &impl ExprFactProvider,
     lhs: ValueId,
     rhs: ValueId,
 ) -> SimplifyAction {
-    from_expr_simplify_result(simplify_binary_with_known_imm(
-        func,
-        kind,
-        lhs,
-        rhs,
-        |v| known_imm(func, lattice, v),
-        |_lhs, _rhs| false,
-    ))
+    from_expr_simplify_result(simplify_binary_with_facts(func, kind, lhs, rhs, facts))
 }
 
 fn simplify_rem_by_one(
     func: &Function,
     kind: BinaryInstKind,
-    lattice: &SecondaryMap<ValueId, LatticeCell>,
+    facts: &impl ExprFactProvider,
     lhs: ValueId,
     rhs: ValueId,
 ) -> SimplifyAction {
-    from_expr_simplify_result(simplify_binary_with_known_imm(
-        func,
-        kind,
-        lhs,
-        rhs,
-        |v| known_imm(func, lattice, v),
-        |_lhs, _rhs| false,
-    ))
+    from_expr_simplify_result(simplify_binary_with_facts(func, kind, lhs, rhs, facts))
 }
 
 fn simplify_cmp_self(
@@ -534,6 +541,12 @@ pub(super) fn simplify_inst(
     let inst = func.dfg.inst(inst_id);
     let is = func.inst_set();
     let results_len = func.dfg.inst_results(inst_id).len();
+    let facts = SccpExprFacts {
+        func,
+        lattice,
+        may_be_undef,
+        known_bits: KnownBitsQuery::new(func),
+    };
 
     match inst.kind() {
         InstClassKind::Unary(kind) => {
@@ -611,34 +624,23 @@ pub(super) fn simplify_inst(
             }
 
             wrap_action(match kind {
-                BinaryInstKind::And => {
-                    simplify_commutative_and(func, lattice, may_be_undef, *lhs, *rhs)
-                }
-                BinaryInstKind::Or => {
-                    simplify_commutative_or(func, lattice, may_be_undef, *lhs, *rhs)
-                }
-                BinaryInstKind::Xor => {
-                    simplify_commutative_xor(func, lattice, may_be_undef, *lhs, *rhs)
-                }
-                BinaryInstKind::Mul => simplify_commutative_mul(func, lattice, *lhs, *rhs),
-                BinaryInstKind::Add => simplify_commutative_add(func, lattice, *lhs, *rhs),
-                BinaryInstKind::Sub => simplify_sub(func, lattice, may_be_undef, *lhs, *rhs),
+                BinaryInstKind::And => simplify_commutative_and(func, &facts, *lhs, *rhs),
+                BinaryInstKind::Or => simplify_commutative_or(func, &facts, *lhs, *rhs),
+                BinaryInstKind::Xor => simplify_commutative_xor(func, &facts, *lhs, *rhs),
+                BinaryInstKind::Mul => simplify_commutative_mul(func, &facts, *lhs, *rhs),
+                BinaryInstKind::Add => simplify_commutative_add(func, &facts, *lhs, *rhs),
+                BinaryInstKind::Sub => simplify_sub(func, &facts, *lhs, *rhs),
                 BinaryInstKind::Udiv
                 | BinaryInstKind::Sdiv
                 | BinaryInstKind::EvmUdiv
-                | BinaryInstKind::EvmSdiv => simplify_div_by_one(func, kind, lattice, *lhs, *rhs),
+                | BinaryInstKind::EvmSdiv => simplify_div_by_one(func, kind, &facts, *lhs, *rhs),
                 BinaryInstKind::Umod
                 | BinaryInstKind::Smod
                 | BinaryInstKind::EvmUmod
-                | BinaryInstKind::EvmSmod => simplify_rem_by_one(func, kind, lattice, *lhs, *rhs),
+                | BinaryInstKind::EvmSmod => simplify_rem_by_one(func, kind, &facts, *lhs, *rhs),
                 BinaryInstKind::Shl | BinaryInstKind::Shr | BinaryInstKind::Sar => {
-                    from_expr_simplify_result(simplify_binary_with_known_imm(
-                        func,
-                        kind,
-                        *lhs,
-                        *rhs,
-                        |v| known_imm(func, lattice, v),
-                        |_lhs, _rhs| false,
+                    from_expr_simplify_result(simplify_binary_with_facts(
+                        func, kind, *lhs, *rhs, &facts,
                     ))
                 }
                 BinaryInstKind::Eq => {
@@ -721,5 +723,71 @@ pub(super) fn simplify_inst(
 
             no_change_results(results_len)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use cranelift_entity::SecondaryMap;
+    use sonatina_ir::{Function, InstId, module::FuncRef};
+    use sonatina_parser::parse_module;
+
+    use super::{SimplifyAction, simplify_inst};
+    use crate::optim::sccp::LatticeCell;
+
+    #[test]
+    fn simplify_inst_folds_logical_shr_mask_with_known_bits() {
+        let (module, func_ref) = parse_test_module(
+            r#"
+target = "evm-ethereum-london"
+
+func public %f(v0.i256) -> i256 {
+block0:
+    v1.i256 = shr 224.i256 v0;
+    v2.i256 = and v1 4294967295.i256;
+    return v2;
+}
+"#,
+        );
+
+        module.func_store.view(func_ref, |func| {
+            let and_inst = find_inst(
+                func,
+                sonatina_ir::inst::InstClassKind::Binary(sonatina_ir::inst::BinaryInstKind::And),
+            );
+            let inst = and_inst.expect("missing and");
+            let lattice = SecondaryMap::<_, LatticeCell>::default();
+            let may_be_undef = SecondaryMap::<_, bool>::default();
+            let simplified = simplify_inst(func, &lattice, &may_be_undef, inst);
+            let and_args = func.dfg.inst(inst).collect_values();
+            let [value, _mask] = and_args.as_slice() else {
+                panic!("and should have two args");
+            };
+            assert!(simplified.iter().any(|action| {
+                matches!(action, SimplifyAction::Copy(candidate) if candidate == value)
+            }));
+        });
+    }
+
+    fn parse_test_module(src: &str) -> (sonatina_ir::Module, FuncRef) {
+        let parsed = parse_module(src).expect("module parses");
+        let func_ref = parsed
+            .module
+            .funcs()
+            .into_iter()
+            .find(|&func| parsed.module.ctx.func_sig(func, |sig| sig.name() == "f"))
+            .expect("missing f");
+        (parsed.module, func_ref)
+    }
+
+    fn find_inst(func: &Function, kind: sonatina_ir::inst::InstClassKind) -> Option<InstId> {
+        for block in func.layout.iter_block() {
+            for inst in func.layout.iter_inst(block) {
+                if func.dfg.inst(inst).kind() == kind {
+                    return Some(inst);
+                }
+            }
+        }
+        None
     }
 }
