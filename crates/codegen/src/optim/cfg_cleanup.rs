@@ -429,6 +429,85 @@ block1:
     }
 
     #[test]
+    fn trims_noreturn_loop_tail_and_repairs_backedge_phi_inputs() {
+        let module = parse(
+            r#"
+target = "evm-ethereum-osaka"
+
+func private %exit_now() {
+    block0:
+        evm_return 0.i256 0.i256;
+}
+
+func private %caller() {
+    block0:
+        jump block1;
+
+    block1:
+        v0.i256 = phi (0.i256 block0) (v1 block2);
+        br 1.i1 block2 block3;
+
+    block2:
+        call %exit_now;
+        v1.i256 = add v0 1.i256;
+        jump block1;
+
+    block3:
+        return;
+}
+"#,
+        );
+        crate::analysis::func_behavior::analyze_module(&module);
+
+        let caller = find_func(&module, "caller");
+        module.func_store.modify(caller, |func| {
+            assert!(CfgCleanup::new(CleanupMode::RepairWithUndef).run(func));
+
+            let block2 = func
+                .layout
+                .iter_block()
+                .find(|&block| {
+                    func.layout.first_inst_of(block).is_some_and(|inst| {
+                        func.dfg.call_info(inst).is_some_and(|call| {
+                            func.ctx()
+                                .func_sig(call.callee(), |sig| sig.name() == "exit_now")
+                        })
+                    })
+                })
+                .expect("block with exit_now call should remain");
+            let block2_insts: Vec<_> = func.layout.iter_inst(block2).collect();
+            assert_eq!(block2_insts.len(), 2);
+            assert!(func.dfg.call_info(block2_insts[0]).is_some());
+            assert!(
+                <&Unreachable as InstDowncast>::downcast(
+                    func.inst_set(),
+                    func.dfg.inst(block2_insts[1]),
+                )
+                .is_some()
+            );
+
+            let block1 = func
+                .layout
+                .iter_block()
+                .find(|&block| {
+                    func.layout.last_inst_of(block).is_some_and(|inst| {
+                        func.dfg.is_branch(inst)
+                            && func
+                                .dfg
+                                .branch_info(inst)
+                                .is_some_and(|info| info.dests().contains(&block2))
+                    })
+                })
+                .expect("loop header block should remain");
+            let header_first = func
+                .layout
+                .first_inst_of(block1)
+                .expect("header first inst");
+            assert!(func.dfg.cast_phi(header_first).is_none());
+        });
+    }
+
+    #[test]
     fn prunes_multi_block_unreachable_region_as_closed_set() {
         let module = parse(
             r#"
