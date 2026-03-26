@@ -1,0 +1,73 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: opt_ir_snapshot
+input_file: test_files/evm/fe_hash2_repro_loop_direct_const_unoptimized.sntn
+---
+target = "evm-ethereum-osaka"
+
+global private const [i8; 32] $__fe_const_data_0 = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
+global private const [i8; 32] $__fe_const_data_1 = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2];
+
+func private %run() -> i256 {
+    block0:
+        v0.objref<[i256; 1]> = obj.alloc [i256; 1];
+        v1.i256 = sym_addr $__fe_const_data_0;
+        v2.*[i256; 1] = int_to_ptr v1 *[i256; 1];
+        v4.*i256 = bitcast v2 *i256;
+        v5.i256 = ptr_to_int v4 i256;
+        v7.*i256 = alloca i256;
+        v8.i256 = ptr_to_int v7 i256;
+        evm_code_copy v8 v5 32.i256;
+        v9.i256 = mload v8 i256;
+        v10.objref<i256> = obj.index v0 0.i256;
+        obj.store v10 v9;
+        v15.i256 = sym_addr $__fe_const_data_1;
+        v16.*[i256; 1] = int_to_ptr v15 *[i256; 1];
+        v17.*i256 = bitcast v16 *i256;
+        v18.i256 = ptr_to_int v17 i256;
+        jump block1;
+
+    block1:
+        v29.objref<[i256; 1]> = phi (v0 block0) (v14 block2);
+        v11.i256 = phi (0.i256 block0) (v30 block2);
+        v28.i1 = lt v11 1.i256;
+        br v28 block2 block3;
+
+    block2:
+        v14.objref<[i256; 1]> = obj.alloc [i256; 1];
+        v19.*i256 = alloca i256;
+        v20.i256 = ptr_to_int v19 i256;
+        evm_code_copy v20 v18 32.i256;
+        v21.i256 = mload v20 i256;
+        v22.objref<i256> = obj.index v14 0.i256;
+        obj.store v22 v21;
+        v30.i256 = add 1.i256 v11;
+        jump block1;
+
+    block3:
+        v27.objref<i256> = obj.index v29 0.i256;
+        v28.i256 = obj.load v27;
+        return v28;
+}
+
+func private %__repro_runtime_entry() {
+    block0:
+        v1.i256 = call %run;
+        v3.i1 = eq 2.i256 v1;
+        br v3 block1 block4;
+
+    block4:
+        evm_revert 0.i256 0.i256;
+
+    block1:
+        evm_return 0.i256 0.i256;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %__repro_runtime_entry;
+        data $__fe_const_data_0;
+        data $__fe_const_data_1;
+    }
+}

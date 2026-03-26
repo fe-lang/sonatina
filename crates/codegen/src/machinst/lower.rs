@@ -1,4 +1,4 @@
-use super::vcode::{Label, SymFixup, VCode, VCodeFixup, VCodeInst};
+use super::vcode::{Label, SectionCodeUnitId, SymFixup, VCode, VCodeFixup, VCodeInst};
 use crate::stackalloc::Allocator;
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
@@ -9,6 +9,13 @@ use sonatina_ir::{
 };
 
 pub struct LoweredFunction<Op> {
+    pub vcode: VCode<Op>,
+    pub block_order: Vec<BlockId>,
+}
+
+pub struct SectionCodeUnit<Op> {
+    pub id: SectionCodeUnitId,
+    pub name: String,
     pub vcode: VCode<Op>,
     pub block_order: Vec<BlockId>,
 }
@@ -45,6 +52,16 @@ pub trait LowerBackend {
         func: FuncRef,
         section_ctx: &SectionLoweringCtx<'_>,
     ) -> Result<LoweredFunction<Self::MInst>, Self::Error>;
+
+    fn post_lower_section(
+        &self,
+        _module: &Module,
+        _funcs: &[FuncRef],
+        _lowered: &mut [(FuncRef, LoweredFunction<Self::MInst>)],
+        _section_ctx: &SectionLoweringCtx<'_>,
+    ) -> Result<Vec<SectionCodeUnit<Self::MInst>>, Self::Error> {
+        Ok(Vec::new())
+    }
 
     fn apply_sym_fixup(
         &self,

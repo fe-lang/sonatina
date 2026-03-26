@@ -2,10 +2,12 @@ pub mod adce;
 pub mod aggregate_combine;
 pub mod aggregate_scalarize;
 pub mod cfg_cleanup;
+pub mod checked_arith_elim;
 pub mod egraph;
 pub mod gvn;
 pub mod insn_simplify;
 pub mod licm;
+pub mod loop_strength_reduce;
 pub mod sccp;
 
 use std::{
@@ -18,7 +20,7 @@ use std::{
 use sonatina_ir::{Function, ir_writer::FuncWriter, module::FuncRef};
 use sonatina_parser::{ParsedModule, parse_module};
 use sonatina_verifier::{
-    ParseVerifyError, VerificationLevel, VerifierConfig, parse_and_verify_module,
+    ParseVerifyError, VerificationLevel, VerifierConfig, parse_and_verify_module, verify_function,
 };
 use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
 use walkdir::WalkDir;
@@ -150,23 +152,35 @@ impl<'a> FileChecker<'a> {
 
     fn check_func(&mut self, parsed_module: &ParsedModule, func_ref: FuncRef) -> FileCheckResult {
         let comments = &parsed_module.debug.func_comments[func_ref];
+        let verify_cfg = VerifierConfig::for_level(VerificationLevel::Fast);
 
-        let (func_ir, func_name) = parsed_module.module.func_store.modify(func_ref, |func| {
-            self.transformer.transform(func);
-            (
-                FuncWriter::with_debug_provider(func, func_ref, &parsed_module.debug).dump_string(),
-                parsed_module
-                    .module
-                    .ctx
-                    .func_sig(func_ref, |sig| sig.name().to_string()),
-            )
-        });
-        let checker = self.build_checker(comments);
+        let (func_ir, func_name, verify_err) =
+            parsed_module.module.func_store.modify(func_ref, |func| {
+                self.transformer.transform(func);
+                let verify_report =
+                    verify_function(&parsed_module.module.ctx, func_ref, func, &verify_cfg);
+                (
+                    FuncWriter::with_debug_provider(func, func_ref, &parsed_module.debug)
+                        .dump_string(),
+                    parsed_module
+                        .module
+                        .ctx
+                        .func_sig(func_ref, |sig| sig.name().to_string()),
+                    verify_report
+                        .has_errors()
+                        .then(|| verify_report.to_string()),
+                )
+            });
 
-        let result = match checker.explain(&func_ir, &()) {
-            Ok((true, _)) => Ok(()),
-            Ok((false, err)) => Err(err),
-            Err(err) => Err(format!("{err}")),
+        let result = if let Some(err) = verify_err {
+            Err(err)
+        } else {
+            let checker = self.build_checker(comments);
+            match checker.explain(&func_ir, &()) {
+                Ok((true, _)) => Ok(()),
+                Ok((false, err)) => Err(err),
+                Err(err) => Err(format!("{err}")),
+            }
         };
 
         let mut test_path = self.file_path.to_owned();

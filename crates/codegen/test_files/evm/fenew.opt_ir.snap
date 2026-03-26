@@ -31,12 +31,12 @@ func private %__Counter_runtime() {
     block0:
         v19.i256 = evm_calldata_size;
         v21.i1 = lt v19 4.i256;
-        br v21 block14 block15;
-
-    block14:
-        evm_revert 0.i256 0.i256;
+        br v21 block15 block16;
 
     block15:
+        evm_revert 0.i256 0.i256;
+
+    block16:
         v22.i256 = evm_calldata_load 0.i256;
         v24.i256 = shr 224.i256 v22;
         v25.i32 = trunc v24 i32;

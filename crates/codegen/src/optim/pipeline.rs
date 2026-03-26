@@ -25,6 +25,7 @@ use super::{
     },
     branch_canonicalize::BranchCanonicalize,
     cfg_cleanup::CfgCleanup,
+    checked_arith_elim::{CheckedArithElim, has_supported_checked_arith},
     dead_arg::{DeadArgElimConfig, run_dead_arg_elim},
     dead_func::{DeadFuncElimConfig, collect_object_roots, run_dead_func_elim},
     egraph::run_egraph_pass,
@@ -32,6 +33,7 @@ use super::{
     inliner::{Inliner, InlinerConfig},
     licm::LicmSolver,
     load_store::LoadStoreSolver,
+    loop_strength_reduce::LoopStrengthReduce,
     multi_result_legalize::legalize_multi_result,
     sccp::SccpSolver,
 };
@@ -56,12 +58,16 @@ pub enum Pass {
     AggregateScalarize,
     /// Per-space load/store forwarding and dead-store elimination.
     LoadStore,
+    /// Eliminate checked arithmetic and div/mod overflow flags proven unreachable by range analysis.
+    CheckedArithElim,
     /// Sparse conditional constant propagation (composite: CfgCleanup + SCCP + CfgCleanup + ADCE).
     Sccp,
     /// Standalone aggressive dead code elimination.
     Adce,
     /// Loop invariant code motion.
     Licm,
+    /// Loop strength reduction for affine memory addresses.
+    LoopStrengthReduce,
     /// E-graph based algebraic simplification and memory forwarding.
     Egraph,
     /// Complete Global Value Numbering (legacy sparse predicated solver).
@@ -83,9 +89,11 @@ impl Pass {
             Pass::ObjectLoadStore => "object_load_store",
             Pass::AggregateScalarize => "aggregate_scalarize",
             Pass::LoadStore => "load_store",
+            Pass::CheckedArithElim => "checked_arith_elim",
             Pass::Sccp => "sccp",
             Pass::Adce => "adce",
             Pass::Licm => "licm",
+            Pass::LoopStrengthReduce => "loop_strength_reduce",
             Pass::Egraph => "egraph",
             Pass::Gvn => "gvn",
             Pass::RebuildUsers => "rebuild_users",
@@ -146,6 +154,7 @@ const PRIMARY_FUNC_PASSES: &[Pass] = &[
     Pass::ObjectLoadStore,
     Pass::AggregateScalarize,
     Pass::LoadStore,
+    Pass::CheckedArithElim,
     Pass::Sccp,
     Pass::Gvn,
     Pass::Licm,
@@ -164,6 +173,7 @@ const SECONDARY_FUNC_PASSES: &[Pass] = &[
     Pass::ObjectLoadStore,
     Pass::AggregateScalarize,
     Pass::LoadStore,
+    Pass::CheckedArithElim,
     Pass::Sccp,
     Pass::Gvn,
     Pass::BranchCanonicalize,
@@ -193,9 +203,11 @@ fn pass_may_invalidate_func_behavior(pass: Pass) -> bool {
             | Pass::ObjectLoadStore
             | Pass::AggregateScalarize
             | Pass::LoadStore
+            | Pass::CheckedArithElim
             | Pass::Sccp
             | Pass::Adce
             | Pass::Licm
+            | Pass::LoopStrengthReduce
             | Pass::Egraph
             | Pass::Gvn
     )
@@ -324,6 +336,7 @@ impl Pipeline {
     ///    - `AggregateCombine`
     ///    - `AggregateScalarize`
     ///    - `LoadStore`
+    ///    - `CheckedArithElim`
     ///    - `Sccp`
     ///    - `Gvn`
     ///    - `CfgCleanup`
@@ -537,6 +550,34 @@ fn run_pass(
                 solver.run(func, &mut ctx.cfg);
             }
         }
+        Pass::CheckedArithElim => {
+            let _span = trace_span!("sonatina.optim.pipeline.pass.checked_arith_elim").entered();
+            if !has_supported_checked_arith(func) {
+                return;
+            }
+            {
+                let _span =
+                    trace_span!("sonatina.optim.pipeline.checked_arith_elim.compute_cfg").entered();
+                ctx.cfg.compute(func);
+            }
+            {
+                let _span =
+                    trace_span!("sonatina.optim.pipeline.checked_arith_elim.compute_domtree")
+                        .entered();
+                ctx.domtree.compute(&ctx.cfg);
+            }
+            {
+                let _span =
+                    trace_span!("sonatina.optim.pipeline.checked_arith_elim.compute_looptree")
+                        .entered();
+                ctx.lpt.compute(&ctx.cfg, &ctx.domtree);
+            }
+            {
+                let _span =
+                    trace_span!("sonatina.optim.pipeline.checked_arith_elim.solve").entered();
+                CheckedArithElim::new().run(func, &ctx.cfg, &ctx.lpt);
+            }
+        }
         Pass::Sccp => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.sccp").entered();
             // SccpSolver::run is composite: internally does
@@ -590,6 +631,31 @@ fn run_pass(
             {
                 let _span = trace_span!("sonatina.optim.pipeline.licm.cleanup").entered();
                 CfgCleanup::new(CleanupMode::Strict).run(func);
+            }
+        }
+        Pass::LoopStrengthReduce => {
+            let _span = trace_span!("sonatina.optim.pipeline.pass.loop_strength_reduce").entered();
+            {
+                let _span = trace_span!("sonatina.optim.pipeline.loop_strength_reduce.compute_cfg")
+                    .entered();
+                ctx.cfg.compute(func);
+            }
+            {
+                let _span =
+                    trace_span!("sonatina.optim.pipeline.loop_strength_reduce.compute_domtree")
+                        .entered();
+                ctx.domtree.compute(&ctx.cfg);
+            }
+            {
+                let _span =
+                    trace_span!("sonatina.optim.pipeline.loop_strength_reduce.compute_looptree")
+                        .entered();
+                ctx.lpt.compute(&ctx.cfg, &ctx.domtree);
+            }
+            {
+                let _span =
+                    trace_span!("sonatina.optim.pipeline.loop_strength_reduce.solve").entered();
+                LoopStrengthReduce::new().run(func, &mut ctx.cfg, &mut ctx.domtree, &mut ctx.lpt);
             }
         }
         Pass::Egraph => {
@@ -778,6 +844,70 @@ func private %caller() {
     }
 
     #[test]
+    fn cfg_cleanup_trims_noreturn_call_with_split_continuation() {
+        let source = r#"
+target = "evm-ethereum-osaka"
+
+func private %run() -> i256 {
+block0:
+    evm_return 0.i256 0.i256;
+}
+
+func private %test_run() {
+block0:
+    v0.i256 = call %run;
+    v3.i1 = eq v0 2.i256;
+    jump block2;
+
+block2:
+    v4.i1 = is_zero v3;
+    br v4 block3 block4;
+
+block3:
+    evm_revert 0.i256 0.i256;
+
+block4:
+    jump block1;
+
+block1:
+    return;
+}
+"#;
+
+        let mut module = parse_module(source).expect("parse should succeed").module;
+        run_test_func_passes(&mut module, &[Pass::CfgCleanup]);
+
+        let test_run = module
+            .funcs()
+            .into_iter()
+            .find(|func_ref| {
+                module
+                    .ctx
+                    .func_sig(*func_ref, |sig| sig.name() == "test_run")
+            })
+            .expect("test_run should exist");
+        module.func_store.view(test_run, |func| {
+            let dumped = FuncWriter::new(test_run, func).dump_string();
+            assert!(
+                dumped.contains("unreachable;"),
+                "split continuation after noreturn call should be trimmed:\n{dumped}"
+            );
+            assert!(
+                !dumped.contains("eq "),
+                "trimmed tail should not leave eq behind:\n{dumped}"
+            );
+            assert!(
+                !dumped.contains("is_zero "),
+                "unreachable continuation should be removed:\n{dumped}"
+            );
+            assert!(
+                !dumped.contains("undef"),
+                "structural noreturn cleanup should not synthesize undef:\n{dumped}"
+            );
+        });
+    }
+
+    #[test]
     fn default_pipeline_prunes_unreachable_private_functions() {
         let source = r#"
 target = "evm-ethereum-london"
@@ -809,6 +939,135 @@ object @O {
             .collect::<Vec<_>>();
         names.sort();
         assert_eq!(names, vec!["entry".to_string()]);
+    }
+
+    #[test]
+    fn sccp_folds_logical_shr_mask_with_known_bits() {
+        let source = r#"
+target = "evm-ethereum-london"
+
+func private %entry(v0.i256) -> i256 {
+    block0:
+        v1.i256 = shr 224.i256 v0;
+        v2.i256 = and v1 4294967295.i256;
+        return v2;
+}
+"#;
+
+        let mut module = parse_module(source).expect("parse should succeed").module;
+        let func_ref = module.funcs()[0];
+        run_test_func_passes(
+            &mut module,
+            &[Pass::CfgCleanup, Pass::Sccp, Pass::CfgCleanup],
+        );
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            assert!(dumped.contains("v1.i256 = shr 224.i256 v0;"), "{dumped}");
+            assert!(!dumped.contains(" and "), "{dumped}");
+            assert!(dumped.contains("return v1;"), "{dumped}");
+        });
+    }
+
+    #[test]
+    fn sccp_keeps_sar_mask_when_sign_is_unknown() {
+        let source = r#"
+target = "evm-ethereum-london"
+
+func private %entry(v0.i256) -> i256 {
+    block0:
+        v1.i256 = sar 224.i256 v0;
+        v2.i256 = and v1 4294967295.i256;
+        return v2;
+}
+"#;
+
+        let mut module = parse_module(source).expect("parse should succeed").module;
+        let func_ref = module.funcs()[0];
+        run_test_func_passes(
+            &mut module,
+            &[Pass::CfgCleanup, Pass::Sccp, Pass::CfgCleanup],
+        );
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            assert!(
+                dumped.contains("v2.i256 = and v1 4294967295.i256;"),
+                "{dumped}"
+            );
+        });
+    }
+
+    #[test]
+    fn sccp_compare_contradiction_requires_defined_operands() {
+        let source = r#"
+target = "evm-ethereum-london"
+
+func private %entry() -> i256 {
+    block0:
+        v1.i8 = and undef.i8 1.i8;
+        v2.i8 = or v1 2.i8;
+        v3.i1 = eq v1 v2;
+        br v3 block1 block2;
+
+    block1:
+        return 1.i256;
+
+    block2:
+        return 2.i256;
+}
+"#;
+
+        let mut module = parse_module(source).expect("parse should succeed").module;
+        let func_ref = module.funcs()[0];
+        run_test_func_passes(
+            &mut module,
+            &[Pass::CfgCleanup, Pass::Sccp, Pass::CfgCleanup],
+        );
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            assert!(dumped.contains("return 1.i256;"), "{dumped}");
+            assert!(dumped.contains("return 2.i256;"), "{dumped}");
+        });
+    }
+
+    #[test]
+    fn sccp_does_not_copy_fold_phi_with_undef_incoming() {
+        let source = r#"
+target = "evm-ethereum-london"
+
+func private %entry(v0.i1) -> i256 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        jump block3;
+
+    block2:
+        jump block3;
+
+    block3:
+        v1.i256 = phi (undef.i256 block1) (7.i256 block2);
+        v2.i256 = and v1 4294967295.i256;
+        return v2;
+}
+"#;
+
+        let mut module = parse_module(source).expect("parse should succeed").module;
+        let func_ref = module.funcs()[0];
+        run_test_func_passes(
+            &mut module,
+            &[Pass::CfgCleanup, Pass::Sccp, Pass::CfgCleanup],
+        );
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            assert!(
+                dumped.contains("v2.i256 = and v1 4294967295.i256;"),
+                "{dumped}"
+            );
+        });
     }
 
     #[test]
@@ -1572,6 +1831,68 @@ func private %entry() -> i256 {
                 dumped.contains("return 2.i256;"),
                 "else branch should remain reachable when eq compares maybe-undef value:\n{dumped}"
             );
+        });
+    }
+
+    #[test]
+    fn gvn_folds_logical_shr_mask_with_known_bits() {
+        let source = r#"
+target = "evm-ethereum-london"
+
+func private %entry(v0.i256) -> i256 {
+    block0:
+        v1.i256 = shr 224.i256 v0;
+        v2.i256 = and v1 4294967295.i256;
+        return v2;
+}
+"#;
+
+        let mut module = parse_module(source).expect("parse should succeed").module;
+        let func_ref = module.funcs()[0];
+        run_test_func_passes(
+            &mut module,
+            &[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup],
+        );
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            assert!(dumped.contains("v1.i256 = shr 224.i256 v0;"), "{dumped}");
+            assert!(!dumped.contains(" and "), "{dumped}");
+            assert!(dumped.contains("return v1;"), "{dumped}");
+        });
+    }
+
+    #[test]
+    fn gvn_compare_contradiction_requires_defined_operands() {
+        let source = r#"
+target = "evm-ethereum-london"
+
+func private %entry() -> i256 {
+    block0:
+        v1.i8 = and undef.i8 1.i8;
+        v2.i8 = or v1 2.i8;
+        v3.i1 = eq v1 v2;
+        br v3 block1 block2;
+
+    block1:
+        return 1.i256;
+
+    block2:
+        return 2.i256;
+}
+"#;
+
+        let mut module = parse_module(source).expect("parse should succeed").module;
+        let func_ref = module.funcs()[0];
+        run_test_func_passes(
+            &mut module,
+            &[Pass::CfgCleanup, Pass::Gvn, Pass::CfgCleanup],
+        );
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            assert!(dumped.contains("return 1.i256;"), "{dumped}");
+            assert!(dumped.contains("return 2.i256;"), "{dumped}");
         });
     }
 

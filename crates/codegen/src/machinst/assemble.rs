@@ -9,8 +9,8 @@ use sonatina_ir::{
 };
 
 use super::{
-    lower::LowerBackend,
-    vcode::{Label, LabelId, VCode, VCodeFixup, VCodeInst},
+    lower::{LowerBackend, SectionCodeUnit},
+    vcode::{Label, LabelId, SectionCodeUnitId, VCode, VCodeFixup, VCodeInst},
 };
 
 pub struct ObjectLayout<Op> {
@@ -18,11 +18,17 @@ pub struct ObjectLayout<Op> {
     _offset: u32,
     _size: u32,
     functions: IndexMap<FuncRef, FuncLayout<Op>>,
+    section_units: IndexMap<SectionCodeUnitId, SectionUnitLayout<Op>>,
     func_offsets: SecondaryMap<FuncRef, u32>,
+    section_unit_offsets: SecondaryMap<SectionCodeUnitId, u32>,
 }
 
 impl<Op> ObjectLayout<Op> {
-    pub fn new(funcs: Vec<(FuncRef, VCode<Op>, Vec<BlockId>)>, mut offset: u32) -> Self {
+    pub fn new(
+        funcs: Vec<(FuncRef, VCode<Op>, Vec<BlockId>)>,
+        section_units: Vec<SectionCodeUnit<Op>>,
+        mut offset: u32,
+    ) -> Self {
         let start = offset;
 
         let mut func_offsets = SecondaryMap::with_capacity(funcs.len());
@@ -35,28 +41,65 @@ impl<Op> ObjectLayout<Op> {
                 (f, layout)
             })
             .collect();
+        let mut section_unit_offsets = SecondaryMap::default();
+        let section_units = section_units
+            .into_iter()
+            .map(|unit| {
+                section_unit_offsets[unit.id] = offset;
+                let layout = FuncLayout::new(unit.vcode, unit.block_order, offset);
+                offset += layout.size;
+                (
+                    unit.id,
+                    SectionUnitLayout {
+                        name: unit.name,
+                        layout,
+                    },
+                )
+            })
+            .collect();
 
         Self {
             _offset: start,
             _size: offset - start,
             functions,
+            section_units,
             func_offsets,
+            section_unit_offsets,
         }
     }
 
     pub fn resize(&mut self, backend: &impl LowerBackend<MInst = Op>, mut offset: u32) -> bool {
         let mut did_change = false;
         for (funcref, layout) in self.functions.iter_mut() {
-            did_change |= layout.resize(backend, offset, &self.func_offsets);
+            did_change |= layout.resize(
+                backend,
+                offset,
+                &self.func_offsets,
+                &self.section_unit_offsets,
+            );
             self.func_offsets[*funcref] = offset;
             offset += layout.size;
         }
+        for (unit_id, unit) in self.section_units.iter_mut() {
+            did_change |= unit.layout.resize(
+                backend,
+                offset,
+                &self.func_offsets,
+                &self.section_unit_offsets,
+            );
+            self.section_unit_offsets[*unit_id] = offset;
+            offset += unit.layout.size;
+        }
+        did_change |= update(&mut self._size, offset - self._offset);
         did_change
     }
 
     pub fn emit(&self, backend: &impl LowerBackend<MInst = Op>, buf: &mut Vec<u8>) {
         for layout in self.functions.values() {
             layout.emit(backend, buf);
+        }
+        for unit in self.section_units.values() {
+            unit.layout.emit(backend, buf);
         }
     }
 
@@ -76,6 +119,29 @@ impl<Op> ObjectLayout<Op> {
 
     pub(crate) fn func_layout(&self, func: FuncRef) -> Option<&FuncLayout<Op>> {
         self.functions.get(&func)
+    }
+
+    pub(crate) fn code_end(&self) -> u32 {
+        self._offset + self._size
+    }
+
+    pub(crate) fn section_units(&self) -> &IndexMap<SectionCodeUnitId, SectionUnitLayout<Op>> {
+        &self.section_units
+    }
+}
+
+pub struct SectionUnitLayout<Op> {
+    name: String,
+    layout: FuncLayout<Op>,
+}
+
+impl<Op> SectionUnitLayout<Op> {
+    pub(crate) fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub(crate) fn layout(&self) -> &FuncLayout<Op> {
+        &self.layout
     }
 }
 
@@ -132,6 +198,7 @@ impl<Op> FuncLayout<Op> {
         backend: &impl LowerBackend<MInst = Op>,
         mut offset: u32,
         fn_offsets: &SecondaryMap<FuncRef, u32>,
+        section_unit_offsets: &SecondaryMap<SectionCodeUnitId, u32>,
     ) -> bool {
         let mut did_change = update(&mut self.offset, offset);
 
@@ -149,6 +216,7 @@ impl<Op> FuncLayout<Op> {
                     let address = match self.vcode.labels[*label] {
                         Label::Block(b) => self.block_offsets[b],
                         Label::Function(f) => fn_offsets[f],
+                        Label::SectionCodeUnit(unit) => section_unit_offsets[unit],
                         Label::Insn(i) => self.insn_offsets[i],
                     };
                     did_change |= update(self.label_targets.index_mut(*label), address);
@@ -201,6 +269,10 @@ impl<Op> FuncLayout<Op> {
     pub(crate) fn vcode(&self) -> &VCode<Op> {
         &self.vcode
     }
+
+    pub(crate) fn end(&self) -> u32 {
+        self.offset + self.size
+    }
 }
 
 impl<Op> ObjectLayout<Op>
@@ -218,6 +290,9 @@ where
                 let ctx = FuncWriteCtx::with_debug_provider(function, *funcref, dbg);
                 layout.write(w, &ctx)
             })?;
+        }
+        for unit in self.section_units.values() {
+            unit.layout.write_synthetic(w, &unit.name)?;
         }
         Ok(())
     }
@@ -261,6 +336,7 @@ where
                         Label::Block(BlockId(n)) => write!(w, " (block{n})")?,
                         Label::Insn(_) => {}
                         Label::Function(func) => write!(w, " ({func:?})")?,
+                        Label::SectionCodeUnit(unit) => write!(w, " (section_unit{})", unit.0)?,
                     };
                 }
 
@@ -270,6 +346,48 @@ where
                     cur_ir = Some(ir);
                     write!(w, "  // ")?;
                     InstStatement(ir).write(w, ctx)?;
+                }
+                writeln!(w)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl<Op> FuncLayout<Op>
+where
+    Op: std::fmt::Debug,
+{
+    pub(crate) fn write_synthetic<W>(&self, w: &mut W, name: &str) -> io::Result<()>
+    where
+        W: io::Write,
+    {
+        writeln!(w, "// synthetic section unit")?;
+        writeln!(w, "{name}:")?;
+
+        for block in self.block_order.iter().copied() {
+            writeln!(w, "  block{}:", block.0)?;
+            for insn in self.vcode.block_insns(block) {
+                write!(
+                    w,
+                    "{: >5}    {:?}",
+                    self.insn_offsets[insn], self.vcode.insts[insn],
+                )?;
+                if let Some((_, bytes)) = self.vcode.inst_imm_bytes.get(insn) {
+                    let mut be = [0; 32];
+                    be[32 - bytes.len()..].copy_from_slice(bytes);
+                    let imm = U256::from_big_endian(&be);
+                    write!(w, " 0x{imm:x} ({imm})")?;
+                } else if let Some((_, fixup)) = self.vcode.fixups.get(insn)
+                    && let VCodeFixup::Label(label) = fixup
+                {
+                    write!(w, " {}", self.label_targets[*label])?;
+                    match self.vcode.labels[*label] {
+                        Label::Block(BlockId(n)) => write!(w, " (block{n})")?,
+                        Label::Insn(_) => {}
+                        Label::Function(func) => write!(w, " ({func:?})")?,
+                        Label::SectionCodeUnit(unit) => write!(w, " (section_unit{})", unit.0)?,
+                    };
                 }
                 writeln!(w)?;
             }

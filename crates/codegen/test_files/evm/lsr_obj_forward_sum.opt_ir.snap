@@ -1,0 +1,44 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: opt_ir_snapshot
+input_file: test_files/evm/lsr_obj_forward_sum.sntn
+---
+target = "evm-ethereum-osaka"
+
+func public %entry() {
+    block0:
+        v0.objref<[i256; 4]> = obj.alloc [i256; 4];
+        v1.objref<i256> = obj.index v0 0.i256;
+        obj.store v1 1.i256;
+        v2.objref<i256> = obj.index v0 1.i256;
+        obj.store v2 2.i256;
+        v3.objref<i256> = obj.index v0 2.i256;
+        obj.store v3 3.i256;
+        v4.objref<i256> = obj.index v0 3.i256;
+        obj.store v4 4.i256;
+        jump block3;
+
+    block3:
+        v13.i256 = phi (0.i256 block0) (v20 block4);
+        v15.i256 = phi (0.i256 block0) (v19 block4);
+        v16.i1 = lt v13 4.i256;
+        br v16 block4 block1;
+
+    block4:
+        v17.objref<i256> = obj.index v0 v13;
+        v18.i256 = obj.load v17;
+        v19.i256 = add v15 v18;
+        v20.i256 = add 1.i256 v13;
+        jump block3;
+
+    block1:
+        mstore 0.i256 v15 i256;
+        evm_return 0.i256 32.i256;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %entry;
+    }
+}

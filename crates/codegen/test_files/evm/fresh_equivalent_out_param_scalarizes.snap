@@ -10,7 +10,7 @@ object: Contract
   total: 25 bytes
 
 functions:
-  entry: ir_blocks=4 ir_insts=13 vcode_ops=21 fixups=2 imm_bytes=2
+  entry: ir_blocks=4 ir_insts=12 vcode_ops=21 fixups=2 imm_bytes=2
     mem: scratch_words=4 stable_words=0 stable_mode=None entry_abs_words=4 abs_words_end=4
 
 evm:
@@ -43,6 +43,6 @@ entry:
     MSTORE
   block5:
     JUMPDEST
-    MLOAD  // v5.i256 = mload v4 i256;
+    MLOAD  // v5.i256 = mload v15 i256;
     SWAP1  // return v5;
     JUMP

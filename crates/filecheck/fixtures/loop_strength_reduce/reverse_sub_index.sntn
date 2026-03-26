@@ -1,0 +1,43 @@
+target = "evm-ethereum-osaka"
+
+# check: func public %reverse
+# check: block0:
+# check:     v13.i256 = ptr_to_int v0 i256
+# check:     v15.i256 = add v13 224.i256
+# check:     jump block1
+# check:
+# check: block1:
+# check:     v1.i256 = phi (0.i256 block0) (v6 block2)
+# check:     v2.i256 = phi (0.i256 block0) (v7 block2)
+# check:     v16.i256 = phi (v15 block0) (v18 block2)
+# check:     v3.i1 = lt v1 4.i256
+# check:     br v3 block2 block3
+# check:
+# check: block2:
+# check:     v8.i256 = mload v16 i256
+# check:     v7.i256 = add v2 v8
+# check:     v6.i256 = add v1 1.i256
+# check:     v18.i256 = sub v16 32.i256
+# check:     jump block1
+
+func public %reverse(v0.*[i256; 8]) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v1.i256 = phi (0.i256 block0) (v6 block2);
+        v2.i256 = phi (0.i256 block0) (v7 block2);
+        v3.i1 = lt v1 4.i256;
+        br v3 block2 block3;
+
+    block2:
+        v4.i256 = sub 7.i256 v1;
+        v5.*i256 = gep v0 0.i256 v4;
+        v8.i256 = mload v5 i256;
+        v7.i256 = add v2 v8;
+        v6.i256 = add v1 1.i256;
+        jump block1;
+
+    block3:
+        return v2;
+}

@@ -1,0 +1,406 @@
+#! Checked arithmetic elimination should rewrite provably safe checked ops and let SCCP remove dead overflow paths.
+
+target = "evm-ethereum-osaka"
+
+# regex: SUM=\bv\d+\b
+# check: func public %uaddo_dominating_bound(v0.i256) -> i256 {
+# check: $SUM.i256 = add v0 1.i256;
+# check: return $SUM;
+# not: uaddo
+# not: 999.i256
+func public %uaddo_dominating_bound(v0.i256) -> i256 {
+block0:
+    v1.i1 = lt v0 24.i256;
+    br v1 block1 block2;
+
+block1:
+    (v2.i256, v3.i1) = uaddo v0 1.i256;
+    br v3 block3 block4;
+
+block2:
+    return 0.i256;
+
+block3:
+    return 999.i256;
+
+block4:
+    return v2;
+}
+
+# check: func public %uaddo_loop_increment() -> i256 {
+# check: add v0 1.i256;
+# not: uaddo
+# not: 999.i256
+func public %uaddo_loop_increment() -> i256 {
+block0:
+    jump block1;
+
+block1:
+    v0.i256 = phi (0.i256 block0) (v3 block4);
+    v1.i1 = lt v0 100.i256;
+    br v1 block2 block5;
+
+block2:
+    (v3.i256, v4.i1) = uaddo v0 1.i256;
+    br v4 block3 block4;
+
+block3:
+    return 999.i256;
+
+block4:
+    jump block1;
+
+block5:
+    return v0;
+}
+
+# regex: QUOT=\bv\d+\b
+# regex: REM=\bv\d+\b
+# check: func public %unsigned_divmod_guard(v0.i256, v1.i256) -> i256 {
+# check: $QUOT.i256 = evm_udiv v0 v1;
+# check: $REM.i256 = evm_umod $QUOT v1;
+# check: return $REM;
+# not: evm_udivo
+# not: evm_umodo
+# not: 111.i256
+# not: 222.i256
+func public %unsigned_divmod_guard(v0.i256, v1.i256) -> i256 {
+block0:
+    v2.i1 = ne v1 0.i256;
+    br v2 block1 block2;
+
+block1:
+    (v3.i256, v4.i1) = evm_udivo v0 v1;
+    br v4 block3 block4;
+
+block2:
+    return 0.i256;
+
+block3:
+    return 111.i256;
+
+block4:
+    (v5.i256, v6.i1) = evm_umodo v3 v1;
+    br v6 block5 block6;
+
+block5:
+    return 222.i256;
+
+block6:
+    return v5;
+}
+
+# regex: NEG=\bv\d+\b
+# check: func public %snego_guard(v0.i256) -> i256 {
+# check: $NEG.i256 = sub 0.i256 v0;
+# check: return $NEG;
+# not: snego
+# not: 123.i256
+func public %snego_guard(v0.i256) -> i256 {
+block0:
+    v1.i1 = ne v0 -57896044618658097711785492504343953926634992332820282019728792003956564819968.i256;
+    br v1 block1 block2;
+
+block1:
+    (v2.i256, v3.i1) = snego v0;
+    br v3 block3 block4;
+
+block2:
+    return 0.i256;
+
+block3:
+    return 123.i256;
+
+block4:
+    return v2;
+}
+
+# check: func public %uaddo_unproven(v0.i256, v1.i256) -> i256 {
+# check: uaddo v0 v1;
+func public %uaddo_unproven(v0.i256, v1.i256) -> i256 {
+block0:
+    (v2.i256, v3.i1) = uaddo v0 v1;
+    br v3 block1 block2;
+
+block1:
+    return 9.i256;
+
+block2:
+    return v2;
+}
+
+# check: func public %sdivo_preserved(v0.i256, v1.i256) -> i256 {
+# check: evm_sdivo v0 v1;
+func public %sdivo_preserved(v0.i256, v1.i256) -> i256 {
+block0:
+    v2.i1 = ne v1 0.i256;
+    br v2 block1 block2;
+
+block1:
+    (v3.i256, v4.i1) = evm_sdivo v0 v1;
+    br v4 block3 block4;
+
+block2:
+    return 0.i256;
+
+block3:
+    return 7.i256;
+
+block4:
+    return v3;
+}
+
+# regex: SDIV=\bv\d+\b
+# check: func public %sdivo_eliminated(v0.i256, v1.i256) -> i256 {
+# check: $SDIV.i256 = evm_sdiv v0 v1;
+# check: return $SDIV;
+# not: evm_sdivo
+# not: 77.i256
+func public %sdivo_eliminated(v0.i256, v1.i256) -> i256 {
+block0:
+    v2.i1 = slt v1 0.i256;
+    br v2 block1 block2;
+
+block1:
+    v3.i1 = ne v1 -1.i256;
+    br v3 block3 block2;
+
+block2:
+    return 0.i256;
+
+block3:
+    v4.i1 = ne v0 -57896044618658097711785492504343953926634992332820282019728792003956564819968.i256;
+    br v4 block4 block2;
+
+block4:
+    (v5.i256, v6.i1) = evm_sdivo v0 v1;
+    br v6 block5 block6;
+
+block5:
+    return 77.i256;
+
+block6:
+    return v5;
+}
+
+# regex: UMUL=\bv\d+\b
+# check: func public %umulo_safe(v0.i8, v1.i8) -> i8 {
+# check: $UMUL.i8 = mul v0 v1;
+# check: return $UMUL;
+# not: umulo
+# not: 99.i8
+func public %umulo_safe(v0.i8, v1.i8) -> i8 {
+block0:
+    v2.i1 = le v0 10.i8;
+    br v2 block1 block4;
+
+block1:
+    v3.i1 = le v1 10.i8;
+    br v3 block2 block4;
+
+block2:
+    (v4.i8, v5.i1) = umulo v0 v1;
+    br v5 block3 block5;
+
+block3:
+    return 99.i8;
+
+block4:
+    return 0.i8;
+
+block5:
+    return v4;
+}
+
+# check: func public %umulo_unsafe(v0.i8, v1.i8) -> i8 {
+# check: umulo v0 v1;
+func public %umulo_unsafe(v0.i8, v1.i8) -> i8 {
+block0:
+    (v2.i8, v3.i1) = umulo v0 v1;
+    br v3 block1 block2;
+
+block1:
+    return 88.i8;
+
+block2:
+    return v2;
+}
+
+# regex: SMUL=\bv\d+\b
+# check: func public %smulo_safe(v0.i8, v1.i8) -> i8 {
+# check: $SMUL.i8 = mul v0 v1;
+# check: return $SMUL;
+# not: smulo
+# not: 99.i8
+func public %smulo_safe(v0.i8, v1.i8) -> i8 {
+block0:
+    v2.i1 = sge v0 0.i8;
+    br v2 block1 block5;
+
+block1:
+    v3.i1 = sge v1 0.i8;
+    br v3 block2 block5;
+
+block2:
+    v4.i1 = sle v0 10.i8;
+    br v4 block3 block5;
+
+block3:
+    v5.i1 = sle v1 10.i8;
+    br v5 block4 block5;
+
+block4:
+    (v6.i8, v7.i1) = smulo v0 v1;
+    br v7 block6 block7;
+
+block5:
+    return 0.i8;
+
+block6:
+    return 99.i8;
+
+block7:
+    return v6;
+}
+
+# check: func public %smulo_unsafe(v0.i8, v1.i8) -> i8 {
+# check: smulo v0 v1;
+func public %smulo_unsafe(v0.i8, v1.i8) -> i8 {
+block0:
+    (v2.i8, v3.i1) = smulo v0 v1;
+    br v3 block1 block2;
+
+block1:
+    return 88.i8;
+
+block2:
+    return v2;
+}
+
+# regex: USUB=\bv\d+\b
+# check: func public %usubo_safe(v0.i8, v1.i8) -> i8 {
+# check: $USUB.i8 = sub v0 v1;
+# check: return $USUB;
+# not: usubo
+# not: 55.i8
+func public %usubo_safe(v0.i8, v1.i8) -> i8 {
+block0:
+    v2.i1 = ge v0 10.i8;
+    br v2 block1 block4;
+
+block1:
+    v3.i1 = le v1 10.i8;
+    br v3 block2 block4;
+
+block2:
+    (v4.i8, v5.i1) = usubo v0 v1;
+    br v5 block3 block5;
+
+block3:
+    return 55.i8;
+
+block4:
+    return 0.i8;
+
+block5:
+    return v4;
+}
+
+# regex: SADD=\bv\d+\b
+# check: func public %saddo_safe(v0.i8, v1.i8) -> i8 {
+# check: $SADD.i8 = add v0 v1;
+# check: return $SADD;
+# not: saddo
+# not: 66.i8
+func public %saddo_safe(v0.i8, v1.i8) -> i8 {
+block0:
+    v2.i1 = sge v0 0.i8;
+    br v2 block1 block6;
+
+block1:
+    v3.i1 = sge v1 0.i8;
+    br v3 block2 block6;
+
+block2:
+    v4.i1 = sle v0 10.i8;
+    br v4 block3 block6;
+
+block3:
+    v5.i1 = sle v1 10.i8;
+    br v5 block4 block6;
+
+block4:
+    (v6.i8, v7.i1) = saddo v0 v1;
+    br v7 block5 block7;
+
+block5:
+    return 66.i8;
+
+block6:
+    return 0.i8;
+
+block7:
+    return v6;
+}
+
+# regex: SSUB=\bv\d+\b
+# check: func public %ssubo_safe(v0.i8, v1.i8) -> i8 {
+# check: $SSUB.i8 = sub v0 v1;
+# check: return $SSUB;
+# not: ssubo
+# not: 77.i8
+func public %ssubo_safe(v0.i8, v1.i8) -> i8 {
+block0:
+    v2.i1 = sge v0 0.i8;
+    br v2 block1 block6;
+
+block1:
+    v3.i1 = sge v1 0.i8;
+    br v3 block2 block6;
+
+block2:
+    v4.i1 = sle v0 10.i8;
+    br v4 block3 block6;
+
+block3:
+    v5.i1 = sle v1 10.i8;
+    br v5 block4 block6;
+
+block4:
+    (v6.i8, v7.i1) = ssubo v0 v1;
+    br v7 block5 block7;
+
+block5:
+    return 77.i8;
+
+block6:
+    return 0.i8;
+
+block7:
+    return v6;
+}
+
+# regex: SMOD=\bv\d+\b
+# check: func public %smodo_safe(v0.i8, v1.i8) -> i8 {
+# check: $SMOD.i8 = evm_smod v0 v1;
+# check: return $SMOD;
+# not: evm_smodo
+# not: 44.i8
+func public %smodo_safe(v0.i8, v1.i8) -> i8 {
+block0:
+    v2.i1 = sgt v1 0.i8;
+    br v2 block1 block2;
+
+block1:
+    (v3.i8, v4.i1) = evm_smodo v0 v1;
+    br v4 block3 block4;
+
+block2:
+    return 0.i8;
+
+block3:
+    return 44.i8;
+
+block4:
+    return v3;
+}

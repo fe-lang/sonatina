@@ -1,6 +1,6 @@
 use crate::machinst::{
     assemble::ObjectLayout,
-    lower::{FixupUpdate, LowerBackend, SectionLoweringCtx},
+    lower::{FixupUpdate, LowerBackend, LoweredFunction, SectionLoweringCtx},
     vcode::{SymFixup, SymFixupKind, VCodeFixup, VCodeInst},
 };
 use cranelift_entity::EntityRef;
@@ -60,7 +60,8 @@ pub fn link_section<B: LowerBackend>(
     }
 
     let mut sym_fixups: Vec<(FuncRef, VCodeInst, SymFixup)> = Vec::new();
-    let mut layout_funcs = Vec::with_capacity(funcs.len());
+    let mut lowered_funcs: Vec<(FuncRef, LoweredFunction<B::MInst>)> =
+        Vec::with_capacity(funcs.len());
 
     for &func in funcs {
         let lowered = {
@@ -81,10 +82,21 @@ pub fn link_section<B: LowerBackend>(
             sym_fixups.push((func, *insn, fixup.clone()));
         }
 
-        layout_funcs.push((func, lowered.vcode, lowered.block_order));
+        lowered_funcs.push((func, lowered));
     }
 
-    let mut layout = ObjectLayout::new(layout_funcs, 0);
+    let section_units = backend
+        .post_lower_section(module, funcs, &mut lowered_funcs, section_ctx)
+        .map_err(|error| LinkSectionError::Backend {
+            func: funcs[0],
+            error,
+        })?;
+    let layout_funcs = lowered_funcs
+        .into_iter()
+        .map(|(func, lowered)| (func, lowered.vcode, lowered.block_order))
+        .collect();
+
+    let mut layout = ObjectLayout::new(layout_funcs, section_units, 0);
 
     for iter in 0..MAX_ITERS {
         let _span = debug_span!("sonatina.codegen.link_section.relaxation_iter", iter).entered();
@@ -191,22 +203,16 @@ fn build_section_symtab<Op>(
     embeds: &[(EmbedSymbol, Vec<u8>)],
 ) -> Result<(FxHashMap<SymbolId, SymbolDef>, u32), String> {
     let mut symtab: FxHashMap<SymbolId, SymbolDef> = FxHashMap::default();
-
-    let mut code_end: u32 = 0;
     for &func in funcs {
         let offset = layout.func_offset(func);
         let size = layout
             .func_size(func)
             .ok_or_else(|| "missing function size".to_string())?;
 
-        let end = offset
-            .checked_add(size)
-            .ok_or_else(|| "function offset overflow".to_string())?;
-        code_end = code_end.max(end);
         symtab.insert(SymbolId::Func(func), SymbolDef { offset, size });
     }
 
-    let mut cursor = code_end;
+    let mut cursor = layout.code_end();
     for (gv, bytes) in data {
         let size: u32 = bytes
             .len()
@@ -277,17 +283,7 @@ fn build_section_observability<Op>(
         section_bytes,
     } = input;
 
-    let mut code_bytes: u32 = 0;
-    for &func in funcs {
-        let def = symtab
-            .get(&SymbolId::Func(func))
-            .ok_or_else(|| format!("missing function symbol for {:?}", func))?;
-        let end = def
-            .offset
-            .checked_add(def.size)
-            .ok_or_else(|| "function bounds overflow".to_string())?;
-        code_bytes = code_bytes.max(end);
-    }
+    let code_bytes = layout.code_end();
 
     let mut data_bytes = 0_u32;
     for (_, blob) in data {
@@ -385,6 +381,55 @@ fn build_section_observability<Op>(
                 ir_inst,
                 frontend_provenance: None,
                 unmapped_reason,
+            });
+        }
+    }
+
+    let synthetic_func_base = funcs
+        .iter()
+        .map(|func| func.as_u32())
+        .max()
+        .map_or(0, |max| max.saturating_add(1));
+    for (idx, (unit_id, unit)) in layout.section_units().iter().enumerate() {
+        let func = FuncRef::from_u32(
+            synthetic_func_base
+                .checked_add(idx as u32)
+                .expect("synthetic observability func ref overflow"),
+        );
+        let func_name = unit.name().to_string();
+        let layout = unit.layout();
+        let func_end = layout.end();
+
+        let mut ordered: Vec<(VCodeInst, BlockId)> = Vec::new();
+        for &block in layout.block_order() {
+            for insn in layout.block_insns(block) {
+                ordered.push((insn, block));
+            }
+        }
+
+        for (index, (insn, block)) in ordered.iter().copied().enumerate() {
+            let pc_start = layout.insn_offset(insn);
+            let pc_end = ordered
+                .get(index + 1)
+                .map(|(next, _)| layout.insn_offset(*next))
+                .unwrap_or(func_end);
+            if pc_end < pc_start {
+                return Err(format!(
+                    "pc interval reversed for section unit {:?} insn {:?}: [{pc_start}, {pc_end})",
+                    unit_id, insn
+                ));
+            }
+
+            pc_map.push(PcMapEntry {
+                pc_start,
+                pc_end,
+                func,
+                func_name: func_name.clone(),
+                block,
+                vcode_inst: insn,
+                ir_inst: None,
+                frontend_provenance: None,
+                unmapped_reason: Some(UnmappedReason::Synthetic),
             });
         }
     }

@@ -21,12 +21,13 @@ use sonatina_ir::{
 };
 
 use crate::{
+    analysis::known_bits::{KnownBits, KnownBitsQuery},
     cfg_edit::{CfgEditor, CleanupMode, remove_phi_incoming_from, simplify_trivial_phis_in_block},
     domtree::{DomTree, DominatorTreeTraversable},
     optim::{
         aggregate::{ObjectMemoryAnalysis, ObjectReadGvnKey},
         simplify_expr::{
-            SimplifyExprResult, simplify_binary_with_known_imm, simplify_cast,
+            ExprFactProvider, SimplifyExprResult, simplify_binary_with_facts, simplify_cast,
             simplify_unary_with_same_inner,
         },
     },
@@ -98,6 +99,35 @@ pub struct GvnSolver {
     may_be_undef_cache: RefCell<FxHashMap<ValueId, bool>>,
 }
 
+struct GvnExprFacts<'a, 'b> {
+    func: &'a Function,
+    solver: &'b GvnSolver,
+    known_bits: &'b KnownBitsQuery,
+}
+
+impl ExprFactProvider for GvnExprFacts<'_, '_> {
+    fn known_imm(&self, v: ValueId) -> Option<Immediate> {
+        self.func.dfg.value_imm(v)
+    }
+
+    fn known_bits(&self, func: &Function, v: ValueId) -> KnownBits {
+        if let Some(imm) = self.known_imm(v) {
+            return KnownBits::from_imm(imm);
+        }
+
+        debug_assert_eq!(func.dfg.value_ty(v), self.func.dfg.value_ty(v));
+        self.known_bits.for_value(func, v)
+    }
+
+    fn same_non_undef(&self, lhs: ValueId, rhs: ValueId) -> bool {
+        self.solver.same_non_undef(self.func, lhs, rhs)
+    }
+
+    fn may_be_undef(&self, v: ValueId) -> bool {
+        self.solver.may_be_undef(self.func, v)
+    }
+}
+
 impl GvnSolver {
     pub fn new() -> Self {
         Self {
@@ -162,6 +192,8 @@ impl GvnSolver {
             self.assign_class(arg, class);
         }
 
+        let known_bits = KnownBitsQuery::new(func);
+
         // Iterate all insns in RPO to assign ranks and analyze edges information.
         for &block in domtree.rpo() {
             // Assign rank to the block.
@@ -191,8 +223,10 @@ impl GvnSolver {
 
                             // Create predicate for each edges.
                             // TODO: We need more elaborate representation of predicate.
-                            let then_predicate = self.extract_edge_predicate(func, cond, true);
-                            let else_predicate = self.extract_edge_predicate(func, cond, false);
+                            let then_predicate =
+                                self.extract_edge_predicate(func, &known_bits, cond, true);
+                            let else_predicate =
+                                self.extract_edge_predicate(func, &known_bits, cond, false);
 
                             // Make immediates to which the predicate and `cond` is evaluated when the edge is selected.
                             let then_imm = self.make_imm(&mut func.dfg, true);
@@ -257,6 +291,7 @@ impl GvnSolver {
                         let result = self.reassign_congruence(
                             func,
                             domtree,
+                            &known_bits,
                             object_memory,
                             insn,
                             inst_result,
@@ -452,6 +487,7 @@ impl GvnSolver {
         &mut self,
         func: &mut Function,
         domtree: &DomTree,
+        known_bits: &KnownBitsQuery,
         object_memory: Option<&ObjectMemoryAnalysis>,
         insn: InstId,
         inst_result: ValueId,
@@ -467,6 +503,7 @@ impl GvnSolver {
             self.perform_symbolic_evaluation(
                 func,
                 domtree,
+                known_bits,
                 inst_to_gvn_key(func, insn),
                 result_idx,
                 block,
@@ -498,10 +535,11 @@ impl GvnSolver {
 
             // We need to recompute value phi for the class to reflect reachability changes and
             // leader changes.
-            value_phi_changed |= self.recompute_value_phi(func, &gvn_insn, inst_result, class);
+            value_phi_changed |=
+                self.recompute_value_phi(func, known_bits, &gvn_insn, inst_result, class);
             class
         } else if let Some(value_phi) =
-            ValuePhiFinder::new(self, inst_result).compute_value_phi(func, &gvn_insn)
+            ValuePhiFinder::new(self, known_bits, inst_result).compute_value_phi(func, &gvn_insn)
         {
             if let Some(class) = self.value_phi_table.get(&value_phi) {
                 *class
@@ -573,11 +611,13 @@ impl GvnSolver {
     fn recompute_value_phi(
         &mut self,
         func: &mut Function,
+        known_bits: &KnownBitsQuery,
         insn_data: &GvnInsn,
         inst_result: ValueId,
         class: Class,
     ) -> bool {
-        let value_phi = ValuePhiFinder::new(self, inst_result).compute_value_phi(func, insn_data);
+        let value_phi =
+            ValuePhiFinder::new(self, known_bits, inst_result).compute_value_phi(func, insn_data);
         self.update_class_value_phi(class, value_phi)
     }
 
@@ -777,6 +817,7 @@ impl GvnSolver {
         &mut self,
         func: &mut Function,
         domtree: &DomTree,
+        known_bits: &KnownBitsQuery,
         insn_expr: OwnedInstKey,
         result_idx: usize,
         block: BlockId,
@@ -840,7 +881,9 @@ impl GvnSolver {
 
         if let Some(imm) = self.perform_constant_folding(func, &insn_expr, result_idx) {
             GvnInsn::Value(imm)
-        } else if let Some(result) = self.perform_simplification(func, &insn_expr, result_idx) {
+        } else if let Some(result) =
+            self.perform_simplification(func, known_bits, &insn_expr, result_idx)
+        {
             result
         } else {
             GvnInsn::expr(insn_expr, result_idx)
@@ -1144,6 +1187,7 @@ impl GvnSolver {
     fn perform_simplification(
         &mut self,
         func: &mut Function,
+        known_bits: &KnownBitsQuery,
         insn_expr: &OwnedInstKey,
         result_idx: usize,
     ) -> Option<GvnInsn> {
@@ -1190,14 +1234,12 @@ impl GvnSolver {
             {
                 return Some(result);
             }
-            let simplified = simplify_binary_with_known_imm(
+            let facts = GvnExprFacts {
                 func,
-                kind,
-                lhs,
-                rhs,
-                |value| func.dfg.value_imm(value),
-                |lhs, rhs| self.same_non_undef(func, lhs, rhs),
-            );
+                solver: self,
+                known_bits,
+            };
+            let simplified = simplify_binary_with_facts(func, kind, lhs, rhs, &facts);
             if !simplified.is_no_change() {
                 return Some(self.simplify_expr_result_to_gvn(func, simplified));
             }
@@ -1580,6 +1622,7 @@ impl GvnSolver {
     fn extract_edge_predicate(
         &mut self,
         func: &mut Function,
+        known_bits: &KnownBitsQuery,
         cond: ValueId,
         edge_truth: bool,
     ) -> Option<PredicateRelation> {
@@ -1591,7 +1634,8 @@ impl GvnSolver {
         for _ in 0..16 {
             let (insn_expr, result_idx) = gvn_insn.expr_parts()?;
 
-            if let Some(simplified) = self.perform_simplification(func, insn_expr, result_idx)
+            if let Some(simplified) =
+                self.perform_simplification(func, known_bits, insn_expr, result_idx)
                 && let GvnInsn::Value(value) = simplified
                 && let Some((value_inst, value_result_idx)) = func.dfg.value_inst_result(value)
             {
@@ -2054,8 +2098,9 @@ struct GvnBlock {
 
 /// This struct finds value phi that described in
 /// `Detection of Redundant Expressions: A Complete and Polynomial-Time Algorithm in SSA`.
-struct ValuePhiFinder<'a> {
+struct ValuePhiFinder<'a, 'b> {
     solver: &'a mut GvnSolver,
+    known_bits: &'b KnownBitsQuery,
     /// Hold visited values to prevent infinite loop in `get_phi_of`.
     visited: FxHashSet<ValueId>,
     /// Hold visited queries to prevent infinite recursion in
@@ -2063,12 +2108,17 @@ struct ValuePhiFinder<'a> {
     visited_queries: FxHashSet<GvnInsn>,
 }
 
-impl<'a> ValuePhiFinder<'a> {
-    fn new(solver: &'a mut GvnSolver, inst_result: ValueId) -> Self {
+impl<'a, 'b> ValuePhiFinder<'a, 'b> {
+    fn new(
+        solver: &'a mut GvnSolver,
+        known_bits: &'b KnownBitsQuery,
+        inst_result: ValueId,
+    ) -> Self {
         let mut visited = FxHashSet::default();
         visited.insert(inst_result);
         Self {
             solver,
+            known_bits,
             visited,
             visited_queries: FxHashSet::default(),
         }
@@ -2151,7 +2201,7 @@ impl<'a> ValuePhiFinder<'a> {
             }
         }
 
-        Some(result.canonicalize())
+        result.canonicalize()
     }
 
     fn compute_value_phi_for_binary<F>(
@@ -2249,7 +2299,7 @@ impl<'a> ValuePhiFinder<'a> {
             }
         }
 
-        Some(result.canonicalize())
+        result.canonicalize()
     }
 
     fn compute_value_phi_for_cast<F>(
@@ -2283,7 +2333,7 @@ impl<'a> ValuePhiFinder<'a> {
             }
         }
 
-        Some(result.canonicalize())
+        result.canonicalize()
     }
 
     /// Lookup value phi argument.
@@ -2293,7 +2343,8 @@ impl<'a> ValuePhiFinder<'a> {
             if let Some(imm) = self.solver.perform_constant_folding(func, &key, result_idx) {
                 return Some(ValuePhi::Value(imm));
             } else if let Some(simplified) =
-                self.solver.perform_simplification(func, &key, result_idx)
+                self.solver
+                    .perform_simplification(func, self.known_bits, &key, result_idx)
             {
                 if let GvnInsn::Value(value) = simplified {
                     return Some(ValuePhi::Value(value));
@@ -2335,7 +2386,8 @@ impl<'a> ValuePhiFinder<'a> {
     /// is annotated with `ValuePhi`.
     /// The result reflects the reachability of the incoming edges,
     /// i.e. if a phi arg pass through an unreachable incoming edge, then the arg and blocks
-    /// are omitted from the result.
+    /// are omitted from the result. If no incoming edge to the phi remains reachable, returns
+    /// `None`.
     ///
     /// The result is sorted in the block order.
     fn get_phi_of(&mut self, func: &Function, value: ValueId) -> Option<ValuePhi> {
@@ -2364,7 +2416,7 @@ impl<'a> ValuePhiFinder<'a> {
                     }
                 }
 
-                return Some(result.canonicalize());
+                return result.canonicalize();
             };
 
             // If the value is annotated with value phi, then return it.
@@ -2408,8 +2460,8 @@ impl ValuePhiInsn {
     }
 
     /// Canonicalize the value phi insn and convert into value phi.
-    fn canonicalize(mut self) -> ValuePhi {
-        let first_arg = &self.args[0].0;
+    fn canonicalize(mut self) -> Option<ValuePhi> {
+        let first_arg = &self.args.first()?.0;
 
         // If all arguments are the same, then return first argument.
         if self
@@ -2417,11 +2469,11 @@ impl ValuePhiInsn {
             .iter()
             .all(|(value_phi, _)| value_phi == first_arg)
         {
-            first_arg.clone()
+            Some(first_arg.clone())
         } else {
             // Sort arguments in block order.
             self.args.sort_by_key(|(_, block)| *block);
-            ValuePhi::PhiInsn(self)
+            Some(ValuePhi::PhiInsn(self))
         }
     }
 }
@@ -2921,7 +2973,10 @@ mod tests {
         BinaryInstKind, ClassData, GvnInsn, GvnSolver, InstClassKind, ValuePhi, ValuePhiFinder,
         inst_to_gvn_key,
     };
-    use crate::domtree::DomTree;
+    use crate::{
+        analysis::known_bits::{KnownBitsQuery, count_query_news_for_test},
+        domtree::DomTree,
+    };
     use sonatina_ir::{ControlFlowGraph, Immediate, Type, ValueId};
     use sonatina_parser::parse_module;
 
@@ -2942,6 +2997,48 @@ mod tests {
         assert!(solver.update_class_value_phi(class, None));
         assert!(!solver.value_phi_table.contains_key(&phi2));
         assert!(!solver.update_class_value_phi(class, None));
+    }
+
+    #[test]
+    fn gvn_reuses_one_known_bits_query_for_analysis() {
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-london"
+
+func public %f(v0.i256) -> i256 {
+block0:
+    v1.i256 = shr 224.i256 v0;
+    v2.i256 = and v1 4294967295.i256;
+    v3.i1 = eq v2 0.i256;
+    br v3 block1 block2;
+
+block1:
+    return v2;
+
+block2:
+    v4.i256 = and v2 4294967295.i256;
+    return v4;
+}
+"#,
+        )
+        .expect("module parses");
+        let func_ref = parsed.module.funcs()[0];
+
+        parsed.module.func_store.modify(func_ref, |func| {
+            let mut cfg = ControlFlowGraph::default();
+            cfg.compute(func);
+            let mut domtree = DomTree::default();
+            domtree.compute(&cfg);
+
+            let (_, query_news) = count_query_news_for_test(|| {
+                let mut solver = GvnSolver::new();
+                solver.run(func, &mut cfg, &mut domtree);
+            });
+            assert_eq!(
+                query_news, 1,
+                "GVN should build one known-bits snapshot per run"
+            );
+        });
     }
 
     #[test]
@@ -3030,7 +3127,9 @@ func private %entry(v0.i32, v1.i32) -> i32 {
                 Some(stale_phi.clone()),
             );
 
-            let result = solver.reassign_congruence(func, &domtree, None, add_inst, add_result);
+            let known_bits = KnownBitsQuery::new(func);
+            let result =
+                solver.reassign_congruence(func, &domtree, &known_bits, None, add_inst, add_result);
             assert!(result.changed);
             assert!(result.class_changed);
             assert!(result.value_phi_changed);
@@ -3099,9 +3198,70 @@ func private %entry(v0.i1) -> i32 {
             let class = solver.make_class(GvnInsn::expr(phi_key, 0), None);
             solver.assign_class(phi_value, class);
 
-            let mut finder = ValuePhiFinder::new(&mut solver, func.arg_values[0]);
+            let known_bits = KnownBitsQuery::new(func);
+            let mut finder = ValuePhiFinder::new(&mut solver, &known_bits, func.arg_values[0]);
             assert!(finder.get_phi_of(func, phi_value).is_some());
             assert!(finder.get_phi_of(func, phi_value).is_some());
+        });
+    }
+
+    #[test]
+    fn value_phi_finder_returns_none_when_phi_has_no_reachable_args() {
+        let source = r#"
+target = "evm-ethereum-london"
+
+func private %entry(v0.i1) -> i32 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        jump block3;
+
+    block2:
+        jump block3;
+
+    block3:
+        v1.i32 = phi (1.i32 block1) (2.i32 block2);
+        return v1;
+}
+"#;
+
+        let module = parse_module(source).expect("parse should succeed").module;
+        let func_ref = module.funcs()[0];
+        module.func_store.modify(func_ref, |func| {
+            let mut solver = GvnSolver::new();
+            solver.classes.push(ClassData {
+                values: BTreeSet::new(),
+                gvn_insn: GvnInsn::Value(ValueId(u32::MAX)),
+                value_phi: None,
+            });
+
+            let phi_inst = func
+                .layout
+                .iter_block()
+                .flat_map(|block| func.layout.iter_inst(block))
+                .find(|&inst| func.dfg.is_phi(inst))
+                .expect("test function should contain a phi instruction");
+            let phi_value = func
+                .dfg
+                .inst_result(phi_inst)
+                .expect("test function should contain a phi result");
+            let phi_block = func.layout.inst_block(phi_inst);
+            let phi_key = inst_to_gvn_key(func, phi_inst);
+            let phi_args = phi_key
+                .phi_args()
+                .expect("phi instruction should have args");
+
+            for &(_, from) in phi_args {
+                solver.add_edge_info(from, phi_block, None, None, None);
+            }
+
+            let class = solver.make_class(GvnInsn::expr(phi_key, 0), None);
+            solver.assign_class(phi_value, class);
+
+            let known_bits = KnownBitsQuery::new(func);
+            let mut finder = ValuePhiFinder::new(&mut solver, &known_bits, func.arg_values[0]);
+            assert_eq!(finder.get_phi_of(func, phi_value), None);
         });
     }
 

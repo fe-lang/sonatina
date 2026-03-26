@@ -1,0 +1,40 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: "String::from_utf8(out).unwrap()"
+input_file: test_files/evm/late_block_dedup_revert_fanout.sntn
+---
+evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
+
+object: Contract
+  section runtime: 17 bytes
+  total: 17 bytes
+
+functions:
+  entry: ir_blocks=5 ir_insts=8 vcode_ops=23 fixups=2 imm_bytes=1
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
+
+evm:
+  case default: calldata_len=0 revert gas_used=21029 output_len=0 tx_gas=21000 runtime_gas=29
+
+
+--------------- DEBUG ---------------
+
+// func public %entry()
+entry:
+  block0:
+    PUSH0  // v0.i256 = evm_calldata_load 0.i256;
+    CALLDATALOAD
+    DUP1  // v1.i1 = is_zero v0;
+    ISZERO
+    PUSH1 block4  // br v1 block1 block2;
+    JUMPI
+  block2:
+    PUSH1 0x1 (1)  // v2.i1 = eq 1.i256 v0;
+    EQ
+    PUSH1 block4  // br v2 block3 block4;
+    JUMPI
+  block4:
+    JUMPDEST
+    PUSH0  // evm_revert 0.i256 0.i256;
+    PUSH0
+    REVERT

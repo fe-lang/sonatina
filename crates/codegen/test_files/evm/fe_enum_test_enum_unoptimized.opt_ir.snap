@@ -29,12 +29,12 @@ func private %__EnumContract_runtime() {
     block0:
         v31.i256 = call %calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_len 0.i256;
         v32.i1 = lt v31 4.i256;
-        br v32 block7 block8;
+        br v32 block10 block11;
 
-    block7:
+    block10:
         evm_revert 0.i256 0.i256;
 
-    block8:
+    block11:
         v33.i256 = call %calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_word_at 0.i256 0.i256;
         v35.i256 = shr 224.i256 v33;
         v36.i32 = trunc v35 i32;

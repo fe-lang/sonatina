@@ -1,0 +1,33 @@
+#! evm.config: { vcode: true, opt: s, stackify_trace: false }
+#! evm.case: default
+#!   calldata:
+#!   expect: revert 0x00000000000000000000000000000000000000000000000000000000000000aa000000000000000000000000000000000000000000000000000000000000001100000000000000000000000000000000000000000000000000000000000000220000000000000000000000000000000000000000000000000000000000000033
+
+target = "evm-ethereum-osaka"
+
+func public %entry() {
+block0:
+    v0.i256 = evm_calldata_load 0.i32;
+    v1.i1 = eq v0 0.i256;
+    br v1 block1 block2;
+
+block1:
+    mstore 0.i256 170.i256 i256;
+    mstore 32.i256 17.i256 i256;
+    mstore 64.i256 34.i256 i256;
+    mstore 96.i256 51.i256 i256;
+    evm_revert 0.i256 128.i256;
+
+block2:
+    mstore 0.i256 187.i256 i256;
+    mstore 32.i256 17.i256 i256;
+    mstore 64.i256 34.i256 i256;
+    mstore 96.i256 51.i256 i256;
+    evm_revert 0.i256 128.i256;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}

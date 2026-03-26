@@ -4,6 +4,7 @@ use smallvec::SmallVec;
 use sonatina_ir::{
     Function, I256, Immediate, Inst, InstId, Module, Type, U256, Value, ValueId,
     inst::{
+        BinaryInstKind, UnaryInstKind,
         arith::{
             self, Add, Mul, Neg, Saddsat, Sdiv, Smod, Smulsat, Ssubsat, Sub, Uaddsat, Udiv, Umod,
             Umulsat, Usubsat,
@@ -145,6 +146,22 @@ fn legalize_immediate(imm: sonatina_ir::Immediate) -> sonatina_ir::Immediate {
         Type::EnumTag(_) => unreachable!(),
         Type::Compound(_) | Type::Unit => unreachable!(),
     }
+}
+
+fn low_mask(bits: u16) -> U256 {
+    match bits {
+        0 => U256::zero(),
+        256 => !U256::zero(),
+        bits => (U256::one() << usize::from(bits)) - U256::one(),
+    }
+}
+
+fn low_mask_bits(func: &Function, value: ValueId) -> Option<u16> {
+    let imm = func.dfg.value_imm(value)?;
+    let ones = imm.as_i256().to_u256();
+    [1u16, 8, 16, 32, 64, 128, 256]
+        .into_iter()
+        .find(|&bits| ones == low_mask(bits))
 }
 
 pub(crate) fn legalize_evm_section(module: &Module, funcs: &[FuncRef]) {
@@ -596,11 +613,7 @@ impl<'a> FunctionLegalizer<'a> {
     }
 
     fn mask_value(&mut self, bits: u16) -> ValueId {
-        let mask = if bits == 256 {
-            !U256::zero()
-        } else {
-            (U256::one() << usize::from(bits)) - U256::one()
-        };
+        let mask = low_mask(bits);
         self.imm_i256(mask)
     }
 
@@ -800,6 +813,10 @@ impl<'a> FunctionLegalizer<'a> {
         match width {
             ScalarWidth::Full256 => value,
             ScalarWidth::Narrow(bits) => {
+                if self.value_fits_narrow_locally(value, bits) {
+                    return value;
+                }
+
                 let mask = self.mask_value(bits);
                 self.insert_before_one(
                     before,
@@ -809,6 +826,10 @@ impl<'a> FunctionLegalizer<'a> {
                 )
             }
             ScalarWidth::Bool => {
+                if self.value_is_local_bool(value) {
+                    return value;
+                }
+
                 let one = self.one_i256();
                 let masked = self.insert_before_one(
                     before,
@@ -825,6 +846,81 @@ impl<'a> FunctionLegalizer<'a> {
                 )
             }
         }
+    }
+
+    fn value_fits_narrow_locally(&self, value: ValueId, target_bits: u16) -> bool {
+        if self
+            .func
+            .dfg
+            .value_imm(value)
+            .is_some_and(|imm| imm.as_i256().to_u256() & !low_mask(target_bits) == U256::zero())
+        {
+            return true;
+        }
+
+        if self.width_of(value).is_some_and(|width| {
+            matches!(width, ScalarWidth::Bool)
+                || matches!(width, ScalarWidth::Narrow(bits) if bits <= target_bits)
+        }) {
+            return true;
+        }
+
+        let Value::Inst { inst, .. } = self.func.dfg.value(value) else {
+            return false;
+        };
+
+        if let Some((lhs, rhs)) =
+            downcast::<&logic::And>(self.evm_inst_set(), self.func.dfg.inst(*inst))
+                .map(|i| (*i.lhs(), *i.rhs()))
+        {
+            return low_mask_bits(self.func, lhs)
+                .or_else(|| low_mask_bits(self.func, rhs))
+                .is_some_and(|bits| bits <= target_bits);
+        }
+
+        if let Some((bits, _input)) =
+            downcast::<&arith::Shr>(self.evm_inst_set(), self.func.dfg.inst(*inst))
+                .map(|i| (*i.bits(), *i.value()))
+            && let Some(shift) = self.func.dfg.value_imm(bits)
+        {
+            let shift = shift.as_i256().to_u256();
+            if shift <= U256::from(256u16) {
+                let fit_bits = 256u16.saturating_sub(shift.as_usize() as u16);
+                return fit_bits <= target_bits;
+            }
+        }
+
+        if let Some(bitcast) = downcast::<&Bitcast>(self.evm_inst_set(), self.func.dfg.inst(*inst))
+        {
+            return self.func.dfg.value_ty(*bitcast.from()) == Type::I1 && target_bits >= 1;
+        }
+
+        false
+    }
+
+    fn value_is_local_bool(&self, value: ValueId) -> bool {
+        if self.width_of(value) == Some(ScalarWidth::Bool) {
+            return true;
+        }
+
+        let Value::Inst { inst, .. } = self.func.dfg.value(value) else {
+            return false;
+        };
+        matches!(
+            self.func.dfg.inst(*inst).kind(),
+            sonatina_ir::inst::InstClassKind::Binary(
+                BinaryInstKind::Eq
+                    | BinaryInstKind::Ne
+                    | BinaryInstKind::Lt
+                    | BinaryInstKind::Gt
+                    | BinaryInstKind::Slt
+                    | BinaryInstKind::Sgt
+                    | BinaryInstKind::Le
+                    | BinaryInstKind::Ge
+                    | BinaryInstKind::Sle
+                    | BinaryInstKind::Sge
+            ) | sonatina_ir::inst::InstClassKind::Unary(UnaryInstKind::IsZero)
+        )
     }
 
     fn rewrite_uaddo(&mut self, inst: InstId, lhs: ValueId, rhs: ValueId) {

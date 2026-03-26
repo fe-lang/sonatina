@@ -1,6 +1,5 @@
-use cranelift_entity::SecondaryMap;
 use sonatina_ir::{
-    BlockId, ControlFlowGraph, Function,
+    BlockId, ControlFlowGraph, Function, InstDowncast,
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
     inst::control_flow::Unreachable,
     module::FuncAttrs,
@@ -26,17 +25,14 @@ impl CfgCleanup {
 
         let mut changed = editor.trim_after_terminator();
         changed |= ensure_blocks_terminated(editor.func_mut(), self.mode);
-        changed |= trim_after_noreturn_call(editor.func_mut());
         if changed {
             editor.recompute_cfg();
         }
 
-        let reachable = editor.cfg().reachable_blocks();
-        let pruned_unreachable = prune_unreachable(editor.func_mut(), &reachable);
+        changed |= trim_after_noreturn_call(&mut editor);
+
+        let pruned_unreachable = prune_unreachable(&mut editor);
         changed |= pruned_unreachable;
-        if pruned_unreachable {
-            editor.recompute_cfg();
-        }
 
         let blocks: Vec<_> = editor.func().layout.iter_block().collect();
         for block in blocks {
@@ -96,59 +92,99 @@ fn merge_linear_blocks(editor: &mut CfgEditor) -> bool {
     changed
 }
 
-fn trim_after_noreturn_call(func: &mut Function) -> bool {
-    let blocks: Vec<_> = func.layout.iter_block().collect();
+fn trim_after_noreturn_call(editor: &mut CfgEditor<'_>) -> bool {
     let mut changed = false;
 
-    for block in blocks {
-        let mut next_inst = func.layout.first_inst_of(block);
-        while let Some(inst) = next_inst {
-            next_inst = func.layout.next_inst_of(inst);
-
-            let Some(call_info) = func.dfg.call_info(inst) else {
-                continue;
-            };
-            let callee = call_info.callee();
-            if !func.ctx().func_attrs(callee).contains(FuncAttrs::NORETURN) {
+    'restart: loop {
+        let blocks: Vec<_> = editor.func().layout.iter_block().collect();
+        for block in blocks {
+            if !editor.func().layout.is_block_inserted(block) {
                 continue;
             }
 
-            let mut to_remove = Vec::new();
-            let mut cursor = func.layout.next_inst_of(inst);
-            while let Some(after) = cursor {
-                to_remove.push(after);
-                cursor = func.layout.next_inst_of(after);
-            }
+            let mut next_inst = editor.func().layout.first_inst_of(block);
+            while let Some(inst) = next_inst {
+                next_inst = editor.func().layout.next_inst_of(inst);
 
-            for &inst in &to_remove {
-                func.layout.remove_inst(inst);
-            }
-            func.erase_insts(&to_remove);
+                let Some(call_info) = editor.func().dfg.call_info(inst) else {
+                    continue;
+                };
+                let callee = call_info.callee();
+                if !editor
+                    .func()
+                    .ctx()
+                    .func_attrs(callee)
+                    .contains(FuncAttrs::NORETURN)
+                {
+                    continue;
+                }
 
-            let unreachable = Unreachable::new_unchecked(func.inst_set());
-            InstInserter::at_location(CursorLocation::BlockBottom(block))
-                .insert_inst_data(func, unreachable);
-            changed = true;
-            break;
+                let Some(after) = editor.func().layout.next_inst_of(inst) else {
+                    continue;
+                };
+                let already_normalized = editor.func().layout.next_inst_of(after).is_none()
+                    && <&Unreachable as InstDowncast>::downcast(
+                        editor.func().inst_set(),
+                        editor.func().dfg.inst(after),
+                    )
+                    .is_some();
+                if already_normalized {
+                    continue;
+                }
+
+                let (_, cont_block) = editor.split_block_at(after);
+                let term = editor
+                    .func()
+                    .layout
+                    .last_inst_of(block)
+                    .expect("split block should end with a jump");
+                let jump = editor
+                    .func()
+                    .dfg
+                    .cast_jump(term)
+                    .expect("split block terminator should be a jump");
+                debug_assert_eq!(*jump.dest(), cont_block);
+
+                InstInserter::at_location(CursorLocation::At(term)).remove_inst(editor.func_mut());
+
+                let inst_set = editor.func().inst_set();
+                InstInserter::at_location(CursorLocation::BlockBottom(block))
+                    .insert_inst_data(editor.func_mut(), Unreachable::new_unchecked(inst_set));
+
+                editor.recompute_cfg();
+                let unreachable = collect_unreachable_blocks(editor);
+                if !unreachable.is_empty() {
+                    editor.delete_blocks_unreachable(&unreachable);
+                }
+
+                changed = true;
+                continue 'restart;
+            }
         }
+
+        break;
     }
 
     changed
 }
 
-fn prune_unreachable(func: &mut Function, reachable: &SecondaryMap<BlockId, bool>) -> bool {
-    let blocks: Vec<_> = func.layout.iter_block().collect();
-    let mut changed = false;
-    let mut editor = CfgEditor::new(func, CleanupMode::RepairWithUndef);
+fn collect_unreachable_blocks(editor: &CfgEditor<'_>) -> Vec<BlockId> {
+    let reachable = editor.cfg().reachable_blocks();
+    editor
+        .func()
+        .layout
+        .iter_block()
+        .filter(|block| !reachable[*block])
+        .collect()
+}
 
-    for block in blocks {
-        if reachable[block] {
-            continue;
-        }
-        changed |= editor.delete_block_unreachable(block);
+fn prune_unreachable(editor: &mut CfgEditor<'_>) -> bool {
+    let unreachable = collect_unreachable_blocks(editor);
+    if unreachable.is_empty() {
+        return false;
     }
 
-    changed
+    editor.delete_blocks_unreachable(&unreachable)
 }
 
 fn ensure_blocks_terminated(func: &mut Function, mode: CleanupMode) -> bool {
@@ -272,6 +308,7 @@ mod tests {
     use sonatina_ir::{
         InstDowncast, Module,
         inst::control_flow::{Return, Unreachable},
+        ir_writer::FuncWriter,
         module::FuncRef,
     };
     use sonatina_parser::parse_module;
@@ -341,6 +378,92 @@ func private %caller() {
                     .count(),
                 0
             );
+        });
+    }
+
+    #[test]
+    fn trims_noreturn_split_continuation_without_undef() {
+        let module = parse(
+            r#"
+target = "evm-ethereum-osaka"
+
+func private %run() -> i256 {
+block0:
+    evm_return 0.i256 0.i256;
+}
+
+func private %test_run() {
+block0:
+    v0.i256 = call %run;
+    v3.i1 = eq v0 2.i256;
+    jump block2;
+
+block2:
+    v4.i1 = is_zero v3;
+    br v4 block3 block4;
+
+block3:
+    evm_revert 0.i256 0.i256;
+
+block4:
+    jump block1;
+
+block1:
+    return;
+}
+"#,
+        );
+        crate::analysis::func_behavior::analyze_module(&module);
+
+        let test_run = find_func(&module, "test_run");
+        module.func_store.modify(test_run, |func| {
+            assert!(CfgCleanup::new(CleanupMode::RepairWithUndef).run(func));
+
+            let dumped = FuncWriter::new(test_run, func).dump_string();
+            assert!(dumped.contains("unreachable;"));
+            assert!(!dumped.contains("eq "));
+            assert!(!dumped.contains("is_zero "));
+            assert!(!dumped.contains("undef"));
+            assert_eq!(func.layout.iter_block().count(), 1);
+        });
+    }
+
+    #[test]
+    fn prunes_multi_block_unreachable_region_as_closed_set() {
+        let module = parse(
+            r#"
+target = "evm-ethereum-osaka"
+
+func private %dead_region() {
+block0:
+    return;
+
+block1:
+    v0.i1 = eq 1.i256 2.i256;
+    jump block2;
+
+block2:
+    v1.i1 = is_zero v0;
+    br v1 block3 block4;
+
+block3:
+    return;
+
+block4:
+    return;
+}
+"#,
+        );
+
+        let dead_region = find_func(&module, "dead_region");
+        module.func_store.modify(dead_region, |func| {
+            assert!(CfgCleanup::new(CleanupMode::RepairWithUndef).run(func));
+
+            let dumped = FuncWriter::new(dead_region, func).dump_string();
+            assert!(!dumped.contains("eq "));
+            assert!(!dumped.contains("is_zero "));
+            assert!(!dumped.contains("undef"));
+            assert_eq!(func.layout.iter_block().count(), 1);
         });
     }
 }

@@ -20,7 +20,6 @@ func private %ark(v0.*[i256; 3], v1.i256) -> *[i256; 3] {
         v8.i256 = sym_size $__fe_const_data_0;
         v9.i256 = ptr_to_int v6 i256;
         evm_code_copy v9 v7 v8;
-        v10.*[i256; 24] = bitcast v6 *[i256; 24];
         v12.i1 = lt v1 24.i256;
         br v12 block2 block1;
 
@@ -28,24 +27,22 @@ func private %ark(v0.*[i256; 3], v1.i256) -> *[i256; 3] {
         evm_revert 0.i256 0.i256;
 
     block2:
-        v14.*i256 = gep v10 0.i256 v1;
+        v58.*[i256; 24] = bitcast v6 *[i256; 24];
+        v14.*i256 = gep v58 0.i256 v1;
         v15.i256 = mload v14 i256;
-        v18.i256 = evm_add_mod v4 v15 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
+        v18.i256 = evm_add_mod v15 v4 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
         v21.*i256 = gep v0 0.i256 1.i256;
         v22.i256 = mload v21 i256;
         v23.*i8 = evm_malloc 768.i256;
         v26.i256 = ptr_to_int v23 i256;
         evm_code_copy v26 v7 v8;
-        v27.*[i256; 24] = bitcast v23 *[i256; 24];
-        (v29.i256, v30.i1) = uaddo v1 1.i256;
-        br v30 block1 block3;
-
-    block3:
-        v32.i1 = lt v29 24.i256;
+        v59.i256 = add 1.i256 v1;
+        v32.i1 = lt v59 24.i256;
         br v32 block4 block1;
 
     block4:
-        v34.*i256 = gep v27 0.i256 v29;
+        v60.*[i256; 24] = bitcast v23 *[i256; 24];
+        v34.*i256 = gep v60 0.i256 v59;
         v35.i256 = mload v34 i256;
         v37.i256 = evm_add_mod v22 v35 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
         v40.*i256 = gep v0 0.i256 2.i256;
@@ -53,16 +50,13 @@ func private %ark(v0.*[i256; 3], v1.i256) -> *[i256; 3] {
         v42.*i8 = evm_malloc 768.i256;
         v45.i256 = ptr_to_int v42 i256;
         evm_code_copy v45 v7 v8;
-        v46.*[i256; 24] = bitcast v42 *[i256; 24];
-        (v48.i256, v49.i1) = uaddo v1 2.i256;
-        br v49 block1 block5;
-
-    block5:
-        v51.i1 = lt v48 24.i256;
+        v62.i256 = add 2.i256 v1;
+        v51.i1 = lt v62 24.i256;
         br v51 block6 block1;
 
     block6:
-        v53.*i256 = gep v46 0.i256 v48;
+        v63.*[i256; 24] = bitcast v42 *[i256; 24];
+        v53.*i256 = gep v63 0.i256 v62;
         v54.i256 = mload v53 i256;
         v56.i256 = evm_add_mod v41 v54 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
         v58.*i8 = evm_malloc 96.i256;
@@ -157,13 +151,25 @@ func private %mix(v0.*[i256; 3]) -> *[i256; 3] {
 
 func private %poseidon_mock(v0.i256, v1.i256) -> i256 {
     block0:
-        (v3.i256, v4.i1) = evm_umodo v0 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
-        br v4 block9 block10;
+        v54.i256 = evm_umod v0 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
+        v56.i256 = evm_umod v1 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
+        v10.*i8 = evm_malloc 96.i256;
+        v11.*[i256; 3] = bitcast v10 *[i256; 3];
+        v13.*i256 = bitcast v11 *i256;
+        mstore v13 v54 i256;
+        v15.*i256 = gep v11 0.i256 1.i256;
+        mstore v15 v56 i256;
+        v17.*i256 = gep v11 0.i256 2.i256;
+        mstore v17 0.i256 i256;
+        v22.*i8 = evm_malloc 32.i256;
+        mstore v22 2.i256 i256;
+        v24.i256 = call %range_known_const_s__usize___unknown__h4e84f6b6b8307914_seq_ha637d2df505bccf2_len__0__fc6647014fb554e5 v22;
+        jump block1;
 
     block1:
-        v66.i256 = phi (0.i256 block11) (v36 block3);
-        v63.*[i256; 3] = phi (v11 block11) (v34 block3);
-        v25.i256 = phi (0.i256 block11) (v39 block3);
+        v66.i256 = phi (0.i256 block0) (v36 block3);
+        v63.*[i256; 3] = phi (v11 block0) (v34 block3);
+        v25.i256 = phi (0.i256 block0) (v39 block3);
         v27.i1 = lt v25 v24;
         br v27 block2 block14;
 
@@ -203,24 +209,6 @@ func private %poseidon_mock(v0.i256, v1.i256) -> i256 {
 
     block9:
         evm_revert 0.i256 0.i256;
-
-    block10:
-        (v7.i256, v8.i1) = evm_umodo v1 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
-        br v8 block9 block11;
-
-    block11:
-        v10.*i8 = evm_malloc 96.i256;
-        v11.*[i256; 3] = bitcast v10 *[i256; 3];
-        v13.*i256 = bitcast v11 *i256;
-        mstore v13 v3 i256;
-        v15.*i256 = gep v11 0.i256 1.i256;
-        mstore v15 v7 i256;
-        v17.*i256 = gep v11 0.i256 2.i256;
-        mstore v17 0.i256 i256;
-        v22.*i8 = evm_malloc 32.i256;
-        mstore v22 2.i256 i256;
-        v24.i256 = call %range_known_const_s__usize___unknown__h4e84f6b6b8307914_seq_ha637d2df505bccf2_len__0__fc6647014fb554e5 v22;
-        jump block1;
 
     block14:
         v42.*i8 = evm_malloc 32.i256;

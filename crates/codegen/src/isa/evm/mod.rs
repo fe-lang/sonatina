@@ -1,5 +1,7 @@
 mod heap_plan;
 mod late_alias;
+mod late_block_merge;
+mod late_section_merge;
 mod lazy_frame;
 mod legalize;
 pub use late_alias::canonicalize_alias_value;
@@ -31,7 +33,9 @@ use crate::{
     liveness::{InstLiveness, Liveness},
     loop_analysis::LoopTree,
     machinst::{
-        lower::{FixupUpdate, Lower, LowerBackend, LoweredFunction, SectionLoweringCtx},
+        lower::{
+            FixupUpdate, Lower, LowerBackend, LoweredFunction, SectionCodeUnit, SectionLoweringCtx,
+        },
         vcode::{Label, SymFixup, SymFixupKind, VCode, VCodeFixup, VCodeInst},
     },
     module_analysis::{CallGraph, SccBuilder},
@@ -42,9 +46,15 @@ use crate::{
             ObjectLowerToMemory, ObjectReturnOutParam, assert_aggregate_legalized,
             collect_local_object_arg_info_with_effects, compute_object_effect_summaries, shape,
         },
+        branch_canonicalize::BranchCanonicalize,
         cfg_cleanup::CfgCleanup,
+        checked_arith_elim::{CheckedArithElim, has_supported_checked_arith},
         dead_arg::{DeadArgElimConfig, run_dead_arg_elim},
+        gvn::GvnSolver,
+        known_bits_simplify::KnownBitsSimplify,
+        licm::LicmSolver,
         load_store::LoadStoreSolver,
+        loop_strength_reduce::LoopStrengthReduce,
         sccp::SccpSolver,
     },
     stackalloc::{Action, Actions, Allocator, StackifyAlloc, StackifyBuilder},
@@ -64,6 +74,8 @@ use sonatina_triple::{EvmVersion, OperatingSystem};
 
 use cranelift_entity::{EntityList, SecondaryMap};
 use late_alias::compute_evm_late_aliases;
+use late_block_merge::run_late_block_merge;
+use late_section_merge::run_late_section_terminal_outline;
 use lazy_frame::{FrameSite, FrameSummary, LazyFramePlan, compute_frame_summary};
 use legalize::legalize_evm_section;
 use mem_effects::compute_func_mem_effects;
@@ -81,6 +93,13 @@ pub enum PushWidthPolicy {
     #[default]
     Push4,
     MinimalRelax,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LateCleanupProfile {
+    Off,
+    Speed,
+    Size,
 }
 
 #[derive(Clone)]
@@ -172,7 +191,7 @@ pub struct EvmBackend {
     isa: Evm,
     stackify_reach_depth: u8,
     arena_cost_model: ArenaCostModel,
-    enable_late_cleanup_optimizations: bool,
+    late_cleanup_profile: LateCleanupProfile,
     section_state: RefCell<Option<PreparedSection>>,
     current_mem_plan: RefCell<Option<FuncMemPlan>>,
     current_frame_summary: RefCell<Option<FrameSummary>>,
@@ -193,7 +212,7 @@ impl EvmBackend {
             isa,
             stackify_reach_depth: 16,
             arena_cost_model: ArenaCostModel::default(),
-            enable_late_cleanup_optimizations: true,
+            late_cleanup_profile: LateCleanupProfile::Speed,
             section_state: RefCell::new(None),
             current_mem_plan: RefCell::new(None),
             current_frame_summary: RefCell::new(None),
@@ -211,8 +230,17 @@ impl EvmBackend {
         self
     }
 
+    pub fn with_late_cleanup_profile(mut self, profile: LateCleanupProfile) -> Self {
+        self.late_cleanup_profile = profile;
+        self
+    }
+
     pub fn with_late_cleanup_optimizations(mut self, enable: bool) -> Self {
-        self.enable_late_cleanup_optimizations = enable;
+        self.late_cleanup_profile = if enable {
+            LateCleanupProfile::Speed
+        } else {
+            LateCleanupProfile::Off
+        };
         self
     }
 
@@ -769,7 +797,7 @@ impl EvmBackend {
             aliases: block_aliases,
             emitted_block_order,
         } = alias_plan;
-        let emitted_block_order = if self.enable_late_cleanup_optimizations {
+        let mut emitted_block_order = if self.late_cleanup_profile != LateCleanupProfile::Off {
             module.func_store.view(func, |function| {
                 rewrite_evm_local_fallthrough_layout(function, &block_aliases, emitted_block_order)
             })
@@ -804,6 +832,22 @@ impl EvmBackend {
                 trace_span!("sonatina.codegen.evm.lower_prepared_function.prune_redundant_opcodes")
                     .entered();
             prune_redundant_opcode_sequences(&mut vcode, &emitted_block_order);
+        }
+        if self.late_cleanup_profile != LateCleanupProfile::Off {
+            let _span =
+                trace_span!("sonatina.codegen.evm.lower_prepared_function.late_block_merge")
+                    .entered();
+            module.func_store.view(func, |function| {
+                run_late_block_merge(
+                    &mut vcode,
+                    &mut emitted_block_order,
+                    function
+                        .layout
+                        .entry_block()
+                        .expect("prepared lowering requires an entry block"),
+                    self.late_cleanup_profile,
+                );
+            });
         }
         {
             let _span =
@@ -907,7 +951,7 @@ fn compute_function_entry_jump_targets(module: &Module, funcs: &[FuncRef]) -> Fx
     targets
 }
 
-fn referenced_insn_label_targets(vcode: &VCode<OpCode>) -> FxHashSet<VCodeInst> {
+pub(crate) fn referenced_insn_label_targets(vcode: &VCode<OpCode>) -> FxHashSet<VCodeInst> {
     let mut targets = FxHashSet::default();
     for (_, fixup) in vcode.fixups.values() {
         let VCodeFixup::Label(label) = fixup else {
@@ -1529,7 +1573,7 @@ fn compute_dyn_sp_plan(
     }
 }
 
-fn is_push_opcode(op: OpCode) -> bool {
+pub(crate) fn is_push_opcode(op: OpCode) -> bool {
     let byte = op as u8;
     byte == OpCode::PUSH0 as u8 || (OpCode::PUSH1 as u8..=OpCode::PUSH32 as u8).contains(&byte)
 }
@@ -1595,7 +1639,7 @@ fn is_bool_producer_opcode(op: OpCode) -> bool {
     )
 }
 
-fn is_plain_inst(
+pub(crate) fn is_plain_inst(
     vcode: &VCode<OpCode>,
     label_targets: &FxHashSet<VCodeInst>,
     inst: VCodeInst,
@@ -2000,9 +2044,13 @@ fn run_evm_post_legalize_cleanup(
     func_behavior::analyze_module(module);
     for &func in funcs {
         module.func_store.modify(func, |function| {
+            BranchCanonicalize::new().run(function);
+
             let mut cfg = ControlFlowGraph::new();
             cfg.compute(function);
             LoadStoreSolver::new().run(function, &mut cfg);
+
+            KnownBitsSimplify::new().run(function);
             cfg.compute(function);
             SccpSolver::new().run(function, &mut cfg);
         });
@@ -2013,17 +2061,53 @@ fn run_evm_post_memory_legalize_cleanup(module: &Module, funcs: &[FuncRef]) {
     for &func in funcs {
         module.func_store.modify(func, |function| {
             CfgCleanup::new(CleanupMode::Strict).run(function);
+            BranchCanonicalize::new().run(function);
+
+            let mut cfg = ControlFlowGraph::new();
+            let mut domtree = DomTree::new();
+            GvnSolver::new().run(function, &mut cfg, &mut domtree);
+
+            let mut lpt = LoopTree::new();
+            LicmSolver::new().run(function, &mut cfg, &mut lpt);
+
+            CfgCleanup::new(CleanupMode::Strict).run(function);
         });
     }
 
     func_behavior::analyze_module(module);
     for &func in funcs {
         module.func_store.modify(func, |function| {
+            BranchCanonicalize::new().run(function);
+
             let mut cfg = ControlFlowGraph::new();
             cfg.compute(function);
             LoadStoreSolver::new().run(function, &mut cfg);
+
+            if has_supported_checked_arith(function) {
+                cfg.compute(function);
+                let mut domtree = DomTree::new();
+                domtree.compute(&cfg);
+                let mut lpt = LoopTree::new();
+                lpt.compute(&cfg, &domtree);
+                CheckedArithElim::new().run(function, &cfg, &lpt);
+            }
+
             cfg.compute(function);
             SccpSolver::new().run(function, &mut cfg);
+
+            cfg.compute(function);
+            let mut domtree = DomTree::new();
+            domtree.compute(&cfg);
+            let mut lpt = LoopTree::new();
+            lpt.compute(&cfg, &domtree);
+            LoopStrengthReduce::new().run(function, &mut cfg, &mut domtree, &mut lpt);
+
+            cfg.compute(function);
+            LoadStoreSolver::new().run(function, &mut cfg);
+
+            cfg.compute(function);
+            SccpSolver::new().run(function, &mut cfg);
+            CfgCleanup::new(CleanupMode::Strict).run(function);
         });
     }
 }
@@ -2160,7 +2244,7 @@ impl LowerBackend for EvmBackend {
             info_span!("sonatina.codegen.evm.prepare_section", funcs = funcs.len()).entered();
         let local_object_args = run_evm_pre_memory_aggregate_pipeline(module);
         legalize_evm_section(module, funcs);
-        if self.enable_late_cleanup_optimizations {
+        if self.late_cleanup_profile != LateCleanupProfile::Off {
             run_evm_post_legalize_cleanup(module, funcs, &local_object_args);
         }
         for &func in funcs {
@@ -2202,7 +2286,7 @@ impl LowerBackend for EvmBackend {
                 });
             }
         }
-        if self.enable_late_cleanup_optimizations {
+        if self.late_cleanup_profile != LateCleanupProfile::Off {
             run_evm_post_memory_legalize_cleanup(module, funcs);
         }
 
@@ -2397,7 +2481,7 @@ impl LowerBackend for EvmBackend {
         let closure = collect_call_closure(module, std::slice::from_ref(&func));
         let local_object_args = run_evm_pre_memory_aggregate_pipeline(module);
         legalize_evm_section(module, &closure);
-        if self.enable_late_cleanup_optimizations {
+        if self.late_cleanup_profile != LateCleanupProfile::Off {
             run_evm_post_legalize_cleanup(module, &closure, &local_object_args);
         }
         module.func_store.view(func, |function| {
@@ -2426,7 +2510,7 @@ impl LowerBackend for EvmBackend {
                 assert_aggregate_legalized(function, &module.ctx);
             });
         }
-        if self.enable_late_cleanup_optimizations {
+        if self.late_cleanup_profile != LateCleanupProfile::Off {
             run_evm_post_memory_legalize_cleanup(module, std::slice::from_ref(&func));
         }
 
@@ -2489,6 +2573,19 @@ impl LowerBackend for EvmBackend {
             function_entry_jumpdest: true,
         };
         self.lower_prepared_function(module, func, lowering)
+    }
+
+    fn post_lower_section(
+        &self,
+        module: &Module,
+        _funcs: &[FuncRef],
+        lowered: &mut [(FuncRef, LoweredFunction<Self::MInst>)],
+        _section_ctx: &SectionLoweringCtx<'_>,
+    ) -> Result<Vec<SectionCodeUnit<Self::MInst>>, Self::Error> {
+        if self.late_cleanup_profile == LateCleanupProfile::Off {
+            return Ok(Vec::new());
+        }
+        Ok(run_late_section_terminal_outline(module, lowered))
     }
 
     fn apply_sym_fixup(
@@ -4586,7 +4683,7 @@ fn u32_to_evm_push_bytes(value: u32, policy: PushWidthPolicy) -> SmallVec<[u8; 4
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::analysis::func_behavior;
+    use crate::{analysis::func_behavior, optim::pipeline::Pipeline};
     use sonatina_ir::{
         InstSetBase,
         cfg::ControlFlowGraph,
@@ -5706,7 +5803,7 @@ object @Contract {
             vendor: Vendor::Ethereum,
             operating_system: OperatingSystem::Evm(EvmVersion::Osaka),
         }))
-        .with_late_cleanup_optimizations(true);
+        .with_late_cleanup_profile(LateCleanupProfile::Speed);
         let object = ObjectName::from("Contract");
         let section = SectionName::from("runtime");
         let embeds: Vec<EmbedSymbol> = Vec::new();
@@ -5735,6 +5832,59 @@ object @Contract {
                 "entry callsite should be rewritten after late dead-arg elim:\n{dumped}"
             );
         });
+    }
+
+    #[test]
+    fn prepare_section_runs_raw_memory_cleanup_after_memory_legalize() {
+        let mut parsed = parse_module(include_str!(
+            "../../../test_files/evm/fresh_equivalent_out_param_scalarizes.sntn"
+        ))
+        .unwrap();
+        Pipeline::speed().run(&mut parsed.module);
+
+        let funcs = parsed.module.funcs();
+        let backend = EvmBackend::new(Evm::new(TargetTriple {
+            architecture: Architecture::Evm,
+            vendor: Vendor::Ethereum,
+            operating_system: OperatingSystem::Evm(EvmVersion::Osaka),
+        }))
+        .with_late_cleanup_profile(LateCleanupProfile::Speed);
+        let local_object_args = run_evm_pre_memory_aggregate_pipeline(&parsed.module);
+        legalize_evm_section(&parsed.module, &funcs);
+        run_evm_post_legalize_cleanup(&parsed.module, &funcs, &local_object_args);
+
+        let ptr_escape = compute_ptr_escape_summaries(&parsed.module, &funcs, &backend.isa);
+        for &func in &funcs {
+            parsed.module.func_store.modify(func, |function| {
+                prepare_free_ptr_restore(function, &parsed.module.ctx, &backend, &ptr_escape);
+                AggregateLowerToMemoryLegalize::default().run(function, &parsed.module.ctx);
+                assert_aggregate_legalized(function, &parsed.module.ctx);
+            });
+        }
+
+        let entry = find_func(&parsed.module, "entry");
+        let before = parsed.module.func_store.view(entry, |function| {
+            function
+                .layout
+                .iter_block()
+                .map(|block| function.layout.iter_inst(block).count())
+                .sum::<usize>()
+        });
+
+        run_evm_post_memory_legalize_cleanup(&parsed.module, &funcs);
+
+        let after = parsed.module.func_store.view(entry, |function| {
+            function
+                .layout
+                .iter_block()
+                .map(|block| function.layout.iter_inst(block).count())
+                .sum::<usize>()
+        });
+
+        assert!(
+            after < before,
+            "late raw-memory cleanup should reduce prepared IR after memory legalization (before={before}, after={after})"
+        );
     }
 
     #[test]

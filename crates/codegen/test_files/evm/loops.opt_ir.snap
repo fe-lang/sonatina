@@ -125,16 +125,13 @@ func private %__Bench_runtime() {
         jump block26;
 
     block26:
-        v69.i256 = phi (0.i256 block4) (v71 block27);
+        v69.i256 = phi (0.i256 block4) (v84 block27);
         v70.i1 = lt v69 v13;
         br v70 block27 block24;
 
     block27:
-        (v71.i256, v72.i1) = uaddo v69 1.i256;
-        br v72 block29 block26;
-
-    block29:
-        evm_revert 0.i256 0.i256;
+        v84.i256 = add v69 1.i256;
+        jump block26;
 
     block24:
         mstore 0.i256 v69 i256;
@@ -188,18 +185,15 @@ func private %__Bench_runtime() {
 
     block40:
         v75.i256 = phi (v74 block10) (v80 block41);
-        v77.i256 = phi (0.i256 block10) (v81 block41);
+        v77.i256 = phi (0.i256 block10) (v85 block41);
         v78.i1 = lt v77 v73;
         br v78 block41 block38;
 
     block41:
         v79.i256 = xor v74 v77;
         v80.i256 = xor v75 v79;
-        (v81.i256, v82.i1) = uaddo v77 1.i256;
-        br v82 block43 block40;
-
-    block43:
-        evm_revert 0.i256 0.i256;
+        v85.i256 = add v77 1.i256;
+        jump block40;
 
     block38:
         mstore 0.i256 v75 i256;

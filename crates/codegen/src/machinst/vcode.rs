@@ -19,18 +19,23 @@ use std::{collections::HashSet, fmt, io};
 pub struct LabelId(pub u32);
 entity_impl!(LabelId);
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Copy, Hash, PartialOrd, Ord)]
+pub struct SectionCodeUnitId(pub u32);
+entity_impl!(SectionCodeUnitId);
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum Label {
     Insn(VCodeInst),
     Block(BlockId),
     Function(FuncRef),
+    SectionCodeUnit(SectionCodeUnitId),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Copy, Hash, PartialOrd, Ord)]
 pub struct VCodeInst(pub u32);
 entity_impl!(VCodeInst);
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SymFixupKind {
     Addr,
     Size,
@@ -138,6 +143,9 @@ where
                             write!(w, " `pc + ({offset})`")
                         }
                         Label::Function(func) => write!(w, " {func:?}"),
+                        Label::SectionCodeUnit(unit) => {
+                            write!(w, " section_unit{}", unit.0)
+                        }
                     }?;
                 }
 
@@ -155,13 +163,6 @@ where
 
         for &block in block_order {
             if self.blocks.get(block).is_none() || !emitted_blocks.insert(block) {
-                continue;
-            }
-            write_block(block, &mut cur_ir)?;
-        }
-
-        for block in self.blocks.keys() {
-            if !emitted_blocks.insert(block) {
                 continue;
             }
             write_block(block, &mut cur_ir)?;
@@ -223,5 +224,59 @@ where
         let next = self.list.get(self.next, self.pool)?;
         self.next += 1;
         Some(next)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sonatina_ir::{
+        Linkage, Signature,
+        builder::test_util::test_module_builder,
+        ir_writer::{FuncWriteCtx, IrWrite},
+    };
+
+    fn write_with_ctx(
+        vcode: &VCode<&'static str>,
+        f: impl FnOnce(&VCode<&'static str>, &mut Vec<u8>, &FuncWriteCtx<'_>) -> io::Result<()>,
+    ) -> String {
+        let mb = test_module_builder();
+        let func_ref = mb
+            .declare_function(Signature::new_unit("test_func", Linkage::Public, &[]))
+            .unwrap();
+        let module = mb.build();
+
+        module.func_store.view(func_ref, |func| {
+            let ctx = FuncWriteCtx::new(func, func_ref);
+            let mut out = Vec::new();
+            f(vcode, &mut out, &ctx).unwrap();
+            String::from_utf8(out).unwrap()
+        })
+    }
+
+    #[test]
+    fn write_with_block_order_only_prints_requested_blocks() {
+        let mut vcode = VCode::default();
+        vcode.add_inst_to_block("keep", None, BlockId(0));
+        vcode.add_inst_to_block("drop", None, BlockId(1));
+
+        let out = write_with_ctx(&vcode, |vcode, out, ctx| {
+            vcode.write_with_block_order(out, ctx, &[BlockId(0)])
+        });
+
+        assert!(out.contains("  block0:\n"));
+        assert!(!out.contains("  block1:\n"));
+    }
+
+    #[test]
+    fn ir_write_still_prints_all_blocks() {
+        let mut vcode = VCode::default();
+        vcode.add_inst_to_block("keep", None, BlockId(0));
+        vcode.add_inst_to_block("also_keep", None, BlockId(1));
+
+        let out = write_with_ctx(&vcode, |vcode, out, ctx| vcode.write(out, ctx));
+
+        assert!(out.contains("  block0:\n"));
+        assert!(out.contains("  block1:\n"));
     }
 }
