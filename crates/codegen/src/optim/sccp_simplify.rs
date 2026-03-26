@@ -57,7 +57,7 @@ struct SccpExprFacts<'a, 'b> {
     func: &'a Function,
     lattice: &'b SecondaryMap<ValueId, LatticeCell>,
     may_be_undef: &'b SecondaryMap<ValueId, bool>,
-    known_bits: KnownBitsQuery<'a>,
+    known_bits: &'b KnownBitsQuery,
 }
 
 impl ExprFactProvider for SccpExprFacts<'_, '_> {
@@ -71,7 +71,7 @@ impl ExprFactProvider for SccpExprFacts<'_, '_> {
         }
 
         debug_assert_eq!(func.dfg.value_ty(v), self.func.dfg.value_ty(v));
-        self.known_bits.for_value(v)
+        self.known_bits.for_value(func, v)
     }
 
     fn same_non_undef(&self, lhs: ValueId, rhs: ValueId) -> bool {
@@ -536,6 +536,7 @@ pub(super) fn simplify_inst(
     func: &Function,
     lattice: &SecondaryMap<ValueId, LatticeCell>,
     may_be_undef: &SecondaryMap<ValueId, bool>,
+    known_bits: &KnownBitsQuery,
     inst_id: InstId,
 ) -> SimplifyResults {
     let inst = func.dfg.inst(inst_id);
@@ -545,7 +546,7 @@ pub(super) fn simplify_inst(
         func,
         lattice,
         may_be_undef,
-        known_bits: KnownBitsQuery::new(func),
+        known_bits,
     };
 
     match inst.kind() {
@@ -733,7 +734,7 @@ mod tests {
     use sonatina_parser::parse_module;
 
     use super::{SimplifyAction, simplify_inst};
-    use crate::optim::sccp::LatticeCell;
+    use crate::{analysis::known_bits::KnownBitsQuery, optim::sccp::LatticeCell};
 
     #[test]
     fn simplify_inst_folds_logical_shr_mask_with_known_bits() {
@@ -758,7 +759,8 @@ block0:
             let inst = and_inst.expect("missing and");
             let lattice = SecondaryMap::<_, LatticeCell>::default();
             let may_be_undef = SecondaryMap::<_, bool>::default();
-            let simplified = simplify_inst(func, &lattice, &may_be_undef, inst);
+            let known_bits = KnownBitsQuery::new(func);
+            let simplified = simplify_inst(func, &lattice, &may_be_undef, &known_bits, inst);
             let and_args = func.dfg.inst(inst).collect_values();
             let [value, _mask] = and_args.as_slice() else {
                 panic!("and should have two args");

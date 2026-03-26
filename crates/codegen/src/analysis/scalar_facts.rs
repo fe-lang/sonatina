@@ -8,7 +8,8 @@ use super::{
 };
 
 pub struct ScalarFacts<'a, 'r> {
-    known_bits: KnownBitsQuery<'a>,
+    func: &'a Function,
+    known_bits: KnownBitsQuery,
     demanded_bits: DemandedBitsQuery<'a>,
     range: Option<&'r RangeEnv>,
 }
@@ -16,6 +17,7 @@ pub struct ScalarFacts<'a, 'r> {
 impl<'a, 'r> ScalarFacts<'a, 'r> {
     pub fn new(func: &'a Function) -> Self {
         Self {
+            func,
             known_bits: KnownBitsQuery::new(func),
             demanded_bits: DemandedBitsQuery::new(func),
             range: None,
@@ -24,6 +26,7 @@ impl<'a, 'r> ScalarFacts<'a, 'r> {
 
     pub fn with_range_env(func: &'a Function, range: &'r RangeEnv) -> Self {
         Self {
+            func,
             known_bits: KnownBitsQuery::new(func),
             demanded_bits: DemandedBitsQuery::new(func),
             range: Some(range),
@@ -31,7 +34,7 @@ impl<'a, 'r> ScalarFacts<'a, 'r> {
     }
 
     pub fn known_bits(&self, value: ValueId) -> KnownBits {
-        self.known_bits.for_value(value)
+        self.known_bits.for_value(self.func, value)
     }
 
     pub fn demanded_bits(&self, value: ValueId) -> U256 {
@@ -43,6 +46,6 @@ impl<'a, 'r> ScalarFacts<'a, 'r> {
     }
 
     pub fn is_known_nonzero(&self, value: ValueId) -> bool {
-        self.known_bits.is_known_nonzero(value)
+        self.known_bits.is_known_nonzero(self.func, value)
     }
 }

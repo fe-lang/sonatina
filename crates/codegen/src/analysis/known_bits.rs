@@ -1,4 +1,9 @@
 use std::collections::VecDeque;
+#[cfg(test)]
+use std::{
+    cell::Cell,
+    panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
+};
 
 use cranelift_entity::SecondaryMap;
 use sonatina_ir::{
@@ -87,67 +92,90 @@ impl KnownBits {
     }
 }
 
-pub struct KnownBitsQuery<'a> {
-    func: &'a Function,
+pub struct KnownBitsQuery {
     known: SecondaryMap<ValueId, KnownBits>,
+    value_tys: SecondaryMap<ValueId, Option<Type>>,
+    immediates: SecondaryMap<ValueId, Option<Immediate>>,
 }
 
-impl<'a> KnownBitsQuery<'a> {
-    pub fn new(func: &'a Function) -> Self {
+#[cfg(test)]
+thread_local! {
+    static TEST_NEW_COUNTER: Cell<Option<usize>> = const { Cell::new(None) };
+}
+
+impl KnownBitsQuery {
+    pub fn new(func: &Function) -> Self {
+        #[cfg(test)]
+        TEST_NEW_COUNTER.with(|counter| {
+            if let Some(count) = counter.get() {
+                counter.set(Some(count + 1));
+            }
+        });
+
         let mut query = Self {
-            func,
             known: SecondaryMap::default(),
+            value_tys: SecondaryMap::default(),
+            immediates: SecondaryMap::default(),
         };
-        query.solve();
+        query.capture_value_metadata(func);
+        query.solve(func);
         query
     }
 
-    pub fn for_value(&self, value: ValueId) -> KnownBits {
-        self.known_of(value)
+    pub fn for_value(&self, func: &Function, value: ValueId) -> KnownBits {
+        self.known_of(func, value)
     }
 
-    pub fn is_known_zero(&self, value: ValueId) -> bool {
-        let ty = self.func.dfg.value_ty(value);
-        supports_known_bits(ty) && self.for_value(value).all_zero_in(type_mask(ty))
+    pub fn is_known_zero(&self, func: &Function, value: ValueId) -> bool {
+        let ty = self.value_ty(func, value);
+        supports_known_bits(ty) && self.for_value(func, value).all_zero_in(type_mask(ty))
     }
 
-    pub fn is_known_nonzero(&self, value: ValueId) -> bool {
-        let ty = self.func.dfg.value_ty(value);
-        supports_known_bits(ty) && (self.for_value(value).known_one & type_mask(ty)) != U256::zero()
+    pub fn is_known_nonzero(&self, func: &Function, value: ValueId) -> bool {
+        let ty = self.value_ty(func, value);
+        supports_known_bits(ty)
+            && (self.for_value(func, value).known_one & type_mask(ty)) != U256::zero()
     }
 
-    pub fn fits_in_low_bits(&self, value: ValueId, bits: u16) -> bool {
-        let ty = self.func.dfg.value_ty(value);
-        supports_known_bits(ty) && self.for_value(value).fits_in_low_bits(bits, ty)
+    pub fn fits_in_low_bits(&self, func: &Function, value: ValueId, bits: u16) -> bool {
+        let ty = self.value_ty(func, value);
+        supports_known_bits(ty) && self.for_value(func, value).fits_in_low_bits(bits, ty)
     }
 
-    pub fn has_conflicting_known_bits(&self, lhs: ValueId, rhs: ValueId) -> bool {
-        let ty = self.func.dfg.value_ty(lhs);
-        debug_assert_eq!(ty, self.func.dfg.value_ty(rhs));
-        has_conflicting_known_bits(self.for_value(lhs), self.for_value(rhs), ty)
+    pub fn has_conflicting_known_bits(&self, func: &Function, lhs: ValueId, rhs: ValueId) -> bool {
+        let ty = self.value_ty(func, lhs);
+        debug_assert_eq!(ty, self.value_ty(func, rhs));
+        has_conflicting_known_bits(self.for_value(func, lhs), self.for_value(func, rhs), ty)
     }
 
-    fn solve(&mut self) {
-        let values: Vec<_> = self.func.dfg.value_ids().collect();
+    fn capture_value_metadata(&mut self, func: &Function) {
+        for value in func.dfg.value_ids() {
+            self.value_tys[value] = Some(func.dfg.value_ty(value));
+            self.immediates[value] = func.dfg.value_imm(value);
+        }
+    }
+
+    fn solve(&mut self, func: &Function) {
+        let values: Vec<_> = func.dfg.value_ids().collect();
         let mut dependents = SecondaryMap::<ValueId, Vec<ValueId>>::default();
         let mut queued = SecondaryMap::<ValueId, bool>::default();
         let mut worklist = VecDeque::new();
 
         for value in values {
-            if let Value::Inst { inst, .. } = self.func.dfg.value(value) {
-                for used in self.func.dfg.inst(*inst).collect_values() {
+            if let Value::Inst { inst, .. } = func.dfg.value(value) {
+                for used in func.dfg.inst(*inst).collect_values() {
                     dependents[used].push(value);
                 }
             }
 
-            self.known[value] = self.seed_known_bits(value);
+            self.known[value] = self.seed_known_bits(func, value);
             queued[value] = true;
             worklist.push_back(value);
         }
 
         while let Some(value) = worklist.pop_front() {
             queued[value] = false;
-            let known = self.value_known_bits(value);
+            let known = self.value_known_bits(func, value);
             if known == self.known[value] {
                 continue;
             }
@@ -164,79 +192,106 @@ impl<'a> KnownBitsQuery<'a> {
         }
     }
 
-    fn seed_known_bits(&self, value: ValueId) -> KnownBits {
-        self.func
-            .dfg
-            .value_imm(value)
-            .map(KnownBits::from_imm)
-            .unwrap_or_else(|| KnownBits::unknown(self.func.dfg.value_ty(value)))
+    fn value_ty(&self, func: &Function, value: ValueId) -> Type {
+        self.value_tys
+            .get(value)
+            .copied()
+            .flatten()
+            .unwrap_or_else(|| func.dfg.value_ty(value))
     }
 
-    fn known_of(&self, value: ValueId) -> KnownBits {
-        self.func
-            .dfg
-            .value_imm(value)
-            .map(KnownBits::from_imm)
-            .unwrap_or(self.known[value])
+    fn value_imm(&self, func: &Function, value: ValueId) -> Option<Immediate> {
+        self.immediates
+            .get(value)
+            .copied()
+            .flatten()
+            .or_else(|| func.dfg.value_imm(value))
     }
 
-    fn value_known_bits(&self, value: ValueId) -> KnownBits {
-        if let Some(imm) = self.func.dfg.value_imm(value) {
+    fn seed_known_bits(&self, func: &Function, value: ValueId) -> KnownBits {
+        self.value_imm(func, value)
+            .map(KnownBits::from_imm)
+            .unwrap_or_else(|| KnownBits::unknown(self.value_ty(func, value)))
+    }
+
+    fn known_of(&self, func: &Function, value: ValueId) -> KnownBits {
+        self.value_imm(func, value)
+            .map(KnownBits::from_imm)
+            .unwrap_or_else(|| {
+                self.known
+                    .get(value)
+                    .copied()
+                    .unwrap_or_else(|| KnownBits::unknown(self.value_ty(func, value)))
+            })
+    }
+
+    fn value_known_bits(&self, func: &Function, value: ValueId) -> KnownBits {
+        if let Some(imm) = self.value_imm(func, value) {
             return KnownBits::from_imm(imm);
         }
 
-        let ty = self.func.dfg.value_ty(value);
-        match self.func.dfg.value(value) {
+        if self.known.get(value).is_none() {
+            return KnownBits::unknown(self.value_ty(func, value));
+        }
+
+        let ty = self.value_ty(func, value);
+        match func.dfg.value(value) {
             Value::Arg { .. } | Value::Global { .. } | Value::Undef { .. } => {
                 KnownBits::unknown(ty)
             }
             Value::Immediate { .. } => unreachable!("immediates handled above"),
             Value::Inst {
                 inst, result_idx, ..
-            } => self.inst_result_known_bits(*inst, usize::from(*result_idx), ty),
+            } => self.inst_result_known_bits(func, *inst, usize::from(*result_idx), ty),
         }
     }
 
     fn inst_result_known_bits(
         &self,
+        func: &Function,
         inst: sonatina_ir::InstId,
         result_idx: usize,
         ty: Type,
     ) -> KnownBits {
-        if !supports_known_bits(ty) {
+        if !supports_known_bits(ty) || result_idx != 0 {
             return KnownBits::unknown(ty);
         }
 
-        if result_idx != 0 {
-            return KnownBits::unknown(ty);
-        }
-
-        if let Some(phi) = self.func.dfg.cast_phi(inst) {
-            let mut args = phi.args().iter().map(|(value, _)| self.known_of(*value));
+        if let Some(phi) = func.dfg.cast_phi(inst) {
+            let mut args = phi
+                .args()
+                .iter()
+                .map(|(value, _)| self.known_of(func, *value));
             return args
                 .next()
                 .map(|first| args.fold(first, |acc, incoming| acc.meet(incoming, ty)))
                 .unwrap_or_else(|| KnownBits::unknown(ty));
         }
 
-        let inst_data = self.func.dfg.inst(inst);
+        let inst_data = func.dfg.inst(inst);
         let args = inst_data.collect_values();
         match inst_data.kind() {
-            InstClassKind::Binary(kind) => self.binary_known_bits(kind, ty, &args),
-            InstClassKind::Cast(kind) => self.cast_known_bits(kind, ty, &args),
-            InstClassKind::Unary(kind) => self.unary_known_bits(kind, ty, &args),
+            InstClassKind::Binary(kind) => self.binary_known_bits(func, kind, ty, &args),
+            InstClassKind::Cast(kind) => self.cast_known_bits(func, kind, ty, &args),
+            InstClassKind::Unary(kind) => self.unary_known_bits(func, kind, ty, &args),
             InstClassKind::Phi | InstClassKind::Opaque => KnownBits::unknown(ty),
         }
     }
 
-    fn unary_known_bits(&self, kind: UnaryInstKind, ty: Type, args: &[ValueId]) -> KnownBits {
+    fn unary_known_bits(
+        &self,
+        func: &Function,
+        kind: UnaryInstKind,
+        ty: Type,
+        args: &[ValueId],
+    ) -> KnownBits {
         let [arg] = args else {
             return KnownBits::unknown(ty);
         };
-        let arg_known = self.known_of(*arg);
+        let arg_known = self.known_of(func, *arg);
         match kind {
             UnaryInstKind::IsZero => {
-                let arg_ty = self.func.dfg.value_ty(*arg);
+                let arg_ty = self.value_ty(func, *arg);
                 if !supports_known_bits(arg_ty) {
                     return bool_shape();
                 }
@@ -263,12 +318,18 @@ impl<'a> KnownBitsQuery<'a> {
         }
     }
 
-    fn cast_known_bits(&self, kind: CastInstKind, ty: Type, args: &[ValueId]) -> KnownBits {
+    fn cast_known_bits(
+        &self,
+        func: &Function,
+        kind: CastInstKind,
+        ty: Type,
+        args: &[ValueId],
+    ) -> KnownBits {
         let [arg] = args else {
             return KnownBits::unknown(ty);
         };
-        let src_ty = self.func.dfg.value_ty(*arg);
-        let src = self.known_of(*arg);
+        let src_ty = self.value_ty(func, *arg);
+        let src = self.known_of(func, *arg);
         match kind {
             CastInstKind::Zext => {
                 let src_mask = type_mask(src_ty);
@@ -300,12 +361,18 @@ impl<'a> KnownBitsQuery<'a> {
         }
     }
 
-    fn binary_known_bits(&self, kind: BinaryInstKind, ty: Type, args: &[ValueId]) -> KnownBits {
+    fn binary_known_bits(
+        &self,
+        func: &Function,
+        kind: BinaryInstKind,
+        ty: Type,
+        args: &[ValueId],
+    ) -> KnownBits {
         let [lhs, rhs] = args else {
             return KnownBits::unknown(ty);
         };
-        let lhs_known = self.known_of(*lhs);
-        let rhs_known = self.known_of(*rhs);
+        let lhs_known = self.known_of(func, *lhs);
+        let rhs_known = self.known_of(func, *rhs);
 
         match kind {
             BinaryInstKind::And => KnownBits::normalized(
@@ -325,9 +392,9 @@ impl<'a> KnownBitsQuery<'a> {
                 (lhs_known.known_zero & rhs_known.known_one)
                     | (lhs_known.known_one & rhs_known.known_zero),
             ),
-            BinaryInstKind::Shl => self.shl_known_bits(ty, *lhs, rhs_known),
-            BinaryInstKind::Shr => self.shr_known_bits(ty, *lhs, rhs_known),
-            BinaryInstKind::Sar => self.sar_known_bits(ty, *lhs, rhs_known),
+            BinaryInstKind::Shl => self.shl_known_bits(func, ty, *lhs, rhs_known),
+            BinaryInstKind::Shr => self.shr_known_bits(func, ty, *lhs, rhs_known),
+            BinaryInstKind::Sar => self.sar_known_bits(func, ty, *lhs, rhs_known),
             BinaryInstKind::Eq
             | BinaryInstKind::Ne
             | BinaryInstKind::Lt
@@ -337,13 +404,19 @@ impl<'a> KnownBitsQuery<'a> {
             | BinaryInstKind::Le
             | BinaryInstKind::Ge
             | BinaryInstKind::Sle
-            | BinaryInstKind::Sge => self.compare_known_bits(kind, *lhs, *rhs),
+            | BinaryInstKind::Sge => self.compare_known_bits(func, kind, *lhs, *rhs),
             _ => KnownBits::unknown(ty),
         }
     }
 
-    fn shl_known_bits(&self, ty: Type, bits: ValueId, value: KnownBits) -> KnownBits {
-        let Some(shift) = constant_shift(self.func, bits) else {
+    fn shl_known_bits(
+        &self,
+        func: &Function,
+        ty: Type,
+        bits: ValueId,
+        value: KnownBits,
+    ) -> KnownBits {
+        let Some(shift) = constant_shift(self.value_imm(func, bits)) else {
             return KnownBits::unknown(ty);
         };
         let width = U256::from(type_bits(ty));
@@ -359,8 +432,14 @@ impl<'a> KnownBitsQuery<'a> {
         )
     }
 
-    fn shr_known_bits(&self, ty: Type, bits: ValueId, value: KnownBits) -> KnownBits {
-        let Some(shift) = constant_shift(self.func, bits) else {
+    fn shr_known_bits(
+        &self,
+        func: &Function,
+        ty: Type,
+        bits: ValueId,
+        value: KnownBits,
+    ) -> KnownBits {
+        let Some(shift) = constant_shift(self.value_imm(func, bits)) else {
             return KnownBits::unknown(ty);
         };
         let width_bits = type_bits(ty);
@@ -377,8 +456,14 @@ impl<'a> KnownBitsQuery<'a> {
         )
     }
 
-    fn sar_known_bits(&self, ty: Type, bits: ValueId, value: KnownBits) -> KnownBits {
-        let Some(shift) = constant_shift(self.func, bits) else {
+    fn sar_known_bits(
+        &self,
+        func: &Function,
+        ty: Type,
+        bits: ValueId,
+        value: KnownBits,
+    ) -> KnownBits {
+        let Some(shift) = constant_shift(self.value_imm(func, bits)) else {
             return KnownBits::unknown(ty);
         };
         let width_bits = type_bits(ty);
@@ -405,14 +490,20 @@ impl<'a> KnownBitsQuery<'a> {
         KnownBits::normalized(ty, known_zero, known_one)
     }
 
-    fn compare_known_bits(&self, kind: BinaryInstKind, lhs: ValueId, rhs: ValueId) -> KnownBits {
-        let ty = self.func.dfg.value_ty(lhs);
+    fn compare_known_bits(
+        &self,
+        func: &Function,
+        kind: BinaryInstKind,
+        lhs: ValueId,
+        rhs: ValueId,
+    ) -> KnownBits {
+        let ty = self.value_ty(func, lhs);
         if !supports_known_bits(ty) {
             return bool_shape();
         }
 
-        let lhs_known = self.known_of(lhs);
-        let rhs_known = self.known_of(rhs);
+        let lhs_known = self.known_of(func, lhs);
+        let rhs_known = self.known_of(func, rhs);
         let lhs_exact = lhs_known.exact_imm(ty);
         let rhs_exact = rhs_known.exact_imm(ty);
 
@@ -443,6 +534,26 @@ impl<'a> KnownBitsQuery<'a> {
     }
 }
 
+#[cfg(test)]
+pub(crate) fn count_query_news_for_test<T>(f: impl FnOnce() -> T) -> (T, usize) {
+    TEST_NEW_COUNTER.with(|counter| {
+        assert!(
+            counter.replace(Some(0)).is_none(),
+            "known bits query counter is already active"
+        );
+
+        let result = catch_unwind(AssertUnwindSafe(f));
+        let count = counter
+            .replace(None)
+            .expect("known bits query counter should stay active");
+
+        match result {
+            Ok(result) => (result, count),
+            Err(payload) => resume_unwind(payload),
+        }
+    })
+}
+
 pub(crate) fn has_conflicting_known_bits(lhs: KnownBits, rhs: KnownBits, ty: Type) -> bool {
     supports_known_bits(ty)
         && ((lhs.known_zero & rhs.known_one) | (lhs.known_one & rhs.known_zero)) & type_mask(ty)
@@ -463,8 +574,8 @@ pub(crate) fn supports_known_bits(ty: Type) -> bool {
     )
 }
 
-fn constant_shift(func: &Function, bits: ValueId) -> Option<U256> {
-    Some(func.dfg.value_imm(bits)?.as_i256().to_u256())
+fn constant_shift(bits: Option<Immediate>) -> Option<U256> {
+    Some(bits?.as_i256().to_u256())
 }
 
 pub(crate) fn type_bits(ty: Type) -> u16 {
@@ -554,8 +665,8 @@ mod tests {
 
         let func = only_func(&mb);
         let query = KnownBitsQuery::new(&func);
-        let known = query.for_value(shifted);
-        assert!(query.fits_in_low_bits(shifted, 32));
+        let known = query.for_value(&func, shifted);
+        assert!(query.fits_in_low_bits(&func, shifted, 32));
         assert!(known.all_zero_in(!low_mask(32)));
     }
 
@@ -575,7 +686,7 @@ mod tests {
 
         let func = only_func(&mb);
         let query = KnownBitsQuery::new(&func);
-        assert!(!query.for_value(shifted).all_zero_in(!low_mask(32)));
+        assert!(!query.for_value(&func, shifted).all_zero_in(!low_mask(32)));
 
         let mb = test_module_builder();
         let (evm, mut builder) = test_func_builder(&mb, &[], Type::I256);
@@ -591,7 +702,7 @@ mod tests {
 
         let func = only_func(&mb);
         let query = KnownBitsQuery::new(&func);
-        assert!(query.for_value(shifted).all_zero_in(!low_mask(32)));
+        assert!(query.for_value(&func, shifted).all_zero_in(!low_mask(32)));
     }
 
     #[test]
@@ -626,7 +737,7 @@ mod tests {
 
         let func = only_func(&mb);
         let query = KnownBitsQuery::new(&func);
-        let known = query.for_value(phi);
+        let known = query.for_value(&func, phi);
         assert_eq!(known.known_one & U256::from(0xffu16), U256::from(0x10u8));
         assert_eq!(known.known_zero & U256::from(0xffu16), U256::from(0xcfu8));
     }
@@ -661,7 +772,7 @@ block3:
             .view(parsed.module.funcs()[0], |func| func.clone());
         let phi = find_inst_result_by_kind(&func, InstClassKind::Phi);
         let query = KnownBitsQuery::new(&func);
-        assert!(query.for_value(phi).all_zero_in(U256::one()));
+        assert!(query.for_value(&func, phi).all_zero_in(U256::one()));
     }
 
     #[test]
@@ -682,15 +793,15 @@ block3:
         let func = only_func(&mb);
         let query = KnownBitsQuery::new(&func);
         assert_eq!(
-            query.for_value(wide).exact_imm(Type::I16),
+            query.for_value(&func, wide).exact_imm(Type::I16),
             Some(Immediate::from_i256(I256::from(0x00ffu16), Type::I16))
         );
         assert_eq!(
-            query.for_value(narrowed).exact_imm(Type::I8),
+            query.for_value(&func, narrowed).exact_imm(Type::I8),
             Some(Immediate::from_i256(I256::from(-1i8), Type::I8))
         );
         assert_eq!(
-            query.for_value(signed).exact_imm(Type::I16),
+            query.for_value(&func, signed).exact_imm(Type::I16),
             Some(Immediate::from_i256(I256::from(-1i16), Type::I16))
         );
     }
@@ -716,10 +827,10 @@ block3:
 
         let func = only_func(&mb);
         let query = KnownBitsQuery::new(&func);
-        assert!(!query.is_known_zero(masked));
-        assert!(query.is_known_nonzero(forced));
-        assert!(query.has_conflicting_known_bits(masked, forced));
-        assert!(query.fits_in_low_bits(masked, 7));
+        assert!(!query.is_known_zero(&func, masked));
+        assert!(query.is_known_nonzero(&func, forced));
+        assert!(query.has_conflicting_known_bits(&func, masked, forced));
+        assert!(query.fits_in_low_bits(&func, masked, 7));
     }
 
     #[test]
@@ -754,7 +865,7 @@ block3:
 
         let func = only_func(&mb);
         assert_eq!(
-            KnownBitsQuery::new(&func).for_value(phi),
+            KnownBitsQuery::new(&func).for_value(&func, phi),
             KnownBits::default()
         );
     }
@@ -782,10 +893,10 @@ block3:
 
         let func = only_func(&mb);
         let query = KnownBitsQuery::new(&func);
-        let shr_known = query.for_value(shr);
-        let and_known = query.for_value(and);
-        let or_known = query.for_value(or);
-        let xor_known = query.for_value(xor);
+        let shr_known = query.for_value(&func, shr);
+        let and_known = query.for_value(&func, and);
+        let or_known = query.for_value(&func, or);
+        let xor_known = query.for_value(&func, xor);
         let mut rng = XorShift64(1);
         for _ in 0..256 {
             let arg_imm = imm_i256(next_u256(&mut rng));
@@ -828,10 +939,10 @@ block3:
 
         let func = only_func(&mb);
         let query = KnownBitsQuery::new(&func);
-        let zext_known = query.for_value(zext);
-        let trunc_known = query.for_value(trunc);
-        let sext_known = query.for_value(sext);
-        let iszero_known = query.for_value(iszero);
+        let zext_known = query.for_value(&func, zext);
+        let trunc_known = query.for_value(&func, trunc);
+        let sext_known = query.for_value(&func, sext);
+        let iszero_known = query.for_value(&func, iszero);
         let mut rng = XorShift64(9);
         for _ in 0..256 {
             let arg_imm = Immediate::from_i256(I256::from(next_u256(&mut rng)), Type::I8);

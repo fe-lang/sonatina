@@ -25,7 +25,10 @@ use super::{
     cfg_cleanup::CfgCleanup,
     sccp_simplify::{SimplifyAction, simplify_inst},
 };
-use crate::cfg_edit::{CfgEditor, CleanupMode};
+use crate::{
+    analysis::known_bits::KnownBitsQuery,
+    cfg_edit::{CfgEditor, CleanupMode},
+};
 
 #[derive(Debug)]
 pub struct SccpSolver {
@@ -73,14 +76,16 @@ impl SccpSolver {
             self.lattice[*arg] = LatticeCell::Top;
         }
 
+        let solve_known_bits = KnownBitsQuery::new(func);
+
         // Evaluate all values in entry block.
         self.reachable_blocks[entry_block] = true;
-        self.eval_insts_in(func, entry_block);
+        self.eval_insts_in(func, entry_block, &solve_known_bits);
 
         while !(self.flow_work.is_empty() && self.ssa_work.is_empty()) {
             while let Some(edge) = self.flow_work.pop() {
                 self.flow_work_set.remove(&edge);
-                self.eval_edge(func, edge);
+                self.eval_edge(func, edge, &solve_known_bits);
             }
 
             while let Some(value) = self.ssa_work.pop() {
@@ -91,7 +96,7 @@ impl SccpSolver {
                         if func.dfg.is_phi(user) {
                             self.eval_phi(func, user);
                         } else {
-                            self.eval_inst(func, user);
+                            self.eval_inst(func, user, &solve_known_bits);
                         }
                     }
                 }
@@ -103,7 +108,8 @@ impl SccpSolver {
 
         self.remove_unreachable_edges(func, cleanup_mode);
         cfg.compute(func);
-        self.fold_insts(func, cfg);
+        let fold_known_bits = KnownBitsQuery::new(func);
+        self.fold_insts(func, cfg, &fold_known_bits);
 
         CfgCleanup::new(cleanup_mode).run(func);
         cfg.compute(func);
@@ -141,7 +147,7 @@ impl SccpSolver {
         self.ssa_work_set[value] = true;
     }
 
-    fn eval_edge(&mut self, func: &mut Function, edge: FlowEdge) {
+    fn eval_edge(&mut self, func: &mut Function, edge: FlowEdge, known_bits: &KnownBitsQuery) {
         let dest = edge.to;
 
         if self.reachable_edges.contains(&edge) {
@@ -153,7 +159,7 @@ impl SccpSolver {
             self.eval_phis_in(func, dest);
         } else {
             self.reachable_blocks[dest] = true;
-            self.eval_insts_in(func, dest);
+            self.eval_insts_in(func, dest, known_bits);
         }
     }
 
@@ -186,17 +192,17 @@ impl SccpSolver {
         self.set_may_be_undef(phi_value, eval_may_be_undef);
     }
 
-    fn eval_insts_in(&mut self, func: &Function, block: BlockId) {
+    fn eval_insts_in(&mut self, func: &Function, block: BlockId, known_bits: &KnownBitsQuery) {
         for inst in func.layout.iter_inst(block) {
             if func.dfg.is_phi(inst) {
                 self.eval_phi(func, inst);
             } else {
-                self.eval_inst(func, inst);
+                self.eval_inst(func, inst, known_bits);
             }
         }
     }
 
-    fn eval_inst(&mut self, func: &Function, inst_id: InstId) {
+    fn eval_inst(&mut self, func: &Function, inst_id: InstId, known_bits: &KnownBitsQuery) {
         debug_assert!(!func.dfg.is_phi(inst_id));
         if let Some(bi) = func.dfg.branch_info(inst_id) {
             self.eval_branch(func, inst_id, bi);
@@ -221,7 +227,8 @@ impl SccpSolver {
             return;
         }
 
-        let simplified = simplify_inst(func, &self.lattice, &self.may_be_undef, inst_id);
+        let simplified =
+            simplify_inst(func, &self.lattice, &self.may_be_undef, known_bits, inst_id);
         if simplified.len() != inst_results.len() {
             debug_assert_eq!(
                 simplified.len(),
@@ -432,7 +439,12 @@ impl SccpSolver {
         self.reachable_edges.contains(&FlowEdge::new(inst, dest))
     }
 
-    fn fold_insts(&mut self, func: &mut Function, cfg: &ControlFlowGraph) {
+    fn fold_insts(
+        &mut self,
+        func: &mut Function,
+        cfg: &ControlFlowGraph,
+        known_bits: &KnownBitsQuery,
+    ) {
         let mut rpo: Vec<_> = cfg.post_order().collect();
         rpo.reverse();
 
@@ -440,12 +452,12 @@ impl SccpSolver {
             let mut next_inst = func.layout.first_inst_of(block);
             while let Some(inst) = next_inst {
                 next_inst = func.layout.next_inst_of(inst);
-                self.fold(func, inst);
+                self.fold(func, inst, known_bits);
             }
         }
     }
 
-    fn fold(&self, func: &mut Function, inst: InstId) {
+    fn fold(&self, func: &mut Function, inst: InstId, known_bits: &KnownBitsQuery) {
         let inst_results = func.dfg.inst_results(inst).to_vec();
         if inst_results.is_empty() {
             return;
@@ -453,7 +465,8 @@ impl SccpSolver {
 
         let mut changed = false;
         if !func.dfg.is_phi(inst) {
-            let simplified = simplify_inst(func, &self.lattice, &self.may_be_undef, inst);
+            let simplified =
+                simplify_inst(func, &self.lattice, &self.may_be_undef, known_bits, inst);
             debug_assert_eq!(
                 simplified.len(),
                 inst_results.len(),
@@ -898,6 +911,9 @@ mod tests {
             logic,
         },
     };
+    use sonatina_parser::parse_module;
+
+    use crate::analysis::known_bits::count_query_news_for_test;
 
     #[derive(Clone, Copy)]
     struct XorShift64(u64);
@@ -1033,6 +1049,38 @@ mod tests {
             let ret = downcast::<&Return>(func.inst_set(), func.dfg.inst(term)).expect("return");
             let value = ret.args().iter().next().copied().expect("return value");
             assert_eq!(func.dfg.value_imm(value), Some(Immediate::one(Type::I256)));
+        });
+    }
+
+    #[test]
+    fn sccp_reuses_known_bits_queries_across_probes() {
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-london"
+
+func public %f(v0.i256) -> i256 {
+block0:
+    v1.i256 = shr 224.i256 v0;
+    v2.i256 = and v1 4294967295.i256;
+    v3.i256 = and v2 4294967295.i256;
+    return v3;
+}
+"#,
+        )
+        .expect("module parses");
+        let func_ref = parsed.module.funcs()[0];
+
+        parsed.module.func_store.modify(func_ref, |func| {
+            let mut cfg = ControlFlowGraph::default();
+            cfg.compute(func);
+            let (_, query_news) = count_query_news_for_test(|| {
+                let mut solver = SccpSolver::new();
+                solver.run(func, &mut cfg);
+            });
+            assert_eq!(
+                query_news, 2,
+                "SCCP should build one known-bits snapshot per phase"
+            );
         });
     }
 
