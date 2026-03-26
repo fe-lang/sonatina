@@ -49,16 +49,16 @@ func private %__Order_runtime() {
     block0:
         v16.i256 = evm_calldata_size;
         v18.i1 = lt v16 4.i256;
-        br v18 block14 block15;
+        br v18 block19 block20;
 
-    block14:
+    block19:
         evm_revert 0.i256 0.i256;
 
-    block15:
+    block20:
         v19.i256 = evm_calldata_load 0.i256;
         v21.i256 = shr 224.i256 v19;
         v22.i32 = trunc v21 i32;
-        br_table v22 block1 (1.i32 block8) (2.i32 block17) (3.i32 block21) (4.i32 block25) (5.i32 block6);
+        br_table v22 block1 (1.i32 block8) (2.i32 block22) (3.i32 block26) (4.i32 block30) (5.i32 block6);
 
     block1:
         evm_revert 0.i256 0.i256;
@@ -76,46 +76,46 @@ func private %__Order_runtime() {
         call %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f v15;
         unreachable;
 
-    block17:
+    block22:
         v23.i256 = evm_sload 0.i256;
-        br_table v23 block16 (1.i256 block18);
+        br_table v23 block21 (1.i256 block23);
 
-    block18:
+    block23:
         evm_sstore 0.i256 2.i256;
-        jump block16;
+        jump block21;
 
-    block16:
-        v25.i256 = phi (0.i256 block18) (1.i256 block17);
+    block21:
+        v25.i256 = phi (0.i256 block23) (1.i256 block22);
         call %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f v25;
         unreachable;
 
-    block21:
+    block26:
         v26.i256 = evm_sload 0.i256;
-        br_table v26 block20 (2.i256 block22);
+        br_table v26 block25 (2.i256 block27);
 
-    block22:
+    block27:
         evm_sstore 0.i256 3.i256;
-        jump block20;
+        jump block25;
 
-    block20:
-        v28.i256 = phi (0.i256 block22) (1.i256 block21);
+    block25:
+        v28.i256 = phi (0.i256 block27) (1.i256 block26);
         call %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f v28;
         unreachable;
 
-    block25:
+    block30:
         v31.i256 = evm_sload 0.i256;
-        br_table v31 block24 (0.i256 block26) (1.i256 block27);
+        br_table v31 block29 (0.i256 block31) (1.i256 block32);
 
-    block26:
+    block31:
         evm_sstore 0.i256 4.i256;
-        jump block24;
+        jump block29;
 
-    block27:
+    block32:
         evm_sstore 0.i256 4.i256;
-        jump block24;
+        jump block29;
 
-    block24:
-        v32.i256 = phi (0.i256 block26) (0.i256 block27) (1.i256 block25);
+    block29:
+        v32.i256 = phi (0.i256 block31) (0.i256 block32) (1.i256 block30);
         call %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f v32;
         unreachable;
 

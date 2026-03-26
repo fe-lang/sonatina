@@ -78,9 +78,9 @@ __EnumContract_runtime:
     PUSH1 0x4 (4)  // v32.i1 = lt v31 4.i256;
     SWAP1
     LT
-    PUSH1 block1  // br v32 block7 block8;
+    PUSH1 block1  // br v32 block10 block11;
     JUMPI
-  block8:
+  block11:
     PUSH0  // v33.i256 = call %calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_word_at 0.i256 0.i256;
     PUSH0
     PUSH1 `pc + (4)`

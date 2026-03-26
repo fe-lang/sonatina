@@ -900,6 +900,10 @@ block1:
                 !dumped.contains("is_zero "),
                 "unreachable continuation should be removed:\n{dumped}"
             );
+            assert!(
+                !dumped.contains("undef"),
+                "structural noreturn cleanup should not synthesize undef:\n{dumped}"
+            );
         });
     }
 
