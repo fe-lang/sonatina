@@ -704,6 +704,7 @@ impl FromSyntax<Error> for Type {
             Rule::primitive_type => TypeKind::Int(IntType::from_str(node.txt).unwrap()),
             Rule::ptr_type => TypeKind::Ptr(Box::new(node.single(Rule::type_name))),
             Rule::objref_type => TypeKind::ObjRef(Box::new(node.single(Rule::type_name))),
+            Rule::constref_type => TypeKind::ConstRef(Box::new(node.single(Rule::type_name))),
             Rule::enumtag_type => TypeKind::EnumTag(node.single(Rule::struct_identifier)),
             Rule::array_type => {
                 let Ok(size) = usize::from_str(node.get(Rule::array_size).as_str()) else {
@@ -737,6 +738,7 @@ pub enum TypeKind {
     Int(IntType),
     Ptr(Box<Type>),
     ObjRef(Box<Type>),
+    ConstRef(Box<Type>),
     EnumTag(StructName),
     Array(Box<Type>, usize),
     Named(SmolStr),

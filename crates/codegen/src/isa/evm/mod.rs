@@ -1,3 +1,4 @@
+mod const_data;
 mod heap_plan;
 mod late_alias;
 mod late_block_merge;
@@ -1927,7 +1928,7 @@ fn type_is_legalized_evm(ctx: &ModuleCtx, ty: Type, seen: &mut FxHashSet<Compoun
                 CompoundType::Array { elem, .. } | CompoundType::Ptr(elem) => {
                     type_is_legalized_evm(ctx, elem, seen)
                 }
-                CompoundType::ObjRef(_) => false,
+                CompoundType::ObjRef(_) | CompoundType::ConstRef(_) => false,
                 CompoundType::Func { args, ret_tys } => args
                     .iter()
                     .chain(ret_tys.iter())
@@ -1994,6 +1995,7 @@ fn collect_call_closure(module: &Module, roots: &[FuncRef]) -> Vec<FuncRef> {
 
 fn run_evm_pre_memory_aggregate_pipeline(module: &Module) -> LocalObjectArgMap {
     EnumLowerToProduct.run(module);
+    const_data::ConstDataLower::default().run(module);
     for func_ref in module.funcs() {
         module.func_store.modify(func_ref, |function| {
             AggregateCombine::default().run(function)
@@ -3113,11 +3115,16 @@ impl LowerBackend for EvmBackend {
 
                 emit_post_actions(ctx, &alloc.write(insn, results.as_slice()));
             }
-            EvmInstKind::ObjAlloc(_)
+            EvmInstKind::ConstRef(_)
+            | EvmInstKind::ConstProj(_)
+            | EvmInstKind::ConstIndex(_)
+            | EvmInstKind::ConstLoad(_)
+            | EvmInstKind::ObjAlloc(_)
             | EvmInstKind::ObjProj(_)
             | EvmInstKind::ObjIndex(_)
             | EvmInstKind::ObjLoad(_)
             | EvmInstKind::ObjStore(_)
+            | EvmInstKind::ObjInitConst(_)
             | EvmInstKind::EnumMake(_)
             | EvmInstKind::EnumTag(_)
             | EvmInstKind::EnumIsVariant(_)
@@ -3779,6 +3786,9 @@ fn build_gep_lower_plan(ctx: &Lower<OpCode>, args: &[ValueId]) -> GepLowerPlan {
             }
             CompoundType::ObjRef(_) => {
                 panic!("invalid gep: indexing into object-reference type");
+            }
+            CompoundType::ConstRef(_) => {
+                panic!("invalid gep: indexing into const-reference type");
             }
         }
     }

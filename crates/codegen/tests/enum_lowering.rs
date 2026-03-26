@@ -427,7 +427,8 @@ fn type_contains_live_enum(module: &Module, ty: Type) -> bool {
             CompoundType::Enum(_) => true,
             CompoundType::Array { elem, .. }
             | CompoundType::Ptr(elem)
-            | CompoundType::ObjRef(elem) => type_contains_live_enum(module, elem),
+            | CompoundType::ObjRef(elem)
+            | CompoundType::ConstRef(elem) => type_contains_live_enum(module, elem),
             CompoundType::Struct(data) => data
                 .fields
                 .iter()

@@ -82,6 +82,10 @@ impl Interpret for Gep {
                     panic!("Invalid GEP: indexing into an object reference");
                 }
 
+                CompoundType::ConstRef(_) => {
+                    panic!("Invalid GEP: indexing into a const reference");
+                }
+
                 CompoundType::Enum(_) => {
                     panic!("Invalid GEP: indexing into an enum type");
                 }
@@ -156,6 +160,7 @@ impl Interpret for InsertValue {
                     CompoundType::Enum(_) => unreachable!(),
                     CompoundType::Ptr(_) => unreachable!(),
                     CompoundType::ObjRef(_) => unreachable!(),
+                    CompoundType::ConstRef(_) => unreachable!(),
                     CompoundType::Func { .. } => unreachable!(),
                 };
                 vec![EvalValue::Undef; len]

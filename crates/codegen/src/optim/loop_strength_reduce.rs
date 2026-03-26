@@ -1047,6 +1047,7 @@ fn const_gep_offset(func: &Function, base: ValueId, indices: &[ValueId]) -> Opti
             }
             sonatina_ir::types::CompoundType::Enum(_)
             | sonatina_ir::types::CompoundType::ObjRef(_)
+            | sonatina_ir::types::CompoundType::ConstRef(_)
             | sonatina_ir::types::CompoundType::Func { .. } => return None,
         }
     }

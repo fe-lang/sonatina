@@ -63,10 +63,11 @@ block_ident  = ${ "block" ~ block_number }
 block_number =  { ASCII_DIGIT+ }
 value_name   = ${ "v" ~ ASCII_DIGIT+ }
 
-type_name          =  { primitive_type | ptr_type | objref_type | enumtag_type | array_type | unit_type | struct_identifier | function_type }
+type_name          =  { primitive_type | ptr_type | objref_type | constref_type | enumtag_type | array_type | unit_type | struct_identifier | function_type }
 primitive_type     =  { "i8" | "i16" | "i32" | "i64" | "i128" | "i256" | "i1" }
 ptr_type           = ${ "*" ~ type_name }
 objref_type        = ${ "objref" ~ "<" ~ type_name ~ ">" }
+constref_type      = ${ "constref" ~ "<" ~ type_name ~ ">" }
 enumtag_type       = ${ "enumtag" ~ "(" ~ struct_identifier ~ ")" }
 array_type         = !{ "[" ~ type_name ~ ";" ~ array_size ~ "]" }
 array_size         =  { ASCII_DIGIT+ }

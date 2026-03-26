@@ -27,6 +27,11 @@ impl TypeStore {
         Type::Compound(ty)
     }
 
+    pub fn make_const_ref(&mut self, ty: Type) -> Type {
+        let ty = self.make_compound(CompoundType::ConstRef(ty));
+        Type::Compound(ty)
+    }
+
     pub fn make_array(&mut self, elem: Type, len: usize) -> Type {
         let ty = self.make_compound(CompoundType::Array { elem, len });
         Type::Compound(ty)
@@ -231,6 +236,13 @@ impl TypeStore {
         }
     }
 
+    pub fn is_const_ref(&self, ty: Type) -> bool {
+        match ty {
+            Type::Compound(cmpd_ref) => self.compounds[cmpd_ref].is_const_ref(),
+            _ => false,
+        }
+    }
+
     pub fn is_array(&self, ty: Type) -> bool {
         match ty {
             Type::Compound(cmpd_ref) => self.compounds[cmpd_ref].is_array(),
@@ -341,6 +353,10 @@ impl Type {
         ctx.with_ty_store(|store| store.is_obj_ref(self))
     }
 
+    pub fn is_const_ref(self, ctx: &ModuleCtx) -> bool {
+        ctx.with_ty_store(|store| store.is_const_ref(self))
+    }
+
     pub fn resolve_compound(self, ctx: &ModuleCtx) -> Option<CompoundType> {
         let Self::Compound(cmpd) = self else {
             return None;
@@ -355,6 +371,10 @@ impl Type {
 
     pub fn to_obj_ref(self, ctx: &ModuleCtx) -> Type {
         ctx.with_ty_store_mut(|s| s.make_obj_ref(self))
+    }
+
+    pub fn to_const_ref(self, ctx: &ModuleCtx) -> Type {
+        ctx.with_ty_store_mut(|s| s.make_const_ref(self))
     }
 }
 
@@ -464,6 +484,11 @@ where
                     ty.write(w, ctx)?;
                     write!(w, ">")
                 }
+                CompoundType::ConstRef(ty) => {
+                    write!(w, "constref<")?;
+                    ty.write(w, ctx)?;
+                    write!(w, ">")
+                }
                 CompoundType::Struct(StructData { name, packed, .. }) => {
                     if *packed {
                         write!(w, "@<{name}>")
@@ -519,6 +544,7 @@ pub enum CompoundType {
     },
     Ptr(Type),
     ObjRef(Type),
+    ConstRef(Type),
     Struct(StructData),
     Enum(EnumData),
     Func {
@@ -611,6 +637,10 @@ impl CompoundType {
 
     pub fn is_obj_ref(&self) -> bool {
         matches!(self, Self::ObjRef(_))
+    }
+
+    pub fn is_const_ref(&self) -> bool {
+        matches!(self, Self::ConstRef(_))
     }
 
     pub fn is_struct(&self) -> bool {

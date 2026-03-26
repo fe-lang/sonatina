@@ -470,6 +470,10 @@ impl BuildCtx {
                 let t = self.type_(mb, t);
                 mb.objref_type(t)
             }
+            ast::TypeKind::ConstRef(t) => {
+                let t = self.type_(mb, t);
+                mb.constref_type(t)
+            }
             ast::TypeKind::EnumTag(name) => mb
                 .lookup_enum(&name.0)
                 .map(ir::Type::EnumTag)
@@ -1080,6 +1084,38 @@ func private %ops(v0.i256, v1.i256, v2.i256) -> i256 {
         assert!(printed.contains("obj.materialize.stack v3"));
         assert!(printed.contains("mem.alloc_dynamic v2"));
         assert!(printed.contains("obj.materialize.heap v3"));
+    }
+
+    #[test]
+    fn test_constref_and_const_ops_roundtrip() {
+        let s = r#"
+target = "evm-ethereum-london"
+
+type @pair = {i256, [i256; 2]};
+
+global private const @pair $pair = {10, [11, 12]};
+
+func private %ops() -> i256 {
+    block0:
+        v0.constref<@pair> = const.ref $pair;
+        v1.constref<[i256; 2]> = const.proj v0 1.i8;
+        v2.constref<i256> = const.index v1 0.i8;
+        v3.i256 = const.load v2;
+        v4.objref<@pair> = obj.alloc @pair;
+        obj.init.const v4 v0;
+        return v3;
+}
+"#;
+
+        let parsed = parse_module(s).unwrap();
+        let mut w = ir::ir_writer::ModuleWriter::with_debug_provider(&parsed.module, &parsed.debug);
+        let printed = w.dump_string();
+        assert!(printed.contains("constref<@pair>"), "{printed}");
+        assert!(printed.contains("const.ref $pair"), "{printed}");
+        assert!(printed.contains("const.proj v0 1.i8"), "{printed}");
+        assert!(printed.contains("const.index v1 0.i8"), "{printed}");
+        assert!(printed.contains("const.load v2"), "{printed}");
+        assert!(printed.contains("obj.init.const v4 v0"), "{printed}");
     }
 
     #[test]

@@ -352,6 +352,14 @@ impl FunctionVerifier<'_> {
                     ));
                     return None;
                 }
+                CompoundType::ConstRef(_) => {
+                    self.emit(Diagnostic::error(
+                        DiagnosticCode::GepTypeComputationFailed,
+                        "gep cannot index into const-reference type",
+                        location.clone(),
+                    ));
+                    return None;
+                }
                 CompoundType::Enum(_) => {
                     self.emit(Diagnostic::error(
                         DiagnosticCode::GepTypeComputationFailed,
@@ -495,7 +503,10 @@ impl FunctionVerifier<'_> {
                 ));
                 None
             }
-            CompoundType::Ptr(_) | CompoundType::ObjRef(_) | CompoundType::Func { .. } => {
+            CompoundType::Ptr(_)
+            | CompoundType::ObjRef(_)
+            | CompoundType::ConstRef(_)
+            | CompoundType::Func { .. } => {
                 self.emit(Diagnostic::error(
                     DiagnosticCode::InstOperandTypeMismatch,
                     "aggregate operation destination must be struct or array",

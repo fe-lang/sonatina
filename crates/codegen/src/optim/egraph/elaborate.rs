@@ -1327,7 +1327,9 @@ impl<'a> Elaborator<'a> {
                     *data.fields.get(field_idx)?
                 }
                 CompoundType::Enum(_) => return None,
-                CompoundType::ObjRef(_) | CompoundType::Func { .. } => return None,
+                CompoundType::ObjRef(_) | CompoundType::ConstRef(_) | CompoundType::Func { .. } => {
+                    return None;
+                }
             };
         }
 

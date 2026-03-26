@@ -86,7 +86,8 @@ fn encode_initializer(
 
         Some(CompoundType::Enum(_))
         | Some(CompoundType::Ptr(_))
-        | Some(CompoundType::ObjRef(_)) => Err(DataEncodingError::UnsupportedType(ty)),
+        | Some(CompoundType::ObjRef(_))
+        | Some(CompoundType::ConstRef(_)) => Err(DataEncodingError::UnsupportedType(ty)),
         Some(CompoundType::Func { .. }) => Err(DataEncodingError::UnsupportedType(ty)),
         None => Err(DataEncodingError::UnsupportedType(ty)),
     }
@@ -131,7 +132,8 @@ fn encoded_size(ctx: &ModuleCtx, ty: Type) -> Result<usize, DataEncodingError> {
 
         Some(CompoundType::Enum(_))
         | Some(CompoundType::Ptr(_))
-        | Some(CompoundType::ObjRef(_)) => Err(DataEncodingError::UnsupportedType(ty)),
+        | Some(CompoundType::ObjRef(_))
+        | Some(CompoundType::ConstRef(_)) => Err(DataEncodingError::UnsupportedType(ty)),
         Some(CompoundType::Func { .. }) => Err(DataEncodingError::UnsupportedType(ty)),
         None => Err(DataEncodingError::UnsupportedType(ty)),
     }

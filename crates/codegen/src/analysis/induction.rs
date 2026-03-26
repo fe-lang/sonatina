@@ -316,7 +316,10 @@ fn match_gep(func: &Function, biv: AffineIv, gep: &Gep) -> Option<MatchedAffineA
                 const_bytes = const_bytes.checked_add(i64::from(field_offset))?;
                 current_ty = field_ty;
             }
-            CompoundType::Enum(_) | CompoundType::ObjRef(_) | CompoundType::Func { .. } => {
+            CompoundType::Enum(_)
+            | CompoundType::ObjRef(_)
+            | CompoundType::ConstRef(_)
+            | CompoundType::Func { .. } => {
                 return None;
             }
         }
@@ -648,7 +651,10 @@ fn const_gep_offset(func: &Function, base: ValueId, indices: &[ValueId]) -> Opti
                 total = total.checked_add(i64::from(field_offset))?;
                 current_ty = field_ty;
             }
-            CompoundType::Enum(_) | CompoundType::ObjRef(_) | CompoundType::Func { .. } => {
+            CompoundType::Enum(_)
+            | CompoundType::ObjRef(_)
+            | CompoundType::ConstRef(_)
+            | CompoundType::Func { .. } => {
                 return None;
             }
         }

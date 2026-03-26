@@ -142,6 +142,15 @@ impl EnumTypeLowerer {
                     mapped
                 })
             }
+            CompoundType::ConstRef(elem) => {
+                let elem = self.rewrite_type(ctx, elem);
+                ctx.with_ty_store_mut(|store| {
+                    let Type::Compound(mapped) = store.make_const_ref(elem) else {
+                        unreachable!();
+                    };
+                    mapped
+                })
+            }
             CompoundType::Func { args, ret_tys } => {
                 let args: Vec<_> = args
                     .iter()

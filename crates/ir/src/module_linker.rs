@@ -451,6 +451,10 @@ impl ModuleLinker {
                 let linked_ty = link_type(self, ty)?;
                 CompoundType::ObjRef(linked_ty)
             }
+            CompoundType::ConstRef(ty) => {
+                let linked_ty = link_type(self, ty)?;
+                CompoundType::ConstRef(linked_ty)
+            }
 
             CompoundType::Func {
                 mut args,

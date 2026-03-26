@@ -485,6 +485,15 @@ impl ObjRefTypeLowerer {
                 self.changed = true;
                 mapped
             }
+            CompoundType::ConstRef(elem) => {
+                let elem = self.rewrite_type(ctx, elem);
+                ctx.with_ty_store_mut(|store| {
+                    let Type::Compound(mapped) = store.make_const_ref(elem) else {
+                        unreachable!();
+                    };
+                    mapped
+                })
+            }
             CompoundType::Enum(data) => {
                 let new_variants: Vec<_> = data
                     .variants
@@ -601,7 +610,9 @@ mod tests {
             }
 
             match ctx.with_ty_store(|store| store.resolve_compound(compound).clone()) {
-                CompoundType::Array { elem, .. } | CompoundType::Ptr(elem) => worklist.push(elem),
+                CompoundType::Array { elem, .. }
+                | CompoundType::Ptr(elem)
+                | CompoundType::ConstRef(elem) => worklist.push(elem),
                 CompoundType::ObjRef(_) => return true,
                 CompoundType::Struct(data) => worklist.extend(data.fields),
                 CompoundType::Enum(data) => {

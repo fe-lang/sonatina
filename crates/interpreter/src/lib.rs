@@ -228,6 +228,10 @@ impl State for Machine {
                     panic!("object references can't be loaded from raw memory");
                 }
 
+                CompoundType::ConstRef(_) => {
+                    panic!("const references can't be loaded from raw memory");
+                }
+
                 CompoundType::Func { .. } => {
                     panic!("function type can't be placed in memory");
                 }
@@ -296,6 +300,10 @@ impl State for Machine {
 
                 CompoundType::ObjRef(_) => {
                     panic!("object references can't be stored in raw memory");
+                }
+
+                CompoundType::ConstRef(_) => {
+                    panic!("const references can't be stored in raw memory");
                 }
 
                 CompoundType::Func { .. } => {

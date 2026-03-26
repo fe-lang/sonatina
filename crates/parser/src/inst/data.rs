@@ -11,10 +11,15 @@ super::impl_inst_build_common! {SymAddr, build_sym_addr}
 super::impl_inst_build_common! {SymSize, build_sym_size}
 super::impl_inst_build! {Alloca, (ty: Type)}
 super::impl_inst_build! {ObjAlloc, (ty: Type)}
+super::impl_inst_build_common! {ConstRef, build_const_ref}
+super::impl_inst_build_common! {ConstProj, build_const_proj}
+super::impl_inst_build! {ConstIndex, (object: ValueId, index: ValueId)}
+super::impl_inst_build! {ConstLoad, (object: ValueId)}
 super::impl_inst_build_common! {ObjProj, build_obj_proj}
 super::impl_inst_build! {ObjIndex, (object: ValueId, index: ValueId)}
 super::impl_inst_build! {ObjLoad, (object: ValueId)}
 super::impl_inst_build! {ObjStore, (object: ValueId, value: ValueId)}
+super::impl_inst_build! {ObjInitConst, (object: ValueId, value: ValueId)}
 super::impl_inst_build_common! {EnumMake, build_enum_make}
 super::impl_inst_build! {EnumTag, (value: ValueId)}
 super::impl_inst_build_common! {EnumIsVariant, build_enum_is_variant}
@@ -41,6 +46,16 @@ fn build_sym_addr(
     Ok(SymAddr::new(has_inst, sym))
 }
 
+fn build_const_ref(
+    ctx: &mut BuildCtx,
+    fb: &mut FunctionBuilder<ir::func_cursor::InstInserter>,
+    args: &[ast::InstArg],
+    has_inst: &dyn HasInst<ConstRef>,
+) -> Result<ConstRef, Box<Error>> {
+    let global = build_global_ref(ctx, fb, args)?;
+    Ok(ConstRef::new(has_inst, global.into()))
+}
+
 fn build_sym_size(
     ctx: &mut BuildCtx,
     fb: &mut FunctionBuilder<ir::func_cursor::InstInserter>,
@@ -49,6 +64,49 @@ fn build_sym_size(
 ) -> Result<SymSize, Box<Error>> {
     let sym = build_symbol_ref(ctx, fb, args)?;
     Ok(SymSize::new(has_inst, sym))
+}
+
+fn build_global_ref(
+    ctx: &mut BuildCtx,
+    fb: &mut FunctionBuilder<ir::func_cursor::InstInserter>,
+    args: &[ast::InstArg],
+) -> Result<ir::GlobalVariableRef, Box<Error>> {
+    let arg = &args[0];
+    let ast::InstArgKind::Value(value) = &arg.kind else {
+        return Err(Box::new(Error::InstArgKindMismatch {
+            expected: "global value".into(),
+            actual: Some(
+                match &arg.kind {
+                    ast::InstArgKind::Value(_) => "value",
+                    ast::InstArgKind::MultiValue(_) => "(value, ...)",
+                    ast::InstArgKind::Ty(_) => "type",
+                    ast::InstArgKind::Variant(_) => "variant name",
+                    ast::InstArgKind::Block(_) => "block",
+                    ast::InstArgKind::ValueBlockMap(_) => "(value, block)",
+                    ast::InstArgKind::FuncRef(_) => "function name",
+                    ast::InstArgKind::EmbedSymbol(_) => "embed symbol",
+                    ast::InstArgKind::CurrentSection => "current section symbol",
+                }
+                .into(),
+            ),
+            span: arg.span,
+        }));
+    };
+    let ast::ValueKind::Global(name) = &value.kind else {
+        return Err(Box::new(Error::InstArgKindMismatch {
+            expected: "global value".into(),
+            actual: Some("value".into()),
+            span: arg.span,
+        }));
+    };
+    let Some(gv) = fb.module_builder.lookup_gv(&name.string) else {
+        ctx.errors.push(Error::Undefined(
+            crate::UndefinedKind::Value(name.string.clone()),
+            value.span,
+        ));
+        return Ok(ir::GlobalVariableRef::from_u32(0));
+    };
+    Ok(gv)
 }
 
 fn build_symbol_ref(
@@ -104,6 +162,25 @@ fn build_symbol_ref(
             ),
             span: arg.span,
         })),
+    }
+}
+
+fn build_const_proj(
+    ctx: &mut BuildCtx,
+    fb: &mut FunctionBuilder<ir::func_cursor::InstInserter>,
+    args: &[ast::InstArg],
+    has_inst: &dyn HasInst<ConstProj>,
+) -> Result<ConstProj, Box<Error>> {
+    let mut values = SmallVec::new();
+    let mut ast_args = args.iter().peekable();
+    while ast_args.peek().is_some() {
+        values.push(super::process_arg!(ctx, fb, ast_args, ValueId));
+    }
+
+    if let Some(arg) = ast_args.next() {
+        Err(Box::new(Error::UnexpectedTrailingInstArg(arg.span)))
+    } else {
+        Ok(ConstProj::new(has_inst, values))
     }
 }
 
