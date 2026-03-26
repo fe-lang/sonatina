@@ -18,6 +18,11 @@ use super::{
 
 type LeafValues = SmallVec<[ValueId; 4]>;
 
+// The current EVM backend remains correct for scalarized aggregates up to 16 leaves,
+// but wider scalar webs can miscompile during optimized lowering. Keep those aggregates
+// in their original object/aggregate form until the backend can preserve wider live sets.
+const MAX_SCALARIZABLE_VALUE_LEAVES: usize = 16;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum RootKind {
     Alloca { inst: InstId },
@@ -893,6 +898,12 @@ impl AggregateScalarize {
         for value in func.dfg.value_ids() {
             let ty = func.dfg.value_ty(value);
             if !shape::is_supported_scalar_shape_ty(module, ty) {
+                continue;
+            }
+            if self
+                .aggregate_shape(module, ty)
+                .is_some_and(|shape| shape.leaves.len() > MAX_SCALARIZABLE_VALUE_LEAVES)
+            {
                 continue;
             }
             let ok = match func.dfg.value(value) {
@@ -3179,6 +3190,54 @@ func private %f(v0.i256, v1.i256, v2.i256) -> i256 {
 
         module.func_store.view(func_ref, |func| {
             assert_no_promoted_aggregate_artifacts(func, &ctx);
+        });
+    }
+
+    #[test]
+    fn scalarize_skips_wide_insert_value_webs_above_sixteen_leaves() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func private %f(v0.i256) -> i256 {
+    block0:
+        v1.[i256; 17] = insert_value undef.[i256; 17] 0.i8 v0;
+        v2.[i256; 17] = insert_value v1 1.i8 v0;
+        v3.[i256; 17] = insert_value v2 2.i8 v0;
+        v4.[i256; 17] = insert_value v3 3.i8 v0;
+        v5.[i256; 17] = insert_value v4 4.i8 v0;
+        v6.[i256; 17] = insert_value v5 5.i8 v0;
+        v7.[i256; 17] = insert_value v6 6.i8 v0;
+        v8.[i256; 17] = insert_value v7 7.i8 v0;
+        v9.[i256; 17] = insert_value v8 8.i8 v0;
+        v10.[i256; 17] = insert_value v9 9.i8 v0;
+        v11.[i256; 17] = insert_value v10 10.i8 v0;
+        v12.[i256; 17] = insert_value v11 11.i8 v0;
+        v13.[i256; 17] = insert_value v12 12.i8 v0;
+        v14.[i256; 17] = insert_value v13 13.i8 v0;
+        v15.[i256; 17] = insert_value v14 14.i8 v0;
+        v16.[i256; 17] = insert_value v15 15.i8 v0;
+        v17.[i256; 17] = insert_value v16 16.i8 v0;
+        v18.i256 = extract_value v17 16.i8;
+        return v18;
+}
+"#,
+        );
+        let func_ref = lookup_func(&module, "f");
+        module.func_store.modify(func_ref, |func| {
+            AggregateScalarize::default().run(func);
+        });
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            assert!(
+                dumped.contains("insert_value"),
+                "wide aggregate insert_value web should not scalarize:\n{dumped}"
+            );
+            assert!(
+                dumped.contains("extract_value"),
+                "wide aggregate extract_value should remain explicit:\n{dumped}"
+            );
         });
     }
 
