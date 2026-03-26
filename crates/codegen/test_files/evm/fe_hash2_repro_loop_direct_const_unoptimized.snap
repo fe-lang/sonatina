@@ -1,0 +1,226 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: "String::from_utf8(out).unwrap()"
+input_file: test_files/evm/fe_hash2_repro_loop_direct_const_unoptimized.sntn
+---
+evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=true evm_trace=false emit_observability=false opt=2
+
+object: Contract
+  section runtime: 142 bytes
+  total: 142 bytes
+
+functions:
+  run: ir_blocks=4 ir_insts=31 vcode_ops=46 fixups=4 imm_bytes=10
+    mem: scratch_words=3 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=3
+  __repro_runtime_entry: ir_blocks=3 ir_insts=5 vcode_ops=16 fixups=3 imm_bytes=1
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=0
+
+evm:
+  case ok: calldata_len=0 success reason=Return gas_used=21242 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=242
+
+
+--------------- DEBUG ---------------
+
+// func private %run() -> i256
+  block0 P=[] T=[]
+    // v0.*[i256; 1] = alloca [i256; 1];
+    - stack=[<RET>]
+      alloca [] -> v0
+    // v1.i256 = sym_addr $__fe_const_data_0;
+    - stack=[v0, <RET>]
+      sym_addr [] -> v1
+    // v2.*[i256; 1] = int_to_ptr v1 *[i256; 1];
+    - stack=[v1, v0, <RET>]
+      int_to_ptr [v1] -> v1
+    // v3.*i256 = bitcast v2 *i256;
+    - stack=[v1, v0, <RET>]
+      bitcast [v1] -> v1
+    // v4.i256 = ptr_to_int v3 i256;
+    - stack=[v1, v0, <RET>]
+      ptr_to_int [v1] -> v1
+    // v5.*i256 = alloca i256;
+    - stack=[v1, v0, <RET>]
+      alloca [] -> v5
+    // v6.i256 = ptr_to_int v5 i256;
+    - stack=[v5, v1, v0, <RET>]
+      ptr_to_int [v5] -> v5
+    // evm_code_copy v6 v4 32.i256;
+    - stack=[v5, v1, v0, <RET>], last_use=[v1]
+      pre: [PUSH(32), SWAP1, SWAP2, DUP3]
+      evm_code_copy [v5, v1, 32]
+    // v7.i256 = mload v6 i256;
+    - stack=[v5, v0, <RET>], last_use=[v5]
+      mload [v5] -> v7
+    // v8.*i256 = bitcast v0 *i256;
+    - stack=[v7, v0, <RET>]
+      bitcast [v0] -> v0
+    // mstore v8 v7 i256;
+    - stack=[v7, v0, <RET>], last_use=[v7]
+      pre: [DUP2]
+      mstore [v0, v7]
+    // v13.i256 = sym_addr $__fe_const_data_1;
+    - stack=[v0, <RET>]
+      sym_addr [] -> v13
+    // v14.*[i256; 1] = int_to_ptr v13 *[i256; 1];
+    - stack=[v13, v0, <RET>]
+      int_to_ptr [v13] -> v13
+    // v15.*i256 = bitcast v14 *i256;
+    - stack=[v13, v0, <RET>]
+      bitcast [v13] -> v13
+    // v16.i256 = ptr_to_int v15 i256;
+    - stack=[v13, v0, <RET>]
+      ptr_to_int [v13] -> v13
+    // jump block1;
+    - stack=[v13, v0, <RET>]
+      exit(block1): [PUSH(0), SWAP1, SWAP2]
+      jump -> block1
+  block1 P=[v34, v10] T=[v13]
+    // v28.i1 = lt v10 1.i256;
+    - stack=[v34, v10, v13, <RET>]
+      pre: [PUSH(1), DUP3]
+      lt [v10, 1] -> v28
+    // br v28 block2 block3;
+    - stack=[v28, v34, v10, v13, <RET>]
+      br [v28] -> [block2, block3]
+  block2 P=[] T=[v10, v13]
+    inherited from block1: [v34x, v10, v13, <RET>]
+    prologue: [POP]
+    // v12.*[i256; 1] = alloca [i256; 1];
+    - stack=[v10, v13, <RET>]
+      alloca [] -> v12
+    // v17.*i256 = alloca i256;
+    - stack=[v12, v10, v13, <RET>]
+      alloca [] -> v17
+    // v18.i256 = ptr_to_int v17 i256;
+    - stack=[v17, v12, v10, v13, <RET>]
+      ptr_to_int [v17] -> v17
+    // evm_code_copy v18 v16 32.i256;
+    - stack=[v17, v12, v10, v13, <RET>]
+      pre: [PUSH(32), DUP5, DUP3]
+      evm_code_copy [v17, v13, 32]
+    // v19.i256 = mload v18 i256;
+    - stack=[v17, v12, v10, v13, <RET>], last_use=[v17]
+      mload [v17] -> v19
+    // v20.*i256 = bitcast v12 *i256;
+    - stack=[v19, v12, v10, v13, <RET>]
+      bitcast [v12] -> v12
+    // mstore v20 v19 i256;
+    - stack=[v19, v12, v10, v13, <RET>], last_use=[v19]
+      pre: [DUP2]
+      mstore [v12, v19]
+    // v30.i256 = add 1.i256 v10;
+    - stack=[v12, v10, v13, <RET>], last_use=[v10]
+      pre: [SWAP1, PUSH(1)]
+      add [1, v10] -> v30
+    // jump block1;
+    - stack=[v30, v12, v13, <RET>]
+      exit(block1): [SWAP1]
+      jump -> block1
+  block3 P=[] T=[v34]
+    inherited from block1: [v34, v10x, v13x, <RET>]
+    // v24.i256 = mload v34 i256;
+    - stack=[v34, v10x, v13x, <RET>], last_use=[v34]
+      cleanup: [SWAP2, POP, POP]
+      mload [v34] -> v24
+    // return v24;
+    - stack=[v24, <RET>]
+      return [v24]
+
+// func private %__repro_runtime_entry()
+  block0 P=[] T=[]
+    // v1.i256 = call %run;
+    - stack=[]
+      pre: [PUSH_CONT]
+      call [] -> v1
+    // v3.i1 = eq 2.i256 v1;
+    - stack=[v1], last_use=[v1]
+      pre: [PUSH(2)]
+      eq [2, v1] -> v3
+    // br v3 block1 block4;
+    - stack=[v3]
+      br [v3] -> [block1, block4]
+  block1 P=[] T=[]
+    // evm_return 0.i256 0.i256;
+    - stack=[]
+      pre: [PUSH(0), PUSH(0)]
+      evm_return [0, 0]
+  block4 P=[] T=[]
+    // evm_revert 0.i256 0.i256;
+    - stack=[]
+      pre: [PUSH(0), PUSH(0)]
+      evm_revert [0, 0]
+
+// func private %run() -> i256
+run:
+  block0:
+    JUMPDEST
+    PUSH1 0xa0 (160)  // v0.*[i256; 1] = alloca [i256; 1];
+    PUSH0 0x0 (0)  // v1.i256 = sym_addr $__fe_const_data_0;
+    PUSH1 0xc0 (192)  // v7.*i256 = alloca i256;
+    PUSH1 0x20 (32)  // evm_code_copy v8 v5 32.i256;
+    SWAP1
+    SWAP2
+    DUP3
+    CODECOPY
+    MLOAD  // v9.i256 = mload v8 i256;
+    DUP2  // mstore v10 v9 i256;
+    MSTORE
+    PUSH0 0x0 (0)  // v15.i256 = sym_addr $__fe_const_data_1;
+    PUSH0  // jump block1;
+    SWAP1
+    SWAP2
+  block1:
+    JUMPDEST
+    PUSH1 0x1 (1)  // v28.i1 = lt v11 1.i256;
+    DUP3
+    LT
+    ISZERO  // br v28 block2 block3;
+    PUSH1 block3
+    JUMPI
+  block2:
+    POP  // v14.*[i256; 1] = alloca [i256; 1];
+    PUSH1 0xc0 (192)
+    PUSH1 0xe0 (224)  // v19.*i256 = alloca i256;
+    PUSH1 0x20 (32)  // evm_code_copy v20 v18 32.i256;
+    DUP5
+    DUP3
+    CODECOPY
+    MLOAD  // v21.i256 = mload v20 i256;
+    DUP2  // mstore v22 v21 i256;
+    MSTORE
+    SWAP1  // v30.i256 = add 1.i256 v11;
+    PUSH1 0x1 (1)
+    ADD
+    SWAP1  // jump block1;
+    PUSH1 block1
+    JUMP
+  block3:
+    JUMPDEST
+    SWAP2  // v28.i256 = mload v34 i256;
+    POP
+    POP
+    MLOAD
+    SWAP1  // return v28;
+    JUMP
+
+// func private %__repro_runtime_entry()
+__repro_runtime_entry:
+  block0:
+    PUSH1 `pc + (3)`  // v1.i256 = call %run;
+    PUSH1 FuncRef(0)
+    JUMP
+    JUMPDEST
+    PUSH1 0x2 (2)  // v3.i1 = eq 2.i256 v1;
+    EQ
+    ISZERO  // br v3 block1 block4;
+    PUSH1 block4
+    JUMPI
+  block1:
+    PUSH0  // evm_return 0.i256 0.i256;
+    PUSH0
+    RETURN
+  block4:
+    JUMPDEST
+    PUSH0  // evm_revert 0.i256 0.i256;
+    PUSH0
+    REVERT

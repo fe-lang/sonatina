@@ -844,6 +844,66 @@ func private %caller() {
     }
 
     #[test]
+    fn cfg_cleanup_trims_noreturn_call_with_split_continuation() {
+        let source = r#"
+target = "evm-ethereum-osaka"
+
+func private %run() -> i256 {
+block0:
+    evm_return 0.i256 0.i256;
+}
+
+func private %test_run() {
+block0:
+    v0.i256 = call %run;
+    v3.i1 = eq v0 2.i256;
+    jump block2;
+
+block2:
+    v4.i1 = is_zero v3;
+    br v4 block3 block4;
+
+block3:
+    evm_revert 0.i256 0.i256;
+
+block4:
+    jump block1;
+
+block1:
+    return;
+}
+"#;
+
+        let mut module = parse_module(source).expect("parse should succeed").module;
+        run_test_func_passes(&mut module, &[Pass::CfgCleanup]);
+
+        let test_run = module
+            .funcs()
+            .into_iter()
+            .find(|func_ref| {
+                module
+                    .ctx
+                    .func_sig(*func_ref, |sig| sig.name() == "test_run")
+            })
+            .expect("test_run should exist");
+        module.func_store.view(test_run, |func| {
+            let dumped = FuncWriter::new(test_run, func).dump_string();
+            assert!(
+                dumped.contains("unreachable;"),
+                "split continuation after noreturn call should be trimmed:\n{dumped}"
+            );
+            assert!(
+                !dumped.contains("eq "),
+                "trimmed tail should not leave eq behind:\n{dumped}"
+            );
+            assert!(
+                !dumped.contains("is_zero "),
+                "unreachable continuation should be removed:\n{dumped}"
+            );
+        });
+    }
+
+    #[test]
     fn default_pipeline_prunes_unreachable_private_functions() {
         let source = r#"
 target = "evm-ethereum-london"

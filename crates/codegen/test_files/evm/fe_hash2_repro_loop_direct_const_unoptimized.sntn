@@ -1,0 +1,108 @@
+#! evm.config: { vcode: true, opt: 2, stackify_trace: true }
+#! evm.case: ok
+#!   calldata:
+#!   expect: return
+
+# Full unoptimized (-O 0) Fe Sonatina IR for fe-hash2-repro-loop-direct-const.
+# The original `%run` contract entry is turned into a normal helper by replacing
+# its terminal `evm_stop` with `return`, and a runnable EVM test entry is added
+# to call `%test_run`.
+
+target = "evm-ethereum-osaka"
+
+global private const [i8; 32] $__fe_const_data_0 = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
+global private const [i8; 32] $__fe_const_data_1 = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2];
+
+func private %run() -> i256 {
+    block0:
+        v0.objref<[i256; 1]> = obj.alloc [i256; 1];
+        v1.i256 = sym_addr $__fe_const_data_0;
+        v2.*[i256; 1] = int_to_ptr v1 *[i256; 1];
+        v4.*i256 = gep v2 0.i256 0.i256;
+        v5.i256 = ptr_to_int v4 i256;
+        v7.*i256 = alloca i256;
+        v8.i256 = ptr_to_int v7 i256;
+        evm_code_copy v8 v5 32.i256;
+        v9.i256 = mload v8 i256;
+        v10.objref<i256> = obj.index v0 0.i256;
+        obj.store v10 v9;
+        jump block1;
+
+    block1:
+        v29.objref<[i256; 1]> = phi (v0 block0) (v14 block5);
+        v11.i256 = phi (0.i256 block0) (v24 block5);
+        v13.i1 = call %usize_ha12462c6d36e68b0_ord_h264f6d6d75097a_lt v11 1.i256;
+        br v13 block2 block3;
+
+    block2:
+        v14.objref<[i256; 1]> = obj.alloc [i256; 1];
+        v15.i256 = sym_addr $__fe_const_data_1;
+        v16.*[i256; 1] = int_to_ptr v15 *[i256; 1];
+        v17.*i256 = gep v16 0.i256 0.i256;
+        v18.i256 = ptr_to_int v17 i256;
+        v19.*i256 = alloca i256;
+        v20.i256 = ptr_to_int v19 i256;
+        evm_code_copy v20 v18 32.i256;
+        v21.i256 = mload v20 i256;
+        v22.objref<i256> = obj.index v14 0.i256;
+        obj.store v22 v21;
+        (v24.i256, v25.i1) = uaddo v11 1.i256;
+        br v25 block4 block5;
+
+    block3:
+        v27.objref<i256> = obj.index v29 0.i256;
+        v28.i256 = obj.load v27;
+        return v28;
+
+    block4:
+        evm_revert 0.i256 0.i256;
+
+    block5:
+        jump block1;
+}
+
+func private %test_run() {
+    block0:
+        v0.i256 = call %run;
+        v2.i1 = call %u256_h3271ca15373d4483_eq_he50383edd273619f_eq v0 2.i256;
+        call %assert v2;
+        return;
+}
+
+func private %usize_ha12462c6d36e68b0_ord_h264f6d6d75097a_lt(v0.i256, v1.i256) -> i1 {
+    block0:
+        v2.i1 = lt v0 v1;
+        return v2;
+}
+
+func private %u256_h3271ca15373d4483_eq_he50383edd273619f_eq(v0.i256, v1.i256) -> i1 {
+    block0:
+        v2.i1 = eq v0 v1;
+        return v2;
+}
+
+func private %assert(v0.i1) {
+    block0:
+        v1.i1 = is_zero v0;
+        br v1 block1 block2;
+
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block2:
+        return;
+}
+
+func private %__repro_runtime_entry() {
+    block0:
+        call %test_run;
+        evm_return 0.i256 0.i256;
+}
+
+object @Contract {
+    section runtime {
+        entry %__repro_runtime_entry;
+        data $__fe_const_data_0;
+        data $__fe_const_data_1;
+    }
+}

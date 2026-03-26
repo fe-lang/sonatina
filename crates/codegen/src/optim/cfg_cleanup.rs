@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use cranelift_entity::SecondaryMap;
 use sonatina_ir::{
     BlockId, ControlFlowGraph, Function,
@@ -118,6 +120,37 @@ fn trim_after_noreturn_call(func: &mut Function) -> bool {
             while let Some(after) = cursor {
                 to_remove.push(after);
                 cursor = func.layout.next_inst_of(after);
+            }
+            let to_remove_set: BTreeSet<_> = to_remove.iter().copied().collect();
+
+            // A noreturn call can leave a split continuation region that still references
+            // values defined in the trimmed tail. Those uses are unreachable once we replace
+            // the tail with `unreachable`, so rewrite them to `undef` before erasing.
+            for &trimmed_inst in &to_remove {
+                let results = func.dfg.inst_results(trimmed_inst).to_vec();
+                for result in results {
+                    let users = func.dfg.users(result).copied().collect::<Vec<_>>();
+                    if users.iter().all(|user| {
+                        !func.layout.is_inst_inserted(*user) || to_remove_set.contains(user)
+                    }) {
+                        continue;
+                    }
+
+                    let undef = func.dfg.make_undef_value(func.dfg.value_ty(result));
+                    for user in users {
+                        if !func.layout.is_inst_inserted(user) || to_remove_set.contains(&user) {
+                            continue;
+                        }
+
+                        func.dfg.untrack_inst(user);
+                        func.dfg.inst_mut(user).for_each_value_mut(&mut |value| {
+                            if *value == result {
+                                *value = undef;
+                            }
+                        });
+                        func.dfg.attach_user(user);
+                    }
+                }
             }
 
             for &inst in &to_remove {
