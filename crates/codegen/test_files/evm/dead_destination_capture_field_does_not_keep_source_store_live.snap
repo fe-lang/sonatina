@@ -1,0 +1,30 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: "String::from_utf8(out).unwrap()"
+input_file: test_files/evm/dead_destination_capture_field_does_not_keep_source_store_live.sntn
+---
+evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
+
+object: Contract
+  section runtime: 8 bytes
+  total: 8 bytes
+
+functions:
+  entry: ir_blocks=1 ir_insts=2 vcode_ops=6 fixups=0 imm_bytes=2
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
+
+evm:
+  case ok: calldata_len=0 success reason=Return gas_used=21016 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=16
+
+
+--------------- DEBUG ---------------
+
+// func public %entry()
+entry:
+  block0:
+    PUSH1 0x14 (20)  // mstore 0.i256 20.i256 i256;
+    PUSH0
+    MSTORE
+    PUSH1 0x20 (32)  // evm_return 0.i256 32.i256;
+    PUSH0
+    RETURN

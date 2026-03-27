@@ -1,0 +1,47 @@
+#! evm.config: { vcode: true, opt: 2 }
+#! evm.case: ok
+#!   calldata: u256(37)
+#!   expect: return u256(37)
+
+target = "evm-ethereum-osaka"
+
+type @wrapper = { objref<i256> };
+
+func private %make_wrapper(v0.objref<i256>) -> objref<@wrapper> {
+block0:
+    v1.objref<@wrapper> = obj.alloc @wrapper;
+    v2.objref<objref<i256>> = obj.proj v1 0.i8;
+    obj.store v2 v0;
+    return v1;
+}
+
+func private %read_wrapper(v0.objref<@wrapper>) -> i256 {
+block0:
+    v1.objref<objref<i256>> = obj.proj v0 0.i8;
+    v2.objref<i256> = obj.load v1;
+    v3.i256 = obj.load v2;
+    return v3;
+}
+
+func private %main(v0.i256) -> i256 {
+block0:
+    v1.objref<i256> = obj.alloc i256;
+    obj.store v1 v0;
+    v2.objref<@wrapper> = call %make_wrapper v1;
+    v3.i256 = call %read_wrapper v2;
+    return v3;
+}
+
+func public %entry() {
+block0:
+    v0.i256 = evm_calldata_load 0.i32;
+    v1.i256 = call %main v0;
+    mstore 0.i32 v1 i256;
+    evm_return 0.i8 32.i8;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}

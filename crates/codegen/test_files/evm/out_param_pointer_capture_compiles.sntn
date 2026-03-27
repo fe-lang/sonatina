@@ -1,0 +1,23 @@
+#! evm.config: { vcode: true, opt: 2 }
+
+target = "evm-ethereum-osaka"
+
+func private %capture(v0.*i256, v1.**i256) {
+block0:
+    mstore v1 v0 *i256;
+    return;
+}
+
+func public %entry() {
+block0:
+    v0.*i256 = alloca i256;
+    v1.**i256 = alloca *i256;
+    call %capture v0 v1;
+    return;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}

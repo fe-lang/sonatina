@@ -1,0 +1,37 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: opt_ir_snapshot
+input_file: test_files/evm/same_root_phi_capture_preserves_all_source_stores.sntn
+---
+target = "evm-ethereum-osaka"
+
+type @Data = {i256, i256};
+type @Cell = {objref<i256>};
+
+func public %entry() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i32;
+        v5.objref<@Data> = obj.alloc @Data;
+        v6.objref<i256> = obj.proj v5 0.i8;
+        obj.store v6 10.i256;
+        v9.objref<i256> = obj.proj v5 1.i8;
+        obj.store v9 20.i256;
+        v13.i1 = is_zero v0;
+        br v13 block5 block4;
+
+    block4:
+        jump block5;
+
+    block5:
+        v16.objref<i256> = phi (v6 block0) (v9 block4);
+        v20.i256 = obj.load v16;
+        mstore 0.i32 v20 i256;
+        evm_return 0.i8 32.i8;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %entry;
+    }
+}
