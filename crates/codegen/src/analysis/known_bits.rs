@@ -482,6 +482,7 @@ impl KnownBitsQuery {
         let value_mask = type_mask(ty);
         let shift = shift.as_usize();
         let fill_mask = type_mask(ty) & !low_mask((usize::from(width_bits) - shift) as u16);
+        let value_mask = type_mask(ty);
         let mut known_zero = (value.known_zero & value_mask) >> shift;
         let mut known_one = (value.known_one & value_mask) >> shift;
         if value.all_zero_in(sign_mask) {
@@ -875,6 +876,65 @@ mod tests {
             query.for_value(&func, neg_sar).exact_imm(Type::I32),
             Some(Immediate::all_one(Type::I32))
         );
+    }
+
+    #[test]
+    fn narrow_arithmetic_sar_handles_negative_positive_and_unknown_signs() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::I8);
+        let is = evm.inst_set();
+        let block = builder.append_block();
+        builder.switch_to_block(block);
+        let neg = builder.make_imm_value(Immediate::from_i256(I256::from(-16i8), Type::I8));
+        let shift = builder.make_imm_value(Immediate::from_i256(I256::from(2u8), Type::I8));
+        let shifted = builder.insert_inst_with(|| Sar::new(is, shift, neg), Type::I8);
+        builder.insert_inst_no_result_with(|| Return::new_single(is, shifted));
+        builder.seal_all();
+        builder.finish();
+
+        let func = only_func(&mb);
+        let query = KnownBitsQuery::new(&func);
+        assert_eq!(
+            query.for_value(&func, shifted).exact_imm(Type::I8),
+            Some(Immediate::from_i256(I256::from(-4i8), Type::I8))
+        );
+
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::I8);
+        let is = evm.inst_set();
+        let block = builder.append_block();
+        builder.switch_to_block(block);
+        let pos = builder.make_imm_value(Immediate::from_i256(I256::from(16i8), Type::I8));
+        let shift = builder.make_imm_value(Immediate::from_i256(I256::from(2u8), Type::I8));
+        let shifted = builder.insert_inst_with(|| Sar::new(is, shift, pos), Type::I8);
+        builder.insert_inst_no_result_with(|| Return::new_single(is, shifted));
+        builder.seal_all();
+        builder.finish();
+
+        let func = only_func(&mb);
+        let query = KnownBitsQuery::new(&func);
+        assert_eq!(
+            query.for_value(&func, shifted).exact_imm(Type::I8),
+            Some(Immediate::from_i256(I256::from(4i8), Type::I8))
+        );
+
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[Type::I8], Type::I8);
+        let is = evm.inst_set();
+        let block = builder.append_block();
+        builder.switch_to_block(block);
+        let arg = builder.args()[0];
+        let shift = builder.make_imm_value(Immediate::from_i256(I256::from(2u8), Type::I8));
+        let shifted = builder.insert_inst_with(|| Sar::new(is, shift, arg), Type::I8);
+        builder.insert_inst_no_result_with(|| Return::new_single(is, shifted));
+        builder.seal_all();
+        builder.finish();
+
+        let func = only_func(&mb);
+        let query = KnownBitsQuery::new(&func);
+        let known = query.for_value(&func, shifted);
+        assert_eq!(known.known_zero & U256::from(0xc0u8), U256::zero());
+        assert_eq!(known.known_one & U256::from(0xc0u8), U256::zero());
     }
 
     #[test]
