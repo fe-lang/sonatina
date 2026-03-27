@@ -14,7 +14,23 @@ pub(crate) type ObjectEffectSummaryMap = FxHashMap<FuncRef, ObjectEffectSummary>
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ObjectEffectSummary {
     pub arg_effects: Vec<ObjectArgEffect>,
+    pub captures: Vec<ObjectCaptureEffect>,
     pub ret_effect: ObjectReturnEffect,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct ObjectCaptureEffect {
+    pub dst_arg: usize,
+    pub dst_slice: shape::AggregateSlice,
+    pub src_arg: usize,
+    pub src_slice: shape::AggregateSlice,
+}
+
+#[derive(Clone, Copy)]
+struct CaptureContext<'a> {
+    root_slices: &'a FxHashMap<ValueId, shape::AggregateSlice>,
+    arg_roots: &'a FxHashMap<ValueId, usize>,
+    provenance: &'a super::provenance::RootProvenanceMap,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -128,6 +144,7 @@ impl ObjectEffectSummary {
             .unwrap_or_default();
         Self {
             arg_effects,
+            captures: Vec::new(),
             ret_effect: ObjectReturnEffect::None,
         }
     }
@@ -253,6 +270,11 @@ fn compute_summary_for_func(
             layout_cache,
             Some(summaries),
         );
+        let capture_ctx = CaptureContext {
+            root_slices: &root_slices,
+            arg_roots: &arg_roots,
+            provenance: &provenance,
+        };
 
         for block in function.layout.iter_block() {
             for inst in function.layout.iter_inst(block) {
@@ -296,6 +318,12 @@ fn compute_summary_for_func(
                     downcast::<&data::ObjStore>(function.inst_set(), function.dfg.inst(inst))
                 {
                     record_write(&mut summary, &arg_roots, &provenance, *obj_store.object());
+                    record_capture(
+                        &mut summary,
+                        capture_ctx,
+                        *obj_store.object(),
+                        *obj_store.value(),
+                    );
                     continue;
                 }
 
@@ -318,10 +346,10 @@ fn compute_summary_for_func(
                     record_enum_write_variant(
                         function,
                         &mut summary,
-                        &arg_roots,
-                        &provenance,
+                        capture_ctx,
                         *enum_write_variant.object(),
                         *enum_write_variant.variant(),
+                        enum_write_variant.values(),
                         enum_write_variant.values().len(),
                     );
                     continue;
@@ -361,8 +389,7 @@ fn compute_summary_for_func(
                     merge_call_effects(
                         function,
                         &mut summary,
-                        &arg_roots,
-                        &provenance,
+                        capture_ctx,
                         call,
                         summaries,
                         layout_cache,
@@ -371,6 +398,7 @@ fn compute_summary_for_func(
             }
         }
 
+        dedup_capture_effects(&mut summary.captures);
         summary.ret_effect =
             classify_return_effect(function, &arg_roots, &root_slices, &provenance);
         for idx in 0..summary.arg_effects.len() {
@@ -500,8 +528,7 @@ fn join_return_class(lhs: ReturnClass, rhs: ReturnClass) -> ReturnClass {
 fn merge_call_effects(
     function: &Function,
     summary: &mut ObjectEffectSummary,
-    arg_roots: &FxHashMap<ValueId, usize>,
-    provenance: &super::provenance::RootProvenanceMap,
+    capture_ctx: CaptureContext<'_>,
     call: &control_flow::Call,
     summaries: &ObjectEffectSummaryMap,
     layout_cache: &mut shape::AggregateLayoutCache,
@@ -514,8 +541,15 @@ fn merge_call_effects(
         let Some(callee_effect) = callee_summary.arg_effects.get(callee_idx) else {
             continue;
         };
-        merge_call_arg_effect(summary, arg_roots, provenance, arg, callee_effect);
+        merge_call_arg_effect(
+            summary,
+            capture_ctx.arg_roots,
+            capture_ctx.provenance,
+            arg,
+            callee_effect,
+        );
     }
+    merge_call_capture_effects(summary, capture_ctx, call, &callee_summary.captures);
 }
 
 fn merge_call_arg_effect(
@@ -572,6 +606,269 @@ fn merge_effect_into_arg(
     arg_effect.materializes_heap |= callee_effect.materializes_heap;
     map_into_slice_set(&mut arg_effect.reads, base_slice, &callee_effect.reads);
     map_into_slice_set(&mut arg_effect.writes, base_slice, &callee_effect.writes);
+}
+
+fn merge_call_capture_effects(
+    summary: &mut ObjectEffectSummary,
+    capture_ctx: CaptureContext<'_>,
+    call: &control_flow::Call,
+    callee_captures: &[ObjectCaptureEffect],
+) {
+    for capture in callee_captures {
+        let Some(&dst_arg) = call.args().get(capture.dst_arg) else {
+            continue;
+        };
+        let Some(&src_arg) = call.args().get(capture.src_arg) else {
+            continue;
+        };
+        let dst_slices = map_capture_slice_into_arg_slices(capture_ctx, dst_arg, capture.dst_slice);
+        let src_slices = map_capture_slice_into_arg_slices(capture_ctx, src_arg, capture.src_slice);
+
+        for (dst_idx, dst_slice) in &dst_slices {
+            for (src_idx, src_slice) in &src_slices {
+                push_capture_effect(
+                    summary,
+                    ObjectCaptureEffect {
+                        dst_arg: *dst_idx,
+                        dst_slice: *dst_slice,
+                        src_arg: *src_idx,
+                        src_slice: *src_slice,
+                    },
+                );
+            }
+        }
+    }
+}
+
+fn record_capture(
+    summary: &mut ObjectEffectSummary,
+    capture_ctx: CaptureContext<'_>,
+    object: ValueId,
+    value: ValueId,
+) {
+    let dst_slices = capture_arg_slices(capture_ctx, object);
+    if dst_slices.is_empty() {
+        return;
+    }
+    let src_slices = capture_arg_slices(capture_ctx, value);
+    if src_slices.is_empty() {
+        return;
+    }
+
+    for (dst_arg, dst_slice) in &dst_slices {
+        for (src_arg, src_slice) in &src_slices {
+            push_capture_effect(
+                summary,
+                ObjectCaptureEffect {
+                    dst_arg: *dst_arg,
+                    dst_slice: *dst_slice,
+                    src_arg: *src_arg,
+                    src_slice: *src_slice,
+                },
+            );
+        }
+    }
+}
+
+fn record_enum_variant_captures(
+    function: &Function,
+    summary: &mut ObjectEffectSummary,
+    capture_ctx: CaptureContext<'_>,
+    dst_arg: usize,
+    base_slice: shape::AggregateSlice,
+    values: &[ValueId],
+    variant: sonatina_ir::types::EnumVariantRef,
+) {
+    for (field_idx, &value) in values.iter().enumerate() {
+        if objref_element_ty(function.ctx(), function.dfg.value_ty(value)).is_none() {
+            continue;
+        }
+        let Some(field_slice) = shape::enum_variant_field_slice(
+            function.ctx(),
+            base_slice.ty,
+            variant,
+            u32::try_from(field_idx).ok().unwrap_or(u32::MAX),
+        ) else {
+            continue;
+        };
+        let src_slices = capture_arg_slices(capture_ctx, value);
+        if src_slices.is_empty() {
+            continue;
+        }
+        let dst_slice = shape::AggregateSlice {
+            ty: field_slice.ty,
+            first_leaf: base_slice.first_leaf + field_slice.first_leaf,
+            leaf_count: field_slice.leaf_count,
+        };
+        for (src_arg, src_slice) in &src_slices {
+            push_capture_effect(
+                summary,
+                ObjectCaptureEffect {
+                    dst_arg,
+                    dst_slice,
+                    src_arg: *src_arg,
+                    src_slice: *src_slice,
+                },
+            );
+        }
+    }
+}
+
+fn record_enum_variant_captures_from_roots(
+    function: &Function,
+    summary: &mut ObjectEffectSummary,
+    capture_ctx: CaptureContext<'_>,
+    object: ValueId,
+    values: &[ValueId],
+    variant: sonatina_ir::types::EnumVariantRef,
+) {
+    for (field_idx, &value) in values.iter().enumerate() {
+        if objref_element_ty(function.ctx(), function.dfg.value_ty(value)).is_none() {
+            continue;
+        }
+        let mut dst_slices = Vec::new();
+        for (root_idx, root_slice) in capture_arg_slices(capture_ctx, object) {
+            let Some(field_slice) = shape::enum_variant_field_slice(
+                function.ctx(),
+                root_slice.ty,
+                variant,
+                u32::try_from(field_idx).ok().unwrap_or(u32::MAX),
+            ) else {
+                continue;
+            };
+            dst_slices.push((
+                root_idx,
+                shape::AggregateSlice {
+                    ty: field_slice.ty,
+                    first_leaf: root_slice.first_leaf + field_slice.first_leaf,
+                    leaf_count: field_slice.leaf_count,
+                },
+            ));
+        }
+        if dst_slices.is_empty() {
+            continue;
+        }
+        let src_slices = capture_arg_slices(capture_ctx, value);
+        if src_slices.is_empty() {
+            continue;
+        }
+
+        for (dst_arg, dst_slice) in &dst_slices {
+            for (src_arg, src_slice) in &src_slices {
+                push_capture_effect(
+                    summary,
+                    ObjectCaptureEffect {
+                        dst_arg: *dst_arg,
+                        dst_slice: *dst_slice,
+                        src_arg: *src_arg,
+                        src_slice: *src_slice,
+                    },
+                );
+            }
+        }
+    }
+}
+
+fn capture_arg_slices(
+    capture_ctx: CaptureContext<'_>,
+    value: ValueId,
+) -> Vec<(usize, shape::AggregateSlice)> {
+    if let Some(projection) = capture_ctx.provenance.exact_projection(value)
+        && let Some(&idx) = capture_ctx.arg_roots.get(&projection.root_value)
+    {
+        return vec![(idx, projection.slice)];
+    }
+
+    match capture_ctx.provenance.provenance(value) {
+        super::RootProvenance::SameRoot(root) => capture_ctx
+            .arg_roots
+            .get(&root)
+            .and_then(|&idx| {
+                capture_ctx
+                    .root_slices
+                    .get(&root)
+                    .copied()
+                    .map(|slice| (idx, slice))
+            })
+            .into_iter()
+            .collect(),
+        super::RootProvenance::Maybe(roots) => roots
+            .into_iter()
+            .filter_map(|root| {
+                capture_ctx.arg_roots.get(&root).and_then(|&idx| {
+                    capture_ctx
+                        .root_slices
+                        .get(&root)
+                        .copied()
+                        .map(|slice| (idx, slice))
+                })
+            })
+            .collect(),
+        super::RootProvenance::Exact(_) | super::RootProvenance::Unknown => Vec::new(),
+    }
+}
+
+fn map_capture_slice_into_arg_slices(
+    capture_ctx: CaptureContext<'_>,
+    value: ValueId,
+    slice: shape::AggregateSlice,
+) -> Vec<(usize, shape::AggregateSlice)> {
+    if let Some(projection) = capture_ctx.provenance.exact_projection(value)
+        && let Some(&idx) = capture_ctx.arg_roots.get(&projection.root_value)
+        && let Some(mapped) = offset_slice(projection.slice, slice)
+    {
+        return vec![(idx, mapped)];
+    }
+
+    match capture_ctx.provenance.provenance(value) {
+        super::RootProvenance::SameRoot(root) => capture_ctx
+            .arg_roots
+            .get(&root)
+            .and_then(|&idx| {
+                capture_ctx
+                    .root_slices
+                    .get(&root)
+                    .copied()
+                    .and_then(|base| offset_slice(base, slice).map(|mapped| (idx, mapped)))
+            })
+            .into_iter()
+            .collect(),
+        super::RootProvenance::Maybe(roots) => roots
+            .into_iter()
+            .filter_map(|root| {
+                capture_ctx.arg_roots.get(&root).and_then(|&idx| {
+                    capture_ctx
+                        .root_slices
+                        .get(&root)
+                        .copied()
+                        .and_then(|base| offset_slice(base, slice).map(|mapped| (idx, mapped)))
+                })
+            })
+            .collect(),
+        super::RootProvenance::Exact(_) | super::RootProvenance::Unknown => Vec::new(),
+    }
+}
+
+fn offset_slice(
+    base_slice: shape::AggregateSlice,
+    relative: shape::AggregateSlice,
+) -> Option<shape::AggregateSlice> {
+    (relative.first_leaf + relative.leaf_count <= base_slice.leaf_count).then_some(
+        shape::AggregateSlice {
+            ty: relative.ty,
+            first_leaf: base_slice.first_leaf + relative.first_leaf,
+            leaf_count: relative.leaf_count,
+        },
+    )
+}
+
+fn push_capture_effect(summary: &mut ObjectEffectSummary, capture: ObjectCaptureEffect) {
+    summary.captures.push(capture);
+}
+
+fn dedup_capture_effects(captures: &mut Vec<ObjectCaptureEffect>) {
+    let mut seen = FxHashSet::default();
+    captures.retain(|capture| seen.insert(*capture));
 }
 
 fn map_into_slice_set(
@@ -642,15 +939,20 @@ fn record_enum_tag_write(
 fn record_enum_write_variant(
     function: &Function,
     summary: &mut ObjectEffectSummary,
-    arg_roots: &FxHashMap<ValueId, usize>,
-    provenance: &super::provenance::RootProvenanceMap,
+    capture_ctx: CaptureContext<'_>,
     object: ValueId,
     variant: sonatina_ir::types::EnumVariantRef,
+    values: &[ValueId],
     payload_len: usize,
 ) {
-    record_enum_tag_write(summary, arg_roots, provenance, object);
-    if let Some(projection) = provenance.exact_projection(object)
-        && let Some(&idx) = arg_roots.get(&projection.root_value)
+    record_enum_tag_write(
+        summary,
+        capture_ctx.arg_roots,
+        capture_ctx.provenance,
+        object,
+    );
+    if let Some(projection) = capture_ctx.provenance.exact_projection(object)
+        && let Some(&idx) = capture_ctx.arg_roots.get(&projection.root_value)
     {
         for field_idx in 0..payload_len {
             let Some(field_slice) = shape::enum_variant_field_slice(
@@ -669,12 +971,29 @@ fn record_enum_write_variant(
                     leaf_count: field_slice.leaf_count,
                 });
         }
+        record_enum_variant_captures(
+            function,
+            summary,
+            capture_ctx,
+            idx,
+            projection.slice,
+            values,
+            variant,
+        );
         return;
     }
-    for root_idx in root_arg_indices(arg_roots, provenance, object) {
+    for root_idx in root_arg_indices(capture_ctx.arg_roots, capture_ctx.provenance, object) {
         summary.arg_effects[root_idx].writes =
             SliceSet::whole_root(summary.arg_effects[root_idx].writes.total_leaves());
     }
+    record_enum_variant_captures_from_roots(
+        function,
+        summary,
+        capture_ctx,
+        object,
+        values,
+        variant,
+    );
 }
 
 fn record_materialize(
@@ -778,5 +1097,117 @@ pub(crate) fn whole_root_slice(
         leaf_count: layout_cache
             .shape(ctx, pointee_ty)
             .map_or(1, |shape| shape.leaves.len()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sonatina_ir::module::FuncRef;
+    use sonatina_parser::parse_module;
+
+    fn parse_test_module(src: &str) -> Module {
+        parse_module(src).expect("parse should succeed").module
+    }
+
+    fn lookup_func(module: &Module, name: &str) -> FuncRef {
+        module
+            .funcs()
+            .into_iter()
+            .find(|&func_ref| module.ctx.func_sig(func_ref, |sig| sig.name() == name))
+            .expect("function should exist")
+    }
+
+    #[test]
+    fn fresh_out_arg_capture_summary_tracks_source_slices() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @Data = { i256, i256 };
+type @LiveView = { objref<i256>, objref<i256> };
+
+func private %make_view(v0.objref<@LiveView>, v1.objref<@Data>) {
+block0:
+    v2.objref<i256> = obj.proj v1 0.i8;
+    v3.objref<objref<i256>> = obj.proj v0 0.i8;
+    obj.store v3 v2;
+    v4.objref<i256> = obj.proj v1 1.i8;
+    v5.objref<objref<i256>> = obj.proj v0 1.i8;
+    obj.store v5 v4;
+    return;
+}
+"#,
+        );
+
+        let func_ref = lookup_func(&module, "make_view");
+        let summary = compute_object_effect_summaries(&module)
+            .remove(&func_ref)
+            .expect("summary should exist");
+
+        assert!(
+            summary.captures.iter().any(|capture| {
+                capture.dst_arg == 0
+                    && capture.src_arg == 1
+                    && capture.dst_slice.first_leaf == 0
+                    && capture.dst_slice.leaf_count == 1
+                    && capture.src_slice.ty == Type::I256
+                    && capture.src_slice.first_leaf == 0
+                    && capture.src_slice.leaf_count == 1
+            }),
+            "summary should record field-0 capture from the source arg"
+        );
+        assert!(
+            summary.captures.iter().any(|capture| {
+                capture.dst_arg == 0
+                    && capture.src_arg == 1
+                    && capture.dst_slice.first_leaf == 1
+                    && capture.dst_slice.leaf_count == 1
+                    && capture.src_slice.ty == Type::I256
+                    && capture.src_slice.first_leaf == 1
+                    && capture.src_slice.leaf_count == 1
+            }),
+            "summary should record field-1 capture from the source arg"
+        );
+    }
+
+    #[test]
+    fn capture_summary_propagates_through_helper_calls() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @Data = { i256, i256 };
+type @LiveView = { objref<i256>, objref<i256> };
+
+func private %make_view(v0.objref<@LiveView>, v1.objref<@Data>) {
+block0:
+    v2.objref<i256> = obj.proj v1 0.i8;
+    v3.objref<objref<i256>> = obj.proj v0 0.i8;
+    obj.store v3 v2;
+    return;
+}
+
+func private %mid(v0.objref<@LiveView>, v1.objref<@Data>) {
+block0:
+    call %make_view v0 v1;
+    return;
+}
+"#,
+        );
+
+        let func_ref = lookup_func(&module, "mid");
+        let summary = compute_object_effect_summaries(&module)
+            .remove(&func_ref)
+            .expect("summary should exist");
+        assert!(
+            summary.captures.iter().any(|capture| {
+                capture.dst_arg == 0
+                    && capture.src_arg == 1
+                    && capture.dst_slice.first_leaf == 0
+                    && capture.src_slice.first_leaf == 0
+            }),
+            "transitive helper summary should preserve capture relations"
+        );
     }
 }

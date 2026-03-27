@@ -22,6 +22,12 @@ use super::{
 
 type AvailableMap = FxHashMap<ObjectSlice, ValueId>;
 
+struct CallCaptureEndpoint<'a> {
+    tracked: Option<TrackedObject>,
+    possible_roots: &'a FxHashSet<ValueId>,
+    slice: shape::AggregateSlice,
+}
+
 #[derive(Default)]
 pub struct ObjectLoadStore {
     changed: bool,
@@ -692,6 +698,29 @@ fn handle_call_backward(
         return true;
     };
 
+    for capture in &summary.captures {
+        let Some(&dst_arg) = call.args().get(capture.dst_arg) else {
+            continue;
+        };
+        let Some(&src_arg) = call.args().get(capture.src_arg) else {
+            continue;
+        };
+        apply_call_backward_capture(
+            live,
+            tracked,
+            &CallCaptureEndpoint {
+                tracked: tracked[dst_arg],
+                possible_roots: &possible_roots[dst_arg],
+                slice: capture.dst_slice,
+            },
+            &CallCaptureEndpoint {
+                tracked: tracked[src_arg],
+                possible_roots: &possible_roots[src_arg],
+                slice: capture.src_slice,
+            },
+        );
+    }
+
     for (idx, &arg) in call.args().iter().enumerate() {
         let Some(effect) = summary.arg_effects.get(idx) else {
             continue;
@@ -707,6 +736,38 @@ fn handle_call_backward(
         );
     }
     true
+}
+
+fn apply_call_backward_capture(
+    live: &mut FxHashMap<ValueId, FxHashSet<usize>>,
+    tracked: &SecondaryMap<ValueId, Option<TrackedObject>>,
+    dst: &CallCaptureEndpoint<'_>,
+    src: &CallCaptureEndpoint<'_>,
+) {
+    let dst_live = dst
+        .tracked
+        .and_then(|tracked| map_capture_slice(tracked, dst.slice))
+        .is_some_and(|slice| slice_has_live_leaf(live, slice))
+        || dst
+            .possible_roots
+            .iter()
+            .copied()
+            .any(|root| root_has_live(live, root));
+    if !dst_live {
+        return;
+    }
+
+    if let Some(slice) = src
+        .tracked
+        .and_then(|tracked| map_capture_slice(tracked, src.slice))
+    {
+        mark_live(live, TrackedObject::Exact(slice));
+        return;
+    }
+
+    for &root in src.possible_roots {
+        mark_root_live(live, root, root_total_leaves(tracked, root));
+    }
 }
 
 fn apply_call_backward_effect(
@@ -1048,6 +1109,31 @@ fn root_total_leaves(
         .copied()
         .map(TrackedObject::total_leaves)
         .expect("tracked root should exist")
+}
+
+fn map_capture_slice(
+    tracked: TrackedObject,
+    capture: shape::AggregateSlice,
+) -> Option<ObjectSlice> {
+    match tracked {
+        TrackedObject::Exact(base) => (capture.first_leaf + capture.leaf_count <= base.leaf_count)
+            .then_some(ObjectSlice {
+                root: base.root,
+                ty: capture.ty,
+                first_leaf: base.first_leaf + capture.first_leaf,
+                leaf_count: capture.leaf_count,
+                total_leaves: base.total_leaves,
+            }),
+        TrackedObject::RootUnknown { root, total_leaves } => {
+            (capture.first_leaf + capture.leaf_count <= total_leaves).then_some(ObjectSlice {
+                root,
+                ty: capture.ty,
+                first_leaf: capture.first_leaf,
+                leaf_count: capture.leaf_count,
+                total_leaves,
+            })
+        }
+    }
 }
 
 fn kill_overlapping_available(available: &mut AvailableMap, slice: ObjectSlice) {
@@ -1425,6 +1511,68 @@ func private %f(v0.i256) -> i256 {
             assert!(
                 dumped.contains("return v0;"),
                 "store/load on fresh call result should forward:\n{dumped}"
+            );
+        });
+    }
+
+    #[test]
+    fn fresh_out_capture_keeps_source_stores_live() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @Data = { i256, i256 };
+type @LiveView = { objref<i256>, objref<i256> };
+
+func private %make_view(v0.objref<@LiveView>, v1.objref<@Data>) {
+block0:
+    v2.objref<i256> = obj.proj v1 0.i8;
+    v3.objref<objref<i256>> = obj.proj v0 0.i8;
+    obj.store v3 v2;
+    v4.objref<i256> = obj.proj v1 1.i8;
+    v5.objref<objref<i256>> = obj.proj v0 1.i8;
+    obj.store v5 v4;
+    return;
+}
+
+func private %read_view(v0.objref<@LiveView>) -> i256 {
+block0:
+    v1.objref<objref<i256>> = obj.proj v0 0.i8;
+    v2.objref<i256> = obj.load v1;
+    v3.i256 = obj.load v2;
+    v4.objref<objref<i256>> = obj.proj v0 1.i8;
+    v5.objref<i256> = obj.load v4;
+    v6.i256 = obj.load v5;
+    v7.i256 = add v3 v6;
+    return v7;
+}
+
+func private %f() -> i256 {
+block0:
+    v0.objref<@Data> = obj.alloc @Data;
+    v1.objref<i256> = obj.proj v0 0.i8;
+    obj.store v1 10.i256;
+    v2.objref<i256> = obj.proj v0 1.i8;
+    obj.store v2 20.i256;
+    v3.objref<@LiveView> = obj.alloc @LiveView;
+    call %make_view v3 v0;
+    v4.i256 = call %read_view v3;
+    return v4;
+}
+"#,
+        );
+        let func_ref = lookup_func(&module, "f");
+        run_with_effects(&module, func_ref);
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            assert!(
+                dumped.contains("obj.store v1 10.i256;"),
+                "field-0 store must stay live through the captured return object:\n{dumped}"
+            );
+            assert!(
+                dumped.contains("obj.store v2 20.i256;"),
+                "field-1 store must stay live through the captured return object:\n{dumped}"
             );
         });
     }
