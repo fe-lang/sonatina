@@ -744,16 +744,7 @@ fn apply_call_backward_capture(
     dst: &CallCaptureEndpoint<'_>,
     src: &CallCaptureEndpoint<'_>,
 ) {
-    let dst_live = dst
-        .tracked
-        .and_then(|tracked| map_capture_slice(tracked, dst.slice))
-        .is_some_and(|slice| slice_has_live_leaf(live, slice))
-        || dst
-            .possible_roots
-            .iter()
-            .copied()
-            .any(|root| root_has_live(live, root));
-    if !dst_live {
+    if !capture_destination_has_live(live, dst) {
         return;
     }
 
@@ -768,6 +759,28 @@ fn apply_call_backward_capture(
     for &root in src.possible_roots {
         mark_root_live(live, root, root_total_leaves(tracked, root));
     }
+}
+
+fn capture_destination_has_live(
+    live: &FxHashMap<ValueId, FxHashSet<usize>>,
+    dst: &CallCaptureEndpoint<'_>,
+) -> bool {
+    let Some(tracked) = dst.tracked else {
+        return dst
+            .possible_roots
+            .iter()
+            .copied()
+            .any(|root| root_has_live(live, root));
+    };
+    if let Some(slice) = map_capture_slice(tracked, dst.slice) {
+        return slice_has_live_leaf(live, slice);
+    }
+    tracked.exact().is_none()
+        && dst
+            .possible_roots
+            .iter()
+            .copied()
+            .any(|root| root_has_live(live, root))
 }
 
 fn apply_call_backward_effect(
@@ -1565,6 +1578,64 @@ block0:
             assert!(
                 dumped.contains("obj.store v2 20.i256;"),
                 "field-1 store must stay live through the captured return object:\n{dumped}"
+            );
+        });
+    }
+
+    #[test]
+    fn dead_destination_capture_field_does_not_keep_source_store_live() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @Data = { i256, i256 };
+type @LiveView = { objref<i256>, objref<i256> };
+
+func private %make_view(v0.objref<@LiveView>, v1.objref<@Data>) {
+block0:
+    v2.objref<i256> = obj.proj v1 0.i8;
+    v3.objref<objref<i256>> = obj.proj v0 0.i8;
+    obj.store v3 v2;
+    v4.objref<i256> = obj.proj v1 1.i8;
+    v5.objref<objref<i256>> = obj.proj v0 1.i8;
+    obj.store v5 v4;
+    return;
+}
+
+func private %read_view_second(v0.objref<@LiveView>) -> i256 {
+block0:
+    v1.objref<objref<i256>> = obj.proj v0 1.i8;
+    v2.objref<i256> = obj.load v1;
+    v3.i256 = obj.load v2;
+    return v3;
+}
+
+func private %f() -> i256 {
+block0:
+    v0.objref<@Data> = obj.alloc @Data;
+    v1.objref<i256> = obj.proj v0 0.i8;
+    obj.store v1 10.i256;
+    v2.objref<i256> = obj.proj v0 1.i8;
+    obj.store v2 20.i256;
+    v3.objref<@LiveView> = obj.alloc @LiveView;
+    call %make_view v3 v0;
+    v4.i256 = call %read_view_second v3;
+    return v4;
+}
+"#,
+        );
+        let func_ref = lookup_func(&module, "f");
+        run_with_effects(&module, func_ref);
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            assert!(
+                !dumped.contains("obj.store v1 10.i256;"),
+                "dead destination capture field should not keep field-0 source store live:\n{dumped}"
+            );
+            assert!(
+                dumped.contains("obj.store v2 20.i256;"),
+                "live destination capture field must keep field-1 source store live:\n{dumped}"
             );
         });
     }
