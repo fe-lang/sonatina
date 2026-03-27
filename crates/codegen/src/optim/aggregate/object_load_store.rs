@@ -1124,15 +1124,7 @@ fn map_capture_slice(
                 leaf_count: capture.leaf_count,
                 total_leaves: base.total_leaves,
             }),
-        TrackedObject::RootUnknown { root, total_leaves } => {
-            (capture.first_leaf + capture.leaf_count <= total_leaves).then_some(ObjectSlice {
-                root,
-                ty: capture.ty,
-                first_leaf: capture.first_leaf,
-                leaf_count: capture.leaf_count,
-                total_leaves,
-            })
-        }
+        TrackedObject::RootUnknown { .. } => None,
     }
 }
 
@@ -1573,6 +1565,72 @@ block0:
             assert!(
                 dumped.contains("obj.store v2 20.i256;"),
                 "field-1 store must stay live through the captured return object:\n{dumped}"
+            );
+        });
+    }
+
+    #[test]
+    fn same_root_phi_capture_keeps_all_source_stores_live() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @Data = { i256, i256 };
+type @Cell = { objref<i256> };
+
+func private %capture(v0.objref<@Cell>, v1.objref<i256>) {
+block0:
+    v2.objref<objref<i256>> = obj.proj v0 0.i8;
+    obj.store v2 v1;
+    return;
+}
+
+func private %read_cell(v0.objref<@Cell>) -> i256 {
+block0:
+    v1.objref<objref<i256>> = obj.proj v0 0.i8;
+    v2.objref<i256> = obj.load v1;
+    v3.i256 = obj.load v2;
+    return v3;
+}
+
+func private %f(v0.i1) -> i256 {
+block0:
+    v1.objref<@Data> = obj.alloc @Data;
+    v2.objref<i256> = obj.proj v1 0.i8;
+    obj.store v2 10.i256;
+    v3.objref<i256> = obj.proj v1 1.i8;
+    obj.store v3 20.i256;
+    v4.objref<@Cell> = obj.alloc @Cell;
+    br v0 block1 block2;
+
+block1:
+    v5.objref<i256> = obj.proj v1 0.i8;
+    jump block3;
+
+block2:
+    v6.objref<i256> = obj.proj v1 1.i8;
+    jump block3;
+
+block3:
+    v7.objref<i256> = phi (v5 block1) (v6 block2);
+    call %capture v4 v7;
+    v8.i256 = call %read_cell v4;
+    return v8;
+}
+"#,
+        );
+        let func_ref = lookup_func(&module, "f");
+        run_with_effects(&module, func_ref);
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            assert!(
+                dumped.contains("obj.store v2 10.i256;"),
+                "same-root phi capture may read field 0, so that store must remain:\n{dumped}"
+            );
+            assert!(
+                dumped.contains("obj.store v3 20.i256;"),
+                "same-root phi capture may read field 1, so that store must remain:\n{dumped}"
             );
         });
     }

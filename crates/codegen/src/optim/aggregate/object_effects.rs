@@ -815,38 +815,13 @@ fn map_capture_slice_into_arg_slices(
 ) -> Vec<(usize, shape::AggregateSlice)> {
     if let Some(projection) = capture_ctx.provenance.exact_projection(value)
         && let Some(&idx) = capture_ctx.arg_roots.get(&projection.root_value)
-        && let Some(mapped) = offset_slice(projection.slice, slice)
     {
-        return vec![(idx, mapped)];
+        return offset_slice(projection.slice, slice)
+            .map(|mapped| vec![(idx, mapped)])
+            .unwrap_or_default();
     }
 
-    match capture_ctx.provenance.provenance(value) {
-        super::RootProvenance::SameRoot(root) => capture_ctx
-            .arg_roots
-            .get(&root)
-            .and_then(|&idx| {
-                capture_ctx
-                    .root_slices
-                    .get(&root)
-                    .copied()
-                    .and_then(|base| offset_slice(base, slice).map(|mapped| (idx, mapped)))
-            })
-            .into_iter()
-            .collect(),
-        super::RootProvenance::Maybe(roots) => roots
-            .into_iter()
-            .filter_map(|root| {
-                capture_ctx.arg_roots.get(&root).and_then(|&idx| {
-                    capture_ctx
-                        .root_slices
-                        .get(&root)
-                        .copied()
-                        .and_then(|base| offset_slice(base, slice).map(|mapped| (idx, mapped)))
-                })
-            })
-            .collect(),
-        super::RootProvenance::Exact(_) | super::RootProvenance::Unknown => Vec::new(),
-    }
+    capture_arg_slices(capture_ctx, value)
 }
 
 fn offset_slice(
@@ -1208,6 +1183,59 @@ block0:
                     && capture.src_slice.first_leaf == 0
             }),
             "transitive helper summary should preserve capture relations"
+        );
+    }
+
+    #[test]
+    fn capture_summary_widens_same_root_phi_sources_to_whole_root() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @Data = { i256, i256 };
+type @Cell = { objref<i256> };
+
+func private %capture(v0.objref<@Cell>, v1.objref<i256>) {
+block0:
+    v2.objref<objref<i256>> = obj.proj v0 0.i8;
+    obj.store v2 v1;
+    return;
+}
+
+func private %mid(v0.objref<@Cell>, v1.objref<@Data>, v2.i1) {
+block0:
+    br v2 block1 block2;
+
+block1:
+    v3.objref<i256> = obj.proj v1 0.i8;
+    jump block3;
+
+block2:
+    v4.objref<i256> = obj.proj v1 1.i8;
+    jump block3;
+
+block3:
+    v5.objref<i256> = phi (v3 block1) (v4 block2);
+    call %capture v0 v5;
+    return;
+}
+"#,
+        );
+
+        let func_ref = lookup_func(&module, "mid");
+        let summary = compute_object_effect_summaries(&module)
+            .remove(&func_ref)
+            .expect("summary should exist");
+        assert!(
+            summary.captures.iter().any(|capture| {
+                capture.dst_arg == 0
+                    && capture.src_arg == 1
+                    && capture.dst_slice.first_leaf == 0
+                    && capture.dst_slice.leaf_count == 1
+                    && capture.src_slice.first_leaf == 0
+                    && capture.src_slice.leaf_count == 2
+            }),
+            "same-root phi capture should conservatively widen to the whole source root"
         );
     }
 }
