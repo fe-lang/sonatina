@@ -6,8 +6,8 @@ input_file: test_files/evm/arena_alloc_recursion_spills.sntn
 evm.config: stack_reach=4 vcode=false bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 157 bytes
-  total: 157 bytes
+  section runtime: 139 bytes
+  total: 139 bytes
 
 functions:
   f: ir_blocks=3 ir_insts=28 vcode_ops=148 fixups=6 imm_bytes=32
