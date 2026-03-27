@@ -59,6 +59,18 @@ impl Function {
             self.dfg.untrack_inst(inst);
         }
 
+        let needs_user_rebuild = insts.iter().copied().any(|inst| {
+            self.dfg.inst_results(inst).iter().copied().any(|value| {
+                self.dfg
+                    .users(value)
+                    .copied()
+                    .any(|user| !self.layout.is_inst_inserted(user))
+            })
+        });
+        if needs_user_rebuild {
+            self.rebuild_users();
+        }
+
         for &inst in insts {
             self.dfg.delete_inst(inst);
         }
