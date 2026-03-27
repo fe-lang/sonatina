@@ -5835,6 +5835,127 @@ object @Contract {
     }
 
     #[test]
+    fn prepare_section_allows_pointer_arg_copied_into_caller_local_out_param() {
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func private %capture(v0.*i256, v1.**i256) {
+block0:
+    mstore v1 v0 *i256;
+    return;
+}
+
+func public %entry() {
+block0:
+    v0.*i256 = alloca i256;
+    v1.**i256 = alloca *i256;
+    call %capture v0 v1;
+    return;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}
+"#,
+        )
+        .unwrap();
+
+        let funcs = parsed.module.funcs();
+        let backend = EvmBackend::new(Evm::new(TargetTriple {
+            architecture: Architecture::Evm,
+            vendor: Vendor::Ethereum,
+            operating_system: OperatingSystem::Evm(EvmVersion::Osaka),
+        }));
+        let object = ObjectName::from("Contract");
+        let section = SectionName::from("runtime");
+        let embeds: Vec<EmbedSymbol> = Vec::new();
+        let section_ctx = SectionLoweringCtx {
+            object: &object,
+            section: &section,
+            embed_symbols: &embeds,
+        };
+
+        backend.prepare_section(&parsed.module, &funcs, &section_ctx);
+    }
+
+    #[test]
+    fn prepare_section_allows_local_returned_object_capturing_pointer_arg() {
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @Take = {i256, objref<[i256; 8]>};
+
+func private %reverse(v0.objref<[i256; 8]>) -> objref<[i256; 8]> {
+block0:
+    return v0;
+}
+
+func private %take(v0.i256, v1.objref<[i256; 8]>) -> objref<@Take> {
+block0:
+    v2.objref<@Take> = obj.alloc @Take;
+    v4.objref<i256> = obj.proj v2 0.i256;
+    obj.store v4 v0;
+    v6.objref<objref<[i256; 8]>> = obj.proj v2 1.i256;
+    obj.store v6 v1;
+    return v2;
+}
+
+func private %take_get(v0.objref<@Take>, v1.i256) -> i256 {
+block0:
+    v3.objref<objref<[i256; 8]>> = obj.proj v0 1.i256;
+    v4.objref<[i256; 8]> = obj.load v3;
+    v6.objref<i256> = obj.index v4 v1;
+    v7.i256 = obj.load v6;
+    return v7;
+}
+
+func private %sum_last4(v0.objref<[i256; 8]>) -> i256 {
+block0:
+    v2.objref<[i256; 8]> = call %reverse v0;
+    v4.objref<@Take> = call %take 4.i256 v2;
+    v5.i256 = call %take_get v4 0.i256;
+    return v5;
+}
+
+func public %entry() {
+block0:
+    v0.objref<[i256; 8]> = obj.alloc [i256; 8];
+    v1.i256 = call %sum_last4 v0;
+    return;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}
+"#,
+        )
+        .unwrap();
+
+        let funcs = parsed.module.funcs();
+        let backend = EvmBackend::new(Evm::new(TargetTriple {
+            architecture: Architecture::Evm,
+            vendor: Vendor::Ethereum,
+            operating_system: OperatingSystem::Evm(EvmVersion::Osaka),
+        }));
+        let object = ObjectName::from("Contract");
+        let section = SectionName::from("runtime");
+        let embeds: Vec<EmbedSymbol> = Vec::new();
+        let section_ctx = SectionLoweringCtx {
+            object: &object,
+            section: &section,
+            embed_symbols: &embeds,
+        };
+
+        backend.prepare_section(&parsed.module, &funcs, &section_ctx);
+    }
+
+    #[test]
     fn prepare_section_runs_raw_memory_cleanup_after_memory_legalize() {
         let mut parsed = parse_module(include_str!(
             "../../../test_files/evm/fresh_equivalent_out_param_scalarizes.sntn"

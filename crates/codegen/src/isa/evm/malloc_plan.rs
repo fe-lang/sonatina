@@ -76,7 +76,6 @@ pub(crate) fn should_restore_free_ptr_on_internal_returns(
             .get(&callee)
             .cloned()
             .unwrap_or_else(|| conservative_unknown_ptr_summary(module, callee))
-            .arg_may_be_returned
     });
     let prov = &prov_info.value;
     let local_mem = &prov_info.local_mem;
@@ -223,7 +222,6 @@ pub(crate) fn compute_transient_mallocs(
             .get(&callee)
             .cloned()
             .unwrap_or_else(|| conservative_unknown_ptr_summary(module, callee))
-            .arg_may_be_returned
     });
     let prov = &prov_info.value;
     let local_mem = &prov_info.local_mem;
@@ -307,7 +305,6 @@ pub(crate) fn compute_malloc_escape_kinds_for_function(
             .get(&callee)
             .cloned()
             .unwrap_or_else(|| conservative_unknown_ptr_summary(module, callee))
-            .arg_may_be_returned
     });
     let prov = &prov_info.value;
     let local_mem = &prov_info.local_mem;
@@ -602,14 +599,7 @@ fn compute_malloc_escape_kinds(
 }
 
 fn conservative_unknown_ptr_summary(module: &ModuleCtx, func_ref: FuncRef) -> PtrEscapeSummary {
-    let arg_count = module.func_sig(func_ref, |sig| sig.args().len());
-    PtrEscapeSummary {
-        arg_may_escape: vec![true; arg_count],
-        arg_may_be_returned: vec![true; arg_count],
-        returns_any_ptr: module.func_sig(func_ref, |sig| {
-            sig.ret_tys().iter().any(|ty| ty.is_pointer(module))
-        }),
-    }
+    PtrEscapeSummary::conservative_unknown_ctx(module, func_ref)
 }
 
 fn value_may_be_heap_derived(

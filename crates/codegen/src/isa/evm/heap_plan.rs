@@ -13,6 +13,7 @@ use super::{
         FuncAnalysis, FuncMemPlan, ObjLoc, ProgramMemoryPlan, WORD_BYTES, compute_abs_clobber_words,
     },
     provenance::compute_value_provenance,
+    ptr_escape::PtrEscapeSummary,
 };
 
 pub(crate) fn compute_malloc_future_abs_words(
@@ -65,8 +66,7 @@ fn compute_future_bounds_for_func(
     ctx: &FutureBoundsCtx<'_>,
 ) -> FxHashMap<InstId, u32> {
     let prov = compute_value_provenance(function, ctx.module, ctx.isa, |callee| {
-        let arg_count = ctx.module.func_sig(callee, |sig| sig.args().len());
-        vec![true; arg_count]
+        PtrEscapeSummary::conservative_unknown_ctx(ctx.module, callee)
     });
 
     let mut alloca_end_words: FxHashMap<InstId, u32> = FxHashMap::default();

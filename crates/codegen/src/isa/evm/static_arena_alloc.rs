@@ -266,7 +266,6 @@ pub(crate) fn compute_func_stack_objects(
             .get(&callee)
             .cloned()
             .unwrap_or_else(|| conservative_unknown_ptr_summary(ctx.module, callee))
-            .arg_may_be_returned
     });
     let prov = &prov_info.value;
 
@@ -911,14 +910,7 @@ fn insert_free_segment(free: &mut BTreeMap<u32, u32>, start: u32, len: u32) {
 }
 
 fn conservative_unknown_ptr_summary(module: &ModuleCtx, func_ref: FuncRef) -> PtrEscapeSummary {
-    let arg_count = module.func_sig(func_ref, |sig| sig.args().len());
-    PtrEscapeSummary {
-        arg_may_escape: vec![true; arg_count],
-        arg_may_be_returned: vec![true; arg_count],
-        returns_any_ptr: module.func_sig(func_ref, |sig| {
-            sig.ret_tys().iter().any(|ty| ty.is_pointer(module))
-        }),
-    }
+    PtrEscapeSummary::conservative_unknown_ctx(module, func_ref)
 }
 
 fn compute_escaping_allocas(
