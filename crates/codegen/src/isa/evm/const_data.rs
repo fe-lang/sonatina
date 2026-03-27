@@ -9,6 +9,8 @@ use sonatina_ir::{
     visitor::VisitorMut,
 };
 
+use crate::optim::aggregate::shape;
+
 #[derive(Debug, Clone)]
 enum ConstPathStep {
     Field(usize),
@@ -395,7 +397,18 @@ impl ConstDataLower {
                     inst.as_u32()
                 )
             });
-        if let Some(path) = source.path.as_ref()
+        if !source.ty.is_integral()
+            && let Some(copy_len_bytes) = word_blob_copy_len_bytes(func.ctx(), source.ty)
+        {
+            emit_obj_init_from_codecopy(
+                func,
+                inst,
+                *init.object(),
+                source.ty,
+                source.addr,
+                copy_len_bytes,
+            );
+        } else if let Some(path) = source.path.as_ref()
             && let Some((ty, subtree_init)) = eval_const_path_subtree(module, path)
         {
             emit_obj_init(func, inst, *init.object(), ty, &subtree_init);
@@ -800,6 +813,47 @@ fn encode_const_words(
     }
 }
 
+// EVM readonly const refs currently use word blobs: one 32-byte slot per scalar leaf.
+// Bulk-copying into an object is only valid when the runtime object layout is exactly the
+// same contiguous leaf layout, with no extra padding between recursively flattened fields.
+fn word_blob_copy_len_bytes(module: &ModuleCtx, ty: Type) -> Option<u32> {
+    if ty.is_integral() {
+        return (module.size_of(ty).ok()? == 32).then_some(32);
+    }
+
+    match ty.resolve_compound(module)? {
+        CompoundType::Array { elem, len } => {
+            let elem_size = word_blob_copy_len_bytes(module, elem)?;
+            let runtime_elem_size = shape::runtime_size_bytes(module, elem)?;
+            let runtime_size = shape::runtime_size_bytes(module, ty)?;
+            let total_size = elem_size.checked_mul(u32::try_from(len).ok()?)?;
+            (runtime_elem_size == elem_size && runtime_size == total_size).then_some(total_size)
+        }
+        CompoundType::Struct(s) => {
+            if s.packed {
+                return None;
+            }
+
+            let mut total_size = 0u32;
+            for (idx, field_ty) in s.fields.iter().copied().enumerate() {
+                let (field_offset, _) =
+                    shape::struct_field_offset_bytes(&s.fields, s.packed, idx, module)?;
+                if field_offset != total_size {
+                    return None;
+                }
+                total_size = total_size.checked_add(word_blob_copy_len_bytes(module, field_ty)?)?;
+            }
+
+            (shape::runtime_size_bytes(module, ty)? == total_size).then_some(total_size)
+        }
+        CompoundType::Ptr(_)
+        | CompoundType::ObjRef(_)
+        | CompoundType::ConstRef(_)
+        | CompoundType::Enum(_)
+        | CompoundType::Func { .. } => None,
+    }
+}
+
 fn emit_obj_init(
     func: &mut Function,
     before: InstId,
@@ -862,6 +916,28 @@ fn emit_obj_init(
         }
         _ => panic!("unsupported obj.init.const type {ty:?}"),
     }
+}
+
+fn emit_obj_init_from_codecopy(
+    func: &mut Function,
+    before: InstId,
+    object: ValueId,
+    ty: Type,
+    addr: ValueId,
+    copy_len_bytes: u32,
+) {
+    let dst = insert_before_one(
+        func,
+        before,
+        data::ObjMaterializeStack::new_unchecked(func.inst_set(), object),
+        ty.to_ptr(func.ctx()),
+    );
+    let copy_len = imm_i256(func, copy_len_bytes);
+    insert_before_no_result(
+        func,
+        before,
+        evm::EvmCodeCopy::new_unchecked(func.inst_set(), dst, addr, copy_len),
+    );
 }
 
 fn emit_obj_init_from_addr(
@@ -1227,7 +1303,7 @@ func private %entry(v0.i256) -> i256 {
     }
 
     #[test]
-    fn obj_init_const_lowers_to_obj_stores() {
+    fn obj_init_const_aggregate_lowers_to_bulk_codecopy() {
         let parsed = parse(
             r#"
 target = "evm-ethereum-osaka"
@@ -1254,7 +1330,42 @@ func private %entry() -> i256 {
             .func_store
             .view(entry, |func| FuncWriter::new(entry, func).dump_string());
         assert!(!dumped.contains("obj.init.const"));
+        assert!(dumped.contains("obj.materialize.stack"));
+        assert!(dumped.contains("evm_code_copy"));
+        assert!(!dumped.contains("obj.store"));
+        assert!(!dumped.contains("const."));
+    }
+
+    #[test]
+    fn obj_init_const_scalar_lowers_to_obj_store() {
+        let parsed = parse(
+            r#"
+target = "evm-ethereum-osaka"
+
+global private const i256 $value = 11;
+
+func private %entry() -> i256 {
+    block0:
+        v0.objref<i256> = obj.alloc i256;
+        v1.constref<i256> = const.ref $value;
+        obj.init.const v0 v1;
+        v2.i256 = obj.load v0;
+        return v2;
+}
+"#,
+        );
+
+        ConstDataLower::default().run(&parsed.module);
+
+        let entry = find_func_ref(&parsed, "entry");
+        let dumped = parsed
+            .module
+            .func_store
+            .view(entry, |func| FuncWriter::new(entry, func).dump_string());
+        assert!(!dumped.contains("obj.init.const"));
         assert!(dumped.contains("obj.store"));
+        assert!(!dumped.contains("obj.materialize.stack"));
+        assert!(!dumped.contains("evm_code_copy"));
         assert!(!dumped.contains("const."));
     }
 
