@@ -7,12 +7,10 @@ target = "evm-ethereum-osaka"
 
 type @Take = {i256, objref<[i256; 8]>};
 
-func public %entry() -> i256 {
+func public %entry() {
     block0:
-        v0.objref<[i256; 8]> = obj.alloc [i256; 8];
-        v12.objref<i256> = obj.index v0 0.i256;
-        v13.i256 = obj.load v12;
-        return v13;
+        mstore 0.i32 4.i256 i256;
+        evm_return 0.i8 32.i8;
 }
 
 

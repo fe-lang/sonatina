@@ -1,4 +1,7 @@
 #! evm.config: { vcode: true, opt: 2 }
+#! evm.case: ok
+#!   calldata:
+#!   expect: return u256(4)
 
 target = "evm-ethereum-osaka"
 
@@ -36,13 +39,20 @@ block0:
     return v3;
 }
 
-func public %entry() -> i256 {
+func private %main() -> i256 {
 block0:
     v0.objref<[i256; 8]> = obj.alloc [i256; 8];
     v1.objref<i256> = obj.index v0 0.i256;
     obj.store v1 4.i256;
     v2.i256 = call %sum_last4 v0;
     return v2;
+}
+
+func public %entry() {
+block0:
+    v0.i256 = call %main;
+    mstore 0.i32 v0 i256;
+    evm_return 0.i8 32.i8;
 }
 
 object @Contract {

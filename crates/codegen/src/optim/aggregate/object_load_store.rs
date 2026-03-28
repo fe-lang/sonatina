@@ -697,22 +697,38 @@ fn handle_call_backward(
         }
         return true;
     };
+    let call_result = single_result_value(func, inst);
 
     for capture in &summary.captures {
-        let Some(&dst_arg) = call.args().get(capture.dst_arg) else {
-            continue;
-        };
         let Some(&src_arg) = call.args().get(capture.src_arg) else {
             continue;
+        };
+        let dst = match capture.dst {
+            super::object_effects::ObjectCaptureDestination::Arg { index, slice } => {
+                let Some(&dst_arg) = call.args().get(index) else {
+                    continue;
+                };
+                CallCaptureEndpoint {
+                    tracked: tracked[dst_arg],
+                    possible_roots: &possible_roots[dst_arg],
+                    slice,
+                }
+            }
+            super::object_effects::ObjectCaptureDestination::Return { slice } => {
+                let Some(result) = call_result else {
+                    continue;
+                };
+                CallCaptureEndpoint {
+                    tracked: tracked[result],
+                    possible_roots: &possible_roots[result],
+                    slice,
+                }
+            }
         };
         apply_call_backward_capture(
             live,
             tracked,
-            &CallCaptureEndpoint {
-                tracked: tracked[dst_arg],
-                possible_roots: &possible_roots[dst_arg],
-                slice: capture.dst_slice,
-            },
+            &dst,
             &CallCaptureEndpoint {
                 tracked: tracked[src_arg],
                 possible_roots: &possible_roots[src_arg],
@@ -1124,6 +1140,13 @@ fn root_total_leaves(
         .expect("tracked root should exist")
 }
 
+fn single_result_value(func: &Function, inst: InstId) -> Option<ValueId> {
+    let [result] = func.dfg.inst_results(inst) else {
+        return None;
+    };
+    Some(*result)
+}
+
 fn map_capture_slice(
     tracked: TrackedObject,
     capture: shape::AggregateSlice,
@@ -1516,6 +1539,68 @@ func private %f(v0.i256) -> i256 {
             assert!(
                 dumped.contains("return v0;"),
                 "store/load on fresh call result should forward:\n{dumped}"
+            );
+        });
+    }
+
+    #[test]
+    fn returned_capture_chain_keeps_source_store_live() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @Take = { i256, objref<[i256; 8]> };
+
+func private %reverse(v0.objref<[i256; 8]>) -> objref<[i256; 8]> {
+block0:
+    return v0;
+}
+
+func private %take(v0.i256, v1.objref<[i256; 8]>) -> objref<@Take> {
+block0:
+    v2.objref<@Take> = obj.alloc @Take;
+    v3.objref<i256> = obj.proj v2 0.i8;
+    obj.store v3 v0;
+    v4.objref<objref<[i256; 8]>> = obj.proj v2 1.i8;
+    obj.store v4 v1;
+    return v2;
+}
+
+func private %take_get(v0.objref<@Take>, v1.i256) -> i256 {
+block0:
+    v2.objref<objref<[i256; 8]>> = obj.proj v0 1.i8;
+    v3.objref<[i256; 8]> = obj.load v2;
+    v4.objref<i256> = obj.index v3 v1;
+    v5.i256 = obj.load v4;
+    return v5;
+}
+
+func private %sum_last4(v0.objref<[i256; 8]>) -> i256 {
+block0:
+    v1.objref<[i256; 8]> = call %reverse v0;
+    v2.objref<@Take> = call %take 4.i256 v1;
+    v3.i256 = call %take_get v2 0.i256;
+    return v3;
+}
+
+func private %main() -> i256 {
+block0:
+    v0.objref<[i256; 8]> = obj.alloc [i256; 8];
+    v1.objref<i256> = obj.index v0 0.i256;
+    obj.store v1 4.i256;
+    v2.i256 = call %sum_last4 v0;
+    return v2;
+}
+"#,
+        );
+        let func_ref = lookup_func(&module, "main");
+        run_with_effects(&module, func_ref);
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            assert!(
+                dumped.contains("obj.store v1 4.i256;"),
+                "source store should stay live through returned capture chain:\n{dumped}"
             );
         });
     }

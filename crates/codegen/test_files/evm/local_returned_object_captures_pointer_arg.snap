@@ -6,23 +6,25 @@ input_file: test_files/evm/local_returned_object_captures_pointer_arg.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 5 bytes
-  total: 5 bytes
+  section runtime: 8 bytes
+  total: 8 bytes
 
 functions:
-  entry: ir_blocks=1 ir_insts=4 vcode_ops=4 fixups=0 imm_bytes=1
-    mem: scratch_words=8 stable_words=0 stable_mode=None entry_abs_words=8 abs_words_end=8
+  entry: ir_blocks=1 ir_insts=2 vcode_ops=6 fixups=0 imm_bytes=2
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  <no evm.case directives>
+  case ok: calldata_len=0 success reason=Return gas_used=21016 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=16
 
 
 --------------- DEBUG ---------------
 
-// func public %entry() -> i256
+// func public %entry()
 entry:
   block0:
-    PUSH1 0xa0 (160)  // v0.*[i256; 8] = alloca [i256; 8];
-    MLOAD  // v13.i256 = mload v12 i256;
-    SWAP1  // return v13;
-    JUMP
+    PUSH1 0x4 (4)  // mstore 0.i256 4.i256 i256;
+    PUSH0
+    MSTORE
+    PUSH1 0x20 (32)  // evm_return 0.i256 32.i256;
+    PUSH0
+    RETURN

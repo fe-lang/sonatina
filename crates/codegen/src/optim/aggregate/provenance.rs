@@ -9,6 +9,12 @@ use sonatina_ir::{
 
 use super::{ObjectEffectSummaryMap, ObjectReturnEffect, shape};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct RootCaptureRoot {
+    dst_slice: shape::AggregateSlice,
+    src_root: ValueId,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Projection {
     pub root_value: ValueId,
@@ -142,6 +148,14 @@ pub(crate) fn collect_root_provenance(
         };
     }
 
+    refine_possible_roots_from_objref_loads(
+        func,
+        root_slices,
+        &exact_states,
+        &mut provenance.possible_roots,
+        object_effects,
+    );
+
     provenance
 }
 
@@ -179,6 +193,245 @@ fn compute_possible_roots(
             break;
         }
     }
+}
+
+fn refine_possible_roots_from_objref_loads(
+    func: &Function,
+    root_slices: &FxHashMap<ValueId, shape::AggregateSlice>,
+    exact_states: &SecondaryMap<ValueId, Option<ExactState>>,
+    possible_roots: &mut SecondaryMap<ValueId, FxHashSet<ValueId>>,
+    object_effects: Option<&ObjectEffectSummaryMap>,
+) {
+    let mut root_captures = FxHashMap::<ValueId, Vec<RootCaptureRoot>>::default();
+
+    loop {
+        let mut changed = false;
+
+        for block in func.layout.iter_block() {
+            for inst in func.layout.iter_inst(block) {
+                if !func.layout.is_inst_inserted(inst) {
+                    continue;
+                }
+
+                if let Some(obj_store) =
+                    downcast::<&data::ObjStore>(func.inst_set(), func.dfg.inst(inst))
+                    && reference_element_ty(func.ctx(), func.dfg.value_ty(*obj_store.value()))
+                        .is_some()
+                {
+                    changed |= record_root_capture_sources(
+                        &mut root_captures,
+                        capture_destinations_for_value(
+                            *obj_store.object(),
+                            None,
+                            exact_states,
+                            possible_roots,
+                            root_slices,
+                        ),
+                        &possible_roots[*obj_store.value()],
+                    );
+                }
+
+                if downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(inst)).is_some() {
+                    changed |= merge_call_capture_roots(
+                        func,
+                        inst,
+                        exact_states,
+                        possible_roots,
+                        root_slices,
+                        object_effects,
+                        &mut root_captures,
+                    );
+                }
+
+                if let Some(updated) =
+                    possible_root_transfer(func, inst, possible_roots, object_effects)
+                    && let Some(result) = single_result_value(func, inst)
+                    && union_root_set(&mut possible_roots[result], &updated)
+                {
+                    changed = true;
+                }
+
+                if let Some(obj_load) =
+                    downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst))
+                    && reference_element_ty(func.ctx(), func.dfg.value_ty(*obj_load.object()))
+                        .is_some()
+                    && let Some(result) = single_result_value(func, inst)
+                {
+                    let loaded_roots = capture_roots_for_value(
+                        *obj_load.object(),
+                        exact_states,
+                        possible_roots,
+                        root_slices,
+                        &root_captures,
+                    );
+                    if union_root_set(&mut possible_roots[result], &loaded_roots) {
+                        changed = true;
+                    }
+                }
+            }
+        }
+
+        if !changed {
+            return;
+        }
+    }
+}
+
+fn merge_call_capture_roots(
+    func: &Function,
+    inst: InstId,
+    exact_states: &SecondaryMap<ValueId, Option<ExactState>>,
+    possible_roots: &SecondaryMap<ValueId, FxHashSet<ValueId>>,
+    root_slices: &FxHashMap<ValueId, shape::AggregateSlice>,
+    object_effects: Option<&ObjectEffectSummaryMap>,
+    root_captures: &mut FxHashMap<ValueId, Vec<RootCaptureRoot>>,
+) -> bool {
+    let call = downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(inst))
+        .expect("merge_call_capture_roots requires a call instruction");
+    let Some(summary) = object_effects.and_then(|effects| effects.get(call.callee())) else {
+        return false;
+    };
+
+    let mut changed = false;
+    let call_result = single_result_value(func, inst);
+    for capture in &summary.captures {
+        let Some(&src_arg) = call.args().get(capture.src_arg) else {
+            continue;
+        };
+        let dsts = match capture.dst {
+            super::object_effects::ObjectCaptureDestination::Arg { index, slice } => call
+                .args()
+                .get(index)
+                .map(|&dst_arg| {
+                    capture_destinations_for_value(
+                        dst_arg,
+                        Some(slice),
+                        exact_states,
+                        possible_roots,
+                        root_slices,
+                    )
+                })
+                .unwrap_or_default(),
+            super::object_effects::ObjectCaptureDestination::Return { slice } => call_result
+                .map(|result| {
+                    capture_destinations_for_value(
+                        result,
+                        Some(slice),
+                        exact_states,
+                        possible_roots,
+                        root_slices,
+                    )
+                })
+                .unwrap_or_default(),
+        };
+        changed |= record_root_capture_sources(root_captures, dsts, &possible_roots[src_arg]);
+    }
+    changed
+}
+
+fn record_root_capture_sources(
+    root_captures: &mut FxHashMap<ValueId, Vec<RootCaptureRoot>>,
+    dsts: Vec<(ValueId, shape::AggregateSlice)>,
+    src_roots: &FxHashSet<ValueId>,
+) -> bool {
+    let mut changed = false;
+    for (root, dst_slice) in dsts {
+        for &src_root in src_roots {
+            let entry = root_captures.entry(root).or_default();
+            let capture = RootCaptureRoot {
+                dst_slice,
+                src_root,
+            };
+            if entry.contains(&capture) {
+                continue;
+            }
+            entry.push(capture);
+            changed = true;
+        }
+    }
+    changed
+}
+
+fn capture_destinations_for_value(
+    value: ValueId,
+    relative_slice: Option<shape::AggregateSlice>,
+    exact_states: &SecondaryMap<ValueId, Option<ExactState>>,
+    possible_roots: &SecondaryMap<ValueId, FxHashSet<ValueId>>,
+    root_slices: &FxHashMap<ValueId, shape::AggregateSlice>,
+) -> Vec<(ValueId, shape::AggregateSlice)> {
+    if let Some(projection) = exact_projection_of(exact_states, value) {
+        return relative_slice
+            .map(|slice| offset_projection_slice(projection.slice, slice))
+            .unwrap_or(Some(projection.slice))
+            .map(|slice| vec![(projection.root_value, slice)])
+            .unwrap_or_default();
+    }
+
+    possible_roots[value]
+        .iter()
+        .copied()
+        .filter_map(|root| {
+            whole_root_projection(root, exact_states, root_slices).map(|slice| (root, slice))
+        })
+        .collect()
+}
+
+fn capture_roots_for_value(
+    value: ValueId,
+    exact_states: &SecondaryMap<ValueId, Option<ExactState>>,
+    possible_roots: &SecondaryMap<ValueId, FxHashSet<ValueId>>,
+    root_slices: &FxHashMap<ValueId, shape::AggregateSlice>,
+    root_captures: &FxHashMap<ValueId, Vec<RootCaptureRoot>>,
+) -> FxHashSet<ValueId> {
+    let mut roots = FxHashSet::default();
+    for (root, access_slice) in
+        capture_destinations_for_value(value, None, exact_states, possible_roots, root_slices)
+    {
+        let Some(captures) = root_captures.get(&root) else {
+            continue;
+        };
+        for capture in captures {
+            if slices_overlap_relative(access_slice, capture.dst_slice) {
+                roots.insert(capture.src_root);
+            }
+        }
+    }
+    roots
+}
+
+fn whole_root_projection(
+    root: ValueId,
+    exact_states: &SecondaryMap<ValueId, Option<ExactState>>,
+    root_slices: &FxHashMap<ValueId, shape::AggregateSlice>,
+) -> Option<shape::AggregateSlice> {
+    root_slices
+        .get(&root)
+        .copied()
+        .or_else(|| exact_projection_of(exact_states, root).map(|projection| projection.slice))
+}
+
+fn offset_projection_slice(
+    base_slice: shape::AggregateSlice,
+    relative_slice: shape::AggregateSlice,
+) -> Option<shape::AggregateSlice> {
+    (relative_slice.first_leaf + relative_slice.leaf_count <= base_slice.leaf_count).then_some(
+        shape::AggregateSlice {
+            ty: relative_slice.ty,
+            first_leaf: base_slice.first_leaf + relative_slice.first_leaf,
+            leaf_count: relative_slice.leaf_count,
+        },
+    )
+}
+
+fn union_root_set(dst: &mut FxHashSet<ValueId>, src: &FxHashSet<ValueId>) -> bool {
+    let before = dst.len();
+    dst.extend(src.iter().copied());
+    dst.len() != before
+}
+
+fn slices_overlap_relative(lhs: shape::AggregateSlice, rhs: shape::AggregateSlice) -> bool {
+    lhs.first_leaf < rhs.first_leaf + rhs.leaf_count
+        && rhs.first_leaf < lhs.first_leaf + lhs.leaf_count
 }
 
 fn possible_root_transfer(
@@ -817,4 +1070,87 @@ fn projection_view_leaf_tys(
     }
 
     Some(vec![ty])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::optim::aggregate::{
+        compute_object_effect_summaries, object_tracking::collect_root_slices,
+    };
+    use sonatina_ir::{Module, module::FuncRef};
+    use sonatina_parser::parse_module;
+
+    fn parse_test_module(src: &str) -> Module {
+        parse_module(src).expect("parse should succeed").module
+    }
+
+    fn lookup_func(module: &Module, name: &str) -> FuncRef {
+        module
+            .funcs()
+            .into_iter()
+            .find(|&func_ref| module.ctx.func_sig(func_ref, |sig| sig.name() == name))
+            .expect("function should exist")
+    }
+
+    #[test]
+    fn objref_load_from_captured_field_keeps_source_root_provenance() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @Take = { i256, objref<[i256; 8]> };
+
+func private %f() -> objref<[i256; 8]> {
+block0:
+    v0.objref<[i256; 8]> = obj.alloc [i256; 8];
+    v1.objref<@Take> = obj.alloc @Take;
+    v2.objref<objref<[i256; 8]>> = obj.proj v1 1.i8;
+    obj.store v2 v0;
+    v3.objref<[i256; 8]> = obj.load v2;
+    return v3;
+}
+"#,
+        );
+
+        let func_ref = lookup_func(&module, "f");
+        let object_effects = compute_object_effect_summaries(&module);
+        module.func_store.view(func_ref, |func| {
+            let mut layout_cache = shape::AggregateLayoutCache::default();
+            let root_slices = collect_root_slices(func, None, &mut layout_cache);
+            let provenance = collect_root_provenance(
+                func,
+                func.ctx(),
+                &root_slices,
+                &mut layout_cache,
+                Some(&object_effects),
+            );
+
+            let loaded = func
+                .layout
+                .iter_block()
+                .flat_map(|block| func.layout.iter_inst(block))
+                .find_map(|inst| {
+                    downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst))
+                        .and_then(|_| func.dfg.inst_result(inst))
+                })
+                .expect("load result should exist");
+
+            let source_root = func
+                .layout
+                .iter_block()
+                .flat_map(|block| func.layout.iter_inst(block))
+                .find_map(|inst| {
+                    downcast::<&data::ObjAlloc>(func.inst_set(), func.dfg.inst(inst))
+                        .and_then(|_| func.dfg.inst_result(inst))
+                        .filter(|&result| func.dfg.value_ty(result) == func.dfg.value_ty(loaded))
+                })
+                .expect("source root should exist");
+
+            assert_eq!(
+                provenance.provenance(loaded),
+                RootProvenance::SameRoot(source_root)
+            );
+        });
+    }
 }
