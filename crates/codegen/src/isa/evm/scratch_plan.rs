@@ -98,13 +98,10 @@ pub(crate) fn compute_scratch_live_values(
     inst_liveness: &InstLiveness,
 ) -> BitSet<ValueId> {
     let prov = compute_value_provenance(function, module, isa, |callee| {
-        ptr_escape.get(&callee).map_or_else(
-            || {
-                let arg_count = module.func_sig(callee, |sig| sig.args().len());
-                vec![true; arg_count]
-            },
-            |summary| summary.arg_may_be_returned.clone(),
-        )
+        ptr_escape
+            .get(&callee)
+            .cloned()
+            .unwrap_or_else(|| PtrEscapeSummary::conservative_unknown_ctx(module, callee))
     });
 
     let mut scratch_live_values: BitSet<ValueId> = BitSet::default();

@@ -8,6 +8,8 @@ use sonatina_ir::{
     module::{FuncRef, ModuleCtx},
 };
 
+use super::ptr_escape::PtrEscapeSummary;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum PtrBase {
     Arg(u32),
@@ -142,6 +144,12 @@ impl Provenance {
             && self.bases.iter().all(|b| matches!(b, PtrBase::Alloca(_)))
     }
 
+    pub(crate) fn may_be_nonlocal_nonarg(&self) -> bool {
+        self.unknown_non_arg
+            || self.bases.iter().any(|b| matches!(b, PtrBase::Malloc(_)))
+            || (self.bases.is_empty() && self.unknown_arg_indices.is_empty())
+    }
+
     pub(crate) fn alloca_insts(&self) -> impl Iterator<Item = InstId> + '_ {
         self.bases.iter().filter_map(|b| match b {
             PtrBase::Alloca(inst) => Some(*inst),
@@ -226,7 +234,7 @@ pub(crate) fn compute_provenance(
     function: &Function,
     module: &ModuleCtx,
     isa: &Evm,
-    callee_arg_may_be_returned: impl Fn(FuncRef) -> Vec<bool>,
+    callee_summary: impl Fn(FuncRef) -> PtrEscapeSummary,
 ) -> ProvenanceInfo {
     let mut prov: SecondaryMap<ValueId, Provenance> = SecondaryMap::new();
     for value in function.dfg.value_ids() {
@@ -317,7 +325,21 @@ pub(crate) fn compute_provenance(
                         let _ = next.union_with(&prov[*ev.dest()]);
                     }
                     EvmInstKind::Call(call) => {
-                        let arg_may_be_returned = callee_arg_may_be_returned(*call.callee());
+                        let summary = callee_summary(*call.callee());
+                        for (src_idx, dst_args) in summary.arg_may_store_to_args.iter().enumerate()
+                        {
+                            let Some(&src_arg) = call.args().get(src_idx) else {
+                                continue;
+                            };
+                            let src_prov = prov[src_arg].clone();
+                            for &dst_idx in dst_args {
+                                let Some(&dst_arg) = call.args().get(dst_idx as usize) else {
+                                    continue;
+                                };
+                                changed |= store_local_mem(&mut mem, &prov[dst_arg], &src_prov);
+                            }
+                        }
+                        let arg_may_be_returned = summary.arg_may_be_returned;
                         for (idx, &arg) in call.args().iter().enumerate() {
                             if arg_may_be_returned.get(idx).copied().unwrap_or(false) {
                                 let _ = next.union_with(&prov[arg]);
@@ -381,9 +403,9 @@ pub(crate) fn compute_value_provenance(
     function: &Function,
     module: &ModuleCtx,
     isa: &Evm,
-    callee_arg_may_be_returned: impl Fn(FuncRef) -> Vec<bool>,
+    callee_summary: impl Fn(FuncRef) -> PtrEscapeSummary,
 ) -> SecondaryMap<ValueId, Provenance> {
-    compute_provenance(function, module, isa, callee_arg_may_be_returned).value
+    compute_provenance(function, module, isa, callee_summary).value
 }
 
 #[cfg(test)]
@@ -408,7 +430,9 @@ mod tests {
         });
 
         parsed.module.func_store.view(func_ref, |function| {
-            let prov = compute_value_provenance(function, &parsed.module.ctx, &isa, |_| Vec::new());
+            let prov = compute_value_provenance(function, &parsed.module.ctx, &isa, |_| {
+                PtrEscapeSummary::new(0)
+            });
 
             for block in function.layout.iter_block() {
                 for inst in function.layout.iter_inst(block) {

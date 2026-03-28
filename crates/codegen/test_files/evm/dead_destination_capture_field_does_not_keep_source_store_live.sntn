@@ -1,0 +1,54 @@
+#! evm.config: { vcode: true, opt: 2 }
+#! evm.case: ok
+#!   calldata:
+#!   expect: return u256(20)
+
+target = "evm-ethereum-osaka"
+
+type @Data = { i256, i256 };
+type @LiveView = { objref<i256>, objref<i256> };
+
+func private %make_view(v0.objref<@LiveView>, v1.objref<@Data>) {
+block0:
+    v2.objref<i256> = obj.proj v1 0.i8;
+    v3.objref<objref<i256>> = obj.proj v0 0.i8;
+    obj.store v3 v2;
+    v4.objref<i256> = obj.proj v1 1.i8;
+    v5.objref<objref<i256>> = obj.proj v0 1.i8;
+    obj.store v5 v4;
+    return;
+}
+
+func private %read_view_second(v0.objref<@LiveView>) -> i256 {
+block0:
+    v1.objref<objref<i256>> = obj.proj v0 1.i8;
+    v2.objref<i256> = obj.load v1;
+    v3.i256 = obj.load v2;
+    return v3;
+}
+
+func private %main() -> i256 {
+block0:
+    v0.objref<@Data> = obj.alloc @Data;
+    v1.objref<i256> = obj.proj v0 0.i8;
+    obj.store v1 10.i256;
+    v2.objref<i256> = obj.proj v0 1.i8;
+    obj.store v2 20.i256;
+    v3.objref<@LiveView> = obj.alloc @LiveView;
+    call %make_view v3 v0;
+    v4.i256 = call %read_view_second v3;
+    return v4;
+}
+
+func public %entry() {
+block0:
+    v0.i256 = call %main;
+    mstore 0.i32 v0 i256;
+    evm_return 0.i8 32.i8;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}

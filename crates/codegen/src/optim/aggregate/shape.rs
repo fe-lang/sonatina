@@ -23,7 +23,7 @@ pub struct AggregateShape {
     pub leaves: SmallVec<[AggregateLeaf; 4]>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct AggregateSlice {
     pub ty: Type,
     pub first_leaf: usize,

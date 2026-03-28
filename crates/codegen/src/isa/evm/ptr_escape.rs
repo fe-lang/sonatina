@@ -1,41 +1,66 @@
 use rustc_hash::{FxHashMap, FxHashSet};
+use smallvec::SmallVec;
 use sonatina_ir::{
     InstSetExt, Module,
     inst::evm::inst_set::EvmInstKind,
     isa::{Isa, evm::Evm},
-    module::FuncRef,
+    module::{FuncRef, ModuleCtx},
 };
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::module_analysis::{CallGraph, CallGraphSccs, SccBuilder, SccRef};
 
-use super::provenance::compute_provenance;
+use super::provenance::{Provenance, compute_provenance};
+
+type ArgStoreTargets = Vec<SmallVec<[u32; 4]>>;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PtrEscapeSummary {
     pub(crate) arg_may_escape: Vec<bool>,
     pub(crate) arg_may_be_returned: Vec<bool>,
+    pub(crate) arg_may_store_to_args: ArgStoreTargets,
     pub(crate) returns_any_ptr: bool,
 }
 
 impl PtrEscapeSummary {
-    fn new(arg_count: usize) -> Self {
+    pub(crate) fn new(arg_count: usize) -> Self {
         Self {
             arg_may_escape: vec![false; arg_count],
             arg_may_be_returned: vec![false; arg_count],
+            arg_may_store_to_args: std::iter::repeat_with(SmallVec::new)
+                .take(arg_count)
+                .collect(),
             returns_any_ptr: false,
         }
     }
 
-    fn conservative_unknown(module: &Module, func: FuncRef) -> Self {
-        let arg_count = module.func_store.view(func, |f| f.arg_values.len());
+    pub(crate) fn conservative_unknown(module: &Module, func: FuncRef) -> Self {
+        Self::conservative_unknown_ctx(&module.ctx, func)
+    }
+
+    pub(crate) fn conservative_unknown_ctx(module: &ModuleCtx, func: FuncRef) -> Self {
+        let arg_count = module.func_sig(func, |sig| sig.args().len());
         Self {
             arg_may_escape: vec![true; arg_count],
             arg_may_be_returned: vec![true; arg_count],
-            returns_any_ptr: module.ctx.func_sig(func, |sig| {
-                sig.ret_tys().iter().any(|ty| ty.is_pointer(&module.ctx))
+            arg_may_store_to_args: (0..arg_count)
+                .map(|_| (0..arg_count).map(|idx| idx as u32).collect())
+                .collect(),
+            returns_any_ptr: module.func_sig(func, |sig| {
+                sig.ret_tys().iter().any(|ty| ty.is_pointer(module))
             }),
         }
+    }
+
+    fn record_store_to_arg(&mut self, src_idx: usize, dst_idx: u32) {
+        let Some(targets) = self.arg_may_store_to_args.get_mut(src_idx) else {
+            return;
+        };
+        if targets.contains(&dst_idx) {
+            return;
+        }
+        targets.push(dst_idx);
+        targets.sort_unstable();
     }
 }
 
@@ -164,7 +189,6 @@ fn compute_summary_for_func(
                 .get(&callee)
                 .cloned()
                 .unwrap_or_else(|| PtrEscapeSummary::conservative_unknown(module, callee))
-                .arg_may_be_returned
         });
         let prov = &prov_info.value;
         let local_mem = &prov_info.local_mem;
@@ -199,13 +223,11 @@ fn compute_summary_for_func(
                             continue;
                         }
 
-                        let val_prov = &prov[*mstore.value()];
-                        for idx in val_prov.arg_indices() {
-                            let idx = idx as usize;
-                            if idx < summary.arg_may_escape.len() {
-                                summary.arg_may_escape[idx] = true;
-                            }
-                        }
+                        record_escape_into_provenance(
+                            &mut summary,
+                            &prov[*mstore.value()],
+                            addr_prov,
+                        );
                     }
                     EvmInstKind::EvmMstore8(mstore8) => {
                         let addr_prov = &prov[*mstore8.addr()];
@@ -213,13 +235,11 @@ fn compute_summary_for_func(
                             continue;
                         }
 
-                        let val_prov = &prov[*mstore8.val()];
-                        for idx in val_prov.arg_indices() {
-                            let idx = idx as usize;
-                            if idx < summary.arg_may_escape.len() {
-                                summary.arg_may_escape[idx] = true;
-                            }
-                        }
+                        record_escape_into_provenance(
+                            &mut summary,
+                            &prov[*mstore8.val()],
+                            addr_prov,
+                        );
                     }
                     EvmInstKind::EvmMcopy(mcopy) => {
                         let dest_prov = &prov[*mcopy.dest()];
@@ -231,21 +251,11 @@ fn compute_summary_for_func(
                         if src_prov.is_local_addr() {
                             for base in src_prov.alloca_insts() {
                                 if let Some(stored) = local_mem.get(&base) {
-                                    for idx in stored.arg_indices() {
-                                        let idx = idx as usize;
-                                        if idx < summary.arg_may_escape.len() {
-                                            summary.arg_may_escape[idx] = true;
-                                        }
-                                    }
+                                    record_escape_into_provenance(&mut summary, stored, dest_prov);
                                 }
                             }
                         } else {
-                            for idx in src_prov.arg_indices() {
-                                let idx = idx as usize;
-                                if idx < summary.arg_may_escape.len() {
-                                    summary.arg_may_escape[idx] = true;
-                                }
-                            }
+                            record_escape_into_provenance(&mut summary, src_prov, dest_prov);
                         }
                     }
                     EvmInstKind::Call(call) => {
@@ -256,14 +266,28 @@ fn compute_summary_for_func(
 
                         let args = call.args();
                         for (idx, &arg) in args.iter().enumerate() {
+                            let p = &prov[arg];
                             if idx < callee_sum.arg_may_escape.len()
                                 && callee_sum.arg_may_escape[idx]
                             {
-                                let p = &prov[arg];
                                 for arg_idx in p.arg_indices() {
                                     let arg_idx = arg_idx as usize;
                                     if arg_idx < summary.arg_may_escape.len() {
                                         summary.arg_may_escape[arg_idx] = true;
+                                    }
+                                }
+                            }
+                            if let Some(targets) = callee_sum.arg_may_store_to_args.get(idx) {
+                                for arg_idx in p.arg_indices() {
+                                    for &target in targets {
+                                        let Some(&target_arg) = args.get(target as usize) else {
+                                            continue;
+                                        };
+                                        record_escape_from_arg_index(
+                                            &mut summary,
+                                            arg_idx as usize,
+                                            &prov[target_arg],
+                                        );
                                     }
                                 }
                             }
@@ -276,6 +300,31 @@ fn compute_summary_for_func(
 
         summary
     })
+}
+
+fn record_escape_into_provenance(
+    summary: &mut PtrEscapeSummary,
+    src_prov: &Provenance,
+    dst_prov: &Provenance,
+) {
+    for arg_idx in src_prov.arg_indices() {
+        record_escape_from_arg_index(summary, arg_idx as usize, dst_prov);
+    }
+}
+
+fn record_escape_from_arg_index(
+    summary: &mut PtrEscapeSummary,
+    src_idx: usize,
+    dst_prov: &Provenance,
+) {
+    for dst_idx in dst_prov.arg_indices() {
+        summary.record_store_to_arg(src_idx, dst_idx);
+    }
+    if dst_prov.may_be_nonlocal_nonarg()
+        && let Some(escapes) = summary.arg_may_escape.get_mut(src_idx)
+    {
+        *escapes = true;
+    }
 }
 
 #[cfg(test)]
@@ -425,5 +474,85 @@ block0:
         let f = &summaries["f"];
         assert_eq!(f.arg_may_be_returned, vec![false, false]);
         assert_eq!(f.arg_may_escape, vec![false, false]);
+    }
+
+    #[test]
+    fn ptr_escape_tracks_pointer_store_into_out_param_arg_conditionally() {
+        let (summaries, _) = compute(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %capture(v0.*i8, v1.**i8) {
+block0:
+    mstore v1 v0 *i8;
+    return;
+}
+"#,
+        );
+
+        let capture = &summaries["capture"];
+        assert_eq!(capture.arg_may_escape, vec![false, false]);
+        assert_eq!(capture.arg_may_be_returned, vec![false, false]);
+        assert_eq!(
+            capture.arg_may_store_to_args[0].as_slice(),
+            &[1],
+            "arg 0 should only escape through arg 1"
+        );
+        assert!(
+            capture.arg_may_store_to_args[1].is_empty(),
+            "out-param itself should not be marked as forwarded"
+        );
+    }
+
+    #[test]
+    fn ptr_escape_local_out_param_capture_does_not_mark_caller_arg_escape() {
+        let (summaries, _) = compute(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @Take = {i256, *[i256; 8]};
+
+func public %take(v7.*@Take, v0.i256, v1.*[i256; 8]) {
+block0:
+    v3.*i256 = bitcast v7 *i256;
+    mstore v3 v0 i256;
+    v4.**[i256; 8] = gep v7 0.i256 1.i256;
+    mstore v4 v1 *[i256; 8];
+    return;
+}
+
+func public %take_get(v0.*@Take, v1.i256) -> i256 {
+block0:
+    v3.**[i256; 8] = gep v0 0.i256 1.i256;
+    v4.*[i256; 8] = mload v3 *[i256; 8];
+    v5.*i256 = gep v4 0.i256 v1;
+    v6.i256 = mload v5 i256;
+    return v6;
+}
+
+func public %sum_last4(v0.*[i256; 8]) -> i256 {
+block0:
+    v1.*@Take = alloca @Take;
+    call %take v1 4.i256 v0;
+    v2.i256 = call %take_get v1 0.i256;
+    return v2;
+}
+"#,
+        );
+
+        let take = &summaries["take"];
+        assert_eq!(take.arg_may_escape, vec![false, false, false]);
+        assert_eq!(
+            take.arg_may_store_to_args[2].as_slice(),
+            &[0],
+            "take should forward arg 2 only into the synthetic out-param"
+        );
+
+        let sum_last4 = &summaries["sum_last4"];
+        assert_eq!(
+            sum_last4.arg_may_escape,
+            vec![false],
+            "caller-local synthetic out-param must not count as an escape"
+        );
     }
 }

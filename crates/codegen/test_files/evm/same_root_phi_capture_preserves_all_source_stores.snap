@@ -1,0 +1,56 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: "String::from_utf8(out).unwrap()"
+input_file: test_files/evm/same_root_phi_capture_preserves_all_source_stores.sntn
+---
+evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
+
+object: Contract
+  section runtime: 35 bytes
+  total: 35 bytes
+
+functions:
+  entry: ir_blocks=4 ir_insts=14 vcode_ops=30 fixups=2 imm_bytes=5
+    mem: scratch_words=2 stable_words=0 stable_mode=None entry_abs_words=2 abs_words_end=2
+
+evm:
+  case field0: calldata_len=32 success reason=Return gas_used=21229 gas_refunded=0 logs=0 output=call len=32 tx_gas=21128 runtime_gas=101
+  case field1: calldata_len=32 success reason=Return gas_used=21228 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=88
+
+
+--------------- DEBUG ---------------
+
+// func public %entry()
+entry:
+  block0:
+    PUSH0  // v0.i256 = evm_calldata_load 0.i256;
+    CALLDATALOAD
+    PUSH1 0xa0 (160)  // v5.*@Data = alloca @Data;
+    PUSH1 0xa (10)  // mstore v6 10.i256 i256;
+    DUP2
+    MSTORE
+    DUP1  // v9.*i256 = gep v5 0.i256 1.i256;
+    POP
+    PUSH1 0xc0 (192)
+    PUSH1 0x14 (20)  // mstore v9 20.i256 i256;
+    DUP2
+    MSTORE
+    SWAP2  // v13.i1 = is_zero v0;
+    PUSH1 block7  // br v13 block6 block7;
+    JUMPI
+  block6:
+    SWAP1  // jump block5;
+    POP
+    PUSH1 block5
+    JUMP
+  block7:
+    JUMPDEST
+    POP  // jump block5;
+  block5:
+    JUMPDEST
+    MLOAD  // v20.i256 = mload v16 i256;
+    PUSH0  // mstore 0.i256 v20 i256;
+    MSTORE
+    PUSH1 0x20 (32)  // evm_return 0.i256 32.i256;
+    PUSH0
+    RETURN

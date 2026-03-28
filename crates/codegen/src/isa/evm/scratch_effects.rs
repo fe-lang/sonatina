@@ -5,7 +5,10 @@ use sonatina_ir::{
     module::{FuncRef, ModuleCtx},
 };
 
-use super::{provenance::compute_value_provenance, scratch_plan::inst_is_scratch_clobber};
+use super::{
+    provenance::compute_value_provenance, ptr_escape::PtrEscapeSummary,
+    scratch_plan::inst_is_scratch_clobber,
+};
 
 pub(crate) fn compute_local_scratch_clobbers(
     module: &Module,
@@ -25,8 +28,7 @@ pub(crate) fn compute_local_scratch_clobbers(
 
 fn func_clobbers_scratch(function: &Function, module: &ModuleCtx, isa: &Evm) -> bool {
     let prov = compute_value_provenance(function, module, isa, |callee| {
-        let arg_count = module.func_sig(callee, |sig| sig.args().len());
-        vec![true; arg_count]
+        PtrEscapeSummary::conservative_unknown_ctx(module, callee)
     });
 
     for block in function.layout.iter_block() {

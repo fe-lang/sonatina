@@ -6031,6 +6031,72 @@ object @Contract {
     }
 
     #[test]
+    fn lowering_skips_trunc_mask_after_logical_shr() {
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %entry() {
+block0:
+    v0.i256 = evm_calldata_load 0.i256;
+    v1.i256 = shr 224.i256 v0;
+    v2.i32 = trunc v1 i32;
+    v3.i1 = eq v2 305419896.i32;
+    br v3 block1 block2;
+
+block1:
+    evm_return 0.i256 0.i256;
+
+block2:
+    evm_revert 0.i256 0.i256;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}
+"#,
+        )
+        .unwrap();
+
+        let func = find_func(&parsed.module, "entry");
+        let backend = EvmBackend::new(Evm::new(TargetTriple {
+            architecture: Architecture::Evm,
+            vendor: Vendor::Ethereum,
+            operating_system: OperatingSystem::Evm(EvmVersion::Osaka),
+        }));
+        let object = ObjectName::from("Contract");
+        let section = SectionName::from("runtime");
+        let embeds: Vec<EmbedSymbol> = Vec::new();
+        let section_ctx = SectionLoweringCtx {
+            object: &object,
+            section: &section,
+            embed_symbols: &embeds,
+        };
+
+        backend.prepare_section(&parsed.module, &[func], &section_ctx);
+        let lowered = backend
+            .lower_function(&parsed.module, func, &section_ctx)
+            .expect("entry lowers");
+        let ops: Vec<_> = lowered
+            .block_order
+            .iter()
+            .flat_map(|&block| lowered.vcode.block_insns(block))
+            .map(|inst| lowered.vcode.insts[inst] as u8)
+            .collect();
+
+        assert!(
+            ops.contains(&(OpCode::SHR as u8)),
+            "expected the calldata selector path to lower through SHR"
+        );
+        assert!(
+            !ops.contains(&(OpCode::AND as u8)),
+            "trunc after SHR should not materialize a redundant mask: {ops:?}"
+        );
+    }
+
+    #[test]
     fn materialize_jumpdests_uses_final_block_fixups() {
         let parsed = parse_module(
             r#"

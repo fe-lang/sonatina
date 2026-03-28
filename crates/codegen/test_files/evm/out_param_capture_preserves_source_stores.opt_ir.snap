@@ -1,0 +1,22 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: opt_ir_snapshot
+input_file: test_files/evm/out_param_capture_preserves_source_stores.sntn
+---
+target = "evm-ethereum-osaka"
+
+type @Data = {i256, i256};
+type @LiveView = {objref<i256>, objref<i256>};
+
+func public %entry() {
+    block0:
+        mstore 0.i32 30.i256 i256;
+        evm_return 0.i8 32.i8;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %entry;
+    }
+}
