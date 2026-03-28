@@ -32,6 +32,7 @@ pub(crate) enum RootProvenance {
 #[derive(Default)]
 pub(crate) struct RootProvenanceMap {
     exact: SecondaryMap<ValueId, Option<Projection>>,
+    possible_projections: SecondaryMap<ValueId, Vec<Projection>>,
     possible_roots: SecondaryMap<ValueId, FxHashSet<ValueId>>,
 }
 
@@ -63,6 +64,10 @@ impl RootProvenanceMap {
 
     pub(crate) fn into_possible_roots(self) -> SecondaryMap<ValueId, FxHashSet<ValueId>> {
         self.possible_roots
+    }
+
+    pub(crate) fn possible_projections(&self, value: ValueId) -> &[Projection] {
+        &self.possible_projections[value]
     }
 }
 
@@ -148,6 +153,16 @@ pub(crate) fn collect_root_provenance(
         };
     }
 
+    provenance.possible_projections = collect_possible_projections(
+        func,
+        module,
+        root_slices,
+        &provenance.possible_roots,
+        &mut exact_states,
+        layout_cache,
+        object_effects,
+    );
+
     refine_possible_roots_from_objref_loads(
         func,
         root_slices,
@@ -157,6 +172,67 @@ pub(crate) fn collect_root_provenance(
     );
 
     provenance
+}
+
+fn collect_possible_projections(
+    func: &Function,
+    module: &ModuleCtx,
+    root_slices: &FxHashMap<ValueId, shape::AggregateSlice>,
+    possible_roots: &SecondaryMap<ValueId, FxHashSet<ValueId>>,
+    exact_states: &mut SecondaryMap<ValueId, Option<ExactState>>,
+    layout_cache: &mut shape::AggregateLayoutCache,
+    object_effects: Option<&ObjectEffectSummaryMap>,
+) -> SecondaryMap<ValueId, Vec<Projection>> {
+    let mut possible_projections = SecondaryMap::<ValueId, Vec<Projection>>::default();
+
+    for (&root_value, &slice) in root_slices {
+        possible_projections[root_value].push(Projection { root_value, slice });
+    }
+
+    for value in func.dfg.value_ids() {
+        if let Some(projection) = exact_projection_of(exact_states, value) {
+            possible_projections[value].push(projection);
+        }
+    }
+
+    loop {
+        let mut changed = false;
+
+        for block in func.layout.iter_block() {
+            for inst in func.layout.iter_inst(block) {
+                if !func.layout.is_inst_inserted(inst) {
+                    continue;
+                }
+
+                let Some(result) = single_result_value(func, inst) else {
+                    continue;
+                };
+                let next = if let Some(projection) = exact_projection_of(exact_states, result) {
+                    vec![projection]
+                } else {
+                    derive_possible_projections(
+                        func,
+                        module,
+                        inst,
+                        result,
+                        &possible_projections,
+                        possible_roots,
+                        layout_cache,
+                        object_effects,
+                    )
+                };
+
+                if next != possible_projections[result] {
+                    possible_projections[result] = next;
+                    changed = true;
+                }
+            }
+        }
+
+        if !changed {
+            return possible_projections;
+        }
+    }
 }
 
 fn compute_possible_roots(
@@ -642,6 +718,156 @@ fn derive_exact_state(
         })
 }
 
+#[allow(clippy::too_many_arguments)]
+fn derive_possible_projections(
+    func: &Function,
+    module: &ModuleCtx,
+    inst: InstId,
+    result: ValueId,
+    possible_projections: &SecondaryMap<ValueId, Vec<Projection>>,
+    possible_roots: &SecondaryMap<ValueId, FxHashSet<ValueId>>,
+    layout_cache: &mut shape::AggregateLayoutCache,
+    object_effects: Option<&ObjectEffectSummaryMap>,
+) -> Vec<Projection> {
+    let Some(root_value) = singleton_root(possible_roots, result) else {
+        return Vec::new();
+    };
+
+    if let Some(gep) = downcast::<&data::Gep>(func.inst_set(), func.dfg.inst(inst)) {
+        let Some(&base) = gep.values().first() else {
+            return Vec::new();
+        };
+        return map_candidate_projections(possible_projections, base, |projection| {
+            let sub = shape::aggregate_slice_for_gep_path(
+                module,
+                projection.slice.ty,
+                &gep.values()[1..],
+                &func.dfg,
+            )?;
+            Some(Projection {
+                root_value: projection.root_value,
+                slice: shape::AggregateSlice {
+                    ty: sub.ty,
+                    first_leaf: projection.slice.first_leaf + sub.first_leaf,
+                    leaf_count: sub.leaf_count,
+                },
+            })
+        });
+    }
+
+    if let Some(bitcast) = downcast::<&cast::Bitcast>(func.inst_set(), func.dfg.inst(inst)) {
+        return map_candidate_projections(possible_projections, *bitcast.from(), |projection| {
+            let slice = bitcast_projection_slice(
+                layout_cache,
+                module,
+                projection.slice,
+                func.dfg.value_ty(result),
+            )?;
+            Some(Projection {
+                root_value: projection.root_value,
+                slice,
+            })
+        });
+    }
+
+    if let Some(obj_proj) = downcast::<&data::ObjProj>(func.inst_set(), func.dfg.inst(inst)) {
+        let Some((&base, indices)) = obj_proj.values().split_first() else {
+            return Vec::new();
+        };
+        return map_candidate_projections(possible_projections, base, |projection| {
+            let sub = shape::aggregate_slice_for_object_path(
+                module,
+                projection.slice.ty,
+                indices,
+                &func.dfg,
+            )?;
+            Some(Projection {
+                root_value: projection.root_value,
+                slice: shape::AggregateSlice {
+                    ty: sub.ty,
+                    first_leaf: projection.slice.first_leaf + sub.first_leaf,
+                    leaf_count: sub.leaf_count,
+                },
+            })
+        });
+    }
+
+    if let Some(obj_index) = downcast::<&data::ObjIndex>(func.inst_set(), func.dfg.inst(inst)) {
+        return map_candidate_projections(
+            possible_projections,
+            *obj_index.object(),
+            |projection| {
+                let sub = shape::aggregate_slice_for_object_path(
+                    module,
+                    projection.slice.ty,
+                    &[*obj_index.index()],
+                    &func.dfg,
+                )?;
+                Some(Projection {
+                    root_value: projection.root_value,
+                    slice: shape::AggregateSlice {
+                        ty: sub.ty,
+                        first_leaf: projection.slice.first_leaf + sub.first_leaf,
+                        leaf_count: sub.leaf_count,
+                    },
+                })
+            },
+        );
+    }
+
+    if let Some(enum_proj) = downcast::<&data::EnumProj>(func.inst_set(), func.dfg.inst(inst)) {
+        let Some(field_idx) = shape::const_u32(&func.dfg, *enum_proj.field()) else {
+            return Vec::new();
+        };
+        return map_candidate_projections(
+            possible_projections,
+            *enum_proj.object(),
+            |projection| {
+                let sub = shape::enum_variant_field_slice(
+                    module,
+                    projection.slice.ty,
+                    *enum_proj.variant(),
+                    field_idx,
+                )?;
+                Some(Projection {
+                    root_value: projection.root_value,
+                    slice: shape::AggregateSlice {
+                        ty: sub.ty,
+                        first_leaf: projection.slice.first_leaf + sub.first_leaf,
+                        leaf_count: sub.leaf_count,
+                    },
+                })
+            },
+        );
+    }
+
+    if let Some(enum_assert_ref) =
+        downcast::<&data::EnumAssertVariantRef>(func.inst_set(), func.dfg.inst(inst))
+    {
+        return map_candidate_projections(possible_projections, *enum_assert_ref.object(), Some);
+    }
+
+    if let Some(call) = downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(inst)) {
+        return derive_call_possible_projections(
+            func,
+            inst,
+            result,
+            call,
+            possible_projections,
+            possible_roots,
+            root_value,
+            layout_cache,
+            object_effects,
+        );
+    }
+
+    downcast::<&control_flow::Phi>(func.inst_set(), func.dfg.inst(inst))
+        .map(|phi| {
+            derive_phi_projection_candidates(func, result, phi, possible_projections, root_value)
+        })
+        .unwrap_or_default()
+}
+
 fn derive_phi_state(
     func: &Function,
     result: ValueId,
@@ -710,6 +936,28 @@ fn derive_phi_state(
     } else {
         ExactState::Blocked
     }
+}
+
+fn derive_phi_projection_candidates(
+    func: &Function,
+    result: ValueId,
+    phi: &control_flow::Phi,
+    possible_projections: &SecondaryMap<ValueId, Vec<Projection>>,
+    root_value: ValueId,
+) -> Vec<Projection> {
+    let result_ty = func.dfg.value_ty(result);
+    let mut candidates = Vec::new();
+    for &(arg, _) in phi.args() {
+        for &projection in &possible_projections[arg] {
+            if projection.root_value != root_value
+                || !projection_value_ty_matches(result_ty, projection.slice.ty, func.ctx())
+            {
+                continue;
+            }
+            push_unique_projection(&mut candidates, projection);
+        }
+    }
+    candidates
 }
 
 fn exact_projection_of(
@@ -955,6 +1203,98 @@ fn fresh_call_root_projection(
                 .map_or(1, |shape| shape.leaves.len()),
         },
     })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn derive_call_possible_projections(
+    func: &Function,
+    inst: InstId,
+    result: ValueId,
+    call: &control_flow::Call,
+    possible_projections: &SecondaryMap<ValueId, Vec<Projection>>,
+    possible_roots: &SecondaryMap<ValueId, FxHashSet<ValueId>>,
+    root_value: ValueId,
+    layout_cache: &mut shape::AggregateLayoutCache,
+    object_effects: Option<&ObjectEffectSummaryMap>,
+) -> Vec<Projection> {
+    let Some(summary) = object_effects.and_then(|effects| effects.get(call.callee())) else {
+        return Vec::new();
+    };
+
+    match summary.ret_effect {
+        ObjectReturnEffect::SameAsArg { index } | ObjectReturnEffect::DerivedFromArg { index } => {
+            let Some(&arg) = call.args().get(index) else {
+                return Vec::new();
+            };
+            filter_projection_candidates(
+                func,
+                result,
+                &possible_projections[arg],
+                possible_roots,
+                root_value,
+            )
+        }
+        ObjectReturnEffect::FreshObject => {
+            fresh_call_root_projection(func, result, inst, object_effects, layout_cache)
+                .into_iter()
+                .collect()
+        }
+        ObjectReturnEffect::None | ObjectReturnEffect::Unknown => Vec::new(),
+    }
+}
+
+fn map_candidate_projections(
+    possible_projections: &SecondaryMap<ValueId, Vec<Projection>>,
+    value: ValueId,
+    mut map: impl FnMut(Projection) -> Option<Projection>,
+) -> Vec<Projection> {
+    let mut projections = Vec::new();
+    for &projection in &possible_projections[value] {
+        let Some(mapped) = map(projection) else {
+            continue;
+        };
+        push_unique_projection(&mut projections, mapped);
+    }
+    projections
+}
+
+fn filter_projection_candidates(
+    func: &Function,
+    result: ValueId,
+    projections: &[Projection],
+    possible_roots: &SecondaryMap<ValueId, FxHashSet<ValueId>>,
+    root_value: ValueId,
+) -> Vec<Projection> {
+    let result_ty = func.dfg.value_ty(result);
+    let mut filtered = Vec::new();
+    for &projection in projections {
+        if projection.root_value != root_value
+            || !possible_roots[result].contains(&projection.root_value)
+            || !projection_value_ty_matches(result_ty, projection.slice.ty, func.ctx())
+        {
+            continue;
+        }
+        push_unique_projection(&mut filtered, projection);
+    }
+    filtered
+}
+
+fn singleton_root(
+    possible_roots: &SecondaryMap<ValueId, FxHashSet<ValueId>>,
+    value: ValueId,
+) -> Option<ValueId> {
+    (possible_roots[value].len() == 1).then(|| {
+        *possible_roots[value]
+            .iter()
+            .next()
+            .expect("singleton root set must have an element")
+    })
+}
+
+fn push_unique_projection(projections: &mut Vec<Projection>, projection: Projection) {
+    if !projections.contains(&projection) {
+        projections.push(projection);
+    }
 }
 
 fn single_result_value(func: &Function, inst: InstId) -> Option<ValueId> {

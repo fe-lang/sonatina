@@ -43,10 +43,11 @@ struct RootCaptureEffect {
     src_slice: shape::AggregateSlice,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct ReturnedFreshSlice {
     root_value: ValueId,
-    slice: shape::AggregateSlice,
+    return_slice: shape::AggregateSlice,
+    possible_slices: Option<Vec<shape::AggregateSlice>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -514,7 +515,7 @@ fn analyze_returns(
             );
             combined = join_return_class(combined, class);
             if let Some(fresh_slice) = fresh_slice
-                && seen_returned_slices.insert(fresh_slice)
+                && seen_returned_slices.insert(fresh_slice.clone())
             {
                 returned_fresh_slices.push(fresh_slice);
             }
@@ -557,6 +558,10 @@ fn classify_return_value(
     }
 
     if let Some(projection) = provenance.exact_projection(value) {
+        let Some(return_ty) = objref_element_ty(function.ctx(), function.dfg.value_ty(value))
+        else {
+            return (ReturnClass::None, None);
+        };
         if let Some(&idx) = arg_roots.get(&projection.root_value) {
             return (
                 if root_slices.get(&projection.root_value) == Some(&projection.slice) {
@@ -575,7 +580,8 @@ fn classify_return_value(
             },
             is_fresh_root(function, projection.root_value).then_some(ReturnedFreshSlice {
                 root_value: projection.root_value,
-                slice: projection.slice,
+                return_slice: whole_root_slice(layout_cache, function.ctx(), return_ty),
+                possible_slices: Some(vec![projection.slice]),
             }),
         );
     }
@@ -585,14 +591,27 @@ fn classify_return_value(
             if let Some(&idx) = arg_roots.get(&root) {
                 (ReturnClass::DerivedFromArg(idx), None)
             } else if is_fresh_root(function, root) {
+                let Some(return_ty) =
+                    objref_element_ty(function.ctx(), function.dfg.value_ty(value))
+                else {
+                    return (ReturnClass::None, None);
+                };
+                let mut possible_slices = Vec::new();
+                for projection in provenance.possible_projections(value) {
+                    if projection.root_value == root
+                        && objref_element_ty(function.ctx(), function.dfg.value_ty(value))
+                            == Some(projection.slice.ty)
+                    {
+                        push_unique_slice(&mut possible_slices, projection.slice);
+                    }
+                }
                 (
                     ReturnClass::FreshObject,
-                    objref_element_ty(function.ctx(), function.dfg.value_ty(value)).map(
-                        |elem_ty| ReturnedFreshSlice {
-                            root_value: root,
-                            slice: whole_root_slice(layout_cache, function.ctx(), elem_ty),
-                        },
-                    ),
+                    Some(ReturnedFreshSlice {
+                        root_value: root,
+                        return_slice: whole_root_slice(layout_cache, function.ctx(), return_ty),
+                        possible_slices: (!possible_slices.is_empty()).then_some(possible_slices),
+                    }),
                 )
             } else {
                 (ReturnClass::Unknown, None)
@@ -648,24 +667,70 @@ fn emit_public_capture_effects(
         }
     }
 
-    for &returned in returned_fresh_slices {
+    for returned in returned_fresh_slices {
         let Some(captures) = root_captures.get(&returned.root_value) else {
             continue;
         };
+        let mut captures_by_source =
+            FxHashMap::<(usize, shape::AggregateSlice), Vec<shape::AggregateSlice>>::default();
         for &capture in captures {
-            let Some(slice) = rebase_return_capture_slice(returned.slice, capture.dst_slice) else {
-                continue;
-            };
-            push_capture_effect(
-                summary,
-                ObjectCaptureEffect {
-                    dst: ObjectCaptureDestination::Return { slice },
-                    src_arg: capture.src_arg,
-                    src_slice: capture.src_slice,
-                },
-            );
+            captures_by_source
+                .entry((capture.src_arg, capture.src_slice))
+                .or_default()
+                .push(capture.dst_slice);
+        }
+        for ((src_arg, src_slice), dst_slices) in captures_by_source {
+            for slice in return_capture_slices_for_source(returned, &dst_slices) {
+                push_capture_effect(
+                    summary,
+                    ObjectCaptureEffect {
+                        dst: ObjectCaptureDestination::Return { slice },
+                        src_arg,
+                        src_slice,
+                    },
+                );
+            }
         }
     }
+}
+
+fn return_capture_slices_for_source(
+    returned: &ReturnedFreshSlice,
+    dst_slices: &[shape::AggregateSlice],
+) -> Vec<shape::AggregateSlice> {
+    let Some(possible_slices) = returned.possible_slices.as_deref() else {
+        return vec![returned.return_slice];
+    };
+
+    let mut common_slices = None::<Vec<shape::AggregateSlice>>;
+    let mut any_overlap = false;
+    for &possible_slice in possible_slices {
+        let mut candidate_slices = Vec::new();
+        for &dst_slice in dst_slices {
+            let Some(slice) = rebase_return_capture_slice(possible_slice, dst_slice) else {
+                continue;
+            };
+            push_unique_slice(&mut candidate_slices, slice);
+        }
+        any_overlap |= !candidate_slices.is_empty();
+        match common_slices.as_ref() {
+            Some(existing) if !same_slice_set(existing, &candidate_slices) => {
+                return any_overlap
+                    .then_some(vec![returned.return_slice])
+                    .unwrap_or_default();
+            }
+            Some(_) => {}
+            None => common_slices = Some(candidate_slices),
+        }
+    }
+
+    common_slices
+        .filter(|slices| !slices.is_empty())
+        .unwrap_or_else(|| {
+            any_overlap
+                .then_some(vec![returned.return_slice])
+                .unwrap_or_default()
+        })
 }
 
 fn rebase_return_capture_slice(
@@ -689,7 +754,7 @@ fn rebase_slice(
     (base_slice.first_leaf <= nested_slice.first_leaf
         && nested_slice.first_leaf + nested_slice.leaf_count
             <= base_slice.first_leaf + base_slice.leaf_count)
-        .then_some(shape::AggregateSlice {
+        .then(|| shape::AggregateSlice {
             ty: nested_slice.ty,
             first_leaf: nested_slice.first_leaf - base_slice.first_leaf,
             leaf_count: nested_slice.leaf_count,
@@ -998,6 +1063,16 @@ fn extend_capture_sources_for_root(
 fn dedup_capture_source_slices(src_slices: &mut Vec<(usize, shape::AggregateSlice)>) {
     let mut seen = FxHashSet::default();
     src_slices.retain(|source| seen.insert(*source));
+}
+
+fn same_slice_set(lhs: &[shape::AggregateSlice], rhs: &[shape::AggregateSlice]) -> bool {
+    lhs.len() == rhs.len() && lhs.iter().all(|slice| rhs.contains(slice))
+}
+
+fn push_unique_slice(slices: &mut Vec<shape::AggregateSlice>, slice: shape::AggregateSlice) {
+    if !slices.contains(&slice) {
+        slices.push(slice);
+    }
 }
 
 fn kill_capture_access(
@@ -1765,6 +1840,110 @@ block0:
         assert!(
             has_return_capture(&summary, 1, 1, 0, 1, 1),
             "returned local out-arg field 1 should preserve source field 1"
+        );
+    }
+
+    #[test]
+    fn return_capture_summary_preserves_shared_relative_slice_across_same_root_phi() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @Cell = { i256 };
+type @Inner = { objref<i256>, i256 };
+type @Outer = { @Inner, @Inner };
+
+func private %pick(v0.i1, v1.objref<@Cell>) -> objref<@Inner> {
+block0:
+    v2.objref<@Outer> = obj.alloc @Outer;
+    br v0 block1 block2;
+
+block1:
+    v3.objref<@Inner> = obj.proj v2 0.i8;
+    v4.objref<objref<i256>> = obj.proj v3 0.i8;
+    v5.objref<i256> = obj.proj v1 0.i8;
+    obj.store v4 v5;
+    jump block3;
+
+block2:
+    v6.objref<@Inner> = obj.proj v2 1.i8;
+    v7.objref<objref<i256>> = obj.proj v6 0.i8;
+    v8.objref<i256> = obj.proj v1 0.i8;
+    obj.store v7 v8;
+    jump block3;
+
+block3:
+    v9.objref<@Inner> = phi (v3 block1) (v6 block2);
+    return v9;
+}
+"#,
+        );
+
+        let func_ref = lookup_func(&module, "pick");
+        let summary = compute_object_effect_summaries(&module)
+            .remove(&func_ref)
+            .expect("summary should exist");
+
+        assert_eq!(summary.ret_effect, ObjectReturnEffect::FreshObject);
+        assert!(
+            has_return_capture(&summary, 0, 1, 1, 0, 1),
+            "matching same-root return candidates should keep a precise return capture"
+        );
+    }
+
+    #[test]
+    fn return_capture_summary_widens_disagreeing_same_root_phi_to_whole_return() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @Cell = { i256 };
+type @Inner = { objref<i256>, objref<i256> };
+type @Outer = { @Inner, @Inner };
+
+func private %pick(v0.i1, v1.objref<@Cell>) -> objref<@Inner> {
+block0:
+    v2.objref<@Outer> = obj.alloc @Outer;
+    br v0 block1 block2;
+
+block1:
+    v3.objref<@Inner> = obj.proj v2 0.i8;
+    v4.objref<objref<i256>> = obj.proj v3 1.i8;
+    v5.objref<i256> = obj.proj v1 0.i8;
+    obj.store v4 v5;
+    jump block3;
+
+block2:
+    v6.objref<@Inner> = obj.proj v2 1.i8;
+    v7.objref<objref<i256>> = obj.proj v6 0.i8;
+    v8.objref<i256> = obj.proj v1 0.i8;
+    obj.store v7 v8;
+    jump block3;
+
+block3:
+    v9.objref<@Inner> = phi (v3 block1) (v6 block2);
+    return v9;
+}
+"#,
+        );
+
+        let func_ref = lookup_func(&module, "pick");
+        let summary = compute_object_effect_summaries(&module)
+            .remove(&func_ref)
+            .expect("summary should exist");
+
+        assert_eq!(summary.ret_effect, ObjectReturnEffect::FreshObject);
+        assert!(
+            has_return_capture(&summary, 0, 2, 1, 0, 1),
+            "disagreeing same-root return candidates should widen to the whole returned object"
+        );
+        assert!(
+            !has_return_capture(&summary, 0, 1, 1, 0, 1),
+            "ambiguous same-root return should not invent a precise field-0 capture"
+        );
+        assert!(
+            !has_return_capture(&summary, 1, 1, 1, 0, 1),
+            "ambiguous same-root return should not invent a precise field-1 capture"
         );
     }
 

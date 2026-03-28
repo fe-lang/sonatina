@@ -1606,6 +1606,80 @@ block0:
     }
 
     #[test]
+    fn ambiguous_return_capture_keeps_source_store_live() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @Cell = { i256 };
+type @Inner = { objref<i256>, objref<i256> };
+type @Outer = { @Inner, @Inner };
+
+func private %pick(v0.i1, v1.objref<@Cell>, v2.objref<@Cell>) -> objref<@Inner> {
+block0:
+    v3.objref<@Outer> = obj.alloc @Outer;
+    br v0 block1 block2;
+
+block1:
+    v4.objref<@Inner> = obj.proj v3 0.i8;
+    v5.objref<objref<i256>> = obj.proj v4 1.i8;
+    v6.objref<i256> = obj.proj v1 0.i8;
+    obj.store v5 v6;
+    v7.objref<objref<i256>> = obj.proj v4 0.i8;
+    v8.objref<i256> = obj.proj v2 0.i8;
+    obj.store v7 v8;
+    jump block3;
+
+block2:
+    v9.objref<@Inner> = obj.proj v3 1.i8;
+    v10.objref<objref<i256>> = obj.proj v9 0.i8;
+    v11.objref<i256> = obj.proj v1 0.i8;
+    obj.store v10 v11;
+    v12.objref<objref<i256>> = obj.proj v9 1.i8;
+    v13.objref<i256> = obj.proj v2 0.i8;
+    obj.store v12 v13;
+    jump block3;
+
+block3:
+    v14.objref<@Inner> = phi (v4 block1) (v9 block2);
+    return v14;
+}
+
+func private %read_first(v0.objref<@Inner>) -> i256 {
+block0:
+    v1.objref<objref<i256>> = obj.proj v0 0.i8;
+    v2.objref<i256> = obj.load v1;
+    v3.i256 = obj.load v2;
+    return v3;
+}
+
+func private %main(v0.i1) -> i256 {
+block0:
+    v1.objref<@Cell> = obj.alloc @Cell;
+    v2.objref<i256> = obj.proj v1 0.i8;
+    obj.store v2 4.i256;
+    v3.objref<@Cell> = obj.alloc @Cell;
+    v4.objref<i256> = obj.proj v3 0.i8;
+    obj.store v4 9.i256;
+    v5.objref<@Inner> = call %pick v0 v1 v3;
+    v6.i256 = call %read_first v5;
+    return v6;
+}
+"#,
+        );
+        let func_ref = lookup_func(&module, "main");
+        run_with_effects(&module, func_ref);
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            assert!(
+                dumped.contains("obj.store v2 4.i256;"),
+                "ambiguous returned capture should keep the source store live:\n{dumped}"
+            );
+        });
+    }
+
+    #[test]
     fn forwards_store_into_successor_block() {
         let module = parse_test_module(
             r#"
