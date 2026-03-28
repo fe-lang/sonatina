@@ -1,6 +1,7 @@
 use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
-    Function, Module, Type, ValueId,
+    BlockId, Function, Module, Type, ValueId,
+    cfg::ControlFlowGraph,
     inst::{control_flow, data, downcast},
     module::{FuncRef, ModuleCtx},
 };
@@ -314,9 +315,13 @@ fn compute_summary_for_func(
             arg_roots: &arg_roots,
             provenance: &provenance,
         };
-        let mut root_captures = RootCaptureMap::default();
+        let mut cfg = ControlFlowGraph::default();
+        cfg.compute(function);
+        let (block_entry_captures, exit_root_captures) =
+            compute_capture_states_for_blocks(function, capture_ctx, summaries, layout_cache, &cfg);
 
         for block in function.layout.iter_block() {
+            let mut root_captures = block_entry_captures[block].clone();
             for inst in function.layout.iter_inst(block) {
                 if !function.layout.is_inst_inserted(inst) {
                     continue;
@@ -369,7 +374,6 @@ fn compute_summary_for_func(
                         *obj_store.object(),
                     );
                     record_capture(
-                        &mut summary,
                         &mut root_captures,
                         capture_ctx,
                         *obj_store.object(),
@@ -450,10 +454,9 @@ fn compute_summary_for_func(
             }
         }
 
-        dedup_root_capture_effects(&mut root_captures);
         emit_public_capture_effects(
             &mut summary,
-            &root_captures,
+            &exit_root_captures,
             &arg_roots,
             &return_analysis.returned_fresh_slices,
         );
@@ -471,6 +474,150 @@ fn compute_summary_for_func(
         }
         summary
     })
+}
+
+fn compute_capture_states_for_blocks(
+    function: &Function,
+    capture_ctx: CaptureContext<'_>,
+    summaries: &ObjectEffectSummaryMap,
+    layout_cache: &mut shape::AggregateLayoutCache,
+    cfg: &ControlFlowGraph,
+) -> (
+    cranelift_entity::SecondaryMap<BlockId, RootCaptureMap>,
+    RootCaptureMap,
+) {
+    let mut block_entry_captures = cranelift_entity::SecondaryMap::default();
+    let mut block_exit_captures = cranelift_entity::SecondaryMap::default();
+
+    loop {
+        let mut changed = false;
+
+        for block in function.layout.iter_block() {
+            let mut entry_captures = RootCaptureMap::default();
+            for &pred in cfg.preds_of(block) {
+                merge_root_capture_maps(&mut entry_captures, &block_exit_captures[pred]);
+            }
+
+            if block_entry_captures[block] != entry_captures {
+                block_entry_captures[block] = entry_captures.clone();
+                changed = true;
+            }
+
+            let mut exit_captures = entry_captures;
+            for inst in function.layout.iter_inst(block) {
+                apply_inst_capture_transfer(
+                    function,
+                    inst,
+                    &mut exit_captures,
+                    capture_ctx,
+                    summaries,
+                    layout_cache,
+                );
+            }
+            dedup_root_capture_effects(&mut exit_captures);
+
+            if block_exit_captures[block] != exit_captures {
+                block_exit_captures[block] = exit_captures;
+                changed = true;
+            }
+        }
+
+        if !changed {
+            break;
+        }
+    }
+
+    let mut exit_root_captures = RootCaptureMap::default();
+    for &block in &cfg.exits {
+        merge_root_capture_maps(&mut exit_root_captures, &block_exit_captures[block]);
+    }
+    dedup_root_capture_effects(&mut exit_root_captures);
+
+    (block_entry_captures, exit_root_captures)
+}
+
+fn apply_inst_capture_transfer(
+    function: &Function,
+    inst: sonatina_ir::InstId,
+    root_captures: &mut RootCaptureMap,
+    capture_ctx: CaptureContext<'_>,
+    summaries: &ObjectEffectSummaryMap,
+    layout_cache: &mut shape::AggregateLayoutCache,
+) {
+    if !function.layout.is_inst_inserted(inst) {
+        return;
+    }
+
+    if let Some(obj_store) =
+        downcast::<&data::ObjStore>(function.inst_set(), function.dfg.inst(inst))
+    {
+        kill_capture_access(root_captures, capture_ctx, *obj_store.object(), None);
+        record_capture(
+            root_captures,
+            capture_ctx,
+            *obj_store.object(),
+            *obj_store.value(),
+        );
+        return;
+    }
+
+    if let Some(enum_set_tag) =
+        downcast::<&data::EnumSetTag>(function.inst_set(), function.dfg.inst(inst))
+    {
+        kill_capture_access(
+            root_captures,
+            capture_ctx,
+            *enum_set_tag.object(),
+            Some((0, 1)),
+        );
+        return;
+    }
+
+    if let Some(enum_write_variant) =
+        downcast::<&data::EnumWriteVariant>(function.inst_set(), function.dfg.inst(inst))
+    {
+        kill_capture_access(
+            root_captures,
+            capture_ctx,
+            *enum_write_variant.object(),
+            None,
+        );
+        record_enum_variant_captures(
+            function,
+            root_captures,
+            capture_ctx,
+            *enum_write_variant.object(),
+            enum_write_variant.values(),
+            *enum_write_variant.variant(),
+        );
+        return;
+    }
+
+    if downcast::<&control_flow::Call>(function.inst_set(), function.dfg.inst(inst)).is_some() {
+        apply_call_capture_transfer(
+            function,
+            inst,
+            root_captures,
+            capture_ctx,
+            summaries,
+            layout_cache,
+        );
+    }
+}
+
+fn merge_root_capture_maps(dst: &mut RootCaptureMap, src: &RootCaptureMap) -> bool {
+    let mut changed = false;
+    for (&root, captures) in src {
+        let entry = dst.entry(root).or_default();
+        for &capture in captures {
+            if entry.contains(&capture) {
+                continue;
+            }
+            entry.push(capture);
+            changed = true;
+        }
+    }
+    changed
 }
 
 fn analyze_returns(
@@ -777,28 +924,77 @@ fn merge_call_effects(
 ) {
     let call = downcast::<&control_flow::Call>(function.inst_set(), function.dfg.inst(inst))
         .expect("merge_call_effects requires a call instruction");
-    let callee_summary = summaries.get(call.callee()).cloned().unwrap_or_else(|| {
-        ObjectEffectSummary::conservative_unknown(function.ctx(), *call.callee(), layout_cache)
-    });
+    let callee_summary = call_effect_summary(function, call, summaries, layout_cache);
+    let pre_call_captures = root_captures.clone();
 
     for (callee_idx, &arg) in call.args().iter().enumerate() {
         let Some(callee_effect) = callee_summary.arg_effects.get(callee_idx) else {
             continue;
         };
-        merge_call_arg_effect(summary, root_captures, capture_ctx, arg, callee_effect);
+        merge_call_arg_effect(
+            summary,
+            &pre_call_captures,
+            root_captures,
+            capture_ctx,
+            arg,
+            callee_effect,
+        );
     }
     merge_call_capture_effects(
         function,
         inst,
         root_captures,
+        &pre_call_captures,
         capture_ctx,
         call,
         &callee_summary.captures,
     );
 }
 
+fn apply_call_capture_transfer(
+    function: &Function,
+    inst: sonatina_ir::InstId,
+    root_captures: &mut RootCaptureMap,
+    capture_ctx: CaptureContext<'_>,
+    summaries: &ObjectEffectSummaryMap,
+    layout_cache: &mut shape::AggregateLayoutCache,
+) {
+    let call = downcast::<&control_flow::Call>(function.inst_set(), function.dfg.inst(inst))
+        .expect("apply_call_capture_transfer requires a call instruction");
+    let callee_summary = call_effect_summary(function, call, summaries, layout_cache);
+    let pre_call_captures = root_captures.clone();
+
+    for (callee_idx, &arg) in call.args().iter().enumerate() {
+        let Some(callee_effect) = callee_summary.arg_effects.get(callee_idx) else {
+            continue;
+        };
+        kill_capture_slice_set(root_captures, capture_ctx, arg, &callee_effect.writes);
+    }
+    merge_call_capture_effects(
+        function,
+        inst,
+        root_captures,
+        &pre_call_captures,
+        capture_ctx,
+        call,
+        &callee_summary.captures,
+    );
+}
+
+fn call_effect_summary(
+    function: &Function,
+    call: &control_flow::Call,
+    summaries: &ObjectEffectSummaryMap,
+    layout_cache: &mut shape::AggregateLayoutCache,
+) -> ObjectEffectSummary {
+    summaries.get(call.callee()).cloned().unwrap_or_else(|| {
+        ObjectEffectSummary::conservative_unknown(function.ctx(), *call.callee(), layout_cache)
+    })
+}
+
 fn merge_call_arg_effect(
     summary: &mut ObjectEffectSummary,
+    capture_sources: &RootCaptureMap,
     root_captures: &mut RootCaptureMap,
     capture_ctx: CaptureContext<'_>,
     value: ValueId,
@@ -835,15 +1031,18 @@ fn merge_call_arg_effect(
         }
     }
 
-    for (src_arg, src_slice) in
-        capture_source_slices_for_slice_set(root_captures, capture_ctx, value, &callee_effect.reads)
-    {
+    for (src_arg, src_slice) in capture_source_slices_for_slice_set(
+        capture_sources,
+        capture_ctx,
+        value,
+        &callee_effect.reads,
+    ) {
         summary.arg_effects[src_arg].reads.add_slice(src_slice);
     }
     if callee_effect.escapes || callee_effect.materializes_stack || callee_effect.materializes_heap
     {
         let mut seen = FxHashSet::default();
-        for (src_arg, _) in capture_source_slices(root_captures, capture_ctx, value, None) {
+        for (src_arg, _) in capture_source_slices(capture_sources, capture_ctx, value, None) {
             if !seen.insert(src_arg) {
                 continue;
             }
@@ -875,6 +1074,7 @@ fn merge_call_capture_effects(
     function: &Function,
     inst: sonatina_ir::InstId,
     root_captures: &mut RootCaptureMap,
+    capture_sources: &RootCaptureMap,
     capture_ctx: CaptureContext<'_>,
     call: &control_flow::Call,
     callee_captures: &[ObjectCaptureEffect],
@@ -884,8 +1084,12 @@ fn merge_call_capture_effects(
         let Some(&src_arg) = call.args().get(capture.src_arg) else {
             continue;
         };
-        let src_slices =
-            capture_source_slices(root_captures, capture_ctx, src_arg, Some(capture.src_slice));
+        let src_slices = capture_source_slices(
+            capture_sources,
+            capture_ctx,
+            src_arg,
+            Some(capture.src_slice),
+        );
         if src_slices.is_empty() {
             continue;
         }
@@ -904,7 +1108,6 @@ fn merge_call_capture_effects(
 }
 
 fn record_capture(
-    _summary: &mut ObjectEffectSummary,
     root_captures: &mut RootCaptureMap,
     capture_ctx: CaptureContext<'_>,
     object: ValueId,
@@ -1610,6 +1813,20 @@ mod tests {
             .is_some_and(|effect| effect.reads.is_whole_root())
     }
 
+    fn arg_reads_slice(
+        summary: &ObjectEffectSummary,
+        index: usize,
+        first_leaf: usize,
+        leaf_count: usize,
+    ) -> bool {
+        summary.arg_effects.get(index).is_some_and(|effect| {
+            effect.reads.is_whole_root()
+                || effect.reads.exact_leaves().is_some_and(|leaves| {
+                    (first_leaf..first_leaf + leaf_count).all(|leaf| leaves.contains(&leaf))
+                })
+        })
+    }
+
     #[test]
     fn fresh_out_arg_capture_summary_tracks_source_slices() {
         let module = parse_test_module(
@@ -1679,6 +1896,91 @@ block0:
         assert!(
             has_arg_capture(&summary, 0, 0, 1, 1, 0, 1),
             "transitive helper summary should preserve capture relations"
+        );
+    }
+
+    #[test]
+    fn capture_summary_preserves_branch_local_capture_reads() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @Data = { i256, i256 };
+type @Holder = { objref<i256> };
+
+func private %branch_read(v0.objref<@Holder>, v1.objref<@Data>, v2.i1) {
+block0:
+    br v2 block1 block2;
+
+block1:
+    v3.objref<i256> = obj.proj v1 0.i8;
+    v4.objref<objref<i256>> = obj.proj v0 0.i8;
+    obj.store v4 v3;
+    jump block3;
+
+block2:
+    v5.objref<i256> = obj.alloc i256;
+    v6.objref<objref<i256>> = obj.proj v0 0.i8;
+    obj.store v6 v5;
+    jump block3;
+
+block3:
+    v7.objref<objref<i256>> = obj.proj v0 0.i8;
+    v8.objref<i256> = obj.load v7;
+    v9.i256 = obj.load v8;
+    return;
+}
+"#,
+        );
+
+        let func_ref = lookup_func(&module, "branch_read");
+        let summary = compute_object_effect_summaries(&module)
+            .remove(&func_ref)
+            .expect("summary should exist");
+        assert!(
+            arg_reads_slice(&summary, 1, 0, 1),
+            "merge-block read should preserve captures from the non-overwriting predecessor"
+        );
+    }
+
+    #[test]
+    fn capture_summary_uses_pre_call_capture_snapshot_for_aliased_args() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @Data = { i256, i256 };
+type @Holder = { objref<i256> };
+
+func private %callee(v0.objref<@Holder>, v1.objref<@Holder>) {
+block0:
+    v2.objref<objref<i256>> = obj.proj v1 0.i8;
+    v3.objref<i256> = obj.load v2;
+    v4.i256 = obj.load v3;
+    v5.objref<i256> = obj.alloc i256;
+    v6.objref<objref<i256>> = obj.proj v0 0.i8;
+    obj.store v6 v5;
+    return;
+}
+
+func private %caller(v0.objref<@Holder>, v1.objref<@Data>) {
+block0:
+    v2.objref<i256> = obj.proj v1 0.i8;
+    v3.objref<objref<i256>> = obj.proj v0 0.i8;
+    obj.store v3 v2;
+    call %callee v0 v0;
+    return;
+}
+"#,
+        );
+
+        let func_ref = lookup_func(&module, "caller");
+        let summary = compute_object_effect_summaries(&module)
+            .remove(&func_ref)
+            .expect("summary should exist");
+        assert!(
+            arg_reads_slice(&summary, 1, 0, 1),
+            "aliased call args should read captured sources from the pre-call state"
         );
     }
 
