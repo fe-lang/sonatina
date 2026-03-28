@@ -1,7 +1,8 @@
 use cranelift_entity::SecondaryMap;
 use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
-    Function, InstId, Type, ValueId,
+    BlockId, Function, InstId, Type, ValueId,
+    cfg::ControlFlowGraph,
     inst::{cast, control_flow, data, downcast},
     module::ModuleCtx,
     types::CompoundType,
@@ -285,106 +286,39 @@ fn refine_possible_roots_from_objref_loads(
     possible_roots: &mut SecondaryMap<ValueId, FxHashSet<ValueId>>,
     object_effects: Option<&ObjectEffectSummaryMap>,
 ) {
+    let mut cfg = ControlFlowGraph::default();
+    cfg.compute(func);
+    let reachable = cfg.reachable_blocks();
+
     loop {
         let mut changed = false;
-        let mut root_captures = FxHashMap::<ValueId, Vec<RootCaptureRoot>>::default();
+        let possible_roots_snapshot = possible_roots.clone();
+        let capture_state = CaptureStateView {
+            exact_states,
+            possible_roots: &possible_roots_snapshot,
+            root_slices,
+        };
+        let block_entry_captures = compute_capture_states_for_blocks(
+            func,
+            capture_state,
+            object_effects,
+            &cfg,
+            &reachable,
+        );
 
         for block in func.layout.iter_block() {
+            if !reachable[block] {
+                continue;
+            }
+
+            let mut root_captures = block_entry_captures[block].clone();
             for inst in func.layout.iter_inst(block) {
                 if !func.layout.is_inst_inserted(inst) {
                     continue;
                 }
 
-                if let Some(obj_store) =
-                    downcast::<&data::ObjStore>(func.inst_set(), func.dfg.inst(inst))
-                {
-                    kill_capture_access(
-                        &mut root_captures,
-                        *obj_store.object(),
-                        None,
-                        CaptureStateView {
-                            exact_states,
-                            possible_roots,
-                            root_slices,
-                        },
-                    );
-                    if reference_element_ty(func.ctx(), func.dfg.value_ty(*obj_store.value()))
-                        .is_some()
-                    {
-                        record_root_capture_sources(
-                            &mut root_captures,
-                            capture_destinations_for_value(
-                                *obj_store.object(),
-                                None,
-                                CaptureStateView {
-                                    exact_states,
-                                    possible_roots,
-                                    root_slices,
-                                },
-                            ),
-                            &possible_roots[*obj_store.value()],
-                        );
-                    }
-                }
-
-                if let Some(enum_set_tag) =
-                    downcast::<&data::EnumSetTag>(func.inst_set(), func.dfg.inst(inst))
-                {
-                    kill_capture_access(
-                        &mut root_captures,
-                        *enum_set_tag.object(),
-                        Some((0, 1)),
-                        CaptureStateView {
-                            exact_states,
-                            possible_roots,
-                            root_slices,
-                        },
-                    );
-                }
-
-                if let Some(enum_write_variant) =
-                    downcast::<&data::EnumWriteVariant>(func.inst_set(), func.dfg.inst(inst))
-                {
-                    kill_capture_access(
-                        &mut root_captures,
-                        *enum_write_variant.object(),
-                        None,
-                        CaptureStateView {
-                            exact_states,
-                            possible_roots,
-                            root_slices,
-                        },
-                    );
-                    record_enum_variant_capture_sources(
-                        func,
-                        &mut root_captures,
-                        *enum_write_variant.object(),
-                        enum_write_variant.values(),
-                        *enum_write_variant.variant(),
-                        CaptureStateView {
-                            exact_states,
-                            possible_roots,
-                            root_slices,
-                        },
-                    );
-                }
-
-                if downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(inst)).is_some() {
-                    merge_call_capture_roots(
-                        func,
-                        inst,
-                        CaptureStateView {
-                            exact_states,
-                            possible_roots,
-                            root_slices,
-                        },
-                        object_effects,
-                        &mut root_captures,
-                    );
-                }
-
                 if let Some(updated) =
-                    possible_root_transfer(func, inst, possible_roots, object_effects)
+                    possible_root_transfer(func, inst, &possible_roots_snapshot, object_effects)
                     && let Some(result) = single_result_value(func, inst)
                     && union_root_set(&mut possible_roots[result], &updated)
                 {
@@ -397,25 +331,140 @@ fn refine_possible_roots_from_objref_loads(
                         .is_some()
                     && let Some(result) = single_result_value(func, inst)
                 {
-                    let loaded_roots = capture_roots_for_value(
-                        *obj_load.object(),
-                        CaptureStateView {
-                            exact_states,
-                            possible_roots,
-                            root_slices,
-                        },
-                        &root_captures,
-                    );
+                    let loaded_roots =
+                        capture_roots_for_value(*obj_load.object(), capture_state, &root_captures);
                     if union_root_set(&mut possible_roots[result], &loaded_roots) {
                         changed = true;
                     }
                 }
+
+                apply_inst_capture_transfer(
+                    func,
+                    inst,
+                    capture_state,
+                    object_effects,
+                    &mut root_captures,
+                );
             }
         }
 
         if !changed {
             return;
         }
+    }
+}
+
+fn compute_capture_states_for_blocks(
+    func: &Function,
+    capture_state: CaptureStateView<'_>,
+    object_effects: Option<&ObjectEffectSummaryMap>,
+    cfg: &ControlFlowGraph,
+    reachable: &SecondaryMap<BlockId, bool>,
+) -> SecondaryMap<BlockId, FxHashMap<ValueId, Vec<RootCaptureRoot>>> {
+    let mut block_entry_captures = SecondaryMap::default();
+    let mut block_exit_captures = SecondaryMap::default();
+
+    loop {
+        let mut changed = false;
+
+        for block in func.layout.iter_block() {
+            if !reachable[block] {
+                continue;
+            }
+
+            let mut entry_captures = FxHashMap::default();
+            for &pred in cfg.preds_of(block) {
+                if reachable[pred] {
+                    merge_root_capture_maps(&mut entry_captures, &block_exit_captures[pred]);
+                }
+            }
+            dedup_root_capture_roots(&mut entry_captures);
+
+            if block_entry_captures[block] != entry_captures {
+                block_entry_captures[block] = entry_captures.clone();
+                changed = true;
+            }
+
+            let mut exit_captures = entry_captures;
+            for inst in func.layout.iter_inst(block) {
+                apply_inst_capture_transfer(
+                    func,
+                    inst,
+                    capture_state,
+                    object_effects,
+                    &mut exit_captures,
+                );
+            }
+            dedup_root_capture_roots(&mut exit_captures);
+
+            if block_exit_captures[block] != exit_captures {
+                block_exit_captures[block] = exit_captures;
+                changed = true;
+            }
+        }
+
+        if !changed {
+            return block_entry_captures;
+        }
+    }
+}
+
+fn apply_inst_capture_transfer(
+    func: &Function,
+    inst: InstId,
+    capture_state: CaptureStateView<'_>,
+    object_effects: Option<&ObjectEffectSummaryMap>,
+    root_captures: &mut FxHashMap<ValueId, Vec<RootCaptureRoot>>,
+) {
+    if !func.layout.is_inst_inserted(inst) {
+        return;
+    }
+
+    if let Some(obj_store) = downcast::<&data::ObjStore>(func.inst_set(), func.dfg.inst(inst)) {
+        kill_capture_access(root_captures, *obj_store.object(), None, capture_state);
+        if reference_element_ty(func.ctx(), func.dfg.value_ty(*obj_store.value())).is_some() {
+            record_root_capture_sources(
+                root_captures,
+                capture_destinations_for_value(*obj_store.object(), None, capture_state),
+                &capture_state.possible_roots[*obj_store.value()],
+            );
+        }
+        return;
+    }
+
+    if let Some(enum_set_tag) = downcast::<&data::EnumSetTag>(func.inst_set(), func.dfg.inst(inst))
+    {
+        kill_capture_access(
+            root_captures,
+            *enum_set_tag.object(),
+            Some((0, 1)),
+            capture_state,
+        );
+        return;
+    }
+
+    if let Some(enum_write_variant) =
+        downcast::<&data::EnumWriteVariant>(func.inst_set(), func.dfg.inst(inst))
+    {
+        kill_capture_access(
+            root_captures,
+            *enum_write_variant.object(),
+            None,
+            capture_state,
+        );
+        record_enum_variant_capture_sources(
+            func,
+            root_captures,
+            *enum_write_variant.object(),
+            enum_write_variant.values(),
+            *enum_write_variant.variant(),
+            capture_state,
+        );
+        return;
+    }
+
+    if downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(inst)).is_some() {
+        merge_call_capture_roots(func, inst, capture_state, object_effects, root_captures);
     }
 }
 
@@ -455,6 +504,28 @@ fn merge_call_capture_roots(
                 .unwrap_or_default(),
         };
         record_root_capture_sources(root_captures, dsts, &capture_state.possible_roots[src_arg]);
+    }
+}
+
+fn merge_root_capture_maps(
+    dst: &mut FxHashMap<ValueId, Vec<RootCaptureRoot>>,
+    src: &FxHashMap<ValueId, Vec<RootCaptureRoot>>,
+) {
+    for (&root, captures) in src {
+        let entry = dst.entry(root).or_default();
+        for &capture in captures {
+            if entry.contains(&capture) {
+                continue;
+            }
+            entry.push(capture);
+        }
+    }
+}
+
+fn dedup_root_capture_roots(root_captures: &mut FxHashMap<ValueId, Vec<RootCaptureRoot>>) {
+    for captures in root_captures.values_mut() {
+        let mut seen = FxHashSet::default();
+        captures.retain(|capture| seen.insert(*capture));
     }
 }
 
@@ -1707,6 +1778,74 @@ block0:
                 provenance.provenance(*loaded),
                 RootProvenance::SameRoot(*overwritten_root)
             );
+        });
+    }
+
+    #[test]
+    fn branch_local_overwrite_keeps_all_possible_captured_roots() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @Take = { i256, objref<[i256; 8]> };
+
+func private %f(v0.i1) -> objref<[i256; 8]> {
+block0:
+    v1.objref<[i256; 8]> = obj.alloc [i256; 8];
+    v2.objref<[i256; 8]> = obj.alloc [i256; 8];
+    v3.objref<@Take> = obj.alloc @Take;
+    v4.objref<objref<[i256; 8]>> = obj.proj v3 1.i8;
+    obj.store v4 v1;
+    br v0 block1 block2;
+
+block1:
+    jump block3;
+
+block2:
+    obj.store v4 v2;
+    jump block3;
+
+block3:
+    v5.objref<[i256; 8]> = obj.load v4;
+    return v5;
+}
+"#,
+        );
+
+        let func_ref = lookup_func(&module, "f");
+        let object_effects = compute_object_effect_summaries(&module);
+        module.func_store.view(func_ref, |func| {
+            let mut layout_cache = shape::AggregateLayoutCache::default();
+            let root_slices = collect_root_slices(func, None, &mut layout_cache);
+            let provenance = collect_root_provenance(
+                func,
+                func.ctx(),
+                &root_slices,
+                &mut layout_cache,
+                Some(&object_effects),
+            );
+
+            let loaded = func
+                .layout
+                .iter_block()
+                .flat_map(|block| func.layout.iter_inst(block))
+                .find_map(|inst| {
+                    downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst))
+                        .and_then(|_| func.dfg.inst_result(inst))
+                })
+                .expect("load result should exist");
+            let roots: FxHashSet<_> = func
+                .layout
+                .iter_block()
+                .flat_map(|block| func.layout.iter_inst(block))
+                .filter_map(|inst| {
+                    downcast::<&data::ObjAlloc>(func.inst_set(), func.dfg.inst(inst))
+                        .and_then(|_| func.dfg.inst_result(inst))
+                        .filter(|&result| func.dfg.value_ty(result) == func.dfg.value_ty(loaded))
+                })
+                .collect();
+
+            assert_eq!(provenance.provenance(loaded), RootProvenance::Maybe(roots));
         });
     }
 
