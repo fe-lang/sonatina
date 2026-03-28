@@ -1680,6 +1680,50 @@ block0:
     }
 
     #[test]
+    fn overwritten_captured_pointer_store_becomes_dead() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @Cell = { i256 };
+type @Holder = { objref<@Cell> };
+
+func private %f(v0.i256) -> i256 {
+block0:
+    v1.objref<@Cell> = obj.alloc @Cell;
+    v2.objref<i256> = obj.proj v1 0.i8;
+    obj.store v2 11.i256;
+    v3.objref<@Cell> = obj.alloc @Cell;
+    v4.objref<i256> = obj.proj v3 0.i8;
+    obj.store v4 v0;
+    v5.objref<@Holder> = obj.alloc @Holder;
+    v6.objref<objref<@Cell>> = obj.proj v5 0.i8;
+    obj.store v6 v1;
+    obj.store v6 v3;
+    v7.objref<@Cell> = obj.load v6;
+    v8.objref<i256> = obj.proj v7 0.i8;
+    v9.i256 = obj.load v8;
+    return v9;
+}
+"#,
+        );
+        let func_ref = lookup_func(&module, "f");
+        run_with_effects(&module, func_ref);
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            assert!(
+                !dumped.contains("obj.store v2 11.i256;"),
+                "stale overwritten capture should not keep the first source store live:\n{dumped}"
+            );
+            assert!(
+                dumped.contains("return v0;"),
+                "precise overwritten capture provenance should let the final load collapse to the live source value:\n{dumped}"
+            );
+        });
+    }
+
+    #[test]
     fn forwards_store_into_successor_block() {
         let module = parse_test_module(
             r#"
