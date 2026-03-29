@@ -1587,6 +1587,7 @@ impl VerifyInst for data::ObjInitConst {
             ));
             return;
         };
+        validate_const_data_ty(verifier, actual_ty, location.clone(), "obj.init.const");
         if actual_ty != expected_ty {
             verifier.emit(
                 Diagnostic::error(

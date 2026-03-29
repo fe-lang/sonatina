@@ -20,6 +20,13 @@ fn has_code(report: &sonatina_verifier::VerificationReport, code: &str) -> bool 
         .any(|diagnostic| diagnostic.code.as_str() == code)
 }
 
+fn has_message(report: &sonatina_verifier::VerificationReport, message: &str) -> bool {
+    report
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.message == message)
+}
+
 fn diagnostic_fingerprint(report: &sonatina_verifier::VerificationReport) -> Vec<String> {
     report
         .diagnostics
@@ -510,6 +517,89 @@ func public %entry(v0.i256, v1.i256) -> i256 {
     let report = verify_module(&parsed.module, &cfg);
 
     assert!(report.is_ok(), "expected no verifier errors, got {report}");
+}
+
+#[test]
+fn obj_init_const_rejects_pointer_payloads() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+func private %bad(v0.objref<*i256>, v1.constref<*i256>) -> unit {
+    block0:
+        obj.init.const v0 v1;
+        return;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Full);
+    let report = verify_module(&parsed.module, &cfg);
+
+    assert!(has_code(&report, "IR0600"), "expected IR0600, got {report}");
+    assert!(
+        has_message(
+            &report,
+            "obj.init.const does not support pointer-typed const data"
+        ),
+        "expected pointer payload diagnostic, got {report}"
+    );
+}
+
+#[test]
+fn obj_init_const_rejects_reference_payloads() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+func private %bad(v0.objref<objref<i256>>, v1.constref<objref<i256>>) -> unit {
+    block0:
+        obj.init.const v0 v1;
+        return;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Full);
+    let report = verify_module(&parsed.module, &cfg);
+
+    assert!(has_code(&report, "IR0600"), "expected IR0600, got {report}");
+    assert!(
+        has_message(
+            &report,
+            "obj.init.const does not support reference or enum-tag const data"
+        ),
+        "expected reference payload diagnostic, got {report}"
+    );
+}
+
+#[test]
+fn obj_init_const_rejects_enum_tag_payloads() {
+    let src = r#"
+target = "evm-ethereum-osaka"
+
+type @OptionI256 = enum {
+    #None,
+    #Some(i256),
+};
+
+func private %bad(v0.objref<enumtag(@OptionI256)>, v1.constref<enumtag(@OptionI256)>) -> unit {
+    block0:
+        obj.init.const v0 v1;
+        return;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Full);
+    let report = verify_module(&parsed.module, &cfg);
+
+    assert!(has_code(&report, "IR0600"), "expected IR0600, got {report}");
+    assert!(
+        has_message(
+            &report,
+            "obj.init.const does not support reference or enum-tag const data"
+        ),
+        "expected enum-tag payload diagnostic, got {report}"
+    );
 }
 
 #[test]
