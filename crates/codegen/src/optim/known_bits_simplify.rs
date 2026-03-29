@@ -469,6 +469,31 @@ block0:
     }
 
     #[test]
+    fn folds_redundant_mask_after_subword_logical_shr() {
+        let (module, func_ref) = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %f(v0.i32) -> i32 {
+block0:
+    v1.i32 = shr 8.i32 v0;
+    v2.i32 = and v1 16777215.i32;
+    return v2;
+}
+"#,
+        );
+
+        module.func_store.modify(func_ref, |func| {
+            assert!(KnownBitsSimplify::new().run(func));
+        });
+
+        let dumped = dump_func(&module, func_ref);
+        assert!(dumped.contains("v1.i32 = shr 8.i32 v0;"), "{dumped}");
+        assert!(!dumped.contains(" and "), "{dumped}");
+        assert!(dumped.contains("return v1;"), "{dumped}");
+    }
+
+    #[test]
     fn folds_redundant_or_when_bits_are_already_known_one() {
         let (module, func_ref) = parse_test_module(
             r#"
@@ -576,6 +601,87 @@ block0:
             dumped.contains("v2.i256 = and v1 4294967295.i256;"),
             "{dumped}"
         );
+    }
+
+    #[test]
+    fn folds_redundant_mask_after_subword_arithmetic_sar_with_known_zero_sign() {
+        let (module, func_ref) = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %f(v0.i32) -> i32 {
+block0:
+    v1.i32 = and v0 2147483647.i32;
+    v2.i32 = sar 8.i32 v1;
+    v3.i32 = and v2 16777215.i32;
+    return v3;
+}
+"#,
+        );
+
+        module.func_store.modify(func_ref, |func| {
+            assert!(KnownBitsSimplify::new().run(func));
+        });
+
+        let dumped = dump_func(&module, func_ref);
+        assert!(dumped.contains("v2.i32 = sar 8.i32 v1;"), "{dumped}");
+        assert!(
+            !dumped.contains("v3.i32 = and v2 16777215.i32;"),
+            "{dumped}"
+        );
+        assert!(dumped.contains("return v2;"), "{dumped}");
+    }
+
+    #[test]
+    fn does_not_fold_mask_after_subword_arithmetic_sar_without_known_sign() {
+        let (module, func_ref) = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %f(v0.i32) -> i32 {
+block0:
+    v1.i32 = sar 8.i32 v0;
+    v2.i32 = and v1 8388607.i32;
+    return v2;
+}
+"#,
+        );
+
+        module.func_store.modify(func_ref, |func| {
+            assert!(!KnownBitsSimplify::new().run(func));
+        });
+
+        let dumped = dump_func(&module, func_ref);
+        assert!(dumped.contains("v2.i32 = and v1 8388607.i32;"), "{dumped}");
+    }
+
+    #[test]
+    fn folds_redundant_or_after_subword_arithmetic_sar_with_known_one_sign() {
+        let (module, func_ref) = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %f(v0.i32) -> i32 {
+block0:
+    v1.i32 = or v0 -2147483648.i32;
+    v2.i32 = sar 8.i32 v1;
+    v3.i32 = or v2 -16777216.i32;
+    return v3;
+}
+"#,
+        );
+
+        module.func_store.modify(func_ref, |func| {
+            assert!(KnownBitsSimplify::new().run(func));
+        });
+
+        let dumped = dump_func(&module, func_ref);
+        assert!(dumped.contains("v2.i32 = sar 8.i32 v1;"), "{dumped}");
+        assert!(
+            !dumped.contains("v3.i32 = or v2 -16777216.i32;"),
+            "{dumped}"
+        );
+        assert!(dumped.contains("return v2;"), "{dumped}");
     }
 
     #[test]
