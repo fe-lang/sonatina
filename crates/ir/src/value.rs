@@ -763,9 +763,41 @@ mod tests {
     }
 
     #[test]
+    fn lshr_respects_subword_width_and_overshift() {
+        assert_eq!(
+            Immediate::I32(-1).lshr(Immediate::I32(8)),
+            Immediate::I32(0x00ff_ffff)
+        );
+        assert_eq!(
+            Immediate::I32(-1).lshr(Immediate::I32(32)),
+            Immediate::I32(0)
+        );
+    }
+
+    #[test]
     fn ashr_sign_extends_within_type_width() {
         assert_eq!(Immediate::I8(-8).ashr(Immediate::I8(1)), Immediate::I8(-4));
         assert_eq!(Immediate::I8(-8).ashr(Immediate::I8(8)), Immediate::I8(-1));
+    }
+
+    #[test]
+    fn ashr_respects_subword_width_and_overshift() {
+        assert_eq!(
+            Immediate::I32(0x007f_0000).ashr(Immediate::I32(8)),
+            Immediate::I32(0x0000_7f00)
+        );
+        assert_eq!(
+            Immediate::I32(-0x0080_0000).ashr(Immediate::I32(8)),
+            Immediate::I32(-0x0000_8000)
+        );
+        assert_eq!(
+            Immediate::I32(0x7fff_ffff).ashr(Immediate::I32(32)),
+            Immediate::I32(0)
+        );
+        assert_eq!(
+            Immediate::I32(-1).ashr(Immediate::I32(32)),
+            Immediate::I32(-1)
+        );
     }
 
     #[test]

@@ -3315,6 +3315,41 @@ func private %entry(v0.i256, v1.i256) -> i256 {
     }
 
     #[test]
+    fn constant_folding_shr_uses_logical_shift() {
+        let source = r#"
+target = "evm-ethereum-london"
+
+func private %entry() -> i8 {
+    block0:
+        v0.i8 = shr 1.i8 -8.i8;
+        return v0;
+}
+"#;
+
+        let module = parse_module(source).expect("parse should succeed").module;
+        let func_ref = module.funcs()[0];
+        module.func_store.modify(func_ref, |func| {
+            let shr_inst = func
+                .layout
+                .iter_block()
+                .flat_map(|block| func.layout.iter_inst(block))
+                .find(|&inst| {
+                    matches!(
+                        inst_to_gvn_key(func, inst).kind(),
+                        InstClassKind::Binary(BinaryInstKind::Shr)
+                    )
+                })
+                .expect("test function should contain a shr instruction");
+            let key = inst_to_gvn_key(func, shr_inst);
+            let mut solver = GvnSolver::new();
+            let folded = solver
+                .perform_constant_folding(func, &key, 0)
+                .expect("shr constant folding should succeed");
+            assert_eq!(func.dfg.value_imm(folded), Some(Immediate::I8(124)));
+        });
+    }
+
+    #[test]
     fn constant_folding_sar_uses_arithmetic_shift() {
         let source = r#"
 target = "evm-ethereum-london"

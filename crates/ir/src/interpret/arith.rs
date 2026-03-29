@@ -440,6 +440,39 @@ mod tests {
     }
 
     #[test]
+    fn shift_right_is_width_aware_for_subword_operands() {
+        let hi = TestHasInst;
+        let bits = crate::ValueId::from_u32(0);
+        let value = crate::ValueId::from_u32(1);
+        let mut state = TestState::new([
+            (bits, EvalValue::Imm(Immediate::I32(8))),
+            (value, EvalValue::Imm(Immediate::I32(-1))),
+        ]);
+
+        assert_eq!(
+            Shr::new(&hi, bits, value).interpret(&mut state),
+            super::single_result(EvalValue::Imm(Immediate::I32(0x00ff_ffff)))
+        );
+        assert_eq!(
+            Sar::new(&hi, bits, value).interpret(&mut state),
+            super::single_result(EvalValue::Imm(Immediate::I32(-1)))
+        );
+
+        let mut overshift_state = TestState::new([
+            (bits, EvalValue::Imm(Immediate::I32(40))),
+            (value, EvalValue::Imm(Immediate::I32(-1))),
+        ]);
+        assert_eq!(
+            Shr::new(&hi, bits, value).interpret(&mut overshift_state),
+            super::single_result(EvalValue::Imm(Immediate::I32(0)))
+        );
+        assert_eq!(
+            Sar::new(&hi, bits, value).interpret(&mut overshift_state),
+            super::single_result(EvalValue::Imm(Immediate::I32(-1)))
+        );
+    }
+
+    #[test]
     fn uaddo_returns_sum_and_overflow_flag() {
         let hi = TestHasInst;
         let lhs = crate::ValueId::from_u32(0);
