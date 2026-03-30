@@ -197,6 +197,13 @@ pub(crate) fn eval_const_path_immediate(
     }
 }
 
+pub(crate) fn dynamic_index_values(path: &ConstPath) -> impl Iterator<Item = ValueId> + '_ {
+    path.steps.iter().filter_map(|step| match step {
+        ConstPathStep::IndexValue(value) => Some(*value),
+        ConstPathStep::Field(_) | ConstPathStep::IndexConst(_) => None,
+    })
+}
+
 pub(crate) fn eval_const_path_subtree(
     module: &ModuleCtx,
     path: &ConstPath,

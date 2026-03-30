@@ -8,6 +8,7 @@ use std::collections::BTreeSet;
 
 use cranelift_entity::SecondaryMap;
 use rustc_hash::FxHashSet;
+use smallvec::SmallVec;
 use sonatina_ir::{
     BlockId, ControlFlowGraph, DataFlowGraph, Function, Immediate, InstId, Type, Value, ValueId,
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
@@ -43,6 +44,8 @@ pub struct SccpSolver {
 
     flow_work_set: FxHashSet<FlowEdge>,
     ssa_work_set: SecondaryMap<ValueId, bool>,
+    aux_deps_by_inst: SecondaryMap<InstId, SmallVec<[ValueId; 2]>>,
+    aux_users_by_value: SecondaryMap<ValueId, SmallVec<[InstId; 2]>>,
 }
 
 impl SccpSolver {
@@ -56,6 +59,8 @@ impl SccpSolver {
             ssa_work: Vec::default(),
             flow_work_set: FxHashSet::default(),
             ssa_work_set: SecondaryMap::default(),
+            aux_deps_by_inst: SecondaryMap::default(),
+            aux_users_by_value: SecondaryMap::default(),
         }
     }
     pub fn run(&mut self, func: &mut Function, cfg: &mut ControlFlowGraph) {
@@ -103,6 +108,15 @@ impl SccpSolver {
                         }
                     }
                 }
+
+                if let Some(aux_users) = self.aux_users_by_value.get(value).cloned() {
+                    for inst in aux_users {
+                        let block = func.layout.inst_block(inst);
+                        if self.reachable_blocks[block] {
+                            self.eval_inst(func, inst, &const_paths, &solve_known_bits);
+                        }
+                    }
+                }
             }
         }
 
@@ -130,6 +144,8 @@ impl SccpSolver {
         self.ssa_work.clear();
         self.flow_work_set.clear();
         self.ssa_work_set.clear();
+        self.aux_deps_by_inst.clear();
+        self.aux_users_by_value.clear();
     }
 
     fn push_flow_work(&mut self, edge: FlowEdge) {
@@ -226,28 +242,33 @@ impl SccpSolver {
     ) {
         debug_assert!(!func.dfg.is_phi(inst_id));
         if let Some(bi) = func.dfg.branch_info(inst_id) {
+            self.update_aux_deps(inst_id, &[]);
             self.eval_branch(func, inst_id, bi);
             return;
         };
 
         let inst_results = func.dfg.inst_results(inst_id).to_vec();
         if inst_results.is_empty() {
+            self.update_aux_deps(inst_id, &[]);
             return;
         }
 
         // SCCP here is intraprocedural. Do not attempt to interpret calls even
         // when callee attrs classify them as effect-free.
         if func.dfg.is_call(inst_id) {
+            self.update_aux_deps(inst_id, &[]);
             self.set_inst_results_top(&inst_results);
             return;
         }
 
         let inst = func.dfg.inst(inst_id);
         if func.dfg.side_effect(inst_id).has_effect() {
+            self.update_aux_deps(inst_id, &[]);
             self.set_inst_results_top(&inst_results);
             return;
         }
 
+        let mut aux_value_deps = SmallVec::<[ValueId; 2]>::new();
         let simplified = simplify_inst(
             func,
             &self.lattice,
@@ -255,7 +276,9 @@ impl SccpSolver {
             const_paths,
             known_bits,
             inst_id,
+            &mut aux_value_deps,
         );
+        self.update_aux_deps(inst_id, &aux_value_deps);
         if simplified.len() != inst_results.len() {
             debug_assert_eq!(
                 simplified.len(),
@@ -499,6 +522,7 @@ impl SccpSolver {
 
         let mut changed = false;
         if !func.dfg.is_phi(inst) {
+            let mut aux_value_deps = SmallVec::<[ValueId; 2]>::new();
             let simplified = simplify_inst(
                 func,
                 &self.lattice,
@@ -506,6 +530,7 @@ impl SccpSolver {
                 const_paths,
                 known_bits,
                 inst,
+                &mut aux_value_deps,
             );
             debug_assert_eq!(
                 simplified.len(),
@@ -678,6 +703,31 @@ impl SccpSolver {
             self.may_be_undef[value] = may_be_undef;
             self.push_ssa_work(value);
         }
+    }
+
+    fn update_aux_deps(&mut self, inst: InstId, new_deps: &[ValueId]) {
+        let old_deps = std::mem::take(&mut self.aux_deps_by_inst[inst]);
+        for value in old_deps.iter().copied() {
+            if new_deps.contains(&value) {
+                continue;
+            }
+            let users = &mut self.aux_users_by_value[value];
+            if let Some(pos) = users.iter().position(|&user| user == inst) {
+                users.remove(pos);
+            }
+        }
+        let mut deps = SmallVec::<[ValueId; 2]>::new();
+        for &value in new_deps {
+            if deps.contains(&value) {
+                continue;
+            }
+            deps.push(value);
+            if old_deps.contains(&value) {
+                continue;
+            }
+            self.aux_users_by_value[value].push(inst);
+        }
+        self.aux_deps_by_inst[inst] = deps;
     }
 
     fn set_inst_results_top(&mut self, results: &[ValueId]) {

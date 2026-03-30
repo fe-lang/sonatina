@@ -361,6 +361,103 @@ func public %entry(v0.i8) -> i256 {
 }
 
 #[test]
+fn sccp_keeps_const_load_with_loop_varying_index_phi() {
+    let (module, func_ref) = parse_test_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+global private const [i256; 4] $arr = [11, 22, 33, 44];
+
+func public %entry() -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v0.i256 = phi (0.i256 block0) (v5 block3);
+        v1.i256 = phi (0.i256 block0) (v4 block3);
+        v2.i1 = lt v0 4.i256;
+        br v2 block2 block4;
+
+    block2:
+        v3.constref<[i256; 4]> = const.ref $arr;
+        v6.constref<i256> = const.index v3 v0;
+        v7.i256 = const.load v6;
+        v4.i256 = add v1 v7;
+        jump block3;
+
+    block3:
+        v5.i256 = add v0 1.i256;
+        jump block1;
+
+    block4:
+        return v1;
+}
+"#,
+    );
+    module.func_store.modify(func_ref, |func| {
+        let mut cfg = ControlFlowGraph::new();
+        SccpSolver::new().run(func, &mut cfg);
+    });
+    let dumped = module.func_store.view(func_ref, |func| {
+        FuncWriter::new(func_ref, func).dump_string()
+    });
+    assert!(
+        dumped.contains("const.load"),
+        "loop-varying const.load index should not fold to a single immediate:\n{dumped}"
+    );
+    assert_fast_verified(&module);
+}
+
+#[test]
+fn sccp_keeps_const_load_with_reused_dynamic_index_value() {
+    let (module, func_ref) = parse_test_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+global private const [[i256; 2]; 2] $arr = [[11, 22], [33, 44]];
+
+func public %entry() -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v0.i256 = phi (0.i256 block0) (v5 block3);
+        v1.i256 = phi (0.i256 block0) (v4 block3);
+        v2.i1 = lt v0 2.i256;
+        br v2 block2 block4;
+
+    block2:
+        v3.constref<[[i256; 2]; 2]> = const.ref $arr;
+        v6.constref<[i256; 2]> = const.index v3 v0;
+        v7.constref<i256> = const.index v6 v0;
+        v8.i256 = const.load v7;
+        v4.i256 = add v1 v8;
+        jump block3;
+
+    block3:
+        v5.i256 = add v0 1.i256;
+        jump block1;
+
+    block4:
+        return v1;
+}
+"#,
+    );
+    module.func_store.modify(func_ref, |func| {
+        let mut cfg = ControlFlowGraph::new();
+        SccpSolver::new().run(func, &mut cfg);
+    });
+    let dumped = module.func_store.view(func_ref, |func| {
+        FuncWriter::new(func_ref, func).dump_string()
+    });
+    assert!(
+        dumped.contains("const.load"),
+        "reused loop-varying index should not fold to a single immediate:\n{dumped}"
+    );
+    assert_fast_verified(&module);
+}
+
+#[test]
 fn sccp_preserves_maybe_undef_saturating_zero_identities() {
     let (module, func_ref) = parse_test_module(
         r#"

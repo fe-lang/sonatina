@@ -9,7 +9,7 @@ use sonatina_ir::{
 };
 
 use super::{
-    const_eval::{ConstPathAnalysis, eval_const_value_immediate},
+    const_eval::{ConstPathAnalysis, dynamic_index_values, eval_const_value_immediate},
     sccp::LatticeCell,
     simplify_expr::{
         ExprFactProvider, SimplifyExprResult, simplify_binary_with_facts, simplify_cast,
@@ -230,7 +230,15 @@ fn simplify_const_load(
     may_be_undef: &SecondaryMap<ValueId, bool>,
     const_paths: &ConstPathAnalysis,
     object: ValueId,
+    aux_value_deps: &mut SmallVec<[ValueId; 2]>,
 ) -> SimplifyAction {
+    if let Some(path) = const_paths.path(object) {
+        for value in dynamic_index_values(path) {
+            if !aux_value_deps.contains(&value) {
+                aux_value_deps.push(value);
+            }
+        }
+    }
     if is_may_be_undef(func, may_be_undef, object) {
         return SimplifyAction::NoChange;
     }
@@ -571,7 +579,9 @@ pub(super) fn simplify_inst(
     const_paths: &ConstPathAnalysis,
     known_bits: &KnownBitsQuery,
     inst_id: InstId,
+    aux_value_deps: &mut SmallVec<[ValueId; 2]>,
 ) -> SimplifyResults {
+    aux_value_deps.clear();
     let inst = func.dfg.inst(inst_id);
     let is = func.inst_set();
     let results_len = func.dfg.inst_results(inst_id).len();
@@ -758,6 +768,7 @@ pub(super) fn simplify_inst(
                     may_be_undef,
                     const_paths,
                     *i.object(),
+                    aux_value_deps,
                 ));
             }
             if let Some(i) = downcast::<&data::Gep>(is, inst) {
@@ -772,7 +783,8 @@ pub(super) fn simplify_inst(
 #[cfg(test)]
 mod tests {
     use cranelift_entity::SecondaryMap;
-    use sonatina_ir::{Function, InstId, module::FuncRef};
+    use smallvec::SmallVec;
+    use sonatina_ir::{Function, InstId, ValueId, module::FuncRef};
     use sonatina_parser::parse_module;
 
     use super::{SimplifyAction, simplify_inst};
@@ -810,6 +822,7 @@ block0:
             let constref_value_tys = collect_constref_value_tys(func);
             let const_paths = analyze_const_paths(func, &constref_value_tys);
             let known_bits = KnownBitsQuery::new(func);
+            let mut aux_value_deps = SmallVec::<[ValueId; 2]>::new();
             let simplified = simplify_inst(
                 func,
                 &lattice,
@@ -817,6 +830,7 @@ block0:
                 &const_paths,
                 &known_bits,
                 inst,
+                &mut aux_value_deps,
             );
             let and_args = func.dfg.inst(inst).collect_values();
             let [value, _mask] = and_args.as_slice() else {
