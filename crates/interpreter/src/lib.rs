@@ -2,7 +2,7 @@ use std::mem;
 
 use cranelift_entity::SecondaryMap;
 use sonatina_ir::{
-    BlockId, DataFlowGraph, Function, I256, Immediate, InstId, Module, Type, Value, ValueId,
+    BlockId, DataFlowGraph, Function, I256, Immediate, InstId, Module, Type, U256, Value, ValueId,
     interpret::{Action, EvalResults, EvalValue, Interpret, State},
     isa::Endian,
     module::{FuncRef, ModuleCtx, RoFuncStore},
@@ -188,7 +188,9 @@ impl State for Machine {
             return EvalValue::Undef;
         };
 
-        let addr = addr.as_usize();
+        let Some(addr) = nonnegative_imm_usize(addr) else {
+            return EvalValue::Undef;
+        };
         let size = self.module_ctx.size_of_unchecked(ty);
         if addr + size > self.memory.len() {
             return EvalValue::Undef;
@@ -263,7 +265,9 @@ impl State for Machine {
         let Some(addr) = addr.as_imm() else {
             panic!("udnef address in store")
         };
-        let addr = addr.as_usize();
+        let Some(addr) = nonnegative_imm_usize(addr) else {
+            return EvalValue::Undef;
+        };
         let size = self.module_ctx.size_of_unchecked(ty);
         if addr + size > self.memory.len() {
             self.memory.resize(addr + size, 0);
@@ -349,5 +353,43 @@ impl State for Machine {
 
     fn dfg(&self) -> &DataFlowGraph {
         &self.top_func().dfg
+    }
+}
+
+fn nonnegative_imm_usize(imm: Immediate) -> Option<usize> {
+    if imm.is_negative() {
+        return None;
+    }
+
+    let value = imm.as_i256().to_u256();
+    (value <= U256::from(usize::MAX)).then_some(value.as_usize())
+}
+
+#[cfg(test)]
+mod tests {
+    use sonatina_ir::{builder::test_util::test_module_builder, interpret::EvalValue};
+
+    use super::*;
+
+    #[test]
+    fn negative_memory_addresses_are_rejected() {
+        let mut machine = Machine::new(test_module_builder().build());
+        machine.memory = vec![1, 2, 3, 4];
+
+        assert_eq!(
+            machine.load(EvalValue::Imm(Immediate::I8(-1)), Type::I8),
+            EvalValue::Undef
+        );
+
+        let before = machine.memory.clone();
+        assert_eq!(
+            machine.store(
+                EvalValue::Imm(Immediate::I8(-1)),
+                EvalValue::Imm(Immediate::I8(9)),
+                Type::I8,
+            ),
+            EvalValue::Undef
+        );
+        assert_eq!(machine.memory, before);
     }
 }

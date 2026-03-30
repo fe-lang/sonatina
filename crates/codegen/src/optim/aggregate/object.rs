@@ -1,8 +1,8 @@
 use rustc_hash::FxHashMap;
 use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{
-    Function, I256, Immediate, Module, Type, Value, ValueId,
-    inst::{data, downcast, evm},
+    Function, I256, Immediate, InstId, Module, Type, Value, ValueId,
+    inst::{cast, data, downcast, evm},
     module::{FuncRef, ModuleCtx},
     types::{CompoundType, CompoundTypeRef, StructData},
     visitor::VisitorMut,
@@ -327,7 +327,13 @@ impl ObjectLowerToMemory {
             downcast::<&data::ObjIndex>(func.inst_set(), func.dfg.inst(inst)).cloned()
         {
             let zero = func.dfg.make_imm_value(0i64);
-            let values = smallvec![*obj_index.object(), zero, *obj_index.index()];
+            let index = zext_before(
+                func,
+                inst,
+                *obj_index.index(),
+                func.ctx().type_layout.pointer_repl(),
+            );
+            let values = smallvec![*obj_index.object(), zero, index];
             func.dfg.replace_inst(
                 inst,
                 Box::new(data::Gep::new_unchecked(func.inst_set(), values)),
@@ -580,6 +586,24 @@ fn pointer_elem_ty(func: &Function, value: ValueId) -> Option<Type> {
     func.ctx().with_ty_store(|store| store.deref(ty))
 }
 
+fn zext_before(func: &mut Function, before: InstId, value: ValueId, ty: Type) -> ValueId {
+    if func.dfg.value_ty(value) == ty {
+        return value;
+    }
+
+    let inst = func
+        .dfg
+        .make_inst(cast::Zext::new_unchecked(func.inst_set(), value, ty));
+    func.layout.insert_inst_before(inst, before);
+    let result = func.dfg.make_value(Value::Inst {
+        inst,
+        result_idx: 0,
+        ty,
+    });
+    func.dfg.attach_result(inst, result);
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -591,6 +615,7 @@ mod tests {
     use sonatina_ir::{
         Module,
         inst::{control_flow, data, evm},
+        ir_writer::FuncWriter,
         isa::evm::Evm,
     };
     use sonatina_parser::parse_module;
@@ -744,6 +769,58 @@ mod tests {
                 }
             });
         }
+    }
+
+    #[test]
+    fn obj_index_lowering_zero_extends_dynamic_indices_before_gep() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %entry(v0.i8) -> unit {
+block0:
+    v1.objref<[i256; 4]> = obj.alloc [i256; 4];
+    v2.objref<i256> = obj.index v1 v0;
+    obj.store v2 1.i256;
+    return;
+}
+"#,
+        );
+
+        let mut pass = ObjectLowerToMemory;
+        pass.run(&module);
+
+        let entry = lookup_func(&module, "entry");
+        module.func_store.view(entry, |func| {
+            let mut saw_zext = false;
+            let mut saw_gep = false;
+            for block in func.layout.iter_block() {
+                for inst in func.layout.iter_inst(block) {
+                    if let Some(zext) =
+                        downcast::<&cast::Zext>(func.inst_set(), func.dfg.inst(inst))
+                    {
+                        assert_eq!(func.dfg.value_ty(*zext.from()), Type::I8);
+                        assert_eq!(
+                            func.dfg
+                                .inst_result(inst)
+                                .map(|value| func.dfg.value_ty(value)),
+                            Some(Type::I256)
+                        );
+                        saw_zext = true;
+                    }
+                    if let Some(gep) = downcast::<&data::Gep>(func.inst_set(), func.dfg.inst(inst))
+                    {
+                        assert_eq!(func.dfg.value_ty(gep.values()[2]), Type::I256);
+                        saw_gep = true;
+                    }
+                }
+            }
+            assert!(saw_zext, "expected obj.index lowering to insert zext");
+            assert!(saw_gep, "expected obj.index lowering to produce gep");
+
+            let dumped = FuncWriter::new(entry, func).dump_string();
+            assert!(!dumped.contains("obj.index"), "{dumped}");
+        });
     }
 
     #[test]

@@ -1,7 +1,7 @@
 use macros::inst_prop;
 use rustc_hash::FxHashSet;
 use sonatina_ir::{
-    Inst, InstId, Type, ValueId,
+    Inst, InstId, Type, U256, ValueId,
     inst::{
         arith, cast, cmp,
         control_flow::{self},
@@ -409,6 +409,43 @@ fn object_field_ty(
             None
         }
     }
+}
+
+fn verify_nonnegative_in_bounds_array_index(
+    verifier: &mut FunctionVerifier<'_>,
+    value: ValueId,
+    len: usize,
+    location: crate::diagnostic::Location,
+    opname: &str,
+) -> bool {
+    let Some(imm) = verifier.value_imm(value) else {
+        return true;
+    };
+    if imm.is_negative() {
+        verifier.emit(
+            Diagnostic::error(
+                DiagnosticCode::InstOperandTypeMismatch,
+                format!("{opname} index must be non-negative"),
+                location,
+            )
+            .with_note(format!("index immediate {:?}", imm)),
+        );
+        return false;
+    }
+
+    if imm.as_i256().to_u256() >= U256::from(len) {
+        verifier.emit(
+            Diagnostic::error(
+                DiagnosticCode::InstOperandTypeMismatch,
+                format!("{opname} index is out of bounds"),
+                location,
+            )
+            .with_note(format!("index immediate {:?}, length {}", imm, len)),
+        );
+        return false;
+    }
+
+    true
 }
 
 fn enum_value_ty(
@@ -1317,7 +1354,7 @@ impl VerifyInst for data::ConstIndex {
             ));
             return;
         };
-        let CompoundType::Array { elem, .. } = cmpd else {
+        let CompoundType::Array { elem, len } = cmpd else {
             verifier.emit(Diagnostic::error(
                 DiagnosticCode::InstOperandTypeMismatch,
                 "const.index requires an array const-reference type",
@@ -1325,6 +1362,15 @@ impl VerifyInst for data::ConstIndex {
             ));
             return;
         };
+        if !verify_nonnegative_in_bounds_array_index(
+            verifier,
+            *self.index(),
+            len,
+            location.clone(),
+            "const.index",
+        ) {
+            return;
+        }
         expect_constref_result(verifier, inst_id, elem, location, "const.index");
     }
 }
@@ -1461,7 +1507,7 @@ impl VerifyInst for data::ObjIndex {
             ));
             return;
         };
-        let CompoundType::Array { elem, .. } = cmpd else {
+        let CompoundType::Array { elem, len } = cmpd else {
             verifier.emit(Diagnostic::error(
                 DiagnosticCode::InstOperandTypeMismatch,
                 "obj.index requires an array object type",
@@ -1469,6 +1515,15 @@ impl VerifyInst for data::ObjIndex {
             ));
             return;
         };
+        if !verify_nonnegative_in_bounds_array_index(
+            verifier,
+            *self.index(),
+            len,
+            location.clone(),
+            "obj.index",
+        ) {
+            return;
+        }
         expect_objref_result(verifier, inst_id, elem, location, "obj.index");
     }
 }

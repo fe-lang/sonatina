@@ -1276,6 +1276,112 @@ func public %bad_extract() -> unit {
 }
 
 #[test]
+fn negative_const_and_object_indices_are_rejected() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+global private const [i32; 2] $arr = [1, 2];
+
+func private %bad_const() -> unit {
+    block0:
+        v0.constref<[i32; 2]> = const.ref $arr;
+        v1.constref<i32> = const.index v0 -1.i32;
+        return;
+}
+
+func private %bad_obj() -> unit {
+    block0:
+        v0.objref<[i32; 2]> = obj.alloc [i32; 2];
+        v1.objref<i32> = obj.index v0 -1.i32;
+        return;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&parsed.module, &cfg);
+
+    assert!(
+        has_message(&report, "const.index index must be non-negative"),
+        "expected const.index negativity error, got {report}"
+    );
+    assert!(
+        has_message(&report, "obj.index index must be non-negative"),
+        "expected obj.index negativity error, got {report}"
+    );
+}
+
+#[test]
+fn constant_oob_const_and_object_indices_are_rejected() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+global private const [i32; 2] $arr = [1, 2];
+
+func private %bad_const() -> unit {
+    block0:
+        v0.constref<[i32; 2]> = const.ref $arr;
+        v1.constref<i32> = const.index v0 2.i32;
+        return;
+}
+
+func private %bad_obj() -> unit {
+    block0:
+        v0.objref<[i32; 2]> = obj.alloc [i32; 2];
+        v1.objref<i32> = obj.index v0 2.i32;
+        return;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&parsed.module, &cfg);
+
+    assert!(
+        has_message(&report, "const.index index is out of bounds"),
+        "expected const.index bounds error, got {report}"
+    );
+    assert!(
+        has_message(&report, "obj.index index is out of bounds"),
+        "expected obj.index bounds error, got {report}"
+    );
+}
+
+#[test]
+fn dynamic_const_and_object_indices_still_verify() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+global private const [i32; 2] $arr = [1, 2];
+
+func private %ok_const(v0.i32) -> i32 {
+    block0:
+        v1.constref<[i32; 2]> = const.ref $arr;
+        v2.constref<i32> = const.index v1 v0;
+        v3.i32 = const.load v2;
+        return v3;
+}
+
+func private %ok_obj(v0.i32) -> unit {
+    block0:
+        v1.objref<[i32; 2]> = obj.alloc [i32; 2];
+        v2.objref<i32> = obj.index v1 v0;
+        obj.store v2 1.i32;
+        return;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&parsed.module, &cfg);
+
+    assert!(
+        report.is_ok(),
+        "expected dynamic indices to verify, got {report}"
+    );
+}
+
+#[test]
 fn function_pointer_types_and_get_function_ptr_verify() {
     let src = r#"
 target = "evm-ethereum-london"
