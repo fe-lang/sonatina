@@ -87,7 +87,6 @@ impl CheckedArithElim {
         env: &crate::range_analysis::RangeEnv,
         inst: InstId,
     ) -> Option<RewritePlan> {
-        checked_value_fact(func, env, inst)?;
         let kind = match func.dfg.inst(inst).kind() {
             InstClassKind::Unary(UnaryInstKind::Snego) => PlainOpKind::SnegAsSubZero,
             InstClassKind::Binary(kind) => match kind {
@@ -102,6 +101,7 @@ impl CheckedArithElim {
             },
             _ => return None,
         };
+        checked_value_fact(func, env, inst)?;
 
         Some(RewritePlan { inst, kind })
     }

@@ -479,7 +479,6 @@ impl KnownBitsQuery {
             };
         }
 
-        let value_mask = type_mask(ty);
         let shift = shift.as_usize();
         let fill_mask = type_mask(ty) & !low_mask((usize::from(width_bits) - shift) as u16);
         let value_mask = type_mask(ty);
