@@ -1323,7 +1323,7 @@ impl<'a> Elaborator<'a> {
             current_ty = match compound {
                 CompoundType::Ptr(elem) | CompoundType::Array { elem, .. } => elem,
                 CompoundType::Struct(data) => {
-                    let field_idx = self.func.dfg.value_imm(index)?.as_usize();
+                    let field_idx = self.func.dfg.value_imm(index)?.to_nonnegative_usize()?;
                     *data.fields.get(field_idx)?
                 }
                 CompoundType::Enum(_) => return None,

@@ -2,7 +2,7 @@ use std::mem;
 
 use cranelift_entity::SecondaryMap;
 use sonatina_ir::{
-    BlockId, DataFlowGraph, Function, I256, Immediate, InstId, Module, Type, U256, Value, ValueId,
+    BlockId, DataFlowGraph, Function, I256, Immediate, InstId, Module, Type, Value, ValueId,
     interpret::{Action, EvalResults, EvalValue, Interpret, State},
     isa::Endian,
     module::{FuncRef, ModuleCtx, RoFuncStore},
@@ -365,12 +365,7 @@ impl State for Machine {
 }
 
 fn nonnegative_imm_usize(imm: Immediate) -> Option<usize> {
-    if imm.is_negative() {
-        return None;
-    }
-
-    let value = imm.as_i256().to_u256();
-    (value <= U256::from(usize::MAX)).then_some(value.as_usize())
+    imm.to_nonnegative_usize()
 }
 
 #[cfg(test)]

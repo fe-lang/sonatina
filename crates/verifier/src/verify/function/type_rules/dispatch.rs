@@ -326,16 +326,18 @@ impl_cmp_rule!(
     cmp::Ne => "ne",
 );
 
-fn object_field_ty(
+fn projected_field_ty(
     verifier: &mut FunctionVerifier<'_>,
     base_ty: Type,
     idx_value: ValueId,
     location: crate::diagnostic::Location,
+    opname: &str,
+    array_opname: &str,
 ) -> Option<Type> {
     let Type::Compound(cmpd_ref) = base_ty else {
         verifier.emit(Diagnostic::error(
             DiagnosticCode::InstOperandTypeMismatch,
-            "object projection requires struct or array object type",
+            format!("{opname} requires a struct reference type"),
             location,
         ));
         return None;
@@ -347,40 +349,46 @@ fn object_field_ty(
     else {
         verifier.emit(Diagnostic::error(
             DiagnosticCode::InvalidTypeRef,
-            "object projection references unknown type",
+            format!("{opname} references unknown type"),
             location,
         ));
         return None;
     };
 
     match cmpd {
-        CompoundType::Array { elem, .. } => Some(elem),
+        CompoundType::Array { .. } => {
+            verifier.emit(Diagnostic::error(
+                DiagnosticCode::InstOperandTypeMismatch,
+                format!("{opname} does not support array indexing; use {array_opname}"),
+                location,
+            ));
+            None
+        }
         CompoundType::Struct(s) => {
             let Some(imm) = verifier.value_imm(idx_value) else {
                 verifier.emit(Diagnostic::error(
                     DiagnosticCode::InstOperandTypeMismatch,
-                    "object struct projection index must be an immediate value",
+                    format!("{opname} index must be an immediate value"),
                     location,
                 ));
                 return None;
             };
-            if imm.is_negative() {
+            let Some(index) = imm.to_nonnegative_usize() else {
                 verifier.emit(
                     Diagnostic::error(
                         DiagnosticCode::InstOperandTypeMismatch,
-                        "object projection index must be non-negative",
+                        format!("{opname} index must be a non-negative immediate value"),
                         location,
                     )
                     .with_note(format!("index immediate {:?}", imm)),
                 );
                 return None;
-            }
-            let index = imm.as_usize();
+            };
             let Some(field_ty) = s.fields.get(index).copied() else {
                 verifier.emit(
                     Diagnostic::error(
                         DiagnosticCode::InstOperandTypeMismatch,
-                        "object projection index is out of bounds",
+                        format!("{opname} index is out of bounds"),
                         location,
                     )
                     .with_note(format!("index {index}, fields {}", s.fields.len())),
@@ -392,7 +400,7 @@ fn object_field_ty(
         CompoundType::Enum(_) => {
             verifier.emit(Diagnostic::error(
                 DiagnosticCode::InstOperandTypeMismatch,
-                "object projection requires struct or array object type; use enum.proj for enums",
+                format!("{opname} requires a struct reference type; use enum.proj for enums"),
                 location,
             ));
             None
@@ -403,7 +411,7 @@ fn object_field_ty(
         | CompoundType::Func { .. } => {
             verifier.emit(Diagnostic::error(
                 DiagnosticCode::InstOperandTypeMismatch,
-                "object projection requires struct or array object type",
+                format!("{opname} requires a struct reference type"),
                 location,
             ));
             None
@@ -534,7 +542,7 @@ fn enum_variant_field_ty(
             if imm.is_negative() {
                 return None;
             }
-            let index = imm.as_usize();
+            let index = imm.to_nonnegative_usize()?;
             variant_data.fields.get(index).copied()
         })?;
         Some(idx)
@@ -858,7 +866,7 @@ fn enum_variant_for_tag_value(
     enum_ty: CompoundTypeRef,
     value: ValueId,
 ) -> Option<EnumVariantRef> {
-    let idx = verifier.value_imm(value)?.as_i256().to_u256().as_usize();
+    let idx = verifier.value_imm(value)?.to_nonnegative_usize()?;
     let variant_count = verifier.ctx.with_ty_store(|store| {
         let CompoundType::Enum(enum_data) = store.get_compound(enum_ty)? else {
             return None;
@@ -1300,8 +1308,14 @@ impl VerifyInst for data::ConstProj {
                 ));
                 return;
             }
-            let Some(field_ty) = object_field_ty(verifier, current_ty, idx_value, location.clone())
-            else {
+            let Some(field_ty) = projected_field_ty(
+                verifier,
+                current_ty,
+                idx_value,
+                location.clone(),
+                "const.proj",
+                "const.index",
+            ) else {
                 return;
             };
             current_ty = field_ty;
@@ -1453,8 +1467,14 @@ impl VerifyInst for data::ObjProj {
                 ));
                 return;
             }
-            let Some(field_ty) = object_field_ty(verifier, current_ty, idx_value, location.clone())
-            else {
+            let Some(field_ty) = projected_field_ty(
+                verifier,
+                current_ty,
+                idx_value,
+                location.clone(),
+                "obj.proj",
+                "obj.index",
+            ) else {
                 return;
             };
             current_ty = field_ty;

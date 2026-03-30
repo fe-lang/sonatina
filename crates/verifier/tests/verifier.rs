@@ -1348,6 +1348,122 @@ func private %bad_obj() -> unit {
 }
 
 #[test]
+fn array_projection_ops_are_rejected() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+global private const [i32; 2] $arr = [1, 2];
+
+func private %bad_const() -> unit {
+    block0:
+        v0.constref<[i32; 2]> = const.ref $arr;
+        v1.constref<i32> = const.proj v0 0.i32;
+        return;
+}
+
+func private %bad_obj() -> unit {
+    block0:
+        v0.objref<[i32; 2]> = obj.alloc [i32; 2];
+        v1.objref<i32> = obj.proj v0 0.i32;
+        return;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&parsed.module, &cfg);
+
+    assert!(
+        has_message(
+            &report,
+            "const.proj does not support array indexing; use const.index"
+        ),
+        "expected const.proj array rejection, got {report}"
+    );
+    assert!(
+        has_message(
+            &report,
+            "obj.proj does not support array indexing; use obj.index"
+        ),
+        "expected obj.proj array rejection, got {report}"
+    );
+}
+
+#[test]
+fn oversized_positive_indices_are_rejected() {
+    let src = r#"
+target = "evm-ethereum-osaka"
+
+type @s = {i32, i64};
+type @OptionI32 = enum {
+    #None,
+    #Some(i32),
+};
+
+func private %bad_gep(v0.*@s) -> unit {
+    block0:
+        v1.*i64 = gep v0 0.i32 1606938044258990275541962092341162602522202993782792835301376.i256;
+        return;
+}
+
+func private %bad_insert() -> unit {
+    block0:
+        v0.[i32; 2] = insert_value undef.[i32; 2] 1606938044258990275541962092341162602522202993782792835301376.i256 1.i32;
+        return;
+}
+
+func private %bad_extract() -> unit {
+    block0:
+        v0.i32 = extract_value undef.[i32; 2] 1606938044258990275541962092341162602522202993782792835301376.i256;
+        return;
+}
+
+func private %bad_proj(v0.objref<@s>) -> unit {
+    block0:
+        v1.objref<i64> = obj.proj v0 1606938044258990275541962092341162602522202993782792835301376.i256;
+        return;
+}
+
+func private %bad_enum(v0.objref<@OptionI32>) -> unit {
+    block0:
+        v1.objref<@OptionI32> = enum.assert_variant_ref v0 #Some;
+        v2.objref<i32> = enum.proj v1 #Some 1606938044258990275541962092341162602522202993782792835301376.i256;
+        return;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&parsed.module, &cfg);
+
+    assert!(
+        has_message(
+            &report,
+            "struct gep indices must be non-negative immediate values"
+        ),
+        "expected oversized gep rejection, got {report}"
+    );
+    assert!(
+        has_message(&report, "aggregate index is out of bounds"),
+        "expected oversized aggregate index rejection, got {report}"
+    );
+    assert!(
+        has_message(
+            &report,
+            "obj.proj index must be a non-negative immediate value"
+        ),
+        "expected oversized obj.proj rejection, got {report}"
+    );
+    assert!(
+        has_message(
+            &report,
+            "enum.proj field index is out of bounds for the selected variant"
+        ),
+        "expected oversized enum.proj rejection, got {report}"
+    );
+}
+
+#[test]
 fn dynamic_const_and_object_indices_still_verify() {
     let src = r#"
 target = "evm-ethereum-london"

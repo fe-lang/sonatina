@@ -1430,7 +1430,7 @@ fn enum_variant_for_tag_value(
     value: ValueId,
 ) -> Option<EnumVariantRef> {
     let imm = func.dfg.value_imm(value)?;
-    let idx = imm.as_i256().to_u256().as_usize();
+    let idx = imm.to_nonnegative_usize()?;
     let variant_count = enum_variant_count(func.ctx(), enum_ty)?;
     (idx < variant_count).then_some(EnumVariantRef::new(
         enum_ty,

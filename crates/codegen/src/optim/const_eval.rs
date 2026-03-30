@@ -343,16 +343,15 @@ fn const_child_path_step(
     current_ty: Type,
     idx_value: ValueId,
 ) -> Option<(Type, ConstPathStep)> {
-    let idx_imm = func
-        .dfg
-        .value_imm(idx_value)
-        .filter(|imm| !imm.is_negative())
-        .map(Immediate::as_usize);
+    let idx_imm = func.dfg.value_imm(idx_value);
+    let idx = idx_imm.and_then(Immediate::to_nonnegative_usize);
     match current_ty.resolve_compound(func.ctx())? {
         CompoundType::Array { elem, len } => {
             let step = match idx_imm {
-                Some(idx) if idx < len => ConstPathStep::IndexConst(idx),
-                Some(_) => return None,
+                Some(_) => idx.filter(|&idx| idx < len).map_or(
+                    ConstPathStep::IndexValue(idx_value),
+                    ConstPathStep::IndexConst,
+                ),
                 None => ConstPathStep::IndexValue(idx_value),
             };
             Some((elem, step))
@@ -361,7 +360,7 @@ fn const_child_path_step(
             if s.packed {
                 return None;
             }
-            let idx = idx_imm?;
+            let idx = idx?;
             Some((*s.fields.get(idx)?, ConstPathStep::Field(idx)))
         }
         CompoundType::Ptr(_)
@@ -399,9 +398,7 @@ where
             GvInitializer::Array(items),
             ConstPathStep::IndexValue(value),
         ) => {
-            let idx = resolve_index(*value)
-                .filter(|imm| !imm.is_negative())
-                .map(Immediate::as_usize)?;
+            let idx = resolve_index(*value)?.to_nonnegative_usize()?;
             (idx < len).then_some(())?;
             eval_initializer_subtree(module, elem, items.get(idx)?, rest, resolve_index)
         }

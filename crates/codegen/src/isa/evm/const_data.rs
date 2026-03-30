@@ -1209,6 +1209,37 @@ func private %entry(v0.i256) -> i256 {
     }
 
     #[test]
+    fn const_load_huge_immediate_index_lowers_to_codecopy() {
+        let parsed = parse(
+            r#"
+target = "evm-ethereum-osaka"
+
+global private const [i256; 4] $arr = [1, 2, 3, 4];
+
+func private %entry() -> i256 {
+    block0:
+        v0.constref<[i256; 4]> = const.ref $arr;
+        v1.constref<i256> = const.index v0 1606938044258990275541962092341162602522202993782792835301376.i256;
+        v2.i256 = const.load v1;
+        return v2;
+}
+"#,
+        );
+
+        ConstDataLower::default().run(&parsed.module);
+
+        let mut writer = ModuleWriter::with_debug_provider(&parsed.module, &parsed.debug);
+        let dumped = writer.dump_string();
+        assert!(dumped.contains("evm_code_copy"));
+        assert!(dumped.contains("mload"));
+        assert!(!dumped.contains("return 1.i256;"));
+        assert!(!dumped.contains("return 2.i256;"));
+        assert!(!dumped.contains("return 3.i256;"));
+        assert!(!dumped.contains("return 4.i256;"));
+        assert!(!dumped.contains("const."));
+    }
+
+    #[test]
     fn const_load_phi_same_path_folds_to_immediate_despite_layout_order() {
         let parsed = parse(
             r#"

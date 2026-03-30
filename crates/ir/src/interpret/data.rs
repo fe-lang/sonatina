@@ -1,5 +1,5 @@
 use super::{Action, EvalValue, Interpret, State, no_result, single_result};
-use crate::{I256, Immediate, Type, U256, inst::data::*, types::CompoundType};
+use crate::{I256, Immediate, Type, inst::data::*, types::CompoundType};
 
 impl Interpret for Mload {
     fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
@@ -246,12 +246,7 @@ impl Interpret for ExtractValue {
 }
 
 fn nonnegative_imm_usize(imm: Immediate) -> Option<usize> {
-    if imm.is_negative() {
-        return None;
-    }
-
-    let value = imm.as_i256().to_u256();
-    (value <= U256::from(usize::MAX)).then_some(value.as_usize())
+    imm.to_nonnegative_usize()
 }
 
 #[cfg(test)]

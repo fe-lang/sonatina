@@ -364,7 +364,8 @@ fn rewrite_inst(
             .dfg
             .value_imm(*enum_extract.field())
             .expect("enum.extract field index must be immediate")
-            .as_usize();
+            .to_nonnegative_usize()
+            .expect("enum.extract field index must be non-negative and fit in usize");
         let result_ty = layout.payload_tys(*enum_extract.variant())[field_idx];
         let slot = layout.payload_slot(*enum_extract.variant(), field_idx);
         let value =
@@ -464,7 +465,8 @@ fn rewrite_inst(
             .dfg
             .value_imm(*enum_proj.field())
             .expect("enum.proj field index must be immediate")
-            .as_usize();
+            .to_nonnegative_usize()
+            .expect("enum.proj field index must be non-negative and fit in usize");
         let field_ty = layout.payload_tys(*enum_proj.variant())[field_idx];
         let slot = layout.payload_slot(*enum_proj.variant(), field_idx);
         let field = insert_obj_proj_before(function, inst, *enum_proj.object(), slot, field_ty);

@@ -388,7 +388,17 @@ impl FunctionVerifier<'_> {
                         );
                         return None;
                     }
-                    let index = imm.as_usize();
+                    let Some(index) = imm.to_nonnegative_usize() else {
+                        self.emit(
+                            Diagnostic::error(
+                                DiagnosticCode::GepTypeComputationFailed,
+                                "struct gep indices must be non-negative immediate values",
+                                location.clone(),
+                            )
+                            .with_note(format!("index immediate {:?} does not fit in usize", imm)),
+                        );
+                        return None;
+                    };
                     let Some(field_ty) = s.fields.get(index).copied() else {
                         self.emit(
                             Diagnostic::error(
@@ -460,11 +470,18 @@ impl FunctionVerifier<'_> {
             );
             return None;
         }
-        let idx_imm = idx_imm.map(Immediate::as_usize);
+        let idx = idx_imm.and_then(Immediate::to_nonnegative_usize);
+        if idx_imm.is_some() && idx.is_none() {
+            self.emit(
+                Diagnostic::error(code, "aggregate index is out of bounds", location)
+                    .with_note("index immediate does not fit in usize"),
+            );
+            return None;
+        }
 
         match cmpd {
             CompoundType::Array { elem, len } => {
-                if let Some(index) = idx_imm
+                if let Some(index) = idx
                     && index >= len
                 {
                     self.emit(
@@ -476,7 +493,7 @@ impl FunctionVerifier<'_> {
                 Some(elem)
             }
             CompoundType::Struct(s) => {
-                let Some(index) = idx_imm else {
+                let Some(index) = idx else {
                     self.emit(Diagnostic::error(
                         code,
                         "struct aggregate index must be an immediate value",

@@ -806,7 +806,11 @@ pub(super) fn simplify_inst(
 #[cfg(test)]
 mod tests {
     use cranelift_entity::SecondaryMap;
-    use sonatina_ir::{Function, InstId, module::FuncRef};
+    use sonatina_ir::{
+        Function, I256, Immediate, InstId, Type, U256,
+        inst::{data, downcast},
+        module::FuncRef,
+    };
     use sonatina_parser::parse_module;
 
     use super::{AuxDeps, SimplifyAction, SimplifyCtx, simplify_inst};
@@ -860,6 +864,55 @@ block0:
             assert!(simplified.iter().any(|action| {
                 matches!(action, SimplifyAction::Copy(candidate) if candidate == value)
             }));
+        });
+    }
+
+    #[test]
+    fn simplify_const_load_keeps_huge_known_dynamic_index_unfolded() {
+        let (module, func_ref) = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+global private const [i256; 2] $arr = [11, 22];
+
+func public %f(v0.i256) -> i256 {
+block0:
+    v1.constref<[i256; 2]> = const.ref $arr;
+    v2.constref<i256> = const.index v1 v0;
+    v3.i256 = const.load v2;
+    return v3;
+}
+"#,
+        );
+
+        module.func_store.view(func_ref, |func| {
+            let inst = func
+                .layout
+                .iter_block()
+                .flat_map(|block| func.layout.iter_inst(block))
+                .find(|&inst| {
+                    downcast::<&data::ConstLoad>(func.inst_set(), func.dfg.inst(inst)).is_some()
+                })
+                .expect("missing const.load");
+            let mut lattice = SecondaryMap::<_, LatticeCell>::default();
+            lattice[func.arg_values[0]] = LatticeCell::Const(Immediate::from_i256(
+                I256::from(U256::one() << 200),
+                Type::I256,
+            ));
+            let may_be_undef = SecondaryMap::<_, bool>::default();
+            let constref_value_tys = collect_constref_value_tys(func);
+            let const_paths = analyze_const_paths(func, &constref_value_tys);
+            let known_bits = KnownBitsQuery::new(func);
+            let is_edge_executable = |_, _| false;
+            let mut aux_deps = AuxDeps::default();
+            let mut simplify_ctx = SimplifyCtx {
+                const_paths: &const_paths,
+                known_bits: &known_bits,
+                is_edge_executable: &is_edge_executable,
+                aux_deps: &mut aux_deps,
+            };
+            let simplified = simplify_inst(func, &lattice, &may_be_undef, inst, &mut simplify_ctx);
+            assert!(matches!(simplified.as_slice(), [SimplifyAction::NoChange]));
         });
     }
 
