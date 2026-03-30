@@ -91,9 +91,12 @@ impl Interpret for Gep {
                     panic!("Invalid GEP: indexing into an enum type");
                 }
 
-                CompoundType::Struct(s) => {
+                CompoundType::Struct(_) => {
+                    let Some(idx) = nonnegative_imm_usize(idx_value) else {
+                        return single_result(EvalValue::Undef);
+                    };
                     let Some((field_offset, field_ty)) =
-                        struct_field_offset(state, s.fields.as_slice(), idx_value)
+                        state.dfg().ctx.aggregate_elem_offset(current_ty, idx)
                     else {
                         return single_result(EvalValue::Undef);
                     };
@@ -242,11 +245,6 @@ impl Interpret for ExtractValue {
     }
 }
 
-fn align_to(offset: usize, alignment: usize) -> usize {
-    assert!(alignment & (alignment - 1) == 0);
-    (offset + alignment - 1) & !(alignment - 1)
-}
-
 fn nonnegative_imm_usize(imm: Immediate) -> Option<usize> {
     if imm.is_negative() {
         return None;
@@ -254,23 +252,6 @@ fn nonnegative_imm_usize(imm: Immediate) -> Option<usize> {
 
     let value = imm.as_i256().to_u256();
     (value <= U256::from(usize::MAX)).then_some(value.as_usize())
-}
-
-fn struct_field_offset(
-    state: &dyn State,
-    fields: &[Type],
-    idx_value: Immediate,
-) -> Option<(usize, Type)> {
-    let idx = nonnegative_imm_usize(idx_value)?;
-    let mut offset = 0usize;
-    for (field_idx, &field_ty) in fields.iter().enumerate() {
-        offset = align_to(offset, state.dfg().ctx.align_of_unchecked(field_ty));
-        if field_idx == idx {
-            return Some((offset, field_ty));
-        }
-        offset = offset.checked_add(state.dfg().ctx.size_of_unchecked(field_ty))?;
-    }
-    None
 }
 
 #[cfg(test)]

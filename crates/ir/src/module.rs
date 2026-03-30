@@ -14,7 +14,7 @@ use crate::{
     ir_writer::IrWrite,
     isa::{Endian, Isa, TypeLayout, TypeLayoutError},
     object::Object,
-    types::TypeStore,
+    types::{CompoundType, TypeStore},
 };
 
 bitflags! {
@@ -276,6 +276,53 @@ impl ModuleCtx {
         self.align_of(ty).unwrap()
     }
 
+    pub fn aggregate_len(&self, aggregate_ty: Type) -> Option<usize> {
+        let Type::Compound(cmpd) = aggregate_ty else {
+            return None;
+        };
+
+        match self.with_ty_store(|store| store.resolve_compound(cmpd).clone()) {
+            CompoundType::Array { len, .. } => Some(len),
+            CompoundType::Struct(s) => (!s.packed).then_some(s.fields.len()),
+            CompoundType::Enum(_)
+            | CompoundType::Ptr(_)
+            | CompoundType::ObjRef(_)
+            | CompoundType::ConstRef(_)
+            | CompoundType::Func { .. } => None,
+        }
+    }
+
+    pub fn aggregate_elem_offset(&self, aggregate_ty: Type, idx: usize) -> Option<(usize, Type)> {
+        let Type::Compound(cmpd) = aggregate_ty else {
+            return None;
+        };
+
+        match self.with_ty_store(|store| store.resolve_compound(cmpd).clone()) {
+            CompoundType::Array { elem, len } => {
+                (idx < len).then_some((self.size_of(elem).ok()?.checked_mul(idx)?, elem))
+            }
+            CompoundType::Struct(s) => {
+                if s.packed {
+                    return None;
+                }
+
+                let &field_ty = s.fields.get(idx)?;
+                let mut offset = 0usize;
+                for &ty in s.fields.iter().take(idx) {
+                    offset = align_to(offset, self.align_of(ty).ok()?)?;
+                    offset = offset.checked_add(self.size_of(ty).ok()?)?;
+                }
+                offset = align_to(offset, self.align_of(field_ty).ok()?)?;
+                Some((offset, field_ty))
+            }
+            CompoundType::Enum(_)
+            | CompoundType::Ptr(_)
+            | CompoundType::ObjRef(_)
+            | CompoundType::ConstRef(_)
+            | CompoundType::Func { .. } => None,
+        }
+    }
+
     pub fn func_sig<F, R>(&self, func_ref: FuncRef, f: F) -> R
     where
         F: FnOnce(&Signature) -> R,
@@ -462,6 +509,18 @@ impl ModuleCtx {
     {
         f(&mut self.gv_store.write().unwrap())
     }
+}
+
+fn align_to(offset: usize, align: usize) -> Option<usize> {
+    if align <= 1 {
+        return Some(offset);
+    }
+    if !align.is_power_of_two() {
+        return None;
+    }
+
+    let aligned = offset.checked_add(align.checked_sub(1)?)?;
+    Some(aligned & !(align - 1))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

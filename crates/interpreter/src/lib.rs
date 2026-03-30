@@ -196,29 +196,25 @@ impl State for Machine {
             return EvalValue::Undef;
         }
 
-        // Store a value of aggregate type.
+        // Load a value of aggregate type.
         if !(ty.is_integral() || ty.is_pointer(&self.module_ctx)) {
             let mut fields = Vec::new();
 
             match ty.resolve_compound(&self.module_ctx).unwrap() {
-                CompoundType::Array { elem: elem_ty, len } => {
-                    let mut addr = addr;
-                    let elem_size = self.module_ctx.size_of_unchecked(elem_ty);
-                    for _ in 0..len {
-                        let elem_addr = EvalValue::Imm(Immediate::I256(I256::from(addr)));
-                        let elem = self.load(elem_addr, elem_ty);
+                CompoundType::Array { .. } | CompoundType::Struct(_) => {
+                    let field_count = self
+                        .module_ctx
+                        .aggregate_len(ty)
+                        .expect("aggregate types must have a field count");
+                    for idx in 0..field_count {
+                        let (field_offset, field_ty) = self
+                            .module_ctx
+                            .aggregate_elem_offset(ty, idx)
+                            .expect("aggregate types must have field offsets");
+                        let elem_addr =
+                            EvalValue::Imm(Immediate::I256(I256::from(addr + field_offset)));
+                        let elem = self.load(elem_addr, field_ty);
                         fields.push(elem);
-                        addr += elem_size;
-                    }
-                }
-
-                CompoundType::Struct(s) => {
-                    let mut addr = addr;
-                    for field_ty in s.fields.into_iter() {
-                        let elem_addr = EvalValue::Imm(Immediate::I256(I256::from(addr)));
-                        let field = self.load(elem_addr, field_ty);
-                        fields.push(field);
-                        addr += self.module_ctx.size_of_unchecked(field_ty);
                     }
                 }
 
@@ -275,26 +271,38 @@ impl State for Machine {
 
         // Store a value of aggregate type.
         if !(ty.is_integral() || ty.is_pointer(&self.module_ctx)) {
-            let EvalValue::Aggregate { fields, ty } = value else {
+            let EvalValue::Aggregate {
+                fields,
+                ty: value_ty,
+            } = value
+            else {
                 unreachable!();
             };
-            match ty.resolve_compound(&self.module_ctx).unwrap() {
-                CompoundType::Array { elem: elem_ty, .. } => {
-                    let mut addr = addr;
-                    let elem_size = self.module_ctx.size_of_unchecked(elem_ty);
-                    for field in &fields {
-                        let elem_addr = EvalValue::Imm(Immediate::I256(I256::from(addr)));
-                        self.store(field.clone(), elem_addr, elem_ty);
-                        addr += elem_size;
-                    }
-                }
+            debug_assert_eq!(value_ty, ty, "aggregate store type mismatch");
 
-                CompoundType::Struct(s) => {
-                    let mut addr = addr;
-                    for (i, field_ty) in s.fields.into_iter().enumerate() {
-                        let elem_addr = EvalValue::Imm(Immediate::I256(I256::from(addr)));
-                        self.store(fields[i].clone(), elem_addr, field_ty);
-                        addr += self.module_ctx.size_of_unchecked(field_ty);
+            match ty.resolve_compound(&self.module_ctx).unwrap() {
+                CompoundType::Array { .. } | CompoundType::Struct(_) => {
+                    let field_count = self
+                        .module_ctx
+                        .aggregate_len(ty)
+                        .expect("aggregate types must have a field count");
+                    if fields.len() != field_count {
+                        debug_assert_eq!(
+                            fields.len(),
+                            field_count,
+                            "aggregate value field count must match type"
+                        );
+                        return EvalValue::Undef;
+                    }
+
+                    for (idx, field) in fields.iter().enumerate() {
+                        let (field_offset, field_ty) = self
+                            .module_ctx
+                            .aggregate_elem_offset(ty, idx)
+                            .expect("aggregate types must have field offsets");
+                        let elem_addr =
+                            EvalValue::Imm(Immediate::I256(I256::from(addr + field_offset)));
+                        let _ = self.store(elem_addr, field.clone(), field_ty);
                     }
                 }
 
