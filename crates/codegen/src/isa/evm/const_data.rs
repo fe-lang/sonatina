@@ -2,7 +2,7 @@ use rustc_hash::FxHashMap;
 use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{
     Function, GlobalVariableRef, I256, Immediate, InstId, Linkage, Module, Type, Value, ValueId,
-    global_variable::{GlobalVariableData, GvInitializer},
+    global_variable::{GlobalVariableData, GlobalVariableStore, GvInitializer},
     inst::{arith, cast, data, downcast, evm},
     module::ModuleCtx,
     types::{CompoundType, CompoundTypeRef, StructData},
@@ -454,19 +454,33 @@ impl ConstDataLower {
                 .map(|byte| GvInitializer::make_imm(byte as i8))
                 .collect(),
         );
-        let symbol = format!("__sonatina_const_words_{source_symbol}_{}", source.as_u32());
+        let symbol_base = format!("__sonatina_const_words_{source_symbol}_{}", source.as_u32());
         let blob = module.ctx.with_gv_store_mut(|store| {
-            store.lookup_gv(&symbol).unwrap_or_else(|| {
-                store.make_gv(GlobalVariableData::constant(
-                    symbol,
-                    blob_ty,
-                    Linkage::Private,
-                    blob_init,
-                ))
-            })
+            let symbol = fresh_global_symbol(store, &symbol_base);
+            store.make_gv(GlobalVariableData::constant(
+                symbol,
+                blob_ty,
+                Linkage::Private,
+                blob_init,
+            ))
         });
         self.word_blobs.insert(source, blob);
         blob
+    }
+}
+
+fn fresh_global_symbol(store: &GlobalVariableStore, base: &str) -> String {
+    if store.lookup_gv(base).is_none() {
+        return base.to_string();
+    }
+
+    let mut suffix = 1u32;
+    loop {
+        let symbol = format!("{base}_{suffix}");
+        if store.lookup_gv(&symbol).is_none() {
+            return symbol;
+        }
+        suffix += 1;
     }
 }
 
@@ -1245,6 +1259,21 @@ mod tests {
         EvmBackend::new(Evm::new(triple))
     }
 
+    fn global_symbols_with_prefix(
+        parsed: &sonatina_parser::ParsedModule,
+        prefix: &str,
+    ) -> Vec<String> {
+        let mut symbols = parsed.module.ctx.with_gv_store(|store| {
+            store
+                .all_gv_data()
+                .map(|data| data.symbol.clone())
+                .filter(|symbol| symbol.starts_with(prefix))
+                .collect::<Vec<_>>()
+        });
+        symbols.sort();
+        symbols
+    }
+
     #[test]
     fn const_load_static_index_folds_to_immediate() {
         let parsed = parse(
@@ -1297,6 +1326,43 @@ func private %entry(v0.i256) -> i256 {
         let mut writer = ModuleWriter::with_debug_provider(&parsed.module, &parsed.debug);
         let dumped = writer.dump_string();
         assert!(dumped.contains("__sonatina_const_words_arr_"));
+        assert!(dumped.contains("evm_code_copy"));
+        assert!(dumped.contains("mload"));
+        assert!(!dumped.contains("const."));
+    }
+
+    #[test]
+    fn dynamic_const_load_collision_uses_fresh_blob_symbol() {
+        let parsed = parse(
+            r#"
+target = "evm-ethereum-osaka"
+
+global private const [i256; 4] $arr = [1, 2, 3, 4];
+global private const [i8; 1] $__sonatina_const_words_arr_0 = [99];
+
+func private %entry(v0.i256) -> i256 {
+    block0:
+        v1.constref<[i256; 4]> = const.ref $arr;
+        v2.constref<i256> = const.index v1 v0;
+        v3.i256 = const.load v2;
+        return v3;
+}
+"#,
+        );
+
+        ConstDataLower::default().run(&parsed.module);
+
+        let base_symbol = parsed.module.ctx.with_gv_store(|store| {
+            let source = store.lookup_gv("arr").expect("arr global should exist");
+            format!("__sonatina_const_words_arr_{}", source.as_u32())
+        });
+        assert_eq!(
+            global_symbols_with_prefix(&parsed, &base_symbol),
+            vec![base_symbol.clone(), format!("{base_symbol}_1")]
+        );
+
+        let mut writer = ModuleWriter::with_debug_provider(&parsed.module, &parsed.debug);
+        let dumped = writer.dump_string();
         assert!(dumped.contains("evm_code_copy"));
         assert!(dumped.contains("mload"));
         assert!(!dumped.contains("const."));
@@ -1394,6 +1460,38 @@ object @Contract {
         let opts = CompileOptions::default();
         compile_all_objects(&parsed.module, &test_backend(), &opts)
             .expect("object compilation should include backend-synthesized const blobs");
+    }
+
+    #[test]
+    fn dynamic_const_load_object_compile_succeeds_with_colliding_blob_symbol() {
+        let parsed = parse(
+            r#"
+target = "evm-ethereum-osaka"
+
+global private const [i256; 4] $arr = [1, 2, 3, 4];
+global private const [i8; 1] $__sonatina_const_words_arr_0 = [99];
+
+func private %entry(v0.i256) -> i256 {
+    block0:
+        v1.constref<[i256; 4]> = const.ref $arr;
+        v2.constref<i256> = const.index v1 v0;
+        v3.i256 = const.load v2;
+        return v3;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+    data $arr;
+    data $__sonatina_const_words_arr_0;
+  }
+}
+"#,
+        );
+
+        let opts = CompileOptions::default();
+        compile_all_objects(&parsed.module, &test_backend(), &opts)
+            .expect("object compilation should succeed with colliding synthesized blob symbols");
     }
 
     #[test]
