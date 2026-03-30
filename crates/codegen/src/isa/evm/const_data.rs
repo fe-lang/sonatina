@@ -1,9 +1,9 @@
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{
     Function, GlobalVariableRef, I256, Immediate, InstId, Linkage, Module, Type, Value, ValueId,
     global_variable::{GlobalVariableData, GlobalVariableStore, GvInitializer},
-    inst::{arith, cast, data, downcast, evm},
+    inst::{arith, cast, control_flow, data, downcast, evm},
     module::ModuleCtx,
     types::{CompoundType, CompoundTypeRef, StructData},
     visitor::VisitorMut,
@@ -11,14 +11,14 @@ use sonatina_ir::{
 
 use crate::optim::aggregate::shape;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum ConstPathStep {
     Field(usize),
     IndexConst(usize),
     IndexValue(ValueId),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct ConstPath {
     global: GlobalVariableRef,
     ty: Type,
@@ -33,6 +33,154 @@ struct LoweredConstValue {
     addr: ValueId,
     ty: Type,
     path: Option<ConstPath>,
+}
+
+struct ConstRewriteCtx<'a> {
+    constref_value_tys: &'a FxHashMap<ValueId, Type>,
+    const_paths: &'a ConstPathAnalysis,
+    lowered_values: &'a mut FxHashMap<ValueId, LoweredConstValue>,
+}
+
+impl ConstRewriteCtx<'_> {
+    fn resolve(&self, value: ValueId) -> Option<LoweredConstValue> {
+        self.lowered_values.get(&value).cloned().or_else(|| {
+            self.constref_value_tys
+                .get(&value)
+                .copied()
+                .map(|ty| LoweredConstValue {
+                    addr: value,
+                    ty,
+                    path: self.const_paths.path(value).cloned(),
+                })
+        })
+    }
+
+    fn insert(&mut self, value: ValueId, lowered: LoweredConstValue) {
+        self.lowered_values.insert(value, lowered);
+    }
+
+    fn remove(&mut self, value: ValueId) {
+        self.lowered_values.remove(&value);
+    }
+}
+
+#[derive(Debug, Default)]
+struct ConstPathAnalysis {
+    paths: FxHashMap<ValueId, Option<ConstPath>>,
+}
+
+impl ConstPathAnalysis {
+    fn compute(func: &Function, constref_value_tys: &FxHashMap<ValueId, Type>) -> Self {
+        let mut analysis = Self::default();
+        let mut visiting = FxHashSet::default();
+        for &value in constref_value_tys.keys() {
+            analysis.compute_value_path(func, value, constref_value_tys, &mut visiting);
+        }
+        analysis
+    }
+
+    fn path(&self, value: ValueId) -> Option<&ConstPath> {
+        self.paths.get(&value).and_then(Option::as_ref)
+    }
+
+    fn compute_value_path(
+        &mut self,
+        func: &Function,
+        value: ValueId,
+        constref_value_tys: &FxHashMap<ValueId, Type>,
+        visiting: &mut FxHashSet<ValueId>,
+    ) -> Option<ConstPath> {
+        if let Some(path) = self.paths.get(&value) {
+            return path.clone();
+        }
+        if !constref_value_tys.contains_key(&value) || !visiting.insert(value) {
+            return None;
+        }
+
+        let path = match func.dfg.value(value) {
+            Value::Inst { inst, .. } => {
+                self.compute_inst_path(func, *inst, constref_value_tys, visiting)
+            }
+            Value::Arg { .. }
+            | Value::Immediate { .. }
+            | Value::Global { .. }
+            | Value::Undef { .. } => None,
+        };
+
+        visiting.remove(&value);
+        self.paths.insert(value, path.clone());
+        path
+    }
+
+    fn compute_inst_path(
+        &mut self,
+        func: &Function,
+        inst: InstId,
+        constref_value_tys: &FxHashMap<ValueId, Type>,
+        visiting: &mut FxHashSet<ValueId>,
+    ) -> Option<ConstPath> {
+        let inst_data = func.dfg.inst(inst);
+        if let Some(const_ref) = downcast::<&data::ConstRef>(func.inst_set(), inst_data) {
+            let global = const_ref.global().gv();
+            let ty = func.ctx().with_gv_store(|store| store.ty(global));
+            return Some(ConstPath {
+                global,
+                ty,
+                steps: Vec::new(),
+            });
+        }
+        if let Some(proj) = downcast::<&data::ConstProj>(func.inst_set(), inst_data) {
+            let (&base, rest) = proj.values().split_first()?;
+            return self.compute_subref_path(func, base, rest, constref_value_tys, visiting);
+        }
+        if let Some(index) = downcast::<&data::ConstIndex>(func.inst_set(), inst_data) {
+            return self.compute_subref_path(
+                func,
+                *index.object(),
+                &[*index.index()],
+                constref_value_tys,
+                visiting,
+            );
+        }
+        if let Some(phi) = downcast::<&control_flow::Phi>(func.inst_set(), inst_data) {
+            return self.compute_phi_path(func, phi, constref_value_tys, visiting);
+        }
+        None
+    }
+
+    fn compute_subref_path(
+        &mut self,
+        func: &Function,
+        base: ValueId,
+        indices: &[ValueId],
+        constref_value_tys: &FxHashMap<ValueId, Type>,
+        visiting: &mut FxHashSet<ValueId>,
+    ) -> Option<ConstPath> {
+        let mut path = self.compute_value_path(func, base, constref_value_tys, visiting)?;
+        let (ty, steps) = const_path_steps(func, path.ty, indices)?;
+        path.ty = ty;
+        path.steps.extend(steps);
+        Some(path)
+    }
+
+    fn compute_phi_path(
+        &mut self,
+        func: &Function,
+        phi: &control_flow::Phi,
+        constref_value_tys: &FxHashMap<ValueId, Type>,
+        visiting: &mut FxHashSet<ValueId>,
+    ) -> Option<ConstPath> {
+        let mut candidate = None;
+        for &(arg, _) in phi.args() {
+            let path = self.compute_value_path(func, arg, constref_value_tys, visiting)?;
+            match candidate {
+                Some(ref existing) if *existing != path => return None,
+                Some(_) => {}
+                None => candidate = Some(path),
+            }
+        }
+        candidate
+    }
 }
 
 #[derive(Default)]
@@ -140,8 +288,14 @@ impl ConstDataLower {
         types: &mut ConstRefTypeLowerer,
     ) -> bool {
         let constref_value_tys = collect_constref_value_tys(func);
+        let const_paths = ConstPathAnalysis::compute(func, &constref_value_tys);
         let mut changed = rewrite_function_types(func, types);
         let mut lowered_values = FxHashMap::default();
+        let mut rewrite_ctx = ConstRewriteCtx {
+            constref_value_tys: &constref_value_tys,
+            const_paths: &const_paths,
+            lowered_values: &mut lowered_values,
+        };
         let blocks: Vec<_> = func.layout.iter_block().collect();
         for block in blocks {
             let insts: Vec<_> = func.layout.iter_inst(block).collect();
@@ -149,8 +303,7 @@ impl ConstDataLower {
                 if !func.layout.is_inst_inserted(inst) {
                     continue;
                 }
-                changed |=
-                    self.rewrite_inst(module, func, inst, &constref_value_tys, &mut lowered_values);
+                changed |= self.rewrite_inst(module, func, inst, &mut rewrite_ctx);
             }
         }
 
@@ -166,8 +319,7 @@ impl ConstDataLower {
         module: &Module,
         func: &mut Function,
         inst: InstId,
-        constref_value_tys: &FxHashMap<ValueId, Type>,
-        lowered_values: &mut FxHashMap<ValueId, LoweredConstValue>,
+        rewrite_ctx: &mut ConstRewriteCtx<'_>,
     ) -> bool {
         if let Some(const_ref) =
             downcast::<&data::ConstRef>(func.inst_set(), func.dfg.inst(inst)).cloned()
@@ -177,13 +329,13 @@ impl ConstDataLower {
                 func,
                 inst,
                 const_ref.global().gv(),
-                lowered_values,
+                rewrite_ctx,
             );
         }
         if let Some(proj) =
             downcast::<&data::ConstProj>(func.inst_set(), func.dfg.inst(inst)).cloned()
         {
-            return self.rewrite_const_proj(func, inst, &proj, constref_value_tys, lowered_values);
+            return self.rewrite_const_proj(func, inst, &proj, rewrite_ctx);
         }
         if let Some(index) =
             downcast::<&data::ConstIndex>(func.inst_set(), func.dfg.inst(inst)).cloned()
@@ -193,33 +345,18 @@ impl ConstDataLower {
                 inst,
                 *index.object(),
                 *index.index(),
-                constref_value_tys,
-                lowered_values,
+                rewrite_ctx,
             );
         }
         if let Some(load) =
             downcast::<&data::ConstLoad>(func.inst_set(), func.dfg.inst(inst)).cloned()
         {
-            return self.rewrite_const_load(
-                module,
-                func,
-                inst,
-                *load.object(),
-                constref_value_tys,
-                lowered_values,
-            );
+            return self.rewrite_const_load(module, func, inst, *load.object(), rewrite_ctx);
         }
         if let Some(init) =
             downcast::<&data::ObjInitConst>(func.inst_set(), func.dfg.inst(inst)).cloned()
         {
-            return self.rewrite_obj_init_const(
-                module,
-                func,
-                inst,
-                init,
-                constref_value_tys,
-                lowered_values,
-            );
+            return self.rewrite_obj_init_const(module, func, inst, init, rewrite_ctx);
         }
         false
     }
@@ -230,7 +367,7 @@ impl ConstDataLower {
         func: &mut Function,
         inst: InstId,
         global: GlobalVariableRef,
-        lowered_values: &mut FxHashMap<ValueId, LoweredConstValue>,
+        rewrite_ctx: &mut ConstRewriteCtx<'_>,
     ) -> bool {
         let blob = self.word_blob_global(module, global);
         let replacement = insert_before_one(
@@ -244,7 +381,7 @@ impl ConstDataLower {
             .inst_result(inst)
             .expect("const.ref must have a result");
         let ty = module.ctx.with_gv_store(|store| store.ty(global));
-        lowered_values.insert(
+        rewrite_ctx.insert(
             replacement,
             LoweredConstValue {
                 addr: replacement,
@@ -257,7 +394,7 @@ impl ConstDataLower {
             },
         );
         replace_with_alias(func, inst, replacement);
-        lowered_values.remove(&result);
+        rewrite_ctx.remove(result);
         true
     }
 
@@ -266,13 +403,12 @@ impl ConstDataLower {
         func: &mut Function,
         inst: InstId,
         proj: &data::ConstProj,
-        constref_value_tys: &FxHashMap<ValueId, Type>,
-        lowered_values: &mut FxHashMap<ValueId, LoweredConstValue>,
+        rewrite_ctx: &mut ConstRewriteCtx<'_>,
     ) -> bool {
         let Some((&base, rest)) = proj.values().split_first() else {
             panic!("const.proj requires a base operand");
         };
-        self.rewrite_const_subref(func, inst, base, rest, constref_value_tys, lowered_values)
+        self.rewrite_const_subref(func, inst, base, rest, rewrite_ctx)
     }
 
     fn rewrite_const_index(
@@ -281,17 +417,9 @@ impl ConstDataLower {
         inst: InstId,
         object: ValueId,
         index: ValueId,
-        constref_value_tys: &FxHashMap<ValueId, Type>,
-        lowered_values: &mut FxHashMap<ValueId, LoweredConstValue>,
+        rewrite_ctx: &mut ConstRewriteCtx<'_>,
     ) -> bool {
-        self.rewrite_const_subref(
-            func,
-            inst,
-            object,
-            &[index],
-            constref_value_tys,
-            lowered_values,
-        )
+        self.rewrite_const_subref(func, inst, object, &[index], rewrite_ctx)
     }
 
     fn rewrite_const_subref(
@@ -300,16 +428,14 @@ impl ConstDataLower {
         inst: InstId,
         base: ValueId,
         indices: &[ValueId],
-        constref_value_tys: &FxHashMap<ValueId, Type>,
-        lowered_values: &mut FxHashMap<ValueId, LoweredConstValue>,
+        rewrite_ctx: &mut ConstRewriteCtx<'_>,
     ) -> bool {
-        let base =
-            lowered_const_value(base, constref_value_tys, lowered_values).unwrap_or_else(|| {
-                panic!(
-                    "unsupported const subreference source at inst {}",
-                    inst.as_u32()
-                )
-            });
+        let base = rewrite_ctx.resolve(base).unwrap_or_else(|| {
+            panic!(
+                "unsupported const subreference source at inst {}",
+                inst.as_u32()
+            )
+        });
         let (ty, steps) = const_path_steps(func, base.ty, indices).unwrap_or_else(|| {
             panic!(
                 "unsupported const projection/index at inst {} (base_ty: {:?}, indices: {:?})",
@@ -336,7 +462,7 @@ impl ConstDataLower {
             dynamic_terms,
             true,
         );
-        lowered_values.insert(
+        rewrite_ctx.insert(
             replacement,
             LoweredConstValue {
                 addr: replacement,
@@ -358,10 +484,10 @@ impl ConstDataLower {
         func: &mut Function,
         inst: InstId,
         object: ValueId,
-        constref_value_tys: &FxHashMap<ValueId, Type>,
-        lowered_values: &mut FxHashMap<ValueId, LoweredConstValue>,
+        rewrite_ctx: &mut ConstRewriteCtx<'_>,
     ) -> bool {
-        let source = lowered_const_value(object, constref_value_tys, lowered_values)
+        let source = rewrite_ctx
+            .resolve(object)
             .unwrap_or_else(|| panic!("unsupported const.load source at inst {}", inst.as_u32()));
         let result_ty = func
             .dfg
@@ -387,16 +513,14 @@ impl ConstDataLower {
         func: &mut Function,
         inst: InstId,
         init: data::ObjInitConst,
-        constref_value_tys: &FxHashMap<ValueId, Type>,
-        lowered_values: &mut FxHashMap<ValueId, LoweredConstValue>,
+        rewrite_ctx: &mut ConstRewriteCtx<'_>,
     ) -> bool {
-        let source = lowered_const_value(*init.value(), constref_value_tys, lowered_values)
-            .unwrap_or_else(|| {
-                panic!(
-                    "unsupported obj.init.const source at inst {}",
-                    inst.as_u32()
-                )
-            });
+        let source = rewrite_ctx.resolve(*init.value()).unwrap_or_else(|| {
+            panic!(
+                "unsupported obj.init.const source at inst {}",
+                inst.as_u32()
+            )
+        });
         if !source.ty.is_integral()
             && let Some(copy_len_bytes) = word_blob_copy_len_bytes(func.ctx(), source.ty)
         {
@@ -610,23 +734,6 @@ fn rewrite_function_types(func: &mut Function, types: &mut ConstRefTypeLowerer) 
     }
 
     changed || visitor.changed
-}
-
-fn lowered_const_value(
-    value: ValueId,
-    constref_value_tys: &FxHashMap<ValueId, Type>,
-    lowered_values: &FxHashMap<ValueId, LoweredConstValue>,
-) -> Option<LoweredConstValue> {
-    lowered_values.get(&value).cloned().or_else(|| {
-        constref_value_tys
-            .get(&value)
-            .copied()
-            .map(|ty| LoweredConstValue {
-                addr: value,
-                ty,
-                path: None,
-            })
-    })
 }
 
 fn const_path_steps(
@@ -1332,6 +1439,47 @@ func private %entry(v0.i256) -> i256 {
     }
 
     #[test]
+    fn const_load_phi_same_path_folds_to_immediate_despite_layout_order() {
+        let parsed = parse(
+            r#"
+target = "evm-ethereum-osaka"
+
+global private const [i256; 4] $arr = [1, 2, 3, 4];
+
+func private %entry() -> i256 {
+    block0:
+        br 1.i1 block1 block2;
+
+    block3:
+        v4.constref<i256> = phi (v1 block1) (v3 block2);
+        v5.i256 = const.load v4;
+        return v5;
+
+    block1:
+        v0.constref<[i256; 4]> = const.ref $arr;
+        v1.constref<i256> = const.index v0 2.i8;
+        jump block3;
+
+    block2:
+        v2.constref<[i256; 4]> = const.ref $arr;
+        v3.constref<i256> = const.index v2 2.i8;
+        jump block3;
+}
+"#,
+        );
+
+        ConstDataLower::default().run(&parsed.module);
+
+        let entry = find_func_ref(&parsed, "entry");
+        let dumped = parsed
+            .module
+            .func_store
+            .view(entry, |func| FuncWriter::new(entry, func).dump_string());
+        assert!(dumped.contains("return 3.i256;"));
+        assert!(!dumped.contains("const."));
+    }
+
+    #[test]
     fn dynamic_const_load_collision_uses_fresh_blob_symbol() {
         let parsed = parse(
             r#"
@@ -1399,6 +1547,51 @@ func private %entry() -> i256 {
         assert!(dumped.contains("obj.materialize.stack"));
         assert!(dumped.contains("evm_code_copy"));
         assert!(!dumped.contains("obj.store"));
+        assert!(!dumped.contains("const."));
+    }
+
+    #[test]
+    fn obj_init_const_scalar_phi_same_path_uses_immediate_store_despite_layout_order() {
+        let parsed = parse(
+            r#"
+target = "evm-ethereum-osaka"
+
+global private const i256 $value = 11;
+
+func private %entry() -> i256 {
+    block0:
+        br 1.i1 block1 block2;
+
+    block3:
+        v2.objref<i256> = obj.alloc i256;
+        v3.constref<i256> = phi (v0 block1) (v1 block2);
+        obj.init.const v2 v3;
+        v4.i256 = obj.load v2;
+        return v4;
+
+    block1:
+        v0.constref<i256> = const.ref $value;
+        jump block3;
+
+    block2:
+        v1.constref<i256> = const.ref $value;
+        jump block3;
+}
+"#,
+        );
+
+        ConstDataLower::default().run(&parsed.module);
+
+        let entry = find_func_ref(&parsed, "entry");
+        let dumped = parsed
+            .module
+            .func_store
+            .view(entry, |func| FuncWriter::new(entry, func).dump_string());
+        assert!(!dumped.contains("obj.init.const"));
+        assert!(dumped.contains("obj.store"));
+        assert!(!dumped.contains("obj.materialize.stack"));
+        assert!(!dumped.contains("evm_code_copy"));
+        assert!(!dumped.contains("mload"));
         assert!(!dumped.contains("const."));
     }
 
