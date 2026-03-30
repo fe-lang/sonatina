@@ -1,6 +1,7 @@
 use rustc_hash::{FxHashMap, FxHashSet};
+use smallvec::SmallVec;
 use sonatina_ir::{
-    Function, GlobalVariableRef, Immediate, InstId, Type, Value, ValueId,
+    BlockId, Function, GlobalVariableRef, Immediate, InstId, Type, Value, ValueId,
     global_variable::GvInitializer,
     inst::{control_flow, data, downcast},
     module::ModuleCtx,
@@ -21,8 +22,21 @@ pub(crate) struct ConstPath {
     pub(crate) steps: Vec<ConstPathStep>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct BlockEdge {
+    pub(crate) from: BlockId,
+    pub(crate) to: BlockId,
+}
+
+impl BlockEdge {
+    pub(crate) fn new(from: BlockId, to: BlockId) -> Self {
+        Self { from, to }
+    }
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct ConstPathAnalysis {
+    constref_value_tys: FxHashMap<ValueId, Type>,
     paths: FxHashMap<ValueId, Option<ConstPath>>,
 }
 
@@ -31,8 +45,32 @@ impl ConstPathAnalysis {
         self.paths.get(&value).and_then(Option::as_ref)
     }
 
+    pub(crate) fn reachable_path<F>(
+        &self,
+        func: &Function,
+        value: ValueId,
+        is_edge_executable: F,
+        edge_deps: &mut SmallVec<[BlockEdge; 2]>,
+    ) -> Option<ConstPath>
+    where
+        F: Fn(BlockId, BlockId) -> bool,
+    {
+        ReachableConstPathResolver {
+            analysis: self,
+            func,
+            is_edge_executable,
+            edge_deps,
+            memo: FxHashMap::default(),
+            visiting: FxHashSet::default(),
+        }
+        .resolve_value(value)
+    }
+
     fn compute(func: &Function, constref_value_tys: &FxHashMap<ValueId, Type>) -> Self {
-        let mut analysis = Self::default();
+        let mut analysis = Self {
+            constref_value_tys: constref_value_tys.clone(),
+            paths: FxHashMap::default(),
+        };
         let mut visiting = FxHashSet::default();
         for &value in constref_value_tys.keys() {
             analysis.compute_value_path(func, value, constref_value_tys, &mut visiting);
@@ -140,6 +178,100 @@ impl ConstPathAnalysis {
     }
 }
 
+struct ReachableConstPathResolver<'a, F> {
+    analysis: &'a ConstPathAnalysis,
+    func: &'a Function,
+    is_edge_executable: F,
+    edge_deps: &'a mut SmallVec<[BlockEdge; 2]>,
+    memo: FxHashMap<ValueId, Option<ConstPath>>,
+    visiting: FxHashSet<ValueId>,
+}
+
+impl<F> ReachableConstPathResolver<'_, F>
+where
+    F: Fn(BlockId, BlockId) -> bool,
+{
+    fn resolve_value(&mut self, value: ValueId) -> Option<ConstPath> {
+        if let Some(path) = self.analysis.path(value) {
+            return Some(path.clone());
+        }
+        if let Some(path) = self.memo.get(&value) {
+            return path.clone();
+        }
+        if !self.analysis.constref_value_tys.contains_key(&value) || !self.visiting.insert(value) {
+            return None;
+        }
+
+        let path = match self.func.dfg.value(value) {
+            Value::Inst { inst, .. } => self.resolve_inst(*inst),
+            Value::Arg { .. }
+            | Value::Immediate { .. }
+            | Value::Global { .. }
+            | Value::Undef { .. } => None,
+        };
+
+        self.visiting.remove(&value);
+        self.memo.insert(value, path.clone());
+        path
+    }
+
+    fn resolve_inst(&mut self, inst: InstId) -> Option<ConstPath> {
+        let inst_data = self.func.dfg.inst(inst);
+        if let Some(const_ref) = downcast::<&data::ConstRef>(self.func.inst_set(), inst_data) {
+            let global = const_ref.global().gv();
+            let ty = self.func.ctx().with_gv_store(|store| store.ty(global));
+            return Some(ConstPath {
+                global,
+                ty,
+                steps: Vec::new(),
+            });
+        }
+        if let Some(proj) = downcast::<&data::ConstProj>(self.func.inst_set(), inst_data) {
+            let (&base, rest) = proj.values().split_first()?;
+            return self.resolve_subref(base, rest);
+        }
+        if let Some(index) = downcast::<&data::ConstIndex>(self.func.inst_set(), inst_data) {
+            return self.resolve_subref(*index.object(), &[*index.index()]);
+        }
+        if let Some(phi) = downcast::<&control_flow::Phi>(self.func.inst_set(), inst_data) {
+            return self.resolve_phi(inst, phi);
+        }
+        None
+    }
+
+    fn resolve_subref(&mut self, base: ValueId, indices: &[ValueId]) -> Option<ConstPath> {
+        let mut path = self.resolve_value(base)?;
+        let (ty, steps) = const_path_steps(self.func, path.ty, indices)?;
+        path.ty = ty;
+        path.steps.extend(steps);
+        Some(path)
+    }
+
+    fn resolve_phi(&mut self, inst: InstId, phi: &control_flow::Phi) -> Option<ConstPath> {
+        let block = self.func.layout.inst_block(inst);
+        let mut candidate = None;
+        let mut has_executable = false;
+        for &(arg, from) in phi.args() {
+            let edge = BlockEdge::new(from, block);
+            if !self.edge_deps.contains(&edge) {
+                self.edge_deps.push(edge);
+            }
+            if !(self.is_edge_executable)(from, block) {
+                continue;
+            }
+
+            has_executable = true;
+            let path = self.resolve_value(arg)?;
+            match candidate {
+                Some(ref existing) if *existing != path => return None,
+                Some(_) => {}
+                None => candidate = Some(path),
+            }
+        }
+        has_executable.then_some(candidate).flatten()
+    }
+}
+
 pub(crate) fn analyze_const_paths(
     func: &Function,
     constref_value_tys: &FxHashMap<ValueId, Type>,
@@ -173,16 +305,6 @@ pub(crate) fn const_path_steps(
         steps.push(step);
     }
     Some((current_ty, steps))
-}
-
-pub(crate) fn eval_const_value_immediate(
-    module: &ModuleCtx,
-    const_paths: &ConstPathAnalysis,
-    value: ValueId,
-    resolve_index: impl Fn(ValueId) -> Option<Immediate>,
-) -> Option<Immediate> {
-    let path = const_paths.path(value)?;
-    eval_const_path_immediate(module, path, resolve_index)
 }
 
 pub(crate) fn eval_const_path_immediate(

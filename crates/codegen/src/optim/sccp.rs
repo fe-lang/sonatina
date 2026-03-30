@@ -7,7 +7,7 @@
 use std::collections::BTreeSet;
 
 use cranelift_entity::SecondaryMap;
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 use sonatina_ir::{
     BlockId, ControlFlowGraph, DataFlowGraph, Function, Immediate, InstId, Type, Value, ValueId,
@@ -24,8 +24,8 @@ use sonatina_ir::{
 use super::{
     adce::AdceSolver,
     cfg_cleanup::CfgCleanup,
-    const_eval::{ConstPathAnalysis, analyze_const_paths, collect_constref_value_tys},
-    sccp_simplify::{SimplifyAction, simplify_inst},
+    const_eval::{BlockEdge, ConstPathAnalysis, analyze_const_paths, collect_constref_value_tys},
+    sccp_simplify::{AuxDeps, SimplifyAction, SimplifyCtx, simplify_inst},
 };
 use crate::{
     analysis::known_bits::KnownBitsQuery,
@@ -44,8 +44,10 @@ pub struct SccpSolver {
 
     flow_work_set: FxHashSet<FlowEdge>,
     ssa_work_set: SecondaryMap<ValueId, bool>,
-    aux_deps_by_inst: SecondaryMap<InstId, SmallVec<[ValueId; 2]>>,
+    aux_value_deps_by_inst: SecondaryMap<InstId, SmallVec<[ValueId; 2]>>,
+    aux_edge_deps_by_inst: SecondaryMap<InstId, SmallVec<[BlockEdge; 2]>>,
     aux_users_by_value: SecondaryMap<ValueId, SmallVec<[InstId; 2]>>,
+    aux_users_by_edge: FxHashMap<BlockEdge, SmallVec<[InstId; 2]>>,
 }
 
 impl SccpSolver {
@@ -59,8 +61,10 @@ impl SccpSolver {
             ssa_work: Vec::default(),
             flow_work_set: FxHashSet::default(),
             ssa_work_set: SecondaryMap::default(),
-            aux_deps_by_inst: SecondaryMap::default(),
+            aux_value_deps_by_inst: SecondaryMap::default(),
+            aux_edge_deps_by_inst: SecondaryMap::default(),
             aux_users_by_value: SecondaryMap::default(),
+            aux_users_by_edge: FxHashMap::default(),
         }
     }
     pub fn run(&mut self, func: &mut Function, cfg: &mut ControlFlowGraph) {
@@ -144,8 +148,10 @@ impl SccpSolver {
         self.ssa_work.clear();
         self.flow_work_set.clear();
         self.ssa_work_set.clear();
-        self.aux_deps_by_inst.clear();
+        self.aux_value_deps_by_inst.clear();
+        self.aux_edge_deps_by_inst.clear();
         self.aux_users_by_value.clear();
+        self.aux_users_by_edge.clear();
     }
 
     fn push_flow_work(&mut self, edge: FlowEdge) {
@@ -185,6 +191,16 @@ impl SccpSolver {
         } else {
             self.reachable_blocks[dest] = true;
             self.eval_insts_in(func, dest, const_paths, known_bits);
+        }
+
+        let dep_edge = BlockEdge::new(func.layout.inst_block(edge.inst), dest);
+        if let Some(aux_users) = self.aux_users_by_edge.get(&dep_edge).cloned() {
+            for inst in aux_users {
+                let block = func.layout.inst_block(inst);
+                if self.reachable_blocks[block] {
+                    self.eval_inst(func, inst, const_paths, known_bits);
+                }
+            }
         }
     }
 
@@ -242,43 +258,48 @@ impl SccpSolver {
     ) {
         debug_assert!(!func.dfg.is_phi(inst_id));
         if let Some(bi) = func.dfg.branch_info(inst_id) {
-            self.update_aux_deps(inst_id, &[]);
+            self.update_aux_deps(inst_id, &[], &[]);
             self.eval_branch(func, inst_id, bi);
             return;
         };
 
         let inst_results = func.dfg.inst_results(inst_id).to_vec();
         if inst_results.is_empty() {
-            self.update_aux_deps(inst_id, &[]);
+            self.update_aux_deps(inst_id, &[], &[]);
             return;
         }
 
         // SCCP here is intraprocedural. Do not attempt to interpret calls even
         // when callee attrs classify them as effect-free.
         if func.dfg.is_call(inst_id) {
-            self.update_aux_deps(inst_id, &[]);
+            self.update_aux_deps(inst_id, &[], &[]);
             self.set_inst_results_top(&inst_results);
             return;
         }
 
         let inst = func.dfg.inst(inst_id);
         if func.dfg.side_effect(inst_id).has_effect() {
-            self.update_aux_deps(inst_id, &[]);
+            self.update_aux_deps(inst_id, &[], &[]);
             self.set_inst_results_top(&inst_results);
             return;
         }
 
-        let mut aux_value_deps = SmallVec::<[ValueId; 2]>::new();
+        let is_edge_executable = |from, to| self.is_reachable(func, from, to);
+        let mut aux_deps = AuxDeps::default();
+        let mut simplify_ctx = SimplifyCtx {
+            const_paths,
+            known_bits,
+            is_edge_executable: &is_edge_executable,
+            aux_deps: &mut aux_deps,
+        };
         let simplified = simplify_inst(
             func,
             &self.lattice,
             &self.may_be_undef,
-            const_paths,
-            known_bits,
             inst_id,
-            &mut aux_value_deps,
+            &mut simplify_ctx,
         );
-        self.update_aux_deps(inst_id, &aux_value_deps);
+        self.update_aux_deps(inst_id, &aux_deps.value_deps, &aux_deps.edge_deps);
         if simplified.len() != inst_results.len() {
             debug_assert_eq!(
                 simplified.len(),
@@ -522,15 +543,20 @@ impl SccpSolver {
 
         let mut changed = false;
         if !func.dfg.is_phi(inst) {
-            let mut aux_value_deps = SmallVec::<[ValueId; 2]>::new();
+            let is_edge_executable = |from, to| self.is_reachable(func, from, to);
+            let mut aux_deps = AuxDeps::default();
+            let mut simplify_ctx = SimplifyCtx {
+                const_paths,
+                known_bits,
+                is_edge_executable: &is_edge_executable,
+                aux_deps: &mut aux_deps,
+            };
             let simplified = simplify_inst(
                 func,
                 &self.lattice,
                 &self.may_be_undef,
-                const_paths,
-                known_bits,
                 inst,
-                &mut aux_value_deps,
+                &mut simplify_ctx,
             );
             debug_assert_eq!(
                 simplified.len(),
@@ -705,10 +731,15 @@ impl SccpSolver {
         }
     }
 
-    fn update_aux_deps(&mut self, inst: InstId, new_deps: &[ValueId]) {
-        let old_deps = std::mem::take(&mut self.aux_deps_by_inst[inst]);
-        for value in old_deps.iter().copied() {
-            if new_deps.contains(&value) {
+    fn update_aux_deps(
+        &mut self,
+        inst: InstId,
+        new_value_deps: &[ValueId],
+        new_edge_deps: &[BlockEdge],
+    ) {
+        let old_value_deps = std::mem::take(&mut self.aux_value_deps_by_inst[inst]);
+        for value in old_value_deps.iter().copied() {
+            if new_value_deps.contains(&value) {
                 continue;
             }
             let users = &mut self.aux_users_by_value[value];
@@ -716,18 +747,46 @@ impl SccpSolver {
                 users.remove(pos);
             }
         }
-        let mut deps = SmallVec::<[ValueId; 2]>::new();
-        for &value in new_deps {
-            if deps.contains(&value) {
+        let mut value_deps = SmallVec::<[ValueId; 2]>::new();
+        for &value in new_value_deps {
+            if value_deps.contains(&value) {
                 continue;
             }
-            deps.push(value);
-            if old_deps.contains(&value) {
+            value_deps.push(value);
+            if old_value_deps.contains(&value) {
                 continue;
             }
             self.aux_users_by_value[value].push(inst);
         }
-        self.aux_deps_by_inst[inst] = deps;
+        self.aux_value_deps_by_inst[inst] = value_deps;
+
+        let old_edge_deps = std::mem::take(&mut self.aux_edge_deps_by_inst[inst]);
+        for edge in &old_edge_deps {
+            if new_edge_deps.contains(edge) {
+                continue;
+            }
+            let Some(users) = self.aux_users_by_edge.get_mut(edge) else {
+                continue;
+            };
+            if let Some(pos) = users.iter().position(|&user| user == inst) {
+                users.remove(pos);
+            }
+            if users.is_empty() {
+                self.aux_users_by_edge.remove(edge);
+            }
+        }
+        let mut edge_deps = SmallVec::<[BlockEdge; 2]>::new();
+        for &edge in new_edge_deps {
+            if edge_deps.contains(&edge) {
+                continue;
+            }
+            edge_deps.push(edge);
+            if old_edge_deps.contains(&edge) {
+                continue;
+            }
+            self.aux_users_by_edge.entry(edge).or_default().push(inst);
+        }
+        self.aux_edge_deps_by_inst[inst] = edge_deps;
     }
 
     fn set_inst_results_top(&mut self, results: &[ValueId]) {

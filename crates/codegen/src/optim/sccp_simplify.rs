@@ -1,7 +1,7 @@
 use cranelift_entity::SecondaryMap;
 use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{
-    Function, Immediate, InstId, Type, Value, ValueId,
+    BlockId, Function, Immediate, InstId, Type, Value, ValueId,
     inst::{
         BinaryInstKind, CastInstKind, InstClassKind, UnaryInstKind, cast, data, downcast,
         inst_set::InstSetBase,
@@ -9,7 +9,7 @@ use sonatina_ir::{
 };
 
 use super::{
-    const_eval::{ConstPathAnalysis, dynamic_index_values, eval_const_value_immediate},
+    const_eval::{BlockEdge, ConstPathAnalysis, dynamic_index_values, eval_const_path_immediate},
     sccp::LatticeCell,
     simplify_expr::{
         ExprFactProvider, SimplifyExprResult, simplify_binary_with_facts, simplify_cast,
@@ -26,6 +26,26 @@ pub(super) enum SimplifyAction {
 }
 
 pub(super) type SimplifyResults = SmallVec<[SimplifyAction; 1]>;
+
+#[derive(Default)]
+pub(super) struct AuxDeps {
+    pub(super) value_deps: SmallVec<[ValueId; 2]>,
+    pub(super) edge_deps: SmallVec<[BlockEdge; 2]>,
+}
+
+impl AuxDeps {
+    fn clear(&mut self) {
+        self.value_deps.clear();
+        self.edge_deps.clear();
+    }
+}
+
+pub(super) struct SimplifyCtx<'a> {
+    pub(super) const_paths: &'a ConstPathAnalysis,
+    pub(super) known_bits: &'a KnownBitsQuery,
+    pub(super) is_edge_executable: &'a dyn Fn(BlockId, BlockId) -> bool,
+    pub(super) aux_deps: &'a mut AuxDeps,
+}
 
 fn from_expr_simplify_result(simplified: SimplifyExprResult) -> SimplifyAction {
     match simplified {
@@ -228,25 +248,31 @@ fn simplify_const_load(
     func: &Function,
     lattice: &SecondaryMap<ValueId, LatticeCell>,
     may_be_undef: &SecondaryMap<ValueId, bool>,
-    const_paths: &ConstPathAnalysis,
     object: ValueId,
-    aux_value_deps: &mut SmallVec<[ValueId; 2]>,
+    ctx: &mut SimplifyCtx<'_>,
 ) -> SimplifyAction {
-    if let Some(path) = const_paths.path(object) {
-        for value in dynamic_index_values(path) {
-            if !aux_value_deps.contains(&value) {
-                aux_value_deps.push(value);
+    if let Some(path) = ctx.const_paths.reachable_path(
+        func,
+        object,
+        |from, to| (ctx.is_edge_executable)(from, to),
+        &mut ctx.aux_deps.edge_deps,
+    ) {
+        for value in dynamic_index_values(&path) {
+            if !ctx.aux_deps.value_deps.contains(&value) {
+                ctx.aux_deps.value_deps.push(value);
             }
         }
-    }
-    if is_may_be_undef(func, may_be_undef, object) {
-        return SimplifyAction::NoChange;
+        if is_may_be_undef(func, may_be_undef, object) {
+            return SimplifyAction::NoChange;
+        }
+
+        return eval_const_path_immediate(func.ctx(), &path, |value| {
+            known_non_undef_imm(func, lattice, may_be_undef, value)
+        })
+        .map_or(SimplifyAction::NoChange, SimplifyAction::Const);
     }
 
-    eval_const_value_immediate(func.ctx(), const_paths, object, |value| {
-        known_non_undef_imm(func, lattice, may_be_undef, value)
-    })
-    .map_or(SimplifyAction::NoChange, SimplifyAction::Const)
+    SimplifyAction::NoChange
 }
 
 fn simplify_sub(
@@ -576,12 +602,10 @@ pub(super) fn simplify_inst(
     func: &Function,
     lattice: &SecondaryMap<ValueId, LatticeCell>,
     may_be_undef: &SecondaryMap<ValueId, bool>,
-    const_paths: &ConstPathAnalysis,
-    known_bits: &KnownBitsQuery,
     inst_id: InstId,
-    aux_value_deps: &mut SmallVec<[ValueId; 2]>,
+    ctx: &mut SimplifyCtx<'_>,
 ) -> SimplifyResults {
-    aux_value_deps.clear();
+    ctx.aux_deps.clear();
     let inst = func.dfg.inst(inst_id);
     let is = func.inst_set();
     let results_len = func.dfg.inst_results(inst_id).len();
@@ -589,7 +613,7 @@ pub(super) fn simplify_inst(
         func,
         lattice,
         may_be_undef,
-        known_bits,
+        known_bits: ctx.known_bits,
     };
 
     match inst.kind() {
@@ -766,9 +790,8 @@ pub(super) fn simplify_inst(
                     func,
                     lattice,
                     may_be_undef,
-                    const_paths,
                     *i.object(),
-                    aux_value_deps,
+                    ctx,
                 ));
             }
             if let Some(i) = downcast::<&data::Gep>(is, inst) {
@@ -783,11 +806,10 @@ pub(super) fn simplify_inst(
 #[cfg(test)]
 mod tests {
     use cranelift_entity::SecondaryMap;
-    use smallvec::SmallVec;
-    use sonatina_ir::{Function, InstId, ValueId, module::FuncRef};
+    use sonatina_ir::{Function, InstId, module::FuncRef};
     use sonatina_parser::parse_module;
 
-    use super::{SimplifyAction, simplify_inst};
+    use super::{AuxDeps, SimplifyAction, SimplifyCtx, simplify_inst};
     use crate::{
         analysis::known_bits::KnownBitsQuery,
         optim::{
@@ -822,16 +844,15 @@ block0:
             let constref_value_tys = collect_constref_value_tys(func);
             let const_paths = analyze_const_paths(func, &constref_value_tys);
             let known_bits = KnownBitsQuery::new(func);
-            let mut aux_value_deps = SmallVec::<[ValueId; 2]>::new();
-            let simplified = simplify_inst(
-                func,
-                &lattice,
-                &may_be_undef,
-                &const_paths,
-                &known_bits,
-                inst,
-                &mut aux_value_deps,
-            );
+            let is_edge_executable = |_, _| false;
+            let mut aux_deps = AuxDeps::default();
+            let mut simplify_ctx = SimplifyCtx {
+                const_paths: &const_paths,
+                known_bits: &known_bits,
+                is_edge_executable: &is_edge_executable,
+                aux_deps: &mut aux_deps,
+            };
+            let simplified = simplify_inst(func, &lattice, &may_be_undef, inst, &mut simplify_ctx);
             let and_args = func.dfg.inst(inst).collect_values();
             let [value, _mask] = and_args.as_slice() else {
                 panic!("and should have two args");

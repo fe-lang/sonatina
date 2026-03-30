@@ -1,0 +1,53 @@
+#! SCCP should fold const.load through a phi only when the reachable const path stays unique.
+
+target = "evm-ethereum-osaka"
+
+global private const i256 $lhs = 10;
+global private const i256 $rhs = 20;
+
+# sameln: func public %const_load_single_reachable_phi_path() -> i256 {
+# nextln:     block0:
+# nextln:         return 10.i256;
+func public %const_load_single_reachable_phi_path() -> i256 {
+    block0:
+        br 1.i1 block1 block2;
+
+    block1:
+        v0.constref<i256> = const.ref $lhs;
+        jump block3;
+
+    block2:
+        v1.constref<i256> = const.ref $rhs;
+        jump block3;
+
+    block3:
+        v2.constref<i256> = phi (v0 block1) (v1 block2);
+        v3.i256 = const.load v2;
+        return v3;
+}
+
+# sameln: func public %const_load_late_conflicting_phi_edge() -> i256 {
+# not:         return 10.i256;
+# not:         return 20.i256;
+# check:         v3.i256 = const.load v1;
+func public %const_load_late_conflicting_phi_edge() -> i256 {
+    block0:
+        v0.constref<i256> = const.ref $lhs;
+        jump block1;
+
+    block1:
+        v1.constref<i256> = phi (v0 block0) (v4 block3);
+        v2.i1 = phi (1.i1 block0) (0.i1 block3);
+        v3.i256 = const.load v1;
+        br v2 block2 block4;
+
+    block2:
+        v4.constref<i256> = const.ref $rhs;
+        jump block3;
+
+    block3:
+        jump block1;
+
+    block4:
+        return v3;
+}
