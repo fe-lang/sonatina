@@ -23,6 +23,7 @@ use sonatina_ir::{
 use super::{
     adce::AdceSolver,
     cfg_cleanup::CfgCleanup,
+    const_eval::{ConstPathAnalysis, analyze_const_paths, collect_constref_value_tys},
     sccp_simplify::{SimplifyAction, simplify_inst},
 };
 use crate::{
@@ -66,6 +67,8 @@ impl SccpSolver {
             CleanupMode::RepairWithUndef
         };
         CfgCleanup::new(cleanup_mode).run(func);
+        let constref_value_tys = collect_constref_value_tys(func);
+        let const_paths = analyze_const_paths(func, &constref_value_tys);
 
         let Some(entry_block) = func.layout.entry_block() else {
             return;
@@ -80,12 +83,12 @@ impl SccpSolver {
 
         // Evaluate all values in entry block.
         self.reachable_blocks[entry_block] = true;
-        self.eval_insts_in(func, entry_block, &solve_known_bits);
+        self.eval_insts_in(func, entry_block, &const_paths, &solve_known_bits);
 
         while !(self.flow_work.is_empty() && self.ssa_work.is_empty()) {
             while let Some(edge) = self.flow_work.pop() {
                 self.flow_work_set.remove(&edge);
-                self.eval_edge(func, edge, &solve_known_bits);
+                self.eval_edge(func, edge, &const_paths, &solve_known_bits);
             }
 
             while let Some(value) = self.ssa_work.pop() {
@@ -96,7 +99,7 @@ impl SccpSolver {
                         if func.dfg.is_phi(user) {
                             self.eval_phi(func, user);
                         } else {
-                            self.eval_inst(func, user, &solve_known_bits);
+                            self.eval_inst(func, user, &const_paths, &solve_known_bits);
                         }
                     }
                 }
@@ -109,7 +112,7 @@ impl SccpSolver {
         self.remove_unreachable_edges(func, cleanup_mode);
         cfg.compute(func);
         let fold_known_bits = KnownBitsQuery::new(func);
-        self.fold_insts(func, cfg, &fold_known_bits);
+        self.fold_insts(func, cfg, &const_paths, &fold_known_bits);
 
         CfgCleanup::new(cleanup_mode).run(func);
         cfg.compute(func);
@@ -147,7 +150,13 @@ impl SccpSolver {
         self.ssa_work_set[value] = true;
     }
 
-    fn eval_edge(&mut self, func: &mut Function, edge: FlowEdge, known_bits: &KnownBitsQuery) {
+    fn eval_edge(
+        &mut self,
+        func: &mut Function,
+        edge: FlowEdge,
+        const_paths: &ConstPathAnalysis,
+        known_bits: &KnownBitsQuery,
+    ) {
         let dest = edge.to;
 
         if self.reachable_edges.contains(&edge) {
@@ -159,7 +168,7 @@ impl SccpSolver {
             self.eval_phis_in(func, dest);
         } else {
             self.reachable_blocks[dest] = true;
-            self.eval_insts_in(func, dest, known_bits);
+            self.eval_insts_in(func, dest, const_paths, known_bits);
         }
     }
 
@@ -192,17 +201,29 @@ impl SccpSolver {
         self.set_may_be_undef(phi_value, eval_may_be_undef);
     }
 
-    fn eval_insts_in(&mut self, func: &Function, block: BlockId, known_bits: &KnownBitsQuery) {
+    fn eval_insts_in(
+        &mut self,
+        func: &Function,
+        block: BlockId,
+        const_paths: &ConstPathAnalysis,
+        known_bits: &KnownBitsQuery,
+    ) {
         for inst in func.layout.iter_inst(block) {
             if func.dfg.is_phi(inst) {
                 self.eval_phi(func, inst);
             } else {
-                self.eval_inst(func, inst, known_bits);
+                self.eval_inst(func, inst, const_paths, known_bits);
             }
         }
     }
 
-    fn eval_inst(&mut self, func: &Function, inst_id: InstId, known_bits: &KnownBitsQuery) {
+    fn eval_inst(
+        &mut self,
+        func: &Function,
+        inst_id: InstId,
+        const_paths: &ConstPathAnalysis,
+        known_bits: &KnownBitsQuery,
+    ) {
         debug_assert!(!func.dfg.is_phi(inst_id));
         if let Some(bi) = func.dfg.branch_info(inst_id) {
             self.eval_branch(func, inst_id, bi);
@@ -227,8 +248,14 @@ impl SccpSolver {
             return;
         }
 
-        let simplified =
-            simplify_inst(func, &self.lattice, &self.may_be_undef, known_bits, inst_id);
+        let simplified = simplify_inst(
+            func,
+            &self.lattice,
+            &self.may_be_undef,
+            const_paths,
+            known_bits,
+            inst_id,
+        );
         if simplified.len() != inst_results.len() {
             debug_assert_eq!(
                 simplified.len(),
@@ -443,6 +470,7 @@ impl SccpSolver {
         &mut self,
         func: &mut Function,
         cfg: &ControlFlowGraph,
+        const_paths: &ConstPathAnalysis,
         known_bits: &KnownBitsQuery,
     ) {
         let mut rpo: Vec<_> = cfg.post_order().collect();
@@ -452,12 +480,18 @@ impl SccpSolver {
             let mut next_inst = func.layout.first_inst_of(block);
             while let Some(inst) = next_inst {
                 next_inst = func.layout.next_inst_of(inst);
-                self.fold(func, inst, known_bits);
+                self.fold(func, inst, const_paths, known_bits);
             }
         }
     }
 
-    fn fold(&self, func: &mut Function, inst: InstId, known_bits: &KnownBitsQuery) {
+    fn fold(
+        &self,
+        func: &mut Function,
+        inst: InstId,
+        const_paths: &ConstPathAnalysis,
+        known_bits: &KnownBitsQuery,
+    ) {
         let inst_results = func.dfg.inst_results(inst).to_vec();
         if inst_results.is_empty() {
             return;
@@ -465,8 +499,14 @@ impl SccpSolver {
 
         let mut changed = false;
         if !func.dfg.is_phi(inst) {
-            let simplified =
-                simplify_inst(func, &self.lattice, &self.may_be_undef, known_bits, inst);
+            let simplified = simplify_inst(
+                func,
+                &self.lattice,
+                &self.may_be_undef,
+                const_paths,
+                known_bits,
+                inst,
+            );
             debug_assert_eq!(
                 simplified.len(),
                 inst_results.len(),

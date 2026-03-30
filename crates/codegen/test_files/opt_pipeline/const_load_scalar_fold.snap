@@ -1,0 +1,12 @@
+---
+source: crates/codegen/tests/opt_pipeline.rs
+input_file: test_files/opt_pipeline/const_load_scalar_fold.sntn
+---
+target = "evm-ethereum-osaka"
+
+global private const [i256; 4] $arr = [11, 22, 33, 44];
+
+func public %entry() -> i256 {
+    block0:
+        return 33.i256;
+}

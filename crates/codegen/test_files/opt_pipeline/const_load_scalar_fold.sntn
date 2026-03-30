@@ -1,0 +1,11 @@
+target = "evm-ethereum-osaka"
+
+global private const [i256; 4] $arr = [11, 22, 33, 44];
+
+func public %entry() -> i256 {
+    block0:
+        v0.constref<[i256; 4]> = const.ref $arr;
+        v1.constref<i256> = const.index v0 2.i8;
+        v2.i256 = const.load v1;
+        return v2;
+}

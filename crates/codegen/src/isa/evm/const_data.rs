@@ -1,29 +1,22 @@
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{
     Function, GlobalVariableRef, I256, Immediate, InstId, Linkage, Module, Type, Value, ValueId,
     global_variable::{GlobalVariableData, GlobalVariableStore, GvInitializer},
-    inst::{arith, cast, control_flow, data, downcast, evm},
+    inst::{arith, cast, data, downcast, evm},
     module::ModuleCtx,
     types::{CompoundType, CompoundTypeRef, StructData},
     visitor::VisitorMut,
 };
 
-use crate::optim::aggregate::shape;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum ConstPathStep {
-    Field(usize),
-    IndexConst(usize),
-    IndexValue(ValueId),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ConstPath {
-    global: GlobalVariableRef,
-    ty: Type,
-    steps: Vec<ConstPathStep>,
-}
+use crate::optim::{
+    aggregate::shape,
+    const_eval::{
+        ConstPath, ConstPathAnalysis, ConstPathStep, analyze_const_paths,
+        collect_constref_value_tys, const_path_steps, eval_const_path_immediate,
+        eval_const_path_subtree,
+    },
+};
 
 type ConstOffsetTerms = Vec<(ValueId, u32)>;
 type ConstOffsetPlan = (Type, u32, ConstOffsetTerms);
@@ -61,125 +54,6 @@ impl ConstRewriteCtx<'_> {
 
     fn remove(&mut self, value: ValueId) {
         self.lowered_values.remove(&value);
-    }
-}
-
-#[derive(Debug, Default)]
-struct ConstPathAnalysis {
-    paths: FxHashMap<ValueId, Option<ConstPath>>,
-}
-
-impl ConstPathAnalysis {
-    fn compute(func: &Function, constref_value_tys: &FxHashMap<ValueId, Type>) -> Self {
-        let mut analysis = Self::default();
-        let mut visiting = FxHashSet::default();
-        for &value in constref_value_tys.keys() {
-            analysis.compute_value_path(func, value, constref_value_tys, &mut visiting);
-        }
-        analysis
-    }
-
-    fn path(&self, value: ValueId) -> Option<&ConstPath> {
-        self.paths.get(&value).and_then(Option::as_ref)
-    }
-
-    fn compute_value_path(
-        &mut self,
-        func: &Function,
-        value: ValueId,
-        constref_value_tys: &FxHashMap<ValueId, Type>,
-        visiting: &mut FxHashSet<ValueId>,
-    ) -> Option<ConstPath> {
-        if let Some(path) = self.paths.get(&value) {
-            return path.clone();
-        }
-        if !constref_value_tys.contains_key(&value) || !visiting.insert(value) {
-            return None;
-        }
-
-        let path = match func.dfg.value(value) {
-            Value::Inst { inst, .. } => {
-                self.compute_inst_path(func, *inst, constref_value_tys, visiting)
-            }
-            Value::Arg { .. }
-            | Value::Immediate { .. }
-            | Value::Global { .. }
-            | Value::Undef { .. } => None,
-        };
-
-        visiting.remove(&value);
-        self.paths.insert(value, path.clone());
-        path
-    }
-
-    fn compute_inst_path(
-        &mut self,
-        func: &Function,
-        inst: InstId,
-        constref_value_tys: &FxHashMap<ValueId, Type>,
-        visiting: &mut FxHashSet<ValueId>,
-    ) -> Option<ConstPath> {
-        let inst_data = func.dfg.inst(inst);
-        if let Some(const_ref) = downcast::<&data::ConstRef>(func.inst_set(), inst_data) {
-            let global = const_ref.global().gv();
-            let ty = func.ctx().with_gv_store(|store| store.ty(global));
-            return Some(ConstPath {
-                global,
-                ty,
-                steps: Vec::new(),
-            });
-        }
-        if let Some(proj) = downcast::<&data::ConstProj>(func.inst_set(), inst_data) {
-            let (&base, rest) = proj.values().split_first()?;
-            return self.compute_subref_path(func, base, rest, constref_value_tys, visiting);
-        }
-        if let Some(index) = downcast::<&data::ConstIndex>(func.inst_set(), inst_data) {
-            return self.compute_subref_path(
-                func,
-                *index.object(),
-                &[*index.index()],
-                constref_value_tys,
-                visiting,
-            );
-        }
-        if let Some(phi) = downcast::<&control_flow::Phi>(func.inst_set(), inst_data) {
-            return self.compute_phi_path(func, phi, constref_value_tys, visiting);
-        }
-        None
-    }
-
-    fn compute_subref_path(
-        &mut self,
-        func: &Function,
-        base: ValueId,
-        indices: &[ValueId],
-        constref_value_tys: &FxHashMap<ValueId, Type>,
-        visiting: &mut FxHashSet<ValueId>,
-    ) -> Option<ConstPath> {
-        let mut path = self.compute_value_path(func, base, constref_value_tys, visiting)?;
-        let (ty, steps) = const_path_steps(func, path.ty, indices)?;
-        path.ty = ty;
-        path.steps.extend(steps);
-        Some(path)
-    }
-
-    fn compute_phi_path(
-        &mut self,
-        func: &Function,
-        phi: &control_flow::Phi,
-        constref_value_tys: &FxHashMap<ValueId, Type>,
-        visiting: &mut FxHashSet<ValueId>,
-    ) -> Option<ConstPath> {
-        let mut candidate = None;
-        for &(arg, _) in phi.args() {
-            let path = self.compute_value_path(func, arg, constref_value_tys, visiting)?;
-            match candidate {
-                Some(ref existing) if *existing != path => return None,
-                Some(_) => {}
-                None => candidate = Some(path),
-            }
-        }
-        candidate
     }
 }
 
@@ -288,7 +162,7 @@ impl ConstDataLower {
         types: &mut ConstRefTypeLowerer,
     ) -> bool {
         let constref_value_tys = collect_constref_value_tys(func);
-        let const_paths = ConstPathAnalysis::compute(func, &constref_value_tys);
+        let const_paths = analyze_const_paths(func, &constref_value_tys);
         let mut changed = rewrite_function_types(func, types);
         let mut lowered_values = FxHashMap::default();
         let mut rewrite_ctx = ConstRewriteCtx {
@@ -495,7 +369,8 @@ impl ConstDataLower {
             .map(|result| func.dfg.value_ty(result))
             .expect("const.load must have a result");
         if let Some(path) = source.path.as_ref()
-            && let Some(imm) = eval_const_path_immediate(module, path)
+            && let Some(imm) =
+                eval_const_path_immediate(&module.ctx, path, |value| func.dfg.value_imm(value))
         {
             let replacement = func.dfg.make_imm_value(imm);
             replace_with_alias(func, inst, replacement);
@@ -533,7 +408,8 @@ impl ConstDataLower {
                 copy_len_bytes,
             );
         } else if let Some(path) = source.path.as_ref()
-            && let Some((ty, subtree_init)) = eval_const_path_subtree(module, path)
+            && let Some((ty, subtree_init)) =
+                eval_const_path_subtree(&module.ctx, path, |value| func.dfg.value_imm(value))
         {
             emit_obj_init(func, inst, *init.object(), ty, &subtree_init);
         } else {
@@ -667,19 +543,6 @@ fn rewrite_module_types(module: &Module, types: &mut ConstRefTypeLowerer) -> boo
     changed
 }
 
-fn collect_constref_value_tys(func: &Function) -> FxHashMap<ValueId, Type> {
-    func.dfg
-        .value_ids()
-        .filter_map(|value| {
-            let ty = func.dfg.value_ty(value);
-            match ty.resolve_compound(func.ctx()) {
-                Some(CompoundType::ConstRef(elem)) => Some((value, elem)),
-                _ => None,
-            }
-        })
-        .collect()
-}
-
 fn rewrite_function_types(func: &mut Function, types: &mut ConstRefTypeLowerer) -> bool {
     let mut changed = false;
     for value in func.dfg.value_ids().collect::<Vec<_>>() {
@@ -734,99 +597,6 @@ fn rewrite_function_types(func: &mut Function, types: &mut ConstRefTypeLowerer) 
     }
 
     changed || visitor.changed
-}
-
-fn const_path_steps(
-    func: &Function,
-    base_ty: Type,
-    indices: &[ValueId],
-) -> Option<(Type, Vec<ConstPathStep>)> {
-    let mut current_ty = base_ty;
-    let mut steps = Vec::with_capacity(indices.len());
-    for &idx_value in indices {
-        let (next_ty, step) = const_child_path_step(func, current_ty, idx_value)?;
-        current_ty = next_ty;
-        steps.push(step);
-    }
-    Some((current_ty, steps))
-}
-
-fn const_child_path_step(
-    func: &Function,
-    current_ty: Type,
-    idx_value: ValueId,
-) -> Option<(Type, ConstPathStep)> {
-    let idx_imm = func
-        .dfg
-        .value_imm(idx_value)
-        .filter(|imm| !imm.is_negative())
-        .map(Immediate::as_usize);
-    match current_ty.resolve_compound(func.ctx())? {
-        CompoundType::Array { elem, len } => {
-            let step = match idx_imm {
-                Some(idx) if idx < len => ConstPathStep::IndexConst(idx),
-                Some(_) => return None,
-                None => ConstPathStep::IndexValue(idx_value),
-            };
-            Some((elem, step))
-        }
-        CompoundType::Struct(s) => {
-            if s.packed {
-                return None;
-            }
-            let idx = idx_imm?;
-            Some((*s.fields.get(idx)?, ConstPathStep::Field(idx)))
-        }
-        CompoundType::Ptr(_)
-        | CompoundType::ObjRef(_)
-        | CompoundType::ConstRef(_)
-        | CompoundType::Enum(_)
-        | CompoundType::Func { .. } => None,
-    }
-}
-
-fn eval_const_path_immediate(module: &Module, path: &ConstPath) -> Option<Immediate> {
-    let (ty, init) = eval_const_path_subtree(module, path)?;
-    match init {
-        GvInitializer::Immediate(imm) if imm.ty() == ty => Some(imm),
-        _ => None,
-    }
-}
-
-fn eval_const_path_subtree(module: &Module, path: &ConstPath) -> Option<(Type, GvInitializer)> {
-    module.ctx.with_gv_store(|store| {
-        let ty = store.ty(path.global);
-        let init = store.init_data(path.global)?;
-        eval_initializer_subtree(&module.ctx, ty, init, &path.steps)
-    })
-}
-
-fn eval_initializer_subtree(
-    module: &sonatina_ir::module::ModuleCtx,
-    ty: Type,
-    init: &GvInitializer,
-    steps: &[ConstPathStep],
-) -> Option<(Type, GvInitializer)> {
-    let Some((step, rest)) = steps.split_first() else {
-        return Some((ty, init.clone()));
-    };
-    match (ty.resolve_compound(module)?, init, step) {
-        (
-            CompoundType::Array { elem, len },
-            GvInitializer::Array(items),
-            ConstPathStep::IndexConst(idx),
-        ) => {
-            (*idx < len).then_some(())?;
-            eval_initializer_subtree(module, elem, items.get(*idx)?, rest)
-        }
-        (CompoundType::Struct(s), GvInitializer::Struct(fields), ConstPathStep::Field(idx)) => {
-            if s.packed {
-                return None;
-            }
-            eval_initializer_subtree(module, *s.fields.get(*idx)?, fields.get(*idx)?, rest)
-        }
-        _ => None,
-    }
 }
 
 fn const_steps_offset_bytes(

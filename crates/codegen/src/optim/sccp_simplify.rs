@@ -9,6 +9,7 @@ use sonatina_ir::{
 };
 
 use super::{
+    const_eval::{ConstPathAnalysis, eval_const_value_immediate},
     sccp::LatticeCell,
     simplify_expr::{
         ExprFactProvider, SimplifyExprResult, simplify_binary_with_facts, simplify_cast,
@@ -47,10 +48,24 @@ fn known_imm(
     lattice: &SecondaryMap<ValueId, LatticeCell>,
     v: ValueId,
 ) -> Option<Immediate> {
-    func.dfg.value_imm(v).or_else(|| match lattice.get(v) {
-        Some(LatticeCell::Const(imm)) => Some(*imm),
-        _ => None,
-    })
+    func.dfg
+        .get_value(v)
+        .and_then(|_| func.dfg.value_imm(v))
+        .or_else(|| match lattice.get(v) {
+            Some(LatticeCell::Const(imm)) => Some(*imm),
+            _ => None,
+        })
+}
+
+fn known_non_undef_imm(
+    func: &Function,
+    lattice: &SecondaryMap<ValueId, LatticeCell>,
+    may_be_undef: &SecondaryMap<ValueId, bool>,
+    v: ValueId,
+) -> Option<Immediate> {
+    (!is_may_be_undef(func, may_be_undef, v))
+        .then(|| known_imm(func, lattice, v))
+        .flatten()
 }
 
 struct SccpExprFacts<'a, 'b> {
@@ -84,7 +99,7 @@ impl ExprFactProvider for SccpExprFacts<'_, '_> {
 }
 
 fn is_explicit_undef(func: &Function, v: ValueId) -> bool {
-    matches!(func.dfg.value(v), Value::Undef { .. })
+    matches!(func.dfg.get_value(v), Some(Value::Undef { .. }))
 }
 
 fn is_may_be_undef(
@@ -207,6 +222,23 @@ fn simplify_gep_all_zero(
     }
 
     SimplifyAction::NoChange
+}
+
+fn simplify_const_load(
+    func: &Function,
+    lattice: &SecondaryMap<ValueId, LatticeCell>,
+    may_be_undef: &SecondaryMap<ValueId, bool>,
+    const_paths: &ConstPathAnalysis,
+    object: ValueId,
+) -> SimplifyAction {
+    if is_may_be_undef(func, may_be_undef, object) {
+        return SimplifyAction::NoChange;
+    }
+
+    eval_const_value_immediate(func.ctx(), const_paths, object, |value| {
+        known_non_undef_imm(func, lattice, may_be_undef, value)
+    })
+    .map_or(SimplifyAction::NoChange, SimplifyAction::Const)
 }
 
 fn simplify_sub(
@@ -536,6 +568,7 @@ pub(super) fn simplify_inst(
     func: &Function,
     lattice: &SecondaryMap<ValueId, LatticeCell>,
     may_be_undef: &SecondaryMap<ValueId, bool>,
+    const_paths: &ConstPathAnalysis,
     known_bits: &KnownBitsQuery,
     inst_id: InstId,
 ) -> SimplifyResults {
@@ -718,6 +751,15 @@ pub(super) fn simplify_inst(
             }
         }
         InstClassKind::Phi | InstClassKind::Opaque => {
+            if let Some(i) = downcast::<&data::ConstLoad>(is, inst) {
+                return wrap_action(simplify_const_load(
+                    func,
+                    lattice,
+                    may_be_undef,
+                    const_paths,
+                    *i.object(),
+                ));
+            }
             if let Some(i) = downcast::<&data::Gep>(is, inst) {
                 return wrap_action(simplify_gep_all_zero(func, lattice, i.values().as_slice()));
             }
@@ -734,7 +776,13 @@ mod tests {
     use sonatina_parser::parse_module;
 
     use super::{SimplifyAction, simplify_inst};
-    use crate::{analysis::known_bits::KnownBitsQuery, optim::sccp::LatticeCell};
+    use crate::{
+        analysis::known_bits::KnownBitsQuery,
+        optim::{
+            const_eval::{analyze_const_paths, collect_constref_value_tys},
+            sccp::LatticeCell,
+        },
+    };
 
     #[test]
     fn simplify_inst_folds_logical_shr_mask_with_known_bits() {
@@ -759,8 +807,17 @@ block0:
             let inst = and_inst.expect("missing and");
             let lattice = SecondaryMap::<_, LatticeCell>::default();
             let may_be_undef = SecondaryMap::<_, bool>::default();
+            let constref_value_tys = collect_constref_value_tys(func);
+            let const_paths = analyze_const_paths(func, &constref_value_tys);
             let known_bits = KnownBitsQuery::new(func);
-            let simplified = simplify_inst(func, &lattice, &may_be_undef, &known_bits, inst);
+            let simplified = simplify_inst(
+                func,
+                &lattice,
+                &may_be_undef,
+                &const_paths,
+                &known_bits,
+                inst,
+            );
             let and_args = func.dfg.inst(inst).collect_values();
             let [value, _mask] = and_args.as_slice() else {
                 panic!("and should have two args");
