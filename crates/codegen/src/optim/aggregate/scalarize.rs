@@ -6,6 +6,7 @@ use sonatina_ir::{
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
     inst::{cast, cmp, control_flow, data, downcast},
     module::FuncRef,
+    types::CompoundType,
 };
 
 use crate::cfg_edit::{CfgEditor, CleanupMode};
@@ -2342,21 +2343,18 @@ impl AggregateScalarize {
         let mut current_ty = promoted.shape.root_ty;
 
         for &idx in leaf.path.as_slice() {
-            let idx_value = func.dfg.make_imm_value(i64::from(idx));
             let next_ty = shape::aggregate_slice_for_index(module, current_ty, idx)
                 .map(|slice| slice.ty)
                 .unwrap_or_else(|| panic!("missing aggregate slice for promoted live-in leaf"));
-            let result_ty = func
-                .ctx()
-                .with_ty_store_mut(|store| store.make_obj_ref(next_ty));
-            let proj = cursor.insert_inst_data(
+            object = insert_object_child_ref(
                 func,
-                data::ObjProj::new_unchecked(func.inst_set(), smallvec![object, idx_value]),
+                &mut cursor,
+                module,
+                object,
+                current_ty,
+                idx,
+                next_ty,
             );
-            let result = cursor.make_result(func, proj, result_ty);
-            cursor.attach_result(func, proj, result);
-            cursor.set_location(CursorLocation::At(proj));
-            object = result;
             current_ty = next_ty;
         }
 
@@ -2432,21 +2430,18 @@ impl AggregateScalarize {
         let mut current_ty = promoted.shape.root_ty;
 
         for &idx in leaf.path.as_slice() {
-            let idx_value = func.dfg.make_imm_value(i64::from(idx));
             let next_ty = shape::aggregate_slice_for_index(module, current_ty, idx)
                 .map(|slice| slice.ty)
                 .unwrap_or_else(|| panic!("missing aggregate slice for promoted write-back leaf"));
-            let result_ty = func
-                .ctx()
-                .with_ty_store_mut(|store| store.make_obj_ref(next_ty));
-            let proj = cursor.insert_inst_data(
+            object = insert_object_child_ref(
                 func,
-                data::ObjProj::new_unchecked(func.inst_set(), smallvec![object, idx_value]),
+                &mut cursor,
+                module,
+                object,
+                current_ty,
+                idx,
+                next_ty,
             );
-            let result = cursor.make_result(func, proj, result_ty);
-            cursor.attach_result(func, proj, result);
-            cursor.set_location(CursorLocation::At(proj));
-            object = result;
             current_ty = next_ty;
         }
 
@@ -2456,6 +2451,38 @@ impl AggregateScalarize {
         );
         cursor.set_location(CursorLocation::At(store));
     }
+}
+
+fn insert_object_child_ref(
+    func: &mut Function,
+    cursor: &mut InstInserter,
+    module: &sonatina_ir::module::ModuleCtx,
+    object: ValueId,
+    current_ty: Type,
+    idx: u32,
+    next_ty: Type,
+) -> ValueId {
+    let idx_value = func.dfg.make_imm_value(i64::from(idx));
+    let result_ty = func
+        .ctx()
+        .with_ty_store_mut(|store| store.make_obj_ref(next_ty));
+    let inst = match current_ty.resolve_compound(module) {
+        Some(CompoundType::Array { .. }) => cursor.insert_inst_data(
+            func,
+            data::ObjIndex::new_unchecked(func.inst_set(), object, idx_value),
+        ),
+        Some(CompoundType::Struct(_)) => cursor.insert_inst_data(
+            func,
+            data::ObjProj::new_unchecked(func.inst_set(), smallvec![object, idx_value]),
+        ),
+        other => {
+            panic!("unexpected aggregate scalarization path step for {current_ty:?}: {other:?}")
+        }
+    };
+    let result = cursor.make_result(func, inst, result_ty);
+    cursor.attach_result(func, inst, result);
+    cursor.set_location(CursorLocation::At(inst));
+    result
 }
 
 impl RootKind {
@@ -2998,6 +3025,43 @@ func private %f(v0.objref<@one>, v1.i256) -> i256 {
             assert!(
                 dumped.contains("return v3;"),
                 "without scalarization the explicit object load should remain the returned value:\n{dumped}"
+            );
+        });
+    }
+
+    #[test]
+    fn scalarize_uses_obj_index_for_array_arg_live_ins() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func private %f(v0.objref<[i256; 3]>) -> i256 {
+    block0:
+        v1.objref<i256> = obj.index v0 0.i8;
+        v2.i256 = obj.load v1;
+        v3.objref<i256> = obj.index v0 1.i8;
+        v4.i256 = obj.load v3;
+        v5.i256 = add v2 v4;
+        return v5;
+}
+"#,
+        );
+        let func_ref = lookup_func(&module, "f");
+        run_scalarize_with_local_args(&module, func_ref);
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            assert!(
+                dumped.contains("obj.index v0 0."),
+                "array arg live-ins should keep obj.index for the first element:\n{dumped}"
+            );
+            assert!(
+                dumped.contains("obj.index v0 1."),
+                "array arg live-ins should keep obj.index for the second element:\n{dumped}"
+            );
+            assert!(
+                !dumped.contains("obj.proj v0 0.") && !dumped.contains("obj.proj v0 1."),
+                "array arg live-ins must not be rewritten to obj.proj:\n{dumped}"
             );
         });
     }
