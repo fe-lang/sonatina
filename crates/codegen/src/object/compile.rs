@@ -1,11 +1,8 @@
 use indexmap::IndexMap;
 use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
-    GlobalVariableRef, InstDowncast, Module,
-    inst::{
-        data::{GetFunctionPtr, SymAddr, SymSize, SymbolRef},
-        equiv::{BinaryInstKind, InstClassKind, UnaryInstKind},
-    },
+    GlobalVariableRef, Module,
+    inst::equiv::{BinaryInstKind, InstClassKind, UnaryInstKind},
     module::FuncRef,
     object::EmbedSymbol,
 };
@@ -24,7 +21,10 @@ use super::{
 };
 use crate::{
     isa::evm::{EvmBackend, collect_unsupported_evm_multi_return},
-    machinst::lower::SectionLoweringCtx,
+    machinst::lower::{
+        SectionLoweringCtx, SectionWorkModule, build_section_membership,
+        compute_section_function_emission_order,
+    },
 };
 
 fn compile_required_sections_into_cache(
@@ -299,10 +299,17 @@ fn compile_section(
         section.embeds.iter().map(|e| e.as_symbol.clone()).collect();
     let defined_embed_symbol_set: FxHashSet<EmbedSymbol> =
         defined_embed_symbols.iter().cloned().collect();
+    let mut section_data: Vec<GlobalVariableRef> = section.data.iter().copied().collect();
+    section_data.sort_unstable();
 
-    let mut membership = {
+    let membership = {
         let _span = trace_span!("sonatina.codegen.object.build_membership").entered();
-        build_membership(program, section_id)
+        build_section_membership(
+            program.module,
+            section.entry,
+            &section.includes,
+            &section_data,
+        )
     };
     for used in &membership.used_embed_symbols {
         if !defined_embed_symbol_set.contains(used) {
@@ -320,12 +327,17 @@ fn compile_section(
         embed_symbols: &defined_embed_symbols,
     };
 
-    let mut funcs = {
+    let funcs = {
         let _span =
             trace_span!("sonatina.codegen.object.compute_function_emission_order").entered();
-        compute_function_emission_order(program, section, &membership)
+        compute_section_function_emission_order(
+            program.module,
+            section.entry,
+            &section.includes,
+            &membership,
+        )
     };
-    let mut backend_errors = reject_unsupported_evm_multi_return(
+    let backend_errors = reject_unsupported_evm_multi_return(
         program.module,
         &funcs,
         section.entry,
@@ -346,18 +358,21 @@ fn compile_section(
     };
 
     let prepared = {
-        let _span = trace_span!("sonatina.codegen.object.prepare_section_for_membership").entered();
+        let _span = trace_span!("sonatina.codegen.object.prepare_section_work_module").entered();
         let fallback_func = funcs.first().copied().unwrap_or(section.entry);
+        let work = SectionWorkModule::from_module_subset(
+            program.module,
+            &funcs,
+            section.entry,
+            &section.includes,
+            &section_data,
+        );
         backend
-            .prepare_section(program.module, &funcs, &section_ctx)
+            .prepare_section(work)
             .map_err(|message| prepare_error(message, fallback_func))?
     };
 
-    membership = {
-        let _span = trace_span!("sonatina.codegen.object.rebuild_membership").entered();
-        build_membership(program, section_id)
-    };
-    for used in &membership.used_embed_symbols {
+    for used in prepared.used_embed_symbols() {
         if !defined_embed_symbol_set.contains(used) {
             return Err(vec![ObjectCompileError::UndefinedEmbedSymbol {
                 object: object_name.clone(),
@@ -366,42 +381,15 @@ fn compile_section(
             }]);
         }
     }
-    funcs = {
-        let _span =
-            trace_span!("sonatina.codegen.object.recompute_function_emission_order").entered();
-        compute_function_emission_order(program, section, &membership)
-    };
-    backend_errors = reject_unsupported_evm_multi_return(
-        program.module,
-        &funcs,
-        section.entry,
-        object_name,
-        section_name,
-    );
-    if !backend_errors.is_empty() {
-        return Err(backend_errors);
-    }
-    let prepared = if prepared.funcs() == funcs.as_slice() {
-        prepared
-    } else {
-        let _span = trace_span!("sonatina.codegen.object.prepare_section_final").entered();
-        let fallback_func = funcs.first().copied().unwrap_or(section.entry);
-        backend
-            .prepare_section(program.module, &funcs, &section_ctx)
-            .map_err(|message| prepare_error(message, fallback_func))?
-    };
-
     let mut data: Vec<(GlobalVariableRef, Vec<u8>)> = Vec::new();
-    let mut gvs: Vec<GlobalVariableRef> = membership.globals.iter().copied().collect();
-    gvs.sort_unstable();
     {
         let _span = trace_span!(
             "sonatina.codegen.object.encode_global_initializers",
-            global_count = gvs.len()
+            global_count = prepared.globals().len()
         )
         .entered();
-        for gv in gvs {
-            let bytes = super::data::encode_gv_initializer_to_bytes(&program.module.ctx, gv)
+        for &gv in prepared.globals() {
+            let bytes = super::data::encode_gv_initializer_to_bytes(&prepared.module().ctx, gv)
                 .map_err(|e| {
                     vec![ObjectCompileError::InvalidGlobalForData {
                         object: object_name.clone(),
@@ -440,202 +428,27 @@ fn compile_section(
             section = %section_name.0
         )
         .entered();
-        link_section(
-            program.module,
-            backend,
-            &prepared,
-            &data,
-            &embeds,
-            &section_ctx,
-            opts,
-        )
-        .map_err(|e| match e {
-            LinkSectionError::Backend { func, error } => vec![ObjectCompileError::BackendError {
-                object: object_name.clone(),
-                section: section_name.clone(),
-                func,
-                message: error,
-            }],
-            LinkSectionError::Link(message) => vec![ObjectCompileError::LinkError {
-                object: object_name.clone(),
-                section: section_name.clone(),
-                message,
-            }],
-        })?
+        link_section(backend, &prepared, &data, &embeds, &section_ctx, opts).map_err(
+            |e| match e {
+                LinkSectionError::Backend { func, error } => {
+                    vec![ObjectCompileError::BackendError {
+                        object: object_name.clone(),
+                        section: section_name.clone(),
+                        func,
+                        message: error,
+                    }]
+                }
+                LinkSectionError::Link(message) => vec![ObjectCompileError::LinkError {
+                    object: object_name.clone(),
+                    section: section_name.clone(),
+                    message,
+                }],
+            },
+        )?
     };
 
     cache.insert(section_id, artifact);
     Ok(())
-}
-
-#[derive(Default)]
-struct SectionMembership {
-    funcs: FxHashSet<FuncRef>,
-    globals: FxHashSet<GlobalVariableRef>,
-    used_embed_symbols: FxHashSet<EmbedSymbol>,
-}
-
-fn build_membership(program: &ResolvedProgram<'_>, section_id: SectionId) -> SectionMembership {
-    let module = program.module;
-    let section = program.section(section_id);
-
-    let mut membership = SectionMembership::default();
-    membership.globals.extend(section.data.iter().copied());
-
-    let mut worklist = Vec::new();
-    let roots = std::iter::once(section.entry).chain(section.includes.iter().copied());
-    for func in roots {
-        if membership.funcs.insert(func) {
-            worklist.push(func);
-        }
-    }
-
-    while let Some(func_ref) = worklist.pop() {
-        module.func_store.view(func_ref, |func| {
-            let is = func.inst_set();
-            for block in func.layout.iter_block() {
-                for inst_id in func.layout.iter_inst(block) {
-                    if let Some(call) = func.dfg.call_info(inst_id) {
-                        let callee = call.callee();
-                        if membership.funcs.insert(callee) {
-                            worklist.push(callee);
-                        }
-                    }
-
-                    let inst = func.dfg.inst(inst_id);
-
-                    if let Some(ptr) = <&GetFunctionPtr as InstDowncast>::downcast(is, inst) {
-                        let func = *ptr.func();
-                        if membership.funcs.insert(func) {
-                            worklist.push(func);
-                        }
-                    }
-
-                    if let Some(sym) = <&SymAddr as InstDowncast>::downcast(is, inst) {
-                        record_symbol(sym.sym(), &mut membership, &mut worklist);
-                    }
-                    if let Some(sym) = <&SymSize as InstDowncast>::downcast(is, inst) {
-                        record_symbol(sym.sym(), &mut membership, &mut worklist);
-                    }
-                }
-            }
-        });
-    }
-
-    membership
-}
-
-fn record_symbol(sym: &SymbolRef, membership: &mut SectionMembership, worklist: &mut Vec<FuncRef>) {
-    match sym {
-        SymbolRef::Func(func) => {
-            if membership.funcs.insert(*func) {
-                worklist.push(*func);
-            }
-        }
-        SymbolRef::Global(gv) => {
-            membership.globals.insert(*gv);
-        }
-        SymbolRef::Embed(sym) => {
-            membership.used_embed_symbols.insert(sym.clone());
-        }
-        SymbolRef::CurrentSection => {}
-    }
-}
-
-fn compute_function_emission_order(
-    program: &ResolvedProgram<'_>,
-    section: &super::resolve::ResolvedSection,
-    membership: &SectionMembership,
-) -> Vec<FuncRef> {
-    let module = program.module;
-
-    let mut include_priority: FxHashMap<FuncRef, usize> = FxHashMap::default();
-    for (idx, func) in section.includes.iter().copied().enumerate() {
-        include_priority.entry(func).or_insert(idx);
-    }
-
-    let mut func_names: FxHashMap<FuncRef, String> = FxHashMap::default();
-    for func in membership.funcs.iter().copied() {
-        let name = module.ctx.func_sig(func, |sig| sig.name().to_string());
-        func_names.insert(func, name);
-    }
-
-    let mut adjacency: FxHashMap<FuncRef, Vec<FuncRef>> = FxHashMap::default();
-    for &func_ref in &membership.funcs {
-        let mut callees: FxHashSet<FuncRef> = FxHashSet::default();
-        module.func_store.view(func_ref, |func| {
-            for block in func.layout.iter_block() {
-                for inst_id in func.layout.iter_inst(block) {
-                    if let Some(call) = func.dfg.call_info(inst_id) {
-                        let callee = call.callee();
-                        if membership.funcs.contains(&callee) {
-                            callees.insert(callee);
-                        }
-                    }
-                }
-            }
-        });
-
-        let mut callees: Vec<_> = callees.into_iter().collect();
-        callees.sort_by(|a, b| compare_func(*a, *b, &include_priority, &func_names));
-        adjacency.insert(func_ref, callees);
-    }
-
-    let mut visited: FxHashSet<FuncRef> = FxHashSet::default();
-    let mut order = Vec::new();
-
-    fn dfs(
-        node: FuncRef,
-        adjacency: &FxHashMap<FuncRef, Vec<FuncRef>>,
-        visited: &mut FxHashSet<FuncRef>,
-        out: &mut Vec<FuncRef>,
-    ) {
-        if !visited.insert(node) {
-            return;
-        }
-        out.push(node);
-        if let Some(callees) = adjacency.get(&node) {
-            for &callee in callees {
-                dfs(callee, adjacency, visited, out);
-            }
-        }
-    }
-
-    dfs(section.entry, &adjacency, &mut visited, &mut order);
-
-    let mut extra_roots: Vec<FuncRef> = section.includes.to_vec();
-    extra_roots.sort_by(|a, b| compare_func(*a, *b, &include_priority, &func_names));
-    for root in extra_roots {
-        dfs(root, &adjacency, &mut visited, &mut order);
-    }
-
-    let mut remaining: Vec<FuncRef> = membership
-        .funcs
-        .iter()
-        .copied()
-        .filter(|f| !visited.contains(f))
-        .collect();
-    remaining.sort_by(|a, b| compare_func(*a, *b, &include_priority, &func_names));
-    for root in remaining {
-        dfs(root, &adjacency, &mut visited, &mut order);
-    }
-
-    debug_assert_eq!(visited.len(), membership.funcs.len());
-    order
-}
-
-fn compare_func(
-    a: FuncRef,
-    b: FuncRef,
-    include_priority: &FxHashMap<FuncRef, usize>,
-    func_names: &FxHashMap<FuncRef, String>,
-) -> std::cmp::Ordering {
-    let a_pri = include_priority.get(&a).copied().unwrap_or(usize::MAX);
-    let b_pri = include_priority.get(&b).copied().unwrap_or(usize::MAX);
-    let a_name = func_names.get(&a).unwrap();
-    let b_name = func_names.get(&b).unwrap();
-
-    (a_pri, a_name, a.as_u32()).cmp(&(b_pri, b_name, b.as_u32()))
 }
 
 fn collect_embed_deps(
@@ -689,7 +502,9 @@ mod tests {
             CompileOptions, FrontendProvenanceMap, OBSERVABILITY_SCHEMA_VERSION, artifact::SymbolId,
         },
     };
-    use sonatina_ir::{InstDowncastMut, inst::arith::Add, isa::evm::Evm};
+    use sonatina_ir::{
+        InstDowncastMut, Type, inst::arith::Add, ir_writer::ModuleWriter, isa::evm::Evm,
+    };
     use sonatina_parser::parse_module;
     use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
     use sonatina_verifier::{VerificationLevel, VerifierConfig};
@@ -1329,6 +1144,71 @@ object @O {
     }
 
     #[test]
+    fn compile_object_keeps_input_module_immutable() {
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @pair = { i256, i256 };
+
+func private %swap(v0.@pair) -> @pair {
+    block0:
+        v1.i256 = extract_value v0 0.i8;
+        v2.i256 = extract_value v0 1.i8;
+        v3.@pair = insert_value undef.@pair 0.i8 v2;
+        v4.@pair = insert_value v3 1.i8 v1;
+        return v4;
+}
+
+func public %main(v0.i256, v1.i256) -> i256 {
+    block0:
+        v2.@pair = insert_value undef.@pair 0.i8 v0;
+        v3.@pair = insert_value v2 1.i8 v1;
+        v4.@pair = call %swap v3;
+        v5.i256 = extract_value v4 0.i8;
+        return v5;
+}
+
+object @O {
+  section runtime {
+    entry %main;
+  }
+}
+"#,
+        )
+        .unwrap();
+        let original = ModuleWriter::new(&parsed.module).dump_string();
+        compile_object(
+            &parsed.module,
+            &test_backend(),
+            "O",
+            &compile_opts(
+                PushWidthPolicy::Push4,
+                false,
+                false,
+                VerifierConfig::for_level(VerificationLevel::Standard),
+            ),
+        )
+        .expect("compile should succeed");
+
+        let swap = parsed
+            .module
+            .ctx
+            .declared_funcs
+            .iter()
+            .find_map(|entry| (entry.value().name() == "swap").then_some(*entry.key()))
+            .expect("swap should exist");
+        let sig = parsed
+            .module
+            .ctx
+            .get_sig(swap)
+            .expect("signature should exist");
+        assert!(matches!(sig.args(), [Type::Compound(_)]));
+        assert!(matches!(sig.ret_tys(), [Type::Compound(_)]));
+        assert_eq!(ModuleWriter::new(&parsed.module).dump_string(), original);
+    }
+
+    #[test]
     fn compile_object_rejects_internal_multi_return_arity_above_16_for_evm() {
         let ret_tys = std::iter::repeat_n("i32", 17)
             .collect::<Vec<_>>()
@@ -1432,9 +1312,21 @@ object @O {
             object: ObjectId(0),
             section: 0,
         };
-        let membership = build_membership(&program, section_id);
-        let order =
-            compute_function_emission_order(&program, program.section(section_id), &membership);
+        let section = program.section(section_id);
+        let mut section_data: Vec<GlobalVariableRef> = section.data.iter().copied().collect();
+        section_data.sort_unstable();
+        let membership = build_section_membership(
+            &parsed.module,
+            section.entry,
+            &section.includes,
+            &section_data,
+        );
+        let order = compute_section_function_emission_order(
+            &parsed.module,
+            section.entry,
+            &section.includes,
+            &membership,
+        );
         let names: Vec<_> = order
             .into_iter()
             .map(|func| {

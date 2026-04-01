@@ -29,7 +29,7 @@ use crate::{
     liveness::{InstLiveness, Liveness},
     loop_analysis::LoopTree,
     machinst::{
-        lower::{FixupUpdate, Lower, LoweredFunction, SectionCodeUnit, SectionLoweringCtx},
+        lower::{FixupUpdate, Lower, LoweredFunction, SectionCodeUnit, SectionWorkModule},
         vcode::{Label, SymFixup, SymFixupKind, VCode, VCodeFixup, VCodeInst},
     },
     module_analysis::{CallGraph, SccBuilder},
@@ -55,12 +55,13 @@ use crate::{
 };
 use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{
-    BlockId, Function, Immediate, InstId, InstSetExt, Module, Type, U256, ValueId,
+    BlockId, Function, GlobalVariableRef, Immediate, InstId, InstSetExt, Module, Type, U256,
+    ValueId,
     cfg::ControlFlowGraph,
     inst::{control_flow::BranchKind, data::SymbolRef, evm::inst_set::EvmInstKind},
     isa::{Isa, evm::Evm},
     module::{FuncRef, ModuleCtx},
-    object::Directive,
+    object::EmbedSymbol,
     types::{CompoundType, CompoundTypeRef},
 };
 use sonatina_triple::{EvmVersion, OperatingSystem};
@@ -95,16 +96,30 @@ pub enum LateCleanupProfile {
     Size,
 }
 
-#[derive(Clone)]
 pub struct EvmPreparedSection {
+    work: SectionWorkModule,
     funcs: Vec<FuncRef>,
+    globals: Vec<GlobalVariableRef>,
+    used_embed_symbols: FxHashSet<EmbedSymbol>,
     section_plan: EvmSectionPlan,
     function_plans: FxHashMap<FuncRef, EvmFunctionPlan>,
 }
 
 impl EvmPreparedSection {
+    pub fn module(&self) -> &Module {
+        self.work.module()
+    }
+
     pub fn funcs(&self) -> &[FuncRef] {
         &self.funcs
+    }
+
+    pub fn globals(&self) -> &[GlobalVariableRef] {
+        &self.globals
+    }
+
+    pub fn used_embed_symbols(&self) -> &FxHashSet<EmbedSymbol> {
+        &self.used_embed_symbols
     }
 
     fn function_plan(&self, func: FuncRef) -> Option<&EvmFunctionPlan> {
@@ -225,33 +240,19 @@ impl EvmBackend {
     ///
     /// This intentionally includes alloca layout (offset/size + computed address),
     /// so snapshots can assert that alloca reuse is correct across loops/branches.
-    pub fn snapshot_mem_plan(
-        &self,
-        module: &Module,
-        prepared: &EvmPreparedSection,
-        funcs: &[FuncRef],
-    ) -> String {
-        self.snapshot_mem_plan_impl(module, prepared, funcs, false)
+    pub fn snapshot_mem_plan(&self, prepared: &EvmPreparedSection) -> String {
+        self.snapshot_mem_plan_impl(prepared, false)
     }
 
-    pub fn snapshot_mem_plan_detail(
-        &self,
-        module: &Module,
-        prepared: &EvmPreparedSection,
-        funcs: &[FuncRef],
-    ) -> String {
-        self.snapshot_mem_plan_impl(module, prepared, funcs, true)
+    pub fn snapshot_mem_plan_detail(&self, prepared: &EvmPreparedSection) -> String {
+        self.snapshot_mem_plan_impl(prepared, true)
     }
 
-    fn snapshot_mem_plan_impl(
-        &self,
-        module: &Module,
-        prepared: &EvmPreparedSection,
-        funcs: &[FuncRef],
-        detail: bool,
-    ) -> String {
+    fn snapshot_mem_plan_impl(&self, prepared: &EvmPreparedSection, detail: bool) -> String {
         use std::fmt::Write as _;
 
+        let module = prepared.module();
+        let funcs = prepared.funcs();
         let mut out = String::new();
         writeln!(
             &mut out,
@@ -1189,46 +1190,6 @@ impl EntryFrameState {
     }
 }
 
-fn resolve_section_entry(
-    module: &Module,
-    section_ctx: &SectionLoweringCtx<'_>,
-    funcs: &[FuncRef],
-) -> FuncRef {
-    let funcs_set: FxHashSet<FuncRef> = funcs.iter().copied().collect();
-    let object = module.objects.get(section_ctx.object.0.as_str());
-
-    object
-        .and_then(|object| {
-            object
-                .sections
-                .iter()
-                .find(|section| section.name == *section_ctx.section)
-                .or_else(|| {
-                    let mut matches = object.sections.iter().filter(|section| {
-                        section.directives.iter().all(|directive| match directive {
-                            Directive::Entry(func) | Directive::Include(func) => {
-                                funcs_set.contains(func)
-                            }
-                            Directive::Data(_) | Directive::Embed(_) => true,
-                        })
-                    });
-                    let first = matches.next()?;
-                    matches.next().is_none().then_some(first)
-                })
-        })
-        .and_then(|section| {
-            section
-                .directives
-                .iter()
-                .find_map(|directive| match directive {
-                    Directive::Entry(func) => Some(*func),
-                    Directive::Include(_) | Directive::Data(_) | Directive::Embed(_) => None,
-                })
-        })
-        .or_else(|| funcs.first().copied())
-        .expect("section must contain an entry function")
-}
-
 fn compute_dyn_sp_plan(
     module: &Module,
     funcs: &[FuncRef],
@@ -2056,39 +2017,41 @@ fn validate_supported_lowering_ir(func_ref: FuncRef, func: &Function) -> Result<
 }
 
 impl EvmBackend {
-    pub fn prepare_section(
-        &self,
-        module: &Module,
-        funcs: &[FuncRef],
-        section_ctx: &SectionLoweringCtx<'_>,
-    ) -> Result<EvmPreparedSection, String> {
-        let _span =
-            info_span!("sonatina.codegen.evm.prepare_section", funcs = funcs.len()).entered();
+    pub fn prepare_section(&self, work: SectionWorkModule) -> Result<EvmPreparedSection, String> {
+        let module = work.module();
+        let work_funcs = module.funcs();
+        let _span = info_span!(
+            "sonatina.codegen.evm.prepare_section",
+            funcs = work_funcs.len()
+        )
+        .entered();
         let local_object_args = run_evm_pre_memory_aggregate_pipeline(module);
-        legalize_evm_section(module, funcs);
+        legalize_evm_section(module, &work_funcs);
         if self.late_cleanup_profile != LateCleanupProfile::Off {
-            run_evm_post_legalize_cleanup(module, funcs, &local_object_args);
+            run_evm_post_legalize_cleanup(module, &work_funcs, &local_object_args);
         }
-        if let Some((_, message)) = collect_unsupported_evm_multi_return(module, funcs, None)
+        if let Some((_, message)) = collect_unsupported_evm_multi_return(module, &work_funcs, None)
             .into_iter()
             .next()
         {
             return Err(message);
         }
-        for &func in funcs {
+        let membership = work.membership();
+        let funcs = work.function_emission_order(&membership);
+        for &func in &funcs {
             module.func_store.view(func, |function| {
                 validate_supported_lowering_ir(func, function)
             })?;
         }
         let ptr_escape = {
             let _span = debug_span!("sonatina.codegen.evm.compute_ptr_escape_summaries").entered();
-            compute_ptr_escape_summaries(module, funcs, &self.isa)
+            compute_ptr_escape_summaries(module, &funcs, &self.isa)
         };
 
         // Pre-pass: insert free-ptr restore (conservative: treat all calls as barriers).
         {
             let _span = debug_span!("sonatina.codegen.evm.prepare_free_ptr_restore").entered();
-            for &func in funcs {
+            for &func in &funcs {
                 let _span = trace_span!(
                     "sonatina.codegen.evm.prepare_free_ptr_restore.func",
                     func_ref = func.as_u32()
@@ -2102,7 +2065,7 @@ impl EvmBackend {
 
         {
             let _span = debug_span!("sonatina.codegen.evm.aggregate_legalize").entered();
-            for &func in funcs {
+            for &func in &funcs {
                 let _span = trace_span!(
                     "sonatina.codegen.evm.aggregate_legalize.func",
                     func_ref = func.as_u32()
@@ -2115,7 +2078,7 @@ impl EvmBackend {
             }
         }
         if self.late_cleanup_profile != LateCleanupProfile::Off {
-            run_evm_post_memory_legalize_cleanup(module, funcs);
+            run_evm_post_memory_legalize_cleanup(module, &funcs);
         }
 
         {
@@ -2124,13 +2087,13 @@ impl EvmBackend {
         }
 
         let (analyses, scratch_effects) =
-            compute_scratch_effect_analyses(module, funcs, self, &ptr_escape);
+            compute_scratch_effect_analyses(module, &funcs, self, &ptr_escape);
 
         let mut plan = {
             let _span = debug_span!("sonatina.codegen.evm.compute_program_memory_plan").entered();
             compute_program_memory_plan(
                 module,
-                funcs,
+                &funcs,
                 &analyses,
                 &ptr_escape,
                 &self.isa,
@@ -2140,14 +2103,14 @@ impl EvmBackend {
 
         let mem_effects = {
             let _span = trace_span!("sonatina.codegen.evm.compute_func_mem_effects").entered();
-            compute_func_mem_effects(module, funcs, &plan, &scratch_effects, &self.isa)
+            compute_func_mem_effects(module, &funcs, &plan, &scratch_effects, &self.isa)
         };
         let return_escape_caller_abs_words = {
             let _span = trace_span!("sonatina.codegen.evm.compute_return_escape_clamps").entered();
-            compute_return_escape_caller_clamp_words(module, funcs, &plan)
+            compute_return_escape_caller_clamp_words(module, &funcs, &plan)
         };
 
-        for &func in funcs {
+        for &func in &funcs {
             let _span = trace_span!(
                 "sonatina.codegen.evm.annotate_mem_plan_for_func",
                 func_ref = func.as_u32()
@@ -2185,7 +2148,7 @@ impl EvmBackend {
         let malloc_bounds = {
             let _span =
                 debug_span!("sonatina.codegen.evm.compute_malloc_future_abs_words").entered();
-            heap_plan::compute_malloc_future_abs_words(module, funcs, &plan, &analyses, &self.isa)
+            heap_plan::compute_malloc_future_abs_words(module, &funcs, &plan, &analyses, &self.isa)
         };
         for (func, bounds) in malloc_bounds {
             if let Some(mem_plan) = plan.funcs.get_mut(&func) {
@@ -2194,7 +2157,7 @@ impl EvmBackend {
         }
 
         if std::env::var_os("SONATINA_EVM_MEM_DEBUG").is_some() {
-            debug_print_mem_plan(module, funcs, &plan);
+            debug_print_mem_plan(module, &funcs, &plan);
         }
         let has_persistent_mallocs = {
             let _span = trace_span!("sonatina.codegen.evm.detect_persistent_mallocs").entered();
@@ -2240,15 +2203,15 @@ impl EvmBackend {
             })
         };
 
-        let section_entry = resolve_section_entry(module, section_ctx, funcs);
+        let section_entry = work.entry();
         let function_entry_jump_targets = {
             let _span =
                 trace_span!("sonatina.codegen.evm.compute_function_entry_jump_targets").entered();
-            compute_function_entry_jump_targets(module, funcs)
+            compute_function_entry_jump_targets(module, &funcs)
         };
         let dyn_sp_plan = {
             let _span = trace_span!("sonatina.codegen.evm.compute_dyn_sp_plan").entered();
-            compute_dyn_sp_plan(module, funcs, section_entry, &plan, &analyses, &self.isa)
+            compute_dyn_sp_plan(module, &funcs, section_entry, &plan, &analyses, &self.isa)
         };
         let has_dynamic_frames = plan.funcs.values().any(FuncMemPlan::uses_dynamic_frame);
 
@@ -2337,8 +2300,13 @@ impl EvmBackend {
             has_explicit_free_ptr_writes
         )
         .entered();
+        let mut globals: Vec<_> = membership.globals.iter().copied().collect();
+        globals.sort_unstable();
         Ok(EvmPreparedSection {
-            funcs: funcs.to_vec(),
+            work,
+            funcs,
+            globals,
+            used_embed_symbols: membership.used_embed_symbols,
             section_plan,
             function_plans,
         })
@@ -2346,9 +2314,8 @@ impl EvmBackend {
 
     pub fn lower_function(
         &self,
-        module: &Module,
-        func: FuncRef,
         prepared: &EvmPreparedSection,
+        func: FuncRef,
     ) -> Result<LoweredFunction<OpCode>, String> {
         let _span = debug_span!(
             "sonatina.codegen.evm.lower_function",
@@ -2359,18 +2326,21 @@ impl EvmBackend {
             .function_plan(func)
             .ok_or_else(|| format!("missing prepared lowering for func {}", func.as_u32()))?;
         EvmFunctionLowering::new(self, &prepared.section_plan, function_plan)
-            .lower_prepared_function(module, func)
+            .lower_prepared_function(prepared.module(), func)
     }
 
     pub fn post_lower_section(
         &self,
-        module: &Module,
+        prepared: &EvmPreparedSection,
         lowered: &mut [(FuncRef, LoweredFunction<OpCode>)],
     ) -> Result<Vec<SectionCodeUnit<OpCode>>, String> {
         if self.late_cleanup_profile == LateCleanupProfile::Off {
             return Ok(Vec::new());
         }
-        Ok(run_late_section_terminal_outline(module, lowered))
+        Ok(run_late_section_terminal_outline(
+            prepared.module(),
+            lowered,
+        ))
     }
 
     pub fn apply_sym_fixup(
@@ -4460,12 +4430,7 @@ fn u32_to_evm_push_bytes(value: u32, policy: PushWidthPolicy) -> SmallVec<[u8; 4
 mod tests {
     use super::*;
     use crate::{analysis::func_behavior, optim::pipeline::Pipeline};
-    use sonatina_ir::{
-        InstSetBase,
-        cfg::ControlFlowGraph,
-        ir_writer::FuncWriter,
-        object::{EmbedSymbol, ObjectName, SectionName},
-    };
+    use sonatina_ir::{Directive, InstSetBase, cfg::ControlFlowGraph, ir_writer::FuncWriter};
     use sonatina_parser::parse_module;
     use sonatina_triple::{Architecture, TargetTriple, Vendor};
 
@@ -4603,6 +4568,18 @@ mod tests {
             .into_iter()
             .find(|&func| module.ctx.func_sig(func, |sig| sig.name() == name))
             .expect("function exists")
+    }
+
+    fn work_module_with_entry(
+        module: &Module,
+        _funcs: &[FuncRef],
+        entry: FuncRef,
+    ) -> SectionWorkModule {
+        SectionWorkModule::from_roots(module, entry, &[], &[])
+    }
+
+    fn work_module(module: &Module, funcs: &[FuncRef]) -> SectionWorkModule {
+        work_module_with_entry(module, funcs, funcs[0])
     }
 
     fn rewrite_local_fallthrough_order_from_src(
@@ -5520,17 +5497,12 @@ object @Contract {
             operating_system: OperatingSystem::Evm(EvmVersion::Osaka),
         }))
         .with_stackify_reach_depth(4);
-        let object = ObjectName::from("Contract");
-        let section = SectionName::from("runtime");
-        let embeds: Vec<EmbedSymbol> = Vec::new();
-        let section_ctx = SectionLoweringCtx {
-            object: &object,
-            section: &section,
-            embed_symbols: &embeds,
-        };
-
         let prepared = backend
-            .prepare_section(&parsed.module, &funcs, &section_ctx)
+            .prepare_section(work_module_with_entry(
+                &parsed.module,
+                &funcs,
+                names["entry"],
+            ))
             .expect("prepare should succeed");
         assert!(
             !prepared
@@ -5584,21 +5556,16 @@ object @Contract {
             operating_system: OperatingSystem::Evm(EvmVersion::Osaka),
         }))
         .with_late_cleanup_profile(LateCleanupProfile::Speed);
-        let object = ObjectName::from("Contract");
-        let section = SectionName::from("runtime");
-        let embeds: Vec<EmbedSymbol> = Vec::new();
-        let section_ctx = SectionLoweringCtx {
-            object: &object,
-            section: &section,
-            embed_symbols: &embeds,
-        };
-
-        backend
-            .prepare_section(&parsed.module, &funcs, &section_ctx)
+        let prepared = backend
+            .prepare_section(work_module_with_entry(
+                &parsed.module,
+                &funcs,
+                names["entry"],
+            ))
             .expect("prepare should succeed");
 
-        let helper_sig = parsed
-            .module
+        let helper_sig = prepared
+            .module()
             .ctx
             .get_sig(names["helper"])
             .expect("helper signature should exist");
@@ -5607,13 +5574,26 @@ object @Contract {
             1,
             "late cleanup should prune dead helper arg"
         );
-        parsed.module.func_store.view(names["entry"], |function| {
-            let dumped = FuncWriter::new(names["entry"], function).dump_string();
-            assert!(
-                dumped.contains("v1.i256 = call %helper v0;"),
-                "entry callsite should be rewritten after late dead-arg elim:\n{dumped}"
-            );
-        });
+        prepared
+            .module()
+            .func_store
+            .view(names["entry"], |function| {
+                let dumped = FuncWriter::new(names["entry"], function).dump_string();
+                assert!(
+                    dumped.contains("v1.i256 = call %helper v0;"),
+                    "entry callsite should be rewritten after late dead-arg elim:\n{dumped}"
+                );
+            });
+        let original_helper_sig = parsed
+            .module
+            .ctx
+            .get_sig(names["helper"])
+            .expect("original helper signature should exist");
+        assert_eq!(
+            original_helper_sig.args().len(),
+            2,
+            "prepare should not mutate the original module"
+        );
     }
 
     #[test]
@@ -5707,20 +5687,15 @@ object @Contract {
             vendor: Vendor::Ethereum,
             operating_system: OperatingSystem::Evm(EvmVersion::Osaka),
         }));
-        let object = ObjectName::from("Contract");
-        let section = SectionName::from("runtime");
-        let embeds: Vec<EmbedSymbol> = Vec::new();
-        let section_ctx = SectionLoweringCtx {
-            object: &object,
-            section: &section,
-            embed_symbols: &embeds,
-        };
-
         let prepared = backend
-            .prepare_section(&parsed.module, &funcs, &section_ctx)
+            .prepare_section(work_module_with_entry(
+                &parsed.module,
+                &funcs,
+                names["caller"],
+            ))
             .expect("prepare should succeed");
         let lowered = backend
-            .lower_function(&parsed.module, names["caller"], &prepared)
+            .lower_function(&prepared, names["caller"])
             .expect("caller lowers");
 
         assert_eq!(lowered.block_order.len(), 1, "expected single caller block");
@@ -5736,7 +5711,7 @@ object @Contract {
         );
 
         let lowered_abort = backend
-            .lower_function(&parsed.module, names["abort"], &prepared)
+            .lower_function(&prepared, names["abort"])
             .expect("abort lowers");
         let abort_block = lowered_abort.block_order[0];
         let abort_jumpdest_count = lowered_abort
@@ -5782,20 +5757,11 @@ object @Contract {
             vendor: Vendor::Ethereum,
             operating_system: OperatingSystem::Evm(EvmVersion::Osaka),
         }));
-        let object = ObjectName::from("Contract");
-        let section = SectionName::from("runtime");
-        let embeds: Vec<EmbedSymbol> = Vec::new();
-        let section_ctx = SectionLoweringCtx {
-            object: &object,
-            section: &section,
-            embed_symbols: &embeds,
-        };
-
         let prepared = backend
-            .prepare_section(&parsed.module, &[func], &section_ctx)
+            .prepare_section(work_module(&parsed.module, &[func]))
             .expect("prepare should succeed");
         let lowered = backend
-            .lower_function(&parsed.module, func, &prepared)
+            .lower_function(&prepared, func)
             .expect("main lowers");
 
         let block2 = lowered
@@ -5852,20 +5818,11 @@ object @Contract {
             vendor: Vendor::Ethereum,
             operating_system: OperatingSystem::Evm(EvmVersion::Osaka),
         }));
-        let object = ObjectName::from("Contract");
-        let section = SectionName::from("runtime");
-        let embeds: Vec<EmbedSymbol> = Vec::new();
-        let section_ctx = SectionLoweringCtx {
-            object: &object,
-            section: &section,
-            embed_symbols: &embeds,
-        };
-
         let prepared = backend
-            .prepare_section(&parsed.module, &[func], &section_ctx)
+            .prepare_section(work_module(&parsed.module, &[func]))
             .expect("prepare should succeed");
         let lowered = backend
-            .lower_function(&parsed.module, func, &prepared)
+            .lower_function(&prepared, func)
             .expect("entry lowers");
         let ops: Vec<_> = lowered
             .block_order
@@ -5968,20 +5925,11 @@ object @Contract {
             vendor: Vendor::Ethereum,
             operating_system: OperatingSystem::Evm(EvmVersion::Osaka),
         }));
-        let object = ObjectName::from("Contract");
-        let section = SectionName::from("runtime");
-        let embeds: Vec<EmbedSymbol> = Vec::new();
-        let section_ctx = SectionLoweringCtx {
-            object: &object,
-            section: &section,
-            embed_symbols: &embeds,
-        };
-
         let prepared = backend
-            .prepare_section(&parsed.module, &[func], &section_ctx)
+            .prepare_section(work_module(&parsed.module, &[func]))
             .expect("prepare should succeed");
         let lowered = backend
-            .lower_function(&parsed.module, func, &prepared)
+            .lower_function(&prepared, func)
             .expect("main lowers");
 
         assert!(
@@ -6050,20 +5998,11 @@ object @Contract {
             vendor: Vendor::Ethereum,
             operating_system: OperatingSystem::Evm(EvmVersion::Osaka),
         }));
-        let object = ObjectName::from("Contract");
-        let section = SectionName::from("runtime");
-        let embeds: Vec<EmbedSymbol> = Vec::new();
-        let section_ctx = SectionLoweringCtx {
-            object: &object,
-            section: &section,
-            embed_symbols: &embeds,
-        };
-
         let prepared = backend
-            .prepare_section(&parsed.module, &[func], &section_ctx)
+            .prepare_section(work_module(&parsed.module, &[func]))
             .expect("prepare should succeed");
         let lowered = backend
-            .lower_function(&parsed.module, func, &prepared)
+            .lower_function(&prepared, func)
             .expect("main lowers");
         let entry = lowered.block_order[0];
         let ops: Vec<_> = lowered
@@ -6105,17 +6044,8 @@ object @Contract {
             vendor: Vendor::Ethereum,
             operating_system: OperatingSystem::Evm(EvmVersion::Osaka),
         }));
-        let object = ObjectName::from("Contract");
-        let section = SectionName::from("runtime");
-        let embeds: Vec<EmbedSymbol> = Vec::new();
-        let section_ctx = SectionLoweringCtx {
-            object: &object,
-            section: &section,
-            embed_symbols: &embeds,
-        };
-
         let prepared = backend
-            .prepare_section(&parsed.module, &[func], &section_ctx)
+            .prepare_section(work_module(&parsed.module, &[func]))
             .expect("prepare should succeed");
         assert!(
             prepared.function_plan(func).is_some(),
@@ -6123,11 +6053,11 @@ object @Contract {
         );
 
         backend
-            .lower_function(&parsed.module, func, &prepared)
+            .lower_function(&prepared, func)
             .expect("first lower succeeds");
 
         backend
-            .lower_function(&parsed.module, func, &prepared)
+            .lower_function(&prepared, func)
             .expect("second lower succeeds");
     }
 
@@ -6157,17 +6087,8 @@ object @Contract {
             vendor: Vendor::Ethereum,
             operating_system: OperatingSystem::Evm(EvmVersion::Osaka),
         }));
-        let object = ObjectName::from("Contract");
-        let section = SectionName::from("runtime");
-        let embeds: Vec<EmbedSymbol> = Vec::new();
-        let section_ctx = SectionLoweringCtx {
-            object: &object,
-            section: &section,
-            embed_symbols: &embeds,
-        };
-
         let _prepared = backend
-            .prepare_section(&parsed.module, &[func], &section_ctx)
+            .prepare_section(work_module(&parsed.module, &[func]))
             .expect("initial prepare should succeed");
 
         parsed.module.func_store.modify(func, |function| {
@@ -6195,11 +6116,11 @@ object @Contract {
         });
 
         let prepared = backend
-            .prepare_section(&parsed.module, &[func], &section_ctx)
+            .prepare_section(work_module(&parsed.module, &[func]))
             .expect("re-prepare after mutation should succeed");
 
         let lowered = backend
-            .lower_function(&parsed.module, func, &prepared)
+            .lower_function(&prepared, func)
             .expect("lower after mutation succeeds");
         assert!(
             lowered

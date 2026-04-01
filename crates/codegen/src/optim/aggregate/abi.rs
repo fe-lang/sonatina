@@ -510,6 +510,7 @@ mod tests {
     use super::*;
     use crate::{
         isa::evm::{EvmBackend, PushWidthPolicy},
+        machinst::lower::SectionWorkModule,
         object::{CompileOptions, compile_all_objects},
     };
     use sonatina_ir::{Module, isa::evm::Evm, types::CompoundType};
@@ -653,16 +654,29 @@ object @Contract {
 "#,
         );
 
+        let backend = test_backend();
         let opts = CompileOptions {
             fixup_policy: PushWidthPolicy::MinimalRelax,
             emit_symtab: false,
             emit_observability: false,
             verifier_cfg: VerifierConfig::for_level(VerificationLevel::Fast),
         };
-        compile_all_objects(&module, &test_backend(), &opts).expect("compile should succeed");
+        compile_all_objects(&module, &backend, &opts).expect("compile should succeed");
 
-        let swap = lookup_func(&module, "swap");
-        let sig = module.ctx.get_sig(swap).expect("signature should exist");
+        let prepared = backend
+            .prepare_section(SectionWorkModule::from_roots(
+                &module,
+                lookup_func(&module, "entry"),
+                &[],
+                &[],
+            ))
+            .expect("prepare should succeed");
+        let swap = lookup_func(prepared.module(), "swap");
+        let sig = prepared
+            .module()
+            .ctx
+            .get_sig(swap)
+            .expect("signature should exist");
         assert_eq!(sig.args(), &[Type::I256, Type::I256]);
         assert_eq!(sig.ret_tys(), &[Type::I256, Type::I256]);
     }

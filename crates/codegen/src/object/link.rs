@@ -39,7 +39,6 @@ struct BuildSectionObservabilityInput<'a, Op> {
 }
 
 pub fn link_section(
-    module: &Module,
     backend: &EvmBackend,
     prepared: &EvmPreparedSection,
     data: &[(GlobalVariableRef, Vec<u8>)],
@@ -48,6 +47,7 @@ pub fn link_section(
     opts: &CompileOptions,
 ) -> Result<SectionArtifact, LinkSectionError> {
     const MAX_ITERS: usize = 64;
+    let module = prepared.module();
     let funcs = prepared.funcs();
 
     let _span = info_span!(
@@ -70,7 +70,7 @@ pub fn link_section(
             )
             .entered();
             backend
-                .lower_function(module, func, prepared)
+                .lower_function(prepared, func)
                 .map_err(|error| LinkSectionError::Backend { func, error })?
         };
 
@@ -85,7 +85,7 @@ pub fn link_section(
     }
 
     let section_units = backend
-        .post_lower_section(module, &mut lowered_funcs)
+        .post_lower_section(prepared, &mut lowered_funcs)
         .map_err(|error| LinkSectionError::Backend {
             func: funcs[0],
             error,

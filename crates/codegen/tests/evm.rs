@@ -17,7 +17,7 @@ use sonatina_codegen::{
     isa::evm::{EvmBackend, LateCleanupProfile, PushWidthPolicy, canonicalize_alias_value},
     liveness::Liveness,
     machinst::{
-        lower::{LoweredFunction, SectionCodeUnit, SectionLoweringCtx},
+        lower::{LoweredFunction, SectionCodeUnit, SectionWorkModule},
         vcode::{Label, VCodeFixup},
     },
     object::{CompileOptions, compile_all_objects},
@@ -33,7 +33,6 @@ use sonatina_ir::{
     ir_writer::{FuncWriteCtx, FunctionSignature, IrWrite, ModuleWriter},
     isa::evm::Evm,
     module::{Module, ModuleCtx},
-    object::{EmbedSymbol, ObjectName, SectionName},
 };
 use sonatina_parser::{ParsedModule, parse_module};
 use sonatina_triple::{Architecture, OperatingSystem, Vendor};
@@ -193,34 +192,31 @@ fn test_evm(fixture: Fixture<&str>) {
         EvmOptPipeline::Speed => LateCleanupProfile::Speed,
     });
 
-    let object_name = ObjectName::from("Contract");
-    let section_name = SectionName::from("snapshot");
-    let embed_symbols: Vec<EmbedSymbol> = Vec::new();
-    let section_ctx = SectionLoweringCtx {
-        object: &object_name,
-        section: &section_name,
-        embed_symbols: &embed_symbols,
-    };
-
     let prepared = backend
-        .prepare_section(&parsed.module, &func_order, &section_ctx)
+        .prepare_section(SectionWorkModule::from_roots(
+            &parsed.module,
+            func_order[0],
+            &func_order[1..],
+            &[],
+        ))
         .unwrap();
 
-    let mem_plan = backend.snapshot_mem_plan(&parsed.module, &prepared, &func_order);
+    let mem_plan = backend.snapshot_mem_plan(&prepared);
     let (mem_plan_header, mem_plan_funcs) = parse_mem_plan_summary(&mem_plan);
 
-    let mut lowered_funcs: Vec<_> = func_order
+    let mut lowered_funcs: Vec<_> = prepared
+        .funcs()
         .iter()
         .copied()
         .map(|func| {
             backend
-                .lower_function(&parsed.module, func, &prepared)
+                .lower_function(&prepared, func)
                 .map(|lowered| (func, lowered))
                 .unwrap()
         })
         .collect();
     let synthetic_units = backend
-        .post_lower_section(&parsed.module, &mut lowered_funcs)
+        .post_lower_section(&prepared, &mut lowered_funcs)
         .unwrap();
 
     let mut func_stats: Vec<FuncStats> = Vec::new();
@@ -232,8 +228,8 @@ fn test_evm(fixture: Fixture<&str>) {
         let vcode_fixups = lowered.vcode.fixups.len();
         let vcode_imm_bytes = lowered.vcode.inst_imm_bytes.len();
 
-        let name = parsed
-            .module
+        let name = prepared
+            .module()
             .ctx
             .func_sig(*fref, |sig| sig.name().to_string());
 
@@ -242,14 +238,14 @@ fn test_evm(fixture: Fixture<&str>) {
             .cloned()
             .unwrap_or_else(|| format!("<missing mem plan entry for {name}>"));
 
-        let (ir_blocks, ir_insts) = parsed.module.func_store.view(*fref, |function| {
+        let (ir_blocks, ir_insts) = prepared.module().func_store.view(*fref, |function| {
             if emit_stackify_trace || emit_vcode {
                 let ctx = FuncWriteCtx::with_debug_provider(function, *fref, &parsed.debug);
 
                 if emit_stackify_trace {
                     let stackify = stackify_trace_for_fn(
                         function,
-                        &parsed.module.ctx,
+                        &prepared.module().ctx,
                         &backend,
                         stackify_reach_depth,
                     );

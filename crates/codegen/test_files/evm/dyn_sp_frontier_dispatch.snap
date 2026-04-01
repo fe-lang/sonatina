@@ -10,9 +10,9 @@ object: Contract
   total: 122 bytes
 
 functions:
-  ready: ir_blocks=3 ir_insts=10 vcode_ops=55 fixups=4 imm_bytes=11
+  ready: ir_blocks=3 ir_insts=10 vcode_ops=58 fixups=4 imm_bytes=13
     mem: scratch_words=0 stable_words=1 stable_mode=DynamicFrame entry_abs_words=0 abs_words_end=0
-  dispatch: ir_blocks=3 ir_insts=7 vcode_ops=23 fixups=3 imm_bytes=5
+  dispatch: ir_blocks=3 ir_insts=7 vcode_ops=20 fixups=3 imm_bytes=3
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   entry: ir_blocks=1 ir_insts=6 vcode_ops=17 fixups=2 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
@@ -28,6 +28,9 @@ evm:
 ready:
   block0:
     JUMPDEST
+    PUSH1 0xa0 (160)
+    PUSH1 0x80 (128)
+    MSTORE
     PUSH0  // v1.i1 = eq v0 0.i256;
     DUP2
     EQ
@@ -103,11 +106,8 @@ dispatch:
   block2:
     JUMPDEST
     PUSH1 0x1 (1)  // v4.i256 = call %ready 1.i256;
-    PUSH1 `pc + (7)`
+    PUSH1 `pc + (4)`
     SWAP1
-    PUSH1 0xa0 (160)
-    PUSH1 0x80 (128)
-    MSTORE
     PUSH1 FuncRef(0)
     JUMP
     JUMPDEST

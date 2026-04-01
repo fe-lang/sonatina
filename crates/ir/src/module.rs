@@ -4,7 +4,7 @@ use bitflags::bitflags;
 use cranelift_entity::entity_impl;
 use dashmap::{DashMap, ReadOnlyView};
 use rayon::{iter::IntoParallelIterator, prelude::ParallelIterator};
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_triple::TargetTriple;
 
 use crate::{
@@ -106,6 +106,25 @@ impl Module {
 
     pub fn funcs(&self) -> Vec<FuncRef> {
         self.func_store.funcs()
+    }
+
+    pub fn clone_for_funcs(&self, funcs: &[FuncRef]) -> Self {
+        let funcs_set: FxHashSet<FuncRef> = funcs.iter().copied().collect();
+        let ctx = self.ctx.clone_for_funcs(&funcs_set);
+        let cloned = Self {
+            func_store: FuncStore::new(),
+            ctx,
+            objects: self.objects.clone(),
+        };
+
+        for &func_ref in funcs {
+            if let Some(mut function) = self.func_store.try_view(func_ref, Clone::clone) {
+                function.dfg.ctx = cloned.ctx.clone();
+                cloned.func_store.restore(func_ref, function);
+            }
+        }
+
+        cloned
     }
 }
 
@@ -257,6 +276,39 @@ impl ModuleCtx {
             func_effects: Arc::new(RwLock::new(FxHashMap::default())),
             func_hints: Arc::new(RwLock::new(FxHashMap::default())),
             gv_store: Arc::new(RwLock::new(GlobalVariableStore::default())),
+        }
+    }
+
+    pub fn clone_for_funcs(&self, _funcs: &FxHashSet<FuncRef>) -> Self {
+        let declared_funcs = DashMap::new();
+        for entry in self.declared_funcs.iter() {
+            declared_funcs.insert(*entry.key(), entry.value().clone());
+        }
+        let func_effects = self
+            .func_effects
+            .read()
+            .unwrap()
+            .iter()
+            .map(|(&func_ref, effects)| (func_ref, effects.clone()))
+            .collect();
+        let func_hints = self
+            .func_hints
+            .read()
+            .unwrap()
+            .iter()
+            .map(|(&func_ref, &hints)| (func_ref, hints))
+            .collect();
+
+        Self {
+            triple: self.triple,
+            inst_set: self.inst_set,
+            type_layout: self.type_layout,
+            address_spaces: self.address_spaces,
+            declared_funcs: Arc::new(declared_funcs),
+            func_effects: Arc::new(RwLock::new(func_effects)),
+            func_hints: Arc::new(RwLock::new(func_hints)),
+            type_store: Arc::new(RwLock::new(self.type_store.read().unwrap().clone())),
+            gv_store: Arc::new(RwLock::new(self.gv_store.read().unwrap().clone())),
         }
     }
 

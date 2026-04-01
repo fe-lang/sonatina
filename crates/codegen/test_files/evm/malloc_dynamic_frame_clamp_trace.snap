@@ -10,7 +10,7 @@ object: Contract
   total: 22 bytes
 
 functions:
-  dyn: ir_blocks=1 ir_insts=4 vcode_ops=38 fixups=3 imm_bytes=9
+  dyn: ir_blocks=1 ir_insts=4 vcode_ops=41 fixups=3 imm_bytes=11
     mem: scratch_words=0 stable_words=1 stable_mode=DynamicFrame entry_abs_words=0 abs_words_end=0
   main: ir_blocks=1 ir_insts=4 vcode_ops=8 fixups=0 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
@@ -27,6 +27,9 @@ evm:
 dyn:
   block0:
     JUMPDEST
+    PUSH1 0xa0 (160)
+    PUSH1 0x80 (128)
+    MSTORE
     PUSH1 0x80 (128)
     MLOAD
     PUSH1 0x40 (64)
