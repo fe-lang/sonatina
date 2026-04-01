@@ -1,6 +1,6 @@
 use sonatina_codegen::{
     isa::evm::{EvmBackend, PushWidthPolicy},
-    machinst::lower::{LowerBackend, SectionLoweringCtx},
+    machinst::lower::SectionLoweringCtx,
     object::{CompileOptions, compile_object},
 };
 use sonatina_ir::{
@@ -78,7 +78,9 @@ func public %main(v0.i8, v1.i8) -> i8 {
     };
 
     let funcs = defined_funcs(&parsed.module);
-    backend.prepare_section(&parsed.module, &funcs, &section_ctx);
+    backend
+        .prepare_section(&parsed.module, &funcs, &section_ctx)
+        .expect("prepare should succeed");
 
     let mut writer = ModuleWriter::new(&parsed.module);
     let dumped = writer.dump_string();
@@ -116,7 +118,7 @@ func public %main(v0.i8, v1.i8) -> i8 {
 }
 
 #[test]
-fn lower_function_without_prepare_section_legalizes_call_closure() {
+fn lower_function_legalizes_call_closure_after_prepare_section() {
     let source = r#"
 target = "evm-ethereum-osaka"
 
@@ -144,13 +146,12 @@ func public %main(v0.i8) -> i8 {
         embed_symbols: &embed_symbols,
     };
 
+    let prepared = backend
+        .prepare_section(&parsed.module, &defined_funcs(&parsed.module), &section_ctx)
+        .expect("prepare should legalize the full call closure");
     backend
-        .lower_function(
-            &parsed.module,
-            find_func(&parsed.module, "main"),
-            &section_ctx,
-        )
-        .expect("standalone lowering should legalize the full call closure");
+        .lower_function(&parsed.module, find_func(&parsed.module, "main"), &prepared)
+        .expect("lowering should consume the prepared call closure");
 
     for func_name in ["main", "helper"] {
         let sig = parsed
@@ -161,6 +162,90 @@ func public %main(v0.i8) -> i8 {
         assert_eq!(sig.args(), &[sonatina_ir::Type::I256]);
         assert_eq!(sig.ret_tys(), &[sonatina_ir::Type::I256]);
     }
+}
+
+#[test]
+fn prepare_section_rejects_external_multi_return_calls() {
+    let source = r#"
+target = "evm-ethereum-osaka"
+
+declare external %pair_add(i32, i32) -> (i32, i1);
+
+func public %main() {
+    block0:
+        (v0.i32, v1.i1) = call %pair_add 1.i32 2.i32;
+        return;
+}
+"#;
+
+    let parsed = parse_module(source).expect("module should parse");
+    let backend = evm_backend();
+    let object_name = ObjectName::from("Contract");
+    let section_name = SectionName::from("runtime");
+    let embed_symbols: Vec<EmbedSymbol> = Vec::new();
+    let section_ctx = SectionLoweringCtx {
+        object: &object_name,
+        section: &section_name,
+        embed_symbols: &embed_symbols,
+    };
+
+    let err =
+        match backend.prepare_section(&parsed.module, &defined_funcs(&parsed.module), &section_ctx)
+        {
+            Ok(_) => panic!("prepare should reject external multi-return calls"),
+            Err(err) => err,
+        };
+    assert!(err.contains("external or declaration-only multi-return calls"));
+}
+
+#[test]
+fn prepare_section_rejects_call_arity_above_16() {
+    let ret_tys = std::iter::repeat_n("i32", 17)
+        .collect::<Vec<_>>()
+        .join(", ");
+    let ret_values = (0..17)
+        .map(|idx| format!("{idx}.i32"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let call_results = (0..17)
+        .map(|idx| format!("v{idx}.i32"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let source = format!(
+        r#"
+target = "evm-ethereum-osaka"
+
+func public %pair_many() -> ({ret_tys}) {{
+    block0:
+        return ({ret_values});
+}}
+
+func public %main() -> i32 {{
+    block0:
+        ({call_results}) = call %pair_many;
+        return v0;
+}}
+"#
+    );
+
+    let parsed = parse_module(&source).expect("module should parse");
+    let backend = evm_backend();
+    let object_name = ObjectName::from("Contract");
+    let section_name = SectionName::from("runtime");
+    let embed_symbols: Vec<EmbedSymbol> = Vec::new();
+    let section_ctx = SectionLoweringCtx {
+        object: &object_name,
+        section: &section_name,
+        embed_symbols: &embed_symbols,
+    };
+
+    let err =
+        match backend.prepare_section(&parsed.module, &defined_funcs(&parsed.module), &section_ctx)
+        {
+            Ok(_) => panic!("prepare should reject calls with more than 16 results"),
+            Err(err) => err,
+        };
+    assert!(err.contains("supports at most 16"));
 }
 
 #[test]

@@ -17,7 +17,7 @@ use sonatina_codegen::{
     isa::evm::{EvmBackend, LateCleanupProfile, PushWidthPolicy, canonicalize_alias_value},
     liveness::Liveness,
     machinst::{
-        lower::{LowerBackend, LoweredFunction, SectionCodeUnit, SectionLoweringCtx},
+        lower::{LoweredFunction, SectionCodeUnit, SectionLoweringCtx},
         vcode::{Label, VCodeFixup},
     },
     object::{CompileOptions, compile_all_objects},
@@ -202,9 +202,11 @@ fn test_evm(fixture: Fixture<&str>) {
         embed_symbols: &embed_symbols,
     };
 
-    backend.prepare_section(&parsed.module, &func_order, &section_ctx);
+    let prepared = backend
+        .prepare_section(&parsed.module, &func_order, &section_ctx)
+        .unwrap();
 
-    let mem_plan = backend.snapshot_mem_plan(&parsed.module, &func_order);
+    let mem_plan = backend.snapshot_mem_plan(&parsed.module, &prepared, &func_order);
     let (mem_plan_header, mem_plan_funcs) = parse_mem_plan_summary(&mem_plan);
 
     let mut lowered_funcs: Vec<_> = func_order
@@ -212,18 +214,13 @@ fn test_evm(fixture: Fixture<&str>) {
         .copied()
         .map(|func| {
             backend
-                .lower_function(&parsed.module, func, &section_ctx)
+                .lower_function(&parsed.module, func, &prepared)
                 .map(|lowered| (func, lowered))
                 .unwrap()
         })
         .collect();
     let synthetic_units = backend
-        .post_lower_section(
-            &parsed.module,
-            &func_order,
-            &mut lowered_funcs,
-            &section_ctx,
-        )
+        .post_lower_section(&parsed.module, &mut lowered_funcs)
         .unwrap();
 
     let mut func_stats: Vec<FuncStats> = Vec::new();

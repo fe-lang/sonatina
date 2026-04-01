@@ -5,6 +5,7 @@ pub mod error;
 pub mod link;
 pub mod resolve;
 
+use crate::isa::evm::PushWidthPolicy;
 pub use artifact::{
     FrontendProvenanceMap, OBSERVABILITY_SCHEMA_VERSION, ObjectArtifact, ObjectObservability,
     PcMapEntry, SectionArtifact, SectionObservability, SymbolDef, SymbolId, UnmappedReason,
@@ -19,17 +20,17 @@ pub use resolve::{
 use sonatina_verifier::{VerificationLevel, VerifierConfig};
 
 #[derive(Debug, Clone)]
-pub struct CompileOptions<P> {
-    pub fixup_policy: P,
+pub struct CompileOptions {
+    pub fixup_policy: PushWidthPolicy,
     pub emit_symtab: bool,
     pub emit_observability: bool,
     pub verifier_cfg: VerifierConfig,
 }
 
-impl<P: Default> Default for CompileOptions<P> {
+impl Default for CompileOptions {
     fn default() -> Self {
         Self {
-            fixup_policy: P::default(),
+            fixup_policy: PushWidthPolicy::default(),
             emit_symtab: true,
             emit_observability: false,
             verifier_cfg: VerifierConfig::for_level(VerificationLevel::Fast),

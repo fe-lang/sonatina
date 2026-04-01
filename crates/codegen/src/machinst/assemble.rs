@@ -2,6 +2,7 @@ use std::{io, ops::IndexMut};
 
 use cranelift_entity::SecondaryMap;
 use indexmap::IndexMap;
+use smallvec::SmallVec;
 use sonatina_ir::{
     BlockId, Module, U256,
     ir_writer::{DebugProvider, FuncWriteCtx, FunctionSignature, InstStatement, IrWrite},
@@ -9,7 +10,7 @@ use sonatina_ir::{
 };
 
 use super::{
-    lower::{LowerBackend, SectionCodeUnit},
+    lower::SectionCodeUnit,
     vcode::{Label, LabelId, SectionCodeUnitId, VCode, VCodeFixup, VCodeInst},
 };
 
@@ -68,11 +69,17 @@ impl<Op> ObjectLayout<Op> {
         }
     }
 
-    pub fn resize(&mut self, backend: &impl LowerBackend<MInst = Op>, mut offset: u32) -> bool {
+    pub fn resize(
+        &mut self,
+        update_opcode_with_label: &mut impl FnMut(&mut Op, u32) -> SmallVec<[u8; 4]>,
+        update_opcode_with_immediate_bytes: &mut impl FnMut(&mut Op, &mut SmallVec<[u8; 8]>),
+        mut offset: u32,
+    ) -> bool {
         let mut did_change = false;
         for (funcref, layout) in self.functions.iter_mut() {
             did_change |= layout.resize(
-                backend,
+                update_opcode_with_label,
+                update_opcode_with_immediate_bytes,
                 offset,
                 &self.func_offsets,
                 &self.section_unit_offsets,
@@ -82,7 +89,8 @@ impl<Op> ObjectLayout<Op> {
         }
         for (unit_id, unit) in self.section_units.iter_mut() {
             did_change |= unit.layout.resize(
-                backend,
+                update_opcode_with_label,
+                update_opcode_with_immediate_bytes,
                 offset,
                 &self.func_offsets,
                 &self.section_unit_offsets,
@@ -94,12 +102,19 @@ impl<Op> ObjectLayout<Op> {
         did_change
     }
 
-    pub fn emit(&self, backend: &impl LowerBackend<MInst = Op>, buf: &mut Vec<u8>) {
+    pub fn emit(
+        &self,
+        emit_opcode: &mut impl FnMut(&Op, &mut Vec<u8>),
+        emit_immediate_bytes: &mut impl FnMut(&[u8], &mut Vec<u8>),
+        emit_label: &mut impl FnMut(u32, &mut Vec<u8>),
+        buf: &mut Vec<u8>,
+    ) {
         for layout in self.functions.values() {
-            layout.emit(backend, buf);
+            layout.emit(emit_opcode, emit_immediate_bytes, emit_label, buf);
         }
         for unit in self.section_units.values() {
-            unit.layout.emit(backend, buf);
+            unit.layout
+                .emit(emit_opcode, emit_immediate_bytes, emit_label, buf);
         }
     }
 
@@ -195,7 +210,8 @@ impl<Op> FuncLayout<Op> {
 
     fn resize(
         &mut self,
-        backend: &impl LowerBackend<MInst = Op>,
+        update_opcode_with_label: &mut impl FnMut(&mut Op, u32) -> SmallVec<[u8; 4]>,
+        update_opcode_with_immediate_bytes: &mut impl FnMut(&mut Op, &mut SmallVec<[u8; 8]>),
         mut offset: u32,
         fn_offsets: &SecondaryMap<FuncRef, u32>,
         section_unit_offsets: &SecondaryMap<SectionCodeUnitId, u32>,
@@ -222,12 +238,12 @@ impl<Op> FuncLayout<Op> {
                     did_change |= update(self.label_targets.index_mut(*label), address);
 
                     let label_bytes =
-                        backend.update_opcode_with_label(&mut self.vcode.insts[*insn], address);
+                        update_opcode_with_label(&mut self.vcode.insts[*insn], address);
                     offset += label_bytes.len() as u32;
                 }
 
                 if let Some((_, bytes)) = self.vcode.inst_imm_bytes.get_mut(*insn) {
-                    backend.update_opcode_with_immediate_bytes(&mut self.vcode.insts[*insn], bytes);
+                    update_opcode_with_immediate_bytes(&mut self.vcode.insts[*insn], bytes);
                     offset += bytes.len() as u32;
                 }
             }
@@ -236,19 +252,25 @@ impl<Op> FuncLayout<Op> {
         did_change
     }
 
-    fn emit(&self, backend: &impl LowerBackend<MInst = Op>, buf: &mut Vec<u8>) {
+    fn emit(
+        &self,
+        emit_opcode: &mut impl FnMut(&Op, &mut Vec<u8>),
+        emit_immediate_bytes: &mut impl FnMut(&[u8], &mut Vec<u8>),
+        emit_label: &mut impl FnMut(u32, &mut Vec<u8>),
+        buf: &mut Vec<u8>,
+    ) {
         for block in self.block_order.iter().copied() {
             for insn in self.vcode.block_insns(block) {
-                backend.emit_opcode(&self.vcode.insts[insn], buf);
+                emit_opcode(&self.vcode.insts[insn], buf);
                 if let Some((_, fixup)) = self.vcode.fixups.get(insn)
                     && let VCodeFixup::Label(label) = fixup
                 {
                     let address = self.label_targets[*label];
-                    backend.emit_label(address, buf); // xxx emit_address_bytes
+                    emit_label(address, buf); // xxx emit_address_bytes
                 }
 
                 if let Some((_, bytes)) = self.vcode.inst_imm_bytes.get(insn) {
-                    backend.emit_immediate_bytes(bytes, buf);
+                    emit_immediate_bytes(bytes, buf);
                 }
             }
         }

@@ -19,11 +19,6 @@ pub(crate) mod static_arena_alloc;
 
 use opcode::OpCode;
 use rustc_hash::{FxHashMap, FxHashSet};
-use std::{
-    cell::RefCell,
-    collections::hash_map::DefaultHasher,
-    hash::{Hash, Hasher},
-};
 use tracing::{debug_span, info_span, trace_span};
 
 use crate::{
@@ -34,9 +29,7 @@ use crate::{
     liveness::{InstLiveness, Liveness},
     loop_analysis::LoopTree,
     machinst::{
-        lower::{
-            FixupUpdate, Lower, LowerBackend, LoweredFunction, SectionCodeUnit, SectionLoweringCtx,
-        },
+        lower::{FixupUpdate, Lower, LoweredFunction, SectionCodeUnit, SectionLoweringCtx},
         vcode::{Label, SymFixup, SymFixupKind, VCode, VCodeFixup, VCodeInst},
     },
     module_analysis::{CallGraph, SccBuilder},
@@ -65,10 +58,9 @@ use sonatina_ir::{
     BlockId, Function, Immediate, InstId, InstSetExt, Module, Type, U256, ValueId,
     cfg::ControlFlowGraph,
     inst::{control_flow::BranchKind, data::SymbolRef, evm::inst_set::EvmInstKind},
-    ir_writer::{FuncWriter, IrWrite},
     isa::{Isa, evm::Evm},
     module::{FuncRef, ModuleCtx},
-    object::{Directive, ObjectName, SectionName},
+    object::Directive,
     types::{CompoundType, CompoundTypeRef},
 };
 use sonatina_triple::{EvmVersion, OperatingSystem};
@@ -104,20 +96,40 @@ pub enum LateCleanupProfile {
 }
 
 #[derive(Clone)]
-struct PreparedSection {
-    module_ptr: usize,
-    object: ObjectName,
-    section: SectionName,
+pub struct EvmPreparedSection {
     funcs: Vec<FuncRef>,
-    fingerprint: u64,
-    section_entry: FuncRef,
-    plan: ProgramMemoryPlan,
+    section_plan: EvmSectionPlan,
+    function_plans: FxHashMap<FuncRef, EvmFunctionPlan>,
+}
+
+impl EvmPreparedSection {
+    pub fn funcs(&self) -> &[FuncRef] {
+        &self.funcs
+    }
+
+    fn function_plan(&self, func: FuncRef) -> Option<&EvmFunctionPlan> {
+        self.function_plans.get(&func)
+    }
+}
+
+#[derive(Clone)]
+struct EvmSectionPlan {
+    dyn_base: u32,
+    scratch_peak_words: u32,
+    static_chain_peak_words: u32,
     has_persistent_mallocs: bool,
     has_explicit_free_ptr_writes: bool,
-    dyn_sp_plan: DynSpPlan,
-    function_entry_jump_targets: FxHashSet<FuncRef>,
-    allocs: FxHashMap<FuncRef, StackifyAlloc>,
-    block_orders: FxHashMap<FuncRef, Vec<BlockId>>,
+}
+
+#[derive(Clone)]
+struct EvmFunctionPlan {
+    alloc: StackifyAlloc,
+    emitted_block_order: Vec<BlockId>,
+    block_aliases: FxHashMap<BlockId, BlockId>,
+    mem_plan: FuncMemPlan,
+    frame_summary: FrameSummary,
+    dyn_sp_plan: FuncDynSpPlan,
+    function_entry_jumpdest: bool,
 }
 
 #[derive(Clone, Default)]
@@ -143,61 +155,11 @@ enum FrontierInitKind {
     Checked,
 }
 
-#[derive(Clone)]
-struct PreparedLowering {
-    alloc: StackifyAlloc,
-    block_order: Vec<BlockId>,
-    mem_plan: FuncMemPlan,
-    frame_summary: FrameSummary,
-    dyn_sp_plan: Option<FuncDynSpPlan>,
-    function_entry_jumpdest: bool,
-}
-
-fn canonicalize_prepared_funcs(funcs: &[FuncRef]) -> Vec<FuncRef> {
-    let mut funcs = funcs.to_vec();
-    funcs.sort_unstable_by_key(|func| func.as_u32());
-    funcs
-}
-
-fn compute_prepared_section_fingerprint(
-    module: &Module,
-    funcs: &[FuncRef],
-    section_ctx: &SectionLoweringCtx<'_>,
-) -> u64 {
-    let funcs = canonicalize_prepared_funcs(funcs);
-    let mut hasher = DefaultHasher::new();
-    section_ctx.object.hash(&mut hasher);
-    section_ctx.section.hash(&mut hasher);
-
-    if let Some(object) = module.objects.get(section_ctx.object.0.as_str()) {
-        let mut bytes = Vec::new();
-        object
-            .write(&mut bytes, &module.ctx)
-            .expect("object fingerprint write failed");
-        bytes.hash(&mut hasher);
-    }
-
-    for &func in &funcs {
-        func.as_u32().hash(&mut hasher);
-        let func_text = module.func_store.view(func, |function| {
-            FuncWriter::new(func, function).dump_string()
-        });
-        func_text.hash(&mut hasher);
-    }
-
-    hasher.finish()
-}
-
 pub struct EvmBackend {
     isa: Evm,
     stackify_reach_depth: u8,
     arena_cost_model: ArenaCostModel,
     late_cleanup_profile: LateCleanupProfile,
-    section_state: RefCell<Option<PreparedSection>>,
-    current_mem_plan: RefCell<Option<FuncMemPlan>>,
-    current_frame_summary: RefCell<Option<FrameSummary>>,
-    current_dyn_sp_plan: RefCell<Option<FuncDynSpPlan>>,
-    current_block_aliases: RefCell<Option<FxHashMap<BlockId, BlockId>>>,
 }
 impl EvmBackend {
     pub fn new(isa: Evm) -> Self {
@@ -214,11 +176,6 @@ impl EvmBackend {
             stackify_reach_depth: 16,
             arena_cost_model: ArenaCostModel::default(),
             late_cleanup_profile: LateCleanupProfile::Speed,
-            section_state: RefCell::new(None),
-            current_mem_plan: RefCell::new(None),
-            current_frame_summary: RefCell::new(None),
-            current_dyn_sp_plan: RefCell::new(None),
-            current_block_aliases: RefCell::new(None),
         }
     }
 
@@ -268,35 +225,46 @@ impl EvmBackend {
     ///
     /// This intentionally includes alloca layout (offset/size + computed address),
     /// so snapshots can assert that alloca reuse is correct across loops/branches.
-    pub fn snapshot_mem_plan(&self, module: &Module, funcs: &[FuncRef]) -> String {
-        self.snapshot_mem_plan_impl(module, funcs, false)
+    pub fn snapshot_mem_plan(
+        &self,
+        module: &Module,
+        prepared: &EvmPreparedSection,
+        funcs: &[FuncRef],
+    ) -> String {
+        self.snapshot_mem_plan_impl(module, prepared, funcs, false)
     }
 
-    pub fn snapshot_mem_plan_detail(&self, module: &Module, funcs: &[FuncRef]) -> String {
-        self.snapshot_mem_plan_impl(module, funcs, true)
+    pub fn snapshot_mem_plan_detail(
+        &self,
+        module: &Module,
+        prepared: &EvmPreparedSection,
+        funcs: &[FuncRef],
+    ) -> String {
+        self.snapshot_mem_plan_impl(module, prepared, funcs, true)
     }
 
-    fn snapshot_mem_plan_impl(&self, module: &Module, funcs: &[FuncRef], detail: bool) -> String {
+    fn snapshot_mem_plan_impl(
+        &self,
+        module: &Module,
+        prepared: &EvmPreparedSection,
+        funcs: &[FuncRef],
+        detail: bool,
+    ) -> String {
         use std::fmt::Write as _;
-
-        let state = self.section_state.borrow();
-        let Some(section) = state.as_ref() else {
-            return String::new();
-        };
 
         let mut out = String::new();
         writeln!(
             &mut out,
             "evm mem plan: global_dyn_base=0x{:x} static_base=0x{:x} scratch_peak_words={} static_chain_peak_words={}",
-            section.plan.global_dyn_base,
+            prepared.section_plan.dyn_base,
             STATIC_BASE,
-            section.plan.scratch_peak_words,
-            section.plan.static_chain_peak_words
+            prepared.section_plan.scratch_peak_words,
+            prepared.section_plan.static_chain_peak_words
         )
         .expect("mem plan write failed");
 
         for &func in funcs {
-            let Some(func_plan) = section.plan.funcs.get(&func) else {
+            let Some(func_plan) = prepared.function_plan(func).map(|plan| &plan.mem_plan) else {
                 continue;
             };
 
@@ -408,7 +376,7 @@ impl EvmBackend {
                 }
 
                 let mut scratch_spills: Vec<(ValueId, u32)> = Vec::new();
-                if let Some(alloc) = section.allocs.get(&func) {
+                if let Some(alloc) = prepared.function_plan(func).map(|plan| &plan.alloc) {
                     module.func_store.view(func, |function| {
                         for v in function.dfg.value_ids() {
                             let Some(slot) = alloc.scratch_slot_of_value[v] else {
@@ -514,148 +482,55 @@ impl EvmBackend {
 
         out
     }
+}
 
-    fn prepared_section_matches(
-        &self,
-        module: &Module,
-        funcs: &[FuncRef],
-        section_ctx: &SectionLoweringCtx<'_>,
-    ) -> bool {
-        let Some((module_ptr, object, section, prepared_funcs, fingerprint)) =
-            self.section_state.borrow().as_ref().map(|state| {
-                (
-                    state.module_ptr,
-                    state.object.clone(),
-                    state.section.clone(),
-                    state.funcs.clone(),
-                    state.fingerprint,
-                )
-            })
-        else {
-            return false;
-        };
+struct EvmFunctionLowering<'a> {
+    backend: &'a EvmBackend,
+    section_plan: &'a EvmSectionPlan,
+    function_plan: &'a EvmFunctionPlan,
+}
 
-        module_ptr == module as *const _ as usize
-            && object == *section_ctx.object
-            && section == *section_ctx.section
-            && prepared_funcs == canonicalize_prepared_funcs(funcs)
-            && fingerprint
-                == compute_prepared_section_fingerprint(module, &prepared_funcs, section_ctx)
-    }
-
-    fn prepared_function(
-        &self,
-        module: &Module,
-        func: FuncRef,
-        section_ctx: &SectionLoweringCtx<'_>,
-    ) -> Option<PreparedLowering> {
-        let (module_ptr, object, section, funcs, fingerprint) =
-            self.section_state.borrow().as_ref().map(|state| {
-                (
-                    state.module_ptr,
-                    state.object.clone(),
-                    state.section.clone(),
-                    state.funcs.clone(),
-                    state.fingerprint,
-                )
-            })?;
-
-        if module_ptr != module as *const _ as usize
-            || object != *section_ctx.object
-            || section != *section_ctx.section
-            || !funcs.contains(&func)
-            || fingerprint != compute_prepared_section_fingerprint(module, &funcs, section_ctx)
-        {
-            *self.section_state.borrow_mut() = None;
-            return None;
+impl<'a> EvmFunctionLowering<'a> {
+    fn new(
+        backend: &'a EvmBackend,
+        section_plan: &'a EvmSectionPlan,
+        function_plan: &'a EvmFunctionPlan,
+    ) -> Self {
+        Self {
+            backend,
+            section_plan,
+            function_plan,
         }
-
-        let state = self.section_state.borrow();
-        let section = state.as_ref()?;
-
-        let alloc = section.allocs.get(&func)?.clone();
-        let block_order = section.block_orders.get(&func)?.clone();
-        let mem_plan = section.plan.funcs.get(&func).cloned()?;
-        let frame_summary = section
-            .dyn_sp_plan
-            .frame_summaries
-            .get(&func)
-            .cloned()
-            .unwrap_or_default();
-        let dyn_sp_plan = Some(FuncDynSpPlan {
-            entry_init: func == section.section_entry && section.dyn_sp_plan.entry_init,
-            frontier_init_calls: section
-                .dyn_sp_plan
-                .frontier_init_calls
-                .get(&func)
-                .cloned()
-                .unwrap_or_default(),
-            checked_frontier_init_calls: section
-                .dyn_sp_plan
-                .checked_frontier_init_calls
-                .get(&func)
-                .cloned()
-                .unwrap_or_default(),
-            entry_live_frame: section
-                .dyn_sp_plan
-                .entry_live_frame
-                .get(&func)
-                .copied()
-                .unwrap_or(false),
-        });
-
-        Some(PreparedLowering {
-            alloc,
-            block_order,
-            mem_plan,
-            frame_summary,
-            dyn_sp_plan,
-            function_entry_jumpdest: section.function_entry_jump_targets.contains(&func),
-        })
     }
 
     fn dyn_base(&self) -> u32 {
-        self.section_state
-            .borrow()
-            .as_ref()
-            .map(|s| s.plan.global_dyn_base)
-            .unwrap_or(STATIC_BASE)
+        self.section_plan.dyn_base
     }
 
     fn emit_frame_enter(&self, ctx: &mut Lower<OpCode>, frame_size_slots: u32) {
-        if self.current_dyn_sp_plan.borrow().is_some() {
-            enter_frame_initialized(ctx, frame_size_slots);
-        } else {
-            enter_frame_compat(ctx, frame_size_slots, self.dyn_base());
-        }
+        enter_frame_initialized(ctx, frame_size_slots);
     }
 
-    fn current_lazy_frame_plan_matches(&self, pred: impl FnOnce(&LazyFramePlan) -> bool) -> bool {
-        self.current_frame_summary
-            .borrow()
+    fn lazy_frame_plan_matches(&self, pred: impl FnOnce(&LazyFramePlan) -> bool) -> bool {
+        self.function_plan
+            .frame_summary
+            .lowering
             .as_ref()
-            .and_then(|summary| summary.lowering.as_ref())
             .is_some_and(pred)
     }
 
-    fn has_current_lazy_frame_lowering(&self) -> bool {
-        self.current_frame_summary
-            .borrow()
-            .as_ref()
-            .and_then(|summary| summary.lowering.as_ref())
-            .is_some()
+    fn has_lazy_frame_lowering(&self) -> bool {
+        self.function_plan.frame_summary.lowering.is_some()
     }
 
-    fn current_local_frame_active_before_inst(&self, inst: InstId) -> bool {
-        self.current_frame_summary
-            .borrow()
-            .as_ref()
-            .is_some_and(|summary| summary.local_frame_active_before_inst(inst))
+    fn local_frame_active_before_inst(&self, inst: InstId) -> bool {
+        self.function_plan
+            .frame_summary
+            .local_frame_active_before_inst(inst)
     }
 
-    fn current_frontier_init_kind(&self, inst: InstId) -> Option<FrontierInitKind> {
-        let plan = self.current_dyn_sp_plan.borrow();
-        let plan = plan.as_ref()?;
+    fn frontier_init_kind(&self, inst: InstId) -> Option<FrontierInitKind> {
+        let plan = &self.function_plan.dyn_sp_plan;
         if plan.checked_frontier_init_calls.contains(&inst) {
             Some(FrontierInitKind::Checked)
         } else if plan.frontier_init_calls.contains(&inst) {
@@ -665,32 +540,20 @@ impl EvmBackend {
         }
     }
 
-    fn current_malloc_needs_dyn_sp_clamp(&self, inst: InstId) -> bool {
-        let entry_live_frame = self
-            .current_dyn_sp_plan
-            .borrow()
-            .as_ref()
-            .map(|plan| plan.entry_live_frame);
-        entry_live_frame
-            .map(|entry_live_frame| {
-                entry_live_frame || self.current_local_frame_active_before_inst(inst)
-            })
-            .unwrap_or(true)
+    fn malloc_needs_dyn_sp_clamp(&self, inst: InstId) -> bool {
+        self.function_plan.dyn_sp_plan.entry_live_frame || self.local_frame_active_before_inst(inst)
     }
 
     fn canonical_block_target(&self, block: BlockId) -> BlockId {
-        self.current_block_aliases
-            .borrow()
-            .as_ref()
-            .and_then(|aliases| aliases.get(&block).copied())
+        self.function_plan
+            .block_aliases
+            .get(&block)
+            .copied()
             .unwrap_or(block)
     }
 
     fn is_elided_block(&self, block: BlockId) -> bool {
-        self.current_block_aliases
-            .borrow()
-            .as_ref()
-            .is_some_and(|aliases| aliases.contains_key(&block))
+        self.function_plan.block_aliases.contains_key(&block)
     }
 
     fn emit_lazy_frame_enter_if_site_matches(
@@ -699,7 +562,7 @@ impl EvmBackend {
         frame_size_slots: u32,
         site: FrameSite,
     ) {
-        if self.current_lazy_frame_plan_matches(|plan| plan.enter_before_site(site)) {
+        if self.lazy_frame_plan_matches(|plan| plan.enter_before_site(site)) {
             self.emit_frame_enter(ctx, frame_size_slots);
         }
     }
@@ -710,7 +573,7 @@ impl EvmBackend {
         frame_size_slots: u32,
         site: FrameSite,
     ) {
-        if self.current_lazy_frame_plan_matches(|plan| plan.exit_before_site(site)) {
+        if self.lazy_frame_plan_matches(|plan| plan.exit_before_site(site)) {
             leave_frame(ctx, frame_size_slots);
         }
     }
@@ -740,92 +603,54 @@ impl EvmBackend {
             let index = action_index_offset
                 .checked_add(index)
                 .expect("lazy frame action index overflow");
-            if self.current_lazy_frame_plan_matches(|plan| plan.enter_before_action(site, index)) {
+            if self.lazy_frame_plan_matches(|plan| plan.enter_before_action(site, index)) {
                 self.emit_frame_enter(ctx, frame_size_slots);
             }
-            if self.current_lazy_frame_plan_matches(|plan| plan.exit_before_action(site, index)) {
+            if self.lazy_frame_plan_matches(|plan| plan.exit_before_action(site, index)) {
                 leave_frame(ctx, frame_size_slots);
             }
             perform_action(ctx, action, frame_size_slots);
-            if self.current_lazy_frame_plan_matches(|plan| plan.exit_after_action(site, index)) {
+            if self.lazy_frame_plan_matches(|plan| plan.exit_after_action(site, index)) {
                 leave_frame(ctx, frame_size_slots);
             }
         }
 
-        if self.current_lazy_frame_plan_matches(|plan| plan.exit_after_site(site)) {
+        if self.lazy_frame_plan_matches(|plan| plan.exit_after_site(site)) {
             leave_frame(ctx, frame_size_slots);
         }
-    }
-
-    fn section_has_persistent_mallocs(&self) -> bool {
-        self.section_state
-            .borrow()
-            .as_ref()
-            .is_none_or(|s| s.has_persistent_mallocs)
-    }
-
-    fn section_has_explicit_free_ptr_writes(&self) -> bool {
-        self.section_state
-            .borrow()
-            .as_ref()
-            .is_none_or(|s| s.has_explicit_free_ptr_writes)
     }
 
     fn lower_prepared_function(
         &self,
         module: &Module,
         func: FuncRef,
-        prepared: PreparedLowering,
     ) -> Result<LoweredFunction<OpCode>, String> {
-        let PreparedLowering {
-            alloc,
-            block_order,
-            mem_plan,
-            frame_summary,
-            dyn_sp_plan,
-            function_entry_jumpdest,
-        } = prepared;
+        let mut emitted_block_order = self.function_plan.emitted_block_order.clone();
         let _span = trace_span!(
             "sonatina.codegen.evm.lower_prepared_function",
             func_ref = func.as_u32(),
-            blocks = block_order.len()
+            blocks = emitted_block_order.len()
         )
         .entered();
-        let alias_plan = module.func_store.view(func, |function| {
-            compute_late_block_alias_plan(function, &alloc, &frame_summary, &block_order)
-        });
-        let LateBlockAliasPlan {
-            aliases: block_aliases,
-            emitted_block_order,
-        } = alias_plan;
-        let mut emitted_block_order = if self.late_cleanup_profile != LateCleanupProfile::Off {
-            module.func_store.view(func, |function| {
-                rewrite_evm_local_fallthrough_layout(function, &block_aliases, emitted_block_order)
-            })
-        } else {
-            emitted_block_order
-        };
         module.func_store.view(func, |function| {
             assert_aggregate_legalized(function, &module.ctx);
         });
         let mut vcode = {
             let _span = trace_span!("sonatina.codegen.evm.lower_prepared_function.lower").entered();
             module.func_store.view(func, |function| {
-                let _plan_guard =
-                    CurrentMemPlanGuard::new(&self.current_mem_plan, mem_plan.clone());
-                let _frame_summary_guard = CurrentFrameSummaryGuard::new(
-                    &self.current_frame_summary,
-                    frame_summary.clone(),
+                let mut alloc = FinalAlloc::new(
+                    self.function_plan.alloc.clone(),
+                    self.function_plan.mem_plan.clone(),
                 );
-                let _dyn_sp_plan_guard =
-                    CurrentDynSpPlanGuard::new(&self.current_dyn_sp_plan, dyn_sp_plan.clone());
-                let _block_alias_guard = CurrentBlockAliasesGuard::new(
-                    &self.current_block_aliases,
-                    block_aliases.clone(),
-                );
-                let mut alloc = FinalAlloc::new(alloc, mem_plan);
                 let lower = Lower::new(&module.ctx, function, &emitted_block_order);
-                lower.lower(self, &mut alloc).map_err(|e| format!("{e:?}"))
+                lower
+                    .lower(
+                        &mut alloc,
+                        |ctx, alloc, block| self.enter_block(ctx, alloc, block),
+                        |ctx, alloc, function| self.enter_function(ctx, alloc, function),
+                        |ctx, alloc, insn| self.lower_insn(ctx, alloc, insn),
+                    )
+                    .map_err(|e| format!("{e:?}"))
             })?
         };
         {
@@ -834,7 +659,7 @@ impl EvmBackend {
                     .entered();
             prune_redundant_opcode_sequences(&mut vcode, &emitted_block_order);
         }
-        if self.late_cleanup_profile != LateCleanupProfile::Off {
+        if self.backend.late_cleanup_profile != LateCleanupProfile::Off {
             let _span =
                 trace_span!("sonatina.codegen.evm.lower_prepared_function.late_block_merge")
                     .entered();
@@ -846,7 +671,7 @@ impl EvmBackend {
                         .layout
                         .entry_block()
                         .expect("prepared lowering requires an entry block"),
-                    self.late_cleanup_profile,
+                    self.backend.late_cleanup_profile,
                 );
             });
         }
@@ -859,7 +684,7 @@ impl EvmBackend {
                     &mut vcode,
                     function,
                     &emitted_block_order,
-                    function_entry_jumpdest,
+                    self.function_plan.function_entry_jumpdest,
                 );
             });
         }
@@ -876,34 +701,31 @@ impl EvmBackend {
         args: &[ValueId],
         steps: &[GepStep],
     ) -> Option<u32> {
-        let mem_plan = self.current_mem_plan.borrow();
-        let mem_plan = mem_plan.as_ref()?;
         let &base = args.first()?;
-        let base_addr = self.try_fold_static_arena_addr_value(ctx, mem_plan, base)?;
+        let base_addr = self.try_fold_static_arena_addr_value(ctx, base)?;
         let offset = gep_const_offset_bytes(steps)?;
         base_addr.checked_add(offset)
     }
 
-    fn try_fold_static_arena_addr_value(
-        &self,
-        ctx: &Lower<OpCode>,
-        mem_plan: &FuncMemPlan,
-        value: ValueId,
-    ) -> Option<u32> {
+    fn try_fold_static_arena_addr_value(&self, ctx: &Lower<OpCode>, value: ValueId) -> Option<u32> {
         let inst = ctx.value_def_inst(value)?;
-        let data = self.isa.inst_set().resolve_inst(ctx.insn_data(inst));
+        let data = self
+            .backend
+            .isa
+            .inst_set()
+            .resolve_inst(ctx.insn_data(inst));
         match data {
             EvmInstKind::Alloca(_) => {
-                let loc = mem_plan.alloca_loc.get(&inst).copied()?;
-                obj_loc_abs_addr_bytes(mem_plan, loc)
+                let loc = self.function_plan.mem_plan.alloca_loc.get(&inst).copied()?;
+                obj_loc_abs_addr_bytes(&self.function_plan.mem_plan, loc)
             }
             EvmInstKind::Bitcast(bitcast) => {
-                self.try_fold_static_arena_addr_value(ctx, mem_plan, *bitcast.from())
+                self.try_fold_static_arena_addr_value(ctx, *bitcast.from())
             }
             EvmInstKind::Gep(gep) => {
                 let values = gep.values();
                 let &base = values.first()?;
-                let base_addr = self.try_fold_static_arena_addr_value(ctx, mem_plan, base)?;
+                let base_addr = self.try_fold_static_arena_addr_value(ctx, base)?;
                 let steps = build_gep_lower_plan(ctx, values.as_slice()).steps;
                 let offset = gep_const_offset_bytes(&steps)?;
                 base_addr.checked_add(offset)
@@ -1843,77 +1665,6 @@ fn prune_redundant_opcode_sequences(vcode: &mut VCode<OpCode>, block_order: &[Bl
     }
 }
 
-struct CurrentMemPlanGuard<'a> {
-    slot: &'a RefCell<Option<FuncMemPlan>>,
-}
-
-impl<'a> CurrentMemPlanGuard<'a> {
-    fn new(slot: &'a RefCell<Option<FuncMemPlan>>, plan: FuncMemPlan) -> Self {
-        *slot.borrow_mut() = Some(plan);
-        Self { slot }
-    }
-}
-
-impl Drop for CurrentMemPlanGuard<'_> {
-    fn drop(&mut self) {
-        *self.slot.borrow_mut() = None;
-    }
-}
-
-struct CurrentFrameSummaryGuard<'a> {
-    slot: &'a RefCell<Option<FrameSummary>>,
-}
-
-impl<'a> CurrentFrameSummaryGuard<'a> {
-    fn new(slot: &'a RefCell<Option<FrameSummary>>, summary: FrameSummary) -> Self {
-        *slot.borrow_mut() = Some(summary);
-        Self { slot }
-    }
-}
-
-impl Drop for CurrentFrameSummaryGuard<'_> {
-    fn drop(&mut self) {
-        *self.slot.borrow_mut() = None;
-    }
-}
-
-struct CurrentDynSpPlanGuard<'a> {
-    slot: &'a RefCell<Option<FuncDynSpPlan>>,
-}
-
-impl<'a> CurrentDynSpPlanGuard<'a> {
-    fn new(slot: &'a RefCell<Option<FuncDynSpPlan>>, plan: Option<FuncDynSpPlan>) -> Self {
-        *slot.borrow_mut() = plan;
-        Self { slot }
-    }
-}
-
-impl Drop for CurrentDynSpPlanGuard<'_> {
-    fn drop(&mut self) {
-        *self.slot.borrow_mut() = None;
-    }
-}
-
-struct CurrentBlockAliasesGuard<'a> {
-    slot: &'a RefCell<Option<FxHashMap<BlockId, BlockId>>>,
-}
-
-impl<'a> CurrentBlockAliasesGuard<'a> {
-    fn new(
-        slot: &'a RefCell<Option<FxHashMap<BlockId, BlockId>>>,
-        aliases: FxHashMap<BlockId, BlockId>,
-    ) -> Self {
-        *slot.borrow_mut() = Some(aliases);
-        Self { slot }
-    }
-}
-
-impl Drop for CurrentBlockAliasesGuard<'_> {
-    fn drop(&mut self) {
-        *self.slot.borrow_mut() = None;
-    }
-}
-
 fn type_is_legalized_evm(ctx: &ModuleCtx, ty: Type, seen: &mut FxHashSet<CompoundTypeRef>) -> bool {
     match ty {
         Type::I1 | Type::I256 | Type::Unit => true,
@@ -1943,54 +1694,15 @@ fn type_is_legalized_evm(ctx: &ModuleCtx, ty: Type, seen: &mut FxHashSet<Compoun
     }
 }
 
-fn assert_type_is_legalized_evm(ctx: &ModuleCtx, ty: Type, context: &str) {
+fn validate_type_is_legalized_evm(ctx: &ModuleCtx, ty: Type, context: &str) -> Result<(), String> {
     let mut seen = FxHashSet::default();
-    assert!(
-        type_is_legalized_evm(ctx, ty, &mut seen),
-        "{context} must be legalized to the EVM scalar subset, found {ty:?}"
-    );
-}
-
-fn collect_call_closure(module: &Module, roots: &[FuncRef]) -> Vec<FuncRef> {
-    let mut closure = FxHashSet::default();
-    let mut worklist = Vec::from(roots);
-    let evm_inst_set = Evm::new(module.ctx.triple).inst_set();
-
-    while let Some(func_ref) = worklist.pop() {
-        if !module.ctx.declared_funcs.contains_key(&func_ref) || !closure.insert(func_ref) {
-            continue;
-        }
-
-        if !module.ctx.func_linkage(func_ref).has_definition() {
-            continue;
-        }
-
-        module.func_store.view(func_ref, |func| {
-            for block in func.layout.iter_block() {
-                for inst in func.layout.iter_inst(block) {
-                    match evm_inst_set.resolve_inst(func.dfg.inst(inst)) {
-                        EvmInstKind::Call(call) => worklist.push(*call.callee()),
-                        EvmInstKind::GetFunctionPtr(ptr) => worklist.push(*ptr.func()),
-                        EvmInstKind::SymAddr(sym) => {
-                            if let SymbolRef::Func(sym_func) = sym.sym() {
-                                worklist.push(*sym_func);
-                            }
-                        }
-                        EvmInstKind::SymSize(sym) => {
-                            if let SymbolRef::Func(sym_func) = sym.sym() {
-                                worklist.push(*sym_func);
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-            }
-        });
+    if type_is_legalized_evm(ctx, ty, &mut seen) {
+        Ok(())
+    } else {
+        Err(format!(
+            "{context} must be legalized to the EVM scalar subset, found {ty:?}"
+        ))
     }
-
-    let mut closure: Vec<_> = closure.into_iter().collect();
-    closure.sort_unstable();
-    closure
 }
 
 fn run_evm_pre_memory_aggregate_pipeline(module: &Module) -> LocalObjectArgMap {
@@ -2114,25 +1826,151 @@ fn run_evm_post_memory_legalize_cleanup(module: &Module, funcs: &[FuncRef]) {
     }
 }
 
-fn assert_supported_lowering_ir(func_ref: FuncRef, func: &Function) {
+pub(crate) fn collect_unsupported_evm_multi_return(
+    module: &Module,
+    funcs: &[FuncRef],
+    entry: Option<FuncRef>,
+) -> Vec<(FuncRef, String)> {
+    let mut errors = Vec::new();
+
+    for &func in funcs {
+        let Some(sig) = module.ctx.get_sig(func) else {
+            continue;
+        };
+        let func_name = format!("%{}", sig.name());
+        let ret_count = sig.ret_tys().len();
+
+        if ret_count > 16 {
+            errors.push((
+                func,
+                format!(
+                    "EVM backend supports at most 16 internal return values, but function {func_name} has {ret_count}"
+                ),
+            ));
+        }
+        if entry == Some(func) && ret_count > 1 {
+            errors.push((
+                func,
+                format!(
+                    "EVM backend does not support section entry {func_name} with {ret_count} return values"
+                ),
+            ));
+        }
+        if ret_count > 1 && !sig.linkage().has_definition() {
+            errors.push((
+                func,
+                format!(
+                    "EVM backend does not support declaration-only function {func_name} with {ret_count} return values"
+                ),
+            ));
+        }
+
+        module.func_store.view(func, |function| {
+            for block in function.layout.iter_block() {
+                for inst in function.layout.iter_inst(block) {
+                    if let Some(call) = function.dfg.call_info(inst) {
+                        let call_results = function.dfg.inst_results(inst);
+                        let callee = call.callee();
+                        let callee_name = module
+                            .ctx
+                            .get_sig(callee)
+                            .map(|sig| format!("%{}", sig.name()))
+                            .unwrap_or_else(|| format!("{callee:?}"));
+
+                        if call_results.len() > 16 {
+                            errors.push((
+                                func,
+                                format!(
+                                    "EVM backend supports at most 16 call results, but inst{} has {} results to {callee_name}",
+                                    inst.as_u32(),
+                                    call_results.len()
+                                ),
+                            ));
+                        }
+
+                        if let Some(callee_sig) = module.ctx.get_sig(callee) {
+                            if callee_sig.ret_tys().len() > 16 {
+                                errors.push((
+                                    func,
+                                    format!(
+                                        "EVM backend supports at most 16 internal return values, but callee {callee_name} has {}",
+                                        callee_sig.ret_tys().len()
+                                    ),
+                                ));
+                            }
+                            if callee_sig.ret_tys().len() > 1 && !callee_sig.linkage().has_definition()
+                            {
+                                errors.push((
+                                    func,
+                                    format!(
+                                        "EVM backend does not support external or declaration-only multi-return calls to {callee_name}"
+                                    ),
+                                ));
+                            }
+                            if call_results.len() != callee_sig.ret_tys().len() {
+                                errors.push((
+                                    func,
+                                    format!(
+                                        "call inst{} result count {} does not match callee {callee_name} return count {}",
+                                        inst.as_u32(),
+                                        call_results.len(),
+                                        callee_sig.ret_tys().len()
+                                    ),
+                                ));
+                            }
+                        }
+                    }
+
+                    if let Some(return_args) = function.dfg.return_args(inst) {
+                        if return_args.len() > 16 {
+                            errors.push((
+                                func,
+                                format!(
+                                    "EVM backend supports at most 16 return values, but return inst{} has {}",
+                                    inst.as_u32(),
+                                    return_args.len()
+                                ),
+                            ));
+                        }
+                        if return_args.len() != sig.ret_tys().len() {
+                            errors.push((
+                                func,
+                                format!(
+                                    "return inst{} value count {} does not match function signature return count {}",
+                                    inst.as_u32(),
+                                    return_args.len(),
+                                    sig.ret_tys().len()
+                                ),
+                            ));
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    errors
+}
+
+fn validate_supported_lowering_ir(func_ref: FuncRef, func: &Function) -> Result<(), String> {
     if let Some(sig) = func.ctx().get_sig(func_ref) {
         for &arg in sig.args() {
-            assert_type_is_legalized_evm(func.ctx(), arg, "function argument type");
+            validate_type_is_legalized_evm(func.ctx(), arg, "function argument type")?;
         }
         for &ret in sig.ret_tys() {
-            assert_type_is_legalized_evm(func.ctx(), ret, "function return type");
+            validate_type_is_legalized_evm(func.ctx(), ret, "function return type")?;
         }
     }
 
     for &arg in &func.arg_values {
-        assert_type_is_legalized_evm(
+        validate_type_is_legalized_evm(
             func.ctx(),
             func.dfg.value_ty(arg),
             "function argument value",
-        );
+        )?;
     }
     for value in func.dfg.value_ids() {
-        assert_type_is_legalized_evm(func.ctx(), func.dfg.value_ty(value), "value type");
+        validate_type_is_legalized_evm(func.ctx(), func.dfg.value_ty(value), "value type")?;
     }
 
     let evm_inst_set = Evm::new(func.ctx().triple).inst_set();
@@ -2156,46 +1994,46 @@ fn assert_supported_lowering_ir(func_ref: FuncRef, func: &Function) {
                 | EvmInstKind::EvmSdivo(_)
                 | EvmInstKind::EvmUmodo(_)
                 | EvmInstKind::EvmSmodo(_) => {
-                    panic!(
+                    return Err(format!(
                         "multi-result arithmetic must be legalized before EVM lowering: {}",
                         func.dfg.inst(inst).as_text()
-                    );
+                    ));
                 }
                 EvmInstKind::Sdiv(_)
                 | EvmInstKind::Udiv(_)
                 | EvmInstKind::Umod(_)
                 | EvmInstKind::Smod(_) => {
-                    panic!(
+                    return Err(format!(
                         "generic integer div/mod must be legalized to EVM-specific ops before lowering: {}",
                         func.dfg.inst(inst).as_text()
-                    );
+                    ));
                 }
                 EvmInstKind::Sext(_) | EvmInstKind::Zext(_) | EvmInstKind::Trunc(_) => {
-                    panic!(
+                    return Err(format!(
                         "integer casts must be eliminated before EVM lowering: {}",
                         func.dfg.inst(inst).as_text()
-                    );
+                    ));
                 }
                 EvmInstKind::Not(not) if func.dfg.value_ty(*not.arg()) == Type::I1 => {
-                    panic!("not on i1 must be legalized before EVM lowering");
+                    return Err("not on i1 must be legalized before EVM lowering".to_string());
                 }
                 EvmInstKind::Bitcast(bitcast) => {
-                    assert_type_is_legalized_evm(func.ctx(), *bitcast.ty(), "bitcast type");
+                    validate_type_is_legalized_evm(func.ctx(), *bitcast.ty(), "bitcast type")?;
                 }
                 EvmInstKind::IntToPtr(int_to_ptr) => {
-                    assert_type_is_legalized_evm(func.ctx(), *int_to_ptr.ty(), "inttoptr type");
+                    validate_type_is_legalized_evm(func.ctx(), *int_to_ptr.ty(), "inttoptr type")?;
                 }
                 EvmInstKind::PtrToInt(ptr_to_int) => {
-                    assert_type_is_legalized_evm(func.ctx(), *ptr_to_int.ty(), "ptrtoint type");
+                    validate_type_is_legalized_evm(func.ctx(), *ptr_to_int.ty(), "ptrtoint type")?;
                 }
                 EvmInstKind::Mload(mload) => {
-                    assert_type_is_legalized_evm(func.ctx(), *mload.ty(), "mload type");
+                    validate_type_is_legalized_evm(func.ctx(), *mload.ty(), "mload type")?;
                 }
                 EvmInstKind::Mstore(mstore) => {
-                    assert_type_is_legalized_evm(func.ctx(), *mstore.ty(), "mstore type");
+                    validate_type_is_legalized_evm(func.ctx(), *mstore.ty(), "mstore type")?;
                 }
                 EvmInstKind::Alloca(alloca) => {
-                    assert_type_is_legalized_evm(func.ctx(), *alloca.ty(), "alloca type");
+                    validate_type_is_legalized_evm(func.ctx(), *alloca.ty(), "alloca type")?;
                 }
                 _ => {}
             }
@@ -2205,43 +2043,25 @@ fn assert_supported_lowering_ir(func_ref: FuncRef, func: &Function) {
                 continue;
             }
 
-            assert!(
-                func.dfg.is_call(inst),
-                "multi-result instruction `{}` must be legalized before EVM lowering",
-                func.dfg.inst(inst).as_text()
-            );
-            assert!(
-                results.len() <= 16,
-                "EVM lowering supports at most 16 call results"
-            );
-            if let Some(call) = func.dfg.call_info(inst)
-                && let Some(sig) = func.ctx().get_sig(call.callee())
-            {
-                assert_eq!(
-                    results.len(),
-                    sig.ret_tys().len(),
-                    "call result count must match callee signature before EVM lowering"
-                );
+            if !func.dfg.is_call(inst) {
+                return Err(format!(
+                    "multi-result instruction `{}` must be legalized before EVM lowering",
+                    func.dfg.inst(inst).as_text()
+                ));
             }
         }
     }
+
+    Ok(())
 }
 
-impl LowerBackend for EvmBackend {
-    type MInst = OpCode;
-    type Error = String;
-    type FixupPolicy = PushWidthPolicy;
-
-    fn prepare_section(
+impl EvmBackend {
+    pub fn prepare_section(
         &self,
         module: &Module,
         funcs: &[FuncRef],
         section_ctx: &SectionLoweringCtx<'_>,
-    ) {
-        if self.prepared_section_matches(module, funcs, section_ctx) {
-            return;
-        }
-
+    ) -> Result<EvmPreparedSection, String> {
         let _span =
             info_span!("sonatina.codegen.evm.prepare_section", funcs = funcs.len()).entered();
         let local_object_args = run_evm_pre_memory_aggregate_pipeline(module);
@@ -2249,10 +2069,16 @@ impl LowerBackend for EvmBackend {
         if self.late_cleanup_profile != LateCleanupProfile::Off {
             run_evm_post_legalize_cleanup(module, funcs, &local_object_args);
         }
+        if let Some((_, message)) = collect_unsupported_evm_multi_return(module, funcs, None)
+            .into_iter()
+            .next()
+        {
+            return Err(message);
+        }
         for &func in funcs {
             module.func_store.view(func, |function| {
-                assert_supported_lowering_ir(func, function)
-            });
+                validate_supported_lowering_ir(func, function)
+            })?;
         }
         let ptr_escape = {
             let _span = debug_span!("sonatina.codegen.evm.compute_ptr_escape_summaries").entered();
@@ -2426,178 +2252,135 @@ impl LowerBackend for EvmBackend {
         };
         let has_dynamic_frames = plan.funcs.values().any(FuncMemPlan::uses_dynamic_frame);
 
-        let (allocs, block_orders) = {
+        let section_plan = EvmSectionPlan {
+            dyn_base: plan.global_dyn_base,
+            scratch_peak_words: plan.scratch_peak_words,
+            static_chain_peak_words: plan.static_chain_peak_words,
+            has_persistent_mallocs,
+            has_explicit_free_ptr_writes,
+        };
+        let function_plans = {
             let _span = trace_span!("sonatina.codegen.evm.extract_lowering_state").entered();
-            let mut allocs: FxHashMap<FuncRef, StackifyAlloc> = FxHashMap::default();
-            let mut block_orders: FxHashMap<FuncRef, Vec<BlockId>> = FxHashMap::default();
+            let mut function_plans = FxHashMap::default();
             for (func, analysis) in analyses {
-                allocs.insert(func, analysis.alloc);
-                block_orders.insert(func, analysis.block_order);
+                let mem_plan = plan
+                    .funcs
+                    .get(&func)
+                    .cloned()
+                    .ok_or_else(|| format!("missing memory plan for func {}", func.as_u32()))?;
+                let frame_summary = dyn_sp_plan
+                    .frame_summaries
+                    .get(&func)
+                    .cloned()
+                    .unwrap_or_default();
+                let func_dyn_sp_plan = FuncDynSpPlan {
+                    entry_init: func == section_entry && dyn_sp_plan.entry_init,
+                    frontier_init_calls: dyn_sp_plan
+                        .frontier_init_calls
+                        .get(&func)
+                        .cloned()
+                        .unwrap_or_default(),
+                    checked_frontier_init_calls: dyn_sp_plan
+                        .checked_frontier_init_calls
+                        .get(&func)
+                        .cloned()
+                        .unwrap_or_default(),
+                    entry_live_frame: dyn_sp_plan
+                        .entry_live_frame
+                        .get(&func)
+                        .copied()
+                        .unwrap_or(false),
+                };
+                let alias_plan = module.func_store.view(func, |function| {
+                    compute_late_block_alias_plan(
+                        function,
+                        &analysis.alloc,
+                        &frame_summary,
+                        &analysis.block_order,
+                    )
+                });
+                let LateBlockAliasPlan {
+                    aliases: block_aliases,
+                    emitted_block_order,
+                } = alias_plan;
+                let emitted_block_order = if self.late_cleanup_profile != LateCleanupProfile::Off {
+                    module.func_store.view(func, |function| {
+                        rewrite_evm_local_fallthrough_layout(
+                            function,
+                            &block_aliases,
+                            emitted_block_order,
+                        )
+                    })
+                } else {
+                    emitted_block_order
+                };
+                function_plans.insert(
+                    func,
+                    EvmFunctionPlan {
+                        alloc: analysis.alloc,
+                        emitted_block_order,
+                        block_aliases,
+                        mem_plan,
+                        frame_summary,
+                        dyn_sp_plan: func_dyn_sp_plan,
+                        function_entry_jumpdest: function_entry_jump_targets.contains(&func),
+                    },
+                );
             }
-            (allocs, block_orders)
+            function_plans
         };
 
-        {
-            let _span = debug_span!(
-                "sonatina.codegen.evm.prepare_section_summary",
-                has_dynamic_frames,
-                has_persistent_mallocs,
-                has_explicit_free_ptr_writes
-            )
-            .entered();
-            *self.section_state.borrow_mut() = Some(PreparedSection {
-                module_ptr: module as *const _ as usize,
-                object: section_ctx.object.clone(),
-                section: section_ctx.section.clone(),
-                funcs: canonicalize_prepared_funcs(funcs),
-                fingerprint: compute_prepared_section_fingerprint(module, funcs, section_ctx),
-                section_entry,
-                plan,
-                has_persistent_mallocs,
-                has_explicit_free_ptr_writes,
-                dyn_sp_plan,
-                function_entry_jump_targets,
-                allocs,
-                block_orders,
-            });
-        }
+        let _span = debug_span!(
+            "sonatina.codegen.evm.prepare_section_summary",
+            has_dynamic_frames,
+            has_persistent_mallocs,
+            has_explicit_free_ptr_writes
+        )
+        .entered();
+        Ok(EvmPreparedSection {
+            funcs: funcs.to_vec(),
+            section_plan,
+            function_plans,
+        })
     }
 
-    fn lower_function(
+    pub fn lower_function(
         &self,
         module: &Module,
         func: FuncRef,
-        section_ctx: &SectionLoweringCtx<'_>,
-    ) -> Result<LoweredFunction<Self::MInst>, Self::Error> {
-        let prepared = self.prepared_function(module, func, section_ctx);
+        prepared: &EvmPreparedSection,
+    ) -> Result<LoweredFunction<OpCode>, String> {
         let _span = debug_span!(
             "sonatina.codegen.evm.lower_function",
-            func_ref = func.as_u32(),
-            prepared_path = prepared.is_some()
+            func_ref = func.as_u32()
         )
         .entered();
-        if let Some(prepared) = prepared {
-            return self.lower_prepared_function(module, func, prepared);
-        }
-
-        let closure = collect_call_closure(module, std::slice::from_ref(&func));
-        let local_object_args = run_evm_pre_memory_aggregate_pipeline(module);
-        legalize_evm_section(module, &closure);
-        if self.late_cleanup_profile != LateCleanupProfile::Off {
-            run_evm_post_legalize_cleanup(module, &closure, &local_object_args);
-        }
-        module.func_store.view(func, |function| {
-            assert_supported_lowering_ir(func, function)
-        });
-
-        let ptr_escape = {
-            let _span =
-                trace_span!("sonatina.codegen.evm.lower_function.compute_ptr_escape").entered();
-            compute_ptr_escape_summaries(module, std::slice::from_ref(&func), &self.isa)
-        };
-
-        {
-            let _span = trace_span!("sonatina.codegen.evm.lower_function.prepare_free_ptr_restore")
-                .entered();
-            module.func_store.modify(func, |function| {
-                prepare_free_ptr_restore(function, &module.ctx, self, &ptr_escape);
-            });
-        }
-
-        {
-            let _span =
-                trace_span!("sonatina.codegen.evm.lower_function.aggregate_legalize").entered();
-            module.func_store.modify(func, |function| {
-                AggregateLowerToMemoryLegalize::default().run(function, &module.ctx);
-                assert_aggregate_legalized(function, &module.ctx);
-            });
-        }
-        if self.late_cleanup_profile != LateCleanupProfile::Off {
-            run_evm_post_memory_legalize_cleanup(module, std::slice::from_ref(&func));
-        }
-
-        {
-            let _span = trace_span!("sonatina.codegen.evm.lower_function.func_behavior").entered();
-            func_behavior::analyze_module(module);
-        }
-
-        let analysis = {
-            let _span =
-                trace_span!("sonatina.codegen.evm.lower_function.prepare_stackify_analysis")
-                    .entered();
-            module.func_store.modify(func, |function| {
-                prepare_stackify_analysis(function, &module.ctx, self, &ptr_escape, None)
-            })
-        };
-
-        let alloc_ctx =
-            static_arena_alloc::StaticArenaAllocCtx::new(&module.ctx, &self.isa, &ptr_escape);
-        let layout = {
-            let _span =
-                trace_span!("sonatina.codegen.evm.lower_function.plan_func_objects").entered();
-            module.func_store.view(func, |function| {
-                alloc_ctx.plan_func_objects(func, function, &analysis)
-            })
-        };
-
-        let mem_plan = FuncMemPlan {
-            scratch_words: 0,
-            stable_words: layout.locals_words,
-            stable_mode: StableMode::DynamicFrame,
-            entry_abs_words: 0,
-            obj_loc: layout
-                .obj_offset_words
-                .into_iter()
-                .map(|(id, off)| (id, ObjLoc::StableFrame(off)))
-                .collect(),
-            alloca_loc: layout
-                .alloca_offset_words
-                .into_iter()
-                .map(|(inst, off)| (inst, ObjLoc::StableFrame(off)))
-                .collect(),
-            spill_obj: layout.spill_obj,
-            call_preserve: FxHashMap::default(),
-            malloc_future_abs_words: FxHashMap::default(),
-            transient_mallocs: FxHashSet::default(),
-            malloc_escape_kinds: FxHashMap::default(),
-            return_escape_caller_abs_words: 0,
-        };
-        let frame_summary = module.func_store.view(func, |function| {
-            let alloc = FinalAlloc::new(analysis.alloc.clone(), mem_plan.clone());
-            compute_frame_summary(function, &alloc, &mem_plan, &self.isa)
-        });
-        let lowering = PreparedLowering {
-            alloc: analysis.alloc,
-            block_order: analysis.block_order,
-            mem_plan,
-            frame_summary,
-            dyn_sp_plan: None,
-            function_entry_jumpdest: true,
-        };
-        self.lower_prepared_function(module, func, lowering)
+        let function_plan = prepared
+            .function_plan(func)
+            .ok_or_else(|| format!("missing prepared lowering for func {}", func.as_u32()))?;
+        EvmFunctionLowering::new(self, &prepared.section_plan, function_plan)
+            .lower_prepared_function(module, func)
     }
 
-    fn post_lower_section(
+    pub fn post_lower_section(
         &self,
         module: &Module,
-        _funcs: &[FuncRef],
-        lowered: &mut [(FuncRef, LoweredFunction<Self::MInst>)],
-        _section_ctx: &SectionLoweringCtx<'_>,
-    ) -> Result<Vec<SectionCodeUnit<Self::MInst>>, Self::Error> {
+        lowered: &mut [(FuncRef, LoweredFunction<OpCode>)],
+    ) -> Result<Vec<SectionCodeUnit<OpCode>>, String> {
         if self.late_cleanup_profile == LateCleanupProfile::Off {
             return Ok(Vec::new());
         }
         Ok(run_late_section_terminal_outline(module, lowered))
     }
 
-    fn apply_sym_fixup(
+    pub fn apply_sym_fixup(
         &self,
-        vcode: &mut VCode<Self::MInst>,
+        vcode: &mut VCode<OpCode>,
         inst: VCodeInst,
         fixup: &SymFixup,
         value: u32,
-        policy: &Self::FixupPolicy,
-    ) -> Result<FixupUpdate, Self::Error> {
+        policy: &PushWidthPolicy,
+    ) -> Result<FixupUpdate, String> {
         let _ = fixup;
         let (_, bytes) = vcode
             .inst_imm_bytes
@@ -2622,25 +2405,22 @@ impl LowerBackend for EvmBackend {
             FixupUpdate::ContentChanged
         })
     }
+}
 
+impl EvmFunctionLowering<'_> {
     fn enter_function(
         &self,
-        ctx: &mut Lower<Self::MInst>,
+        ctx: &mut Lower<OpCode>,
         alloc: &mut dyn Allocator,
         function: &Function,
     ) {
         let frame_size_slots = alloc.frame_size_slots();
         let actions = alloc.enter_function(function);
-        if self
-            .current_dyn_sp_plan
-            .borrow()
-            .as_ref()
-            .is_some_and(|plan| plan.entry_init)
-        {
+        if self.function_plan.dyn_sp_plan.entry_init {
             init_dyn_sp(ctx, self.dyn_base());
         }
 
-        if self.has_current_lazy_frame_lowering() {
+        if self.has_lazy_frame_lowering() {
             self.emit_actions_for_site(ctx, &actions, frame_size_slots, FrameSite::EnterFunction);
         } else {
             self.emit_frame_enter(ctx, frame_size_slots);
@@ -2648,12 +2428,7 @@ impl LowerBackend for EvmBackend {
         }
     }
 
-    fn enter_block(
-        &self,
-        ctx: &mut Lower<Self::MInst>,
-        _alloc: &mut dyn Allocator,
-        block: BlockId,
-    ) {
+    fn enter_block(&self, ctx: &mut Lower<OpCode>, _alloc: &mut dyn Allocator, block: BlockId) {
         if self.is_elided_block(block) {
             return;
         }
@@ -2670,23 +2445,27 @@ impl LowerBackend for EvmBackend {
         );
     }
 
-    fn lower(&self, ctx: &mut Lower<Self::MInst>, alloc: &mut dyn Allocator, insn: InstId) {
+    fn lower_insn(&self, ctx: &mut Lower<OpCode>, alloc: &mut dyn Allocator, insn: InstId) {
         if self.is_elided_block(ctx.insn_block(insn)) {
             return;
         }
 
         let frame_size_slots = alloc.frame_size_slots();
-        let emit_pre_actions = |ctx: &mut Lower<Self::MInst>, actions: &[Action]| {
+        let emit_pre_actions = |ctx: &mut Lower<OpCode>, actions: &[Action]| {
             self.emit_actions_for_site(ctx, actions, frame_size_slots, FrameSite::PreInst(insn))
         };
-        let emit_post_actions = |ctx: &mut Lower<Self::MInst>, actions: &[Action]| {
+        let emit_post_actions = |ctx: &mut Lower<OpCode>, actions: &[Action]| {
             self.emit_actions_for_site(ctx, actions, frame_size_slots, FrameSite::PostInst(insn))
         };
         let results: SmallVec<[ValueId; 4]> = ctx.insn_results(insn).iter().copied().collect();
         let args = ctx.insn_data(insn).collect_values();
-        let data = self.isa.inst_set().resolve_inst(ctx.insn_data(insn));
+        let data = self
+            .backend
+            .isa
+            .inst_set()
+            .resolve_inst(ctx.insn_data(insn));
 
-        let basic_op = |ctx: &mut Lower<Self::MInst>, ops: &[OpCode]| {
+        let basic_op = |ctx: &mut Lower<OpCode>, ops: &[OpCode]| {
             emit_pre_actions(ctx, &alloc.read(insn, &args));
             for op in ops {
                 ctx.push(*op);
@@ -2946,7 +2725,7 @@ impl LowerBackend for EvmBackend {
                         prefix_folded_len,
                     );
 
-                    match self.current_frontier_init_kind(insn) {
+                    match self.frontier_init_kind(insn) {
                         Some(FrontierInitKind::Always) => init_dyn_sp(ctx, self.dyn_base()),
                         Some(FrontierInitKind::Checked) => ensure_dyn_sp_init(ctx, self.dyn_base()),
                         None => {}
@@ -2973,7 +2752,7 @@ impl LowerBackend for EvmBackend {
                         FrameSite::PreInst(insn),
                     );
 
-                    match self.current_frontier_init_kind(insn) {
+                    match self.frontier_init_kind(insn) {
                         Some(FrontierInitKind::Always) => init_dyn_sp(ctx, self.dyn_base()),
                         Some(FrontierInitKind::Checked) => ensure_dyn_sp_init(ctx, self.dyn_base()),
                         None => {}
@@ -2987,7 +2766,7 @@ impl LowerBackend for EvmBackend {
 
             EvmInstKind::Return(_) => {
                 emit_pre_actions(ctx, &alloc.read(insn, &args));
-                if !self.has_current_lazy_frame_lowering() {
+                if !self.has_lazy_frame_lowering() {
                     leave_frame(ctx, alloc.frame_size_slots());
                 }
 
@@ -3000,6 +2779,7 @@ impl LowerBackend for EvmBackend {
             EvmInstKind::Mload(_) => basic_op(ctx, &[OpCode::MLOAD]),
             EvmInstKind::Mstore(mstore) => {
                 let ty_size = self
+                    .backend
                     .isa
                     .type_layout()
                     .size_of(*mstore.ty(), ctx.module)
@@ -3082,11 +2862,7 @@ impl LowerBackend for EvmBackend {
                 emit_post_actions(ctx, &alloc.write(insn, results.as_slice()));
             }
             EvmInstKind::Alloca(_) => {
-                let mem_plan = self.current_mem_plan.borrow();
-                let mem_plan = mem_plan
-                    .as_ref()
-                    .expect("missing memory plan during lowering");
-
+                let mem_plan = &self.function_plan.mem_plan;
                 let loc = *mem_plan.alloca_loc.get(&insn).expect("missing alloca plan");
 
                 emit_pre_actions(ctx, &alloc.read(insn, &args));
@@ -3104,7 +2880,7 @@ impl LowerBackend for EvmBackend {
                             FrameSite::Inst(insn),
                         );
                         emit_dyn_frame_addr(ctx, frame_size_slots, offset_words);
-                        if self.current_lazy_frame_plan_matches(|plan| {
+                        if self.lazy_frame_plan_matches(|plan| {
                             plan.exit_after_site(FrameSite::Inst(insn))
                         }) {
                             leave_frame(ctx, frame_size_slots);
@@ -3284,13 +3060,10 @@ impl LowerBackend for EvmBackend {
             EvmInstKind::EvmRevert(_) => basic_op(ctx, &[OpCode::REVERT]),
             EvmInstKind::EvmSelfDestruct(_) => basic_op(ctx, &[OpCode::SELFDESTRUCT]),
             EvmInstKind::EvmMalloc(_) => {
-                let needs_dyn_sp_clamp = self.current_malloc_needs_dyn_sp_clamp(insn);
-                let has_persistent_mallocs = self.section_has_persistent_mallocs();
-                let has_explicit_free_ptr_writes = self.section_has_explicit_free_ptr_writes();
-                let mem_plan = self.current_mem_plan.borrow();
-                let mem_plan = mem_plan
-                    .as_ref()
-                    .expect("missing memory plan during lowering");
+                let needs_dyn_sp_clamp = self.malloc_needs_dyn_sp_clamp(insn);
+                let has_persistent_mallocs = self.section_plan.has_persistent_mallocs;
+                let has_explicit_free_ptr_writes = self.section_plan.has_explicit_free_ptr_writes;
+                let mem_plan = &self.function_plan.mem_plan;
                 let is_transient = mem_plan.transient_mallocs.contains(&insn);
 
                 let dyn_base_words = self
@@ -3436,8 +3209,10 @@ impl LowerBackend for EvmBackend {
             }
         }
     }
+}
 
-    fn update_opcode_with_immediate_bytes(
+impl EvmBackend {
+    pub(crate) fn update_opcode_with_immediate_bytes(
         &self,
         opcode: &mut OpCode,
         bytes: &mut SmallVec<[u8; 8]>,
@@ -3450,7 +3225,7 @@ impl LowerBackend for EvmBackend {
         *opcode = push_op(bytes.len());
     }
 
-    fn update_opcode_with_label(
+    pub(crate) fn update_opcode_with_label(
         &self,
         opcode: &mut OpCode,
         label_offset: u32,
@@ -3465,14 +3240,14 @@ impl LowerBackend for EvmBackend {
         bytes
     }
 
-    fn emit_opcode(&self, opcode: &OpCode, buf: &mut Vec<u8>) {
+    pub(crate) fn emit_opcode(&self, opcode: &OpCode, buf: &mut Vec<u8>) {
         buf.push(*opcode as u8);
     }
 
-    fn emit_immediate_bytes(&self, bytes: &[u8], buf: &mut Vec<u8>) {
+    pub(crate) fn emit_immediate_bytes(&self, bytes: &[u8], buf: &mut Vec<u8>) {
         buf.extend_from_slice(bytes);
     }
-    fn emit_label(&self, address: u32, buf: &mut Vec<u8>) {
+    pub(crate) fn emit_label(&self, address: u32, buf: &mut Vec<u8>) {
         buf.extend(address.to_be_bytes().into_iter().skip_while(|b| *b == 0));
     }
 }
@@ -4277,15 +4052,6 @@ fn enter_frame_initialized(ctx: &mut Lower<OpCode>, frame_slots: u32) {
     ctx.push(OpCode::MSTORE);
 }
 
-fn enter_frame_compat(ctx: &mut Lower<OpCode>, frame_slots: u32, dyn_base: u32) {
-    if frame_slots == 0 {
-        return;
-    }
-
-    ensure_dyn_sp_init(ctx, dyn_base);
-    enter_frame_initialized(ctx, frame_slots);
-}
-
 fn leave_frame(ctx: &mut Lower<OpCode>, frame_slots: u32) {
     if frame_slots == 0 {
         return;
@@ -4697,6 +4463,7 @@ mod tests {
     use sonatina_ir::{
         InstSetBase,
         cfg::ControlFlowGraph,
+        ir_writer::FuncWriter,
         object::{EmbedSymbol, ObjectName, SectionName},
     };
     use sonatina_parser::parse_module;
@@ -5762,12 +5529,15 @@ object @Contract {
             embed_symbols: &embeds,
         };
 
-        backend.prepare_section(&parsed.module, &funcs, &section_ctx);
-
-        let section_state = backend.section_state.borrow();
-        let prepared = section_state.as_ref().expect("section prepared");
+        let prepared = backend
+            .prepare_section(&parsed.module, &funcs, &section_ctx)
+            .expect("prepare should succeed");
         assert!(
-            !prepared.allocs[&names["f"]].uses_scratch_spills(),
+            !prepared
+                .function_plan(names["f"])
+                .expect("function plan for %f")
+                .alloc
+                .uses_scratch_spills(),
             "recursive caller should treat self-call as a scratch barrier"
         );
     }
@@ -5823,7 +5593,9 @@ object @Contract {
             embed_symbols: &embeds,
         };
 
-        backend.prepare_section(&parsed.module, &funcs, &section_ctx);
+        backend
+            .prepare_section(&parsed.module, &funcs, &section_ctx)
+            .expect("prepare should succeed");
 
         let helper_sig = parsed
             .module
@@ -5944,9 +5716,11 @@ object @Contract {
             embed_symbols: &embeds,
         };
 
-        backend.prepare_section(&parsed.module, &funcs, &section_ctx);
+        let prepared = backend
+            .prepare_section(&parsed.module, &funcs, &section_ctx)
+            .expect("prepare should succeed");
         let lowered = backend
-            .lower_function(&parsed.module, names["caller"], &section_ctx)
+            .lower_function(&parsed.module, names["caller"], &prepared)
             .expect("caller lowers");
 
         assert_eq!(lowered.block_order.len(), 1, "expected single caller block");
@@ -5962,7 +5736,7 @@ object @Contract {
         );
 
         let lowered_abort = backend
-            .lower_function(&parsed.module, names["abort"], &section_ctx)
+            .lower_function(&parsed.module, names["abort"], &prepared)
             .expect("abort lowers");
         let abort_block = lowered_abort.block_order[0];
         let abort_jumpdest_count = lowered_abort
@@ -6017,9 +5791,11 @@ object @Contract {
             embed_symbols: &embeds,
         };
 
-        backend.prepare_section(&parsed.module, &[func], &section_ctx);
+        let prepared = backend
+            .prepare_section(&parsed.module, &[func], &section_ctx)
+            .expect("prepare should succeed");
         let lowered = backend
-            .lower_function(&parsed.module, func, &section_ctx)
+            .lower_function(&parsed.module, func, &prepared)
             .expect("main lowers");
 
         let block2 = lowered
@@ -6085,9 +5861,11 @@ object @Contract {
             embed_symbols: &embeds,
         };
 
-        backend.prepare_section(&parsed.module, &[func], &section_ctx);
+        let prepared = backend
+            .prepare_section(&parsed.module, &[func], &section_ctx)
+            .expect("prepare should succeed");
         let lowered = backend
-            .lower_function(&parsed.module, func, &section_ctx)
+            .lower_function(&parsed.module, func, &prepared)
             .expect("entry lowers");
         let ops: Vec<_> = lowered
             .block_order
@@ -6199,9 +5977,11 @@ object @Contract {
             embed_symbols: &embeds,
         };
 
-        backend.prepare_section(&parsed.module, &[func], &section_ctx);
+        let prepared = backend
+            .prepare_section(&parsed.module, &[func], &section_ctx)
+            .expect("prepare should succeed");
         let lowered = backend
-            .lower_function(&parsed.module, func, &section_ctx)
+            .lower_function(&parsed.module, func, &prepared)
             .expect("main lowers");
 
         assert!(
@@ -6279,9 +6059,11 @@ object @Contract {
             embed_symbols: &embeds,
         };
 
-        backend.prepare_section(&parsed.module, &[func], &section_ctx);
+        let prepared = backend
+            .prepare_section(&parsed.module, &[func], &section_ctx)
+            .expect("prepare should succeed");
         let lowered = backend
-            .lower_function(&parsed.module, func, &section_ctx)
+            .lower_function(&parsed.module, func, &prepared)
             .expect("main lowers");
         let entry = lowered.block_order[0];
         let ops: Vec<_> = lowered
@@ -6297,7 +6079,7 @@ object @Contract {
     }
 
     #[test]
-    fn prepared_section_state_is_reusable_across_lower_calls() {
+    fn prepared_section_is_reusable_across_lower_calls() {
         let parsed = parse_module(
             r#"
 target = "evm-ethereum-osaka"
@@ -6332,30 +6114,25 @@ object @Contract {
             embed_symbols: &embeds,
         };
 
-        backend.prepare_section(&parsed.module, &[func], &section_ctx);
-        assert!(backend.prepared_section_matches(&parsed.module, &[func], &section_ctx));
-
-        backend
-            .lower_function(&parsed.module, func, &section_ctx)
-            .expect("first lower succeeds");
-        assert!(backend.prepared_section_matches(&parsed.module, &[func], &section_ctx));
+        let prepared = backend
+            .prepare_section(&parsed.module, &[func], &section_ctx)
+            .expect("prepare should succeed");
         assert!(
-            backend
-                .section_state
-                .borrow()
-                .as_ref()
-                .is_some_and(|state| state.allocs.contains_key(&func)),
-            "prepared alloc should remain cached after lowering"
+            prepared.function_plan(func).is_some(),
+            "prepared section should retain the per-function lowering plan"
         );
 
         backend
-            .lower_function(&parsed.module, func, &section_ctx)
+            .lower_function(&parsed.module, func, &prepared)
+            .expect("first lower succeeds");
+
+        backend
+            .lower_function(&parsed.module, func, &prepared)
             .expect("second lower succeeds");
-        assert!(backend.prepared_section_matches(&parsed.module, &[func], &section_ctx));
     }
 
     #[test]
-    fn prepared_section_state_is_invalidated_after_module_mutation() {
+    fn reprepare_after_module_mutation_updates_lowering() {
         let parsed = parse_module(
             r#"
 target = "evm-ethereum-osaka"
@@ -6389,12 +6166,9 @@ object @Contract {
             embed_symbols: &embeds,
         };
 
-        backend.prepare_section(&parsed.module, &[func], &section_ctx);
-        assert!(
-            backend
-                .prepared_function(&parsed.module, func, &section_ctx)
-                .is_some()
-        );
+        let _prepared = backend
+            .prepare_section(&parsed.module, &[func], &section_ctx)
+            .expect("initial prepare should succeed");
 
         parsed.module.func_store.modify(func, |function| {
             let block = function.layout.entry_block().expect("entry block exists");
@@ -6420,19 +6194,12 @@ object @Contract {
             );
         });
 
-        assert!(!backend.prepared_section_matches(&parsed.module, &[func], &section_ctx));
-        assert!(
-            backend
-                .prepared_function(&parsed.module, func, &section_ctx)
-                .is_none()
-        );
-        assert!(
-            backend.section_state.borrow().is_none(),
-            "stale prepared section should be cleared after invalidation"
-        );
+        let prepared = backend
+            .prepare_section(&parsed.module, &[func], &section_ctx)
+            .expect("re-prepare after mutation should succeed");
 
         let lowered = backend
-            .lower_function(&parsed.module, func, &section_ctx)
+            .lower_function(&parsed.module, func, &prepared)
             .expect("lower after mutation succeeds");
         assert!(
             lowered

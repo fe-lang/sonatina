@@ -1,10 +1,9 @@
 use super::vcode::{Label, SectionCodeUnitId, SymFixup, VCode, VCodeFixup, VCodeInst};
 use crate::stackalloc::Allocator;
 use rustc_hash::FxHashMap;
-use smallvec::SmallVec;
 use sonatina_ir::{
-    BlockId, Function, Immediate, Inst, InstId, Module, Type, Value, ValueId,
-    module::{FuncRef, ModuleCtx},
+    BlockId, Function, Immediate, Inst, InstId, Type, Value, ValueId,
+    module::ModuleCtx,
     object::{EmbedSymbol, ObjectName, SectionName},
 };
 
@@ -31,73 +30,6 @@ pub enum FixupUpdate {
     Unchanged,
     ContentChanged,
     LayoutChanged,
-}
-
-pub trait LowerBackend {
-    type MInst;
-    type Error: std::fmt::Display;
-    type FixupPolicy: Clone;
-
-    fn prepare_section(
-        &self,
-        _module: &Module,
-        _funcs: &[FuncRef],
-        _section_ctx: &SectionLoweringCtx<'_>,
-    ) {
-    }
-
-    fn lower_function(
-        &self,
-        module: &Module,
-        func: FuncRef,
-        section_ctx: &SectionLoweringCtx<'_>,
-    ) -> Result<LoweredFunction<Self::MInst>, Self::Error>;
-
-    fn post_lower_section(
-        &self,
-        _module: &Module,
-        _funcs: &[FuncRef],
-        _lowered: &mut [(FuncRef, LoweredFunction<Self::MInst>)],
-        _section_ctx: &SectionLoweringCtx<'_>,
-    ) -> Result<Vec<SectionCodeUnit<Self::MInst>>, Self::Error> {
-        Ok(Vec::new())
-    }
-
-    fn apply_sym_fixup(
-        &self,
-        vcode: &mut VCode<Self::MInst>,
-        inst: VCodeInst,
-        fixup: &SymFixup,
-        value: u32,
-        policy: &Self::FixupPolicy,
-    ) -> Result<FixupUpdate, Self::Error>;
-
-    fn lower(&self, ctx: &mut Lower<Self::MInst>, alloc: &mut dyn Allocator, inst: InstId);
-    // -> Option<InstOutput> == SmallVec<[ValueRegs<Reg>; 2]>
-
-    fn enter_function(
-        &self,
-        ctx: &mut Lower<Self::MInst>,
-        alloc: &mut dyn Allocator,
-        function: &Function,
-    );
-    fn enter_block(&self, ctx: &mut Lower<Self::MInst>, alloc: &mut dyn Allocator, block: BlockId);
-
-    fn update_opcode_with_immediate_bytes(
-        &self,
-        opcode: &mut Self::MInst,
-        bytes: &mut SmallVec<[u8; 8]>,
-    );
-
-    fn update_opcode_with_label(
-        &self,
-        opcode: &mut Self::MInst,
-        label_offset: u32,
-    ) -> SmallVec<[u8; 4]>;
-
-    fn emit_opcode(&self, opcode: &Self::MInst, buf: &mut Vec<u8>);
-    fn emit_immediate_bytes(&self, bytes: &[u8], buf: &mut Vec<u8>);
-    fn emit_label(&self, address: u32, buf: &mut Vec<u8>);
 }
 
 #[derive(Debug)]
@@ -136,24 +68,26 @@ impl<'a, Op: Default> Lower<'a, Op> {
         }
     }
 
-    pub fn lower<B: LowerBackend<MInst = Op>>(
+    pub fn lower(
         mut self,
-        backend: &B,
         alloc: &mut dyn Allocator,
+        mut enter_block: impl FnMut(&mut Self, &mut dyn Allocator, BlockId),
+        mut enter_function: impl FnMut(&mut Self, &mut dyn Allocator, &Function),
+        mut lower_insn: impl FnMut(&mut Self, &mut dyn Allocator, InstId),
     ) -> CodegenResult<VCode<Op>> {
         let function = self.function;
         let entry = function.layout.entry_block();
         for block in function.layout.iter_block() {
             self.cur_block = Some(block);
             self.cur_insn = None;
-            backend.enter_block(&mut self, alloc, block);
+            enter_block(&mut self, alloc, block);
             if entry == Some(block) {
-                backend.enter_function(&mut self, alloc, function);
+                enter_function(&mut self, alloc, function);
             }
 
             for insn in function.layout.iter_inst(block) {
                 self.cur_insn = Some(insn);
-                backend.lower(&mut self, alloc, insn);
+                lower_insn(&mut self, alloc, insn);
             }
         }
 

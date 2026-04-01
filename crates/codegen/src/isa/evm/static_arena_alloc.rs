@@ -59,13 +59,6 @@ pub(crate) struct StackObj {
     pub(crate) store_count: u32,
 }
 
-pub(crate) struct FuncObjectLayout {
-    pub(crate) obj_offset_words: FxHashMap<StackObjId, u32>,
-    pub(crate) alloca_offset_words: FxHashMap<InstId, u32>,
-    pub(crate) spill_obj: SecondaryMap<ValueId, Option<StackObjId>>,
-    pub(crate) locals_words: u32,
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum StableReason {
     None,
@@ -133,19 +126,6 @@ impl<'a> StaticArenaAllocCtx<'a> {
             isa,
             ptr_escape,
         }
-    }
-
-    pub(crate) fn plan_func_objects(
-        &self,
-        func_ref: FuncRef,
-        function: &Function,
-        analysis: &FuncAnalysis,
-    ) -> FuncObjectLayout {
-        let stack = self.compute_func_stack_objects(func_ref, function, analysis);
-        let min_offset_words: FxHashMap<StackObjId, u32> = FxHashMap::default();
-        let (obj_offset_words, locals_words) =
-            pack_objects_with_min_offsets(&stack, &min_offset_words);
-        build_func_object_layout(&stack, obj_offset_words, locals_words)
     }
 
     pub(crate) fn compute_func_stack_objects(
@@ -619,43 +599,6 @@ pub(crate) fn compute_func_stack_objects(
         spill_obj,
         call_sites,
         next_obj_id: next_id,
-    }
-}
-
-pub(crate) fn pack_objects_with_min_offsets(
-    stack: &FuncStackObjects,
-    min_offset_words: &FxHashMap<StackObjId, u32>,
-) -> (FxHashMap<StackObjId, u32>, u32) {
-    let mut objs: Vec<PackedObject> = stack
-        .objects
-        .iter()
-        .map(|obj| PackedObject {
-            id: obj.id,
-            size_words: obj.size_words,
-            interval: obj.interval,
-            min_offset_words: min_offset_words.get(&obj.id).copied().unwrap_or_default(),
-        })
-        .collect();
-    pack_objects(&mut objs)
-}
-
-pub(crate) fn build_func_object_layout(
-    stack: &FuncStackObjects,
-    obj_offset_words: FxHashMap<StackObjId, u32>,
-    locals_words: u32,
-) -> FuncObjectLayout {
-    let mut alloca_offset_words: FxHashMap<InstId, u32> = FxHashMap::default();
-    for (inst, id) in stack.alloca_ids.iter() {
-        if let Some(off) = obj_offset_words.get(id) {
-            alloca_offset_words.insert(*inst, *off);
-        }
-    }
-
-    FuncObjectLayout {
-        obj_offset_words,
-        alloca_offset_words,
-        spill_obj: stack.spill_obj.clone(),
-        locals_words,
     }
 }
 

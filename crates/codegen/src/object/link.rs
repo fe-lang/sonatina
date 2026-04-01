@@ -1,7 +1,10 @@
-use crate::machinst::{
-    assemble::ObjectLayout,
-    lower::{FixupUpdate, LowerBackend, LoweredFunction, SectionLoweringCtx},
-    vcode::{SymFixup, SymFixupKind, VCodeFixup, VCodeInst},
+use crate::{
+    isa::evm::{EvmBackend, EvmPreparedSection, opcode::OpCode},
+    machinst::{
+        assemble::ObjectLayout,
+        lower::{FixupUpdate, LoweredFunction, SectionLoweringCtx},
+        vcode::{SymFixup, SymFixupKind, VCodeFixup, VCodeInst},
+    },
 };
 use cranelift_entity::EntityRef;
 use rustc_hash::FxHashMap;
@@ -19,8 +22,8 @@ use super::{
 };
 
 #[derive(Debug)]
-pub enum LinkSectionError<E> {
-    Backend { func: FuncRef, error: E },
+pub enum LinkSectionError {
+    Backend { func: FuncRef, error: String },
     Link(String),
 }
 
@@ -35,16 +38,17 @@ struct BuildSectionObservabilityInput<'a, Op> {
     section_bytes: u32,
 }
 
-pub fn link_section<B: LowerBackend>(
+pub fn link_section(
     module: &Module,
-    backend: &B,
-    funcs: &[FuncRef],
+    backend: &EvmBackend,
+    prepared: &EvmPreparedSection,
     data: &[(GlobalVariableRef, Vec<u8>)],
     embeds: &[(EmbedSymbol, Vec<u8>)],
     section_ctx: &SectionLoweringCtx<'_>,
-    opts: &CompileOptions<B::FixupPolicy>,
-) -> Result<SectionArtifact, LinkSectionError<B::Error>> {
+    opts: &CompileOptions,
+) -> Result<SectionArtifact, LinkSectionError> {
     const MAX_ITERS: usize = 64;
+    let funcs = prepared.funcs();
 
     let _span = info_span!(
         "sonatina.codegen.link_section",
@@ -54,13 +58,8 @@ pub fn link_section<B: LowerBackend>(
     )
     .entered();
 
-    {
-        let _span = debug_span!("sonatina.codegen.link_section.prepare_section").entered();
-        backend.prepare_section(module, funcs, section_ctx);
-    }
-
     let mut sym_fixups: Vec<(FuncRef, VCodeInst, SymFixup)> = Vec::new();
-    let mut lowered_funcs: Vec<(FuncRef, LoweredFunction<B::MInst>)> =
+    let mut lowered_funcs: Vec<(FuncRef, LoweredFunction<OpCode>)> =
         Vec::with_capacity(funcs.len());
 
     for &func in funcs {
@@ -71,7 +70,7 @@ pub fn link_section<B: LowerBackend>(
             )
             .entered();
             backend
-                .lower_function(module, func, section_ctx)
+                .lower_function(module, func, prepared)
                 .map_err(|error| LinkSectionError::Backend { func, error })?
         };
 
@@ -86,7 +85,7 @@ pub fn link_section<B: LowerBackend>(
     }
 
     let section_units = backend
-        .post_lower_section(module, funcs, &mut lowered_funcs, section_ctx)
+        .post_lower_section(module, &mut lowered_funcs)
         .map_err(|error| LinkSectionError::Backend {
             func: funcs[0],
             error,
@@ -102,7 +101,11 @@ pub fn link_section<B: LowerBackend>(
         let _span = debug_span!("sonatina.codegen.link_section.relaxation_iter", iter).entered();
         {
             let _span = trace_span!("sonatina.codegen.link_section.resize_layout").entered();
-            while layout.resize(backend, 0) {}
+            while layout.resize(
+                &mut |opcode, label_offset| backend.update_opcode_with_label(opcode, label_offset),
+                &mut |opcode, bytes| backend.update_opcode_with_immediate_bytes(opcode, bytes),
+                0,
+            ) {}
         }
 
         let (symtab, section_size) = {
@@ -134,7 +137,13 @@ pub fn link_section<B: LowerBackend>(
         if !layout_changed {
             {
                 let _span = trace_span!("sonatina.codegen.link_section.final_resize").entered();
-                while layout.resize(backend, 0) {}
+                while layout.resize(
+                    &mut |opcode, label_offset| {
+                        backend.update_opcode_with_label(opcode, label_offset)
+                    },
+                    &mut |opcode, bytes| backend.update_opcode_with_immediate_bytes(opcode, bytes),
+                    0,
+                ) {}
             }
 
             let bytes = {
@@ -144,7 +153,12 @@ pub fn link_section<B: LowerBackend>(
                 )
                 .entered();
                 let mut bytes = Vec::with_capacity(section_size as usize);
-                layout.emit(backend, &mut bytes);
+                layout.emit(
+                    &mut |opcode, buf| backend.emit_opcode(opcode, buf),
+                    &mut |imm, buf| backend.emit_immediate_bytes(imm, buf),
+                    &mut |address, buf| backend.emit_label(address, buf),
+                    &mut bytes,
+                );
                 for (_, blob) in data {
                     bytes.extend_from_slice(blob);
                 }
