@@ -663,6 +663,32 @@ object @Contract {
 }
 
 #[test]
+fn declaration_only_section_entry_is_rejected() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+declare external %entry();
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&parsed.module, &cfg);
+
+    assert!(
+        report.diagnostics.iter().any(|diagnostic| diagnostic
+            .message
+            .contains("section entry must reference a defined function body")),
+        "expected declaration-only section entry rejection, got {report}"
+    );
+}
+
+#[test]
 fn bitcast_objref_is_rejected() {
     let src = r#"
 target = "evm-ethereum-london"

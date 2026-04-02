@@ -1040,6 +1040,44 @@ object @O {
     }
 
     #[test]
+    fn compile_object_rejects_declaration_only_section_entry() {
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+declare external %main();
+
+object @O {
+  section runtime {
+    entry %main;
+  }
+}
+"#,
+        )
+        .unwrap();
+        let errs = compile_object(
+            &parsed.module,
+            &test_backend(),
+            "O",
+            &compile_opts(
+                PushWidthPolicy::Push4,
+                false,
+                false,
+                VerifierConfig::for_level(VerificationLevel::Fast),
+            ),
+        )
+        .expect_err("declaration-only section entry must fail verifier preflight");
+        let [ObjectCompileError::VerifierFailed { report }] = errs.as_slice() else {
+            panic!("expected verifier failure, got {errs:?}");
+        };
+        assert!(report.diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .contains("section entry must reference a defined function body")
+        }));
+    }
+
+    #[test]
     fn compile_object_allows_internal_multi_return_helpers_for_evm() {
         let parsed = parse_module(
             r#"
