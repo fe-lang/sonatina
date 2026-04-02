@@ -4,7 +4,7 @@ use bitflags::bitflags;
 use cranelift_entity::entity_impl;
 use dashmap::{DashMap, ReadOnlyView};
 use rayon::{iter::IntoParallelIterator, prelude::ParallelIterator};
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 use sonatina_triple::TargetTriple;
 
 use crate::{
@@ -109,8 +109,7 @@ impl Module {
     }
 
     pub fn clone_for_funcs(&self, funcs: &[FuncRef]) -> Self {
-        let funcs_set: FxHashSet<FuncRef> = funcs.iter().copied().collect();
-        let ctx = self.ctx.clone_for_funcs(&funcs_set);
+        let ctx = self.ctx.deep_clone();
         let cloned = Self {
             func_store: FuncStore::new(),
             ctx,
@@ -279,7 +278,7 @@ impl ModuleCtx {
         }
     }
 
-    pub fn clone_for_funcs(&self, _funcs: &FxHashSet<FuncRef>) -> Self {
+    pub fn deep_clone(&self) -> Self {
         let declared_funcs = DashMap::new();
         for entry in self.declared_funcs.iter() {
             declared_funcs.insert(*entry.key(), entry.value().clone());

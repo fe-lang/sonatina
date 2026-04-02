@@ -2,14 +2,17 @@ use crate::{
     isa::evm::{EvmBackend, EvmPreparedSection, opcode::OpCode},
     machinst::{
         assemble::ObjectLayout,
-        lower::{FixupUpdate, LoweredFunction, SectionLoweringCtx},
+        lower::{FixupUpdate, LoweredFunction},
         vcode::{SymFixup, SymFixupKind, VCodeFixup, VCodeInst},
     },
 };
 use cranelift_entity::EntityRef;
 use rustc_hash::FxHashMap;
 use sonatina_ir::{
-    BlockId, GlobalVariableRef, Module, inst::data::SymbolRef, module::FuncRef, object::EmbedSymbol,
+    BlockId, GlobalVariableRef, Module,
+    inst::data::SymbolRef,
+    module::FuncRef,
+    object::{EmbedSymbol, SectionName},
 };
 use tracing::{debug_span, info_span, trace_span};
 
@@ -34,7 +37,7 @@ struct BuildSectionObservabilityInput<'a, Op> {
     symtab: &'a FxHashMap<SymbolId, SymbolDef>,
     data: &'a [(GlobalVariableRef, Vec<u8>)],
     embeds: &'a [(EmbedSymbol, Vec<u8>)],
-    section_ctx: &'a SectionLoweringCtx<'a>,
+    section: &'a SectionName,
     section_bytes: u32,
 }
 
@@ -43,7 +46,7 @@ pub fn link_section(
     prepared: &EvmPreparedSection,
     data: &[(GlobalVariableRef, Vec<u8>)],
     embeds: &[(EmbedSymbol, Vec<u8>)],
-    section_ctx: &SectionLoweringCtx<'_>,
+    section: &SectionName,
     opts: &CompileOptions,
 ) -> Result<SectionArtifact, LinkSectionError> {
     const MAX_ITERS: usize = 64;
@@ -184,7 +187,7 @@ pub fn link_section(
                         symtab: &symtab,
                         data,
                         embeds,
-                        section_ctx,
+                        section,
                         section_bytes,
                     })
                     .map_err(LinkSectionError::Link)?
@@ -293,7 +296,7 @@ fn build_section_observability<Op>(
         symtab,
         data,
         embeds,
-        section_ctx,
+        section,
         section_bytes,
     } = input;
 
@@ -531,7 +534,7 @@ fn build_section_observability<Op>(
 
     Ok(SectionObservability {
         schema_version: OBSERVABILITY_SCHEMA_VERSION,
-        section: section_ctx.section.clone(),
+        section: section.clone(),
         section_bytes,
         code_bytes,
         data_bytes,

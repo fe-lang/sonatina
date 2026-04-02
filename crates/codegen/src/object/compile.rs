@@ -22,8 +22,7 @@ use super::{
 use crate::{
     isa::evm::{EvmBackend, collect_unsupported_evm_multi_return},
     machinst::lower::{
-        SectionLoweringCtx, SectionWorkModule, build_section_membership,
-        compute_section_function_emission_order,
+        SectionWorkModule, build_section_membership, compute_section_function_emission_order,
     },
 };
 
@@ -321,12 +320,6 @@ fn compile_section(
         }
     }
 
-    let section_ctx = SectionLoweringCtx {
-        object: object_name,
-        section: section_name,
-        embed_symbols: &defined_embed_symbols,
-    };
-
     let funcs = {
         let _span =
             trace_span!("sonatina.codegen.object.compute_function_emission_order").entered();
@@ -428,7 +421,7 @@ fn compile_section(
             section = %section_name.0
         )
         .entered();
-        link_section(backend, &prepared, &data, &embeds, &section_ctx, opts).map_err(
+        link_section(backend, &prepared, &data, &embeds, section_name, opts).map_err(
             |e| match e {
                 LinkSectionError::Backend { func, error } => {
                     vec![ObjectCompileError::BackendError {

@@ -6,7 +6,7 @@ use sonatina_ir::{
     Value, ValueId,
     inst::data::{GetFunctionPtr, SymAddr, SymSize, SymbolRef},
     module::{FuncRef, ModuleCtx},
-    object::{EmbedSymbol, ObjectName, SectionName},
+    object::EmbedSymbol,
 };
 
 pub struct LoweredFunction<Op> {
@@ -19,12 +19,6 @@ pub struct SectionCodeUnit<Op> {
     pub name: String,
     pub vcode: VCode<Op>,
     pub block_order: Vec<BlockId>,
-}
-
-pub struct SectionLoweringCtx<'a> {
-    pub object: &'a ObjectName,
-    pub section: &'a SectionName,
-    pub embed_symbols: &'a [EmbedSymbol],
 }
 
 pub struct SectionWorkModule {
