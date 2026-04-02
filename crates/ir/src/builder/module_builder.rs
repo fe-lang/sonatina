@@ -48,6 +48,7 @@ impl std::error::Error for BuilderError {}
 
 impl ModuleBuilder {
     pub fn new(ctx: ModuleCtx) -> Self {
+        let ctx = ctx.fork();
         Self {
             func_store: Arc::new(FuncStore::new()),
             ctx,
@@ -233,7 +234,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        FuncEffectSummary, Linkage, ObjectName,
+        FuncEffectSummary, GlobalVariableData, Linkage, ObjectName,
         builder::test_util::{test_isa, test_module_builder},
         inst::{
             SideEffect,
@@ -255,6 +256,67 @@ mod tests {
         // Declaring again with same sig should succeed
         let result2 = builder.declare_function(sig);
         assert!(result2.is_ok());
+    }
+
+    #[test]
+    fn test_new_builder_forks_module_ctx_stores() {
+        let isa = test_isa();
+        let ctx = ModuleCtx::new(&isa);
+
+        let builder1 = ModuleBuilder::new(ctx.clone());
+        let builder2 = ModuleBuilder::new(ctx);
+
+        let foo = builder1
+            .declare_function(Signature::new_unit("foo", Linkage::Public, &[]))
+            .unwrap();
+        assert_eq!(
+            builder1.ctx.func_sig(foo, |sig| sig.name().to_string()),
+            "foo"
+        );
+
+        let bar = builder2
+            .declare_function(Signature::new_unit("bar", Linkage::Public, &[]))
+            .unwrap();
+        assert_eq!(
+            builder2.ctx.func_sig(bar, |sig| sig.name().to_string()),
+            "bar"
+        );
+
+        // The two builders must not share the same `declared_funcs` store. If they did, `bar`
+        // would overwrite `foo` because fresh `FuncStore`s allocate overlapping `FuncRef`s.
+        assert_eq!(
+            builder1.ctx.func_sig(foo, |sig| sig.name().to_string()),
+            "foo"
+        );
+    }
+
+    #[test]
+    fn test_new_builder_preserves_seeded_type_and_global_stores() {
+        let isa = test_isa();
+        let ctx = ModuleCtx::new(&isa);
+        let seeded_struct = ctx.with_ty_store_mut(|s| s.make_struct("Seeded", &[], false));
+        let seeded_struct_ref = match seeded_struct {
+            Type::Compound(compound) => compound,
+            _ => panic!("expected compound type"),
+        };
+        let seeded_gv = ctx.with_gv_store_mut(|s| {
+            s.make_gv(GlobalVariableData::new(
+                "SEEDED".into(),
+                seeded_struct,
+                Linkage::Private,
+                false,
+                None,
+            ))
+        });
+
+        let builder = ModuleBuilder::new(ctx);
+
+        assert_eq!(builder.lookup_struct("Seeded"), Some(seeded_struct_ref));
+        assert_eq!(builder.lookup_gv("SEEDED"), Some(seeded_gv));
+        assert_eq!(
+            builder.ctx.with_gv_store(|s| s.ty(seeded_gv)),
+            seeded_struct
+        );
     }
 
     #[test]

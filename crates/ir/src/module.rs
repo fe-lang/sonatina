@@ -311,6 +311,26 @@ impl ModuleCtx {
         }
     }
 
+    /// Fork module state for building a new module on the same target.
+    ///
+    /// `ModuleCtx` clones intentionally share internal stores so `Function`s can cheaply hold a
+    /// reference to their parent `Module`'s context. `ModuleBuilder::new` needs different
+    /// semantics: preserve any caller-provided type/global declarations while isolating
+    /// function-scoped metadata so fresh `FuncStore`s do not collide through shared `FuncRef`s.
+    pub fn fork(&self) -> Self {
+        Self {
+            triple: self.triple,
+            inst_set: self.inst_set,
+            type_layout: self.type_layout,
+            address_spaces: self.address_spaces,
+            declared_funcs: Arc::new(DashMap::new()),
+            func_effects: Arc::new(RwLock::new(FxHashMap::default())),
+            func_hints: Arc::new(RwLock::new(FxHashMap::default())),
+            type_store: Arc::new(RwLock::new(self.type_store.read().unwrap().clone())),
+            gv_store: Arc::new(RwLock::new(self.gv_store.read().unwrap().clone())),
+        }
+    }
+
     pub fn size_of(&self, ty: Type) -> Result<usize, TypeLayoutError> {
         self.type_layout.size_of(ty, self)
     }
