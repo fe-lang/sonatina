@@ -356,7 +356,6 @@ pub(crate) fn compute_return_escape_caller_clamp_words(
     let mut callers: FxHashMap<FuncRef, FxHashSet<FuncRef>> = FxHashMap::default();
     let mut clamp_words: FxHashMap<FuncRef, u32> = FxHashMap::default();
     for &func in funcs {
-        callers.insert(func, FxHashSet::default());
         clamp_words.insert(func, 0);
     }
 
@@ -381,12 +380,8 @@ pub(crate) fn compute_return_escape_caller_clamp_words(
         changed = false;
 
         for &func in funcs {
-            let Some(func_callers) = callers.get(&func) else {
-                continue;
-            };
-
             let mut next = clamp_words.get(&func).copied().unwrap_or(0);
-            for caller in func_callers {
+            for caller in callers.get(&func).into_iter().flatten() {
                 let caller_clobber_words = abs_clobber_words
                     .get(caller)
                     .copied()

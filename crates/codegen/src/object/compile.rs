@@ -310,15 +310,6 @@ fn compile_section(
             &section_data,
         )
     };
-    for used in &membership.used_embed_symbols {
-        if !defined_embed_symbol_set.contains(used) {
-            return Err(vec![ObjectCompileError::UndefinedEmbedSymbol {
-                object: object_name.clone(),
-                section: section_name.clone(),
-                symbol: used.clone(),
-            }]);
-        }
-    }
 
     let funcs = {
         let _span =

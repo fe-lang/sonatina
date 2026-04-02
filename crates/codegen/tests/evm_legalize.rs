@@ -1,6 +1,5 @@
 use sonatina_codegen::{
-    isa::evm::{EvmBackend, PushWidthPolicy},
-    machinst::lower::SectionWorkModule,
+    isa::evm::{EvmBackend, PushWidthPolicy, test_util::prepare_root},
     object::{CompileOptions, compile_object},
 };
 use sonatina_ir::{Module, ir_writer::ModuleWriter, isa::evm::Evm, module::FuncRef};
@@ -23,10 +22,6 @@ fn find_func(module: &Module, name: &str) -> FuncRef {
         .iter()
         .find_map(|entry| (entry.value().name() == name).then(|| *entry.key()))
         .unwrap_or_else(|| panic!("missing function %{name}"))
-}
-
-fn work_module(module: &Module, entry: FuncRef) -> SectionWorkModule {
-    SectionWorkModule::from_roots(module, entry, &[], &[])
 }
 
 #[test]
@@ -60,11 +55,7 @@ func public %main(v0.i8, v1.i8) -> i8 {
 
     let parsed = parse_module(source).expect("module should parse");
     let backend = evm_backend();
-    let prepared = backend
-        .prepare_section(work_module(
-            &parsed.module,
-            find_func(&parsed.module, "main"),
-        ))
+    let prepared = prepare_root(&parsed.module, &backend, find_func(&parsed.module, "main"))
         .expect("prepare should succeed");
 
     let mut writer = ModuleWriter::new(prepared.module());
@@ -127,11 +118,7 @@ func public %main(v0.i8) -> i8 {
 
     let parsed = parse_module(source).expect("module should parse");
     let backend = evm_backend();
-    let prepared = backend
-        .prepare_section(work_module(
-            &parsed.module,
-            find_func(&parsed.module, "main"),
-        ))
+    let prepared = prepare_root(&parsed.module, &backend, find_func(&parsed.module, "main"))
         .expect("prepare should legalize the full call closure");
     backend
         .lower_function(&prepared, find_func(prepared.module(), "main"))
@@ -170,10 +157,7 @@ func public %main() {
 
     let parsed = parse_module(source).expect("module should parse");
     let backend = evm_backend();
-    let err = match backend.prepare_section(work_module(
-        &parsed.module,
-        find_func(&parsed.module, "main"),
-    )) {
+    let err = match prepare_root(&parsed.module, &backend, find_func(&parsed.module, "main")) {
         Ok(_) => panic!("prepare should reject external multi-return calls"),
         Err(err) => err,
     };
@@ -212,10 +196,7 @@ func public %main() -> i32 {{
 
     let parsed = parse_module(&source).expect("module should parse");
     let backend = evm_backend();
-    let err = match backend.prepare_section(work_module(
-        &parsed.module,
-        find_func(&parsed.module, "main"),
-    )) {
+    let err = match prepare_root(&parsed.module, &backend, find_func(&parsed.module, "main")) {
         Ok(_) => panic!("prepare should reject calls with more than 16 results"),
         Err(err) => err,
     };

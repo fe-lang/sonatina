@@ -17,6 +17,8 @@ mod ptr_escape;
 mod scratch_effects;
 mod scratch_plan;
 pub(crate) mod static_arena_alloc;
+#[doc(hidden)]
+pub mod test_util;
 mod verify;
 
 pub use backend::{EvmBackend, LateCleanupProfile, PushWidthPolicy};

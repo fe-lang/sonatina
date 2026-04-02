@@ -63,20 +63,8 @@ impl SectionWorkModule {
         &self.module
     }
 
-    pub fn module_mut(&mut self) -> &mut Module {
-        &mut self.module
-    }
-
     pub fn entry(&self) -> FuncRef {
         self.entry
-    }
-
-    pub fn includes(&self) -> &[FuncRef] {
-        &self.includes
-    }
-
-    pub fn data(&self) -> &[GlobalVariableRef] {
-        &self.data
     }
 
     pub fn membership(&self) -> SectionMembership {

@@ -2,8 +2,7 @@ mod common;
 
 use dir_test::{Fixture, dir_test};
 use sonatina_codegen::{
-    isa::evm::{EvmBackend, PushWidthPolicy},
-    machinst::lower::SectionWorkModule,
+    isa::evm::{EvmBackend, PushWidthPolicy, test_util::prepare_root},
     object::{CompileOptions, compile_all_objects},
     optim::Pipeline,
     transform::aggregate::EnumLowerToProduct,
@@ -107,14 +106,12 @@ object @Contract {
     let backend = test_backend();
     compile_all_objects(&parsed.module, &backend, &opts).expect("compile should succeed");
 
-    let prepared = backend
-        .prepare_section(SectionWorkModule::from_roots(
-            &parsed.module,
-            lookup_func(&parsed.module, "entry"),
-            &[],
-            &[],
-        ))
-        .expect("prepare should succeed");
+    let prepared = prepare_root(
+        &parsed.module,
+        &backend,
+        lookup_func(&parsed.module, "entry"),
+    )
+    .expect("prepare should succeed");
     assert_no_live_enum_ir(prepared.module());
     let entry = lookup_func(prepared.module(), "entry");
     let make_some = lookup_func(prepared.module(), "make_some");
@@ -328,9 +325,7 @@ fn enum_tag_br_table_cases_compile_through_evm_codegen() {
     };
     let backend = test_backend();
     compile_all_objects(&module, &backend, &opts).expect("compile should succeed");
-    let prepared = backend
-        .prepare_section(SectionWorkModule::from_roots(&module, func_ref, &[], &[]))
-        .expect("prepare should succeed");
+    let prepared = prepare_root(&module, &backend, func_ref).expect("prepare should succeed");
     assert_no_live_enum_ir(prepared.module());
 }
 

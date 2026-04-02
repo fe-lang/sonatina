@@ -608,8 +608,7 @@ fn zext_before(func: &mut Function, before: InstId, value: ValueId, ty: Type) ->
 mod tests {
     use super::*;
     use crate::{
-        isa::evm::{EvmBackend, PushWidthPolicy},
-        machinst::lower::SectionWorkModule,
+        isa::evm::{EvmBackend, PushWidthPolicy, test_util::prepare_root},
         object::{CompileOptions, compile_all_objects},
     };
     use rustc_hash::FxHashSet;
@@ -876,13 +875,7 @@ object @Contract {
         };
         compile_all_objects(&module, &backend, &opts).expect("compile should succeed");
 
-        let prepared = backend
-            .prepare_section(SectionWorkModule::from_roots(
-                &module,
-                lookup_func(&module, "entry"),
-                &[],
-                &[],
-            ))
+        let prepared = prepare_root(&module, &backend, lookup_func(&module, "entry"))
             .expect("prepare should succeed");
         let prepared_module = prepared.module();
         assert_no_object_ir(prepared_module);
@@ -1000,13 +993,7 @@ object @Contract {
         };
         compile_all_objects(&module, &backend, &opts).expect("compile should succeed");
 
-        let prepared = backend
-            .prepare_section(SectionWorkModule::from_roots(
-                &module,
-                lookup_func(&module, "entry"),
-                &[],
-                &[],
-            ))
+        let prepared = prepare_root(&module, &backend, lookup_func(&module, "entry"))
             .expect("prepare should succeed");
         let entry = lookup_func(prepared.module(), "entry");
         prepared.module().func_store.view(entry, |func| {
@@ -1069,13 +1056,7 @@ object @Contract {
         };
         compile_all_objects(&module, &backend, &opts).expect("compile should succeed");
 
-        let prepared = backend
-            .prepare_section(SectionWorkModule::from_roots(
-                &module,
-                lookup_func(&module, "entry"),
-                &[],
-                &[],
-            ))
+        let prepared = prepare_root(&module, &backend, lookup_func(&module, "entry"))
             .expect("prepare should succeed");
         assert_no_object_ir(prepared.module());
     }
