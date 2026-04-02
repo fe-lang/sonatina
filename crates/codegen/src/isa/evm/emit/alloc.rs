@@ -34,31 +34,34 @@ impl FinalAlloc {
             .unwrap_or_else(|| panic!("missing stack object location for obj {}", id.as_u32()))
     }
 
-    pub(crate) fn action_load_for_loc(&self, loc: ObjLoc, extra_words: u32) -> Action {
+    fn action_for_loc(
+        &self,
+        loc: ObjLoc,
+        extra_words: u32,
+        kind: &str,
+        abs: fn(u32) -> Action,
+        frame: fn(u32) -> Action,
+    ) -> Action {
         match loc {
-            ObjLoc::ScratchAbs(off) => Action::MemLoadAbs(
-                self.abs_addr_for_word(
-                    off.checked_add(extra_words)
-                        .expect("scratch load offset overflow"),
-                ),
-            ),
+            ObjLoc::ScratchAbs(off) => abs(self.abs_addr_for_word(
+                off.checked_add(extra_words)
+                    .unwrap_or_else(|| panic!("scratch {kind} offset overflow")),
+            )),
             ObjLoc::StableAbs(off) => {
                 let base_word = self
                     .mem_plan
                     .stable_base_word()
                     .expect("stable abs object missing stable base");
-                Action::MemLoadAbs(
-                    self.abs_addr_for_word(
-                        base_word
-                            .checked_add(off)
-                            .and_then(|w| w.checked_add(extra_words))
-                            .expect("stable load offset overflow"),
-                    ),
-                )
+                abs(self.abs_addr_for_word(
+                    base_word
+                        .checked_add(off)
+                        .and_then(|w| w.checked_add(extra_words))
+                        .unwrap_or_else(|| panic!("stable {kind} offset overflow")),
+                ))
             }
-            ObjLoc::StableFrame(off) => Action::MemLoadFrameSlot(
+            ObjLoc::StableFrame(off) => frame(
                 off.checked_add(extra_words)
-                    .expect("frame load offset overflow"),
+                    .unwrap_or_else(|| panic!("frame {kind} offset overflow")),
             ),
             ObjLoc::StackPinned(depth) => {
                 panic!("stack-pinned objects are not supported in EVM lowering (depth={depth})")
@@ -66,36 +69,24 @@ impl FinalAlloc {
         }
     }
 
+    pub(crate) fn action_load_for_loc(&self, loc: ObjLoc, extra_words: u32) -> Action {
+        self.action_for_loc(
+            loc,
+            extra_words,
+            "load",
+            Action::MemLoadAbs,
+            Action::MemLoadFrameSlot,
+        )
+    }
+
     pub(crate) fn action_store_for_loc(&self, loc: ObjLoc, extra_words: u32) -> Action {
-        match loc {
-            ObjLoc::ScratchAbs(off) => Action::MemStoreAbs(
-                self.abs_addr_for_word(
-                    off.checked_add(extra_words)
-                        .expect("scratch store offset overflow"),
-                ),
-            ),
-            ObjLoc::StableAbs(off) => {
-                let base_word = self
-                    .mem_plan
-                    .stable_base_word()
-                    .expect("stable abs object missing stable base");
-                Action::MemStoreAbs(
-                    self.abs_addr_for_word(
-                        base_word
-                            .checked_add(off)
-                            .and_then(|w| w.checked_add(extra_words))
-                            .expect("stable store offset overflow"),
-                    ),
-                )
-            }
-            ObjLoc::StableFrame(off) => Action::MemStoreFrameSlot(
-                off.checked_add(extra_words)
-                    .expect("frame store offset overflow"),
-            ),
-            ObjLoc::StackPinned(depth) => {
-                panic!("stack-pinned objects are not supported in EVM lowering (depth={depth})")
-            }
-        }
+        self.action_for_loc(
+            loc,
+            extra_words,
+            "store",
+            Action::MemStoreAbs,
+            Action::MemStoreFrameSlot,
+        )
     }
 
     fn inject_call_save_pre(
