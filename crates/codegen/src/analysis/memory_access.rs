@@ -15,7 +15,7 @@ use sonatina_ir::{
     types::CompoundType,
 };
 
-use crate::{isa::evm::STATIC_BASE, optim::aggregate::shape};
+use crate::{isa::evm::STATIC_BASE, transform::aggregate::shape};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ValueKey {

@@ -14,7 +14,7 @@ use sonatina_ir::{
 
 use crate::{
     loop_analysis::{Loop, LoopTree},
-    optim::aggregate::shape,
+    transform::aggregate::shape,
 };
 
 pub type LoopId = Loop;

@@ -5,7 +5,8 @@ use sonatina_codegen::{
     isa::evm::{EvmBackend, PushWidthPolicy},
     machinst::lower::SectionWorkModule,
     object::{CompileOptions, compile_all_objects},
-    optim::{Pipeline, aggregate::EnumLowerToProduct},
+    optim::Pipeline,
+    transform::aggregate::EnumLowerToProduct,
 };
 use sonatina_ir::{
     I256, Immediate, Linkage, Module, Signature, Type,

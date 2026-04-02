@@ -1636,11 +1636,11 @@ fn projection_view_leaf_tys(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::optim::aggregate::{
-        compute_object_effect_summaries, object_tracking::collect_root_slices,
-    };
+    use crate::transform::aggregate::compute_object_effect_summaries;
     use sonatina_ir::{Module, module::FuncRef};
     use sonatina_parser::parse_module;
+
+    use super::super::object_tracking::collect_root_slices;
 
     fn parse_test_module(src: &str) -> Module {
         parse_module(src).expect("parse should succeed").module

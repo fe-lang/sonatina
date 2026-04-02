@@ -1276,8 +1276,8 @@ mod tests {
     }
 
     fn run_with_effects(module: &sonatina_ir::Module, func_ref: FuncRef) {
-        let object_effects = crate::optim::aggregate::compute_object_effect_summaries(module);
-        let local_object_args = crate::optim::aggregate::collect_local_object_arg_info(module);
+        let object_effects = crate::transform::aggregate::compute_object_effect_summaries(module);
+        let local_object_args = crate::transform::aggregate::collect_local_object_arg_info(module);
         module.func_store.modify(func_ref, |func| {
             ObjectLoadStore::default().run_for_func(
                 func_ref,

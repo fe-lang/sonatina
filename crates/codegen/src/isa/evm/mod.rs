@@ -1,16 +1,15 @@
-mod const_data;
 mod heap_plan;
 mod late_alias;
 mod late_block_merge;
 mod late_section_merge;
 mod lazy_frame;
-mod legalize;
 pub use late_alias::canonicalize_alias_value;
 pub(crate) use late_alias::normalize_alias_map;
 mod malloc_plan;
 mod mem_effects;
 mod memory_plan;
 pub mod opcode;
+mod pipeline;
 mod provenance;
 mod ptr_escape;
 mod scratch_effects;
@@ -23,7 +22,6 @@ use tracing::{debug_span, info_span, trace_span};
 
 use crate::{
     analysis::func_behavior,
-    cfg_edit::CleanupMode,
     critical_edge::CriticalEdgeSplitter,
     domtree::DomTree,
     liveness::{InstLiveness, Liveness},
@@ -33,25 +31,8 @@ use crate::{
         vcode::{Label, SymFixup, SymFixupKind, VCode, VCodeFixup, VCodeInst},
     },
     module_analysis::{CallGraph, SccBuilder},
-    optim::{
-        aggregate::{
-            AggregateCombine, AggregateExpandAbi, AggregateLowerToMemoryLegalize,
-            AggregateScalarize, EnumLowerToProduct, LocalObjectArgMap, ObjectLoadStore,
-            ObjectLowerToMemory, ObjectReturnOutParam, assert_aggregate_legalized,
-            collect_local_object_arg_info_with_effects, compute_object_effect_summaries, shape,
-        },
-        branch_canonicalize::BranchCanonicalize,
-        cfg_cleanup::CfgCleanup,
-        checked_arith_elim::{CheckedArithElim, has_supported_checked_arith},
-        dead_arg::{DeadArgElimConfig, run_dead_arg_elim},
-        gvn::GvnSolver,
-        known_bits_simplify::KnownBitsSimplify,
-        licm::LicmSolver,
-        load_store::LoadStoreSolver,
-        loop_strength_reduce::LoopStrengthReduce,
-        sccp::SccpSolver,
-    },
     stackalloc::{Action, Actions, Allocator, StackifyAlloc, StackifyBuilder},
+    transform::aggregate::{assert_aggregate_legalized, shape},
 };
 use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{
@@ -71,7 +52,6 @@ use late_alias::compute_evm_late_aliases;
 use late_block_merge::run_late_block_merge;
 use late_section_merge::run_late_section_terminal_outline;
 use lazy_frame::{FrameSite, FrameSummary, LazyFramePlan, compute_frame_summary};
-use legalize::legalize_evm_section;
 use mem_effects::compute_func_mem_effects;
 pub(crate) use memory_plan::STATIC_BASE;
 use memory_plan::{
@@ -79,6 +59,7 @@ use memory_plan::{
     ProgramMemoryPlan, StableMode, WORD_BYTES, compute_abs_clobber_words,
     compute_program_memory_plan, topo_sort_sccs,
 };
+use pipeline::EvmPipeline;
 use ptr_escape::{PtrEscapeSummary, compute_ptr_escape_summaries};
 use static_arena_alloc::StackObjId;
 
@@ -1666,127 +1647,6 @@ fn validate_type_is_legalized_evm(ctx: &ModuleCtx, ty: Type, context: &str) -> R
     }
 }
 
-fn run_evm_pre_memory_aggregate_pipeline(module: &Module) -> LocalObjectArgMap {
-    EnumLowerToProduct.run(module);
-    const_data::ConstDataLower::default().run(module);
-    for func_ref in module.funcs() {
-        module.func_store.modify(func_ref, |function| {
-            AggregateCombine::default().run(function)
-        });
-    }
-    let synthetic_out_args = ObjectReturnOutParam.run_with_synthetic_out_args(module);
-    let object_effects = compute_object_effect_summaries(module);
-    let mut local_object_args = collect_local_object_arg_info_with_effects(module, &object_effects);
-    crate::optim::aggregate::merge_local_object_arg_info(
-        &mut local_object_args,
-        &synthetic_out_args,
-    );
-    for func_ref in module.funcs() {
-        module.func_store.modify(func_ref, |function| {
-            ObjectLoadStore::default().run_for_func(
-                func_ref,
-                function,
-                &local_object_args,
-                &object_effects,
-            )
-        });
-    }
-    ObjectLowerToMemory.run(module);
-    AggregateExpandAbi::default().run(module);
-    local_object_args
-}
-
-fn run_evm_post_legalize_cleanup(
-    module: &Module,
-    funcs: &[FuncRef],
-    local_object_args: &LocalObjectArgMap,
-) {
-    for &func in funcs {
-        module.func_store.modify(func, |function| {
-            CfgCleanup::new(CleanupMode::Strict).run(function);
-            AggregateCombine::default().run(function);
-            AggregateScalarize::default().run_for_func(func, function, local_object_args);
-        });
-    }
-
-    run_dead_arg_elim(module, DeadArgElimConfig::default());
-    for &func in funcs {
-        module.func_store.modify(func, |function| {
-            CfgCleanup::new(CleanupMode::Strict).run(function);
-        });
-    }
-
-    func_behavior::analyze_module(module);
-    for &func in funcs {
-        module.func_store.modify(func, |function| {
-            BranchCanonicalize::new().run(function);
-
-            let mut cfg = ControlFlowGraph::new();
-            cfg.compute(function);
-            LoadStoreSolver::new().run(function, &mut cfg);
-
-            KnownBitsSimplify::new().run(function);
-            cfg.compute(function);
-            SccpSolver::new().run(function, &mut cfg);
-        });
-    }
-}
-
-fn run_evm_post_memory_legalize_cleanup(module: &Module, funcs: &[FuncRef]) {
-    for &func in funcs {
-        module.func_store.modify(func, |function| {
-            CfgCleanup::new(CleanupMode::Strict).run(function);
-            BranchCanonicalize::new().run(function);
-
-            let mut cfg = ControlFlowGraph::new();
-            let mut domtree = DomTree::new();
-            GvnSolver::new().run(function, &mut cfg, &mut domtree);
-
-            let mut lpt = LoopTree::new();
-            LicmSolver::new().run(function, &mut cfg, &mut lpt);
-
-            CfgCleanup::new(CleanupMode::Strict).run(function);
-        });
-    }
-
-    func_behavior::analyze_module(module);
-    for &func in funcs {
-        module.func_store.modify(func, |function| {
-            BranchCanonicalize::new().run(function);
-
-            let mut cfg = ControlFlowGraph::new();
-            cfg.compute(function);
-            LoadStoreSolver::new().run(function, &mut cfg);
-
-            if has_supported_checked_arith(function) {
-                cfg.compute(function);
-                let mut domtree = DomTree::new();
-                domtree.compute(&cfg);
-                let mut lpt = LoopTree::new();
-                lpt.compute(&cfg, &domtree);
-                CheckedArithElim::new().run(function, &cfg, &lpt);
-            }
-
-            cfg.compute(function);
-            SccpSolver::new().run(function, &mut cfg);
-
-            cfg.compute(function);
-            let mut domtree = DomTree::new();
-            domtree.compute(&cfg);
-            let mut lpt = LoopTree::new();
-            lpt.compute(&cfg, &domtree);
-            LoopStrengthReduce::new().run(function, &mut cfg, &mut domtree, &mut lpt);
-
-            cfg.compute(function);
-            LoadStoreSolver::new().run(function, &mut cfg);
-
-            cfg.compute(function);
-            SccpSolver::new().run(function, &mut cfg);
-            CfgCleanup::new(CleanupMode::Strict).run(function);
-        });
-    }
-}
-
 pub(crate) fn collect_unsupported_evm_multi_return(
     module: &Module,
     funcs: &[FuncRef],
@@ -2019,67 +1879,16 @@ fn validate_supported_lowering_ir(func_ref: FuncRef, func: &Function) -> Result<
 impl EvmBackend {
     pub fn prepare_section(&self, work: SectionWorkModule) -> Result<EvmPreparedSection, String> {
         let module = work.module();
-        let work_funcs = module.funcs();
+        let pipeline = EvmPipeline::new(self);
         let _span = info_span!(
             "sonatina.codegen.evm.prepare_section",
-            funcs = work_funcs.len()
+            funcs = module.funcs().len()
         )
         .entered();
-        let local_object_args = run_evm_pre_memory_aggregate_pipeline(module);
-        legalize_evm_section(module, &work_funcs);
-        if self.late_cleanup_profile != LateCleanupProfile::Off {
-            run_evm_post_legalize_cleanup(module, &work_funcs, &local_object_args);
-        }
-        if let Some((_, message)) = collect_unsupported_evm_multi_return(module, &work_funcs, None)
-            .into_iter()
-            .next()
-        {
-            return Err(message);
-        }
+        let pipeline = pipeline.run(&work)?;
+        let funcs = pipeline.funcs;
+        let ptr_escape = pipeline.ptr_escape;
         let membership = work.membership();
-        let funcs = work.function_emission_order(&membership);
-        for &func in &funcs {
-            module.func_store.view(func, |function| {
-                validate_supported_lowering_ir(func, function)
-            })?;
-        }
-        let ptr_escape = {
-            let _span = debug_span!("sonatina.codegen.evm.compute_ptr_escape_summaries").entered();
-            compute_ptr_escape_summaries(module, &funcs, &self.isa)
-        };
-
-        // Pre-pass: insert free-ptr restore (conservative: treat all calls as barriers).
-        {
-            let _span = debug_span!("sonatina.codegen.evm.prepare_free_ptr_restore").entered();
-            for &func in &funcs {
-                let _span = trace_span!(
-                    "sonatina.codegen.evm.prepare_free_ptr_restore.func",
-                    func_ref = func.as_u32()
-                )
-                .entered();
-                module.func_store.modify(func, |function| {
-                    prepare_free_ptr_restore(function, &module.ctx, self, &ptr_escape);
-                });
-            }
-        }
-
-        {
-            let _span = debug_span!("sonatina.codegen.evm.aggregate_legalize").entered();
-            for &func in &funcs {
-                let _span = trace_span!(
-                    "sonatina.codegen.evm.aggregate_legalize.func",
-                    func_ref = func.as_u32()
-                )
-                .entered();
-                module.func_store.modify(func, |function| {
-                    AggregateLowerToMemoryLegalize::default().run(function, &module.ctx);
-                    assert_aggregate_legalized(function, &module.ctx);
-                });
-            }
-        }
-        if self.late_cleanup_profile != LateCleanupProfile::Off {
-            run_evm_post_memory_legalize_cleanup(module, &funcs);
-        }
 
         {
             let _span = debug_span!("sonatina.codegen.evm.func_behavior").entered();
@@ -5605,44 +5414,47 @@ object @Contract {
         Pipeline::speed().run(&mut parsed.module);
 
         let funcs = parsed.module.funcs();
-        let backend = EvmBackend::new(Evm::new(TargetTriple {
+        let off_backend = EvmBackend::new(Evm::new(TargetTriple {
+            architecture: Architecture::Evm,
+            vendor: Vendor::Ethereum,
+            operating_system: OperatingSystem::Evm(EvmVersion::Osaka),
+        }))
+        .with_late_cleanup_profile(LateCleanupProfile::Off);
+        let speed_backend = EvmBackend::new(Evm::new(TargetTriple {
             architecture: Architecture::Evm,
             vendor: Vendor::Ethereum,
             operating_system: OperatingSystem::Evm(EvmVersion::Osaka),
         }))
         .with_late_cleanup_profile(LateCleanupProfile::Speed);
-        let local_object_args = run_evm_pre_memory_aggregate_pipeline(&parsed.module);
-        legalize_evm_section(&parsed.module, &funcs);
-        run_evm_post_legalize_cleanup(&parsed.module, &funcs, &local_object_args);
-
-        let ptr_escape = compute_ptr_escape_summaries(&parsed.module, &funcs, &backend.isa);
-        for &func in &funcs {
-            parsed.module.func_store.modify(func, |function| {
-                prepare_free_ptr_restore(function, &parsed.module.ctx, &backend, &ptr_escape);
-                AggregateLowerToMemoryLegalize::default().run(function, &parsed.module.ctx);
-                assert_aggregate_legalized(function, &parsed.module.ctx);
-            });
-        }
-
         let entry = find_func(&parsed.module, "entry");
-        let before = parsed.module.func_store.view(entry, |function| {
-            function
-                .layout
-                .iter_block()
-                .map(|block| function.layout.iter_inst(block).count())
-                .sum::<usize>()
-        });
+        let count_insts = |prepared: &EvmPreparedSection| {
+            prepared.module().func_store.view(entry, |function| {
+                function
+                    .layout
+                    .iter_block()
+                    .map(|block| function.layout.iter_inst(block).count())
+                    .sum::<usize>()
+            })
+        };
+        let dump_entry = |prepared: &EvmPreparedSection| {
+            prepared.module().func_store.view(entry, |function| {
+                FuncWriter::new(entry, function).dump_string()
+            })
+        };
+        let before = off_backend
+            .prepare_section(work_module_with_entry(&parsed.module, &funcs, entry))
+            .expect("prepare without optional cleanup should succeed");
+        let after = speed_backend
+            .prepare_section(work_module_with_entry(&parsed.module, &funcs, entry))
+            .expect("prepare with optional cleanup should succeed");
+        let before_dump = dump_entry(&before);
+        let before = count_insts(&before);
+        let after = count_insts(&after);
 
-        run_evm_post_memory_legalize_cleanup(&parsed.module, &funcs);
-
-        let after = parsed.module.func_store.view(entry, |function| {
-            function
-                .layout
-                .iter_block()
-                .map(|block| function.layout.iter_inst(block).count())
-                .sum::<usize>()
-        });
-
+        assert!(
+            !before_dump.contains("obj."),
+            "mandatory lowering must still remove object IR when optional cleanup is off:\n{before_dump}"
+        );
         assert!(
             after < before,
             "late raw-memory cleanup should reduce prepared IR after memory legalization (before={before}, after={after})"
