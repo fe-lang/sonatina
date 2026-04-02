@@ -1,7 +1,7 @@
 use macros::inst_prop;
 use rustc_hash::FxHashSet;
 use sonatina_ir::{
-    Inst, InstId, Type, ValueId,
+    Inst, InstId, Type, U256, ValueId,
     inst::{
         arith, cast, cmp,
         control_flow::{self},
@@ -12,7 +12,7 @@ use sonatina_ir::{
 
 use crate::{
     diagnostic::{Diagnostic, DiagnosticCode},
-    verify::type_utils::{is_integral_or_pointer, is_obj_ref_ty, is_pointer_ty},
+    verify::type_utils::{is_const_ref_ty, is_integral_or_pointer, is_obj_ref_ty, is_pointer_ty},
 };
 
 use super::FunctionVerifier;
@@ -326,16 +326,18 @@ impl_cmp_rule!(
     cmp::Ne => "ne",
 );
 
-fn object_field_ty(
+fn projected_field_ty(
     verifier: &mut FunctionVerifier<'_>,
     base_ty: Type,
     idx_value: ValueId,
     location: crate::diagnostic::Location,
+    opname: &str,
+    array_opname: &str,
 ) -> Option<Type> {
     let Type::Compound(cmpd_ref) = base_ty else {
         verifier.emit(Diagnostic::error(
             DiagnosticCode::InstOperandTypeMismatch,
-            "object projection requires struct or array object type",
+            format!("{opname} requires a struct reference type"),
             location,
         ));
         return None;
@@ -347,40 +349,46 @@ fn object_field_ty(
     else {
         verifier.emit(Diagnostic::error(
             DiagnosticCode::InvalidTypeRef,
-            "object projection references unknown type",
+            format!("{opname} references unknown type"),
             location,
         ));
         return None;
     };
 
     match cmpd {
-        CompoundType::Array { elem, .. } => Some(elem),
+        CompoundType::Array { .. } => {
+            verifier.emit(Diagnostic::error(
+                DiagnosticCode::InstOperandTypeMismatch,
+                format!("{opname} does not support array indexing; use {array_opname}"),
+                location,
+            ));
+            None
+        }
         CompoundType::Struct(s) => {
             let Some(imm) = verifier.value_imm(idx_value) else {
                 verifier.emit(Diagnostic::error(
                     DiagnosticCode::InstOperandTypeMismatch,
-                    "object struct projection index must be an immediate value",
+                    format!("{opname} index must be an immediate value"),
                     location,
                 ));
                 return None;
             };
-            if imm.is_negative() {
+            let Some(index) = imm.to_nonnegative_usize() else {
                 verifier.emit(
                     Diagnostic::error(
                         DiagnosticCode::InstOperandTypeMismatch,
-                        "object projection index must be non-negative",
+                        format!("{opname} index must be a non-negative immediate value"),
                         location,
                     )
                     .with_note(format!("index immediate {:?}", imm)),
                 );
                 return None;
-            }
-            let index = imm.as_usize();
+            };
             let Some(field_ty) = s.fields.get(index).copied() else {
                 verifier.emit(
                     Diagnostic::error(
                         DiagnosticCode::InstOperandTypeMismatch,
-                        "object projection index is out of bounds",
+                        format!("{opname} index is out of bounds"),
                         location,
                     )
                     .with_note(format!("index {index}, fields {}", s.fields.len())),
@@ -392,20 +400,60 @@ fn object_field_ty(
         CompoundType::Enum(_) => {
             verifier.emit(Diagnostic::error(
                 DiagnosticCode::InstOperandTypeMismatch,
-                "object projection requires struct or array object type; use enum.proj for enums",
+                format!("{opname} requires a struct reference type; use enum.proj for enums"),
                 location,
             ));
             None
         }
-        CompoundType::Ptr(_) | CompoundType::ObjRef(_) | CompoundType::Func { .. } => {
+        CompoundType::Ptr(_)
+        | CompoundType::ObjRef(_)
+        | CompoundType::ConstRef(_)
+        | CompoundType::Func { .. } => {
             verifier.emit(Diagnostic::error(
                 DiagnosticCode::InstOperandTypeMismatch,
-                "object projection requires struct or array object type",
+                format!("{opname} requires a struct reference type"),
                 location,
             ));
             None
         }
     }
+}
+
+fn verify_nonnegative_in_bounds_array_index(
+    verifier: &mut FunctionVerifier<'_>,
+    value: ValueId,
+    len: usize,
+    location: crate::diagnostic::Location,
+    opname: &str,
+) -> bool {
+    let Some(imm) = verifier.value_imm(value) else {
+        return true;
+    };
+    if imm.is_negative() {
+        verifier.emit(
+            Diagnostic::error(
+                DiagnosticCode::InstOperandTypeMismatch,
+                format!("{opname} index must be non-negative"),
+                location,
+            )
+            .with_note(format!("index immediate {:?}", imm)),
+        );
+        return false;
+    }
+
+    if imm.as_i256().to_u256() >= U256::from(len) {
+        verifier.emit(
+            Diagnostic::error(
+                DiagnosticCode::InstOperandTypeMismatch,
+                format!("{opname} index is out of bounds"),
+                location,
+            )
+            .with_note(format!("index immediate {:?}, length {}", imm, len)),
+        );
+        return false;
+    }
+
+    true
 }
 
 fn enum_value_ty(
@@ -494,7 +542,7 @@ fn enum_variant_field_ty(
             if imm.is_negative() {
                 return None;
             }
-            let index = imm.as_usize();
+            let index = imm.to_nonnegative_usize()?;
             variant_data.fields.get(index).copied()
         })?;
         Some(idx)
@@ -818,7 +866,7 @@ fn enum_variant_for_tag_value(
     enum_ty: CompoundTypeRef,
     value: ValueId,
 ) -> Option<EnumVariantRef> {
-    let idx = verifier.value_imm(value)?.as_i256().to_u256().as_usize();
+    let idx = verifier.value_imm(value)?.to_nonnegative_usize()?;
     let variant_count = verifier.ctx.with_ty_store(|store| {
         let CompoundType::Enum(enum_data) = store.get_compound(enum_ty)? else {
             return None;
@@ -867,6 +915,115 @@ fn expect_objref_result(
             )
             .with_note(format!("found {:?}", result_ty)),
         );
+    }
+}
+
+fn expect_constref_result(
+    verifier: &mut FunctionVerifier<'_>,
+    inst_id: InstId,
+    elem_ty: Type,
+    location: crate::diagnostic::Location,
+    opname: &str,
+) {
+    let Some(result_ty) = verifier.inst_result_ty(inst_id) else {
+        verifier.emit(Diagnostic::error(
+            DiagnosticCode::InstResultTypeMismatch,
+            format!("{opname} must produce a const-reference result"),
+            location,
+        ));
+        return;
+    };
+    if verifier.constref_ty(result_ty) != Some(elem_ty) {
+        verifier.emit(
+            Diagnostic::error(
+                DiagnosticCode::InstResultTypeMismatch,
+                format!("{opname} result type must be constref<{elem_ty:?}>"),
+                verifier.inst_location(inst_id),
+            )
+            .with_note(format!("found {:?}", result_ty)),
+        );
+    }
+}
+
+fn validate_const_data_ty(
+    verifier: &mut FunctionVerifier<'_>,
+    ty: Type,
+    location: crate::diagnostic::Location,
+    opname: &str,
+) -> bool {
+    if ty.is_pointer(verifier.ctx) {
+        verifier.emit(Diagnostic::error(
+            DiagnosticCode::InstOperandTypeMismatch,
+            format!("{opname} does not support pointer-typed const data"),
+            location,
+        ));
+        return false;
+    }
+    if ty.is_obj_ref(verifier.ctx) || ty.is_const_ref(verifier.ctx) || ty.is_enum_tag() {
+        verifier.emit(Diagnostic::error(
+            DiagnosticCode::InstOperandTypeMismatch,
+            format!("{opname} does not support reference or enum-tag const data"),
+            location,
+        ));
+        return false;
+    }
+    if ty.is_integral() {
+        return true;
+    }
+
+    let Type::Compound(cmpd_ref) = ty else {
+        verifier.emit(Diagnostic::error(
+            DiagnosticCode::InstOperandTypeMismatch,
+            format!("{opname} does not support this const-data type"),
+            location,
+        ));
+        return false;
+    };
+    let Some(cmpd) = verifier
+        .ctx
+        .with_ty_store(|store| store.get_compound(cmpd_ref).cloned())
+    else {
+        verifier.emit(Diagnostic::error(
+            DiagnosticCode::InvalidTypeRef,
+            format!("{opname} references unknown const-data type"),
+            location,
+        ));
+        return false;
+    };
+
+    match cmpd {
+        CompoundType::Array { elem, .. } => {
+            validate_const_data_ty(verifier, elem, location, opname)
+        }
+        CompoundType::Struct(s) => {
+            if s.packed {
+                verifier.emit(Diagnostic::error(
+                    DiagnosticCode::InstOperandTypeMismatch,
+                    format!("{opname} does not support packed-struct const data"),
+                    location,
+                ));
+                return false;
+            }
+            s.fields
+                .into_iter()
+                .all(|field| validate_const_data_ty(verifier, field, location.clone(), opname))
+        }
+        CompoundType::Enum(_) | CompoundType::Func { .. } => {
+            verifier.emit(Diagnostic::error(
+                DiagnosticCode::InstOperandTypeMismatch,
+                format!("{opname} does not support enum or function const data"),
+                location,
+            ));
+            false
+        }
+        CompoundType::Ptr(_) | CompoundType::ObjRef(_) | CompoundType::ConstRef(_) => {
+            verifier.emit(Diagnostic::error(
+                DiagnosticCode::InstOperandTypeMismatch,
+                format!("{opname} does not support reference-typed const data"),
+                location,
+            ));
+            false
+        }
     }
 }
 
@@ -1085,13 +1242,188 @@ impl VerifyInst for data::Alloca {
     }
 }
 
+impl VerifyInst for data::ConstRef {
+    fn verify_inst(&self, verifier: &mut FunctionVerifier<'_>, inst_id: InstId) {
+        let location = verifier.inst_location(inst_id);
+        let global_ref = self.global().gv();
+        let Some(global) = verifier
+            .ctx
+            .with_gv_store(|store| store.get(global_ref).cloned())
+        else {
+            verifier.emit(
+                Diagnostic::error(
+                    DiagnosticCode::InvalidGlobalRef,
+                    "const.ref references unknown global",
+                    location.clone(),
+                )
+                .with_note(format!("missing global id {}", global_ref.as_u32())),
+            );
+            return;
+        };
+        if !global.is_const {
+            verifier.emit(Diagnostic::error(
+                DiagnosticCode::InstOperandTypeMismatch,
+                "const.ref requires a const global",
+                location.clone(),
+            ));
+        }
+        if global.initializer.is_none() {
+            verifier.emit(Diagnostic::error(
+                DiagnosticCode::InstOperandTypeMismatch,
+                "const.ref requires a global with an initializer",
+                location.clone(),
+            ));
+        }
+        validate_const_data_ty(verifier, global.ty, location.clone(), "const.ref");
+        expect_constref_result(verifier, inst_id, global.ty, location, "const.ref");
+    }
+}
+
+impl VerifyInst for data::ConstProj {
+    fn verify_inst(&self, verifier: &mut FunctionVerifier<'_>, inst_id: InstId) {
+        let location = verifier.inst_location(inst_id);
+        let Some((&object, indices)) = self.values().split_first() else {
+            return;
+        };
+        let Some(object_ty) = verifier.value_ty(object) else {
+            return;
+        };
+        let Some(mut current_ty) = verifier.constref_ty(object_ty) else {
+            verifier.emit(Diagnostic::error(
+                DiagnosticCode::InstOperandTypeMismatch,
+                "const.proj base must be a const reference",
+                location.clone(),
+            ));
+            return;
+        };
+        for &idx_value in indices {
+            let Some(idx_ty) = verifier.value_ty(idx_value) else {
+                return;
+            };
+            if !idx_ty.is_integral() {
+                verifier.emit(Diagnostic::error(
+                    DiagnosticCode::InstOperandTypeMismatch,
+                    "const projection indices must be integral",
+                    location.clone(),
+                ));
+                return;
+            }
+            let Some(field_ty) = projected_field_ty(
+                verifier,
+                current_ty,
+                idx_value,
+                location.clone(),
+                "const.proj",
+                "const.index",
+            ) else {
+                return;
+            };
+            current_ty = field_ty;
+        }
+        expect_constref_result(verifier, inst_id, current_ty, location, "const.proj");
+    }
+}
+
+impl VerifyInst for data::ConstIndex {
+    fn verify_inst(&self, verifier: &mut FunctionVerifier<'_>, inst_id: InstId) {
+        let location = verifier.inst_location(inst_id);
+        let Some(object_ty) = verifier.value_ty(*self.object()) else {
+            return;
+        };
+        let Some(index_ty) = verifier.value_ty(*self.index()) else {
+            return;
+        };
+        let Some(base_ty) = verifier.constref_ty(object_ty) else {
+            verifier.emit(Diagnostic::error(
+                DiagnosticCode::InstOperandTypeMismatch,
+                "const.index base must be a const reference",
+                location.clone(),
+            ));
+            return;
+        };
+        if !index_ty.is_integral() {
+            verifier.emit(Diagnostic::error(
+                DiagnosticCode::InstOperandTypeMismatch,
+                "const.index index must be integral",
+                location.clone(),
+            ));
+            return;
+        }
+        let Some(Type::Compound(cmpd_ref)) = Some(base_ty) else {
+            verifier.emit(Diagnostic::error(
+                DiagnosticCode::InstOperandTypeMismatch,
+                "const.index requires an array const-reference type",
+                location.clone(),
+            ));
+            return;
+        };
+        let Some(cmpd) = verifier
+            .ctx
+            .with_ty_store(|store| store.get_compound(cmpd_ref).cloned())
+        else {
+            verifier.emit(Diagnostic::error(
+                DiagnosticCode::InvalidTypeRef,
+                "const.index references unknown const-data type",
+                location.clone(),
+            ));
+            return;
+        };
+        let CompoundType::Array { elem, len } = cmpd else {
+            verifier.emit(Diagnostic::error(
+                DiagnosticCode::InstOperandTypeMismatch,
+                "const.index requires an array const-reference type",
+                location.clone(),
+            ));
+            return;
+        };
+        if !verify_nonnegative_in_bounds_array_index(
+            verifier,
+            *self.index(),
+            len,
+            location.clone(),
+            "const.index",
+        ) {
+            return;
+        }
+        expect_constref_result(verifier, inst_id, elem, location, "const.index");
+    }
+}
+
+impl VerifyInst for data::ConstLoad {
+    fn verify_inst(&self, verifier: &mut FunctionVerifier<'_>, inst_id: InstId) {
+        let location = verifier.inst_location(inst_id);
+        let Some(object_ty) = verifier.value_ty(*self.object()) else {
+            return;
+        };
+        let Some(value_ty) = verifier.constref_ty(object_ty) else {
+            verifier.emit(Diagnostic::error(
+                DiagnosticCode::InstOperandTypeMismatch,
+                "const.load operand must be a const reference",
+                location.clone(),
+            ));
+            return;
+        };
+        if !value_ty.is_integral() {
+            verifier.emit(Diagnostic::error(
+                DiagnosticCode::InstOperandTypeMismatch,
+                "const.load currently only supports scalar integral leaf types",
+                location.clone(),
+            ));
+        }
+        verifier.expect_result_ty(inst_id, value_ty, location);
+    }
+}
+
 impl VerifyInst for data::ObjAlloc {
     fn verify_inst(&self, verifier: &mut FunctionVerifier<'_>, inst_id: InstId) {
         let location = verifier.inst_location(inst_id);
-        if verifier.is_function_ty(*self.ty()) || is_obj_ref_ty(verifier.ctx, *self.ty()) {
+        if verifier.is_function_ty(*self.ty())
+            || is_obj_ref_ty(verifier.ctx, *self.ty())
+            || is_const_ref_ty(verifier.ctx, *self.ty())
+        {
             verifier.emit(Diagnostic::error(
                 DiagnosticCode::InstOperandTypeMismatch,
-                "obj.alloc type must be a non-function, non-object-reference type",
+                "obj.alloc type must be a non-function, non-reference type",
                 location.clone(),
             ));
         }
@@ -1135,8 +1467,14 @@ impl VerifyInst for data::ObjProj {
                 ));
                 return;
             }
-            let Some(field_ty) = object_field_ty(verifier, current_ty, idx_value, location.clone())
-            else {
+            let Some(field_ty) = projected_field_ty(
+                verifier,
+                current_ty,
+                idx_value,
+                location.clone(),
+                "obj.proj",
+                "obj.index",
+            ) else {
                 return;
             };
             current_ty = field_ty;
@@ -1189,7 +1527,7 @@ impl VerifyInst for data::ObjIndex {
             ));
             return;
         };
-        let CompoundType::Array { elem, .. } = cmpd else {
+        let CompoundType::Array { elem, len } = cmpd else {
             verifier.emit(Diagnostic::error(
                 DiagnosticCode::InstOperandTypeMismatch,
                 "obj.index requires an array object type",
@@ -1197,6 +1535,15 @@ impl VerifyInst for data::ObjIndex {
             ));
             return;
         };
+        if !verify_nonnegative_in_bounds_array_index(
+            verifier,
+            *self.index(),
+            len,
+            location.clone(),
+            "obj.index",
+        ) {
+            return;
+        }
         expect_objref_result(verifier, inst_id, elem, location, "obj.index");
     }
 }
@@ -1284,6 +1631,46 @@ impl VerifyInst for data::ObjStore {
                     location.clone(),
                 )
                 .with_note(format!("expected {:?}, found {:?}", expected_ty, value_ty)),
+            );
+        }
+        verifier.expect_no_result(inst_id, location);
+    }
+}
+
+impl VerifyInst for data::ObjInitConst {
+    fn verify_inst(&self, verifier: &mut FunctionVerifier<'_>, inst_id: InstId) {
+        let location = verifier.inst_location(inst_id);
+        let Some(object_ty) = verifier.value_ty(*self.object()) else {
+            return;
+        };
+        let Some(expected_ty) = verifier.objref_ty(object_ty) else {
+            verifier.emit(Diagnostic::error(
+                DiagnosticCode::InstOperandTypeMismatch,
+                "obj.init.const destination must be an object reference",
+                location.clone(),
+            ));
+            return;
+        };
+        let Some(value_ty) = verifier.value_ty(*self.value()) else {
+            return;
+        };
+        let Some(actual_ty) = verifier.constref_ty(value_ty) else {
+            verifier.emit(Diagnostic::error(
+                DiagnosticCode::InstOperandTypeMismatch,
+                "obj.init.const source must be a const reference",
+                location.clone(),
+            ));
+            return;
+        };
+        validate_const_data_ty(verifier, actual_ty, location.clone(), "obj.init.const");
+        if actual_ty != expected_ty {
+            verifier.emit(
+                Diagnostic::error(
+                    DiagnosticCode::InstOperandTypeMismatch,
+                    "obj.init.const source and destination types must match",
+                    location.clone(),
+                )
+                .with_note(format!("expected {:?}, found {:?}", expected_ty, actual_ty)),
             );
         }
         verifier.expect_no_result(inst_id, location);

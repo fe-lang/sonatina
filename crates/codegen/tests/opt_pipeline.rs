@@ -192,6 +192,272 @@ func public %entry() -> i256 {
 }
 
 #[test]
+fn sccp_folds_const_load_from_const_ref() {
+    let (module, func_ref) = parse_test_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+global private const i256 $value = 77;
+
+func public %entry() -> i256 {
+    block0:
+        v0.constref<i256> = const.ref $value;
+        v1.i256 = const.load v0;
+        return v1;
+}
+"#,
+    );
+    module.func_store.modify(func_ref, |func| {
+        let mut cfg = ControlFlowGraph::new();
+        SccpSolver::new().run(func, &mut cfg);
+    });
+    assert_func_not_contains(&module, func_ref, "const.load");
+    let dumped = module.func_store.view(func_ref, |func| {
+        FuncWriter::new(func_ref, func).dump_string()
+    });
+    assert!(
+        dumped.contains("return 77.i256;"),
+        "const.load(const.ref) should fold to an immediate:\n{dumped}"
+    );
+    assert_fast_verified(&module);
+}
+
+#[test]
+fn sccp_folds_const_load_through_const_proj() {
+    let (module, func_ref) = parse_test_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+type @pair = { i256, i256 };
+
+global private const @pair $pair = {10, 20};
+
+func public %entry() -> i256 {
+    block0:
+        v0.constref<@pair> = const.ref $pair;
+        v1.constref<i256> = const.proj v0 1.i8;
+        v2.i256 = const.load v1;
+        return v2;
+}
+"#,
+    );
+    module.func_store.modify(func_ref, |func| {
+        let mut cfg = ControlFlowGraph::new();
+        SccpSolver::new().run(func, &mut cfg);
+    });
+    assert_func_not_contains(&module, func_ref, "const.load");
+    let dumped = module.func_store.view(func_ref, |func| {
+        FuncWriter::new(func_ref, func).dump_string()
+    });
+    assert!(
+        dumped.contains("return 20.i256;"),
+        "const.load(const.proj(const.ref ...)) should fold to an immediate:\n{dumped}"
+    );
+    assert_fast_verified(&module);
+}
+
+#[test]
+fn sccp_folds_const_load_with_proven_constant_dynamic_index() {
+    let (module, func_ref) = parse_test_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+global private const [i256; 4] $arr = [11, 22, 33, 44];
+
+func public %entry() -> i256 {
+    block0:
+        v0.i8 = add 0.i8 1.i8;
+        v1.constref<[i256; 4]> = const.ref $arr;
+        v2.constref<i256> = const.index v1 v0;
+        v3.i256 = const.load v2;
+        return v3;
+}
+"#,
+    );
+    module.func_store.modify(func_ref, |func| {
+        let mut cfg = ControlFlowGraph::new();
+        SccpSolver::new().run(func, &mut cfg);
+    });
+    assert_func_not_contains(&module, func_ref, "const.load");
+    let dumped = module.func_store.view(func_ref, |func| {
+        FuncWriter::new(func_ref, func).dump_string()
+    });
+    assert!(
+        dumped.contains("return 22.i256;"),
+        "const.load with an SCCP-proven dynamic index should fold to an immediate:\n{dumped}"
+    );
+    assert_fast_verified(&module);
+}
+
+#[test]
+fn sccp_folds_const_load_through_same_path_phi() {
+    let (module, func_ref) = parse_test_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+type @pair = { i256, i256 };
+
+global private const @pair $pair = {10, 20};
+
+func public %entry(v0.i1) -> i256 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        v1.constref<@pair> = const.ref $pair;
+        v2.constref<i256> = const.proj v1 1.i8;
+        jump block3;
+
+    block2:
+        v3.constref<@pair> = const.ref $pair;
+        v4.constref<i256> = const.proj v3 1.i8;
+        jump block3;
+
+    block3:
+        v5.constref<i256> = phi (v2 block1) (v4 block2);
+        v6.i256 = const.load v5;
+        return v6;
+}
+"#,
+    );
+    module.func_store.modify(func_ref, |func| {
+        let mut cfg = ControlFlowGraph::new();
+        SccpSolver::new().run(func, &mut cfg);
+    });
+    assert_func_not_contains(&module, func_ref, "const.load");
+    let dumped = module.func_store.view(func_ref, |func| {
+        FuncWriter::new(func_ref, func).dump_string()
+    });
+    assert!(
+        dumped.contains("return 20.i256;"),
+        "const.load through a phi of identical paths should fold to an immediate:\n{dumped}"
+    );
+    assert_fast_verified(&module);
+}
+
+#[test]
+fn sccp_keeps_const_load_with_unknown_dynamic_index() {
+    let (module, func_ref) = parse_test_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+global private const [i256; 4] $arr = [11, 22, 33, 44];
+
+func public %entry(v0.i8) -> i256 {
+    block0:
+        v1.constref<[i256; 4]> = const.ref $arr;
+        v2.constref<i256> = const.index v1 v0;
+        v3.i256 = const.load v2;
+        return v3;
+}
+"#,
+    );
+    module.func_store.modify(func_ref, |func| {
+        let mut cfg = ControlFlowGraph::new();
+        SccpSolver::new().run(func, &mut cfg);
+    });
+    assert_func_contains(&module, func_ref, "const.load");
+    assert_fast_verified(&module);
+}
+
+#[test]
+fn sccp_keeps_const_load_with_loop_varying_index_phi() {
+    let (module, func_ref) = parse_test_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+global private const [i256; 4] $arr = [11, 22, 33, 44];
+
+func public %entry() -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v0.i256 = phi (0.i256 block0) (v5 block3);
+        v1.i256 = phi (0.i256 block0) (v4 block3);
+        v2.i1 = lt v0 4.i256;
+        br v2 block2 block4;
+
+    block2:
+        v3.constref<[i256; 4]> = const.ref $arr;
+        v6.constref<i256> = const.index v3 v0;
+        v7.i256 = const.load v6;
+        v4.i256 = add v1 v7;
+        jump block3;
+
+    block3:
+        v5.i256 = add v0 1.i256;
+        jump block1;
+
+    block4:
+        return v1;
+}
+"#,
+    );
+    module.func_store.modify(func_ref, |func| {
+        let mut cfg = ControlFlowGraph::new();
+        SccpSolver::new().run(func, &mut cfg);
+    });
+    let dumped = module.func_store.view(func_ref, |func| {
+        FuncWriter::new(func_ref, func).dump_string()
+    });
+    assert!(
+        dumped.contains("const.load"),
+        "loop-varying const.load index should not fold to a single immediate:\n{dumped}"
+    );
+    assert_fast_verified(&module);
+}
+
+#[test]
+fn sccp_keeps_const_load_with_reused_dynamic_index_value() {
+    let (module, func_ref) = parse_test_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+global private const [[i256; 2]; 2] $arr = [[11, 22], [33, 44]];
+
+func public %entry() -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v0.i256 = phi (0.i256 block0) (v5 block3);
+        v1.i256 = phi (0.i256 block0) (v4 block3);
+        v2.i1 = lt v0 2.i256;
+        br v2 block2 block4;
+
+    block2:
+        v3.constref<[[i256; 2]; 2]> = const.ref $arr;
+        v6.constref<[i256; 2]> = const.index v3 v0;
+        v7.constref<i256> = const.index v6 v0;
+        v8.i256 = const.load v7;
+        v4.i256 = add v1 v8;
+        jump block3;
+
+    block3:
+        v5.i256 = add v0 1.i256;
+        jump block1;
+
+    block4:
+        return v1;
+}
+"#,
+    );
+    module.func_store.modify(func_ref, |func| {
+        let mut cfg = ControlFlowGraph::new();
+        SccpSolver::new().run(func, &mut cfg);
+    });
+    let dumped = module.func_store.view(func_ref, |func| {
+        FuncWriter::new(func_ref, func).dump_string()
+    });
+    assert!(
+        dumped.contains("const.load"),
+        "reused loop-varying index should not fold to a single immediate:\n{dumped}"
+    );
+    assert_fast_verified(&module);
+}
+
+#[test]
 fn sccp_preserves_maybe_undef_saturating_zero_identities() {
     let (module, func_ref) = parse_test_module(
         r#"

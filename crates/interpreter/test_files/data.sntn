@@ -1,6 +1,9 @@
 target = "evm-ethereum-london"
 
 type @foo = { i8, i16, *i64 };
+type @pair = { i8, i16 };
+type @inner = { i32, i64 };
+type @outer = { @inner, i32 };
 
 #[(10.i256, 255.i8) -> 255.i8]
 func private %store_load(v0.i256, v1.i8) -> i8 {
@@ -20,4 +23,46 @@ func private %alloca(v0.i16) -> i8 {
         mstore v2 v0 i16;
         v3.i16 = mload v2 i16;
         return v3;
+}
+
+#[(7.i8, 4660.i16) -> 4660.i16]
+func private %aggregate_struct_store_load(v0.i8, v1.i16) -> i16 {
+    block0:
+        v2.@pair = insert_value undef.@pair 0.i8 v0;
+        v3.@pair = insert_value v2 1.i8 v1;
+        v4.*@pair = alloca @pair;
+        mstore v4 v3 @pair;
+        v5.@pair = mload v4 @pair;
+        v6.i16 = extract_value v5 1.i8;
+        return v6;
+}
+
+#[(5.i16, 9.i16) -> 9.i16]
+func private %aggregate_array_store_load(v0.i16, v1.i16) -> i16 {
+    block0:
+        v2.[i16; 2] = insert_value undef.[i16; 2] 0.i8 v0;
+        v3.[i16; 2] = insert_value v2 1.i8 v1;
+        v4.*[i16; 2] = alloca [i16; 2];
+        mstore v4 v3 [i16; 2];
+        v5.[i16; 2] = mload v4 [i16; 2];
+        v6.i16 = extract_value v5 1.i8;
+        return v6;
+}
+
+#[(7.i32, 11.i64, 13.i32) -> 22.i64]
+func private %nested_aggregate_store_load_matches_gep(v0.i32, v1.i64, v2.i32) -> i64 {
+    block0:
+        v3.@inner = insert_value undef.@inner 0.i8 v0;
+        v4.@inner = insert_value v3 1.i8 v1;
+        v5.@outer = insert_value undef.@outer 0.i8 v4;
+        v6.@outer = insert_value v5 1.i8 v2;
+        v7.*@outer = alloca @outer;
+        mstore v7 v6 @outer;
+        v8.@outer = mload v7 @outer;
+        v9.@inner = extract_value v8 0.i8;
+        v10.i64 = extract_value v9 1.i8;
+        v11.*i64 = gep v7 0.i8 0.i8 1.i8;
+        v12.i64 = mload v11 i64;
+        v13.i64 = add v10 v12;
+        return v13;
 }

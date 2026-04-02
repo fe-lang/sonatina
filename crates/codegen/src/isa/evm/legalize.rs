@@ -91,6 +91,15 @@ impl TypeLegalizer {
             CompoundType::ObjRef(_) => {
                 panic!("object references must be lowered before EVM type legalization");
             }
+            CompoundType::ConstRef(elem) => {
+                let elem = self.legalize_type(ctx, elem);
+                let mapped = ctx.with_ty_store_mut(|store| match store.make_const_ref(elem) {
+                    Type::Compound(mapped) => mapped,
+                    _ => unreachable!(),
+                });
+                self.compound_map.insert(compound, mapped);
+                mapped
+            }
             CompoundType::Enum(_) => {
                 panic!("enum types must be lowered before EVM type legalization");
             }

@@ -201,6 +201,10 @@ impl ModuleBuilder {
         self.ctx.with_ty_store_mut(|s| s.make_obj_ref(ty))
     }
 
+    pub fn constref_type(&self, ty: Type) -> Type {
+        self.ctx.with_ty_store_mut(|s| s.make_const_ref(ty))
+    }
+
     pub fn func_builder<C>(&self, func: FuncRef) -> FunctionBuilder<C>
     where
         C: FuncCursor,

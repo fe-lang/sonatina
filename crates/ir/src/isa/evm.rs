@@ -124,7 +124,9 @@ impl TypeLayout for EvmTypeLayout {
                 match cmpd_data {
                     CompoundType::Array { elem, len } => self.size_of(elem, ctx)? * len,
 
-                    CompoundType::Ptr(_) | CompoundType::ObjRef(_) => 32,
+                    CompoundType::Ptr(_) | CompoundType::ObjRef(_) | CompoundType::ConstRef(_) => {
+                        32
+                    }
 
                     CompoundType::Struct(s) => {
                         if s.packed {

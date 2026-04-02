@@ -471,6 +471,15 @@ impl Immediate {
         val.as_i256().to_u256().as_usize()
     }
 
+    pub fn to_nonnegative_usize(self) -> Option<usize> {
+        if self.is_negative() {
+            return None;
+        }
+
+        let value = self.as_i256().to_u256();
+        (value <= U256::from(usize::MAX)).then(|| value.as_usize())
+    }
+
     pub fn from_i256(val: I256, ty: Type) -> Self {
         match ty {
             Type::I1 => Self::I1(val.trunc_to_i1()),

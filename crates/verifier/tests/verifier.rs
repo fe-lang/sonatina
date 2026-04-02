@@ -20,6 +20,13 @@ fn has_code(report: &sonatina_verifier::VerificationReport, code: &str) -> bool 
         .any(|diagnostic| diagnostic.code.as_str() == code)
 }
 
+fn has_message(report: &sonatina_verifier::VerificationReport, message: &str) -> bool {
+    report
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.message == message)
+}
+
 fn diagnostic_fingerprint(report: &sonatina_verifier::VerificationReport) -> Vec<String> {
     report
         .diagnostics
@@ -510,6 +517,89 @@ func public %entry(v0.i256, v1.i256) -> i256 {
     let report = verify_module(&parsed.module, &cfg);
 
     assert!(report.is_ok(), "expected no verifier errors, got {report}");
+}
+
+#[test]
+fn obj_init_const_rejects_pointer_payloads() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+func private %bad(v0.objref<*i256>, v1.constref<*i256>) -> unit {
+    block0:
+        obj.init.const v0 v1;
+        return;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Full);
+    let report = verify_module(&parsed.module, &cfg);
+
+    assert!(has_code(&report, "IR0600"), "expected IR0600, got {report}");
+    assert!(
+        has_message(
+            &report,
+            "obj.init.const does not support pointer-typed const data"
+        ),
+        "expected pointer payload diagnostic, got {report}"
+    );
+}
+
+#[test]
+fn obj_init_const_rejects_reference_payloads() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+func private %bad(v0.objref<objref<i256>>, v1.constref<objref<i256>>) -> unit {
+    block0:
+        obj.init.const v0 v1;
+        return;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Full);
+    let report = verify_module(&parsed.module, &cfg);
+
+    assert!(has_code(&report, "IR0600"), "expected IR0600, got {report}");
+    assert!(
+        has_message(
+            &report,
+            "obj.init.const does not support reference or enum-tag const data"
+        ),
+        "expected reference payload diagnostic, got {report}"
+    );
+}
+
+#[test]
+fn obj_init_const_rejects_enum_tag_payloads() {
+    let src = r#"
+target = "evm-ethereum-osaka"
+
+type @OptionI256 = enum {
+    #None,
+    #Some(i256),
+};
+
+func private %bad(v0.objref<enumtag(@OptionI256)>, v1.constref<enumtag(@OptionI256)>) -> unit {
+    block0:
+        obj.init.const v0 v1;
+        return;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Full);
+    let report = verify_module(&parsed.module, &cfg);
+
+    assert!(has_code(&report, "IR0600"), "expected IR0600, got {report}");
+    assert!(
+        has_message(
+            &report,
+            "obj.init.const does not support reference or enum-tag const data"
+        ),
+        "expected enum-tag payload diagnostic, got {report}"
+    );
 }
 
 #[test]
@@ -1183,6 +1273,228 @@ func public %bad_extract() -> unit {
     assert!(has_code(&report, "IR0606"), "expected IR0606, got {report}");
     assert!(has_code(&report, "IR0608"), "expected IR0608, got {report}");
     assert!(has_code(&report, "IR0607"), "expected IR0607, got {report}");
+}
+
+#[test]
+fn negative_const_and_object_indices_are_rejected() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+global private const [i32; 2] $arr = [1, 2];
+
+func private %bad_const() -> unit {
+    block0:
+        v0.constref<[i32; 2]> = const.ref $arr;
+        v1.constref<i32> = const.index v0 -1.i32;
+        return;
+}
+
+func private %bad_obj() -> unit {
+    block0:
+        v0.objref<[i32; 2]> = obj.alloc [i32; 2];
+        v1.objref<i32> = obj.index v0 -1.i32;
+        return;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&parsed.module, &cfg);
+
+    assert!(
+        has_message(&report, "const.index index must be non-negative"),
+        "expected const.index negativity error, got {report}"
+    );
+    assert!(
+        has_message(&report, "obj.index index must be non-negative"),
+        "expected obj.index negativity error, got {report}"
+    );
+}
+
+#[test]
+fn constant_oob_const_and_object_indices_are_rejected() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+global private const [i32; 2] $arr = [1, 2];
+
+func private %bad_const() -> unit {
+    block0:
+        v0.constref<[i32; 2]> = const.ref $arr;
+        v1.constref<i32> = const.index v0 2.i32;
+        return;
+}
+
+func private %bad_obj() -> unit {
+    block0:
+        v0.objref<[i32; 2]> = obj.alloc [i32; 2];
+        v1.objref<i32> = obj.index v0 2.i32;
+        return;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&parsed.module, &cfg);
+
+    assert!(
+        has_message(&report, "const.index index is out of bounds"),
+        "expected const.index bounds error, got {report}"
+    );
+    assert!(
+        has_message(&report, "obj.index index is out of bounds"),
+        "expected obj.index bounds error, got {report}"
+    );
+}
+
+#[test]
+fn array_projection_ops_are_rejected() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+global private const [i32; 2] $arr = [1, 2];
+
+func private %bad_const() -> unit {
+    block0:
+        v0.constref<[i32; 2]> = const.ref $arr;
+        v1.constref<i32> = const.proj v0 0.i32;
+        return;
+}
+
+func private %bad_obj() -> unit {
+    block0:
+        v0.objref<[i32; 2]> = obj.alloc [i32; 2];
+        v1.objref<i32> = obj.proj v0 0.i32;
+        return;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&parsed.module, &cfg);
+
+    assert!(
+        has_message(
+            &report,
+            "const.proj does not support array indexing; use const.index"
+        ),
+        "expected const.proj array rejection, got {report}"
+    );
+    assert!(
+        has_message(
+            &report,
+            "obj.proj does not support array indexing; use obj.index"
+        ),
+        "expected obj.proj array rejection, got {report}"
+    );
+}
+
+#[test]
+fn oversized_positive_indices_are_rejected() {
+    let src = r#"
+target = "evm-ethereum-osaka"
+
+type @s = {i32, i64};
+type @OptionI32 = enum {
+    #None,
+    #Some(i32),
+};
+
+func private %bad_gep(v0.*@s) -> unit {
+    block0:
+        v1.*i64 = gep v0 0.i32 1606938044258990275541962092341162602522202993782792835301376.i256;
+        return;
+}
+
+func private %bad_insert() -> unit {
+    block0:
+        v0.[i32; 2] = insert_value undef.[i32; 2] 1606938044258990275541962092341162602522202993782792835301376.i256 1.i32;
+        return;
+}
+
+func private %bad_extract() -> unit {
+    block0:
+        v0.i32 = extract_value undef.[i32; 2] 1606938044258990275541962092341162602522202993782792835301376.i256;
+        return;
+}
+
+func private %bad_proj(v0.objref<@s>) -> unit {
+    block0:
+        v1.objref<i64> = obj.proj v0 1606938044258990275541962092341162602522202993782792835301376.i256;
+        return;
+}
+
+func private %bad_enum(v0.objref<@OptionI32>) -> unit {
+    block0:
+        v1.objref<@OptionI32> = enum.assert_variant_ref v0 #Some;
+        v2.objref<i32> = enum.proj v1 #Some 1606938044258990275541962092341162602522202993782792835301376.i256;
+        return;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&parsed.module, &cfg);
+
+    assert!(
+        has_message(
+            &report,
+            "struct gep indices must be non-negative immediate values"
+        ),
+        "expected oversized gep rejection, got {report}"
+    );
+    assert!(
+        has_message(&report, "aggregate index is out of bounds"),
+        "expected oversized aggregate index rejection, got {report}"
+    );
+    assert!(
+        has_message(
+            &report,
+            "obj.proj index must be a non-negative immediate value"
+        ),
+        "expected oversized obj.proj rejection, got {report}"
+    );
+    assert!(
+        has_message(
+            &report,
+            "enum.proj field index is out of bounds for the selected variant"
+        ),
+        "expected oversized enum.proj rejection, got {report}"
+    );
+}
+
+#[test]
+fn dynamic_const_and_object_indices_still_verify() {
+    let src = r#"
+target = "evm-ethereum-london"
+
+global private const [i32; 2] $arr = [1, 2];
+
+func private %ok_const(v0.i32) -> i32 {
+    block0:
+        v1.constref<[i32; 2]> = const.ref $arr;
+        v2.constref<i32> = const.index v1 v0;
+        v3.i32 = const.load v2;
+        return v3;
+}
+
+func private %ok_obj(v0.i32) -> unit {
+    block0:
+        v1.objref<[i32; 2]> = obj.alloc [i32; 2];
+        v2.objref<i32> = obj.index v1 v0;
+        obj.store v2 1.i32;
+        return;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&parsed.module, &cfg);
+
+    assert!(
+        report.is_ok(),
+        "expected dynamic indices to verify, got {report}"
+    );
 }
 
 #[test]

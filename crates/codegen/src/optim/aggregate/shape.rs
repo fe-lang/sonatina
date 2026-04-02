@@ -273,7 +273,10 @@ pub fn aggregate_slice_for_gep_path(
             CompoundType::Enum(_) => {
                 return None;
             }
-            CompoundType::Ptr(_) | CompoundType::ObjRef(_) | CompoundType::Func { .. } => {
+            CompoundType::Ptr(_)
+            | CompoundType::ObjRef(_)
+            | CompoundType::ConstRef(_)
+            | CompoundType::Func { .. } => {
                 return None;
             }
         }
@@ -315,7 +318,10 @@ pub fn aggregate_slice_for_object_path(
             CompoundType::Enum(_) => {
                 return None;
             }
-            CompoundType::Ptr(_) | CompoundType::ObjRef(_) | CompoundType::Func { .. } => {
+            CompoundType::Ptr(_)
+            | CompoundType::ObjRef(_)
+            | CompoundType::ConstRef(_)
+            | CompoundType::Func { .. } => {
                 return None;
             }
         }
@@ -332,7 +338,10 @@ pub fn aggregate_child_ty(module: &ModuleCtx, agg_ty: Type, idx: u32) -> Option<
         CompoundType::Enum(_) => {
             enum_slot_info(module, agg_ty, u32::try_from(idx).ok()?).map(|slot| slot.ty())
         }
-        CompoundType::Ptr(_) | CompoundType::ObjRef(_) | CompoundType::Func { .. } => None,
+        CompoundType::Ptr(_)
+        | CompoundType::ObjRef(_)
+        | CompoundType::ConstRef(_)
+        | CompoundType::Func { .. } => None,
     }
 }
 
@@ -341,7 +350,10 @@ pub fn aggregate_child_count(module: &ModuleCtx, agg_ty: Type) -> Option<usize> 
         CompoundType::Struct(s) => (!s.packed).then_some(s.fields.len()),
         CompoundType::Array { len, .. } => Some(len),
         CompoundType::Enum(_) => enum_child_count(module, agg_ty),
-        CompoundType::Ptr(_) | CompoundType::ObjRef(_) | CompoundType::Func { .. } => None,
+        CompoundType::Ptr(_)
+        | CompoundType::ObjRef(_)
+        | CompoundType::ConstRef(_)
+        | CompoundType::Func { .. } => None,
     }
 }
 
@@ -462,7 +474,9 @@ fn runtime_size_align_bytes(module: &ModuleCtx, ty: Type) -> Option<(u32, u32)> 
             Some((size, align))
         }
         Some(CompoundType::Func { .. }) => None,
-        Some(CompoundType::Ptr(_)) | Some(CompoundType::ObjRef(_)) => {
+        Some(CompoundType::Ptr(_))
+        | Some(CompoundType::ObjRef(_))
+        | Some(CompoundType::ConstRef(_)) => {
             let word_ty = module.type_layout.pointer_repl();
             let size = u32::try_from(module.size_of(word_ty).ok()?).ok()?;
             let align = u32::try_from(module.align_of(word_ty).ok()?).ok()?;
@@ -541,7 +555,10 @@ fn aggregate_slice_info(
                 }
             }
         }
-        CompoundType::Ptr(_) | CompoundType::ObjRef(_) | CompoundType::Func { .. } => None,
+        CompoundType::Ptr(_)
+        | CompoundType::ObjRef(_)
+        | CompoundType::ConstRef(_)
+        | CompoundType::Func { .. } => None,
     }
 }
 
@@ -655,7 +672,10 @@ fn aggregate_slice_for_leaf_range_impl(
             }
             None
         }
-        CompoundType::Ptr(_) | CompoundType::ObjRef(_) | CompoundType::Func { .. } => None,
+        CompoundType::Ptr(_)
+        | CompoundType::ObjRef(_)
+        | CompoundType::ConstRef(_)
+        | CompoundType::Func { .. } => None,
     }
 }
 
@@ -685,7 +705,10 @@ fn flattened_leaf_count(module: &ModuleCtx, ty: Type) -> Option<usize> {
             Some(count)
         }
         Some(CompoundType::Func { .. }) => None,
-        Some(CompoundType::Ptr(_)) | Some(CompoundType::ObjRef(_)) | None => Some(1),
+        Some(CompoundType::Ptr(_))
+        | Some(CompoundType::ObjRef(_))
+        | Some(CompoundType::ConstRef(_))
+        | None => Some(1),
     }
 }
 
@@ -754,7 +777,10 @@ fn flatten_aggregate(
             }
             Some(())
         }
-        Some(CompoundType::Ptr(_)) | Some(CompoundType::ObjRef(_)) | None => {
+        Some(CompoundType::Ptr(_))
+        | Some(CompoundType::ObjRef(_))
+        | Some(CompoundType::ConstRef(_))
+        | None => {
             let size = runtime_size_bytes(module, ty)?;
             out.push(AggregateLeaf {
                 path: path.clone(),

@@ -425,7 +425,7 @@ fn compile_section<B: LowerBackend>(
     let defined_embed_symbol_set: FxHashSet<EmbedSymbol> =
         defined_embed_symbols.iter().cloned().collect();
 
-    let membership = {
+    let mut membership = {
         let _span = trace_span!("sonatina.codegen.object.build_membership").entered();
         build_membership(program, section_id)
     };
@@ -445,9 +445,33 @@ fn compile_section<B: LowerBackend>(
         embed_symbols: &defined_embed_symbols,
     };
 
-    let funcs = {
+    let mut funcs = {
         let _span =
             trace_span!("sonatina.codegen.object.compute_function_emission_order").entered();
+        compute_function_emission_order(program, section, &membership)
+    };
+
+    {
+        let _span = trace_span!("sonatina.codegen.object.prepare_section_for_membership").entered();
+        backend.prepare_section(program.module, &funcs, &section_ctx);
+    }
+
+    membership = {
+        let _span = trace_span!("sonatina.codegen.object.rebuild_membership").entered();
+        build_membership(program, section_id)
+    };
+    for used in &membership.used_embed_symbols {
+        if !defined_embed_symbol_set.contains(used) {
+            return Err(vec![ObjectCompileError::UndefinedEmbedSymbol {
+                object: object_name.clone(),
+                section: section_name.clone(),
+                symbol: used.clone(),
+            }]);
+        }
+    }
+    funcs = {
+        let _span =
+            trace_span!("sonatina.codegen.object.recompute_function_emission_order").entered();
         compute_function_emission_order(program, section, &membership)
     };
 
@@ -759,12 +783,14 @@ mod tests {
             lower::{FixupUpdate, LowerBackend, LoweredFunction, SectionLoweringCtx},
             vcode::{Label, SymFixup, SymFixupKind, VCode, VCodeFixup, VCodeInst},
         },
-        object::{CompileOptions, FrontendProvenanceMap, OBSERVABILITY_SCHEMA_VERSION},
+        object::{
+            CompileOptions, FrontendProvenanceMap, OBSERVABILITY_SCHEMA_VERSION, artifact::SymbolId,
+        },
     };
     use cranelift_entity::EntityRef;
     use smallvec::SmallVec;
     use sonatina_ir::{
-        InstDowncast, InstDowncastMut, Module,
+        BlockId, InstDowncast, InstDowncastMut, Module,
         inst::{
             arith::Add,
             data::{SymAddr, SymSize},
@@ -942,6 +968,133 @@ mod tests {
         }
     }
 
+    struct PruneCallInPrepareBackend;
+
+    impl LowerBackend for PruneCallInPrepareBackend {
+        type MInst = u8;
+        type Error = String;
+        type FixupPolicy = PushWidthPolicy;
+
+        fn prepare_section(
+            &self,
+            module: &Module,
+            funcs: &[FuncRef],
+            section_ctx: &SectionLoweringCtx<'_>,
+        ) {
+            let _ = section_ctx;
+            for &func in funcs {
+                let is_main = module.ctx.func_sig(func, |sig| sig.name() == "main");
+                if !is_main {
+                    continue;
+                }
+                module.func_store.modify(func, |function| {
+                    let blocks: Vec<_> = function.layout.iter_block().collect();
+                    for block in blocks {
+                        let insts: Vec<_> = function.layout.iter_inst(block).collect();
+                        for inst in insts {
+                            if function.dfg.call_info(inst).is_some() {
+                                function.layout.remove_inst(inst);
+                                return;
+                            }
+                        }
+                    }
+                });
+            }
+        }
+
+        fn lower_function(
+            &self,
+            module: &Module,
+            func: FuncRef,
+            section_ctx: &SectionLoweringCtx<'_>,
+        ) -> Result<LoweredFunction<Self::MInst>, Self::Error> {
+            let _ = (module, section_ctx);
+
+            let mut vcode: VCode<Self::MInst> = VCode::default();
+            let block = BlockId::from_u32(0);
+            let _ = &mut vcode.blocks[block];
+            vcode.add_inst_to_block(
+                u8::try_from(func.as_u32() + 1).expect("func opcode overflow"),
+                None,
+                block,
+            );
+
+            Ok(LoweredFunction {
+                vcode,
+                block_order: vec![block],
+            })
+        }
+
+        fn apply_sym_fixup(
+            &self,
+            vcode: &mut VCode<Self::MInst>,
+            inst: VCodeInst,
+            fixup: &SymFixup,
+            value: u32,
+            policy: &Self::FixupPolicy,
+        ) -> Result<FixupUpdate, Self::Error> {
+            let _ = (vcode, inst, fixup, value, policy);
+            unreachable!("PruneCallInPrepareBackend does not emit symbol fixups")
+        }
+
+        fn lower(
+            &self,
+            ctx: &mut crate::machinst::lower::Lower<Self::MInst>,
+            alloc: &mut dyn crate::stackalloc::Allocator,
+            inst: sonatina_ir::InstId,
+        ) {
+            let _ = (ctx, alloc, inst);
+            unreachable!("PruneCallInPrepareBackend does not use machinst lowering")
+        }
+
+        fn enter_function(
+            &self,
+            ctx: &mut crate::machinst::lower::Lower<Self::MInst>,
+            alloc: &mut dyn crate::stackalloc::Allocator,
+            function: &sonatina_ir::Function,
+        ) {
+            let _ = (ctx, alloc, function);
+        }
+
+        fn enter_block(
+            &self,
+            ctx: &mut crate::machinst::lower::Lower<Self::MInst>,
+            alloc: &mut dyn crate::stackalloc::Allocator,
+            block: sonatina_ir::BlockId,
+        ) {
+            let _ = (ctx, alloc, block);
+        }
+
+        fn update_opcode_with_immediate_bytes(
+            &self,
+            opcode: &mut Self::MInst,
+            bytes: &mut SmallVec<[u8; 8]>,
+        ) {
+            let _ = (opcode, bytes);
+        }
+
+        fn update_opcode_with_label(
+            &self,
+            opcode: &mut Self::MInst,
+            label_offset: u32,
+        ) -> SmallVec<[u8; 4]> {
+            let _ = (opcode, label_offset);
+            SmallVec::new()
+        }
+
+        fn emit_opcode(&self, opcode: &Self::MInst, buf: &mut Vec<u8>) {
+            buf.push(*opcode);
+        }
+
+        fn emit_immediate_bytes(&self, bytes: &[u8], buf: &mut Vec<u8>) {
+            buf.extend_from_slice(bytes);
+        }
+
+        fn emit_label(&self, address: u32, buf: &mut Vec<u8>) {
+            let _ = (address, buf);
+        }
+    }
+
     #[test]
     fn compile_object_embeds_sections_and_patches_fixups() {
         let s = r#"
@@ -1015,6 +1168,83 @@ object @Contract {
         assert_eq!(init[5], 0x63);
         assert_eq!(&init[6..10], &13u32.to_be_bytes());
         assert_eq!(&init[10..], runtime.as_slice());
+    }
+
+    #[test]
+    fn compile_object_recomputes_function_membership_after_prepare_section() {
+        let s = r#"
+target = "evm-ethereum-london"
+
+func public %helper() {
+    block0:
+        return;
+}
+
+func public %main() {
+    block0:
+        call %helper;
+        return;
+}
+
+object @O {
+  section runtime {
+    entry %main;
+  }
+}
+"#;
+
+        let parsed = parse_module(s).unwrap();
+        let main = parsed
+            .module
+            .funcs()
+            .into_iter()
+            .find(|func| {
+                parsed
+                    .module
+                    .ctx
+                    .func_sig(*func, |sig| sig.name() == "main")
+            })
+            .expect("missing main");
+        let helper = parsed
+            .module
+            .funcs()
+            .into_iter()
+            .find(|func| {
+                parsed
+                    .module
+                    .ctx
+                    .func_sig(*func, |sig| sig.name() == "helper")
+            })
+            .expect("missing helper");
+
+        let backend = PruneCallInPrepareBackend;
+        let opts = CompileOptions {
+            fixup_policy: PushWidthPolicy::Push4,
+            emit_symtab: true,
+            emit_observability: false,
+            verifier_cfg: VerifierConfig::for_level(VerificationLevel::Standard),
+        };
+
+        let artifact = compile_object(&parsed.module, &backend, "O", &opts).unwrap();
+        let runtime = artifact
+            .sections
+            .iter()
+            .find(|(name, _)| name.0.as_str() == "runtime")
+            .unwrap()
+            .1;
+
+        assert_eq!(
+            runtime.bytes,
+            vec![u8::try_from(main.as_u32() + 1).unwrap()]
+        );
+        assert!(
+            runtime.symtab.contains_key(&SymbolId::Func(main)),
+            "main must remain in the section symbol table"
+        );
+        assert!(
+            !runtime.symtab.contains_key(&SymbolId::Func(helper)),
+            "prepare_section-mutated dead helper must be removed from section membership"
+        );
     }
 
     #[test]

@@ -15,11 +15,11 @@ global private const [i8; 96] $__fe_const_data_4 = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0
 
 func private %ark(v0.objref<[i256; 3]>, v1.i256) -> objref<[i256; 3]> {
     block0:
-        v84.objref<i256> = obj.proj v0 2.i64;
+        v84.objref<i256> = obj.index v0 2.i64;
         v85.i256 = obj.load v84;
-        v82.objref<i256> = obj.proj v0 1.i64;
+        v82.objref<i256> = obj.index v0 1.i64;
         v83.i256 = obj.load v82;
-        v80.objref<i256> = obj.proj v0 0.i64;
+        v80.objref<i256> = obj.index v0 0.i64;
         v81.i256 = obj.load v80;
         v5.objref<[i256; 24]> = obj.alloc [i256; 24];
         v6.*[i256; 24] = obj.materialize.stack v5;
@@ -73,11 +73,11 @@ func private %ark(v0.objref<[i256; 3]>, v1.i256) -> objref<[i256; 3]> {
 
 func private %sigma_full(v0.objref<[i256; 3]>) -> objref<[i256; 3]> {
     block0:
-        v61.objref<i256> = obj.proj v0 2.i64;
+        v61.objref<i256> = obj.index v0 2.i64;
         v62.i256 = obj.load v61;
-        v59.objref<i256> = obj.proj v0 1.i64;
+        v59.objref<i256> = obj.index v0 1.i64;
         v60.i256 = obj.load v59;
-        v57.objref<i256> = obj.proj v0 0.i64;
+        v57.objref<i256> = obj.index v0 0.i64;
         v58.i256 = obj.load v57;
         v40.i256 = evm_mul_mod v58 v58 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
         v41.i256 = evm_mul_mod v40 v40 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;

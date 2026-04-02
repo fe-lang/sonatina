@@ -36,12 +36,11 @@ impl Interpret for Gep {
             "GEP must start with a pointer type"
         );
 
-        let mut offset = 0;
+        let mut offset = I256::zero();
         for value in self.values()[1..].iter() {
             let Some(idx_value) = state.lookup_val(*value).as_imm() else {
                 return single_result(EvalValue::Undef);
             };
-            let idx_value = idx_value.as_usize();
 
             let cmpd = match current_ty {
                 Type::I1
@@ -68,13 +67,15 @@ impl Interpret for Gep {
             match cmpd_data {
                 CompoundType::Array { elem, .. } => {
                     let elem_size = state.dfg().ctx.size_of_unchecked(elem);
-                    offset += elem_size * idx_value;
+                    let step = idx_value.as_i256().overflowing_mul(I256::from(elem_size)).0;
+                    offset = offset.overflowing_add(step).0;
                     current_ty = elem;
                 }
 
                 CompoundType::Ptr(ty) => {
                     let size = state.dfg().ctx.size_of_unchecked(ty);
-                    offset += size * idx_value;
+                    let step = idx_value.as_i256().overflowing_mul(I256::from(size)).0;
+                    offset = offset.overflowing_add(step).0;
                     current_ty = ty;
                 }
 
@@ -82,20 +83,25 @@ impl Interpret for Gep {
                     panic!("Invalid GEP: indexing into an object reference");
                 }
 
+                CompoundType::ConstRef(_) => {
+                    panic!("Invalid GEP: indexing into a const reference");
+                }
+
                 CompoundType::Enum(_) => {
                     panic!("Invalid GEP: indexing into an enum type");
                 }
 
-                CompoundType::Struct(s) => {
-                    let mut local_offset = 0;
-                    for i in 0..idx_value {
-                        let field_ty = s.fields[i];
-                        let size = state.dfg().ctx.size_of_unchecked(field_ty);
-                        let align = state.dfg().ctx.align_of_unchecked(field_ty);
-                        local_offset += align_to(offset + size, align);
-                    }
-                    offset += local_offset;
-                    current_ty = s.fields[idx_value];
+                CompoundType::Struct(_) => {
+                    let Some(idx) = nonnegative_imm_usize(idx_value) else {
+                        return single_result(EvalValue::Undef);
+                    };
+                    let Some((field_offset, field_ty)) =
+                        state.dfg().ctx.aggregate_elem_offset(current_ty, idx)
+                    else {
+                        return single_result(EvalValue::Undef);
+                    };
+                    offset = offset.overflowing_add(I256::from(field_offset)).0;
+                    current_ty = field_ty;
                 }
 
                 CompoundType::Func { .. } => {
@@ -107,7 +113,7 @@ impl Interpret for Gep {
         }
 
         let tl = state.dfg().ctx.type_layout;
-        let res = base_addr + Immediate::from_i256(I256::from(offset), tl.pointer_repl());
+        let res = base_addr + Immediate::from_i256(offset, tl.pointer_repl());
         single_result(EvalValue::Imm(res))
     }
 }
@@ -156,6 +162,7 @@ impl Interpret for InsertValue {
                     CompoundType::Enum(_) => unreachable!(),
                     CompoundType::Ptr(_) => unreachable!(),
                     CompoundType::ObjRef(_) => unreachable!(),
+                    CompoundType::ConstRef(_) => unreachable!(),
                     CompoundType::Func { .. } => unreachable!(),
                 };
                 vec![EvalValue::Undef; len]
@@ -167,10 +174,17 @@ impl Interpret for InsertValue {
         };
 
         let idx_val = state.lookup_val(*self.idx());
-        let Some(idx) = idx_val.as_imm().map(Immediate::as_usize) else {
+        let Some(idx_imm) = idx_val.as_imm() else {
             debug_assert!(
                 idx_val.is_undef(),
                 "insert_value index must be an immediate"
+            );
+            return single_result(EvalValue::Undef);
+        };
+        let Some(idx) = nonnegative_imm_usize(idx_imm) else {
+            debug_assert!(
+                idx_imm.is_negative(),
+                "insert_value index must be non-negative"
             );
             return single_result(EvalValue::Undef);
         };
@@ -206,10 +220,17 @@ impl Interpret for ExtractValue {
         };
 
         let idx_val = state.lookup_val(*self.idx());
-        let Some(idx) = idx_val.as_imm().map(Immediate::as_usize) else {
+        let Some(idx_imm) = idx_val.as_imm() else {
             debug_assert!(
                 idx_val.is_undef(),
                 "extract_value index must be an immediate"
+            );
+            return single_result(EvalValue::Undef);
+        };
+        let Some(idx) = nonnegative_imm_usize(idx_imm) else {
+            debug_assert!(
+                idx_imm.is_negative(),
+                "extract_value index must be non-negative"
             );
             return single_result(EvalValue::Undef);
         };
@@ -224,7 +245,144 @@ impl Interpret for ExtractValue {
     }
 }
 
-fn align_to(offset: usize, alignment: usize) -> usize {
-    assert!(alignment & (alignment - 1) == 0);
-    (offset + alignment - 1) & !(alignment - 1)
+fn nonnegative_imm_usize(imm: Immediate) -> Option<usize> {
+    imm.to_nonnegative_usize()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use smallvec::smallvec;
+
+    use super::*;
+    use crate::{
+        DataFlowGraph, HasInst, Type, Value, ValueId,
+        builder::test_util::test_isa,
+        interpret::EvalResults,
+        module::{FuncRef, ModuleCtx},
+    };
+
+    struct TestHasInst;
+
+    impl<I: crate::Inst> HasInst<I> for TestHasInst {}
+
+    struct TestState {
+        dfg: DataFlowGraph,
+        values: HashMap<ValueId, EvalValue>,
+    }
+
+    impl TestState {
+        fn new(dfg: DataFlowGraph, values: impl IntoIterator<Item = (ValueId, EvalValue)>) -> Self {
+            Self {
+                dfg,
+                values: values.into_iter().collect(),
+            }
+        }
+    }
+
+    impl State for TestState {
+        fn lookup_val(&mut self, value: ValueId) -> EvalValue {
+            self.values.get(&value).cloned().unwrap_or_default()
+        }
+
+        fn call_func(&mut self, _func: FuncRef, _args: Vec<EvalValue>) -> EvalResults {
+            unreachable!()
+        }
+
+        fn set_action(&mut self, action: Action) {
+            assert_eq!(action, Action::Continue);
+        }
+
+        fn prev_block(&mut self) -> crate::BlockId {
+            unreachable!()
+        }
+
+        fn load(&mut self, _addr: EvalValue, _ty: Type) -> EvalValue {
+            unreachable!()
+        }
+
+        fn store(&mut self, _addr: EvalValue, _value: EvalValue, _ty: Type) -> EvalValue {
+            unreachable!()
+        }
+
+        fn alloca(&mut self, _ty: Type) -> EvalValue {
+            unreachable!()
+        }
+
+        fn dfg(&self) -> &DataFlowGraph {
+            &self.dfg
+        }
+    }
+
+    #[test]
+    fn gep_pointer_indices_use_signed_offsets() {
+        let isa = test_isa();
+        let mut dfg = DataFlowGraph::new(ModuleCtx::new(&isa));
+        let base = dfg.make_value(Value::Arg {
+            ty: Type::I32.to_ptr(&dfg.ctx),
+            idx: 0,
+        });
+        let idx = dfg.make_value(Value::Arg {
+            ty: Type::I32,
+            idx: 1,
+        });
+        let mut state = TestState::new(
+            dfg,
+            [
+                (base, EvalValue::Imm(Immediate::I256(I256::from(64)))),
+                (idx, EvalValue::Imm(Immediate::I32(-1))),
+            ],
+        );
+
+        assert_eq!(
+            Gep::new(&TestHasInst, smallvec![base, idx]).interpret(&mut state),
+            single_result(EvalValue::Imm(Immediate::I256(I256::from(32))))
+        );
+    }
+
+    #[test]
+    fn aggregate_value_indices_reject_negative_immediates() {
+        let isa = test_isa();
+        let mut dfg = DataFlowGraph::new(ModuleCtx::new(&isa));
+        let array_ty = dfg
+            .ctx
+            .with_ty_store_mut(|store| store.make_array(Type::I32, 2));
+        let dest = dfg.make_value(Value::Arg {
+            ty: array_ty,
+            idx: 0,
+        });
+        let idx = dfg.make_value(Value::Arg {
+            ty: Type::I32,
+            idx: 1,
+        });
+        let value = dfg.make_value(Value::Arg {
+            ty: Type::I32,
+            idx: 2,
+        });
+        let aggregate = EvalValue::Aggregate {
+            fields: vec![
+                EvalValue::Imm(Immediate::I32(1)),
+                EvalValue::Imm(Immediate::I32(2)),
+            ],
+            ty: array_ty,
+        };
+        let mut state = TestState::new(
+            dfg,
+            [
+                (dest, aggregate),
+                (idx, EvalValue::Imm(Immediate::I32(-1))),
+                (value, EvalValue::Imm(Immediate::I32(7))),
+            ],
+        );
+
+        assert_eq!(
+            InsertValue::new(&TestHasInst, dest, idx, value).interpret(&mut state),
+            single_result(EvalValue::Undef)
+        );
+        assert_eq!(
+            ExtractValue::new(&TestHasInst, dest, idx).interpret(&mut state),
+            single_result(EvalValue::Undef)
+        );
+    }
 }

@@ -1193,6 +1193,9 @@ impl GvnSolver {
     ) -> Option<GvnInsn> {
         if let InstClassKind::Unary(kind) = insn_expr.kind() {
             let arg = insn_expr.unary_arg()?;
+            if matches!(kind, UnaryInstKind::Snego) && !func.dfg.value_ty(arg).is_integral() {
+                return None;
+            }
             if matches!(kind, UnaryInstKind::Snego)
                 && result_idx == 0
                 && func.dfg.value_imm(arg).is_some_and(Immediate::is_zero)
@@ -1284,6 +1287,9 @@ impl GvnSolver {
         rhs: ValueId,
     ) -> Option<GvnInsn> {
         let ty = func.dfg.value_ty(lhs);
+        if !ty.is_integral() {
+            return None;
+        }
         let zero = Immediate::zero(ty);
         let one = Immediate::one(ty);
         let lhs_imm = func.dfg.value_imm(lhs);
@@ -1339,6 +1345,9 @@ impl GvnSolver {
         result_idx: usize,
     ) -> Option<GvnInsn> {
         let ty = func.dfg.value_ty(lhs);
+        if !ty.is_integral() {
+            return None;
+        }
         let zero = Immediate::zero(ty);
         let one = Immediate::one(ty);
         let lhs_imm = func.dfg.value_imm(lhs);

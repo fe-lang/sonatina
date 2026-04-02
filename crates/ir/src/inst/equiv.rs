@@ -2,15 +2,15 @@ use std::any::{Any, TypeId};
 
 use smallvec::SmallVec;
 
-use crate::{BlockId, Type, ValueId, module::FuncRef, types::EnumVariantRef};
+use crate::{BlockId, GlobalVariableRef, Type, ValueId, module::FuncRef, types::EnumVariantRef};
 
 use super::{
     Inst,
     cast::{Bitcast, IntToPtr, PtrToInt, Sext, Trunc, Zext},
     control_flow::{Call, Phi},
     data::{
-        EnumAssertVariant, EnumAssertVariantRef, EnumExtract, EnumIsVariant, EnumMake, EnumProj,
-        EnumSetTag, EnumWriteVariant, GetFunctionPtr, SymAddr, SymSize, SymbolRef,
+        ConstRef, EnumAssertVariant, EnumAssertVariantRef, EnumExtract, EnumIsVariant, EnumMake,
+        EnumProj, EnumSetTag, EnumWriteVariant, GetFunctionPtr, SymAddr, SymSize, SymbolRef,
     },
 };
 
@@ -114,6 +114,7 @@ pub struct OwnedInstKey {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum OpaqueInstData {
     GetFunctionPtr(FuncRef),
+    ConstRef(GlobalVariableRef),
     SymAddr(SymbolRef),
     SymSize(SymbolRef),
     EnumVariant(EnumVariantRef),
@@ -352,6 +353,9 @@ fn inst_extra_ty(inst: &dyn Inst) -> Option<Type> {
 fn opaque_data(inst: &dyn Inst) -> Option<OpaqueInstData> {
     if let Some(inst) = downcast_ref::<GetFunctionPtr>(inst) {
         return Some(OpaqueInstData::GetFunctionPtr(*inst.func()));
+    }
+    if let Some(inst) = downcast_ref::<ConstRef>(inst) {
+        return Some(OpaqueInstData::ConstRef(inst.global().gv()));
     }
     if let Some(inst) = downcast_ref::<SymAddr>(inst) {
         return Some(OpaqueInstData::SymAddr(inst.sym().clone()));

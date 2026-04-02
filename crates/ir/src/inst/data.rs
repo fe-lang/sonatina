@@ -60,6 +60,45 @@ impl VisitableMut for SymbolRef {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct GlobalValueRef(GlobalVariableRef);
+
+impl GlobalValueRef {
+    pub fn gv(self) -> GlobalVariableRef {
+        self.0
+    }
+}
+
+impl From<GlobalVariableRef> for GlobalValueRef {
+    fn from(value: GlobalVariableRef) -> Self {
+        Self(value)
+    }
+}
+
+impl<Ctx> IrWrite<Ctx> for GlobalValueRef
+where
+    Ctx: AsRef<ModuleCtx>,
+{
+    fn write<W>(&self, w: &mut W, ctx: &Ctx) -> io::Result<()>
+    where
+        W: io::Write,
+    {
+        SymbolRef::Global(self.0).write(w, ctx)
+    }
+}
+
+impl Visitable for GlobalValueRef {
+    fn accept(&self, visitor: &mut dyn crate::visitor::Visitor) {
+        self.0.accept(visitor);
+    }
+}
+
+impl VisitableMut for GlobalValueRef {
+    fn accept_mut(&mut self, visitor: &mut dyn crate::visitor::VisitorMut) {
+        self.0.accept_mut(visitor);
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 #[inst(side_effect(super::SideEffect::Read))]
 pub struct Mload {
@@ -99,6 +138,32 @@ pub struct ObjAlloc {
     ty: Type,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(text = "const.ref")]
+pub struct ConstRef {
+    global: GlobalValueRef,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
+#[inst(arity(at_least(2)))]
+#[inst(text = "const.proj")]
+pub struct ConstProj {
+    values: SmallVec<[ValueId; 4]>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(text = "const.index")]
+pub struct ConstIndex {
+    object: ValueId,
+    index: ValueId,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(text = "const.load")]
+pub struct ConstLoad {
+    object: ValueId,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
 #[inst(arity(at_least(2)))]
 #[inst(text = "obj.proj")]
@@ -124,6 +189,14 @@ pub struct ObjLoad {
 #[inst(side_effect(super::SideEffect::Write))]
 #[inst(text = "obj.store")]
 pub struct ObjStore {
+    object: ValueId,
+    value: ValueId,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(side_effect(super::SideEffect::Write))]
+#[inst(text = "obj.init.const")]
+pub struct ObjInitConst {
     object: ValueId,
     value: ValueId,
 }

@@ -599,6 +599,9 @@ pub(crate) fn has_by_value_function_type_in_signature(ctx: &ModuleCtx, ty: Type)
             CompoundType::ObjRef(elem) => {
                 stack.push((elem, true));
             }
+            CompoundType::ConstRef(elem) => {
+                stack.push((elem, true));
+            }
             CompoundType::Struct(s) => {
                 for field in s.fields {
                     stack.push((field, behind_pointer));
@@ -648,7 +651,7 @@ fn has_obj_ref_in_signature(ctx: &ModuleCtx, ty: Type) -> bool {
 
         match cmpd {
             CompoundType::Array { elem, .. } | CompoundType::Ptr(elem) => stack.push(elem),
-            CompoundType::ObjRef(_) => return true,
+            CompoundType::ObjRef(_) | CompoundType::ConstRef(_) => return true,
             CompoundType::Struct(s) => stack.extend(s.fields),
             CompoundType::Enum(data) => stack.extend(
                 data.variants
@@ -686,7 +689,8 @@ fn has_enum_in_signature(ctx: &ModuleCtx, ty: Type) -> bool {
         match cmpd {
             CompoundType::Array { elem, .. }
             | CompoundType::Ptr(elem)
-            | CompoundType::ObjRef(elem) => stack.push(elem),
+            | CompoundType::ObjRef(elem)
+            | CompoundType::ConstRef(elem) => stack.push(elem),
             CompoundType::Struct(s) => stack.extend(s.fields),
             CompoundType::Enum(_) => return true,
             CompoundType::Func { args, ret_tys } => {
@@ -728,6 +732,11 @@ fn validate_data_initializer_shape(
     if ty.is_obj_ref(ctx) {
         return Err(format!(
             "type {ty:?} is unsupported for object data (object reference type)"
+        ));
+    }
+    if ty.is_const_ref(ctx) {
+        return Err(format!(
+            "type {ty:?} is unsupported for object data (const reference type)"
         ));
     }
     if ty.is_enum_tag() {
@@ -804,6 +813,9 @@ fn validate_data_initializer_shape(
         )),
         CompoundType::ObjRef(_) => Err(format!(
             "type {ty:?} is unsupported for object data (object reference type)"
+        )),
+        CompoundType::ConstRef(_) => Err(format!(
+            "type {ty:?} is unsupported for object data (const reference type)"
         )),
         CompoundType::Func { .. } => Err(format!(
             "type {ty:?} is unsupported for object data (function type)"

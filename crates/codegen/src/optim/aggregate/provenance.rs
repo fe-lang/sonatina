@@ -1578,7 +1578,9 @@ fn bitcast_projection_slice(
 
 fn reference_element_ty(module: &ModuleCtx, ty: Type) -> Option<Type> {
     match ty.resolve_compound(module)? {
-        CompoundType::Ptr(elem) | CompoundType::ObjRef(elem) => Some(elem),
+        CompoundType::Ptr(elem) | CompoundType::ObjRef(elem) | CompoundType::ConstRef(elem) => {
+            Some(elem)
+        }
         CompoundType::Struct(_)
         | CompoundType::Array { .. }
         | CompoundType::Enum(_)

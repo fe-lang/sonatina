@@ -128,7 +128,7 @@ impl RangeAnalysis {
 
 impl RangeFact {
     pub fn full_for(ty: Type) -> Self {
-        debug_assert!(ty.is_integral());
+        debug_assert!(supports_range_facts(ty));
         Self {
             unsigned: UnsignedInterval {
                 lo: U256::zero(),
@@ -143,7 +143,7 @@ impl RangeFact {
 
     pub fn singleton(imm: Immediate) -> Self {
         let ty = imm.ty();
-        debug_assert!(ty.is_integral());
+        debug_assert!(supports_range_facts(ty));
         let unsigned = imm_to_unsigned(imm);
         let signed = imm.as_i256();
         Self {
@@ -161,6 +161,10 @@ impl RangeFact {
     pub fn is_full_for(&self, ty: Type) -> bool {
         *self == Self::full_for(ty)
     }
+}
+
+fn supports_range_facts(ty: Type) -> bool {
+    ty.is_integral() || ty.is_enum_tag()
 }
 
 impl UnsignedInterval {
@@ -210,7 +214,7 @@ enum NormalizedCond {
 
 pub(crate) fn fact_for_value(func: &Function, env: &RangeEnv, value: ValueId) -> RangeFact {
     let ty = func.dfg.value_ty(value);
-    debug_assert!(ty.is_integral());
+    debug_assert!(supports_range_facts(ty));
 
     if let Some(imm) = func.dfg.value_imm(value) {
         return RangeFact::singleton(imm);
@@ -235,7 +239,7 @@ pub(crate) fn exact_immediate(
     }
 
     let ty = func.dfg.value_ty(value);
-    if !ty.is_integral() {
+    if !supports_range_facts(ty) {
         return None;
     }
 
@@ -424,7 +428,7 @@ fn apply_phi_entry_facts(
             continue;
         };
         let ty = func.dfg.value_ty(result);
-        if !ty.is_integral() {
+        if !supports_range_facts(ty) {
             entry_env.remove(&result);
             continue;
         }
@@ -644,7 +648,7 @@ fn refine_compare_edge_impl(
     }
 
     let ty = func.dfg.value_ty(lhs);
-    if !ty.is_integral() || func.dfg.value_ty(rhs) != ty {
+    if !supports_range_facts(ty) || func.dfg.value_ty(rhs) != ty {
         return Some(env.clone());
     }
 
@@ -709,7 +713,7 @@ fn refine_not_equal_constant_edge(
         return;
     };
     let ty = imm.ty();
-    if !ty.is_integral() {
+    if !supports_range_facts(ty) {
         return;
     }
 
@@ -897,7 +901,7 @@ fn compare_truth_in_env(
     rhs: ValueId,
 ) -> Option<bool> {
     let ty = func.dfg.value_ty(lhs);
-    if !ty.is_integral() || func.dfg.value_ty(rhs) != ty {
+    if !supports_range_facts(ty) || func.dfg.value_ty(rhs) != ty {
         return None;
     }
 
@@ -1430,7 +1434,7 @@ fn set_env_signed(
 
 fn set_env_fact(func: &Function, env: &mut RangeEnv, value: ValueId, fact: RangeFact) {
     let ty = func.dfg.value_ty(value);
-    if !ty.is_integral() || matches!(func.dfg.value(value), Value::Immediate { .. }) {
+    if !supports_range_facts(ty) || matches!(func.dfg.value(value), Value::Immediate { .. }) {
         return;
     }
     if fact.is_full_for(ty) {
@@ -1453,7 +1457,7 @@ fn join_envs(func: &Function, lhs: &RangeEnv, rhs: &RangeEnv) -> RangeEnv {
             continue;
         };
         let ty = func.dfg.value_ty(value);
-        if !ty.is_integral() {
+        if !supports_range_facts(ty) {
             continue;
         }
         let fact = join_facts(smaller_fact, larger_fact, ty);
@@ -1477,7 +1481,7 @@ fn widen_env(func: &Function, old: &RangeEnv, new: &RangeEnv) -> RangeEnv {
             continue;
         }
         let ty = func.dfg.value_ty(value);
-        if !ty.is_integral() {
+        if !supports_range_facts(ty) {
             continue;
         }
         let old_fact = old[&value];
@@ -1617,11 +1621,17 @@ fn unsigned_max(ty: Type) -> U256 {
 }
 
 fn signed_min(ty: Type) -> I256 {
-    Immediate::signed_min(ty).as_i256()
+    match ty {
+        Type::EnumTag(_) => I256::from(U256::one() << 255),
+        _ => Immediate::signed_min(ty).as_i256(),
+    }
 }
 
 fn signed_max(ty: Type) -> I256 {
-    Immediate::signed_max(ty).as_i256()
+    match ty {
+        Type::EnumTag(_) => I256::from((U256::one() << 255) - U256::one()),
+        _ => Immediate::signed_max(ty).as_i256(),
+    }
 }
 
 fn type_bits(ty: Type) -> u16 {
@@ -1632,7 +1642,7 @@ fn type_bits(ty: Type) -> u16 {
         Type::I32 => 32,
         Type::I64 => 64,
         Type::I128 => 128,
-        Type::I256 => 256,
+        Type::I256 | Type::EnumTag(_) => 256,
         _ => panic!("non-integral type {ty:?} has no bit width"),
     }
 }
@@ -1648,6 +1658,7 @@ mod tests {
             control_flow::{Br, Jump, Phi, Return},
         },
         prelude::*,
+        types::{EnumReprHint, VariantData},
     };
 
     use crate::domtree::DomTree;
@@ -1694,6 +1705,98 @@ mod tests {
             signed_max(Type::I256),
             I256::from((U256::one() << 255) - U256::one())
         );
+
+        let mb = test_module_builder();
+        let enum_ty = mb.declare_enum_type(
+            "E",
+            &[
+                VariantData {
+                    name: "A".into(),
+                    explicit_discriminant: None,
+                    fields: vec![],
+                },
+                VariantData {
+                    name: "B".into(),
+                    explicit_discriminant: None,
+                    fields: vec![],
+                },
+            ],
+            EnumReprHint::Default,
+        );
+        let Type::Compound(enum_ty) = enum_ty else {
+            unreachable!();
+        };
+        let tag_ty = Type::EnumTag(enum_ty);
+        let singleton = RangeFact::singleton(Immediate::EnumTag {
+            enum_ty,
+            value: I256::from(-1i8),
+        });
+        assert_eq!(singleton.unsigned.lo, !U256::zero());
+        assert_eq!(singleton.unsigned.hi, !U256::zero());
+        assert_eq!(singleton.signed.lo, I256::from(-1i8));
+        assert_eq!(singleton.signed.hi, I256::from(-1i8));
+        assert_eq!(unsigned_max(tag_ty), !U256::zero());
+        assert_eq!(signed_min(tag_ty), I256::from(U256::one() << 255));
+        assert_eq!(
+            signed_max(tag_ty),
+            I256::from((U256::one() << 255) - U256::one())
+        );
+    }
+
+    #[test]
+    fn enumtag_equality_folds_without_panicking() {
+        let mb = test_module_builder();
+        let enum_ty = mb.declare_enum_type(
+            "E",
+            &[
+                VariantData {
+                    name: "A".into(),
+                    explicit_discriminant: None,
+                    fields: vec![],
+                },
+                VariantData {
+                    name: "B".into(),
+                    explicit_discriminant: None,
+                    fields: vec![],
+                },
+            ],
+            EnumReprHint::Default,
+        );
+        let Type::Compound(enum_ty) = enum_ty else {
+            unreachable!();
+        };
+        let tag_ty = Type::EnumTag(enum_ty);
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::I1);
+        let is = evm.inst_set();
+        let b0 = builder.append_block();
+        let b1 = builder.append_block();
+        builder.switch_to_block(b0);
+        let lhs = builder.make_imm_value(Immediate::EnumTag {
+            enum_ty,
+            value: I256::from(1u8),
+        });
+        builder.insert_inst_no_result_with(|| Jump::new(is, b1));
+
+        builder.switch_to_block(b1);
+        let rhs = builder.make_imm_value(Immediate::EnumTag {
+            enum_ty,
+            value: I256::from(1u8),
+        });
+        let phi = builder.insert_inst_with(|| Phi::new(is, vec![(lhs, b0)]), tag_ty);
+        let eq = builder.insert_inst_with(|| Eq::new(is, phi, rhs), Type::I1);
+        builder.insert_inst_no_result_with(|| Return::new_single(is, eq));
+        builder.seal_all();
+        builder.finish();
+
+        let module = mb.build();
+        let func_ref = module.funcs()[0];
+        module.func_store.view(func_ref, |func| {
+            let analysis = compute_analysis(func);
+            assert_eq!(exact_bool(func, analysis.exit_env(b1), eq), Some(true));
+            let fact = fact_for_value(func, analysis.exit_env(b1), phi);
+            assert_eq!(fact.unsigned.lo, U256::from(1u8));
+            assert_eq!(fact.unsigned.hi, U256::from(1u8));
+        });
     }
 
     #[test]

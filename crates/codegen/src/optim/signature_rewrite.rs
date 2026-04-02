@@ -186,6 +186,15 @@ impl SignatureRewriteTypeRewriter {
                 self.compound_map.insert(compound, mapped);
                 mapped
             }
+            CompoundType::ConstRef(elem) => {
+                let elem = self.rewrite_type(ctx, elem);
+                let mapped = ctx.with_ty_store_mut(|store| match store.make_const_ref(elem) {
+                    Type::Compound(mapped) => mapped,
+                    _ => unreachable!(),
+                });
+                self.compound_map.insert(compound, mapped);
+                mapped
+            }
             CompoundType::Enum(data) => {
                 let new_variants: Vec<_> = data
                     .variants
@@ -589,6 +598,7 @@ fn collect_nested_planned_func_types(
         match cmpd {
             CompoundType::Array { elem, .. }
             | CompoundType::Ptr(elem)
+            | CompoundType::ConstRef(elem)
             | CompoundType::ObjRef(elem) => {
                 stack.push(elem);
             }
