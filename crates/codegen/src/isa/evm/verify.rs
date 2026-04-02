@@ -20,29 +20,21 @@ pub(crate) fn collect_unsupported_evm_multi_return(
         };
         let func_name = format!("%{}", sig.name());
         let ret_count = sig.ret_tys().len();
+        let mut push_error = |message| errors.push((func, message));
 
         if ret_count > 16 {
-            errors.push((
-                func,
-                format!(
-                    "EVM backend supports at most 16 internal return values, but function {func_name} has {ret_count}"
-                ),
+            push_error(format!(
+                "EVM backend supports at most 16 internal return values, but function {func_name} has {ret_count}"
             ));
         }
         if entry == Some(func) && ret_count > 1 {
-            errors.push((
-                func,
-                format!(
-                    "EVM backend does not support section entry {func_name} with {ret_count} return values"
-                ),
+            push_error(format!(
+                "EVM backend does not support section entry {func_name} with {ret_count} return values"
             ));
         }
         if ret_count > 1 && !sig.linkage().has_definition() {
-            errors.push((
-                func,
-                format!(
-                    "EVM backend does not support declaration-only function {func_name} with {ret_count} return values"
-                ),
+            push_error(format!(
+                "EVM backend does not support declaration-only function {func_name} with {ret_count} return values"
             ));
         }
 
@@ -59,44 +51,30 @@ pub(crate) fn collect_unsupported_evm_multi_return(
                             .unwrap_or_else(|| format!("{callee:?}"));
 
                         if call_results.len() > 16 {
-                            errors.push((
-                                func,
-                                format!(
-                                    "EVM backend supports at most 16 call results, but inst{} has {} results to {callee_name}",
-                                    inst.as_u32(),
-                                    call_results.len()
-                                ),
+                            push_error(format!(
+                                "EVM backend supports at most 16 call results, but inst{} has {} results to {callee_name}",
+                                inst.as_u32(),
+                                call_results.len()
                             ));
                         }
 
                         if let Some(callee_sig) = module.ctx.get_sig(callee) {
-                            if callee_sig.ret_tys().len() > 16 {
-                                errors.push((
-                                    func,
-                                    format!(
-                                        "EVM backend supports at most 16 internal return values, but callee {callee_name} has {}",
-                                        callee_sig.ret_tys().len()
-                                    ),
+                            let callee_ret_count = callee_sig.ret_tys().len();
+                            if callee_ret_count > 16 {
+                                push_error(format!(
+                                    "EVM backend supports at most 16 internal return values, but callee {callee_name} has {callee_ret_count}",
                                 ));
                             }
-                            if callee_sig.ret_tys().len() > 1 && !callee_sig.linkage().has_definition()
-                            {
-                                errors.push((
-                                    func,
-                                    format!(
-                                        "EVM backend does not support external or declaration-only multi-return calls to {callee_name}"
-                                    ),
+                            if callee_ret_count > 1 && !callee_sig.linkage().has_definition() {
+                                push_error(format!(
+                                    "EVM backend does not support external or declaration-only multi-return calls to {callee_name}"
                                 ));
                             }
-                            if call_results.len() != callee_sig.ret_tys().len() {
-                                errors.push((
-                                    func,
-                                    format!(
-                                        "call inst{} result count {} does not match callee {callee_name} return count {}",
-                                        inst.as_u32(),
-                                        call_results.len(),
-                                        callee_sig.ret_tys().len()
-                                    ),
+                            if call_results.len() != callee_ret_count {
+                                push_error(format!(
+                                    "call inst{} result count {} does not match callee {callee_name} return count {callee_ret_count}",
+                                    inst.as_u32(),
+                                    call_results.len(),
                                 ));
                             }
                         }
@@ -104,24 +82,18 @@ pub(crate) fn collect_unsupported_evm_multi_return(
 
                     if let Some(return_args) = function.dfg.return_args(inst) {
                         if return_args.len() > 16 {
-                            errors.push((
-                                func,
-                                format!(
-                                    "EVM backend supports at most 16 return values, but return inst{} has {}",
-                                    inst.as_u32(),
-                                    return_args.len()
-                                ),
+                            push_error(format!(
+                                "EVM backend supports at most 16 return values, but return inst{} has {}",
+                                inst.as_u32(),
+                                return_args.len()
                             ));
                         }
                         if return_args.len() != sig.ret_tys().len() {
-                            errors.push((
-                                func,
-                                format!(
-                                    "return inst{} value count {} does not match function signature return count {}",
-                                    inst.as_u32(),
-                                    return_args.len(),
-                                    sig.ret_tys().len()
-                                ),
+                            push_error(format!(
+                                "return inst{} value count {} does not match function signature return count {}",
+                                inst.as_u32(),
+                                return_args.len(),
+                                sig.ret_tys().len()
                             ));
                         }
                     }

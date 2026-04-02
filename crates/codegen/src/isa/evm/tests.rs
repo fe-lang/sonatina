@@ -1,9 +1,37 @@
-
 use super::*;
-use crate::{analysis::func_behavior, optim::pipeline::Pipeline};
-use sonatina_ir::{Directive, InstSetBase, cfg::ControlFlowGraph, ir_writer::FuncWriter};
+use crate::{
+    analysis::func_behavior,
+    critical_edge::CriticalEdgeSplitter,
+    domtree::DomTree,
+    liveness::{InstLiveness, Liveness},
+    machinst::{
+        lower::SectionWorkModule,
+        vcode::{Label, VCode, VCodeFixup},
+    },
+    optim::pipeline::Pipeline,
+    stackalloc::{Action, Actions, Allocator, StackifyBuilder},
+};
+use cranelift_entity::SecondaryMap;
+use rustc_hash::{FxHashMap, FxHashSet};
+use smallvec::{SmallVec, smallvec};
+use sonatina_ir::{
+    BlockId, Directive, Immediate, InstId, InstSetBase, InstSetExt, Module, ValueId,
+    cfg::ControlFlowGraph, inst::evm::inst_set::EvmInstKind, ir_writer::FuncWriter, isa::Isa,
+};
 use sonatina_parser::parse_module;
-use sonatina_triple::{Architecture, TargetTriple, Vendor};
+use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
+
+use self::{
+    dyn_sp::{DynSpPlan, compute_dyn_sp_plan},
+    emit::{
+        FinalAlloc, materialize_jumpdests, prune_redundant_opcode_sequences,
+        rewrite_evm_local_fallthrough_layout,
+    },
+    memory_plan::{
+        ArenaCostModel, ProgramMemoryPlan, compute_abs_clobber_words, compute_program_memory_plan,
+    },
+    prepare::compute_return_escape_caller_clamp_words,
+};
 
 struct PlanTestCtx {
     module: sonatina_ir::Module,

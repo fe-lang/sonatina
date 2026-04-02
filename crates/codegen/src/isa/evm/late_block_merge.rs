@@ -901,6 +901,7 @@ mod tests {
     use smallvec::smallvec;
 
     use super::*;
+    use crate::isa::evm::emit::push_op;
 
     fn summary_for_ops(ops: &[OpCode]) -> StackSummary {
         ops.iter()
@@ -911,7 +912,7 @@ mod tests {
     }
 
     fn push_imm(vcode: &mut VCode<OpCode>, block: BlockId, bytes: &[u8]) -> VCodeInst {
-        let inst = vcode.add_inst_to_block(super::super::push_op(bytes.len()), None, block);
+        let inst = vcode.add_inst_to_block(push_op(bytes.len()), None, block);
         if !bytes.is_empty() {
             vcode.inst_imm_bytes.insert((inst, bytes.into()));
         }
