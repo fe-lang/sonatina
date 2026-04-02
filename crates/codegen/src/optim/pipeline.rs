@@ -9,7 +9,10 @@
 //! [`Step`] represents one unit of work in the pipeline. [`Pipeline`] holds
 //! an ordered sequence of steps and executes them against a module.
 
-use sonatina_ir::{ControlFlowGraph, Function, module::Module};
+use sonatina_ir::{
+    ControlFlowGraph, Function,
+    module::{FuncRef, Module},
+};
 use tracing::{debug_span, info_span, trace_span};
 
 use crate::{
@@ -31,6 +34,7 @@ use super::{
     egraph::run_egraph_pass,
     gvn::GvnSolver,
     inliner::{Inliner, InlinerConfig},
+    known_bits_simplify::KnownBitsSimplify,
     licm::LicmSolver,
     load_store::LoadStoreSolver,
     loop_strength_reduce::LoopStrengthReduce,
@@ -58,6 +62,8 @@ pub enum Pass {
     AggregateScalarize,
     /// Per-space load/store forwarding and dead-store elimination.
     LoadStore,
+    /// Simplify expressions with precise known-bit reasoning.
+    KnownBitsSimplify,
     /// Eliminate checked arithmetic and div/mod overflow flags proven unreachable by range analysis.
     CheckedArithElim,
     /// Sparse conditional constant propagation (composite: CfgCleanup + SCCP + CfgCleanup + ADCE).
@@ -89,6 +95,7 @@ impl Pass {
             Pass::ObjectLoadStore => "object_load_store",
             Pass::AggregateScalarize => "aggregate_scalarize",
             Pass::LoadStore => "load_store",
+            Pass::KnownBitsSimplify => "known_bits_simplify",
             Pass::CheckedArithElim => "checked_arith_elim",
             Pass::Sccp => "sccp",
             Pass::Adce => "adce",
@@ -203,6 +210,7 @@ fn pass_may_invalidate_func_behavior(pass: Pass) -> bool {
             | Pass::ObjectLoadStore
             | Pass::AggregateScalarize
             | Pass::LoadStore
+            | Pass::KnownBitsSimplify
             | Pass::CheckedArithElim
             | Pass::Sccp
             | Pass::Adce
@@ -403,19 +411,12 @@ impl Pipeline {
                         pass_count = passes.len()
                     )
                     .entered();
-                    for &pass in passes {
-                        if func_behavior_dirty && pass_needs_func_behavior(pass) {
-                            let _span =
-                                trace_span!("sonatina.optim.pipeline.func_behavior_analyze")
-                                    .entered();
-                            func_behavior::analyze_module(module);
-                            func_behavior_dirty = false;
-                        }
-                        run_module_pass(pass, module);
-                        if pass_may_invalidate_func_behavior(pass) {
-                            func_behavior_dirty = true;
-                        }
-                    }
+                    run_function_pass_round(
+                        module,
+                        passes,
+                        &mut func_behavior_dirty,
+                        FuncPassOverrides::default(),
+                    );
                 }
                 Step::DeadArgElim => {
                     let _span = debug_span!("sonatina.optim.pipeline.dead_arg_elim").entered();
@@ -440,39 +441,97 @@ impl Default for Pipeline {
     }
 }
 
-fn run_module_pass(pass: Pass, module: &Module) {
+#[derive(Default, Clone, Copy)]
+pub(crate) struct FuncPassOverrides<'a> {
+    pub(crate) funcs: Option<&'a [FuncRef]>,
+    pub(crate) local_object_args: Option<&'a LocalObjectArgMap>,
+    pub(crate) object_effects: Option<&'a ObjectEffectSummaryMap>,
+}
+
+pub(crate) fn run_function_pass_round(
+    module: &Module,
+    passes: &[Pass],
+    func_behavior_dirty: &mut bool,
+    overrides: FuncPassOverrides<'_>,
+) {
+    for &pass in passes {
+        if *func_behavior_dirty && pass_needs_func_behavior(pass) {
+            let _span = trace_span!("sonatina.optim.pipeline.func_behavior_analyze").entered();
+            func_behavior::analyze_module(module);
+            *func_behavior_dirty = false;
+        }
+        run_module_pass(pass, module, overrides);
+        if pass_may_invalidate_func_behavior(pass) {
+            *func_behavior_dirty = true;
+        }
+    }
+}
+
+fn run_module_pass(pass: Pass, module: &Module, overrides: FuncPassOverrides<'_>) {
     let _span = debug_span!("sonatina.optim.pipeline.pass_round", pass = pass.as_str()).entered();
-    let object_effects = matches!(
-        pass,
-        Pass::ObjectLoadStore | Pass::AggregateScalarize | Pass::Gvn | Pass::Licm
-    )
-    .then(|| compute_object_effect_summaries(module));
-    let local_object_args = object_effects
-        .as_ref()
-        .map(|effects| collect_local_object_arg_info_with_effects(module, effects))
-        .or_else(|| {
-            matches!(
-                pass,
-                Pass::ObjectLoadStore | Pass::AggregateScalarize | Pass::Gvn | Pass::Licm
-            )
-            .then(|| collect_local_object_arg_info(module))
-        });
-    module.func_store.par_for_each(|func_ref, func| {
-        let _span = debug_span!(
-            "sonatina.optim.pipeline.function",
-            func_ref = func_ref.as_u32()
-        )
-        .entered();
-        let mut ctx = PassContext::default();
-        run_pass(
+    let owned_object_effects = if overrides.object_effects.is_none() {
+        matches!(
             pass,
-            Some(func_ref),
-            func,
-            &mut ctx,
-            local_object_args.as_ref(),
-            object_effects.as_ref(),
-        );
-    });
+            Pass::ObjectLoadStore | Pass::AggregateScalarize | Pass::Gvn | Pass::Licm
+        )
+        .then(|| compute_object_effect_summaries(module))
+    } else {
+        None
+    };
+    let object_effects = overrides.object_effects.or(owned_object_effects.as_ref());
+    let owned_local_object_args = if overrides.local_object_args.is_none() {
+        object_effects
+            .map(|effects| collect_local_object_arg_info_with_effects(module, effects))
+            .or_else(|| {
+                matches!(
+                    pass,
+                    Pass::ObjectLoadStore | Pass::AggregateScalarize | Pass::Gvn | Pass::Licm
+                )
+                .then(|| collect_local_object_arg_info(module))
+            })
+    } else {
+        None
+    };
+    let local_object_args = overrides
+        .local_object_args
+        .or(owned_local_object_args.as_ref());
+    if let Some(funcs) = overrides.funcs {
+        for &func_ref in funcs {
+            module.func_store.modify(func_ref, |func| {
+                let _span = debug_span!(
+                    "sonatina.optim.pipeline.function",
+                    func_ref = func_ref.as_u32()
+                )
+                .entered();
+                let mut ctx = PassContext::default();
+                run_pass(
+                    pass,
+                    Some(func_ref),
+                    func,
+                    &mut ctx,
+                    local_object_args,
+                    object_effects,
+                );
+            });
+        }
+    } else {
+        module.func_store.par_for_each(|func_ref, func| {
+            let _span = debug_span!(
+                "sonatina.optim.pipeline.function",
+                func_ref = func_ref.as_u32()
+            )
+            .entered();
+            let mut ctx = PassContext::default();
+            run_pass(
+                pass,
+                Some(func_ref),
+                func,
+                &mut ctx,
+                local_object_args,
+                object_effects,
+            );
+        });
+    }
 }
 
 /// Reusable analysis allocations for a single pass sequence on one function.
@@ -549,6 +608,10 @@ fn run_pass(
                 let _span = trace_span!("sonatina.optim.pipeline.load_store.solve").entered();
                 solver.run(func, &mut ctx.cfg);
             }
+        }
+        Pass::KnownBitsSimplify => {
+            let _span = trace_span!("sonatina.optim.pipeline.pass.known_bits_simplify").entered();
+            KnownBitsSimplify::new().run(func);
         }
         Pass::CheckedArithElim => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.checked_arith_elim").entered();

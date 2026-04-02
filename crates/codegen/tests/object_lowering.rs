@@ -1,7 +1,7 @@
 mod common;
 
 use dir_test::{Fixture, dir_test};
-use sonatina_codegen::optim::aggregate::ObjectLowerToMemory;
+use sonatina_codegen::transform::aggregate::ObjectLowerToMemory;
 use sonatina_ir::ir_writer::ModuleWriter;
 use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module};
 

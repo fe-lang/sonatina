@@ -2683,7 +2683,7 @@ mod tests {
     }
 
     fn run_scalarize_with_local_args(module: &Module, func_ref: FuncRef) {
-        let local_object_args = crate::optim::aggregate::collect_local_object_arg_info(module);
+        let local_object_args = crate::transform::aggregate::collect_local_object_arg_info(module);
         module.func_store.modify(func_ref, |func| {
             AggregateScalarize::default().run_for_func(func_ref, func, &local_object_args);
         });
@@ -3084,10 +3084,11 @@ func private %make(v0.i256) -> objref<@one> {
 "#,
         );
         let func_ref = lookup_func(&module, "make");
-        let mut local_object_args = crate::optim::aggregate::collect_local_object_arg_info(&module);
+        let mut local_object_args =
+            crate::transform::aggregate::collect_local_object_arg_info(&module);
         let synthetic_out_args =
-            crate::optim::aggregate::ObjectReturnOutParam.run_with_synthetic_out_args(&module);
-        crate::optim::aggregate::merge_local_object_arg_info(
+            crate::transform::aggregate::ObjectReturnOutParam.run_with_synthetic_out_args(&module);
+        crate::transform::aggregate::merge_local_object_arg_info(
             &mut local_object_args,
             &synthetic_out_args,
         );
@@ -3143,10 +3144,11 @@ func private %choose_pair(v0.i1, v1.i256, v2.i256) -> objref<@pair> {
 "#,
         );
         let func_ref = lookup_func(&module, "choose_pair");
-        let mut local_object_args = crate::optim::aggregate::collect_local_object_arg_info(&module);
+        let mut local_object_args =
+            crate::transform::aggregate::collect_local_object_arg_info(&module);
         let synthetic_out_args =
-            crate::optim::aggregate::ObjectReturnOutParam.run_with_synthetic_out_args(&module);
-        crate::optim::aggregate::merge_local_object_arg_info(
+            crate::transform::aggregate::ObjectReturnOutParam.run_with_synthetic_out_args(&module);
+        crate::transform::aggregate::merge_local_object_arg_info(
             &mut local_object_args,
             &synthetic_out_args,
         );
@@ -3189,16 +3191,12 @@ func private %f(v0.objref<@one>, v1.i256) -> i256 {
 "#,
         );
         let func_ref = lookup_func(&module, "f");
-        let object_effects = crate::optim::aggregate::compute_object_effect_summaries(&module);
-        let local_object_args = crate::optim::aggregate::collect_local_object_arg_info(&module);
+        let object_effects = crate::transform::aggregate::compute_object_effect_summaries(&module);
+        let local_object_args = crate::transform::aggregate::collect_local_object_arg_info(&module);
 
         module.func_store.modify(func_ref, |func| {
-            crate::optim::aggregate::ObjectLoadStore::default().run_for_func(
-                func_ref,
-                func,
-                &local_object_args,
-                &object_effects,
-            );
+            crate::transform::aggregate::object_load_store::ObjectLoadStore::default()
+                .run_for_func(func_ref, func, &local_object_args, &object_effects);
             AggregateScalarize::default().run_for_func(func_ref, func, &local_object_args);
         });
 

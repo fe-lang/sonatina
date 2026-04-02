@@ -6,8 +6,8 @@ input_file: test_files/evm/fe_poseidon_mock_different_inputs_master_baseline.snt
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 2583 bytes
-  total: 2583 bytes
+  section runtime: 2584 bytes
+  total: 2584 bytes
 
 functions:
   ark: ir_blocks=8 ir_insts=50 vcode_ops=146 fixups=9 imm_bytes=31
@@ -24,7 +24,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=49641 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=28641
+  case ok: calldata_len=0 success reason=Return gas_used=49721 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=28721
 
 
 --------------- DEBUG ---------------

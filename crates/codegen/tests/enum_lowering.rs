@@ -2,9 +2,10 @@ mod common;
 
 use dir_test::{Fixture, dir_test};
 use sonatina_codegen::{
-    isa::evm::{EvmBackend, PushWidthPolicy},
+    isa::evm::{EvmBackend, PushWidthPolicy, test_util::prepare_root},
     object::{CompileOptions, compile_all_objects},
-    optim::{Pipeline, aggregate::EnumLowerToProduct},
+    optim::Pipeline,
+    transform::aggregate::EnumLowerToProduct,
 };
 use sonatina_ir::{
     I256, Immediate, Linkage, Module, Signature, Type,
@@ -102,13 +103,20 @@ object @Contract {
         emit_observability: false,
         verifier_cfg: VerifierConfig::for_level(VerificationLevel::Fast),
     };
-    compile_all_objects(&parsed.module, &test_backend(), &opts).expect("compile should succeed");
+    let backend = test_backend();
+    compile_all_objects(&parsed.module, &backend, &opts).expect("compile should succeed");
 
-    assert_no_live_enum_ir(&parsed.module);
-    let entry = lookup_func(&parsed.module, "entry");
-    let make_some = lookup_func(&parsed.module, "make_some");
+    let prepared = prepare_root(
+        &parsed.module,
+        &backend,
+        lookup_func(&parsed.module, "entry"),
+    )
+    .expect("prepare should succeed");
+    assert_no_live_enum_ir(prepared.module());
+    let entry = lookup_func(prepared.module(), "entry");
+    let make_some = lookup_func(prepared.module(), "make_some");
     for func_ref in [entry, make_some] {
-        parsed.module.func_store.view(func_ref, |func| {
+        prepared.module().func_store.view(func_ref, |func| {
             assert!(
                 func.layout
                     .iter_block()
@@ -315,8 +323,10 @@ fn enum_tag_br_table_cases_compile_through_evm_codegen() {
         emit_observability: false,
         verifier_cfg: VerifierConfig::for_level(VerificationLevel::Full),
     };
-    compile_all_objects(&module, &test_backend(), &opts).expect("compile should succeed");
-    assert_no_live_enum_ir(&module);
+    let backend = test_backend();
+    compile_all_objects(&module, &backend, &opts).expect("compile should succeed");
+    let prepared = prepare_root(&module, &backend, func_ref).expect("prepare should succeed");
+    assert_no_live_enum_ir(prepared.module());
 }
 
 fn lookup_func(module: &Module, name: &str) -> FuncRef {

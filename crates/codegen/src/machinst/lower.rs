@@ -1,11 +1,12 @@
 use super::vcode::{Label, SectionCodeUnitId, SymFixup, VCode, VCodeFixup, VCodeInst};
 use crate::stackalloc::Allocator;
-use rustc_hash::FxHashMap;
-use smallvec::SmallVec;
+use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
-    BlockId, Function, Immediate, Inst, InstId, Module, Type, Value, ValueId,
+    BlockId, Function, GlobalVariableRef, Immediate, Inst, InstDowncast, InstId, Module, Type,
+    Value, ValueId,
+    inst::data::{GetFunctionPtr, SymAddr, SymSize, SymbolRef},
     module::{FuncRef, ModuleCtx},
-    object::{EmbedSymbol, ObjectName, SectionName},
+    object::EmbedSymbol,
 };
 
 pub struct LoweredFunction<Op> {
@@ -20,10 +21,246 @@ pub struct SectionCodeUnit<Op> {
     pub block_order: Vec<BlockId>,
 }
 
-pub struct SectionLoweringCtx<'a> {
-    pub object: &'a ObjectName,
-    pub section: &'a SectionName,
-    pub embed_symbols: &'a [EmbedSymbol],
+pub struct SectionWorkModule {
+    module: Module,
+    entry: FuncRef,
+    includes: Vec<FuncRef>,
+    data: Vec<GlobalVariableRef>,
+}
+
+impl SectionWorkModule {
+    pub fn from_roots(
+        module: &Module,
+        entry: FuncRef,
+        includes: &[FuncRef],
+        data: &[GlobalVariableRef],
+    ) -> Self {
+        let membership = build_section_membership(module, entry, includes, data);
+        let funcs = module
+            .funcs()
+            .into_iter()
+            .filter(|func| membership.funcs.contains(func))
+            .collect::<Vec<_>>();
+        Self::from_module_subset(module, &funcs, entry, includes, data)
+    }
+
+    pub fn from_module_subset(
+        module: &Module,
+        funcs: &[FuncRef],
+        entry: FuncRef,
+        includes: &[FuncRef],
+        data: &[GlobalVariableRef],
+    ) -> Self {
+        Self {
+            module: module.clone_for_funcs(funcs),
+            entry,
+            includes: includes.to_vec(),
+            data: data.to_vec(),
+        }
+    }
+
+    pub fn module(&self) -> &Module {
+        &self.module
+    }
+
+    pub fn entry(&self) -> FuncRef {
+        self.entry
+    }
+
+    pub fn membership(&self) -> SectionMembership {
+        build_section_membership(&self.module, self.entry, &self.includes, &self.data)
+    }
+
+    pub fn function_emission_order(&self, membership: &SectionMembership) -> Vec<FuncRef> {
+        compute_section_function_emission_order(
+            &self.module,
+            self.entry,
+            &self.includes,
+            membership,
+        )
+    }
+}
+
+#[derive(Default)]
+pub struct SectionMembership {
+    pub funcs: FxHashSet<FuncRef>,
+    pub globals: FxHashSet<GlobalVariableRef>,
+    pub used_embed_symbols: FxHashSet<EmbedSymbol>,
+}
+
+pub fn build_section_membership(
+    module: &Module,
+    entry: FuncRef,
+    includes: &[FuncRef],
+    data: &[GlobalVariableRef],
+) -> SectionMembership {
+    let mut membership = SectionMembership::default();
+    membership.globals.extend(data.iter().copied());
+
+    let mut worklist = Vec::new();
+    let roots = std::iter::once(entry).chain(includes.iter().copied());
+    for func in roots {
+        add_section_func(module, &mut membership, &mut worklist, func);
+    }
+
+    while let Some(func_ref) = worklist.pop() {
+        module.func_store.try_view(func_ref, |func| {
+            let is = func.inst_set();
+            for block in func.layout.iter_block() {
+                for inst_id in func.layout.iter_inst(block) {
+                    if let Some(call) = func.dfg.call_info(inst_id) {
+                        add_section_func(module, &mut membership, &mut worklist, call.callee());
+                    }
+
+                    let inst = func.dfg.inst(inst_id);
+
+                    if let Some(ptr) = <&GetFunctionPtr as InstDowncast>::downcast(is, inst) {
+                        add_section_func(module, &mut membership, &mut worklist, *ptr.func());
+                    }
+
+                    if let Some(sym) = <&SymAddr as InstDowncast>::downcast(is, inst) {
+                        record_section_symbol(module, sym.sym(), &mut membership, &mut worklist);
+                    }
+                    if let Some(sym) = <&SymSize as InstDowncast>::downcast(is, inst) {
+                        record_section_symbol(module, sym.sym(), &mut membership, &mut worklist);
+                    }
+                }
+            }
+        });
+    }
+
+    membership
+}
+
+pub fn compute_section_function_emission_order(
+    module: &Module,
+    entry: FuncRef,
+    includes: &[FuncRef],
+    membership: &SectionMembership,
+) -> Vec<FuncRef> {
+    let mut include_priority: FxHashMap<FuncRef, usize> = FxHashMap::default();
+    for (idx, func) in includes.iter().copied().enumerate() {
+        include_priority.entry(func).or_insert(idx);
+    }
+
+    let mut func_names: FxHashMap<FuncRef, String> = FxHashMap::default();
+    for func in membership.funcs.iter().copied() {
+        let name = module.ctx.func_sig(func, |sig| sig.name().to_string());
+        func_names.insert(func, name);
+    }
+
+    let mut adjacency: FxHashMap<FuncRef, Vec<FuncRef>> = FxHashMap::default();
+    for &func_ref in &membership.funcs {
+        let mut callees: FxHashSet<FuncRef> = FxHashSet::default();
+        module.func_store.view(func_ref, |func| {
+            for block in func.layout.iter_block() {
+                for inst_id in func.layout.iter_inst(block) {
+                    if let Some(call) = func.dfg.call_info(inst_id) {
+                        let callee = call.callee();
+                        if membership.funcs.contains(&callee) {
+                            callees.insert(callee);
+                        }
+                    }
+                }
+            }
+        });
+
+        let mut callees: Vec<_> = callees.into_iter().collect();
+        callees.sort_by(|a, b| compare_section_func(*a, *b, &include_priority, &func_names));
+        adjacency.insert(func_ref, callees);
+    }
+
+    let mut visited: FxHashSet<FuncRef> = FxHashSet::default();
+    let mut order = Vec::new();
+
+    fn dfs(
+        node: FuncRef,
+        adjacency: &FxHashMap<FuncRef, Vec<FuncRef>>,
+        visited: &mut FxHashSet<FuncRef>,
+        out: &mut Vec<FuncRef>,
+    ) {
+        if !visited.insert(node) {
+            return;
+        }
+        out.push(node);
+        if let Some(callees) = adjacency.get(&node) {
+            for &callee in callees {
+                dfs(callee, adjacency, visited, out);
+            }
+        }
+    }
+
+    if membership.funcs.contains(&entry) {
+        dfs(entry, &adjacency, &mut visited, &mut order);
+    }
+
+    let mut extra_roots: Vec<FuncRef> = includes.to_vec();
+    extra_roots.sort_by(|a, b| compare_section_func(*a, *b, &include_priority, &func_names));
+    for root in extra_roots {
+        if membership.funcs.contains(&root) {
+            dfs(root, &adjacency, &mut visited, &mut order);
+        }
+    }
+
+    let mut remaining: Vec<FuncRef> = membership
+        .funcs
+        .iter()
+        .copied()
+        .filter(|f| !visited.contains(f))
+        .collect();
+    remaining.sort_by(|a, b| compare_section_func(*a, *b, &include_priority, &func_names));
+    for root in remaining {
+        dfs(root, &adjacency, &mut visited, &mut order);
+    }
+
+    debug_assert_eq!(visited.len(), membership.funcs.len());
+    order
+}
+
+fn add_section_func(
+    module: &Module,
+    membership: &mut SectionMembership,
+    worklist: &mut Vec<FuncRef>,
+    func: FuncRef,
+) {
+    if module.ctx.func_linkage(func).has_definition()
+        && module.func_store.contains(func)
+        && membership.funcs.insert(func)
+    {
+        worklist.push(func);
+    }
+}
+
+fn record_section_symbol(
+    module: &Module,
+    sym: &SymbolRef,
+    membership: &mut SectionMembership,
+    worklist: &mut Vec<FuncRef>,
+) {
+    match sym {
+        SymbolRef::Func(func) => add_section_func(module, membership, worklist, *func),
+        SymbolRef::Global(gv) => {
+            membership.globals.insert(*gv);
+        }
+        SymbolRef::Embed(sym) => {
+            membership.used_embed_symbols.insert(sym.clone());
+        }
+        SymbolRef::CurrentSection => {}
+    }
+}
+
+fn compare_section_func(
+    a: FuncRef,
+    b: FuncRef,
+    include_priority: &FxHashMap<FuncRef, usize>,
+    func_names: &FxHashMap<FuncRef, String>,
+) -> std::cmp::Ordering {
+    let a_pri = include_priority.get(&a).copied().unwrap_or(usize::MAX);
+    let b_pri = include_priority.get(&b).copied().unwrap_or(usize::MAX);
+    let a_name = func_names.get(&a).unwrap();
+    let b_name = func_names.get(&b).unwrap();
+
+    (a_pri, a_name, a.as_u32()).cmp(&(b_pri, b_name, b.as_u32()))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,73 +268,6 @@ pub enum FixupUpdate {
     Unchanged,
     ContentChanged,
     LayoutChanged,
-}
-
-pub trait LowerBackend {
-    type MInst;
-    type Error: std::fmt::Display;
-    type FixupPolicy: Clone;
-
-    fn prepare_section(
-        &self,
-        _module: &Module,
-        _funcs: &[FuncRef],
-        _section_ctx: &SectionLoweringCtx<'_>,
-    ) {
-    }
-
-    fn lower_function(
-        &self,
-        module: &Module,
-        func: FuncRef,
-        section_ctx: &SectionLoweringCtx<'_>,
-    ) -> Result<LoweredFunction<Self::MInst>, Self::Error>;
-
-    fn post_lower_section(
-        &self,
-        _module: &Module,
-        _funcs: &[FuncRef],
-        _lowered: &mut [(FuncRef, LoweredFunction<Self::MInst>)],
-        _section_ctx: &SectionLoweringCtx<'_>,
-    ) -> Result<Vec<SectionCodeUnit<Self::MInst>>, Self::Error> {
-        Ok(Vec::new())
-    }
-
-    fn apply_sym_fixup(
-        &self,
-        vcode: &mut VCode<Self::MInst>,
-        inst: VCodeInst,
-        fixup: &SymFixup,
-        value: u32,
-        policy: &Self::FixupPolicy,
-    ) -> Result<FixupUpdate, Self::Error>;
-
-    fn lower(&self, ctx: &mut Lower<Self::MInst>, alloc: &mut dyn Allocator, inst: InstId);
-    // -> Option<InstOutput> == SmallVec<[ValueRegs<Reg>; 2]>
-
-    fn enter_function(
-        &self,
-        ctx: &mut Lower<Self::MInst>,
-        alloc: &mut dyn Allocator,
-        function: &Function,
-    );
-    fn enter_block(&self, ctx: &mut Lower<Self::MInst>, alloc: &mut dyn Allocator, block: BlockId);
-
-    fn update_opcode_with_immediate_bytes(
-        &self,
-        opcode: &mut Self::MInst,
-        bytes: &mut SmallVec<[u8; 8]>,
-    );
-
-    fn update_opcode_with_label(
-        &self,
-        opcode: &mut Self::MInst,
-        label_offset: u32,
-    ) -> SmallVec<[u8; 4]>;
-
-    fn emit_opcode(&self, opcode: &Self::MInst, buf: &mut Vec<u8>);
-    fn emit_immediate_bytes(&self, bytes: &[u8], buf: &mut Vec<u8>);
-    fn emit_label(&self, address: u32, buf: &mut Vec<u8>);
 }
 
 #[derive(Debug)]
@@ -136,24 +306,26 @@ impl<'a, Op: Default> Lower<'a, Op> {
         }
     }
 
-    pub fn lower<B: LowerBackend<MInst = Op>>(
+    pub fn lower(
         mut self,
-        backend: &B,
         alloc: &mut dyn Allocator,
+        mut enter_block: impl FnMut(&mut Self, &mut dyn Allocator, BlockId),
+        mut enter_function: impl FnMut(&mut Self, &mut dyn Allocator, &Function),
+        mut lower_insn: impl FnMut(&mut Self, &mut dyn Allocator, InstId),
     ) -> CodegenResult<VCode<Op>> {
         let function = self.function;
         let entry = function.layout.entry_block();
         for block in function.layout.iter_block() {
             self.cur_block = Some(block);
             self.cur_insn = None;
-            backend.enter_block(&mut self, alloc, block);
+            enter_block(&mut self, alloc, block);
             if entry == Some(block) {
-                backend.enter_function(&mut self, alloc, function);
+                enter_function(&mut self, alloc, function);
             }
 
             for insn in function.layout.iter_inst(block) {
                 self.cur_insn = Some(insn);
-                backend.lower(&mut self, alloc, insn);
+                lower_insn(&mut self, alloc, insn);
             }
         }
 

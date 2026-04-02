@@ -943,7 +943,7 @@ mod tests {
     use crate::{
         critical_edge::CriticalEdgeSplitter,
         isa::evm::{
-            FinalAlloc,
+            emit::FinalAlloc,
             memory_plan::{ArenaCostModel, FuncAnalysis, compute_program_memory_plan},
             ptr_escape::compute_ptr_escape_summaries,
         },

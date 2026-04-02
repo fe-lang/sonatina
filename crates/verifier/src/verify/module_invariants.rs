@@ -272,6 +272,25 @@ pub(super) fn collect_module_invariants(
                                 .ctx
                                 .get_sig(*func)
                                 .expect("checked function signature should exist");
+                            if !module.ctx.func_linkage(*func).has_definition()
+                                || !module.func_store.contains(*func)
+                            {
+                                report.push(
+                                    Diagnostic::error(
+                                        DiagnosticCode::StructuralInvariantViolation,
+                                        "section entry must reference a defined function body",
+                                        Location::Object {
+                                            name: object_name.clone(),
+                                            section: Some(section_name.clone()),
+                                        },
+                                    )
+                                    .with_note(format!(
+                                        "entry function `%{}` has no body",
+                                        sig.name()
+                                    )),
+                                    cfg.max_diagnostics,
+                                );
+                            }
                             if sig
                                 .args()
                                 .iter()

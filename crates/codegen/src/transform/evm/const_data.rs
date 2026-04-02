@@ -9,13 +9,13 @@ use sonatina_ir::{
     visitor::VisitorMut,
 };
 
-use crate::optim::{
-    aggregate::shape,
-    const_eval::{
+use crate::{
+    optim::const_eval::{
         ConstPath, ConstPathAnalysis, ConstPathStep, analyze_const_paths,
         collect_constref_value_tys, const_path_steps, eval_const_path_immediate,
         eval_const_path_subtree,
     },
+    transform::aggregate::shape,
 };
 
 type ConstOffsetTerms = Vec<(ValueId, u32)>;

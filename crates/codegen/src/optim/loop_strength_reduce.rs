@@ -1036,7 +1036,7 @@ fn const_gep_offset(func: &Function, base: ValueId, indices: &[ValueId]) -> Opti
             sonatina_ir::types::CompoundType::Struct(s) => {
                 let idx = usize::try_from(idx).ok()?;
                 let (field_offset, field_ty) =
-                    crate::optim::aggregate::shape::struct_field_offset_bytes(
+                    crate::transform::aggregate::shape::struct_field_offset_bytes(
                         &s.fields,
                         s.packed,
                         idx,

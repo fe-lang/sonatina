@@ -6,7 +6,7 @@ use crate::{
     cfg_edit::{CfgEditor, CleanupMode},
     domtree::DomTree,
     loop_analysis::{Loop, LoopTree},
-    optim::aggregate::ObjectMemoryAnalysis,
+    transform::aggregate::ObjectMemoryAnalysis,
 };
 
 #[derive(Debug)]

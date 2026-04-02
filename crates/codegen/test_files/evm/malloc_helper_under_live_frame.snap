@@ -10,11 +10,11 @@ object: Contract
   total: 135 bytes
 
 functions:
-  helper: ir_blocks=1 ir_insts=4 vcode_ops=27 fixups=2 imm_bytes=5
+  helper: ir_blocks=1 ir_insts=4 vcode_ops=8 fixups=0 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   ready: ir_blocks=3 ir_insts=12 vcode_ops=61 fixups=6 imm_bytes=11
     mem: scratch_words=0 stable_words=1 stable_mode=DynamicFrame entry_abs_words=0 abs_words_end=0
-  entry: ir_blocks=1 ir_insts=5 vcode_ops=17 fixups=2 imm_bytes=4
+  entry: ir_blocks=1 ir_insts=5 vcode_ops=14 fixups=2 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
@@ -27,26 +27,7 @@ evm:
 helper:
   block0:
     JUMPDEST
-    PUSH1 0x40 (64)  // v0.*i256 = evm_malloc 32.i256;
-    MLOAD
-    PUSH1 0x80 (128)
-    MLOAD
-    DUP2
-    DUP2
-    LT
-    PUSH1 `pc + (3)`
-    JUMPI
-    SWAP1
-    JUMPDEST
-    POP
-    PUSH1 0x9f (159)
-    DUP2
-    GT
-    PUSH1 `pc + (4)`
-    JUMPI
-    POP
-    PUSH1 0xa0 (160)
-    JUMPDEST
+    PUSH1 0xa0 (160)  // v0.*i256 = evm_malloc 32.i256;
     PUSH1 0x6f (111)  // mstore v0 111.i256 i256;
     DUP2
     MSTORE
@@ -128,11 +109,8 @@ entry:
     CALLDATALOAD
     PUSH1 0xe0 (224)  // v1.i256 = shr 224.i256 v0;
     SHR
-    PUSH1 `pc + (7)`  // v2.i256 = call %ready v1;
+    PUSH1 `pc + (4)`  // v2.i256 = call %ready v1;
     SWAP1
-    PUSH1 0xa0 (160)
-    PUSH1 0x80 (128)
-    MSTORE
     PUSH1 FuncRef(1)
     JUMP
     JUMPDEST

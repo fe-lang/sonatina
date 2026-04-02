@@ -2748,11 +2748,11 @@ impl<'a> RedundantCodeRemover<'a> {
         object_memory: Option<&ObjectMemoryAnalysis>,
         insn: InstId,
     ) -> bool {
-        let Some(inst_result) = func.dfg.inst_result(insn) else {
+        let [inst_result] = func.dfg.inst_results(insn) else {
             return false;
         };
         self.solver
-            .object_read_gvn_insn(func, object_memory, insn, inst_result)
+            .object_read_gvn_insn(func, object_memory, insn, *inst_result)
             .is_some()
     }
 

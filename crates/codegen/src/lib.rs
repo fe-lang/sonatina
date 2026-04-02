@@ -14,3 +14,4 @@ pub mod optim;
 pub mod post_domtree;
 pub mod range_analysis;
 pub mod stackalloc;
+pub mod transform;

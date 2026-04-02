@@ -608,7 +608,7 @@ fn zext_before(func: &mut Function, before: InstId, value: ValueId, ty: Type) ->
 mod tests {
     use super::*;
     use crate::{
-        isa::evm::{EvmBackend, PushWidthPolicy},
+        isa::evm::{EvmBackend, PushWidthPolicy, test_util::prepare_root},
         object::{CompileOptions, compile_all_objects},
     };
     use rustc_hash::FxHashSet;
@@ -866,32 +866,36 @@ object @Contract {
 "#,
         );
 
+        let backend = test_backend();
         let opts = CompileOptions {
             fixup_policy: PushWidthPolicy::MinimalRelax,
             emit_symtab: false,
             emit_observability: false,
             verifier_cfg: VerifierConfig::for_level(VerificationLevel::Fast),
         };
-        compile_all_objects(&module, &test_backend(), &opts).expect("compile should succeed");
+        compile_all_objects(&module, &backend, &opts).expect("compile should succeed");
 
-        assert_no_object_ir(&module);
-        let entry = lookup_func(&module, "entry");
-        let make_pair = lookup_func(&module, "make_pair");
-        let forward_pair = lookup_func(&module, "forward_pair");
-        let make_pair_sig = module
+        let prepared = prepare_root(&module, &backend, lookup_func(&module, "entry"))
+            .expect("prepare should succeed");
+        let prepared_module = prepared.module();
+        assert_no_object_ir(prepared_module);
+        let entry = lookup_func(prepared_module, "entry");
+        let make_pair = lookup_func(prepared_module, "make_pair");
+        let forward_pair = lookup_func(prepared_module, "forward_pair");
+        let make_pair_sig = prepared_module
             .ctx
             .get_sig(make_pair)
             .expect("make_pair signature should exist");
         assert_eq!(make_pair_sig.args().len(), 3);
         assert!(make_pair_sig.returns_unit());
-        let forward_pair_sig = module
+        let forward_pair_sig = prepared_module
             .ctx
             .get_sig(forward_pair)
             .expect("forward_pair signature should exist");
         assert_eq!(forward_pair_sig.args().len(), 3);
         assert!(forward_pair_sig.returns_unit());
 
-        module.func_store.view(make_pair, |func| {
+        prepared_module.func_store.view(make_pair, |func| {
             assert!(
                 func.layout
                     .iter_block()
@@ -903,7 +907,7 @@ object @Contract {
                 "make_pair should initialize the caller-provided object in place"
             );
         });
-        module.func_store.view(forward_pair, |func| {
+        prepared_module.func_store.view(forward_pair, |func| {
             assert!(
                 func.layout
                     .iter_block()
@@ -915,7 +919,7 @@ object @Contract {
                 "forward_pair should forward the caller-provided object without heap allocation"
             );
         });
-        module.func_store.view(entry, |func| {
+        prepared_module.func_store.view(entry, |func| {
             let mut saw_forward_pair = false;
             assert!(
                 func.layout
@@ -980,16 +984,19 @@ object @Contract {
 "#,
         );
 
+        let backend = test_backend();
         let opts = CompileOptions {
             fixup_policy: PushWidthPolicy::MinimalRelax,
             emit_symtab: false,
             emit_observability: false,
             verifier_cfg: VerifierConfig::for_level(VerificationLevel::Fast),
         };
-        compile_all_objects(&module, &test_backend(), &opts).expect("compile should succeed");
+        compile_all_objects(&module, &backend, &opts).expect("compile should succeed");
 
-        let entry = lookup_func(&module, "entry");
-        module.func_store.view(entry, |func| {
+        let prepared = prepare_root(&module, &backend, lookup_func(&module, "entry"))
+            .expect("prepare should succeed");
+        let entry = lookup_func(prepared.module(), "entry");
+        prepared.module().func_store.view(entry, |func| {
             assert!(
                 func.layout
                     .iter_block()
@@ -1040,14 +1047,17 @@ object @Contract {
 "#,
         );
 
+        let backend = test_backend();
         let opts = CompileOptions {
             fixup_policy: PushWidthPolicy::MinimalRelax,
             emit_symtab: false,
             emit_observability: false,
             verifier_cfg: VerifierConfig::for_level(VerificationLevel::Fast),
         };
-        compile_all_objects(&module, &test_backend(), &opts).expect("compile should succeed");
+        compile_all_objects(&module, &backend, &opts).expect("compile should succeed");
 
-        assert_no_object_ir(&module);
+        let prepared = prepare_root(&module, &backend, lookup_func(&module, "entry"))
+            .expect("prepare should succeed");
+        assert_no_object_ir(prepared.module());
     }
 }

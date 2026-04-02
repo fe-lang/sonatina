@@ -8,7 +8,7 @@ use smallvec::SmallVec;
 
 use crate::{ir_writer::IrWrite, module::ModuleCtx};
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct TypeStore {
     compounds: PrimaryMap<CompoundTypeRef, CompoundType>,
     rev_types: FxHashMap<CompoundType, CompoundTypeRef>,

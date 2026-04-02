@@ -5,7 +5,7 @@ use rustc_hash::FxHashMap;
 
 use crate::{Immediate, Linkage, Type, ir_writer::IrWrite, module::ModuleCtx};
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct GlobalVariableStore {
     gv_data: PrimaryMap<GlobalVariableRef, GlobalVariableData>,
     symbols: FxHashMap<String, GlobalVariableRef>,

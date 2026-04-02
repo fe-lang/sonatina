@@ -957,6 +957,37 @@ fn standalone_function_passes_support_live_multi_result_input() {
 }
 
 #[test]
+fn gvn_tolerates_live_multi_result_calls() {
+    let (module, _) = parse_test_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+declare external %pair() -> (i256, i1);
+
+func public %entry() -> i256 {
+    block0:
+        (v0.i256, v1.i1) = call %pair;
+        br v1 block1 block2;
+
+    block1:
+        return 0.i256;
+
+    block2:
+        return v0;
+}
+"#,
+    );
+    let func_ref = find_func_by_name(&module, "entry");
+    module.func_store.modify(func_ref, |func| {
+        let mut cfg = ControlFlowGraph::new();
+        let mut domtree = DomTree::new();
+        GvnSolver::new().run(func, &mut cfg, &mut domtree);
+    });
+    assert_func_contains(&module, func_ref, "call %pair");
+    assert_fast_verified(&module);
+}
+
+#[test]
 fn balanced_pipeline_preserves_live_multi_result_ir_until_lowering() {
     let (mut module, func_ref) = parse_test_module(STANDALONE_MULTI_RESULT_SRC);
     Pipeline::size().run(&mut module);

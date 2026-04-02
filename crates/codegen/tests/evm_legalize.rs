@@ -1,15 +1,8 @@
 use sonatina_codegen::{
-    isa::evm::{EvmBackend, PushWidthPolicy},
-    machinst::lower::{LowerBackend, SectionLoweringCtx},
+    isa::evm::{EvmBackend, PushWidthPolicy, test_util::prepare_root},
     object::{CompileOptions, compile_object},
 };
-use sonatina_ir::{
-    Module,
-    ir_writer::ModuleWriter,
-    isa::evm::Evm,
-    module::FuncRef,
-    object::{EmbedSymbol, ObjectName, SectionName},
-};
+use sonatina_ir::{Module, ir_writer::ModuleWriter, isa::evm::Evm, module::FuncRef};
 use sonatina_parser::parse_module;
 use sonatina_triple::{Architecture, OperatingSystem, TargetTriple, Vendor};
 use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module};
@@ -20,12 +13,6 @@ fn evm_backend() -> EvmBackend {
         vendor: Vendor::Ethereum,
         operating_system: OperatingSystem::Evm(sonatina_triple::EvmVersion::Osaka),
     }))
-}
-
-fn defined_funcs(module: &Module) -> Vec<FuncRef> {
-    let mut funcs = module.funcs();
-    funcs.retain(|func| module.ctx.func_linkage(*func).has_definition());
-    funcs
 }
 
 fn find_func(module: &Module, name: &str) -> FuncRef {
@@ -68,20 +55,12 @@ func public %main(v0.i8, v1.i8) -> i8 {
 
     let parsed = parse_module(source).expect("module should parse");
     let backend = evm_backend();
-    let object_name = ObjectName::from("Contract");
-    let section_name = SectionName::from("runtime");
-    let embed_symbols: Vec<EmbedSymbol> = Vec::new();
-    let section_ctx = SectionLoweringCtx {
-        object: &object_name,
-        section: &section_name,
-        embed_symbols: &embed_symbols,
-    };
+    let prepared = prepare_root(&parsed.module, &backend, find_func(&parsed.module, "main"))
+        .expect("prepare should succeed");
 
-    let funcs = defined_funcs(&parsed.module);
-    backend.prepare_section(&parsed.module, &funcs, &section_ctx);
-
-    let mut writer = ModuleWriter::new(&parsed.module);
+    let mut writer = ModuleWriter::new(prepared.module());
     let dumped = writer.dump_string();
+    let original = ModuleWriter::new(&parsed.module).dump_string();
 
     for illegal in [
         "i8",
@@ -106,9 +85,13 @@ func public %main(v0.i8, v1.i8) -> i8 {
         !dumped.contains(" = not "),
         "late cleanup may fold the legalized form further, but `not` must be eliminated:\n{dumped}"
     );
+    assert!(
+        original.contains("usubo") && original.contains("evm_sdivo"),
+        "prepare should not mutate the original module:\n{original}"
+    );
 
     let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
-    let report = verify_module(&parsed.module, &cfg);
+    let report = verify_module(prepared.module(), &cfg);
     assert!(
         !report.has_errors(),
         "legalized module must verify:\n{report}"
@@ -116,7 +99,7 @@ func public %main(v0.i8, v1.i8) -> i8 {
 }
 
 #[test]
-fn lower_function_without_prepare_section_legalizes_call_closure() {
+fn lower_function_legalizes_call_closure_after_prepare_section() {
     let source = r#"
 target = "evm-ethereum-osaka"
 
@@ -135,32 +118,89 @@ func public %main(v0.i8) -> i8 {
 
     let parsed = parse_module(source).expect("module should parse");
     let backend = evm_backend();
-    let object_name = ObjectName::from("Contract");
-    let section_name = SectionName::from("runtime");
-    let embed_symbols: Vec<EmbedSymbol> = Vec::new();
-    let section_ctx = SectionLoweringCtx {
-        object: &object_name,
-        section: &section_name,
-        embed_symbols: &embed_symbols,
-    };
-
+    let prepared = prepare_root(&parsed.module, &backend, find_func(&parsed.module, "main"))
+        .expect("prepare should legalize the full call closure");
     backend
-        .lower_function(
-            &parsed.module,
-            find_func(&parsed.module, "main"),
-            &section_ctx,
-        )
-        .expect("standalone lowering should legalize the full call closure");
+        .lower_function(&prepared, find_func(prepared.module(), "main"))
+        .expect("lowering should consume the prepared call closure");
 
     for func_name in ["main", "helper"] {
-        let sig = parsed
-            .module
+        let sig = prepared
+            .module()
             .ctx
-            .get_sig(find_func(&parsed.module, func_name))
+            .get_sig(find_func(prepared.module(), func_name))
             .unwrap_or_else(|| panic!("missing signature for %{func_name}"));
         assert_eq!(sig.args(), &[sonatina_ir::Type::I256]);
         assert_eq!(sig.ret_tys(), &[sonatina_ir::Type::I256]);
     }
+    let original_sig = parsed
+        .module
+        .ctx
+        .get_sig(find_func(&parsed.module, "main"))
+        .expect("missing original main signature");
+    assert_eq!(original_sig.args(), &[sonatina_ir::Type::I8]);
+}
+
+#[test]
+fn prepare_section_rejects_external_multi_return_calls() {
+    let source = r#"
+target = "evm-ethereum-osaka"
+
+declare external %pair_add(i32, i32) -> (i32, i1);
+
+func public %main() {
+    block0:
+        (v0.i32, v1.i1) = call %pair_add 1.i32 2.i32;
+        return;
+}
+"#;
+
+    let parsed = parse_module(source).expect("module should parse");
+    let backend = evm_backend();
+    let err = match prepare_root(&parsed.module, &backend, find_func(&parsed.module, "main")) {
+        Ok(_) => panic!("prepare should reject external multi-return calls"),
+        Err(err) => err,
+    };
+    assert!(err.contains("external or declaration-only multi-return calls"));
+}
+
+#[test]
+fn prepare_section_rejects_call_arity_above_16() {
+    let ret_tys = std::iter::repeat_n("i32", 17)
+        .collect::<Vec<_>>()
+        .join(", ");
+    let ret_values = (0..17)
+        .map(|idx| format!("{idx}.i32"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let call_results = (0..17)
+        .map(|idx| format!("v{idx}.i32"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let source = format!(
+        r#"
+target = "evm-ethereum-osaka"
+
+func public %pair_many() -> ({ret_tys}) {{
+    block0:
+        return ({ret_values});
+}}
+
+func public %main() -> i32 {{
+    block0:
+        ({call_results}) = call %pair_many;
+        return v0;
+}}
+"#
+    );
+
+    let parsed = parse_module(&source).expect("module should parse");
+    let backend = evm_backend();
+    let err = match prepare_root(&parsed.module, &backend, find_func(&parsed.module, "main")) {
+        Ok(_) => panic!("prepare should reject calls with more than 16 results"),
+        Err(err) => err,
+    };
+    assert!(err.contains("supports at most 16"));
 }
 
 #[test]
