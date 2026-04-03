@@ -14,7 +14,8 @@ use sonatina_ir::{
 };
 
 use crate::analysis::memory_access::{
-    AliasResult, BaseObject, LinearRangeKey, MemoryAccessAnalysis, RangeCoverage, TrackedLocKey,
+    AliasResult, BaseObject, KeyExpr, LinearRangeKey, MemoryAccessAnalysis, RangeCoverage,
+    TrackedLocKey, ValueKey,
 };
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -281,6 +282,7 @@ fn transfer_forward(
     state: &mut AvailState,
     rewrite: bool,
 ) -> bool {
+    prune_dead_avail_state(func, state);
     let effects = func.dfg.effects(inst);
 
     if let Some(key) = forwardable_read_key(func, inst, analysis, &effects) {
@@ -350,6 +352,7 @@ fn transfer_backward(
     committing_exit_reachable: bool,
     rewrite: bool,
 ) -> bool {
+    prune_dead_live_state(func, live);
     let effects = func.dfg.effects(inst);
 
     for access in effects.accesses.iter().rev() {
@@ -414,6 +417,51 @@ fn kill_aliasing_key(state: &mut AvailState, analysis: &MemoryAccessAnalysis, ke
     state
         .exact
         .retain(|other, _| analysis.alias(other, key) == AliasResult::NoAlias);
+}
+
+fn prune_dead_avail_state(func: &Function, state: &mut AvailState) {
+    state
+        .exact
+        .retain(|key, value| func.dfg.has_value(*value) && tracked_key_is_live(func, key));
+}
+
+fn prune_dead_live_state(func: &Function, live: &mut LiveState) {
+    live.exact_live.retain(|key| tracked_key_is_live(func, key));
+    live.exit_live.retain(|key| tracked_key_is_live(func, key));
+    live.range_live
+        .retain(|range| linear_range_is_live(func, range));
+}
+
+fn tracked_key_is_live(func: &Function, key: &TrackedLocKey) -> bool {
+    match key {
+        TrackedLocKey::Linear(key) => base_object_is_live(func, &key.base),
+        TrackedLocKey::Keyed(key) => value_key_is_live(func, &key.key),
+    }
+}
+
+fn linear_range_is_live(func: &Function, range: &LinearRangeKey) -> bool {
+    base_object_is_live(func, &range.base)
+}
+
+fn base_object_is_live(func: &Function, base: &BaseObject) -> bool {
+    match base {
+        BaseObject::Alloca(inst) | BaseObject::Malloc(inst) => func.dfg.has_inst(*inst),
+        BaseObject::Arg(value) | BaseObject::Unknown(value) => func.dfg.has_value(*value),
+        BaseObject::Global(_) | BaseObject::Absolute(_) => true,
+    }
+}
+
+fn value_key_is_live(func: &Function, key: &ValueKey) -> bool {
+    match key {
+        ValueKey::Imm(_) => true,
+        ValueKey::Value(value) => func.dfg.has_value(*value),
+        ValueKey::Expr(expr) => match expr.as_ref() {
+            KeyExpr::Unary { arg, .. } | KeyExpr::Cast { arg, .. } => value_key_is_live(func, arg),
+            KeyExpr::Binary { lhs, rhs, .. } => {
+                value_key_is_live(func, lhs) && value_key_is_live(func, rhs)
+            }
+        },
+    }
 }
 
 fn has_may_alias_live(
@@ -504,6 +552,9 @@ fn forwardable_store_value(
     value: ValueId,
     key: &TrackedLocKey,
 ) -> Option<ValueId> {
+    if !func.dfg.has_value(value) {
+        return None;
+    }
     if func.dfg.value_ty(value) != expected_loaded_value_type(key) {
         return None;
     }
@@ -705,6 +756,54 @@ mod tests {
             builder.func.dfg.value_imm(ret[0]),
             Some(Immediate::I256(I256::from(7)))
         );
+    }
+
+    #[test]
+    fn rewrite_ignores_deleted_available_values() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::I256);
+        let is = evm.inst_set();
+
+        let block = builder.append_block();
+        builder.switch_to_block(block);
+
+        let ptr_ty = builder.ptr_type(Type::I256);
+        let addr = builder.insert_inst_with(|| Alloca::new(is, Type::I256), ptr_ty);
+        let dead_load = builder.insert_inst_with(|| Mload::new(is, addr, Type::I256), Type::I256);
+        let live_load = builder.insert_inst_with(|| Mload::new(is, addr, Type::I256), Type::I256);
+        builder.insert_inst_no_result_with(|| Return::new_single(is, live_load));
+        builder.seal_all();
+
+        let dead_inst = builder
+            .func
+            .dfg
+            .value_inst(dead_load)
+            .expect("dead load should come from an instruction");
+        builder.func.layout.remove_inst(dead_inst);
+        builder.func.erase_inst(dead_inst);
+
+        let live_inst = builder
+            .func
+            .dfg
+            .value_inst(live_load)
+            .expect("live load should come from an instruction");
+        let analysis = MemoryAccessAnalysis::new();
+        let effects = builder.func.dfg.effects(live_inst);
+        let key = forwardable_read_key(&builder.func, live_inst, &analysis, &effects)
+            .expect("live load should be forwardable");
+
+        let mut state = AvailState::default();
+        state.exact.insert(key.clone(), dead_load);
+
+        assert!(!transfer_forward(
+            &mut builder.func,
+            live_inst,
+            &analysis,
+            &mut state,
+            true,
+        ));
+        assert!(builder.func.layout.is_inst_inserted(live_inst));
+        assert_eq!(state.exact.get(&key), Some(&live_load));
     }
 
     #[test]
