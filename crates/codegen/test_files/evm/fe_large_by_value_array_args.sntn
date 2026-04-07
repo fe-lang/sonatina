@@ -1,0 +1,505 @@
+target = "evm-ethereum-osaka"
+
+type @__fe_layout_0 = {i256, i256};
+type @__fe_layout_1 = {@__fe_layout_0, i256};
+type @__fe_layout_2 = {@__fe_layout_1, i256};
+type @__fe_layout_3 = {i256, i256, i256};
+type @__fe_layout_4 = {i256, i256};
+
+func private %__C_recv_0_0() -> i256 {
+    block0:
+        v2.objref<[i256; 2]> = obj.alloc [i256; 2];
+        v4.objref<i256> = obj.index v2 0.i256;
+        obj.store v4 1.i256;
+        v5.objref<i256> = obj.index v2 1.i256;
+        obj.store v5 2.i256;
+        v6.[i256; 2] = obj.load v2;
+        v7.objref<[i256; 2]> = obj.alloc [i256; 2];
+        v8.objref<i256> = obj.index v7 0.i256;
+        obj.store v8 1.i256;
+        v9.objref<i256> = obj.index v7 1.i256;
+        obj.store v9 2.i256;
+        v10.[i256; 2] = obj.load v7;
+        v13.objref<[i256; 2]> = obj.alloc [i256; 2];
+        v14.objref<i256> = obj.index v13 0.i256;
+        obj.store v14 3.i256;
+        v15.objref<i256> = obj.index v13 1.i256;
+        obj.store v15 4.i256;
+        v16.[i256; 2] = obj.load v13;
+        v19.objref<[i256; 2]> = obj.alloc [i256; 2];
+        v20.objref<i256> = obj.index v19 0.i256;
+        obj.store v20 5.i256;
+        v21.objref<i256> = obj.index v19 1.i256;
+        obj.store v21 6.i256;
+        v22.[i256; 2] = obj.load v19;
+        v23.objref<[i256; 2]> = obj.alloc [i256; 2];
+        v24.objref<i256> = obj.index v23 0.i256;
+        obj.store v24 3.i256;
+        v25.objref<i256> = obj.index v23 1.i256;
+        obj.store v25 4.i256;
+        v26.[i256; 2] = obj.load v23;
+        v27.objref<[i256; 2]> = obj.alloc [i256; 2];
+        v28.objref<i256> = obj.index v27 0.i256;
+        obj.store v28 5.i256;
+        v29.objref<i256> = obj.index v27 1.i256;
+        obj.store v29 6.i256;
+        v30.[i256; 2] = obj.load v27;
+        v31.objref<[[i256; 2]; 2]> = obj.alloc [[i256; 2]; 2];
+        v32.objref<[i256; 2]> = obj.index v31 0.i256;
+        obj.store v32 v26;
+        v33.objref<[i256; 2]> = obj.index v31 1.i256;
+        obj.store v33 v30;
+        v34.[[i256; 2]; 2] = obj.load v31;
+        v35.objref<[i256; 2]> = obj.alloc [i256; 2];
+        v36.objref<i256> = obj.index v35 0.i256;
+        obj.store v36 3.i256;
+        v37.objref<i256> = obj.index v35 1.i256;
+        obj.store v37 4.i256;
+        v38.[i256; 2] = obj.load v35;
+        v39.objref<[i256; 2]> = obj.alloc [i256; 2];
+        v40.objref<i256> = obj.index v39 0.i256;
+        obj.store v40 5.i256;
+        v41.objref<i256> = obj.index v39 1.i256;
+        obj.store v41 6.i256;
+        v42.[i256; 2] = obj.load v39;
+        v43.objref<[[i256; 2]; 2]> = obj.alloc [[i256; 2]; 2];
+        v44.objref<[i256; 2]> = obj.index v43 0.i256;
+        obj.store v44 v38;
+        v45.objref<[i256; 2]> = obj.index v43 1.i256;
+        obj.store v45 v42;
+        v46.[[i256; 2]; 2] = obj.load v43;
+        v49.objref<[i256; 2]> = obj.alloc [i256; 2];
+        v50.objref<i256> = obj.index v49 0.i256;
+        obj.store v50 7.i256;
+        v51.objref<i256> = obj.index v49 1.i256;
+        obj.store v51 8.i256;
+        v52.[i256; 2] = obj.load v49;
+        v53.objref<[i256; 2]> = obj.alloc [i256; 2];
+        v54.objref<i256> = obj.index v53 0.i256;
+        obj.store v54 7.i256;
+        v55.objref<i256> = obj.index v53 1.i256;
+        obj.store v55 8.i256;
+        v56.[i256; 2] = obj.load v53;
+        v95.objref<[i256; 38]> = obj.alloc [i256; 38];
+        v96.objref<i256> = obj.index v95 0.i256;
+        obj.store v96 9.i256;
+        v97.objref<i256> = obj.index v95 1.i256;
+        obj.store v97 10.i256;
+        v98.objref<i256> = obj.index v95 2.i256;
+        obj.store v98 11.i256;
+        v99.objref<i256> = obj.index v95 3.i256;
+        obj.store v99 12.i256;
+        v100.objref<i256> = obj.index v95 4.i256;
+        obj.store v100 13.i256;
+        v101.objref<i256> = obj.index v95 5.i256;
+        obj.store v101 14.i256;
+        v102.objref<i256> = obj.index v95 6.i256;
+        obj.store v102 15.i256;
+        v103.objref<i256> = obj.index v95 7.i256;
+        obj.store v103 16.i256;
+        v104.objref<i256> = obj.index v95 8.i256;
+        obj.store v104 17.i256;
+        v105.objref<i256> = obj.index v95 9.i256;
+        obj.store v105 18.i256;
+        v106.objref<i256> = obj.index v95 10.i256;
+        obj.store v106 19.i256;
+        v107.objref<i256> = obj.index v95 11.i256;
+        obj.store v107 20.i256;
+        v108.objref<i256> = obj.index v95 12.i256;
+        obj.store v108 21.i256;
+        v109.objref<i256> = obj.index v95 13.i256;
+        obj.store v109 22.i256;
+        v110.objref<i256> = obj.index v95 14.i256;
+        obj.store v110 23.i256;
+        v111.objref<i256> = obj.index v95 15.i256;
+        obj.store v111 24.i256;
+        v112.objref<i256> = obj.index v95 16.i256;
+        obj.store v112 25.i256;
+        v113.objref<i256> = obj.index v95 17.i256;
+        obj.store v113 26.i256;
+        v114.objref<i256> = obj.index v95 18.i256;
+        obj.store v114 27.i256;
+        v115.objref<i256> = obj.index v95 19.i256;
+        obj.store v115 28.i256;
+        v116.objref<i256> = obj.index v95 20.i256;
+        obj.store v116 29.i256;
+        v117.objref<i256> = obj.index v95 21.i256;
+        obj.store v117 30.i256;
+        v118.objref<i256> = obj.index v95 22.i256;
+        obj.store v118 31.i256;
+        v119.objref<i256> = obj.index v95 23.i256;
+        obj.store v119 32.i256;
+        v120.objref<i256> = obj.index v95 24.i256;
+        obj.store v120 33.i256;
+        v121.objref<i256> = obj.index v95 25.i256;
+        obj.store v121 34.i256;
+        v122.objref<i256> = obj.index v95 26.i256;
+        obj.store v122 35.i256;
+        v123.objref<i256> = obj.index v95 27.i256;
+        obj.store v123 36.i256;
+        v124.objref<i256> = obj.index v95 28.i256;
+        obj.store v124 37.i256;
+        v125.objref<i256> = obj.index v95 29.i256;
+        obj.store v125 38.i256;
+        v126.objref<i256> = obj.index v95 30.i256;
+        obj.store v126 39.i256;
+        v127.objref<i256> = obj.index v95 31.i256;
+        obj.store v127 40.i256;
+        v128.objref<i256> = obj.index v95 32.i256;
+        obj.store v128 41.i256;
+        v129.objref<i256> = obj.index v95 33.i256;
+        obj.store v129 42.i256;
+        v130.objref<i256> = obj.index v95 34.i256;
+        obj.store v130 43.i256;
+        v131.objref<i256> = obj.index v95 35.i256;
+        obj.store v131 44.i256;
+        v132.objref<i256> = obj.index v95 36.i256;
+        obj.store v132 45.i256;
+        v133.objref<i256> = obj.index v95 37.i256;
+        obj.store v133 46.i256;
+        v134.[i256; 38] = obj.load v95;
+        v135.objref<[i256; 38]> = obj.alloc [i256; 38];
+        v136.objref<i256> = obj.index v135 0.i256;
+        obj.store v136 9.i256;
+        v137.objref<i256> = obj.index v135 1.i256;
+        obj.store v137 10.i256;
+        v138.objref<i256> = obj.index v135 2.i256;
+        obj.store v138 11.i256;
+        v139.objref<i256> = obj.index v135 3.i256;
+        obj.store v139 12.i256;
+        v140.objref<i256> = obj.index v135 4.i256;
+        obj.store v140 13.i256;
+        v141.objref<i256> = obj.index v135 5.i256;
+        obj.store v141 14.i256;
+        v142.objref<i256> = obj.index v135 6.i256;
+        obj.store v142 15.i256;
+        v143.objref<i256> = obj.index v135 7.i256;
+        obj.store v143 16.i256;
+        v144.objref<i256> = obj.index v135 8.i256;
+        obj.store v144 17.i256;
+        v145.objref<i256> = obj.index v135 9.i256;
+        obj.store v145 18.i256;
+        v146.objref<i256> = obj.index v135 10.i256;
+        obj.store v146 19.i256;
+        v147.objref<i256> = obj.index v135 11.i256;
+        obj.store v147 20.i256;
+        v148.objref<i256> = obj.index v135 12.i256;
+        obj.store v148 21.i256;
+        v149.objref<i256> = obj.index v135 13.i256;
+        obj.store v149 22.i256;
+        v150.objref<i256> = obj.index v135 14.i256;
+        obj.store v150 23.i256;
+        v151.objref<i256> = obj.index v135 15.i256;
+        obj.store v151 24.i256;
+        v152.objref<i256> = obj.index v135 16.i256;
+        obj.store v152 25.i256;
+        v153.objref<i256> = obj.index v135 17.i256;
+        obj.store v153 26.i256;
+        v154.objref<i256> = obj.index v135 18.i256;
+        obj.store v154 27.i256;
+        v155.objref<i256> = obj.index v135 19.i256;
+        obj.store v155 28.i256;
+        v156.objref<i256> = obj.index v135 20.i256;
+        obj.store v156 29.i256;
+        v157.objref<i256> = obj.index v135 21.i256;
+        obj.store v157 30.i256;
+        v158.objref<i256> = obj.index v135 22.i256;
+        obj.store v158 31.i256;
+        v159.objref<i256> = obj.index v135 23.i256;
+        obj.store v159 32.i256;
+        v160.objref<i256> = obj.index v135 24.i256;
+        obj.store v160 33.i256;
+        v161.objref<i256> = obj.index v135 25.i256;
+        obj.store v161 34.i256;
+        v162.objref<i256> = obj.index v135 26.i256;
+        obj.store v162 35.i256;
+        v163.objref<i256> = obj.index v135 27.i256;
+        obj.store v163 36.i256;
+        v164.objref<i256> = obj.index v135 28.i256;
+        obj.store v164 37.i256;
+        v165.objref<i256> = obj.index v135 29.i256;
+        obj.store v165 38.i256;
+        v166.objref<i256> = obj.index v135 30.i256;
+        obj.store v166 39.i256;
+        v167.objref<i256> = obj.index v135 31.i256;
+        obj.store v167 40.i256;
+        v168.objref<i256> = obj.index v135 32.i256;
+        obj.store v168 41.i256;
+        v169.objref<i256> = obj.index v135 33.i256;
+        obj.store v169 42.i256;
+        v170.objref<i256> = obj.index v135 34.i256;
+        obj.store v170 43.i256;
+        v171.objref<i256> = obj.index v135 35.i256;
+        obj.store v171 44.i256;
+        v172.objref<i256> = obj.index v135 36.i256;
+        obj.store v172 45.i256;
+        v173.objref<i256> = obj.index v135 37.i256;
+        obj.store v173 46.i256;
+        v174.[i256; 38] = obj.load v135;
+        v175.i256 = call %prove_like v10 v46 v56 v174;
+        return v175;
+}
+
+func private %__fe_contract_init_root_C() {
+    block0:
+        v1.i256 = sym_addr &Contract_runtime;
+        v2.i256 = sym_size &Contract_runtime;
+        evm_code_copy 0.i256 v1 v2;
+        evm_return 0.i256 v2;
+}
+
+func private %__fe_contract_recv_abi_C_16909060() {
+    block0:
+        v0.objref<@__fe_layout_0> = obj.alloc @__fe_layout_0;
+        v3.i256 = evm_call_value;
+        v4.i1 = ne v3 0.i256;
+        v5.i1 = ne 0.i256 0.i256;
+        v6.i1 = eq v4 v5;
+        v7.i1 = is_zero v6;
+        br v7 block1 block2;
+
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block2:
+        v9.i256 = evm_calldata_size;
+        (v11.i256, v12.i1) = usubo v9 4.i256;
+        br v12 block3 block4;
+
+    block3:
+        evm_revert 0.i256 0.i256;
+
+    block4:
+        v13.*i8 = evm_malloc v11;
+        v14.i256 = ptr_to_int v13 i256;
+        evm_calldata_copy v14 4.i256 v11;
+        v17.objref<i256> = obj.proj v0 0.i256;
+        obj.store v17 v14;
+        v19.objref<i256> = obj.proj v0 1.i256;
+        obj.store v19 v11;
+        v20.@__fe_layout_0 = obj.load v0;
+        v21.@__fe_layout_2 = call %decoder_new v20;
+        v22.objref<@__fe_layout_2> = obj.alloc @__fe_layout_2;
+        obj.store v22 v21;
+        v23.i256 = call %__C_recv_0_0;
+        v24.@__fe_layout_3 = call %encoder_new;
+        v26.objref<@__fe_layout_3> = obj.alloc @__fe_layout_3;
+        obj.store v26 v24;
+        v27.i256 = call %reserve_head v26 32.i256;
+        v28.objref<@__fe_layout_3> = obj.alloc @__fe_layout_3;
+        obj.store v28 v24;
+        call %encode v23 v28;
+        v30.@__fe_layout_4 = call %finish v24;
+        v31.objref<@__fe_layout_4> = obj.alloc @__fe_layout_4;
+        obj.store v31 v30;
+        v32.objref<i256> = obj.proj v31 0.i256;
+        v33.i256 = obj.load v32;
+        v34.objref<i256> = obj.proj v31 1.i256;
+        v35.i256 = obj.load v34;
+        evm_return v33 v35;
+}
+
+func private %__fe_contract_runtime_root_C() {
+    block0:
+        v1.i256 = evm_calldata_load 0.i256;
+        v3.i256 = shr 224.i256 v1;
+        v4.i32 = trunc v3 i32;
+        br_table v4 block1 (16909060.i32 block2);
+
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block2:
+        call %__fe_contract_recv_abi_C_16909060;
+        unreachable;
+}
+
+func private %add_0(v0.i256, v1.i256) -> i256 {
+    block0:
+        (v2.i256, v3.i1) = uaddo v0 v1;
+        br v3 block1 block2;
+
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block2:
+        return v2;
+}
+
+func private %add_1(v0.i256, v1.i256) -> i256 {
+    block0:
+        (v2.i256, v3.i1) = uaddo v0 v1;
+        br v3 block1 block2;
+
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block2:
+        return v2;
+}
+
+func private %decoder_new(v0.@__fe_layout_0) -> @__fe_layout_2 {
+    block0:
+        v1.@__fe_layout_2 = call %new_1 v0;
+        return v1;
+}
+
+func private %encode(v0.i256, v1.objref<@__fe_layout_3>) {
+    block0:
+        call %write_word v1 v0;
+        return;
+}
+
+func private %encoder_new() -> @__fe_layout_3 {
+    block0:
+        v0.@__fe_layout_3 = call %new_0;
+        return v0;
+}
+
+func private %eq(v0.i256, v1.i256) -> i1 {
+    block0:
+        v3.i1 = ne v0 0.i256;
+        v4.i1 = ne v1 0.i256;
+        v5.i1 = eq v3 v4;
+        return v5;
+}
+
+func private %finish(v0.@__fe_layout_3) -> @__fe_layout_4 {
+    block0:
+        v1.objref<@__fe_layout_3> = obj.alloc @__fe_layout_3;
+        obj.store v1 v0;
+        v3.objref<i256> = obj.proj v1 0.i256;
+        v4.i256 = obj.load v3;
+        v6.objref<i256> = obj.proj v1 2.i256;
+        v7.i256 = obj.load v6;
+        v8.i256 = call %sub v7 v4;
+        v9.objref<@__fe_layout_4> = obj.alloc @__fe_layout_4;
+        v10.objref<i256> = obj.proj v9 0.i256;
+        obj.store v10 v4;
+        v12.objref<i256> = obj.proj v9 1.i256;
+        obj.store v12 v8;
+        v13.@__fe_layout_4 = obj.load v9;
+        return v13;
+}
+
+func private %new_0() -> @__fe_layout_3 {
+    block0:
+        v1.objref<@__fe_layout_3> = obj.alloc @__fe_layout_3;
+        v2.objref<i256> = obj.proj v1 0.i256;
+        obj.store v2 0.i256;
+        v4.objref<i256> = obj.proj v1 1.i256;
+        obj.store v4 0.i256;
+        v6.objref<i256> = obj.proj v1 2.i256;
+        obj.store v6 0.i256;
+        v7.@__fe_layout_3 = obj.load v1;
+        return v7;
+}
+
+func private %new_1(v0.@__fe_layout_0) -> @__fe_layout_2 {
+    block0:
+        v1.@__fe_layout_1 = call %new_2 v0;
+        v3.objref<@__fe_layout_2> = obj.alloc @__fe_layout_2;
+        v4.objref<@__fe_layout_1> = obj.proj v3 0.i256;
+        obj.store v4 v1;
+        v6.objref<i256> = obj.proj v3 1.i256;
+        obj.store v6 0.i256;
+        v7.@__fe_layout_2 = obj.load v3;
+        return v7;
+}
+
+func private %new_2(v0.@__fe_layout_0) -> @__fe_layout_1 {
+    block0:
+        v2.objref<@__fe_layout_1> = obj.alloc @__fe_layout_1;
+        v3.objref<@__fe_layout_0> = obj.proj v2 0.i256;
+        obj.store v3 v0;
+        v5.objref<i256> = obj.proj v2 1.i256;
+        obj.store v5 0.i256;
+        v6.@__fe_layout_1 = obj.load v2;
+        return v6;
+}
+
+func private %prove_like(v0.[i256; 2], v1.[[i256; 2]; 2], v2.[i256; 2], v3.[i256; 38]) -> i256 {
+    block0:
+        v4.objref<[i256; 2]> = obj.alloc [i256; 2];
+        v5.objref<[[i256; 2]; 2]> = obj.alloc [[i256; 2]; 2];
+        v6.objref<[i256; 2]> = obj.alloc [i256; 2];
+        v7.objref<[i256; 38]> = obj.alloc [i256; 38];
+        obj.store v4 v0;
+        obj.store v5 v1;
+        obj.store v6 v2;
+        obj.store v7 v3;
+        v9.objref<[i256; 2]> = obj.index v5 0.i256;
+        v10.[i256; 2] = obj.load v9;
+        v11.objref<[i256; 2]> = obj.index v5 0.i256;
+        v12.objref<i256> = obj.index v11 0.i256;
+        v13.i256 = obj.load v12;
+        v14.objref<i256> = obj.index v6 0.i256;
+        v15.i256 = obj.load v14;
+        v16.objref<i256> = obj.index v7 0.i256;
+        v17.i256 = obj.load v16;
+        v18.objref<i256> = obj.index v4 0.i256;
+        v19.i256 = obj.load v18;
+        return v19;
+}
+
+func private %reserve_head(v0.objref<@__fe_layout_3>, v1.i256) -> i256 {
+    block0:
+        v3.objref<i256> = obj.proj v0 0.i256;
+        v4.i256 = obj.load v3;
+        v5.i1 = call %eq v4 0.i256;
+        br v5 block1 block2;
+
+    block1:
+        v7.*i8 = evm_malloc v1;
+        v8.i256 = ptr_to_int v7 i256;
+        v10.objref<i256> = obj.proj v0 0.i256;
+        obj.store v10 v8;
+        v12.objref<i256> = obj.proj v0 1.i256;
+        obj.store v12 v8;
+        v13.i256 = call %add_1 v8 v1;
+        v15.objref<i256> = obj.proj v0 2.i256;
+        obj.store v15 v13;
+        jump block3;
+
+    block2:
+        jump block3;
+
+    block3:
+        v17.objref<i256> = obj.proj v0 0.i256;
+        v18.i256 = obj.load v17;
+        return v18;
+}
+
+func private %sub(v0.i256, v1.i256) -> i256 {
+    block0:
+        (v2.i256, v3.i1) = usubo v0 v1;
+        br v3 block1 block2;
+
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block2:
+        return v2;
+}
+
+func private %write_word(v0.objref<@__fe_layout_3>, v1.i256) {
+    block0:
+        v3.objref<i256> = obj.proj v0 1.i256;
+        v4.i256 = obj.load v3;
+        mstore v4 v1 i256;
+        v7.i256 = call %add_0 v4 32.i256;
+        v8.objref<i256> = obj.proj v0 1.i256;
+        obj.store v8 v7;
+        return;
+}
+
+
+object @Contract {
+    section init {
+        entry %__fe_contract_init_root_C;
+        embed .runtime as &Contract_runtime;
+    }
+    section runtime {
+        entry %__fe_contract_runtime_root_C;
+    }
+}

@@ -10,7 +10,7 @@ use crate::{
     transform::{
         aggregate::{
             AggregateExpandAbi, AggregateLowerToMemoryLegalize, LocalObjectArgMap,
-            ObjectEffectSummaryMap, ObjectLowerToMemory, ObjectReturnOutParam,
+            ObjectByValueArgAbi, ObjectEffectSummaryMap, ObjectLowerToMemory, ObjectReturnOutParam,
             assert_aggregate_legalized, collect_local_object_arg_info_with_effects,
             compute_object_effect_summaries, merge_local_object_arg_info,
         },
@@ -64,7 +64,7 @@ impl<'a> EvmPipeline<'a> {
         let _span = info_span!(
             "sonatina.codegen.evm.pipeline.run",
             funcs = ctx.funcs.len(),
-            phases = if optional_cleanup { 9 } else { 5 }
+            phases = if optional_cleanup { 10 } else { 6 }
         )
         .entered();
 
@@ -84,6 +84,11 @@ impl<'a> EvmPipeline<'a> {
             "out_param_lowering",
             "mandatory",
             EvmPipelineContext::run_out_param_lowering,
+        )?;
+        ctx.run_phase(
+            "byvalue_arg_object_abi_lowering",
+            "mandatory",
+            EvmPipelineContext::run_byvalue_arg_object_abi_lowering,
         )?;
         if optional_cleanup {
             ctx.run_phase(
@@ -207,6 +212,12 @@ impl EvmPipelineContext<'_> {
 
     fn run_out_param_lowering(&mut self) -> Result<(), String> {
         self.synthetic_out_args = ObjectReturnOutParam.run_with_synthetic_out_args(self.module());
+        self.func_behavior_dirty = true;
+        Ok(())
+    }
+
+    fn run_byvalue_arg_object_abi_lowering(&mut self) -> Result<(), String> {
+        ObjectByValueArgAbi::default().run(self.module());
         self.func_behavior_dirty = true;
         Ok(())
     }

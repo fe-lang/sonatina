@@ -27,6 +27,7 @@ pub(crate) enum SpecialObjectUse<'a> {
     MaterializeStack(Option<ValueId>),
     MaterializeHeap,
     Call {
+        inst: sonatina_ir::InstId,
         value: ValueId,
         call: &'a control_flow::Call,
     },
@@ -192,14 +193,16 @@ pub(crate) fn object_root_stays_local_with_effects(
         {
             ControlFlow::Continue(())
         }
-        SpecialObjectUse::Call { value, call }
+        SpecialObjectUse::Call { inst, value, call }
             if is_allowed_root_value(value)
                 && call_root_preserves_locality(
-                    function.ctx(),
+                    function,
+                    inst,
                     call,
                     value,
                     root_ty,
                     object_effects,
+                    &mut is_allowed_root_value,
                 ) =>
         {
             ControlFlow::Continue(())
@@ -229,7 +232,7 @@ pub(crate) fn object_root_stays_local_with(
         {
             ControlFlow::Continue(())
         }
-        SpecialObjectUse::Call { value, call }
+        SpecialObjectUse::Call { value, call, .. }
             if is_allowed_root_value(value)
                 && call_passes_object_to_local_arg_info(
                     function.ctx(),
@@ -489,7 +492,11 @@ fn walk_object_root_uses_impl<T>(
                 downcast::<&control_flow::Call>(function.inst_set(), function.dfg.inst(user))
                 && call.args().contains(&value)
             {
-                let flow = on_special(SpecialObjectUse::Call { value, call });
+                let flow = on_special(SpecialObjectUse::Call {
+                    inst: user,
+                    value,
+                    call,
+                });
                 if let Some(result) =
                     call_same_root_result(function, user, call, value, object_effects)
                 {
@@ -523,13 +530,15 @@ fn walk_object_root_uses_impl<T>(
 }
 
 fn call_root_preserves_locality(
-    ctx: &ModuleCtx,
+    function: &Function,
+    inst: sonatina_ir::InstId,
     call: &control_flow::Call,
     value: ValueId,
     value_ty: Type,
     object_effects: &ObjectEffectSummaryMap,
+    is_allowed_root_value: &mut impl FnMut(ValueId) -> bool,
 ) -> bool {
-    let Some(sig) = ctx.get_sig(*call.callee()) else {
+    let Some(sig) = function.ctx().get_sig(*call.callee()) else {
         return false;
     };
     let Some(summary) = object_effects.get(call.callee()) else {
@@ -545,8 +554,21 @@ fn call_root_preserves_locality(
         let Some(effect) = summary.arg_effects.get(idx) else {
             return false;
         };
-        if sig.args().get(idx) != Some(&value_ty) || effect.escapes || effect.materializes_heap {
+        if sig.args().get(idx) != Some(&value_ty) {
             return false;
+        }
+        if effect.local_only {
+            continue;
+        }
+
+        let Some(result) = function.dfg.inst_result(inst) else {
+            return false;
+        };
+        match summary.ret_effect {
+            ObjectReturnEffect::SameAsArg { index }
+            | ObjectReturnEffect::DerivedFromArg { index }
+                if index == idx && is_allowed_root_value(result) => {}
+            _ => return false,
         }
     }
 

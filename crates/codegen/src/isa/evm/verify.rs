@@ -1,7 +1,7 @@
 use rustc_hash::FxHashSet;
 use sonatina_ir::{
     Function, InstSetExt, Module, Type,
-    inst::evm::inst_set::EvmInstKind,
+    inst::{control_flow, downcast, evm::inst_set::EvmInstKind},
     isa::{Isa, evm::Evm},
     module::{FuncRef, ModuleCtx},
     types::{CompoundType, CompoundTypeRef},
@@ -19,9 +19,15 @@ pub(crate) fn collect_unsupported_evm_multi_return(
             continue;
         };
         let func_name = format!("%{}", sig.name());
+        let arg_count = sig.args().len();
         let ret_count = sig.ret_tys().len();
         let mut push_error = |message| errors.push((func, message));
 
+        if arg_count > 16 {
+            push_error(format!(
+                "EVM backend supports at most 16 internal arguments, but function {func_name} has {arg_count}"
+            ));
+        }
         if ret_count > 16 {
             push_error(format!(
                 "EVM backend supports at most 16 internal return values, but function {func_name} has {ret_count}"
@@ -41,9 +47,11 @@ pub(crate) fn collect_unsupported_evm_multi_return(
         module.func_store.view(func, |function| {
             for block in function.layout.iter_block() {
                 for inst in function.layout.iter_inst(block) {
-                    if let Some(call) = function.dfg.call_info(inst) {
+                    if let Some(call) =
+                        downcast::<&control_flow::Call>(function.inst_set(), function.dfg.inst(inst))
+                    {
                         let call_results = function.dfg.inst_results(inst);
-                        let callee = call.callee();
+                        let callee = *call.callee();
                         let callee_name = module
                             .ctx
                             .get_sig(callee)
@@ -57,12 +65,32 @@ pub(crate) fn collect_unsupported_evm_multi_return(
                                 call_results.len()
                             ));
                         }
+                        if call.args().len() > 16 {
+                            push_error(format!(
+                                "EVM backend supports at most 16 call operands, but inst{} has {} to {callee_name}",
+                                inst.as_u32(),
+                                call.args().len()
+                            ));
+                        }
 
                         if let Some(callee_sig) = module.ctx.get_sig(callee) {
+                            let callee_arg_count = callee_sig.args().len();
                             let callee_ret_count = callee_sig.ret_tys().len();
+                            if callee_arg_count > 16 {
+                                push_error(format!(
+                                    "EVM backend supports at most 16 internal arguments, but callee {callee_name} has {callee_arg_count}",
+                                ));
+                            }
                             if callee_ret_count > 16 {
                                 push_error(format!(
                                     "EVM backend supports at most 16 internal return values, but callee {callee_name} has {callee_ret_count}",
+                                ));
+                            }
+                            if call.args().len() != callee_arg_count {
+                                push_error(format!(
+                                    "call inst{} argument count {} does not match callee {callee_name} argument count {callee_arg_count}",
+                                    inst.as_u32(),
+                                    call.args().len(),
                                 ));
                             }
                             if callee_ret_count > 1 && !callee_sig.linkage().has_definition() {

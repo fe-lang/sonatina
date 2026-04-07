@@ -2,12 +2,12 @@ use cranelift_entity::SecondaryMap;
 use rustc_hash::FxHashMap;
 use sonatina_ir::{
     Function, Type, ValueId,
-    inst::{data, downcast},
+    inst::{control_flow, data, downcast},
     module::ModuleCtx,
 };
 
 use super::{
-    LocalObjectArgInfo,
+    LocalObjectArgInfo, ObjectEffectSummaryMap, ObjectReturnEffect,
     provenance::{CompleteProvenance, CompleteRootSet},
     shape,
 };
@@ -56,6 +56,57 @@ pub(crate) fn collect_root_slices(
                     whole_root_slice(layout_cache, func.ctx(), *obj_alloc.ty()),
                 );
             }
+        }
+    }
+
+    root_slices
+}
+
+pub(crate) fn collect_call_planner_root_slices(
+    func: &Function,
+    object_effects: &ObjectEffectSummaryMap,
+    layout_cache: &mut shape::AggregateLayoutCache,
+) -> FxHashMap<ValueId, shape::AggregateSlice> {
+    let mut root_slices = FxHashMap::default();
+
+    for &arg in &func.arg_values {
+        let Some(root_ty) = objref_element_ty(func.ctx(), func.dfg.value_ty(arg)) else {
+            continue;
+        };
+        root_slices.insert(arg, whole_root_slice(layout_cache, func.ctx(), root_ty));
+    }
+
+    for block in func.layout.iter_block() {
+        for inst in func.layout.iter_inst(block) {
+            if let Some(obj_alloc) =
+                downcast::<&data::ObjAlloc>(func.inst_set(), func.dfg.inst(inst))
+                && let Some(result) = func.dfg.inst_result(inst)
+                && objref_element_ty(func.ctx(), func.dfg.value_ty(result)).is_some()
+            {
+                root_slices.insert(
+                    result,
+                    whole_root_slice(layout_cache, func.ctx(), *obj_alloc.ty()),
+                );
+                continue;
+            }
+
+            let Some(call) = downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(inst))
+            else {
+                continue;
+            };
+            let Some(summary) = object_effects.get(call.callee()) else {
+                continue;
+            };
+            if summary.ret_effect != ObjectReturnEffect::FreshObject {
+                continue;
+            }
+            let [result] = func.dfg.inst_results(inst) else {
+                continue;
+            };
+            let Some(root_ty) = objref_element_ty(func.ctx(), func.dfg.value_ty(*result)) else {
+                continue;
+            };
+            root_slices.insert(*result, whole_root_slice(layout_cache, func.ctx(), root_ty));
         }
     }
 

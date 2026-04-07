@@ -1,4 +1,5 @@
 pub(crate) mod abi;
+pub(crate) mod byval_object_abi;
 mod cleanup;
 pub(crate) mod combine;
 pub(crate) mod enum_lowering;
@@ -18,6 +19,7 @@ pub(crate) mod scalarize;
 pub mod shape;
 
 pub use abi::AggregateExpandAbi;
+pub use byval_object_abi::{ObjectByValueArgAbi, ObjectByValueArgAbiConfig};
 pub use enum_lowering::EnumLowerToProduct;
 pub use legalize::{AggregateLowerToMemoryLegalize, assert_aggregate_legalized};
 pub use object::ObjectLowerToMemory;
