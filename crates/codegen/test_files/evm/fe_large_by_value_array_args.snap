@@ -13,41 +13,41 @@ object: Contract
 
 functions:
   __C_recv_0_0: ir_blocks=1 ir_insts=300 vcode_ops=800 fixups=2 imm_bytes=258
-    mem: scratch_words=54 stable_words=38 stable_mode=StaticAbs(base=0xd00) entry_abs_words=99 abs_words_end=137
+    mem: scratch_words=48 stable_words=38 stable_mode=StaticAbs(base=0xc40) entry_abs_words=93 abs_words_end=131
   prove_like: ir_blocks=1 ir_insts=152 vcode_ops=354 fixups=0 imm_bytes=94
-    mem: scratch_words=36 stable_words=0 stable_mode=None entry_abs_words=137 abs_words_end=36
+    mem: scratch_words=36 stable_words=0 stable_mode=None entry_abs_words=131 abs_words_end=36
   __fe_contract_init_root_C: ir_blocks=1 ir_insts=4 vcode_ops=8 fixups=2 imm_bytes=2
-    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=54 abs_words_end=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=48 abs_words_end=0
   __fe_contract_recv_abi_C_16909060: ir_blocks=5 ir_insts=232 vcode_ops=551 fixups=15 imm_bytes=137
-    mem: scratch_words=6 stable_words=45 stable_mode=StaticAbs(base=0x760) entry_abs_words=54 abs_words_end=99
+    mem: scratch_words=4 stable_words=45 stable_mode=StaticAbs(base=0x6a0) entry_abs_words=48 abs_words_end=93
   decoder_new: ir_blocks=1 ir_insts=155 vcode_ops=344 fixups=2 imm_bytes=91
-    mem: scratch_words=0 stable_words=40 stable_mode=StaticAbs(base=0xd00) entry_abs_words=99 abs_words_end=139
+    mem: scratch_words=0 stable_words=40 stable_mode=StaticAbs(base=0xc40) entry_abs_words=93 abs_words_end=133
   new_1: ir_blocks=1 ir_insts=79 vcode_ops=189 fixups=2 imm_bytes=49
-    mem: scratch_words=4 stable_words=15 stable_mode=StaticAbs(base=0x1200) entry_abs_words=139 abs_words_end=154
+    mem: scratch_words=4 stable_words=15 stable_mode=StaticAbs(base=0x1140) entry_abs_words=133 abs_words_end=148
   new_2: ir_blocks=1 ir_insts=39 vcode_ops=98 fixups=0 imm_bytes=24
-    mem: scratch_words=9 stable_words=0 stable_mode=None entry_abs_words=154 abs_words_end=9
+    mem: scratch_words=7 stable_words=0 stable_mode=None entry_abs_words=148 abs_words_end=7
   encode: ir_blocks=1 ir_insts=2 vcode_ops=7 fixups=2 imm_bytes=0
-    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=99 abs_words_end=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=93 abs_words_end=0
   write_word: ir_blocks=1 ir_insts=7 vcode_ops=20 fixups=2 imm_bytes=3
-    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=99 abs_words_end=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=93 abs_words_end=0
   add_0: ir_blocks=3 ir_insts=5 vcode_ops=16 fixups=1 imm_bytes=0
-    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=99 abs_words_end=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=93 abs_words_end=0
   encoder_new: ir_blocks=1 ir_insts=47 vcode_ops=110 fixups=2 imm_bytes=27
-    mem: scratch_words=0 stable_words=12 stable_mode=StaticAbs(base=0xd00) entry_abs_words=99 abs_words_end=111
+    mem: scratch_words=0 stable_words=12 stable_mode=StaticAbs(base=0xc40) entry_abs_words=93 abs_words_end=105
   new_0: ir_blocks=1 ir_insts=14 vcode_ops=38 fixups=0 imm_bytes=7
-    mem: scratch_words=3 stable_words=0 stable_mode=None entry_abs_words=111 abs_words_end=3
+    mem: scratch_words=3 stable_words=0 stable_mode=None entry_abs_words=105 abs_words_end=3
   finish: ir_blocks=1 ir_insts=67 vcode_ops=156 fixups=2 imm_bytes=38
-    mem: scratch_words=12 stable_words=0 stable_mode=None entry_abs_words=99 abs_words_end=12
+    mem: scratch_words=12 stable_words=0 stable_mode=None entry_abs_words=93 abs_words_end=12
   sub: ir_blocks=3 ir_insts=5 vcode_ops=16 fixups=1 imm_bytes=0
-    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=99 abs_words_end=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=93 abs_words_end=0
   reserve_head: ir_blocks=4 ir_insts=18 vcode_ops=63 fixups=7 imm_bytes=8
-    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=99 abs_words_end=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=93 abs_words_end=0
   add_1: ir_blocks=3 ir_insts=5 vcode_ops=16 fixups=1 imm_bytes=0
-    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=99 abs_words_end=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=93 abs_words_end=0
   eq: ir_blocks=1 ir_insts=4 vcode_ops=11 fixups=0 imm_bytes=0
-    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=99 abs_words_end=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=93 abs_words_end=0
   __fe_contract_runtime_root_C: ir_blocks=3 ir_insts=8 vcode_ops=20 fixups=2 imm_bytes=3
-    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=54 abs_words_end=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=48 abs_words_end=0
 
 evm:
   deploy: success reason=Return gas_used=940231 gas_refunded=0 logs=0 output=create len=4106 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1

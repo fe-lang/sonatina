@@ -739,6 +739,62 @@ struct FreeSegment {
     len: u32,
 }
 
+trait FreeList {
+    fn with_capacity(capacity: usize) -> Self;
+    fn insert(&mut self, start: u32, len: u32);
+    fn take_fit(&mut self, min_offset_words: u32, size_words: u32) -> Option<FreeSegment>;
+    fn take_frontier_segment(&mut self, max_used: u32) -> Option<FreeSegment>;
+}
+
+struct SortedFreeList(Vec<FreeSegment>);
+
+struct UnsortedFreeList(Vec<FreeSegment>);
+
+impl FreeList for SortedFreeList {
+    fn with_capacity(capacity: usize) -> Self {
+        Self(Vec::with_capacity(capacity))
+    }
+
+    fn insert(&mut self, start: u32, len: u32) {
+        insert_free_segment_sorted(&mut self.0, start, len);
+    }
+
+    fn take_fit(&mut self, min_offset_words: u32, size_words: u32) -> Option<FreeSegment> {
+        find_first_fit_segment(&self.0, min_offset_words, size_words)
+            .map(|index| self.0.remove(index))
+    }
+
+    fn take_frontier_segment(&mut self, max_used: u32) -> Option<FreeSegment> {
+        match self.0.last().copied() {
+            Some(segment) if segment.end() == max_used => self.0.pop(),
+            _ => None,
+        }
+    }
+}
+
+
+impl FreeList for UnsortedFreeList {
+    fn with_capacity(capacity: usize) -> Self {
+        Self(Vec::with_capacity(capacity))
+    }
+
+    fn insert(&mut self, start: u32, len: u32) {
+        insert_free_segment_unsorted(&mut self.0, start, len);
+    }
+
+    fn take_fit(&mut self, min_offset_words: u32, size_words: u32) -> Option<FreeSegment> {
+        find_min_start_fit_segment(&self.0, min_offset_words, size_words)
+            .map(|index| self.0.swap_remove(index))
+    }
+
+    fn take_frontier_segment(&mut self, max_used: u32) -> Option<FreeSegment> {
+        self.0
+            .iter()
+            .position(|&segment| segment.end() == max_used)
+            .map(|index| self.0.swap_remove(index))
+    }
+}
+
 #[cfg(test)]
 pub(crate) fn pack_objects(objects: &mut [PackedObject]) -> (FxHashMap<StackObjId, u32>, u32) {
     objects.sort_unstable_by_key(|o| (o.interval.start, o.interval.end, o.id.as_u32()));
@@ -764,7 +820,7 @@ pub(crate) fn pack_objects_peak_presorted(objects: &[PackedObject]) -> u32 {
 pub(crate) fn pack_objects_peak(objects: impl IntoIterator<Item = PackedObject>) -> u32 {
     let iter = objects.into_iter();
     let (lower_bound, _) = iter.size_hint();
-    pack_objects_impl(iter, lower_bound, |_, _| {})
+    pack_objects_with_free::<UnsortedFreeList>(iter, lower_bound, |_, _| {})
 }
 
 fn pack_objects_impl(
@@ -772,9 +828,17 @@ fn pack_objects_impl(
     lower_bound: usize,
     mut record: impl FnMut(StackObjId, u32),
 ) -> u32 {
+    pack_objects_with_free::<SortedFreeList>(objects, lower_bound, &mut record)
+}
+
+fn pack_objects_with_free<F: FreeList>(
+    objects: impl IntoIterator<Item = PackedObject>,
+    lower_bound: usize,
+    mut record: impl FnMut(StackObjId, u32),
+) -> u32 {
     let mut active: BinaryHeap<Reverse<(u32, u32, u32, u32)>> =
         BinaryHeap::with_capacity(lower_bound);
-    let mut free = Vec::new();
+    let mut free = F::with_capacity(lower_bound);
     let mut max_used: u32 = 0;
 
     for obj in objects {
@@ -782,7 +846,7 @@ fn pack_objects_impl(
             && end <= obj.interval.start
         {
             let _ = active.pop();
-            insert_free_segment(&mut free, off, size);
+            free.insert(off, size);
         }
 
         if obj.size_words == 0 {
@@ -790,36 +854,34 @@ fn pack_objects_impl(
             continue;
         }
 
-        let off =
-            if let Some(index) = find_free_segment(&free, obj.min_offset_words, obj.size_words) {
-                let FreeSegment { start, len } = free.remove(index);
-                let end = start.checked_add(len).expect("free segment overflow");
-                let alloc_start = start.max(obj.min_offset_words);
-                let alloc_end = alloc_start
-                    .checked_add(obj.size_words)
-                    .expect("free segment overflow");
-
-                insert_free_segment(
-                    &mut free,
-                    start,
+        let off = if let Some(segment) = free.take_fit(obj.min_offset_words, obj.size_words) {
+            let (alloc_start, prefix, suffix) =
+                split_free_segment(segment, obj.min_offset_words, obj.size_words);
+            free.insert(prefix.start, prefix.len);
+            free.insert(suffix.start, suffix.len);
+            alloc_start
+        } else {
+            let old_max_used = max_used;
+            if let Some(segment) = free.take_frontier_segment(old_max_used) {
+                let alloc_start = segment.start.max(obj.min_offset_words);
+                free.insert(
+                    segment.start,
                     alloc_start
-                        .checked_sub(start)
+                        .checked_sub(segment.start)
                         .expect("free segment underflow"),
                 );
-                insert_free_segment(
-                    &mut free,
-                    alloc_end,
-                    end.checked_sub(alloc_end).expect("free segment underflow"),
-                );
-
                 alloc_start
             } else {
-                let off = obj.min_offset_words.max(max_used);
-                max_used = off
-                    .checked_add(obj.size_words)
-                    .expect("locals size overflow");
-                off
-            };
+                let alloc_start = obj.min_offset_words.max(old_max_used);
+                free.insert(
+                    old_max_used,
+                    alloc_start
+                        .checked_sub(old_max_used)
+                        .expect("free segment underflow"),
+                );
+                alloc_start
+            }
+        };
 
         record(obj.id, off);
         active.push(Reverse((
@@ -837,25 +899,73 @@ fn pack_objects_impl(
     max_used
 }
 
-fn find_free_segment(
+fn split_free_segment(
+    segment: FreeSegment,
+    min_offset_words: u32,
+    size_words: u32,
+) -> (u32, FreeSegment, FreeSegment) {
+    let end = segment
+        .start
+        .checked_add(segment.len)
+        .expect("free segment overflow");
+    let alloc_start = segment.start.max(min_offset_words);
+    let alloc_end = alloc_start
+        .checked_add(size_words)
+        .expect("free segment overflow");
+    (
+        alloc_start,
+        FreeSegment {
+            start: segment.start,
+            len: alloc_start
+                .checked_sub(segment.start)
+                .expect("free segment underflow"),
+        },
+        FreeSegment {
+            start: alloc_end,
+            len: end.checked_sub(alloc_end).expect("free segment underflow"),
+        },
+    )
+}
+
+fn find_first_fit_segment(
     free: &[FreeSegment],
     min_offset_words: u32,
     size_words: u32,
 ) -> Option<usize> {
-    free.iter().position(|segment| {
-        let end = segment
-            .start
-            .checked_add(segment.len)
-            .expect("free segment overflow");
-        let alloc_start = segment.start.max(min_offset_words);
-        let alloc_end = alloc_start
-            .checked_add(size_words)
-            .expect("free segment overflow");
-        end >= alloc_end
-    })
+    free.iter()
+        .position(|segment| free_segment_fits(*segment, min_offset_words, size_words))
 }
 
-fn insert_free_segment(free: &mut Vec<FreeSegment>, start: u32, len: u32) {
+fn find_min_start_fit_segment(
+    free: &[FreeSegment],
+    min_offset_words: u32,
+    size_words: u32,
+) -> Option<usize> {
+    let mut best: Option<(usize, u32)> = None;
+    for (index, segment) in free.iter().enumerate() {
+        if !free_segment_fits(*segment, min_offset_words, size_words) {
+            continue;
+        }
+        match best {
+            None => best = Some((index, segment.start)),
+            Some((_, best_start)) if segment.start < best_start => {
+                best = Some((index, segment.start));
+            }
+            _ => {}
+        }
+    }
+    best.map(|(index, _)| index)
+}
+
+fn free_segment_fits(segment: FreeSegment, min_offset_words: u32, size_words: u32) -> bool {
+    let alloc_start = segment.start.max(min_offset_words);
+    let alloc_end = alloc_start
+        .checked_add(size_words)
+        .expect("free segment overflow");
+    segment.end() >= alloc_end
+}
+
+fn insert_free_segment_sorted(free: &mut Vec<FreeSegment>, start: u32, len: u32) {
     if len == 0 {
         return;
     }
@@ -868,11 +978,7 @@ fn insert_free_segment(free: &mut Vec<FreeSegment>, start: u32, len: u32) {
 
     if index != 0 {
         let prev = free[index - 1];
-        let p_end = prev
-            .start
-            .checked_add(prev.len)
-            .expect("free segment overflow");
-        if p_end == start {
+        if prev.end() == start {
             start = prev.start;
             len = len.checked_add(prev.len).expect("free segment overflow");
             let _ = free.remove(index - 1);
@@ -902,7 +1008,7 @@ pub(crate) struct PeakPackItem {
 #[derive(Default)]
 pub(crate) struct PeakPackWorkspace {
     active: BinaryHeap<Reverse<(u32, u32, u32)>>,
-    free: PeakFreeTree,
+    free: Vec<FreeSegment>,
 }
 
 impl PeakPackWorkspace {
@@ -911,225 +1017,11 @@ impl PeakPackWorkspace {
         if self.active.capacity() < capacity_hint {
             self.active.reserve(capacity_hint - self.active.capacity());
         }
-        self.free.clear(capacity_hint);
-    }
-}
-
-#[derive(Default)]
-struct PeakFreeTree {
-    root: Option<u32>,
-    nodes: Vec<PeakFreeNode>,
-}
-
-#[derive(Clone, Copy)]
-struct PeakFreeNode {
-    start: u32,
-    len: u32,
-    max_len: u32,
-    prio: u64,
-    left: Option<u32>,
-    right: Option<u32>,
-}
-
-impl PeakFreeTree {
-    fn clear(&mut self, capacity_hint: usize) {
-        self.root = None;
-        self.nodes.clear();
-        if self.nodes.capacity() < capacity_hint {
-            self.nodes.reserve(capacity_hint - self.nodes.capacity());
+        self.free.clear();
+        if self.free.capacity() < capacity_hint {
+            self.free.reserve(capacity_hint - self.free.capacity());
         }
     }
-
-    fn insert(&mut self, start: u32, len: u32) {
-        if len == 0 {
-            return;
-        }
-
-        let mut start = start;
-        let mut len = len;
-        let (left, right) = self.split(self.root, start);
-        let (left, prev) = self.pop_last(left);
-        let mut left = left;
-        if let Some(prev) = prev {
-            let prev_end = prev
-                .start
-                .checked_add(prev.len)
-                .expect("free segment overflow");
-            if prev_end == start {
-                start = prev.start;
-                len = len.checked_add(prev.len).expect("free segment overflow");
-            } else {
-                let prev = self.alloc(prev.start, prev.len);
-                left = self.merge(left, Some(prev));
-            }
-        }
-
-        let (right, next) = self.pop_first(right);
-        let mut right = right;
-        if let Some(next) = next {
-            let end = start.checked_add(len).expect("free segment overflow");
-            if end == next.start {
-                len = len.checked_add(next.len).expect("free segment overflow");
-            } else {
-                let next = self.alloc(next.start, next.len);
-                right = self.merge(Some(next), right);
-            }
-        }
-
-        let inserted = self.alloc(start, len);
-        self.root = self.merge(left, Some(inserted));
-        self.root = self.merge(self.root, right);
-    }
-
-    fn take_leftmost_fit(&mut self, size_words: u32) -> Option<FreeSegment> {
-        let (root, segment) = self.take_leftmost_fit_from(self.root, size_words);
-        self.root = root;
-        segment
-    }
-
-    fn take_leftmost_fit_from(
-        &mut self,
-        root: Option<u32>,
-        size_words: u32,
-    ) -> (Option<u32>, Option<FreeSegment>) {
-        let Some(idx) = root else {
-            return (None, None);
-        };
-
-        let left = self.nodes[idx as usize].left;
-        if self.max_len(left) >= size_words {
-            let (new_left, segment) = self.take_leftmost_fit_from(left, size_words);
-            self.nodes[idx as usize].left = new_left;
-            self.update(idx);
-            return (Some(idx), segment);
-        }
-
-        if self.nodes[idx as usize].len >= size_words {
-            let node = self.nodes[idx as usize];
-            return (
-                self.merge(node.left, node.right),
-                Some(FreeSegment {
-                    start: node.start,
-                    len: node.len,
-                }),
-            );
-        }
-
-        let (new_right, segment) =
-            self.take_leftmost_fit_from(self.nodes[idx as usize].right, size_words);
-        self.nodes[idx as usize].right = new_right;
-        self.update(idx);
-        (Some(idx), segment)
-    }
-
-    fn split(&mut self, root: Option<u32>, start: u32) -> (Option<u32>, Option<u32>) {
-        let Some(idx) = root else {
-            return (None, None);
-        };
-        if self.nodes[idx as usize].start < start {
-            let (mid, right) = self.split(self.nodes[idx as usize].right, start);
-            self.nodes[idx as usize].right = mid;
-            self.update(idx);
-            (Some(idx), right)
-        } else {
-            let (left, mid) = self.split(self.nodes[idx as usize].left, start);
-            self.nodes[idx as usize].left = mid;
-            self.update(idx);
-            (left, Some(idx))
-        }
-    }
-
-    fn merge(&mut self, left: Option<u32>, right: Option<u32>) -> Option<u32> {
-        match (left, right) {
-            (None, root) | (root, None) => root,
-            (Some(l), Some(r)) if self.nodes[l as usize].prio <= self.nodes[r as usize].prio => {
-                let merged = self.merge(self.nodes[l as usize].right, Some(r));
-                self.nodes[l as usize].right = merged;
-                self.update(l);
-                Some(l)
-            }
-            (Some(l), Some(r)) => {
-                let merged = self.merge(Some(l), self.nodes[r as usize].left);
-                self.nodes[r as usize].left = merged;
-                self.update(r);
-                Some(r)
-            }
-        }
-    }
-
-    fn pop_first(&mut self, root: Option<u32>) -> (Option<u32>, Option<FreeSegment>) {
-        let Some(idx) = root else {
-            return (None, None);
-        };
-        if self.nodes[idx as usize].left.is_none() {
-            let node = self.nodes[idx as usize];
-            return (
-                node.right,
-                Some(FreeSegment {
-                    start: node.start,
-                    len: node.len,
-                }),
-            );
-        }
-
-        let (left, segment) = self.pop_first(self.nodes[idx as usize].left);
-        self.nodes[idx as usize].left = left;
-        self.update(idx);
-        (Some(idx), segment)
-    }
-
-    fn pop_last(&mut self, root: Option<u32>) -> (Option<u32>, Option<FreeSegment>) {
-        let Some(idx) = root else {
-            return (None, None);
-        };
-        if self.nodes[idx as usize].right.is_none() {
-            let node = self.nodes[idx as usize];
-            return (
-                node.left,
-                Some(FreeSegment {
-                    start: node.start,
-                    len: node.len,
-                }),
-            );
-        }
-
-        let (right, segment) = self.pop_last(self.nodes[idx as usize].right);
-        self.nodes[idx as usize].right = right;
-        self.update(idx);
-        (Some(idx), segment)
-    }
-
-    fn alloc(&mut self, start: u32, len: u32) -> u32 {
-        let idx = self.nodes.len() as u32;
-        self.nodes.push(PeakFreeNode {
-            start,
-            len,
-            max_len: len,
-            prio: peak_node_priority(start),
-            left: None,
-            right: None,
-        });
-        idx
-    }
-
-    fn update(&mut self, idx: u32) {
-        let left = self.max_len(self.nodes[idx as usize].left);
-        let right = self.max_len(self.nodes[idx as usize].right);
-        self.nodes[idx as usize].max_len = self.nodes[idx as usize].len.max(left.max(right));
-    }
-
-    fn max_len(&self, idx: Option<u32>) -> u32 {
-        idx.map_or(0, |idx| self.nodes[idx as usize].max_len)
-    }
-}
-
-fn peak_node_priority(start: u32) -> u64 {
-    let mut x = u64::from(start).wrapping_add(0x9e37_79b9_7f4a_7c15);
-    x ^= x >> 30;
-    x = x.wrapping_mul(0xbf58_476d_1ce4_e5b9);
-    x ^= x >> 27;
-    x = x.wrapping_mul(0x94d0_49bb_1331_11eb);
-    x ^ (x >> 31)
 }
 
 pub(crate) fn pack_zero_min_offset_peak_sorted(
@@ -1141,20 +1033,38 @@ pub(crate) fn pack_zero_min_offset_peak_sorted(
     let mut max_used: u32 = 0;
 
     for item in items {
-        while let Some(Reverse((end, off, size))) = workspace.active.peek().copied()
+        while let Some(Reverse((end, off, size_words))) = workspace.active.peek().copied()
             && end <= item.start
         {
             let _ = workspace.active.pop();
-            workspace.free.insert(off, size);
+            insert_free_segment_unsorted(&mut workspace.free, off, size_words);
         }
 
         if item.size_words == 0 {
             continue;
         }
 
-        let off = if let Some(segment) = workspace.free.take_leftmost_fit(item.size_words) {
+        let mut fit: Option<(usize, u32)> = None;
+        let mut frontier_idx = None;
+        for (index, segment) in workspace.free.iter().copied().enumerate() {
+            if free_segment_fits(segment, 0, item.size_words) {
+                match fit {
+                    None => fit = Some((index, segment.start)),
+                    Some((_, best_start)) if segment.start < best_start => {
+                        fit = Some((index, segment.start))
+                    }
+                    _ => {}
+                }
+            } else if segment.end() == max_used {
+                frontier_idx = Some(index);
+            }
+        }
+
+        let off = if let Some((index, _)) = fit {
+            let segment = workspace.free.swap_remove(index);
             if segment.len > item.size_words {
-                workspace.free.insert(
+                insert_free_segment_unsorted(
+                    &mut workspace.free,
                     segment
                         .start
                         .checked_add(item.size_words)
@@ -1166,14 +1076,11 @@ pub(crate) fn pack_zero_min_offset_peak_sorted(
                 );
             }
             segment.start
+        } else if let Some(index) = frontier_idx {
+            workspace.free.swap_remove(index).start
         } else {
-            let off = max_used;
-            max_used = off
-                .checked_add(item.size_words)
-                .expect("locals size overflow");
-            off
+            max_used
         };
-
         workspace
             .active
             .push(Reverse((item.end, off, item.size_words)));
@@ -1184,6 +1091,41 @@ pub(crate) fn pack_zero_min_offset_peak_sorted(
     }
 
     max_used
+}
+
+impl FreeSegment {
+    fn end(self) -> u32 {
+        self.start
+            .checked_add(self.len)
+            .expect("free segment overflow")
+    }
+}
+fn insert_free_segment_unsorted(free: &mut Vec<FreeSegment>, start: u32, len: u32) {
+    if len == 0 {
+        return;
+    }
+
+    let mut start = start;
+    let mut len = len;
+    let mut index = 0;
+    while index < free.len() {
+        let segment = free[index];
+        let end = start.checked_add(len).expect("free segment overflow");
+        if segment.end() == start {
+            start = segment.start;
+            len = len.checked_add(segment.len).expect("free segment overflow");
+            let _ = free.swap_remove(index);
+            continue;
+        }
+        if end == segment.start {
+            len = len.checked_add(segment.len).expect("free segment overflow");
+            let _ = free.swap_remove(index);
+            continue;
+        }
+        index += 1;
+    }
+
+    free.push(FreeSegment { start, len });
 }
 
 fn conservative_unknown_ptr_summary(module: &ModuleCtx, func_ref: FuncRef) -> PtrEscapeSummary {
@@ -1497,10 +1439,11 @@ mod tests {
         presorted
             .sort_unstable_by_key(|obj| (obj.interval.start, obj.interval.end, obj.id.as_u32()));
         let (presorted_offsets, presorted_words) = pack_objects_presorted(&presorted);
+        let peak_words = pack_objects_peak_presorted(&presorted);
 
         assert_eq!(presorted_offsets, sorted_offsets);
         assert_eq!(presorted_words, sorted_words);
-        assert_eq!(pack_objects_peak_presorted(&presorted), sorted_words);
+        assert_eq!(peak_words, sorted_words);
     }
 
     #[test]
@@ -1546,5 +1489,174 @@ mod tests {
         );
 
         assert_eq!(specialized_peak, generic_peak);
+    }
+
+    #[test]
+    fn zero_min_peak_packer_matches_generic_peak_with_tied_bounds() {
+        let objects = [
+            PackedObject {
+                id: StackObjId::new(1),
+                size_words: 3,
+                interval: LiveInterval { start: 0, end: 4 },
+                min_offset_words: 0,
+            },
+            PackedObject {
+                id: StackObjId::new(2),
+                size_words: 2,
+                interval: LiveInterval { start: 0, end: 1 },
+                min_offset_words: 0,
+            },
+            PackedObject {
+                id: StackObjId::new(3),
+                size_words: 4,
+                interval: LiveInterval { start: 1, end: 4 },
+                min_offset_words: 0,
+            },
+            PackedObject {
+                id: StackObjId::new(4),
+                size_words: 1,
+                interval: LiveInterval { start: 4, end: 4 },
+                min_offset_words: 0,
+            },
+            PackedObject {
+                id: StackObjId::new(5),
+                size_words: 2,
+                interval: LiveInterval { start: 4, end: 6 },
+                min_offset_words: 0,
+            },
+        ];
+
+        let generic_peak = pack_objects_peak_presorted(&objects);
+        let mut workspace = PeakPackWorkspace::default();
+        let specialized_peak = pack_zero_min_offset_peak_sorted(
+            &mut workspace,
+            objects.iter().map(|obj| PeakPackItem {
+                start: obj.interval.start,
+                end: obj.interval.end,
+                size_words: obj.size_words,
+            }),
+            objects.len(),
+        );
+
+        assert_eq!(specialized_peak, generic_peak);
+    }
+
+    #[test]
+    fn zero_min_peak_packer_matches_generic_peak_randomized() {
+        let mut seed = 0x4d59_5df4_d0f3_3173u64;
+        for case_idx in 0..256 {
+            let count = (next_test_u32(&mut seed) % 12 + 1) as usize;
+            let mut objects = Vec::with_capacity(count);
+            for obj_idx in 0..count {
+                let start = next_test_u32(&mut seed) % 16;
+                let end = start + next_test_u32(&mut seed) % 8;
+                objects.push(PackedObject {
+                    id: StackObjId::new(obj_idx + 1),
+                    size_words: next_test_u32(&mut seed) % 6 + 1,
+                    interval: LiveInterval { start, end },
+                    min_offset_words: 0,
+                });
+            }
+            objects.sort_unstable_by_key(|obj| {
+                (obj.interval.start, obj.interval.end, obj.id.as_u32())
+            });
+
+            let generic_peak = pack_objects_peak_presorted(&objects);
+            let mut workspace = PeakPackWorkspace::default();
+            let specialized_peak = pack_zero_min_offset_peak_sorted(
+                &mut workspace,
+                objects.iter().map(|obj| PeakPackItem {
+                    start: obj.interval.start,
+                    end: obj.interval.end,
+                    size_words: obj.size_words,
+                }),
+                objects.len(),
+            );
+
+            assert_eq!(
+                specialized_peak, generic_peak,
+                "randomized zero-min peak mismatch on case {case_idx}"
+            );
+        }
+    }
+
+    #[test]
+    fn packer_extends_frontier_segment_into_tail() {
+        let presorted = [
+            PackedObject {
+                id: StackObjId::new(1),
+                size_words: 4,
+                interval: LiveInterval { start: 0, end: 5 },
+                min_offset_words: 0,
+            },
+            PackedObject {
+                id: StackObjId::new(2),
+                size_words: 3,
+                interval: LiveInterval { start: 1, end: 1 },
+                min_offset_words: 0,
+            },
+            PackedObject {
+                id: StackObjId::new(3),
+                size_words: 5,
+                interval: LiveInterval { start: 2, end: 4 },
+                min_offset_words: 0,
+            },
+        ];
+
+        let (offsets, max_used) = pack_objects_presorted(&presorted);
+        let mut workspace = PeakPackWorkspace::default();
+        let specialized_peak = pack_zero_min_offset_peak_sorted(
+            &mut workspace,
+            presorted.iter().map(|obj| PeakPackItem {
+                start: obj.interval.start,
+                end: obj.interval.end,
+                size_words: obj.size_words,
+            }),
+            presorted.len(),
+        );
+
+        assert_eq!(offsets[&StackObjId::new(1)], 0);
+        assert_eq!(offsets[&StackObjId::new(2)], 4);
+        assert_eq!(offsets[&StackObjId::new(3)], 4);
+        assert_eq!(max_used, 9);
+        assert_eq!(pack_objects_peak_presorted(&presorted), 9);
+        assert_eq!(specialized_peak, 9);
+    }
+
+    #[test]
+    fn packer_materializes_gap_when_min_offset_skips_frontier() {
+        let presorted = [
+            PackedObject {
+                id: StackObjId::new(1),
+                size_words: 4,
+                interval: LiveInterval { start: 0, end: 5 },
+                min_offset_words: 0,
+            },
+            PackedObject {
+                id: StackObjId::new(2),
+                size_words: 2,
+                interval: LiveInterval { start: 1, end: 1 },
+                min_offset_words: 10,
+            },
+            PackedObject {
+                id: StackObjId::new(3),
+                size_words: 8,
+                interval: LiveInterval { start: 2, end: 4 },
+                min_offset_words: 0,
+            },
+        ];
+
+        let (offsets, max_used) = pack_objects_presorted(&presorted);
+
+        assert_eq!(offsets[&StackObjId::new(1)], 0);
+        assert_eq!(offsets[&StackObjId::new(2)], 10);
+        assert_eq!(offsets[&StackObjId::new(3)], 4);
+        assert_eq!(max_used, 12);
+        assert_eq!(pack_objects_peak_presorted(&presorted), 12);
+    }
+
+    fn next_test_u32(seed: &mut u64) -> u32 {
+        *seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+        (*seed >> 32) as u32
     }
 }
