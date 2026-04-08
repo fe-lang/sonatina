@@ -652,7 +652,7 @@ fn analyze_returns(
                 combined = join_return_class(combined, ReturnClass::None);
                 continue;
             };
-            let (class, fresh_slice) = classify_return_value(
+            let (class, fresh_slices) = classify_return_value(
                 function,
                 value,
                 arg_roots,
@@ -661,10 +661,10 @@ fn analyze_returns(
                 layout_cache,
             );
             combined = join_return_class(combined, class);
-            if let Some(fresh_slice) = fresh_slice
-                && seen_returned_slices.insert(fresh_slice.clone())
-            {
-                returned_fresh_slices.push(fresh_slice);
+            for fresh_slice in fresh_slices {
+                if seen_returned_slices.insert(fresh_slice.clone()) {
+                    returned_fresh_slices.push(fresh_slice);
+                }
             }
         }
     }
@@ -699,15 +699,15 @@ fn classify_return_value(
     root_slices: &FxHashMap<ValueId, shape::AggregateSlice>,
     provenance: &super::provenance::RootProvenanceMap,
     layout_cache: &mut shape::AggregateLayoutCache,
-) -> (ReturnClass, Option<ReturnedFreshSlice>) {
+) -> (ReturnClass, Vec<ReturnedFreshSlice>) {
     if objref_element_ty(function.ctx(), function.dfg.value_ty(value)).is_none() {
-        return (ReturnClass::None, None);
+        return (ReturnClass::None, Vec::new());
     }
 
     if let Some(projection) = provenance.exact_projection(value) {
         let Some(return_ty) = objref_element_ty(function.ctx(), function.dfg.value_ty(value))
         else {
-            return (ReturnClass::None, None);
+            return (ReturnClass::None, Vec::new());
         };
         if let Some(&idx) = arg_roots.get(&projection.root_value) {
             return (
@@ -716,58 +716,100 @@ fn classify_return_value(
                 } else {
                     ReturnClass::DerivedFromArg(idx)
                 },
-                None,
+                Vec::new(),
             );
         }
-        return (
-            if is_fresh_root(function, projection.root_value) {
-                ReturnClass::FreshObject
-            } else {
-                ReturnClass::Unknown
-            },
-            is_fresh_root(function, projection.root_value).then_some(ReturnedFreshSlice {
-                root_value: projection.root_value,
-                return_slice: whole_root_slice(layout_cache, function.ctx(), return_ty),
-                possible_slices: Some(vec![projection.slice]),
-            }),
-        );
+        if is_fresh_root(function, projection.root_value) {
+            return (
+                ReturnClass::FreshObject,
+                vec![ReturnedFreshSlice {
+                    root_value: projection.root_value,
+                    return_slice: whole_root_slice(layout_cache, function.ctx(), return_ty),
+                    possible_slices: Some(vec![projection.slice]),
+                }],
+            );
+        }
+        return (ReturnClass::Unknown, Vec::new());
     }
 
     match provenance.provenance(value) {
         super::RootProvenance::SameRoot(root) => {
             if let Some(&idx) = arg_roots.get(&root) {
-                (ReturnClass::DerivedFromArg(idx), None)
-            } else if is_fresh_root(function, root) {
-                let Some(return_ty) =
-                    objref_element_ty(function.ctx(), function.dfg.value_ty(value))
-                else {
-                    return (ReturnClass::None, None);
-                };
-                let mut possible_slices = Vec::new();
-                for projection in provenance.possible_projections(value) {
-                    if projection.root_value == root
-                        && objref_element_ty(function.ctx(), function.dfg.value_ty(value))
-                            == Some(projection.slice.ty)
-                    {
-                        push_unique_slice(&mut possible_slices, projection.slice);
-                    }
-                }
-                (
-                    ReturnClass::FreshObject,
-                    Some(ReturnedFreshSlice {
-                        root_value: root,
-                        return_slice: whole_root_slice(layout_cache, function.ctx(), return_ty),
-                        possible_slices: (!possible_slices.is_empty()).then_some(possible_slices),
-                    }),
-                )
+                (ReturnClass::DerivedFromArg(idx), Vec::new())
+            } else if let Some(fresh_roots) = classify_all_fresh_roots(
+                function,
+                value,
+                [root],
+                root_slices,
+                provenance,
+                layout_cache,
+            ) {
+                (ReturnClass::FreshObject, fresh_roots)
             } else {
-                (ReturnClass::Unknown, None)
+                (ReturnClass::Unknown, Vec::new())
             }
         }
-        super::RootProvenance::Exact(_)
-        | super::RootProvenance::Maybe(_)
-        | super::RootProvenance::Unknown => (ReturnClass::Unknown, None),
+        super::RootProvenance::Maybe(roots) => {
+            if roots.iter().any(|root| arg_roots.contains_key(root)) {
+                return (ReturnClass::Unknown, Vec::new());
+            }
+            if let Some(fresh_roots) = classify_all_fresh_roots(
+                function,
+                value,
+                roots,
+                root_slices,
+                provenance,
+                layout_cache,
+            ) {
+                (ReturnClass::FreshObject, fresh_roots)
+            } else {
+                (ReturnClass::Unknown, Vec::new())
+            }
+        }
+        super::RootProvenance::Exact(_) | super::RootProvenance::Unknown => {
+            (ReturnClass::Unknown, Vec::new())
+        }
     }
+}
+
+fn classify_all_fresh_roots(
+    function: &Function,
+    value: ValueId,
+    roots: impl IntoIterator<Item = ValueId>,
+    root_slices: &FxHashMap<ValueId, shape::AggregateSlice>,
+    provenance: &super::provenance::RootProvenanceMap,
+    layout_cache: &mut shape::AggregateLayoutCache,
+) -> Option<Vec<ReturnedFreshSlice>> {
+    let return_ty = objref_element_ty(function.ctx(), function.dfg.value_ty(value))?;
+    let return_slice = whole_root_slice(layout_cache, function.ctx(), return_ty);
+    let mut roots: Vec<_> = roots.into_iter().collect();
+    roots.sort_unstable_by_key(|root| root.as_u32());
+    roots.dedup();
+    if roots.is_empty() || roots.iter().any(|&root| !is_fresh_root(function, root)) {
+        return None;
+    }
+
+    let mut returned = Vec::with_capacity(roots.len());
+    for root in roots {
+        let mut possible_slices = Vec::new();
+        for projection in provenance.possible_projections(value) {
+            if projection.root_value == root && projection.slice.ty == return_ty {
+                push_unique_slice(&mut possible_slices, projection.slice);
+            }
+        }
+        if possible_slices.is_empty()
+            && let Some(&root_slice) = root_slices.get(&root)
+            && root_slice.ty == return_ty
+        {
+            push_unique_slice(&mut possible_slices, root_slice);
+        }
+        returned.push(ReturnedFreshSlice {
+            root_value: root,
+            return_slice,
+            possible_slices: (!possible_slices.is_empty()).then_some(possible_slices),
+        });
+    }
+    Some(returned)
 }
 
 fn join_return_class(lhs: ReturnClass, rhs: ReturnClass) -> ReturnClass {
@@ -2190,6 +2232,127 @@ block3:
         assert!(
             has_return_capture(&summary, 0, 1, 1, 0, 1),
             "matching same-root return candidates should keep a precise return capture"
+        );
+    }
+
+    #[test]
+    fn fresh_multi_root_phi_return_is_fresh_object() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @Pair = { i256, i256 };
+
+func private %pick(v0.i1, v1.i256, v2.i256) -> objref<@Pair> {
+block0:
+    br v0 block1 block2;
+
+block1:
+    v3.objref<@Pair> = obj.alloc @Pair;
+    v4.objref<i256> = obj.proj v3 0.i8;
+    obj.store v4 v1;
+    jump block3;
+
+block2:
+    v5.objref<@Pair> = obj.alloc @Pair;
+    v6.objref<i256> = obj.proj v5 0.i8;
+    obj.store v6 v2;
+    jump block3;
+
+block3:
+    v7.objref<@Pair> = phi (v3 block1) (v5 block2);
+    return v7;
+}
+"#,
+        );
+
+        let func_ref = lookup_func(&module, "pick");
+        let summary = compute_object_effect_summaries(&module)
+            .remove(&func_ref)
+            .expect("summary should exist");
+
+        assert_eq!(summary.ret_effect, ObjectReturnEffect::FreshObject);
+    }
+
+    #[test]
+    fn mixed_fresh_and_arg_root_phi_return_stays_unknown() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @Pair = { i256, i256 };
+
+func private %pick(v0.i1, v1.objref<@Pair>, v2.i256) -> objref<@Pair> {
+block0:
+    br v0 block1 block2;
+
+block1:
+    v3.objref<@Pair> = obj.alloc @Pair;
+    v4.objref<i256> = obj.proj v3 0.i8;
+    obj.store v4 v2;
+    jump block3;
+
+block2:
+    jump block3;
+
+block3:
+    v5.objref<@Pair> = phi (v3 block1) (v1 block2);
+    return v5;
+}
+"#,
+        );
+
+        let func_ref = lookup_func(&module, "pick");
+        let summary = compute_object_effect_summaries(&module)
+            .remove(&func_ref)
+            .expect("summary should exist");
+
+        assert_eq!(summary.ret_effect, ObjectReturnEffect::Unknown);
+    }
+
+    #[test]
+    fn return_capture_summary_survives_fresh_multi_root_phi() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @Cell = { i256 };
+type @Take = { objref<i256>, i256 };
+
+func private %pick(v0.i1, v1.objref<@Cell>) -> objref<@Take> {
+block0:
+    br v0 block1 block2;
+
+block1:
+    v2.objref<@Take> = obj.alloc @Take;
+    v3.objref<objref<i256>> = obj.proj v2 0.i8;
+    v4.objref<i256> = obj.proj v1 0.i8;
+    obj.store v3 v4;
+    jump block3;
+
+block2:
+    v5.objref<@Take> = obj.alloc @Take;
+    v6.objref<objref<i256>> = obj.proj v5 0.i8;
+    v7.objref<i256> = obj.proj v1 0.i8;
+    obj.store v6 v7;
+    jump block3;
+
+block3:
+    v8.objref<@Take> = phi (v2 block1) (v5 block2);
+    return v8;
+}
+"#,
+        );
+
+        let func_ref = lookup_func(&module, "pick");
+        let summary = compute_object_effect_summaries(&module)
+            .remove(&func_ref)
+            .expect("summary should exist");
+
+        assert_eq!(summary.ret_effect, ObjectReturnEffect::FreshObject);
+        assert!(
+            has_return_capture(&summary, 0, 1, 1, 0, 1),
+            "multi-root fresh phi return should preserve the shared capture"
         );
     }
 

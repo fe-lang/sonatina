@@ -919,6 +919,91 @@ block3:
     }
 
     #[test]
+    fn forwards_nested_multi_root_fresh_call_to_caller_out_param() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @pair = { i256, i256 };
+
+func private %pick(v0.i1, v1.i256, v2.i256) -> objref<@pair> {
+block0:
+    br v0 block1 block2;
+
+block1:
+    v3.objref<@pair> = obj.alloc @pair;
+    v4.objref<i256> = obj.proj v3 0.i8;
+    obj.store v4 v1;
+    jump block3;
+
+block2:
+    v5.objref<@pair> = obj.alloc @pair;
+    v6.objref<i256> = obj.proj v5 0.i8;
+    obj.store v6 v2;
+    jump block3;
+
+block3:
+    v7.objref<@pair> = phi (v3 block1) (v5 block2);
+    return v7;
+}
+
+func private %wrap(v0.i1, v1.i1, v2.i256, v3.i256, v4.i256) -> objref<@pair> {
+block0:
+    br v0 block1 block2;
+
+block1:
+    v5.objref<@pair> = call %pick v1 v2 v3;
+    jump block3;
+
+block2:
+    v6.objref<@pair> = obj.alloc @pair;
+    v7.objref<i256> = obj.proj v6 0.i8;
+    obj.store v7 v4;
+    jump block3;
+
+block3:
+    v8.objref<@pair> = phi (v5 block1) (v6 block2);
+    return v8;
+}
+"#,
+        );
+        let pick = lookup_func(&module, "pick");
+        let wrap = lookup_func(&module, "wrap");
+
+        ObjectReturnOutParam.run(&module);
+        verify_rewritten_module(&module);
+
+        let pair = pair_ty(&module);
+        let wrap_sig = module.ctx.get_sig(wrap).expect("signature should exist");
+        assert_eq!(wrap_sig.args().len(), 6);
+        assert_eq!(
+            objref_element_ty(&module.ctx, wrap_sig.args()[0]),
+            Some(pair)
+        );
+        assert_eq!(wrap_sig.ret_tys(), &[]);
+
+        module.func_store.view(wrap, |func| {
+            let dumped = dump_func(&module, wrap);
+            let calls = call_insts(func, pick);
+            let [call_inst] = calls.as_slice() else {
+                panic!("expected one rewritten nested call:\n{dumped}");
+            };
+            let call = downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(*call_inst))
+                .expect("call should remain present");
+            assert_eq!(
+                call.args()[0],
+                func.arg_values[0],
+                "multi-root fresh nested call should forward the caller out-param:\n{dumped}"
+            );
+            assert_eq!(
+                count_obj_allocs(func, pair),
+                0,
+                "returned nested call should not allocate a temporary out slot:\n{dumped}"
+            );
+        });
+    }
+
+    #[test]
     fn leaves_unrelated_same_typed_helper_calls_on_distinct_temporaries() {
         let module = parse_test_module(
             r#"
