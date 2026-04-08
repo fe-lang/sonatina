@@ -5,6 +5,7 @@ use sonatina_ir::{BlockId, InstId, Module, ValueId, module::FuncRef};
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{
+    bitset::BitSet,
     liveness::InstLiveness,
     module_analysis::{CallGraph, CallGraphSccs, SccBuilder, SccRef},
     stackalloc::StackifyAlloc,
@@ -16,7 +17,8 @@ use super::{
     ptr_escape::PtrEscapeSummary,
     static_arena_alloc::{
         CallSiteObjects, FuncStackObjects, LiveInterval, ObjFacts, PackedObject, StackObj,
-        StackObjId, StackObjKind, StaticArenaAllocCtx, pack_objects,
+        StackObjId, StackObjKind, StaticArenaAllocCtx, pack_objects_peak_presorted,
+        pack_objects_presorted,
     },
 };
 use sonatina_ir::isa::evm::Evm;
@@ -195,13 +197,36 @@ impl FuncAnalysis {
 
 #[derive(Clone, Debug)]
 struct FuncPlacementEval {
-    promoted_optional: FxHashSet<StackObjId>,
     scratch_offsets: FxHashMap<StackObjId, u32>,
     scratch_words: u32,
     stable_offsets: FxHashMap<StackObjId, u32>,
     stable_words: u32,
     call_preserve: FxHashMap<InstId, CallPreservePlan>,
     cost: u64,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct FuncPlacementScore {
+    scratch_words: u32,
+    stable_words: u32,
+    cost: u64,
+}
+
+#[derive(Default)]
+struct FuncPlacementWorkspace {
+    scratch_pack: Vec<PackedObject>,
+    shadow_objs: Vec<StackObj>,
+    stable_pack: Vec<PackedObject>,
+}
+
+struct FuncPlacementCtx<'a> {
+    stack: &'a FuncStackObjects,
+    sorted_objects: &'a [&'a StackObj],
+    sorted_calls: &'a [&'a CallSiteObjects],
+    facts: &'a FxHashMap<StackObjId, ObjFacts>,
+    must_stable: &'a BitSet<StackObjId>,
+    is_recursive: bool,
+    cost_model: &'a ArenaCostModel,
 }
 
 pub(crate) fn compute_program_memory_plan(
@@ -502,106 +527,118 @@ fn solve_func_placement(
     is_recursive: bool,
     cost_model: &ArenaCostModel,
 ) -> FuncPlacementEval {
+    let mut sorted_objects: Vec<_> = stack.objects.iter().collect();
+    sorted_objects.sort_unstable_by_key(|obj| pack_sort_key(obj.id, obj.interval));
+    let mut sorted_calls: Vec<_> = stack.call_sites.iter().collect();
+    sorted_calls.sort_unstable_by_key(|call| (call.inst_pos, call.inst.as_u32()));
     let mut candidates: Vec<StackObjId> = facts
         .values()
         .filter(|fact| !fact.must_stable && !fact.live_across_calls.is_empty())
         .map(|fact| fact.id)
         .collect();
     candidates.sort_unstable_by_key(|id| id.as_u32());
+    let must_stable: BitSet<StackObjId> = facts
+        .values()
+        .filter(|fact| fact.must_stable)
+        .map(|fact| fact.id)
+        .collect();
+    let ctx = FuncPlacementCtx {
+        stack,
+        sorted_objects: &sorted_objects,
+        sorted_calls: &sorted_calls,
+        facts,
+        must_stable: &must_stable,
+        is_recursive,
+        cost_model,
+    };
 
-    let mut promoted_optional: FxHashSet<StackObjId> = FxHashSet::default();
-    let mut best =
-        evaluate_func_placement(stack, facts, is_recursive, cost_model, &promoted_optional);
+    let mut promoted_optional = BitSet::default();
+    let mut workspace = FuncPlacementWorkspace {
+        scratch_pack: Vec::with_capacity(sorted_objects.len()),
+        shadow_objs: Vec::with_capacity(sorted_calls.len()),
+        stable_pack: Vec::with_capacity(sorted_objects.len().saturating_add(sorted_calls.len())),
+    };
+    let mut best = evaluate_func_placement(&ctx, &promoted_optional, &mut workspace);
+    let mut best_score = score_from_eval(&best);
 
     loop {
         let mut best_candidate: Option<StackObjId> = None;
-        let mut best_eval: Option<FuncPlacementEval> = None;
+        let mut best_candidate_score: Option<FuncPlacementScore> = None;
         for &candidate in &candidates {
-            if promoted_optional.contains(&candidate) {
+            if promoted_optional.contains(candidate) {
                 continue;
             }
 
-            let mut next = promoted_optional.clone();
-            next.insert(candidate);
-            let eval = evaluate_func_placement(stack, facts, is_recursive, cost_model, &next);
-            if !is_better_eval(&eval, &best) {
+            let _ = promoted_optional.insert(candidate);
+            let score = evaluate_func_placement_score(&ctx, &promoted_optional, &mut workspace);
+            let _ = promoted_optional.remove(candidate);
+            if !is_better_score(score, best_score) {
                 continue;
             }
 
-            let replace = match (&best_candidate, &best_eval) {
+            let replace = match (&best_candidate, &best_candidate_score) {
                 (None, None) => true,
                 (Some(prev), Some(cur)) => {
-                    is_better_eval(&eval, cur)
-                        || (eval.cost == cur.cost && candidate.as_u32() < prev.as_u32())
+                    is_better_score(score, *cur)
+                        || (score.cost == cur.cost && candidate.as_u32() < prev.as_u32())
                 }
                 _ => false,
             };
             if replace {
                 best_candidate = Some(candidate);
-                best_eval = Some(eval);
+                best_candidate_score = Some(score);
             }
         }
 
         let Some(candidate) = best_candidate else {
             break;
         };
-        promoted_optional.insert(candidate);
-        best = best_eval.expect("missing best eval for promoted candidate");
+        let _ = promoted_optional.insert(candidate);
+        best = evaluate_func_placement(&ctx, &promoted_optional, &mut workspace);
+        best_score = score_from_eval(&best);
     }
 
-    let promoted: Vec<StackObjId> = promoted_optional.iter().copied().collect();
+    let promoted: Vec<StackObjId> = promoted_optional.iter().collect();
     for candidate in promoted {
-        if !promoted_optional.contains(&candidate) {
+        if !promoted_optional.contains(candidate) {
             continue;
         }
-        let mut next = promoted_optional.clone();
-        next.remove(&candidate);
-        let eval = evaluate_func_placement(stack, facts, is_recursive, cost_model, &next);
-        if is_better_eval(&eval, &best) {
-            promoted_optional = next;
-            best = eval;
+        let _ = promoted_optional.remove(candidate);
+        let score = evaluate_func_placement_score(&ctx, &promoted_optional, &mut workspace);
+        if is_better_score(score, best_score) {
+            best = evaluate_func_placement(&ctx, &promoted_optional, &mut workspace);
+            best_score = score;
+        } else {
+            let _ = promoted_optional.insert(candidate);
         }
     }
 
-    best.promoted_optional = promoted_optional;
     best
 }
 
 fn evaluate_func_placement(
-    stack: &FuncStackObjects,
-    facts: &FxHashMap<StackObjId, ObjFacts>,
-    is_recursive: bool,
-    cost_model: &ArenaCostModel,
-    promoted_optional: &FxHashSet<StackObjId>,
+    ctx: &FuncPlacementCtx<'_>,
+    promoted_optional: &BitSet<StackObjId>,
+    workspace: &mut FuncPlacementWorkspace,
 ) -> FuncPlacementEval {
-    let mut stable_real: FxHashSet<StackObjId> = FxHashSet::default();
-    for fact in facts.values() {
-        if fact.must_stable || promoted_optional.contains(&fact.id) {
-            stable_real.insert(fact.id);
-        }
-    }
+    build_scratch_pack(
+        &mut workspace.scratch_pack,
+        ctx.sorted_objects,
+        ctx.must_stable,
+        promoted_optional,
+    );
+    let (scratch_offsets, scratch_words) = pack_objects_presorted(&workspace.scratch_pack);
 
-    let mut scratch_pack: Vec<PackedObject> = stack
-        .objects
-        .iter()
-        .filter(|obj| !stable_real.contains(&obj.id))
-        .map(|obj| PackedObject {
-            id: obj.id,
-            size_words: obj.size_words,
-            interval: obj.interval,
-            min_offset_words: 0,
-        })
-        .collect();
-    let (scratch_offsets, scratch_words) = pack_objects(&mut scratch_pack);
-
-    let mut shadow_objs: Vec<StackObj> = Vec::new();
-    let mut call_preserve: FxHashMap<InstId, CallPreservePlan> = FxHashMap::default();
-    let mut next_obj_id = stack.next_obj_id;
-    for call in &stack.call_sites {
+    workspace.shadow_objs.clear();
+    let mut call_preserve =
+        FxHashMap::with_capacity_and_hasher(ctx.sorted_calls.len(), Default::default());
+    let mut next_obj_id = ctx.stack.next_obj_id;
+    for &call in ctx.sorted_calls {
         let Some((shadow_obj, plan)) = build_shadow_preserve_for_call(
-            stack,
+            ctx.stack,
             call,
-            &stable_real,
+            ctx.must_stable,
+            promoted_optional,
             &scratch_offsets,
             next_obj_id,
         ) else {
@@ -610,94 +647,28 @@ fn evaluate_func_placement(
         next_obj_id = next_obj_id
             .checked_add(1)
             .expect("shadow object id overflow");
-        shadow_objs.push(shadow_obj);
+        workspace.shadow_objs.push(shadow_obj);
         call_preserve.insert(call.inst, plan);
     }
 
-    let mut stable_pack: Vec<PackedObject> = stack
-        .objects
-        .iter()
-        .filter(|obj| stable_real.contains(&obj.id))
-        .map(|obj| PackedObject {
-            id: obj.id,
-            size_words: obj.size_words,
-            interval: obj.interval,
-            min_offset_words: 0,
-        })
-        .collect();
-    stable_pack.extend(shadow_objs.iter().map(|obj| PackedObject {
-        id: obj.id,
-        size_words: obj.size_words,
-        interval: obj.interval,
-        min_offset_words: 0,
-    }));
-    let (stable_offsets, stable_words) = pack_objects(&mut stable_pack);
+    build_stable_pack(
+        &mut workspace.stable_pack,
+        ctx.sorted_objects,
+        &workspace.shadow_objs,
+        ctx.must_stable,
+        promoted_optional,
+    );
+    let (stable_offsets, stable_words) = pack_objects_presorted(&workspace.stable_pack);
 
-    let mut cost = evaluate_memory_cost(cost_model, scratch_words, stable_words);
-    if is_recursive && stable_words != 0 {
-        cost = cost
-            .checked_add(
-                cost_model
-                    .w_save
-                    .checked_mul(32)
-                    .expect("frame setup cost overflow"),
-            )
-            .and_then(|cost| {
-                cost.checked_add(
-                    cost_model
-                        .w_code
-                        .checked_mul(16)
-                        .expect("frame setup code cost overflow"),
-                )
-            })
-            .expect("frame setup total cost overflow");
-    }
-    if is_recursive {
-        for fact in facts.values() {
-            if !stable_real.contains(&fact.id) {
-                continue;
-            }
-            let access_penalty = fact.access_weight.saturating_mul(4);
-            cost = cost
-                .checked_add(
-                    cost_model
-                        .w_stack
-                        .checked_mul(access_penalty)
-                        .expect("frame access cost overflow"),
-                )
-                .expect("frame access total cost overflow");
-        }
-    }
-    for plan in call_preserve.values() {
-        let PreserveMode::ShadowRuns { runs, .. } = &plan.mode else {
-            continue;
-        };
-        let words: u64 = runs.iter().map(|run| u64::from(run.len_words)).sum();
-        let (copy_gas, copy_bytes) = if is_recursive {
-            (words.saturating_mul(16), words.saturating_mul(16))
-        } else {
-            (words.saturating_mul(12), words.saturating_mul(12))
-        };
-        cost = cost
-            .checked_add(
-                cost_model
-                    .w_save
-                    .checked_mul(copy_gas)
-                    .expect("shadow copy gas cost overflow"),
-            )
-            .and_then(|cost| {
-                cost.checked_add(
-                    cost_model
-                        .w_code
-                        .checked_mul(copy_bytes)
-                        .expect("shadow copy code cost overflow"),
-                )
-            })
-            .expect("shadow copy total cost overflow");
-    }
+    let cost = placement_cost(
+        ctx,
+        promoted_optional,
+        shadow_copy_words(&call_preserve),
+        scratch_words,
+        stable_words,
+    );
 
     FuncPlacementEval {
-        promoted_optional: promoted_optional.clone(),
         scratch_offsets,
         scratch_words,
         stable_offsets,
@@ -707,16 +678,72 @@ fn evaluate_func_placement(
     }
 }
 
+fn evaluate_func_placement_score(
+    ctx: &FuncPlacementCtx<'_>,
+    promoted_optional: &BitSet<StackObjId>,
+    workspace: &mut FuncPlacementWorkspace,
+) -> FuncPlacementScore {
+    build_scratch_pack(
+        &mut workspace.scratch_pack,
+        ctx.sorted_objects,
+        ctx.must_stable,
+        promoted_optional,
+    );
+    let scratch_words = pack_objects_peak_presorted(&workspace.scratch_pack);
+
+    workspace.shadow_objs.clear();
+    let mut shadow_copy_words = 0u64;
+    let mut next_obj_id = ctx.stack.next_obj_id;
+    for &call in ctx.sorted_calls {
+        let Some(shadow_obj) = build_shadow_obj_for_call(
+            ctx.stack,
+            call,
+            ctx.must_stable,
+            promoted_optional,
+            next_obj_id,
+        ) else {
+            continue;
+        };
+        next_obj_id = next_obj_id
+            .checked_add(1)
+            .expect("shadow object id overflow");
+        shadow_copy_words = shadow_copy_words.saturating_add(u64::from(shadow_obj.size_words));
+        workspace.shadow_objs.push(shadow_obj);
+    }
+
+    build_stable_pack(
+        &mut workspace.stable_pack,
+        ctx.sorted_objects,
+        &workspace.shadow_objs,
+        ctx.must_stable,
+        promoted_optional,
+    );
+    let stable_words = pack_objects_peak_presorted(&workspace.stable_pack);
+
+    FuncPlacementScore {
+        scratch_words,
+        stable_words,
+        cost: placement_cost(
+            ctx,
+            promoted_optional,
+            shadow_copy_words,
+            scratch_words,
+            stable_words,
+        ),
+    }
+}
+
 fn build_shadow_preserve_for_call(
     stack: &FuncStackObjects,
     call: &CallSiteObjects,
-    stable_real: &FxHashSet<StackObjId>,
+    must_stable: &BitSet<StackObjId>,
+    promoted_optional: &BitSet<StackObjId>,
     scratch_offsets: &FxHashMap<StackObjId, u32>,
     next_obj_id: u32,
 ) -> Option<(StackObj, CallPreservePlan)> {
-    let mut ranges: Vec<(u32, u32)> = Vec::new();
+    let mut ranges = SmallVec::<[(u32, u32); 8]>::new();
     for &obj in &call.live_out_objs {
-        if stable_real.contains(&obj) {
+        if is_stable_real(must_stable, promoted_optional, obj) {
             continue;
         }
         let Some(&size) = stack.obj_size_words.get(&obj) else {
@@ -740,25 +767,25 @@ fn build_shadow_preserve_for_call(
     }
 
     ranges.sort_unstable_by_key(|(start, _)| *start);
-    let mut merged: Vec<(u32, u32)> = Vec::new();
+    let mut shadow_words: u32 = 0;
+    let mut runs: SmallVec<[SaveRun; 2]> = smallvec![];
     for (start, len) in ranges {
-        if let Some((last_start, last_len)) = merged.last_mut() {
-            let last_end = last_start
-                .checked_add(*last_len)
+        if let Some(last) = runs.last_mut() {
+            let last_end = last
+                .scratch_src_word
+                .checked_add(last.len_words)
                 .expect("shadow run end overflow");
             if last_end == start {
-                *last_len = last_len
+                last.len_words = last
+                    .len_words
                     .checked_add(len)
                     .expect("shadow run merge overflow");
+                shadow_words = shadow_words
+                    .checked_add(len)
+                    .expect("shadow object size overflow");
                 continue;
             }
         }
-        merged.push((start, len));
-    }
-
-    let mut shadow_words: u32 = 0;
-    let mut runs: SmallVec<[SaveRun; 2]> = smallvec![];
-    for (start, len) in merged {
         runs.push(SaveRun {
             scratch_src_word: start,
             shadow_dst_word: shadow_words,
@@ -794,7 +821,207 @@ fn build_shadow_preserve_for_call(
     Some((shadow_obj, plan))
 }
 
-fn is_better_eval(candidate: &FuncPlacementEval, current: &FuncPlacementEval) -> bool {
+fn build_shadow_obj_for_call(
+    stack: &FuncStackObjects,
+    call: &CallSiteObjects,
+    must_stable: &BitSet<StackObjId>,
+    promoted_optional: &BitSet<StackObjId>,
+    next_obj_id: u32,
+) -> Option<StackObj> {
+    let mut shadow_words: u32 = 0;
+    for &obj in &call.live_out_objs {
+        if is_stable_real(must_stable, promoted_optional, obj) {
+            continue;
+        }
+        let Some(&size) = stack.obj_size_words.get(&obj) else {
+            panic!("missing object size for obj {}", obj.as_u32());
+        };
+        if size == 0 {
+            continue;
+        }
+        shadow_words = shadow_words
+            .checked_add(size)
+            .expect("shadow object size overflow");
+    }
+    if shadow_words == 0 {
+        return None;
+    }
+
+    Some(StackObj {
+        id: StackObjId::new(next_obj_id as usize),
+        kind: StackObjKind::Shadow(call.inst),
+        size_words: shadow_words,
+        interval: LiveInterval {
+            start: call.inst_pos,
+            end: call.inst_pos,
+        },
+        access_weight: 0,
+        load_count: 0,
+        store_count: 0,
+    })
+}
+
+fn build_scratch_pack(
+    scratch_pack: &mut Vec<PackedObject>,
+    sorted_objects: &[&StackObj],
+    must_stable: &BitSet<StackObjId>,
+    promoted_optional: &BitSet<StackObjId>,
+) {
+    scratch_pack.clear();
+    for &obj in sorted_objects {
+        if is_stable_real(must_stable, promoted_optional, obj.id) {
+            continue;
+        }
+        scratch_pack.push(PackedObject {
+            id: obj.id,
+            size_words: obj.size_words,
+            interval: obj.interval,
+            min_offset_words: 0,
+        });
+    }
+}
+
+fn build_stable_pack(
+    stable_pack: &mut Vec<PackedObject>,
+    sorted_objects: &[&StackObj],
+    shadow_objs: &[StackObj],
+    must_stable: &BitSet<StackObjId>,
+    promoted_optional: &BitSet<StackObjId>,
+) {
+    stable_pack.clear();
+    let mut shadow_iter = shadow_objs.iter().peekable();
+    for &obj in sorted_objects {
+        if !is_stable_real(must_stable, promoted_optional, obj.id) {
+            continue;
+        }
+        let obj_key = pack_sort_key(obj.id, obj.interval);
+        while let Some(shadow) = shadow_iter.peek()
+            && pack_sort_key(shadow.id, shadow.interval) <= obj_key
+        {
+            stable_pack.push(PackedObject {
+                id: shadow.id,
+                size_words: shadow.size_words,
+                interval: shadow.interval,
+                min_offset_words: 0,
+            });
+            let _ = shadow_iter.next();
+        }
+        stable_pack.push(PackedObject {
+            id: obj.id,
+            size_words: obj.size_words,
+            interval: obj.interval,
+            min_offset_words: 0,
+        });
+    }
+    for shadow in shadow_iter {
+        stable_pack.push(PackedObject {
+            id: shadow.id,
+            size_words: shadow.size_words,
+            interval: shadow.interval,
+            min_offset_words: 0,
+        });
+    }
+}
+
+fn placement_cost(
+    ctx: &FuncPlacementCtx<'_>,
+    promoted_optional: &BitSet<StackObjId>,
+    shadow_copy_words: u64,
+    scratch_words: u32,
+    stable_words: u32,
+) -> u64 {
+    let mut cost = evaluate_memory_cost(ctx.cost_model, scratch_words, stable_words);
+    if ctx.is_recursive && stable_words != 0 {
+        cost = cost
+            .checked_add(
+                ctx.cost_model
+                    .w_save
+                    .checked_mul(32)
+                    .expect("frame setup cost overflow"),
+            )
+            .and_then(|cost| {
+                cost.checked_add(
+                    ctx.cost_model
+                        .w_code
+                        .checked_mul(16)
+                        .expect("frame setup code cost overflow"),
+                )
+            })
+            .expect("frame setup total cost overflow");
+    }
+    if ctx.is_recursive {
+        for fact in ctx.facts.values() {
+            if !is_stable_real(ctx.must_stable, promoted_optional, fact.id) {
+                continue;
+            }
+            let access_penalty = fact.access_weight.saturating_mul(4);
+            cost = cost
+                .checked_add(
+                    ctx.cost_model
+                        .w_stack
+                        .checked_mul(access_penalty)
+                        .expect("frame access cost overflow"),
+                )
+                .expect("frame access total cost overflow");
+        }
+    }
+    let (copy_gas, copy_bytes) = if ctx.is_recursive {
+        (
+            shadow_copy_words.saturating_mul(16),
+            shadow_copy_words.saturating_mul(16),
+        )
+    } else {
+        (
+            shadow_copy_words.saturating_mul(12),
+            shadow_copy_words.saturating_mul(12),
+        )
+    };
+    cost.checked_add(
+        ctx.cost_model
+            .w_save
+            .checked_mul(copy_gas)
+            .expect("shadow copy gas cost overflow"),
+    )
+    .and_then(|cost| {
+        cost.checked_add(
+            ctx.cost_model
+                .w_code
+                .checked_mul(copy_bytes)
+                .expect("shadow copy code cost overflow"),
+        )
+    })
+    .expect("shadow copy total cost overflow")
+}
+
+fn shadow_copy_words(call_preserve: &FxHashMap<InstId, CallPreservePlan>) -> u64 {
+    call_preserve
+        .values()
+        .map(|plan| match &plan.mode {
+            PreserveMode::ShadowRuns { runs, .. } => {
+                runs.iter().map(|run| u64::from(run.len_words)).sum()
+            }
+            PreserveMode::None | PreserveMode::TinyStackLift { .. } => 0,
+        })
+        .sum()
+}
+
+fn is_stable_real(
+    must_stable: &BitSet<StackObjId>,
+    promoted_optional: &BitSet<StackObjId>,
+    obj: StackObjId,
+) -> bool {
+    must_stable.contains(obj) || promoted_optional.contains(obj)
+}
+
+fn score_from_eval(eval: &FuncPlacementEval) -> FuncPlacementScore {
+    FuncPlacementScore {
+        scratch_words: eval.scratch_words,
+        stable_words: eval.stable_words,
+        cost: eval.cost,
+    }
+}
+
+fn is_better_score(candidate: FuncPlacementScore, current: FuncPlacementScore) -> bool {
     candidate.cost < current.cost
         || (candidate.cost == current.cost
             && (candidate.stable_words < current.stable_words
@@ -829,6 +1056,10 @@ fn abs_addr_for_word(word: u32) -> u32 {
                 .expect("absolute address overflow"),
         )
         .expect("absolute address overflow")
+}
+
+fn pack_sort_key(id: StackObjId, interval: LiveInterval) -> (u32, u32, u32) {
+    (interval.start, interval.end, id.as_u32())
 }
 
 #[cfg(debug_assertions)]

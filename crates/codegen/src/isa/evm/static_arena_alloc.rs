@@ -18,10 +18,7 @@ use sonatina_ir::{
     isa::{Isa, evm::Evm},
     module::{FuncRef, ModuleCtx},
 };
-use std::{
-    cmp::Reverse,
-    collections::{BTreeMap, BinaryHeap},
-};
+use std::{cmp::Reverse, collections::BinaryHeap};
 
 use crate::{bitset::BitSet, liveness::InstLiveness};
 
@@ -736,15 +733,39 @@ pub(crate) struct PackedObject {
     pub(crate) min_offset_words: u32,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct FreeSegment {
+    start: u32,
+    len: u32,
+}
+
+#[cfg(test)]
 pub(crate) fn pack_objects(objects: &mut [PackedObject]) -> (FxHashMap<StackObjId, u32>, u32) {
     objects.sort_unstable_by_key(|o| (o.interval.start, o.interval.end, o.id.as_u32()));
+    pack_objects_presorted(objects)
+}
 
-    let mut out: FxHashMap<StackObjId, u32> = FxHashMap::default();
-    let mut active: BinaryHeap<Reverse<(u32, u32, u32, u32)>> = BinaryHeap::new(); // (end, off, size, id)
-    let mut free: BTreeMap<u32, u32> = BTreeMap::new(); // start -> len
+pub(crate) fn pack_objects_presorted(
+    objects: &[PackedObject],
+) -> (FxHashMap<StackObjId, u32>, u32) {
+    let mut out = FxHashMap::with_capacity_and_hasher(objects.len(), Default::default());
+    let max_used = pack_objects_impl(objects, |id, off| {
+        let _ = out.insert(id, off);
+    });
+    (out, max_used)
+}
+
+pub(crate) fn pack_objects_peak_presorted(objects: &[PackedObject]) -> u32 {
+    pack_objects_impl(objects, |_, _| {})
+}
+
+fn pack_objects_impl(objects: &[PackedObject], mut record: impl FnMut(StackObjId, u32)) -> u32 {
+    let mut active: BinaryHeap<Reverse<(u32, u32, u32, u32)>> =
+        BinaryHeap::with_capacity(objects.len());
+    let mut free = Vec::new();
     let mut max_used: u32 = 0;
 
-    for obj in objects.iter() {
+    for obj in objects {
         while let Some(Reverse((end, off, size, _id))) = active.peek().copied()
             && end <= obj.interval.start
         {
@@ -753,62 +774,42 @@ pub(crate) fn pack_objects(objects: &mut [PackedObject]) -> (FxHashMap<StackObjI
         }
 
         if obj.size_words == 0 {
-            out.insert(obj.id, 0);
+            record(obj.id, 0);
             continue;
         }
 
-        let mut found: Option<(u32, u32)> = free
-            .range(..=obj.min_offset_words)
-            .next_back()
-            .filter(|&(&start, &len)| {
+        let off =
+            if let Some(index) = find_free_segment(&free, obj.min_offset_words, obj.size_words) {
+                let FreeSegment { start, len } = free.remove(index);
                 let end = start.checked_add(len).expect("free segment overflow");
                 let alloc_start = start.max(obj.min_offset_words);
                 let alloc_end = alloc_start
                     .checked_add(obj.size_words)
                     .expect("free segment overflow");
-                end >= alloc_end
-            })
-            .map(|(&start, &len)| (start, len));
 
-        if found.is_none() {
-            found = free
-                .range(obj.min_offset_words..)
-                .find(|&(_, &len)| len >= obj.size_words)
-                .map(|(&start, &len)| (start, len));
-        }
+                insert_free_segment(
+                    &mut free,
+                    start,
+                    alloc_start
+                        .checked_sub(start)
+                        .expect("free segment underflow"),
+                );
+                insert_free_segment(
+                    &mut free,
+                    alloc_end,
+                    end.checked_sub(alloc_end).expect("free segment underflow"),
+                );
 
-        let off = if let Some((start, len)) = found {
-            free.remove(&start);
-
-            let end = start.checked_add(len).expect("free segment overflow");
-            let alloc_start = start.max(obj.min_offset_words);
-            let alloc_end = alloc_start
-                .checked_add(obj.size_words)
-                .expect("free segment overflow");
-
-            insert_free_segment(
-                &mut free,
-                start,
                 alloc_start
-                    .checked_sub(start)
-                    .expect("free segment underflow"),
-            );
-            insert_free_segment(
-                &mut free,
-                alloc_end,
-                end.checked_sub(alloc_end).expect("free segment underflow"),
-            );
+            } else {
+                let off = obj.min_offset_words.max(max_used);
+                max_used = off
+                    .checked_add(obj.size_words)
+                    .expect("locals size overflow");
+                off
+            };
 
-            alloc_start
-        } else {
-            let off = obj.min_offset_words.max(max_used);
-            max_used = off
-                .checked_add(obj.size_words)
-                .expect("locals size overflow");
-            off
-        };
-
-        out.insert(obj.id, off);
+        record(obj.id, off);
         active.push(Reverse((
             obj.interval.end,
             off,
@@ -821,35 +822,62 @@ pub(crate) fn pack_objects(objects: &mut [PackedObject]) -> (FxHashMap<StackObjI
         );
     }
 
-    (out, max_used)
+    max_used
 }
 
-fn insert_free_segment(free: &mut BTreeMap<u32, u32>, start: u32, len: u32) {
+fn find_free_segment(
+    free: &[FreeSegment],
+    min_offset_words: u32,
+    size_words: u32,
+) -> Option<usize> {
+    free.iter().position(|segment| {
+        let end = segment
+            .start
+            .checked_add(segment.len)
+            .expect("free segment overflow");
+        let alloc_start = segment.start.max(min_offset_words);
+        let alloc_end = alloc_start
+            .checked_add(size_words)
+            .expect("free segment overflow");
+        end >= alloc_end
+    })
+}
+
+fn insert_free_segment(free: &mut Vec<FreeSegment>, start: u32, len: u32) {
     if len == 0 {
         return;
     }
 
     let mut start = start;
     let mut len = len;
+    let mut index = free
+        .binary_search_by_key(&start, |segment| segment.start)
+        .unwrap_or_else(|index| index);
 
-    if let Some((&p_start, &p_len)) = free.range(..start).next_back() {
-        let p_end = p_start.checked_add(p_len).expect("free segment overflow");
+    if index != 0 {
+        let prev = free[index - 1];
+        let p_end = prev
+            .start
+            .checked_add(prev.len)
+            .expect("free segment overflow");
         if p_end == start {
-            start = p_start;
-            len = len.checked_add(p_len).expect("free segment overflow");
-            free.remove(&p_start);
+            start = prev.start;
+            len = len.checked_add(prev.len).expect("free segment overflow");
+            let _ = free.remove(index - 1);
+            index -= 1;
         }
     }
 
-    if let Some((&n_start, &n_len)) = free.range(start..).next() {
+    if index < free.len() {
+        let next = free[index];
         let end = start.checked_add(len).expect("free segment overflow");
-        if end == n_start {
-            len = len.checked_add(n_len).expect("free segment overflow");
-            free.remove(&n_start);
+        if end == next.start {
+            len = len.checked_add(next.len).expect("free segment overflow");
+            let _ = free.remove(index);
         }
     }
 
-    free.insert(start, len);
+    free.insert(index, FreeSegment { start, len });
 }
 
 fn conservative_unknown_ptr_summary(module: &ModuleCtx, func_ref: FuncRef) -> PtrEscapeSummary {
@@ -1127,5 +1155,44 @@ mod tests {
             call.live_out_objs.contains(&spill_obj),
             "canonical spill object for aliased pointer should be live across the internal call"
         );
+    }
+
+    #[test]
+    fn presorted_packer_matches_sorted_packer() {
+        let mut unsorted = vec![
+            PackedObject {
+                id: StackObjId::new(3),
+                size_words: 2,
+                interval: LiveInterval { start: 4, end: 9 },
+                min_offset_words: 0,
+            },
+            PackedObject {
+                id: StackObjId::new(1),
+                size_words: 1,
+                interval: LiveInterval { start: 0, end: 2 },
+                min_offset_words: 0,
+            },
+            PackedObject {
+                id: StackObjId::new(2),
+                size_words: 3,
+                interval: LiveInterval { start: 1, end: 6 },
+                min_offset_words: 1,
+            },
+            PackedObject {
+                id: StackObjId::new(4),
+                size_words: 1,
+                interval: LiveInterval { start: 6, end: 6 },
+                min_offset_words: 0,
+            },
+        ];
+        let (sorted_offsets, sorted_words) = pack_objects(&mut unsorted);
+
+        let mut presorted = unsorted.clone();
+        presorted
+            .sort_unstable_by_key(|obj| (obj.interval.start, obj.interval.end, obj.id.as_u32()));
+        let (presorted_offsets, presorted_words) = pack_objects_presorted(&presorted);
+
+        assert_eq!(presorted_offsets, sorted_offsets);
+        assert_eq!(presorted_words, sorted_words);
     }
 }
