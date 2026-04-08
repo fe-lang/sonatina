@@ -11,9 +11,9 @@ use sonatina_ir::{
 use super::{ObjectEffectSummaryMap, ObjectReturnEffect, SliceSet, shape};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-struct RootCaptureRoot {
+struct RootCaptureSource {
     dst_slice: shape::AggregateSlice,
-    src_root: ValueId,
+    src_root: Option<ValueId>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,14 +35,21 @@ pub(crate) struct RootProvenanceMap {
     exact: SecondaryMap<ValueId, Option<Projection>>,
     possible_projections: SecondaryMap<ValueId, Vec<Projection>>,
     possible_roots: SecondaryMap<ValueId, FxHashSet<ValueId>>,
+    maybe_unknown: SecondaryMap<ValueId, bool>,
 }
 
 impl RootProvenanceMap {
     pub(crate) fn exact_projection(&self, value: ValueId) -> Option<Projection> {
+        if self.maybe_unknown[value] {
+            return None;
+        }
         self.exact[value]
     }
 
     pub(crate) fn provenance(&self, value: ValueId) -> RootProvenance {
+        if self.maybe_unknown[value] {
+            return RootProvenance::Unknown;
+        }
         if let Some(projection) = self.exact[value] {
             return RootProvenance::Exact(projection);
         }
@@ -59,15 +66,28 @@ impl RootProvenanceMap {
         }
     }
 
-    pub(crate) fn into_exact_projection(self) -> SecondaryMap<ValueId, Option<Projection>> {
+    pub(crate) fn into_exact_projection(mut self) -> SecondaryMap<ValueId, Option<Projection>> {
+        for value in self.exact.keys() {
+            if self.maybe_unknown[value] {
+                self.exact[value] = None;
+            }
+        }
         self.exact
     }
 
-    pub(crate) fn into_possible_roots(self) -> SecondaryMap<ValueId, FxHashSet<ValueId>> {
-        self.possible_roots
+    pub(crate) fn into_possible_roots_and_unknown(
+        self,
+    ) -> (
+        SecondaryMap<ValueId, FxHashSet<ValueId>>,
+        SecondaryMap<ValueId, bool>,
+    ) {
+        (self.possible_roots, self.maybe_unknown)
     }
 
     pub(crate) fn possible_projections(&self, value: ValueId) -> &[Projection] {
+        if self.maybe_unknown[value] {
+            return &[];
+        }
         &self.possible_projections[value]
     }
 }
@@ -83,7 +103,14 @@ enum ExactState {
 struct CaptureStateView<'a> {
     exact_states: &'a SecondaryMap<ValueId, Option<ExactState>>,
     possible_roots: &'a SecondaryMap<ValueId, FxHashSet<ValueId>>,
+    maybe_unknown: &'a SecondaryMap<ValueId, bool>,
     root_slices: &'a FxHashMap<ValueId, shape::AggregateSlice>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+struct RootTransfer {
+    roots: FxHashSet<ValueId>,
+    maybe_unknown: bool,
 }
 
 pub(crate) fn collect_root_provenance(
@@ -101,7 +128,12 @@ pub(crate) fn collect_root_provenance(
         exact_states[root_value] = Some(ExactState::Exact(Projection { root_value, slice }));
     }
 
-    compute_possible_roots(func, &mut provenance.possible_roots, object_effects);
+    compute_possible_roots(
+        func,
+        &mut provenance.possible_roots,
+        &mut provenance.maybe_unknown,
+        object_effects,
+    );
     let value_sccs = compute_supported_value_sccs(func, root_slices);
 
     loop {
@@ -134,6 +166,7 @@ pub(crate) fn collect_root_provenance(
                         result,
                         &exact_states,
                         &provenance.possible_roots,
+                        &provenance.maybe_unknown,
                         &value_sccs,
                         layout_cache,
                         object_effects,
@@ -156,8 +189,9 @@ pub(crate) fn collect_root_provenance(
 
     for value in func.dfg.value_ids() {
         provenance.exact[value] = match exact_states[value].unwrap_or(ExactState::Unknown) {
-            ExactState::Exact(projection) => Some(projection),
+            ExactState::Exact(projection) if !provenance.maybe_unknown[value] => Some(projection),
             ExactState::Unknown | ExactState::Blocked => None,
+            ExactState::Exact(_) => None,
         };
     }
 
@@ -166,6 +200,7 @@ pub(crate) fn collect_root_provenance(
         module,
         root_slices,
         &provenance.possible_roots,
+        &provenance.maybe_unknown,
         &mut exact_states,
         layout_cache,
         object_effects,
@@ -176,17 +211,20 @@ pub(crate) fn collect_root_provenance(
         root_slices,
         &exact_states,
         &mut provenance.possible_roots,
+        &mut provenance.maybe_unknown,
         object_effects,
     );
 
     provenance
 }
 
+#[allow(clippy::too_many_arguments)]
 fn collect_possible_projections(
     func: &Function,
     module: &ModuleCtx,
     root_slices: &FxHashMap<ValueId, shape::AggregateSlice>,
     possible_roots: &SecondaryMap<ValueId, FxHashSet<ValueId>>,
+    maybe_unknown: &SecondaryMap<ValueId, bool>,
     exact_states: &mut SecondaryMap<ValueId, Option<ExactState>>,
     layout_cache: &mut shape::AggregateLayoutCache,
     object_effects: Option<&ObjectEffectSummaryMap>,
@@ -198,7 +236,7 @@ fn collect_possible_projections(
     }
 
     for value in func.dfg.value_ids() {
-        if let Some(projection) = exact_projection_of(exact_states, value) {
+        if let Some(projection) = exact_projection_of(exact_states, maybe_unknown, value) {
             possible_projections[value].push(projection);
         }
     }
@@ -215,7 +253,9 @@ fn collect_possible_projections(
                 let Some(result) = single_result_value(func, inst) else {
                     continue;
                 };
-                let next = if let Some(projection) = exact_projection_of(exact_states, result) {
+                let next = if let Some(projection) =
+                    exact_projection_of(exact_states, maybe_unknown, result)
+                {
                     vec![projection]
                 } else {
                     derive_possible_projections(
@@ -225,6 +265,7 @@ fn collect_possible_projections(
                         result,
                         &possible_projections,
                         possible_roots,
+                        maybe_unknown,
                         layout_cache,
                         object_effects,
                     )
@@ -246,6 +287,7 @@ fn collect_possible_projections(
 fn compute_possible_roots(
     func: &Function,
     possible_roots: &mut SecondaryMap<ValueId, FxHashSet<ValueId>>,
+    maybe_unknown: &mut SecondaryMap<ValueId, bool>,
     object_effects: Option<&ObjectEffectSummaryMap>,
 ) {
     loop {
@@ -257,17 +299,24 @@ fn compute_possible_roots(
                     continue;
                 }
 
-                let Some(updated) =
-                    possible_root_transfer(func, inst, possible_roots, object_effects)
-                else {
+                let Some(updated) = possible_root_transfer(
+                    func,
+                    inst,
+                    possible_roots,
+                    maybe_unknown,
+                    object_effects,
+                ) else {
                     continue;
                 };
                 let Some(result) = single_result_value(func, inst) else {
                     continue;
                 };
 
-                if updated != possible_roots[result] {
-                    possible_roots[result] = updated;
+                if updated.roots != possible_roots[result]
+                    || updated.maybe_unknown != maybe_unknown[result]
+                {
+                    possible_roots[result] = updated.roots;
+                    maybe_unknown[result] = updated.maybe_unknown;
                     changed = true;
                 }
             }
@@ -284,6 +333,7 @@ fn refine_possible_roots_from_objref_loads(
     root_slices: &FxHashMap<ValueId, shape::AggregateSlice>,
     exact_states: &SecondaryMap<ValueId, Option<ExactState>>,
     possible_roots: &mut SecondaryMap<ValueId, FxHashSet<ValueId>>,
+    maybe_unknown: &mut SecondaryMap<ValueId, bool>,
     object_effects: Option<&ObjectEffectSummaryMap>,
 ) {
     let mut cfg = ControlFlowGraph::default();
@@ -293,9 +343,11 @@ fn refine_possible_roots_from_objref_loads(
     loop {
         let mut changed = false;
         let possible_roots_snapshot = possible_roots.clone();
+        let maybe_unknown_snapshot = maybe_unknown.clone();
         let capture_state = CaptureStateView {
             exact_states,
             possible_roots: &possible_roots_snapshot,
+            maybe_unknown: &maybe_unknown_snapshot,
             root_slices,
         };
         let block_entry_captures = compute_capture_states_for_blocks(
@@ -317,10 +369,18 @@ fn refine_possible_roots_from_objref_loads(
                     continue;
                 }
 
-                if let Some(updated) =
-                    possible_root_transfer(func, inst, &possible_roots_snapshot, object_effects)
-                    && let Some(result) = single_result_value(func, inst)
-                    && union_root_set(&mut possible_roots[result], &updated)
+                if let Some(updated) = possible_root_transfer(
+                    func,
+                    inst,
+                    &possible_roots_snapshot,
+                    &maybe_unknown_snapshot,
+                    object_effects,
+                ) && let Some(result) = single_result_value(func, inst)
+                    && union_root_transfer(
+                        &mut possible_roots[result],
+                        &mut maybe_unknown[result],
+                        &updated,
+                    )
                 {
                     changed = true;
                 }
@@ -333,7 +393,11 @@ fn refine_possible_roots_from_objref_loads(
                 {
                     let loaded_roots =
                         capture_roots_for_value(*obj_load.object(), capture_state, &root_captures);
-                    if union_root_set(&mut possible_roots[result], &loaded_roots) {
+                    if union_root_transfer(
+                        &mut possible_roots[result],
+                        &mut maybe_unknown[result],
+                        &loaded_roots,
+                    ) {
                         changed = true;
                     }
                 }
@@ -360,7 +424,7 @@ fn compute_capture_states_for_blocks(
     object_effects: Option<&ObjectEffectSummaryMap>,
     cfg: &ControlFlowGraph,
     reachable: &SecondaryMap<BlockId, bool>,
-) -> SecondaryMap<BlockId, FxHashMap<ValueId, Vec<RootCaptureRoot>>> {
+) -> SecondaryMap<BlockId, FxHashMap<ValueId, Vec<RootCaptureSource>>> {
     let mut block_entry_captures = SecondaryMap::default();
     let mut block_exit_captures = SecondaryMap::default();
 
@@ -414,7 +478,7 @@ fn apply_inst_capture_transfer(
     inst: InstId,
     capture_state: CaptureStateView<'_>,
     object_effects: Option<&ObjectEffectSummaryMap>,
-    root_captures: &mut FxHashMap<ValueId, Vec<RootCaptureRoot>>,
+    root_captures: &mut FxHashMap<ValueId, Vec<RootCaptureSource>>,
 ) {
     if !func.layout.is_inst_inserted(inst) {
         return;
@@ -427,6 +491,7 @@ fn apply_inst_capture_transfer(
                 root_captures,
                 capture_destinations_for_value(*obj_store.object(), None, capture_state),
                 &capture_state.possible_roots[*obj_store.value()],
+                capture_state.maybe_unknown[*obj_store.value()],
             );
         }
         return;
@@ -473,7 +538,7 @@ fn merge_call_capture_roots(
     inst: InstId,
     capture_state: CaptureStateView<'_>,
     object_effects: Option<&ObjectEffectSummaryMap>,
-    root_captures: &mut FxHashMap<ValueId, Vec<RootCaptureRoot>>,
+    root_captures: &mut FxHashMap<ValueId, Vec<RootCaptureSource>>,
 ) {
     let call = downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(inst))
         .expect("merge_call_capture_roots requires a call instruction");
@@ -503,13 +568,18 @@ fn merge_call_capture_roots(
                 .map(|result| capture_destinations_for_value(result, Some(slice), capture_state))
                 .unwrap_or_default(),
         };
-        record_root_capture_sources(root_captures, dsts, &capture_state.possible_roots[src_arg]);
+        record_root_capture_sources(
+            root_captures,
+            dsts,
+            &capture_state.possible_roots[src_arg],
+            capture_state.maybe_unknown[src_arg],
+        );
     }
 }
 
 fn merge_root_capture_maps(
-    dst: &mut FxHashMap<ValueId, Vec<RootCaptureRoot>>,
-    src: &FxHashMap<ValueId, Vec<RootCaptureRoot>>,
+    dst: &mut FxHashMap<ValueId, Vec<RootCaptureSource>>,
+    src: &FxHashMap<ValueId, Vec<RootCaptureSource>>,
 ) {
     for (&root, captures) in src {
         let entry = dst.entry(root).or_default();
@@ -522,7 +592,7 @@ fn merge_root_capture_maps(
     }
 }
 
-fn dedup_root_capture_roots(root_captures: &mut FxHashMap<ValueId, Vec<RootCaptureRoot>>) {
+fn dedup_root_capture_roots(root_captures: &mut FxHashMap<ValueId, Vec<RootCaptureSource>>) {
     for captures in root_captures.values_mut() {
         let mut seen = FxHashSet::default();
         captures.retain(|capture| seen.insert(*capture));
@@ -530,16 +600,28 @@ fn dedup_root_capture_roots(root_captures: &mut FxHashMap<ValueId, Vec<RootCaptu
 }
 
 fn record_root_capture_sources(
-    root_captures: &mut FxHashMap<ValueId, Vec<RootCaptureRoot>>,
+    root_captures: &mut FxHashMap<ValueId, Vec<RootCaptureSource>>,
     dsts: Vec<(ValueId, shape::AggregateSlice)>,
     src_roots: &FxHashSet<ValueId>,
+    src_maybe_unknown: bool,
 ) {
     for (root, dst_slice) in dsts {
         for &src_root in src_roots {
             let entry = root_captures.entry(root).or_default();
-            let capture = RootCaptureRoot {
+            let capture = RootCaptureSource {
                 dst_slice,
-                src_root,
+                src_root: Some(src_root),
+            };
+            if entry.contains(&capture) {
+                continue;
+            }
+            entry.push(capture);
+        }
+        if src_maybe_unknown {
+            let entry = root_captures.entry(root).or_default();
+            let capture = RootCaptureSource {
+                dst_slice,
+                src_root: None,
             };
             if entry.contains(&capture) {
                 continue;
@@ -551,7 +633,7 @@ fn record_root_capture_sources(
 
 fn record_enum_variant_capture_sources(
     func: &Function,
-    root_captures: &mut FxHashMap<ValueId, Vec<RootCaptureRoot>>,
+    root_captures: &mut FxHashMap<ValueId, Vec<RootCaptureSource>>,
     object: ValueId,
     values: &[ValueId],
     variant: sonatina_ir::types::EnumVariantRef,
@@ -576,17 +658,26 @@ fn record_enum_variant_capture_sources(
             root_captures,
             capture_destinations_for_value(object, Some(field_slice), capture_state),
             &capture_state.possible_roots[value],
+            capture_state.maybe_unknown[value],
         );
     }
 }
 
 fn kill_capture_access(
-    root_captures: &mut FxHashMap<ValueId, Vec<RootCaptureRoot>>,
+    root_captures: &mut FxHashMap<ValueId, Vec<RootCaptureSource>>,
     object: ValueId,
     relative_slice: Option<(usize, usize)>,
     capture_state: CaptureStateView<'_>,
 ) {
-    if let Some(projection) = exact_projection_of(capture_state.exact_states, object) {
+    if capture_state.maybe_unknown[object] {
+        root_captures.clear();
+        return;
+    }
+    if let Some(projection) = exact_projection_of(
+        capture_state.exact_states,
+        capture_state.maybe_unknown,
+        object,
+    ) {
         let access_slice = relative_slice.map_or(projection.slice, |(first_leaf, leaf_count)| {
             shape::AggregateSlice {
                 ty: projection.slice.ty,
@@ -604,7 +695,7 @@ fn kill_capture_access(
 }
 
 fn kill_capture_slice_set(
-    root_captures: &mut FxHashMap<ValueId, Vec<RootCaptureRoot>>,
+    root_captures: &mut FxHashMap<ValueId, Vec<RootCaptureSource>>,
     value: ValueId,
     slices: &SliceSet,
     capture_state: CaptureStateView<'_>,
@@ -612,7 +703,15 @@ fn kill_capture_slice_set(
     if slices.is_empty() {
         return;
     }
-    let Some(projection) = exact_projection_of(capture_state.exact_states, value) else {
+    if capture_state.maybe_unknown[value] {
+        root_captures.clear();
+        return;
+    }
+    let Some(projection) = exact_projection_of(
+        capture_state.exact_states,
+        capture_state.maybe_unknown,
+        value,
+    ) else {
         for (root, whole_root_slice) in capture_destinations_for_value(value, None, capture_state) {
             kill_capture_root_slice(root_captures, root, Some(whole_root_slice));
         }
@@ -640,7 +739,7 @@ fn kill_capture_slice_set(
 }
 
 fn kill_capture_root_slice(
-    root_captures: &mut FxHashMap<ValueId, Vec<RootCaptureRoot>>,
+    root_captures: &mut FxHashMap<ValueId, Vec<RootCaptureSource>>,
     root: ValueId,
     access_slice: Option<shape::AggregateSlice>,
 ) {
@@ -662,7 +761,11 @@ fn capture_destinations_for_value(
     relative_slice: Option<shape::AggregateSlice>,
     capture_state: CaptureStateView<'_>,
 ) -> Vec<(ValueId, shape::AggregateSlice)> {
-    if let Some(projection) = exact_projection_of(capture_state.exact_states, value) {
+    if let Some(projection) = exact_projection_of(
+        capture_state.exact_states,
+        capture_state.maybe_unknown,
+        value,
+    ) {
         return relative_slice
             .map(|slice| offset_projection_slice(projection.slice, slice))
             .unwrap_or(Some(projection.slice))
@@ -680,20 +783,27 @@ fn capture_destinations_for_value(
 fn capture_roots_for_value(
     value: ValueId,
     capture_state: CaptureStateView<'_>,
-    root_captures: &FxHashMap<ValueId, Vec<RootCaptureRoot>>,
-) -> FxHashSet<ValueId> {
-    let mut roots = FxHashSet::default();
+    root_captures: &FxHashMap<ValueId, Vec<RootCaptureSource>>,
+) -> RootTransfer {
+    let mut transfer = RootTransfer {
+        maybe_unknown: capture_state.maybe_unknown[value],
+        ..RootTransfer::default()
+    };
     for (root, access_slice) in capture_destinations_for_value(value, None, capture_state) {
         let Some(captures) = root_captures.get(&root) else {
             continue;
         };
         for capture in captures {
             if slices_overlap_relative(access_slice, capture.dst_slice) {
-                roots.insert(capture.src_root);
+                if let Some(src_root) = capture.src_root {
+                    transfer.roots.insert(src_root);
+                } else {
+                    transfer.maybe_unknown = true;
+                }
             }
         }
     }
-    roots
+    transfer
 }
 
 fn whole_root_projection(
@@ -701,7 +811,12 @@ fn whole_root_projection(
     capture_state: CaptureStateView<'_>,
 ) -> Option<shape::AggregateSlice> {
     capture_state.root_slices.get(&root).copied().or_else(|| {
-        exact_projection_of(capture_state.exact_states, root).map(|projection| projection.slice)
+        exact_projection_of(
+            capture_state.exact_states,
+            capture_state.maybe_unknown,
+            root,
+        )
+        .map(|projection| projection.slice)
     })
 }
 
@@ -724,6 +839,17 @@ fn union_root_set(dst: &mut FxHashSet<ValueId>, src: &FxHashSet<ValueId>) -> boo
     dst.len() != before
 }
 
+fn union_root_transfer(
+    dst_roots: &mut FxHashSet<ValueId>,
+    dst_maybe_unknown: &mut bool,
+    src: &RootTransfer,
+) -> bool {
+    let roots_changed = union_root_set(dst_roots, &src.roots);
+    let unknown_changed = !*dst_maybe_unknown && src.maybe_unknown;
+    *dst_maybe_unknown |= src.maybe_unknown;
+    roots_changed || unknown_changed
+}
+
 fn slices_overlap_relative(lhs: shape::AggregateSlice, rhs: shape::AggregateSlice) -> bool {
     lhs.first_leaf < rhs.first_leaf + rhs.leaf_count
         && rhs.first_leaf < lhs.first_leaf + lhs.leaf_count
@@ -733,49 +859,71 @@ fn possible_root_transfer(
     func: &Function,
     inst: InstId,
     possible_roots: &SecondaryMap<ValueId, FxHashSet<ValueId>>,
+    maybe_unknown: &SecondaryMap<ValueId, bool>,
     object_effects: Option<&ObjectEffectSummaryMap>,
-) -> Option<FxHashSet<ValueId>> {
+) -> Option<RootTransfer> {
     if let Some(gep) = downcast::<&data::Gep>(func.inst_set(), func.dfg.inst(inst)) {
-        return gep
-            .values()
-            .first()
-            .map(|base| possible_roots[*base].clone());
+        return gep.values().first().map(|base| RootTransfer {
+            roots: possible_roots[*base].clone(),
+            maybe_unknown: maybe_unknown[*base],
+        });
     }
 
     if let Some(bitcast) = downcast::<&cast::Bitcast>(func.inst_set(), func.dfg.inst(inst)) {
-        return Some(possible_roots[*bitcast.from()].clone());
+        return Some(RootTransfer {
+            roots: possible_roots[*bitcast.from()].clone(),
+            maybe_unknown: maybe_unknown[*bitcast.from()],
+        });
     }
 
     if let Some(obj_proj) = downcast::<&data::ObjProj>(func.inst_set(), func.dfg.inst(inst)) {
-        return obj_proj
-            .values()
-            .first()
-            .map(|base| possible_roots[*base].clone());
+        return obj_proj.values().first().map(|base| RootTransfer {
+            roots: possible_roots[*base].clone(),
+            maybe_unknown: maybe_unknown[*base],
+        });
     }
 
     if let Some(obj_index) = downcast::<&data::ObjIndex>(func.inst_set(), func.dfg.inst(inst)) {
-        return Some(possible_roots[*obj_index.object()].clone());
+        return Some(RootTransfer {
+            roots: possible_roots[*obj_index.object()].clone(),
+            maybe_unknown: maybe_unknown[*obj_index.object()],
+        });
     }
 
     if let Some(enum_proj) = downcast::<&data::EnumProj>(func.inst_set(), func.dfg.inst(inst)) {
-        return Some(possible_roots[*enum_proj.object()].clone());
+        return Some(RootTransfer {
+            roots: possible_roots[*enum_proj.object()].clone(),
+            maybe_unknown: maybe_unknown[*enum_proj.object()],
+        });
     }
 
     if let Some(enum_assert_ref) =
         downcast::<&data::EnumAssertVariantRef>(func.inst_set(), func.dfg.inst(inst))
     {
-        return Some(possible_roots[*enum_assert_ref.object()].clone());
+        return Some(RootTransfer {
+            roots: possible_roots[*enum_assert_ref.object()].clone(),
+            maybe_unknown: maybe_unknown[*enum_assert_ref.object()],
+        });
     }
 
     if let Some(call) = downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(inst)) {
-        return call_return_root_transfer(func, inst, call, possible_roots, object_effects);
+        return call_return_root_transfer(
+            func,
+            inst,
+            call,
+            possible_roots,
+            maybe_unknown,
+            object_effects,
+        );
     }
 
     downcast::<&control_flow::Phi>(func.inst_set(), func.dfg.inst(inst)).map(|phi| {
-        phi.args()
-            .iter()
-            .flat_map(|(arg, _)| possible_roots[*arg].iter().copied())
-            .collect()
+        let mut transfer = RootTransfer::default();
+        for &(arg, _) in phi.args() {
+            transfer.roots.extend(possible_roots[arg].iter().copied());
+            transfer.maybe_unknown |= maybe_unknown[arg];
+        }
+        transfer
     })
 }
 
@@ -787,15 +935,16 @@ fn derive_exact_state(
     result: ValueId,
     exact_states: &SecondaryMap<ValueId, Option<ExactState>>,
     possible_roots: &SecondaryMap<ValueId, FxHashSet<ValueId>>,
+    maybe_unknown: &SecondaryMap<ValueId, bool>,
     value_sccs: &FxHashMap<ValueId, usize>,
     layout_cache: &mut shape::AggregateLayoutCache,
     object_effects: Option<&ObjectEffectSummaryMap>,
 ) -> ExactState {
     if let Some(gep) = downcast::<&data::Gep>(func.inst_set(), func.dfg.inst(inst)) {
         let Some(&base) = gep.values().first() else {
-            return exact_state_or_unknown(exact_states, result, possible_roots);
+            return exact_state_or_unknown(exact_states, possible_roots, maybe_unknown, result);
         };
-        let Some(base_projection) = exact_projection_of(exact_states, base) else {
+        let Some(base_projection) = exact_projection_of(exact_states, maybe_unknown, base) else {
             return pending_or_blocked(exact_states, base);
         };
         let Some(sub) = shape::aggregate_slice_for_gep_path(
@@ -818,7 +967,8 @@ fn derive_exact_state(
 
     if let Some(bitcast) = downcast::<&cast::Bitcast>(func.inst_set(), func.dfg.inst(inst)) {
         let source = *bitcast.from();
-        let Some(source_projection) = exact_projection_of(exact_states, source) else {
+        let Some(source_projection) = exact_projection_of(exact_states, maybe_unknown, source)
+        else {
             return pending_or_blocked(exact_states, source);
         };
         let Some(slice) = bitcast_projection_slice(
@@ -837,9 +987,9 @@ fn derive_exact_state(
 
     if let Some(obj_proj) = downcast::<&data::ObjProj>(func.inst_set(), func.dfg.inst(inst)) {
         let Some((&base, indices)) = obj_proj.values().split_first() else {
-            return exact_state_or_unknown(exact_states, result, possible_roots);
+            return exact_state_or_unknown(exact_states, possible_roots, maybe_unknown, result);
         };
-        let Some(base_projection) = exact_projection_of(exact_states, base) else {
+        let Some(base_projection) = exact_projection_of(exact_states, maybe_unknown, base) else {
             return pending_or_blocked(exact_states, base);
         };
         let Some(sub) = shape::aggregate_slice_for_object_path(
@@ -862,7 +1012,7 @@ fn derive_exact_state(
 
     if let Some(obj_index) = downcast::<&data::ObjIndex>(func.inst_set(), func.dfg.inst(inst)) {
         let base = *obj_index.object();
-        let Some(base_projection) = exact_projection_of(exact_states, base) else {
+        let Some(base_projection) = exact_projection_of(exact_states, maybe_unknown, base) else {
             return pending_or_blocked(exact_states, base);
         };
         let Some(sub) = shape::aggregate_slice_for_object_path(
@@ -885,7 +1035,7 @@ fn derive_exact_state(
 
     if let Some(enum_proj) = downcast::<&data::EnumProj>(func.inst_set(), func.dfg.inst(inst)) {
         let base = *enum_proj.object();
-        let Some(base_projection) = exact_projection_of(exact_states, base) else {
+        let Some(base_projection) = exact_projection_of(exact_states, maybe_unknown, base) else {
             return pending_or_blocked(exact_states, base);
         };
         let Some(field_idx) = shape::const_u32(&func.dfg, *enum_proj.field()) else {
@@ -913,7 +1063,7 @@ fn derive_exact_state(
         downcast::<&data::EnumAssertVariantRef>(func.inst_set(), func.dfg.inst(inst))
     {
         let base = *enum_assert_ref.object();
-        let Some(base_projection) = exact_projection_of(exact_states, base) else {
+        let Some(base_projection) = exact_projection_of(exact_states, maybe_unknown, base) else {
             return pending_or_blocked(exact_states, base);
         };
         return ExactState::Exact(base_projection);
@@ -926,15 +1076,26 @@ fn derive_exact_state(
             call,
             exact_states,
             possible_roots,
+            maybe_unknown,
             layout_cache,
             object_effects,
         );
     }
 
-    downcast::<&control_flow::Phi>(func.inst_set(), func.dfg.inst(inst))
-        .map_or(ExactState::Unknown, |phi| {
-            derive_phi_state(func, result, phi, exact_states, possible_roots, value_sccs)
-        })
+    downcast::<&control_flow::Phi>(func.inst_set(), func.dfg.inst(inst)).map_or(
+        ExactState::Unknown,
+        |phi| {
+            derive_phi_state(
+                func,
+                result,
+                phi,
+                exact_states,
+                possible_roots,
+                maybe_unknown,
+                value_sccs,
+            )
+        },
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -945,10 +1106,11 @@ fn derive_possible_projections(
     result: ValueId,
     possible_projections: &SecondaryMap<ValueId, Vec<Projection>>,
     possible_roots: &SecondaryMap<ValueId, FxHashSet<ValueId>>,
+    maybe_unknown: &SecondaryMap<ValueId, bool>,
     layout_cache: &mut shape::AggregateLayoutCache,
     object_effects: Option<&ObjectEffectSummaryMap>,
 ) -> Vec<Projection> {
-    let Some(root_value) = singleton_root(possible_roots, result) else {
+    let Some(root_value) = singleton_root(possible_roots, maybe_unknown, result) else {
         return Vec::new();
     };
 
@@ -1074,6 +1236,7 @@ fn derive_possible_projections(
             call,
             possible_projections,
             possible_roots,
+            maybe_unknown,
             root_value,
             layout_cache,
             object_effects,
@@ -1093,8 +1256,12 @@ fn derive_phi_state(
     phi: &control_flow::Phi,
     exact_states: &SecondaryMap<ValueId, Option<ExactState>>,
     possible_roots: &SecondaryMap<ValueId, FxHashSet<ValueId>>,
+    maybe_unknown: &SecondaryMap<ValueId, bool>,
     value_sccs: &FxHashMap<ValueId, usize>,
 ) -> ExactState {
+    if maybe_unknown[result] {
+        return ExactState::Unknown;
+    }
     let roots = &possible_roots[result];
     if roots.is_empty() {
         return ExactState::Unknown;
@@ -1110,7 +1277,10 @@ fn derive_phi_state(
 
     let mut candidate = None;
     for &(arg, _) in phi.args() {
-        let Some(projection) = exact_projection_of(exact_states, arg) else {
+        if maybe_unknown[arg] {
+            return ExactState::Unknown;
+        }
+        let Some(projection) = exact_projection_of(exact_states, maybe_unknown, arg) else {
             if matches!(
                 exact_states[arg].unwrap_or(ExactState::Unknown),
                 ExactState::Blocked
@@ -1181,8 +1351,12 @@ fn derive_phi_projection_candidates(
 
 fn exact_projection_of(
     exact_states: &SecondaryMap<ValueId, Option<ExactState>>,
+    maybe_unknown: &SecondaryMap<ValueId, bool>,
     value: ValueId,
 ) -> Option<Projection> {
+    if maybe_unknown[value] {
+        return None;
+    }
     match exact_states[value].unwrap_or(ExactState::Unknown) {
         ExactState::Exact(projection) => Some(projection),
         ExactState::Unknown | ExactState::Blocked => None,
@@ -1191,10 +1365,11 @@ fn exact_projection_of(
 
 fn exact_state_or_unknown(
     exact_states: &SecondaryMap<ValueId, Option<ExactState>>,
-    value: ValueId,
     possible_roots: &SecondaryMap<ValueId, FxHashSet<ValueId>>,
+    maybe_unknown: &SecondaryMap<ValueId, bool>,
+    value: ValueId,
 ) -> ExactState {
-    if possible_roots[value].is_empty() {
+    if maybe_unknown[value] || possible_roots[value].is_empty() {
         ExactState::Unknown
     } else {
         exact_states[value].unwrap_or(ExactState::Unknown)
@@ -1324,33 +1499,49 @@ fn call_return_root_transfer(
     inst: InstId,
     call: &control_flow::Call,
     possible_roots: &SecondaryMap<ValueId, FxHashSet<ValueId>>,
+    maybe_unknown: &SecondaryMap<ValueId, bool>,
     object_effects: Option<&ObjectEffectSummaryMap>,
-) -> Option<FxHashSet<ValueId>> {
+) -> Option<RootTransfer> {
     let [result] = func.dfg.inst_results(inst) else {
         return None;
     };
-    let summary = object_effects.and_then(|effects| effects.get(call.callee()))?;
+    let Some(summary) = object_effects.and_then(|effects| effects.get(call.callee())) else {
+        return reference_element_ty(func.ctx(), func.dfg.value_ty(*result)).map(|_| {
+            RootTransfer {
+                maybe_unknown: true,
+                ..RootTransfer::default()
+            }
+        });
+    };
     match summary.ret_effect {
         ObjectReturnEffect::SameAsArg { index } | ObjectReturnEffect::DerivedFromArg { index } => {
-            call.args()
-                .get(index)
-                .map(|arg| possible_roots[*arg].clone())
+            call.args().get(index).map(|arg| RootTransfer {
+                roots: possible_roots[*arg].clone(),
+                maybe_unknown: maybe_unknown[*arg],
+            })
         }
         ObjectReturnEffect::FreshObject => {
-            let mut roots = FxHashSet::default();
-            roots.insert(*result);
-            Some(roots)
+            let mut transfer = RootTransfer::default();
+            transfer.roots.insert(*result);
+            Some(transfer)
         }
-        ObjectReturnEffect::None | ObjectReturnEffect::Unknown => None,
+        ObjectReturnEffect::None | ObjectReturnEffect::Unknown => {
+            reference_element_ty(func.ctx(), func.dfg.value_ty(*result)).map(|_| RootTransfer {
+                maybe_unknown: true,
+                ..RootTransfer::default()
+            })
+        }
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn derive_call_exact_state(
     func: &Function,
     inst: InstId,
     call: &control_flow::Call,
     exact_states: &SecondaryMap<ValueId, Option<ExactState>>,
     possible_roots: &SecondaryMap<ValueId, FxHashSet<ValueId>>,
+    maybe_unknown: &SecondaryMap<ValueId, bool>,
     layout_cache: &mut shape::AggregateLayoutCache,
     object_effects: Option<&ObjectEffectSummaryMap>,
 ) -> ExactState {
@@ -1358,7 +1549,7 @@ fn derive_call_exact_state(
         return ExactState::Blocked;
     };
     let Some(summary) = object_effects.and_then(|effects| effects.get(call.callee())) else {
-        return exact_state_or_unknown(exact_states, result, possible_roots);
+        return exact_state_or_unknown(exact_states, possible_roots, maybe_unknown, result);
     };
 
     match summary.ret_effect {
@@ -1366,7 +1557,7 @@ fn derive_call_exact_state(
             let Some(&arg) = call.args().get(index) else {
                 return ExactState::Blocked;
             };
-            let Some(projection) = exact_projection_of(exact_states, arg) else {
+            let Some(projection) = exact_projection_of(exact_states, maybe_unknown, arg) else {
                 return pending_or_blocked(exact_states, arg);
             };
             if projection_value_ty_matches(
@@ -1383,14 +1574,14 @@ fn derive_call_exact_state(
             let Some(&arg) = call.args().get(index) else {
                 return ExactState::Blocked;
             };
-            exact_state_or_unknown(exact_states, arg, possible_roots)
+            exact_state_or_unknown(exact_states, possible_roots, maybe_unknown, arg)
         }
         ObjectReturnEffect::FreshObject => {
             fresh_call_root_projection(func, result, inst, object_effects, layout_cache)
                 .map_or(ExactState::Blocked, ExactState::Exact)
         }
         ObjectReturnEffect::None | ObjectReturnEffect::Unknown => {
-            exact_state_or_unknown(exact_states, result, possible_roots)
+            exact_state_or_unknown(exact_states, possible_roots, maybe_unknown, result)
         }
     }
 }
@@ -1432,6 +1623,7 @@ fn derive_call_possible_projections(
     call: &control_flow::Call,
     possible_projections: &SecondaryMap<ValueId, Vec<Projection>>,
     possible_roots: &SecondaryMap<ValueId, FxHashSet<ValueId>>,
+    maybe_unknown: &SecondaryMap<ValueId, bool>,
     root_value: ValueId,
     layout_cache: &mut shape::AggregateLayoutCache,
     object_effects: Option<&ObjectEffectSummaryMap>,
@@ -1450,6 +1642,7 @@ fn derive_call_possible_projections(
                 result,
                 &possible_projections[arg],
                 possible_roots,
+                maybe_unknown,
                 root_value,
             )
         }
@@ -1482,8 +1675,12 @@ fn filter_projection_candidates(
     result: ValueId,
     projections: &[Projection],
     possible_roots: &SecondaryMap<ValueId, FxHashSet<ValueId>>,
+    maybe_unknown: &SecondaryMap<ValueId, bool>,
     root_value: ValueId,
 ) -> Vec<Projection> {
+    if maybe_unknown[result] {
+        return Vec::new();
+    }
     let result_ty = func.dfg.value_ty(result);
     let mut filtered = Vec::new();
     for &projection in projections {
@@ -1500,9 +1697,10 @@ fn filter_projection_candidates(
 
 fn singleton_root(
     possible_roots: &SecondaryMap<ValueId, FxHashSet<ValueId>>,
+    maybe_unknown: &SecondaryMap<ValueId, bool>,
     value: ValueId,
 ) -> Option<ValueId> {
-    (possible_roots[value].len() == 1).then(|| {
+    (!maybe_unknown[value] && possible_roots[value].len() == 1).then(|| {
         *possible_roots[value]
             .iter()
             .next()
@@ -1991,6 +2189,62 @@ block0:
                 provenance.provenance(*loaded),
                 RootProvenance::SameRoot(*overwritten_root)
             );
+        });
+    }
+
+    #[test]
+    fn phi_with_unknown_branch_stays_unknown() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+declare external %mystery() -> objref<[i256; 8]>;
+
+func private %f(v0.i1) -> objref<[i256; 8]> {
+block0:
+    v1.objref<[i256; 8]> = obj.alloc [i256; 8];
+    br v0 block1 block2;
+
+block1:
+    jump block3;
+
+block2:
+    v2.objref<[i256; 8]> = call %mystery;
+    jump block3;
+
+block3:
+    v3.objref<[i256; 8]> = phi (v1 block1) (v2 block2);
+    return v3;
+}
+"#,
+        );
+
+        let func_ref = lookup_func(&module, "f");
+        let object_effects = compute_object_effect_summaries(&module);
+        module.func_store.view(func_ref, |func| {
+            let mut layout_cache = shape::AggregateLayoutCache::default();
+            let root_slices = collect_root_slices(func, None, &mut layout_cache);
+            let provenance = collect_root_provenance(
+                func,
+                func.ctx(),
+                &root_slices,
+                &mut layout_cache,
+                Some(&object_effects),
+            );
+
+            let phi_result = func
+                .layout
+                .iter_block()
+                .flat_map(|block| func.layout.iter_inst(block))
+                .find_map(|inst| {
+                    downcast::<&control_flow::Phi>(func.inst_set(), func.dfg.inst(inst))
+                        .and_then(|_| func.dfg.inst_result(inst))
+                })
+                .expect("phi result should exist");
+
+            assert_eq!(provenance.provenance(phi_result), RootProvenance::Unknown);
+            assert_eq!(provenance.exact_projection(phi_result), None);
+            assert!(provenance.possible_projections(phi_result).is_empty());
         });
     }
 }
