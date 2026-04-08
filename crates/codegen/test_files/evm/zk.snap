@@ -36,10 +36,10 @@ evm:
   deploy: success reason=Return gas_used=521750 gas_refunded=0 logs=0 output=create len=2167 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
   case bench_lean_typical_root: calldata_len=1124 success reason=Return gas_used=30029 gas_refunded=0 logs=0 output=call len=32 tx_gas=28616 runtime_gas=1413
   case bench_lean_typical_verify: calldata_len=1156 success reason=Return gas_used=30612 gas_refunded=0 logs=0 output=call len=32 tx_gas=29128 runtime_gas=1484
-  case bench_lean_typical_update: calldata_len=1188 success reason=Return gas_used=31565 gas_refunded=0 logs=0 output=call len=32 tx_gas=29640 runtime_gas=1925
+  case bench_lean_typical_update: calldata_len=1188 success reason=Return gas_used=31551 gas_refunded=0 logs=0 output=call len=32 tx_gas=29640 runtime_gas=1911
   case bench_lean_32_root: calldata_len=1124 success reason=Return gas_used=44024 gas_refunded=0 logs=0 output=call len=32 tx_gas=38216 runtime_gas=5808
   case bench_lean_32_verify: calldata_len=1156 success reason=Return gas_used=44607 gas_refunded=0 logs=0 output=call len=32 tx_gas=38728 runtime_gas=5879
-  case bench_lean_32_update: calldata_len=1188 success reason=Return gas_used=47070 gas_refunded=0 logs=0 output=call len=32 tx_gas=39240 runtime_gas=7830
+  case bench_lean_32_update: calldata_len=1188 success reason=Return gas_used=47006 gas_refunded=0 logs=0 output=call len=32 tx_gas=39240 runtime_gas=7766
   case bench_smt_typical_root: calldata_len=1124 success reason=Return gas_used=36795 gas_refunded=0 logs=0 output=call len=32 tx_gas=27932 runtime_gas=8863
   case bench_smt_typical_verify: calldata_len=1156 success reason=Return gas_used=37378 gas_refunded=0 logs=0 output=call len=32 tx_gas=28444 runtime_gas=8934
   case bench_smt_typical_update: calldata_len=1188 success reason=Return gas_used=40198 gas_refunded=0 logs=0 output=call len=32 tx_gas=28956 runtime_gas=11242
@@ -349,10 +349,10 @@ evm:
       br [v11] -> [block4, block5]
   block4 P=[] T=[v7, v8, v9, v10, v5, v4, v0]
     inherited from block3: [v7, v8, v9, v10, v5, v4, v0, <RET>]
-    // v12.i256 = mul 32.i256 v10;
+    // v12.i256 = shl 5.i256 v10;
     - stack=[v7, v8, v9, v10, v5, v4, v0, <RET>]
-      pre: [DUP4, PUSH(32)]
-      mul [32, v10] -> v12
+      pre: [DUP4, PUSH(5)]
+      shl [5, v10] -> v12
     // v13.i256 = add v12 v5;
     - stack=[v12, v7, v8, v9, v10, v5, v4, v0, <RET>], last_use=[v12]
       pre: [DUP6]
@@ -1531,9 +1531,9 @@ leanimt_update_root_from_calldata:
     PUSH1 block5
     JUMPI
   block4:
-    DUP4  // v81.i256 = mul 32.i256 v14;
-    PUSH1 0x20 (32)
-    MUL
+    DUP4  // v81.i256 = shl 5.i256 v14;
+    PUSH1 0x5 (5)
+    SHL
     DUP6  // v24.i256 = add v81 v5;
     ADD
     CALLDATALOAD  // v25.i256 = evm_calldata_load v24;

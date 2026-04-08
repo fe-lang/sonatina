@@ -9,8 +9,8 @@ func public %entry() {
     block0:
         v0.i256 = evm_calldata_load 0.i32;
         v1.i256 = and v0 1.i256;
-        v2.i1 = eq v1 0.i256;
-        br v2 block1 block6;
+        v14.i1 = is_zero v1;
+        br v14 block1 block6;
 
     block1:
         (v3.i256, v4.i1) = uaddo v0 1.i256;

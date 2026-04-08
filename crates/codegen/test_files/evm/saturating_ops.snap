@@ -6,24 +6,24 @@ input_file: test_files/evm/saturating_ops.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=1
 
 object: Contract
-  section runtime: 763 bytes
-  total: 763 bytes
+  section runtime: 758 bytes
+  total: 758 bytes
 
 functions:
-  entry: ir_blocks=43 ir_insts=93 vcode_ops=398 fixups=39 imm_bytes=75
+  entry: ir_blocks=43 ir_insts=93 vcode_ops=393 fixups=39 imm_bytes=75
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case uaddsat_u8: calldata_len=96 success reason=Return gas_used=21564 gas_refunded=0 logs=0 output=call len=32 tx_gas=21408 runtime_gas=156
-  case usubsat_u8: calldata_len=96 success reason=Return gas_used=21593 gas_refunded=0 logs=0 output=call len=32 tx_gas=21420 runtime_gas=173
-  case umulsat_u128: calldata_len=96 success reason=Return gas_used=21799 gas_refunded=0 logs=0 output=call len=32 tx_gas=21600 runtime_gas=199
-  case saddsat_i8: calldata_len=96 success reason=Return gas_used=21668 gas_refunded=0 logs=0 output=call len=32 tx_gas=21420 runtime_gas=248
-  case ssubsat_i8: calldata_len=96 success reason=Return gas_used=21690 gas_refunded=0 logs=0 output=call len=32 tx_gas=21420 runtime_gas=270
-  case smulsat_i128: calldata_len=96 success reason=Return gas_used=21896 gas_refunded=0 logs=0 output=call len=32 tx_gas=21600 runtime_gas=296
-  case evm_ssubsat_i8_signext_i256: calldata_len=96 success reason=Return gas_used=21717 gas_refunded=0 logs=0 output=call len=32 tx_gas=21420 runtime_gas=297
-  case evm_uaddsat_i8_truncates_i256_inputs: calldata_len=96 success reason=Return gas_used=21691 gas_refunded=0 logs=0 output=call len=32 tx_gas=21408 runtime_gas=283
-  case evm_usubsat_i8_truncates_i256_inputs: calldata_len=96 success reason=Return gas_used=21729 gas_refunded=0 logs=0 output=call len=32 tx_gas=21420 runtime_gas=309
-  case evm_umulsat_i8_truncates_i256_inputs: calldata_len=96 success reason=Return gas_used=21743 gas_refunded=0 logs=0 output=call len=32 tx_gas=21420 runtime_gas=323
+  case uaddsat_u8: calldata_len=96 success reason=Return gas_used=21562 gas_refunded=0 logs=0 output=call len=32 tx_gas=21408 runtime_gas=154
+  case usubsat_u8: calldata_len=96 success reason=Return gas_used=21589 gas_refunded=0 logs=0 output=call len=32 tx_gas=21420 runtime_gas=169
+  case umulsat_u128: calldata_len=96 success reason=Return gas_used=21797 gas_refunded=0 logs=0 output=call len=32 tx_gas=21600 runtime_gas=197
+  case saddsat_i8: calldata_len=96 success reason=Return gas_used=21666 gas_refunded=0 logs=0 output=call len=32 tx_gas=21420 runtime_gas=246
+  case ssubsat_i8: calldata_len=96 success reason=Return gas_used=21688 gas_refunded=0 logs=0 output=call len=32 tx_gas=21420 runtime_gas=268
+  case smulsat_i128: calldata_len=96 success reason=Return gas_used=21894 gas_refunded=0 logs=0 output=call len=32 tx_gas=21600 runtime_gas=294
+  case evm_ssubsat_i8_signext_i256: calldata_len=96 success reason=Return gas_used=21715 gas_refunded=0 logs=0 output=call len=32 tx_gas=21420 runtime_gas=295
+  case evm_uaddsat_i8_truncates_i256_inputs: calldata_len=96 success reason=Return gas_used=21687 gas_refunded=0 logs=0 output=call len=32 tx_gas=21408 runtime_gas=279
+  case evm_usubsat_i8_truncates_i256_inputs: calldata_len=96 success reason=Return gas_used=21725 gas_refunded=0 logs=0 output=call len=32 tx_gas=21420 runtime_gas=305
+  case evm_umulsat_i8_truncates_i256_inputs: calldata_len=96 success reason=Return gas_used=21739 gas_refunded=0 logs=0 output=call len=32 tx_gas=21420 runtime_gas=319
 
 
 --------------- DEBUG ---------------
@@ -37,10 +37,9 @@ entry:
     CALLDATALOAD
     PUSH1 0x40 (64)  // v2.i256 = evm_calldata_load 64.i256;
     CALLDATALOAD
-    PUSH0  // v3.i1 = eq v0 0.i256;
-    DUP4
-    EQ
-    PUSH1 block10  // br v3 block10 block1;
+    DUP3  // v66.i1 = is_zero v0;
+    ISZERO
+    PUSH1 block10  // br v66 block10 block1;
     JUMPI
   block1:
     PUSH1 0x1 (1)  // v4.i1 = eq v0 1.i256;
@@ -114,9 +113,8 @@ entry:
     POP
     PUSH1 0xff (255)
     JUMPDEST
-    PUSH0  // v46.i1 = eq v45 0.i256;
-    EQ
-    PUSH1 block16  // br v46 block62 block63;
+    ISZERO  // v70.i1 = is_zero v45;
+    PUSH1 block16  // br v70 block62 block63;
     JUMPI
     PUSH1 block17
     JUMP
@@ -139,11 +137,10 @@ entry:
     POP
     PUSH0
     JUMPDEST
-    SWAP1  // v44.i1 = eq v43 0.i256;
+    SWAP1  // v69.i1 = is_zero v43;
     POP
-    PUSH0
-    EQ
-    PUSH1 block16  // br v44 block60 block61;
+    ISZERO
+    PUSH1 block16  // br v69 block60 block61;
     JUMPI
     PUSH1 block17
     JUMP
@@ -166,11 +163,10 @@ entry:
     POP
     PUSH1 0xff (255)
     JUMPDEST
-    SWAP1  // v42.i1 = eq v41 0.i256;
+    SWAP1  // v68.i1 = is_zero v41;
     POP
-    PUSH0
-    EQ
-    PUSH1 block16  // br v42 block58 block59;
+    ISZERO
+    PUSH1 block16  // br v68 block58 block59;
     JUMPI
     PUSH1 block17
     JUMP
@@ -212,13 +208,13 @@ entry:
     JUMP
   block15:
     JUMPDEST
-    SWAP1  // v93.i256 = and v1 340282366920938463463374607431768211455.i256;
+    SWAP1  // v98.i256 = and v1 340282366920938463463374607431768211455.i256;
     PUSH16 0xffffffffffffffffffffffffffffffff (340282366920938463463374607431768211455)
     AND
-    SWAP1  // v95.i256 = and v2 340282366920938463463374607431768211455.i256;
+    SWAP1  // v100.i256 = and v2 340282366920938463463374607431768211455.i256;
     PUSH16 0xffffffffffffffffffffffffffffffff (340282366920938463463374607431768211455)
     AND
-    SWAP1  // v96.i256 = evm_smulsat v93 v95 i128;
+    SWAP1  // v101.i256 = evm_smulsat v98 v100 i128;
     PUSH1 0xf (15)
     SIGNEXTEND
     SWAP1
@@ -242,11 +238,11 @@ entry:
     SWAP1
     POP
     JUMPDEST
-    SWAP1  // v97.i256 = and v96 340282366920938463463374607431768211455.i256;
+    SWAP1  // v102.i256 = and v101 340282366920938463463374607431768211455.i256;
     POP
     PUSH16 0xffffffffffffffffffffffffffffffff (340282366920938463463374607431768211455)
     AND
-    PUSH16 0x7fffffffffffffffffffffffffffffff (170141183460469231731687303715884105727)  // v32.i1 = eq v97 170141183460469231731687303715884105727.i256;
+    PUSH16 0x7fffffffffffffffffffffffffffffff (170141183460469231731687303715884105727)  // v32.i1 = eq v102 170141183460469231731687303715884105727.i256;
     EQ
     PUSH1 block16  // br v32 block54 block55;
     JUMPI
@@ -254,13 +250,13 @@ entry:
     JUMP
   block14:
     JUMPDEST
-    SWAP1  // v87.i256 = and v1 255.i256;
+    SWAP1  // v92.i256 = and v1 255.i256;
     PUSH1 0xff (255)
     AND
-    SWAP1  // v89.i256 = and v2 255.i256;
+    SWAP1  // v94.i256 = and v2 255.i256;
     PUSH1 0xff (255)
     AND
-    SWAP1  // v90.i256 = evm_ssubsat v87 v89 i8;
+    SWAP1  // v95.i256 = evm_ssubsat v92 v94 i8;
     PUSH0
     SIGNEXTEND
     SWAP1
@@ -284,11 +280,11 @@ entry:
     SWAP1
     POP
     JUMPDEST
-    SWAP1  // v91.i256 = and v90 255.i256;
+    SWAP1  // v96.i256 = and v95 255.i256;
     POP
     PUSH1 0xff (255)
     AND
-    PUSH1 0x80 (128)  // v28.i1 = eq v91 128.i256;
+    PUSH1 0x80 (128)  // v28.i1 = eq v96 128.i256;
     EQ
     PUSH1 block16  // br v28 block52 block53;
     JUMPI
@@ -296,13 +292,13 @@ entry:
     JUMP
   block13:
     JUMPDEST
-    SWAP1  // v81.i256 = and v1 255.i256;
+    SWAP1  // v86.i256 = and v1 255.i256;
     PUSH1 0xff (255)
     AND
-    SWAP1  // v83.i256 = and v2 255.i256;
+    SWAP1  // v88.i256 = and v2 255.i256;
     PUSH1 0xff (255)
     AND
-    SWAP1  // v84.i256 = evm_saddsat v81 v83 i8;
+    SWAP1  // v89.i256 = evm_saddsat v86 v88 i8;
     PUSH0
     SIGNEXTEND
     SWAP1
@@ -326,11 +322,11 @@ entry:
     SWAP1
     POP
     JUMPDEST
-    SWAP1  // v85.i256 = and v84 255.i256;
+    SWAP1  // v90.i256 = and v89 255.i256;
     POP
     PUSH1 0xff (255)
     AND
-    PUSH1 0x7f (127)  // v24.i1 = eq v85 127.i256;
+    PUSH1 0x7f (127)  // v24.i1 = eq v90 127.i256;
     EQ
     PUSH1 block16  // br v24 block50 block51;
     JUMPI
@@ -338,13 +334,13 @@ entry:
     JUMP
   block12:
     JUMPDEST
-    SWAP1  // v77.i256 = and v1 340282366920938463463374607431768211455.i256;
+    SWAP1  // v82.i256 = and v1 340282366920938463463374607431768211455.i256;
     PUSH16 0xffffffffffffffffffffffffffffffff (340282366920938463463374607431768211455)
     AND
-    SWAP1  // v79.i256 = and v2 340282366920938463463374607431768211455.i256;
+    SWAP1  // v84.i256 = and v2 340282366920938463463374607431768211455.i256;
     PUSH16 0xffffffffffffffffffffffffffffffff (340282366920938463463374607431768211455)
     AND
-    SWAP1  // v19.i256 = evm_umulsat v77 v79 i128;
+    SWAP1  // v19.i256 = evm_umulsat v82 v84 i128;
     PUSH16 0xffffffffffffffffffffffffffffffff (340282366920938463463374607431768211455)
     AND
     SWAP1
@@ -371,13 +367,13 @@ entry:
     JUMP
   block11:
     JUMPDEST
-    SWAP1  // v73.i256 = and v1 255.i256;
+    SWAP1  // v78.i256 = and v1 255.i256;
     PUSH1 0xff (255)
     AND
-    SWAP1  // v75.i256 = and v2 255.i256;
+    SWAP1  // v80.i256 = and v2 255.i256;
     PUSH1 0xff (255)
     AND
-    SWAP1  // v15.i256 = evm_usubsat v73 v75 i8;
+    SWAP1  // v15.i256 = evm_usubsat v78 v80 i8;
     PUSH1 0xff (255)
     AND
     SWAP1
@@ -394,23 +390,22 @@ entry:
     POP
     PUSH0
     JUMPDEST
-    SWAP1  // v16.i1 = eq v15 0.i256;
+    SWAP1  // v67.i1 = is_zero v15;
     POP
-    PUSH0
-    EQ
-    PUSH1 block16  // br v16 block46 block47;
+    ISZERO
+    PUSH1 block16  // br v67 block46 block47;
     JUMPI
     PUSH1 block17
     JUMP
   block10:
     JUMPDEST
-    SWAP1  // v69.i256 = and v1 255.i256;
+    SWAP1  // v74.i256 = and v1 255.i256;
     PUSH1 0xff (255)
     AND
-    SWAP1  // v71.i256 = and v2 255.i256;
+    SWAP1  // v76.i256 = and v2 255.i256;
     PUSH1 0xff (255)
     AND
-    SWAP1  // v11.i256 = evm_uaddsat v69 v71 i8;
+    SWAP1  // v11.i256 = evm_uaddsat v74 v76 i8;
     PUSH1 0xff (255)
     AND
     SWAP1

@@ -39,6 +39,7 @@ use super::{
     load_store::LoadStoreSolver,
     loop_strength_reduce::LoopStrengthReduce,
     multi_result_legalize::legalize_multi_result,
+    scalar_canonicalize::ScalarCanonicalize,
     sccp::SccpSolver,
 };
 
@@ -62,6 +63,8 @@ pub enum Pass {
     AggregateScalarize,
     /// Per-space load/store forwarding and dead-store elimination.
     LoadStore,
+    /// Cheap local scalar canonicalization (zero-compares, neg-arith, pow2 mul, cast chains).
+    ScalarCanonicalize,
     /// Simplify expressions with precise known-bit reasoning.
     KnownBitsSimplify,
     /// Eliminate checked arithmetic and div/mod overflow flags proven unreachable by range analysis.
@@ -95,6 +98,7 @@ impl Pass {
             Pass::ObjectLoadStore => "object_load_store",
             Pass::AggregateScalarize => "aggregate_scalarize",
             Pass::LoadStore => "load_store",
+            Pass::ScalarCanonicalize => "scalar_canonicalize",
             Pass::KnownBitsSimplify => "known_bits_simplify",
             Pass::CheckedArithElim => "checked_arith_elim",
             Pass::Sccp => "sccp",
@@ -163,9 +167,11 @@ const PRIMARY_FUNC_PASSES: &[Pass] = &[
     Pass::LoadStore,
     Pass::CheckedArithElim,
     Pass::Sccp,
+    Pass::ScalarCanonicalize,
     Pass::Gvn,
     Pass::Licm,
     Pass::CfgCleanup,
+    Pass::ScalarCanonicalize,
     Pass::Gvn,
     Pass::KnownBitsSimplify,
     Pass::Sccp,
@@ -182,6 +188,7 @@ const SECONDARY_FUNC_PASSES: &[Pass] = &[
     Pass::LoadStore,
     Pass::CheckedArithElim,
     Pass::Sccp,
+    Pass::ScalarCanonicalize,
     Pass::Gvn,
     Pass::BranchCanonicalize,
     Pass::CfgCleanup,
@@ -210,6 +217,7 @@ fn pass_may_invalidate_func_behavior(pass: Pass) -> bool {
             | Pass::ObjectLoadStore
             | Pass::AggregateScalarize
             | Pass::LoadStore
+            | Pass::ScalarCanonicalize
             | Pass::KnownBitsSimplify
             | Pass::CheckedArithElim
             | Pass::Sccp
@@ -337,11 +345,13 @@ impl Pipeline {
     ///    - `LoadStore`
     ///    - `CheckedArithElim`
     ///    - `Sccp` — constant propagation + dead code elimination (composite)
+    ///    - `ScalarCanonicalize` — local canonical forms for scalar SSA instructions
     ///    - `Gvn` — sparse predicated global value numbering with value-phi resolution
     ///    - `Licm` — loop invariant code motion
     ///    - `CfgCleanup` — clean up after LICM structural changes
+    ///    - `ScalarCanonicalize` — canonicalize new local forms exposed by LICM cleanup
     ///    - `Gvn` — second value-numbering round for LICM-exposed redundancy
-    ///    - `KnownBitsSimplify` — local simplification without egraph saturation
+    ///    - `KnownBitsSimplify` — fact-driven local simplification
     ///    - `Sccp` — second round catches constants exposed by the new local rewrites
     ///    - `BranchCanonicalize`
     ///    - `CfgCleanup` — final cleanup
@@ -349,11 +359,14 @@ impl Pipeline {
     /// 4. Per-function passes (parallel):
     ///    - `CfgCleanup`
     ///    - `AggregateCombine`
+    ///    - `BranchCanonicalize`
     ///    - `AggregateScalarize`
     ///    - `LoadStore`
     ///    - `CheckedArithElim`
     ///    - `Sccp`
+    ///    - `ScalarCanonicalize`
     ///    - `Gvn`
+    ///    - `BranchCanonicalize`
     ///    - `CfgCleanup`
     /// 5. `DeadArgElim` — remove dead private formals and rewrite direct calls
     /// 6. Per-function cleanup:
@@ -616,6 +629,10 @@ fn run_pass(
                 solver.run(func, &mut ctx.cfg);
             }
         }
+        Pass::ScalarCanonicalize => {
+            let _span = trace_span!("sonatina.optim.pipeline.pass.scalar_canonicalize").entered();
+            ScalarCanonicalize::new().run(func);
+        }
         Pass::KnownBitsSimplify => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.known_bits_simplify").entered();
             KnownBitsSimplify::new().run(func);
@@ -865,6 +882,7 @@ mod tests {
             &[
                 Pass::CfgCleanup,
                 Pass::Sccp,
+                Pass::ScalarCanonicalize,
                 Pass::Gvn,
                 Pass::KnownBitsSimplify,
             ],
@@ -1863,6 +1881,7 @@ func private %entry(v0.i1, v1.i32) -> i32 {
             &mut module,
             &[
                 Pass::CfgCleanup,
+                Pass::ScalarCanonicalize,
                 Pass::Gvn,
                 Pass::KnownBitsSimplify,
                 Pass::Sccp,

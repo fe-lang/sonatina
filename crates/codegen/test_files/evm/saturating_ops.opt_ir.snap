@@ -10,8 +10,8 @@ func public %entry() {
         v0.i256 = evm_calldata_load 0.i32;
         v1.i256 = evm_calldata_load 32.i32;
         v2.i256 = evm_calldata_load 64.i32;
-        v3.i1 = eq v0 0.i256;
-        br v3 block10 block1;
+        v66.i1 = is_zero v0;
+        br v66 block10 block1;
 
     block1:
         v4.i1 = eq v0 1.i256;
@@ -60,8 +60,8 @@ func public %entry() {
         v13.i8 = trunc v1 i8;
         v14.i8 = trunc v2 i8;
         v15.i8 = usubsat v13 v14;
-        v16.i1 = eq v15 0.i8;
-        br v16 block16 block17;
+        v67.i1 = is_zero v15;
+        br v67 block16 block17;
 
     block12:
         v17.i128 = trunc v1 i128;
@@ -98,18 +98,18 @@ func public %entry() {
 
     block19:
         v41.i256 = evm_uaddsat v1 v2 i8;
-        v42.i1 = eq v41 0.i256;
-        br v42 block16 block17;
+        v68.i1 = is_zero v41;
+        br v68 block16 block17;
 
     block20:
         v43.i256 = evm_usubsat v1 v2 i8;
-        v44.i1 = eq v43 0.i256;
-        br v44 block16 block17;
+        v69.i1 = is_zero v43;
+        br v69 block16 block17;
 
     block21:
         v45.i256 = evm_umulsat v1 v2 i8;
-        v46.i1 = eq v45 0.i256;
-        br v46 block16 block17;
+        v70.i1 = is_zero v45;
+        br v70 block16 block17;
 
     block16:
         mstore 0.i256 1.i256 i256;

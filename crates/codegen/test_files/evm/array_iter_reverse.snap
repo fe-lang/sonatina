@@ -6,17 +6,17 @@ input_file: test_files/evm/array_iter_reverse.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 235 bytes
-  total: 235 bytes
+  section runtime: 228 bytes
+  total: 228 bytes
 
 functions:
-  test_view_param_local_ref_take_reverse: ir_blocks=7 ir_insts=68 vcode_ops=172 fixups=11 imm_bytes=39
+  test_view_param_local_ref_take_reverse: ir_blocks=7 ir_insts=68 vcode_ops=170 fixups=11 imm_bytes=39
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  assert: ir_blocks=3 ir_insts=6 vcode_ops=11 fixups=1 imm_bytes=0
+  assert: ir_blocks=3 ir_insts=6 vcode_ops=10 fixups=1 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=22144 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=1144
+  case ok: calldata_len=0 success reason=Return gas_used=22078 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=1078
 
 
 --------------- DEBUG ---------------
@@ -112,10 +112,7 @@ test_view_param_local_ref_take_reverse:
     PUSH1 0x4 (4)  // v46.i1 = lt v45 4.i256;
     DUP3
     LT
-    PUSH0  // v48.i1 = eq v72 0.i256;
-    EQ
-    ISZERO  // br v48 block1 block4;
-    PUSH1 block4
+    PUSH1 block4  // br v48 block1 block4;
     JUMPI
   block1:
     SWAP2  // v30.i1 = eq v43 26.i256;
@@ -153,8 +150,7 @@ test_view_param_local_ref_take_reverse:
     PUSH1 0x4 (4)  // v65.i1 = lt v64 4.i256;
     DUP3
     LT
-    PUSH0  // v67.i1 = eq v74 0.i256;
-    EQ
+    ISZERO  // v67.i1 = is_zero v74;
     PUSH1 block6  // br v67 block6 block9;
     JUMPI
   block9:
@@ -207,9 +203,6 @@ test_view_param_local_ref_take_reverse:
 assert:
   block0:
     JUMPDEST
-    ISZERO  // v2.i1 = is_zero v0;
-    PUSH0  // v5.i1 = eq v8 0.i256;
-    EQ
     PUSH1 block2  // br v5 block2 block1;
     JUMPI
   block1:

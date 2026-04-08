@@ -1,6 +1,6 @@
 use sonatina_ir::{
     Function, I256, Immediate, Type, U256, ValueId,
-    inst::{BinaryInstKind, CastInstKind, UnaryInstKind, cast, downcast},
+    inst::{BinaryInstKind, CastInstKind, InstClassKind, UnaryInstKind, cast, downcast},
 };
 
 use crate::analysis::known_bits::{
@@ -33,7 +33,7 @@ pub(crate) enum EvmModOp {
     Mul,
 }
 
-fn integral_bit_width(ty: Type) -> Option<usize> {
+pub(crate) fn integral_bit_width(ty: Type) -> Option<usize> {
     match ty {
         Type::I1 => Some(1),
         Type::I8 => Some(8),
@@ -60,6 +60,22 @@ fn integral_byte_width(ty: Type) -> Option<usize> {
 
 fn imm_to_u256(imm: Immediate) -> U256 {
     imm.as_i256().to_u256() & type_mask(imm.ty())
+}
+
+pub(crate) fn shift_amount_for_pow2_mul(imm: Immediate) -> Option<usize> {
+    let bit_width = integral_bit_width(imm.ty())?;
+    let mut value = imm_to_u256(imm);
+    if value == U256::zero() || value & (value - U256::one()) != U256::zero() {
+        return None;
+    }
+
+    let mut shift = 0;
+    while value > U256::one() {
+        value >>= 1;
+        shift += 1;
+    }
+
+    (shift != 0 && shift < bit_width).then_some(shift)
 }
 
 fn fold_evm_addmod_raw(lhs: U256, rhs: U256, modulus: U256) -> U256 {
@@ -521,6 +537,46 @@ pub(crate) fn simplify_cast(
     }
 
     SimplifyExprResult::NoChange
+}
+
+pub(crate) fn canonicalize_cast_chain(
+    func: &Function,
+    kind: CastInstKind,
+    from: ValueId,
+    ty: Type,
+) -> Option<(CastInstKind, ValueId, Type)> {
+    let (inst, _) = func.dfg.value_inst_result(from)?;
+    let InstClassKind::Cast(inner_kind) = func.dfg.inst(inst).kind() else {
+        return None;
+    };
+    let values = func.dfg.inst(inst).collect_values();
+    let [inner_arg] = values.as_slice() else {
+        return None;
+    };
+    let inner_ty = func.dfg.value_ty(from);
+    let src_ty = func.dfg.value_ty(*inner_arg);
+    let src_bits = integral_bit_width(src_ty)?;
+    let inner_bits = integral_bit_width(inner_ty)?;
+    let dst_bits = integral_bit_width(ty)?;
+
+    match (kind, inner_kind) {
+        (CastInstKind::Zext, CastInstKind::Zext) | (CastInstKind::Sext, CastInstKind::Sext)
+            if src_bits < dst_bits && inner_bits < dst_bits =>
+        {
+            Some((kind, *inner_arg, ty))
+        }
+        (CastInstKind::Trunc, CastInstKind::Trunc)
+            if src_bits > dst_bits && inner_bits > dst_bits =>
+        {
+            Some((kind, *inner_arg, ty))
+        }
+        (CastInstKind::Trunc, CastInstKind::Zext | CastInstKind::Sext)
+            if src_bits < dst_bits && dst_bits < inner_bits =>
+        {
+            Some((inner_kind, *inner_arg, ty))
+        }
+        _ => None,
+    }
 }
 
 fn simplify_and_copy_with_facts(

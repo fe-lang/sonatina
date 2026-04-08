@@ -12,8 +12,8 @@ func public %entry() {
         v0.i256 = evm_calldata_load 0.i32;
         v1.i256 = evm_calldata_load 32.i32;
         v17.i256 = add v0 v1;
-        v19.i1 = eq v0 0.i256;
-        br v19 block5 block4;
+        v34.i1 = is_zero v0;
+        br v34 block5 block4;
 
     block4:
         jump block5;

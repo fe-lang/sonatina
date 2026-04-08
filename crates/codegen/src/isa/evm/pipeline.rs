@@ -251,6 +251,7 @@ impl EvmPipelineContext<'_> {
                 Pass::CfgCleanup,
                 Pass::BranchCanonicalize,
                 Pass::LoadStore,
+                Pass::ScalarCanonicalize,
                 Pass::KnownBitsSimplify,
                 Pass::Sccp,
             ],
@@ -323,6 +324,7 @@ impl EvmPipelineContext<'_> {
             &[
                 Pass::CfgCleanup,
                 Pass::BranchCanonicalize,
+                Pass::ScalarCanonicalize,
                 Pass::Gvn,
                 Pass::Licm,
                 Pass::CfgCleanup,

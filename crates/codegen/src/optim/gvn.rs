@@ -29,8 +29,9 @@ use crate::{
         aggregate::{ObjectMemoryAnalysis, ObjectReadGvnKey},
         simplify_expr::{
             EvmModOp, ExprFactProvider, SimplifyExprResult, fold_evm_clz,
-            simplify_binary_with_facts, simplify_cast, simplify_evm_byte_known,
-            simplify_evm_exp_known, simplify_evm_modop_known, simplify_unary_with_same_inner,
+            shift_amount_for_pow2_mul, simplify_binary_with_facts, simplify_cast,
+            simplify_evm_byte_known, simplify_evm_exp_known, simplify_evm_modop_known,
+            simplify_unary_with_same_inner,
         },
     },
 };
@@ -1386,16 +1387,11 @@ impl GvnSolver {
 
                 if kind == BinaryInstKind::Mul {
                     if let Some(imm) = func.dfg.value_imm(lhs)
-                        && (imm.is_two()
-                            || imm == Immediate::from_i256(sonatina_ir::I256::from(4), imm.ty()))
+                        && let Some(shift) = shift_amount_for_pow2_mul(imm)
                     {
                         let shift = self.make_imm(
                             &mut func.dfg,
-                            if imm.is_two() {
-                                Immediate::one(imm.ty())
-                            } else {
-                                Immediate::from_i256(sonatina_ir::I256::from(2), imm.ty())
-                            },
+                            Immediate::from_i256(sonatina_ir::I256::from(shift), imm.ty()),
                         );
                         if let Some(key) =
                             make_gvn_binary_key(func, BinaryInstKind::Shl, shift, rhs, result_ty)
@@ -1404,16 +1400,11 @@ impl GvnSolver {
                         }
                     }
                     if let Some(imm) = func.dfg.value_imm(rhs)
-                        && (imm.is_two()
-                            || imm == Immediate::from_i256(sonatina_ir::I256::from(4), imm.ty()))
+                        && let Some(shift) = shift_amount_for_pow2_mul(imm)
                     {
                         let shift = self.make_imm(
                             &mut func.dfg,
-                            if imm.is_two() {
-                                Immediate::one(imm.ty())
-                            } else {
-                                Immediate::from_i256(sonatina_ir::I256::from(2), imm.ty())
-                            },
+                            Immediate::from_i256(sonatina_ir::I256::from(shift), imm.ty()),
                         );
                         if let Some(key) =
                             make_gvn_binary_key(func, BinaryInstKind::Shl, shift, lhs, result_ty)
@@ -2845,6 +2836,11 @@ impl<'a> RedundantCodeRemover<'a> {
                                 changed = true;
                             }
                         }
+                    }
+
+                    if changed && self.inst_results_are_dead(func, insn) {
+                        inserter.remove_inst(func);
+                        continue;
                     }
 
                     if changed && self.inst_results_are_dead(func, insn) {

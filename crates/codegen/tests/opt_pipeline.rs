@@ -6,7 +6,7 @@ use sonatina_codegen::{
     loop_analysis::LoopTree,
     optim::{
         Pass, Step, egraph::run_egraph_pass, gvn::GvnSolver, licm::LicmSolver, pipeline::Pipeline,
-        sccp::SccpSolver,
+        scalar_canonicalize::ScalarCanonicalize, sccp::SccpSolver,
     },
 };
 use sonatina_ir::{
@@ -1053,6 +1053,37 @@ func public %entry(v0.i256) -> i256 {
 }
 
 #[test]
+fn scalar_canonicalize_rewrites_eq_zero_to_is_zero() {
+    let (module, func_ref) = parse_test_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+func public %entry(v0.i256) -> i256 {
+    block0:
+        v1.i1 = eq v0 0.i256;
+        v2.i256 = zext v1 i256;
+        return v2;
+}
+"#,
+    );
+    module.func_store.modify(func_ref, |func| {
+        assert!(ScalarCanonicalize::new().run(func));
+    });
+    let dumped = module.func_store.view(func_ref, |func| {
+        FuncWriter::new(func_ref, func).dump_string()
+    });
+    assert!(
+        dumped.contains(" = is_zero "),
+        "expected eq-zero to rewrite to is_zero:\n{dumped}"
+    );
+    assert!(
+        !dumped.contains(" = eq "),
+        "expected eq-zero rewrite to remove eq:\n{dumped}"
+    );
+    assert_fast_verified(&module);
+}
+
+#[test]
 fn gvn_cses_mul_by_two_with_shl_one() {
     let (module, func_ref) = parse_test_module(
         r#"
@@ -1079,6 +1110,36 @@ func public %entry(v0.i256) -> i256 {
         dumped.matches(" = mul ").count() + dumped.matches(" = shl ").count(),
         1,
         "expected mul-by-two and shl-one to CSE:\n{dumped}"
+    );
+    assert_fast_verified(&module);
+}
+
+#[test]
+fn scalar_canonicalize_rewrites_mul_by_pow2_to_shl() {
+    let (module, func_ref) = parse_test_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+func public %entry(v0.i256) -> i256 {
+    block0:
+        v1.i256 = mul v0 8.i256;
+        return v1;
+}
+"#,
+    );
+    module.func_store.modify(func_ref, |func| {
+        assert!(ScalarCanonicalize::new().run(func));
+    });
+    let dumped = module.func_store.view(func_ref, |func| {
+        FuncWriter::new(func_ref, func).dump_string()
+    });
+    assert!(
+        dumped.contains(" = shl 3.i256 "),
+        "expected mul-by-pow2 to rewrite to shl:\n{dumped}"
+    );
+    assert!(
+        !dumped.contains(" = mul "),
+        "expected mul-by-pow2 rewrite to remove mul:\n{dumped}"
     );
     assert_fast_verified(&module);
 }
@@ -1111,6 +1172,37 @@ func public %entry(v0.i256, v1.i256) -> i256 {
         dumped.matches(" = add ").count() + dumped.matches(" = sub ").count(),
         2,
         "expected add-neg and sub to CSE, leaving only one producer plus the final add:\n{dumped}"
+    );
+    assert_fast_verified(&module);
+}
+
+#[test]
+fn scalar_canonicalize_rewrites_add_neg_to_sub() {
+    let (module, func_ref) = parse_test_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+func public %entry(v0.i256, v1.i256) -> i256 {
+    block0:
+        v2.i256 = neg v1;
+        v3.i256 = add v0 v2;
+        return v3;
+}
+"#,
+    );
+    module.func_store.modify(func_ref, |func| {
+        assert!(ScalarCanonicalize::new().run(func));
+    });
+    let dumped = module.func_store.view(func_ref, |func| {
+        FuncWriter::new(func_ref, func).dump_string()
+    });
+    assert!(
+        dumped.contains(" = sub v0 v1;"),
+        "expected add-neg to rewrite to sub:\n{dumped}"
+    );
+    assert!(
+        !dumped.contains(" = add v0 v2;"),
+        "expected add-neg rewrite to remove add-neg form:\n{dumped}"
     );
     assert_fast_verified(&module);
 }

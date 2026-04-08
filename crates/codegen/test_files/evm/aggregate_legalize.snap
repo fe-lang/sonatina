@@ -6,15 +6,15 @@ input_file: test_files/evm/aggregate_legalize.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=1
 
 object: Contract
-  section runtime: 32 bytes
-  total: 32 bytes
+  section runtime: 29 bytes
+  total: 29 bytes
 
 functions:
-  entry: ir_blocks=4 ir_insts=11 vcode_ops=28 fixups=2 imm_bytes=2
+  entry: ir_blocks=4 ir_insts=11 vcode_ops=27 fixups=2 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=64 success reason=Return gas_used=21347 gas_refunded=0 logs=0 output=call len=32 tx_gas=21280 runtime_gas=67
+  case ok: calldata_len=64 success reason=Return gas_used=21339 gas_refunded=0 logs=0 output=call len=32 tx_gas=21280 runtime_gas=59
 
 
 --------------- DEBUG ---------------
@@ -29,11 +29,8 @@ entry:
     DUP1  // v17.i256 = add v0 v1;
     DUP3
     ADD
-    PUSH0  // v19.i1 = eq v0 0.i256;
-    DUP4
-    EQ
-    ISZERO  // br v19 block7 block8;
-    PUSH1 block8
+    DUP3  // v34.i1 = is_zero v0;
+    PUSH1 block8  // br v34 block7 block8;
     JUMPI
   block7:
     SWAP1  // jump block5;

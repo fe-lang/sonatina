@@ -102,8 +102,8 @@ func private %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_s
         v15.*i8 = evm_malloc v14;
         v16.i256 = ptr_to_int v15 i256;
         evm_return_data_copy v16 0.i256 v14;
-        v35.i1 = eq v13 0.i256;
-        br v35 block1 block2;
+        v36.i1 = is_zero v13;
+        br v36 block1 block2;
 
     block1:
         evm_revert v16 v14;
@@ -140,8 +140,8 @@ func private %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_s
         v15.*i8 = evm_malloc v14;
         v16.i256 = ptr_to_int v15 i256;
         evm_return_data_copy v16 0.i256 v14;
-        v35.i1 = eq v13 0.i256;
-        br v35 block1 block2;
+        v36.i1 = is_zero v13;
+        br v36 block1 block2;
 
     block1:
         evm_revert v16 v14;
@@ -175,8 +175,8 @@ func private %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_s
         v15.*i8 = evm_malloc v14;
         v16.i256 = ptr_to_int v15 i256;
         evm_return_data_copy v16 0.i256 v14;
-        v33.i1 = eq v13 0.i256;
-        br v33 block1 block2;
+        v34.i1 = is_zero v13;
+        br v34 block1 block2;
 
     block1:
         evm_revert v16 v14;
@@ -253,8 +253,8 @@ func private %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_
     block0:
         v3.objref<i256> = obj.proj v0 0.i256;
         v4.i256 = obj.load v3;
-        v17.i1 = eq v4 0.i256;
-        br v17 block1 block2;
+        v18.i1 = is_zero v4;
+        br v18 block1 block2;
 
     block1:
         v7.*i8 = evm_malloc v1;
@@ -408,7 +408,7 @@ func public %entry() {
 
     block6:
         v21.i256 = evm_create2 0.i256 v18 v15 0.i256;
-        v22.i1 = eq v21 0.i256;
+        v22.i1 = is_zero v21;
         br v22 block3 block1;
 
     block1:
@@ -420,7 +420,7 @@ func public %entry() {
         v12.i1 = eq v11 1.i256;
         call %assert v12;
         v13.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__MakeNone_h1a70bbc7ba2867ef__33da4420f6afdeb1 v21 100000.i256 0.i256;
-        v14.i1 = eq v13 0.i256;
+        v14.i1 = is_zero v13;
         call %assert v14;
         mstore 0.i256 1.i256 i256;
         evm_return 0.i256 32.i256;

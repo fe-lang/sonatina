@@ -114,8 +114,8 @@ func private %__Bench_runtime() {
 
     block2:
         v8.i256 = evm_call_value;
-        v10.i1 = eq v8 0.i256;
-        br v10 block4 block3;
+        v83.i1 = is_zero v8;
+        br v83 block4 block3;
 
     block3:
         evm_revert 0.i256 0.i256;
@@ -125,12 +125,12 @@ func private %__Bench_runtime() {
         jump block26;
 
     block26:
-        v69.i256 = phi (0.i256 block4) (v84 block27);
+        v69.i256 = phi (0.i256 block4) (v90 block27);
         v70.i1 = lt v69 v13;
         br v70 block27 block24;
 
     block27:
-        v84.i256 = add v69 1.i256;
+        v90.i256 = add v69 1.i256;
         jump block26;
 
     block24:
@@ -139,8 +139,8 @@ func private %__Bench_runtime() {
 
     block5:
         v15.i256 = evm_call_value;
-        v16.i1 = eq v15 0.i256;
-        br v16 block7 block6;
+        v84.i1 = is_zero v15;
+        br v84 block7 block6;
 
     block6:
         evm_revert 0.i256 0.i256;
@@ -172,8 +172,8 @@ func private %__Bench_runtime() {
 
     block8:
         v21.i256 = evm_call_value;
-        v22.i1 = eq v21 0.i256;
-        br v22 block10 block9;
+        v85.i1 = is_zero v21;
+        br v85 block10 block9;
 
     block9:
         evm_revert 0.i256 0.i256;
@@ -185,14 +185,14 @@ func private %__Bench_runtime() {
 
     block40:
         v75.i256 = phi (v74 block10) (v80 block41);
-        v77.i256 = phi (0.i256 block10) (v85 block41);
+        v77.i256 = phi (0.i256 block10) (v91 block41);
         v78.i1 = lt v77 v73;
         br v78 block41 block38;
 
     block41:
         v79.i256 = xor v74 v77;
         v80.i256 = xor v75 v79;
-        v85.i256 = add v77 1.i256;
+        v91.i256 = add v77 1.i256;
         jump block40;
 
     block38:
@@ -201,8 +201,8 @@ func private %__Bench_runtime() {
 
     block11:
         v27.i256 = evm_call_value;
-        v28.i1 = eq v27 0.i256;
-        br v28 block13 block12;
+        v86.i1 = is_zero v27;
+        br v86 block13 block12;
 
     block12:
         evm_revert 0.i256 0.i256;
@@ -215,8 +215,8 @@ func private %__Bench_runtime() {
 
     block14:
         v33.i256 = evm_call_value;
-        v34.i1 = eq v33 0.i256;
-        br v34 block16 block15;
+        v87.i1 = is_zero v33;
+        br v87 block16 block15;
 
     block15:
         evm_revert 0.i256 0.i256;
@@ -229,8 +229,8 @@ func private %__Bench_runtime() {
 
     block17:
         v39.i256 = evm_call_value;
-        v40.i1 = eq v39 0.i256;
-        br v40 block19 block18;
+        v88.i1 = is_zero v39;
+        br v88 block19 block18;
 
     block18:
         evm_revert 0.i256 0.i256;
