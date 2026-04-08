@@ -81,7 +81,7 @@ impl ObjectReturnOutParam {
 
             for func in module.funcs() {
                 module.func_store.modify(func, |function| {
-                    if self.rewrite_calls(function, &plans) {
+                    if self.rewrite_calls(function, func, &plans) {
                         function.rebuild_users();
                     }
                 });
@@ -416,7 +416,12 @@ impl ObjectReturnOutParam {
         }
     }
 
-    fn rewrite_calls(&self, function: &mut Function, plans: &FxHashMap<FuncRef, FuncPlan>) -> bool {
+    fn rewrite_calls(
+        &self,
+        function: &mut Function,
+        caller_func: FuncRef,
+        plans: &FxHashMap<FuncRef, FuncPlan>,
+    ) -> bool {
         let mut changed = false;
         let blocks: Vec<_> = function.layout.iter_block().collect();
         for block in blocks {
@@ -434,7 +439,7 @@ impl ObjectReturnOutParam {
                 let Some(plan) = plans.get(call.callee()) else {
                     continue;
                 };
-                self.rewrite_call(function, inst, &call, plan);
+                self.rewrite_call(function, inst, &call, plan, caller_func, plans);
                 changed = true;
             }
         }
@@ -447,20 +452,45 @@ impl ObjectReturnOutParam {
         inst: InstId,
         call: &control_flow::Call,
         plan: &FuncPlan,
+        caller_func: FuncRef,
+        plans: &FxHashMap<FuncRef, FuncPlan>,
     ) {
+        // If the calling function was itself planned for out-param rewriting,
+        // and the call result type matches the caller's out-param type, forward
+        // the caller's out-param to the callee instead of allocating a fresh local.
+        // This handles the case where a call result flows through a phi to the
+        // caller's return (e.g. `and_then` calling `Step::call`).
+        let caller_out_param = if plans.contains_key(&caller_func)
+            && !function.arg_values.is_empty()
+            && function.dfg.value_ty(function.arg_values[0]) == plan.out_ty
+        {
+            Some(function.arg_values[0])
+        } else {
+            None
+        };
+
+        let out_arg = if let Some(caller_out) = caller_out_param {
+            caller_out
+        } else {
+            let loc = function.layout.prev_inst_of(inst).map_or(
+                CursorLocation::BlockTop(function.layout.inst_block(inst)),
+                CursorLocation::At,
+            );
+            let mut cursor = InstInserter::at_location(loc);
+            let out_alloc = cursor.insert_inst_data(
+                function,
+                data::ObjAlloc::new_unchecked(function.inst_set(), plan.out_elem_ty),
+            );
+            let out_arg = cursor.make_result(function, out_alloc, plan.out_ty);
+            cursor.attach_result(function, out_alloc, out_arg);
+            out_arg
+        };
+
         let loc = function.layout.prev_inst_of(inst).map_or(
             CursorLocation::BlockTop(function.layout.inst_block(inst)),
             CursorLocation::At,
         );
         let mut cursor = InstInserter::at_location(loc);
-        let out_alloc = cursor.insert_inst_data(
-            function,
-            data::ObjAlloc::new_unchecked(function.inst_set(), plan.out_elem_ty),
-        );
-        let out_arg = cursor.make_result(function, out_alloc, plan.out_ty);
-        cursor.attach_result(function, out_alloc, out_arg);
-        cursor.set_location(CursorLocation::At(out_alloc));
-
         let new_args = std::iter::once(out_arg)
             .chain(call.args().iter().copied())
             .collect();
