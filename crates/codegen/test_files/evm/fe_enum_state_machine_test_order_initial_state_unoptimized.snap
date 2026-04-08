@@ -6,8 +6,8 @@ input_file: test_files/evm/fe_enum_state_machine_test_order_initial_state_unopti
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 1121 bytes
-  total: 1121 bytes
+  section runtime: 1124 bytes
+  total: 1124 bytes
 
 object: Order
   section init: 492 bytes
@@ -37,11 +37,11 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=9 abs_words_end=0
   evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Confirm_h67936812d51d0893__aed46e41f390dba4: ir_blocks=5 ir_insts=27 vcode_ops=85 fixups=9 imm_bytes=11
     mem: scratch_words=0 stable_words=5 stable_mode=StaticAbs(base=0xa0) entry_abs_words=0 abs_words_end=5
-  entry: ir_blocks=5 ir_insts=28 vcode_ops=102 fixups=16 imm_bytes=12
+  entry: ir_blocks=5 ir_insts=26 vcode_ops=104 fixups=16 imm_bytes=13
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=174703 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=153703
+  case ok: calldata_len=0 success reason=Return gas_used=174708 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=153708
 
 
 --------------- DEBUG ---------------
@@ -739,9 +739,9 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Confirm_h
 // func public %entry()
 entry:
   block0:
-    PUSH0 0x0 (0)  // v12.i256 = sym_size &__Order_init;
-    PUSH0 0x0 (0)  // v13.i256 = sym_addr &__Order_init;
-    DUP2  // v14.*i256 = evm_malloc v12;
+    PUSH0 0x0 (0)  // v11.i256 = sym_size &__Order_init;
+    PUSH0 0x0 (0)  // v12.i256 = sym_addr &__Order_init;
+    DUP2  // v13.*i256 = evm_malloc v11;
     POP
     PUSH1 0x40 (64)
     MLOAD
@@ -753,41 +753,41 @@ entry:
     POP
     PUSH2 0x1c0 (448)
     JUMPDEST
-    DUP3  // evm_code_copy v15 v13 v12;
+    DUP3  // evm_code_copy v14 v12 v11;
     SWAP1
     SWAP2
     DUP3
     CODECOPY
-    DUP2  // v25.i256 = add v15 v12;
+    DUP2  // v24.i256 = add v14 v11;
     DUP2
     ADD
-    DUP2  // v26.i1 = lt v25 v15;
+    DUP2  // v25.i1 = lt v24 v14;
     SWAP1
     LT
-    PUSH1 section_unit0  // br v26 block5 block6;
+    PUSH1 section_unit0  // br v25 block5 block6;
     JUMPI
   block6:
     JUMPDEST
-    PUSH0  // v18.i256 = evm_create2 0.i256 v15 v12 0.i256;
+    PUSH0  // v17.i256 = evm_create2 0.i256 v14 v11 0.i256;
     SWAP2
     SWAP1
     PUSH0
     CREATE2
-    PUSH0  // v19.i1 = eq v18 0.i256;
+    PUSH0  // v18.i1 = eq v17 0.i256;
     DUP2
     EQ
-    PUSH1 block3  // br v19 block3 block1;
+    PUSH1 block3  // br v18 block3 block1;
     JUMPI
   block1:
-    DUP1  // v11.i1 = is_zero v18;
-    ISZERO
-    ISZERO  // v6.i1 = is_zero v11;
-    PUSH1 `pc + (4)`  // call %assert v6;
+    PUSH1 0x1 (1)  // call %assert 1.i1;
+    PUSH0
+    SIGNEXTEND
+    PUSH1 `pc + (4)`
     SWAP1
     PUSH1 FuncRef(11)
     JUMP
     JUMPDEST
-    DUP1  // v7.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Which_hfc83a4c81bdb00b2__3f276d0d504e07da v18 100000.i256 0.i256;
+    DUP1  // v7.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Which_hfc83a4c81bdb00b2__3f276d0d504e07da v17 100000.i256 0.i256;
     PUSH0
     PUSH3 0x186a0 (100000)
     PUSH1 `pc + (4)`
@@ -795,20 +795,22 @@ entry:
     PUSH1 FuncRef(12)
     JUMP
     JUMPDEST
-    ISZERO  // v8.i1 = is_zero v7;
+    PUSH0  // v8.i1 = eq v7 0.i256;
+    EQ
     PUSH1 `pc + (4)`  // call %assert v8;
     SWAP1
     PUSH1 FuncRef(11)
     JUMP
     JUMPDEST
-    PUSH0  // v9.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Confirm_h67936812d51d0893__aed46e41f390dba4 v18 100000.i256 0.i256;
+    PUSH0  // v9.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Confirm_h67936812d51d0893__aed46e41f390dba4 v17 100000.i256 0.i256;
     PUSH3 0x186a0 (100000)
     PUSH1 `pc + (4)`
     SWAP3
     PUSH1 FuncRef(14)
     JUMP
     JUMPDEST
-    ISZERO  // v10.i1 = is_zero v9;
+    PUSH0  // v10.i1 = eq v9 0.i256;
+    EQ
     PUSH1 `pc + (4)`  // call %assert v10;
     SWAP1
     PUSH1 FuncRef(11)
@@ -822,8 +824,8 @@ entry:
     RETURN
   block3:
     JUMPDEST
-    RETURNDATASIZE  // v20.i256 = evm_return_data_size;
-    DUP1  // v21.*i256 = evm_malloc v20;
+    RETURNDATASIZE  // v19.i256 = evm_return_data_size;
+    DUP1  // v20.*i256 = evm_malloc v19;
     POP
     PUSH1 0x40 (64)
     MLOAD
@@ -835,11 +837,11 @@ entry:
     POP
     PUSH1 0xa0 (160)
     JUMPDEST
-    DUP2  // evm_return_data_copy v22 0.i256 v20;
+    DUP2  // evm_return_data_copy v21 0.i256 v19;
     PUSH0
     DUP3
     RETURNDATACOPY
-    REVERT  // evm_revert v22 v20;
+    REVERT  // evm_revert v21 v19;
 
 // synthetic section unit
 __evm_shared_tail_0:

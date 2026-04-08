@@ -41,7 +41,7 @@ func private %run() -> i256 {
         v21.i256 = mload v20 i256;
         v22.objref<i256> = obj.index v14 0.i256;
         obj.store v22 v21;
-        v30.i256 = add 1.i256 v11;
+        v30.i256 = add v11 1.i256;
         jump block1;
 
     block3:
@@ -53,7 +53,7 @@ func private %run() -> i256 {
 func private %__repro_runtime_entry() {
     block0:
         v1.i256 = call %run;
-        v3.i1 = eq 2.i256 v1;
+        v3.i1 = eq v1 2.i256;
         br v3 block1 block4;
 
     block4:

@@ -1,5 +1,5 @@
 use sonatina_ir::{
-    Function, Immediate, Type, ValueId,
+    Function, I256, Immediate, Type, U256, ValueId,
     inst::{BinaryInstKind, CastInstKind, UnaryInstKind, cast, downcast},
 };
 
@@ -25,6 +25,210 @@ pub(crate) trait ExprFactProvider {
     fn known_bits(&self, func: &Function, v: ValueId) -> KnownBits;
     fn same_non_undef(&self, lhs: ValueId, rhs: ValueId) -> bool;
     fn may_be_undef(&self, v: ValueId) -> bool;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EvmModOp {
+    Add,
+    Mul,
+}
+
+fn integral_bit_width(ty: Type) -> Option<usize> {
+    match ty {
+        Type::I1 => Some(1),
+        Type::I8 => Some(8),
+        Type::I16 => Some(16),
+        Type::I32 => Some(32),
+        Type::I64 => Some(64),
+        Type::I128 => Some(128),
+        Type::I256 => Some(256),
+        Type::EnumTag(_) | Type::Compound(_) | Type::Unit => None,
+    }
+}
+
+fn integral_byte_width(ty: Type) -> Option<usize> {
+    match ty {
+        Type::I1 | Type::I8 => Some(1),
+        Type::I16 => Some(2),
+        Type::I32 => Some(4),
+        Type::I64 => Some(8),
+        Type::I128 => Some(16),
+        Type::I256 => Some(32),
+        Type::EnumTag(_) | Type::Compound(_) | Type::Unit => None,
+    }
+}
+
+fn imm_to_u256(imm: Immediate) -> U256 {
+    imm.as_i256().to_u256() & type_mask(imm.ty())
+}
+
+fn fold_evm_addmod_raw(lhs: U256, rhs: U256, modulus: U256) -> U256 {
+    if modulus.is_zero() {
+        return U256::zero();
+    }
+
+    let lhs = lhs % modulus;
+    let rhs = rhs % modulus;
+    let modulus_minus_rhs = modulus - rhs;
+
+    if lhs >= modulus_minus_rhs {
+        lhs - modulus_minus_rhs
+    } else {
+        lhs + rhs
+    }
+}
+
+fn fold_evm_mulmod_raw(lhs: U256, rhs: U256, modulus: U256) -> U256 {
+    if modulus.is_zero() {
+        return U256::zero();
+    }
+
+    let mut result = U256::zero();
+    let mut addend = lhs % modulus;
+    let mut multiplier = rhs % modulus;
+
+    while multiplier > U256::zero() {
+        if multiplier & U256::one() == U256::one() {
+            result = fold_evm_addmod_raw(result, addend, modulus);
+        }
+        addend = fold_evm_addmod_raw(addend, addend, modulus);
+        multiplier >>= 1;
+    }
+
+    result
+}
+
+pub(crate) fn fold_evm_modop(
+    lhs: Immediate,
+    rhs: Immediate,
+    modulus: Immediate,
+    op: EvmModOp,
+) -> Option<Immediate> {
+    let ty = lhs.ty();
+    if ty != rhs.ty() || ty != modulus.ty() || !ty.is_integral() {
+        return None;
+    }
+
+    let result = match op {
+        EvmModOp::Add => {
+            fold_evm_addmod_raw(imm_to_u256(lhs), imm_to_u256(rhs), imm_to_u256(modulus))
+        }
+        EvmModOp::Mul => {
+            fold_evm_mulmod_raw(imm_to_u256(lhs), imm_to_u256(rhs), imm_to_u256(modulus))
+        }
+    };
+    Some(Immediate::from_i256(I256::from(result), ty))
+}
+
+pub(crate) fn simplify_evm_modop_known(
+    lhs: Option<Immediate>,
+    rhs: Option<Immediate>,
+    modulus: Option<Immediate>,
+    ty: Type,
+    op: EvmModOp,
+) -> Option<Immediate> {
+    if !ty.is_integral() {
+        return None;
+    }
+
+    if modulus.is_some_and(Immediate::is_zero) {
+        return Some(Immediate::zero(ty));
+    }
+
+    fold_evm_modop(lhs?, rhs?, modulus?, op)
+}
+
+pub(crate) fn fold_evm_exp(base: Immediate, exponent: Immediate) -> Option<Immediate> {
+    let ty = base.ty();
+    if ty != exponent.ty() || !ty.is_integral() {
+        return None;
+    }
+
+    let mask = type_mask(ty);
+    let mut result = U256::one() & mask;
+    let mut base = imm_to_u256(base) & mask;
+    let mut exponent = imm_to_u256(exponent);
+
+    while exponent > U256::zero() {
+        if exponent & U256::one() == U256::one() {
+            result = result.overflowing_mul(base).0 & mask;
+        }
+
+        exponent >>= 1;
+        base = base.overflowing_mul(base).0 & mask;
+    }
+
+    Some(Immediate::from_i256(I256::from(result), ty))
+}
+
+pub(crate) fn simplify_evm_exp_known(
+    base: Option<Immediate>,
+    exponent: Option<Immediate>,
+    ty: Type,
+) -> Option<Immediate> {
+    if !ty.is_integral() {
+        return None;
+    }
+
+    if exponent.is_some_and(Immediate::is_zero) || base.is_some_and(Immediate::is_one) {
+        return Some(Immediate::one(ty));
+    }
+
+    if base.is_some_and(Immediate::is_zero) && exponent.is_some_and(|imm| !imm.is_zero()) {
+        return Some(Immediate::zero(ty));
+    }
+
+    fold_evm_exp(base?, exponent?)
+}
+
+pub(crate) fn fold_evm_byte(pos: Immediate, value: Immediate) -> Option<Immediate> {
+    let ty = value.ty();
+    if ty != pos.ty() || !ty.is_integral() {
+        return None;
+    }
+
+    let pos = imm_to_u256(pos);
+    if pos >= U256::from(32u8) {
+        return Some(Immediate::zero(ty));
+    }
+
+    let value_bytes = integral_byte_width(ty)?;
+    let pos = pos.as_usize();
+    if pos < 32 - value_bytes {
+        return Some(Immediate::zero(ty));
+    }
+
+    let idx = pos - (32 - value_bytes);
+    let shift_bytes = value_bytes - 1 - idx;
+    let result = (imm_to_u256(value) >> (shift_bytes * 8)) & U256::from(0xffu16);
+    Some(Immediate::from_i256(I256::from(result), ty))
+}
+
+pub(crate) fn simplify_evm_byte_known(
+    pos: Option<Immediate>,
+    value: Option<Immediate>,
+    ty: Type,
+) -> Option<Immediate> {
+    if !ty.is_integral() {
+        return None;
+    }
+
+    if value.is_some_and(Immediate::is_zero) {
+        return Some(Immediate::zero(ty));
+    }
+
+    fold_evm_byte(pos?, value?)
+}
+
+pub(crate) fn fold_evm_clz(word: Immediate) -> Option<Immediate> {
+    let ty = word.ty();
+    let bit_width = integral_bit_width(ty)?;
+    let value = imm_to_u256(word);
+    let clz = (0..bit_width)
+        .rev()
+        .find(|&bit| ((value >> bit) & U256::one()) == U256::one())
+        .map_or(bit_width, |bit| bit_width - 1 - bit);
+    Some(Immediate::from_i256(I256::from(clz), ty))
 }
 
 pub(crate) fn simplify_unary_with_same_inner(

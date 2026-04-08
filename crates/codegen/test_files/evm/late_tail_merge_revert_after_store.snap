@@ -6,15 +6,15 @@ input_file: test_files/evm/late_tail_merge_revert_after_store.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=1
 
 object: Contract
-  section runtime: 40 bytes
-  total: 40 bytes
+  section runtime: 43 bytes
+  total: 43 bytes
 
 functions:
-  entry: ir_blocks=3 ir_insts=13 vcode_ops=54 fixups=3 imm_bytes=23
+  entry: ir_blocks=3 ir_insts=13 vcode_ops=55 fixups=3 imm_bytes=23
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case default: calldata_len=0 revert gas_used=21082 output_len=128 tx_gas=21000 runtime_gas=82
+  case default: calldata_len=0 revert gas_used=21090 output_len=128 tx_gas=21000 runtime_gas=90
 
 
 --------------- DEBUG ---------------
@@ -24,7 +24,10 @@ entry:
   block0:
     PUSH0  // v0.i256 = evm_calldata_load 0.i256;
     CALLDATALOAD
-    PUSH1 block2  // br v1 block1 block2;
+    PUSH0  // v1.i1 = eq v0 0.i256;
+    EQ
+    ISZERO  // br v1 block1 block2;
+    PUSH1 block2
     JUMPI
   block1:
     PUSH1 0xaa (170)  // mstore 0.i256 170.i256 i256;

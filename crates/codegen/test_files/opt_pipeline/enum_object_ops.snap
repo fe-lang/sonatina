@@ -11,7 +11,7 @@ type @OptionI256 = enum {
 
 func public %entry(v0.i256) -> i256 {
     block0:
-        v5.i256 = add 7.i256 v0;
+        v5.i256 = add v0 7.i256;
         return v5;
 }
 

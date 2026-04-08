@@ -16,7 +16,7 @@ func public %entry() {
         obj.store v6 10.i256;
         v9.objref<i256> = obj.proj v5 1.i8;
         obj.store v9 20.i256;
-        v13.i1 = is_zero v0;
+        v13.i1 = eq v0 0.i256;
         br v13 block5 block4;
 
     block4:

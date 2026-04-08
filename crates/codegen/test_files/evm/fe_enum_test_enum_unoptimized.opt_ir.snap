@@ -388,41 +388,39 @@ func private %soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_
 
 func public %entry() {
     block0:
-        v16.i256 = sym_size &__EnumContract_init;
-        v17.i256 = sym_addr &__EnumContract_init;
-        v18.*i8 = evm_malloc v16;
-        v19.i256 = ptr_to_int v18 i256;
-        evm_code_copy v19 v17 v16;
-        (v20.i256, v21.i1) = uaddo v19 v16;
-        br v21 block5 block6;
+        v15.i256 = sym_size &__EnumContract_init;
+        v16.i256 = sym_addr &__EnumContract_init;
+        v17.*i8 = evm_malloc v15;
+        v18.i256 = ptr_to_int v17 i256;
+        evm_code_copy v18 v16 v15;
+        (v19.i256, v20.i1) = uaddo v18 v15;
+        br v20 block5 block6;
 
     block3:
-        v24.i256 = evm_return_data_size;
-        v25.*i8 = evm_malloc v24;
-        v26.i256 = ptr_to_int v25 i256;
-        evm_return_data_copy v26 0.i256 v24;
-        evm_revert v26 v24;
+        v23.i256 = evm_return_data_size;
+        v24.*i8 = evm_malloc v23;
+        v25.i256 = ptr_to_int v24 i256;
+        evm_return_data_copy v25 0.i256 v23;
+        evm_revert v25 v23;
 
     block5:
         evm_revert 0.i256 0.i256;
 
     block6:
-        v22.i256 = evm_create2 0.i256 v19 v16 0.i256;
-        v23.i1 = eq v22 0.i256;
-        br v23 block3 block1;
+        v21.i256 = evm_create2 0.i256 v18 v15 0.i256;
+        v22.i1 = eq v21 0.i256;
+        br v22 block3 block1;
 
     block1:
-        v15.i1 = is_zero v22;
-        v8.i1 = is_zero v15;
-        call %assert v8;
-        v9.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__MakeSome_hb4c3b28d7dc84c95__10de9d95694004b7 v22 100000.i256 0.i256 42.i256;
-        v10.i1 = eq 42.i256 v9;
+        call %assert 1.i1;
+        v9.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__MakeSome_hb4c3b28d7dc84c95__10de9d95694004b7 v21 100000.i256 0.i256 42.i256;
+        v10.i1 = eq v9 42.i256;
         call %assert v10;
-        v11.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__IsSomeCheck_h24a3280701a16da1__395956188d9a6813 v22 100000.i256 0.i256 99.i256;
-        v12.i1 = eq 1.i256 v11;
+        v11.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__IsSomeCheck_h24a3280701a16da1__395956188d9a6813 v21 100000.i256 0.i256 99.i256;
+        v12.i1 = eq v11 1.i256;
         call %assert v12;
-        v13.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__MakeNone_h1a70bbc7ba2867ef__33da4420f6afdeb1 v22 100000.i256 0.i256;
-        v14.i1 = is_zero v13;
+        v13.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__MakeNone_h1a70bbc7ba2867ef__33da4420f6afdeb1 v21 100000.i256 0.i256;
+        v14.i1 = eq v13 0.i256;
         call %assert v14;
         mstore 0.i256 1.i256 i256;
         evm_return 0.i256 32.i256;

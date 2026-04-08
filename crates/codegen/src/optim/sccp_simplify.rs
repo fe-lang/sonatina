@@ -3,7 +3,7 @@ use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{
     BlockId, Function, Immediate, InstId, Type, Value, ValueId,
     inst::{
-        BinaryInstKind, CastInstKind, InstClassKind, UnaryInstKind, cast, data, downcast,
+        BinaryInstKind, CastInstKind, InstClassKind, UnaryInstKind, cast, data, downcast, evm,
         inst_set::InstSetBase,
     },
 };
@@ -12,7 +12,8 @@ use super::{
     const_eval::{BlockEdge, ConstPathAnalysis, dynamic_index_values, eval_const_path_immediate},
     sccp::LatticeCell,
     simplify_expr::{
-        ExprFactProvider, SimplifyExprResult, simplify_binary_with_facts, simplify_cast,
+        EvmModOp, ExprFactProvider, SimplifyExprResult, fold_evm_clz, simplify_binary_with_facts,
+        simplify_cast, simplify_evm_byte_known, simplify_evm_exp_known, simplify_evm_modop_known,
         simplify_unary_with_same_inner,
     },
 };
@@ -358,6 +359,63 @@ fn simplify_div_by_one(
     from_expr_simplify_result(simplify_binary_with_facts(func, kind, lhs, rhs, facts))
 }
 
+fn simplify_evm_clz(
+    func: &Function,
+    lattice: &SecondaryMap<ValueId, LatticeCell>,
+    arg: ValueId,
+) -> SimplifyAction {
+    known_imm(func, lattice, arg)
+        .and_then(fold_evm_clz)
+        .map_or(SimplifyAction::NoChange, SimplifyAction::Const)
+}
+
+fn simplify_evm_exp(
+    func: &Function,
+    lattice: &SecondaryMap<ValueId, LatticeCell>,
+    lhs: ValueId,
+    rhs: ValueId,
+) -> SimplifyAction {
+    simplify_evm_exp_known(
+        known_imm(func, lattice, lhs),
+        known_imm(func, lattice, rhs),
+        func.dfg.value_ty(lhs),
+    )
+    .map_or(SimplifyAction::NoChange, SimplifyAction::Const)
+}
+
+fn simplify_evm_byte(
+    func: &Function,
+    lattice: &SecondaryMap<ValueId, LatticeCell>,
+    lhs: ValueId,
+    rhs: ValueId,
+) -> SimplifyAction {
+    simplify_evm_byte_known(
+        known_imm(func, lattice, lhs),
+        known_imm(func, lattice, rhs),
+        func.dfg.value_ty(rhs),
+    )
+    .map_or(SimplifyAction::NoChange, SimplifyAction::Const)
+}
+
+fn simplify_evm_modop(
+    func: &Function,
+    lattice: &SecondaryMap<ValueId, LatticeCell>,
+    lhs: ValueId,
+    rhs: ValueId,
+    modulus: ValueId,
+    op: EvmModOp,
+    result_ty: Type,
+) -> SimplifyAction {
+    simplify_evm_modop_known(
+        known_imm(func, lattice, lhs),
+        known_imm(func, lattice, rhs),
+        known_imm(func, lattice, modulus),
+        result_ty,
+        op,
+    )
+    .map_or(SimplifyAction::NoChange, SimplifyAction::Const)
+}
+
 fn simplify_rem_by_one(
     func: &Function,
     kind: BinaryInstKind,
@@ -626,6 +684,9 @@ pub(super) fn simplify_inst(
             if matches!(kind, UnaryInstKind::Snego) {
                 return simplify_snego(func, lattice, *arg, results_len);
             }
+            if matches!(kind, UnaryInstKind::EvmClz) {
+                return wrap_action(simplify_evm_clz(func, lattice, *arg));
+            }
 
             wrap_action(from_expr_simplify_result(simplify_unary_with_same_inner(
                 kind,
@@ -758,9 +819,9 @@ pub(super) fn simplify_inst(
                 | BinaryInstKind::EvmUsubsat
                 | BinaryInstKind::EvmSsubsat
                 | BinaryInstKind::EvmUmulsat
-                | BinaryInstKind::EvmSmulsat
-                | BinaryInstKind::EvmExp
-                | BinaryInstKind::EvmByte => SimplifyAction::NoChange,
+                | BinaryInstKind::EvmSmulsat => SimplifyAction::NoChange,
+                BinaryInstKind::EvmExp => simplify_evm_exp(func, lattice, *lhs, *rhs),
+                BinaryInstKind::EvmByte => simplify_evm_byte(func, lattice, *lhs, *rhs),
             })
         }
         InstClassKind::Cast(kind) => {
@@ -796,6 +857,30 @@ pub(super) fn simplify_inst(
             }
             if let Some(i) = downcast::<&data::Gep>(is, inst) {
                 return wrap_action(simplify_gep_all_zero(func, lattice, i.values().as_slice()));
+            }
+            if let Some(i) = downcast::<&evm::EvmAddMod>(is, inst) {
+                return wrap_action(simplify_evm_modop(
+                    func,
+                    lattice,
+                    *i.lhs(),
+                    *i.rhs(),
+                    *i.modulus(),
+                    EvmModOp::Add,
+                    func.dfg
+                        .value_ty(func.dfg.inst_result(inst_id).expect("evm_add_mod result")),
+                ));
+            }
+            if let Some(i) = downcast::<&evm::EvmMulMod>(is, inst) {
+                return wrap_action(simplify_evm_modop(
+                    func,
+                    lattice,
+                    *i.lhs(),
+                    *i.rhs(),
+                    *i.modulus(),
+                    EvmModOp::Mul,
+                    func.dfg
+                        .value_ty(func.dfg.inst_result(inst_id).expect("evm_mul_mod result")),
+                ));
             }
 
             no_change_results(results_len)

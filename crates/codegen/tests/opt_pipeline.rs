@@ -165,6 +165,55 @@ func public %entry() -> i256 {
 }
 
 #[test]
+fn sccp_folds_one_sided_evm_peepholes() {
+    let (module, func_ref) = parse_test_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+func public %entry(v0.i256, v1.i256) -> i256 {
+    block0:
+        v2.i256 = evm_add_mod v0 v1 0.i256;
+        v3.i256 = evm_mul_mod v0 v1 0.i256;
+        v4.i256 = evm_exp v0 0.i256;
+        v5.i256 = evm_exp 1.i256 v1;
+        v6.i256 = evm_byte v0 0.i256;
+        v7.i256 = evm_clz 0.i256;
+        v8.i256 = add v2 v3;
+        v9.i256 = add v8 v4;
+        v10.i256 = add v9 v5;
+        v11.i256 = add v10 v6;
+        v12.i256 = add v11 v7;
+        return v12;
+}
+"#,
+    );
+    module.func_store.modify(func_ref, |func| {
+        let mut cfg = ControlFlowGraph::new();
+        SccpSolver::new().run(func, &mut cfg);
+    });
+    let dumped = module.func_store.view(func_ref, |func| {
+        FuncWriter::new(func_ref, func).dump_string()
+    });
+    assert!(
+        dumped.contains("return 258.i256;"),
+        "unexpected SCCP output:\n{dumped}"
+    );
+    for needle in [
+        "evm_add_mod",
+        "evm_mul_mod",
+        "evm_exp",
+        "evm_byte",
+        "evm_clz",
+    ] {
+        assert!(
+            !dumped.contains(needle),
+            "expected {needle} to fold away:\n{dumped}"
+        );
+    }
+    assert_fast_verified(&module);
+}
+
+#[test]
 fn sccp_folds_snego_zero_identity() {
     let (module, func_ref) = parse_test_module(
         r#"
@@ -916,6 +965,152 @@ func public %entry(v0.i1) -> i8 {
     assert!(
         dumped.contains("umulsat"),
         "maybe-undef umulsat should not fold to zero:\n{dumped}"
+    );
+    assert_fast_verified(&module);
+}
+
+#[test]
+fn gvn_folds_one_sided_evm_peepholes() {
+    let (module, func_ref) = parse_test_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+func public %entry(v0.i256, v1.i256) -> i256 {
+    block0:
+        v2.i256 = evm_add_mod v0 v1 0.i256;
+        v3.i256 = evm_mul_mod v0 v1 0.i256;
+        v4.i256 = evm_exp v0 0.i256;
+        v5.i256 = evm_exp 1.i256 v1;
+        v6.i256 = evm_byte v0 0.i256;
+        v7.i256 = evm_clz 0.i256;
+        v8.i256 = add v2 v3;
+        v9.i256 = add v8 v4;
+        v10.i256 = add v9 v5;
+        v11.i256 = add v10 v6;
+        v12.i256 = add v11 v7;
+        return v12;
+}
+"#,
+    );
+    module.func_store.modify(func_ref, |func| {
+        let mut cfg = ControlFlowGraph::new();
+        let mut domtree = DomTree::new();
+        GvnSolver::new().run(func, &mut cfg, &mut domtree);
+    });
+    let dumped = module.func_store.view(func_ref, |func| {
+        FuncWriter::new(func_ref, func).dump_string()
+    });
+    assert!(
+        dumped.contains("return 258.i256;"),
+        "unexpected GVN output:\n{dumped}"
+    );
+    for needle in [
+        "evm_add_mod",
+        "evm_mul_mod",
+        "evm_exp",
+        "evm_byte",
+        "evm_clz",
+    ] {
+        assert!(
+            !dumped.contains(needle),
+            "expected {needle} to fold away:\n{dumped}"
+        );
+    }
+    assert_fast_verified(&module);
+}
+
+#[test]
+fn gvn_cses_eq_zero_with_is_zero() {
+    let (module, func_ref) = parse_test_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+func public %entry(v0.i256) -> i256 {
+    block0:
+        v1.i1 = eq v0 0.i256;
+        v2.i1 = is_zero v0;
+        v3.i256 = zext v1 i256;
+        v4.i256 = zext v2 i256;
+        v5.i256 = add v3 v4;
+        return v5;
+}
+"#,
+    );
+    module.func_store.modify(func_ref, |func| {
+        let mut cfg = ControlFlowGraph::new();
+        let mut domtree = DomTree::new();
+        GvnSolver::new().run(func, &mut cfg, &mut domtree);
+    });
+    let dumped = module.func_store.view(func_ref, |func| {
+        FuncWriter::new(func_ref, func).dump_string()
+    });
+    assert_eq!(
+        dumped.matches(" = eq ").count() + dumped.matches(" = is_zero ").count(),
+        1,
+        "expected eq-zero and is_zero to CSE:\n{dumped}"
+    );
+    assert_fast_verified(&module);
+}
+
+#[test]
+fn gvn_cses_mul_by_two_with_shl_one() {
+    let (module, func_ref) = parse_test_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+func public %entry(v0.i256) -> i256 {
+    block0:
+        v1.i256 = mul v0 2.i256;
+        v2.i256 = shl 1.i256 v0;
+        v3.i256 = add v1 v2;
+        return v3;
+}
+"#,
+    );
+    module.func_store.modify(func_ref, |func| {
+        let mut cfg = ControlFlowGraph::new();
+        let mut domtree = DomTree::new();
+        GvnSolver::new().run(func, &mut cfg, &mut domtree);
+    });
+    let dumped = module.func_store.view(func_ref, |func| {
+        FuncWriter::new(func_ref, func).dump_string()
+    });
+    assert_eq!(
+        dumped.matches(" = mul ").count() + dumped.matches(" = shl ").count(),
+        1,
+        "expected mul-by-two and shl-one to CSE:\n{dumped}"
+    );
+    assert_fast_verified(&module);
+}
+
+#[test]
+fn gvn_cses_add_neg_with_sub() {
+    let (module, func_ref) = parse_test_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+func public %entry(v0.i256, v1.i256) -> i256 {
+    block0:
+        v2.i256 = neg v1;
+        v3.i256 = add v0 v2;
+        v4.i256 = sub v0 v1;
+        v5.i256 = add v3 v4;
+        return v5;
+}
+"#,
+    );
+    module.func_store.modify(func_ref, |func| {
+        let mut cfg = ControlFlowGraph::new();
+        let mut domtree = DomTree::new();
+        GvnSolver::new().run(func, &mut cfg, &mut domtree);
+    });
+    let dumped = module.func_store.view(func_ref, |func| {
+        FuncWriter::new(func_ref, func).dump_string()
+    });
+    assert_eq!(
+        dumped.matches(" = add ").count() + dumped.matches(" = sub ").count(),
+        2,
+        "expected add-neg and sub to CSE, leaving only one producer plus the final add:\n{dumped}"
     );
     assert_fast_verified(&module);
 }

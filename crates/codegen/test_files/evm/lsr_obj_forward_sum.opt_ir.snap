@@ -28,7 +28,7 @@ func public %entry() {
         v17.objref<i256> = obj.index v0 v13;
         v18.i256 = obj.load v17;
         v19.i256 = add v15 v18;
-        v20.i256 = add 1.i256 v13;
+        v20.i256 = add v13 1.i256;
         jump block3;
 
     block1:

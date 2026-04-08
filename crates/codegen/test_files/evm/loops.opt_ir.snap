@@ -50,21 +50,21 @@ func private %__Bench_recv_0_4(v0.i256) -> i256 {
 
 func private %__Bench_recv_0_5(v0.objref<@__fe_obj_XorLoopUnchecked_1>) -> i256 {
     block0:
-        v33.objref<i256> = obj.proj v0 1.i64;
-        v34.i256 = obj.load v33;
-        v31.objref<i256> = obj.proj v0 0.i64;
-        v32.i256 = obj.load v31;
+        v32.objref<i256> = obj.proj v0 1.i64;
+        v33.i256 = obj.load v32;
+        v30.objref<i256> = obj.proj v0 0.i64;
+        v31.i256 = obj.load v30;
         jump block3;
 
     block3:
-        v9.i256 = phi (v34 block0) (v14 block4);
+        v9.i256 = phi (v33 block0) (v14 block4);
         v11.i256 = phi (0.i256 block0) (v15 block4);
-        v12.i1 = lt v11 v32;
+        v12.i1 = lt v11 v31;
         br v12 block4 block1;
 
     block4:
-        v24.i256 = xor v34 v11;
-        v14.i256 = xor v9 v24;
+        v27.i256 = xor v11 v33;
+        v14.i256 = xor v9 v27;
         v15.i256 = add 1.i256 v11;
         jump block3;
 
@@ -277,7 +277,7 @@ func private %u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482
         evm_revert 0.i256 0.i256;
 
     block4:
-        v21.i256 = add v5 v10;
+        v21.i256 = add v10 v5;
         v22.i256 = evm_calldata_load v21;
         obj.store v9 v12;
         return v22;

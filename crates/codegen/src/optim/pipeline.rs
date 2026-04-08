@@ -74,13 +74,13 @@ pub enum Pass {
     Licm,
     /// Loop strength reduction for affine memory addresses.
     LoopStrengthReduce,
-    /// E-graph based algebraic simplification and memory forwarding.
+    /// Legacy e-graph based algebraic simplification pass.
     Egraph,
     /// Complete Global Value Numbering (legacy sparse predicated solver).
     Gvn,
     /// Recompute `dfg.users` from layout-inserted instructions only.
     ///
-    /// Use after passes (like Egraph) that can leave stale user entries
+    /// Use after passes (like legacy Egraph) that can leave stale user entries
     /// due to `change_to_alias` + layout removal interactions.
     RebuildUsers,
 }
@@ -166,8 +166,8 @@ const PRIMARY_FUNC_PASSES: &[Pass] = &[
     Pass::Gvn,
     Pass::Licm,
     Pass::CfgCleanup,
-    Pass::Egraph,
-    Pass::RebuildUsers,
+    Pass::Gvn,
+    Pass::KnownBitsSimplify,
     Pass::Sccp,
     Pass::BranchCanonicalize,
     Pass::CfgCleanup,
@@ -329,14 +329,21 @@ impl Pipeline {
     /// Current sequence:
     /// 1. `Inline` — module-level inlining (trivial + constrained full inliner)
     /// 2. Per-function passes (parallel):
-    ///    - `CfgCleanup` — normalize CFG before analysis-heavy passes
+    ///    - `CfgCleanup`
+    ///    - `AggregateCombine`
+    ///    - `BranchCanonicalize`
+    ///    - `ObjectLoadStore`
+    ///    - `AggregateScalarize`
+    ///    - `LoadStore`
+    ///    - `CheckedArithElim`
     ///    - `Sccp` — constant propagation + dead code elimination (composite)
     ///    - `Gvn` — sparse predicated global value numbering with value-phi resolution
     ///    - `Licm` — loop invariant code motion
     ///    - `CfgCleanup` — clean up after LICM structural changes
-    ///    - `Egraph` — algebraic simplification, memory forwarding
-    ///    - `RebuildUsers` — fix stale `dfg.users` after egraph
-    ///    - `Sccp` — second round catches constants exposed by egraph
+    ///    - `Gvn` — second value-numbering round for LICM-exposed redundancy
+    ///    - `KnownBitsSimplify` — local simplification without egraph saturation
+    ///    - `Sccp` — second round catches constants exposed by the new local rewrites
+    ///    - `BranchCanonicalize`
     ///    - `CfgCleanup` — final cleanup
     /// 3. `Inline` — repeat inlining with freshly simplified callees/callers
     /// 4. Per-function passes (parallel):
@@ -853,7 +860,15 @@ mod tests {
     #[test]
     fn func_passes_single_function_module() {
         let mut module = build_test_module();
-        run_test_func_passes(&mut module, &[Pass::CfgCleanup, Pass::Sccp, Pass::Egraph]);
+        run_test_func_passes(
+            &mut module,
+            &[
+                Pass::CfgCleanup,
+                Pass::Sccp,
+                Pass::Gvn,
+                Pass::KnownBitsSimplify,
+            ],
+        );
     }
 
     #[test]
@@ -1818,7 +1833,7 @@ func private %entry() -> i32 {
     }
 
     #[test]
-    fn gvn_phi_pruning_keeps_users_consistent_for_egraph_dce() {
+    fn gvn_phi_pruning_keeps_users_consistent_for_followup_sccp_dce() {
         let source = r#"
 target = "evm-ethereum-london"
 
@@ -1846,7 +1861,13 @@ func private %entry(v0.i1, v1.i32) -> i32 {
         let func_ref = module.funcs()[0];
         run_test_func_passes(
             &mut module,
-            &[Pass::CfgCleanup, Pass::Gvn, Pass::Egraph, Pass::CfgCleanup],
+            &[
+                Pass::CfgCleanup,
+                Pass::Gvn,
+                Pass::KnownBitsSimplify,
+                Pass::Sccp,
+                Pass::CfgCleanup,
+            ],
         );
 
         module.func_store.view(func_ref, |func| {

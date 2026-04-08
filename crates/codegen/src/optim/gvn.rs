@@ -16,6 +16,7 @@ use sonatina_ir::{
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
     inst::{
         BinaryInstKind, CastInstKind, InstClassKind, InstKeyExt, OwnedInstKey, UnaryInstKind,
+        arith, cmp,
         control_flow::{BranchKind, Jump, Unreachable},
     },
 };
@@ -27,8 +28,9 @@ use crate::{
     optim::{
         aggregate::{ObjectMemoryAnalysis, ObjectReadGvnKey},
         simplify_expr::{
-            ExprFactProvider, SimplifyExprResult, simplify_binary_with_facts, simplify_cast,
-            simplify_unary_with_same_inner,
+            EvmModOp, ExprFactProvider, SimplifyExprResult, fold_evm_clz,
+            simplify_binary_with_facts, simplify_cast, simplify_evm_byte_known,
+            simplify_evm_exp_known, simplify_evm_modop_known, simplify_unary_with_same_inner,
         },
     },
 };
@@ -71,6 +73,60 @@ fn fold_evm_saturating(
         BinaryInstKind::EvmSmulsat => Some(lhs.saturating_smul(rhs).sext(result_ty)),
         _ => None,
     }
+}
+
+fn make_gvn_unary_key(
+    func: &Function,
+    kind: UnaryInstKind,
+    arg: ValueId,
+    result_ty: Type,
+) -> Option<OwnedInstKey> {
+    let is = func.inst_set();
+    match kind {
+        UnaryInstKind::IsZero => {
+            Some(cmp::IsZero::new(is.has_is_zero()?, arg).owned_key(&[result_ty]))
+        }
+        UnaryInstKind::Neg | UnaryInstKind::Not | UnaryInstKind::Snego | UnaryInstKind::EvmClz => {
+            None
+        }
+    }
+}
+
+fn make_gvn_binary_key(
+    func: &Function,
+    kind: BinaryInstKind,
+    lhs: ValueId,
+    rhs: ValueId,
+    result_ty: Type,
+) -> Option<OwnedInstKey> {
+    let is = func.inst_set();
+    match kind {
+        BinaryInstKind::Add => {
+            Some(arith::Add::new(is.has_add()?, lhs, rhs).owned_key(&[result_ty]))
+        }
+        BinaryInstKind::Sub => {
+            Some(arith::Sub::new(is.has_sub()?, lhs, rhs).owned_key(&[result_ty]))
+        }
+        BinaryInstKind::Shl => {
+            Some(arith::Shl::new(is.has_shl()?, lhs, rhs).owned_key(&[result_ty]))
+        }
+        _ => None,
+    }
+}
+
+fn neg_source(func: &Function, value: ValueId) -> Option<ValueId> {
+    let Value::Inst { inst, .. } = func.dfg.value(value) else {
+        return None;
+    };
+    let inner = func.dfg.inst(*inst);
+    if inner.kind() != InstClassKind::Unary(UnaryInstKind::Neg) {
+        return None;
+    }
+    let values = inner.collect_values();
+    let [arg] = values.as_slice() else {
+        return None;
+    };
+    Some(*arg)
 }
 
 /// A GVN solver.
@@ -908,7 +964,7 @@ impl GvnSolver {
                 },
                 UnaryInstKind::Not => !arg,
                 UnaryInstKind::IsZero => arg.is_zero().into(),
-                UnaryInstKind::EvmClz => return None,
+                UnaryInstKind::EvmClz => fold_evm_clz(arg)?,
             }
         } else if let InstClassKind::Binary(kind) = insn_expr.kind() {
             let (lhs, rhs) = insn_expr.binary_args()?;
@@ -1158,7 +1214,16 @@ impl GvnSolver {
                     insn_expr.extra_ty()?,
                     *insn_expr.result_tys().get(result_idx)?,
                 )?,
-                BinaryInstKind::EvmExp | BinaryInstKind::EvmByte => return None,
+                BinaryInstKind::EvmExp => simplify_evm_exp_known(
+                    func.dfg.value_imm(lhs),
+                    func.dfg.value_imm(rhs),
+                    *insn_expr.result_tys().get(result_idx)?,
+                )?,
+                BinaryInstKind::EvmByte => simplify_evm_byte_known(
+                    func.dfg.value_imm(lhs),
+                    func.dfg.value_imm(rhs),
+                    *insn_expr.result_tys().get(result_idx)?,
+                )?,
             }
         } else if let InstClassKind::Cast(kind) = insn_expr.kind() {
             let (arg, ty) = insn_expr.cast_arg_ty()?;
@@ -1176,6 +1241,22 @@ impl GvnSolver {
                     Immediate::from_i256(value.as_i256(), ty)
                 }
             }
+        } else if insn_expr.kind() == InstClassKind::Opaque {
+            let [lhs, rhs, modulus] = insn_expr.values() else {
+                return None;
+            };
+            let op = match insn_expr.opcode_text() {
+                "evm_add_mod" => EvmModOp::Add,
+                "evm_mul_mod" => EvmModOp::Mul,
+                _ => return None,
+            };
+            simplify_evm_modop_known(
+                func.dfg.value_imm(*lhs),
+                func.dfg.value_imm(*rhs),
+                func.dfg.value_imm(*modulus),
+                *insn_expr.result_tys().get(result_idx)?,
+                op,
+            )?
         } else {
             return None;
         };
@@ -1257,6 +1338,90 @@ impl GvnSolver {
                 && let Some(value) = self.simplify_add_sub_cancellation(func, lhs, rhs)
             {
                 return Some(GvnInsn::Value(value));
+            }
+
+            if result_idx == 0
+                && let Some(result_ty) = insn_expr.result_tys().first().copied()
+            {
+                if kind == BinaryInstKind::Eq
+                    && func.dfg.value_ty(lhs).is_integral()
+                    && func.dfg.value_ty(rhs).is_integral()
+                {
+                    if func.dfg.value_imm(lhs).is_some_and(Immediate::is_zero)
+                        && let Some(key) =
+                            make_gvn_unary_key(func, UnaryInstKind::IsZero, rhs, result_ty)
+                    {
+                        return Some(GvnInsn::expr(key, 0));
+                    }
+                    if func.dfg.value_imm(rhs).is_some_and(Immediate::is_zero)
+                        && let Some(key) =
+                            make_gvn_unary_key(func, UnaryInstKind::IsZero, lhs, result_ty)
+                    {
+                        return Some(GvnInsn::expr(key, 0));
+                    }
+                }
+
+                if kind == BinaryInstKind::Add {
+                    if let Some(arg) = neg_source(func, rhs)
+                        && let Some(key) =
+                            make_gvn_binary_key(func, BinaryInstKind::Sub, lhs, arg, result_ty)
+                    {
+                        return Some(GvnInsn::expr(key, 0));
+                    }
+                    if let Some(arg) = neg_source(func, lhs)
+                        && let Some(key) =
+                            make_gvn_binary_key(func, BinaryInstKind::Sub, rhs, arg, result_ty)
+                    {
+                        return Some(GvnInsn::expr(key, 0));
+                    }
+                }
+
+                if kind == BinaryInstKind::Sub
+                    && let Some(arg) = neg_source(func, rhs)
+                    && let Some(key) =
+                        make_gvn_binary_key(func, BinaryInstKind::Add, lhs, arg, result_ty)
+                {
+                    return Some(GvnInsn::expr(key, 0));
+                }
+
+                if kind == BinaryInstKind::Mul {
+                    if let Some(imm) = func.dfg.value_imm(lhs)
+                        && (imm.is_two()
+                            || imm == Immediate::from_i256(sonatina_ir::I256::from(4), imm.ty()))
+                    {
+                        let shift = self.make_imm(
+                            &mut func.dfg,
+                            if imm.is_two() {
+                                Immediate::one(imm.ty())
+                            } else {
+                                Immediate::from_i256(sonatina_ir::I256::from(2), imm.ty())
+                            },
+                        );
+                        if let Some(key) =
+                            make_gvn_binary_key(func, BinaryInstKind::Shl, shift, rhs, result_ty)
+                        {
+                            return Some(GvnInsn::expr(key, 0));
+                        }
+                    }
+                    if let Some(imm) = func.dfg.value_imm(rhs)
+                        && (imm.is_two()
+                            || imm == Immediate::from_i256(sonatina_ir::I256::from(4), imm.ty()))
+                    {
+                        let shift = self.make_imm(
+                            &mut func.dfg,
+                            if imm.is_two() {
+                                Immediate::one(imm.ty())
+                            } else {
+                                Immediate::from_i256(sonatina_ir::I256::from(2), imm.ty())
+                            },
+                        );
+                        if let Some(key) =
+                            make_gvn_binary_key(func, BinaryInstKind::Shl, shift, lhs, result_ty)
+                        {
+                            return Some(GvnInsn::expr(key, 0));
+                        }
+                    }
+                }
             }
         }
 
@@ -1696,6 +1861,24 @@ impl GvnSolver {
             {
                 let (lhs, rhs) = insn_expr.binary_args()?;
                 return Some(PredicateRelation::Eq { lhs, rhs });
+            }
+
+            if let InstClassKind::Unary(UnaryInstKind::IsZero) = insn_expr.kind()
+                && let Some(arg) = insn_expr.unary_arg()
+            {
+                if expected_true {
+                    let arg_ty = func.dfg.value_ty(arg);
+                    let zero = self.make_imm(&mut func.dfg, Immediate::zero(arg_ty));
+                    return Some(PredicateRelation::Eq {
+                        lhs: arg,
+                        rhs: zero,
+                    });
+                }
+
+                if func.dfg.value_ty(arg) == Type::I1 {
+                    let one = self.make_imm(&mut func.dfg, true);
+                    return Some(PredicateRelation::Eq { lhs: arg, rhs: one });
+                }
             }
 
             return None;
