@@ -15,9 +15,9 @@ func private %make_pair(v7.objref<@pair>, v0.i256, v1.i256) {
         return;
 }
 
-func private %forward_pair(v4.objref<@pair>, v0.i256, v1.i256) {
+func private %forward_pair(v3.objref<@pair>, v0.i256, v1.i256) {
     block0:
-        call %make_pair v4 v0 v1;
+        call %make_pair v3 v0 v1;
         return;
 }
 
