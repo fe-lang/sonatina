@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/evm.rs
+assertion_line: 449
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/fe_poseidon_mock_different_inputs_regression.sntn
 ---
@@ -11,20 +12,20 @@ object: Contract
 
 functions:
   ark: ir_blocks=8 ir_insts=45 vcode_ops=131 fixups=8 imm_bytes=26
-    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=7 abs_words_end=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=6 abs_words_end=0
   sigma_full: ir_blocks=1 ir_insts=22 vcode_ops=60 fixups=0 imm_bytes=13
-    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=7 abs_words_end=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=6 abs_words_end=0
   mix: ir_blocks=7 ir_insts=37 vcode_ops=109 fixups=10 imm_bytes=22
-    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=7 abs_words_end=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=6 abs_words_end=0
   poseidon_mock: ir_blocks=12 ir_insts=57 vcode_ops=179 fixups=23 imm_bytes=25
-    mem: scratch_words=0 stable_words=7 stable_mode=StaticAbs(base=0xa0) entry_abs_words=0 abs_words_end=7
+    mem: scratch_words=0 stable_words=6 stable_mode=StaticAbs(base=0xa0) entry_abs_words=0 abs_words_end=6
   range_known_const_s__usize___unknown__h4e84f6b6b8307914_seq_ha637d2df505bccf2_len__0__fc6647014fb554e5: ir_blocks=4 ir_insts=8 vcode_ops=13 fixups=1 imm_bytes=0
-    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=7 abs_words_end=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=6 abs_words_end=0
   entry: ir_blocks=3 ir_insts=7 vcode_ops=27 fixups=5 imm_bytes=6
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=48627 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=27627
+  case ok: calldata_len=0 success reason=Return gas_used=48624 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=27624
 
 
 --------------- DEBUG ---------------
@@ -45,13 +46,13 @@ ark:
     MLOAD
     PUSH1 0x40 (64)  // v5.*[i256; 24] = evm_malloc 768.i256;
     MLOAD
-    PUSH2 0x17f (383)
+    PUSH2 0x15f (351)
     DUP2
     GT
     PUSH1 `pc + (4)`
     JUMPI
     POP
-    PUSH2 0x180 (384)
+    PUSH2 0x160 (352)
     JUMPDEST
     PUSH0 0x0 (0)  // v7.i256 = sym_addr $__fe_const_data_0;
     PUSH0 0x0 (0)  // v8.i256 = sym_size $__fe_const_data_0;
@@ -80,13 +81,13 @@ ark:
     ADDMOD
     PUSH1 0x40 (64)  // v22.*[i256; 24] = evm_malloc 768.i256;
     MLOAD
-    PUSH2 0x17f (383)
+    PUSH2 0x15f (351)
     DUP2
     GT
     PUSH1 `pc + (4)`
     JUMPI
     POP
-    PUSH2 0x180 (384)
+    PUSH2 0x160 (352)
     JUMPDEST
     DUP3  // evm_code_copy v26 v7 v8;
     DUP5
@@ -114,13 +115,13 @@ ark:
     ADDMOD
     PUSH1 0x40 (64)  // v41.*[i256; 24] = evm_malloc 768.i256;
     MLOAD
-    PUSH2 0x17f (383)
+    PUSH2 0x15f (351)
     DUP2
     GT
     PUSH1 `pc + (4)`
     JUMPI
     POP
-    PUSH2 0x180 (384)
+    PUSH2 0x160 (352)
     JUMPDEST
     SWAP2  // evm_code_copy v45 v7 v8;
     SWAP1
@@ -233,13 +234,13 @@ mix:
     JUMPDEST
     PUSH1 0x40 (64)  // v1.*[i256; 3] = evm_malloc 96.i256;
     MLOAD
-    PUSH2 0x17f (383)
+    PUSH2 0x15f (351)
     DUP2
     GT
     PUSH1 `pc + (4)`
     JUMPI
     POP
-    PUSH2 0x180 (384)
+    PUSH2 0x160 (352)
     JUMPDEST
     DUP1
     PUSH1 0x60 (96)
@@ -292,13 +293,13 @@ mix:
     MLOAD
     PUSH1 0x40 (64)  // v30.*[[i256; 3]; 3] = evm_malloc 288.i256;
     MLOAD
-    PUSH2 0x17f (383)
+    PUSH2 0x15f (351)
     DUP2
     GT
     PUSH1 `pc + (4)`
     JUMPI
     POP
-    PUSH2 0x180 (384)
+    PUSH2 0x160 (352)
     JUMPDEST
     DUP7  // evm_code_copy v34 v32 v33;
     DUP9
@@ -362,13 +363,13 @@ poseidon_mock:
     MOD
     PUSH1 0x40 (64)  // v9.*[i256; 3] = evm_malloc 96.i256;
     MLOAD
-    PUSH2 0x17f (383)
+    PUSH2 0x15f (351)
     DUP2
     GT
     PUSH1 `pc + (4)`
     JUMPI
     POP
-    PUSH2 0x180 (384)
+    PUSH2 0x160 (352)
     JUMPDEST
     DUP1
     PUSH1 0x60 (96)
@@ -414,7 +415,7 @@ poseidon_mock:
     PUSH1 block14
     JUMPI
   block2:
-    PUSH1 0xc0 (192)  // v56.*[i256; 3] = alloca [i256; 3];
+    PUSH1 0xa0 (160)  // v56.*[i256; 3] = alloca [i256; 3];
     DUP2  // call %ark v56 v60 v63;
     DUP2
     SWAP4
@@ -423,7 +424,7 @@ poseidon_mock:
     PUSH1 FuncRef(0)
     JUMP
     JUMPDEST
-    PUSH2 0x120 (288)  // v57.*[i256; 3] = alloca [i256; 3];
+    PUSH2 0x100 (256)  // v57.*[i256; 3] = alloca [i256; 3];
     DUP1  // call %sigma_full v57 v56;
     SWAP3
     PUSH1 `pc + (4)`

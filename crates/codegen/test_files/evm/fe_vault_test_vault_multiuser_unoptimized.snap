@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/evm.rs
+assertion_line: 449
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/fe_vault_test_vault_multiuser_unoptimized.sntn
 ---
@@ -39,13 +40,13 @@ functions:
   return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f: ir_blocks=1 ir_insts=11 vcode_ops=39 fixups=8 imm_bytes=4
     mem: scratch_words=0 stable_words=5 stable_mode=StaticAbs(base=0x100) entry_abs_words=3 abs_words_end=8
   solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head: ir_blocks=6 ir_insts=19 vcode_ops=66 fixups=4 imm_bytes=8
-    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=11 abs_words_end=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=8 abs_words_end=0
   solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish: ir_blocks=3 ir_insts=13 vcode_ops=28 fixups=1 imm_bytes=2
-    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=11 abs_words_end=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=8 abs_words_end=0
   solencoder_h1b9228b90dad6928_new: ir_blocks=1 ir_insts=7 vcode_ops=16 fixups=0 imm_bytes=2
-    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=11 abs_words_end=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=8 abs_words_end=0
   solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_write_word: ir_blocks=3 ir_insts=9 vcode_ops=23 fixups=1 imm_bytes=2
-    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=11 abs_words_end=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=8 abs_words_end=0
   soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563: ir_blocks=5 ir_insts=16 vcode_ops=49 fixups=6 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=0
   __VaultUser_init: ir_blocks=1 ir_insts=4 vcode_ops=8 fixups=2 imm_bytes=2
@@ -75,7 +76,7 @@ functions:
   evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__GetTotalShares_hbe2278c3233da528__5145d089cb2da672: ir_blocks=5 ir_insts=26 vcode_ops=87 fixups=11 imm_bytes=11
     mem: scratch_words=0 stable_words=5 stable_mode=StaticAbs(base=0xe0) entry_abs_words=2 abs_words_end=7
   evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__AddYield_h1b194739dad02c6e__f712b0a646b2bb64: ir_blocks=7 ir_insts=38 vcode_ops=122 fixups=14 imm_bytes=15
-    mem: scratch_words=0 stable_words=9 stable_mode=StaticAbs(base=0xe0) entry_abs_words=2 abs_words_end=11
+    mem: scratch_words=0 stable_words=6 stable_mode=StaticAbs(base=0xe0) entry_abs_words=2 abs_words_end=8
   evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__ProxyGetMyShares_h22fbe0bf58ab85ce__459f6c55c5a1059b: ir_blocks=5 ir_insts=29 vcode_ops=104 fixups=13 imm_bytes=12
     mem: scratch_words=0 stable_words=5 stable_mode=StaticAbs(base=0xe0) entry_abs_words=2 abs_words_end=7
   evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__ProxyWithdraw_h1ed1c85115544221__ae5519407fcbbd72: ir_blocks=5 ir_insts=34 vcode_ops=117 fixups=15 imm_bytes=13
@@ -1808,13 +1809,13 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__AddYield_
     POP
     PUSH1 0x40 (64)
     MLOAD
-    PUSH2 0x1ff (511)
+    PUSH2 0x19f (415)
     DUP2
     GT
     PUSH1 `pc + (4)`
     JUMPI
     POP
-    PUSH2 0x200 (512)
+    PUSH2 0x1a0 (416)
     JUMPDEST
     DUP2  // evm_return_data_copy v16 0.i256 v14;
     PUSH0
@@ -1842,7 +1843,7 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__AddYield_
     POP
     PUSH2 0x100 (256)
     MSTORE  // mstore v41 v14 i256;
-    PUSH2 0x180 (384)  // v45.*@__fe_obj_SolDecoder_8 = alloca @__fe_obj_SolDecoder_8;
+    PUSH2 0x120 (288)  // v45.*@__fe_obj_SolDecoder_8 = alloca @__fe_obj_SolDecoder_8;
     SWAP1  // call %soldecoder_i__ha12a03fcb5ba844b_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b v45 v39;
     PUSH1 `pc + (4)`
     SWAP2

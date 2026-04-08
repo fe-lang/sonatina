@@ -105,7 +105,7 @@ pub(crate) struct ObjectMemoryAnalysis {
     layout_cache: shape::AggregateLayoutCache,
     read_states: FxHashMap<InstId, ObjectReadState>,
     clobbers: FxHashMap<InstId, Vec<ObjectClobber>>,
-    call_pre_states: FxHashMap<InstId, MemoryState>,
+    inst_pre_states: FxHashMap<InstId, MemoryState>,
     promote_loaded_values: bool,
 }
 
@@ -119,8 +119,24 @@ impl ObjectMemoryAnalysis {
         self.layout_cache.clear();
         self.read_states.clear();
         self.clobbers.clear();
-        self.call_pre_states.clear();
+        self.inst_pre_states.clear();
         self.promote_loaded_values = false;
+
+        let root_slices = collect_root_slices(func, local_object_args, &mut self.layout_cache);
+        self.compute_with_root_slices(func, local_object_args, object_effects, &root_slices);
+    }
+
+    pub(crate) fn compute_with_loaded_value_carriers(
+        &mut self,
+        func: &Function,
+        local_object_args: Option<&FxHashMap<usize, LocalObjectArgInfo>>,
+        object_effects: Option<&ObjectEffectSummaryMap>,
+    ) {
+        self.layout_cache.clear();
+        self.read_states.clear();
+        self.clobbers.clear();
+        self.inst_pre_states.clear();
+        self.promote_loaded_values = true;
 
         let root_slices = collect_root_slices(func, local_object_args, &mut self.layout_cache);
         self.compute_with_root_slices(func, local_object_args, object_effects, &root_slices);
@@ -135,7 +151,7 @@ impl ObjectMemoryAnalysis {
         self.layout_cache.clear();
         self.read_states.clear();
         self.clobbers.clear();
-        self.call_pre_states.clear();
+        self.inst_pre_states.clear();
         self.promote_loaded_values = true;
 
         let root_slices =
@@ -267,7 +283,7 @@ impl ObjectMemoryAnalysis {
         value: ValueId,
         slice: ObjectSlice,
     ) -> bool {
-        self.call_pre_states.get(&inst).is_some_and(|state| {
+        self.inst_pre_states.get(&inst).is_some_and(|state| {
             state.active_roots.contains(&slice.root)
                 && !state.blocked_roots.contains(&slice.root)
                 && matches!(
@@ -503,10 +519,13 @@ fn transfer_inst(
     if let Some(call) =
         downcast::<&control_flow::Call>(ctx.func.inst_set(), ctx.func.dfg.inst(inst))
     {
-        record_call_pre_state(inst, state, record);
+        record_inst_pre_state(inst, state, record);
         apply_call_transfer(ctx, inst, call, state, record);
         activate_defined_root(ctx.func, inst, ctx.tracked, ctx.relevant_slices, state);
         return;
+    }
+    if downcast::<&control_flow::Return>(ctx.func.inst_set(), ctx.func.dfg.inst(inst)).is_some() {
+        record_inst_pre_state(inst, state, record);
     }
 
     activate_defined_root(ctx.func, inst, ctx.tracked, ctx.relevant_slices, state);
@@ -702,13 +721,13 @@ fn record_read_state(
     );
 }
 
-fn record_call_pre_state(
+fn record_inst_pre_state(
     inst: InstId,
     state: &MemoryState,
     record: &mut Option<&mut ObjectMemoryAnalysis>,
 ) {
     if let Some(record) = record.as_deref_mut() {
-        record.call_pre_states.insert(inst, state.clone());
+        record.inst_pre_states.insert(inst, state.clone());
     }
 }
 
