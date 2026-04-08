@@ -46,6 +46,11 @@ impl Function {
             !self.layout.is_inst_inserted(inst),
             "instruction {inst:?} must be detached before erase"
         );
+        // Some transformations detach instructions without keeping `dfg.users` up-to-date.
+        // Rebuild on-demand so deletion does not spuriously panic on stale users.
+        if inst_results_have_stale_users(self, &[inst]) {
+            self.rebuild_users();
+        }
         self.dfg.delete_inst(inst);
     }
 
@@ -56,19 +61,14 @@ impl Function {
                 !self.layout.is_inst_inserted(inst),
                 "instruction {inst:?} must be detached before erase"
             );
-            self.dfg.untrack_inst(inst);
         }
 
-        let needs_user_rebuild = insts.iter().copied().any(|inst| {
-            self.dfg.inst_results(inst).iter().copied().any(|value| {
-                self.dfg
-                    .users(value)
-                    .copied()
-                    .any(|user| !self.layout.is_inst_inserted(user))
-            })
-        });
-        if needs_user_rebuild {
+        if inst_results_have_stale_users(self, insts) {
             self.rebuild_users();
+        }
+
+        for &inst in insts {
+            self.dfg.untrack_inst(inst);
         }
 
         for &inst in insts {
@@ -89,16 +89,146 @@ impl Function {
         self.dfg.delete_block(block);
     }
 
-    /// Recompute `dfg.users` from scratch using only layout-inserted instructions.
+    /// Recompute `dfg.users` from scratch using all live DFG instructions.
     ///
     /// Call this after passes that may leave stale user entries (e.g. egraph).
     pub fn rebuild_users(&mut self) {
         self.dfg.clear_users();
-        for block in self.layout.iter_block() {
-            for inst in self.layout.iter_inst(block) {
-                self.dfg.attach_user(inst);
-            }
+        let insts: Vec<_> = self.dfg.inst_ids().collect();
+        for inst in insts {
+            self.dfg.attach_user(inst);
         }
+    }
+}
+
+fn inst_results_have_stale_users(func: &Function, insts: &[InstId]) -> bool {
+    fn inst_uses_value(func: &Function, user: InstId, value: ValueId) -> bool {
+        let mut uses = false;
+        func.dfg.inst(user).for_each_value(&mut |v| {
+            uses |= v == value;
+        });
+        uses
+    }
+
+    insts.iter().copied().any(|inst| {
+        func.dfg.inst_results(inst).iter().copied().any(|value| {
+            func.dfg
+                .users(value)
+                .copied()
+                .any(|user| !func.dfg.has_inst(user) || !inst_uses_value(func, user, value))
+        })
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{
+        Immediate, Linkage, Signature, Type, builder::test_util::test_module_builder,
+        func_cursor::InstInserter, inst::arith::Add,
+    };
+
+    #[test]
+    fn erase_inst_rebuilds_stale_users_from_mutated_instructions() {
+        let mb = test_module_builder();
+        let sig = Signature::new_unit("test_func", Linkage::Public, &[]);
+        let func_ref = mb.declare_function(sig).unwrap();
+
+        let mut builder = mb.func_builder::<InstInserter>(func_ref);
+        let entry = builder.append_block();
+        builder.switch_to_block(entry);
+
+        let lhs = builder.make_imm_value(Immediate::I32(1));
+        let rhs = builder.make_imm_value(Immediate::I32(2));
+        let has_add = builder.inst_set().has_add().unwrap();
+
+        let produced = builder.insert_inst(Add::new(has_add, lhs, rhs), Type::I32);
+        let producer_inst = builder.func.dfg.value_inst(produced).unwrap();
+
+        let consumed = builder.insert_inst(Add::new(has_add, produced, lhs), Type::I32);
+        let consumer_inst = builder.func.dfg.value_inst(consumed).unwrap();
+
+        builder.insert_return_unit();
+        builder.seal_all();
+
+        // Rewrite the consumer to stop using the producer without repairing `dfg.users`.
+        builder
+            .func
+            .dfg
+            .inst_mut(consumer_inst)
+            .for_each_value_mut(&mut |value| {
+                if *value == produced {
+                    *value = lhs;
+                }
+            });
+
+        builder.func.layout.remove_inst(producer_inst);
+
+        // Previously this would panic in `DataFlowGraph::delete_inst` because the producer result
+        // still had a stale tracked user entry for the mutated consumer.
+        builder.func.erase_inst(producer_inst);
+
+        assert!(!builder.func.dfg.has_inst(producer_inst));
+    }
+
+    #[test]
+    #[should_panic(expected = "with live result users")]
+    fn erase_inst_keeps_detached_live_users_tracked() {
+        let mb = test_module_builder();
+        let sig = Signature::new_unit("test_func", Linkage::Public, &[]);
+        let func_ref = mb.declare_function(sig).unwrap();
+
+        let mut builder = mb.func_builder::<InstInserter>(func_ref);
+        let entry = builder.append_block();
+        builder.switch_to_block(entry);
+
+        let lhs = builder.make_imm_value(Immediate::I32(1));
+        let rhs = builder.make_imm_value(Immediate::I32(2));
+        let has_add = builder.inst_set().has_add().unwrap();
+
+        let produced = builder.insert_inst(Add::new(has_add, lhs, rhs), Type::I32);
+        let producer_inst = builder.func.dfg.value_inst(produced).unwrap();
+
+        let consumed = builder.insert_inst(Add::new(has_add, produced, lhs), Type::I32);
+        let consumer_inst = builder.func.dfg.value_inst(consumed).unwrap();
+
+        builder.insert_return_unit();
+        builder.seal_all();
+
+        builder.func.layout.remove_inst(consumer_inst);
+        builder.func.layout.remove_inst(producer_inst);
+
+        builder.func.erase_inst(producer_inst);
+    }
+
+    #[test]
+    fn erase_insts_untracks_batch_before_delete() {
+        let mb = test_module_builder();
+        let sig = Signature::new_unit("test_func", Linkage::Public, &[]);
+        let func_ref = mb.declare_function(sig).unwrap();
+
+        let mut builder = mb.func_builder::<InstInserter>(func_ref);
+        let entry = builder.append_block();
+        builder.switch_to_block(entry);
+
+        let lhs = builder.make_imm_value(Immediate::I32(1));
+        let rhs = builder.make_imm_value(Immediate::I32(2));
+        let has_add = builder.inst_set().has_add().unwrap();
+
+        let produced = builder.insert_inst(Add::new(has_add, lhs, rhs), Type::I32);
+        let producer_inst = builder.func.dfg.value_inst(produced).unwrap();
+
+        let consumed = builder.insert_inst(Add::new(has_add, produced, lhs), Type::I32);
+        let consumer_inst = builder.func.dfg.value_inst(consumed).unwrap();
+
+        builder.insert_return_unit();
+        builder.seal_all();
+
+        builder.func.layout.remove_inst(consumer_inst);
+        builder.func.layout.remove_inst(producer_inst);
+        builder.func.erase_insts(&[producer_inst, consumer_inst]);
+
+        assert!(!builder.func.dfg.has_inst(producer_inst));
+        assert!(!builder.func.dfg.has_inst(consumer_inst));
     }
 }
 
