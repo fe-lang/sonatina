@@ -16,9 +16,9 @@ use super::{
     malloc_plan::MallocEscapeKind,
     ptr_escape::PtrEscapeSummary,
     static_arena_alloc::{
-        CallSiteObjects, FuncStackObjects, LiveInterval, ObjFacts, PackedObject, StackObj,
-        StackObjId, StackObjKind, StaticArenaAllocCtx, pack_objects_peak_presorted,
-        pack_objects_presorted,
+        CallSiteObjects, FuncStackObjects, LiveInterval, ObjFacts, PackedObject, PeakPackItem,
+        PeakPackWorkspace, StackObj, StackObjId, StackObjKind, StaticArenaAllocCtx,
+        pack_objects_presorted, pack_zero_min_offset_peak_sorted,
     },
 };
 use sonatina_ir::isa::evm::Evm;
@@ -202,10 +202,9 @@ struct FuncPlacementEval {
     stable_offsets: FxHashMap<StackObjId, u32>,
     stable_words: u32,
     call_preserve: FxHashMap<InstId, CallPreservePlan>,
-    cost: u64,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct FuncPlacementScore {
     scratch_words: u32,
     stable_words: u32,
@@ -219,14 +218,292 @@ struct FuncPlacementWorkspace {
     stable_pack: Vec<PackedObject>,
 }
 
-struct FuncPlacementCtx<'a> {
+#[derive(Default)]
+struct FuncPlacementScoreWorkspace {
+    scratch_peak: PeakPackWorkspace,
+    stable_peak: PeakPackWorkspace,
+}
+
+#[derive(Clone, Debug)]
+struct CandidateMeta {
+    obj_id: StackObjId,
+    local_idx: u32,
+    size_words: u32,
+    recursive_access_cost: u64,
+    shadow_copy_words: u64,
+    live_call_indices: SmallVec<[u32; 4]>,
+}
+
+struct PlacementProblem<'a> {
     stack: &'a FuncStackObjects,
-    sorted_objects: &'a [&'a StackObj],
-    sorted_calls: &'a [&'a CallSiteObjects],
-    facts: &'a FxHashMap<StackObjId, ObjFacts>,
-    must_stable: &'a BitSet<StackObjId>,
+    sorted_objects: Vec<&'a StackObj>,
+    sorted_calls: Vec<&'a CallSiteObjects>,
+    must_stable: BitSet<StackObjId>,
+    must_stable_by_local: Vec<bool>,
+    candidates: Vec<CandidateMeta>,
+    base_shadow_words_by_call: Vec<u32>,
+    base_shadow_copy_words: u64,
+    base_recursive_access_cost: u64,
+    frame_setup_cost: u64,
+    shadow_cost_per_word: u64,
+    next_shadow_base_id: u32,
     is_recursive: bool,
     cost_model: &'a ArenaCostModel,
+}
+
+#[derive(Clone, Debug)]
+struct PlacementState {
+    promoted: Vec<bool>,
+    shadow_words_by_call: Vec<u32>,
+    shadow_copy_words: u64,
+    recursive_access_cost: u64,
+    scratch_real_locals: Vec<u32>,
+    stable_real_locals: Vec<u32>,
+    nonzero_shadow_calls: Vec<u32>,
+}
+
+#[derive(Clone, Copy)]
+enum PlacementTrial {
+    None,
+    Add(usize),
+    Remove(usize),
+}
+
+impl<'a> PlacementProblem<'a> {
+    fn new(
+        stack: &'a FuncStackObjects,
+        facts: &FxHashMap<StackObjId, ObjFacts>,
+        is_recursive: bool,
+        cost_model: &'a ArenaCostModel,
+    ) -> Self {
+        let mut sorted_objects: Vec<_> = stack.objects.iter().collect();
+        sorted_objects.sort_unstable_by_key(|obj| pack_sort_key(obj.id, obj.interval));
+        let mut sorted_calls: Vec<_> = stack.call_sites.iter().collect();
+        sorted_calls.sort_unstable_by_key(|call| (call.inst_pos, call.inst.as_u32()));
+
+        let mut local_obj_index_by_id = vec![u32::MAX; stack.next_obj_id as usize];
+        let mut must_stable_by_local = vec![false; sorted_objects.len()];
+        let mut must_stable = BitSet::default();
+        for (local_idx, &obj) in sorted_objects.iter().enumerate() {
+            local_obj_index_by_id[obj.id.as_u32() as usize] = local_idx as u32;
+            let fact = facts
+                .get(&obj.id)
+                .unwrap_or_else(|| panic!("missing object facts for obj {}", obj.id.as_u32()));
+            must_stable_by_local[local_idx] = fact.must_stable;
+            if fact.must_stable {
+                let _ = must_stable.insert(obj.id);
+            }
+        }
+
+        let mut candidates: Vec<_> = facts
+            .values()
+            .filter(|fact| !fact.must_stable && !fact.live_across_calls.is_empty())
+            .map(|fact| fact.id)
+            .collect();
+        candidates.sort_unstable_by_key(|id| id.as_u32());
+
+        let mut optional_idx_by_local = vec![u32::MAX; sorted_objects.len()];
+        let mut candidate_meta = Vec::with_capacity(candidates.len());
+        for obj_id in candidates {
+            let fact = facts
+                .get(&obj_id)
+                .unwrap_or_else(|| panic!("missing object facts for obj {}", obj_id.as_u32()));
+            let local_idx = *local_obj_index_by_id
+                .get(obj_id.as_u32() as usize)
+                .unwrap_or(&u32::MAX);
+            assert_ne!(
+                local_idx,
+                u32::MAX,
+                "missing sorted object index for obj {}",
+                obj_id.as_u32()
+            );
+            optional_idx_by_local[local_idx as usize] = candidate_meta.len() as u32;
+            candidate_meta.push(CandidateMeta {
+                obj_id,
+                local_idx,
+                size_words: fact.size_words,
+                recursive_access_cost: recursive_access_cost(cost_model, is_recursive, fact),
+                shadow_copy_words: 0,
+                live_call_indices: SmallVec::new(),
+            });
+        }
+
+        let mut base_shadow_words_by_call = vec![0u32; sorted_calls.len()];
+        let mut base_shadow_copy_words = 0u64;
+        for (call_idx, &call) in sorted_calls.iter().enumerate() {
+            for &obj in &call.live_out_objs {
+                let size = stack
+                    .obj_size_words
+                    .get(&obj)
+                    .copied()
+                    .unwrap_or_else(|| panic!("missing object size for obj {}", obj.as_u32()));
+                if size == 0 {
+                    continue;
+                }
+                let local_idx = *local_obj_index_by_id
+                    .get(obj.as_u32() as usize)
+                    .unwrap_or(&u32::MAX);
+                assert_ne!(
+                    local_idx,
+                    u32::MAX,
+                    "missing sorted object index for obj {}",
+                    obj.as_u32()
+                );
+                if must_stable_by_local[local_idx as usize] {
+                    continue;
+                }
+                base_shadow_words_by_call[call_idx] = base_shadow_words_by_call[call_idx]
+                    .checked_add(size)
+                    .expect("shadow words overflow");
+                base_shadow_copy_words = base_shadow_copy_words
+                    .checked_add(u64::from(size))
+                    .expect("shadow copy words overflow");
+                let optional_idx = optional_idx_by_local[local_idx as usize];
+                if optional_idx != u32::MAX {
+                    let candidate = &mut candidate_meta[optional_idx as usize];
+                    candidate.shadow_copy_words = candidate
+                        .shadow_copy_words
+                        .checked_add(u64::from(size))
+                        .expect("candidate shadow copy words overflow");
+                    candidate.live_call_indices.push(call_idx as u32);
+                }
+            }
+        }
+
+        let base_recursive_access_cost = facts
+            .values()
+            .filter(|fact| fact.must_stable)
+            .try_fold(0u64, |acc, fact| {
+                acc.checked_add(recursive_access_cost(cost_model, is_recursive, fact))
+            })
+            .expect("recursive access cost overflow");
+
+        Self {
+            stack,
+            sorted_objects,
+            sorted_calls,
+            must_stable,
+            must_stable_by_local,
+            candidates: candidate_meta,
+            base_shadow_words_by_call,
+            base_shadow_copy_words,
+            base_recursive_access_cost,
+            frame_setup_cost: frame_setup_cost(cost_model),
+            shadow_cost_per_word: shadow_cost_per_word(cost_model, is_recursive),
+            next_shadow_base_id: stack.next_obj_id,
+            is_recursive,
+            cost_model,
+        }
+    }
+
+    fn promoted_optional(&self, state: &PlacementState) -> BitSet<StackObjId> {
+        self.candidates
+            .iter()
+            .zip(&state.promoted)
+            .filter_map(|(candidate, &promoted)| promoted.then_some(candidate.obj_id))
+            .collect()
+    }
+}
+
+impl PlacementState {
+    fn new(problem: &PlacementProblem<'_>) -> Self {
+        Self {
+            promoted: vec![false; problem.candidates.len()],
+            shadow_words_by_call: problem.base_shadow_words_by_call.clone(),
+            shadow_copy_words: problem.base_shadow_copy_words,
+            recursive_access_cost: problem.base_recursive_access_cost,
+            scratch_real_locals: problem
+                .sorted_objects
+                .iter()
+                .enumerate()
+                .filter_map(|(local_idx, obj)| {
+                    (!problem.must_stable_by_local[local_idx] && obj.size_words != 0)
+                        .then_some(local_idx as u32)
+                })
+                .collect(),
+            stable_real_locals: problem
+                .sorted_objects
+                .iter()
+                .enumerate()
+                .filter_map(|(local_idx, obj)| {
+                    (problem.must_stable_by_local[local_idx] && obj.size_words != 0)
+                        .then_some(local_idx as u32)
+                })
+                .collect(),
+            nonzero_shadow_calls: problem
+                .base_shadow_words_by_call
+                .iter()
+                .enumerate()
+                .filter_map(|(call_idx, &shadow_words)| {
+                    (shadow_words != 0).then_some(call_idx as u32)
+                })
+                .collect(),
+        }
+    }
+
+    fn apply_add(&mut self, problem: &PlacementProblem<'_>, candidate_idx: usize) {
+        assert!(
+            !self.promoted[candidate_idx],
+            "candidate {} already promoted",
+            problem.candidates[candidate_idx].obj_id.as_u32()
+        );
+        self.promoted[candidate_idx] = true;
+        let candidate = &problem.candidates[candidate_idx];
+        if candidate.size_words != 0 {
+            remove_sorted_u32(&mut self.scratch_real_locals, candidate.local_idx);
+            insert_sorted_u32(&mut self.stable_real_locals, candidate.local_idx);
+        }
+        self.shadow_copy_words = self
+            .shadow_copy_words
+            .checked_sub(candidate.shadow_copy_words)
+            .expect("shadow copy words underflow");
+        self.recursive_access_cost = self
+            .recursive_access_cost
+            .checked_add(candidate.recursive_access_cost)
+            .expect("recursive access cost overflow");
+        for &call_idx in &candidate.live_call_indices {
+            let shadow_words = &mut self.shadow_words_by_call[call_idx as usize];
+            let was_nonzero = *shadow_words != 0;
+            *shadow_words = shadow_words
+                .checked_sub(candidate.size_words)
+                .expect("shadow words underflow");
+            if was_nonzero && *shadow_words == 0 {
+                remove_sorted_u32(&mut self.nonzero_shadow_calls, call_idx);
+            }
+        }
+    }
+
+    fn apply_remove(&mut self, problem: &PlacementProblem<'_>, candidate_idx: usize) {
+        assert!(
+            self.promoted[candidate_idx],
+            "candidate {} is not promoted",
+            problem.candidates[candidate_idx].obj_id.as_u32()
+        );
+        self.promoted[candidate_idx] = false;
+        let candidate = &problem.candidates[candidate_idx];
+        if candidate.size_words != 0 {
+            remove_sorted_u32(&mut self.stable_real_locals, candidate.local_idx);
+            insert_sorted_u32(&mut self.scratch_real_locals, candidate.local_idx);
+        }
+        self.shadow_copy_words = self
+            .shadow_copy_words
+            .checked_add(candidate.shadow_copy_words)
+            .expect("shadow copy words overflow");
+        self.recursive_access_cost = self
+            .recursive_access_cost
+            .checked_sub(candidate.recursive_access_cost)
+            .expect("recursive access cost underflow");
+        for &call_idx in &candidate.live_call_indices {
+            let shadow_words = &mut self.shadow_words_by_call[call_idx as usize];
+            let was_nonzero = *shadow_words != 0;
+            *shadow_words = shadow_words
+                .checked_add(candidate.size_words)
+                .expect("shadow words overflow");
+            if !was_nonzero && *shadow_words != 0 {
+                insert_sorted_u32(&mut self.nonzero_shadow_calls, call_idx);
+            }
+        }
+    }
 }
 
 pub(crate) fn compute_program_memory_plan(
@@ -527,51 +804,36 @@ fn solve_func_placement(
     is_recursive: bool,
     cost_model: &ArenaCostModel,
 ) -> FuncPlacementEval {
-    let mut sorted_objects: Vec<_> = stack.objects.iter().collect();
-    sorted_objects.sort_unstable_by_key(|obj| pack_sort_key(obj.id, obj.interval));
-    let mut sorted_calls: Vec<_> = stack.call_sites.iter().collect();
-    sorted_calls.sort_unstable_by_key(|call| (call.inst_pos, call.inst.as_u32()));
-    let mut candidates: Vec<StackObjId> = facts
-        .values()
-        .filter(|fact| !fact.must_stable && !fact.live_across_calls.is_empty())
-        .map(|fact| fact.id)
-        .collect();
-    candidates.sort_unstable_by_key(|id| id.as_u32());
-    let must_stable: BitSet<StackObjId> = facts
-        .values()
-        .filter(|fact| fact.must_stable)
-        .map(|fact| fact.id)
-        .collect();
-    let ctx = FuncPlacementCtx {
-        stack,
-        sorted_objects: &sorted_objects,
-        sorted_calls: &sorted_calls,
-        facts,
-        must_stable: &must_stable,
-        is_recursive,
-        cost_model,
-    };
-
-    let mut promoted_optional = BitSet::default();
+    let problem = PlacementProblem::new(stack, facts, is_recursive, cost_model);
+    let mut state = PlacementState::new(&problem);
     let mut workspace = FuncPlacementWorkspace {
-        scratch_pack: Vec::with_capacity(sorted_objects.len()),
-        shadow_objs: Vec::with_capacity(sorted_calls.len()),
-        stable_pack: Vec::with_capacity(sorted_objects.len().saturating_add(sorted_calls.len())),
+        scratch_pack: Vec::with_capacity(problem.sorted_objects.len()),
+        shadow_objs: Vec::with_capacity(problem.sorted_calls.len()),
+        stable_pack: Vec::with_capacity(
+            problem
+                .sorted_objects
+                .len()
+                .saturating_add(problem.sorted_calls.len()),
+        ),
     };
-    let mut best = evaluate_func_placement(&ctx, &promoted_optional, &mut workspace);
-    let mut best_score = score_from_eval(&best);
+    let mut score_workspace = FuncPlacementScoreWorkspace::default();
+    let mut best_score =
+        evaluate_func_placement_score(&problem, &state, PlacementTrial::None, &mut score_workspace);
 
     loop {
-        let mut best_candidate: Option<StackObjId> = None;
+        let mut best_candidate: Option<usize> = None;
         let mut best_candidate_score: Option<FuncPlacementScore> = None;
-        for &candidate in &candidates {
-            if promoted_optional.contains(candidate) {
+        for (candidate_idx, candidate) in problem.candidates.iter().enumerate() {
+            if state.promoted[candidate_idx] {
                 continue;
             }
 
-            let _ = promoted_optional.insert(candidate);
-            let score = evaluate_func_placement_score(&ctx, &promoted_optional, &mut workspace);
-            let _ = promoted_optional.remove(candidate);
+            let score = evaluate_func_placement_score(
+                &problem,
+                &state,
+                PlacementTrial::Add(candidate_idx),
+                &mut score_workspace,
+            );
             if !is_better_score(score, best_score) {
                 continue;
             }
@@ -580,64 +842,68 @@ fn solve_func_placement(
                 (None, None) => true,
                 (Some(prev), Some(cur)) => {
                     is_better_score(score, *cur)
-                        || (score.cost == cur.cost && candidate.as_u32() < prev.as_u32())
+                        || (score.cost == cur.cost
+                            && candidate.obj_id.as_u32()
+                                < problem.candidates[*prev].obj_id.as_u32())
                 }
                 _ => false,
             };
             if replace {
-                best_candidate = Some(candidate);
+                best_candidate = Some(candidate_idx);
                 best_candidate_score = Some(score);
             }
         }
 
-        let Some(candidate) = best_candidate else {
+        let Some(candidate_idx) = best_candidate else {
             break;
         };
-        let _ = promoted_optional.insert(candidate);
-        best = evaluate_func_placement(&ctx, &promoted_optional, &mut workspace);
-        best_score = score_from_eval(&best);
+        state.apply_add(&problem, candidate_idx);
+        best_score = best_candidate_score.expect("missing candidate score");
     }
 
-    let promoted: Vec<StackObjId> = promoted_optional.iter().collect();
-    for candidate in promoted {
-        if !promoted_optional.contains(candidate) {
+    for candidate_idx in 0..problem.candidates.len() {
+        if !state.promoted[candidate_idx] {
             continue;
         }
-        let _ = promoted_optional.remove(candidate);
-        let score = evaluate_func_placement_score(&ctx, &promoted_optional, &mut workspace);
+        let score = evaluate_func_placement_score(
+            &problem,
+            &state,
+            PlacementTrial::Remove(candidate_idx),
+            &mut score_workspace,
+        );
         if is_better_score(score, best_score) {
-            best = evaluate_func_placement(&ctx, &promoted_optional, &mut workspace);
+            state.apply_remove(&problem, candidate_idx);
             best_score = score;
-        } else {
-            let _ = promoted_optional.insert(candidate);
         }
     }
 
-    best
+    let promoted_optional = problem.promoted_optional(&state);
+    evaluate_func_placement(&problem, &promoted_optional, &state, &mut workspace)
 }
 
 fn evaluate_func_placement(
-    ctx: &FuncPlacementCtx<'_>,
+    problem: &PlacementProblem<'_>,
     promoted_optional: &BitSet<StackObjId>,
+    state: &PlacementState,
     workspace: &mut FuncPlacementWorkspace,
 ) -> FuncPlacementEval {
     build_scratch_pack(
         &mut workspace.scratch_pack,
-        ctx.sorted_objects,
-        ctx.must_stable,
+        &problem.sorted_objects,
+        &problem.must_stable,
         promoted_optional,
     );
     let (scratch_offsets, scratch_words) = pack_objects_presorted(&workspace.scratch_pack);
 
     workspace.shadow_objs.clear();
     let mut call_preserve =
-        FxHashMap::with_capacity_and_hasher(ctx.sorted_calls.len(), Default::default());
-    let mut next_obj_id = ctx.stack.next_obj_id;
-    for &call in ctx.sorted_calls {
+        FxHashMap::with_capacity_and_hasher(problem.sorted_calls.len(), Default::default());
+    let mut next_obj_id = problem.next_shadow_base_id;
+    for &call in &problem.sorted_calls {
         let Some((shadow_obj, plan)) = build_shadow_preserve_for_call(
-            ctx.stack,
+            problem.stack,
             call,
-            ctx.must_stable,
+            &problem.must_stable,
             promoted_optional,
             &scratch_offsets,
             next_obj_id,
@@ -653,19 +919,34 @@ fn evaluate_func_placement(
 
     build_stable_pack(
         &mut workspace.stable_pack,
-        ctx.sorted_objects,
+        &problem.sorted_objects,
         &workspace.shadow_objs,
-        ctx.must_stable,
+        &problem.must_stable,
         promoted_optional,
     );
     let (stable_offsets, stable_words) = pack_objects_presorted(&workspace.stable_pack);
 
+    let shadow_copy_words = shadow_copy_words(&call_preserve);
+    debug_assert_eq!(shadow_copy_words, state.shadow_copy_words);
     let cost = placement_cost(
-        ctx,
-        promoted_optional,
-        shadow_copy_words(&call_preserve),
+        problem,
+        state.recursive_access_cost,
+        shadow_copy_words,
         scratch_words,
         stable_words,
+    );
+    debug_assert_eq!(
+        FuncPlacementScore {
+            scratch_words,
+            stable_words,
+            cost,
+        },
+        evaluate_func_placement_score(
+            problem,
+            state,
+            PlacementTrial::None,
+            &mut FuncPlacementScoreWorkspace::default(),
+        )
     );
 
     FuncPlacementEval {
@@ -674,63 +955,92 @@ fn evaluate_func_placement(
         stable_offsets,
         stable_words,
         call_preserve,
-        cost,
     }
 }
 
 fn evaluate_func_placement_score(
-    ctx: &FuncPlacementCtx<'_>,
-    promoted_optional: &BitSet<StackObjId>,
-    workspace: &mut FuncPlacementWorkspace,
+    problem: &PlacementProblem<'_>,
+    state: &PlacementState,
+    trial: PlacementTrial,
+    workspace: &mut FuncPlacementScoreWorkspace,
 ) -> FuncPlacementScore {
-    build_scratch_pack(
-        &mut workspace.scratch_pack,
-        ctx.sorted_objects,
-        ctx.must_stable,
-        promoted_optional,
-    );
-    let scratch_words = pack_objects_peak_presorted(&workspace.scratch_pack);
-
-    workspace.shadow_objs.clear();
-    let mut shadow_copy_words = 0u64;
-    let mut next_obj_id = ctx.stack.next_obj_id;
-    for &call in ctx.sorted_calls {
-        let Some(shadow_obj) = build_shadow_obj_for_call(
-            ctx.stack,
-            call,
-            ctx.must_stable,
-            promoted_optional,
-            next_obj_id,
-        ) else {
-            continue;
-        };
-        next_obj_id = next_obj_id
-            .checked_add(1)
-            .expect("shadow object id overflow");
-        shadow_copy_words = shadow_copy_words.saturating_add(u64::from(shadow_obj.size_words));
-        workspace.shadow_objs.push(shadow_obj);
-    }
-
-    build_stable_pack(
-        &mut workspace.stable_pack,
-        ctx.sorted_objects,
-        &workspace.shadow_objs,
-        ctx.must_stable,
-        promoted_optional,
-    );
-    let stable_words = pack_objects_peak_presorted(&workspace.stable_pack);
+    let scratch_words = scratch_peak_with_trial(problem, state, trial, workspace);
+    let stable_words = stable_peak_with_trial(problem, state, trial, workspace);
+    let shadow_copy_words = shadow_copy_words_with_trial(problem, state, trial);
+    let recursive_access_cost = recursive_access_cost_with_trial(problem, state, trial);
 
     FuncPlacementScore {
         scratch_words,
         stable_words,
         cost: placement_cost(
-            ctx,
-            promoted_optional,
+            problem,
+            recursive_access_cost,
             shadow_copy_words,
             scratch_words,
             stable_words,
         ),
     }
+}
+
+fn scratch_peak_with_trial(
+    problem: &PlacementProblem<'_>,
+    state: &PlacementState,
+    trial: PlacementTrial,
+    workspace: &mut FuncPlacementScoreWorkspace,
+) -> u32 {
+    let trial_candidate = trial_candidate(problem, trial);
+    let (insert_idx, skip_idx) = match trial {
+        PlacementTrial::Add(_) => (None, trial_candidate.map(|candidate| candidate.local_idx)),
+        PlacementTrial::Remove(_) => (trial_candidate.map(|candidate| candidate.local_idx), None),
+        PlacementTrial::None => (None, None),
+    };
+    let count = state.scratch_real_locals.len() + usize::from(insert_idx.is_some())
+        - usize::from(skip_idx.is_some());
+
+    pack_zero_min_offset_peak_sorted(
+        &mut workspace.scratch_peak,
+        TrialLocalIter::new(&state.scratch_real_locals, insert_idx, skip_idx)
+            .map(|local_idx| peak_item_for_local(problem, local_idx)),
+        count,
+    )
+}
+
+fn stable_peak_with_trial(
+    problem: &PlacementProblem<'_>,
+    state: &PlacementState,
+    trial: PlacementTrial,
+    workspace: &mut FuncPlacementScoreWorkspace,
+) -> u32 {
+    let trial_candidate = trial_candidate(problem, trial);
+    let (insert_idx, skip_idx) = match trial {
+        PlacementTrial::Add(_) => (trial_candidate.map(|candidate| candidate.local_idx), None),
+        PlacementTrial::Remove(_) => (None, trial_candidate.map(|candidate| candidate.local_idx)),
+        PlacementTrial::None => (None, None),
+    };
+    let mut real_iter = TrialLocalIter::new(&state.stable_real_locals, insert_idx, skip_idx)
+        .map(|local_idx| peak_item_for_local(problem, local_idx))
+        .peekable();
+    let mut shadow_iter = TrialShadowCallIter::new(problem, state, trial).peekable();
+    let count = state.stable_real_locals.len() + usize::from(insert_idx.is_some())
+        - usize::from(skip_idx.is_some())
+        + shadow_call_count_with_trial(problem, state, trial);
+
+    pack_zero_min_offset_peak_sorted(
+        &mut workspace.stable_peak,
+        std::iter::from_fn(move || match (real_iter.peek(), shadow_iter.peek()) {
+            (Some(real), Some(shadow)) => {
+                if peak_real_sorts_before_shadow(real, shadow) {
+                    real_iter.next()
+                } else {
+                    shadow_iter.next()
+                }
+            }
+            (Some(_), None) => real_iter.next(),
+            (None, Some(_)) => shadow_iter.next(),
+            (None, None) => None,
+        }),
+        count,
+    )
 }
 
 fn build_shadow_preserve_for_call(
@@ -821,46 +1131,6 @@ fn build_shadow_preserve_for_call(
     Some((shadow_obj, plan))
 }
 
-fn build_shadow_obj_for_call(
-    stack: &FuncStackObjects,
-    call: &CallSiteObjects,
-    must_stable: &BitSet<StackObjId>,
-    promoted_optional: &BitSet<StackObjId>,
-    next_obj_id: u32,
-) -> Option<StackObj> {
-    let mut shadow_words: u32 = 0;
-    for &obj in &call.live_out_objs {
-        if is_stable_real(must_stable, promoted_optional, obj) {
-            continue;
-        }
-        let Some(&size) = stack.obj_size_words.get(&obj) else {
-            panic!("missing object size for obj {}", obj.as_u32());
-        };
-        if size == 0 {
-            continue;
-        }
-        shadow_words = shadow_words
-            .checked_add(size)
-            .expect("shadow object size overflow");
-    }
-    if shadow_words == 0 {
-        return None;
-    }
-
-    Some(StackObj {
-        id: StackObjId::new(next_obj_id as usize),
-        kind: StackObjKind::Shadow(call.inst),
-        size_words: shadow_words,
-        interval: LiveInterval {
-            start: call.inst_pos,
-            end: call.inst_pos,
-        },
-        access_weight: 0,
-        load_count: 0,
-        store_count: 0,
-    })
-}
-
 fn build_scratch_pack(
     scratch_pack: &mut Vec<PackedObject>,
     sorted_objects: &[&StackObj],
@@ -924,72 +1194,27 @@ fn build_stable_pack(
 }
 
 fn placement_cost(
-    ctx: &FuncPlacementCtx<'_>,
-    promoted_optional: &BitSet<StackObjId>,
+    problem: &PlacementProblem<'_>,
+    recursive_access_cost: u64,
     shadow_copy_words: u64,
     scratch_words: u32,
     stable_words: u32,
 ) -> u64 {
-    let mut cost = evaluate_memory_cost(ctx.cost_model, scratch_words, stable_words);
-    if ctx.is_recursive && stable_words != 0 {
+    let mut cost = evaluate_memory_cost(problem.cost_model, scratch_words, stable_words);
+    if problem.is_recursive && stable_words != 0 {
         cost = cost
-            .checked_add(
-                ctx.cost_model
-                    .w_save
-                    .checked_mul(32)
-                    .expect("frame setup cost overflow"),
-            )
-            .and_then(|cost| {
-                cost.checked_add(
-                    ctx.cost_model
-                        .w_code
-                        .checked_mul(16)
-                        .expect("frame setup code cost overflow"),
-                )
-            })
+            .checked_add(problem.frame_setup_cost)
             .expect("frame setup total cost overflow");
     }
-    if ctx.is_recursive {
-        for fact in ctx.facts.values() {
-            if !is_stable_real(ctx.must_stable, promoted_optional, fact.id) {
-                continue;
-            }
-            let access_penalty = fact.access_weight.saturating_mul(4);
-            cost = cost
-                .checked_add(
-                    ctx.cost_model
-                        .w_stack
-                        .checked_mul(access_penalty)
-                        .expect("frame access cost overflow"),
-                )
-                .expect("frame access total cost overflow");
-        }
-    }
-    let (copy_gas, copy_bytes) = if ctx.is_recursive {
-        (
-            shadow_copy_words.saturating_mul(16),
-            shadow_copy_words.saturating_mul(16),
-        )
-    } else {
-        (
-            shadow_copy_words.saturating_mul(12),
-            shadow_copy_words.saturating_mul(12),
-        )
-    };
+    cost = cost
+        .checked_add(recursive_access_cost)
+        .expect("frame access total cost overflow");
     cost.checked_add(
-        ctx.cost_model
-            .w_save
-            .checked_mul(copy_gas)
-            .expect("shadow copy gas cost overflow"),
+        problem
+            .shadow_cost_per_word
+            .checked_mul(shadow_copy_words)
+            .expect("shadow copy total cost overflow"),
     )
-    .and_then(|cost| {
-        cost.checked_add(
-            ctx.cost_model
-                .w_code
-                .checked_mul(copy_bytes)
-                .expect("shadow copy code cost overflow"),
-        )
-    })
     .expect("shadow copy total cost overflow")
 }
 
@@ -1005,20 +1230,277 @@ fn shadow_copy_words(call_preserve: &FxHashMap<InstId, CallPreservePlan>) -> u64
         .sum()
 }
 
+struct TrialLocalIter<'a> {
+    base: &'a [u32],
+    pos: usize,
+    insert_idx: Option<u32>,
+    skip_idx: Option<u32>,
+}
+
+impl<'a> TrialLocalIter<'a> {
+    fn new(base: &'a [u32], insert_idx: Option<u32>, skip_idx: Option<u32>) -> Self {
+        Self {
+            base,
+            pos: 0,
+            insert_idx,
+            skip_idx,
+        }
+    }
+}
+
+impl Iterator for TrialLocalIter<'_> {
+    type Item = u32;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            let base_idx = self.base.get(self.pos).copied();
+            if let Some(insert_idx) = self.insert_idx
+                && base_idx.is_none_or(|base_idx| insert_idx < base_idx)
+            {
+                self.insert_idx = None;
+                return Some(insert_idx);
+            }
+
+            let Some(base_idx) = base_idx else {
+                return self.insert_idx.take();
+            };
+            self.pos += 1;
+            if self.skip_idx == Some(base_idx) {
+                continue;
+            }
+            return Some(base_idx);
+        }
+    }
+}
+
+struct TrialShadowCallIter<'a> {
+    problem: &'a PlacementProblem<'a>,
+    state: &'a PlacementState,
+    trial: PlacementTrial,
+    trial_candidate: Option<&'a CandidateMeta>,
+    base_pos: usize,
+    trial_pos: usize,
+}
+
+impl<'a> TrialShadowCallIter<'a> {
+    fn new(
+        problem: &'a PlacementProblem<'a>,
+        state: &'a PlacementState,
+        trial: PlacementTrial,
+    ) -> Self {
+        Self {
+            problem,
+            state,
+            trial,
+            trial_candidate: trial_candidate(problem, trial),
+            base_pos: 0,
+            trial_pos: 0,
+        }
+    }
+}
+
+impl Iterator for TrialShadowCallIter<'_> {
+    type Item = PeakPackItem;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            let base_idx = self.state.nonzero_shadow_calls.get(self.base_pos).copied();
+            let trial_idx = self
+                .trial_candidate
+                .and_then(|candidate| candidate.live_call_indices.get(self.trial_pos).copied());
+            let idx = match (base_idx, trial_idx) {
+                (Some(base_idx), Some(trial_idx)) => base_idx.min(trial_idx),
+                (Some(base_idx), None) => base_idx,
+                (None, Some(trial_idx)) => trial_idx,
+                (None, None) => return None,
+            };
+            let from_base = base_idx == Some(idx);
+            let from_trial = trial_idx == Some(idx);
+            if from_base {
+                self.base_pos += 1;
+            }
+            if from_trial {
+                self.trial_pos += 1;
+            }
+
+            let mut shadow_words = if from_base {
+                self.state.shadow_words_by_call[idx as usize]
+            } else {
+                0
+            };
+            if from_trial && let Some(candidate) = self.trial_candidate {
+                shadow_words = match self.trial {
+                    PlacementTrial::Add(_) => shadow_words
+                        .checked_sub(candidate.size_words)
+                        .expect("shadow words underflow"),
+                    PlacementTrial::Remove(_) => shadow_words
+                        .checked_add(candidate.size_words)
+                        .expect("shadow words overflow"),
+                    PlacementTrial::None => shadow_words,
+                };
+            }
+            if shadow_words == 0 {
+                continue;
+            }
+
+            let call = self.problem.sorted_calls[idx as usize];
+            return Some(PeakPackItem {
+                start: call.inst_pos,
+                end: call.inst_pos,
+                size_words: shadow_words,
+            });
+        }
+    }
+}
+
+fn peak_item_for_local(problem: &PlacementProblem<'_>, local_idx: u32) -> PeakPackItem {
+    let obj = problem.sorted_objects[local_idx as usize];
+    PeakPackItem {
+        start: obj.interval.start,
+        end: obj.interval.end,
+        size_words: obj.size_words,
+    }
+}
+
+fn peak_real_sorts_before_shadow(real: &PeakPackItem, shadow: &PeakPackItem) -> bool {
+    (real.start, real.end) <= (shadow.start, shadow.end)
+}
+
+fn shadow_call_count_with_trial(
+    problem: &PlacementProblem<'_>,
+    state: &PlacementState,
+    trial: PlacementTrial,
+) -> usize {
+    let mut count = state.nonzero_shadow_calls.len();
+    if let Some(candidate) = trial_candidate(problem, trial) {
+        for &call_idx in &candidate.live_call_indices {
+            let shadow_words = state.shadow_words_by_call[call_idx as usize];
+            let next_shadow_words = match trial {
+                PlacementTrial::Add(_) => shadow_words
+                    .checked_sub(candidate.size_words)
+                    .expect("shadow words underflow"),
+                PlacementTrial::Remove(_) => shadow_words
+                    .checked_add(candidate.size_words)
+                    .expect("shadow words overflow"),
+                PlacementTrial::None => shadow_words,
+            };
+            if shadow_words == 0 && next_shadow_words != 0 {
+                count += 1;
+            } else if shadow_words != 0 && next_shadow_words == 0 {
+                count -= 1;
+            }
+        }
+    }
+    count
+}
+
+fn shadow_copy_words_with_trial(
+    problem: &PlacementProblem<'_>,
+    state: &PlacementState,
+    trial: PlacementTrial,
+) -> u64 {
+    match trial {
+        PlacementTrial::None => state.shadow_copy_words,
+        PlacementTrial::Add(candidate_idx) => state
+            .shadow_copy_words
+            .checked_sub(problem.candidates[candidate_idx].shadow_copy_words)
+            .expect("shadow copy words underflow"),
+        PlacementTrial::Remove(candidate_idx) => state
+            .shadow_copy_words
+            .checked_add(problem.candidates[candidate_idx].shadow_copy_words)
+            .expect("shadow copy words overflow"),
+    }
+}
+
+fn recursive_access_cost_with_trial(
+    problem: &PlacementProblem<'_>,
+    state: &PlacementState,
+    trial: PlacementTrial,
+) -> u64 {
+    match trial {
+        PlacementTrial::None => state.recursive_access_cost,
+        PlacementTrial::Add(candidate_idx) => state
+            .recursive_access_cost
+            .checked_add(problem.candidates[candidate_idx].recursive_access_cost)
+            .expect("recursive access cost overflow"),
+        PlacementTrial::Remove(candidate_idx) => state
+            .recursive_access_cost
+            .checked_sub(problem.candidates[candidate_idx].recursive_access_cost)
+            .expect("recursive access cost underflow"),
+    }
+}
+
+fn trial_candidate<'a>(
+    problem: &'a PlacementProblem<'a>,
+    trial: PlacementTrial,
+) -> Option<&'a CandidateMeta> {
+    match trial {
+        PlacementTrial::None => None,
+        PlacementTrial::Add(candidate_idx) | PlacementTrial::Remove(candidate_idx) => {
+            Some(&problem.candidates[candidate_idx])
+        }
+    }
+}
+
+fn insert_sorted_u32(values: &mut Vec<u32>, value: u32) {
+    match values.binary_search(&value) {
+        Ok(_) => {}
+        Err(index) => values.insert(index, value),
+    }
+}
+
+fn remove_sorted_u32(values: &mut Vec<u32>, value: u32) {
+    let index = values
+        .binary_search(&value)
+        .unwrap_or_else(|_| panic!("missing sorted value {value}"));
+    let _ = values.remove(index);
+}
+
+fn recursive_access_cost(cost_model: &ArenaCostModel, is_recursive: bool, fact: &ObjFacts) -> u64 {
+    if !is_recursive {
+        return 0;
+    }
+    cost_model
+        .w_stack
+        .checked_mul(fact.access_weight.saturating_mul(4))
+        .expect("frame access cost overflow")
+}
+
+fn frame_setup_cost(cost_model: &ArenaCostModel) -> u64 {
+    cost_model
+        .w_save
+        .checked_mul(32)
+        .expect("frame setup cost overflow")
+        .checked_add(
+            cost_model
+                .w_code
+                .checked_mul(16)
+                .expect("frame setup code cost overflow"),
+        )
+        .expect("frame setup total cost overflow")
+}
+
+fn shadow_cost_per_word(cost_model: &ArenaCostModel, is_recursive: bool) -> u64 {
+    let copy_units = if is_recursive { 16 } else { 12 };
+    cost_model
+        .w_save
+        .checked_mul(copy_units)
+        .expect("shadow copy gas cost overflow")
+        .checked_add(
+            cost_model
+                .w_code
+                .checked_mul(copy_units)
+                .expect("shadow copy code cost overflow"),
+        )
+        .expect("shadow copy total cost overflow")
+}
+
 fn is_stable_real(
     must_stable: &BitSet<StackObjId>,
     promoted_optional: &BitSet<StackObjId>,
     obj: StackObjId,
 ) -> bool {
     must_stable.contains(obj) || promoted_optional.contains(obj)
-}
-
-fn score_from_eval(eval: &FuncPlacementEval) -> FuncPlacementScore {
-    FuncPlacementScore {
-        scratch_words: eval.scratch_words,
-        stable_words: eval.stable_words,
-        cost: eval.cost,
-    }
 }
 
 fn is_better_score(candidate: FuncPlacementScore, current: FuncPlacementScore) -> bool {
@@ -1507,6 +1989,74 @@ mod tests {
         })
     }
 
+    fn problem_from_src(
+        src: &str,
+        func_name: &str,
+        cost_model: &ArenaCostModel,
+    ) -> (PlacementProblem<'static>, bool) {
+        let parsed = parse_module(src).unwrap();
+        let module = Box::leak(Box::new(parsed.module));
+        let funcs = module.funcs();
+        let isa = Box::leak(Box::new(test_isa()));
+        let cost_model = Box::leak(Box::new(*cost_model));
+        let ptr_escape = Box::leak(Box::new(
+            super::super::ptr_escape::compute_ptr_escape_summaries(module, &funcs, isa),
+        ));
+
+        let mut analyses: FxHashMap<FuncRef, FuncAnalysis> = FxHashMap::default();
+        for &func in &funcs {
+            module.func_store.modify(func, |function| {
+                analyses.insert(func, build_analysis(function, 16));
+            });
+        }
+
+        let funcs_set: FxHashSet<FuncRef> = funcs.iter().copied().collect();
+        let call_graph = CallGraph::build_graph_subset(module, &funcs_set);
+        let scc = SccBuilder::new().compute_scc(&call_graph);
+
+        let mut names: FxHashMap<String, FuncRef> = FxHashMap::default();
+        for &func in &funcs {
+            let name = module.ctx.func_sig(func, |sig| sig.name().to_string());
+            names.insert(name, func);
+        }
+        let func = names[func_name];
+        let analysis = analyses.remove(&func).expect("missing analysis");
+        let alloc_ctx = StaticArenaAllocCtx::new(&module.ctx, isa, ptr_escape);
+        let stack = Box::leak(Box::new(module.func_store.view(func, |function| {
+            alloc_ctx.compute_func_stack_objects(func, function, &analysis)
+        })));
+        let scc_ref = scc.scc_ref(func);
+        let is_recursive = scc.scc_info(scc_ref).is_cycle;
+        let facts = Box::leak(Box::new(build_planner_facts(
+            stack,
+            &scc,
+            scc_ref,
+            is_recursive,
+        )));
+        (
+            PlacementProblem::new(stack, facts, is_recursive, cost_model),
+            is_recursive,
+        )
+    }
+
+    fn score_from_full_eval(
+        problem: &PlacementProblem<'_>,
+        state: &PlacementState,
+        eval: &FuncPlacementEval,
+    ) -> FuncPlacementScore {
+        FuncPlacementScore {
+            scratch_words: eval.scratch_words,
+            stable_words: eval.stable_words,
+            cost: placement_cost(
+                problem,
+                state.recursive_access_cost,
+                shadow_copy_words(&eval.call_preserve),
+                eval.scratch_words,
+                eval.stable_words,
+            ),
+        }
+    }
+
     #[test]
     fn visible_alloca_uses_static_stable_abs() {
         let ctx = plan_ctx_from_src(
@@ -1715,5 +2265,111 @@ block0:
         let c_base = c_plan.stable_base_word().expect("missing c base");
         assert!(b_base >= a_base + a_plan.stable_words);
         assert!(c_base >= b_base + b_plan.stable_words);
+    }
+
+    #[test]
+    fn streamed_func_placement_score_matches_full_eval() {
+        let cost_model = ArenaCostModel::default();
+        let (problem, is_recursive) = problem_from_src(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %f() -> i256 {
+block0:
+    v0.*i256 = alloca i256;
+    v1.*i256 = alloca i256;
+    mstore v0 1.i256 i256;
+    mstore v1 2.i256 i256;
+    v2.i256 = call %f;
+    v3.i256 = mload v0 i256;
+    v4.i256 = mload v1 i256;
+    v5.i256 = add v2 v3;
+    v6.i256 = add v5 v4;
+    return v6;
+}
+"#,
+            "f",
+            &cost_model,
+        );
+        assert!(is_recursive, "test expects a recursive function");
+        assert_eq!(problem.candidates.len(), 2, "test expects two candidates");
+
+        for mask in 0..(1usize << problem.candidates.len()) {
+            let mut state = PlacementState::new(&problem);
+            let mut score_workspace = FuncPlacementScoreWorkspace::default();
+            for candidate_idx in 0..problem.candidates.len() {
+                if mask & (1 << candidate_idx) != 0 {
+                    state.apply_add(&problem, candidate_idx);
+                }
+            }
+
+            let promoted_optional = problem.promoted_optional(&state);
+            let mut workspace = FuncPlacementWorkspace {
+                scratch_pack: Vec::with_capacity(problem.sorted_objects.len()),
+                shadow_objs: Vec::with_capacity(problem.sorted_calls.len()),
+                stable_pack: Vec::with_capacity(
+                    problem
+                        .sorted_objects
+                        .len()
+                        .saturating_add(problem.sorted_calls.len()),
+                ),
+            };
+            let eval =
+                evaluate_func_placement(&problem, &promoted_optional, &state, &mut workspace);
+            assert_eq!(
+                evaluate_func_placement_score(
+                    &problem,
+                    &state,
+                    PlacementTrial::None,
+                    &mut score_workspace,
+                ),
+                score_from_full_eval(&problem, &state, &eval),
+                "baseline streamed score mismatch for promoted mask {mask:b}"
+            );
+
+            for candidate_idx in 0..problem.candidates.len() {
+                if state.promoted[candidate_idx] {
+                    let mut next_state = state.clone();
+                    next_state.apply_remove(&problem, candidate_idx);
+                    let next_promoted = problem.promoted_optional(&next_state);
+                    let next_eval = evaluate_func_placement(
+                        &problem,
+                        &next_promoted,
+                        &next_state,
+                        &mut workspace,
+                    );
+                    assert_eq!(
+                        evaluate_func_placement_score(
+                            &problem,
+                            &state,
+                            PlacementTrial::Remove(candidate_idx),
+                            &mut score_workspace,
+                        ),
+                        score_from_full_eval(&problem, &next_state, &next_eval),
+                        "remove-trial streamed score mismatch for candidate {candidate_idx} in mask {mask:b}"
+                    );
+                } else {
+                    let mut next_state = state.clone();
+                    next_state.apply_add(&problem, candidate_idx);
+                    let next_promoted = problem.promoted_optional(&next_state);
+                    let next_eval = evaluate_func_placement(
+                        &problem,
+                        &next_promoted,
+                        &next_state,
+                        &mut workspace,
+                    );
+                    assert_eq!(
+                        evaluate_func_placement_score(
+                            &problem,
+                            &state,
+                            PlacementTrial::Add(candidate_idx),
+                            &mut score_workspace,
+                        ),
+                        score_from_full_eval(&problem, &next_state, &next_eval),
+                        "add-trial streamed score mismatch for candidate {candidate_idx} in mask {mask:b}"
+                    );
+                }
+            }
+        }
     }
 }

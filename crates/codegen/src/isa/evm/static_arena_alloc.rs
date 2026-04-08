@@ -749,19 +749,31 @@ pub(crate) fn pack_objects_presorted(
     objects: &[PackedObject],
 ) -> (FxHashMap<StackObjId, u32>, u32) {
     let mut out = FxHashMap::with_capacity_and_hasher(objects.len(), Default::default());
-    let max_used = pack_objects_impl(objects, |id, off| {
+    let max_used = pack_objects_impl(objects.iter().copied(), objects.len(), |id, off| {
         let _ = out.insert(id, off);
     });
     (out, max_used)
 }
 
+#[cfg(test)]
 pub(crate) fn pack_objects_peak_presorted(objects: &[PackedObject]) -> u32 {
-    pack_objects_impl(objects, |_, _| {})
+    pack_objects_peak(objects.iter().copied())
 }
 
-fn pack_objects_impl(objects: &[PackedObject], mut record: impl FnMut(StackObjId, u32)) -> u32 {
+#[cfg(test)]
+pub(crate) fn pack_objects_peak(objects: impl IntoIterator<Item = PackedObject>) -> u32 {
+    let iter = objects.into_iter();
+    let (lower_bound, _) = iter.size_hint();
+    pack_objects_impl(iter, lower_bound, |_, _| {})
+}
+
+fn pack_objects_impl(
+    objects: impl IntoIterator<Item = PackedObject>,
+    lower_bound: usize,
+    mut record: impl FnMut(StackObjId, u32),
+) -> u32 {
     let mut active: BinaryHeap<Reverse<(u32, u32, u32, u32)>> =
-        BinaryHeap::with_capacity(objects.len());
+        BinaryHeap::with_capacity(lower_bound);
     let mut free = Vec::new();
     let mut max_used: u32 = 0;
 
@@ -878,6 +890,300 @@ fn insert_free_segment(free: &mut Vec<FreeSegment>, start: u32, len: u32) {
     }
 
     free.insert(index, FreeSegment { start, len });
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct PeakPackItem {
+    pub(crate) start: u32,
+    pub(crate) end: u32,
+    pub(crate) size_words: u32,
+}
+
+#[derive(Default)]
+pub(crate) struct PeakPackWorkspace {
+    active: BinaryHeap<Reverse<(u32, u32, u32)>>,
+    free: PeakFreeTree,
+}
+
+impl PeakPackWorkspace {
+    fn reset(&mut self, capacity_hint: usize) {
+        self.active.clear();
+        if self.active.capacity() < capacity_hint {
+            self.active.reserve(capacity_hint - self.active.capacity());
+        }
+        self.free.clear(capacity_hint);
+    }
+}
+
+#[derive(Default)]
+struct PeakFreeTree {
+    root: Option<u32>,
+    nodes: Vec<PeakFreeNode>,
+}
+
+#[derive(Clone, Copy)]
+struct PeakFreeNode {
+    start: u32,
+    len: u32,
+    max_len: u32,
+    prio: u64,
+    left: Option<u32>,
+    right: Option<u32>,
+}
+
+impl PeakFreeTree {
+    fn clear(&mut self, capacity_hint: usize) {
+        self.root = None;
+        self.nodes.clear();
+        if self.nodes.capacity() < capacity_hint {
+            self.nodes.reserve(capacity_hint - self.nodes.capacity());
+        }
+    }
+
+    fn insert(&mut self, start: u32, len: u32) {
+        if len == 0 {
+            return;
+        }
+
+        let mut start = start;
+        let mut len = len;
+        let (left, right) = self.split(self.root, start);
+        let (left, prev) = self.pop_last(left);
+        let mut left = left;
+        if let Some(prev) = prev {
+            let prev_end = prev
+                .start
+                .checked_add(prev.len)
+                .expect("free segment overflow");
+            if prev_end == start {
+                start = prev.start;
+                len = len.checked_add(prev.len).expect("free segment overflow");
+            } else {
+                let prev = self.alloc(prev.start, prev.len);
+                left = self.merge(left, Some(prev));
+            }
+        }
+
+        let (right, next) = self.pop_first(right);
+        let mut right = right;
+        if let Some(next) = next {
+            let end = start.checked_add(len).expect("free segment overflow");
+            if end == next.start {
+                len = len.checked_add(next.len).expect("free segment overflow");
+            } else {
+                let next = self.alloc(next.start, next.len);
+                right = self.merge(Some(next), right);
+            }
+        }
+
+        let inserted = self.alloc(start, len);
+        self.root = self.merge(left, Some(inserted));
+        self.root = self.merge(self.root, right);
+    }
+
+    fn take_leftmost_fit(&mut self, size_words: u32) -> Option<FreeSegment> {
+        let (root, segment) = self.take_leftmost_fit_from(self.root, size_words);
+        self.root = root;
+        segment
+    }
+
+    fn take_leftmost_fit_from(
+        &mut self,
+        root: Option<u32>,
+        size_words: u32,
+    ) -> (Option<u32>, Option<FreeSegment>) {
+        let Some(idx) = root else {
+            return (None, None);
+        };
+
+        let left = self.nodes[idx as usize].left;
+        if self.max_len(left) >= size_words {
+            let (new_left, segment) = self.take_leftmost_fit_from(left, size_words);
+            self.nodes[idx as usize].left = new_left;
+            self.update(idx);
+            return (Some(idx), segment);
+        }
+
+        if self.nodes[idx as usize].len >= size_words {
+            let node = self.nodes[idx as usize];
+            return (
+                self.merge(node.left, node.right),
+                Some(FreeSegment {
+                    start: node.start,
+                    len: node.len,
+                }),
+            );
+        }
+
+        let (new_right, segment) =
+            self.take_leftmost_fit_from(self.nodes[idx as usize].right, size_words);
+        self.nodes[idx as usize].right = new_right;
+        self.update(idx);
+        (Some(idx), segment)
+    }
+
+    fn split(&mut self, root: Option<u32>, start: u32) -> (Option<u32>, Option<u32>) {
+        let Some(idx) = root else {
+            return (None, None);
+        };
+        if self.nodes[idx as usize].start < start {
+            let (mid, right) = self.split(self.nodes[idx as usize].right, start);
+            self.nodes[idx as usize].right = mid;
+            self.update(idx);
+            (Some(idx), right)
+        } else {
+            let (left, mid) = self.split(self.nodes[idx as usize].left, start);
+            self.nodes[idx as usize].left = mid;
+            self.update(idx);
+            (left, Some(idx))
+        }
+    }
+
+    fn merge(&mut self, left: Option<u32>, right: Option<u32>) -> Option<u32> {
+        match (left, right) {
+            (None, root) | (root, None) => root,
+            (Some(l), Some(r)) if self.nodes[l as usize].prio <= self.nodes[r as usize].prio => {
+                let merged = self.merge(self.nodes[l as usize].right, Some(r));
+                self.nodes[l as usize].right = merged;
+                self.update(l);
+                Some(l)
+            }
+            (Some(l), Some(r)) => {
+                let merged = self.merge(Some(l), self.nodes[r as usize].left);
+                self.nodes[r as usize].left = merged;
+                self.update(r);
+                Some(r)
+            }
+        }
+    }
+
+    fn pop_first(&mut self, root: Option<u32>) -> (Option<u32>, Option<FreeSegment>) {
+        let Some(idx) = root else {
+            return (None, None);
+        };
+        if self.nodes[idx as usize].left.is_none() {
+            let node = self.nodes[idx as usize];
+            return (
+                node.right,
+                Some(FreeSegment {
+                    start: node.start,
+                    len: node.len,
+                }),
+            );
+        }
+
+        let (left, segment) = self.pop_first(self.nodes[idx as usize].left);
+        self.nodes[idx as usize].left = left;
+        self.update(idx);
+        (Some(idx), segment)
+    }
+
+    fn pop_last(&mut self, root: Option<u32>) -> (Option<u32>, Option<FreeSegment>) {
+        let Some(idx) = root else {
+            return (None, None);
+        };
+        if self.nodes[idx as usize].right.is_none() {
+            let node = self.nodes[idx as usize];
+            return (
+                node.left,
+                Some(FreeSegment {
+                    start: node.start,
+                    len: node.len,
+                }),
+            );
+        }
+
+        let (right, segment) = self.pop_last(self.nodes[idx as usize].right);
+        self.nodes[idx as usize].right = right;
+        self.update(idx);
+        (Some(idx), segment)
+    }
+
+    fn alloc(&mut self, start: u32, len: u32) -> u32 {
+        let idx = self.nodes.len() as u32;
+        self.nodes.push(PeakFreeNode {
+            start,
+            len,
+            max_len: len,
+            prio: peak_node_priority(start),
+            left: None,
+            right: None,
+        });
+        idx
+    }
+
+    fn update(&mut self, idx: u32) {
+        let left = self.max_len(self.nodes[idx as usize].left);
+        let right = self.max_len(self.nodes[idx as usize].right);
+        self.nodes[idx as usize].max_len = self.nodes[idx as usize].len.max(left.max(right));
+    }
+
+    fn max_len(&self, idx: Option<u32>) -> u32 {
+        idx.map_or(0, |idx| self.nodes[idx as usize].max_len)
+    }
+}
+
+fn peak_node_priority(start: u32) -> u64 {
+    let mut x = u64::from(start).wrapping_add(0x9e37_79b9_7f4a_7c15);
+    x ^= x >> 30;
+    x = x.wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    x ^= x >> 27;
+    x = x.wrapping_mul(0x94d0_49bb_1331_11eb);
+    x ^ (x >> 31)
+}
+
+pub(crate) fn pack_zero_min_offset_peak_sorted(
+    workspace: &mut PeakPackWorkspace,
+    items: impl IntoIterator<Item = PeakPackItem>,
+    capacity_hint: usize,
+) -> u32 {
+    workspace.reset(capacity_hint);
+    let mut max_used: u32 = 0;
+
+    for item in items {
+        while let Some(Reverse((end, off, size))) = workspace.active.peek().copied()
+            && end <= item.start
+        {
+            let _ = workspace.active.pop();
+            workspace.free.insert(off, size);
+        }
+
+        if item.size_words == 0 {
+            continue;
+        }
+
+        let off = if let Some(segment) = workspace.free.take_leftmost_fit(item.size_words) {
+            if segment.len > item.size_words {
+                workspace.free.insert(
+                    segment
+                        .start
+                        .checked_add(item.size_words)
+                        .expect("free segment overflow"),
+                    segment
+                        .len
+                        .checked_sub(item.size_words)
+                        .expect("free segment underflow"),
+                );
+            }
+            segment.start
+        } else {
+            let off = max_used;
+            max_used = off
+                .checked_add(item.size_words)
+                .expect("locals size overflow");
+            off
+        };
+
+        workspace
+            .active
+            .push(Reverse((item.end, off, item.size_words)));
+        max_used = max_used.max(
+            off.checked_add(item.size_words)
+                .expect("locals size overflow"),
+        );
+    }
+
+    max_used
 }
 
 fn conservative_unknown_ptr_summary(module: &ModuleCtx, func_ref: FuncRef) -> PtrEscapeSummary {
@@ -1194,5 +1500,51 @@ mod tests {
 
         assert_eq!(presorted_offsets, sorted_offsets);
         assert_eq!(presorted_words, sorted_words);
+        assert_eq!(pack_objects_peak_presorted(&presorted), sorted_words);
+    }
+
+    #[test]
+    fn zero_min_peak_packer_matches_generic_peak() {
+        let mut objects = vec![
+            PackedObject {
+                id: StackObjId::new(5),
+                size_words: 4,
+                interval: LiveInterval { start: 5, end: 9 },
+                min_offset_words: 0,
+            },
+            PackedObject {
+                id: StackObjId::new(2),
+                size_words: 2,
+                interval: LiveInterval { start: 0, end: 4 },
+                min_offset_words: 0,
+            },
+            PackedObject {
+                id: StackObjId::new(7),
+                size_words: 3,
+                interval: LiveInterval { start: 2, end: 6 },
+                min_offset_words: 0,
+            },
+            PackedObject {
+                id: StackObjId::new(8),
+                size_words: 1,
+                interval: LiveInterval { start: 6, end: 6 },
+                min_offset_words: 0,
+            },
+        ];
+        objects.sort_unstable_by_key(|obj| (obj.interval.start, obj.interval.end, obj.id.as_u32()));
+
+        let generic_peak = pack_objects_peak_presorted(&objects);
+        let mut workspace = PeakPackWorkspace::default();
+        let specialized_peak = pack_zero_min_offset_peak_sorted(
+            &mut workspace,
+            objects.iter().map(|obj| PeakPackItem {
+                start: obj.interval.start,
+                end: obj.interval.end,
+                size_words: obj.size_words,
+            }),
+            objects.len(),
+        );
+
+        assert_eq!(specialized_peak, generic_peak);
     }
 }
