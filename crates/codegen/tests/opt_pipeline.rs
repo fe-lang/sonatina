@@ -854,6 +854,85 @@ func public %entry() -> i256 {
 }
 
 #[test]
+fn gvn_deletes_unreachable_region_with_cross_block_uses() {
+    let (module, func_ref) = parse_test_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+func public %entry() -> i256 {
+    block0:
+        v0.i1 = eq 0.i256 1.i256;
+        br v0 block1 block2;
+
+    block1:
+        v1.i256 = add 40.i256 2.i256;
+        jump block3;
+
+    block2:
+        return 7.i256;
+
+    block3:
+        return v1;
+}
+"#,
+    );
+    module.func_store.modify(func_ref, |func| {
+        let mut cfg = ControlFlowGraph::new();
+        let mut domtree = DomTree::new();
+        GvnSolver::new().run(func, &mut cfg, &mut domtree);
+    });
+    let dumped = module.func_store.view(func_ref, |func| {
+        FuncWriter::new(func_ref, func).dump_string()
+    });
+    assert!(
+        dumped.contains("return 7.i256;"),
+        "unreachable region should be pruned without leaving live users:\n{dumped}"
+    );
+    assert_fast_verified(&module);
+}
+
+#[test]
+fn gvn_deletes_unreachable_region_with_ptr_to_int_cross_block_use() {
+    let (module, func_ref) = parse_test_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+global private i32 $G0 = 0;
+
+func public %entry() -> i256 {
+    block0:
+        v0.i1 = eq 0.i256 1.i256;
+        br v0 block1 block2;
+
+    block1:
+        v1.i256 = ptr_to_int $G0 i256;
+        jump block3;
+
+    block2:
+        return 7.i256;
+
+    block3:
+        v2.i256 = add v1 1.i256;
+        return v2;
+}
+"#,
+    );
+    module.func_store.modify(func_ref, |func| {
+        let mut cfg = ControlFlowGraph::new();
+        let mut domtree = DomTree::new();
+        GvnSolver::new().run(func, &mut cfg, &mut domtree);
+    });
+    let dumped = module.func_store.view(func_ref, |func| {
+        FuncWriter::new(func_ref, func).dump_string()
+    });
+    assert!(
+        dumped.contains("return 7.i256;"),
+        "dead ptr_to_int region should be pruned without leaving live users:\n{dumped}"
+    );
+    assert_fast_verified(&module);
+}
+
+#[test]
 fn gvn_eliminates_redundant_checked_overflow_ops() {
     let (module, func_ref) = parse_test_module(
         r#"
