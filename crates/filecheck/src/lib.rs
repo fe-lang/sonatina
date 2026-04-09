@@ -3,7 +3,6 @@ pub mod aggregate_combine;
 pub mod aggregate_scalarize;
 pub mod cfg_cleanup;
 pub mod checked_arith_elim;
-pub mod egraph;
 pub mod gvn;
 pub mod insn_simplify;
 pub mod licm;

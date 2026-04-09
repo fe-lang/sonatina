@@ -31,7 +31,6 @@ use super::{
     checked_arith_elim::{CheckedArithElim, has_supported_checked_arith},
     dead_arg::{DeadArgElimConfig, run_dead_arg_elim},
     dead_func::{DeadFuncElimConfig, collect_object_roots, run_dead_func_elim},
-    egraph::run_egraph_pass,
     gvn::GvnSolver,
     inliner::{Inliner, InlinerConfig},
     known_bits_simplify::KnownBitsSimplify,
@@ -77,13 +76,11 @@ pub enum Pass {
     Licm,
     /// Loop strength reduction for affine memory addresses.
     LoopStrengthReduce,
-    /// Legacy e-graph based algebraic simplification pass.
-    Egraph,
     /// Complete Global Value Numbering (legacy sparse predicated solver).
     Gvn,
     /// Recompute `dfg.users` from layout-inserted instructions only.
     ///
-    /// Use after passes (like legacy Egraph) that can leave stale user entries
+    /// Use after passes that can leave stale user entries
     /// due to `change_to_alias` + layout removal interactions.
     RebuildUsers,
 }
@@ -105,7 +102,6 @@ impl Pass {
             Pass::Adce => "adce",
             Pass::Licm => "licm",
             Pass::LoopStrengthReduce => "loop_strength_reduce",
-            Pass::Egraph => "egraph",
             Pass::Gvn => "gvn",
             Pass::RebuildUsers => "rebuild_users",
         }
@@ -204,7 +200,7 @@ const POST_DEAD_ARG_CLEANUP_PASSES: &[Pass] = &[
 fn pass_needs_func_behavior(pass: Pass) -> bool {
     matches!(
         pass,
-        Pass::CfgCleanup | Pass::LoadStore | Pass::Sccp | Pass::Adce | Pass::Egraph | Pass::Gvn
+        Pass::CfgCleanup | Pass::LoadStore | Pass::Sccp | Pass::Adce | Pass::Gvn
     )
 }
 
@@ -224,7 +220,6 @@ fn pass_may_invalidate_func_behavior(pass: Pass) -> bool {
             | Pass::Adce
             | Pass::Licm
             | Pass::LoopStrengthReduce
-            | Pass::Egraph
             | Pass::Gvn
     )
 }
@@ -744,10 +739,6 @@ fn run_pass(
                     trace_span!("sonatina.optim.pipeline.loop_strength_reduce.solve").entered();
                 LoopStrengthReduce::new().run(func, &mut ctx.cfg, &mut ctx.domtree, &mut ctx.lpt);
             }
-        }
-        Pass::Egraph => {
-            let _span = trace_span!("sonatina.optim.pipeline.pass.egraph").entered();
-            run_egraph_pass(func);
         }
         Pass::Gvn => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.gvn").entered();

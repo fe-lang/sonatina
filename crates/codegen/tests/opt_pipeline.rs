@@ -5,7 +5,7 @@ use sonatina_codegen::{
     domtree::DomTree,
     loop_analysis::LoopTree,
     optim::{
-        Pass, Step, egraph::run_egraph_pass, gvn::GvnSolver, licm::LicmSolver, pipeline::Pipeline,
+        Pass, Step, gvn::GvnSolver, licm::LicmSolver, pipeline::Pipeline,
         scalar_canonicalize::ScalarCanonicalize, sccp::SccpSolver,
     },
 };
@@ -1343,13 +1343,6 @@ fn standalone_function_passes_support_live_multi_result_input() {
     });
     assert_func_contains(&licm_module, licm_func, "uaddo");
     assert_fast_verified(&licm_module);
-
-    let (egraph_module, egraph_func) = parse_test_module(STANDALONE_MULTI_RESULT_SRC);
-    egraph_module
-        .func_store
-        .modify(egraph_func, run_egraph_pass);
-    assert_func_contains(&egraph_module, egraph_func, "uaddo");
-    assert_fast_verified(&egraph_module);
 }
 
 #[test]

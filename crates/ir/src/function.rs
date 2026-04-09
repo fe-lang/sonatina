@@ -91,7 +91,7 @@ impl Function {
 
     /// Recompute `dfg.users` from scratch using all live DFG instructions.
     ///
-    /// Call this after passes that may leave stale user entries (e.g. egraph).
+    /// Call this after passes that may leave stale user entries.
     pub fn rebuild_users(&mut self) {
         self.dfg.clear_users();
         let insts: Vec<_> = self.dfg.inst_ids().collect();
