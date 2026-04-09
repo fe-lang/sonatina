@@ -132,6 +132,15 @@ impl<Op> ObjectLayout<Op> {
             .map(|layout| &mut layout.vcode)
     }
 
+    pub(crate) fn section_unit_vcode_mut(
+        &mut self,
+        unit: SectionCodeUnitId,
+    ) -> Option<&mut VCode<Op>> {
+        self.section_units
+            .get_mut(&unit)
+            .map(|layout| &mut layout.layout.vcode)
+    }
+
     pub(crate) fn func_layout(&self, func: FuncRef) -> Option<&FuncLayout<Op>> {
         self.functions.get(&func)
     }
