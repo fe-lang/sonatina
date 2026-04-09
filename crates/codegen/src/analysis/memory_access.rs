@@ -562,7 +562,7 @@ impl MemoryAccessAnalysis {
         visiting: &mut FxHashSet<ValueId>,
     ) -> Option<ValueKey> {
         if !visiting.insert(value) {
-            return Some(ValueKey::Value(value));
+            return None;
         }
 
         let key = match func.dfg.get_value(value)? {
@@ -572,7 +572,7 @@ impl MemoryAccessAnalysis {
                 inst,
                 result_idx,
                 ty,
-            } => Some(self.inst_value_key(func, value, *inst, *result_idx, *ty, visiting)),
+            } => self.inst_value_key(func, *inst, *result_idx, *ty, visiting),
             Value::Global { .. } | Value::Undef { .. } => None,
         };
 
@@ -583,12 +583,11 @@ impl MemoryAccessAnalysis {
     fn inst_value_key(
         &self,
         func: &Function,
-        value: ValueId,
         inst: InstId,
         result_idx: u16,
         ty: Type,
         visiting: &mut FxHashSet<ValueId>,
-    ) -> ValueKey {
+    ) -> Option<ValueKey> {
         let Some(results) = func.dfg.try_inst_results(inst) else {
             return ValueKey::Value(value);
         };
@@ -610,74 +609,57 @@ impl MemoryAccessAnalysis {
 
         match key.kind() {
             InstClassKind::Unary(_) => {
-                let Some(arg) = key
+                let arg = key
                     .unary_arg()
-                    .and_then(|arg| self.trackable_value_key_rec(func, arg, visiting))
-                else {
-                    return ValueKey::Value(value);
-                };
-                ValueKey::Expr(Box::new(KeyExpr::Unary {
+                    .and_then(|arg| self.trackable_value_key_rec(func, arg, visiting))?;
+                Some(ValueKey::Expr(Box::new(KeyExpr::Unary {
                     opcode: key.opcode_text(),
                     result_idx,
                     ty,
                     arg,
-                }))
+                })))
             }
             InstClassKind::Binary(_) => {
-                let Some((lhs, rhs)) = key.binary_args() else {
-                    return ValueKey::Value(value);
-                };
-                let Some(mut lhs) = self.trackable_value_key_rec(func, lhs, visiting) else {
-                    return ValueKey::Value(value);
-                };
-                let Some(mut rhs) = self.trackable_value_key_rec(func, rhs, visiting) else {
-                    return ValueKey::Value(value);
-                };
+                let (lhs, rhs) = key.binary_args()?;
+                let mut lhs = self.trackable_value_key_rec(func, lhs, visiting)?;
+                let mut rhs = self.trackable_value_key_rec(func, rhs, visiting)?;
                 if key.is_commutative_binary()
                     && value_key_fingerprint(&rhs) < value_key_fingerprint(&lhs)
                 {
                     std::mem::swap(&mut lhs, &mut rhs);
                 }
-                ValueKey::Expr(Box::new(KeyExpr::Binary {
+                Some(ValueKey::Expr(Box::new(KeyExpr::Binary {
                     opcode: key.opcode_text(),
                     result_idx,
                     ty,
                     extra_ty: key.extra_ty(),
                     lhs,
                     rhs,
-                }))
+                })))
             }
             InstClassKind::Cast(_) => {
-                let Some((arg, _)) = key.cast_arg_ty() else {
-                    return ValueKey::Value(value);
-                };
-                let Some(arg) = self.trackable_value_key_rec(func, arg, visiting) else {
-                    return ValueKey::Value(value);
-                };
-                ValueKey::Expr(Box::new(KeyExpr::Cast {
+                let (arg, _) = key.cast_arg_ty()?;
+                let arg = self.trackable_value_key_rec(func, arg, visiting)?;
+                Some(ValueKey::Expr(Box::new(KeyExpr::Cast {
                     opcode: key.opcode_text(),
                     result_idx,
                     ty,
                     arg,
-                }))
+                })))
             }
             InstClassKind::Phi => {
-                let Some(phi_args) = key.phi_args() else {
-                    return ValueKey::Value(value);
-                };
+                let phi_args = key.phi_args()?;
                 let mut args = phi_args
                     .iter()
                     .map(|(arg, _)| self.trackable_value_key_rec(func, *arg, visiting));
-                let Some(first) = args.next().flatten() else {
-                    return ValueKey::Value(value);
-                };
+                let first = args.next().flatten()?;
                 if args.all(|arg| arg.as_ref() == Some(&first)) {
-                    first
+                    Some(first)
                 } else {
-                    ValueKey::Value(value)
+                    None
                 }
             }
-            InstClassKind::Opaque => ValueKey::Value(value),
+            InstClassKind::Opaque => None,
         }
     }
 
@@ -810,7 +792,7 @@ mod tests {
         builder::test_util::*,
         inst::{
             arith::Add,
-            control_flow::Return,
+            control_flow::{Br, Jump, Return},
             data::{Alloca, Mload},
             evm::{EvmMalloc, EvmSload, EvmUaddsat},
         },
@@ -1012,6 +994,50 @@ mod tests {
         let analysis = MemoryAccessAnalysis::new();
 
         assert_eq!(analysis.alias(&key0, &key1), AliasResult::MustAlias);
+    }
+
+    #[test]
+    fn loop_variant_dynamic_keyed_access_is_not_trackable() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[Type::I1, Type::I256], Type::I256);
+        let is = evm.inst_set();
+        let carried = builder.declare_var(Type::I256);
+
+        let entry = builder.append_block();
+        let header = builder.append_block();
+        let body = builder.append_block();
+        let exit = builder.append_block();
+
+        builder.switch_to_block(entry);
+        let cond = builder.args()[0];
+        let base = builder.args()[1];
+        let zero = builder.make_imm_value(I256::from(0));
+        let one = builder.make_imm_value(I256::from(1));
+        builder.def_var(carried, zero);
+        builder.insert_inst_no_result_with(|| Jump::new(is, header));
+
+        builder.switch_to_block(header);
+        let idx = builder.use_var(carried);
+        let key = builder.insert_inst_with(|| Add::new(is, base, idx), Type::I256);
+        let load = builder.insert_inst_with(|| EvmSload::new(is, key), Type::I256);
+        let _ = load;
+        builder.insert_inst_no_result_with(|| Br::new(is, cond, exit, body));
+
+        builder.switch_to_block(body);
+        let next = builder.insert_inst_with(|| Add::new(is, idx, one), Type::I256);
+        builder.def_var(carried, next);
+        builder.insert_inst_no_result_with(|| Jump::new(is, header));
+
+        builder.switch_to_block(exit);
+        builder.insert_inst_no_result_with(|| Return::new_single(is, zero));
+        builder.seal_all();
+
+        let load_inst = builder
+            .func
+            .dfg
+            .value_inst(load)
+            .expect("loop load should stay defined by a load");
+        assert!(maybe_single_key(&builder.func, load_inst).is_none());
     }
 
     #[test]
