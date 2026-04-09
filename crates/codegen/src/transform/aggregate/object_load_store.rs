@@ -14,8 +14,9 @@ use super::{
     object_tracking::{
         ObjectSlice, TrackedObject, collect_root_slices, collect_tracked_objects,
         enum_tag_object_slice, enum_variant_field_object_slice, object_slice_overlaps_effect,
-        slice_is_covered_by, slices_overlap,
+        slice_is_covered_by, slices_overlap, whole_root_slice_for_value,
     },
+    provenance::{MayProvenance, MayRootSet},
     reconstruct::AggregateValueReconstructor,
     shape,
 };
@@ -24,7 +25,7 @@ type AvailableMap = FxHashMap<ObjectSlice, ValueId>;
 
 struct CallCaptureEndpoint<'a> {
     tracked: Option<TrackedObject>,
-    possible_roots: &'a FxHashSet<ValueId>,
+    roots: MayRootSet<'a>,
     slice: shape::AggregateSlice,
 }
 
@@ -70,19 +71,13 @@ impl ObjectLoadStore {
                 &mut self.layout_cache,
                 object_effects,
             );
-            let tracked = collect_tracked_objects(func, &provenance, &mut self.layout_cache);
-            let possible_roots = provenance.into_possible_roots();
+            let tracked =
+                collect_tracked_objects(func, provenance.complete(), &mut self.layout_cache);
+            let may = provenance.may();
             let live_out_roots = self.collect_live_out_roots(&tracked, func, local_object_args);
 
-            let mut iter_changed =
-                self.run_forward(func, &tracked, &possible_roots, object_effects);
-            iter_changed |= self.run_backward(
-                func,
-                &tracked,
-                &possible_roots,
-                &live_out_roots,
-                object_effects,
-            );
+            let mut iter_changed = self.run_forward(func, &tracked, may, object_effects);
+            iter_changed |= self.run_backward(func, &tracked, may, &live_out_roots, object_effects);
 
             if iter_changed {
                 func.rebuild_users();
@@ -103,7 +98,7 @@ impl ObjectLoadStore {
         &mut self,
         func: &mut Function,
         tracked: &SecondaryMap<ValueId, Option<TrackedObject>>,
-        possible_roots: &SecondaryMap<ValueId, FxHashSet<ValueId>>,
+        provenance: MayProvenance<'_>,
         object_effects: Option<&ObjectEffectSummaryMap>,
     ) -> bool {
         let mut cfg = ControlFlowGraph::new();
@@ -147,7 +142,7 @@ impl ObjectLoadStore {
                         func,
                         inst,
                         tracked,
-                        possible_roots,
+                        provenance,
                         &mut available,
                         object_effects,
                     );
@@ -201,19 +196,18 @@ impl ObjectLoadStore {
         None
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn transfer_forward(
         &mut self,
         func: &mut Function,
         inst: InstId,
         tracked: &SecondaryMap<ValueId, Option<TrackedObject>>,
-        possible_roots: &SecondaryMap<ValueId, FxHashSet<ValueId>>,
+        provenance: MayProvenance<'_>,
         available: &mut AvailableMap,
         object_effects: Option<&ObjectEffectSummaryMap>,
     ) -> bool {
         if let Some(obj_load) = downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst)) {
-            for root in observed_roots(func, inst, possible_roots, &[*obj_load.object()]) {
-                kill_root_available(available, root);
-            }
+            kill_observed_available(func, inst, provenance, available, &[*obj_load.object()]);
             if let Some(slice) = tracked[*obj_load.object()]
                 .as_ref()
                 .copied()
@@ -231,9 +225,7 @@ impl ObjectLoadStore {
         if let Some(enum_get_tag) =
             downcast::<&data::EnumGetTag>(func.inst_set(), func.dfg.inst(inst))
         {
-            for root in observed_roots(func, inst, possible_roots, &[*enum_get_tag.object()]) {
-                kill_root_available(available, root);
-            }
+            kill_observed_available(func, inst, provenance, available, &[*enum_get_tag.object()]);
             if let Some(slice) = tracked[*enum_get_tag.object()]
                 .as_ref()
                 .copied()
@@ -257,20 +249,14 @@ impl ObjectLoadStore {
         }
 
         if let Some(obj_store) = downcast::<&data::ObjStore>(func.inst_set(), func.dfg.inst(inst)) {
-            for root in observed_roots(func, inst, possible_roots, &[*obj_store.object()]) {
-                kill_root_available(available, root);
-            }
+            kill_observed_available(func, inst, provenance, available, &[*obj_store.object()]);
 
             let Some(tracked_object) = tracked[*obj_store.object()].as_ref().copied() else {
-                for &root in &possible_roots[*obj_store.object()] {
-                    kill_root_available(available, root);
-                }
+                kill_possible_roots_available(available, provenance.may_roots(*obj_store.object()));
                 return false;
             };
             let Some(slice) = tracked_object.exact() else {
-                for &root in &possible_roots[*obj_store.object()] {
-                    kill_root_available(available, root);
-                }
+                kill_possible_roots_available(available, provenance.may_roots(*obj_store.object()));
                 return false;
             };
             if available.get(&slice) == Some(obj_store.value()) {
@@ -285,22 +271,22 @@ impl ObjectLoadStore {
         if let Some(enum_set_tag) =
             downcast::<&data::EnumSetTag>(func.inst_set(), func.dfg.inst(inst))
         {
-            for root in observed_roots(func, inst, possible_roots, &[*enum_set_tag.object()]) {
-                kill_root_available(available, root);
-            }
+            kill_observed_available(func, inst, provenance, available, &[*enum_set_tag.object()]);
             let Some(tracked_object) = tracked[*enum_set_tag.object()].as_ref().copied() else {
-                for &root in &possible_roots[*enum_set_tag.object()] {
-                    kill_root_available(available, root);
-                }
+                kill_possible_roots_available(
+                    available,
+                    provenance.may_roots(*enum_set_tag.object()),
+                );
                 return false;
             };
             let Some(slice) = tracked_object
                 .exact()
                 .and_then(|slice| enum_tag_object_slice(func.ctx(), slice))
             else {
-                for &root in &possible_roots[*enum_set_tag.object()] {
-                    kill_root_available(available, root);
-                }
+                kill_possible_roots_available(
+                    available,
+                    provenance.may_roots(*enum_set_tag.object()),
+                );
                 return false;
             };
             let tag = func
@@ -318,21 +304,26 @@ impl ObjectLoadStore {
         if let Some(enum_write_variant) =
             downcast::<&data::EnumWriteVariant>(func.inst_set(), func.dfg.inst(inst)).cloned()
         {
-            for root in observed_roots(func, inst, possible_roots, &[*enum_write_variant.object()])
-            {
-                kill_root_available(available, root);
-            }
+            kill_observed_available(
+                func,
+                inst,
+                provenance,
+                available,
+                &[*enum_write_variant.object()],
+            );
             let Some(tracked_object) = tracked[*enum_write_variant.object()].as_ref().copied()
             else {
-                for &root in &possible_roots[*enum_write_variant.object()] {
-                    kill_root_available(available, root);
-                }
+                kill_possible_roots_available(
+                    available,
+                    provenance.may_roots(*enum_write_variant.object()),
+                );
                 return false;
             };
             let Some(base_slice) = tracked_object.exact() else {
-                for &root in &possible_roots[*enum_write_variant.object()] {
-                    kill_root_available(available, root);
-                }
+                kill_possible_roots_available(
+                    available,
+                    provenance.may_roots(*enum_write_variant.object()),
+                );
                 return false;
             };
             for (field_idx, &value) in enum_write_variant.values().iter().enumerate() {
@@ -364,20 +355,11 @@ impl ObjectLoadStore {
             return false;
         }
 
-        if handle_call_forward(
-            func,
-            inst,
-            tracked,
-            possible_roots,
-            available,
-            object_effects,
-        ) {
+        if handle_call_forward(func, inst, tracked, provenance, available, object_effects) {
             return false;
         }
 
-        for root in observed_roots(func, inst, possible_roots, &[]) {
-            kill_root_available(available, root);
-        }
+        kill_observed_available(func, inst, provenance, available, &[]);
         false
     }
 
@@ -385,7 +367,7 @@ impl ObjectLoadStore {
         &mut self,
         func: &mut Function,
         tracked: &SecondaryMap<ValueId, Option<TrackedObject>>,
-        possible_roots: &SecondaryMap<ValueId, FxHashSet<ValueId>>,
+        provenance: MayProvenance<'_>,
         live_out_roots: &FxHashMap<ValueId, usize>,
         object_effects: Option<&ObjectEffectSummaryMap>,
     ) -> bool {
@@ -436,7 +418,7 @@ impl ObjectLoadStore {
                         func,
                         inst,
                         tracked,
-                        possible_roots,
+                        provenance,
                         &mut live,
                         object_effects,
                     );
@@ -465,19 +447,12 @@ impl ObjectLoadStore {
                 if !func.layout.is_inst_inserted(inst) {
                     continue;
                 }
-                let removed = try_remove_dead_store(func, inst, tracked, possible_roots, &live);
+                let removed = try_remove_dead_store(func, inst, tracked, provenance, &live);
                 changed |= removed;
                 if removed {
                     continue;
                 }
-                transfer_backward_live(
-                    func,
-                    inst,
-                    tracked,
-                    possible_roots,
-                    &mut live,
-                    object_effects,
-                );
+                transfer_backward_live(func, inst, tracked, provenance, &mut live, object_effects);
             }
         }
 
@@ -570,9 +545,9 @@ fn meet_forward(states: impl Iterator<Item = AvailableMap>) -> AvailableMap {
 fn observed_roots(
     func: &Function,
     inst: InstId,
-    possible_roots: &SecondaryMap<ValueId, FxHashSet<ValueId>>,
+    provenance: MayProvenance<'_>,
     skip: &[ValueId],
-) -> Vec<ValueId> {
+) -> (Vec<ValueId>, bool) {
     if downcast::<&data::ObjAlloc>(func.inst_set(), func.dfg.inst(inst)).is_some()
         || downcast::<&data::Gep>(func.inst_set(), func.dfg.inst(inst)).is_some()
         || downcast::<&cast::Bitcast>(func.inst_set(), func.dfg.inst(inst)).is_some()
@@ -581,27 +556,69 @@ fn observed_roots(
         || downcast::<&data::EnumProj>(func.inst_set(), func.dfg.inst(inst)).is_some()
         || downcast::<&control_flow::Phi>(func.inst_set(), func.dfg.inst(inst)).is_some()
     {
-        return Vec::new();
+        return (Vec::new(), false);
     }
 
     let skipped: FxHashSet<_> = skip.iter().copied().collect();
     let mut roots = FxHashSet::default();
+    let mut observed_unknown = false;
     for value in func.dfg.inst(inst).collect_values() {
         if skipped.contains(&value) {
             continue;
         }
-        for &root in &possible_roots[value] {
-            roots.insert(root);
+        let root_set = provenance.may_roots(value);
+        observed_unknown |= root_set.has_unknown();
+        for root in root_set.observed().iter() {
+            roots.insert(root.value());
         }
     }
-    roots.into_iter().collect()
+    (roots.into_iter().collect(), observed_unknown)
+}
+
+fn kill_possible_roots_available(available: &mut AvailableMap, possible_roots: MayRootSet<'_>) {
+    let Some(possible_roots) = possible_roots.exhaustive_known_roots() else {
+        available.clear();
+        return;
+    };
+    for root in possible_roots.iter() {
+        kill_root_available(available, root.value());
+    }
+}
+
+fn kill_observed_available(
+    func: &Function,
+    inst: InstId,
+    provenance: MayProvenance<'_>,
+    available: &mut AvailableMap,
+    skip: &[ValueId],
+) {
+    let (roots, observed_unknown) = observed_roots(func, inst, provenance, skip);
+    if observed_unknown {
+        available.clear();
+        return;
+    }
+    for root in roots {
+        kill_root_available(available, root);
+    }
+}
+
+fn mark_all_tracked_roots_live(
+    func: &Function,
+    tracked: &SecondaryMap<ValueId, Option<TrackedObject>>,
+    live: &mut FxHashMap<ValueId, FxHashSet<usize>>,
+) {
+    for value in func.dfg.value_ids() {
+        if let Some(root_slice) = whole_root_slice_for_value(tracked, value) {
+            mark_root_live(live, root_slice.root, root_slice.total_leaves);
+        }
+    }
 }
 
 fn handle_call_forward(
     func: &Function,
     inst: InstId,
     tracked: &SecondaryMap<ValueId, Option<TrackedObject>>,
-    possible_roots: &SecondaryMap<ValueId, FxHashSet<ValueId>>,
+    provenance: MayProvenance<'_>,
     available: &mut AvailableMap,
     object_effects: Option<&ObjectEffectSummaryMap>,
 ) -> bool {
@@ -609,9 +626,7 @@ fn handle_call_forward(
         return false;
     };
     let Some(summary) = object_effects.and_then(|effects| effects.get(call.callee())) else {
-        for root in observed_roots(func, inst, possible_roots, &[]) {
-            kill_root_available(available, root);
-        }
+        kill_observed_available(func, inst, provenance, available, &[]);
         return true;
     };
 
@@ -622,7 +637,7 @@ fn handle_call_forward(
         apply_call_forward_effect(
             available,
             tracked[arg],
-            &possible_roots[arg],
+            provenance.may_roots(arg),
             &effect.writes,
             effect.escapes || effect.materializes_heap,
         );
@@ -633,29 +648,23 @@ fn handle_call_forward(
 fn apply_call_forward_effect(
     available: &mut AvailableMap,
     tracked_object: Option<TrackedObject>,
-    possible_roots: &FxHashSet<ValueId>,
+    possible_roots: MayRootSet<'_>,
     writes: &SliceSet,
     escapes: bool,
 ) {
     if escapes {
-        for &root in possible_roots {
-            kill_root_available(available, root);
-        }
+        kill_possible_roots_available(available, possible_roots);
         return;
     }
     if writes.is_empty() {
         return;
     }
     let Some(tracked_object) = tracked_object else {
-        for &root in possible_roots {
-            kill_root_available(available, root);
-        }
+        kill_possible_roots_available(available, possible_roots);
         return;
     };
     let Some(base_slice) = tracked_object.exact() else {
-        for &root in possible_roots {
-            kill_root_available(available, root);
-        }
+        kill_possible_roots_available(available, possible_roots);
         return;
     };
     kill_available_slice_set(available, base_slice, writes);
@@ -684,7 +693,7 @@ fn handle_call_backward(
     func: &Function,
     inst: InstId,
     tracked: &SecondaryMap<ValueId, Option<TrackedObject>>,
-    possible_roots: &SecondaryMap<ValueId, FxHashSet<ValueId>>,
+    provenance: MayProvenance<'_>,
     live: &mut FxHashMap<ValueId, FxHashSet<usize>>,
     object_effects: Option<&ObjectEffectSummaryMap>,
 ) -> bool {
@@ -692,8 +701,13 @@ fn handle_call_backward(
         return false;
     };
     let Some(summary) = object_effects.and_then(|effects| effects.get(call.callee())) else {
-        for root in observed_roots(func, inst, possible_roots, &[]) {
-            mark_root_live(live, root, root_total_leaves(tracked, root));
+        let (roots, observed_unknown) = observed_roots(func, inst, provenance, &[]);
+        if observed_unknown {
+            mark_all_tracked_roots_live(func, tracked, live);
+        } else {
+            for root in roots {
+                mark_root_live(live, root, root_total_leaves(tracked, root));
+            }
         }
         return true;
     };
@@ -710,7 +724,7 @@ fn handle_call_backward(
                 };
                 CallCaptureEndpoint {
                     tracked: tracked[dst_arg],
-                    possible_roots: &possible_roots[dst_arg],
+                    roots: provenance.may_roots(dst_arg),
                     slice,
                 }
             }
@@ -720,21 +734,21 @@ fn handle_call_backward(
                 };
                 CallCaptureEndpoint {
                     tracked: tracked[result],
-                    possible_roots: &possible_roots[result],
+                    roots: provenance.may_roots(result),
                     slice,
                 }
             }
         };
-        apply_call_backward_capture(
-            live,
-            tracked,
-            &dst,
-            &CallCaptureEndpoint {
-                tracked: tracked[src_arg],
-                possible_roots: &possible_roots[src_arg],
-                slice: capture.src_slice,
-            },
-        );
+        let src = CallCaptureEndpoint {
+            tracked: tracked[src_arg],
+            roots: provenance.may_roots(src_arg),
+            slice: capture.src_slice,
+        };
+        if dst.roots.has_unknown() || src.roots.has_unknown() {
+            mark_all_tracked_roots_live(func, tracked, live);
+            continue;
+        }
+        apply_call_backward_capture(live, tracked, &dst, &src);
     }
 
     for (idx, &arg) in call.args().iter().enumerate() {
@@ -742,10 +756,11 @@ fn handle_call_backward(
             continue;
         };
         apply_call_backward_effect(
+            func,
             live,
             tracked,
             tracked[arg],
-            &possible_roots[arg],
+            provenance.may_roots(arg),
             &effect.reads,
             &effect.writes,
             effect.escapes || effect.materializes_heap,
@@ -772,8 +787,8 @@ fn apply_call_backward_capture(
         return;
     }
 
-    for &root in src.possible_roots {
-        mark_root_live(live, root, root_total_leaves(tracked, root));
+    for root in src.roots.observed().iter() {
+        mark_root_live(live, root.value(), root_total_leaves(tracked, root.value()));
     }
 }
 
@@ -781,52 +796,51 @@ fn capture_destination_has_live(
     live: &FxHashMap<ValueId, FxHashSet<usize>>,
     dst: &CallCaptureEndpoint<'_>,
 ) -> bool {
+    if dst.roots.has_unknown() {
+        return true;
+    }
     let Some(tracked) = dst.tracked else {
         return dst
-            .possible_roots
+            .roots
+            .observed()
             .iter()
-            .copied()
-            .any(|root| root_has_live(live, root));
+            .any(|root| root_has_live(live, root.value()));
     };
     if let Some(slice) = map_capture_slice(tracked, dst.slice) {
         return slice_has_live_leaf(live, slice);
     }
     tracked.exact().is_none()
         && dst
-            .possible_roots
+            .roots
+            .observed()
             .iter()
-            .copied()
-            .any(|root| root_has_live(live, root))
+            .any(|root| root_has_live(live, root.value()))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn apply_call_backward_effect(
+    func: &Function,
     live: &mut FxHashMap<ValueId, FxHashSet<usize>>,
     tracked: &SecondaryMap<ValueId, Option<TrackedObject>>,
     tracked_object: Option<TrackedObject>,
-    possible_roots: &FxHashSet<ValueId>,
+    possible_roots: MayRootSet<'_>,
     reads: &SliceSet,
     writes: &SliceSet,
     escapes: bool,
 ) {
     if escapes {
-        for &root in possible_roots {
-            mark_root_live(live, root, root_total_leaves(tracked, root));
-        }
+        mark_live_may_roots(func, live, tracked, possible_roots);
         return;
     }
     let Some(tracked_object) = tracked_object else {
         if !reads.is_empty() || !writes.is_empty() {
-            for &root in possible_roots {
-                mark_root_live(live, root, root_total_leaves(tracked, root));
-            }
+            mark_live_may_roots(func, live, tracked, possible_roots);
         }
         return;
     };
     let Some(base_slice) = tracked_object.exact() else {
         if !reads.is_empty() || !writes.is_empty() {
-            for &root in possible_roots {
-                mark_root_live(live, root, root_total_leaves(tracked, root));
-            }
+            mark_live_may_roots(func, live, tracked, possible_roots);
         }
         return;
     };
@@ -907,7 +921,7 @@ fn transfer_backward_live(
     func: &Function,
     inst: InstId,
     tracked: &SecondaryMap<ValueId, Option<TrackedObject>>,
-    possible_roots: &SecondaryMap<ValueId, FxHashSet<ValueId>>,
+    provenance: MayProvenance<'_>,
     live: &mut FxHashMap<ValueId, FxHashSet<usize>>,
     object_effects: Option<&ObjectEffectSummaryMap>,
 ) {
@@ -915,33 +929,54 @@ fn transfer_backward_live(
         if let Some(tracked_object) = tracked[*obj_load.object()].as_ref().copied() {
             mark_live(live, tracked_object);
         } else {
-            for &root in &possible_roots[*obj_load.object()] {
+            mark_live_may_roots(
+                func,
+                live,
+                tracked,
+                provenance.may_roots(*obj_load.object()),
+            );
+        }
+        let (roots, observed_unknown) =
+            observed_roots(func, inst, provenance, &[*obj_load.object()]);
+        if observed_unknown {
+            mark_all_tracked_roots_live(func, tracked, live);
+        } else {
+            for root in roots {
                 mark_root_live(live, root, root_total_leaves(tracked, root));
             }
-        }
-        for root in observed_roots(func, inst, possible_roots, &[*obj_load.object()]) {
-            mark_root_live(live, root, root_total_leaves(tracked, root));
         }
         return;
     }
 
     if let Some(obj_store) = downcast::<&data::ObjStore>(func.inst_set(), func.dfg.inst(inst)) {
-        for root in observed_roots(func, inst, possible_roots, &[*obj_store.object()]) {
-            mark_root_live(live, root, root_total_leaves(tracked, root));
+        let (roots, observed_unknown) =
+            observed_roots(func, inst, provenance, &[*obj_store.object()]);
+        if observed_unknown {
+            mark_all_tracked_roots_live(func, tracked, live);
+        } else {
+            for root in roots {
+                mark_root_live(live, root, root_total_leaves(tracked, root));
+            }
         }
 
         let Some(tracked_object) = tracked[*obj_store.object()].as_ref().copied() else {
-            for &root in &possible_roots[*obj_store.object()] {
-                mark_root_live(live, root, root_total_leaves(tracked, root));
-            }
+            mark_live_may_roots(
+                func,
+                live,
+                tracked,
+                provenance.may_roots(*obj_store.object()),
+            );
             return;
         };
         if let Some(slice) = tracked_object.exact() {
             clear_live_slice(live, slice);
         } else {
-            for &root in &possible_roots[*obj_store.object()] {
-                mark_root_live(live, root, root_total_leaves(tracked, root));
-            }
+            mark_live_may_roots(
+                func,
+                live,
+                tracked,
+                provenance.may_roots(*obj_store.object()),
+            );
         }
         return;
     }
@@ -958,12 +993,21 @@ fn transfer_backward_live(
                 mark_live(live, tracked_object);
             }
         } else {
-            for &root in &possible_roots[*enum_get_tag.object()] {
+            mark_live_may_roots(
+                func,
+                live,
+                tracked,
+                provenance.may_roots(*enum_get_tag.object()),
+            );
+        }
+        let (roots, observed_unknown) =
+            observed_roots(func, inst, provenance, &[*enum_get_tag.object()]);
+        if observed_unknown {
+            mark_all_tracked_roots_live(func, tracked, live);
+        } else {
+            for root in roots {
                 mark_root_live(live, root, root_total_leaves(tracked, root));
             }
-        }
-        for root in observed_roots(func, inst, possible_roots, &[*enum_get_tag.object()]) {
-            mark_root_live(live, root, root_total_leaves(tracked, root));
         }
         return;
     }
@@ -986,13 +1030,22 @@ fn transfer_backward_live(
 
     if let Some(enum_set_tag) = downcast::<&data::EnumSetTag>(func.inst_set(), func.dfg.inst(inst))
     {
-        for root in observed_roots(func, inst, possible_roots, &[*enum_set_tag.object()]) {
-            mark_root_live(live, root, root_total_leaves(tracked, root));
-        }
-        let Some(tracked_object) = tracked[*enum_set_tag.object()].as_ref().copied() else {
-            for &root in &possible_roots[*enum_set_tag.object()] {
+        let (roots, observed_unknown) =
+            observed_roots(func, inst, provenance, &[*enum_set_tag.object()]);
+        if observed_unknown {
+            mark_all_tracked_roots_live(func, tracked, live);
+        } else {
+            for root in roots {
                 mark_root_live(live, root, root_total_leaves(tracked, root));
             }
+        }
+        let Some(tracked_object) = tracked[*enum_set_tag.object()].as_ref().copied() else {
+            mark_live_may_roots(
+                func,
+                live,
+                tracked,
+                provenance.may_roots(*enum_set_tag.object()),
+            );
             return;
         };
         if let Some(slice) = tracked_object
@@ -1001,9 +1054,12 @@ fn transfer_backward_live(
         {
             clear_live_slice(live, slice);
         } else {
-            for &root in &possible_roots[*enum_set_tag.object()] {
-                mark_root_live(live, root, root_total_leaves(tracked, root));
-            }
+            mark_live_may_roots(
+                func,
+                live,
+                tracked,
+                provenance.may_roots(*enum_set_tag.object()),
+            );
         }
         return;
     }
@@ -1011,19 +1067,31 @@ fn transfer_backward_live(
     if let Some(enum_write_variant) =
         downcast::<&data::EnumWriteVariant>(func.inst_set(), func.dfg.inst(inst))
     {
-        for root in observed_roots(func, inst, possible_roots, &[*enum_write_variant.object()]) {
-            mark_root_live(live, root, root_total_leaves(tracked, root));
-        }
-        let Some(tracked_object) = tracked[*enum_write_variant.object()].as_ref().copied() else {
-            for &root in &possible_roots[*enum_write_variant.object()] {
+        let (roots, observed_unknown) =
+            observed_roots(func, inst, provenance, &[*enum_write_variant.object()]);
+        if observed_unknown {
+            mark_all_tracked_roots_live(func, tracked, live);
+        } else {
+            for root in roots {
                 mark_root_live(live, root, root_total_leaves(tracked, root));
             }
+        }
+        let Some(tracked_object) = tracked[*enum_write_variant.object()].as_ref().copied() else {
+            mark_live_may_roots(
+                func,
+                live,
+                tracked,
+                provenance.may_roots(*enum_write_variant.object()),
+            );
             return;
         };
         let Some(base_slice) = tracked_object.exact() else {
-            for &root in &possible_roots[*enum_write_variant.object()] {
-                mark_root_live(live, root, root_total_leaves(tracked, root));
-            }
+            mark_live_may_roots(
+                func,
+                live,
+                tracked,
+                provenance.may_roots(*enum_write_variant.object()),
+            );
             return;
         };
         if let Some(tag_slice) = enum_tag_object_slice(func.ctx(), base_slice) {
@@ -1043,12 +1111,17 @@ fn transfer_backward_live(
         return;
     }
 
-    if handle_call_backward(func, inst, tracked, possible_roots, live, object_effects) {
+    if handle_call_backward(func, inst, tracked, provenance, live, object_effects) {
         return;
     }
 
-    for root in observed_roots(func, inst, possible_roots, &[]) {
-        mark_root_live(live, root, root_total_leaves(tracked, root));
+    let (roots, observed_unknown) = observed_roots(func, inst, provenance, &[]);
+    if observed_unknown {
+        mark_all_tracked_roots_live(func, tracked, live);
+    } else {
+        for root in roots {
+            mark_root_live(live, root, root_total_leaves(tracked, root));
+        }
     }
 }
 
@@ -1056,7 +1129,7 @@ fn try_remove_dead_store(
     func: &mut Function,
     inst: InstId,
     tracked: &SecondaryMap<ValueId, Option<TrackedObject>>,
-    possible_roots: &SecondaryMap<ValueId, FxHashSet<ValueId>>,
+    provenance: MayProvenance<'_>,
     live: &FxHashMap<ValueId, FxHashSet<usize>>,
 ) -> bool {
     if let Some(obj_store) = downcast::<&data::ObjStore>(func.inst_set(), func.dfg.inst(inst)) {
@@ -1066,10 +1139,7 @@ fn try_remove_dead_store(
         let needed = if let Some(slice) = tracked_object.exact() {
             slice_has_live_leaf(live, slice)
         } else {
-            possible_roots[*obj_store.object()]
-                .iter()
-                .copied()
-                .any(|root| root_has_live(live, root))
+            roots_have_live(live, provenance.may_roots(*obj_store.object()))
         };
         if needed {
             return false;
@@ -1090,10 +1160,7 @@ fn try_remove_dead_store(
         {
             slice_has_live_leaf(live, slice)
         } else {
-            possible_roots[*enum_set_tag.object()]
-                .iter()
-                .copied()
-                .any(|root| root_has_live(live, root))
+            roots_have_live(live, provenance.may_roots(*enum_set_tag.object()))
         };
         if needed {
             return false;
@@ -1116,10 +1183,7 @@ fn try_remove_dead_store(
             .into_iter()
             .any(|slice| slice_has_live_leaf(live, slice))
     } else {
-        possible_roots[*enum_write_variant.object()]
-            .iter()
-            .copied()
-            .any(|root| root_has_live(live, root))
+        roots_have_live(live, provenance.may_roots(*enum_write_variant.object()))
     };
     if needed {
         return false;
@@ -1138,6 +1202,28 @@ fn root_total_leaves(
         .copied()
         .map(TrackedObject::total_leaves)
         .expect("tracked root should exist")
+}
+
+fn mark_live_may_roots(
+    func: &Function,
+    live: &mut FxHashMap<ValueId, FxHashSet<usize>>,
+    tracked: &SecondaryMap<ValueId, Option<TrackedObject>>,
+    roots: MayRootSet<'_>,
+) {
+    if roots.has_unknown() {
+        mark_all_tracked_roots_live(func, tracked, live);
+        return;
+    }
+    for root in roots.observed().iter() {
+        mark_root_live(live, root.value(), root_total_leaves(tracked, root.value()));
+    }
+}
+
+fn roots_have_live(live: &FxHashMap<ValueId, FxHashSet<usize>>, roots: MayRootSet<'_>) -> bool {
+    let Some(roots) = roots.exhaustive_known_roots() else {
+        return true;
+    };
+    roots.iter().any(|root| root_has_live(live, root.value()))
 }
 
 fn single_result_value(func: &Function, inst: InstId) -> Option<ValueId> {
@@ -1539,6 +1625,114 @@ func private %f(v0.i256) -> i256 {
             assert!(
                 dumped.contains("return v0;"),
                 "store/load on fresh call result should forward:\n{dumped}"
+            );
+        });
+    }
+
+    #[test]
+    fn incomplete_phi_read_summary_keeps_precall_store_live() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @pair = { i256, i256 };
+
+declare external %mystery() -> objref<@pair>;
+
+func private %read_maybe(v0.i1, v1.objref<@pair>) -> i256 {
+block0:
+    br v0 block1 block2;
+
+block1:
+    jump block3;
+
+block2:
+    v2.objref<@pair> = call %mystery;
+    jump block3;
+
+block3:
+    v3.objref<@pair> = phi (v1 block1) (v2 block2);
+    v4.objref<i256> = obj.proj v3 0.i8;
+    v5.i256 = obj.load v4;
+    return v5;
+}
+
+func private %main(v0.i1, v1.objref<@pair>, v2.i256) -> i256 {
+block0:
+    v3.objref<i256> = obj.proj v1 0.i8;
+    obj.store v3 v2;
+    v4.i256 = call %read_maybe v0 v1;
+    return v4;
+}
+"#,
+        );
+        let func_ref = lookup_func(&module, "main");
+        run_with_effects(&module, func_ref);
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            assert!(
+                dumped.contains("obj.store v3 v2;"),
+                "pre-call store must stay live when callee may read the arg through incomplete provenance:\n{dumped}"
+            );
+        });
+    }
+
+    #[test]
+    fn inexact_fresh_call_read_summary_keeps_precall_store_live() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @cell = { i256 };
+type @take = { objref<i256> };
+
+func private %take(v0.objref<@cell>) -> objref<@take> {
+block0:
+    v1.objref<@take> = obj.alloc @take;
+    v2.objref<objref<i256>> = obj.proj v1 0.i8;
+    v3.objref<i256> = obj.proj v0 0.i8;
+    obj.store v2 v3;
+    return v1;
+}
+
+func private %read_two_calls(v0.i1, v1.objref<@cell>) -> i256 {
+block0:
+    br v0 block1 block2;
+
+block1:
+    v2.objref<@take> = call %take v1;
+    jump block3;
+
+block2:
+    v3.objref<@take> = call %take v1;
+    jump block3;
+
+block3:
+    v4.objref<@take> = phi (v2 block1) (v3 block2);
+    v5.objref<objref<i256>> = obj.proj v4 0.i8;
+    v6.objref<i256> = obj.load v5;
+    v7.i256 = obj.load v6;
+    return v7;
+}
+
+func private %main(v0.i1, v1.objref<@cell>, v2.i256) -> i256 {
+block0:
+    v3.objref<i256> = obj.proj v1 0.i8;
+    obj.store v3 v2;
+    v4.i256 = call %read_two_calls v0 v1;
+    return v4;
+}
+"#,
+        );
+        let func_ref = lookup_func(&module, "main");
+        run_with_effects(&module, func_ref);
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            assert!(
+                dumped.contains("obj.store v3 v2;"),
+                "pre-call store must stay live when callee may read through inexact fresh helper roots:\n{dumped}"
             );
         });
     }

@@ -14,6 +14,7 @@ use super::{
         enum_tag_object_slice, enum_variant_field_object_slice, object_slice_overlaps_effect,
         slice_is_covered_by, slices_overlap, whole_root_slice_for_value,
     },
+    provenance::{MayProvenance, MayRootSet},
     shape,
 };
 
@@ -93,7 +94,7 @@ struct MemoryState {
 struct TransferCtx<'a> {
     func: &'a Function,
     tracked: &'a SecondaryMap<ValueId, Option<TrackedObject>>,
-    possible_roots: &'a SecondaryMap<ValueId, FxHashSet<ValueId>>,
+    provenance: MayProvenance<'a>,
     relevant_slices: &'a FxHashMap<ValueId, Vec<ObjectSlice>>,
     object_effects: Option<&'a ObjectEffectSummaryMap>,
 }
@@ -124,8 +125,8 @@ impl ObjectMemoryAnalysis {
             &mut self.layout_cache,
             object_effects,
         );
-        let tracked = collect_tracked_objects(func, &provenance, &mut self.layout_cache);
-        let possible_roots = provenance.into_possible_roots();
+        let tracked = collect_tracked_objects(func, provenance.complete(), &mut self.layout_cache);
+        let may = provenance.may();
         let relevant_slices = collect_relevant_slices(func, &tracked);
         if relevant_slices.is_empty() {
             return;
@@ -176,7 +177,7 @@ impl ObjectMemoryAnalysis {
                 let transfer_ctx = TransferCtx {
                     func,
                     tracked: &tracked,
-                    possible_roots: &possible_roots,
+                    provenance: may,
                     relevant_slices: &relevant_slices,
                     object_effects,
                 };
@@ -204,7 +205,7 @@ impl ObjectMemoryAnalysis {
             let transfer_ctx = TransferCtx {
                 func,
                 tracked: &tracked,
-                possible_roots: &possible_roots,
+                provenance: may,
                 relevant_slices: &relevant_slices,
                 object_effects,
             };
@@ -462,7 +463,7 @@ fn transfer_inst(
         apply_exact_value_write(
             inst,
             ctx.tracked[*obj_store.object()],
-            &ctx.possible_roots[*obj_store.object()],
+            ctx.provenance.may_roots(*obj_store.object()),
             ctx.relevant_slices,
             *obj_store.value(),
             state,
@@ -484,7 +485,7 @@ fn transfer_inst(
         } else {
             block_possible_roots(
                 state,
-                &ctx.possible_roots[*enum_set_tag.object()],
+                ctx.provenance.may_roots(*enum_set_tag.object()),
                 inst,
                 record,
             );
@@ -502,7 +503,7 @@ fn transfer_inst(
         else {
             block_possible_roots(
                 state,
-                &ctx.possible_roots[*enum_write_variant.object()],
+                ctx.provenance.may_roots(*enum_write_variant.object()),
                 inst,
                 record,
             );
@@ -540,7 +541,7 @@ fn transfer_inst(
         return;
     }
 
-    block_observed_roots(ctx.func, inst, ctx.possible_roots, state, record);
+    block_observed_roots(ctx.func, inst, ctx.provenance, state, record);
 }
 
 fn activate_defined_root(
@@ -616,10 +617,11 @@ fn record_read_state(
     );
 }
 
+#[allow(clippy::too_many_arguments)]
 fn apply_exact_value_write(
     inst: InstId,
     tracked_object: Option<TrackedObject>,
-    possible_roots: &FxHashSet<ValueId>,
+    possible_roots: MayRootSet<'_>,
     relevant_slices: &FxHashMap<ValueId, Vec<ObjectSlice>>,
     value: ValueId,
     state: &mut MemoryState,
@@ -673,7 +675,7 @@ fn apply_call_transfer(
         .object_effects
         .and_then(|effects| effects.get(call.callee()))
     else {
-        block_observed_roots(ctx.func, inst, ctx.possible_roots, state, record);
+        block_observed_roots(ctx.func, inst, ctx.provenance, state, record);
         return;
     };
 
@@ -682,7 +684,7 @@ fn apply_call_transfer(
             continue;
         };
         if effect.escapes || effect.materializes_heap {
-            block_possible_roots(state, &ctx.possible_roots[arg], inst, record);
+            block_possible_roots(state, ctx.provenance.may_roots(arg), inst, record);
             continue;
         }
 
@@ -696,7 +698,7 @@ fn apply_call_transfer(
                 record,
             );
         } else if !effect.writes.is_empty() {
-            block_possible_roots(state, &ctx.possible_roots[arg], inst, record);
+            block_possible_roots(state, ctx.provenance.may_roots(arg), inst, record);
         }
     }
 }
@@ -795,26 +797,46 @@ fn activate_root(
     }
 }
 
-fn block_possible_roots(
+fn block_all_active_roots(
     state: &mut MemoryState,
-    roots: &FxHashSet<ValueId>,
     inst: InstId,
     record: &mut Option<&mut ObjectMemoryAnalysis>,
 ) {
-    for &root in roots {
+    for root in state.active_roots.iter().copied().collect::<Vec<_>>() {
         state.blocked_roots.insert(root);
         record_clobber(record, inst, ObjectClobber::Root(root));
+    }
+}
+
+fn block_possible_roots(
+    state: &mut MemoryState,
+    roots: MayRootSet<'_>,
+    inst: InstId,
+    record: &mut Option<&mut ObjectMemoryAnalysis>,
+) {
+    let Some(roots) = roots.exhaustive_known_roots() else {
+        block_all_active_roots(state, inst, record);
+        return;
+    };
+    for root in roots.iter() {
+        state.blocked_roots.insert(root.value());
+        record_clobber(record, inst, ObjectClobber::Root(root.value()));
     }
 }
 
 fn block_observed_roots(
     func: &Function,
     inst: InstId,
-    possible_roots: &SecondaryMap<ValueId, FxHashSet<ValueId>>,
+    provenance: MayProvenance<'_>,
     state: &mut MemoryState,
     record: &mut Option<&mut ObjectMemoryAnalysis>,
 ) {
-    for root in observed_roots(func, inst, possible_roots, &[]) {
+    let (roots, observed_unknown) = observed_roots(func, inst, provenance, &[]);
+    if observed_unknown {
+        block_all_active_roots(state, inst, record);
+        return;
+    }
+    for root in roots {
         state.blocked_roots.insert(root);
         record_clobber(record, inst, ObjectClobber::Root(root));
     }
@@ -872,20 +894,23 @@ fn single_result_value(func: &Function, inst: InstId) -> Option<ValueId> {
 fn observed_roots(
     func: &Function,
     inst: InstId,
-    possible_roots: &SecondaryMap<ValueId, FxHashSet<ValueId>>,
+    provenance: MayProvenance<'_>,
     skip: &[ValueId],
-) -> Vec<ValueId> {
+) -> (Vec<ValueId>, bool) {
     let skipped: FxHashSet<_> = skip.iter().copied().collect();
     let mut roots = FxHashSet::default();
+    let mut observed_unknown = false;
     for value in func.dfg.inst(inst).collect_values() {
         if skipped.contains(&value) {
             continue;
         }
-        for &root in &possible_roots[value] {
-            roots.insert(root);
+        let root_set = provenance.may_roots(value);
+        observed_unknown |= root_set.has_unknown();
+        for root in root_set.observed().iter() {
+            roots.insert(root.value());
         }
     }
-    roots.into_iter().collect()
+    (roots.into_iter().collect(), observed_unknown)
 }
 
 fn clobber_overlaps_slice(effect: &ObjectClobber, slice: ObjectSlice) -> bool {

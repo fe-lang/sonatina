@@ -16,9 +16,9 @@ func private %make_pair(v7.objref<@pair>, v0.i256, v1.i256) {
         return;
 }
 
-func private %build_via(v5.objref<@pair>, v0.*(objref<@pair>, i256, i256) -> unit, v1.i256, v2.i256) {
+func private %build_via(v4.objref<@pair>, v0.*(objref<@pair>, i256, i256) -> unit, v1.i256, v2.i256) {
     block0:
-        call %make_pair v5 v1 v2;
+        call %make_pair v4 v1 v2;
         return;
 }
 
