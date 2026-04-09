@@ -419,7 +419,7 @@ fn prune_dead_single_result_insts(func: &mut Function) {
             {
                 continue;
             }
-            let Some(result) = func.dfg.inst_result(inst) else {
+            let &[result] = func.dfg.inst_results(inst) else {
                 continue;
             };
             if func.dfg.users_num(result) != 0 {
