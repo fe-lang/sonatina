@@ -677,7 +677,7 @@ fn encode_const_words(
         if imm.ty() != ty {
             return None;
         }
-        out.extend_from_slice(&imm.as_i256().to_u256().to_big_endian());
+        out.extend_from_slice(&imm.zext(Type::I256).as_i256().to_u256().to_big_endian());
         return Some(());
     }
 
@@ -1102,6 +1102,7 @@ mod tests {
         object::{CompileOptions, compile_all_objects},
     };
     use sonatina_ir::{
+        global_variable::GvInitializer,
         ir_writer::{FuncWriter, ModuleWriter},
         isa::evm::Evm,
         module::FuncRef,
@@ -1349,6 +1350,66 @@ func private %entry() -> i256 {
         assert!(dumped.contains("evm_code_copy"));
         assert!(!dumped.contains("obj.store"));
         assert!(!dumped.contains("const."));
+    }
+
+    #[test]
+    fn obj_init_const_bulk_codecopy_zero_extends_negative_narrow_words() {
+        let parsed = parse(
+            r#"
+target = "evm-ethereum-osaka"
+
+global private const [i8; 1] $arr = [-1];
+
+func private %entry() -> i256 {
+    block0:
+        v0.objref<[i8; 1]> = obj.alloc [i8; 1];
+        v1.constref<[i8; 1]> = const.ref $arr;
+        obj.init.const v0 v1;
+        return 0.i256;
+}
+"#,
+        );
+
+        ConstDataLower::default().run(&parsed.module);
+
+        let entry = find_func_ref(&parsed, "entry");
+        let dumped = parsed
+            .module
+            .func_store
+            .view(entry, |func| FuncWriter::new(entry, func).dump_string());
+        assert!(dumped.contains("evm_code_copy"));
+        assert!(!dumped.contains("obj.store"));
+
+        let blob = parsed.module.ctx.with_gv_store(|store| {
+            let source = store.lookup_gv("arr").expect("arr global should exist");
+            let symbol = format!("__sonatina_const_words_arr_{}", source.as_u32());
+            store
+                .lookup_gv(&symbol)
+                .expect("synthesized blob should exist")
+        });
+        let blob_bytes = parsed.module.ctx.with_gv_store(|store| {
+            let init = store
+                .gv_data(blob)
+                .initializer
+                .clone()
+                .expect("blob should have initializer");
+            let GvInitializer::Array(bytes) = init else {
+                panic!("blob initializer should be a byte array");
+            };
+            bytes
+                .into_iter()
+                .map(|byte| {
+                    let GvInitializer::Immediate(imm) = byte else {
+                        panic!("blob bytes must be immediates");
+                    };
+                    imm.as_i256().to_u256().low_u32() as u8
+                })
+                .collect::<Vec<_>>()
+        });
+
+        assert_eq!(blob_bytes.len(), 32);
+        assert!(blob_bytes[..31].iter().all(|&byte| byte == 0));
+        assert_eq!(blob_bytes[31], 0xff);
     }
 
     #[test]
