@@ -357,8 +357,22 @@ pub(crate) fn fold_stack_actions(actions: &[Action]) -> SmallVec<[Action; 8]> {
     out
 }
 
+const DYN_FRAME_LINK_SLOTS: u32 = 1;
+
+fn dyn_frame_total_slots(frame_size_slots: u32) -> u32 {
+    frame_size_slots
+        .checked_add(DYN_FRAME_LINK_SLOTS)
+        .expect("frame size overflow")
+}
+
+fn dyn_frame_link_sp_relative_bytes() -> u32 {
+    DYN_FRAME_LINK_SLOTS
+        .checked_mul(WORD_BYTES)
+        .expect("frame slot byte offset overflow")
+}
+
 pub(crate) fn frame_slot_sp_relative_bytes(frame_size_slots: u32, offset_words: u32) -> u32 {
-    let sp_relative_words = frame_size_slots
+    let sp_relative_words = dyn_frame_total_slots(frame_size_slots)
         .checked_sub(offset_words)
         .filter(|words| *words != 0)
         .unwrap_or_else(|| {
@@ -684,17 +698,29 @@ pub(crate) fn enter_frame_initialized(ctx: &mut Lower<OpCode>, frame_slots: u32)
         return;
     }
 
-    let frame_bytes = frame_slots
+    let frame_bytes = dyn_frame_total_slots(frame_slots)
         .checked_mul(WORD_BYTES)
         .expect("frame size overflow");
 
     push_bytes(ctx, &[DYN_SP_SLOT]);
     ctx.push(OpCode::MLOAD);
+    ctx.push(OpCode::DUP1);
     push_bytes(ctx, &[FREE_PTR_SLOT]);
     ctx.push(OpCode::MLOAD);
     emit_max_top_two(ctx);
     push_bytes(ctx, &u32_to_be(frame_bytes));
     ctx.push(OpCode::ADD);
+
+    // Save the caller's SP in a hidden link slot at the top of the dynamic frame so
+    // nested heap clamping cannot permanently shift the caller's local frame base.
+    ctx.push(OpCode::DUP2);
+    push_bytes(ctx, &u32_to_be(dyn_frame_link_sp_relative_bytes()));
+    ctx.push(OpCode::DUP3);
+    ctx.push(OpCode::SUB);
+    ctx.push(OpCode::MSTORE);
+    ctx.push(OpCode::SWAP1);
+    ctx.push(OpCode::POP);
+
     push_bytes(ctx, &[DYN_SP_SLOT]);
     ctx.push(OpCode::MSTORE);
 }
@@ -704,17 +730,11 @@ pub(crate) fn leave_frame(ctx: &mut Lower<OpCode>, frame_slots: u32) {
         return;
     }
 
-    push_bytes(
-        ctx,
-        &u32_to_be(
-            frame_slots
-                .checked_mul(WORD_BYTES)
-                .expect("frame size overflow"),
-        ),
-    );
+    push_bytes(ctx, &u32_to_be(dyn_frame_link_sp_relative_bytes()));
     push_bytes(ctx, &[DYN_SP_SLOT]);
     ctx.push(OpCode::MLOAD);
     ctx.push(OpCode::SUB);
+    ctx.push(OpCode::MLOAD);
     push_bytes(ctx, &[DYN_SP_SLOT]);
     ctx.push(OpCode::MSTORE);
 }
