@@ -1674,6 +1674,65 @@ block0:
     }
 
     #[test]
+    fn inexact_fresh_call_read_summary_keeps_precall_store_live() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @cell = { i256 };
+type @take = { objref<i256> };
+
+func private %take(v0.objref<@cell>) -> objref<@take> {
+block0:
+    v1.objref<@take> = obj.alloc @take;
+    v2.objref<objref<i256>> = obj.proj v1 0.i8;
+    v3.objref<i256> = obj.proj v0 0.i8;
+    obj.store v2 v3;
+    return v1;
+}
+
+func private %read_two_calls(v0.i1, v1.objref<@cell>) -> i256 {
+block0:
+    br v0 block1 block2;
+
+block1:
+    v2.objref<@take> = call %take v1;
+    jump block3;
+
+block2:
+    v3.objref<@take> = call %take v1;
+    jump block3;
+
+block3:
+    v4.objref<@take> = phi (v2 block1) (v3 block2);
+    v5.objref<objref<i256>> = obj.proj v4 0.i8;
+    v6.objref<i256> = obj.load v5;
+    v7.i256 = obj.load v6;
+    return v7;
+}
+
+func private %main(v0.i1, v1.objref<@cell>, v2.i256) -> i256 {
+block0:
+    v3.objref<i256> = obj.proj v1 0.i8;
+    obj.store v3 v2;
+    v4.i256 = call %read_two_calls v0 v1;
+    return v4;
+}
+"#,
+        );
+        let func_ref = lookup_func(&module, "main");
+        run_with_effects(&module, func_ref);
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            assert!(
+                dumped.contains("obj.store v3 v2;"),
+                "pre-call store must stay live when callee may read through inexact fresh helper roots:\n{dumped}"
+            );
+        });
+    }
+
+    #[test]
     fn returned_capture_chain_keeps_source_store_live() {
         let module = parse_test_module(
             r#"

@@ -147,6 +147,11 @@ impl<'a> CompleteProvenance<'a> {
         self.facts.exact[value]
     }
 
+    pub(crate) fn exact_root_slice(self, root: ValueId) -> Option<shape::AggregateSlice> {
+        let projection = self.exact_projection(root)?;
+        (projection.root_value == root).then_some(projection.slice)
+    }
+
     pub(crate) fn root_set(self, value: ValueId) -> Option<CompleteRootSet<'a>> {
         if self.facts.maybe_unknown[value] {
             return None;

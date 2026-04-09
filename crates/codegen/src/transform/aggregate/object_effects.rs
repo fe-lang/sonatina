@@ -68,7 +68,6 @@ type RootCaptureMap = FxHashMap<ValueId, Vec<RootCaptureEffect>>;
 struct EffectProvenance<'a> {
     complete: CompleteProvenance<'a>,
     may: MayProvenance<'a>,
-    root_slices: &'a FxHashMap<ValueId, shape::AggregateSlice>,
     arg_roots: &'a FxHashMap<ValueId, usize>,
 }
 
@@ -104,8 +103,13 @@ impl<'a> EffectProvenance<'a> {
         }
 
         for root in self.may.root_set(value).observed().iter() {
-            if let Some(slice) = self.root_slices.get(&root).copied() {
+            if let Some(slice) = self.complete.exact_root_slice(root) {
                 out.push((root, slice));
+            } else {
+                debug_assert!(
+                    false,
+                    "observed provenance root must have an exact root slice"
+                );
             }
         }
 
@@ -354,17 +358,11 @@ fn compute_summary_for_func(
             layout_cache,
             Some(summaries),
         );
-        let return_analysis = analyze_returns(
-            function,
-            &arg_roots,
-            &root_slices,
-            provenance.complete(),
-            layout_cache,
-        );
+        let return_analysis =
+            analyze_returns(function, &arg_roots, provenance.complete(), layout_cache);
         let effect_provenance = EffectProvenance {
             complete: provenance.complete(),
             may: provenance.may(),
-            root_slices: &root_slices,
             arg_roots: &arg_roots,
         };
         let mut cfg = ControlFlowGraph::default();
@@ -680,7 +678,6 @@ fn merge_root_capture_maps(dst: &mut RootCaptureMap, src: &RootCaptureMap) -> bo
 fn analyze_returns(
     function: &Function,
     arg_roots: &FxHashMap<ValueId, usize>,
-    root_slices: &FxHashMap<ValueId, shape::AggregateSlice>,
     provenance: CompleteProvenance<'_>,
     layout_cache: &mut shape::AggregateLayoutCache,
 ) -> ReturnAnalysis {
@@ -709,14 +706,8 @@ fn analyze_returns(
                 combined = join_return_class(combined, ReturnClass::None);
                 continue;
             };
-            let (class, fresh_slices) = classify_return_value(
-                function,
-                value,
-                arg_roots,
-                root_slices,
-                provenance,
-                layout_cache,
-            );
+            let (class, fresh_slices) =
+                classify_return_value(function, value, arg_roots, provenance, layout_cache);
             combined = join_return_class(combined, class);
             for fresh_slice in fresh_slices {
                 if seen_returned_slices.insert(fresh_slice.clone()) {
@@ -753,7 +744,6 @@ fn classify_return_value(
     function: &Function,
     value: ValueId,
     arg_roots: &FxHashMap<ValueId, usize>,
-    root_slices: &FxHashMap<ValueId, shape::AggregateSlice>,
     provenance: CompleteProvenance<'_>,
     layout_cache: &mut shape::AggregateLayoutCache,
 ) -> (ReturnClass, Vec<ReturnedFreshSlice>) {
@@ -768,7 +758,7 @@ fn classify_return_value(
         };
         if let Some(&idx) = arg_roots.get(&projection.root_value) {
             return (
-                if root_slices.get(&projection.root_value) == Some(&projection.slice) {
+                if provenance.exact_root_slice(projection.root_value) == Some(projection.slice) {
                     ReturnClass::SameAsArg(idx)
                 } else {
                     ReturnClass::DerivedFromArg(idx)
@@ -793,14 +783,9 @@ fn classify_return_value(
         Some(CompleteRootSet::Single(root)) => {
             if let Some(&idx) = arg_roots.get(&root) {
                 (ReturnClass::DerivedFromArg(idx), Vec::new())
-            } else if let Some(fresh_roots) = classify_all_fresh_roots(
-                function,
-                value,
-                [root],
-                root_slices,
-                provenance,
-                layout_cache,
-            ) {
+            } else if let Some(fresh_roots) =
+                classify_all_fresh_roots(function, value, [root], provenance, layout_cache)
+            {
                 (ReturnClass::FreshObject, fresh_roots)
             } else {
                 (ReturnClass::Unknown, Vec::new())
@@ -810,14 +795,9 @@ fn classify_return_value(
             if roots.iter().any(|root| arg_roots.contains_key(&root)) {
                 return (ReturnClass::Unknown, Vec::new());
             }
-            if let Some(fresh_roots) = classify_all_fresh_roots(
-                function,
-                value,
-                roots.iter(),
-                root_slices,
-                provenance,
-                layout_cache,
-            ) {
+            if let Some(fresh_roots) =
+                classify_all_fresh_roots(function, value, roots.iter(), provenance, layout_cache)
+            {
                 (ReturnClass::FreshObject, fresh_roots)
             } else {
                 (ReturnClass::Unknown, Vec::new())
@@ -831,7 +811,6 @@ fn classify_all_fresh_roots(
     function: &Function,
     value: ValueId,
     roots: impl IntoIterator<Item = ValueId>,
-    root_slices: &FxHashMap<ValueId, shape::AggregateSlice>,
     provenance: CompleteProvenance<'_>,
     layout_cache: &mut shape::AggregateLayoutCache,
 ) -> Option<Vec<ReturnedFreshSlice>> {
@@ -853,7 +832,7 @@ fn classify_all_fresh_roots(
             }
         }
         if possible_slices.is_empty()
-            && let Some(&root_slice) = root_slices.get(&root)
+            && let Some(root_slice) = provenance.exact_root_slice(root)
             && root_slice.ty == return_ty
         {
             push_unique_slice(&mut possible_slices, root_slice);
@@ -1983,6 +1962,57 @@ block0:
         assert!(
             has_arg_capture(&summary, 0, 0, 1, 1, 0, 1),
             "transitive helper summary should preserve capture relations"
+        );
+    }
+
+    #[test]
+    fn inexact_fresh_call_roots_still_propagate_captured_reads() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @Cell = { i256 };
+type @Take = { objref<i256> };
+
+func private %take(v0.objref<@Cell>) -> objref<@Take> {
+block0:
+    v1.objref<@Take> = obj.alloc @Take;
+    v2.objref<objref<i256>> = obj.proj v1 0.i8;
+    v3.objref<i256> = obj.proj v0 0.i8;
+    obj.store v2 v3;
+    return v1;
+}
+
+func private %read_two_calls(v0.i1, v1.objref<@Cell>) -> i256 {
+block0:
+    br v0 block1 block2;
+
+block1:
+    v2.objref<@Take> = call %take v1;
+    jump block3;
+
+block2:
+    v3.objref<@Take> = call %take v1;
+    jump block3;
+
+block3:
+    v4.objref<@Take> = phi (v2 block1) (v3 block2);
+    v5.objref<objref<i256>> = obj.proj v4 0.i8;
+    v6.objref<i256> = obj.load v5;
+    v7.i256 = obj.load v6;
+    return v7;
+}
+"#,
+        );
+
+        let func_ref = lookup_func(&module, "read_two_calls");
+        let summary = compute_object_effect_summaries(&module)
+            .remove(&func_ref)
+            .expect("summary should exist");
+
+        assert!(
+            arg_reads_slice(&summary, 1, 0, 1),
+            "fresh helper call roots merged through an inexact phi should still propagate arg reads"
         );
     }
 
