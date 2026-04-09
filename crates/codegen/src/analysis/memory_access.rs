@@ -245,11 +245,11 @@ impl MemoryAccessAnalysis {
             return alias;
         }
 
-        if reserved_evm_meta_interval(&lhs.base, lhs.offset, i64::from(lhs.bytes))
-            .is_some_and(|_| is_allocator_managed_base(&rhs.base))
-            || reserved_evm_meta_interval(&rhs.base, rhs.offset, i64::from(rhs.bytes))
-                .is_some_and(|_| is_allocator_managed_base(&lhs.base))
-        {
+        if reserved_evm_meta_interval(&lhs.base, lhs.offset, i64::from(lhs.bytes)).is_some_and(
+            |_| allocator_managed_access_cannot_reach_reserved_meta(&rhs.base, rhs.offset),
+        ) || reserved_evm_meta_interval(&rhs.base, rhs.offset, i64::from(rhs.bytes)).is_some_and(
+            |_| allocator_managed_access_cannot_reach_reserved_meta(&lhs.base, lhs.offset),
+        ) {
             return AliasResult::NoAlias;
         }
 
@@ -319,10 +319,12 @@ impl MemoryAccessAnalysis {
             return self.coverage_from_intervals(range, range_start, range_end, key_start, key_end);
         }
 
-        if reserved_evm_meta_interval(&range.base, range.offset, range.bytes)
-            .is_some_and(|_| is_allocator_managed_base(&key.base))
-            || reserved_evm_meta_interval(&key.base, key.offset, i64::from(key.bytes))
-                .is_some_and(|_| is_allocator_managed_base(&range.base))
+        if reserved_evm_meta_interval(&range.base, range.offset, range.bytes).is_some_and(|_| {
+            allocator_managed_access_cannot_reach_reserved_meta(&key.base, key.offset)
+        }) || reserved_evm_meta_interval(&key.base, key.offset, i64::from(key.bytes))
+            .is_some_and(|_| {
+                allocator_managed_access_cannot_reach_reserved_meta(&range.base, range.offset)
+            })
         {
             return RangeCoverage::NoOverlap;
         }
@@ -763,6 +765,10 @@ fn reserved_evm_meta_interval(base: &BaseObject, offset: i64, bytes: i64) -> Opt
 
 fn is_allocator_managed_base(base: &BaseObject) -> bool {
     matches!(base, BaseObject::Alloca(_) | BaseObject::Malloc(_))
+}
+
+fn allocator_managed_access_cannot_reach_reserved_meta(base: &BaseObject, offset: i64) -> bool {
+    is_allocator_managed_base(base) && offset >= 0
 }
 
 fn byte_ranges_overlap(lhs_start: i64, lhs_end: i64, rhs_start: i64, rhs_end: i64) -> bool {
@@ -1331,6 +1337,104 @@ mod tests {
         assert_eq!(
             MemoryAccessAnalysis::new().alias(&malloc_key, &absolute_key),
             AliasResult::MayAlias
+        );
+    }
+
+    #[test]
+    fn malloc_negative_offset_into_meta_may_alias_absolute() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::Unit);
+        let is = evm.inst_set();
+
+        let block = builder.append_block();
+        builder.switch_to_block(block);
+
+        let size = builder.make_imm_value(I256::from(32));
+        let ptr_ty = builder.ptr_type(Type::I8);
+        let addr = builder.insert_inst_with(|| EvmMalloc::new(is, size), ptr_ty);
+        let addr_i256 =
+            builder.insert_inst_with(|| PtrToInt::new(is, addr, Type::I256), Type::I256);
+        let delta = builder.make_imm_value(I256::from(i64::from(STATIC_BASE) - 64));
+        let meta_addr_i256 =
+            builder.insert_inst_with(|| Sub::new(is, addr_i256, delta), Type::I256);
+        let meta_addr =
+            builder.insert_inst_with(|| IntToPtr::new(is, meta_addr_i256, ptr_ty), ptr_ty);
+        let load = builder.insert_inst_with(|| Mload::new(is, meta_addr, Type::I256), Type::I256);
+        let _ = load;
+        builder.insert_inst_no_result_with(|| Return::new_unit(is));
+        builder.seal_all();
+
+        let load_inst = builder
+            .func
+            .dfg
+            .value_inst(load)
+            .expect("load should stay defined by an instruction");
+        let malloc_key = single_key(&builder.func, load_inst);
+        let absolute_key = MemoryAccessAnalysis::new()
+            .trackable_exact_loc(
+                &builder.func,
+                &exact_imm_access(
+                    builder.func.ctx().address_spaces().default_space(),
+                    Immediate::from_i256(I256::from(64), Type::I256),
+                ),
+            )
+            .expect("absolute meta access should be trackable");
+
+        assert_eq!(
+            MemoryAccessAnalysis::new().alias(&malloc_key, &absolute_key),
+            AliasResult::MayAlias
+        );
+    }
+
+    #[test]
+    fn malloc_negative_offset_into_meta_write_coverage_is_unknown() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::Unit);
+        let is = evm.inst_set();
+
+        let block = builder.append_block();
+        builder.switch_to_block(block);
+
+        let size = builder.make_imm_value(I256::from(32));
+        let ptr_ty = builder.ptr_type(Type::I8);
+        let addr = builder.insert_inst_with(|| EvmMalloc::new(is, size), ptr_ty);
+        let addr_i256 =
+            builder.insert_inst_with(|| PtrToInt::new(is, addr, Type::I256), Type::I256);
+        let delta = builder.make_imm_value(I256::from(i64::from(STATIC_BASE) - 64));
+        let meta_addr_i256 =
+            builder.insert_inst_with(|| Sub::new(is, addr_i256, delta), Type::I256);
+        let meta_addr =
+            builder.insert_inst_with(|| IntToPtr::new(is, meta_addr_i256, ptr_ty), ptr_ty);
+        let load = builder.insert_inst_with(|| Mload::new(is, meta_addr, Type::I256), Type::I256);
+        let _ = load;
+        builder.insert_inst_no_result_with(|| Return::new_unit(is));
+        builder.seal_all();
+
+        let load_inst = builder
+            .func
+            .dfg
+            .value_inst(load)
+            .expect("load should stay defined by an instruction");
+        let TrackedLocKey::Linear(key) = single_key(&builder.func, load_inst) else {
+            panic!("expected a linear key");
+        };
+        let analysis = MemoryAccessAnalysis::new();
+        let range_addr = builder.make_imm_value(I256::from(64));
+        let range_len = builder.make_imm_value(I256::from(32));
+        let range = analysis
+            .trackable_linear_range(
+                &builder.func,
+                &range_access(
+                    builder.func.ctx().address_spaces().default_space(),
+                    range_addr,
+                    range_len,
+                ),
+            )
+            .expect("absolute meta range should be trackable");
+
+        assert_eq!(
+            analysis.exact_write_coverage(&range, &key),
+            RangeCoverage::Unknown
         );
     }
 
