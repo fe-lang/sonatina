@@ -814,7 +814,7 @@ fn block_possible_roots(
     inst: InstId,
     record: &mut Option<&mut ObjectMemoryAnalysis>,
 ) {
-    let Some(roots) = roots.killable() else {
+    let Some(roots) = roots.exhaustive_known_roots() else {
         block_all_active_roots(state, inst, record);
         return;
     };

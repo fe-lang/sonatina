@@ -9,7 +9,7 @@ use sonatina_ir::{
 
 use super::{
     collect_root_provenance,
-    provenance::{CompleteProvenance, CompleteRootSet, KnownRoots, MayProvenance},
+    provenance::{CompleteProvenance, CompleteRootSet, MayProvenance},
     shape,
 };
 
@@ -114,10 +114,6 @@ impl<'a> EffectProvenance<'a> {
         }
 
         out
-    }
-
-    fn killable_roots(self, value: ValueId) -> Option<KnownRoots<'a>> {
-        self.may.root_set(value).killable()
     }
 }
 
@@ -1339,6 +1335,8 @@ fn kill_capture_access(
     object: ValueId,
     relative_slice: Option<(usize, usize)>,
 ) {
+    // Capture propagation is a may-analysis, so ambiguous destinations remain
+    // weak updates. Only exact destinations can soundly kill prior captures.
     if let Some(projection) = capture_ctx.exact_projection(object) {
         let access_slice = relative_slice.map_or(projection.slice, |(first_leaf, leaf_count)| {
             shape::AggregateSlice {
@@ -1348,13 +1346,6 @@ fn kill_capture_access(
             }
         });
         kill_capture_root_slice(root_captures, projection.root_value, Some(access_slice));
-        return;
-    }
-
-    if let Some(roots) = capture_ctx.killable_roots(object) {
-        for root in roots.iter() {
-            kill_capture_root_slice(root_captures, root, None);
-        }
     }
 }
 
@@ -1368,11 +1359,6 @@ fn kill_capture_slice_set(
         return;
     }
     let Some(projection) = capture_ctx.exact_projection(value) else {
-        if let Some(roots) = capture_ctx.killable_roots(value) {
-            for root in roots.iter() {
-                kill_capture_root_slice(root_captures, root, None);
-            }
-        }
         return;
     };
     if slices.is_whole_root() || projection.slice.leaf_count != slices.total_leaves() {
@@ -2013,6 +1999,165 @@ block3:
         assert!(
             arg_reads_slice(&summary, 1, 0, 1),
             "fresh helper call roots merged through an inexact phi should still propagate arg reads"
+        );
+    }
+
+    #[test]
+    fn weak_update_through_multi_root_phi_preserves_prior_capture_reads() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @Cell = { i256 };
+type @Take = { objref<i256> };
+
+func private %take(v0.objref<@Cell>) -> objref<@Take> {
+block0:
+    v1.objref<@Take> = obj.alloc @Take;
+    v2.objref<objref<i256>> = obj.proj v1 0.i8;
+    v3.objref<i256> = obj.proj v0 0.i8;
+    obj.store v2 v3;
+    return v1;
+}
+
+func private %read_preserved(v0.i1, v1.objref<@Cell>, v2.objref<@Cell>) -> i256 {
+block0:
+    br v0 block1 block2;
+
+block1:
+    v3.objref<@Take> = call %take v1;
+    jump block3;
+
+block2:
+    v4.objref<@Take> = call %take v1;
+    jump block3;
+
+block3:
+    v5.objref<@Take> = phi (v3 block1) (v4 block2);
+    v6.objref<i256> = obj.proj v2 0.i8;
+    v7.objref<objref<i256>> = obj.proj v5 0.i8;
+    obj.store v7 v6;
+    v8.objref<objref<i256>> = obj.proj v3 0.i8;
+    v9.objref<i256> = obj.load v8;
+    v10.i256 = obj.load v9;
+    return v10;
+}
+"#,
+        );
+
+        let func_ref = lookup_func(&module, "read_preserved");
+        let summary = compute_object_effect_summaries(&module)
+            .remove(&func_ref)
+            .expect("summary should exist");
+
+        assert!(
+            arg_reads_slice(&summary, 1, 0, 1),
+            "weak updates through multi-root destinations must preserve prior captured reads"
+        );
+    }
+
+    #[test]
+    fn unknown_capture_target_does_not_clear_prior_capture_reads() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @Cell = { i256 };
+type @Take = { objref<i256> };
+
+declare external %mystery_take() -> objref<@Take>;
+
+func private %take(v0.objref<@Cell>) -> objref<@Take> {
+block0:
+    v1.objref<@Take> = obj.alloc @Take;
+    v2.objref<objref<i256>> = obj.proj v1 0.i8;
+    v3.objref<i256> = obj.proj v0 0.i8;
+    obj.store v2 v3;
+    return v1;
+}
+
+func private %read_preserved(v0.i1, v1.objref<@Cell>, v2.objref<@Cell>) -> i256 {
+block0:
+    v3.objref<@Take> = call %take v1;
+    br v0 block1 block2;
+
+block1:
+    jump block3;
+
+block2:
+    v4.objref<@Take> = call %mystery_take;
+    jump block3;
+
+block3:
+    v5.objref<@Take> = phi (v3 block1) (v4 block2);
+    v6.objref<i256> = obj.proj v2 0.i8;
+    v7.objref<objref<i256>> = obj.proj v5 0.i8;
+    obj.store v7 v6;
+    v8.objref<objref<i256>> = obj.proj v3 0.i8;
+    v9.objref<i256> = obj.load v8;
+    v10.i256 = obj.load v9;
+    return v10;
+}
+"#,
+        );
+
+        let func_ref = lookup_func(&module, "read_preserved");
+        let summary = compute_object_effect_summaries(&module)
+            .remove(&func_ref)
+            .expect("summary should exist");
+
+        assert!(
+            arg_reads_slice(&summary, 1, 0, 1),
+            "unknown write targets must not clear prior captured reads on known roots"
+        );
+    }
+
+    #[test]
+    fn same_root_ambiguous_store_preserves_prior_capture_reads() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @Cell = { i256 };
+type @Pair = { objref<i256>, objref<i256> };
+
+func private %read_preserved(v0.i1, v1.objref<@Cell>, v2.objref<@Cell>) -> i256 {
+block0:
+    v3.objref<@Pair> = obj.alloc @Pair;
+    v4.objref<objref<i256>> = obj.proj v3 0.i8;
+    v5.objref<i256> = obj.proj v1 0.i8;
+    obj.store v4 v5;
+    v6.objref<objref<i256>> = obj.proj v3 1.i8;
+    v7.objref<i256> = obj.proj v1 0.i8;
+    obj.store v6 v7;
+    br v0 block1 block2;
+
+block1:
+    jump block3;
+
+block2:
+    jump block3;
+
+block3:
+    v8.objref<objref<i256>> = phi (v4 block1) (v6 block2);
+    v9.objref<i256> = obj.proj v2 0.i8;
+    obj.store v8 v9;
+    v10.objref<objref<i256>> = obj.proj v3 0.i8;
+    v11.objref<i256> = obj.load v10;
+    v12.i256 = obj.load v11;
+    return v12;
+}
+"#,
+        );
+
+        let func_ref = lookup_func(&module, "read_preserved");
+        let summary = compute_object_effect_summaries(&module)
+            .remove(&func_ref)
+            .expect("summary should exist");
+
+        assert!(
+            arg_reads_slice(&summary, 1, 0, 1),
+            "same-root ambiguous stores must remain weak updates for capture propagation"
         );
     }
 

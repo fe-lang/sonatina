@@ -576,7 +576,7 @@ fn observed_roots(
 }
 
 fn kill_possible_roots_available(available: &mut AvailableMap, possible_roots: MayRootSet<'_>) {
-    let Some(possible_roots) = possible_roots.killable() else {
+    let Some(possible_roots) = possible_roots.exhaustive_known_roots() else {
         available.clear();
         return;
     };
@@ -1215,7 +1215,7 @@ fn mark_live_may_roots(
 }
 
 fn roots_have_live(live: &FxHashMap<ValueId, FxHashSet<usize>>, roots: MayRootSet<'_>) -> bool {
-    let Some(roots) = roots.killable() else {
+    let Some(roots) = roots.exhaustive_known_roots() else {
         return true;
     };
     roots.iter().any(|root| root_has_live(live, root))
