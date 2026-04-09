@@ -287,6 +287,7 @@ fn compute_summary_for_func(
                                             &mut summary,
                                             arg_idx as usize,
                                             &prov[target_arg],
+                                            true,
                                         );
                                     }
                                 }
@@ -308,7 +309,7 @@ fn record_escape_into_provenance(
     dst_prov: &Provenance,
 ) {
     for arg_idx in src_prov.arg_indices() {
-        record_escape_from_arg_index(summary, arg_idx as usize, dst_prov);
+        record_escape_from_arg_index(summary, arg_idx as usize, dst_prov, false);
     }
 }
 
@@ -316,11 +317,12 @@ fn record_escape_from_arg_index(
     summary: &mut PtrEscapeSummary,
     src_idx: usize,
     dst_prov: &Provenance,
+    dst_arg_may_point_nonlocal: bool,
 ) {
     for dst_idx in dst_prov.arg_indices() {
         summary.record_store_to_arg(src_idx, dst_idx);
     }
-    if dst_prov.may_be_nonlocal_nonarg()
+    if (dst_prov.may_be_nonlocal_nonarg() || (dst_arg_may_point_nonlocal && dst_prov.has_any_arg()))
         && let Some(escapes) = summary.arg_may_escape.get_mut(src_idx)
     {
         *escapes = true;
@@ -553,6 +555,35 @@ block0:
             sum_last4.arg_may_escape,
             vec![false],
             "caller-local synthetic out-param must not count as an escape"
+        );
+    }
+
+    #[test]
+    fn ptr_escape_store_into_outparam_arg_marks_caller_arg_escape() {
+        let (summaries, _) = compute(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %capture(v0.*i8, v1.**i8) {
+block0:
+    mstore v1 v0 *i8;
+    return;
+}
+
+func public %wrapper(v0.*i8, v1.**i8) {
+block0:
+    call %capture v0 v1;
+    return;
+}
+"#,
+        );
+
+        let wrapper = &summaries["wrapper"];
+        assert_eq!(wrapper.arg_may_escape, vec![true, false]);
+        assert_eq!(
+            wrapper.arg_may_store_to_args[0].as_slice(),
+            &[1],
+            "wrapper should still record that arg 0 flows into arg 1"
         );
     }
 }
