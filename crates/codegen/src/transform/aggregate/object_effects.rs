@@ -1056,20 +1056,8 @@ fn merge_call_arg_effect(
     {
         merge_effect_into_arg(summary, idx, Some(projection.slice), callee_effect);
     } else {
-        match capture_ctx.provenance.provenance(value) {
-            super::RootProvenance::SameRoot(root) => {
-                if let Some(&idx) = capture_ctx.arg_roots.get(&root) {
-                    merge_effect_into_arg(summary, idx, None, callee_effect);
-                }
-            }
-            super::RootProvenance::Maybe(roots) => {
-                for root in roots {
-                    if let Some(&idx) = capture_ctx.arg_roots.get(&root) {
-                        merge_effect_into_arg(summary, idx, None, callee_effect);
-                    }
-                }
-            }
-            super::RootProvenance::Exact(_) | super::RootProvenance::Unknown => {}
+        for idx in root_arg_indices(capture_ctx.arg_roots, capture_ctx.provenance, value) {
+            merge_effect_into_arg(summary, idx, None, callee_effect);
         }
     }
 
@@ -1207,43 +1195,36 @@ fn capture_source_slices(
 ) -> Vec<(usize, shape::AggregateSlice)> {
     let mut src_slices = Vec::new();
 
-    match capture_ctx.provenance.provenance(value) {
-        super::RootProvenance::Exact(projection) => {
-            let access_slice = relative_slice
-                .map(|slice| offset_slice(projection.slice, slice))
-                .unwrap_or(Some(projection.slice));
-            let Some(access_slice) = access_slice else {
-                return Vec::new();
-            };
-            if let Some(&idx) = capture_ctx.arg_roots.get(&projection.root_value) {
-                src_slices.push((idx, access_slice));
-            }
-            extend_capture_sources_for_root(
-                &mut src_slices,
-                root_captures,
-                projection.root_value,
-                Some(access_slice),
-            );
+    // Effect and capture propagation need a conservative may-touch view. Known
+    // roots still matter even when provenance is incomplete; only planning and
+    // return classification require the strict complete-only view.
+    if let Some(projection) = capture_ctx.provenance.exact_projection(value) {
+        let access_slice = relative_slice
+            .map(|slice| offset_slice(projection.slice, slice))
+            .unwrap_or(Some(projection.slice));
+        let Some(access_slice) = access_slice else {
+            return Vec::new();
+        };
+        if let Some(&idx) = capture_ctx.arg_roots.get(&projection.root_value) {
+            src_slices.push((idx, access_slice));
         }
-        super::RootProvenance::SameRoot(root) => {
-            if let Some(&idx) = capture_ctx.arg_roots.get(&root)
-                && let Some(slice) = capture_ctx.root_slices.get(&root).copied()
-            {
-                src_slices.push((idx, slice));
-            }
-            extend_capture_sources_for_root(&mut src_slices, root_captures, root, None);
+        extend_capture_sources_for_root(
+            &mut src_slices,
+            root_captures,
+            projection.root_value,
+            Some(access_slice),
+        );
+        dedup_capture_source_slices(&mut src_slices);
+        return src_slices;
+    }
+
+    for &root in capture_ctx.provenance.known_possible_roots(value) {
+        if let Some(&idx) = capture_ctx.arg_roots.get(&root)
+            && let Some(slice) = capture_ctx.root_slices.get(&root).copied()
+        {
+            src_slices.push((idx, slice));
         }
-        super::RootProvenance::Maybe(roots) => {
-            for root in roots {
-                if let Some(&idx) = capture_ctx.arg_roots.get(&root)
-                    && let Some(slice) = capture_ctx.root_slices.get(&root).copied()
-                {
-                    src_slices.push((idx, slice));
-                }
-                extend_capture_sources_for_root(&mut src_slices, root_captures, root, None);
-            }
-        }
-        super::RootProvenance::Unknown => {}
+        extend_capture_sources_for_root(&mut src_slices, root_captures, root, None);
     }
 
     dedup_capture_source_slices(&mut src_slices);
@@ -1402,6 +1383,8 @@ fn possible_roots_for_value(
     provenance: &super::provenance::RootProvenanceMap,
     value: ValueId,
 ) -> Vec<ValueId> {
+    // Intentionally uses the strict provenance view. If `maybe_unknown` is set,
+    // kill paths must not drop may-captures on the known roots unconditionally.
     match provenance.provenance(value) {
         super::RootProvenance::Exact(projection) => vec![projection.root_value],
         super::RootProvenance::SameRoot(root) => vec![root],
@@ -1418,26 +1401,18 @@ fn value_root_slices(
         return vec![(projection.root_value, projection.slice)];
     }
 
-    match capture_ctx.provenance.provenance(value) {
-        super::RootProvenance::SameRoot(root) => capture_ctx
-            .root_slices
-            .get(&root)
-            .copied()
-            .map(|slice| (root, slice))
-            .into_iter()
-            .collect(),
-        super::RootProvenance::Maybe(roots) => roots
-            .into_iter()
-            .filter_map(|root| {
-                capture_ctx
-                    .root_slices
-                    .get(&root)
-                    .copied()
-                    .map(|slice| (root, slice))
-            })
-            .collect(),
-        super::RootProvenance::Exact(_) | super::RootProvenance::Unknown => Vec::new(),
-    }
+    capture_ctx
+        .provenance
+        .known_possible_roots(value)
+        .iter()
+        .filter_map(|&root| {
+            capture_ctx
+                .root_slices
+                .get(&root)
+                .copied()
+                .map(|slice| (root, slice))
+        })
+        .collect()
 }
 
 fn map_capture_slice_into_roots(
@@ -1742,21 +1717,28 @@ fn root_arg_indices(
     provenance: &super::provenance::RootProvenanceMap,
     object: ValueId,
 ) -> Vec<usize> {
-    match provenance.provenance(object) {
-        super::RootProvenance::Exact(projection) => arg_roots
+    if let Some(projection) = provenance.exact_projection(object) {
+        return arg_roots
             .get(&projection.root_value)
             .copied()
             .into_iter()
-            .collect(),
-        super::RootProvenance::SameRoot(root) => {
-            arg_roots.get(&root).copied().into_iter().collect()
-        }
-        super::RootProvenance::Maybe(roots) => roots
-            .into_iter()
-            .filter_map(|root| arg_roots.get(&root).copied())
-            .collect(),
-        super::RootProvenance::Unknown => Vec::new(),
+            .collect();
     }
+
+    let mut seen = FxHashSet::default();
+    let mut indices = Vec::new();
+    let known_roots = provenance.known_possible_roots(object);
+    if provenance.may_be_unknown(object) && known_roots.is_empty() {
+        return indices;
+    }
+    for &root in known_roots {
+        if let Some(&idx) = arg_roots.get(&root)
+            && seen.insert(idx)
+        {
+            indices.push(idx);
+        }
+    }
+    indices
 }
 
 pub(crate) fn is_fresh_root(function: &Function, value: ValueId) -> bool {
@@ -1855,6 +1837,13 @@ mod tests {
             .is_some_and(|effect| effect.reads.is_whole_root())
     }
 
+    fn arg_writes_whole_root(summary: &ObjectEffectSummary, index: usize) -> bool {
+        summary
+            .arg_effects
+            .get(index)
+            .is_some_and(|effect| effect.writes.is_whole_root())
+    }
+
     fn arg_reads_slice(
         summary: &ObjectEffectSummary,
         index: usize,
@@ -1903,6 +1892,88 @@ block0:
         assert!(
             has_arg_capture(&summary, 0, 1, 1, 1, 1, 1),
             "summary should record field-1 capture from the source arg"
+        );
+    }
+
+    #[test]
+    fn mixed_arg_and_unknown_phi_still_marks_arg_read() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @Pair = { i256, i256 };
+
+declare external %mystery() -> objref<@Pair>;
+
+func private %read_maybe(v0.i1, v1.objref<@Pair>) -> i256 {
+block0:
+    br v0 block1 block2;
+
+block1:
+    jump block3;
+
+block2:
+    v2.objref<@Pair> = call %mystery;
+    jump block3;
+
+block3:
+    v3.objref<@Pair> = phi (v1 block1) (v2 block2);
+    v4.objref<i256> = obj.proj v3 0.i8;
+    v5.i256 = obj.load v4;
+    return v5;
+}
+"#,
+        );
+
+        let func_ref = lookup_func(&module, "read_maybe");
+        let summary = compute_object_effect_summaries(&module)
+            .remove(&func_ref)
+            .expect("summary should exist");
+
+        assert!(
+            arg_reads_whole_root(&summary, 1),
+            "incomplete phi provenance should still conservatively mark arg reads"
+        );
+    }
+
+    #[test]
+    fn mixed_arg_and_unknown_phi_still_marks_arg_write() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @Pair = { i256, i256 };
+
+declare external %mystery() -> objref<@Pair>;
+
+func private %write_maybe(v0.i1, v1.objref<@Pair>, v2.i256) {
+block0:
+    br v0 block1 block2;
+
+block1:
+    jump block3;
+
+block2:
+    v3.objref<@Pair> = call %mystery;
+    jump block3;
+
+block3:
+    v4.objref<@Pair> = phi (v1 block1) (v3 block2);
+    v5.objref<i256> = obj.proj v4 0.i8;
+    obj.store v5 v2;
+    return;
+}
+"#,
+        );
+
+        let func_ref = lookup_func(&module, "write_maybe");
+        let summary = compute_object_effect_summaries(&module)
+            .remove(&func_ref)
+            .expect("summary should exist");
+
+        assert!(
+            arg_writes_whole_root(&summary, 1),
+            "incomplete phi provenance should still conservatively mark arg writes"
         );
     }
 

@@ -46,6 +46,8 @@ impl RootProvenanceMap {
         self.exact[value]
     }
 
+    // This is the strict, complete provenance view. If an unknown contributor is
+    // present, callers must not treat the known root set as exhaustive.
     pub(crate) fn provenance(&self, value: ValueId) -> RootProvenance {
         if self.maybe_unknown[value] {
             return RootProvenance::Unknown;
@@ -89,6 +91,14 @@ impl RootProvenanceMap {
             return &[];
         }
         &self.possible_projections[value]
+    }
+
+    pub(crate) fn known_possible_roots(&self, value: ValueId) -> &FxHashSet<ValueId> {
+        &self.possible_roots[value]
+    }
+
+    pub(crate) fn may_be_unknown(&self, value: ValueId) -> bool {
+        self.maybe_unknown[value]
     }
 }
 

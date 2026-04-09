@@ -1776,6 +1776,55 @@ func private %f(v0.i256) -> i256 {
     }
 
     #[test]
+    fn incomplete_phi_read_summary_keeps_precall_store_live() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @pair = { i256, i256 };
+
+declare external %mystery() -> objref<@pair>;
+
+func private %read_maybe(v0.i1, v1.objref<@pair>) -> i256 {
+block0:
+    br v0 block1 block2;
+
+block1:
+    jump block3;
+
+block2:
+    v2.objref<@pair> = call %mystery;
+    jump block3;
+
+block3:
+    v3.objref<@pair> = phi (v1 block1) (v2 block2);
+    v4.objref<i256> = obj.proj v3 0.i8;
+    v5.i256 = obj.load v4;
+    return v5;
+}
+
+func private %main(v0.i1, v1.objref<@pair>, v2.i256) -> i256 {
+block0:
+    v3.objref<i256> = obj.proj v1 0.i8;
+    obj.store v3 v2;
+    v4.i256 = call %read_maybe v0 v1;
+    return v4;
+}
+"#,
+        );
+        let func_ref = lookup_func(&module, "main");
+        run_with_effects(&module, func_ref);
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            assert!(
+                dumped.contains("obj.store v3 v2;"),
+                "pre-call store must stay live when callee may read the arg through incomplete provenance:\n{dumped}"
+            );
+        });
+    }
+
+    #[test]
     fn returned_capture_chain_keeps_source_store_live() {
         let module = parse_test_module(
             r#"
