@@ -30,4 +30,4 @@ pub(crate) use object_locality::{
     collect_local_object_arg_info_with_effects, merge_local_object_arg_info,
 };
 pub(crate) use object_memory::{ObjectMemoryAnalysis, ObjectReadGvnKey};
-pub(crate) use provenance::{Projection, RootProvenance, collect_root_provenance};
+pub(crate) use provenance::{Projection, collect_root_provenance};

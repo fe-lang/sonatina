@@ -1,3 +1,15 @@
+//! Root provenance keeps one internal fact table and exposes two semantic views:
+//!
+//! - `CompleteProvenance` is for proof-grade consumers that must reject incomplete
+//!   provenance. It is used by `object_abi`, `object_tracking`, `scalarize`, and
+//!   return classification in `object_effects`.
+//! - `MayProvenance` is for conservative analyses that may still observe known
+//!   roots when unknown contributors exist. It is used by `object_load_store`
+//!   and `object_memory`.
+//!
+//! Mixed consumers such as `object_effects` receive both views through a
+//! domain-specific adapter instead of querying raw provenance facts directly.
+
 use cranelift_entity::SecondaryMap;
 use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
@@ -22,83 +34,155 @@ pub(crate) struct Projection {
     pub slice: shape::AggregateSlice,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum RootProvenance {
-    Exact(Projection),
-    SameRoot(ValueId),
-    Maybe(FxHashSet<ValueId>),
-    Unknown,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct KnownRoots<'a>(&'a FxHashSet<ValueId>);
+
+impl<'a> KnownRoots<'a> {
+    pub(crate) fn iter(self) -> impl Iterator<Item = ValueId> + 'a {
+        self.0.iter().copied()
+    }
+
+    pub(crate) fn contains(self, root: ValueId) -> bool {
+        self.0.contains(&root)
+    }
+
+    pub(crate) fn len(self) -> usize {
+        self.0.len()
+    }
+
+    pub(crate) fn is_empty(self) -> bool {
+        self.0.is_empty()
+    }
 }
 
 #[derive(Default)]
-pub(crate) struct RootProvenanceMap {
+pub(crate) struct ProvenanceFacts {
     exact: SecondaryMap<ValueId, Option<Projection>>,
     possible_projections: SecondaryMap<ValueId, Vec<Projection>>,
     possible_roots: SecondaryMap<ValueId, FxHashSet<ValueId>>,
     maybe_unknown: SecondaryMap<ValueId, bool>,
 }
 
-impl RootProvenanceMap {
-    pub(crate) fn exact_projection(&self, value: ValueId) -> Option<Projection> {
-        if self.maybe_unknown[value] {
-            return None;
+#[derive(Clone, Copy)]
+pub(crate) struct CompleteProvenance<'a> {
+    facts: &'a ProvenanceFacts,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct MayProvenance<'a> {
+    facts: &'a ProvenanceFacts,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CompleteRootSet<'a> {
+    Single(ValueId),
+    Multiple(KnownRoots<'a>),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum MayRootSet<'a> {
+    KnownOnly(KnownRoots<'a>),
+    KnownAndUnknown(KnownRoots<'a>),
+}
+
+impl<'a> MayRootSet<'a> {
+    pub(crate) fn observed(self) -> KnownRoots<'a> {
+        match self {
+            Self::KnownOnly(roots) | Self::KnownAndUnknown(roots) => roots,
         }
-        self.exact[value]
     }
 
-    // This is the strict, complete provenance view. If an unknown contributor is
-    // present, callers must not treat the known root set as exhaustive.
-    pub(crate) fn provenance(&self, value: ValueId) -> RootProvenance {
-        if self.maybe_unknown[value] {
-            return RootProvenance::Unknown;
-        }
-        if let Some(projection) = self.exact[value] {
-            return RootProvenance::Exact(projection);
-        }
-
-        match self.possible_roots[value].len() {
-            0 => RootProvenance::Unknown,
-            1 => RootProvenance::SameRoot(
-                *self.possible_roots[value]
-                    .iter()
-                    .next()
-                    .expect("singleton root set must have an element"),
-            ),
-            _ => RootProvenance::Maybe(self.possible_roots[value].clone()),
+    pub(crate) fn killable(self) -> Option<KnownRoots<'a>> {
+        match self {
+            Self::KnownOnly(roots) => Some(roots),
+            Self::KnownAndUnknown(_) => None,
         }
     }
 
-    pub(crate) fn into_exact_projection(mut self) -> SecondaryMap<ValueId, Option<Projection>> {
+    pub(crate) fn has_unknown(self) -> bool {
+        matches!(self, Self::KnownAndUnknown(_))
+    }
+}
+
+pub(crate) struct ExactProjectionMap(SecondaryMap<ValueId, Option<Projection>>);
+
+impl ExactProjectionMap {
+    pub(crate) fn get(&self, value: ValueId) -> Option<Projection> {
+        self.0[value]
+    }
+
+    pub(crate) fn clear(&mut self, value: ValueId) {
+        self.set(value, None);
+    }
+
+    pub(crate) fn set(&mut self, value: ValueId, projection: Option<Projection>) {
+        self.0[value] = projection;
+    }
+}
+
+impl ProvenanceFacts {
+    pub(crate) fn complete(&self) -> CompleteProvenance<'_> {
+        CompleteProvenance { facts: self }
+    }
+
+    pub(crate) fn may(&self) -> MayProvenance<'_> {
+        MayProvenance { facts: self }
+    }
+
+    pub(crate) fn into_exact_projection_map(mut self) -> ExactProjectionMap {
         for value in self.exact.keys() {
             if self.maybe_unknown[value] {
                 self.exact[value] = None;
             }
         }
-        self.exact
+        ExactProjectionMap(self.exact)
     }
+}
 
-    pub(crate) fn into_possible_roots_and_unknown(
-        self,
-    ) -> (
-        SecondaryMap<ValueId, FxHashSet<ValueId>>,
-        SecondaryMap<ValueId, bool>,
-    ) {
-        (self.possible_roots, self.maybe_unknown)
-    }
-
-    pub(crate) fn possible_projections(&self, value: ValueId) -> &[Projection] {
-        if self.maybe_unknown[value] {
-            return &[];
+impl<'a> CompleteProvenance<'a> {
+    pub(crate) fn exact_projection(self, value: ValueId) -> Option<Projection> {
+        if self.facts.maybe_unknown[value] {
+            return None;
         }
-        &self.possible_projections[value]
+        self.facts.exact[value]
     }
 
-    pub(crate) fn known_possible_roots(&self, value: ValueId) -> &FxHashSet<ValueId> {
-        &self.possible_roots[value]
+    pub(crate) fn root_set(self, value: ValueId) -> Option<CompleteRootSet<'a>> {
+        if self.facts.maybe_unknown[value] {
+            return None;
+        }
+
+        let roots = KnownRoots(&self.facts.possible_roots[value]);
+        if roots.is_empty() {
+            None
+        } else if roots.len() == 1 {
+            Some(CompleteRootSet::Single(
+                roots
+                    .iter()
+                    .next()
+                    .expect("singleton root set must have an element"),
+            ))
+        } else {
+            Some(CompleteRootSet::Multiple(roots))
+        }
     }
 
-    pub(crate) fn may_be_unknown(&self, value: ValueId) -> bool {
-        self.maybe_unknown[value]
+    pub(crate) fn possible_projections(self, value: ValueId) -> Option<&'a [Projection]> {
+        if self.facts.maybe_unknown[value] {
+            return None;
+        }
+        Some(&self.facts.possible_projections[value])
+    }
+}
+
+impl<'a> MayProvenance<'a> {
+    pub(crate) fn root_set(self, value: ValueId) -> MayRootSet<'a> {
+        let roots = KnownRoots(&self.facts.possible_roots[value]);
+        if self.facts.maybe_unknown[value] {
+            MayRootSet::KnownAndUnknown(roots)
+        } else {
+            MayRootSet::KnownOnly(roots)
+        }
     }
 }
 
@@ -129,8 +213,8 @@ pub(crate) fn collect_root_provenance(
     root_slices: &FxHashMap<ValueId, shape::AggregateSlice>,
     layout_cache: &mut shape::AggregateLayoutCache,
     object_effects: Option<&ObjectEffectSummaryMap>,
-) -> RootProvenanceMap {
-    let mut provenance = RootProvenanceMap::default();
+) -> ProvenanceFacts {
+    let mut provenance = ProvenanceFacts::default();
     let mut exact_states = SecondaryMap::default();
 
     for (&root_value, &slice) in root_slices {
@@ -1862,6 +1946,59 @@ mod tests {
             .expect("function should exist")
     }
 
+    fn sorted_known_roots(roots: KnownRoots<'_>) -> Vec<ValueId> {
+        let mut roots: Vec<_> = roots.iter().collect();
+        roots.sort_unstable_by_key(|root| root.as_u32());
+        roots
+    }
+
+    #[test]
+    fn exact_known_root_uses_complete_and_may_views() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func private %f() -> objref<[i256; 8]> {
+block0:
+    v0.objref<[i256; 8]> = obj.alloc [i256; 8];
+    return v0;
+}
+"#,
+        );
+
+        let func_ref = lookup_func(&module, "f");
+        module.func_store.view(func_ref, |func| {
+            let mut layout_cache = shape::AggregateLayoutCache::default();
+            let root_slices = collect_root_slices(func, None, &mut layout_cache);
+            let provenance =
+                collect_root_provenance(func, func.ctx(), &root_slices, &mut layout_cache, None);
+            let complete = provenance.complete();
+            let may = provenance.may();
+            let root = func
+                .layout
+                .iter_block()
+                .flat_map(|block| func.layout.iter_inst(block))
+                .find_map(|inst| {
+                    downcast::<&data::ObjAlloc>(func.inst_set(), func.dfg.inst(inst))
+                        .and_then(|_| func.dfg.inst_result(inst))
+                })
+                .expect("alloc root should exist");
+
+            assert_eq!(
+                complete.exact_projection(root),
+                Some(Projection {
+                    root_value: root,
+                    slice: root_slices[&root],
+                })
+            );
+            assert_eq!(complete.root_set(root), Some(CompleteRootSet::Single(root)));
+            match may.root_set(root) {
+                MayRootSet::KnownOnly(roots) => assert_eq!(sorted_known_roots(roots), vec![root]),
+                MayRootSet::KnownAndUnknown(_) => panic!("exact root should not be unknown"),
+            }
+        });
+    }
+
     #[test]
     fn objref_load_from_captured_field_keeps_source_root_provenance() {
         let module = parse_test_module(
@@ -1916,9 +2053,10 @@ block0:
                 })
                 .expect("source root should exist");
 
+            let complete = provenance.complete();
             assert_eq!(
-                provenance.provenance(loaded),
-                RootProvenance::SameRoot(source_root)
+                complete.root_set(loaded),
+                Some(CompleteRootSet::Single(source_root))
             );
         });
     }
@@ -1984,9 +2122,10 @@ block0:
                 panic!("expected exactly two array roots");
             };
 
+            let complete = provenance.complete();
             assert_eq!(
-                provenance.provenance(*loaded),
-                RootProvenance::SameRoot(*overwritten_root)
+                complete.root_set(*loaded),
+                Some(CompleteRootSet::Single(*overwritten_root))
             );
         });
     }
@@ -2055,7 +2194,32 @@ block3:
                 })
                 .collect();
 
-            assert_eq!(provenance.provenance(loaded), RootProvenance::Maybe(roots));
+            let complete = provenance.complete();
+            let may = provenance.may();
+            match complete.root_set(loaded) {
+                Some(CompleteRootSet::Multiple(actual)) => {
+                    assert_eq!(sorted_known_roots(actual), {
+                        let mut expected: Vec<_> = roots.into_iter().collect();
+                        expected.sort_unstable_by_key(|root| root.as_u32());
+                        expected
+                    });
+                }
+                other => panic!("expected complete multiple root set, got {other:?}"),
+            }
+            match may.root_set(loaded) {
+                MayRootSet::KnownOnly(actual) => {
+                    let mut expected: Vec<_> = complete
+                        .root_set(loaded)
+                        .map(|set| match set {
+                            CompleteRootSet::Multiple(roots) => sorted_known_roots(roots),
+                            CompleteRootSet::Single(root) => vec![root],
+                        })
+                        .expect("multiple roots should stay complete");
+                    expected.sort_unstable_by_key(|root| root.as_u32());
+                    assert_eq!(sorted_known_roots(actual), expected);
+                }
+                MayRootSet::KnownAndUnknown(_) => panic!("known-only roots should stay complete"),
+            }
         });
     }
 
@@ -2120,9 +2284,10 @@ block0:
                 panic!("expected exactly two array roots");
             };
 
+            let complete = provenance.complete();
             assert_eq!(
-                provenance.provenance(*loaded),
-                RootProvenance::SameRoot(*loaded_root)
+                complete.root_set(*loaded),
+                Some(CompleteRootSet::Single(*loaded_root))
             );
         });
     }
@@ -2195,9 +2360,10 @@ block0:
                 panic!("expected exactly two array roots");
             };
 
+            let complete = provenance.complete();
             assert_eq!(
-                provenance.provenance(*loaded),
-                RootProvenance::SameRoot(*overwritten_root)
+                complete.root_set(*loaded),
+                Some(CompleteRootSet::Single(*overwritten_root))
             );
         });
     }
@@ -2252,9 +2418,65 @@ block3:
                 })
                 .expect("phi result should exist");
 
-            assert_eq!(provenance.provenance(phi_result), RootProvenance::Unknown);
-            assert_eq!(provenance.exact_projection(phi_result), None);
-            assert!(provenance.possible_projections(phi_result).is_empty());
+            let complete = provenance.complete();
+            let may = provenance.may();
+            assert_eq!(complete.exact_projection(phi_result), None);
+            assert_eq!(complete.root_set(phi_result), None);
+            assert_eq!(complete.possible_projections(phi_result), None);
+            match may.root_set(phi_result) {
+                MayRootSet::KnownAndUnknown(roots) => {
+                    assert_eq!(sorted_known_roots(roots).len(), 1);
+                }
+                MayRootSet::KnownOnly(_) => panic!("phi with unknown branch must stay incomplete"),
+            }
+        });
+    }
+
+    #[test]
+    fn unknown_only_uses_known_and_unknown_may_view() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+declare external %mystery() -> objref<[i256; 8]>;
+
+func private %f() -> objref<[i256; 8]> {
+block0:
+    v0.objref<[i256; 8]> = call %mystery;
+    return v0;
+}
+"#,
+        );
+
+        let func_ref = lookup_func(&module, "f");
+        let object_effects = compute_object_effect_summaries(&module);
+        module.func_store.view(func_ref, |func| {
+            let mut layout_cache = shape::AggregateLayoutCache::default();
+            let root_slices = collect_root_slices(func, None, &mut layout_cache);
+            let provenance = collect_root_provenance(
+                func,
+                func.ctx(),
+                &root_slices,
+                &mut layout_cache,
+                Some(&object_effects),
+            );
+            let call_result = func
+                .layout
+                .iter_block()
+                .flat_map(|block| func.layout.iter_inst(block))
+                .find_map(|inst| {
+                    downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(inst))
+                        .and_then(|_| func.dfg.inst_result(inst))
+                })
+                .expect("call result should exist");
+            let complete = provenance.complete();
+            let may = provenance.may();
+
+            assert_eq!(complete.root_set(call_result), None);
+            match may.root_set(call_result) {
+                MayRootSet::KnownAndUnknown(roots) => assert!(roots.is_empty()),
+                MayRootSet::KnownOnly(_) => panic!("unknown-only value must stay incomplete"),
+            }
         });
     }
 }

@@ -6,7 +6,11 @@ use sonatina_ir::{
     module::ModuleCtx,
 };
 
-use super::{LocalObjectArgInfo, RootProvenance, shape};
+use super::{
+    LocalObjectArgInfo,
+    provenance::{CompleteProvenance, CompleteRootSet},
+    shape,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct ObjectSlice {
@@ -60,7 +64,7 @@ pub(crate) fn collect_root_slices(
 
 pub(crate) fn collect_tracked_objects(
     func: &Function,
-    provenance: &super::provenance::RootProvenanceMap,
+    provenance: CompleteProvenance<'_>,
     layout_cache: &mut shape::AggregateLayoutCache,
 ) -> SecondaryMap<ValueId, Option<TrackedObject>> {
     let mut tracked = SecondaryMap::default();
@@ -69,8 +73,7 @@ pub(crate) fn collect_tracked_objects(
         if objref_element_ty(func.ctx(), func.dfg.value_ty(value)).is_none() {
             continue;
         }
-        tracked[value] =
-            tracked_object_from_provenance(func, provenance.provenance(value), layout_cache);
+        tracked[value] = tracked_object_from_provenance(func, provenance, value, layout_cache);
     }
 
     tracked
@@ -78,22 +81,26 @@ pub(crate) fn collect_tracked_objects(
 
 fn tracked_object_from_provenance(
     func: &Function,
-    provenance: RootProvenance,
+    provenance: CompleteProvenance<'_>,
+    value: ValueId,
     layout_cache: &mut shape::AggregateLayoutCache,
 ) -> Option<TrackedObject> {
-    match provenance {
-        RootProvenance::Exact(projection) => Some(TrackedObject::Exact(ObjectSlice {
+    if let Some(projection) = provenance.exact_projection(value) {
+        return Some(TrackedObject::Exact(ObjectSlice {
             root: projection.root_value,
             ty: projection.slice.ty,
             first_leaf: projection.slice.first_leaf,
             leaf_count: projection.slice.leaf_count,
             total_leaves: root_leaf_count_for_value(func, layout_cache, projection.root_value)?,
-        })),
-        RootProvenance::SameRoot(root) => Some(TrackedObject::RootUnknown {
+        }));
+    }
+
+    match provenance.root_set(value)? {
+        CompleteRootSet::Single(root) => Some(TrackedObject::RootUnknown {
             root,
             total_leaves: root_leaf_count_for_value(func, layout_cache, root)?,
         }),
-        RootProvenance::Maybe(_) | RootProvenance::Unknown => None,
+        CompleteRootSet::Multiple(_) => None,
     }
 }
 

@@ -12,9 +12,13 @@ use sonatina_ir::{
 use crate::cfg_edit::{CfgEditor, CleanupMode};
 
 use super::{
-    LocalObjectArgInfo, LocalObjectArgMap, Projection, RootInit, RootProvenance,
-    cleanup::DeadPureInstCleanup, collect_root_provenance, promotion::SsaBuilder,
-    reconstruct::bitcast_before_inst, shape,
+    LocalObjectArgInfo, LocalObjectArgMap, RootInit,
+    cleanup::DeadPureInstCleanup,
+    collect_root_provenance,
+    promotion::SsaBuilder,
+    provenance::{CompleteProvenance, ExactProjectionMap},
+    reconstruct::bitcast_before_inst,
+    shape,
 };
 
 type LeafValues = SmallVec<[ValueId; 4]>;
@@ -340,10 +344,7 @@ impl AggregateScalarize {
         func: &Function,
         module: &sonatina_ir::module::ModuleCtx,
         local_object_args: Option<&FxHashMap<usize, LocalObjectArgInfo>>,
-    ) -> (
-        Vec<PromotableRoot>,
-        SecondaryMap<ValueId, Option<Projection>>,
-    ) {
+    ) -> (Vec<PromotableRoot>, ExactProjectionMap) {
         let mut promoted = Vec::new();
 
         let mut roots: Vec<(ValueId, RootKind, Type, shape::AggregateShape)> = Vec::new();
@@ -435,7 +436,7 @@ impl AggregateScalarize {
         let provenance =
             collect_root_provenance(func, module, &root_slices, &mut self.layout_cache, None);
         for (root_value, root_kind, shape_data) in candidate_roots {
-            if !self.root_use_chain_is_promotable(func, module, root_value, &provenance) {
+            if !self.root_use_chain_is_promotable(func, module, root_value, provenance.complete()) {
                 continue;
             }
             promoted.push(PromotableRoot {
@@ -455,7 +456,7 @@ impl AggregateScalarize {
             });
         }
 
-        (promoted, provenance.into_exact_projection())
+        (promoted, provenance.into_exact_projection_map())
     }
 
     fn root_use_chain_is_promotable(
@@ -463,7 +464,7 @@ impl AggregateScalarize {
         func: &Function,
         module: &sonatina_ir::module::ModuleCtx,
         root_value: ValueId,
-        provenance: &super::provenance::RootProvenanceMap,
+        provenance: CompleteProvenance<'_>,
     ) -> bool {
         let mut dead_use_cache = FxHashMap::default();
 
@@ -486,10 +487,10 @@ impl AggregateScalarize {
                     let Some(result) = func.dfg.inst_result(user) else {
                         return false;
                     };
-                    if matches!(
-                        provenance.provenance(result),
-                        RootProvenance::Exact(next) if next.root_value == root_value
-                    ) {
+                    if provenance
+                        .exact_projection(result)
+                        .is_some_and(|next| next.root_value == root_value)
+                    {
                         continue;
                     }
                 }
@@ -501,10 +502,10 @@ impl AggregateScalarize {
                     let Some(result) = func.dfg.inst_result(user) else {
                         return false;
                     };
-                    if matches!(
-                        provenance.provenance(result),
-                        RootProvenance::Exact(next) if next.root_value == root_value
-                    ) {
+                    if provenance
+                        .exact_projection(result)
+                        .is_some_and(|next| next.root_value == root_value)
+                    {
                         continue;
                     }
                 }
@@ -516,10 +517,10 @@ impl AggregateScalarize {
                     let Some(result) = func.dfg.inst_result(user) else {
                         return false;
                     };
-                    if matches!(
-                        provenance.provenance(result),
-                        RootProvenance::Exact(next) if next.root_value == root_value
-                    ) {
+                    if provenance
+                        .exact_projection(result)
+                        .is_some_and(|next| next.root_value == root_value)
+                    {
                         continue;
                     }
                 }
@@ -531,10 +532,10 @@ impl AggregateScalarize {
                     let Some(result) = func.dfg.inst_result(user) else {
                         return false;
                     };
-                    if matches!(
-                        provenance.provenance(result),
-                        RootProvenance::Exact(next) if next.root_value == root_value
-                    ) {
+                    if provenance
+                        .exact_projection(result)
+                        .is_some_and(|next| next.root_value == root_value)
+                    {
                         continue;
                     }
                 }
@@ -546,10 +547,10 @@ impl AggregateScalarize {
                     let Some(result) = func.dfg.inst_result(user) else {
                         return false;
                     };
-                    if matches!(
-                        provenance.provenance(result),
-                        RootProvenance::Exact(next) if next.root_value == root_value
-                    ) {
+                    if provenance
+                        .exact_projection(result)
+                        .is_some_and(|next| next.root_value == root_value)
+                    {
                         continue;
                     }
                 }
@@ -758,7 +759,7 @@ impl AggregateScalarize {
         func: &Function,
         module: &sonatina_ir::module::ModuleCtx,
         promoted_roots: &mut Vec<PromotableRoot>,
-        projection_of: &mut SecondaryMap<ValueId, Option<Projection>>,
+        projection_of: &mut ExactProjectionMap,
         scalarizable: &SecondaryMap<ValueId, bool>,
     ) -> bool {
         let before = promoted_roots.len();
@@ -777,10 +778,10 @@ impl AggregateScalarize {
             .map(|promoted| promoted.root_value)
             .collect();
         for value in func.dfg.value_ids() {
-            if let Some(projection) = projection_of[value]
+            if let Some(projection) = projection_of.get(value)
                 && !kept.contains(&projection.root_value)
             {
-                projection_of[value] = None;
+                projection_of.clear(value);
             }
         }
         promoted_roots.len() != before
@@ -791,11 +792,11 @@ impl AggregateScalarize {
         func: &Function,
         module: &sonatina_ir::module::ModuleCtx,
         root_value: ValueId,
-        projection_of: &SecondaryMap<ValueId, Option<Projection>>,
+        projection_of: &ExactProjectionMap,
         scalarizable: &SecondaryMap<ValueId, bool>,
     ) -> bool {
         for ptr in func.dfg.value_ids() {
-            let Some(projection) = projection_of[ptr] else {
+            let Some(projection) = projection_of.get(ptr) else {
                 continue;
             };
             if projection.root_value != root_value {
@@ -892,7 +893,7 @@ impl AggregateScalarize {
         &mut self,
         func: &Function,
         module: &sonatina_ir::module::ModuleCtx,
-        projection_of: &SecondaryMap<ValueId, Option<Projection>>,
+        projection_of: &ExactProjectionMap,
     ) -> SecondaryMap<ValueId, bool> {
         let mut scalarizable: SecondaryMap<ValueId, bool> = SecondaryMap::default();
 
@@ -937,11 +938,11 @@ impl AggregateScalarize {
                     } else if let Some(mload) =
                         downcast::<&data::Mload>(func.inst_set(), func.dfg.inst(*inst))
                     {
-                        projection_of[*mload.addr()].is_some()
+                        projection_of.get(*mload.addr()).is_some()
                     } else if let Some(obj_load) =
                         downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(*inst))
                     {
-                        projection_of[*obj_load.object()].is_some()
+                        projection_of.get(*obj_load.object()).is_some()
                     } else {
                         false
                     }
@@ -985,7 +986,7 @@ impl AggregateScalarize {
         &mut self,
         func: &Function,
         module: &sonatina_ir::module::ModuleCtx,
-        projection_of: &SecondaryMap<ValueId, Option<Projection>>,
+        projection_of: &ExactProjectionMap,
         scalarizable: &SecondaryMap<ValueId, bool>,
         value: ValueId,
     ) -> bool {
@@ -1100,14 +1101,14 @@ impl AggregateScalarize {
                     downcast::<&data::Mload>(func.inst_set(), func.dfg.inst(*inst))
                 {
                     shape::is_supported_scalar_shape_ty(module, *mload.ty())
-                        && projection_of[*mload.addr()].is_some()
+                        && projection_of.get(*mload.addr()).is_some()
                         && *mload.ty() == func.dfg.value_ty(value)
                 } else if let Some(obj_load) =
                     downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(*inst))
                 {
                     let value_ty = func.dfg.value_ty(value);
                     shape::is_supported_scalar_shape_ty(module, value_ty)
-                        && projection_of[*obj_load.object()].is_some()
+                        && projection_of.get(*obj_load.object()).is_some()
                 } else if let Some(bitcast) =
                     downcast::<&cast::Bitcast>(func.inst_set(), func.dfg.inst(*inst))
                 {
@@ -1135,7 +1136,7 @@ impl AggregateScalarize {
         &mut self,
         func: &Function,
         module: &sonatina_ir::module::ModuleCtx,
-        projection_of: &SecondaryMap<ValueId, Option<Projection>>,
+        projection_of: &ExactProjectionMap,
         scalarizable: &SecondaryMap<ValueId, bool>,
         value: ValueId,
     ) -> bool {
@@ -1223,7 +1224,7 @@ impl AggregateScalarize {
                 if !shape::is_supported_scalar_shape_ty(module, *mstore.ty()) {
                     return false;
                 }
-                if projection_of[*mstore.addr()].is_none() {
+                if projection_of.get(*mstore.addr()).is_none() {
                     return false;
                 }
                 continue;
@@ -1236,7 +1237,7 @@ impl AggregateScalarize {
                 if !shape::is_supported_scalar_shape_ty(module, func.dfg.value_ty(value)) {
                     return false;
                 }
-                if projection_of[*obj_store.object()].is_none() {
+                if projection_of.get(*obj_store.object()).is_none() {
                     return false;
                 }
                 continue;
@@ -1319,7 +1320,7 @@ impl AggregateScalarize {
         module: &sonatina_ir::module::ModuleCtx,
         block: BlockId,
         inst: InstId,
-        projection_of: &SecondaryMap<ValueId, Option<Projection>>,
+        projection_of: &ExactProjectionMap,
         promoted_by_root: &FxHashMap<ValueId, PromotableRoot>,
         scalarizable: &SecondaryMap<ValueId, bool>,
         scalarized_agg: &mut SecondaryMap<ValueId, Option<LeafValues>>,
@@ -1341,7 +1342,7 @@ impl AggregateScalarize {
                     )
                 })
         {
-            let Some(projection) = projection_of[projection_value] else {
+            let Some(projection) = projection_of.get(projection_value) else {
                 return;
             };
             let Some(promoted) = promoted_by_root.get(&projection.root_value) else {
@@ -1396,7 +1397,7 @@ impl AggregateScalarize {
         if let Some(enum_get_tag) =
             downcast::<&data::EnumGetTag>(func.inst_set(), func.dfg.inst(inst))
         {
-            let Some(projection) = projection_of[*enum_get_tag.object()] else {
+            let Some(projection) = projection_of.get(*enum_get_tag.object()) else {
                 return;
             };
             let Some(promoted) = promoted_by_root.get(&projection.root_value) else {
@@ -1426,7 +1427,7 @@ impl AggregateScalarize {
         if let Some(enum_set_tag) =
             downcast::<&data::EnumSetTag>(func.inst_set(), func.dfg.inst(inst))
         {
-            let Some(projection) = projection_of[*enum_set_tag.object()] else {
+            let Some(projection) = projection_of.get(*enum_set_tag.object()) else {
                 return;
             };
             let Some(promoted) = promoted_by_root.get(&projection.root_value) else {
@@ -1453,7 +1454,7 @@ impl AggregateScalarize {
         if let Some(enum_write_variant) =
             downcast::<&data::EnumWriteVariant>(func.inst_set(), func.dfg.inst(inst)).cloned()
         {
-            let Some(projection) = projection_of[*enum_write_variant.object()] else {
+            let Some(projection) = projection_of.get(*enum_write_variant.object()) else {
                 return;
             };
             let Some(promoted) = promoted_by_root.get(&projection.root_value) else {
@@ -1544,7 +1545,7 @@ impl AggregateScalarize {
         else {
             return;
         };
-        let Some(projection) = projection_of[projection_value] else {
+        let Some(projection) = projection_of.get(projection_value) else {
             return;
         };
         let Some(promoted) = promoted_by_root.get(&projection.root_value) else {
@@ -2051,7 +2052,7 @@ impl AggregateScalarize {
     fn cleanup_scalarized_artifacts(
         &mut self,
         func: &mut Function,
-        projection_of: &SecondaryMap<ValueId, Option<Projection>>,
+        projection_of: &ExactProjectionMap,
         promoted_by_root: &FxHashMap<ValueId, PromotableRoot>,
     ) -> bool {
         let mut changed = false;
@@ -2117,7 +2118,7 @@ impl AggregateScalarize {
     fn cleanup_dead_promoted_paths_with_current_users(
         &self,
         func: &mut Function,
-        projection_of: &SecondaryMap<ValueId, Option<Projection>>,
+        projection_of: &ExactProjectionMap,
         promoted_by_root: &FxHashMap<ValueId, PromotableRoot>,
     ) -> bool {
         if promoted_by_root.is_empty() {
@@ -2127,7 +2128,7 @@ impl AggregateScalarize {
         let mut candidate_results = FxHashMap::default();
 
         for value in func.dfg.value_ids() {
-            let Some(projection) = projection_of[value] else {
+            let Some(projection) = projection_of.get(value) else {
                 continue;
             };
             if !promoted_by_root.contains_key(&projection.root_value) {

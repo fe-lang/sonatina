@@ -14,6 +14,7 @@ use super::{
     compute_object_effect_summaries,
     object_locality::{self, LocalObjectArgInfo, LocalObjectArgMap, RootInit},
     private_abi::{self, PrivateAbiPlan},
+    provenance::{CompleteProvenance, CompleteRootSet},
     shape,
 };
 use crate::cfg_scc::CfgSccAnalysis;
@@ -235,13 +236,14 @@ impl ObjectReturnOutParam {
             return None;
         }
         let mut layout_cache = shape::AggregateLayoutCache::default();
-        let provenance = collect_root_provenance(
+        let provenance_facts = collect_root_provenance(
             function,
             function.ctx(),
             &root_slices,
             &mut layout_cache,
             Some(object_effects),
         );
+        let provenance = provenance_facts.complete();
         let root_slice = whole_object_slice(&mut layout_cache, function.ctx(), out_elem_ty);
         let mut return_roots = SmallVec::<[ValueId; 4]>::new();
         let mut seen_roots = FxHashSet::default();
@@ -264,9 +266,7 @@ impl ObjectReturnOutParam {
                     return None;
                 }
 
-                for root in
-                    self.returned_whole_roots(root, root_slice, &root_slices, &provenance)?
-                {
+                for root in self.returned_whole_roots(root, root_slice, &root_slices, provenance)? {
                     if !seen_roots.insert(root) {
                         continue;
                     }
@@ -293,7 +293,7 @@ impl ObjectReturnOutParam {
                 function,
                 root,
                 &root_slices,
-                &provenance,
+                provenance,
                 object_effects,
                 &allowed_roots,
             ) {
@@ -310,7 +310,7 @@ impl ObjectReturnOutParam {
         value: ValueId,
         root_slice: shape::AggregateSlice,
         root_slices: &FxHashMap<ValueId, shape::AggregateSlice>,
-        provenance: &super::provenance::RootProvenanceMap,
+        provenance: CompleteProvenance<'_>,
     ) -> Option<SmallVec<[ValueId; 4]>> {
         if let Some(projection) = provenance.exact_projection(value) {
             return (root_slices.get(&projection.root_value) == Some(&projection.slice)
@@ -318,13 +318,13 @@ impl ObjectReturnOutParam {
                 .then_some(smallvec![projection.root_value]);
         }
 
-        match provenance.provenance(value) {
-            super::RootProvenance::SameRoot(root) => {
+        match provenance.root_set(value)? {
+            CompleteRootSet::Single(root) => {
                 (root_slices.get(&root) == Some(&root_slice)).then_some(smallvec![root])
             }
-            super::RootProvenance::Maybe(roots) => {
+            CompleteRootSet::Multiple(roots) => {
                 let mut returned_roots = SmallVec::<[ValueId; 4]>::new();
-                for root in roots {
+                for root in roots.iter() {
                     if root_slices.get(&root) != Some(&root_slice) {
                         return None;
                     }
@@ -333,7 +333,6 @@ impl ObjectReturnOutParam {
                 returned_roots.sort_unstable_by_key(|root| root.as_u32());
                 (!returned_roots.is_empty()).then_some(returned_roots)
             }
-            super::RootProvenance::Exact(_) | super::RootProvenance::Unknown => None,
         }
     }
 
@@ -347,7 +346,7 @@ impl ObjectReturnOutParam {
         value: ValueId,
         root: ValueId,
         root_slice: shape::AggregateSlice,
-        provenance: &super::provenance::RootProvenanceMap,
+        provenance: CompleteProvenance<'_>,
         allowed_roots: &FxHashSet<ValueId>,
     ) -> bool {
         if provenance
@@ -363,18 +362,15 @@ impl ObjectReturnOutParam {
             return false;
         }
 
-        match provenance.provenance(value) {
-            super::RootProvenance::SameRoot(provenance_root) => provenance_root == root,
-            super::RootProvenance::Maybe(roots) => {
-                roots.contains(&root)
+        match provenance.root_set(value) {
+            Some(CompleteRootSet::Single(provenance_root)) => provenance_root == root,
+            Some(CompleteRootSet::Multiple(roots)) => {
+                roots.contains(root)
                     && roots
                         .iter()
-                        .all(|candidate| allowed_roots.contains(candidate))
+                        .all(|candidate| allowed_roots.contains(&candidate))
             }
-            super::RootProvenance::Exact(projection) => {
-                projection.root_value == root && projection.slice == root_slice
-            }
-            super::RootProvenance::Unknown => false,
+            None => false,
         }
     }
 
@@ -383,7 +379,7 @@ impl ObjectReturnOutParam {
         function: &Function,
         root: ValueId,
         root_slices: &FxHashMap<ValueId, shape::AggregateSlice>,
-        provenance: &super::provenance::RootProvenanceMap,
+        provenance: CompleteProvenance<'_>,
         object_effects: &ObjectEffectSummaryMap,
         allowed_roots: &FxHashSet<ValueId>,
     ) -> bool {
