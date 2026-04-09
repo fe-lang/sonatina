@@ -12,6 +12,7 @@
 
 use cranelift_entity::SecondaryMap;
 use rustc_hash::{FxHashMap, FxHashSet};
+use smallvec::SmallVec;
 use sonatina_ir::{
     BlockId, Function, InstId, Type, ValueId,
     cfg::ControlFlowGraph,
@@ -25,12 +26,35 @@ use super::{ObjectEffectSummaryMap, ObjectReturnEffect, SliceSet, shape};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct RootCaptureSource {
     dst_slice: shape::AggregateSlice,
-    src_root: Option<ValueId>,
+    src_root: Option<RootValue>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct RootValue(ValueId);
+
+impl RootValue {
+    pub(crate) fn new(value: ValueId) -> Self {
+        Self(value)
+    }
+
+    pub(crate) fn value(self) -> ValueId {
+        self.0
+    }
+
+    pub(crate) fn as_u32(self) -> u32 {
+        self.0.as_u32()
+    }
+}
+
+impl From<RootValue> for ValueId {
+    fn from(root: RootValue) -> Self {
+        root.value()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Projection {
-    pub root_value: ValueId,
+    pub root_value: RootValue,
     pub slice: shape::AggregateSlice,
 }
 
@@ -38,12 +62,12 @@ pub(crate) struct Projection {
 pub(crate) struct KnownRoots<'a>(&'a FxHashSet<ValueId>);
 
 impl<'a> KnownRoots<'a> {
-    pub(crate) fn iter(self) -> impl Iterator<Item = ValueId> + 'a {
-        self.0.iter().copied()
+    pub(crate) fn iter(self) -> impl Iterator<Item = RootValue> + 'a {
+        self.0.iter().copied().map(RootValue::new)
     }
 
-    pub(crate) fn contains(self, root: ValueId) -> bool {
-        self.0.contains(&root)
+    pub(crate) fn contains(self, root: RootValue) -> bool {
+        self.0.contains(&root.value())
     }
 
     pub(crate) fn len(self) -> usize {
@@ -75,32 +99,36 @@ pub(crate) struct MayProvenance<'a> {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CompleteRootSet<'a> {
-    Single(ValueId),
+    Single(RootValue),
     Multiple(KnownRoots<'a>),
 }
 
+impl<'a> CompleteRootSet<'a> {
+    pub(crate) fn contains(self, root: RootValue) -> bool {
+        match self {
+            Self::Single(candidate) => candidate == root,
+            Self::Multiple(roots) => roots.contains(root),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum MayRootSet<'a> {
-    KnownOnly(KnownRoots<'a>),
-    KnownAndUnknown(KnownRoots<'a>),
+pub(crate) struct MayRootSet<'a> {
+    roots: KnownRoots<'a>,
+    has_unknown: bool,
 }
 
 impl<'a> MayRootSet<'a> {
     pub(crate) fn observed(self) -> KnownRoots<'a> {
-        match self {
-            Self::KnownOnly(roots) | Self::KnownAndUnknown(roots) => roots,
-        }
+        self.roots
     }
 
     pub(crate) fn exhaustive_known_roots(self) -> Option<KnownRoots<'a>> {
-        match self {
-            Self::KnownOnly(roots) => Some(roots),
-            Self::KnownAndUnknown(_) => None,
-        }
+        (!self.has_unknown).then_some(self.roots)
     }
 
     pub(crate) fn has_unknown(self) -> bool {
-        matches!(self, Self::KnownAndUnknown(_))
+        self.has_unknown
     }
 }
 
@@ -118,6 +146,37 @@ impl ExactProjectionMap {
     pub(crate) fn set(&mut self, value: ValueId, projection: Option<Projection>) {
         self.0[value] = projection;
     }
+}
+
+pub(crate) fn exact_capture_destination(
+    projection: Option<Projection>,
+    relative_slice: Option<shape::AggregateSlice>,
+) -> Option<(RootValue, shape::AggregateSlice)> {
+    // Capture-state propagation is a may-analysis, so strong updates are only
+    // sound when the destination itself is exact. Multi-root, same-root
+    // ambiguous, and known-plus-unknown destinations must remain weak updates.
+    let projection = projection?;
+    let access_slice = relative_slice
+        .map(|slice| offset_projection_slice(projection.slice, slice))
+        .unwrap_or(Some(projection.slice))?;
+    Some((projection.root_value, access_slice))
+}
+
+pub(crate) fn observed_root_slices<'a>(
+    exact_projection: Option<Projection>,
+    observed_roots: KnownRoots<'a>,
+    mut whole_root_slice: impl FnMut(RootValue) -> shape::AggregateSlice,
+) -> SmallVec<[(RootValue, shape::AggregateSlice); 4]> {
+    let mut out = SmallVec::new();
+    if let Some(projection) = exact_projection {
+        out.push((projection.root_value, projection.slice));
+        return out;
+    }
+
+    for root in observed_roots.iter() {
+        out.push((root, whole_root_slice(root)));
+    }
+    out
 }
 
 impl ProvenanceFacts {
@@ -147,12 +206,12 @@ impl<'a> CompleteProvenance<'a> {
         self.facts.exact[value]
     }
 
-    pub(crate) fn exact_root_slice(self, root: ValueId) -> Option<shape::AggregateSlice> {
-        let projection = self.exact_projection(root)?;
+    pub(crate) fn exact_root_slice(self, root: RootValue) -> Option<shape::AggregateSlice> {
+        let projection = self.exact_projection(root.value())?;
         (projection.root_value == root).then_some(projection.slice)
     }
 
-    pub(crate) fn root_set(self, value: ValueId) -> Option<CompleteRootSet<'a>> {
+    pub(crate) fn complete_roots(self, value: ValueId) -> Option<CompleteRootSet<'a>> {
         if self.facts.maybe_unknown[value] {
             return None;
         }
@@ -172,21 +231,35 @@ impl<'a> CompleteProvenance<'a> {
         }
     }
 
-    pub(crate) fn possible_projections(self, value: ValueId) -> Option<&'a [Projection]> {
-        if self.facts.maybe_unknown[value] {
-            return None;
+    pub(crate) fn possible_slices_for_root(
+        self,
+        value: ValueId,
+        root: RootValue,
+    ) -> Option<SmallVec<[shape::AggregateSlice; 4]>> {
+        if !self.complete_roots(value)?.contains(root) {
+            return Some(SmallVec::new());
         }
-        Some(&self.facts.possible_projections[value])
+
+        let mut slices = SmallVec::new();
+        for projection in &self.facts.possible_projections[value] {
+            if projection.root_value == root && !slices.contains(&projection.slice) {
+                slices.push(projection.slice);
+            }
+        }
+        if slices.is_empty()
+            && let Some(root_slice) = self.exact_root_slice(root)
+        {
+            slices.push(root_slice);
+        }
+        Some(slices)
     }
 }
 
 impl<'a> MayProvenance<'a> {
-    pub(crate) fn root_set(self, value: ValueId) -> MayRootSet<'a> {
-        let roots = KnownRoots(&self.facts.possible_roots[value]);
-        if self.facts.maybe_unknown[value] {
-            MayRootSet::KnownAndUnknown(roots)
-        } else {
-            MayRootSet::KnownOnly(roots)
+    pub(crate) fn may_roots(self, value: ValueId) -> MayRootSet<'a> {
+        MayRootSet {
+            roots: KnownRoots(&self.facts.possible_roots[value]),
+            has_unknown: self.facts.maybe_unknown[value],
         }
     }
 }
@@ -224,7 +297,10 @@ pub(crate) fn collect_root_provenance(
 
     for (&root_value, &slice) in root_slices {
         provenance.possible_roots[root_value].insert(root_value);
-        exact_states[root_value] = Some(ExactState::Exact(Projection { root_value, slice }));
+        exact_states[root_value] = Some(ExactState::Exact(Projection {
+            root_value: RootValue::new(root_value),
+            slice,
+        }));
     }
 
     compute_possible_roots(
@@ -250,7 +326,7 @@ pub(crate) fn collect_root_provenance(
 
                 let next = if let Some(&slice) = root_slices.get(&result) {
                     ExactState::Exact(Projection {
-                        root_value: result,
+                        root_value: RootValue::new(result),
                         slice,
                     })
                 } else if let Some(projection) =
@@ -331,7 +407,10 @@ fn collect_possible_projections(
     let mut possible_projections = SecondaryMap::<ValueId, Vec<Projection>>::default();
 
     for (&root_value, &slice) in root_slices {
-        possible_projections[root_value].push(Projection { root_value, slice });
+        possible_projections[root_value].push(Projection {
+            root_value: RootValue::new(root_value),
+            slice,
+        });
     }
 
     for value in func.dfg.value_ids() {
@@ -709,7 +788,7 @@ fn record_root_capture_sources(
             let entry = root_captures.entry(root).or_default();
             let capture = RootCaptureSource {
                 dst_slice,
-                src_root: Some(src_root),
+                src_root: Some(RootValue::new(src_root)),
             };
             if entry.contains(&capture) {
                 continue;
@@ -768,21 +847,21 @@ fn kill_capture_access(
     relative_slice: Option<(usize, usize)>,
     capture_state: CaptureStateView<'_>,
 ) {
-    let Some(projection) = exact_projection_of(
+    let projection = exact_projection_of(
         capture_state.exact_states,
         capture_state.maybe_unknown,
         object,
-    ) else {
-        return;
-    };
-    let access_slice = relative_slice.map_or(projection.slice, |(first_leaf, leaf_count)| {
-        shape::AggregateSlice {
+    );
+    let relative_slice = relative_slice.and_then(|(first_leaf, leaf_count)| {
+        projection.map(|projection| shape::AggregateSlice {
             ty: projection.slice.ty,
-            first_leaf: projection.slice.first_leaf + first_leaf,
+            first_leaf,
             leaf_count,
-        }
+        })
     });
-    kill_capture_root_slice(root_captures, projection.root_value, Some(access_slice));
+    if let Some((root, access_slice)) = exact_capture_destination(projection, relative_slice) {
+        kill_capture_root_slice(root_captures, root.value(), Some(access_slice));
+    }
 }
 
 fn kill_capture_slice_set(
@@ -842,17 +921,27 @@ fn capture_destinations_for_value(
     relative_slice: Option<shape::AggregateSlice>,
     capture_state: CaptureStateView<'_>,
 ) -> Vec<(ValueId, shape::AggregateSlice)> {
-    if let Some((root, slice)) =
-        exact_capture_destination_for_value(value, relative_slice, capture_state)
-    {
-        return vec![(root, slice)];
-    }
-
-    capture_state.possible_roots[value]
-        .iter()
-        .copied()
-        .filter_map(|root| whole_root_projection(root, capture_state).map(|slice| (root, slice)))
-        .collect()
+    observed_root_slices(
+        exact_projection_of(
+            capture_state.exact_states,
+            capture_state.maybe_unknown,
+            value,
+        ),
+        KnownRoots(&capture_state.possible_roots[value]),
+        |root| whole_root_projection(root, capture_state),
+    )
+    .into_iter()
+    .filter_map(|(root, slice)| {
+        exact_capture_destination(
+            Some(Projection {
+                root_value: root,
+                slice,
+            }),
+            relative_slice,
+        )
+    })
+    .map(|(root, slice)| (root.value(), slice))
+    .collect()
 }
 
 fn exact_capture_destination_for_value(
@@ -860,18 +949,15 @@ fn exact_capture_destination_for_value(
     relative_slice: Option<shape::AggregateSlice>,
     capture_state: CaptureStateView<'_>,
 ) -> Option<(ValueId, shape::AggregateSlice)> {
-    // Capture state is a may-analysis, so strong updates are only sound when the
-    // destination itself is exact. Multi-root, same-root-ambiguous, and
-    // known-plus-unknown destinations must remain weak updates.
-    let projection = exact_projection_of(
-        capture_state.exact_states,
-        capture_state.maybe_unknown,
-        value,
-    )?;
-    let access_slice = relative_slice
-        .map(|slice| offset_projection_slice(projection.slice, slice))
-        .unwrap_or(Some(projection.slice))?;
-    Some((projection.root_value, access_slice))
+    exact_capture_destination(
+        exact_projection_of(
+            capture_state.exact_states,
+            capture_state.maybe_unknown,
+            value,
+        ),
+        relative_slice,
+    )
+    .map(|(root, slice)| (root.value(), slice))
 }
 
 fn capture_roots_for_value(
@@ -890,7 +976,7 @@ fn capture_roots_for_value(
         for capture in captures {
             if slices_overlap_relative(access_slice, capture.dst_slice) {
                 if let Some(src_root) = capture.src_root {
-                    transfer.roots.insert(src_root);
+                    transfer.roots.insert(src_root.value());
                 } else {
                     transfer.maybe_unknown = true;
                 }
@@ -901,20 +987,25 @@ fn capture_roots_for_value(
 }
 
 fn whole_root_projection(
-    root: ValueId,
+    root: RootValue,
     capture_state: CaptureStateView<'_>,
-) -> Option<shape::AggregateSlice> {
-    capture_state.root_slices.get(&root).copied().or_else(|| {
-        exact_projection_of(
-            capture_state.exact_states,
-            capture_state.maybe_unknown,
-            root,
-        )
-        .map(|projection| projection.slice)
-    })
+) -> shape::AggregateSlice {
+    capture_state
+        .root_slices
+        .get(&root.value())
+        .copied()
+        .or_else(|| {
+            exact_projection_of(
+                capture_state.exact_states,
+                capture_state.maybe_unknown,
+                root.value(),
+            )
+            .map(|projection| projection.slice)
+        })
+        .expect("observed capture-state root must have an exact whole-root slice")
 }
 
-fn offset_projection_slice(
+pub(crate) fn offset_projection_slice(
     base_slice: shape::AggregateSlice,
     relative_slice: shape::AggregateSlice,
 ) -> Option<shape::AggregateSlice> {
@@ -1383,7 +1474,7 @@ fn derive_phi_state(
             }
             continue;
         };
-        if projection.root_value != root_value {
+        if projection.root_value != RootValue::new(root_value) {
             return ExactState::Blocked;
         }
         match candidate {
@@ -1432,7 +1523,7 @@ fn derive_phi_projection_candidates(
     let mut candidates = Vec::new();
     for &(arg, _) in phi.args() {
         for &projection in &possible_projections[arg] {
-            if projection.root_value != root_value
+            if projection.root_value != RootValue::new(root_value)
                 || !projection_value_ty_matches(result_ty, projection.slice.ty, func.ctx())
             {
                 continue;
@@ -1698,7 +1789,7 @@ fn fresh_call_root_projection(
     }
     let pointee_ty = reference_element_ty(func.ctx(), func.dfg.value_ty(result))?;
     Some(Projection {
-        root_value: result,
+        root_value: RootValue::new(result),
         slice: shape::AggregateSlice {
             ty: pointee_ty,
             first_leaf: 0,
@@ -1778,8 +1869,8 @@ fn filter_projection_candidates(
     let result_ty = func.dfg.value_ty(result);
     let mut filtered = Vec::new();
     for &projection in projections {
-        if projection.root_value != root_value
-            || !possible_roots[result].contains(&projection.root_value)
+        if projection.root_value != RootValue::new(root_value)
+            || !possible_roots[result].contains(&projection.root_value.value())
             || !projection_value_ty_matches(result_ty, projection.slice.ty, func.ctx())
         {
             continue;
@@ -1947,9 +2038,19 @@ mod tests {
     }
 
     fn sorted_known_roots(roots: KnownRoots<'_>) -> Vec<ValueId> {
-        let mut roots: Vec<_> = roots.iter().collect();
+        let mut roots: Vec<_> = roots.iter().map(RootValue::value).collect();
         roots.sort_unstable_by_key(|root| root.as_u32());
         roots
+    }
+
+    fn assert_known_only(root_set: MayRootSet<'_>, expected: &[ValueId]) {
+        assert!(!root_set.has_unknown(), "expected known-only roots");
+        assert_eq!(sorted_known_roots(root_set.observed()), expected);
+    }
+
+    fn assert_known_and_unknown(root_set: MayRootSet<'_>, expected: &[ValueId]) {
+        assert!(root_set.has_unknown(), "expected known+unknown roots");
+        assert_eq!(sorted_known_roots(root_set.observed()), expected);
     }
 
     fn collect_root_slices_with_arg_roots(
@@ -2001,15 +2102,15 @@ block0:
             assert_eq!(
                 complete.exact_projection(root),
                 Some(Projection {
-                    root_value: root,
+                    root_value: RootValue::new(root),
                     slice: root_slices[&root],
                 })
             );
-            assert_eq!(complete.root_set(root), Some(CompleteRootSet::Single(root)));
-            match may.root_set(root) {
-                MayRootSet::KnownOnly(roots) => assert_eq!(sorted_known_roots(roots), vec![root]),
-                MayRootSet::KnownAndUnknown(_) => panic!("exact root should not be unknown"),
-            }
+            assert_eq!(
+                complete.complete_roots(root),
+                Some(CompleteRootSet::Single(RootValue::new(root)))
+            );
+            assert_known_only(may.may_roots(root), &[root]);
         });
     }
 
@@ -2069,8 +2170,8 @@ block0:
 
             let complete = provenance.complete();
             assert_eq!(
-                complete.root_set(loaded),
-                Some(CompleteRootSet::Single(source_root))
+                complete.complete_roots(loaded),
+                Some(CompleteRootSet::Single(RootValue::new(source_root)))
             );
         });
     }
@@ -2138,8 +2239,8 @@ block0:
 
             let complete = provenance.complete();
             assert_eq!(
-                complete.root_set(*loaded),
-                Some(CompleteRootSet::Single(*overwritten_root))
+                complete.complete_roots(*loaded),
+                Some(CompleteRootSet::Single(RootValue::new(*overwritten_root)))
             );
         });
     }
@@ -2210,7 +2311,7 @@ block3:
 
             let complete = provenance.complete();
             let may = provenance.may();
-            match complete.root_set(loaded) {
+            match complete.complete_roots(loaded) {
                 Some(CompleteRootSet::Multiple(actual)) => {
                     assert_eq!(sorted_known_roots(actual), {
                         let mut expected: Vec<_> = roots.into_iter().collect();
@@ -2220,20 +2321,15 @@ block3:
                 }
                 other => panic!("expected complete multiple root set, got {other:?}"),
             }
-            match may.root_set(loaded) {
-                MayRootSet::KnownOnly(actual) => {
-                    let mut expected: Vec<_> = complete
-                        .root_set(loaded)
-                        .map(|set| match set {
-                            CompleteRootSet::Multiple(roots) => sorted_known_roots(roots),
-                            CompleteRootSet::Single(root) => vec![root],
-                        })
-                        .expect("multiple roots should stay complete");
-                    expected.sort_unstable_by_key(|root| root.as_u32());
-                    assert_eq!(sorted_known_roots(actual), expected);
-                }
-                MayRootSet::KnownAndUnknown(_) => panic!("known-only roots should stay complete"),
-            }
+            let mut expected: Vec<_> = complete
+                .complete_roots(loaded)
+                .map(|set| match set {
+                    CompleteRootSet::Multiple(roots) => sorted_known_roots(roots),
+                    CompleteRootSet::Single(root) => vec![root.value()],
+                })
+                .expect("multiple roots should stay complete");
+            expected.sort_unstable_by_key(|root| root.as_u32());
+            assert_known_only(may.may_roots(loaded), &expected);
         });
     }
 
@@ -2300,8 +2396,8 @@ block0:
 
             let complete = provenance.complete();
             assert_eq!(
-                complete.root_set(*loaded),
-                Some(CompleteRootSet::Single(*loaded_root))
+                complete.complete_roots(*loaded),
+                Some(CompleteRootSet::Single(RootValue::new(*loaded_root)))
             );
         });
     }
@@ -2376,8 +2472,8 @@ block0:
 
             let complete = provenance.complete();
             assert_eq!(
-                complete.root_set(*loaded),
-                Some(CompleteRootSet::Single(*overwritten_root))
+                complete.complete_roots(*loaded),
+                Some(CompleteRootSet::Single(RootValue::new(*overwritten_root)))
             );
         });
     }
@@ -2451,10 +2547,7 @@ block3:
             let expected = vec![func.arg_values[1], func.arg_values[2]];
             let may = provenance.may();
 
-            assert_eq!(
-                sorted_known_roots(may.root_set(loaded).observed()),
-                expected
-            );
+            assert_known_only(may.may_roots(loaded), &expected);
         });
     }
 
@@ -2529,10 +2622,7 @@ block3:
             let expected = vec![func.arg_values[1], func.arg_values[2]];
             let may = provenance.may();
 
-            assert_eq!(
-                sorted_known_roots(may.root_set(loaded).observed()),
-                expected
-            );
+            assert_known_only(may.may_roots(loaded), &expected);
         });
     }
 
@@ -2600,10 +2690,7 @@ block3:
             let expected = vec![func.arg_values[1], func.arg_values[2]];
             let may = provenance.may();
 
-            assert_eq!(
-                sorted_known_roots(may.root_set(loaded).observed()),
-                expected
-            );
+            assert_known_only(may.may_roots(loaded), &expected);
         });
     }
 
@@ -2656,18 +2743,25 @@ block3:
                         .and_then(|_| func.dfg.inst_result(inst))
                 })
                 .expect("phi result should exist");
+            let known_root = func
+                .layout
+                .iter_block()
+                .flat_map(|block| func.layout.iter_inst(block))
+                .find_map(|inst| {
+                    downcast::<&data::ObjAlloc>(func.inst_set(), func.dfg.inst(inst))
+                        .and_then(|_| func.dfg.inst_result(inst))
+                })
+                .expect("alloc root should exist");
 
             let complete = provenance.complete();
             let may = provenance.may();
             assert_eq!(complete.exact_projection(phi_result), None);
-            assert_eq!(complete.root_set(phi_result), None);
-            assert_eq!(complete.possible_projections(phi_result), None);
-            match may.root_set(phi_result) {
-                MayRootSet::KnownAndUnknown(roots) => {
-                    assert_eq!(sorted_known_roots(roots).len(), 1);
-                }
-                MayRootSet::KnownOnly(_) => panic!("phi with unknown branch must stay incomplete"),
-            }
+            assert_eq!(complete.complete_roots(phi_result), None);
+            assert_eq!(
+                complete.possible_slices_for_root(phi_result, RootValue::new(known_root)),
+                None
+            );
+            assert_known_and_unknown(may.may_roots(phi_result), &[known_root]);
         });
     }
 
@@ -2711,11 +2805,8 @@ block0:
             let complete = provenance.complete();
             let may = provenance.may();
 
-            assert_eq!(complete.root_set(call_result), None);
-            match may.root_set(call_result) {
-                MayRootSet::KnownAndUnknown(roots) => assert!(roots.is_empty()),
-                MayRootSet::KnownOnly(_) => panic!("unknown-only value must stay incomplete"),
-            }
+            assert_eq!(complete.complete_roots(call_result), None);
+            assert_known_and_unknown(may.may_roots(call_result), &[]);
         });
     }
 }

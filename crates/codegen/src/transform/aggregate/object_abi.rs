@@ -14,7 +14,7 @@ use super::{
     compute_object_effect_summaries,
     object_locality::{self, LocalObjectArgInfo, LocalObjectArgMap, RootInit},
     private_abi::{self, PrivateAbiPlan},
-    provenance::{CompleteProvenance, CompleteRootSet},
+    provenance::{CompleteProvenance, CompleteRootSet, RootValue},
     shape,
 };
 use crate::cfg_scc::CfgSccAnalysis;
@@ -313,22 +313,21 @@ impl ObjectReturnOutParam {
         provenance: CompleteProvenance<'_>,
     ) -> Option<SmallVec<[ValueId; 4]>> {
         if let Some(projection) = provenance.exact_projection(value) {
-            return (root_slices.get(&projection.root_value) == Some(&projection.slice)
+            return (root_slices.get(&projection.root_value.value()) == Some(&projection.slice)
                 && projection.slice == root_slice)
-                .then_some(smallvec![projection.root_value]);
+                .then_some(smallvec![projection.root_value.value()]);
         }
 
-        match provenance.root_set(value)? {
-            CompleteRootSet::Single(root) => {
-                (root_slices.get(&root) == Some(&root_slice)).then_some(smallvec![root])
-            }
+        match provenance.complete_roots(value)? {
+            CompleteRootSet::Single(root) => (root_slices.get(&root.value()) == Some(&root_slice))
+                .then_some(smallvec![root.value()]),
             CompleteRootSet::Multiple(roots) => {
                 let mut returned_roots = SmallVec::<[ValueId; 4]>::new();
                 for root in roots.iter() {
-                    if root_slices.get(&root) != Some(&root_slice) {
+                    if root_slices.get(&root.value()) != Some(&root_slice) {
                         return None;
                     }
-                    returned_roots.push(root);
+                    returned_roots.push(root.value());
                 }
                 returned_roots.sort_unstable_by_key(|root| root.as_u32());
                 (!returned_roots.is_empty()).then_some(returned_roots)
@@ -352,7 +351,7 @@ impl ObjectReturnOutParam {
         if provenance
             .exact_projection(value)
             .is_some_and(|projection| {
-                projection.root_value == root && projection.slice == root_slice
+                projection.root_value == RootValue::new(root) && projection.slice == root_slice
             })
         {
             return true;
@@ -362,13 +361,15 @@ impl ObjectReturnOutParam {
             return false;
         }
 
-        match provenance.root_set(value) {
-            Some(CompleteRootSet::Single(provenance_root)) => provenance_root == root,
+        match provenance.complete_roots(value) {
+            Some(CompleteRootSet::Single(provenance_root)) => {
+                provenance_root == RootValue::new(root)
+            }
             Some(CompleteRootSet::Multiple(roots)) => {
-                roots.contains(root)
+                roots.contains(RootValue::new(root))
                     && roots
                         .iter()
-                        .all(|candidate| allowed_roots.contains(&candidate))
+                        .all(|candidate| allowed_roots.contains(&candidate.value()))
             }
             None => false,
         }

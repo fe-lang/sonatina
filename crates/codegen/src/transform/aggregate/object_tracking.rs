@@ -87,18 +87,22 @@ fn tracked_object_from_provenance(
 ) -> Option<TrackedObject> {
     if let Some(projection) = provenance.exact_projection(value) {
         return Some(TrackedObject::Exact(ObjectSlice {
-            root: projection.root_value,
+            root: projection.root_value.value(),
             ty: projection.slice.ty,
             first_leaf: projection.slice.first_leaf,
             leaf_count: projection.slice.leaf_count,
-            total_leaves: root_leaf_count_for_value(func, layout_cache, projection.root_value)?,
+            total_leaves: root_leaf_count_for_value(
+                func,
+                layout_cache,
+                projection.root_value.value(),
+            )?,
         }));
     }
 
-    match provenance.root_set(value)? {
+    match provenance.complete_roots(value)? {
         CompleteRootSet::Single(root) => Some(TrackedObject::RootUnknown {
-            root,
-            total_leaves: root_leaf_count_for_value(func, layout_cache, root)?,
+            root: root.value(),
+            total_leaves: root_leaf_count_for_value(func, layout_cache, root.value())?,
         }),
         CompleteRootSet::Multiple(_) => None,
     }

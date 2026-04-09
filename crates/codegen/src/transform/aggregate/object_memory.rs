@@ -463,7 +463,7 @@ fn transfer_inst(
         apply_exact_value_write(
             inst,
             ctx.tracked[*obj_store.object()],
-            ctx.provenance.root_set(*obj_store.object()),
+            ctx.provenance.may_roots(*obj_store.object()),
             ctx.relevant_slices,
             *obj_store.value(),
             state,
@@ -485,7 +485,7 @@ fn transfer_inst(
         } else {
             block_possible_roots(
                 state,
-                ctx.provenance.root_set(*enum_set_tag.object()),
+                ctx.provenance.may_roots(*enum_set_tag.object()),
                 inst,
                 record,
             );
@@ -503,7 +503,7 @@ fn transfer_inst(
         else {
             block_possible_roots(
                 state,
-                ctx.provenance.root_set(*enum_write_variant.object()),
+                ctx.provenance.may_roots(*enum_write_variant.object()),
                 inst,
                 record,
             );
@@ -684,7 +684,7 @@ fn apply_call_transfer(
             continue;
         };
         if effect.escapes || effect.materializes_heap {
-            block_possible_roots(state, ctx.provenance.root_set(arg), inst, record);
+            block_possible_roots(state, ctx.provenance.may_roots(arg), inst, record);
             continue;
         }
 
@@ -698,7 +698,7 @@ fn apply_call_transfer(
                 record,
             );
         } else if !effect.writes.is_empty() {
-            block_possible_roots(state, ctx.provenance.root_set(arg), inst, record);
+            block_possible_roots(state, ctx.provenance.may_roots(arg), inst, record);
         }
     }
 }
@@ -819,8 +819,8 @@ fn block_possible_roots(
         return;
     };
     for root in roots.iter() {
-        state.blocked_roots.insert(root);
-        record_clobber(record, inst, ObjectClobber::Root(root));
+        state.blocked_roots.insert(root.value());
+        record_clobber(record, inst, ObjectClobber::Root(root.value()));
     }
 }
 
@@ -904,10 +904,10 @@ fn observed_roots(
         if skipped.contains(&value) {
             continue;
         }
-        let root_set = provenance.root_set(value);
+        let root_set = provenance.may_roots(value);
         observed_unknown |= root_set.has_unknown();
         for root in root_set.observed().iter() {
-            roots.insert(root);
+            roots.insert(root.value());
         }
     }
     (roots.into_iter().collect(), observed_unknown)

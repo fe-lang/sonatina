@@ -9,7 +9,10 @@ use sonatina_ir::{
 
 use super::{
     collect_root_provenance,
-    provenance::{CompleteProvenance, CompleteRootSet, MayProvenance},
+    provenance::{
+        CompleteProvenance, CompleteRootSet, MayProvenance, RootValue, exact_capture_destination,
+        observed_root_slices,
+    },
     shape,
 };
 
@@ -51,7 +54,7 @@ struct RootCaptureEffect {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct ReturnedFreshSlice {
-    root_value: ValueId,
+    root_value: RootValue,
     return_slice: shape::AggregateSlice,
     possible_slices: Option<Vec<shape::AggregateSlice>>,
 }
@@ -62,13 +65,13 @@ struct ReturnAnalysis {
     returned_fresh_slices: Vec<ReturnedFreshSlice>,
 }
 
-type RootCaptureMap = FxHashMap<ValueId, Vec<RootCaptureEffect>>;
+type RootCaptureMap = FxHashMap<RootValue, Vec<RootCaptureEffect>>;
 
 #[derive(Clone, Copy)]
 struct EffectProvenance<'a> {
     complete: CompleteProvenance<'a>,
     may: MayProvenance<'a>,
-    arg_roots: &'a FxHashMap<ValueId, usize>,
+    arg_roots: &'a FxHashMap<RootValue, usize>,
 }
 
 impl<'a> EffectProvenance<'a> {
@@ -80,7 +83,7 @@ impl<'a> EffectProvenance<'a> {
         let mut seen = FxHashSet::default();
         let mut out = SmallVec::new();
 
-        for root in self.may.root_set(value).observed().iter() {
+        for root in self.may.may_roots(value).observed().iter() {
             if let Some(&idx) = self.arg_roots.get(&root)
                 && seen.insert(idx)
             {
@@ -94,26 +97,16 @@ impl<'a> EffectProvenance<'a> {
     fn root_slices_for_observation(
         self,
         value: ValueId,
-    ) -> SmallVec<[(ValueId, shape::AggregateSlice); 4]> {
-        let mut out = SmallVec::new();
-
-        if let Some(projection) = self.exact_projection(value) {
-            out.push((projection.root_value, projection.slice));
-            return out;
-        }
-
-        for root in self.may.root_set(value).observed().iter() {
-            if let Some(slice) = self.complete.exact_root_slice(root) {
-                out.push((root, slice));
-            } else {
-                debug_assert!(
-                    false,
-                    "observed provenance root must have an exact root slice"
-                );
-            }
-        }
-
-        out
+    ) -> SmallVec<[(RootValue, shape::AggregateSlice); 4]> {
+        observed_root_slices(
+            self.exact_projection(value),
+            self.may.may_roots(value).observed(),
+            |root| {
+                self.complete
+                    .exact_root_slice(root)
+                    .expect("observed provenance root must have an exact root slice")
+            },
+        )
     }
 }
 
@@ -330,7 +323,7 @@ fn compute_summary_for_func(
             };
             let slice = whole_root_slice(layout_cache, function.ctx(), elem_ty);
             root_slices.insert(arg, slice);
-            arg_roots.insert(arg, idx);
+            arg_roots.insert(RootValue::new(arg), idx);
         }
 
         for block in function.layout.iter_block() {
@@ -673,7 +666,7 @@ fn merge_root_capture_maps(dst: &mut RootCaptureMap, src: &RootCaptureMap) -> bo
 
 fn analyze_returns(
     function: &Function,
-    arg_roots: &FxHashMap<ValueId, usize>,
+    arg_roots: &FxHashMap<RootValue, usize>,
     provenance: CompleteProvenance<'_>,
     layout_cache: &mut shape::AggregateLayoutCache,
 ) -> ReturnAnalysis {
@@ -739,7 +732,7 @@ fn analyze_returns(
 fn classify_return_value(
     function: &Function,
     value: ValueId,
-    arg_roots: &FxHashMap<ValueId, usize>,
+    arg_roots: &FxHashMap<RootValue, usize>,
     provenance: CompleteProvenance<'_>,
     layout_cache: &mut shape::AggregateLayoutCache,
 ) -> (ReturnClass, Vec<ReturnedFreshSlice>) {
@@ -762,7 +755,7 @@ fn classify_return_value(
                 Vec::new(),
             );
         }
-        if is_fresh_root(function, projection.root_value) {
+        if is_fresh_root(function, projection.root_value.value()) {
             return (
                 ReturnClass::FreshObject,
                 vec![ReturnedFreshSlice {
@@ -775,7 +768,7 @@ fn classify_return_value(
         return (ReturnClass::Unknown, Vec::new());
     }
 
-    match provenance.root_set(value) {
+    match provenance.complete_roots(value) {
         Some(CompleteRootSet::Single(root)) => {
             if let Some(&idx) = arg_roots.get(&root) {
                 (ReturnClass::DerivedFromArg(idx), Vec::new())
@@ -806,7 +799,7 @@ fn classify_return_value(
 fn classify_all_fresh_roots(
     function: &Function,
     value: ValueId,
-    roots: impl IntoIterator<Item = ValueId>,
+    roots: impl IntoIterator<Item = RootValue>,
     provenance: CompleteProvenance<'_>,
     layout_cache: &mut shape::AggregateLayoutCache,
 ) -> Option<Vec<ReturnedFreshSlice>> {
@@ -815,23 +808,21 @@ fn classify_all_fresh_roots(
     let mut roots: Vec<_> = roots.into_iter().collect();
     roots.sort_unstable_by_key(|root| root.as_u32());
     roots.dedup();
-    if roots.is_empty() || roots.iter().any(|&root| !is_fresh_root(function, root)) {
+    if roots.is_empty()
+        || roots
+            .iter()
+            .any(|&root| !is_fresh_root(function, root.value()))
+    {
         return None;
     }
 
     let mut returned = Vec::with_capacity(roots.len());
     for root in roots {
         let mut possible_slices = Vec::new();
-        for projection in provenance.possible_projections(value)? {
-            if projection.root_value == root && projection.slice.ty == return_ty {
-                push_unique_slice(&mut possible_slices, projection.slice);
+        for slice in provenance.possible_slices_for_root(value, root)? {
+            if slice.ty == return_ty {
+                push_unique_slice(&mut possible_slices, slice);
             }
-        }
-        if possible_slices.is_empty()
-            && let Some(root_slice) = provenance.exact_root_slice(root)
-            && root_slice.ty == return_ty
-        {
-            push_unique_slice(&mut possible_slices, root_slice);
         }
         returned.push(ReturnedFreshSlice {
             root_value: root,
@@ -864,7 +855,7 @@ fn join_return_class(lhs: ReturnClass, rhs: ReturnClass) -> ReturnClass {
 fn emit_public_capture_effects(
     summary: &mut ObjectEffectSummary,
     root_captures: &RootCaptureMap,
-    arg_roots: &FxHashMap<ValueId, usize>,
+    arg_roots: &FxHashMap<RootValue, usize>,
     returned_fresh_slices: &[ReturnedFreshSlice],
 ) {
     for (&root, &index) in arg_roots {
@@ -1228,22 +1219,13 @@ fn capture_source_slices(
     // Effect and capture propagation need a conservative may-touch view. Known
     // roots still matter even when provenance is incomplete; only planning and
     // return classification require the strict complete-only view.
-    if let Some(projection) = capture_ctx.exact_projection(value) {
-        let access_slice = relative_slice
-            .map(|slice| offset_slice(projection.slice, slice))
-            .unwrap_or(Some(projection.slice));
-        let Some(access_slice) = access_slice else {
-            return Vec::new();
-        };
-        if let Some(&idx) = capture_ctx.arg_roots.get(&projection.root_value) {
+    if let Some((root, access_slice)) =
+        exact_capture_destination(capture_ctx.exact_projection(value), relative_slice)
+    {
+        if let Some(&idx) = capture_ctx.arg_roots.get(&root) {
             src_slices.push((idx, access_slice));
         }
-        extend_capture_sources_for_root(
-            &mut src_slices,
-            root_captures,
-            projection.root_value,
-            Some(access_slice),
-        );
+        extend_capture_sources_for_root(&mut src_slices, root_captures, root, Some(access_slice));
         dedup_capture_source_slices(&mut src_slices);
         return src_slices;
     }
@@ -1298,7 +1280,7 @@ fn capture_source_slices_for_slice_set(
 fn extend_capture_sources_for_root(
     src_slices: &mut Vec<(usize, shape::AggregateSlice)>,
     root_captures: &RootCaptureMap,
-    root: ValueId,
+    root: RootValue,
     access_slice: Option<shape::AggregateSlice>,
 ) {
     let Some(captures) = root_captures.get(&root) else {
@@ -1335,17 +1317,16 @@ fn kill_capture_access(
     object: ValueId,
     relative_slice: Option<(usize, usize)>,
 ) {
-    // Capture propagation is a may-analysis, so ambiguous destinations remain
-    // weak updates. Only exact destinations can soundly kill prior captures.
-    if let Some(projection) = capture_ctx.exact_projection(object) {
-        let access_slice = relative_slice.map_or(projection.slice, |(first_leaf, leaf_count)| {
-            shape::AggregateSlice {
-                ty: projection.slice.ty,
-                first_leaf: projection.slice.first_leaf + first_leaf,
-                leaf_count,
-            }
-        });
-        kill_capture_root_slice(root_captures, projection.root_value, Some(access_slice));
+    let projection = capture_ctx.exact_projection(object);
+    let relative_slice = relative_slice.and_then(|(first_leaf, leaf_count)| {
+        projection.map(|projection| shape::AggregateSlice {
+            ty: projection.slice.ty,
+            first_leaf,
+            leaf_count,
+        })
+    });
+    if let Some((root, access_slice)) = exact_capture_destination(projection, relative_slice) {
+        kill_capture_root_slice(root_captures, root, Some(access_slice));
     }
 }
 
@@ -1358,25 +1339,27 @@ fn kill_capture_slice_set(
     if slices.is_empty() {
         return;
     }
-    let Some(projection) = capture_ctx.exact_projection(value) else {
+    let Some((root, base_slice)) =
+        exact_capture_destination(capture_ctx.exact_projection(value), None)
+    else {
         return;
     };
-    if slices.is_whole_root() || projection.slice.leaf_count != slices.total_leaves() {
-        kill_capture_root_slice(root_captures, projection.root_value, Some(projection.slice));
+    if slices.is_whole_root() || base_slice.leaf_count != slices.total_leaves() {
+        kill_capture_root_slice(root_captures, root, Some(base_slice));
         return;
     }
     let Some(exact_leaves) = slices.exact_leaves() else {
-        kill_capture_root_slice(root_captures, projection.root_value, Some(projection.slice));
+        kill_capture_root_slice(root_captures, root, Some(base_slice));
         return;
     };
 
     for &leaf in exact_leaves {
         kill_capture_root_slice(
             root_captures,
-            projection.root_value,
+            root,
             Some(shape::AggregateSlice {
-                ty: projection.slice.ty,
-                first_leaf: projection.slice.first_leaf + leaf,
+                ty: base_slice.ty,
+                first_leaf: base_slice.first_leaf + leaf,
                 leaf_count: 1,
             }),
         );
@@ -1385,7 +1368,7 @@ fn kill_capture_slice_set(
 
 fn kill_capture_root_slice(
     root_captures: &mut RootCaptureMap,
-    root: ValueId,
+    root: RootValue,
     access_slice: Option<shape::AggregateSlice>,
 ) {
     let Some(captures) = root_captures.get_mut(&root) else {
@@ -1404,11 +1387,7 @@ fn kill_capture_root_slice(
 fn value_root_slices(
     capture_ctx: EffectProvenance<'_>,
     value: ValueId,
-) -> Vec<(ValueId, shape::AggregateSlice)> {
-    if let Some(projection) = capture_ctx.exact_projection(value) {
-        return vec![(projection.root_value, projection.slice)];
-    }
-
+) -> Vec<(RootValue, shape::AggregateSlice)> {
     capture_ctx.root_slices_for_observation(value).into_vec()
 }
 
@@ -1416,32 +1395,19 @@ fn map_capture_slice_into_roots(
     capture_ctx: EffectProvenance<'_>,
     value: ValueId,
     slice: shape::AggregateSlice,
-) -> Vec<(ValueId, shape::AggregateSlice)> {
-    if let Some(projection) = capture_ctx.exact_projection(value) {
-        return offset_slice(projection.slice, slice)
-            .map(|mapped| vec![(projection.root_value, mapped)])
-            .unwrap_or_default();
+) -> Vec<(RootValue, shape::AggregateSlice)> {
+    if let Some((root, mapped)) =
+        exact_capture_destination(capture_ctx.exact_projection(value), Some(slice))
+    {
+        return vec![(root, mapped)];
     }
 
     value_root_slices(capture_ctx, value)
 }
 
-fn offset_slice(
-    base_slice: shape::AggregateSlice,
-    relative: shape::AggregateSlice,
-) -> Option<shape::AggregateSlice> {
-    (relative.first_leaf + relative.leaf_count <= base_slice.leaf_count).then_some(
-        shape::AggregateSlice {
-            ty: relative.ty,
-            first_leaf: base_slice.first_leaf + relative.first_leaf,
-            leaf_count: relative.leaf_count,
-        },
-    )
-}
-
 fn record_root_capture_effects(
     root_captures: &mut RootCaptureMap,
-    dst_roots: &[(ValueId, shape::AggregateSlice)],
+    dst_roots: &[(RootValue, shape::AggregateSlice)],
     src_slices: &[(usize, shape::AggregateSlice)],
 ) {
     for (root, dst_slice) in dst_roots {

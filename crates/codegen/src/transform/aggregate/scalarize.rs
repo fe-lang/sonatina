@@ -16,7 +16,7 @@ use super::{
     cleanup::DeadPureInstCleanup,
     collect_root_provenance,
     promotion::SsaBuilder,
-    provenance::{CompleteProvenance, ExactProjectionMap},
+    provenance::{CompleteProvenance, ExactProjectionMap, RootValue},
     reconstruct::bitcast_before_inst,
     shape,
 };
@@ -472,7 +472,7 @@ impl AggregateScalarize {
             let Some(projection) = provenance.exact_projection(ptr) else {
                 continue;
             };
-            if projection.root_value != root_value {
+            if projection.root_value != RootValue::new(root_value) {
                 continue;
             }
 
@@ -489,7 +489,7 @@ impl AggregateScalarize {
                     };
                     if provenance
                         .exact_projection(result)
-                        .is_some_and(|next| next.root_value == root_value)
+                        .is_some_and(|next| next.root_value == RootValue::new(root_value))
                     {
                         continue;
                     }
@@ -504,7 +504,7 @@ impl AggregateScalarize {
                     };
                     if provenance
                         .exact_projection(result)
-                        .is_some_and(|next| next.root_value == root_value)
+                        .is_some_and(|next| next.root_value == RootValue::new(root_value))
                     {
                         continue;
                     }
@@ -519,7 +519,7 @@ impl AggregateScalarize {
                     };
                     if provenance
                         .exact_projection(result)
-                        .is_some_and(|next| next.root_value == root_value)
+                        .is_some_and(|next| next.root_value == RootValue::new(root_value))
                     {
                         continue;
                     }
@@ -534,7 +534,7 @@ impl AggregateScalarize {
                     };
                     if provenance
                         .exact_projection(result)
-                        .is_some_and(|next| next.root_value == root_value)
+                        .is_some_and(|next| next.root_value == RootValue::new(root_value))
                     {
                         continue;
                     }
@@ -549,7 +549,7 @@ impl AggregateScalarize {
                     };
                     if provenance
                         .exact_projection(result)
-                        .is_some_and(|next| next.root_value == root_value)
+                        .is_some_and(|next| next.root_value == RootValue::new(root_value))
                     {
                         continue;
                     }
@@ -779,7 +779,7 @@ impl AggregateScalarize {
             .collect();
         for value in func.dfg.value_ids() {
             if let Some(projection) = projection_of.get(value)
-                && !kept.contains(&projection.root_value)
+                && !kept.contains(&projection.root_value.value())
             {
                 projection_of.clear(value);
             }
@@ -799,7 +799,7 @@ impl AggregateScalarize {
             let Some(projection) = projection_of.get(ptr) else {
                 continue;
             };
-            if projection.root_value != root_value {
+            if projection.root_value != RootValue::new(root_value) {
                 continue;
             }
 
@@ -1345,7 +1345,7 @@ impl AggregateScalarize {
             let Some(projection) = projection_of.get(projection_value) else {
                 return;
             };
-            let Some(promoted) = promoted_by_root.get(&projection.root_value) else {
+            let Some(promoted) = promoted_by_root.get(&projection.root_value.value()) else {
                 return;
             };
             let Some(result) = result else {
@@ -1400,7 +1400,7 @@ impl AggregateScalarize {
             let Some(projection) = projection_of.get(*enum_get_tag.object()) else {
                 return;
             };
-            let Some(promoted) = promoted_by_root.get(&projection.root_value) else {
+            let Some(promoted) = promoted_by_root.get(&projection.root_value.value()) else {
                 return;
             };
             let Some(tag_slice) = shape::enum_tag_slice(module, projection.slice.ty) else {
@@ -1430,7 +1430,7 @@ impl AggregateScalarize {
             let Some(projection) = projection_of.get(*enum_set_tag.object()) else {
                 return;
             };
-            let Some(promoted) = promoted_by_root.get(&projection.root_value) else {
+            let Some(promoted) = promoted_by_root.get(&projection.root_value.value()) else {
                 return;
             };
             let Some(tag_slice) = shape::enum_tag_slice(module, projection.slice.ty) else {
@@ -1444,7 +1444,7 @@ impl AggregateScalarize {
             ssa.def_var(promoted.leaf_vars[leaf_idx], tag, block);
             record_modified_leaves(
                 modified_leaves,
-                projection.root_value,
+                projection.root_value.value(),
                 leaf_idx..leaf_idx + tag_slice.leaf_count,
             );
             InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
@@ -1457,7 +1457,7 @@ impl AggregateScalarize {
             let Some(projection) = projection_of.get(*enum_write_variant.object()) else {
                 return;
             };
-            let Some(promoted) = promoted_by_root.get(&projection.root_value) else {
+            let Some(promoted) = promoted_by_root.get(&projection.root_value.value()) else {
                 return;
             };
             let enum_ty = projection.slice.ty;
@@ -1508,7 +1508,7 @@ impl AggregateScalarize {
                 }
                 record_modified_leaves(
                     modified_leaves,
-                    projection.root_value,
+                    projection.root_value.value(),
                     base_leaf..base_leaf + field_slice.leaf_count,
                 );
             }
@@ -1524,7 +1524,7 @@ impl AggregateScalarize {
             ssa.def_var(promoted.leaf_vars[tag_leaf_idx], tag, block);
             record_modified_leaves(
                 modified_leaves,
-                projection.root_value,
+                projection.root_value.value(),
                 tag_leaf_idx..tag_leaf_idx + tag_slice.leaf_count,
             );
             InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
@@ -1548,7 +1548,7 @@ impl AggregateScalarize {
         let Some(projection) = projection_of.get(projection_value) else {
             return;
         };
-        let Some(promoted) = promoted_by_root.get(&projection.root_value) else {
+        let Some(promoted) = promoted_by_root.get(&projection.root_value.value()) else {
             return;
         };
         let leaf_range =
@@ -1579,7 +1579,7 @@ impl AggregateScalarize {
                 let stored = bitcast_before_inst(func, inst, val, view_ty, underlying_leaf.ty);
                 ssa.def_var(var, stored, block);
             }
-            record_modified_leaves(modified_leaves, projection.root_value, leaf_range);
+            record_modified_leaves(modified_leaves, projection.root_value.value(), leaf_range);
             InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
             return;
         }
@@ -1591,7 +1591,7 @@ impl AggregateScalarize {
         let var = promoted.leaf_vars[projection.slice.first_leaf];
         let stored = bitcast_before_inst(func, inst, value, ty, underlying_leaf.ty);
         ssa.def_var(var, stored, block);
-        record_modified_leaves(modified_leaves, projection.root_value, leaf_range);
+        record_modified_leaves(modified_leaves, projection.root_value.value(), leaf_range);
         InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
     }
 
@@ -2131,7 +2131,7 @@ impl AggregateScalarize {
             let Some(projection) = projection_of.get(value) else {
                 continue;
             };
-            if !promoted_by_root.contains_key(&projection.root_value) {
+            if !promoted_by_root.contains_key(&projection.root_value.value()) {
                 continue;
             }
             let Some(inst) = func.dfg.value_inst(value) else {
