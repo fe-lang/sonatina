@@ -2,15 +2,6 @@ target = "evm-ethereum-london"
 
 # check:    block0:
 # nextln:        v3.i8 = add v1 v2;
-# nextln:        br v0 block1 block2;
-# nextln: 
-# nextln:    block1:
-# nextln:        jump block3;
-# nextln: 
-# nextln:    block2:
-# nextln:        jump block3;
-# nextln: 
-# nextln:    block3:
 # nextln:        return v3;
 func public %simple_branch(v0.i1, v1.i8, v2.i8) -> i8 {
     block0:
