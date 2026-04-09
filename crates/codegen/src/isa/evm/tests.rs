@@ -503,6 +503,62 @@ block2:
 }
 
 #[test]
+fn recursive_entry_lowering_checks_dyn_sp_before_reinit() {
+    let parsed = parse_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+func public %f(v0.i1, v1.i256) -> i256 {
+block0:
+    br v0 block1 block2;
+
+block1:
+    return 0.i256;
+
+block2:
+    v2.*i256 = alloca i256;
+    mstore v2 v1 i256;
+    v3.i256 = call %f 1.i1 v1;
+    v4.i256 = mload v2 i256;
+    v5.i256 = add v3 v4;
+    return v5;
+}
+"#,
+    )
+    .unwrap();
+
+    let f = find_func(&parsed.module, "f");
+    let backend = EvmBackend::new(Evm::new(TargetTriple {
+        architecture: Architecture::Evm,
+        vendor: Vendor::Ethereum,
+        operating_system: OperatingSystem::Evm(EvmVersion::Osaka),
+    }));
+    let prepared = backend
+        .prepare_section(work_module_with_entry(&parsed.module, &[f], f))
+        .expect("prepare should succeed");
+    let function_plan = prepared.function_plan(f).expect("missing function plan");
+    assert!(function_plan.dyn_sp_plan.entry_init);
+    assert!(function_plan.dyn_sp_plan.entry_live_frame);
+
+    let lowered = backend
+        .lower_function(&prepared, f)
+        .expect("function lowers");
+    let first_mem_op = lowered
+        .block_order
+        .iter()
+        .flat_map(|&block| lowered.vcode.block_insns(block))
+        .map(|inst| lowered.vcode.insts[inst] as u8)
+        .find(|op| *op == OpCode::MLOAD as u8 || *op == OpCode::MSTORE as u8)
+        .expect("entry lowering should touch dyn_sp");
+
+    assert_eq!(
+        first_mem_op,
+        OpCode::MLOAD as u8,
+        "recursive entry lowering must guard dyn_sp init before writing it"
+    );
+}
+
+#[test]
 fn return_escape_clamp_uses_caller_transitive_clobber_bound() {
     let ctx = plan_test_ctx_from_src(
         r#"

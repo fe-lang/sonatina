@@ -248,7 +248,11 @@ impl<'a> EvmFunctionLowering<'a> {
         let frame_size_slots = alloc.frame_size_slots();
         let actions = alloc.enter_function(function);
         if self.function_plan.dyn_sp_plan.entry_init {
-            stack::init_dyn_sp(ctx, self.dyn_base());
+            if self.function_plan.dyn_sp_plan.entry_live_frame {
+                stack::ensure_dyn_sp_init(ctx, self.dyn_base());
+            } else {
+                stack::init_dyn_sp(ctx, self.dyn_base());
+            }
         }
 
         if self.has_lazy_frame_lowering() {
