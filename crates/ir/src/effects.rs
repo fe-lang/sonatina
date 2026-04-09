@@ -209,7 +209,10 @@ impl EffectCostClass {
             Self::Pure => 1,
             Self::Observe => 2,
             Self::Mutate => 3,
-            Self::Control | Self::Return => 1,
+            // Keep non-return control flow more expensive than a plain return so
+            // inliner profitability matches the pre-refactor side-effect model.
+            Self::Control => 2,
+            Self::Return => 1,
         }
     }
 }
