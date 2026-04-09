@@ -821,7 +821,7 @@ fn apply_call_transfer(
         let Some(effect) = summary.arg_effects.get(idx) else {
             continue;
         };
-        if effect.escapes || effect.materializes_heap {
+        if effect.needs_unknown_object_barrier() {
             block_possible_roots(state, ctx.provenance.may_roots(arg), inst, record);
             continue;
         }

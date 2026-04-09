@@ -120,6 +120,12 @@ pub(crate) struct ObjectArgEffect {
     pub materializes_heap: bool,
 }
 
+impl ObjectArgEffect {
+    pub(crate) fn needs_unknown_object_barrier(&self) -> bool {
+        self.escapes || self.materializes_stack || self.materializes_heap
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ObjectReturnEffect {
     None,
@@ -507,8 +513,8 @@ fn compute_summary_for_func(
         dedup_capture_effects(&mut summary.captures);
         summary.ret_effect = return_analysis.ret_effect;
         for idx in 0..summary.arg_effects.len() {
-            summary.arg_effects[idx].local_only = !summary.arg_effects[idx].escapes
-                && !summary.arg_effects[idx].materializes_heap
+            summary.arg_effects[idx].local_only = !summary.arg_effects[idx]
+                .needs_unknown_object_barrier()
                 && !matches!(
                     summary.ret_effect,
                     ObjectReturnEffect::SameAsArg { index }
