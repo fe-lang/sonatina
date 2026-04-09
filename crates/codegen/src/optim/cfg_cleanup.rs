@@ -109,7 +109,12 @@ fn trim_after_noreturn_call(editor: &mut CfgEditor<'_>) -> bool {
                     continue;
                 };
                 let callee = call_info.callee();
-                if !editor.func().ctx().func_effects(callee).never_returns() {
+                if editor
+                    .func()
+                    .ctx()
+                    .func_effects(callee)
+                    .may_return_to_caller()
+                {
                     continue;
                 }
 

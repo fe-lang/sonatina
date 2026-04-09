@@ -274,6 +274,10 @@ impl FuncEffectSummary {
         self.will_terminate
     }
 
+    pub fn may_return_to_caller(&self) -> bool {
+        !self.never_returns()
+    }
+
     pub fn may_read_memory(&self) -> bool {
         !self.may_read_spaces.is_empty() || self.may_read_unknown
     }
@@ -299,6 +303,10 @@ impl FuncEffectSummary {
 
     pub fn can_elide_if_unused_call(&self) -> bool {
         self.always_returns() && !self.may_mutate_state()
+    }
+
+    pub fn is_committing_noreturn(&self) -> bool {
+        self.never_returns() && self.may_commit_visible_writes
     }
 
     pub fn union_with(&mut self, other: &Self) {

@@ -769,9 +769,11 @@ pub(super) fn operand_order_for_evm(
 }
 
 fn call_has_local_return(func: &Function, inst: InstId) -> bool {
-    func.dfg
-        .call_info(inst)
-        .is_some_and(|call| !func.ctx().func_effects(call.callee()).never_returns())
+    func.dfg.call_info(inst).is_some_and(|call| {
+        func.ctx()
+            .func_effects(call.callee())
+            .may_return_to_caller()
+    })
 }
 
 pub(super) fn inst_is_noop_alias_cast(

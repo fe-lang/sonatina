@@ -102,7 +102,7 @@ fn unreachable_stays_terminating(func: &Function, block: BlockId, term: InstId) 
         return false;
     };
     let effects = func.ctx().func_effects(call.callee());
-    effects.noreturn && effects.will_terminate
+    effects.never_returns() && effects.always_terminates()
 }
 
 fn prev_non_phi_inst(func: &Function, block: BlockId, before: InstId) -> Option<InstId> {

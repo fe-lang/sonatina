@@ -450,7 +450,7 @@ pub(crate) fn compute_func_stack_objects(
             };
             let pos = inst_pos.get(&inst).copied().unwrap_or_default();
             let callee = *call.callee();
-            let local_return = !ctx.module.func_effects(callee).never_returns();
+            let local_return = ctx.module.func_effects(callee).may_return_to_caller();
             let arg_count = u8::try_from(call.args().len()).expect("call arg count too large");
             let call_results = function.dfg.inst_results(inst);
             let canonical_call_results: FxHashSet<ValueId> = call_results
