@@ -6,9 +6,9 @@ input_file: test_files/evm/loops.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section init: 556 bytes
-  section runtime: 536 bytes
-  total: 1092 bytes
+  section init: 537 bytes
+  section runtime: 517 bytes
+  total: 1054 bytes
 
 functions:
   __Bench_recv_0_3: ir_blocks=4 ir_insts=7 vcode_ops=17 fixups=2 imm_bytes=1
@@ -19,7 +19,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=0
   __Bench_init: ir_blocks=3 ir_insts=8 vcode_ops=16 fixups=3 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  __Bench_runtime: ir_blocks=36 ir_insts=96 vcode_ops=303 fixups=44 imm_bytes=23
+  __Bench_runtime: ir_blocks=36 ir_insts=96 vcode_ops=291 fixups=44 imm_bytes=23
     mem: scratch_words=0 stable_words=3 stable_mode=StaticAbs(base=0xa0) entry_abs_words=0 abs_words_end=3
   calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_len: ir_blocks=3 ir_insts=6 vcode_ops=17 fixups=1 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=0
@@ -27,13 +27,13 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=0
 
 evm:
-  deploy: success reason=Return gas_used=169272 gas_refunded=0 logs=0 output=create len=536 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
-  case counter: calldata_len=36 success reason=Return gas_used=25714 gas_refunded=0 logs=0 output=call len=32 tx_gas=21204 runtime_gas=4510
-  case sum: calldata_len=36 success reason=Return gas_used=30844 gas_refunded=0 logs=0 output=call len=32 tx_gas=21204 runtime_gas=9640
-  case xor_loop: calldata_len=68 success reason=Return gas_used=27882 gas_refunded=0 logs=0 output=call len=32 tx_gas=21344 runtime_gas=6538
-  case counter_unchecked: calldata_len=36 success reason=Return gas_used=25810 gas_refunded=0 logs=0 output=call len=32 tx_gas=21204 runtime_gas=4606
-  case sum_unchecked: calldata_len=36 success reason=Return gas_used=26938 gas_refunded=0 logs=0 output=call len=32 tx_gas=21204 runtime_gas=5734
-  case xor_loop_unchecked: calldata_len=68 success reason=Return gas_used=28019 gas_refunded=0 logs=0 output=call len=32 tx_gas=21344 runtime_gas=6675
+  deploy: success reason=Return gas_used=165166 gas_refunded=0 logs=0 output=create len=517 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
+  case counter: calldata_len=36 success reason=Return gas_used=25706 gas_refunded=0 logs=0 output=call len=32 tx_gas=21204 runtime_gas=4502
+  case sum: calldata_len=36 success reason=Return gas_used=30836 gas_refunded=0 logs=0 output=call len=32 tx_gas=21204 runtime_gas=9632
+  case xor_loop: calldata_len=68 success reason=Return gas_used=27874 gas_refunded=0 logs=0 output=call len=32 tx_gas=21344 runtime_gas=6530
+  case counter_unchecked: calldata_len=36 success reason=Return gas_used=25802 gas_refunded=0 logs=0 output=call len=32 tx_gas=21204 runtime_gas=4598
+  case sum_unchecked: calldata_len=36 success reason=Return gas_used=26930 gas_refunded=0 logs=0 output=call len=32 tx_gas=21204 runtime_gas=5726
+  case xor_loop_unchecked: calldata_len=68 success reason=Return gas_used=28011 gas_refunded=0 logs=0 output=call len=32 tx_gas=21344 runtime_gas=6667
 
 
 --------------- DEBUG ---------------
@@ -96,17 +96,17 @@ __Bench_recv_0_4:
 __Bench_recv_0_5:
   block0:
     JUMPDEST
-    DUP1  // v33.*i256 = gep v0 0.i256 1.i256;
+    DUP1  // v32.*i256 = gep v0 0.i256 1.i256;
     PUSH1 0x20 (32)
     ADD
-    MLOAD  // v34.i256 = mload v33 i256;
-    SWAP1  // v32.i256 = mload v31 i256;
+    MLOAD  // v33.i256 = mload v32 i256;
+    SWAP1  // v31.i256 = mload v30 i256;
     MLOAD
     PUSH0  // jump block3;
     DUP3
   block3:
     JUMPDEST
-    DUP3  // v12.i1 = lt v11 v32;
+    DUP3  // v12.i1 = lt v11 v31;
     DUP3
     LT
     PUSH1 block4  // br v12 block4 block1;
@@ -120,10 +120,10 @@ __Bench_recv_0_5:
     JUMP
   block4:
     JUMPDEST
-    DUP2  // v24.i256 = xor v34 v11;
-    DUP5
+    DUP4  // v27.i256 = xor v11 v33;
+    DUP3
     XOR
-    XOR  // v14.i256 = xor v9 v24;
+    XOR  // v14.i256 = xor v9 v27;
     SWAP1  // v15.i256 = add 1.i256 v11;
     PUSH1 0x1 (1)
     ADD
@@ -217,10 +217,7 @@ __Bench_runtime:
     SWAP1  // v8.i256 = evm_call_value;
     POP
     CALLVALUE
-    PUSH0  // v10.i1 = eq v8 0.i256;
-    EQ
-    ISZERO
-    PUSH1 block1  // br v10 block4 block3;
+    PUSH1 block1  // br v83 block4 block3;
     JUMPI
   block4:
     PUSH1 `pc + (4)`  // v13.i256 = call %u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98 v58;
@@ -246,7 +243,7 @@ __Bench_runtime:
     RETURN
   block27:
     JUMPDEST
-    PUSH1 0x1 (1)  // v84.i256 = add v69 1.i256;
+    PUSH1 0x1 (1)  // v90.i256 = add v69 1.i256;
     ADD
     PUSH1 block26  // jump block26;
     JUMP
@@ -255,10 +252,7 @@ __Bench_runtime:
     SWAP1  // v15.i256 = evm_call_value;
     POP
     CALLVALUE
-    PUSH0  // v16.i1 = eq v15 0.i256;
-    EQ
-    ISZERO
-    PUSH1 block1  // br v16 block7 block6;
+    PUSH1 block1  // br v84 block7 block6;
     JUMPI
   block7:
     PUSH1 `pc + (4)`  // v19.i256 = call %u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98 v58;
@@ -287,22 +281,22 @@ __Bench_runtime:
     RETURN
   block34:
     JUMPDEST
-    DUP2  // v92.i256 = add v88 v90;
+    DUP2  // v98.i256 = add v88 v90;
     DUP2
     ADD
-    SWAP1  // v93.i1 = lt v92 v88;
+    SWAP1  // v99.i1 = lt v98 v88;
     DUP2
     LT
-    PUSH1 block36  // br v93 block47 block37;
+    PUSH1 block36  // br v99 block47 block37;
     JUMPI
   block37:
-    PUSH1 0x1 (1)  // v94.i256 = add v90 1.i256;
+    PUSH1 0x1 (1)  // v100.i256 = add v90 1.i256;
     DUP3
     ADD
-    SWAP2  // v95.i1 = lt v94 v90;
+    SWAP2  // v101.i1 = lt v100 v90;
     DUP3
     LT
-    ISZERO  // br v95 block49 block48;
+    ISZERO  // br v101 block49 block48;
     PUSH1 block33
     JUMPI
   block36:
@@ -315,10 +309,7 @@ __Bench_runtime:
     SWAP1  // v21.i256 = evm_call_value;
     POP
     CALLVALUE
-    PUSH0  // v22.i1 = eq v21 0.i256;
-    EQ
-    ISZERO
-    PUSH1 block1  // br v22 block10 block9;
+    PUSH1 block1  // br v85 block10 block9;
     JUMPI
   block10:
     DUP1  // v73.i256 = call %u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98 v58;
@@ -358,7 +349,7 @@ __Bench_runtime:
     DUP4
     XOR
     XOR  // v80.i256 = xor v75 v79;
-    SWAP1  // v85.i256 = add v77 1.i256;
+    SWAP1  // v91.i256 = add v77 1.i256;
     PUSH1 0x1 (1)
     ADD
     SWAP1  // jump block40;
@@ -369,10 +360,7 @@ __Bench_runtime:
     SWAP1  // v27.i256 = evm_call_value;
     POP
     CALLVALUE
-    PUSH0  // v28.i1 = eq v27 0.i256;
-    EQ
-    ISZERO
-    PUSH1 block1  // br v28 block13 block12;
+    PUSH1 block1  // br v86 block13 block12;
     JUMPI
   block13:
     PUSH1 `pc + (4)`  // v31.i256 = call %u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98 v58;
@@ -395,10 +383,7 @@ __Bench_runtime:
     SWAP1  // v33.i256 = evm_call_value;
     POP
     CALLVALUE
-    PUSH0  // v34.i1 = eq v33 0.i256;
-    EQ
-    ISZERO
-    PUSH1 block1  // br v34 block16 block15;
+    PUSH1 block1  // br v87 block16 block15;
     JUMPI
   block16:
     PUSH1 `pc + (4)`  // v37.i256 = call %u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98 v58;
@@ -421,10 +406,7 @@ __Bench_runtime:
     SWAP1  // v39.i256 = evm_call_value;
     POP
     CALLVALUE
-    PUSH0  // v40.i1 = eq v39 0.i256;
-    EQ
-    ISZERO
-    PUSH1 block1  // br v40 block19 block18;
+    PUSH1 block1  // br v88 block19 block18;
     JUMPI
   block19:
     DUP1  // v78.i256 = call %u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98 v58;
@@ -503,7 +485,7 @@ u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_So
     JUMPI
   block4:
     JUMPDEST
-    SWAP1  // v21.i256 = add v5 v10;
+    SWAP1  // v21.i256 = add v10 v5;
     SWAP2
     ADD
     CALLDATALOAD  // v22.i256 = evm_calldata_load v21;

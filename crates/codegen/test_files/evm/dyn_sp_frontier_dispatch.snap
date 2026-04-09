@@ -6,8 +6,8 @@ input_file: test_files/evm/dyn_sp_frontier_dispatch.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 122 bytes
-  total: 122 bytes
+  section runtime: 121 bytes
+  total: 121 bytes
 
 functions:
   ready: ir_blocks=3 ir_insts=10 vcode_ops=58 fixups=4 imm_bytes=13
@@ -18,8 +18,8 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case cold: calldata_len=4 success reason=Return gas_used=21136 gas_refunded=0 logs=0 output=call len=32 tx_gas=21028 runtime_gas=108
-  case hot: calldata_len=4 success reason=Return gas_used=21345 gas_refunded=0 logs=0 output=call len=32 tx_gas=21016 runtime_gas=329
+  case cold: calldata_len=4 success reason=Return gas_used=21134 gas_refunded=0 logs=0 output=call len=32 tx_gas=21028 runtime_gas=106
+  case hot: calldata_len=4 success reason=Return gas_used=21343 gas_refunded=0 logs=0 output=call len=32 tx_gas=21016 runtime_gas=327
 
 
 --------------- DEBUG ---------------
@@ -121,8 +121,7 @@ entry:
     CALLDATALOAD
     PUSH1 0xe0 (224)  // v1.i256 = shr 224.i256 v0;
     SHR
-    PUSH0  // v2.i1 = ne v1 0.i256;
-    EQ
+    ISZERO  // v2.i1 = ne v1 0.i256;
     ISZERO
     PUSH1 `pc + (4)`  // v3.i256 = call %dispatch v2;
     SWAP1

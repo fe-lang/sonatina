@@ -1,6 +1,6 @@
 use sonatina_ir::{
-    Function, Immediate, Type, ValueId,
-    inst::{BinaryInstKind, CastInstKind, UnaryInstKind, cast, downcast},
+    Function, I256, Immediate, Type, U256, Value, ValueId,
+    inst::{BinaryInstKind, CastInstKind, InstClassKind, UnaryInstKind, cast, downcast},
 };
 
 use crate::analysis::known_bits::{
@@ -25,6 +25,295 @@ pub(crate) trait ExprFactProvider {
     fn known_bits(&self, func: &Function, v: ValueId) -> KnownBits;
     fn same_non_undef(&self, lhs: ValueId, rhs: ValueId) -> bool;
     fn may_be_undef(&self, v: ValueId) -> bool;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EvmModOp {
+    Add,
+    Mul,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ZextI1CompareRewrite {
+    Copy(ValueId),
+    IsZero(ValueId),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct KnownValueFact {
+    pub(crate) imm: Option<Immediate>,
+    pub(crate) may_be_undef: bool,
+}
+
+pub(crate) fn integral_bit_width(ty: Type) -> Option<usize> {
+    match ty {
+        Type::I1 => Some(1),
+        Type::I8 => Some(8),
+        Type::I16 => Some(16),
+        Type::I32 => Some(32),
+        Type::I64 => Some(64),
+        Type::I128 => Some(128),
+        Type::I256 => Some(256),
+        Type::EnumTag(_) | Type::Compound(_) | Type::Unit => None,
+    }
+}
+
+fn integral_byte_width(ty: Type) -> Option<usize> {
+    match ty {
+        Type::I1 | Type::I8 => Some(1),
+        Type::I16 => Some(2),
+        Type::I32 => Some(4),
+        Type::I64 => Some(8),
+        Type::I128 => Some(16),
+        Type::I256 => Some(32),
+        Type::EnumTag(_) | Type::Compound(_) | Type::Unit => None,
+    }
+}
+
+fn imm_to_u256(imm: Immediate) -> U256 {
+    imm.as_i256().to_u256() & type_mask(imm.ty())
+}
+
+pub(crate) fn shift_amount_for_pow2_mul(imm: Immediate) -> Option<usize> {
+    let bit_width = integral_bit_width(imm.ty())?;
+    let mut value = imm_to_u256(imm);
+    if value == U256::zero() || value & (value - U256::one()) != U256::zero() {
+        return None;
+    }
+
+    let mut shift = 0;
+    while value > U256::one() {
+        value >>= 1;
+        shift += 1;
+    }
+
+    (shift != 0 && shift < bit_width).then_some(shift)
+}
+
+pub(crate) fn simplify_zext_i1_compare(
+    func: &Function,
+    kind: BinaryInstKind,
+    lhs: ValueId,
+    rhs: ValueId,
+    known_imm: impl Fn(ValueId) -> Option<Immediate>,
+) -> Option<ZextI1CompareRewrite> {
+    simplify_zext_i1_compare_one_side(func, kind, lhs, rhs, &known_imm)
+        .or_else(|| simplify_zext_i1_compare_one_side(func, kind, rhs, lhs, &known_imm))
+}
+
+fn simplify_zext_i1_compare_one_side(
+    func: &Function,
+    kind: BinaryInstKind,
+    widened: ValueId,
+    other: ValueId,
+    known_imm: &impl Fn(ValueId) -> Option<Immediate>,
+) -> Option<ZextI1CompareRewrite> {
+    let from = zext_i1_source(func, widened)?;
+    let ty = func.dfg.value_ty(widened);
+    let imm = known_imm(other)?;
+
+    match kind {
+        BinaryInstKind::Eq if imm == Immediate::one(ty) => Some(ZextI1CompareRewrite::Copy(from)),
+        BinaryInstKind::Ne if imm == Immediate::zero(ty) => Some(ZextI1CompareRewrite::Copy(from)),
+        BinaryInstKind::Eq if imm == Immediate::zero(ty) => {
+            Some(ZextI1CompareRewrite::IsZero(from))
+        }
+        BinaryInstKind::Ne if imm == Immediate::one(ty) => Some(ZextI1CompareRewrite::IsZero(from)),
+        _ => None,
+    }
+}
+
+fn zext_i1_source(func: &Function, value: ValueId) -> Option<ValueId> {
+    let Value::Inst { inst, .. } = func.dfg.value(value) else {
+        return None;
+    };
+    if func.dfg.inst(*inst).kind() != InstClassKind::Cast(CastInstKind::Zext) {
+        return None;
+    }
+
+    let values = func.dfg.inst(*inst).collect_values();
+    let [from] = values.as_slice() else {
+        return None;
+    };
+    (func.dfg.value_ty(*from) == Type::I1).then_some(*from)
+}
+
+fn fold_evm_addmod_raw(lhs: U256, rhs: U256, modulus: U256) -> U256 {
+    if modulus.is_zero() {
+        return U256::zero();
+    }
+
+    let lhs = lhs % modulus;
+    let rhs = rhs % modulus;
+    let modulus_minus_rhs = modulus - rhs;
+
+    if lhs >= modulus_minus_rhs {
+        lhs - modulus_minus_rhs
+    } else {
+        lhs + rhs
+    }
+}
+
+fn fold_evm_mulmod_raw(lhs: U256, rhs: U256, modulus: U256) -> U256 {
+    if modulus.is_zero() {
+        return U256::zero();
+    }
+
+    let mut result = U256::zero();
+    let mut addend = lhs % modulus;
+    let mut multiplier = rhs % modulus;
+
+    while multiplier > U256::zero() {
+        if multiplier & U256::one() == U256::one() {
+            result = fold_evm_addmod_raw(result, addend, modulus);
+        }
+        addend = fold_evm_addmod_raw(addend, addend, modulus);
+        multiplier >>= 1;
+    }
+
+    result
+}
+
+pub(crate) fn fold_evm_modop(
+    lhs: Immediate,
+    rhs: Immediate,
+    modulus: Immediate,
+    op: EvmModOp,
+) -> Option<Immediate> {
+    let ty = lhs.ty();
+    if ty != rhs.ty() || ty != modulus.ty() || !ty.is_integral() {
+        return None;
+    }
+
+    let result = match op {
+        EvmModOp::Add => {
+            fold_evm_addmod_raw(imm_to_u256(lhs), imm_to_u256(rhs), imm_to_u256(modulus))
+        }
+        EvmModOp::Mul => {
+            fold_evm_mulmod_raw(imm_to_u256(lhs), imm_to_u256(rhs), imm_to_u256(modulus))
+        }
+    };
+    Some(Immediate::from_i256(I256::from(result), ty))
+}
+
+pub(crate) fn simplify_evm_modop_known(
+    lhs: KnownValueFact,
+    rhs: KnownValueFact,
+    modulus: KnownValueFact,
+    ty: Type,
+    op: EvmModOp,
+) -> Option<Immediate> {
+    if !ty.is_integral() {
+        return None;
+    }
+    if lhs.may_be_undef || rhs.may_be_undef || modulus.may_be_undef {
+        return None;
+    }
+
+    if modulus.imm.is_some_and(Immediate::is_zero) {
+        return Some(Immediate::zero(ty));
+    }
+
+    fold_evm_modop(lhs.imm?, rhs.imm?, modulus.imm?, op)
+}
+
+pub(crate) fn fold_evm_exp(base: Immediate, exponent: Immediate) -> Option<Immediate> {
+    let ty = base.ty();
+    if ty != exponent.ty() || !ty.is_integral() {
+        return None;
+    }
+
+    let mask = type_mask(ty);
+    let mut result = U256::one() & mask;
+    let mut base = imm_to_u256(base) & mask;
+    let mut exponent = imm_to_u256(exponent);
+
+    while exponent > U256::zero() {
+        if exponent & U256::one() == U256::one() {
+            result = result.overflowing_mul(base).0 & mask;
+        }
+
+        exponent >>= 1;
+        base = base.overflowing_mul(base).0 & mask;
+    }
+
+    Some(Immediate::from_i256(I256::from(result), ty))
+}
+
+pub(crate) fn simplify_evm_exp_known(
+    base: KnownValueFact,
+    exponent: KnownValueFact,
+    ty: Type,
+) -> Option<Immediate> {
+    if !ty.is_integral() {
+        return None;
+    }
+    if base.may_be_undef || exponent.may_be_undef {
+        return None;
+    }
+
+    if exponent.imm.is_some_and(Immediate::is_zero) || base.imm.is_some_and(Immediate::is_one) {
+        return Some(Immediate::one(ty));
+    }
+
+    if base.imm.is_some_and(Immediate::is_zero) && exponent.imm.is_some_and(|imm| !imm.is_zero()) {
+        return Some(Immediate::zero(ty));
+    }
+
+    fold_evm_exp(base.imm?, exponent.imm?)
+}
+
+pub(crate) fn fold_evm_byte(pos: Immediate, value: Immediate) -> Option<Immediate> {
+    let ty = value.ty();
+    if ty != pos.ty() || !ty.is_integral() {
+        return None;
+    }
+
+    let pos = imm_to_u256(pos);
+    if pos >= U256::from(32u8) {
+        return Some(Immediate::zero(ty));
+    }
+
+    let value_bytes = integral_byte_width(ty)?;
+    let pos = pos.as_usize();
+    if pos < 32 - value_bytes {
+        return Some(Immediate::zero(ty));
+    }
+
+    let idx = pos - (32 - value_bytes);
+    let shift_bytes = value_bytes - 1 - idx;
+    let result = (imm_to_u256(value) >> (shift_bytes * 8)) & U256::from(0xffu16);
+    Some(Immediate::from_i256(I256::from(result), ty))
+}
+
+pub(crate) fn simplify_evm_byte_known(
+    pos: KnownValueFact,
+    value: KnownValueFact,
+    ty: Type,
+) -> Option<Immediate> {
+    if !ty.is_integral() {
+        return None;
+    }
+    if pos.may_be_undef || value.may_be_undef {
+        return None;
+    }
+
+    if value.imm.is_some_and(Immediate::is_zero) {
+        return Some(Immediate::zero(ty));
+    }
+
+    fold_evm_byte(pos.imm?, value.imm?)
+}
+
+pub(crate) fn fold_evm_clz(word: Immediate) -> Option<Immediate> {
+    let ty = word.ty();
+    let bit_width = integral_bit_width(ty)?;
+    let value = imm_to_u256(word);
+    let clz = (0..bit_width)
+        .rev()
+        .find(|&bit| ((value >> bit) & U256::one()) == U256::one())
+        .map_or(bit_width, |bit| bit_width - 1 - bit);
+    Some(Immediate::from_i256(I256::from(clz), ty))
 }
 
 pub(crate) fn simplify_unary_with_same_inner(
@@ -164,6 +453,11 @@ pub(crate) fn simplify_binary_with_facts(
             }
         }
         BinaryInstKind::Eq => {
+            if let Some(ZextI1CompareRewrite::Copy(value)) =
+                simplify_zext_i1_compare(func, kind, lhs, rhs, |v| facts.known_imm(v))
+            {
+                return SimplifyExprResult::Copy(value);
+            }
             if facts.same_non_undef(lhs, rhs) {
                 return SimplifyExprResult::Const(Immediate::one(Type::I1));
             }
@@ -179,6 +473,11 @@ pub(crate) fn simplify_binary_with_facts(
             }
         }
         BinaryInstKind::Ne => {
+            if let Some(ZextI1CompareRewrite::Copy(value)) =
+                simplify_zext_i1_compare(func, kind, lhs, rhs, |v| facts.known_imm(v))
+            {
+                return SimplifyExprResult::Copy(value);
+            }
             if facts.same_non_undef(lhs, rhs) {
                 return SimplifyExprResult::Const(Immediate::zero(Type::I1));
             }
@@ -317,6 +616,46 @@ pub(crate) fn simplify_cast(
     }
 
     SimplifyExprResult::NoChange
+}
+
+pub(crate) fn canonicalize_cast_chain(
+    func: &Function,
+    kind: CastInstKind,
+    from: ValueId,
+    ty: Type,
+) -> Option<(CastInstKind, ValueId, Type)> {
+    let (inst, _) = func.dfg.value_inst_result(from)?;
+    let InstClassKind::Cast(inner_kind) = func.dfg.inst(inst).kind() else {
+        return None;
+    };
+    let values = func.dfg.inst(inst).collect_values();
+    let [inner_arg] = values.as_slice() else {
+        return None;
+    };
+    let inner_ty = func.dfg.value_ty(from);
+    let src_ty = func.dfg.value_ty(*inner_arg);
+    let src_bits = integral_bit_width(src_ty)?;
+    let inner_bits = integral_bit_width(inner_ty)?;
+    let dst_bits = integral_bit_width(ty)?;
+
+    match (kind, inner_kind) {
+        (CastInstKind::Zext, CastInstKind::Zext) | (CastInstKind::Sext, CastInstKind::Sext)
+            if src_bits < dst_bits && inner_bits < dst_bits =>
+        {
+            Some((kind, *inner_arg, ty))
+        }
+        (CastInstKind::Trunc, CastInstKind::Trunc)
+            if src_bits > dst_bits && inner_bits > dst_bits =>
+        {
+            Some((kind, *inner_arg, ty))
+        }
+        (CastInstKind::Trunc, CastInstKind::Zext | CastInstKind::Sext)
+            if src_bits < dst_bits && dst_bits < inner_bits =>
+        {
+            Some((inner_kind, *inner_arg, ty))
+        }
+        _ => None,
+    }
 }
 
 fn simplify_and_copy_with_facts(
@@ -553,6 +892,107 @@ mod tests {
         let simplified =
             simplify_binary_with_facts(&func, BinaryInstKind::And, value, mask, &facts);
         assert_eq!(simplified, SimplifyExprResult::NoChange);
+    }
+
+    #[test]
+    fn simplify_evm_exp_known_blocks_maybe_undef_one_sided_folds() {
+        let ty = Type::I256;
+
+        assert_eq!(
+            simplify_evm_exp_known(
+                KnownValueFact {
+                    imm: None,
+                    may_be_undef: true,
+                },
+                KnownValueFact {
+                    imm: Some(Immediate::zero(ty)),
+                    may_be_undef: false,
+                },
+                ty,
+            ),
+            None
+        );
+        assert_eq!(
+            simplify_evm_exp_known(
+                KnownValueFact {
+                    imm: Some(Immediate::one(ty)),
+                    may_be_undef: false,
+                },
+                KnownValueFact {
+                    imm: None,
+                    may_be_undef: true,
+                },
+                ty,
+            ),
+            None
+        );
+        assert_eq!(
+            simplify_evm_exp_known(
+                KnownValueFact {
+                    imm: Some(Immediate::one(ty)),
+                    may_be_undef: false,
+                },
+                KnownValueFact {
+                    imm: None,
+                    may_be_undef: false,
+                },
+                ty,
+            ),
+            Some(Immediate::one(ty))
+        );
+    }
+
+    #[test]
+    fn simplify_evm_one_sided_helpers_block_maybe_undef_ignored_operands() {
+        let ty = Type::I256;
+
+        assert_eq!(
+            simplify_evm_modop_known(
+                KnownValueFact {
+                    imm: None,
+                    may_be_undef: true,
+                },
+                KnownValueFact {
+                    imm: Some(Immediate::from_i256(I256::from(7), ty)),
+                    may_be_undef: false,
+                },
+                KnownValueFact {
+                    imm: Some(Immediate::zero(ty)),
+                    may_be_undef: false,
+                },
+                ty,
+                EvmModOp::Add,
+            ),
+            None
+        );
+        assert_eq!(
+            simplify_evm_byte_known(
+                KnownValueFact {
+                    imm: None,
+                    may_be_undef: true,
+                },
+                KnownValueFact {
+                    imm: Some(Immediate::zero(ty)),
+                    may_be_undef: false,
+                },
+                ty,
+            ),
+            None
+        );
+        assert_eq!(
+            simplify_evm_byte_known(
+                KnownValueFact {
+                    imm: None,
+                    may_be_undef: false,
+                },
+                KnownValueFact {
+                    imm: Some(Immediate::zero(ty)),
+                    may_be_undef: false,
+                },
+                ty,
+            ),
+            Some(Immediate::zero(ty))
+        );
     }
 
     #[test]

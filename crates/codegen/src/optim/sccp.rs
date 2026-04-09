@@ -13,7 +13,7 @@ use sonatina_ir::{
     BlockId, ControlFlowGraph, DataFlowGraph, Function, Immediate, InstId, Type, Value, ValueId,
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
     inst::{
-        arith, cast,
+        arith, cast, cmp,
         control_flow::{BranchInfo, BranchKind},
         downcast,
     },
@@ -326,6 +326,23 @@ impl SccpSolver {
                         self.normalize_cell_for_value(func, result, self.cell_of(func, src));
                     result_states[idx] = Some((src_cell, self.may_be_undef_of(func, src)));
                 }
+                SimplifyAction::BuildIsZero(arg) => {
+                    if !self.may_be_undef_of(func, arg)
+                        && let Some(imm) = self.cell_of(func, arg).to_imm()
+                    {
+                        let cell = self
+                            .normalize_const_imm_for_value(
+                                func,
+                                result,
+                                Immediate::I1(imm.is_zero()),
+                            )
+                            .map(LatticeCell::Const)
+                            .unwrap_or(LatticeCell::Top);
+                        result_states[idx] = Some((cell, false));
+                    } else {
+                        all_results_simplified = false;
+                    }
+                }
                 SimplifyAction::NoChange => {
                     all_results_simplified = false;
                 }
@@ -597,6 +614,17 @@ impl SccpSolver {
                                 inst,
                                 Box::new(cast::Bitcast::new(bitcast, src, result_ty)),
                             );
+                            return;
+                        }
+                    }
+                    SimplifyAction::BuildIsZero(arg) => {
+                        if idx == 0
+                            && inst_results.len() == 1
+                            && func.dfg.value_ty(result) == Type::I1
+                            && let Some(is_zero) = func.inst_set().has_is_zero()
+                        {
+                            func.dfg
+                                .replace_inst(inst, Box::new(cmp::IsZero::new(is_zero, arg)));
                             return;
                         }
                     }

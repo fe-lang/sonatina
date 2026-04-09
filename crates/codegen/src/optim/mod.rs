@@ -16,6 +16,7 @@ pub mod load_store;
 pub mod loop_strength_reduce;
 pub mod multi_result_legalize;
 pub mod pipeline;
+pub mod scalar_canonicalize;
 pub mod sccp;
 mod sccp_simplify;
 pub(crate) mod signature_rewrite;

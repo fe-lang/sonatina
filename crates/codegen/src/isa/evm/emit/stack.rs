@@ -163,6 +163,22 @@ pub(crate) fn prune_redundant_opcode_sequences(vcode: &mut VCode<OpCode>, block_
         let mut changed = false;
         let mut i = 0usize;
         while i < insts.len() {
+            if i + 1 < insts.len() {
+                let push = insts[i];
+                let eq = insts[i + 1];
+                if !label_targets.contains(&push)
+                    && push_immediate_u256(vcode, push) == Some(U256::zero())
+                    && is_plain_inst(vcode, &label_targets, eq)
+                    && (vcode.insts[eq] as u8) == (OpCode::EQ as u8)
+                {
+                    vcode.insts[eq] = OpCode::ISZERO;
+                    kept.push(eq);
+                    changed = true;
+                    i += 2;
+                    continue;
+                }
+            }
+
             if i + 3 < insts.len() {
                 let z0 = insts[i];
                 let z1 = insts[i + 1];

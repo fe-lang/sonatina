@@ -14,8 +14,8 @@ func public %entry() {
         mstore v1 99.i256 i256;
         v2.i256 = evm_calldata_load 0.i32;
         v3.i256 = and v2 1.i256;
-        v4.i1 = eq v3 0.i256;
-        br v4 block1 block8;
+        v39.i1 = is_zero v3;
+        br v39 block1 block8;
 
     block1:
         (v5.i256, v6.i1) = uaddo v2 1.i256;

@@ -14,8 +14,8 @@ type @__fe_obj_SolDecoder_4 = {@__fe_obj_Cursor_3, i256};
 func private %__Counter_init() {
     block0:
         v0.i256 = evm_call_value;
-        v2.i1 = is_zero v0;
-        br v2 block2 block1;
+        v6.i1 = is_zero v0;
+        br v6 block2 block1;
 
     block1:
         evm_revert 0.i256 0.i256;
@@ -29,26 +29,26 @@ func private %__Counter_init() {
 
 func private %__Counter_runtime() {
     block0:
-        v19.i256 = evm_calldata_size;
-        v21.i1 = lt v19 4.i256;
-        br v21 block15 block16;
+        v21.i256 = evm_calldata_size;
+        v23.i1 = lt v21 4.i256;
+        br v23 block15 block16;
 
     block15:
         evm_revert 0.i256 0.i256;
 
     block16:
-        v22.i256 = evm_calldata_load 0.i256;
-        v24.i256 = shr 224.i256 v22;
-        v25.i32 = trunc v24 i32;
-        br_table v25 block1 (-794959734.i32 block2) (1833756220.i32 block5);
+        v24.i256 = evm_calldata_load 0.i256;
+        v26.i256 = shr 224.i256 v24;
+        v27.i32 = trunc v26 i32;
+        br_table v27 block1 (-794959734.i32 block2) (1833756220.i32 block5);
 
     block1:
         evm_revert 0.i256 0.i256;
 
     block2:
         v5.i256 = evm_call_value;
-        v6.i1 = eq v5 0.i256;
-        br v6 block9 block3;
+        v17.i1 = is_zero v5;
+        br v17 block9 block3;
 
     block3:
         evm_revert 0.i256 0.i256;
@@ -67,8 +67,8 @@ func private %__Counter_runtime() {
 
     block5:
         v9.i256 = evm_call_value;
-        v10.i1 = eq v9 0.i256;
-        br v10 block7 block6;
+        v18.i1 = is_zero v9;
+        br v18 block7 block6;
 
     block6:
         evm_revert 0.i256 0.i256;
@@ -92,23 +92,23 @@ func private %assert(v0.i1) {
 
 func private %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Get_h3927684624c88c53__624197e0d5a47bbd(v0.i256, v1.i256, v2.i256) -> i256 {
     block0:
-        v31.*i8 = evm_malloc 4.i256;
-        v32.i256 = ptr_to_int v31 i256;
-        mstore v32 49437969891755755400450161744656089009884903607872082989584577758955590123520.i256 i256;
-        (v33.i256, v34.i1) = uaddo v32 4.i256;
-        br v34 block9 block10;
+        v32.*i8 = evm_malloc 4.i256;
+        v33.i256 = ptr_to_int v32 i256;
+        mstore v33 49437969891755755400450161744656089009884903607872082989584577758955590123520.i256 i256;
+        (v34.i256, v35.i1) = uaddo v33 4.i256;
+        br v35 block9 block10;
 
     block9:
         evm_revert 0.i256 0.i256;
 
     block10:
-        v13.i256 = evm_call v1 v0 v2 v32 4.i256 0.i256 0.i256;
+        v13.i256 = evm_call v1 v0 v2 v33 4.i256 0.i256 0.i256;
         v14.i256 = evm_return_data_size;
         v15.*i8 = evm_malloc v14;
         v16.i256 = ptr_to_int v15 i256;
         evm_return_data_copy v16 0.i256 v14;
-        v17.i1 = is_zero v13;
-        br v17 block1 block4;
+        v25.i1 = is_zero v13;
+        br v25 block1 block4;
 
     block1:
         evm_revert v16 v14;
@@ -127,46 +127,46 @@ func private %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_s
         v22.objref<i256> = obj.proj v20 1.i256;
         obj.store v22 v14;
         v23.objref<@__fe_obj_SolDecoder_4> = call %soldecoder_i__ha12a03fcb5ba844b_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b v20;
-        v40.objref<@__fe_obj_Cursor_3> = obj.proj v23 0.i256;
-        v41.objref<@__fe_obj_MemoryBytes_2> = obj.proj v40 0.i256;
-        v42.objref<i256> = obj.proj v41 1.i256;
-        v43.i256 = obj.load v42;
-        v44.objref<i256> = obj.proj v40 1.i256;
-        v45.i256 = obj.load v44;
-        v46.i256 = add 32.i256 v45;
-        v47.i1 = gt v46 v43;
-        br v47 block13 block14;
+        v41.objref<@__fe_obj_Cursor_3> = obj.proj v23 0.i256;
+        v42.objref<@__fe_obj_MemoryBytes_2> = obj.proj v41 0.i256;
+        v43.objref<i256> = obj.proj v42 1.i256;
+        v44.i256 = obj.load v43;
+        v45.objref<i256> = obj.proj v41 1.i256;
+        v46.i256 = obj.load v45;
+        v47.i256 = add v46 32.i256;
+        v48.i1 = gt v47 v44;
+        br v48 block13 block14;
 
     block13:
         evm_revert 0.i256 0.i256;
 
     block14:
-        v48.objref<i256> = obj.proj v41 0.i256;
-        v49.i256 = obj.load v48;
-        v50.i256 = add v49 v45;
-        v51.i256 = mload v50 i256;
-        return v51;
+        v49.objref<i256> = obj.proj v42 0.i256;
+        v50.i256 = obj.load v49;
+        v51.i256 = add v50 v46;
+        v52.i256 = mload v51 i256;
+        return v52;
 }
 
 func private %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Increment_h7f6f99e9615d3007__bcc01f8624c55385(v0.i256, v1.i256, v2.i256) {
     block0:
-        v28.*i8 = evm_malloc 4.i256;
-        v29.i256 = ptr_to_int v28 i256;
-        mstore v29 -21432072031172259149098304932151112453092825142662437103785846030156425068544.i256 i256;
-        (v30.i256, v31.i1) = uaddo v29 4.i256;
-        br v31 block9 block10;
+        v29.*i8 = evm_malloc 4.i256;
+        v30.i256 = ptr_to_int v29 i256;
+        mstore v30 -21432072031172259149098304932151112453092825142662437103785846030156425068544.i256 i256;
+        (v31.i256, v32.i1) = uaddo v30 4.i256;
+        br v32 block9 block10;
 
     block9:
         evm_revert 0.i256 0.i256;
 
     block10:
-        v13.i256 = evm_call v1 v0 v2 v29 4.i256 0.i256 0.i256;
+        v13.i256 = evm_call v1 v0 v2 v30 4.i256 0.i256 0.i256;
         v14.i256 = evm_return_data_size;
         v15.*i8 = evm_malloc v14;
         v16.i256 = ptr_to_int v15 i256;
         evm_return_data_copy v16 0.i256 v14;
-        v16.i1 = is_zero v13;
-        br v16 block1 block4;
+        v22.i1 = is_zero v13;
+        br v22 block1 block4;
 
     block1:
         evm_revert v16 v14;
@@ -210,39 +210,37 @@ func private %soldecoder_i__ha12a03fcb5ba844b_new__MemoryBytes_h1e381015a9b0111b
 
 func public %entry() {
     block0:
-        v12.i256 = sym_size &__Counter_init;
-        v13.i256 = sym_addr &__Counter_init;
-        v14.*i8 = evm_malloc v12;
-        v15.i256 = ptr_to_int v14 i256;
-        evm_code_copy v15 v13 v12;
-        (v16.i256, v17.i1) = uaddo v15 v12;
-        br v17 block5 block6;
+        v11.i256 = sym_size &__Counter_init;
+        v12.i256 = sym_addr &__Counter_init;
+        v13.*i8 = evm_malloc v11;
+        v14.i256 = ptr_to_int v13 i256;
+        evm_code_copy v14 v12 v11;
+        (v15.i256, v16.i1) = uaddo v14 v11;
+        br v16 block5 block6;
 
     block3:
-        v20.i256 = evm_return_data_size;
-        v21.*i8 = evm_malloc v20;
-        v22.i256 = ptr_to_int v21 i256;
-        evm_return_data_copy v22 0.i256 v20;
-        evm_revert v22 v20;
+        v19.i256 = evm_return_data_size;
+        v20.*i8 = evm_malloc v19;
+        v21.i256 = ptr_to_int v20 i256;
+        evm_return_data_copy v21 0.i256 v19;
+        evm_revert v21 v19;
 
     block5:
         evm_revert 0.i256 0.i256;
 
     block6:
-        v18.i256 = evm_create2 0.i256 v15 v12 0.i256;
-        v19.i1 = eq v18 0.i256;
-        br v19 block3 block1;
+        v17.i256 = evm_create2 0.i256 v14 v11 0.i256;
+        v18.i1 = is_zero v17;
+        br v18 block3 block1;
 
     block1:
-        v11.i1 = is_zero v18;
-        v6.i1 = is_zero v11;
-        call %assert v6;
-        v7.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Get_h3927684624c88c53__624197e0d5a47bbd v18 100000.i256 0.i256;
+        call %assert 1.i1;
+        v7.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Get_h3927684624c88c53__624197e0d5a47bbd v17 100000.i256 0.i256;
         v8.i1 = is_zero v7;
         call %assert v8;
-        call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Increment_h7f6f99e9615d3007__bcc01f8624c55385 v18 100000.i256 0.i256;
-        v9.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Get_h3927684624c88c53__624197e0d5a47bbd v18 100000.i256 0.i256;
-        v10.i1 = eq 1.i256 v9;
+        call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Increment_h7f6f99e9615d3007__bcc01f8624c55385 v17 100000.i256 0.i256;
+        v9.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Get_h3927684624c88c53__624197e0d5a47bbd v17 100000.i256 0.i256;
+        v10.i1 = eq v9 1.i256;
         call %assert v10;
         mstore 0.i256 1.i256 i256;
         evm_return 0.i256 32.i256;

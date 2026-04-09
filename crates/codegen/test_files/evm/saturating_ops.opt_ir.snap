@@ -10,106 +10,106 @@ func public %entry() {
         v0.i256 = evm_calldata_load 0.i32;
         v1.i256 = evm_calldata_load 32.i32;
         v2.i256 = evm_calldata_load 64.i32;
-        v3.i1 = is_zero v0;
-        br v3 block10 block1;
+        v66.i1 = is_zero v0;
+        br v66 block10 block1;
 
     block1:
-        v4.i1 = eq 1.i256 v0;
+        v4.i1 = eq v0 1.i256;
         br v4 block11 block2;
 
     block2:
-        v5.i1 = eq 2.i256 v0;
+        v5.i1 = eq v0 2.i256;
         br v5 block12 block3;
 
     block3:
-        v6.i1 = eq 3.i256 v0;
+        v6.i1 = eq v0 3.i256;
         br v6 block13 block4;
 
     block4:
-        v7.i1 = eq 4.i256 v0;
+        v7.i1 = eq v0 4.i256;
         br v7 block14 block5;
 
     block5:
-        v8.i1 = eq 5.i256 v0;
+        v8.i1 = eq v0 5.i256;
         br v8 block15 block6;
 
     block6:
-        v35.i1 = eq 6.i256 v0;
+        v35.i1 = eq v0 6.i256;
         br v35 block18 block7;
 
     block7:
-        v38.i1 = eq 7.i256 v0;
+        v38.i1 = eq v0 7.i256;
         br v38 block19 block8;
 
     block8:
-        v39.i1 = eq 8.i256 v0;
+        v39.i1 = eq v0 8.i256;
         br v39 block20 block9;
 
     block9:
-        v40.i1 = eq 9.i256 v0;
+        v40.i1 = eq v0 9.i256;
         br v40 block21 block17;
 
     block10:
         v9.i8 = trunc v1 i8;
         v10.i8 = trunc v2 i8;
         v11.i8 = uaddsat v9 v10;
-        v12.i1 = eq -1.i8 v11;
+        v12.i1 = eq v11 -1.i8;
         br v12 block16 block17;
 
     block11:
         v13.i8 = trunc v1 i8;
         v14.i8 = trunc v2 i8;
         v15.i8 = usubsat v13 v14;
-        v16.i1 = is_zero v15;
-        br v16 block16 block17;
+        v67.i1 = is_zero v15;
+        br v67 block16 block17;
 
     block12:
         v17.i128 = trunc v1 i128;
         v18.i128 = trunc v2 i128;
         v19.i128 = umulsat v17 v18;
-        v20.i1 = eq -1.i128 v19;
+        v20.i1 = eq v19 -1.i128;
         br v20 block16 block17;
 
     block13:
         v21.i8 = trunc v1 i8;
         v22.i8 = trunc v2 i8;
         v23.i8 = saddsat v21 v22;
-        v24.i1 = eq 127.i8 v23;
+        v24.i1 = eq v23 127.i8;
         br v24 block16 block17;
 
     block14:
         v25.i8 = trunc v1 i8;
         v26.i8 = trunc v2 i8;
         v27.i8 = ssubsat v25 v26;
-        v28.i1 = eq -128.i8 v27;
+        v28.i1 = eq v27 -128.i8;
         br v28 block16 block17;
 
     block15:
         v29.i128 = trunc v1 i128;
         v30.i128 = trunc v2 i128;
         v31.i128 = smulsat v29 v30;
-        v32.i1 = eq 170141183460469231731687303715884105727.i128 v31;
+        v32.i1 = eq v31 170141183460469231731687303715884105727.i128;
         br v32 block16 block17;
 
     block18:
         v36.i256 = evm_ssubsat v1 v2 i8;
-        v37.i1 = eq -128.i256 v36;
+        v37.i1 = eq v36 -128.i256;
         br v37 block16 block17;
 
     block19:
         v41.i256 = evm_uaddsat v1 v2 i8;
-        v42.i1 = is_zero v41;
-        br v42 block16 block17;
+        v68.i1 = is_zero v41;
+        br v68 block16 block17;
 
     block20:
         v43.i256 = evm_usubsat v1 v2 i8;
-        v44.i1 = is_zero v43;
-        br v44 block16 block17;
+        v69.i1 = is_zero v43;
+        br v69 block16 block17;
 
     block21:
         v45.i256 = evm_umulsat v1 v2 i8;
-        v46.i1 = is_zero v45;
-        br v46 block16 block17;
+        v70.i1 = is_zero v45;
+        br v70 block16 block17;
 
     block16:
         mstore 0.i256 1.i256 i256;

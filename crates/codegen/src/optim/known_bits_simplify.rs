@@ -12,7 +12,7 @@ use crate::analysis::{
 };
 
 use super::simplify_expr::{
-    ExprFactProvider, SimplifyExprResult, simplify_binary_with_facts, simplify_cast,
+    ExprFactProvider, SimplifyExprResult, simplify_binary_with_facts,
     simplify_unary_with_same_inner,
 };
 
@@ -204,14 +204,7 @@ impl KnownBitsSimplify {
                     )
                 }
             }
-            InstClassKind::Cast(kind) => {
-                let args = inst_data.collect_values();
-                let [from] = args.as_slice() else {
-                    return None;
-                };
-                let ty = cast_result_ty(func, inst)?;
-                simplify_cast(func, kind, *from, ty)
-            }
+            InstClassKind::Cast(_) => SimplifyExprResult::NoChange,
             InstClassKind::Phi | InstClassKind::Opaque => SimplifyExprResult::NoChange,
         };
 
@@ -235,13 +228,6 @@ impl Default for KnownBitsSimplify {
     fn default() -> Self {
         Self::new()
     }
-}
-
-fn cast_result_ty(func: &Function, inst: InstId) -> Option<sonatina_ir::Type> {
-    func.dfg
-        .inst_results(inst)
-        .first()
-        .map(|&result| func.dfg.value_ty(result))
 }
 
 fn simplify_binary_with_demanded_bits(

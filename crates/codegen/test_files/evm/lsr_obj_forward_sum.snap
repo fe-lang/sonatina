@@ -69,7 +69,7 @@ entry:
     SWAP1  // v19.i256 = add v15 v18;
     SWAP2
     ADD
-    SWAP1  // v20.i256 = add 1.i256 v13;
+    SWAP1  // v20.i256 = add v13 1.i256;
     PUSH1 0x1 (1)
     ADD
     SWAP2  // v26.i256 = add v25 32.i256;

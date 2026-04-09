@@ -24,12 +24,12 @@ entry:
   block0:
     PUSH0  // v0.i256 = evm_calldata_load 0.i256;
     CALLDATALOAD
-    DUP1  // v1.i1 = is_zero v0;
+    DUP1  // v6.i1 = is_zero v0;
     ISZERO
-    PUSH1 block4  // br v1 block1 block2;
+    PUSH1 block4  // br v6 block1 block2;
     JUMPI
   block2:
-    PUSH1 0x1 (1)  // v2.i1 = eq 1.i256 v0;
+    PUSH1 0x1 (1)  // v2.i1 = eq v0 1.i256;
     EQ
     PUSH1 block4  // br v2 block3 block4;
     JUMPI

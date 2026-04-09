@@ -6,15 +6,15 @@ input_file: test_files/evm/gvn_cross_block_tuple_call_reuse.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=true evm_trace=false emit_observability=false opt=1
 
 object: Contract
-  section runtime: 68 bytes
-  total: 68 bytes
+  section runtime: 65 bytes
+  total: 65 bytes
 
 functions:
-  entry: ir_blocks=8 ir_insts=24 vcode_ops=53 fixups=3 imm_bytes=12
+  entry: ir_blocks=8 ir_insts=24 vcode_ops=52 fixups=3 imm_bytes=12
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=32 success reason=Return gas_used=21301 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=161
+  case ok: calldata_len=32 success reason=Return gas_used=21293 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=153
 
 
 --------------- DEBUG ---------------
@@ -36,32 +36,31 @@ evm:
     - stack=[v2]
       pre: [PUSH(1), DUP2]
       and [v2, 1] -> v3
-    // v4.i1 = eq v3 0.i256;
+    // v39.i1 = is_zero v3;
     - stack=[v3, v2], last_use=[v3]
-      pre: [PUSH(0)]
-      eq [0, v3] -> v4
-    // br v4 block1 block16;
-    - stack=[v4, v2]
-      br [v4] -> [block1, block16]
+      is_zero [v3] -> v39
+    // br v39 block1 block16;
+    - stack=[v39, v2]
+      br [v39] -> [block1, block16]
   block1 P=[] T=[v2]
     inherited from block0: [v2]
-    // v41.i256 = add v2 1.i256;
+    // v42.i256 = add v2 1.i256;
     - stack=[v2]
       pre: [PUSH(1), DUP2]
-      add [v2, 1] -> v41
-    // v42.i1 = lt v41 v2;
-    - stack=[v41, v2], last_use=[v2]
+      add [v2, 1] -> v42
+    // v43.i1 = lt v42 v2;
+    - stack=[v42, v2], last_use=[v2]
       pre: [SWAP1, DUP2]
-      lt [v41, v2] -> v42
-    // br v42 block9 block2;
-    - stack=[v42, v41]
-      br [v42] -> [block9, block2]
-  block2 P=[] T=[v41]
-    inherited from block1: [v41]
-    // v7.i1 = eq v41 5.i256;
-    - stack=[v41], last_use=[v41]
+      lt [v42, v2] -> v43
+    // br v43 block9 block2;
+    - stack=[v43, v42]
+      br [v43] -> [block9, block2]
+  block2 P=[] T=[v42]
+    inherited from block1: [v42]
+    // v7.i1 = eq v42 5.i256;
+    - stack=[v42], last_use=[v42]
       pre: [PUSH(5)]
-      eq [5, v41] -> v7
+      eq [5, v42] -> v7
     // br v7 block12 block17;
     - stack=[v7]
       br [v7] -> [block12, block17]
@@ -129,22 +128,19 @@ entry:
     PUSH1 0x1 (1)  // v3.i256 = and v2 1.i256;
     DUP2
     AND
-    PUSH0  // v4.i1 = eq v3 0.i256;
-    EQ
-    ISZERO  // br v4 block1 block16;
-    PUSH1 block8
+    PUSH1 block8  // br v39 block1 block16;
     JUMPI
   block1:
-    PUSH1 0x1 (1)  // v41.i256 = add v2 1.i256;
+    PUSH1 0x1 (1)  // v42.i256 = add v2 1.i256;
     DUP2
     ADD
-    SWAP1  // v42.i1 = lt v41 v2;
+    SWAP1  // v43.i1 = lt v42 v2;
     DUP2
     LT
-    PUSH1 block9  // br v42 block9 block2;
+    PUSH1 block9  // br v43 block9 block2;
     JUMPI
   block2:
-    PUSH1 0x5 (5)  // v7.i1 = eq v41 5.i256;
+    PUSH1 0x5 (5)  // v7.i1 = eq v42 5.i256;
     EQ
     ISZERO  // br v7 block12 block17;
     PUSH1 block8

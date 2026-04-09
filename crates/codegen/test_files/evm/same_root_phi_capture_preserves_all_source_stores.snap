@@ -35,8 +35,8 @@ entry:
     PUSH1 0x14 (20)  // mstore v9 20.i256 i256;
     DUP2
     MSTORE
-    SWAP2  // v13.i1 = is_zero v0;
-    PUSH1 block7  // br v13 block6 block7;
+    SWAP2  // v21.i1 = is_zero v0;
+    PUSH1 block7  // br v21 block6 block7;
     JUMPI
   block6:
     SWAP1  // jump block5;

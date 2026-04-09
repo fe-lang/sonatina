@@ -26,49 +26,49 @@ entry:
     PUSH1 0x1 (1)  // mstore v2 1.i256 i256;
     DUP2
     MSTORE
-    DUP1  // v3.*i256 = gep v36 0.i256 1.i256;
+    DUP1  // v3.*i256 = gep v1 0.i256 1.i256;
     PUSH1 0x20 (32)
     ADD
     PUSH1 0x2 (2)  // mstore v3 2.i256 i256;
     SWAP1
     MSTORE
-    DUP1  // v4.*i256 = gep v36 0.i256 2.i256;
+    DUP1  // v4.*i256 = gep v1 0.i256 2.i256;
     PUSH1 0x40 (64)
     ADD
     PUSH1 0x3 (3)  // mstore v4 3.i256 i256;
     SWAP1
     MSTORE
-    DUP1  // v5.*i256 = gep v36 0.i256 3.i256;
+    DUP1  // v5.*i256 = gep v1 0.i256 3.i256;
     PUSH1 0x60 (96)
     ADD
     PUSH1 0x4 (4)  // mstore v5 4.i256 i256;
     SWAP1
     MSTORE
-    DUP1  // v6.*i256 = gep v36 0.i256 4.i256;
+    DUP1  // v6.*i256 = gep v1 0.i256 4.i256;
     PUSH1 0x80 (128)
     ADD
     PUSH1 0x5 (5)  // mstore v6 5.i256 i256;
     SWAP1
     MSTORE
-    DUP1  // v7.*i256 = gep v36 0.i256 5.i256;
+    DUP1  // v7.*i256 = gep v1 0.i256 5.i256;
     PUSH1 0xa0 (160)
     ADD
     PUSH1 0x6 (6)  // mstore v7 6.i256 i256;
     SWAP1
     MSTORE
-    DUP1  // v8.*i256 = gep v36 0.i256 6.i256;
+    DUP1  // v8.*i256 = gep v1 0.i256 6.i256;
     PUSH1 0xc0 (192)
     ADD
     PUSH1 0x7 (7)  // mstore v8 7.i256 i256;
     SWAP1
     MSTORE
-    DUP1  // v9.*i256 = gep v36 0.i256 7.i256;
+    DUP1  // v9.*i256 = gep v1 0.i256 7.i256;
     PUSH1 0xe0 (224)
     ADD
     PUSH1 0x8 (8)  // mstore v9 8.i256 i256;
     SWAP1
     MSTORE
-    PUSH1 0xe0 (224)  // v47.i256 = add v45 224.i256;
+    PUSH1 0xe0 (224)  // v38.i256 = add v36 224.i256;
     ADD
     PUSH0  // jump block3;
     PUSH0
@@ -90,15 +90,15 @@ entry:
     RETURN
   block4:
     JUMPDEST
-    DUP3  // v31.i256 = mload v48 i256;
+    DUP3  // v31.i256 = mload v39 i256;
     MLOAD
-    SWAP1  // v32.i256 = add v31 v26;
+    SWAP1  // v32.i256 = add v26 v31;
     SWAP2
     ADD
-    SWAP1  // v33.i256 = add 1.i256 v24;
+    SWAP1  // v33.i256 = add v24 1.i256;
     PUSH1 0x1 (1)
     ADD
-    PUSH1 0x20 (32)  // v49.i256 = sub v48 32.i256;
+    PUSH1 0x20 (32)  // v40.i256 = sub v39 32.i256;
     SWAP1
     SWAP3
     SUB

@@ -12,87 +12,87 @@ func private %test_view_param_local_ref_take_reverse() {
     block0:
         v2.*i8 = evm_malloc 256.i256;
         v3.i256 = ptr_to_int v2 i256;
-        v36.*[i256; 8] = bitcast v2 *[i256; 8];
-        v6.*i256 = bitcast v36 *i256;
+        v5.*[i256; 8] = bitcast v2 *[i256; 8];
+        v6.*i256 = bitcast v5 *i256;
         mstore v6 1.i256 i256;
-        v9.*i256 = gep v36 0.i256 1.i256;
+        v9.*i256 = gep v5 0.i256 1.i256;
         mstore v9 2.i256 i256;
-        v12.*i256 = gep v36 0.i256 2.i256;
+        v12.*i256 = gep v5 0.i256 2.i256;
         mstore v12 3.i256 i256;
-        v15.*i256 = gep v36 0.i256 3.i256;
+        v15.*i256 = gep v5 0.i256 3.i256;
         mstore v15 4.i256 i256;
-        v18.*i256 = gep v36 0.i256 4.i256;
+        v18.*i256 = gep v5 0.i256 4.i256;
         mstore v18 5.i256 i256;
-        v21.*i256 = gep v36 0.i256 5.i256;
+        v21.*i256 = gep v5 0.i256 5.i256;
         mstore v21 6.i256 i256;
-        v24.*i256 = gep v36 0.i256 6.i256;
+        v24.*i256 = gep v5 0.i256 6.i256;
         mstore v24 7.i256 i256;
-        v27.*i256 = gep v36 0.i256 7.i256;
+        v27.*i256 = gep v5 0.i256 7.i256;
         mstore v27 8.i256 i256;
-        v47.*i8 = evm_malloc 64.i256;
-        v48.*@__fe_Take_0 = bitcast v47 *@__fe_Take_0;
-        v49.*i256 = bitcast v48 *i256;
-        mstore v49 4.i256 i256;
-        v51.*i256 = gep v48 0.i256 1.i256;
-        mstore v51 v3 i256;
-        v52.*[i256; 8] = int_to_ptr v3 *[i256; 8];
+        v37.*i8 = evm_malloc 64.i256;
+        v38.*@__fe_Take_0 = bitcast v37 *@__fe_Take_0;
+        v39.*i256 = bitcast v38 *i256;
+        mstore v39 4.i256 i256;
+        v40.*i256 = gep v38 0.i256 1.i256;
+        mstore v40 v3 i256;
+        v41.*[i256; 8] = int_to_ptr v3 *[i256; 8];
         jump block3;
 
     block3:
-        v54.i256 = phi (0.i256 block0) (v63 block4);
-        v56.i256 = phi (0.i256 block0) (v64 block4);
-        v57.i1 = lt v56 4.i256;
-        v58.i256 = zext v57 i256;
-        v59.i1 = is_zero v58;
-        br v59 block1 block4;
+        v43.i256 = phi (0.i256 block0) (v52 block4);
+        v45.i256 = phi (0.i256 block0) (v53 block4);
+        v46.i1 = lt v45 4.i256;
+        v47.i256 = zext v46 i256;
+        v48.i1 = is_zero v47;
+        br v48 block1 block4;
 
     block4:
-        v60.i256 = sub 7.i256 v56;
-        v61.*i256 = gep v52 0.i256 v60;
-        v62.i256 = mload v61 i256;
-        v63.i256 = add v62 v54;
-        v64.i256 = add 1.i256 v56;
+        v49.i256 = sub 7.i256 v45;
+        v50.*i256 = gep v41 0.i256 v49;
+        v51.i256 = mload v50 i256;
+        v52.i256 = add v43 v51;
+        v53.i256 = add v45 1.i256;
         jump block3;
 
     block1:
-        v44.i1 = eq 26.i256 v54;
-        v31.i256 = zext v44 i256;
+        v30.i1 = eq v43 26.i256;
+        v31.i256 = zext v30 i256;
         call %assert v31;
-        v67.*i8 = evm_malloc 64.i256;
-        v68.*@__fe_Take_1 = bitcast v67 *@__fe_Take_1;
-        v69.*i256 = bitcast v68 *i256;
-        mstore v69 4.i256 i256;
-        v70.*i256 = gep v68 0.i256 1.i256;
-        mstore v70 v3 i256;
+        v56.*i8 = evm_malloc 64.i256;
+        v57.*@__fe_Take_1 = bitcast v56 *@__fe_Take_1;
+        v58.*i256 = bitcast v57 *i256;
+        mstore v58 4.i256 i256;
+        v59.*i256 = gep v57 0.i256 1.i256;
+        mstore v59 v3 i256;
         jump block8;
 
     block8:
-        v73.i256 = phi (0.i256 block1) (v81 block9);
-        v75.i256 = phi (0.i256 block1) (v82 block9);
-        v76.i1 = lt v75 4.i256;
-        v77.i256 = zext v76 i256;
-        v78.i1 = is_zero v77;
-        br v78 block6 block9;
+        v62.i256 = phi (0.i256 block1) (v70 block9);
+        v64.i256 = phi (0.i256 block1) (v71 block9);
+        v65.i1 = lt v64 4.i256;
+        v66.i256 = zext v65 i256;
+        v67.i1 = is_zero v66;
+        br v67 block6 block9;
 
     block9:
-        v79.*i256 = gep v52 0.i256 v75;
-        v80.i256 = mload v79 i256;
-        v81.i256 = add v80 v73;
-        v82.i256 = add 1.i256 v75;
+        v68.*i256 = gep v41 0.i256 v64;
+        v69.i256 = mload v68 i256;
+        v70.i256 = add v62 v69;
+        v71.i256 = add v64 1.i256;
         jump block8;
 
     block6:
-        v45.i1 = eq 10.i256 v73;
-        v35.i256 = zext v45 i256;
+        v34.i1 = eq v62 10.i256;
+        v35.i256 = zext v34 i256;
         call %assert v35;
         evm_return 0.i256 0.i256;
 }
 
 func public %assert(v0.i256) {
     block0:
-        v9.i1 = is_zero v0;
-        v10.i256 = zext v9 i256;
-        v5.i1 = is_zero v10;
+        v2.i1 = is_zero v0;
+        v3.i256 = zext v2 i256;
+        v5.i1 = is_zero v3;
         br v5 block2 block1;
 
     block1:

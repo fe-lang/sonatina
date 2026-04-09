@@ -24,7 +24,7 @@ entry:
   block0:
     PUSH0  // v0.i256 = evm_calldata_load 0.i256;
     CALLDATALOAD
-    PUSH1 block2  // br v1 block1 block2;
+    PUSH1 block2  // br v13 block1 block2;
     JUMPI
   block1:
     PUSH1 0xaa (170)  // mstore 0.i256 170.i256 i256;

@@ -1,5 +1,5 @@
 use sonatina_ir::{
-    BlockId, Function, InstId, Type, Value, ValueId,
+    BlockId, Function, Immediate, InstId, Type, Value, ValueId,
     inst::{BinaryInstKind, InstClassKind, UnaryInstKind, cmp, control_flow::Br, downcast},
 };
 
@@ -88,12 +88,16 @@ impl BranchCanonicalize {
         }
 
         let mut dead_cmp_inst = None;
-        if let Some((cmp_inst, kind, lhs, rhs)) = compare_value(func, cond)
-            && compare_cost(invert_compare(kind)) < compare_cost(kind)
-        {
-            cond = insert_compare_before(func, term, invert_compare(kind), lhs, rhs);
-            swap = !swap;
-            dead_cmp_inst = Some(cmp_inst);
+        if let Some((cmp_inst, kind, lhs, rhs)) = compare_value(func, cond) {
+            if let Some(zero_compare) = zero_compare_branch_rewrite(func, term, kind, lhs, rhs) {
+                cond = zero_compare.cond;
+                swap ^= zero_compare.swap;
+                dead_cmp_inst = Some(cmp_inst);
+            } else if compare_cost(invert_compare(kind)) < compare_cost(kind) {
+                cond = insert_compare_before(func, term, invert_compare(kind), lhs, rhs);
+                swap = !swap;
+                dead_cmp_inst = Some(cmp_inst);
+            }
         }
 
         let (nz_dest, z_dest) = if swap {
@@ -122,6 +126,11 @@ struct Plan {
     z_dest: BlockId,
     dead_insts: Vec<InstId>,
     dead_cmp_inst: Option<InstId>,
+}
+
+struct ZeroComparePlan {
+    cond: ValueId,
+    swap: bool,
 }
 
 fn compare_value(
@@ -188,6 +197,91 @@ fn compare_cost(kind: BinaryInstKind) -> u8 {
     }
 }
 
+fn zero_compare_branch_rewrite(
+    func: &mut Function,
+    term: InstId,
+    kind: BinaryInstKind,
+    lhs: ValueId,
+    rhs: ValueId,
+) -> Option<ZeroComparePlan> {
+    if matches!(kind, BinaryInstKind::Eq | BinaryInstKind::Ne)
+        && func.dfg.value_ty(lhs) == Type::I1
+        && let Some(bit) = i1_literal(func, rhs)
+    {
+        return Some(ZeroComparePlan {
+            cond: lhs,
+            swap: matches!(
+                (kind, bit),
+                (BinaryInstKind::Eq, false) | (BinaryInstKind::Ne, true)
+            ),
+        });
+    }
+    if matches!(kind, BinaryInstKind::Eq | BinaryInstKind::Ne)
+        && func.dfg.value_ty(rhs) == Type::I1
+        && let Some(bit) = i1_literal(func, lhs)
+    {
+        return Some(ZeroComparePlan {
+            cond: rhs,
+            swap: matches!(
+                (kind, bit),
+                (BinaryInstKind::Eq, false) | (BinaryInstKind::Ne, true)
+            ),
+        });
+    }
+
+    let (arg, swap) = match kind {
+        BinaryInstKind::Eq
+            if func.dfg.value_ty(lhs).is_integral()
+                && func
+                    .dfg
+                    .value_imm(rhs)
+                    .is_some_and(sonatina_ir::Immediate::is_zero) =>
+        {
+            (lhs, false)
+        }
+        BinaryInstKind::Eq
+            if func.dfg.value_ty(rhs).is_integral()
+                && func
+                    .dfg
+                    .value_imm(lhs)
+                    .is_some_and(sonatina_ir::Immediate::is_zero) =>
+        {
+            (rhs, false)
+        }
+        BinaryInstKind::Ne
+            if func.dfg.value_ty(lhs).is_integral()
+                && func
+                    .dfg
+                    .value_imm(rhs)
+                    .is_some_and(sonatina_ir::Immediate::is_zero) =>
+        {
+            (lhs, true)
+        }
+        BinaryInstKind::Ne
+            if func.dfg.value_ty(rhs).is_integral()
+                && func
+                    .dfg
+                    .value_imm(lhs)
+                    .is_some_and(sonatina_ir::Immediate::is_zero) =>
+        {
+            (rhs, true)
+        }
+        _ => return None,
+    };
+
+    Some(ZeroComparePlan {
+        cond: insert_is_zero_before(func, term, arg)?,
+        swap,
+    })
+}
+
+fn i1_literal(func: &Function, value: ValueId) -> Option<bool> {
+    match func.dfg.value_imm(value)? {
+        Immediate::I1(bit) => Some(bit),
+        _ => None,
+    }
+}
+
 fn insert_compare_before(
     func: &mut Function,
     before: InstId,
@@ -217,6 +311,20 @@ fn insert_compare_before(
     func.dfg.attach_result(inst, value);
     func.layout.insert_inst_before(inst, before);
     value
+}
+
+fn insert_is_zero_before(func: &mut Function, before: InstId, arg: ValueId) -> Option<ValueId> {
+    let inst = func
+        .dfg
+        .make_inst(cmp::IsZero::new(func.inst_set().has_is_zero()?, arg));
+    let value = func.dfg.make_value(Value::Inst {
+        inst,
+        result_idx: 0,
+        ty: Type::I1,
+    });
+    func.dfg.attach_result(inst, value);
+    func.layout.insert_inst_before(inst, before);
+    Some(value)
 }
 
 fn remove_dead_single_result_inst(func: &mut Function, inst: InstId) {
@@ -308,6 +416,212 @@ block2:
         assert!(body.contains("gt v0 v1;"), "{body}");
         assert!(body.contains("block2 block1;"), "{body}");
         assert!(!body.contains(" le "), "{body}");
+    }
+
+    #[test]
+    fn rewrites_eq_zero_branch_to_is_zero() {
+        let (module, func_ref) = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %f(v0.i256) -> i256 {
+block0:
+    v1.i1 = eq v0 0.i256;
+    br v1 block1 block2;
+
+block1:
+    return 1.i256;
+
+block2:
+    return 2.i256;
+}
+"#,
+        );
+
+        module.func_store.modify(func_ref, |func| {
+            assert!(BranchCanonicalize::new().run(func));
+        });
+
+        let body = dump_func(&module, func_ref);
+        assert!(body.contains(" = is_zero v0;"), "{body}");
+        assert!(body.contains("block1 block2;"), "{body}");
+        assert!(!body.contains(" = eq "), "{body}");
+    }
+
+    #[test]
+    fn rewrites_ne_zero_branch_to_is_zero_with_swapped_successors() {
+        let (module, func_ref) = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %f(v0.i256) -> i256 {
+block0:
+    v1.i1 = ne v0 0.i256;
+    br v1 block1 block2;
+
+block1:
+    return 1.i256;
+
+block2:
+    return 2.i256;
+}
+"#,
+        );
+
+        module.func_store.modify(func_ref, |func| {
+            assert!(BranchCanonicalize::new().run(func));
+        });
+
+        let body = dump_func(&module, func_ref);
+        assert!(body.contains(" = is_zero v0;"), "{body}");
+        assert!(body.contains("block2 block1;"), "{body}");
+        assert!(!body.contains(" = ne "), "{body}");
+    }
+
+    #[test]
+    fn rewrites_i1_eq_zero_branch_to_direct_branch_with_swapped_successors() {
+        let (module, func_ref) = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %f(v0.i1) -> i256 {
+block0:
+    v1.i1 = eq v0 0.i1;
+    br v1 block1 block2;
+
+block1:
+    return 1.i256;
+
+block2:
+    return 2.i256;
+}
+"#,
+        );
+
+        module.func_store.modify(func_ref, |func| {
+            assert!(BranchCanonicalize::new().run(func));
+        });
+
+        let body = dump_func(&module, func_ref);
+        assert!(body.contains("br v0 block2 block1;"), "{body}");
+        assert!(!body.contains(" = eq "), "{body}");
+        assert!(!body.contains(" = is_zero "), "{body}");
+    }
+
+    #[test]
+    fn rewrites_i1_ne_zero_branch_to_direct_branch() {
+        let (module, func_ref) = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %f(v0.i1) -> i256 {
+block0:
+    v1.i1 = ne v0 0.i1;
+    br v1 block1 block2;
+
+block1:
+    return 1.i256;
+
+block2:
+    return 2.i256;
+}
+"#,
+        );
+
+        module.func_store.modify(func_ref, |func| {
+            assert!(BranchCanonicalize::new().run(func));
+        });
+
+        let body = dump_func(&module, func_ref);
+        assert!(body.contains("br v0 block1 block2;"), "{body}");
+        assert!(!body.contains(" = ne "), "{body}");
+    }
+
+    #[test]
+    fn rewrites_i1_eq_one_branch_to_direct_branch() {
+        let (module, func_ref) = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %f(v0.i1) -> i256 {
+block0:
+    v1.i1 = eq v0 1.i1;
+    br v1 block1 block2;
+
+block1:
+    return 1.i256;
+
+block2:
+    return 2.i256;
+}
+"#,
+        );
+
+        module.func_store.modify(func_ref, |func| {
+            assert!(BranchCanonicalize::new().run(func));
+        });
+
+        let body = dump_func(&module, func_ref);
+        assert!(body.contains("br v0 block1 block2;"), "{body}");
+        assert!(!body.contains(" = eq "), "{body}");
+    }
+
+    #[test]
+    fn rewrites_i1_ne_one_branch_to_direct_branch_with_swapped_successors() {
+        let (module, func_ref) = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %f(v0.i1) -> i256 {
+block0:
+    v1.i1 = ne v0 1.i1;
+    br v1 block1 block2;
+
+block1:
+    return 1.i256;
+
+block2:
+    return 2.i256;
+}
+"#,
+        );
+
+        module.func_store.modify(func_ref, |func| {
+            assert!(BranchCanonicalize::new().run(func));
+        });
+
+        let body = dump_func(&module, func_ref);
+        assert!(body.contains("br v0 block2 block1;"), "{body}");
+        assert!(!body.contains(" = ne "), "{body}");
+    }
+
+    #[test]
+    fn does_not_rewrite_non_eq_ne_i1_literal_compare() {
+        let (module, func_ref) = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %f(v0.i1) -> i256 {
+block0:
+    v1.i1 = lt v0 1.i1;
+    br v1 block1 block2;
+
+block1:
+    return 1.i256;
+
+block2:
+    return 2.i256;
+}
+"#,
+        );
+
+        module.func_store.modify(func_ref, |func| {
+            assert!(!BranchCanonicalize::new().run(func));
+        });
+
+        let body = dump_func(&module, func_ref);
+        assert!(body.contains(" = lt v0 1.i1;"), "{body}");
+        assert!(body.contains("br v1 block1 block2;"), "{body}");
     }
 
     fn parse_test_module(src: &str) -> (Module, FuncRef) {

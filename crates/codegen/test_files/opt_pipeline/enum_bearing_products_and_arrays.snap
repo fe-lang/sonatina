@@ -19,14 +19,14 @@ func public %entry(v0.i256, v1.i256) -> i256 {
     block0:
         v11.@OptionI256 = enum.make @OptionI256 #Some v0;
         enum.assert_variant v11 #Some;
+        v17.i256 = add v0 1.i256;
         enum.assert_variant v11 #Some;
         v27.@Flag = enum.make @Flag #On v1;
         enum.assert_variant v11 #Some;
         enum.assert_variant v27 #On;
-        v46.i256 = add 1.i256 v0;
-        v47.i256 = add v46 v0;
-        v48.i256 = add v0 v1;
-        v6.i256 = add v47 v48;
+        v34.i256 = add v0 v1;
+        v5.i256 = add v17 v0;
+        v6.i256 = add v5 v34;
         return v6;
 }
 

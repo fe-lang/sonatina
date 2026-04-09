@@ -2,18 +2,17 @@ use cranelift_entity::SecondaryMap;
 use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{
     BlockId, Function, Immediate, InstId, Type, Value, ValueId,
-    inst::{
-        BinaryInstKind, CastInstKind, InstClassKind, UnaryInstKind, cast, data, downcast,
-        inst_set::InstSetBase,
-    },
+    inst::{BinaryInstKind, CastInstKind, InstClassKind, UnaryInstKind, cast, data, downcast, evm},
 };
 
 use super::{
     const_eval::{BlockEdge, ConstPathAnalysis, dynamic_index_values, eval_const_path_immediate},
     sccp::LatticeCell,
     simplify_expr::{
-        ExprFactProvider, SimplifyExprResult, simplify_binary_with_facts, simplify_cast,
-        simplify_unary_with_same_inner,
+        EvmModOp, ExprFactProvider, KnownValueFact, SimplifyExprResult, ZextI1CompareRewrite,
+        fold_evm_clz, simplify_binary_with_facts, simplify_cast, simplify_evm_byte_known,
+        simplify_evm_exp_known, simplify_evm_modop_known, simplify_unary_with_same_inner,
+        simplify_zext_i1_compare,
     },
 };
 use crate::analysis::known_bits::{KnownBits, KnownBitsQuery};
@@ -22,6 +21,7 @@ use crate::analysis::known_bits::{KnownBits, KnownBitsQuery};
 pub(super) enum SimplifyAction {
     Const(Immediate),
     Copy(ValueId),
+    BuildIsZero(ValueId),
     NoChange,
 }
 
@@ -299,53 +299,20 @@ fn simplify_redundant_cast(
     from_expr_simplify_result(simplify_cast(func, kind, from, ty))
 }
 
-fn zext_i1_source(func: &Function, is: &dyn InstSetBase, value: ValueId) -> Option<ValueId> {
-    let Value::Inst { inst, .. } = func.dfg.value(value) else {
-        return None;
-    };
-    let zext = downcast::<&cast::Zext>(is, func.dfg.inst(*inst))?;
-    let from = *zext.from();
-    (func.dfg.value_ty(from) == Type::I1).then_some(from)
-}
-
-fn simplify_eq_zext_i1_one(
+fn simplify_zext_i1_compare_action(
     func: &Function,
-    is: &dyn InstSetBase,
     lattice: &SecondaryMap<ValueId, LatticeCell>,
+    kind: BinaryInstKind,
     lhs: ValueId,
     rhs: ValueId,
 ) -> SimplifyAction {
-    if let Some(from) = zext_i1_source(func, is, lhs)
-        && known_imm(func, lattice, rhs) == Some(Immediate::one(func.dfg.value_ty(lhs)))
-    {
-        return SimplifyAction::Copy(from);
-    }
-    if let Some(from) = zext_i1_source(func, is, rhs)
-        && known_imm(func, lattice, lhs) == Some(Immediate::one(func.dfg.value_ty(rhs)))
-    {
-        return SimplifyAction::Copy(from);
-    }
-    SimplifyAction::NoChange
-}
-
-fn simplify_ne_zext_i1_zero(
-    func: &Function,
-    is: &dyn InstSetBase,
-    lattice: &SecondaryMap<ValueId, LatticeCell>,
-    lhs: ValueId,
-    rhs: ValueId,
-) -> SimplifyAction {
-    if let Some(from) = zext_i1_source(func, is, lhs)
-        && known_imm(func, lattice, rhs) == Some(Immediate::zero(func.dfg.value_ty(lhs)))
-    {
-        return SimplifyAction::Copy(from);
-    }
-    if let Some(from) = zext_i1_source(func, is, rhs)
-        && known_imm(func, lattice, lhs) == Some(Immediate::zero(func.dfg.value_ty(rhs)))
-    {
-        return SimplifyAction::Copy(from);
-    }
-    SimplifyAction::NoChange
+    simplify_zext_i1_compare(func, kind, lhs, rhs, |value| {
+        known_imm(func, lattice, value)
+    })
+    .map_or(SimplifyAction::NoChange, |rewrite| match rewrite {
+        ZextI1CompareRewrite::Copy(value) => SimplifyAction::Copy(value),
+        ZextI1CompareRewrite::IsZero(value) => SimplifyAction::BuildIsZero(value),
+    })
 }
 
 fn simplify_div_by_one(
@@ -356,6 +323,86 @@ fn simplify_div_by_one(
     rhs: ValueId,
 ) -> SimplifyAction {
     from_expr_simplify_result(simplify_binary_with_facts(func, kind, lhs, rhs, facts))
+}
+
+fn simplify_evm_clz(
+    func: &Function,
+    lattice: &SecondaryMap<ValueId, LatticeCell>,
+    arg: ValueId,
+) -> SimplifyAction {
+    known_imm(func, lattice, arg)
+        .and_then(fold_evm_clz)
+        .map_or(SimplifyAction::NoChange, SimplifyAction::Const)
+}
+
+fn simplify_evm_exp(
+    func: &Function,
+    lattice: &SecondaryMap<ValueId, LatticeCell>,
+    may_be_undef: &SecondaryMap<ValueId, bool>,
+    lhs: ValueId,
+    rhs: ValueId,
+) -> SimplifyAction {
+    simplify_evm_exp_known(
+        KnownValueFact {
+            imm: known_imm(func, lattice, lhs),
+            may_be_undef: is_may_be_undef(func, may_be_undef, lhs),
+        },
+        KnownValueFact {
+            imm: known_imm(func, lattice, rhs),
+            may_be_undef: is_may_be_undef(func, may_be_undef, rhs),
+        },
+        func.dfg.value_ty(lhs),
+    )
+    .map_or(SimplifyAction::NoChange, SimplifyAction::Const)
+}
+
+fn simplify_evm_byte(
+    func: &Function,
+    lattice: &SecondaryMap<ValueId, LatticeCell>,
+    may_be_undef: &SecondaryMap<ValueId, bool>,
+    lhs: ValueId,
+    rhs: ValueId,
+) -> SimplifyAction {
+    simplify_evm_byte_known(
+        KnownValueFact {
+            imm: known_imm(func, lattice, lhs),
+            may_be_undef: is_may_be_undef(func, may_be_undef, lhs),
+        },
+        KnownValueFact {
+            imm: known_imm(func, lattice, rhs),
+            may_be_undef: is_may_be_undef(func, may_be_undef, rhs),
+        },
+        func.dfg.value_ty(rhs),
+    )
+    .map_or(SimplifyAction::NoChange, SimplifyAction::Const)
+}
+
+fn simplify_evm_modop(
+    func: &Function,
+    lattice: &SecondaryMap<ValueId, LatticeCell>,
+    may_be_undef: &SecondaryMap<ValueId, bool>,
+    operands: [ValueId; 3],
+    op: EvmModOp,
+    result_ty: Type,
+) -> SimplifyAction {
+    let [lhs, rhs, modulus] = operands;
+    simplify_evm_modop_known(
+        KnownValueFact {
+            imm: known_imm(func, lattice, lhs),
+            may_be_undef: is_may_be_undef(func, may_be_undef, lhs),
+        },
+        KnownValueFact {
+            imm: known_imm(func, lattice, rhs),
+            may_be_undef: is_may_be_undef(func, may_be_undef, rhs),
+        },
+        KnownValueFact {
+            imm: known_imm(func, lattice, modulus),
+            may_be_undef: is_may_be_undef(func, may_be_undef, modulus),
+        },
+        result_ty,
+        op,
+    )
+    .map_or(SimplifyAction::NoChange, SimplifyAction::Const)
 }
 
 fn simplify_rem_by_one(
@@ -626,6 +673,9 @@ pub(super) fn simplify_inst(
             if matches!(kind, UnaryInstKind::Snego) {
                 return simplify_snego(func, lattice, *arg, results_len);
             }
+            if matches!(kind, UnaryInstKind::EvmClz) {
+                return wrap_action(simplify_evm_clz(func, lattice, *arg));
+            }
 
             wrap_action(from_expr_simplify_result(simplify_unary_with_same_inner(
                 kind,
@@ -712,14 +762,16 @@ pub(super) fn simplify_inst(
                     ))
                 }
                 BinaryInstKind::Eq => {
-                    let simplified = simplify_eq_zext_i1_one(func, is, lattice, *lhs, *rhs);
+                    let simplified =
+                        simplify_zext_i1_compare_action(func, lattice, kind, *lhs, *rhs);
                     if !matches!(simplified, SimplifyAction::NoChange) {
                         return wrap_action(simplified);
                     }
                     simplify_cmp_self(func, lattice, may_be_undef, *lhs, *rhs, true)
                 }
                 BinaryInstKind::Ne => {
-                    let simplified = simplify_ne_zext_i1_zero(func, is, lattice, *lhs, *rhs);
+                    let simplified =
+                        simplify_zext_i1_compare_action(func, lattice, kind, *lhs, *rhs);
                     if !matches!(simplified, SimplifyAction::NoChange) {
                         return wrap_action(simplified);
                     }
@@ -758,9 +810,11 @@ pub(super) fn simplify_inst(
                 | BinaryInstKind::EvmUsubsat
                 | BinaryInstKind::EvmSsubsat
                 | BinaryInstKind::EvmUmulsat
-                | BinaryInstKind::EvmSmulsat
-                | BinaryInstKind::EvmExp
-                | BinaryInstKind::EvmByte => SimplifyAction::NoChange,
+                | BinaryInstKind::EvmSmulsat => SimplifyAction::NoChange,
+                BinaryInstKind::EvmExp => simplify_evm_exp(func, lattice, may_be_undef, *lhs, *rhs),
+                BinaryInstKind::EvmByte => {
+                    simplify_evm_byte(func, lattice, may_be_undef, *lhs, *rhs)
+                }
             })
         }
         InstClassKind::Cast(kind) => {
@@ -796,6 +850,28 @@ pub(super) fn simplify_inst(
             }
             if let Some(i) = downcast::<&data::Gep>(is, inst) {
                 return wrap_action(simplify_gep_all_zero(func, lattice, i.values().as_slice()));
+            }
+            if let Some(i) = downcast::<&evm::EvmAddMod>(is, inst) {
+                return wrap_action(simplify_evm_modop(
+                    func,
+                    lattice,
+                    may_be_undef,
+                    [*i.lhs(), *i.rhs(), *i.modulus()],
+                    EvmModOp::Add,
+                    func.dfg
+                        .value_ty(func.dfg.inst_result(inst_id).expect("evm_add_mod result")),
+                ));
+            }
+            if let Some(i) = downcast::<&evm::EvmMulMod>(is, inst) {
+                return wrap_action(simplify_evm_modop(
+                    func,
+                    lattice,
+                    may_be_undef,
+                    [*i.lhs(), *i.rhs(), *i.modulus()],
+                    EvmModOp::Mul,
+                    func.dfg
+                        .value_ty(func.dfg.inst_result(inst_id).expect("evm_mul_mod result")),
+                ));
             }
 
             no_change_results(results_len)
@@ -864,6 +940,84 @@ block0:
             assert!(simplified.iter().any(|action| {
                 matches!(action, SimplifyAction::Copy(candidate) if candidate == value)
             }));
+        });
+    }
+
+    #[test]
+    fn simplify_inst_folds_eq_zext_i1_one_to_copy() {
+        let (module, func_ref) = parse_test_module(
+            r#"
+target = "evm-ethereum-london"
+
+func public %f(v0.i1) -> i1 {
+block0:
+    v1.i256 = zext v0 i256;
+    v2.i1 = eq v1 1.i256;
+    return v2;
+}
+"#,
+        );
+
+        module.func_store.view(func_ref, |func| {
+            let inst = find_inst(
+                func,
+                sonatina_ir::inst::InstClassKind::Binary(sonatina_ir::inst::BinaryInstKind::Eq),
+            )
+            .expect("missing eq");
+            let lattice = SecondaryMap::<_, LatticeCell>::default();
+            let may_be_undef = SecondaryMap::<_, bool>::default();
+            let constref_value_tys = collect_constref_value_tys(func);
+            let const_paths = analyze_const_paths(func, &constref_value_tys);
+            let known_bits = KnownBitsQuery::new(func);
+            let is_edge_executable = |_, _| false;
+            let mut aux_deps = AuxDeps::default();
+            let mut simplify_ctx = SimplifyCtx {
+                const_paths: &const_paths,
+                known_bits: &known_bits,
+                is_edge_executable: &is_edge_executable,
+                aux_deps: &mut aux_deps,
+            };
+            let simplified = simplify_inst(func, &lattice, &may_be_undef, inst, &mut simplify_ctx);
+            assert!(matches!(simplified.as_slice(), [SimplifyAction::Copy(value)] if *value == func.arg_values[0]));
+        });
+    }
+
+    #[test]
+    fn simplify_inst_folds_ne_zext_i1_one_to_is_zero() {
+        let (module, func_ref) = parse_test_module(
+            r#"
+target = "evm-ethereum-london"
+
+func public %f(v0.i1) -> i1 {
+block0:
+    v1.i256 = zext v0 i256;
+    v2.i1 = ne v1 1.i256;
+    return v2;
+}
+"#,
+        );
+
+        module.func_store.view(func_ref, |func| {
+            let inst = find_inst(
+                func,
+                sonatina_ir::inst::InstClassKind::Binary(sonatina_ir::inst::BinaryInstKind::Ne),
+            )
+            .expect("missing ne");
+            let lattice = SecondaryMap::<_, LatticeCell>::default();
+            let may_be_undef = SecondaryMap::<_, bool>::default();
+            let constref_value_tys = collect_constref_value_tys(func);
+            let const_paths = analyze_const_paths(func, &constref_value_tys);
+            let known_bits = KnownBitsQuery::new(func);
+            let is_edge_executable = |_, _| false;
+            let mut aux_deps = AuxDeps::default();
+            let mut simplify_ctx = SimplifyCtx {
+                const_paths: &const_paths,
+                known_bits: &known_bits,
+                is_edge_executable: &is_edge_executable,
+                aux_deps: &mut aux_deps,
+            };
+            let simplified = simplify_inst(func, &lattice, &may_be_undef, inst, &mut simplify_ctx);
+            assert!(matches!(simplified.as_slice(), [SimplifyAction::BuildIsZero(value)] if *value == func.arg_values[0]));
         });
     }
 

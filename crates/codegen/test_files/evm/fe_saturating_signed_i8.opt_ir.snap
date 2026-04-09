@@ -19,26 +19,26 @@ func private %assert(v0.i1) {
 func private %i8_h1bb527fe1af58754_saturatingsub_hd0c1c727e69d9468_saturating_sub(v0.i8, v1.i8) -> i8 {
     block0:
         v2.i8 = sub v0 v1;
-        v43.i256 = sext v0 i256;
-        v44.i256 = and 128.i256 v43;
-        v24.i1 = eq v44 0.i256;
-        v67.i1 = is_zero v24;
-        v68.i256 = sext v1 i256;
-        v69.i256 = and 128.i256 v68;
-        v70.i1 = eq v69 0.i256;
-        v71.i1 = is_zero v70;
-        v32.i1 = eq v67 v71;
+        v23.i256 = sext v0 i256;
+        v5.i256 = and v23 128.i256;
+        v24.i1 = is_zero v5;
+        v25.i1 = is_zero v24;
+        v26.i256 = sext v1 i256;
+        v9.i256 = and v26 128.i256;
+        v27.i1 = is_zero v9;
+        v28.i1 = is_zero v27;
+        v29.i256 = sext v2 i256;
+        v12.i256 = and v29 128.i256;
+        v30.i1 = is_zero v12;
+        v31.i1 = is_zero v30;
+        v32.i1 = eq v25 v28;
         br v32 block7 block3;
 
     block1:
         br v24 block9 block7;
 
     block3:
-        v73.i256 = sext v2 i256;
-        v74.i256 = and 128.i256 v73;
-        v75.i1 = eq v74 0.i256;
-        v76.i1 = is_zero v75;
-        v34.i1 = eq v76 v67;
+        v34.i1 = eq v25 v31;
         br v34 block7 block1;
 
     block7:
@@ -51,16 +51,16 @@ func private %i8_h1bb527fe1af58754_saturatingsub_hd0c1c727e69d9468_saturating_su
 
 func private %i8_h1bb527fe1af58754_saturatingmul_hf2bc6be7b84ff8f7_saturating_mul(v0.i8, v1.i8) -> i8 {
     block0:
-        v34.i1 = eq v0 0.i8;
-        br v34 block16 block3;
+        v46.i1 = is_zero v0;
+        br v46 block16 block3;
 
     block2:
         v35.i1 = eq v0 -128.i8;
         br v35 block7 block6;
 
     block3:
-        v36.i1 = eq v1 0.i8;
-        br v36 block16 block2;
+        v47.i1 = is_zero v1;
+        br v47 block16 block2;
 
     block5:
         v17.i8 = mul v0 v1;
@@ -84,8 +84,8 @@ func private %i8_h1bb527fe1af58754_saturatingmul_hf2bc6be7b84ff8f7_saturating_mu
         v41.i256 = sext v1 i256;
         v34.i256 = xor v40 v41;
         v35.i256 = and v34 128.i256;
-        v42.i1 = eq v35 0.i256;
-        br v42 block20 block16;
+        v48.i1 = is_zero v35;
+        br v48 block20 block16;
 
     block16:
         v45.i8 = phi (0.i8 block0) (0.i8 block3) (-128.i8 block9) (v17 block19) (127.i8 block20) (127.i8 block7) (127.i8 block8);
@@ -106,10 +106,10 @@ func private %__fe_sonatina_entry() {
     block0:
         call %assert 1.i1;
         v7.i8 = call %i8_h1bb527fe1af58754_saturatingsub_hd0c1c727e69d9468_saturating_sub -128.i8 1.i8;
-        v8.i1 = eq -128.i8 v7;
+        v8.i1 = eq v7 -128.i8;
         call %assert v8;
         v9.i8 = call %i8_h1bb527fe1af58754_saturatingmul_hf2bc6be7b84ff8f7_saturating_mul 64.i8 4.i8;
-        v10.i1 = eq 127.i8 v9;
+        v10.i1 = eq v9 127.i8;
         call %assert v10;
         evm_stop;
 }

@@ -23,37 +23,37 @@ func private %__Foo_runtime() {
 
     block6:
         v11.i256 = evm_calldata_load 0.i256;
+        v13.i256 = shr 224.i256 v11;
         v17.i256 = evm_malloc 64.i256;
         mstore v17 0.i256 i256;
-        v18.i256 = add 32.i256 v17;
+        v18.i256 = add v17 32.i256;
         mstore v18 0.i256 i256;
         v20.i256 = evm_malloc 64.i256;
         mstore v20 0.i256 i256;
-        v21.i256 = add 32.i256 v20;
+        v21.i256 = add v20 32.i256;
         mstore v21 4.i256 i256;
         v22.i256 = evm_malloc 96.i256;
         mstore v22 0.i256 i256;
-        v26.i256 = add 32.i256 v22;
+        v26.i256 = add v22 32.i256;
         mstore v26 4.i256 i256;
-        v27.i256 = add 64.i256 v22;
+        v27.i256 = add v22 64.i256;
         mstore v27 4.i256 i256;
-        v30.i256 = shr 224.i256 v11;
-        v5.i1 = eq 1.i256 v30;
+        v5.i1 = eq v13 1.i256;
         br v5 block9 block1;
 
     block1:
         evm_revert 0.i256 0.i256;
 
     block9:
-        v32.i256 = phi (0.i256 block6) (v37 block10);
-        v34.i1 = lt v32 20.i256;
-        br v34 block10 block7;
+        v31.i256 = phi (0.i256 block6) (v36 block10);
+        v33.i1 = lt v31 20.i256;
+        br v33 block10 block7;
 
     block10:
-        v35.i256 = evm_sload 0.i256;
-        v36.i256 = add 1.i256 v35;
-        evm_sstore 0.i256 v36;
-        v37.i256 = add 1.i256 v32;
+        v34.i256 = evm_sload 0.i256;
+        v35.i256 = add v34 1.i256;
+        evm_sstore 0.i256 v35;
+        v36.i256 = add v31 1.i256;
         jump block9;
 
     block7:
@@ -64,17 +64,17 @@ func public %soldecoder_i__ha12a03fcb5ba844b_with_base__CallData_hf71d505b6ff5dc
     block0:
         v14.i256 = evm_malloc 64.i256;
         mstore v14 v0 i256;
-        v15.i256 = add 32.i256 v14;
+        v15.i256 = add v14 32.i256;
         mstore v15 0.i256 i256;
         v17.i256 = evm_malloc 64.i256;
         mstore v17 v0 i256;
-        v18.i256 = add 32.i256 v17;
+        v18.i256 = add v17 32.i256;
         mstore v18 v1 i256;
         v6.i256 = evm_malloc 96.i256;
         mstore v6 v0 i256;
-        v11.i256 = add 32.i256 v6;
+        v11.i256 = add v6 32.i256;
         mstore v11 v1 i256;
-        v13.i256 = add 64.i256 v6;
+        v13.i256 = add v6 64.i256;
         mstore v13 v1 i256;
         return v6;
 }
@@ -83,7 +83,7 @@ func public %cursor_i__h140a998c67d6d59c_new__CallData_hf71d505b6ff5dc81__e6d5f0
     block0:
         v3.i256 = evm_malloc 64.i256;
         mstore v3 v0 i256;
-        v5.i256 = add 32.i256 v3;
+        v5.i256 = add v3 32.i256;
         mstore v5 0.i256 i256;
         return v3;
 }
@@ -93,7 +93,7 @@ func public %cursor_i__h140a998c67d6d59c_fork__CallData_hf71d505b6ff5dc81__e6d5f
         v3.i256 = mload v0 i256;
         v5.i256 = evm_malloc 64.i256;
         mstore v5 v3 i256;
-        v7.i256 = add 32.i256 v5;
+        v7.i256 = add v5 32.i256;
         mstore v7 v1 i256;
         return v5;
 }

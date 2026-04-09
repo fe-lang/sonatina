@@ -39,6 +39,7 @@ use super::{
     load_store::LoadStoreSolver,
     loop_strength_reduce::LoopStrengthReduce,
     multi_result_legalize::legalize_multi_result,
+    scalar_canonicalize::ScalarCanonicalize,
     sccp::SccpSolver,
 };
 
@@ -62,6 +63,8 @@ pub enum Pass {
     AggregateScalarize,
     /// Per-space load/store forwarding and dead-store elimination.
     LoadStore,
+    /// Cheap local scalar canonicalization (zero-compares, neg-arith, pow2 mul, cast chains).
+    ScalarCanonicalize,
     /// Simplify expressions with precise known-bit reasoning.
     KnownBitsSimplify,
     /// Eliminate checked arithmetic and div/mod overflow flags proven unreachable by range analysis.
@@ -74,13 +77,13 @@ pub enum Pass {
     Licm,
     /// Loop strength reduction for affine memory addresses.
     LoopStrengthReduce,
-    /// E-graph based algebraic simplification and memory forwarding.
+    /// Legacy e-graph based algebraic simplification pass.
     Egraph,
     /// Complete Global Value Numbering (legacy sparse predicated solver).
     Gvn,
     /// Recompute `dfg.users` from layout-inserted instructions only.
     ///
-    /// Use after passes (like Egraph) that can leave stale user entries
+    /// Use after passes (like legacy Egraph) that can leave stale user entries
     /// due to `change_to_alias` + layout removal interactions.
     RebuildUsers,
 }
@@ -95,6 +98,7 @@ impl Pass {
             Pass::ObjectLoadStore => "object_load_store",
             Pass::AggregateScalarize => "aggregate_scalarize",
             Pass::LoadStore => "load_store",
+            Pass::ScalarCanonicalize => "scalar_canonicalize",
             Pass::KnownBitsSimplify => "known_bits_simplify",
             Pass::CheckedArithElim => "checked_arith_elim",
             Pass::Sccp => "sccp",
@@ -163,11 +167,13 @@ const PRIMARY_FUNC_PASSES: &[Pass] = &[
     Pass::LoadStore,
     Pass::CheckedArithElim,
     Pass::Sccp,
+    Pass::ScalarCanonicalize,
     Pass::Gvn,
     Pass::Licm,
     Pass::CfgCleanup,
-    Pass::Egraph,
-    Pass::RebuildUsers,
+    Pass::ScalarCanonicalize,
+    Pass::Gvn,
+    Pass::KnownBitsSimplify,
     Pass::Sccp,
     Pass::BranchCanonicalize,
     Pass::CfgCleanup,
@@ -182,6 +188,7 @@ const SECONDARY_FUNC_PASSES: &[Pass] = &[
     Pass::LoadStore,
     Pass::CheckedArithElim,
     Pass::Sccp,
+    Pass::ScalarCanonicalize,
     Pass::Gvn,
     Pass::BranchCanonicalize,
     Pass::CfgCleanup,
@@ -210,6 +217,7 @@ fn pass_may_invalidate_func_behavior(pass: Pass) -> bool {
             | Pass::ObjectLoadStore
             | Pass::AggregateScalarize
             | Pass::LoadStore
+            | Pass::ScalarCanonicalize
             | Pass::KnownBitsSimplify
             | Pass::CheckedArithElim
             | Pass::Sccp
@@ -329,24 +337,36 @@ impl Pipeline {
     /// Current sequence:
     /// 1. `Inline` — module-level inlining (trivial + constrained full inliner)
     /// 2. Per-function passes (parallel):
-    ///    - `CfgCleanup` — normalize CFG before analysis-heavy passes
+    ///    - `CfgCleanup`
+    ///    - `AggregateCombine`
+    ///    - `BranchCanonicalize`
+    ///    - `ObjectLoadStore`
+    ///    - `AggregateScalarize`
+    ///    - `LoadStore`
+    ///    - `CheckedArithElim`
     ///    - `Sccp` — constant propagation + dead code elimination (composite)
+    ///    - `ScalarCanonicalize` — local canonical forms for scalar SSA instructions
     ///    - `Gvn` — sparse predicated global value numbering with value-phi resolution
     ///    - `Licm` — loop invariant code motion
     ///    - `CfgCleanup` — clean up after LICM structural changes
-    ///    - `Egraph` — algebraic simplification, memory forwarding
-    ///    - `RebuildUsers` — fix stale `dfg.users` after egraph
-    ///    - `Sccp` — second round catches constants exposed by egraph
+    ///    - `ScalarCanonicalize` — canonicalize new local forms exposed by LICM cleanup
+    ///    - `Gvn` — second value-numbering round for LICM-exposed redundancy
+    ///    - `KnownBitsSimplify` — fact-driven local simplification
+    ///    - `Sccp` — second round catches constants exposed by the new local rewrites
+    ///    - `BranchCanonicalize`
     ///    - `CfgCleanup` — final cleanup
     /// 3. `Inline` — repeat inlining with freshly simplified callees/callers
     /// 4. Per-function passes (parallel):
     ///    - `CfgCleanup`
     ///    - `AggregateCombine`
+    ///    - `BranchCanonicalize`
     ///    - `AggregateScalarize`
     ///    - `LoadStore`
     ///    - `CheckedArithElim`
     ///    - `Sccp`
+    ///    - `ScalarCanonicalize`
     ///    - `Gvn`
+    ///    - `BranchCanonicalize`
     ///    - `CfgCleanup`
     /// 5. `DeadArgElim` — remove dead private formals and rewrite direct calls
     /// 6. Per-function cleanup:
@@ -609,6 +629,10 @@ fn run_pass(
                 solver.run(func, &mut ctx.cfg);
             }
         }
+        Pass::ScalarCanonicalize => {
+            let _span = trace_span!("sonatina.optim.pipeline.pass.scalar_canonicalize").entered();
+            ScalarCanonicalize::new().run(func);
+        }
         Pass::KnownBitsSimplify => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.known_bits_simplify").entered();
             KnownBitsSimplify::new().run(func);
@@ -853,7 +877,16 @@ mod tests {
     #[test]
     fn func_passes_single_function_module() {
         let mut module = build_test_module();
-        run_test_func_passes(&mut module, &[Pass::CfgCleanup, Pass::Sccp, Pass::Egraph]);
+        run_test_func_passes(
+            &mut module,
+            &[
+                Pass::CfgCleanup,
+                Pass::Sccp,
+                Pass::ScalarCanonicalize,
+                Pass::Gvn,
+                Pass::KnownBitsSimplify,
+            ],
+        );
     }
 
     #[test]
@@ -1818,7 +1851,7 @@ func private %entry() -> i32 {
     }
 
     #[test]
-    fn gvn_phi_pruning_keeps_users_consistent_for_egraph_dce() {
+    fn gvn_phi_pruning_keeps_users_consistent_for_followup_sccp_dce() {
         let source = r#"
 target = "evm-ethereum-london"
 
@@ -1846,7 +1879,14 @@ func private %entry(v0.i1, v1.i32) -> i32 {
         let func_ref = module.funcs()[0];
         run_test_func_passes(
             &mut module,
-            &[Pass::CfgCleanup, Pass::Gvn, Pass::Egraph, Pass::CfgCleanup],
+            &[
+                Pass::CfgCleanup,
+                Pass::ScalarCanonicalize,
+                Pass::Gvn,
+                Pass::KnownBitsSimplify,
+                Pass::Sccp,
+                Pass::CfgCleanup,
+            ],
         );
 
         module.func_store.view(func_ref, |func| {

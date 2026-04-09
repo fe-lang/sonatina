@@ -206,6 +206,10 @@ enum NormalizedCond {
         rhs: ValueId,
         invert: bool,
     },
+    ZeroTest {
+        value: ValueId,
+        invert: bool,
+    },
     Value {
         value: ValueId,
         invert: bool,
@@ -500,6 +504,9 @@ fn refine_br_edge(
             rhs,
             invert,
         } => refine_compare_edge(func, env, kind, lhs, rhs, take_true_edge ^ invert),
+        NormalizedCond::ZeroTest { value, invert } => {
+            refine_zero_test_edge(func, env, value, take_true_edge ^ invert)
+        }
     }
 }
 
@@ -516,7 +523,7 @@ fn normalize_condition(func: &Function, env: &RangeEnv, mut value: ValueId) -> N
         };
 
         match func.dfg.inst(inst).kind() {
-            InstClassKind::Unary(UnaryInstKind::Not | UnaryInstKind::IsZero) => {
+            InstClassKind::Unary(UnaryInstKind::Not) => {
                 let args = func.dfg.inst(inst).collect_values();
                 let [arg] = args.as_slice() else {
                     return NormalizedCond::Value { value, invert };
@@ -526,6 +533,24 @@ fn normalize_condition(func: &Function, env: &RangeEnv, mut value: ValueId) -> N
                 }
                 value = *arg;
                 invert = !invert;
+            }
+            InstClassKind::Unary(UnaryInstKind::IsZero) => {
+                let args = func.dfg.inst(inst).collect_values();
+                let [arg] = args.as_slice() else {
+                    return NormalizedCond::Value { value, invert };
+                };
+                if func.dfg.value_ty(*arg) == Type::I1 {
+                    value = *arg;
+                    invert = !invert;
+                    continue;
+                }
+                if func.dfg.value_ty(*arg).is_integral() {
+                    return NormalizedCond::ZeroTest {
+                        value: *arg,
+                        invert,
+                    };
+                }
+                return NormalizedCond::Value { value, invert };
             }
             InstClassKind::Binary(BinaryInstKind::Eq | BinaryInstKind::Ne) => {
                 let args = func.dfg.inst(inst).collect_values();
@@ -612,6 +637,35 @@ fn normalize_bool_compare(
     None
 }
 
+fn refine_zero_test_edge(
+    func: &Function,
+    env: &RangeEnv,
+    value: ValueId,
+    zero_test_truth: bool,
+) -> Option<RangeEnv> {
+    let ty = func.dfg.value_ty(value);
+    if !supports_range_facts(ty) {
+        return Some(env.clone());
+    }
+
+    let zero = Immediate::zero(ty);
+    if let Some(imm) = exact_immediate(func, env, value) {
+        return (imm.is_zero() == zero_test_truth).then(|| env.clone());
+    }
+
+    let value_fact = fact_for_value(func, env, value);
+    let mut refined = env.clone();
+    if zero_test_truth {
+        let zero_fact = RangeFact::singleton(zero);
+        let unsigned = value_fact.unsigned.intersect(zero_fact.unsigned)?;
+        let signed = value_fact.signed.intersect(zero_fact.signed)?;
+        set_env_fact(func, &mut refined, value, RangeFact { unsigned, signed });
+    } else {
+        refine_not_equal_immediate_edge(func, &mut refined, value, value_fact, zero);
+    }
+    Some(refined)
+}
+
 fn refine_compare_edge(
     func: &Function,
     env: &RangeEnv,
@@ -691,8 +745,8 @@ fn refine_compare_edge_impl(
         }
         BinaryInstKind::Ne => {
             if compare_truth {
-                refine_not_equal_constant_edge(func, &mut refined, lhs, lhs_fact, rhs, rhs_fact);
-                refine_not_equal_constant_edge(func, &mut refined, rhs, rhs_fact, lhs, lhs_fact);
+                refine_not_equal_constant_edge(func, &mut refined, lhs, lhs_fact, rhs);
+                refine_not_equal_constant_edge(func, &mut refined, rhs, rhs_fact, lhs);
             }
         }
         _ => {}
@@ -707,11 +761,20 @@ fn refine_not_equal_constant_edge(
     value: ValueId,
     value_fact: RangeFact,
     other: ValueId,
-    _other_fact: RangeFact,
 ) {
     let Some(imm) = exact_immediate(func, env, other) else {
         return;
     };
+    refine_not_equal_immediate_edge(func, env, value, value_fact, imm);
+}
+
+fn refine_not_equal_immediate_edge(
+    func: &Function,
+    env: &mut RangeEnv,
+    value: ValueId,
+    value_fact: RangeFact,
+    imm: Immediate,
+) {
     let ty = imm.ty();
     if !supports_range_facts(ty) {
         return;
@@ -1654,7 +1717,7 @@ mod tests {
         builder::test_util::*,
         inst::{
             arith::Add,
-            cmp::{Eq, Le, Lt, Ne},
+            cmp::{Eq, IsZero, Le, Lt, Ne},
             control_flow::{Br, Jump, Phi, Return},
         },
         prelude::*,
@@ -2067,6 +2130,42 @@ mod tests {
         module.func_store.view(func_ref, |func| {
             let analysis = compute_analysis(func);
             assert!(analysis.is_reachable(b2));
+            let fact = fact_for_value(func, analysis.entry_env(b2), arg);
+            assert_eq!(fact.unsigned.lo, U256::from(1u8));
+            assert_eq!(fact.unsigned.hi, U256::from(255u16));
+        });
+    }
+
+    #[test]
+    fn false_edge_of_is_zero_refines_value_nonzero() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[Type::I8], Type::I8);
+        let is = evm.inst_set();
+
+        let b0 = builder.append_block();
+        let b1 = builder.append_block();
+        let b2 = builder.append_block();
+
+        builder.switch_to_block(b0);
+        let arg = builder.args()[0];
+        let cond =
+            builder.insert_inst_with(|| IsZero::new(is.has_is_zero().unwrap(), arg), Type::I1);
+        builder.insert_inst_no_result_with(|| Br::new(is, cond, b1, b2));
+
+        builder.switch_to_block(b1);
+        let zero = builder.make_imm_value(0i8);
+        builder.insert_inst_no_result_with(|| Return::new_single(is, zero));
+
+        builder.switch_to_block(b2);
+        builder.insert_inst_no_result_with(|| Return::new_single(is, arg));
+
+        builder.seal_all();
+        builder.finish();
+
+        let module = mb.build();
+        let func_ref = module.funcs()[0];
+        module.func_store.view(func_ref, |func| {
+            let analysis = compute_analysis(func);
             let fact = fact_for_value(func, analysis.entry_env(b2), arg);
             assert_eq!(fact.unsigned.lo, U256::from(1u8));
             assert_eq!(fact.unsigned.hi, U256::from(255u16));
