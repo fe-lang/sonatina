@@ -4,7 +4,10 @@ use sonatina_ir::{
     inst::{BinaryInstKind, CastInstKind, InstClassKind, UnaryInstKind, arith, cast, cmp},
 };
 
-use super::simplify_expr::{canonicalize_cast_chain, shift_amount_for_pow2_mul, simplify_cast};
+use super::simplify_expr::{
+    ZextI1CompareRewrite, canonicalize_cast_chain, shift_amount_for_pow2_mul, simplify_cast,
+    simplify_zext_i1_compare,
+};
 
 pub struct ScalarCanonicalize {
     plans: Vec<RewritePlan>,
@@ -73,7 +76,15 @@ impl ScalarCanonicalize {
             changed = true;
             let resolved = resolve_copy_replacements(&self.plans);
             for &plan in &self.plans {
-                apply_plan(func, plan, &resolved);
+                if let RewritePlan::ReplaceInst { .. } = plan {
+                    apply_replace_plan(func, plan, &resolved);
+                }
+            }
+
+            for &plan in &self.plans {
+                if let RewritePlan::Copy { .. } = plan {
+                    apply_copy_plan(func, plan, &resolved);
+                }
             }
 
             for &plan in &self.plans {
@@ -97,6 +108,25 @@ impl ScalarCanonicalize {
                 let [lhs, rhs] = values.as_slice() else {
                     return None;
                 };
+                if let Some(rewrite) = simplify_zext_i1_compare(func, kind, *lhs, *rhs, |value| {
+                    func.dfg.value_imm(value)
+                }) {
+                    return Some(match rewrite {
+                        ZextI1CompareRewrite::Copy(replacement) => RewritePlan::Copy {
+                            inst,
+                            result: *result,
+                            replacement,
+                        },
+                        ZextI1CompareRewrite::IsZero(arg) => RewritePlan::ReplaceInst {
+                            inst,
+                            replacement: InstSpec::Unary {
+                                kind: UnaryInstKind::IsZero,
+                                arg,
+                            },
+                        },
+                    });
+                }
+
                 canonicalize_binary_inst(func, kind, *lhs, *rhs)
                     .filter(|&replacement| supports_inst_spec(func, replacement))
                     .map(|replacement| RewritePlan::ReplaceInst { inst, replacement })
@@ -261,19 +291,26 @@ fn resolve_copy_replacement(
     replacement
 }
 
-fn apply_plan(func: &mut Function, plan: RewritePlan, resolved: &FxHashMap<ValueId, ValueId>) {
-    match plan {
-        RewritePlan::Copy { result, .. } => {
-            if func.dfg.has_value(result) {
-                func.dfg.change_to_alias(result, resolved[&result]);
-            }
-        }
-        RewritePlan::ReplaceInst { inst, replacement } => {
-            let Some(replacement) = build_inst(func, replacement) else {
-                return;
-            };
-            func.dfg.replace_inst(inst, replacement);
-        }
+fn apply_replace_plan(
+    func: &mut Function,
+    plan: RewritePlan,
+    resolved: &FxHashMap<ValueId, ValueId>,
+) {
+    let RewritePlan::ReplaceInst { inst, replacement } = plan else {
+        return;
+    };
+    let Some(replacement) = build_inst(func, rebase_inst_spec(replacement, resolved)) else {
+        return;
+    };
+    func.dfg.replace_inst(inst, replacement);
+}
+
+fn apply_copy_plan(func: &mut Function, plan: RewritePlan, resolved: &FxHashMap<ValueId, ValueId>) {
+    let RewritePlan::Copy { result, .. } = plan else {
+        return;
+    };
+    if func.dfg.has_value(result) {
+        func.dfg.change_to_alias(result, resolved[&result]);
     }
 }
 
@@ -302,6 +339,36 @@ fn build_inst(func: &mut Function, replacement: InstSpec) -> Option<Box<dyn Inst
             CastInstKind::Bitcast | CastInstKind::IntToPtr | CastInstKind::PtrToInt => None,
         },
     }
+}
+
+fn rebase_inst_spec(replacement: InstSpec, resolved: &FxHashMap<ValueId, ValueId>) -> InstSpec {
+    match replacement {
+        InstSpec::Unary { kind, arg } => InstSpec::Unary {
+            kind,
+            arg: rebase_value(arg, resolved),
+        },
+        InstSpec::Binary { kind, lhs, rhs } => InstSpec::Binary {
+            kind,
+            lhs: rebase_operand(lhs, resolved),
+            rhs: rebase_operand(rhs, resolved),
+        },
+        InstSpec::Cast { kind, from, ty } => InstSpec::Cast {
+            kind,
+            from: rebase_value(from, resolved),
+            ty,
+        },
+    }
+}
+
+fn rebase_operand(operand: Operand, resolved: &FxHashMap<ValueId, ValueId>) -> Operand {
+    match operand {
+        Operand::Value(value) => Operand::Value(rebase_value(value, resolved)),
+        Operand::Imm(imm) => Operand::Imm(imm),
+    }
+}
+
+fn rebase_value(value: ValueId, resolved: &FxHashMap<ValueId, ValueId>) -> ValueId {
+    resolved.get(&value).copied().unwrap_or(value)
 }
 
 fn materialize_operand(func: &mut Function, operand: Operand) -> ValueId {
@@ -452,6 +519,57 @@ block0:
         assert!(dumped.contains("v2.i32 = zext v0 i32;"), "{dumped}");
         assert!(!dumped.contains(" i64;"), "{dumped}");
         assert!(dumped.contains("return v2;"), "{dumped}");
+    }
+
+    #[test]
+    fn rewrites_zext_i1_eq_zero_to_is_zero_source() {
+        let (module, func_ref) = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %f(v0.i1) -> i256 {
+block0:
+    v1.i256 = zext v0 i256;
+    v2.i1 = eq v1 0.i256;
+    v3.i256 = zext v2 i256;
+    return v3;
+}
+"#,
+        );
+
+        module.func_store.modify(func_ref, |func| {
+            assert!(ScalarCanonicalize::new().run(func));
+        });
+
+        let dumped = dump_func(&module, func_ref);
+        assert!(dumped.contains(" = is_zero v0;"), "{dumped}");
+        assert!(!dumped.contains(" = eq v1 0.i256;"), "{dumped}");
+    }
+
+    #[test]
+    fn rebases_replace_operands_after_copy_rewrites() {
+        let (module, func_ref) = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %f(v0.i8) -> i256 {
+block0:
+    v1.i16 = zext v0 i16;
+    v2.i8 = trunc v1 i8;
+    v3.i1 = eq v2 0.i8;
+    v4.i256 = zext v3 i256;
+    return v4;
+}
+"#,
+        );
+
+        module.func_store.modify(func_ref, |func| {
+            assert!(ScalarCanonicalize::new().run(func));
+        });
+
+        let dumped = dump_func(&module, func_ref);
+        assert!(dumped.contains(" = is_zero v0;"), "{dumped}");
+        assert!(!dumped.contains(" = trunc "), "{dumped}");
     }
 
     fn parse_test_module(src: &str) -> (Module, FuncRef) {

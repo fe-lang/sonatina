@@ -103,17 +103,14 @@ func private %__Vault_recv_0_1(v0.i256, v1.i256) -> i256 {
         evm_revert 0.i256 0.i256;
 
     block8:
-        (v22.i256, v23.i1) = evm_udivo v17 v8;
-        br v23 block7 block9;
-
-    block9:
+        v37.i256 = evm_udiv v17 v8;
         (v28.i256, v29.i1) = usubo v8 v0;
         br v29 block7 block10;
 
     block10:
         evm_sstore v7 v28;
         v32.i256 = evm_sload v1;
-        (v34.i256, v35.i1) = usubo v32 v22;
+        (v34.i256, v35.i1) = usubo v32 v37;
         br v35 block7 block11;
 
     block11:
@@ -124,7 +121,7 @@ func private %__Vault_recv_0_1(v0.i256, v1.i256) -> i256 {
     block12:
         v33.i256 = call %storagemap_storage_slot_with_salt__Address_h257056268eac7027__5ab99f7153cdba29 v10 0.i256;
         evm_sstore v33 v39;
-        return v22;
+        return v37;
 }
 
 func private %__Vault_init() {

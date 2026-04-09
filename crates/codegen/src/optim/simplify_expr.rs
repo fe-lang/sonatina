@@ -1,5 +1,5 @@
 use sonatina_ir::{
-    Function, I256, Immediate, Type, U256, ValueId,
+    Function, I256, Immediate, Type, U256, Value, ValueId,
     inst::{BinaryInstKind, CastInstKind, InstClassKind, UnaryInstKind, cast, downcast},
 };
 
@@ -31,6 +31,12 @@ pub(crate) trait ExprFactProvider {
 pub(crate) enum EvmModOp {
     Add,
     Mul,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ZextI1CompareRewrite {
+    Copy(ValueId),
+    IsZero(ValueId),
 }
 
 pub(crate) fn integral_bit_width(ty: Type) -> Option<usize> {
@@ -76,6 +82,54 @@ pub(crate) fn shift_amount_for_pow2_mul(imm: Immediate) -> Option<usize> {
     }
 
     (shift != 0 && shift < bit_width).then_some(shift)
+}
+
+pub(crate) fn simplify_zext_i1_compare(
+    func: &Function,
+    kind: BinaryInstKind,
+    lhs: ValueId,
+    rhs: ValueId,
+    known_imm: impl Fn(ValueId) -> Option<Immediate>,
+) -> Option<ZextI1CompareRewrite> {
+    simplify_zext_i1_compare_one_side(func, kind, lhs, rhs, &known_imm)
+        .or_else(|| simplify_zext_i1_compare_one_side(func, kind, rhs, lhs, &known_imm))
+}
+
+fn simplify_zext_i1_compare_one_side(
+    func: &Function,
+    kind: BinaryInstKind,
+    widened: ValueId,
+    other: ValueId,
+    known_imm: &impl Fn(ValueId) -> Option<Immediate>,
+) -> Option<ZextI1CompareRewrite> {
+    let from = zext_i1_source(func, widened)?;
+    let ty = func.dfg.value_ty(widened);
+    let imm = known_imm(other)?;
+
+    match kind {
+        BinaryInstKind::Eq if imm == Immediate::one(ty) => Some(ZextI1CompareRewrite::Copy(from)),
+        BinaryInstKind::Ne if imm == Immediate::zero(ty) => Some(ZextI1CompareRewrite::Copy(from)),
+        BinaryInstKind::Eq if imm == Immediate::zero(ty) => {
+            Some(ZextI1CompareRewrite::IsZero(from))
+        }
+        BinaryInstKind::Ne if imm == Immediate::one(ty) => Some(ZextI1CompareRewrite::IsZero(from)),
+        _ => None,
+    }
+}
+
+fn zext_i1_source(func: &Function, value: ValueId) -> Option<ValueId> {
+    let Value::Inst { inst, .. } = func.dfg.value(value) else {
+        return None;
+    };
+    if func.dfg.inst(*inst).kind() != InstClassKind::Cast(CastInstKind::Zext) {
+        return None;
+    }
+
+    let values = func.dfg.inst(*inst).collect_values();
+    let [from] = values.as_slice() else {
+        return None;
+    };
+    (func.dfg.value_ty(*from) == Type::I1).then_some(*from)
 }
 
 fn fold_evm_addmod_raw(lhs: U256, rhs: U256, modulus: U256) -> U256 {
@@ -384,6 +438,11 @@ pub(crate) fn simplify_binary_with_facts(
             }
         }
         BinaryInstKind::Eq => {
+            if let Some(ZextI1CompareRewrite::Copy(value)) =
+                simplify_zext_i1_compare(func, kind, lhs, rhs, |v| facts.known_imm(v))
+            {
+                return SimplifyExprResult::Copy(value);
+            }
             if facts.same_non_undef(lhs, rhs) {
                 return SimplifyExprResult::Const(Immediate::one(Type::I1));
             }
@@ -399,6 +458,11 @@ pub(crate) fn simplify_binary_with_facts(
             }
         }
         BinaryInstKind::Ne => {
+            if let Some(ZextI1CompareRewrite::Copy(value)) =
+                simplify_zext_i1_compare(func, kind, lhs, rhs, |v| facts.known_imm(v))
+            {
+                return SimplifyExprResult::Copy(value);
+            }
             if facts.same_non_undef(lhs, rhs) {
                 return SimplifyExprResult::Const(Immediate::zero(Type::I1));
             }

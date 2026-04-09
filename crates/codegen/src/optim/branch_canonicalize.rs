@@ -1,5 +1,5 @@
 use sonatina_ir::{
-    BlockId, Function, InstId, Type, Value, ValueId,
+    BlockId, Function, Immediate, InstId, Type, Value, ValueId,
     inst::{BinaryInstKind, InstClassKind, UnaryInstKind, cmp, control_flow::Br, downcast},
 };
 
@@ -204,6 +204,31 @@ fn zero_compare_branch_rewrite(
     lhs: ValueId,
     rhs: ValueId,
 ) -> Option<ZeroComparePlan> {
+    if matches!(kind, BinaryInstKind::Eq | BinaryInstKind::Ne)
+        && func.dfg.value_ty(lhs) == Type::I1
+        && let Some(bit) = i1_literal(func, rhs)
+    {
+        return Some(ZeroComparePlan {
+            cond: lhs,
+            swap: matches!(
+                (kind, bit),
+                (BinaryInstKind::Eq, false) | (BinaryInstKind::Ne, true)
+            ),
+        });
+    }
+    if matches!(kind, BinaryInstKind::Eq | BinaryInstKind::Ne)
+        && func.dfg.value_ty(rhs) == Type::I1
+        && let Some(bit) = i1_literal(func, lhs)
+    {
+        return Some(ZeroComparePlan {
+            cond: rhs,
+            swap: matches!(
+                (kind, bit),
+                (BinaryInstKind::Eq, false) | (BinaryInstKind::Ne, true)
+            ),
+        });
+    }
+
     let (arg, swap) = match kind {
         BinaryInstKind::Eq
             if func.dfg.value_ty(lhs).is_integral()
@@ -248,6 +273,13 @@ fn zero_compare_branch_rewrite(
         cond: insert_is_zero_before(func, term, arg)?,
         swap,
     })
+}
+
+fn i1_literal(func: &Function, value: ValueId) -> Option<bool> {
+    match func.dfg.value_imm(value)? {
+        Immediate::I1(bit) => Some(bit),
+        _ => None,
+    }
 }
 
 fn insert_compare_before(
@@ -444,6 +476,152 @@ block2:
         assert!(body.contains(" = is_zero v0;"), "{body}");
         assert!(body.contains("block2 block1;"), "{body}");
         assert!(!body.contains(" = ne "), "{body}");
+    }
+
+    #[test]
+    fn rewrites_i1_eq_zero_branch_to_direct_branch_with_swapped_successors() {
+        let (module, func_ref) = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %f(v0.i1) -> i256 {
+block0:
+    v1.i1 = eq v0 0.i1;
+    br v1 block1 block2;
+
+block1:
+    return 1.i256;
+
+block2:
+    return 2.i256;
+}
+"#,
+        );
+
+        module.func_store.modify(func_ref, |func| {
+            assert!(BranchCanonicalize::new().run(func));
+        });
+
+        let body = dump_func(&module, func_ref);
+        assert!(body.contains("br v0 block2 block1;"), "{body}");
+        assert!(!body.contains(" = eq "), "{body}");
+        assert!(!body.contains(" = is_zero "), "{body}");
+    }
+
+    #[test]
+    fn rewrites_i1_ne_zero_branch_to_direct_branch() {
+        let (module, func_ref) = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %f(v0.i1) -> i256 {
+block0:
+    v1.i1 = ne v0 0.i1;
+    br v1 block1 block2;
+
+block1:
+    return 1.i256;
+
+block2:
+    return 2.i256;
+}
+"#,
+        );
+
+        module.func_store.modify(func_ref, |func| {
+            assert!(BranchCanonicalize::new().run(func));
+        });
+
+        let body = dump_func(&module, func_ref);
+        assert!(body.contains("br v0 block1 block2;"), "{body}");
+        assert!(!body.contains(" = ne "), "{body}");
+    }
+
+    #[test]
+    fn rewrites_i1_eq_one_branch_to_direct_branch() {
+        let (module, func_ref) = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %f(v0.i1) -> i256 {
+block0:
+    v1.i1 = eq v0 1.i1;
+    br v1 block1 block2;
+
+block1:
+    return 1.i256;
+
+block2:
+    return 2.i256;
+}
+"#,
+        );
+
+        module.func_store.modify(func_ref, |func| {
+            assert!(BranchCanonicalize::new().run(func));
+        });
+
+        let body = dump_func(&module, func_ref);
+        assert!(body.contains("br v0 block1 block2;"), "{body}");
+        assert!(!body.contains(" = eq "), "{body}");
+    }
+
+    #[test]
+    fn rewrites_i1_ne_one_branch_to_direct_branch_with_swapped_successors() {
+        let (module, func_ref) = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %f(v0.i1) -> i256 {
+block0:
+    v1.i1 = ne v0 1.i1;
+    br v1 block1 block2;
+
+block1:
+    return 1.i256;
+
+block2:
+    return 2.i256;
+}
+"#,
+        );
+
+        module.func_store.modify(func_ref, |func| {
+            assert!(BranchCanonicalize::new().run(func));
+        });
+
+        let body = dump_func(&module, func_ref);
+        assert!(body.contains("br v0 block2 block1;"), "{body}");
+        assert!(!body.contains(" = ne "), "{body}");
+    }
+
+    #[test]
+    fn does_not_rewrite_non_eq_ne_i1_literal_compare() {
+        let (module, func_ref) = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %f(v0.i1) -> i256 {
+block0:
+    v1.i1 = lt v0 1.i1;
+    br v1 block1 block2;
+
+block1:
+    return 1.i256;
+
+block2:
+    return 2.i256;
+}
+"#,
+        );
+
+        module.func_store.modify(func_ref, |func| {
+            assert!(!BranchCanonicalize::new().run(func));
+        });
+
+        let body = dump_func(&module, func_ref);
+        assert!(body.contains(" = lt v0 1.i1;"), "{body}");
+        assert!(body.contains("br v1 block1 block2;"), "{body}");
     }
 
     fn parse_test_module(src: &str) -> (Module, FuncRef) {

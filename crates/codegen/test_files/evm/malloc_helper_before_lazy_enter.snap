@@ -6,8 +6,8 @@ input_file: test_files/evm/malloc_helper_before_lazy_enter.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 64 bytes
-  total: 64 bytes
+  section runtime: 63 bytes
+  total: 63 bytes
 
 functions:
   helper: ir_blocks=1 ir_insts=4 vcode_ops=8 fixups=0 imm_bytes=2
@@ -18,8 +18,8 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=1 abs_words_end=0
 
 evm:
-  case before_enter: calldata_len=8 success reason=Return gas_used=21220 gas_refunded=0 logs=0 output=call len=32 tx_gas=21056 runtime_gas=164
-  case active: calldata_len=8 success reason=Return gas_used=21177 gas_refunded=0 logs=0 output=call len=32 tx_gas=21044 runtime_gas=133
+  case before_enter: calldata_len=8 success reason=Return gas_used=21218 gas_refunded=0 logs=0 output=call len=32 tx_gas=21056 runtime_gas=162
+  case active: calldata_len=8 success reason=Return gas_used=21175 gas_refunded=0 logs=0 output=call len=32 tx_gas=21044 runtime_gas=131
 
 
 --------------- DEBUG ---------------
@@ -75,8 +75,7 @@ entry:
     PUSH1 0xe0 (224)  // v3.i256 = shr 224.i256 v2;
     SHR
     SWAP1  // v4.i1 = ne v1 0.i256;
-    PUSH0
-    EQ
+    ISZERO
     ISZERO
     SWAP1  // v5.i256 = call %ready v4 v3;
     PUSH1 `pc + (4)`

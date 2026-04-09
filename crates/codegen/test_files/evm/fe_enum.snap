@@ -6,8 +6,8 @@ input_file: test_files/evm/fe_enum.sntn
 evm.config: stack_reach=16 vcode=false bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 81 bytes
-  total: 81 bytes
+  section runtime: 80 bytes
+  total: 80 bytes
 
 functions:
   abi_encode_u256: ir_blocks=1 ir_insts=2 vcode_ops=8 fixups=0 imm_bytes=1

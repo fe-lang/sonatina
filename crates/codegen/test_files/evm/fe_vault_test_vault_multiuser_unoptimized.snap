@@ -307,65 +307,65 @@ __Vault_recv_0_1:
     JUMPDEST
     DUP6  // v15.i256 = evm_sload v1;
     SLOAD
-    DUP1  // v38.i256 = mul v0 v15;
+    DUP1  // v39.i256 = mul v0 v15;
     DUP7
     MUL
-    PUSH0  // v39.i1 = ne v15 0.i256;
+    PUSH0  // v40.i1 = ne v15 0.i256;
     DUP3
     EQ
     ISZERO
-    SWAP2  // v40.i256 = evm_udiv v38 v15;
+    SWAP2  // v41.i256 = evm_udiv v39 v15;
     DUP2
     DIV
-    DUP8  // v41.i1 = ne v40 v0;
+    DUP8  // v42.i1 = ne v41 v0;
     EQ
     ISZERO
-    SWAP1  // v42.i1 = and v39 v41;
+    SWAP1  // v43.i1 = and v40 v42;
     SWAP2
     AND
-    PUSH1 section_unit0  // br v42 block18 block8;
+    PUSH1 section_unit0  // br v43 block17 block8;
     JUMPI
   block8:
-    DUP4  // v43.i256 = evm_udiv v38 v8;
+    DUP4  // v37.i256 = evm_udiv v39 v8;
     SWAP1
     DIV
-    DUP6  // v45.i256 = sub v8 v0;
+    DUP6  // v44.i256 = sub v8 v0;
     DUP5
     SUB
-    DUP7  // v46.i1 = lt v8 v0;
+    DUP7  // v45.i1 = lt v8 v0;
     SWAP1
     SWAP5
     LT
-    PUSH1 section_unit0  // br v46 block19 block10;
+    PUSH1 section_unit0  // br v45 block18 block10;
     JUMPI
   block10:
-    SWAP3  // evm_sstore v7 v45;
+    SWAP3  // evm_sstore v7 v44;
     SWAP1
     SWAP4
     SSTORE
     DUP5  // v32.i256 = evm_sload v1;
     SLOAD
-    DUP3  // v47.i256 = sub v32 v43;
+    DUP3  // v46.i256 = sub v32 v37;
     DUP2
     SUB
-    DUP4  // v48.i1 = lt v32 v43;
+    DUP4  // v47.i1 = lt v32 v37;
     SWAP1
     SWAP2
     LT
-    PUSH1 section_unit0  // br v48 block20 block11;
+    PUSH1 section_unit0  // br v47 block19 block11;
     JUMPI
   block11:
-    SWAP1  // evm_sstore v1 v47;
+    SWAP1  // evm_sstore v1 v46;
     SWAP5
     SSTORE
-    DUP3  // v49.i256 = sub v31 v0;
+    DUP3  // v48.i256 = sub v31 v0;
     DUP3
     SUB
-    SWAP3  // v50.i1 = lt v31 v0;
+    SWAP3  // v49.i1 = lt v31 v0;
     SWAP1
     SWAP2
     LT
-    PUSH1 section_unit0  // br v50 block21 block12;
+    PUSH1 section_unit0  // br v49 block20 block12;
     JUMPI
   block12:
     SWAP2  // v33.i256 = call %storagemap_storage_slot_with_salt__Address_h257056268eac7027__5ab99f7153cdba29 v10 0.i256;
@@ -375,8 +375,8 @@ __Vault_recv_0_1:
     PUSH1 FuncRef(95)
     JUMP
     JUMPDEST
-    SSTORE  // evm_sstore v33 v49;
-    SWAP1  // return v43;
+    SSTORE  // evm_sstore v33 v48;
+    SWAP1  // return v37;
     JUMP
 
 // func private %__Vault_init()
