@@ -328,7 +328,10 @@ fn insert_is_zero_before(func: &mut Function, before: InstId, arg: ValueId) -> O
 }
 
 fn remove_dead_single_result_inst(func: &mut Function, inst: InstId) {
-    if !func.layout.is_inst_inserted(inst) || func.dfg.inst(inst).side_effect().has_effect() {
+    if !func.layout.is_inst_inserted(inst)
+        || func.dfg.is_terminator(inst)
+        || func.dfg.side_effect(inst).has_effect()
+    {
         return;
     }
 
