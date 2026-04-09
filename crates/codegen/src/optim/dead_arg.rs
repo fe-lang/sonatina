@@ -136,6 +136,7 @@ fn is_dead_arg_root_inst(function: &Function, inst: InstId) -> bool {
     }
 
     function.dfg.is_terminator(inst)
+        || function.dfg.may_observe_state(inst)
         || function.dfg.may_mutate_state(inst)
         || function.dfg.may_transfer_control(inst)
 }
@@ -678,6 +679,36 @@ func public %entry(v0.i256) -> i256 {
         assert!(caller.contains("call %writer v1;"));
         let dumped = dump_module(&parsed.module);
         assert!(dumped.contains("v1.i256 = call %caller v0;"));
+        assert_verified(&parsed.module);
+    }
+
+    #[test]
+    fn read_side_effect_keeps_arg_live() {
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func private %reader(v0.i256) -> i256 {
+    block0:
+        v1.i256 = evm_sload v0;
+        return 0.i256;
+}
+
+func public %entry(v0.i256) -> i256 {
+    block0:
+        v1.i256 = call %reader v0;
+        return v1;
+}
+"#,
+        );
+
+        let stats = run_dead_arg_elim(&parsed.module, DeadArgElimConfig::default());
+
+        assert_eq!(stats.rewritten_funcs, 0);
+        assert_eq!(stats.removed_args, 0);
+        assert_sig(&parsed.module, "reader", 1, 1);
+        let dumped = dump_function(&parsed.module, "reader");
+        assert!(dumped.contains("v1.i256 = evm_sload v0;"));
         assert_verified(&parsed.module);
     }
 
