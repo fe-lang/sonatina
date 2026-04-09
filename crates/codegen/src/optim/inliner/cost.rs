@@ -1,7 +1,7 @@
 use rustc_hash::FxHashMap;
 use sonatina_ir::{
     BlockId, ControlFlowGraph, Function, Linkage, Module,
-    inst::{SideEffect, data, downcast},
+    inst::{data, downcast},
     module::{FuncHints, FuncRef},
 };
 
@@ -440,18 +440,7 @@ fn compute_inlinee_summary(
                 continue;
             }
 
-            base_cost += match func.dfg.side_effect(inst_id) {
-                SideEffect::None => 1,
-                SideEffect::Read => 2,
-                SideEffect::Write => 3,
-                SideEffect::Control => {
-                    if func.dfg.is_return(inst_id) {
-                        1
-                    } else {
-                        2
-                    }
-                }
-            };
+            base_cost += func.dfg.effect_cost_class(inst_id).base_cost();
         }
     }
 

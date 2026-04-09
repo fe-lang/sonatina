@@ -2,7 +2,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 use sonatina_ir::{
     Function, InstId, Type, Value, ValueId,
-    inst::{SideEffect, control_flow, control_flow::BranchKind, downcast},
+    inst::{control_flow, control_flow::BranchKind, downcast},
     module::{FuncRef, Module},
 };
 
@@ -136,10 +136,8 @@ fn is_dead_arg_root_inst(function: &Function, inst: InstId) -> bool {
     }
 
     function.dfg.is_terminator(inst)
-        || matches!(
-            function.dfg.side_effect(inst),
-            SideEffect::Write | SideEffect::Control
-        )
+        || function.dfg.may_mutate_state(inst)
+        || function.dfg.may_transfer_control(inst)
 }
 
 fn collect_candidate_funcs(module: &Module, config: DeadArgElimConfig) -> FxHashSet<FuncRef> {

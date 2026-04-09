@@ -280,7 +280,7 @@ mix:
     SWAP1
     PUSH1 0x1 (1)
     ADD
-    SWAP1  // v54.i256 = add v52 32.i256;
+    SWAP1  // v53.i256 = add v51 32.i256;
     PUSH1 0x20 (32)
     ADD
     SWAP1  // jump block1;
@@ -288,7 +288,7 @@ mix:
     JUMP
   block10:
     JUMPDEST
-    DUP3  // v29.i256 = mload v52 i256;
+    DUP3  // v29.i256 = mload v51 i256;
     MLOAD
     PUSH1 0x40 (64)  // v30.*[[i256; 3]; 3] = evm_malloc 288.i256;
     MLOAD
@@ -317,7 +317,7 @@ mix:
     MUL
     ADD
     MLOAD  // v43.i256 = mload v42 i256;
-    DUP4  // v49.i256 = mload v56 i256;
+    DUP4  // v49.i256 = mload v55 i256;
     MLOAD
     PUSH32 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001 (21888242871839275222246405745257275088548364400416034343698204186575808495617)  // v52.i256 = evm_mul_mod v43 v49 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
     SWAP2
@@ -325,11 +325,11 @@ mix:
     PUSH32 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001 (21888242871839275222246405745257275088548364400416034343698204186575808495617)  // v54.i256 = evm_add_mod v29 v52 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
     SWAP2
     ADDMOD
-    DUP4  // mstore v52 v54 i256;
+    DUP4  // mstore v51 v54 i256;
     MSTORE
     PUSH1 0x1 (1)  // v61.i256 = add v18 1.i256;
     ADD
-    SWAP1  // v57.i256 = add v56 32.i256;
+    SWAP1  // v56.i256 = add v55 32.i256;
     PUSH1 0x20 (32)
     ADD
     SWAP1  // jump block5;
@@ -350,7 +350,7 @@ mix:
 poseidon_mock:
   block0:
     JUMPDEST
-    PUSH1 0x40 (64)  // v68.i256 = mload 64.i32 i256;
+    PUSH1 0x40 (64)  // v67.i256 = mload 64.i32 i256;
     MLOAD
     PUSH32 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001 (21888242871839275222246405745257275088548364400416034343698204186575808495617)  // v51.i256 = evm_umod v0 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
     SWAP1
@@ -414,8 +414,8 @@ poseidon_mock:
     PUSH1 block14
     JUMPI
   block2:
-    PUSH1 0xc0 (192)  // v57.*[i256; 3] = alloca [i256; 3];
-    DUP2  // call %ark v57 v60 v63;
+    PUSH1 0xc0 (192)  // v56.*[i256; 3] = alloca [i256; 3];
+    DUP2  // call %ark v56 v60 v63;
     DUP2
     SWAP4
     PUSH1 `pc + (4)`
@@ -423,27 +423,27 @@ poseidon_mock:
     PUSH1 FuncRef(0)
     JUMP
     JUMPDEST
-    PUSH2 0x120 (288)  // v58.*[i256; 3] = alloca [i256; 3];
-    DUP1  // call %sigma_full v58 v57;
+    PUSH2 0x120 (288)  // v57.*[i256; 3] = alloca [i256; 3];
+    DUP1  // call %sigma_full v57 v56;
     SWAP3
     PUSH1 `pc + (4)`
     SWAP2
     PUSH1 FuncRef(2)
     JUMP
     JUMPDEST
-    SWAP1  // v31.*[i256; 3] = call %mix v58;
+    SWAP1  // v31.*[i256; 3] = call %mix v57;
     PUSH1 `pc + (4)`
     SWAP1
     PUSH1 FuncRef(3)
     JUMP
     JUMPDEST
-    PUSH1 0x3 (3)  // v63.i256 = add v63 3.i256;
+    PUSH1 0x3 (3)  // v62.i256 = add v63 3.i256;
     DUP3
     ADD
-    SWAP2  // v64.i1 = lt v63 v63;
+    SWAP2  // v63.i1 = lt v62 v63;
     DUP3
     LT
-    PUSH1 section_unit0  // br v64 block18 block3;
+    PUSH1 section_unit0  // br v63 block18 block3;
     JUMPI
   block3:
     SWAP2  // v36.i256 = add v22 1.i256;
@@ -481,8 +481,8 @@ poseidon_mock:
     PUSH1 block8
     JUMPI
   block6:
-    PUSH1 0xa0 (160)  // v59.*[i256; 3] = alloca [i256; 3];
-    DUP2  // call %ark v59 v70 v73;
+    PUSH1 0xa0 (160)  // v58.*[i256; 3] = alloca [i256; 3];
+    DUP2  // call %ark v58 v70 v73;
     DUP2
     SWAP4
     PUSH1 `pc + (4)`
@@ -490,27 +490,27 @@ poseidon_mock:
     PUSH1 FuncRef(0)
     JUMP
     JUMPDEST
-    PUSH2 0x100 (256)  // v60.*[i256; 3] = alloca [i256; 3];
-    DUP1  // call %sigma_full v60 v59;
+    PUSH2 0x100 (256)  // v59.*[i256; 3] = alloca [i256; 3];
+    DUP1  // call %sigma_full v59 v58;
     SWAP3
     PUSH1 `pc + (4)`
     SWAP2
     PUSH1 FuncRef(2)
     JUMP
     JUMPDEST
-    SWAP1  // v51.*[i256; 3] = call %mix v60;
+    SWAP1  // v51.*[i256; 3] = call %mix v59;
     PUSH1 `pc + (4)`
     SWAP1
     PUSH1 FuncRef(3)
     JUMP
     JUMPDEST
-    PUSH1 0x3 (3)  // v65.i256 = add v73 3.i256;
+    PUSH1 0x3 (3)  // v64.i256 = add v73 3.i256;
     DUP3
     ADD
-    SWAP2  // v66.i1 = lt v65 v73;
+    SWAP2  // v65.i1 = lt v64 v73;
     DUP3
     LT
-    PUSH1 section_unit0  // br v66 block19 block7;
+    PUSH1 section_unit0  // br v65 block19 block7;
     JUMPI
   block7:
     SWAP2  // v55.i256 = add v42 1.i256;
@@ -527,7 +527,7 @@ poseidon_mock:
     POP
     POP
     MLOAD
-    SWAP1  // mstore 64.i32 v68 i256;
+    SWAP1  // mstore 64.i32 v67 i256;
     PUSH1 0x40 (64)
     MSTORE
     SWAP1  // return v58;

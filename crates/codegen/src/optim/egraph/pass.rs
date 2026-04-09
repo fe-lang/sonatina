@@ -17,7 +17,7 @@ fn has_unknown_call_attrs(func: &Function) -> bool {
     for block in func.layout.iter_block() {
         for inst_id in func.layout.iter_inst(block) {
             if let Some(call) = func.dfg.call_info(inst_id)
-                && !func.ctx().has_func_attrs(call.callee())
+                && !func.ctx().has_func_effects(call.callee())
             {
                 return true;
             }
@@ -370,15 +370,14 @@ fn eliminate_dead_pure_insts(func: &mut Function) -> bool {
 }
 
 fn is_trivially_dead_pure_inst(func: &Function, inst: InstId) -> bool {
-    if func.dfg.side_effect(inst).has_effect() || func.dfg.is_terminator(inst) {
+    if !func.dfg.can_drop_if_unused(inst) {
         return false;
     }
 
-    let results = func.dfg.inst_results(inst);
-    !results.is_empty()
-        && results
-            .iter()
-            .all(|&result| func.dfg.users_num(result) == 0)
+    func.dfg
+        .inst_results(inst)
+        .iter()
+        .all(|&result| func.dfg.users_num(result) == 0)
 }
 
 #[cfg(test)]
@@ -492,7 +491,10 @@ func private %f() {
 
         let pure = find_func_ref(&parsed, "pure");
         let caller = find_func_ref(&parsed, "f");
-        parsed.module.ctx.set_func_attrs(pure, FuncAttrs::empty());
+        parsed
+            .module
+            .ctx
+            .set_legacy_func_attrs(pure, FuncAttrs::empty());
 
         parsed.module.func_store.view(caller, |func| {
             assert!(!has_unknown_call_attrs(func));

@@ -12,8 +12,7 @@ use rustc_hash::FxHashSet;
 use sonatina_ir::{
     BlockId, Function, InstDowncast, InstId, Type, U256, Value, ValueId,
     cfg::ControlFlowGraph,
-    inst::{SideEffect, arith::*, cast::*, cmp::*, control_flow::Phi, data::*, evm::*, logic::*},
-    module::FuncAttrs,
+    inst::{arith::*, cast::*, cmp::*, control_flow::Phi, data::*, evm::*, logic::*},
 };
 
 const TYPES: &str = include_str!("types.egg");
@@ -516,13 +515,10 @@ fn inst_to_egglog_with_mem(
 
 fn inst_writes_memory(func: &Function, inst_id: InstId) -> bool {
     if let Some(call) = func.dfg.call_info(inst_id) {
-        return func
-            .ctx()
-            .func_attrs(call.callee())
-            .contains(FuncAttrs::MEM_WRITE);
+        return func.ctx().func_effects(call.callee()).may_write_memory();
     }
 
-    matches!(func.dfg.inst(inst_id).side_effect(), SideEffect::Write)
+    func.dfg.may_write_memory(inst_id)
 }
 
 fn value_name(v: ValueId) -> String {
@@ -592,6 +588,7 @@ mod tests {
             data::{Mload, Mstore},
         },
         isa::Isa,
+        module::FuncAttrs,
     };
 
     use super::*;
@@ -600,7 +597,7 @@ mod tests {
         let mb = test_module_builder();
         let callee_sig = Signature::new_unit("callee", Linkage::Public, &[]);
         let callee = mb.declare_function(callee_sig).unwrap();
-        mb.ctx.set_func_attrs(callee, attrs);
+        mb.ctx.set_legacy_func_attrs(callee, attrs);
 
         let ptr_ty = mb.ptr_type(Type::I32);
         let (evm, mut builder) = test_func_builder(&mb, &[ptr_ty], Type::Unit);

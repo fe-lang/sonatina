@@ -411,7 +411,7 @@ impl ModuleCtx {
         self.func_sig(func_ref, |sig| sig.linkage())
     }
 
-    pub fn func_attrs(&self, func_ref: FuncRef) -> FuncAttrs {
+    pub fn legacy_func_attrs(&self, func_ref: FuncRef) -> FuncAttrs {
         self.func_effects
             .read()
             .unwrap()
@@ -420,11 +420,11 @@ impl ModuleCtx {
             .unwrap_or_default()
     }
 
-    pub fn has_func_attrs(&self, func_ref: FuncRef) -> bool {
+    pub fn has_legacy_func_attrs(&self, func_ref: FuncRef) -> bool {
         self.has_func_effects(func_ref)
     }
 
-    pub fn set_all_func_attrs(&self, new: FxHashMap<FuncRef, FuncAttrs>) {
+    pub fn set_all_legacy_func_attrs(&self, new: FxHashMap<FuncRef, FuncAttrs>) {
         let effects = new
             .iter()
             .map(|(&func_ref, &attrs)| (func_ref, FuncEffectSummary::from_legacy_attrs(attrs)))
@@ -432,11 +432,11 @@ impl ModuleCtx {
         self.set_all_func_effects(effects);
     }
 
-    pub fn set_func_attrs(&self, func_ref: FuncRef, attrs: FuncAttrs) {
+    pub fn set_legacy_func_attrs(&self, func_ref: FuncRef, attrs: FuncAttrs) {
         self.set_func_effects(func_ref, FuncEffectSummary::from_legacy_attrs(attrs));
     }
 
-    pub fn clear_func_attrs(&self, func_ref: FuncRef) {
+    pub fn clear_legacy_func_attrs(&self, func_ref: FuncRef) {
         self.clear_func_effects(func_ref);
     }
 
@@ -465,8 +465,8 @@ impl ModuleCtx {
         self.func_effects.write().unwrap().remove(&func_ref);
     }
 
-    pub fn call_side_effect(&self, func_ref: FuncRef) -> SideEffect {
-        self.func_effects(func_ref).to_legacy_side_effect()
+    pub fn legacy_call_side_effect(&self, func_ref: FuncRef) -> SideEffect {
+        self.func_effects(func_ref).legacy_side_effect()
     }
 
     pub fn address_spaces(&self) -> &'static dyn AddressSpaceInfo {
@@ -533,7 +533,7 @@ impl ModuleCtx {
     }
 
     pub fn clear_func_metadata(&self, func_ref: FuncRef) {
-        self.clear_func_attrs(func_ref);
+        self.clear_legacy_func_attrs(func_ref);
         self.clear_func_hints(func_ref);
     }
 

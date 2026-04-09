@@ -2,7 +2,6 @@ use sonatina_ir::{
     BlockId, ControlFlowGraph, Function, InstDowncast,
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
     inst::control_flow::Unreachable,
-    module::FuncAttrs,
 };
 
 use crate::cfg_edit::{CfgEditor, CleanupMode};
@@ -110,12 +109,7 @@ fn trim_after_noreturn_call(editor: &mut CfgEditor<'_>) -> bool {
                     continue;
                 };
                 let callee = call_info.callee();
-                if !editor
-                    .func()
-                    .ctx()
-                    .func_attrs(callee)
-                    .contains(FuncAttrs::NORETURN)
-                {
+                if !editor.func().ctx().func_effects(callee).never_returns() {
                     continue;
                 }
 
@@ -350,12 +344,7 @@ func private %caller() {
 
         let exit_now = find_func(&module, "exit_now");
         let caller = find_func(&module, "caller");
-        assert!(
-            module
-                .ctx
-                .func_attrs(exit_now)
-                .contains(FuncAttrs::NORETURN)
-        );
+        assert!(module.ctx.func_effects(exit_now).never_returns());
 
         module.func_store.modify(caller, |func| {
             assert!(CfgCleanup::new(CleanupMode::RepairWithUndef).run(func));

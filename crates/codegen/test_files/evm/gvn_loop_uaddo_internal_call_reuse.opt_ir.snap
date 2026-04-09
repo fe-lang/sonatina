@@ -63,9 +63,9 @@ func public %entry() {
         jump block14;
 
     block14:
-        v52.*i256 = phi (v41 block16) (v46 block17);
+        v49.*i256 = phi (v41 block16) (v46 block17);
         v48.*@pair = phi (v40 block16) (v45 block17);
-        v10.i256 = mload v52 i256;
+        v10.i256 = mload v49 i256;
         v11.i1 = eq v10 1.i256;
         br v11 block5 block8;
 

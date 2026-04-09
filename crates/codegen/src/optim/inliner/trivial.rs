@@ -6,9 +6,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 use sonatina_ir::{
     Function, GlobalVariableRef, Immediate, Inst, InstDowncast, InstId, Module, Type, Value,
-    ValueId,
-    inst::{SideEffect, control_flow},
-    module::FuncRef,
+    ValueId, inst::control_flow, module::FuncRef,
 };
 
 use crate::{
@@ -351,7 +349,7 @@ fn is_pure_splice_inst(callee: &Function, inst_id: InstId) -> bool {
         return is_removable_pure_call(callee, inst_id);
     }
 
-    callee.dfg.side_effect(inst_id) == SideEffect::None
+    callee.dfg.has_value_semantics(inst_id)
 }
 
 pub(super) fn materialize_plan(callee: &Function, summary: &InlinePlanSummary) -> InlinePlan {

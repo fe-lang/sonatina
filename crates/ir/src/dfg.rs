@@ -9,8 +9,9 @@ use vec_collections::VecSet;
 
 use super::{Immediate, Type, Value, ValueId};
 use crate::{
-    GlobalVariableRef, Inst, InstDowncast, InstDowncastMut, InstEffects, InstSetBase,
-    effects::classify_inst_effects,
+    EffectCostClass, GlobalVariableRef, Inst, InstDowncast, InstDowncastMut, InstEffectSummary,
+    InstEffects, InstSetBase,
+    effects::{classify_inst_effects, summarize_inst_effects},
     inst::{
         InstId, SideEffect,
         control_flow::{self, BranchInfo, CallInfo, Jump, Phi},
@@ -610,12 +611,68 @@ impl DataFlowGraph {
         }
     }
 
-    pub fn side_effect(&self, inst_id: InstId) -> SideEffect {
-        self.effects(inst_id).to_legacy_side_effect()
+    pub fn effect_summary(&self, inst_id: InstId) -> InstEffectSummary {
+        summarize_inst_effects(self, inst_id)
+    }
+
+    pub fn legacy_side_effect(&self, inst_id: InstId) -> SideEffect {
+        self.effect_summary(inst_id).to_legacy_side_effect()
     }
 
     pub fn effects(&self, inst_id: InstId) -> InstEffects {
         classify_inst_effects(self, inst_id)
+    }
+
+    pub fn may_read_memory(&self, inst_id: InstId) -> bool {
+        self.effect_summary(inst_id).may_read_memory()
+    }
+
+    pub fn may_write_memory(&self, inst_id: InstId) -> bool {
+        self.effect_summary(inst_id).may_write_memory()
+    }
+
+    pub fn may_observe_state(&self, inst_id: InstId) -> bool {
+        self.effect_summary(inst_id).may_observe_state()
+    }
+
+    pub fn may_mutate_state(&self, inst_id: InstId) -> bool {
+        self.effect_summary(inst_id).may_mutate_state()
+    }
+
+    pub fn may_transfer_control(&self, inst_id: InstId) -> bool {
+        self.effect_summary(inst_id).may_transfer_control()
+    }
+
+    pub fn has_value_semantics(&self, inst_id: InstId) -> bool {
+        !self.effect_summary(inst_id).has_effect()
+            && !self.is_branch(inst_id)
+            && !self.is_phi(inst_id)
+            && !self.is_terminator(inst_id)
+    }
+
+    pub fn can_drop_if_unused(&self, inst_id: InstId) -> bool {
+        !self.inst_results(inst_id).is_empty()
+            && !self.is_terminator(inst_id)
+            && !self.effect_summary(inst_id).has_effect()
+    }
+
+    pub fn can_speculate(&self, inst_id: InstId) -> bool {
+        self.has_value_semantics(inst_id)
+    }
+
+    pub fn effect_cost_class(&self, inst_id: InstId) -> EffectCostClass {
+        let summary = self.effect_summary(inst_id);
+        if self.is_return(inst_id) {
+            EffectCostClass::Return
+        } else if summary.may_transfer_control() {
+            EffectCostClass::Control
+        } else if summary.may_mutate_state() {
+            EffectCostClass::Mutate
+        } else if summary.may_observe_state() {
+            EffectCostClass::Observe
+        } else {
+            EffectCostClass::Pure
+        }
     }
 
     pub fn is_branch(&self, inst_id: InstId) -> bool {

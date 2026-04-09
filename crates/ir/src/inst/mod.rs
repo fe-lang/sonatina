@@ -33,7 +33,7 @@ cranelift_entity::entity_impl!(InstId);
 pub trait Inst:
     inst_set::sealed::Registered + DynClone + Any + Send + Sync + Visitable + VisitableMut
 {
-    fn side_effect(&self) -> SideEffect;
+    fn declared_effect_hint(&self) -> SideEffect;
     fn arity(&self) -> InstArity;
     fn as_text(&self) -> &'static str;
     fn is_terminator(&self) -> bool;

@@ -16,7 +16,7 @@ use sonatina_ir::{
     BlockId, Function, InstId, InstSetExt, ValueId,
     inst::evm::inst_set::EvmInstKind,
     isa::{Isa, evm::Evm},
-    module::{FuncAttrs, FuncRef, ModuleCtx},
+    module::{FuncRef, ModuleCtx},
 };
 use std::{
     cmp::Reverse,
@@ -450,7 +450,7 @@ pub(crate) fn compute_func_stack_objects(
             };
             let pos = inst_pos.get(&inst).copied().unwrap_or_default();
             let callee = *call.callee();
-            let local_return = !ctx.module.func_attrs(callee).contains(FuncAttrs::NORETURN);
+            let local_return = !ctx.module.func_effects(callee).never_returns();
             let arg_count = u8::try_from(call.args().len()).expect("call arg count too large");
             let call_results = function.dfg.inst_results(inst);
             let canonical_call_results: FxHashSet<ValueId> = call_results

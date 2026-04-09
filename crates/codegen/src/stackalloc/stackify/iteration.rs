@@ -1,9 +1,6 @@
 use cranelift_entity::SecondaryMap;
 use smallvec::SmallVec;
-use sonatina_ir::{
-    BlockId, Function, Immediate, InstId, ValueId, inst::control_flow::BranchKind,
-    module::FuncAttrs,
-};
+use sonatina_ir::{BlockId, Function, Immediate, InstId, ValueId, inst::control_flow::BranchKind};
 use std::collections::BTreeMap;
 
 use crate::{bitset::BitSet, isa::evm::immediate_u32, stackalloc::Actions};
@@ -772,12 +769,9 @@ pub(super) fn operand_order_for_evm(
 }
 
 fn call_has_local_return(func: &Function, inst: InstId) -> bool {
-    func.dfg.call_info(inst).is_some_and(|call| {
-        !func
-            .ctx()
-            .func_attrs(call.callee())
-            .contains(FuncAttrs::NORETURN)
-    })
+    func.dfg
+        .call_info(inst)
+        .is_some_and(|call| !func.ctx().func_effects(call.callee()).never_returns())
 }
 
 pub(super) fn inst_is_noop_alias_cast(

@@ -569,7 +569,7 @@ impl GvnSolver {
 
         // If insn has a side effect, create new class if the value still belongs to
         // `INITIAL_CLASS`.
-        if func.dfg.side_effect(insn).has_effect() && object_read.is_none() {
+        if !func.dfg.has_value_semantics(insn) && object_read.is_none() {
             if self.value_class(inst_result) == INITIAL_CLASS {
                 let class = self.make_class(gvn_insn, None);
                 self.assign_class(inst_result, class);
@@ -2844,7 +2844,7 @@ impl<'a> RedundantCodeRemover<'a> {
 
                     let mut changed = false;
                     let mut aliased_results = FxHashSet::default();
-                    if !func.dfg.side_effect(insn).has_effect()
+                    if func.dfg.has_value_semantics(insn)
                         || self.inst_is_eliminable_object_read(func, object_memory, insn)
                     {
                         for &inst_result in &inst_results {

@@ -278,7 +278,7 @@ impl SccpSolver {
         }
 
         let inst = func.dfg.inst(inst_id);
-        if func.dfg.side_effect(inst_id).has_effect() {
+        if !func.dfg.has_value_semantics(inst_id) {
             self.update_aux_deps(inst_id, &[], &[]);
             self.set_inst_results_top(&inst_results);
             return;
@@ -892,7 +892,7 @@ impl SccpSolver {
                 }
 
                 let inst_data = func.dfg.inst(inst);
-                if inst_data.side_effect().has_effect() {
+                if !func.dfg.has_value_semantics(inst) {
                     continue;
                 }
 

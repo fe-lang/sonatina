@@ -61,8 +61,7 @@ impl<'a> DemandedBitsQuery<'a> {
         let inst_data = self.func.dfg.inst(inst);
         let is_external_use = self.func.dfg.branch_info(inst).is_some()
             || inst_data.kind() == InstClassKind::Opaque
-            || self.func.dfg.side_effect(inst).has_effect()
-            || self.func.dfg.inst_results(inst).is_empty();
+            || !self.func.dfg.can_drop_if_unused(inst);
         if !is_external_use {
             return;
         }

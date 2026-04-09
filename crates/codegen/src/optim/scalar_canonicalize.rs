@@ -415,10 +415,7 @@ fn prune_dead_pure_insts(func: &mut Function) {
     for block in blocks {
         let insts: Vec<_> = func.layout.iter_inst(block).collect();
         for inst in insts {
-            if !func.layout.is_inst_inserted(inst)
-                || func.dfg.is_terminator(inst)
-                || func.dfg.side_effect(inst).has_effect()
-            {
+            if !func.layout.is_inst_inserted(inst) || !func.dfg.can_drop_if_unused(inst) {
                 continue;
             }
 

@@ -2627,9 +2627,7 @@ fn is_dead_inst_tree(
     if let Some(&cached) = memo.get(&inst) {
         return cached;
     }
-    if !visiting.insert(inst)
-        || func.dfg.side_effect(inst).has_effect()
-        || func.dfg.is_terminator(inst)
+    if !visiting.insert(inst) || !func.dfg.has_value_semantics(inst) || func.dfg.is_terminator(inst)
     {
         memo.insert(inst, false);
         return false;
