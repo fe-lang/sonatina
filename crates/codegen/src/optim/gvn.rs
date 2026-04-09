@@ -28,7 +28,7 @@ use crate::{
     optim::{
         aggregate::{ObjectMemoryAnalysis, ObjectReadGvnKey},
         simplify_expr::{
-            EvmModOp, ExprFactProvider, SimplifyExprResult, fold_evm_clz,
+            EvmModOp, ExprFactProvider, KnownValueFact, SimplifyExprResult, fold_evm_clz,
             shift_amount_for_pow2_mul, simplify_binary_with_facts, simplify_cast,
             simplify_evm_byte_known, simplify_evm_exp_known, simplify_evm_modop_known,
             simplify_unary_with_same_inner,
@@ -1216,13 +1216,25 @@ impl GvnSolver {
                     *insn_expr.result_tys().get(result_idx)?,
                 )?,
                 BinaryInstKind::EvmExp => simplify_evm_exp_known(
-                    func.dfg.value_imm(lhs),
-                    func.dfg.value_imm(rhs),
+                    KnownValueFact {
+                        imm: func.dfg.value_imm(lhs),
+                        may_be_undef: self.may_be_undef(func, lhs),
+                    },
+                    KnownValueFact {
+                        imm: func.dfg.value_imm(rhs),
+                        may_be_undef: self.may_be_undef(func, rhs),
+                    },
                     *insn_expr.result_tys().get(result_idx)?,
                 )?,
                 BinaryInstKind::EvmByte => simplify_evm_byte_known(
-                    func.dfg.value_imm(lhs),
-                    func.dfg.value_imm(rhs),
+                    KnownValueFact {
+                        imm: func.dfg.value_imm(lhs),
+                        may_be_undef: self.may_be_undef(func, lhs),
+                    },
+                    KnownValueFact {
+                        imm: func.dfg.value_imm(rhs),
+                        may_be_undef: self.may_be_undef(func, rhs),
+                    },
                     *insn_expr.result_tys().get(result_idx)?,
                 )?,
             }
@@ -1252,9 +1264,18 @@ impl GvnSolver {
                 _ => return None,
             };
             simplify_evm_modop_known(
-                func.dfg.value_imm(*lhs),
-                func.dfg.value_imm(*rhs),
-                func.dfg.value_imm(*modulus),
+                KnownValueFact {
+                    imm: func.dfg.value_imm(*lhs),
+                    may_be_undef: self.may_be_undef(func, *lhs),
+                },
+                KnownValueFact {
+                    imm: func.dfg.value_imm(*rhs),
+                    may_be_undef: self.may_be_undef(func, *rhs),
+                },
+                KnownValueFact {
+                    imm: func.dfg.value_imm(*modulus),
+                    may_be_undef: self.may_be_undef(func, *modulus),
+                },
                 *insn_expr.result_tys().get(result_idx)?,
                 op,
             )?

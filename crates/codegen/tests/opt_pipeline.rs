@@ -550,6 +550,60 @@ func public %entry(v0.i1) -> i8 {
 }
 
 #[test]
+fn sccp_preserves_maybe_undef_one_sided_evm_folds() {
+    let (module, func_ref) = parse_test_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+func public %entry(v0.i1) -> i256 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        jump block3;
+
+    block2:
+        jump block3;
+
+    block3:
+        v1.i256 = phi (undef.i256 block1) (7.i256 block2);
+        v2.i256 = evm_add_mod v1 3.i256 0.i256;
+        v3.i256 = evm_exp v1 0.i256;
+        v4.i256 = evm_exp 1.i256 v1;
+        v5.i256 = evm_byte v1 0.i256;
+        v6.i256 = add v2 v3;
+        v7.i256 = add v4 v5;
+        v8.i256 = add v6 v7;
+        return v8;
+}
+"#,
+    );
+    module.func_store.modify(func_ref, |func| {
+        let mut cfg = ControlFlowGraph::new();
+        SccpSolver::new().run(func, &mut cfg);
+    });
+    let dumped = module.func_store.view(func_ref, |func| {
+        FuncWriter::new(func_ref, func).dump_string()
+    });
+    assert_eq!(
+        dumped.matches("evm_add_mod").count(),
+        1,
+        "unexpected SCCP output:\n{dumped}"
+    );
+    assert_eq!(
+        dumped.matches("evm_exp").count(),
+        2,
+        "unexpected SCCP output:\n{dumped}"
+    );
+    assert_eq!(
+        dumped.matches("evm_byte").count(),
+        1,
+        "unexpected SCCP output:\n{dumped}"
+    );
+    assert_fast_verified(&module);
+}
+
+#[test]
 fn sccp_prunes_complex_loop_without_adce_block_delete_panic() {
     let (module, func_ref) = parse_test_module(
         r#"
@@ -965,6 +1019,61 @@ func public %entry(v0.i1) -> i8 {
     assert!(
         dumped.contains("umulsat"),
         "maybe-undef umulsat should not fold to zero:\n{dumped}"
+    );
+    assert_fast_verified(&module);
+}
+
+#[test]
+fn gvn_preserves_maybe_undef_one_sided_evm_folds() {
+    let (module, func_ref) = parse_test_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+func public %entry(v0.i1) -> i256 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        jump block3;
+
+    block2:
+        jump block3;
+
+    block3:
+        v1.i256 = phi (undef.i256 block1) (7.i256 block2);
+        v2.i256 = evm_add_mod v1 3.i256 0.i256;
+        v3.i256 = evm_exp v1 0.i256;
+        v4.i256 = evm_exp 1.i256 v1;
+        v5.i256 = evm_byte v1 0.i256;
+        v6.i256 = add v2 v3;
+        v7.i256 = add v4 v5;
+        v8.i256 = add v6 v7;
+        return v8;
+}
+"#,
+    );
+    module.func_store.modify(func_ref, |func| {
+        let mut cfg = ControlFlowGraph::new();
+        let mut domtree = DomTree::new();
+        GvnSolver::new().run(func, &mut cfg, &mut domtree);
+    });
+    let dumped = module.func_store.view(func_ref, |func| {
+        FuncWriter::new(func_ref, func).dump_string()
+    });
+    assert_eq!(
+        dumped.matches("evm_add_mod").count(),
+        1,
+        "unexpected GVN output:\n{dumped}"
+    );
+    assert_eq!(
+        dumped.matches("evm_exp").count(),
+        2,
+        "unexpected GVN output:\n{dumped}"
+    );
+    assert_eq!(
+        dumped.matches("evm_byte").count(),
+        1,
+        "unexpected GVN output:\n{dumped}"
     );
     assert_fast_verified(&module);
 }

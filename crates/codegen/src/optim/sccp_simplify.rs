@@ -9,9 +9,10 @@ use super::{
     const_eval::{BlockEdge, ConstPathAnalysis, dynamic_index_values, eval_const_path_immediate},
     sccp::LatticeCell,
     simplify_expr::{
-        EvmModOp, ExprFactProvider, SimplifyExprResult, ZextI1CompareRewrite, fold_evm_clz,
-        simplify_binary_with_facts, simplify_cast, simplify_evm_byte_known, simplify_evm_exp_known,
-        simplify_evm_modop_known, simplify_unary_with_same_inner, simplify_zext_i1_compare,
+        EvmModOp, ExprFactProvider, KnownValueFact, SimplifyExprResult, ZextI1CompareRewrite,
+        fold_evm_clz, simplify_binary_with_facts, simplify_cast, simplify_evm_byte_known,
+        simplify_evm_exp_known, simplify_evm_modop_known, simplify_unary_with_same_inner,
+        simplify_zext_i1_compare,
     },
 };
 use crate::analysis::known_bits::{KnownBits, KnownBitsQuery};
@@ -337,12 +338,19 @@ fn simplify_evm_clz(
 fn simplify_evm_exp(
     func: &Function,
     lattice: &SecondaryMap<ValueId, LatticeCell>,
+    may_be_undef: &SecondaryMap<ValueId, bool>,
     lhs: ValueId,
     rhs: ValueId,
 ) -> SimplifyAction {
     simplify_evm_exp_known(
-        known_imm(func, lattice, lhs),
-        known_imm(func, lattice, rhs),
+        KnownValueFact {
+            imm: known_imm(func, lattice, lhs),
+            may_be_undef: is_may_be_undef(func, may_be_undef, lhs),
+        },
+        KnownValueFact {
+            imm: known_imm(func, lattice, rhs),
+            may_be_undef: is_may_be_undef(func, may_be_undef, rhs),
+        },
         func.dfg.value_ty(lhs),
     )
     .map_or(SimplifyAction::NoChange, SimplifyAction::Const)
@@ -351,12 +359,19 @@ fn simplify_evm_exp(
 fn simplify_evm_byte(
     func: &Function,
     lattice: &SecondaryMap<ValueId, LatticeCell>,
+    may_be_undef: &SecondaryMap<ValueId, bool>,
     lhs: ValueId,
     rhs: ValueId,
 ) -> SimplifyAction {
     simplify_evm_byte_known(
-        known_imm(func, lattice, lhs),
-        known_imm(func, lattice, rhs),
+        KnownValueFact {
+            imm: known_imm(func, lattice, lhs),
+            may_be_undef: is_may_be_undef(func, may_be_undef, lhs),
+        },
+        KnownValueFact {
+            imm: known_imm(func, lattice, rhs),
+            may_be_undef: is_may_be_undef(func, may_be_undef, rhs),
+        },
         func.dfg.value_ty(rhs),
     )
     .map_or(SimplifyAction::NoChange, SimplifyAction::Const)
@@ -365,16 +380,25 @@ fn simplify_evm_byte(
 fn simplify_evm_modop(
     func: &Function,
     lattice: &SecondaryMap<ValueId, LatticeCell>,
-    lhs: ValueId,
-    rhs: ValueId,
-    modulus: ValueId,
+    may_be_undef: &SecondaryMap<ValueId, bool>,
+    operands: [ValueId; 3],
     op: EvmModOp,
     result_ty: Type,
 ) -> SimplifyAction {
+    let [lhs, rhs, modulus] = operands;
     simplify_evm_modop_known(
-        known_imm(func, lattice, lhs),
-        known_imm(func, lattice, rhs),
-        known_imm(func, lattice, modulus),
+        KnownValueFact {
+            imm: known_imm(func, lattice, lhs),
+            may_be_undef: is_may_be_undef(func, may_be_undef, lhs),
+        },
+        KnownValueFact {
+            imm: known_imm(func, lattice, rhs),
+            may_be_undef: is_may_be_undef(func, may_be_undef, rhs),
+        },
+        KnownValueFact {
+            imm: known_imm(func, lattice, modulus),
+            may_be_undef: is_may_be_undef(func, may_be_undef, modulus),
+        },
         result_ty,
         op,
     )
@@ -787,8 +811,10 @@ pub(super) fn simplify_inst(
                 | BinaryInstKind::EvmSsubsat
                 | BinaryInstKind::EvmUmulsat
                 | BinaryInstKind::EvmSmulsat => SimplifyAction::NoChange,
-                BinaryInstKind::EvmExp => simplify_evm_exp(func, lattice, *lhs, *rhs),
-                BinaryInstKind::EvmByte => simplify_evm_byte(func, lattice, *lhs, *rhs),
+                BinaryInstKind::EvmExp => simplify_evm_exp(func, lattice, may_be_undef, *lhs, *rhs),
+                BinaryInstKind::EvmByte => {
+                    simplify_evm_byte(func, lattice, may_be_undef, *lhs, *rhs)
+                }
             })
         }
         InstClassKind::Cast(kind) => {
@@ -829,9 +855,8 @@ pub(super) fn simplify_inst(
                 return wrap_action(simplify_evm_modop(
                     func,
                     lattice,
-                    *i.lhs(),
-                    *i.rhs(),
-                    *i.modulus(),
+                    may_be_undef,
+                    [*i.lhs(), *i.rhs(), *i.modulus()],
                     EvmModOp::Add,
                     func.dfg
                         .value_ty(func.dfg.inst_result(inst_id).expect("evm_add_mod result")),
@@ -841,9 +866,8 @@ pub(super) fn simplify_inst(
                 return wrap_action(simplify_evm_modop(
                     func,
                     lattice,
-                    *i.lhs(),
-                    *i.rhs(),
-                    *i.modulus(),
+                    may_be_undef,
+                    [*i.lhs(), *i.rhs(), *i.modulus()],
                     EvmModOp::Mul,
                     func.dfg
                         .value_ty(func.dfg.inst_result(inst_id).expect("evm_mul_mod result")),

@@ -39,6 +39,12 @@ pub(crate) enum ZextI1CompareRewrite {
     IsZero(ValueId),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct KnownValueFact {
+    pub(crate) imm: Option<Immediate>,
+    pub(crate) may_be_undef: bool,
+}
+
 pub(crate) fn integral_bit_width(ty: Type) -> Option<usize> {
     match ty {
         Type::I1 => Some(1),
@@ -191,21 +197,24 @@ pub(crate) fn fold_evm_modop(
 }
 
 pub(crate) fn simplify_evm_modop_known(
-    lhs: Option<Immediate>,
-    rhs: Option<Immediate>,
-    modulus: Option<Immediate>,
+    lhs: KnownValueFact,
+    rhs: KnownValueFact,
+    modulus: KnownValueFact,
     ty: Type,
     op: EvmModOp,
 ) -> Option<Immediate> {
     if !ty.is_integral() {
         return None;
     }
+    if lhs.may_be_undef || rhs.may_be_undef || modulus.may_be_undef {
+        return None;
+    }
 
-    if modulus.is_some_and(Immediate::is_zero) {
+    if modulus.imm.is_some_and(Immediate::is_zero) {
         return Some(Immediate::zero(ty));
     }
 
-    fold_evm_modop(lhs?, rhs?, modulus?, op)
+    fold_evm_modop(lhs.imm?, rhs.imm?, modulus.imm?, op)
 }
 
 pub(crate) fn fold_evm_exp(base: Immediate, exponent: Immediate) -> Option<Immediate> {
@@ -232,23 +241,26 @@ pub(crate) fn fold_evm_exp(base: Immediate, exponent: Immediate) -> Option<Immed
 }
 
 pub(crate) fn simplify_evm_exp_known(
-    base: Option<Immediate>,
-    exponent: Option<Immediate>,
+    base: KnownValueFact,
+    exponent: KnownValueFact,
     ty: Type,
 ) -> Option<Immediate> {
     if !ty.is_integral() {
         return None;
     }
+    if base.may_be_undef || exponent.may_be_undef {
+        return None;
+    }
 
-    if exponent.is_some_and(Immediate::is_zero) || base.is_some_and(Immediate::is_one) {
+    if exponent.imm.is_some_and(Immediate::is_zero) || base.imm.is_some_and(Immediate::is_one) {
         return Some(Immediate::one(ty));
     }
 
-    if base.is_some_and(Immediate::is_zero) && exponent.is_some_and(|imm| !imm.is_zero()) {
+    if base.imm.is_some_and(Immediate::is_zero) && exponent.imm.is_some_and(|imm| !imm.is_zero()) {
         return Some(Immediate::zero(ty));
     }
 
-    fold_evm_exp(base?, exponent?)
+    fold_evm_exp(base.imm?, exponent.imm?)
 }
 
 pub(crate) fn fold_evm_byte(pos: Immediate, value: Immediate) -> Option<Immediate> {
@@ -275,19 +287,22 @@ pub(crate) fn fold_evm_byte(pos: Immediate, value: Immediate) -> Option<Immediat
 }
 
 pub(crate) fn simplify_evm_byte_known(
-    pos: Option<Immediate>,
-    value: Option<Immediate>,
+    pos: KnownValueFact,
+    value: KnownValueFact,
     ty: Type,
 ) -> Option<Immediate> {
     if !ty.is_integral() {
         return None;
     }
+    if pos.may_be_undef || value.may_be_undef {
+        return None;
+    }
 
-    if value.is_some_and(Immediate::is_zero) {
+    if value.imm.is_some_and(Immediate::is_zero) {
         return Some(Immediate::zero(ty));
     }
 
-    fold_evm_byte(pos?, value?)
+    fold_evm_byte(pos.imm?, value.imm?)
 }
 
 pub(crate) fn fold_evm_clz(word: Immediate) -> Option<Immediate> {
@@ -877,6 +892,107 @@ mod tests {
         let simplified =
             simplify_binary_with_facts(&func, BinaryInstKind::And, value, mask, &facts);
         assert_eq!(simplified, SimplifyExprResult::NoChange);
+    }
+
+    #[test]
+    fn simplify_evm_exp_known_blocks_maybe_undef_one_sided_folds() {
+        let ty = Type::I256;
+
+        assert_eq!(
+            simplify_evm_exp_known(
+                KnownValueFact {
+                    imm: None,
+                    may_be_undef: true,
+                },
+                KnownValueFact {
+                    imm: Some(Immediate::zero(ty)),
+                    may_be_undef: false,
+                },
+                ty,
+            ),
+            None
+        );
+        assert_eq!(
+            simplify_evm_exp_known(
+                KnownValueFact {
+                    imm: Some(Immediate::one(ty)),
+                    may_be_undef: false,
+                },
+                KnownValueFact {
+                    imm: None,
+                    may_be_undef: true,
+                },
+                ty,
+            ),
+            None
+        );
+        assert_eq!(
+            simplify_evm_exp_known(
+                KnownValueFact {
+                    imm: Some(Immediate::one(ty)),
+                    may_be_undef: false,
+                },
+                KnownValueFact {
+                    imm: None,
+                    may_be_undef: false,
+                },
+                ty,
+            ),
+            Some(Immediate::one(ty))
+        );
+    }
+
+    #[test]
+    fn simplify_evm_one_sided_helpers_block_maybe_undef_ignored_operands() {
+        let ty = Type::I256;
+
+        assert_eq!(
+            simplify_evm_modop_known(
+                KnownValueFact {
+                    imm: None,
+                    may_be_undef: true,
+                },
+                KnownValueFact {
+                    imm: Some(Immediate::from_i256(I256::from(7), ty)),
+                    may_be_undef: false,
+                },
+                KnownValueFact {
+                    imm: Some(Immediate::zero(ty)),
+                    may_be_undef: false,
+                },
+                ty,
+                EvmModOp::Add,
+            ),
+            None
+        );
+        assert_eq!(
+            simplify_evm_byte_known(
+                KnownValueFact {
+                    imm: None,
+                    may_be_undef: true,
+                },
+                KnownValueFact {
+                    imm: Some(Immediate::zero(ty)),
+                    may_be_undef: false,
+                },
+                ty,
+            ),
+            None
+        );
+        assert_eq!(
+            simplify_evm_byte_known(
+                KnownValueFact {
+                    imm: None,
+                    may_be_undef: false,
+                },
+                KnownValueFact {
+                    imm: Some(Immediate::zero(ty)),
+                    may_be_undef: false,
+                },
+                ty,
+            ),
+            Some(Immediate::zero(ty))
+        );
     }
 
     #[test]
