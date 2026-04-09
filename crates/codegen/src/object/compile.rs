@@ -20,7 +20,7 @@ use super::{
     resolve::{ObjectId, ResolvedProgram, SectionId},
 };
 use crate::{
-    isa::evm::{EvmBackend, collect_unsupported_evm_multi_return},
+    isa::evm::{EvmBackend, collect_unsupported_evm_calls},
     machinst::lower::{
         SectionWorkModule, build_section_membership, compute_section_function_emission_order,
     },
@@ -125,7 +125,7 @@ fn is_checked_multi_result_inst(kind: InstClassKind) -> bool {
     )
 }
 
-fn reject_unsupported_evm_multi_return(
+fn reject_unsupported_evm_calls(
     module: &Module,
     funcs: &[FuncRef],
     entry: FuncRef,
@@ -136,7 +136,7 @@ fn reject_unsupported_evm_multi_return(
         return vec![];
     }
 
-    collect_unsupported_evm_multi_return(module, funcs, Some(entry))
+    collect_unsupported_evm_calls(module, funcs, Some(entry))
         .into_iter()
         .map(|(func, message)| ObjectCompileError::BackendError {
             object: object.clone(),
@@ -321,7 +321,7 @@ fn compile_section(
             &membership,
         )
     };
-    let backend_errors = reject_unsupported_evm_multi_return(
+    let backend_errors = reject_unsupported_evm_calls(
         program.module,
         &funcs,
         section.entry,
@@ -1125,17 +1125,17 @@ object @O {
     }
 
     #[test]
-    fn compile_object_rejects_external_multi_return_calls_for_evm() {
+    fn compile_object_rejects_external_calls_for_evm() {
         let parsed = parse_module(
             r#"
 target = "evm-ethereum-osaka"
 
-declare external %pair_add(i32, i32) -> (i32, i1);
+declare external %pair_add(i32, i32) -> i32;
 
-func public %main() {
+func public %main() -> i32 {
     block0:
-        (v0.i32, v1.i1) = call %pair_add 1.i32 2.i32;
-        return;
+        v0.i32 = call %pair_add 1.i32 2.i32;
+        return v0;
 }
 
 object @O {
@@ -1157,11 +1157,11 @@ object @O {
                 VerifierConfig::for_level(VerificationLevel::Standard),
             ),
         )
-        .expect_err("must reject multi-return call");
+        .expect_err("must reject external call");
         assert!(errs.iter().any(|err| matches!(
             err,
             ObjectCompileError::BackendError { message, .. }
-                if message.contains("external or declaration-only multi-return calls")
+                if message.contains("calls to external or declaration-only function %pair_add")
         )));
     }
 

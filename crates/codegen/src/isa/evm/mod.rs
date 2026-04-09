@@ -38,7 +38,7 @@ pub(crate) use opcode::OpCode;
 pub(crate) use prepare::{EvmFunctionPlan, EvmSectionPlan, prepare_free_ptr_restore};
 pub(crate) use ptr_escape::{PtrEscapeSummary, compute_ptr_escape_summaries};
 pub(crate) use sonatina_ir::{isa::evm::Evm, module::FuncRef};
-pub(crate) use verify::{collect_unsupported_evm_multi_return, validate_supported_lowering_ir};
+pub(crate) use verify::{collect_unsupported_evm_calls, validate_supported_lowering_ir};
 
 #[cfg(test)]
 mod tests;
