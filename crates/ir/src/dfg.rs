@@ -13,7 +13,7 @@ use crate::{
     InstEffects, InstSetBase,
     effects::{classify_inst_effects, summarize_inst_effects},
     inst::{
-        InstId, SideEffect,
+        InstId,
         control_flow::{self, BranchInfo, CallInfo, Jump, Phi},
     },
     ir_writer::{FuncWriteCtx, IrWrite},
@@ -613,10 +613,6 @@ impl DataFlowGraph {
 
     pub fn effect_summary(&self, inst_id: InstId) -> InstEffectSummary {
         summarize_inst_effects(self, inst_id)
-    }
-
-    pub fn legacy_side_effect(&self, inst_id: InstId) -> SideEffect {
-        self.effect_summary(inst_id).to_legacy_side_effect()
     }
 
     pub fn effects(&self, inst_id: InstId) -> InstEffects {

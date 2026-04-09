@@ -234,14 +234,11 @@ mod tests {
 
     use super::*;
     use crate::{
-        FuncEffectSummary, GlobalVariableData, Linkage, ObjectName,
+        EffectBits, FuncEffectSummary, GlobalVariableData, InstEffectSummary, Linkage, ObjectName,
         builder::test_util::{test_isa, test_module_builder},
-        inst::{
-            SideEffect,
-            control_flow::{Call, Return},
-        },
+        inst::control_flow::{Call, Return},
         isa::Isa,
-        module::{FuncAttrs, FuncHints, InlineHint},
+        module::{FuncHints, InlineHint},
         types::Type,
     };
 
@@ -372,7 +369,7 @@ mod tests {
     }
 
     #[test]
-    fn test_sparse_attr_map_hole_reuse_keeps_new_function_unknown() {
+    fn test_sparse_effect_map_hole_reuse_keeps_new_function_unknown() {
         let builder = test_module_builder();
 
         let mut refs = Vec::new();
@@ -383,7 +380,7 @@ mod tests {
 
         builder
             .ctx
-            .set_legacy_func_attrs(refs[3], FuncAttrs::MEM_READ | FuncAttrs::MEM_WRITE);
+            .set_func_effects(refs[3], FuncEffectSummary::unknown_call());
         builder.ctx.set_func_hints(refs[3], FuncHints::NOINLINE);
 
         for &removed in &[refs[1], refs[3]] {
@@ -394,32 +391,42 @@ mod tests {
         let mut attrs = FxHashMap::default();
         let mut hints = FxHashMap::default();
         for &func_ref in &[refs[0], refs[2], refs[4]] {
-            attrs.insert(func_ref, FuncAttrs::MEM_READ);
+            attrs.insert(
+                func_ref,
+                FuncEffectSummary {
+                    may_read_unknown: true,
+                    ..FuncEffectSummary::default()
+                },
+            );
             hints.insert(func_ref, FuncHints::INLINEHINT);
         }
-        builder.ctx.set_all_legacy_func_attrs(attrs);
+        builder.ctx.set_all_func_effects(attrs);
         builder.ctx.set_all_func_hints(hints);
 
-        assert_eq!(builder.ctx.legacy_func_attrs(refs[0]), FuncAttrs::MEM_READ);
-        assert!(!builder.ctx.has_legacy_func_attrs(refs[3]));
+        assert_eq!(
+            builder.ctx.func_effects(refs[0]),
+            FuncEffectSummary {
+                may_read_unknown: true,
+                ..FuncEffectSummary::default()
+            }
+        );
+        assert!(!builder.ctx.has_func_effects(refs[3]));
         assert!(!builder.ctx.has_func_hints(refs[3]));
 
         let new_sig = Signature::new_unit("new_func", Linkage::Private, &[]);
         let new_ref = builder.declare_function(new_sig).unwrap();
         assert_eq!(new_ref, refs[3]);
-        assert!(!builder.ctx.has_legacy_func_attrs(new_ref));
+        assert!(!builder.ctx.has_func_effects(new_ref));
         assert!(!builder.ctx.has_func_hints(new_ref));
     }
 
     #[test]
-    fn test_effect_summary_and_legacy_attr_views_stay_consistent() {
+    fn test_func_effect_summary_storage_round_trips() {
         let builder = test_module_builder();
         let callee = builder
             .declare_function(Signature::new_unit("callee", Linkage::Private, &[]))
             .unwrap();
 
-        assert_eq!(builder.ctx.legacy_func_attrs(callee), FuncAttrs::empty());
-        assert!(!builder.ctx.has_legacy_func_attrs(callee));
         assert_eq!(
             builder.ctx.func_effects(callee),
             FuncEffectSummary::unknown_call()
@@ -436,16 +443,9 @@ mod tests {
 
         assert_eq!(builder.ctx.func_effects(callee), effects);
         assert!(builder.ctx.has_func_effects(callee));
-        assert_eq!(
-            builder.ctx.legacy_func_attrs(callee),
-            effects.to_legacy_attrs()
-        );
-        assert!(builder.ctx.has_legacy_func_attrs(callee));
 
         builder.ctx.clear_func_effects(callee);
 
-        assert_eq!(builder.ctx.legacy_func_attrs(callee), FuncAttrs::empty());
-        assert!(!builder.ctx.has_legacy_func_attrs(callee));
         assert_eq!(
             builder.ctx.func_effects(callee),
             FuncEffectSummary::unknown_call()
@@ -454,7 +454,7 @@ mod tests {
     }
 
     #[test]
-    fn test_call_side_effect_cache_tracks_attr_updates() {
+    fn test_call_effect_summary_tracks_func_effect_updates() {
         let builder = test_module_builder();
         let callee = builder
             .declare_function(Signature::new_unit("callee", Linkage::Private, &[]))
@@ -488,40 +488,83 @@ mod tests {
         });
 
         module.func_store.view(caller, |func| {
-            assert_eq!(func.dfg.legacy_side_effect(call_inst), SideEffect::Control);
+            assert_eq!(
+                func.dfg.effect_summary(call_inst),
+                InstEffectSummary::from_bits(
+                    EffectBits::MEM_READ | EffectBits::MEM_WRITE | EffectBits::CONTROL
+                )
+            );
         });
 
-        module
-            .ctx
-            .set_legacy_func_attrs(callee, FuncAttrs::WILLRETURN | FuncAttrs::MEM_READ);
+        module.ctx.set_func_effects(
+            callee,
+            FuncEffectSummary {
+                may_read_unknown: true,
+                will_return: true,
+                ..FuncEffectSummary::default()
+            },
+        );
         module.func_store.view(caller, |func| {
-            assert_eq!(func.dfg.legacy_side_effect(call_inst), SideEffect::Read);
+            assert_eq!(
+                func.dfg.effect_summary(call_inst),
+                InstEffectSummary::from_bits(EffectBits::MEM_READ)
+            );
         });
 
-        module
-            .ctx
-            .set_legacy_func_attrs(callee, FuncAttrs::WILLRETURN | FuncAttrs::MEM_WRITE);
+        module.ctx.set_func_effects(
+            callee,
+            FuncEffectSummary {
+                may_write_unknown: true,
+                will_return: true,
+                ..FuncEffectSummary::default()
+            },
+        );
         module.func_store.view(caller, |func| {
-            assert_eq!(func.dfg.legacy_side_effect(call_inst), SideEffect::Write);
+            assert_eq!(
+                func.dfg.effect_summary(call_inst),
+                InstEffectSummary::from_bits(EffectBits::MEM_WRITE)
+            );
         });
 
-        module
-            .ctx
-            .set_legacy_func_attrs(callee, FuncAttrs::WILLRETURN);
+        module.ctx.set_func_effects(
+            callee,
+            FuncEffectSummary {
+                will_return: true,
+                ..FuncEffectSummary::default()
+            },
+        );
         module.func_store.view(caller, |func| {
-            assert_eq!(func.dfg.legacy_side_effect(call_inst), SideEffect::None);
+            assert_eq!(
+                func.dfg.effect_summary(call_inst),
+                InstEffectSummary::default()
+            );
         });
 
-        module.ctx.clear_legacy_func_attrs(callee);
+        module.ctx.clear_func_effects(callee);
         module.func_store.view(caller, |func| {
-            assert_eq!(func.dfg.legacy_side_effect(call_inst), SideEffect::Control);
+            assert_eq!(
+                func.dfg.effect_summary(call_inst),
+                InstEffectSummary::from_bits(
+                    EffectBits::MEM_READ | EffectBits::MEM_WRITE | EffectBits::CONTROL
+                )
+            );
         });
 
         let mut attrs = FxHashMap::default();
-        attrs.insert(callee, FuncAttrs::WILLRETURN | FuncAttrs::MEM_READ);
-        module.ctx.set_all_legacy_func_attrs(attrs);
+        attrs.insert(
+            callee,
+            FuncEffectSummary {
+                may_read_unknown: true,
+                will_return: true,
+                ..FuncEffectSummary::default()
+            },
+        );
+        module.ctx.set_all_func_effects(attrs);
         module.func_store.view(caller, |func| {
-            assert_eq!(func.dfg.legacy_side_effect(call_inst), SideEffect::Read);
+            assert_eq!(
+                func.dfg.effect_summary(call_inst),
+                InstEffectSummary::from_bits(EffectBits::MEM_READ)
+            );
         });
     }
 

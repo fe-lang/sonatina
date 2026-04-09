@@ -20,7 +20,6 @@ use crate::{
         },
     },
     isa::evm::space::{CALLDATA, CODE, MEMORY, RETURNDATA, STORAGE, TRANSIENT},
-    module::FuncAttrs,
 };
 
 const EVM_WORD_BYTES: u32 = 32;
@@ -160,18 +159,6 @@ impl InstEffectSummary {
     pub fn may_allocate(self) -> bool {
         self.bits.contains(EffectBits::ALLOC)
     }
-
-    pub fn to_legacy_side_effect(self) -> SideEffect {
-        if self.may_transfer_control() {
-            SideEffect::Control
-        } else if self.may_mutate_state() {
-            SideEffect::Write
-        } else if self.may_observe_state() {
-            SideEffect::Read
-        } else {
-            SideEffect::None
-        }
-    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -204,10 +191,6 @@ impl InstEffects {
         }
 
         InstEffectSummary::from_bits(bits)
-    }
-
-    pub fn legacy_side_effect(&self) -> SideEffect {
-        self.summary().to_legacy_side_effect()
     }
 }
 
@@ -254,51 +237,6 @@ impl FuncEffectSummary {
         }
     }
 
-    pub fn from_legacy_attrs(attrs: FuncAttrs) -> Self {
-        Self {
-            may_read_unknown: attrs.contains(FuncAttrs::MEM_READ),
-            may_write_unknown: attrs.contains(FuncAttrs::MEM_WRITE),
-            may_commit_visible_writes: !attrs.contains(FuncAttrs::NORETURN)
-                || attrs.contains(FuncAttrs::WILLTERMINATE),
-            noreturn: attrs.contains(FuncAttrs::NORETURN),
-            will_return: attrs.contains(FuncAttrs::WILLRETURN),
-            will_terminate: attrs.contains(FuncAttrs::WILLTERMINATE),
-            ..Self::default()
-        }
-    }
-
-    pub fn to_legacy_attrs(&self) -> FuncAttrs {
-        let mut attrs = FuncAttrs::empty();
-
-        if self.noreturn {
-            attrs.insert(FuncAttrs::NORETURN);
-        }
-        if self.will_return {
-            attrs.insert(FuncAttrs::WILLRETURN);
-        }
-        if self.will_terminate {
-            attrs.insert(FuncAttrs::WILLTERMINATE);
-        }
-
-        if !self.may_read_spaces.is_empty()
-            || self.may_read_unknown
-            || self.other.contains(OtherEffects::OBSERVE)
-        {
-            attrs.insert(FuncAttrs::MEM_READ);
-        }
-
-        if !self.may_write_spaces.is_empty()
-            || self.may_write_unknown
-            || self
-                .other
-                .intersects(OtherEffects::MUTATE | OtherEffects::ALLOC)
-        {
-            attrs.insert(FuncAttrs::MEM_WRITE);
-        }
-
-        attrs
-    }
-
     pub fn effect_summary(&self) -> InstEffectSummary {
         let mut bits = EffectBits::default();
 
@@ -322,10 +260,6 @@ impl FuncEffectSummary {
         }
 
         InstEffectSummary::from_bits(bits)
-    }
-
-    pub fn legacy_side_effect(&self) -> SideEffect {
-        self.effect_summary().to_legacy_side_effect()
     }
 
     pub fn always_returns(&self) -> bool {
@@ -1331,6 +1265,6 @@ mod tests {
         );
         assert!(summary.may_mutate_state());
         assert!(summary.may_transfer_control());
-        assert_eq!(summary.to_legacy_side_effect(), SideEffect::Control);
+        assert!(summary.may_write_memory() || summary.may_mutate_state());
     }
 }
