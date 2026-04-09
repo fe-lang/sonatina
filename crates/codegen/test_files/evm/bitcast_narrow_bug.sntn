@@ -1,0 +1,25 @@
+#! evm.case: ok
+#!   calldata:
+#!   expect: return u256(2)
+
+target = "evm-ethereum-osaka"
+
+func public %entry() {
+block0:
+    v0.i8 = bitcast 256.i256 i8;
+    v1.i1 = eq v0 0.i8;
+    v2.i16 = bitcast 255.i8 i16;
+    v3.i256 = sext v2 i256;
+    v4.i1 = eq v3 255.i256;
+    v5.i256 = zext v1 i256;
+    v6.i256 = zext v4 i256;
+    v7.i256 = add v5 v6;
+    mstore 0.i32 v7 i256;
+    evm_return 0.i8 32.i8;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}

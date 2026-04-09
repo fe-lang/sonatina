@@ -2169,11 +2169,41 @@ impl<'a> FunctionLegalizer<'a> {
         self.replace_with_aliases(inst, &[result]);
     }
 
+    fn preserve_collapsed_scalar_bitcast(&mut self, inst: InstId, from: ValueId) -> ValueId {
+        let src = self.width_of(from).expect("missing bitcast source width");
+        let dst = self
+            .single_result_width(inst)
+            .expect("missing bitcast result width");
+        if src == dst {
+            return from;
+        }
+
+        match dst {
+            ScalarWidth::Bool => unreachable!("collapsed scalar bitcasts never legalize to i1"),
+            ScalarWidth::Full256 => self.copy_i256_with_width(inst, from, ScalarWidth::Full256),
+            ScalarWidth::Narrow(_) => {
+                let result = self.canonicalize_to_width(inst, from, dst);
+                if result == from {
+                    self.copy_i256_with_width(inst, from, dst)
+                } else {
+                    result
+                }
+            }
+        }
+    }
+
     fn rewrite_bitcast(&mut self, inst: InstId, from: ValueId, ty: Type) {
         let dst_ty = self.types.legalize_type(self.ctx, ty);
         let src_ty = self.func.dfg.value_ty(from);
         if src_ty == dst_ty {
-            self.replace_with_aliases(inst, &[from]);
+            // Narrow and widened scalar bitcasts both collapse to `i256` on EVM, but they still
+            // need the destination width's semantics and provenance.
+            let result = if dst_ty == Type::I256 {
+                self.preserve_collapsed_scalar_bitcast(inst, from)
+            } else {
+                from
+            };
+            self.replace_with_aliases(inst, &[result]);
             return;
         }
 
