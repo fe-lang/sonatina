@@ -16,9 +16,9 @@ use super::{
     malloc_plan::MallocEscapeKind,
     ptr_escape::PtrEscapeSummary,
     static_arena_alloc::{
-        CallSiteObjects, FuncStackObjects, LiveInterval, ObjFacts, PackedObject, PeakPackItem,
-        PeakPackWorkspace, StackObj, StackObjId, StackObjKind, StaticArenaAllocCtx,
-        pack_objects_presorted, pack_zero_min_offset_peak_sorted,
+        CallSiteObjects, FuncStackObjects, LiveInterval, ObjFacts, PackedObject, PeakPackWorkspace,
+        RankedPeakPackItem, ReleaseSchedule, StackObj, StackObjId, StackObjKind,
+        StaticArenaAllocCtx, pack_objects_presorted, pack_zero_min_offset_peak_ranked,
     },
 };
 use sonatina_ir::isa::evm::Evm;
@@ -238,6 +238,10 @@ struct PlacementProblem<'a> {
     stack: &'a FuncStackObjects,
     sorted_objects: Vec<&'a StackObj>,
     sorted_calls: Vec<&'a CallSiteObjects>,
+    scratch_release: ReleaseSchedule,
+    stable_order_by_local: Vec<u32>,
+    stable_order_by_call: Vec<u32>,
+    stable_release: ReleaseSchedule,
     must_stable: BitSet<StackObjId>,
     must_stable_by_local: Vec<bool>,
     candidates: Vec<CandidateMeta>,
@@ -280,6 +284,51 @@ impl<'a> PlacementProblem<'a> {
         sorted_objects.sort_unstable_by_key(|obj| pack_sort_key(obj.id, obj.interval));
         let mut sorted_calls: Vec<_> = stack.call_sites.iter().collect();
         sorted_calls.sort_unstable_by_key(|call| (call.inst_pos, call.inst.as_u32()));
+        let scratch_release = ReleaseSchedule::from_end_ranks(
+            &sorted_objects
+                .iter()
+                .map(|obj| obj.interval.end)
+                .collect::<Vec<_>>(),
+            rank_count(sorted_objects.iter().map(|obj| obj.interval.end).max()),
+        );
+        let mut stable_order_by_local = vec![u32::MAX; sorted_objects.len()];
+        let mut stable_order_by_call = vec![u32::MAX; sorted_calls.len()];
+        let mut stable_end_ranks =
+            Vec::with_capacity(sorted_objects.len().saturating_add(sorted_calls.len()));
+        let mut local_pos = 0usize;
+        let mut call_pos = 0usize;
+        while local_pos < sorted_objects.len() || call_pos < sorted_calls.len() {
+            let take_local = match (sorted_objects.get(local_pos), sorted_calls.get(call_pos)) {
+                (Some(obj), Some(call)) => {
+                    let shadow_order = problem_shadow_order_id(stack.next_obj_id, call_pos);
+                    pack_sort_key(obj.id, obj.interval)
+                        <= (call.inst_pos, call.inst_pos, shadow_order)
+                }
+                (Some(_), None) => true,
+                (None, Some(_)) => false,
+                (None, None) => break,
+            };
+            let order_idx = stable_end_ranks.len() as u32;
+            if take_local {
+                stable_order_by_local[local_pos] = order_idx;
+                stable_end_ranks.push(sorted_objects[local_pos].interval.end);
+                local_pos += 1;
+            } else {
+                stable_order_by_call[call_pos] = order_idx;
+                stable_end_ranks.push(sorted_calls[call_pos].inst_pos);
+                call_pos += 1;
+            }
+        }
+        let stable_release = ReleaseSchedule::from_end_ranks(
+            &stable_end_ranks,
+            rank_count(
+                sorted_objects
+                    .iter()
+                    .map(|obj| obj.interval.end)
+                    .chain(sorted_calls.iter().map(|call| call.inst_pos))
+                    .max(),
+            ),
+        );
 
         let mut local_obj_index_by_id = vec![u32::MAX; stack.next_obj_id as usize];
         let mut must_stable_by_local = vec![false; sorted_objects.len()];
@@ -382,6 +431,10 @@ impl<'a> PlacementProblem<'a> {
             stack,
             sorted_objects,
             sorted_calls,
+            scratch_release,
+            stable_order_by_local,
+            stable_order_by_call,
+            stable_release,
             must_stable,
             must_stable_by_local,
             candidates: candidate_meta,
@@ -997,10 +1050,11 @@ fn scratch_peak_with_trial(
     let count = state.scratch_real_locals.len() + usize::from(insert_idx.is_some())
         - usize::from(skip_idx.is_some());
 
-    pack_zero_min_offset_peak_sorted(
+    pack_zero_min_offset_peak_ranked(
         &mut workspace.scratch_peak,
+        &problem.scratch_release,
         TrialLocalIter::new(&state.scratch_real_locals, insert_idx, skip_idx)
-            .map(|local_idx| peak_item_for_local(problem, local_idx)),
+            .map(|local_idx| ranked_scratch_item_for_local(problem, local_idx)),
         count,
     )
 }
@@ -1018,18 +1072,19 @@ fn stable_peak_with_trial(
         PlacementTrial::None => (None, None),
     };
     let mut real_iter = TrialLocalIter::new(&state.stable_real_locals, insert_idx, skip_idx)
-        .map(|local_idx| peak_item_for_local(problem, local_idx))
+        .map(|local_idx| ranked_stable_real_item_for_local(problem, local_idx))
         .peekable();
     let mut shadow_iter = TrialShadowCallIter::new(problem, state, trial).peekable();
     let count = state.stable_real_locals.len() + usize::from(insert_idx.is_some())
         - usize::from(skip_idx.is_some())
         + shadow_call_count_with_trial(problem, state, trial);
 
-    pack_zero_min_offset_peak_sorted(
+    pack_zero_min_offset_peak_ranked(
         &mut workspace.stable_peak,
+        &problem.stable_release,
         std::iter::from_fn(move || match (real_iter.peek(), shadow_iter.peek()) {
             (Some(real), Some(shadow)) => {
-                if peak_real_sorts_before_shadow(real, shadow) {
+                if real.order_idx < shadow.order_idx {
                     real_iter.next()
                 } else {
                     shadow_iter.next()
@@ -1300,7 +1355,7 @@ impl<'a> TrialShadowCallIter<'a> {
 }
 
 impl Iterator for TrialShadowCallIter<'_> {
-    type Item = PeakPackItem;
+    type Item = RankedPeakPackItem;
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
@@ -1344,26 +1399,37 @@ impl Iterator for TrialShadowCallIter<'_> {
             }
 
             let call = self.problem.sorted_calls[idx as usize];
-            return Some(PeakPackItem {
-                start: call.inst_pos,
-                end: call.inst_pos,
+            return Some(RankedPeakPackItem {
+                order_idx: self.problem.stable_order_by_call[idx as usize],
+                start_rank: call.inst_pos,
                 size_words: shadow_words,
             });
         }
     }
 }
 
-fn peak_item_for_local(problem: &PlacementProblem<'_>, local_idx: u32) -> PeakPackItem {
+fn ranked_scratch_item_for_local(
+    problem: &PlacementProblem<'_>,
+    local_idx: u32,
+) -> RankedPeakPackItem {
     let obj = problem.sorted_objects[local_idx as usize];
-    PeakPackItem {
-        start: obj.interval.start,
-        end: obj.interval.end,
+    RankedPeakPackItem {
+        order_idx: local_idx,
+        start_rank: obj.interval.start,
         size_words: obj.size_words,
     }
 }
 
-fn peak_real_sorts_before_shadow(real: &PeakPackItem, shadow: &PeakPackItem) -> bool {
-    (real.start, real.end) <= (shadow.start, shadow.end)
+fn ranked_stable_real_item_for_local(
+    problem: &PlacementProblem<'_>,
+    local_idx: u32,
+) -> RankedPeakPackItem {
+    let obj = problem.sorted_objects[local_idx as usize];
+    RankedPeakPackItem {
+        order_idx: problem.stable_order_by_local[local_idx as usize],
+        start_rank: obj.interval.start,
+        size_words: obj.size_words,
+    }
 }
 
 fn shadow_call_count_with_trial(
@@ -1540,8 +1606,18 @@ fn abs_addr_for_word(word: u32) -> u32 {
         .expect("absolute address overflow")
 }
 
+fn rank_count(max_rank: Option<u32>) -> usize {
+    max_rank.map_or(0, |rank| rank as usize + 1)
+}
+
 fn pack_sort_key(id: StackObjId, interval: LiveInterval) -> (u32, u32, u32) {
     (interval.start, interval.end, id.as_u32())
+}
+
+fn problem_shadow_order_id(next_shadow_base_id: u32, call_idx: usize) -> u32 {
+    next_shadow_base_id
+        .checked_add(call_idx as u32)
+        .expect("shadow order id overflow")
 }
 
 #[cfg(debug_assertions)]
