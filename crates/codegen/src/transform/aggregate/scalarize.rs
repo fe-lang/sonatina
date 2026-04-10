@@ -83,14 +83,23 @@ impl AggregateScalarize {
             self.find_promotable_roots(func, &module, local_object_args);
         let scalarizable = loop {
             let scalarizable = self.compute_scalarizable_aggregates(func, &module, &projection_of);
-            let removed = self.filter_promotable_roots(
+            let changed = self.filter_promotable_roots(
                 func,
                 &module,
                 &mut promoted_roots,
                 &mut projection_of,
                 &scalarizable,
             );
-            if !removed {
+            if !changed {
+                let kept: FxHashSet<ValueId> = promoted_roots
+                    .iter()
+                    .map(|promoted| promoted.root_value)
+                    .collect();
+                debug_assert!(func.dfg.value_ids().all(|value| {
+                    projection_of
+                        .get(value)
+                        .is_none_or(|projection| kept.contains(&projection.root_value.value()))
+                }));
                 break scalarizable;
             }
         };
@@ -777,14 +786,16 @@ impl AggregateScalarize {
             .iter()
             .map(|promoted| promoted.root_value)
             .collect();
+        let mut projection_changed = false;
         for value in func.dfg.value_ids() {
             if let Some(projection) = projection_of.get(value)
                 && !kept.contains(&projection.root_value.value())
             {
                 projection_of.clear(value);
+                projection_changed = true;
             }
         }
-        promoted_roots.len() != before
+        promoted_roots.len() != before || projection_changed
     }
 
     fn promotable_root_can_scalarize(
@@ -2627,9 +2638,7 @@ fn is_dead_inst_tree(
     if let Some(&cached) = memo.get(&inst) {
         return cached;
     }
-    if !visiting.insert(inst)
-        || func.dfg.side_effect(inst).has_effect()
-        || func.dfg.is_terminator(inst)
+    if !visiting.insert(inst) || !func.dfg.has_value_semantics(inst) || func.dfg.is_terminator(inst)
     {
         memo.insert(inst, false);
         return false;
@@ -2888,6 +2897,55 @@ func private %f() -> i256 {
                     );
                 }
             }
+        });
+    }
+
+    #[test]
+    fn scalarize_recomputes_after_clearing_non_promoted_root_projections() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @slice = { i256, i256 };
+
+func private %f() -> i256 {
+    block0:
+        v0.*@slice = alloca @slice;
+        v1.*@slice = alloca @slice;
+        v2.i256 = ptr_to_int v1 i256;
+        mstore 0.i32 v2 i256;
+        v3.@slice = mload v1 @slice;
+        mstore v0 v3 @slice;
+        v4.@slice = mload v0 @slice;
+        v5.i256 = extract_value v4 0.i8;
+        return v5;
+}
+"#,
+        );
+        let func_ref = lookup_func(&module, "f");
+        let changed = module
+            .func_store
+            .modify(func_ref, |func| AggregateScalarize::default().run(func));
+
+        assert!(
+            !changed,
+            "scalarization should reject roots that only looked scalarizable through a non-promoted root"
+        );
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            assert!(
+                dumped.contains("v0.*@slice = alloca @slice;")
+                    && dumped.contains("v1.*@slice = alloca @slice;"),
+                "both allocas should remain when the fixpoint removes the stale projection:\n{dumped}"
+            );
+            assert!(
+                dumped.contains("v3.@slice = mload v1 @slice;")
+                    && dumped.contains("mstore v0 v3 @slice;")
+                    && dumped.contains("v4.@slice = mload v0 @slice;")
+                    && dumped.contains("v5.i256 = extract_value v4 0.i8;"),
+                "aggregate transfer through the promoted candidate should stay explicit:\n{dumped}"
+            );
         });
     }
 

@@ -1,9 +1,9 @@
 target = "evm-ethereum-london"
 
-# check: block1:
-# nextln:   jump block4;
+# check: block0:
+# nextln:   br v0 block4 block2;
 # nextln: 
-# nextln: block2:
+# check: block2:
 # nextln:   return 0.i1;
 # nextln: 
 # nextln: block4:

@@ -122,10 +122,7 @@ impl LicmSolver {
             return true;
         }
 
-        !(func.dfg.side_effect(inst_id).has_effect()
-            || func.dfg.is_branch(inst_id)
-            || func.dfg.is_phi(inst_id)
-            || func.dfg.is_terminator(inst_id))
+        func.dfg.can_speculate(inst_id)
     }
 
     /// Returns preheader of the loop, if one can be used/created.

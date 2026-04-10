@@ -1,0 +1,257 @@
+#! evm.config: { vcode: true, opt: 2 }
+#! evm.case: ok
+#!   calldata:
+#!   expect: return u256(42)
+
+target = "evm-ethereum-osaka"
+
+type @Addr = { i256 };
+type @Bytes = { i256, i256 };
+type @Cursor = { @Bytes, i256 };
+type @Decoder = { @Cursor, i256 };
+type @CallData = { i256, i256 };
+
+func private %add_0(v0.i256, v1.i256) -> i256 {
+block0:
+    (v2.i256, v3.i1) = uaddo v0 v1;
+    br v3 block1 block2;
+
+block1:
+    evm_revert 0.i256 0.i256;
+
+block2:
+    return v2;
+}
+
+func private %add_1(v0.i256, v1.i256) -> i256 {
+block0:
+    (v2.i256, v3.i1) = uaddo v0 v1;
+    br v3 block1 block2;
+
+block1:
+    evm_revert 0.i256 0.i256;
+
+block2:
+    return v2;
+}
+
+func private %eq_0(v0.i256, v1.i256) -> i1 {
+block0:
+    v2.i1 = eq v0 v1;
+    return v2;
+}
+
+func private %gt_0(v0.i256, v1.i256) -> i1 {
+block0:
+    v2.i1 = gt v0 v1;
+    return v2;
+}
+
+func private %lt_0(v0.i256, v1.i256) -> i1 {
+block0:
+    v2.i1 = lt v0 v1;
+    return v2;
+}
+
+func private %shl_0(v0.i256, v1.i256) -> i256 {
+block0:
+    v2.i256 = shl v1 v0;
+    return v2;
+}
+
+func private %encode_to_ptr(v0.i256) {
+block0:
+    return;
+}
+
+func private %encode_calldata(v0.i32) -> @CallData {
+block0:
+    v2.i256 = zext v0 i256;
+    v4.i256 = call %shl_0 v2 224.i256;
+    v7.*i8 = evm_malloc 4.i256;
+    v8.i256 = ptr_to_int v7 i256;
+    mstore v8 v4 i256;
+    v12.i256 = call %add_0 v8 4.i256;
+    call %encode_to_ptr v12;
+    v14.objref<@CallData> = obj.alloc @CallData;
+    v15.objref<i256> = obj.proj v14 0.i256;
+    obj.store v15 v8;
+    v17.objref<i256> = obj.proj v14 1.i256;
+    obj.store v17 4.i256;
+    v18.@CallData = obj.load v14;
+    return v18;
+}
+
+func private %new_cursor(v0.@Bytes) -> @Cursor {
+block0:
+    v2.objref<@Cursor> = obj.alloc @Cursor;
+    v3.objref<@Bytes> = obj.proj v2 0.i256;
+    obj.store v3 v0;
+    v5.objref<i256> = obj.proj v2 1.i256;
+    obj.store v5 0.i256;
+    v6.@Cursor = obj.load v2;
+    return v6;
+}
+
+func private %new_decoder(v0.@Bytes) -> @Decoder {
+block0:
+    v1.@Cursor = call %new_cursor v0;
+    v3.objref<@Decoder> = obj.alloc @Decoder;
+    v4.objref<@Cursor> = obj.proj v3 0.i256;
+    obj.store v4 v1;
+    v6.objref<i256> = obj.proj v3 1.i256;
+    obj.store v6 0.i256;
+    v7.@Decoder = obj.load v3;
+    return v7;
+}
+
+func private %len_0(v0.@Bytes) -> i256 {
+block0:
+    v1.objref<@Bytes> = obj.alloc @Bytes;
+    obj.store v1 v0;
+    v3.objref<i256> = obj.proj v1 1.i256;
+    v4.i256 = obj.load v3;
+    return v4;
+}
+
+func private %word_at_0(v0.@Bytes, v1.i256) -> i256 {
+block0:
+    v2.objref<@Bytes> = obj.alloc @Bytes;
+    obj.store v2 v0;
+    v4.objref<i256> = obj.proj v2 0.i256;
+    v5.i256 = obj.load v4;
+    v6.i256 = call %add_1 v5 v1;
+    v7.i256 = mload v6 i256;
+    return v7;
+}
+
+func private %read_word(v0.objref<@Decoder>) -> i256 {
+block0:
+    v2.objref<@Cursor> = obj.proj v0 0.i256;
+    v3.@Cursor = obj.load v2;
+    v4.objref<@Cursor> = obj.proj v0 0.i256;
+    v5.objref<@Bytes> = obj.proj v4 0.i256;
+    v6.@Bytes = obj.load v5;
+    v7.i256 = call %len_0 v6;
+    v8.objref<@Cursor> = obj.proj v0 0.i256;
+    v9.@Cursor = obj.load v8;
+    v10.objref<@Cursor> = obj.proj v0 0.i256;
+    v12.objref<i256> = obj.proj v10 1.i256;
+    v13.i256 = obj.load v12;
+    v15.i256 = call %add_1 v13 32.i256;
+    v16.i1 = call %gt_0 v15 v7;
+    br v16 block1 block2;
+
+block1:
+    evm_revert 0.i256 0.i256;
+
+block2:
+    jump block3;
+
+block3:
+    v18.objref<@Cursor> = obj.proj v0 0.i256;
+    v19.@Cursor = obj.load v18;
+    v20.objref<@Cursor> = obj.proj v0 0.i256;
+    v21.objref<@Bytes> = obj.proj v20 0.i256;
+    v22.@Bytes = obj.load v21;
+    v23.objref<@Cursor> = obj.proj v0 0.i256;
+    v24.@Cursor = obj.load v23;
+    v25.objref<@Cursor> = obj.proj v0 0.i256;
+    v26.objref<i256> = obj.proj v25 1.i256;
+    v27.i256 = obj.load v26;
+    v28.i256 = call %word_at_0 v22 v27;
+    v30.objref<@Cursor> = obj.proj v0 0.i256;
+    v31.objref<i256> = obj.proj v30 1.i256;
+    obj.store v31 v15;
+    return v28;
+}
+
+func private %decode_0(v0.objref<@Decoder>) -> i256 {
+block0:
+    v1.i256 = call %read_word v0;
+    return v1;
+}
+
+func private %decode_returndata(v0.i256, v1.i256) -> i256 {
+block0:
+    v3.i1 = call %lt_0 v1 32.i256;
+    br v3 block1 block2;
+
+block1:
+    evm_revert 0.i256 0.i256;
+
+block2:
+    jump block3;
+
+block3:
+    v5.objref<@Bytes> = obj.alloc @Bytes;
+    v7.objref<i256> = obj.proj v5 0.i256;
+    obj.store v7 v0;
+    v10.objref<i256> = obj.proj v5 1.i256;
+    obj.store v10 v1;
+    v11.@Bytes = obj.load v5;
+    v12.@Decoder = call %new_decoder v11;
+    v13.objref<@Decoder> = obj.alloc @Decoder;
+    obj.store v13 v12;
+    v14.i256 = call %decode_0 v13;
+    return v14;
+}
+
+func private %call_target(v0.@Addr, v1.i256, v2.i256) -> i256 {
+block0:
+    v3.objref<@Addr> = obj.alloc @Addr;
+    v4.objref<@CallData> = obj.alloc @CallData;
+    obj.store v3 v0;
+    v6.@CallData = call %encode_calldata -810667497.i32;
+    obj.store v4 v6;
+    v8.objref<i256> = obj.proj v3 0.i256;
+    v9.i256 = obj.load v8;
+    v10.objref<i256> = obj.proj v4 0.i256;
+    v11.i256 = obj.load v10;
+    v13.objref<i256> = obj.proj v4 1.i256;
+    v14.i256 = obj.load v13;
+    v15.i256 = evm_call v1 v9 v2 v11 v14 0.i256 0.i256;
+    v16.i256 = evm_return_data_size;
+    v17.*i8 = evm_malloc v16;
+    v18.i256 = ptr_to_int v17 i256;
+    evm_return_data_copy v18 0.i256 v16;
+    v20.i1 = call %eq_0 v15 0.i256;
+    br v20 block1 block2;
+
+block1:
+    evm_revert v18 v16;
+
+block2:
+    jump block3;
+
+block3:
+    v25.i256 = call %decode_returndata v18 v16;
+    return v25;
+}
+
+func public %entry() {
+block0:
+    v0.i256 = evm_calldata_size;
+    v1.i1 = eq v0 0.i256;
+    br v1 block1 block2;
+
+block1:
+    v2.objref<@Addr> = obj.alloc @Addr;
+    v3.i256 = evm_address;
+    v4.objref<i256> = obj.proj v2 0.i256;
+    obj.store v4 v3;
+    v5.@Addr = obj.load v2;
+    v6.i256 = call %call_target v5 100000.i256 0.i256;
+    mstore 0.i32 v6 i256;
+    evm_return 0.i8 32.i8;
+
+block2:
+    mstore 0.i32 42.i256 i256;
+    evm_return 0.i8 32.i8;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}

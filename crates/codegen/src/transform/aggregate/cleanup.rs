@@ -51,16 +51,11 @@ impl DeadPureInstCleanup {
 }
 
 fn is_dead_pure_inst(func: &Function, inst: InstId) -> bool {
-    if !func.layout.is_inst_inserted(inst) || func.dfg.side_effect(inst).has_effect() {
+    if !func.layout.is_inst_inserted(inst) || !func.dfg.can_drop_if_unused(inst) {
         return false;
     }
 
-    let results = func.dfg.inst_results(inst);
-    if results.is_empty() {
-        return false;
-    }
-
-    results.iter().copied().all(|result| {
+    func.dfg.inst_results(inst).iter().copied().all(|result| {
         !func
             .dfg
             .users(result)

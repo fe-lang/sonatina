@@ -602,8 +602,9 @@ fn exit_commits_visible_writes(func: &Function, block: sonatina_ir::BlockId) -> 
 
     if <&control_flow::Unreachable as InstDowncast>::downcast(is, inst).is_some() {
         return preceding_terminal_call(func, term).is_some_and(|call| {
-            let effects = func.ctx().func_effects(call.callee());
-            effects.noreturn && effects.may_commit_visible_writes
+            func.ctx()
+                .func_effects(call.callee())
+                .is_committing_noreturn()
         });
     }
 

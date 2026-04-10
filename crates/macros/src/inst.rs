@@ -497,7 +497,7 @@ impl InstStruct {
         let kind = self.kind.to_tokens();
         quote! {
             impl crate::Inst for #struct_name {
-                fn side_effect(&self) -> crate::inst::SideEffect {
+                fn declared_effect_hint(&self) -> crate::inst::SideEffect {
                     #side_effect
                 }
 

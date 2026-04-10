@@ -28,7 +28,8 @@ pub use cfg::ControlFlowGraph;
 pub use dfg::{Block, BlockId, DataFlowGraph};
 pub use effects::{
     AccessKind, AccessLoc, AddressSpaceDesc, AddressSpaceId, AddressSpaceInfo, AddressSpaceKind,
-    FuncEffectSummary, InstEffects, MemoryAccess, OtherEffects,
+    EffectBits, EffectCostClass, FuncEffectSummary, InstEffectSummary, InstEffects, MemoryAccess,
+    OtherEffects,
 };
 pub use function::{Function, Signature};
 pub use global_variable::{GlobalVariableData, GlobalVariableRef};

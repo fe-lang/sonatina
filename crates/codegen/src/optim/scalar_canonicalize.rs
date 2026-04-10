@@ -93,7 +93,7 @@ impl ScalarCanonicalize {
                 }
             }
 
-            prune_dead_single_result_insts(func);
+            prune_dead_pure_insts(func);
         }
     }
 
@@ -410,19 +410,21 @@ fn remove_rewritten_inst(func: &mut Function, inst: InstId) {
     func.erase_inst(inst);
 }
 
-fn prune_dead_single_result_insts(func: &mut Function) {
+fn prune_dead_pure_insts(func: &mut Function) {
     let blocks: Vec<_> = func.layout.iter_block().collect();
     for block in blocks {
         let insts: Vec<_> = func.layout.iter_inst(block).collect();
         for inst in insts {
-            if !func.layout.is_inst_inserted(inst) || func.dfg.inst(inst).side_effect().has_effect()
-            {
+            if !func.layout.is_inst_inserted(inst) || !func.dfg.can_drop_if_unused(inst) {
                 continue;
             }
-            let &[result] = func.dfg.inst_results(inst) else {
-                continue;
-            };
-            if func.dfg.users_num(result) != 0 {
+
+            if func
+                .dfg
+                .inst_results(inst)
+                .iter()
+                .any(|&result| func.dfg.users_num(result) != 0)
+            {
                 continue;
             }
 
@@ -569,6 +571,33 @@ block0:
 
         let dumped = dump_func(&module, func_ref);
         assert!(dumped.contains(" = is_zero v0;"), "{dumped}");
+        assert!(!dumped.contains(" = trunc "), "{dumped}");
+    }
+
+    #[test]
+    fn prunes_dead_multi_result_insts_after_rewrite() {
+        let (module, func_ref) = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %f(v0.i8, v1.i256, v2.i256) -> i8 {
+block0:
+    (v3.i256, v4.i1) = uaddo v1 v2;
+    v5.i16 = zext v0 i16;
+    v6.i8 = trunc v5 i8;
+    return v6;
+}
+"#,
+        );
+
+        module.func_store.modify(func_ref, |func| {
+            assert!(ScalarCanonicalize::new().run(func));
+        });
+
+        let dumped = dump_func(&module, func_ref);
+        assert!(dumped.contains("return v0;"), "{dumped}");
+        assert!(!dumped.contains("uaddo"), "{dumped}");
+        assert!(!dumped.contains(" = zext "), "{dumped}");
         assert!(!dumped.contains(" = trunc "), "{dumped}");
     }
 

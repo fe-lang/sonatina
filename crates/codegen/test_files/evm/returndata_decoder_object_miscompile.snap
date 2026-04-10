@@ -1,0 +1,158 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: "String::from_utf8(out).unwrap()"
+input_file: test_files/evm/returndata_decoder_object_miscompile.sntn
+---
+evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
+
+object: Contract
+  section runtime: 169 bytes
+  total: 169 bytes
+
+functions:
+  add_1: ir_blocks=3 ir_insts=5 vcode_ops=16 fixups=1 imm_bytes=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
+  decode_returndata: ir_blocks=5 ir_insts=10 vcode_ops=38 fixups=6 imm_bytes=2
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
+  entry: ir_blocks=7 ir_insts=24 vcode_ops=73 fixups=6 imm_bytes=11
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
+
+evm:
+  case ok: calldata_len=0 success reason=Return gas_used=21523 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=523
+
+
+--------------- DEBUG ---------------
+
+// func private %add_1(v0.i256, v1.i256) -> i256
+add_1:
+  block0:
+    JUMPDEST
+    SWAP1  // v7.i256 = add v0 v1;
+    DUP2
+    ADD
+    SWAP1  // v8.i1 = lt v7 v0;
+    DUP2
+    LT
+    PUSH1 section_unit0  // br v8 block1 block2;
+    JUMPI
+  block2:
+    JUMPDEST
+    SWAP1  // return v7;
+    JUMP
+
+// func private %decode_returndata(v0.i256, v1.i256) -> i256
+decode_returndata:
+  block0:
+    JUMPDEST
+    PUSH1 0x20 (32)  // v13.i1 = lt v1 32.i256;
+    DUP3
+    LT
+    PUSH1 section_unit0  // br v13 block1 block9;
+    JUMPI
+  block9:
+    JUMPDEST
+    PUSH0  // v31.i256 = call %add_1 0.i256 32.i256;
+    PUSH1 0x20 (32)
+    PUSH1 `pc + (4)`
+    SWAP2
+    PUSH1 FuncRef(1)
+    JUMP
+    JUMPDEST
+    SWAP1  // v32.i1 = gt v31 v1;
+    SWAP2
+    SWAP1
+    GT
+    PUSH1 section_unit0  // br v32 block6 block7;
+    JUMPI
+  block7:
+    PUSH0  // v35.i256 = call %add_1 v0 0.i256;
+    PUSH1 `pc + (4)`
+    SWAP2
+    PUSH1 FuncRef(1)
+    JUMP
+    JUMPDEST
+    MLOAD  // v36.i256 = mload v35 i256;
+    SWAP1  // return v36;
+    JUMP
+
+// func public %entry()
+entry:
+  block0:
+    CALLDATASIZE  // v0.i256 = evm_calldata_size;
+    PUSH1 block2  // br v13 block1 block2;
+    JUMPI
+  block1:
+    ADDRESS  // v3.i256 = evm_address;
+    PUSH1 0xa0 (160)  // v17.*i256 = evm_malloc 4.i256;
+    PUSH32 0xcfae321700000000000000000000000000000000000000000000000000000000 (93936536753403694139279681939632466665208136910392087765254240489517648707584)  // mstore v18 -21855552483912501284291303069055441188061847755248476274203343518395480932352.i256 i256;
+    DUP2
+    MSTORE
+    PUSH1 0x4 (4)  // v32.i256 = add v18 4.i256;
+    DUP2
+    ADD
+    DUP2  // v33.i1 = lt v32 v18;
+    SWAP1
+    LT
+    PUSH1 section_unit0  // br v33 block5 block6;
+    JUMPI
+  block6:
+    JUMPDEST
+    PUSH1 0x4 (4)  // v23.i256 = evm_call 100000.i256 v3 0.i256 v18 4.i256 0.i256 0.i256;
+    PUSH0
+    SWAP2
+    PUSH0
+    PUSH0
+    SWAP5
+    PUSH3 0x186a0 (100000)
+    CALL
+    RETURNDATASIZE  // v24.i256 = evm_return_data_size;
+    DUP1  // v25.*i256 = evm_malloc v24;
+    POP
+    PUSH1 0x40 (64)
+    MLOAD
+    PUSH1 0x9f (159)
+    DUP2
+    GT
+    PUSH1 `pc + (4)`
+    JUMPI
+    POP
+    PUSH1 0xa0 (160)
+    JUMPDEST
+    DUP2  // evm_return_data_copy v26 0.i256 v24;
+    PUSH0
+    DUP3
+    RETURNDATACOPY
+    SWAP2  // v27.i1 = is_zero v23;
+    PUSH1 block8  // br v27 block7 block8;
+    JUMPI
+  block7:
+    SWAP1  // evm_revert v26 v24;
+    REVERT
+  block8:
+    JUMPDEST
+    PUSH1 `pc + (4)`  // v28.i256 = call %decode_returndata v26 v24;
+    SWAP2
+    PUSH1 FuncRef(14)
+    JUMP
+    JUMPDEST
+    PUSH0  // mstore 0.i256 v28 i256;
+    MSTORE
+    PUSH1 0x20 (32)  // evm_return 0.i256 32.i256;
+    PUSH0
+    RETURN
+  block2:
+    JUMPDEST
+    PUSH1 0x2a (42)  // mstore 0.i256 42.i256 i256;
+    PUSH0
+    MSTORE
+    PUSH1 0x20 (32)  // evm_return 0.i256 32.i256;
+    PUSH0
+    RETURN
+
+// synthetic section unit
+__evm_shared_tail_0:
+  block0:
+    JUMPDEST
+    PUSH0
+    PUSH0
+    REVERT

@@ -96,17 +96,17 @@ __Bench_recv_0_4:
 __Bench_recv_0_5:
   block0:
     JUMPDEST
-    DUP1  // v32.*i256 = gep v0 0.i256 1.i256;
+    DUP1  // v31.*i256 = gep v0 0.i256 1.i256;
     PUSH1 0x20 (32)
     ADD
-    MLOAD  // v33.i256 = mload v32 i256;
-    SWAP1  // v31.i256 = mload v30 i256;
+    MLOAD  // v32.i256 = mload v31 i256;
+    SWAP1  // v30.i256 = mload v29 i256;
     MLOAD
     PUSH0  // jump block3;
     DUP3
   block3:
     JUMPDEST
-    DUP3  // v12.i1 = lt v11 v31;
+    DUP3  // v12.i1 = lt v11 v30;
     DUP3
     LT
     PUSH1 block4  // br v12 block4 block1;
@@ -120,7 +120,7 @@ __Bench_recv_0_5:
     JUMP
   block4:
     JUMPDEST
-    DUP4  // v27.i256 = xor v11 v33;
+    DUP4  // v27.i256 = xor v11 v32;
     DUP3
     XOR
     XOR  // v14.i256 = xor v9 v27;
@@ -281,22 +281,22 @@ __Bench_runtime:
     RETURN
   block34:
     JUMPDEST
-    DUP2  // v98.i256 = add v88 v90;
+    DUP2  // v96.i256 = add v88 v90;
     DUP2
     ADD
-    SWAP1  // v99.i1 = lt v98 v88;
+    SWAP1  // v97.i1 = lt v96 v88;
     DUP2
     LT
-    PUSH1 block36  // br v99 block47 block37;
+    PUSH1 block36  // br v97 block47 block37;
     JUMPI
   block37:
-    PUSH1 0x1 (1)  // v100.i256 = add v90 1.i256;
+    PUSH1 0x1 (1)  // v98.i256 = add v90 1.i256;
     DUP3
     ADD
-    SWAP2  // v101.i1 = lt v100 v90;
+    SWAP2  // v99.i1 = lt v98 v90;
     DUP3
     LT
-    ISZERO  // br v101 block49 block48;
+    ISZERO  // br v99 block49 block48;
     PUSH1 block33
     JUMPI
   block36:

@@ -2,7 +2,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
     BlockId, Function, InstId, InstSetExt, Type, ValueId,
     cfg::ControlFlowGraph,
-    inst::{SideEffect, evm::inst_set::EvmInstKind},
+    inst::evm::inst_set::EvmInstKind,
     isa::{Isa, evm::Evm},
 };
 
@@ -682,7 +682,7 @@ fn is_escape_like_root_use(
         EvmInstKind::EvmMstore8(mstore8) => rooted_operands.contains(mstore8.val()),
         EvmInstKind::EvmSstore(sstore) => rooted_operands.contains(sstore.val()),
         EvmInstKind::EvmTstore(tstore) => rooted_operands.contains(tstore.val()),
-        _ => function.dfg.inst(inst).side_effect() == SideEffect::Write,
+        _ => function.dfg.may_write_memory(inst),
     }
 }
 

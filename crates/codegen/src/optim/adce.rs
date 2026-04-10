@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 
 use cranelift_entity::SecondaryMap;
-use sonatina_ir::{BlockId, Function, InstId, inst::SideEffect};
+use sonatina_ir::{BlockId, Function, InstId};
 
 use crate::{
     cfg_edit::{CfgEditor, CleanupMode, remove_phi_incoming_from, simplify_trivial_phis_in_block},
@@ -303,10 +303,7 @@ fn is_live_root_inst(func: &Function, inst_id: InstId) -> bool {
         return !is_removable_pure_call(func, inst_id);
     }
 
-    matches!(
-        func.dfg.side_effect(inst_id),
-        SideEffect::Write | SideEffect::Control
-    )
+    func.dfg.may_mutate_state(inst_id) || func.dfg.may_transfer_control(inst_id)
 }
 
 #[cfg(test)]

@@ -7,7 +7,6 @@ pub mod checked_arith_elim;
 pub(crate) mod const_eval;
 pub mod dead_arg;
 pub mod dead_func;
-pub mod egraph;
 pub mod gvn;
 pub mod inliner;
 pub mod known_bits_simplify;

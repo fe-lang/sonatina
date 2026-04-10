@@ -3,12 +3,10 @@
 
 target = "evm-ethereum-london"
 
-# regex: VALUE=\bv\d+\b
 # check:  block0:
 # nextln:    jump block1;
 # nextln: 
 # nextln: block1:
-# nextln:     $(var1=$VALUE).i1 = phi (0.i1 block0) (1.i1 block7);
 # nextln:     v1.i32 = phi (-2022207984.i32 block0) (0.i32 block7);
 # nextln:     br v0 block3 block2;
 # nextln: 
@@ -16,17 +14,17 @@ target = "evm-ethereum-london"
 # nextln:     jump block3;
 # nextln: 
 # nextln: block3:
-# nextln:     $(var2=$VALUE).i1 = phi ($var1 block1) (0.i1 block2);
 # nextln:     v2.i32 = phi (-1.i32 block2) (v1 block1);
-# nextln:     br $var2 block6 block7;
+# nextln:     v3.i1 = eq v2 0.i32;
+# nextln:     br v3 block6 block7;
 # nextln: 
 # nextln: block6:
 # nextln:     jump block7;
 # nextln: 
 # nextln: block7:
-# nextln:     $(var3=$VALUE).i1 = phi ($var2 block3) (1.i1 block6);
+# nextln:     v11.i1 = phi (v3 block3) (1.i1 block6);
 # nextln:     v4.i32 = phi (v2 block3) (0.i32 block6);
-# nextln:     br $var3 block8 block1;
+# nextln:     br v11 block8 block1;
 # nextln: 
 # nextln: block8:
 # nextln:     return;
