@@ -2,7 +2,10 @@ use cranelift_entity::{EntityRef, SecondaryMap};
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{BlockId, InstId, Module, ValueId, module::FuncRef};
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    cmp::Ordering,
+    collections::{BTreeMap, BTreeSet},
+};
 
 use crate::{
     bitset::BitSet,
@@ -224,14 +227,23 @@ struct FuncPlacementScoreWorkspace {
     stable_peak: PeakPackWorkspace,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct EventRange {
+    start_order: u32,
+    end_order: u32,
+}
+
 #[derive(Clone, Debug)]
 struct CandidateMeta {
     obj_id: StackObjId,
     local_idx: u32,
     size_words: u32,
+    scratch_lb_range: EventRange,
+    stable_lb_range: EventRange,
     recursive_access_cost: u64,
     shadow_copy_words: u64,
     live_call_indices: SmallVec<[u32; 4]>,
+    live_call_order_indices: SmallVec<[u32; 4]>,
 }
 
 struct PlacementProblem<'a> {
@@ -239,9 +251,11 @@ struct PlacementProblem<'a> {
     sorted_objects: Vec<&'a StackObj>,
     sorted_calls: Vec<&'a CallSiteObjects>,
     scratch_release: ReleaseSchedule,
+    scratch_lb_range_by_local: Vec<EventRange>,
     stable_order_by_local: Vec<u32>,
     stable_order_by_call: Vec<u32>,
     stable_release: ReleaseSchedule,
+    stable_lb_range_by_local: Vec<EventRange>,
     must_stable: BitSet<StackObjId>,
     must_stable_by_local: Vec<bool>,
     candidates: Vec<CandidateMeta>,
@@ -258,6 +272,7 @@ struct PlacementProblem<'a> {
 #[derive(Clone, Debug)]
 struct PlacementState {
     promoted: Vec<bool>,
+    promoted_count: usize,
     shadow_words_by_call: Vec<u32>,
     shadow_copy_words: u64,
     recursive_access_cost: u64,
@@ -266,12 +281,60 @@ struct PlacementState {
     nonzero_shadow_calls: Vec<u32>,
 }
 
-#[derive(Clone, Copy)]
-enum PlacementTrial {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PlacementMove {
     None,
     Add(usize),
     Remove(usize),
+    Swap { add_idx: usize, remove_idx: usize },
 }
+
+#[derive(Clone, Copy, Debug)]
+struct MoveLocalDelta {
+    local_idx: u32,
+    scratch_delta: i64,
+    stable_delta: i64,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct MoveCallDelta {
+    call_idx: u32,
+    stable_shadow_delta: i64,
+}
+
+struct PlacementLowerBoundState {
+    scratch_tree: MaxAddSegTree,
+    stable_tree: MaxAddSegTree,
+}
+
+struct MaxAddSegTree {
+    len: usize,
+    max: Vec<i64>,
+    lazy: Vec<i64>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct BoundMoveEval {
+    mv: PlacementMove,
+    lower_bound: FuncPlacementScore,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ExactMoveEval {
+    mv: PlacementMove,
+    exact: FuncPlacementScore,
+}
+
+#[derive(Default)]
+struct SearchWorkBuffers {
+    one_flip_bounds: Vec<BoundMoveEval>,
+    swap_bounds: Vec<BoundMoveEval>,
+    add_shortlist: Vec<usize>,
+    remove_shortlist: Vec<usize>,
+}
+
+const SWAP_FULL_PAIR_LIMIT: usize = 25_000;
+const SWAP_SHORTLIST_PER_METRIC: usize = 8;
 
 impl<'a> PlacementProblem<'a> {
     fn new(
@@ -284,15 +347,29 @@ impl<'a> PlacementProblem<'a> {
         sorted_objects.sort_unstable_by_key(|obj| pack_sort_key(obj.id, obj.interval));
         let mut sorted_calls: Vec<_> = stack.call_sites.iter().collect();
         sorted_calls.sort_unstable_by_key(|call| (call.inst_pos, call.inst.as_u32()));
+        let scratch_start_ranks: Vec<u32> = sorted_objects
+            .iter()
+            .map(|obj| obj.interval.start)
+            .collect();
+        let scratch_end_ranks: Vec<u32> =
+            sorted_objects.iter().map(|obj| obj.interval.end).collect();
         let scratch_release = ReleaseSchedule::from_end_ranks(
-            &sorted_objects
-                .iter()
-                .map(|obj| obj.interval.end)
-                .collect::<Vec<_>>(),
-            rank_count(sorted_objects.iter().map(|obj| obj.interval.end).max()),
+            &scratch_end_ranks,
+            rank_count(scratch_end_ranks.iter().copied().max()),
         );
+        let scratch_lb_range_by_local: Vec<EventRange> =
+            build_lb_end_order_by_order(&scratch_start_ranks, &scratch_end_ranks)
+                .into_iter()
+                .enumerate()
+                .map(|(local_idx, end_order)| EventRange {
+                    start_order: local_idx as u32,
+                    end_order,
+                })
+                .collect();
         let mut stable_order_by_local = vec![u32::MAX; sorted_objects.len()];
         let mut stable_order_by_call = vec![u32::MAX; sorted_calls.len()];
+        let mut stable_start_ranks =
+            Vec::with_capacity(sorted_objects.len().saturating_add(sorted_calls.len()));
         let mut stable_end_ranks =
             Vec::with_capacity(sorted_objects.len().saturating_add(sorted_calls.len()));
         let mut local_pos = 0usize;
@@ -311,10 +388,12 @@ impl<'a> PlacementProblem<'a> {
             let order_idx = stable_end_ranks.len() as u32;
             if take_local {
                 stable_order_by_local[local_pos] = order_idx;
+                stable_start_ranks.push(sorted_objects[local_pos].interval.start);
                 stable_end_ranks.push(sorted_objects[local_pos].interval.end);
                 local_pos += 1;
             } else {
                 stable_order_by_call[call_pos] = order_idx;
+                stable_start_ranks.push(sorted_calls[call_pos].inst_pos);
                 stable_end_ranks.push(sorted_calls[call_pos].inst_pos);
                 call_pos += 1;
             }
@@ -329,6 +408,15 @@ impl<'a> PlacementProblem<'a> {
                     .max(),
             ),
         );
+        let stable_lb_end_by_order =
+            build_lb_end_order_by_order(&stable_start_ranks, &stable_end_ranks);
+        let stable_lb_range_by_local: Vec<EventRange> = stable_order_by_local
+            .iter()
+            .map(|&order_idx| EventRange {
+                start_order: order_idx,
+                end_order: stable_lb_end_by_order[order_idx as usize],
+            })
+            .collect();
 
         let mut local_obj_index_by_id = vec![u32::MAX; stack.next_obj_id as usize];
         let mut must_stable_by_local = vec![false; sorted_objects.len()];
@@ -371,9 +459,12 @@ impl<'a> PlacementProblem<'a> {
                 obj_id,
                 local_idx,
                 size_words: fact.size_words,
+                scratch_lb_range: scratch_lb_range_by_local[local_idx as usize],
+                stable_lb_range: stable_lb_range_by_local[local_idx as usize],
                 recursive_access_cost: recursive_access_cost(cost_model, is_recursive, fact),
                 shadow_copy_words: 0,
                 live_call_indices: SmallVec::new(),
+                live_call_order_indices: SmallVec::new(),
             });
         }
 
@@ -415,6 +506,9 @@ impl<'a> PlacementProblem<'a> {
                         .checked_add(u64::from(size))
                         .expect("candidate shadow copy words overflow");
                     candidate.live_call_indices.push(call_idx as u32);
+                    candidate
+                        .live_call_order_indices
+                        .push(stable_order_by_call[call_idx]);
                 }
             }
         }
@@ -432,9 +526,11 @@ impl<'a> PlacementProblem<'a> {
             sorted_objects,
             sorted_calls,
             scratch_release,
+            scratch_lb_range_by_local,
             stable_order_by_local,
             stable_order_by_call,
             stable_release,
+            stable_lb_range_by_local,
             must_stable,
             must_stable_by_local,
             candidates: candidate_meta,
@@ -462,6 +558,7 @@ impl PlacementState {
     fn new(problem: &PlacementProblem<'_>) -> Self {
         Self {
             promoted: vec![false; problem.candidates.len()],
+            promoted_count: 0,
             shadow_words_by_call: problem.base_shadow_words_by_call.clone(),
             shadow_copy_words: problem.base_shadow_copy_words,
             recursive_access_cost: problem.base_recursive_access_cost,
@@ -501,6 +598,7 @@ impl PlacementState {
             problem.candidates[candidate_idx].obj_id.as_u32()
         );
         self.promoted[candidate_idx] = true;
+        self.promoted_count += 1;
         let candidate = &problem.candidates[candidate_idx];
         if candidate.size_words != 0 {
             remove_sorted_u32(&mut self.scratch_real_locals, candidate.local_idx);
@@ -533,6 +631,10 @@ impl PlacementState {
             problem.candidates[candidate_idx].obj_id.as_u32()
         );
         self.promoted[candidate_idx] = false;
+        self.promoted_count = self
+            .promoted_count
+            .checked_sub(1)
+            .expect("promoted count underflow");
         let candidate = &problem.candidates[candidate_idx];
         if candidate.size_words != 0 {
             remove_sorted_u32(&mut self.stable_real_locals, candidate.local_idx);
@@ -556,6 +658,194 @@ impl PlacementState {
                 insert_sorted_u32(&mut self.nonzero_shadow_calls, call_idx);
             }
         }
+    }
+
+    fn apply_swap(&mut self, problem: &PlacementProblem<'_>, add_idx: usize, remove_idx: usize) {
+        assert_ne!(add_idx, remove_idx, "swap requires distinct candidates");
+        self.apply_remove(problem, remove_idx);
+        self.apply_add(problem, add_idx);
+    }
+}
+
+impl MaxAddSegTree {
+    fn new() -> Self {
+        Self {
+            len: 0,
+            max: Vec::new(),
+            lazy: Vec::new(),
+        }
+    }
+
+    fn reset(&mut self, len: usize) {
+        self.len = len;
+        let tree_len = len.saturating_mul(4).max(1);
+        if self.max.len() < tree_len {
+            self.max.resize(tree_len, 0);
+            self.lazy.resize(tree_len, 0);
+        } else {
+            self.max[..tree_len].fill(0);
+            self.lazy[..tree_len].fill(0);
+        }
+    }
+
+    fn add_range_nolog(&mut self, start: u32, end: u32, delta: i64) {
+        self.add_range_impl(start as usize, end as usize, delta, 1, 0, self.len);
+    }
+
+    fn add_point_nolog(&mut self, idx: u32, delta: i64) {
+        self.add_point_impl(idx as usize, delta, 1, 0, self.len);
+    }
+
+    fn max_value(&self) -> u32 {
+        if self.len == 0 {
+            return 0;
+        }
+        debug_assert!(self.max[1] >= 0, "negative committed lower-bound load");
+        self.max[1] as u32
+    }
+
+    fn add_range_impl(
+        &mut self,
+        start: usize,
+        end: usize,
+        delta: i64,
+        idx: usize,
+        seg_start: usize,
+        seg_end: usize,
+    ) {
+        if self.len == 0
+            || start > end
+            || seg_start == seg_end
+            || end < seg_start
+            || seg_end - 1 < start
+        {
+            return;
+        }
+        if start <= seg_start && seg_end - 1 <= end {
+            self.apply_delta(idx, delta);
+            return;
+        }
+        let mid = seg_start + (seg_end - seg_start) / 2;
+        if start < mid {
+            self.add_range_impl(start, end, delta, idx * 2, seg_start, mid);
+        }
+        if end >= mid && mid < seg_end {
+            self.add_range_impl(start, end, delta, idx * 2 + 1, mid, seg_end);
+        }
+        self.recompute(idx);
+    }
+
+    fn add_point_impl(
+        &mut self,
+        pos: usize,
+        delta: i64,
+        idx: usize,
+        seg_start: usize,
+        seg_end: usize,
+    ) {
+        if self.len == 0 || seg_start == seg_end || pos < seg_start || pos >= seg_end {
+            return;
+        }
+        if seg_end - seg_start == 1 {
+            self.apply_delta(idx, delta);
+            return;
+        }
+        let mid = seg_start + (seg_end - seg_start) / 2;
+        if pos < mid {
+            self.add_point_impl(pos, delta, idx * 2, seg_start, mid);
+        } else {
+            self.add_point_impl(pos, delta, idx * 2 + 1, mid, seg_end);
+        }
+        self.recompute(idx);
+    }
+
+    fn apply_delta(&mut self, idx: usize, delta: i64) {
+        self.max[idx] += delta;
+        self.lazy[idx] += delta;
+    }
+
+    fn recompute(&mut self, idx: usize) {
+        self.max[idx] = self.max[idx * 2].max(self.max[idx * 2 + 1]) + self.lazy[idx];
+    }
+}
+
+impl Default for MaxAddSegTree {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl PlacementLowerBoundState {
+    fn new(problem: &PlacementProblem<'_>) -> Self {
+        let mut scratch_tree = MaxAddSegTree::new();
+        scratch_tree.reset(problem.sorted_objects.len());
+        for (local_idx, obj) in problem.sorted_objects.iter().enumerate() {
+            if problem.must_stable_by_local[local_idx] || obj.size_words == 0 {
+                continue;
+            }
+            let range = problem.scratch_lb_range_by_local[local_idx];
+            scratch_tree.add_range_nolog(
+                range.start_order,
+                range.end_order,
+                i64::from(obj.size_words),
+            );
+        }
+
+        let mut stable_tree = MaxAddSegTree::new();
+        stable_tree.reset(problem.sorted_objects.len() + problem.sorted_calls.len());
+        for (local_idx, obj) in problem.sorted_objects.iter().enumerate() {
+            if !problem.must_stable_by_local[local_idx] || obj.size_words == 0 {
+                continue;
+            }
+            let range = problem.stable_lb_range_by_local[local_idx];
+            stable_tree.add_range_nolog(
+                range.start_order,
+                range.end_order,
+                i64::from(obj.size_words),
+            );
+        }
+        for (call_idx, &shadow_words) in problem.base_shadow_words_by_call.iter().enumerate() {
+            if shadow_words == 0 {
+                continue;
+            }
+            stable_tree.add_point_nolog(
+                problem.stable_order_by_call[call_idx],
+                i64::from(shadow_words),
+            );
+        }
+
+        Self {
+            scratch_tree,
+            stable_tree,
+        }
+    }
+
+    fn apply_add(&mut self, problem: &PlacementProblem<'_>, candidate_idx: usize) {
+        self.apply_move(problem, PlacementMove::Add(candidate_idx));
+    }
+
+    fn apply_remove(&mut self, problem: &PlacementProblem<'_>, candidate_idx: usize) {
+        self.apply_move(problem, PlacementMove::Remove(candidate_idx));
+    }
+
+    fn apply_swap(&mut self, problem: &PlacementProblem<'_>, add_idx: usize, remove_idx: usize) {
+        self.apply_move(
+            problem,
+            PlacementMove::Swap {
+                add_idx,
+                remove_idx,
+            },
+        );
+    }
+
+    fn apply_move(&mut self, problem: &PlacementProblem<'_>, mv: PlacementMove) {
+        apply_lower_bound_move(
+            problem,
+            &mut self.scratch_tree,
+            &mut self.stable_tree,
+            mv,
+            1,
+        );
     }
 }
 
@@ -859,6 +1149,7 @@ fn solve_func_placement(
 ) -> FuncPlacementEval {
     let problem = PlacementProblem::new(stack, facts, is_recursive, cost_model);
     let mut state = PlacementState::new(&problem);
+    let mut lb_state = PlacementLowerBoundState::new(&problem);
     let mut workspace = FuncPlacementWorkspace {
         scratch_pack: Vec::with_capacity(problem.sorted_objects.len()),
         shadow_objs: Vec::with_capacity(problem.sorted_calls.len()),
@@ -870,68 +1161,75 @@ fn solve_func_placement(
         ),
     };
     let mut score_workspace = FuncPlacementScoreWorkspace::default();
+    let mut search_work = SearchWorkBuffers::default();
     let mut best_score =
-        evaluate_func_placement_score(&problem, &state, PlacementTrial::None, &mut score_workspace);
+        evaluate_func_placement_score(&problem, &state, PlacementMove::None, &mut score_workspace);
+    let mut iteration = 0usize;
 
     loop {
-        let mut best_candidate: Option<usize> = None;
-        let mut best_candidate_score: Option<FuncPlacementScore> = None;
-        for (candidate_idx, candidate) in problem.candidates.iter().enumerate() {
-            if state.promoted[candidate_idx] {
-                continue;
-            }
+        iteration += 1;
+        debug_assert!(
+            iteration <= 1_000_000,
+            "placement local search did not converge"
+        );
 
-            let score = evaluate_func_placement_score(
-                &problem,
-                &state,
-                PlacementTrial::Add(candidate_idx),
-                &mut score_workspace,
-            );
-            if !is_better_score(score, best_score) {
-                continue;
-            }
-
-            let replace = match (&best_candidate, &best_candidate_score) {
-                (None, None) => true,
-                (Some(prev), Some(cur)) => {
-                    is_better_score(score, *cur)
-                        || (score.cost == cur.cost
-                            && candidate.obj_id.as_u32()
-                                < problem.candidates[*prev].obj_id.as_u32())
-                }
-                _ => false,
-            };
-            if replace {
-                best_candidate = Some(candidate_idx);
-                best_candidate_score = Some(score);
-            }
-        }
-
-        let Some(candidate_idx) = best_candidate else {
-            break;
-        };
-        state.apply_add(&problem, candidate_idx);
-        best_score = best_candidate_score.expect("missing candidate score");
-    }
-
-    for candidate_idx in 0..problem.candidates.len() {
-        if !state.promoted[candidate_idx] {
-            continue;
-        }
-        let score = evaluate_func_placement_score(
+        if let Some(best_move) = find_best_exact_one_flip_move(
             &problem,
             &state,
-            PlacementTrial::Remove(candidate_idx),
+            &mut lb_state,
+            best_score,
             &mut score_workspace,
-        );
-        if is_better_score(score, best_score) {
-            state.apply_remove(&problem, candidate_idx);
-            best_score = score;
+            &mut search_work,
+        ) {
+            apply_placement_move(&problem, &mut state, &mut lb_state, best_move.mv);
+            best_score = best_move.exact;
+            continue;
         }
+
+        if let Some(best_move) = find_best_exact_swap_move(
+            &problem,
+            &state,
+            &mut lb_state,
+            best_score,
+            &mut score_workspace,
+            &mut search_work,
+        ) {
+            apply_placement_move(&problem, &mut state, &mut lb_state, best_move.mv);
+            best_score = best_move.exact;
+            continue;
+        }
+
+        break;
     }
 
     let promoted_optional = problem.promoted_optional(&state);
     evaluate_func_placement(&problem, &promoted_optional, &state, &mut workspace)
+}
+
+fn apply_placement_move(
+    problem: &PlacementProblem<'_>,
+    state: &mut PlacementState,
+    lb_state: &mut PlacementLowerBoundState,
+    mv: PlacementMove,
+) {
+    match mv {
+        PlacementMove::None => {}
+        PlacementMove::Add(candidate_idx) => {
+            state.apply_add(problem, candidate_idx);
+            lb_state.apply_add(problem, candidate_idx);
+        }
+        PlacementMove::Remove(candidate_idx) => {
+            state.apply_remove(problem, candidate_idx);
+            lb_state.apply_remove(problem, candidate_idx);
+        }
+        PlacementMove::Swap {
+            add_idx,
+            remove_idx,
+        } => {
+            state.apply_swap(problem, add_idx, remove_idx);
+            lb_state.apply_swap(problem, add_idx, remove_idx);
+        }
+    }
 }
 
 fn evaluate_func_placement(
@@ -997,7 +1295,7 @@ fn evaluate_func_placement(
         evaluate_func_placement_score(
             problem,
             state,
-            PlacementTrial::None,
+            PlacementMove::None,
             &mut FuncPlacementScoreWorkspace::default(),
         )
     );
@@ -1014,13 +1312,12 @@ fn evaluate_func_placement(
 fn evaluate_func_placement_score(
     problem: &PlacementProblem<'_>,
     state: &PlacementState,
-    trial: PlacementTrial,
+    mv: PlacementMove,
     workspace: &mut FuncPlacementScoreWorkspace,
 ) -> FuncPlacementScore {
-    let scratch_words = scratch_peak_with_trial(problem, state, trial, workspace);
-    let stable_words = stable_peak_with_trial(problem, state, trial, workspace);
-    let shadow_copy_words = shadow_copy_words_with_trial(problem, state, trial);
-    let recursive_access_cost = recursive_access_cost_with_trial(problem, state, trial);
+    let scratch_words = scratch_peak_with_move(problem, state, mv, workspace);
+    let stable_words = stable_peak_with_move(problem, state, mv, workspace);
+    let (shadow_copy_words, recursive_access_cost) = additive_terms_with_move(problem, state, mv);
 
     FuncPlacementScore {
         scratch_words,
@@ -1035,21 +1332,52 @@ fn evaluate_func_placement_score(
     }
 }
 
-fn scratch_peak_with_trial(
+fn evaluate_func_placement_lower_bound(
     problem: &PlacementProblem<'_>,
     state: &PlacementState,
-    trial: PlacementTrial,
+    lb_state: &mut PlacementLowerBoundState,
+    mv: PlacementMove,
+) -> FuncPlacementScore {
+    apply_lower_bound_move(
+        problem,
+        &mut lb_state.scratch_tree,
+        &mut lb_state.stable_tree,
+        mv,
+        1,
+    );
+    let scratch_words = lb_state.scratch_tree.max_value();
+    let stable_words = lb_state.stable_tree.max_value();
+    apply_lower_bound_move(
+        problem,
+        &mut lb_state.scratch_tree,
+        &mut lb_state.stable_tree,
+        mv,
+        -1,
+    );
+
+    let (shadow_copy_words, recursive_access_cost) = additive_terms_with_move(problem, state, mv);
+    FuncPlacementScore {
+        scratch_words,
+        stable_words,
+        cost: placement_cost(
+            problem,
+            recursive_access_cost,
+            shadow_copy_words,
+            scratch_words,
+            stable_words,
+        ),
+    }
+}
+
+fn scratch_peak_with_move(
+    problem: &PlacementProblem<'_>,
+    state: &PlacementState,
+    mv: PlacementMove,
     workspace: &mut FuncPlacementScoreWorkspace,
 ) -> u32 {
-    let trial_candidate = trial_candidate(problem, trial);
-    let (insert_idx, skip_idx) = match trial {
-        PlacementTrial::Add(_) => (None, trial_candidate.map(|candidate| candidate.local_idx)),
-        PlacementTrial::Remove(_) => (trial_candidate.map(|candidate| candidate.local_idx), None),
-        PlacementTrial::None => (None, None),
-    };
+    let (insert_idx, skip_idx) = scratch_local_indices_for_move(problem, mv);
     let count = state.scratch_real_locals.len() + usize::from(insert_idx.is_some())
         - usize::from(skip_idx.is_some());
-
     pack_zero_min_offset_peak_ranked(
         &mut workspace.scratch_peak,
         &problem.scratch_release,
@@ -1059,25 +1387,24 @@ fn scratch_peak_with_trial(
     )
 }
 
-fn stable_peak_with_trial(
+fn stable_peak_with_move(
     problem: &PlacementProblem<'_>,
     state: &PlacementState,
-    trial: PlacementTrial,
+    mv: PlacementMove,
     workspace: &mut FuncPlacementScoreWorkspace,
 ) -> u32 {
-    let trial_candidate = trial_candidate(problem, trial);
-    let (insert_idx, skip_idx) = match trial {
-        PlacementTrial::Add(_) => (trial_candidate.map(|candidate| candidate.local_idx), None),
-        PlacementTrial::Remove(_) => (None, trial_candidate.map(|candidate| candidate.local_idx)),
-        PlacementTrial::None => (None, None),
-    };
+    let (insert_idx, skip_idx) = stable_local_indices_for_move(problem, mv);
     let mut real_iter = TrialLocalIter::new(&state.stable_real_locals, insert_idx, skip_idx)
         .map(|local_idx| ranked_stable_real_item_for_local(problem, local_idx))
         .peekable();
-    let mut shadow_iter = TrialShadowCallIter::new(problem, state, trial).peekable();
+    let mut local_deltas = SmallVec::<[MoveLocalDelta; 2]>::new();
+    let mut call_deltas = SmallVec::<[MoveCallDelta; 8]>::new();
+    build_move_deltas(problem, mv, &mut local_deltas, &mut call_deltas);
+    let mut shadow_iter = MoveShadowCallIter::new(problem, state, &call_deltas).peekable();
     let count = state.stable_real_locals.len() + usize::from(insert_idx.is_some())
         - usize::from(skip_idx.is_some())
-        + shadow_call_count_with_trial(problem, state, trial);
+        + state.nonzero_shadow_calls.len()
+        + call_deltas.len();
 
     pack_zero_min_offset_peak_ranked(
         &mut workspace.stable_peak,
@@ -1096,6 +1423,272 @@ fn stable_peak_with_trial(
         }),
         count,
     )
+}
+
+fn find_best_exact_one_flip_move(
+    problem: &PlacementProblem<'_>,
+    state: &PlacementState,
+    lb_state: &mut PlacementLowerBoundState,
+    current_score: FuncPlacementScore,
+    exact_ws: &mut FuncPlacementScoreWorkspace,
+    work: &mut SearchWorkBuffers,
+) -> Option<ExactMoveEval> {
+    work.one_flip_bounds.clear();
+    for candidate_idx in 0..problem.candidates.len() {
+        let mv = if state.promoted[candidate_idx] {
+            PlacementMove::Remove(candidate_idx)
+        } else {
+            PlacementMove::Add(candidate_idx)
+        };
+        let lower_bound = evaluate_func_placement_lower_bound(problem, state, lb_state, mv);
+        if is_better_score(lower_bound, current_score) {
+            work.one_flip_bounds.push(BoundMoveEval { mv, lower_bound });
+        }
+    }
+    work.one_flip_bounds.sort_unstable_by(|a, b| {
+        cmp_func_placement_score(a.lower_bound, b.lower_bound)
+            .then_with(|| {
+                resulting_promoted_count(state, a.mv).cmp(&resulting_promoted_count(state, b.mv))
+            })
+            .then_with(|| cmp_move_tie_key(problem, a.mv, b.mv))
+    });
+
+    let mut best_exact: Option<ExactMoveEval> = None;
+    for bound in &work.one_flip_bounds {
+        if let Some(current_best) = best_exact
+            && cmp_func_placement_score(bound.lower_bound, current_best.exact) != Ordering::Less
+        {
+            break;
+        }
+        let exact = evaluate_func_placement_score(problem, state, bound.mv, exact_ws);
+        if !is_better_score(exact, current_score) {
+            continue;
+        }
+        if best_exact.is_none_or(|current_best| {
+            is_preferred_exact_move(
+                problem,
+                state,
+                bound.mv,
+                exact,
+                current_best.mv,
+                current_best.exact,
+            )
+        }) {
+            best_exact = Some(ExactMoveEval {
+                mv: bound.mv,
+                exact,
+            });
+        }
+    }
+    best_exact
+}
+
+fn find_best_exact_swap_move(
+    problem: &PlacementProblem<'_>,
+    state: &PlacementState,
+    lb_state: &mut PlacementLowerBoundState,
+    current_score: FuncPlacementScore,
+    exact_ws: &mut FuncPlacementScoreWorkspace,
+    work: &mut SearchWorkBuffers,
+) -> Option<ExactMoveEval> {
+    let feasible_add_count = state.promoted.iter().filter(|&&promoted| !promoted).count();
+    let feasible_remove_count = state.promoted_count;
+    if feasible_add_count == 0 || feasible_remove_count == 0 {
+        return None;
+    }
+
+    work.swap_bounds.clear();
+    if feasible_add_count.saturating_mul(feasible_remove_count) <= SWAP_FULL_PAIR_LIMIT {
+        for add_idx in 0..problem.candidates.len() {
+            if state.promoted[add_idx] {
+                continue;
+            }
+            for remove_idx in 0..problem.candidates.len() {
+                if !state.promoted[remove_idx] {
+                    continue;
+                }
+                let mv = PlacementMove::Swap {
+                    add_idx,
+                    remove_idx,
+                };
+                let lower_bound = evaluate_func_placement_lower_bound(problem, state, lb_state, mv);
+                if is_better_score(lower_bound, current_score) {
+                    work.swap_bounds.push(BoundMoveEval { mv, lower_bound });
+                }
+            }
+        }
+    } else {
+        collect_swap_shortlists(problem, state, lb_state, work);
+        let add_shortlist = work.add_shortlist.clone();
+        let remove_shortlist = work.remove_shortlist.clone();
+        for add_idx in add_shortlist {
+            for &remove_idx in &remove_shortlist {
+                let mv = PlacementMove::Swap {
+                    add_idx,
+                    remove_idx,
+                };
+                let lower_bound = evaluate_func_placement_lower_bound(problem, state, lb_state, mv);
+                if is_better_score(lower_bound, current_score) {
+                    work.swap_bounds.push(BoundMoveEval { mv, lower_bound });
+                }
+            }
+        }
+    }
+
+    work.swap_bounds.sort_unstable_by(|a, b| {
+        cmp_func_placement_score(a.lower_bound, b.lower_bound)
+            .then_with(|| {
+                resulting_promoted_count(state, a.mv).cmp(&resulting_promoted_count(state, b.mv))
+            })
+            .then_with(|| cmp_move_tie_key(problem, a.mv, b.mv))
+    });
+
+    let mut best_exact: Option<ExactMoveEval> = None;
+    for bound in &work.swap_bounds {
+        if let Some(current_best) = best_exact
+            && cmp_func_placement_score(bound.lower_bound, current_best.exact) != Ordering::Less
+        {
+            break;
+        }
+        let exact = evaluate_func_placement_score(problem, state, bound.mv, exact_ws);
+        if !is_better_score(exact, current_score) {
+            continue;
+        }
+        if best_exact.is_none_or(|current_best| {
+            is_preferred_exact_move(
+                problem,
+                state,
+                bound.mv,
+                exact,
+                current_best.mv,
+                current_best.exact,
+            )
+        }) {
+            best_exact = Some(ExactMoveEval {
+                mv: bound.mv,
+                exact,
+            });
+        }
+    }
+    best_exact
+}
+
+fn collect_swap_shortlists(
+    problem: &PlacementProblem<'_>,
+    state: &PlacementState,
+    lb_state: &mut PlacementLowerBoundState,
+    work: &mut SearchWorkBuffers,
+) {
+    work.add_shortlist.clear();
+    work.remove_shortlist.clear();
+
+    let mut add_lb_scores = Vec::new();
+    let mut remove_lb_scores = Vec::new();
+    for candidate_idx in 0..problem.candidates.len() {
+        if state.promoted[candidate_idx] {
+            remove_lb_scores.push((
+                candidate_idx,
+                evaluate_func_placement_lower_bound(
+                    problem,
+                    state,
+                    lb_state,
+                    PlacementMove::Remove(candidate_idx),
+                ),
+            ));
+        } else {
+            add_lb_scores.push((
+                candidate_idx,
+                evaluate_func_placement_lower_bound(
+                    problem,
+                    state,
+                    lb_state,
+                    PlacementMove::Add(candidate_idx),
+                ),
+            ));
+        }
+    }
+
+    add_lb_scores.sort_unstable_by(|a, b| {
+        cmp_func_placement_score(a.1, b.1).then_with(|| {
+            problem.candidates[a.0]
+                .obj_id
+                .as_u32()
+                .cmp(&problem.candidates[b.0].obj_id.as_u32())
+        })
+    });
+    remove_lb_scores.sort_unstable_by(|a, b| {
+        cmp_func_placement_score(a.1, b.1).then_with(|| {
+            problem.candidates[a.0]
+                .obj_id
+                .as_u32()
+                .cmp(&problem.candidates[b.0].obj_id.as_u32())
+        })
+    });
+    for &(candidate_idx, _) in add_lb_scores.iter().take(SWAP_SHORTLIST_PER_METRIC) {
+        push_unique_candidate(&mut work.add_shortlist, candidate_idx);
+    }
+    for &(candidate_idx, _) in remove_lb_scores.iter().take(SWAP_SHORTLIST_PER_METRIC) {
+        push_unique_candidate(&mut work.remove_shortlist, candidate_idx);
+    }
+
+    collect_metric_shortlist(problem, state, false, work);
+    collect_metric_shortlist(problem, state, true, work);
+
+    work.add_shortlist
+        .sort_unstable_by_key(|&candidate_idx| problem.candidates[candidate_idx].obj_id.as_u32());
+    work.remove_shortlist
+        .sort_unstable_by_key(|&candidate_idx| problem.candidates[candidate_idx].obj_id.as_u32());
+}
+
+fn collect_metric_shortlist(
+    problem: &PlacementProblem<'_>,
+    state: &PlacementState,
+    promoted: bool,
+    work: &mut SearchWorkBuffers,
+) {
+    for metric in 0..3 {
+        let mut candidates: Vec<usize> = problem
+            .candidates
+            .iter()
+            .enumerate()
+            .filter_map(|(candidate_idx, _)| {
+                (state.promoted[candidate_idx] == promoted).then_some(candidate_idx)
+            })
+            .collect();
+        candidates.sort_unstable_by(|&lhs, &rhs| {
+            candidate_metric(problem, rhs, metric)
+                .cmp(&candidate_metric(problem, lhs, metric))
+                .then_with(|| {
+                    problem.candidates[lhs]
+                        .obj_id
+                        .as_u32()
+                        .cmp(&problem.candidates[rhs].obj_id.as_u32())
+                })
+        });
+        for &candidate_idx in candidates.iter().take(SWAP_SHORTLIST_PER_METRIC) {
+            if promoted {
+                push_unique_candidate(&mut work.remove_shortlist, candidate_idx);
+            } else {
+                push_unique_candidate(&mut work.add_shortlist, candidate_idx);
+            }
+        }
+    }
+}
+
+fn candidate_metric(problem: &PlacementProblem<'_>, candidate_idx: usize, metric: usize) -> u64 {
+    let candidate = &problem.candidates[candidate_idx];
+    match metric {
+        0 => u64::from(candidate.size_words),
+        1 => candidate.shadow_copy_words,
+        2 => candidate.recursive_access_cost,
+        _ => panic!("unknown candidate metric {metric}"),
+    }
+}
+
+fn push_unique_candidate(shortlist: &mut Vec<usize>, candidate_idx: usize) {
+    if !shortlist.contains(&candidate_idx) {
+        shortlist.push(candidate_idx);
+    }
 }
 
 fn build_shadow_preserve_for_call(
@@ -1248,6 +1841,309 @@ fn build_stable_pack(
     }
 }
 
+fn cmp_func_placement_score(a: FuncPlacementScore, b: FuncPlacementScore) -> Ordering {
+    a.cost
+        .cmp(&b.cost)
+        .then_with(|| a.stable_words.cmp(&b.stable_words))
+        .then_with(|| a.scratch_words.cmp(&b.scratch_words))
+}
+
+fn resulting_promoted_count(state: &PlacementState, mv: PlacementMove) -> usize {
+    match mv {
+        PlacementMove::None => state.promoted_count,
+        PlacementMove::Add(_) => state.promoted_count + 1,
+        PlacementMove::Remove(_) => state
+            .promoted_count
+            .checked_sub(1)
+            .expect("promoted count underflow"),
+        PlacementMove::Swap { .. } => state.promoted_count,
+    }
+}
+
+fn move_arity_rank(mv: PlacementMove) -> u8 {
+    match mv {
+        PlacementMove::Add(_) | PlacementMove::Remove(_) => 0,
+        PlacementMove::Swap { .. } => 1,
+        PlacementMove::None => 2,
+    }
+}
+
+fn move_tie_key(problem: &PlacementProblem<'_>, mv: PlacementMove) -> (u8, u32, u32) {
+    match mv {
+        PlacementMove::Add(candidate_idx) => {
+            (0, problem.candidates[candidate_idx].obj_id.as_u32(), 0)
+        }
+        PlacementMove::Remove(candidate_idx) => {
+            (1, problem.candidates[candidate_idx].obj_id.as_u32(), 0)
+        }
+        PlacementMove::Swap {
+            add_idx,
+            remove_idx,
+        } => (
+            2,
+            problem.candidates[add_idx].obj_id.as_u32(),
+            problem.candidates[remove_idx].obj_id.as_u32(),
+        ),
+        PlacementMove::None => (3, u32::MAX, u32::MAX),
+    }
+}
+
+fn cmp_move_tie_key(
+    problem: &PlacementProblem<'_>,
+    a: PlacementMove,
+    b: PlacementMove,
+) -> Ordering {
+    move_tie_key(problem, a).cmp(&move_tie_key(problem, b))
+}
+
+fn is_preferred_exact_move(
+    problem: &PlacementProblem<'_>,
+    state: &PlacementState,
+    mv_a: PlacementMove,
+    score_a: FuncPlacementScore,
+    mv_b: PlacementMove,
+    score_b: FuncPlacementScore,
+) -> bool {
+    cmp_func_placement_score(score_a, score_b) == Ordering::Less
+        || (score_a == score_b
+            && resulting_promoted_count(state, mv_a)
+                .cmp(&resulting_promoted_count(state, mv_b))
+                .then_with(|| move_arity_rank(mv_a).cmp(&move_arity_rank(mv_b)))
+                .then_with(|| cmp_move_tie_key(problem, mv_a, mv_b))
+                == Ordering::Less)
+}
+
+fn build_lb_end_order_by_order(
+    start_ranks_by_order: &[u32],
+    end_ranks_by_order: &[u32],
+) -> Vec<u32> {
+    assert_eq!(
+        start_ranks_by_order.len(),
+        end_ranks_by_order.len(),
+        "lower-bound order arrays must have matching lengths"
+    );
+    let mut out = Vec::with_capacity(start_ranks_by_order.len());
+    for (order_idx, &end_rank) in end_ranks_by_order.iter().enumerate() {
+        let last_before = start_ranks_by_order.partition_point(|&start_rank| start_rank < end_rank);
+        out.push(order_idx.max(last_before.saturating_sub(1)) as u32);
+    }
+    out
+}
+
+fn push_local_delta(
+    local_deltas: &mut SmallVec<[MoveLocalDelta; 2]>,
+    local_idx: u32,
+    scratch_delta: i64,
+    stable_delta: i64,
+) {
+    if scratch_delta == 0 && stable_delta == 0 {
+        return;
+    }
+    if let Some(delta) = local_deltas
+        .iter_mut()
+        .find(|delta| delta.local_idx == local_idx)
+    {
+        delta.scratch_delta += scratch_delta;
+        delta.stable_delta += stable_delta;
+        return;
+    }
+    local_deltas.push(MoveLocalDelta {
+        local_idx,
+        scratch_delta,
+        stable_delta,
+    });
+}
+
+fn push_call_delta(
+    call_deltas: &mut SmallVec<[MoveCallDelta; 8]>,
+    call_idx: u32,
+    stable_shadow_delta: i64,
+) {
+    if stable_shadow_delta == 0 {
+        return;
+    }
+    if let Some(delta) = call_deltas
+        .iter_mut()
+        .find(|delta| delta.call_idx == call_idx)
+    {
+        delta.stable_shadow_delta += stable_shadow_delta;
+        return;
+    }
+    call_deltas.push(MoveCallDelta {
+        call_idx,
+        stable_shadow_delta,
+    });
+}
+
+fn add_candidate_move_deltas(
+    problem: &PlacementProblem<'_>,
+    candidate_idx: usize,
+    sign: i64,
+    local_deltas: &mut SmallVec<[MoveLocalDelta; 2]>,
+    call_deltas: &mut SmallVec<[MoveCallDelta; 8]>,
+) {
+    let candidate = &problem.candidates[candidate_idx];
+    let size = i64::from(candidate.size_words);
+    push_local_delta(local_deltas, candidate.local_idx, -sign * size, sign * size);
+    for &call_idx in &candidate.live_call_indices {
+        push_call_delta(call_deltas, call_idx, -sign * size);
+    }
+}
+
+fn build_move_deltas(
+    problem: &PlacementProblem<'_>,
+    mv: PlacementMove,
+    local_deltas: &mut SmallVec<[MoveLocalDelta; 2]>,
+    call_deltas: &mut SmallVec<[MoveCallDelta; 8]>,
+) {
+    local_deltas.clear();
+    call_deltas.clear();
+    match mv {
+        PlacementMove::None => {}
+        PlacementMove::Add(candidate_idx) => {
+            add_candidate_move_deltas(problem, candidate_idx, 1, local_deltas, call_deltas);
+        }
+        PlacementMove::Remove(candidate_idx) => {
+            add_candidate_move_deltas(problem, candidate_idx, -1, local_deltas, call_deltas);
+        }
+        PlacementMove::Swap {
+            add_idx,
+            remove_idx,
+        } => {
+            add_candidate_move_deltas(problem, add_idx, 1, local_deltas, call_deltas);
+            add_candidate_move_deltas(problem, remove_idx, -1, local_deltas, call_deltas);
+        }
+    }
+    local_deltas.retain(|delta| delta.scratch_delta != 0 || delta.stable_delta != 0);
+    call_deltas.retain(|delta| delta.stable_shadow_delta != 0);
+    call_deltas.sort_unstable_by_key(|delta| delta.call_idx);
+}
+
+fn apply_candidate_local_lower_bound_delta(
+    candidate: &CandidateMeta,
+    scratch_tree: &mut MaxAddSegTree,
+    stable_tree: &mut MaxAddSegTree,
+    sign: i64,
+) {
+    if candidate.size_words == 0 {
+        return;
+    }
+    let size = i64::from(candidate.size_words);
+    scratch_tree.add_range_nolog(
+        candidate.scratch_lb_range.start_order,
+        candidate.scratch_lb_range.end_order,
+        -sign * size,
+    );
+    stable_tree.add_range_nolog(
+        candidate.stable_lb_range.start_order,
+        candidate.stable_lb_range.end_order,
+        sign * size,
+    );
+}
+
+fn apply_candidate_shadow_lower_bound_delta(
+    candidate: &CandidateMeta,
+    stable_tree: &mut MaxAddSegTree,
+    sign: i64,
+) {
+    if candidate.size_words == 0 {
+        return;
+    }
+    let shadow_delta = -sign * i64::from(candidate.size_words);
+    for &order_idx in &candidate.live_call_order_indices {
+        stable_tree.add_point_nolog(order_idx, shadow_delta);
+    }
+}
+
+fn apply_swap_shadow_lower_bound_delta(
+    add_candidate: &CandidateMeta,
+    remove_candidate: &CandidateMeta,
+    stable_tree: &mut MaxAddSegTree,
+    scale: i64,
+) {
+    let add_size = i64::from(add_candidate.size_words);
+    let remove_size = i64::from(remove_candidate.size_words);
+    let mut add_pos = 0usize;
+    let mut remove_pos = 0usize;
+    while add_pos < add_candidate.live_call_order_indices.len()
+        || remove_pos < remove_candidate.live_call_order_indices.len()
+    {
+        let add_order = add_candidate.live_call_order_indices.get(add_pos).copied();
+        let remove_order = remove_candidate
+            .live_call_order_indices
+            .get(remove_pos)
+            .copied();
+        let Some(order_idx) = (match (add_order, remove_order) {
+            (Some(add_order), Some(remove_order)) => Some(add_order.min(remove_order)),
+            (Some(add_order), None) => Some(add_order),
+            (None, Some(remove_order)) => Some(remove_order),
+            (None, None) => None,
+        }) else {
+            break;
+        };
+
+        let mut delta = 0i64;
+        if add_order == Some(order_idx) {
+            delta -= scale * add_size;
+            add_pos += 1;
+        }
+        if remove_order == Some(order_idx) {
+            delta += scale * remove_size;
+            remove_pos += 1;
+        }
+        if delta != 0 {
+            stable_tree.add_point_nolog(order_idx, delta);
+        }
+    }
+}
+
+fn apply_lower_bound_move(
+    problem: &PlacementProblem<'_>,
+    scratch_tree: &mut MaxAddSegTree,
+    stable_tree: &mut MaxAddSegTree,
+    mv: PlacementMove,
+    scale: i64,
+) {
+    match mv {
+        PlacementMove::None => {}
+        PlacementMove::Add(candidate_idx) => {
+            let candidate = &problem.candidates[candidate_idx];
+            apply_candidate_local_lower_bound_delta(candidate, scratch_tree, stable_tree, scale);
+            apply_candidate_shadow_lower_bound_delta(candidate, stable_tree, scale);
+        }
+        PlacementMove::Remove(candidate_idx) => {
+            let candidate = &problem.candidates[candidate_idx];
+            apply_candidate_local_lower_bound_delta(candidate, scratch_tree, stable_tree, -scale);
+            apply_candidate_shadow_lower_bound_delta(candidate, stable_tree, -scale);
+        }
+        PlacementMove::Swap {
+            add_idx,
+            remove_idx,
+        } => {
+            let add_candidate = &problem.candidates[add_idx];
+            let remove_candidate = &problem.candidates[remove_idx];
+            apply_candidate_local_lower_bound_delta(
+                add_candidate,
+                scratch_tree,
+                stable_tree,
+                scale,
+            );
+            apply_candidate_local_lower_bound_delta(
+                remove_candidate,
+                scratch_tree,
+                stable_tree,
+                -scale,
+            );
+            apply_swap_shadow_lower_bound_delta(
+                add_candidate,
+                remove_candidate,
+                stable_tree,
+                scale,
+            );
+        }
+    }
+}
+
 fn placement_cost(
     problem: &PlacementProblem<'_>,
     recursive_access_cost: u64,
@@ -1328,72 +2224,105 @@ impl Iterator for TrialLocalIter<'_> {
     }
 }
 
-struct TrialShadowCallIter<'a> {
-    problem: &'a PlacementProblem<'a>,
-    state: &'a PlacementState,
-    trial: PlacementTrial,
-    trial_candidate: Option<&'a CandidateMeta>,
-    base_pos: usize,
-    trial_pos: usize,
+fn scratch_local_indices_for_move(
+    problem: &PlacementProblem<'_>,
+    mv: PlacementMove,
+) -> (Option<u32>, Option<u32>) {
+    match mv {
+        PlacementMove::None => (None, None),
+        PlacementMove::Add(candidate_idx) => {
+            (None, Some(problem.candidates[candidate_idx].local_idx))
+        }
+        PlacementMove::Remove(candidate_idx) => {
+            (Some(problem.candidates[candidate_idx].local_idx), None)
+        }
+        PlacementMove::Swap {
+            add_idx,
+            remove_idx,
+        } => (
+            Some(problem.candidates[remove_idx].local_idx),
+            Some(problem.candidates[add_idx].local_idx),
+        ),
+    }
 }
 
-impl<'a> TrialShadowCallIter<'a> {
+fn stable_local_indices_for_move(
+    problem: &PlacementProblem<'_>,
+    mv: PlacementMove,
+) -> (Option<u32>, Option<u32>) {
+    match mv {
+        PlacementMove::None => (None, None),
+        PlacementMove::Add(candidate_idx) => {
+            (Some(problem.candidates[candidate_idx].local_idx), None)
+        }
+        PlacementMove::Remove(candidate_idx) => {
+            (None, Some(problem.candidates[candidate_idx].local_idx))
+        }
+        PlacementMove::Swap {
+            add_idx,
+            remove_idx,
+        } => (
+            Some(problem.candidates[add_idx].local_idx),
+            Some(problem.candidates[remove_idx].local_idx),
+        ),
+    }
+}
+
+struct MoveShadowCallIter<'a> {
+    problem: &'a PlacementProblem<'a>,
+    state: &'a PlacementState,
+    base_pos: usize,
+    delta_pos: usize,
+    deltas: &'a [MoveCallDelta],
+}
+
+impl<'a> MoveShadowCallIter<'a> {
     fn new(
         problem: &'a PlacementProblem<'a>,
         state: &'a PlacementState,
-        trial: PlacementTrial,
+        deltas: &'a [MoveCallDelta],
     ) -> Self {
         Self {
             problem,
             state,
-            trial,
-            trial_candidate: trial_candidate(problem, trial),
             base_pos: 0,
-            trial_pos: 0,
+            delta_pos: 0,
+            deltas,
         }
     }
 }
 
-impl Iterator for TrialShadowCallIter<'_> {
+impl Iterator for MoveShadowCallIter<'_> {
     type Item = RankedPeakPackItem;
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
             let base_idx = self.state.nonzero_shadow_calls.get(self.base_pos).copied();
-            let trial_idx = self
-                .trial_candidate
-                .and_then(|candidate| candidate.live_call_indices.get(self.trial_pos).copied());
-            let idx = match (base_idx, trial_idx) {
-                (Some(base_idx), Some(trial_idx)) => base_idx.min(trial_idx),
+            let delta_idx = self.deltas.get(self.delta_pos).map(|delta| delta.call_idx);
+            let idx = match (base_idx, delta_idx) {
+                (Some(base_idx), Some(delta_idx)) => base_idx.min(delta_idx),
                 (Some(base_idx), None) => base_idx,
-                (None, Some(trial_idx)) => trial_idx,
+                (None, Some(delta_idx)) => delta_idx,
                 (None, None) => return None,
             };
             let from_base = base_idx == Some(idx);
-            let from_trial = trial_idx == Some(idx);
+            let from_delta = delta_idx == Some(idx);
             if from_base {
                 self.base_pos += 1;
             }
-            if from_trial {
-                self.trial_pos += 1;
+            if from_delta {
+                self.delta_pos += 1;
             }
 
             let mut shadow_words = if from_base {
-                self.state.shadow_words_by_call[idx as usize]
+                i64::from(self.state.shadow_words_by_call[idx as usize])
             } else {
                 0
             };
-            if from_trial && let Some(candidate) = self.trial_candidate {
-                shadow_words = match self.trial {
-                    PlacementTrial::Add(_) => shadow_words
-                        .checked_sub(candidate.size_words)
-                        .expect("shadow words underflow"),
-                    PlacementTrial::Remove(_) => shadow_words
-                        .checked_add(candidate.size_words)
-                        .expect("shadow words overflow"),
-                    PlacementTrial::None => shadow_words,
-                };
+            if from_delta {
+                shadow_words += self.deltas[self.delta_pos - 1].stable_shadow_delta;
             }
+            assert!(shadow_words >= 0, "shadow words underflow");
             if shadow_words == 0 {
                 continue;
             }
@@ -1402,7 +2331,7 @@ impl Iterator for TrialShadowCallIter<'_> {
             return Some(RankedPeakPackItem {
                 order_idx: self.problem.stable_order_by_call[idx as usize],
                 start_rank: call.inst_pos,
-                size_words: shadow_words,
+                size_words: shadow_words as u32,
             });
         }
     }
@@ -1432,78 +2361,59 @@ fn ranked_stable_real_item_for_local(
     }
 }
 
-fn shadow_call_count_with_trial(
+fn additive_terms_with_move(
     problem: &PlacementProblem<'_>,
     state: &PlacementState,
-    trial: PlacementTrial,
-) -> usize {
-    let mut count = state.nonzero_shadow_calls.len();
-    if let Some(candidate) = trial_candidate(problem, trial) {
-        for &call_idx in &candidate.live_call_indices {
-            let shadow_words = state.shadow_words_by_call[call_idx as usize];
-            let next_shadow_words = match trial {
-                PlacementTrial::Add(_) => shadow_words
-                    .checked_sub(candidate.size_words)
-                    .expect("shadow words underflow"),
-                PlacementTrial::Remove(_) => shadow_words
-                    .checked_add(candidate.size_words)
-                    .expect("shadow words overflow"),
-                PlacementTrial::None => shadow_words,
-            };
-            if shadow_words == 0 && next_shadow_words != 0 {
-                count += 1;
-            } else if shadow_words != 0 && next_shadow_words == 0 {
-                count -= 1;
-            }
+    mv: PlacementMove,
+) -> (u64, u64) {
+    match mv {
+        PlacementMove::None => (state.shadow_copy_words, state.recursive_access_cost),
+        PlacementMove::Add(candidate_idx) => {
+            let candidate = &problem.candidates[candidate_idx];
+            (
+                state
+                    .shadow_copy_words
+                    .checked_sub(candidate.shadow_copy_words)
+                    .expect("shadow copy words underflow"),
+                state
+                    .recursive_access_cost
+                    .checked_add(candidate.recursive_access_cost)
+                    .expect("recursive access cost overflow"),
+            )
         }
-    }
-    count
-}
-
-fn shadow_copy_words_with_trial(
-    problem: &PlacementProblem<'_>,
-    state: &PlacementState,
-    trial: PlacementTrial,
-) -> u64 {
-    match trial {
-        PlacementTrial::None => state.shadow_copy_words,
-        PlacementTrial::Add(candidate_idx) => state
-            .shadow_copy_words
-            .checked_sub(problem.candidates[candidate_idx].shadow_copy_words)
-            .expect("shadow copy words underflow"),
-        PlacementTrial::Remove(candidate_idx) => state
-            .shadow_copy_words
-            .checked_add(problem.candidates[candidate_idx].shadow_copy_words)
-            .expect("shadow copy words overflow"),
-    }
-}
-
-fn recursive_access_cost_with_trial(
-    problem: &PlacementProblem<'_>,
-    state: &PlacementState,
-    trial: PlacementTrial,
-) -> u64 {
-    match trial {
-        PlacementTrial::None => state.recursive_access_cost,
-        PlacementTrial::Add(candidate_idx) => state
-            .recursive_access_cost
-            .checked_add(problem.candidates[candidate_idx].recursive_access_cost)
-            .expect("recursive access cost overflow"),
-        PlacementTrial::Remove(candidate_idx) => state
-            .recursive_access_cost
-            .checked_sub(problem.candidates[candidate_idx].recursive_access_cost)
-            .expect("recursive access cost underflow"),
-    }
-}
-
-fn trial_candidate<'a>(
-    problem: &'a PlacementProblem<'a>,
-    trial: PlacementTrial,
-) -> Option<&'a CandidateMeta> {
-    match trial {
-        PlacementTrial::None => None,
-        PlacementTrial::Add(candidate_idx) | PlacementTrial::Remove(candidate_idx) => {
-            Some(&problem.candidates[candidate_idx])
+        PlacementMove::Remove(candidate_idx) => {
+            let candidate = &problem.candidates[candidate_idx];
+            (
+                state
+                    .shadow_copy_words
+                    .checked_add(candidate.shadow_copy_words)
+                    .expect("shadow copy words overflow"),
+                state
+                    .recursive_access_cost
+                    .checked_sub(candidate.recursive_access_cost)
+                    .expect("recursive access cost underflow"),
+            )
+        }
+        PlacementMove::Swap {
+            add_idx,
+            remove_idx,
+        } => {
+            let add_candidate = &problem.candidates[add_idx];
+            let remove_candidate = &problem.candidates[remove_idx];
+            (
+                state
+                    .shadow_copy_words
+                    .checked_sub(add_candidate.shadow_copy_words)
+                    .expect("shadow copy words underflow")
+                    .checked_add(remove_candidate.shadow_copy_words)
+                    .expect("shadow copy words overflow"),
+                state
+                    .recursive_access_cost
+                    .checked_add(add_candidate.recursive_access_cost)
+                    .expect("recursive access cost overflow")
+                    .checked_sub(remove_candidate.recursive_access_cost)
+                    .expect("recursive access cost underflow"),
+            )
         }
     }
 }
@@ -1570,11 +2480,7 @@ fn is_stable_real(
 }
 
 fn is_better_score(candidate: FuncPlacementScore, current: FuncPlacementScore) -> bool {
-    candidate.cost < current.cost
-        || (candidate.cost == current.cost
-            && (candidate.stable_words < current.stable_words
-                || (candidate.stable_words == current.stable_words
-                    && candidate.scratch_words < current.scratch_words)))
+    cmp_func_placement_score(candidate, current) == Ordering::Less
 }
 
 fn evaluate_memory_cost(cost_model: &ArenaCostModel, scratch_words: u32, stable_words: u32) -> u64 {
@@ -2133,6 +3039,87 @@ mod tests {
         }
     }
 
+    fn state_from_mask(problem: &PlacementProblem<'_>, mask: usize) -> PlacementState {
+        let mut state = PlacementState::new(problem);
+        for candidate_idx in 0..problem.candidates.len() {
+            if mask & (1 << candidate_idx) != 0 {
+                state.apply_add(problem, candidate_idx);
+            }
+        }
+        state
+    }
+
+    fn eval_state_score(
+        problem: &PlacementProblem<'_>,
+        state: &PlacementState,
+        workspace: &mut FuncPlacementWorkspace,
+    ) -> FuncPlacementScore {
+        let promoted_optional = problem.promoted_optional(state);
+        let eval = evaluate_func_placement(problem, &promoted_optional, state, workspace);
+        score_from_full_eval(problem, state, &eval)
+    }
+
+    fn next_state_for_move(
+        problem: &PlacementProblem<'_>,
+        state: &PlacementState,
+        mv: PlacementMove,
+    ) -> PlacementState {
+        let mut next_state = state.clone();
+        match mv {
+            PlacementMove::None => {}
+            PlacementMove::Add(candidate_idx) => next_state.apply_add(problem, candidate_idx),
+            PlacementMove::Remove(candidate_idx) => next_state.apply_remove(problem, candidate_idx),
+            PlacementMove::Swap {
+                add_idx,
+                remove_idx,
+            } => {
+                next_state.apply_swap(problem, add_idx, remove_idx);
+            }
+        }
+        next_state
+    }
+
+    fn solve_problem_score(problem: &PlacementProblem<'_>) -> FuncPlacementScore {
+        let mut state = PlacementState::new(problem);
+        let mut lb_state = PlacementLowerBoundState::new(problem);
+        let mut score_workspace = FuncPlacementScoreWorkspace::default();
+        let mut search_work = SearchWorkBuffers::default();
+        let mut current_score = evaluate_func_placement_score(
+            problem,
+            &state,
+            PlacementMove::None,
+            &mut score_workspace,
+        );
+
+        loop {
+            if let Some(best_move) = find_best_exact_one_flip_move(
+                problem,
+                &state,
+                &mut lb_state,
+                current_score,
+                &mut score_workspace,
+                &mut search_work,
+            ) {
+                apply_placement_move(problem, &mut state, &mut lb_state, best_move.mv);
+                current_score = best_move.exact;
+                continue;
+            }
+            if let Some(best_move) = find_best_exact_swap_move(
+                problem,
+                &state,
+                &mut lb_state,
+                current_score,
+                &mut score_workspace,
+                &mut search_work,
+            ) {
+                apply_placement_move(problem, &mut state, &mut lb_state, best_move.mv);
+                current_score = best_move.exact;
+                continue;
+            }
+            return current_score;
+        }
+    }
+
     #[test]
     fn visible_alloca_uses_static_stable_abs() {
         let ctx = plan_ctx_from_src(
@@ -2371,13 +3358,8 @@ block0:
         assert_eq!(problem.candidates.len(), 2, "test expects two candidates");
 
         for mask in 0..(1usize << problem.candidates.len()) {
-            let mut state = PlacementState::new(&problem);
+            let state = state_from_mask(&problem, mask);
             let mut score_workspace = FuncPlacementScoreWorkspace::default();
-            for candidate_idx in 0..problem.candidates.len() {
-                if mask & (1 << candidate_idx) != 0 {
-                    state.apply_add(&problem, candidate_idx);
-                }
-            }
 
             let promoted_optional = problem.promoted_optional(&state);
             let mut workspace = FuncPlacementWorkspace {
@@ -2396,7 +3378,7 @@ block0:
                 evaluate_func_placement_score(
                     &problem,
                     &state,
-                    PlacementTrial::None,
+                    PlacementMove::None,
                     &mut score_workspace,
                 ),
                 score_from_full_eval(&problem, &state, &eval),
@@ -2418,7 +3400,7 @@ block0:
                         evaluate_func_placement_score(
                             &problem,
                             &state,
-                            PlacementTrial::Remove(candidate_idx),
+                            PlacementMove::Remove(candidate_idx),
                             &mut score_workspace,
                         ),
                         score_from_full_eval(&problem, &next_state, &next_eval),
@@ -2438,7 +3420,7 @@ block0:
                         evaluate_func_placement_score(
                             &problem,
                             &state,
-                            PlacementTrial::Add(candidate_idx),
+                            PlacementMove::Add(candidate_idx),
                             &mut score_workspace,
                         ),
                         score_from_full_eval(&problem, &next_state, &next_eval),
@@ -2446,6 +3428,176 @@ block0:
                     );
                 }
             }
+
+            for add_idx in 0..problem.candidates.len() {
+                if state.promoted[add_idx] {
+                    continue;
+                }
+                for remove_idx in 0..problem.candidates.len() {
+                    if !state.promoted[remove_idx] {
+                        continue;
+                    }
+                    let mv = PlacementMove::Swap {
+                        add_idx,
+                        remove_idx,
+                    };
+                    let next_state = next_state_for_move(&problem, &state, mv);
+                    let next_promoted = problem.promoted_optional(&next_state);
+                    let next_eval = evaluate_func_placement(
+                        &problem,
+                        &next_promoted,
+                        &next_state,
+                        &mut workspace,
+                    );
+                    assert_eq!(
+                        evaluate_func_placement_score(&problem, &state, mv, &mut score_workspace),
+                        score_from_full_eval(&problem, &next_state, &next_eval),
+                        "swap streamed score mismatch for add {add_idx} remove {remove_idx} in mask {mask:b}"
+                    );
+                }
+            }
         }
+    }
+
+    #[test]
+    fn placement_lower_bound_is_safe_for_all_moves() {
+        let cost_model = ArenaCostModel::default();
+        let (problem, is_recursive) = problem_from_src(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %f() -> i256 {
+block0:
+    v0.*i256 = alloca i256;
+    v1.*i256 = alloca i256;
+    v2.*i256 = alloca i256;
+    mstore v0 1.i256 i256;
+    mstore v1 2.i256 i256;
+    mstore v2 3.i256 i256;
+    v3.i256 = call %f;
+    v4.i256 = mload v0 i256;
+    v5.i256 = mload v1 i256;
+    v6.i256 = mload v2 i256;
+    v7.i256 = add v3 v4;
+    v8.i256 = add v7 v5;
+    v9.i256 = add v8 v6;
+    return v9;
+}
+"#,
+            "f",
+            &cost_model,
+        );
+        assert!(is_recursive, "test expects a recursive function");
+
+        let mut score_workspace = FuncPlacementScoreWorkspace::default();
+        for mask in 0..(1usize << problem.candidates.len()) {
+            let state = state_from_mask(&problem, mask);
+            let mut lb_state = PlacementLowerBoundState::new(&problem);
+            for candidate_idx in 0..problem.candidates.len() {
+                if state.promoted[candidate_idx] {
+                    lb_state.apply_add(&problem, candidate_idx);
+                }
+            }
+
+            let mut moves = vec![PlacementMove::None];
+            for candidate_idx in 0..problem.candidates.len() {
+                if state.promoted[candidate_idx] {
+                    moves.push(PlacementMove::Remove(candidate_idx));
+                } else {
+                    moves.push(PlacementMove::Add(candidate_idx));
+                }
+            }
+            for add_idx in 0..problem.candidates.len() {
+                if state.promoted[add_idx] {
+                    continue;
+                }
+                for remove_idx in 0..problem.candidates.len() {
+                    if state.promoted[remove_idx] {
+                        moves.push(PlacementMove::Swap {
+                            add_idx,
+                            remove_idx,
+                        });
+                    }
+                }
+            }
+
+            for mv in moves {
+                let lower_bound =
+                    evaluate_func_placement_lower_bound(&problem, &state, &mut lb_state, mv);
+                let exact =
+                    evaluate_func_placement_score(&problem, &state, mv, &mut score_workspace);
+                assert!(
+                    lower_bound.scratch_words <= exact.scratch_words,
+                    "scratch lower bound exceeded exact score for move {:?} in mask {mask:b}",
+                    mv
+                );
+                assert!(
+                    lower_bound.stable_words <= exact.stable_words,
+                    "stable lower bound exceeded exact score for move {:?} in mask {mask:b}",
+                    mv
+                );
+                assert!(
+                    lower_bound.cost <= exact.cost,
+                    "cost lower bound exceeded exact score for move {:?} in mask {mask:b}",
+                    mv
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn local_search_matches_exhaustive_optimum_on_small_problem() {
+        let cost_model = ArenaCostModel::default();
+        let (problem, is_recursive) = problem_from_src(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %f() -> i256 {
+block0:
+    v0.*i256 = alloca i256;
+    v1.*i256 = alloca i256;
+    v2.*i256 = alloca i256;
+    mstore v0 1.i256 i256;
+    mstore v1 2.i256 i256;
+    mstore v2 3.i256 i256;
+    v3.i256 = call %f;
+    v4.i256 = mload v0 i256;
+    v5.i256 = mload v1 i256;
+    v6.i256 = mload v2 i256;
+    v7.i256 = add v3 v4;
+    v8.i256 = add v7 v5;
+    v9.i256 = add v8 v6;
+    return v9;
+}
+"#,
+            "f",
+            &cost_model,
+        );
+        assert!(is_recursive, "test expects a recursive function");
+        assert_eq!(problem.candidates.len(), 3, "test expects three candidates");
+
+        let mut workspace = FuncPlacementWorkspace {
+            scratch_pack: Vec::with_capacity(problem.sorted_objects.len()),
+            shadow_objs: Vec::with_capacity(problem.sorted_calls.len()),
+            stable_pack: Vec::with_capacity(
+                problem
+                    .sorted_objects
+                    .len()
+                    .saturating_add(problem.sorted_calls.len()),
+            ),
+        };
+        let mut best = None;
+        for mask in 0..(1usize << problem.candidates.len()) {
+            let state = state_from_mask(&problem, mask);
+            let score = eval_state_score(&problem, &state, &mut workspace);
+            if best.is_none_or(|current| is_better_score(score, current)) {
+                best = Some(score);
+            }
+        }
+
+        assert_eq!(
+            solve_problem_score(&problem),
+            best.expect("missing exhaustive optimum"),
+        );
     }
 }

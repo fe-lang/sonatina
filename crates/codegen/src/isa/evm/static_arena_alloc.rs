@@ -788,18 +788,29 @@ impl ReleaseSchedule {
 }
 
 #[derive(Default)]
-struct PeakFreeList {
-    segments: Vec<FreeSegment>,
+struct PeakFreeTree {
+    root: Option<u32>,
+    nodes: Vec<PeakFreeNode>,
     frontier: Option<FreeSegment>,
 }
 
-impl PeakFreeList {
+#[derive(Clone, Copy, Debug)]
+struct PeakFreeNode {
+    seg: FreeSegment,
+    prio: u64,
+    parent: Option<u32>,
+    left: Option<u32>,
+    right: Option<u32>,
+    max_len: u32,
+}
+
+impl PeakFreeTree {
     fn reset(&mut self, capacity_hint: usize) {
-        self.segments.clear();
+        self.root = None;
+        self.nodes.clear();
         self.frontier = None;
-        if self.segments.capacity() < capacity_hint {
-            self.segments
-                .reserve(capacity_hint - self.segments.capacity());
+        if self.nodes.capacity() < capacity_hint {
+            self.nodes.reserve(capacity_hint - self.nodes.capacity());
         }
     }
 
@@ -818,55 +829,271 @@ impl PeakFreeList {
                 .checked_add(frontier.len)
                 .expect("free segment overflow");
         }
-        let mut index = self
-            .segments
-            .binary_search_by_key(&segment.start, |segment| segment.start)
-            .unwrap_or_else(|index| index);
-        if index != 0 {
-            let prev = self.segments[index - 1];
-            if prev.end() == segment.start {
-                let _ = self.segments.remove(index - 1);
-                index -= 1;
-                segment.start = prev.start;
+
+        let succ_idx = self.lower_bound(segment.start);
+        let pred_idx = succ_idx
+            .and_then(|idx| self.predecessor(idx))
+            .or_else(|| self.max_node(self.root));
+
+        if let Some(pred_idx) = pred_idx {
+            let pred = self.nodes[pred_idx as usize].seg;
+            if pred.end() == segment.start {
+                self.remove_node(pred_idx);
+                segment.start = pred.start;
                 segment.len = segment
                     .len
-                    .checked_add(prev.len)
+                    .checked_add(pred.len)
                     .expect("free segment overflow");
             }
         }
-        if index < self.segments.len() {
-            let next = self.segments[index];
-            if segment.end() == next.start {
-                let _ = self.segments.remove(index);
+
+        if let Some(succ_idx) = succ_idx {
+            let succ = self.nodes[succ_idx as usize].seg;
+            if segment.end() == succ.start {
+                self.remove_node(succ_idx);
                 segment.len = segment
                     .len
-                    .checked_add(next.len)
+                    .checked_add(succ.len)
                     .expect("free segment overflow");
             }
         }
 
         if segment.end() == max_used {
             self.frontier = Some(segment);
-        } else {
-            self.segments.insert(index, segment);
+            return;
         }
+
+        let node_idx = self.alloc_node(segment);
+        self.insert_node(node_idx);
     }
 
     fn take_fit(&mut self, size_words: u32) -> Option<FreeSegment> {
-        self.segments
-            .iter()
-            .position(|segment| segment.len >= size_words)
-            .map(|index| self.segments.remove(index))
+        let mut cursor = self.root;
+        while let Some(idx) = cursor {
+            let left = self.nodes[idx as usize].left;
+            if self.max_len(left) >= size_words {
+                cursor = left;
+                continue;
+            }
+            if self.nodes[idx as usize].seg.len >= size_words {
+                let seg = self.nodes[idx as usize].seg;
+                self.remove_node(idx);
+                return Some(seg);
+            }
+            let right = self.nodes[idx as usize].right;
+            if self.max_len(right) >= size_words {
+                cursor = right;
+                continue;
+            }
+            return None;
+        }
+        None
     }
 
     fn take_frontier(&mut self) -> Option<FreeSegment> {
         self.frontier.take()
     }
+
+    fn alloc_node(&mut self, seg: FreeSegment) -> u32 {
+        let idx = self.nodes.len() as u32;
+        self.nodes.push(PeakFreeNode {
+            seg,
+            prio: priority_for(seg.start),
+            parent: None,
+            left: None,
+            right: None,
+            max_len: seg.len,
+        });
+        idx
+    }
+
+    fn max_len(&self, root: Option<u32>) -> u32 {
+        root.map_or(0, |idx| self.nodes[idx as usize].max_len)
+    }
+
+    fn recompute(&mut self, idx: u32) {
+        let node = self.nodes[idx as usize];
+        self.nodes[idx as usize].max_len = node
+            .seg
+            .len
+            .max(self.max_len(node.left))
+            .max(self.max_len(node.right));
+    }
+
+    fn update_parent(&mut self, child: Option<u32>, parent: Option<u32>) {
+        if let Some(child) = child {
+            self.nodes[child as usize].parent = parent;
+        }
+    }
+
+    fn set_left(&mut self, parent: u32, child: Option<u32>) {
+        self.nodes[parent as usize].left = child;
+        self.update_parent(child, Some(parent));
+    }
+
+    fn set_right(&mut self, parent: u32, child: Option<u32>) {
+        self.nodes[parent as usize].right = child;
+        self.update_parent(child, Some(parent));
+    }
+
+    fn replace_child(&mut self, parent: Option<u32>, old: u32, new: Option<u32>) {
+        if let Some(parent) = parent {
+            if self.nodes[parent as usize].left == Some(old) {
+                self.set_left(parent, new);
+            } else {
+                debug_assert_eq!(self.nodes[parent as usize].right, Some(old));
+                self.set_right(parent, new);
+            }
+        } else {
+            self.root = new;
+            self.update_parent(new, None);
+        }
+    }
+
+    fn recompute_upwards(&mut self, mut node: Option<u32>) {
+        while let Some(idx) = node {
+            self.recompute(idx);
+            node = self.nodes[idx as usize].parent;
+        }
+    }
+
+    fn rotate_left(&mut self, idx: u32) {
+        let right = self.nodes[idx as usize]
+            .right
+            .expect("rotate_left requires right child");
+        let parent = self.nodes[idx as usize].parent;
+        let beta = self.nodes[right as usize].left;
+        self.replace_child(parent, idx, Some(right));
+        self.set_right(idx, beta);
+        self.set_left(right, Some(idx));
+        self.recompute(idx);
+        self.recompute(right);
+    }
+
+    fn rotate_right(&mut self, idx: u32) {
+        let left = self.nodes[idx as usize]
+            .left
+            .expect("rotate_right requires left child");
+        let parent = self.nodes[idx as usize].parent;
+        let beta = self.nodes[left as usize].right;
+        self.replace_child(parent, idx, Some(left));
+        self.set_left(idx, beta);
+        self.set_right(left, Some(idx));
+        self.recompute(idx);
+        self.recompute(left);
+    }
+
+    fn lower_bound(&self, key: u32) -> Option<u32> {
+        let mut cursor = self.root;
+        let mut candidate = None;
+        while let Some(idx) = cursor {
+            let node = self.nodes[idx as usize];
+            if node.seg.start < key {
+                cursor = node.right;
+            } else {
+                candidate = Some(idx);
+                cursor = node.left;
+            }
+        }
+        candidate
+    }
+
+    fn max_node(&self, mut node: Option<u32>) -> Option<u32> {
+        while let Some(idx) = node
+            && let Some(right) = self.nodes[idx as usize].right
+        {
+            node = Some(right);
+        }
+        node
+    }
+
+    fn predecessor(&self, idx: u32) -> Option<u32> {
+        if self.nodes[idx as usize].left.is_some() {
+            return self.max_node(self.nodes[idx as usize].left);
+        }
+        let mut cursor = idx;
+        let mut parent = self.nodes[cursor as usize].parent;
+        while let Some(parent_idx) = parent {
+            if self.nodes[parent_idx as usize].right == Some(cursor) {
+                return Some(parent_idx);
+            }
+            cursor = parent_idx;
+            parent = self.nodes[cursor as usize].parent;
+        }
+        None
+    }
+
+    fn insert_node(&mut self, node_idx: u32) {
+        let start = self.nodes[node_idx as usize].seg.start;
+        let Some(mut cursor) = self.root else {
+            self.root = Some(node_idx);
+            return;
+        };
+        loop {
+            if start < self.nodes[cursor as usize].seg.start {
+                if let Some(left) = self.nodes[cursor as usize].left {
+                    cursor = left;
+                } else {
+                    self.set_left(cursor, Some(node_idx));
+                    break;
+                }
+            } else if let Some(right) = self.nodes[cursor as usize].right {
+                cursor = right;
+            } else {
+                self.set_right(cursor, Some(node_idx));
+                break;
+            }
+        }
+
+        while let Some(parent) = self.nodes[node_idx as usize].parent {
+            if self.nodes[parent as usize].prio <= self.nodes[node_idx as usize].prio {
+                break;
+            }
+            if self.nodes[parent as usize].left == Some(node_idx) {
+                self.rotate_right(parent);
+            } else {
+                self.rotate_left(parent);
+            }
+        }
+        self.recompute_upwards(Some(node_idx));
+    }
+
+    fn remove_node(&mut self, idx: u32) {
+        while self.nodes[idx as usize].left.is_some() || self.nodes[idx as usize].right.is_some() {
+            match (
+                self.nodes[idx as usize].left,
+                self.nodes[idx as usize].right,
+            ) {
+                (Some(left), Some(right)) => {
+                    if self.nodes[left as usize].prio <= self.nodes[right as usize].prio {
+                        self.rotate_right(idx);
+                    } else {
+                        self.rotate_left(idx);
+                    }
+                }
+                (Some(_), None) => self.rotate_right(idx),
+                (None, Some(_)) => self.rotate_left(idx),
+                (None, None) => unreachable!(),
+            }
+        }
+
+        let parent = self.nodes[idx as usize].parent;
+        self.replace_child(parent, idx, None);
+        self.nodes[idx as usize].parent = None;
+        self.recompute_upwards(parent);
+    }
+}
+
+fn priority_for(start: u32) -> u64 {
+    let mut x = u64::from(start).wrapping_add(0x9e37_79b9_7f4a_7c15);
+    x = (x ^ (x >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    x = (x ^ (x >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    x ^ (x >> 31)
 }
 
 #[derive(Default)]
 pub(crate) struct PeakPackWorkspace {
-    free: PeakFreeList,
+    free: PeakFreeTree,
     active_epoch: Vec<u32>,
     active_off: Vec<u32>,
     active_size: Vec<u32>,
@@ -888,6 +1115,7 @@ impl PeakPackWorkspace {
         }
     }
 }
+
 trait FreeList {
     fn with_capacity(capacity: usize) -> Self;
     fn insert(&mut self, start: u32, len: u32);
@@ -897,6 +1125,7 @@ trait FreeList {
 
 struct SortedFreeList(Vec<FreeSegment>);
 
+#[cfg(test)]
 struct UnsortedFreeList(Vec<FreeSegment>);
 
 impl FreeList for SortedFreeList {
@@ -921,7 +1150,7 @@ impl FreeList for SortedFreeList {
     }
 }
 
-
+#[cfg(test)]
 impl FreeList for UnsortedFreeList {
     fn with_capacity(capacity: usize) -> Self {
         Self(Vec::with_capacity(capacity))
@@ -1180,6 +1409,7 @@ fn find_first_fit_segment(
         .position(|segment| free_segment_fits(*segment, min_offset_words, size_words))
 }
 
+#[cfg(test)]
 fn find_min_start_fit_segment(
     free: &[FreeSegment],
     min_offset_words: u32,
@@ -1242,6 +1472,7 @@ fn insert_free_segment_sorted(free: &mut Vec<FreeSegment>, start: u32, len: u32)
     free.insert(index, FreeSegment { start, len });
 }
 
+#[cfg(test)]
 fn insert_free_segment_unsorted(free: &mut Vec<FreeSegment>, start: u32, len: u32) {
     if len == 0 {
         return;
@@ -1717,6 +1948,43 @@ mod tests {
     }
 
     #[test]
+    fn zero_min_peak_packer_matches_generic_peak_with_dense_ties() {
+        let mut seed = 0x7c52_91d2_4aa1_44cdu64;
+        for case_idx in 0..256 {
+            let count = (next_test_u32(&mut seed) % 16 + 1) as usize;
+            let mut objects = Vec::with_capacity(count);
+            for obj_idx in 0..count {
+                let start = next_test_u32(&mut seed) % 4;
+                let end = start + next_test_u32(&mut seed) % 3;
+                objects.push(PackedObject {
+                    id: StackObjId::new(obj_idx + 1),
+                    size_words: next_test_u32(&mut seed) % 7,
+                    interval: LiveInterval { start, end },
+                    min_offset_words: 0,
+                });
+            }
+            objects.sort_unstable_by_key(|obj| {
+                (obj.interval.start, obj.interval.end, obj.id.as_u32())
+            });
+
+            let generic_peak = pack_objects_peak_presorted(&objects);
+            let mut workspace = PeakPackWorkspace::default();
+            let schedule = zero_min_release_schedule(&objects);
+            let specialized_peak = pack_zero_min_offset_peak_ranked(
+                &mut workspace,
+                &schedule,
+                zero_min_ranked_items(&objects),
+                objects.len(),
+            );
+
+            assert_eq!(
+                specialized_peak, generic_peak,
+                "dense-tie zero-min peak mismatch on case {case_idx}"
+            );
+        }
+    }
+
+    #[test]
     fn packer_extends_frontier_segment_into_tail() {
         let presorted = [
             PackedObject {
@@ -1834,6 +2102,55 @@ mod tests {
             subset.len(),
         );
 
+        assert_eq!(specialized_peak, generic_peak);
+    }
+
+    #[test]
+    fn zero_min_peak_packer_matches_generic_peak_when_frontier_forms_after_merge() {
+        let objects = [
+            PackedObject {
+                id: StackObjId::new(4),
+                size_words: 4,
+                interval: LiveInterval { start: 0, end: 4 },
+                min_offset_words: 0,
+            },
+            PackedObject {
+                id: StackObjId::new(2),
+                size_words: 1,
+                interval: LiveInterval { start: 3, end: 4 },
+                min_offset_words: 0,
+            },
+            PackedObject {
+                id: StackObjId::new(1),
+                size_words: 6,
+                interval: LiveInterval { start: 5, end: 8 },
+                min_offset_words: 0,
+            },
+            PackedObject {
+                id: StackObjId::new(3),
+                size_words: 1,
+                interval: LiveInterval { start: 6, end: 12 },
+                min_offset_words: 0,
+            },
+            PackedObject {
+                id: StackObjId::new(5),
+                size_words: 4,
+                interval: LiveInterval { start: 7, end: 10 },
+                min_offset_words: 0,
+            },
+        ];
+
+        let generic_peak = pack_objects_peak_presorted(&objects);
+        let mut workspace = PeakPackWorkspace::default();
+        let schedule = zero_min_release_schedule(&objects);
+        let specialized_peak = pack_zero_min_offset_peak_ranked(
+            &mut workspace,
+            &schedule,
+            zero_min_ranked_items(&objects),
+            objects.len(),
+        );
+
+        assert_eq!(generic_peak, 11);
         assert_eq!(specialized_peak, generic_peak);
     }
 
