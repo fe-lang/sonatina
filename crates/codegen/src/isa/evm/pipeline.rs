@@ -294,27 +294,32 @@ impl EvmPipelineContext<'_> {
             .ptr_escape
             .as_ref()
             .ok_or_else(|| "missing ptr escape summaries before free-ptr restore".to_string())?;
-        for &func in &self.funcs {
-            let _span = trace_span!(
-                "sonatina.codegen.evm.prepare_free_ptr_restore.func",
-                func_ref = func.as_u32()
-            )
-            .entered();
-            self.module().func_store.modify(func, |function| {
-                prepare_free_ptr_restore(function, &self.module().ctx, self.backend, ptr_escape);
+        {
+            let module = self.module();
+            let module_ctx = &module.ctx;
+            let backend = self.backend;
+            module.func_store.par_for_each(|func, function| {
+                let _span = trace_span!(
+                    "sonatina.codegen.evm.prepare_free_ptr_restore.func",
+                    func_ref = func.as_u32()
+                )
+                .entered();
+                prepare_free_ptr_restore(function, module_ctx, backend, ptr_escape);
             });
         }
         self.func_behavior_dirty = true;
 
-        for &func in &self.funcs {
-            let _span = trace_span!(
-                "sonatina.codegen.evm.aggregate_legalize.func",
-                func_ref = func.as_u32()
-            )
-            .entered();
-            self.module().func_store.modify(func, |function| {
-                AggregateLowerToMemoryLegalize::default().run(function, &self.module().ctx);
-                assert_aggregate_legalized(function, &self.module().ctx);
+        {
+            let module = self.module();
+            let module_ctx = &module.ctx;
+            module.func_store.par_for_each(|func, function| {
+                let _span = trace_span!(
+                    "sonatina.codegen.evm.aggregate_legalize.func",
+                    func_ref = func.as_u32()
+                )
+                .entered();
+                AggregateLowerToMemoryLegalize::default().run(function, module_ctx);
+                assert_aggregate_legalized(function, module_ctx);
             });
         }
         self.func_behavior_dirty = true;
