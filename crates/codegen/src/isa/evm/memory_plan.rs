@@ -1,4 +1,5 @@
 use cranelift_entity::{EntityRef, SecondaryMap};
+use rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{BlockId, InstId, Module, ValueId, module::FuncRef};
@@ -884,27 +885,45 @@ pub(crate) fn compute_program_memory_plan(
     let scc_edges = build_scc_edges(&funcs_set, &call_graph, &scc, &topo);
     let alloc_ctx = StaticArenaAllocCtx::new(&module.ctx, isa, ptr_escape);
 
+    let mut stack_results: Vec<_> = funcs
+        .par_iter()
+        .copied()
+        .map(|func| {
+            let analysis = analyses.get(&func).expect("missing FuncAnalysis");
+            let stack = module.func_store.view(func, |function| {
+                alloc_ctx.compute_func_stack_objects(func, function, analysis)
+            });
+            (func, stack)
+        })
+        .collect();
+    stack_results.sort_unstable_by_key(|(func, _)| func.as_u32());
+
     let mut stacks: FxHashMap<FuncRef, FuncStackObjects> = FxHashMap::default();
-    for &func in funcs {
-        let analysis = analyses.get(&func).expect("missing FuncAnalysis");
-        let stack = module.func_store.view(func, |function| {
-            alloc_ctx.compute_func_stack_objects(func, function, analysis)
-        });
+    for (func, stack) in stack_results {
         stacks.insert(func, stack);
     }
 
+    let mut placement_results: Vec<_> = funcs
+        .par_iter()
+        .copied()
+        .map(|func| {
+            let stack = stacks
+                .get(&func)
+                .unwrap_or_else(|| panic!("missing object facts for func {}", func.as_u32()));
+            let scc_ref = scc.scc_ref(func);
+            let is_recursive = scc.scc_info(scc_ref).is_cycle;
+            let facts = build_planner_facts(stack, &scc, scc_ref, is_recursive);
+            (
+                func,
+                solve_func_placement(stack, &facts, is_recursive, cost_model),
+            )
+        })
+        .collect();
+    placement_results.sort_unstable_by_key(|(func, _)| func.as_u32());
+
     let mut placements: FxHashMap<FuncRef, FuncPlacementEval> = FxHashMap::default();
-    for &func in funcs {
-        let stack = stacks
-            .get(&func)
-            .unwrap_or_else(|| panic!("missing object facts for func {}", func.as_u32()));
-        let scc_ref = scc.scc_ref(func);
-        let is_recursive = scc.scc_info(scc_ref).is_cycle;
-        let facts = build_planner_facts(stack, &scc, scc_ref, is_recursive);
-        placements.insert(
-            func,
-            solve_func_placement(stack, &facts, is_recursive, cost_model),
-        );
+    for (func, placement) in placement_results {
+        placements.insert(func, placement);
     }
 
     let scratch_peak_words = placements
@@ -2937,6 +2956,115 @@ mod tests {
         }
     }
 
+    fn stable_mode_summary(mode: StableMode) -> (u8, u32) {
+        match mode {
+            StableMode::None => (0, 0),
+            StableMode::StaticAbs { base_word } => (1, base_word),
+            StableMode::DynamicFrame => (2, 0),
+        }
+    }
+
+    fn obj_loc_summary(loc: ObjLoc) -> (u8, u32) {
+        match loc {
+            ObjLoc::ScratchAbs(word) => (0, word),
+            ObjLoc::StableAbs(word) => (1, word),
+            ObjLoc::StableFrame(word) => (2, word),
+            ObjLoc::StackPinned(slot) => (3, u32::from(slot)),
+        }
+    }
+
+    fn call_preserve_summary(plan: &CallPreservePlan) -> (u8, u8, u32, Vec<(u32, u32, u32)>) {
+        match &plan.mode {
+            PreserveMode::None => (0, plan.result_count, 0, Vec::new()),
+            PreserveMode::ShadowRuns { shadow_obj, runs } => (
+                1,
+                plan.result_count,
+                shadow_obj.as_u32(),
+                runs.iter()
+                    .map(|run| (run.scratch_src_word, run.shadow_dst_word, run.len_words))
+                    .collect(),
+            ),
+            PreserveMode::TinyStackLift { word_offsets } => (
+                2,
+                plan.result_count,
+                0,
+                word_offsets
+                    .iter()
+                    .copied()
+                    .map(|word| (word, 0, 0))
+                    .collect(),
+            ),
+        }
+    }
+
+    type ObjLocSummary = (u8, u32);
+    type PreserveRunSummary = (u32, u32, u32);
+    type CallPreserveSummary = (u8, u8, u32, Vec<PreserveRunSummary>);
+    type FuncPlanSummary = (
+        String,
+        Vec<(u32, ObjLocSummary)>,
+        Vec<(u32, ObjLocSummary)>,
+        Vec<(u32, CallPreserveSummary)>,
+        u32,
+        u32,
+        (u8, u32),
+        u32,
+    );
+    type PlanSummary = (u32, u32, u32, Vec<FuncRef>, Vec<FuncPlanSummary>);
+
+    fn plan_summary(ctx: &PlanCtx) -> PlanSummary {
+        let mut funcs = ctx.module.funcs();
+        funcs.sort_unstable_by_key(|func| func.as_u32());
+        let per_func = funcs
+            .iter()
+            .copied()
+            .map(|func| {
+                let name = ctx.module.ctx.func_sig(func, |sig| sig.name().to_string());
+                let func_plan = ctx.plan.funcs.get(&func).expect("missing function plan");
+
+                let mut obj_loc: Vec<_> = func_plan
+                    .obj_loc
+                    .iter()
+                    .map(|(obj, loc)| (obj.as_u32(), obj_loc_summary(*loc)))
+                    .collect();
+                obj_loc.sort_unstable_by_key(|(obj, _)| *obj);
+
+                let mut alloca_loc: Vec<_> = func_plan
+                    .alloca_loc
+                    .iter()
+                    .map(|(inst, loc)| (inst.as_u32(), obj_loc_summary(*loc)))
+                    .collect();
+                alloca_loc.sort_unstable_by_key(|(inst, _)| *inst);
+
+                let mut call_preserve: Vec<_> = func_plan
+                    .call_preserve
+                    .iter()
+                    .map(|(inst, plan)| (inst.as_u32(), call_preserve_summary(plan)))
+                    .collect();
+                call_preserve.sort_unstable_by_key(|(inst, _)| *inst);
+
+                (
+                    name,
+                    obj_loc,
+                    alloca_loc,
+                    call_preserve,
+                    func_plan.scratch_words,
+                    func_plan.stable_words,
+                    stable_mode_summary(func_plan.stable_mode),
+                    func_plan.entry_abs_words,
+                )
+            })
+            .collect();
+
+        (
+            ctx.plan.scratch_peak_words,
+            ctx.plan.static_chain_peak_words,
+            ctx.plan.global_dyn_base,
+            funcs,
+            per_func,
+        )
+    }
+
     fn alloca_insts(module: &Module, isa: &Evm, func: FuncRef) -> Vec<InstId> {
         module.func_store.view(func, |function| {
             let mut allocas: Vec<InstId> = Vec::new();
@@ -3328,6 +3456,51 @@ block0:
         let c_base = c_plan.stable_base_word().expect("missing c base");
         assert!(b_base >= a_base + a_plan.stable_words);
         assert!(c_base >= b_base + b_plan.stable_words);
+    }
+
+    #[test]
+    fn compute_program_memory_plan_is_deterministic_across_runs() {
+        let src = r#"
+target = "evm-ethereum-osaka"
+
+func public %leaf(v0.*i256) -> i256 {
+block0:
+    mstore v0 1.i256 i256;
+    return 0.i256;
+}
+
+func public %chain(v0.*i256) -> i256 {
+block0:
+    v1.*i256 = alloca i256;
+    v2.i256 = call %leaf v1;
+    return v2;
+}
+
+func public %recur(v0.*i256, v1.i256) -> i256 {
+block0:
+    v2.i1 = eq v1 0.i256;
+    br v2 block1 block2;
+
+block1:
+    return 0.i256;
+
+block2:
+    v3.*i256 = alloca i256;
+    mstore v3 v1 i256;
+    v4.i256 = sub v1 1.i256;
+    v5.i256 = call %recur v3 v4;
+    v6.i256 = call %chain v3;
+    v7.i256 = add v5 v6;
+    return v7;
+}
+"#;
+
+        let cost_model = ArenaCostModel::default();
+        let expected = plan_summary(&plan_ctx_from_src(src, &cost_model));
+        for _ in 0..8 {
+            let actual = plan_summary(&plan_ctx_from_src(src, &cost_model));
+            assert_eq!(actual, expected, "memory plan changed across runs");
+        }
     }
 
     #[test]
