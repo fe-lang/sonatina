@@ -1,3 +1,4 @@
+use rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
 use rustc_hash::FxHashSet;
 use sonatina_ir::{
     Function, Module,
@@ -15,15 +16,17 @@ pub(crate) fn compute_local_scratch_clobbers(
     funcs: &[FuncRef],
     isa: &Evm,
 ) -> FxHashSet<FuncRef> {
-    let mut local = FxHashSet::default();
-    for &func in funcs {
-        if module.func_store.view(func, |function| {
-            func_clobbers_scratch(function, &module.ctx, isa)
-        }) {
-            local.insert(func);
-        }
-    }
-    local
+    let mut local: Vec<_> = funcs
+        .par_iter()
+        .copied()
+        .filter(|&func| {
+            module.func_store.view(func, |function| {
+                func_clobbers_scratch(function, &module.ctx, isa)
+            })
+        })
+        .collect();
+    local.sort_unstable_by_key(|func| func.as_u32());
+    local.into_iter().collect()
 }
 
 fn func_clobbers_scratch(function: &Function, module: &ModuleCtx, isa: &Evm) -> bool {

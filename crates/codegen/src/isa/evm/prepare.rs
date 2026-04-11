@@ -1,3 +1,4 @@
+use rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
 use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::{debug_span, info_span, trace_span};
 
@@ -572,23 +573,33 @@ fn compute_scratch_effect_analyses(
         });
         let analysis_scratch_effects = cycle_scratch_effects.as_ref().unwrap_or(&scratch_effects);
 
-        let mut scc_uses_scratch_spills = false;
-        for func in components.iter().copied() {
-            let _span = trace_span!(
-                "sonatina.codegen.evm.prepare_stackify_analysis",
-                func_ref = func.as_u32()
-            )
-            .entered();
-            let analysis = module.func_store.modify(func, |function| {
-                prepare_stackify_analysis(
-                    function,
-                    &module.ctx,
-                    backend,
-                    ptr_escape,
-                    Some(analysis_scratch_effects),
+        let mut scc_results: Vec<_> = components
+            .par_iter()
+            .copied()
+            .map(|func| {
+                let _span = trace_span!(
+                    "sonatina.codegen.evm.prepare_stackify_analysis",
+                    func_ref = func.as_u32()
                 )
-            });
-            scc_uses_scratch_spills |= analysis.alloc.uses_scratch_spills();
+                .entered();
+                let analysis = module.func_store.modify(func, |function| {
+                    prepare_stackify_analysis(
+                        function,
+                        &module.ctx,
+                        backend,
+                        ptr_escape,
+                        Some(analysis_scratch_effects),
+                    )
+                });
+                let uses_scratch_spills = analysis.alloc.uses_scratch_spills();
+                (func, analysis, uses_scratch_spills)
+            })
+            .collect();
+        scc_results.sort_unstable_by_key(|(func, _, _)| func.as_u32());
+
+        let mut scc_uses_scratch_spills = false;
+        for (func, analysis, uses_scratch_spills) in scc_results {
+            scc_uses_scratch_spills |= uses_scratch_spills;
             analyses.insert(func, analysis);
         }
 
