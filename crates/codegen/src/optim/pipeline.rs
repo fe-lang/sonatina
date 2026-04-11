@@ -9,6 +9,7 @@
 //! [`Step`] represents one unit of work in the pipeline. [`Pipeline`] holds
 //! an ordered sequence of steps and executes them against a module.
 
+use rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
 use sonatina_ir::{
     ControlFlowGraph, Function,
     module::{FuncRef, Module},
@@ -511,7 +512,7 @@ fn run_module_pass(pass: Pass, module: &Module, overrides: FuncPassOverrides<'_>
         .local_object_args
         .or(owned_local_object_args.as_ref());
     if let Some(funcs) = overrides.funcs {
-        for &func_ref in funcs {
+        funcs.par_iter().copied().for_each(|func_ref| {
             module.func_store.modify(func_ref, |func| {
                 let _span = debug_span!(
                     "sonatina.optim.pipeline.function",
@@ -528,7 +529,7 @@ fn run_module_pass(pass: Pass, module: &Module, overrides: FuncPassOverrides<'_>
                     object_effects,
                 );
             });
-        }
+        });
     } else {
         module.func_store.par_for_each(|func_ref, func| {
             let _span = debug_span!(
@@ -2480,6 +2481,78 @@ func public %entry(v0.i256) -> i256 {
             assert!(
                 dumped.contains("call %sink"),
                 "caller should still call sink after cleanup:\n{dumped}"
+            );
+        });
+    }
+
+    #[test]
+    fn explicit_func_subset_only_runs_passes_on_selected_functions() {
+        let source = r#"
+target = "evm-ethereum-osaka"
+
+func private %selected() -> i256 {
+block0:
+    br 1.i1 block1 block2;
+
+block1:
+    return 7.i256;
+
+block2:
+    return 9.i256;
+}
+
+func private %other() -> i256 {
+block0:
+    br 1.i1 block1 block2;
+
+block1:
+    return 11.i256;
+
+block2:
+    return 13.i256;
+}
+"#;
+
+        let module = parse_module(source).expect("parse should succeed").module;
+        let funcs = module.funcs();
+        let selected = funcs
+            .iter()
+            .copied()
+            .find(|func_ref| {
+                module
+                    .ctx
+                    .func_sig(*func_ref, |sig| sig.name() == "selected")
+            })
+            .expect("selected should exist");
+        let other = funcs
+            .iter()
+            .copied()
+            .find(|func_ref| module.ctx.func_sig(*func_ref, |sig| sig.name() == "other"))
+            .expect("other should exist");
+
+        let mut func_behavior_dirty = true;
+        run_function_pass_round(
+            &module,
+            &[Pass::Sccp, Pass::CfgCleanup],
+            &mut func_behavior_dirty,
+            FuncPassOverrides {
+                funcs: Some(&[selected]),
+                ..FuncPassOverrides::default()
+            },
+        );
+
+        module.func_store.view(selected, |func| {
+            let dumped = FuncWriter::new(selected, func).dump_string();
+            assert!(
+                !dumped.contains("block2"),
+                "selected function should be optimized by the subset pass round:\n{dumped}"
+            );
+        });
+        module.func_store.view(other, |func| {
+            let dumped = FuncWriter::new(other, func).dump_string();
+            assert!(
+                dumped.contains("block2"),
+                "unselected function should not be mutated by the subset pass round:\n{dumped}"
             );
         });
     }
