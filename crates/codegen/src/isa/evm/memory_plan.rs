@@ -694,7 +694,7 @@ impl MaxAddSegTree {
     }
 
     fn add_point_nolog(&mut self, idx: u32, delta: i64) {
-        self.add_point_impl(idx as usize, delta, 1, 0, self.len);
+        self.add_point_impl(idx as usize, delta);
     }
 
     fn max_value(&self) -> u32 {
@@ -736,28 +736,30 @@ impl MaxAddSegTree {
         self.recompute(idx);
     }
 
-    fn add_point_impl(
-        &mut self,
-        pos: usize,
-        delta: i64,
-        idx: usize,
-        seg_start: usize,
-        seg_end: usize,
-    ) {
-        if self.len == 0 || seg_start == seg_end || pos < seg_start || pos >= seg_end {
+    fn add_point_impl(&mut self, pos: usize, delta: i64) {
+        if self.len == 0 || pos >= self.len {
             return;
         }
-        if seg_end - seg_start == 1 {
-            self.apply_delta(idx, delta);
-            return;
+
+        let mut idx = 1usize;
+        let mut seg_start = 0usize;
+        let mut seg_end = self.len;
+        let mut path = SmallVec::<[usize; 32]>::new();
+        while seg_end - seg_start > 1 {
+            path.push(idx);
+            let mid = seg_start + (seg_end - seg_start) / 2;
+            if pos < mid {
+                idx *= 2;
+                seg_end = mid;
+            } else {
+                idx = idx * 2 + 1;
+                seg_start = mid;
+            }
         }
-        let mid = seg_start + (seg_end - seg_start) / 2;
-        if pos < mid {
-            self.add_point_impl(pos, delta, idx * 2, seg_start, mid);
-        } else {
-            self.add_point_impl(pos, delta, idx * 2 + 1, mid, seg_end);
+        self.apply_delta(idx, delta);
+        while let Some(parent) = path.pop() {
+            self.recompute(parent);
         }
-        self.recompute(idx);
     }
 
     fn apply_delta(&mut self, idx: usize, delta: i64) {
