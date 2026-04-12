@@ -1,3 +1,4 @@
+use rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
 use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
     Function, InstSetExt, Module,
@@ -43,24 +44,31 @@ pub(crate) fn compute_func_mem_effects(
     let edges = build_scc_edges(&funcs_set, &call_graph, &scc, &topo);
 
     let mut local_effects: FxHashMap<FuncRef, FuncMemEffects> = FxHashMap::default();
-    for &func in funcs {
-        let func_plan = plan.funcs.get(&func);
-        let touches_static_arena = func_plan.is_some_and(|p| {
-            p.scratch_words != 0 || p.stable_base_word().is_some() && p.stable_words != 0
-        });
-        let touches_dyn_frame = func_plan.is_some_and(|p| p.frame_words() != 0);
-        let touches_heap_meta = module.func_store.view(func, |f| func_uses_malloc(f, isa));
-        let touches_scratch = scratch_effects.contains(&func);
-
-        local_effects.insert(
-            func,
-            FuncMemEffects {
-                touches_static_arena,
-                touches_scratch,
-                touches_dyn_frame,
-                touches_heap_meta,
-            },
-        );
+    let mut local_effect_results: Vec<_> = funcs
+        .par_iter()
+        .copied()
+        .map(|func| {
+            let func_plan = plan.funcs.get(&func);
+            let touches_static_arena = func_plan.is_some_and(|p| {
+                p.scratch_words != 0 || p.stable_base_word().is_some() && p.stable_words != 0
+            });
+            let touches_dyn_frame = func_plan.is_some_and(|p| p.frame_words() != 0);
+            let touches_heap_meta = module.func_store.view(func, |f| func_uses_malloc(f, isa));
+            let touches_scratch = scratch_effects.contains(&func);
+            (
+                func,
+                FuncMemEffects {
+                    touches_static_arena,
+                    touches_scratch,
+                    touches_dyn_frame,
+                    touches_heap_meta,
+                },
+            )
+        })
+        .collect();
+    local_effect_results.sort_unstable_by_key(|(func, _)| func.as_u32());
+    for (func, effects) in local_effect_results {
+        local_effects.insert(func, effects);
     }
 
     let mut scc_effects: FxHashMap<SccRef, FuncMemEffects> = FxHashMap::default();

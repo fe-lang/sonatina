@@ -900,6 +900,129 @@ block2:
 }
 
 #[test]
+fn dyn_sp_plan_is_deterministic_across_runs() {
+    let src = r#"
+target = "evm-ethereum-osaka"
+
+func public %entry(v0.i256) -> i256 {
+block0:
+    v1.i1 = eq v0 0.i256;
+    br v1 block1 block2;
+
+block1:
+    v2.i256 = call %helper 4.i256;
+    return v2;
+
+block2:
+    v3.i256 = call %ready_caller v0;
+    return v3;
+}
+
+func private %helper(v0.i256) -> i256 {
+block0:
+    v1.i1 = eq v0 0.i256;
+    br v1 block1 block2;
+
+block1:
+    return 0.i256;
+
+block2:
+    v2.*i256 = alloca i256;
+    mstore v2 v0 i256;
+    v3.i256 = call %ready_caller v0;
+    v4.i256 = sub v0 1.i256;
+    v5.i256 = call %target v4;
+    v6.i256 = mload v2 i256;
+    v7.i256 = add v3 v5;
+    v8.i256 = add v7 v6;
+    return v8;
+}
+
+func private %ready_caller(v0.i256) -> i256 {
+block0:
+    v1.i1 = eq v0 0.i256;
+    br v1 block1 block2;
+
+block1:
+    return 0.i256;
+
+block2:
+    v2.*i256 = alloca i256;
+    mstore v2 v0 i256;
+    v3.i256 = call %target v0;
+    v4.i256 = mload v2 i256;
+    v5.i256 = add v3 v4;
+    return v5;
+}
+
+func private %target(v0.i256) -> i256 {
+block0:
+    v1.i1 = eq v0 0.i256;
+    br v1 block1 block2;
+
+block1:
+    return 0.i256;
+
+block2:
+    v2.*i256 = alloca i256;
+    mstore v2 v0 i256;
+    v3.i256 = sub v0 1.i256;
+    v4.i256 = call %target v3;
+    v5.i256 = mload v2 i256;
+    v6.i256 = add v4 v5;
+    return v6;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}
+"#;
+
+    let mut expected_frontier_init_calls = None;
+    let mut expected_checked_frontier_init_calls = None;
+    let mut expected_entry_live_frame = None;
+    let mut expected_frame_summaries = None;
+
+    for _ in 0..8 {
+        let plan = dyn_sp_plan_from_src(src).plan;
+        if let Some(expected) = &expected_frontier_init_calls {
+            assert_eq!(
+                &plan.frontier_init_calls, expected,
+                "frontier init calls changed across runs"
+            );
+        } else {
+            expected_frontier_init_calls = Some(plan.frontier_init_calls.clone());
+        }
+        if let Some(expected) = &expected_checked_frontier_init_calls {
+            assert_eq!(
+                &plan.checked_frontier_init_calls, expected,
+                "checked frontier init calls changed across runs"
+            );
+        } else {
+            expected_checked_frontier_init_calls = Some(plan.checked_frontier_init_calls.clone());
+        }
+        if let Some(expected) = &expected_entry_live_frame {
+            assert_eq!(
+                &plan.entry_live_frame, expected,
+                "entry live frame changed across runs"
+            );
+        } else {
+            expected_entry_live_frame = Some(plan.entry_live_frame.clone());
+        }
+        if let Some(expected) = &expected_frame_summaries {
+            assert_eq!(
+                &plan.frame_summaries, expected,
+                "frame summaries changed across runs"
+            );
+        } else {
+            expected_frame_summaries = Some(plan.frame_summaries.clone());
+        }
+    }
+}
+
+#[test]
 fn noreturn_call_skips_continuation_marker_and_preserve() {
     let parsed = parse_module(
         r#"
