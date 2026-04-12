@@ -3050,6 +3050,7 @@ mod tests {
     use crate::{
         critical_edge::CriticalEdgeSplitter,
         domtree::DomTree,
+        isa::evm::static_arena_alloc::StableReason,
         liveness::{InstLiveness, Liveness},
         stackalloc::StackifyBuilder,
     };
@@ -3370,6 +3371,234 @@ mod tests {
         score_from_full_eval(problem, state, &eval)
     }
 
+    fn search_regression_problems() -> Vec<PlacementProblem<'static>> {
+        const LADDER_THREE_CALLS: &str = r#"
+target = "evm-ethereum-osaka"
+
+func public %f() -> i256 {
+block0:
+    v0.*i256 = alloca i256;
+    v1.*i256 = alloca i256;
+    v2.*i256 = alloca i256;
+    v3.*i256 = alloca i256;
+    mstore v0 1.i256 i256;
+    mstore v1 2.i256 i256;
+    v4.i256 = call %f;
+    v5.i256 = mload v0 i256;
+    mstore v2 3.i256 i256;
+    v6.i256 = call %f;
+    v7.i256 = mload v1 i256;
+    mstore v3 4.i256 i256;
+    v8.i256 = call %f;
+    v9.i256 = mload v2 i256;
+    v10.i256 = mload v3 i256;
+    v11.i256 = add v4 v5;
+    v12.i256 = add v11 v6;
+    v13.i256 = add v12 v7;
+    v14.i256 = add v13 v8;
+    v15.i256 = add v14 v9;
+    v16.i256 = add v15 v10;
+    return v16;
+}
+"#;
+        const LADDER_FOUR_CALLS: &str = r#"
+target = "evm-ethereum-osaka"
+
+func public %f() -> i256 {
+block0:
+    v0.*i256 = alloca i256;
+    v1.*i256 = alloca i256;
+    v2.*i256 = alloca i256;
+    v3.*i256 = alloca i256;
+    v4.*i256 = alloca i256;
+    mstore v0 1.i256 i256;
+    mstore v1 2.i256 i256;
+    v5.i256 = call %f;
+    mstore v2 3.i256 i256;
+    v6.i256 = call %f;
+    v7.i256 = mload v0 i256;
+    mstore v3 4.i256 i256;
+    v8.i256 = call %f;
+    v9.i256 = mload v1 i256;
+    v10.i256 = mload v2 i256;
+    mstore v4 5.i256 i256;
+    v11.i256 = call %f;
+    v12.i256 = mload v3 i256;
+    v13.i256 = mload v4 i256;
+    v14.i256 = add v5 v6;
+    v15.i256 = add v14 v7;
+    v16.i256 = add v15 v8;
+    v17.i256 = add v16 v9;
+    v18.i256 = add v17 v10;
+    v19.i256 = add v18 v11;
+    v20.i256 = add v19 v12;
+    v21.i256 = add v20 v13;
+    return v21;
+}
+"#;
+
+        let cost_models = [
+            ArenaCostModel::default(),
+            ArenaCostModel {
+                w_mem: 3,
+                w_save: 6,
+                w_code: 25,
+                w_stack: 1,
+                max_save_words_per_call: 128,
+            },
+            ArenaCostModel {
+                w_mem: 3,
+                w_save: 1,
+                w_code: 10,
+                w_stack: 6,
+                max_save_words_per_call: 128,
+            },
+        ];
+        let mut problems = Vec::new();
+        let synthetic_mask_patterns = [
+            [0b001, 0b011, 0b110, 0b100],
+            [0b001, 0b111, 0b110, 0b100],
+            [0b001, 0b010, 0b100, 0b111],
+            [0b101, 0b011, 0b110, 0b001],
+        ];
+        let synthetic_size_patterns = [[1, 1, 1, 1], [1, 1, 2, 2], [1, 2, 1, 3], [2, 2, 1, 1]];
+        let synthetic_weight_patterns = [[1, 1, 1, 1], [1, 3, 2, 4], [4, 1, 3, 2]];
+        for call_masks in synthetic_mask_patterns {
+            for sizes in synthetic_size_patterns {
+                for access_weights in synthetic_weight_patterns {
+                    for cost_model in cost_models {
+                        problems.push(synthetic_search_problem(
+                            call_masks,
+                            sizes,
+                            access_weights,
+                            cost_model,
+                        ));
+                    }
+                }
+            }
+        }
+        for src in [LADDER_THREE_CALLS, LADDER_FOUR_CALLS] {
+            for cost_model in cost_models {
+                let (problem, is_recursive) = problem_from_src(src, "f", &cost_model);
+                assert!(
+                    is_recursive,
+                    "search regression expects a recursive function"
+                );
+                assert!(
+                    problem.candidates.len() >= 4,
+                    "search regression expects at least four candidates"
+                );
+                problems.push(problem);
+            }
+        }
+        problems
+    }
+
+    fn synthetic_search_problem(
+        call_masks: [u8; 4],
+        sizes: [u32; 4],
+        access_weights: [u64; 4],
+        cost_model: ArenaCostModel,
+    ) -> PlacementProblem<'static> {
+        let call_insts = [
+            InstId::from_u32(100),
+            InstId::from_u32(101),
+            InstId::from_u32(102),
+        ];
+        let call_positions = [10u32, 20, 30];
+
+        let mut objects = Vec::new();
+        let mut obj_facts = FxHashMap::default();
+        let mut obj_size_words = FxHashMap::default();
+        let mut alloca_ids = FxHashMap::default();
+        for obj_idx in 0..call_masks.len() {
+            let id = StackObjId::from_u32(obj_idx as u32);
+            let alloca = InstId::from_u32(obj_idx as u32);
+            let first_call_idx = (0..call_insts.len())
+                .find(|&call_idx| call_masks[obj_idx] & (1 << call_idx) != 0)
+                .expect("synthetic candidate must be live across at least one call");
+            let last_call_idx = (0..call_insts.len())
+                .rev()
+                .find(|&call_idx| call_masks[obj_idx] & (1 << call_idx) != 0)
+                .expect("synthetic candidate must be live across at least one call");
+            let interval = LiveInterval {
+                start: call_positions[first_call_idx].saturating_sub(1),
+                end: call_positions[last_call_idx]
+                    .checked_add(1)
+                    .expect("synthetic interval end overflow"),
+            };
+            let live_across_calls = call_insts
+                .iter()
+                .enumerate()
+                .filter_map(|(call_idx, &inst)| {
+                    (call_masks[obj_idx] & (1 << call_idx) != 0).then_some(inst)
+                })
+                .collect::<SmallVec<[InstId; 4]>>();
+            objects.push(StackObj {
+                id,
+                kind: StackObjKind::Alloca(alloca),
+                size_words: sizes[obj_idx],
+                interval,
+                access_weight: access_weights[obj_idx],
+                load_count: 1,
+                store_count: 1,
+            });
+            obj_facts.insert(
+                id,
+                ObjFacts {
+                    id,
+                    size_words: sizes[obj_idx],
+                    interval,
+                    is_alloca: true,
+                    is_spill: false,
+                    address_taken: false,
+                    access_weight: access_weights[obj_idx],
+                    load_count: 1,
+                    store_count: 1,
+                    live_across_calls,
+                    visible_to_callee_at: SmallVec::new(),
+                    live_across_recursive_call: true,
+                    must_stable: false,
+                    stable_reason: StableReason::None,
+                },
+            );
+            obj_size_words.insert(id, sizes[obj_idx]);
+            alloca_ids.insert(alloca, id);
+        }
+
+        let call_sites = call_insts
+            .iter()
+            .enumerate()
+            .map(|(call_idx, &inst)| CallSiteObjects {
+                inst,
+                inst_pos: call_positions[call_idx],
+                callee: FuncRef::from_u32(0),
+                result_count: 1,
+                arg_count: 0,
+                live_out_objs: (0..call_masks.len())
+                    .filter_map(|obj_idx| {
+                        (call_masks[obj_idx] & (1 << call_idx) != 0)
+                            .then_some(StackObjId::from_u32(obj_idx as u32))
+                    })
+                    .collect(),
+                callee_visible_objs: Vec::new(),
+            })
+            .collect();
+
+        let stack = Box::leak(Box::new(FuncStackObjects {
+            objects,
+            obj_facts: obj_facts.clone(),
+            obj_size_words,
+            alloca_ids,
+            spill_obj: SecondaryMap::default(),
+            call_sites,
+            next_obj_id: call_masks.len() as u32,
+        }));
+        let facts = Box::leak(Box::new(obj_facts));
+        let cost_model = Box::leak(Box::new(cost_model));
+        PlacementProblem::new(stack, facts, true, cost_model)
+    }
+
     fn next_state_for_move(
         problem: &PlacementProblem<'_>,
         state: &PlacementState,
@@ -3507,6 +3736,126 @@ mod tests {
                 continue;
             }
             return current_score;
+        }
+    }
+
+    fn best_exact_one_flip(
+        problem: &PlacementProblem<'_>,
+        state: &PlacementState,
+        current_score: FuncPlacementScore,
+        workspace: &mut FuncPlacementScoreWorkspace,
+    ) -> Option<ExactMoveEval> {
+        let mut best_exact: Option<ExactMoveEval> = None;
+        for candidate_idx in 0..problem.candidates.len() {
+            let mv = if state.promoted[candidate_idx] {
+                PlacementMove::Remove(candidate_idx)
+            } else {
+                PlacementMove::Add(candidate_idx)
+            };
+            let exact = evaluate_func_placement_score(problem, state, mv, workspace);
+            if !is_better_score(exact, current_score) {
+                continue;
+            }
+            if best_exact.is_none_or(|current_best| {
+                is_preferred_exact_move(
+                    problem,
+                    state,
+                    mv,
+                    exact,
+                    current_best.mv,
+                    current_best.exact,
+                )
+            }) {
+                best_exact = Some(ExactMoveEval { mv, exact });
+            }
+        }
+        best_exact
+    }
+
+    fn best_exact_swap(
+        problem: &PlacementProblem<'_>,
+        state: &PlacementState,
+        current_score: FuncPlacementScore,
+        workspace: &mut FuncPlacementScoreWorkspace,
+    ) -> Option<ExactMoveEval> {
+        let mut best_exact: Option<ExactMoveEval> = None;
+        for add_idx in 0..problem.candidates.len() {
+            if state.promoted[add_idx] {
+                continue;
+            }
+            for remove_idx in 0..problem.candidates.len() {
+                if !state.promoted[remove_idx] {
+                    continue;
+                }
+                let mv = PlacementMove::Swap {
+                    add_idx,
+                    remove_idx,
+                };
+                let exact = evaluate_func_placement_score(problem, state, mv, workspace);
+                if !is_better_score(exact, current_score) {
+                    continue;
+                }
+                if best_exact.is_none_or(|current_best| {
+                    is_preferred_exact_move(
+                        problem,
+                        state,
+                        mv,
+                        exact,
+                        current_best.mv,
+                        current_best.exact,
+                    )
+                }) {
+                    best_exact = Some(ExactMoveEval { mv, exact });
+                }
+            }
+        }
+        best_exact
+    }
+
+    fn solve_problem_trace_from_state(
+        problem: &PlacementProblem<'_>,
+        start_state: &PlacementState,
+    ) -> (FuncPlacementScore, Vec<PlacementMove>) {
+        let mut state = start_state.clone();
+        let mut lb_state = lb_state_for_state(problem, &state);
+        let mut score_workspace = FuncPlacementScoreWorkspace::default();
+        let mut search_work = SearchWorkBuffers::default();
+        let mut current_score = evaluate_func_placement_score(
+            problem,
+            &state,
+            PlacementMove::None,
+            &mut score_workspace,
+        );
+        let mut trace = Vec::new();
+
+        loop {
+            if let Some(best_move) = find_best_exact_one_flip_move(
+                problem,
+                &state,
+                &mut lb_state,
+                current_score,
+                &mut score_workspace,
+                &mut search_work,
+            ) {
+                apply_placement_move(problem, &mut state, &mut lb_state, best_move.mv);
+                current_score = best_move.exact;
+                trace.push(best_move.mv);
+                continue;
+            }
+            if let Some(best_move) = find_best_exact_swap_move(
+                problem,
+                &state,
+                &mut lb_state,
+                current_score,
+                &mut score_workspace,
+                &mut search_work,
+            ) {
+                apply_placement_move(problem, &mut state, &mut lb_state, best_move.mv);
+                current_score = best_move.exact;
+                trace.push(best_move.mv);
+                continue;
+            }
+            return (current_score, trace);
         }
     }
 
@@ -4386,5 +4735,143 @@ block0:
             solve_problem_score(&problem),
             best.expect("missing exhaustive optimum"),
         );
+    }
+
+    #[test]
+    fn local_search_one_flip_search_matches_exact_best_on_small_synthetic_corpus() {
+        for (problem_idx, problem) in search_regression_problems()
+            .into_iter()
+            .take(12)
+            .enumerate()
+        {
+            let mut workspace = FuncPlacementWorkspace::default();
+            let mut exact_workspace = FuncPlacementScoreWorkspace::default();
+            for mask in 0..(1usize << problem.candidates.len()) {
+                let state = state_from_mask(&problem, mask);
+                let current_score = eval_state_score(&problem, &state, &mut workspace);
+                let expected =
+                    best_exact_one_flip(&problem, &state, current_score, &mut exact_workspace);
+                let mut lb_state = lb_state_for_state(&problem, &state);
+                let mut search_work = SearchWorkBuffers::default();
+                let actual = find_best_exact_one_flip_move(
+                    &problem,
+                    &state,
+                    &mut lb_state,
+                    current_score,
+                    &mut exact_workspace,
+                    &mut search_work,
+                );
+                assert_eq!(
+                    actual.map(|eval| eval.mv),
+                    expected.map(|eval| eval.mv),
+                    "unexpected one-flip move for problem={problem_idx} mask={mask:b}"
+                );
+                assert_eq!(
+                    actual.map(|eval| eval.exact),
+                    expected.map(|eval| eval.exact),
+                    "unexpected one-flip exact score for problem={problem_idx} mask={mask:b}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn local_search_matches_exhaustive_optimum_from_nonempty_states_on_small_synthetic_corpus() {
+        for (problem_idx, problem) in search_regression_problems()
+            .into_iter()
+            .take(12)
+            .enumerate()
+        {
+            let mut eval_workspace = FuncPlacementWorkspace::default();
+            let mut exhaustive_best = None;
+            for mask in 0..(1usize << problem.candidates.len()) {
+                let state = state_from_mask(&problem, mask);
+                let score = eval_state_score(&problem, &state, &mut eval_workspace);
+                if exhaustive_best.is_none_or(|current| is_better_score(score, current)) {
+                    exhaustive_best = Some(score);
+                }
+            }
+            let exhaustive_best = exhaustive_best.expect("missing exhaustive optimum");
+
+            for mask in 1..(1usize << problem.candidates.len()) {
+                let state = state_from_mask(&problem, mask);
+                let (score, trace) = solve_problem_trace_from_state(&problem, &state);
+                assert_eq!(
+                    score, exhaustive_best,
+                    "solver missed exhaustive optimum from nonempty state: \
+                     problem={problem_idx} mask={mask:b} trace={trace:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn local_search_chooses_best_exact_swap_when_swap_improves() {
+        let mut found = None;
+
+        for (problem_idx, problem) in search_regression_problems().into_iter().enumerate() {
+            let mut workspace = FuncPlacementWorkspace::default();
+            let mut exact_workspace = FuncPlacementScoreWorkspace::default();
+            for mask in 0..(1usize << problem.candidates.len()) {
+                let state = state_from_mask(&problem, mask);
+                let current_score = eval_state_score(&problem, &state, &mut workspace);
+                let expected_swap =
+                    best_exact_swap(&problem, &state, current_score, &mut exact_workspace);
+                let Some(expected_swap) = expected_swap else {
+                    continue;
+                };
+
+                let mut lb_state = lb_state_for_state(&problem, &state);
+                let mut search_work = SearchWorkBuffers::default();
+                let actual_swap = find_best_exact_swap_move(
+                    &problem,
+                    &state,
+                    &mut lb_state,
+                    current_score,
+                    &mut exact_workspace,
+                    &mut search_work,
+                )
+                .expect("missing improving swap");
+                found = Some((problem_idx, mask, expected_swap, actual_swap));
+                break;
+            }
+            if found.is_some() {
+                break;
+            }
+        }
+
+        let (problem_idx, mask, expected_swap, actual_swap) =
+            found.expect("expected a state where a swap improves the score");
+        assert!(matches!(actual_swap.mv, PlacementMove::Swap { .. }));
+        assert_eq!(
+            actual_swap.mv, expected_swap.mv,
+            "unexpected best swap for problem={problem_idx} mask={mask:b}"
+        );
+        assert_eq!(
+            actual_swap.exact, expected_swap.exact,
+            "unexpected exact score for swap at problem={problem_idx} mask={mask:b}"
+        );
+    }
+
+    #[test]
+    fn local_search_is_deterministic_across_all_small_states() {
+        for (problem_idx, problem) in search_regression_problems().into_iter().enumerate() {
+            for mask in 0..(1usize << problem.candidates.len()) {
+                let state = state_from_mask(&problem, mask);
+                let (expected_score, expected_trace) =
+                    solve_problem_trace_from_state(&problem, &state);
+                for _ in 0..8 {
+                    let (score, trace) = solve_problem_trace_from_state(&problem, &state);
+                    assert_eq!(
+                        score, expected_score,
+                        "non-deterministic score at problem={problem_idx} mask={mask:b}"
+                    );
+                    assert_eq!(
+                        trace, expected_trace,
+                        "non-deterministic trace at problem={problem_idx} mask={mask:b}"
+                    );
+                }
+            }
+        }
     }
 }
