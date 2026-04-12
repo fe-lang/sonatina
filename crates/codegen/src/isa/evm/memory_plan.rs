@@ -1380,7 +1380,7 @@ fn evaluate_func_placement_score_bounded(
     mv: PlacementMove,
     lower_bound: FuncPlacementScore,
     current_score: FuncPlacementScore,
-    best_exact: Option<FuncPlacementScore>,
+    best_exact: Option<ExactMoveEval>,
     workspace: &mut FuncPlacementScoreWorkspace,
 ) -> Option<FuncPlacementScore> {
     let (shadow_copy_words, recursive_access_cost) = additive_terms_with_move(problem, state, mv);
@@ -1401,7 +1401,7 @@ fn evaluate_func_placement_score_bounded(
             stable_peak_with_move(problem, state, mv, workspace),
         ),
     };
-    if !partial_exact_can_still_matter(first_score, current_score, best_exact) {
+    if !partial_exact_can_still_matter(problem, state, mv, first_score, current_score, best_exact) {
         return None;
     }
 
@@ -1628,7 +1628,7 @@ fn find_best_exact_one_flip_move(
             bound.mv,
             bound.lower_bound,
             current_score,
-            best_exact.map(|best| best.exact),
+            best_exact,
             exact_ws,
         );
         let Some(exact) = exact else {
@@ -1729,7 +1729,7 @@ fn find_best_exact_swap_move(
             bound.mv,
             bound.lower_bound,
             current_score,
-            best_exact.map(|best| best.exact),
+            best_exact,
             exact_ws,
         );
         let Some(exact) = exact else {
@@ -2033,14 +2033,18 @@ fn cmp_func_placement_score(a: FuncPlacementScore, b: FuncPlacementScore) -> Ord
 }
 
 fn partial_exact_can_still_matter(
+    problem: &PlacementProblem<'_>,
+    state: &PlacementState,
+    mv: PlacementMove,
     partial: FuncPlacementScore,
     current_score: FuncPlacementScore,
-    best_exact: Option<FuncPlacementScore>,
+    best_exact: Option<ExactMoveEval>,
 ) -> bool {
     if let Some(best_exact) = best_exact {
-        // Equal-score partials still matter because the full exact score may tie on score and win
-        // on the existing move-preference tie-breaks.
-        cmp_func_placement_score(partial, best_exact) != Ordering::Greater
+        // A staged partial is a lower bound on the final exact score, so once the candidate no
+        // longer beats the incumbent under the existing equal-score move ordering, the second
+        // exact replay cannot change the outcome.
+        is_preferred_exact_move(problem, state, mv, partial, best_exact.mv, best_exact.exact)
     } else {
         is_better_score(partial, current_score)
     }
@@ -3442,6 +3446,29 @@ mod tests {
         panic!("no move found for exact peak domain {desired:?}");
     }
 
+    fn find_equal_score_tie_neighbor(
+        problem: &PlacementProblem<'_>,
+        state: &PlacementState,
+        mv: PlacementMove,
+        score: FuncPlacementScore,
+        prefer_mv: bool,
+    ) -> PlacementMove {
+        for other in std::iter::once(PlacementMove::None)
+            .chain(candidate_moves_for_state(problem, state).into_iter())
+        {
+            if other == mv {
+                continue;
+            }
+            if prefer_mv && is_preferred_exact_move(problem, state, mv, score, other, score) {
+                return other;
+            }
+            if !prefer_mv && is_preferred_exact_move(problem, state, other, score, mv, score) {
+                return other;
+            }
+        }
+        panic!("no equal-score tie neighbor found for move {mv:?}");
+    }
+
     fn solve_problem_score(problem: &PlacementProblem<'_>) -> FuncPlacementScore {
         let mut state = PlacementState::new(problem);
         let mut lb_state = PlacementLowerBoundState::new(problem);
@@ -4112,6 +4139,7 @@ block0:
             lower_bound.stable_words,
         );
         assert_eq!(partial_ws.replay_counts(), (1, 0));
+        let incumbent_mv = find_equal_score_tie_neighbor(&problem, &state, mv, partial, true);
 
         let exact = evaluate_func_placement_score(
             &problem,
@@ -4134,12 +4162,88 @@ block0:
                 mv,
                 lower_bound,
                 loose_current,
-                Some(partial),
+                Some(ExactMoveEval {
+                    mv: incumbent_mv,
+                    exact: partial,
+                }),
                 &mut bounded_ws,
             ),
             Some(exact)
         );
         assert_eq!(bounded_ws.replay_counts(), (1, 1));
+    }
+
+    #[test]
+    fn bounded_exact_equal_partial_prunes_when_tie_break_loses() {
+        let cost_model = ArenaCostModel::default();
+        let (problem, is_recursive) = problem_from_src(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %f() -> i256 {
+block0:
+    v0.*i256 = alloca i256;
+    v1.*i256 = alloca i256;
+    v2.*i256 = alloca i256;
+    mstore v0 1.i256 i256;
+    mstore v1 2.i256 i256;
+    mstore v2 3.i256 i256;
+    v3.i256 = call %f;
+    v4.i256 = mload v0 i256;
+    v5.i256 = mload v1 i256;
+    v6.i256 = mload v2 i256;
+    v7.i256 = add v3 v4;
+    v8.i256 = add v7 v5;
+    v9.i256 = add v8 v6;
+    return v9;
+}
+"#,
+            "f",
+            &cost_model,
+        );
+        assert!(is_recursive, "test expects a recursive function");
+
+        let (state, mv) = find_move_with_first_exact_domain(&problem, ExactPeakDomain::Scratch);
+        let mut lb_state = lb_state_for_state(&problem, &state);
+        let lower_bound = evaluate_func_placement_lower_bound(&problem, &state, &mut lb_state, mv);
+        let (shadow_copy_words, recursive_access_cost) =
+            additive_terms_with_move(&problem, &state, mv);
+
+        let mut partial_ws = FuncPlacementScoreWorkspace::default();
+        partial_ws.clear_replay_counts();
+        let partial = score_from_words(
+            &problem,
+            recursive_access_cost,
+            shadow_copy_words,
+            scratch_peak_with_move(&problem, &state, mv, &mut partial_ws),
+            lower_bound.stable_words,
+        );
+        assert_eq!(partial_ws.replay_counts(), (1, 0));
+        let incumbent_mv = find_equal_score_tie_neighbor(&problem, &state, mv, partial, false);
+        let loose_current = FuncPlacementScore {
+            scratch_words: u32::MAX,
+            stable_words: u32::MAX,
+            cost: u64::MAX,
+        };
+
+        let mut bounded_ws = FuncPlacementScoreWorkspace::default();
+        bounded_ws.clear_replay_counts();
+        assert_eq!(
+            evaluate_func_placement_score_bounded(
+                &problem,
+                &state,
+                mv,
+                lower_bound,
+                loose_current,
+                Some(ExactMoveEval {
+                    mv: incumbent_mv,
+                    exact: partial,
+                }),
+                &mut bounded_ws,
+            ),
+            None
+        );
+        assert_eq!(bounded_ws.replay_counts(), (1, 0));
     }
 
     #[test]
