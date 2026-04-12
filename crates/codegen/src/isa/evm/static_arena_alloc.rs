@@ -951,21 +951,8 @@ pub(crate) fn pack_zero_min_offset_peak_ranked(
             continue;
         }
 
-        let off = if let Some(segment) = workspace.free.take_fit(item.size_words) {
-            if segment.len > item.size_words {
-                workspace.free.insert(
-                    segment
-                        .start
-                        .checked_add(item.size_words)
-                        .expect("free segment overflow"),
-                    segment
-                        .len
-                        .checked_sub(item.size_words)
-                        .expect("free segment underflow"),
-                    max_used,
-                );
-            }
-            segment.start
+        let off = if let Some(off) = workspace.free.take_fit_prefix(item.size_words) {
+            off
         } else if let Some(segment) = workspace.free.take_frontier() {
             if segment.len > item.size_words {
                 workspace.free.restore_frontier(FreeSegment {
@@ -1723,6 +1710,60 @@ mod tests {
         assert_eq!(max_used, 9);
         assert_eq!(pack_objects_peak_presorted(&presorted), 9);
         assert_eq!(specialized_peak, 9);
+    }
+
+    #[test]
+    fn zero_min_peak_packer_reuses_remaining_interior_suffix() {
+        let presorted = [
+            PackedObject {
+                id: StackObjId::new(1),
+                size_words: 4,
+                interval: LiveInterval { start: 0, end: 7 },
+                min_offset_words: 0,
+            },
+            PackedObject {
+                id: StackObjId::new(2),
+                size_words: 6,
+                interval: LiveInterval { start: 0, end: 2 },
+                min_offset_words: 0,
+            },
+            PackedObject {
+                id: StackObjId::new(3),
+                size_words: 3,
+                interval: LiveInterval { start: 1, end: 7 },
+                min_offset_words: 0,
+            },
+            PackedObject {
+                id: StackObjId::new(4),
+                size_words: 2,
+                interval: LiveInterval { start: 3, end: 6 },
+                min_offset_words: 0,
+            },
+            PackedObject {
+                id: StackObjId::new(5),
+                size_words: 4,
+                interval: LiveInterval { start: 4, end: 5 },
+                min_offset_words: 0,
+            },
+        ];
+
+        let (offsets, generic_peak) = pack_objects_presorted(&presorted);
+        let mut workspace = PeakPackWorkspace::default();
+        let schedule = zero_min_release_schedule(&presorted);
+        let specialized_peak = pack_zero_min_offset_peak_ranked(
+            &mut workspace,
+            &schedule,
+            zero_min_ranked_items(&presorted),
+            presorted.len(),
+        );
+
+        assert_eq!(offsets[&StackObjId::new(1)], 0);
+        assert_eq!(offsets[&StackObjId::new(2)], 4);
+        assert_eq!(offsets[&StackObjId::new(3)], 10);
+        assert_eq!(offsets[&StackObjId::new(4)], 4);
+        assert_eq!(offsets[&StackObjId::new(5)], 6);
+        assert_eq!(generic_peak, 13);
+        assert_eq!(specialized_peak, generic_peak);
     }
 
     #[test]

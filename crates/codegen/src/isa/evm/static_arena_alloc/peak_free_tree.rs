@@ -2,7 +2,7 @@ use super::FreeSegment;
 
 /// Augmented start-ordered treap used by the zero-min exact peak scorer.
 ///
-/// `pack_zero_min_offset_peak_ranked` repeatedly frees interior holes and then asks for the
+/// `pack_zero_min_offset_peak_ranked` repeatedly frees interior holes and then allocates from the
 /// leftmost free segment whose length is at least a requested size. The open tail at the current
 /// `max_used` frontier is handled separately because allocating from that detached suffix can grow
 /// the peak and must not interfere with interior leftmost-fit decisions.
@@ -91,7 +91,7 @@ impl PeakFreeTree {
         self.insert_node(node_idx);
     }
 
-    pub(super) fn take_fit(&mut self, size_words: u32) -> Option<FreeSegment> {
+    pub(super) fn take_fit_prefix(&mut self, size_words: u32) -> Option<u32> {
         let mut cursor = self.root;
         while let Some(idx) = cursor {
             let left = self.nodes[idx as usize].left;
@@ -99,10 +99,26 @@ impl PeakFreeTree {
                 cursor = left;
                 continue;
             }
-            if self.nodes[idx as usize].seg.len >= size_words {
-                let seg = self.nodes[idx as usize].seg;
-                self.remove_node(idx);
-                return Some(seg);
+            let seg = self.nodes[idx as usize].seg;
+            if seg.len >= size_words {
+                if seg.len == size_words {
+                    self.remove_node(idx);
+                } else {
+                    debug_assert!(size_words < seg.len);
+                    // Prefix allocation leaves the segment end unchanged, so the node stays an
+                    // interior hole and still satisfies the start-ordered BST invariant.
+                    let new_start = seg
+                        .start
+                        .checked_add(size_words)
+                        .expect("free segment overflow");
+                    self.nodes[idx as usize].seg.start = new_start;
+                    self.nodes[idx as usize].seg.len = seg
+                        .len
+                        .checked_sub(size_words)
+                        .expect("free segment underflow");
+                    self.recompute_upwards(Some(idx));
+                }
+                return Some(seg.start);
             }
             let right = self.nodes[idx as usize].right;
             if self.max_len(right) >= size_words {
