@@ -226,6 +226,26 @@ struct FuncPlacementWorkspace {
 struct FuncPlacementScoreWorkspace {
     scratch_peak: PeakPackWorkspace,
     stable_peak: PeakPackWorkspace,
+    #[cfg(test)]
+    replay_counts: ExactReplayCounts,
+}
+
+#[cfg(test)]
+#[derive(Default)]
+struct ExactReplayCounts {
+    scratch: usize,
+    stable: usize,
+}
+
+#[cfg(test)]
+impl FuncPlacementScoreWorkspace {
+    fn clear_replay_counts(&mut self) {
+        self.replay_counts = ExactReplayCounts::default();
+    }
+
+    fn replay_counts(&self) -> (usize, usize) {
+        (self.replay_counts.scratch, self.replay_counts.stable)
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -324,6 +344,12 @@ struct BoundMoveEval {
 struct ExactMoveEval {
     mv: PlacementMove,
     exact: FuncPlacementScore,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ExactPeakDomain {
+    Scratch,
+    Stable,
 }
 
 #[derive(Default)]
@@ -1336,10 +1362,74 @@ fn evaluate_func_placement_score(
     mv: PlacementMove,
     workspace: &mut FuncPlacementScoreWorkspace,
 ) -> FuncPlacementScore {
+    let (shadow_copy_words, recursive_access_cost) = additive_terms_with_move(problem, state, mv);
     let scratch_words = scratch_peak_with_move(problem, state, mv, workspace);
     let stable_words = stable_peak_with_move(problem, state, mv, workspace);
-    let (shadow_copy_words, recursive_access_cost) = additive_terms_with_move(problem, state, mv);
+    score_from_words(
+        problem,
+        recursive_access_cost,
+        shadow_copy_words,
+        scratch_words,
+        stable_words,
+    )
+}
 
+fn evaluate_func_placement_score_bounded(
+    problem: &PlacementProblem<'_>,
+    state: &PlacementState,
+    mv: PlacementMove,
+    lower_bound: FuncPlacementScore,
+    current_score: FuncPlacementScore,
+    best_exact: Option<FuncPlacementScore>,
+    workspace: &mut FuncPlacementScoreWorkspace,
+) -> Option<FuncPlacementScore> {
+    let (shadow_copy_words, recursive_access_cost) = additive_terms_with_move(problem, state, mv);
+    let first_domain = first_exact_peak_domain(problem, state, mv);
+    let first_score = match first_domain {
+        ExactPeakDomain::Scratch => score_from_words(
+            problem,
+            recursive_access_cost,
+            shadow_copy_words,
+            scratch_peak_with_move(problem, state, mv, workspace),
+            lower_bound.stable_words,
+        ),
+        ExactPeakDomain::Stable => score_from_words(
+            problem,
+            recursive_access_cost,
+            shadow_copy_words,
+            lower_bound.scratch_words,
+            stable_peak_with_move(problem, state, mv, workspace),
+        ),
+    };
+    if !partial_exact_can_still_matter(first_score, current_score, best_exact) {
+        return None;
+    }
+
+    Some(match first_domain {
+        ExactPeakDomain::Scratch => score_from_words(
+            problem,
+            recursive_access_cost,
+            shadow_copy_words,
+            first_score.scratch_words,
+            stable_peak_with_move(problem, state, mv, workspace),
+        ),
+        ExactPeakDomain::Stable => score_from_words(
+            problem,
+            recursive_access_cost,
+            shadow_copy_words,
+            scratch_peak_with_move(problem, state, mv, workspace),
+            first_score.stable_words,
+        ),
+    })
+}
+
+fn score_from_words(
+    problem: &PlacementProblem<'_>,
+    recursive_access_cost: u64,
+    shadow_copy_words: u64,
+    scratch_words: u32,
+    stable_words: u32,
+) -> FuncPlacementScore {
     FuncPlacementScore {
         scratch_words,
         stable_words,
@@ -1377,17 +1467,13 @@ fn evaluate_func_placement_lower_bound(
     );
 
     let (shadow_copy_words, recursive_access_cost) = additive_terms_with_move(problem, state, mv);
-    FuncPlacementScore {
+    score_from_words(
+        problem,
+        recursive_access_cost,
+        shadow_copy_words,
         scratch_words,
         stable_words,
-        cost: placement_cost(
-            problem,
-            recursive_access_cost,
-            shadow_copy_words,
-            scratch_words,
-            stable_words,
-        ),
-    }
+    )
 }
 
 fn scratch_peak_with_move(
@@ -1396,9 +1482,12 @@ fn scratch_peak_with_move(
     mv: PlacementMove,
     workspace: &mut FuncPlacementScoreWorkspace,
 ) -> u32 {
+    #[cfg(test)]
+    {
+        workspace.replay_counts.scratch += 1;
+    }
     let (insert_idx, skip_idx) = scratch_local_indices_for_move(problem, mv);
-    let count = state.scratch_real_locals.len() + usize::from(insert_idx.is_some())
-        - usize::from(skip_idx.is_some());
+    let count = trial_local_count(state.scratch_real_locals.len(), insert_idx, skip_idx);
     pack_zero_min_offset_peak_ranked(
         &mut workspace.scratch_peak,
         &problem.scratch_release,
@@ -1414,6 +1503,10 @@ fn stable_peak_with_move(
     mv: PlacementMove,
     workspace: &mut FuncPlacementScoreWorkspace,
 ) -> u32 {
+    #[cfg(test)]
+    {
+        workspace.replay_counts.stable += 1;
+    }
     let (insert_idx, skip_idx) = stable_local_indices_for_move(problem, mv);
     let mut real_iter = TrialLocalIter::new(&state.stable_real_locals, insert_idx, skip_idx)
         .map(|local_idx| ranked_stable_real_item_for_local(problem, local_idx))
@@ -1422,10 +1515,7 @@ fn stable_peak_with_move(
     let mut call_deltas = SmallVec::<[MoveCallDelta; 8]>::new();
     build_move_deltas(problem, mv, &mut local_deltas, &mut call_deltas);
     let mut shadow_iter = MoveShadowCallIter::new(problem, state, &call_deltas).peekable();
-    let count = state.stable_real_locals.len() + usize::from(insert_idx.is_some())
-        - usize::from(skip_idx.is_some())
-        + state.nonzero_shadow_calls.len()
-        + call_deltas.len();
+    let count = stable_peak_item_count(state, insert_idx, skip_idx, call_deltas.len());
 
     pack_zero_min_offset_peak_ranked(
         &mut workspace.stable_peak,
@@ -1444,6 +1534,57 @@ fn stable_peak_with_move(
         }),
         count,
     )
+}
+
+fn trial_local_count(base_len: usize, insert_idx: Option<u32>, skip_idx: Option<u32>) -> usize {
+    base_len + usize::from(insert_idx.is_some()) - usize::from(skip_idx.is_some())
+}
+
+fn scratch_peak_item_count(
+    state: &PlacementState,
+    insert_idx: Option<u32>,
+    skip_idx: Option<u32>,
+) -> usize {
+    trial_local_count(state.scratch_real_locals.len(), insert_idx, skip_idx)
+}
+
+fn stable_peak_item_count(
+    state: &PlacementState,
+    insert_idx: Option<u32>,
+    skip_idx: Option<u32>,
+    move_shadow_delta_count: usize,
+) -> usize {
+    trial_local_count(state.stable_real_locals.len(), insert_idx, skip_idx)
+        + state.nonzero_shadow_calls.len()
+        + move_shadow_delta_count
+}
+
+fn stable_move_shadow_delta_count(problem: &PlacementProblem<'_>, mv: PlacementMove) -> usize {
+    let mut local_deltas = SmallVec::<[MoveLocalDelta; 2]>::new();
+    let mut call_deltas = SmallVec::<[MoveCallDelta; 8]>::new();
+    build_move_deltas(problem, mv, &mut local_deltas, &mut call_deltas);
+    call_deltas.len()
+}
+
+fn first_exact_peak_domain(
+    problem: &PlacementProblem<'_>,
+    state: &PlacementState,
+    mv: PlacementMove,
+) -> ExactPeakDomain {
+    let (scratch_insert_idx, scratch_skip_idx) = scratch_local_indices_for_move(problem, mv);
+    let scratch_count = scratch_peak_item_count(state, scratch_insert_idx, scratch_skip_idx);
+    let (stable_insert_idx, stable_skip_idx) = stable_local_indices_for_move(problem, mv);
+    let stable_count = stable_peak_item_count(
+        state,
+        stable_insert_idx,
+        stable_skip_idx,
+        stable_move_shadow_delta_count(problem, mv),
+    );
+    if scratch_count <= stable_count {
+        ExactPeakDomain::Scratch
+    } else {
+        ExactPeakDomain::Stable
+    }
 }
 
 fn find_best_exact_one_flip_move(
@@ -1481,7 +1622,18 @@ fn find_best_exact_one_flip_move(
         {
             break;
         }
-        let exact = evaluate_func_placement_score(problem, state, bound.mv, exact_ws);
+        let exact = evaluate_func_placement_score_bounded(
+            problem,
+            state,
+            bound.mv,
+            bound.lower_bound,
+            current_score,
+            best_exact.map(|best| best.exact),
+            exact_ws,
+        );
+        let Some(exact) = exact else {
+            continue;
+        };
         if !is_better_score(exact, current_score) {
             continue;
         }
@@ -1571,7 +1723,18 @@ fn find_best_exact_swap_move(
         {
             break;
         }
-        let exact = evaluate_func_placement_score(problem, state, bound.mv, exact_ws);
+        let exact = evaluate_func_placement_score_bounded(
+            problem,
+            state,
+            bound.mv,
+            bound.lower_bound,
+            current_score,
+            best_exact.map(|best| best.exact),
+            exact_ws,
+        );
+        let Some(exact) = exact else {
+            continue;
+        };
         if !is_better_score(exact, current_score) {
             continue;
         }
@@ -1867,6 +2030,20 @@ fn cmp_func_placement_score(a: FuncPlacementScore, b: FuncPlacementScore) -> Ord
         .cmp(&b.cost)
         .then_with(|| a.stable_words.cmp(&b.stable_words))
         .then_with(|| a.scratch_words.cmp(&b.scratch_words))
+}
+
+fn partial_exact_can_still_matter(
+    partial: FuncPlacementScore,
+    current_score: FuncPlacementScore,
+    best_exact: Option<FuncPlacementScore>,
+) -> bool {
+    if let Some(best_exact) = best_exact {
+        // Equal-score partials still matter because the full exact score may tie on score and win
+        // on the existing move-preference tie-breaks.
+        cmp_func_placement_score(partial, best_exact) != Ordering::Greater
+    } else {
+        is_better_score(partial, current_score)
+    }
 }
 
 fn resulting_promoted_count(state: &PlacementState, mv: PlacementMove) -> usize {
@@ -3209,6 +3386,62 @@ mod tests {
         next_state
     }
 
+    fn lb_state_for_state(
+        problem: &PlacementProblem<'_>,
+        state: &PlacementState,
+    ) -> PlacementLowerBoundState {
+        let mut lb_state = PlacementLowerBoundState::new(problem);
+        for candidate_idx in 0..problem.candidates.len() {
+            if state.promoted[candidate_idx] {
+                lb_state.apply_add(problem, candidate_idx);
+            }
+        }
+        lb_state
+    }
+
+    fn candidate_moves_for_state(
+        problem: &PlacementProblem<'_>,
+        state: &PlacementState,
+    ) -> Vec<PlacementMove> {
+        let mut moves = Vec::new();
+        for candidate_idx in 0..problem.candidates.len() {
+            if state.promoted[candidate_idx] {
+                moves.push(PlacementMove::Remove(candidate_idx));
+            } else {
+                moves.push(PlacementMove::Add(candidate_idx));
+            }
+        }
+        for add_idx in 0..problem.candidates.len() {
+            if state.promoted[add_idx] {
+                continue;
+            }
+            for remove_idx in 0..problem.candidates.len() {
+                if state.promoted[remove_idx] {
+                    moves.push(PlacementMove::Swap {
+                        add_idx,
+                        remove_idx,
+                    });
+                }
+            }
+        }
+        moves
+    }
+
+    fn find_move_with_first_exact_domain(
+        problem: &PlacementProblem<'_>,
+        desired: ExactPeakDomain,
+    ) -> (PlacementState, PlacementMove) {
+        for mask in 0..(1usize << problem.candidates.len()) {
+            let state = state_from_mask(problem, mask);
+            for mv in candidate_moves_for_state(problem, &state) {
+                if first_exact_peak_domain(problem, &state, mv) == desired {
+                    return (state, mv);
+                }
+            }
+        }
+        panic!("no move found for exact peak domain {desired:?}");
+    }
+
     fn solve_problem_score(problem: &PlacementProblem<'_>) -> FuncPlacementScore {
         let mut state = PlacementState::new(problem);
         let mut lb_state = PlacementLowerBoundState::new(problem);
@@ -3632,6 +3865,281 @@ block0:
                 }
             }
         }
+    }
+
+    #[test]
+    fn bounded_streamed_func_placement_score_matches_full_eval_with_loose_cutoff() {
+        let cost_model = ArenaCostModel::default();
+        let (problem, is_recursive) = problem_from_src(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %f() -> i256 {
+block0:
+    v0.*i256 = alloca i256;
+    v1.*i256 = alloca i256;
+    mstore v0 1.i256 i256;
+    mstore v1 2.i256 i256;
+    v2.i256 = call %f;
+    v3.i256 = mload v0 i256;
+    v4.i256 = mload v1 i256;
+    v5.i256 = add v2 v3;
+    v6.i256 = add v5 v4;
+    return v6;
+}
+"#,
+            "f",
+            &cost_model,
+        );
+        assert!(is_recursive, "test expects a recursive function");
+
+        let loose_cutoff = FuncPlacementScore {
+            scratch_words: u32::MAX,
+            stable_words: u32::MAX,
+            cost: u64::MAX,
+        };
+
+        for mask in 0..(1usize << problem.candidates.len()) {
+            let state = state_from_mask(&problem, mask);
+            let mut lb_state = lb_state_for_state(&problem, &state);
+            let mut exact_ws = FuncPlacementScoreWorkspace::default();
+            let mut bounded_ws = FuncPlacementScoreWorkspace::default();
+
+            for mv in std::iter::once(PlacementMove::None)
+                .chain(candidate_moves_for_state(&problem, &state).into_iter())
+            {
+                let lower_bound =
+                    evaluate_func_placement_lower_bound(&problem, &state, &mut lb_state, mv);
+                let exact = evaluate_func_placement_score(&problem, &state, mv, &mut exact_ws);
+                assert_eq!(
+                    evaluate_func_placement_score_bounded(
+                        &problem,
+                        &state,
+                        mv,
+                        lower_bound,
+                        loose_cutoff,
+                        None,
+                        &mut bounded_ws,
+                    ),
+                    Some(exact),
+                    "bounded exact score mismatch for move {:?} in mask {mask:b}",
+                    mv
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn bounded_exact_prunes_after_first_scratch_replay() {
+        let cost_model = ArenaCostModel::default();
+        let (problem, is_recursive) = problem_from_src(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %f() -> i256 {
+block0:
+    v0.*i256 = alloca i256;
+    v1.*i256 = alloca i256;
+    v2.*i256 = alloca i256;
+    mstore v0 1.i256 i256;
+    mstore v1 2.i256 i256;
+    mstore v2 3.i256 i256;
+    v3.i256 = call %f;
+    v4.i256 = mload v0 i256;
+    v5.i256 = mload v1 i256;
+    v6.i256 = mload v2 i256;
+    v7.i256 = add v3 v4;
+    v8.i256 = add v7 v5;
+    v9.i256 = add v8 v6;
+    return v9;
+}
+"#,
+            "f",
+            &cost_model,
+        );
+        assert!(is_recursive, "test expects a recursive function");
+
+        let (state, mv) = find_move_with_first_exact_domain(&problem, ExactPeakDomain::Scratch);
+        let mut lb_state = lb_state_for_state(&problem, &state);
+        let lower_bound = evaluate_func_placement_lower_bound(&problem, &state, &mut lb_state, mv);
+        let (shadow_copy_words, recursive_access_cost) =
+            additive_terms_with_move(&problem, &state, mv);
+
+        let mut partial_ws = FuncPlacementScoreWorkspace::default();
+        partial_ws.clear_replay_counts();
+        let partial = score_from_words(
+            &problem,
+            recursive_access_cost,
+            shadow_copy_words,
+            scratch_peak_with_move(&problem, &state, mv, &mut partial_ws),
+            lower_bound.stable_words,
+        );
+        assert_eq!(partial_ws.replay_counts(), (1, 0));
+
+        let mut bounded_ws = FuncPlacementScoreWorkspace::default();
+        bounded_ws.clear_replay_counts();
+        assert_eq!(
+            evaluate_func_placement_score_bounded(
+                &problem,
+                &state,
+                mv,
+                lower_bound,
+                partial,
+                None,
+                &mut bounded_ws,
+            ),
+            None
+        );
+        assert_eq!(bounded_ws.replay_counts(), (1, 0));
+    }
+
+    #[test]
+    fn bounded_exact_prunes_after_first_stable_replay() {
+        let cost_model = ArenaCostModel::default();
+        let (problem, is_recursive) = problem_from_src(
+            r#"
+target = "evm-ethereum-osaka"
+
+func private %g() -> i256 {
+block0:
+    return 7.i256;
+}
+
+func public %f() -> i256 {
+block0:
+    v0.*i256 = alloca i256;
+    v1.*i256 = alloca i256;
+    v2.*i256 = alloca i256;
+    v3.*i256 = alloca i256;
+    mstore v0 1.i256 i256;
+    mstore v1 2.i256 i256;
+    mstore v2 3.i256 i256;
+    mstore v3 4.i256 i256;
+    v4.i256 = call %g;
+    v5.i256 = mload v0 i256;
+    v6.i256 = mload v1 i256;
+    v7.i256 = mload v2 i256;
+    v8.i256 = mload v3 i256;
+    v9.i256 = add v4 v5;
+    v10.i256 = add v9 v6;
+    v11.i256 = add v10 v7;
+    v12.i256 = add v11 v8;
+    return v12;
+}
+"#,
+            "f",
+            &cost_model,
+        );
+        assert!(!is_recursive, "test expects a non-recursive function");
+
+        let (state, mv) = find_move_with_first_exact_domain(&problem, ExactPeakDomain::Stable);
+        let mut lb_state = lb_state_for_state(&problem, &state);
+        let lower_bound = evaluate_func_placement_lower_bound(&problem, &state, &mut lb_state, mv);
+        let (shadow_copy_words, recursive_access_cost) =
+            additive_terms_with_move(&problem, &state, mv);
+
+        let mut partial_ws = FuncPlacementScoreWorkspace::default();
+        partial_ws.clear_replay_counts();
+        let partial = score_from_words(
+            &problem,
+            recursive_access_cost,
+            shadow_copy_words,
+            lower_bound.scratch_words,
+            stable_peak_with_move(&problem, &state, mv, &mut partial_ws),
+        );
+        assert_eq!(partial_ws.replay_counts(), (0, 1));
+
+        let mut bounded_ws = FuncPlacementScoreWorkspace::default();
+        bounded_ws.clear_replay_counts();
+        assert_eq!(
+            evaluate_func_placement_score_bounded(
+                &problem,
+                &state,
+                mv,
+                lower_bound,
+                partial,
+                None,
+                &mut bounded_ws,
+            ),
+            None
+        );
+        assert_eq!(bounded_ws.replay_counts(), (0, 1));
+    }
+
+    #[test]
+    fn bounded_exact_equal_partial_keeps_second_replay_for_tie_breaks() {
+        let cost_model = ArenaCostModel::default();
+        let (problem, is_recursive) = problem_from_src(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %f() -> i256 {
+block0:
+    v0.*i256 = alloca i256;
+    v1.*i256 = alloca i256;
+    v2.*i256 = alloca i256;
+    mstore v0 1.i256 i256;
+    mstore v1 2.i256 i256;
+    mstore v2 3.i256 i256;
+    v3.i256 = call %f;
+    v4.i256 = mload v0 i256;
+    v5.i256 = mload v1 i256;
+    v6.i256 = mload v2 i256;
+    v7.i256 = add v3 v4;
+    v8.i256 = add v7 v5;
+    v9.i256 = add v8 v6;
+    return v9;
+}
+"#,
+            "f",
+            &cost_model,
+        );
+        assert!(is_recursive, "test expects a recursive function");
+
+        let (state, mv) = find_move_with_first_exact_domain(&problem, ExactPeakDomain::Scratch);
+        let mut lb_state = lb_state_for_state(&problem, &state);
+        let lower_bound = evaluate_func_placement_lower_bound(&problem, &state, &mut lb_state, mv);
+        let (shadow_copy_words, recursive_access_cost) =
+            additive_terms_with_move(&problem, &state, mv);
+
+        let mut partial_ws = FuncPlacementScoreWorkspace::default();
+        partial_ws.clear_replay_counts();
+        let partial = score_from_words(
+            &problem,
+            recursive_access_cost,
+            shadow_copy_words,
+            scratch_peak_with_move(&problem, &state, mv, &mut partial_ws),
+            lower_bound.stable_words,
+        );
+        assert_eq!(partial_ws.replay_counts(), (1, 0));
+
+        let exact = evaluate_func_placement_score(
+            &problem,
+            &state,
+            mv,
+            &mut FuncPlacementScoreWorkspace::default(),
+        );
+        let loose_current = FuncPlacementScore {
+            scratch_words: u32::MAX,
+            stable_words: u32::MAX,
+            cost: u64::MAX,
+        };
+
+        let mut bounded_ws = FuncPlacementScoreWorkspace::default();
+        bounded_ws.clear_replay_counts();
+        assert_eq!(
+            evaluate_func_placement_score_bounded(
+                &problem,
+                &state,
+                mv,
+                lower_bound,
+                loose_current,
+                Some(partial),
+                &mut bounded_ws,
+            ),
+            Some(exact)
+        );
+        assert_eq!(bounded_ws.replay_counts(), (1, 1));
     }
 
     #[test]
