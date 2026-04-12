@@ -283,11 +283,11 @@ func private %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_
 
 func private %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish(v0.objref<@__fe_obj_SolEncoder_1>) -> objref<@__fe_obj_tuple_0> {
     block0:
-        v38.objref<i256> = obj.proj v0 2.i64;
-        v39.i256 = obj.load v38;
-        v34.objref<i256> = obj.proj v0 0.i64;
-        v35.i256 = obj.load v34;
-        (v7.i256, v8.i1) = usubo v39 v35;
+        v35.objref<i256> = obj.proj v0 2.i256;
+        v36.i256 = obj.load v35;
+        v31.objref<i256> = obj.proj v0 0.i256;
+        v32.i256 = obj.load v31;
+        (v7.i256, v8.i1) = usubo v36 v32;
         br v8 block1 block2;
 
     block1:
@@ -296,7 +296,7 @@ func private %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish(v
     block2:
         v9.objref<@__fe_obj_tuple_0> = obj.alloc @__fe_obj_tuple_0;
         v11.objref<i256> = obj.proj v9 0.i256;
-        obj.store v11 v35;
+        obj.store v11 v32;
         v13.objref<i256> = obj.proj v9 1.i256;
         obj.store v13 v7;
         return v9;

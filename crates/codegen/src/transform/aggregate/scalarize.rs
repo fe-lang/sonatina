@@ -17,7 +17,9 @@ use super::{
     collect_root_provenance,
     promotion::SsaBuilder,
     provenance::{CompleteProvenance, ExactProjectionMap, RootValue},
-    reconstruct::bitcast_before_inst,
+    reconstruct::{
+        AggregateValueReconstructor, bitcast_before_inst, rebuild_aggregate_from_leaf_values,
+    },
     shape,
 };
 
@@ -203,6 +205,15 @@ impl AggregateScalarize {
         );
         self.simplify_scalar_phi_results(func, &mut scalar_phi_results);
         self.changed |= self.cleanup_scalarized_artifacts(func, &projection_of, &promoted_by_root);
+        #[cfg(debug_assertions)]
+        if let Some(reason) = self.first_remaining_promoted_aggregate_memory_op(
+            func,
+            &module,
+            &projection_of,
+            &promoted_by_root,
+        ) {
+            panic!("AggregateScalarize left aggregate memory ops on a promoted root: {reason}");
+        }
 
         if self.changed {
             func.rebuild_users();
@@ -579,7 +590,16 @@ impl AggregateScalarize {
                 if let Some(mload) = downcast::<&data::Mload>(func.inst_set(), func.dfg.inst(user))
                     && *mload.addr() == ptr
                 {
-                    if self.projection_slice_can_view_as(module, projection.slice, *mload.ty()) {
+                    let load_ty = *mload.ty();
+                    if (!shape::is_supported_scalar_shape_ty(module, load_ty)
+                        && self.projection_slice_can_view_as(module, projection.slice, load_ty))
+                        || (shape::is_supported_scalar_shape_ty(module, load_ty)
+                            && self.projection_load_has_full_rewrite_plan(
+                                module,
+                                projection.slice,
+                                load_ty,
+                            ))
+                    {
                         continue;
                     }
                     return false;
@@ -592,11 +612,16 @@ impl AggregateScalarize {
                     let Some(result) = func.dfg.inst_result(user) else {
                         return false;
                     };
-                    if self.projection_slice_can_view_as(
-                        module,
-                        projection.slice,
-                        func.dfg.value_ty(result),
-                    ) {
+                    let load_ty = func.dfg.value_ty(result);
+                    if (!shape::is_supported_scalar_shape_ty(module, load_ty)
+                        && self.projection_slice_can_view_as(module, projection.slice, load_ty))
+                        || (shape::is_supported_scalar_shape_ty(module, load_ty)
+                            && self.projection_load_has_full_rewrite_plan(
+                                module,
+                                projection.slice,
+                                load_ty,
+                            ))
+                    {
                         continue;
                     }
                     return false;
@@ -820,30 +845,46 @@ impl AggregateScalarize {
                 }
                 if let Some(mload) = downcast::<&data::Mload>(func.inst_set(), func.dfg.inst(user))
                     && *mload.addr() == ptr
-                    && shape::is_supported_scalar_shape_ty(module, *mload.ty())
                 {
-                    let Some(result) = func.dfg.inst_result(user) else {
-                        return false;
-                    };
-                    if !scalarizable[result] {
+                    let load_ty = *mload.ty();
+                    if shape::is_supported_scalar_shape_ty(module, load_ty)
+                        && !self.projection_load_has_full_rewrite_plan(
+                            module,
+                            projection.slice,
+                            load_ty,
+                        )
+                    {
                         return false;
                     }
                 }
                 if let Some(obj_load) =
                     downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(user))
                     && *obj_load.object() == ptr
-                    && let Some(result) = func.dfg.inst_result(user)
-                    && shape::is_supported_scalar_shape_ty(module, func.dfg.value_ty(result))
-                    && !scalarizable[result]
                 {
-                    return false;
+                    let Some(result) = func.dfg.inst_result(user) else {
+                        return false;
+                    };
+                    let load_ty = func.dfg.value_ty(result);
+                    if shape::is_supported_scalar_shape_ty(module, load_ty)
+                        && !self.projection_load_has_full_rewrite_plan(
+                            module,
+                            projection.slice,
+                            load_ty,
+                        )
+                    {
+                        return false;
+                    }
                 }
                 if let Some(mstore) =
                     downcast::<&data::Mstore>(func.inst_set(), func.dfg.inst(user))
                     && *mstore.addr() == ptr
                     && shape::is_supported_scalar_shape_ty(module, *mstore.ty())
-                    && (!scalarizable[*mstore.value()]
-                        || func.dfg.value_ty(*mstore.value()) != *mstore.ty())
+                    && (!self.value_has_leaf_rewrite_plan(
+                        module,
+                        func.dfg.value_ty(*mstore.value()),
+                        *mstore.value(),
+                        scalarizable,
+                    ) || func.dfg.value_ty(*mstore.value()) != *mstore.ty())
                 {
                     return false;
                 }
@@ -853,7 +894,12 @@ impl AggregateScalarize {
                 {
                     let value_ty = func.dfg.value_ty(*obj_store.value());
                     if shape::is_supported_scalar_shape_ty(module, value_ty)
-                        && !scalarizable[*obj_store.value()]
+                        && !self.value_has_leaf_rewrite_plan(
+                            module,
+                            value_ty,
+                            *obj_store.value(),
+                            scalarizable,
+                        )
                     {
                         return false;
                     }
@@ -949,11 +995,25 @@ impl AggregateScalarize {
                     } else if let Some(mload) =
                         downcast::<&data::Mload>(func.inst_set(), func.dfg.inst(*inst))
                     {
-                        projection_of.get(*mload.addr()).is_some()
+                        projection_of.get(*mload.addr()).is_some_and(|projection| {
+                            self.projection_load_has_full_rewrite_plan(
+                                module,
+                                projection.slice,
+                                *mload.ty(),
+                            )
+                        })
                     } else if let Some(obj_load) =
                         downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(*inst))
                     {
-                        projection_of.get(*obj_load.object()).is_some()
+                        projection_of
+                            .get(*obj_load.object())
+                            .is_some_and(|projection| {
+                                self.projection_load_has_full_rewrite_plan(
+                                    module,
+                                    projection.slice,
+                                    ty,
+                                )
+                            })
                     } else {
                         false
                     }
@@ -1112,14 +1172,28 @@ impl AggregateScalarize {
                     downcast::<&data::Mload>(func.inst_set(), func.dfg.inst(*inst))
                 {
                     shape::is_supported_scalar_shape_ty(module, *mload.ty())
-                        && projection_of.get(*mload.addr()).is_some()
+                        && projection_of.get(*mload.addr()).is_some_and(|projection| {
+                            self.projection_load_has_full_rewrite_plan(
+                                module,
+                                projection.slice,
+                                *mload.ty(),
+                            )
+                        })
                         && *mload.ty() == func.dfg.value_ty(value)
                 } else if let Some(obj_load) =
                     downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(*inst))
                 {
                     let value_ty = func.dfg.value_ty(value);
                     shape::is_supported_scalar_shape_ty(module, value_ty)
-                        && projection_of.get(*obj_load.object()).is_some()
+                        && projection_of
+                            .get(*obj_load.object())
+                            .is_some_and(|projection| {
+                                self.projection_load_has_full_rewrite_plan(
+                                    module,
+                                    projection.slice,
+                                    value_ty,
+                                )
+                            })
                 } else if let Some(bitcast) =
                     downcast::<&cast::Bitcast>(func.inst_set(), func.dfg.inst(*inst))
                 {
@@ -1362,37 +1436,41 @@ impl AggregateScalarize {
             let Some(result) = result else {
                 return;
             };
-            let leaf_range = projection.slice.first_leaf
-                ..projection.slice.first_leaf + projection.slice.leaf_count;
-            let underlying_leaves = &promoted.shape.leaves[leaf_range.clone()];
             if shape::is_supported_scalar_shape_ty(module, ty) {
-                if !scalarizable[result] {
+                if !self.projection_load_has_full_rewrite_plan(module, projection.slice, ty) {
                     return;
                 }
-                let Some(view_leaf_tys) = self.projection_view_leaf_tys(module, ty) else {
+                let Some(leaves) = self.promoted_projection_replacement_leaves(
+                    func,
+                    module,
+                    inst,
+                    block,
+                    promoted,
+                    projection.slice,
+                    ty,
+                    ssa,
+                ) else {
                     return;
                 };
-                if view_leaf_tys.len() != underlying_leaves.len() {
+                if scalarizable[result] {
+                    scalarized_agg[result] = Some(leaves.clone());
+                }
+                let Some(replacement) =
+                    rebuild_aggregate_from_leaf_values(func, inst, module, ty, &leaves)
+                else {
                     return;
+                };
+                if scalarizable[result] {
+                    scalarized_agg[replacement] = Some(leaves.clone());
                 }
-                let mut leaves: LeafValues = SmallVec::new();
-                for (i, (underlying_leaf, view_ty)) in
-                    underlying_leaves.iter().zip(view_leaf_tys).enumerate()
-                {
-                    let var = promoted.leaf_vars[projection.slice.first_leaf + i];
-                    let value = ssa.use_var(func, var, block);
-                    leaves.push(bitcast_before_inst(
-                        func,
-                        inst,
-                        value,
-                        underlying_leaf.ty,
-                        view_ty,
-                    ));
-                }
-                scalarized_agg[result] = Some(leaves);
+                func.dfg.change_to_alias(result, replacement);
+                InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
                 return;
             }
 
+            let leaf_range = projection.slice.first_leaf
+                ..projection.slice.first_leaf + projection.slice.leaf_count;
+            let underlying_leaves = &promoted.shape.leaves[leaf_range];
             if projection.slice.leaf_count != 1 {
                 return;
             }
@@ -1568,7 +1646,7 @@ impl AggregateScalarize {
 
         if shape::is_supported_scalar_shape_ty(module, ty) {
             let Some(payload_leaves) =
-                self.scalarized_leaves_of_value(func, module, value, ty, scalarized_agg)
+                self.leaf_rewrite_values_of_value(func, module, inst, value, ty, scalarized_agg)
             else {
                 return;
             };
@@ -2256,6 +2334,53 @@ impl AggregateScalarize {
         Some(smallvec![ty])
     }
 
+    fn projection_load_has_full_rewrite_plan(
+        &mut self,
+        module: &sonatina_ir::module::ModuleCtx,
+        slice: shape::AggregateSlice,
+        view_ty: Type,
+    ) -> bool {
+        self.projection_slice_can_view_as(module, slice, view_ty)
+            && (!shape::is_supported_scalar_shape_ty(module, view_ty)
+                || shape::is_supported_aggregate_ty(module, view_ty))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn promoted_projection_replacement_leaves(
+        &mut self,
+        func: &mut Function,
+        module: &sonatina_ir::module::ModuleCtx,
+        inst: InstId,
+        block: BlockId,
+        promoted: &PromotableRoot,
+        slice: shape::AggregateSlice,
+        view_ty: Type,
+        ssa: &mut SsaBuilder,
+    ) -> Option<LeafValues> {
+        let view_leaf_tys = self.projection_view_leaf_tys(module, view_ty)?;
+        let leaf_range = slice.first_leaf..slice.first_leaf + slice.leaf_count;
+        let underlying_leaves = &promoted.shape.leaves[leaf_range];
+        if view_leaf_tys.len() != underlying_leaves.len() {
+            return None;
+        }
+
+        let mut leaves = LeafValues::new();
+        for (i, (underlying_leaf, view_leaf_ty)) in
+            underlying_leaves.iter().zip(view_leaf_tys).enumerate()
+        {
+            let var = promoted.leaf_vars[slice.first_leaf + i];
+            let value = ssa.use_var(func, var, block);
+            leaves.push(bitcast_before_inst(
+                func,
+                inst,
+                value,
+                underlying_leaf.ty,
+                view_leaf_ty,
+            ));
+        }
+        Some(leaves)
+    }
+
     fn projection_slice_can_view_as(
         &mut self,
         module: &sonatina_ir::module::ModuleCtx,
@@ -2333,6 +2458,46 @@ impl AggregateScalarize {
         }
 
         scalarized_agg[value].clone()
+    }
+
+    fn leaf_rewrite_values_of_value(
+        &mut self,
+        func: &mut Function,
+        module: &sonatina_ir::module::ModuleCtx,
+        inst: InstId,
+        value: ValueId,
+        ty: Type,
+        scalarized_agg: &SecondaryMap<ValueId, Option<LeafValues>>,
+    ) -> Option<LeafValues> {
+        if let Some(leaves) =
+            self.scalarized_leaves_of_value(func, module, value, ty, scalarized_agg)
+        {
+            return Some(leaves);
+        }
+        if !shape::is_supported_aggregate_ty(module, ty) {
+            return None;
+        }
+
+        let agg_shape = self.aggregate_shape(module, ty)?;
+        let mut reconstructor = AggregateValueReconstructor::new(&mut self.layout_cache);
+        let mut leaves = LeafValues::new();
+        for leaf in agg_shape.leaves {
+            let slice = shape::aggregate_slice_for_path(module, ty, &leaf.path)?;
+            leaves.push(reconstructor.rebuild_slice(func, inst, value, ty, slice, leaf.ty)?);
+        }
+        Some(leaves)
+    }
+
+    fn value_has_leaf_rewrite_plan(
+        &self,
+        module: &sonatina_ir::module::ModuleCtx,
+        ty: Type,
+        value: ValueId,
+        scalarizable: &SecondaryMap<ValueId, bool>,
+    ) -> bool {
+        !shape::is_supported_scalar_shape_ty(module, ty)
+            || scalarizable[value]
+            || shape::is_supported_aggregate_ty(module, ty)
     }
 
     fn insert_live_in_leaf_load(
@@ -2463,6 +2628,84 @@ impl AggregateScalarize {
         );
         cursor.set_location(CursorLocation::At(store));
     }
+
+    #[cfg(debug_assertions)]
+    fn first_remaining_promoted_aggregate_memory_op(
+        &self,
+        func: &Function,
+        module: &sonatina_ir::module::ModuleCtx,
+        projection_of: &ExactProjectionMap,
+        promoted_by_root: &FxHashMap<ValueId, PromotableRoot>,
+    ) -> Option<String> {
+        for block in func.layout.iter_block() {
+            for inst in func.layout.iter_inst(block) {
+                if let Some(mload) = downcast::<&data::Mload>(func.inst_set(), func.dfg.inst(inst))
+                    && shape::is_supported_scalar_shape_ty(module, *mload.ty())
+                    && let Some(projection) = projection_of.get(*mload.addr())
+                    && promoted_by_root.contains_key(&projection.root_value.value())
+                {
+                    return Some(format!(
+                        "aggregate mload at block {} inst {} on promoted root {} from addr {}",
+                        block.as_u32(),
+                        inst.as_u32(),
+                        projection.root_value.value().as_u32(),
+                        mload.addr().as_u32(),
+                    ));
+                }
+                if let Some(obj_load) =
+                    downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst))
+                    && let Some(result) = func.dfg.inst_result(inst)
+                    && shape::is_supported_scalar_shape_ty(module, func.dfg.value_ty(result))
+                    && let Some(projection) = projection_of.get(*obj_load.object())
+                    && promoted_by_root.contains_key(&projection.root_value.value())
+                {
+                    return Some(format!(
+                        "aggregate obj.load at block {} inst {} on promoted root {} from object {}",
+                        block.as_u32(),
+                        inst.as_u32(),
+                        projection.root_value.value().as_u32(),
+                        obj_load.object().as_u32(),
+                    ));
+                }
+                if let Some(mstore) =
+                    downcast::<&data::Mstore>(func.inst_set(), func.dfg.inst(inst))
+                    && shape::is_supported_scalar_shape_ty(module, *mstore.ty())
+                    && let Some(projection) = projection_of.get(*mstore.addr())
+                    && promoted_by_root.contains_key(&projection.root_value.value())
+                {
+                    return Some(format!(
+                        "aggregate mstore at block {} inst {} on promoted root {} to addr {} value {}",
+                        block.as_u32(),
+                        inst.as_u32(),
+                        projection.root_value.value().as_u32(),
+                        mstore.addr().as_u32(),
+                        mstore.value().as_u32(),
+                    ));
+                }
+                if let Some(obj_store) =
+                    downcast::<&data::ObjStore>(func.inst_set(), func.dfg.inst(inst))
+                    && shape::is_supported_scalar_shape_ty(
+                        module,
+                        func.dfg.value_ty(*obj_store.value()),
+                    )
+                    && let Some(projection) = projection_of.get(*obj_store.object())
+                    && promoted_by_root.contains_key(&projection.root_value.value())
+                {
+                    return Some(format!(
+                        "aggregate obj.store at block {} inst {} on promoted root {} to object {} ({:?}) value {} ({:?})",
+                        block.as_u32(),
+                        inst.as_u32(),
+                        projection.root_value.value().as_u32(),
+                        obj_store.object().as_u32(),
+                        func.dfg.value_ty(*obj_store.object()),
+                        obj_store.value().as_u32(),
+                        func.dfg.value_ty(*obj_store.value()),
+                    ));
+                }
+            }
+        }
+        None
+    }
 }
 
 fn insert_object_child_ref(
@@ -2474,7 +2717,9 @@ fn insert_object_child_ref(
     idx: u32,
     next_ty: Type,
 ) -> ValueId {
-    let idx_value = func.dfg.make_imm_value(i64::from(idx));
+    let idx_value = func
+        .dfg
+        .make_imm_value(Immediate::from_i256(I256::from(idx), Type::I256));
     let result_ty = func
         .ctx()
         .with_ty_store_mut(|store| store.make_obj_ref(next_ty));
@@ -2928,23 +3173,23 @@ func private %f() -> i256 {
             .modify(func_ref, |func| AggregateScalarize::default().run(func));
 
         assert!(
-            !changed,
-            "scalarization should reject roots that only looked scalarizable through a non-promoted root"
+            changed,
+            "scalarization should still promote the destination root when the stored aggregate is leaf-decomposable even if the source root is not promoted"
         );
 
         module.func_store.view(func_ref, |func| {
             let dumped = FuncWriter::new(func_ref, func).dump_string();
             assert!(
-                dumped.contains("v0.*@slice = alloca @slice;")
+                !dumped.contains("v0.*@slice = alloca @slice;")
                     && dumped.contains("v1.*@slice = alloca @slice;"),
-                "both allocas should remain when the fixpoint removes the stale projection:\n{dumped}"
+                "only the non-promoted source root should remain after the destination root scalarizes:\n{dumped}"
             );
             assert!(
                 dumped.contains("v3.@slice = mload v1 @slice;")
-                    && dumped.contains("mstore v0 v3 @slice;")
-                    && dumped.contains("v4.@slice = mload v0 @slice;")
-                    && dumped.contains("v5.i256 = extract_value v4 0.i8;"),
-                "aggregate transfer through the promoted candidate should stay explicit:\n{dumped}"
+                    && !dumped.contains("mstore v0 v3 @slice;")
+                    && !dumped.contains("v4.@slice = mload v0 @slice;")
+                    && dumped.contains("extract_value v3 0.i256"),
+                "the promoted destination root should disappear while the non-promoted source load remains explicit:\n{dumped}"
             );
         });
     }
@@ -3016,6 +3261,53 @@ func private %f(v0.i256, v1.i256) -> i256 {
 
         module.func_store.view(func_ref, |func| {
             assert_no_promoted_aggregate_artifacts(func, &ctx);
+        });
+    }
+
+    #[test]
+    fn scalarize_rebuilds_whole_object_load_for_non_scalarized_consumer() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @pair = { i256, i256 };
+
+func private %consume(v0.@pair) -> i256 {
+    block0:
+        v1.i256 = extract_value v0 1.i8;
+        return v1;
+}
+
+func private %f(v0.i256, v1.i256) -> i256 {
+    block0:
+        v2.objref<@pair> = obj.alloc @pair;
+        v3.objref<i256> = obj.proj v2 0.i8;
+        v4.objref<i256> = obj.proj v2 1.i8;
+        obj.store v3 v0;
+        obj.store v4 v1;
+        v5.@pair = obj.load v2;
+        v6.i256 = call %consume v5;
+        return v6;
+}
+"#,
+        );
+        let ctx = module.ctx.clone();
+        let func_ref = lookup_func(&module, "f");
+        module.func_store.modify(func_ref, |func| {
+            AggregateScalarize::default().run(func);
+        });
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            assert_no_promoted_aggregate_artifacts(func, &ctx);
+            assert!(
+                dumped.contains("call %consume"),
+                "whole-object load replacement should preserve the non-scalarized call consumer:\n{dumped}"
+            );
+            assert!(
+                dumped.contains("insert_value"),
+                "whole-object load should rebuild an SSA aggregate before the call:\n{dumped}"
+            );
         });
     }
 

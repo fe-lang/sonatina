@@ -1,5 +1,5 @@
 use sonatina_ir::{
-    Function, InstId, Type, Value, ValueId,
+    Function, I256, Immediate, InstId, Type, Value, ValueId,
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
     inst::{cast, data, downcast},
 };
@@ -214,6 +214,25 @@ impl<'a> AggregateValueReconstructor<'a> {
     }
 }
 
+pub(crate) fn rebuild_aggregate_from_leaf_values(
+    func: &mut Function,
+    inst: InstId,
+    module: &sonatina_ir::module::ModuleCtx,
+    agg_ty: Type,
+    scalar_leaves: &[ValueId],
+) -> Option<ValueId> {
+    if !shape::is_supported_aggregate_ty(module, agg_ty) {
+        return None;
+    }
+
+    let leaf_count = shape::aggregate_shape(module, agg_ty)?.leaves.len();
+    if scalar_leaves.len() != leaf_count {
+        return None;
+    }
+
+    rebuild_aggregate_from_leaf_values_impl(func, inst, module, agg_ty, scalar_leaves)
+}
+
 pub(crate) fn bitcast_before_inst(
     func: &mut Function,
     inst: InstId,
@@ -241,6 +260,40 @@ pub(crate) fn bitcast_before_inst(
     });
     cursor.attach_result(func, bitcast_inst, cast_value);
     cast_value
+}
+
+fn rebuild_aggregate_from_leaf_values_impl(
+    func: &mut Function,
+    inst: InstId,
+    module: &sonatina_ir::module::ModuleCtx,
+    agg_ty: Type,
+    scalar_leaves: &[ValueId],
+) -> Option<ValueId> {
+    if scalar_leaves.is_empty() {
+        return Some(func.dfg.make_undef_value(agg_ty));
+    }
+
+    let child_count = shape::aggregate_child_count(module, agg_ty)?;
+    let mut aggregate = func.dfg.make_undef_value(agg_ty);
+    for idx in 0..child_count {
+        let idx = u32::try_from(idx).ok()?;
+        let child = shape::aggregate_slice_for_index(module, agg_ty, idx)?;
+        let child_value = if child.leaf_count == 0 {
+            func.dfg.make_undef_value(child.ty)
+        } else if shape::is_supported_aggregate_ty(module, child.ty) {
+            rebuild_aggregate_from_leaf_values_impl(
+                func,
+                inst,
+                module,
+                child.ty,
+                &scalar_leaves[child.first_leaf..child.first_leaf + child.leaf_count],
+            )?
+        } else {
+            scalar_leaves[child.first_leaf]
+        };
+        aggregate = insert_value_before_inst(func, inst, aggregate, idx, child_value, agg_ty);
+    }
+    Some(aggregate)
 }
 
 fn is_explicit_undef(func: &Function, value: ValueId) -> bool {
@@ -325,7 +378,9 @@ fn extract_value_before_inst(
     idx: u32,
     ty: Type,
 ) -> ValueId {
-    let idx_value = func.dfg.make_imm_value(i64::from(idx));
+    let idx_value = func
+        .dfg
+        .make_imm_value(Immediate::from_i256(I256::from(idx), Type::I256));
     let loc = func.layout.prev_inst_of(inst).map_or(
         CursorLocation::BlockTop(func.layout.inst_block(inst)),
         CursorLocation::At,
@@ -369,7 +424,9 @@ fn insert_value_before_inst(
     value: ValueId,
     ty: Type,
 ) -> ValueId {
-    let idx_value = func.dfg.make_imm_value(i64::from(idx));
+    let idx_value = func
+        .dfg
+        .make_imm_value(Immediate::from_i256(I256::from(idx), Type::I256));
     let loc = func.layout.prev_inst_of(inst).map_or(
         CursorLocation::BlockTop(func.layout.inst_block(inst)),
         CursorLocation::At,
