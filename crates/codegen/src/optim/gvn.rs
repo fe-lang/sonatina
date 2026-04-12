@@ -11,14 +11,13 @@ use std::{cell::RefCell, collections::BTreeSet};
 
 use cranelift_entity::{PrimaryMap, SecondaryMap, entity_impl, packed_option::PackedOption};
 use rustc_hash::{FxHashMap, FxHashSet};
+use smallvec::SmallVec;
 use sonatina_ir::{
-    BlockId, ControlFlowGraph, DataFlowGraph, Function, Immediate, Inst, InstId, Type, Value,
-    ValueId,
+    BlockId, ControlFlowGraph, DataFlowGraph, Function, Immediate, InstId, Type, Value, ValueId,
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
     inst::{
         BinaryInstKind, CastInstKind, InstClassKind, InstKeyExt, OwnedInstKey, UnaryInstKind,
-        arith, cmp,
-        control_flow::{self, BranchKind, Jump, Unreachable},
+        arith, cmp, control_flow::BranchKind,
     },
 };
 
@@ -840,14 +839,6 @@ impl GvnSolver {
             .in_edges
             .iter()
             .filter(|edge| self.edge_data(**edge).reachable)
-    }
-
-    /// Returns unreachable outgoing edges of the block.
-    fn unreachable_out_edges(&self, block: BlockId) -> impl Iterator<Item = &Edge> {
-        self.blocks[block]
-            .out_edges
-            .iter()
-            .filter(|edge| !self.edge_data(**edge).reachable)
     }
 
     /// Returns the incoming edge if the edge is only one reachable edge to the block.
@@ -3034,56 +3025,6 @@ impl<'a> RedundantCodeRemover<'a> {
         }
     }
 
-    fn rewrite_br_table_for_reachability(
-        &self,
-        func: &Function,
-        block: BlockId,
-        br_table: &control_flow::BrTable,
-    ) -> Option<Box<dyn Inst>> {
-        let unreachable: FxHashSet<_> = self.solver.unreachable_out_edges(block).copied().collect();
-        if unreachable.is_empty() {
-            return None;
-        }
-
-        let out_edges = &self.solver.blocks[block].out_edges;
-        let table_offset = usize::from(br_table.default().is_some());
-        debug_assert_eq!(out_edges.len(), br_table.table().len() + table_offset);
-
-        let mut default = *br_table.default();
-        if default.is_some() && unreachable.contains(&out_edges[0]) {
-            default = None;
-        }
-
-        let mut table = Vec::with_capacity(br_table.table().len());
-        for (idx, (value, dest)) in br_table.table().iter().enumerate() {
-            let edge = out_edges[table_offset + idx];
-            if !unreachable.contains(&edge) {
-                table.push((*value, *dest));
-            }
-        }
-
-        let mut dests = FxHashSet::default();
-        if let Some(default) = default {
-            dests.insert(default);
-        }
-        for (_, dest) in &table {
-            dests.insert(*dest);
-        }
-
-        let inst_set = func.inst_set();
-        let new_term: Box<dyn Inst> = match dests.len() {
-            0 => Box::new(Unreachable::new_unchecked(inst_set)),
-            1 => Box::new(Jump::new(inst_set.jump(), *dests.iter().next().unwrap())),
-            _ => {
-                let mut new_br_table = br_table.clone();
-                *new_br_table.default_mut() = default;
-                *new_br_table.table_mut() = table;
-                Box::new(new_br_table)
-            }
-        };
-        Some(new_term)
-    }
-
     /// Remove unreachable edges and blocks.
     fn remove_unreachable_edges(&self, func: &mut Function) {
         let mut editor = CfgEditor::new(func, CleanupMode::RepairWithUndef);
@@ -3097,23 +3038,18 @@ impl<'a> RedundantCodeRemover<'a> {
             let Some(term) = editor.func().layout.last_inst_of(block) else {
                 continue;
             };
-
-            let new_term = editor.func().dfg.cast_br_table(term).and_then(|br_table| {
-                self.rewrite_br_table_for_reachability(editor.func(), block, br_table)
-            });
-            if let Some(new_term) = new_term {
-                editor.func_mut().dfg.replace_inst(term, new_term);
-                continue;
-            }
-
             if !editor.func().dfg.is_branch(term) {
                 continue;
             }
-
-            for &out_edge in self.solver.unreachable_out_edges(block) {
-                let edge_data = self.solver.edge_data(out_edge);
-                editor.func_mut().dfg.remove_branch_dest(term, edge_data.to);
+            let out_edges = self.solver.blocks[block].out_edges.clone();
+            let keep_mask: SmallVec<[bool; 4]> = out_edges
+                .into_iter()
+                .map(|edge| self.solver.edge_data(edge).reachable)
+                .collect();
+            if keep_mask.iter().all(|keep| *keep) {
+                continue;
             }
+            editor.retain_out_edges(block, &keep_mask);
         }
 
         editor.recompute_cfg();
