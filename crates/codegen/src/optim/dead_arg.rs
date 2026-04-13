@@ -8,12 +8,9 @@ use sonatina_ir::{
 
 use crate::{analysis::func_behavior, module_analysis::CallGraph};
 
-use super::{
-    call_purity::is_removable_pure_call,
-    signature_rewrite::{
-        SignatureRewritePlan, propagate_signature_rewrite_types, retain_higher_order_safe_plans,
-        rewrite_declared_signatures,
-    },
+use super::signature_rewrite::{
+    SignatureRewritePlan, propagate_signature_rewrite_types, retain_higher_order_safe_plans,
+    rewrite_declared_signatures,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -131,14 +128,7 @@ pub fn run_dead_arg_elim(module: &Module, config: DeadArgElimConfig) -> DeadArgE
 }
 
 fn is_dead_arg_root_inst(function: &Function, inst: InstId) -> bool {
-    if function.dfg.call_info(inst).is_some() {
-        return !is_removable_pure_call(function, inst);
-    }
-
-    function.dfg.is_terminator(inst)
-        || function.dfg.may_observe_state(inst)
-        || function.dfg.may_mutate_state(inst)
-        || function.dfg.may_transfer_control(inst)
+    function.dfg.is_terminator(inst) || function.dfg.effect_summary(inst).has_effect()
 }
 
 fn collect_candidate_funcs(module: &Module, config: DeadArgElimConfig) -> FxHashSet<FuncRef> {
@@ -709,6 +699,44 @@ func public %entry(v0.i256) -> i256 {
         assert_sig(&parsed.module, "reader", 1, 1);
         let dumped = dump_function(&parsed.module, "reader");
         assert!(dumped.contains("v1.i256 = evm_sload v0;"));
+        assert_verified(&parsed.module);
+    }
+
+    #[test]
+    fn unused_read_only_call_keeps_caller_arg_live() {
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func private %reader(v0.i256) -> i256 {
+    block0:
+        v1.i256 = evm_sload v0;
+        return 0.i256;
+}
+
+func private %caller(v0.i256) -> i256 {
+    block0:
+        v1.i256 = call %reader v0;
+        return 0.i256;
+}
+
+func public %entry(v0.i256) -> i256 {
+    block0:
+        v1.i256 = call %caller v0;
+        return v1;
+}
+"#,
+        );
+
+        let stats = run_dead_arg_elim(&parsed.module, DeadArgElimConfig::default());
+
+        assert_eq!(stats.rewritten_funcs, 0);
+        assert_eq!(stats.removed_args, 0);
+        assert_sig(&parsed.module, "caller", 1, 1);
+        let caller = dump_function(&parsed.module, "caller");
+        assert!(caller.contains("v1.i256 = call %reader v0;"));
+        let dumped = dump_module(&parsed.module);
+        assert!(dumped.contains("v1.i256 = call %caller v0;"));
         assert_verified(&parsed.module);
     }
 
