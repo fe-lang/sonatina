@@ -20,7 +20,10 @@ use crate::{isa::evm::STATIC_BASE, transform::aggregate::shape};
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ValueKey {
     Imm(Immediate),
-    Value(ValueId),
+    // Exact keyed forwarding is only sound for runtime-invariant leaves. Raw SSA identities are
+    // not stable enough across loop backedges or merged control flow, so the only symbolic leaf
+    // we preserve directly is a formal argument.
+    Arg(ValueId),
     Expr(Box<KeyExpr>),
 }
 
@@ -245,10 +248,13 @@ impl MemoryAccessAnalysis {
             return alias;
         }
 
-        if reserved_evm_meta_interval(&lhs.base, lhs.offset, i64::from(lhs.bytes)).is_some_and(
-            |_| allocator_managed_access_cannot_reach_reserved_meta(&rhs.base, rhs.offset),
-        ) || reserved_evm_meta_interval(&rhs.base, rhs.offset, i64::from(rhs.bytes)).is_some_and(
-            |_| allocator_managed_access_cannot_reach_reserved_meta(&lhs.base, lhs.offset),
+        if reserved_meta_shortcut_applies(
+            &lhs.base,
+            lhs.offset,
+            i64::from(lhs.bytes),
+            &rhs.base,
+            rhs.offset,
+            i64::from(rhs.bytes),
         ) {
             return AliasResult::NoAlias;
         }
@@ -319,13 +325,14 @@ impl MemoryAccessAnalysis {
             return self.coverage_from_intervals(range, range_start, range_end, key_start, key_end);
         }
 
-        if reserved_evm_meta_interval(&range.base, range.offset, range.bytes).is_some_and(|_| {
-            allocator_managed_access_cannot_reach_reserved_meta(&key.base, key.offset)
-        }) || reserved_evm_meta_interval(&key.base, key.offset, i64::from(key.bytes))
-            .is_some_and(|_| {
-                allocator_managed_access_cannot_reach_reserved_meta(&range.base, range.offset)
-            })
-        {
+        if reserved_meta_shortcut_applies(
+            &range.base,
+            range.offset,
+            range.bytes,
+            &key.base,
+            key.offset,
+            i64::from(key.bytes),
+        ) {
             return RangeCoverage::NoOverlap;
         }
 
@@ -567,9 +574,12 @@ impl MemoryAccessAnalysis {
             return None;
         }
 
+        // `None` means the value cannot be rebuilt from runtime-invariant leaves and must stay
+        // out of exact keyed forwarding. Structural expression equality is not enough once phi
+        // nodes or loop-carried values can vary across executions.
         let key = match func.dfg.get_value(value)? {
             Value::Immediate { imm, .. } => Some(ValueKey::Imm(*imm)),
-            Value::Arg { .. } => Some(ValueKey::Value(value)),
+            Value::Arg { .. } => Some(ValueKey::Arg(value)),
             Value::Inst {
                 inst,
                 result_idx,
@@ -590,9 +600,7 @@ impl MemoryAccessAnalysis {
         ty: Type,
         visiting: &mut FxHashSet<ValueId>,
     ) -> Option<ValueKey> {
-        let Some(results) = func.dfg.try_inst_results(inst) else {
-            return ValueKey::Value(value);
-        };
+        let results = func.dfg.try_inst_results(inst)?;
         let result_tys = results
             .iter()
             .map(|&result| {
@@ -601,12 +609,8 @@ impl MemoryAccessAnalysis {
                     .map(|_| func.dfg.value_ty(result))
             })
             .collect::<Option<Vec<_>>>();
-        let Some(result_tys) = result_tys else {
-            return ValueKey::Value(value);
-        };
-        let Some(inst_data) = func.dfg.get_inst(inst) else {
-            return ValueKey::Value(value);
-        };
+        let result_tys = result_tys?;
+        let inst_data = func.dfg.get_inst(inst)?;
         let key = inst_data.owned_key(&result_tys);
 
         match key.kind() {
@@ -763,6 +767,21 @@ fn reserved_evm_meta_interval(base: &BaseObject, offset: i64, bytes: i64) -> Opt
     (end <= i64::from(STATIC_BASE)).then_some((start, end))
 }
 
+fn reserved_meta_shortcut_applies(
+    lhs_base: &BaseObject,
+    lhs_offset: i64,
+    lhs_bytes: i64,
+    rhs_base: &BaseObject,
+    rhs_offset: i64,
+    rhs_bytes: i64,
+) -> bool {
+    reserved_evm_meta_interval(lhs_base, lhs_offset, lhs_bytes)
+        .is_some_and(|_| allocator_managed_access_cannot_reach_reserved_meta(rhs_base, rhs_offset))
+        || reserved_evm_meta_interval(rhs_base, rhs_offset, rhs_bytes).is_some_and(|_| {
+            allocator_managed_access_cannot_reach_reserved_meta(lhs_base, lhs_offset)
+        })
+}
+
 fn is_allocator_managed_base(base: &BaseObject) -> bool {
     matches!(base, BaseObject::Alloca(_) | BaseObject::Malloc(_))
 }
@@ -795,7 +814,8 @@ mod tests {
     use super::*;
     use sonatina_ir::{
         AccessKind, AccessLoc, MemoryAccess, Type,
-        builder::test_util::*,
+        builder::{FunctionBuilder, test_util::*},
+        func_cursor::InstInserter,
         inst::{
             arith::Add,
             control_flow::{Br, Jump, Return},
@@ -841,6 +861,66 @@ mod tests {
                 ty: Type::I256,
             },
         }
+    }
+
+    #[derive(Clone, Copy)]
+    enum AllocatorBaseKind {
+        Alloca,
+        Malloc,
+    }
+
+    fn insert_allocator_base<I>(
+        builder: &mut FunctionBuilder<InstInserter>,
+        is: &I,
+        kind: AllocatorBaseKind,
+        ptr_ty: Type,
+    ) -> ValueId
+    where
+        I: sonatina_ir::InstSetBase
+            + sonatina_ir::HasInst<Alloca>
+            + sonatina_ir::HasInst<EvmMalloc>,
+    {
+        match kind {
+            AllocatorBaseKind::Alloca => {
+                builder.insert_inst_with(|| Alloca::new(is, Type::I8), ptr_ty)
+            }
+            AllocatorBaseKind::Malloc => {
+                let size = builder.make_imm_value(I256::from(32));
+                builder.insert_inst_with(|| EvmMalloc::new(is, size), ptr_ty)
+            }
+        }
+    }
+
+    fn insert_allocator_offset_ptr<I>(
+        builder: &mut FunctionBuilder<InstInserter>,
+        is: &I,
+        kind: AllocatorBaseKind,
+        ptr_ty: Type,
+        offset: i64,
+    ) -> ValueId
+    where
+        I: sonatina_ir::InstSetBase
+            + sonatina_ir::HasInst<Add>
+            + sonatina_ir::HasInst<Sub>
+            + sonatina_ir::HasInst<Alloca>
+            + sonatina_ir::HasInst<IntToPtr>
+            + sonatina_ir::HasInst<PtrToInt>
+            + sonatina_ir::HasInst<EvmMalloc>,
+    {
+        let addr = insert_allocator_base(builder, is, kind, ptr_ty);
+        if offset == 0 {
+            return addr;
+        }
+
+        let addr_i256 =
+            builder.insert_inst_with(|| PtrToInt::new(is, addr, Type::I256), Type::I256);
+        let delta = builder.make_imm_value(I256::from(offset.unsigned_abs()));
+        let shifted = if offset > 0 {
+            builder.insert_inst_with(|| Add::new(is, addr_i256, delta), Type::I256)
+        } else {
+            builder.insert_inst_with(|| Sub::new(is, addr_i256, delta), Type::I256)
+        };
+        builder.insert_inst_with(|| IntToPtr::new(is, shifted, ptr_ty), ptr_ty)
     }
 
     #[test]
@@ -1305,6 +1385,46 @@ mod tests {
     }
 
     #[test]
+    fn reserved_absolute_meta_access_does_not_alias_alloca_key() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::Unit);
+        let is = evm.inst_set();
+
+        let block = builder.append_block();
+        builder.switch_to_block(block);
+
+        let ptr_ty = builder.ptr_type(Type::I8);
+        let addr =
+            insert_allocator_offset_ptr(&mut builder, is, AllocatorBaseKind::Alloca, ptr_ty, 32);
+        let load = builder.insert_inst_with(|| Mload::new(is, addr, Type::I256), Type::I256);
+        let _ = load;
+        builder.insert_inst_no_result_with(|| Return::new_unit(is));
+        builder.seal_all();
+
+        let load_inst = builder
+            .func
+            .dfg
+            .value_inst(load)
+            .expect("load should stay defined by an instruction");
+        let alloca_key = single_key(&builder.func, load_inst);
+        let free_ptr = Immediate::from_i256(I256::from(64), Type::I256);
+        let absolute_key = MemoryAccessAnalysis::new()
+            .trackable_exact_loc(
+                &builder.func,
+                &exact_imm_access(
+                    builder.func.ctx().address_spaces().default_space(),
+                    free_ptr,
+                ),
+            )
+            .expect("free pointer access should be trackable");
+
+        assert_eq!(
+            MemoryAccessAnalysis::new().alias(&alloca_key, &absolute_key),
+            AliasResult::NoAlias
+        );
+    }
+
+    #[test]
     fn absolute_access_at_static_base_may_alias_malloc_key() {
         let mb = test_module_builder();
         let (evm, mut builder) = test_func_builder(&mb, &[], Type::Unit);
@@ -1406,6 +1526,136 @@ mod tests {
         let meta_addr =
             builder.insert_inst_with(|| IntToPtr::new(is, meta_addr_i256, ptr_ty), ptr_ty);
         let load = builder.insert_inst_with(|| Mload::new(is, meta_addr, Type::I256), Type::I256);
+        let _ = load;
+        builder.insert_inst_no_result_with(|| Return::new_unit(is));
+        builder.seal_all();
+
+        let load_inst = builder
+            .func
+            .dfg
+            .value_inst(load)
+            .expect("load should stay defined by an instruction");
+        let TrackedLocKey::Linear(key) = single_key(&builder.func, load_inst) else {
+            panic!("expected a linear key");
+        };
+        let analysis = MemoryAccessAnalysis::new();
+        let range_addr = builder.make_imm_value(I256::from(64));
+        let range_len = builder.make_imm_value(I256::from(32));
+        let range = analysis
+            .trackable_linear_range(
+                &builder.func,
+                &range_access(
+                    builder.func.ctx().address_spaces().default_space(),
+                    range_addr,
+                    range_len,
+                ),
+            )
+            .expect("absolute meta range should be trackable");
+
+        assert_eq!(
+            analysis.exact_write_coverage(&range, &key),
+            RangeCoverage::Unknown
+        );
+    }
+
+    #[test]
+    fn positive_allocator_offsets_stay_disjoint_from_reserved_meta_write_coverage() {
+        for kind in [AllocatorBaseKind::Malloc, AllocatorBaseKind::Alloca] {
+            let mb = test_module_builder();
+            let (evm, mut builder) = test_func_builder(&mb, &[], Type::Unit);
+            let is = evm.inst_set();
+
+            let block = builder.append_block();
+            builder.switch_to_block(block);
+
+            let ptr_ty = builder.ptr_type(Type::I8);
+            let addr = insert_allocator_offset_ptr(&mut builder, is, kind, ptr_ty, 32);
+            let load = builder.insert_inst_with(|| Mload::new(is, addr, Type::I256), Type::I256);
+            let _ = load;
+            builder.insert_inst_no_result_with(|| Return::new_unit(is));
+            builder.seal_all();
+
+            let load_inst = builder
+                .func
+                .dfg
+                .value_inst(load)
+                .expect("load should stay defined by an instruction");
+            let TrackedLocKey::Linear(key) = single_key(&builder.func, load_inst) else {
+                panic!("expected a linear key");
+            };
+            let analysis = MemoryAccessAnalysis::new();
+            let range_addr = builder.make_imm_value(I256::from(64));
+            let range_len = builder.make_imm_value(I256::from(32));
+            let range = analysis
+                .trackable_linear_range(
+                    &builder.func,
+                    &range_access(
+                        builder.func.ctx().address_spaces().default_space(),
+                        range_addr,
+                        range_len,
+                    ),
+                )
+                .expect("absolute meta range should be trackable");
+
+            assert_eq!(
+                analysis.exact_write_coverage(&range, &key),
+                RangeCoverage::NoOverlap
+            );
+        }
+    }
+
+    #[test]
+    fn alloca_negative_offset_into_meta_may_alias_absolute() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::Unit);
+        let is = evm.inst_set();
+
+        let block = builder.append_block();
+        builder.switch_to_block(block);
+
+        let ptr_ty = builder.ptr_type(Type::I8);
+        let addr =
+            insert_allocator_offset_ptr(&mut builder, is, AllocatorBaseKind::Alloca, ptr_ty, -64);
+        let load = builder.insert_inst_with(|| Mload::new(is, addr, Type::I256), Type::I256);
+        let _ = load;
+        builder.insert_inst_no_result_with(|| Return::new_unit(is));
+        builder.seal_all();
+
+        let load_inst = builder
+            .func
+            .dfg
+            .value_inst(load)
+            .expect("load should stay defined by an instruction");
+        let alloca_key = single_key(&builder.func, load_inst);
+        let absolute_key = MemoryAccessAnalysis::new()
+            .trackable_exact_loc(
+                &builder.func,
+                &exact_imm_access(
+                    builder.func.ctx().address_spaces().default_space(),
+                    Immediate::from_i256(I256::from(64), Type::I256),
+                ),
+            )
+            .expect("absolute meta access should be trackable");
+
+        assert_eq!(
+            MemoryAccessAnalysis::new().alias(&alloca_key, &absolute_key),
+            AliasResult::MayAlias
+        );
+    }
+
+    #[test]
+    fn alloca_negative_offset_into_meta_write_coverage_is_unknown() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::Unit);
+        let is = evm.inst_set();
+
+        let block = builder.append_block();
+        builder.switch_to_block(block);
+
+        let ptr_ty = builder.ptr_type(Type::I8);
+        let addr =
+            insert_allocator_offset_ptr(&mut builder, is, AllocatorBaseKind::Alloca, ptr_ty, -64);
+        let load = builder.insert_inst_with(|| Mload::new(is, addr, Type::I256), Type::I256);
         let _ = load;
         builder.insert_inst_no_result_with(|| Return::new_unit(is));
         builder.seal_all();
