@@ -18,7 +18,7 @@ use super::{
     promotion::SsaBuilder,
     provenance::{CompleteProvenance, ExactProjectionMap, RootValue},
     reconstruct::{
-        AggregateValueReconstructor, bitcast_before_inst, rebuild_aggregate_from_leaf_values,
+        AggregateValueReconstructor, bitcast_before_inst, rebuild_scalar_shape_from_leaf_values,
     },
     shape,
 };
@@ -1456,7 +1456,7 @@ impl AggregateScalarize {
                     scalarized_agg[result] = Some(leaves.clone());
                 }
                 let Some(replacement) =
-                    rebuild_aggregate_from_leaf_values(func, inst, module, ty, &leaves)
+                    rebuild_scalar_shape_from_leaf_values(func, inst, module, ty, &leaves)
                 else {
                     return;
                 };
@@ -2792,7 +2792,10 @@ fn shape_contains_enum(shape: &shape::AggregateShape) -> bool {
     shape.leaves.iter().any(|leaf| leaf.ty.is_enum_tag())
 }
 
-fn enum_variant_tag_imm(variant: sonatina_ir::types::EnumVariantRef, ty: Type) -> Immediate {
+pub(crate) fn enum_variant_tag_imm(
+    variant: sonatina_ir::types::EnumVariantRef,
+    ty: Type,
+) -> Immediate {
     match ty {
         Type::EnumTag(enum_ty) => Immediate::EnumTag {
             enum_ty,

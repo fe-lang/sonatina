@@ -1,13 +1,22 @@
+use smallvec::SmallVec;
 use sonatina_ir::{
     Function, I256, Immediate, InstId, Type, Value, ValueId,
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
     inst::{cast, data, downcast},
+    types::{CompoundType, EnumVariantRef},
 };
 
-use super::shape;
+use super::{scalarize::enum_variant_tag_imm, shape};
 
 pub(crate) struct AggregateValueReconstructor<'a> {
     layout_cache: &'a mut shape::AggregateLayoutCache,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ValueRebuildKind {
+    Aggregate,
+    Enum,
+    Leaf,
 }
 
 impl<'a> AggregateValueReconstructor<'a> {
@@ -85,9 +94,28 @@ impl<'a> AggregateValueReconstructor<'a> {
 
         if matches!(
             result_ty.resolve_compound(func.ctx()),
-            Some(sonatina_ir::types::CompoundType::Enum(_))
+            Some(CompoundType::Enum(_))
         ) {
-            return None;
+            let module = func.ctx().clone();
+            let shape = self.layout_cache.shape(&module, result_ty)?;
+            let mut leaves = SmallVec::<[ValueId; 4]>::new();
+            for (leaf_idx, leaf) in shape.leaves.iter().enumerate() {
+                let source_child_slice = shape::aggregate_slice_for_leaf_range(
+                    &module,
+                    source_ty,
+                    source_slice.first_leaf + leaf_idx,
+                    1,
+                )?;
+                leaves.push(self.rebuild_slice(
+                    func,
+                    inst,
+                    source,
+                    source_ty,
+                    source_child_slice,
+                    leaf.ty,
+                )?);
+            }
+            return rebuild_scalar_shape_from_leaf_values(func, inst, &module, result_ty, &leaves);
         }
 
         let child_count = shape::aggregate_child_count(func.ctx(), result_ty)?;
@@ -214,14 +242,14 @@ impl<'a> AggregateValueReconstructor<'a> {
     }
 }
 
-pub(crate) fn rebuild_aggregate_from_leaf_values(
+pub(crate) fn rebuild_scalar_shape_from_leaf_values(
     func: &mut Function,
     inst: InstId,
     module: &sonatina_ir::module::ModuleCtx,
     agg_ty: Type,
     scalar_leaves: &[ValueId],
 ) -> Option<ValueId> {
-    if !shape::is_supported_aggregate_ty(module, agg_ty) {
+    if !shape::is_supported_scalar_shape_ty(module, agg_ty) {
         return None;
     }
 
@@ -230,7 +258,30 @@ pub(crate) fn rebuild_aggregate_from_leaf_values(
         return None;
     }
 
-    rebuild_aggregate_from_leaf_values_impl(func, inst, module, agg_ty, scalar_leaves)
+    rebuild_value_from_leaf_values_impl(func, inst, module, agg_ty, scalar_leaves)
+}
+
+fn value_rebuild_kind(
+    module: &sonatina_ir::module::ModuleCtx,
+    ty: Type,
+) -> Option<ValueRebuildKind> {
+    match ty.resolve_compound(module) {
+        Some(CompoundType::Enum(_)) if shape::is_supported_scalar_shape_ty(module, ty) => {
+            Some(ValueRebuildKind::Enum)
+        }
+        Some(CompoundType::Enum(_)) => None,
+        Some(CompoundType::Struct(_) | CompoundType::Array { .. })
+            if shape::is_supported_aggregate_ty(module, ty) =>
+        {
+            Some(ValueRebuildKind::Aggregate)
+        }
+        Some(CompoundType::Struct(_) | CompoundType::Array { .. } | CompoundType::Func { .. }) => {
+            None
+        }
+        Some(CompoundType::Ptr(_) | CompoundType::ObjRef(_) | CompoundType::ConstRef(_)) | None => {
+            Some(ValueRebuildKind::Leaf)
+        }
+    }
 }
 
 pub(crate) fn bitcast_before_inst(
@@ -262,7 +313,7 @@ pub(crate) fn bitcast_before_inst(
     cast_value
 }
 
-fn rebuild_aggregate_from_leaf_values_impl(
+fn rebuild_value_from_leaf_values_impl(
     func: &mut Function,
     inst: InstId,
     module: &sonatina_ir::module::ModuleCtx,
@@ -273,27 +324,94 @@ fn rebuild_aggregate_from_leaf_values_impl(
         return Some(func.dfg.make_undef_value(agg_ty));
     }
 
-    let child_count = shape::aggregate_child_count(module, agg_ty)?;
-    let mut aggregate = func.dfg.make_undef_value(agg_ty);
-    for idx in 0..child_count {
-        let idx = u32::try_from(idx).ok()?;
-        let child = shape::aggregate_slice_for_index(module, agg_ty, idx)?;
-        let child_value = if child.leaf_count == 0 {
-            func.dfg.make_undef_value(child.ty)
-        } else if shape::is_supported_aggregate_ty(module, child.ty) {
-            rebuild_aggregate_from_leaf_values_impl(
+    match value_rebuild_kind(module, agg_ty)? {
+        ValueRebuildKind::Leaf => (scalar_leaves.len() == 1).then_some(scalar_leaves[0]),
+        ValueRebuildKind::Enum => {
+            rebuild_enum_from_leaf_values(func, inst, module, agg_ty, scalar_leaves)
+        }
+        ValueRebuildKind::Aggregate => {
+            let child_count = shape::aggregate_child_count(module, agg_ty)?;
+            let mut aggregate = func.dfg.make_undef_value(agg_ty);
+            for idx in 0..child_count {
+                let idx = u32::try_from(idx).ok()?;
+                let child = shape::aggregate_slice_for_index(module, agg_ty, idx)?;
+                let child_value = if child.leaf_count == 0 {
+                    func.dfg.make_undef_value(child.ty)
+                } else {
+                    rebuild_value_from_leaf_values_impl(
+                        func,
+                        inst,
+                        module,
+                        child.ty,
+                        &scalar_leaves[child.first_leaf..child.first_leaf + child.leaf_count],
+                    )?
+                };
+                aggregate =
+                    insert_value_before_inst(func, inst, aggregate, idx, child_value, agg_ty);
+            }
+            Some(aggregate)
+        }
+    }
+}
+
+fn rebuild_enum_from_leaf_values(
+    func: &mut Function,
+    inst: InstId,
+    module: &sonatina_ir::module::ModuleCtx,
+    enum_ty: Type,
+    scalar_leaves: &[ValueId],
+) -> Option<ValueId> {
+    let Type::Compound(enum_cmpd) = enum_ty else {
+        return None;
+    };
+    let tag_slice = shape::enum_tag_slice(module, enum_ty)?;
+    let tag = *scalar_leaves.get(tag_slice.first_leaf)?;
+    let variant = resolve_known_enum_variant(func, enum_cmpd, tag)?;
+    let variant_data = module.with_ty_store(|store| store.enum_variant_data(variant).cloned())?;
+    let mut values = SmallVec::<[ValueId; 2]>::new();
+    for (field_idx, _) in variant_data.fields.iter().enumerate() {
+        let field_idx = u32::try_from(field_idx).ok()?;
+        let field_slice = shape::enum_variant_field_slice(module, enum_ty, variant, field_idx)?;
+        let value = if field_slice.leaf_count == 0 {
+            func.dfg.make_undef_value(field_slice.ty)
+        } else {
+            rebuild_value_from_leaf_values_impl(
                 func,
                 inst,
                 module,
-                child.ty,
-                &scalar_leaves[child.first_leaf..child.first_leaf + child.leaf_count],
+                field_slice.ty,
+                &scalar_leaves
+                    [field_slice.first_leaf..field_slice.first_leaf + field_slice.leaf_count],
             )?
-        } else {
-            scalar_leaves[child.first_leaf]
         };
-        aggregate = insert_value_before_inst(func, inst, aggregate, idx, child_value, agg_ty);
+        values.push(value);
     }
-    Some(aggregate)
+    Some(insert_enum_make_before_inst(
+        func, inst, enum_ty, variant, values,
+    ))
+}
+
+fn resolve_known_enum_variant(
+    func: &Function,
+    enum_ty: sonatina_ir::types::CompoundTypeRef,
+    value: ValueId,
+) -> Option<EnumVariantRef> {
+    let idx = if let Some(imm) = func.dfg.value_imm(value) {
+        imm.to_nonnegative_usize()?
+    } else if let Some(inst) = func.dfg.value_inst(value)
+        && let Some(enum_tag) = downcast::<&data::EnumTag>(func.inst_set(), func.dfg.inst(inst))
+        && let Some(make_inst) = func.dfg.value_inst(*enum_tag.value())
+        && let Some(enum_make) =
+            downcast::<&data::EnumMake>(func.inst_set(), func.dfg.inst(make_inst))
+    {
+        usize::try_from(enum_make.variant().index()).ok()?
+    } else {
+        return None;
+    };
+    let variant_count = func
+        .ctx()
+        .with_ty_store(|store| store.enum_data(enum_ty).map(|data| data.variants.len()))?;
+    (idx < variant_count).then_some(EnumVariantRef::new(enum_ty, u32::try_from(idx).ok()?))
 }
 
 fn is_explicit_undef(func: &Function, value: ValueId) -> bool {
@@ -338,7 +456,10 @@ fn enum_child_value_from_source(
             let enum_make =
                 downcast::<&data::EnumMake>(func.inst_set(), func.dfg.inst(def_inst)).cloned()?;
             if target_idx == 0 {
-                return Some(Some(enum_tag_before_inst(func, inst, aggregate, child_ty)));
+                return Some(Some(func.dfg.make_imm_value(enum_variant_tag_imm(
+                    *enum_make.variant(),
+                    child_ty,
+                ))));
             }
             let shape::EnumSlotInfo::VariantField { variant, field, .. } =
                 shape::enum_slot_info(func.ctx(), aggregate_ty, target_idx)?
@@ -414,6 +535,31 @@ fn enum_tag_before_inst(func: &mut Function, inst: InstId, value: ValueId, ty: T
     });
     cursor.attach_result(func, enum_tag_inst, enum_tag_value);
     enum_tag_value
+}
+
+fn insert_enum_make_before_inst(
+    func: &mut Function,
+    inst: InstId,
+    ty: Type,
+    variant: EnumVariantRef,
+    values: SmallVec<[ValueId; 2]>,
+) -> ValueId {
+    let loc = func.layout.prev_inst_of(inst).map_or(
+        CursorLocation::BlockTop(func.layout.inst_block(inst)),
+        CursorLocation::At,
+    );
+    let mut cursor = InstInserter::at_location(loc);
+    let enum_make_inst = cursor.insert_inst_data(
+        func,
+        data::EnumMake::new_unchecked(func.inst_set(), ty, variant, values),
+    );
+    let enum_make_value = func.dfg.make_value(Value::Inst {
+        inst: enum_make_inst,
+        result_idx: 0,
+        ty,
+    });
+    cursor.attach_result(func, enum_make_inst, enum_make_value);
+    enum_make_value
 }
 
 fn insert_value_before_inst(
@@ -629,6 +775,180 @@ block0:
                     .unwrap();
             assert_eq!(*extract.dest(), func.arg_values[0]);
             assert_eq!(shape::const_u32(&func.dfg, *extract.idx()), Some(1));
+        });
+    }
+
+    #[test]
+    fn rebuilds_fieldless_enum_children_as_full_enum_values() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @E = enum {
+    #A,
+    #B,
+};
+
+type @Pair = { i256, @E };
+
+func private %f() -> i256 {
+block0:
+    return 0.i256;
+}
+"#,
+        );
+        let pair = module
+            .ctx
+            .with_ty_store(|s| Type::Compound(s.lookup_struct("Pair").unwrap()));
+        let enum_ty = module
+            .ctx
+            .with_ty_store(|s| Type::Compound(s.lookup_enum("E").unwrap()));
+        let Type::Compound(enum_cmpd) = enum_ty else {
+            panic!("expected enum compound type");
+        };
+        let func_ref = lookup_func(&module, "f");
+
+        module.func_store.modify(func_ref, |func| {
+            let ret = func
+                .layout
+                .last_inst_of(func.layout.entry_block().unwrap())
+                .unwrap();
+            let module_ctx = func.ctx().clone();
+            let leaves = [
+                func.dfg
+                    .make_imm_value(Immediate::from_i256(I256::zero(), Type::I256)),
+                func.dfg.make_imm_value(Immediate::EnumTag {
+                    enum_ty: enum_cmpd,
+                    value: I256::zero(),
+                }),
+            ];
+            let rebuilt =
+                rebuild_scalar_shape_from_leaf_values(func, ret, &module_ctx, pair, &leaves)
+                    .unwrap();
+            let rebuilt_inst = func.dfg.value_inst(rebuilt).unwrap();
+            let final_insert =
+                downcast::<&data::InsertValue>(func.inst_set(), func.dfg.inst(rebuilt_inst))
+                    .unwrap();
+            assert_eq!(shape::const_u32(&func.dfg, *final_insert.idx()), Some(1));
+            let enum_child = *final_insert.value();
+            assert_eq!(func.dfg.value_ty(enum_child), enum_ty);
+
+            let enum_make_inst = func.dfg.value_inst(enum_child).unwrap();
+            let enum_make =
+                downcast::<&data::EnumMake>(func.inst_set(), func.dfg.inst(enum_make_inst))
+                    .unwrap();
+            assert_eq!(*enum_make.ty(), enum_ty);
+            assert_eq!(*enum_make.variant(), EnumVariantRef::new(enum_cmpd, 0));
+            assert!(enum_make.values().is_empty());
+        });
+    }
+
+    #[test]
+    fn rebuilds_payload_enum_children_as_full_enum_values() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @OptionI256 = enum {
+    #None,
+    #Some(i256),
+};
+
+type @Pair = { i256, @OptionI256 };
+
+func private %f() -> i256 {
+block0:
+    return 0.i256;
+}
+"#,
+        );
+        let pair = module
+            .ctx
+            .with_ty_store(|s| Type::Compound(s.lookup_struct("Pair").unwrap()));
+        let enum_ty = module
+            .ctx
+            .with_ty_store(|s| Type::Compound(s.lookup_enum("OptionI256").unwrap()));
+        let Type::Compound(enum_cmpd) = enum_ty else {
+            panic!("expected enum compound type");
+        };
+        let func_ref = lookup_func(&module, "f");
+
+        module.func_store.modify(func_ref, |func| {
+            let ret = func
+                .layout
+                .last_inst_of(func.layout.entry_block().unwrap())
+                .unwrap();
+            let module_ctx = func.ctx().clone();
+            let leaves = [
+                func.dfg
+                    .make_imm_value(Immediate::from_i256(I256::from(11), Type::I256)),
+                func.dfg.make_imm_value(Immediate::EnumTag {
+                    enum_ty: enum_cmpd,
+                    value: I256::from(1),
+                }),
+                func.dfg
+                    .make_imm_value(Immediate::from_i256(I256::from(7), Type::I256)),
+            ];
+            let rebuilt =
+                rebuild_scalar_shape_from_leaf_values(func, ret, &module_ctx, pair, &leaves)
+                    .unwrap();
+            let rebuilt_inst = func.dfg.value_inst(rebuilt).unwrap();
+            let final_insert =
+                downcast::<&data::InsertValue>(func.inst_set(), func.dfg.inst(rebuilt_inst))
+                    .unwrap();
+            assert_eq!(shape::const_u32(&func.dfg, *final_insert.idx()), Some(1));
+            let enum_child = *final_insert.value();
+            assert_eq!(func.dfg.value_ty(enum_child), enum_ty);
+
+            let enum_make_inst = func.dfg.value_inst(enum_child).unwrap();
+            let enum_make =
+                downcast::<&data::EnumMake>(func.inst_set(), func.dfg.inst(enum_make_inst))
+                    .unwrap();
+            assert_eq!(*enum_make.ty(), enum_ty);
+            assert_eq!(*enum_make.variant(), EnumVariantRef::new(enum_cmpd, 1));
+            assert_eq!(enum_make.values().len(), 1);
+            let payload = enum_make.values()[0];
+            assert_eq!(func.dfg.value_ty(payload), Type::I256);
+            assert_eq!(
+                func.dfg.value_imm(payload).map(|imm| imm.as_i256()),
+                Some(I256::from(7))
+            );
+        });
+    }
+
+    #[test]
+    fn refuses_to_rebuild_enum_results_with_dynamic_tags() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @OptionI256 = enum {
+    #None,
+    #Some(i256),
+};
+
+func private %f(v0.enumtag(@OptionI256), v1.i256) -> i256 {
+block0:
+    return 0.i256;
+}
+"#,
+        );
+        let enum_ty = module
+            .ctx
+            .with_ty_store(|s| Type::Compound(s.lookup_enum("OptionI256").unwrap()));
+        let func_ref = lookup_func(&module, "f");
+
+        module.func_store.modify(func_ref, |func| {
+            let ret = func
+                .layout
+                .last_inst_of(func.layout.entry_block().unwrap())
+                .unwrap();
+            let module_ctx = func.ctx().clone();
+            let leaves = [func.arg_values[0], func.arg_values[1]];
+            assert!(
+                rebuild_scalar_shape_from_leaf_values(func, ret, &module_ctx, enum_ty, &leaves)
+                    .is_none()
+            );
         });
     }
 }

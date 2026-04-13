@@ -401,6 +401,11 @@ pub fn const_u32(dfg: &DataFlowGraph, value: ValueId) -> Option<u32> {
     (u256 <= U256::from(u32::MAX)).then_some(u256.low_u32())
 }
 
+/// Returns whether `ty` can be reified with generic aggregate ops such as
+/// `insert_value` and `extract_value`.
+///
+/// This intentionally excludes enums. Enums participate in scalar-shape
+/// flattening, but they must be rebuilt with enum-specific ops.
 pub fn is_supported_aggregate_ty(module: &ModuleCtx, ty: Type) -> bool {
     match ty.resolve_compound(module) {
         Some(CompoundType::Struct(s)) => {
@@ -415,6 +420,12 @@ pub fn is_supported_aggregate_ty(module: &ModuleCtx, ty: Type) -> bool {
     }
 }
 
+/// Returns whether `ty` can be flattened into runtime leaves for scalar-shape
+/// transforms.
+///
+/// This is broader than [`is_supported_aggregate_ty`]: it includes enums so
+/// enum-bearing structs and arrays can still participate in scalar-shape
+/// analyses, even though enums are not generic aggregate-op destinations.
 pub fn is_supported_scalar_shape_ty(module: &ModuleCtx, ty: Type) -> bool {
     match ty.resolve_compound(module) {
         Some(CompoundType::Struct(s)) => {
