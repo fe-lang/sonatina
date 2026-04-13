@@ -7,7 +7,7 @@ use sonatina_ir::{BlockId, Function, InstId};
 
 use crate::{
     cfg_edit::{CfgEditor, CleanupMode, remove_phi_incoming_from, simplify_trivial_phis_in_block},
-    optim::{call_purity::is_removable_pure_call, cfg_cleanup::CfgCleanup},
+    optim::{call_purity::is_nonmutating_returning_call, cfg_cleanup::CfgCleanup},
     post_domtree::{PDFSet, PDTIdom, PostDomTree},
 };
 
@@ -300,7 +300,9 @@ impl Default for AdceSolver {
 
 fn is_live_root_inst(func: &Function, inst_id: InstId) -> bool {
     if func.dfg.call_info(inst_id).is_some() {
-        return !is_removable_pure_call(func, inst_id);
+        // ADCE may erase whole unused read-only calls, so only calls that can
+        // mutate state or escape local control remain liveness roots.
+        return !is_nonmutating_returning_call(func, inst_id);
     }
 
     func.dfg.may_mutate_state(inst_id) || func.dfg.may_transfer_control(inst_id)
@@ -309,6 +311,8 @@ fn is_live_root_inst(func: &Function, inst_id: InstId) -> bool {
 #[cfg(test)]
 mod tests {
     use sonatina_ir::{Module, ir_writer::FuncWriter};
+
+    use crate::analysis::func_behavior;
 
     use super::AdceSolver;
 
@@ -320,6 +324,14 @@ mod tests {
         let funcs = module.funcs();
         assert_eq!(funcs.len(), 1);
         funcs[0]
+    }
+
+    fn find_func(module: &Module, name: &str) -> sonatina_ir::module::FuncRef {
+        module
+            .funcs()
+            .into_iter()
+            .find(|&func_ref| module.ctx.func_sig(func_ref, |sig| sig.name() == name))
+            .unwrap_or_else(|| panic!("missing function {name}"))
     }
 
     #[test]
@@ -358,6 +370,45 @@ func private %f(v0.i256) -> i256 {
                 dumped.contains("phi (v0 block0)")
                     && dumped.contains("block0:\n        jump block1;"),
                 "ADCE must keep the entry predecessor for live phi values:\n{dumped}"
+            );
+        });
+    }
+
+    #[test]
+    fn removes_unused_read_only_call() {
+        let source = r#"
+target = "evm-ethereum-osaka"
+
+func private %reader(v0.i256) -> i256 {
+    block0:
+        v1.i256 = evm_sload v0;
+        return v1;
+}
+
+func public %caller(v0.i256) -> i256 {
+    block0:
+        v1.i256 = call %reader v0;
+        return 7.i256;
+}
+"#;
+
+        let parsed = parse_module(source);
+        func_behavior::analyze_module(&parsed.module);
+        let func_ref = find_func(&parsed.module, "caller");
+
+        parsed.module.func_store.modify(func_ref, |func| {
+            AdceSolver::new().run(func);
+        });
+
+        parsed.module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            assert!(
+                !dumped.contains("call %reader"),
+                "ADCE should remove unused read-only calls:\n{dumped}"
+            );
+            assert!(
+                dumped.contains("return 7.i256;"),
+                "caller should still return the live constant:\n{dumped}"
             );
         });
     }
