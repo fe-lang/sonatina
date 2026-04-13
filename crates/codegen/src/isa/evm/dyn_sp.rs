@@ -1,3 +1,4 @@
+use rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
 use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{InstId, Module, module::FuncRef};
 
@@ -78,19 +79,27 @@ pub(crate) fn compute_dyn_sp_plan(
     isa: &Evm,
 ) -> DynSpPlan {
     let mut frame_summaries: FxHashMap<FuncRef, FrameSummary> = FxHashMap::default();
-    for &func in funcs {
-        let analysis = analyses
-            .get(&func)
-            .unwrap_or_else(|| panic!("missing analysis for func {}", func.as_u32()));
-        let mem_plan = plan
-            .funcs
-            .get(&func)
-            .cloned()
-            .unwrap_or_else(|| panic!("missing memory plan for func {}", func.as_u32()));
-        let summary = module.func_store.view(func, |function| {
-            let alloc = FinalAlloc::new(analysis.alloc.clone(), mem_plan.clone());
-            compute_frame_summary(function, &alloc, &mem_plan, isa)
-        });
+    let mut frame_summary_results: Vec<_> = funcs
+        .par_iter()
+        .copied()
+        .map(|func| {
+            let analysis = analyses
+                .get(&func)
+                .unwrap_or_else(|| panic!("missing analysis for func {}", func.as_u32()));
+            let mem_plan = plan
+                .funcs
+                .get(&func)
+                .cloned()
+                .unwrap_or_else(|| panic!("missing memory plan for func {}", func.as_u32()));
+            let summary = module.func_store.view(func, |function| {
+                let alloc = FinalAlloc::new(analysis.alloc.clone(), mem_plan.clone());
+                compute_frame_summary(function, &alloc, &mem_plan, isa)
+            });
+            (func, summary)
+        })
+        .collect();
+    frame_summary_results.sort_unstable_by_key(|(func, _)| func.as_u32());
+    for (func, summary) in frame_summary_results {
         frame_summaries.insert(func, summary);
     }
 
@@ -172,53 +181,72 @@ pub(crate) fn compute_dyn_sp_plan(
     let mut frontier_init_calls: FxHashMap<FuncRef, FxHashSet<InstId>> = FxHashMap::default();
     let mut checked_frontier_init_calls: FxHashMap<FuncRef, FxHashSet<InstId>> =
         FxHashMap::default();
-    for &caller in &ordered_reachable {
-        let caller_scc = scc.scc_ref(caller);
-        if ready_sccs.contains(&caller_scc) {
-            continue;
-        }
+    let mut frontier_init_results: Vec<_> = ordered_reachable
+        .par_iter()
+        .copied()
+        .filter_map(|caller| {
+            let caller_scc = scc.scc_ref(caller);
+            if ready_sccs.contains(&caller_scc) {
+                return None;
+            }
 
-        let caller_summary = frame_summaries
-            .get(&caller)
-            .unwrap_or_else(|| panic!("missing frame summary for func {}", caller.as_u32()));
-        let caller_state = entry_states.get(&caller).copied().unwrap_or_default();
-        module.func_store.view(caller, |function| {
-            for block in function.layout.iter_block() {
-                for inst in function.layout.iter_inst(block) {
-                    let Some(call) = function.dfg.call_info(inst) else {
-                        continue;
-                    };
-                    let callee = call.callee();
-                    if !reachable_funcs.contains(&callee) {
-                        continue;
-                    }
-                    let callee_scc = scc.scc_ref(callee);
-                    if caller_scc == callee_scc || !ready_sccs.contains(&callee_scc) {
-                        continue;
-                    }
-                    if caller_summary.local_frame_active_before_inst(inst) {
-                        continue;
-                    }
+            let caller_summary = frame_summaries
+                .get(&caller)
+                .unwrap_or_else(|| panic!("missing frame summary for func {}", caller.as_u32()));
+            let caller_state = entry_states.get(&caller).copied().unwrap_or_default();
+            let (mut frontier_calls, mut checked_calls) =
+                (FxHashSet::default(), FxHashSet::default());
+            module.func_store.view(caller, |function| {
+                for block in function.layout.iter_block() {
+                    for inst in function.layout.iter_inst(block) {
+                        let Some(call) = function.dfg.call_info(inst) else {
+                            continue;
+                        };
+                        let callee = call.callee();
+                        if !reachable_funcs.contains(&callee) {
+                            continue;
+                        }
+                        let callee_scc = scc.scc_ref(callee);
+                        if caller_scc == callee_scc || !ready_sccs.contains(&callee_scc) {
+                            continue;
+                        }
+                        if caller_summary.local_frame_active_before_inst(inst) {
+                            continue;
+                        }
 
-                    match (
-                        caller_state.maybe_no_live_frame,
-                        caller_state.maybe_live_frame,
-                    ) {
-                        (true, false) => {
-                            frontier_init_calls.entry(caller).or_default().insert(inst);
+                        match (
+                            caller_state.maybe_no_live_frame,
+                            caller_state.maybe_live_frame,
+                        ) {
+                            (true, false) => {
+                                frontier_calls.insert(inst);
+                            }
+                            (true, true) => {
+                                frontier_calls.insert(inst);
+                                checked_calls.insert(inst);
+                            }
+                            (false, true) | (false, false) => {}
                         }
-                        (true, true) => {
-                            frontier_init_calls.entry(caller).or_default().insert(inst);
-                            checked_frontier_init_calls
-                                .entry(caller)
-                                .or_default()
-                                .insert(inst);
-                        }
-                        (false, true) | (false, false) => {}
                     }
                 }
-            }
-        });
+            });
+            (!frontier_calls.is_empty() || !checked_calls.is_empty()).then_some((
+                caller,
+                frontier_calls,
+                checked_calls,
+            ))
+        })
+        .collect();
+    frontier_init_results.sort_unstable_by_key(|(func, _, _)| func.as_u32());
+    for (caller, caller_frontier_init_calls, caller_checked_frontier_init_calls) in
+        frontier_init_results
+    {
+        if !caller_frontier_init_calls.is_empty() {
+            frontier_init_calls.insert(caller, caller_frontier_init_calls);
+        }
+        if !caller_checked_frontier_init_calls.is_empty() {
+            checked_frontier_init_calls.insert(caller, caller_checked_frontier_init_calls);
+        }
     }
 
     let mut entry_live_frame: FxHashMap<FuncRef, bool> = FxHashMap::default();

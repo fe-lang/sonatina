@@ -9,6 +9,8 @@
 //! - Variable-sized linear scan over live intervals with a free-segment map.
 //! - Each object has a lower bound (`min_offset_words`) derived from call clobber constraints.
 
+mod peak_free_tree;
+
 use cranelift_entity::{EntityRef, SecondaryMap, entity_impl};
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
@@ -18,12 +20,11 @@ use sonatina_ir::{
     isa::{Isa, evm::Evm},
     module::{FuncRef, ModuleCtx},
 };
-use std::{
-    cmp::Reverse,
-    collections::{BTreeMap, BinaryHeap},
-};
+use std::{cmp::Reverse, collections::BinaryHeap};
 
 use crate::{bitset::BitSet, liveness::InstLiveness};
+
+use peak_free_tree::PeakFreeTree;
 
 use super::{
     memory_plan::{FuncAnalysis, WORD_BYTES},
@@ -736,79 +737,313 @@ pub(crate) struct PackedObject {
     pub(crate) min_offset_words: u32,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct FreeSegment {
+    start: u32,
+    len: u32,
+}
+
+impl FreeSegment {
+    fn end(self) -> u32 {
+        self.start
+            .checked_add(self.len)
+            .expect("free segment overflow")
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct RankedPeakPackItem {
+    pub(crate) order_idx: u32,
+    pub(crate) start_rank: u32,
+    pub(crate) size_words: u32,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ReleaseSchedule {
+    by_end_rank: Vec<std::ops::Range<usize>>,
+    order_indices: Vec<u32>,
+}
+
+impl ReleaseSchedule {
+    pub(crate) fn from_end_ranks(end_ranks_by_order: &[u32], rank_count: usize) -> Self {
+        let mut order_indices: Vec<u32> = (0..end_ranks_by_order.len())
+            .map(|order_idx| order_idx as u32)
+            .collect();
+        order_indices
+            .sort_unstable_by_key(|&order_idx| (end_ranks_by_order[order_idx as usize], order_idx));
+
+        let mut by_end_rank = vec![0..0; rank_count];
+        let mut cursor = 0usize;
+        for (rank, range) in by_end_rank.iter_mut().enumerate() {
+            let start = cursor;
+            while let Some(&order_idx) = order_indices.get(cursor)
+                && end_ranks_by_order[order_idx as usize] == rank as u32
+            {
+                cursor += 1;
+            }
+            *range = start..cursor;
+        }
+
+        Self {
+            by_end_rank,
+            order_indices,
+        }
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct PeakPackWorkspace {
+    free: PeakFreeTree,
+    active_epoch: Vec<u32>,
+    active_off: Vec<u32>,
+    active_size: Vec<u32>,
+    epoch: u32,
+}
+
+impl PeakPackWorkspace {
+    fn reset(&mut self, capacity_hint: usize, universe_len: usize) {
+        self.free.reset(capacity_hint);
+        if self.active_epoch.len() < universe_len {
+            self.active_epoch.resize(universe_len, 0);
+            self.active_off.resize(universe_len, 0);
+            self.active_size.resize(universe_len, 0);
+        }
+        self.epoch = self.epoch.wrapping_add(1);
+        if self.epoch == 0 {
+            self.active_epoch.fill(0);
+            self.epoch = 1;
+        }
+    }
+}
+
+trait FreeList {
+    fn with_capacity(capacity: usize) -> Self;
+    fn insert(&mut self, start: u32, len: u32);
+    fn take_fit(&mut self, min_offset_words: u32, size_words: u32) -> Option<FreeSegment>;
+    fn take_frontier_segment(&mut self, max_used: u32) -> Option<FreeSegment>;
+}
+
+struct SortedFreeList(Vec<FreeSegment>);
+
+#[cfg(test)]
+struct UnsortedFreeList(Vec<FreeSegment>);
+
+impl FreeList for SortedFreeList {
+    fn with_capacity(capacity: usize) -> Self {
+        Self(Vec::with_capacity(capacity))
+    }
+
+    fn insert(&mut self, start: u32, len: u32) {
+        insert_free_segment_sorted(&mut self.0, start, len);
+    }
+
+    fn take_fit(&mut self, min_offset_words: u32, size_words: u32) -> Option<FreeSegment> {
+        find_first_fit_segment(&self.0, min_offset_words, size_words)
+            .map(|index| self.0.remove(index))
+    }
+
+    fn take_frontier_segment(&mut self, max_used: u32) -> Option<FreeSegment> {
+        match self.0.last().copied() {
+            Some(segment) if segment.end() == max_used => self.0.pop(),
+            _ => None,
+        }
+    }
+}
+
+#[cfg(test)]
+impl FreeList for UnsortedFreeList {
+    fn with_capacity(capacity: usize) -> Self {
+        Self(Vec::with_capacity(capacity))
+    }
+
+    fn insert(&mut self, start: u32, len: u32) {
+        insert_free_segment_unsorted(&mut self.0, start, len);
+    }
+
+    fn take_fit(&mut self, min_offset_words: u32, size_words: u32) -> Option<FreeSegment> {
+        find_min_start_fit_segment(&self.0, min_offset_words, size_words)
+            .map(|index| self.0.swap_remove(index))
+    }
+
+    fn take_frontier_segment(&mut self, max_used: u32) -> Option<FreeSegment> {
+        self.0
+            .iter()
+            .position(|&segment| segment.end() == max_used)
+            .map(|index| self.0.swap_remove(index))
+    }
+}
+
+#[cfg(test)]
 pub(crate) fn pack_objects(objects: &mut [PackedObject]) -> (FxHashMap<StackObjId, u32>, u32) {
     objects.sort_unstable_by_key(|o| (o.interval.start, o.interval.end, o.id.as_u32()));
+    pack_objects_presorted(objects)
+}
 
-    let mut out: FxHashMap<StackObjId, u32> = FxHashMap::default();
-    let mut active: BinaryHeap<Reverse<(u32, u32, u32, u32)>> = BinaryHeap::new(); // (end, off, size, id)
-    let mut free: BTreeMap<u32, u32> = BTreeMap::new(); // start -> len
+pub(crate) fn pack_objects_presorted(
+    objects: &[PackedObject],
+) -> (FxHashMap<StackObjId, u32>, u32) {
+    let mut out = FxHashMap::with_capacity_and_hasher(objects.len(), Default::default());
+    let max_used = pack_objects_impl(objects.iter().copied(), objects.len(), |id, off| {
+        let _ = out.insert(id, off);
+    });
+    (out, max_used)
+}
+
+#[cfg(test)]
+pub(crate) fn pack_objects_peak_presorted(objects: &[PackedObject]) -> u32 {
+    pack_objects_peak(objects.iter().copied())
+}
+
+#[cfg(test)]
+pub(crate) fn pack_objects_peak(objects: impl IntoIterator<Item = PackedObject>) -> u32 {
+    let iter = objects.into_iter();
+    let (lower_bound, _) = iter.size_hint();
+    pack_objects_with_free::<UnsortedFreeList>(iter, lower_bound, |_, _| {})
+}
+
+pub(crate) fn pack_zero_min_offset_peak_ranked(
+    workspace: &mut PeakPackWorkspace,
+    schedule: &ReleaseSchedule,
+    items: impl IntoIterator<Item = RankedPeakPackItem>,
+    capacity_hint: usize,
+) -> u32 {
+    workspace.reset(capacity_hint, schedule.order_indices.len());
+    let mut max_used: u32 = 0;
+    let mut drained_rank = 0usize;
+    let mut drained_within_rank = 0usize;
+
+    for item in items {
+        while drained_rank < item.start_rank as usize {
+            let range = &schedule.by_end_rank[drained_rank];
+            while drained_within_rank < range.len() {
+                let order_idx = schedule.order_indices[range.start + drained_within_rank] as usize;
+                drained_within_rank += 1;
+                if workspace.active_epoch[order_idx] == workspace.epoch {
+                    workspace.free.insert(
+                        workspace.active_off[order_idx],
+                        workspace.active_size[order_idx],
+                        max_used,
+                    );
+                }
+            }
+            drained_rank += 1;
+            drained_within_rank = 0;
+        }
+        if let Some(range) = schedule.by_end_rank.get(drained_rank) {
+            while drained_within_rank < range.len() {
+                let order_idx = schedule.order_indices[range.start + drained_within_rank];
+                if order_idx >= item.order_idx {
+                    break;
+                }
+                drained_within_rank += 1;
+                let order_idx = order_idx as usize;
+                if workspace.active_epoch[order_idx] == workspace.epoch {
+                    workspace.free.insert(
+                        workspace.active_off[order_idx],
+                        workspace.active_size[order_idx],
+                        max_used,
+                    );
+                }
+            }
+        }
+
+        if item.size_words == 0 {
+            continue;
+        }
+
+        let off = if let Some(off) = workspace.free.take_fit_prefix(item.size_words) {
+            off
+        } else if let Some(segment) = workspace.free.take_frontier() {
+            if segment.len > item.size_words {
+                workspace.free.restore_frontier(FreeSegment {
+                    start: segment
+                        .start
+                        .checked_add(item.size_words)
+                        .expect("free segment overflow"),
+                    len: segment
+                        .len
+                        .checked_sub(item.size_words)
+                        .expect("free segment underflow"),
+                });
+            }
+            segment.start
+        } else {
+            max_used
+        };
+        let order_idx = item.order_idx as usize;
+        workspace.active_epoch[order_idx] = workspace.epoch;
+        workspace.active_off[order_idx] = off;
+        workspace.active_size[order_idx] = item.size_words;
+        max_used = max_used.max(
+            off.checked_add(item.size_words)
+                .expect("locals size overflow"),
+        );
+    }
+
+    max_used
+}
+
+fn pack_objects_impl(
+    objects: impl IntoIterator<Item = PackedObject>,
+    lower_bound: usize,
+    mut record: impl FnMut(StackObjId, u32),
+) -> u32 {
+    pack_objects_with_free::<SortedFreeList>(objects, lower_bound, &mut record)
+}
+
+fn pack_objects_with_free<F: FreeList>(
+    objects: impl IntoIterator<Item = PackedObject>,
+    lower_bound: usize,
+    mut record: impl FnMut(StackObjId, u32),
+) -> u32 {
+    let mut active: BinaryHeap<Reverse<(u32, u32, u32, u32)>> =
+        BinaryHeap::with_capacity(lower_bound);
+    let mut free = F::with_capacity(lower_bound);
     let mut max_used: u32 = 0;
 
-    for obj in objects.iter() {
+    for obj in objects {
         while let Some(Reverse((end, off, size, _id))) = active.peek().copied()
             && end <= obj.interval.start
         {
             let _ = active.pop();
-            insert_free_segment(&mut free, off, size);
+            free.insert(off, size);
         }
 
         if obj.size_words == 0 {
-            out.insert(obj.id, 0);
+            record(obj.id, 0);
             continue;
         }
 
-        let mut found: Option<(u32, u32)> = free
-            .range(..=obj.min_offset_words)
-            .next_back()
-            .filter(|&(&start, &len)| {
-                let end = start.checked_add(len).expect("free segment overflow");
-                let alloc_start = start.max(obj.min_offset_words);
-                let alloc_end = alloc_start
-                    .checked_add(obj.size_words)
-                    .expect("free segment overflow");
-                end >= alloc_end
-            })
-            .map(|(&start, &len)| (start, len));
-
-        if found.is_none() {
-            found = free
-                .range(obj.min_offset_words..)
-                .find(|&(_, &len)| len >= obj.size_words)
-                .map(|(&start, &len)| (start, len));
-        }
-
-        let off = if let Some((start, len)) = found {
-            free.remove(&start);
-
-            let end = start.checked_add(len).expect("free segment overflow");
-            let alloc_start = start.max(obj.min_offset_words);
-            let alloc_end = alloc_start
-                .checked_add(obj.size_words)
-                .expect("free segment overflow");
-
-            insert_free_segment(
-                &mut free,
-                start,
-                alloc_start
-                    .checked_sub(start)
-                    .expect("free segment underflow"),
-            );
-            insert_free_segment(
-                &mut free,
-                alloc_end,
-                end.checked_sub(alloc_end).expect("free segment underflow"),
-            );
-
+        let off = if let Some(segment) = free.take_fit(obj.min_offset_words, obj.size_words) {
+            let (alloc_start, prefix, suffix) =
+                split_free_segment(segment, obj.min_offset_words, obj.size_words);
+            free.insert(prefix.start, prefix.len);
+            free.insert(suffix.start, suffix.len);
             alloc_start
         } else {
-            let off = obj.min_offset_words.max(max_used);
-            max_used = off
-                .checked_add(obj.size_words)
-                .expect("locals size overflow");
-            off
+            let old_max_used = max_used;
+            if let Some(segment) = free.take_frontier_segment(old_max_used) {
+                let alloc_start = segment.start.max(obj.min_offset_words);
+                free.insert(
+                    segment.start,
+                    alloc_start
+                        .checked_sub(segment.start)
+                        .expect("free segment underflow"),
+                );
+                alloc_start
+            } else {
+                let alloc_start = obj.min_offset_words.max(old_max_used);
+                free.insert(
+                    old_max_used,
+                    alloc_start
+                        .checked_sub(old_max_used)
+                        .expect("free segment underflow"),
+                );
+                alloc_start
+            }
         };
 
-        out.insert(obj.id, off);
+        record(obj.id, off);
         active.push(Reverse((
             obj.interval.end,
             off,
@@ -821,35 +1056,136 @@ pub(crate) fn pack_objects(objects: &mut [PackedObject]) -> (FxHashMap<StackObjI
         );
     }
 
-    (out, max_used)
+    max_used
 }
 
-fn insert_free_segment(free: &mut BTreeMap<u32, u32>, start: u32, len: u32) {
+fn split_free_segment(
+    segment: FreeSegment,
+    min_offset_words: u32,
+    size_words: u32,
+) -> (u32, FreeSegment, FreeSegment) {
+    let end = segment
+        .start
+        .checked_add(segment.len)
+        .expect("free segment overflow");
+    let alloc_start = segment.start.max(min_offset_words);
+    let alloc_end = alloc_start
+        .checked_add(size_words)
+        .expect("free segment overflow");
+    (
+        alloc_start,
+        FreeSegment {
+            start: segment.start,
+            len: alloc_start
+                .checked_sub(segment.start)
+                .expect("free segment underflow"),
+        },
+        FreeSegment {
+            start: alloc_end,
+            len: end.checked_sub(alloc_end).expect("free segment underflow"),
+        },
+    )
+}
+
+fn find_first_fit_segment(
+    free: &[FreeSegment],
+    min_offset_words: u32,
+    size_words: u32,
+) -> Option<usize> {
+    free.iter()
+        .position(|segment| free_segment_fits(*segment, min_offset_words, size_words))
+}
+
+#[cfg(test)]
+fn find_min_start_fit_segment(
+    free: &[FreeSegment],
+    min_offset_words: u32,
+    size_words: u32,
+) -> Option<usize> {
+    let mut best: Option<(usize, u32)> = None;
+    for (index, segment) in free.iter().enumerate() {
+        if !free_segment_fits(*segment, min_offset_words, size_words) {
+            continue;
+        }
+        match best {
+            None => best = Some((index, segment.start)),
+            Some((_, best_start)) if segment.start < best_start => {
+                best = Some((index, segment.start));
+            }
+            _ => {}
+        }
+    }
+    best.map(|(index, _)| index)
+}
+
+fn free_segment_fits(segment: FreeSegment, min_offset_words: u32, size_words: u32) -> bool {
+    let alloc_start = segment.start.max(min_offset_words);
+    let alloc_end = alloc_start
+        .checked_add(size_words)
+        .expect("free segment overflow");
+    segment.end() >= alloc_end
+}
+
+fn insert_free_segment_sorted(free: &mut Vec<FreeSegment>, start: u32, len: u32) {
     if len == 0 {
         return;
     }
 
     let mut start = start;
     let mut len = len;
+    let mut index = free
+        .binary_search_by_key(&start, |segment| segment.start)
+        .unwrap_or_else(|index| index);
 
-    if let Some((&p_start, &p_len)) = free.range(..start).next_back() {
-        let p_end = p_start.checked_add(p_len).expect("free segment overflow");
-        if p_end == start {
-            start = p_start;
-            len = len.checked_add(p_len).expect("free segment overflow");
-            free.remove(&p_start);
+    if index != 0 {
+        let prev = free[index - 1];
+        if prev.end() == start {
+            start = prev.start;
+            len = len.checked_add(prev.len).expect("free segment overflow");
+            let _ = free.remove(index - 1);
+            index -= 1;
         }
     }
 
-    if let Some((&n_start, &n_len)) = free.range(start..).next() {
+    if index < free.len() {
+        let next = free[index];
         let end = start.checked_add(len).expect("free segment overflow");
-        if end == n_start {
-            len = len.checked_add(n_len).expect("free segment overflow");
-            free.remove(&n_start);
+        if end == next.start {
+            len = len.checked_add(next.len).expect("free segment overflow");
+            let _ = free.remove(index);
         }
     }
 
-    free.insert(start, len);
+    free.insert(index, FreeSegment { start, len });
+}
+
+#[cfg(test)]
+fn insert_free_segment_unsorted(free: &mut Vec<FreeSegment>, start: u32, len: u32) {
+    if len == 0 {
+        return;
+    }
+
+    let mut start = start;
+    let mut len = len;
+    let mut index = 0;
+    while index < free.len() {
+        let segment = free[index];
+        let end = start.checked_add(len).expect("free segment overflow");
+        if segment.end() == start {
+            start = segment.start;
+            len = len.checked_add(segment.len).expect("free segment overflow");
+            let _ = free.swap_remove(index);
+            continue;
+        }
+        if end == segment.start {
+            len = len.checked_add(segment.len).expect("free segment overflow");
+            let _ = free.swap_remove(index);
+            continue;
+        }
+        index += 1;
+    }
+
+    free.push(FreeSegment { start, len });
 }
 
 fn conservative_unknown_ptr_summary(module: &ModuleCtx, func_ref: FuncRef) -> PtrEscapeSummary {
@@ -1127,5 +1463,467 @@ mod tests {
             call.live_out_objs.contains(&spill_obj),
             "canonical spill object for aliased pointer should be live across the internal call"
         );
+    }
+
+    #[test]
+    fn presorted_packer_matches_sorted_packer() {
+        let mut unsorted = vec![
+            PackedObject {
+                id: StackObjId::new(3),
+                size_words: 2,
+                interval: LiveInterval { start: 4, end: 9 },
+                min_offset_words: 0,
+            },
+            PackedObject {
+                id: StackObjId::new(1),
+                size_words: 1,
+                interval: LiveInterval { start: 0, end: 2 },
+                min_offset_words: 0,
+            },
+            PackedObject {
+                id: StackObjId::new(2),
+                size_words: 3,
+                interval: LiveInterval { start: 1, end: 6 },
+                min_offset_words: 1,
+            },
+            PackedObject {
+                id: StackObjId::new(4),
+                size_words: 1,
+                interval: LiveInterval { start: 6, end: 6 },
+                min_offset_words: 0,
+            },
+        ];
+        let (sorted_offsets, sorted_words) = pack_objects(&mut unsorted);
+
+        let mut presorted = unsorted.clone();
+        presorted
+            .sort_unstable_by_key(|obj| (obj.interval.start, obj.interval.end, obj.id.as_u32()));
+        let (presorted_offsets, presorted_words) = pack_objects_presorted(&presorted);
+        let peak_words = pack_objects_peak_presorted(&presorted);
+
+        assert_eq!(presorted_offsets, sorted_offsets);
+        assert_eq!(presorted_words, sorted_words);
+        assert_eq!(peak_words, sorted_words);
+    }
+
+    #[test]
+    fn zero_min_peak_packer_matches_generic_peak() {
+        let mut objects = vec![
+            PackedObject {
+                id: StackObjId::new(5),
+                size_words: 4,
+                interval: LiveInterval { start: 5, end: 9 },
+                min_offset_words: 0,
+            },
+            PackedObject {
+                id: StackObjId::new(2),
+                size_words: 2,
+                interval: LiveInterval { start: 0, end: 4 },
+                min_offset_words: 0,
+            },
+            PackedObject {
+                id: StackObjId::new(7),
+                size_words: 3,
+                interval: LiveInterval { start: 2, end: 6 },
+                min_offset_words: 0,
+            },
+            PackedObject {
+                id: StackObjId::new(8),
+                size_words: 1,
+                interval: LiveInterval { start: 6, end: 6 },
+                min_offset_words: 0,
+            },
+        ];
+        objects.sort_unstable_by_key(|obj| (obj.interval.start, obj.interval.end, obj.id.as_u32()));
+
+        let generic_peak = pack_objects_peak_presorted(&objects);
+        let mut workspace = PeakPackWorkspace::default();
+        let schedule = zero_min_release_schedule(&objects);
+        let specialized_peak = pack_zero_min_offset_peak_ranked(
+            &mut workspace,
+            &schedule,
+            zero_min_ranked_items(&objects),
+            objects.len(),
+        );
+
+        assert_eq!(specialized_peak, generic_peak);
+    }
+
+    #[test]
+    fn zero_min_peak_packer_matches_generic_peak_with_tied_bounds() {
+        let objects = [
+            PackedObject {
+                id: StackObjId::new(1),
+                size_words: 3,
+                interval: LiveInterval { start: 0, end: 4 },
+                min_offset_words: 0,
+            },
+            PackedObject {
+                id: StackObjId::new(2),
+                size_words: 2,
+                interval: LiveInterval { start: 0, end: 1 },
+                min_offset_words: 0,
+            },
+            PackedObject {
+                id: StackObjId::new(3),
+                size_words: 4,
+                interval: LiveInterval { start: 1, end: 4 },
+                min_offset_words: 0,
+            },
+            PackedObject {
+                id: StackObjId::new(4),
+                size_words: 1,
+                interval: LiveInterval { start: 4, end: 4 },
+                min_offset_words: 0,
+            },
+            PackedObject {
+                id: StackObjId::new(5),
+                size_words: 2,
+                interval: LiveInterval { start: 4, end: 6 },
+                min_offset_words: 0,
+            },
+        ];
+
+        let generic_peak = pack_objects_peak_presorted(&objects);
+        let mut workspace = PeakPackWorkspace::default();
+        let schedule = zero_min_release_schedule(&objects);
+        let specialized_peak = pack_zero_min_offset_peak_ranked(
+            &mut workspace,
+            &schedule,
+            zero_min_ranked_items(&objects),
+            objects.len(),
+        );
+
+        assert_eq!(specialized_peak, generic_peak);
+    }
+
+    #[test]
+    fn zero_min_peak_packer_matches_generic_peak_randomized() {
+        let mut seed = 0x4d59_5df4_d0f3_3173u64;
+        for case_idx in 0..256 {
+            let count = (next_test_u32(&mut seed) % 12 + 1) as usize;
+            let mut objects = Vec::with_capacity(count);
+            for obj_idx in 0..count {
+                let start = next_test_u32(&mut seed) % 16;
+                let end = start + next_test_u32(&mut seed) % 8;
+                objects.push(PackedObject {
+                    id: StackObjId::new(obj_idx + 1),
+                    size_words: next_test_u32(&mut seed) % 6 + 1,
+                    interval: LiveInterval { start, end },
+                    min_offset_words: 0,
+                });
+            }
+            objects.sort_unstable_by_key(|obj| {
+                (obj.interval.start, obj.interval.end, obj.id.as_u32())
+            });
+
+            let generic_peak = pack_objects_peak_presorted(&objects);
+            let mut workspace = PeakPackWorkspace::default();
+            let schedule = zero_min_release_schedule(&objects);
+            let specialized_peak = pack_zero_min_offset_peak_ranked(
+                &mut workspace,
+                &schedule,
+                zero_min_ranked_items(&objects),
+                objects.len(),
+            );
+
+            assert_eq!(
+                specialized_peak, generic_peak,
+                "randomized zero-min peak mismatch on case {case_idx}"
+            );
+        }
+    }
+
+    #[test]
+    fn zero_min_peak_packer_matches_generic_peak_with_dense_ties() {
+        let mut seed = 0x7c52_91d2_4aa1_44cdu64;
+        for case_idx in 0..256 {
+            let count = (next_test_u32(&mut seed) % 16 + 1) as usize;
+            let mut objects = Vec::with_capacity(count);
+            for obj_idx in 0..count {
+                let start = next_test_u32(&mut seed) % 4;
+                let end = start + next_test_u32(&mut seed) % 3;
+                objects.push(PackedObject {
+                    id: StackObjId::new(obj_idx + 1),
+                    size_words: next_test_u32(&mut seed) % 7,
+                    interval: LiveInterval { start, end },
+                    min_offset_words: 0,
+                });
+            }
+            objects.sort_unstable_by_key(|obj| {
+                (obj.interval.start, obj.interval.end, obj.id.as_u32())
+            });
+
+            let generic_peak = pack_objects_peak_presorted(&objects);
+            let mut workspace = PeakPackWorkspace::default();
+            let schedule = zero_min_release_schedule(&objects);
+            let specialized_peak = pack_zero_min_offset_peak_ranked(
+                &mut workspace,
+                &schedule,
+                zero_min_ranked_items(&objects),
+                objects.len(),
+            );
+
+            assert_eq!(
+                specialized_peak, generic_peak,
+                "dense-tie zero-min peak mismatch on case {case_idx}"
+            );
+        }
+    }
+
+    #[test]
+    fn packer_extends_frontier_segment_into_tail() {
+        let presorted = [
+            PackedObject {
+                id: StackObjId::new(1),
+                size_words: 4,
+                interval: LiveInterval { start: 0, end: 5 },
+                min_offset_words: 0,
+            },
+            PackedObject {
+                id: StackObjId::new(2),
+                size_words: 3,
+                interval: LiveInterval { start: 1, end: 1 },
+                min_offset_words: 0,
+            },
+            PackedObject {
+                id: StackObjId::new(3),
+                size_words: 5,
+                interval: LiveInterval { start: 2, end: 4 },
+                min_offset_words: 0,
+            },
+        ];
+
+        let (offsets, max_used) = pack_objects_presorted(&presorted);
+        let mut workspace = PeakPackWorkspace::default();
+        let schedule = zero_min_release_schedule(&presorted);
+        let specialized_peak = pack_zero_min_offset_peak_ranked(
+            &mut workspace,
+            &schedule,
+            zero_min_ranked_items(&presorted),
+            presorted.len(),
+        );
+
+        assert_eq!(offsets[&StackObjId::new(1)], 0);
+        assert_eq!(offsets[&StackObjId::new(2)], 4);
+        assert_eq!(offsets[&StackObjId::new(3)], 4);
+        assert_eq!(max_used, 9);
+        assert_eq!(pack_objects_peak_presorted(&presorted), 9);
+        assert_eq!(specialized_peak, 9);
+    }
+
+    #[test]
+    fn zero_min_peak_packer_reuses_remaining_interior_suffix() {
+        let presorted = [
+            PackedObject {
+                id: StackObjId::new(1),
+                size_words: 4,
+                interval: LiveInterval { start: 0, end: 7 },
+                min_offset_words: 0,
+            },
+            PackedObject {
+                id: StackObjId::new(2),
+                size_words: 6,
+                interval: LiveInterval { start: 0, end: 2 },
+                min_offset_words: 0,
+            },
+            PackedObject {
+                id: StackObjId::new(3),
+                size_words: 3,
+                interval: LiveInterval { start: 1, end: 7 },
+                min_offset_words: 0,
+            },
+            PackedObject {
+                id: StackObjId::new(4),
+                size_words: 2,
+                interval: LiveInterval { start: 3, end: 6 },
+                min_offset_words: 0,
+            },
+            PackedObject {
+                id: StackObjId::new(5),
+                size_words: 4,
+                interval: LiveInterval { start: 4, end: 5 },
+                min_offset_words: 0,
+            },
+        ];
+
+        let (offsets, generic_peak) = pack_objects_presorted(&presorted);
+        let mut workspace = PeakPackWorkspace::default();
+        let schedule = zero_min_release_schedule(&presorted);
+        let specialized_peak = pack_zero_min_offset_peak_ranked(
+            &mut workspace,
+            &schedule,
+            zero_min_ranked_items(&presorted),
+            presorted.len(),
+        );
+
+        assert_eq!(offsets[&StackObjId::new(1)], 0);
+        assert_eq!(offsets[&StackObjId::new(2)], 4);
+        assert_eq!(offsets[&StackObjId::new(3)], 10);
+        assert_eq!(offsets[&StackObjId::new(4)], 4);
+        assert_eq!(offsets[&StackObjId::new(5)], 6);
+        assert_eq!(generic_peak, 13);
+        assert_eq!(specialized_peak, generic_peak);
+    }
+
+    #[test]
+    fn packer_materializes_gap_when_min_offset_skips_frontier() {
+        let presorted = [
+            PackedObject {
+                id: StackObjId::new(1),
+                size_words: 4,
+                interval: LiveInterval { start: 0, end: 5 },
+                min_offset_words: 0,
+            },
+            PackedObject {
+                id: StackObjId::new(2),
+                size_words: 2,
+                interval: LiveInterval { start: 1, end: 1 },
+                min_offset_words: 10,
+            },
+            PackedObject {
+                id: StackObjId::new(3),
+                size_words: 8,
+                interval: LiveInterval { start: 2, end: 4 },
+                min_offset_words: 0,
+            },
+        ];
+
+        let (offsets, max_used) = pack_objects_presorted(&presorted);
+
+        assert_eq!(offsets[&StackObjId::new(1)], 0);
+        assert_eq!(offsets[&StackObjId::new(2)], 10);
+        assert_eq!(offsets[&StackObjId::new(3)], 4);
+        assert_eq!(max_used, 12);
+        assert_eq!(pack_objects_peak_presorted(&presorted), 12);
+    }
+
+    #[test]
+    fn zero_min_peak_packer_matches_generic_peak_for_sparse_trial_subset() {
+        let universe = [
+            PackedObject {
+                id: StackObjId::new(1),
+                size_words: 3,
+                interval: LiveInterval { start: 0, end: 5 },
+                min_offset_words: 0,
+            },
+            PackedObject {
+                id: StackObjId::new(2),
+                size_words: 2,
+                interval: LiveInterval { start: 1, end: 1 },
+                min_offset_words: 0,
+            },
+            PackedObject {
+                id: StackObjId::new(3),
+                size_words: 4,
+                interval: LiveInterval { start: 2, end: 6 },
+                min_offset_words: 0,
+            },
+            PackedObject {
+                id: StackObjId::new(4),
+                size_words: 5,
+                interval: LiveInterval { start: 3, end: 4 },
+                min_offset_words: 0,
+            },
+        ];
+        let present = [0usize, 2, 3];
+        let subset = present.map(|index| universe[index]);
+
+        let generic_peak = pack_objects_peak_presorted(&subset);
+        let mut workspace = PeakPackWorkspace::default();
+        let schedule = zero_min_release_schedule(&universe);
+        let specialized_peak = pack_zero_min_offset_peak_ranked(
+            &mut workspace,
+            &schedule,
+            present.into_iter().map(|order_idx| RankedPeakPackItem {
+                order_idx: order_idx as u32,
+                start_rank: universe[order_idx].interval.start,
+                size_words: universe[order_idx].size_words,
+            }),
+            subset.len(),
+        );
+
+        assert_eq!(specialized_peak, generic_peak);
+    }
+
+    #[test]
+    fn zero_min_peak_packer_matches_generic_peak_when_frontier_forms_after_merge() {
+        let objects = [
+            PackedObject {
+                id: StackObjId::new(4),
+                size_words: 4,
+                interval: LiveInterval { start: 0, end: 4 },
+                min_offset_words: 0,
+            },
+            PackedObject {
+                id: StackObjId::new(2),
+                size_words: 1,
+                interval: LiveInterval { start: 3, end: 4 },
+                min_offset_words: 0,
+            },
+            PackedObject {
+                id: StackObjId::new(1),
+                size_words: 6,
+                interval: LiveInterval { start: 5, end: 8 },
+                min_offset_words: 0,
+            },
+            PackedObject {
+                id: StackObjId::new(3),
+                size_words: 1,
+                interval: LiveInterval { start: 6, end: 12 },
+                min_offset_words: 0,
+            },
+            PackedObject {
+                id: StackObjId::new(5),
+                size_words: 4,
+                interval: LiveInterval { start: 7, end: 10 },
+                min_offset_words: 0,
+            },
+        ];
+
+        let generic_peak = pack_objects_peak_presorted(&objects);
+        let mut workspace = PeakPackWorkspace::default();
+        let schedule = zero_min_release_schedule(&objects);
+        let specialized_peak = pack_zero_min_offset_peak_ranked(
+            &mut workspace,
+            &schedule,
+            zero_min_ranked_items(&objects),
+            objects.len(),
+        );
+
+        assert_eq!(generic_peak, 11);
+        assert_eq!(specialized_peak, generic_peak);
+    }
+
+    fn zero_min_ranked_items(
+        objects: &[PackedObject],
+    ) -> impl Iterator<Item = RankedPeakPackItem> + '_ {
+        objects
+            .iter()
+            .enumerate()
+            .map(|(order_idx, obj)| RankedPeakPackItem {
+                order_idx: order_idx as u32,
+                start_rank: obj.interval.start,
+                size_words: obj.size_words,
+            })
+    }
+
+    fn zero_min_release_schedule(objects: &[PackedObject]) -> ReleaseSchedule {
+        ReleaseSchedule::from_end_ranks(
+            &objects
+                .iter()
+                .map(|obj| obj.interval.end)
+                .collect::<Vec<_>>(),
+            objects
+                .iter()
+                .map(|obj| obj.interval.end)
+                .max()
+                .map_or(0, |rank| rank as usize + 1),
+        )
+    }
+
+    fn next_test_u32(seed: &mut u64) -> u32 {
+        *seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+        (*seed >> 32) as u32
     }
 }

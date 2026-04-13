@@ -1,3 +1,4 @@
+use rayon::prelude::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
 use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::{debug_span, info_span, trace_span};
 
@@ -139,36 +140,52 @@ pub(crate) fn prepare_section(
         compute_return_escape_caller_clamp_words(module, &funcs, &plan)
     };
 
-    for &func in &funcs {
-        let _span = trace_span!(
-            "sonatina.codegen.evm.annotate_mem_plan_for_func",
-            func_ref = func.as_u32()
-        )
-        .entered();
-        let analysis = analyses.get(&func).expect("missing analysis");
-        let (malloc_escape_kinds, transient_mallocs) = module.func_store.view(func, |function| {
-            let escape_kinds = malloc_plan::compute_malloc_escape_kinds_for_function(
-                function,
-                &module.ctx,
-                &backend.isa,
-                &ptr_escape,
-            );
-            let transient = malloc_plan::compute_transient_mallocs(
-                function,
-                &module.ctx,
-                &backend.isa,
-                &ptr_escape,
-                Some(&mem_effects),
-                &analysis.inst_liveness,
-            );
-            (escape_kinds, transient)
-        });
+    let mut mem_plan_annotations: Vec<_> = funcs
+        .par_iter()
+        .copied()
+        .map(|func| {
+            let _span = trace_span!(
+                "sonatina.codegen.evm.annotate_mem_plan_for_func",
+                func_ref = func.as_u32()
+            )
+            .entered();
+            let analysis = analyses.get(&func).expect("missing analysis");
+            let (malloc_escape_kinds, transient_mallocs) =
+                module.func_store.view(func, |function| {
+                    let escape_kinds = malloc_plan::compute_malloc_escape_kinds_for_function(
+                        function,
+                        &module.ctx,
+                        &backend.isa,
+                        &ptr_escape,
+                    );
+                    let transient = malloc_plan::compute_transient_mallocs(
+                        function,
+                        &module.ctx,
+                        &backend.isa,
+                        &ptr_escape,
+                        Some(&mem_effects),
+                        &analysis.inst_liveness,
+                    );
+                    (escape_kinds, transient)
+                });
+            (
+                func,
+                malloc_escape_kinds,
+                transient_mallocs,
+                return_escape_caller_abs_words
+                    .get(&func)
+                    .copied()
+                    .unwrap_or(0),
+            )
+        })
+        .collect();
+    mem_plan_annotations.sort_unstable_by_key(|(func, ..)| func.as_u32());
+    for (func, malloc_escape_kinds, transient_mallocs, return_escape_caller_abs_words) in
+        mem_plan_annotations
+    {
         if let Some(mem_plan) = plan.funcs.get_mut(&func) {
             mem_plan.malloc_escape_kinds = malloc_escape_kinds;
-            mem_plan.return_escape_caller_abs_words = return_escape_caller_abs_words
-                .get(&func)
-                .copied()
-                .unwrap_or(0);
+            mem_plan.return_escape_caller_abs_words = return_escape_caller_abs_words;
             mem_plan.transient_mallocs = transient_mallocs;
         }
     }
@@ -258,70 +275,77 @@ pub(crate) fn prepare_section(
     let function_plans = {
         let _span = trace_span!("sonatina.codegen.evm.extract_lowering_state").entered();
         let mut function_plans = FxHashMap::default();
-        for (func, analysis) in analyses {
-            let mem_plan = plan
-                .funcs
-                .get(&func)
-                .cloned()
-                .ok_or_else(|| format!("missing memory plan for func {}", func.as_u32()))?;
-            let frame_summary = dyn_sp_plan
-                .frame_summaries
-                .get(&func)
-                .cloned()
-                .unwrap_or_default();
-            let func_dyn_sp_plan = FuncDynSpPlan {
-                entry_init: func == section_entry && dyn_sp_plan.entry_init,
-                frontier_init_calls: dyn_sp_plan
-                    .frontier_init_calls
+        let mut results: Vec<_> = analyses
+            .into_par_iter()
+            .map(|(func, analysis)| {
+                let mem_plan =
+                    plan.funcs.get(&func).cloned().unwrap_or_else(|| {
+                        panic!("missing memory plan for func {}", func.as_u32())
+                    });
+                let frame_summary = dyn_sp_plan
+                    .frame_summaries
                     .get(&func)
                     .cloned()
-                    .unwrap_or_default(),
-                checked_frontier_init_calls: dyn_sp_plan
-                    .checked_frontier_init_calls
-                    .get(&func)
-                    .cloned()
-                    .unwrap_or_default(),
-                entry_live_frame: dyn_sp_plan
-                    .entry_live_frame
-                    .get(&func)
-                    .copied()
-                    .unwrap_or(false),
-            };
-            let alias_plan = module.func_store.view(func, |function| {
-                compute_late_block_alias_plan(
-                    function,
-                    &analysis.alloc,
-                    &frame_summary,
-                    &analysis.block_order,
-                )
-            });
-            let LateBlockAliasPlan {
-                aliases: block_aliases,
-                emitted_block_order,
-            } = alias_plan;
-            let emitted_block_order = if backend.late_cleanup_profile != LateCleanupProfile::Off {
-                module.func_store.view(func, |function| {
-                    rewrite_evm_local_fallthrough_layout(
+                    .unwrap_or_default();
+                let func_dyn_sp_plan = FuncDynSpPlan {
+                    entry_init: func == section_entry && dyn_sp_plan.entry_init,
+                    frontier_init_calls: dyn_sp_plan
+                        .frontier_init_calls
+                        .get(&func)
+                        .cloned()
+                        .unwrap_or_default(),
+                    checked_frontier_init_calls: dyn_sp_plan
+                        .checked_frontier_init_calls
+                        .get(&func)
+                        .cloned()
+                        .unwrap_or_default(),
+                    entry_live_frame: dyn_sp_plan
+                        .entry_live_frame
+                        .get(&func)
+                        .copied()
+                        .unwrap_or(false),
+                };
+                let alias_plan = module.func_store.view(func, |function| {
+                    compute_late_block_alias_plan(
                         function,
-                        &block_aliases,
-                        emitted_block_order,
+                        &analysis.alloc,
+                        &frame_summary,
+                        &analysis.block_order,
                     )
-                })
-            } else {
-                emitted_block_order
-            };
-            function_plans.insert(
-                func,
-                EvmFunctionPlan {
-                    alloc: analysis.alloc,
+                });
+                let LateBlockAliasPlan {
+                    aliases: block_aliases,
                     emitted_block_order,
-                    block_aliases,
-                    mem_plan,
-                    frame_summary,
-                    dyn_sp_plan: func_dyn_sp_plan,
-                    function_entry_jumpdest: function_entry_jump_targets.contains(&func),
-                },
-            );
+                } = alias_plan;
+                let emitted_block_order = if backend.late_cleanup_profile != LateCleanupProfile::Off
+                {
+                    module.func_store.view(func, |function| {
+                        rewrite_evm_local_fallthrough_layout(
+                            function,
+                            &block_aliases,
+                            emitted_block_order,
+                        )
+                    })
+                } else {
+                    emitted_block_order
+                };
+                (
+                    func,
+                    EvmFunctionPlan {
+                        alloc: analysis.alloc,
+                        emitted_block_order,
+                        block_aliases,
+                        mem_plan,
+                        frame_summary,
+                        dyn_sp_plan: func_dyn_sp_plan,
+                        function_entry_jumpdest: function_entry_jump_targets.contains(&func),
+                    },
+                )
+            })
+            .collect();
+        results.sort_unstable_by_key(|(func, _)| func.as_u32());
+        for (func, plan) in results {
+            function_plans.insert(func, plan);
         }
         function_plans
     };
@@ -572,23 +596,33 @@ fn compute_scratch_effect_analyses(
         });
         let analysis_scratch_effects = cycle_scratch_effects.as_ref().unwrap_or(&scratch_effects);
 
-        let mut scc_uses_scratch_spills = false;
-        for func in components.iter().copied() {
-            let _span = trace_span!(
-                "sonatina.codegen.evm.prepare_stackify_analysis",
-                func_ref = func.as_u32()
-            )
-            .entered();
-            let analysis = module.func_store.modify(func, |function| {
-                prepare_stackify_analysis(
-                    function,
-                    &module.ctx,
-                    backend,
-                    ptr_escape,
-                    Some(analysis_scratch_effects),
+        let mut scc_results: Vec<_> = components
+            .par_iter()
+            .copied()
+            .map(|func| {
+                let _span = trace_span!(
+                    "sonatina.codegen.evm.prepare_stackify_analysis",
+                    func_ref = func.as_u32()
                 )
-            });
-            scc_uses_scratch_spills |= analysis.alloc.uses_scratch_spills();
+                .entered();
+                let analysis = module.func_store.modify(func, |function| {
+                    prepare_stackify_analysis(
+                        function,
+                        &module.ctx,
+                        backend,
+                        ptr_escape,
+                        Some(analysis_scratch_effects),
+                    )
+                });
+                let uses_scratch_spills = analysis.alloc.uses_scratch_spills();
+                (func, analysis, uses_scratch_spills)
+            })
+            .collect();
+        scc_results.sort_unstable_by_key(|(func, _, _)| func.as_u32());
+
+        let mut scc_uses_scratch_spills = false;
+        for (func, analysis, uses_scratch_spills) in scc_results {
+            scc_uses_scratch_spills |= uses_scratch_spills;
             analyses.insert(func, analysis);
         }
 

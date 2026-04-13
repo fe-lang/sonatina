@@ -243,7 +243,7 @@ impl ObjectLowerToMemory {
                     kind = Materialization::Heap;
                     std::ops::ControlFlow::Continue(())
                 }
-                SpecialObjectUse::Call { value, call }
+                SpecialObjectUse::Call { value, call, .. }
                     if value == root
                         && object_locality::call_passes_object_to_local_args(
                             func.ctx(),

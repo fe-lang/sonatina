@@ -435,7 +435,12 @@ impl MemoryAccessAnalysis {
             return CanonicalAddr::unknown(addr);
         }
 
-        let canonical = match func.dfg.value(addr) {
+        let Some(value) = func.dfg.get_value(addr) else {
+            visiting.remove(&addr);
+            return CanonicalAddr::unknown(addr);
+        };
+
+        let canonical = match value {
             Value::Immediate { imm, .. } => CanonicalAddr {
                 base: BaseObject::Absolute(*imm),
                 offset: 0,
@@ -560,7 +565,7 @@ impl MemoryAccessAnalysis {
             return Some(ValueKey::Value(value));
         }
 
-        let key = match func.dfg.value(value) {
+        let key = match func.dfg.get_value(value)? {
             Value::Immediate { imm, .. } => Some(ValueKey::Imm(*imm)),
             Value::Arg { .. } => Some(ValueKey::Value(value)),
             Value::Inst {
@@ -584,13 +589,24 @@ impl MemoryAccessAnalysis {
         ty: Type,
         visiting: &mut FxHashSet<ValueId>,
     ) -> ValueKey {
-        let result_tys: Vec<_> = func
-            .dfg
-            .inst_results(inst)
+        let Some(results) = func.dfg.try_inst_results(inst) else {
+            return ValueKey::Value(value);
+        };
+        let result_tys = results
             .iter()
-            .map(|&result| func.dfg.value_ty(result))
-            .collect();
-        let key = func.dfg.inst(inst).owned_key(&result_tys);
+            .map(|&result| {
+                func.dfg
+                    .get_value(result)
+                    .map(|_| func.dfg.value_ty(result))
+            })
+            .collect::<Option<Vec<_>>>();
+        let Some(result_tys) = result_tys else {
+            return ValueKey::Value(value);
+        };
+        let Some(inst_data) = func.dfg.get_inst(inst) else {
+            return ValueKey::Value(value);
+        };
+        let key = inst_data.owned_key(&result_tys);
 
         match key.kind() {
             InstClassKind::Unary(_) => {
@@ -666,6 +682,7 @@ impl MemoryAccessAnalysis {
     }
 
     fn const_gep_offset(&self, func: &Function, base: ValueId, indices: &[ValueId]) -> Option<i64> {
+        func.dfg.get_value(base)?;
         let mut current_ty = func.dfg.value_ty(base);
         if !current_ty.is_pointer(func.ctx()) {
             return None;
@@ -705,6 +722,7 @@ impl MemoryAccessAnalysis {
     }
 
     fn value_const_i64(&self, func: &Function, value: ValueId) -> Option<i64> {
+        func.dfg.get_value(value)?;
         immediate_i64(func.dfg.value_imm(value)?)
     }
 }
@@ -1086,6 +1104,43 @@ mod tests {
             .expect("zero-length range should be trackable");
 
         assert!(!analysis.range_may_alias_key(&range, &key));
+    }
+
+    #[test]
+    fn deleted_range_length_is_not_trackable() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::Unit);
+        let is = evm.inst_set();
+
+        let block = builder.append_block();
+        builder.switch_to_block(block);
+
+        let addr = builder.make_imm_value(I256::from(64));
+        let one = builder.make_imm_value(I256::from(1));
+        let len = builder.insert_inst_with(|| Add::new(is, one, one), Type::I256);
+        builder.insert_inst_no_result_with(|| Return::new_unit(is));
+        builder.seal_all();
+
+        let len_inst = builder
+            .func
+            .dfg
+            .value_inst(len)
+            .expect("len should come from add");
+        builder.func.layout.remove_inst(len_inst);
+        builder.func.erase_inst(len_inst);
+
+        let analysis = MemoryAccessAnalysis::new();
+        assert_eq!(
+            analysis.trackable_linear_range(
+                &builder.func,
+                &range_access(
+                    builder.func.ctx().address_spaces().default_space(),
+                    addr,
+                    len
+                ),
+            ),
+            None
+        );
     }
 
     #[test]

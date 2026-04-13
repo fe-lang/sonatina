@@ -1,7 +1,7 @@
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 use sonatina_ir::{
-    Function, Type, Value, ValueId,
+    Function, I256, Immediate, Type, Value, ValueId,
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
     inst::{control_flow, data, downcast},
     module::{FuncRef, Module, ModuleCtx},
@@ -29,7 +29,7 @@ struct FuncPlan {
 }
 
 #[derive(Clone, Copy)]
-struct AbiChildSlice {
+pub(crate) struct AbiChildSlice {
     idx: u32,
     ty: Type,
     first_leaf: usize,
@@ -399,7 +399,7 @@ impl AggregateExpandAbi {
     }
 }
 
-fn abi_runtime_leaf_slices(
+pub(crate) fn abi_runtime_leaf_slices(
     module: &ModuleCtx,
     agg_ty: Type,
 ) -> Option<SmallVec<[shape::AggregateSlice; 4]>> {
@@ -439,7 +439,26 @@ fn collect_abi_runtime_leaf_slices(
     Some(())
 }
 
-fn abi_child_slices(module: &ModuleCtx, agg_ty: Type) -> Option<SmallVec<[AbiChildSlice; 4]>> {
+pub(crate) fn abi_leaf_count(module: &ModuleCtx, ty: Type) -> Option<usize> {
+    if shape::runtime_size_bytes(module, ty)? == 0 {
+        return Some(0);
+    }
+    if !shape::is_supported_aggregate_ty(module, ty) {
+        return Some(1);
+    }
+
+    Some(
+        abi_child_slices(module, ty)?
+            .into_iter()
+            .map(|child| child.leaf_count)
+            .sum(),
+    )
+}
+
+pub(crate) fn abi_child_slices(
+    module: &ModuleCtx,
+    agg_ty: Type,
+) -> Option<SmallVec<[AbiChildSlice; 4]>> {
     if !shape::is_supported_aggregate_ty(module, agg_ty) {
         return None;
     }
@@ -462,22 +481,6 @@ fn abi_child_slices(module: &ModuleCtx, agg_ty: Type) -> Option<SmallVec<[AbiChi
     Some(children)
 }
 
-fn abi_leaf_count(module: &ModuleCtx, ty: Type) -> Option<usize> {
-    if shape::runtime_size_bytes(module, ty)? == 0 {
-        return Some(0);
-    }
-    if !shape::is_supported_aggregate_ty(module, ty) {
-        return Some(1);
-    }
-
-    Some(
-        abi_child_slices(module, ty)?
-            .into_iter()
-            .map(|child| child.leaf_count)
-            .sum(),
-    )
-}
-
 fn insert_value_before_inst(
     func: &mut Function,
     inst: sonatina_ir::InstId,
@@ -486,7 +489,9 @@ fn insert_value_before_inst(
     value: ValueId,
     ty: Type,
 ) -> ValueId {
-    let idx_value = func.dfg.make_imm_value(i64::from(idx));
+    let idx_value = func
+        .dfg
+        .make_imm_value(Immediate::from_i256(I256::from(idx), Type::I256));
     let loc = func.layout.prev_inst_of(inst).map_or(
         CursorLocation::BlockTop(func.layout.inst_block(inst)),
         CursorLocation::At,

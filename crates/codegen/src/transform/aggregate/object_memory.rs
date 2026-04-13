@@ -10,9 +10,10 @@ use crate::loop_analysis::{Loop, LoopTree};
 use super::{
     LocalObjectArgInfo, ObjectEffectSummaryMap, RootInit, SliceSet, collect_root_provenance,
     object_tracking::{
-        ObjectSlice, TrackedObject, collect_root_slices, collect_tracked_objects,
-        enum_tag_object_slice, enum_variant_field_object_slice, object_slice_overlaps_effect,
-        slice_is_covered_by, slices_overlap, whole_root_slice_for_value,
+        ObjectSlice, TrackedObject, collect_call_planner_root_slices, collect_root_slices,
+        collect_tracked_objects, enum_tag_object_slice, enum_variant_field_object_slice,
+        object_slice_overlaps_effect, slice_is_covered_by, slices_overlap,
+        whole_root_slice_for_value,
     },
     provenance::{MayProvenance, MayRootSet},
     shape,
@@ -104,6 +105,8 @@ pub(crate) struct ObjectMemoryAnalysis {
     layout_cache: shape::AggregateLayoutCache,
     read_states: FxHashMap<InstId, ObjectReadState>,
     clobbers: FxHashMap<InstId, Vec<ObjectClobber>>,
+    inst_pre_states: FxHashMap<InstId, MemoryState>,
+    promote_loaded_values: bool,
 }
 
 impl ObjectMemoryAnalysis {
@@ -116,12 +119,57 @@ impl ObjectMemoryAnalysis {
         self.layout_cache.clear();
         self.read_states.clear();
         self.clobbers.clear();
+        self.inst_pre_states.clear();
+        self.promote_loaded_values = false;
 
         let root_slices = collect_root_slices(func, local_object_args, &mut self.layout_cache);
+        self.compute_with_root_slices(func, local_object_args, object_effects, &root_slices);
+    }
+
+    pub(crate) fn compute_with_loaded_value_carriers(
+        &mut self,
+        func: &Function,
+        local_object_args: Option<&FxHashMap<usize, LocalObjectArgInfo>>,
+        object_effects: Option<&ObjectEffectSummaryMap>,
+    ) {
+        self.layout_cache.clear();
+        self.read_states.clear();
+        self.clobbers.clear();
+        self.inst_pre_states.clear();
+        self.promote_loaded_values = true;
+
+        let root_slices = collect_root_slices(func, local_object_args, &mut self.layout_cache);
+        self.compute_with_root_slices(func, local_object_args, object_effects, &root_slices);
+    }
+
+    pub(crate) fn compute_for_call_planner(
+        &mut self,
+        func: &Function,
+        local_object_args: Option<&FxHashMap<usize, LocalObjectArgInfo>>,
+        object_effects: &ObjectEffectSummaryMap,
+    ) {
+        self.layout_cache.clear();
+        self.read_states.clear();
+        self.clobbers.clear();
+        self.inst_pre_states.clear();
+        self.promote_loaded_values = true;
+
+        let root_slices =
+            collect_call_planner_root_slices(func, object_effects, &mut self.layout_cache);
+        self.compute_with_root_slices(func, local_object_args, Some(object_effects), &root_slices);
+    }
+
+    fn compute_with_root_slices(
+        &mut self,
+        func: &Function,
+        local_object_args: Option<&FxHashMap<usize, LocalObjectArgInfo>>,
+        object_effects: Option<&ObjectEffectSummaryMap>,
+        root_slices: &FxHashMap<ValueId, shape::AggregateSlice>,
+    ) {
         let provenance = collect_root_provenance(
             func,
             func.ctx(),
-            &root_slices,
+            root_slices,
             &mut self.layout_cache,
             object_effects,
         );
@@ -141,7 +189,13 @@ impl ObjectMemoryAnalysis {
             .into_iter()
             .rev()
             .collect();
-        let initial_state = initial_state(func, local_object_args, &tracked, &relevant_slices);
+        let initial_state = initial_state(
+            func,
+            local_object_args,
+            &tracked,
+            &relevant_slices,
+            self.promote_loaded_values,
+        );
         let mut in_states = SecondaryMap::<BlockId, MemoryState>::new();
         let mut out_states = SecondaryMap::<BlockId, MemoryState>::new();
         let mut out_valid = SecondaryMap::<BlockId, bool>::new();
@@ -221,6 +275,22 @@ impl ObjectMemoryAnalysis {
 
     pub(crate) fn read_state(&self, inst: InstId) -> Option<ObjectReadState> {
         self.read_states.get(&inst).copied()
+    }
+
+    pub(crate) fn value_matches_current_object_slice_before_inst(
+        &self,
+        inst: InstId,
+        value: ValueId,
+        slice: ObjectSlice,
+    ) -> bool {
+        self.inst_pre_states.get(&inst).is_some_and(|state| {
+            state.active_roots.contains(&slice.root)
+                && !state.blocked_roots.contains(&slice.root)
+                && matches!(
+                    state.carriers.get(&slice),
+                    Some(MemoryCarrier::Value { value: current, .. }) if *current == value
+                )
+        })
     }
 
     pub(crate) fn read_is_loop_invariant(
@@ -315,8 +385,32 @@ fn initial_state(
     local_object_args: Option<&FxHashMap<usize, LocalObjectArgInfo>>,
     tracked: &SecondaryMap<ValueId, Option<TrackedObject>>,
     relevant_slices: &FxHashMap<ValueId, Vec<ObjectSlice>>,
+    seed_all_arg_roots: bool,
 ) -> MemoryState {
     let mut state = MemoryState::default();
+    if seed_all_arg_roots {
+        for (idx, &root) in func.arg_values.iter().enumerate() {
+            let Some(root_slice) = whole_root_slice_for_value(tracked, root) else {
+                continue;
+            };
+            let init = local_object_args
+                .and_then(|args| args.get(&idx))
+                .map(|info| info.init)
+                .unwrap_or(RootInit::LoadLiveIn);
+            let token = match init {
+                RootInit::LoadLiveIn => ObjectMemToken::LiveIn { root },
+                RootInit::UndefFresh => ObjectMemToken::FreshEntry { root },
+            };
+            activate_root(&mut state, root_slice, token, relevant_slices);
+            if init == RootInit::LoadLiveIn {
+                mark_slice_initialized(&mut state, root_slice);
+            } else {
+                state.initialized_leaves.entry(root).or_default();
+            }
+        }
+        return state;
+    }
+
     let Some(local_object_args) = local_object_args else {
         return state;
     };
@@ -425,9 +519,13 @@ fn transfer_inst(
     if let Some(call) =
         downcast::<&control_flow::Call>(ctx.func.inst_set(), ctx.func.dfg.inst(inst))
     {
+        record_inst_pre_state(inst, state, record);
         apply_call_transfer(ctx, inst, call, state, record);
         activate_defined_root(ctx.func, inst, ctx.tracked, ctx.relevant_slices, state);
         return;
+    }
+    if downcast::<&control_flow::Return>(ctx.func.inst_set(), ctx.func.dfg.inst(inst)).is_some() {
+        record_inst_pre_state(inst, state, record);
     }
 
     activate_defined_root(ctx.func, inst, ctx.tracked, ctx.relevant_slices, state);
@@ -435,6 +533,12 @@ fn transfer_inst(
     if let Some(obj_load) = downcast::<&data::ObjLoad>(ctx.func.inst_set(), ctx.func.dfg.inst(inst))
     {
         record_read_state(inst, ctx.tracked[*obj_load.object()], state, record);
+        if record
+            .as_deref()
+            .is_some_and(|analysis| analysis.promote_loaded_values)
+        {
+            promote_loaded_value_to_carrier(ctx.func, inst, ctx.tracked[*obj_load.object()], state);
+        }
         return;
     }
 
@@ -613,6 +717,40 @@ fn record_read_state(
             read_slice: slice,
             key,
             may_be_undef: !slice_is_fully_initialized(state, slice),
+        },
+    );
+}
+
+fn record_inst_pre_state(
+    inst: InstId,
+    state: &MemoryState,
+    record: &mut Option<&mut ObjectMemoryAnalysis>,
+) {
+    if let Some(record) = record.as_deref_mut() {
+        record.inst_pre_states.insert(inst, state.clone());
+    }
+}
+
+fn promote_loaded_value_to_carrier(
+    func: &Function,
+    inst: InstId,
+    tracked_object: Option<TrackedObject>,
+    state: &mut MemoryState,
+) {
+    let Some(result) = single_result_value(func, inst) else {
+        return;
+    };
+    let Some(slice) = tracked_object.and_then(TrackedObject::exact) else {
+        return;
+    };
+    if !state.active_roots.contains(&slice.root) || state.blocked_roots.contains(&slice.root) {
+        return;
+    }
+    state.carriers.insert(
+        slice,
+        MemoryCarrier::Value {
+            value: result,
+            slice,
         },
     );
 }

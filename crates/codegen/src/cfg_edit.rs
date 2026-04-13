@@ -151,8 +151,124 @@ impl<'f> CfgEditor<'f> {
         changed
     }
 
-    pub fn remove_edge(&mut self, from: BlockId, to: BlockId) -> bool {
-        self.remove_succ(from, to)
+    pub fn retain_out_edges(&mut self, from: BlockId, keep_mask: &[bool]) -> bool {
+        assert!(self.func.layout.is_block_inserted(from));
+
+        let Some(term) = self.func.layout.last_inst_of(from) else {
+            panic!("block {from:?} has no terminator");
+        };
+        assert!(
+            self.func.dfg.is_terminator(term),
+            "block {from:?} does not end with a terminator"
+        );
+
+        let Some(branch_info) = self.func.dfg.branch_info(term) else {
+            panic!("terminator {term:?} has no branch info");
+        };
+        let old_dests = branch_info.dests();
+        assert_eq!(
+            keep_mask.len(),
+            old_dests.len(),
+            "keep mask length {} does not match outgoing edge count {} for {from:?}",
+            keep_mask.len(),
+            old_dests.len()
+        );
+        if keep_mask.iter().all(|keep| *keep) {
+            return false;
+        }
+
+        self.func.dfg.retain_branch_edges(term, keep_mask);
+
+        let mut removed_dests = FxHashSet::default();
+        for (edge_idx, &dest) in old_dests.iter().enumerate() {
+            if keep_mask[edge_idx]
+                || old_dests.iter().enumerate().any(|(other_idx, other_dest)| {
+                    other_idx != edge_idx && keep_mask[other_idx] && *other_dest == dest
+                })
+            {
+                continue;
+            }
+            removed_dests.insert(dest);
+        }
+
+        for dest in removed_dests {
+            if !self.func.layout.is_block_inserted(dest) {
+                if matches!(self.mode, CleanupMode::Strict) {
+                    panic!("branch target {dest:?} is not inserted");
+                }
+                continue;
+            }
+            remove_phi_incoming_from(self.func, dest, from);
+            simplify_trivial_phis_in_block(self.func, dest);
+        }
+
+        self.recompute_cfg();
+        true
+    }
+
+    pub fn retarget_out_edge(
+        &mut self,
+        from: BlockId,
+        edge_idx: usize,
+        new_to: BlockId,
+        phi_inputs: &[(InstId, ValueId)],
+    ) -> bool {
+        assert!(self.func.layout.is_block_inserted(from));
+        assert!(self.func.layout.is_block_inserted(new_to));
+
+        let Some(term) = self.func.layout.last_inst_of(from) else {
+            panic!("block {from:?} has no terminator");
+        };
+        assert!(
+            self.func.dfg.is_terminator(term),
+            "block {from:?} does not end with a terminator"
+        );
+
+        let Some(branch_info) = self.func.dfg.branch_info(term) else {
+            panic!("terminator {term:?} has no branch info");
+        };
+        let old_dests = branch_info.dests();
+        let old_to = *old_dests
+            .get(edge_idx)
+            .unwrap_or_else(|| panic!("outgoing edge index out of bounds: {edge_idx}"));
+        if old_to == new_to {
+            return false;
+        }
+
+        let old_to_inserted = self.func.layout.is_block_inserted(old_to);
+        if !old_to_inserted && matches!(self.mode, CleanupMode::Strict) {
+            panic!("branch target {old_to:?} is not inserted");
+        }
+
+        let old_has_other_edge = old_dests
+            .iter()
+            .enumerate()
+            .any(|(other_idx, dest)| other_idx != edge_idx && *dest == old_to);
+        let from_already_preds_new_to = old_dests
+            .iter()
+            .enumerate()
+            .any(|(other_idx, dest)| other_idx != edge_idx && *dest == new_to);
+
+        self.func
+            .dfg
+            .rewrite_branch_edge_dest(term, edge_idx, new_to);
+
+        if old_to_inserted && !old_has_other_edge {
+            remove_phi_incoming_from(self.func, old_to, from);
+            simplify_trivial_phis_in_block(self.func, old_to);
+        }
+
+        if from_already_preds_new_to {
+            assert!(
+                phi_inputs.is_empty(),
+                "phi mapping must be empty when {from:?} already precedes {new_to:?}"
+            );
+        } else {
+            append_phi_inputs_for_new_pred(self.func, new_to, from, phi_inputs);
+        }
+
+        self.recompute_cfg();
+        true
     }
 
     pub fn prune_phi_to_current_preds(&mut self, block: BlockId) -> bool {
@@ -248,7 +364,7 @@ impl<'f> CfgEditor<'f> {
         cursor.set_location(CursorLocation::BlockTop(mid));
         cursor.append_inst_data(self.func, Jump::new(self.func.dfg.inst_set().jump(), to));
 
-        self.func.dfg.rewrite_branch_dest(term, to, mid);
+        self.func.dfg.rewrite_branch_edges_to_block(term, to, mid);
         replace_phi_incoming_block(self.func, to, from, mid);
 
         self.recompute_cfg();
@@ -321,7 +437,7 @@ impl<'f> CfgEditor<'f> {
 
             self.func
                 .dfg
-                .rewrite_branch_dest(last_inst, lp_header, new_preheader);
+                .rewrite_branch_edges_to_block(last_inst, lp_header, new_preheader);
         }
 
         self.rewrite_loop_header_phis_for_preheader(lp_header, outside_preds, new_preheader);
@@ -383,12 +499,13 @@ impl<'f> CfgEditor<'f> {
             return false;
         }
 
-        self.func.dfg.rewrite_branch_dest(pred_term, block, succ);
+        self.func
+            .dfg
+            .rewrite_branch_edges_to_block(pred_term, block, succ);
         replace_phi_incoming_block(self.func, succ, block, pred);
         simplify_trivial_phis_in_block(self.func, succ);
         InstInserter::at_location(CursorLocation::BlockTop(block)).remove_block(self.func);
-        self.cfg.replace_edge(pred, block, succ);
-        self.cfg.remove_edge(block, succ);
+        self.recompute_cfg();
         true
     }
 
@@ -568,18 +685,7 @@ impl<'f> CfgEditor<'f> {
         }
 
         InstInserter::at_location(CursorLocation::BlockTop(succ)).remove_block(self.func);
-        self.cfg.remove_edge(block, succ);
-        for succ_succ in succ_succs {
-            self.cfg.remove_edge(succ, succ_succ);
-            self.cfg.add_edge(block, succ_succ);
-        }
-        if self
-            .func
-            .dfg
-            .is_exit(self.func.layout.last_inst_of(block).unwrap())
-        {
-            self.cfg.replace_exit(succ, block);
-        }
+        self.recompute_cfg();
         true
     }
 
@@ -591,7 +697,7 @@ impl<'f> CfgEditor<'f> {
         let preds: Vec<_> = self.cfg.preds_of(b).copied().collect();
         for pred in preds {
             if self.func.layout.is_block_inserted(pred) {
-                let removed = self.remove_edge(pred, b);
+                let removed = self.remove_succ(pred, b);
                 assert!(removed, "edge {pred:?} -> {b:?} does not exist");
             }
         }
@@ -707,16 +813,6 @@ impl<'f> CfgEditor<'f> {
         self.replace_succ_inner(from, old_to, new_to, phi_inputs, true)
     }
 
-    pub fn retarget_edge_with_phi_mapping(
-        &mut self,
-        from: BlockId,
-        old_to: BlockId,
-        new_to: BlockId,
-        phi_inputs: &[(InstId, ValueId)],
-    ) {
-        self.replace_succ(from, old_to, new_to, phi_inputs)
-    }
-
     fn replace_succ_inner(
         &mut self,
         from: BlockId,
@@ -727,6 +823,9 @@ impl<'f> CfgEditor<'f> {
     ) -> bool {
         assert!(self.func.layout.is_block_inserted(from));
         assert!(self.func.layout.is_block_inserted(new_to));
+        if old_to == new_to {
+            return false;
+        }
         let old_to_inserted = self.func.layout.is_block_inserted(old_to);
         if !old_to_inserted && matches!(self.mode, CleanupMode::Strict) {
             panic!("branch target {old_to:?} is not inserted");
@@ -749,7 +848,9 @@ impl<'f> CfgEditor<'f> {
 
         let from_already_preds_new_to = self.cfg.preds_of(new_to).any(|pred| *pred == from);
 
-        self.func.dfg.rewrite_branch_dest(term, old_to, new_to);
+        self.func
+            .dfg
+            .rewrite_branch_edges_to_block(term, old_to, new_to);
 
         if old_to_inserted {
             remove_phi_incoming_from(self.func, old_to, from);
@@ -762,20 +863,7 @@ impl<'f> CfgEditor<'f> {
                 "phi mapping must be empty when {from:?} already precedes {new_to:?}"
             );
         } else {
-            let expected: BTreeSet<_> = iter_phis_in_block(self.func, new_to).collect();
-            let provided: BTreeSet<_> = phi_inputs.iter().map(|(phi, _)| *phi).collect();
-            assert_eq!(expected, provided, "phi mapping is incomplete");
-
-            for &(phi_inst, incoming) in phi_inputs {
-                self.func.dfg.untrack_inst(phi_inst);
-                let phi = self.func.dfg.cast_phi_mut(phi_inst).unwrap();
-                assert!(
-                    !phi.args().iter().any(|(_, pred)| *pred == from),
-                    "phi {phi_inst:?} already has incoming from {from:?}"
-                );
-                phi.append_phi_arg(incoming, from);
-                self.func.dfg.attach_user(phi_inst);
-            }
+            append_phi_inputs_for_new_pred(self.func, new_to, from, phi_inputs);
         }
 
         self.recompute_cfg();
@@ -860,7 +948,7 @@ fn remove_succ_and_repair_phis(
         return false;
     }
 
-    func.dfg.remove_branch_dest(term, to);
+    func.dfg.remove_branch_edges_to_block(term, to);
 
     if !func.layout.is_block_inserted(to) {
         if matches!(mode, CleanupMode::Strict) {
@@ -872,6 +960,30 @@ fn remove_succ_and_repair_phis(
     remove_phi_incoming_from(func, to, from);
     simplify_trivial_phis_in_block(func, to);
     true
+}
+
+fn append_phi_inputs_for_new_pred(
+    func: &mut Function,
+    block: BlockId,
+    pred: BlockId,
+    phi_inputs: &[(InstId, ValueId)],
+) {
+    let expected: BTreeSet<_> = iter_phis_in_block(func, block).collect();
+    let provided: BTreeSet<_> = phi_inputs.iter().map(|(phi, _)| *phi).collect();
+    assert_eq!(expected, provided, "phi mapping is incomplete");
+
+    for &(phi_inst, incoming) in phi_inputs {
+        func.dfg.untrack_inst(phi_inst);
+        let phi = func.dfg.cast_phi_mut(phi_inst).unwrap();
+        assert!(
+            !phi.args()
+                .iter()
+                .any(|(_, existing_pred)| *existing_pred == pred),
+            "phi {phi_inst:?} already has incoming from {pred:?}"
+        );
+        phi.append_phi_arg(incoming, pred);
+        func.dfg.attach_user(phi_inst);
+    }
 }
 
 fn iter_phis_in_block(func: &Function, block: BlockId) -> impl Iterator<Item = InstId> + '_ {
@@ -1090,6 +1202,163 @@ mod tests {
             let term = editor.func().layout.last_inst_of(b0).unwrap();
             let jump = editor.func().dfg.cast_jump(term).unwrap();
             assert_eq!(*jump.dest(), b2);
+        });
+    }
+
+    #[test]
+    fn retain_out_edges_keeps_phi_when_duplicate_pred_edge_remains() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func private %f() -> i32 {
+block0:
+    br_table 0.i8 block2 (0.i8 block1) (1.i8 block1);
+
+block1:
+    v0.i32 = phi (7.i32 block0);
+    return v0;
+
+block2:
+    return 9.i32;
+}
+"#,
+        );
+        let func_ref = module.funcs()[0];
+        module.func_store.modify(func_ref, |func| {
+            let blocks: Vec<_> = func.layout.iter_block().collect();
+            let [b0, b1, _] = blocks.as_slice() else {
+                panic!("expected three blocks");
+            };
+
+            let mut editor = CfgEditor::new(func, CleanupMode::Strict);
+            assert!(editor.retain_out_edges(*b0, &[false, true, false]));
+
+            let term = editor.func().layout.last_inst_of(*b0).unwrap();
+            let jump = editor.func().dfg.cast_jump(term).unwrap();
+            assert_eq!(*jump.dest(), *b1);
+
+            let phi_inst = editor.func().layout.first_inst_of(*b1).unwrap();
+            let phi = editor.func().dfg.cast_phi(phi_inst).unwrap();
+            assert_eq!(phi.args(), &[(phi.args()[0].0, *b0)]);
+            assert_eq!(editor.cfg().pred_edges_as_slice(*b1).len(), 1);
+            assert_eq!(editor.cfg().preds_as_slice(*b1), &[*b0]);
+        });
+    }
+
+    #[test]
+    fn retarget_out_edge_keeps_old_phi_when_duplicate_pred_edge_remains() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func private %f() -> i32 {
+block0:
+    br_table 0.i8 block1 (0.i8 block1) (1.i8 block2);
+
+block1:
+    v0.i32 = phi (7.i32 block0);
+    return v0;
+
+block2:
+    jump block3;
+
+block3:
+    v1.i32 = phi (9.i32 block2);
+    return v1;
+}
+"#,
+        );
+        let func_ref = module.funcs()[0];
+        module.func_store.modify(func_ref, |func| {
+            let blocks: Vec<_> = func.layout.iter_block().collect();
+            let [b0, b1, b2, b3] = blocks.as_slice() else {
+                panic!("expected four blocks");
+            };
+
+            let mut editor = CfgEditor::new(func, CleanupMode::Strict);
+            let phi_inst = editor.func().layout.first_inst_of(*b3).unwrap();
+            let eleven = editor.func_mut().dfg.make_imm_value(11i32);
+            assert!(editor.retarget_out_edge(*b0, 1, *b3, &[(phi_inst, eleven)]));
+
+            let old_phi_inst = editor.func().layout.first_inst_of(*b1).unwrap();
+            let old_phi = editor.func().dfg.cast_phi(old_phi_inst).unwrap();
+            assert_eq!(old_phi.args().len(), 1);
+            assert_eq!(old_phi.args()[0].1, *b0);
+
+            let new_phi_inst = editor.func().layout.first_inst_of(*b3).unwrap();
+            let new_phi = editor.func().dfg.cast_phi(new_phi_inst).unwrap();
+            assert_eq!(new_phi.args().len(), 2);
+            assert_eq!(
+                new_phi
+                    .args()
+                    .iter()
+                    .filter(|(_, pred)| *pred == *b0)
+                    .count(),
+                1
+            );
+            assert!(new_phi.args().iter().any(|&(value, pred)| {
+                pred == *b0
+                    && matches!(
+                        editor.func().dfg.value(value),
+                        Value::Immediate {
+                            imm: Immediate::I32(11),
+                            ..
+                        }
+                    )
+            }));
+            assert!(new_phi.args().iter().any(|&(value, pred)| {
+                pred == *b2
+                    && matches!(
+                        editor.func().dfg.value(value),
+                        Value::Immediate {
+                            imm: Immediate::I32(9),
+                            ..
+                        }
+                    )
+            }));
+        });
+    }
+
+    #[test]
+    fn retarget_out_edge_to_existing_pred_does_not_duplicate_phi_inputs() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func private %f() -> i32 {
+block0:
+    br_table 0.i8 block1 (0.i8 block2) (1.i8 block1);
+
+block1:
+    v0.i32 = phi (7.i32 block0);
+    return v0;
+
+block2:
+    return 9.i32;
+}
+"#,
+        );
+        let func_ref = module.funcs()[0];
+        module.func_store.modify(func_ref, |func| {
+            let blocks: Vec<_> = func.layout.iter_block().collect();
+            let [b0, b1, _] = blocks.as_slice() else {
+                panic!("expected three blocks");
+            };
+
+            let mut editor = CfgEditor::new(func, CleanupMode::Strict);
+            assert!(editor.retarget_out_edge(*b0, 1, *b1, &[]));
+
+            let phi_inst = editor.func().layout.first_inst_of(*b1).unwrap();
+            let phi = editor.func().dfg.cast_phi(phi_inst).unwrap();
+            assert_eq!(phi.args().len(), 1);
+            assert_eq!(phi.args()[0].1, *b0);
+
+            let term = editor.func().layout.last_inst_of(*b0).unwrap();
+            let jump = editor.func().dfg.cast_jump(term).unwrap();
+            assert_eq!(*jump.dest(), *b1);
+            assert_eq!(editor.cfg().preds_as_slice(*b1), &[*b0]);
+            assert_eq!(editor.cfg().pred_edges_as_slice(*b1).len(), 1);
         });
     }
 

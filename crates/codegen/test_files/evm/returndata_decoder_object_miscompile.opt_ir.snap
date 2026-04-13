@@ -23,26 +23,49 @@ func private %add_1(v0.i256, v1.i256) -> i256 {
         return v2;
 }
 
-func private %decode_returndata(v0.i256, v1.i256) -> i256 {
+func private %call_target(v0.@Addr, v1.i256, v2.i256) -> i256 {
     block0:
-        v13.i1 = lt v1 32.i256;
-        br v13 block1 block9;
+        v25.*i8 = evm_malloc 4.i256;
+        v26.i256 = ptr_to_int v25 i256;
+        mstore v26 -21855552483912501284291303069055441188061847755248476274203343518395480932352.i256 i256;
+        (v27.i256, v28.i1) = uaddo v26 4.i256;
+        br v28 block7 block9;
 
-    block1:
+    block7:
         evm_revert 0.i256 0.i256;
 
     block9:
-        v31.i256 = call %add_1 0.i256 32.i256;
-        v32.i1 = gt v31 v1;
-        br v32 block6 block7;
+        v35.i256 = bitcast v0 i256;
+        v15.i256 = evm_call v1 v35 v2 v26 4.i256 0.i256 0.i256;
+        v16.i256 = evm_return_data_size;
+        v17.*i8 = evm_malloc v16;
+        v18.i256 = ptr_to_int v17 i256;
+        evm_return_data_copy v18 0.i256 v16;
+        v34.i1 = is_zero v15;
+        br v34 block1 block11;
 
-    block6:
+    block1:
+        evm_revert v18 v16;
+
+    block11:
+        v51.i1 = lt v16 32.i256;
+        br v51 block12 block13;
+
+    block12:
         evm_revert 0.i256 0.i256;
 
-    block7:
-        v35.i256 = call %add_1 v0 0.i256;
-        v36.i256 = mload v35 i256;
-        return v36;
+    block13:
+        v69.i256 = call %add_1 0.i256 32.i256;
+        v70.i1 = gt v69 v16;
+        br v70 block16 block17;
+
+    block16:
+        evm_revert 0.i256 0.i256;
+
+    block17:
+        v72.i256 = call %add_1 v18 0.i256;
+        v73.i256 = mload v72 i256;
+        return v73;
 }
 
 func public %entry() {
@@ -53,30 +76,9 @@ func public %entry() {
 
     block1:
         v3.i256 = evm_address;
-        v17.*i8 = evm_malloc 4.i256;
-        v18.i256 = ptr_to_int v17 i256;
-        mstore v18 -21855552483912501284291303069055441188061847755248476274203343518395480932352.i256 i256;
-        (v20.i256, v21.i1) = uaddo v18 4.i256;
-        br v21 block5 block6;
-
-    block5:
-        evm_revert 0.i256 0.i256;
-
-    block6:
-        v23.i256 = evm_call 100000.i256 v3 0.i256 v18 4.i256 0.i256 0.i256;
-        v24.i256 = evm_return_data_size;
-        v25.*i8 = evm_malloc v24;
-        v26.i256 = ptr_to_int v25 i256;
-        evm_return_data_copy v26 0.i256 v24;
-        v27.i1 = is_zero v23;
-        br v27 block7 block8;
-
-    block7:
-        evm_revert v26 v24;
-
-    block8:
-        v28.i256 = call %decode_returndata v26 v24;
-        mstore 0.i32 v28 i256;
+        v16.@Addr = insert_value undef.@Addr 0.i256 v3;
+        v6.i256 = call %call_target v16 100000.i256 0.i256;
+        mstore 0.i32 v6 i256;
         evm_return 0.i8 32.i8;
 
     block2:

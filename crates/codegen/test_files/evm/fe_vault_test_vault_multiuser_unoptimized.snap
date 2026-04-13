@@ -39,13 +39,13 @@ functions:
   return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f: ir_blocks=1 ir_insts=11 vcode_ops=39 fixups=8 imm_bytes=4
     mem: scratch_words=0 stable_words=5 stable_mode=StaticAbs(base=0x100) entry_abs_words=3 abs_words_end=8
   solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head: ir_blocks=6 ir_insts=19 vcode_ops=66 fixups=4 imm_bytes=8
-    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=11 abs_words_end=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=8 abs_words_end=0
   solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish: ir_blocks=3 ir_insts=13 vcode_ops=28 fixups=1 imm_bytes=2
-    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=11 abs_words_end=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=8 abs_words_end=0
   solencoder_h1b9228b90dad6928_new: ir_blocks=1 ir_insts=7 vcode_ops=16 fixups=0 imm_bytes=2
-    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=11 abs_words_end=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=8 abs_words_end=0
   solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_write_word: ir_blocks=3 ir_insts=9 vcode_ops=23 fixups=1 imm_bytes=2
-    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=11 abs_words_end=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=8 abs_words_end=0
   soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563: ir_blocks=5 ir_insts=16 vcode_ops=49 fixups=6 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=0
   __VaultUser_init: ir_blocks=1 ir_insts=4 vcode_ops=8 fixups=2 imm_bytes=2
@@ -75,7 +75,7 @@ functions:
   evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__GetTotalShares_hbe2278c3233da528__5145d089cb2da672: ir_blocks=5 ir_insts=26 vcode_ops=87 fixups=11 imm_bytes=11
     mem: scratch_words=0 stable_words=5 stable_mode=StaticAbs(base=0xe0) entry_abs_words=2 abs_words_end=7
   evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__AddYield_h1b194739dad02c6e__f712b0a646b2bb64: ir_blocks=7 ir_insts=38 vcode_ops=122 fixups=14 imm_bytes=15
-    mem: scratch_words=0 stable_words=9 stable_mode=StaticAbs(base=0xe0) entry_abs_words=2 abs_words_end=11
+    mem: scratch_words=0 stable_words=6 stable_mode=StaticAbs(base=0xe0) entry_abs_words=2 abs_words_end=8
   evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__ProxyGetMyShares_h22fbe0bf58ab85ce__459f6c55c5a1059b: ir_blocks=5 ir_insts=29 vcode_ops=104 fixups=13 imm_bytes=12
     mem: scratch_words=0 stable_words=5 stable_mode=StaticAbs(base=0xe0) entry_abs_words=2 abs_words_end=7
   evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__ProxyWithdraw_h1ed1c85115544221__ae5519407fcbbd72: ir_blocks=5 ir_insts=34 vcode_ops=117 fixups=15 imm_bytes=13
@@ -714,33 +714,33 @@ solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head:
     SWAP1  // return v20;
     JUMP
 
-// func private %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish(v42.*@__fe_obj_tuple_4, v0.*@__fe_obj_SolEncoder_5)
+// func private %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish(v39.*@__fe_obj_tuple_4, v0.*@__fe_obj_SolEncoder_5)
 solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish:
   block0:
     JUMPDEST
-    DUP2  // v38.*i256 = gep v0 0.i256 2.i256;
+    DUP2  // v35.*i256 = gep v0 0.i256 2.i256;
     PUSH1 0x40 (64)
     ADD
-    MLOAD  // v39.i256 = mload v38 i256;
-    SWAP2  // v35.i256 = mload v34 i256;
+    MLOAD  // v36.i256 = mload v35 i256;
+    SWAP2  // v32.i256 = mload v31 i256;
     MLOAD
-    DUP1  // v43.i256 = sub v39 v35;
+    DUP1  // v41.i256 = sub v36 v32;
     DUP4
     SUB
-    SWAP1  // v44.i1 = lt v39 v35;
+    SWAP1  // v42.i1 = lt v36 v32;
     DUP1
     SWAP4
     LT
-    PUSH1 section_unit0  // br v44 block1 block2;
+    PUSH1 section_unit0  // br v42 block1 block2;
     JUMPI
   block2:
     JUMPDEST
-    SWAP2  // mstore v11 v35 i256;
+    SWAP2  // mstore v11 v32 i256;
     DUP2
     MSTORE
-    PUSH1 0x20 (32)  // v13.*i256 = gep v42 0.i256 1.i256;
+    PUSH1 0x20 (32)  // v13.*i256 = gep v39 0.i256 1.i256;
     ADD
-    MSTORE  // mstore v13 v43 i256;
+    MSTORE  // mstore v13 v41 i256;
     JUMP  // return;
 
 // func private %solencoder_h1b9228b90dad6928_new(v7.*@__fe_obj_SolEncoder_5)
@@ -1097,22 +1097,22 @@ decode_returndata__u256__3271ca15373d4483:
     SWAP1  // return v12;
     JUMP
 
-// func private %soldecoder_i__ha12a03fcb5ba844b_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b(v52.*@__fe_obj_SolDecoder_8, v0.*@__fe_obj_MemoryBytes_6)
+// func private %soldecoder_i__ha12a03fcb5ba844b_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b(v50.*@__fe_obj_SolDecoder_8, v0.*@__fe_obj_MemoryBytes_6)
 soldecoder_i__ha12a03fcb5ba844b_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b:
   block0:
     JUMPDEST
-    DUP2  // v48.*i256 = gep v0 0.i256 1.i256;
+    DUP2  // v46.*i256 = gep v0 0.i256 1.i256;
     PUSH1 0x20 (32)
     ADD
-    MLOAD  // v49.i256 = mload v48 i256;
-    SWAP2  // v47.i256 = mload v46 i256;
+    MLOAD  // v47.i256 = mload v46 i256;
+    SWAP2  // v45.i256 = mload v44 i256;
     MLOAD
-    DUP2  // mstore v9 v47 i256;
+    DUP2  // mstore v9 v45 i256;
     MSTORE
     DUP1  // v16.*i256 = gep v8 0.i256 1.i256;
     PUSH1 0x20 (32)
     ADD
-    SWAP1  // mstore v16 v49 i256;
+    SWAP1  // mstore v16 v47 i256;
     SWAP2
     SWAP1
     MSTORE
@@ -1122,7 +1122,7 @@ soldecoder_i__ha12a03fcb5ba844b_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54c
     PUSH0  // mstore v20 0.i256 i256;
     SWAP1
     MSTORE
-    PUSH1 0x60 (96)  // v21.*i256 = gep v52 0.i256 1.i256;
+    PUSH1 0x60 (96)  // v21.*i256 = gep v50 0.i256 1.i256;
     ADD
     PUSH0  // mstore v21 0.i256 i256;
     SWAP1
@@ -1447,61 +1447,61 @@ create2_stor_arg0_root_stor__Evm_hef0af3106e109414_VaultUser_hcb553b593515d281__
 evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__ProxyDeposit_he111d05e2ced69cd__69de45b2cdda8e37:
   block0:
     JUMPDEST
-    PUSH1 0x40 (64)  // v58.i256 = mload 64.i32 i256;
+    PUSH1 0x40 (64)  // v57.i256 = mload 64.i32 i256;
     MLOAD
-    DUP5  // v49.*i256 = gep v3 0.i256 1.i256;
+    DUP5  // v47.*i256 = gep v3 0.i256 1.i256;
     PUSH1 0x20 (32)
     ADD
-    MLOAD  // v50.i256 = mload v49 i256;
-    SWAP5  // v48.i256 = mload v47 i256;
+    MLOAD  // v48.i256 = mload v47 i256;
+    SWAP5  // v46.i256 = mload v45 i256;
     MLOAD
-    PUSH1 0xe0 (224)  // v53.*@__fe_obj_SolEncoder_5 = alloca @__fe_obj_SolEncoder_5;
-    DUP1  // call %solencoder_h1b9228b90dad6928_new v53;
+    PUSH1 0xe0 (224)  // v51.*@__fe_obj_SolEncoder_5 = alloca @__fe_obj_SolEncoder_5;
+    DUP1  // call %solencoder_h1b9228b90dad6928_new v51;
     PUSH1 `pc + (4)`
     SWAP1
     PUSH1 FuncRef(81)
     JUMP
     JUMPDEST
-    DUP1  // v30.i256 = call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head v53 68.i256;
+    DUP1  // v28.i256 = call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head v51 68.i256;
     PUSH1 0x44 (68)
     PUSH1 `pc + (4)`
     SWAP2
     PUSH1 FuncRef(76)
     JUMP
     JUMPDEST
-    PUSH29 0x1000000000000000000000000000000000000000000000000000000000 (431359146674410236714672241392314090778194310760649159697657763987456)  // mstore v30 431359146674410236714672241392314090778194310760649159697657763987456.i256 i256;
+    PUSH29 0x1000000000000000000000000000000000000000000000000000000000 (431359146674410236714672241392314090778194310760649159697657763987456)  // mstore v28 431359146674410236714672241392314090778194310760649159697657763987456.i256 i256;
     DUP2
     MSTORE
-    PUSH1 0x4 (4)  // v55.i256 = add v30 4.i256;
+    PUSH1 0x4 (4)  // v54.i256 = add v28 4.i256;
     DUP2
     ADD
-    SWAP1  // v56.i1 = lt v55 v30;
+    SWAP1  // v55.i1 = lt v54 v28;
     DUP2
     LT
-    PUSH1 section_unit0  // br v56 block5 block6;
+    PUSH1 section_unit0  // br v55 block5 block6;
     JUMPI
   block6:
     JUMPDEST
-    DUP2  // v37.*i256 = gep v53 0.i256 1.i256;
+    DUP2  // v35.*i256 = gep v51 0.i256 1.i256;
     POP
     PUSH2 0x100 (256)
-    MSTORE  // mstore v37 v55 i256;
-    DUP1  // call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_write_word v53 v48;
+    MSTORE  // mstore v35 v54 i256;
+    DUP1  // call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_write_word v51 v46;
     SWAP2
     PUSH1 `pc + (4)`
     SWAP2
     PUSH1 FuncRef(100)
     JUMP
     JUMPDEST
-    DUP1  // call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_write_word v53 v50;
+    DUP1  // call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_write_word v51 v48;
     SWAP6
     PUSH1 `pc + (4)`
     SWAP2
     PUSH1 FuncRef(100)
     JUMP
     JUMPDEST
-    PUSH2 0x140 (320)  // v54.*@__fe_obj_tuple_4 = alloca @__fe_obj_tuple_4;
-    DUP1  // call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish v54 v53;
+    PUSH2 0x140 (320)  // v52.*@__fe_obj_tuple_4 = alloca @__fe_obj_tuple_4;
+    DUP1  // call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish v52 v51;
     SWAP6
     PUSH1 `pc + (4)`
     SWAP2
@@ -1510,7 +1510,7 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__ProxyDepo
     JUMPDEST
     DUP5  // v9.i256 = mload v8 i256;
     MLOAD
-    SWAP5  // v11.*i256 = gep v54 0.i256 1.i256;
+    SWAP5  // v11.*i256 = gep v52 0.i256 1.i256;
     POP
     PUSH2 0x160 (352)
     MLOAD  // v12.i256 = mload v11 i256;
@@ -1552,7 +1552,7 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__ProxyDepo
     PUSH1 FuncRef(53)
     JUMP
     JUMPDEST
-    SWAP1  // mstore 64.i32 v58 i256;
+    SWAP1  // mstore 64.i32 v57 i256;
     PUSH1 0x40 (64)
     MSTORE
     SWAP2  // return v22;
@@ -1808,13 +1808,13 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__AddYield_
     POP
     PUSH1 0x40 (64)
     MLOAD
-    PUSH2 0x1ff (511)
+    PUSH2 0x19f (415)
     DUP2
     GT
     PUSH1 `pc + (4)`
     JUMPI
     POP
-    PUSH2 0x200 (512)
+    PUSH2 0x1a0 (416)
     JUMPDEST
     DUP2  // evm_return_data_copy v16 0.i256 v14;
     PUSH0
@@ -1842,7 +1842,7 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__AddYield_
     POP
     PUSH2 0x100 (256)
     MSTORE  // mstore v41 v14 i256;
-    PUSH2 0x180 (384)  // v45.*@__fe_obj_SolDecoder_8 = alloca @__fe_obj_SolDecoder_8;
+    PUSH2 0x120 (288)  // v45.*@__fe_obj_SolDecoder_8 = alloca @__fe_obj_SolDecoder_8;
     SWAP1  // call %soldecoder_i__ha12a03fcb5ba844b_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b v45 v39;
     PUSH1 `pc + (4)`
     SWAP2
@@ -1965,22 +1965,22 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__ProxyGetM
 evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__ProxyWithdraw_h1ed1c85115544221__ae5519407fcbbd72:
   block0:
     JUMPDEST
-    PUSH1 0x40 (64)  // v70.i256 = mload 64.i32 i256;
+    PUSH1 0x40 (64)  // v69.i256 = mload 64.i32 i256;
     MLOAD
-    DUP5  // v61.*i256 = gep v3 0.i256 1.i256;
+    DUP5  // v59.*i256 = gep v3 0.i256 1.i256;
     PUSH1 0x20 (32)
     ADD
-    MLOAD  // v62.i256 = mload v61 i256;
-    SWAP5  // v60.i256 = mload v59 i256;
+    MLOAD  // v60.i256 = mload v59 i256;
+    SWAP5  // v58.i256 = mload v57 i256;
     MLOAD
-    PUSH1 0xe0 (224)  // v65.*@__fe_obj_SolEncoder_5 = alloca @__fe_obj_SolEncoder_5;
-    DUP1  // call %solencoder_h1b9228b90dad6928_new v65;
+    PUSH1 0xe0 (224)  // v63.*@__fe_obj_SolEncoder_5 = alloca @__fe_obj_SolEncoder_5;
+    DUP1  // call %solencoder_h1b9228b90dad6928_new v63;
     PUSH1 `pc + (4)`
     SWAP1
     PUSH1 FuncRef(81)
     JUMP
     JUMPDEST
-    DUP1  // v23.i256 = call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head v65 68.i256;
+    DUP1  // v23.i256 = call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head v63 68.i256;
     PUSH1 0x44 (68)
     PUSH1 `pc + (4)`
     SWAP2
@@ -1990,36 +1990,36 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__ProxyWith
     PUSH29 0x1100000000000000000000000000000000000000000000000000000000 (458319093341560876509339256479333721451831455183189732178761374236672)  // mstore v23 458319093341560876509339256479333721451831455183189732178761374236672.i256 i256;
     DUP2
     MSTORE
-    PUSH1 0x4 (4)  // v67.i256 = add v23 4.i256;
+    PUSH1 0x4 (4)  // v66.i256 = add v23 4.i256;
     DUP2
     ADD
-    SWAP1  // v68.i1 = lt v67 v23;
+    SWAP1  // v67.i1 = lt v66 v23;
     DUP2
     LT
-    PUSH1 section_unit0  // br v68 block5 block7;
+    PUSH1 section_unit0  // br v67 block5 block7;
     JUMPI
   block7:
     JUMPDEST
-    DUP2  // v29.*i256 = gep v65 0.i256 1.i256;
+    DUP2  // v29.*i256 = gep v63 0.i256 1.i256;
     POP
     PUSH2 0x100 (256)
-    MSTORE  // mstore v29 v67 i256;
-    DUP1  // call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_write_word v65 v60;
+    MSTORE  // mstore v29 v66 i256;
+    DUP1  // call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_write_word v63 v58;
     SWAP2
     PUSH1 `pc + (4)`
     SWAP2
     PUSH1 FuncRef(100)
     JUMP
     JUMPDEST
-    DUP1  // call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_write_word v65 v62;
+    DUP1  // call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_write_word v63 v60;
     SWAP6
     PUSH1 `pc + (4)`
     SWAP2
     PUSH1 FuncRef(100)
     JUMP
     JUMPDEST
-    PUSH2 0x140 (320)  // v66.*@__fe_obj_tuple_4 = alloca @__fe_obj_tuple_4;
-    DUP1  // call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish v66 v65;
+    PUSH2 0x140 (320)  // v64.*@__fe_obj_tuple_4 = alloca @__fe_obj_tuple_4;
+    DUP1  // call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish v64 v63;
     SWAP6
     PUSH1 `pc + (4)`
     SWAP2
@@ -2028,7 +2028,7 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__ProxyWith
     JUMPDEST
     DUP5  // v9.i256 = mload v8 i256;
     MLOAD
-    SWAP5  // v11.*i256 = gep v66 0.i256 1.i256;
+    SWAP5  // v11.*i256 = gep v64 0.i256 1.i256;
     POP
     PUSH2 0x160 (352)
     MLOAD  // v12.i256 = mload v11 i256;
@@ -2070,7 +2070,7 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__ProxyWith
     PUSH1 FuncRef(53)
     JUMP
     JUMPDEST
-    SWAP1  // mstore 64.i32 v70 i256;
+    SWAP1  // mstore 64.i32 v69 i256;
     PUSH1 0x40 (64)
     MSTORE
     SWAP2  // return v22;

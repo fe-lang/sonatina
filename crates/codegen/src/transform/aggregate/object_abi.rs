@@ -688,7 +688,7 @@ fn objref_element_ty(ctx: &ModuleCtx, ty: Type) -> Option<Type> {
     Some(elem)
 }
 
-fn whole_object_slice(
+pub(crate) fn whole_object_slice(
     layout_cache: &mut shape::AggregateLayoutCache,
     ctx: &ModuleCtx,
     ty: Type,
@@ -707,7 +707,10 @@ fn whole_object_slice(
     }
 }
 
-fn fresh_root_blocks_are_pairwise_unreachable(function: &Function, roots: &[ValueId]) -> bool {
+pub(crate) fn fresh_root_blocks_are_pairwise_unreachable(
+    function: &Function,
+    roots: &[ValueId],
+) -> bool {
     let mut cfg = ControlFlowGraph::new();
     cfg.compute(function);
     let mut scc = CfgSccAnalysis::new();

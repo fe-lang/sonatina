@@ -1,4 +1,5 @@
 use cranelift_entity::SecondaryMap;
+use rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
 use rustc_hash::FxHashMap;
 use sonatina_ir::{
     BlockId, Function, InstId, InstSetExt, Module, ValueId,
@@ -24,29 +25,38 @@ pub(crate) fn compute_malloc_future_abs_words(
     isa: &Evm,
 ) -> FxHashMap<FuncRef, FxHashMap<InstId, u32>> {
     let abs_clobber_words = compute_abs_clobber_words(module, funcs, plan);
+    let mut results: Vec<_> = funcs
+        .par_iter()
+        .copied()
+        .map(|f| {
+            let func_plan = plan
+                .funcs
+                .get(&f)
+                .unwrap_or_else(|| panic!("missing memory plan for func {}", f.as_u32()));
+            let analysis = analyses
+                .get(&f)
+                .unwrap_or_else(|| panic!("missing analysis for func {}", f.as_u32()));
+            let map = module.func_store.view(f, |function| {
+                let mut cfg = ControlFlowGraph::new();
+                cfg.compute(function);
+                let ctx = FutureBoundsCtx {
+                    module: &module.ctx,
+                    isa,
+                    plan,
+                    func_plan,
+                    abs_clobber_words: &abs_clobber_words,
+                    analysis,
+                };
+                compute_future_bounds_for_func(function, &cfg, &ctx)
+            });
+            (f, map)
+        })
+        .collect();
+    results.sort_unstable_by_key(|(func, _)| func.as_u32());
+
     let mut out: FxHashMap<FuncRef, FxHashMap<InstId, u32>> = FxHashMap::default();
-    for &f in funcs {
-        let func_plan = plan
-            .funcs
-            .get(&f)
-            .unwrap_or_else(|| panic!("missing memory plan for func {}", f.as_u32()));
-        let analysis = analyses
-            .get(&f)
-            .unwrap_or_else(|| panic!("missing analysis for func {}", f.as_u32()));
-        let map = module.func_store.view(f, |function| {
-            let mut cfg = ControlFlowGraph::new();
-            cfg.compute(function);
-            let ctx = FutureBoundsCtx {
-                module: &module.ctx,
-                isa,
-                plan,
-                func_plan,
-                abs_clobber_words: &abs_clobber_words,
-                analysis,
-            };
-            compute_future_bounds_for_func(function, &cfg, &ctx)
-        });
-        out.insert(f, map);
+    for (func, map) in results {
+        out.insert(func, map);
     }
     out
 }

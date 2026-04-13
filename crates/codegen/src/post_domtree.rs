@@ -48,13 +48,13 @@ impl PostDomTree {
         self.exit = BlockId(self.entry.0 + 1);
 
         // Add edges from dummy entry block to real entry block and dummy exit block.
-        self.rcfg.add_edge(self.entry, real_entry);
-        self.rcfg.add_edge(self.entry, self.exit);
+        self.rcfg.add_succ_block(self.entry, real_entry);
+        self.rcfg.add_succ_block(self.entry, self.exit);
 
         // Add edges from real exit blocks to dummy exit block.
         let real_exits = std::mem::take(&mut self.rcfg.exits);
         for exit in &real_exits {
-            self.rcfg.add_edge(*exit, self.exit);
+            self.rcfg.add_succ_block(*exit, self.exit);
         }
 
         self.rcfg.reverse_edges(self.exit, &[self.entry]);

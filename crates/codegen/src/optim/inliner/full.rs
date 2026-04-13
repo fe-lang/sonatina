@@ -259,7 +259,8 @@ pub(super) fn try_inline_callsite_full(
             .layout
             .last_inst_of(callsite_block)
             .expect("split_block_at inserts a terminator in the callsite block");
-        func.dfg.rewrite_branch_dest(term, cont_block, entry_new);
+        func.dfg
+            .rewrite_branch_edges_to_block(term, cont_block, entry_new);
     }
 
     if !call_results.is_empty() {

@@ -540,10 +540,16 @@ impl DataFlowGraph {
         self.untrack_inst(inst_id);
 
         let results = std::mem::take(&mut self.inst_results[inst_id]);
+        let inst_text = self.insts[inst_id].as_text();
         for value_id in results {
+            let users = self.users[value_id]
+                .iter()
+                .map(|&user| format!("{user:?}:{}", self.insts[user].as_text()))
+                .collect::<Vec<_>>();
             assert!(
                 self.users_num(value_id) == 0,
-                "cannot delete inst {inst_id:?} with live result users"
+                "cannot delete inst {inst_id:?} ({inst_text}) with live result users: result={value_id:?} ty={:?} users={users:?}",
+                self.value_ty(value_id),
             );
             self.delete_value(value_id);
         }
@@ -693,25 +699,61 @@ impl DataFlowGraph {
         Some(r.args().as_slice())
     }
 
-    pub fn rewrite_branch_dest(&mut self, inst_id: InstId, from: BlockId, to: BlockId) {
+    pub fn rewrite_branch_edges_to_block(&mut self, inst_id: InstId, from: BlockId, to: BlockId) {
         let inst_set = self.ctx.inst_set;
         let Some(branch) = self.branch_info(inst_id) else {
             return;
         };
 
-        let new_inst = branch.rewrite_dest(inst_set, from, to);
+        let new_inst = branch.rewrite_edges_to_block(inst_set, from, to);
         self.remove_old_users(inst_id, new_inst.as_ref());
 
         self.insts[inst_id] = new_inst;
     }
 
-    pub fn remove_branch_dest(&mut self, inst_id: InstId, dest: BlockId) {
+    pub fn remove_branch_edges_to_block(&mut self, inst_id: InstId, dest: BlockId) {
         let inst_set = self.ctx.inst_set;
         let Some(branch) = self.branch_info(inst_id) else {
             return;
         };
 
-        let new_inst = branch.remove_dest(inst_set, dest);
+        let new_inst = branch.remove_edges_to_block(inst_set, dest);
+        self.remove_old_users(inst_id, new_inst.as_ref());
+
+        self.insts[inst_id] = new_inst;
+    }
+
+    pub fn rewrite_branch_edge_dest(&mut self, inst_id: InstId, edge_idx: usize, to: BlockId) {
+        let inst_set = self.ctx.inst_set;
+        let Some(branch) = self.branch_info(inst_id) else {
+            return;
+        };
+
+        let new_inst = branch.rewrite_edge_dest(inst_set, edge_idx, to);
+        self.remove_old_users(inst_id, new_inst.as_ref());
+
+        self.insts[inst_id] = new_inst;
+    }
+
+    pub fn remove_branch_edge(&mut self, inst_id: InstId, edge_idx: usize) {
+        let inst_set = self.ctx.inst_set;
+        let Some(branch) = self.branch_info(inst_id) else {
+            return;
+        };
+
+        let new_inst = branch.remove_edge(inst_set, edge_idx);
+        self.remove_old_users(inst_id, new_inst.as_ref());
+
+        self.insts[inst_id] = new_inst;
+    }
+
+    pub fn retain_branch_edges(&mut self, inst_id: InstId, keep_mask: &[bool]) {
+        let inst_set = self.ctx.inst_set;
+        let Some(branch) = self.branch_info(inst_id) else {
+            return;
+        };
+
+        let new_inst = branch.retain_edges(inst_set, keep_mask);
         self.remove_old_users(inst_id, new_inst.as_ref());
 
         self.insts[inst_id] = new_inst;

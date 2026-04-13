@@ -900,6 +900,129 @@ block2:
 }
 
 #[test]
+fn dyn_sp_plan_is_deterministic_across_runs() {
+    let src = r#"
+target = "evm-ethereum-osaka"
+
+func public %entry(v0.i256) -> i256 {
+block0:
+    v1.i1 = eq v0 0.i256;
+    br v1 block1 block2;
+
+block1:
+    v2.i256 = call %helper 4.i256;
+    return v2;
+
+block2:
+    v3.i256 = call %ready_caller v0;
+    return v3;
+}
+
+func private %helper(v0.i256) -> i256 {
+block0:
+    v1.i1 = eq v0 0.i256;
+    br v1 block1 block2;
+
+block1:
+    return 0.i256;
+
+block2:
+    v2.*i256 = alloca i256;
+    mstore v2 v0 i256;
+    v3.i256 = call %ready_caller v0;
+    v4.i256 = sub v0 1.i256;
+    v5.i256 = call %target v4;
+    v6.i256 = mload v2 i256;
+    v7.i256 = add v3 v5;
+    v8.i256 = add v7 v6;
+    return v8;
+}
+
+func private %ready_caller(v0.i256) -> i256 {
+block0:
+    v1.i1 = eq v0 0.i256;
+    br v1 block1 block2;
+
+block1:
+    return 0.i256;
+
+block2:
+    v2.*i256 = alloca i256;
+    mstore v2 v0 i256;
+    v3.i256 = call %target v0;
+    v4.i256 = mload v2 i256;
+    v5.i256 = add v3 v4;
+    return v5;
+}
+
+func private %target(v0.i256) -> i256 {
+block0:
+    v1.i1 = eq v0 0.i256;
+    br v1 block1 block2;
+
+block1:
+    return 0.i256;
+
+block2:
+    v2.*i256 = alloca i256;
+    mstore v2 v0 i256;
+    v3.i256 = sub v0 1.i256;
+    v4.i256 = call %target v3;
+    v5.i256 = mload v2 i256;
+    v6.i256 = add v4 v5;
+    return v6;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}
+"#;
+
+    let mut expected_frontier_init_calls = None;
+    let mut expected_checked_frontier_init_calls = None;
+    let mut expected_entry_live_frame = None;
+    let mut expected_frame_summaries = None;
+
+    for _ in 0..8 {
+        let plan = dyn_sp_plan_from_src(src).plan;
+        if let Some(expected) = &expected_frontier_init_calls {
+            assert_eq!(
+                &plan.frontier_init_calls, expected,
+                "frontier init calls changed across runs"
+            );
+        } else {
+            expected_frontier_init_calls = Some(plan.frontier_init_calls.clone());
+        }
+        if let Some(expected) = &expected_checked_frontier_init_calls {
+            assert_eq!(
+                &plan.checked_frontier_init_calls, expected,
+                "checked frontier init calls changed across runs"
+            );
+        } else {
+            expected_checked_frontier_init_calls = Some(plan.checked_frontier_init_calls.clone());
+        }
+        if let Some(expected) = &expected_entry_live_frame {
+            assert_eq!(
+                &plan.entry_live_frame, expected,
+                "entry live frame changed across runs"
+            );
+        } else {
+            expected_entry_live_frame = Some(plan.entry_live_frame.clone());
+        }
+        if let Some(expected) = &expected_frame_summaries {
+            assert_eq!(
+                &plan.frame_summaries, expected,
+                "frame summaries changed across runs"
+            );
+        } else {
+            expected_frame_summaries = Some(plan.frame_summaries.clone());
+        }
+    }
+}
+
+#[test]
 fn noreturn_call_skips_continuation_marker_and_preserve() {
     let parsed = parse_module(
         r#"
@@ -1095,6 +1218,151 @@ object @Contract {
     assert!(
         !prepared
             .function_plan(names["f"])
+            .expect("function plan for %f")
+            .alloc
+            .uses_scratch_spills(),
+        "recursive caller should treat self-call as a scratch barrier"
+    );
+}
+
+#[test]
+fn prepare_section_scratch_analysis_is_deterministic_across_runs() {
+    let parsed = parse_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+func private %helper(v0.i256) -> i256 {
+block0:
+    v1.i256 = add v0 5.i256;
+    return v1;
+}
+
+func public %f(v0.i256) -> i256 {
+block0:
+    v1.i1 = eq v0 0.i256;
+    br v1 block1 block2;
+
+block1:
+    return 0.i256;
+
+block2:
+    v2.*i256 = alloca i256;
+    mstore v2 v0 i256;
+    v3.i256 = mload v2 i256;
+    v4.i256 = add v3 1.i256;
+    v5.i256 = add v3 2.i256;
+    v6.i256 = add v3 3.i256;
+    v7.i256 = add v3 4.i256;
+    mstore v2 v7 i256;
+    v8.i256 = sub v3 1.i256;
+    v9.i256 = call %f v8;
+    v10.i256 = mload v2 i256;
+    v11.i256 = add v9 v10;
+    v12.i256 = add v11 v4;
+    v13.i256 = add v12 v5;
+    v14.i256 = add v13 v6;
+    return v14;
+}
+
+func public %entry() {
+block0:
+    v0.i256 = call %helper 7.i256;
+    v1.i256 = call %f v0;
+    mstore 0.i32 v1 i256;
+    evm_return 0.i8 32.i8;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}
+"#,
+    )
+    .unwrap();
+
+    let funcs = parsed.module.funcs();
+    let entry = find_func(&parsed.module, "entry");
+    let recursive = find_func(&parsed.module, "f");
+    let backend = EvmBackend::new(Evm::new(TargetTriple {
+        architecture: Architecture::Evm,
+        vendor: Vendor::Ethereum,
+        operating_system: OperatingSystem::Evm(EvmVersion::Osaka),
+    }))
+    .with_stackify_reach_depth(4);
+
+    let mut expected_func_order: Option<Vec<FuncRef>> = None;
+    let mut expected_spill_summary: Option<Vec<(String, bool)>> = None;
+    let mut expected_mem_plan: Option<String> = None;
+
+    for _ in 0..8 {
+        let prepared = backend
+            .prepare_section(work_module_with_entry(&parsed.module, &funcs, entry))
+            .expect("prepare should succeed");
+        let func_order = prepared.funcs().to_vec();
+        let spill_summary: Vec<_> = prepared
+            .funcs()
+            .iter()
+            .copied()
+            .map(|func| {
+                (
+                    prepared
+                        .module()
+                        .ctx
+                        .func_sig(func, |sig| sig.name().to_string()),
+                    prepared
+                        .function_plan(func)
+                        .expect("function plan should exist")
+                        .alloc
+                        .uses_scratch_spills(),
+                )
+            })
+            .collect();
+        let mem_plan = backend.snapshot_mem_plan_detail(&prepared);
+
+        if let Some(expected) = &expected_func_order {
+            assert_eq!(
+                func_order.as_slice(),
+                expected.as_slice(),
+                "function order changed across runs"
+            );
+        } else {
+            expected_func_order = Some(func_order);
+        }
+        if let Some(expected) = &expected_spill_summary {
+            assert_eq!(
+                spill_summary.as_slice(),
+                expected.as_slice(),
+                "scratch spill decisions changed across runs"
+            );
+        } else {
+            expected_spill_summary = Some(spill_summary);
+        }
+        if let Some(expected) = &expected_mem_plan {
+            assert_eq!(
+                mem_plan.as_str(),
+                expected.as_str(),
+                "mem plan changed across runs"
+            );
+        } else {
+            expected_mem_plan = Some(mem_plan);
+        }
+    }
+
+    assert!(
+        !expected_spill_summary
+            .expect("spill summary should be recorded")
+            .into_iter()
+            .find(|(name, _)| name == "f")
+            .expect("recursive function should be present")
+            .1,
+        "recursive caller should still avoid scratch spills"
+    );
+    assert!(
+        !backend
+            .prepare_section(work_module_with_entry(&parsed.module, &funcs, entry))
+            .expect("prepare should succeed")
+            .function_plan(recursive)
             .expect("function plan for %f")
             .alloc
             .uses_scratch_spills(),
