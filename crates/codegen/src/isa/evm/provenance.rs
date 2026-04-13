@@ -326,22 +326,17 @@ pub(crate) fn compute_provenance(
                     }
                     EvmInstKind::Call(call) => {
                         let summary = callee_summary(*call.callee());
-                        for (src_idx, dst_args) in summary.arg_may_store_to_args.iter().enumerate()
-                        {
-                            let Some(&src_arg) = call.args().get(src_idx) else {
+                        for (src_idx, &src_arg) in call.args().iter().enumerate() {
+                            if summary.arg_store_targets(src_idx).is_empty() {
                                 continue;
-                            };
+                            }
                             let src_prov = prov[src_arg].clone();
-                            for &dst_idx in dst_args {
-                                let Some(&dst_arg) = call.args().get(dst_idx as usize) else {
-                                    continue;
-                                };
+                            for dst_arg in summary.call_arg_store_dest_args(src_idx, call.args()) {
                                 changed |= store_local_mem(&mut mem, &prov[dst_arg], &src_prov);
                             }
                         }
-                        let arg_may_be_returned = summary.arg_may_be_returned;
                         for (idx, &arg) in call.args().iter().enumerate() {
-                            if arg_may_be_returned.get(idx).copied().unwrap_or(false) {
+                            if summary.arg_may_be_returned(idx) {
                                 let _ = next.union_with(&prov[arg]);
                             }
                         }
