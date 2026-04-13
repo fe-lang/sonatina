@@ -6,19 +6,19 @@ input_file: test_files/evm/lazy_frame_exit_before_action_regression.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 193 bytes
-  total: 193 bytes
+  section runtime: 213 bytes
+  total: 213 bytes
 
 functions:
-  f: ir_blocks=3 ir_insts=8 vcode_ops=53 fixups=4 imm_bytes=13
+  f: ir_blocks=3 ir_insts=8 vcode_ops=71 fixups=5 imm_bytes=15
     mem: scratch_words=0 stable_words=1 stable_mode=DynamicFrame entry_abs_words=0 abs_words_end=0
-  g: ir_blocks=5 ir_insts=17 vcode_ops=87 fixups=9 imm_bytes=13
+  g: ir_blocks=5 ir_insts=17 vcode_ops=96 fixups=9 imm_bytes=14
     mem: scratch_words=0 stable_words=1 stable_mode=DynamicFrame entry_abs_words=0 abs_words_end=0
   entry: ir_blocks=1 ir_insts=3 vcode_ops=11 fixups=2 imm_bytes=1
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=21713 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=713
+  case ok: calldata_len=0 success reason=Return gas_used=21797 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=797
 
 
 --------------- DEBUG ---------------
@@ -27,9 +27,18 @@ evm:
 f:
   block0:
     JUMPDEST
+    PUSH1 0x80 (128)
+    MLOAD
+    DUP1
+    PUSH1 `pc + (7)`
+    JUMPI
+    POP
     PUSH1 0xa0 (160)
+    DUP1
     PUSH1 0x80 (128)
     MSTORE
+    JUMPDEST
+    POP
     ISZERO  // br v0 block1 block2;
     PUSH1 block2
     JUMPI
@@ -41,6 +50,7 @@ f:
     JUMPDEST
     PUSH1 0x80 (128)  // v1.*i256 = alloca i256;
     MLOAD
+    DUP1
     PUSH1 0x40 (64)
     MLOAD
     DUP2
@@ -51,11 +61,18 @@ f:
     SWAP1
     JUMPDEST
     POP
-    PUSH1 0x20 (32)
+    PUSH1 0x40 (64)
     ADD
+    DUP2
+    PUSH1 0x20 (32)
+    DUP3
+    SUB
+    MSTORE
+    SWAP1
+    POP
     PUSH1 0x80 (128)
     MSTORE
-    PUSH1 0x20 (32)
+    PUSH1 0x40 (64)
     PUSH1 0x80 (128)
     MLOAD
     SUB
@@ -76,6 +93,7 @@ f:
     PUSH1 0x80 (128)
     MLOAD
     SUB
+    MLOAD
     PUSH1 0x80 (128)
     MSTORE
     ADD  // v4.i256 = add v2 v3;
@@ -97,6 +115,7 @@ g:
     JUMPDEST
     PUSH1 0x80 (128)  // v1.*i256 = alloca i256;
     MLOAD
+    DUP1
     PUSH1 0x40 (64)
     MLOAD
     DUP2
@@ -107,11 +126,18 @@ g:
     SWAP1
     JUMPDEST
     POP
-    PUSH1 0x20 (32)
+    PUSH1 0x40 (64)
     ADD
+    DUP2
+    PUSH1 0x20 (32)
+    DUP3
+    SUB
+    MSTORE
+    SWAP1
+    POP
     PUSH1 0x80 (128)
     MSTORE
-    PUSH1 0x20 (32)
+    PUSH1 0x40 (64)
     PUSH1 0x80 (128)
     MLOAD
     SUB
@@ -152,6 +178,7 @@ g:
     PUSH1 0x80 (128)
     MLOAD
     SUB
+    MLOAD
     PUSH1 0x80 (128)
     MSTORE
     SWAP3  // v9.i1 = eq v3 v5;

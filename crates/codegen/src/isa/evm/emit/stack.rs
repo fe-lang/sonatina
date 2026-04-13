@@ -371,6 +371,13 @@ fn dyn_frame_link_sp_relative_bytes() -> u32 {
         .expect("frame slot byte offset overflow")
 }
 
+fn debug_assert_dyn_frame_has_link_slot(frame_size_slots: u32) {
+    debug_assert!(
+        dyn_frame_total_slots(frame_size_slots) > frame_size_slots,
+        "dynamic frames must reserve a hidden caller-SP link slot"
+    );
+}
+
 pub(crate) fn frame_slot_sp_relative_bytes(frame_size_slots: u32, offset_words: u32) -> u32 {
     let sp_relative_words = dyn_frame_total_slots(frame_size_slots)
         .checked_sub(offset_words)
@@ -697,6 +704,7 @@ pub(crate) fn enter_frame_initialized(ctx: &mut Lower<OpCode>, frame_slots: u32)
     if frame_slots == 0 {
         return;
     }
+    debug_assert_dyn_frame_has_link_slot(frame_slots);
 
     let frame_bytes = dyn_frame_total_slots(frame_slots)
         .checked_mul(WORD_BYTES)
@@ -729,7 +737,10 @@ pub(crate) fn leave_frame(ctx: &mut Lower<OpCode>, frame_slots: u32) {
     if frame_slots == 0 {
         return;
     }
+    debug_assert_dyn_frame_has_link_slot(frame_slots);
 
+    // Restore the caller SP from the hidden link slot so heap clamps inside the callee
+    // cannot skew the caller's visible frame base on return.
     push_bytes(ctx, &u32_to_be(dyn_frame_link_sp_relative_bytes()));
     push_bytes(ctx, &[DYN_SP_SLOT]);
     ctx.push(OpCode::MLOAD);

@@ -25,7 +25,7 @@ pub use backend::{EvmBackend, LateCleanupProfile, PushWidthPolicy};
 pub use late_alias::canonicalize_alias_value;
 pub use prepare::EvmPreparedSection;
 
-pub(crate) use dyn_sp::FrontierInitKind;
+pub(crate) use dyn_sp::DynSpInitKind;
 pub(crate) use emit::{
     fold_stack_actions, immediate_u32, is_plain_inst, is_push_opcode, referenced_insn_label_targets,
 };

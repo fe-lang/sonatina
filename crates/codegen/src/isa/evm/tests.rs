@@ -5,7 +5,7 @@ use crate::{
     domtree::DomTree,
     liveness::{InstLiveness, Liveness},
     machinst::{
-        lower::SectionWorkModule,
+        lower::{LoweredFunction, SectionWorkModule},
         vcode::{Label, VCode, VCodeFixup},
     },
     optim::pipeline::Pipeline,
@@ -22,7 +22,7 @@ use sonatina_parser::parse_module;
 use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
 
 use self::{
-    dyn_sp::{DynSpPlan, compute_dyn_sp_plan},
+    dyn_sp::{DynSpInitKind, DynSpPlan, compute_dyn_sp_plan},
     emit::{
         FinalAlloc, materialize_jumpdests, prune_redundant_opcode_sequences,
         rewrite_evm_local_fallthrough_layout,
@@ -177,6 +177,23 @@ fn work_module_with_entry(
 
 fn work_module(module: &Module, funcs: &[FuncRef]) -> SectionWorkModule {
     work_module_with_entry(module, funcs, funcs[0])
+}
+
+fn test_backend() -> EvmBackend {
+    EvmBackend::new(Evm::new(TargetTriple {
+        architecture: Architecture::Evm,
+        vendor: Vendor::Ethereum,
+        operating_system: OperatingSystem::Evm(EvmVersion::Osaka),
+    }))
+}
+
+fn first_memory_op(lowered: &LoweredFunction<OpCode>) -> Option<u8> {
+    lowered
+        .block_order
+        .iter()
+        .flat_map(|&block| lowered.vcode.block_insns(block))
+        .map(|inst| lowered.vcode.insts[inst] as u8)
+        .find(|op| *op == OpCode::MLOAD as u8 || *op == OpCode::MSTORE as u8)
 }
 
 fn rewrite_local_fallthrough_order_from_src(
@@ -492,7 +509,7 @@ block2:
     );
 
     let f = ctx.names["f"];
-    assert!(ctx.plan.entry_init);
+    assert_eq!(ctx.plan.entry_init, Some(DynSpInitKind::Checked));
     assert!(
         ctx.plan
             .frontier_init_calls
@@ -528,33 +545,128 @@ block2:
     .unwrap();
 
     let f = find_func(&parsed.module, "f");
-    let backend = EvmBackend::new(Evm::new(TargetTriple {
-        architecture: Architecture::Evm,
-        vendor: Vendor::Ethereum,
-        operating_system: OperatingSystem::Evm(EvmVersion::Osaka),
-    }));
+    let backend = test_backend();
     let prepared = backend
         .prepare_section(work_module_with_entry(&parsed.module, &[f], f))
         .expect("prepare should succeed");
     let function_plan = prepared.function_plan(f).expect("missing function plan");
-    assert!(function_plan.dyn_sp_plan.entry_init);
+    assert_eq!(
+        function_plan.dyn_sp_plan.entry_init,
+        Some(DynSpInitKind::Checked)
+    );
     assert!(function_plan.dyn_sp_plan.entry_live_frame);
 
     let lowered = backend
         .lower_function(&prepared, f)
         .expect("function lowers");
-    let first_mem_op = lowered
-        .block_order
-        .iter()
-        .flat_map(|&block| lowered.vcode.block_insns(block))
-        .map(|inst| lowered.vcode.insts[inst] as u8)
-        .find(|op| *op == OpCode::MLOAD as u8 || *op == OpCode::MSTORE as u8)
-        .expect("entry lowering should touch dyn_sp");
+    let first_mem_op = first_memory_op(&lowered).expect("entry lowering should touch dyn_sp");
 
     assert_eq!(
         first_mem_op,
         OpCode::MLOAD as u8,
         "recursive entry lowering must guard dyn_sp init before writing it"
+    );
+}
+
+#[test]
+fn nonrecursive_entry_lowering_skips_dyn_sp_init() {
+    let parsed = parse_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+func public %entry() {
+block0:
+    evm_return 0.i8 0.i8;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}
+"#,
+    )
+    .unwrap();
+
+    let entry = find_func(&parsed.module, "entry");
+    let backend = test_backend();
+    let prepared = backend
+        .prepare_section(work_module_with_entry(&parsed.module, &[entry], entry))
+        .expect("prepare should succeed");
+    let function_plan = prepared
+        .function_plan(entry)
+        .expect("missing function plan");
+    assert_eq!(function_plan.dyn_sp_plan.entry_init, None);
+
+    let lowered = backend
+        .lower_function(&prepared, entry)
+        .expect("function lowers");
+    assert_eq!(
+        first_memory_op(&lowered),
+        None,
+        "entry without dyn-sp init should not emit dyn-sp memory ops"
+    );
+}
+
+#[test]
+fn recursive_entry_without_live_frame_initializes_dyn_sp_directly() {
+    let parsed = parse_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+func public %f(v0.i1) -> i256 {
+block0:
+    br v0 block1 block2;
+ 
+block1:
+    return 0.i256;
+ 
+block2:
+    v1.i256 = call %f 1.i1;
+    v2.*i256 = alloca i256;
+    mstore v2 5.i256 i256;
+    v3.i256 = call %sink v2;
+    v4.i256 = mload v2 i256;
+    v5.i256 = add v1 v3;
+    v6.i256 = add v5 v4;
+    return v6;
+}
+
+func private %sink(v0.*i256) -> i256 {
+block0:
+    v1.i256 = mload v0 i256;
+    return v1;
+}
+
+object @Contract {
+  section runtime {
+    entry %f;
+  }
+}
+"#,
+    )
+    .unwrap();
+
+    let f = find_func(&parsed.module, "f");
+    let backend = test_backend();
+    let prepared = backend
+        .prepare_section(work_module_with_entry(&parsed.module, &[f], f))
+        .expect("prepare should succeed");
+    let function_plan = prepared.function_plan(f).expect("missing function plan");
+    assert_eq!(
+        function_plan.dyn_sp_plan.entry_init,
+        Some(DynSpInitKind::Always)
+    );
+    assert!(!function_plan.dyn_sp_plan.entry_live_frame);
+
+    let lowered = backend
+        .lower_function(&prepared, f)
+        .expect("function lowers");
+    let first_mem_op = first_memory_op(&lowered).expect("entry lowering should touch dyn_sp");
+    assert_eq!(
+        first_mem_op,
+        OpCode::MSTORE as u8,
+        "entry without live-frame reentry should initialize dyn_sp directly"
     );
 }
 
@@ -696,7 +808,7 @@ block2:
             .expect("call to ready")
     });
 
-    assert!(!ctx.plan.entry_init);
+    assert_eq!(ctx.plan.entry_init, None);
     assert!(frontier_calls.contains(&call_inst));
     assert!(
         ctx.plan
@@ -1038,6 +1150,7 @@ object @Contract {
 
     let mut expected_frontier_init_calls = None;
     let mut expected_checked_frontier_init_calls = None;
+    let mut expected_entry_init = None;
     let mut expected_entry_live_frame = None;
     let mut expected_frame_summaries = None;
 
@@ -1058,6 +1171,11 @@ object @Contract {
             );
         } else {
             expected_checked_frontier_init_calls = Some(plan.checked_frontier_init_calls.clone());
+        }
+        if let Some(expected) = expected_entry_init {
+            assert_eq!(plan.entry_init, expected, "entry init changed across runs");
+        } else {
+            expected_entry_init = Some(plan.entry_init);
         }
         if let Some(expected) = &expected_entry_live_frame {
             assert_eq!(

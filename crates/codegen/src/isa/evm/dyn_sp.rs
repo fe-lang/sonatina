@@ -13,7 +13,7 @@ use super::{
 
 #[derive(Clone, Default)]
 pub(crate) struct DynSpPlan {
-    pub(crate) entry_init: bool,
+    pub(crate) entry_init: Option<DynSpInitKind>,
     pub(crate) frontier_init_calls: FxHashMap<FuncRef, FxHashSet<InstId>>,
     pub(crate) checked_frontier_init_calls: FxHashMap<FuncRef, FxHashSet<InstId>>,
     pub(crate) entry_live_frame: FxHashMap<FuncRef, bool>,
@@ -22,14 +22,14 @@ pub(crate) struct DynSpPlan {
 
 #[derive(Clone, Default)]
 pub(crate) struct FuncDynSpPlan {
-    pub(crate) entry_init: bool,
+    pub(crate) entry_init: Option<DynSpInitKind>,
     pub(crate) frontier_init_calls: FxHashSet<InstId>,
     pub(crate) checked_frontier_init_calls: FxHashSet<InstId>,
     pub(crate) entry_live_frame: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum FrontierInitKind {
+pub(crate) enum DynSpInitKind {
     Always,
     Checked,
 }
@@ -177,7 +177,6 @@ pub(crate) fn compute_dyn_sp_plan(
         }
     }
 
-    let entry_init = ready_sccs.contains(&scc.scc_ref(section_entry));
     let mut frontier_init_calls: FxHashMap<FuncRef, FxHashSet<InstId>> = FxHashMap::default();
     let mut checked_frontier_init_calls: FxHashMap<FuncRef, FxHashSet<InstId>> =
         FxHashMap::default();
@@ -254,6 +253,17 @@ pub(crate) fn compute_dyn_sp_plan(
         let state = entry_states.get(&func).copied().unwrap_or_default();
         entry_live_frame.insert(func, state.maybe_live_frame);
     }
+    let entry_init = if !ready_sccs.contains(&scc.scc_ref(section_entry)) {
+        None
+    } else if entry_live_frame
+        .get(&section_entry)
+        .copied()
+        .unwrap_or(false)
+    {
+        Some(DynSpInitKind::Checked)
+    } else {
+        Some(DynSpInitKind::Always)
+    };
 
     DynSpPlan {
         entry_init,
