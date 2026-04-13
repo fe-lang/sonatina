@@ -11,7 +11,7 @@ use sonatina_ir::{
 
 use crate::{
     cfg_edit::{CfgEditor, CleanupMode},
-    optim::call_purity::is_removable_pure_call,
+    optim::call_purity::is_nonmutating_returning_call,
 };
 
 use super::{InlineStats, InlinerConfig};
@@ -323,7 +323,7 @@ fn collect_splice_body(
             return None;
         }
 
-        if config.splice_require_pure && !is_pure_splice_inst(callee, inst_id) {
+        if config.splice_require_pure && !is_splice_safe_inst(callee, inst_id) {
             stats.skipped_not_pure += 1;
             stats.skipped_effectful += 1;
             return None;
@@ -344,9 +344,9 @@ fn collect_splice_body(
     Some(CollectedSpliceBody { const_values, body })
 }
 
-fn is_pure_splice_inst(callee: &Function, inst_id: InstId) -> bool {
+fn is_splice_safe_inst(callee: &Function, inst_id: InstId) -> bool {
     if callee.dfg.call_info(inst_id).is_some() {
-        return is_removable_pure_call(callee, inst_id);
+        return is_nonmutating_returning_call(callee, inst_id);
     }
 
     callee.dfg.has_value_semantics(inst_id)
