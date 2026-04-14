@@ -454,7 +454,7 @@ fn base_object_is_live(func: &Function, base: &BaseObject) -> bool {
 fn value_key_is_live(func: &Function, key: &ValueKey) -> bool {
     match key {
         ValueKey::Imm(_) => true,
-        ValueKey::Value(value) => func.dfg.has_value(*value),
+        ValueKey::Arg(value) => func.dfg.has_value(*value),
         ValueKey::Expr(expr) => match expr.as_ref() {
             KeyExpr::Unary { arg, .. } | KeyExpr::Cast { arg, .. } => value_key_is_live(func, arg),
             KeyExpr::Binary { lhs, rhs, .. } => {
@@ -845,6 +845,63 @@ mod tests {
 
         assert!(run_solver(&mut builder.func));
         assert_eq!(count_insts::<Mload>(&builder.func), 0);
+
+        let add_inst = builder
+            .func
+            .dfg
+            .value_inst(loop_sum)
+            .expect("loop sum should stay defined by an add");
+        let add = <&Add as InstDowncast>::downcast(is, builder.func.dfg.inst(add_inst))
+            .expect("loop use should stay as an add");
+        assert_eq!(
+            builder.func.dfg.value_imm(*add.lhs()),
+            Some(Immediate::I256(I256::from(7)))
+        );
+        assert_eq!(
+            builder.func.dfg.value_imm(*add.rhs()),
+            Some(Immediate::I256(I256::from(1)))
+        );
+    }
+
+    #[test]
+    fn forwards_loop_invariant_sload_with_initially_unsolved_backedge() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[Type::I1, Type::I256], Type::I256);
+        let is = evm.inst_set();
+        let carried = builder.declare_var(Type::I256);
+
+        let entry = builder.append_block();
+        let header = builder.append_block();
+        let body = builder.append_block();
+        let exit = builder.append_block();
+
+        builder.switch_to_block(entry);
+        let cond = builder.args()[0];
+        let base = builder.args()[1];
+        let zero = builder.make_imm_value(I256::from(0));
+        let one = builder.make_imm_value(I256::from(1));
+        let seven = builder.make_imm_value(I256::from(7));
+        let slot = builder.insert_inst_with(|| Add::new(is, base, one), Type::I256);
+        builder.insert_inst_no_result_with(|| EvmSstore::new(is, slot, seven));
+        builder.def_var(carried, zero);
+        builder.insert_inst_no_result_with(|| Jump::new(is, header));
+
+        builder.switch_to_block(header);
+        builder.insert_inst_no_result_with(|| Br::new(is, cond, exit, body));
+
+        builder.switch_to_block(body);
+        let loop_load = builder.insert_inst_with(|| EvmSload::new(is, slot), Type::I256);
+        let loop_sum = builder.insert_inst_with(|| Add::new(is, loop_load, one), Type::I256);
+        builder.def_var(carried, loop_sum);
+        builder.insert_inst_no_result_with(|| Jump::new(is, header));
+
+        builder.switch_to_block(exit);
+        let result = builder.use_var(carried);
+        builder.insert_inst_no_result_with(|| Return::new_single(is, result));
+        builder.seal_all();
+
+        assert!(run_solver(&mut builder.func));
+        assert_eq!(count_insts::<EvmSload>(&builder.func), 0);
 
         let add_inst = builder
             .func
@@ -1624,6 +1681,45 @@ mod tests {
         builder.seal_all();
 
         assert!(run_solver(&mut builder.func));
+        assert_eq!(count_insts::<EvmSload>(&builder.func), 1);
+    }
+
+    #[test]
+    fn does_not_forward_loop_variant_sload_across_backedge() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[Type::I1, Type::I256], Type::I256);
+        let is = evm.inst_set();
+        let carried = builder.declare_var(Type::I256);
+
+        let entry = builder.append_block();
+        let header = builder.append_block();
+        let body = builder.append_block();
+        let exit = builder.append_block();
+
+        builder.switch_to_block(entry);
+        let cond = builder.args()[0];
+        let base = builder.args()[1];
+        let zero = builder.make_imm_value(I256::from(0));
+        let one = builder.make_imm_value(I256::from(1));
+        builder.def_var(carried, zero);
+        builder.insert_inst_no_result_with(|| Jump::new(is, header));
+
+        builder.switch_to_block(header);
+        let idx = builder.use_var(carried);
+        let slot = builder.insert_inst_with(|| Add::new(is, base, idx), Type::I256);
+        let loaded = builder.insert_inst_with(|| EvmSload::new(is, slot), Type::I256);
+        builder.insert_inst_no_result_with(|| Br::new(is, cond, exit, body));
+
+        builder.switch_to_block(body);
+        let next = builder.insert_inst_with(|| Add::new(is, idx, one), Type::I256);
+        builder.def_var(carried, next);
+        builder.insert_inst_no_result_with(|| Jump::new(is, header));
+
+        builder.switch_to_block(exit);
+        builder.insert_inst_no_result_with(|| Return::new_single(is, loaded));
+        builder.seal_all();
+
+        assert!(!run_solver(&mut builder.func));
         assert_eq!(count_insts::<EvmSload>(&builder.func), 1);
     }
 
