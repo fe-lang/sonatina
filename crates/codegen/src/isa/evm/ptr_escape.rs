@@ -27,10 +27,6 @@ impl ArgStoreLattice {
         changed
     }
 
-    fn union(self, other: Self) -> Self {
-        Self(self.0 | other.0)
-    }
-
     fn record_local(&mut self) -> bool {
         self.record(Self::LOCAL)
     }
@@ -199,14 +195,13 @@ impl PtrEscapeSummary {
 
             while let Some(dst_idx) = stack.pop() {
                 let dst_idx = dst_idx as usize;
-                if dst_idx >= self.args.len() || dst_idx == src_idx || seen[dst_idx] {
+                if dst_idx >= self.args.len() || seen[dst_idx] {
                     continue;
                 }
                 seen[dst_idx] = true;
                 closed_targets.push(dst_idx as u32);
 
-                let (dst_stores, dst_targets) = &direct[dst_idx];
-                stores = stores.union(*dst_stores);
+                let (_, dst_targets) = &direct[dst_idx];
                 stack.extend(dst_targets.iter().copied());
             }
 
@@ -562,6 +557,53 @@ mod tests {
         })
     }
 
+    fn ret_provenance_from_src(src: &str, func_name: &str) -> Provenance {
+        let parsed = parse_module(src).expect("module parses");
+        let funcs: Vec<FuncRef> = parsed.module.funcs();
+        let isa = Evm::new(TargetTriple {
+            architecture: Architecture::Evm,
+            vendor: Vendor::Ethereum,
+            operating_system: OperatingSystem::Evm(EvmVersion::Osaka),
+        });
+        let summaries = compute_ptr_escape_summaries(&parsed.module, &funcs, &isa);
+        let func_ref = parsed
+            .module
+            .funcs()
+            .into_iter()
+            .find(|&func| {
+                parsed
+                    .module
+                    .ctx
+                    .func_sig(func, |sig| sig.name() == func_name)
+            })
+            .expect("function exists");
+
+        parsed.module.func_store.view(func_ref, |function| {
+            let prov = compute_provenance(function, &parsed.module.ctx, &isa, |callee| {
+                summaries.get(&callee).cloned().unwrap_or_else(|| {
+                    PtrEscapeSummary::conservative_unknown(&parsed.module, callee)
+                })
+            })
+            .value;
+
+            for block in function.layout.iter_block() {
+                for inst in function.layout.iter_inst(block) {
+                    let data = isa.inst_set().resolve_inst(function.dfg.inst(inst));
+                    if let EvmInstKind::Return(_) = data
+                        && let Some(ret_val) = function
+                            .dfg
+                            .return_args(inst)
+                            .and_then(|args| args.first().copied())
+                    {
+                        return prov[ret_val].clone();
+                    }
+                }
+            }
+
+            panic!("no return value in function");
+        })
+    }
+
     #[test]
     fn ptr_escape_direct_return() {
         let (summaries, _) = compute(
@@ -701,6 +743,107 @@ block0:
         );
         assert!(capture.arg_store_lattice(0).may_store_to_arg());
         assert!(!capture.arg_store_lattice(0).may_store_nonlocal());
+    }
+
+    #[test]
+    fn ptr_escape_preserves_self_target_arg_stores() {
+        let (summaries, _) = compute(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %capture(v0.**i8) {
+block0:
+    mstore v0 v0 **i8;
+    return;
+}
+"#,
+        );
+
+        let capture = &summaries["capture"];
+        assert_eq!(arg_may_escape(capture), vec![false]);
+        assert_eq!(arg_may_be_returned(capture), vec![false]);
+        assert_eq!(
+            arg_store_targets(capture, 0),
+            vec![0],
+            "self-target out-param stores must stay modeled"
+        );
+        assert!(capture.arg_store_lattice(0).may_store_to_arg());
+        assert!(!capture.arg_store_lattice(0).may_store_nonlocal());
+    }
+
+    #[test]
+    fn ptr_escape_self_target_call_preserves_local_roundtrip_provenance() {
+        let ret_prov = ret_provenance_from_src(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %capture(v0.**i8) {
+block0:
+    mstore v0 v0 **i8;
+    return;
+}
+
+func public %wrapper() -> **i8 {
+block0:
+    v0.**i8 = alloca *i8;
+    call %capture v0;
+    v1.**i8 = mload v0 **i8;
+    return v1;
+}
+"#,
+            "wrapper",
+        );
+
+        assert!(ret_prov.is_local_addr(), "{ret_prov:?}");
+        assert_eq!(ret_prov.alloca_insts().count(), 1);
+    }
+
+    #[test]
+    fn ptr_escape_keeps_nonlocal_outparam_destinations_context_sensitive() {
+        let src = r#"
+target = "evm-ethereum-osaka"
+
+func public %capture(v0.*i8, v1.**i8) {
+block0:
+    mstore v1 v0 *i8;
+    mstore 0.i32 v1 **i8;
+    return;
+}
+
+func public %top_arg(v0.*i8, v1.**i8) {
+block0:
+    call %capture v0 v1;
+    return;
+}
+
+func public %top_local(v0.*i8) {
+block0:
+    v1.**i8 = alloca *i8;
+    call %capture v0 v1;
+    return;
+}
+"#;
+        let (summaries, _) = compute(src);
+
+        let capture = &summaries["capture"];
+        assert_eq!(arg_may_escape(capture), vec![false, true]);
+        assert_eq!(
+            arg_store_targets(capture, 0),
+            vec![1],
+            "source arg should keep only the forwarded out-param target"
+        );
+        assert!(!capture.arg_store_lattice(0).may_store_nonlocal());
+        assert!(capture.arg_store_lattice(0).may_store_to_arg());
+        assert!(capture.arg_store_lattice(1).may_store_nonlocal());
+
+        assert!(
+            call_arg_may_escape_from_src(src, "top_arg", 0),
+            "arg-backed out-param should still make the source escape"
+        );
+        assert!(
+            !call_arg_may_escape_from_src(src, "top_local", 0),
+            "caller-local out-param should remain non-escaping"
+        );
     }
 
     #[test]

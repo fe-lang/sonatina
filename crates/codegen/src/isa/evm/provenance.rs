@@ -280,6 +280,22 @@ pub(crate) fn compute_provenance(
                     changed |= poison_local_mem(&mut mem, &prov[dst]);
                 }
 
+                let call_summary = if let EvmInstKind::Call(call) = &data {
+                    let summary = callee_summary(*call.callee());
+                    for (src_idx, &src_arg) in call.args().iter().enumerate() {
+                        if summary.arg_store_targets(src_idx).is_empty() {
+                            continue;
+                        }
+                        let src_prov = prov[src_arg].clone();
+                        for dst_arg in summary.call_arg_store_dest_args(src_idx, call.args()) {
+                            changed |= store_local_mem(&mut mem, &prov[dst_arg], &src_prov);
+                        }
+                    }
+                    Some(summary)
+                } else {
+                    None
+                };
+
                 let [def] = function.dfg.inst_results(inst) else {
                     continue;
                 };
@@ -325,16 +341,9 @@ pub(crate) fn compute_provenance(
                         let _ = next.union_with(&prov[*ev.dest()]);
                     }
                     EvmInstKind::Call(call) => {
-                        let summary = callee_summary(*call.callee());
-                        for (src_idx, &src_arg) in call.args().iter().enumerate() {
-                            if summary.arg_store_targets(src_idx).is_empty() {
-                                continue;
-                            }
-                            let src_prov = prov[src_arg].clone();
-                            for dst_arg in summary.call_arg_store_dest_args(src_idx, call.args()) {
-                                changed |= store_local_mem(&mut mem, &prov[dst_arg], &src_prov);
-                            }
-                        }
+                        let summary = call_summary
+                            .as_ref()
+                            .expect("call summary should exist for call instructions");
                         for (idx, &arg) in call.args().iter().enumerate() {
                             if summary.arg_may_be_returned(idx) {
                                 let _ = next.union_with(&prov[arg]);
