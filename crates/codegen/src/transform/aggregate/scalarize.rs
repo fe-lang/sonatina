@@ -2341,8 +2341,7 @@ impl AggregateScalarize {
         view_ty: Type,
     ) -> bool {
         self.projection_slice_can_view_as(module, slice, view_ty)
-            && (!shape::is_supported_scalar_shape_ty(module, view_ty)
-                || shape::is_supported_aggregate_ty(module, view_ty))
+            && shape::is_leaf_reifiable_ty(module, view_ty)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2474,7 +2473,7 @@ impl AggregateScalarize {
         {
             return Some(leaves);
         }
-        if !shape::is_supported_aggregate_ty(module, ty) {
+        if !shape::is_leaf_reifiable_ty(module, ty) {
             return None;
         }
 
@@ -2495,9 +2494,7 @@ impl AggregateScalarize {
         value: ValueId,
         scalarizable: &SecondaryMap<ValueId, bool>,
     ) -> bool {
-        !shape::is_supported_scalar_shape_ty(module, ty)
-            || scalarizable[value]
-            || shape::is_supported_aggregate_ty(module, ty)
+        shape::is_leaf_reifiable_ty(module, ty) || scalarizable[value]
     }
 
     fn insert_live_in_leaf_load(
@@ -3926,6 +3923,61 @@ func private %f(v0.i256, v1.i256) -> i256 {
                 "each promoted alloca in the original block should get its own seed point"
             );
             assert_no_promoted_aggregate_artifacts(func, &ctx);
+        });
+    }
+
+    #[test]
+    fn scalarize_keeps_dynamic_enum_bearing_root_in_object_form() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @E = enum {
+    #None,
+    #A,
+};
+
+type @Pair = {[i256; 2], @E};
+
+func private %pair(v0.i1) -> @Pair {
+    block0:
+        v1.objref<@Pair> = obj.alloc @Pair;
+        v2.objref<[i256; 2]> = obj.proj v1 0.i256;
+        v3.objref<i256> = obj.index v2 0.i256;
+        obj.store v3 5.i256;
+        v4.objref<i256> = obj.index v2 1.i256;
+        obj.store v4 9.i256;
+        v5.objref<@E> = obj.proj v1 1.i256;
+        br v0 block1 block2;
+
+    block1:
+        enum.set_tag v5 #None;
+        jump block3;
+
+    block2:
+        enum.set_tag v5 #A;
+        jump block3;
+
+    block3:
+        v6.@Pair = obj.load v1;
+        return v6;
+}
+"#,
+        );
+        let func_ref = lookup_func(&module, "pair");
+        module.func_store.modify(func_ref, |func| {
+            AggregateScalarize::default().run(func);
+        });
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            assert!(
+                dumped.contains("obj.alloc")
+                    && dumped.contains("obj.proj")
+                    && dumped.contains("obj.load")
+                    && dumped.contains("enum.set_tag"),
+                "dynamic enum-bearing roots should stay in object form:\n{dumped}"
+            );
         });
     }
 

@@ -447,6 +447,28 @@ pub fn is_supported_scalar_shape_ty(module: &ModuleCtx, ty: Type) -> bool {
     }
 }
 
+/// Returns whether `ty` can always be rebuilt from an arbitrary runtime leaf
+/// slice without value-dependent reconstruction.
+///
+/// This is stricter than [`is_supported_scalar_shape_ty`]. Enums, and aggregates
+/// containing enums, are excluded because rebuilding a full value from arbitrary
+/// leaf SSA state would require recovering the active variant from dynamic tag
+/// leaves.
+pub fn is_leaf_reifiable_ty(module: &ModuleCtx, ty: Type) -> bool {
+    match ty.resolve_compound(module) {
+        Some(CompoundType::Struct(s)) => {
+            !s.packed
+                && s.fields
+                    .iter()
+                    .copied()
+                    .all(|field| is_leaf_reifiable_ty(module, field))
+        }
+        Some(CompoundType::Array { elem, .. }) => is_leaf_reifiable_ty(module, elem),
+        Some(CompoundType::Enum(_)) => false,
+        _ => true,
+    }
+}
+
 pub fn runtime_size_bytes(module: &ModuleCtx, ty: Type) -> Option<u32> {
     runtime_size_align_bytes(module, ty).map(|(size, _)| size)
 }
