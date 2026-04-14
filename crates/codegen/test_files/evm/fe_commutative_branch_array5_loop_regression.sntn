@@ -1,0 +1,138 @@
+#! evm.config: { opt: 2 }
+#! evm.case: ok
+#!   calldata:
+#!   expect: return
+
+# Reduced from Fe `verify_depth_1_happy_path`.
+# The unoptimized IR is correct and passes when run with `-O 0`.
+# After the Sonatina speed pipeline, this currently miscompiles and reverts.
+
+target = "evm-ethereum-osaka"
+
+func private %verify_checked(v0.i256, v1.i256, v2.[i8; 5], v3.[i256; 5]) -> i1 {
+    block0:
+        v4.*i256 = alloca i256;
+        v5.objref<[i8; 5]> = obj.alloc [i8; 5];
+        v6.objref<[i256; 5]> = obj.alloc [i256; 5];
+        v7.*i256 = alloca i256;
+        v8.objref<[i8; 5]> = obj.alloc [i8; 5];
+        v9.objref<[i256; 5]> = obj.alloc [i256; 5];
+        v10.*i256 = alloca i256;
+        v11.objref<[i256; 5]> = obj.alloc [i256; 5];
+        v12.*i256 = alloca i256;
+        mstore v4 v1 i256;
+        obj.store v5 v2;
+        obj.store v6 v3;
+        v13.i256 = mload v4 i256;
+        mstore v7 0.i256 i256;
+        jump block1;
+
+    block1:
+        v48.i256 = phi (v13 block0) (v52 block10);
+        v16.i256 = mload v7 i256;
+        v17.i1 = lt v16 1.i256;
+        br v17 block2 block3;
+
+    block2:
+        v18.[i8; 5] = obj.load v5;
+        obj.store v8 v18;
+        v19.i256 = mload v7 i256;
+        v20.objref<i8> = obj.index v8 v19;
+        v21.i8 = obj.load v20;
+        v23.i1 = eq v21 0.i8;
+        br v23 block4 block5;
+
+    block3:
+        v26.i1 = eq v48 v0;
+        return v26;
+
+    block4:
+        v27.[i256; 5] = obj.load v6;
+        obj.store v9 v27;
+        v28.i256 = mload v7 i256;
+        v29.objref<i256> = obj.index v9 v28;
+        v30.i256 = obj.load v29;
+        (v32.i256, v33.i1) = uaddo v48 v30;
+        br v33 block7 block8;
+
+    block5:
+        v35.[i256; 5] = obj.load v6;
+        obj.store v11 v35;
+        v36.i256 = mload v7 i256;
+        v37.objref<i256> = obj.index v11 v36;
+        v38.i256 = obj.load v37;
+        (v40.i256, v41.i1) = uaddo v38 v48;
+        br v41 block7 block9;
+
+    block6:
+        v52.i256 = phi (v34 block8) (v42 block9);
+        v43.i256 = ptr_to_int v7 i256;
+        v44.i256 = mload v43 i256;
+        (v45.i256, v46.i1) = uaddo v44 1.i256;
+        br v46 block7 block10;
+
+    block7:
+        evm_revert 0.i256 0.i256;
+
+    block8:
+        mstore v10 v32 i256;
+        v34.i256 = mload v10 i256;
+        jump block6;
+
+    block9:
+        mstore v12 v40 i256;
+        v42.i256 = mload v12 i256;
+        jump block6;
+
+    block10:
+        mstore v43 v45 i256;
+        jump block1;
+}
+
+func private %run() {
+    block0:
+        v13.objref<[i8; 5]> = obj.alloc [i8; 5];
+        v14.objref<i8> = obj.index v13 0.i256;
+        obj.store v14 0.i8;
+        v15.objref<i8> = obj.index v13 1.i256;
+        obj.store v15 0.i8;
+        v16.objref<i8> = obj.index v13 2.i256;
+        obj.store v16 0.i8;
+        v17.objref<i8> = obj.index v13 3.i256;
+        obj.store v17 0.i8;
+        v18.objref<i8> = obj.index v13 4.i256;
+        obj.store v18 0.i8;
+        v19.[i8; 5] = obj.load v13;
+        v27.objref<[i256; 5]> = obj.alloc [i256; 5];
+        v28.objref<i256> = obj.index v27 0.i256;
+        obj.store v28 11.i256;
+        v29.objref<i256> = obj.index v27 1.i256;
+        obj.store v29 0.i256;
+        v30.objref<i256> = obj.index v27 2.i256;
+        obj.store v30 0.i256;
+        v31.objref<i256> = obj.index v27 3.i256;
+        obj.store v31 0.i256;
+        v32.objref<i256> = obj.index v27 4.i256;
+        obj.store v32 0.i256;
+        v38.[i256; 5] = obj.load v27;
+        v39.i1 = call %verify_checked 18.i256 7.i256 v19 v38;
+        br v39 block1 block3;
+
+    block3:
+        evm_revert 0.i256 0.i256;
+
+    block1:
+        return;
+}
+
+func public %entry() {
+    block0:
+        call %run;
+        evm_return 0.i8 0.i8;
+}
+
+object @Contract {
+    section runtime {
+        entry %entry;
+    }
+}

@@ -40,6 +40,14 @@ pub enum Action {
     MemLoadFrameSlot(u32),
     MemStoreAbs(u32),
     MemStoreFrameSlot(u32),
+    MaterializeLocalAddr {
+        alloca: InstId,
+        offset_bytes: i64,
+    },
+    PushFrameAddr {
+        offset_words: u32,
+        extra_bytes: i64,
+    },
 
     /// Virtual stack-object memory operation, rewritten during lowering.
     MemLoadObj(StackObjId),

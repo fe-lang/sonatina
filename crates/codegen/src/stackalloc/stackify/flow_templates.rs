@@ -311,6 +311,7 @@ impl<'a, 'ctx> FlowTemplateSolver<'a, 'ctx> {
                             spill_requests,
                             ctx,
                             self.spill_obj,
+                            &ctx.exact_local_addr,
                             &mut free_slots,
                             slots,
                         );
@@ -365,6 +366,7 @@ impl<'a, 'ctx> FlowTemplateSolver<'a, 'ctx> {
                     spill_requests,
                     ctx,
                     self.spill_obj,
+                    &ctx.exact_local_addr,
                     &mut free_slots,
                     slots,
                 );
@@ -380,6 +382,7 @@ impl<'a, 'ctx> FlowTemplateSolver<'a, 'ctx> {
                 spill_requests,
                 ctx,
                 self.spill_obj,
+                &ctx.exact_local_addr,
                 &mut free_slots,
                 slots,
             );
@@ -422,6 +425,7 @@ impl<'a, 'ctx> FlowTemplateSolver<'a, 'ctx> {
                     spill_requests,
                     ctx,
                     self.spill_obj,
+                    &ctx.exact_local_addr,
                     &mut free_slots,
                     slots,
                 );

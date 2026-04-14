@@ -89,6 +89,7 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
             &mut *self.spill_requests,
             self.ctx,
             &self.alloc.spill_obj,
+            &self.alloc.exact_local_addr,
             free_slots,
             &mut *self.slots,
         );
@@ -109,6 +110,7 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
             &mut *self.spill_requests,
             self.ctx,
             &self.alloc.spill_obj,
+            &self.alloc.exact_local_addr,
             free_slots,
             &mut *self.slots,
         );
@@ -129,6 +131,7 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
             &mut *self.spill_requests,
             self.ctx,
             &self.alloc.spill_obj,
+            &self.alloc.exact_local_addr,
             free_slots,
             &mut *self.slots,
         );

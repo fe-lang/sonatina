@@ -4,7 +4,11 @@ use sonatina_ir::{BlockId, Function, ValueId, cfg::ControlFlowGraph};
 use std::collections::BTreeMap;
 
 use crate::{
-    bitset::BitSet, cfg_scc::CfgSccAnalysis, domtree::DomTree, isa::evm::normalize_alias_map,
+    analysis::memory_access::{ExactLocalAddr, MemoryAccessAnalysis},
+    bitset::BitSet,
+    cfg_scc::CfgSccAnalysis,
+    domtree::DomTree,
+    isa::evm::normalize_alias_map,
     liveness::Liveness,
 };
 
@@ -71,6 +75,7 @@ pub(super) struct StackifyContext<'a> {
     pub(super) has_internal_return: bool,
     pub(super) reach: StackifyReachability,
     pub(super) value_aliases: SecondaryMap<ValueId, Option<ValueId>>,
+    pub(super) exact_local_addr: SecondaryMap<ValueId, Option<ExactLocalAddr>>,
 }
 
 impl StackifyContext<'_> {
@@ -165,6 +170,8 @@ impl<'a> StackifyBuilder<'a> {
         };
         normalize_alias_map(self.func, &mut value_aliases);
 
+        let exact_local_addr = compute_exact_local_addrs(self.func, &value_aliases);
+
         let ctx = StackifyContext {
             func: self.func,
             cfg: self.cfg,
@@ -182,6 +189,7 @@ impl<'a> StackifyBuilder<'a> {
             has_internal_return: function_has_internal_return(self.func),
             reach: self.reach,
             value_aliases,
+            exact_local_addr,
         };
 
         // `spill_set` is discovered via a monotone fixed point:
@@ -221,6 +229,7 @@ impl<'a> StackifyBuilder<'a> {
             let arg = ctx.canonicalize_value(arg);
             if let Some(spilled) = spill.spilled(arg)
                 && ctx.scratch_spill_slots != 0
+                && ctx.exact_local_addr[arg].is_none()
                 && !ctx.scratch_live_values.contains(arg)
                 && slots
                     .scratch
@@ -236,7 +245,7 @@ impl<'a> StackifyBuilder<'a> {
             }
         }
 
-        let spill_obj = assign_spill_obj_ids(ctx.func, spill);
+        let spill_obj = assign_spill_obj_ids(ctx.func, spill, &ctx.exact_local_addr);
 
         // Template solving may encounter temporary unreachable values while iterating toward a
         // fixed point, but those requests are not necessarily required under the final chosen
@@ -251,6 +260,7 @@ impl<'a> StackifyBuilder<'a> {
             brtable_actions: BTreeMap::new(),
             spill_obj,
             scratch_slot_of_value: SecondaryMap::new(),
+            exact_local_addr: ctx.exact_local_addr.clone(),
         };
 
         let mut spill_requests: BitSet<ValueId> = BitSet::default();
@@ -285,6 +295,7 @@ impl<'a> StackifyBuilder<'a> {
 fn assign_spill_obj_ids(
     func: &Function,
     spill: SpillSet<'_>,
+    exact_local_addr: &SecondaryMap<ValueId, Option<ExactLocalAddr>>,
 ) -> SecondaryMap<ValueId, Option<crate::isa::evm::static_arena_alloc::StackObjId>> {
     let mut map: SecondaryMap<ValueId, Option<crate::isa::evm::static_arena_alloc::StackObjId>> =
         SecondaryMap::new();
@@ -295,8 +306,28 @@ fn assign_spill_obj_ids(
     let mut spilled: Vec<ValueId> = spill.bitset().iter().collect();
     spilled.sort_unstable_by_key(|v| v.as_u32());
 
-    for (idx, v) in spilled.into_iter().enumerate() {
-        map[v] = Some(crate::isa::evm::static_arena_alloc::StackObjId::new(idx));
+    let mut next_idx = 0usize;
+    for v in spilled {
+        if exact_local_addr[v].is_some() {
+            continue;
+        }
+        map[v] = Some(crate::isa::evm::static_arena_alloc::StackObjId::new(
+            next_idx,
+        ));
+        next_idx += 1;
+    }
+    map
+}
+
+fn compute_exact_local_addrs(
+    func: &Function,
+    value_aliases: &SecondaryMap<ValueId, Option<ValueId>>,
+) -> SecondaryMap<ValueId, Option<ExactLocalAddr>> {
+    let analysis = MemoryAccessAnalysis::new();
+    let mut map: SecondaryMap<ValueId, Option<ExactLocalAddr>> = SecondaryMap::new();
+    for value in func.dfg.value_ids() {
+        let canonical = value_aliases[value].unwrap_or(value);
+        map[value] = analysis.exact_local_addr(func, canonical);
     }
     map
 }

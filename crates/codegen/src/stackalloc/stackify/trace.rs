@@ -476,6 +476,22 @@ fn fmt_actions(actions: &[Action]) -> String {
             Action::MemLoadFrameSlot(slot) => {
                 let _ = write!(&mut s, "MLOAD_SLOT({slot})");
             }
+            Action::MaterializeLocalAddr {
+                alloca,
+                offset_bytes,
+            } => {
+                let _ = write!(
+                    &mut s,
+                    "MAT_LOCAL_ADDR({}, {offset_bytes})",
+                    alloca.as_u32()
+                );
+            }
+            Action::PushFrameAddr {
+                offset_words,
+                extra_bytes,
+            } => {
+                let _ = write!(&mut s, "PUSH_FRAME_ADDR({offset_words}, {extra_bytes})");
+            }
             Action::MemLoadObj(obj) => {
                 let _ = write!(&mut s, "MLOAD_OBJ({})", obj.as_u32());
             }

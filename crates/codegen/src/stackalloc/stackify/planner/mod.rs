@@ -6,6 +6,7 @@ mod operand_prep;
 mod test_utils;
 
 use crate::{
+    analysis::memory_access::ExactLocalAddr,
     bitset::BitSet,
     liveness::Liveness,
     stackalloc::{Action, Actions},
@@ -31,6 +32,7 @@ pub(super) struct MemPlan<'a> {
     scratch_live_values: &'a BitSet<ValueId>,
     scratch_spill_slots: u32,
     spill_obj: &'a SecondaryMap<ValueId, Option<crate::isa::evm::static_arena_alloc::StackObjId>>,
+    exact_local_addr: &'a SecondaryMap<ValueId, Option<ExactLocalAddr>>,
     free_slots: &'a mut FreeSlotPools,
     slots: &'a mut SpillSlotPools,
     liveness: &'a Liveness,
@@ -46,6 +48,7 @@ impl<'a> MemPlan<'a> {
             ValueId,
             Option<crate::isa::evm::static_arena_alloc::StackObjId>,
         >,
+        exact_local_addr: &'a SecondaryMap<ValueId, Option<ExactLocalAddr>>,
         free_slots: &'a mut FreeSlotPools,
         slots: &'a mut SpillSlotPools,
     ) -> Self {
@@ -53,6 +56,7 @@ impl<'a> MemPlan<'a> {
             scratch_live_values: &ctx.scratch_live_values,
             scratch_spill_slots: ctx.scratch_spill_slots,
             spill_obj,
+            exact_local_addr,
             free_slots,
             slots,
             liveness: ctx.liveness,
@@ -82,6 +86,14 @@ impl<'a> MemPlan<'a> {
         let Some(spilled) = self.spill.spilled(v) else {
             return;
         };
+        if self.exact_local_addr[v].is_some() {
+            debug_assert_eq!(
+                self.spill_obj[v], None,
+                "exact local addresses must not have spill objects"
+            );
+            actions.push(Action::Pop);
+            return;
+        }
 
         if self.scratch_spill_slots != 0
             && !self.scratch_live_values.contains(v)
@@ -108,6 +120,17 @@ impl<'a> MemPlan<'a> {
             // `v`'s definition once it becomes part of `spill_set`.
             return Action::MemLoadObj(crate::isa::evm::static_arena_alloc::StackObjId::new(0));
         };
+
+        if let Some(exact) = self.exact_local_addr[v] {
+            debug_assert_eq!(
+                self.spill_obj[v], None,
+                "exact local addresses must not have spill objects"
+            );
+            return Action::MaterializeLocalAddr {
+                alloca: exact.root_alloca,
+                offset_bytes: exact.offset_bytes,
+            };
+        }
 
         if self.scratch_spill_slots != 0
             && !self.scratch_live_values.contains(v)

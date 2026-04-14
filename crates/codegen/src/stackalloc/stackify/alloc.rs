@@ -2,7 +2,10 @@ use cranelift_entity::SecondaryMap;
 use sonatina_ir::{BlockId, Function, InstId, ValueId};
 use std::collections::BTreeMap;
 
-use crate::stackalloc::{Action, Actions, Allocator};
+use crate::{
+    analysis::memory_access::ExactLocalAddr,
+    stackalloc::{Action, Actions, Allocator},
+};
 
 #[derive(Clone, Default)]
 pub struct StackifyAlloc {
@@ -15,6 +18,7 @@ pub struct StackifyAlloc {
     pub(crate) spill_obj:
         SecondaryMap<ValueId, Option<crate::isa::evm::static_arena_alloc::StackObjId>>,
     pub(crate) scratch_slot_of_value: SecondaryMap<ValueId, Option<u32>>,
+    pub(crate) exact_local_addr: SecondaryMap<ValueId, Option<ExactLocalAddr>>,
 }
 
 impl StackifyAlloc {
@@ -33,7 +37,9 @@ impl Allocator for StackifyAlloc {
                 idx < super::DUP_MAX,
                 "function arg depth exceeds DUP16 reach"
             );
-            if let Some(slot) = self.scratch_slot_of_value[arg] {
+            if self.exact_local_addr[arg].is_some() {
+                continue;
+            } else if let Some(slot) = self.scratch_slot_of_value[arg] {
                 act.push(Action::StackDup(idx as u8));
                 act.push(Action::MemStoreAbs(slot * 32));
             } else if let Some(obj) = self.spill_obj[arg] {

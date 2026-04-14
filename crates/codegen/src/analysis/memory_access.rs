@@ -115,6 +115,12 @@ struct CanonicalAddr {
     offset: i64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ExactLocalAddr {
+    pub root_alloca: InstId,
+    pub offset_bytes: i64,
+}
+
 pub struct MemoryAccessAnalysis;
 
 impl MemoryAccessAnalysis {
@@ -237,6 +243,17 @@ impl MemoryAccessAnalysis {
                 .trackable_exact_loc(func, access)
                 .is_none_or(|other| self.alias(key, &other) != AliasResult::NoAlias),
         }
+    }
+
+    pub fn exact_local_addr(&self, func: &Function, value: ValueId) -> Option<ExactLocalAddr> {
+        let canonical = self.canonical_linear_addr(func, value);
+        let BaseObject::Alloca(root_alloca) = canonical.base else {
+            return None;
+        };
+        Some(ExactLocalAddr {
+            root_alloca,
+            offset_bytes: canonical.offset,
+        })
     }
 
     fn alias_linear(&self, lhs: &LinearLocKey, rhs: &LinearLocKey) -> AliasResult {
@@ -812,6 +829,7 @@ fn immediate_i64(imm: Immediate) -> Option<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use smallvec::smallvec;
     use sonatina_ir::{
         AccessKind, AccessLoc, MemoryAccess, Type,
         builder::{FunctionBuilder, test_util::*},
@@ -819,7 +837,8 @@ mod tests {
         inst::{
             arith::Add,
             control_flow::{Br, Jump, Return},
-            data::{Alloca, Mload},
+            cast::{Bitcast, PtrToInt},
+            data::{Alloca, Gep, Mload},
             evm::{EvmMalloc, EvmSload, EvmUaddsat},
         },
         isa::Isa,
@@ -977,6 +996,110 @@ mod tests {
 
         assert_eq!(analysis.alias(&key0, &key1), AliasResult::MustAlias);
         assert_eq!(analysis.alias(&key0, &key2), AliasResult::NoAlias);
+    }
+
+    #[test]
+    fn exact_local_addr_tracks_constant_gep_cast_chains() {
+        let mb = test_module_builder();
+        let arr_ty = mb.declare_array_type(Type::I256, 8);
+        let ptr_ty = mb.ptr_type(arr_ty);
+        let elem_ptr_ty = mb.ptr_type(Type::I256);
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::Unit);
+        let is = evm.inst_set();
+
+        let block = builder.append_block();
+        builder.switch_to_block(block);
+
+        let base = builder.insert_inst_with(|| Alloca::new(is, arr_ty), ptr_ty);
+        let zero = builder.make_imm_value(I256::from(0u8));
+        let two = builder.make_imm_value(I256::from(2u8));
+        let gep =
+            builder.insert_inst_with(|| Gep::new(is, smallvec![base, zero, two]), elem_ptr_ty);
+        let widened = builder.insert_inst_with(|| Bitcast::new(is, gep, ptr_ty), ptr_ty);
+        let addr = builder.insert_inst_with(|| PtrToInt::new(is, widened, Type::I256), Type::I256);
+        builder.insert_inst_no_result_with(|| Return::new_unit(is));
+        builder.seal_all();
+
+        let analysis = MemoryAccessAnalysis::new();
+        let exact = analysis
+            .exact_local_addr(&builder.func, addr)
+            .expect("expected exact local addr");
+
+        let alloca_inst = builder
+            .func
+            .layout
+            .iter_inst(block)
+            .find(|&inst| builder.func.dfg.inst_result(inst) == Some(base))
+            .expect("alloca inst exists");
+        assert_eq!(exact.root_alloca, alloca_inst);
+        assert_eq!(exact.offset_bytes, 64);
+    }
+
+    #[test]
+    fn exact_local_addr_accepts_identical_phi_paths() {
+        let mb = test_module_builder();
+        let ptr_ty = mb.ptr_type(Type::I256);
+        let (evm, mut builder) = test_func_builder(&mb, &[Type::I1], Type::Unit);
+        let is = evm.inst_set();
+        let entry = builder.append_block();
+        let left = builder.append_block();
+        let right = builder.append_block();
+        let join = builder.append_block();
+
+        builder.switch_to_block(entry);
+        let base = builder.insert_inst_with(|| Alloca::new(is, Type::I256), ptr_ty);
+        let cond = builder.args()[0];
+        builder.insert_inst_no_result_with(|| Br::new(is, cond, left, right));
+
+        builder.switch_to_block(left);
+        builder.insert_inst_no_result_with(|| Jump::new(is, join));
+
+        builder.switch_to_block(right);
+        builder.insert_inst_no_result_with(|| Jump::new(is, join));
+
+        builder.switch_to_block(join);
+        let phi =
+            builder.insert_inst_with(|| Phi::new(is, vec![(base, left), (base, right)]), ptr_ty);
+        let addr = builder.insert_inst_with(|| PtrToInt::new(is, phi, Type::I256), Type::I256);
+        builder.insert_inst_no_result_with(|| Return::new_unit(is));
+        builder.seal_all();
+
+        let analysis = MemoryAccessAnalysis::new();
+        let exact = analysis
+            .exact_local_addr(&builder.func, addr)
+            .expect("expected exact local addr");
+
+        let alloca_inst = builder
+            .func
+            .layout
+            .iter_inst(entry)
+            .find(|&inst| builder.func.dfg.inst_result(inst) == Some(base))
+            .expect("alloca inst exists");
+        assert_eq!(exact.root_alloca, alloca_inst);
+        assert_eq!(exact.offset_bytes, 0);
+    }
+
+    #[test]
+    fn exact_local_addr_rejects_loaded_local_pointers() {
+        let mb = test_module_builder();
+        let ptr_ty = mb.ptr_type(Type::I256);
+        let slot_ptr_ty = mb.ptr_type(ptr_ty);
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::Unit);
+        let is = evm.inst_set();
+
+        let block = builder.append_block();
+        builder.switch_to_block(block);
+
+        let slot = builder.insert_inst_with(|| Alloca::new(is, ptr_ty), slot_ptr_ty);
+        let loaded = builder.insert_inst_with(|| Mload::new(is, slot, ptr_ty), ptr_ty);
+        let addr = builder.insert_inst_with(|| PtrToInt::new(is, loaded, Type::I256), Type::I256);
+        builder.insert_inst_no_result_with(|| Return::new_unit(is));
+        builder.seal_all();
+
+        assert_eq!(
+            MemoryAccessAnalysis::new().exact_local_addr(&builder.func, addr),
+            None
+        );
     }
 
     #[test]
