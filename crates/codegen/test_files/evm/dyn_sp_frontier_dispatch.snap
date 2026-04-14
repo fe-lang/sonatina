@@ -6,11 +6,11 @@ input_file: test_files/evm/dyn_sp_frontier_dispatch.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 121 bytes
-  total: 121 bytes
+  section runtime: 131 bytes
+  total: 131 bytes
 
 functions:
-  ready: ir_blocks=3 ir_insts=10 vcode_ops=58 fixups=4 imm_bytes=13
+  ready: ir_blocks=3 ir_insts=10 vcode_ops=76 fixups=5 imm_bytes=15
     mem: scratch_words=0 stable_words=1 stable_mode=DynamicFrame entry_abs_words=0 abs_words_end=0
   dispatch: ir_blocks=3 ir_insts=7 vcode_ops=20 fixups=3 imm_bytes=3
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
@@ -19,7 +19,7 @@ functions:
 
 evm:
   case cold: calldata_len=4 success reason=Return gas_used=21134 gas_refunded=0 logs=0 output=call len=32 tx_gas=21028 runtime_gas=106
-  case hot: calldata_len=4 success reason=Return gas_used=21343 gas_refunded=0 logs=0 output=call len=32 tx_gas=21016 runtime_gas=327
+  case hot: calldata_len=4 success reason=Return gas_used=21372 gas_refunded=0 logs=0 output=call len=32 tx_gas=21016 runtime_gas=356
 
 
 --------------- DEBUG ---------------
@@ -28,9 +28,18 @@ evm:
 ready:
   block0:
     JUMPDEST
+    PUSH1 0x80 (128)
+    MLOAD
+    DUP1
+    PUSH1 `pc + (7)`
+    JUMPI
+    POP
     PUSH1 0xa0 (160)
+    DUP1
     PUSH1 0x80 (128)
     MSTORE
+    JUMPDEST
+    POP
     PUSH0  // v1.i1 = eq v0 0.i256;
     DUP2
     EQ
@@ -46,6 +55,7 @@ ready:
     JUMPDEST
     PUSH1 0x80 (128)  // v2.*i256 = alloca i256;
     MLOAD
+    DUP1
     PUSH1 0x40 (64)
     MLOAD
     DUP2
@@ -56,11 +66,18 @@ ready:
     SWAP1
     JUMPDEST
     POP
-    PUSH1 0x20 (32)
+    PUSH1 0x40 (64)
     ADD
+    DUP2
+    PUSH1 0x20 (32)
+    DUP3
+    SUB
+    MSTORE
+    SWAP1
+    POP
     PUSH1 0x80 (128)
     MSTORE
-    PUSH1 0x20 (32)
+    PUSH1 0x40 (64)
     PUSH1 0x80 (128)
     MLOAD
     SUB
@@ -82,6 +99,7 @@ ready:
     PUSH1 0x80 (128)
     MLOAD
     SUB
+    MLOAD
     PUSH1 0x80 (128)
     MSTORE
     ADD  // v6.i256 = add v4 v5;

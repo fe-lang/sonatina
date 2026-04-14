@@ -24,7 +24,7 @@ use sonatina_ir::{BlockId, Function, InstId, Module, module::FuncRef};
 
 use self::stack::{enter_frame_initialized, leave_frame, perform_action};
 use super::{
-    EvmBackend, EvmFunctionPlan, EvmSectionPlan, FrameSite, FrontierInitKind, LateCleanupProfile,
+    DynSpInitKind, EvmBackend, EvmFunctionPlan, EvmSectionPlan, FrameSite, LateCleanupProfile,
     LazyFramePlan, late_block_merge::run_late_block_merge, opcode::OpCode,
 };
 
@@ -73,12 +73,12 @@ impl<'a> EvmFunctionLowering<'a> {
             .local_frame_active_before_inst(inst)
     }
 
-    fn frontier_init_kind(&self, inst: InstId) -> Option<FrontierInitKind> {
+    fn frontier_init_kind(&self, inst: InstId) -> Option<DynSpInitKind> {
         let plan = &self.function_plan.dyn_sp_plan;
         if plan.checked_frontier_init_calls.contains(&inst) {
-            Some(FrontierInitKind::Checked)
+            Some(DynSpInitKind::Checked)
         } else if plan.frontier_init_calls.contains(&inst) {
-            Some(FrontierInitKind::Always)
+            Some(DynSpInitKind::Always)
         } else {
             None
         }
@@ -247,8 +247,15 @@ impl<'a> EvmFunctionLowering<'a> {
     ) {
         let frame_size_slots = alloc.frame_size_slots();
         let actions = alloc.enter_function(function);
-        if self.function_plan.dyn_sp_plan.entry_init {
-            stack::init_dyn_sp(ctx, self.dyn_base());
+        debug_assert!(
+            !(self.function_plan.dyn_sp_plan.entry_live_frame
+                && self.function_plan.dyn_sp_plan.entry_init == Some(DynSpInitKind::Always)),
+            "entry with possible live-frame reentry cannot use unconditional dyn-sp init"
+        );
+        match self.function_plan.dyn_sp_plan.entry_init {
+            None => {}
+            Some(DynSpInitKind::Always) => stack::init_dyn_sp(ctx, self.dyn_base()),
+            Some(DynSpInitKind::Checked) => stack::ensure_dyn_sp_init(ctx, self.dyn_base()),
         }
 
         if self.has_lazy_frame_lowering() {

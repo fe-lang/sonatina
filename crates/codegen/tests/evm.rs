@@ -392,7 +392,6 @@ fn test_evm(fixture: Fixture<&str>) {
             first_call_res_dbg = Some(format!("{res:?}"));
             first_call_trace = Some(trace);
         }
-
         assert_case(case, &res, fixture.path());
         let tx_gas = initial_tx_gas_for_call(&case.calldata);
         let runtime_gas = execution_gas_used(&res).saturating_sub(tx_gas);

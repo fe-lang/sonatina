@@ -288,7 +288,11 @@ pub(crate) fn prepare_section(
                     .cloned()
                     .unwrap_or_default();
                 let func_dyn_sp_plan = FuncDynSpPlan {
-                    entry_init: func == section_entry && dyn_sp_plan.entry_init,
+                    entry_init: if func == section_entry {
+                        dyn_sp_plan.entry_init
+                    } else {
+                        Default::default()
+                    },
                     frontier_init_calls: dyn_sp_plan
                         .frontier_init_calls
                         .get(&func)

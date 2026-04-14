@@ -16,7 +16,7 @@ use crate::{
 
 use super::{
     super::{
-        FREE_PTR_SLOT, FrameSite, FrontierInitKind, ObjLoc, STATIC_BASE, WORD_BYTES, opcode::OpCode,
+        DynSpInitKind, FREE_PTR_SLOT, FrameSite, ObjLoc, STATIC_BASE, WORD_BYTES, opcode::OpCode,
     },
     EvmFunctionLowering,
     stack::{
@@ -289,8 +289,8 @@ impl EvmFunctionLowering<'_> {
                     );
 
                     match self.frontier_init_kind(insn) {
-                        Some(FrontierInitKind::Always) => init_dyn_sp(ctx, self.dyn_base()),
-                        Some(FrontierInitKind::Checked) => ensure_dyn_sp_init(ctx, self.dyn_base()),
+                        Some(DynSpInitKind::Always) => init_dyn_sp(ctx, self.dyn_base()),
+                        Some(DynSpInitKind::Checked) => ensure_dyn_sp_init(ctx, self.dyn_base()),
                         None => {}
                     }
 
@@ -311,8 +311,8 @@ impl EvmFunctionLowering<'_> {
                     );
 
                     match self.frontier_init_kind(insn) {
-                        Some(FrontierInitKind::Always) => init_dyn_sp(ctx, self.dyn_base()),
-                        Some(FrontierInitKind::Checked) => ensure_dyn_sp_init(ctx, self.dyn_base()),
+                        Some(DynSpInitKind::Always) => init_dyn_sp(ctx, self.dyn_base()),
+                        Some(DynSpInitKind::Checked) => ensure_dyn_sp_init(ctx, self.dyn_base()),
                         None => {}
                     }
 

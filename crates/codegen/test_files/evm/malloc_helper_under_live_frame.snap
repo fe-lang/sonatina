@@ -6,19 +6,19 @@ input_file: test_files/evm/malloc_helper_under_live_frame.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 135 bytes
-  total: 135 bytes
+  section runtime: 145 bytes
+  total: 145 bytes
 
 functions:
   helper: ir_blocks=1 ir_insts=4 vcode_ops=8 fixups=0 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  ready: ir_blocks=3 ir_insts=12 vcode_ops=61 fixups=6 imm_bytes=11
+  ready: ir_blocks=3 ir_insts=12 vcode_ops=70 fixups=6 imm_bytes=12
     mem: scratch_words=0 stable_words=1 stable_mode=DynamicFrame entry_abs_words=0 abs_words_end=0
   entry: ir_blocks=1 ir_insts=5 vcode_ops=14 fixups=2 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=4 success reason=Return gas_used=21409 gas_refunded=0 logs=0 output=call len=32 tx_gas=21028 runtime_gas=381
+  case ok: calldata_len=4 success reason=Return gas_used=21438 gas_refunded=0 logs=0 output=call len=32 tx_gas=21028 runtime_gas=410
 
 
 --------------- DEBUG ---------------
@@ -54,6 +54,7 @@ ready:
     JUMPDEST
     PUSH1 0x80 (128)  // v2.*i256 = alloca i256;
     MLOAD
+    DUP1
     PUSH1 0x40 (64)
     MLOAD
     DUP2
@@ -64,11 +65,18 @@ ready:
     SWAP1
     JUMPDEST
     POP
-    PUSH1 0x20 (32)
+    PUSH1 0x40 (64)
     ADD
+    DUP2
+    PUSH1 0x20 (32)
+    DUP3
+    SUB
+    MSTORE
+    SWAP1
+    POP
     PUSH1 0x80 (128)
     MSTORE
-    PUSH1 0x20 (32)
+    PUSH1 0x40 (64)
     PUSH1 0x80 (128)
     MLOAD
     SUB
@@ -94,6 +102,7 @@ ready:
     PUSH1 0x80 (128)
     MLOAD
     SUB
+    MLOAD
     PUSH1 0x80 (128)
     MSTORE
     SWAP2  // v7.i256 = add v3 v5;
