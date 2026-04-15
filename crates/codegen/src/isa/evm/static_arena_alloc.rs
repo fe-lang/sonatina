@@ -6,25 +6,21 @@
 //! - Any caller object live across that call must be placed at offset `>= need_words(g)`.
 //!
 //! Packing:
-//! - Variable-sized linear scan over live intervals with a free-segment map.
+//! - Variable-sized exact packing over CFG live regions.
 //! - Each object has a lower bound (`min_offset_words`) derived from call clobber constraints.
-
-mod peak_free_tree;
 
 use cranelift_entity::{EntityRef, SecondaryMap, entity_impl};
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 use sonatina_ir::{
-    BlockId, Function, InstId, InstSetExt, ValueId,
+    BlockId, ControlFlowGraph, Function, InstId, InstSetExt, ValueId,
     inst::evm::inst_set::EvmInstKind,
     isa::{Isa, evm::Evm},
     module::{FuncRef, ModuleCtx},
 };
-use std::{cmp::Reverse, collections::BinaryHeap};
+use std::hash::Hash;
 
-use crate::{bitset::BitSet, liveness::InstLiveness};
-
-use peak_free_tree::PeakFreeTree;
+use crate::bitset::BitSet;
 
 use super::{
     memory_plan::{FuncAnalysis, WORD_BYTES},
@@ -36,6 +32,14 @@ use super::{
 pub struct StackObjId(u32);
 entity_impl!(StackObjId);
 
+#[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
+pub(crate) struct LocalObjIdx(u32);
+entity_impl!(LocalObjIdx);
+
+#[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
+pub(crate) struct StableItemIdx(u32);
+entity_impl!(StableItemIdx);
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum StackObjKind {
     Alloca(InstId),
@@ -43,10 +47,66 @@ pub(crate) enum StackObjKind {
     Shadow(InstId),
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub(crate) struct LiveInterval {
-    pub(crate) start: u32,
-    pub(crate) end: u32,
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct BlockLiveSegment {
+    pub(crate) block: BlockId,
+    pub(crate) start_boundary: u32,
+    pub(crate) end_boundary: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct LiveRegion {
+    pub(crate) segments: SmallVec<[BlockLiveSegment; 4]>,
+    pub(crate) first_rank: u32,
+    pub(crate) last_rank: u32,
+}
+
+impl LiveRegion {
+    pub(crate) fn empty() -> Self {
+        Self {
+            segments: SmallVec::new(),
+            first_rank: 0,
+            last_rank: 0,
+        }
+    }
+
+    pub(crate) fn sort_only(rank: u32) -> Self {
+        Self {
+            segments: SmallVec::new(),
+            first_rank: rank,
+            last_rank: rank,
+        }
+    }
+
+    pub(crate) fn sort_key(&self, id: StackObjId) -> (u32, u32, u32) {
+        (self.first_rank, self.last_rank, id.as_u32())
+    }
+
+    pub(crate) fn overlaps(&self, other: &Self) -> bool {
+        let mut lhs = 0usize;
+        let mut rhs = 0usize;
+        while lhs < self.segments.len() && rhs < other.segments.len() {
+            let a = self.segments[lhs];
+            let b = other.segments[rhs];
+            let block_cmp = a.block.as_u32().cmp(&b.block.as_u32());
+            if block_cmp.is_lt() {
+                lhs += 1;
+                continue;
+            }
+            if block_cmp.is_gt() {
+                rhs += 1;
+                continue;
+            }
+            if a.end_boundary <= b.start_boundary {
+                lhs += 1;
+            } else if b.end_boundary <= a.start_boundary {
+                rhs += 1;
+            } else {
+                return true;
+            }
+        }
+        false
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -54,7 +114,7 @@ pub(crate) struct StackObj {
     pub(crate) id: StackObjId,
     pub(crate) kind: StackObjKind,
     pub(crate) size_words: u32,
-    pub(crate) interval: LiveInterval,
+    pub(crate) region: LiveRegion,
     pub(crate) access_weight: u64,
     pub(crate) load_count: u32,
     pub(crate) store_count: u32,
@@ -75,7 +135,7 @@ pub(crate) enum StableReason {
 pub(crate) struct ObjFacts {
     pub(crate) id: StackObjId,
     pub(crate) size_words: u32,
-    pub(crate) interval: LiveInterval,
+    pub(crate) region: LiveRegion,
     pub(crate) is_alloca: bool,
     pub(crate) is_spill: bool,
     pub(crate) address_taken: bool,
@@ -91,12 +151,12 @@ pub(crate) struct ObjFacts {
 
 pub(crate) struct CallSiteObjects {
     pub(crate) inst: InstId,
-    pub(crate) inst_pos: u32,
+    pub(crate) call_rank: u32,
     pub(crate) callee: FuncRef,
     pub(crate) result_count: u8,
     #[allow(dead_code)]
     pub(crate) arg_count: u8,
-    pub(crate) live_out_objs: Vec<StackObjId>,
+    pub(crate) live_across_objs: Vec<StackObjId>,
     pub(crate) callee_visible_objs: Vec<StackObjId>,
 }
 
@@ -218,19 +278,402 @@ pub(crate) fn compute_inst_order(
     (order, pos)
 }
 
-pub(crate) fn compute_block_end_pos(
-    function: &Function,
-    inst_pos: &FxHashMap<InstId, u32>,
-) -> FxHashMap<BlockId, u32> {
-    let mut out: FxHashMap<BlockId, u32> = FxHashMap::default();
-    for block in function.layout.iter_block() {
-        let mut end: Option<u32> = None;
-        for inst in function.layout.iter_inst(block) {
-            end = Some(inst_pos.get(&inst).copied().unwrap_or_default());
+fn compute_block_order(function: &Function, block_order: &[BlockId]) -> Vec<BlockId> {
+    let mut blocks = Vec::new();
+    let mut seen: FxHashSet<BlockId> = FxHashSet::default();
+    for &block in block_order {
+        if seen.insert(block) {
+            blocks.push(block);
         }
-        out.insert(block, end.unwrap_or(0));
     }
+    for block in function.layout.iter_block() {
+        if seen.insert(block) {
+            blocks.push(block);
+        }
+    }
+    blocks
+}
+
+#[derive(Default)]
+struct ExpandedAllocaRoots {
+    allocas: FxHashSet<InstId>,
+    hit_unknown: bool,
+}
+
+struct AllocaClosureCtx<'a> {
+    edges: &'a FxHashMap<InstId, FxHashSet<InstId>>,
+    unknown: &'a FxHashSet<InstId>,
+    all_allocas: &'a FxHashSet<InstId>,
+}
+
+impl AllocaClosureCtx<'_> {
+    fn expand_roots(&self, roots: impl IntoIterator<Item = InstId>) -> ExpandedAllocaRoots {
+        let (allocas, hit_unknown) =
+            conservative_closure_allocas(roots, self.edges, self.unknown, self.all_allocas);
+        ExpandedAllocaRoots {
+            allocas,
+            hit_unknown,
+        }
+    }
+}
+
+#[derive(Default)]
+struct ObjectEventIndex {
+    phi_defs: SecondaryMap<BlockId, BitSet<LocalObjIdx>>,
+    edge_phi_uses: FxHashMap<(BlockId, BlockId), BitSet<LocalObjIdx>>,
+    local_uses: SecondaryMap<InstId, BitSet<LocalObjIdx>>,
+    local_defs: SecondaryMap<InstId, BitSet<LocalObjIdx>>,
+    block_inst_count: SecondaryMap<BlockId, u32>,
+    block_rank_base: SecondaryMap<BlockId, u32>,
+    inst_block: FxHashMap<InstId, BlockId>,
+    inst_index_in_block: FxHashMap<InstId, u32>,
+}
+
+struct ObjectEventBuildCtx<'a, 'b> {
+    analysis: &'a FuncAnalysis,
+    isa: &'a Evm,
+    prov: &'a SecondaryMap<ValueId, Provenance>,
+    spill_local_by_value: &'a SecondaryMap<ValueId, Option<LocalObjIdx>>,
+    alloca_local_by_inst: &'a FxHashMap<InstId, LocalObjIdx>,
+    closure: &'a AllocaClosureCtx<'b>,
+    unknown_barrier_objs: &'a mut FxHashSet<StackObjId>,
+    obj_id_by_local: &'a [StackObjId],
+}
+
+impl ObjectEventIndex {
+    fn ensure_block(&mut self, block: BlockId) {
+        let _ = &mut self.phi_defs[block];
+        let _ = &mut self.block_inst_count[block];
+        let _ = &mut self.block_rank_base[block];
+    }
+
+    fn ensure_inst(&mut self, inst: InstId) {
+        let _ = &mut self.local_uses[inst];
+        let _ = &mut self.local_defs[inst];
+    }
+
+    fn boundary_rank(&self, block: BlockId, boundary_idx: u32) -> u32 {
+        self.block_rank_base[block]
+            .checked_add(boundary_idx)
+            .expect("boundary rank overflow")
+    }
+}
+
+#[derive(Default)]
+struct ObjectBlockLiveness {
+    live_in: SecondaryMap<BlockId, BitSet<LocalObjIdx>>,
+    live_out: SecondaryMap<BlockId, BitSet<LocalObjIdx>>,
+}
+
+fn seed_object_event_metadata(function: &Function, block_order: &[BlockId]) -> ObjectEventIndex {
+    let mut events = ObjectEventIndex::default();
+    let mut next_rank = 0u32;
+    for &block in block_order {
+        events.ensure_block(block);
+        events.block_rank_base[block] = next_rank;
+
+        let mut inst_count = 0u32;
+        for (inst_index, inst) in function.layout.iter_inst(block).enumerate() {
+            let inst_index = inst_index as u32;
+            events.ensure_inst(inst);
+            events.inst_block.insert(inst, block);
+            events.inst_index_in_block.insert(inst, inst_index);
+            inst_count = inst_index
+                .checked_add(1)
+                .expect("block instruction count overflow");
+        }
+        events.block_inst_count[block] = inst_count;
+        next_rank = next_rank
+            .checked_add(inst_count.checked_add(1).expect("block boundary overflow"))
+            .expect("block rank overflow");
+    }
+    events
+}
+
+fn add_value_alloca_uses(
+    uses: &mut BitSet<LocalObjIdx>,
+    value: ValueId,
+    prov: &SecondaryMap<ValueId, Provenance>,
+    closure: &AllocaClosureCtx<'_>,
+    alloca_local_by_inst: &FxHashMap<InstId, LocalObjIdx>,
+    unknown_barrier_objs: &mut FxHashSet<StackObjId>,
+    obj_id_by_local: &[StackObjId],
+) {
+    let roots: Vec<_> = prov[value].alloca_insts().collect();
+    if roots.is_empty() {
+        return;
+    }
+    let expanded = closure.expand_roots(roots);
+    for alloca in expanded.allocas {
+        if let Some(&local_idx) = alloca_local_by_inst.get(&alloca) {
+            uses.insert(local_idx);
+            if expanded.hit_unknown {
+                unknown_barrier_objs.insert(obj_id_by_local[local_idx.as_u32() as usize]);
+            }
+        }
+    }
+}
+
+fn build_object_event_index(
+    function: &Function,
+    block_order: &[BlockId],
+    ctx: &mut ObjectEventBuildCtx<'_, '_>,
+) -> ObjectEventIndex {
+    let mut events = seed_object_event_metadata(function, block_order);
+
+    for &block in block_order {
+        for inst in function.layout.iter_inst(block) {
+            let resolved = ctx.isa.inst_set().resolve_inst(function.dfg.inst(inst));
+            if let EvmInstKind::Phi(phi) = resolved {
+                for &result in function.dfg.inst_results(inst) {
+                    let value = ctx.analysis.canonicalize_value(result);
+                    if let Some(local_idx) = ctx.spill_local_by_value[value] {
+                        events.phi_defs[block].insert(local_idx);
+                    }
+                }
+                for (value, pred) in phi.args().iter() {
+                    let raw_value = *value;
+                    let value = ctx.analysis.canonicalize_value(raw_value);
+                    if let Some(local_idx) = ctx.spill_local_by_value[value] {
+                        events
+                            .edge_phi_uses
+                            .entry((*pred, block))
+                            .or_default()
+                            .insert(local_idx);
+                    }
+
+                    let edge_uses = events.edge_phi_uses.entry((*pred, block)).or_default();
+                    add_value_alloca_uses(
+                        edge_uses,
+                        raw_value,
+                        ctx.prov,
+                        ctx.closure,
+                        ctx.alloca_local_by_inst,
+                        ctx.unknown_barrier_objs,
+                        ctx.obj_id_by_local,
+                    );
+                }
+                continue;
+            }
+
+            for &result in function.dfg.inst_results(inst) {
+                let value = ctx.analysis.canonicalize_value(result);
+                if let Some(local_idx) = ctx.spill_local_by_value[value] {
+                    events.local_defs[inst].insert(local_idx);
+                }
+            }
+
+            if matches!(resolved, EvmInstKind::Alloca(_))
+                && let Some(&local_idx) = ctx.alloca_local_by_inst.get(&inst)
+            {
+                events.local_defs[inst].insert(local_idx);
+            }
+
+            function.dfg.inst(inst).for_each_value(&mut |value| {
+                let value = ctx.analysis.canonicalize_value(value);
+                if let Some(local_idx) = ctx.spill_local_by_value[value] {
+                    events.local_uses[inst].insert(local_idx);
+                }
+                add_value_alloca_uses(
+                    &mut events.local_uses[inst],
+                    value,
+                    ctx.prov,
+                    ctx.closure,
+                    ctx.alloca_local_by_inst,
+                    ctx.unknown_barrier_objs,
+                    ctx.obj_id_by_local,
+                );
+            });
+        }
+    }
+
+    events
+}
+
+fn reverse_scan_block_non_phi(
+    function: &Function,
+    block: BlockId,
+    live_out: &BitSet<LocalObjIdx>,
+    events: &ObjectEventIndex,
+) -> BitSet<LocalObjIdx> {
+    let mut live = live_out.clone();
+    let insts: Vec<_> = function.layout.iter_inst(block).collect();
+    for inst in insts.into_iter().rev() {
+        if function.dfg.is_phi(inst) {
+            continue;
+        }
+        live.difference_with(&events.local_defs[inst]);
+        live.union_with(&events.local_uses[inst]);
+    }
+    live
+}
+
+fn solve_object_block_liveness(
+    function: &Function,
+    cfg: &ControlFlowGraph,
+    block_order: &[BlockId],
+    events: &ObjectEventIndex,
+) -> ObjectBlockLiveness {
+    let mut out = ObjectBlockLiveness::default();
+    for &block in block_order {
+        let _ = &mut out.live_in[block];
+        let _ = &mut out.live_out[block];
+    }
+
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for &block in block_order.iter().rev() {
+            let mut live_out = BitSet::default();
+            for &succ in cfg.succs_as_slice(block) {
+                let mut edge_live = out.live_in[succ].clone();
+                edge_live.difference_with(&events.phi_defs[succ]);
+                if let Some(phi_uses) = events.edge_phi_uses.get(&(block, succ)) {
+                    edge_live.union_with(phi_uses);
+                }
+                live_out.union_with(&edge_live);
+            }
+
+            let live_in = reverse_scan_block_non_phi(function, block, &live_out, events);
+            if live_out != out.live_out[block] || live_in != out.live_in[block] {
+                out.live_out[block] = live_out;
+                out.live_in[block] = live_in;
+                changed = true;
+            }
+        }
+    }
+
     out
+}
+
+fn build_block_boundary_live_sets(
+    function: &Function,
+    block: BlockId,
+    block_live: &ObjectBlockLiveness,
+    events: &ObjectEventIndex,
+) -> Vec<BitSet<LocalObjIdx>> {
+    let insts: Vec<_> = function.layout.iter_inst(block).collect();
+    let mut boundary_live = vec![BitSet::default(); insts.len().saturating_add(1)];
+    boundary_live[insts.len()] = block_live.live_out[block].clone();
+
+    let mut live = block_live.live_out[block].clone();
+    for inst in insts.into_iter().rev() {
+        if function.dfg.is_phi(inst) {
+            continue;
+        }
+        let boundary_idx = events.inst_index_in_block[&inst] as usize;
+        live.difference_with(&events.local_defs[inst]);
+        live.union_with(&events.local_uses[inst]);
+        boundary_live[boundary_idx] = live.clone();
+    }
+
+    boundary_live
+}
+
+fn push_region_segment(
+    regions: &mut [LiveRegion],
+    events: &ObjectEventIndex,
+    local_idx: LocalObjIdx,
+    block: BlockId,
+    start_boundary: u32,
+    end_boundary: u32,
+) {
+    if start_boundary == end_boundary {
+        return;
+    }
+
+    let region = &mut regions[local_idx.as_u32() as usize];
+    region.segments.push(BlockLiveSegment {
+        block,
+        start_boundary,
+        end_boundary,
+    });
+    let start_rank = events.boundary_rank(block, start_boundary);
+    let end_rank = events.boundary_rank(block, end_boundary);
+    if region.segments.len() == 1 {
+        region.first_rank = start_rank;
+        region.last_rank = end_rank;
+    } else {
+        region.first_rank = region.first_rank.min(start_rank);
+        region.last_rank = region.last_rank.max(end_rank);
+    }
+}
+
+fn coalesce_region_segments(region: &mut LiveRegion) {
+    if region.segments.is_empty() {
+        return;
+    }
+    region
+        .segments
+        .sort_unstable_by_key(|seg| (seg.block.as_u32(), seg.start_boundary, seg.end_boundary));
+    let mut coalesced = SmallVec::<[BlockLiveSegment; 4]>::new();
+    for segment in region.segments.drain(..) {
+        if let Some(last) = coalesced.last_mut()
+            && last.block == segment.block
+            && last.end_boundary == segment.start_boundary
+        {
+            last.end_boundary = segment.end_boundary;
+        } else {
+            coalesced.push(segment);
+        }
+    }
+    region.segments = coalesced;
+}
+
+fn emit_regions(
+    function: &Function,
+    block_order: &[BlockId],
+    events: &ObjectEventIndex,
+    block_live: &ObjectBlockLiveness,
+    object_count: usize,
+) -> Vec<LiveRegion> {
+    let mut regions = vec![LiveRegion::empty(); object_count];
+    let mut open = vec![None; object_count];
+
+    for &block in block_order {
+        open.fill(None);
+        let boundary_live = build_block_boundary_live_sets(function, block, block_live, events);
+        let mut active = BitSet::default();
+        let block_inst_count = events.block_inst_count[block];
+
+        for boundary_idx in 0..block_inst_count {
+            let current = &boundary_live[boundary_idx as usize];
+            for local_idx in BitSet::difference(&active, current).iter() {
+                if let Some(start_boundary) = open[local_idx.as_u32() as usize].take() {
+                    push_region_segment(
+                        &mut regions,
+                        events,
+                        local_idx,
+                        block,
+                        start_boundary,
+                        boundary_idx,
+                    );
+                }
+            }
+            for local_idx in BitSet::difference(current, &active).iter() {
+                open[local_idx.as_u32() as usize] = Some(boundary_idx);
+            }
+            active = current.clone();
+        }
+
+        for local_idx in active.iter() {
+            if let Some(start_boundary) = open[local_idx.as_u32() as usize].take() {
+                push_region_segment(
+                    &mut regions,
+                    events,
+                    local_idx,
+                    block,
+                    start_boundary,
+                    block_inst_count,
+                );
+            }
+        }
+    }
+
+    for region in &mut regions {
+        coalesce_region_segments(region);
+    }
+    regions
 }
 
 pub(crate) fn compute_func_stack_objects(
@@ -239,8 +682,10 @@ pub(crate) fn compute_func_stack_objects(
     ctx: &StaticArenaAllocCtx<'_>,
     analysis: &FuncAnalysis,
 ) -> FuncStackObjects {
-    let (inst_order, inst_pos) = compute_inst_order(function, &analysis.block_order);
-    let block_end_pos = compute_block_end_pos(function, &inst_pos);
+    let block_order = compute_block_order(function, &analysis.block_order);
+    let (inst_order, _inst_pos) = compute_inst_order(function, &analysis.block_order);
+    let mut cfg = ControlFlowGraph::new();
+    cfg.compute(function);
 
     let prov_info = compute_provenance(function, ctx.module, ctx.isa, |callee| {
         ctx.ptr_escape
@@ -287,16 +732,6 @@ pub(crate) fn compute_func_stack_objects(
         }
     }
 
-    let spill_intervals = compute_spill_intervals(
-        function,
-        analysis,
-        ctx.isa,
-        &inst_order,
-        &inst_pos,
-        &block_end_pos,
-        &spilled_values,
-    );
-
     let mut objects: Vec<StackObj> = Vec::new();
     for v in spilled_values.iter() {
         let id = spill_obj[v].expect("spilled value missing stack object id");
@@ -304,10 +739,7 @@ pub(crate) fn compute_func_stack_objects(
             id,
             kind: StackObjKind::Spill(v),
             size_words: 1,
-            interval: spill_intervals
-                .get(&v)
-                .copied()
-                .unwrap_or(LiveInterval { start: 0, end: 0 }),
+            region: LiveRegion::empty(),
             access_weight: 0,
             load_count: 0,
             store_count: 0,
@@ -322,16 +754,6 @@ pub(crate) fn compute_func_stack_objects(
         .map(|id| id.as_u32())
         .max()
         .map_or(0, |n| n.checked_add(1).expect("stack object id overflow"));
-
-    let alloca_intervals = compute_alloca_intervals(
-        function,
-        ctx.isa,
-        &inst_order,
-        &inst_pos,
-        &block_end_pos,
-        &analysis.inst_liveness,
-        prov,
-    );
 
     let mut alloca_ids: FxHashMap<InstId, StackObjId> = FxHashMap::default();
     for &inst in &inst_order {
@@ -355,13 +777,7 @@ pub(crate) fn compute_func_stack_objects(
             id,
             kind: StackObjKind::Alloca(inst),
             size_words,
-            interval: alloca_intervals
-                .get(&inst)
-                .copied()
-                .unwrap_or(LiveInterval {
-                    start: inst_pos.get(&inst).copied().unwrap_or_default(),
-                    end: inst_pos.get(&inst).copied().unwrap_or_default(),
-                }),
+            region: LiveRegion::empty(),
             access_weight: 0,
             load_count: 0,
             store_count: 0,
@@ -373,6 +789,20 @@ pub(crate) fn compute_func_stack_objects(
     for (idx, obj) in objects.iter().enumerate() {
         obj_index.insert(obj.id, idx);
     }
+
+    let mut spill_local_by_value: SecondaryMap<ValueId, Option<LocalObjIdx>> = SecondaryMap::new();
+    for value in function.dfg.value_ids() {
+        let _ = &mut spill_local_by_value[value];
+    }
+    for value in spilled_values.iter() {
+        let obj = spill_obj[value].expect("spilled value missing stack object id");
+        spill_local_by_value[value] = Some(LocalObjIdx::new(obj_index[&obj]));
+    }
+    let mut alloca_local_by_inst: FxHashMap<InstId, LocalObjIdx> = FxHashMap::default();
+    for (&inst, &id) in &alloca_ids {
+        alloca_local_by_inst.insert(inst, LocalObjIdx::new(obj_index[&id]));
+    }
+    let obj_id_by_local: Vec<StackObjId> = objects.iter().map(|obj| obj.id).collect();
 
     for block in function.layout.iter_block() {
         for inst in function.layout.iter_inst(block) {
@@ -443,60 +873,44 @@ pub(crate) fn compute_func_stack_objects(
     }
 
     let mut unknown_barrier_objs: FxHashSet<StackObjId> = FxHashSet::default();
+    let closure = AllocaClosureCtx {
+        edges: &local_edges,
+        unknown: &local_unknown,
+        all_allocas: &all_allocas,
+    };
+    let mut event_ctx = ObjectEventBuildCtx {
+        analysis,
+        isa: ctx.isa,
+        prov,
+        spill_local_by_value: &spill_local_by_value,
+        alloca_local_by_inst: &alloca_local_by_inst,
+        closure: &closure,
+        unknown_barrier_objs: &mut unknown_barrier_objs,
+        obj_id_by_local: &obj_id_by_local,
+    };
+    let events = build_object_event_index(function, &block_order, &mut event_ctx);
+    let block_live = solve_object_block_liveness(function, &cfg, &block_order, &events);
+    let regions = emit_regions(function, &block_order, &events, &block_live, objects.len());
+    for (idx, region) in regions.into_iter().enumerate() {
+        objects[idx].region = region;
+    }
+
     let mut call_sites: Vec<CallSiteObjects> = Vec::new();
-    for block in function.layout.iter_block() {
+    for &block in &block_order {
+        let boundary_live = build_block_boundary_live_sets(function, block, &block_live, &events);
         for inst in function.layout.iter_inst(block) {
             let Some(call) = function.dfg.cast_call(inst) else {
                 continue;
             };
-            let pos = inst_pos.get(&inst).copied().unwrap_or_default();
-            let callee = *call.callee();
-            let local_return = ctx.module.func_effects(callee).may_return_to_caller();
-            let arg_count = u8::try_from(call.args().len()).expect("call arg count too large");
-            let call_results = function.dfg.inst_results(inst);
-            let canonical_call_results: FxHashSet<ValueId> = call_results
+
+            let mut live_across =
+                boundary_live[events.inst_index_in_block[&inst] as usize + 1].clone();
+            live_across.difference_with(&events.local_defs[inst]);
+            let mut live_across_objs: Vec<StackObjId> = live_across
                 .iter()
-                .map(|&value| analysis.canonicalize_value(value))
+                .map(|local_idx| obj_id_by_local[local_idx.as_u32() as usize])
                 .collect();
-            let result_count =
-                u8::try_from(call_results.len()).expect("call result count too large");
-
-            let mut set: FxHashSet<StackObjId> = FxHashSet::default();
-            let mut roots: FxHashSet<InstId> = FxHashSet::default();
-            if local_return {
-                for v in analysis.inst_liveness.live_out(inst).iter() {
-                    let v = analysis.canonicalize_value(v);
-                    if canonical_call_results.contains(&v) {
-                        continue;
-                    }
-
-                    if let Some(obj) = spill_obj[v] {
-                        set.insert(obj);
-                    }
-
-                    for base in prov[v].alloca_insts() {
-                        roots.insert(base);
-                    }
-                }
-            }
-
-            let (allocas, unknown_live) = conservative_closure_allocas(
-                roots.iter().copied(),
-                &local_edges,
-                &local_unknown,
-                &all_allocas,
-            );
-            for base in allocas {
-                if let Some(&id) = alloca_ids.get(&base) {
-                    set.insert(id);
-                    if unknown_live {
-                        unknown_barrier_objs.insert(id);
-                    }
-                }
-            }
-
-            let mut live_objs: Vec<StackObjId> = set.into_iter().collect();
-            live_objs.sort_unstable_by_key(|id| id.as_u32());
+            live_across_objs.sort_unstable_by_key(|id| id.as_u32());
 
             let mut visible_objs: FxHashSet<StackObjId> = FxHashSet::default();
             let mut roots: FxHashSet<InstId> = FxHashSet::default();
@@ -505,16 +919,11 @@ pub(crate) fn compute_func_stack_objects(
                     roots.insert(base);
                 }
             }
-            let (allocas, unknown_visible) = conservative_closure_allocas(
-                roots.iter().copied(),
-                &local_edges,
-                &local_unknown,
-                &all_allocas,
-            );
-            for base in allocas {
-                if let Some(&id) = alloca_ids.get(&base) {
+            let expanded = closure.expand_roots(roots.iter().copied());
+            for alloca in expanded.allocas {
+                if let Some(&id) = alloca_ids.get(&alloca) {
                     visible_objs.insert(id);
-                    if unknown_visible {
+                    if expanded.hit_unknown {
                         unknown_barrier_objs.insert(id);
                     }
                 }
@@ -523,11 +932,12 @@ pub(crate) fn compute_func_stack_objects(
             callee_visible_objs.sort_unstable_by_key(|id| id.as_u32());
             call_sites.push(CallSiteObjects {
                 inst,
-                inst_pos: pos,
-                callee,
-                result_count,
-                arg_count,
-                live_out_objs: live_objs,
+                call_rank: events.boundary_rank(block, events.inst_index_in_block[&inst]),
+                callee: *call.callee(),
+                result_count: u8::try_from(function.dfg.inst_results(inst).len())
+                    .expect("call result count too large"),
+                arg_count: u8::try_from(call.args().len()).expect("call arg count too large"),
+                live_across_objs,
                 callee_visible_objs,
             });
         }
@@ -547,7 +957,7 @@ pub(crate) fn compute_func_stack_objects(
             ObjFacts {
                 id: obj.id,
                 size_words: obj.size_words,
-                interval: obj.interval,
+                region: obj.region.clone(),
                 is_alloca: matches!(obj.kind, StackObjKind::Alloca(_)),
                 is_spill: matches!(obj.kind, StackObjKind::Spill(_)),
                 address_taken,
@@ -563,7 +973,7 @@ pub(crate) fn compute_func_stack_objects(
         );
     }
     for call in &call_sites {
-        for &obj in &call.live_out_objs {
+        for &obj in &call.live_across_objs {
             let facts = obj_facts
                 .get_mut(&obj)
                 .unwrap_or_else(|| panic!("missing object facts for obj {}", obj.as_u32()));
@@ -603,589 +1013,148 @@ pub(crate) fn compute_func_stack_objects(
     }
 }
 
-fn compute_spill_intervals(
-    function: &Function,
-    analysis: &FuncAnalysis,
-    isa: &Evm,
-    inst_order: &[InstId],
-    inst_pos: &FxHashMap<InstId, u32>,
-    block_end_pos: &FxHashMap<BlockId, u32>,
-    spilled: &BitSet<ValueId>,
-) -> FxHashMap<ValueId, LiveInterval> {
-    let mut start: FxHashMap<ValueId, u32> = FxHashMap::default();
-    let mut end: FxHashMap<ValueId, u32> = FxHashMap::default();
-
-    for v in spilled.iter() {
-        let start_pos = if matches!(function.dfg.value(v), sonatina_ir::Value::Arg { .. }) {
-            0
-        } else if let Some(inst) = function.dfg.value_inst(v) {
-            inst_pos.get(&inst).copied().unwrap_or_default()
-        } else {
-            0
-        };
-        start.insert(v, start_pos);
-        end.insert(v, start_pos);
-    }
-
-    for &inst in inst_order {
-        let pos = inst_pos.get(&inst).copied().unwrap_or_default();
-        let data = isa.inst_set().resolve_inst(function.dfg.inst(inst));
-        if let EvmInstKind::Phi(phi) = data {
-            for (val, pred) in phi.args().iter() {
-                let val = analysis.canonicalize_value(*val);
-                if spilled.contains(val) {
-                    let use_pos = block_end_pos.get(pred).copied().unwrap_or_default();
-                    end.entry(val).and_modify(|e| *e = (*e).max(use_pos));
-                }
-            }
-        } else {
-            function.dfg.inst(inst).for_each_value(&mut |v| {
-                let v = analysis.canonicalize_value(v);
-                if spilled.contains(v) {
-                    end.entry(v).and_modify(|e| *e = (*e).max(pos));
-                }
-            });
-        }
-
-        for v in analysis.inst_liveness.live_out(inst).iter() {
-            let v = analysis.canonicalize_value(v);
-            if spilled.contains(v) {
-                end.entry(v).and_modify(|e| *e = (*e).max(pos));
-            }
-        }
-    }
-
-    let mut out: FxHashMap<ValueId, LiveInterval> = FxHashMap::default();
-    for v in spilled.iter() {
-        let s = start.get(&v).copied().unwrap_or(0);
-        let e = end.get(&v).copied().unwrap_or(s);
-        out.insert(v, LiveInterval { start: s, end: e });
-    }
-    out
-}
-
-fn compute_alloca_intervals(
-    function: &Function,
-    isa: &Evm,
-    inst_order: &[InstId],
-    inst_pos: &FxHashMap<InstId, u32>,
-    block_end_pos: &FxHashMap<BlockId, u32>,
-    inst_liveness: &InstLiveness,
-    prov: &SecondaryMap<ValueId, Provenance>,
-) -> FxHashMap<InstId, LiveInterval> {
-    let mut allocas: FxHashSet<InstId> = FxHashSet::default();
-    for &inst in inst_order {
-        if matches!(
-            isa.inst_set().resolve_inst(function.dfg.inst(inst)),
-            EvmInstKind::Alloca(_)
-        ) {
-            allocas.insert(inst);
-        }
-    }
-
-    let mut last_live: FxHashMap<InstId, u32> = FxHashMap::default();
-    for &inst in &allocas {
-        let pos = inst_pos.get(&inst).copied().unwrap_or_default();
-        last_live.insert(inst, pos);
-    }
-
-    for &inst in inst_order {
-        let pos = inst_pos.get(&inst).copied().unwrap_or_default();
-        let data = isa.inst_set().resolve_inst(function.dfg.inst(inst));
-        if let EvmInstKind::Phi(phi) = data {
-            for (val, pred) in phi.args().iter() {
-                let use_pos = block_end_pos.get(pred).copied().unwrap_or_default();
-                for base in prov[*val].alloca_insts() {
-                    let entry = last_live.get_mut(&base).expect("missing alloca last-live");
-                    *entry = (*entry).max(use_pos);
-                }
-            }
-        } else {
-            function.dfg.inst(inst).for_each_value(&mut |v| {
-                for base in prov[v].alloca_insts() {
-                    let entry = last_live.get_mut(&base).expect("missing alloca last-live");
-                    *entry = (*entry).max(pos);
-                }
-            });
-        }
-
-        for v in inst_liveness.live_out(inst).iter() {
-            if prov[v].is_empty() {
-                continue;
-            }
-            for base in prov[v].alloca_insts() {
-                let entry = last_live.get_mut(&base).expect("missing alloca last-live");
-                *entry = (*entry).max(pos);
-            }
-        }
-    }
-
-    let mut out: FxHashMap<InstId, LiveInterval> = FxHashMap::default();
-    for &inst in &allocas {
-        let start = inst_pos.get(&inst).copied().unwrap_or_default();
-        let end = last_live.get(&inst).copied().unwrap_or(start);
-        out.insert(inst, LiveInterval { start, end });
-    }
-    out
-}
-
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct PackedObject {
     pub(crate) id: StackObjId,
     pub(crate) size_words: u32,
-    pub(crate) interval: LiveInterval,
+    pub(crate) region: LiveRegion,
     pub(crate) min_offset_words: u32,
 }
 
 #[derive(Clone, Copy, Debug)]
-struct FreeSegment {
-    start: u32,
-    len: u32,
-}
-
-impl FreeSegment {
-    fn end(self) -> u32 {
-        self.start
-            .checked_add(self.len)
-            .expect("free segment overflow")
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct RankedPeakPackItem {
-    pub(crate) order_idx: u32,
-    pub(crate) start_rank: u32,
+pub(crate) struct ExactPackItem<Idx> {
+    pub(crate) id: StackObjId,
+    pub(crate) idx: Idx,
     pub(crate) size_words: u32,
+    pub(crate) min_offset_words: u32,
 }
 
-#[derive(Clone, Debug)]
-pub(crate) struct ReleaseSchedule {
-    by_end_rank: Vec<std::ops::Range<usize>>,
-    order_indices: Vec<u32>,
-}
-
-impl ReleaseSchedule {
-    pub(crate) fn from_end_ranks(end_ranks_by_order: &[u32], rank_count: usize) -> Self {
-        let mut order_indices: Vec<u32> = (0..end_ranks_by_order.len())
-            .map(|order_idx| order_idx as u32)
-            .collect();
-        order_indices
-            .sort_unstable_by_key(|&order_idx| (end_ranks_by_order[order_idx as usize], order_idx));
-
-        let mut by_end_rank = vec![0..0; rank_count];
-        let mut cursor = 0usize;
-        for (rank, range) in by_end_rank.iter_mut().enumerate() {
-            let start = cursor;
-            while let Some(&order_idx) = order_indices.get(cursor)
-                && end_ranks_by_order[order_idx as usize] == rank as u32
-            {
-                cursor += 1;
-            }
-            *range = start..cursor;
-        }
-
-        Self {
-            by_end_rank,
-            order_indices,
-        }
-    }
-}
-
-#[derive(Default)]
-pub(crate) struct PeakPackWorkspace {
-    free: PeakFreeTree,
-    active_epoch: Vec<u32>,
-    active_off: Vec<u32>,
-    active_size: Vec<u32>,
-    epoch: u32,
-}
-
-impl PeakPackWorkspace {
-    fn reset(&mut self, capacity_hint: usize, universe_len: usize) {
-        self.free.reset(capacity_hint);
-        if self.active_epoch.len() < universe_len {
-            self.active_epoch.resize(universe_len, 0);
-            self.active_off.resize(universe_len, 0);
-            self.active_size.resize(universe_len, 0);
-        }
-        self.epoch = self.epoch.wrapping_add(1);
-        if self.epoch == 0 {
-            self.active_epoch.fill(0);
-            self.epoch = 1;
-        }
-    }
-}
-
-trait FreeList {
-    fn with_capacity(capacity: usize) -> Self;
-    fn insert(&mut self, start: u32, len: u32);
-    fn take_fit(&mut self, min_offset_words: u32, size_words: u32) -> Option<FreeSegment>;
-    fn take_frontier_segment(&mut self, max_used: u32) -> Option<FreeSegment>;
-}
-
-struct SortedFreeList(Vec<FreeSegment>);
-
-#[cfg(test)]
-struct UnsortedFreeList(Vec<FreeSegment>);
-
-impl FreeList for SortedFreeList {
-    fn with_capacity(capacity: usize) -> Self {
-        Self(Vec::with_capacity(capacity))
-    }
-
-    fn insert(&mut self, start: u32, len: u32) {
-        insert_free_segment_sorted(&mut self.0, start, len);
-    }
-
-    fn take_fit(&mut self, min_offset_words: u32, size_words: u32) -> Option<FreeSegment> {
-        find_first_fit_segment(&self.0, min_offset_words, size_words)
-            .map(|index| self.0.remove(index))
-    }
-
-    fn take_frontier_segment(&mut self, max_used: u32) -> Option<FreeSegment> {
-        match self.0.last().copied() {
-            Some(segment) if segment.end() == max_used => self.0.pop(),
-            _ => None,
-        }
-    }
-}
-
-#[cfg(test)]
-impl FreeList for UnsortedFreeList {
-    fn with_capacity(capacity: usize) -> Self {
-        Self(Vec::with_capacity(capacity))
-    }
-
-    fn insert(&mut self, start: u32, len: u32) {
-        insert_free_segment_unsorted(&mut self.0, start, len);
-    }
-
-    fn take_fit(&mut self, min_offset_words: u32, size_words: u32) -> Option<FreeSegment> {
-        find_min_start_fit_segment(&self.0, min_offset_words, size_words)
-            .map(|index| self.0.swap_remove(index))
-    }
-
-    fn take_frontier_segment(&mut self, max_used: u32) -> Option<FreeSegment> {
-        self.0
-            .iter()
-            .position(|&segment| segment.end() == max_used)
-            .map(|index| self.0.swap_remove(index))
-    }
-}
-
-#[cfg(test)]
-pub(crate) fn pack_objects(objects: &mut [PackedObject]) -> (FxHashMap<StackObjId, u32>, u32) {
-    objects.sort_unstable_by_key(|o| (o.interval.start, o.interval.end, o.id.as_u32()));
-    pack_objects_presorted(objects)
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ExactPackResult {
+    pub(crate) offsets: FxHashMap<StackObjId, u32>,
+    pub(crate) max_used: u32,
 }
 
 pub(crate) fn pack_objects_presorted(
     objects: &[PackedObject],
 ) -> (FxHashMap<StackObjId, u32>, u32) {
-    let mut out = FxHashMap::with_capacity_and_hasher(objects.len(), Default::default());
-    let max_used = pack_objects_impl(objects.iter().copied(), objects.len(), |id, off| {
-        let _ = out.insert(id, off);
-    });
-    (out, max_used)
-}
+    let mut offsets = FxHashMap::with_capacity_and_hasher(objects.len(), Default::default());
+    let mut placed: Vec<(u32, u32, &PackedObject)> = Vec::with_capacity(objects.len());
+    let mut max_used = 0u32;
 
-#[cfg(test)]
-pub(crate) fn pack_objects_peak_presorted(objects: &[PackedObject]) -> u32 {
-    pack_objects_peak(objects.iter().copied())
-}
-
-#[cfg(test)]
-pub(crate) fn pack_objects_peak(objects: impl IntoIterator<Item = PackedObject>) -> u32 {
-    let iter = objects.into_iter();
-    let (lower_bound, _) = iter.size_hint();
-    pack_objects_with_free::<UnsortedFreeList>(iter, lower_bound, |_, _| {})
-}
-
-pub(crate) fn pack_zero_min_offset_peak_ranked(
-    workspace: &mut PeakPackWorkspace,
-    schedule: &ReleaseSchedule,
-    items: impl IntoIterator<Item = RankedPeakPackItem>,
-    capacity_hint: usize,
-) -> u32 {
-    workspace.reset(capacity_hint, schedule.order_indices.len());
-    let mut max_used: u32 = 0;
-    let mut drained_rank = 0usize;
-    let mut drained_within_rank = 0usize;
-
-    for item in items {
-        while drained_rank < item.start_rank as usize {
-            let range = &schedule.by_end_rank[drained_rank];
-            while drained_within_rank < range.len() {
-                let order_idx = schedule.order_indices[range.start + drained_within_rank] as usize;
-                drained_within_rank += 1;
-                if workspace.active_epoch[order_idx] == workspace.epoch {
-                    workspace.free.insert(
-                        workspace.active_off[order_idx],
-                        workspace.active_size[order_idx],
-                        max_used,
-                    );
-                }
-            }
-            drained_rank += 1;
-            drained_within_rank = 0;
-        }
-        if let Some(range) = schedule.by_end_rank.get(drained_rank) {
-            while drained_within_rank < range.len() {
-                let order_idx = schedule.order_indices[range.start + drained_within_rank];
-                if order_idx >= item.order_idx {
-                    break;
-                }
-                drained_within_rank += 1;
-                let order_idx = order_idx as usize;
-                if workspace.active_epoch[order_idx] == workspace.epoch {
-                    workspace.free.insert(
-                        workspace.active_off[order_idx],
-                        workspace.active_size[order_idx],
-                        max_used,
-                    );
-                }
-            }
-        }
-
-        if item.size_words == 0 {
+    for object in objects {
+        if object.size_words == 0 {
+            offsets.insert(object.id, 0);
             continue;
         }
 
-        let off = if let Some(off) = workspace.free.take_fit_prefix(item.size_words) {
-            off
-        } else if let Some(segment) = workspace.free.take_frontier() {
-            if segment.len > item.size_words {
-                workspace.free.restore_frontier(FreeSegment {
-                    start: segment
-                        .start
-                        .checked_add(item.size_words)
-                        .expect("free segment overflow"),
-                    len: segment
-                        .len
-                        .checked_sub(item.size_words)
-                        .expect("free segment underflow"),
-                });
-            }
-            segment.start
-        } else {
-            max_used
-        };
-        let order_idx = item.order_idx as usize;
-        workspace.active_epoch[order_idx] = workspace.epoch;
-        workspace.active_off[order_idx] = off;
-        workspace.active_size[order_idx] = item.size_words;
+        let off = first_fit_above(
+            object.min_offset_words,
+            object.size_words,
+            occupied_ranges(
+                placed
+                    .iter()
+                    .filter(|(_, _, placed_object)| placed_object.region.overlaps(&object.region))
+                    .map(|(off, end, _)| (*off, *end)),
+            ),
+        );
+        offsets.insert(object.id, off);
+        max_used = max_used.max(
+            off.checked_add(object.size_words)
+                .expect("locals size overflow"),
+        );
+        placed.push((
+            off,
+            off.checked_add(object.size_words)
+                .expect("locals size overflow"),
+            object,
+        ));
+    }
+
+    (offsets, max_used)
+}
+
+pub(crate) fn pack_exact_with_offsets<Idx>(
+    items: &[ExactPackItem<Idx>],
+    conflicts: &[BitSet<Idx>],
+) -> ExactPackResult
+where
+    Idx: EntityRef + Copy + Eq + Hash,
+{
+    let mut offsets = FxHashMap::with_capacity_and_hasher(items.len(), Default::default());
+    let mut placed: Vec<(u32, u32, Idx, u32)> = Vec::with_capacity(items.len());
+    let mut max_used = 0u32;
+
+    for item in items {
+        if item.size_words == 0 {
+            offsets.insert(item.id, 0);
+            continue;
+        }
+
+        let off = first_fit_above(
+            item.min_offset_words,
+            item.size_words,
+            occupied_ranges(placed.iter().filter_map(|(off, end, placed_idx, _)| {
+                conflicts[item.idx.index()]
+                    .contains(*placed_idx)
+                    .then_some((*off, *end))
+            })),
+        );
+        offsets.insert(item.id, off);
         max_used = max_used.max(
             off.checked_add(item.size_words)
                 .expect("locals size overflow"),
         );
-    }
-
-    max_used
-}
-
-fn pack_objects_impl(
-    objects: impl IntoIterator<Item = PackedObject>,
-    lower_bound: usize,
-    mut record: impl FnMut(StackObjId, u32),
-) -> u32 {
-    pack_objects_with_free::<SortedFreeList>(objects, lower_bound, &mut record)
-}
-
-fn pack_objects_with_free<F: FreeList>(
-    objects: impl IntoIterator<Item = PackedObject>,
-    lower_bound: usize,
-    mut record: impl FnMut(StackObjId, u32),
-) -> u32 {
-    let mut active: BinaryHeap<Reverse<(u32, u32, u32, u32)>> =
-        BinaryHeap::with_capacity(lower_bound);
-    let mut free = F::with_capacity(lower_bound);
-    let mut max_used: u32 = 0;
-
-    for obj in objects {
-        while let Some(Reverse((end, off, size, _id))) = active.peek().copied()
-            && end <= obj.interval.start
-        {
-            let _ = active.pop();
-            free.insert(off, size);
-        }
-
-        if obj.size_words == 0 {
-            record(obj.id, 0);
-            continue;
-        }
-
-        let off = if let Some(segment) = free.take_fit(obj.min_offset_words, obj.size_words) {
-            let (alloc_start, prefix, suffix) =
-                split_free_segment(segment, obj.min_offset_words, obj.size_words);
-            free.insert(prefix.start, prefix.len);
-            free.insert(suffix.start, suffix.len);
-            alloc_start
-        } else {
-            let old_max_used = max_used;
-            if let Some(segment) = free.take_frontier_segment(old_max_used) {
-                let alloc_start = segment.start.max(obj.min_offset_words);
-                free.insert(
-                    segment.start,
-                    alloc_start
-                        .checked_sub(segment.start)
-                        .expect("free segment underflow"),
-                );
-                alloc_start
-            } else {
-                let alloc_start = obj.min_offset_words.max(old_max_used);
-                free.insert(
-                    old_max_used,
-                    alloc_start
-                        .checked_sub(old_max_used)
-                        .expect("free segment underflow"),
-                );
-                alloc_start
-            }
-        };
-
-        record(obj.id, off);
-        active.push(Reverse((
-            obj.interval.end,
+        placed.push((
             off,
-            obj.size_words,
-            obj.id.as_u32(),
-        )));
-        max_used = max_used.max(
-            off.checked_add(obj.size_words)
+            off.checked_add(item.size_words)
                 .expect("locals size overflow"),
-        );
+            item.idx,
+            item.size_words,
+        ));
     }
 
-    max_used
+    ExactPackResult { offsets, max_used }
 }
 
-fn split_free_segment(
-    segment: FreeSegment,
-    min_offset_words: u32,
-    size_words: u32,
-) -> (u32, FreeSegment, FreeSegment) {
-    let end = segment
-        .start
-        .checked_add(segment.len)
-        .expect("free segment overflow");
-    let alloc_start = segment.start.max(min_offset_words);
-    let alloc_end = alloc_start
-        .checked_add(size_words)
-        .expect("free segment overflow");
-    (
-        alloc_start,
-        FreeSegment {
-            start: segment.start,
-            len: alloc_start
-                .checked_sub(segment.start)
-                .expect("free segment underflow"),
-        },
-        FreeSegment {
-            start: alloc_end,
-            len: end.checked_sub(alloc_end).expect("free segment underflow"),
-        },
-    )
+pub(crate) fn pack_exact_peak<Idx>(items: &[ExactPackItem<Idx>], conflicts: &[BitSet<Idx>]) -> u32
+where
+    Idx: EntityRef + Copy + Eq + Hash,
+{
+    pack_exact_with_offsets(items, conflicts).max_used
 }
 
-fn find_first_fit_segment(
-    free: &[FreeSegment],
-    min_offset_words: u32,
-    size_words: u32,
-) -> Option<usize> {
-    free.iter()
-        .position(|segment| free_segment_fits(*segment, min_offset_words, size_words))
+fn occupied_ranges(occupied: impl Iterator<Item = (u32, u32)>) -> Vec<(u32, u32)> {
+    let mut occupied: Vec<_> = occupied.collect();
+    occupied.sort_unstable();
+    let mut merged = Vec::with_capacity(occupied.len());
+    for (start, end) in occupied {
+        if let Some((_, merged_end)) = merged.last_mut()
+            && start <= *merged_end
+        {
+            *merged_end = (*merged_end).max(end);
+        } else {
+            merged.push((start, end));
+        }
+    }
+    merged
 }
 
-#[cfg(test)]
-fn find_min_start_fit_segment(
-    free: &[FreeSegment],
-    min_offset_words: u32,
-    size_words: u32,
-) -> Option<usize> {
-    let mut best: Option<(usize, u32)> = None;
-    for (index, segment) in free.iter().enumerate() {
-        if !free_segment_fits(*segment, min_offset_words, size_words) {
+fn first_fit_above(min_offset_words: u32, size_words: u32, occupied: Vec<(u32, u32)>) -> u32 {
+    let mut cursor = min_offset_words;
+    for (start, end) in occupied {
+        if end <= cursor {
             continue;
         }
-        match best {
-            None => best = Some((index, segment.start)),
-            Some((_, best_start)) if segment.start < best_start => {
-                best = Some((index, segment.start));
-            }
-            _ => {}
+        if cursor
+            .checked_add(size_words)
+            .is_some_and(|candidate_end| candidate_end <= start)
+        {
+            return cursor;
         }
+        cursor = cursor.max(end);
     }
-    best.map(|(index, _)| index)
-}
-
-fn free_segment_fits(segment: FreeSegment, min_offset_words: u32, size_words: u32) -> bool {
-    let alloc_start = segment.start.max(min_offset_words);
-    let alloc_end = alloc_start
-        .checked_add(size_words)
-        .expect("free segment overflow");
-    segment.end() >= alloc_end
-}
-
-fn insert_free_segment_sorted(free: &mut Vec<FreeSegment>, start: u32, len: u32) {
-    if len == 0 {
-        return;
-    }
-
-    let mut start = start;
-    let mut len = len;
-    let mut index = free
-        .binary_search_by_key(&start, |segment| segment.start)
-        .unwrap_or_else(|index| index);
-
-    if index != 0 {
-        let prev = free[index - 1];
-        if prev.end() == start {
-            start = prev.start;
-            len = len.checked_add(prev.len).expect("free segment overflow");
-            let _ = free.remove(index - 1);
-            index -= 1;
-        }
-    }
-
-    if index < free.len() {
-        let next = free[index];
-        let end = start.checked_add(len).expect("free segment overflow");
-        if end == next.start {
-            len = len.checked_add(next.len).expect("free segment overflow");
-            let _ = free.remove(index);
-        }
-    }
-
-    free.insert(index, FreeSegment { start, len });
-}
-
-#[cfg(test)]
-fn insert_free_segment_unsorted(free: &mut Vec<FreeSegment>, start: u32, len: u32) {
-    if len == 0 {
-        return;
-    }
-
-    let mut start = start;
-    let mut len = len;
-    let mut index = 0;
-    while index < free.len() {
-        let segment = free[index];
-        let end = start.checked_add(len).expect("free segment overflow");
-        if segment.end() == start {
-            start = segment.start;
-            len = len.checked_add(segment.len).expect("free segment overflow");
-            let _ = free.swap_remove(index);
-            continue;
-        }
-        if end == segment.start {
-            len = len.checked_add(segment.len).expect("free segment overflow");
-            let _ = free.swap_remove(index);
-            continue;
-        }
-        index += 1;
-    }
-
-    free.push(FreeSegment { start, len });
+    cursor
 }
 
 fn conservative_unknown_ptr_summary(module: &ModuleCtx, func_ref: FuncRef) -> PtrEscapeSummary {
@@ -1356,8 +1325,8 @@ fn render_alloca_escapes(
     msg
 }
 
-#[cfg(test)]
-mod tests {
+#[cfg(any())]
+mod old_tests {
     use super::*;
     use crate::{
         critical_edge::CriticalEdgeSplitter,
@@ -1925,5 +1894,508 @@ mod tests {
     fn next_test_u32(seed: &mut u64) -> u32 {
         *seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
         (*seed >> 32) as u32
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        critical_edge::CriticalEdgeSplitter,
+        domtree::DomTree,
+        isa::evm::{EvmBackend, canonicalize_alias_value},
+        liveness::{InstLiveness, Liveness},
+        stackalloc::StackifyBuilder,
+    };
+    use sonatina_parser::{ParsedModule, parse_module};
+    use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
+    use std::fmt::Write;
+
+    fn test_isa() -> Evm {
+        Evm::new(TargetTriple {
+            architecture: Architecture::Evm,
+            vendor: Vendor::Ethereum,
+            operating_system: OperatingSystem::Evm(EvmVersion::Osaka),
+        })
+    }
+
+    fn region(block: u32, start_boundary: u32, end_boundary: u32) -> LiveRegion {
+        LiveRegion {
+            segments: SmallVec::from_vec(vec![BlockLiveSegment {
+                block: BlockId::from_u32(block),
+                start_boundary,
+                end_boundary,
+            }]),
+            first_rank: start_boundary,
+            last_rank: end_boundary,
+        }
+    }
+
+    fn analyze_function(
+        input: &str,
+        func_name: &str,
+        stack_reach: u8,
+    ) -> (ParsedModule, FuncRef, FuncAnalysis, FuncStackObjects) {
+        let parsed = parse_module(input).expect("module parses");
+        let isa = test_isa();
+        let backend = EvmBackend::new(test_isa());
+        let funcs = parsed.module.funcs();
+        let ptr_escape =
+            super::super::ptr_escape::compute_ptr_escape_summaries(&parsed.module, &funcs, &isa);
+
+        let func_ref = parsed
+            .module
+            .funcs()
+            .into_iter()
+            .find(|&func| {
+                parsed
+                    .module
+                    .ctx
+                    .func_sig(func, |sig| sig.name() == func_name)
+            })
+            .unwrap_or_else(|| panic!("function `{func_name}` exists"));
+
+        let mut analysis = None;
+        parsed.module.func_store.modify(func_ref, |function| {
+            let mut cfg = sonatina_ir::cfg::ControlFlowGraph::new();
+            cfg.compute(function);
+            CriticalEdgeSplitter::new().run(function, &mut cfg);
+
+            let mut liveness = Liveness::new();
+            liveness.compute(function, &cfg);
+
+            let mut inst_liveness = InstLiveness::new();
+            inst_liveness.compute(function, &cfg, &liveness);
+
+            let mut dom = DomTree::new();
+            dom.compute(&cfg);
+
+            let value_aliases =
+                backend.compute_stackify_value_aliases(function, &parsed.module.ctx);
+
+            let mut stack_liveness = Liveness::new();
+            stack_liveness.compute_with_value_normalizer(function, &cfg, |value| {
+                canonicalize_alias_value(&value_aliases, value)
+            });
+
+            let alloc = StackifyBuilder::new(function, &cfg, &dom, &stack_liveness, stack_reach)
+                .with_value_aliases(&value_aliases)
+                .compute();
+
+            analysis = Some(FuncAnalysis {
+                alloc,
+                inst_liveness,
+                block_order: dom.rpo().to_vec(),
+                value_aliases,
+            });
+        });
+        let analysis = analysis.expect("analysis computed");
+
+        let alloc_ctx = StaticArenaAllocCtx::new(&parsed.module.ctx, &isa, &ptr_escape);
+        let stack = parsed.module.func_store.view(func_ref, |function| {
+            alloc_ctx.compute_func_stack_objects(func_ref, function, &analysis)
+        });
+        (parsed, func_ref, analysis, stack)
+    }
+
+    #[test]
+    fn aliased_spill_is_marked_live_across_at_internal_call() {
+        let (parsed, func_ref, analysis, stack) = analyze_function(
+            include_str!("../../../tests/fixtures/fe_lazy_merkle_proof_element_1_pass6.sntn"),
+            "lazyimtdata_hb575fd00dcf9c59f_merkle_proof_elements",
+            16,
+        );
+
+        let spill_value = analysis.canonicalize_value(
+            parsed
+                .debug
+                .value(func_ref, "v5")
+                .expect("aliased pointer value exists"),
+        );
+        let spill_obj = analysis.alloc.spill_obj[spill_value].expect("spill object exists");
+
+        let call = stack
+            .call_sites
+            .iter()
+            .find(|call| {
+                parsed.module.ctx.func_sig(call.callee, |sig| {
+                    sig.name() == "lazyimtdata_hb575fd00dcf9c59f_levels_for_root"
+                })
+            })
+            .expect("levels_for_root call exists");
+
+        assert!(
+            call.live_across_objs.contains(&spill_obj),
+            "canonical spill object for aliased pointer should be live across the internal call"
+        );
+    }
+
+    #[test]
+    fn conservative_closure_allocas_expands_and_marks_unknown() {
+        let root = InstId::from_u32(1);
+        let child = InstId::from_u32(2);
+        let unrelated = InstId::from_u32(3);
+        let mut edges = FxHashMap::default();
+        edges.insert(root, FxHashSet::from_iter([child]));
+        let unknown = FxHashSet::from_iter([child]);
+        let all_allocas = FxHashSet::from_iter([root, child, unrelated]);
+        let closure = AllocaClosureCtx {
+            edges: &edges,
+            unknown: &unknown,
+            all_allocas: &all_allocas,
+        };
+
+        let expanded = closure.expand_roots([root]);
+        assert!(expanded.hit_unknown);
+        assert_eq!(expanded.allocas, all_allocas);
+    }
+
+    #[test]
+    fn loop_carried_spill_region_reaches_loop_header_via_backedge() {
+        let mut src = String::from(
+            r#"
+target = "evm-ethereum-osaka"
+
+func private %loop_spill() -> i256 {
+block0:
+    jump block1;
+
+block1:
+"#,
+        );
+        for i in 0..18 {
+            let _ = writeln!(
+                &mut src,
+                "    v{}.i256 = phi ({}.i256 block0) (v{} block2);",
+                i + 1,
+                i,
+                i + 20
+            );
+        }
+        src.push_str(
+            r#"
+    v19.i256 = phi (0.i256 block0) (v38 block2);
+    v39.i1 = lt v19 1.i256;
+    br v39 block2 block3;
+
+block2:
+"#,
+        );
+        for i in 0..18 {
+            let _ = writeln!(&mut src, "    v{}.i256 = add v{} 1.i256;", i + 20, i + 1);
+        }
+        src.push_str(
+            r#"
+    v38.i256 = add v19 1.i256;
+    jump block1;
+
+block3:
+    return v18;
+}
+"#,
+        );
+
+        let (parsed, func_ref, analysis, stack) = analyze_function(&src, "loop_spill", 16);
+        let spilled =
+            analysis.canonicalize_value(parsed.debug.value(func_ref, "v18").expect("v18 exists"));
+        let spill_obj =
+            analysis.alloc.spill_obj[spilled].expect("loop-carried phi spill object exists");
+        let region = &stack.obj_facts[&spill_obj].region;
+        assert!(
+            region
+                .segments
+                .iter()
+                .any(|segment| segment.block == BlockId::from_u32(1)),
+            "backedge spill should stay live in the loop header region: {region:?}"
+        );
+        assert!(
+            region
+                .segments
+                .iter()
+                .any(|segment| segment.block == BlockId::from_u32(2)),
+            "backedge spill should stay live through the looping predecessor block: {region:?}"
+        );
+    }
+
+    #[test]
+    fn loop_carried_alloca_region_reaches_loop_header_via_backedge() {
+        let (parsed, func_ref, _analysis, stack) = analyze_function(
+            r#"
+target = "evm-ethereum-osaka"
+
+func private %loop_alloca_phi() -> i256 {
+    block0:
+        v0.*i256 = alloca i256;
+        mstore v0 1.i256 i256;
+        jump block1;
+
+    block1:
+        v1.*i256 = phi (v0 block0) (v4 block2);
+        v2.i256 = phi (0.i256 block0) (v5 block2);
+        v3.i1 = lt v2 1.i256;
+        br v3 block2 block3;
+
+    block2:
+        v4.*i256 = alloca i256;
+        mstore v4 2.i256 i256;
+        v5.i256 = add v2 1.i256;
+        jump block1;
+
+    block3:
+        v6.i256 = mload v1 i256;
+        return v6;
+}
+"#,
+            "loop_alloca_phi",
+            16,
+        );
+
+        let loop_alloca = parsed.debug.value(func_ref, "v4").expect("v4 exists");
+        let alloca_inst = parsed.module.func_store.view(func_ref, |function| {
+            function
+                .dfg
+                .value_inst(loop_alloca)
+                .expect("v4 is defined by alloca")
+        });
+        let obj_id = stack.alloca_ids[&alloca_inst];
+        let region = &stack.obj_facts[&obj_id].region;
+        assert!(
+            region
+                .segments
+                .iter()
+                .any(|segment| segment.block == BlockId::from_u32(1)),
+            "loop-carried alloca should stay live in the loop header across the backedge: {region:?}"
+        );
+        assert!(
+            region
+                .segments
+                .iter()
+                .any(|segment| segment.block == BlockId::from_u32(2)),
+            "loop-carried alloca should remain live through its defining block: {region:?}"
+        );
+    }
+
+    #[test]
+    fn phi_operand_allocas_live_on_predecessor_tails_not_successor_entry() {
+        let mut src = String::from(
+            r#"
+target = "evm-ethereum-osaka"
+
+func private %branch_phi(v0.i1) -> i32 {
+block0:
+    br v0 block1 block2;
+
+block1:
+"#,
+        );
+        for i in 0..18 {
+            let _ = writeln!(&mut src, "    v{}.i32 = add {i}.i32 1.i32;", i + 1);
+        }
+        src.push_str(
+            r#"
+    jump block3;
+
+block2:
+"#,
+        );
+        for i in 0..18 {
+            let _ = writeln!(&mut src, "    v{}.i32 = add {}.i32 1.i32;", i + 19, 100 + i);
+        }
+        src.push_str(
+            r#"
+    jump block3;
+
+block3:
+"#,
+        );
+        for i in 0..18 {
+            let _ = writeln!(
+                &mut src,
+                "    v{}.i32 = phi (v{} block1) (v{} block2);",
+                i + 37,
+                i + 1,
+                i + 19
+            );
+        }
+        src.push_str(
+            r#"
+    return v54;
+}
+"#,
+        );
+
+        let (parsed, func_ref, analysis, stack) = analyze_function(&src, "branch_phi", 16);
+        let left_region = (1..=18)
+            .find_map(|idx| {
+                let name = format!("v{idx}");
+                let value = analysis.canonicalize_value(
+                    parsed
+                        .debug
+                        .value(func_ref, &name)
+                        .expect("branch value exists"),
+                );
+                let obj = analysis.alloc.spill_obj[value]?;
+                Some(&stack.obj_facts[&obj].region)
+            })
+            .expect("left branch should produce a spilled phi operand value");
+        let right_region = (19..=36)
+            .find_map(|idx| {
+                let name = format!("v{idx}");
+                let value = analysis.canonicalize_value(
+                    parsed
+                        .debug
+                        .value(func_ref, &name)
+                        .expect("branch value exists"),
+                );
+                let obj = analysis.alloc.spill_obj[value]?;
+                Some(&stack.obj_facts[&obj].region)
+            })
+            .expect("right branch should produce a spilled phi operand value");
+
+        assert!(
+            left_region
+                .segments
+                .iter()
+                .any(|segment| segment.block == BlockId::from_u32(1)),
+            "left phi operand spill should stay live through its predecessor block: {left_region:?}"
+        );
+        assert!(
+            right_region
+                .segments
+                .iter()
+                .any(|segment| segment.block == BlockId::from_u32(2)),
+            "right phi operand spill should stay live through its predecessor block: {right_region:?}"
+        );
+        assert!(
+            left_region
+                .segments
+                .iter()
+                .all(|segment| segment.block != BlockId::from_u32(3)),
+            "left phi operand spill should not be treated as successor-entry live for the phi block: {left_region:?}"
+        );
+        assert!(
+            right_region
+                .segments
+                .iter()
+                .all(|segment| segment.block != BlockId::from_u32(3)),
+            "right phi operand spill should not be treated as successor-entry live for the phi block: {right_region:?}"
+        );
+        assert!(
+            !left_region.overlaps(right_region),
+            "branch-exclusive phi operand spills should not conflict: left={left_region:?} right={right_region:?}"
+        );
+    }
+
+    #[test]
+    fn closure_expanded_child_alloca_becomes_visible_and_live_at_call() {
+        let (parsed, func_ref, _analysis, stack) = analyze_function(
+            r#"
+target = "evm-ethereum-osaka"
+
+func private %callee(v0.*i256) -> i256 {
+block0:
+    mstore v0 7.i256 i256;
+    return 0.i256;
+}
+
+func private %closure_visible() -> i256 {
+block0:
+    v0.**i256 = alloca *i256;
+    v1.*i256 = alloca i256;
+    mstore v1 1.i256 i256;
+    mstore v0 v1 *i256;
+    v2.*i256 = mload v0 *i256;
+    v3.i256 = call %callee v2;
+    v4.i256 = mload v1 i256;
+    return v4;
+}
+"#,
+            "closure_visible",
+            16,
+        );
+
+        let child_alloca = parsed.module.func_store.view(func_ref, |function| {
+            function
+                .dfg
+                .value_inst(parsed.debug.value(func_ref, "v1").expect("v1 exists"))
+                .expect("v1 is defined by alloca")
+        });
+        let child_obj = stack.alloca_ids[&child_alloca];
+        let call = stack
+            .call_sites
+            .iter()
+            .find(|call| {
+                parsed
+                    .module
+                    .ctx
+                    .func_sig(call.callee, |sig| sig.name() == "callee")
+            })
+            .expect("callee call exists");
+
+        assert!(
+            call.callee_visible_objs.contains(&child_obj),
+            "closure-expanded child alloca should be visible to the callee"
+        );
+        assert!(
+            call.live_across_objs.contains(&child_obj),
+            "closure-expanded child alloca should stay live across the call when read afterward"
+        );
+    }
+
+    #[test]
+    fn exact_pack_reuses_storage_for_branch_exclusive_regions() {
+        let mut objects = vec![
+            PackedObject {
+                id: StackObjId::new(1),
+                size_words: 4,
+                region: region(0, 0, 2),
+                min_offset_words: 0,
+            },
+            PackedObject {
+                id: StackObjId::new(2),
+                size_words: 3,
+                region: region(1, 0, 2),
+                min_offset_words: 0,
+            },
+        ];
+        objects.sort_unstable_by_key(|obj| obj.region.sort_key(obj.id));
+
+        let (offsets, max_used) = pack_objects_presorted(&objects);
+        assert_eq!(offsets[&StackObjId::new(1)], 0);
+        assert_eq!(offsets[&StackObjId::new(2)], 0);
+        assert_eq!(max_used, 4);
+    }
+
+    #[test]
+    fn exact_pack_respects_conflicts_and_min_offsets() {
+        let items = vec![
+            ExactPackItem {
+                id: StackObjId::new(1),
+                idx: LocalObjIdx::new(0),
+                size_words: 3,
+                min_offset_words: 0,
+            },
+            ExactPackItem {
+                id: StackObjId::new(2),
+                idx: LocalObjIdx::new(1),
+                size_words: 2,
+                min_offset_words: 1,
+            },
+            ExactPackItem {
+                id: StackObjId::new(3),
+                idx: LocalObjIdx::new(2),
+                size_words: 1,
+                min_offset_words: 5,
+            },
+        ];
+        let mut conflicts = vec![BitSet::default(); 3];
+        let _ = conflicts[0].insert(LocalObjIdx::new(1));
+        let _ = conflicts[1].insert(LocalObjIdx::new(0));
+
+        let packed = pack_exact_with_offsets(&items, &conflicts);
+        assert_eq!(packed.offsets[&StackObjId::new(1)], 0);
+        assert_eq!(packed.offsets[&StackObjId::new(2)], 3);
+        assert_eq!(packed.offsets[&StackObjId::new(3)], 5);
+        assert_eq!(packed.max_used, 6);
     }
 }

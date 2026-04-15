@@ -1,0 +1,167 @@
+#! evm.config: { vcode: true, opt: 0 }
+#! evm.case: ok
+#!   calldata:
+#!   expect: return
+
+target = "evm-ethereum-osaka"
+
+func private %run() -> [i256; 5] {
+    block0:
+        v0.objref<[i256; 5]> = obj.alloc [i256; 5];
+        v1.objref<i256> = obj.index v0 0.i256;
+        obj.store v1 0.i256;
+        v2.objref<i256> = obj.index v0 1.i256;
+        obj.store v2 0.i256;
+        v3.objref<i256> = obj.index v0 2.i256;
+        obj.store v3 0.i256;
+        v4.objref<i256> = obj.index v0 3.i256;
+        obj.store v4 0.i256;
+        v5.objref<i256> = obj.index v0 4.i256;
+        obj.store v5 0.i256;
+        v6.[i256; 5] = obj.load v0;
+        jump block1;
+
+    block1:
+        v7.[i256; 5] = phi (v6 block0) (v44 block5);
+        v8.i256 = phi (0.i256 block0) (v45 block5);
+        v9.i1 = lt v8 2.i256;
+        br v9 block2 block7;
+
+    block2:
+        v10.i1 = eq v8 0.i256;
+        br v10 block3 block4;
+
+    block3:
+        v11.objref<[i256; 5]> = obj.alloc [i256; 5];
+        v12.objref<i256> = obj.index v11 0.i256;
+        obj.store v12 10.i256;
+        v13.objref<i256> = obj.index v11 1.i256;
+        obj.store v13 11.i256;
+        v14.objref<i256> = obj.index v11 2.i256;
+        obj.store v14 12.i256;
+        v15.objref<i256> = obj.index v11 3.i256;
+        obj.store v15 13.i256;
+        v16.objref<i256> = obj.index v11 4.i256;
+        obj.store v16 14.i256;
+        v17.[i256; 5] = obj.load v11;
+        jump block5;
+
+    block4:
+        v18.objref<[i256; 5]> = obj.alloc [i256; 5];
+        v19.objref<i256> = obj.index v18 0.i256;
+        obj.store v19 20.i256;
+        v20.objref<i256> = obj.index v18 1.i256;
+        obj.store v20 21.i256;
+        v21.objref<i256> = obj.index v18 2.i256;
+        obj.store v21 22.i256;
+        v22.objref<i256> = obj.index v18 3.i256;
+        obj.store v22 23.i256;
+        v23.objref<i256> = obj.index v18 4.i256;
+        obj.store v23 24.i256;
+        v24.[i256; 5] = obj.load v18;
+        jump block5;
+
+    block5:
+        v25.[i256; 5] = phi (v17 block3) (v24 block4);
+        v26.objref<[i256; 5]> = obj.alloc [i256; 5];
+        obj.store v26 v7;
+        v27.objref<[i256; 5]> = obj.alloc [i256; 5];
+        obj.store v27 v25;
+        v28.objref<[i256; 5]> = obj.alloc [i256; 5];
+        v29.objref<i256> = obj.index v26 0.i256;
+        v30.i256 = obj.load v29;
+        v31.objref<i256> = obj.index v27 0.i256;
+        v32.i256 = obj.load v31;
+        v33.i256 = add v30 v32;
+        v34.objref<i256> = obj.index v28 0.i256;
+        obj.store v34 v33;
+        v35.objref<i256> = obj.index v26 1.i256;
+        v36.i256 = obj.load v35;
+        v37.objref<i256> = obj.index v27 1.i256;
+        v38.i256 = obj.load v37;
+        v39.i256 = add v36 v38;
+        v40.objref<i256> = obj.index v28 1.i256;
+        obj.store v40 v39;
+        v41.objref<i256> = obj.index v26 2.i256;
+        v42.i256 = obj.load v41;
+        v43.objref<i256> = obj.index v27 2.i256;
+        v46.i256 = obj.load v43;
+        v47.i256 = add v42 v46;
+        v48.objref<i256> = obj.index v28 2.i256;
+        obj.store v48 v47;
+        v49.objref<i256> = obj.index v26 3.i256;
+        v50.i256 = obj.load v49;
+        v51.objref<i256> = obj.index v27 3.i256;
+        v52.i256 = obj.load v51;
+        v53.i256 = add v50 v52;
+        v54.objref<i256> = obj.index v28 3.i256;
+        obj.store v54 v53;
+        v55.objref<i256> = obj.index v26 4.i256;
+        v56.i256 = obj.load v55;
+        v57.objref<i256> = obj.index v27 4.i256;
+        v58.i256 = obj.load v57;
+        v59.i256 = add v56 v58;
+        v60.objref<i256> = obj.index v28 4.i256;
+        obj.store v60 v59;
+        v61.[i256; 5] = obj.load v28;
+        v62.objref<[i256; 5]> = obj.alloc [i256; 5];
+        obj.store v62 v61;
+        v44.[i256; 5] = obj.load v62;
+        v45.i256 = add v8 1.i256;
+        jump block1;
+
+    block7:
+        return v7;
+}
+
+func private %assert(v0.i1) {
+    block0:
+        v1.i1 = is_zero v0;
+        br v1 block1 block2;
+
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block2:
+        return;
+}
+
+func private %test_run() {
+    block0:
+        v0.[i256; 5] = call %run;
+        v1.objref<[i256; 5]> = obj.alloc [i256; 5];
+        obj.store v1 v0;
+        v2.objref<i256> = obj.index v1 0.i256;
+        v3.i256 = obj.load v2;
+        v4.i1 = eq v3 30.i256;
+        call %assert v4;
+        v5.objref<i256> = obj.index v1 1.i256;
+        v6.i256 = obj.load v5;
+        v7.i1 = eq v6 32.i256;
+        call %assert v7;
+        v8.objref<i256> = obj.index v1 2.i256;
+        v9.i256 = obj.load v8;
+        v10.i1 = eq v9 34.i256;
+        call %assert v10;
+        v11.objref<i256> = obj.index v1 3.i256;
+        v12.i256 = obj.load v11;
+        v13.i1 = eq v12 36.i256;
+        call %assert v13;
+        v14.objref<i256> = obj.index v1 4.i256;
+        v15.i256 = obj.load v14;
+        v16.i1 = eq v15 38.i256;
+        call %assert v16;
+        return;
+}
+
+func private %__repro_runtime_entry() {
+    block0:
+        call %test_run;
+        evm_return 0.i256 0.i256;
+}
+
+object @Contract {
+    section runtime {
+        entry %__repro_runtime_entry;
+    }
+}

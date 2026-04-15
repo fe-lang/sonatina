@@ -6,17 +6,17 @@ input_file: test_files/evm/fe_hash2_repro_loop_direct_const_unoptimized.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=true evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 142 bytes
-  total: 142 bytes
+  section runtime: 143 bytes
+  total: 143 bytes
 
 functions:
   run: ir_blocks=4 ir_insts=32 vcode_ops=46 fixups=4 imm_bytes=10
-    mem: scratch_words=3 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=3
+    mem: scratch_words=0 stable_words=4 stable_mode=StaticAbs(base=0xa0) entry_abs_words=0 abs_words_end=4
   __repro_runtime_entry: ir_blocks=3 ir_insts=5 vcode_ops=16 fixups=3 imm_bytes=1
-    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=21242 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=242
+  case ok: calldata_len=0 success reason=Return gas_used=21245 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=245
 
 
 --------------- DEBUG ---------------
@@ -157,9 +157,9 @@ evm:
 run:
   block0:
     JUMPDEST
-    PUSH1 0xa0 (160)  // v0.*[i256; 1] = alloca [i256; 1];
+    PUSH1 0xe0 (224)  // v0.*[i256; 1] = alloca [i256; 1];
     PUSH0 0x0 (0)  // v1.i256 = sym_addr $__fe_const_data_0;
-    PUSH1 0xc0 (192)  // v7.*i256 = alloca i256;
+    PUSH2 0x100 (256)  // v7.*i256 = alloca i256;
     PUSH1 0x20 (32)  // evm_code_copy v8 v5 32.i256;
     SWAP1
     SWAP2
@@ -182,8 +182,8 @@ run:
     JUMPI
   block2:
     POP  // v14.*[i256; 1] = alloca [i256; 1];
-    PUSH1 0xc0 (192)
-    PUSH1 0xe0 (224)  // v19.*i256 = alloca i256;
+    PUSH1 0xa0 (160)
+    PUSH1 0xc0 (192)  // v19.*i256 = alloca i256;
     PUSH1 0x20 (32)  // evm_code_copy v20 v18 32.i256;
     DUP5
     DUP3

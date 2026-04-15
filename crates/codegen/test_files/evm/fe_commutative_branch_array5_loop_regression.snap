@@ -6,8 +6,8 @@ input_file: test_files/evm/fe_commutative_branch_array5_loop_regression.sntn
 evm.config: stack_reach=16 vcode=false bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 668 bytes
-  total: 668 bytes
+  section runtime: 667 bytes
+  total: 667 bytes
 
 functions:
   verify_checked: ir_blocks=12 ir_insts=112 vcode_ops=373 fixups=6 imm_bytes=110
