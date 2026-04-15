@@ -148,7 +148,7 @@ mod tests {
     }
 
     #[test]
-    fn stable_pack_conflicts_shadow_only_with_live_across_objects() {
+    fn stable_pack_conflicts_shadow_with_callee_visible_objects() {
         let real0 = stack_obj(
             1,
             StackObjKind::Alloca(InstId::from_u32(1)),
@@ -175,11 +175,10 @@ mod tests {
         let _ = must_stable.insert(real0.id);
         let _ = must_stable.insert(real1.id);
         let promoted_optional = BitSet::default();
-        let mut real_conflicts = vec![BitSet::default(), BitSet::default()];
-        let _ = real_conflicts[0].insert(LocalObjIdx::new(1));
-        let _ = real_conflicts[1].insert(LocalObjIdx::new(0));
+        let real_conflicts = vec![BitSet::default(), BitSet::default()];
         let mut shadow_conflicts = vec![BitSet::default(); 1];
         let _ = shadow_conflicts[0].insert(LocalObjIdx::new(0));
+        let _ = shadow_conflicts[0].insert(LocalObjIdx::new(1));
 
         let mut items = Vec::new();
         let mut conflicts = Vec::new();
@@ -200,8 +199,11 @@ mod tests {
         let real0_off = packed.offsets[&real0.id];
         let real1_off = packed.offsets[&real1.id];
         let shadow_off = packed.offsets[&StackObjId::new(3)];
+        assert_eq!(real0_off, 0);
+        assert_eq!(real1_off, 0);
         assert_ne!(shadow_off, real0_off);
-        assert_eq!(shadow_off, real1_off);
+        assert_ne!(shadow_off, real1_off);
+        assert_eq!(shadow_off, 4);
     }
 }
 
@@ -469,6 +471,19 @@ impl<'a> PlacementProblem<'a> {
         let mut base_shadow_words_by_call = vec![0u32; sorted_calls.len()];
         let mut base_shadow_copy_words = 0u64;
         for (call_idx, &call) in sorted_calls.iter().enumerate() {
+            for &obj in &call.callee_visible_objs {
+                let local_idx = *local_obj_index_by_id
+                    .get(obj.as_u32() as usize)
+                    .unwrap_or(&u32::MAX);
+                assert_ne!(
+                    local_idx,
+                    u32::MAX,
+                    "missing sorted object index for obj {}",
+                    obj.as_u32()
+                );
+                let _ =
+                    shadow_conflicts_by_call[call_idx].insert(LocalObjIdx::new(local_idx as usize));
+            }
             for &obj in &call.live_across_objs {
                 let size = stack
                     .obj_size_words
