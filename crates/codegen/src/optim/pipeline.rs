@@ -86,26 +86,109 @@ pub enum Pass {
     RebuildUsers,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PassInfo {
+    name: &'static str,
+    needs_func_behavior: bool,
+    invalidates_func_behavior: bool,
+}
+
 impl Pass {
-    pub const fn as_str(self) -> &'static str {
+    const fn info(self) -> PassInfo {
         match self {
-            Pass::LegalizeMultiResult => "legalize_multi_result",
-            Pass::CfgCleanup => "cfg_cleanup",
-            Pass::AggregateCombine => "aggregate_combine",
-            Pass::BranchCanonicalize => "branch_canonicalize",
-            Pass::ObjectLoadStore => "object_load_store",
-            Pass::AggregateScalarize => "aggregate_scalarize",
-            Pass::LoadStore => "load_store",
-            Pass::ScalarCanonicalize => "scalar_canonicalize",
-            Pass::KnownBitsSimplify => "known_bits_simplify",
-            Pass::CheckedArithElim => "checked_arith_elim",
-            Pass::Sccp => "sccp",
-            Pass::Adce => "adce",
-            Pass::Licm => "licm",
-            Pass::LoopStrengthReduce => "loop_strength_reduce",
-            Pass::Gvn => "gvn",
-            Pass::RebuildUsers => "rebuild_users",
+            Pass::LegalizeMultiResult => PassInfo {
+                name: "legalize_multi_result",
+                needs_func_behavior: false,
+                invalidates_func_behavior: false,
+            },
+            Pass::CfgCleanup => PassInfo {
+                name: "cfg_cleanup",
+                needs_func_behavior: true,
+                invalidates_func_behavior: true,
+            },
+            Pass::AggregateCombine => PassInfo {
+                name: "aggregate_combine",
+                needs_func_behavior: false,
+                invalidates_func_behavior: true,
+            },
+            Pass::BranchCanonicalize => PassInfo {
+                name: "branch_canonicalize",
+                needs_func_behavior: false,
+                invalidates_func_behavior: true,
+            },
+            Pass::ObjectLoadStore => PassInfo {
+                name: "object_load_store",
+                needs_func_behavior: false,
+                invalidates_func_behavior: true,
+            },
+            Pass::AggregateScalarize => PassInfo {
+                name: "aggregate_scalarize",
+                needs_func_behavior: false,
+                invalidates_func_behavior: true,
+            },
+            Pass::LoadStore => PassInfo {
+                name: "load_store",
+                needs_func_behavior: true,
+                invalidates_func_behavior: true,
+            },
+            Pass::ScalarCanonicalize => PassInfo {
+                name: "scalar_canonicalize",
+                needs_func_behavior: false,
+                invalidates_func_behavior: true,
+            },
+            Pass::KnownBitsSimplify => PassInfo {
+                name: "known_bits_simplify",
+                needs_func_behavior: false,
+                invalidates_func_behavior: true,
+            },
+            Pass::CheckedArithElim => PassInfo {
+                name: "checked_arith_elim",
+                needs_func_behavior: false,
+                invalidates_func_behavior: true,
+            },
+            Pass::Sccp => PassInfo {
+                name: "sccp",
+                needs_func_behavior: true,
+                invalidates_func_behavior: true,
+            },
+            Pass::Adce => PassInfo {
+                name: "adce",
+                needs_func_behavior: true,
+                invalidates_func_behavior: true,
+            },
+            Pass::Licm => PassInfo {
+                name: "licm",
+                needs_func_behavior: true,
+                invalidates_func_behavior: true,
+            },
+            Pass::LoopStrengthReduce => PassInfo {
+                name: "loop_strength_reduce",
+                needs_func_behavior: false,
+                invalidates_func_behavior: true,
+            },
+            Pass::Gvn => PassInfo {
+                name: "gvn",
+                needs_func_behavior: true,
+                invalidates_func_behavior: true,
+            },
+            Pass::RebuildUsers => PassInfo {
+                name: "rebuild_users",
+                needs_func_behavior: false,
+                invalidates_func_behavior: false,
+            },
         }
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        self.info().name
+    }
+
+    const fn needs_func_behavior(self) -> bool {
+        self.info().needs_func_behavior
+    }
+
+    const fn invalidates_func_behavior(self) -> bool {
+        self.info().invalidates_func_behavior
     }
 }
 
@@ -197,33 +280,6 @@ const POST_DEAD_ARG_CLEANUP_PASSES: &[Pass] = &[
     Pass::BranchCanonicalize,
     Pass::CfgCleanup,
 ];
-
-fn pass_needs_func_behavior(pass: Pass) -> bool {
-    matches!(
-        pass,
-        Pass::CfgCleanup | Pass::LoadStore | Pass::Sccp | Pass::Adce | Pass::Licm | Pass::Gvn
-    )
-}
-
-fn pass_may_invalidate_func_behavior(pass: Pass) -> bool {
-    matches!(
-        pass,
-        Pass::CfgCleanup
-            | Pass::AggregateCombine
-            | Pass::BranchCanonicalize
-            | Pass::ObjectLoadStore
-            | Pass::AggregateScalarize
-            | Pass::LoadStore
-            | Pass::ScalarCanonicalize
-            | Pass::KnownBitsSimplify
-            | Pass::CheckedArithElim
-            | Pass::Sccp
-            | Pass::Adce
-            | Pass::Licm
-            | Pass::LoopStrengthReduce
-            | Pass::Gvn
-    )
-}
 
 fn size_inliner_config() -> InlinerConfig {
     InlinerConfig {
@@ -471,13 +527,13 @@ pub(crate) fn run_function_pass_round(
     overrides: FuncPassOverrides<'_>,
 ) {
     for &pass in passes {
-        if *func_behavior_dirty && pass_needs_func_behavior(pass) {
+        if *func_behavior_dirty && pass.needs_func_behavior() {
             let _span = trace_span!("sonatina.optim.pipeline.func_behavior_analyze").entered();
             func_behavior::analyze_module(module);
             *func_behavior_dirty = false;
         }
         run_module_pass(pass, module, overrides);
-        if pass_may_invalidate_func_behavior(pass) {
+        if pass.invalidates_func_behavior() {
             *func_behavior_dirty = true;
         }
     }
@@ -868,7 +924,8 @@ mod tests {
 
     #[test]
     fn licm_pass_triggers_func_behavior_analysis() {
-        assert!(pass_needs_func_behavior(Pass::Licm));
+        assert!(Pass::Licm.needs_func_behavior());
+        assert!(Pass::Licm.invalidates_func_behavior());
     }
 
     #[test]
