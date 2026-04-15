@@ -1101,7 +1101,7 @@ impl ObjectAggregateAbi {
             CursorLocation::BlockTop(function.layout.inst_block(inst)),
             CursorLocation::At,
         );
-        let mut cursor = InstInserter::at_location(loc);
+        let mut pre_call = InstInserter::at_location(loc);
         let mut new_args = SmallVec::<[ValueId; 8]>::new();
         let mut readonly_copy_cache = FxHashMap::<ValueId, ValueId>::default();
         let old_results = function.dfg.inst_results(inst).to_vec();
@@ -1110,7 +1110,7 @@ impl ObjectAggregateAbi {
         for (&out_ty, &lowering) in plan.hidden_out_tys.iter().zip(&ret_lowerings) {
             match lowering {
                 RetLowering::Temp => {
-                    let alloc_inst = cursor.insert_inst_data(
+                    let alloc_inst = pre_call.insert_inst_data(
                         function,
                         data::ObjAlloc::new_unchecked(
                             function.inst_set(),
@@ -1118,9 +1118,9 @@ impl ObjectAggregateAbi {
                                 .expect("hidden out arg should be objref"),
                         ),
                     );
-                    let object = cursor.make_result(function, alloc_inst, out_ty);
-                    cursor.attach_result(function, alloc_inst, object);
-                    cursor.set_location(CursorLocation::At(alloc_inst));
+                    let object = pre_call.make_result(function, alloc_inst, out_ty);
+                    pre_call.attach_result(function, alloc_inst, object);
+                    pre_call.set_location(CursorLocation::At(alloc_inst));
                     out_roots.push(object);
                     new_args.push(object);
                 }
@@ -1146,20 +1146,21 @@ impl ObjectAggregateAbi {
                             new_args.push(cached_copy);
                             continue;
                         }
-                        let alloc_inst = cursor.insert_inst_data(
+                        let alloc_inst = pre_call.insert_inst_data(
                             function,
                             data::ObjAlloc::new_unchecked(
                                 function.inst_set(),
                                 arg_plan.original_ty,
                             ),
                         );
-                        let object = cursor.make_result(function, alloc_inst, arg_plan.new_ty);
-                        cursor.attach_result(function, alloc_inst, object);
-                        cursor.set_location(CursorLocation::At(alloc_inst));
-                        cursor.insert_inst_data(
+                        let object = pre_call.make_result(function, alloc_inst, arg_plan.new_ty);
+                        pre_call.attach_result(function, alloc_inst, object);
+                        pre_call.set_location(CursorLocation::At(alloc_inst));
+                        let store_inst = pre_call.insert_inst_data(
                             function,
                             data::ObjStore::new_unchecked(function.inst_set(), object, arg),
                         );
+                        pre_call.set_location(CursorLocation::At(store_inst));
                         if can_reuse_copy {
                             readonly_copy_cache.insert(arg, object);
                         }
@@ -1171,7 +1172,7 @@ impl ObjectAggregateAbi {
             }
         }
 
-        let new_call = cursor.insert_inst_data(
+        let new_call = pre_call.insert_inst_data(
             function,
             control_flow::Call::new(
                 function
@@ -1195,11 +1196,11 @@ impl ObjectAggregateAbi {
                 result_idx: idx as u16,
                 ty,
             });
-            cursor.attach_result(function, new_call, result);
+            pre_call.attach_result(function, new_call, result);
             new_direct_results.push(result);
         }
 
-        cursor.set_location(CursorLocation::At(new_call));
+        let mut post_call = InstInserter::at_location(CursorLocation::At(new_call));
         let mut direct_idx = 0usize;
         let mut out_idx = 0usize;
         for (&old_result, ret_plan) in old_results.iter().zip(&plan.rets) {
@@ -1234,13 +1235,13 @@ impl ObjectAggregateAbi {
                         };
                         continue;
                     }
-                    let load_inst = cursor.insert_inst_data(
+                    let load_inst = post_call.insert_inst_data(
                         function,
                         data::ObjLoad::new_unchecked(function.inst_set(), out_root),
                     );
-                    let loaded = cursor.make_result(function, load_inst, ret_plan.original_ty);
-                    cursor.attach_result(function, load_inst, loaded);
-                    cursor.set_location(CursorLocation::At(load_inst));
+                    let loaded = post_call.make_result(function, load_inst, ret_plan.original_ty);
+                    post_call.attach_result(function, load_inst, loaded);
+                    post_call.set_location(CursorLocation::At(load_inst));
                     function.dfg.change_to_alias(old_result, loaded);
                 }
             }
@@ -2813,6 +2814,84 @@ block0:
                 "borrowed live-in root should not be movable:\n{dumped}"
             );
         });
+    }
+
+    #[test]
+    fn retained_byvalue_array_copies_are_initialized_before_rewritten_call() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @Result = { i1, i256 };
+type @Pair = { [i256; 5], [i8; 5] };
+
+func private %check(v0.[i256; 5], v1.[i8; 5]) -> @Result {
+block0:
+    v2.objref<[i256; 5]> = obj.alloc [i256; 5];
+    obj.store v2 v0;
+    v3.objref<[i8; 5]> = obj.alloc [i8; 5];
+    obj.store v3 v1;
+    v4.[i256; 5] = obj.load v2;
+    v5.i256 = extract_value v4 1.i8;
+    v6.[i8; 5] = obj.load v3;
+    v7.i8 = extract_value v6 1.i8;
+    v8.i1 = eq v5 1.i256;
+    v9.i1 = eq v7 1.i8;
+    v10.i1 = and v8 v9;
+    v11.@Result = insert_value undef.@Result 0.i8 v10;
+    v12.@Result = insert_value v11 1.i8 0.i256;
+    return v12;
+}
+
+func private %main() -> i1 {
+block0:
+    v0.objref<[i256; 5]> = obj.alloc [i256; 5];
+    v1.[i256; 5] = insert_value undef.[i256; 5] 0.i8 0.i256;
+    v2.[i256; 5] = insert_value v1 1.i8 1.i256;
+    obj.store v0 v2;
+    v3.objref<[i8; 5]> = obj.alloc [i8; 5];
+    v4.[i8; 5] = insert_value undef.[i8; 5] 0.i8 0.i8;
+    v5.[i8; 5] = insert_value v4 1.i8 1.i8;
+    obj.store v3 v5;
+    v6.objref<@Pair> = obj.alloc @Pair;
+    v7.objref<[i256; 5]> = obj.proj v6 0.i8;
+    v8.[i256; 5] = obj.load v0;
+    obj.store v7 v8;
+    v9.objref<[i8; 5]> = obj.proj v6 1.i8;
+    v10.[i8; 5] = obj.load v3;
+    obj.store v9 v10;
+    v11.@Result = call %check v8 v10;
+    v12.i1 = extract_value v11 0.i8;
+    br v12 block1 block2;
+
+block1:
+    v13.@Result = call %check v8 v10;
+    v14.i1 = extract_value v13 0.i8;
+    return v14;
+
+block2:
+    return 0.i1;
+}
+"#,
+        );
+
+        run_byvalue_arg_abi(&module);
+        let dumped = dump_func(&module, "main");
+        let block1 = dumped
+            .split("block1:")
+            .nth(1)
+            .and_then(|tail| tail.split("block2:").next())
+            .expect("main should contain block1");
+        let first_store = block1
+            .find("obj.store")
+            .expect("rewritten block should initialize copied args");
+        let call = block1
+            .find("call %check")
+            .expect("rewritten block should still contain the second call");
+        assert!(
+            first_store < call,
+            "fresh by-value arg copies must be initialized before the rewritten call:\n{dumped}"
+        );
     }
 
     #[test]

@@ -1,0 +1,24 @@
+---
+source: crates/codegen/tests/evm.rs
+assertion_line: 449
+expression: "String::from_utf8(out).unwrap()"
+input_file: test_files/evm/retained_enum_result_packed_array_pair_regression.sntn
+---
+evm.config: stack_reach=16 vcode=false bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
+
+object: Contract
+  section runtime: 913 bytes
+  total: 913 bytes
+
+functions:
+  __fe_test_root_local_tuple_pack_then_verify_like_twice: ir_blocks=1 ir_insts=2 vcode_ops=5 fixups=2 imm_bytes=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=12 abs_words_end=0
+  local_tuple_pack_then_verify_like_twice: ir_blocks=17 ir_insts=149 vcode_ops=454 fixups=27 imm_bytes=77
+    mem: scratch_words=10 stable_words=15 stable_mode=StaticAbs(base=0x220) entry_abs_words=12 abs_words_end=27
+  assert: ir_blocks=3 ir_insts=3 vcode_ops=9 fixups=1 imm_bytes=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=27 abs_words_end=0
+  verify_like: ir_blocks=19 ir_insts=92 vcode_ops=223 fixups=9 imm_bytes=33
+    mem: scratch_words=12 stable_words=0 stable_mode=None entry_abs_words=27 abs_words_end=12
+
+evm:
+  case ok: calldata_len=0 success reason=Stop gas_used=23907 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=2907
