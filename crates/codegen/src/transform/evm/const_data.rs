@@ -677,7 +677,7 @@ fn encode_const_words(
         if imm.ty() != ty {
             return None;
         }
-        out.extend_from_slice(&imm.as_i256().to_u256().to_big_endian());
+        out.extend_from_slice(&imm.zext(Type::I256).as_i256().to_u256().to_big_endian());
         return Some(());
     }
 
@@ -1102,6 +1102,7 @@ mod tests {
         object::{CompileOptions, compile_all_objects},
     };
     use sonatina_ir::{
+        global_variable::GvInitializer,
         ir_writer::{FuncWriter, ModuleWriter},
         isa::evm::Evm,
         module::FuncRef,
@@ -1149,6 +1150,37 @@ mod tests {
         });
         symbols.sort();
         symbols
+    }
+
+    fn lowered_blob_bytes(parsed: &sonatina_parser::ParsedModule, source_symbol: &str) -> Vec<u8> {
+        let blob = parsed.module.ctx.with_gv_store(|store| {
+            let source = store
+                .lookup_gv(source_symbol)
+                .unwrap_or_else(|| panic!("{source_symbol} global should exist"));
+            let symbol = format!("__sonatina_const_words_{source_symbol}_{}", source.as_u32());
+            store
+                .lookup_gv(&symbol)
+                .expect("synthesized blob should exist")
+        });
+        parsed.module.ctx.with_gv_store(|store| {
+            let init = store
+                .gv_data(blob)
+                .initializer
+                .clone()
+                .expect("blob should have initializer");
+            let GvInitializer::Array(bytes) = init else {
+                panic!("blob initializer should be a byte array");
+            };
+            bytes
+                .into_iter()
+                .map(|byte| {
+                    let GvInitializer::Immediate(imm) = byte else {
+                        panic!("blob bytes must be immediates");
+                    };
+                    imm.as_i256().to_u256().low_u32() as u8
+                })
+                .collect()
+        })
     }
 
     #[test]
@@ -1349,6 +1381,91 @@ func private %entry() -> i256 {
         assert!(dumped.contains("evm_code_copy"));
         assert!(!dumped.contains("obj.store"));
         assert!(!dumped.contains("const."));
+    }
+
+    #[test]
+    fn obj_init_const_bulk_codecopy_zero_extends_negative_narrow_words() {
+        let parsed = parse(
+            r#"
+target = "evm-ethereum-osaka"
+
+global private const [i8; 1] $arr = [-1];
+
+func private %entry() -> i256 {
+    block0:
+        v0.objref<[i8; 1]> = obj.alloc [i8; 1];
+        v1.constref<[i8; 1]> = const.ref $arr;
+        obj.init.const v0 v1;
+        return 0.i256;
+}
+"#,
+        );
+
+        ConstDataLower::default().run(&parsed.module);
+
+        let entry = find_func_ref(&parsed, "entry");
+        let dumped = parsed
+            .module
+            .func_store
+            .view(entry, |func| FuncWriter::new(entry, func).dump_string());
+        assert!(dumped.contains("evm_code_copy"));
+        assert!(!dumped.contains("obj.store"));
+        let blob_bytes = lowered_blob_bytes(&parsed, "arr");
+
+        assert_eq!(blob_bytes.len(), 32);
+        assert!(blob_bytes[..31].iter().all(|&byte| byte == 0));
+        assert_eq!(blob_bytes[31], 0xff);
+    }
+
+    #[test]
+    fn obj_init_const_bulk_codecopy_zero_extends_nested_narrow_words() {
+        let parsed = parse(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @inner = { i1, [i16; 2] };
+type @outer = { @inner, [i1; 2] };
+
+global private const @outer $value = {{1, [-2, 3]}, [0, 1]};
+
+func private %entry() -> i256 {
+    block0:
+        v0.objref<@outer> = obj.alloc @outer;
+        v1.constref<@outer> = const.ref $value;
+        obj.init.const v0 v1;
+        return 0.i256;
+}
+"#,
+        );
+
+        ConstDataLower::default().run(&parsed.module);
+
+        let entry = find_func_ref(&parsed, "entry");
+        let dumped = parsed
+            .module
+            .func_store
+            .view(entry, |func| FuncWriter::new(entry, func).dump_string());
+        assert!(dumped.contains("evm_code_copy"));
+        assert!(!dumped.contains("obj.store"));
+
+        let blob_bytes = lowered_blob_bytes(&parsed, "value");
+        assert_eq!(blob_bytes.len(), 32 * 5);
+
+        let words: Vec<_> = blob_bytes.chunks_exact(32).collect();
+        assert!(words[0][..31].iter().all(|&byte| byte == 0));
+        assert_eq!(words[0][31], 1);
+
+        assert!(words[1][..30].iter().all(|&byte| byte == 0));
+        assert_eq!(&words[1][30..], &[0xff, 0xfe]);
+
+        assert!(words[2][..30].iter().all(|&byte| byte == 0));
+        assert_eq!(&words[2][30..], &[0x00, 0x03]);
+
+        assert!(words[3][..31].iter().all(|&byte| byte == 0));
+        assert_eq!(words[3][31], 0);
+
+        assert!(words[4][..31].iter().all(|&byte| byte == 0));
+        assert_eq!(words[4][31], 1);
     }
 
     #[test]
