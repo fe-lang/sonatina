@@ -353,23 +353,25 @@ impl GvnSolver {
                             insn,
                             inst_result,
                         );
-                        if result.changed {
+                        if result.changed() {
                             changed = true;
                             block_changed = true;
 
-                            if result.leader_changed || result.value_phi_changed {
-                                // Leader and value-phi changes affect canonicalized queries beyond
-                                // the moved value's direct users. Fall back to a full rescan
-                                // until we have explicit dependency tracking for canonicalized
-                                // keys.
-                                retouch_all_reachable = true;
-                            } else if result.class_changed {
-                                for &user in func.dfg.users(inst_result) {
-                                    next_touched_any |= Self::mark_touched(
-                                        &mut next_touched,
-                                        func.layout.inst_block(user),
-                                    );
+                            match result.retouch {
+                                CanonicalRetouch::None => {}
+                                CanonicalRetouch::DirectUsers => {
+                                    for &user in func.dfg.users(inst_result) {
+                                        next_touched_any |= Self::mark_touched(
+                                            &mut next_touched,
+                                            func.layout.inst_block(user),
+                                        );
+                                    }
                                 }
+                                // Leader and value-phi changes affect canonicalized queries
+                                // beyond the moved value's direct users. Fall back to a full
+                                // rescan until we have explicit dependency tracking for
+                                // canonicalized keys.
+                                CanonicalRetouch::AllReachable => retouch_all_reachable = true,
                             }
                         }
                     }
@@ -571,12 +573,7 @@ impl GvnSolver {
             if self.value_class(inst_result) == INITIAL_CLASS {
                 let class = self.make_class(gvn_insn, None);
                 let move_result = self.assign_class(inst_result, class);
-                return ReassignResult {
-                    changed: true,
-                    class_changed: true,
-                    leader_changed: move_result.leader_changed,
-                    value_phi_changed: false,
-                };
+                return ReassignResult::for_class_move(move_result.retouch);
             } else {
                 return ReassignResult::default();
             }
@@ -608,20 +605,15 @@ impl GvnSolver {
 
         let old_class = self.value_class(inst_result);
         if old_class == new_class {
-            ReassignResult {
-                changed: value_phi_changed,
-                class_changed: false,
-                leader_changed: false,
-                value_phi_changed,
-            }
+            ReassignResult::for_value_phi_change(value_phi_changed)
         } else {
             let move_result = self.assign_class(inst_result, new_class);
-            ReassignResult {
-                changed: true,
-                class_changed: true,
-                leader_changed: move_result.leader_changed,
-                value_phi_changed,
-            }
+            let retouch = if value_phi_changed {
+                CanonicalRetouch::AllReachable
+            } else {
+                move_result.retouch.max(CanonicalRetouch::DirectUsers)
+            };
+            ReassignResult { retouch }
         }
     }
 
@@ -1973,7 +1965,13 @@ impl GvnSolver {
                 .retain(|_, mapped_class| *mapped_class != old_class);
         }
 
-        ClassAssignResult { leader_changed }
+        ClassAssignResult {
+            retouch: if leader_changed {
+                CanonicalRetouch::AllReachable
+            } else {
+                CanonicalRetouch::None
+            },
+        }
     }
 
     /// Make value from immediate, also make a corresponding congruence class and update
@@ -2178,17 +2176,44 @@ impl Default for GvnSolver {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+enum CanonicalRetouch {
+    #[default]
+    None,
+    DirectUsers,
+    AllReachable,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 struct ReassignResult {
-    changed: bool,
-    class_changed: bool,
-    leader_changed: bool,
-    value_phi_changed: bool,
+    retouch: CanonicalRetouch,
+}
+
+impl ReassignResult {
+    fn changed(self) -> bool {
+        self.retouch != CanonicalRetouch::None
+    }
+
+    fn for_class_move(move_retouch: CanonicalRetouch) -> Self {
+        Self {
+            retouch: move_retouch.max(CanonicalRetouch::DirectUsers),
+        }
+    }
+
+    fn for_value_phi_change(value_phi_changed: bool) -> Self {
+        Self {
+            retouch: if value_phi_changed {
+                CanonicalRetouch::AllReachable
+            } else {
+                CanonicalRetouch::None
+            },
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 struct ClassAssignResult {
-    leader_changed: bool,
+    retouch: CanonicalRetouch,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Copy, Hash, PartialOrd, Ord)]
@@ -3122,8 +3147,8 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::{
-        BinaryInstKind, ClassData, GvnInsn, GvnSolver, InstClassKind, ValuePhi, ValuePhiFinder,
-        inst_to_gvn_key,
+        BinaryInstKind, CanonicalRetouch, ClassData, GvnInsn, GvnSolver, InstClassKind, ValuePhi,
+        ValuePhiFinder, inst_to_gvn_key, make_gvn_binary_key,
     };
     use crate::{
         analysis::known_bits::{KnownBitsQuery, count_query_news_for_test},
@@ -3246,19 +3271,17 @@ block2:
 
         let lower_rank_class = solver.make_class(GvnInsn::Value(lower_rank), None);
         let target_class = solver.make_class(GvnInsn::Value(current_leader), None);
-        assert!(
-            !solver
-                .assign_class(lower_rank, lower_rank_class)
-                .leader_changed
+        assert_eq!(
+            solver.assign_class(lower_rank, lower_rank_class).retouch,
+            CanonicalRetouch::None
         );
-        assert!(
-            !solver
-                .assign_class(current_leader, target_class)
-                .leader_changed
+        assert_eq!(
+            solver.assign_class(current_leader, target_class).retouch,
+            CanonicalRetouch::None
         );
 
         let result = solver.assign_class(lower_rank, target_class);
-        assert!(result.leader_changed);
+        assert_eq!(result.retouch, CanonicalRetouch::AllReachable);
         assert_eq!(solver.class_leader(target_class), lower_rank);
     }
 
@@ -3280,12 +3303,21 @@ block2:
 
         let src = solver.make_class(GvnInsn::Value(old_leader), None);
         let dst = solver.make_class(GvnInsn::Value(destination_leader), None);
-        assert!(!solver.assign_class(old_leader, src).leader_changed);
-        assert!(!solver.assign_class(remaining_member, src).leader_changed);
-        assert!(!solver.assign_class(destination_leader, dst).leader_changed);
+        assert_eq!(
+            solver.assign_class(old_leader, src).retouch,
+            CanonicalRetouch::None
+        );
+        assert_eq!(
+            solver.assign_class(remaining_member, src).retouch,
+            CanonicalRetouch::None
+        );
+        assert_eq!(
+            solver.assign_class(destination_leader, dst).retouch,
+            CanonicalRetouch::None
+        );
 
         let result = solver.assign_class(old_leader, dst);
-        assert!(result.leader_changed);
+        assert_eq!(result.retouch, CanonicalRetouch::AllReachable);
         assert_eq!(solver.class_leader(src), remaining_member);
         assert_eq!(solver.class_leader(dst), destination_leader);
     }
@@ -3342,9 +3374,8 @@ func private %entry(v0.i32, v1.i32) -> i32 {
             let known_bits = KnownBitsQuery::new(func);
             let result =
                 solver.reassign_congruence(func, &domtree, &known_bits, None, add_inst, add_result);
-            assert!(result.changed);
-            assert!(result.class_changed);
-            assert!(result.value_phi_changed);
+            assert!(result.changed());
+            assert_eq!(result.retouch, CanonicalRetouch::AllReachable);
             assert_eq!(solver.value_class(add_result), class);
             assert_eq!(solver.classes[class].value_phi, None);
             assert!(!solver.value_phi_table.contains_key(&stale_phi));
@@ -3523,6 +3554,109 @@ func private %entry(v0.i256, v1.i256) -> i256 {
             solver.run(func, &mut cfg, &mut domtree);
 
             assert_ne!(solver.value_class(*sum), solver.value_class(*overflow));
+        });
+    }
+
+    #[test]
+    fn run_invalidates_stale_queries_after_leader_change() {
+        let source = r#"
+target = "evm-ethereum-london"
+
+func private %entry(v0.i32, v9.i1) -> i32 {
+    block0:
+        jump block10;
+
+    block10:
+        v1.i32 = phi (v0 block0) (v2 block2);
+        v3.i32 = add v1 1.i32;
+        jump block1;
+
+    block1:
+        jump block2;
+
+    block2:
+        v2.i32 = add v0 1.i32;
+        v4.i32 = add v2 2.i32;
+        br v9 block10 block11;
+
+    block11:
+        return v4;
+}
+"#;
+
+        let module = parse_module(source).expect("parse should succeed").module;
+        let func_ref = module.funcs()[0];
+        module.func_store.modify(func_ref, |func| {
+            let mut cfg = ControlFlowGraph::default();
+            cfg.compute(func);
+            let mut domtree = DomTree::default();
+            domtree.compute(&cfg);
+
+            let arg_plus_one: Vec<_> = func
+                .layout
+                .iter_block()
+                .flat_map(|block| func.layout.iter_inst(block))
+                .filter(|&inst| {
+                    matches!(
+                        inst_to_gvn_key(func, inst).kind(),
+                        InstClassKind::Binary(BinaryInstKind::Add)
+                    ) && func
+                        .dfg
+                        .inst(inst)
+                        .collect_values()
+                        .last()
+                        .and_then(|value| func.dfg.value_imm(*value))
+                        == Some(Immediate::I32(1))
+                })
+                .collect();
+            let [old_leader_inst, new_leader_inst] = arg_plus_one.as_slice() else {
+                panic!("test function should contain exactly two add-1 instructions");
+            };
+            let old_leader = func
+                .dfg
+                .inst_result(*old_leader_inst)
+                .expect("initial leader should produce a result");
+            let new_leader = func
+                .dfg
+                .inst_result(*new_leader_inst)
+                .expect("replacement leader should produce a result");
+            let dependent_inst = func
+                .layout
+                .iter_inst(func.layout.inst_block(*new_leader_inst))
+                .find(|&inst| {
+                    matches!(
+                        inst_to_gvn_key(func, inst).kind(),
+                        InstClassKind::Binary(BinaryInstKind::Add)
+                    ) && func
+                        .dfg
+                        .inst(inst)
+                        .collect_values()
+                        .last()
+                        .and_then(|value| func.dfg.value_imm(*value))
+                        == Some(Immediate::I32(2))
+                })
+                .expect("later block should contain a dependent add");
+            let dependent_rhs = func.dfg.inst(dependent_inst).collect_values()[1];
+            let stale_key = make_gvn_binary_key(
+                func,
+                BinaryInstKind::Add,
+                old_leader,
+                dependent_rhs,
+                Type::I32,
+            )
+            .expect("stale add query should be constructible");
+
+            let mut solver = GvnSolver::new();
+            solver.run(func, &mut cfg, &mut domtree);
+
+            assert_eq!(
+                solver.class_leader(solver.value_class(new_leader)),
+                new_leader
+            );
+            assert!(
+                !solver.insn_table.contains_key(&GvnInsn::expr(stale_key, 0)),
+                "stale query keyed by the old leader should have been invalidated"
+            );
         });
     }
 
