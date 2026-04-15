@@ -205,6 +205,103 @@ mod tests {
         assert_ne!(shadow_off, real1_off);
         assert_eq!(shadow_off, 4);
     }
+
+    #[test]
+    fn swap_search_uses_bounded_shortlists_once_pair_count_exceeds_limit() {
+        let candidate_count = 320usize;
+        let objects: Vec<_> = (0..candidate_count)
+            .map(|idx| {
+                stack_obj(
+                    idx as u32,
+                    StackObjKind::Alloca(InstId::from_u32(idx as u32)),
+                    1 + (idx % 3) as u32,
+                    region(0, 0, 1),
+                )
+            })
+            .collect();
+        let obj_size_words = objects.iter().map(|obj| (obj.id, obj.size_words)).collect();
+        let stack = FuncStackObjects {
+            objects,
+            obj_facts: FxHashMap::default(),
+            obj_size_words,
+            alloca_ids: FxHashMap::default(),
+            spill_obj: SecondaryMap::default(),
+            call_sites: Vec::new(),
+            next_obj_id: candidate_count as u32,
+        };
+        let sorted_objects: Vec<_> = stack.objects.iter().collect();
+        let candidates = sorted_objects
+            .iter()
+            .enumerate()
+            .map(|(local_idx, obj)| CandidateMeta {
+                obj_id: obj.id,
+                local_idx: LocalObjIdx::new(local_idx),
+                size_words: obj.size_words,
+                recursive_access_cost: (local_idx % 11) as u64,
+                shadow_copy_words: 0,
+                live_call_indices: SmallVec::new(),
+            })
+            .collect();
+        let cost_model = ArenaCostModel::default();
+        let problem = PlacementProblem {
+            stack: &stack,
+            sorted_objects,
+            sorted_calls: Vec::new(),
+            must_stable: BitSet::default(),
+            must_stable_by_local: vec![false; candidate_count],
+            candidates,
+            base_shadow_words_by_call: Vec::new(),
+            base_shadow_copy_words: 0,
+            base_recursive_access_cost: 0,
+            frame_setup_cost: 0,
+            shadow_cost_per_word: 0,
+            next_shadow_base_id: stack.next_obj_id,
+            is_recursive: false,
+            cost_model: &cost_model,
+            real_conflicts_by_local: vec![BitSet::default(); candidate_count],
+            shadow_conflicts_by_call: Vec::new(),
+        };
+        let mut state = PlacementState::new(&problem);
+        for candidate_idx in 0..candidate_count / 2 {
+            state.apply_add(&problem, candidate_idx);
+        }
+
+        let feasible_add_count = state.promoted.iter().filter(|&&promoted| !promoted).count();
+        let feasible_remove_count = state.promoted_count;
+        assert!(
+            feasible_add_count.saturating_mul(feasible_remove_count) > SWAP_FULL_PAIR_LIMIT,
+            "test must exercise the bounded swap shortlist path"
+        );
+
+        let mut lb_state = PlacementLowerBoundState::new(&problem);
+        let mut search_work = SearchWorkBuffers::default();
+        let current_score = FuncPlacementScore {
+            scratch_words: u32::MAX,
+            stable_words: u32::MAX,
+            cost: u64::MAX,
+        };
+        let _ = find_best_exact_swap_move(
+            &problem,
+            &state,
+            &mut lb_state,
+            current_score,
+            &mut FuncPlacementScoreWorkspace::default(),
+            &mut search_work,
+        );
+
+        assert!(!search_work.add_shortlist.is_empty());
+        assert!(!search_work.remove_shortlist.is_empty());
+        assert!(search_work.add_shortlist.len() <= SWAP_SHORTLIST_PER_METRIC * 3);
+        assert!(search_work.remove_shortlist.len() <= SWAP_SHORTLIST_PER_METRIC * 3);
+        assert_eq!(
+            search_work.swap_exact.len(),
+            search_work
+                .add_shortlist
+                .len()
+                .saturating_mul(search_work.remove_shortlist.len()),
+            "bounded swap search should only exact-score the shortlist cross-product",
+        );
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -384,6 +481,8 @@ struct ExactMoveEval {
 struct SearchWorkBuffers {
     one_flip_exact: Vec<ExactMoveEval>,
     swap_exact: Vec<ExactMoveEval>,
+    add_shortlist: Vec<usize>,
+    remove_shortlist: Vec<usize>,
 }
 
 #[derive(Default)]
@@ -396,6 +495,7 @@ struct ShadowPackObj {
 }
 
 const SWAP_FULL_PAIR_LIMIT: usize = 25_000;
+const SWAP_SHORTLIST_PER_METRIC: usize = 8;
 
 impl<'a> PlacementProblem<'a> {
     fn new(
@@ -1408,23 +1508,38 @@ fn find_best_exact_swap_move(
     }
 
     let _ = lb_state;
-    let _ = SWAP_FULL_PAIR_LIMIT;
     work.swap_exact.clear();
-    for add_idx in 0..problem.candidates.len() {
-        if state.promoted[add_idx] {
-            continue;
-        }
-        for remove_idx in 0..problem.candidates.len() {
-            if !state.promoted[remove_idx] {
+    if feasible_add_count.saturating_mul(feasible_remove_count) <= SWAP_FULL_PAIR_LIMIT {
+        for add_idx in 0..problem.candidates.len() {
+            if state.promoted[add_idx] {
                 continue;
             }
-            let mv = PlacementMove::Swap {
-                add_idx,
-                remove_idx,
-            };
-            let exact = evaluate_func_placement_score(problem, state, mv, exact_ws);
-            if is_better_score(exact, current_score) {
-                work.swap_exact.push(ExactMoveEval { mv, exact });
+            for remove_idx in 0..problem.candidates.len() {
+                if !state.promoted[remove_idx] {
+                    continue;
+                }
+                let mv = PlacementMove::Swap {
+                    add_idx,
+                    remove_idx,
+                };
+                let exact = evaluate_func_placement_score(problem, state, mv, exact_ws);
+                if is_better_score(exact, current_score) {
+                    work.swap_exact.push(ExactMoveEval { mv, exact });
+                }
+            }
+        }
+    } else {
+        collect_swap_shortlists(problem, state, work);
+        for &add_idx in &work.add_shortlist {
+            for &remove_idx in &work.remove_shortlist {
+                let mv = PlacementMove::Swap {
+                    add_idx,
+                    remove_idx,
+                };
+                let exact = evaluate_func_placement_score(problem, state, mv, exact_ws);
+                if is_better_score(exact, current_score) {
+                    work.swap_exact.push(ExactMoveEval { mv, exact });
+                }
             }
         }
     }
@@ -1437,6 +1552,73 @@ fn find_best_exact_swap_move(
             .then_with(|| cmp_move_tie_key(problem, a.mv, b.mv))
     });
     work.swap_exact.first().copied()
+}
+
+fn collect_swap_shortlists(
+    problem: &PlacementProblem<'_>,
+    state: &PlacementState,
+    work: &mut SearchWorkBuffers,
+) {
+    work.add_shortlist.clear();
+    work.remove_shortlist.clear();
+    collect_metric_shortlist(problem, state, false, work);
+    collect_metric_shortlist(problem, state, true, work);
+
+    work.add_shortlist
+        .sort_unstable_by_key(|&candidate_idx| problem.candidates[candidate_idx].obj_id.as_u32());
+    work.remove_shortlist
+        .sort_unstable_by_key(|&candidate_idx| problem.candidates[candidate_idx].obj_id.as_u32());
+}
+
+fn collect_metric_shortlist(
+    problem: &PlacementProblem<'_>,
+    state: &PlacementState,
+    promoted: bool,
+    work: &mut SearchWorkBuffers,
+) {
+    for metric in 0..3 {
+        let mut candidates: Vec<_> = problem
+            .candidates
+            .iter()
+            .enumerate()
+            .filter_map(|(candidate_idx, _)| {
+                (state.promoted[candidate_idx] == promoted).then_some(candidate_idx)
+            })
+            .collect();
+        candidates.sort_unstable_by(|&lhs, &rhs| {
+            candidate_metric(problem, rhs, metric)
+                .cmp(&candidate_metric(problem, lhs, metric))
+                .then_with(|| {
+                    problem.candidates[lhs]
+                        .obj_id
+                        .as_u32()
+                        .cmp(&problem.candidates[rhs].obj_id.as_u32())
+                })
+        });
+        for &candidate_idx in candidates.iter().take(SWAP_SHORTLIST_PER_METRIC) {
+            if promoted {
+                push_unique_candidate(&mut work.remove_shortlist, candidate_idx);
+            } else {
+                push_unique_candidate(&mut work.add_shortlist, candidate_idx);
+            }
+        }
+    }
+}
+
+fn candidate_metric(problem: &PlacementProblem<'_>, candidate_idx: usize, metric: usize) -> u64 {
+    let candidate = &problem.candidates[candidate_idx];
+    match metric {
+        0 => u64::from(candidate.size_words),
+        1 => candidate.shadow_copy_words,
+        2 => candidate.recursive_access_cost,
+        _ => panic!("unknown candidate metric {metric}"),
+    }
+}
+
+fn push_unique_candidate(shortlist: &mut Vec<usize>, candidate_idx: usize) {
+    if !shortlist.contains(&candidate_idx) {
+        shortlist.push(candidate_idx);
+    }
 }
 
 fn build_shadow_preserve_for_call(
