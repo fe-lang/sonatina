@@ -357,21 +357,19 @@ impl GvnSolver {
                             changed = true;
                             block_changed = true;
 
-                            if result.class_changed {
+                            if result.leader_changed || result.value_phi_changed {
+                                // Leader and value-phi changes affect canonicalized queries beyond
+                                // the moved value's direct users. Fall back to a full rescan
+                                // until we have explicit dependency tracking for canonicalized
+                                // keys.
+                                retouch_all_reachable = true;
+                            } else if result.class_changed {
                                 for &user in func.dfg.users(inst_result) {
                                     next_touched_any |= Self::mark_touched(
                                         &mut next_touched,
                                         func.layout.inst_block(user),
                                     );
                                 }
-                            }
-
-                            if result.value_phi_changed {
-                                // Value-phi updates can affect value-phi lookups globally. Keep
-                                // this conservative until we have finer dependency tracking.
-                                // Defer the full scan until the end of the iteration to avoid
-                                // repeated O(#reachable blocks) sweeps per changed instruction.
-                                retouch_all_reachable = true;
                             }
                         }
                     }
@@ -572,10 +570,11 @@ impl GvnSolver {
         if !func.dfg.has_value_semantics(insn) && object_read.is_none() {
             if self.value_class(inst_result) == INITIAL_CLASS {
                 let class = self.make_class(gvn_insn, None);
-                self.assign_class(inst_result, class);
+                let move_result = self.assign_class(inst_result, class);
                 return ReassignResult {
                     changed: true,
                     class_changed: true,
+                    leader_changed: move_result.leader_changed,
                     value_phi_changed: false,
                 };
             } else {
@@ -612,13 +611,15 @@ impl GvnSolver {
             ReassignResult {
                 changed: value_phi_changed,
                 class_changed: false,
+                leader_changed: false,
                 value_phi_changed,
             }
         } else {
-            self.assign_class(inst_result, new_class);
+            let move_result = self.assign_class(inst_result, new_class);
             ReassignResult {
                 changed: true,
                 class_changed: true,
+                leader_changed: move_result.leader_changed,
                 value_phi_changed,
             }
         }
@@ -1936,12 +1937,14 @@ impl GvnSolver {
     }
 
     /// Assign `class` to `value`.
-    fn assign_class(&mut self, value: ValueId, class: Class) {
+    fn assign_class(&mut self, value: ValueId, class: Class) -> ClassAssignResult {
         let old_class = self.value_class(value);
         if old_class == class {
-            return;
+            return ClassAssignResult::default();
         }
 
+        let old_leader_before = self.class_leader_if_nonempty(old_class);
+        let new_leader_before = self.class_leader_if_nonempty(class);
         let value_rank = self.value_rank(value);
 
         // Add value to the class.
@@ -1950,16 +1953,27 @@ impl GvnSolver {
         self.values[value].class = class;
 
         // Remove `value` from `old` class.
-        let old_class_data = &mut self.classes[old_class];
-        old_class_data.values.remove(&(value_rank, value));
+        self.classes[old_class].values.remove(&(value_rank, value));
+
+        let old_leader_after = self.class_leader_if_nonempty(old_class);
+        let new_leader_after = self.class_leader_if_nonempty(class);
+        let leader_changed = matches!(
+            (old_leader_before, old_leader_after),
+            (Some(before), Some(after)) if before != after
+        ) || matches!(
+            (new_leader_before, new_leader_after),
+            (Some(before), Some(after)) if before != after
+        );
 
         // Remove all stale indexes that still point to the emptied class.
-        if old_class_data.values.is_empty() {
+        if self.classes[old_class].values.is_empty() {
             self.insn_table
                 .retain(|_, mapped_class| *mapped_class != old_class);
             self.value_phi_table
                 .retain(|_, mapped_class| *mapped_class != old_class);
         }
+
+        ClassAssignResult { leader_changed }
     }
 
     /// Make value from immediate, also make a corresponding congruence class and update
@@ -2050,6 +2064,12 @@ impl GvnSolver {
     /// Returns `ClassData`.
     fn class_data(&self, class: Class) -> &ClassData {
         &self.classes[class]
+    }
+
+    fn class_leader_if_nonempty(&self, class: Class) -> Option<ValueId> {
+        self.classes
+            .get(class)
+            .and_then(|data| data.values.iter().next().map(|(_, leader)| *leader))
     }
 
     /// Returns the class of the value.
@@ -2162,7 +2182,13 @@ impl Default for GvnSolver {
 struct ReassignResult {
     changed: bool,
     class_changed: bool,
+    leader_changed: bool,
     value_phi_changed: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+struct ClassAssignResult {
+    leader_changed: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Copy, Hash, PartialOrd, Ord)]
@@ -3202,6 +3228,66 @@ block2:
                 .values()
                 .all(|mapped_class| *mapped_class != class1)
         );
+    }
+
+    #[test]
+    fn assign_class_reports_new_class_leader_changes() {
+        let mut solver = GvnSolver::new();
+        solver.classes.push(ClassData {
+            values: BTreeSet::new(),
+            gvn_insn: GvnInsn::Value(ValueId(u32::MAX)),
+            value_phi: None,
+        });
+
+        let lower_rank = ValueId::from_u32(10);
+        let current_leader = ValueId::from_u32(11);
+        solver.values[lower_rank].rank = 1;
+        solver.values[current_leader].rank = 2;
+
+        let lower_rank_class = solver.make_class(GvnInsn::Value(lower_rank), None);
+        let target_class = solver.make_class(GvnInsn::Value(current_leader), None);
+        assert!(
+            !solver
+                .assign_class(lower_rank, lower_rank_class)
+                .leader_changed
+        );
+        assert!(
+            !solver
+                .assign_class(current_leader, target_class)
+                .leader_changed
+        );
+
+        let result = solver.assign_class(lower_rank, target_class);
+        assert!(result.leader_changed);
+        assert_eq!(solver.class_leader(target_class), lower_rank);
+    }
+
+    #[test]
+    fn assign_class_reports_old_class_leader_changes() {
+        let mut solver = GvnSolver::new();
+        solver.classes.push(ClassData {
+            values: BTreeSet::new(),
+            gvn_insn: GvnInsn::Value(ValueId(u32::MAX)),
+            value_phi: None,
+        });
+
+        let old_leader = ValueId::from_u32(10);
+        let remaining_member = ValueId::from_u32(11);
+        let destination_leader = ValueId::from_u32(12);
+        solver.values[destination_leader].rank = 1;
+        solver.values[old_leader].rank = 2;
+        solver.values[remaining_member].rank = 3;
+
+        let src = solver.make_class(GvnInsn::Value(old_leader), None);
+        let dst = solver.make_class(GvnInsn::Value(destination_leader), None);
+        assert!(!solver.assign_class(old_leader, src).leader_changed);
+        assert!(!solver.assign_class(remaining_member, src).leader_changed);
+        assert!(!solver.assign_class(destination_leader, dst).leader_changed);
+
+        let result = solver.assign_class(old_leader, dst);
+        assert!(result.leader_changed);
+        assert_eq!(solver.class_leader(src), remaining_member);
+        assert_eq!(solver.class_leader(dst), destination_leader);
     }
 
     #[test]
