@@ -7,7 +7,7 @@ use sonatina_ir::{
     types::{CompoundType, CompoundTypeRef},
 };
 
-pub(crate) fn collect_unsupported_evm_multi_return(
+pub(crate) fn collect_unsupported_evm_calls(
     module: &Module,
     funcs: &[FuncRef],
     entry: Option<FuncRef>,
@@ -74,6 +74,13 @@ pub(crate) fn collect_unsupported_evm_multi_return(
                         }
 
                         if let Some(callee_sig) = module.ctx.get_sig(callee) {
+                            if !callee_sig.linkage().has_definition() {
+                                push_error(format!(
+                                    "EVM backend does not support calls to external or declaration-only function {callee_name}"
+                                ));
+                                continue;
+                            }
+
                             let callee_arg_count = callee_sig.args().len();
                             let callee_ret_count = callee_sig.ret_tys().len();
                             if callee_arg_count > 16 {
@@ -91,11 +98,6 @@ pub(crate) fn collect_unsupported_evm_multi_return(
                                     "call inst{} argument count {} does not match callee {callee_name} argument count {callee_arg_count}",
                                     inst.as_u32(),
                                     call.args().len(),
-                                ));
-                            }
-                            if callee_ret_count > 1 && !callee_sig.linkage().has_definition() {
-                                push_error(format!(
-                                    "EVM backend does not support external or declaration-only multi-return calls to {callee_name}"
                                 ));
                             }
                             if call_results.len() != callee_ret_count {

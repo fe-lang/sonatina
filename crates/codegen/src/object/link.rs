@@ -1,5 +1,5 @@
 use crate::{
-    isa::evm::{EvmBackend, EvmPreparedSection, opcode::OpCode},
+    isa::evm::{EvmBackend, EvmPreparedSection, PushWidthPolicy, opcode::OpCode},
     machinst::{
         assemble::ObjectLayout,
         lower::{FixupUpdate, LoweredFunction},
@@ -23,6 +23,14 @@ use super::{
         SymbolId, UnmappedReason, UnmappedReasonCoverage,
     },
 };
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SymFixupSite {
+    Function(FuncRef),
+    SectionUnit(crate::machinst::vcode::SectionCodeUnitId),
+}
+
+type RecordedSymFixup = (SymFixupSite, VCodeInst, SymFixup);
 
 #[derive(Debug)]
 pub enum LinkSectionError {
@@ -61,7 +69,6 @@ pub fn link_section(
     )
     .entered();
 
-    let mut sym_fixups: Vec<(FuncRef, VCodeInst, SymFixup)> = Vec::new();
     let mut lowered_funcs: Vec<(FuncRef, LoweredFunction<OpCode>)> =
         Vec::with_capacity(funcs.len());
 
@@ -77,13 +84,6 @@ pub fn link_section(
                 .map_err(|error| LinkSectionError::Backend { func, error })?
         };
 
-        for (insn, fixup) in lowered.vcode.fixups.values() {
-            let VCodeFixup::Sym(fixup) = fixup else {
-                continue;
-            };
-            sym_fixups.push((func, *insn, fixup.clone()));
-        }
-
         lowered_funcs.push((func, lowered));
     }
 
@@ -93,6 +93,23 @@ pub fn link_section(
             func: funcs[0],
             error,
         })?;
+
+    let mut sym_fixups = Vec::new();
+    for (func, lowered) in &lowered_funcs {
+        collect_sym_fixups(
+            SymFixupSite::Function(*func),
+            &lowered.vcode,
+            &mut sym_fixups,
+        );
+    }
+    for unit in &section_units {
+        collect_sym_fixups(
+            SymFixupSite::SectionUnit(unit.id),
+            &unit.vcode,
+            &mut sym_fixups,
+        );
+    }
+
     let layout_funcs = lowered_funcs
         .into_iter()
         .map(|(func, lowered)| (func, lowered.vcode, lowered.block_order))
@@ -104,11 +121,16 @@ pub fn link_section(
         let _span = debug_span!("sonatina.codegen.link_section.relaxation_iter", iter).entered();
         {
             let _span = trace_span!("sonatina.codegen.link_section.resize_layout").entered();
-            while layout.resize(
-                &mut |opcode, label_offset| backend.update_opcode_with_label(opcode, label_offset),
-                &mut |opcode, bytes| backend.update_opcode_with_immediate_bytes(opcode, bytes),
-                0,
-            ) {}
+            while layout
+                .resize(
+                    &mut |opcode, label_offset| {
+                        backend.update_opcode_with_label(opcode, label_offset)
+                    },
+                    &mut |opcode, bytes| backend.update_opcode_with_immediate_bytes(opcode, bytes),
+                    0,
+                )
+                .map_err(|error| LinkSectionError::Link(error.to_string()))?
+            {}
         }
 
         let (symtab, section_size) = {
@@ -116,37 +138,29 @@ pub fn link_section(
             build_section_symtab(&layout, funcs, data, embeds).map_err(LinkSectionError::Link)?
         };
 
-        let mut layout_changed = false;
-        for (func, insn, fixup) in &sym_fixups {
-            let _span = trace_span!(
-                "sonatina.codegen.link_section.apply_fixup",
-                func_ref = func.as_u32(),
-                inst = insn.as_u32()
-            )
-            .entered();
-            let value = fixup_value(&symtab, fixup).map_err(LinkSectionError::Link)?;
-
-            let vcode = layout
-                .func_vcode_mut(*func)
-                .ok_or_else(|| LinkSectionError::Link("missing function vcode".to_string()))?;
-
-            let update = backend
-                .apply_sym_fixup(vcode, *insn, fixup, value, &opts.fixup_policy)
-                .map_err(|error| LinkSectionError::Backend { func: *func, error })?;
-
-            layout_changed |= update == FixupUpdate::LayoutChanged;
-        }
+        let layout_changed = apply_sym_fixups(
+            backend,
+            &mut layout,
+            &sym_fixups,
+            &symtab,
+            &opts.fixup_policy,
+        )?;
 
         if !layout_changed {
             {
                 let _span = trace_span!("sonatina.codegen.link_section.final_resize").entered();
-                while layout.resize(
-                    &mut |opcode, label_offset| {
-                        backend.update_opcode_with_label(opcode, label_offset)
-                    },
-                    &mut |opcode, bytes| backend.update_opcode_with_immediate_bytes(opcode, bytes),
-                    0,
-                ) {}
+                while layout
+                    .resize(
+                        &mut |opcode, label_offset| {
+                            backend.update_opcode_with_label(opcode, label_offset)
+                        },
+                        &mut |opcode, bytes| {
+                            backend.update_opcode_with_immediate_bytes(opcode, bytes)
+                        },
+                        0,
+                    )
+                    .map_err(|error| LinkSectionError::Link(error.to_string()))?
+                {}
             }
 
             let bytes = {
@@ -211,6 +225,69 @@ pub fn link_section(
     Err(LinkSectionError::Link(
         "fixup relaxation did not converge".to_string(),
     ))
+}
+
+fn collect_sym_fixups(
+    site: SymFixupSite,
+    vcode: &crate::machinst::vcode::VCode<OpCode>,
+    out: &mut Vec<RecordedSymFixup>,
+) {
+    for (insn, fixup) in vcode.fixups.values() {
+        let VCodeFixup::Sym(fixup) = fixup else {
+            continue;
+        };
+        out.push((site, *insn, fixup.clone()));
+    }
+}
+
+fn apply_sym_fixups(
+    backend: &EvmBackend,
+    layout: &mut ObjectLayout<OpCode>,
+    sym_fixups: &[RecordedSymFixup],
+    symtab: &FxHashMap<SymbolId, SymbolDef>,
+    fixup_policy: &PushWidthPolicy,
+) -> Result<bool, LinkSectionError> {
+    let mut layout_changed = false;
+    for (site, insn, fixup) in sym_fixups {
+        let value = fixup_value(symtab, fixup).map_err(LinkSectionError::Link)?;
+        let update = match site {
+            SymFixupSite::Function(func) => {
+                let _span = trace_span!(
+                    "sonatina.codegen.link_section.apply_fixup",
+                    func_ref = func.as_u32(),
+                    inst = insn.as_u32()
+                )
+                .entered();
+                let vcode = layout
+                    .func_vcode_mut(*func)
+                    .ok_or_else(|| LinkSectionError::Link("missing function vcode".to_string()))?;
+                backend
+                    .apply_sym_fixup(vcode, *insn, fixup, value, fixup_policy)
+                    .map_err(|error| LinkSectionError::Backend { func: *func, error })?
+            }
+            SymFixupSite::SectionUnit(unit) => {
+                let _span = trace_span!(
+                    "sonatina.codegen.link_section.apply_fixup",
+                    section_unit = unit.0,
+                    inst = insn.as_u32()
+                )
+                .entered();
+                let vcode = layout.section_unit_vcode_mut(*unit).ok_or_else(|| {
+                    LinkSectionError::Link("missing section unit vcode".to_string())
+                })?;
+                backend
+                    .apply_sym_fixup(vcode, *insn, fixup, value, fixup_policy)
+                    .map_err(|error| {
+                        LinkSectionError::Link(format!(
+                            "failed to apply symbol fixup in section unit {}: {error}",
+                            unit.0
+                        ))
+                    })?
+            }
+        };
+        layout_changed |= update == FixupUpdate::LayoutChanged;
+    }
+    Ok(layout_changed)
 }
 
 fn build_section_symtab<Op>(
@@ -560,5 +637,122 @@ fn classify_unmapped_reason<Op>(
         UnmappedReason::Synthetic
     } else {
         UnmappedReason::NoIrInst
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        isa::evm::opcode::OpCode,
+        machinst::{
+            lower::SectionCodeUnit,
+            vcode::{SectionCodeUnitId, VCode},
+        },
+    };
+    use smallvec::smallvec;
+    use sonatina_ir::{isa::evm::Evm, module::FuncRef};
+    use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
+
+    fn test_backend() -> EvmBackend {
+        EvmBackend::new(Evm::new(TargetTriple {
+            architecture: Architecture::Evm,
+            vendor: Vendor::Ethereum,
+            operating_system: OperatingSystem::Evm(EvmVersion::Osaka),
+        }))
+    }
+
+    #[test]
+    fn apply_sym_fixups_updates_section_unit_immediates() {
+        let backend = test_backend();
+        let func = FuncRef::from_u32(0);
+        let gv = GlobalVariableRef::from_u32(0);
+        let unit_id = SectionCodeUnitId(0);
+        let block = BlockId(0);
+
+        let mut func_vcode = VCode::<OpCode>::default();
+        func_vcode.add_inst_to_block(OpCode::STOP, None, block);
+
+        let mut unit_vcode = VCode::<OpCode>::default();
+        let addr = unit_vcode.add_inst_to_block(OpCode::PUSH0, None, block);
+        unit_vcode.inst_imm_bytes.insert((addr, smallvec![]));
+        unit_vcode.fixups.insert((
+            addr,
+            VCodeFixup::Sym(SymFixup {
+                kind: SymFixupKind::Addr,
+                sym: SymbolRef::Global(gv),
+            }),
+        ));
+        let size = unit_vcode.add_inst_to_block(OpCode::PUSH0, None, block);
+        unit_vcode.inst_imm_bytes.insert((size, smallvec![]));
+        unit_vcode.fixups.insert((
+            size,
+            VCodeFixup::Sym(SymFixup {
+                kind: SymFixupKind::Size,
+                sym: SymbolRef::Global(gv),
+            }),
+        ));
+        unit_vcode.add_inst_to_block(OpCode::STOP, None, block);
+
+        let mut sym_fixups = Vec::new();
+        collect_sym_fixups(
+            SymFixupSite::SectionUnit(unit_id),
+            &unit_vcode,
+            &mut sym_fixups,
+        );
+        assert_eq!(sym_fixups.len(), 2);
+
+        let mut layout = ObjectLayout::new(
+            vec![(func, func_vcode, vec![block])],
+            vec![SectionCodeUnit {
+                id: unit_id,
+                name: "__helper".to_string(),
+                vcode: unit_vcode,
+                block_order: vec![block],
+            }],
+            0,
+        );
+        let mut symtab = FxHashMap::default();
+        symtab.insert(
+            SymbolId::Global(gv),
+            SymbolDef {
+                offset: 0x1234_5678,
+                size: 0x0102_0304,
+            },
+        );
+
+        let layout_changed = apply_sym_fixups(
+            &backend,
+            &mut layout,
+            &sym_fixups,
+            &symtab,
+            &PushWidthPolicy::Push4,
+        )
+        .expect("helper fixups should resolve");
+        assert!(layout_changed, "PUSH0 should relax to wider PUSH");
+
+        let unit = layout
+            .section_units()
+            .get(&unit_id)
+            .expect("section unit layout should exist");
+        let (addr_inst, addr_bytes) = unit
+            .layout()
+            .vcode()
+            .inst_imm_bytes
+            .get(addr)
+            .expect("addr fixup bytes should exist");
+        let (size_inst, size_bytes) = unit
+            .layout()
+            .vcode()
+            .inst_imm_bytes
+            .get(size)
+            .expect("size fixup bytes should exist");
+
+        assert_eq!(*addr_inst, addr);
+        assert_eq!(addr_bytes.as_slice(), &[0x12, 0x34, 0x56, 0x78][..]);
+        assert_eq!(unit.layout().vcode().insts[addr] as u8, OpCode::PUSH4 as u8);
+        assert_eq!(*size_inst, size);
+        assert_eq!(size_bytes.as_slice(), &[0x01, 0x02, 0x03, 0x04][..]);
+        assert_eq!(unit.layout().vcode().insts[size] as u8, OpCode::PUSH4 as u8);
     }
 }

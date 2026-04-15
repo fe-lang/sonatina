@@ -14,6 +14,31 @@ use super::{
     vcode::{Label, LabelId, SectionCodeUnitId, VCode, VCodeFixup, VCodeInst},
 };
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LayoutError {
+    MissingFunctionOffset(FuncRef),
+    MissingSectionUnitOffset(SectionCodeUnitId),
+}
+
+impl std::fmt::Display for LayoutError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MissingFunctionOffset(func) => {
+                write!(
+                    f,
+                    "missing layout offset for function label target {func:?}"
+                )
+            }
+            Self::MissingSectionUnitOffset(unit) => {
+                write!(
+                    f,
+                    "missing layout offset for section helper label target {unit:?}"
+                )
+            }
+        }
+    }
+}
+
 pub struct ObjectLayout<Op> {
     // TODO: data, suffix (solc metadata)
     _offset: u32,
@@ -74,7 +99,7 @@ impl<Op> ObjectLayout<Op> {
         update_opcode_with_label: &mut impl FnMut(&mut Op, u32) -> SmallVec<[u8; 4]>,
         update_opcode_with_immediate_bytes: &mut impl FnMut(&mut Op, &mut SmallVec<[u8; 8]>),
         mut offset: u32,
-    ) -> bool {
+    ) -> Result<bool, LayoutError> {
         let mut did_change = false;
         for (funcref, layout) in self.functions.iter_mut() {
             did_change |= layout.resize(
@@ -83,7 +108,7 @@ impl<Op> ObjectLayout<Op> {
                 offset,
                 &self.func_offsets,
                 &self.section_unit_offsets,
-            );
+            )?;
             self.func_offsets[*funcref] = offset;
             offset += layout.size;
         }
@@ -94,12 +119,12 @@ impl<Op> ObjectLayout<Op> {
                 offset,
                 &self.func_offsets,
                 &self.section_unit_offsets,
-            );
+            )?;
             self.section_unit_offsets[*unit_id] = offset;
             offset += unit.layout.size;
         }
         did_change |= update(&mut self._size, offset - self._offset);
-        did_change
+        Ok(did_change)
     }
 
     pub fn emit(
@@ -130,6 +155,15 @@ impl<Op> ObjectLayout<Op> {
         self.functions
             .get_mut(&func)
             .map(|layout| &mut layout.vcode)
+    }
+
+    pub(crate) fn section_unit_vcode_mut(
+        &mut self,
+        unit: SectionCodeUnitId,
+    ) -> Option<&mut VCode<Op>> {
+        self.section_units
+            .get_mut(&unit)
+            .map(|layout| &mut layout.layout.vcode)
     }
 
     pub(crate) fn func_layout(&self, func: FuncRef) -> Option<&FuncLayout<Op>> {
@@ -215,7 +249,7 @@ impl<Op> FuncLayout<Op> {
         mut offset: u32,
         fn_offsets: &SecondaryMap<FuncRef, u32>,
         section_unit_offsets: &SecondaryMap<SectionCodeUnitId, u32>,
-    ) -> bool {
+    ) -> Result<bool, LayoutError> {
         let mut did_change = update(&mut self.offset, offset);
 
         for block in self.block_order.iter().copied() {
@@ -231,8 +265,14 @@ impl<Op> FuncLayout<Op> {
                 {
                     let address = match self.vcode.labels[*label] {
                         Label::Block(b) => self.block_offsets[b],
-                        Label::Function(f) => fn_offsets[f],
-                        Label::SectionCodeUnit(unit) => section_unit_offsets[unit],
+                        Label::Function(f) => fn_offsets
+                            .get(f)
+                            .copied()
+                            .ok_or(LayoutError::MissingFunctionOffset(f))?,
+                        Label::SectionCodeUnit(unit) => section_unit_offsets
+                            .get(unit)
+                            .copied()
+                            .ok_or(LayoutError::MissingSectionUnitOffset(unit))?,
                         Label::Insn(i) => self.insn_offsets[i],
                     };
                     did_change |= update(self.label_targets.index_mut(*label), address);
@@ -249,7 +289,7 @@ impl<Op> FuncLayout<Op> {
             }
         }
         did_change |= update(&mut self.size, offset - self.offset);
-        did_change
+        Ok(did_change)
     }
 
     fn emit(
@@ -422,4 +462,30 @@ fn update(val: &mut u32, to: u32) -> bool {
     let did_change = *val != to;
     *val = to;
     did_change
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::isa::evm::opcode::OpCode;
+
+    #[test]
+    fn resize_rejects_missing_function_label_target() {
+        let block = BlockId(0);
+        let mut vcode = VCode::<OpCode>::default();
+        let push = vcode.add_inst_to_block(OpCode::PUSH1, None, block);
+        let label = vcode.labels.push(Label::Function(FuncRef::from_u32(1)));
+        vcode.fixups.insert((push, VCodeFixup::Label(label)));
+        vcode.add_inst_to_block(OpCode::JUMP, None, block);
+
+        let mut layout =
+            ObjectLayout::new(vec![(FuncRef::from_u32(0), vcode, vec![block])], vec![], 0);
+        let err = layout
+            .resize(&mut |_, _| SmallVec::new(), &mut |_, _| {}, 0)
+            .expect_err("missing function label target must fail cleanly");
+        assert_eq!(
+            err,
+            LayoutError::MissingFunctionOffset(FuncRef::from_u32(1))
+        );
+    }
 }

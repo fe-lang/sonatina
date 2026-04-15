@@ -8,6 +8,7 @@ use crate::{
         lower::{LoweredFunction, SectionWorkModule},
         vcode::{Label, VCode, VCodeFixup},
     },
+    object::{CompileOptions, SymbolId, link::link_section},
     optim::pipeline::Pipeline,
     stackalloc::{Action, Actions, Allocator, StackifyBuilder},
 };
@@ -17,6 +18,7 @@ use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{
     BlockId, Directive, Immediate, InstId, InstSetBase, InstSetExt, Module, ValueId,
     cfg::ControlFlowGraph, inst::evm::inst_set::EvmInstKind, ir_writer::FuncWriter, isa::Isa,
+    object::SectionName,
 };
 use sonatina_parser::parse_module;
 use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
@@ -2596,5 +2598,139 @@ fn prune_keeps_iszero_iszero_before_non_labeled_jumpi() {
             OpCode::PUSH1 as u8,
             OpCode::JUMPI as u8
         ]
+    );
+}
+
+#[test]
+fn link_section_resolves_sym_fixups_in_late_outlined_helper() {
+    let parsed = parse_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+func private %a(v0.i1) {
+block0:
+    br v0 block1 block2;
+
+block1:
+    jump block3;
+
+block2:
+    evm_invalid;
+
+block3:
+    v1.i256 = sym_addr .;
+    v2.i256 = sym_size .;
+    mstore 0.i256 v1 i256;
+    mstore 32.i256 v2 i256;
+    evm_return 0.i256 64.i256;
+}
+
+func private %b(v0.i1) {
+block0:
+    br v0 block1 block2;
+
+block1:
+    jump block3;
+
+block2:
+    evm_invalid;
+
+block3:
+    v3.i256 = sym_addr .;
+    v4.i256 = sym_size .;
+    mstore 0.i256 v3 i256;
+    mstore 32.i256 v4 i256;
+    evm_return 0.i256 64.i256;
+}
+
+func public %main(v0.i1) {
+block0:
+    br v0 block1 block2;
+
+block1:
+    call %a 1.i1;
+    return;
+
+block2:
+    call %b 1.i1;
+    return;
+}
+"#,
+    )
+    .expect("module parses");
+    let backend = test_backend();
+    let entry = find_func(&parsed.module, "main");
+    let prepared = backend
+        .prepare_section(work_module_with_entry(&parsed.module, &[entry], entry))
+        .expect("prepare should succeed");
+    let mut lowered_funcs: Vec<_> = prepared
+        .funcs()
+        .iter()
+        .map(|&func| {
+            (
+                func,
+                backend
+                    .lower_function(&prepared, func)
+                    .expect("lowering should succeed"),
+            )
+        })
+        .collect();
+    let section_units = backend
+        .post_lower_section(&prepared, &mut lowered_funcs)
+        .expect("late outlining should succeed");
+
+    assert_eq!(section_units.len(), 1, "expected one outlined helper");
+    let helper_fixups: Vec<_> = section_units[0]
+        .vcode
+        .fixups
+        .values()
+        .filter_map(|(_, fixup)| match fixup {
+            VCodeFixup::Sym(sym) => Some((sym.kind.clone(), sym.sym.clone())),
+            VCodeFixup::Label(_) => None,
+        })
+        .collect();
+    assert!(
+        helper_fixups.iter().any(
+            |(kind, sym)| *kind == crate::machinst::vcode::SymFixupKind::Addr
+                && *sym == sonatina_ir::inst::data::SymbolRef::CurrentSection
+        ),
+        "outlined helper must retain current-section address fixup: {helper_fixups:?}"
+    );
+    assert!(
+        helper_fixups.iter().any(
+            |(kind, sym)| *kind == crate::machinst::vcode::SymFixupKind::Size
+                && *sym == sonatina_ir::inst::data::SymbolRef::CurrentSection
+        ),
+        "outlined helper must retain current-section size fixup: {helper_fixups:?}"
+    );
+
+    let artifact = link_section(
+        &backend,
+        &prepared,
+        &[],
+        &[],
+        &SectionName("runtime".into()),
+        &CompileOptions::default(),
+    )
+    .expect("linking should resolve outlined helper symbol fixups");
+    let current = artifact
+        .symtab
+        .get(&SymbolId::CurrentSection)
+        .expect("current-section symbol missing");
+    let offset = current.offset.to_be_bytes();
+    let size = current.size.to_be_bytes();
+    assert!(
+        artifact
+            .bytes
+            .windows(offset.len())
+            .any(|window| window == offset),
+        "linked section must contain the resolved current-section address"
+    );
+    assert!(
+        artifact
+            .bytes
+            .windows(size.len())
+            .any(|window| window == size),
+        "linked section must contain the resolved current-section size"
     );
 }

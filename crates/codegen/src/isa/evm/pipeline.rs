@@ -20,7 +20,7 @@ use crate::{
 use sonatina_ir::{Module, module::FuncRef};
 
 use super::{
-    EvmBackend, LateCleanupProfile, PtrEscapeSummary, collect_unsupported_evm_multi_return,
+    EvmBackend, LateCleanupProfile, PtrEscapeSummary, collect_unsupported_evm_calls,
     compute_ptr_escape_summaries, prepare_free_ptr_restore, validate_supported_lowering_ir,
 };
 
@@ -268,10 +268,9 @@ impl EvmPipelineContext<'_> {
         let membership = self.work.membership();
         self.funcs = self.work.function_emission_order(&membership);
 
-        if let Some((_, message)) =
-            collect_unsupported_evm_multi_return(self.module(), &self.funcs, None)
-                .into_iter()
-                .next()
+        if let Some((_, message)) = collect_unsupported_evm_calls(self.module(), &self.funcs, None)
+            .into_iter()
+            .next()
         {
             return Err(message);
         }

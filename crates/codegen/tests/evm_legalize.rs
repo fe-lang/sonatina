@@ -142,26 +142,26 @@ func public %main(v0.i8) -> i8 {
 }
 
 #[test]
-fn prepare_section_rejects_external_multi_return_calls() {
+fn prepare_section_rejects_external_calls() {
     let source = r#"
 target = "evm-ethereum-osaka"
 
-declare external %pair_add(i32, i32) -> (i32, i1);
+declare external %pair_add(i32, i32) -> i32;
 
-func public %main() {
+func public %main() -> i32 {
     block0:
-        (v0.i32, v1.i1) = call %pair_add 1.i32 2.i32;
-        return;
+        v0.i32 = call %pair_add 1.i32 2.i32;
+        return v0;
 }
 "#;
 
     let parsed = parse_module(source).expect("module should parse");
     let backend = evm_backend();
     let err = match prepare_root(&parsed.module, &backend, find_func(&parsed.module, "main")) {
-        Ok(_) => panic!("prepare should reject external multi-return calls"),
+        Ok(_) => panic!("prepare should reject external calls"),
         Err(err) => err,
     };
-    assert!(err.contains("external or declaration-only multi-return calls"));
+    assert!(err.contains("calls to external or declaration-only function %pair_add"));
 }
 
 #[test]
