@@ -2309,3 +2309,70 @@ enum SignedCmpKind {
     Le,
     Ge,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::legalize_evm_section;
+    use sonatina_ir::{Function, ir_writer::FuncWriter, module::FuncRef};
+    use sonatina_parser::{ParsedModule, parse_module};
+
+    fn parse(src: &str) -> ParsedModule {
+        parse_module(src).unwrap_or_else(|errs| panic!("parse failed: {errs:?}"))
+    }
+
+    fn find_func(parsed: &ParsedModule, name: &str) -> FuncRef {
+        parsed
+            .module
+            .funcs()
+            .into_iter()
+            .find(|&func_ref| {
+                parsed
+                    .module
+                    .ctx
+                    .func_sig(func_ref, |sig| sig.name() == name)
+            })
+            .unwrap_or_else(|| panic!("function `{name}` should exist"))
+    }
+
+    fn dump_func(function: &Function, func_ref: FuncRef) -> String {
+        FuncWriter::new(func_ref, function).dump_string()
+    }
+
+    #[test]
+    fn pointer_preserving_bitcasts_stay_aliases_through_legalization() {
+        let parsed = parse(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %entry() -> i8 {
+block0:
+    v0.*i8 = alloca i8;
+    v1.*i256 = bitcast v0 *i256;
+    mstore v1 7.i8 i8;
+    v2.*i8 = bitcast v1 *i8;
+    v3.i8 = mload v2 i8;
+    return v3;
+}
+"#,
+        );
+
+        let funcs = parsed.module.funcs();
+        legalize_evm_section(&parsed.module, &funcs);
+
+        let entry = find_func(&parsed, "entry");
+        let dumped = parsed
+            .module
+            .func_store
+            .view(entry, |function| dump_func(function, entry));
+
+        assert!(dumped.contains("v0.*i256 = alloca i256;"), "{dumped}");
+        assert!(dumped.contains("mstore v0 7.i256 i256;"), "{dumped}");
+        assert!(dumped.contains("mload v0 i256;"), "{dumped}");
+        assert!(dumped.contains("and v"), "{dumped}");
+        assert!(dumped.contains("return v"), "{dumped}");
+        assert!(!dumped.contains("bitcast"), "{dumped}");
+        assert!(!dumped.contains(" = or "), "{dumped}");
+        assert!(!dumped.contains("ptrtoint"), "{dumped}");
+        assert!(!dumped.contains("inttoptr"), "{dumped}");
+    }
+}
