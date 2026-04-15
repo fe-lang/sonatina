@@ -201,7 +201,7 @@ const POST_DEAD_ARG_CLEANUP_PASSES: &[Pass] = &[
 fn pass_needs_func_behavior(pass: Pass) -> bool {
     matches!(
         pass,
-        Pass::CfgCleanup | Pass::LoadStore | Pass::Sccp | Pass::Adce | Pass::Gvn
+        Pass::CfgCleanup | Pass::LoadStore | Pass::Sccp | Pass::Adce | Pass::Licm | Pass::Gvn
     )
 }
 
@@ -864,6 +864,11 @@ mod tests {
         let pipeline = Pipeline::new();
         let mut module = build_test_module();
         pipeline.run(&mut module);
+    }
+
+    #[test]
+    fn licm_pass_triggers_func_behavior_analysis() {
+        assert!(pass_needs_func_behavior(Pass::Licm));
     }
 
     #[test]
@@ -2428,6 +2433,87 @@ func public %caller(v0.i1, v1.*i32, v2.i32) -> i32 {
                 "helper splicing should leave the still-multi-block inner call in place:\n{dumped}"
             );
         });
+    }
+
+    #[test]
+    fn licm_recomputes_func_behavior_before_licm_only_step() {
+        let source = r#"
+target = "evm-ethereum-london"
+
+func private %pure_after_cleanup(v0.i1, v1.*i32, v2.i32) -> i32 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        br 0.i1 block3 block4;
+
+    block2:
+        return v2;
+
+    block3:
+        mstore v1 1.i32 i32;
+        return 99.i32;
+
+    block4:
+        v3.i32 = add v2 2.i32;
+        return v3;
+}
+
+func private %entry(v0.i1, v1.*i32, v2.i32) -> i32 {
+    block0:
+        jump block1;
+
+    block1:
+        br v0 block2 block3;
+
+    block2:
+        v3.i32 = call %pure_after_cleanup v0 v1 v2;
+        v4.i32 = add v3 1.i32;
+        jump block1;
+
+    block3:
+        return 0.i32;
+}
+"#;
+
+        let mut module = parse_module(source).expect("parse should succeed").module;
+        let entry = module
+            .funcs()
+            .into_iter()
+            .find(|&func_ref| module.ctx.func_sig(func_ref, |sig| sig.name() == "entry"))
+            .expect("entry should exist");
+        let mut pipeline = Pipeline::new();
+        pipeline
+            .add_step(Step::FuncPasses(vec![
+                Pass::CfgCleanup,
+                Pass::Sccp,
+                Pass::CfgCleanup,
+            ]))
+            .add_step(Step::FuncPasses(vec![Pass::Licm]));
+
+        pipeline.run(&mut module);
+
+        let dumped = module
+            .func_store
+            .view(entry, |func| FuncWriter::new(entry, func).dump_string());
+        let block0 = dumped
+            .split("block0:")
+            .nth(1)
+            .and_then(|tail| tail.split("block1:").next())
+            .expect("block0 section should exist");
+        let block2 = dumped
+            .split("block2:")
+            .nth(1)
+            .and_then(|tail| tail.split("block3:").next())
+            .expect("block2 section should exist");
+        assert!(
+            block0.contains("call %pure_after_cleanup"),
+            "LICM-only step should see refreshed callee effects and hoist the invariant call:\n{dumped}"
+        );
+        assert!(
+            !block2.contains("call %pure_after_cleanup"),
+            "loop body should no longer contain the hoisted call after LICM:\n{dumped}"
+        );
     }
 
     #[test]
