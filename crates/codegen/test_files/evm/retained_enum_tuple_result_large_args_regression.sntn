@@ -1,0 +1,131 @@
+#! evm.config: { opt: 2 }
+#! evm.case: ok
+#!   calldata:
+#!   expect: return
+
+target = "evm-ethereum-osaka"
+
+type @MyErr = enum {
+    #None,
+    #Bad,
+};
+
+type @Big = { i1, [i256; 5] };
+type @Ret = { i1, @MyErr };
+
+func private %make_big() -> @Big {
+block0:
+    v0.objref<[i256; 5]> = obj.alloc [i256; 5];
+    v1.objref<i256> = obj.index v0 0.i256;
+    obj.store v1 0.i256;
+    v2.objref<i256> = obj.index v0 1.i256;
+    obj.store v2 0.i256;
+    v3.objref<i256> = obj.index v0 2.i256;
+    obj.store v3 0.i256;
+    v4.objref<i256> = obj.index v0 3.i256;
+    obj.store v4 0.i256;
+    v5.objref<i256> = obj.index v0 4.i256;
+    obj.store v5 0.i256;
+    v6.[i256; 5] = obj.load v0;
+    v7.objref<@Big> = obj.alloc @Big;
+    v8.objref<i1> = obj.proj v7 0.i256;
+    obj.store v8 1.i1;
+    v9.objref<[i256; 5]> = obj.proj v7 1.i256;
+    v10.objref<i256> = obj.index v9 0.i256;
+    obj.store v10 0.i256;
+    v11.objref<i256> = obj.index v9 1.i256;
+    obj.store v11 0.i256;
+    v12.objref<i256> = obj.index v9 2.i256;
+    obj.store v12 0.i256;
+    v13.objref<i256> = obj.index v9 3.i256;
+    obj.store v13 0.i256;
+    v14.objref<i256> = obj.index v9 4.i256;
+    obj.store v14 0.i256;
+    v15.@Big = obj.load v7;
+    return v15;
+}
+
+func private %vals_a() -> [i256; 5] {
+block0:
+    v0.objref<[i256; 5]> = obj.alloc [i256; 5];
+    v1.objref<i256> = obj.index v0 0.i256;
+    obj.store v1 0.i256;
+    v2.objref<i256> = obj.index v0 1.i256;
+    obj.store v2 7.i256;
+    v3.objref<i256> = obj.index v0 2.i256;
+    obj.store v3 0.i256;
+    v4.objref<i256> = obj.index v0 3.i256;
+    obj.store v4 0.i256;
+    v5.objref<i256> = obj.index v0 4.i256;
+    obj.store v5 0.i256;
+    v6.[i256; 5] = obj.load v0;
+    return v6;
+}
+
+func private %vals_b() -> [i256; 5] {
+block0:
+    v0.objref<[i256; 5]> = obj.alloc [i256; 5];
+    v1.objref<i256> = obj.index v0 0.i256;
+    obj.store v1 0.i256;
+    v2.objref<i256> = obj.index v0 1.i256;
+    obj.store v2 0.i256;
+    v3.objref<i256> = obj.index v0 2.i256;
+    obj.store v3 9.i256;
+    v4.objref<i256> = obj.index v0 3.i256;
+    obj.store v4 0.i256;
+    v5.objref<i256> = obj.index v0 4.i256;
+    obj.store v5 0.i256;
+    v6.[i256; 5] = obj.load v0;
+    return v6;
+}
+
+func private %check(v0.@Big, v1.[i256; 5], v2.[i256; 5]) -> @Ret {
+block0:
+    v3.i1 = extract_value v0 0.i8;
+    v4.i256 = extract_value v1 1.i8;
+    v5.i1 = eq v4 7.i256;
+    v6.i1 = and v3 v5;
+    v7.i256 = extract_value v2 2.i8;
+    v8.i1 = eq v7 9.i256;
+    v9.i1 = and v6 v8;
+    v10.objref<@Ret> = obj.alloc @Ret;
+    v11.objref<i1> = obj.proj v10 0.i256;
+    obj.store v11 v9;
+    v12.objref<@MyErr> = obj.proj v10 1.i256;
+    enum.set_tag v12 #None;
+    v13.@Ret = obj.load v10;
+    return v13;
+}
+
+func private %run() {
+block0:
+    v0.@Big = call %make_big;
+    v1.[i256; 5] = call %vals_a;
+    v2.[i256; 5] = call %vals_b;
+    v3.@Ret = call %check v0 v1 v2;
+    v4.[i256; 5] = call %vals_a;
+    v5.[i256; 5] = call %vals_b;
+    v6.@Ret = call %check v0 v4 v5;
+    v7.i1 = extract_value v3 0.i8;
+    v8.i1 = extract_value v6 0.i8;
+    v11.i1 = and v7 v8;
+    br v11 block1 block2;
+
+block1:
+    return;
+
+block2:
+    evm_revert 0.i256 0.i256;
+}
+
+func public %entry() {
+block0:
+    call %run;
+    evm_return 0.i8 0.i8;
+}
+
+object @Contract {
+    section runtime {
+        entry %entry;
+    }
+}

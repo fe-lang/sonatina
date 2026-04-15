@@ -1002,12 +1002,6 @@ impl ObjectAggregateAbi {
             return;
         }
 
-        let facts = self.collect_caller_elision_facts(
-            function,
-            current_plan,
-            object_effects,
-            local_object_args,
-        );
         let blocks: Vec<_> = function.layout.iter_block().collect();
         for block in blocks {
             let insts: Vec<_> = function.layout.iter_inst(block).collect();
@@ -1024,6 +1018,12 @@ impl ObjectAggregateAbi {
                 let Some(plan) = plans.get(call.callee()) else {
                     continue;
                 };
+                let facts = self.collect_caller_elision_facts(
+                    function,
+                    current_plan,
+                    object_effects,
+                    local_object_args,
+                );
                 self.rewrite_call_with_elision(function, inst, &call, plan, object_effects, &facts);
             }
         }
