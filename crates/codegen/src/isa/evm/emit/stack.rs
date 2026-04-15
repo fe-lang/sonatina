@@ -26,6 +26,8 @@ enum StackPeepholeOp {
     Pop,
 }
 
+const MAX_STACK_PEEPHOLE_WINDOW: usize = 24;
+
 fn classify_stack_peephole_op(
     vcode: &VCode<OpCode>,
     label_targets: &FxHashSet<VCodeInst>,
@@ -61,6 +63,26 @@ fn classify_stack_peephole_op(
         return Some(StackPeepholeOp::Swap(byte - OpCode::SWAP1 as u8 + 1));
     }
     None
+}
+
+fn classify_stack_action_peephole_op(action: Action) -> Option<StackPeepholeOp> {
+    match action {
+        Action::Push(_) => Some(StackPeepholeOp::Push),
+        Action::StackDup(depth) => (depth < 16).then_some(StackPeepholeOp::Dup(depth + 1)),
+        Action::StackSwap(depth) => {
+            ((1..=16).contains(&depth)).then_some(StackPeepholeOp::Swap(depth))
+        }
+        Action::Pop => Some(StackPeepholeOp::Pop),
+        Action::PushContinuationOffset
+        | Action::MemLoadAbs(_)
+        | Action::MemLoadFrameSlot(_)
+        | Action::MemStoreAbs(_)
+        | Action::MemStoreFrameSlot(_)
+        | Action::MaterializeLocalAddr { .. }
+        | Action::PushFrameAddr { .. }
+        | Action::MemLoadObj(_)
+        | Action::MemStoreObj(_) => None,
+    }
 }
 
 fn is_bool_producer_opcode(op: OpCode) -> bool {
@@ -104,19 +126,12 @@ fn push_immediate_u256(vcode: &VCode<OpCode>, inst: VCodeInst) -> Option<U256> {
     Some(U256::from_big_endian(&be))
 }
 
-fn is_noop_stack_peephole_sequence(
-    vcode: &VCode<OpCode>,
-    label_targets: &FxHashSet<VCodeInst>,
-    insts: &[VCodeInst],
-) -> bool {
+fn is_noop_stack_peephole_ops(ops: &[StackPeepholeOp]) -> bool {
     let mut stack: SmallVec<[u16; 64]> = (0..32).collect();
     let initial = stack.clone();
     let mut next_push_token: u16 = 1000;
 
-    for &inst in insts {
-        let Some(op) = classify_stack_peephole_op(vcode, label_targets, inst) else {
-            return false;
-        };
+    for &op in ops {
         match op {
             StackPeepholeOp::Push => {
                 stack.push(next_push_token);
@@ -148,6 +163,34 @@ fn is_noop_stack_peephole_sequence(
     }
 
     stack == initial
+}
+
+fn is_noop_stack_peephole_sequence(
+    vcode: &VCode<OpCode>,
+    label_targets: &FxHashSet<VCodeInst>,
+    insts: &[VCodeInst],
+) -> bool {
+    let mut ops = SmallVec::<[StackPeepholeOp; 8]>::new();
+    for &inst in insts {
+        let Some(op) = classify_stack_peephole_op(vcode, label_targets, inst) else {
+            return false;
+        };
+        ops.push(op);
+    }
+
+    is_noop_stack_peephole_ops(ops.as_slice())
+}
+
+fn is_noop_stack_action_sequence(actions: &[Action]) -> bool {
+    let mut ops = SmallVec::<[StackPeepholeOp; 8]>::new();
+    for &action in actions {
+        let Some(op) = classify_stack_action_peephole_op(action) else {
+            return false;
+        };
+        ops.push(op);
+    }
+
+    is_noop_stack_peephole_ops(ops.as_slice())
 }
 
 pub(crate) fn prune_redundant_opcode_sequences(vcode: &mut VCode<OpCode>, block_order: &[BlockId]) {
@@ -250,8 +293,7 @@ pub(crate) fn prune_redundant_opcode_sequences(vcode: &mut VCode<OpCode>, block_
                 }
             }
 
-            const MAX_WINDOW: usize = 24;
-            let run_limit = (i + MAX_WINDOW).min(insts.len());
+            let run_limit = (i + MAX_STACK_PEEPHOLE_WINDOW).min(insts.len());
             let mut run_end = i;
             while run_end < run_limit
                 && classify_stack_peephole_op(vcode, &label_targets, insts[run_end]).is_some()
@@ -307,45 +349,13 @@ pub(crate) fn fold_stack_actions(actions: &[Action]) -> SmallVec<[Action; 8]> {
         out.push(action);
         loop {
             let len = out.len();
-
             let mut changed = false;
-            if len >= 2 {
-                let prev = out[len - 2];
-                let last = out[len - 1];
-                let cancels = match (prev, last) {
-                    (Action::StackSwap(a), Action::StackSwap(b)) => a == b,
-                    (Action::StackDup(_), Action::Pop) | (Action::Push(_), Action::Pop) => true,
-                    _ => false,
-                };
-                if cancels {
-                    out.truncate(len - 2);
+            let max_suffix_len = MAX_STACK_PEEPHOLE_WINDOW.min(len);
+            for suffix_len in (2..=max_suffix_len).rev() {
+                if is_noop_stack_action_sequence(&out[len - suffix_len..]) {
+                    out.truncate(len - suffix_len);
                     changed = true;
-                }
-            }
-
-            if !changed && len >= 3 {
-                let a = out[len - 3];
-                let b = out[len - 2];
-                let c = out[len - 1];
-                if matches!(a, Action::Push(_)) && b == Action::StackSwap(1) && c == Action::Pop {
-                    out.truncate(len - 3);
-                    changed = true;
-                }
-            }
-
-            if !changed && len >= 8 {
-                let i = len - 8;
-                if matches!(out[i], Action::Push(_))
-                    && matches!(out[i + 1], Action::Push(_))
-                    && out[i + 2] == Action::StackSwap(1)
-                    && out[i + 3] == Action::StackSwap(2)
-                    && out[i + 4] == Action::StackSwap(1)
-                    && out[i + 5] == Action::Pop
-                    && out[i + 6] == Action::StackSwap(1)
-                    && out[i + 7] == Action::Pop
-                {
-                    out.truncate(len - 8);
-                    changed = true;
+                    break;
                 }
             }
 
