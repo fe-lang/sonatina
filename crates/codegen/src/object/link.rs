@@ -121,11 +121,16 @@ pub fn link_section(
         let _span = debug_span!("sonatina.codegen.link_section.relaxation_iter", iter).entered();
         {
             let _span = trace_span!("sonatina.codegen.link_section.resize_layout").entered();
-            while layout.resize(
-                &mut |opcode, label_offset| backend.update_opcode_with_label(opcode, label_offset),
-                &mut |opcode, bytes| backend.update_opcode_with_immediate_bytes(opcode, bytes),
-                0,
-            ) {}
+            while layout
+                .resize(
+                    &mut |opcode, label_offset| {
+                        backend.update_opcode_with_label(opcode, label_offset)
+                    },
+                    &mut |opcode, bytes| backend.update_opcode_with_immediate_bytes(opcode, bytes),
+                    0,
+                )
+                .map_err(|error| LinkSectionError::Link(error.to_string()))?
+            {}
         }
 
         let (symtab, section_size) = {
@@ -144,13 +149,18 @@ pub fn link_section(
         if !layout_changed {
             {
                 let _span = trace_span!("sonatina.codegen.link_section.final_resize").entered();
-                while layout.resize(
-                    &mut |opcode, label_offset| {
-                        backend.update_opcode_with_label(opcode, label_offset)
-                    },
-                    &mut |opcode, bytes| backend.update_opcode_with_immediate_bytes(opcode, bytes),
-                    0,
-                ) {}
+                while layout
+                    .resize(
+                        &mut |opcode, label_offset| {
+                            backend.update_opcode_with_label(opcode, label_offset)
+                        },
+                        &mut |opcode, bytes| {
+                            backend.update_opcode_with_immediate_bytes(opcode, bytes)
+                        },
+                        0,
+                    )
+                    .map_err(|error| LinkSectionError::Link(error.to_string()))?
+                {}
             }
 
             let bytes = {
