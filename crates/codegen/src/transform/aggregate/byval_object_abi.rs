@@ -2817,7 +2817,7 @@ block0:
     }
 
     #[test]
-    fn retained_byvalue_array_copies_are_initialized_before_rewritten_call() {
+    fn retained_byvalue_array_roots_share_across_branch_when_still_current() {
         let module = parse_test_module(
             r#"
 target = "evm-ethereum-osaka"
@@ -2876,22 +2876,54 @@ block2:
         );
 
         run_byvalue_arg_abi(&module);
+        let caller_ref = lookup_func(&module, "main");
+        let callee_ref = lookup_func(&module, "check");
         let dumped = dump_func(&module, "main");
-        let block1 = dumped
-            .split("block1:")
-            .nth(1)
-            .and_then(|tail| tail.split("block2:").next())
-            .expect("main should contain block1");
-        let first_store = block1
-            .find("obj.store")
-            .expect("rewritten block should initialize copied args");
-        let call = block1
-            .find("call %check")
-            .expect("rewritten block should still contain the second call");
-        assert!(
-            first_store < call,
-            "fresh by-value arg copies must be initialized before the rewritten call:\n{dumped}"
+        assert_eq!(
+            count_obj_allocs(&module, "main"),
+            3,
+            "current whole-root loads should be shared directly without extra copies:\n{dumped}"
         );
+        let expected_arg_tys = module.func_store.view(callee_ref, |func| {
+            [
+                func.dfg.value_ty(func.arg_values[0]),
+                func.dfg.value_ty(func.arg_values[1]),
+            ]
+        });
+        module.func_store.view(caller_ref, |func| {
+            let mut calls = Vec::new();
+            for block in func.layout.iter_block() {
+                for inst in func.layout.iter_inst(block) {
+                    let Some(call) =
+                        downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(inst))
+                    else {
+                        continue;
+                    };
+                    if *call.callee() == callee_ref {
+                        calls.push(call.args().to_vec());
+                    }
+                }
+            }
+            assert_eq!(
+                calls.len(),
+                2,
+                "expected both calls to remain after rewrite:\n{dumped}"
+            );
+            for args in calls {
+                assert_eq!(
+                    args.len(),
+                    2,
+                    "rewritten calls should still have exactly two by-value args:\n{dumped}"
+                );
+                assert!(
+                    value_is_obj_alloc(func, args[0])
+                        && value_is_obj_alloc(func, args[1])
+                        && func.dfg.value_ty(args[0]) == expected_arg_tys[0]
+                        && func.dfg.value_ty(args[1]) == expected_arg_tys[1],
+                    "rewritten calls should share the existing roots directly:\n{dumped}"
+                );
+            }
+        });
     }
 
     #[test]

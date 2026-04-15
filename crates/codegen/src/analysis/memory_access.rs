@@ -836,8 +836,8 @@ mod tests {
         func_cursor::InstInserter,
         inst::{
             arith::Add,
-            control_flow::{Br, Jump, Return},
             cast::{Bitcast, PtrToInt},
+            control_flow::{Br, Jump, Return},
             data::{Alloca, Gep, Mload},
             evm::{EvmMalloc, EvmSload, EvmUaddsat},
         },
