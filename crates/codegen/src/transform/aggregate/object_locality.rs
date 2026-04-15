@@ -554,7 +554,7 @@ fn call_root_preserves_locality(
         let Some(effect) = summary.arg_effects.get(idx) else {
             return false;
         };
-        if sig.args().get(idx) != Some(&value_ty) {
+        if sig.args().get(idx) != Some(&value_ty) || effect.needs_unknown_object_barrier() {
             return false;
         }
         if effect.local_only {
@@ -851,6 +851,32 @@ block0:
         assert!(
             !local.get(&func).is_some_and(|args| args.contains_key(&0)),
             "escaping callee should block local-object classification"
+        );
+    }
+
+    #[test]
+    fn collect_local_object_arg_info_rejects_stack_materialized_arg() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @pair = { i256, i256 };
+
+func private %f(v0.objref<@pair>) {
+block0:
+    v1.*@pair = obj.materialize.stack v0;
+    v2.*i256 = gep v1 0.i64 0.i8;
+    mstore v2 7.i256 i256;
+    return;
+}
+"#,
+        );
+
+        let func = lookup_func(&module, "f");
+        let local = collect_local_object_arg_info(&module);
+        assert!(
+            !local.get(&func).is_some_and(|args| args.contains_key(&0)),
+            "stack-materialized args should not be treated as local-only"
         );
     }
 }

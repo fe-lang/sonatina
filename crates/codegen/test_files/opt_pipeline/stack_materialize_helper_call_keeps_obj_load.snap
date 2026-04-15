@@ -1,0 +1,26 @@
+---
+source: crates/codegen/tests/opt_pipeline.rs
+input_file: test_files/opt_pipeline/stack_materialize_helper_call_keeps_obj_load.sntn
+---
+target = "evm-ethereum-osaka"
+
+type @pair = {i256, i256};
+
+func public %write_ptr(v0.objref<@pair>, v1.i256) {
+    block0:
+        v2.*@pair = obj.materialize.stack v0;
+        v3.*i256 = bitcast v2 *i256;
+        mstore v3 v1 i256;
+        return;
+}
+
+func public %entry(v0.objref<@pair>, v1.i256) -> i256 {
+    block0:
+        v2.objref<i256> = obj.proj v0 0.i8;
+        obj.store v2 1.i256;
+        v7.*@pair = obj.materialize.stack v0;
+        v8.*i256 = bitcast v7 *i256;
+        mstore v8 v1 i256;
+        v3.i256 = obj.load v2;
+        return v3;
+}

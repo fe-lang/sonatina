@@ -1,0 +1,20 @@
+target = "evm-ethereum-osaka"
+
+type @pair = { i256, i256 };
+
+func public %write_ptr(v0.objref<@pair>, v1.i256) {
+block0:
+    v2.*@pair = obj.materialize.stack v0;
+    v3.*i256 = gep v2 0.i64 0.i8;
+    mstore v3 v1 i256;
+    return;
+}
+
+func public %entry(v0.objref<@pair>, v1.i256) -> i256 {
+block0:
+    v2.objref<i256> = obj.proj v0 0.i8;
+    obj.store v2 1.i256;
+    call %write_ptr v0 v1;
+    v3.i256 = obj.load v2;
+    return v3;
+}

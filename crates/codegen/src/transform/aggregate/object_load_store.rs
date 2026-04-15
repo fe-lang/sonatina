@@ -639,7 +639,7 @@ fn handle_call_forward(
             tracked[arg],
             provenance.may_roots(arg),
             &effect.writes,
-            effect.escapes || effect.materializes_heap,
+            effect.needs_unknown_object_barrier(),
         );
     }
     true
@@ -763,7 +763,7 @@ fn handle_call_backward(
             provenance.may_roots(arg),
             &effect.reads,
             &effect.writes,
-            effect.escapes || effect.materializes_heap,
+            effect.needs_unknown_object_barrier(),
         );
     }
     true

@@ -120,6 +120,12 @@ pub(crate) struct ObjectArgEffect {
     pub materializes_heap: bool,
 }
 
+impl ObjectArgEffect {
+    pub(crate) fn needs_unknown_object_barrier(&self) -> bool {
+        self.escapes || self.materializes_stack || self.materializes_heap
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ObjectReturnEffect {
     None,
@@ -507,8 +513,8 @@ fn compute_summary_for_func(
         dedup_capture_effects(&mut summary.captures);
         summary.ret_effect = return_analysis.ret_effect;
         for idx in 0..summary.arg_effects.len() {
-            summary.arg_effects[idx].local_only = !summary.arg_effects[idx].escapes
-                && !summary.arg_effects[idx].materializes_heap
+            summary.arg_effects[idx].local_only = !summary.arg_effects[idx]
+                .needs_unknown_object_barrier()
                 && !matches!(
                     summary.ret_effect,
                     ObjectReturnEffect::SameAsArg { index }
@@ -1065,9 +1071,7 @@ fn merge_call_arg_effect(
 ) {
     if callee_effect.reads.is_empty()
         && callee_effect.writes.is_empty()
-        && !callee_effect.escapes
-        && !callee_effect.materializes_stack
-        && !callee_effect.materializes_heap
+        && !callee_effect.needs_unknown_object_barrier()
     {
         return;
     }
@@ -1090,8 +1094,7 @@ fn merge_call_arg_effect(
     ) {
         summary.arg_effects[src_arg].reads.add_slice(src_slice);
     }
-    if callee_effect.escapes || callee_effect.materializes_stack || callee_effect.materializes_heap
-    {
+    if callee_effect.needs_unknown_object_barrier() {
         let mut seen = FxHashSet::default();
         for (src_arg, _) in capture_source_slices(capture_sources, capture_ctx, value, None) {
             if !seen.insert(src_arg) {
