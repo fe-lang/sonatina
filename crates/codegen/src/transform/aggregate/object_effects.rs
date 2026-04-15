@@ -1071,9 +1071,7 @@ fn merge_call_arg_effect(
 ) {
     if callee_effect.reads.is_empty()
         && callee_effect.writes.is_empty()
-        && !callee_effect.escapes
-        && !callee_effect.materializes_stack
-        && !callee_effect.materializes_heap
+        && !callee_effect.needs_unknown_object_barrier()
     {
         return;
     }
@@ -1096,8 +1094,7 @@ fn merge_call_arg_effect(
     ) {
         summary.arg_effects[src_arg].reads.add_slice(src_slice);
     }
-    if callee_effect.escapes || callee_effect.materializes_stack || callee_effect.materializes_heap
-    {
+    if callee_effect.needs_unknown_object_barrier() {
         let mut seen = FxHashSet::default();
         for (src_arg, _) in capture_source_slices(capture_sources, capture_ctx, value, None) {
             if !seen.insert(src_arg) {

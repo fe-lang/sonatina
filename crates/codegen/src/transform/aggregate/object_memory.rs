@@ -1060,3 +1060,120 @@ fn clobber_overlaps_slice(effect: &ObjectClobber, slice: ObjectSlice) -> bool {
         ObjectClobber::Root(root) => *root == slice.root,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::transform::aggregate::{
+        collect_local_object_arg_info_with_effects, compute_object_effect_summaries,
+    };
+    use sonatina_ir::{Module, module::FuncRef};
+    use sonatina_parser::parse_module;
+
+    fn parse_test_module(src: &str) -> Module {
+        parse_module(src).expect("parse should succeed").module
+    }
+
+    fn lookup_func(module: &Module, name: &str) -> FuncRef {
+        module
+            .funcs()
+            .into_iter()
+            .find(|&func_ref| module.ctx.func_sig(func_ref, |sig| sig.name() == name))
+            .expect("function should exist")
+    }
+
+    fn analyzed_read_key(module: &Module, func_name: &str) -> Option<ObjectReadGvnKey> {
+        let object_effects = compute_object_effect_summaries(module);
+        let local_object_args = collect_local_object_arg_info_with_effects(module, &object_effects);
+        let func_ref = lookup_func(module, func_name);
+
+        module.func_store.view(func_ref, |func| {
+            let mut object_memory = ObjectMemoryAnalysis::default();
+            object_memory.compute_with_loaded_value_carriers(
+                func,
+                local_object_args.get(&func_ref),
+                Some(&object_effects),
+            );
+
+            let load_inst = func
+                .layout
+                .iter_block()
+                .flat_map(|block| func.layout.iter_inst(block))
+                .find(|&inst| {
+                    downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst)).is_some()
+                })
+                .expect("function should contain an obj.load");
+            object_memory
+                .read_state(load_inst)
+                .map(ObjectReadState::key)
+        })
+    }
+
+    #[test]
+    fn read_only_helper_call_preserves_value_carrier() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @pair = { i256, i256 };
+
+func private %peek(v0.objref<@pair>) -> i256 {
+block0:
+    v1.objref<i256> = obj.proj v0 0.i8;
+    v2.i256 = obj.load v1;
+    return v2;
+}
+
+func private %f(v0.objref<@pair>, v1.i256) -> i256 {
+block0:
+    v2.objref<i256> = obj.proj v0 0.i8;
+    obj.store v2 v1;
+    call %peek v0;
+    v3.i256 = obj.load v2;
+    return v3;
+}
+"#,
+        );
+
+        assert!(
+            matches!(
+                analyzed_read_key(&module, "f"),
+                Some(ObjectReadGvnKey::ValueCarrier { .. })
+            ),
+            "read-only helper summary should preserve the value carrier"
+        );
+    }
+
+    #[test]
+    fn stack_materialize_helper_call_blocks_value_carrier() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @pair = { i256, i256 };
+
+func private %write_ptr(v0.objref<@pair>, v1.i256) {
+block0:
+    v2.*@pair = obj.materialize.stack v0;
+    v3.*i256 = gep v2 0.i64 0.i8;
+    mstore v3 v1 i256;
+    return;
+}
+
+func private %f(v0.objref<@pair>, v1.i256) -> i256 {
+block0:
+    v2.objref<i256> = obj.proj v0 0.i8;
+    obj.store v2 1.i256;
+    call %write_ptr v0 v1;
+    v3.i256 = obj.load v2;
+    return v3;
+}
+"#,
+        );
+
+        assert!(
+            analyzed_read_key(&module, "f").is_none(),
+            "stack-materializing helper summary should block tracked object reads entirely"
+        );
+    }
+}
