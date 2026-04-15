@@ -72,6 +72,15 @@ impl PtrArgEscape {
     }
 }
 
+/// Summary of direct pointer escape effects at a function boundary.
+///
+/// All facts are callee-local: [`PtrArgEscape::arg_store_targets`] records only
+/// direct writes within the callee body (including single-level callee summary
+/// application during SCC fixpoint iteration). No transitive closure is taken.
+///
+/// Effects that depend on caller context (e.g., whether a destination arg is
+/// backed by local memory vs nonlocal memory) must be derived at call sites
+/// via [`Self::call_arg_may_escape_nonlocal`] or [`Self::for_each_store_effect`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PtrEscapeSummary {
     pub(crate) args: Vec<PtrArgEscape>,
@@ -180,39 +189,20 @@ impl PtrEscapeSummary {
             .filter_map(move |&dst_idx| call_args.get(dst_idx as usize).copied())
     }
 
-    fn normalize(&mut self) {
-        let direct: Vec<_> = self
-            .args
-            .iter()
-            .map(|arg| (arg.stores, arg.arg_store_targets.clone()))
-            .collect();
-
-        for src_idx in 0..self.args.len() {
-            let (mut stores, direct_targets) = direct[src_idx].clone();
-            let mut stack = direct_targets.into_vec();
-            let mut seen = vec![false; self.args.len()];
-            let mut closed_targets = SmallVec::<[u32; 4]>::new();
-
-            while let Some(dst_idx) = stack.pop() {
-                let dst_idx = dst_idx as usize;
-                if dst_idx >= self.args.len() || seen[dst_idx] {
-                    continue;
+    /// Apply this summary's store effects at a call site, substituting actual
+    /// args for formals. Calls `f(src_formal_idx, dst_actual)` for each direct
+    /// src-to-dst-arg edge in the summary.
+    pub(crate) fn for_each_store_effect(
+        &self,
+        call_args: &[ValueId],
+        mut f: impl FnMut(usize, ValueId),
+    ) {
+        for (src_idx, arg) in self.args.iter().enumerate() {
+            for &dst_idx in &arg.arg_store_targets {
+                if let Some(&dst_actual) = call_args.get(dst_idx as usize) {
+                    f(src_idx, dst_actual);
                 }
-                seen[dst_idx] = true;
-                closed_targets.push(dst_idx as u32);
-
-                let (_, dst_targets) = &direct[dst_idx];
-                stack.extend(dst_targets.iter().copied());
             }
-
-            closed_targets.sort_unstable();
-            closed_targets.dedup();
-            if !closed_targets.is_empty() {
-                let _ = stores.record_arg();
-            }
-
-            self.args[src_idx].stores = stores;
-            self.args[src_idx].arg_store_targets = closed_targets;
         }
     }
 }
@@ -247,8 +237,7 @@ pub(crate) fn compute_ptr_escape_summaries(
         loop {
             let mut changed = false;
             for &f in &component {
-                let mut new_summary = compute_summary_for_func(module, f, isa, &summaries);
-                new_summary.normalize();
+                let new_summary = compute_summary_for_func(module, f, isa, &summaries);
                 let cur = summaries.get(&f).expect("missing ptr escape summary");
                 if *cur != new_summary {
                     summaries.insert(f, new_summary);
@@ -346,6 +335,7 @@ fn compute_summary_for_func(
         });
         let prov = &prov_info.value;
         let local_mem = &prov_info.local_mem;
+        let arg_mem = &prov_info.arg_mem;
 
         for block in function.layout.iter_block() {
             for inst in function.layout.iter_inst(block) {
@@ -385,16 +375,22 @@ fn compute_summary_for_func(
                         );
                     }
                     EvmInstKind::EvmMcopy(mcopy) => {
+                        // mcopy copies BYTES from *src to *dest. The escaping
+                        // values are the contents at the source address, not
+                        // the source address itself. Look up stored content
+                        // via local_mem (alloca sources) and arg_mem (arg
+                        // sources).
                         let dest_prov = &prov[*mcopy.dest()];
                         let src_prov = &prov[*mcopy.addr()];
-                        if src_prov.is_local_addr() {
-                            for base in src_prov.alloca_insts() {
-                                if let Some(stored) = local_mem.get(&base) {
-                                    record_escape_into_provenance(&mut summary, stored, dest_prov);
-                                }
+                        for base in src_prov.alloca_insts() {
+                            if let Some(stored) = local_mem.get(&base) {
+                                record_escape_into_provenance(&mut summary, stored, dest_prov);
                             }
-                        } else {
-                            record_escape_into_provenance(&mut summary, src_prov, dest_prov);
+                        }
+                        for arg_idx in src_prov.arg_indices() {
+                            if let Some(content) = arg_mem.get(arg_idx as usize) {
+                                record_escape_into_provenance(&mut summary, content, dest_prov);
+                            }
                         }
                     }
                     EvmInstKind::Call(call) => {
@@ -1072,5 +1068,137 @@ block2:
                     .unwrap_or_else(|| panic!("missing summary for case {name}")),
             );
         }
+    }
+
+    #[test]
+    fn ptr_escape_no_transitive_closure_over_arg_store_targets() {
+        let (summaries, _) = compute(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %capture(v0.*i8, v1.**i8) {
+block0:
+    mstore v1 v0 *i8;
+    return;
+}
+
+func public %forward(v0.*i8, v1.**i8, v2.***i8) {
+block0:
+    call %capture v0 v1;
+    call %capture v1 v2;
+    return;
+}
+"#,
+        );
+
+        let forward = &summaries["forward"];
+        assert_eq!(
+            arg_store_targets(forward, 0),
+            vec![1],
+            "arg 0 stores to arg 1 only; no transitive closure to arg 2"
+        );
+        assert_eq!(
+            arg_store_targets(forward, 1),
+            vec![2],
+            "arg 1 stores to arg 2 only"
+        );
+        assert_eq!(
+            arg_may_escape(forward),
+            vec![false, false, false],
+            "no arg should be unconditionally nonlocal"
+        );
+    }
+
+    #[test]
+    fn ptr_escape_mcopy_from_arg_attributes_stored_content_not_source_address() {
+        let src = r#"
+target = "evm-ethereum-osaka"
+
+func public %relay(v0.*i8, v1.**i8, v2.**i8) {
+block0:
+    mstore v1 v0 *i8;
+    evm_mcopy v2 v1 32.i256;
+    return;
+}
+
+func public %top_local(v0.*i8) {
+block0:
+    v1.**i8 = alloca *i8;
+    v2.**i8 = alloca *i8;
+    call %relay v0 v1 v2;
+    return;
+}
+
+func public %top_nonlocal_dest(v0.*i8, v1.**i8) {
+block0:
+    v2.**i8 = alloca *i8;
+    call %relay v0 v2 v1;
+    return;
+}
+"#;
+        let (summaries, _) = compute(src);
+
+        let relay = &summaries["relay"];
+        // arg 0's value was stored at *arg1, then mcopy'd to *arg2.
+        // The summary should attribute the escape to arg 0 (the content),
+        // NOT to arg 1 (the source address).
+        assert_eq!(
+            arg_store_targets(relay, 0),
+            vec![1, 2],
+            "arg 0 should flow to both arg 1 (via mstore) and arg 2 (via mcopy of *arg1)"
+        );
+        assert!(
+            !relay.arg_store_targets(1).contains(&2),
+            "arg 1 (source address) should NOT be recorded as storing to arg 2"
+        );
+        assert_eq!(
+            arg_may_escape(relay),
+            vec![false, false, false],
+            "no arg should be unconditionally nonlocal"
+        );
+
+        // When both the mstore dest and mcopy dest are caller-local,
+        // no escape should be reported.
+        assert!(
+            !call_arg_may_escape_from_src(src, "top_local", 0),
+            "arg 0 should not escape when all destinations are caller-local"
+        );
+
+        // When the mcopy destination is nonlocal, arg 0 should escape.
+        assert!(
+            call_arg_may_escape_from_src(src, "top_nonlocal_dest", 0),
+            "arg 0 should escape when mcopy destination is nonlocal"
+        );
+    }
+
+    #[test]
+    fn ptr_escape_mcopy_from_local_to_arg_tracks_content() {
+        let (summaries, _) = compute(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %copy_out(v0.*i8, v1.**i8) {
+block0:
+    v2.**i8 = alloca *i8;
+    mstore v2 v0 *i8;
+    evm_mcopy v1 v2 32.i256;
+    return;
+}
+"#,
+        );
+
+        let f = &summaries["copy_out"];
+        // arg 0 was stored to local memory, then mcopy'd to *arg 1.
+        // The local branch of mcopy should attribute this to arg 0.
+        assert_eq!(
+            arg_store_targets(f, 0),
+            vec![1],
+            "arg 0 should escape through arg 1 via local-to-arg mcopy"
+        );
+        assert_eq!(
+            arg_may_escape(f),
+            vec![false, false],
+            "no arg should be unconditionally nonlocal"
+        );
     }
 }

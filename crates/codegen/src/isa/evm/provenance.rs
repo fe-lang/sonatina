@@ -209,6 +209,26 @@ fn poison_local_mem(mem: &mut FxHashMap<InstId, Provenance>, addr_prov: &Provena
     changed
 }
 
+fn store_arg_mem(mem: &mut [Provenance], addr_prov: &Provenance, val_prov: &Provenance) -> bool {
+    let mut changed = false;
+    for arg_idx in addr_prov.arg_indices() {
+        if let Some(slot) = mem.get_mut(arg_idx as usize) {
+            changed |= slot.union_with(val_prov);
+        }
+    }
+    changed
+}
+
+fn poison_arg_mem(mem: &mut [Provenance], addr_prov: &Provenance) -> bool {
+    let mut changed = false;
+    for arg_idx in addr_prov.arg_indices() {
+        if let Some(slot) = mem.get_mut(arg_idx as usize) {
+            changed |= slot.poison_to_unknown_non_arg_preserving_arg_attribution();
+        }
+    }
+    changed
+}
+
 fn unmodeled_write_addr(data: &EvmInstKind) -> Option<ValueId> {
     match data {
         EvmInstKind::EvmMstore8(mstore8) => Some(*mstore8.addr()),
@@ -228,6 +248,11 @@ fn unmodeled_write_addr(data: &EvmInstKind) -> Option<ValueId> {
 pub(crate) struct ProvenanceInfo {
     pub(crate) value: SecondaryMap<ValueId, Provenance>,
     pub(crate) local_mem: FxHashMap<InstId, Provenance>,
+    /// Tracks what the callee stores to arg-backed memory addresses.
+    /// Initialized empty (bottom); only callee-initiated stores are recorded.
+    /// Used by mcopy handling to determine the provenance of bytes being copied
+    /// from arg-addressed memory.
+    pub(crate) arg_mem: Vec<Provenance>,
 }
 
 pub(crate) fn compute_provenance(
@@ -262,6 +287,7 @@ pub(crate) fn compute_provenance(
     }
 
     let mut mem: FxHashMap<InstId, Provenance> = FxHashMap::default();
+    let mut arg_mem: Vec<Provenance> = vec![Provenance::default(); function.arg_values.len()];
 
     let mut changed = true;
     while changed {
@@ -272,25 +298,28 @@ pub(crate) fn compute_provenance(
                 let data = isa.inst_set().resolve_inst(function.dfg.inst(inst));
 
                 if let EvmInstKind::Mstore(mstore) = &data {
-                    changed |=
-                        store_local_mem(&mut mem, &prov[*mstore.addr()], &prov[*mstore.value()]);
+                    let addr = &prov[*mstore.addr()];
+                    let val = &prov[*mstore.value()];
+                    changed |= store_local_mem(&mut mem, addr, val);
+                    changed |= store_arg_mem(&mut arg_mem, addr, val);
                 }
 
                 if let Some(dst) = unmodeled_write_addr(&data) {
                     changed |= poison_local_mem(&mut mem, &prov[dst]);
+                    changed |= poison_arg_mem(&mut arg_mem, &prov[dst]);
                 }
 
                 let call_summary = if let EvmInstKind::Call(call) = &data {
                     let summary = callee_summary(*call.callee());
-                    for (src_idx, &src_arg) in call.args().iter().enumerate() {
-                        if summary.arg_store_targets(src_idx).is_empty() {
-                            continue;
+                    let args = call.args();
+                    summary.for_each_store_effect(args, |src_idx, dst_actual| {
+                        if let Some(&src_actual) = args.get(src_idx) {
+                            let src_prov = prov[src_actual].clone();
+                            let dst_addr = &prov[dst_actual];
+                            changed |= store_local_mem(&mut mem, dst_addr, &src_prov);
+                            changed |= store_arg_mem(&mut arg_mem, dst_addr, &src_prov);
                         }
-                        let src_prov = prov[src_arg].clone();
-                        for dst_arg in summary.call_arg_store_dest_args(src_idx, call.args()) {
-                            changed |= store_local_mem(&mut mem, &prov[dst_arg], &src_prov);
-                        }
-                    }
+                    });
                     Some(summary)
                 } else {
                     None
@@ -400,6 +429,7 @@ pub(crate) fn compute_provenance(
     ProvenanceInfo {
         value: prov,
         local_mem: mem,
+        arg_mem,
     }
 }
 
