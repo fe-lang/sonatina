@@ -26,9 +26,50 @@ enum StackPeepholeOp {
     Pop,
 }
 
+#[derive(Clone, Copy)]
+enum StackPeepholeInput {
+    OpCode(OpCode),
+    Action(Action),
+}
+
 const MAX_STACK_PEEPHOLE_WINDOW: usize = 24;
 
-fn classify_stack_peephole_op(
+fn classify_stack_peephole_input(input: StackPeepholeInput) -> Option<StackPeepholeOp> {
+    match input {
+        StackPeepholeInput::OpCode(op) => {
+            let byte = op as u8;
+            if byte == OpCode::POP as u8 {
+                return Some(StackPeepholeOp::Pop);
+            }
+            if (OpCode::DUP1 as u8..=OpCode::DUP16 as u8).contains(&byte) {
+                return Some(StackPeepholeOp::Dup(byte - OpCode::DUP1 as u8 + 1));
+            }
+            if (OpCode::SWAP1 as u8..=OpCode::SWAP16 as u8).contains(&byte) {
+                return Some(StackPeepholeOp::Swap(byte - OpCode::SWAP1 as u8 + 1));
+            }
+            is_push_opcode(op).then_some(StackPeepholeOp::Push)
+        }
+        StackPeepholeInput::Action(action) => match action {
+            Action::Push(_) => Some(StackPeepholeOp::Push),
+            Action::StackDup(depth) => (depth < 16).then_some(StackPeepholeOp::Dup(depth + 1)),
+            Action::StackSwap(depth) => {
+                ((1..=16).contains(&depth)).then_some(StackPeepholeOp::Swap(depth))
+            }
+            Action::Pop => Some(StackPeepholeOp::Pop),
+            Action::PushContinuationOffset
+            | Action::MemLoadAbs(_)
+            | Action::MemLoadFrameSlot(_)
+            | Action::MemStoreAbs(_)
+            | Action::MemStoreFrameSlot(_)
+            | Action::MaterializeLocalAddr { .. }
+            | Action::PushFrameAddr { .. }
+            | Action::MemLoadObj(_)
+            | Action::MemStoreObj(_) => None,
+        },
+    }
+}
+
+fn classify_stack_opcode_peephole_op(
     vcode: &VCode<OpCode>,
     label_targets: &FxHashSet<VCodeInst>,
     inst: VCodeInst,
@@ -40,49 +81,23 @@ fn classify_stack_peephole_op(
     if is_push_opcode(op) {
         if (op as u8) == (OpCode::PUSH0 as u8) {
             if vcode.inst_imm_bytes.get(inst).is_none() {
-                return Some(StackPeepholeOp::Push);
+                return classify_stack_peephole_input(StackPeepholeInput::OpCode(op));
             }
             return None;
         }
         if vcode.inst_imm_bytes.get(inst).is_some() {
-            return Some(StackPeepholeOp::Push);
+            return classify_stack_peephole_input(StackPeepholeInput::OpCode(op));
         }
         return None;
     }
     if vcode.inst_imm_bytes.get(inst).is_some() {
         return None;
     }
-    let byte = op as u8;
-    if byte == OpCode::POP as u8 {
-        return Some(StackPeepholeOp::Pop);
-    }
-    if (OpCode::DUP1 as u8..=OpCode::DUP16 as u8).contains(&byte) {
-        return Some(StackPeepholeOp::Dup(byte - OpCode::DUP1 as u8 + 1));
-    }
-    if (OpCode::SWAP1 as u8..=OpCode::SWAP16 as u8).contains(&byte) {
-        return Some(StackPeepholeOp::Swap(byte - OpCode::SWAP1 as u8 + 1));
-    }
-    None
+    classify_stack_peephole_input(StackPeepholeInput::OpCode(op))
 }
 
 fn classify_stack_action_peephole_op(action: Action) -> Option<StackPeepholeOp> {
-    match action {
-        Action::Push(_) => Some(StackPeepholeOp::Push),
-        Action::StackDup(depth) => (depth < 16).then_some(StackPeepholeOp::Dup(depth + 1)),
-        Action::StackSwap(depth) => {
-            ((1..=16).contains(&depth)).then_some(StackPeepholeOp::Swap(depth))
-        }
-        Action::Pop => Some(StackPeepholeOp::Pop),
-        Action::PushContinuationOffset
-        | Action::MemLoadAbs(_)
-        | Action::MemLoadFrameSlot(_)
-        | Action::MemStoreAbs(_)
-        | Action::MemStoreFrameSlot(_)
-        | Action::MaterializeLocalAddr { .. }
-        | Action::PushFrameAddr { .. }
-        | Action::MemLoadObj(_)
-        | Action::MemStoreObj(_) => None,
-    }
+    classify_stack_peephole_input(StackPeepholeInput::Action(action))
 }
 
 fn is_bool_producer_opcode(op: OpCode) -> bool {
@@ -165,32 +180,31 @@ fn is_noop_stack_peephole_ops(ops: &[StackPeepholeOp]) -> bool {
     stack == initial
 }
 
+fn collect_stack_peephole_ops<T: Copy>(
+    items: &[T],
+    mut classify: impl FnMut(T) -> Option<StackPeepholeOp>,
+) -> Option<SmallVec<[StackPeepholeOp; 8]>> {
+    let mut ops = SmallVec::<[StackPeepholeOp; 8]>::new();
+    for item in items {
+        ops.push(classify(*item)?);
+    }
+    Some(ops)
+}
+
 fn is_noop_stack_peephole_sequence(
     vcode: &VCode<OpCode>,
     label_targets: &FxHashSet<VCodeInst>,
     insts: &[VCodeInst],
 ) -> bool {
-    let mut ops = SmallVec::<[StackPeepholeOp; 8]>::new();
-    for &inst in insts {
-        let Some(op) = classify_stack_peephole_op(vcode, label_targets, inst) else {
-            return false;
-        };
-        ops.push(op);
-    }
-
-    is_noop_stack_peephole_ops(ops.as_slice())
+    collect_stack_peephole_ops(insts, |inst| {
+        classify_stack_opcode_peephole_op(vcode, label_targets, inst)
+    })
+    .is_some_and(|ops| is_noop_stack_peephole_ops(ops.as_slice()))
 }
 
 fn is_noop_stack_action_sequence(actions: &[Action]) -> bool {
-    let mut ops = SmallVec::<[StackPeepholeOp; 8]>::new();
-    for &action in actions {
-        let Some(op) = classify_stack_action_peephole_op(action) else {
-            return false;
-        };
-        ops.push(op);
-    }
-
-    is_noop_stack_peephole_ops(ops.as_slice())
+    collect_stack_peephole_ops(actions, classify_stack_action_peephole_op)
+        .is_some_and(|ops| is_noop_stack_peephole_ops(ops.as_slice()))
 }
 
 pub(crate) fn prune_redundant_opcode_sequences(vcode: &mut VCode<OpCode>, block_order: &[BlockId]) {
@@ -296,7 +310,8 @@ pub(crate) fn prune_redundant_opcode_sequences(vcode: &mut VCode<OpCode>, block_
             let run_limit = (i + MAX_STACK_PEEPHOLE_WINDOW).min(insts.len());
             let mut run_end = i;
             while run_end < run_limit
-                && classify_stack_peephole_op(vcode, &label_targets, insts[run_end]).is_some()
+                && classify_stack_opcode_peephole_op(vcode, &label_targets, insts[run_end])
+                    .is_some()
             {
                 run_end += 1;
             }
