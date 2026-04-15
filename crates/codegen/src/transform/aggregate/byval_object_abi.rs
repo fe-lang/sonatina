@@ -2937,6 +2937,198 @@ block0:
     }
 
     #[test]
+    fn readonly_borrowed_struct_with_dynamic_nested_index_should_share_without_copy() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @Data = { [i8; 5], [i256; 5], [i256; 5] };
+type @Res = { i1, i256 };
+
+func private %element_get(v0.@Data, v1.i256, v2.i256) -> @Res {
+block0:
+    v3.objref<@Data> = obj.alloc @Data;
+    obj.store v3 v0;
+    v4.objref<[i8; 5]> = obj.proj v3 0.i8;
+    v5.objref<i8> = obj.index v4 v2;
+    v6.i8 = obj.load v5;
+    v7.i1 = eq v6 0.i8;
+    br v7 block1 block2;
+
+block1:
+    v8.@Res = insert_value undef.@Res 0.i8 0.i1;
+    v9.@Res = insert_value v8 1.i8 0.i256;
+    return v9;
+
+block2:
+    v10.objref<[i256; 5]> = obj.proj v3 2.i8;
+    v11.objref<i256> = obj.index v10 v2;
+    v12.i256 = obj.load v11;
+    v13.@Res = insert_value undef.@Res 0.i8 1.i1;
+    v14.@Res = insert_value v13 1.i8 v12;
+    return v14;
+}
+
+func private %caller(v0.objref<@Data>, v1.i256) -> i256 {
+block0:
+    v2.@Data = obj.load v0;
+    v3.@Res = call %element_get v2 0.i256 v1;
+    v4.i1 = extract_value v3 0.i8;
+    br v4 block1 block2;
+
+block1:
+    v5.i256 = extract_value v3 1.i8;
+    return v5;
+
+block2:
+    return 0.i256;
+}
+"#,
+        );
+
+        run_byvalue_arg_abi(&module);
+
+        let caller_ref = lookup_func(&module, "caller");
+        let call_args = first_call_args(&module, "caller", "element_get");
+        let dumped = dump_func(&module, "caller");
+        assert_eq!(
+            count_obj_allocs(&module, "caller"),
+            0,
+            "readonly borrowed struct path should not copy:\n{dumped}"
+        );
+        module.func_store.view(caller_ref, |func| {
+            assert!(
+                value_is_arg(func, call_args[0]) && call_args[0] == func.arg_values[0],
+                "readonly borrowed struct path should share the live-in objref:\n{dumped}"
+            );
+            assert!(
+                call_args.get(2).copied() == Some(func.arg_values[1]),
+                "dynamic index should stay the original scalar arg:\n{dumped}"
+            );
+        });
+    }
+
+    #[test]
+    fn readonly_large_borrowed_struct_with_dynamic_nested_index_should_share_without_copy() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @Data = { [i8; 192], [i256; 192], [i256; 192] };
+type @Res = { i1, i256 };
+
+func private %element_get(v0.@Data, v1.i256, v2.i256) -> @Res {
+block0:
+    v3.objref<@Data> = obj.alloc @Data;
+    obj.store v3 v0;
+    v4.objref<[i8; 192]> = obj.proj v3 0.i8;
+    v5.objref<i8> = obj.index v4 v2;
+    v6.i8 = obj.load v5;
+    v7.i1 = eq v6 0.i8;
+    br v7 block1 block2;
+
+block1:
+    v8.@Res = insert_value undef.@Res 0.i8 0.i1;
+    v9.@Res = insert_value v8 1.i8 0.i256;
+    return v9;
+
+block2:
+    v10.objref<[i256; 192]> = obj.proj v3 2.i8;
+    v11.objref<i256> = obj.index v10 v2;
+    v12.i256 = obj.load v11;
+    v13.@Res = insert_value undef.@Res 0.i8 1.i1;
+    v14.@Res = insert_value v13 1.i8 v12;
+    return v14;
+}
+
+func private %caller(v0.objref<@Data>, v1.i256) -> i256 {
+block0:
+    v2.@Data = obj.load v0;
+    v3.@Res = call %element_get v2 0.i256 v1;
+    v4.i1 = extract_value v3 0.i8;
+    br v4 block1 block2;
+
+block1:
+    v5.i256 = extract_value v3 1.i8;
+    return v5;
+
+block2:
+    return 0.i256;
+}
+"#,
+        );
+
+        run_byvalue_arg_abi(&module);
+
+        let caller_ref = lookup_func(&module, "caller");
+        let call_args = first_call_args(&module, "caller", "element_get");
+        let dumped = dump_func(&module, "caller");
+        assert_eq!(
+            count_obj_allocs(&module, "caller"),
+            0,
+            "readonly large borrowed struct path should not copy:\n{dumped}"
+        );
+        module.func_store.view(caller_ref, |func| {
+            assert!(
+                value_is_arg(func, call_args[0]) && call_args[0] == func.arg_values[0],
+                "readonly large borrowed struct path should share the live-in objref:\n{dumped}"
+            );
+            assert!(
+                call_args.get(2).copied() == Some(func.arg_values[1]),
+                "dynamic index should stay the original scalar arg:\n{dumped}"
+            );
+        });
+    }
+
+    #[test]
+    fn readonly_borrowed_arg_across_branch_should_share_without_copy() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func private %readonly(v0.[i256; 8]) -> i256 {
+block0:
+    v1.objref<[i256; 8]> = obj.alloc [i256; 8];
+    obj.store v1 v0;
+    v2.[i256; 8] = obj.load v1;
+    v3.i256 = extract_value v2 0.i8;
+    return v3;
+}
+
+func private %caller(v0.objref<[i256; 8]>, v1.i1) -> i256 {
+block0:
+    v2.[i256; 8] = obj.load v0;
+    br v1 block1 block2;
+
+block1:
+    v3.i256 = call %readonly v2;
+    return v3;
+
+block2:
+    return 0.i256;
+}
+"#,
+        );
+
+        run_byvalue_arg_abi(&module);
+
+        let caller_ref = lookup_func(&module, "caller");
+        let call_args = first_call_args(&module, "caller", "readonly");
+        let dumped = dump_func(&module, "caller");
+        assert_eq!(
+            count_obj_allocs(&module, "caller"),
+            0,
+            "readonly borrowed arg across a branch should not copy:\n{dumped}"
+        );
+        module.func_store.view(caller_ref, |func| {
+            assert!(
+                value_is_arg(func, call_args[0]) && call_args[0] == func.arg_values[0],
+                "readonly borrowed arg across a branch should share the live-in objref:\n{dumped}"
+            );
+        });
+    }
+
+    #[test]
     fn projected_source_move_rejected_when_same_root_alias_escaped_before_call() {
         let module = parse_test_module(
             r#"
