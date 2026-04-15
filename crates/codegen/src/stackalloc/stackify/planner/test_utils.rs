@@ -1,4 +1,5 @@
 use crate::{
+    analysis::memory_access::MemoryAccessAnalysis,
     cfg_scc::CfgSccAnalysis,
     domtree::DomTree,
     isa::evm::normalize_alias_map,
@@ -33,6 +34,12 @@ pub(super) fn build_stackify_test_context<'a>(
     let def_info = compute_def_info(func, entry, &value_aliases);
     let phi_results = compute_phi_results(func, &value_aliases);
     let phi_out_sources = compute_phi_out_sources(func, cfg, &value_aliases);
+    let analysis = MemoryAccessAnalysis::new();
+    let mut exact_local_addr: SecondaryMap<ValueId, Option<_>> = SecondaryMap::new();
+    for value in func.dfg.values.keys() {
+        exact_local_addr[value] =
+            analysis.exact_local_addr(func, value_aliases[value].unwrap_or(value));
+    }
 
     StackifyContext {
         func,
@@ -50,5 +57,6 @@ pub(super) fn build_stackify_test_context<'a>(
         has_internal_return: function_has_internal_return(func),
         reach,
         value_aliases,
+        exact_local_addr,
     }
 }

@@ -1,4 +1,4 @@
-use sonatina_ir::{BlockId, Function, InstId};
+use sonatina_ir::{BlockId, Function, I256, Immediate, InstId};
 
 use crate::stackalloc::{Action, Actions, Allocator, StackifyAlloc};
 
@@ -87,6 +87,53 @@ impl FinalAlloc {
             Action::MemStoreAbs,
             Action::MemStoreFrameSlot,
         )
+    }
+
+    fn action_for_exact_local_addr(&self, alloca: InstId, offset_bytes: i64) -> Action {
+        let loc = self
+            .mem_plan
+            .alloca_loc
+            .get(&alloca)
+            .copied()
+            .unwrap_or_else(|| {
+                panic!(
+                    "missing alloca location for exact local addr inst {}",
+                    alloca.as_u32()
+                )
+            });
+        match loc {
+            ObjLoc::ScratchAbs(off) => {
+                let base = i64::from(self.abs_addr_for_word(off));
+                let addr = base
+                    .checked_add(offset_bytes)
+                    .unwrap_or_else(|| panic!("scratch exact local addr overflow"));
+                Action::Push(Immediate::I256(I256::from(addr)))
+            }
+            ObjLoc::StableAbs(off) => {
+                let base_word = self
+                    .mem_plan
+                    .stable_base_word()
+                    .expect("stable abs alloca missing stable base");
+                let base = i64::from(
+                    self.abs_addr_for_word(
+                        base_word
+                            .checked_add(off)
+                            .expect("stable exact local word overflow"),
+                    ),
+                );
+                let addr = base
+                    .checked_add(offset_bytes)
+                    .unwrap_or_else(|| panic!("stable exact local addr overflow"));
+                Action::Push(Immediate::I256(I256::from(addr)))
+            }
+            ObjLoc::StableFrame(off) => Action::PushFrameAddr {
+                offset_words: off,
+                extra_bytes: offset_bytes,
+            },
+            ObjLoc::StackPinned(depth) => {
+                panic!("stack-pinned exact local addresses are not supported (depth={depth})")
+            }
+        }
     }
 
     fn inject_call_save_pre(
@@ -183,6 +230,12 @@ impl FinalAlloc {
                 }
                 Action::MemStoreObj(id) => {
                     *action = self.action_store_for_loc(self.obj_loc_for_id(*id), 0);
+                }
+                Action::MaterializeLocalAddr {
+                    alloca,
+                    offset_bytes,
+                } => {
+                    *action = self.action_for_exact_local_addr(*alloca, *offset_bytes);
                 }
                 _ => {}
             }

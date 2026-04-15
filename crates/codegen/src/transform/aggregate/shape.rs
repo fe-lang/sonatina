@@ -401,6 +401,11 @@ pub fn const_u32(dfg: &DataFlowGraph, value: ValueId) -> Option<u32> {
     (u256 <= U256::from(u32::MAX)).then_some(u256.low_u32())
 }
 
+/// Returns whether `ty` can be reified with generic aggregate ops such as
+/// `insert_value` and `extract_value`.
+///
+/// This intentionally excludes enums. Enums participate in scalar-shape
+/// flattening, but they must be rebuilt with enum-specific ops.
 pub fn is_supported_aggregate_ty(module: &ModuleCtx, ty: Type) -> bool {
     match ty.resolve_compound(module) {
         Some(CompoundType::Struct(s)) => {
@@ -415,6 +420,12 @@ pub fn is_supported_aggregate_ty(module: &ModuleCtx, ty: Type) -> bool {
     }
 }
 
+/// Returns whether `ty` can be flattened into runtime leaves for scalar-shape
+/// transforms.
+///
+/// This is broader than [`is_supported_aggregate_ty`]: it includes enums so
+/// enum-bearing structs and arrays can still participate in scalar-shape
+/// analyses, even though enums are not generic aggregate-op destinations.
 pub fn is_supported_scalar_shape_ty(module: &ModuleCtx, ty: Type) -> bool {
     match ty.resolve_compound(module) {
         Some(CompoundType::Struct(s)) => {
@@ -433,6 +444,28 @@ pub fn is_supported_scalar_shape_ty(module: &ModuleCtx, ty: Type) -> bool {
                 .all(|field_ty| runtime_size_align_bytes(module, field_ty).is_some())
         }),
         _ => false,
+    }
+}
+
+/// Returns whether `ty` can always be rebuilt from an arbitrary runtime leaf
+/// slice without value-dependent reconstruction.
+///
+/// This is stricter than [`is_supported_scalar_shape_ty`]. Enums, and aggregates
+/// containing enums, are excluded because rebuilding a full value from arbitrary
+/// leaf SSA state would require recovering the active variant from dynamic tag
+/// leaves.
+pub fn is_leaf_reifiable_ty(module: &ModuleCtx, ty: Type) -> bool {
+    match ty.resolve_compound(module) {
+        Some(CompoundType::Struct(s)) => {
+            !s.packed
+                && s.fields
+                    .iter()
+                    .copied()
+                    .all(|field| is_leaf_reifiable_ty(module, field))
+        }
+        Some(CompoundType::Array { elem, .. }) => is_leaf_reifiable_ty(module, elem),
+        Some(CompoundType::Enum(_)) => false,
+        _ => true,
     }
 }
 

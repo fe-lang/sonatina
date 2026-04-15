@@ -11,6 +11,7 @@ use crate::{
 };
 
 use super::{
+    br_table::plan_br_table_compare_chain,
     builder::StackifyContext,
     iteration::{
         clean_dead_stack_prefix, consume_operand_uses, count_block_uses,
@@ -311,6 +312,7 @@ impl<'a, 'ctx> FlowTemplateSolver<'a, 'ctx> {
                             spill_requests,
                             ctx,
                             self.spill_obj,
+                            &ctx.exact_local_addr,
                             &mut free_slots,
                             slots,
                         );
@@ -343,15 +345,41 @@ impl<'a, 'ctx> FlowTemplateSolver<'a, 'ctx> {
                             &mut actions,
                         );
 
-                        // As in final planning, all taken paths inherit the base stack state.
-                        for &(_, dest) in table.table().iter() {
-                            edge_cand
-                                .insert((block, dest), project_transfer(&stack, &carry_in[dest]));
+                        let (case_stacks, default_stack) = plan_br_table_compare_chain(
+                            table.table(),
+                            &stack,
+                            |_, case_val, case_stack| {
+                                let mem = planner::MemPlan::new(
+                                    spill,
+                                    spill_requests,
+                                    ctx,
+                                    self.spill_obj,
+                                    &ctx.exact_local_addr,
+                                    &mut free_slots,
+                                    slots,
+                                );
+                                let mut case_actions = Actions::new();
+                                with_planner(ctx, mem, case_stack, &mut case_actions, |planner| {
+                                    let consume_last_use = BitSet::<ValueId>::default();
+                                    let mut compare_args = smallvec::smallvec![scrutinee, case_val];
+                                    planner.prepare_operands_for_commutative_pair(
+                                        &mut compare_args,
+                                        &consume_last_use,
+                                    );
+                                });
+                            },
+                        );
+
+                        for case in case_stacks {
+                            edge_cand.insert(
+                                (block, case.dest),
+                                project_transfer(&case.post_compare_stack, &carry_in[case.dest]),
+                            );
                         }
                         if let Some(default) = table.default() {
                             edge_cand.insert(
                                 (block, *default),
-                                project_transfer(&stack, &carry_in[*default]),
+                                project_transfer(&default_stack, &carry_in[*default]),
                             );
                         }
                         return;
@@ -365,6 +393,7 @@ impl<'a, 'ctx> FlowTemplateSolver<'a, 'ctx> {
                     spill_requests,
                     ctx,
                     self.spill_obj,
+                    &ctx.exact_local_addr,
                     &mut free_slots,
                     slots,
                 );
@@ -380,6 +409,7 @@ impl<'a, 'ctx> FlowTemplateSolver<'a, 'ctx> {
                 spill_requests,
                 ctx,
                 self.spill_obj,
+                &ctx.exact_local_addr,
                 &mut free_slots,
                 slots,
             );
@@ -422,6 +452,7 @@ impl<'a, 'ctx> FlowTemplateSolver<'a, 'ctx> {
                     spill_requests,
                     ctx,
                     self.spill_obj,
+                    &ctx.exact_local_addr,
                     &mut free_slots,
                     slots,
                 );

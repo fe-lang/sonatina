@@ -1002,12 +1002,6 @@ impl ObjectAggregateAbi {
             return;
         }
 
-        let facts = self.collect_caller_elision_facts(
-            function,
-            current_plan,
-            object_effects,
-            local_object_args,
-        );
         let blocks: Vec<_> = function.layout.iter_block().collect();
         for block in blocks {
             let insts: Vec<_> = function.layout.iter_inst(block).collect();
@@ -1024,6 +1018,12 @@ impl ObjectAggregateAbi {
                 let Some(plan) = plans.get(call.callee()) else {
                     continue;
                 };
+                let facts = self.collect_caller_elision_facts(
+                    function,
+                    current_plan,
+                    object_effects,
+                    local_object_args,
+                );
                 self.rewrite_call_with_elision(function, inst, &call, plan, object_effects, &facts);
             }
         }
@@ -1101,7 +1101,7 @@ impl ObjectAggregateAbi {
             CursorLocation::BlockTop(function.layout.inst_block(inst)),
             CursorLocation::At,
         );
-        let mut cursor = InstInserter::at_location(loc);
+        let mut pre_call = InstInserter::at_location(loc);
         let mut new_args = SmallVec::<[ValueId; 8]>::new();
         let mut readonly_copy_cache = FxHashMap::<ValueId, ValueId>::default();
         let old_results = function.dfg.inst_results(inst).to_vec();
@@ -1110,7 +1110,7 @@ impl ObjectAggregateAbi {
         for (&out_ty, &lowering) in plan.hidden_out_tys.iter().zip(&ret_lowerings) {
             match lowering {
                 RetLowering::Temp => {
-                    let alloc_inst = cursor.insert_inst_data(
+                    let alloc_inst = pre_call.insert_inst_data(
                         function,
                         data::ObjAlloc::new_unchecked(
                             function.inst_set(),
@@ -1118,9 +1118,9 @@ impl ObjectAggregateAbi {
                                 .expect("hidden out arg should be objref"),
                         ),
                     );
-                    let object = cursor.make_result(function, alloc_inst, out_ty);
-                    cursor.attach_result(function, alloc_inst, object);
-                    cursor.set_location(CursorLocation::At(alloc_inst));
+                    let object = pre_call.make_result(function, alloc_inst, out_ty);
+                    pre_call.attach_result(function, alloc_inst, object);
+                    pre_call.set_location(CursorLocation::At(alloc_inst));
                     out_roots.push(object);
                     new_args.push(object);
                 }
@@ -1146,20 +1146,21 @@ impl ObjectAggregateAbi {
                             new_args.push(cached_copy);
                             continue;
                         }
-                        let alloc_inst = cursor.insert_inst_data(
+                        let alloc_inst = pre_call.insert_inst_data(
                             function,
                             data::ObjAlloc::new_unchecked(
                                 function.inst_set(),
                                 arg_plan.original_ty,
                             ),
                         );
-                        let object = cursor.make_result(function, alloc_inst, arg_plan.new_ty);
-                        cursor.attach_result(function, alloc_inst, object);
-                        cursor.set_location(CursorLocation::At(alloc_inst));
-                        cursor.insert_inst_data(
+                        let object = pre_call.make_result(function, alloc_inst, arg_plan.new_ty);
+                        pre_call.attach_result(function, alloc_inst, object);
+                        pre_call.set_location(CursorLocation::At(alloc_inst));
+                        let store_inst = pre_call.insert_inst_data(
                             function,
                             data::ObjStore::new_unchecked(function.inst_set(), object, arg),
                         );
+                        pre_call.set_location(CursorLocation::At(store_inst));
                         if can_reuse_copy {
                             readonly_copy_cache.insert(arg, object);
                         }
@@ -1171,7 +1172,7 @@ impl ObjectAggregateAbi {
             }
         }
 
-        let new_call = cursor.insert_inst_data(
+        let new_call = pre_call.insert_inst_data(
             function,
             control_flow::Call::new(
                 function
@@ -1195,11 +1196,11 @@ impl ObjectAggregateAbi {
                 result_idx: idx as u16,
                 ty,
             });
-            cursor.attach_result(function, new_call, result);
+            pre_call.attach_result(function, new_call, result);
             new_direct_results.push(result);
         }
 
-        cursor.set_location(CursorLocation::At(new_call));
+        let mut post_call = InstInserter::at_location(CursorLocation::At(new_call));
         let mut direct_idx = 0usize;
         let mut out_idx = 0usize;
         for (&old_result, ret_plan) in old_results.iter().zip(&plan.rets) {
@@ -1234,13 +1235,13 @@ impl ObjectAggregateAbi {
                         };
                         continue;
                     }
-                    let load_inst = cursor.insert_inst_data(
+                    let load_inst = post_call.insert_inst_data(
                         function,
                         data::ObjLoad::new_unchecked(function.inst_set(), out_root),
                     );
-                    let loaded = cursor.make_result(function, load_inst, ret_plan.original_ty);
-                    cursor.attach_result(function, load_inst, loaded);
-                    cursor.set_location(CursorLocation::At(load_inst));
+                    let loaded = post_call.make_result(function, load_inst, ret_plan.original_ty);
+                    post_call.attach_result(function, load_inst, loaded);
+                    post_call.set_location(CursorLocation::At(load_inst));
                     function.dfg.change_to_alias(old_result, loaded);
                 }
             }
@@ -2816,6 +2817,116 @@ block0:
     }
 
     #[test]
+    fn retained_byvalue_array_roots_share_across_branch_when_still_current() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @Result = { i1, i256 };
+type @Pair = { [i256; 5], [i8; 5] };
+
+func private %check(v0.[i256; 5], v1.[i8; 5]) -> @Result {
+block0:
+    v2.objref<[i256; 5]> = obj.alloc [i256; 5];
+    obj.store v2 v0;
+    v3.objref<[i8; 5]> = obj.alloc [i8; 5];
+    obj.store v3 v1;
+    v4.[i256; 5] = obj.load v2;
+    v5.i256 = extract_value v4 1.i8;
+    v6.[i8; 5] = obj.load v3;
+    v7.i8 = extract_value v6 1.i8;
+    v8.i1 = eq v5 1.i256;
+    v9.i1 = eq v7 1.i8;
+    v10.i1 = and v8 v9;
+    v11.@Result = insert_value undef.@Result 0.i8 v10;
+    v12.@Result = insert_value v11 1.i8 0.i256;
+    return v12;
+}
+
+func private %main() -> i1 {
+block0:
+    v0.objref<[i256; 5]> = obj.alloc [i256; 5];
+    v1.[i256; 5] = insert_value undef.[i256; 5] 0.i8 0.i256;
+    v2.[i256; 5] = insert_value v1 1.i8 1.i256;
+    obj.store v0 v2;
+    v3.objref<[i8; 5]> = obj.alloc [i8; 5];
+    v4.[i8; 5] = insert_value undef.[i8; 5] 0.i8 0.i8;
+    v5.[i8; 5] = insert_value v4 1.i8 1.i8;
+    obj.store v3 v5;
+    v6.objref<@Pair> = obj.alloc @Pair;
+    v7.objref<[i256; 5]> = obj.proj v6 0.i8;
+    v8.[i256; 5] = obj.load v0;
+    obj.store v7 v8;
+    v9.objref<[i8; 5]> = obj.proj v6 1.i8;
+    v10.[i8; 5] = obj.load v3;
+    obj.store v9 v10;
+    v11.@Result = call %check v8 v10;
+    v12.i1 = extract_value v11 0.i8;
+    br v12 block1 block2;
+
+block1:
+    v13.@Result = call %check v8 v10;
+    v14.i1 = extract_value v13 0.i8;
+    return v14;
+
+block2:
+    return 0.i1;
+}
+"#,
+        );
+
+        run_byvalue_arg_abi(&module);
+        let caller_ref = lookup_func(&module, "main");
+        let callee_ref = lookup_func(&module, "check");
+        let dumped = dump_func(&module, "main");
+        assert_eq!(
+            count_obj_allocs(&module, "main"),
+            3,
+            "current whole-root loads should be shared directly without extra copies:\n{dumped}"
+        );
+        let expected_arg_tys = module.func_store.view(callee_ref, |func| {
+            [
+                func.dfg.value_ty(func.arg_values[0]),
+                func.dfg.value_ty(func.arg_values[1]),
+            ]
+        });
+        module.func_store.view(caller_ref, |func| {
+            let mut calls = Vec::new();
+            for block in func.layout.iter_block() {
+                for inst in func.layout.iter_inst(block) {
+                    let Some(call) =
+                        downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(inst))
+                    else {
+                        continue;
+                    };
+                    if *call.callee() == callee_ref {
+                        calls.push(call.args().to_vec());
+                    }
+                }
+            }
+            assert_eq!(
+                calls.len(),
+                2,
+                "expected both calls to remain after rewrite:\n{dumped}"
+            );
+            for args in calls {
+                assert_eq!(
+                    args.len(),
+                    2,
+                    "rewritten calls should still have exactly two by-value args:\n{dumped}"
+                );
+                assert!(
+                    value_is_obj_alloc(func, args[0])
+                        && value_is_obj_alloc(func, args[1])
+                        && func.dfg.value_ty(args[0]) == expected_arg_tys[0]
+                        && func.dfg.value_ty(args[1]) == expected_arg_tys[1],
+                    "rewritten calls should share the existing roots directly:\n{dumped}"
+                );
+            }
+        });
+    }
+
+    #[test]
     fn readonly_borrowed_arg_can_share_without_copy() {
         let module = parse_test_module(
             r#"
@@ -2853,6 +2964,198 @@ block0:
             assert!(
                 value_is_arg(func, call_args[0]),
                 "readonly borrowed path should share the live-in objref:\n{dumped}"
+            );
+        });
+    }
+
+    #[test]
+    fn readonly_borrowed_struct_with_dynamic_nested_index_should_share_without_copy() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @Data = { [i8; 5], [i256; 5], [i256; 5] };
+type @Res = { i1, i256 };
+
+func private %element_get(v0.@Data, v1.i256, v2.i256) -> @Res {
+block0:
+    v3.objref<@Data> = obj.alloc @Data;
+    obj.store v3 v0;
+    v4.objref<[i8; 5]> = obj.proj v3 0.i8;
+    v5.objref<i8> = obj.index v4 v2;
+    v6.i8 = obj.load v5;
+    v7.i1 = eq v6 0.i8;
+    br v7 block1 block2;
+
+block1:
+    v8.@Res = insert_value undef.@Res 0.i8 0.i1;
+    v9.@Res = insert_value v8 1.i8 0.i256;
+    return v9;
+
+block2:
+    v10.objref<[i256; 5]> = obj.proj v3 2.i8;
+    v11.objref<i256> = obj.index v10 v2;
+    v12.i256 = obj.load v11;
+    v13.@Res = insert_value undef.@Res 0.i8 1.i1;
+    v14.@Res = insert_value v13 1.i8 v12;
+    return v14;
+}
+
+func private %caller(v0.objref<@Data>, v1.i256) -> i256 {
+block0:
+    v2.@Data = obj.load v0;
+    v3.@Res = call %element_get v2 0.i256 v1;
+    v4.i1 = extract_value v3 0.i8;
+    br v4 block1 block2;
+
+block1:
+    v5.i256 = extract_value v3 1.i8;
+    return v5;
+
+block2:
+    return 0.i256;
+}
+"#,
+        );
+
+        run_byvalue_arg_abi(&module);
+
+        let caller_ref = lookup_func(&module, "caller");
+        let call_args = first_call_args(&module, "caller", "element_get");
+        let dumped = dump_func(&module, "caller");
+        assert_eq!(
+            count_obj_allocs(&module, "caller"),
+            0,
+            "readonly borrowed struct path should not copy:\n{dumped}"
+        );
+        module.func_store.view(caller_ref, |func| {
+            assert!(
+                value_is_arg(func, call_args[0]) && call_args[0] == func.arg_values[0],
+                "readonly borrowed struct path should share the live-in objref:\n{dumped}"
+            );
+            assert!(
+                call_args.get(2).copied() == Some(func.arg_values[1]),
+                "dynamic index should stay the original scalar arg:\n{dumped}"
+            );
+        });
+    }
+
+    #[test]
+    fn readonly_large_borrowed_struct_with_dynamic_nested_index_should_share_without_copy() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @Data = { [i8; 192], [i256; 192], [i256; 192] };
+type @Res = { i1, i256 };
+
+func private %element_get(v0.@Data, v1.i256, v2.i256) -> @Res {
+block0:
+    v3.objref<@Data> = obj.alloc @Data;
+    obj.store v3 v0;
+    v4.objref<[i8; 192]> = obj.proj v3 0.i8;
+    v5.objref<i8> = obj.index v4 v2;
+    v6.i8 = obj.load v5;
+    v7.i1 = eq v6 0.i8;
+    br v7 block1 block2;
+
+block1:
+    v8.@Res = insert_value undef.@Res 0.i8 0.i1;
+    v9.@Res = insert_value v8 1.i8 0.i256;
+    return v9;
+
+block2:
+    v10.objref<[i256; 192]> = obj.proj v3 2.i8;
+    v11.objref<i256> = obj.index v10 v2;
+    v12.i256 = obj.load v11;
+    v13.@Res = insert_value undef.@Res 0.i8 1.i1;
+    v14.@Res = insert_value v13 1.i8 v12;
+    return v14;
+}
+
+func private %caller(v0.objref<@Data>, v1.i256) -> i256 {
+block0:
+    v2.@Data = obj.load v0;
+    v3.@Res = call %element_get v2 0.i256 v1;
+    v4.i1 = extract_value v3 0.i8;
+    br v4 block1 block2;
+
+block1:
+    v5.i256 = extract_value v3 1.i8;
+    return v5;
+
+block2:
+    return 0.i256;
+}
+"#,
+        );
+
+        run_byvalue_arg_abi(&module);
+
+        let caller_ref = lookup_func(&module, "caller");
+        let call_args = first_call_args(&module, "caller", "element_get");
+        let dumped = dump_func(&module, "caller");
+        assert_eq!(
+            count_obj_allocs(&module, "caller"),
+            0,
+            "readonly large borrowed struct path should not copy:\n{dumped}"
+        );
+        module.func_store.view(caller_ref, |func| {
+            assert!(
+                value_is_arg(func, call_args[0]) && call_args[0] == func.arg_values[0],
+                "readonly large borrowed struct path should share the live-in objref:\n{dumped}"
+            );
+            assert!(
+                call_args.get(2).copied() == Some(func.arg_values[1]),
+                "dynamic index should stay the original scalar arg:\n{dumped}"
+            );
+        });
+    }
+
+    #[test]
+    fn readonly_borrowed_arg_across_branch_should_share_without_copy() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func private %readonly(v0.[i256; 8]) -> i256 {
+block0:
+    v1.objref<[i256; 8]> = obj.alloc [i256; 8];
+    obj.store v1 v0;
+    v2.[i256; 8] = obj.load v1;
+    v3.i256 = extract_value v2 0.i8;
+    return v3;
+}
+
+func private %caller(v0.objref<[i256; 8]>, v1.i1) -> i256 {
+block0:
+    v2.[i256; 8] = obj.load v0;
+    br v1 block1 block2;
+
+block1:
+    v3.i256 = call %readonly v2;
+    return v3;
+
+block2:
+    return 0.i256;
+}
+"#,
+        );
+
+        run_byvalue_arg_abi(&module);
+
+        let caller_ref = lookup_func(&module, "caller");
+        let call_args = first_call_args(&module, "caller", "readonly");
+        let dumped = dump_func(&module, "caller");
+        assert_eq!(
+            count_obj_allocs(&module, "caller"),
+            0,
+            "readonly borrowed arg across a branch should not copy:\n{dumped}"
+        );
+        module.func_store.view(caller_ref, |func| {
+            assert!(
+                value_is_arg(func, call_args[0]) && call_args[0] == func.arg_values[0],
+                "readonly borrowed arg across a branch should share the live-in objref:\n{dumped}"
             );
         });
     }

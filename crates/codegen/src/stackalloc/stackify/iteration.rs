@@ -7,6 +7,7 @@ use crate::{bitset::BitSet, isa::evm::immediate_u32, stackalloc::Actions};
 
 use super::{
     alloc::StackifyAlloc,
+    br_table::plan_br_table_compare_chain,
     builder::{StackifyContext, StackifyReachability},
     planner::{self, Planner},
     slots::{FreeSlotPools, FreeSlots, SlotPool, SpillSlotPools},
@@ -89,6 +90,7 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
             &mut *self.spill_requests,
             self.ctx,
             &self.alloc.spill_obj,
+            &self.alloc.exact_local_addr,
             free_slots,
             &mut *self.slots,
         );
@@ -109,6 +111,7 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
             &mut *self.spill_requests,
             self.ctx,
             &self.alloc.spill_obj,
+            &self.alloc.exact_local_addr,
             free_slots,
             &mut *self.slots,
         );
@@ -129,6 +132,7 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
             &mut *self.spill_requests,
             self.ctx,
             &self.alloc.spill_obj,
+            &self.alloc.exact_local_addr,
             free_slots,
             &mut *self.slots,
         );
@@ -449,7 +453,9 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
                 }
                 BranchKind::BrTable(table) => {
                     // Build per-case compare actions. As with `br`, we normalize successor entry
-                    // stacks in their block prologues, so we keep the current stack order here.
+                    // stacks in their block prologues, but unlike `br` the compare ladder does
+                    // not restore the original stack between cases. Each case must plan from the
+                    // non-taken stack left by the previous `EQ; JUMPI`.
                     let scrutinee = *table.scrutinee();
                     let scrutinee = self.ctx.canonicalize_value(scrutinee);
 
@@ -469,42 +475,42 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
                     let base_actions = self.alloc.pre_actions[inst].clone();
                     self.alloc.pre_actions[inst].clear();
 
-                    // The br_table lowering emits `EQ; JUMPI` for each case in order.
-                    for (case_idx, &(case_val, dest)) in table.table().iter().enumerate() {
-                        let mut case_actions = Actions::new();
-                        let mut case_stack = state.stack.clone();
+                    let (case_stacks, default_stack) = plan_br_table_compare_chain(
+                        table.table(),
+                        &state.stack,
+                        |case_idx, case_val, case_stack| {
+                            let mut case_actions = Actions::new();
+                            if case_idx == 0 {
+                                case_actions.extend_from_slice(&base_actions);
+                            }
+                            self.with_planner(
+                                case_stack,
+                                &mut case_actions,
+                                &mut state.free_slots,
+                                |p| {
+                                    let consume_last_use = BitSet::<ValueId>::default();
+                                    let mut compare_args = smallvec::smallvec![scrutinee, case_val];
+                                    p.prepare_operands_for_commutative_pair(
+                                        &mut compare_args,
+                                        &consume_last_use,
+                                    );
+                                },
+                            );
+                            self.alloc
+                                .brtable_actions
+                                .insert((inst, scrutinee, case_val), case_actions);
+                        },
+                    );
 
-                        // Put [scrutinee, case_val] on stack for EQ (order doesn't matter).
-                        if case_idx == 0 {
-                            case_actions.extend_from_slice(&base_actions);
-                        }
-                        self.with_planner(
-                            &mut case_stack,
-                            &mut case_actions,
-                            &mut state.free_slots,
-                            |p| {
-                                let consume_last_use = BitSet::<ValueId>::default();
-                                let mut compare_args = smallvec::smallvec![scrutinee, case_val];
-                                p.prepare_operands_for_commutative_pair(
-                                    &mut compare_args,
-                                    &consume_last_use,
-                                );
-                            },
-                        );
-                        self.alloc
-                            .brtable_actions
-                            .insert((inst, scrutinee, case_val), case_actions);
-
-                        // Destination blocks inherit the base stack state (the compare chain
-                        // restores it on all non-taken paths).
+                    for case in case_stacks {
                         debug_assert_eq!(
-                            self.ctx.cfg.pred_num_of(dest),
+                            self.ctx.cfg.pred_num_of(case.dest),
                             1,
                             "no critical edges: br_table target must be single-pred"
                         );
                         self.inherited_stack
-                            .entry(dest)
-                            .or_insert_with(|| (state.block, state.stack.clone()));
+                            .entry(case.dest)
+                            .or_insert_with(|| (state.block, case.post_compare_stack));
                     }
 
                     if let Some(default) = table.default() {
@@ -515,7 +521,7 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
                         );
                         self.inherited_stack
                             .entry(*default)
-                            .or_insert_with(|| (state.block, state.stack.clone()));
+                            .or_insert_with(|| (state.block, default_stack));
                     }
 
                     self.observer.on_inst_br_table(inst);

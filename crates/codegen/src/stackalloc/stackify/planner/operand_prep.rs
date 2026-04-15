@@ -600,6 +600,7 @@ block0:
                     &mut spill_requests,
                     &ctx,
                     &spill_obj,
+                    &ctx.exact_local_addr,
                     &mut free_slots,
                     &mut slots,
                 );
@@ -644,6 +645,7 @@ block0:
                 &mut spill_requests,
                 &ctx,
                 &spill_obj,
+                &ctx.exact_local_addr,
                 &mut free_slots,
                 &mut slots,
             );
@@ -707,6 +709,7 @@ block0:
                 &mut spill_requests,
                 &ctx,
                 &spill_obj,
+                &ctx.exact_local_addr,
                 &mut free_slots,
                 &mut slots,
             );
@@ -794,6 +797,7 @@ block0:
                 &mut spill_requests,
                 &ctx,
                 &spill_obj,
+                &ctx.exact_local_addr,
                 &mut free_slots,
                 &mut slots,
             );
@@ -854,6 +858,7 @@ block0:
                 &mut spill_requests,
                 &ctx,
                 &spill_obj,
+                &ctx.exact_local_addr,
                 &mut free_slots,
                 &mut slots,
             );
@@ -927,6 +932,7 @@ block0:
                 &mut spill_requests,
                 &ctx,
                 &spill_obj,
+                &ctx.exact_local_addr,
                 &mut free_slots,
                 &mut slots,
             );

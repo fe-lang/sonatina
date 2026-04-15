@@ -1,0 +1,52 @@
+#! evm.config: { opt: 2 }
+#! evm.case: ok
+#!   calldata:
+#!   expect: return u256(7)
+
+target = "evm-ethereum-osaka"
+
+type @OptionI256 = enum {
+    #None,
+    #Some(i256),
+};
+
+type @Pair = { i256, @OptionI256 };
+
+func private %pair(v0.i1) -> @Pair {
+block0:
+    br v0 block1 block2;
+
+block1:
+    v1.@OptionI256 = enum.make @OptionI256 #Some (7.i256);
+    v2.@Pair = insert_value undef.@Pair 0.i8 1.i256;
+    v3.@Pair = insert_value v2 1.i8 v1;
+    return v3;
+
+block2:
+    v4.@OptionI256 = enum.make @OptionI256 #None;
+    v5.@Pair = insert_value undef.@Pair 0.i8 0.i256;
+    v6.@Pair = insert_value v5 1.i8 v4;
+    return v6;
+}
+
+func public %main() -> i256 {
+block0:
+    v0.@Pair = call %pair 1.i1;
+    v1.@OptionI256 = extract_value v0 1.i8;
+    enum.assert_variant v1 #Some;
+    v2.i256 = enum.extract v1 #Some 0.i8;
+    return v2;
+}
+
+func public %entry() {
+block0:
+    v0.i256 = call %main;
+    mstore 0.i8 v0 i256;
+    evm_return 0.i8 32.i8;
+}
+
+object @Contract {
+    section runtime {
+        entry %entry;
+    }
+}

@@ -1,0 +1,85 @@
+#! evm.config: { opt: 2 }
+#! evm.case: ok
+#!   calldata:
+#!   expect: return
+
+target = "evm-ethereum-osaka"
+
+type @E = enum {
+    #None,
+    #A,
+};
+
+type @Pair = {[i256; 2], @E};
+
+func private %pair(v0.i1) -> @Pair {
+block0:
+    v1.objref<@Pair> = obj.alloc @Pair;
+    v2.objref<[i256; 2]> = obj.proj v1 0.i256;
+    v3.objref<i256> = obj.index v2 0.i256;
+    obj.store v3 5.i256;
+    v4.objref<i256> = obj.index v2 1.i256;
+    obj.store v4 9.i256;
+    v5.objref<@E> = obj.proj v1 1.i256;
+    br v0 block1 block2;
+
+block1:
+    enum.set_tag v5 #None;
+    jump block3;
+
+block2:
+    enum.set_tag v5 #A;
+    jump block3;
+
+block3:
+    v6.@Pair = obj.load v1;
+    return v6;
+}
+
+func private %code(v0.@E) -> i256 {
+block0:
+    v1.enumtag(@E) = enum.tag v0;
+    br_table v1 block3 (0.enumtag(@E) block1) (1.enumtag(@E) block2);
+
+block1:
+    return 0.i256;
+
+block2:
+    return 1.i256;
+
+block3:
+    unreachable;
+}
+
+func private %run() {
+block0:
+    v0.@Pair = call %pair 1.i1;
+    v1.[i256; 2] = extract_value v0 0.i256;
+    v2.@E = extract_value v0 1.i256;
+    v3.i256 = call %code v2;
+    v4.i256 = extract_value v1 0.i256;
+    v5.i1 = eq v3 0.i256;
+    br v5 block1 block3;
+
+block1:
+    v6.i1 = eq v4 5.i256;
+    br v6 block2 block3;
+
+block2:
+    return;
+
+block3:
+    evm_revert 0.i256 0.i256;
+}
+
+func public %entry() {
+block0:
+    call %run;
+    evm_return 0.i8 0.i8;
+}
+
+object @Contract {
+    section runtime {
+        entry %entry;
+    }
+}

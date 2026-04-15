@@ -1,0 +1,30 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: opt_ir_snapshot
+input_file: test_files/evm/fieldless_enum_tuple_reconstruct.sntn
+---
+target = "evm-ethereum-osaka"
+
+type @Pair = {i256, @E};
+type @E = enum {
+    #A,
+    #B,
+};
+
+func public %main() -> i256 {
+    block0:
+        return 0.i256;
+}
+
+func public %entry() {
+    block0:
+        mstore 0.i8 0.i256 i256;
+        evm_return 0.i8 32.i8;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %entry;
+    }
+}

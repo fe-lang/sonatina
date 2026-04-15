@@ -1,0 +1,64 @@
+---
+source: crates/codegen/tests/evm.rs
+assertion_line: 451
+expression: opt_ir_snapshot
+input_file: test_files/evm/tuple_enum_field_from_pair_regression.sntn
+---
+target = "evm-ethereum-osaka"
+
+type @Pair = {[i256; 2], @E};
+type @E = enum {
+    #None,
+    #A,
+};
+
+func private %run() {
+    block0:
+        v11.objref<@Pair> = obj.alloc @Pair;
+        v12.objref<[i256; 2]> = obj.proj v11 0.i256;
+        v13.objref<i256> = obj.index v12 0.i256;
+        obj.store v13 5.i256;
+        v14.objref<i256> = obj.index v12 1.i256;
+        obj.store v14 9.i256;
+        v16.objref<@E> = obj.proj v11 1.i256;
+        enum.set_tag v16 #None;
+        v17.@Pair = obj.load v11;
+        v1.[i256; 2] = extract_value v17 0.i256;
+        v2.@E = extract_value v17 1.i256;
+        v18.enumtag(@E) = enum.tag v2;
+        br_table v18 block13 (0.enumtag(@E) block9) (1.enumtag(@E) block12);
+
+    block12:
+        jump block9;
+
+    block13:
+        unreachable;
+
+    block9:
+        v24.i1 = phi (1.i1 block0) (0.i1 block12);
+        v4.i256 = extract_value v1 0.i256;
+        br v24 block1 block3;
+
+    block1:
+        v6.i1 = eq v4 5.i256;
+        br v6 block2 block3;
+
+    block2:
+        return;
+
+    block3:
+        evm_revert 0.i256 0.i256;
+}
+
+func public %entry() {
+    block0:
+        call %run;
+        evm_return 0.i8 0.i8;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %entry;
+    }
+}

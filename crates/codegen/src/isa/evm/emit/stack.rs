@@ -457,6 +457,23 @@ pub(crate) fn perform_action(ctx: &mut Lower<OpCode>, action: Action, frame_size
             emit_dyn_frame_addr(ctx, frame_size_slots, offset);
             ctx.push(OpCode::MSTORE);
         }
+        Action::PushFrameAddr {
+            offset_words,
+            extra_bytes,
+        } => {
+            emit_dyn_frame_addr(ctx, frame_size_slots, offset_words);
+            if extra_bytes > 0 {
+                push_bytes(ctx, &u256_to_be(&(extra_bytes as u64).into()));
+                ctx.push(OpCode::ADD);
+            } else if extra_bytes < 0 {
+                let abs = extra_bytes.unsigned_abs();
+                push_bytes(ctx, &u256_to_be(&abs.into()));
+                ctx.push(OpCode::SUB);
+            }
+        }
+        Action::MaterializeLocalAddr { .. } => {
+            panic!("unlowered MaterializeLocalAddr action");
+        }
         Action::MemLoadObj(_) | Action::MemStoreObj(_) => {
             panic!("unlowered Mem*Obj action");
         }

@@ -98,6 +98,7 @@ struct TransferCtx<'a> {
     provenance: MayProvenance<'a>,
     relevant_slices: &'a FxHashMap<ValueId, Vec<ObjectSlice>>,
     object_effects: Option<&'a ObjectEffectSummaryMap>,
+    promote_loaded_values: bool,
 }
 
 #[derive(Default)]
@@ -234,6 +235,7 @@ impl ObjectMemoryAnalysis {
                     provenance: may,
                     relevant_slices: &relevant_slices,
                     object_effects,
+                    promote_loaded_values: self.promote_loaded_values,
                 };
                 for inst in func.layout.iter_inst(block) {
                     if !func.layout.is_inst_inserted(inst) {
@@ -262,6 +264,7 @@ impl ObjectMemoryAnalysis {
                 provenance: may,
                 relevant_slices: &relevant_slices,
                 object_effects,
+                promote_loaded_values: self.promote_loaded_values,
             };
             for inst in func.layout.iter_inst(block) {
                 if !func.layout.is_inst_inserted(inst) {
@@ -533,10 +536,7 @@ fn transfer_inst(
     if let Some(obj_load) = downcast::<&data::ObjLoad>(ctx.func.inst_set(), ctx.func.dfg.inst(inst))
     {
         record_read_state(inst, ctx.tracked[*obj_load.object()], state, record);
-        if record
-            .as_deref()
-            .is_some_and(|analysis| analysis.promote_loaded_values)
-        {
+        if ctx.promote_loaded_values {
             promote_loaded_value_to_carrier(ctx.func, inst, ctx.tracked[*obj_load.object()], state);
         }
         return;
