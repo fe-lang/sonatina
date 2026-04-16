@@ -11,7 +11,7 @@ use crate::{
     stackalloc::Action,
 };
 
-use super::super::{DYN_SP_SLOT, FREE_PTR_SLOT, OpCode, WORD_BYTES};
+use super::super::{DYN_SP_SLOT, DynamicFrameLayout, FREE_PTR_SLOT, FrameLocalWord, OpCode};
 
 pub(crate) fn is_push_opcode(op: OpCode) -> bool {
     let byte = op as u8;
@@ -382,55 +382,30 @@ pub(crate) fn fold_stack_actions(actions: &[Action]) -> SmallVec<[Action; 8]> {
     out
 }
 
-const DYN_FRAME_LINK_SLOTS: u32 = 1;
-
-fn dyn_frame_total_slots(frame_size_slots: u32) -> u32 {
-    frame_size_slots
-        .checked_add(DYN_FRAME_LINK_SLOTS)
-        .expect("frame size overflow")
-}
-
-fn dyn_frame_link_sp_relative_bytes() -> u32 {
-    DYN_FRAME_LINK_SLOTS
-        .checked_mul(WORD_BYTES)
-        .expect("frame slot byte offset overflow")
-}
-
-fn debug_assert_dyn_frame_has_link_slot(frame_size_slots: u32) {
-    debug_assert!(
-        dyn_frame_total_slots(frame_size_slots) > frame_size_slots,
-        "dynamic frames must reserve a hidden caller-SP link slot"
-    );
-}
-
-pub(crate) fn frame_slot_sp_relative_bytes(frame_size_slots: u32, offset_words: u32) -> u32 {
-    let sp_relative_words = dyn_frame_total_slots(frame_size_slots)
-        .checked_sub(offset_words)
-        .filter(|words| *words != 0)
-        .unwrap_or_else(|| {
-            panic!(
-                "frame slot offset {} out of range for frame size {}",
-                offset_words, frame_size_slots
-            )
-        });
-    sp_relative_words
-        .checked_mul(WORD_BYTES)
-        .expect("frame slot byte offset overflow")
-}
-
 pub(crate) fn emit_dyn_frame_addr(
     ctx: &mut Lower<OpCode>,
-    frame_size_slots: u32,
-    offset_words: u32,
+    frame_layout: DynamicFrameLayout,
+    offset_words: FrameLocalWord,
 ) {
-    let sp_relative_bytes = frame_slot_sp_relative_bytes(frame_size_slots, offset_words);
+    let sp_relative_bytes = frame_layout.sp_relative_bytes(offset_words);
     push_bytes(ctx, &u32_to_be(sp_relative_bytes));
     push_bytes(ctx, &[DYN_SP_SLOT]);
     ctx.push(OpCode::MLOAD);
     ctx.push(OpCode::SUB);
 }
 
-pub(crate) fn perform_action(ctx: &mut Lower<OpCode>, action: Action, frame_size_slots: u32) {
+fn dynamic_frame_layout(
+    frame_layout: Option<DynamicFrameLayout>,
+    context: &str,
+) -> DynamicFrameLayout {
+    frame_layout.unwrap_or_else(|| panic!("{context} requires an addressable dynamic frame layout"))
+}
+
+pub(crate) fn perform_action(
+    ctx: &mut Lower<OpCode>,
+    action: Action,
+    frame_layout: Option<DynamicFrameLayout>,
+) {
     match action {
         Action::StackDup(slot) => {
             debug_assert!(slot < 16, "DUP out of range: {slot}");
@@ -471,7 +446,12 @@ pub(crate) fn perform_action(ctx: &mut Lower<OpCode>, action: Action, frame_size
             ctx.push(OpCode::MLOAD);
         }
         Action::MemLoadFrameSlot(offset) => {
-            emit_dyn_frame_addr(ctx, frame_size_slots, offset);
+            let frame_layout = dynamic_frame_layout(frame_layout, "frame load");
+            emit_dyn_frame_addr(
+                ctx,
+                frame_layout,
+                frame_layout.expect_local_word(offset, "load"),
+            );
             ctx.push(OpCode::MLOAD);
         }
         Action::MemStoreAbs(offset) => {
@@ -479,14 +459,24 @@ pub(crate) fn perform_action(ctx: &mut Lower<OpCode>, action: Action, frame_size
             ctx.push(OpCode::MSTORE);
         }
         Action::MemStoreFrameSlot(offset) => {
-            emit_dyn_frame_addr(ctx, frame_size_slots, offset);
+            let frame_layout = dynamic_frame_layout(frame_layout, "frame store");
+            emit_dyn_frame_addr(
+                ctx,
+                frame_layout,
+                frame_layout.expect_local_word(offset, "store"),
+            );
             ctx.push(OpCode::MSTORE);
         }
         Action::PushFrameAddr {
             offset_words,
             extra_bytes,
         } => {
-            emit_dyn_frame_addr(ctx, frame_size_slots, offset_words);
+            let frame_layout = dynamic_frame_layout(frame_layout, "frame address");
+            emit_dyn_frame_addr(
+                ctx,
+                frame_layout,
+                frame_layout.expect_local_word(offset_words, "address"),
+            );
             if extra_bytes > 0 {
                 push_bytes(ctx, &u256_to_be(&(extra_bytes as u64).into()));
                 ctx.push(OpCode::ADD);
@@ -508,10 +498,14 @@ pub(crate) fn perform_action(ctx: &mut Lower<OpCode>, action: Action, frame_size
     }
 }
 
-pub(crate) fn perform_actions(ctx: &mut Lower<OpCode>, actions: &[Action], frame_size_slots: u32) {
+pub(crate) fn perform_actions(
+    ctx: &mut Lower<OpCode>,
+    actions: &[Action],
+    frame_layout: Option<DynamicFrameLayout>,
+) {
     let folded = fold_stack_actions(actions);
     for action in folded {
-        perform_action(ctx, action, frame_size_slots);
+        perform_action(ctx, action, frame_layout);
     }
 }
 
@@ -742,29 +736,23 @@ pub(crate) fn ensure_dyn_sp_init(ctx: &mut Lower<OpCode>, dyn_base: u32) {
     ctx.push(OpCode::POP);
 }
 
-pub(crate) fn enter_frame_initialized(ctx: &mut Lower<OpCode>, frame_slots: u32) {
-    if frame_slots == 0 {
-        return;
-    }
-    debug_assert_dyn_frame_has_link_slot(frame_slots);
-
-    let frame_bytes = dyn_frame_total_slots(frame_slots)
-        .checked_mul(WORD_BYTES)
-        .expect("frame size overflow");
-
+pub(crate) fn enter_frame_initialized(ctx: &mut Lower<OpCode>, frame_layout: DynamicFrameLayout) {
     push_bytes(ctx, &[DYN_SP_SLOT]);
     ctx.push(OpCode::MLOAD);
     ctx.push(OpCode::DUP1);
     push_bytes(ctx, &[FREE_PTR_SLOT]);
     ctx.push(OpCode::MLOAD);
     emit_max_top_two(ctx);
-    push_bytes(ctx, &u32_to_be(frame_bytes));
+    push_bytes(ctx, &u32_to_be(frame_layout.frame_bytes()));
     ctx.push(OpCode::ADD);
 
     // Save the caller's SP in a hidden link slot at the top of the dynamic frame so
     // nested heap clamping cannot permanently shift the caller's local frame base.
     ctx.push(OpCode::DUP2);
-    push_bytes(ctx, &u32_to_be(dyn_frame_link_sp_relative_bytes()));
+    push_bytes(
+        ctx,
+        &u32_to_be(frame_layout.caller_link_sp_relative_bytes()),
+    );
     ctx.push(OpCode::DUP3);
     ctx.push(OpCode::SUB);
     ctx.push(OpCode::MSTORE);
@@ -775,15 +763,13 @@ pub(crate) fn enter_frame_initialized(ctx: &mut Lower<OpCode>, frame_slots: u32)
     ctx.push(OpCode::MSTORE);
 }
 
-pub(crate) fn leave_frame(ctx: &mut Lower<OpCode>, frame_slots: u32) {
-    if frame_slots == 0 {
-        return;
-    }
-    debug_assert_dyn_frame_has_link_slot(frame_slots);
-
+pub(crate) fn leave_frame(ctx: &mut Lower<OpCode>, frame_layout: DynamicFrameLayout) {
     // Restore the caller SP from the hidden link slot so heap clamps inside the callee
     // cannot skew the caller's visible frame base on return.
-    push_bytes(ctx, &u32_to_be(dyn_frame_link_sp_relative_bytes()));
+    push_bytes(
+        ctx,
+        &u32_to_be(frame_layout.caller_link_sp_relative_bytes()),
+    );
     push_bytes(ctx, &[DYN_SP_SLOT]);
     ctx.push(OpCode::MLOAD);
     ctx.push(OpCode::SUB);

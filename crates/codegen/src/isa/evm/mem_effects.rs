@@ -52,7 +52,7 @@ pub(crate) fn compute_func_mem_effects(
             let touches_static_arena = func_plan.is_some_and(|p| {
                 p.scratch_words != 0 || p.stable_base_word().is_some() && p.stable_words != 0
             });
-            let touches_dyn_frame = func_plan.is_some_and(|p| p.frame_words() != 0);
+            let touches_dyn_frame = func_plan.is_some_and(|p| p.dynamic_frame_layout().is_some());
             let touches_heap_meta = module.func_store.view(func, |f| func_uses_malloc(f, isa));
             let touches_scratch = scratch_effects.contains(&func);
             (

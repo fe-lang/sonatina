@@ -37,12 +37,12 @@ impl EvmFunctionLowering<'_> {
             return;
         }
 
-        let frame_size_slots = alloc.frame_size_slots();
+        let frame_layout = self.frame_layout();
         let emit_pre_actions = |ctx: &mut Lower<OpCode>, actions: &[Action]| {
-            self.emit_actions_for_site(ctx, actions, frame_size_slots, FrameSite::PreInst(insn))
+            self.emit_actions_for_site(ctx, actions, frame_layout, FrameSite::PreInst(insn))
         };
         let emit_post_actions = |ctx: &mut Lower<OpCode>, actions: &[Action]| {
-            self.emit_actions_for_site(ctx, actions, frame_size_slots, FrameSite::PostInst(insn))
+            self.emit_actions_for_site(ctx, actions, frame_layout, FrameSite::PostInst(insn))
         };
         let results: SmallVec<[ValueId; 4]> = ctx.insn_results(insn).iter().copied().collect();
         let args = ctx.insn_data(insn).collect_values();
@@ -237,7 +237,7 @@ impl EvmFunctionLowering<'_> {
                     self.emit_actions_for_site(
                         ctx,
                         &alloc.read_br_table_case(insn, case_idx),
-                        frame_size_slots,
+                        frame_layout,
                         FrameSite::PreInst(insn),
                     );
                     ctx.push(OpCode::EQ);
@@ -272,7 +272,7 @@ impl EvmFunctionLowering<'_> {
                     self.emit_actions_for_site_from_offset(
                         ctx,
                         &actions,
-                        frame_size_slots,
+                        frame_layout,
                         FrameSite::PreInst(insn),
                         0,
                     );
@@ -282,7 +282,7 @@ impl EvmFunctionLowering<'_> {
                     self.emit_actions_for_site_from_offset(
                         ctx,
                         &suffix,
-                        frame_size_slots,
+                        frame_layout,
                         FrameSite::PreInst(insn),
                         prefix_folded_len,
                     );
@@ -305,7 +305,7 @@ impl EvmFunctionLowering<'_> {
                     self.emit_actions_for_site(
                         ctx,
                         &actions,
-                        frame_size_slots,
+                        frame_layout,
                         FrameSite::PreInst(insn),
                     );
 
@@ -322,8 +322,10 @@ impl EvmFunctionLowering<'_> {
             }
             EvmInstKind::Return(_) => {
                 emit_pre_actions(ctx, &alloc.read(insn, &args));
-                if !self.has_lazy_frame_lowering() {
-                    super::stack::leave_frame(ctx, alloc.frame_size_slots());
+                if !self.has_lazy_frame_lowering()
+                    && let Some(frame_layout) = frame_layout
+                {
+                    super::stack::leave_frame(ctx, frame_layout);
                 }
 
                 for depth in 1..=args.len() {
@@ -371,7 +373,7 @@ impl EvmFunctionLowering<'_> {
                     self.emit_actions_for_site(
                         ctx,
                         &alloc.read(insn, gep_plan.runtime_args.as_slice()),
-                        frame_size_slots,
+                        frame_layout,
                         FrameSite::PreInst(insn),
                     );
                     for _ in 0..gep_plan.runtime_args.len() {
@@ -385,7 +387,7 @@ impl EvmFunctionLowering<'_> {
                 self.emit_actions_for_site(
                     ctx,
                     &alloc.read(insn, gep_plan.runtime_args.as_slice()),
-                    frame_size_slots,
+                    frame_layout,
                     FrameSite::PreInst(insn),
                 );
                 for step in gep_plan.steps {
@@ -427,16 +429,22 @@ impl EvmFunctionLowering<'_> {
                         push_bytes(ctx, &u32_to_be(addr_bytes));
                     }
                     ObjLoc::StableFrame(offset_words) => {
+                        let frame_layout = frame_layout
+                            .expect("stable frame alloca requires an addressable dynamic frame");
                         self.emit_lazy_frame_enter_if_site_matches(
                             ctx,
-                            frame_size_slots,
+                            Some(frame_layout),
                             FrameSite::Inst(insn),
                         );
-                        emit_dyn_frame_addr(ctx, frame_size_slots, offset_words);
+                        emit_dyn_frame_addr(
+                            ctx,
+                            frame_layout,
+                            frame_layout.expect_local_word(offset_words, "alloca"),
+                        );
                         if self.lazy_frame_plan_matches(|plan| {
                             plan.exit_after_site(FrameSite::Inst(insn))
                         }) {
-                            super::stack::leave_frame(ctx, frame_size_slots);
+                            super::stack::leave_frame(ctx, frame_layout);
                         }
                     }
                     ObjLoc::StackPinned(_) => panic!("stack-pinned allocas are not implemented"),
@@ -656,7 +664,7 @@ impl EvmFunctionLowering<'_> {
                 self.emit_actions_for_site(
                     ctx,
                     &alloc.read(insn, runtime_args.as_slice()),
-                    frame_size_slots,
+                    frame_layout,
                     FrameSite::PreInst(insn),
                 );
 

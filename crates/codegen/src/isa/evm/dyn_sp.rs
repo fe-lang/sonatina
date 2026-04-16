@@ -134,7 +134,7 @@ pub(crate) fn compute_dyn_sp_plan(
             .any(|func| {
                 plan.funcs
                     .get(&func)
-                    .is_some_and(|func_plan| func_plan.frame_size_words() != 0)
+                    .is_some_and(|func_plan| func_plan.dynamic_frame_layout().is_some())
             })
         {
             ready_sccs.insert(scc_ref);

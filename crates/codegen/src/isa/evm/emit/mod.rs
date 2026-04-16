@@ -9,8 +9,8 @@ pub(crate) use layout::{
     materialize_jumpdests, referenced_insn_label_targets, rewrite_evm_local_fallthrough_layout,
 };
 pub(crate) use stack::{
-    fold_stack_actions, frame_slot_sp_relative_bytes, immediate_u32, is_plain_inst, is_push_opcode,
-    perform_actions, prune_redundant_opcode_sequences, push_op,
+    fold_stack_actions, immediate_u32, is_plain_inst, is_push_opcode, perform_actions,
+    prune_redundant_opcode_sequences, push_op,
 };
 
 use tracing::trace_span;
@@ -24,8 +24,8 @@ use sonatina_ir::{BlockId, Function, InstId, Module, module::FuncRef};
 
 use self::stack::{enter_frame_initialized, leave_frame, perform_action};
 use super::{
-    DynSpInitKind, EvmBackend, EvmFunctionPlan, EvmSectionPlan, FrameSite, LateCleanupProfile,
-    LazyFramePlan, late_block_merge::run_late_block_merge, opcode::OpCode,
+    DynSpInitKind, DynamicFrameLayout, EvmBackend, EvmFunctionPlan, EvmSectionPlan, FrameSite,
+    LateCleanupProfile, LazyFramePlan, late_block_merge::run_late_block_merge, opcode::OpCode,
 };
 
 pub(crate) struct EvmFunctionLowering<'a> {
@@ -51,8 +51,12 @@ impl<'a> EvmFunctionLowering<'a> {
         self.section_plan.dyn_base
     }
 
-    fn emit_frame_enter(&self, ctx: &mut Lower<OpCode>, frame_size_slots: u32) {
-        enter_frame_initialized(ctx, frame_size_slots);
+    fn frame_layout(&self) -> Option<DynamicFrameLayout> {
+        self.function_plan.mem_plan.dynamic_frame_layout()
+    }
+
+    fn emit_frame_enter(&self, ctx: &mut Lower<OpCode>, frame_layout: DynamicFrameLayout) {
+        enter_frame_initialized(ctx, frame_layout);
     }
 
     fn lazy_frame_plan_matches(&self, pred: impl FnOnce(&LazyFramePlan) -> bool) -> bool {
@@ -103,22 +107,26 @@ impl<'a> EvmFunctionLowering<'a> {
     fn emit_lazy_frame_enter_if_site_matches(
         &self,
         ctx: &mut Lower<OpCode>,
-        frame_size_slots: u32,
+        frame_layout: Option<DynamicFrameLayout>,
         site: FrameSite,
     ) {
-        if self.lazy_frame_plan_matches(|plan| plan.enter_before_site(site)) {
-            self.emit_frame_enter(ctx, frame_size_slots);
+        if self.lazy_frame_plan_matches(|plan| plan.enter_before_site(site))
+            && let Some(frame_layout) = frame_layout
+        {
+            self.emit_frame_enter(ctx, frame_layout);
         }
     }
 
     fn emit_lazy_frame_leave_if_site_matches(
         &self,
         ctx: &mut Lower<OpCode>,
-        frame_size_slots: u32,
+        frame_layout: Option<DynamicFrameLayout>,
         site: FrameSite,
     ) {
-        if self.lazy_frame_plan_matches(|plan| plan.exit_before_site(site)) {
-            leave_frame(ctx, frame_size_slots);
+        if self.lazy_frame_plan_matches(|plan| plan.exit_before_site(site))
+            && let Some(frame_layout) = frame_layout
+        {
+            leave_frame(ctx, frame_layout);
         }
     }
 
@@ -126,41 +134,49 @@ impl<'a> EvmFunctionLowering<'a> {
         &self,
         ctx: &mut Lower<OpCode>,
         actions: &[Action],
-        frame_size_slots: u32,
+        frame_layout: Option<DynamicFrameLayout>,
         site: FrameSite,
     ) {
-        self.emit_actions_for_site_from_offset(ctx, actions, frame_size_slots, site, 0);
+        self.emit_actions_for_site_from_offset(ctx, actions, frame_layout, site, 0);
     }
 
     fn emit_actions_for_site_from_offset(
         &self,
         ctx: &mut Lower<OpCode>,
         actions: &[Action],
-        frame_size_slots: u32,
+        frame_layout: Option<DynamicFrameLayout>,
         site: FrameSite,
         action_index_offset: usize,
     ) {
-        self.emit_lazy_frame_enter_if_site_matches(ctx, frame_size_slots, site);
+        self.emit_lazy_frame_enter_if_site_matches(ctx, frame_layout, site);
 
         let folded = fold_stack_actions(actions);
         for (index, action) in folded.iter().copied().enumerate() {
             let index = action_index_offset
                 .checked_add(index)
                 .expect("lazy frame action index overflow");
-            if self.lazy_frame_plan_matches(|plan| plan.enter_before_action(site, index)) {
-                self.emit_frame_enter(ctx, frame_size_slots);
+            if self.lazy_frame_plan_matches(|plan| plan.enter_before_action(site, index))
+                && let Some(frame_layout) = frame_layout
+            {
+                self.emit_frame_enter(ctx, frame_layout);
             }
-            if self.lazy_frame_plan_matches(|plan| plan.exit_before_action(site, index)) {
-                leave_frame(ctx, frame_size_slots);
+            if self.lazy_frame_plan_matches(|plan| plan.exit_before_action(site, index))
+                && let Some(frame_layout) = frame_layout
+            {
+                leave_frame(ctx, frame_layout);
             }
-            perform_action(ctx, action, frame_size_slots);
-            if self.lazy_frame_plan_matches(|plan| plan.exit_after_action(site, index)) {
-                leave_frame(ctx, frame_size_slots);
+            perform_action(ctx, action, frame_layout);
+            if self.lazy_frame_plan_matches(|plan| plan.exit_after_action(site, index))
+                && let Some(frame_layout) = frame_layout
+            {
+                leave_frame(ctx, frame_layout);
             }
         }
 
-        if self.lazy_frame_plan_matches(|plan| plan.exit_after_site(site)) {
-            leave_frame(ctx, frame_size_slots);
+        if self.lazy_frame_plan_matches(|plan| plan.exit_after_site(site))
+            && let Some(frame_layout) = frame_layout
+        {
+            leave_frame(ctx, frame_layout);
         }
     }
 
@@ -245,7 +261,7 @@ impl<'a> EvmFunctionLowering<'a> {
         alloc: &mut dyn Allocator,
         function: &Function,
     ) {
-        let frame_size_slots = alloc.frame_size_slots();
+        let frame_layout = self.frame_layout();
         let actions = alloc.enter_function(function);
         debug_assert!(
             !(self.function_plan.dyn_sp_plan.entry_live_frame
@@ -259,27 +275,22 @@ impl<'a> EvmFunctionLowering<'a> {
         }
 
         if self.has_lazy_frame_lowering() {
-            self.emit_actions_for_site(ctx, &actions, frame_size_slots, FrameSite::EnterFunction);
+            self.emit_actions_for_site(ctx, &actions, frame_layout, FrameSite::EnterFunction);
         } else {
-            self.emit_frame_enter(ctx, frame_size_slots);
-            perform_actions(ctx, &actions, frame_size_slots);
+            if let Some(frame_layout) = frame_layout {
+                self.emit_frame_enter(ctx, frame_layout);
+            }
+            perform_actions(ctx, &actions, frame_layout);
         }
     }
 
-    fn enter_block(&self, ctx: &mut Lower<OpCode>, alloc: &mut dyn Allocator, block: BlockId) {
+    fn enter_block(&self, ctx: &mut Lower<OpCode>, _: &mut dyn Allocator, block: BlockId) {
         if self.is_elided_block(block) {
             return;
         }
 
-        self.emit_lazy_frame_enter_if_site_matches(
-            ctx,
-            alloc.frame_size_slots(),
-            FrameSite::BlockEntry(block),
-        );
-        self.emit_lazy_frame_leave_if_site_matches(
-            ctx,
-            alloc.frame_size_slots(),
-            FrameSite::BlockEntry(block),
-        );
+        let frame_layout = self.frame_layout();
+        self.emit_lazy_frame_enter_if_site_matches(ctx, frame_layout, FrameSite::BlockEntry(block));
+        self.emit_lazy_frame_leave_if_site_matches(ctx, frame_layout, FrameSite::BlockEntry(block));
     }
 }
