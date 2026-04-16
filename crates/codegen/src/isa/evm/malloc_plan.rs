@@ -15,6 +15,7 @@ use sonatina_ir::{
 use crate::{bitset::BitSet, liveness::InstLiveness};
 
 use super::{
+    escape_scan::{EscapeScanCtx, EscapeSink, EscapeSource, for_each_escape_event_at_inst},
     mem_effects::FuncMemEffects,
     provenance::{Provenance, compute_provenance},
     ptr_escape::PtrEscapeSummary,
@@ -79,68 +80,29 @@ pub(crate) fn should_restore_free_ptr_on_internal_returns(
     });
     let prov = &prov_info.value;
     let local_mem = &prov_info.local_mem;
+    let scan_ctx = EscapeScanCtx {
+        module,
+        isa,
+        ptr_escape,
+        prov,
+        local_mem,
+    };
 
     for block in function.layout.iter_block() {
         for inst in function.layout.iter_inst(block) {
-            let data = isa.inst_set().resolve_inst(function.dfg.inst(inst));
-            match data {
-                EvmInstKind::Return(_) => {
-                    let Some(ret_args) = function.dfg.return_args(inst) else {
-                        continue;
-                    };
-                    for &ret_val in ret_args {
-                        if value_may_be_heap_derived(function, module, ret_val, prov) {
-                            return false;
-                        }
-                    }
+            let mut escapes_heap = false;
+            for_each_escape_event_at_inst(function, inst, scan_ctx, |event| match event.source {
+                EscapeSource::Value(value) => {
+                    escapes_heap |= value_may_be_heap_derived(function, module, value, prov);
                 }
-                EvmInstKind::Mstore(mstore) => {
-                    let addr = *mstore.addr();
-                    if prov[addr].is_local_addr() {
-                        continue;
-                    }
-
-                    let val = *mstore.value();
-                    if value_may_be_heap_derived(function, module, val, prov) {
-                        return false;
-                    }
+                EscapeSource::LocalMem { stored, .. } => {
+                    escapes_heap |=
+                        stored.is_unknown_ptr() || stored.malloc_insts().next().is_some();
                 }
-                EvmInstKind::EvmMstore8(mstore8) => {
-                    let addr = *mstore8.addr();
-                    if prov[addr].is_local_addr() {
-                        continue;
-                    }
-
-                    let val = *mstore8.val();
-                    if value_may_be_heap_derived(function, module, val, prov) {
-                        return false;
-                    }
-                }
-                EvmInstKind::EvmMcopy(mcopy) => {
-                    let dest = *mcopy.dest();
-                    if prov[dest].is_local_addr() {
-                        continue;
-                    }
-                    let src = *mcopy.addr();
-                    if local_copy_source_may_be_heap_derived(src, prov, local_mem) {
-                        return false;
-                    }
-                }
-                EvmInstKind::Call(call) => {
-                    let callee = *call.callee();
-                    let callee_sum = ptr_escape
-                        .get(&callee)
-                        .cloned()
-                        .unwrap_or_else(|| conservative_unknown_ptr_summary(module, callee));
-                    for (idx, &arg) in call.args().iter().enumerate() {
-                        if callee_sum.call_arg_may_escape_nonlocal(idx, call.args(), prov)
-                            && value_may_be_heap_derived(function, module, arg, prov)
-                        {
-                            return false;
-                        }
-                    }
-                }
-                _ => {}
+                EscapeSource::UnknownCopy => escapes_heap = true,
+            });
+            if escapes_heap {
+                return false;
             }
         }
     }
@@ -454,29 +416,6 @@ fn record_unknown_seen_mallocs(
     }
 }
 
-fn local_copy_source_may_be_heap_derived(
-    src: ValueId,
-    prov: &SecondaryMap<ValueId, Provenance>,
-    local_mem: &FxHashMap<InstId, Provenance>,
-) -> bool {
-    let src_prov = &prov[src];
-    if !src_prov.is_local_addr() {
-        return true;
-    }
-
-    let mut any = false;
-    for base in src_prov.alloca_insts() {
-        any = true;
-        if let Some(stored) = local_mem.get(&base)
-            && (stored.is_unknown_ptr() || stored.malloc_insts().next().is_some())
-        {
-            return true;
-        }
-    }
-
-    !any
-}
-
 fn compute_malloc_escape_kinds(
     function: &Function,
     module: &ModuleCtx,
@@ -487,108 +426,48 @@ fn compute_malloc_escape_kinds(
     block_malloc_in: &SecondaryMap<BlockId, BitSet<InstId>>,
 ) -> FxHashMap<InstId, MallocEscapeKind> {
     let mut escape_kinds: FxHashMap<InstId, MallocEscapeKind> = FxHashMap::default();
+    let scan_ctx = EscapeScanCtx {
+        module,
+        isa,
+        ptr_escape,
+        prov,
+        local_mem,
+    };
 
     for block in function.layout.iter_block() {
         let mut seen_mallocs = block_malloc_in[block].clone();
         for inst in function.layout.iter_inst(block) {
-            let data = isa.inst_set().resolve_inst(function.dfg.inst(inst));
-            match data {
-                EvmInstKind::Return(_) => {
-                    let Some(ret_args) = function.dfg.return_args(inst) else {
-                        continue;
-                    };
-                    for &ret_val in ret_args {
-                        record_escaping_mallocs(
-                            &mut escape_kinds,
-                            ret_val,
-                            prov,
-                            &seen_mallocs,
-                            MallocEscapeKind::RETURNS_TO_CALLER,
-                        );
-                    }
-                }
-                EvmInstKind::Mstore(mstore) => {
-                    let addr = *mstore.addr();
-                    if prov[addr].is_local_addr() {
-                        continue;
-                    }
-
-                    let val = *mstore.value();
-                    record_escaping_mallocs(
+            for_each_escape_event_at_inst(function, inst, scan_ctx, |event| {
+                let direct_kind = match event.sink {
+                    EscapeSink::Return => MallocEscapeKind::RETURNS_TO_CALLER,
+                    EscapeSink::NonLocalStore
+                    | EscapeSink::NonLocalCopy
+                    | EscapeSink::CallArg { .. } => MallocEscapeKind::STORED_NON_LOCAL,
+                };
+                match event.source {
+                    EscapeSource::Value(value) => record_escaping_mallocs(
                         &mut escape_kinds,
-                        val,
+                        value,
                         prov,
                         &seen_mallocs,
-                        MallocEscapeKind::STORED_NON_LOCAL,
-                    );
-                }
-                EvmInstKind::EvmMstore8(mstore8) => {
-                    let addr = *mstore8.addr();
-                    if prov[addr].is_local_addr() {
-                        continue;
-                    }
-
-                    let val = *mstore8.val();
-                    record_escaping_mallocs(
+                        direct_kind,
+                    ),
+                    EscapeSource::LocalMem { stored, .. } => record_escaping_provenance(
                         &mut escape_kinds,
-                        val,
-                        prov,
+                        stored,
                         &seen_mallocs,
-                        MallocEscapeKind::STORED_NON_LOCAL,
-                    );
-                }
-                EvmInstKind::EvmMcopy(mcopy) => {
-                    let dest = *mcopy.dest();
-                    if prov[dest].is_local_addr() {
-                        continue;
+                        direct_kind,
+                    ),
+                    EscapeSource::UnknownCopy => {
+                        record_unknown_seen_mallocs(&mut escape_kinds, &seen_mallocs)
                     }
+                }
+            });
 
-                    let src = *mcopy.addr();
-                    let src_prov = &prov[src];
-                    if src_prov.is_local_addr() {
-                        let mut any = false;
-                        for base in src_prov.alloca_insts() {
-                            any = true;
-                            if let Some(stored) = local_mem.get(&base) {
-                                record_escaping_provenance(
-                                    &mut escape_kinds,
-                                    stored,
-                                    &seen_mallocs,
-                                    MallocEscapeKind::STORED_NON_LOCAL,
-                                );
-                            }
-                        }
-                        if !any {
-                            record_unknown_seen_mallocs(&mut escape_kinds, &seen_mallocs);
-                        }
-                    } else {
-                        // Unknown source bytes copied to non-local memory may include malloc-derived
-                        // pointers from this function.
-                        record_unknown_seen_mallocs(&mut escape_kinds, &seen_mallocs);
-                    }
-                }
-                EvmInstKind::Call(call) => {
-                    let callee = *call.callee();
-                    let callee_sum = ptr_escape
-                        .get(&callee)
-                        .cloned()
-                        .unwrap_or_else(|| conservative_unknown_ptr_summary(module, callee));
-                    for (idx, &arg) in call.args().iter().enumerate() {
-                        if callee_sum.call_arg_may_escape_nonlocal(idx, call.args(), prov) {
-                            record_escaping_mallocs(
-                                &mut escape_kinds,
-                                arg,
-                                prov,
-                                &seen_mallocs,
-                                MallocEscapeKind::STORED_NON_LOCAL,
-                            );
-                        }
-                    }
-                }
-                _ => {}
-            }
-
-            if matches!(data, EvmInstKind::EvmMalloc(_)) {
+            if matches!(
+                isa.inst_set().resolve_inst(function.dfg.inst(inst)),
+                EvmInstKind::EvmMalloc(_)
+            ) {
                 seen_mallocs.insert(inst);
             }
         }
