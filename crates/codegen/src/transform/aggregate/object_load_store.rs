@@ -674,15 +674,7 @@ fn handle_call_backward(
         return false;
     };
     let Some(summary) = object_effects.and_then(|effects| effects.get(call.callee())) else {
-        let (roots, observed_unknown) =
-            observed_roots_ignoring_pure_address_ops(func, inst, provenance, &[]);
-        if observed_unknown {
-            mark_all_tracked_roots_live(func, tracked, live);
-        } else {
-            for root in roots {
-                mark_root_live(live, root, tracked_root_total_leaves(tracked, root));
-            }
-        }
+        mark_observed_roots_live(func, inst, tracked, provenance, live, &[]);
         return true;
     };
     let call_result = single_result_value(func, inst);
@@ -866,6 +858,25 @@ fn clear_or_mark_live_slice(live: &mut LiveLeafMap, base_slice: ObjectSlice, mar
     }
 }
 
+fn mark_observed_roots_live(
+    func: &Function,
+    inst: InstId,
+    tracked: &SecondaryMap<ValueId, Option<TrackedObject>>,
+    provenance: MayProvenance<'_>,
+    live: &mut LiveLeafMap,
+    skip: &[ValueId],
+) {
+    let (roots, observed_unknown) =
+        observed_roots_ignoring_pure_address_ops(func, inst, provenance, skip);
+    if observed_unknown {
+        mark_all_tracked_roots_live(func, tracked, live);
+        return;
+    }
+    for root in roots {
+        mark_root_live(live, root, tracked_root_total_leaves(tracked, root));
+    }
+}
+
 fn transfer_backward_live(
     func: &Function,
     inst: InstId,
@@ -885,32 +896,19 @@ fn transfer_backward_live(
                 provenance.may_roots(*obj_load.object()),
             );
         }
-        let (roots, observed_unknown) =
-            observed_roots_ignoring_pure_address_ops(func, inst, provenance, &[*obj_load.object()]);
-        if observed_unknown {
-            mark_all_tracked_roots_live(func, tracked, live);
-        } else {
-            for root in roots {
-                mark_root_live(live, root, tracked_root_total_leaves(tracked, root));
-            }
-        }
+        mark_observed_roots_live(func, inst, tracked, provenance, live, &[*obj_load.object()]);
         return;
     }
 
     if let Some(obj_store) = downcast::<&data::ObjStore>(func.inst_set(), func.dfg.inst(inst)) {
-        let (roots, observed_unknown) = observed_roots_ignoring_pure_address_ops(
+        mark_observed_roots_live(
             func,
             inst,
+            tracked,
             provenance,
+            live,
             &[*obj_store.object()],
         );
-        if observed_unknown {
-            mark_all_tracked_roots_live(func, tracked, live);
-        } else {
-            for root in roots {
-                mark_root_live(live, root, tracked_root_total_leaves(tracked, root));
-            }
-        }
 
         let Some(tracked_object) = tracked[*obj_store.object()].as_ref().copied() else {
             mark_live_may_roots(
@@ -953,19 +951,14 @@ fn transfer_backward_live(
                 provenance.may_roots(*enum_get_tag.object()),
             );
         }
-        let (roots, observed_unknown) = observed_roots_ignoring_pure_address_ops(
+        mark_observed_roots_live(
             func,
             inst,
+            tracked,
             provenance,
+            live,
             &[*enum_get_tag.object()],
         );
-        if observed_unknown {
-            mark_all_tracked_roots_live(func, tracked, live);
-        } else {
-            for root in roots {
-                mark_root_live(live, root, tracked_root_total_leaves(tracked, root));
-            }
-        }
         return;
     }
 
@@ -987,19 +980,14 @@ fn transfer_backward_live(
 
     if let Some(enum_set_tag) = downcast::<&data::EnumSetTag>(func.inst_set(), func.dfg.inst(inst))
     {
-        let (roots, observed_unknown) = observed_roots_ignoring_pure_address_ops(
+        mark_observed_roots_live(
             func,
             inst,
+            tracked,
             provenance,
+            live,
             &[*enum_set_tag.object()],
         );
-        if observed_unknown {
-            mark_all_tracked_roots_live(func, tracked, live);
-        } else {
-            for root in roots {
-                mark_root_live(live, root, tracked_root_total_leaves(tracked, root));
-            }
-        }
         let Some(tracked_object) = tracked[*enum_set_tag.object()].as_ref().copied() else {
             mark_live_may_roots(
                 func,
@@ -1028,19 +1016,14 @@ fn transfer_backward_live(
     if let Some(enum_write_variant) =
         downcast::<&data::EnumWriteVariant>(func.inst_set(), func.dfg.inst(inst))
     {
-        let (roots, observed_unknown) = observed_roots_ignoring_pure_address_ops(
+        mark_observed_roots_live(
             func,
             inst,
+            tracked,
             provenance,
+            live,
             &[*enum_write_variant.object()],
         );
-        if observed_unknown {
-            mark_all_tracked_roots_live(func, tracked, live);
-        } else {
-            for root in roots {
-                mark_root_live(live, root, tracked_root_total_leaves(tracked, root));
-            }
-        }
         let Some(tracked_object) = tracked[*enum_write_variant.object()].as_ref().copied() else {
             mark_live_may_roots(
                 func,
@@ -1059,19 +1042,8 @@ fn transfer_backward_live(
             );
             return;
         };
-        if let Some(tag_slice) = enum_tag_object_slice(func.ctx(), base_slice) {
-            clear_live_slice(live, tag_slice);
-        }
-        for field_idx in 0..enum_write_variant.values().len() {
-            let Some(field_slice) = enum_variant_field_object_slice(
-                func.ctx(),
-                base_slice,
-                *enum_write_variant.variant(),
-                u32::try_from(field_idx).ok().unwrap_or(u32::MAX),
-            ) else {
-                continue;
-            };
-            clear_live_slice(live, field_slice);
+        for slice in enum_write_variant_slices(func.ctx(), base_slice, enum_write_variant) {
+            clear_live_slice(live, slice);
         }
         return;
     }
@@ -1080,15 +1052,7 @@ fn transfer_backward_live(
         return;
     }
 
-    let (roots, observed_unknown) =
-        observed_roots_ignoring_pure_address_ops(func, inst, provenance, &[]);
-    if observed_unknown {
-        mark_all_tracked_roots_live(func, tracked, live);
-    } else {
-        for root in roots {
-            mark_root_live(live, root, tracked_root_total_leaves(tracked, root));
-        }
-    }
+    mark_observed_roots_live(func, inst, tracked, provenance, live, &[]);
 }
 
 fn try_remove_dead_store(
