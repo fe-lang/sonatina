@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/evm.rs
+assertion_line: 448
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/loops.sntn
 ---
@@ -281,22 +282,22 @@ __Bench_runtime:
     RETURN
   block34:
     JUMPDEST
-    DUP2  // v96.i256 = add v88 v90;
+    DUP2  // v94.i256 = add v88 v90;
     DUP2
     ADD
-    SWAP1  // v97.i1 = lt v96 v88;
+    SWAP1  // v95.i1 = lt v94 v88;
     DUP2
     LT
-    PUSH1 block36  // br v97 block47 block37;
+    PUSH1 block36  // br v95 block47 block37;
     JUMPI
   block37:
-    PUSH1 0x1 (1)  // v98.i256 = add v90 1.i256;
+    PUSH1 0x1 (1)  // v96.i256 = add v90 1.i256;
     DUP3
     ADD
-    SWAP2  // v99.i1 = lt v98 v90;
+    SWAP2  // v97.i1 = lt v96 v90;
     DUP3
     LT
-    ISZERO  // br v99 block49 block48;
+    ISZERO  // br v97 block49 block48;
     PUSH1 block33
     JUMPI
   block36:
