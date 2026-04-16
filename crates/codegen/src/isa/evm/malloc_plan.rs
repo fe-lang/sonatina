@@ -80,12 +80,14 @@ pub(crate) fn should_restore_free_ptr_on_internal_returns(
     });
     let prov = &prov_info.value;
     let local_mem = &prov_info.local_mem;
+    let arg_mem = &prov_info.arg_mem;
     let scan_ctx = EscapeScanCtx {
         module,
         isa,
         ptr_escape,
         prov,
         local_mem,
+        arg_mem,
     };
 
     for block in function.layout.iter_block() {
@@ -186,17 +188,18 @@ pub(crate) fn compute_transient_mallocs(
     });
     let prov = &prov_info.value;
     let local_mem = &prov_info.local_mem;
-
-    let block_malloc_in = compute_block_malloc_in(function, isa);
-    let escape_kinds = compute_malloc_escape_kinds(
-        function,
+    let arg_mem = &prov_info.arg_mem;
+    let scan_ctx = EscapeScanCtx {
         module,
         isa,
         ptr_escape,
         prov,
         local_mem,
-        &block_malloc_in,
-    );
+        arg_mem,
+    };
+
+    let block_malloc_in = compute_block_malloc_in(function, isa);
+    let escape_kinds = compute_malloc_escape_kinds(function, scan_ctx, &block_malloc_in);
 
     for malloc in escape_kinds.keys() {
         mallocs.remove(malloc);
@@ -269,16 +272,17 @@ pub(crate) fn compute_malloc_escape_kinds_for_function(
     });
     let prov = &prov_info.value;
     let local_mem = &prov_info.local_mem;
-    let block_malloc_in = compute_block_malloc_in(function, isa);
-    compute_malloc_escape_kinds(
-        function,
+    let arg_mem = &prov_info.arg_mem;
+    let scan_ctx = EscapeScanCtx {
         module,
         isa,
         ptr_escape,
         prov,
         local_mem,
-        &block_malloc_in,
-    )
+        arg_mem,
+    };
+    let block_malloc_in = compute_block_malloc_in(function, isa);
+    compute_malloc_escape_kinds(function, scan_ctx, &block_malloc_in)
 }
 
 fn remove_live_mallocs(
@@ -418,21 +422,11 @@ fn record_unknown_seen_mallocs(
 
 fn compute_malloc_escape_kinds(
     function: &Function,
-    module: &ModuleCtx,
-    isa: &Evm,
-    ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
-    prov: &SecondaryMap<ValueId, Provenance>,
-    local_mem: &FxHashMap<InstId, Provenance>,
+    scan_ctx: EscapeScanCtx<'_>,
     block_malloc_in: &SecondaryMap<BlockId, BitSet<InstId>>,
 ) -> FxHashMap<InstId, MallocEscapeKind> {
     let mut escape_kinds: FxHashMap<InstId, MallocEscapeKind> = FxHashMap::default();
-    let scan_ctx = EscapeScanCtx {
-        module,
-        isa,
-        ptr_escape,
-        prov,
-        local_mem,
-    };
+    let prov = scan_ctx.prov;
 
     for block in function.layout.iter_block() {
         let mut seen_mallocs = block_malloc_in[block].clone();
@@ -444,6 +438,7 @@ fn compute_malloc_escape_kinds(
                     | EscapeSink::NonLocalCopy
                     | EscapeSink::CallArg { .. } => MallocEscapeKind::STORED_NON_LOCAL,
                 };
+
                 match event.source {
                     EscapeSource::Value(value) => record_escaping_mallocs(
                         &mut escape_kinds,
@@ -465,7 +460,10 @@ fn compute_malloc_escape_kinds(
             });
 
             if matches!(
-                isa.inst_set().resolve_inst(function.dfg.inst(inst)),
+                scan_ctx
+                    .isa
+                    .inst_set()
+                    .resolve_inst(function.dfg.inst(inst)),
                 EvmInstKind::EvmMalloc(_)
             ) {
                 seen_mallocs.insert(inst);
