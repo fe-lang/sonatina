@@ -20,7 +20,7 @@ use super::{
         enum_tag_object_slice, enum_variant_field_object_slice, objref_element_ty, slices_overlap,
         whole_root_slice,
     },
-    provenance::{MayProvenance, MayRootSet, ProvenanceFacts},
+    provenance::{MayProvenance, MayRootSet, ProvenanceFacts, RootValue},
     reconstruct::AggregateValueReconstructor,
     shape,
 };
@@ -38,42 +38,126 @@ enum AggregateFieldLookup {
     Unknown,
 }
 
-type EnumObjectFacts = FxHashMap<ObjectSlice, KnownEnumObjectState>;
-type PendingEnumWrites = FxHashMap<ObjectSlice, PendingEnumWrite>;
+type EnumObjectFacts = FxHashMap<ExactEnumSlice, KnownEnumObjectState>;
+type PendingEnumWrites = FxHashMap<ExactEnumSlice, PendingEnumWrite>;
 type EnumLiveMap = LiveLeafMap;
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct ExactObjectSlice(ObjectSlice);
+impl ExactObjectSlice {
+    fn new(slice: ObjectSlice) -> Self {
+        Self(slice)
+    }
 
+    fn slice(self) -> ObjectSlice {
+        self.0
+    }
+
+    fn root(self) -> RootValue {
+        RootValue::new(self.0.root)
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct ExactEnumSlice(ExactObjectSlice);
+impl ExactEnumSlice {
+    fn new(func: &Function, slice: ExactObjectSlice) -> Option<Self> {
+        is_enum_compound_ty(func.ctx(), slice.slice().ty).then_some(Self(slice))
+    }
+
+    fn slice(self) -> ObjectSlice {
+        self.0.slice()
+    }
+
+    fn root(self) -> RootValue {
+        self.0.root()
+    }
+}
 #[derive(Clone, Copy)]
-struct EnumRootProvenance<'a> {
+struct EnumAliasContext<'a> {
     tracked: &'a SecondaryMap<ValueId, Option<TrackedObject>>,
     may: MayProvenance<'a>,
 }
+impl<'a> EnumAliasContext<'a> {
+    fn exact_object(self, value: ValueId) -> Option<ExactObjectSlice> {
+        self.tracked[value]
+            .as_ref()
+            .copied()
+            .and_then(TrackedObject::exact)
+            .map(ExactObjectSlice::new)
+    }
 
-enum ObjectAlias {
-    Exact(ObjectSlice),
-    Roots(SmallVec<[ValueId; 4]>),
+    fn exact_enum(self, func: &Function, value: ValueId) -> Option<ExactEnumSlice> {
+        self.exact_object(value)
+            .and_then(|slice| ExactEnumSlice::new(func, slice))
+    }
+
+    fn exact_local(
+        self,
+        func: &Function,
+        local_roots: &FxHashSet<ValueId>,
+        value: ValueId,
+    ) -> Option<ExactEnumSlice> {
+        let slice = self.exact_enum(func, value)?;
+        local_roots.contains(&slice.root().value()).then_some(slice)
+    }
+
+    fn observed(self, value: ValueId) -> EnumAlias {
+        if let Some(tracked_object) = self.tracked[value].as_ref().copied() {
+            return match tracked_object {
+                TrackedObject::Exact(slice) => EnumAlias::Exact(ExactObjectSlice::new(slice)),
+                TrackedObject::RootUnknown { root, .. } => {
+                    EnumAlias::Roots(smallvec![RootValue::new(root)])
+                }
+            };
+        }
+
+        let roots = self.may_root_set(value);
+        if roots.has_unknown() {
+            return EnumAlias::Unknown;
+        }
+        let Some(roots) = roots
+            .exhaustive_known_roots()
+            .filter(|roots| !roots.is_empty())
+        else {
+            return EnumAlias::None;
+        };
+
+        let mut observed = SmallVec::new();
+        for root in roots.iter() {
+            if !observed.contains(&root) {
+                observed.push(root);
+            }
+        }
+        EnumAlias::Roots(observed)
+    }
+
+    fn may_root_set(self, value: ValueId) -> MayRootSet<'a> {
+        self.may.may_roots(value)
+    }
+}
+enum EnumAlias {
+    // Exact aliases stay object-typed because non-enum projections still need to conservatively
+    // kill overlapping enum state by slice.
+    Exact(ExactObjectSlice),
+    Roots(SmallVec<[RootValue; 4]>),
     Unknown,
     None,
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct KnownEnumObjectState {
     variant: EnumVariantRef,
     payloads: SmallVec<[Option<ValueId>; 2]>,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PendingEnumWriteKind {
     SetTag,
     WriteVariant,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct PendingEnumWrite {
     inst: InstId,
     kind: PendingEnumWriteKind,
     variant: EnumVariantRef,
 }
-
 fn collect_combine_enum_root_provenance(
     func: &Function,
     layout_cache: &mut shape::AggregateLayoutCache,
@@ -87,7 +171,6 @@ fn collect_combine_enum_root_provenance(
     }
     collect_root_provenance(func, func.ctx(), &root_slices, layout_cache, None)
 }
-
 impl AggregateCombine {
     pub fn run(&mut self, func: &mut Function) -> bool {
         self.changed = false;
@@ -104,11 +187,11 @@ impl AggregateCombine {
                 enum_root_provenance.complete(),
                 &mut self.layout_cache,
             );
-            let enum_root_provenance = EnumRootProvenance {
+            let enum_aliases = EnumAliasContext {
                 tracked: &tracked,
                 may: enum_root_provenance.may(),
             };
-            let enum_entry_facts = compute_enum_object_entry_facts(func, enum_root_provenance);
+            let enum_entry_facts = compute_enum_object_entry_facts(func, enum_aliases);
             let blocks: Vec<_> = func.layout.iter_block().collect();
             for block in blocks {
                 let mut enum_facts = enum_entry_facts[block].clone();
@@ -121,7 +204,7 @@ impl AggregateCombine {
                     iter_changed |= self.try_rewrite_enum_object_inst(
                         func,
                         inst,
-                        enum_root_provenance,
+                        enum_aliases,
                         &mut enum_facts,
                         &mut pending_enum_writes,
                     );
@@ -149,7 +232,7 @@ impl AggregateCombine {
         &mut self,
         func: &mut Function,
         inst: InstId,
-        root_provenance: EnumRootProvenance<'_>,
+        enum_aliases: EnumAliasContext<'_>,
         enum_facts: &mut EnumObjectFacts,
         pending_enum_writes: &mut PendingEnumWrites,
     ) -> bool {
@@ -158,16 +241,14 @@ impl AggregateCombine {
         {
             clear_pending_enum_writes_for_alias(
                 pending_enum_writes,
-                root_provenance,
+                enum_aliases,
                 *enum_get_tag.object(),
             );
 
             let Some(result) = func.dfg.inst_result(inst) else {
                 return false;
             };
-            let Some(object) =
-                exact_enum_object_slice(func, root_provenance, *enum_get_tag.object())
-            else {
+            let Some(object) = enum_aliases.exact_enum(func, *enum_get_tag.object()) else {
                 return false;
             };
             let Some(state) = enum_facts.get(&object) else {
@@ -184,12 +265,10 @@ impl AggregateCombine {
         {
             clear_pending_enum_writes_for_alias(
                 pending_enum_writes,
-                root_provenance,
+                enum_aliases,
                 *enum_assert_ref.object(),
             );
-            let Some(object) =
-                exact_enum_object_slice(func, root_provenance, *enum_assert_ref.object())
-            else {
+            let Some(object) = enum_aliases.exact_enum(func, *enum_assert_ref.object()) else {
                 return false;
             };
             let redundant = enum_facts.get(&object).is_some_and(|state| {
@@ -214,11 +293,10 @@ impl AggregateCombine {
         {
             clear_pending_enum_writes_for_alias(
                 pending_enum_writes,
-                root_provenance,
+                enum_aliases,
                 *enum_proj.object(),
             );
-            let Some(object) = exact_enum_object_slice(func, root_provenance, *enum_proj.object())
-            else {
+            let Some(object) = enum_aliases.exact_enum(func, *enum_proj.object()) else {
                 return false;
             };
 
@@ -241,8 +319,7 @@ impl AggregateCombine {
             downcast::<&data::ObjStore>(func.inst_set(), func.dfg.inst(inst)).cloned()
             && let Some(enum_proj) = enum_proj_of_value(func, *obj_store.object())
         {
-            if let Some(object) =
-                exact_enum_object_slice(func, root_provenance, *enum_proj.object())
+            if let Some(object) = enum_aliases.exact_enum(func, *enum_proj.object())
                 && let Some(field_idx) = inst_const_index(func, *enum_proj.field())
             {
                 kill_overlapping_enum_state_except(enum_facts, pending_enum_writes, object);
@@ -257,7 +334,7 @@ impl AggregateCombine {
                 kill_enum_state_for_alias(
                     enum_facts,
                     pending_enum_writes,
-                    root_provenance,
+                    enum_aliases,
                     *enum_proj.object(),
                 );
             }
@@ -267,13 +344,11 @@ impl AggregateCombine {
         if let Some(enum_set_tag) =
             downcast::<&data::EnumSetTag>(func.inst_set(), func.dfg.inst(inst)).cloned()
         {
-            let Some(object) =
-                exact_enum_object_slice(func, root_provenance, *enum_set_tag.object())
-            else {
+            let Some(object) = enum_aliases.exact_enum(func, *enum_set_tag.object()) else {
                 kill_enum_state_for_alias(
                     enum_facts,
                     pending_enum_writes,
-                    root_provenance,
+                    enum_aliases,
                     *enum_set_tag.object(),
                 );
                 return false;
@@ -301,13 +376,11 @@ impl AggregateCombine {
         if let Some(enum_write_variant) =
             downcast::<&data::EnumWriteVariant>(func.inst_set(), func.dfg.inst(inst)).cloned()
         {
-            let Some(object) =
-                exact_enum_object_slice(func, root_provenance, *enum_write_variant.object())
-            else {
+            let Some(object) = enum_aliases.exact_enum(func, *enum_write_variant.object()) else {
                 kill_enum_state_for_alias(
                     enum_facts,
                     pending_enum_writes,
-                    root_provenance,
+                    enum_aliases,
                     *enum_write_variant.object(),
                 );
                 return false;
@@ -342,19 +415,13 @@ impl AggregateCombine {
         {
             clear_pending_enum_writes_for_alias(
                 pending_enum_writes,
-                root_provenance,
+                enum_aliases,
                 *enum_proj.object(),
             );
             return false;
         }
 
-        kill_touched_enum_object_facts(
-            func,
-            inst,
-            root_provenance,
-            enum_facts,
-            pending_enum_writes,
-        );
+        kill_touched_enum_object_facts(func, inst, enum_aliases, enum_facts, pending_enum_writes);
         false
     }
 
@@ -771,10 +838,9 @@ impl AggregateCombine {
         true
     }
 }
-
 fn compute_enum_object_entry_facts(
     func: &Function,
-    root_provenance: EnumRootProvenance<'_>,
+    enum_aliases: EnumAliasContext<'_>,
 ) -> SecondaryMap<BlockId, EnumObjectFacts> {
     let mut cfg = ControlFlowGraph::new();
     cfg.compute(func);
@@ -797,13 +863,7 @@ fn compute_enum_object_entry_facts(
                     .copied()
                     .filter(|pred| reachable[*pred])
                     .map(|pred| {
-                        edge_enum_object_facts(
-                            func,
-                            pred,
-                            block,
-                            &out_states[pred],
-                            root_provenance,
-                        )
+                        edge_enum_object_facts(func, pred, block, &out_states[pred], enum_aliases)
                     }),
             );
             if next_in != in_states[block] {
@@ -818,7 +878,7 @@ fn compute_enum_object_entry_facts(
                     transfer_enum_object_facts(
                         func,
                         inst,
-                        root_provenance,
+                        enum_aliases,
                         &mut state,
                         &mut pending_writes,
                     );
@@ -836,7 +896,6 @@ fn compute_enum_object_entry_facts(
         }
     }
 }
-
 fn remove_dead_local_enum_writes(
     func: &mut Function,
     layout_cache: &mut shape::AggregateLayoutCache,
@@ -848,7 +907,7 @@ fn remove_dead_local_enum_writes(
 
     let root_provenance = collect_combine_enum_root_provenance(func, layout_cache);
     let tracked = collect_tracked_objects(func, root_provenance.complete(), layout_cache);
-    let root_provenance = EnumRootProvenance {
+    let enum_aliases = EnumAliasContext {
         tracked: &tracked,
         may: root_provenance.may(),
     };
@@ -886,13 +945,7 @@ fn remove_dead_local_enum_writes(
                 .rev()
             {
                 if func.layout.is_inst_inserted(inst) {
-                    transfer_backward_enum_live(
-                        func,
-                        inst,
-                        &local_roots,
-                        root_provenance,
-                        &mut live,
-                    );
+                    transfer_backward_enum_live(func, inst, &local_roots, enum_aliases, &mut live);
                 }
             }
 
@@ -925,17 +978,16 @@ fn remove_dead_local_enum_writes(
                 continue;
             }
             let removed =
-                try_remove_dead_local_enum_write(func, inst, &local_roots, root_provenance, &live);
+                try_remove_dead_local_enum_write(func, inst, &local_roots, enum_aliases, &live);
             changed |= removed;
             if !removed {
-                transfer_backward_enum_live(func, inst, &local_roots, root_provenance, &mut live);
+                transfer_backward_enum_live(func, inst, &local_roots, enum_aliases, &mut live);
             }
         }
     }
 
     changed
 }
-
 fn collect_local_object_roots(func: &Function) -> FxHashSet<ValueId> {
     let mut local_roots = FxHashSet::default();
 
@@ -958,7 +1010,6 @@ fn collect_local_object_roots(func: &Function) -> FxHashSet<ValueId> {
 
     local_roots
 }
-
 fn object_root_stays_local(func: &Function, root: ValueId) -> bool {
     let local_object_args = FxHashMap::default();
     object_locality::object_root_stays_local(
@@ -969,163 +1020,105 @@ fn object_root_stays_local(func: &Function, root: ValueId) -> bool {
         false,
     )
 }
-
-fn exact_enum_object_slice(
-    func: &Function,
-    root_provenance: EnumRootProvenance<'_>,
-    value: ValueId,
-) -> Option<ObjectSlice> {
-    root_provenance.tracked[value]
-        .as_ref()
-        .copied()
-        .and_then(TrackedObject::exact)
-        .filter(|slice| is_enum_compound_ty(func.ctx(), slice.ty))
+fn kill_pending_enum_writes_for_root(pending_enum_writes: &mut PendingEnumWrites, root: RootValue) {
+    pending_enum_writes.retain(|slice, _| slice.root() != root);
 }
-
-fn exact_local_enum_object_slice(
-    func: &Function,
-    root_provenance: EnumRootProvenance<'_>,
-    local_roots: &FxHashSet<ValueId>,
-    value: ValueId,
-) -> Option<ObjectSlice> {
-    let slice = exact_enum_object_slice(func, root_provenance, value)?;
-    local_roots.contains(&slice.root).then_some(slice)
-}
-
-fn observed_object_alias(root_provenance: EnumRootProvenance<'_>, value: ValueId) -> ObjectAlias {
-    if let Some(tracked_object) = root_provenance.tracked[value].as_ref().copied() {
-        return match tracked_object {
-            TrackedObject::Exact(slice) => ObjectAlias::Exact(slice),
-            TrackedObject::RootUnknown { root, .. } => ObjectAlias::Roots(smallvec![root]),
-        };
-    }
-
-    let roots = root_provenance.may.may_roots(value);
-    if roots.has_unknown() {
-        return ObjectAlias::Unknown;
-    }
-    let Some(roots) = roots
-        .exhaustive_known_roots()
-        .filter(|roots| !roots.is_empty())
-    else {
-        return ObjectAlias::None;
-    };
-
-    let mut observed = SmallVec::new();
-    for root in roots.iter() {
-        let root = root.value();
-        if !observed.contains(&root) {
-            observed.push(root);
-        }
-    }
-    ObjectAlias::Roots(observed)
-}
-
-fn kill_pending_enum_writes_for_root(pending_enum_writes: &mut PendingEnumWrites, root: ValueId) {
-    pending_enum_writes.retain(|slice, _| slice.root != root);
-}
-
 fn kill_overlapping_pending_enum_writes(
     pending_enum_writes: &mut PendingEnumWrites,
-    slice: ObjectSlice,
+    slice: ExactObjectSlice,
 ) {
-    pending_enum_writes.retain(|other, _| !slices_overlap(*other, slice));
+    pending_enum_writes.retain(|other, _| !slices_overlap(other.slice(), slice.slice()));
 }
-
 fn clear_pending_enum_writes_for_alias(
     pending_enum_writes: &mut PendingEnumWrites,
-    root_provenance: EnumRootProvenance<'_>,
+    enum_aliases: EnumAliasContext<'_>,
     value: ValueId,
 ) {
-    match observed_object_alias(root_provenance, value) {
-        ObjectAlias::Exact(slice) => {
-            kill_overlapping_pending_enum_writes(pending_enum_writes, slice)
-        }
-        ObjectAlias::Roots(roots) => {
+    match enum_aliases.observed(value) {
+        EnumAlias::Exact(slice) => kill_overlapping_pending_enum_writes(pending_enum_writes, slice),
+        EnumAlias::Roots(roots) => {
             for root in roots {
                 kill_pending_enum_writes_for_root(pending_enum_writes, root);
             }
         }
-        ObjectAlias::Unknown => pending_enum_writes.clear(),
-        ObjectAlias::None => {}
+        EnumAlias::Unknown => pending_enum_writes.clear(),
+        EnumAlias::None => {}
     }
 }
-
 fn kill_root_enum_state(
     enum_facts: &mut EnumObjectFacts,
     pending_enum_writes: &mut PendingEnumWrites,
-    root: ValueId,
+    root: RootValue,
 ) {
-    enum_facts.retain(|slice, _| slice.root != root);
-    pending_enum_writes.retain(|slice, _| slice.root != root);
+    enum_facts.retain(|slice, _| slice.root() != root);
+    pending_enum_writes.retain(|slice, _| slice.root() != root);
 }
-
 fn kill_overlapping_enum_state(
     enum_facts: &mut EnumObjectFacts,
     pending_enum_writes: &mut PendingEnumWrites,
-    slice: ObjectSlice,
+    slice: ExactObjectSlice,
 ) {
-    enum_facts.retain(|other, _| !slices_overlap(*other, slice));
-    pending_enum_writes.retain(|other, _| !slices_overlap(*other, slice));
+    enum_facts.retain(|other, _| !slices_overlap(other.slice(), slice.slice()));
+    pending_enum_writes.retain(|other, _| !slices_overlap(other.slice(), slice.slice()));
 }
-
 fn kill_overlapping_enum_state_except(
     enum_facts: &mut EnumObjectFacts,
     pending_enum_writes: &mut PendingEnumWrites,
-    slice: ObjectSlice,
+    slice: ExactEnumSlice,
 ) {
-    enum_facts.retain(|other, _| *other == slice || !slices_overlap(*other, slice));
-    pending_enum_writes.retain(|other, _| *other == slice || !slices_overlap(*other, slice));
+    enum_facts.retain(|other, _| *other == slice || !slices_overlap(other.slice(), slice.slice()));
+    pending_enum_writes
+        .retain(|other, _| *other == slice || !slices_overlap(other.slice(), slice.slice()));
 }
-
 fn kill_enum_state_for_alias(
     enum_facts: &mut EnumObjectFacts,
     pending_enum_writes: &mut PendingEnumWrites,
-    root_provenance: EnumRootProvenance<'_>,
+    enum_aliases: EnumAliasContext<'_>,
     value: ValueId,
 ) {
-    match observed_object_alias(root_provenance, value) {
-        ObjectAlias::Exact(slice) => {
+    match enum_aliases.observed(value) {
+        EnumAlias::Exact(slice) => {
             kill_overlapping_enum_state(enum_facts, pending_enum_writes, slice)
         }
-        ObjectAlias::Roots(roots) => {
+        EnumAlias::Roots(roots) => {
             for root in roots {
                 kill_root_enum_state(enum_facts, pending_enum_writes, root);
             }
         }
-        ObjectAlias::Unknown => {
+        EnumAlias::Unknown => {
             enum_facts.clear();
             pending_enum_writes.clear();
         }
-        ObjectAlias::None => {}
+        EnumAlias::None => {}
     }
 }
-
 fn is_enum_state_passthrough_inst(func: &Function, inst: InstId) -> bool {
     is_pure_object_address_inst(func, inst)
         || downcast::<&control_flow::Jump>(func.inst_set(), func.dfg.inst(inst)).is_some()
         || downcast::<&control_flow::Br>(func.inst_set(), func.dfg.inst(inst)).is_some()
         || downcast::<&control_flow::BrTable>(func.inst_set(), func.dfg.inst(inst)).is_some()
 }
-
 fn observed_object_roots(
     func: &Function,
     inst: InstId,
-    root_provenance: EnumRootProvenance<'_>,
+    enum_aliases: EnumAliasContext<'_>,
     skip: &[ValueId],
-) -> (Vec<ValueId>, bool) {
+) -> (Vec<RootValue>, bool) {
     if is_enum_state_passthrough_inst(func, inst) {
         return (Vec::new(), false);
     }
-    let (roots, observed_unknown) = observed_roots(func, inst, root_provenance.may, skip);
-    (roots.into_vec(), observed_unknown)
-}
 
+    let (roots, observed_unknown) = observed_roots(func, inst, enum_aliases.may, skip);
+    (
+        roots.into_iter().map(RootValue::new).collect(),
+        observed_unknown,
+    )
+}
 fn transfer_backward_enum_live(
     func: &Function,
     inst: InstId,
     local_roots: &FxHashSet<ValueId>,
-    root_provenance: EnumRootProvenance<'_>,
+    enum_aliases: EnumAliasContext<'_>,
     live: &mut EnumLiveMap,
 ) {
     if is_enum_state_passthrough_inst(func, inst) {
@@ -1134,25 +1127,24 @@ fn transfer_backward_enum_live(
 
     if let Some(obj_load) = downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst)) {
         if let Some((object, variant, field)) = enum_field_of_value(func, *obj_load.object())
-            && let Some(base_slice) =
-                exact_local_enum_object_slice(func, root_provenance, local_roots, object)
+            && let Some(base_slice) = enum_aliases.exact_local(func, local_roots, object)
             && let Some(field_slice) =
-                enum_variant_field_object_slice(func.ctx(), base_slice, variant, field)
+                enum_variant_field_object_slice(func.ctx(), base_slice.slice(), variant, field)
         {
             mark_live_slice(live, field_slice);
         } else {
             mark_live_may_roots(
                 local_roots,
-                root_provenance.tracked,
+                enum_aliases,
                 live,
-                root_provenance.may.may_roots(*obj_load.object()),
+                enum_aliases.may_root_set(*obj_load.object()),
             );
         }
         mark_observed_local_roots_live(
             func,
             inst,
             local_roots,
-            root_provenance,
+            enum_aliases,
             live,
             &[*obj_load.object()],
         );
@@ -1164,23 +1156,22 @@ fn transfer_backward_enum_live(
             func,
             inst,
             local_roots,
-            root_provenance,
+            enum_aliases,
             live,
             &[*obj_store.object()],
         );
         if let Some((object, variant, field)) = enum_field_of_value(func, *obj_store.object())
-            && let Some(base_slice) =
-                exact_local_enum_object_slice(func, root_provenance, local_roots, object)
+            && let Some(base_slice) = enum_aliases.exact_local(func, local_roots, object)
             && let Some(field_slice) =
-                enum_variant_field_object_slice(func.ctx(), base_slice, variant, field)
+                enum_variant_field_object_slice(func.ctx(), base_slice.slice(), variant, field)
         {
             clear_live_slice(live, field_slice);
         } else {
             mark_live_may_roots(
                 local_roots,
-                root_provenance.tracked,
+                enum_aliases,
                 live,
-                root_provenance.may.may_roots(*obj_store.object()),
+                enum_aliases.may_root_set(*obj_store.object()),
             );
         }
         return;
@@ -1188,21 +1179,17 @@ fn transfer_backward_enum_live(
 
     if let Some(enum_get_tag) = downcast::<&data::EnumGetTag>(func.inst_set(), func.dfg.inst(inst))
     {
-        if let Some(tag_slice) = exact_local_enum_object_slice(
-            func,
-            root_provenance,
-            local_roots,
-            *enum_get_tag.object(),
-        )
-        .and_then(|slice| enum_tag_object_slice(func.ctx(), slice))
+        if let Some(tag_slice) = enum_aliases
+            .exact_local(func, local_roots, *enum_get_tag.object())
+            .and_then(|slice| enum_tag_object_slice(func.ctx(), slice.slice()))
         {
             mark_live_slice(live, tag_slice);
         } else {
             mark_live_may_roots(
                 local_roots,
-                root_provenance.tracked,
+                enum_aliases,
                 live,
-                root_provenance.may.may_roots(*enum_get_tag.object()),
+                enum_aliases.may_root_set(*enum_get_tag.object()),
             );
         }
         return;
@@ -1211,21 +1198,17 @@ fn transfer_backward_enum_live(
     if let Some(enum_assert_ref) =
         downcast::<&data::EnumAssertVariantRef>(func.inst_set(), func.dfg.inst(inst))
     {
-        if let Some(tag_slice) = exact_local_enum_object_slice(
-            func,
-            root_provenance,
-            local_roots,
-            *enum_assert_ref.object(),
-        )
-        .and_then(|slice| enum_tag_object_slice(func.ctx(), slice))
+        if let Some(tag_slice) = enum_aliases
+            .exact_local(func, local_roots, *enum_assert_ref.object())
+            .and_then(|slice| enum_tag_object_slice(func.ctx(), slice.slice()))
         {
             mark_live_slice(live, tag_slice);
         } else {
             mark_live_may_roots(
                 local_roots,
-                root_provenance.tracked,
+                enum_aliases,
                 live,
-                root_provenance.may.may_roots(*enum_assert_ref.object()),
+                enum_aliases.may_root_set(*enum_assert_ref.object()),
             );
         }
         return;
@@ -1233,21 +1216,17 @@ fn transfer_backward_enum_live(
 
     if let Some(enum_set_tag) = downcast::<&data::EnumSetTag>(func.inst_set(), func.dfg.inst(inst))
     {
-        if let Some(tag_slice) = exact_local_enum_object_slice(
-            func,
-            root_provenance,
-            local_roots,
-            *enum_set_tag.object(),
-        )
-        .and_then(|slice| enum_tag_object_slice(func.ctx(), slice))
+        if let Some(tag_slice) = enum_aliases
+            .exact_local(func, local_roots, *enum_set_tag.object())
+            .and_then(|slice| enum_tag_object_slice(func.ctx(), slice.slice()))
         {
             clear_live_slice(live, tag_slice);
         } else {
             mark_live_may_roots(
                 local_roots,
-                root_provenance.tracked,
+                enum_aliases,
                 live,
-                root_provenance.may.may_roots(*enum_set_tag.object()),
+                enum_aliases.may_root_set(*enum_set_tag.object()),
             );
         }
         return;
@@ -1256,50 +1235,47 @@ fn transfer_backward_enum_live(
     if let Some(enum_write_variant) =
         downcast::<&data::EnumWriteVariant>(func.inst_set(), func.dfg.inst(inst))
     {
-        if let Some(base_slice) = exact_local_enum_object_slice(
-            func,
-            root_provenance,
-            local_roots,
-            *enum_write_variant.object(),
-        ) {
-            for slice in enum_write_variant_slices(func.ctx(), base_slice, enum_write_variant) {
+        if let Some(base_slice) =
+            enum_aliases.exact_local(func, local_roots, *enum_write_variant.object())
+        {
+            for slice in
+                enum_write_variant_slices(func.ctx(), base_slice.slice(), enum_write_variant)
+            {
                 clear_live_slice(live, slice);
             }
         } else {
             mark_live_may_roots(
                 local_roots,
-                root_provenance.tracked,
+                enum_aliases,
                 live,
-                root_provenance.may.may_roots(*enum_write_variant.object()),
+                enum_aliases.may_root_set(*enum_write_variant.object()),
             );
         }
         mark_observed_local_roots_live(
             func,
             inst,
             local_roots,
-            root_provenance,
+            enum_aliases,
             live,
             &[*enum_write_variant.object()],
         );
         return;
     }
 
-    mark_observed_local_roots_live(func, inst, local_roots, root_provenance, live, &[]);
+    mark_observed_local_roots_live(func, inst, local_roots, enum_aliases, live, &[]);
 }
-
 fn try_remove_dead_local_enum_write(
     func: &mut Function,
     inst: InstId,
     local_roots: &FxHashSet<ValueId>,
-    root_provenance: EnumRootProvenance<'_>,
+    enum_aliases: EnumAliasContext<'_>,
     live: &EnumLiveMap,
 ) -> bool {
     if let Some(obj_store) = downcast::<&data::ObjStore>(func.inst_set(), func.dfg.inst(inst))
         && let Some((object, variant, field)) = enum_field_of_value(func, *obj_store.object())
-        && let Some(base_slice) =
-            exact_local_enum_object_slice(func, root_provenance, local_roots, object)
+        && let Some(base_slice) = enum_aliases.exact_local(func, local_roots, object)
         && let Some(field_slice) =
-            enum_variant_field_object_slice(func.ctx(), base_slice, variant, field)
+            enum_variant_field_object_slice(func.ctx(), base_slice.slice(), variant, field)
         && !slice_has_live_leaf(live, field_slice)
     {
         InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
@@ -1307,13 +1283,9 @@ fn try_remove_dead_local_enum_write(
     }
 
     if let Some(enum_set_tag) = downcast::<&data::EnumSetTag>(func.inst_set(), func.dfg.inst(inst))
-        && let Some(tag_slice) = exact_local_enum_object_slice(
-            func,
-            root_provenance,
-            local_roots,
-            *enum_set_tag.object(),
-        )
-        .and_then(|slice| enum_tag_object_slice(func.ctx(), slice))
+        && let Some(tag_slice) = enum_aliases
+            .exact_local(func, local_roots, *enum_set_tag.object())
+            .and_then(|slice| enum_tag_object_slice(func.ctx(), slice.slice()))
         && !slice_has_live_leaf(live, tag_slice)
     {
         InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
@@ -1322,13 +1294,9 @@ fn try_remove_dead_local_enum_write(
 
     if let Some(enum_write_variant) =
         downcast::<&data::EnumWriteVariant>(func.inst_set(), func.dfg.inst(inst))
-        && let Some(base_slice) = exact_local_enum_object_slice(
-            func,
-            root_provenance,
-            local_roots,
-            *enum_write_variant.object(),
-        )
-        && !enum_write_variant_slices(func.ctx(), base_slice, enum_write_variant)
+        && let Some(base_slice) =
+            enum_aliases.exact_local(func, local_roots, *enum_write_variant.object())
+        && !enum_write_variant_slices(func.ctx(), base_slice.slice(), enum_write_variant)
             .into_iter()
             .any(|slice| slice_has_live_leaf(live, slice))
     {
@@ -1338,7 +1306,6 @@ fn try_remove_dead_local_enum_write(
 
     false
 }
-
 fn enum_field_of_value(func: &Function, value: ValueId) -> Option<(ValueId, EnumVariantRef, u32)> {
     let enum_proj = enum_proj_of_value(func, value)?;
     Some((
@@ -1347,56 +1314,60 @@ fn enum_field_of_value(func: &Function, value: ValueId) -> Option<(ValueId, Enum
         inst_const_index(func, *enum_proj.field())?,
     ))
 }
-
 fn mark_observed_local_roots_live(
     func: &Function,
     inst: InstId,
     local_roots: &FxHashSet<ValueId>,
-    root_provenance: EnumRootProvenance<'_>,
+    enum_aliases: EnumAliasContext<'_>,
     live: &mut EnumLiveMap,
     skip: &[ValueId],
 ) {
-    let (roots, observed_unknown) = observed_object_roots(func, inst, root_provenance, skip);
+    let (roots, observed_unknown) = observed_object_roots(func, inst, enum_aliases, skip);
     if observed_unknown {
-        mark_all_local_roots_live(local_roots, root_provenance.tracked, live);
+        mark_all_local_roots_live(local_roots, enum_aliases, live);
         return;
     }
     for root in roots {
-        if local_roots.contains(&root) {
+        if local_roots.contains(&root.value()) {
             mark_root_live(
                 live,
-                root,
-                tracked_root_total_leaves(root_provenance.tracked, root),
+                root.value(),
+                tracked_root_total_leaves(enum_aliases.tracked, root.value()),
             );
         }
     }
 }
-
 fn mark_live_may_roots(
     local_roots: &FxHashSet<ValueId>,
-    tracked: &SecondaryMap<ValueId, Option<TrackedObject>>,
+    enum_aliases: EnumAliasContext<'_>,
     live: &mut EnumLiveMap,
     roots: MayRootSet<'_>,
 ) {
     if roots.has_unknown() {
-        mark_all_local_roots_live(local_roots, tracked, live);
+        mark_all_local_roots_live(local_roots, enum_aliases, live);
         return;
     }
     for root in roots.observed().iter() {
-        let root = root.value();
-        if local_roots.contains(&root) {
-            mark_root_live(live, root, tracked_root_total_leaves(tracked, root));
+        if local_roots.contains(&root.value()) {
+            mark_root_live(
+                live,
+                root.value(),
+                tracked_root_total_leaves(enum_aliases.tracked, root.value()),
+            );
         }
     }
 }
-
 fn mark_all_local_roots_live(
     local_roots: &FxHashSet<ValueId>,
-    tracked: &SecondaryMap<ValueId, Option<TrackedObject>>,
+    enum_aliases: EnumAliasContext<'_>,
     live: &mut EnumLiveMap,
 ) {
     for &root in local_roots {
-        mark_root_live(live, root, tracked_root_total_leaves(tracked, root));
+        mark_root_live(
+            live,
+            root,
+            tracked_root_total_leaves(enum_aliases.tracked, root),
+        );
     }
 }
 
@@ -1447,7 +1418,7 @@ fn edge_enum_object_facts(
     pred: BlockId,
     succ: BlockId,
     out_state: &EnumObjectFacts,
-    root_provenance: EnumRootProvenance<'_>,
+    enum_aliases: EnumAliasContext<'_>,
 ) -> EnumObjectFacts {
     let mut edge_state = out_state.clone();
     let Some(term) = func.layout.last_inst_of(pred) else {
@@ -1455,8 +1426,7 @@ fn edge_enum_object_facts(
     };
 
     if let Some(br_table) = downcast::<&control_flow::BrTable>(func.inst_set(), func.dfg.inst(term))
-        && let Some((object, variant)) =
-            br_table_edge_variant(func, br_table, succ, root_provenance)
+        && let Some((object, variant)) = br_table_edge_variant(func, br_table, succ, enum_aliases)
     {
         update_enum_assert_fact(func, &mut edge_state, object, variant);
         return edge_state;
@@ -1469,10 +1439,10 @@ fn br_table_edge_variant(
     func: &Function,
     br_table: &control_flow::BrTable,
     succ: BlockId,
-    root_provenance: EnumRootProvenance<'_>,
-) -> Option<(ObjectSlice, EnumVariantRef)> {
+    enum_aliases: EnumAliasContext<'_>,
+) -> Option<(ExactEnumSlice, EnumVariantRef)> {
     let enum_get_tag = enum_get_tag_of_value(func, *br_table.scrutinee())?;
-    let object = exact_enum_object_slice(func, root_provenance, *enum_get_tag.object())?;
+    let object = enum_aliases.exact_enum(func, *enum_get_tag.object())?;
     let Type::EnumTag(enum_ty) = func.dfg.value_ty(*br_table.scrutinee()) else {
         return None;
     };
@@ -1547,7 +1517,7 @@ fn enum_variant_for_tag_value(
 fn transfer_enum_object_facts(
     func: &Function,
     inst: InstId,
-    root_provenance: EnumRootProvenance<'_>,
+    enum_aliases: EnumAliasContext<'_>,
     enum_facts: &mut EnumObjectFacts,
     pending_enum_writes: &mut PendingEnumWrites,
 ) {
@@ -1555,7 +1525,7 @@ fn transfer_enum_object_facts(
     {
         clear_pending_enum_writes_for_alias(
             pending_enum_writes,
-            root_provenance,
+            enum_aliases,
             *enum_get_tag.object(),
         );
         return;
@@ -1566,30 +1536,23 @@ fn transfer_enum_object_facts(
     {
         clear_pending_enum_writes_for_alias(
             pending_enum_writes,
-            root_provenance,
+            enum_aliases,
             *enum_assert_ref.object(),
         );
-        if let Some(object) =
-            exact_enum_object_slice(func, root_provenance, *enum_assert_ref.object())
-        {
+        if let Some(object) = enum_aliases.exact_enum(func, *enum_assert_ref.object()) {
             update_enum_assert_fact(func, enum_facts, object, *enum_assert_ref.variant());
         }
         return;
     }
 
     if let Some(enum_proj) = downcast::<&data::EnumProj>(func.inst_set(), func.dfg.inst(inst)) {
-        clear_pending_enum_writes_for_alias(
-            pending_enum_writes,
-            root_provenance,
-            *enum_proj.object(),
-        );
+        clear_pending_enum_writes_for_alias(pending_enum_writes, enum_aliases, *enum_proj.object());
         return;
     }
 
     if let Some(enum_set_tag) = downcast::<&data::EnumSetTag>(func.inst_set(), func.dfg.inst(inst))
     {
-        if let Some(object) = exact_enum_object_slice(func, root_provenance, *enum_set_tag.object())
-        {
+        if let Some(object) = enum_aliases.exact_enum(func, *enum_set_tag.object()) {
             kill_overlapping_enum_state_except(enum_facts, pending_enum_writes, object);
             pending_enum_writes.insert(
                 object,
@@ -1604,7 +1567,7 @@ fn transfer_enum_object_facts(
             kill_enum_state_for_alias(
                 enum_facts,
                 pending_enum_writes,
-                root_provenance,
+                enum_aliases,
                 *enum_set_tag.object(),
             );
         }
@@ -1614,9 +1577,7 @@ fn transfer_enum_object_facts(
     if let Some(enum_write_variant) =
         downcast::<&data::EnumWriteVariant>(func.inst_set(), func.dfg.inst(inst))
     {
-        if let Some(object) =
-            exact_enum_object_slice(func, root_provenance, *enum_write_variant.object())
-        {
+        if let Some(object) = enum_aliases.exact_enum(func, *enum_write_variant.object()) {
             kill_overlapping_enum_state_except(enum_facts, pending_enum_writes, object);
             pending_enum_writes.insert(
                 object,
@@ -1636,7 +1597,7 @@ fn transfer_enum_object_facts(
             kill_enum_state_for_alias(
                 enum_facts,
                 pending_enum_writes,
-                root_provenance,
+                enum_aliases,
                 *enum_write_variant.object(),
             );
         }
@@ -1646,18 +1607,14 @@ fn transfer_enum_object_facts(
     if let Some(obj_load) = downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst))
         && let Some(enum_proj) = enum_proj_of_value(func, *obj_load.object())
     {
-        clear_pending_enum_writes_for_alias(
-            pending_enum_writes,
-            root_provenance,
-            *enum_proj.object(),
-        );
+        clear_pending_enum_writes_for_alias(pending_enum_writes, enum_aliases, *enum_proj.object());
         return;
     }
 
     if let Some(obj_store) = downcast::<&data::ObjStore>(func.inst_set(), func.dfg.inst(inst))
         && let Some(enum_proj) = enum_proj_of_value(func, *obj_store.object())
     {
-        if let Some(object) = exact_enum_object_slice(func, root_provenance, *enum_proj.object())
+        if let Some(object) = enum_aliases.exact_enum(func, *enum_proj.object())
             && let Some(field_idx) = inst_const_index(func, *enum_proj.field())
         {
             kill_overlapping_enum_state_except(enum_facts, pending_enum_writes, object);
@@ -1672,20 +1629,20 @@ fn transfer_enum_object_facts(
             kill_enum_state_for_alias(
                 enum_facts,
                 pending_enum_writes,
-                root_provenance,
+                enum_aliases,
                 *enum_proj.object(),
             );
         }
         return;
     }
 
-    kill_touched_enum_object_facts(func, inst, root_provenance, enum_facts, pending_enum_writes);
+    kill_touched_enum_object_facts(func, inst, enum_aliases, enum_facts, pending_enum_writes);
 }
 
 fn update_enum_assert_fact(
     func: &Function,
     enum_facts: &mut EnumObjectFacts,
-    object: ObjectSlice,
+    object: ExactEnumSlice,
     variant: EnumVariantRef,
 ) {
     let payloads = enum_facts
@@ -1699,7 +1656,7 @@ fn update_enum_assert_fact(
 fn update_enum_set_tag_fact(
     func: &Function,
     enum_facts: &mut EnumObjectFacts,
-    object: ObjectSlice,
+    object: ExactEnumSlice,
     variant: EnumVariantRef,
 ) {
     let payloads = enum_facts
@@ -1712,7 +1669,7 @@ fn update_enum_set_tag_fact(
 
 fn update_enum_write_variant_fact(
     enum_facts: &mut EnumObjectFacts,
-    object: ObjectSlice,
+    object: ExactEnumSlice,
     variant: EnumVariantRef,
     values: &[ValueId],
 ) {
@@ -1727,7 +1684,7 @@ fn update_enum_write_variant_fact(
 
 fn update_enum_store_fact(
     enum_facts: &mut EnumObjectFacts,
-    object: ObjectSlice,
+    object: ExactEnumSlice,
     variant: EnumVariantRef,
     field_idx: u32,
     value: ValueId,
@@ -1748,7 +1705,7 @@ fn update_enum_store_fact(
 
 fn enum_payload_value(
     enum_facts: &EnumObjectFacts,
-    object: ObjectSlice,
+    object: ExactEnumSlice,
     variant: EnumVariantRef,
     field_idx: u32,
 ) -> Option<ValueId> {
@@ -1782,7 +1739,7 @@ fn unknown_variant_payloads(
 fn remove_dead_overwritten_enum_write(
     func: &mut Function,
     pending_enum_writes: &mut PendingEnumWrites,
-    object: ObjectSlice,
+    object: ExactEnumSlice,
     next_kind: PendingEnumWriteKind,
     next_variant: EnumVariantRef,
 ) -> bool {
@@ -1809,7 +1766,7 @@ fn remove_dead_overwritten_enum_write(
 fn kill_touched_enum_object_facts(
     func: &Function,
     inst: InstId,
-    root_provenance: EnumRootProvenance<'_>,
+    enum_aliases: EnumAliasContext<'_>,
     enum_facts: &mut EnumObjectFacts,
     pending_enum_writes: &mut PendingEnumWrites,
 ) {
@@ -1817,13 +1774,13 @@ fn kill_touched_enum_object_facts(
         return;
     }
 
-    let mut touched_slices = SmallVec::<[ObjectSlice; 4]>::new();
-    let mut touched_roots = SmallVec::<[ValueId; 4]>::new();
+    let mut touched_slices = SmallVec::<[ExactObjectSlice; 4]>::new();
+    let mut touched_roots = SmallVec::<[RootValue; 4]>::new();
     let mut saw_unknown = false;
     for value in func.dfg.inst(inst).collect_values() {
         append_touched_enum_object(
             value,
-            root_provenance,
+            enum_aliases,
             &mut touched_slices,
             &mut touched_roots,
             &mut saw_unknown,
@@ -1846,26 +1803,26 @@ fn kill_touched_enum_object_facts(
 
 fn append_touched_enum_object(
     value: ValueId,
-    root_provenance: EnumRootProvenance<'_>,
-    touched_slices: &mut SmallVec<[ObjectSlice; 4]>,
-    touched_roots: &mut SmallVec<[ValueId; 4]>,
+    enum_aliases: EnumAliasContext<'_>,
+    touched_slices: &mut SmallVec<[ExactObjectSlice; 4]>,
+    touched_roots: &mut SmallVec<[RootValue; 4]>,
     saw_unknown: &mut bool,
 ) {
-    match observed_object_alias(root_provenance, value) {
-        ObjectAlias::Exact(slice) => {
+    match enum_aliases.observed(value) {
+        EnumAlias::Exact(slice) => {
             if !touched_slices.contains(&slice) {
                 touched_slices.push(slice);
             }
         }
-        ObjectAlias::Roots(roots) => {
+        EnumAlias::Roots(roots) => {
             for root in roots {
                 if !touched_roots.contains(&root) {
                     touched_roots.push(root);
                 }
             }
         }
-        ObjectAlias::Unknown => *saw_unknown = true,
-        ObjectAlias::None => {}
+        EnumAlias::Unknown => *saw_unknown = true,
+        EnumAlias::None => {}
     }
 }
 
