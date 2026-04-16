@@ -219,7 +219,6 @@ impl EvmFunctionLowering<'_> {
             }
             EvmInstKind::BrTable(br) => {
                 let table = br.table().clone();
-                let scrutinee = *br.scrutinee();
                 let default = (*br.default()).map(|dest| self.canonical_block_target(dest));
 
                 assert!(!table.is_empty(), "empty br_table");
@@ -233,11 +232,11 @@ impl EvmFunctionLowering<'_> {
                     "br_table has duplicate scrutinee values"
                 );
 
-                for (case_val, dest) in table.iter() {
+                for (case_idx, (_, dest)) in table.iter().enumerate() {
                     let dest = self.canonical_block_target(*dest);
                     self.emit_actions_for_site(
                         ctx,
-                        &alloc.read(insn, &[scrutinee, *case_val]),
+                        &alloc.read_br_table_case(insn, case_idx),
                         frame_size_slots,
                         FrameSite::PreInst(insn),
                     );

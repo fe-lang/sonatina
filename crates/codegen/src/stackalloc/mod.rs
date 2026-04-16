@@ -22,6 +22,8 @@ pub trait Allocator {
     /// in the specified order. I.e. the first `Value` in `vals`
     /// will be on the top of the stack.
     fn read(&self, inst: InstId, vals: &[ValueId]) -> Actions;
+    /// Return the actions required for the `case_index`th `br_table` compare in IR order.
+    fn read_br_table_case(&self, inst: InstId, case_index: usize) -> Actions;
     fn write(&self, inst: InstId, vals: &[ValueId]) -> Actions;
 
     fn traverse_edge(&self, from: BlockId, to: BlockId) -> Actions;

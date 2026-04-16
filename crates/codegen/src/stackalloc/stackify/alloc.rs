@@ -1,6 +1,5 @@
 use cranelift_entity::SecondaryMap;
 use sonatina_ir::{BlockId, Function, InstId, ValueId};
-use std::collections::BTreeMap;
 
 use crate::{
     analysis::memory_access::ExactLocalAddr,
@@ -12,8 +11,8 @@ pub struct StackifyAlloc {
     pub(super) pre_actions: SecondaryMap<InstId, Actions>,
     pub(super) post_actions: SecondaryMap<InstId, Actions>,
 
-    /// br_table lowering uses per-case action sequences keyed by (scrutinee, case_val).
-    pub(super) brtable_actions: BTreeMap<(InstId, ValueId, ValueId), Actions>,
+    /// `br_table` lowering uses per-case action sequences stored in IR case order.
+    pub(super) brtable_actions: SecondaryMap<InstId, Vec<Actions>>,
 
     pub(crate) spill_obj:
         SecondaryMap<ValueId, Option<crate::isa::evm::static_arena_alloc::StackObjId>>,
@@ -50,13 +49,21 @@ impl Allocator for StackifyAlloc {
         act
     }
 
-    fn read(&self, inst: InstId, vals: &[ValueId]) -> Actions {
-        if let [scrutinee, case_val] = vals
-            && let Some(act) = self.brtable_actions.get(&(inst, *scrutinee, *case_val))
-        {
-            return act.clone();
-        }
+    fn read(&self, inst: InstId, _vals: &[ValueId]) -> Actions {
         self.pre_actions[inst].clone()
+    }
+
+    fn read_br_table_case(&self, inst: InstId, case_index: usize) -> Actions {
+        self.brtable_actions[inst]
+            .get(case_index)
+            .cloned()
+            .unwrap_or_else(|| {
+                panic!(
+                    "missing br_table case actions for inst {} case {}",
+                    inst.as_u32(),
+                    case_index
+                )
+            })
     }
 
     fn write(&self, inst: InstId, _vals: &[ValueId]) -> Actions {

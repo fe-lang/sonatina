@@ -56,7 +56,7 @@ mod tests {
         domtree::DomTree,
         isa::evm::{EvmBackend, canonicalize_alias_value},
         liveness::{InstLiveness, Liveness},
-        stackalloc::Action,
+        stackalloc::{Action, Allocator},
     };
     use cranelift_entity::SecondaryMap;
     use sonatina_ir::{
@@ -252,6 +252,99 @@ block0:
                     );
                 }
             }
+        });
+    }
+
+    #[test]
+    fn br_table_case_actions_are_stored_by_case_order_for_alias_scrutinees() {
+        const SRC: &str = r#"
+target = "evm-ethereum-osaka"
+
+func public %dispatch(v0.i256) -> i32 {
+block0:
+    v1.*i8 = int_to_ptr v0 *i8;
+    v2.i256 = ptr_to_int v1 i256;
+    br_table v2 block3 (0.i256 block1) (11.i256 block2);
+
+block1:
+    return 100.i32;
+
+block2:
+    return 200.i32;
+
+block3:
+    return 300.i32;
+}
+"#;
+
+        let parsed = parse_module(SRC).expect("module parses");
+        let fref = parsed
+            .module
+            .funcs()
+            .into_iter()
+            .find(|&f| {
+                parsed
+                    .module
+                    .ctx
+                    .func_sig(f, |sig| sig.name() == "dispatch")
+            })
+            .expect("missing dispatch");
+        let backend = EvmBackend::new(Evm::new(TargetTriple {
+            architecture: Architecture::Evm,
+            vendor: Vendor::Ethereum,
+            operating_system: OperatingSystem::Evm(EvmVersion::Osaka),
+        }));
+
+        parsed.module.func_store.view(fref, |function| {
+            let mut cfg = ControlFlowGraph::new();
+            cfg.compute(function);
+
+            let mut dom = DomTree::new();
+            dom.compute(&cfg);
+
+            let value_aliases =
+                backend.compute_stackify_value_aliases(function, &parsed.module.ctx);
+
+            let mut liveness = Liveness::new();
+            liveness.compute_with_value_normalizer(function, &cfg, |v| {
+                canonicalize_alias_value(&value_aliases, v)
+            });
+
+            let alloc = StackifyBuilder::new(function, &cfg, &dom, &liveness, 16)
+                .with_value_aliases(&value_aliases)
+                .compute();
+
+            let term = function
+                .layout
+                .iter_block()
+                .flat_map(|block| function.layout.iter_inst(block))
+                .find(|&inst| {
+                    matches!(
+                        function
+                            .dfg
+                            .branch_info(inst)
+                            .map(|branch| branch.branch_kind()),
+                        Some(BranchKind::BrTable(_))
+                    )
+                })
+                .expect("missing br_table terminator");
+
+            assert!(
+                alloc.pre_actions[term].is_empty(),
+                "br_table pre-actions should be hoisted into case actions"
+            );
+            assert_eq!(alloc.brtable_actions[term].len(), 2);
+
+            let first = alloc.read_br_table_case(term, 0);
+            let second = alloc.read_br_table_case(term, 1);
+            assert!(
+                !first.is_empty(),
+                "expected first br_table case to include compare preparation"
+            );
+            assert!(
+                !second.is_empty(),
+                "expected later br_table case to include compare preparation"
+            );
         });
     }
 
