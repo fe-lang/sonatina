@@ -133,8 +133,7 @@ pub(crate) fn should_restore_free_ptr_on_internal_returns(
                         .cloned()
                         .unwrap_or_else(|| conservative_unknown_ptr_summary(module, callee));
                     for (idx, &arg) in call.args().iter().enumerate() {
-                        if idx < callee_sum.arg_may_escape.len()
-                            && callee_sum.arg_may_escape[idx]
+                        if callee_sum.call_arg_may_escape_nonlocal(idx, call.args(), prov)
                             && value_may_be_heap_derived(function, module, arg, prov)
                         {
                             return false;
@@ -575,7 +574,7 @@ fn compute_malloc_escape_kinds(
                         .cloned()
                         .unwrap_or_else(|| conservative_unknown_ptr_summary(module, callee));
                     for (idx, &arg) in call.args().iter().enumerate() {
-                        if idx < callee_sum.arg_may_escape.len() && callee_sum.arg_may_escape[idx] {
+                        if callee_sum.call_arg_may_escape_nonlocal(idx, call.args(), prov) {
                             record_escaping_mallocs(
                                 &mut escape_kinds,
                                 arg,

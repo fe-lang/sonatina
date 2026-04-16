@@ -544,7 +544,7 @@ fn compute_escaping_allocas(
                         .cloned()
                         .unwrap_or_else(|| conservative_unknown_ptr_summary(module, callee));
                     for (idx, &arg) in call.args().iter().enumerate() {
-                        if idx < callee_sum.arg_may_escape.len() && callee_sum.arg_may_escape[idx] {
+                        if callee_sum.call_arg_may_escape_nonlocal(idx, call.args(), prov) {
                             for base in prov[arg].alloca_insts() {
                                 escaping
                                     .entry(base)
