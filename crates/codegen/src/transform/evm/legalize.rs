@@ -25,6 +25,7 @@ use sonatina_ir::{
 };
 use sonatina_triple::Architecture;
 
+use super::scalar_words::legalize_evm_scalar_immediate;
 use crate::optim::adce::AdceSolver;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -148,13 +149,7 @@ fn scalar_width_for_type(ctx: &ModuleCtx, ty: Type) -> Option<ScalarWidth> {
 }
 
 fn legalize_immediate(imm: sonatina_ir::Immediate) -> sonatina_ir::Immediate {
-    match imm.ty() {
-        Type::I1 => imm,
-        Type::I8 | Type::I16 | Type::I32 | Type::I64 | Type::I128 => imm.zext(Type::I256),
-        Type::I256 => imm,
-        Type::EnumTag(_) => unreachable!(),
-        Type::Compound(_) | Type::Unit => unreachable!(),
-    }
+    legalize_evm_scalar_immediate(imm).expect("EVM immediate legalization only supports scalars")
 }
 
 fn low_mask(bits: u16) -> U256 {
