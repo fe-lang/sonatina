@@ -455,14 +455,14 @@ fn fold_stack_actions_keeps_nonmatching_dup_swap() {
 }
 
 #[test]
-fn fold_stack_actions_cancels_push_swap1_pop_noop() {
+fn fold_stack_actions_keeps_push_swap1_pop_replacement() {
     let actions = [
         Action::Push(Immediate::I8(7)),
         Action::StackSwap(1),
         Action::Pop,
     ];
     let folded = fold_stack_actions(&actions);
-    assert!(folded.is_empty());
+    assert_eq!(folded.as_slice(), actions.as_slice());
 }
 
 #[test]
@@ -484,6 +484,49 @@ fn fold_stack_actions_cancels_double_push_swap_pop_shuffle_noop() {
         folded.as_slice(),
         [Action::StackSwap(3), Action::StackSwap(4)].as_slice()
     );
+}
+
+#[test]
+fn prune_keeps_push_swap1_pop_replacement() {
+    let mut vcode = VCode::<OpCode>::default();
+    let block = BlockId(0);
+
+    let push = vcode.add_inst_to_block(OpCode::PUSH1, None, block);
+    vcode.inst_imm_bytes.insert((push, smallvec![7u8]));
+    vcode.add_inst_to_block(OpCode::SWAP1, None, block);
+    vcode.add_inst_to_block(OpCode::POP, None, block);
+
+    prune_redundant_opcode_sequences(&mut vcode, &[block]);
+
+    let ops: Vec<_> = vcode
+        .block_insns(block)
+        .map(|inst| vcode.insts[inst] as u8)
+        .collect();
+    assert_eq!(
+        ops,
+        vec![OpCode::PUSH1 as u8, OpCode::SWAP1 as u8, OpCode::POP as u8]
+    );
+}
+
+#[test]
+fn prune_removes_double_push_swap_pop_shuffle_noop() {
+    let mut vcode = VCode::<OpCode>::default();
+    let block = BlockId(0);
+
+    let push_false = vcode.add_inst_to_block(OpCode::PUSH1, None, block);
+    vcode.inst_imm_bytes.insert((push_false, smallvec![0u8]));
+    let push_true = vcode.add_inst_to_block(OpCode::PUSH1, None, block);
+    vcode.inst_imm_bytes.insert((push_true, smallvec![1u8]));
+    vcode.add_inst_to_block(OpCode::SWAP1, None, block);
+    vcode.add_inst_to_block(OpCode::SWAP2, None, block);
+    vcode.add_inst_to_block(OpCode::SWAP1, None, block);
+    vcode.add_inst_to_block(OpCode::POP, None, block);
+    vcode.add_inst_to_block(OpCode::SWAP1, None, block);
+    vcode.add_inst_to_block(OpCode::POP, None, block);
+
+    prune_redundant_opcode_sequences(&mut vcode, &[block]);
+
+    assert_eq!(vcode.block_insns(block).count(), 0);
 }
 
 #[test]
