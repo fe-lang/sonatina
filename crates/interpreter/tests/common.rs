@@ -32,7 +32,7 @@ pub fn parse_test_cases(module: &ParsedModule) -> Result<Vec<TestCase>, String> 
     let mut cases = Vec::new();
     for func in module.module.funcs() {
         let func_cases = parse_func_cases(module, func)?;
-        cases.extend(func_cases.into_iter());
+        cases.extend(func_cases);
     }
 
     Ok(cases)

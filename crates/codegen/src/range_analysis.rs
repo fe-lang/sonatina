@@ -735,19 +735,15 @@ fn refine_compare_edge_impl(
             set_env_signed(func, &mut refined, lhs, lhs_fact, lhs_interval);
             set_env_signed(func, &mut refined, rhs, rhs_fact, rhs_interval);
         }
-        BinaryInstKind::Eq => {
-            if compare_truth {
-                let unsigned = lhs_fact.unsigned.intersect(rhs_fact.unsigned)?;
-                let signed = lhs_fact.signed.intersect(rhs_fact.signed)?;
-                set_env_fact(func, &mut refined, lhs, RangeFact { unsigned, signed });
-                set_env_fact(func, &mut refined, rhs, RangeFact { unsigned, signed });
-            }
+        BinaryInstKind::Eq if compare_truth => {
+            let unsigned = lhs_fact.unsigned.intersect(rhs_fact.unsigned)?;
+            let signed = lhs_fact.signed.intersect(rhs_fact.signed)?;
+            set_env_fact(func, &mut refined, lhs, RangeFact { unsigned, signed });
+            set_env_fact(func, &mut refined, rhs, RangeFact { unsigned, signed });
         }
-        BinaryInstKind::Ne => {
-            if compare_truth {
-                refine_not_equal_constant_edge(func, &mut refined, lhs, lhs_fact, rhs);
-                refine_not_equal_constant_edge(func, &mut refined, rhs, rhs_fact, lhs);
-            }
+        BinaryInstKind::Ne if compare_truth => {
+            refine_not_equal_constant_edge(func, &mut refined, lhs, lhs_fact, rhs);
+            refine_not_equal_constant_edge(func, &mut refined, rhs, rhs_fact, lhs);
         }
         _ => {}
     }

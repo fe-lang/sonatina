@@ -66,10 +66,7 @@ impl BranchCanonicalize {
         let mut swap = false;
         let mut dead_insts = Vec::new();
 
-        loop {
-            let Some(inst) = func.dfg.value_inst(cond) else {
-                break;
-            };
+        while let Some(inst) = func.dfg.value_inst(cond) {
             if !matches!(
                 func.dfg.inst(inst).kind(),
                 InstClassKind::Unary(UnaryInstKind::IsZero | UnaryInstKind::Not)

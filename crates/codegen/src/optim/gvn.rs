@@ -1474,10 +1474,8 @@ impl GvnSolver {
                     return Some(GvnInsn::Value(self.make_imm(&mut func.dfg, zero)));
                 }
             }
-            BinaryInstKind::Ssubsat => {
-                if rhs_imm == Some(zero) {
-                    return Some(GvnInsn::Value(lhs));
-                }
+            BinaryInstKind::Ssubsat if rhs_imm == Some(zero) => {
+                return Some(GvnInsn::Value(lhs));
             }
             BinaryInstKind::Umulsat | BinaryInstKind::Smulsat => {
                 if (lhs_imm == Some(zero) && !self.may_be_undef(func, rhs))
@@ -1536,16 +1534,14 @@ impl GvnSolver {
                     });
                 }
             }
-            BinaryInstKind::Usubo | BinaryInstKind::Ssubo => {
-                if rhs_imm == Some(zero) {
-                    return Some(if result_idx == 0 {
-                        GvnInsn::Value(lhs)
-                    } else if result_idx == 1 {
-                        GvnInsn::Value(self.make_imm(&mut func.dfg, false))
-                    } else {
-                        return None;
-                    });
-                }
+            BinaryInstKind::Usubo | BinaryInstKind::Ssubo if rhs_imm == Some(zero) => {
+                return Some(if result_idx == 0 {
+                    GvnInsn::Value(lhs)
+                } else if result_idx == 1 {
+                    GvnInsn::Value(self.make_imm(&mut func.dfg, false))
+                } else {
+                    return None;
+                });
             }
             BinaryInstKind::Umulo | BinaryInstKind::Smulo => {
                 if lhs_imm == Some(zero) || rhs_imm == Some(zero) {
@@ -1576,27 +1572,23 @@ impl GvnSolver {
                     });
                 }
             }
-            BinaryInstKind::EvmUdivo | BinaryInstKind::EvmSdivo => {
-                if rhs_imm == Some(one) {
-                    return Some(if result_idx == 0 {
-                        GvnInsn::Value(lhs)
-                    } else if result_idx == 1 {
-                        GvnInsn::Value(self.make_imm(&mut func.dfg, false))
-                    } else {
-                        return None;
-                    });
-                }
+            BinaryInstKind::EvmUdivo | BinaryInstKind::EvmSdivo if rhs_imm == Some(one) => {
+                return Some(if result_idx == 0 {
+                    GvnInsn::Value(lhs)
+                } else if result_idx == 1 {
+                    GvnInsn::Value(self.make_imm(&mut func.dfg, false))
+                } else {
+                    return None;
+                });
             }
-            BinaryInstKind::EvmUmodo | BinaryInstKind::EvmSmodo => {
-                if rhs_imm == Some(one) {
-                    return Some(if result_idx == 0 {
-                        GvnInsn::Value(self.make_imm(&mut func.dfg, zero))
-                    } else if result_idx == 1 {
-                        GvnInsn::Value(self.make_imm(&mut func.dfg, false))
-                    } else {
-                        return None;
-                    });
-                }
+            BinaryInstKind::EvmUmodo | BinaryInstKind::EvmSmodo if rhs_imm == Some(one) => {
+                return Some(if result_idx == 0 {
+                    GvnInsn::Value(self.make_imm(&mut func.dfg, zero))
+                } else if result_idx == 1 {
+                    GvnInsn::Value(self.make_imm(&mut func.dfg, false))
+                } else {
+                    return None;
+                });
             }
             _ => {}
         }
@@ -2487,7 +2479,7 @@ impl<'a, 'b> ValuePhiFinder<'a, 'b> {
 
                 let mut args = Vec::with_capacity(lhs_phi.args.len());
                 for ((lhs_arg, lhs_block), (rhs_arg, rhs_block)) in
-                    lhs_phi.args.into_iter().zip(rhs_phi.args.into_iter())
+                    lhs_phi.args.into_iter().zip(rhs_phi.args)
                 {
                     // If two blocks which phi arg passed through are not identical, return.
                     if lhs_block != rhs_block {

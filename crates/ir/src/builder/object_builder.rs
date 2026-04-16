@@ -224,14 +224,12 @@ impl SectionBuilder {
         for directive in &self.directives {
             match directive {
                 Directive::Entry(_) => entry_count += 1,
-                Directive::Embed(embed) => {
-                    if !embed_symbols.insert(embed.as_symbol.clone()) {
-                        return Err(ObjectBuilderError::DuplicateEmbedSymbol {
-                            object: object.clone(),
-                            section: self.name.clone(),
-                            symbol: embed.as_symbol.clone(),
-                        });
-                    }
+                Directive::Embed(embed) if !embed_symbols.insert(embed.as_symbol.clone()) => {
+                    return Err(ObjectBuilderError::DuplicateEmbedSymbol {
+                        object: object.clone(),
+                        section: self.name.clone(),
+                        symbol: embed.as_symbol.clone(),
+                    });
                 }
                 _ => {}
             }
