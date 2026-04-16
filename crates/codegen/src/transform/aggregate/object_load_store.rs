@@ -1,9 +1,9 @@
 use cranelift_entity::SecondaryMap;
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 use sonatina_ir::{
     BlockId, ControlFlowGraph, Function, I256, Immediate, InstId, Type, ValueId,
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
-    inst::{cast, control_flow, data, downcast},
+    inst::{control_flow, data, downcast},
     module::FuncRef,
 };
 
@@ -11,6 +11,11 @@ use super::{
     LocalObjectArgInfo, LocalObjectArgMap, ObjectEffectSummaryMap, SliceSet,
     cleanup::DeadPureInstCleanup,
     collect_root_provenance,
+    object_state::{
+        LiveLeafMap, clear_live_slice, enum_write_variant_slices, mark_live_slice,
+        mark_live_tracked_object, mark_root_live, observed_roots_ignoring_pure_address_ops,
+        slice_has_live_leaf, tracked_root_total_leaves, union_live_leaf_maps,
+    },
     object_tracking::{
         ObjectSlice, TrackedObject, collect_root_slices, collect_tracked_objects,
         enum_tag_object_slice, enum_variant_field_object_slice, object_slice_overlaps_effect,
@@ -375,8 +380,8 @@ impl ObjectLoadStore {
         cfg.compute(func);
         let reachable = cfg.reachable_blocks();
         let order: Vec<_> = cfg.post_order().collect();
-        let mut in_states = SecondaryMap::<BlockId, FxHashMap<ValueId, FxHashSet<usize>>>::new();
-        let mut out_states = SecondaryMap::<BlockId, FxHashMap<ValueId, FxHashSet<usize>>>::new();
+        let mut in_states = SecondaryMap::<BlockId, LiveLeafMap>::new();
+        let mut out_states = SecondaryMap::<BlockId, LiveLeafMap>::new();
         let mut changed = false;
 
         let mut dataflow_changed = true;
@@ -387,7 +392,7 @@ impl ObjectLoadStore {
                     continue;
                 }
 
-                let mut out_state = meet_live(
+                let mut out_state = union_live_leaf_maps(
                     cfg.succs_of(block)
                         .copied()
                         .filter(|succ| reachable[*succ])
@@ -542,39 +547,6 @@ fn meet_forward(states: impl Iterator<Item = AvailableMap>) -> AvailableMap {
     out
 }
 
-fn observed_roots(
-    func: &Function,
-    inst: InstId,
-    provenance: MayProvenance<'_>,
-    skip: &[ValueId],
-) -> (Vec<ValueId>, bool) {
-    if downcast::<&data::ObjAlloc>(func.inst_set(), func.dfg.inst(inst)).is_some()
-        || downcast::<&data::Gep>(func.inst_set(), func.dfg.inst(inst)).is_some()
-        || downcast::<&cast::Bitcast>(func.inst_set(), func.dfg.inst(inst)).is_some()
-        || downcast::<&data::ObjProj>(func.inst_set(), func.dfg.inst(inst)).is_some()
-        || downcast::<&data::ObjIndex>(func.inst_set(), func.dfg.inst(inst)).is_some()
-        || downcast::<&data::EnumProj>(func.inst_set(), func.dfg.inst(inst)).is_some()
-        || downcast::<&control_flow::Phi>(func.inst_set(), func.dfg.inst(inst)).is_some()
-    {
-        return (Vec::new(), false);
-    }
-
-    let skipped: FxHashSet<_> = skip.iter().copied().collect();
-    let mut roots = FxHashSet::default();
-    let mut observed_unknown = false;
-    for value in func.dfg.inst(inst).collect_values() {
-        if skipped.contains(&value) {
-            continue;
-        }
-        let root_set = provenance.may_roots(value);
-        observed_unknown |= root_set.has_unknown();
-        for root in root_set.observed().iter() {
-            roots.insert(root.value());
-        }
-    }
-    (roots.into_iter().collect(), observed_unknown)
-}
-
 fn kill_possible_roots_available(available: &mut AvailableMap, possible_roots: MayRootSet<'_>) {
     let Some(possible_roots) = possible_roots.exhaustive_known_roots() else {
         available.clear();
@@ -592,7 +564,8 @@ fn kill_observed_available(
     available: &mut AvailableMap,
     skip: &[ValueId],
 ) {
-    let (roots, observed_unknown) = observed_roots(func, inst, provenance, skip);
+    let (roots, observed_unknown) =
+        observed_roots_ignoring_pure_address_ops(func, inst, provenance, skip);
     if observed_unknown {
         available.clear();
         return;
@@ -605,7 +578,7 @@ fn kill_observed_available(
 fn mark_all_tracked_roots_live(
     func: &Function,
     tracked: &SecondaryMap<ValueId, Option<TrackedObject>>,
-    live: &mut FxHashMap<ValueId, FxHashSet<usize>>,
+    live: &mut LiveLeafMap,
 ) {
     for value in func.dfg.value_ids() {
         if let Some(root_slice) = whole_root_slice_for_value(tracked, value) {
@@ -694,19 +667,20 @@ fn handle_call_backward(
     inst: InstId,
     tracked: &SecondaryMap<ValueId, Option<TrackedObject>>,
     provenance: MayProvenance<'_>,
-    live: &mut FxHashMap<ValueId, FxHashSet<usize>>,
+    live: &mut LiveLeafMap,
     object_effects: Option<&ObjectEffectSummaryMap>,
 ) -> bool {
     let Some(call) = downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(inst)) else {
         return false;
     };
     let Some(summary) = object_effects.and_then(|effects| effects.get(call.callee())) else {
-        let (roots, observed_unknown) = observed_roots(func, inst, provenance, &[]);
+        let (roots, observed_unknown) =
+            observed_roots_ignoring_pure_address_ops(func, inst, provenance, &[]);
         if observed_unknown {
             mark_all_tracked_roots_live(func, tracked, live);
         } else {
             for root in roots {
-                mark_root_live(live, root, root_total_leaves(tracked, root));
+                mark_root_live(live, root, tracked_root_total_leaves(tracked, root));
             }
         }
         return true;
@@ -770,7 +744,7 @@ fn handle_call_backward(
 }
 
 fn apply_call_backward_capture(
-    live: &mut FxHashMap<ValueId, FxHashSet<usize>>,
+    live: &mut LiveLeafMap,
     tracked: &SecondaryMap<ValueId, Option<TrackedObject>>,
     dst: &CallCaptureEndpoint<'_>,
     src: &CallCaptureEndpoint<'_>,
@@ -783,19 +757,20 @@ fn apply_call_backward_capture(
         .tracked
         .and_then(|tracked| map_capture_slice(tracked, src.slice))
     {
-        mark_live(live, TrackedObject::Exact(slice));
+        mark_live_slice(live, slice);
         return;
     }
 
     for root in src.roots.observed().iter() {
-        mark_root_live(live, root.value(), root_total_leaves(tracked, root.value()));
+        mark_root_live(
+            live,
+            root.value(),
+            tracked_root_total_leaves(tracked, root.value()),
+        );
     }
 }
 
-fn capture_destination_has_live(
-    live: &FxHashMap<ValueId, FxHashSet<usize>>,
-    dst: &CallCaptureEndpoint<'_>,
-) -> bool {
+fn capture_destination_has_live(live: &LiveLeafMap, dst: &CallCaptureEndpoint<'_>) -> bool {
     if dst.roots.has_unknown() {
         return true;
     }
@@ -820,7 +795,7 @@ fn capture_destination_has_live(
 #[allow(clippy::too_many_arguments)]
 fn apply_call_backward_effect(
     func: &Function,
-    live: &mut FxHashMap<ValueId, FxHashSet<usize>>,
+    live: &mut LiveLeafMap,
     tracked: &SecondaryMap<ValueId, Option<TrackedObject>>,
     tracked_object: Option<TrackedObject>,
     possible_roots: MayRootSet<'_>,
@@ -848,11 +823,7 @@ fn apply_call_backward_effect(
     mark_live_slice_set(live, base_slice, reads);
 }
 
-fn mark_live_slice_set(
-    live: &mut FxHashMap<ValueId, FxHashSet<usize>>,
-    base_slice: ObjectSlice,
-    slices: &SliceSet,
-) {
+fn mark_live_slice_set(live: &mut LiveLeafMap, base_slice: ObjectSlice, slices: &SliceSet) {
     if slices.is_empty() {
         return;
     }
@@ -868,11 +839,7 @@ fn mark_live_slice_set(
     root_live.extend(leaves.iter().map(|leaf| base_slice.first_leaf + *leaf));
 }
 
-fn clear_live_slice_set(
-    live: &mut FxHashMap<ValueId, FxHashSet<usize>>,
-    base_slice: ObjectSlice,
-    slices: &SliceSet,
-) {
+fn clear_live_slice_set(live: &mut LiveLeafMap, base_slice: ObjectSlice, slices: &SliceSet) {
     if slices.is_empty() {
         return;
     }
@@ -891,30 +858,12 @@ fn clear_live_slice_set(
     }
 }
 
-fn clear_or_mark_live_slice(
-    live: &mut FxHashMap<ValueId, FxHashSet<usize>>,
-    base_slice: ObjectSlice,
-    mark: bool,
-) {
+fn clear_or_mark_live_slice(live: &mut LiveLeafMap, base_slice: ObjectSlice, mark: bool) {
     if mark {
-        mark_live(live, TrackedObject::Exact(base_slice));
+        mark_live_slice(live, base_slice);
     } else {
         clear_live_slice(live, base_slice);
     }
-}
-
-fn meet_live(
-    states: impl Iterator<Item = FxHashMap<ValueId, FxHashSet<usize>>>,
-) -> FxHashMap<ValueId, FxHashSet<usize>> {
-    let mut out = FxHashMap::default();
-    for state in states {
-        for (root, leaves) in state {
-            out.entry(root)
-                .or_insert_with(FxHashSet::default)
-                .extend(leaves);
-        }
-    }
-    out
 }
 
 fn transfer_backward_live(
@@ -922,12 +871,12 @@ fn transfer_backward_live(
     inst: InstId,
     tracked: &SecondaryMap<ValueId, Option<TrackedObject>>,
     provenance: MayProvenance<'_>,
-    live: &mut FxHashMap<ValueId, FxHashSet<usize>>,
+    live: &mut LiveLeafMap,
     object_effects: Option<&ObjectEffectSummaryMap>,
 ) {
     if let Some(obj_load) = downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst)) {
         if let Some(tracked_object) = tracked[*obj_load.object()].as_ref().copied() {
-            mark_live(live, tracked_object);
+            mark_live_tracked_object(live, tracked_object);
         } else {
             mark_live_may_roots(
                 func,
@@ -937,25 +886,29 @@ fn transfer_backward_live(
             );
         }
         let (roots, observed_unknown) =
-            observed_roots(func, inst, provenance, &[*obj_load.object()]);
+            observed_roots_ignoring_pure_address_ops(func, inst, provenance, &[*obj_load.object()]);
         if observed_unknown {
             mark_all_tracked_roots_live(func, tracked, live);
         } else {
             for root in roots {
-                mark_root_live(live, root, root_total_leaves(tracked, root));
+                mark_root_live(live, root, tracked_root_total_leaves(tracked, root));
             }
         }
         return;
     }
 
     if let Some(obj_store) = downcast::<&data::ObjStore>(func.inst_set(), func.dfg.inst(inst)) {
-        let (roots, observed_unknown) =
-            observed_roots(func, inst, provenance, &[*obj_store.object()]);
+        let (roots, observed_unknown) = observed_roots_ignoring_pure_address_ops(
+            func,
+            inst,
+            provenance,
+            &[*obj_store.object()],
+        );
         if observed_unknown {
             mark_all_tracked_roots_live(func, tracked, live);
         } else {
             for root in roots {
-                mark_root_live(live, root, root_total_leaves(tracked, root));
+                mark_root_live(live, root, tracked_root_total_leaves(tracked, root));
             }
         }
 
@@ -988,9 +941,9 @@ fn transfer_backward_live(
                 .exact()
                 .and_then(|slice| enum_tag_object_slice(func.ctx(), slice))
             {
-                mark_live(live, TrackedObject::Exact(slice));
+                mark_live_slice(live, slice);
             } else {
-                mark_live(live, tracked_object);
+                mark_live_tracked_object(live, tracked_object);
             }
         } else {
             mark_live_may_roots(
@@ -1000,13 +953,17 @@ fn transfer_backward_live(
                 provenance.may_roots(*enum_get_tag.object()),
             );
         }
-        let (roots, observed_unknown) =
-            observed_roots(func, inst, provenance, &[*enum_get_tag.object()]);
+        let (roots, observed_unknown) = observed_roots_ignoring_pure_address_ops(
+            func,
+            inst,
+            provenance,
+            &[*enum_get_tag.object()],
+        );
         if observed_unknown {
             mark_all_tracked_roots_live(func, tracked, live);
         } else {
             for root in roots {
-                mark_root_live(live, root, root_total_leaves(tracked, root));
+                mark_root_live(live, root, tracked_root_total_leaves(tracked, root));
             }
         }
         return;
@@ -1020,9 +977,9 @@ fn transfer_backward_live(
                 .exact()
                 .and_then(|slice| enum_tag_object_slice(func.ctx(), slice))
             {
-                mark_live(live, TrackedObject::Exact(slice));
+                mark_live_slice(live, slice);
             } else {
-                mark_live(live, tracked_object);
+                mark_live_tracked_object(live, tracked_object);
             }
         }
         return;
@@ -1030,13 +987,17 @@ fn transfer_backward_live(
 
     if let Some(enum_set_tag) = downcast::<&data::EnumSetTag>(func.inst_set(), func.dfg.inst(inst))
     {
-        let (roots, observed_unknown) =
-            observed_roots(func, inst, provenance, &[*enum_set_tag.object()]);
+        let (roots, observed_unknown) = observed_roots_ignoring_pure_address_ops(
+            func,
+            inst,
+            provenance,
+            &[*enum_set_tag.object()],
+        );
         if observed_unknown {
             mark_all_tracked_roots_live(func, tracked, live);
         } else {
             for root in roots {
-                mark_root_live(live, root, root_total_leaves(tracked, root));
+                mark_root_live(live, root, tracked_root_total_leaves(tracked, root));
             }
         }
         let Some(tracked_object) = tracked[*enum_set_tag.object()].as_ref().copied() else {
@@ -1067,13 +1028,17 @@ fn transfer_backward_live(
     if let Some(enum_write_variant) =
         downcast::<&data::EnumWriteVariant>(func.inst_set(), func.dfg.inst(inst))
     {
-        let (roots, observed_unknown) =
-            observed_roots(func, inst, provenance, &[*enum_write_variant.object()]);
+        let (roots, observed_unknown) = observed_roots_ignoring_pure_address_ops(
+            func,
+            inst,
+            provenance,
+            &[*enum_write_variant.object()],
+        );
         if observed_unknown {
             mark_all_tracked_roots_live(func, tracked, live);
         } else {
             for root in roots {
-                mark_root_live(live, root, root_total_leaves(tracked, root));
+                mark_root_live(live, root, tracked_root_total_leaves(tracked, root));
             }
         }
         let Some(tracked_object) = tracked[*enum_write_variant.object()].as_ref().copied() else {
@@ -1115,12 +1080,13 @@ fn transfer_backward_live(
         return;
     }
 
-    let (roots, observed_unknown) = observed_roots(func, inst, provenance, &[]);
+    let (roots, observed_unknown) =
+        observed_roots_ignoring_pure_address_ops(func, inst, provenance, &[]);
     if observed_unknown {
         mark_all_tracked_roots_live(func, tracked, live);
     } else {
         for root in roots {
-            mark_root_live(live, root, root_total_leaves(tracked, root));
+            mark_root_live(live, root, tracked_root_total_leaves(tracked, root));
         }
     }
 }
@@ -1130,7 +1096,7 @@ fn try_remove_dead_store(
     inst: InstId,
     tracked: &SecondaryMap<ValueId, Option<TrackedObject>>,
     provenance: MayProvenance<'_>,
-    live: &FxHashMap<ValueId, FxHashSet<usize>>,
+    live: &LiveLeafMap,
 ) -> bool {
     if let Some(obj_store) = downcast::<&data::ObjStore>(func.inst_set(), func.dfg.inst(inst)) {
         let Some(tracked_object) = tracked[*obj_store.object()].as_ref().copied() else {
@@ -1193,20 +1159,9 @@ fn try_remove_dead_store(
     true
 }
 
-fn root_total_leaves(
-    tracked: &SecondaryMap<ValueId, Option<TrackedObject>>,
-    root: ValueId,
-) -> usize {
-    tracked[root]
-        .as_ref()
-        .copied()
-        .map(TrackedObject::total_leaves)
-        .expect("tracked root should exist")
-}
-
 fn mark_live_may_roots(
     func: &Function,
-    live: &mut FxHashMap<ValueId, FxHashSet<usize>>,
+    live: &mut LiveLeafMap,
     tracked: &SecondaryMap<ValueId, Option<TrackedObject>>,
     roots: MayRootSet<'_>,
 ) {
@@ -1215,11 +1170,15 @@ fn mark_live_may_roots(
         return;
     }
     for root in roots.observed().iter() {
-        mark_root_live(live, root.value(), root_total_leaves(tracked, root.value()));
+        mark_root_live(
+            live,
+            root.value(),
+            tracked_root_total_leaves(tracked, root.value()),
+        );
     }
 }
 
-fn roots_have_live(live: &FxHashMap<ValueId, FxHashSet<usize>>, roots: MayRootSet<'_>) -> bool {
+fn roots_have_live(live: &LiveLeafMap, roots: MayRootSet<'_>) -> bool {
     let Some(roots) = roots.exhaustive_known_roots() else {
         return true;
     };
@@ -1258,50 +1217,7 @@ fn kill_root_available(available: &mut AvailableMap, root: ValueId) {
     available.retain(|slice, _| slice.root != root);
 }
 
-fn mark_live(live: &mut FxHashMap<ValueId, FxHashSet<usize>>, tracked: TrackedObject) {
-    match tracked {
-        TrackedObject::Exact(slice) => {
-            let entry = live.entry(slice.root).or_default();
-            for leaf in slice.first_leaf..slice.first_leaf + slice.leaf_count {
-                entry.insert(leaf);
-            }
-        }
-        TrackedObject::RootUnknown { root, total_leaves } => {
-            mark_root_live(live, root, total_leaves)
-        }
-    }
-}
-
-fn mark_root_live(
-    live: &mut FxHashMap<ValueId, FxHashSet<usize>>,
-    root: ValueId,
-    total_leaves: usize,
-) {
-    let entry = live.entry(root).or_default();
-    for leaf in 0..total_leaves {
-        entry.insert(leaf);
-    }
-}
-
-fn clear_live_slice(live: &mut FxHashMap<ValueId, FxHashSet<usize>>, slice: ObjectSlice) {
-    let Some(entry) = live.get_mut(&slice.root) else {
-        return;
-    };
-    for leaf in slice.first_leaf..slice.first_leaf + slice.leaf_count {
-        entry.remove(&leaf);
-    }
-    if entry.is_empty() {
-        live.remove(&slice.root);
-    }
-}
-
-fn slice_has_live_leaf(live: &FxHashMap<ValueId, FxHashSet<usize>>, slice: ObjectSlice) -> bool {
-    live.get(&slice.root).is_some_and(|entry| {
-        (slice.first_leaf..slice.first_leaf + slice.leaf_count).any(|leaf| entry.contains(&leaf))
-    })
-}
-
-fn root_has_live(live: &FxHashMap<ValueId, FxHashSet<usize>>, root: ValueId) -> bool {
+fn root_has_live(live: &LiveLeafMap, root: ValueId) -> bool {
     live.get(&root).is_some_and(|entry| !entry.is_empty())
 }
 
@@ -1313,28 +1229,6 @@ fn enum_variant_tag_imm(variant: sonatina_ir::types::EnumVariantRef, ty: Type) -
         },
         _ => Immediate::from_i256(I256::from(u64::from(variant.index())), ty),
     }
-}
-
-fn enum_write_variant_slices(
-    ctx: &sonatina_ir::module::ModuleCtx,
-    base: ObjectSlice,
-    enum_write_variant: &data::EnumWriteVariant,
-) -> Vec<ObjectSlice> {
-    let mut slices = Vec::new();
-    if let Some(tag_slice) = enum_tag_object_slice(ctx, base) {
-        slices.push(tag_slice);
-    }
-    for field_idx in 0..enum_write_variant.values().len() {
-        let Some(field_idx) = u32::try_from(field_idx).ok() else {
-            continue;
-        };
-        if let Some(field_slice) =
-            enum_variant_field_object_slice(ctx, base, *enum_write_variant.variant(), field_idx)
-        {
-            slices.push(field_slice);
-        }
-    }
-    slices
 }
 
 fn ends_with_return(func: &Function, block: BlockId) -> bool {

@@ -10,6 +10,7 @@ pub(crate) mod object_effects;
 pub(crate) mod object_load_store;
 pub(crate) mod object_locality;
 pub(crate) mod object_memory;
+mod object_state;
 mod object_tracking;
 pub(crate) mod private_abi;
 mod promotion;
