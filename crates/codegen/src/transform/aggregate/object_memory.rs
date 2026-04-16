@@ -2,13 +2,14 @@ use cranelift_entity::SecondaryMap;
 use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
     BlockId, ControlFlowGraph, Function, InstId, ValueId,
-    inst::{cast, control_flow, data, downcast},
+    inst::{control_flow, data, downcast},
 };
 
 use crate::loop_analysis::{Loop, LoopTree};
 
 use super::{
     LocalObjectArgInfo, ObjectEffectSummaryMap, RootInit, SliceSet, collect_root_provenance,
+    object_state::{is_pure_object_address_inst, observed_roots_ignoring_pure_address_ops},
     object_tracking::{
         ObjectSlice, TrackedObject, collect_call_planner_root_slices, collect_root_slices,
         collect_tracked_objects, enum_tag_object_slice, enum_variant_field_object_slice,
@@ -634,14 +635,7 @@ fn transfer_inst(
         return;
     }
 
-    if downcast::<&data::ObjAlloc>(ctx.func.inst_set(), ctx.func.dfg.inst(inst)).is_some()
-        || downcast::<&data::Gep>(ctx.func.inst_set(), ctx.func.dfg.inst(inst)).is_some()
-        || downcast::<&cast::Bitcast>(ctx.func.inst_set(), ctx.func.dfg.inst(inst)).is_some()
-        || downcast::<&data::ObjProj>(ctx.func.inst_set(), ctx.func.dfg.inst(inst)).is_some()
-        || downcast::<&data::ObjIndex>(ctx.func.inst_set(), ctx.func.dfg.inst(inst)).is_some()
-        || downcast::<&data::EnumProj>(ctx.func.inst_set(), ctx.func.dfg.inst(inst)).is_some()
-        || downcast::<&control_flow::Phi>(ctx.func.inst_set(), ctx.func.dfg.inst(inst)).is_some()
-    {
+    if is_pure_object_address_inst(ctx.func, inst) {
         return;
     }
 
@@ -969,7 +963,8 @@ fn block_observed_roots(
     state: &mut MemoryState,
     record: &mut Option<&mut ObjectMemoryAnalysis>,
 ) {
-    let (roots, observed_unknown) = observed_roots(func, inst, provenance, &[]);
+    let (roots, observed_unknown) =
+        observed_roots_ignoring_pure_address_ops(func, inst, provenance, &[]);
     if observed_unknown {
         block_all_active_roots(state, inst, record);
         return;
@@ -1027,28 +1022,6 @@ fn single_result_value(func: &Function, inst: InstId) -> Option<ValueId> {
     } else {
         None
     }
-}
-
-fn observed_roots(
-    func: &Function,
-    inst: InstId,
-    provenance: MayProvenance<'_>,
-    skip: &[ValueId],
-) -> (Vec<ValueId>, bool) {
-    let skipped: FxHashSet<_> = skip.iter().copied().collect();
-    let mut roots = FxHashSet::default();
-    let mut observed_unknown = false;
-    for value in func.dfg.inst(inst).collect_values() {
-        if skipped.contains(&value) {
-            continue;
-        }
-        let root_set = provenance.may_roots(value);
-        observed_unknown |= root_set.has_unknown();
-        for root in root_set.observed().iter() {
-            roots.insert(root.value());
-        }
-    }
-    (roots.into_iter().collect(), observed_unknown)
 }
 
 fn clobber_overlaps_slice(effect: &ObjectClobber, slice: ObjectSlice) -> bool {

@@ -10,6 +10,11 @@ use sonatina_ir::{
 
 use super::{
     collect_root_provenance, object_locality,
+    object_state::{
+        LiveLeafMap, clear_live_slice, enum_write_variant_slices, is_pure_object_address_inst,
+        mark_live_slice, mark_root_live, observed_roots, slice_has_live_leaf,
+        tracked_root_total_leaves, union_live_leaf_maps,
+    },
     object_tracking::{
         ObjectSlice, TrackedObject, collect_root_slices, collect_tracked_objects,
         enum_tag_object_slice, enum_variant_field_object_slice, objref_element_ty, slices_overlap,
@@ -35,7 +40,7 @@ enum AggregateFieldLookup {
 
 type EnumObjectFacts = FxHashMap<ObjectSlice, KnownEnumObjectState>;
 type PendingEnumWrites = FxHashMap<ObjectSlice, PendingEnumWrite>;
-type EnumLiveMap = FxHashMap<ValueId, FxHashSet<usize>>;
+type EnumLiveMap = LiveLeafMap;
 
 #[derive(Clone, Copy)]
 struct EnumRootProvenance<'a> {
@@ -861,7 +866,7 @@ fn remove_dead_local_enum_writes(
                 continue;
             }
 
-            let out = meet_enum_live(
+            let out = union_live_leaf_maps(
                 cfg.succs_of(block)
                     .copied()
                     .filter(|succ| reachable[*succ])
@@ -1097,16 +1102,10 @@ fn kill_enum_state_for_alias(
 }
 
 fn is_enum_state_passthrough_inst(func: &Function, inst: InstId) -> bool {
-    func.dfg.is_phi(inst)
+    is_pure_object_address_inst(func, inst)
         || downcast::<&control_flow::Jump>(func.inst_set(), func.dfg.inst(inst)).is_some()
         || downcast::<&control_flow::Br>(func.inst_set(), func.dfg.inst(inst)).is_some()
         || downcast::<&control_flow::BrTable>(func.inst_set(), func.dfg.inst(inst)).is_some()
-        || downcast::<&data::ObjProj>(func.inst_set(), func.dfg.inst(inst)).is_some()
-        || downcast::<&data::ObjIndex>(func.inst_set(), func.dfg.inst(inst)).is_some()
-        || downcast::<&data::EnumProj>(func.inst_set(), func.dfg.inst(inst)).is_some()
-        || downcast::<&data::ObjAlloc>(func.inst_set(), func.dfg.inst(inst)).is_some()
-        || downcast::<&data::Gep>(func.inst_set(), func.dfg.inst(inst)).is_some()
-        || downcast::<&cast::Bitcast>(func.inst_set(), func.dfg.inst(inst)).is_some()
 }
 
 fn observed_object_roots(
@@ -1118,31 +1117,8 @@ fn observed_object_roots(
     if is_enum_state_passthrough_inst(func, inst) {
         return (Vec::new(), false);
     }
-
-    let skipped: FxHashSet<_> = skip.iter().copied().collect();
-    let mut roots = FxHashSet::default();
-    let mut observed_unknown = false;
-    for value in func.dfg.inst(inst).collect_values() {
-        if skipped.contains(&value) {
-            continue;
-        }
-        let root_set = root_provenance.may.may_roots(value);
-        observed_unknown |= root_set.has_unknown();
-        for root in root_set.observed().iter() {
-            roots.insert(root.value());
-        }
-    }
-    (roots.into_iter().collect(), observed_unknown)
-}
-
-fn meet_enum_live(states: impl Iterator<Item = EnumLiveMap>) -> EnumLiveMap {
-    let mut out = EnumLiveMap::default();
-    for state in states {
-        for (root, incoming) in state {
-            out.entry(root).or_default().extend(incoming);
-        }
-    }
-    out
+    let (roots, observed_unknown) = observed_roots(func, inst, root_provenance.may, skip);
+    (roots.into_vec(), observed_unknown)
 }
 
 fn transfer_backward_enum_live(
@@ -1372,31 +1348,6 @@ fn enum_field_of_value(func: &Function, value: ValueId) -> Option<(ValueId, Enum
     ))
 }
 
-fn enum_write_variant_slices(
-    ctx: &sonatina_ir::module::ModuleCtx,
-    base_slice: ObjectSlice,
-    enum_write_variant: &data::EnumWriteVariant,
-) -> Vec<ObjectSlice> {
-    let mut slices = Vec::new();
-    if let Some(tag_slice) = enum_tag_object_slice(ctx, base_slice) {
-        slices.push(tag_slice);
-    }
-    for field_idx in 0..enum_write_variant.values().len() {
-        let Some(field_idx) = u32::try_from(field_idx).ok() else {
-            continue;
-        };
-        if let Some(field_slice) = enum_variant_field_object_slice(
-            ctx,
-            base_slice,
-            *enum_write_variant.variant(),
-            field_idx,
-        ) {
-            slices.push(field_slice);
-        }
-    }
-    slices
-}
-
 fn mark_observed_local_roots_live(
     func: &Function,
     inst: InstId,
@@ -1412,7 +1363,11 @@ fn mark_observed_local_roots_live(
     }
     for root in roots {
         if local_roots.contains(&root) {
-            mark_root_live(live, root, root_total_leaves(root_provenance.tracked, root));
+            mark_root_live(
+                live,
+                root,
+                tracked_root_total_leaves(root_provenance.tracked, root),
+            );
         }
     }
 }
@@ -1430,7 +1385,7 @@ fn mark_live_may_roots(
     for root in roots.observed().iter() {
         let root = root.value();
         if local_roots.contains(&root) {
-            mark_root_live(live, root, root_total_leaves(tracked, root));
+            mark_root_live(live, root, tracked_root_total_leaves(tracked, root));
         }
     }
 }
@@ -1441,51 +1396,8 @@ fn mark_all_local_roots_live(
     live: &mut EnumLiveMap,
 ) {
     for &root in local_roots {
-        mark_root_live(live, root, root_total_leaves(tracked, root));
+        mark_root_live(live, root, tracked_root_total_leaves(tracked, root));
     }
-}
-
-fn root_total_leaves(
-    tracked: &SecondaryMap<ValueId, Option<TrackedObject>>,
-    root: ValueId,
-) -> usize {
-    tracked[root]
-        .as_ref()
-        .copied()
-        .map(TrackedObject::total_leaves)
-        .expect("tracked root should exist")
-}
-
-fn mark_live_slice(live: &mut EnumLiveMap, slice: ObjectSlice) {
-    let entry = live.entry(slice.root).or_default();
-    for leaf in slice.first_leaf..slice.first_leaf + slice.leaf_count {
-        entry.insert(leaf);
-    }
-}
-
-fn mark_root_live(live: &mut EnumLiveMap, root: ValueId, total_leaves: usize) {
-    let entry = live.entry(root).or_default();
-    for leaf in 0..total_leaves {
-        entry.insert(leaf);
-    }
-}
-
-fn clear_live_slice(live: &mut EnumLiveMap, slice: ObjectSlice) {
-    let Some(entry) = live.get_mut(&slice.root) else {
-        return;
-    };
-    for leaf in slice.first_leaf..slice.first_leaf + slice.leaf_count {
-        entry.remove(&leaf);
-    }
-    if entry.is_empty() {
-        live.remove(&slice.root);
-    }
-}
-
-fn slice_has_live_leaf(live: &EnumLiveMap, slice: ObjectSlice) -> bool {
-    live.get(&slice.root).is_some_and(|entry| {
-        (slice.first_leaf..slice.first_leaf + slice.leaf_count).any(|leaf| entry.contains(&leaf))
-    })
 }
 
 fn meet_enum_object_facts(states: impl Iterator<Item = EnumObjectFacts>) -> EnumObjectFacts {
