@@ -19,18 +19,18 @@ use crate::{
 use super::{cleanup::DeadPureInstCleanup, shape};
 
 #[derive(Clone)]
-enum AggregateAddrStep {
+enum AggregateProjectionStep {
     Const(u32),
     Dynamic(ValueId),
     Reinterpret(Type),
 }
 
 #[derive(Clone)]
-struct AggregateAddrView {
-    root_addr: ValueId,
+struct AggregateProjectionView {
+    root_value: ValueId,
     root_ty: Type,
     agg_ty: Type,
-    steps: SmallVec<[AggregateAddrStep; 4]>,
+    steps: SmallVec<[AggregateProjectionStep; 4]>,
 }
 
 #[derive(Default)]
@@ -636,14 +636,25 @@ impl AggregateLowerToMemoryLegalize {
             .dfg
             .inst_result(inst)
             .expect("aggregate mload must have result");
-        let agg_ty = *mload.ty();
-        self.rewrite_extract_tree_from_aggregate_addr(func, module, result, *mload.addr(), agg_ty);
-
         if !func
             .dfg
             .users(result)
             .copied()
             .any(|user| func.layout.is_inst_inserted(user))
+        {
+            self.remove_if_results_dead(func, inst);
+            return;
+        }
+
+        let agg_ty = *mload.ty();
+        let needs_snapshot =
+            self.rewrite_extract_tree_from_aggregate_snapshot(func, module, result, agg_ty);
+        if !needs_snapshot
+            && !func
+                .dfg
+                .users(result)
+                .copied()
+                .any(|user| func.layout.is_inst_inserted(user))
         {
             self.remove_if_results_dead(func, inst);
             return;
@@ -657,21 +668,22 @@ impl AggregateLowerToMemoryLegalize {
         self.remove_if_results_dead(func, inst);
     }
 
-    fn rewrite_extract_tree_from_aggregate_addr(
+    fn rewrite_extract_tree_from_aggregate_snapshot(
         &mut self,
         func: &mut Function,
         module: &ModuleCtx,
         root_value: ValueId,
-        src_addr: ValueId,
-        src_agg_ty: Type,
-    ) {
-        let mut views: SecondaryMap<ValueId, Option<AggregateAddrView>> = SecondaryMap::default();
+        root_ty: Type,
+    ) -> bool {
+        let mut views: SecondaryMap<ValueId, Option<AggregateProjectionView>> =
+            SecondaryMap::default();
         let mut worklist = vec![root_value];
         let mut transparent_insts = Vec::new();
-        views[root_value] = Some(AggregateAddrView {
-            root_addr: src_addr,
-            root_ty: src_agg_ty,
-            agg_ty: src_agg_ty,
+        let mut needs_snapshot = false;
+        views[root_value] = Some(AggregateProjectionView {
+            root_value,
+            root_ty,
+            agg_ty: root_ty,
             steps: SmallVec::new(),
         });
 
@@ -697,9 +709,9 @@ impl AggregateLowerToMemoryLegalize {
                 };
                 let result_ty = func.dfg.value_ty(extract_result);
                 if shape::is_supported_aggregate_ty(module, result_ty) {
-                    let Some(child_view) = self
-                        .aggregate_addr_view_for_extract(func, module, &view, &extract, result_ty)
-                    else {
+                    let Some(child_view) = self.aggregate_projection_view_for_extract(
+                        func, module, &view, &extract, result_ty,
+                    ) else {
                         continue;
                     };
                     views[extract_result] = Some(child_view);
@@ -708,9 +720,10 @@ impl AggregateLowerToMemoryLegalize {
                     continue;
                 }
 
-                self.rewrite_scalar_extract_from_aggregate_view(
+                self.rewrite_scalar_extract_from_projection_view(
                     func, module, user, &extract, &view,
                 );
+                needs_snapshot = true;
             }
 
             for &user in &users {
@@ -741,7 +754,7 @@ impl AggregateLowerToMemoryLegalize {
                 let mut bitcast_view = view.clone();
                 bitcast_view
                     .steps
-                    .push(AggregateAddrStep::Reinterpret(bitcast_ty));
+                    .push(AggregateProjectionStep::Reinterpret(bitcast_ty));
                 bitcast_view.agg_ty = bitcast_ty;
                 views[bitcast_result] = Some(bitcast_view);
                 transparent_insts.push(user);
@@ -765,25 +778,27 @@ impl AggregateLowerToMemoryLegalize {
                 self.remove_if_results_dead(func, inst);
             }
         }
+
+        needs_snapshot
     }
 
-    fn aggregate_addr_view_for_extract(
+    fn aggregate_projection_view_for_extract(
         &self,
         func: &Function,
         module: &ModuleCtx,
-        view: &AggregateAddrView,
+        view: &AggregateProjectionView,
         extract: &data::ExtractValue,
         result_ty: Type,
-    ) -> Option<AggregateAddrView> {
+    ) -> Option<AggregateProjectionView> {
         let mut steps = view.steps.clone();
         if let Some(idx) = shape::const_u32(&func.dfg, *extract.idx()) {
             let slice = shape::aggregate_slice_for_index(module, view.agg_ty, idx)?;
             if slice.ty != result_ty {
                 return None;
             }
-            steps.push(AggregateAddrStep::Const(idx));
-            return Some(AggregateAddrView {
-                root_addr: view.root_addr,
+            steps.push(AggregateProjectionStep::Const(idx));
+            return Some(AggregateProjectionView {
+                root_value: view.root_value,
                 root_ty: view.root_ty,
                 agg_ty: result_ty,
                 steps,
@@ -794,9 +809,9 @@ impl AggregateLowerToMemoryLegalize {
         if elem != result_ty {
             return None;
         }
-        steps.push(AggregateAddrStep::Dynamic(*extract.idx()));
-        Some(AggregateAddrView {
-            root_addr: view.root_addr,
+        steps.push(AggregateProjectionStep::Dynamic(*extract.idx()));
+        Some(AggregateProjectionView {
+            root_value: view.root_value,
             root_ty: view.root_ty,
             agg_ty: result_ty,
             steps,
@@ -1120,29 +1135,29 @@ impl AggregateLowerToMemoryLegalize {
         panic!("aggregate memory address must be integral or pointer (got {addr_ty:?})");
     }
 
-    fn aggregate_addr_view_as_typed_ptr(
-        &self,
+    fn aggregate_projection_view_as_typed_ptr(
+        &mut self,
         func: &mut Function,
         builder: &mut BeforeCursor,
         module: &ModuleCtx,
-        view: &AggregateAddrView,
+        view: &AggregateProjectionView,
     ) -> ValueId {
-        let mut ptr = self.aggregate_addr_as_typed_ptr(func, builder, view.root_addr, view.root_ty);
+        let mut ptr = self.materialized_ptr(func, view.root_value, module);
         let mut current_ty = view.root_ty;
         for step in &view.steps {
             match step {
-                AggregateAddrStep::Const(idx) => {
+                AggregateProjectionStep::Const(idx) => {
                     let slice = shape::aggregate_slice_for_index(module, current_ty, *idx)
                         .unwrap_or_else(|| panic!("extract_value index out of bounds"));
                     ptr = self.emit_gep_to_path(func, builder, ptr, &[*idx], slice.ty);
                     current_ty = slice.ty;
                 }
-                AggregateAddrStep::Dynamic(idx_value) => {
+                AggregateProjectionStep::Dynamic(idx_value) => {
                     let elem = self.array_elem_ty_or_panic(module, current_ty, "extract_value");
                     ptr = self.emit_gep_array_element_ptr(func, builder, ptr, *idx_value, elem);
                     current_ty = elem;
                 }
-                AggregateAddrStep::Reinterpret(ty) => {
+                AggregateProjectionStep::Reinterpret(ty) => {
                     let ptr_ty = ty.to_ptr(func.ctx());
                     if func.dfg.value_ty(ptr) != ptr_ty {
                         ptr = builder.insert_with_result(
@@ -1161,13 +1176,13 @@ impl AggregateLowerToMemoryLegalize {
         ptr
     }
 
-    fn rewrite_scalar_extract_from_aggregate_view(
+    fn rewrite_scalar_extract_from_projection_view(
         &mut self,
         func: &mut Function,
         module: &ModuleCtx,
         inst: InstId,
         extract: &data::ExtractValue,
-        view: &AggregateAddrView,
+        view: &AggregateProjectionView,
     ) {
         let result = func
             .dfg
@@ -1175,7 +1190,7 @@ impl AggregateLowerToMemoryLegalize {
             .expect("extract_value must have result");
         let result_ty = func.dfg.value_ty(result);
         let mut builder = BeforeCursor::new_before_inst(func, inst);
-        let src_ptr = self.aggregate_addr_view_as_typed_ptr(func, &mut builder, module, view);
+        let src_ptr = self.aggregate_projection_view_as_typed_ptr(func, &mut builder, module, view);
         let replacement = if let Some(idx) = shape::const_u32(&func.dfg, *extract.idx()) {
             let slice = shape::aggregate_slice_for_index(module, view.agg_ty, idx)
                 .unwrap_or_else(|| panic!("extract_value index out of bounds"));
@@ -1663,6 +1678,13 @@ mod tests {
         isa::evm::{EvmBackend, PushWidthPolicy},
         object::{CompileOptions, compile_all_objects},
     };
+    use revm::{
+        Context, EvmContext, Handler,
+        primitives::{
+            AccountInfo, Address, Bytecode, Bytes, Env, ExecutionResult, OsakaSpec, Output,
+            TransactTo, U256,
+        },
+    };
     use sonatina_ir::{Module, isa::evm::Evm, module::FuncRef};
     use sonatina_parser::parse_module;
     use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
@@ -1687,6 +1709,63 @@ mod tests {
             OperatingSystem::Evm(EvmVersion::Osaka),
         );
         EvmBackend::new(Evm::new(triple))
+    }
+
+    fn test_compile_opts() -> CompileOptions {
+        CompileOptions {
+            fixup_policy: PushWidthPolicy::MinimalRelax,
+            emit_symtab: false,
+            emit_observability: false,
+            verifier_cfg: VerifierConfig::for_level(VerificationLevel::Fast),
+        }
+    }
+
+    fn run_contract(module: &Module) -> U256 {
+        let artifacts = compile_all_objects(module, &test_backend(), &test_compile_opts())
+            .expect("compile should succeed");
+        let artifact = artifacts
+            .iter()
+            .find(|artifact| artifact.object.0.as_str() == "Contract")
+            .expect("missing Contract object");
+        let runtime = artifact
+            .sections
+            .iter()
+            .find(|(name, _)| name.0.as_str() == "runtime")
+            .map(|(_, section)| section.bytes.as_slice())
+            .expect("missing runtime section");
+
+        let mut db = revm::InMemoryDB::default();
+        let bytecode = Bytecode::new_raw(Bytes::copy_from_slice(runtime));
+        let contract = Address::repeat_byte(0x12);
+        db.insert_account_info(
+            contract,
+            AccountInfo {
+                balance: U256::ZERO,
+                nonce: 0,
+                code_hash: bytecode.hash_slow(),
+                code: Some(bytecode),
+            },
+        );
+
+        let mut env = Env::default();
+        env.tx.clear();
+        env.tx.transact_to = TransactTo::Call(contract);
+        env.tx.data = Bytes::default();
+
+        struct NoopInspector;
+        impl<DB: revm::Database> revm::Inspector<DB> for NoopInspector {}
+
+        let context = Context::new(EvmContext::new_with_env(db, Box::new(env)), NoopInspector);
+        let mut evm = revm::Evm::new(context, Handler::mainnet::<OsakaSpec>());
+        let res = evm.transact_commit().expect("evm execution should succeed");
+
+        match res {
+            ExecutionResult::Success {
+                output: Output::Call(bytes),
+                ..
+            } => U256::from_be_slice(bytes.as_ref()),
+            _ => panic!("unexpected execution result: {res:?}"),
+        }
     }
 
     #[test]
@@ -1996,21 +2075,22 @@ func private %f(v0.i256) -> i256 {
     }
 
     #[test]
-    fn late_legalizer_handles_raw_aggregate_addresses_and_scalar_extracts_without_temps() {
+    fn late_legalizer_preserves_snapshot_semantics_for_raw_aggregate_extracts() {
         let module = parse_test_module(
             r#"
 target = "evm-ethereum-osaka"
 
 type @slice = { i256, i256 };
 
-func public %entry(v0.i256, v1.*i8) -> i256 {
+func public %entry() {
     block0:
-        v2.@slice = mload v0 @slice;
-        v3.i256 = extract_value v2 1.i8;
-        v4.@slice = mload v1 @slice;
-        v5.i256 = extract_value v4 0.i8;
-        v6.i256 = add v3 v5;
-        return v6;
+        mstore 64.i32 12.i256 i256;
+        mstore 96.i32 34.i256 i256;
+        v0.@slice = mload 64.i32 @slice;
+        mstore 64.i32 99.i256 i256;
+        v1.i256 = extract_value v0 0.i8;
+        mstore 0.i32 v1 i256;
+        evm_return 0.i8 32.i8;
 }
 
 object @Contract {
@@ -2025,30 +2105,14 @@ object @Contract {
         module.func_store.modify(func_ref, |func| {
             AggregateLowerToMemoryLegalize::default().run(func, &ctx);
         });
-
         module.func_store.view(func_ref, |func| {
             assert_aggregate_legalized(func, &ctx);
-            for block in func.layout.iter_block() {
-                for inst in func.layout.iter_inst(block) {
-                    assert!(
-                        downcast::<&data::Alloca>(func.inst_set(), func.dfg.inst(inst)).is_none(),
-                        "direct scalar extracts from aggregate loads should not materialize temps"
-                    );
-                }
-            }
         });
-
-        let opts = CompileOptions {
-            fixup_policy: PushWidthPolicy::MinimalRelax,
-            emit_symtab: false,
-            emit_observability: false,
-            verifier_cfg: VerifierConfig::for_level(VerificationLevel::Fast),
-        };
-        compile_all_objects(&module, &test_backend(), &opts).expect("compile should succeed");
+        assert_eq!(run_contract(&module), U256::from(12));
     }
 
     #[test]
-    fn late_legalizer_sinks_nested_scalar_extracts_from_raw_aggregate_addresses() {
+    fn late_legalizer_preserves_snapshot_semantics_for_nested_raw_aggregate_extracts() {
         let module = parse_test_module(
             r#"
 target = "evm-ethereum-osaka"
@@ -2056,12 +2120,17 @@ target = "evm-ethereum-osaka"
 type @inner = { i256, i256 };
 type @outer = { @inner, i256 };
 
-func public %entry(v0.i256) -> i256 {
+func public %entry() {
     block0:
-        v1.@outer = mload v0 @outer;
-        v2.@inner = extract_value v1 0.i8;
-        v3.i256 = extract_value v2 1.i8;
-        return v3;
+        mstore 64.i32 10.i256 i256;
+        mstore 96.i32 20.i256 i256;
+        mstore 128.i32 30.i256 i256;
+        v0.@outer = mload 64.i32 @outer;
+        mstore 96.i32 99.i256 i256;
+        v1.@inner = extract_value v0 0.i8;
+        v2.i256 = extract_value v1 1.i8;
+        mstore 0.i32 v2 i256;
+        evm_return 0.i8 32.i8;
 }
 
 object @Contract {
@@ -2076,30 +2145,14 @@ object @Contract {
         module.func_store.modify(func_ref, |func| {
             AggregateLowerToMemoryLegalize::default().run(func, &ctx);
         });
-
         module.func_store.view(func_ref, |func| {
             assert_aggregate_legalized(func, &ctx);
-            for block in func.layout.iter_block() {
-                for inst in func.layout.iter_inst(block) {
-                    assert!(
-                        downcast::<&data::Alloca>(func.inst_set(), func.dfg.inst(inst)).is_none(),
-                        "nested scalar extracts from aggregate loads should not materialize temps"
-                    );
-                }
-            }
         });
-
-        let opts = CompileOptions {
-            fixup_policy: PushWidthPolicy::MinimalRelax,
-            emit_symtab: false,
-            emit_observability: false,
-            verifier_cfg: VerifierConfig::for_level(VerificationLevel::Fast),
-        };
-        compile_all_objects(&module, &test_backend(), &opts).expect("compile should succeed");
+        assert_eq!(run_contract(&module), U256::from(20));
     }
 
     #[test]
-    fn late_legalizer_sinks_scalar_extracts_through_aggregate_bitcasts_from_raw_address() {
+    fn late_legalizer_preserves_snapshot_semantics_through_bitcasted_raw_aggregate_extracts() {
         let module = parse_test_module(
             r#"
 target = "evm-ethereum-osaka"
@@ -2108,13 +2161,17 @@ type @inner = { i256 };
 type @pair = { i256, i256 };
 type @nested = { @inner, i256 };
 
-func public %entry(v0.i256) -> i256 {
+func public %entry() {
     block0:
-        v1.@pair = mload v0 @pair;
-        v2.@nested = bitcast v1 @nested;
-        v3.@inner = extract_value v2 0.i8;
-        v4.i256 = extract_value v3 0.i8;
-        return v4;
+        mstore 64.i32 11.i256 i256;
+        mstore 96.i32 22.i256 i256;
+        v0.@pair = mload 64.i32 @pair;
+        v1.@nested = bitcast v0 @nested;
+        mstore 64.i32 99.i256 i256;
+        v2.@inner = extract_value v1 0.i8;
+        v3.i256 = extract_value v2 0.i8;
+        mstore 0.i32 v3 i256;
+        evm_return 0.i8 32.i8;
 }
 
 object @Contract {
@@ -2129,25 +2186,9 @@ object @Contract {
         module.func_store.modify(func_ref, |func| {
             AggregateLowerToMemoryLegalize::default().run(func, &ctx);
         });
-
         module.func_store.view(func_ref, |func| {
             assert_aggregate_legalized(func, &ctx);
-            for block in func.layout.iter_block() {
-                for inst in func.layout.iter_inst(block) {
-                    assert!(
-                        downcast::<&data::Alloca>(func.inst_set(), func.dfg.inst(inst)).is_none(),
-                        "bitcasted scalar extracts from aggregate loads should not materialize temps"
-                    );
-                }
-            }
         });
-
-        let opts = CompileOptions {
-            fixup_policy: PushWidthPolicy::MinimalRelax,
-            emit_symtab: false,
-            emit_observability: false,
-            verifier_cfg: VerifierConfig::for_level(VerificationLevel::Fast),
-        };
-        compile_all_objects(&module, &test_backend(), &opts).expect("compile should succeed");
+        assert_eq!(run_contract(&module), U256::from(11));
     }
 }
