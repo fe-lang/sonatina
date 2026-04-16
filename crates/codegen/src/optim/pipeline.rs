@@ -86,26 +86,109 @@ pub enum Pass {
     RebuildUsers,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PassInfo {
+    name: &'static str,
+    needs_func_behavior: bool,
+    invalidates_func_behavior: bool,
+}
+
 impl Pass {
-    pub const fn as_str(self) -> &'static str {
+    const fn info(self) -> PassInfo {
         match self {
-            Pass::LegalizeMultiResult => "legalize_multi_result",
-            Pass::CfgCleanup => "cfg_cleanup",
-            Pass::AggregateCombine => "aggregate_combine",
-            Pass::BranchCanonicalize => "branch_canonicalize",
-            Pass::ObjectLoadStore => "object_load_store",
-            Pass::AggregateScalarize => "aggregate_scalarize",
-            Pass::LoadStore => "load_store",
-            Pass::ScalarCanonicalize => "scalar_canonicalize",
-            Pass::KnownBitsSimplify => "known_bits_simplify",
-            Pass::CheckedArithElim => "checked_arith_elim",
-            Pass::Sccp => "sccp",
-            Pass::Adce => "adce",
-            Pass::Licm => "licm",
-            Pass::LoopStrengthReduce => "loop_strength_reduce",
-            Pass::Gvn => "gvn",
-            Pass::RebuildUsers => "rebuild_users",
+            Pass::LegalizeMultiResult => PassInfo {
+                name: "legalize_multi_result",
+                needs_func_behavior: false,
+                invalidates_func_behavior: false,
+            },
+            Pass::CfgCleanup => PassInfo {
+                name: "cfg_cleanup",
+                needs_func_behavior: true,
+                invalidates_func_behavior: true,
+            },
+            Pass::AggregateCombine => PassInfo {
+                name: "aggregate_combine",
+                needs_func_behavior: false,
+                invalidates_func_behavior: true,
+            },
+            Pass::BranchCanonicalize => PassInfo {
+                name: "branch_canonicalize",
+                needs_func_behavior: false,
+                invalidates_func_behavior: true,
+            },
+            Pass::ObjectLoadStore => PassInfo {
+                name: "object_load_store",
+                needs_func_behavior: false,
+                invalidates_func_behavior: true,
+            },
+            Pass::AggregateScalarize => PassInfo {
+                name: "aggregate_scalarize",
+                needs_func_behavior: false,
+                invalidates_func_behavior: true,
+            },
+            Pass::LoadStore => PassInfo {
+                name: "load_store",
+                needs_func_behavior: true,
+                invalidates_func_behavior: true,
+            },
+            Pass::ScalarCanonicalize => PassInfo {
+                name: "scalar_canonicalize",
+                needs_func_behavior: false,
+                invalidates_func_behavior: true,
+            },
+            Pass::KnownBitsSimplify => PassInfo {
+                name: "known_bits_simplify",
+                needs_func_behavior: false,
+                invalidates_func_behavior: true,
+            },
+            Pass::CheckedArithElim => PassInfo {
+                name: "checked_arith_elim",
+                needs_func_behavior: false,
+                invalidates_func_behavior: true,
+            },
+            Pass::Sccp => PassInfo {
+                name: "sccp",
+                needs_func_behavior: true,
+                invalidates_func_behavior: true,
+            },
+            Pass::Adce => PassInfo {
+                name: "adce",
+                needs_func_behavior: true,
+                invalidates_func_behavior: true,
+            },
+            Pass::Licm => PassInfo {
+                name: "licm",
+                needs_func_behavior: true,
+                invalidates_func_behavior: true,
+            },
+            Pass::LoopStrengthReduce => PassInfo {
+                name: "loop_strength_reduce",
+                needs_func_behavior: false,
+                invalidates_func_behavior: true,
+            },
+            Pass::Gvn => PassInfo {
+                name: "gvn",
+                needs_func_behavior: true,
+                invalidates_func_behavior: true,
+            },
+            Pass::RebuildUsers => PassInfo {
+                name: "rebuild_users",
+                needs_func_behavior: false,
+                invalidates_func_behavior: false,
+            },
         }
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        self.info().name
+    }
+
+    const fn needs_func_behavior(self) -> bool {
+        self.info().needs_func_behavior
+    }
+
+    const fn invalidates_func_behavior(self) -> bool {
+        self.info().invalidates_func_behavior
     }
 }
 
@@ -197,33 +280,6 @@ const POST_DEAD_ARG_CLEANUP_PASSES: &[Pass] = &[
     Pass::BranchCanonicalize,
     Pass::CfgCleanup,
 ];
-
-fn pass_needs_func_behavior(pass: Pass) -> bool {
-    matches!(
-        pass,
-        Pass::CfgCleanup | Pass::LoadStore | Pass::Sccp | Pass::Adce | Pass::Gvn
-    )
-}
-
-fn pass_may_invalidate_func_behavior(pass: Pass) -> bool {
-    matches!(
-        pass,
-        Pass::CfgCleanup
-            | Pass::AggregateCombine
-            | Pass::BranchCanonicalize
-            | Pass::ObjectLoadStore
-            | Pass::AggregateScalarize
-            | Pass::LoadStore
-            | Pass::ScalarCanonicalize
-            | Pass::KnownBitsSimplify
-            | Pass::CheckedArithElim
-            | Pass::Sccp
-            | Pass::Adce
-            | Pass::Licm
-            | Pass::LoopStrengthReduce
-            | Pass::Gvn
-    )
-}
 
 fn size_inliner_config() -> InlinerConfig {
     InlinerConfig {
@@ -471,13 +527,13 @@ pub(crate) fn run_function_pass_round(
     overrides: FuncPassOverrides<'_>,
 ) {
     for &pass in passes {
-        if *func_behavior_dirty && pass_needs_func_behavior(pass) {
+        if *func_behavior_dirty && pass.needs_func_behavior() {
             let _span = trace_span!("sonatina.optim.pipeline.func_behavior_analyze").entered();
             func_behavior::analyze_module(module);
             *func_behavior_dirty = false;
         }
         run_module_pass(pass, module, overrides);
-        if pass_may_invalidate_func_behavior(pass) {
+        if pass.invalidates_func_behavior() {
             *func_behavior_dirty = true;
         }
     }
@@ -864,6 +920,12 @@ mod tests {
         let pipeline = Pipeline::new();
         let mut module = build_test_module();
         pipeline.run(&mut module);
+    }
+
+    #[test]
+    fn licm_pass_triggers_func_behavior_analysis() {
+        assert!(Pass::Licm.needs_func_behavior());
+        assert!(Pass::Licm.invalidates_func_behavior());
     }
 
     #[test]
@@ -2428,6 +2490,87 @@ func public %caller(v0.i1, v1.*i32, v2.i32) -> i32 {
                 "helper splicing should leave the still-multi-block inner call in place:\n{dumped}"
             );
         });
+    }
+
+    #[test]
+    fn licm_recomputes_func_behavior_before_licm_only_step() {
+        let source = r#"
+target = "evm-ethereum-london"
+
+func private %pure_after_cleanup(v0.i1, v1.*i32, v2.i32) -> i32 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        br 0.i1 block3 block4;
+
+    block2:
+        return v2;
+
+    block3:
+        mstore v1 1.i32 i32;
+        return 99.i32;
+
+    block4:
+        v3.i32 = add v2 2.i32;
+        return v3;
+}
+
+func private %entry(v0.i1, v1.*i32, v2.i32) -> i32 {
+    block0:
+        jump block1;
+
+    block1:
+        br v0 block2 block3;
+
+    block2:
+        v3.i32 = call %pure_after_cleanup v0 v1 v2;
+        v4.i32 = add v3 1.i32;
+        jump block1;
+
+    block3:
+        return 0.i32;
+}
+"#;
+
+        let mut module = parse_module(source).expect("parse should succeed").module;
+        let entry = module
+            .funcs()
+            .into_iter()
+            .find(|&func_ref| module.ctx.func_sig(func_ref, |sig| sig.name() == "entry"))
+            .expect("entry should exist");
+        let mut pipeline = Pipeline::new();
+        pipeline
+            .add_step(Step::FuncPasses(vec![
+                Pass::CfgCleanup,
+                Pass::Sccp,
+                Pass::CfgCleanup,
+            ]))
+            .add_step(Step::FuncPasses(vec![Pass::Licm]));
+
+        pipeline.run(&mut module);
+
+        let dumped = module
+            .func_store
+            .view(entry, |func| FuncWriter::new(entry, func).dump_string());
+        let block0 = dumped
+            .split("block0:")
+            .nth(1)
+            .and_then(|tail| tail.split("block1:").next())
+            .expect("block0 section should exist");
+        let block2 = dumped
+            .split("block2:")
+            .nth(1)
+            .and_then(|tail| tail.split("block3:").next())
+            .expect("block2 section should exist");
+        assert!(
+            block0.contains("call %pure_after_cleanup"),
+            "LICM-only step should see refreshed callee effects and hoist the invariant call:\n{dumped}"
+        );
+        assert!(
+            !block2.contains("call %pure_after_cleanup"),
+            "loop body should no longer contain the hoisted call after LICM:\n{dumped}"
+        );
     }
 
     #[test]
