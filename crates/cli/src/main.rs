@@ -1,4 +1,5 @@
 use std::{
+    cmp::Reverse,
     collections::{HashMap, HashSet},
     fs,
     io::{self, IsTerminal},
@@ -386,9 +387,7 @@ impl Profiler {
         }
 
         let mut snapshot = self.layer.snapshot();
-        snapshot
-            .stats
-            .sort_by(|left, right| right.1.total.cmp(&left.1.total));
+        snapshot.stats.sort_by_key(|right| Reverse(right.1.total));
 
         println!("  top spans:");
         for (name, stat) in snapshot
@@ -412,7 +411,7 @@ impl Profiler {
             .iter()
             .filter(|(name, _)| name.starts_with("sonatina.optim.pipeline.pass."))
             .collect::<Vec<_>>();
-        pass_stats.sort_by(|left, right| right.1.total.cmp(&left.1.total));
+        pass_stats.sort_by_key(|right| Reverse(right.1.total));
 
         if !pass_stats.is_empty() {
             println!("  optimization passes:");

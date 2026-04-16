@@ -133,7 +133,7 @@ impl Frame {
             prev_block: None,
         };
 
-        for (arg_val, arg_e_val) in arg_values.iter().zip(arg_e_values.into_iter()) {
+        for (arg_val, arg_e_val) in arg_values.iter().zip(arg_e_values) {
             frame.map_val(*arg_val, arg_e_val);
         }
 

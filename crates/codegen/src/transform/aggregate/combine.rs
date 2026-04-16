@@ -2123,10 +2123,7 @@ fn try_reconstruct_original_aggregate(func: &Function, value: ValueId) -> Option
 fn collect_insert_assignments(func: &Function, value: ValueId) -> Option<FxHashMap<u32, ValueId>> {
     let mut assignments: FxHashMap<u32, ValueId> = FxHashMap::default();
     let mut current = value;
-    loop {
-        let Some(inst) = func.dfg.value_inst(current) else {
-            break;
-        };
+    while let Some(inst) = func.dfg.value_inst(current) {
         let Some(insert) = downcast::<&data::InsertValue>(func.inst_set(), func.dfg.inst(inst))
         else {
             break;

@@ -639,11 +639,7 @@ fn apply_splice_body(
             "inserted result count did not match template result count"
         );
 
-        for ((old_res, _), new_res) in template_inst
-            .old_results
-            .into_iter()
-            .zip(inserted_results.into_iter())
-        {
+        for ((old_res, _), new_res) in template_inst.old_results.into_iter().zip(inserted_results) {
             value_map.insert(old_res, new_res);
         }
     }
