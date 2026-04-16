@@ -1,8 +1,8 @@
 use crate::{
     isa::evm::{EvmBackend, EvmPreparedSection, PushWidthPolicy, opcode::OpCode},
     machinst::{
-        assemble::ObjectLayout,
-        lower::{FixupUpdate, LoweredFunction},
+        assemble::{CodeUnitOwner, ObjectLayout},
+        lower::LoweredFunction,
         vcode::{SymFixup, SymFixupKind, VCodeFixup, VCodeInst},
     },
 };
@@ -24,17 +24,10 @@ use super::{
     },
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SymFixupSite {
-    Function(FuncRef),
-    SectionUnit(crate::machinst::vcode::SectionCodeUnitId),
-}
-
-type RecordedSymFixup = (SymFixupSite, VCodeInst, SymFixup);
-
 #[derive(Debug)]
-pub enum LinkSectionError {
+pub(crate) enum LinkSectionError {
     Backend { func: FuncRef, error: String },
+    BackendFixup { owner: CodeUnitOwner, error: String },
     Link(String),
 }
 
@@ -49,7 +42,7 @@ struct BuildSectionObservabilityInput<'a, Op> {
     section_bytes: u32,
 }
 
-pub fn link_section(
+pub(crate) fn link_section(
     backend: &EvmBackend,
     prepared: &EvmPreparedSection,
     data: &[(GlobalVariableRef, Vec<u8>)],
@@ -94,22 +87,6 @@ pub fn link_section(
             error,
         })?;
 
-    let mut sym_fixups = Vec::new();
-    for (func, lowered) in &lowered_funcs {
-        collect_sym_fixups(
-            SymFixupSite::Function(*func),
-            &lowered.vcode,
-            &mut sym_fixups,
-        );
-    }
-    for unit in &section_units {
-        collect_sym_fixups(
-            SymFixupSite::SectionUnit(unit.id),
-            &unit.vcode,
-            &mut sym_fixups,
-        );
-    }
-
     let layout_funcs = lowered_funcs
         .into_iter()
         .map(|(func, lowered)| (func, lowered.vcode, lowered.block_order))
@@ -138,13 +115,8 @@ pub fn link_section(
             build_section_symtab(&layout, funcs, data, embeds).map_err(LinkSectionError::Link)?
         };
 
-        let layout_changed = apply_sym_fixups(
-            backend,
-            &mut layout,
-            &sym_fixups,
-            &symtab,
-            &opts.fixup_policy,
-        )?;
+        let layout_changed =
+            apply_layout_sym_fixups(backend, &mut layout, &symtab, &opts.fixup_policy)?;
 
         if !layout_changed {
             {
@@ -227,67 +199,32 @@ pub fn link_section(
     ))
 }
 
-fn collect_sym_fixups(
-    site: SymFixupSite,
-    vcode: &crate::machinst::vcode::VCode<OpCode>,
-    out: &mut Vec<RecordedSymFixup>,
-) {
-    for (insn, fixup) in vcode.fixups.values() {
-        let VCodeFixup::Sym(fixup) = fixup else {
-            continue;
-        };
-        out.push((site, *insn, fixup.clone()));
-    }
-}
-
-fn apply_sym_fixups(
+fn apply_layout_sym_fixups(
     backend: &EvmBackend,
     layout: &mut ObjectLayout<OpCode>,
-    sym_fixups: &[RecordedSymFixup],
     symtab: &FxHashMap<SymbolId, SymbolDef>,
     fixup_policy: &PushWidthPolicy,
 ) -> Result<bool, LinkSectionError> {
-    let mut layout_changed = false;
-    for (site, insn, fixup) in sym_fixups {
-        let value = fixup_value(symtab, fixup).map_err(LinkSectionError::Link)?;
-        let update = match site {
-            SymFixupSite::Function(func) => {
-                let _span = trace_span!(
-                    "sonatina.codegen.link_section.apply_fixup",
-                    func_ref = func.as_u32(),
-                    inst = insn.as_u32()
-                )
-                .entered();
-                let vcode = layout
-                    .func_vcode_mut(*func)
-                    .ok_or_else(|| LinkSectionError::Link("missing function vcode".to_string()))?;
-                backend
-                    .apply_sym_fixup(vcode, *insn, fixup, value, fixup_policy)
-                    .map_err(|error| LinkSectionError::Backend { func: *func, error })?
-            }
-            SymFixupSite::SectionUnit(unit) => {
-                let _span = trace_span!(
-                    "sonatina.codegen.link_section.apply_fixup",
-                    section_unit = unit.0,
-                    inst = insn.as_u32()
-                )
-                .entered();
-                let vcode = layout.section_unit_vcode_mut(*unit).ok_or_else(|| {
-                    LinkSectionError::Link("missing section unit vcode".to_string())
-                })?;
-                backend
-                    .apply_sym_fixup(vcode, *insn, fixup, value, fixup_policy)
-                    .map_err(|error| {
-                        LinkSectionError::Link(format!(
-                            "failed to apply symbol fixup in section unit {}: {error}",
-                            unit.0
-                        ))
-                    })?
-            }
+    layout.apply_sym_fixups(|owner, vcode, inst, fixup| {
+        let _span = match owner {
+            CodeUnitOwner::Function(func) => trace_span!(
+                "sonatina.codegen.link_section.apply_fixup",
+                func_ref = func.as_u32(),
+                inst = inst.as_u32()
+            )
+            .entered(),
+            CodeUnitOwner::SectionUnit(unit) => trace_span!(
+                "sonatina.codegen.link_section.apply_fixup",
+                section_unit = unit.0,
+                inst = inst.as_u32()
+            )
+            .entered(),
         };
-        layout_changed |= update == FixupUpdate::LayoutChanged;
-    }
-    Ok(layout_changed)
+        let value = fixup_value(symtab, fixup).map_err(LinkSectionError::Link)?;
+        backend
+            .apply_sym_fixup(vcode, inst, fixup, value, fixup_policy)
+            .map_err(|error| LinkSectionError::BackendFixup { owner, error })
+    })
 }
 
 fn build_section_symtab<Op>(
@@ -694,14 +631,6 @@ mod tests {
         ));
         unit_vcode.add_inst_to_block(OpCode::STOP, None, block);
 
-        let mut sym_fixups = Vec::new();
-        collect_sym_fixups(
-            SymFixupSite::SectionUnit(unit_id),
-            &unit_vcode,
-            &mut sym_fixups,
-        );
-        assert_eq!(sym_fixups.len(), 2);
-
         let mut layout = ObjectLayout::new(
             vec![(func, func_vcode, vec![block])],
             vec![SectionCodeUnit {
@@ -721,14 +650,9 @@ mod tests {
             },
         );
 
-        let layout_changed = apply_sym_fixups(
-            &backend,
-            &mut layout,
-            &sym_fixups,
-            &symtab,
-            &PushWidthPolicy::Push4,
-        )
-        .expect("helper fixups should resolve");
+        let layout_changed =
+            apply_layout_sym_fixups(&backend, &mut layout, &symtab, &PushWidthPolicy::Push4)
+                .expect("helper fixups should resolve");
         assert!(layout_changed, "PUSH0 should relax to wider PUSH");
 
         let unit = layout
@@ -754,5 +678,56 @@ mod tests {
         assert_eq!(*size_inst, size);
         assert_eq!(size_bytes.as_slice(), &[0x01, 0x02, 0x03, 0x04][..]);
         assert_eq!(unit.layout().vcode().insts[size] as u8, OpCode::PUSH4 as u8);
+    }
+
+    #[test]
+    fn apply_sym_fixups_reports_section_unit_context() {
+        let backend = test_backend();
+        let func = FuncRef::from_u32(0);
+        let gv = GlobalVariableRef::from_u32(0);
+        let unit_id = SectionCodeUnitId(0);
+        let block = BlockId(0);
+
+        let mut func_vcode = VCode::<OpCode>::default();
+        func_vcode.add_inst_to_block(OpCode::STOP, None, block);
+
+        let mut unit_vcode = VCode::<OpCode>::default();
+        let addr = unit_vcode.add_inst_to_block(OpCode::PUSH0, None, block);
+        unit_vcode.fixups.insert((
+            addr,
+            VCodeFixup::Sym(SymFixup {
+                kind: SymFixupKind::Addr,
+                sym: SymbolRef::Global(gv),
+            }),
+        ));
+
+        let mut layout = ObjectLayout::new(
+            vec![(func, func_vcode, vec![block])],
+            vec![SectionCodeUnit {
+                id: unit_id,
+                name: "__helper".to_string(),
+                vcode: unit_vcode,
+                block_order: vec![block],
+            }],
+            0,
+        );
+        let mut symtab = FxHashMap::default();
+        symtab.insert(
+            SymbolId::Global(gv),
+            SymbolDef {
+                offset: 0x1234_5678,
+                size: 0x0102_0304,
+            },
+        );
+
+        let err = apply_layout_sym_fixups(&backend, &mut layout, &symtab, &PushWidthPolicy::Push4)
+            .expect_err("missing section-unit fixup bytes must fail");
+        assert!(matches!(
+            err,
+            LinkSectionError::BackendFixup {
+                owner: CodeUnitOwner::SectionUnit(owner),
+                error,
+            } if owner == unit_id && error == "missing fixup immediate bytes"
+        ));
     }
 }

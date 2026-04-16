@@ -21,8 +21,11 @@ use super::{
 };
 use crate::{
     isa::evm::{EvmBackend, collect_unsupported_evm_calls},
-    machinst::lower::{
-        SectionWorkModule, build_section_membership, compute_section_function_emission_order,
+    machinst::{
+        assemble::CodeUnitOwner,
+        lower::{
+            SectionWorkModule, build_section_membership, compute_section_function_emission_order,
+        },
     },
 };
 
@@ -422,6 +425,21 @@ fn compile_section(
                         message: error,
                     }]
                 }
+                LinkSectionError::BackendFixup { owner, error } => match owner {
+                    CodeUnitOwner::Function(func) => {
+                        vec![ObjectCompileError::BackendError {
+                            object: object_name.clone(),
+                            section: section_name.clone(),
+                            func,
+                            message: error,
+                        }]
+                    }
+                    CodeUnitOwner::SectionUnit(_) => vec![ObjectCompileError::LinkError {
+                        object: object_name.clone(),
+                        section: section_name.clone(),
+                        message: format!("{owner}: {error}"),
+                    }],
+                },
                 LinkSectionError::Link(message) => vec![ObjectCompileError::LinkError {
                     object: object_name.clone(),
                     section: section_name.clone(),
