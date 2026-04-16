@@ -21,12 +21,29 @@ use sonatina_ir::{
     types::CompoundType,
 };
 
-use super::{ObjectEffectSummaryMap, ObjectReturnEffect, SliceSet, shape};
+use super::{
+    ObjectEffectSummaryMap, ObjectReturnEffect, SliceSet,
+    capture_state::{
+        CaptureRelevantInst, RootCaptureMap as SharedRootCaptureMap, RootCapturePayload,
+        capture_relevant_inst, compute_capture_states_for_blocks as compute_block_capture_states,
+        kill_capture_access as kill_capture_projection_access,
+        kill_capture_slice_set as kill_capture_exact_slice_set, slices_overlap_relative,
+    },
+    shape,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct RootCaptureSource {
     dst_slice: shape::AggregateSlice,
     src_root: Option<RootValue>,
+}
+
+type RootCaptureMap = SharedRootCaptureMap<RootCaptureSource>;
+
+impl RootCapturePayload for RootCaptureSource {
+    fn dst_slice(self) -> shape::AggregateSlice {
+        self.dst_slice
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -602,53 +619,12 @@ fn compute_capture_states_for_blocks(
     object_effects: Option<&ObjectEffectSummaryMap>,
     cfg: &ControlFlowGraph,
     reachable: &SecondaryMap<BlockId, bool>,
-) -> SecondaryMap<BlockId, FxHashMap<ValueId, Vec<RootCaptureSource>>> {
-    let mut block_entry_captures = SecondaryMap::default();
-    let mut block_exit_captures = SecondaryMap::default();
-
-    loop {
-        let mut changed = false;
-
-        for block in func.layout.iter_block() {
-            if !reachable[block] {
-                continue;
-            }
-
-            let mut entry_captures = FxHashMap::default();
-            for &pred in cfg.preds_of(block) {
-                if reachable[pred] {
-                    merge_root_capture_maps(&mut entry_captures, &block_exit_captures[pred]);
-                }
-            }
-            dedup_root_capture_roots(&mut entry_captures);
-
-            if block_entry_captures[block] != entry_captures {
-                block_entry_captures[block] = entry_captures.clone();
-                changed = true;
-            }
-
-            let mut exit_captures = entry_captures;
-            for inst in func.layout.iter_inst(block) {
-                apply_inst_capture_transfer(
-                    func,
-                    inst,
-                    capture_state,
-                    object_effects,
-                    &mut exit_captures,
-                );
-            }
-            dedup_root_capture_roots(&mut exit_captures);
-
-            if block_exit_captures[block] != exit_captures {
-                block_exit_captures[block] = exit_captures;
-                changed = true;
-            }
-        }
-
-        if !changed {
-            return block_entry_captures;
-        }
-    }
+) -> SecondaryMap<BlockId, RootCaptureMap> {
+    let (block_entry_captures, _) =
+        compute_block_capture_states(func, cfg, reachable, |inst, exit_captures| {
+            apply_inst_capture_transfer(func, inst, capture_state, object_effects, exit_captures);
+        });
+    block_entry_captures
 }
 
 fn apply_inst_capture_transfer(
@@ -656,58 +632,52 @@ fn apply_inst_capture_transfer(
     inst: InstId,
     capture_state: CaptureStateView<'_>,
     object_effects: Option<&ObjectEffectSummaryMap>,
-    root_captures: &mut FxHashMap<ValueId, Vec<RootCaptureSource>>,
+    root_captures: &mut RootCaptureMap,
 ) {
     if !func.layout.is_inst_inserted(inst) {
         return;
     }
 
-    if let Some(obj_store) = downcast::<&data::ObjStore>(func.inst_set(), func.dfg.inst(inst)) {
-        kill_capture_access(root_captures, *obj_store.object(), None, capture_state);
-        if reference_element_ty(func.ctx(), func.dfg.value_ty(*obj_store.value())).is_some() {
-            record_root_capture_sources(
+    match capture_relevant_inst(func, inst) {
+        Some(CaptureRelevantInst::ObjStore(obj_store)) => {
+            kill_capture_access(root_captures, *obj_store.object(), None, capture_state);
+            if reference_element_ty(func.ctx(), func.dfg.value_ty(*obj_store.value())).is_some() {
+                record_root_capture_sources(
+                    root_captures,
+                    capture_destinations_for_value(*obj_store.object(), None, capture_state),
+                    &capture_state.possible_roots[*obj_store.value()],
+                    capture_state.maybe_unknown[*obj_store.value()],
+                );
+            }
+        }
+        Some(CaptureRelevantInst::EnumSetTag(enum_set_tag)) => {
+            kill_capture_access(
                 root_captures,
-                capture_destinations_for_value(*obj_store.object(), None, capture_state),
-                &capture_state.possible_roots[*obj_store.value()],
-                capture_state.maybe_unknown[*obj_store.value()],
+                *enum_set_tag.object(),
+                Some((0, 1)),
+                capture_state,
             );
         }
-        return;
-    }
-
-    if let Some(enum_set_tag) = downcast::<&data::EnumSetTag>(func.inst_set(), func.dfg.inst(inst))
-    {
-        kill_capture_access(
-            root_captures,
-            *enum_set_tag.object(),
-            Some((0, 1)),
-            capture_state,
-        );
-        return;
-    }
-
-    if let Some(enum_write_variant) =
-        downcast::<&data::EnumWriteVariant>(func.inst_set(), func.dfg.inst(inst))
-    {
-        kill_capture_access(
-            root_captures,
-            *enum_write_variant.object(),
-            None,
-            capture_state,
-        );
-        record_enum_variant_capture_sources(
-            func,
-            root_captures,
-            *enum_write_variant.object(),
-            enum_write_variant.values(),
-            *enum_write_variant.variant(),
-            capture_state,
-        );
-        return;
-    }
-
-    if downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(inst)).is_some() {
-        merge_call_capture_roots(func, inst, capture_state, object_effects, root_captures);
+        Some(CaptureRelevantInst::EnumWriteVariant(enum_write_variant)) => {
+            kill_capture_access(
+                root_captures,
+                *enum_write_variant.object(),
+                None,
+                capture_state,
+            );
+            record_enum_variant_capture_sources(
+                func,
+                root_captures,
+                *enum_write_variant.object(),
+                enum_write_variant.values(),
+                *enum_write_variant.variant(),
+                capture_state,
+            );
+        }
+        Some(CaptureRelevantInst::Call) => {
+            merge_call_capture_roots(func, inst, capture_state, object_effects, root_captures);
+        }
+        None => {}
     }
 }
 
@@ -716,7 +686,7 @@ fn merge_call_capture_roots(
     inst: InstId,
     capture_state: CaptureStateView<'_>,
     object_effects: Option<&ObjectEffectSummaryMap>,
-    root_captures: &mut FxHashMap<ValueId, Vec<RootCaptureSource>>,
+    root_captures: &mut RootCaptureMap,
 ) {
     let call = downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(inst))
         .expect("merge_call_capture_roots requires a call instruction");
@@ -755,31 +725,9 @@ fn merge_call_capture_roots(
     }
 }
 
-fn merge_root_capture_maps(
-    dst: &mut FxHashMap<ValueId, Vec<RootCaptureSource>>,
-    src: &FxHashMap<ValueId, Vec<RootCaptureSource>>,
-) {
-    for (&root, captures) in src {
-        let entry = dst.entry(root).or_default();
-        for &capture in captures {
-            if entry.contains(&capture) {
-                continue;
-            }
-            entry.push(capture);
-        }
-    }
-}
-
-fn dedup_root_capture_roots(root_captures: &mut FxHashMap<ValueId, Vec<RootCaptureSource>>) {
-    for captures in root_captures.values_mut() {
-        let mut seen = FxHashSet::default();
-        captures.retain(|capture| seen.insert(*capture));
-    }
-}
-
 fn record_root_capture_sources(
-    root_captures: &mut FxHashMap<ValueId, Vec<RootCaptureSource>>,
-    dsts: Vec<(ValueId, shape::AggregateSlice)>,
+    root_captures: &mut RootCaptureMap,
+    dsts: Vec<(RootValue, shape::AggregateSlice)>,
     src_roots: &FxHashSet<ValueId>,
     src_maybe_unknown: bool,
 ) {
@@ -811,7 +759,7 @@ fn record_root_capture_sources(
 
 fn record_enum_variant_capture_sources(
     func: &Function,
-    root_captures: &mut FxHashMap<ValueId, Vec<RootCaptureSource>>,
+    root_captures: &mut RootCaptureMap,
     object: ValueId,
     values: &[ValueId],
     variant: sonatina_ir::types::EnumVariantRef,
@@ -842,7 +790,7 @@ fn record_enum_variant_capture_sources(
 }
 
 fn kill_capture_access(
-    root_captures: &mut FxHashMap<ValueId, Vec<RootCaptureSource>>,
+    root_captures: &mut RootCaptureMap,
     object: ValueId,
     relative_slice: Option<(usize, usize)>,
     capture_state: CaptureStateView<'_>,
@@ -859,68 +807,27 @@ fn kill_capture_access(
             leaf_count,
         })
     });
-    if let Some((root, access_slice)) = exact_capture_destination(projection, relative_slice) {
-        kill_capture_root_slice(root_captures, root.value(), Some(access_slice));
-    }
+    kill_capture_projection_access(root_captures, projection, relative_slice);
 }
 
 fn kill_capture_slice_set(
-    root_captures: &mut FxHashMap<ValueId, Vec<RootCaptureSource>>,
+    root_captures: &mut RootCaptureMap,
     value: ValueId,
     slices: &SliceSet,
     capture_state: CaptureStateView<'_>,
 ) {
-    if slices.is_empty() {
-        return;
-    }
-    let Some((root, base_slice)) = exact_capture_destination_for_value(value, None, capture_state)
-    else {
-        return;
-    };
-    if slices.is_whole_root() || base_slice.leaf_count != slices.total_leaves() {
-        kill_capture_root_slice(root_captures, root, Some(base_slice));
-        return;
-    }
-    let Some(exact_leaves) = slices.exact_leaves() else {
-        kill_capture_root_slice(root_captures, root, Some(base_slice));
-        return;
-    };
-    for &leaf in exact_leaves {
-        kill_capture_root_slice(
-            root_captures,
-            root,
-            Some(shape::AggregateSlice {
-                ty: base_slice.ty,
-                first_leaf: base_slice.first_leaf + leaf,
-                leaf_count: 1,
-            }),
-        );
-    }
-}
-
-fn kill_capture_root_slice(
-    root_captures: &mut FxHashMap<ValueId, Vec<RootCaptureSource>>,
-    root: ValueId,
-    access_slice: Option<shape::AggregateSlice>,
-) {
-    let Some(captures) = root_captures.get_mut(&root) else {
-        return;
-    };
-    let Some(access_slice) = access_slice else {
-        root_captures.remove(&root);
-        return;
-    };
-    captures.retain(|capture| !slices_overlap_relative(access_slice, capture.dst_slice));
-    if captures.is_empty() {
-        root_captures.remove(&root);
-    }
+    kill_capture_exact_slice_set(
+        root_captures,
+        exact_capture_destination_for_value(value, None, capture_state),
+        slices,
+    );
 }
 
 fn capture_destinations_for_value(
     value: ValueId,
     relative_slice: Option<shape::AggregateSlice>,
     capture_state: CaptureStateView<'_>,
-) -> Vec<(ValueId, shape::AggregateSlice)> {
+) -> Vec<(RootValue, shape::AggregateSlice)> {
     observed_root_slices(
         exact_projection_of(
             capture_state.exact_states,
@@ -940,7 +847,6 @@ fn capture_destinations_for_value(
             relative_slice,
         )
     })
-    .map(|(root, slice)| (root.value(), slice))
     .collect()
 }
 
@@ -948,7 +854,7 @@ fn exact_capture_destination_for_value(
     value: ValueId,
     relative_slice: Option<shape::AggregateSlice>,
     capture_state: CaptureStateView<'_>,
-) -> Option<(ValueId, shape::AggregateSlice)> {
+) -> Option<(RootValue, shape::AggregateSlice)> {
     exact_capture_destination(
         exact_projection_of(
             capture_state.exact_states,
@@ -957,13 +863,12 @@ fn exact_capture_destination_for_value(
         ),
         relative_slice,
     )
-    .map(|(root, slice)| (root.value(), slice))
 }
 
 fn capture_roots_for_value(
     value: ValueId,
     capture_state: CaptureStateView<'_>,
-    root_captures: &FxHashMap<ValueId, Vec<RootCaptureSource>>,
+    root_captures: &RootCaptureMap,
 ) -> RootTransfer {
     let mut transfer = RootTransfer {
         maybe_unknown: capture_state.maybe_unknown[value],
@@ -1033,11 +938,6 @@ fn union_root_transfer(
     let unknown_changed = !*dst_maybe_unknown && src.maybe_unknown;
     *dst_maybe_unknown |= src.maybe_unknown;
     roots_changed || unknown_changed
-}
-
-fn slices_overlap_relative(lhs: shape::AggregateSlice, rhs: shape::AggregateSlice) -> bool {
-    lhs.first_leaf < rhs.first_leaf + rhs.leaf_count
-        && rhs.first_leaf < lhs.first_leaf + lhs.leaf_count
 }
 
 fn possible_root_transfer(
@@ -2172,6 +2072,65 @@ block0:
             assert_eq!(
                 complete.complete_roots(loaded),
                 Some(CompleteRootSet::Single(RootValue::new(source_root)))
+            );
+        });
+    }
+
+    #[test]
+    fn dead_predecessor_capture_source_is_ignored_for_objref_load_refinement() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @Take = { objref<[i256; 8]> };
+
+func private %f(v0.objref<@Take>, v1.objref<[i256; 8]>) -> objref<[i256; 8]> {
+block0:
+    v2.objref<objref<[i256; 8]>> = obj.proj v0 0.i8;
+    obj.store v2 v1;
+    jump block2;
+
+block1:
+    v3.objref<[i256; 8]> = obj.alloc [i256; 8];
+    v4.objref<objref<[i256; 8]>> = obj.proj v0 0.i8;
+    obj.store v4 v3;
+    jump block2;
+
+block2:
+    v5.objref<objref<[i256; 8]>> = obj.proj v0 0.i8;
+    v6.objref<[i256; 8]> = obj.load v5;
+    return v6;
+}
+"#,
+        );
+
+        let func_ref = lookup_func(&module, "f");
+        let object_effects = compute_object_effect_summaries(&module);
+        module.func_store.view(func_ref, |func| {
+            let mut layout_cache = shape::AggregateLayoutCache::default();
+            let root_slices = collect_root_slices_with_arg_roots(func, &mut layout_cache);
+            let provenance = collect_root_provenance(
+                func,
+                func.ctx(),
+                &root_slices,
+                &mut layout_cache,
+                Some(&object_effects),
+            );
+
+            let loaded = func
+                .layout
+                .iter_block()
+                .flat_map(|block| func.layout.iter_inst(block))
+                .find_map(|inst| {
+                    downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst))
+                        .and_then(|_| func.dfg.inst_result(inst))
+                })
+                .expect("load result should exist");
+
+            let complete = provenance.complete();
+            assert_eq!(
+                complete.complete_roots(loaded),
+                Some(CompleteRootSet::Single(RootValue::new(func.arg_values[1])))
             );
         });
     }

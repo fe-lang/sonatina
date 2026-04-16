@@ -8,6 +8,12 @@ use sonatina_ir::{
 };
 
 use super::{
+    capture_state::{
+        CaptureRelevantInst, RootCaptureMap as SharedRootCaptureMap, RootCapturePayload,
+        capture_relevant_inst, compute_capture_states_for_blocks as compute_block_capture_states,
+        kill_capture_access as kill_capture_projection_access,
+        kill_capture_slice_set as kill_capture_exact_slice_set, slices_overlap_relative,
+    },
     collect_root_provenance,
     provenance::{
         CompleteProvenance, CompleteRootSet, MayProvenance, RootValue, exact_capture_destination,
@@ -52,6 +58,8 @@ struct RootCaptureEffect {
     src_slice: shape::AggregateSlice,
 }
 
+type RootCaptureMap = SharedRootCaptureMap<RootCaptureEffect>;
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct ReturnedFreshSlice {
     root_value: RootValue,
@@ -64,8 +72,6 @@ struct ReturnAnalysis {
     ret_effect: ObjectReturnEffect,
     returned_fresh_slices: Vec<ReturnedFreshSlice>,
 }
-
-type RootCaptureMap = FxHashMap<RootValue, Vec<RootCaptureEffect>>;
 
 #[derive(Clone, Copy)]
 struct EffectProvenance<'a> {
@@ -107,6 +113,12 @@ impl<'a> EffectProvenance<'a> {
                     .expect("observed provenance root must have an exact root slice")
             },
         )
+    }
+}
+
+impl RootCapturePayload for RootCaptureEffect {
+    fn dst_slice(self) -> shape::AggregateSlice {
+        self.dst_slice
     }
 }
 
@@ -353,8 +365,6 @@ fn compute_summary_for_func(
             layout_cache,
             Some(summaries),
         );
-        let return_analysis =
-            analyze_returns(function, &arg_roots, provenance.complete(), layout_cache);
         let effect_provenance = EffectProvenance {
             complete: provenance.complete(),
             may: provenance.may(),
@@ -362,15 +372,28 @@ fn compute_summary_for_func(
         };
         let mut cfg = ControlFlowGraph::default();
         cfg.compute(function);
+        let reachable = cfg.reachable_blocks();
+        let return_analysis = analyze_returns(
+            function,
+            &reachable,
+            &arg_roots,
+            provenance.complete(),
+            layout_cache,
+        );
         let (block_entry_captures, exit_root_captures) = compute_capture_states_for_blocks(
             function,
             effect_provenance,
             summaries,
             layout_cache,
             &cfg,
+            &reachable,
         );
 
         for block in function.layout.iter_block() {
+            if !reachable[block] {
+                continue;
+            }
+
             let mut root_captures = block_entry_captures[block].clone();
             for inst in function.layout.iter_inst(block) {
                 if !function.layout.is_inst_inserted(inst) {
@@ -532,58 +555,21 @@ fn compute_capture_states_for_blocks(
     summaries: &ObjectEffectSummaryMap,
     layout_cache: &mut shape::AggregateLayoutCache,
     cfg: &ControlFlowGraph,
+    reachable: &cranelift_entity::SecondaryMap<BlockId, bool>,
 ) -> (
     cranelift_entity::SecondaryMap<BlockId, RootCaptureMap>,
     RootCaptureMap,
 ) {
-    let mut block_entry_captures = cranelift_entity::SecondaryMap::default();
-    let mut block_exit_captures = cranelift_entity::SecondaryMap::default();
-
-    loop {
-        let mut changed = false;
-
-        for block in function.layout.iter_block() {
-            let mut entry_captures = RootCaptureMap::default();
-            for &pred in cfg.preds_of(block) {
-                merge_root_capture_maps(&mut entry_captures, &block_exit_captures[pred]);
-            }
-
-            if block_entry_captures[block] != entry_captures {
-                block_entry_captures[block] = entry_captures.clone();
-                changed = true;
-            }
-
-            let mut exit_captures = entry_captures;
-            for inst in function.layout.iter_inst(block) {
-                apply_inst_capture_transfer(
-                    function,
-                    inst,
-                    &mut exit_captures,
-                    effect_provenance,
-                    summaries,
-                    layout_cache,
-                );
-            }
-            dedup_root_capture_effects(&mut exit_captures);
-
-            if block_exit_captures[block] != exit_captures {
-                block_exit_captures[block] = exit_captures;
-                changed = true;
-            }
-        }
-
-        if !changed {
-            break;
-        }
-    }
-
-    let mut exit_root_captures = RootCaptureMap::default();
-    for &block in &cfg.exits {
-        merge_root_capture_maps(&mut exit_root_captures, &block_exit_captures[block]);
-    }
-    dedup_root_capture_effects(&mut exit_root_captures);
-
-    (block_entry_captures, exit_root_captures)
+    compute_block_capture_states(function, cfg, reachable, |inst, exit_captures| {
+        apply_inst_capture_transfer(
+            function,
+            inst,
+            exit_captures,
+            effect_provenance,
+            summaries,
+            layout_cache,
+        );
+    })
 }
 
 fn apply_inst_capture_transfer(
@@ -598,80 +584,57 @@ fn apply_inst_capture_transfer(
         return;
     }
 
-    if let Some(obj_store) =
-        downcast::<&data::ObjStore>(function.inst_set(), function.dfg.inst(inst))
-    {
-        kill_capture_access(root_captures, effect_provenance, *obj_store.object(), None);
-        record_capture(
-            root_captures,
-            effect_provenance,
-            *obj_store.object(),
-            *obj_store.value(),
-        );
-        return;
-    }
-
-    if let Some(enum_set_tag) =
-        downcast::<&data::EnumSetTag>(function.inst_set(), function.dfg.inst(inst))
-    {
-        kill_capture_access(
-            root_captures,
-            effect_provenance,
-            *enum_set_tag.object(),
-            Some((0, 1)),
-        );
-        return;
-    }
-
-    if let Some(enum_write_variant) =
-        downcast::<&data::EnumWriteVariant>(function.inst_set(), function.dfg.inst(inst))
-    {
-        kill_capture_access(
-            root_captures,
-            effect_provenance,
-            *enum_write_variant.object(),
-            None,
-        );
-        record_enum_variant_captures(
-            function,
-            root_captures,
-            effect_provenance,
-            *enum_write_variant.object(),
-            enum_write_variant.values(),
-            *enum_write_variant.variant(),
-        );
-        return;
-    }
-
-    if downcast::<&control_flow::Call>(function.inst_set(), function.dfg.inst(inst)).is_some() {
-        apply_call_capture_transfer(
-            function,
-            inst,
-            root_captures,
-            effect_provenance,
-            summaries,
-            layout_cache,
-        );
-    }
-}
-
-fn merge_root_capture_maps(dst: &mut RootCaptureMap, src: &RootCaptureMap) -> bool {
-    let mut changed = false;
-    for (&root, captures) in src {
-        let entry = dst.entry(root).or_default();
-        for &capture in captures {
-            if entry.contains(&capture) {
-                continue;
-            }
-            entry.push(capture);
-            changed = true;
+    match capture_relevant_inst(function, inst) {
+        Some(CaptureRelevantInst::ObjStore(obj_store)) => {
+            kill_capture_access(root_captures, effect_provenance, *obj_store.object(), None);
+            record_capture(
+                root_captures,
+                effect_provenance,
+                *obj_store.object(),
+                *obj_store.value(),
+            );
         }
+        Some(CaptureRelevantInst::EnumSetTag(enum_set_tag)) => {
+            kill_capture_access(
+                root_captures,
+                effect_provenance,
+                *enum_set_tag.object(),
+                Some((0, 1)),
+            );
+        }
+        Some(CaptureRelevantInst::EnumWriteVariant(enum_write_variant)) => {
+            kill_capture_access(
+                root_captures,
+                effect_provenance,
+                *enum_write_variant.object(),
+                None,
+            );
+            record_enum_variant_captures(
+                function,
+                root_captures,
+                effect_provenance,
+                *enum_write_variant.object(),
+                enum_write_variant.values(),
+                *enum_write_variant.variant(),
+            );
+        }
+        Some(CaptureRelevantInst::Call) => {
+            apply_call_capture_transfer(
+                function,
+                inst,
+                root_captures,
+                effect_provenance,
+                summaries,
+                layout_cache,
+            );
+        }
+        None => {}
     }
-    changed
 }
 
 fn analyze_returns(
     function: &Function,
+    reachable: &cranelift_entity::SecondaryMap<BlockId, bool>,
     arg_roots: &FxHashMap<RootValue, usize>,
     provenance: CompleteProvenance<'_>,
     layout_cache: &mut shape::AggregateLayoutCache,
@@ -682,6 +645,10 @@ fn analyze_returns(
     let mut seen_returned_slices = FxHashSet::default();
 
     for block in function.layout.iter_block() {
+        if !reachable[block] {
+            continue;
+        }
+
         for inst in function.layout.iter_inst(block) {
             let Some(ret) =
                 downcast::<&control_flow::Return>(function.inst_set(), function.dfg.inst(inst))
@@ -975,11 +942,6 @@ fn rebase_slice(
             first_leaf: nested_slice.first_leaf - base_slice.first_leaf,
             leaf_count: nested_slice.leaf_count,
         })
-}
-
-fn slices_overlap_relative(lhs: shape::AggregateSlice, rhs: shape::AggregateSlice) -> bool {
-    lhs.first_leaf < rhs.first_leaf + rhs.leaf_count
-        && rhs.first_leaf < lhs.first_leaf + lhs.leaf_count
 }
 
 fn merge_call_effects(
@@ -1328,9 +1290,7 @@ fn kill_capture_access(
             leaf_count,
         })
     });
-    if let Some((root, access_slice)) = exact_capture_destination(projection, relative_slice) {
-        kill_capture_root_slice(root_captures, root, Some(access_slice));
-    }
+    kill_capture_projection_access(root_captures, projection, relative_slice);
 }
 
 fn kill_capture_slice_set(
@@ -1339,52 +1299,11 @@ fn kill_capture_slice_set(
     value: ValueId,
     slices: &SliceSet,
 ) {
-    if slices.is_empty() {
-        return;
-    }
-    let Some((root, base_slice)) =
-        exact_capture_destination(capture_ctx.exact_projection(value), None)
-    else {
-        return;
-    };
-    if slices.is_whole_root() || base_slice.leaf_count != slices.total_leaves() {
-        kill_capture_root_slice(root_captures, root, Some(base_slice));
-        return;
-    }
-    let Some(exact_leaves) = slices.exact_leaves() else {
-        kill_capture_root_slice(root_captures, root, Some(base_slice));
-        return;
-    };
-
-    for &leaf in exact_leaves {
-        kill_capture_root_slice(
-            root_captures,
-            root,
-            Some(shape::AggregateSlice {
-                ty: base_slice.ty,
-                first_leaf: base_slice.first_leaf + leaf,
-                leaf_count: 1,
-            }),
-        );
-    }
-}
-
-fn kill_capture_root_slice(
-    root_captures: &mut RootCaptureMap,
-    root: RootValue,
-    access_slice: Option<shape::AggregateSlice>,
-) {
-    let Some(captures) = root_captures.get_mut(&root) else {
-        return;
-    };
-    let Some(access_slice) = access_slice else {
-        root_captures.remove(&root);
-        return;
-    };
-    captures.retain(|capture| !slices_overlap_relative(access_slice, capture.dst_slice));
-    if captures.is_empty() {
-        root_captures.remove(&root);
-    }
+    kill_capture_exact_slice_set(
+        root_captures,
+        exact_capture_destination(capture_ctx.exact_projection(value), None),
+        slices,
+    );
 }
 
 fn value_root_slices(
@@ -1434,13 +1353,6 @@ fn push_capture_effect(summary: &mut ObjectEffectSummary, capture: ObjectCapture
 fn dedup_capture_effects(captures: &mut Vec<ObjectCaptureEffect>) {
     let mut seen = FxHashSet::default();
     captures.retain(|capture| seen.insert(*capture));
-}
-
-fn dedup_root_capture_effects(root_captures: &mut RootCaptureMap) {
-    for captures in root_captures.values_mut() {
-        let mut seen = FxHashSet::default();
-        captures.retain(|capture| seen.insert(*capture));
-    }
 }
 
 fn single_result_value(func: &Function, inst: sonatina_ir::InstId) -> Option<ValueId> {
@@ -2328,6 +2240,42 @@ block0:
         assert!(
             has_return_capture(&summary, 1, 1, 0, 0, 8),
             "forwarding helper should preserve returned capture relations"
+        );
+    }
+
+    #[test]
+    fn dead_exit_does_not_contribute_return_captures() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @Take = { objref<[i256; 8]> };
+
+func private %f(v0.objref<[i256; 8]>, v1.objref<@Take>) -> objref<@Take> {
+block0:
+    return v1;
+
+block1:
+    v2.objref<@Take> = obj.alloc @Take;
+    v3.objref<objref<[i256; 8]>> = obj.proj v2 0.i8;
+    obj.store v3 v0;
+    return v2;
+}
+"#,
+        );
+
+        let func_ref = lookup_func(&module, "f");
+        let summary = compute_object_effect_summaries(&module)
+            .remove(&func_ref)
+            .expect("summary should exist");
+
+        assert_eq!(
+            summary.ret_effect,
+            ObjectReturnEffect::SameAsArg { index: 1 }
+        );
+        assert!(
+            summary.captures.is_empty(),
+            "dead return exits must not contribute capture summaries"
         );
     }
 

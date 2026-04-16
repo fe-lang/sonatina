@@ -1,5 +1,6 @@
 pub(crate) mod abi;
 pub(crate) mod byval_object_abi;
+mod capture_state;
 mod cleanup;
 pub(crate) mod combine;
 pub(crate) mod enum_lowering;
