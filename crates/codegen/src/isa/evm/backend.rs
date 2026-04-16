@@ -16,7 +16,7 @@ use crate::machinst::{
 
 use super::{
     STATIC_BASE,
-    emit::{EvmFunctionLowering, frame_slot_sp_relative_bytes, push_op},
+    emit::{EvmFunctionLowering, push_op},
     late_alias::compute_evm_late_aliases,
     late_section_merge::run_late_section_terminal_outline,
     memory_plan::{ArenaCostModel, ObjLoc, PreserveMode, StableMode, WORD_BYTES},
@@ -184,8 +184,11 @@ impl EvmBackend {
                     format!("0x{addr_bytes:x}")
                 }
                 ObjLoc::StableFrame(off) => {
-                    let addr_bytes =
-                        frame_slot_sp_relative_bytes(func_plan.frame_size_words(), off);
+                    let frame_layout = func_plan
+                        .dynamic_frame_layout()
+                        .expect("stable frame object missing dynamic frame layout");
+                    let addr_bytes = frame_layout
+                        .sp_relative_bytes(frame_layout.expect_local_word(off, "debug object"));
                     format!("sp-0x{addr_bytes:x}")
                 }
                 ObjLoc::StackPinned(depth) => format!("stack[{depth}]"),

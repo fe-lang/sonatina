@@ -3,7 +3,8 @@ use sonatina_ir::{BlockId, Function, I256, Immediate, InstId};
 use crate::stackalloc::{Action, Actions, Allocator, StackifyAlloc};
 
 use super::super::{
-    FuncMemPlan, ObjLoc, PreserveMode, STATIC_BASE, WORD_BYTES, static_arena_alloc::StackObjId,
+    DynamicFrameLayout, FuncMemPlan, ObjLoc, PreserveMode, STATIC_BASE, WORD_BYTES,
+    static_arena_alloc::StackObjId,
 };
 
 pub(crate) struct FinalAlloc {
@@ -34,6 +35,21 @@ impl FinalAlloc {
             .unwrap_or_else(|| panic!("missing stack object location for obj {}", id.as_u32()))
     }
 
+    fn dynamic_frame_layout(&self) -> DynamicFrameLayout {
+        self.mem_plan
+            .dynamic_frame_layout()
+            .expect("frame location requires an addressable dynamic frame layout")
+    }
+
+    fn frame_action_offset(&self, offset_words: u32, extra_words: u32, kind: &str) -> u32 {
+        let offset_words = offset_words
+            .checked_add(extra_words)
+            .unwrap_or_else(|| panic!("frame {kind} offset overflow"));
+        self.dynamic_frame_layout()
+            .expect_local_word(offset_words, kind)
+            .as_u32()
+    }
+
     fn action_for_loc(
         &self,
         loc: ObjLoc,
@@ -59,10 +75,7 @@ impl FinalAlloc {
                         .unwrap_or_else(|| panic!("stable {kind} offset overflow")),
                 ))
             }
-            ObjLoc::StableFrame(off) => frame(
-                off.checked_add(extra_words)
-                    .unwrap_or_else(|| panic!("frame {kind} offset overflow")),
-            ),
+            ObjLoc::StableFrame(off) => frame(self.frame_action_offset(off, extra_words, kind)),
             ObjLoc::StackPinned(depth) => {
                 panic!("stack-pinned objects are not supported in EVM lowering (depth={depth})")
             }
@@ -127,7 +140,7 @@ impl FinalAlloc {
                 Action::Push(Immediate::I256(I256::from(addr)))
             }
             ObjLoc::StableFrame(off) => Action::PushFrameAddr {
-                offset_words: off,
+                offset_words: self.frame_action_offset(off, 0, "exact local addr"),
                 extra_bytes: offset_bytes,
             },
             ObjLoc::StackPinned(depth) => {
@@ -250,10 +263,6 @@ impl Allocator for FinalAlloc {
         self.rewrite_actions(self.inner.enter_function(function))
     }
 
-    fn frame_size_slots(&self) -> u32 {
-        self.mem_plan.frame_size_words()
-    }
-
     fn read(&self, inst: InstId, vals: &[sonatina_ir::ValueId]) -> Actions {
         let actions = self.inner.read(inst, vals);
         let actions = self.inject_call_save_pre(inst, vals.len(), actions);
@@ -272,5 +281,54 @@ impl Allocator for FinalAlloc {
 
     fn traverse_edge(&self, from: BlockId, to: BlockId) -> Actions {
         self.rewrite_actions(self.inner.traverse_edge(from, to))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use cranelift_entity::SecondaryMap;
+    use rustc_hash::{FxHashMap, FxHashSet};
+    use sonatina_ir::InstId;
+
+    use super::{FinalAlloc, StackifyAlloc};
+    use crate::{
+        isa::evm::{FuncMemPlan, ObjLoc, memory_plan::StableMode},
+        stackalloc::Action,
+    };
+
+    fn mem_plan_with_alloca(alloca: InstId, loc: ObjLoc, stable_words: u32) -> FuncMemPlan {
+        let mut alloca_loc = FxHashMap::default();
+        alloca_loc.insert(alloca, loc);
+        FuncMemPlan {
+            scratch_words: 0,
+            stable_words,
+            stable_mode: StableMode::DynamicFrame,
+            entry_abs_words: 0,
+            obj_loc: FxHashMap::default(),
+            alloca_loc,
+            spill_obj: SecondaryMap::new(),
+            call_preserve: FxHashMap::default(),
+            malloc_future_abs_words: FxHashMap::default(),
+            transient_mallocs: FxHashSet::default(),
+            malloc_escape_kinds: FxHashMap::default(),
+            return_escape_caller_abs_words: 0,
+        }
+    }
+
+    #[test]
+    fn exact_local_addr_uses_dynamic_frame_local_offsets() {
+        let alloca = InstId::from_u32(7);
+        let alloc = FinalAlloc::new(
+            StackifyAlloc::default(),
+            mem_plan_with_alloca(alloca, ObjLoc::StableFrame(1), 3),
+        );
+
+        assert_eq!(
+            alloc.action_for_exact_local_addr(alloca, 64),
+            Action::PushFrameAddr {
+                offset_words: 1,
+                extra_bytes: 64,
+            }
+        );
     }
 }

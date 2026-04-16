@@ -11,12 +11,6 @@ pub type Actions = SmallVec<[Action; 2]>;
 pub trait Allocator {
     fn enter_function(&self, function: &Function) -> Actions;
 
-    /// Returns the number of 32-byte frame slots used by this function for
-    /// spilling/reloading values.
-    fn frame_size_slots(&self) -> u32 {
-        0
-    }
-
     // xxx rename these to make it clear that these are pre- and post-insn operations
     /// Return the actions required to place `vals` on the stack,
     /// in the specified order. I.e. the first `Value` in `vals`
@@ -38,14 +32,19 @@ pub enum Action {
     PushContinuationOffset,
     Pop,
     MemLoadAbs(u32),
-    /// Relative to the backend-defined dynamic frame layout.
+    /// Local dynamic-frame word offset, excluding backend metadata such as the
+    /// hidden caller-SP link slot.
     MemLoadFrameSlot(u32),
     MemStoreAbs(u32),
+    /// Local dynamic-frame word offset, excluding backend metadata such as the
+    /// hidden caller-SP link slot.
     MemStoreFrameSlot(u32),
     MaterializeLocalAddr {
         alloca: InstId,
         offset_bytes: i64,
     },
+    /// Local dynamic-frame word offset, excluding backend metadata such as the
+    /// hidden caller-SP link slot.
     PushFrameAddr {
         offset_words: u32,
         extra_bytes: i64,

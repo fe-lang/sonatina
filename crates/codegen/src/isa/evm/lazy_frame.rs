@@ -132,7 +132,7 @@ pub(crate) fn compute_frame_summary(
     mem_plan: &FuncMemPlan,
     isa: &Evm,
 ) -> FrameSummary {
-    if mem_plan.frame_size_words() == 0 {
+    if mem_plan.dynamic_frame_layout().is_none() {
         return FrameSummary::default();
     }
 

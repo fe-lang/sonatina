@@ -17,6 +17,7 @@ use crate::{
 
 use super::{
     canonicalize_alias_value,
+    frame_layout::DynamicFrameLayout,
     malloc_plan::MallocEscapeKind,
     ptr_escape::PtrEscapeSummary,
     static_arena_alloc::{
@@ -66,19 +67,14 @@ impl FuncMemPlan {
         }
     }
 
-    pub fn frame_words(&self) -> u32 {
-        match self.stable_mode {
-            StableMode::DynamicFrame => self.stable_words,
-            StableMode::None | StableMode::StaticAbs { .. } => 0,
-        }
+    pub fn dynamic_frame_layout(&self) -> Option<DynamicFrameLayout> {
+        matches!(self.stable_mode, StableMode::DynamicFrame)
+            .then(|| DynamicFrameLayout::new(self.stable_words))
+            .flatten()
     }
 
     pub fn uses_dynamic_frame(&self) -> bool {
         matches!(self.stable_mode, StableMode::DynamicFrame)
-    }
-
-    pub fn frame_size_words(&self) -> u32 {
-        self.frame_words()
     }
 
     pub fn abs_words_end(&self) -> u32 {
@@ -321,6 +317,8 @@ pub enum StableMode {
 pub enum ObjLoc {
     ScratchAbs(u32),
     StableAbs(u32),
+    /// Local dynamic-frame word offset, excluding backend metadata such as the
+    /// hidden caller-SP link slot.
     StableFrame(u32),
     #[allow(dead_code)]
     StackPinned(u8),

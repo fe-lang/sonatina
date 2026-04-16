@@ -1,6 +1,7 @@
 mod backend;
 pub(crate) mod dyn_sp;
 mod emit;
+mod frame_layout;
 mod heap_plan;
 mod late_alias;
 mod late_block_merge;
@@ -29,6 +30,7 @@ pub(crate) use dyn_sp::DynSpInitKind;
 pub(crate) use emit::{
     fold_stack_actions, immediate_u32, is_plain_inst, is_push_opcode, referenced_insn_label_targets,
 };
+pub(crate) use frame_layout::{DynamicFrameLayout, FrameLocalWord};
 pub(crate) use late_alias::normalize_alias_map;
 pub(crate) use lazy_frame::{FrameSite, FrameSummary, LazyFramePlan};
 pub(crate) use memory_plan::{
