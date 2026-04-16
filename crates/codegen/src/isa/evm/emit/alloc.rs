@@ -260,6 +260,10 @@ impl Allocator for FinalAlloc {
         self.rewrite_actions(actions)
     }
 
+    fn read_br_table_case(&self, inst: InstId, case_index: usize) -> Actions {
+        self.rewrite_actions(self.inner.read_br_table_case(inst, case_index))
+    }
+
     fn write(&self, inst: InstId, vals: &[sonatina_ir::ValueId]) -> Actions {
         let actions = self.inner.write(inst, vals);
         let actions = self.inject_call_save_post(inst, actions);

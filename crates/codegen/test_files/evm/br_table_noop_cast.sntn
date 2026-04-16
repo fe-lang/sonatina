@@ -1,0 +1,36 @@
+#! evm.config: { opt: 0 }
+#! evm.case: ok
+#!   calldata: u256(11)
+#!   expect: return u256(200)
+
+target = "evm-ethereum-osaka"
+
+func public %entry() {
+block0:
+    v0.i256 = evm_calldata_load 0.i32;
+    v1.i32 = call %dispatch v0;
+    mstore 0.i32 v1 i32;
+    evm_return 0.i8 32.i8;
+}
+
+func private %dispatch(v0.i256) -> i32 {
+block0:
+    v1.*i8 = int_to_ptr v0 *i8;
+    v2.i256 = ptr_to_int v1 i256;
+    br_table v2 block3 (0.i256 block1) (11.i256 block2);
+
+block1:
+    return 100.i32;
+
+block2:
+    return 200.i32;
+
+block3:
+    return 300.i32;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}

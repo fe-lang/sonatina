@@ -303,8 +303,8 @@ fn compute_active_pre_insts(
                     }
                 }
                 EvmInstKind::BrTable(br) => {
-                    for (case_val, _) in br.table().iter() {
-                        let actions = alloc.read(inst, &[*br.scrutinee(), *case_val]);
+                    for (case_idx, _) in br.table().iter().enumerate() {
+                        let actions = alloc.read_br_table_case(inst, case_idx);
                         if fold_stack_actions(&actions).iter().any(|action| {
                             matches!(
                                 action,
@@ -473,8 +473,8 @@ fn collect_dep_points(
                     }
                 }
                 EvmInstKind::BrTable(br) => {
-                    for (case_val, _) in br.table().iter() {
-                        let actions = alloc.read(inst, &[*br.scrutinee(), *case_val]);
+                    for (case_idx, _) in br.table().iter().enumerate() {
+                        let actions = alloc.read_br_table_case(inst, case_idx);
                         if fold_stack_actions(&actions).iter().any(|action| {
                             matches!(
                                 action,

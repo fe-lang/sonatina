@@ -469,9 +469,9 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
                         &mut self.alloc.pre_actions[inst],
                     );
 
-                    // `br_table` lowering uses per-case `Allocator::read()` calls. Treat any
-                    // actions accumulated for this terminator as a "one-time prefix" executed
-                    // by the first case.
+                    // `br_table` lowering uses per-case `Allocator::read_br_table_case()` calls.
+                    // Treat any actions accumulated for this terminator as a "one-time prefix"
+                    // executed by the first case.
                     let base_actions = self.alloc.pre_actions[inst].clone();
                     self.alloc.pre_actions[inst].clear();
 
@@ -496,9 +496,8 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
                                     );
                                 },
                             );
-                            self.alloc
-                                .brtable_actions
-                                .insert((inst, scrutinee, case_val), case_actions);
+                            debug_assert_eq!(self.alloc.brtable_actions[inst].len(), case_idx);
+                            self.alloc.brtable_actions[inst].push(case_actions);
                         },
                     );
 

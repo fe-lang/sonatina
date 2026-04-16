@@ -1,8 +1,3 @@
-use cranelift_entity::{EntityRef, SecondaryMap};
-use smallvec::SmallVec;
-use sonatina_ir::{BlockId, Function, ValueId, cfg::ControlFlowGraph};
-use std::collections::BTreeMap;
-
 use crate::{
     analysis::memory_access::{ExactLocalAddr, MemoryAccessAnalysis},
     bitset::BitSet,
@@ -11,6 +6,9 @@ use crate::{
     isa::evm::normalize_alias_map,
     liveness::Liveness,
 };
+use cranelift_entity::{EntityRef, SecondaryMap};
+use smallvec::SmallVec;
+use sonatina_ir::{BlockId, Function, ValueId, cfg::ControlFlowGraph};
 
 use super::{
     alloc::StackifyAlloc,
@@ -26,6 +24,7 @@ use super::{
     terminal_chain::compute_terminal_chain_blocks,
     trace::{NullObserver, StackifyObserver},
 };
+use std::collections::BTreeMap;
 
 #[derive(Clone, Copy, Debug)]
 pub(super) struct StackifyReachability {
@@ -257,7 +256,7 @@ impl<'a> StackifyBuilder<'a> {
         let mut alloc = StackifyAlloc {
             pre_actions: SecondaryMap::new(),
             post_actions: SecondaryMap::new(),
-            brtable_actions: BTreeMap::new(),
+            brtable_actions: SecondaryMap::new(),
             spill_obj,
             scratch_slot_of_value: SecondaryMap::new(),
             exact_local_addr: ctx.exact_local_addr.clone(),
