@@ -43,11 +43,17 @@ impl<'a> AggregateValueReconstructor<'a> {
             return Some(func.dfg.make_undef_value(result_ty));
         }
 
+        let (source_first_runtime_leaf, source_runtime_leaf_count) =
+            shape::runtime_leaf_range_for_slice(func.ctx(), source_ty, source_slice)?;
+        if source_runtime_leaf_count == 0 {
+            return Some(func.dfg.make_undef_value(result_ty));
+        }
+
         let source_leaf_count = self
             .layout_cache
             .runtime_leaves(func.ctx(), source_ty)?
             .len();
-        if source_slice.first_leaf == 0 && source_slice.leaf_count == source_leaf_count {
+        if source_first_runtime_leaf == 0 && source_runtime_leaf_count == source_leaf_count {
             return self.cast_aggregate_view_value(func, inst, source, source_ty, result_ty);
         }
 
@@ -65,20 +71,22 @@ impl<'a> AggregateValueReconstructor<'a> {
             for idx in 0..child_count {
                 let idx = u32::try_from(idx).ok()?;
                 let child_slice = shape::aggregate_slice_for_index(func.ctx(), source_ty, idx)?;
-                if source_slice.first_leaf < child_slice.first_leaf
-                    || source_slice.first_leaf + source_slice.leaf_count
-                        > child_slice.first_leaf + child_slice.leaf_count
+                let (child_first_runtime_leaf, child_runtime_leaf_count) =
+                    shape::runtime_leaf_range_for_slice(func.ctx(), source_ty, child_slice)?;
+                if source_first_runtime_leaf < child_first_runtime_leaf
+                    || source_first_runtime_leaf + source_runtime_leaf_count
+                        > child_first_runtime_leaf + child_runtime_leaf_count
                 {
                     continue;
                 }
 
                 let child_value =
                     self.lookup_immediate_child_value(func, inst, source, source_ty, idx)?;
-                let nested_slice = shape::aggregate_slice_for_leaf_range(
+                let nested_slice = shape::aggregate_slice_for_runtime_leaf_range(
                     func.ctx(),
                     child_slice.ty,
-                    source_slice.first_leaf - child_slice.first_leaf,
-                    source_slice.leaf_count,
+                    source_first_runtime_leaf - child_first_runtime_leaf,
+                    source_runtime_leaf_count,
                 )?;
                 return self.rebuild_slice(
                     func,
@@ -99,11 +107,17 @@ impl<'a> AggregateValueReconstructor<'a> {
             let module = func.ctx().clone();
             let shape = self.layout_cache.shape(&module, result_ty)?;
             let mut leaves = SmallVec::<[ValueId; 4]>::new();
-            for (leaf_idx, leaf) in shape.leaves.iter().enumerate() {
-                let source_child_slice = shape::aggregate_slice_for_leaf_range(
+            let mut next_runtime_leaf = source_first_runtime_leaf;
+            for leaf in &shape.leaves {
+                if leaf.size_bytes == 0 {
+                    leaves.push(func.dfg.make_undef_value(leaf.ty));
+                    continue;
+                }
+
+                let source_child_slice = shape::aggregate_slice_for_runtime_leaf_range(
                     &module,
                     source_ty,
-                    source_slice.first_leaf + leaf_idx,
+                    next_runtime_leaf,
                     1,
                 )?;
                 leaves.push(self.rebuild_slice(
@@ -114,6 +128,7 @@ impl<'a> AggregateValueReconstructor<'a> {
                     source_child_slice,
                     leaf.ty,
                 )?);
+                next_runtime_leaf = next_runtime_leaf.checked_add(1)?;
             }
             return rebuild_scalar_shape_from_leaf_values(func, inst, &module, result_ty, &leaves);
         }
@@ -123,14 +138,16 @@ impl<'a> AggregateValueReconstructor<'a> {
         for idx in 0..child_count {
             let idx = u32::try_from(idx).ok()?;
             let child_slice = shape::aggregate_slice_for_index(func.ctx(), result_ty, idx)?;
-            let child_value = if child_slice.leaf_count == 0 {
+            let (child_first_runtime_leaf, child_runtime_leaf_count) =
+                shape::runtime_leaf_range_for_slice(func.ctx(), result_ty, child_slice)?;
+            let child_value = if child_runtime_leaf_count == 0 {
                 func.dfg.make_undef_value(child_slice.ty)
             } else {
-                let source_child_slice = shape::aggregate_slice_for_leaf_range(
+                let source_child_slice = shape::aggregate_slice_for_runtime_leaf_range(
                     func.ctx(),
                     source_ty,
-                    source_slice.first_leaf + child_slice.first_leaf,
-                    child_slice.leaf_count,
+                    source_first_runtime_leaf + child_first_runtime_leaf,
+                    child_runtime_leaf_count,
                 )?;
                 self.rebuild_slice(
                     func,
@@ -661,6 +678,52 @@ block0:
                     .unwrap();
             assert_eq!(*extract.dest(), arg);
             assert_eq!(shape::const_u32(&func.dfg, *extract.idx()), Some(0));
+        });
+    }
+
+    #[test]
+    fn rebuilds_full_compatible_bitcast_views_with_zero_sized_fields() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @src = { unit, i256, i256 };
+type @dst = { i256, i256 };
+
+func private %f(v0.@src) -> i256 {
+block0:
+    return 0.i256;
+}
+"#,
+        );
+        let src = module
+            .ctx
+            .with_ty_store(|s| Type::Compound(s.lookup_struct("src").unwrap()));
+        let dst = module
+            .ctx
+            .with_ty_store(|s| Type::Compound(s.lookup_struct("dst").unwrap()));
+        let func_ref = lookup_func(&module, "f");
+
+        module.func_store.modify(func_ref, |func| {
+            let ret = func
+                .layout
+                .last_inst_of(func.layout.entry_block().unwrap())
+                .unwrap();
+            let arg = func.arg_values[0];
+            let target_slice = shape::aggregate_slice_for_path(func.ctx(), dst, &[]).unwrap();
+            let mut layout_cache = shape::AggregateLayoutCache::default();
+            let source_slice = layout_cache
+                .compatible_bitcast_source_slice(func.ctx(), src, dst, target_slice)
+                .unwrap();
+            let rebuilt = AggregateValueReconstructor::new(&mut layout_cache)
+                .rebuild_slice(func, ret, arg, src, source_slice, dst)
+                .unwrap();
+
+            assert_eq!(func.dfg.value_ty(rebuilt), dst);
+            let rebuilt_inst = func.dfg.value_inst(rebuilt).unwrap();
+            let bitcast =
+                downcast::<&cast::Bitcast>(func.inst_set(), func.dfg.inst(rebuilt_inst)).unwrap();
+            assert_eq!(*bitcast.from(), arg);
         });
     }
 
