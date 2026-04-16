@@ -654,14 +654,14 @@ impl<'a> FunctionLegalizer<'a> {
         Self::scalar_type_for_width(width)
     }
 
-    fn replace_with_canonicalized_narrow_signed_sat<I: Inst>(
+    fn replace_with_normalized_narrow_signed_sat<I: Inst>(
         &mut self,
         inst: InstId,
         data: I,
         width: ScalarWidth,
     ) {
         let raw = self.insert_before_one(inst, data, Type::I256, Some(ScalarWidth::Full256));
-        let result = self.canonicalize_to_width(inst, raw, width);
+        let result = self.normalize_and_retag_width(inst, raw, width);
         self.replace_with_aliases(inst, &[result]);
     }
 
@@ -685,38 +685,65 @@ impl<'a> FunctionLegalizer<'a> {
         }
     }
 
-    fn copy_i256_with_width(
-        &mut self,
-        before: InstId,
-        value: ValueId,
-        width: ScalarWidth,
-    ) -> ValueId {
-        let zero = self.zero_i256();
-        self.insert_before_one(
-            before,
-            Or::new(self.evm_inst_set(), value, zero),
-            Type::I256,
-            Some(width),
-        )
+    fn value_has_width(&self, value: ValueId, width: ScalarWidth) -> bool {
+        self.func.dfg.value_ty(value) == width.legalized_ty() && self.width_of(value) == Some(width)
     }
 
-    fn zero_extend_to_i256(
-        &mut self,
-        before: InstId,
-        value: ValueId,
-        width: ScalarWidth,
-    ) -> ValueId {
-        match width {
-            ScalarWidth::Bool => self.insert_before_one(
+    fn retag_i256_width(&mut self, before: InstId, value: ValueId, width: ScalarWidth) -> ValueId {
+        debug_assert_ne!(
+            width,
+            ScalarWidth::Bool,
+            "bool values must be retagged through retag_width"
+        );
+        if self.value_has_width(value, width) {
+            return value;
+        }
+
+        match self.func.dfg.value_ty(value) {
+            Type::I1 => self.insert_before_one(
                 before,
                 Bitcast::new(self.evm_inst_set(), value, Type::I256),
                 Type::I256,
-                Some(ScalarWidth::Full256),
+                Some(width),
             ),
-            ScalarWidth::Narrow(_) | ScalarWidth::Full256 => {
-                self.copy_i256_with_width(before, value, ScalarWidth::Full256)
+            Type::I256 => {
+                let zero = self.zero_i256();
+                self.insert_before_one(
+                    before,
+                    Or::new(self.evm_inst_set(), value, zero),
+                    Type::I256,
+                    Some(width),
+                )
+            }
+            ty => panic!("cannot retag {ty:?} as {:?}", width.legalized_ty()),
+        }
+    }
+
+    fn retag_width(&mut self, before: InstId, value: ValueId, width: ScalarWidth) -> ValueId {
+        match width {
+            ScalarWidth::Bool if self.value_has_width(value, ScalarWidth::Bool) => value,
+            ScalarWidth::Bool => {
+                debug_assert_eq!(
+                    self.func.dfg.value_ty(value),
+                    Type::I1,
+                    "bool retagging requires a normalized i1 value"
+                );
+                let zero = self.imm_for_width(U256::zero(), ScalarWidth::Bool);
+                self.insert_before_one(
+                    before,
+                    Or::new(self.evm_inst_set(), value, zero),
+                    Type::I1,
+                    Some(ScalarWidth::Bool),
+                )
+            }
+            width @ (ScalarWidth::Narrow(_) | ScalarWidth::Full256) => {
+                self.retag_i256_width(before, value, width)
             }
         }
+    }
+
+    fn zero_extend_to_i256(&mut self, before: InstId, value: ValueId) -> ValueId {
+        self.retag_i256_width(before, value, ScalarWidth::Full256)
     }
 
     fn sign_extend_to_i256(
@@ -726,9 +753,9 @@ impl<'a> FunctionLegalizer<'a> {
         width: ScalarWidth,
     ) -> ValueId {
         match width {
-            ScalarWidth::Full256 => self.copy_i256_with_width(before, value, ScalarWidth::Full256),
+            ScalarWidth::Full256 => self.retag_i256_width(before, value, ScalarWidth::Full256),
             ScalarWidth::Bool => {
-                let widened = self.zero_extend_to_i256(before, value, ScalarWidth::Bool);
+                let widened = self.zero_extend_to_i256(before, value);
                 let zero = self.zero_i256();
                 self.insert_before_one(
                     before,
@@ -756,12 +783,7 @@ impl<'a> FunctionLegalizer<'a> {
     }
 
     fn bool_to_i256(&mut self, before: InstId, value: ValueId) -> ValueId {
-        self.insert_before_one(
-            before,
-            Bitcast::new(self.evm_inst_set(), value, Type::I256),
-            Type::I256,
-            Some(ScalarWidth::Full256),
-        )
+        self.zero_extend_to_i256(before, value)
     }
 
     fn bool_to_mask_i256(&mut self, before: InstId, value: ValueId) -> ValueId {
@@ -813,7 +835,7 @@ impl<'a> FunctionLegalizer<'a> {
         )
     }
 
-    fn canonicalize_to_width(
+    fn normalize_bits_for_width(
         &mut self,
         before: InstId,
         value: ValueId,
@@ -855,6 +877,18 @@ impl<'a> FunctionLegalizer<'a> {
                 )
             }
         }
+    }
+
+    fn normalize_and_retag_width(
+        &mut self,
+        before: InstId,
+        value: ValueId,
+        width: ScalarWidth,
+    ) -> ValueId {
+        let normalized = self.normalize_bits_for_width(before, value, width);
+        let result = self.retag_width(before, normalized, width);
+        debug_assert!(self.value_has_width(result, width));
+        result
     }
 
     fn value_fits_narrow_locally(&self, value: ValueId, target_bits: u16) -> bool {
@@ -942,7 +976,7 @@ impl<'a> FunctionLegalizer<'a> {
             Type::I256,
             Some(ScalarWidth::Full256),
         );
-        let sum = self.canonicalize_to_width(inst, raw, sum_width);
+        let sum = self.normalize_and_retag_width(inst, raw, sum_width);
         let overflow = match sum_width {
             ScalarWidth::Full256 => self.insert_before_one(
                 inst,
@@ -1005,7 +1039,7 @@ impl<'a> FunctionLegalizer<'a> {
             Type::I256,
             Some(ScalarWidth::Full256),
         );
-        let result = self.canonicalize_to_width(inst, raw, sum_width);
+        let result = self.normalize_and_retag_width(inst, raw, sum_width);
         let overflow = self.insert_before_one(
             inst,
             cmp::Lt::new(self.evm_inst_set(), lhs, rhs),
@@ -1055,7 +1089,7 @@ impl<'a> FunctionLegalizer<'a> {
             Type::I256,
             Some(ScalarWidth::Full256),
         );
-        let result = self.canonicalize_to_width(inst, raw, result_width);
+        let result = self.normalize_and_retag_width(inst, raw, result_width);
         let overflow = match result_width {
             ScalarWidth::Full256 => {
                 let zero = self.zero_i256();
@@ -1185,7 +1219,7 @@ impl<'a> FunctionLegalizer<'a> {
                         Some(ScalarWidth::Full256),
                     ),
                 };
-                let result = self.canonicalize_to_width(inst, raw, width);
+                let result = self.normalize_and_retag_width(inst, raw, width);
                 let result_ext = self.sign_extend_to_i256(inst, result, width);
                 let overflow = self.insert_before_one(
                     inst,
@@ -1248,7 +1282,7 @@ impl<'a> FunctionLegalizer<'a> {
         }
 
         let ty = self.saturating_scalar_type(inst);
-        self.replace_with_canonicalized_narrow_signed_sat(
+        self.replace_with_normalized_narrow_signed_sat(
             inst,
             EvmSaddsat::new(self.evm_inst_set(), lhs, rhs, ty),
             width,
@@ -1305,7 +1339,7 @@ impl<'a> FunctionLegalizer<'a> {
         }
 
         let ty = self.saturating_scalar_type(inst);
-        self.replace_with_canonicalized_narrow_signed_sat(
+        self.replace_with_normalized_narrow_signed_sat(
             inst,
             EvmSsubsat::new(self.evm_inst_set(), lhs, rhs, ty),
             width,
@@ -1418,7 +1452,7 @@ impl<'a> FunctionLegalizer<'a> {
         }
 
         let ty = self.saturating_scalar_type(inst);
-        self.replace_with_canonicalized_narrow_signed_sat(
+        self.replace_with_normalized_narrow_signed_sat(
             inst,
             EvmSmulsat::new(self.evm_inst_set(), lhs, rhs, ty),
             width,
@@ -1617,14 +1651,14 @@ impl<'a> FunctionLegalizer<'a> {
             .width_of(self.func.dfg.inst_results(inst)[0])
             .expect("missing result width");
         let zero = self.zero_i256();
-        let arg_ext = self.zero_extend_to_i256(inst, arg, width);
+        let arg_ext = self.zero_extend_to_i256(inst, arg);
         let raw = self.insert_before_one(
             inst,
             Sub::new(self.evm_inst_set(), zero, arg_ext),
             Type::I256,
             Some(ScalarWidth::Full256),
         );
-        let result = self.canonicalize_to_width(inst, raw, width);
+        let result = self.normalize_and_retag_width(inst, raw, width);
         let min = self.min_value_for_width(width);
         let overflow = self.insert_before_one(
             inst,
@@ -1695,7 +1729,7 @@ impl<'a> FunctionLegalizer<'a> {
                     Type::I256,
                     Some(ScalarWidth::Full256),
                 );
-                self.canonicalize_to_width(inst, raw, width)
+                self.normalize_and_retag_width(inst, raw, width)
             }
         };
 
@@ -1755,7 +1789,7 @@ impl<'a> FunctionLegalizer<'a> {
                     Type::I256,
                     Some(ScalarWidth::Full256),
                 );
-                self.canonicalize_to_width(inst, raw, width)
+                self.normalize_and_retag_width(inst, raw, width)
             }
         };
         let zero = self.imm_for_width(U256::zero(), width);
@@ -1791,7 +1825,7 @@ impl<'a> FunctionLegalizer<'a> {
                     Type::I256,
                     Some(ScalarWidth::Full256),
                 );
-                let result = self.canonicalize_to_width(inst, raw, width);
+                let result = self.normalize_and_retag_width(inst, raw, width);
                 self.replace_with_aliases(inst, &[result]);
             }
         }
@@ -1820,7 +1854,7 @@ impl<'a> FunctionLegalizer<'a> {
                     Type::I256,
                     Some(ScalarWidth::Full256),
                 );
-                let result = self.canonicalize_to_width(inst, raw, width);
+                let result = self.normalize_and_retag_width(inst, raw, width);
                 self.replace_with_aliases(inst, &[result]);
             }
         }
@@ -1849,7 +1883,7 @@ impl<'a> FunctionLegalizer<'a> {
                     Type::I256,
                     Some(ScalarWidth::Full256),
                 );
-                let result = self.canonicalize_to_width(inst, raw, width);
+                let result = self.normalize_and_retag_width(inst, raw, width);
                 self.replace_with_aliases(inst, &[result]);
             }
         }
@@ -1871,7 +1905,7 @@ impl<'a> FunctionLegalizer<'a> {
                     Type::I256,
                     Some(ScalarWidth::Full256),
                 );
-                let result = self.canonicalize_to_width(inst, raw, width);
+                let result = self.normalize_and_retag_width(inst, raw, width);
                 self.replace_with_aliases(inst, &[result]);
             }
         }
@@ -1936,7 +1970,7 @@ impl<'a> FunctionLegalizer<'a> {
                 Some(ScalarWidth::Full256),
             )
         };
-        let result = self.canonicalize_to_width(inst, raw, width);
+        let result = self.normalize_and_retag_width(inst, raw, width);
         self.replace_with_aliases(inst, &[result]);
     }
 
@@ -1969,7 +2003,7 @@ impl<'a> FunctionLegalizer<'a> {
                     Type::I256,
                     Some(ScalarWidth::Full256),
                 );
-                let result = self.canonicalize_to_width(inst, raw, width);
+                let result = self.normalize_and_retag_width(inst, raw, width);
                 self.replace_with_aliases(inst, &[result]);
             }
         }
@@ -2016,7 +2050,7 @@ impl<'a> FunctionLegalizer<'a> {
                     Type::I256,
                     Some(ScalarWidth::Full256),
                 );
-                let result = self.canonicalize_to_width(inst, raw, width);
+                let result = self.normalize_and_retag_width(inst, raw, width);
                 self.replace_with_aliases(inst, &[result]);
             }
         }
@@ -2121,7 +2155,7 @@ impl<'a> FunctionLegalizer<'a> {
         let result = match dst {
             ScalarWidth::Full256 => extended,
             ScalarWidth::Bool | ScalarWidth::Narrow(_) => {
-                self.canonicalize_to_width(inst, extended, dst)
+                self.normalize_and_retag_width(inst, extended, dst)
             }
         };
         self.replace_with_aliases(inst, &[result]);
@@ -2133,7 +2167,8 @@ impl<'a> FunctionLegalizer<'a> {
             .expect("missing zext result width");
         let src = self.width_of(arg).expect("missing zext source width");
         if matches!(dst, ScalarWidth::Bool) {
-            self.replace_with_aliases(inst, &[arg]);
+            let result = self.retag_width(inst, arg, dst);
+            self.replace_with_aliases(inst, &[result]);
             return;
         }
 
@@ -2144,9 +2179,7 @@ impl<'a> FunctionLegalizer<'a> {
                 Type::I256,
                 Some(dst),
             ),
-            ScalarWidth::Narrow(_) | ScalarWidth::Full256 => {
-                self.copy_i256_with_width(inst, arg, dst)
-            }
+            ScalarWidth::Narrow(_) | ScalarWidth::Full256 => self.retag_width(inst, arg, dst),
         };
         self.replace_with_aliases(inst, &[result]);
     }
@@ -2155,41 +2188,14 @@ impl<'a> FunctionLegalizer<'a> {
         let dst = self
             .single_result_width(inst)
             .expect("missing trunc result width");
-        let extended = self.zero_extend_to_i256(
-            inst,
-            arg,
-            self.width_of(arg).unwrap_or(ScalarWidth::Full256),
-        );
+        let extended = self.zero_extend_to_i256(inst, arg);
         let result = match dst {
-            ScalarWidth::Full256 => self.copy_i256_with_width(inst, arg, ScalarWidth::Full256),
+            ScalarWidth::Full256 => self.retag_width(inst, arg, ScalarWidth::Full256),
             ScalarWidth::Bool | ScalarWidth::Narrow(_) => {
-                self.canonicalize_to_width(inst, extended, dst)
+                self.normalize_and_retag_width(inst, extended, dst)
             }
         };
         self.replace_with_aliases(inst, &[result]);
-    }
-
-    fn preserve_collapsed_scalar_bitcast(&mut self, inst: InstId, from: ValueId) -> ValueId {
-        let src = self.width_of(from).expect("missing bitcast source width");
-        let dst = self
-            .single_result_width(inst)
-            .expect("missing bitcast result width");
-        if src == dst {
-            return from;
-        }
-
-        match dst {
-            ScalarWidth::Bool => unreachable!("collapsed scalar bitcasts never legalize to i1"),
-            ScalarWidth::Full256 => self.copy_i256_with_width(inst, from, ScalarWidth::Full256),
-            ScalarWidth::Narrow(_) => {
-                let result = self.canonicalize_to_width(inst, from, dst);
-                if result == from {
-                    self.copy_i256_with_width(inst, from, dst)
-                } else {
-                    result
-                }
-            }
-        }
     }
 
     fn rewrite_bitcast(&mut self, inst: InstId, from: ValueId, ty: Type) {
@@ -2199,7 +2205,10 @@ impl<'a> FunctionLegalizer<'a> {
             // Narrow and widened scalar bitcasts both collapse to `i256` on EVM, but they still
             // need the destination width's semantics and provenance.
             let result = if dst_ty == Type::I256 {
-                self.preserve_collapsed_scalar_bitcast(inst, from)
+                let dst = self
+                    .single_result_width(inst)
+                    .expect("missing bitcast result width");
+                self.normalize_and_retag_width(inst, from, dst)
             } else {
                 from
             };
@@ -2231,7 +2240,7 @@ impl<'a> FunctionLegalizer<'a> {
             Type::I256,
             Some(ScalarWidth::Full256),
         );
-        let result = self.canonicalize_to_width(inst, raw, dst);
+        let result = self.normalize_and_retag_width(inst, raw, dst);
         self.replace_with_aliases(inst, &[result]);
     }
 
@@ -2265,7 +2274,7 @@ impl<'a> FunctionLegalizer<'a> {
                     Type::I256,
                     Some(ScalarWidth::Full256),
                 );
-                let result = self.canonicalize_to_width(inst, raw, width);
+                let result = self.normalize_and_retag_width(inst, raw, width);
                 self.replace_with_aliases(inst, &[result]);
             }
         }
@@ -2275,9 +2284,8 @@ impl<'a> FunctionLegalizer<'a> {
         let ty = self.types.legalize_type(self.ctx, ty);
         let value = match scalar_width_for_type(self.ctx, ty) {
             Some(ScalarWidth::Narrow(bits)) => {
-                let width = self.width_of(value).unwrap_or(ScalarWidth::Narrow(bits));
-                let extended = self.zero_extend_to_i256(inst, value, width);
-                self.canonicalize_to_width(inst, extended, ScalarWidth::Narrow(bits))
+                let extended = self.zero_extend_to_i256(inst, value);
+                self.normalize_bits_for_width(inst, extended, ScalarWidth::Narrow(bits))
             }
             Some(ScalarWidth::Bool) | Some(ScalarWidth::Full256) | None => value,
         };
@@ -2338,9 +2346,21 @@ mod tests {
         FuncWriter::new(func_ref, function).dump_string()
     }
 
+    fn legalize_and_dump(src: &str, name: &str) -> String {
+        let parsed = parse(src);
+        let funcs = parsed.module.funcs();
+        legalize_evm_section(&parsed.module, &funcs);
+
+        let func_ref = find_func(&parsed, name);
+        parsed
+            .module
+            .func_store
+            .view(func_ref, |function| dump_func(function, func_ref))
+    }
+
     #[test]
     fn pointer_preserving_bitcasts_stay_aliases_through_legalization() {
-        let parsed = parse(
+        let dumped = legalize_and_dump(
             r#"
 target = "evm-ethereum-osaka"
 
@@ -2354,16 +2374,8 @@ block0:
     return v3;
 }
 "#,
+            "entry",
         );
-
-        let funcs = parsed.module.funcs();
-        legalize_evm_section(&parsed.module, &funcs);
-
-        let entry = find_func(&parsed, "entry");
-        let dumped = parsed
-            .module
-            .func_store
-            .view(entry, |function| dump_func(function, entry));
 
         assert!(dumped.contains("v0.*i256 = alloca i256;"), "{dumped}");
         assert!(dumped.contains("mstore v0 7.i256 i256;"), "{dumped}");
@@ -2374,5 +2386,75 @@ block0:
         assert!(!dumped.contains(" = or "), "{dumped}");
         assert!(!dumped.contains("ptrtoint"), "{dumped}");
         assert!(!dumped.contains("inttoptr"), "{dumped}");
+    }
+
+    #[test]
+    fn collapsed_scalar_bitcasts_keep_destination_width_semantics() {
+        let dumped = legalize_and_dump(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %entry(v0.i32) -> i16 {
+block0:
+    v1.i8 = bitcast v0 i8;
+    v2.i16 = sext v1 i16;
+    return v2;
+}
+"#,
+            "entry",
+        );
+
+        assert!(dumped.contains("255.i256"), "{dumped}");
+        assert!(dumped.contains("248.i256"), "{dumped}");
+        assert!(!dumped.contains("224.i256"), "{dumped}");
+        assert!(!dumped.contains(" = bitcast "), "{dumped}");
+    }
+
+    #[test]
+    fn trunc_results_retag_even_when_bits_already_fit_locally() {
+        let dumped = legalize_and_dump(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %entry(v0.i1) -> i16 {
+block0:
+    v1.i256 = zext v0 i256;
+    v2.i8 = trunc v1 i8;
+    v3.i16 = sext v2 i16;
+    return v3;
+}
+"#,
+            "entry",
+        );
+
+        assert!(dumped.contains("248.i256"), "{dumped}");
+        assert!(dumped.contains(" = or v"), "{dumped}");
+        assert!(dumped.contains("65535.i256"), "{dumped}");
+        assert!(!dumped.contains(" = trunc "), "{dumped}");
+        assert!(!dumped.contains(" = sext "), "{dumped}");
+    }
+
+    #[test]
+    fn narrow_mload_results_feed_signed_ops_at_their_own_width() {
+        let dumped = legalize_and_dump(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %entry() -> i16 {
+block0:
+    v0.*i8 = alloca i8;
+    mstore v0 255.i8 i8;
+    v1.i8 = mload v0 i8;
+    v2.i16 = sext v1 i16;
+    return v2;
+}
+"#,
+            "entry",
+        );
+
+        assert!(dumped.contains("mload v0 i256;"), "{dumped}");
+        assert!(dumped.contains("255.i256"), "{dumped}");
+        assert!(dumped.contains("248.i256"), "{dumped}");
+        assert!(!dumped.contains(" = mload v0 i8;"), "{dumped}");
     }
 }

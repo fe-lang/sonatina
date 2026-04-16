@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/evm.rs
+assertion_line: 448
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/fenew.sntn
 ---
@@ -91,16 +92,16 @@ __Counter_runtime:
   block9:
     PUSH0  // v12.i256 = evm_sload 0.i256;
     SLOAD
-    PUSH1 0x1 (1)  // v32.i256 = add v12 1.i256;
+    PUSH1 0x1 (1)  // v30.i256 = add v12 1.i256;
     DUP2
     ADD
-    SWAP1  // v33.i1 = lt v32 v12;
+    SWAP1  // v31.i1 = lt v30 v12;
     DUP2
     LT
-    PUSH1 block1  // br v33 block10 block11;
+    PUSH1 block1  // br v31 block10 block11;
     JUMPI
   block11:
-    PUSH0  // evm_sstore 0.i256 v32;
+    PUSH0  // evm_sstore 0.i256 v30;
     SSTORE
     PUSH0  // evm_return 0.i256 0.i256;
     PUSH0

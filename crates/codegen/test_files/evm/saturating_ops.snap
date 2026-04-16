@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/evm.rs
+assertion_line: 448
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/saturating_ops.sntn
 ---
@@ -208,13 +209,13 @@ entry:
     JUMP
   block15:
     JUMPDEST
-    SWAP1  // v98.i256 = and v1 340282366920938463463374607431768211455.i256;
+    SWAP1  // v87.i256 = and v1 340282366920938463463374607431768211455.i256;
     PUSH16 0xffffffffffffffffffffffffffffffff (340282366920938463463374607431768211455)
     AND
-    SWAP1  // v100.i256 = and v2 340282366920938463463374607431768211455.i256;
+    SWAP1  // v88.i256 = and v2 340282366920938463463374607431768211455.i256;
     PUSH16 0xffffffffffffffffffffffffffffffff (340282366920938463463374607431768211455)
     AND
-    SWAP1  // v101.i256 = evm_smulsat v98 v100 i128;
+    SWAP1  // v89.i256 = evm_smulsat v87 v88 i128;
     PUSH1 0xf (15)
     SIGNEXTEND
     SWAP1
@@ -238,11 +239,11 @@ entry:
     SWAP1
     POP
     JUMPDEST
-    SWAP1  // v102.i256 = and v101 340282366920938463463374607431768211455.i256;
+    SWAP1  // v90.i256 = and v89 340282366920938463463374607431768211455.i256;
     POP
     PUSH16 0xffffffffffffffffffffffffffffffff (340282366920938463463374607431768211455)
     AND
-    PUSH16 0x7fffffffffffffffffffffffffffffff (170141183460469231731687303715884105727)  // v32.i1 = eq v102 170141183460469231731687303715884105727.i256;
+    PUSH16 0x7fffffffffffffffffffffffffffffff (170141183460469231731687303715884105727)  // v32.i1 = eq v90 170141183460469231731687303715884105727.i256;
     EQ
     PUSH1 block16  // br v32 block54 block55;
     JUMPI
@@ -250,13 +251,13 @@ entry:
     JUMP
   block14:
     JUMPDEST
-    SWAP1  // v92.i256 = and v1 255.i256;
+    SWAP1  // v83.i256 = and v1 255.i256;
     PUSH1 0xff (255)
     AND
-    SWAP1  // v94.i256 = and v2 255.i256;
+    SWAP1  // v84.i256 = and v2 255.i256;
     PUSH1 0xff (255)
     AND
-    SWAP1  // v95.i256 = evm_ssubsat v92 v94 i8;
+    SWAP1  // v85.i256 = evm_ssubsat v83 v84 i8;
     PUSH0
     SIGNEXTEND
     SWAP1
@@ -280,11 +281,11 @@ entry:
     SWAP1
     POP
     JUMPDEST
-    SWAP1  // v96.i256 = and v95 255.i256;
+    SWAP1  // v86.i256 = and v85 255.i256;
     POP
     PUSH1 0xff (255)
     AND
-    PUSH1 0x80 (128)  // v28.i1 = eq v96 128.i256;
+    PUSH1 0x80 (128)  // v28.i1 = eq v86 128.i256;
     EQ
     PUSH1 block16  // br v28 block52 block53;
     JUMPI
@@ -292,13 +293,13 @@ entry:
     JUMP
   block13:
     JUMPDEST
-    SWAP1  // v86.i256 = and v1 255.i256;
+    SWAP1  // v79.i256 = and v1 255.i256;
     PUSH1 0xff (255)
     AND
-    SWAP1  // v88.i256 = and v2 255.i256;
+    SWAP1  // v80.i256 = and v2 255.i256;
     PUSH1 0xff (255)
     AND
-    SWAP1  // v89.i256 = evm_saddsat v86 v88 i8;
+    SWAP1  // v81.i256 = evm_saddsat v79 v80 i8;
     PUSH0
     SIGNEXTEND
     SWAP1
@@ -322,11 +323,11 @@ entry:
     SWAP1
     POP
     JUMPDEST
-    SWAP1  // v90.i256 = and v89 255.i256;
+    SWAP1  // v82.i256 = and v81 255.i256;
     POP
     PUSH1 0xff (255)
     AND
-    PUSH1 0x7f (127)  // v24.i1 = eq v90 127.i256;
+    PUSH1 0x7f (127)  // v24.i1 = eq v82 127.i256;
     EQ
     PUSH1 block16  // br v24 block50 block51;
     JUMPI
@@ -334,13 +335,13 @@ entry:
     JUMP
   block12:
     JUMPDEST
-    SWAP1  // v82.i256 = and v1 340282366920938463463374607431768211455.i256;
+    SWAP1  // v77.i256 = and v1 340282366920938463463374607431768211455.i256;
     PUSH16 0xffffffffffffffffffffffffffffffff (340282366920938463463374607431768211455)
     AND
-    SWAP1  // v84.i256 = and v2 340282366920938463463374607431768211455.i256;
+    SWAP1  // v78.i256 = and v2 340282366920938463463374607431768211455.i256;
     PUSH16 0xffffffffffffffffffffffffffffffff (340282366920938463463374607431768211455)
     AND
-    SWAP1  // v19.i256 = evm_umulsat v82 v84 i128;
+    SWAP1  // v19.i256 = evm_umulsat v77 v78 i128;
     PUSH16 0xffffffffffffffffffffffffffffffff (340282366920938463463374607431768211455)
     AND
     SWAP1
@@ -367,13 +368,13 @@ entry:
     JUMP
   block11:
     JUMPDEST
-    SWAP1  // v78.i256 = and v1 255.i256;
+    SWAP1  // v75.i256 = and v1 255.i256;
     PUSH1 0xff (255)
     AND
-    SWAP1  // v80.i256 = and v2 255.i256;
+    SWAP1  // v76.i256 = and v2 255.i256;
     PUSH1 0xff (255)
     AND
-    SWAP1  // v15.i256 = evm_usubsat v78 v80 i8;
+    SWAP1  // v15.i256 = evm_usubsat v75 v76 i8;
     PUSH1 0xff (255)
     AND
     SWAP1
@@ -399,13 +400,13 @@ entry:
     JUMP
   block10:
     JUMPDEST
-    SWAP1  // v74.i256 = and v1 255.i256;
+    SWAP1  // v73.i256 = and v1 255.i256;
     PUSH1 0xff (255)
     AND
-    SWAP1  // v76.i256 = and v2 255.i256;
+    SWAP1  // v74.i256 = and v2 255.i256;
     PUSH1 0xff (255)
     AND
-    SWAP1  // v11.i256 = evm_uaddsat v74 v76 i8;
+    SWAP1  // v11.i256 = evm_uaddsat v73 v74 i8;
     PUSH1 0xff (255)
     AND
     SWAP1
