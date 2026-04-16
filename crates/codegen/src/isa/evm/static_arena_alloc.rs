@@ -21,6 +21,7 @@ use sonatina_ir::{
 };
 
 use super::{
+    escape_scan::{EscapeScanCtx, EscapeSink, EscapeSource, for_each_escape_event_at_inst},
     memory_plan::{FuncAnalysis, WORD_BYTES},
     provenance::{Provenance, compute_provenance},
     ptr_escape::PtrEscapeSummary,
@@ -228,8 +229,14 @@ pub(crate) fn compute_func_stack_objects(
         }
     }
 
-    let escaping_sites =
-        compute_escaping_allocas(function, ctx.module, ctx.isa, ctx.ptr_escape, prov);
+    let escaping_sites = compute_escaping_allocas(
+        function,
+        ctx.module,
+        ctx.isa,
+        ctx.ptr_escape,
+        prov,
+        &prov_info.local_mem,
+    );
     if !escaping_sites.is_empty() {
         panic!(
             "{}",
@@ -496,71 +503,57 @@ fn compute_escaping_allocas(
     isa: &Evm,
     ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
     prov: &SecondaryMap<ValueId, Provenance>,
+    local_mem: &FxHashMap<InstId, Provenance>,
 ) -> FxHashMap<InstId, Vec<AllocaEscapeSite>> {
     let mut escaping: FxHashMap<InstId, Vec<AllocaEscapeSite>> = FxHashMap::default();
+    let scan_ctx = EscapeScanCtx {
+        module,
+        isa,
+        ptr_escape,
+        prov,
+        local_mem,
+    };
 
     for block in function.layout.iter_block() {
         for inst in function.layout.iter_inst(block) {
-            let data = isa.inst_set().resolve_inst(function.dfg.inst(inst));
-            match data {
-                EvmInstKind::Return(_) => {
-                    let Some(ret_args) = function.dfg.return_args(inst) else {
-                        continue;
-                    };
-                    for &ret_val in ret_args {
-                        for base in prov[ret_val].alloca_insts() {
-                            escaping
-                                .entry(base)
-                                .or_default()
-                                .push(AllocaEscapeSite::Return {
-                                    inst,
-                                    value: ret_val,
-                                });
+            for_each_escape_event_at_inst(function, inst, scan_ctx, |event| match event.source {
+                EscapeSource::Value(value) => {
+                    let site = match event.sink {
+                        EscapeSink::Return => AllocaEscapeSite::Return {
+                            inst: event.inst,
+                            value,
+                        },
+                        EscapeSink::NonLocalStore => AllocaEscapeSite::NonLocalStore {
+                            inst: event.inst,
+                            value,
+                        },
+                        EscapeSink::CallArg { callee, arg_index } => AllocaEscapeSite::CallArg {
+                            inst: event.inst,
+                            callee,
+                            arg_index,
+                            value,
+                        },
+                        EscapeSink::NonLocalCopy => {
+                            unreachable!("mcopy does not emit direct-value escapes")
                         }
+                    };
+                    for base in prov[value].alloca_insts() {
+                        escaping.entry(base).or_default().push(site.clone());
                     }
                 }
-                EvmInstKind::Mstore(mstore) => {
-                    let addr = *mstore.addr();
-                    if prov[addr].is_local_addr() {
-                        continue;
-                    }
-
-                    let val = *mstore.value();
-                    for base in prov[val].alloca_insts() {
+                EscapeSource::LocalMem { addr, stored } => {
+                    for base in stored.alloca_insts() {
                         escaping
                             .entry(base)
                             .or_default()
-                            .push(AllocaEscapeSite::NonLocalStore {
-                                inst,
+                            .push(AllocaEscapeSite::NonLocalCopy {
+                                inst: event.inst,
                                 addr,
-                                value: val,
                             });
                     }
                 }
-                EvmInstKind::Call(call) => {
-                    let callee = *call.callee();
-                    let callee_sum = ptr_escape
-                        .get(&callee)
-                        .cloned()
-                        .unwrap_or_else(|| conservative_unknown_ptr_summary(module, callee));
-                    for (idx, &arg) in call.args().iter().enumerate() {
-                        if callee_sum.call_arg_may_escape_nonlocal(idx, call.args(), prov) {
-                            for base in prov[arg].alloca_insts() {
-                                escaping
-                                    .entry(base)
-                                    .or_default()
-                                    .push(AllocaEscapeSite::CallArg {
-                                        inst,
-                                        callee,
-                                        arg_index: idx,
-                                        value: arg,
-                                    });
-                            }
-                        }
-                    }
-                }
-                _ => {}
-            }
+                EscapeSource::UnknownCopy => {}
+            });
         }
     }
 
@@ -575,8 +568,11 @@ enum AllocaEscapeSite {
     },
     NonLocalStore {
         inst: InstId,
-        addr: ValueId,
         value: ValueId,
+    },
+    NonLocalCopy {
+        inst: InstId,
+        addr: ValueId,
     },
     CallArg {
         inst: InstId,
@@ -587,19 +583,19 @@ enum AllocaEscapeSite {
 }
 
 impl AllocaEscapeSite {
-    fn escape_inst(&self) -> InstId {
+    fn sort_key(&self) -> (u32, u8, u32, u32) {
         match self {
-            AllocaEscapeSite::Return { inst, .. }
-            | AllocaEscapeSite::NonLocalStore { inst, .. }
-            | AllocaEscapeSite::CallArg { inst, .. } => *inst,
-        }
-    }
-
-    fn derived_value(&self) -> ValueId {
-        match self {
-            AllocaEscapeSite::Return { value, .. }
-            | AllocaEscapeSite::NonLocalStore { value, .. }
-            | AllocaEscapeSite::CallArg { value, .. } => *value,
+            AllocaEscapeSite::Return { inst, value } => (inst.as_u32(), 0, value.as_u32(), 0),
+            AllocaEscapeSite::NonLocalStore { inst, value } => {
+                (inst.as_u32(), 1, value.as_u32(), 0)
+            }
+            AllocaEscapeSite::NonLocalCopy { inst, addr } => (inst.as_u32(), 2, addr.as_u32(), 0),
+            AllocaEscapeSite::CallArg {
+                inst,
+                arg_index,
+                value,
+                ..
+            } => (inst.as_u32(), 3, *arg_index as u32, value.as_u32()),
         }
     }
 
@@ -608,9 +604,13 @@ impl AllocaEscapeSite {
             AllocaEscapeSite::Return { inst, value } => {
                 format!("return of v{} at inst {}", value.as_u32(), inst.as_u32())
             }
-            AllocaEscapeSite::NonLocalStore { inst, addr, value } => format!(
-                "non-local store of v{} to addr v{} at inst {}",
+            AllocaEscapeSite::NonLocalStore { inst, value } => format!(
+                "non-local store of v{} at inst {}",
                 value.as_u32(),
+                inst.as_u32()
+            ),
+            AllocaEscapeSite::NonLocalCopy { inst, addr } => format!(
+                "non-local copy of local pointer bytes from addr v{} at inst {}",
                 addr.as_u32(),
                 inst.as_u32()
             ),
@@ -643,7 +643,7 @@ fn render_alloca_escapes(
     let mut msg = String::new();
     msg.push_str(&format!("alloca escapes in {name}:\n"));
     for (alloca_inst, mut sites) in allocas {
-        sites.sort_unstable_by_key(|s| (s.escape_inst().as_u32(), s.derived_value().as_u32()));
+        sites.sort_unstable_by_key(AllocaEscapeSite::sort_key);
         msg.push_str(&format!("  alloca inst {}:\n", alloca_inst.as_u32()));
         for site in sites {
             msg.push_str("    - ");
@@ -1096,6 +1096,47 @@ block0:
         assert!(
             call.live_across_objs.contains(&child_obj),
             "closure-expanded child alloca should stay live across the call when read afterward"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "alloca escapes in store8_escape")]
+    fn alloca_escape_via_nonlocal_mstore8_panics() {
+        let _ = analyze_function(
+            r#"
+target = "evm-ethereum-osaka"
+
+func private %store8_escape() -> i256 {
+block0:
+    v0.*i256 = alloca i256;
+    v1.i256 = ptr_to_int v0 i256;
+    evm_mstore8 0.i32 v1;
+    return 0.i256;
+}
+"#,
+            "store8_escape",
+            16,
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "alloca escapes in mcopy_escape")]
+    fn alloca_escape_via_nonlocal_mcopy_panics() {
+        let _ = analyze_function(
+            r#"
+target = "evm-ethereum-osaka"
+
+func private %mcopy_escape() -> i256 {
+block0:
+    v0.**i256 = alloca *i256;
+    v1.*i256 = alloca i256;
+    mstore v0 v1 *i256;
+    evm_mcopy 0.i8 v0 32.i256;
+    return 0.i256;
+}
+"#,
+            "mcopy_escape",
+            16,
         );
     }
 

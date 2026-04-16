@@ -1,6 +1,7 @@
 mod backend;
 pub(crate) mod dyn_sp;
 mod emit;
+mod escape_scan;
 mod frame_layout;
 mod heap_plan;
 mod late_alias;
