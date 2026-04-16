@@ -2183,7 +2183,7 @@ fn extract_chain_source(func: &Function, mut value: ValueId, path: &[u32]) -> Op
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sonatina_ir::{Module, ir_writer::FuncWriter, module::FuncRef};
+    use sonatina_ir::{Module, inst::control_flow, ir_writer::FuncWriter, module::FuncRef};
     use sonatina_parser::parse_module;
 
     fn parse_test_module(src: &str) -> Module {
@@ -2257,6 +2257,46 @@ block0:
                 extract_count, 1,
                 "bitcasted nested extract chain should collapse"
             );
+        });
+    }
+
+    #[test]
+    fn combine_rewrites_extracts_through_compatible_aggregate_bitcasts_with_zero_sized_fields() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @src = { unit, i256, i256 };
+type @dst = { i256, i256 };
+
+func private %f(v0.@src) -> i256 {
+block0:
+    v1.@dst = bitcast v0 @dst;
+    v2.i256 = extract_value v1 1.i8;
+    return v2;
+}
+"#,
+        );
+        let func_ref = lookup_func(&module, "f");
+        module.func_store.modify(func_ref, |func| {
+            assert!(AggregateCombine::default().run(func));
+        });
+
+        module.func_store.view(func_ref, |func| {
+            let ret_inst = func
+                .layout
+                .last_inst_of(func.layout.entry_block().unwrap())
+                .unwrap();
+            let ret = downcast::<&control_flow::Return>(func.inst_set(), func.dfg.inst(ret_inst))
+                .unwrap();
+            let returned = *ret.args().first().expect("return value");
+            let extract_inst = func.dfg.value_inst(returned).expect("extract result");
+            let extract =
+                downcast::<&data::ExtractValue>(func.inst_set(), func.dfg.inst(extract_inst))
+                    .unwrap();
+
+            assert_eq!(*extract.dest(), func.arg_values[0]);
+            assert_eq!(shape::const_u32(&func.dfg, *extract.idx()), Some(2));
         });
     }
 

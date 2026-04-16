@@ -128,7 +128,14 @@ impl AggregateLayoutCache {
         to_slice: AggregateSlice,
     ) -> Option<AggregateSlice> {
         self.compatible_bitcast_runtime_leaves(module, from_ty, to_ty)?;
-        aggregate_slice_for_leaf_range(module, from_ty, to_slice.first_leaf, to_slice.leaf_count)
+        let (first_runtime_leaf, runtime_leaf_count) =
+            runtime_leaf_range_for_slice(module, to_ty, to_slice)?;
+        aggregate_slice_for_runtime_leaf_range(
+            module,
+            from_ty,
+            first_runtime_leaf,
+            runtime_leaf_count,
+        )
     }
 }
 
@@ -185,6 +192,33 @@ pub fn compatible_aggregate_bitcast_runtime_leaves(
         .then_some((src_leaves, dst_leaves))
 }
 
+pub fn runtime_leaf_range_for_slice(
+    module: &ModuleCtx,
+    root_ty: Type,
+    slice: AggregateSlice,
+) -> Option<(usize, usize)> {
+    if !is_supported_scalar_shape_ty(module, root_ty) {
+        return None;
+    }
+
+    let total_leaf_count = flattened_leaf_count(module, root_ty)?;
+    let slice_end = slice.first_leaf.checked_add(slice.leaf_count)?;
+    if slice_end > total_leaf_count {
+        return None;
+    }
+
+    let shape = aggregate_shape(module, root_ty)?;
+    let first_runtime_leaf = shape.leaves[..slice.first_leaf]
+        .iter()
+        .filter(|leaf| leaf.size_bytes != 0)
+        .count();
+    let runtime_leaf_count = shape.leaves[slice.first_leaf..slice_end]
+        .iter()
+        .filter(|leaf| leaf.size_bytes != 0)
+        .count();
+    Some((first_runtime_leaf, runtime_leaf_count))
+}
+
 pub fn aggregate_slice_for_index(
     module: &ModuleCtx,
     agg_ty: Type,
@@ -233,6 +267,51 @@ pub fn aggregate_slice_for_leaf_range(
     }
 
     aggregate_slice_for_leaf_range_impl(module, root_ty, first_leaf, leaf_count, 0)
+}
+
+pub fn aggregate_slice_for_runtime_leaf_range(
+    module: &ModuleCtx,
+    root_ty: Type,
+    first_runtime_leaf: usize,
+    target_runtime_leaf_count: usize,
+) -> Option<AggregateSlice> {
+    if !is_supported_scalar_shape_ty(module, root_ty) {
+        return None;
+    }
+
+    let total_runtime_leaf_count = runtime_leaf_count_for_ty(module, root_ty)?;
+    if first_runtime_leaf.checked_add(target_runtime_leaf_count)? > total_runtime_leaf_count {
+        return None;
+    }
+    if target_runtime_leaf_count == 0 {
+        return Some(AggregateSlice {
+            ty: root_ty,
+            first_leaf: flattened_leaf_boundary_for_runtime_leaf(
+                module,
+                root_ty,
+                first_runtime_leaf,
+            )?,
+            leaf_count: 0,
+        });
+    }
+
+    let total_leaf_count = flattened_leaf_count(module, root_ty)?;
+    if first_runtime_leaf == 0 && target_runtime_leaf_count == total_runtime_leaf_count {
+        return Some(AggregateSlice {
+            ty: root_ty,
+            first_leaf: 0,
+            leaf_count: total_leaf_count,
+        });
+    }
+
+    aggregate_slice_for_runtime_leaf_range_impl(
+        module,
+        root_ty,
+        first_runtime_leaf,
+        target_runtime_leaf_count,
+        0,
+        0,
+    )
 }
 
 pub fn aggregate_slice_for_gep_path(
@@ -712,6 +791,150 @@ fn aggregate_slice_for_leaf_range_impl(
     }
 }
 
+fn aggregate_slice_for_runtime_leaf_range_impl(
+    module: &ModuleCtx,
+    ty: Type,
+    target_first_runtime_leaf: usize,
+    target_runtime_leaf_count: usize,
+    base_first_leaf: usize,
+    base_first_runtime_leaf: usize,
+) -> Option<AggregateSlice> {
+    match ty.resolve_compound(module)? {
+        CompoundType::Struct(s) => {
+            if s.packed {
+                return None;
+            }
+
+            let mut child_first_leaf = base_first_leaf;
+            let mut child_first_runtime_leaf = base_first_runtime_leaf;
+            for &field_ty in &s.fields {
+                let child_leaf_count = flattened_leaf_count(module, field_ty)?;
+                let child_runtime_leaf_count = runtime_leaf_count_for_ty(module, field_ty)?;
+                if child_first_runtime_leaf == target_first_runtime_leaf
+                    && child_runtime_leaf_count == target_runtime_leaf_count
+                {
+                    return Some(AggregateSlice {
+                        ty: field_ty,
+                        first_leaf: child_first_leaf,
+                        leaf_count: child_leaf_count,
+                    });
+                }
+                if child_runtime_leaf_count != 0
+                    && target_first_runtime_leaf >= child_first_runtime_leaf
+                    && target_first_runtime_leaf + target_runtime_leaf_count
+                        <= child_first_runtime_leaf + child_runtime_leaf_count
+                    && let Some(slice) = aggregate_slice_for_runtime_leaf_range_impl(
+                        module,
+                        field_ty,
+                        target_first_runtime_leaf,
+                        target_runtime_leaf_count,
+                        child_first_leaf,
+                        child_first_runtime_leaf,
+                    )
+                {
+                    return Some(slice);
+                }
+                child_first_leaf = child_first_leaf.checked_add(child_leaf_count)?;
+                child_first_runtime_leaf =
+                    child_first_runtime_leaf.checked_add(child_runtime_leaf_count)?;
+            }
+            None
+        }
+        CompoundType::Array { elem, len } => {
+            let elem_leaf_count = flattened_leaf_count(module, elem)?;
+            let elem_runtime_leaf_count = runtime_leaf_count_for_ty(module, elem)?;
+            let mut child_first_leaf = base_first_leaf;
+            let mut child_first_runtime_leaf = base_first_runtime_leaf;
+            for _ in 0..len {
+                if child_first_runtime_leaf == target_first_runtime_leaf
+                    && elem_runtime_leaf_count == target_runtime_leaf_count
+                {
+                    return Some(AggregateSlice {
+                        ty: elem,
+                        first_leaf: child_first_leaf,
+                        leaf_count: elem_leaf_count,
+                    });
+                }
+                if elem_runtime_leaf_count != 0
+                    && target_first_runtime_leaf >= child_first_runtime_leaf
+                    && target_first_runtime_leaf + target_runtime_leaf_count
+                        <= child_first_runtime_leaf + elem_runtime_leaf_count
+                    && let Some(slice) = aggregate_slice_for_runtime_leaf_range_impl(
+                        module,
+                        elem,
+                        target_first_runtime_leaf,
+                        target_runtime_leaf_count,
+                        child_first_leaf,
+                        child_first_runtime_leaf,
+                    )
+                {
+                    return Some(slice);
+                }
+                child_first_leaf = child_first_leaf.checked_add(elem_leaf_count)?;
+                child_first_runtime_leaf =
+                    child_first_runtime_leaf.checked_add(elem_runtime_leaf_count)?;
+            }
+            None
+        }
+        CompoundType::Enum(_) => {
+            if target_first_runtime_leaf == base_first_runtime_leaf
+                && target_runtime_leaf_count == 1
+            {
+                return Some(AggregateSlice {
+                    ty: enum_tag_ty(ty)?,
+                    first_leaf: base_first_leaf,
+                    leaf_count: 1,
+                });
+            }
+
+            let Type::Compound(enum_ty) = ty else {
+                return None;
+            };
+            let data = module.with_ty_store(|store| store.enum_data(enum_ty).cloned())?;
+            let mut child_first_leaf = base_first_leaf.checked_add(1)?;
+            let mut child_first_runtime_leaf = base_first_runtime_leaf.checked_add(1)?;
+            for variant_data in &data.variants {
+                for &field_ty in &variant_data.fields {
+                    let child_leaf_count = flattened_leaf_count(module, field_ty)?;
+                    let child_runtime_leaf_count = runtime_leaf_count_for_ty(module, field_ty)?;
+                    if child_first_runtime_leaf == target_first_runtime_leaf
+                        && child_runtime_leaf_count == target_runtime_leaf_count
+                    {
+                        return Some(AggregateSlice {
+                            ty: field_ty,
+                            first_leaf: child_first_leaf,
+                            leaf_count: child_leaf_count,
+                        });
+                    }
+                    if child_runtime_leaf_count != 0
+                        && target_first_runtime_leaf >= child_first_runtime_leaf
+                        && target_first_runtime_leaf + target_runtime_leaf_count
+                            <= child_first_runtime_leaf + child_runtime_leaf_count
+                        && let Some(slice) = aggregate_slice_for_runtime_leaf_range_impl(
+                            module,
+                            field_ty,
+                            target_first_runtime_leaf,
+                            target_runtime_leaf_count,
+                            child_first_leaf,
+                            child_first_runtime_leaf,
+                        )
+                    {
+                        return Some(slice);
+                    }
+                    child_first_leaf = child_first_leaf.checked_add(child_leaf_count)?;
+                    child_first_runtime_leaf =
+                        child_first_runtime_leaf.checked_add(child_runtime_leaf_count)?;
+                }
+            }
+            None
+        }
+        CompoundType::Ptr(_)
+        | CompoundType::ObjRef(_)
+        | CompoundType::ConstRef(_)
+        | CompoundType::Func { .. } => None,
+    }
+}
+
 fn flattened_leaf_count(module: &ModuleCtx, ty: Type) -> Option<usize> {
     match ty.resolve_compound(module) {
         Some(CompoundType::Struct(s)) => {
@@ -743,6 +966,66 @@ fn flattened_leaf_count(module: &ModuleCtx, ty: Type) -> Option<usize> {
         | Some(CompoundType::ConstRef(_))
         | None => Some(1),
     }
+}
+
+fn runtime_leaf_count_for_ty(module: &ModuleCtx, ty: Type) -> Option<usize> {
+    match ty.resolve_compound(module) {
+        Some(CompoundType::Struct(s)) => {
+            if s.packed {
+                return None;
+            }
+
+            let mut count = 0usize;
+            for &field_ty in &s.fields {
+                count = count.checked_add(runtime_leaf_count_for_ty(module, field_ty)?)?;
+            }
+            Some(count)
+        }
+        Some(CompoundType::Array { elem, len }) => {
+            runtime_leaf_count_for_ty(module, elem)?.checked_mul(len)
+        }
+        Some(CompoundType::Enum(data)) => {
+            let mut count = 1usize;
+            for variant in &data.variants {
+                for &field_ty in &variant.fields {
+                    count = count.checked_add(runtime_leaf_count_for_ty(module, field_ty)?)?;
+                }
+            }
+            Some(count)
+        }
+        Some(CompoundType::Func { .. }) => None,
+        Some(CompoundType::Ptr(_))
+        | Some(CompoundType::ObjRef(_))
+        | Some(CompoundType::ConstRef(_))
+        | None => Some(usize::from(runtime_size_bytes(module, ty)? != 0)),
+    }
+}
+
+fn flattened_leaf_boundary_for_runtime_leaf(
+    module: &ModuleCtx,
+    root_ty: Type,
+    runtime_leaf_boundary: usize,
+) -> Option<usize> {
+    let shape = aggregate_shape(module, root_ty)?;
+    let total_runtime_leaf_count = shape
+        .leaves
+        .iter()
+        .filter(|leaf| leaf.size_bytes != 0)
+        .count();
+    if runtime_leaf_boundary > total_runtime_leaf_count {
+        return None;
+    }
+
+    let mut seen_runtime_leaves = 0usize;
+    for (idx, leaf) in shape.leaves.iter().enumerate() {
+        if seen_runtime_leaves == runtime_leaf_boundary {
+            return Some(idx);
+        }
+        if leaf.size_bytes != 0 {
+            seen_runtime_leaves = seen_runtime_leaves.checked_add(1)?;
+        }
+    }
+    (seen_runtime_leaves == runtime_leaf_boundary).then_some(shape.leaves.len())
 }
 
 fn flatten_aggregate(
@@ -1241,5 +1524,46 @@ block0:
         assert_eq!(source_slice.ty, Type::I256);
         assert_eq!(source_slice.first_leaf, 0);
         assert_eq!(source_slice.leaf_count, 1);
+    }
+
+    #[test]
+    fn maps_compatible_bitcast_slices_back_to_source_layout_with_zero_sized_fields() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-london"
+
+type @src = { unit, i256, i256 };
+type @dst = { i256, i256 };
+
+func private %f() {
+block0:
+    return;
+}
+"#,
+        );
+        let src = module
+            .ctx
+            .with_ty_store(|s| Type::Compound(s.lookup_struct("src").unwrap()));
+        let dst = module
+            .ctx
+            .with_ty_store(|s| Type::Compound(s.lookup_struct("dst").unwrap()));
+
+        let dst_second = aggregate_slice_for_index(&module.ctx, dst, 1).expect("dst second field");
+        let dst_whole = aggregate_slice_for_path(&module.ctx, dst, &[]).expect("whole dst");
+
+        let mut cache = AggregateLayoutCache::default();
+        let second_source = cache
+            .compatible_bitcast_source_slice(&module.ctx, src, dst, dst_second)
+            .expect("source slice for second field");
+        assert_eq!(second_source.ty, Type::I256);
+        assert_eq!(second_source.first_leaf, 2);
+        assert_eq!(second_source.leaf_count, 1);
+
+        let whole_source = cache
+            .compatible_bitcast_source_slice(&module.ctx, src, dst, dst_whole)
+            .expect("whole source slice");
+        assert_eq!(whole_source.ty, src);
+        assert_eq!(whole_source.first_leaf, 0);
+        assert_eq!(whole_source.leaf_count, 3);
     }
 }
