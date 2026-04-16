@@ -17,7 +17,7 @@ use sonatina_ir::{
     BlockId, Function, InstId, Type, ValueId,
     cfg::ControlFlowGraph,
     inst::{cast, control_flow, data, downcast},
-    module::ModuleCtx,
+    module::{FuncRef, ModuleCtx},
     types::CompoundType,
 };
 
@@ -300,6 +300,26 @@ struct CaptureStateView<'a> {
 struct RootTransfer {
     roots: FxHashSet<ValueId>,
     maybe_unknown: bool,
+}
+
+#[derive(Clone, Copy)]
+enum ProjectionTransferInst<'a> {
+    Gep(&'a data::Gep),
+    Bitcast(&'a cast::Bitcast),
+    ObjProj(&'a data::ObjProj),
+    ObjIndex(&'a data::ObjIndex),
+    EnumProj(&'a data::EnumProj),
+    EnumAssertVariantRef(&'a data::EnumAssertVariantRef),
+}
+
+#[derive(Clone, Copy)]
+enum CallReturnTransferKind {
+    Arg {
+        index: usize,
+        exact_projection: bool,
+    },
+    FreshObject,
+    Unknown,
 }
 
 pub(crate) fn collect_root_provenance(
@@ -1025,133 +1045,17 @@ fn derive_exact_state(
     layout_cache: &mut shape::AggregateLayoutCache,
     object_effects: Option<&ObjectEffectSummaryMap>,
 ) -> ExactState {
-    if let Some(gep) = downcast::<&data::Gep>(func.inst_set(), func.dfg.inst(inst)) {
-        let Some(&base) = gep.values().first() else {
+    if let Some(transfer) = projection_transfer_inst(func, inst) {
+        let Some(source) = transfer.source_value() else {
             return exact_state_or_unknown(exact_states, possible_roots, maybe_unknown, result);
         };
-        let Some(base_projection) = exact_projection_of(exact_states, maybe_unknown, base) else {
-            return pending_or_blocked(exact_states, base);
-        };
-        let Some(sub) = shape::aggregate_slice_for_gep_path(
-            module,
-            base_projection.slice.ty,
-            &gep.values()[1..],
-            &func.dfg,
-        ) else {
-            return ExactState::Blocked;
-        };
-        return ExactState::Exact(Projection {
-            root_value: base_projection.root_value,
-            slice: shape::AggregateSlice {
-                ty: sub.ty,
-                first_leaf: base_projection.slice.first_leaf + sub.first_leaf,
-                leaf_count: sub.leaf_count,
-            },
-        });
-    }
-
-    if let Some(bitcast) = downcast::<&cast::Bitcast>(func.inst_set(), func.dfg.inst(inst)) {
-        let source = *bitcast.from();
         let Some(source_projection) = exact_projection_of(exact_states, maybe_unknown, source)
         else {
             return pending_or_blocked(exact_states, source);
         };
-        let Some(slice) = bitcast_projection_slice(
-            layout_cache,
-            module,
-            source_projection.slice,
-            func.dfg.value_ty(result),
-        ) else {
-            return ExactState::Blocked;
-        };
-        return ExactState::Exact(Projection {
-            root_value: source_projection.root_value,
-            slice,
-        });
-    }
-
-    if let Some(obj_proj) = downcast::<&data::ObjProj>(func.inst_set(), func.dfg.inst(inst)) {
-        let Some((&base, indices)) = obj_proj.values().split_first() else {
-            return exact_state_or_unknown(exact_states, possible_roots, maybe_unknown, result);
-        };
-        let Some(base_projection) = exact_projection_of(exact_states, maybe_unknown, base) else {
-            return pending_or_blocked(exact_states, base);
-        };
-        let Some(sub) = shape::aggregate_slice_for_object_path(
-            module,
-            base_projection.slice.ty,
-            indices,
-            &func.dfg,
-        ) else {
-            return ExactState::Blocked;
-        };
-        return ExactState::Exact(Projection {
-            root_value: base_projection.root_value,
-            slice: shape::AggregateSlice {
-                ty: sub.ty,
-                first_leaf: base_projection.slice.first_leaf + sub.first_leaf,
-                leaf_count: sub.leaf_count,
-            },
-        });
-    }
-
-    if let Some(obj_index) = downcast::<&data::ObjIndex>(func.inst_set(), func.dfg.inst(inst)) {
-        let base = *obj_index.object();
-        let Some(base_projection) = exact_projection_of(exact_states, maybe_unknown, base) else {
-            return pending_or_blocked(exact_states, base);
-        };
-        let Some(sub) = shape::aggregate_slice_for_object_path(
-            module,
-            base_projection.slice.ty,
-            &[*obj_index.index()],
-            &func.dfg,
-        ) else {
-            return ExactState::Blocked;
-        };
-        return ExactState::Exact(Projection {
-            root_value: base_projection.root_value,
-            slice: shape::AggregateSlice {
-                ty: sub.ty,
-                first_leaf: base_projection.slice.first_leaf + sub.first_leaf,
-                leaf_count: sub.leaf_count,
-            },
-        });
-    }
-
-    if let Some(enum_proj) = downcast::<&data::EnumProj>(func.inst_set(), func.dfg.inst(inst)) {
-        let base = *enum_proj.object();
-        let Some(base_projection) = exact_projection_of(exact_states, maybe_unknown, base) else {
-            return pending_or_blocked(exact_states, base);
-        };
-        let Some(field_idx) = shape::const_u32(&func.dfg, *enum_proj.field()) else {
-            return ExactState::Blocked;
-        };
-        let Some(sub) = shape::enum_variant_field_slice(
-            module,
-            base_projection.slice.ty,
-            *enum_proj.variant(),
-            field_idx,
-        ) else {
-            return ExactState::Blocked;
-        };
-        return ExactState::Exact(Projection {
-            root_value: base_projection.root_value,
-            slice: shape::AggregateSlice {
-                ty: sub.ty,
-                first_leaf: base_projection.slice.first_leaf + sub.first_leaf,
-                leaf_count: sub.leaf_count,
-            },
-        });
-    }
-
-    if let Some(enum_assert_ref) =
-        downcast::<&data::EnumAssertVariantRef>(func.inst_set(), func.dfg.inst(inst))
-    {
-        let base = *enum_assert_ref.object();
-        let Some(base_projection) = exact_projection_of(exact_states, maybe_unknown, base) else {
-            return pending_or_blocked(exact_states, base);
-        };
-        return ExactState::Exact(base_projection);
+        return transfer
+            .map_projection(func, module, result, source_projection, layout_cache)
+            .map_or(ExactState::Blocked, ExactState::Exact);
     }
 
     if let Some(call) = downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(inst)) {
@@ -1199,118 +1103,19 @@ fn derive_possible_projections(
         return Vec::new();
     };
 
-    if let Some(gep) = downcast::<&data::Gep>(func.inst_set(), func.dfg.inst(inst)) {
-        let Some(&base) = gep.values().first() else {
+    if let Some(transfer) = projection_transfer_inst(func, inst) {
+        let Some(source) = transfer.source_value() else {
             return Vec::new();
         };
-        return map_candidate_projections(possible_projections, base, |projection| {
-            let sub = shape::aggregate_slice_for_gep_path(
-                module,
-                projection.slice.ty,
-                &gep.values()[1..],
-                &func.dfg,
-            )?;
-            Some(Projection {
-                root_value: projection.root_value,
-                slice: shape::AggregateSlice {
-                    ty: sub.ty,
-                    first_leaf: projection.slice.first_leaf + sub.first_leaf,
-                    leaf_count: sub.leaf_count,
-                },
-            })
-        });
-    }
-
-    if let Some(bitcast) = downcast::<&cast::Bitcast>(func.inst_set(), func.dfg.inst(inst)) {
-        return map_candidate_projections(possible_projections, *bitcast.from(), |projection| {
-            let slice = bitcast_projection_slice(
-                layout_cache,
-                module,
-                projection.slice,
-                func.dfg.value_ty(result),
-            )?;
-            Some(Projection {
-                root_value: projection.root_value,
-                slice,
-            })
-        });
-    }
-
-    if let Some(obj_proj) = downcast::<&data::ObjProj>(func.inst_set(), func.dfg.inst(inst)) {
-        let Some((&base, indices)) = obj_proj.values().split_first() else {
-            return Vec::new();
-        };
-        return map_candidate_projections(possible_projections, base, |projection| {
-            let sub = shape::aggregate_slice_for_object_path(
-                module,
-                projection.slice.ty,
-                indices,
-                &func.dfg,
-            )?;
-            Some(Projection {
-                root_value: projection.root_value,
-                slice: shape::AggregateSlice {
-                    ty: sub.ty,
-                    first_leaf: projection.slice.first_leaf + sub.first_leaf,
-                    leaf_count: sub.leaf_count,
-                },
-            })
-        });
-    }
-
-    if let Some(obj_index) = downcast::<&data::ObjIndex>(func.inst_set(), func.dfg.inst(inst)) {
-        return map_candidate_projections(
-            possible_projections,
-            *obj_index.object(),
-            |projection| {
-                let sub = shape::aggregate_slice_for_object_path(
-                    module,
-                    projection.slice.ty,
-                    &[*obj_index.index()],
-                    &func.dfg,
-                )?;
-                Some(Projection {
-                    root_value: projection.root_value,
-                    slice: shape::AggregateSlice {
-                        ty: sub.ty,
-                        first_leaf: projection.slice.first_leaf + sub.first_leaf,
-                        leaf_count: sub.leaf_count,
-                    },
-                })
-            },
+        return map_projection_candidates_for_result(
+            func,
+            result,
+            root_value,
+            possible_roots,
+            maybe_unknown,
+            &possible_projections[source],
+            |projection| transfer.map_projection(func, module, result, projection, layout_cache),
         );
-    }
-
-    if let Some(enum_proj) = downcast::<&data::EnumProj>(func.inst_set(), func.dfg.inst(inst)) {
-        let Some(field_idx) = shape::const_u32(&func.dfg, *enum_proj.field()) else {
-            return Vec::new();
-        };
-        return map_candidate_projections(
-            possible_projections,
-            *enum_proj.object(),
-            |projection| {
-                let sub = shape::enum_variant_field_slice(
-                    module,
-                    projection.slice.ty,
-                    *enum_proj.variant(),
-                    field_idx,
-                )?;
-                Some(Projection {
-                    root_value: projection.root_value,
-                    slice: shape::AggregateSlice {
-                        ty: sub.ty,
-                        first_leaf: projection.slice.first_leaf + sub.first_leaf,
-                        leaf_count: sub.leaf_count,
-                    },
-                })
-            },
-        );
-    }
-
-    if let Some(enum_assert_ref) =
-        downcast::<&data::EnumAssertVariantRef>(func.inst_set(), func.dfg.inst(inst))
-    {
-        return map_candidate_projections(possible_projections, *enum_assert_ref.object(), Some);
     }
 
     if let Some(call) = downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(inst)) {
@@ -1590,7 +1395,7 @@ fn call_return_root_transfer(
     let [result] = func.dfg.inst_results(inst) else {
         return None;
     };
-    let Some(summary) = object_effects.and_then(|effects| effects.get(call.callee())) else {
+    let Some(kind) = call_return_transfer_kind(object_effects, *call.callee()) else {
         return reference_element_ty(func.ctx(), func.dfg.value_ty(*result)).map(|_| {
             RootTransfer {
                 maybe_unknown: true,
@@ -1598,19 +1403,19 @@ fn call_return_root_transfer(
             }
         });
     };
-    match summary.ret_effect {
-        ObjectReturnEffect::SameAsArg { index } | ObjectReturnEffect::DerivedFromArg { index } => {
+    match kind {
+        CallReturnTransferKind::Arg { index, .. } => {
             call.args().get(index).map(|arg| RootTransfer {
                 roots: possible_roots[*arg].clone(),
                 maybe_unknown: maybe_unknown[*arg],
             })
         }
-        ObjectReturnEffect::FreshObject => {
+        CallReturnTransferKind::FreshObject => {
             let mut transfer = RootTransfer::default();
             transfer.roots.insert(*result);
             Some(transfer)
         }
-        ObjectReturnEffect::None | ObjectReturnEffect::Unknown => {
+        CallReturnTransferKind::Unknown => {
             reference_element_ty(func.ctx(), func.dfg.value_ty(*result)).map(|_| RootTransfer {
                 maybe_unknown: true,
                 ..RootTransfer::default()
@@ -1633,12 +1438,15 @@ fn derive_call_exact_state(
     let Some(result) = single_result_value(func, inst) else {
         return ExactState::Blocked;
     };
-    let Some(summary) = object_effects.and_then(|effects| effects.get(call.callee())) else {
+    let Some(kind) = call_return_transfer_kind(object_effects, *call.callee()) else {
         return exact_state_or_unknown(exact_states, possible_roots, maybe_unknown, result);
     };
 
-    match summary.ret_effect {
-        ObjectReturnEffect::SameAsArg { index } => {
+    match kind {
+        CallReturnTransferKind::Arg {
+            index,
+            exact_projection: true,
+        } => {
             let Some(&arg) = call.args().get(index) else {
                 return ExactState::Blocked;
             };
@@ -1655,17 +1463,20 @@ fn derive_call_exact_state(
                 ExactState::Blocked
             }
         }
-        ObjectReturnEffect::DerivedFromArg { index } => {
-            let Some(&arg) = call.args().get(index) else {
+        CallReturnTransferKind::Arg {
+            index,
+            exact_projection: false,
+        } => {
+            if call.args().get(index).is_none() {
                 return ExactState::Blocked;
-            };
-            exact_state_or_unknown(exact_states, possible_roots, maybe_unknown, arg)
+            }
+            exact_state_or_unknown(exact_states, possible_roots, maybe_unknown, result)
         }
-        ObjectReturnEffect::FreshObject => {
+        CallReturnTransferKind::FreshObject => {
             fresh_call_root_projection(func, result, inst, object_effects, layout_cache)
                 .map_or(ExactState::Blocked, ExactState::Exact)
         }
-        ObjectReturnEffect::None | ObjectReturnEffect::Unknown => {
+        CallReturnTransferKind::Unknown => {
             exact_state_or_unknown(exact_states, possible_roots, maybe_unknown, result)
         }
     }
@@ -1713,71 +1524,179 @@ fn derive_call_possible_projections(
     layout_cache: &mut shape::AggregateLayoutCache,
     object_effects: Option<&ObjectEffectSummaryMap>,
 ) -> Vec<Projection> {
-    let Some(summary) = object_effects.and_then(|effects| effects.get(call.callee())) else {
+    let Some(kind) = call_return_transfer_kind(object_effects, *call.callee()) else {
         return Vec::new();
     };
 
-    match summary.ret_effect {
-        ObjectReturnEffect::SameAsArg { index } | ObjectReturnEffect::DerivedFromArg { index } => {
+    match kind {
+        CallReturnTransferKind::Arg { index, .. } => {
             let Some(&arg) = call.args().get(index) else {
                 return Vec::new();
             };
-            filter_projection_candidates(
+            map_projection_candidates_for_result(
                 func,
                 result,
-                &possible_projections[arg],
+                root_value,
                 possible_roots,
                 maybe_unknown,
-                root_value,
+                &possible_projections[arg],
+                Some,
             )
         }
-        ObjectReturnEffect::FreshObject => {
+        CallReturnTransferKind::FreshObject => {
             fresh_call_root_projection(func, result, inst, object_effects, layout_cache)
                 .into_iter()
                 .collect()
         }
-        ObjectReturnEffect::None | ObjectReturnEffect::Unknown => Vec::new(),
+        CallReturnTransferKind::Unknown => Vec::new(),
     }
 }
 
-fn map_candidate_projections(
-    possible_projections: &SecondaryMap<ValueId, Vec<Projection>>,
-    value: ValueId,
-    mut map: impl FnMut(Projection) -> Option<Projection>,
-) -> Vec<Projection> {
-    let mut projections = Vec::new();
-    for &projection in &possible_projections[value] {
-        let Some(mapped) = map(projection) else {
-            continue;
-        };
-        push_unique_projection(&mut projections, mapped);
-    }
-    projections
-}
-
-fn filter_projection_candidates(
+fn map_projection_candidates_for_result(
     func: &Function,
     result: ValueId,
-    projections: &[Projection],
+    root_value: ValueId,
     possible_roots: &SecondaryMap<ValueId, FxHashSet<ValueId>>,
     maybe_unknown: &SecondaryMap<ValueId, bool>,
-    root_value: ValueId,
+    projections: &[Projection],
+    mut map: impl FnMut(Projection) -> Option<Projection>,
 ) -> Vec<Projection> {
     if maybe_unknown[result] {
         return Vec::new();
     }
     let result_ty = func.dfg.value_ty(result);
-    let mut filtered = Vec::new();
+    let mut mapped = Vec::new();
     for &projection in projections {
-        if projection.root_value != RootValue::new(root_value)
-            || !possible_roots[result].contains(&projection.root_value.value())
-            || !projection_value_ty_matches(result_ty, projection.slice.ty, func.ctx())
+        let Some(mapped_projection) = map(projection) else {
+            continue;
+        };
+        if mapped_projection.root_value != RootValue::new(root_value)
+            || !possible_roots[result].contains(&mapped_projection.root_value.value())
+            || !projection_value_ty_matches(result_ty, mapped_projection.slice.ty, func.ctx())
         {
             continue;
         }
-        push_unique_projection(&mut filtered, projection);
+        push_unique_projection(&mut mapped, mapped_projection);
     }
-    filtered
+    mapped
+}
+
+fn projection_transfer_inst(func: &Function, inst: InstId) -> Option<ProjectionTransferInst<'_>> {
+    let inst_data = func.dfg.inst(inst);
+    if let Some(gep) = downcast::<&data::Gep>(func.inst_set(), inst_data) {
+        return Some(ProjectionTransferInst::Gep(gep));
+    }
+    if let Some(bitcast) = downcast::<&cast::Bitcast>(func.inst_set(), inst_data) {
+        return Some(ProjectionTransferInst::Bitcast(bitcast));
+    }
+    if let Some(obj_proj) = downcast::<&data::ObjProj>(func.inst_set(), inst_data) {
+        return Some(ProjectionTransferInst::ObjProj(obj_proj));
+    }
+    if let Some(obj_index) = downcast::<&data::ObjIndex>(func.inst_set(), inst_data) {
+        return Some(ProjectionTransferInst::ObjIndex(obj_index));
+    }
+    if let Some(enum_proj) = downcast::<&data::EnumProj>(func.inst_set(), inst_data) {
+        return Some(ProjectionTransferInst::EnumProj(enum_proj));
+    }
+    downcast::<&data::EnumAssertVariantRef>(func.inst_set(), inst_data)
+        .map(ProjectionTransferInst::EnumAssertVariantRef)
+}
+
+impl ProjectionTransferInst<'_> {
+    fn source_value(self) -> Option<ValueId> {
+        match self {
+            Self::Gep(gep) => gep.values().first().copied(),
+            Self::Bitcast(bitcast) => Some(*bitcast.from()),
+            Self::ObjProj(obj_proj) => obj_proj.values().first().copied(),
+            Self::ObjIndex(obj_index) => Some(*obj_index.object()),
+            Self::EnumProj(enum_proj) => Some(*enum_proj.object()),
+            Self::EnumAssertVariantRef(enum_assert_ref) => Some(*enum_assert_ref.object()),
+        }
+    }
+
+    fn map_projection(
+        self,
+        func: &Function,
+        module: &ModuleCtx,
+        result: ValueId,
+        projection: Projection,
+        layout_cache: &mut shape::AggregateLayoutCache,
+    ) -> Option<Projection> {
+        match self {
+            Self::Gep(gep) => shape::aggregate_slice_for_gep_path(
+                module,
+                projection.slice.ty,
+                &gep.values()[1..],
+                &func.dfg,
+            )
+            .map(|sub| offset_projection(projection, sub)),
+            Self::Bitcast(_) => bitcast_projection_slice(
+                layout_cache,
+                module,
+                projection.slice,
+                func.dfg.value_ty(result),
+            )
+            .map(|slice| Projection {
+                root_value: projection.root_value,
+                slice,
+            }),
+            Self::ObjProj(obj_proj) => shape::aggregate_slice_for_object_path(
+                module,
+                projection.slice.ty,
+                &obj_proj.values()[1..],
+                &func.dfg,
+            )
+            .map(|sub| offset_projection(projection, sub)),
+            Self::ObjIndex(obj_index) => shape::aggregate_slice_for_object_path(
+                module,
+                projection.slice.ty,
+                &[*obj_index.index()],
+                &func.dfg,
+            )
+            .map(|sub| offset_projection(projection, sub)),
+            Self::EnumProj(enum_proj) => {
+                let field_idx = shape::const_u32(&func.dfg, *enum_proj.field())?;
+                let sub = shape::enum_variant_field_slice(
+                    module,
+                    projection.slice.ty,
+                    *enum_proj.variant(),
+                    field_idx,
+                )?;
+                Some(offset_projection(projection, sub))
+            }
+            Self::EnumAssertVariantRef(_) => Some(projection),
+        }
+    }
+}
+
+fn offset_projection(projection: Projection, sub: shape::AggregateSlice) -> Projection {
+    Projection {
+        root_value: projection.root_value,
+        slice: shape::AggregateSlice {
+            ty: sub.ty,
+            first_leaf: projection.slice.first_leaf + sub.first_leaf,
+            leaf_count: sub.leaf_count,
+        },
+    }
+}
+
+fn call_return_transfer_kind(
+    object_effects: Option<&ObjectEffectSummaryMap>,
+    callee: FuncRef,
+) -> Option<CallReturnTransferKind> {
+    let summary = object_effects?.get(&callee)?;
+    Some(match summary.ret_effect {
+        ObjectReturnEffect::SameAsArg { index } => CallReturnTransferKind::Arg {
+            index,
+            exact_projection: true,
+        },
+        ObjectReturnEffect::DerivedFromArg { index } => CallReturnTransferKind::Arg {
+            index,
+            exact_projection: false,
+        },
+        ObjectReturnEffect::FreshObject => CallReturnTransferKind::FreshObject,
+        ObjectReturnEffect::None | ObjectReturnEffect::Unknown => CallReturnTransferKind::Unknown,
+    })
 }
 
 fn singleton_root(
@@ -2507,6 +2426,115 @@ block3:
             let may = provenance.may();
 
             assert_known_only(may.may_roots(loaded), &expected);
+        });
+    }
+
+    #[test]
+    fn same_as_arg_call_preserves_exact_projection() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @Cell = { i256 };
+
+func private %id(v0.objref<i256>) -> objref<i256> {
+block0:
+    return v0;
+}
+
+func private %f(v0.objref<@Cell>) -> objref<i256> {
+block0:
+    v1.objref<i256> = obj.proj v0 0.i8;
+    v2.objref<i256> = call %id v1;
+    return v2;
+}
+"#,
+        );
+
+        let func_ref = lookup_func(&module, "f");
+        let object_effects = compute_object_effect_summaries(&module);
+        module.func_store.view(func_ref, |func| {
+            let mut layout_cache = shape::AggregateLayoutCache::default();
+            let root_slices = collect_root_slices_with_arg_roots(func, &mut layout_cache);
+            let provenance = collect_root_provenance(
+                func,
+                func.ctx(),
+                &root_slices,
+                &mut layout_cache,
+                Some(&object_effects),
+            );
+            let [projected, call_result] = func
+                .layout
+                .iter_block()
+                .flat_map(|block| func.layout.iter_inst(block))
+                .filter_map(|inst| func.dfg.inst_result(inst))
+                .filter(|&result| {
+                    func.dfg.value_ty(result) != func.dfg.value_ty(func.arg_values[0])
+                })
+                .collect::<Vec<_>>()
+                .try_into()
+                .expect("projection and call result should exist");
+
+            let complete = provenance.complete();
+            assert_eq!(
+                complete.exact_projection(call_result),
+                complete.exact_projection(projected)
+            );
+        });
+    }
+
+    #[test]
+    fn derived_from_arg_call_keeps_root_without_faking_exact_projection() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @Cell = { i256 };
+
+func private %field(v0.objref<@Cell>) -> objref<i256> {
+block0:
+    v1.objref<i256> = obj.proj v0 0.i8;
+    return v1;
+}
+
+func private %f(v0.objref<@Cell>) -> objref<i256> {
+block0:
+    v1.objref<i256> = call %field v0;
+    return v1;
+}
+"#,
+        );
+
+        let func_ref = lookup_func(&module, "f");
+        let object_effects = compute_object_effect_summaries(&module);
+        module.func_store.view(func_ref, |func| {
+            let mut layout_cache = shape::AggregateLayoutCache::default();
+            let root_slices = collect_root_slices_with_arg_roots(func, &mut layout_cache);
+            let provenance = collect_root_provenance(
+                func,
+                func.ctx(),
+                &root_slices,
+                &mut layout_cache,
+                Some(&object_effects),
+            );
+            let call_result = func
+                .layout
+                .iter_block()
+                .flat_map(|block| func.layout.iter_inst(block))
+                .find_map(|inst| {
+                    downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(inst))
+                        .and_then(|_| func.dfg.inst_result(inst))
+                })
+                .expect("call result should exist");
+
+            let complete = provenance.complete();
+            let may = provenance.may();
+            assert_eq!(complete.exact_projection(call_result), None);
+            assert_eq!(
+                complete.complete_roots(call_result),
+                Some(CompleteRootSet::Single(RootValue::new(func.arg_values[0])))
+            );
+            assert_known_only(may.may_roots(call_result), &[func.arg_values[0]]);
         });
     }
 
