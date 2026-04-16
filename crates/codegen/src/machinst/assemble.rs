@@ -1,4 +1,4 @@
-use std::{io, ops::IndexMut};
+use std::{fmt, io, ops::IndexMut};
 
 use cranelift_entity::SecondaryMap;
 use indexmap::IndexMap;
@@ -10,8 +10,8 @@ use sonatina_ir::{
 };
 
 use super::{
-    lower::SectionCodeUnit,
-    vcode::{Label, LabelId, SectionCodeUnitId, VCode, VCodeFixup, VCodeInst},
+    lower::{FixupUpdate, SectionCodeUnit},
+    vcode::{Label, LabelId, SectionCodeUnitId, SymFixup, VCode, VCodeFixup, VCodeInst},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,6 +35,21 @@ impl std::fmt::Display for LayoutError {
                     "missing layout offset for section helper label target {unit:?}"
                 )
             }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CodeUnitOwner {
+    Function(FuncRef),
+    SectionUnit(SectionCodeUnitId),
+}
+
+impl fmt::Display for CodeUnitOwner {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Function(func) => write!(f, "function {func:?}"),
+            Self::SectionUnit(unit) => write!(f, "section helper {}", unit.0),
         }
     }
 }
@@ -151,21 +166,6 @@ impl<Op> ObjectLayout<Op> {
         self.functions.get(&func).map(|layout| layout.size)
     }
 
-    pub(crate) fn func_vcode_mut(&mut self, func: FuncRef) -> Option<&mut VCode<Op>> {
-        self.functions
-            .get_mut(&func)
-            .map(|layout| &mut layout.vcode)
-    }
-
-    pub(crate) fn section_unit_vcode_mut(
-        &mut self,
-        unit: SectionCodeUnitId,
-    ) -> Option<&mut VCode<Op>> {
-        self.section_units
-            .get_mut(&unit)
-            .map(|layout| &mut layout.layout.vcode)
-    }
-
     pub(crate) fn func_layout(&self, func: FuncRef) -> Option<&FuncLayout<Op>> {
         self.functions.get(&func)
     }
@@ -176,6 +176,33 @@ impl<Op> ObjectLayout<Op> {
 
     pub(crate) fn section_units(&self) -> &IndexMap<SectionCodeUnitId, SectionUnitLayout<Op>> {
         &self.section_units
+    }
+
+    pub(crate) fn apply_sym_fixups<E>(
+        &mut self,
+        mut apply: impl FnMut(
+            CodeUnitOwner,
+            &mut VCode<Op>,
+            VCodeInst,
+            &SymFixup,
+        ) -> Result<FixupUpdate, E>,
+    ) -> Result<bool, E> {
+        let mut layout_changed = false;
+        for (func, layout) in self.functions.iter_mut() {
+            layout_changed |= apply_sym_fixups_in_vcode(
+                CodeUnitOwner::Function(*func),
+                &mut layout.vcode,
+                &mut apply,
+            )?;
+        }
+        for (unit_id, unit) in self.section_units.iter_mut() {
+            layout_changed |= apply_sym_fixups_in_vcode(
+                CodeUnitOwner::SectionUnit(*unit_id),
+                &mut unit.layout.vcode,
+                &mut apply,
+            )?;
+        }
+        Ok(layout_changed)
     }
 }
 
@@ -464,10 +491,44 @@ fn update(val: &mut u32, to: u32) -> bool {
     did_change
 }
 
+fn apply_sym_fixups_in_vcode<Op, E>(
+    owner: CodeUnitOwner,
+    vcode: &mut VCode<Op>,
+    apply: &mut impl FnMut(
+        CodeUnitOwner,
+        &mut VCode<Op>,
+        VCodeInst,
+        &SymFixup,
+    ) -> Result<FixupUpdate, E>,
+) -> Result<bool, E> {
+    let fixups = collect_sym_fixups(vcode);
+    let mut layout_changed = false;
+    for (inst, fixup) in fixups {
+        layout_changed |= apply(owner, vcode, inst, &fixup)? == FixupUpdate::LayoutChanged;
+    }
+    Ok(layout_changed)
+}
+
+fn collect_sym_fixups<Op>(vcode: &VCode<Op>) -> Vec<(VCodeInst, SymFixup)> {
+    let mut out = Vec::new();
+    for (insn, fixup) in vcode.fixups.values() {
+        let VCodeFixup::Sym(fixup) = fixup else {
+            continue;
+        };
+        out.push((*insn, fixup.clone()));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::isa::evm::opcode::OpCode;
+    use crate::{
+        isa::evm::opcode::OpCode,
+        machinst::vcode::{SymFixup, SymFixupKind},
+    };
+    use smallvec::smallvec;
+    use sonatina_ir::inst::data::SymbolRef;
 
     #[test]
     fn resize_rejects_missing_function_label_target() {
@@ -486,6 +547,72 @@ mod tests {
         assert_eq!(
             err,
             LayoutError::MissingFunctionOffset(FuncRef::from_u32(1))
+        );
+    }
+
+    #[test]
+    fn apply_sym_fixups_visits_function_and_section_unit_fixups() {
+        let block = BlockId(0);
+        let func = FuncRef::from_u32(0);
+        let unit = SectionCodeUnitId(0);
+        let gv = sonatina_ir::GlobalVariableRef::from_u32(0);
+
+        let mut func_vcode = VCode::<OpCode>::default();
+        let func_fixup = func_vcode.add_inst_to_block(OpCode::PUSH0, None, block);
+        func_vcode.inst_imm_bytes.insert((func_fixup, smallvec![]));
+        func_vcode.fixups.insert((
+            func_fixup,
+            VCodeFixup::Sym(SymFixup {
+                kind: SymFixupKind::Addr,
+                sym: SymbolRef::Global(gv),
+            }),
+        ));
+
+        let mut unit_vcode = VCode::<OpCode>::default();
+        let unit_fixup = unit_vcode.add_inst_to_block(OpCode::PUSH0, None, block);
+        unit_vcode.inst_imm_bytes.insert((unit_fixup, smallvec![]));
+        unit_vcode.fixups.insert((
+            unit_fixup,
+            VCodeFixup::Sym(SymFixup {
+                kind: SymFixupKind::Size,
+                sym: SymbolRef::Global(gv),
+            }),
+        ));
+
+        let mut layout = ObjectLayout::new(
+            vec![(func, func_vcode, vec![block])],
+            vec![SectionCodeUnit {
+                id: unit,
+                name: "__helper".to_string(),
+                vcode: unit_vcode,
+                block_order: vec![block],
+            }],
+            0,
+        );
+
+        let mut visited = Vec::new();
+        let layout_changed = layout
+            .apply_sym_fixups(|owner, _, inst, fixup| {
+                visited.push((owner, inst, fixup.kind.clone()));
+                Ok::<_, ()>(FixupUpdate::Unchanged)
+            })
+            .expect("traversal should not fail");
+
+        assert!(!layout_changed);
+        assert_eq!(
+            visited,
+            vec![
+                (
+                    CodeUnitOwner::Function(func),
+                    func_fixup,
+                    SymFixupKind::Addr
+                ),
+                (
+                    CodeUnitOwner::SectionUnit(unit),
+                    unit_fixup,
+                    SymFixupKind::Size,
+                ),
+            ]
         );
     }
 }
