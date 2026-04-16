@@ -9,6 +9,7 @@ use sonatina_ir::{
     visitor::VisitorMut,
 };
 
+use super::scalar_words::evm_scalar_word_bytes;
 use crate::{
     optim::const_eval::{
         ConstPath, ConstPathAnalysis, ConstPathStep, analyze_const_paths,
@@ -677,7 +678,7 @@ fn encode_const_words(
         if imm.ty() != ty {
             return None;
         }
-        out.extend_from_slice(&imm.zext(Type::I256).as_i256().to_u256().to_big_endian());
+        out.extend_from_slice(&evm_scalar_word_bytes(*imm)?);
         return Some(());
     }
 
