@@ -1,0 +1,166 @@
+#! AggregateCombine should canonicalize nested asserted enum aliases back to their root object.
+
+target = "evm-ethereum-osaka"
+
+type @OptionI256 = enum {
+    #None,
+    #Some(i256),
+};
+
+type @Wrapper = { @OptionI256 };
+
+func private %mystery() -> objref<@OptionI256> {
+    block0:
+        v0.objref<@OptionI256> = obj.alloc @OptionI256;
+        return v0;
+}
+
+# sameln: func private %nested_asserted_enum_write_variant(v0.objref<@OptionI256>) -> i256 {
+# not:     obj.load
+# check:   return 7.i256;
+func private %nested_asserted_enum_write_variant(v0.objref<@OptionI256>) -> i256 {
+    block0:
+        v1.objref<@OptionI256> = enum.assert_variant_ref v0 #Some;
+        v2.objref<@OptionI256> = enum.assert_variant_ref v1 #Some;
+        enum.write_variant v2 #Some (7.i256);
+        v3.objref<i256> = enum.proj v0 #Some 0.i8;
+        v4.i256 = obj.load v3;
+        return v4;
+}
+
+# sameln: func private %nested_assert_phi_alias_write_variant(v0.objref<@OptionI256>) -> i256 {
+# not:     obj.load
+# check:   return 7.i256;
+func private %nested_assert_phi_alias_write_variant(v0.objref<@OptionI256>) -> i256 {
+    block0:
+        v1.objref<@OptionI256> = enum.assert_variant_ref v0 #Some;
+        br 1.i1 block1 block2;
+
+    block1:
+        jump block3;
+
+    block2:
+        v2.objref<@OptionI256> = enum.assert_variant_ref v1 #Some;
+        jump block3;
+
+    block3:
+        v3.objref<@OptionI256> = phi (v1 block1) (v2 block2);
+        enum.write_variant v3 #Some (7.i256);
+        v4.objref<i256> = enum.proj v0 #Some 0.i8;
+        v5.i256 = obj.load v4;
+        return v5;
+}
+
+# sameln: func private %known_plus_unknown_phi_write_variant(v0.i1) -> i256 {
+# check:   obj.load
+# not:     return 7.i256;
+func private %known_plus_unknown_phi_write_variant(v0.i1) -> i256 {
+    block0:
+        v1.objref<@OptionI256> = obj.alloc @OptionI256;
+        enum.write_variant v1 #Some (9.i256);
+        br v0 block1 block2;
+
+    block1:
+        jump block3;
+
+    block2:
+        v2.objref<@OptionI256> = call %mystery;
+        jump block3;
+
+    block3:
+        v3.objref<@OptionI256> = phi (v1 block1) (v2 block2);
+        enum.write_variant v3 #Some (7.i256);
+        v4.objref<i256> = enum.proj v1 #Some 0.i8;
+        v5.i256 = obj.load v4;
+        return v5;
+}
+
+# sameln: func private %nested_enum_field_write_variant() -> i256 {
+# not:     obj.load
+# check:   return 7.i256;
+func private %nested_enum_field_write_variant() -> i256 {
+    block0:
+        v0.objref<@Wrapper> = obj.alloc @Wrapper;
+        v1.objref<@OptionI256> = obj.proj v0 0.i8;
+        enum.write_variant v1 #Some (7.i256);
+        v2.objref<i256> = enum.proj v1 #Some 0.i8;
+        v3.i256 = obj.load v2;
+        return v3;
+}
+
+# sameln: func private %nested_enum_field_write_variant_arg(v0.objref<@Wrapper>) -> i256 {
+# not:     obj.load
+# check:   return 7.i256;
+func private %nested_enum_field_write_variant_arg(v0.objref<@Wrapper>) -> i256 {
+    block0:
+        v1.objref<@OptionI256> = obj.proj v0 0.i8;
+        enum.write_variant v1 #Some (7.i256);
+        v2.objref<i256> = enum.proj v1 #Some 0.i8;
+        v3.i256 = obj.load v2;
+        return v3;
+}
+
+# sameln: func private %nested_enum_field_projection_phi() -> i256 {
+# not:     obj.load
+# check:   return 7.i256;
+func private %nested_enum_field_projection_phi() -> i256 {
+    block0:
+        v0.objref<@Wrapper> = obj.alloc @Wrapper;
+        br 1.i1 block1 block2;
+
+    block1:
+        v1.objref<@OptionI256> = obj.proj v0 0.i8;
+        jump block3;
+
+    block2:
+        v2.objref<@OptionI256> = obj.proj v0 0.i8;
+        jump block3;
+
+    block3:
+        v3.objref<@OptionI256> = phi (v1 block1) (v2 block2);
+        enum.write_variant v3 #Some (7.i256);
+        v4.objref<@OptionI256> = obj.proj v0 0.i8;
+        v5.objref<i256> = enum.proj v4 #Some 0.i8;
+        v6.i256 = obj.load v5;
+        return v6;
+}
+
+# sameln: func private %branch_sensitive_nested_assert_ref(v0.objref<@OptionI256>) -> i256 {
+# not:     obj.load
+# check:   return 7.i256;
+func private %branch_sensitive_nested_assert_ref(v0.objref<@OptionI256>) -> i256 {
+    block0:
+        v1.objref<@OptionI256> = enum.assert_variant_ref v0 #Some;
+        v2.objref<@OptionI256> = enum.assert_variant_ref v1 #Some;
+        v3.enumtag(@OptionI256) = enum.get_tag v2;
+        br_table v3 block2 (1.enumtag(@OptionI256) block1) (0.enumtag(@OptionI256) block2);
+
+    block1:
+        v4.objref<i256> = enum.proj v0 #Some 0.i8;
+        obj.store v4 7.i256;
+        v5.i256 = obj.load v4;
+        return v5;
+
+    block2:
+        return 0.i256;
+}
+
+# sameln: func private %branch_sensitive_nested_wrapper_ref(v0.objref<@Wrapper>) -> i256 {
+# not:     obj.load
+# check:   return 7.i256;
+func private %branch_sensitive_nested_wrapper_ref(v0.objref<@Wrapper>) -> i256 {
+    block0:
+        v1.objref<@OptionI256> = obj.proj v0 0.i8;
+        v2.enumtag(@OptionI256) = enum.get_tag v1;
+        br_table v2 block2 (1.enumtag(@OptionI256) block1) (0.enumtag(@OptionI256) block2);
+
+    block1:
+        v3.objref<@OptionI256> = enum.assert_variant_ref v1 #Some;
+        v4.objref<i256> = enum.proj v3 #Some 0.i8;
+        obj.store v4 7.i256;
+        v5.i256 = obj.load v4;
+        return v5;
+
+    block2:
+        return 0.i256;
+}
