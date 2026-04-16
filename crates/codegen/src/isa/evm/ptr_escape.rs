@@ -1,17 +1,22 @@
+#[cfg(test)]
 use cranelift_entity::SecondaryMap;
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 use sonatina_ir::{
-    InstSetExt, Module, ValueId,
-    inst::evm::inst_set::EvmInstKind,
-    isa::{Isa, evm::Evm},
+    Module, ValueId,
+    isa::evm::Evm,
     module::{FuncRef, ModuleCtx},
 };
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::module_analysis::{CallGraph, CallGraphSccs, SccBuilder, SccRef};
 
-use super::provenance::{Provenance, compute_provenance};
+use super::{
+    escape_scan::{
+        EscapeScanCtx, PtrTransferEvent, PtrTransferSource, for_each_ptr_transfer_at_inst,
+    },
+    provenance::{Provenance, compute_provenance},
+};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ArgStoreLattice(u8);
@@ -158,12 +163,14 @@ impl PtrEscapeSummary {
             .map_or(&[], |arg| arg.arg_store_targets.as_slice())
     }
 
+    #[cfg(test)]
     pub(crate) fn arg_store_lattice(&self, src_idx: usize) -> ArgStoreLattice {
         self.args
             .get(src_idx)
             .map_or_else(ArgStoreLattice::default, |arg| arg.stores)
     }
 
+    #[cfg(test)]
     pub(crate) fn call_arg_may_escape_nonlocal(
         &self,
         src_idx: usize,
@@ -336,90 +343,52 @@ fn compute_summary_for_func(
         let prov = &prov_info.value;
         let local_mem = &prov_info.local_mem;
         let arg_mem = &prov_info.arg_mem;
+        let scan_ctx = EscapeScanCtx {
+            module: &module.ctx,
+            isa,
+            ptr_escape: summaries,
+            prov,
+            local_mem,
+            arg_mem,
+        };
 
         for block in function.layout.iter_block() {
             for inst in function.layout.iter_inst(block) {
-                let data = isa.inst_set().resolve_inst(function.dfg.inst(inst));
+                for_each_ptr_transfer_at_inst(function, inst, scan_ctx, |event| match event {
+                    PtrTransferEvent::Return { value, .. } => {
+                        if function.dfg.value_ty(value).is_pointer(&module.ctx) {
+                            summary.returns_any_ptr = true;
+                        }
 
-                match data {
-                    EvmInstKind::Return(_) => {
-                        let Some(ret_args) = function.dfg.return_args(inst) else {
-                            continue;
-                        };
-                        for &ret_val in ret_args {
-                            let ret_ty = function.dfg.value_ty(ret_val);
-                            if ret_ty.is_pointer(&module.ctx) {
-                                summary.returns_any_ptr = true;
-                            }
-
-                            let ret_prov = &prov[ret_val];
-                            for idx in ret_prov.arg_indices() {
-                                summary.record_returned_arg(idx as usize);
-                            }
+                        for idx in prov[value].arg_indices() {
+                            summary.record_returned_arg(idx as usize);
                         }
                     }
-                    EvmInstKind::Mstore(mstore) => {
-                        let addr_prov = &prov[*mstore.addr()];
-                        record_escape_into_provenance(
-                            &mut summary,
-                            &prov[*mstore.value()],
-                            addr_prov,
-                        );
-                    }
-                    EvmInstKind::EvmMstore8(mstore8) => {
-                        let addr_prov = &prov[*mstore8.addr()];
-                        record_escape_into_provenance(
-                            &mut summary,
-                            &prov[*mstore8.val()],
-                            addr_prov,
-                        );
-                    }
-                    EvmInstKind::EvmMcopy(mcopy) => {
-                        // mcopy copies BYTES from *src to *dest. The escaping
-                        // values are the contents at the source address, not
-                        // the source address itself. Look up stored content
-                        // via local_mem (alloca sources) and arg_mem (arg
-                        // sources).
-                        let dest_prov = &prov[*mcopy.dest()];
-                        let src_prov = &prov[*mcopy.addr()];
-                        for base in src_prov.alloca_insts() {
-                            if let Some(stored) = local_mem.get(&base) {
-                                record_escape_into_provenance(&mut summary, stored, dest_prov);
-                            }
+                    PtrTransferEvent::Write {
+                        dest_prov, source, ..
+                    } => match source {
+                        PtrTransferSource::Value(value) => {
+                            record_escape_into_provenance(&mut summary, &prov[value], dest_prov);
                         }
-                        for arg_idx in src_prov.arg_indices() {
-                            if let Some(content) = arg_mem.get(arg_idx as usize) {
-                                record_escape_into_provenance(&mut summary, content, dest_prov);
-                            }
+                        PtrTransferSource::LocalMem { stored, .. }
+                        | PtrTransferSource::ArgMem { stored } => {
+                            record_escape_into_provenance(&mut summary, stored, dest_prov);
+                        }
+                        PtrTransferSource::UnknownCopy => {}
+                    },
+                    PtrTransferEvent::CallArgEscape { value, .. } => {
+                        for arg_idx in prov[value].arg_indices() {
+                            summary.record_store_nonlocal(arg_idx as usize);
                         }
                     }
-                    EvmInstKind::Call(call) => {
-                        let callee = *call.callee();
-                        let callee_sum = summaries.get(&callee).cloned().unwrap_or_else(|| {
-                            PtrEscapeSummary::conservative_unknown(module, callee)
-                        });
-
-                        let args = call.args();
-                        for (idx, &arg) in args.iter().enumerate() {
-                            let p = &prov[arg];
-                            if callee_sum.arg_store_lattice(idx).may_store_nonlocal() {
-                                for arg_idx in p.arg_indices() {
-                                    summary.record_store_nonlocal(arg_idx as usize);
-                                }
-                            }
-                            for arg_idx in p.arg_indices() {
-                                for target_arg in callee_sum.call_arg_store_dest_args(idx, args) {
-                                    record_escape_from_arg_index(
-                                        &mut summary,
-                                        arg_idx as usize,
-                                        &prov[target_arg],
-                                    );
-                                }
-                            }
+                    PtrTransferEvent::CallArgStore {
+                        value, dest_prov, ..
+                    } => {
+                        for arg_idx in prov[value].arg_indices() {
+                            record_escape_from_arg_index(&mut summary, arg_idx as usize, dest_prov);
                         }
                     }
-                    _ => {}
-                }
+                });
             }
         }
 
@@ -456,6 +425,7 @@ fn record_escape_from_arg_index(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sonatina_ir::{InstSetExt, inst::evm::inst_set::EvmInstKind, isa::Isa};
     use sonatina_parser::parse_module;
     use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
 
@@ -1200,5 +1170,60 @@ block0:
             vec![false, false],
             "no arg should be unconditionally nonlocal"
         );
+    }
+
+    #[test]
+    fn ptr_escape_mcopy_from_arg_to_local_keeps_escape_local() {
+        let (summaries, _) = compute(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %copy_local(v0.*i8, v1.**i8) {
+block0:
+    mstore v1 v0 *i8;
+    v2.**i8 = alloca *i8;
+    evm_mcopy v2 v1 32.i256;
+    return;
+}
+"#,
+        );
+
+        let f = &summaries["copy_local"];
+        assert_eq!(arg_store_targets(f, 0), vec![1]);
+        assert!(f.arg_store_lattice(0).may_store_local());
+        assert!(f.arg_store_lattice(0).may_store_to_arg());
+        assert!(!f.arg_store_lattice(0).may_store_nonlocal());
+        assert_eq!(arg_may_escape(f), vec![false, false]);
+    }
+
+    #[test]
+    fn ptr_escape_mstore8_uses_destination_provenance_like_mstore() {
+        let (summaries, _) = compute(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %f(v0.*i8, v1.*i8, v2.i1) {
+block0:
+    v3.i256 = ptr_to_int v0 i256;
+    br v2 block1 block2;
+
+block1:
+    evm_mstore8 v1 v3;
+    return;
+
+block2:
+    v4.*i8 = alloca i8;
+    evm_mstore8 v4 v3;
+    return;
+}
+"#,
+        );
+
+        let f = &summaries["f"];
+        assert_eq!(arg_store_targets(f, 0), vec![1]);
+        assert!(f.arg_store_lattice(0).may_store_local());
+        assert!(f.arg_store_lattice(0).may_store_to_arg());
+        assert!(!f.arg_store_lattice(0).may_store_nonlocal());
+        assert_eq!(arg_may_escape(f), vec![false, false, false]);
     }
 }

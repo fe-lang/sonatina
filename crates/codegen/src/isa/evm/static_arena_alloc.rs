@@ -236,6 +236,7 @@ pub(crate) fn compute_func_stack_objects(
         ctx.ptr_escape,
         prov,
         &prov_info.local_mem,
+        &prov_info.arg_mem,
     );
     if !escaping_sites.is_empty() {
         panic!(
@@ -504,6 +505,7 @@ fn compute_escaping_allocas(
     ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
     prov: &SecondaryMap<ValueId, Provenance>,
     local_mem: &FxHashMap<InstId, Provenance>,
+    arg_mem: &[Provenance],
 ) -> FxHashMap<InstId, Vec<AllocaEscapeSite>> {
     let mut escaping: FxHashMap<InstId, Vec<AllocaEscapeSite>> = FxHashMap::default();
     let scan_ctx = EscapeScanCtx {
@@ -512,6 +514,7 @@ fn compute_escaping_allocas(
         ptr_escape,
         prov,
         local_mem,
+        arg_mem,
     };
 
     for block in function.layout.iter_block() {
@@ -519,16 +522,18 @@ fn compute_escaping_allocas(
             for_each_escape_event_at_inst(function, inst, scan_ctx, |event| match event.source {
                 EscapeSource::Value(value) => {
                     let site = match event.sink {
-                        EscapeSink::Return => AllocaEscapeSite::Return {
-                            inst: event.inst,
-                            value,
-                        },
+                        EscapeSink::Return => AllocaEscapeSite::Return { inst, value },
                         EscapeSink::NonLocalStore => AllocaEscapeSite::NonLocalStore {
-                            inst: event.inst,
+                            inst,
+                            addr: match isa.inst_set().resolve_inst(function.dfg.inst(inst)) {
+                                EvmInstKind::Mstore(mstore) => *mstore.addr(),
+                                EvmInstKind::EvmMstore8(mstore8) => *mstore8.addr(),
+                                _ => unreachable!("only stores emit direct-value store escapes"),
+                            },
                             value,
                         },
                         EscapeSink::CallArg { callee, arg_index } => AllocaEscapeSite::CallArg {
-                            inst: event.inst,
+                            inst,
                             callee,
                             arg_index,
                             value,
@@ -537,6 +542,7 @@ fn compute_escaping_allocas(
                             unreachable!("mcopy does not emit direct-value escapes")
                         }
                     };
+
                     for base in prov[value].alloca_insts() {
                         escaping.entry(base).or_default().push(site.clone());
                     }
@@ -546,10 +552,7 @@ fn compute_escaping_allocas(
                         escaping
                             .entry(base)
                             .or_default()
-                            .push(AllocaEscapeSite::NonLocalCopy {
-                                inst: event.inst,
-                                addr,
-                            });
+                            .push(AllocaEscapeSite::NonLocalCopy { inst, addr });
                     }
                 }
                 EscapeSource::UnknownCopy => {}
@@ -568,6 +571,7 @@ enum AllocaEscapeSite {
     },
     NonLocalStore {
         inst: InstId,
+        addr: ValueId,
         value: ValueId,
     },
     NonLocalCopy {
@@ -586,8 +590,8 @@ impl AllocaEscapeSite {
     fn sort_key(&self) -> (u32, u8, u32, u32) {
         match self {
             AllocaEscapeSite::Return { inst, value } => (inst.as_u32(), 0, value.as_u32(), 0),
-            AllocaEscapeSite::NonLocalStore { inst, value } => {
-                (inst.as_u32(), 1, value.as_u32(), 0)
+            AllocaEscapeSite::NonLocalStore { inst, addr, value } => {
+                (inst.as_u32(), 1, addr.as_u32(), value.as_u32())
             }
             AllocaEscapeSite::NonLocalCopy { inst, addr } => (inst.as_u32(), 2, addr.as_u32(), 0),
             AllocaEscapeSite::CallArg {
@@ -604,13 +608,14 @@ impl AllocaEscapeSite {
             AllocaEscapeSite::Return { inst, value } => {
                 format!("return of v{} at inst {}", value.as_u32(), inst.as_u32())
             }
-            AllocaEscapeSite::NonLocalStore { inst, value } => format!(
-                "non-local store of v{} at inst {}",
+            AllocaEscapeSite::NonLocalStore { inst, addr, value } => format!(
+                "non-local store of v{} to addr v{} at inst {}",
                 value.as_u32(),
+                addr.as_u32(),
                 inst.as_u32()
             ),
             AllocaEscapeSite::NonLocalCopy { inst, addr } => format!(
-                "non-local copy of local pointer bytes from addr v{} at inst {}",
+                "non-local mcopy from addr v{} at inst {}",
                 addr.as_u32(),
                 inst.as_u32()
             ),
