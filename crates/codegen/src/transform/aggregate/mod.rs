@@ -25,7 +25,9 @@ pub use byval_object_abi::{
     ObjectAggregateAbi, ObjectAggregateAbiConfig, ObjectByValueArgAbi, ObjectByValueArgAbiConfig,
 };
 pub use enum_lowering::EnumLowerToProduct;
-pub use legalize::{AggregateLowerToMemoryLegalize, assert_aggregate_legalized};
+pub use legalize::{
+    AggregateLowerToMemoryLegalize, assert_aggregate_legalized, cleanup_dead_aggregate_alloca_trees,
+};
 pub use object::ObjectLowerToMemory;
 pub use object_abi::ObjectReturnOutParam;
 pub(crate) use object_effects::{
