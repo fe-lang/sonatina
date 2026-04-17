@@ -1629,6 +1629,24 @@ impl AggregateLowerToMemoryLegalize {
         }
     }
 
+    fn collect_dead_aggregate_alloca_slots(&mut self, func: &Function, module: &ModuleCtx) {
+        self.materialized_slots.clear();
+        for block in func.layout.iter_block() {
+            for inst in func.layout.iter_inst(block) {
+                let Some(alloca) = downcast::<&data::Alloca>(func.inst_set(), func.dfg.inst(inst))
+                else {
+                    continue;
+                };
+                if !shape::is_supported_aggregate_ty(module, *alloca.ty()) {
+                    continue;
+                }
+                if let Some(slot_ptr) = func.dfg.inst_result(inst) {
+                    self.materialized_slots.push(slot_ptr);
+                }
+            }
+        }
+    }
+
     fn collect_dead_materialized_slot_insts(&mut self, func: &Function, slot_ptr: ValueId) -> bool {
         self.slot_tree_insts.clear();
         self.slot_tree_queue.clear();
@@ -1995,6 +2013,22 @@ pub fn assert_aggregate_legalized(function: &Function, module: &ModuleCtx) {
                     inst.as_u32()
                 );
             }
+        }
+    }
+}
+
+pub fn cleanup_dead_aggregate_alloca_trees(function: &mut Function, module: &ModuleCtx) -> bool {
+    let mut cleanup = AggregateLowerToMemoryLegalize::default();
+    cleanup.collect_dead_aggregate_alloca_slots(function, module);
+
+    let mut changed = false;
+    loop {
+        let removed_slots = cleanup.remove_dead_materialized_slots(function);
+        let removed_pure = cleanup.dead_pure_cleanup.run_with_current_users(function);
+        let progress = removed_slots || removed_pure;
+        changed |= progress;
+        if !progress {
+            return changed;
         }
     }
 }
@@ -2397,6 +2431,45 @@ func private %f(v0.i256) -> i256 {
                             "aggregate mstore should be gone"
                         );
                     }
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn late_dead_aggregate_alloca_cleanup_drops_dead_slot_trees() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @pair = { i256, i256 };
+
+func private %f() -> i256 {
+    block0:
+        v0.*@pair = alloca @pair;
+        v1.*i256 = gep v0 0.i64 0.i8;
+        mstore v1 1.i256 i256;
+        v2.*i256 = gep v0 0.i64 1.i8;
+        mstore v2 2.i256 i256;
+        v3.*i256 = gep v0 0.i64 0.i8;
+        v4.i256 = mload v3 i256;
+        return 0.i256;
+}
+"#,
+        );
+        let ctx = module.ctx.clone();
+        let func_ref = lookup_func(&module, "f");
+        module.func_store.modify(func_ref, |func| {
+            assert!(cleanup_dead_aggregate_alloca_trees(func, &ctx));
+        });
+
+        module.func_store.view(func_ref, |func| {
+            for block in func.layout.iter_block() {
+                for inst in func.layout.iter_inst(block) {
+                    assert!(
+                        downcast::<&data::Alloca>(func.inst_set(), func.dfg.inst(inst)).is_none(),
+                        "dead aggregate alloca tree should be removed"
+                    );
                 }
             }
         });
