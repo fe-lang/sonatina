@@ -1,7 +1,7 @@
 use std::mem;
 
 use cranelift_entity::SecondaryMap;
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{
     BlockId, Function, Inst, InstId, Type, Value, ValueId,
@@ -18,19 +18,179 @@ use crate::{
 
 use super::{cleanup::DeadPureInstCleanup, shape};
 
-#[derive(Clone)]
-enum AggregateProjectionStep {
-    Const(u32),
-    Dynamic(ValueId),
-    Reinterpret(Type),
-}
-
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 struct AggregateProjectionView {
-    root_value: ValueId,
     root_ty: Type,
     agg_ty: Type,
-    steps: SmallVec<[AggregateProjectionStep; 4]>,
+    first_root_runtime_leaf: usize,
+    runtime_leaf_count: usize,
+}
+
+#[derive(Clone, Copy)]
+struct ScalarUse {
+    inst: InstId,
+    result: ValueId,
+    root_runtime_leaf: usize,
+    result_ty: Type,
+}
+
+#[derive(Default)]
+struct MloadProjectionPlan {
+    scalar_uses: SmallVec<[ScalarUse; 4]>,
+    transparent_insts: SmallVec<[InstId; 8]>,
+    demanded_root_runtime_leaves: SmallVec<[bool; 8]>,
+}
+
+impl MloadProjectionPlan {
+    fn new(root_runtime_leaf_count: usize) -> Self {
+        Self {
+            demanded_root_runtime_leaves: smallvec![false; root_runtime_leaf_count],
+            ..Self::default()
+        }
+    }
+
+    fn add_scalar_use(
+        &mut self,
+        inst: InstId,
+        result: ValueId,
+        root_runtime_leaf: usize,
+        result_ty: Type,
+    ) {
+        self.scalar_uses.push(ScalarUse {
+            inst,
+            result,
+            root_runtime_leaf,
+            result_ty,
+        });
+        self.mark_root_runtime_leaf(root_runtime_leaf);
+    }
+
+    fn mark_root_runtime_leaf(&mut self, root_runtime_leaf: usize) {
+        let Some(demanded) = self.demanded_root_runtime_leaves.get_mut(root_runtime_leaf) else {
+            panic!("aggregate projection root runtime leaf out of bounds");
+        };
+        *demanded = true;
+    }
+
+    fn mark_view_runtime_leaves(&mut self, view: &AggregateProjectionView) {
+        let end = view
+            .first_root_runtime_leaf
+            .checked_add(view.runtime_leaf_count)
+            .unwrap_or_else(|| panic!("aggregate projection runtime leaf range overflow"));
+        let Some(demanded) = self
+            .demanded_root_runtime_leaves
+            .get_mut(view.first_root_runtime_leaf..end)
+        else {
+            panic!("aggregate projection runtime leaf range out of bounds");
+        };
+        for leaf in demanded {
+            *leaf = true;
+        }
+    }
+}
+
+struct SnapshotRoot {
+    src_ptr: ValueId,
+    slot_ptr: Option<ValueId>,
+    runtime_leaves: shape::RuntimeLeaves,
+    raw_leaf_cache: Vec<Option<ValueId>>,
+    cast_leaf_cache: FxHashMap<(usize, Type), ValueId>,
+}
+
+impl SnapshotRoot {
+    fn new(src_ptr: ValueId, runtime_leaves: shape::RuntimeLeaves) -> Self {
+        let raw_leaf_cache = vec![None; runtime_leaves.len()];
+        Self {
+            src_ptr,
+            slot_ptr: None,
+            runtime_leaves,
+            raw_leaf_cache,
+            cast_leaf_cache: FxHashMap::default(),
+        }
+    }
+
+    fn leaf_as(
+        &mut self,
+        legalize: &mut AggregateLowerToMemoryLegalize,
+        func: &mut Function,
+        builder: &mut BeforeCursor,
+        root_runtime_leaf: usize,
+        result_ty: Type,
+    ) -> ValueId {
+        let Some(leaf) = self.runtime_leaves.get(root_runtime_leaf) else {
+            panic!("aggregate projection root runtime leaf out of bounds");
+        };
+
+        let raw = match self.raw_leaf_cache[root_runtime_leaf] {
+            Some(value) => value,
+            None => {
+                let value = legalize.emit_load_scalar_from_path(
+                    func,
+                    builder,
+                    self.src_ptr,
+                    &leaf.path,
+                    leaf.ty,
+                );
+                self.raw_leaf_cache[root_runtime_leaf] = Some(value);
+                value
+            }
+        };
+        if func.dfg.value_ty(raw) == result_ty {
+            return raw;
+        }
+        if let Some(&value) = self.cast_leaf_cache.get(&(root_runtime_leaf, result_ty)) {
+            return value;
+        }
+
+        let casted = builder.insert_with_result(
+            func,
+            cast::Bitcast::new_unchecked(func.inst_set(), raw, result_ty),
+            result_ty,
+        );
+        self.cast_leaf_cache
+            .insert((root_runtime_leaf, result_ty), casted);
+        casted
+    }
+
+    fn ensure_slot(
+        &mut self,
+        legalize: &mut AggregateLowerToMemoryLegalize,
+        func: &mut Function,
+        builder: &mut BeforeCursor,
+        dst_ptr: ValueId,
+        demanded_root_runtime_leaves: &[bool],
+    ) {
+        if self.slot_ptr.is_some() {
+            return;
+        }
+        if demanded_root_runtime_leaves.len() != self.runtime_leaves.len() {
+            panic!("aggregate projection demanded leaf mask length mismatch");
+        }
+
+        for (idx, leaf) in self.runtime_leaves.iter().enumerate() {
+            if !demanded_root_runtime_leaves[idx] {
+                continue;
+            }
+
+            let raw = match self.raw_leaf_cache[idx] {
+                Some(value) => value,
+                None => {
+                    let value = legalize.emit_load_scalar_from_path(
+                        func,
+                        builder,
+                        self.src_ptr,
+                        &leaf.path,
+                        leaf.ty,
+                    );
+                    self.raw_leaf_cache[idx] = Some(value);
+                    value
+                }
+            };
+            legalize.emit_store_scalar_to_path(func, builder, dst_ptr, &leaf.path, raw, leaf.ty);
+        }
+
+        self.slot_ptr = Some(dst_ptr);
+    }
 }
 
 #[derive(Default)]
@@ -647,48 +807,68 @@ impl AggregateLowerToMemoryLegalize {
         }
 
         let agg_ty = *mload.ty();
-        let needs_snapshot =
-            self.rewrite_extract_tree_from_aggregate_snapshot(func, module, result, agg_ty);
-        if !needs_snapshot
-            && !func
-                .dfg
-                .users(result)
-                .copied()
-                .any(|user| func.layout.is_inst_inserted(user))
-        {
-            self.remove_if_results_dead(func, inst);
-            return;
-        }
-
+        let plan = self.plan_mload_projection_uses(func, module, result, agg_ty);
         let mut builder = BeforeCursor::new_before_inst(func, inst);
         let src_ptr = self.aggregate_addr_as_typed_ptr(func, &mut builder, *mload.addr(), agg_ty);
-        let dst_ptr = self.materialized_ptr(func, result, module);
-        self.emit_copy_aggregate_ptr_to_ptr(func, module, &mut builder, src_ptr, dst_ptr, agg_ty);
+        let runtime_leaves = self.runtime_leaves_or_panic(module, agg_ty);
+        let mut snapshot = SnapshotRoot::new(src_ptr, runtime_leaves);
+
+        for scalar_use in &plan.scalar_uses {
+            if !func.layout.is_inst_inserted(scalar_use.inst) {
+                continue;
+            }
+            let replacement = snapshot.leaf_as(
+                self,
+                func,
+                &mut builder,
+                scalar_use.root_runtime_leaf,
+                scalar_use.result_ty,
+            );
+            self.alias_and_remove(func, scalar_use.inst, scalar_use.result, replacement);
+        }
+
+        self.remove_dead_transparents(func, &plan.transparent_insts);
+
+        if func
+            .dfg
+            .users(result)
+            .copied()
+            .any(|user| func.layout.is_inst_inserted(user))
+        {
+            let dst_ptr = self.materialized_ptr(func, result, module);
+            snapshot.ensure_slot(
+                self,
+                func,
+                &mut builder,
+                dst_ptr,
+                plan.demanded_root_runtime_leaves.as_slice(),
+            );
+        }
 
         self.remove_if_results_dead(func, inst);
     }
 
-    fn rewrite_extract_tree_from_aggregate_snapshot(
+    fn plan_mload_projection_uses(
         &mut self,
-        func: &mut Function,
+        func: &Function,
         module: &ModuleCtx,
         root_value: ValueId,
         root_ty: Type,
-    ) -> bool {
+    ) -> MloadProjectionPlan {
+        let root_runtime_leaf_count = self.runtime_leaves_or_panic(module, root_ty).len();
+        let mut plan = MloadProjectionPlan::new(root_runtime_leaf_count);
         let mut views: SecondaryMap<ValueId, Option<AggregateProjectionView>> =
             SecondaryMap::default();
         let mut worklist = vec![root_value];
-        let mut transparent_insts = Vec::new();
-        let mut needs_snapshot = false;
         views[root_value] = Some(AggregateProjectionView {
-            root_value,
             root_ty,
             agg_ty: root_ty,
-            steps: SmallVec::new(),
+            first_root_runtime_leaf: 0,
+            runtime_leaf_count: root_runtime_leaf_count,
         });
 
         while let Some(value) = worklist.pop() {
-            let Some(view) = views[value].clone() else {
+            let Some(view) = views[value] else {
                 continue;
             };
             let users: Vec<_> = func.dfg.users(value).copied().collect();
@@ -705,25 +885,32 @@ impl AggregateLowerToMemoryLegalize {
                     continue;
                 }
                 let Some(extract_result) = func.dfg.inst_result(user) else {
+                    plan.mark_view_runtime_leaves(&view);
                     continue;
                 };
                 let result_ty = func.dfg.value_ty(extract_result);
+                let Some(child_view) = self.aggregate_projection_view_for_extract(
+                    func, module, &view, &extract, result_ty,
+                ) else {
+                    plan.mark_view_runtime_leaves(&view);
+                    continue;
+                };
                 if shape::is_supported_aggregate_ty(module, result_ty) {
-                    let Some(child_view) = self.aggregate_projection_view_for_extract(
-                        func, module, &view, &extract, result_ty,
-                    ) else {
-                        continue;
-                    };
                     views[extract_result] = Some(child_view);
-                    transparent_insts.push(user);
+                    plan.transparent_insts.push(user);
                     worklist.push(extract_result);
                     continue;
                 }
-
-                self.rewrite_scalar_extract_from_projection_view(
-                    func, module, user, &extract, &view,
-                );
-                needs_snapshot = true;
+                if child_view.runtime_leaf_count == 1 {
+                    plan.add_scalar_use(
+                        user,
+                        extract_result,
+                        child_view.first_root_runtime_leaf,
+                        result_ty,
+                    );
+                    continue;
+                }
+                plan.mark_view_runtime_leaves(&view);
             }
 
             for &user in &users {
@@ -739,83 +926,102 @@ impl AggregateLowerToMemoryLegalize {
                     continue;
                 }
                 let Some(bitcast_result) = func.dfg.inst_result(user) else {
+                    plan.mark_view_runtime_leaves(&view);
                     continue;
                 };
                 let bitcast_ty = func.dfg.value_ty(bitcast_result);
-                if !shape::is_supported_aggregate_ty(module, bitcast_ty)
-                    || self
-                        .layout_cache
-                        .compatible_bitcast_runtime_leaves(module, view.agg_ty, bitcast_ty)
-                        .is_none()
+                let Some(bitcast_view) =
+                    self.aggregate_projection_view_for_bitcast(module, &view, bitcast_ty)
+                else {
+                    plan.mark_view_runtime_leaves(&view);
+                    continue;
+                };
+                views[bitcast_result] = Some(bitcast_view);
+                plan.transparent_insts.push(user);
+                worklist.push(bitcast_result);
+            }
+            for &user in &users {
+                if !func.layout.is_inst_inserted(user) {
+                    continue;
+                }
+                if downcast::<&data::ExtractValue>(func.inst_set(), func.dfg.inst(user))
+                    .is_some_and(|extract| *extract.dest() == value)
+                    || downcast::<&cast::Bitcast>(func.inst_set(), func.dfg.inst(user))
+                        .is_some_and(|bitcast| *bitcast.from() == value)
                 {
                     continue;
                 }
-
-                let mut bitcast_view = view.clone();
-                bitcast_view
-                    .steps
-                    .push(AggregateProjectionStep::Reinterpret(bitcast_ty));
-                bitcast_view.agg_ty = bitcast_ty;
-                views[bitcast_result] = Some(bitcast_view);
-                transparent_insts.push(user);
-                worklist.push(bitcast_result);
+                plan.mark_view_runtime_leaves(&view);
             }
         }
 
-        for inst in transparent_insts.into_iter().rev() {
-            if !func.layout.is_inst_inserted(inst) {
-                continue;
-            }
-            let Some(result) = func.dfg.inst_result(inst) else {
-                continue;
-            };
-            if !func
-                .dfg
-                .users(result)
-                .copied()
-                .any(|user| func.layout.is_inst_inserted(user))
-            {
-                self.remove_if_results_dead(func, inst);
-            }
-        }
-
-        needs_snapshot
+        plan
     }
 
     fn aggregate_projection_view_for_extract(
-        &self,
+        &mut self,
         func: &Function,
         module: &ModuleCtx,
         view: &AggregateProjectionView,
         extract: &data::ExtractValue,
         result_ty: Type,
     ) -> Option<AggregateProjectionView> {
-        let mut steps = view.steps.clone();
-        if let Some(idx) = shape::const_u32(&func.dfg, *extract.idx()) {
-            let slice = shape::aggregate_slice_for_index(module, view.agg_ty, idx)?;
-            if slice.ty != result_ty {
-                return None;
-            }
-            steps.push(AggregateProjectionStep::Const(idx));
-            return Some(AggregateProjectionView {
-                root_value: view.root_value,
-                root_ty: view.root_ty,
-                agg_ty: result_ty,
-                steps,
-            });
-        }
-
-        let elem = self.array_elem_ty_or_panic(module, view.agg_ty, "extract_value");
-        if elem != result_ty {
+        let idx = shape::const_u32(&func.dfg, *extract.idx())?;
+        let slice = shape::aggregate_slice_for_index(module, view.agg_ty, idx)?;
+        if slice.ty != result_ty {
             return None;
         }
-        steps.push(AggregateProjectionStep::Dynamic(*extract.idx()));
+        let (first_runtime_leaf, runtime_leaf_count) =
+            shape::runtime_leaf_range_for_slice(module, view.agg_ty, slice)?;
+        let first_root_runtime_leaf = view
+            .first_root_runtime_leaf
+            .checked_add(first_runtime_leaf)
+            .unwrap_or_else(|| panic!("aggregate projection runtime leaf range overflow"));
+        let end = first_root_runtime_leaf
+            .checked_add(runtime_leaf_count)
+            .unwrap_or_else(|| panic!("aggregate projection runtime leaf range overflow"));
+        if end > self.runtime_leaves_or_panic(module, view.root_ty).len() {
+            panic!("aggregate projection runtime leaf range out of bounds");
+        }
         Some(AggregateProjectionView {
-            root_value: view.root_value,
             root_ty: view.root_ty,
             agg_ty: result_ty,
-            steps,
+            first_root_runtime_leaf,
+            runtime_leaf_count,
         })
+    }
+
+    fn aggregate_projection_view_for_bitcast(
+        &mut self,
+        module: &ModuleCtx,
+        view: &AggregateProjectionView,
+        bitcast_ty: Type,
+    ) -> Option<AggregateProjectionView> {
+        if !shape::is_supported_aggregate_ty(module, bitcast_ty)
+            || self
+                .layout_cache
+                .compatible_bitcast_runtime_leaves(module, view.agg_ty, bitcast_ty)
+                .is_none()
+        {
+            return None;
+        }
+        if self.runtime_leaves_or_panic(module, bitcast_ty).len() != view.runtime_leaf_count {
+            return None;
+        }
+        Some(AggregateProjectionView {
+            root_ty: view.root_ty,
+            agg_ty: bitcast_ty,
+            first_root_runtime_leaf: view.first_root_runtime_leaf,
+            runtime_leaf_count: view.runtime_leaf_count,
+        })
+    }
+
+    fn remove_dead_transparents(&self, func: &mut Function, transparent_insts: &[InstId]) {
+        for &inst in transparent_insts.iter().rev() {
+            if func.layout.is_inst_inserted(inst) {
+                self.remove_if_results_dead(func, inst);
+            }
+        }
     }
 
     fn rewrite_aggregate_mstore(&mut self, func: &mut Function, module: &ModuleCtx, inst: InstId) {
@@ -1133,89 +1339,6 @@ impl AggregateLowerToMemoryLegalize {
             );
         }
         panic!("aggregate memory address must be integral or pointer (got {addr_ty:?})");
-    }
-
-    fn aggregate_projection_view_as_typed_ptr(
-        &mut self,
-        func: &mut Function,
-        builder: &mut BeforeCursor,
-        module: &ModuleCtx,
-        view: &AggregateProjectionView,
-    ) -> ValueId {
-        let mut ptr = self.materialized_ptr(func, view.root_value, module);
-        let mut current_ty = view.root_ty;
-        for step in &view.steps {
-            match step {
-                AggregateProjectionStep::Const(idx) => {
-                    let slice = shape::aggregate_slice_for_index(module, current_ty, *idx)
-                        .unwrap_or_else(|| panic!("extract_value index out of bounds"));
-                    ptr = self.emit_gep_to_path(func, builder, ptr, &[*idx], slice.ty);
-                    current_ty = slice.ty;
-                }
-                AggregateProjectionStep::Dynamic(idx_value) => {
-                    let elem = self.array_elem_ty_or_panic(module, current_ty, "extract_value");
-                    ptr = self.emit_gep_array_element_ptr(func, builder, ptr, *idx_value, elem);
-                    current_ty = elem;
-                }
-                AggregateProjectionStep::Reinterpret(ty) => {
-                    let ptr_ty = ty.to_ptr(func.ctx());
-                    if func.dfg.value_ty(ptr) != ptr_ty {
-                        ptr = builder.insert_with_result(
-                            func,
-                            cast::Bitcast::new_unchecked(func.inst_set(), ptr, ptr_ty),
-                            ptr_ty,
-                        );
-                    }
-                    current_ty = *ty;
-                }
-            }
-        }
-        if current_ty != view.agg_ty {
-            panic!("aggregate address view type mismatch during legalization");
-        }
-        ptr
-    }
-
-    fn rewrite_scalar_extract_from_projection_view(
-        &mut self,
-        func: &mut Function,
-        module: &ModuleCtx,
-        inst: InstId,
-        extract: &data::ExtractValue,
-        view: &AggregateProjectionView,
-    ) {
-        let result = func
-            .dfg
-            .inst_result(inst)
-            .expect("extract_value must have result");
-        let result_ty = func.dfg.value_ty(result);
-        let mut builder = BeforeCursor::new_before_inst(func, inst);
-        let src_ptr = self.aggregate_projection_view_as_typed_ptr(func, &mut builder, module, view);
-        let replacement = if let Some(idx) = shape::const_u32(&func.dfg, *extract.idx()) {
-            let slice = shape::aggregate_slice_for_index(module, view.agg_ty, idx)
-                .unwrap_or_else(|| panic!("extract_value index out of bounds"));
-            let src_shape = self.shape_or_panic(module, view.agg_ty);
-            let src_leaf = &src_shape.leaves[slice.first_leaf];
-            self.emit_load_scalar_from_path(
-                func,
-                &mut builder,
-                src_ptr,
-                &src_leaf.path,
-                src_leaf.ty,
-            )
-        } else {
-            let elem = self.array_elem_ty_or_panic(module, view.agg_ty, "extract_value");
-            if elem != result_ty {
-                panic!("extract_value result type mismatch for dynamic array index");
-            }
-            let elem_ptr =
-                self.emit_gep_array_element_ptr(func, &mut builder, src_ptr, *extract.idx(), elem);
-            self.emit_load_scalar_from_path(func, &mut builder, elem_ptr, &[], result_ty)
-        };
-        if func.dfg.value_ty(replacement) != result_ty {
-            panic!("extract_value type mismatch after aggregate load legalization");
-        }
-        self.alias_and_remove(func, inst, result, replacement);
     }
 
     fn emit_gep_to_path(
