@@ -1,4 +1,4 @@
-#! SCCP folds EVM `exp`/`byte` when operands are constant.
+#! SCCP folds EVM `exp`/`byte`/`signextend` when operands are constant.
 
 target = "evm-ethereum-london"
 
@@ -56,3 +56,29 @@ func public %byte_pos_ge_32() -> i32 {
         return v0;
 }
 
+# sameln: func public %signextend_byte0_positive() -> i32 {
+# nextln:     block0:
+# nextln:         return 127.i32;
+func public %signextend_byte0_positive() -> i32 {
+    block0:
+        v0.i32 = evm_signextend 0.i32 127.i32;
+        return v0;
+}
+
+# sameln: func public %signextend_zero_value(v0.i32) -> i32 {
+# nextln:     block0:
+# nextln:         return 0.i32;
+func public %signextend_zero_value(v0.i32) -> i32 {
+    block0:
+        v1.i32 = evm_signextend v0 0.i32;
+        return v1;
+}
+
+# sameln: func public %signextend_byte_ge_32(v0.i32) -> i32 {
+# nextln:     block0:
+# nextln:         return v0;
+func public %signextend_byte_ge_32(v0.i32) -> i32 {
+    block0:
+        v1.i32 = evm_signextend 32.i32 v0;
+        return v1;
+}

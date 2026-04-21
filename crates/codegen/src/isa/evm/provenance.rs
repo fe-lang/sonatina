@@ -408,6 +408,7 @@ pub(crate) fn compute_provenance(
                     | EvmInstKind::EvmAddMod(_)
                     | EvmInstKind::EvmMulMod(_)
                     | EvmInstKind::EvmExp(_)
+                    | EvmInstKind::EvmSignExtend(_)
                     | EvmInstKind::EvmByte(_)
                     | EvmInstKind::EvmClz(_) => {
                         function.dfg.inst(inst).for_each_value(&mut |v| {

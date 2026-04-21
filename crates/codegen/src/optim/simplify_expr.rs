@@ -305,6 +305,47 @@ pub(crate) fn simplify_evm_byte_known(
     fold_evm_byte(pos.imm?, value.imm?)
 }
 
+fn fold_evm_signextend_raw(byte: U256, value: U256, ty: Type) -> U256 {
+    let mask = type_mask(ty);
+    if byte >= U256::from(32u8) {
+        return value & mask;
+    }
+
+    let sign_bit = (byte.as_usize() + 1) * 8 - 1;
+    let result = if value.bit(sign_bit) {
+        value | (!U256::zero() << (sign_bit + 1))
+    } else {
+        value & ((U256::one() << (sign_bit + 1)) - U256::one())
+    };
+    result & mask
+}
+
+pub(crate) fn fold_evm_signextend(byte: Immediate, value: Immediate) -> Option<Immediate> {
+    let ty = value.ty();
+    if ty != byte.ty() || !ty.is_integral() {
+        return None;
+    }
+
+    let result = fold_evm_signextend_raw(imm_to_u256(byte), imm_to_u256(value), ty);
+    Some(Immediate::from_i256(I256::from(result), ty))
+}
+
+pub(crate) fn simplify_evm_signextend_known(
+    byte: KnownValueFact,
+    value: KnownValueFact,
+    ty: Type,
+) -> Option<Immediate> {
+    if !ty.is_integral() || byte.may_be_undef || value.may_be_undef {
+        return None;
+    }
+
+    if value.imm.is_some_and(Immediate::is_zero) {
+        return Some(Immediate::zero(ty));
+    }
+
+    fold_evm_signextend(byte.imm?, value.imm?)
+}
+
 pub(crate) fn fold_evm_clz(word: Immediate) -> Option<Immediate> {
     let ty = word.ty();
     let bit_width = integral_bit_width(ty)?;
@@ -502,6 +543,24 @@ pub(crate) fn simplify_binary_with_facts(
                 return SimplifyExprResult::Copy(rhs);
             }
         }
+        BinaryInstKind::EvmSignExtend => {
+            if let Some(result) = simplify_evm_signextend_known(
+                KnownValueFact {
+                    imm: lhs_imm,
+                    may_be_undef: facts.may_be_undef(lhs),
+                },
+                KnownValueFact {
+                    imm: rhs_imm,
+                    may_be_undef: facts.may_be_undef(rhs),
+                },
+                ty,
+            ) {
+                return SimplifyExprResult::Const(result);
+            }
+            if let Some(value) = simplify_evm_signextend_copy_with_facts(func, lhs, rhs, facts) {
+                return SimplifyExprResult::Copy(value);
+            }
+        }
         BinaryInstKind::Uaddo
         | BinaryInstKind::Uaddsat
         | BinaryInstKind::Saddo
@@ -688,6 +747,39 @@ fn simplify_or_copy_with_facts(
     simplify_mask_copy_with_facts(func, value, ones_mask, facts, KnownBits::all_one_in)
 }
 
+fn simplify_evm_signextend_copy_with_facts(
+    func: &Function,
+    byte: ValueId,
+    value: ValueId,
+    facts: &impl ExprFactProvider,
+) -> Option<ValueId> {
+    let ty = func.dfg.value_ty(value);
+    let byte_imm = imm_to_u256(facts.known_imm(byte)?);
+    if !ty.is_integral() || facts.may_be_undef(byte) {
+        return None;
+    }
+    if byte_imm >= U256::from(32u8) {
+        return Some(value);
+    }
+
+    let width = integral_bit_width(ty)?;
+    let sign_width = (byte_imm.as_usize() + 1) * 8;
+    if sign_width >= width {
+        return Some(value);
+    }
+    if facts.may_be_undef(value) {
+        return None;
+    }
+
+    let low_mask = (U256::one() << sign_width) - U256::one();
+    let sign_mask = U256::one() << (sign_width - 1);
+    let high_mask = type_mask(ty) & !low_mask;
+    let known = facts.known_bits(func, value);
+    let already_sign_extended = known.all_zero_in(sign_mask) && known.all_zero_in(high_mask)
+        || known.all_one_in(sign_mask) && known.all_one_in(high_mask);
+    already_sign_extended.then_some(value)
+}
+
 fn simplify_mask_copy_with_facts(
     func: &Function,
     value: ValueId,
@@ -711,7 +803,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::analysis::known_bits::KnownBits;
+    use crate::analysis::known_bits::{KnownBits, low_mask};
 
     struct MockFacts {
         known_bits: std::collections::BTreeMap<ValueId, KnownBits>,
@@ -892,6 +984,103 @@ mod tests {
         let simplified =
             simplify_binary_with_facts(&func, BinaryInstKind::And, value, mask, &facts);
         assert_eq!(simplified, SimplifyExprResult::NoChange);
+    }
+
+    #[test]
+    fn fold_evm_signextend_matches_evm_sign_extension() {
+        let ty = Type::I256;
+        assert_eq!(
+            fold_evm_signextend(
+                Immediate::zero(ty),
+                Immediate::from_i256(I256::from(0x80u16), ty),
+            ),
+            Some(Immediate::from_i256(I256::from(-128i16), ty))
+        );
+        assert_eq!(
+            fold_evm_signextend(
+                Immediate::from_i256(I256::from(32u8), ty),
+                Immediate::from_i256(I256::from(0x80u16), ty),
+            ),
+            Some(Immediate::from_i256(I256::from(0x80u16), ty))
+        );
+    }
+
+    #[test]
+    fn simplify_binary_with_facts_folds_evm_signextend_identities() {
+        let isa = test_isa();
+        let ctx = ModuleCtx::new(&isa);
+        let sig = Signature::new_single("f", Linkage::Private, &[Type::I256], Type::I256);
+        let mut func = Function::new(&ctx, &sig);
+        let value = func.arg_values[0];
+        let byte32 = func
+            .dfg
+            .make_imm_value(Immediate::from_i256(I256::from(32u8), Type::I256));
+        let facts = MockFacts {
+            known_bits: Default::default(),
+            known_imm: [(byte32, Immediate::from_i256(I256::from(32u8), Type::I256))]
+                .into_iter()
+                .collect(),
+            may_be_undef: Default::default(),
+        };
+
+        assert_eq!(
+            simplify_binary_with_facts(&func, BinaryInstKind::EvmSignExtend, byte32, value, &facts),
+            SimplifyExprResult::Copy(value)
+        );
+
+        let byte0 = func.dfg.make_imm_value(Immediate::zero(Type::I256));
+        let facts = MockFacts {
+            known_bits: [(
+                value,
+                KnownBits::normalized(
+                    Type::I256,
+                    type_mask(Type::I256) & !low_mask(7),
+                    U256::zero(),
+                ),
+            )]
+            .into_iter()
+            .collect(),
+            known_imm: [(byte0, Immediate::zero(Type::I256))].into_iter().collect(),
+            may_be_undef: Default::default(),
+        };
+
+        assert_eq!(
+            simplify_binary_with_facts(&func, BinaryInstKind::EvmSignExtend, byte0, value, &facts),
+            SimplifyExprResult::Copy(value)
+        );
+    }
+
+    #[test]
+    fn simplify_evm_signextend_known_blocks_maybe_undef_zero_fold() {
+        let ty = Type::I256;
+        assert_eq!(
+            simplify_evm_signextend_known(
+                KnownValueFact {
+                    imm: None,
+                    may_be_undef: true,
+                },
+                KnownValueFact {
+                    imm: Some(Immediate::zero(ty)),
+                    may_be_undef: false,
+                },
+                ty,
+            ),
+            None
+        );
+        assert_eq!(
+            simplify_evm_signextend_known(
+                KnownValueFact {
+                    imm: None,
+                    may_be_undef: false,
+                },
+                KnownValueFact {
+                    imm: Some(Immediate::zero(ty)),
+                    may_be_undef: false,
+                },
+                ty,
+            ),
+            Some(Immediate::zero(ty))
+        );
     }
 
     #[test]

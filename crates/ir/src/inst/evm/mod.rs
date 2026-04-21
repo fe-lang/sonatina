@@ -139,6 +139,14 @@ pub struct EvmExp {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(text = "evm_signextend")]
+#[inst(kind(binary(EvmSignExtend)))]
+pub struct EvmSignExtend {
+    byte: ValueId,
+    value: ValueId,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 #[inst(kind(binary(EvmByte)))]
 pub struct EvmByte {
     pos: ValueId,

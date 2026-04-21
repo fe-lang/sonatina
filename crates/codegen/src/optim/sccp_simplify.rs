@@ -11,8 +11,8 @@ use super::{
     simplify_expr::{
         EvmModOp, ExprFactProvider, KnownValueFact, SimplifyExprResult, ZextI1CompareRewrite,
         fold_evm_clz, simplify_binary_with_facts, simplify_cast, simplify_evm_byte_known,
-        simplify_evm_exp_known, simplify_evm_modop_known, simplify_unary_with_same_inner,
-        simplify_zext_i1_compare,
+        simplify_evm_exp_known, simplify_evm_modop_known, simplify_evm_signextend_known,
+        simplify_unary_with_same_inner, simplify_zext_i1_compare,
     },
 };
 use crate::analysis::known_bits::{KnownBits, KnownBitsQuery};
@@ -364,6 +364,27 @@ fn simplify_evm_byte(
     rhs: ValueId,
 ) -> SimplifyAction {
     simplify_evm_byte_known(
+        KnownValueFact {
+            imm: known_imm(func, lattice, lhs),
+            may_be_undef: is_may_be_undef(func, may_be_undef, lhs),
+        },
+        KnownValueFact {
+            imm: known_imm(func, lattice, rhs),
+            may_be_undef: is_may_be_undef(func, may_be_undef, rhs),
+        },
+        func.dfg.value_ty(rhs),
+    )
+    .map_or(SimplifyAction::NoChange, SimplifyAction::Const)
+}
+
+fn simplify_evm_signextend(
+    func: &Function,
+    lattice: &SecondaryMap<ValueId, LatticeCell>,
+    may_be_undef: &SecondaryMap<ValueId, bool>,
+    lhs: ValueId,
+    rhs: ValueId,
+) -> SimplifyAction {
+    simplify_evm_signextend_known(
         KnownValueFact {
             imm: known_imm(func, lattice, lhs),
             may_be_undef: is_may_be_undef(func, may_be_undef, lhs),
@@ -811,6 +832,15 @@ pub(super) fn simplify_inst(
                 | BinaryInstKind::EvmSsubsat
                 | BinaryInstKind::EvmUmulsat
                 | BinaryInstKind::EvmSmulsat => SimplifyAction::NoChange,
+                BinaryInstKind::EvmSignExtend => {
+                    let simplified = from_expr_simplify_result(simplify_binary_with_facts(
+                        func, kind, *lhs, *rhs, &facts,
+                    ));
+                    if !matches!(simplified, SimplifyAction::NoChange) {
+                        return wrap_action(simplified);
+                    }
+                    simplify_evm_signextend(func, lattice, may_be_undef, *lhs, *rhs)
+                }
                 BinaryInstKind::EvmExp => simplify_evm_exp(func, lattice, may_be_undef, *lhs, *rhs),
                 BinaryInstKind::EvmByte => {
                     simplify_evm_byte(func, lattice, may_be_undef, *lhs, *rhs)

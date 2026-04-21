@@ -395,6 +395,9 @@ impl KnownBitsQuery {
             BinaryInstKind::Shl => self.shl_known_bits(func, ty, *lhs, rhs_known),
             BinaryInstKind::Shr => self.shr_known_bits(func, ty, *lhs, rhs_known),
             BinaryInstKind::Sar => self.sar_known_bits(func, ty, *lhs, rhs_known),
+            BinaryInstKind::EvmSignExtend => {
+                self.evm_signextend_known_bits(func, ty, *lhs, rhs_known)
+            }
             BinaryInstKind::Eq
             | BinaryInstKind::Ne
             | BinaryInstKind::Lt
@@ -407,6 +410,39 @@ impl KnownBitsQuery {
             | BinaryInstKind::Sge => self.compare_known_bits(func, kind, *lhs, *rhs),
             _ => KnownBits::unknown(ty),
         }
+    }
+
+    fn evm_signextend_known_bits(
+        &self,
+        func: &Function,
+        ty: Type,
+        byte: ValueId,
+        value: KnownBits,
+    ) -> KnownBits {
+        let Some(byte) = constant_shift(self.value_imm(func, byte)) else {
+            return KnownBits::unknown(ty);
+        };
+        if byte >= U256::from(32u8) {
+            return KnownBits::normalized(ty, value.known_zero, value.known_one);
+        }
+
+        let width = type_bits(ty);
+        let sign_width = ((byte.as_usize() + 1) * 8) as u16;
+        if sign_width >= width {
+            return KnownBits::normalized(ty, value.known_zero, value.known_one);
+        }
+
+        let low_mask = low_mask(sign_width);
+        let high_mask = type_mask(ty) & !low_mask;
+        let sign_mask = U256::one() << usize::from(sign_width - 1);
+        let mut known_zero = value.known_zero & low_mask;
+        let mut known_one = value.known_one & low_mask;
+        if value.all_zero_in(sign_mask) {
+            known_zero |= high_mask;
+        } else if value.all_one_in(sign_mask) {
+            known_one |= high_mask;
+        }
+        KnownBits::normalized(ty, known_zero, known_one)
     }
 
     fn shl_known_bits(
@@ -619,6 +655,7 @@ mod tests {
             arith::{Sar, Shr},
             cast::{Sext, Trunc, Zext},
             control_flow::{Br, Jump, Phi, Return},
+            evm::EvmSignExtend,
             logic::{And, Not, Or, Xor},
         },
         isa::Isa,
@@ -806,6 +843,57 @@ mod tests {
         assert_eq!(
             query.for_value(&func, neg_shifted).exact_imm(Type::I32),
             Some(Immediate::from_i256(I256::from(-0x0000_8000i32), Type::I32))
+        );
+    }
+
+    #[test]
+    fn evm_signextend_sets_fill_bits_when_sign_known() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[Type::I256], Type::I256);
+        let is = evm.inst_set();
+        let block = builder.append_block();
+        builder.switch_to_block(block);
+        let arg = builder.args()[0];
+        let low7 = builder.make_imm_value(Immediate::from_i256(I256::from(0x7fu8), Type::I256));
+        let masked = builder.insert_inst_with(|| And::new(is, arg, low7), Type::I256);
+        let byte = builder.make_imm_value(Immediate::zero(Type::I256));
+        let extended =
+            builder.insert_inst_with(|| EvmSignExtend::new(is, byte, masked), Type::I256);
+        builder.insert_inst_no_result_with(|| Return::new_single(is, extended));
+        builder.seal_all();
+        builder.finish();
+
+        let func = only_func(&mb);
+        let query = KnownBitsQuery::new(&func);
+        assert!(
+            query
+                .for_value(&func, extended)
+                .all_zero_in(type_mask(Type::I256) & !low_mask(7))
+        );
+
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[Type::I256], Type::I256);
+        let is = evm.inst_set();
+        let block = builder.append_block();
+        builder.switch_to_block(block);
+        let arg = builder.args()[0];
+        let low7 = builder.make_imm_value(Immediate::from_i256(I256::from(0x7fu8), Type::I256));
+        let masked = builder.insert_inst_with(|| And::new(is, arg, low7), Type::I256);
+        let sign = builder.make_imm_value(Immediate::from_i256(I256::from(0x80u8), Type::I256));
+        let signed = builder.insert_inst_with(|| Or::new(is, masked, sign), Type::I256);
+        let byte = builder.make_imm_value(Immediate::zero(Type::I256));
+        let extended =
+            builder.insert_inst_with(|| EvmSignExtend::new(is, byte, signed), Type::I256);
+        builder.insert_inst_no_result_with(|| Return::new_single(is, extended));
+        builder.seal_all();
+        builder.finish();
+
+        let func = only_func(&mb);
+        let query = KnownBitsQuery::new(&func);
+        assert!(
+            query
+                .for_value(&func, extended)
+                .all_one_in(type_mask(Type::I256) & !low_mask(7))
         );
     }
 

@@ -2512,6 +2512,7 @@ impl_evm_arithmetic_rule!(
     evm::EvmAddMod,
     evm::EvmMulMod,
     evm::EvmClz,
+    evm::EvmSignExtend,
 );
 
 impl VerifyInst for evm::EvmMalloc {

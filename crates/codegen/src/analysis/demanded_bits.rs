@@ -196,6 +196,14 @@ impl<'a> DemandedBitsQuery<'a> {
                     self.add_demand(*rhs, type_mask_or_zero(self.func, *rhs), worklist, queued);
                 }
             }
+            BinaryInstKind::EvmSignExtend => {
+                if let Some(byte) = constant_shift(self.func, *lhs) {
+                    self.propagate_evm_signextend(*rhs, byte, demand, worklist, queued);
+                } else {
+                    self.add_demand(*lhs, type_mask_or_zero(self.func, *lhs), worklist, queued);
+                    self.add_demand(*rhs, type_mask_or_zero(self.func, *rhs), worklist, queued);
+                }
+            }
             BinaryInstKind::Eq
             | BinaryInstKind::Ne
             | BinaryInstKind::Lt
@@ -214,6 +222,37 @@ impl<'a> DemandedBitsQuery<'a> {
                 self.add_demand(*rhs, type_mask_or_zero(self.func, *rhs), worklist, queued);
             }
         }
+    }
+
+    fn propagate_evm_signextend(
+        &mut self,
+        value: ValueId,
+        byte: U256,
+        demand: U256,
+        worklist: &mut VecDeque<ValueId>,
+        queued: &mut SecondaryMap<ValueId, bool>,
+    ) {
+        let value_ty = self.func.dfg.value_ty(value);
+        let value_bits = type_bits(value_ty);
+        let value_mask = type_mask_or_zero(self.func, value);
+        if byte >= U256::from(32u8) {
+            self.add_demand(value, demand & value_mask, worklist, queued);
+            return;
+        }
+
+        let sign_width = ((byte.as_usize() + 1) * 8) as u16;
+        if sign_width >= value_bits {
+            self.add_demand(value, demand & value_mask, worklist, queued);
+            return;
+        }
+
+        let low_mask = low_mask(sign_width);
+        let high_demand = demand & value_mask & !low_mask;
+        let mut value_demand = demand & low_mask;
+        if high_demand != U256::zero() {
+            value_demand |= U256::one() << usize::from(sign_width - 1);
+        }
+        self.add_demand(value, value_demand, worklist, queued);
     }
 
     fn propagate_cast(
@@ -305,6 +344,7 @@ mod tests {
             arith::Shr,
             cast::{Trunc, Zext},
             control_flow::Return,
+            evm::EvmSignExtend,
         },
         isa::Isa,
     };
@@ -352,6 +392,27 @@ mod tests {
         let func = only_func(&mb);
         let query = DemandedBitsQuery::new(&func);
         assert_eq!(query.for_value(zext), low_mask(8));
+        assert_eq!(query.for_value(arg), low_mask(8));
+    }
+
+    #[test]
+    fn trunc_of_evm_signextend_demands_sign_bit_for_fill_bits() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[Type::I256], Type::I16);
+        let is = evm.inst_set();
+        let block = builder.append_block();
+        builder.switch_to_block(block);
+        let arg = builder.args()[0];
+        let byte = builder.make_imm_value(sonatina_ir::Immediate::zero(Type::I256));
+        let extended = builder.insert_inst_with(|| EvmSignExtend::new(is, byte, arg), Type::I256);
+        let trunc = builder.insert_inst_with(|| Trunc::new(is, extended, Type::I16), Type::I16);
+        builder.insert_inst_no_result_with(|| Return::new_single(is, trunc));
+        builder.seal_all();
+        builder.finish();
+
+        let func = only_func(&mb);
+        let query = DemandedBitsQuery::new(&func);
+        assert_eq!(query.for_value(extended), low_mask(16));
         assert_eq!(query.for_value(arg), low_mask(8));
     }
 

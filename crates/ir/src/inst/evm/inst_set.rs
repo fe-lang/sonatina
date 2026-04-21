@@ -107,6 +107,7 @@ pub struct EvmInstSet(
     evm::EvmAddMod,
     evm::EvmMulMod,
     evm::EvmExp,
+    evm::EvmSignExtend,
     evm::EvmByte,
     evm::EvmClz,
     evm::EvmKeccak256,

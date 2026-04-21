@@ -108,6 +108,7 @@ pub trait Interpret {
         inst::evm::EvmAddMod,
         inst::evm::EvmMulMod,
         inst::evm::EvmExp,
+        inst::evm::EvmSignExtend,
         inst::evm::EvmByte,
     );
 }

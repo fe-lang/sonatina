@@ -569,6 +569,7 @@ impl EvmFunctionLowering<'_> {
             EvmInstKind::EvmAddMod(_) => basic_op(ctx, &[OpCode::ADDMOD]),
             EvmInstKind::EvmMulMod(_) => basic_op(ctx, &[OpCode::MULMOD]),
             EvmInstKind::EvmExp(_) => basic_op(ctx, &[OpCode::EXP]),
+            EvmInstKind::EvmSignExtend(_) => basic_op(ctx, &[OpCode::SIGNEXTEND]),
             EvmInstKind::EvmByte(_) => basic_op(ctx, &[OpCode::BYTE]),
             EvmInstKind::EvmClz(_) => basic_op(ctx, &[OpCode::CLZ]),
             EvmInstKind::EvmKeccak256(_) => basic_op(ctx, &[OpCode::KECCAK256]),
