@@ -997,15 +997,10 @@ object @Contract {
             .expect("prepare should succeed");
         let entry = lookup_func(prepared.module(), "entry");
         prepared.module().func_store.view(entry, |func| {
+            let dumped = FuncWriter::new(entry, func).dump_string();
             assert!(
-                func.layout
-                    .iter_block()
-                    .flat_map(|block| func.layout.iter_inst(block))
-                    .any(
-                        |inst| downcast::<&evm::EvmMalloc>(func.inst_set(), func.dfg.inst(inst))
-                            .is_some()
-                    ),
-                "escaping stack materialization must force heap allocation"
+                dumped.contains("evm_mload 64.i256") && dumped.contains("evm_mstore 64.i256"),
+                "escaping stack materialization must force heap allocation in machine IR:\n{dumped}"
             );
         });
     }

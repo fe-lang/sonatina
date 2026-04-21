@@ -1,19 +1,14 @@
-use cranelift_entity::SecondaryMap;
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashSet;
 use sonatina_ir::{
     Function, Immediate, InstId, InstSetExt, U256, ValueId,
-    inst::evm::inst_set::EvmInstKind,
-    isa::{Isa, evm::Evm},
-    module::{FuncRef, ModuleCtx},
+    inst::evm::machine_inst_set::EvmMachineInstKind,
+    isa::{Isa, evm::EvmMachine},
+    module::FuncRef,
 };
 
 use crate::{bitset::BitSet, liveness::InstLiveness};
 
-use super::{
-    memory_plan::WORD_BYTES,
-    provenance::{Provenance, compute_address_provenance},
-    ptr_escape::PtrEscapeSummary,
-};
+use super::memory_plan::WORD_BYTES;
 
 pub(crate) const SCRATCH_SPILL_SLOTS: u32 = 2;
 
@@ -34,72 +29,67 @@ fn imm_lt_u32(imm: Immediate, bound: u32) -> bool {
     }
 }
 
-fn addr_may_overlap_scratch(
-    function: &Function,
-    addr: ValueId,
-    prov: &SecondaryMap<ValueId, Provenance>,
-) -> bool {
+fn machine_addr_may_overlap_scratch(function: &Function, addr: ValueId) -> bool {
     if function.dfg.value_is_imm(addr) {
         let imm = function
             .dfg
             .value_imm(addr)
             .expect("imm value missing payload");
-        return imm_lt_u32(imm, SCRATCH_END_BYTES);
+        imm_lt_u32(imm, SCRATCH_END_BYTES)
+    } else {
+        true
     }
-
-    prov[addr].is_unknown_ptr() || prov[addr].has_no_known_bases() || prov[addr].has_any_arg()
 }
 
-pub(crate) fn inst_is_scratch_clobber(
+pub(crate) fn machine_inst_is_scratch_clobber(
     function: &Function,
-    isa: &Evm,
+    isa: &EvmMachine,
     inst: InstId,
-    prov: &SecondaryMap<ValueId, Provenance>,
 ) -> bool {
     match isa.inst_set().resolve_inst(function.dfg.inst(inst)) {
-        EvmInstKind::Mstore(mstore) => addr_may_overlap_scratch(function, *mstore.addr(), prov),
-        EvmInstKind::EvmMstore8(mstore8) => {
-            addr_may_overlap_scratch(function, *mstore8.addr(), prov)
+        EvmMachineInstKind::EvmMstore(mstore) => {
+            machine_addr_may_overlap_scratch(function, *mstore.addr())
         }
-        EvmInstKind::EvmCalldataCopy(copy) => {
-            addr_may_overlap_scratch(function, *copy.dst_addr(), prov)
+        EvmMachineInstKind::EvmMstore8(mstore8) => {
+            machine_addr_may_overlap_scratch(function, *mstore8.addr())
         }
-        EvmInstKind::EvmCodeCopy(copy) => {
-            addr_may_overlap_scratch(function, *copy.dst_addr(), prov)
+        EvmMachineInstKind::EvmCalldataCopy(copy) => {
+            machine_addr_may_overlap_scratch(function, *copy.dst_addr())
         }
-        EvmInstKind::EvmExtCodeCopy(copy) => {
-            addr_may_overlap_scratch(function, *copy.dst_addr(), prov)
+        EvmMachineInstKind::EvmCodeCopy(copy) => {
+            machine_addr_may_overlap_scratch(function, *copy.dst_addr())
         }
-        EvmInstKind::EvmReturnDataCopy(copy) => {
-            addr_may_overlap_scratch(function, *copy.dst_addr(), prov)
+        EvmMachineInstKind::EvmExtCodeCopy(copy) => {
+            machine_addr_may_overlap_scratch(function, *copy.dst_addr())
         }
-        EvmInstKind::EvmMcopy(copy) => addr_may_overlap_scratch(function, *copy.dest(), prov),
-        EvmInstKind::EvmCall(call) => addr_may_overlap_scratch(function, *call.ret_addr(), prov),
-        EvmInstKind::EvmCallCode(call) => {
-            addr_may_overlap_scratch(function, *call.ret_addr(), prov)
+        EvmMachineInstKind::EvmReturnDataCopy(copy) => {
+            machine_addr_may_overlap_scratch(function, *copy.dst_addr())
         }
-        EvmInstKind::EvmDelegateCall(call) => {
-            addr_may_overlap_scratch(function, *call.ret_addr(), prov)
+        EvmMachineInstKind::EvmMcopy(copy) => {
+            machine_addr_may_overlap_scratch(function, *copy.dest())
         }
-        EvmInstKind::EvmStaticCall(call) => {
-            addr_may_overlap_scratch(function, *call.ret_addr(), prov)
+        EvmMachineInstKind::EvmCall(call) => {
+            machine_addr_may_overlap_scratch(function, *call.ret_addr())
+        }
+        EvmMachineInstKind::EvmCallCode(call) => {
+            machine_addr_may_overlap_scratch(function, *call.ret_addr())
+        }
+        EvmMachineInstKind::EvmDelegateCall(call) => {
+            machine_addr_may_overlap_scratch(function, *call.ret_addr())
+        }
+        EvmMachineInstKind::EvmStaticCall(call) => {
+            machine_addr_may_overlap_scratch(function, *call.ret_addr())
         }
         _ => false,
     }
 }
 
-pub(crate) fn compute_scratch_live_values(
+pub(crate) fn compute_machine_scratch_live_values(
     function: &Function,
-    module: &ModuleCtx,
-    isa: &Evm,
-    ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
+    isa: &EvmMachine,
     scratch_effects: Option<&FxHashSet<FuncRef>>,
     inst_liveness: &InstLiveness,
 ) -> BitSet<ValueId> {
-    let prov = compute_address_provenance(function, module, isa, |callee| {
-        PtrEscapeSummary::get_or_conservative(ptr_escape, module, callee)
-    });
-
     let mut scratch_live_values: BitSet<ValueId> = BitSet::default();
 
     for block in function.layout.iter_block() {
@@ -108,7 +98,7 @@ pub(crate) fn compute_scratch_live_values(
                 let callee = call.callee();
                 scratch_effects.is_none_or(|effects| effects.contains(&callee))
             } else {
-                inst_is_scratch_clobber(function, isa, inst, &prov)
+                machine_inst_is_scratch_clobber(function, isa, inst)
             };
 
             if is_barrier {
@@ -121,94 +111,4 @@ pub(crate) fn compute_scratch_live_values(
     }
 
     scratch_live_values
-}
-
-#[cfg(test)]
-mod tests {
-    use sonatina_ir::{InstSetExt, isa::Isa};
-    use sonatina_parser::parse_module;
-    use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
-
-    use super::{super::ptr_escape::compute_ptr_escape_summaries, *};
-
-    fn first_mstore_clobbers_scratch(src: &str, func_name: &str) -> bool {
-        let parsed = parse_module(src).expect("module parses");
-        let funcs = parsed.module.funcs();
-        let func_ref = parsed
-            .module
-            .funcs()
-            .into_iter()
-            .find(|&func| {
-                parsed
-                    .module
-                    .ctx
-                    .func_sig(func, |sig| sig.name() == func_name)
-            })
-            .expect("function exists");
-
-        let isa = Evm::new(TargetTriple {
-            architecture: Architecture::Evm,
-            vendor: Vendor::Ethereum,
-            operating_system: OperatingSystem::Evm(EvmVersion::Osaka),
-        });
-        let summaries = compute_ptr_escape_summaries(&parsed.module, &funcs, &isa);
-
-        parsed.module.func_store.view(func_ref, |function| {
-            let prov = compute_address_provenance(function, &parsed.module.ctx, &isa, |callee| {
-                PtrEscapeSummary::get_or_conservative(&summaries, &parsed.module.ctx, callee)
-            });
-            let mstore = function
-                .layout
-                .iter_block()
-                .flat_map(|block| function.layout.iter_inst(block))
-                .find(|&inst| {
-                    matches!(
-                        isa.inst_set().resolve_inst(function.dfg.inst(inst)),
-                        EvmInstKind::Mstore(_)
-                    )
-                })
-                .expect("mstore exists");
-
-            inst_is_scratch_clobber(function, &isa, mstore, &prov)
-        })
-    }
-
-    #[test]
-    fn allocator_managed_address_with_i256_offset_is_not_scratch_clobber() {
-        let clobbers = first_mstore_clobbers_scratch(
-            r#"
-target = "evm-ethereum-osaka"
-
-func public %f(v0.i256) {
-block0:
-    v1.*i8 = evm_malloc 96.i256;
-    v2.i256 = ptr_to_int v1 i256;
-    v3.i256 = add v2 v0;
-    mstore v3 1.i256 i256;
-    return;
-}
-"#,
-            "f",
-        );
-
-        assert!(!clobbers);
-    }
-
-    #[test]
-    fn plain_i256_address_remains_scratch_clobber() {
-        let clobbers = first_mstore_clobbers_scratch(
-            r#"
-target = "evm-ethereum-osaka"
-
-func public %f(v0.i256) {
-block0:
-    mstore v0 1.i256 i256;
-    return;
-}
-"#,
-            "f",
-        );
-
-        assert!(clobbers);
-    }
 }

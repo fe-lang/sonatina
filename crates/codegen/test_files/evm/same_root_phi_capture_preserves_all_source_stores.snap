@@ -6,16 +6,16 @@ input_file: test_files/evm/same_root_phi_capture_preserves_all_source_stores.snt
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 33 bytes
-  total: 33 bytes
+  section runtime: 32 bytes
+  total: 32 bytes
 
 functions:
-  entry: ir_blocks=4 ir_insts=14 vcode_ops=30 fixups=2 imm_bytes=5
+  entry: ir_blocks=4 ir_insts=11 vcode_ops=23 fixups=2 imm_bytes=7
     mem: scratch_words=2 stable_words=0 stable_mode=None entry_abs_words=2 abs_words_end=2
 
 evm:
-  case field0: calldata_len=32 success reason=Return gas_used=21212 gas_refunded=0 logs=0 output=call len=32 tx_gas=21128 runtime_gas=84
-  case field1: calldata_len=32 success reason=Return gas_used=21211 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=71
+  case field0: calldata_len=32 success reason=Return gas_used=21197 gas_refunded=0 logs=0 output=call len=32 tx_gas=21128 runtime_gas=69
+  case field1: calldata_len=32 success reason=Return gas_used=21219 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=79
 
 
 --------------- DEBUG ---------------
@@ -23,32 +23,29 @@ evm:
 // func public %entry()
 entry:
   block0:
-    PUSH0  // v0.i256 = evm_calldata_load 0.i256;
+    PUSH0  // v2.i256 = evm_calldata_load v1;
     CALLDATALOAD
-    PUSH1 0x20 (32)  // v5.*@Data = alloca @Data;
-    PUSH1 0xa (10)  // mstore v6 10.i256 i256;
-    DUP2
+    PUSH1 0xa (10)  // evm_mstore 64.i256 10.i256;
+    PUSH1 0x40 (64)
     MSTORE
-    PUSH1 0x40 (64)  // v9.*i256 = gep v5 0.i256 1.i256;
-    PUSH1 0x14 (20)  // mstore v9 20.i256 i256;
-    DUP2
+    PUSH1 0x14 (20)  // evm_mstore 96.i256 20.i256;
+    PUSH1 0x60 (96)
     MSTORE
-    SWAP2  // v21.i1 = is_zero v0;
-    PUSH1 block7  // br v21 block6 block7;
+    ISZERO  // v8.i1 = is_zero v2;
+    PUSH1 block4  // br v8 block4 block2;
     JUMPI
-  block6:
-    SWAP1  // jump block5;
-    POP
-    PUSH1 block5
+  block2:
+    PUSH1 0x60 (96)  // jump block3;
+    PUSH1 block3
     JUMP
-  block7:
+  block4:
     JUMPDEST
-    POP  // jump block5;
-  block5:
+    PUSH1 0x40 (64)  // jump block3;
+  block3:
     JUMPDEST
-    MLOAD  // v20.i256 = mload v16 i256;
-    PUSH0  // mstore 0.i256 v20 i256;
+    MLOAD  // v9.i256 = evm_mload v0;
+    PUSH0  // evm_mstore v1 v9;
     MSTORE
-    PUSH1 0x20 (32)  // evm_return 0.i256 32.i256;
+    PUSH1 0x20 (32)  // evm_return v1 32.i256;
     PUSH0
     RETURN

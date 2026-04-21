@@ -672,45 +672,6 @@ fn emit_max_top_two(ctx: &mut Lower<OpCode>) {
     ctx.push(OpCode::POP);
 }
 
-fn emit_max_top_with_const(ctx: &mut Lower<OpCode>, constant: &[u8]) {
-    let constant = U256::from_big_endian(constant);
-    if constant.is_zero() {
-        return;
-    }
-
-    let compare_const = u256_to_be(&(constant - U256::from(1_u8)));
-    push_bytes(ctx, &compare_const);
-    ctx.push(OpCode::DUP2);
-    ctx.push(OpCode::GT);
-
-    let keep_x_push = ctx.push(OpCode::PUSH1);
-    ctx.push(OpCode::JUMPI);
-
-    ctx.push(OpCode::POP);
-    push_bytes(ctx, &u256_to_be(&constant));
-
-    let keep_x = ctx.push(OpCode::JUMPDEST);
-    ctx.add_label_reference(keep_x_push, Label::Insn(keep_x));
-}
-
-pub(crate) fn emit_malloc_base(
-    ctx: &mut Lower<OpCode>,
-    min_base_bytes: u32,
-    needs_dyn_sp_clamp: bool,
-) {
-    push_bytes(ctx, &[FREE_PTR_SLOT]);
-    ctx.push(OpCode::MLOAD);
-
-    if needs_dyn_sp_clamp {
-        push_bytes(ctx, &[DYN_SP_SLOT]);
-        ctx.push(OpCode::MLOAD);
-        emit_max_top_two(ctx);
-    }
-
-    let min_base = u32_to_be(min_base_bytes);
-    emit_max_top_with_const(ctx, &min_base);
-}
-
 pub(crate) fn init_dyn_sp(ctx: &mut Lower<OpCode>, dyn_base: u32) {
     push_bytes(ctx, &u32_to_be(dyn_base));
     push_bytes(ctx, &[DYN_SP_SLOT]);

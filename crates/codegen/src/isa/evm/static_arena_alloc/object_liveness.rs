@@ -9,9 +9,7 @@ use sonatina_ir::{
 
 use crate::bitset::BitSet;
 
-use super::{
-    super::memory_plan::FuncAnalysis, CallSiteObjects, LocalObjIdx, Provenance, StackObjId,
-};
+use super::{CallSiteObjects, LocalObjIdx, Provenance, StackObjId, StackObjectInput};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct BlockLiveSegment {
@@ -159,7 +157,7 @@ struct ObjectEventIndex {
 }
 
 pub(super) struct ComputeCtx<'a, 'b> {
-    pub(super) analysis: &'a FuncAnalysis,
+    pub(super) analysis: &'a StackObjectInput<'a>,
     pub(super) isa: &'a Evm,
     pub(super) prov: &'a SecondaryMap<ValueId, Provenance>,
     pub(super) spill_local_by_value: &'a SecondaryMap<ValueId, Option<LocalObjIdx>>,

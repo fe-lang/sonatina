@@ -15,7 +15,7 @@ use crate::{
 };
 use cranelift_entity::{EntityList, SecondaryMap};
 
-use super::super::{FrameSummary, OpCode, lazy_frame::FrameSite};
+use super::super::OpCode;
 
 pub(crate) fn compute_function_entry_jump_targets(
     module: &Module,
@@ -137,7 +137,6 @@ pub(crate) struct LateBlockAliasPlan {
 pub(crate) fn compute_late_block_alias_plan(
     function: &Function,
     alloc: &StackifyAlloc,
-    frame_summary: &FrameSummary,
     block_order: &[BlockId],
 ) -> LateBlockAliasPlan {
     let mut raw_alias_targets: SecondaryMap<BlockId, Option<BlockId>> = SecondaryMap::new();
@@ -151,7 +150,6 @@ pub(crate) fn compute_late_block_alias_plan(
         if Some(block) == entry
             || !alloc.read(term, &[]).is_empty()
             || !alloc.write(term, &[]).is_empty()
-            || lazy_frame_mentions_trampoline_site(frame_summary, block, term)
         {
             continue;
         }
@@ -353,25 +351,4 @@ fn block_trampoline_jump_inst(function: &Function, block: BlockId) -> Option<Ins
     }
 
     Some(term)
-}
-
-fn lazy_frame_mentions_trampoline_site(
-    frame_summary: &FrameSummary,
-    block: BlockId,
-    term: InstId,
-) -> bool {
-    let Some(plan) = frame_summary.lowering.as_ref() else {
-        return false;
-    };
-
-    [
-        FrameSite::BlockEntry(block),
-        FrameSite::PreInst(term),
-        FrameSite::Inst(term),
-        FrameSite::PostInst(term),
-    ]
-    .into_iter()
-    .any(|site| {
-        plan.enter_before_site(site) || plan.exit_before_site(site) || plan.exit_after_site(site)
-    })
 }

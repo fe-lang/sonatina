@@ -22,10 +22,10 @@ evm:
 // func public %entry()
 entry:
   block0:
-    PUSH0  // v0.i256 = evm_calldata_load 0.i256;
+    PUSH0  // v1.i256 = evm_calldata_load v0;
     CALLDATALOAD
-    PUSH0  // mstore 0.i256 v0 i256;
+    PUSH0  // evm_mstore v0 v1;
     MSTORE
-    PUSH1 0x20 (32)  // evm_return 0.i256 32.i256;
+    PUSH1 0x20 (32)  // evm_return v0 32.i256;
     PUSH0
     RETURN

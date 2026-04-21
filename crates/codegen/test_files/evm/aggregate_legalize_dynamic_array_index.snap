@@ -6,15 +6,15 @@ input_file: test_files/evm/aggregate_legalize_dynamic_array_index.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 40 bytes
-  total: 40 bytes
+  section runtime: 38 bytes
+  total: 38 bytes
 
 functions:
-  entry: ir_blocks=1 ir_insts=13 vcode_ops=37 fixups=0 imm_bytes=9
-    mem: scratch_words=4 stable_words=0 stable_mode=None entry_abs_words=4 abs_words_end=4
+  entry: ir_blocks=1 ir_insts=12 vcode_ops=28 fixups=0 imm_bytes=10
+    mem: scratch_words=4 stable_words=0 stable_mode=None entry_abs_words=2 abs_words_end=4
 
 evm:
-  case ok: calldata_len=64 success reason=Return gas_used=21386 gas_refunded=0 logs=0 output=call len=32 tx_gas=21280 runtime_gas=106
+  case ok: calldata_len=64 success reason=Return gas_used=21382 gas_refunded=0 logs=0 output=call len=32 tx_gas=21280 runtime_gas=102
 
 
 --------------- DEBUG ---------------
@@ -22,34 +22,31 @@ evm:
 // func public %entry()
 entry:
   block0:
-    PUSH1 0x60 (96)  // v9.*[i256; 2] = alloca [i256; 2];
-    PUSH0  // v0.i256 = evm_calldata_load 0.i256;
+    PUSH0  // v2.i256 = evm_calldata_load v1;
     CALLDATALOAD
-    PUSH1 0x20 (32)  // v1.i256 = evm_calldata_load 32.i256;
+    PUSH1 0x20 (32)  // v4.i256 = evm_calldata_load v3;
     CALLDATALOAD
-    PUSH1 0x60 (96)  // v12.*i256 = gep v9 0.i64 0.i64;
-    PUSH1 0x20 (32)  // mstore v12 undef.i256 i256;
+    PUSH1 0xc0 (192)  // evm_mstore v0 undef.i256;
     MLOAD
-    SWAP1
+    PUSH1 0x80 (128)
     MSTORE
-    PUSH1 0x80 (128)  // v15.*i256 = gep v9 0.i64 1.i64;
-    PUSH1 0x40 (64)  // mstore v15 undef.i256 i256;
+    PUSH1 0xe0 (224)  // evm_mstore 160.i256 undef.i256;
     MLOAD
-    SWAP1
+    PUSH1 0xa0 (160)
     MSTORE
-    DUP2  // v16.*i256 = gep v9 0.i64 v0;
-    DUP4
-    SWAP1
-    PUSH1 0x20 (32)
-    MUL
+    DUP2  // v8.i256 = shl 5.i256 v2;
+    PUSH1 0x5 (5)
+    SHL
+    PUSH1 0x80 (128)  // v9.i256 = add v0 v8;
     ADD
-    MSTORE  // mstore v16 v1 i256;
-    PUSH1 0x20 (32)  // v17.*i256 = gep v9 0.i64 v0;
-    MUL
+    MSTORE  // evm_mstore v9 v4;
+    PUSH1 0x5 (5)  // v10.i256 = shl 5.i256 v2;
+    SHL
+    PUSH1 0x80 (128)  // v11.i256 = add v0 v10;
     ADD
-    MLOAD  // v18.i256 = mload v17 i256;
-    PUSH0  // mstore 0.i256 v18 i256;
+    MLOAD  // v12.i256 = evm_mload v11;
+    PUSH0  // evm_mstore v1 v12;
     MSTORE
-    PUSH1 0x20 (32)  // evm_return 0.i256 32.i256;
+    PUSH1 0x20 (32)  // evm_return v1 v3;
     PUSH0
     RETURN

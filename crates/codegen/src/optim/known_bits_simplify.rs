@@ -209,16 +209,23 @@ impl KnownBitsSimplify {
         };
 
         match simplified {
-            SimplifyExprResult::Const(imm) => Some(RewritePlan::Const {
-                inst,
-                result: *result,
-                imm,
-            }),
-            SimplifyExprResult::Copy(replacement) => Some(RewritePlan::Copy {
-                inst,
-                result: *result,
-                replacement,
-            }),
+            SimplifyExprResult::Const(imm) if imm.ty() == func.dfg.value_ty(*result) => {
+                Some(RewritePlan::Const {
+                    inst,
+                    result: *result,
+                    imm,
+                })
+            }
+            SimplifyExprResult::Copy(replacement)
+                if func.dfg.value_ty(replacement) == func.dfg.value_ty(*result) =>
+            {
+                Some(RewritePlan::Copy {
+                    inst,
+                    result: *result,
+                    replacement,
+                })
+            }
+            SimplifyExprResult::Const(_) | SimplifyExprResult::Copy(_) => None,
             SimplifyExprResult::NoChange => None,
         }
     }

@@ -6,11 +6,11 @@ input_file: test_files/evm/gep_negative_immediate_runtime.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 23 bytes
-  total: 23 bytes
+  section runtime: 25 bytes
+  total: 25 bytes
 
 functions:
-  main: ir_blocks=1 ir_insts=5 vcode_ops=10 fixups=0 imm_bytes=3
+  main: ir_blocks=1 ir_insts=3 vcode_ops=8 fixups=0 imm_bytes=3
     mem: scratch_words=1 stable_words=0 stable_mode=None entry_abs_words=1 abs_words_end=1
   entry: ir_blocks=1 ir_insts=3 vcode_ops=9 fixups=2 imm_bytes=1
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=1 abs_words_end=0
@@ -25,12 +25,12 @@ evm:
 main:
   block0:
     JUMPDEST
-    PUSH2 0x2000 (8192)  // v1.*i256 = gep v0 255.i256;
-    PUSH1 0x4d (77)  // mstore v1 77.i256 i256;
-    DUP2
+    PUSH1 0x4d (77)  // evm_mstore 8192.i256 77.i256;
+    PUSH2 0x2000 (8192)
     MSTORE
-    MLOAD  // v2.i256 = mload v1 i256;
-    SWAP1  // return v2;
+    PUSH2 0x2000 (8192)  // v4.i256 = evm_mload 8192.i256;
+    MLOAD
+    SWAP1  // return v4;
     JUMP
 
 // func public %entry()
@@ -40,7 +40,7 @@ entry:
     PUSH1 FuncRef(0)
     JUMP
     JUMPDEST
-    PUSH0  // mstore 0.i256 v0 i256;
+    PUSH0  // evm_mstore 0.i256 v0;
     MSTORE
     PUSH1 0x20 (32)  // evm_return 0.i256 32.i256;
     PUSH0

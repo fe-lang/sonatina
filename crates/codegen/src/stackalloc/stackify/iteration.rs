@@ -1,21 +1,19 @@
 use cranelift_entity::SecondaryMap;
 use smallvec::SmallVec;
-use sonatina_ir::{BlockId, Function, I256, Immediate, InstId, ValueId};
+use sonatina_ir::{BlockId, Function, Immediate, InstId, ValueId, inst::control_flow::BranchKind};
 use std::collections::BTreeMap;
 
 use crate::{bitset::BitSet, isa::evm::immediate_u32, stackalloc::Actions};
 
 use super::{
     alloc::StackifyAlloc,
-    block_sim::{BlockSimState, PlannerActionSink, run_block_sim},
-    builder::{StackifyContext, StackifyReachability},
-    planner::{self, NormalizeSearchScratch, Planner},
+    br_table::plan_br_table_compare_chain,
+    builder::{StackifyContext, StackifyOperandMode, StackifyReachability},
+    planner::{self, OperandPrepPolicy, Planner},
     slots::{FreeSlotPools, FreeSlots, SlotPool, SpillSlotPools},
     spill::SpillSet,
     sym_stack::{StackItem, SymStack},
-    templates::{
-        BlockTemplate, TransferOrder, canonical_transfer_order, choose_transfer, project_transfer,
-    },
+    templates::BlockTemplate,
     trace::StackifyObserver,
 };
 
@@ -28,38 +26,30 @@ pub(super) struct IterationPlanner<'a, 'ctx, O: StackifyObserver> {
     ctx: &'a StackifyContext<'ctx>,
     spill: SpillSet<'a>,
     slots: &'a mut SpillSlotPools,
-    templates: &'a mut SecondaryMap<BlockId, BlockTemplate>,
+    templates: &'a SecondaryMap<BlockId, BlockTemplate>,
     terminal_chain_blocks: &'a SecondaryMap<BlockId, bool>,
-    carry_in: &'a SecondaryMap<BlockId, BitSet<ValueId>>,
+    terminal_tail_insts: &'a SecondaryMap<InstId, bool>,
     alloc: &'a mut StackifyAlloc,
     spill_requests: &'a mut BitSet<ValueId>,
-    object_spill_requests: &'a mut BitSet<ValueId>,
-    forced_object_spills: &'a BitSet<ValueId>,
     inherited_stack: BTreeMap<BlockId, (BlockId, SymStack)>,
-    pending_edges: BTreeMap<BlockId, Vec<PendingEdge<O::DeferredExit>>>,
     planned_blocks: BitSet<BlockId>,
-    search_scratch: &'a mut NormalizeSearchScratch,
     observer: &'a mut O,
 }
 
-struct PendingEdge<D> {
-    pred: BlockId,
-    inst: InstId,
-    stack: SymStack,
+struct BlockPlanState {
+    block: BlockId,
     free_slots: FreeSlotPools,
-    action_start: usize,
-    deferred_exit: D,
+    prologue: Actions,
+    injected_prologue: bool,
+    remaining_uses: BTreeMap<ValueId, u32>,
+    live_future: BitSet<ValueId>,
+    live_out: BitSet<ValueId>,
+    stack: SymStack,
 }
 
-#[derive(Clone, Copy)]
-pub(super) struct ReachabilityValues<'a> {
-    pub(super) func: &'a Function,
-}
-
-impl ReachabilityValues<'_> {
-    fn retains(self, value: ValueId) -> bool {
-        !self.func.dfg.value_is_imm(value)
-    }
+enum InstOutcome {
+    Continue,
+    TerminateBlock,
 }
 
 impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
@@ -68,15 +58,12 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
         ctx: &'a StackifyContext<'ctx>,
         spill: SpillSet<'a>,
         slots: &'a mut SpillSlotPools,
-        templates: &'a mut SecondaryMap<BlockId, BlockTemplate>,
+        templates: &'a SecondaryMap<BlockId, BlockTemplate>,
         terminal_chain_blocks: &'a SecondaryMap<BlockId, bool>,
-        carry_in: &'a SecondaryMap<BlockId, BitSet<ValueId>>,
+        terminal_tail_insts: &'a SecondaryMap<InstId, bool>,
         alloc: &'a mut StackifyAlloc,
         spill_requests: &'a mut BitSet<ValueId>,
-        object_spill_requests: &'a mut BitSet<ValueId>,
-        forced_object_spills: &'a BitSet<ValueId>,
         inherited_stack: BTreeMap<BlockId, (BlockId, SymStack)>,
-        search_scratch: &'a mut NormalizeSearchScratch,
         observer: &'a mut O,
     ) -> Self {
         Self {
@@ -85,20 +72,16 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
             slots,
             templates,
             terminal_chain_blocks,
-            carry_in,
+            terminal_tail_insts,
             alloc,
             spill_requests,
-            object_spill_requests,
-            forced_object_spills,
             inherited_stack,
-            pending_edges: BTreeMap::new(),
             planned_blocks: BitSet::default(),
-            search_scratch,
             observer,
         }
     }
 
-    fn with_actions_planner<R>(
+    fn with_planner<R>(
         &mut self,
         stack: &mut SymStack,
         actions: &mut Actions,
@@ -111,12 +94,52 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
             self.ctx,
             &self.alloc.spill_obj,
             &self.alloc.exact_local_addr,
-            self.object_spill_requests,
-            self.forced_object_spills,
             free_slots,
             &mut *self.slots,
         );
-        let mut planner = Planner::new(self.ctx, stack, actions, mem, &mut *self.search_scratch);
+        let mut planner = Planner::new(self.ctx, stack, actions, mem);
+        f(&mut planner)
+    }
+
+    fn with_pre_actions_planner<R>(
+        &mut self,
+        stack: &mut SymStack,
+        inst: InstId,
+        free_slots: &mut FreeSlotPools,
+        f: impl FnOnce(&mut Planner) -> R,
+    ) -> R {
+        let actions = &mut self.alloc.pre_actions[inst];
+        let mem = planner::MemPlan::new(
+            self.spill,
+            &mut *self.spill_requests,
+            self.ctx,
+            &self.alloc.spill_obj,
+            &self.alloc.exact_local_addr,
+            free_slots,
+            &mut *self.slots,
+        );
+        let mut planner = Planner::new(self.ctx, stack, actions, mem);
+        f(&mut planner)
+    }
+
+    fn with_post_actions_planner<R>(
+        &mut self,
+        stack: &mut SymStack,
+        inst: InstId,
+        free_slots: &mut FreeSlotPools,
+        f: impl FnOnce(&mut Planner) -> R,
+    ) -> R {
+        let actions = &mut self.alloc.post_actions[inst];
+        let mem = planner::MemPlan::new(
+            self.spill,
+            &mut *self.spill_requests,
+            self.ctx,
+            &self.alloc.spill_obj,
+            &self.alloc.exact_local_addr,
+            free_slots,
+            &mut *self.slots,
+        );
+        let mut planner = Planner::new(self.ctx, stack, actions, mem);
         f(&mut planner)
     }
 
@@ -126,35 +149,26 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
                 continue;
             }
 
+            self.observer
+                .on_block_header(self.ctx.func, block, &self.templates[block]);
             self.plan_block(block);
         }
-
-        debug_assert!(
-            self.pending_edges.is_empty(),
-            "unresolved stackify edges remain"
-        );
     }
 
     fn plan_block(&mut self, block: BlockId) {
         let mut free_slots: FreeSlotPools = FreeSlotPools::default();
         let mut prologue: Actions = Actions::new();
+        let injected_prologue = false;
 
-        let live_sets = BlockSimState::block_live_sets(self.ctx, block);
-        self.resolve_pending_edges(block);
-
-        let inherited = self.inherited_stack.remove(&block);
-        if self.terminal_chain_blocks[block] {
-            self.freeze_template(block, TransferOrder::new());
-        } else if let Some((_pred, stack)) = inherited.as_ref() {
-            self.freeze_template_from_stack(block, stack);
-        } else if block != self.ctx.entry {
-            self.freeze_template_canonical(block);
-        }
-
-        self.observer
-            .on_block_header(self.ctx.func, block, &self.templates[block]);
         self.planned_blocks.insert(block);
 
+        // Track per-block remaining uses to implement `PopDeadTops`.
+        let (remaining_uses, live_future) =
+            count_block_uses(self.ctx.func, block, &self.ctx.value_aliases);
+        let mut live_out = self.ctx.liveness.block_live_outs(block).clone();
+        live_out.union_with(&self.ctx.phi_out_sources[block]);
+
+        let inherited = self.inherited_stack.remove(&block);
         let stack = if self.terminal_chain_blocks[block] {
             SymStack::opaque_prefix_empty(self.ctx.has_internal_return)
         } else if let Some((pred, mut inh)) = inherited {
@@ -170,24 +184,25 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
                     block,
                     pred,
                     &inh,
-                    &live_sets.live_future,
-                    &live_sets.live_out,
+                    &live_future,
+                    &live_out,
                 );
                 let has_phi_params = !self.ctx.phi_results[block].is_empty();
+                let in_cycle = self
+                    .ctx
+                    .scc
+                    .scc_of(block)
+                    .map(|scc| self.ctx.scc.scc_data(scc).is_cycle)
+                    .unwrap_or(false);
 
-                // Single-predecessor blocks without phis do not need exact entry
+                // Single-predecessor, acyclic blocks without phis do not need exact entry
                 // template normalization. Keeping the inherited stack avoids pointless bottom
                 // reshuffling that can cascade into SWAP/POP churn.
-                if has_phi_params {
-                    let tmpl = self.templates[block].clone();
-                    self.with_actions_planner(
-                        &mut inh,
-                        &mut prologue,
-                        &mut free_slots,
-                        |planner| {
-                            planner.plan_edge_fixup_to_template(&tmpl, pred, block);
-                        },
-                    );
+                if has_phi_params || in_cycle {
+                    let templates = self.templates;
+                    self.with_planner(&mut inh, &mut prologue, &mut free_slots, |planner| {
+                        planner.plan_edge_fixup(templates, pred, block);
+                    });
                 }
                 self.observer.on_block_prologue(&prologue);
             }
@@ -196,8 +211,28 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
             SymStack::from_template(&self.templates[block], self.ctx.has_internal_return)
         };
 
-        let state = BlockSimState::with_live_sets(block, stack, free_slots, prologue, live_sets);
-        let state = run_block_sim(self, state);
+        let mut state = BlockPlanState {
+            block,
+            free_slots,
+            prologue,
+            injected_prologue,
+            remaining_uses,
+            live_future,
+            live_out,
+            stack,
+        };
+
+        let empty_last_use: BitSet<ValueId> = BitSet::default();
+        for inst in self.ctx.func.layout.iter_inst(block) {
+            if self.ctx.func.dfg.is_phi(inst) {
+                continue;
+            }
+
+            match self.plan_inst(&mut state, inst, &empty_last_use) {
+                InstOutcome::Continue => {}
+                InstOutcome::TerminateBlock => break,
+            }
+        }
 
         // If the block had no lowered instructions, inject prologue into the terminator.
         if !state.prologue.is_empty()
@@ -208,352 +243,395 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
         }
     }
 
-    fn resolve_pending_edges(&mut self, block: BlockId) {
-        let Some(mut edges) = self.pending_edges.remove(&block) else {
-            return;
-        };
-        debug_assert!(
-            !self.inherited_stack.contains_key(&block),
-            "pending merge edges cannot also inherit one stack"
-        );
-        debug_assert!(
-            !self.planned_blocks.contains(block),
-            "pending edge target already planned"
-        );
-
-        let projected: Vec<(BlockId, TransferOrder)> = edges
-            .iter()
-            .map(|edge| {
-                (
-                    edge.pred,
-                    project_transfer(&edge.stack, &self.carry_in[block]),
-                )
-            })
-            .collect();
-        if !projected.is_empty() {
-            self.freeze_template(block, choose_transfer(self.ctx, block, &projected));
-        }
-
-        let tmpl = self.templates[block].clone();
-        for edge in edges.iter_mut() {
-            debug_assert_eq!(
-                self.alloc.pre_actions[edge.inst].len(),
-                edge.action_start,
-                "deferred edge action list changed before resolution"
-            );
-            self.with_planner(
-                &mut edge.stack,
-                &mut edge.free_slots,
-                PlannerActionSink::Pre(edge.inst),
-                |planner| planner.plan_edge_fixup_to_template(&tmpl, edge.pred, block),
-            );
-            self.observer.on_deferred_exit_actions(
-                edge.deferred_exit,
-                &self.alloc.pre_actions[edge.inst][edge.action_start..],
-            );
-        }
-    }
-
-    fn freeze_template_from_stack(&mut self, block: BlockId, stack: &SymStack) {
-        self.freeze_template(block, project_transfer(stack, &self.carry_in[block]));
-    }
-
-    fn freeze_template_canonical(&mut self, block: BlockId) {
-        let transfer = canonical_transfer_order(
-            &self.carry_in[block],
-            &self.ctx.dom_depth,
-            &self.ctx.def_info,
-        );
-        self.freeze_template(block, transfer);
-    }
-
-    fn freeze_template(&mut self, block: BlockId, transfer: TransferOrder) {
-        self.templates[block].freeze_transfer(transfer);
-    }
-
-    pub(super) fn ctx(&self) -> &StackifyContext<'ctx> {
-        self.ctx
-    }
-
-    pub(super) fn call_uses_stack_continuation(&self, inst: InstId) -> bool {
-        call_has_local_return(self.ctx.func, inst)
-    }
-
-    pub(super) fn scratch_slots(&self) -> &SlotPool {
-        &self.slots.scratch
-    }
-
-    pub(super) fn clear_inst_actions(&mut self, inst: InstId) {
-        self.alloc.pre_actions[inst].clear();
-        self.alloc.post_actions[inst].clear();
-        self.alloc.brtable_actions[inst].clear();
-    }
-
-    pub(super) fn pre_actions_len(&self, inst: InstId) -> usize {
-        self.alloc.pre_actions[inst].len()
-    }
-
-    pub(super) fn with_pre_actions<R>(
+    fn plan_inst(
         &mut self,
+        state: &mut BlockPlanState,
         inst: InstId,
-        f: impl FnOnce(&mut Actions) -> R,
-    ) -> R {
-        f(&mut self.alloc.pre_actions[inst])
-    }
-
-    pub(super) fn take_pre_actions_for_br_table(&mut self, inst: InstId) -> Actions {
-        std::mem::take(&mut self.alloc.pre_actions[inst])
-    }
-
-    pub(super) fn with_planner<R>(
-        &mut self,
-        stack: &mut SymStack,
-        free_slots: &mut FreeSlotPools,
-        sink: PlannerActionSink<'_>,
-        f: impl FnOnce(&mut Planner<'_, '_>) -> R,
-    ) -> R {
-        match sink {
-            PlannerActionSink::Pre(inst) => {
-                let mem = planner::MemPlan::new(
-                    self.spill,
-                    &mut *self.spill_requests,
-                    self.ctx,
-                    &self.alloc.spill_obj,
-                    &self.alloc.exact_local_addr,
-                    self.object_spill_requests,
-                    self.forced_object_spills,
-                    free_slots,
-                    &mut *self.slots,
-                );
-                let mut planner = Planner::new(
-                    self.ctx,
-                    stack,
-                    &mut self.alloc.pre_actions[inst],
-                    mem,
-                    &mut *self.search_scratch,
-                );
-                f(&mut planner)
-            }
-            PlannerActionSink::Post(inst) => {
-                let mem = planner::MemPlan::new(
-                    self.spill,
-                    &mut *self.spill_requests,
-                    self.ctx,
-                    &self.alloc.spill_obj,
-                    &self.alloc.exact_local_addr,
-                    self.object_spill_requests,
-                    self.forced_object_spills,
-                    free_slots,
-                    &mut *self.slots,
-                );
-                let mut planner = Planner::new(
-                    self.ctx,
-                    stack,
-                    &mut self.alloc.post_actions[inst],
-                    mem,
-                    &mut *self.search_scratch,
-                );
-                f(&mut planner)
-            }
-            PlannerActionSink::BrTableCase {
-                inst,
-                case_idx,
-                prefix,
-            } => {
-                let mut actions = Actions::new();
-                if let Some(prefix) = prefix {
-                    actions.extend_from_slice(prefix);
-                }
-                let mem = planner::MemPlan::new(
-                    self.spill,
-                    &mut *self.spill_requests,
-                    self.ctx,
-                    &self.alloc.spill_obj,
-                    &self.alloc.exact_local_addr,
-                    self.object_spill_requests,
-                    self.forced_object_spills,
-                    free_slots,
-                    &mut *self.slots,
-                );
-                let result = {
-                    let mut planner = Planner::new(
-                        self.ctx,
-                        stack,
-                        &mut actions,
-                        mem,
-                        &mut *self.search_scratch,
-                    );
-                    f(&mut planner)
-                };
-                debug_assert_eq!(self.alloc.brtable_actions[inst].len(), case_idx);
-                self.alloc.brtable_actions[inst].push(actions);
-                result
-            }
-        }
-    }
-
-    pub(super) fn on_inst_start(
-        &mut self,
-        state: &mut BlockSimState,
-        inst: InstId,
-        last_use: &BitSet<ValueId>,
-    ) {
+        empty_last_use: &BitSet<ValueId>,
+    ) -> InstOutcome {
+        // Inject prologue actions once, at the first lowered instruction.
         if !state.prologue.is_empty() && !state.injected_prologue {
             self.alloc.pre_actions[inst].extend_from_slice(&state.prologue);
             state.injected_prologue = true;
         }
+
+        let is_call = self.ctx.func.dfg.is_call(inst);
+        let call_has_local_return = is_call && call_has_local_return(self.ctx.func, inst);
+        let is_normal =
+            self.ctx.func.dfg.branch_info(inst).is_none() && !self.ctx.func.dfg.is_return(inst);
+        let skip_cleanup = skip_pre_exit_cleanup(self.ctx.func, inst);
+
+        let mut args = SmallVec::<[ValueId; 8]>::new();
+        let mut consume_last_use: BitSet<ValueId> = BitSet::default();
+        if is_normal {
+            args = match self.ctx.operand_mode {
+                StackifyOperandMode::HighEvm => {
+                    operand_order_for_evm(self.ctx.func, inst, &self.ctx.value_aliases)
+                }
+                StackifyOperandMode::EvmMachine => {
+                    operand_order_for_evm_machine(self.ctx.func, inst, &self.ctx.value_aliases)
+                }
+            };
+            consume_last_use = last_use_values_in_inst(
+                self.ctx.func,
+                &args,
+                &state.remaining_uses,
+                &state.live_out,
+            );
+        }
+        let last_use = if is_normal {
+            &consume_last_use
+        } else {
+            empty_last_use
+        };
         self.observer.on_inst_start(
             self.ctx.func,
             inst,
             &state.stack,
-            state.live_future(),
-            state.live_out(),
+            &state.live_future,
+            &state.live_out,
             last_use,
         );
-    }
 
-    pub(super) fn on_alias_noop(&mut self, inst: InstId, args: &[ValueId], results: &[ValueId]) {
-        self.observer.on_inst_actions("cleanup", &[], None);
-        self.observer.on_inst_actions("pre", &[], None);
-        self.observer
-            .on_inst_normal(self.ctx.func, inst, args, results);
-        self.observer.on_inst_actions("post", &[], None);
-    }
-
-    pub(super) fn on_cleanup_actions(&mut self, inst: InstId, start: usize, end: usize) {
-        self.observer
-            .on_inst_actions("cleanup", &self.alloc.pre_actions[inst][start..end], None);
-    }
-
-    pub(super) fn on_pre_actions(&mut self, inst: InstId, start: usize) {
-        self.observer
-            .on_inst_actions("pre", &self.alloc.pre_actions[inst][start..], None);
-    }
-
-    pub(super) fn on_post_actions(&mut self, inst: InstId) {
-        self.observer
-            .on_inst_actions("post", &self.alloc.post_actions[inst], None);
-    }
-
-    pub(super) fn on_normal_inst(&mut self, inst: InstId, args: &[ValueId], results: &[ValueId]) {
-        self.observer
-            .on_inst_normal(self.ctx.func, inst, args, results);
-    }
-
-    pub(super) fn on_return(&mut self, inst: InstId, start: usize) {
-        self.observer
-            .on_inst_actions("return", &self.alloc.pre_actions[inst][start..], None);
-        let ret_vals: SmallVec<[ValueId; 16]> = self
+        let results: SmallVec<[ValueId; 4]> = self
             .ctx
             .func
             .dfg
-            .return_args(inst)
-            .map(|args| args.iter().copied().collect())
-            .unwrap_or_default();
-        self.observer
-            .on_inst_return(self.ctx.func, inst, ret_vals.as_slice());
-    }
+            .inst_results(inst)
+            .iter()
+            .map(|&v| self.ctx.canonicalize_value(v))
+            .collect();
+        let res = match results.as_slice() {
+            [res] => Some(*res),
+            _ => None,
+        };
+        if is_normal && inst_is_noop_alias_cast(self.ctx, inst, &args, res) {
+            self.observer.on_inst_actions("cleanup", &[], None);
+            self.observer.on_inst_actions("pre", &[], None);
+            self.observer
+                .on_inst_normal(self.ctx.func, inst, &args, results.as_slice());
 
-    pub(super) fn on_jump(
-        &mut self,
-        state: &mut BlockSimState,
-        inst: InstId,
-        dest: BlockId,
-        action_start: usize,
-    ) {
-        if self.terminal_chain_blocks[dest] {
-        } else if self.ctx.cfg.pred_num_of(dest) > 1
-            && dest != self.ctx.entry
-            && !self.planned_blocks.contains(dest)
-        {
-            debug_assert!(
-                self.ctx.scc.is_reachable(dest),
-                "pending edge target must be reachable"
+            // The instruction is a typed alias-only cast for EVM stackify purposes:
+            // it does not consume or produce stack values, but it still counts as an SSA use.
+            consume_operand_uses(
+                self.ctx.func,
+                &args,
+                &mut state.remaining_uses,
+                &mut state.live_future,
+                &state.live_out,
+                &self.slots.scratch,
+                &mut state.free_slots.scratch,
             );
-            self.pending_edges
-                .entry(dest)
-                .or_default()
-                .push(PendingEdge {
-                    pred: state.block,
-                    inst,
-                    stack: state.stack.clone(),
-                    free_slots: state.free_slots.clone(),
-                    action_start,
-                    deferred_exit: self.observer.on_deferred_inst_jump(inst, dest),
-                });
-            return;
-        } else if self.ctx.cfg.pred_num_of(dest) == 1
-            && dest != self.ctx.entry
-            && !self.planned_blocks.contains(dest)
-        {
-            self.inherited_stack
-                .entry(dest)
-                .or_insert_with(|| (state.block, state.stack.clone()));
-        } else {
-            let tmpl = self.templates[dest].clone();
-            let src = state.block;
-            self.with_planner(
+
+            self.observer.on_inst_actions("post", &[], None);
+            return InstOutcome::Continue;
+        }
+
+        // Stable cleanup: pop dead values (and dead chains under the top live value).
+        let before_cleanup_len = self.alloc.pre_actions[inst].len();
+        if !skip_cleanup {
+            clean_dead_stack_prefix(
+                self.ctx.reach,
                 &mut state.stack,
-                &mut state.free_slots,
-                PlannerActionSink::Pre(inst),
-                |planner| planner.plan_edge_fixup_to_template(&tmpl, src, dest),
+                &state.live_future,
+                &state.live_out,
+                &mut self.alloc.pre_actions[inst],
             );
         }
 
+        // Try to improve operand reachability before operand preparation:
+        // - do nothing if all operands are already `DUP16`-reachable
+        // - otherwise, if an operand is close (within a small depth window), delete dead values,
+        //   redundant duplicates, and (small) immediates above it to pull it back into reach
+        // This helps avoid unnecessary spill-set growth.
+        if is_normal && !skip_cleanup {
+            improve_reachability_before_operands(
+                self.ctx.func,
+                &args,
+                self.ctx.reach,
+                &mut state.stack,
+                &state.live_future,
+                &state.live_out,
+                &mut self.alloc.pre_actions[inst],
+            );
+        }
+        let after_cleanup_len = self.alloc.pre_actions[inst].len();
         self.observer.on_inst_actions(
-            "exit",
-            &self.alloc.pre_actions[inst][action_start..],
-            Some(dest),
+            "cleanup",
+            &self.alloc.pre_actions[inst][before_cleanup_len..after_cleanup_len],
+            None,
         );
-        self.observer.on_inst_jump(inst, dest);
-    }
 
-    pub(super) fn on_branch(&mut self, inst: InstId, cond: ValueId, dests: &[BlockId]) {
-        self.observer.on_inst_br(self.ctx.func, inst, cond, dests);
-    }
+        if let Some(branch) = self.ctx.func.dfg.branch_info(inst) {
+            match branch.branch_kind() {
+                BranchKind::Jump(jump) => {
+                    let dest = *jump.dest();
+                    if self.terminal_chain_blocks[dest] {
+                    } else if self.ctx.cfg.pred_num_of(dest) == 1
+                        && dest != self.ctx.entry
+                        && !self.planned_blocks.contains(dest)
+                    {
+                        // Match `br` lowering: single-predecessor blocks can inherit the
+                        // predecessor stack directly, and will normalize in a block prologue
+                        // only when required (phis/cycles). If the destination block has
+                        // already been planned, we must fix up the edge directly because there
+                        // will be no future block prologue to consume this inherited stack.
+                        self.inherited_stack
+                            .entry(dest)
+                            .or_insert_with(|| (state.block, state.stack.clone()));
+                    } else {
+                        // Multi-predecessor blocks, the already-planned entry block, and any
+                        // other already-planned destination must observe a single chosen entry
+                        // template at the edge. Fix up the predecessor stack to that template
+                        // (including per-edge phi sources).
+                        let templates = self.templates;
+                        let src = state.block;
+                        self.with_pre_actions_planner(
+                            &mut state.stack,
+                            inst,
+                            &mut state.free_slots,
+                            |p| {
+                                p.plan_edge_fixup(templates, src, dest);
+                            },
+                        );
+                    }
 
-    pub(super) fn on_branch_edge(
-        &mut self,
-        state: &mut BlockSimState,
-        succ: BlockId,
-        stack: SymStack,
-    ) {
-        debug_assert!(
-            !self.planned_blocks.contains(succ),
-            "branch edge to planned block {succ:?} requires a split edge"
-        );
-        debug_assert_eq!(
-            self.ctx.cfg.pred_num_of(succ),
-            1,
-            "no critical edges: branch target must be single-pred"
-        );
-        self.inherited_stack
-            .entry(succ)
-            .or_insert_with(|| (state.block, stack));
-    }
+                    self.observer.on_inst_actions(
+                        "exit",
+                        &self.alloc.pre_actions[inst][after_cleanup_len..],
+                        Some(dest),
+                    );
+                    self.observer.on_inst_jump(inst, dest);
+                    return InstOutcome::TerminateBlock;
+                }
+                BranchKind::Br(br) => {
+                    // Ensure the branch condition is on top for the backend's JUMPI sequence.
+                    // We intentionally do not canonicalize the transfer region here: branch
+                    // targets are single-predecessor blocks (after critical-edge splitting)
+                    // and will run an entry prologue to normalize to their templates.
+                    let cond = *br.cond();
+                    let cond = self.ctx.canonicalize_value(cond);
+                    let consume_last_use = last_use_values_in_inst(
+                        self.ctx.func,
+                        &[cond],
+                        &state.remaining_uses,
+                        &state.live_out,
+                    );
 
-    pub(super) fn on_br_table_edge(
-        &mut self,
-        state: &mut BlockSimState,
-        succ: BlockId,
-        stack: SymStack,
-    ) {
-        debug_assert!(
-            !self.planned_blocks.contains(succ),
-            "br_table edge to planned block {succ:?} requires a split edge"
-        );
-        debug_assert_eq!(
-            self.ctx.cfg.pred_num_of(succ),
-            1,
-            "no critical edges: br_table target must be single-pred"
-        );
-        self.inherited_stack
-            .entry(succ)
-            .or_insert_with(|| (state.block, stack));
-    }
+                    improve_reachability_before_operands(
+                        self.ctx.func,
+                        &[cond],
+                        self.ctx.reach,
+                        &mut state.stack,
+                        &state.live_future,
+                        &state.live_out,
+                        &mut self.alloc.pre_actions[inst],
+                    );
+                    self.with_pre_actions_planner(
+                        &mut state.stack,
+                        inst,
+                        &mut state.free_slots,
+                        |p| {
+                            p.prepare_operands(&[cond], &consume_last_use);
+                        },
+                    );
 
-    pub(super) fn on_br_table(&mut self, inst: InstId) {
-        self.observer.on_inst_br_table(inst);
+                    self.observer.on_inst_actions(
+                        "pre",
+                        &self.alloc.pre_actions[inst][after_cleanup_len..],
+                        None,
+                    );
+                    let dests = branch.dests();
+                    self.observer
+                        .on_inst_br(self.ctx.func, inst, cond, dests.as_slice());
+
+                    // The backend consumes the condition value for the actual branch.
+                    let mut post_branch_stack = state.stack.clone();
+                    post_branch_stack.pop_operand();
+
+                    for succ in dests.iter().copied() {
+                        debug_assert_eq!(
+                            self.ctx.cfg.pred_num_of(succ),
+                            1,
+                            "no critical edges: branch target must be single-pred"
+                        );
+                        self.inherited_stack
+                            .entry(succ)
+                            .or_insert_with(|| (state.block, post_branch_stack.clone()));
+                    }
+                    return InstOutcome::TerminateBlock;
+                }
+                BranchKind::BrTable(table) => {
+                    // Build per-case compare actions. As with `br`, we normalize successor entry
+                    // stacks in their block prologues, but unlike `br` the compare ladder does
+                    // not restore the original stack between cases. Each case must plan from the
+                    // non-taken stack left by the previous `EQ; JUMPI`.
+                    let scrutinee = *table.scrutinee();
+                    let scrutinee = self.ctx.canonicalize_value(scrutinee);
+
+                    improve_reachability_before_operands(
+                        self.ctx.func,
+                        &[scrutinee],
+                        self.ctx.reach,
+                        &mut state.stack,
+                        &state.live_future,
+                        &state.live_out,
+                        &mut self.alloc.pre_actions[inst],
+                    );
+
+                    // `br_table` lowering uses per-case `Allocator::read_br_table_case()` calls.
+                    // Treat any actions accumulated for this terminator as a "one-time prefix"
+                    // executed by the first case.
+                    let base_actions = self.alloc.pre_actions[inst].clone();
+                    self.alloc.pre_actions[inst].clear();
+
+                    let (case_stacks, default_stack) = plan_br_table_compare_chain(
+                        table.table(),
+                        &state.stack,
+                        |case_idx, case_val, case_stack| {
+                            let mut case_actions = Actions::new();
+                            if case_idx == 0 {
+                                case_actions.extend_from_slice(&base_actions);
+                            }
+                            self.with_planner(
+                                case_stack,
+                                &mut case_actions,
+                                &mut state.free_slots,
+                                |p| {
+                                    let consume_last_use = BitSet::<ValueId>::default();
+                                    let mut compare_args = smallvec::smallvec![scrutinee, case_val];
+                                    p.prepare_operands_for_commutative_pair(
+                                        &mut compare_args,
+                                        &consume_last_use,
+                                    );
+                                },
+                            );
+                            debug_assert_eq!(self.alloc.brtable_actions[inst].len(), case_idx);
+                            self.alloc.brtable_actions[inst].push(case_actions);
+                        },
+                    );
+
+                    for case in case_stacks {
+                        debug_assert_eq!(
+                            self.ctx.cfg.pred_num_of(case.dest),
+                            1,
+                            "no critical edges: br_table target must be single-pred"
+                        );
+                        self.inherited_stack
+                            .entry(case.dest)
+                            .or_insert_with(|| (state.block, case.post_compare_stack));
+                    }
+
+                    if let Some(default) = table.default() {
+                        debug_assert_eq!(
+                            self.ctx.cfg.pred_num_of(*default),
+                            1,
+                            "no critical edges: br_table default must be single-pred"
+                        );
+                        self.inherited_stack
+                            .entry(*default)
+                            .or_insert_with(|| (state.block, default_stack));
+                    }
+
+                    self.observer.on_inst_br_table(inst);
+                    return InstOutcome::TerminateBlock;
+                }
+            }
+        }
+
+        if self.ctx.func.dfg.is_return(inst) {
+            // Internal return: ensure only (return_val?, ret_addr) remain above the opaque caller
+            // stack segment.
+            self.with_pre_actions_planner(&mut state.stack, inst, &mut state.free_slots, |p| {
+                p.plan_internal_return(inst);
+            });
+            self.observer.on_inst_actions(
+                "return",
+                &self.alloc.pre_actions[inst][after_cleanup_len..],
+                None,
+            );
+            let ret_vals: SmallVec<[ValueId; 16]> = self
+                .ctx
+                .func
+                .dfg
+                .return_args(inst)
+                .map(|args| args.iter().copied().collect())
+                .unwrap_or_default();
+            self.observer
+                .on_inst_return(self.ctx.func, inst, ret_vals.as_slice());
+            return InstOutcome::TerminateBlock;
+        }
+
+        // Normal instruction.
+        let operand_prep_policy = if self.terminal_tail_insts[inst] && !is_call {
+            OperandPrepPolicy::TerminalDeadTail
+        } else {
+            OperandPrepPolicy::Normal
+        };
+        self.with_pre_actions_planner(&mut state.stack, inst, &mut state.free_slots, |p| {
+            p.prepare_operands_for_inst(inst, &mut args, &consume_last_use, operand_prep_policy);
+        });
+
+        if call_has_local_return {
+            // Insert the continuation marker after operand preparation so operand prep cannot
+            // reorder it relative to the call operands.
+            state
+                .stack
+                .push_call_continuation(&mut self.alloc.pre_actions[inst]);
+            state
+                .stack
+                .position_call_ret_below_operands(args.len(), &mut self.alloc.pre_actions[inst]);
+        }
+
+        self.observer.on_inst_actions(
+            "pre",
+            &self.alloc.pre_actions[inst][after_cleanup_len..],
+            None,
+        );
+        self.observer
+            .on_inst_normal(self.ctx.func, inst, &args, results.as_slice());
+
+        consume_operand_uses(
+            self.ctx.func,
+            &args,
+            &mut state.remaining_uses,
+            &mut state.live_future,
+            &state.live_out,
+            &self.slots.scratch,
+            &mut state.free_slots.scratch,
+        );
+
+        let arity = args.len();
+        state.stack.pop_n_operands(arity);
+
+        // Call consumes the temporary continuation target (not an SSA value).
+        if call_has_local_return {
+            state.stack.remove_call_ret_addr();
+        }
+
+        for &res in results.iter().rev() {
+            state.stack.push_value(res);
+        }
+
+        for (depth, &res) in results.iter().enumerate() {
+            let res_live = state.live_future.contains(res) || state.live_out.contains(res);
+            if !res_live {
+                continue;
+            }
+            self.with_post_actions_planner(
+                &mut state.stack,
+                inst,
+                &mut state.free_slots,
+                |planner| {
+                    planner.emit_store_if_spilled_at_depth(res, depth);
+                },
+            );
+        }
+
+        self.observer
+            .on_inst_actions("post", &self.alloc.post_actions[inst], None);
+
+        InstOutcome::Continue
     }
 }
 
@@ -562,73 +640,25 @@ pub(super) fn skip_pre_exit_cleanup(func: &Function, inst: InstId) -> bool {
 }
 
 pub(super) fn count_block_uses(
-    ctx: &StackifyContext<'_>,
+    func: &Function,
     block: BlockId,
-) -> (BTreeMap<ValueId, u32>, BitSet<ValueId>, BTreeMap<I256, u32>) {
+    value_aliases: &SecondaryMap<ValueId, Option<ValueId>>,
+) -> (BTreeMap<ValueId, u32>, BitSet<ValueId>) {
     let mut counts: BTreeMap<ValueId, u32> = BTreeMap::new();
-    let mut cached_counts: BTreeMap<I256, u32> = BTreeMap::new();
-    for inst in ctx.func.layout.iter_inst(block) {
-        if ctx.func.dfg.is_phi(inst) {
+    for inst in func.layout.iter_inst(block) {
+        if func.dfg.is_phi(inst) {
             continue;
         }
-        for v in operand_order_for_evm(ctx.func, inst, &ctx.value_aliases) {
-            if ctx.retains_value(v) {
-                *counts.entry(v).or_insert(0) += 1;
-            } else if ctx.stack_caches_immediate(v)
-                && let Some(imm) = ctx.func.dfg.value_imm(v)
-            {
-                *cached_counts.entry(imm.as_i256()).or_insert(0) += 1;
+        for v in func.dfg.inst(inst).collect_values() {
+            let v = value_aliases[v].unwrap_or(v);
+            if func.dfg.value_is_imm(v) {
+                continue;
             }
+            *counts.entry(v).or_insert(0) += 1;
         }
     }
     let live_future: BitSet<ValueId> = counts.keys().copied().collect();
-    (counts, live_future, cached_counts)
-}
-
-pub(super) fn cached_immediate_preserve_values_in_inst(
-    ctx: &StackifyContext<'_>,
-    args: &[ValueId],
-    cached_remaining_uses: &BTreeMap<I256, u32>,
-) -> BitSet<ValueId> {
-    let mut inst_counts: BTreeMap<I256, u32> = BTreeMap::new();
-    for &value in args {
-        if ctx.stack_caches_immediate(value)
-            && let Some(imm) = ctx.func.dfg.value_imm(value)
-        {
-            *inst_counts.entry(imm.as_i256()).or_insert(0) += 1;
-        }
-    }
-
-    let mut preserve: BitSet<ValueId> = BitSet::default();
-    for &value in args {
-        if ctx.stack_caches_immediate(value)
-            && let Some(imm) = ctx.func.dfg.value_imm(value)
-            && cached_remaining_uses
-                .get(&imm.as_i256())
-                .copied()
-                .unwrap_or(0)
-                > inst_counts.get(&imm.as_i256()).copied().unwrap_or(0)
-        {
-            preserve.insert(value);
-        }
-    }
-    preserve
-}
-
-pub(super) fn consume_cached_immediate_uses(
-    ctx: &StackifyContext<'_>,
-    args: &[ValueId],
-    cached_remaining_uses: &mut BTreeMap<I256, u32>,
-) {
-    for &value in args {
-        if ctx.stack_caches_immediate(value)
-            && let Some(imm) = ctx.func.dfg.value_imm(value)
-            && let Some(count) = cached_remaining_uses.get_mut(&imm.as_i256())
-        {
-            *count = count.saturating_sub(1);
-        }
-    }
-    cached_remaining_uses.retain(|_, count| *count != 0);
+    (counts, live_future)
 }
 
 fn pop_dead_tops(
@@ -695,7 +725,7 @@ pub(super) fn clean_dead_stack_prefix(
     }
 }
 
-pub(crate) fn operand_order_for_evm(
+pub(super) fn operand_order_for_evm(
     func: &Function,
     inst: InstId,
     value_aliases: &SecondaryMap<ValueId, Option<ValueId>>,
@@ -758,6 +788,26 @@ pub(crate) fn operand_order_for_evm(
     args
 }
 
+pub(super) fn operand_order_for_evm_machine(
+    func: &Function,
+    inst: InstId,
+    value_aliases: &SecondaryMap<ValueId, Option<ValueId>>,
+) -> SmallVec<[ValueId; 8]> {
+    let mut args: SmallVec<[ValueId; 8]> = func
+        .dfg
+        .inst(inst)
+        .collect_values()
+        .into_iter()
+        .map(|v| value_aliases[v].unwrap_or(v))
+        .collect();
+
+    if call_has_local_return(func, inst) && !args.is_empty() {
+        args.as_mut_slice().rotate_left(1);
+    }
+
+    args
+}
+
 fn call_has_local_return(func: &Function, inst: InstId) -> bool {
     func.dfg.call_info(inst).is_some_and(|call| {
         func.ctx()
@@ -772,6 +822,9 @@ pub(super) fn inst_is_noop_alias_cast(
     args: &[ValueId],
     res: Option<ValueId>,
 ) -> bool {
+    if matches!(ctx.operand_mode, StackifyOperandMode::EvmMachine) {
+        return false;
+    }
     let Some(res) = res else {
         return false;
     };
@@ -787,7 +840,7 @@ pub(super) fn inst_is_noop_alias_cast(
 }
 
 pub(super) fn consume_operand_uses(
-    ctx: &StackifyContext<'_>,
+    func: &Function,
     args: &[ValueId],
     remaining_uses: &mut BTreeMap<ValueId, u32>,
     live_future: &mut BitSet<ValueId>,
@@ -796,14 +849,14 @@ pub(super) fn consume_operand_uses(
     free_scratch_slots: &mut FreeSlots,
 ) {
     for &v in args {
-        if ctx.retains_value(v)
+        if !func.dfg.value_is_imm(v)
             && let Some(n) = remaining_uses.get_mut(&v)
         {
             let before = *n;
             *n = n.saturating_sub(1);
             if before != 0 && *n == 0 {
                 live_future.remove(v);
-                if !ctx.func.dfg.value_is_imm(v) && !live_out.contains(v) {
+                if !live_out.contains(v) {
                     scratch_slots.release_if_assigned(v, free_scratch_slots);
                 }
             }
@@ -812,14 +865,14 @@ pub(super) fn consume_operand_uses(
 }
 
 pub(super) fn last_use_values_in_inst(
-    ctx: &StackifyContext<'_>,
+    func: &Function,
     args: &[ValueId],
     remaining_uses: &BTreeMap<ValueId, u32>,
     live_out: &BitSet<ValueId>,
 ) -> BitSet<ValueId> {
     let mut inst_counts: BTreeMap<ValueId, u32> = BTreeMap::new();
     for &v in args.iter() {
-        if !ctx.retains_value(v) {
+        if func.dfg.value_is_imm(v) {
             continue;
         }
         *inst_counts.entry(v).or_insert(0) += 1;
@@ -836,7 +889,7 @@ pub(super) fn last_use_values_in_inst(
 }
 
 pub(super) fn improve_reachability_before_operands(
-    values: ReachabilityValues<'_>,
+    func: &Function,
     args: &[ValueId],
     reach: StackifyReachability,
     stack: &mut SymStack,
@@ -848,7 +901,7 @@ pub(super) fn improve_reachability_before_operands(
 
     let mut protected_args: BitSet<ValueId> = BitSet::default();
     for &arg in args.iter() {
-        if values.retains(arg) {
+        if !func.dfg.value_is_imm(arg) {
             protected_args.insert(arg);
         }
     }
@@ -859,7 +912,7 @@ pub(super) fn improve_reachability_before_operands(
     // operand at depth 18-20).
     let mut needs_aggressive = false;
     for &arg in args.iter() {
-        if values.retains(arg)
+        if !func.dfg.value_is_imm(arg)
             && stack.find_reachable_value(arg, reach.dup_max).is_none()
             && stack
                 .find_reachable_value(arg, AGGRESSIVE_REACHABILITY_DEPTH)
@@ -881,11 +934,11 @@ pub(super) fn improve_reachability_before_operands(
         let mut progressed = false;
 
         for &arg in args.iter() {
-            if values.retains(arg)
+            if !func.dfg.value_is_imm(arg)
                 && stack.find_reachable_value(arg, reach.dup_max).is_none()
                 && let Some(pos) = stack.find_reachable_value(arg, AGGRESSIVE_REACHABILITY_DEPTH)
                 && let Some(victim) = choose_reachability_victim(
-                    values,
+                    func,
                     stack,
                     pos,
                     &protected_args,
@@ -908,7 +961,7 @@ pub(super) fn improve_reachability_before_operands(
 }
 
 fn choose_reachability_victim(
-    values: ReachabilityValues<'_>,
+    func: &Function,
     stack: &SymStack,
     above: usize,
     protected_args: &BitSet<ValueId>,
@@ -936,8 +989,8 @@ fn choose_reachability_victim(
     for (i, item) in stack.iter().take(above).enumerate() {
         if let StackItem::Value(v) = item
             && !protected_args.contains(*v)
-            && values.func.dfg.value_is_imm(*v)
-            && is_evictable_imm(values.func, *v)
+            && func.dfg.value_is_imm(*v)
+            && is_evictable_imm(func, *v)
         {
             return Some(i);
         }
@@ -973,7 +1026,7 @@ fn is_evictable_imm(func: &Function, v: ValueId) -> bool {
     imm_push_data_len(imm) <= MAX_PUSH_DATA_BYTES
 }
 
-pub(crate) fn imm_push_data_len(imm: Immediate) -> usize {
+fn imm_push_data_len(imm: Immediate) -> usize {
     if imm.is_zero() {
         return 0;
     }

@@ -5,7 +5,7 @@ use crate::{
     isa::evm::normalize_alias_map,
     liveness::Liveness,
     stackalloc::stackify::{
-        builder::{StackifyContext, StackifyReachability, StackifySearchProfile},
+        builder::{StackifyContext, StackifyOperandMode, StackifyReachability, StackifySearchProfile},
         templates::{
             compute_def_info, compute_dom_depth, compute_phi_out_sources, compute_phi_results,
             function_has_internal_return,
@@ -69,5 +69,6 @@ pub(super) fn build_stackify_test_context<'a>(
         value_aliases,
         exact_local_addr,
         stack_cached_immediates: Default::default(),
+        operand_mode: StackifyOperandMode::HighEvm,
     }
 }

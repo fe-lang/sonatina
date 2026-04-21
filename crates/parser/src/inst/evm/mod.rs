@@ -50,6 +50,8 @@ super::impl_inst_build! {EvmSelfBalance, ()}
 super::impl_inst_build! {EvmBaseFee, ()}
 super::impl_inst_build! {EvmBlobHash, (idx: ValueId)}
 super::impl_inst_build! {EvmBlobBaseFee, ()}
+super::impl_inst_build! {EvmMload, (addr: ValueId)}
+super::impl_inst_build! {EvmMstore, (addr: ValueId, value: ValueId)}
 super::impl_inst_build! {EvmMstore8, (addr: ValueId, val: ValueId)}
 super::impl_inst_build! {EvmSload, (key: ValueId)}
 super::impl_inst_build! {EvmSstore, (key: ValueId, val: ValueId)}

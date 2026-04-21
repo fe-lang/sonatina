@@ -13,10 +13,10 @@ use crate::{
             EvmCaller, EvmChainId, EvmCodeCopy, EvmCodeSize, EvmCoinBase, EvmCreate, EvmCreate2,
             EvmDelegateCall, EvmExtCodeCopy, EvmExtCodeHash, EvmExtCodeSize, EvmGas, EvmGasLimit,
             EvmGasPrice, EvmInvalid, EvmKeccak256, EvmLog0, EvmLog1, EvmLog2, EvmLog3, EvmLog4,
-            EvmMalloc, EvmMcopy, EvmMsize, EvmMstore8, EvmNumber, EvmOrigin, EvmPrevRandao,
-            EvmReturn, EvmReturnDataCopy, EvmReturnDataSize, EvmRevert, EvmSelfBalance,
-            EvmSelfDestruct, EvmSload, EvmSstore, EvmStaticCall, EvmStop, EvmTimestamp, EvmTload,
-            EvmTstore,
+            EvmMalloc, EvmMcopy, EvmMload, EvmMsize, EvmMstore, EvmMstore8, EvmNumber, EvmOrigin,
+            EvmPrevRandao, EvmReturn, EvmReturnDataCopy, EvmReturnDataSize, EvmRevert,
+            EvmSelfBalance, EvmSelfDestruct, EvmSload, EvmSstore, EvmStaticCall, EvmStop,
+            EvmTimestamp, EvmTload, EvmTstore,
         },
     },
     isa::evm::space::{CALLDATA, CODE, MEMORY, RETURNDATA, STORAGE, TRANSIENT},
@@ -575,6 +575,16 @@ fn classify_inst_effects_with<S: EffectSink>(
         return sink.finish();
     }
 
+    if let Some(mload) = <&EvmMload as InstDowncast>::downcast(is, inst) {
+        sink.read_exact(MEMORY, *mload.addr(), EVM_WORD_BYTES, Type::I256);
+        return sink.finish();
+    }
+
+    if let Some(mstore) = <&EvmMstore as InstDowncast>::downcast(is, inst) {
+        sink.write_exact(MEMORY, *mstore.addr(), EVM_WORD_BYTES, Type::I256);
+        return sink.finish();
+    }
+
     if <&data::Alloca as InstDowncast>::downcast(is, inst).is_some() {
         sink.add_other(OtherEffects::ALLOC);
         return sink.finish();
@@ -993,7 +1003,7 @@ mod tests {
         inst::{
             control_flow::Return,
             data::{Alloca, ObjAlloc, ObjLoad, ObjStore},
-            evm::{EvmMalloc, EvmSelfDestruct},
+            evm::{EvmMalloc, EvmMload, EvmMstore, EvmSelfDestruct},
         },
         isa::{Isa, evm::Evm},
     };
@@ -1081,6 +1091,24 @@ mod tests {
         let size = builder.make_imm_value(Immediate::from_i256(I256::from(32), Type::I256));
         let ptr = builder.insert_inst_with(|| EvmMalloc::new(is, size), mb.ptr_type(Type::I8));
         builder.insert_inst_no_result_with(|| Return::new_single(is, ptr));
+        builder.seal_all();
+
+        builder.func
+    }
+
+    fn build_evm_machine_memory_func() -> crate::Function {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::I256);
+        let is = evm.inst_set();
+
+        let block = builder.append_block();
+        builder.switch_to_block(block);
+
+        let addr = builder.make_imm_value(Immediate::from_i256(I256::from(0), Type::I256));
+        let value = builder.make_imm_value(Immediate::from_i256(I256::from(1), Type::I256));
+        builder.insert_inst_no_result_with(|| EvmMstore::new(is, addr, value));
+        let loaded = builder.insert_inst_with(|| EvmMload::new(is, addr), Type::I256);
+        builder.insert_inst_no_result_with(|| Return::new_single(is, loaded));
         builder.seal_all();
 
         builder.func
@@ -1241,6 +1269,47 @@ mod tests {
                 ref other => panic!("expected exact immediate access, got {other:?}"),
             }
         }
+    }
+
+    #[test]
+    fn evm_machine_memory_ops_have_word_memory_effects() {
+        let func = build_evm_machine_memory_func();
+        let load = inst_id_for::<EvmMload>(&func);
+        let store = inst_id_for::<EvmMstore>(&func);
+        let load_addr = func.dfg.inst(load).collect_values()[0];
+        let store_addr = func.dfg.inst(store).collect_values()[0];
+
+        let load_effects = func.dfg.effects(load);
+        assert_eq!(load_effects.accesses.len(), 1);
+        assert_eq!(
+            load_effects.accesses[0],
+            MemoryAccess {
+                space: MEMORY,
+                kind: AccessKind::Read,
+                must_happen: true,
+                loc: AccessLoc::LinearExact {
+                    addr: load_addr,
+                    bytes: EVM_WORD_BYTES,
+                    ty: Type::I256,
+                },
+            }
+        );
+
+        let store_effects = func.dfg.effects(store);
+        assert_eq!(store_effects.accesses.len(), 1);
+        assert_eq!(
+            store_effects.accesses[0],
+            MemoryAccess {
+                space: MEMORY,
+                kind: AccessKind::Write,
+                must_happen: true,
+                loc: AccessLoc::LinearExact {
+                    addr: store_addr,
+                    bytes: EVM_WORD_BYTES,
+                    ty: Type::I256,
+                },
+            }
+        );
     }
 
     #[test]

@@ -6,32 +6,32 @@ input_file: test_files/evm/loops.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section init: 513 bytes
-  section runtime: 493 bytes
-  total: 1006 bytes
+  section init: 517 bytes
+  section runtime: 497 bytes
+  total: 1014 bytes
 
 functions:
-  __Bench_recv_0_3: ir_blocks=5 ir_insts=8 vcode_ops=17 fixups=2 imm_bytes=1
+  __Bench_recv_0_3: ir_blocks=4 ir_insts=7 vcode_ops=18 fixups=2 imm_bytes=1
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=0
-  __Bench_recv_0_4: ir_blocks=5 ir_insts=10 vcode_ops=24 fixups=2 imm_bytes=2
+  __Bench_recv_0_4: ir_blocks=4 ir_insts=9 vcode_ops=23 fixups=2 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=0
-  __Bench_recv_0_5: ir_blocks=5 ir_insts=15 vcode_ops=32 fixups=2 imm_bytes=2
+  __Bench_recv_0_5: ir_blocks=4 ir_insts=13 vcode_ops=33 fixups=2 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=0
   __Bench_init: ir_blocks=3 ir_insts=8 vcode_ops=16 fixups=3 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  __Bench_runtime: ir_blocks=41 ir_insts=101 vcode_ops=286 fixups=42 imm_bytes=23
-    mem: scratch_words=0 stable_words=3 stable_mode=StaticAbs(base=0xa0) entry_abs_words=0 abs_words_end=3
-  u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98: ir_blocks=5 ir_insts=18 vcode_ops=44 fixups=2 imm_bytes=2
+  __Bench_runtime: ir_blocks=36 ir_insts=89 vcode_ops=276 fixups=42 imm_bytes=32
+    mem: scratch_words=3 stable_words=3 stable_mode=StaticAbs(base=0xa0) entry_abs_words=0 abs_words_end=3
+  u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98: ir_blocks=5 ir_insts=16 vcode_ops=45 fixups=2 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=0
 
 evm:
-  deploy: success reason=Return gas_used=159976 gas_refunded=0 logs=0 output=create len=493 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
-  case counter: calldata_len=36 success reason=Return gas_used=25606 gas_refunded=0 logs=0 output=call len=32 tx_gas=21204 runtime_gas=4402
-  case sum: calldata_len=36 success reason=Return gas_used=30736 gas_refunded=0 logs=0 output=call len=32 tx_gas=21204 runtime_gas=9532
-  case xor_loop: calldata_len=68 success reason=Return gas_used=27743 gas_refunded=0 logs=0 output=call len=32 tx_gas=21344 runtime_gas=6399
-  case counter_unchecked: calldata_len=36 success reason=Return gas_used=25702 gas_refunded=0 logs=0 output=call len=32 tx_gas=21204 runtime_gas=4498
-  case sum_unchecked: calldata_len=36 success reason=Return gas_used=27232 gas_refunded=0 logs=0 output=call len=32 tx_gas=21204 runtime_gas=6028
-  case xor_loop_unchecked: calldata_len=68 success reason=Return gas_used=27875 gas_refunded=0 logs=0 output=call len=32 tx_gas=21344 runtime_gas=6531
+  deploy: success reason=Return gas_used=160840 gas_refunded=0 logs=0 output=create len=497 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
+  case counter: calldata_len=36 success reason=Return gas_used=25804 gas_refunded=0 logs=0 output=call len=32 tx_gas=21204 runtime_gas=4600
+  case sum: calldata_len=36 success reason=Return gas_used=30328 gas_refunded=0 logs=0 output=call len=32 tx_gas=21204 runtime_gas=9124
+  case xor_loop: calldata_len=68 success reason=Return gas_used=27938 gas_refunded=0 logs=0 output=call len=32 tx_gas=21344 runtime_gas=6594
+  case counter_unchecked: calldata_len=36 success reason=Return gas_used=25898 gas_refunded=0 logs=0 output=call len=32 tx_gas=21204 runtime_gas=4694
+  case sum_unchecked: calldata_len=36 success reason=Return gas_used=26822 gas_refunded=0 logs=0 output=call len=32 tx_gas=21204 runtime_gas=5618
+  case xor_loop_unchecked: calldata_len=68 success reason=Return gas_used=28068 gas_refunded=0 logs=0 output=call len=32 tx_gas=21344 runtime_gas=6724
 
 
 --------------- DEBUG ---------------
@@ -40,94 +40,95 @@ evm:
 __Bench_recv_0_3:
   block0:
     JUMPDEST
-    PUSH0  // jump block3;
-  block3:
+    PUSH0  // jump block1;
+  block1:
     JUMPDEST
     DUP2  // v5.i1 = lt v4 v0;
     DUP2
     LT
-    PUSH1 block4  // br v5 block5 block1;
+    ISZERO  // br v5 block2 block3;
+    PUSH1 block3
     JUMPI
-  block1:
+  block2:
+    PUSH1 0x1 (1)  // v4.i256 = add v7 v4;
+    ADD
+    PUSH1 block1  // jump block1;
+    JUMP
+  block3:
+    JUMPDEST
     SWAP1  // return v4;
     POP
     SWAP1
-    JUMP
-  block4:
-    JUMPDEST
-    PUSH1 0x1 (1)  // v7.i256 = add 1.i256 v4;
-    ADD
-    PUSH1 block3  // jump block3;
     JUMP
 
 // func private %__Bench_recv_0_4(v0.i256) -> i256
 __Bench_recv_0_4:
   block0:
     JUMPDEST
-    PUSH1 0x1 (1)  // jump block3;
+    PUSH1 0x1 (1)  // jump block1;
     PUSH0
-  block3:
+  block1:
     JUMPDEST
     DUP3  // v16.i1 = gt v7 v0;
     DUP3
     GT
-    ISZERO  // br v16 block1 block5;
-    PUSH1 block4
+    PUSH1 block3  // br v16 block3 block2;
     JUMPI
-  block1:
+  block2:
+    DUP2  // v9.i256 = add v4 v7;
+    ADD
+    SWAP1  // v11.i256 = add v10 v7;
+    PUSH1 0x1 (1)
+    ADD
+    SWAP1  // jump block1;
+    PUSH1 block1
+    JUMP
+  block3:
+    JUMPDEST
     SWAP2  // return v4;
     POP
     POP
     SWAP1
     JUMP
-  block4:
-    JUMPDEST
-    DUP2  // v10.i256 = add v4 v7;
-    ADD
-    SWAP1  // v11.i256 = add 1.i256 v7;
-    PUSH1 0x1 (1)
-    ADD
-    SWAP1  // jump block3;
-    PUSH1 block3
-    JUMP
 
-// func private %__Bench_recv_0_5(v0.*@__fe_obj_XorLoopUnchecked_1) -> i256
+// func private %__Bench_recv_0_5(v0.i256) -> i256
 __Bench_recv_0_5:
   block0:
     JUMPDEST
-    DUP1  // v31.*i256 = gep v0 0.i256 1.i256;
-    PUSH1 0x20 (32)
+    PUSH1 0x20 (32)  // v29.i256 = add v0 v28;
+    DUP2
     ADD
-    MLOAD  // v32.i256 = mload v31 i256;
-    SWAP1  // v30.i256 = mload v29 i256;
+    MLOAD  // v9.i256 = evm_mload v29;
+    SWAP1  // v11.i256 = evm_mload v0;
     MLOAD
-    PUSH0  // jump block3;
+    PUSH0  // jump block1;
     DUP3
-  block3:
+  block1:
     JUMPDEST
-    DUP3  // v12.i1 = lt v11 v30;
+    DUP3  // v12.i1 = lt v31 v11;
     DUP3
     LT
-    PUSH1 block4  // br v12 block5 block1;
+    ISZERO  // br v12 block2 block3;
+    PUSH1 block3
     JUMPI
-  block1:
-    SWAP3  // return v9;
+  block2:
+    DUP4  // v27.i256 = xor v31 v9;
+    DUP3
+    XOR
+    XOR  // v14.i256 = xor v30 v27;
+    SWAP1  // v11.i256 = add v15 v31;
+    PUSH1 0x1 (1)
+    ADD
+    SWAP1  // jump block1;
+    PUSH1 block1
+    JUMP
+  block3:
+    JUMPDEST
+    SWAP3  // return v30;
     POP
     POP
     POP
     SWAP1
-    JUMP
-  block4:
-    JUMPDEST
-    DUP4  // v27.i256 = xor v11 v32;
-    DUP3
-    XOR
-    XOR  // v14.i256 = xor v9 v27;
-    SWAP1  // v15.i256 = add 1.i256 v11;
-    PUSH1 0x1 (1)
-    ADD
-    SWAP1  // jump block3;
-    PUSH1 block3
     JUMP
 
 // func private %__Bench_init()
@@ -140,336 +141,330 @@ __Bench_init:
     JUMPDEST
     PUSH0 0x0 (0)  // v4.i256 = sym_addr &__Bench_runtime;
     PUSH0 0x0 (0)  // v5.i256 = sym_size &__Bench_runtime;
-    DUP1  // evm_code_copy 0.i256 v4 v5;
+    DUP1  // evm_code_copy v3 v4 v5;
     SWAP2
     PUSH0
     CODECOPY
-    PUSH0  // evm_return 0.i256 v5;
+    PUSH0  // evm_return v3 v5;
     RETURN
 
 // func private %__Bench_runtime()
 __Bench_runtime:
   block0:
-    CALLDATASIZE  // v68.i256 = evm_calldata_size;
-    PUSH1 0x4 (4)  // v47.i1 = lt v68 4.i256;
+    CALLDATASIZE  // v58.i256 = evm_calldata_size;
+    PUSH1 0x4 (4)  // v62.i1 = lt v58 v61;
     SWAP1
     LT
-    PUSH1 block1  // br v47 block22 block23;
+    PUSH1 block3  // br v62 block1 block2;
     JUMPI
-  block23:
-    PUSH0  // v50.i256 = evm_calldata_load 0.i256;
+  block2:
+    PUSH0  // v8.i256 = evm_calldata_load v66;
     CALLDATALOAD
-    PUSH1 0xe0 (224)  // v52.i256 = shr 224.i256 v50;
+    PUSH1 0xe0 (224)  // v11.i256 = shr v10 v8;
     SHR
-    PUSH1 0xa0 (160)  // v58.*@__fe_obj_SolDecoder_3 = alloca @__fe_obj_SolDecoder_3;
-    PUSH0  // mstore v62 0.i256 i256;
+    PUSH0  // evm_mstore v13 v66;
+    PUSH1 0xa0 (160)
+    MSTORE
+    PUSH1 0x4 (4)  // evm_mstore 192.i256 v61;
+    PUSH1 0xc0 (192)
+    MSTORE
+    PUSH4 0xb1f525c6 (2985633222)  // br_table v11 block3 (v71 block4) (v72 block10) (v15 block21) (v16 block27) (v17 block30) (v19 block33);
     DUP2
-    MSTORE
-    PUSH1 0xc0 (192)  // v66.*i256 = gep v61 0.i256 1.i256;
-    PUSH1 0x4 (4)  // mstore v66 4.i256 i256;
-    SWAP1
-    MSTORE
-    PUSH4 0xb1f525c6 (2985633222)  // br_table v52 block1 (2985633222.i256 block2) (411796916.i256 block5) (1013569368.i256 block8) (2575799667.i256 block11) (2240911574.i256 block14) (1153984330.i256 block17);
-    DUP3
     EQ
-    PUSH1 block2
+    PUSH1 block4
     JUMPI
     PUSH4 0x188b85b4 (411796916)
-    DUP3
+    DUP2
     EQ
-    PUSH1 block5
+    PUSH1 block10
     JUMPI
     PUSH4 0x3c69d758 (1013569368)
-    DUP3
+    DUP2
     EQ
-    PUSH1 block8
+    PUSH1 block21
     JUMPI
     PUSH4 0x99879573 (2575799667)
-    DUP3
+    DUP2
     EQ
-    PUSH1 block11
+    PUSH1 block27
     JUMPI
     PUSH4 0x859198d6 (2240911574)
-    DUP3
+    DUP2
     EQ
-    PUSH1 block14
+    PUSH1 block30
     JUMPI
     PUSH4 0x44c8674a (1153984330)
-    DUP3
+    DUP2
     EQ
-    PUSH1 block17
+    PUSH1 block33
     JUMPI
-  block1:
+  block3:
     JUMPDEST
-    PUSH0  // evm_revert 0.i256 0.i256;
+    PUSH0  // evm_revert v66 v66;
     PUSH0
     REVERT
-  block2:
-    JUMPDEST
-    SWAP1  // v8.i256 = evm_call_value;
-    POP
-    CALLVALUE
-    PUSH1 block1  // br v86 block4 block3;
-    JUMPI
   block4:
-    PUSH1 `pc + (4)`  // v13.i256 = call %u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98 v58;
+    JUMPDEST
+    POP  // v88.i256 = evm_call_value;
+    CALLVALUE
+    PUSH1 block3  // br v90 block6 block5;
+    JUMPI
+  block6:
+    PUSH1 0xa0 (160)  // v91.i256 = call %u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98 v13;
+    PUSH1 `pc + (4)`
     SWAP1
     PUSH1 FuncRef(7)
     JUMP
     JUMPDEST
-    PUSH0  // jump block26;
-  block26:
+    PUSH0  // jump block7;
+  block7:
     JUMPDEST
-    DUP2  // v70.i1 = lt v69 v13;
+    DUP2  // v92.i1 = lt v45 v91;
     DUP2
     LT
-    PUSH1 block27  // br v70 block54 block24;
+    ISZERO  // br v92 block8 block9;
+    PUSH1 block9
     JUMPI
-  block24:
-    SWAP1  // mstore 0.i256 v69 i256;
+  block8:
+    PUSH1 0x1 (1)  // v94.i256 = add v45 v93;
+    ADD
+    PUSH1 block7  // jump block7;
+    JUMP
+  block9:
+    JUMPDEST
+    SWAP1  // evm_mstore v66 v45;
     POP
     PUSH0
     MSTORE
-    PUSH1 0x20 (32)  // evm_return 0.i256 32.i256;
+    PUSH1 0x20 (32)  // evm_return v66 v69;
+    PUSH0
+    RETURN
+  block10:
+    JUMPDEST
+    POP  // v95.i256 = evm_call_value;
+    CALLVALUE
+    PUSH1 block3  // br v96 block12 block11;
+    JUMPI
+  block12:
+    PUSH1 0xa0 (160)  // v21.i256 = call %u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98 v13;
+    PUSH1 `pc + (4)`
+    SWAP1
+    PUSH1 FuncRef(7)
+    JUMP
+    JUMPDEST
+    PUSH1 0x1 (1)  // jump block14;
+    PUSH0
+  block14:
+    JUMPDEST
+    DUP3  // v22.i1 = gt v50 v21;
+    DUP3
+    GT
+    PUSH1 block20  // br v22 block20 block15;
+    JUMPI
+  block15:
+    DUP2  // v23.i256 = add v47 v50;
+    DUP2
+    ADD
+    SWAP1  // v73.i1 = lt v23 v47;
+    DUP2
+    LT
+    PUSH1 block18  // br v73 block36 block19;
+    JUMPI
+  block19:
+    PUSH1 0x1 (1)  // v74.i256 = add v50 v93;
+    DUP3
+    ADD
+    SWAP2  // v75.i1 = lt v74 v50;
+    DUP3
+    LT
+    ISZERO  // br v75 block38 block37;
+    PUSH1 block14
+    JUMPI
+  block18:
+    JUMPDEST
+    PUSH0  // evm_revert v66 v66;
+    PUSH0
+    REVERT
+  block20:
+    JUMPDEST
+    SWAP2  // evm_mstore v66 v47;
+    POP
+    POP
+    PUSH0
+    MSTORE
+    PUSH1 0x20 (32)  // evm_return v66 v69;
+    PUSH0
+    RETURN
+  block21:
+    JUMPDEST
+    POP  // v76.i256 = evm_call_value;
+    CALLVALUE
+    PUSH1 block3  // br v77 block23 block22;
+    JUMPI
+  block23:
+    PUSH1 0xa0 (160)  // v26.i256 = call %u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98 v13;
+    PUSH1 `pc + (4)`
+    SWAP1
+    PUSH1 FuncRef(7)
+    JUMP
+    JUMPDEST
+    PUSH1 0xa0 (160)  // v27.i256 = call %u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98 v13;
+    PUSH1 `pc + (4)`
+    SWAP1
+    PUSH1 FuncRef(7)
+    JUMP
+    JUMPDEST
+    PUSH0  // jump block24;
+    DUP2
+  block24:
+    JUMPDEST
+    DUP4  // v28.i1 = lt v53 v26;
+    DUP3
+    LT
+    ISZERO  // br v28 block25 block26;
+    PUSH1 block26
+    JUMPI
+  block25:
+    DUP2  // v29.i256 = xor v27 v53;
+    DUP4
+    XOR
+    XOR  // v31.i256 = xor v52 v29;
+    SWAP1  // v32.i256 = add v53 v93;
+    PUSH1 0x1 (1)
+    ADD
+    SWAP1  // jump block24;
+    PUSH1 block24
+    JUMP
+  block26:
+    JUMPDEST
+    SWAP3  // evm_mstore v66 v52;
+    POP
+    POP
+    POP
+    PUSH0
+    MSTORE
+    PUSH1 0x20 (32)  // evm_return v66 v69;
     PUSH0
     RETURN
   block27:
     JUMPDEST
-    PUSH1 0x1 (1)  // v94.i256 = add v69 1.i256;
-    ADD
-    PUSH1 block26  // jump block26;
-    JUMP
-  block5:
-    JUMPDEST
-    SWAP1  // v15.i256 = evm_call_value;
-    POP
-    CALLVALUE
-    PUSH1 block1  // br v87 block7 block6;
+    CALLVALUE  // v33.i256 = evm_call_value;
+    PUSH1 block3  // br v34 block29 block28;
     JUMPI
-  block7:
-    PUSH1 `pc + (4)`  // v19.i256 = call %u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98 v58;
-    SWAP1
-    PUSH1 FuncRef(7)
-    JUMP
-    JUMPDEST
-    PUSH1 0x1 (1)  // jump block33;
-    PUSH0
-  block33:
-    JUMPDEST
-    DUP3  // v91.i1 = gt v90 v19;
-    DUP3
-    GT
-    ISZERO  // br v91 block31 block55;
-    PUSH1 block34
-    JUMPI
-  block31:
-    SWAP2  // mstore 0.i256 v88 i256;
-    POP
-    POP
-    PUSH0
-    MSTORE
-    PUSH1 0x20 (32)  // evm_return 0.i256 32.i256;
-    PUSH0
-    RETURN
-  block34:
-    JUMPDEST
-    DUP2  // v98.i256 = add v88 v90;
-    DUP2
-    ADD
-    SWAP1  // v99.i1 = lt v98 v88;
-    DUP2
-    LT
-    PUSH1 block36  // br v99 block51 block56;
-    JUMPI
-  block37:
-    PUSH1 0x1 (1)  // v100.i256 = add v90 1.i256;
-    DUP3
-    ADD
-    SWAP2  // v101.i1 = lt v100 v90;
-    DUP3
-    LT
-    ISZERO  // br v101 block53 block57;
-    PUSH1 block33
-    JUMPI
-  block36:
-    JUMPDEST
-    PUSH0  // evm_revert 0.i256 0.i256;
-    PUSH0
-    REVERT
-  block8:
-    JUMPDEST
-    SWAP1  // v21.i256 = evm_call_value;
-    POP
-    CALLVALUE
-    PUSH1 block1  // br v88 block10 block9;
-    JUMPI
-  block10:
-    DUP1  // v73.i256 = call %u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98 v58;
+  block29:
+    PUSH1 0xa0 (160)  // v35.i256 = call %u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98 v13;
     PUSH1 `pc + (4)`
     SWAP1
     PUSH1 FuncRef(7)
     JUMP
     JUMPDEST
-    SWAP1  // v74.i256 = call %u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98 v58;
-    PUSH1 `pc + (4)`
-    SWAP1
-    PUSH1 FuncRef(7)
-    JUMP
-    JUMPDEST
-    PUSH0  // jump block44;
-    DUP2
-  block44:
-    JUMPDEST
-    DUP4  // v81.i1 = lt v80 v73;
-    DUP3
-    LT
-    PUSH1 block45  // br v81 block58 block42;
-    JUMPI
-  block42:
-    SWAP3  // mstore 0.i256 v78 i256;
-    POP
-    POP
-    POP
-    PUSH0
-    MSTORE
-    PUSH1 0x20 (32)  // evm_return 0.i256 32.i256;
-    PUSH0
-    RETURN
-  block45:
-    JUMPDEST
-    DUP2  // v82.i256 = xor v74 v80;
-    DUP4
-    XOR
-    XOR  // v83.i256 = xor v78 v82;
-    SWAP1  // v95.i256 = add v80 1.i256;
-    PUSH1 0x1 (1)
-    ADD
-    SWAP1  // jump block44;
-    PUSH1 block44
-    JUMP
-  block11:
-    JUMPDEST
-    SWAP1  // v27.i256 = evm_call_value;
-    POP
-    CALLVALUE
-    PUSH1 block1  // br v89 block13 block12;
-    JUMPI
-  block13:
-    PUSH1 `pc + (4)`  // v31.i256 = call %u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98 v58;
-    SWAP1
-    PUSH1 FuncRef(7)
-    JUMP
-    JUMPDEST
-    PUSH1 `pc + (4)`  // v32.i256 = call %__Bench_recv_0_3 v31;
+    PUSH1 `pc + (4)`  // v37.i256 = call %__Bench_recv_0_3 v35;
     SWAP1
     PUSH1 FuncRef(1)
     JUMP
     JUMPDEST
-    PUSH0  // mstore 0.i256 v32 i256;
+    PUSH0  // evm_mstore v66 v37;
     MSTORE
-    PUSH1 0x20 (32)  // evm_return 0.i256 32.i256;
+    PUSH1 0x20 (32)  // evm_return v66 v69;
     PUSH0
     RETURN
-  block14:
+  block30:
     JUMPDEST
-    SWAP1  // v33.i256 = evm_call_value;
-    POP
-    CALLVALUE
-    PUSH1 block1  // br v90 block16 block15;
+    CALLVALUE  // v38.i256 = evm_call_value;
+    PUSH1 block3  // br v39 block32 block31;
     JUMPI
-  block16:
-    PUSH1 `pc + (4)`  // v37.i256 = call %u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98 v58;
+  block32:
+    PUSH1 0xa0 (160)  // v40.i256 = call %u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98 v13;
+    PUSH1 `pc + (4)`
     SWAP1
     PUSH1 FuncRef(7)
     JUMP
     JUMPDEST
-    PUSH1 `pc + (4)`  // v38.i256 = call %__Bench_recv_0_4 v37;
+    PUSH1 `pc + (4)`  // v41.i256 = call %__Bench_recv_0_4 v40;
     SWAP1
     PUSH1 FuncRef(2)
     JUMP
     JUMPDEST
-    PUSH0  // mstore 0.i256 v38 i256;
+    PUSH0  // evm_mstore v66 v41;
     MSTORE
-    PUSH1 0x20 (32)  // evm_return 0.i256 32.i256;
+    PUSH1 0x20 (32)  // evm_return v66 v69;
     PUSH0
     RETURN
-  block17:
+  block33:
     JUMPDEST
-    SWAP1  // v39.i256 = evm_call_value;
-    POP
-    CALLVALUE
-    PUSH1 block1  // br v91 block19 block18;
+    CALLVALUE  // v78.i256 = evm_call_value;
+    PUSH1 block3  // br v79 block35 block34;
     JUMPI
-  block19:
-    DUP1  // v78.i256 = call %u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98 v58;
+  block35:
+    PUSH1 0xa0 (160)  // v80.i256 = call %u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98 v13;
     PUSH1 `pc + (4)`
     SWAP1
     PUSH1 FuncRef(7)
     JUMP
     JUMPDEST
-    SWAP1  // v79.i256 = call %u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98 v58;
+    PUSH1 0xa0 (160)  // v81.i256 = call %u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98 v13;
     PUSH1 `pc + (4)`
     SWAP1
     PUSH1 FuncRef(7)
     JUMP
     JUMPDEST
-    PUSH1 0xa0 (160)  // v80.*@__fe_obj_XorLoopUnchecked_1 = alloca @__fe_obj_XorLoopUnchecked_1;
-    SWAP2  // mstore v81 v78 i256;
-    DUP3
+    SWAP1  // evm_mstore v13 v80;
+    PUSH1 0xa0 (160)
     MSTORE
-    PUSH1 0xc0 (192)  // v82.*i256 = gep v80 0.i256 1.i256;
-    MSTORE  // mstore v82 v79 i256;
-    PUSH1 `pc + (4)`  // v44.i256 = call %__Bench_recv_0_5 v80;
+    PUSH1 0xc0 (192)  // evm_mstore 192.i256 v81;
+    MSTORE
+    PUSH1 0xa0 (160)  // v44.i256 = call %__Bench_recv_0_5 v13;
+    PUSH1 `pc + (4)`
     SWAP1
     PUSH1 FuncRef(3)
     JUMP
     JUMPDEST
-    PUSH0  // mstore 0.i256 v44 i256;
+    PUSH0  // evm_mstore v66 v44;
     MSTORE
-    PUSH1 0x20 (32)  // evm_return 0.i256 32.i256;
+    PUSH1 0x20 (32)  // evm_return v66 v69;
     PUSH0
     RETURN
 
-// func private %u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98(v0.*@__fe_obj_SolDecoder_3) -> i256
+// func private %u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98(v0.i256) -> i256
 u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98:
   block0:
     JUMPDEST
-    DUP1  // v5.i256 = mload v4 i256;
+    DUP1  // v3.i256 = evm_mload v0;
     MLOAD
-    CALLDATASIZE  // v14.i256 = evm_calldata_size;
-    DUP2  // v20.i256 = sub v14 v5;
+    CALLDATASIZE  // v4.i256 = evm_calldata_size;
+    DUP2  // v5.i256 = sub v4 v3;
     DUP2
     SUB
-    DUP3  // v21.i1 = lt v14 v5;
+    DUP3  // v6.i1 = lt v4 v3;
     SWAP1
     SWAP2
     LT
-    PUSH1 section_unit0  // br v21 block7 block5;
+    PUSH1 section_unit0  // br v6 block1 block2;
     JUMPI
-  block5:
-    SWAP2  // v9.*i256 = gep v3 0.i256 1.i256;
+  block2:
+    JUMPDEST
+    SWAP2  // v10.i256 = add v0 v9;
     PUSH1 0x20 (32)
     ADD
-    DUP1  // v10.i256 = mload v9 i256;
+    DUP1  // v12.i256 = evm_mload v10;
     MLOAD
-    DUP1  // v12.i256 = add 32.i256 v10;
+    DUP1  // v13.i256 = add v9 v12;
     PUSH1 0x20 (32)
     ADD
-    SWAP4  // v13.i1 = gt v12 v20;
+    SWAP4  // v21.i1 = gt v13 v5;
     DUP5
     GT
-    PUSH1 section_unit0  // br v13 block3 block4;
+    PUSH1 section_unit0  // br v21 block3 block4;
     JUMPI
   block4:
-    JUMPDEST
-    SWAP1  // v21.i256 = add v10 v5;
+    SWAP1  // v11.i256 = add v12 v3;
     SWAP2
     ADD
-    CALLDATALOAD  // v22.i256 = evm_calldata_load v21;
-    SWAP2  // mstore v9 v12 i256;
+    CALLDATALOAD  // v12.i256 = evm_calldata_load v11;
+    SWAP2  // evm_mstore v10 v13;
     SWAP1
     MSTORE
-    SWAP1  // return v22;
+    SWAP1  // return v12;
     JUMP
 
 // synthetic section unit

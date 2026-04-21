@@ -22,9 +22,9 @@ evm:
 // func public %entry()
 entry:
   block0:
-    PUSH1 0x4 (4)  // mstore 0.i256 4.i256 i256;
+    PUSH1 0x4 (4)  // evm_mstore v0 4.i256;
     PUSH0
     MSTORE
-    PUSH1 0x20 (32)  // evm_return 0.i256 32.i256;
+    PUSH1 0x20 (32)  // evm_return v0 32.i256;
     PUSH0
     RETURN

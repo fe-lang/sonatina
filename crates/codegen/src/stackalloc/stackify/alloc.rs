@@ -1,4 +1,5 @@
 use cranelift_entity::SecondaryMap;
+use rustc_hash::FxHashMap;
 use sonatina_ir::{BlockId, Function, InstId, ValueId};
 
 use crate::{
@@ -126,6 +127,40 @@ impl StackifyAlloc {
                 );
             }
         });
+    }
+}
+impl StackifyAlloc {
+    pub(crate) fn uses_scratch_spills(&self) -> bool {
+        self.scratch_slot_of_value
+            .values()
+            .any(|slot| slot.is_some())
+    }
+
+    pub(crate) fn remap_stack_objects(&mut self, remap: &FxHashMap<StackObjId, StackObjId>) {
+        fn remap_actions(actions: &mut Actions, remap: &FxHashMap<StackObjId, StackObjId>) {
+            for action in actions {
+                match action {
+                    Action::MemLoadObj(obj) | Action::MemStoreObj(obj) => {
+                        if let Some(new_obj) = remap.get(obj) {
+                            *obj = *new_obj;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        for actions in self.pre_actions.values_mut() {
+            remap_actions(actions, remap);
+        }
+        for actions in self.post_actions.values_mut() {
+            remap_actions(actions, remap);
+        }
+        for cases in self.brtable_actions.values_mut() {
+            for actions in cases {
+                remap_actions(actions, remap);
+            }
+        }
     }
 }
 

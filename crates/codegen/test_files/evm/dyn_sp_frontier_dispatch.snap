@@ -6,20 +6,20 @@ input_file: test_files/evm/dyn_sp_frontier_dispatch.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 131 bytes
-  total: 131 bytes
+  section runtime: 179 bytes
+  total: 179 bytes
 
 functions:
-  ready: ir_blocks=3 ir_insts=10 vcode_ops=76 fixups=5 imm_bytes=15
+  ready: ir_blocks=3 ir_insts=11 vcode_ops=83 fixups=5 imm_bytes=18
     mem: scratch_words=0 stable_words=1 stable_mode=DynamicFrame entry_abs_words=0 abs_words_end=0
-  dispatch: ir_blocks=3 ir_insts=7 vcode_ops=20 fixups=3 imm_bytes=3
+  dispatch: ir_blocks=9 ir_insts=18 vcode_ops=43 fixups=6 imm_bytes=6
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  entry: ir_blocks=1 ir_insts=6 vcode_ops=17 fixups=2 imm_bytes=2
+  entry: ir_blocks=1 ir_insts=7 vcode_ops=16 fixups=2 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case cold: calldata_len=4 success reason=Return gas_used=21134 gas_refunded=0 logs=0 output=call len=32 tx_gas=21028 runtime_gas=106
-  case hot: calldata_len=4 success reason=Return gas_used=21372 gas_refunded=0 logs=0 output=call len=32 tx_gas=21016 runtime_gas=356
+  case cold: calldata_len=4 success reason=Return gas_used=21210 gas_refunded=0 logs=0 output=call len=32 tx_gas=21028 runtime_gas=182
+  case hot: calldata_len=4 success reason=Return gas_used=21513 gas_refunded=0 logs=0 output=call len=32 tx_gas=21016 runtime_gas=497
 
 
 --------------- DEBUG ---------------
@@ -40,20 +40,7 @@ ready:
     MSTORE
     JUMPDEST
     POP
-    PUSH0  // v1.i1 = eq v0 0.i256;
-    DUP2
-    EQ
-    ISZERO  // br v1 block1 block2;
-    PUSH1 block2
-    JUMPI
-  block1:
-    POP  // return 7.i256;
-    PUSH1 0x7 (7)
-    SWAP1
-    JUMP
-  block2:
-    JUMPDEST
-    PUSH1 0x80 (128)  // v2.*i256 = alloca i256;
+    PUSH1 0x80 (128)
     MLOAD
     DUP1
     PUSH1 0x40 (64)
@@ -77,24 +64,12 @@ ready:
     POP
     PUSH1 0x80 (128)
     MSTORE
-    PUSH1 0x40 (64)
-    PUSH1 0x80 (128)
-    MLOAD
-    SUB
-    DUP2  // mstore v2 v0 i256;
-    DUP2
-    MSTORE
-    PUSH1 0x1 (1)  // v3.i256 = sub v0 1.i256;
-    SWAP1
-    SWAP2
-    SUB
-    PUSH1 `pc + (4)`  // v4.i256 = call %ready v3;
-    SWAP1
-    PUSH1 FuncRef(0)
-    JUMP
-    JUMPDEST
-    SWAP1  // v5.i256 = mload v2 i256;
-    MLOAD
+    DUP1  // v13.i1 = is_zero v0;
+    PUSH1 block2  // br v13 block1 block2;
+    JUMPI
+  block1:
+    POP  // return v3;
+    PUSH1 0x7 (7)
     PUSH1 0x20 (32)
     PUSH1 0x80 (128)
     MLOAD
@@ -102,8 +77,38 @@ ready:
     MLOAD
     PUSH1 0x80 (128)
     MSTORE
-    ADD  // v6.i256 = add v4 v5;
-    SWAP1  // return v6;
+    SWAP1
+    JUMP
+  block2:
+    JUMPDEST
+    PUSH1 0x80 (128)  // v5.i256 = evm_mload v4;
+    MLOAD
+    PUSH1 0x40 (64)  // v7.i256 = sub v5 v6;
+    SWAP1
+    SUB
+    DUP2  // evm_mstore v7 v0;
+    DUP2
+    MSTORE
+    PUSH1 0x1 (1)  // v9.i256 = sub v0 1.i256;
+    SWAP1
+    SWAP2
+    SUB
+    PUSH1 `pc + (4)`  // v10.i256 = call %ready v9;
+    SWAP1
+    PUSH1 FuncRef(0)
+    JUMP
+    JUMPDEST
+    SWAP1  // v11.i256 = evm_mload v7;
+    MLOAD
+    ADD  // v12.i256 = add v10 v11;
+    PUSH1 0x20 (32)  // return v12;
+    PUSH1 0x80 (128)
+    MLOAD
+    SUB
+    MLOAD
+    PUSH1 0x80 (128)
+    MSTORE
+    SWAP1
     JUMP
 
 // func public %dispatch(v0.i1) -> i256
@@ -114,40 +119,68 @@ dispatch:
     PUSH1 block2
     JUMPI
   block1:
-    PUSH1 0xa0 (160)  // v1.*i256 = evm_malloc 32.i256;
-    PUSH1 0x6f (111)  // mstore v1 111.i256 i256;
+    PUSH1 0x40 (64)  // v2.i256 = evm_mload v1;
+    MLOAD
+    PUSH1 0x80 (128)  // v4.i256 = evm_mload v3;
+    MLOAD
+    DUP1  // v5.i1 = gt v2 v4;
+    DUP3
+    GT
+    PUSH1 block9  // br v5 block9 block4;
+    JUMPI
+  block4:
+    SWAP1  // jump block5;
+    POP
+    PUSH1 block5
+    JUMP
+  block9:
+    JUMPDEST
+    POP  // jump block5;
+  block5:
+    JUMPDEST
+    PUSH1 0xa0 (160)  // v8.i1 = gt v6 160.i256;
+    DUP2
+    GT
+    PUSH1 block8  // br v8 block10 block7;
+    JUMPI
+  block7:
+    POP  // jump block8;
+    PUSH1 0xa0 (160)
+  block8:
+    JUMPDEST
+    PUSH1 0x6f (111)  // evm_mstore v9 111.i256;
     DUP2
     MSTORE
-    MLOAD  // v3.i256 = mload v1 i256;
-    SWAP1  // return v3;
+    MLOAD  // v11.i256 = evm_mload v9;
+    SWAP1  // return v11;
     JUMP
   block2:
     JUMPDEST
-    PUSH1 0x1 (1)  // v4.i256 = call %ready 1.i256;
+    PUSH1 0x1 (1)  // v13.i256 = call %ready 1.i256;
     PUSH1 `pc + (4)`
     SWAP1
     PUSH1 FuncRef(0)
     JUMP
     JUMPDEST
-    SWAP1  // return v4;
+    SWAP1  // return v13;
     JUMP
 
 // func public %entry()
 entry:
   block0:
-    PUSH0  // v0.i256 = evm_calldata_load 0.i256;
+    PUSH0  // v1.i256 = evm_calldata_load v0;
     CALLDATALOAD
-    PUSH1 0xe0 (224)  // v1.i256 = shr 224.i256 v0;
+    PUSH1 0xe0 (224)  // v3.i256 = shr v2 v1;
     SHR
-    ISZERO  // v2.i1 = ne v1 0.i256;
-    ISZERO
-    PUSH1 `pc + (4)`  // v3.i256 = call %dispatch v2;
+    ISZERO  // v4.i1 = is_zero v3;
+    ISZERO  // v5.i1 = is_zero v4;
+    PUSH1 `pc + (4)`  // v6.i256 = call %dispatch v5;
     SWAP1
     PUSH1 FuncRef(1)
     JUMP
     JUMPDEST
-    PUSH0  // mstore 0.i256 v3 i256;
+    PUSH0  // evm_mstore v0 v6;
     MSTORE
-    PUSH1 0x20 (32)  // evm_return 0.i256 32.i256;
+    PUSH1 0x20 (32)  // evm_return v0 32.i256;
     PUSH0
     RETURN

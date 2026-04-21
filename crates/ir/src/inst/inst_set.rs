@@ -148,6 +148,8 @@ define_inst_set_base! {
         evm::EvmBaseFee,
         evm::EvmBlobHash,
         evm::EvmBlobBaseFee,
+        evm::EvmMload,
+        evm::EvmMstore,
         evm::EvmMstore8,
         evm::EvmSload,
         evm::EvmSstore,

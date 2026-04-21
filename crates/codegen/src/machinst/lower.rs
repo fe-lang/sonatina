@@ -70,6 +70,14 @@ impl SectionWorkModule {
         self.entry
     }
 
+    pub fn includes(&self) -> &[FuncRef] {
+        &self.includes
+    }
+
+    pub fn data(&self) -> &[GlobalVariableRef] {
+        &self.data
+    }
+
     pub fn membership(&self) -> SectionMembership {
         build_section_membership(&self.module, self.entry, &self.includes, &self.data)
     }

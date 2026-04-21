@@ -2,7 +2,7 @@ use super::*;
 use crate::{
     analysis::func_behavior,
     domtree::DomTree,
-    liveness::{InstLiveness, Liveness},
+    liveness::Liveness,
     machinst::{
         lower::{LoweredFunction, SectionWorkModule},
         vcode::{Label, VCode, VCodeFixup},
@@ -13,18 +13,17 @@ use crate::{
     stackify_edge::StackifyEdgeSplitter,
 };
 use cranelift_entity::SecondaryMap;
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{
-    BlockId, Directive, Immediate, InstId, InstSetBase, InstSetExt, Module, ValueId,
-    cfg::ControlFlowGraph, inst::evm::inst_set::EvmInstKind, ir_writer::FuncWriter, isa::Isa,
-    object::SectionName,
+    BlockId, Immediate, InstId, InstSetBase, InstSetExt, Module, ValueId, cfg::ControlFlowGraph,
+    inst::evm::inst_set::EvmInstKind, ir_writer::FuncWriter, isa::Isa, object::SectionName,
 };
 use sonatina_parser::parse_module;
 use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
 
 use self::{
-    dyn_sp::{DynSpInitKind, DynSpPlan, compute_dyn_sp_plan},
+    dyn_sp::DynSpInitKind,
     emit::{
         FinalAlloc, materialize_jumpdests, prune_redundant_opcode_sequences,
         rewrite_evm_local_fallthrough_layout,
@@ -40,13 +39,6 @@ struct PlanTestCtx {
     funcs: Vec<FuncRef>,
     names: FxHashMap<String, FuncRef>,
     plan: ProgramMemoryPlan,
-    analyses: FxHashMap<FuncRef, memory_plan::FuncAnalysis>,
-}
-
-struct DynSpTestCtx {
-    module: sonatina_ir::Module,
-    names: FxHashMap<String, FuncRef>,
-    plan: DynSpPlan,
 }
 
 fn plan_test_ctx_from_src(src: &str) -> PlanTestCtx {
@@ -70,9 +62,6 @@ fn plan_test_ctx_from_src(src: &str) -> PlanTestCtx {
             let mut liveness = Liveness::new();
             liveness.compute(function, &cfg);
 
-            let mut inst_liveness = InstLiveness::new();
-            inst_liveness.compute(function, &cfg, &liveness);
-
             let mut dom = DomTree::new();
             dom.compute(&cfg);
 
@@ -80,7 +69,6 @@ fn plan_test_ctx_from_src(src: &str) -> PlanTestCtx {
                 func,
                 memory_plan::FuncAnalysis {
                     alloc: StackifyBuilder::new(function, &cfg, &dom, &liveness, 16).compute(),
-                    inst_liveness,
                     block_order: dom.rpo().to_vec(),
                     value_aliases: {
                         let mut value_aliases = SecondaryMap::new();
@@ -117,46 +105,6 @@ fn plan_test_ctx_from_src(src: &str) -> PlanTestCtx {
         funcs,
         names,
         plan,
-        analyses,
-    }
-}
-
-fn dyn_sp_plan_from_src(src: &str) -> DynSpTestCtx {
-    let ctx = plan_test_ctx_from_src(src);
-    let isa = Evm::new(TargetTriple {
-        architecture: Architecture::Evm,
-        vendor: Vendor::Ethereum,
-        operating_system: OperatingSystem::Evm(EvmVersion::Osaka),
-    });
-    let section_entry = ctx
-        .module
-        .objects
-        .values()
-        .find_map(|object| {
-            object.sections.iter().find_map(|section| {
-                section
-                    .directives
-                    .iter()
-                    .find_map(|directive| match directive {
-                        Directive::Entry(func) => Some(*func),
-                        Directive::Include(_) | Directive::Data(_) | Directive::Embed(_) => None,
-                    })
-            })
-        })
-        .unwrap_or(ctx.funcs[0]);
-    let dyn_sp_plan = compute_dyn_sp_plan(
-        &ctx.module,
-        &ctx.funcs,
-        section_entry,
-        &ctx.plan,
-        &ctx.analyses,
-        &isa,
-    );
-
-    DynSpTestCtx {
-        module: ctx.module,
-        names: ctx.names,
-        plan: dyn_sp_plan,
     }
 }
 
@@ -195,6 +143,23 @@ fn first_memory_op(lowered: &LoweredFunction<OpCode>) -> Option<u8> {
         .flat_map(|&block| lowered.vcode.block_insns(block))
         .map(|inst| lowered.vcode.insts[inst] as u8)
         .find(|op| *op == OpCode::MLOAD as u8 || *op == OpCode::MSTORE as u8)
+}
+
+fn lowered_bytes(lowered: &LoweredFunction<OpCode>) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    for &block in &lowered.block_order {
+        for inst in lowered.vcode.block_insns(block) {
+            bytes.push(lowered.vcode.insts[inst] as u8);
+            if let Some((_, imm)) = lowered.vcode.inst_imm_bytes.get(inst) {
+                bytes.extend_from_slice(imm);
+            }
+        }
+    }
+    bytes
+}
+
+fn contains_subsequence(bytes: &[u8], needle: &[u8]) -> bool {
+    bytes.windows(needle.len()).any(|window| window == needle)
 }
 
 fn rewrite_local_fallthrough_order_from_src(
@@ -556,41 +521,6 @@ fn prune_removes_two_inst_stack_noops() {
 }
 
 #[test]
-fn dyn_sp_entry_init_covers_ready_recursive_entry_scc() {
-    let ctx = dyn_sp_plan_from_src(
-        r#"
-target = "evm-ethereum-osaka"
-
-func public %f(v0.i1, v1.i256) -> i256 {
-block0:
-    br v0 block1 block2;
-
-block1:
-    return 0.i256;
-
-block2:
-    v2.*i256 = alloca i256;
-    mstore v2 v1 i256;
-    v3.i256 = call %f 1.i1 v1;
-    v4.i256 = mload v2 i256;
-    v5.i256 = add v3 v4;
-    return v5;
-}
-"#,
-    );
-
-    let f = ctx.names["f"];
-    assert_eq!(ctx.plan.entry_init, Some(DynSpInitKind::Checked));
-    assert!(
-        ctx.plan
-            .frontier_init_calls
-            .get(&f)
-            .is_none_or(FxHashSet::is_empty)
-    );
-    assert!(ctx.plan.entry_live_frame[&f]);
-}
-
-#[test]
 fn recursive_entry_lowering_checks_dyn_sp_before_reinit() {
     let parsed = parse_module(
         r#"
@@ -680,7 +610,7 @@ object @Contract {
 }
 
 #[test]
-fn recursive_entry_without_live_frame_initializes_dyn_sp_directly() {
+fn recursive_entry_full_frame_checks_dyn_sp_before_reinit() {
     let parsed = parse_module(
         r#"
 target = "evm-ethereum-osaka"
@@ -726,9 +656,9 @@ object @Contract {
     let function_plan = prepared.function_plan(f).expect("missing function plan");
     assert_eq!(
         function_plan.dyn_sp_plan.entry_init,
-        Some(DynSpInitKind::Always)
+        Some(DynSpInitKind::Checked)
     );
-    assert!(!function_plan.dyn_sp_plan.entry_live_frame);
+    assert!(function_plan.dyn_sp_plan.entry_live_frame);
 
     let lowered = backend
         .lower_function(&prepared, f)
@@ -736,8 +666,135 @@ object @Contract {
     let first_mem_op = first_memory_op(&lowered).expect("entry lowering should touch dyn_sp");
     assert_eq!(
         first_mem_op,
-        OpCode::MSTORE as u8,
-        "entry without live-frame reentry should initialize dyn_sp directly"
+        OpCode::MLOAD as u8,
+        "full-frame entry lowering must check dyn_sp before writing it"
+    );
+}
+
+#[test]
+fn fixed_transient_malloc_keccak_lowers_to_machine_zero_buffer() {
+    let parsed = parse_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+func public %entry(v0.i256) -> i256 {
+block0:
+    v1.*i8 = evm_malloc 32.i256;
+    v2.*i256 = bitcast v1 *i256;
+    mstore v2 v0 i256;
+    v3.i256 = evm_keccak256 v1 32.i256;
+    return v3;
+}
+"#,
+    )
+    .unwrap();
+
+    let entry = find_func(&parsed.module, "entry");
+    let backend = test_backend();
+    let prepared = backend
+        .prepare_section(work_module_with_entry(&parsed.module, &[entry], entry))
+        .expect("prepare should succeed");
+
+    let dumped = prepared.module().func_store.view(entry, |function| {
+        FuncWriter::new(entry, function).dump_string()
+    });
+    assert!(
+        dumped.contains("evm_mstore 0.i256"),
+        "fixed transient store should use address zero in machine IR:\n{dumped}"
+    );
+    assert!(
+        dumped.contains("evm_keccak256 0.i256 32.i256"),
+        "fixed transient keccak should use address zero in machine IR:\n{dumped}"
+    );
+    assert!(
+        !dumped.contains("evm_malloc") && !dumped.contains("bitcast"),
+        "machine IR should not retain malloc/cast operations:\n{dumped}"
+    );
+
+    let lowered = backend
+        .lower_function(&prepared, entry)
+        .expect("entry lowers");
+    let bytes = lowered_bytes(&lowered);
+    assert!(
+        contains_subsequence(
+            &bytes,
+            &[
+                OpCode::PUSH0 as u8,
+                OpCode::MSTORE as u8,
+                OpCode::PUSH1 as u8,
+                0x20,
+                OpCode::PUSH0 as u8,
+                OpCode::KECCAK256 as u8,
+            ],
+        ),
+        "expected PUSH0/MSTORE/PUSH1 0x20/PUSH0/KECCAK256 sequence, got {bytes:?}"
+    );
+    assert!(
+        !contains_subsequence(&bytes, &[OpCode::SWAP1 as u8, OpCode::DUP2 as u8]),
+        "fixed zero buffer should not lower through SWAP1 DUP2: {bytes:?}"
+    );
+}
+
+#[test]
+fn fixed_transient_malloc_return_lowers_to_machine_zero_buffer() {
+    let parsed = parse_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+func public %entry(v0.i256) {
+block0:
+    v1.*i8 = evm_malloc 32.i256;
+    v2.*i256 = bitcast v1 *i256;
+    mstore v2 v0 i256;
+    evm_return v1 32.i256;
+}
+"#,
+    )
+    .unwrap();
+
+    let entry = find_func(&parsed.module, "entry");
+    let backend = test_backend();
+    let prepared = backend
+        .prepare_section(work_module_with_entry(&parsed.module, &[entry], entry))
+        .expect("prepare should succeed");
+
+    let dumped = prepared.module().func_store.view(entry, |function| {
+        FuncWriter::new(entry, function).dump_string()
+    });
+    assert!(
+        dumped.contains("evm_mstore 0.i256"),
+        "fixed transient store should use address zero in machine IR:\n{dumped}"
+    );
+    assert!(
+        dumped.contains("evm_return 0.i256 32.i256"),
+        "fixed transient return should use address zero in machine IR:\n{dumped}"
+    );
+    assert!(
+        !dumped.contains("evm_malloc") && !dumped.contains("bitcast"),
+        "machine IR should not retain malloc/cast operations:\n{dumped}"
+    );
+
+    let lowered = backend
+        .lower_function(&prepared, entry)
+        .expect("entry lowers");
+    let bytes = lowered_bytes(&lowered);
+    assert!(
+        contains_subsequence(
+            &bytes,
+            &[
+                OpCode::PUSH0 as u8,
+                OpCode::MSTORE as u8,
+                OpCode::PUSH1 as u8,
+                0x20,
+                OpCode::PUSH0 as u8,
+                OpCode::RETURN as u8,
+            ],
+        ),
+        "expected PUSH0/MSTORE/PUSH1 0x20/PUSH0/RETURN sequence, got {bytes:?}"
+    );
+    assert!(
+        !contains_subsequence(&bytes, &[OpCode::SWAP1 as u8, OpCode::DUP2 as u8]),
+        "fixed zero buffer should not lower through SWAP1 DUP2: {bytes:?}"
     );
 }
 
@@ -817,457 +874,6 @@ block0:
 }
 
 #[test]
-fn dyn_sp_frontier_init_marks_call_from_non_ready_entry_into_ready_scc() {
-    let ctx = dyn_sp_plan_from_src(
-        r#"
-target = "evm-ethereum-osaka"
-
-func public %dispatch(v0.i1, v1.i256) -> i256 {
-block0:
-    br v0 block1 block2;
-
-block1:
-    v2.*i8 = evm_malloc 32.i256;
-    v3.*i256 = bitcast v2 *i256;
-    mstore v3 111.i256 i256;
-    v4.i256 = mload v3 i256;
-    return v4;
-
-block2:
-    v5.i256 = call %ready v1;
-    return v5;
-}
-
-func private %ready(v0.i256) -> i256 {
-block0:
-    v1.i1 = eq v0 0.i256;
-    br v1 block1 block2;
-
-block1:
-    return 7.i256;
-
-block2:
-    v2.*i256 = alloca i256;
-    mstore v2 v0 i256;
-    v3.i256 = sub v0 1.i256;
-    v4.i256 = call %ready v3;
-    v5.i256 = mload v2 i256;
-    v6.i256 = add v4 v5;
-    return v6;
-}
-"#,
-    );
-
-    let dispatch = ctx.names["dispatch"];
-    let ready = ctx.names["ready"];
-    let frontier_calls = ctx
-        .plan
-        .frontier_init_calls
-        .get(&dispatch)
-        .expect("dispatch should have a frontier init call");
-    let call_inst = ctx.module.func_store.view(dispatch, |function| {
-        function
-            .layout
-            .iter_block()
-            .flat_map(|block| function.layout.iter_inst(block))
-            .find(|&inst| {
-                function
-                    .dfg
-                    .call_info(inst)
-                    .is_some_and(|call| call.callee() == ready)
-            })
-            .expect("call to ready")
-    });
-
-    assert_eq!(ctx.plan.entry_init, None);
-    assert!(frontier_calls.contains(&call_inst));
-    assert!(
-        ctx.plan
-            .checked_frontier_init_calls
-            .get(&dispatch)
-            .is_none_or(|calls| !calls.contains(&call_inst))
-    );
-}
-
-#[test]
-fn dyn_sp_entry_live_frame_propagates_only_from_active_callsites() {
-    let ctx = dyn_sp_plan_from_src(
-        r#"
-target = "evm-ethereum-osaka"
-
-func public %ready(v0.i1, v1.i256) -> i256 {
-block0:
-    br v0 block1 block2;
-
-block1:
-    v2.i256 = call %helper;
-    return v2;
-
-block2:
-    v3.i1 = eq v1 0.i256;
-    br v3 block3 block4;
-
-block3:
-    return 0.i256;
-
-block4:
-    v4.*i256 = alloca i256;
-    mstore v4 v1 i256;
-    v5.i256 = call %helper;
-    v6.i256 = sub v1 1.i256;
-    v7.i256 = call %ready 0.i1 v6;
-    v8.i256 = mload v4 i256;
-    v9.i256 = add v5 v8;
-    return v9;
-}
-
-func private %helper() -> i256 {
-block0:
-    v0.*i8 = evm_malloc 32.i256;
-    v1.*i256 = bitcast v0 *i256;
-    mstore v1 111.i256 i256;
-    v2.i256 = mload v1 i256;
-    return v2;
-}
-"#,
-    );
-
-    let ready = ctx.names["ready"];
-    let helper = ctx.names["helper"];
-    let helper_calls: Vec<InstId> = ctx.module.func_store.view(ready, |function| {
-        function
-            .layout
-            .iter_block()
-            .flat_map(|block| function.layout.iter_inst(block))
-            .filter(|&inst| {
-                function
-                    .dfg
-                    .call_info(inst)
-                    .is_some_and(|call| call.callee() == helper)
-            })
-            .collect()
-    });
-    assert_eq!(
-        helper_calls.len(),
-        2,
-        "expected one cold and one hot helper call"
-    );
-
-    let summary = ctx
-        .plan
-        .frame_summaries
-        .get(&ready)
-        .expect("missing ready summary");
-    let active_count = helper_calls
-        .iter()
-        .copied()
-        .filter(|&inst| summary.local_frame_active_before_inst(inst))
-        .count();
-
-    assert_eq!(
-        active_count, 1,
-        "only the hot helper call should be frame-active"
-    );
-    assert!(ctx.plan.entry_live_frame[&helper]);
-}
-
-#[test]
-fn dyn_sp_helper_before_lazy_enter_stays_not_live() {
-    let ctx = dyn_sp_plan_from_src(
-        r#"
-target = "evm-ethereum-osaka"
-
-func public %helper() -> i256 {
-block0:
-    v0.*i8 = evm_malloc 32.i256;
-    v1.*i256 = bitcast v0 *i256;
-    mstore v1 111.i256 i256;
-    v2.i256 = mload v1 i256;
-    return v2;
-}
-
-func public %ready(v0.i1, v1.i256) -> i256 {
-block0:
-    br v0 block1 block2;
-
-block1:
-    v2.i256 = call %helper;
-    return v2;
-
-block2:
-    v3.*i256 = alloca i256;
-    mstore v3 v1 i256;
-    v4.i256 = mload v3 i256;
-    return v4;
-}
-
-func public %entry(v0.i1, v1.i256) -> i256 {
-block0:
-    v2.i256 = call %ready v0 v1;
-    return v2;
-}
-
-object @Contract {
-  section runtime {
-    entry %entry;
-  }
-}
-"#,
-    );
-
-    let helper = ctx.names["helper"];
-    let ready = ctx.names["ready"];
-    let ready_summary = ctx
-        .plan
-        .frame_summaries
-        .get(&ready)
-        .expect("missing ready summary");
-    let helper_call = ctx.module.func_store.view(ready, |function| {
-        function
-            .layout
-            .iter_block()
-            .flat_map(|block| function.layout.iter_inst(block))
-            .find(|&inst| {
-                function
-                    .dfg
-                    .call_info(inst)
-                    .is_some_and(|call| call.callee() == helper)
-            })
-            .expect("call to helper")
-    });
-
-    assert!(
-        !ready_summary.local_frame_active_before_inst(helper_call),
-        "helper call should stay before lazy frame entry"
-    );
-    assert!(!ctx.plan.entry_live_frame[&helper]);
-}
-
-#[test]
-fn dyn_sp_mixed_entry_helper_uses_checked_frontier_init() {
-    let ctx = dyn_sp_plan_from_src(
-        r#"
-target = "evm-ethereum-osaka"
-
-func public %entry(v0.i1, v1.i256) -> i256 {
-block0:
-    br v0 block1 block2;
-
-block1:
-    v2.i256 = call %helper v1;
-    return v2;
-
-block2:
-    v3.i256 = call %ready_caller v1;
-    return v3;
-}
-
-func private %helper(v0.i256) -> i256 {
-block0:
-    v1.i256 = call %target v0;
-    return v1;
-}
-
-func private %ready_caller(v0.i256) -> i256 {
-block0:
-    v1.i1 = eq v0 0.i256;
-    br v1 block1 block2;
-
-block1:
-    return 0.i256;
-
-block2:
-    v2.*i256 = alloca i256;
-    mstore v2 v0 i256;
-    v3.i256 = call %helper 0.i256;
-    v4.i256 = sub v0 1.i256;
-    v5.i256 = call %ready_caller v4;
-    v6.i256 = mload v2 i256;
-    v7.i256 = add v3 v5;
-    v8.i256 = add v7 v6;
-    return v8;
-}
-
-func private %target(v0.i256) -> i256 {
-block0:
-    v1.i1 = eq v0 0.i256;
-    br v1 block1 block2;
-
-block1:
-    return 0.i256;
-
-block2:
-    v2.*i256 = alloca i256;
-    mstore v2 v0 i256;
-    v3.i256 = sub v0 1.i256;
-    v4.i256 = call %target v3;
-    v5.i256 = mload v2 i256;
-    v6.i256 = add v4 v5;
-    return v6;
-}
-"#,
-    );
-
-    let helper = ctx.names["helper"];
-    let target = ctx.names["target"];
-    let helper_call = ctx.module.func_store.view(helper, |function| {
-        function
-            .layout
-            .iter_block()
-            .flat_map(|block| function.layout.iter_inst(block))
-            .find(|&inst| {
-                function
-                    .dfg
-                    .call_info(inst)
-                    .is_some_and(|call| call.callee() == target)
-            })
-            .expect("helper call to target")
-    });
-
-    assert!(
-        ctx.plan
-            .frontier_init_calls
-            .get(&helper)
-            .is_some_and(|calls| calls.contains(&helper_call))
-    );
-    assert!(
-        ctx.plan
-            .checked_frontier_init_calls
-            .get(&helper)
-            .is_some_and(|calls| calls.contains(&helper_call))
-    );
-}
-
-#[test]
-fn dyn_sp_plan_is_deterministic_across_runs() {
-    let src = r#"
-target = "evm-ethereum-osaka"
-
-func public %entry(v0.i256) -> i256 {
-block0:
-    v1.i1 = eq v0 0.i256;
-    br v1 block1 block2;
-
-block1:
-    v2.i256 = call %helper 4.i256;
-    return v2;
-
-block2:
-    v3.i256 = call %ready_caller v0;
-    return v3;
-}
-
-func private %helper(v0.i256) -> i256 {
-block0:
-    v1.i1 = eq v0 0.i256;
-    br v1 block1 block2;
-
-block1:
-    return 0.i256;
-
-block2:
-    v2.*i256 = alloca i256;
-    mstore v2 v0 i256;
-    v3.i256 = call %ready_caller v0;
-    v4.i256 = sub v0 1.i256;
-    v5.i256 = call %target v4;
-    v6.i256 = mload v2 i256;
-    v7.i256 = add v3 v5;
-    v8.i256 = add v7 v6;
-    return v8;
-}
-
-func private %ready_caller(v0.i256) -> i256 {
-block0:
-    v1.i1 = eq v0 0.i256;
-    br v1 block1 block2;
-
-block1:
-    return 0.i256;
-
-block2:
-    v2.*i256 = alloca i256;
-    mstore v2 v0 i256;
-    v3.i256 = call %target v0;
-    v4.i256 = mload v2 i256;
-    v5.i256 = add v3 v4;
-    return v5;
-}
-
-func private %target(v0.i256) -> i256 {
-block0:
-    v1.i1 = eq v0 0.i256;
-    br v1 block1 block2;
-
-block1:
-    return 0.i256;
-
-block2:
-    v2.*i256 = alloca i256;
-    mstore v2 v0 i256;
-    v3.i256 = sub v0 1.i256;
-    v4.i256 = call %target v3;
-    v5.i256 = mload v2 i256;
-    v6.i256 = add v4 v5;
-    return v6;
-}
-
-object @Contract {
-  section runtime {
-    entry %entry;
-  }
-}
-"#;
-
-    let mut expected_frontier_init_calls = None;
-    let mut expected_checked_frontier_init_calls = None;
-    let mut expected_entry_init = None;
-    let mut expected_entry_live_frame = None;
-    let mut expected_frame_summaries = None;
-
-    for _ in 0..8 {
-        let plan = dyn_sp_plan_from_src(src).plan;
-        if let Some(expected) = &expected_frontier_init_calls {
-            assert_eq!(
-                &plan.frontier_init_calls, expected,
-                "frontier init calls changed across runs"
-            );
-        } else {
-            expected_frontier_init_calls = Some(plan.frontier_init_calls.clone());
-        }
-        if let Some(expected) = &expected_checked_frontier_init_calls {
-            assert_eq!(
-                &plan.checked_frontier_init_calls, expected,
-                "checked frontier init calls changed across runs"
-            );
-        } else {
-            expected_checked_frontier_init_calls = Some(plan.checked_frontier_init_calls.clone());
-        }
-        if let Some(expected) = expected_entry_init {
-            assert_eq!(plan.entry_init, expected, "entry init changed across runs");
-        } else {
-            expected_entry_init = Some(plan.entry_init);
-        }
-        if let Some(expected) = &expected_entry_live_frame {
-            assert_eq!(
-                &plan.entry_live_frame, expected,
-                "entry live frame changed across runs"
-            );
-        } else {
-            expected_entry_live_frame = Some(plan.entry_live_frame.clone());
-        }
-        if let Some(expected) = &expected_frame_summaries {
-            assert_eq!(
-                &plan.frame_summaries, expected,
-                "frame summaries changed across runs"
-            );
-        } else {
-            expected_frame_summaries = Some(plan.frame_summaries.clone());
-        }
-    }
-}
-
-#[test]
 fn noreturn_call_skips_continuation_marker_and_preserve() {
     let parsed = parse_module(
         r#"
@@ -1318,9 +924,6 @@ block0:
             let mut liveness = Liveness::new();
             liveness.compute(function, &cfg);
 
-            let mut inst_liveness = InstLiveness::new();
-            inst_liveness.compute(function, &cfg, &liveness);
-
             let mut dom = DomTree::new();
             dom.compute(&cfg);
 
@@ -1328,7 +931,6 @@ block0:
                 func,
                 memory_plan::FuncAnalysis {
                     alloc: StackifyBuilder::new(function, &cfg, &dom, &liveness, 16).compute(),
-                    inst_liveness,
                     block_order: dom.rpo().to_vec(),
                     value_aliases: {
                         let mut value_aliases = SecondaryMap::new();
@@ -1865,6 +1467,7 @@ fn prepare_section_runs_raw_memory_cleanup_after_memory_legalize() {
         .prepare_section(work_module_with_entry(&parsed.module, &funcs, entry))
         .expect("prepare with optional cleanup should succeed");
     let before_dump = dump_entry(&before);
+    let after_dump = dump_entry(&after);
     let before = count_insts(&before);
     let after = count_insts(&after);
 
@@ -1873,8 +1476,12 @@ fn prepare_section_runs_raw_memory_cleanup_after_memory_legalize() {
         "mandatory lowering must still remove object IR when optional cleanup is off:\n{before_dump}"
     );
     assert!(
-        after < before,
-        "late raw-memory cleanup should reduce prepared IR after memory legalization (before={before}, after={after})"
+        !after_dump.contains("obj."),
+        "mandatory lowering must still remove object IR when optional cleanup is on:\n{after_dump}"
+    );
+    assert!(
+        after <= before,
+        "late raw-memory cleanup should not expand prepared machine IR (before={before}, after={after})"
     );
 }
 
@@ -2450,9 +2057,6 @@ block0:
             let mut liveness = Liveness::new();
             liveness.compute(function, &cfg);
 
-            let mut inst_liveness = InstLiveness::new();
-            inst_liveness.compute(function, &cfg, &liveness);
-
             let mut dom = DomTree::new();
             dom.compute(&cfg);
 
@@ -2463,7 +2067,6 @@ block0:
                 func,
                 memory_plan::FuncAnalysis {
                     alloc,
-                    inst_liveness,
                     block_order,
                     value_aliases: {
                         let mut value_aliases = SecondaryMap::new();
@@ -2615,9 +2218,6 @@ block2:
             let mut liveness = Liveness::new();
             liveness.compute(function, &cfg);
 
-            let mut inst_liveness = InstLiveness::new();
-            inst_liveness.compute(function, &cfg, &liveness);
-
             let mut dom = DomTree::new();
             dom.compute(&cfg);
 
@@ -2628,7 +2228,6 @@ block2:
                 func,
                 memory_plan::FuncAnalysis {
                     alloc,
-                    inst_liveness,
                     block_order,
                     value_aliases: {
                         let mut value_aliases = SecondaryMap::new();

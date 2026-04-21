@@ -24,16 +24,16 @@ evm:
 // func public %main() -> i256
 main:
   block0:
-    PUSH1 0x1b (27)  // return 27.i256;
+    PUSH1 0x1b (27)  // return v0;
     SWAP1
     JUMP
 
 // func public %entry()
 entry:
   block0:
-    PUSH1 0x1b (27)  // mstore 0.i256 27.i256 i256;
+    PUSH1 0x1b (27)  // evm_mstore v0 27.i256;
     PUSH0
     MSTORE
-    PUSH1 0x20 (32)  // evm_return 0.i256 32.i256;
+    PUSH1 0x20 (32)  // evm_return v0 32.i256;
     PUSH0
     RETURN

@@ -10,9 +10,9 @@ object: Contract
   total: 82 bytes
 
 functions:
-  const_ptr: ir_blocks=1 ir_insts=4 vcode_ops=8 fixups=0 imm_bytes=2
+  const_ptr: ir_blocks=1 ir_insts=3 vcode_ops=8 fixups=0 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  main: ir_blocks=1 ir_insts=9 vcode_ops=44 fixups=4 imm_bytes=12
+  main: ir_blocks=7 ir_insts=21 vcode_ops=44 fixups=4 imm_bytes=12
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   entry: ir_blocks=1 ir_insts=3 vcode_ops=9 fixups=2 imm_bytes=1
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
