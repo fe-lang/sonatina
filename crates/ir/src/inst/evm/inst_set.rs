@@ -121,6 +121,8 @@ pub struct EvmInstSet(
     evm::EvmCalldataSize,
     evm::EvmCodeSize,
     evm::EvmCodeCopy,
+    evm::EvmGasPrice,
+    evm::EvmExtCodeSize,
     evm::EvmExtCodeCopy,
     evm::EvmReturnDataSize,
     evm::EvmReturnDataCopy,

@@ -583,6 +583,8 @@ impl EvmFunctionLowering<'_> {
             EvmInstKind::EvmCalldataSize(_) => basic_op(ctx, &[OpCode::CALLDATASIZE]),
             EvmInstKind::EvmCodeSize(_) => basic_op(ctx, &[OpCode::CODESIZE]),
             EvmInstKind::EvmCodeCopy(_) => basic_op(ctx, &[OpCode::CODECOPY]),
+            EvmInstKind::EvmGasPrice(_) => basic_op(ctx, &[OpCode::GASPRICE]),
+            EvmInstKind::EvmExtCodeSize(_) => basic_op(ctx, &[OpCode::EXTCODESIZE]),
             EvmInstKind::EvmExtCodeCopy(_) => basic_op(ctx, &[OpCode::EXTCODECOPY]),
             EvmInstKind::EvmReturnDataSize(_) => basic_op(ctx, &[OpCode::RETURNDATASIZE]),
             EvmInstKind::EvmReturnDataCopy(_) => basic_op(ctx, &[OpCode::RETURNDATACOPY]),
