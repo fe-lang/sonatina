@@ -14,8 +14,8 @@ functions:
     mem: scratch_words=2 stable_words=0 stable_mode=None entry_abs_words=2 abs_words_end=2
 
 evm:
-  case field0: calldata_len=32 success reason=Return gas_used=21224 gas_refunded=0 logs=0 output=call len=32 tx_gas=21128 runtime_gas=96
-  case field1: calldata_len=32 success reason=Return gas_used=21223 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=83
+  case field0: calldata_len=32 success reason=Return gas_used=21212 gas_refunded=0 logs=0 output=call len=32 tx_gas=21128 runtime_gas=84
+  case field1: calldata_len=32 success reason=Return gas_used=21211 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=71
 
 
 --------------- DEBUG ---------------
@@ -25,11 +25,11 @@ entry:
   block0:
     PUSH0  // v0.i256 = evm_calldata_load 0.i256;
     CALLDATALOAD
-    PUSH1 0xa0 (160)  // v5.*@Data = alloca @Data;
+    PUSH1 0x20 (32)  // v5.*@Data = alloca @Data;
     PUSH1 0xa (10)  // mstore v6 10.i256 i256;
     DUP2
     MSTORE
-    PUSH1 0xc0 (192)  // v9.*i256 = gep v5 0.i256 1.i256;
+    PUSH1 0x40 (64)  // v9.*i256 = gep v5 0.i256 1.i256;
     PUSH1 0x14 (20)  // mstore v9 20.i256 i256;
     DUP2
     MSTORE

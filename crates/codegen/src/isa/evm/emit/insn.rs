@@ -15,9 +15,7 @@ use crate::{
 };
 
 use super::{
-    super::{
-        DynSpInitKind, FREE_PTR_SLOT, FrameSite, ObjLoc, STATIC_BASE, WORD_BYTES, opcode::OpCode,
-    },
+    super::{DynSpInitKind, FREE_PTR_SLOT, FrameSite, ObjLoc, WORD_BYTES, opcode::OpCode},
     EvmFunctionLowering,
     stack::{
         emit_dyn_frame_addr, emit_malloc_base, emit_narrow_signed_saturating_binary,
@@ -624,14 +622,14 @@ impl EvmFunctionLowering<'_> {
             EvmInstKind::EvmMalloc(_) => {
                 let needs_dyn_sp_clamp = self.malloc_needs_dyn_sp_clamp(insn);
                 let has_persistent_mallocs = self.section_plan.has_persistent_mallocs;
-                let has_explicit_free_ptr_writes = self.section_plan.has_explicit_free_ptr_writes;
+                let free_ptr_slot_may_be_written = self.section_plan.free_ptr_slot_may_be_written;
                 let mem_plan = &self.function_plan.mem_plan;
                 let is_transient = mem_plan.transient_mallocs.contains(&insn);
 
                 let dyn_base_words = self
                     .dyn_base()
-                    .checked_sub(STATIC_BASE)
-                    .expect("dyn base below static base")
+                    .checked_sub(self.section_plan.arena_base)
+                    .expect("dyn base below arena base")
                     / WORD_BYTES;
                 let mut future_words = mem_plan
                     .malloc_future_abs_words
@@ -649,7 +647,9 @@ impl EvmFunctionLowering<'_> {
                     future_words = future_words.max(mem_plan.return_escape_caller_abs_words);
                 }
 
-                let min_base_bytes = STATIC_BASE
+                let min_base_bytes = self
+                    .section_plan
+                    .arena_base
                     .checked_add(
                         WORD_BYTES
                             .checked_mul(future_words)
@@ -676,11 +676,10 @@ impl EvmFunctionLowering<'_> {
                         ctx.push(OpCode::POP);
                     }
 
-                    if aligned_size_imm.is_some()
-                        && !needs_dyn_sp_clamp
+                    let can_use_fixed_transient_base = !needs_dyn_sp_clamp
                         && !has_persistent_mallocs
-                        && !has_explicit_free_ptr_writes
-                    {
+                        && !free_ptr_slot_may_be_written;
+                    if can_use_fixed_transient_base {
                         push_bytes(ctx, &u32_to_be(min_base_bytes));
                     } else {
                         emit_malloc_base(ctx, min_base_bytes, needs_dyn_sp_clamp);

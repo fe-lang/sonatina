@@ -10,7 +10,7 @@ object: Contract
   total: 1 bytes
 
 functions:
-  entry: ir_blocks=1 ir_insts=3 vcode_ops=5 fixups=0 imm_bytes=2
+  entry: ir_blocks=1 ir_insts=3 vcode_ops=5 fixups=0 imm_bytes=0
     mem: scratch_words=1 stable_words=0 stable_mode=None entry_abs_words=1 abs_words_end=1
 
 evm:

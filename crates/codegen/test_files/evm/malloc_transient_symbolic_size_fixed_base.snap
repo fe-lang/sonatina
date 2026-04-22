@@ -1,0 +1,48 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: "String::from_utf8(out).unwrap()"
+input_file: test_files/evm/malloc_transient_symbolic_size_fixed_base.sntn
+---
+evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
+
+object: Contract
+  section init: 20 bytes
+  section runtime: 8 bytes
+  total: 28 bytes
+
+functions:
+  entry: ir_blocks=1 ir_insts=2 vcode_ops=6 fixups=0 imm_bytes=2
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
+  init: ir_blocks=1 ir_insts=6 vcode_ops=12 fixups=2 imm_bytes=3
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
+
+evm:
+  deploy: success reason=Return gas_used=54954 gas_refunded=0 logs=0 output=create len=8 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
+  case ok: calldata_len=0 success reason=Return gas_used=21016 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=16
+
+
+--------------- DEBUG ---------------
+
+// func public %entry()
+entry:
+  block0:
+    PUSH1 0x1 (1)  // mstore 0.i256 1.i256 i256;
+    PUSH0
+    MSTORE
+    PUSH1 0x20 (32)  // evm_return 0.i256 32.i256;
+    PUSH0
+    RETURN
+
+// func public %init()
+init:
+  block0:
+    PUSH0 0x0 (0)  // v0.i256 = sym_addr &runtime;
+    PUSH0 0x0 (0)  // v1.i256 = sym_size &runtime;
+    PUSH1 0x20 (32)  // v2.*i256 = evm_malloc v1;
+    DUP1  // evm_code_copy v3 v0 v1;
+    SWAP3
+    DUP3
+    SWAP2
+    CODECOPY
+    SWAP1  // evm_return v3 v1;
+    RETURN

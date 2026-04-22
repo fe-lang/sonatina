@@ -6,8 +6,8 @@ input_file: test_files/evm/aggregate_legalize_noopt.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 99 bytes
-  total: 99 bytes
+  section runtime: 90 bytes
+  total: 90 bytes
 
 functions:
   entry: ir_blocks=1 ir_insts=5 vcode_ops=14 fixups=2 imm_bytes=2
@@ -16,7 +16,7 @@ functions:
     mem: scratch_words=6 stable_words=0 stable_mode=None entry_abs_words=6 abs_words_end=6
 
 evm:
-  case ok: calldata_len=64 success reason=Return gas_used=21511 gas_refunded=0 logs=0 output=call len=32 tx_gas=21280 runtime_gas=231
+  case ok: calldata_len=64 success reason=Return gas_used=21499 gas_refunded=0 logs=0 output=call len=32 tx_gas=21280 runtime_gas=219
 
 
 --------------- DEBUG ---------------
@@ -43,54 +43,54 @@ entry:
 agg_noopt:
   block0:
     JUMPDEST
-    PUSH1 0xe0 (224)  // v20.*@slice = alloca @slice;
-    PUSH2 0x120 (288)  // v12.*@slice = alloca @slice;
-    PUSH2 0x120 (288)  // v15.*i256 = gep v12 0.i64 0.i64;
-    PUSH1 0xa0 (160)  // mstore v15 undef.i256 i256;
+    PUSH1 0x60 (96)  // v20.*@slice = alloca @slice;
+    PUSH1 0xa0 (160)  // v12.*@slice = alloca @slice;
+    PUSH1 0xa0 (160)  // v15.*i256 = gep v12 0.i64 0.i64;
+    PUSH1 0x20 (32)  // mstore v15 undef.i256 i256;
     MLOAD
     SWAP1
     MSTORE
-    PUSH2 0x140 (320)  // v18.*i256 = gep v12 0.i64 1.i64;
-    PUSH1 0xc0 (192)  // mstore v18 undef.i256 i256;
+    PUSH1 0xc0 (192)  // v18.*i256 = gep v12 0.i64 1.i64;
+    PUSH1 0x40 (64)  // mstore v18 undef.i256 i256;
     MLOAD
     SWAP1
     MSTORE
-    PUSH2 0x120 (288)  // v19.*i256 = gep v12 0.i64 0.i64;
+    PUSH1 0xa0 (160)  // v19.*i256 = gep v12 0.i64 0.i64;
     SWAP3  // mstore v19 v0 i256;
     SWAP1
     SWAP3
     MSTORE
-    PUSH2 0x120 (288)  // v21.*i256 = gep v12 0.i64 0.i64;
+    PUSH1 0xa0 (160)  // v21.*i256 = gep v12 0.i64 0.i64;
     MLOAD  // v22.i256 = mload v21 i256;
-    PUSH1 0xe0 (224)  // v23.*i256 = gep v20 0.i64 0.i64;
+    PUSH1 0x60 (96)  // v23.*i256 = gep v20 0.i64 0.i64;
     MSTORE  // mstore v23 v22 i256;
     SWAP1  // v24.*i256 = gep v12 0.i64 1.i64;
     POP
-    PUSH2 0x140 (320)
+    PUSH1 0xc0 (192)
     MLOAD  // v25.i256 = mload v24 i256;
-    PUSH2 0x100 (256)  // v26.*i256 = gep v20 0.i64 1.i64;
+    PUSH1 0x80 (128)  // v26.*i256 = gep v20 0.i64 1.i64;
     MSTORE  // mstore v26 v25 i256;
-    PUSH2 0x100 (256)  // v27.*i256 = gep v20 0.i64 1.i64;
+    PUSH1 0x80 (128)  // v27.*i256 = gep v20 0.i64 1.i64;
     SWAP1  // mstore v27 v1 i256;
     SWAP2
     SWAP1
     MSTORE
-    PUSH1 0xa0 (160)  // v4.*@slice = alloca @slice;
-    PUSH1 0xe0 (224)  // v28.*i256 = gep v20 0.i64 0.i64;
+    PUSH1 0x20 (32)  // v4.*@slice = alloca @slice;
+    PUSH1 0x60 (96)  // v28.*i256 = gep v20 0.i64 0.i64;
     MLOAD  // v29.i256 = mload v28 i256;
-    PUSH1 0xa0 (160)  // v30.*i256 = gep v4 0.i64 0.i64;
+    PUSH1 0x20 (32)  // v30.*i256 = gep v4 0.i64 0.i64;
     MSTORE  // mstore v30 v29 i256;
     SWAP1  // v31.*i256 = gep v20 0.i64 1.i64;
     POP
-    PUSH2 0x100 (256)
+    PUSH1 0x80 (128)
     MLOAD  // v32.i256 = mload v31 i256;
-    PUSH1 0xc0 (192)  // v33.*i256 = gep v4 0.i64 1.i64;
+    PUSH1 0x40 (64)  // v33.*i256 = gep v4 0.i64 1.i64;
     MSTORE  // mstore v33 v32 i256;
-    PUSH1 0xa0 (160)  // v34.*i256 = gep v4 0.i64 0.i64;
+    PUSH1 0x20 (32)  // v34.*i256 = gep v4 0.i64 0.i64;
     MLOAD  // v35.i256 = mload v34 i256;
     SWAP1  // v36.*i256 = gep v4 0.i64 1.i64;
     POP
-    PUSH1 0xc0 (192)
+    PUSH1 0x40 (64)
     MLOAD  // v37.i256 = mload v36 i256;
     ADD  // v8.i256 = add v35 v37;
     SWAP1  // return v8;

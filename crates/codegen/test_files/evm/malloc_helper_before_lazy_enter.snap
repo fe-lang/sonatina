@@ -18,8 +18,8 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=1 abs_words_end=0
 
 evm:
-  case before_enter: calldata_len=8 success reason=Return gas_used=21218 gas_refunded=0 logs=0 output=call len=32 tx_gas=21056 runtime_gas=162
-  case active: calldata_len=8 success reason=Return gas_used=21175 gas_refunded=0 logs=0 output=call len=32 tx_gas=21044 runtime_gas=131
+  case before_enter: calldata_len=8 success reason=Return gas_used=21206 gas_refunded=0 logs=0 output=call len=32 tx_gas=21056 runtime_gas=150
+  case active: calldata_len=8 success reason=Return gas_used=21163 gas_refunded=0 logs=0 output=call len=32 tx_gas=21044 runtime_gas=119
 
 
 --------------- DEBUG ---------------
@@ -28,7 +28,7 @@ evm:
 helper:
   block0:
     JUMPDEST
-    PUSH1 0xc0 (192)  // v0.*i256 = evm_malloc 32.i256;
+    PUSH1 0x40 (64)  // v0.*i256 = evm_malloc 32.i256;
     PUSH1 0x6f (111)  // mstore v0 111.i256 i256;
     DUP2
     MSTORE
@@ -53,7 +53,7 @@ ready:
     JUMP
   block2:
     JUMPDEST
-    PUSH1 0xa0 (160)  // v3.*i256 = alloca i256;
+    PUSH1 0x20 (32)  // v3.*i256 = alloca i256;
     SWAP1  // mstore v3 v1 i256;
     DUP2
     MSTORE

@@ -15,7 +15,6 @@ use crate::machinst::{
 };
 
 use super::{
-    STATIC_BASE,
     emit::{EvmFunctionLowering, push_op},
     late_alias::compute_evm_late_aliases,
     late_section_merge::run_late_section_terminal_outline,
@@ -128,9 +127,9 @@ impl EvmBackend {
         let mut out = String::new();
         writeln!(
             &mut out,
-            "evm mem plan: global_dyn_base=0x{:x} static_base=0x{:x} scratch_peak_words={} static_chain_peak_words={}",
+            "evm mem plan: global_dyn_base=0x{:x} arena_base=0x{:x} scratch_peak_words={} static_chain_peak_words={}",
             prepared.section_plan().dyn_base,
-            STATIC_BASE,
+            prepared.section_plan().arena_base,
             prepared.section_plan().scratch_peak_words,
             prepared.section_plan().static_chain_peak_words
         )
@@ -148,7 +147,7 @@ impl EvmBackend {
                 StableMode::StaticAbs { base_word } => {
                     format!(
                         "StaticAbs(base=0x{:x})",
-                        STATIC_BASE + (base_word * WORD_BYTES)
+                        func_plan.abs_addr_for_word(base_word)
                     )
                 }
             };
@@ -165,24 +164,16 @@ impl EvmBackend {
 
             let addr_of = |loc: ObjLoc| match loc {
                 ObjLoc::ScratchAbs(off) => {
-                    let addr_bytes = STATIC_BASE
-                        .checked_add(off.checked_mul(WORD_BYTES).expect("address bytes overflow"))
-                        .expect("address bytes overflow");
+                    let addr_bytes = func_plan.abs_addr_for_word(off);
                     format!("0x{addr_bytes:x}")
                 }
                 ObjLoc::StableAbs(off) => {
                     let base_word = func_plan
                         .stable_base_word()
                         .expect("stable abs object missing stable base");
-                    let addr_bytes = STATIC_BASE
-                        .checked_add(
-                            base_word
-                                .checked_add(off)
-                                .expect("address words overflow")
-                                .checked_mul(WORD_BYTES)
-                                .expect("address bytes overflow"),
-                        )
-                        .expect("address bytes overflow");
+                    let addr_bytes = func_plan.abs_addr_for_word(
+                        base_word.checked_add(off).expect("address words overflow"),
+                    );
                     format!("0x{addr_bytes:x}")
                 }
                 ObjLoc::StableFrame(off) => {

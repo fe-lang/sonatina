@@ -6,18 +6,18 @@ input_file: test_files/evm/arena_alloc_spills.sntn
 evm.config: stack_reach=16 vcode=false bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 353 bytes
-  total: 353 bytes
+  section runtime: 346 bytes
+  total: 346 bytes
 
 functions:
   entry: ir_blocks=1 ir_insts=7 vcode_ops=27 fixups=2 imm_bytes=10
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=8 abs_words_end=0
   caller: ir_blocks=1 ir_insts=40 vcode_ops=153 fixups=2 imm_bytes=33
-    mem: scratch_words=5 stable_words=1 stable_mode=StaticAbs(base=0x1a0) entry_abs_words=8 abs_words_end=9
+    mem: scratch_words=5 stable_words=1 stable_mode=StaticAbs(base=0x140) entry_abs_words=8 abs_words_end=9
   mid: ir_blocks=1 ir_insts=6 vcode_ops=31 fixups=2 imm_bytes=1
-    mem: scratch_words=0 stable_words=1 stable_mode=StaticAbs(base=0x1c0) entry_abs_words=9 abs_words_end=10
+    mem: scratch_words=0 stable_words=1 stable_mode=StaticAbs(base=0x160) entry_abs_words=9 abs_words_end=10
   callee: ir_blocks=1 ir_insts=33 vcode_ops=71 fixups=0 imm_bytes=8
     mem: scratch_words=8 stable_words=0 stable_mode=None entry_abs_words=10 abs_words_end=8
 
 evm:
-  case ok: calldata_len=8 success reason=Return gas_used=21940 gas_refunded=0 logs=0 output=call len=32 tx_gas=21056 runtime_gas=884
+  case ok: calldata_len=8 success reason=Return gas_used=21931 gas_refunded=0 logs=0 output=call len=32 tx_gas=21056 runtime_gas=875

@@ -13,9 +13,9 @@ functions:
   helper: ir_blocks=1 ir_insts=1 vcode_ops=4 fixups=0 imm_bytes=1
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=2 abs_words_end=0
   main: ir_blocks=1 ir_insts=14 vcode_ops=27 fixups=2 imm_bytes=6
-    mem: scratch_words=1 stable_words=1 stable_mode=StaticAbs(base=0xc0) entry_abs_words=1 abs_words_end=2
+    mem: scratch_words=1 stable_words=1 stable_mode=StaticAbs(base=0x40) entry_abs_words=1 abs_words_end=2
   entry: ir_blocks=1 ir_insts=3 vcode_ops=9 fixups=2 imm_bytes=1
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=1 abs_words_end=0
 
 evm:
-  case ok: calldata_len=8 success reason=Return gas_used=21204 gas_refunded=0 logs=0 output=call len=32 tx_gas=21056 runtime_gas=148
+  case ok: calldata_len=8 success reason=Return gas_used=21192 gas_refunded=0 logs=0 output=call len=32 tx_gas=21056 runtime_gas=136

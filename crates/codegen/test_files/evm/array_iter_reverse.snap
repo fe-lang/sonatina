@@ -16,7 +16,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=22078 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=1078
+  case ok: calldata_len=0 success reason=Return gas_used=22072 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=1072
 
 
 --------------- DEBUG ---------------
@@ -26,13 +26,13 @@ test_view_param_local_ref_take_reverse:
   block0:
     PUSH1 0x40 (64)  // v2.*i256 = evm_malloc 256.i256;
     MLOAD
-    PUSH1 0x9f (159)
+    PUSH1 0x5f (95)
     DUP2
     GT
     PUSH1 `pc + (4)`
     JUMPI
     POP
-    PUSH1 0xa0 (160)
+    PUSH1 0x60 (96)
     JUMPDEST
     DUP1
     PUSH2 0x100 (256)
@@ -86,13 +86,13 @@ test_view_param_local_ref_take_reverse:
     MSTORE
     PUSH1 0x40 (64)  // v37.*i256 = evm_malloc 64.i256;
     MLOAD
-    PUSH1 0x9f (159)
+    PUSH1 0x5f (95)
     DUP2
     GT
     PUSH1 `pc + (4)`
     JUMPI
     POP
-    PUSH1 0xa0 (160)
+    PUSH1 0x60 (96)
     JUMPDEST
     PUSH1 0x4 (4)  // mstore v39 4.i256 i256;
     DUP2
@@ -127,13 +127,13 @@ test_view_param_local_ref_take_reverse:
     JUMPDEST
     PUSH1 0x40 (64)  // v56.*i256 = evm_malloc 64.i256;
     MLOAD
-    PUSH1 0x9f (159)
+    PUSH1 0x5f (95)
     DUP2
     GT
     PUSH1 `pc + (4)`
     JUMPI
     POP
-    PUSH1 0xa0 (160)
+    PUSH1 0x60 (96)
     JUMPDEST
     PUSH1 0x4 (4)  // mstore v58 4.i256 i256;
     DUP2

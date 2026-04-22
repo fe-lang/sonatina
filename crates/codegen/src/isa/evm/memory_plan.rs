@@ -35,6 +35,7 @@ pub const STATIC_BASE: u32 = 0xa0;
 
 #[derive(Clone, Debug)]
 pub struct ProgramMemoryPlan {
+    pub arena_base: u32,
     pub scratch_peak_words: u32,
     pub static_chain_peak_words: u32,
     pub global_dyn_base: u32,
@@ -45,6 +46,7 @@ pub struct ProgramMemoryPlan {
 
 #[derive(Clone, Debug)]
 pub struct FuncMemPlan {
+    pub arena_base: u32,
     pub scratch_words: u32,
     pub stable_words: u32,
     pub stable_mode: StableMode,
@@ -60,6 +62,10 @@ pub struct FuncMemPlan {
 }
 
 impl FuncMemPlan {
+    pub fn abs_addr_for_word(&self, word: u32) -> u32 {
+        abs_addr_for_word(self.arena_base, word)
+    }
+
     pub fn stable_base_word(&self) -> Option<u32> {
         match self.stable_mode {
             StableMode::StaticAbs { base_word } => Some(base_word),
@@ -93,13 +99,15 @@ impl FuncMemPlan {
 
     pub fn abs_addr_for_loc(&self, loc: ObjLoc) -> Option<u32> {
         match loc {
-            ObjLoc::ScratchAbs(word) => Some(abs_addr_for_word(word)),
-            ObjLoc::StableAbs(word) => Some(abs_addr_for_word(
-                self.stable_base_word()
-                    .expect("stable absolute object missing base word")
-                    .checked_add(word)
-                    .expect("stable absolute word overflow"),
-            )),
+            ObjLoc::ScratchAbs(word) => Some(self.abs_addr_for_word(word)),
+            ObjLoc::StableAbs(word) => Some(
+                self.abs_addr_for_word(
+                    self.stable_base_word()
+                        .expect("stable absolute object missing base word")
+                        .checked_add(word)
+                        .expect("stable absolute word overflow"),
+                ),
+            ),
             ObjLoc::StableFrame(_) | ObjLoc::StackPinned(_) => None,
         }
     }
@@ -111,6 +119,22 @@ impl FuncMemPlan {
             }
             ObjLoc::StackPinned(_) => None,
         })
+    }
+}
+
+impl ProgramMemoryPlan {
+    pub(crate) fn set_arena_base(&mut self, arena_base: u32) {
+        self.arena_base = arena_base;
+        self.global_dyn_base = abs_addr_for_word(
+            arena_base,
+            self.scratch_peak_words
+                .checked_add(self.static_chain_peak_words)
+                .expect("global dynamic base word overflow"),
+        );
+
+        for func_plan in self.funcs.values_mut() {
+            func_plan.arena_base = arena_base;
+        }
     }
 }
 
@@ -918,7 +942,9 @@ pub(crate) fn compute_program_memory_plan(
         .max()
         .unwrap_or(0);
 
+    let arena_base = STATIC_BASE;
     let global_dyn_base = abs_addr_for_word(
+        arena_base,
         scratch_peak_words
             .checked_add(static_chain_peak_words)
             .expect("global dynamic base word overflow"),
@@ -996,6 +1022,7 @@ pub(crate) fn compute_program_memory_plan(
         funcs_plan.insert(
             func,
             FuncMemPlan {
+                arena_base,
                 scratch_words: placement.scratch_words,
                 stable_words: placement.stable_words,
                 stable_mode,
@@ -1013,6 +1040,7 @@ pub(crate) fn compute_program_memory_plan(
     }
 
     let plan = ProgramMemoryPlan {
+        arena_base,
         scratch_peak_words,
         static_chain_peak_words,
         global_dyn_base,
@@ -2091,8 +2119,8 @@ fn mem_expansion_gas(words: u32) -> u64 {
     u64::try_from(lin.saturating_add(quad)).expect("memory expansion gas overflow")
 }
 
-fn abs_addr_for_word(word: u32) -> u32 {
-    STATIC_BASE
+fn abs_addr_for_word(arena_base: u32, word: u32) -> u32 {
+    arena_base
         .checked_add(
             word.checked_mul(WORD_BYTES)
                 .expect("absolute address overflow"),
