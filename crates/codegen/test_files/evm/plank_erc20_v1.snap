@@ -1,0 +1,178 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: "String::from_utf8(out).unwrap()"
+input_file: test_files/evm/plank_erc20_v1.sntn
+---
+evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
+
+object: Contract
+  section runtime: 122 bytes
+  section init: 179 bytes
+  total: 301 bytes
+
+functions:
+  fn_2: ir_blocks=3 ir_insts=5 vcode_ops=13 fixups=1 imm_bytes=1
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
+  init: ir_blocks=1 ir_insts=19 vcode_ops=36 fixups=5 imm_bytes=6
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
+  run: ir_blocks=7 ir_insts=40 vcode_ops=92 fixups=7 imm_bytes=10
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
+
+evm:
+  deploy: success reason=Return gas_used=82661 gas_refunded=0 logs=0 output=create len=122 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
+  case balance-zero: calldata_len=36 success reason=Return gas_used=23480 gas_refunded=0 logs=0 output=call len=32 tx_gas=21192 runtime_gas=2288
+
+
+--------------- DEBUG ---------------
+
+// func private %fn_2(v0.i256) -> i256
+fn_2:
+  block0:
+    JUMPDEST
+    DUP1  // v2.i256 = shr 160.i256 v0;
+    PUSH1 0xa0 (160)
+    SHR
+    PUSH1 section_unit0  // br v5 block3 block2;
+    JUMPI
+  block3:
+    JUMPDEST
+    SWAP1  // return v0;
+    JUMP
+
+// func public %init()
+init:
+  block0:
+    PUSH0  // v1.*i256 = evm_malloc 64.i256;
+    PUSH0 0x0 (0)  // v3.i256 = sym_size .;
+    PUSH1 0x40 (64)  // evm_code_copy v2 v3 64.i256;
+    SWAP1
+    DUP3
+    CODECOPY
+    DUP1  // v4.i256 = mload v2 i256;
+    MLOAD
+    PUSH1 `pc + (4)`  // v5.i256 = call %fn_2 v4;
+    SWAP1
+    PUSH1 FuncRef(2)
+    JUMP
+    JUMPDEST
+    SWAP1  // v7.i256 = add v2 32.i256;
+    PUSH1 0x20 (32)
+    ADD
+    MLOAD  // v8.i256 = mload v7 i256;
+    PUSH0  // v16.*i256 = evm_malloc 32.i256;
+    SWAP2  // mstore v17 v5 i256;
+    DUP3
+    MSTORE
+    PUSH1 0x20 (32)  // v18.i256 = evm_keccak256 v17 32.i256;
+    SWAP1
+    SWAP2
+    KECCAK256
+    SSTORE  // evm_sstore v18 v8;
+    PUSH0 0x0 (0)  // v10.i256 = sym_size &runtime;
+    PUSH0  // v11.*i256 = evm_malloc v10;
+    PUSH0 0x0 (0)  // v13.i256 = sym_addr &runtime;
+    DUP3  // evm_code_copy v12 v13 v10;
+    SWAP1
+    DUP3
+    CODECOPY
+    RETURN  // evm_return v12 v10;
+
+// func public %run()
+run:
+  block0:
+    PUSH0  // v1.i256 = evm_calldata_load 0.i256;
+    CALLDATALOAD
+    PUSH1 0xe0 (224)  // v3.i256 = shr 224.i256 v1;
+    SHR
+    PUSH4 0xa9059cbb (2835717307)  // v5.i1 = eq v3 2835717307.i256;
+    DUP2
+    EQ
+    PUSH1 block2  // br v5 block2 block1;
+    JUMPI
+  block1:
+    PUSH4 0x70a08231 (1889567281)  // v25.i1 = eq v3 1889567281.i256;
+    EQ
+    ISZERO
+    PUSH1 section_unit0  // br v25 block8 block7;
+    JUMPI
+  block8:
+    JUMPDEST
+    PUSH1 0x4 (4)  // v26.i256 = evm_calldata_load 4.i256;
+    CALLDATALOAD
+    PUSH1 `pc + (4)`  // v27.i256 = call %fn_2 v26;
+    SWAP1
+    PUSH1 FuncRef(2)
+    JUMP
+    JUMPDEST
+    PUSH0  // v34.*i256 = evm_malloc 32.i256;
+    SWAP1  // mstore v35 v27 i256;
+    DUP2
+    MSTORE
+    PUSH1 0x20 (32)  // v36.i256 = evm_keccak256 v35 32.i256;
+    SWAP1
+    KECCAK256
+    SLOAD  // v29.i256 = evm_sload v36;
+    PUSH0  // v31.*i256 = evm_malloc 32.i256;
+    SWAP1  // mstore v32 v29 i256;
+    DUP2
+    MSTORE
+    PUSH1 0x20 (32)  // evm_return v32 32.i256;
+    SWAP1
+    RETURN
+  block2:
+    JUMPDEST
+    POP  // v7.i256 = evm_calldata_load 4.i256;
+    PUSH1 0x4 (4)
+    CALLDATALOAD
+    PUSH1 `pc + (4)`  // v8.i256 = call %fn_2 v7;
+    SWAP1
+    PUSH1 FuncRef(2)
+    JUMP
+    JUMPDEST
+    PUSH1 0x24 (36)  // v10.i256 = evm_calldata_load 36.i256;
+    CALLDATALOAD
+    CALLER  // v11.i256 = evm_caller;
+    PUSH0  // v28.*i256 = evm_malloc 32.i256;
+    SWAP1  // mstore v29 v11 i256;
+    DUP2
+    MSTORE
+    PUSH1 0x20 (32)  // v30.i256 = evm_keccak256 v29 32.i256;
+    SWAP1
+    KECCAK256
+    DUP1  // v13.i256 = evm_sload v30;
+    SLOAD
+    DUP3  // v14.i1 = lt v13 v10;
+    DUP2
+    LT
+    PUSH1 section_unit0  // br v14 block5 block6;
+    JUMPI
+  block6:
+    DUP3  // v18.i256 = sub v13 v10;
+    SWAP1
+    SUB
+    SWAP1  // evm_sstore v30 v18;
+    SSTORE
+    PUSH0  // v31.*i256 = evm_malloc 32.i256;
+    SWAP2  // mstore v32 v8 i256;
+    DUP3
+    MSTORE
+    PUSH1 0x20 (32)  // v33.i256 = evm_keccak256 v32 32.i256;
+    SWAP1
+    SWAP2
+    KECCAK256
+    DUP1  // v21.i256 = evm_sload v33;
+    SLOAD
+    SWAP1  // v22.i256 = add v21 v10;
+    SWAP2
+    ADD
+    SWAP1  // evm_sstore v33 v22;
+    SSTORE
+    STOP  // evm_stop;
+
+// synthetic section unit
+__evm_shared_tail_0:
+  block0:
+    JUMPDEST
+    PUSH0
+    PUSH0
+    REVERT

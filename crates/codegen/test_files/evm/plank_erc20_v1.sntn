@@ -1,0 +1,133 @@
+#! evm.config: { opt: 2, vcode: true, bytecode_hex: false, stackify_trace: false, evm_trace: false }
+#! evm.case: balance-zero
+#!   calldata: bytes(0x70a08231) u256(0)
+#!   expect: return u256(0)
+
+target = "evm-ethereum-osaka"
+
+func private %fn_0() -> i256 {
+    block0:
+        return 0.i256;
+}
+
+func private %fn_1() {
+    block0:
+        v0.i256 = call %fn_0;
+        evm_revert v0 0.i256;
+}
+
+func private %fn_2(v0.i256) -> i256 {
+    block0:
+        v2.i256 = shr 160.i256 v0;
+        v4.i1 = gt v2 0.i256;
+        br v4 block2 block1;
+
+    block1:
+        jump block3;
+
+    block2:
+        call %fn_1;
+        evm_invalid;
+
+    block3:
+        return v0;
+}
+
+func private %fn_3(v0.i256) -> i256 {
+    block0:
+        v2.*i8 = evm_malloc 32.i256;
+        v3.i256 = ptr_to_int v2 i256;
+        mstore v3 v0 i256;
+        v4.i256 = evm_keccak256 v3 32.i256;
+        return v4;
+}
+
+func public %init() {
+    block0:
+        v1.*i8 = evm_malloc 64.i256;
+        v2.i256 = ptr_to_int v1 i256;
+        v3.i256 = sym_size .;
+        evm_code_copy v2 v3 64.i256;
+        v4.i256 = mload v2 i256;
+        v5.i256 = call %fn_2 v4;
+        v7.i256 = add v2 32.i256;
+        v8.i256 = mload v7 i256;
+        v9.i256 = call %fn_3 v5;
+        evm_sstore v9 v8;
+        v10.i256 = sym_size &runtime;
+        v11.*i8 = evm_malloc v10;
+        v12.i256 = ptr_to_int v11 i256;
+        v13.i256 = sym_addr &runtime;
+        v14.i256 = sym_size &runtime;
+        evm_code_copy v12 v13 v14;
+        v15.i256 = sym_size &runtime;
+        evm_return v12 v15;
+}
+
+func public %run() {
+    block0:
+        v1.i256 = evm_calldata_load 0.i256;
+        v3.i256 = shr 224.i256 v1;
+        v5.i1 = eq v3 2835717307.i256;
+        br v5 block2 block1;
+
+    block1:
+        v25.i1 = eq v3 1889567281.i256;
+        br v25 block8 block7;
+
+    block2:
+        v7.i256 = evm_calldata_load 4.i256;
+        v8.i256 = call %fn_2 v7;
+        v10.i256 = evm_calldata_load 36.i256;
+        v11.i256 = evm_caller;
+        v12.i256 = call %fn_3 v11;
+        v13.i256 = evm_sload v12;
+        v14.i1 = lt v13 v10;
+        br v14 block5 block4;
+
+    block3:
+        evm_invalid;
+
+    block4:
+        jump block6;
+
+    block5:
+        call %fn_1;
+        evm_invalid;
+
+    block6:
+        v18.i256 = sub v13 v10;
+        evm_sstore v12 v18;
+        v20.i256 = call %fn_3 v8;
+        v21.i256 = evm_sload v20;
+        v22.i256 = add v21 v10;
+        evm_sstore v20 v22;
+        evm_stop;
+
+    block7:
+        call %fn_1;
+        evm_invalid;
+
+    block8:
+        v26.i256 = evm_calldata_load 4.i256;
+        v27.i256 = call %fn_2 v26;
+        v28.i256 = call %fn_3 v27;
+        v29.i256 = evm_sload v28;
+        v31.*i8 = evm_malloc 32.i256;
+        v32.i256 = ptr_to_int v31 i256;
+        mstore v32 v29 i256;
+        evm_return v32 32.i256;
+
+    block9:
+        jump block3;
+}
+
+object @Contract {
+    section runtime {
+        entry %run;
+    }
+    section init {
+        entry %init;
+        embed .runtime as &runtime;
+    }
+}
