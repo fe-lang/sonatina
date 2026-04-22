@@ -72,7 +72,7 @@ impl ObjectOptimizationSummary {
             + self.enum_object_op_count
     }
 
-    fn qualifies_for_helper_budget(self) -> bool {
+    fn has_scalarizable_object_activity(self) -> bool {
         self.likely_scalarizable && self.tracked_root_count() > 0 && self.object_op_count() > 0
     }
 }
@@ -138,7 +138,7 @@ pub(super) fn decide_inline(
         return InlineDecision::Skip(InlineSkipReason::NoBody);
     }
 
-    let mut predicted_growth = summary.insts;
+    let mut predicted_growth = summary.insts.saturating_sub(1);
     if request.call_has_result && summary.returns > 1 {
         predicted_growth = predicted_growth.saturating_add(1);
     }
@@ -186,14 +186,6 @@ pub(super) fn decide_inline(
         return InlineDecision::Skip(InlineSkipReason::Budget);
     }
 
-    if request.callee_call_count > 1
-        && (exceeds_cap(summary.blocks, config.max_multi_use_inlinee_blocks)
-            || exceeds_cap(summary.insts, config.max_multi_use_inlinee_insts))
-        && !fits_object_helper_budget(module, summary, request, config)
-    {
-        return InlineDecision::Skip(InlineSkipReason::Budget);
-    }
-
     let should_force_single_use =
         config.always_inline_single_use && request.callee_call_count == 1 && summary.blocks > 1;
 
@@ -217,10 +209,7 @@ pub(super) fn decide_inline(
                 .is_leaf(&module.ctx, request.callee_ref)
         });
 
-    let threshold = if summary.has_loop
-        || summary.calls > 0
-        || (summary.blocks > 1 && request.callee_call_count > 1)
-    {
+    let threshold = if summary.has_loop || summary.calls > 0 {
         config.inline_threshold_cold
     } else {
         config.inline_threshold
@@ -232,14 +221,22 @@ pub(super) fn decide_inline(
     if summary.has_loop {
         score += config.loop_penalty;
     }
-    if summary.blocks > 1 && request.callee_call_count > 1 {
-        score += config.multi_block_multi_use_penalty;
-    }
     if request.callee_call_count == 1 {
         score -= config.single_use_bonus;
     }
     if is_leaf {
         score -= config.leaf_bonus;
+    }
+    score -= config.call_overhead_bonus;
+    if request.callee_call_count > 1 && summary.blocks > 1 {
+        score += summary.blocks.saturating_sub(1) as i32 * config.duplicated_block_penalty;
+    }
+    if request.callee_call_count > 1 {
+        score += summary
+            .insts
+            .saturating_sub(config.multi_use_inst_free_allowance) as i32
+            * request.callee_call_count.saturating_sub(1) as i32
+            * config.multi_use_excess_inst_penalty;
     }
     if hints.contains(FuncHints::INLINEHINT) {
         score -= 2;
@@ -277,19 +274,6 @@ fn exceeds_budget(used: usize, growth: usize, cap: usize) -> bool {
     cap > 0 && used.saturating_add(growth) > cap
 }
 
-fn fits_object_helper_budget(
-    module: &Module,
-    summary: InlineeSummary,
-    request: InlineRequest,
-    config: &InlinerConfig,
-) -> bool {
-    module.ctx.func_linkage(request.callee_ref) == Linkage::Private
-        && request.callee_call_count <= config.max_multi_use_object_helper_call_count
-        && summary.object.qualifies_for_helper_budget()
-        && !exceeds_cap(summary.blocks, config.max_multi_use_object_helper_blocks)
-        && !exceeds_cap(summary.insts, config.max_multi_use_object_helper_insts)
-}
-
 fn compute_object_helper_cluster_bonus(
     module: &Module,
     summary_cache: &mut FxHashMap<SummaryKey, InlineeSummary>,
@@ -300,7 +284,7 @@ fn compute_object_helper_cluster_bonus(
 ) -> i32 {
     if config.object_helper_cluster_bonus <= 0
         || module.ctx.func_linkage(callee_ref) != Linkage::Private
-        || !summary.object.qualifies_for_helper_budget()
+        || !summary.object.has_scalarizable_object_activity()
     {
         return 0;
     }
@@ -323,7 +307,7 @@ fn compute_object_helper_cluster_bonus(
                 ctx.object_effects,
             )
             .object
-            .qualifies_for_helper_budget()
+            .has_scalarizable_object_activity()
         })
         .take(2)
         .count() as i32
@@ -569,12 +553,11 @@ func private %caller(v0.objref<@pair>, v1.i256, v2.i256, v3.i256, v4.i256) -> i2
                 always_inline_single_use: false,
                 max_inlinee_blocks: 64,
                 max_inlinee_insts: 1024,
-                max_multi_use_inlinee_blocks: 1,
-                max_multi_use_inlinee_insts: 6,
                 max_growth_per_caller: 4096,
                 max_total_growth: 1 << 20,
                 inline_threshold: 1000,
                 inline_threshold_cold: 4,
+                call_overhead_bonus: 0,
                 object_scalarization_bonus_cap: 4,
                 object_helper_cluster_bonus: 0,
                 ..InlinerConfig::default()
@@ -601,17 +584,119 @@ func private %caller(v0.objref<@pair>, v1.i256, v2.i256, v3.i256, v4.i256) -> i2
                 always_inline_single_use: false,
                 max_inlinee_blocks: 64,
                 max_inlinee_insts: 1024,
-                max_multi_use_inlinee_blocks: 1,
-                max_multi_use_inlinee_insts: 6,
                 max_growth_per_caller: 4096,
                 max_total_growth: 1 << 20,
                 inline_threshold: 1000,
                 inline_threshold_cold: 4,
+                call_overhead_bonus: 0,
                 object_scalarization_bonus_cap: 4,
                 object_helper_cluster_bonus: 3,
                 ..InlinerConfig::default()
             },
         );
         assert!(matches!(enabled, InlineDecision::Inline(_)));
+    }
+
+    #[test]
+    fn branchy_multi_use_leaf_helpers_are_costed_normally() {
+        let mut parsed = sonatina_parser::parse_module(
+            r#"
+target = "evm-ethereum-london"
+
+func private %select(v0.i1, v1.i256) -> i256 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        return v1;
+
+    block2:
+        return 0.i256;
+}
+
+func private %caller(v0.i1, v1.i1, v2.i1, v3.i256) -> i256 {
+    block0:
+        v4.i256 = call %select v0 v3;
+        v5.i256 = call %select v1 v3;
+        v6.i256 = add v4 v5;
+        v7.i256 = call %select v2 v3;
+        v8.i256 = add v6 v7;
+        return v8;
+}
+"#,
+        )
+        .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"));
+        let module = &mut parsed.module;
+        let analysis = module_analysis::analyze_module(module);
+        let select = module
+            .funcs()
+            .into_iter()
+            .find(|&func| module.ctx.func_sig(func, |sig| sig.name() == "select"))
+            .expect("select should exist");
+        let request = InlineRequest {
+            callee_ref: select,
+            callee_call_count: 3,
+            caller_growth: 0,
+            total_growth: 0,
+            callee_depth: 0,
+            call_has_result: true,
+        };
+
+        let without_call_credit = decide_inline(
+            module,
+            &mut FxHashMap::default(),
+            None,
+            false,
+            InlineDecisionContext {
+                module_info: &analysis,
+                local_object_args: None,
+                object_effects: None,
+            },
+            request,
+            &InlinerConfig {
+                enable_full_inliner: true,
+                always_inline_single_use: false,
+                max_inlinee_blocks: 6,
+                max_inlinee_insts: 32,
+                max_growth_per_caller: 24,
+                max_total_growth: 128,
+                inline_threshold: 8,
+                inline_threshold_cold: 4,
+                leaf_bonus: 2,
+                call_overhead_bonus: 0,
+                ..InlinerConfig::default()
+            },
+        );
+        assert!(matches!(
+            without_call_credit,
+            InlineDecision::Skip(super::InlineSkipReason::Cost)
+        ));
+
+        let with_call_credit = decide_inline(
+            module,
+            &mut FxHashMap::default(),
+            None,
+            false,
+            InlineDecisionContext {
+                module_info: &analysis,
+                local_object_args: None,
+                object_effects: None,
+            },
+            request,
+            &InlinerConfig {
+                enable_full_inliner: true,
+                always_inline_single_use: false,
+                max_inlinee_blocks: 6,
+                max_inlinee_insts: 32,
+                max_growth_per_caller: 24,
+                max_total_growth: 128,
+                inline_threshold: 8,
+                inline_threshold_cold: 4,
+                leaf_bonus: 2,
+                call_overhead_bonus: 6,
+                ..InlinerConfig::default()
+            },
+        );
+        assert!(matches!(with_call_credit, InlineDecision::Inline(_)));
     }
 }

@@ -1066,9 +1066,19 @@ func private %test_const_array_loop() {
 
     block8:
         v1192.i1 = eq v1194 8256.i256;
-        call %assert v1192;
-        v1193.i1 = eq v1204 8256.i256;
-        call %assert v1193;
+        br v1192 block28 block30;
+
+    block30:
+        evm_revert 0.i256 0.i256;
+
+    block28:
+        v1194.i1 = eq v1204 8256.i256;
+        br v1194 block32 block34;
+
+    block34:
+        evm_revert 0.i256 0.i256;
+
+    block32:
         return;
 
     block9:
@@ -1083,17 +1093,6 @@ func private %test_const_array_loop() {
         v1180.i256 = mload v1179 i256;
         (v1182.i256, v1183.i1) = uaddo v1204 v1180;
         br v1183 block9 block7;
-}
-
-func private %assert(v0.i1) {
-    block0:
-        br v0 block2 block1;
-
-    block1:
-        evm_revert 0.i256 0.i256;
-
-    block2:
-        return;
 }
 
 func private %__fe_sonatina_entry() {

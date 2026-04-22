@@ -1187,6 +1187,7 @@ func public %caller(v0.i1, v1.i32) -> i32 {
         max_total_growth: 64,
         inline_threshold: 4,
         inline_threshold_cold: 4,
+        call_overhead_bonus: 0,
         ..Default::default()
     };
 
@@ -1348,7 +1349,16 @@ func private %multi(v0.i1, v1.i32) -> i32 {
 
     block2:
         v2.i32 = add v1 1.i32;
-        return v2;
+        v3.i32 = add v2 1.i32;
+        v4.i32 = add v3 1.i32;
+        v5.i32 = add v4 1.i32;
+        v6.i32 = add v5 1.i32;
+        v7.i32 = add v6 1.i32;
+        v8.i32 = add v7 1.i32;
+        v9.i32 = add v8 1.i32;
+        v10.i32 = add v9 1.i32;
+        v11.i32 = add v10 1.i32;
+        return v11;
 }
 
 func public %caller(v0.i1, v1.i32, v2.i32) -> i32 {
@@ -1365,8 +1375,8 @@ func public %caller(v0.i1, v1.i32, v2.i32) -> i32 {
     let module = &mut parsed.module;
 
     let mut cfg = full_only_inliner_test_config();
-    cfg.inline_threshold = 24;
-    cfg.inline_threshold_cold = 12;
+    cfg.inline_threshold = 8;
+    cfg.inline_threshold_cold = 4;
 
     let mut inliner = Inliner::new(cfg);
     let stats = inliner.run(module);
@@ -1413,7 +1423,6 @@ func public %caller(v0.i1, v1.i32, v2.i32) -> i32 {
 
     let mut cfg = full_only_inliner_test_config();
     cfg.inline_threshold_cold = 1000;
-    cfg.multi_block_multi_use_penalty = 0;
 
     let mut inliner = Inliner::new(cfg);
     let stats = inliner.run(module);
@@ -1464,7 +1473,7 @@ func public %caller(v0.i32, v1.i32) -> i32 {
 }
 
 #[test]
-fn full_inliner_multi_use_object_helper_uses_object_helper_budget() {
+fn full_inliner_multi_use_object_helper_can_inline_by_cost() {
     let source = r#"
 target = "evm-ethereum-london"
 
@@ -1500,13 +1509,13 @@ func private %caller(v0.objref<@triple>, v1.i256, v2.i256, v3.i256, v4.i256, v5.
     let dumped = dump_module(module);
     assert!(
         !dumped.contains("call %write"),
-        "object helper should inline through the dedicated multi-use budget:\n{dumped}"
+        "object helper should inline when object bonuses make it profitable:\n{dumped}"
     );
     assert!(stats.full_calls_inlined >= 2);
 }
 
 #[test]
-fn full_inliner_multi_use_non_object_helper_does_not_get_object_budget() {
+fn full_inliner_multi_use_non_object_helper_still_uses_cost_model() {
     let source = r#"
 target = "evm-ethereum-london"
 
@@ -1541,14 +1550,14 @@ func public %caller(v0.i256, v1.i256, v2.i256, v3.i256, v4.i256, v5.i256) -> i25
     let dumped = dump_module(module);
     assert!(
         dumped.contains("call %calc"),
-        "non-object helper should still respect the generic multi-use cap:\n{dumped}"
+        "non-object helper should stay outlined when costed above threshold:\n{dumped}"
     );
     assert_eq!(stats.full_calls_inlined, 0);
-    assert!(stats.skipped_budget > 0);
+    assert!(stats.skipped_cost > 0);
 }
 
 #[test]
-fn full_inliner_object_helper_budget_respects_multi_use_call_count_guard() {
+fn full_inliner_growth_budget_limits_widely_shared_helpers() {
     let source = r#"
 target = "evm-ethereum-london"
 
@@ -1581,7 +1590,8 @@ func private %caller(v0.objref<@triple>, v1.i256, v2.i256, v3.i256) {
     let module = &mut parsed.module;
 
     let mut cfg = object_aware_full_inliner_test_config();
-    cfg.max_multi_use_object_helper_call_count = 3;
+    cfg.max_growth_per_caller = 1;
+    cfg.max_total_growth = 1;
     let mut inliner = Inliner::new(cfg);
     let stats = inliner.run(module);
     assert_module_verified(module);
@@ -1589,7 +1599,7 @@ func private %caller(v0.objref<@triple>, v1.i256, v2.i256, v3.i256) {
     let dumped = dump_module(module);
     assert!(
         dumped.contains("call %write"),
-        "widely shared helper should stay outlined once the object-helper call-count guard trips:\n{dumped}"
+        "widely shared helper should stay outlined once the global growth budget trips:\n{dumped}"
     );
     assert_eq!(stats.full_calls_inlined, 0);
     assert!(stats.skipped_budget > 0);
@@ -1932,15 +1942,12 @@ fn object_aware_full_inliner_test_config() -> InlinerConfig {
         always_inline_single_use: false,
         max_inlinee_blocks: 64,
         max_inlinee_insts: 1024,
-        max_multi_use_inlinee_blocks: 1,
-        max_multi_use_inlinee_insts: 6,
-        max_multi_use_object_helper_blocks: 1,
-        max_multi_use_object_helper_insts: 8,
-        max_multi_use_object_helper_call_count: 3,
         max_growth_per_caller: 4096,
         max_total_growth: 1 << 20,
-        inline_threshold: 1000,
+        inline_threshold: 6,
         inline_threshold_cold: 4,
+        leaf_bonus: 0,
+        call_overhead_bonus: 0,
         object_scalarization_bonus_cap: 10,
         object_helper_cluster_bonus: 4,
         ..Default::default()

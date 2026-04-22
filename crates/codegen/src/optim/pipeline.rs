@@ -290,8 +290,6 @@ fn size_inliner_config() -> InlinerConfig {
         splice_max_insts: 6,
         max_inlinee_blocks: 8,
         max_inlinee_insts: 48,
-        max_multi_use_inlinee_blocks: 1,
-        max_multi_use_inlinee_insts: 6,
         max_growth_per_caller: 32,
         max_total_growth: 160,
         max_inline_depth: 3,
@@ -299,10 +297,11 @@ fn size_inliner_config() -> InlinerConfig {
         inline_threshold_cold: 5,
         single_use_bonus: 8,
         leaf_bonus: 2,
+        call_overhead_bonus: 6,
+        duplicated_block_penalty: 1,
+        multi_use_inst_free_allowance: 5,
+        multi_use_excess_inst_penalty: 1,
         loop_penalty: 32,
-        max_multi_use_object_helper_blocks: 2,
-        max_multi_use_object_helper_insts: 10,
-        max_multi_use_object_helper_call_count: 3,
         object_scalarization_bonus_cap: 8,
         object_helper_cluster_bonus: 3,
         ..InlinerConfig::default()
@@ -315,10 +314,8 @@ fn speed_inliner_config() -> InlinerConfig {
         // on the EVM a smaller post-inline body often wins on runtime gas.
         enable_full_inliner: true,
         splice_max_insts: 4,
-        max_inlinee_blocks: 6,
+        max_inlinee_blocks: 8,
         max_inlinee_insts: 32,
-        max_multi_use_inlinee_blocks: 1,
-        max_multi_use_inlinee_insts: 6,
         max_growth_per_caller: 24,
         max_total_growth: 128,
         max_inline_depth: 3,
@@ -326,10 +323,11 @@ fn speed_inliner_config() -> InlinerConfig {
         inline_threshold_cold: 4,
         single_use_bonus: 8,
         leaf_bonus: 2,
+        call_overhead_bonus: 6,
+        duplicated_block_penalty: 1,
+        multi_use_inst_free_allowance: 5,
+        multi_use_excess_inst_penalty: 1,
         loop_penalty: 32,
-        max_multi_use_object_helper_blocks: 2,
-        max_multi_use_object_helper_insts: 12,
-        max_multi_use_object_helper_call_count: 4,
         object_scalarization_bonus_cap: 10,
         object_helper_cluster_bonus: 4,
         ..InlinerConfig::default()
@@ -2204,8 +2202,7 @@ func private %entry(v0.i32, v1.i32) -> i32 {
         let size = Pipeline::size();
         assert!(size.inliner_config.enable_full_inliner);
         assert_eq!(size.inliner_config.splice_max_insts, 6);
-        assert_eq!(size.inliner_config.max_multi_use_inlinee_blocks, 1);
-        assert_eq!(size.inliner_config.max_multi_use_inlinee_insts, 6);
+        assert!(size.inliner_config.call_overhead_bonus > 0);
 
         let speed = Pipeline::speed();
         assert!(speed.inliner_config.enable_full_inliner);
@@ -2302,7 +2299,12 @@ func private %costly(v0.i1, v1.i32) -> i32 {
 
     block2:
         v2.i32 = add v1 1.i32;
-        return v2;
+        v3.i32 = add v2 1.i32;
+        v4.i32 = add v3 1.i32;
+        v5.i32 = add v4 1.i32;
+        v6.i32 = add v5 1.i32;
+        v7.i32 = add v6 1.i32;
+        return v7;
 }
 
 func public %caller(v0.i1, v1.i32) -> i32 {

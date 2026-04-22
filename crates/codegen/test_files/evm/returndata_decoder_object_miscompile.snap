@@ -6,88 +6,54 @@ input_file: test_files/evm/returndata_decoder_object_miscompile.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 184 bytes
-  total: 184 bytes
+  section runtime: 124 bytes
+  total: 124 bytes
 
 functions:
-  add_1: ir_blocks=3 ir_insts=5 vcode_ops=16 fixups=1 imm_bytes=0
-    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  call_target: ir_blocks=9 ir_insts=27 vcode_ops=98 fixups=10 imm_bytes=13
+  call_target: ir_blocks=9 ir_insts=23 vcode_ops=62 fixups=4 imm_bytes=7
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   entry: ir_blocks=3 ir_insts=9 vcode_ops=25 fixups=3 imm_bytes=4
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=21560 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=560
+  case ok: calldata_len=0 success reason=Return gas_used=21343 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=343
 
 
 --------------- DEBUG ---------------
 
-// func private %add_1(v0.i256, v1.i256) -> i256
-add_1:
-  block0:
-    JUMPDEST
-    SWAP1  // v7.i256 = add v0 v1;
-    DUP2
-    ADD
-    SWAP1  // v8.i1 = lt v7 v0;
-    DUP2
-    LT
-    PUSH1 section_unit0  // br v8 block1 block2;
-    JUMPI
-  block2:
-    JUMPDEST
-    SWAP1  // return v7;
-    JUMP
-
-// func private %call_target(v79.i256, v1.i256, v2.i256) -> i256
+// func private %call_target(v83.i256, v1.i256, v2.i256) -> i256
 call_target:
   block0:
     JUMPDEST
-    PUSH1 0x40 (64)  // v86.i256 = mload 64.i32 i256;
-    MLOAD
-    PUSH1 0x40 (64)  // v25.*i256 = evm_malloc 4.i256;
-    MLOAD
-    PUSH1 0x9f (159)
-    DUP2
-    GT
-    PUSH1 `pc + (4)`
-    JUMPI
-    POP
-    PUSH1 0xa0 (160)
-    JUMPDEST
+    PUSH1 0x20 (32)  // v25.*i256 = evm_malloc 4.i256;
     PUSH32 0xcfae321700000000000000000000000000000000000000000000000000000000 (93936536753403694139279681939632466665208136910392087765254240489517648707584)  // mstore v26 -21855552483912501284291303069055441188061847755248476274203343518395480932352.i256 i256;
     DUP2
     MSTORE
-    PUSH1 0x4 (4)  // v82.i256 = add v26 4.i256;
+    PUSH1 0x4 (4)  // v86.i256 = add v26 4.i256;
     DUP2
     ADD
-    DUP2  // v83.i1 = lt v82 v26;
+    DUP2  // v87.i1 = lt v86 v26;
     SWAP1
     LT
-    PUSH1 section_unit0  // br v83 block7 block9;
+    ISZERO  // br v87 block7 block9;
+    PUSH1 block9
     JUMPI
+  block7:
+    JUMPDEST
+    PUSH0  // evm_revert 0.i256 0.i256;
+    PUSH0
+    REVERT
   block9:
     JUMPDEST
-    PUSH1 0x4 (4)  // v15.i256 = evm_call v1 v79 v2 v26 4.i256 0.i256 0.i256;
-    SWAP2
-    SWAP5
-    PUSH0
+    PUSH0  // v15.i256 = evm_call v1 v83 v2 v26 4.i256 0.i256 0.i256;
     SWAP4
+    PUSH1 0x4 (4)
+    SWAP3
     PUSH0
-    SWAP6
+    SWAP5
     CALL
     RETURNDATASIZE  // v16.i256 = evm_return_data_size;
-    PUSH1 0x40 (64)  // v17.*i256 = evm_malloc v16;
-    MLOAD
-    PUSH1 0x9f (159)
-    DUP2
-    GT
-    PUSH1 `pc + (4)`
-    JUMPI
-    POP
-    PUSH1 0xa0 (160)
-    JUMPDEST
+    PUSH1 0x20 (32)  // v17.*i256 = evm_malloc v16;
     DUP2  // evm_return_data_copy v18 0.i256 v16;
     PUSH0
     DUP3
@@ -103,31 +69,16 @@ call_target:
     PUSH1 0x20 (32)  // v51.i1 = lt v16 32.i256;
     DUP2
     LT
-    PUSH1 section_unit0  // br v51 block12 block13;
-    JUMPI
-  block13:
-    PUSH0  // v69.i256 = call %add_1 0.i256 32.i256;
-    PUSH1 0x20 (32)
-    PUSH1 `pc + (4)`
-    SWAP2
-    PUSH1 FuncRef(1)
-    JUMP
-    JUMPDEST
-    GT  // v70.i1 = gt v69 v16;
-    PUSH1 section_unit0  // br v70 block16 block17;
+    PUSH1 block7  // br v51 block12 block17;
     JUMPI
   block17:
-    PUSH0  // v72.i256 = call %add_1 v18 0.i256;
-    PUSH1 `pc + (4)`
-    SWAP2
-    PUSH1 FuncRef(1)
-    JUMP
-    JUMPDEST
-    MLOAD  // v73.i256 = mload v72 i256;
-    SWAP1  // mstore 64.i32 v86 i256;
-    PUSH1 0x40 (64)
-    MSTORE
-    SWAP1  // return v73;
+    PUSH1 0x20 (32)  // v71.i1 = gt 32.i256 v16;
+    GT
+    PUSH1 block7  // br v71 block18 block21;
+    JUMPI
+  block21:
+    MLOAD  // v75.i256 = mload v18 i256;
+    SWAP1  // return v75;
     JUMP
 
 // func public %entry()
@@ -158,11 +109,3 @@ entry:
     PUSH1 0x20 (32)  // evm_return 0.i256 32.i256;
     PUSH0
     RETURN
-
-// synthetic section unit
-__evm_shared_tail_0:
-  block0:
-    JUMPDEST
-    PUSH0
-    PUSH0
-    REVERT

@@ -113,9 +113,9 @@ func private %mix(v0.objref<[i256; 3]>) -> objref<[i256; 3]> {
     block1:
         v8.i256 = phi (0.i256 block0) (v16 block3);
         v10.i1 = lt v8 3.i256;
-        br v10 block2 block4;
+        br v10 block15 block4;
 
-    block2:
+    block15:
         v28.objref<i256> = obj.index v1 v8;
         jump block5;
 
@@ -127,7 +127,7 @@ func private %mix(v0.objref<[i256; 3]>) -> objref<[i256; 3]> {
         return v1;
 
     block5:
-        v18.i256 = phi (0.i256 block2) (v61 block10);
+        v18.i256 = phi (0.i256 block15) (v61 block10);
         v20.i1 = lt v18 3.i256;
         br v20 block10 block3;
 
@@ -151,29 +151,25 @@ func private %mix(v0.objref<[i256; 3]>) -> objref<[i256; 3]> {
 
 func private %poseidon_mock(v0.i256, v1.i256) -> i256 {
     block0:
-        v51.i256 = evm_umod v0 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
-        v53.i256 = evm_umod v1 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
+        v55.i256 = evm_umod v0 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
+        v57.i256 = evm_umod v1 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
         v9.objref<[i256; 3]> = obj.alloc [i256; 3];
         v11.objref<i256> = obj.index v9 0.i256;
-        obj.store v11 v51;
+        obj.store v11 v55;
         v13.objref<i256> = obj.index v9 1.i256;
-        obj.store v13 v53;
+        obj.store v13 v57;
         v15.objref<i256> = obj.index v9 2.i256;
         obj.store v15 0.i256;
-        v19.objref<@__fe_obj_Range_0> = obj.alloc @__fe_obj_Range_0;
-        v20.objref<i256> = obj.proj v19 1.i256;
-        obj.store v20 2.i256;
-        v21.i256 = call %range_known_const_s__usize___unknown__h4e84f6b6b8307914_seq_ha637d2df505bccf2_len__0__fc6647014fb554e5 v19;
         jump block1;
 
     block1:
         v63.i256 = phi (0.i256 block0) (v33 block3);
         v60.objref<[i256; 3]> = phi (v9 block0) (v31 block3);
         v22.i256 = phi (0.i256 block0) (v36 block3);
-        v24.i1 = lt v22 v21;
-        br v24 block2 block14;
+        v24.i1 = lt v22 2.i256;
+        br v24 block16 block5;
 
-    block2:
+    block16:
         v29.objref<[i256; 3]> = call %ark v60 v63;
         v30.objref<[i256; 3]> = call %sigma_full v29;
         v31.objref<[i256; 3]> = call %mix v30;
@@ -185,13 +181,13 @@ func private %poseidon_mock(v0.i256, v1.i256) -> i256 {
         jump block1;
 
     block5:
-        v73.i256 = phi (v63 block14) (v52 block7);
-        v70.objref<[i256; 3]> = phi (v60 block14) (v51 block7);
-        v42.i256 = phi (0.i256 block14) (v55 block7);
-        v44.i1 = lt v42 v41;
-        br v44 block6 block8;
+        v73.i256 = phi (v63 block1) (v52 block7);
+        v70.objref<[i256; 3]> = phi (v60 block1) (v51 block7);
+        v42.i256 = phi (0.i256 block1) (v55 block7);
+        v44.i1 = lt v42 2.i256;
+        br v44 block20 block8;
 
-    block6:
+    block20:
         v49.objref<[i256; 3]> = call %ark v70 v73;
         v50.objref<[i256; 3]> = call %sigma_full v49;
         v51.objref<[i256; 3]> = call %mix v50;
@@ -209,38 +205,16 @@ func private %poseidon_mock(v0.i256, v1.i256) -> i256 {
 
     block9:
         evm_revert 0.i256 0.i256;
-
-    block14:
-        v39.objref<@__fe_obj_Range_0> = obj.alloc @__fe_obj_Range_0;
-        v40.objref<i256> = obj.proj v39 1.i256;
-        obj.store v40 2.i256;
-        v41.i256 = call %range_known_const_s__usize___unknown__h4e84f6b6b8307914_seq_ha637d2df505bccf2_len__0__fc6647014fb554e5 v39;
-        jump block5;
-}
-
-func private %range_known_const_s__usize___unknown__h4e84f6b6b8307914_seq_ha637d2df505bccf2_len__0__fc6647014fb554e5(v0.objref<@__fe_obj_Range_0>) -> i256 {
-    block0:
-        v29.objref<i256> = obj.proj v0 1.i256;
-        v30.i256 = obj.load v29;
-        v11.i1 = lt v30 0.i256;
-        br v11 block3 block2;
-
-    block2:
-        jump block3;
-
-    block3:
-        v11.i256 = phi (0.i256 block0) (v30 block2);
-        return v11;
 }
 
 func public %entry() {
     block0:
-        v6.i256 = call %poseidon_mock 1.i256 2.i256;
+        v4.i256 = call %poseidon_mock 1.i256 2.i256;
         v7.i256 = call %poseidon_mock 3.i256 4.i256;
-        v8.i1 = eq v6 v7;
-        br v8 block3 block1;
+        v8.i1 = eq v4 v7;
+        br v8 block4 block1;
 
-    block3:
+    block4:
         evm_revert 0.i256 0.i256;
 
     block1:

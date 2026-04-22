@@ -6,8 +6,8 @@ input_file: test_files/evm/vault.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 4572 bytes
-  total: 4572 bytes
+  section runtime: 4564 bytes
+  total: 4564 bytes
 
 object: Vault
   section init: 914 bytes
@@ -20,9 +20,7 @@ object: VaultUser
   total: 2349 bytes
 
 functions:
-  __Contract_runtime_entry: ir_blocks=1 ir_insts=85 vcode_ops=310 fixups=65 imm_bytes=50
-    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  create2_stor__Evm_hef0af3106e109414_Vault_h1ad5e8742309bfc7__bb7e838f6c312aa8: ir_blocks=3 ir_insts=25 vcode_ops=83 fixups=6 imm_bytes=16
+  __Contract_runtime_entry: ir_blocks=3 ir_insts=107 vcode_ops=385 fixups=69 imm_bytes=66
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   assert: ir_blocks=3 ir_insts=6 vcode_ops=11 fixups=1 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
@@ -94,7 +92,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=526547 gas_refunded=79600 logs=0 output=call len=0 tx_gas=21000 runtime_gas=505547
+  case ok: calldata_len=0 success reason=Return gas_used=526516 gas_refunded=79600 logs=0 output=call len=0 tx_gas=21000 runtime_gas=505516
 
 
 --------------- DEBUG ---------------
@@ -102,324 +100,9 @@ evm:
 // func private %__Contract_runtime_entry()
 __Contract_runtime_entry:
   block0:
-    PUSH0  // v12.i256 = call %create2_stor__Evm_hef0af3106e109414_Vault_h1ad5e8742309bfc7__bb7e838f6c312aa8 0.i256 0.i256;
-    PUSH0
-    PUSH1 `pc + (4)`
-    SWAP2
-    PUSH1 FuncRef(20)
-    JUMP
-    JUMPDEST
-    DUP1  // v13.i1 = is_zero v12;
-    ISZERO
-    ISZERO  // v14.i1 = is_zero v13;
-    PUSH1 `pc + (4)`  // call %assert v77;
-    SWAP1
-    PUSH1 FuncRef(21)
-    JUMP
-    JUMPDEST
-    PUSH0  // v16.i256 = call %create2_stor__Evm_hef0af3106e109414_VaultUser_hcb553b593515d281__151df09479dab12a 0.i256 1.i256;
-    PUSH1 0x1 (1)
-    PUSH1 `pc + (4)`
-    SWAP2
-    PUSH1 FuncRef(22)
-    JUMP
-    JUMPDEST
-    DUP1  // v17.i1 = is_zero v16;
-    ISZERO
-    ISZERO  // v18.i1 = is_zero v17;
-    PUSH1 `pc + (4)`  // call %assert v78;
-    SWAP1
-    PUSH1 FuncRef(21)
-    JUMP
-    JUMPDEST
-    DUP2  // v20.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__Deposit_h19f638fdcaab3cd__dbfe67dc81c33b5b v12 100000.i256 0.i256 1000.i256;
-    PUSH2 0x3e8 (1000)
-    PUSH0
-    PUSH3 0x186a0 (100000)
-    PUSH1 `pc + (4)`
-    SWAP4
-    PUSH1 FuncRef(23)
-    JUMP
-    JUMPDEST
-    PUSH2 0x3e8 (1000)  // v21.i1 = eq v20 1000.i256;
-    EQ
-    PUSH1 `pc + (4)`  // call %assert v79;
-    SWAP1
-    PUSH1 FuncRef(21)
-    JUMP
-    JUMPDEST
-    PUSH1 0x40 (64)  // v23.*i256 = evm_malloc 64.i256;
-    MLOAD
-    PUSH1 0xdf (223)
-    DUP2
-    GT
-    PUSH1 `pc + (4)`
-    JUMPI
-    POP
-    PUSH1 0xe0 (224)
-    JUMPDEST
-    DUP1
-    PUSH1 0x40 (64)
-    ADD
-    PUSH1 0x40 (64)
-    MSTORE
-    DUP3  // mstore v26 v12 i256;
-    DUP2
-    MSTORE
-    DUP1  // v28.*i256 = gep v25 0.i256 1.i256;
-    PUSH1 0x20 (32)
-    ADD
-    PUSH2 0x3e8 (1000)  // mstore v28 1000.i256 i256;
-    SWAP1
-    MSTORE
-    DUP2  // v29.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__ProxyDeposit_he111d05e2ced69cd__69de45b2cdda8e37 v16 200000.i256 0.i256 v24;
-    SWAP1
-    PUSH0
-    PUSH3 0x30d40 (200000)
-    PUSH1 `pc + (4)`
-    SWAP4
-    PUSH1 FuncRef(24)
-    JUMP
-    JUMPDEST
-    PUSH2 0x3e8 (1000)  // v30.i1 = eq v29 1000.i256;
-    EQ
-    PUSH1 `pc + (4)`  // call %assert v80;
-    SWAP1
-    PUSH1 FuncRef(21)
-    JUMP
-    JUMPDEST
-    DUP2  // v32.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__GetTotalAssets_h830b2520704d49fc__947e7051a757f184 v12 100000.i256 0.i256;
-    PUSH0
-    PUSH3 0x186a0 (100000)
-    PUSH1 `pc + (4)`
-    SWAP3
-    PUSH1 FuncRef(25)
-    JUMP
-    JUMPDEST
-    PUSH2 0x7d0 (2000)  // v33.i1 = eq v32 2000.i256;
-    EQ
-    PUSH1 `pc + (4)`  // call %assert v81;
-    SWAP1
-    PUSH1 FuncRef(21)
-    JUMP
-    JUMPDEST
-    DUP2  // v35.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__GetTotalShares_hbe2278c3233da528__5145d089cb2da672 v12 100000.i256 0.i256;
-    PUSH0
-    PUSH3 0x186a0 (100000)
-    PUSH1 `pc + (4)`
-    SWAP3
-    PUSH1 FuncRef(26)
-    JUMP
-    JUMPDEST
-    PUSH2 0x7d0 (2000)  // v36.i1 = eq v35 2000.i256;
-    EQ
-    PUSH1 `pc + (4)`  // call %assert v82;
-    SWAP1
-    PUSH1 FuncRef(21)
-    JUMP
-    JUMPDEST
-    DUP2  // call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__AddYield_h1b194739dad02c6e__f712b0a646b2bb64 v12 100000.i256 0.i256 1000.i256;
-    PUSH2 0x3e8 (1000)
-    PUSH0
-    PUSH3 0x186a0 (100000)
-    PUSH1 `pc + (4)`
-    SWAP4
-    PUSH1 FuncRef(27)
-    JUMP
-    JUMPDEST
-    DUP2  // v38.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__Withdraw_h97c67fe0f317b1b0__d9e92202bb8b3b1d v12 100000.i256 0.i256 500.i256;
-    PUSH2 0x1f4 (500)
-    PUSH0
-    PUSH3 0x186a0 (100000)
-    PUSH1 `pc + (4)`
-    SWAP4
-    PUSH1 FuncRef(28)
-    JUMP
-    JUMPDEST
-    PUSH2 0x2ee (750)  // v39.i1 = eq v38 750.i256;
-    EQ
-    PUSH1 `pc + (4)`  // call %assert v83;
-    SWAP1
-    PUSH1 FuncRef(21)
-    JUMP
-    JUMPDEST
-    DUP2  // v41.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__GetMyShares_h4b85c900112aeed6__1df2a8280dde4872 v12 100000.i256 0.i256;
-    PUSH0
-    PUSH3 0x186a0 (100000)
-    PUSH1 `pc + (4)`
-    SWAP3
-    PUSH1 FuncRef(29)
-    JUMP
-    JUMPDEST
-    PUSH2 0x1f4 (500)  // v42.i1 = eq v41 500.i256;
-    EQ
-    PUSH1 `pc + (4)`  // call %assert v84;
-    SWAP1
-    PUSH1 FuncRef(21)
-    JUMP
-    JUMPDEST
-    DUP1  // v44.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__ProxyGetMyShares_h22fbe0bf58ab85ce__459f6c55c5a1059b v16 200000.i256 0.i256 v12;
-    DUP3
-    PUSH0
-    PUSH3 0x30d40 (200000)
-    PUSH1 `pc + (4)`
-    SWAP4
-    PUSH1 FuncRef(30)
-    JUMP
-    JUMPDEST
-    PUSH2 0x3e8 (1000)  // v45.i1 = eq v44 1000.i256;
-    EQ
-    PUSH1 `pc + (4)`  // call %assert v85;
-    SWAP1
-    PUSH1 FuncRef(21)
-    JUMP
-    JUMPDEST
-    DUP2  // v47.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__GetTotalAssets_h830b2520704d49fc__947e7051a757f184 v12 100000.i256 0.i256;
-    PUSH0
-    PUSH3 0x186a0 (100000)
-    PUSH1 `pc + (4)`
-    SWAP3
-    PUSH1 FuncRef(25)
-    JUMP
-    JUMPDEST
-    PUSH2 0x8ca (2250)  // v48.i1 = eq v47 2250.i256;
-    EQ
-    PUSH1 `pc + (4)`  // call %assert v86;
-    SWAP1
-    PUSH1 FuncRef(21)
-    JUMP
-    JUMPDEST
-    PUSH1 0x40 (64)  // v50.*i256 = evm_malloc 64.i256;
-    MLOAD
-    PUSH1 0xdf (223)
-    DUP2
-    GT
-    PUSH1 `pc + (4)`
-    JUMPI
-    POP
-    PUSH1 0xe0 (224)
-    JUMPDEST
-    DUP1
-    PUSH1 0x40 (64)
-    ADD
-    PUSH1 0x40 (64)
-    MSTORE
-    DUP3  // mstore v53 v12 i256;
-    DUP2
-    MSTORE
-    DUP1  // v55.*i256 = gep v52 0.i256 1.i256;
-    PUSH1 0x20 (32)
-    ADD
-    PUSH2 0x270f (9999)  // mstore v55 9999.i256 i256;
-    SWAP1
-    MSTORE
-    DUP2  // v56.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__ProxyWithdraw_h1ed1c85115544221__ae5519407fcbbd72 v16 200000.i256 0.i256 v51;
-    SWAP1
-    PUSH0
-    PUSH3 0x30d40 (200000)
-    PUSH1 `pc + (4)`
-    SWAP4
-    PUSH1 FuncRef(31)
-    JUMP
-    JUMPDEST
-    ISZERO  // v57.i1 = is_zero v56;
-    PUSH1 `pc + (4)`  // call %assert v87;
-    SWAP1
-    PUSH1 FuncRef(21)
-    JUMP
-    JUMPDEST
-    PUSH1 0x40 (64)  // v59.*i256 = evm_malloc 64.i256;
-    MLOAD
-    PUSH1 0xdf (223)
-    DUP2
-    GT
-    PUSH1 `pc + (4)`
-    JUMPI
-    POP
-    PUSH1 0xe0 (224)
-    JUMPDEST
-    DUP1
-    PUSH1 0x40 (64)
-    ADD
-    PUSH1 0x40 (64)
-    MSTORE
-    DUP3  // mstore v62 v12 i256;
-    DUP2
-    MSTORE
-    DUP1  // v64.*i256 = gep v61 0.i256 1.i256;
-    PUSH1 0x20 (32)
-    ADD
-    PUSH2 0x3e8 (1000)  // mstore v64 1000.i256 i256;
-    SWAP1
-    MSTORE
-    PUSH0  // v65.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__ProxyWithdraw_h1ed1c85115544221__ae5519407fcbbd72 v16 200000.i256 0.i256 v60;
-    PUSH3 0x30d40 (200000)
-    PUSH1 `pc + (4)`
-    SWAP4
-    PUSH1 FuncRef(31)
-    JUMP
-    JUMPDEST
-    PUSH2 0x5dc (1500)  // v66.i1 = eq v65 1500.i256;
-    EQ
-    PUSH1 `pc + (4)`  // call %assert v88;
-    SWAP1
-    PUSH1 FuncRef(21)
-    JUMP
-    JUMPDEST
-    DUP1  // v68.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__Withdraw_h97c67fe0f317b1b0__d9e92202bb8b3b1d v12 100000.i256 0.i256 500.i256;
-    PUSH2 0x1f4 (500)
-    PUSH0
-    PUSH3 0x186a0 (100000)
-    PUSH1 `pc + (4)`
-    SWAP4
-    PUSH1 FuncRef(28)
-    JUMP
-    JUMPDEST
-    PUSH2 0x2ee (750)  // v69.i1 = eq v68 750.i256;
-    EQ
-    PUSH1 `pc + (4)`  // call %assert v89;
-    SWAP1
-    PUSH1 FuncRef(21)
-    JUMP
-    JUMPDEST
-    DUP1  // v71.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__GetTotalAssets_h830b2520704d49fc__947e7051a757f184 v12 100000.i256 0.i256;
-    PUSH0
-    PUSH3 0x186a0 (100000)
-    PUSH1 `pc + (4)`
-    SWAP3
-    PUSH1 FuncRef(25)
-    JUMP
-    JUMPDEST
-    ISZERO  // v72.i1 = is_zero v71;
-    PUSH1 `pc + (4)`  // call %assert v90;
-    SWAP1
-    PUSH1 FuncRef(21)
-    JUMP
-    JUMPDEST
-    PUSH0  // v74.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__GetTotalShares_hbe2278c3233da528__5145d089cb2da672 v12 100000.i256 0.i256;
-    PUSH3 0x186a0 (100000)
-    PUSH1 `pc + (4)`
-    SWAP3
-    PUSH1 FuncRef(26)
-    JUMP
-    JUMPDEST
-    ISZERO  // v75.i1 = is_zero v74;
-    PUSH1 `pc + (4)`  // call %assert v91;
-    SWAP1
-    PUSH1 FuncRef(21)
-    JUMP
-    JUMPDEST
-    PUSH0  // evm_return 0.i256 0.i256;
-    PUSH0
-    RETURN
-
-// func private %create2_stor__Evm_hef0af3106e109414_Vault_h1ad5e8742309bfc7__bb7e838f6c312aa8(v1.i256, v2.i256) -> i256
-create2_stor__Evm_hef0af3106e109414_Vault_h1ad5e8742309bfc7__bb7e838f6c312aa8:
-  block0:
-    JUMPDEST
-    PUSH0 0x0 (0)  // v29.i256 = sym_size &__Vault_init;
-    PUSH0 0x0 (0)  // v30.i256 = sym_addr &__Vault_init;
-    DUP2  // v7.*i256 = evm_malloc v29;
+    PUSH0 0x0 (0)  // v77.i256 = sym_size &__Vault_init;
+    PUSH0 0x0 (0)  // v78.i256 = sym_addr &__Vault_init;
+    DUP2  // v79.*i256 = evm_malloc v77;
     PUSH1 0x1f (31)
     ADD
     PUSH1 0x1f (31)
@@ -440,45 +123,352 @@ create2_stor__Evm_hef0af3106e109414_Vault_h1ad5e8742309bfc7__bb7e838f6c312aa8:
     ADD
     PUSH1 0x40 (64)
     MSTORE
-    DUP3  // evm_code_copy v8 v30 v29;
+    DUP3  // evm_code_copy v80 v78 v77;
     SWAP1
     SWAP2
     DUP3
     CODECOPY
-    DUP2  // v9.i256 = add v8 v29;
+    DUP2  // v81.i256 = add v80 v77;
     DUP2
     ADD
-    PUSH1 0x40 (64)  // v11.*i256 = evm_malloc 96.i256;
+    PUSH1 0x40 (64)  // v83.*i256 = evm_malloc 96.i256;
     MLOAD
-    PUSH1 0x9f (159)
+    PUSH1 0xdf (223)
     DUP2
     GT
     PUSH1 `pc + (4)`
     JUMPI
     POP
-    PUSH1 0xa0 (160)
+    PUSH1 0xe0 (224)
     JUMPDEST
-    DUP2  // mstore v14 v9 i256;
+    DUP2  // mstore v85 v81 i256;
     DUP2
     MSTORE
-    DUP1  // v17.*i256 = gep v13 0.i256 1.i256;
+    DUP1  // v86.*i256 = gep v84 0.i256 1.i256;
     PUSH1 0x20 (32)
     ADD
-    DUP3  // mstore v17 v9 i256;
+    DUP3  // mstore v86 v81 i256;
     SWAP1
     MSTORE
-    PUSH1 0x40 (64)  // v21.*i256 = gep v13 0.i256 2.i256;
+    PUSH1 0x40 (64)  // v88.*i256 = gep v84 0.i256 2.i256;
     ADD
-    MSTORE  // mstore v21 v9 i256;
-    SWAP1  // v31.i256 = evm_create2 v1 v8 v29 v2;
+    MSTORE  // mstore v88 v81 i256;
+    PUSH0  // v89.i256 = evm_create2 0.i256 v80 v77 0.i256;
     SWAP2
+    SWAP1
+    PUSH0
     CREATE2
-    DUP1  // v23.i1 = is_zero v31;
-    PUSH1 block2  // br v32 block2 block1;
+    DUP1  // v90.i1 = is_zero v89;
+    ISZERO
+    DUP1  // v92.i1 = is_zero v98;
+    PUSH1 block3  // br v92 block1 block3;
     JUMPI
   block1:
-    RETURNDATASIZE  // v26.i256 = evm_return_data_size;
-    PUSH1 0x40 (64)  // v27.*i256 = evm_malloc v26;
+    ISZERO  // v14.i1 = is_zero v90;
+    PUSH1 `pc + (4)`  // call %assert v99;
+    SWAP1
+    PUSH1 FuncRef(21)
+    JUMP
+    JUMPDEST
+    PUSH0  // v16.i256 = call %create2_stor__Evm_hef0af3106e109414_VaultUser_hcb553b593515d281__151df09479dab12a 0.i256 1.i256;
+    PUSH1 0x1 (1)
+    PUSH1 `pc + (4)`
+    SWAP2
+    PUSH1 FuncRef(22)
+    JUMP
+    JUMPDEST
+    DUP1  // v17.i1 = is_zero v16;
+    ISZERO
+    ISZERO  // v18.i1 = is_zero v17;
+    PUSH1 `pc + (4)`  // call %assert v100;
+    SWAP1
+    PUSH1 FuncRef(21)
+    JUMP
+    JUMPDEST
+    DUP2  // v20.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__Deposit_h19f638fdcaab3cd__dbfe67dc81c33b5b v89 100000.i256 0.i256 1000.i256;
+    PUSH2 0x3e8 (1000)
+    PUSH0
+    PUSH3 0x186a0 (100000)
+    PUSH1 `pc + (4)`
+    SWAP4
+    PUSH1 FuncRef(23)
+    JUMP
+    JUMPDEST
+    PUSH2 0x3e8 (1000)  // v21.i1 = eq v20 1000.i256;
+    EQ
+    PUSH1 `pc + (4)`  // call %assert v101;
+    SWAP1
+    PUSH1 FuncRef(21)
+    JUMP
+    JUMPDEST
+    PUSH1 0x40 (64)  // v23.*i256 = evm_malloc 64.i256;
+    MLOAD
+    PUSH1 0xdf (223)
+    DUP2
+    GT
+    PUSH1 `pc + (4)`
+    JUMPI
+    POP
+    PUSH1 0xe0 (224)
+    JUMPDEST
+    DUP1
+    PUSH1 0x40 (64)
+    ADD
+    PUSH1 0x40 (64)
+    MSTORE
+    DUP3  // mstore v26 v89 i256;
+    DUP2
+    MSTORE
+    DUP1  // v28.*i256 = gep v25 0.i256 1.i256;
+    PUSH1 0x20 (32)
+    ADD
+    PUSH2 0x3e8 (1000)  // mstore v28 1000.i256 i256;
+    SWAP1
+    MSTORE
+    DUP2  // v29.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__ProxyDeposit_he111d05e2ced69cd__69de45b2cdda8e37 v16 200000.i256 0.i256 v24;
+    SWAP1
+    PUSH0
+    PUSH3 0x30d40 (200000)
+    PUSH1 `pc + (4)`
+    SWAP4
+    PUSH1 FuncRef(24)
+    JUMP
+    JUMPDEST
+    PUSH2 0x3e8 (1000)  // v30.i1 = eq v29 1000.i256;
+    EQ
+    PUSH1 `pc + (4)`  // call %assert v102;
+    SWAP1
+    PUSH1 FuncRef(21)
+    JUMP
+    JUMPDEST
+    DUP2  // v32.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__GetTotalAssets_h830b2520704d49fc__947e7051a757f184 v89 100000.i256 0.i256;
+    PUSH0
+    PUSH3 0x186a0 (100000)
+    PUSH1 `pc + (4)`
+    SWAP3
+    PUSH1 FuncRef(25)
+    JUMP
+    JUMPDEST
+    PUSH2 0x7d0 (2000)  // v33.i1 = eq v32 2000.i256;
+    EQ
+    PUSH1 `pc + (4)`  // call %assert v103;
+    SWAP1
+    PUSH1 FuncRef(21)
+    JUMP
+    JUMPDEST
+    DUP2  // v35.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__GetTotalShares_hbe2278c3233da528__5145d089cb2da672 v89 100000.i256 0.i256;
+    PUSH0
+    PUSH3 0x186a0 (100000)
+    PUSH1 `pc + (4)`
+    SWAP3
+    PUSH1 FuncRef(26)
+    JUMP
+    JUMPDEST
+    PUSH2 0x7d0 (2000)  // v36.i1 = eq v35 2000.i256;
+    EQ
+    PUSH1 `pc + (4)`  // call %assert v104;
+    SWAP1
+    PUSH1 FuncRef(21)
+    JUMP
+    JUMPDEST
+    DUP2  // call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__AddYield_h1b194739dad02c6e__f712b0a646b2bb64 v89 100000.i256 0.i256 1000.i256;
+    PUSH2 0x3e8 (1000)
+    PUSH0
+    PUSH3 0x186a0 (100000)
+    PUSH1 `pc + (4)`
+    SWAP4
+    PUSH1 FuncRef(27)
+    JUMP
+    JUMPDEST
+    DUP2  // v38.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__Withdraw_h97c67fe0f317b1b0__d9e92202bb8b3b1d v89 100000.i256 0.i256 500.i256;
+    PUSH2 0x1f4 (500)
+    PUSH0
+    PUSH3 0x186a0 (100000)
+    PUSH1 `pc + (4)`
+    SWAP4
+    PUSH1 FuncRef(28)
+    JUMP
+    JUMPDEST
+    PUSH2 0x2ee (750)  // v39.i1 = eq v38 750.i256;
+    EQ
+    PUSH1 `pc + (4)`  // call %assert v105;
+    SWAP1
+    PUSH1 FuncRef(21)
+    JUMP
+    JUMPDEST
+    DUP2  // v41.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__GetMyShares_h4b85c900112aeed6__1df2a8280dde4872 v89 100000.i256 0.i256;
+    PUSH0
+    PUSH3 0x186a0 (100000)
+    PUSH1 `pc + (4)`
+    SWAP3
+    PUSH1 FuncRef(29)
+    JUMP
+    JUMPDEST
+    PUSH2 0x1f4 (500)  // v42.i1 = eq v41 500.i256;
+    EQ
+    PUSH1 `pc + (4)`  // call %assert v106;
+    SWAP1
+    PUSH1 FuncRef(21)
+    JUMP
+    JUMPDEST
+    DUP1  // v44.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__ProxyGetMyShares_h22fbe0bf58ab85ce__459f6c55c5a1059b v16 200000.i256 0.i256 v89;
+    DUP3
+    PUSH0
+    PUSH3 0x30d40 (200000)
+    PUSH1 `pc + (4)`
+    SWAP4
+    PUSH1 FuncRef(30)
+    JUMP
+    JUMPDEST
+    PUSH2 0x3e8 (1000)  // v45.i1 = eq v44 1000.i256;
+    EQ
+    PUSH1 `pc + (4)`  // call %assert v107;
+    SWAP1
+    PUSH1 FuncRef(21)
+    JUMP
+    JUMPDEST
+    DUP2  // v47.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__GetTotalAssets_h830b2520704d49fc__947e7051a757f184 v89 100000.i256 0.i256;
+    PUSH0
+    PUSH3 0x186a0 (100000)
+    PUSH1 `pc + (4)`
+    SWAP3
+    PUSH1 FuncRef(25)
+    JUMP
+    JUMPDEST
+    PUSH2 0x8ca (2250)  // v48.i1 = eq v47 2250.i256;
+    EQ
+    PUSH1 `pc + (4)`  // call %assert v108;
+    SWAP1
+    PUSH1 FuncRef(21)
+    JUMP
+    JUMPDEST
+    PUSH1 0x40 (64)  // v50.*i256 = evm_malloc 64.i256;
+    MLOAD
+    PUSH1 0xdf (223)
+    DUP2
+    GT
+    PUSH1 `pc + (4)`
+    JUMPI
+    POP
+    PUSH1 0xe0 (224)
+    JUMPDEST
+    DUP1
+    PUSH1 0x40 (64)
+    ADD
+    PUSH1 0x40 (64)
+    MSTORE
+    DUP3  // mstore v53 v89 i256;
+    DUP2
+    MSTORE
+    DUP1  // v55.*i256 = gep v52 0.i256 1.i256;
+    PUSH1 0x20 (32)
+    ADD
+    PUSH2 0x270f (9999)  // mstore v55 9999.i256 i256;
+    SWAP1
+    MSTORE
+    DUP2  // v56.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__ProxyWithdraw_h1ed1c85115544221__ae5519407fcbbd72 v16 200000.i256 0.i256 v51;
+    SWAP1
+    PUSH0
+    PUSH3 0x30d40 (200000)
+    PUSH1 `pc + (4)`
+    SWAP4
+    PUSH1 FuncRef(31)
+    JUMP
+    JUMPDEST
+    ISZERO  // v57.i1 = is_zero v56;
+    PUSH1 `pc + (4)`  // call %assert v109;
+    SWAP1
+    PUSH1 FuncRef(21)
+    JUMP
+    JUMPDEST
+    PUSH1 0x40 (64)  // v59.*i256 = evm_malloc 64.i256;
+    MLOAD
+    PUSH1 0xdf (223)
+    DUP2
+    GT
+    PUSH1 `pc + (4)`
+    JUMPI
+    POP
+    PUSH1 0xe0 (224)
+    JUMPDEST
+    DUP1
+    PUSH1 0x40 (64)
+    ADD
+    PUSH1 0x40 (64)
+    MSTORE
+    DUP3  // mstore v62 v89 i256;
+    DUP2
+    MSTORE
+    DUP1  // v64.*i256 = gep v61 0.i256 1.i256;
+    PUSH1 0x20 (32)
+    ADD
+    PUSH2 0x3e8 (1000)  // mstore v64 1000.i256 i256;
+    SWAP1
+    MSTORE
+    PUSH0  // v65.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__ProxyWithdraw_h1ed1c85115544221__ae5519407fcbbd72 v16 200000.i256 0.i256 v60;
+    PUSH3 0x30d40 (200000)
+    PUSH1 `pc + (4)`
+    SWAP4
+    PUSH1 FuncRef(31)
+    JUMP
+    JUMPDEST
+    PUSH2 0x5dc (1500)  // v66.i1 = eq v65 1500.i256;
+    EQ
+    PUSH1 `pc + (4)`  // call %assert v110;
+    SWAP1
+    PUSH1 FuncRef(21)
+    JUMP
+    JUMPDEST
+    DUP1  // v68.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__Withdraw_h97c67fe0f317b1b0__d9e92202bb8b3b1d v89 100000.i256 0.i256 500.i256;
+    PUSH2 0x1f4 (500)
+    PUSH0
+    PUSH3 0x186a0 (100000)
+    PUSH1 `pc + (4)`
+    SWAP4
+    PUSH1 FuncRef(28)
+    JUMP
+    JUMPDEST
+    PUSH2 0x2ee (750)  // v69.i1 = eq v68 750.i256;
+    EQ
+    PUSH1 `pc + (4)`  // call %assert v111;
+    SWAP1
+    PUSH1 FuncRef(21)
+    JUMP
+    JUMPDEST
+    DUP1  // v71.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__GetTotalAssets_h830b2520704d49fc__947e7051a757f184 v89 100000.i256 0.i256;
+    PUSH0
+    PUSH3 0x186a0 (100000)
+    PUSH1 `pc + (4)`
+    SWAP3
+    PUSH1 FuncRef(25)
+    JUMP
+    JUMPDEST
+    ISZERO  // v72.i1 = is_zero v71;
+    PUSH1 `pc + (4)`  // call %assert v112;
+    SWAP1
+    PUSH1 FuncRef(21)
+    JUMP
+    JUMPDEST
+    PUSH0  // v74.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__GetTotalShares_hbe2278c3233da528__5145d089cb2da672 v89 100000.i256 0.i256;
+    PUSH3 0x186a0 (100000)
+    PUSH1 `pc + (4)`
+    SWAP3
+    PUSH1 FuncRef(26)
+    JUMP
+    JUMPDEST
+    ISZERO  // v75.i1 = is_zero v74;
+    PUSH1 `pc + (4)`  // call %assert v113;
+    SWAP1
+    PUSH1 FuncRef(21)
+    JUMP
+    JUMPDEST
+    PUSH0  // evm_return 0.i256 0.i256;
+    PUSH0
+    RETURN
+  block3:
+    JUMPDEST
+    RETURNDATASIZE  // v93.i256 = evm_return_data_size;
+    PUSH1 0x40 (64)  // v94.*i256 = evm_malloc v93;
     MLOAD
     PUSH1 0x9f (159)
     DUP2
@@ -488,15 +478,11 @@ create2_stor__Evm_hef0af3106e109414_Vault_h1ad5e8742309bfc7__bb7e838f6c312aa8:
     POP
     PUSH1 0xa0 (160)
     JUMPDEST
-    DUP2  // evm_return_data_copy v28 0.i256 v26;
+    DUP2  // evm_return_data_copy v95 0.i256 v93;
     PUSH0
     DUP3
     RETURNDATACOPY
-    REVERT  // evm_revert v28 v26;
-  block2:
-    JUMPDEST
-    SWAP1  // return v31;
-    JUMP
+    REVERT  // evm_revert v95 v93;
 
 // func public %assert(v0.i256)
 assert:

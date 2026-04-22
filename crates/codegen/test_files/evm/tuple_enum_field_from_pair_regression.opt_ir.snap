@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/evm.rs
-assertion_line: 451
 expression: opt_ir_snapshot
 input_file: test_files/evm/tuple_enum_field_from_pair_regression.sntn
 ---
@@ -12,47 +11,41 @@ type @E = enum {
     #A,
 };
 
-func private %run() {
-    block0:
-        v11.objref<@Pair> = obj.alloc @Pair;
-        v12.objref<[i256; 2]> = obj.proj v11 0.i256;
-        v13.objref<i256> = obj.index v12 0.i256;
-        obj.store v13 5.i256;
-        v14.objref<i256> = obj.index v12 1.i256;
-        obj.store v14 9.i256;
-        v16.objref<@E> = obj.proj v11 1.i256;
-        enum.set_tag v16 #None;
-        v17.@Pair = obj.load v11;
-        v1.[i256; 2] = extract_value v17 0.i256;
-        v2.@E = extract_value v17 1.i256;
-        v18.enumtag(@E) = enum.tag v2;
-        br_table v18 block13 (0.enumtag(@E) block9) (1.enumtag(@E) block12);
-
-    block12:
-        jump block9;
-
-    block13:
-        unreachable;
-
-    block9:
-        v24.i1 = phi (1.i1 block0) (0.i1 block12);
-        v4.i256 = extract_value v1 0.i256;
-        br v24 block1 block3;
-
-    block1:
-        v6.i1 = eq v4 5.i256;
-        br v6 block2 block3;
-
-    block2:
-        return;
-
-    block3:
-        evm_revert 0.i256 0.i256;
-}
-
 func public %entry() {
     block0:
-        call %run;
+        v1.objref<@Pair> = obj.alloc @Pair;
+        v3.objref<[i256; 2]> = obj.proj v1 0.i256;
+        v4.objref<i256> = obj.index v3 0.i256;
+        obj.store v4 5.i256;
+        v7.objref<i256> = obj.index v3 1.i256;
+        obj.store v7 9.i256;
+        v9.objref<@E> = obj.proj v1 1.i256;
+        enum.set_tag v9 #None;
+        v10.@Pair = obj.load v1;
+        v11.[i256; 2] = extract_value v10 0.i256;
+        v12.@E = extract_value v10 1.i256;
+        v13.enumtag(@E) = enum.tag v12;
+        br_table v13 block4 (0.enumtag(@E) block5) (1.enumtag(@E) block3);
+
+    block3:
+        jump block5;
+
+    block4:
+        unreachable;
+
+    block5:
+        v18.i1 = phi (1.i1 block0) (0.i1 block3);
+        v19.i256 = extract_value v11 0.i256;
+        br v18 block6 block8;
+
+    block6:
+        v20.i1 = eq v19 5.i256;
+        br v20 block1 block8;
+
+    block8:
+        evm_revert 0.i256 0.i256;
+
+    block1:
         evm_return 0.i8 0.i8;
 }
 

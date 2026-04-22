@@ -5,19 +5,6 @@ input_file: test_files/evm/plank_erc20_v1.sntn
 ---
 target = "evm-ethereum-osaka"
 
-func private %fn_2(v0.i256) -> i256 {
-    block0:
-        v2.i256 = shr 160.i256 v0;
-        v5.i1 = is_zero v2;
-        br v5 block3 block2;
-
-    block2:
-        evm_revert 0.i256 0.i256;
-
-    block3:
-        return v0;
-}
-
 func public %init() {
     block0:
         v1.*i8 = evm_malloc 64.i256;
@@ -25,12 +12,19 @@ func public %init() {
         v3.i256 = sym_size .;
         evm_code_copy v2 v3 64.i256;
         v4.i256 = mload v2 i256;
-        v5.i256 = call %fn_2 v4;
+        v20.i256 = shr 160.i256 v4;
+        v21.i1 = is_zero v20;
+        br v21 block1 block3;
+
+    block3:
+        evm_revert 0.i256 0.i256;
+
+    block1:
         v7.i256 = add v2 32.i256;
         v8.i256 = mload v7 i256;
         v16.*i8 = evm_malloc 32.i256;
         v17.i256 = ptr_to_int v16 i256;
-        mstore v17 v5 i256;
+        mstore v17 v4 i256;
         v18.i256 = evm_keccak256 v17 32.i256;
         evm_sstore v18 v8;
         v10.i256 = sym_size &runtime;
@@ -54,7 +48,14 @@ func public %run() {
 
     block2:
         v7.i256 = evm_calldata_load 4.i256;
-        v8.i256 = call %fn_2 v7;
+        v40.i256 = shr 160.i256 v7;
+        v41.i1 = is_zero v40;
+        br v41 block10 block12;
+
+    block12:
+        evm_revert 0.i256 0.i256;
+
+    block10:
         v10.i256 = evm_calldata_load 36.i256;
         v11.i256 = evm_caller;
         v28.*i8 = evm_malloc 32.i256;
@@ -73,7 +74,7 @@ func public %run() {
         evm_sstore v30 v18;
         v31.*i8 = evm_malloc 32.i256;
         v32.i256 = ptr_to_int v31 i256;
-        mstore v32 v8 i256;
+        mstore v32 v7 i256;
         v33.i256 = evm_keccak256 v32 32.i256;
         v21.i256 = evm_sload v33;
         v22.i256 = add v21 v10;
@@ -85,10 +86,17 @@ func public %run() {
 
     block8:
         v26.i256 = evm_calldata_load 4.i256;
-        v27.i256 = call %fn_2 v26;
+        v42.i256 = shr 160.i256 v26;
+        v43.i1 = is_zero v42;
+        br v43 block14 block16;
+
+    block16:
+        evm_revert 0.i256 0.i256;
+
+    block14:
         v34.*i8 = evm_malloc 32.i256;
         v35.i256 = ptr_to_int v34 i256;
-        mstore v35 v27 i256;
+        mstore v35 v26 i256;
         v36.i256 = evm_keccak256 v35 32.i256;
         v29.i256 = evm_sload v36;
         v31.*i8 = evm_malloc 32.i256;

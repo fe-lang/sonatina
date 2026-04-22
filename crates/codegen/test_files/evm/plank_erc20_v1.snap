@@ -6,38 +6,22 @@ input_file: test_files/evm/plank_erc20_v1.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 122 bytes
-  section init: 179 bytes
-  total: 301 bytes
+  section runtime: 110 bytes
+  section init: 156 bytes
+  total: 266 bytes
 
 functions:
-  fn_2: ir_blocks=3 ir_insts=5 vcode_ops=13 fixups=1 imm_bytes=1
+  init: ir_blocks=3 ir_insts=22 vcode_ops=42 fixups=4 imm_bytes=7
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  init: ir_blocks=1 ir_insts=19 vcode_ops=36 fixups=5 imm_bytes=6
-    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  run: ir_blocks=7 ir_insts=40 vcode_ops=92 fixups=7 imm_bytes=10
+  run: ir_blocks=11 ir_insts=46 vcode_ops=102 fixups=5 imm_bytes=12
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  deploy: success reason=Return gas_used=82661 gas_refunded=0 logs=0 output=create len=122 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
-  case balance-zero: calldata_len=36 success reason=Return gas_used=23480 gas_refunded=0 logs=0 output=call len=32 tx_gas=21192 runtime_gas=2288
+  deploy: success reason=Return gas_used=79857 gas_refunded=0 logs=0 output=create len=110 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
+  case balance-zero: calldata_len=36 success reason=Return gas_used=23446 gas_refunded=0 logs=0 output=call len=32 tx_gas=21192 runtime_gas=2254
 
 
 --------------- DEBUG ---------------
-
-// func private %fn_2(v0.i256) -> i256
-fn_2:
-  block0:
-    JUMPDEST
-    DUP1  // v2.i256 = shr 160.i256 v0;
-    PUSH1 0xa0 (160)
-    SHR
-    PUSH1 section_unit0  // br v5 block3 block2;
-    JUMPI
-  block3:
-    JUMPDEST
-    SWAP1  // return v0;
-    JUMP
 
 // func public %init()
 init:
@@ -50,17 +34,18 @@ init:
     CODECOPY
     DUP1  // v4.i256 = mload v2 i256;
     MLOAD
-    PUSH1 `pc + (4)`  // v5.i256 = call %fn_2 v4;
-    SWAP1
-    PUSH1 FuncRef(2)
-    JUMP
-    JUMPDEST
+    DUP1  // v20.i256 = shr 160.i256 v4;
+    PUSH1 0xa0 (160)
+    SHR
+    PUSH1 section_unit0  // br v21 block1 block3;
+    JUMPI
+  block1:
     SWAP1  // v7.i256 = add v2 32.i256;
     PUSH1 0x20 (32)
     ADD
     MLOAD  // v8.i256 = mload v7 i256;
     PUSH0  // v16.*i256 = evm_malloc 32.i256;
-    SWAP2  // mstore v17 v5 i256;
+    SWAP2  // mstore v17 v4 i256;
     DUP3
     MSTORE
     PUSH1 0x20 (32)  // v18.i256 = evm_keccak256 v17 32.i256;
@@ -99,13 +84,14 @@ run:
     JUMPDEST
     PUSH1 0x4 (4)  // v26.i256 = evm_calldata_load 4.i256;
     CALLDATALOAD
-    PUSH1 `pc + (4)`  // v27.i256 = call %fn_2 v26;
-    SWAP1
-    PUSH1 FuncRef(2)
-    JUMP
-    JUMPDEST
+    DUP1  // v42.i256 = shr 160.i256 v26;
+    PUSH1 0xa0 (160)
+    SHR
+    PUSH1 section_unit0  // br v43 block14 block16;
+    JUMPI
+  block14:
     PUSH0  // v34.*i256 = evm_malloc 32.i256;
-    SWAP1  // mstore v35 v27 i256;
+    SWAP1  // mstore v35 v26 i256;
     DUP2
     MSTORE
     PUSH1 0x20 (32)  // v36.i256 = evm_keccak256 v35 32.i256;
@@ -124,11 +110,12 @@ run:
     POP  // v7.i256 = evm_calldata_load 4.i256;
     PUSH1 0x4 (4)
     CALLDATALOAD
-    PUSH1 `pc + (4)`  // v8.i256 = call %fn_2 v7;
-    SWAP1
-    PUSH1 FuncRef(2)
-    JUMP
-    JUMPDEST
+    DUP1  // v40.i256 = shr 160.i256 v7;
+    PUSH1 0xa0 (160)
+    SHR
+    PUSH1 section_unit0  // br v41 block10 block12;
+    JUMPI
+  block10:
     PUSH1 0x24 (36)  // v10.i256 = evm_calldata_load 36.i256;
     CALLDATALOAD
     CALLER  // v11.i256 = evm_caller;
@@ -153,7 +140,7 @@ run:
     SWAP1  // evm_sstore v30 v18;
     SSTORE
     PUSH0  // v31.*i256 = evm_malloc 32.i256;
-    SWAP2  // mstore v32 v8 i256;
+    SWAP2  // mstore v32 v7 i256;
     DUP3
     MSTORE
     PUSH1 0x20 (32)  // v33.i256 = evm_keccak256 v32 32.i256;
