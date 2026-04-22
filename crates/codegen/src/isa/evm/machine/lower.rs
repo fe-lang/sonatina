@@ -726,12 +726,32 @@ impl FuncLowerCtx<'_> {
             let dyn_sp = self.emit_mload_abs(DYN_SP_SLOT as u32);
             base = self.emit_word_max(base, dyn_sp);
         }
-        let min_base = self.i256_imm(min_base);
-        self.emit_word_max(base, min_base)
+        self.emit_word_max_const_u32(base, min_base)
     }
 
     fn emit_word_max(&mut self, lhs: ValueId, rhs: ValueId) -> ValueId {
-        let cond = self.emit_binary(cmp::Gt::new(self.is, lhs, rhs), Type::I1);
+        let delta = self.emit_binary(arith::Sub::new(self.is, rhs, lhs), Type::I256);
+        let cond = self.emit_binary(cmp::Lt::new(self.is, lhs, rhs), Type::I1);
+        let selected_delta = self.emit_binary(arith::Mul::new(self.is, delta, cond), Type::I256);
+        self.emit_binary(arith::Add::new(self.is, lhs, selected_delta), Type::I256)
+    }
+
+    fn emit_word_max_const_u32(&mut self, lhs: ValueId, rhs: u32) -> ValueId {
+        if rhs == 0 {
+            return lhs;
+        }
+        let value = self.i256_imm(rhs);
+        let compare = self.i256_imm(rhs - 1);
+        self.emit_word_max_with_compare(lhs, value, compare)
+    }
+
+    fn emit_word_max_with_compare(
+        &mut self,
+        lhs: ValueId,
+        rhs: ValueId,
+        compare_rhs: ValueId,
+    ) -> ValueId {
+        let cond = self.emit_binary(cmp::Gt::new(self.is, lhs, compare_rhs), Type::I1);
         let from_block = self.current_block.expect("word max needs current block");
         let lhs_block = self.append_machine_block();
         let rhs_block = self.append_machine_block();

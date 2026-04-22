@@ -6,8 +6,8 @@ input_file: test_files/evm/fe_result_and_then_chain_while_loop_struct_repro_unop
 evm.config: stack_reach=16 vcode=false bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 912 bytes
-  total: 912 bytes
+  section runtime: 910 bytes
+  total: 910 bytes
 
 functions:
   nibble: ir_blocks=3 ir_insts=9 vcode_ops=24 fixups=1 imm_bytes=3
@@ -36,7 +36,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=19 abs_words_end=0
   abi_root_head_size__Error_hdf7f09d2a5744fe8__3dc0663d0c43952: ir_blocks=1 ir_insts=1 vcode_ops=4 fixups=0 imm_bytes=1
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=19 abs_words_end=0
-  solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head: ir_blocks=7 ir_insts=26 vcode_ops=66 fixups=5 imm_bytes=10
+  solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head: ir_blocks=7 ir_insts=26 vcode_ops=65 fixups=5 imm_bytes=10
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=19 abs_words_end=0
   encode_root__Sol_hfd482bb803ad8c5f_Error_hdf7f09d2a5744fe8_SolEncoder_h1b9228b90dad6928__4c76fab4070bc4f0: ir_blocks=1 ir_insts=2 vcode_ops=8 fixups=2 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=19 abs_words_end=0
@@ -50,7 +50,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=19 abs_words_end=0
   solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_base: ir_blocks=1 ir_insts=3 vcode_ops=5 fixups=0 imm_bytes=1
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=19 abs_words_end=0
-  solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_append_tail: ir_blocks=4 ir_insts=14 vcode_ops=30 fixups=1 imm_bytes=7
+  solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_append_tail: ir_blocks=4 ir_insts=14 vcode_ops=29 fixups=1 imm_bytes=7
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=19 abs_words_end=0
   solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_pos: ir_blocks=1 ir_insts=3 vcode_ops=5 fixups=0 imm_bytes=1
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=19 abs_words_end=0

@@ -6,17 +6,17 @@ input_file: test_files/evm/dyn_frame_multi_slot_clamp_bug.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 171 bytes
-  total: 171 bytes
+  section runtime: 165 bytes
+  total: 165 bytes
 
 functions:
-  f: ir_blocks=9 ir_insts=30 vcode_ops=120 fixups=8 imm_bytes=25
+  f: ir_blocks=6 ir_insts=29 vcode_ops=116 fixups=6 imm_bytes=25
     mem: scratch_words=0 stable_words=2 stable_mode=DynamicFrame entry_abs_words=0 abs_words_end=0
   entry: ir_blocks=1 ir_insts=3 vcode_ops=13 fixups=2 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=21616 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=616
+  case ok: calldata_len=0 success reason=Return gas_used=21603 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=603
 
 
 --------------- DEBUG ---------------
@@ -86,48 +86,41 @@ f:
     MLOAD
     PUSH1 0x80 (128)  // v11.i256 = evm_mload v1;
     MLOAD
-    DUP1  // v12.i1 = gt v10 v11;
+    DUP2  // v12.i256 = sub v11 v10;
+    DUP2
+    SUB
+    SWAP1  // v13.i1 = lt v10 v11;
     DUP3
-    GT
-    PUSH1 block9  // br v12 block9 block4;
-    JUMPI
-  block4:
-    SWAP1  // jump block5;
-    POP
-    PUSH1 block5
-    JUMP
-  block9:
-    JUMPDEST
-    POP  // jump block5;
-  block5:
-    JUMPDEST
-    PUSH1 0xa0 (160)  // v15.i1 = gt v13 160.i256;
+    LT
+    MUL  // v14.i256 = mul v12 v13;
+    ADD  // v15.i256 = add v10 v14;
+    PUSH1 0x9f (159)  // v18.i1 = gt v15 159.i256;
     DUP2
     GT
-    PUSH1 block8  // br v15 block10 block7;
+    PUSH1 block5  // br v18 block6 block4;
     JUMPI
-  block7:
-    POP  // jump block8;
+  block4:
+    POP  // jump block5;
     PUSH1 0xa0 (160)
-  block8:
+  block5:
     JUMPDEST
-    PUSH2 0x3e7 (999)  // evm_mstore v16 999.i256;
+    PUSH2 0x3e7 (999)  // evm_mstore v19 999.i256;
     SWAP1
     MSTORE
-    PUSH0  // v19.i256 = call %f 0.i1;
+    PUSH0  // v22.i256 = call %f 0.i1;
     PUSH1 `pc + (4)`
     SWAP1
     PUSH1 FuncRef(0)
     JUMP
     JUMPDEST
-    SWAP1  // v20.i256 = evm_mload v4;
+    SWAP1  // v23.i256 = evm_mload v4;
     MLOAD
-    SWAP2  // v21.i256 = evm_mload v8;
+    SWAP2  // v24.i256 = evm_mload v8;
     MLOAD
-    SWAP2  // v22.i256 = add v19 v20;
+    SWAP2  // v25.i256 = add v22 v23;
     ADD
-    ADD  // v23.i256 = add v22 v21;
-    PUSH1 0x20 (32)  // return v23;
+    ADD  // v26.i256 = add v25 v24;
+    PUSH1 0x20 (32)  // return v26;
     PUSH1 0x80 (128)
     MLOAD
     SUB
@@ -138,11 +131,11 @@ f:
     JUMP
   block2:
     JUMPDEST
-    MLOAD  // v24.i256 = evm_mload v4;
-    SWAP1  // v25.i256 = evm_mload v8;
+    MLOAD  // v27.i256 = evm_mload v4;
+    SWAP1  // v28.i256 = evm_mload v8;
     MLOAD
-    ADD  // v26.i256 = add v24 v25;
-    PUSH1 0x20 (32)  // return v26;
+    ADD  // v29.i256 = add v27 v28;
+    PUSH1 0x20 (32)  // return v29;
     PUSH1 0x80 (128)
     MLOAD
     SUB

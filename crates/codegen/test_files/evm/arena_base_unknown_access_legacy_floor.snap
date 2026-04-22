@@ -29,21 +29,21 @@ entry:
     MSTORE
     PUSH1 0x40 (64)  // v4.i256 = evm_mload v3;
     MLOAD
-    PUSH1 0xa0 (160)  // v6.i1 = gt v4 160.i256;
+    PUSH1 0x9f (159)  // v7.i1 = gt v4 159.i256;
     DUP2
     GT
-    PUSH1 block3  // br v6 block4 block2;
+    PUSH1 block3  // br v7 block4 block2;
     JUMPI
   block2:
     POP  // jump block3;
     PUSH1 0xa0 (160)
   block3:
     JUMPDEST
-    PUSH1 0xb (11)  // evm_mstore v7 11.i256;
+    PUSH1 0xb (11)  // evm_mstore v8 11.i256;
     DUP2
     MSTORE
-    MLOAD  // v9.i256 = evm_mload v7;
-    PUSH0  // evm_mstore v0 v9;
+    MLOAD  // v10.i256 = evm_mload v8;
+    PUSH0  // evm_mstore v0 v10;
     MSTORE
     PUSH1 0x20 (32)  // evm_return v0 32.i256;
     PUSH0

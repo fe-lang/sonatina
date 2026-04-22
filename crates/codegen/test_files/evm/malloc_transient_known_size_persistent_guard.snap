@@ -31,25 +31,25 @@ mk:
     JUMPDEST
     PUSH1 0x40 (64)  // v1.i256 = evm_mload v0;
     MLOAD
-    PUSH1 0xa0 (160)  // v3.i1 = gt v1 160.i256;
+    PUSH1 0x9f (159)  // v4.i1 = gt v1 159.i256;
     DUP2
     GT
-    PUSH1 block3  // br v3 block4 block2;
+    PUSH1 block3  // br v4 block4 block2;
     JUMPI
   block2:
     POP  // jump block3;
     PUSH1 0xa0 (160)
   block3:
     JUMPDEST
-    PUSH1 0x20 (32)  // v6.i256 = add v4 32.i256;
+    PUSH1 0x20 (32)  // v7.i256 = add v5 32.i256;
     DUP2
     ADD
-    PUSH1 0x40 (64)  // evm_mstore v0 v6;
+    PUSH1 0x40 (64)  // evm_mstore v0 v7;
     MSTORE
-    PUSH1 0x7 (7)  // evm_mstore v4 7.i256;
+    PUSH1 0x7 (7)  // evm_mstore v5 7.i256;
     DUP2
     MSTORE
-    SWAP1  // return v4;
+    SWAP1  // return v5;
     JUMP
 
 // func public %scratch() -> i256
@@ -58,21 +58,21 @@ scratch:
     JUMPDEST
     PUSH1 0x40 (64)  // v1.i256 = evm_mload v0;
     MLOAD
-    PUSH1 0xa0 (160)  // v3.i1 = gt v1 v2;
+    PUSH1 0x9f (159)  // v4.i1 = gt v1 159.i256;
     DUP2
     GT
-    PUSH1 block3  // br v3 block4 block2;
+    PUSH1 block3  // br v4 block4 block2;
     JUMPI
   block2:
     POP  // jump block3;
     PUSH1 0xa0 (160)
   block3:
     JUMPDEST
-    PUSH1 0x6f (111)  // evm_mstore v4 111.i256;
+    PUSH1 0x6f (111)  // evm_mstore v5 111.i256;
     DUP2
     MSTORE
-    MLOAD  // v6.i256 = evm_mload v4;
-    SWAP1  // return v6;
+    MLOAD  // v7.i256 = evm_mload v5;
+    SWAP1  // return v7;
     JUMP
 
 // func public %main() -> i256
