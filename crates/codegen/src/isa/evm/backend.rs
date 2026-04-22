@@ -27,8 +27,10 @@ use cranelift_entity::SecondaryMap;
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum PushWidthPolicy {
-    #[default]
+    /// Resolve symbol fixups as fixed-width 32-bit immediates.
     Push4,
+    /// Resolve symbol fixups to the shortest valid EVM PUSH encoding.
+    #[default]
     MinimalRelax,
 }
 
@@ -476,5 +478,15 @@ fn u32_to_evm_push_bytes(value: u32, policy: PushWidthPolicy) -> SmallVec<[u8; 4
                     .collect()
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PushWidthPolicy;
+
+    #[test]
+    fn default_push_width_policy_is_minimal_relax() {
+        assert_eq!(PushWidthPolicy::default(), PushWidthPolicy::MinimalRelax);
     }
 }

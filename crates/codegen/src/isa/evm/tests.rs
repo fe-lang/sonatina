@@ -2753,7 +2753,10 @@ block2:
         &[],
         &[],
         &SectionName("runtime".into()),
-        &CompileOptions::default(),
+        &CompileOptions {
+            fixup_policy: PushWidthPolicy::Push4,
+            ..CompileOptions::default()
+        },
     )
     .expect("linking should resolve outlined helper symbol fixups");
     let current = artifact
