@@ -530,6 +530,33 @@ fn prune_removes_double_push_swap_pop_shuffle_noop() {
 }
 
 #[test]
+fn prune_removes_two_inst_stack_noops() {
+    for (first, imm) in [(OpCode::DUP1, None), (OpCode::PUSH1, Some(7u8))] {
+        let mut vcode = VCode::<OpCode>::default();
+        let block = BlockId(0);
+
+        let inst = vcode.add_inst_to_block(first, None, block);
+        if let Some(byte) = imm {
+            vcode.inst_imm_bytes.insert((inst, smallvec![byte]));
+        }
+        vcode.add_inst_to_block(OpCode::POP, None, block);
+
+        prune_redundant_opcode_sequences(&mut vcode, &[block]);
+
+        assert_eq!(vcode.block_insns(block).count(), 0);
+    }
+
+    let mut vcode = VCode::<OpCode>::default();
+    let block = BlockId(0);
+    vcode.add_inst_to_block(OpCode::SWAP1, None, block);
+    vcode.add_inst_to_block(OpCode::SWAP1, None, block);
+
+    prune_redundant_opcode_sequences(&mut vcode, &[block]);
+
+    assert_eq!(vcode.block_insns(block).count(), 0);
+}
+
+#[test]
 fn dyn_sp_entry_init_covers_ready_recursive_entry_scc() {
     let ctx = dyn_sp_plan_from_src(
         r#"
@@ -2753,7 +2780,10 @@ block2:
         &[],
         &[],
         &SectionName("runtime".into()),
-        &CompileOptions::default(),
+        &CompileOptions {
+            fixup_policy: PushWidthPolicy::Push4,
+            ..CompileOptions::default()
+        },
     )
     .expect("linking should resolve outlined helper symbol fixups");
     let current = artifact

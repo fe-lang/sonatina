@@ -1,0 +1,37 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: "String::from_utf8(out).unwrap()"
+input_file: test_files/evm/evm_signextend.sntn
+---
+evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
+
+object: Contract
+  section runtime: 13 bytes
+  total: 13 bytes
+
+functions:
+  entry: ir_blocks=1 ir_insts=5 vcode_ops=11 fixups=0 imm_bytes=2
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
+
+evm:
+  case byte0_negative: calldata_len=64 success reason=Return gas_used=21300 gas_refunded=0 logs=0 output=call len=32 tx_gas=21268 runtime_gas=32
+  case byte1_negative: calldata_len=64 success reason=Return gas_used=21312 gas_refunded=0 logs=0 output=call len=32 tx_gas=21280 runtime_gas=32
+  case byte32_unchanged: calldata_len=64 success reason=Return gas_used=21312 gas_refunded=0 logs=0 output=call len=32 tx_gas=21280 runtime_gas=32
+
+
+--------------- DEBUG ---------------
+
+// func public %entry()
+entry:
+  block0:
+    PUSH0  // v0.i256 = evm_calldata_load 0.i256;
+    CALLDATALOAD
+    PUSH1 0x20 (32)  // v1.i256 = evm_calldata_load 32.i256;
+    CALLDATALOAD
+    SWAP1  // v2.i256 = evm_signextend v0 v1;
+    SIGNEXTEND
+    PUSH0  // mstore 0.i256 v2 i256;
+    MSTORE
+    PUSH1 0x20 (32)  // evm_return 0.i256 32.i256;
+    PUSH0
+    RETURN

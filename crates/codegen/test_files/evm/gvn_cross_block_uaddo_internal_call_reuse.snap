@@ -14,7 +14,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=32 success reason=Return gas_used=21376 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=236
+  case ok: calldata_len=32 success reason=Return gas_used=21364 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=224
 
 
 --------------- DEBUG ---------------
@@ -184,7 +184,7 @@ evm:
 // func public %entry()
 entry:
   block0:
-    PUSH1 0xa0 (160)  // v0.*i256 = evm_malloc 32.i256;
+    PUSH1 0x20 (32)  // v0.*i256 = evm_malloc 32.i256;
     PUSH1 0x63 (99)  // mstore v0 99.i256 i256;
     SWAP1
     MSTORE
@@ -231,7 +231,7 @@ entry:
     PUSH1 block17
     JUMPI
   block16:
-    PUSH1 0xa0 (160)  // v32.*i256 = evm_malloc 64.i256;
+    PUSH1 0x20 (32)  // v32.*i256 = evm_malloc 64.i256;
     PUSH1 0x1 (1)  // mstore v34 1.i256 i256;
     DUP2
     MSTORE
@@ -246,7 +246,7 @@ entry:
     JUMP
   block17:
     JUMPDEST
-    PUSH1 0xa0 (160)  // v37.*i256 = evm_malloc 64.i256;
+    PUSH1 0x20 (32)  // v37.*i256 = evm_malloc 64.i256;
     PUSH0  // mstore v39 0.i256 i256;
     DUP2
     MSTORE

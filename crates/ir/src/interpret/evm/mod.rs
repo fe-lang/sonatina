@@ -117,6 +117,19 @@ fn evm_byte(pos: U256, value: U256, value_bytes: usize) -> U256 {
     (value >> (shift_bytes * 8)) & U256::from(0xffu16)
 }
 
+fn evm_signextend(byte: U256, value: U256) -> U256 {
+    if byte >= U256::from(32u8) {
+        return value;
+    }
+
+    let sign_bit = (byte.as_usize() + 1) * 8 - 1;
+    if value.bit(sign_bit) {
+        value | (!U256::zero() << (sign_bit + 1))
+    } else {
+        value & ((U256::one() << (sign_bit + 1)) - U256::one())
+    }
+}
+
 fn overflow_results(result: EvalValue, overflow: EvalValue) -> super::EvalResults {
     smallvec![result, overflow]
 }
@@ -395,6 +408,25 @@ impl Interpret for EvmExp {
         let ty = base.ty();
         let mask = mask_for_ty(ty);
         let result = evm_exp(imm_to_u256(base), imm_to_u256(exponent), mask);
+        single_result(EvalValue::Imm(u256_to_imm(result, ty)))
+    }
+}
+
+impl Interpret for EvmSignExtend {
+    fn interpret(&self, state: &mut dyn State) -> super::EvalResults {
+        state.set_action(Action::Continue);
+
+        let byte = state.lookup_val(*self.byte());
+        let value = state.lookup_val(*self.value());
+
+        let (EvalValue::Imm(byte), EvalValue::Imm(value)) = (byte, value) else {
+            return single_result(EvalValue::Undef);
+        };
+
+        debug_assert_eq!(byte.ty(), value.ty());
+
+        let ty = value.ty();
+        let result = evm_signextend(imm_to_u256(byte), imm_to_u256(value)) & mask_for_ty(ty);
         single_result(EvalValue::Imm(u256_to_imm(result, ty)))
     }
 }

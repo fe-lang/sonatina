@@ -2282,13 +2282,13 @@ hash2:
   block0:
     PUSH1 0x40 (64)  // v4.*i256 = evm_malloc 64.i256;
     MLOAD
-    PUSH1 0x9f (159)
+    PUSH2 0x43f (1087)
     DUP2
     GT
     PUSH1 `pc + (4)`
     JUMPI
     POP
-    PUSH1 0xa0 (160)
+    PUSH2 0x440 (1088)
     JUMPDEST
     SWAP1  // mstore v5 v0 i256;
     DUP2

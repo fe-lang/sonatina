@@ -16,4 +16,4 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=2 abs_words_end=0
 
 evm:
-  case ok: calldata_len=8 success reason=Return gas_used=21298 gas_refunded=0 logs=0 output=call len=32 tx_gas=21056 runtime_gas=242
+  case ok: calldata_len=8 success reason=Return gas_used=21286 gas_refunded=0 logs=0 output=call len=32 tx_gas=21056 runtime_gas=230

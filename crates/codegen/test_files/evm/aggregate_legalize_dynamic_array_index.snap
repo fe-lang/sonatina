@@ -6,15 +6,15 @@ input_file: test_files/evm/aggregate_legalize_dynamic_array_index.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 47 bytes
-  total: 47 bytes
+  section runtime: 40 bytes
+  total: 40 bytes
 
 functions:
   entry: ir_blocks=1 ir_insts=13 vcode_ops=37 fixups=0 imm_bytes=9
     mem: scratch_words=4 stable_words=0 stable_mode=None entry_abs_words=4 abs_words_end=4
 
 evm:
-  case ok: calldata_len=64 success reason=Return gas_used=21414 gas_refunded=0 logs=0 output=call len=32 tx_gas=21280 runtime_gas=134
+  case ok: calldata_len=64 success reason=Return gas_used=21386 gas_refunded=0 logs=0 output=call len=32 tx_gas=21280 runtime_gas=106
 
 
 --------------- DEBUG ---------------
@@ -22,22 +22,18 @@ evm:
 // func public %entry()
 entry:
   block0:
-    PUSH1 0xe0 (224)  // v9.*[i256; 2] = alloca [i256; 2];
+    PUSH1 0x60 (96)  // v9.*[i256; 2] = alloca [i256; 2];
     PUSH0  // v0.i256 = evm_calldata_load 0.i256;
     CALLDATALOAD
     PUSH1 0x20 (32)  // v1.i256 = evm_calldata_load 32.i256;
     CALLDATALOAD
-    DUP3  // v12.*i256 = gep v9 0.i64 0.i64;
-    POP
-    PUSH1 0xe0 (224)
-    PUSH1 0xa0 (160)  // mstore v12 undef.i256 i256;
+    PUSH1 0x60 (96)  // v12.*i256 = gep v9 0.i64 0.i64;
+    PUSH1 0x20 (32)  // mstore v12 undef.i256 i256;
     MLOAD
     SWAP1
     MSTORE
-    DUP3  // v15.*i256 = gep v9 0.i64 1.i64;
-    POP
-    PUSH2 0x100 (256)
-    PUSH1 0xc0 (192)  // mstore v15 undef.i256 i256;
+    PUSH1 0x80 (128)  // v15.*i256 = gep v9 0.i64 1.i64;
+    PUSH1 0x40 (64)  // mstore v15 undef.i256 i256;
     MLOAD
     SWAP1
     MSTORE
@@ -48,9 +44,7 @@ entry:
     MUL
     ADD
     MSTORE  // mstore v16 v1 i256;
-    SWAP1  // v17.*i256 = gep v9 0.i64 v0;
-    SWAP1
-    PUSH1 0x20 (32)
+    PUSH1 0x20 (32)  // v17.*i256 = gep v9 0.i64 v0;
     MUL
     ADD
     MLOAD  // v18.i256 = mload v17 i256;

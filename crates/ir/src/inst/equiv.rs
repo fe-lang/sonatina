@@ -75,6 +75,7 @@ pub enum BinaryInstKind {
     EvmUmulsat,
     EvmSmulsat,
     EvmExp,
+    EvmSignExtend,
     EvmByte,
 }
 

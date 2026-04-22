@@ -1,3 +1,4 @@
+use cranelift_entity::SecondaryMap;
 use rayon::prelude::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
 use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::{debug_span, info_span, trace_span};
@@ -12,10 +13,10 @@ use crate::{
     stackalloc::{StackifyAlloc, StackifyBuilder},
 };
 use sonatina_ir::{
-    Function, GlobalVariableRef, InstSetExt, Module,
+    AccessKind, AccessLoc, Function, GlobalVariableRef, InstSetExt, Module, ValueId,
     cfg::ControlFlowGraph,
     inst::evm::inst_set::EvmInstKind,
-    isa::Isa,
+    isa::{Isa, evm::space::MEMORY},
     module::{FuncRef, ModuleCtx},
     object::EmbedSymbol,
 };
@@ -32,13 +33,18 @@ use super::{
     malloc_plan,
     mem_effects::compute_func_mem_effects,
     memory_plan::{
-        self, FREE_PTR_SLOT, FuncMemPlan, ProgramMemoryPlan, STATIC_BASE, StableMode, WORD_BYTES,
-        compute_abs_clobber_words, compute_program_memory_plan, topo_sort_sccs,
+        self, DYN_SP_SLOT, FREE_PTR_SLOT, FuncMemPlan, ProgramMemoryPlan, STATIC_BASE, StableMode,
+        WORD_BYTES, compute_abs_clobber_words, compute_program_memory_plan, topo_sort_sccs,
     },
     pipeline::EvmPipeline,
+    provenance::{Provenance, compute_value_provenance},
     ptr_escape::PtrEscapeSummary,
     scratch_effects, scratch_plan,
 };
+
+const FREE_PTR_SLOT_START: u32 = FREE_PTR_SLOT as u32;
+const FREE_PTR_SLOT_END: u32 = FREE_PTR_SLOT_START + WORD_BYTES;
+const DYN_SP_SLOT_START: u32 = DYN_SP_SLOT as u32;
 
 pub struct EvmPreparedSection {
     work: SectionWorkModule,
@@ -77,11 +83,12 @@ impl EvmPreparedSection {
 
 #[derive(Clone)]
 pub(crate) struct EvmSectionPlan {
+    pub(crate) arena_base: u32,
     pub(crate) dyn_base: u32,
     pub(crate) scratch_peak_words: u32,
     pub(crate) static_chain_peak_words: u32,
     pub(crate) has_persistent_mallocs: bool,
-    pub(crate) has_explicit_free_ptr_writes: bool,
+    pub(crate) free_ptr_slot_may_be_written: bool,
 }
 
 #[derive(Clone)]
@@ -93,6 +100,342 @@ pub(crate) struct EvmFunctionPlan {
     pub(crate) frame_summary: FrameSummary,
     pub(crate) dyn_sp_plan: FuncDynSpPlan,
     pub(crate) function_entry_jumpdest: bool,
+}
+
+#[derive(Clone, Copy)]
+enum MemoryAccessLen {
+    Known(u32),
+    Value(ValueId),
+}
+
+impl MemoryAccessLen {
+    fn is_zero(self, function: &Function) -> bool {
+        match self {
+            MemoryAccessLen::Known(len) => len == 0,
+            MemoryAccessLen::Value(len) => value_imm_u32(function, len) == Some(0),
+        }
+    }
+
+    fn as_u32(self, function: &Function) -> Option<u32> {
+        match self {
+            MemoryAccessLen::Known(len) => Some(len),
+            MemoryAccessLen::Value(len) => value_imm_u32(function, len),
+        }
+    }
+}
+
+fn value_imm_u32(function: &Function, value: ValueId) -> Option<u32> {
+    function.dfg.value_imm(value).and_then(immediate_u32)
+}
+
+fn byte_ranges_overlap(lhs_start: u32, lhs_len: u32, rhs_start: u32, rhs_end: u32) -> bool {
+    if lhs_len == 0 {
+        return false;
+    }
+
+    lhs_start
+        .checked_add(lhs_len)
+        .is_none_or(|lhs_end| lhs_start < rhs_end && rhs_start < lhs_end)
+}
+
+fn addr_is_allocator_managed(prov: &Provenance) -> bool {
+    !prov.is_empty() && !prov.is_unknown_ptr() && !prov.has_any_arg()
+}
+
+fn memory_access_may_touch_range(
+    function: &Function,
+    addr: ValueId,
+    len: MemoryAccessLen,
+    range_start: u32,
+    range_end: u32,
+    prov: &SecondaryMap<ValueId, Provenance>,
+) -> bool {
+    if len.is_zero(function) {
+        return false;
+    }
+
+    if function.dfg.value_is_imm(addr) {
+        let Some(addr) = value_imm_u32(function, addr) else {
+            return false;
+        };
+        return len.as_u32(function).map_or(addr < range_end, |len| {
+            byte_ranges_overlap(addr, len, range_start, range_end)
+        });
+    }
+
+    let prov = &prov[addr];
+    !addr_is_allocator_managed(prov)
+}
+
+fn memory_access_may_touch_range_from_effect(
+    function: &Function,
+    access: &sonatina_ir::MemoryAccess,
+    range_start: u32,
+    range_end: u32,
+    prov: &SecondaryMap<ValueId, Provenance>,
+) -> bool {
+    if access.space != MEMORY {
+        return false;
+    }
+
+    match &access.loc {
+        AccessLoc::LinearExact { addr, bytes, .. } => memory_access_may_touch_range(
+            function,
+            *addr,
+            MemoryAccessLen::Known(*bytes),
+            range_start,
+            range_end,
+            prov,
+        ),
+        AccessLoc::LinearExactImm { addr, bytes, .. } => immediate_u32(*addr)
+            .is_some_and(|addr| byte_ranges_overlap(addr, *bytes, range_start, range_end)),
+        AccessLoc::LinearRange { addr, len } => memory_access_may_touch_range(
+            function,
+            *addr,
+            MemoryAccessLen::Value(*len),
+            range_start,
+            range_end,
+            prov,
+        ),
+        AccessLoc::WholeSpace | AccessLoc::Unknown => true,
+        AccessLoc::KeyedExact { .. } => false,
+    }
+}
+
+fn memory_write_may_touch_free_ptr_slot(
+    function: &Function,
+    access: &sonatina_ir::MemoryAccess,
+    prov: &SecondaryMap<ValueId, Provenance>,
+) -> bool {
+    access.kind == AccessKind::Write
+        && memory_access_may_touch_range_from_effect(
+            function,
+            access,
+            FREE_PTR_SLOT_START,
+            FREE_PTR_SLOT_END,
+            prov,
+        )
+}
+
+fn function_memory_accesses_match(
+    function: &Function,
+    module: &ModuleCtx,
+    backend: &EvmBackend,
+    ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
+    pred: impl Fn(&Function, &sonatina_ir::MemoryAccess, &SecondaryMap<ValueId, Provenance>) -> bool,
+) -> bool {
+    let prov = compute_value_provenance(function, module, &backend.isa, |callee| {
+        ptr_escape
+            .get(&callee)
+            .cloned()
+            .unwrap_or_else(|| PtrEscapeSummary::conservative_unknown_ctx(module, callee))
+    });
+
+    function.layout.iter_block().any(|block| {
+        function.layout.iter_inst(block).any(|inst| {
+            // Section callees are scanned directly; call summaries only expose whole-space writes.
+            if matches!(
+                backend.isa.inst_set().resolve_inst(function.dfg.inst(inst)),
+                EvmInstKind::Call(_) | EvmInstKind::EvmMalloc(_)
+            ) {
+                return false;
+            }
+
+            function
+                .dfg
+                .effects(inst)
+                .accesses
+                .iter()
+                .any(|access| pred(function, access, &prov))
+        })
+    })
+}
+
+fn function_may_write_free_ptr_slot(
+    function: &Function,
+    module: &ModuleCtx,
+    backend: &EvmBackend,
+    ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
+) -> bool {
+    function_memory_accesses_match(
+        function,
+        module,
+        backend,
+        ptr_escape,
+        memory_write_may_touch_free_ptr_slot,
+    )
+}
+
+#[derive(Clone, Copy)]
+enum MemoryLayoutReservation {
+    None,
+    Reserve { start: u32, len: u32 },
+    LegacyFloor,
+}
+
+#[derive(Default)]
+struct SectionMemoryLayout {
+    max_reserved_end: u32,
+    legacy_floor: bool,
+}
+
+impl SectionMemoryLayout {
+    fn reserve_len(&mut self, start: u32, len: u32) {
+        if len != 0 {
+            match start.checked_add(len) {
+                Some(end) => self.max_reserved_end = self.max_reserved_end.max(end),
+                None => self.legacy_floor = true,
+            }
+        }
+    }
+
+    fn apply(&mut self, reservation: MemoryLayoutReservation) {
+        match reservation {
+            MemoryLayoutReservation::None => {}
+            MemoryLayoutReservation::Reserve { start, len } => self.reserve_len(start, len),
+            MemoryLayoutReservation::LegacyFloor => self.legacy_floor = true,
+        }
+    }
+
+    fn arena_base(&self) -> u32 {
+        let base = align_to_word(self.max_reserved_end).unwrap_or(STATIC_BASE);
+        if self.legacy_floor {
+            base.max(STATIC_BASE)
+        } else {
+            base
+        }
+    }
+}
+
+fn align_to_word(bytes: u32) -> Option<u32> {
+    let rem = bytes % WORD_BYTES;
+    if rem == 0 {
+        Some(bytes)
+    } else {
+        bytes.checked_add(WORD_BYTES - rem)
+    }
+}
+
+fn memory_layout_reservation_for_addr_len(
+    function: &Function,
+    addr: ValueId,
+    len: MemoryAccessLen,
+    prov: &SecondaryMap<ValueId, Provenance>,
+) -> MemoryLayoutReservation {
+    if len.is_zero(function) {
+        return MemoryLayoutReservation::None;
+    }
+
+    if function.dfg.value_is_imm(addr) {
+        return match (value_imm_u32(function, addr), len.as_u32(function)) {
+            (Some(start), Some(len)) => MemoryLayoutReservation::Reserve { start, len },
+            _ => MemoryLayoutReservation::LegacyFloor,
+        };
+    }
+
+    if addr_is_allocator_managed(&prov[addr]) {
+        MemoryLayoutReservation::None
+    } else {
+        MemoryLayoutReservation::LegacyFloor
+    }
+}
+
+fn memory_layout_reservation_from_effect(
+    function: &Function,
+    access: &sonatina_ir::MemoryAccess,
+    prov: &SecondaryMap<ValueId, Provenance>,
+) -> MemoryLayoutReservation {
+    if access.space != MEMORY {
+        return MemoryLayoutReservation::None;
+    }
+
+    match &access.loc {
+        AccessLoc::LinearExact { addr, bytes, .. } => memory_layout_reservation_for_addr_len(
+            function,
+            *addr,
+            MemoryAccessLen::Known(*bytes),
+            prov,
+        ),
+        AccessLoc::LinearExactImm { addr, bytes, .. } => immediate_u32(*addr)
+            .map_or(MemoryLayoutReservation::LegacyFloor, |start| {
+                MemoryLayoutReservation::Reserve { start, len: *bytes }
+            }),
+        AccessLoc::LinearRange { addr, len } => memory_layout_reservation_for_addr_len(
+            function,
+            *addr,
+            MemoryAccessLen::Value(*len),
+            prov,
+        ),
+        AccessLoc::WholeSpace | AccessLoc::Unknown => MemoryLayoutReservation::LegacyFloor,
+        AccessLoc::KeyedExact { .. } => MemoryLayoutReservation::None,
+    }
+}
+
+fn reserve_function_memory_layout(
+    layout: &mut SectionMemoryLayout,
+    function: &Function,
+    module: &ModuleCtx,
+    backend: &EvmBackend,
+    ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
+) {
+    let prov = compute_value_provenance(function, module, &backend.isa, |callee| {
+        ptr_escape
+            .get(&callee)
+            .cloned()
+            .unwrap_or_else(|| PtrEscapeSummary::conservative_unknown_ctx(module, callee))
+    });
+
+    for block in function.layout.iter_block() {
+        for inst in function.layout.iter_inst(block) {
+            if matches!(
+                backend.isa.inst_set().resolve_inst(function.dfg.inst(inst)),
+                EvmInstKind::Call(_) | EvmInstKind::EvmMalloc(_) | EvmInstKind::EvmMsize(_)
+            ) {
+                continue;
+            }
+
+            for access in &function.dfg.effects(inst).accesses {
+                layout.apply(memory_layout_reservation_from_effect(
+                    function, access, &prov,
+                ));
+            }
+        }
+    }
+}
+
+struct ArenaBaseFacts {
+    has_dynamic_frames: bool,
+    has_stackify_scratch_spills: bool,
+    has_persistent_mallocs: bool,
+}
+
+fn choose_arena_base(
+    module: &Module,
+    funcs: &[FuncRef],
+    backend: &EvmBackend,
+    ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
+    facts: ArenaBaseFacts,
+) -> u32 {
+    let mut layout = SectionMemoryLayout::default();
+
+    if facts.has_stackify_scratch_spills {
+        layout.reserve_len(0, scratch_plan::SCRATCH_SPILL_SLOTS * WORD_BYTES);
+    }
+    if facts.has_persistent_mallocs {
+        layout.reserve_len(FREE_PTR_SLOT_START, WORD_BYTES);
+    }
+    if facts.has_dynamic_frames {
+        layout.reserve_len(FREE_PTR_SLOT_START, WORD_BYTES);
+        layout.reserve_len(DYN_SP_SLOT_START, WORD_BYTES);
+    }
+
+    for &func in funcs {
+        module.func_store.view(func, |function| {
+            reserve_function_memory_layout(&mut layout, function, &module.ctx, backend, ptr_escape);
+        });
+    }
+
+    layout.arena_base()
 }
 
 pub(crate) fn prepare_section(
@@ -200,9 +543,6 @@ pub(crate) fn prepare_section(
         }
     }
 
-    if std::env::var_os("SONATINA_EVM_MEM_DEBUG").is_some() {
-        debug_print_mem_plan(module, &funcs, &plan);
-    }
     let has_persistent_mallocs = {
         let _span = trace_span!("sonatina.codegen.evm.detect_persistent_mallocs").entered();
         funcs.iter().copied().any(|func| {
@@ -221,30 +561,35 @@ pub(crate) fn prepare_section(
             })
         })
     };
-    let has_explicit_free_ptr_writes = {
-        let _span = trace_span!("sonatina.codegen.evm.detect_explicit_free_ptr_writes").entered();
+    let free_ptr_slot_may_be_written = {
+        let _span = trace_span!("sonatina.codegen.evm.detect_free_ptr_slot_writes").entered();
         funcs.iter().copied().any(|func| {
             module.func_store.view(func, |function| {
-                function.layout.iter_block().any(|block| {
-                    function.layout.iter_inst(block).any(|inst| {
-                        match backend.isa.inst_set().resolve_inst(function.dfg.inst(inst)) {
-                            EvmInstKind::Mstore(mstore) => function
-                                .dfg
-                                .value_imm(*mstore.addr())
-                                .and_then(immediate_u32)
-                                .is_some_and(|addr| addr == u32::from(FREE_PTR_SLOT)),
-                            EvmInstKind::EvmMstore8(mstore8) => function
-                                .dfg
-                                .value_imm(*mstore8.addr())
-                                .and_then(immediate_u32)
-                                .is_some_and(|addr| addr == u32::from(FREE_PTR_SLOT)),
-                            _ => false,
-                        }
-                    })
-                })
+                function_may_write_free_ptr_slot(function, &module.ctx, backend, &ptr_escape)
             })
         })
     };
+    let has_dynamic_frames = plan.funcs.values().any(FuncMemPlan::uses_dynamic_frame);
+    let has_stackify_scratch_spills = analyses
+        .values()
+        .any(|analysis| analysis.alloc.uses_scratch_spills());
+
+    let arena_base = choose_arena_base(
+        module,
+        &funcs,
+        backend,
+        &ptr_escape,
+        ArenaBaseFacts {
+            has_dynamic_frames,
+            has_stackify_scratch_spills,
+            has_persistent_mallocs,
+        },
+    );
+    plan.set_arena_base(arena_base);
+
+    if std::env::var_os("SONATINA_EVM_MEM_DEBUG").is_some() {
+        debug_print_mem_plan(module, &funcs, &plan);
+    }
 
     let section_entry = work.entry();
     let function_entry_jump_targets = {
@@ -263,14 +608,13 @@ pub(crate) fn prepare_section(
             &backend.isa,
         )
     };
-    let has_dynamic_frames = plan.funcs.values().any(FuncMemPlan::uses_dynamic_frame);
-
     let section_plan = EvmSectionPlan {
+        arena_base: plan.arena_base,
         dyn_base: plan.global_dyn_base,
         scratch_peak_words: plan.scratch_peak_words,
         static_chain_peak_words: plan.static_chain_peak_words,
         has_persistent_mallocs,
-        has_explicit_free_ptr_writes,
+        free_ptr_slot_may_be_written,
     };
     let function_plans = {
         let _span = trace_span!("sonatina.codegen.evm.extract_lowering_state").entered();
@@ -356,9 +700,11 @@ pub(crate) fn prepare_section(
 
     let _span = debug_span!(
         "sonatina.codegen.evm.prepare_section_summary",
+        arena_base,
         has_dynamic_frames,
+        has_stackify_scratch_spills,
         has_persistent_mallocs,
-        has_explicit_free_ptr_writes
+        free_ptr_slot_may_be_written,
     )
     .entered();
     let mut globals: Vec<_> = membership.globals.iter().copied().collect();
@@ -664,8 +1010,11 @@ fn debug_print_mem_plan(module: &Module, funcs: &[FuncRef], plan: &ProgramMemory
     funcs_by_name.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
 
     eprintln!(
-        "evm mem debug: global_dyn_base=0x{:x} static_base=0x{:x} scratch_peak_words={} static_chain_peak_words={}",
-        plan.global_dyn_base, STATIC_BASE, plan.scratch_peak_words, plan.static_chain_peak_words
+        "evm mem debug: global_dyn_base=0x{:x} arena_base=0x{:x} scratch_peak_words={} static_chain_peak_words={}",
+        plan.global_dyn_base,
+        plan.arena_base,
+        plan.scratch_peak_words,
+        plan.static_chain_peak_words
     );
     eprintln!("evm mem debug: entry_mem_init_stores=0");
 
@@ -697,15 +1046,7 @@ fn debug_print_mem_plan(module: &Module, funcs: &[FuncRef], plan: &ProgramMemory
         };
 
         let abs_end_words = func_plan.abs_words_end();
-        let abs_end = (abs_end_words != 0).then(|| {
-            STATIC_BASE
-                .checked_add(
-                    abs_end_words
-                        .checked_mul(WORD_BYTES)
-                        .expect("absolute end overflow"),
-                )
-                .expect("absolute end overflow")
-        });
+        let abs_end = (abs_end_words != 0).then(|| func_plan.abs_addr_for_word(abs_end_words));
 
         eprintln!(
             "evm mem debug: {name} scratch_words={} stable_words={} stable_mode={} entry_abs_words={} abs_words_end={} malloc_bounds(min,max,count)=({:?},{:?},{malloc_count}) abs_end={:?}",

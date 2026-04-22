@@ -1,0 +1,30 @@
+target = "evm-ethereum-london"
+
+# sameln: func private %fold_evm_signextend_const() -> i32 {
+# nextln:     block0:
+# nextln:         return 127.i32;
+func private %fold_evm_signextend_const() -> i32 {
+    block0:
+        v0.i32 = evm_signextend 0.i32 127.i32;
+        return v0;
+}
+
+# sameln: func private %fold_evm_signextend_byte_ge_32(v0.i256) -> i256 {
+# nextln:     block0:
+# nextln:         return v0;
+func private %fold_evm_signextend_byte_ge_32(v0.i256) -> i256 {
+    block0:
+        v1.i256 = evm_signextend 32.i256 v0;
+        return v1;
+}
+
+# sameln: func private %fold_evm_signextend_known_zero_sign(v0.i256) -> i256 {
+# nextln:     block0:
+# nextln:         v1.i256 = and v0 127.i256;
+# nextln:         return v1;
+func private %fold_evm_signextend_known_zero_sign(v0.i256) -> i256 {
+    block0:
+        v1.i256 = and v0 127.i256;
+        v2.i256 = evm_signextend 0.i256 v1;
+        return v2;
+}

@@ -11,18 +11,6 @@ type @Cursor = {@Bytes, i256};
 type @Decoder = {@Cursor, i256};
 type @CallData = {i256, i256};
 
-func private %add_1(v0.i256, v1.i256) -> i256 {
-    block0:
-        (v2.i256, v3.i1) = uaddo v0 v1;
-        br v3 block1 block2;
-
-    block1:
-        evm_revert 0.i256 0.i256;
-
-    block2:
-        return v2;
-}
-
 func private %call_target(v0.@Addr, v1.i256, v2.i256) -> i256 {
     block0:
         v25.*i8 = evm_malloc 4.i256;
@@ -49,23 +37,21 @@ func private %call_target(v0.@Addr, v1.i256, v2.i256) -> i256 {
 
     block11:
         v51.i1 = lt v16 32.i256;
-        br v51 block12 block13;
+        br v51 block12 block17;
 
     block12:
         evm_revert 0.i256 0.i256;
 
-    block13:
-        v69.i256 = call %add_1 0.i256 32.i256;
-        v70.i1 = gt v69 v16;
-        br v70 block16 block17;
+    block17:
+        v71.i1 = gt 32.i256 v16;
+        br v71 block18 block21;
 
-    block16:
+    block18:
         evm_revert 0.i256 0.i256;
 
-    block17:
-        v72.i256 = call %add_1 v18 0.i256;
-        v73.i256 = mload v72 i256;
-        return v73;
+    block21:
+        v75.i256 = mload v18 i256;
+        return v75;
 }
 
 func public %entry() {

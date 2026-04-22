@@ -1,0 +1,117 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: opt_ir_snapshot
+input_file: test_files/evm/plank_erc20_v1.sntn
+---
+target = "evm-ethereum-osaka"
+
+func public %init() {
+    block0:
+        v1.*i8 = evm_malloc 64.i256;
+        v2.i256 = ptr_to_int v1 i256;
+        v3.i256 = sym_size .;
+        evm_code_copy v2 v3 64.i256;
+        v4.i256 = mload v2 i256;
+        v20.i256 = shr 160.i256 v4;
+        v21.i1 = is_zero v20;
+        br v21 block1 block3;
+
+    block3:
+        evm_revert 0.i256 0.i256;
+
+    block1:
+        v7.i256 = add v2 32.i256;
+        v8.i256 = mload v7 i256;
+        v16.*i8 = evm_malloc 32.i256;
+        v17.i256 = ptr_to_int v16 i256;
+        mstore v17 v4 i256;
+        v18.i256 = evm_keccak256 v17 32.i256;
+        evm_sstore v18 v8;
+        v10.i256 = sym_size &runtime;
+        v11.*i8 = evm_malloc v10;
+        v12.i256 = ptr_to_int v11 i256;
+        v13.i256 = sym_addr &runtime;
+        evm_code_copy v12 v13 v10;
+        evm_return v12 v10;
+}
+
+func public %run() {
+    block0:
+        v1.i256 = evm_calldata_load 0.i256;
+        v3.i256 = shr 224.i256 v1;
+        v5.i1 = eq v3 2835717307.i256;
+        br v5 block2 block1;
+
+    block1:
+        v25.i1 = eq v3 1889567281.i256;
+        br v25 block8 block7;
+
+    block2:
+        v7.i256 = evm_calldata_load 4.i256;
+        v40.i256 = shr 160.i256 v7;
+        v41.i1 = is_zero v40;
+        br v41 block10 block12;
+
+    block12:
+        evm_revert 0.i256 0.i256;
+
+    block10:
+        v10.i256 = evm_calldata_load 36.i256;
+        v11.i256 = evm_caller;
+        v28.*i8 = evm_malloc 32.i256;
+        v29.i256 = ptr_to_int v28 i256;
+        mstore v29 v11 i256;
+        v30.i256 = evm_keccak256 v29 32.i256;
+        v13.i256 = evm_sload v30;
+        v14.i1 = lt v13 v10;
+        br v14 block5 block6;
+
+    block5:
+        evm_revert 0.i256 0.i256;
+
+    block6:
+        v18.i256 = sub v13 v10;
+        evm_sstore v30 v18;
+        v31.*i8 = evm_malloc 32.i256;
+        v32.i256 = ptr_to_int v31 i256;
+        mstore v32 v7 i256;
+        v33.i256 = evm_keccak256 v32 32.i256;
+        v21.i256 = evm_sload v33;
+        v22.i256 = add v21 v10;
+        evm_sstore v33 v22;
+        evm_stop;
+
+    block7:
+        evm_revert 0.i256 0.i256;
+
+    block8:
+        v26.i256 = evm_calldata_load 4.i256;
+        v42.i256 = shr 160.i256 v26;
+        v43.i1 = is_zero v42;
+        br v43 block14 block16;
+
+    block16:
+        evm_revert 0.i256 0.i256;
+
+    block14:
+        v34.*i8 = evm_malloc 32.i256;
+        v35.i256 = ptr_to_int v34 i256;
+        mstore v35 v26 i256;
+        v36.i256 = evm_keccak256 v35 32.i256;
+        v29.i256 = evm_sload v36;
+        v31.*i8 = evm_malloc 32.i256;
+        v32.i256 = ptr_to_int v31 i256;
+        mstore v32 v29 i256;
+        evm_return v32 32.i256;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %run;
+    }
+    section init {
+        entry %init;
+        embed .runtime as &runtime;
+    }
+}

@@ -1,0 +1,48 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: "String::from_utf8(out).unwrap()"
+input_file: test_files/evm/arena_base_unknown_access_legacy_floor.sntn
+---
+evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
+
+object: Contract
+  section runtime: 31 bytes
+  total: 31 bytes
+
+functions:
+  entry: ir_blocks=1 ir_insts=7 vcode_ops=24 fixups=1 imm_bytes=6
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
+
+evm:
+  case ok: calldata_len=32 success reason=Return gas_used=21261 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=121
+
+
+--------------- DEBUG ---------------
+
+// func public %entry()
+entry:
+  block0:
+    PUSH0  // v0.i256 = evm_calldata_load 0.i256;
+    CALLDATALOAD
+    PUSH1 0x63 (99)  // mstore v0 99.i256 i256;
+    SWAP1
+    MSTORE
+    PUSH1 0x40 (64)  // v1.*i256 = evm_malloc 32.i256;
+    MLOAD
+    PUSH1 0x9f (159)
+    DUP2
+    GT
+    PUSH1 `pc + (4)`
+    JUMPI
+    POP
+    PUSH1 0xa0 (160)
+    JUMPDEST
+    PUSH1 0xb (11)  // mstore v1 11.i256 i256;
+    DUP2
+    MSTORE
+    MLOAD  // v3.i256 = mload v1 i256;
+    PUSH0  // mstore 0.i256 v3 i256;
+    MSTORE
+    PUSH1 0x20 (32)  // evm_return 0.i256 32.i256;
+    PUSH0
+    RETURN

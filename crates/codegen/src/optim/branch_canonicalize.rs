@@ -227,42 +227,14 @@ fn zero_compare_branch_rewrite(
     }
 
     let (arg, swap) = match kind {
-        BinaryInstKind::Eq
-            if func.dfg.value_ty(lhs).is_integral()
-                && func
-                    .dfg
-                    .value_imm(rhs)
-                    .is_some_and(sonatina_ir::Immediate::is_zero) =>
-        {
-            (lhs, false)
-        }
-        BinaryInstKind::Eq
-            if func.dfg.value_ty(rhs).is_integral()
-                && func
-                    .dfg
-                    .value_imm(lhs)
-                    .is_some_and(sonatina_ir::Immediate::is_zero) =>
-        {
-            (rhs, false)
-        }
-        BinaryInstKind::Ne
-            if func.dfg.value_ty(lhs).is_integral()
-                && func
-                    .dfg
-                    .value_imm(rhs)
-                    .is_some_and(sonatina_ir::Immediate::is_zero) =>
-        {
-            (lhs, true)
-        }
-        BinaryInstKind::Ne
-            if func.dfg.value_ty(rhs).is_integral()
-                && func
-                    .dfg
-                    .value_imm(lhs)
-                    .is_some_and(sonatina_ir::Immediate::is_zero) =>
-        {
-            (rhs, true)
-        }
+        BinaryInstKind::Eq if is_integral_zero_compare(func, lhs, rhs) => (lhs, false),
+        BinaryInstKind::Eq if is_integral_zero_compare(func, rhs, lhs) => (rhs, false),
+        BinaryInstKind::Ne if is_integral_zero_compare(func, lhs, rhs) => (lhs, true),
+        BinaryInstKind::Ne if is_integral_zero_compare(func, rhs, lhs) => (rhs, true),
+        BinaryInstKind::Gt if is_integral_zero_compare(func, lhs, rhs) => (lhs, true),
+        BinaryInstKind::Lt if is_integral_zero_compare(func, rhs, lhs) => (rhs, true),
+        BinaryInstKind::Le if is_integral_zero_compare(func, lhs, rhs) => (lhs, false),
+        BinaryInstKind::Ge if is_integral_zero_compare(func, rhs, lhs) => (rhs, false),
         _ => return None,
     };
 
@@ -270,6 +242,11 @@ fn zero_compare_branch_rewrite(
         cond: insert_is_zero_before(func, term, arg)?,
         swap,
     })
+}
+
+fn is_integral_zero_compare(func: &Function, value: ValueId, zero: ValueId) -> bool {
+    func.dfg.value_ty(value).is_integral()
+        && func.dfg.value_imm(zero).is_some_and(Immediate::is_zero)
 }
 
 fn i1_literal(func: &Function, value: ValueId) -> Option<bool> {
@@ -473,6 +450,47 @@ block2:
         assert!(body.contains(" = is_zero v0;"), "{body}");
         assert!(body.contains("block2 block1;"), "{body}");
         assert!(!body.contains(" = ne "), "{body}");
+    }
+
+    #[test]
+    fn rewrites_unsigned_zero_inequality_branches_to_is_zero() {
+        for (cmp, expected_dests, removed_op) in [
+            ("gt v0 0.i256", "block2 block1;", "gt"),
+            ("lt 0.i256 v0", "block2 block1;", "lt"),
+            ("le v0 0.i256", "block1 block2;", "le"),
+            ("ge 0.i256 v0", "block1 block2;", "ge"),
+        ] {
+            let src = format!(
+                r#"
+target = "evm-ethereum-osaka"
+
+func public %f(v0.i256) -> i256 {{
+block0:
+    v1.i1 = {cmp};
+    br v1 block1 block2;
+
+block1:
+    return 1.i256;
+
+block2:
+    return 2.i256;
+}}
+"#
+            );
+            let (module, func_ref) = parse_test_module(&src);
+
+            module.func_store.modify(func_ref, |func| {
+                assert!(BranchCanonicalize::new().run(func));
+            });
+
+            let body = dump_func(&module, func_ref);
+            assert!(body.contains(" = is_zero v0;"), "{cmp}\n{body}");
+            assert!(body.contains(expected_dests), "{cmp}\n{body}");
+            assert!(
+                !body.contains(&format!(" = {removed_op} ")),
+                "{cmp}\n{body}"
+            );
+        }
     }
 
     #[test]

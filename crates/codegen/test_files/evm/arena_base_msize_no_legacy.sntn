@@ -1,0 +1,22 @@
+#! evm.config: { vcode: true, bytecode_hex: false, stackify_trace: false, evm_trace: false }
+#! evm.case: ok
+#!   calldata:
+#!   expect: return u256(1)
+
+target = "evm-ethereum-osaka"
+
+func public %entry() {
+    block0:
+        v0.i256 = evm_msize;
+        v1.i256 = add v0 32.i256;
+        v2.*i8 = evm_malloc v1;
+        v3.*i256 = bitcast v2 *i256;
+        mstore v3 1.i256 i256;
+        evm_return v3 32.i256;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}

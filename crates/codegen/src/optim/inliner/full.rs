@@ -325,7 +325,7 @@ pub(super) fn try_inline_callsite_full(
         blocks_cloned: block_map.len(),
         insts_cloned: inserted_insts,
         phi_fixups: phi_fixups.len(),
-        net_growth: inserted_insts,
+        net_growth: inserted_insts.saturating_sub(1),
         cont_block,
         cont_reachable,
     })

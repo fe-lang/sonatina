@@ -6,15 +6,15 @@ input_file: test_files/evm/internal_call_preserved_uaddo_result_tuple.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=true evm_trace=false emit_observability=false opt=1
 
 object: Contract
-  section runtime: 166 bytes
-  total: 166 bytes
+  section runtime: 172 bytes
+  total: 172 bytes
 
 functions:
   entry: ir_blocks=14 ir_insts=48 vcode_ops=129 fixups=10 imm_bytes=26
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=32 success reason=Return gas_used=21508 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=368
+  case ok: calldata_len=32 success reason=Return gas_used=21517 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=377
 
 
 --------------- DEBUG ---------------
@@ -207,13 +207,13 @@ entry:
   block0:
     PUSH1 0x40 (64)  // v0.*i256 = evm_malloc 32.i256;
     MLOAD
-    PUSH1 0x9f (159)
+    PUSH2 0x21f (543)
     DUP2
     GT
     PUSH1 `pc + (4)`
     JUMPI
     POP
-    PUSH1 0xa0 (160)
+    PUSH2 0x220 (544)
     JUMPDEST
     DUP1
     PUSH1 0x20 (32)
@@ -278,13 +278,13 @@ entry:
   block16:
     PUSH1 0x40 (64)  // v34.*i256 = evm_malloc 64.i256;
     MLOAD
-    PUSH1 0x9f (159)
+    PUSH2 0x21f (543)
     DUP2
     GT
     PUSH1 `pc + (4)`
     JUMPI
     POP
-    PUSH1 0xa0 (160)
+    PUSH2 0x220 (544)
     JUMPDEST
     PUSH1 0x1 (1)  // mstore v36 1.i256 i256;
     DUP2
@@ -302,13 +302,13 @@ entry:
     JUMPDEST
     PUSH1 0x40 (64)  // v39.*i256 = evm_malloc 64.i256;
     MLOAD
-    PUSH1 0x9f (159)
+    PUSH2 0x21f (543)
     DUP2
     GT
     PUSH1 `pc + (4)`
     JUMPI
     POP
-    PUSH1 0xa0 (160)
+    PUSH2 0x220 (544)
     JUMPDEST
     PUSH0  // mstore v41 0.i256 i256;
     DUP2

@@ -28,9 +28,7 @@ evm:
 // func public %big() -> i256
 big:
   block0:
-    PUSH1 0xa0 (160)  // v0.*@big = alloca @big;
-    POP  // v1.*i256 = gep v0 0.i256 0.i256;
-    PUSH1 0xa0 (160)
+    PUSH1 0xa0 (160)  // v1.*i256 = gep v0 0.i256 0.i256;
     PUSH2 0x3e7 (999)  // mstore v1 999.i256 i256;
     DUP2
     MSTORE

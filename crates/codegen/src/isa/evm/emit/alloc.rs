@@ -3,8 +3,7 @@ use sonatina_ir::{BlockId, Function, I256, Immediate, InstId};
 use crate::stackalloc::{Action, Actions, Allocator, StackifyAlloc};
 
 use super::super::{
-    DynamicFrameLayout, FuncMemPlan, ObjLoc, PreserveMode, STATIC_BASE, WORD_BYTES,
-    static_arena_alloc::StackObjId,
+    DynamicFrameLayout, FuncMemPlan, ObjLoc, PreserveMode, static_arena_alloc::StackObjId,
 };
 
 pub(crate) struct FinalAlloc {
@@ -18,13 +17,7 @@ impl FinalAlloc {
     }
 
     fn abs_addr_for_word(&self, word_off: u32) -> u32 {
-        STATIC_BASE
-            .checked_add(
-                word_off
-                    .checked_mul(WORD_BYTES)
-                    .expect("stack object addr bytes overflow"),
-            )
-            .expect("stack object addr bytes overflow")
+        self.mem_plan.abs_addr_for_word(word_off)
     }
 
     pub(crate) fn obj_loc_for_id(&self, id: StackObjId) -> ObjLoc {
@@ -292,7 +285,7 @@ mod tests {
 
     use super::{FinalAlloc, StackifyAlloc};
     use crate::{
-        isa::evm::{FuncMemPlan, ObjLoc, memory_plan::StableMode},
+        isa::evm::{FuncMemPlan, ObjLoc, STATIC_BASE, memory_plan::StableMode},
         stackalloc::Action,
     };
 
@@ -300,6 +293,7 @@ mod tests {
         let mut alloca_loc = FxHashMap::default();
         alloca_loc.insert(alloca, loc);
         FuncMemPlan {
+            arena_base: STATIC_BASE,
             scratch_words: 0,
             stable_words,
             stable_mode: StableMode::DynamicFrame,

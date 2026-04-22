@@ -6,8 +6,8 @@ input_file: test_files/evm/returned_object_field_ref_capture_preserves_source_st
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 69 bytes
-  total: 69 bytes
+  section runtime: 65 bytes
+  total: 65 bytes
 
 functions:
   make_view: ir_blocks=1 ir_insts=7 vcode_ops=12 fixups=0 imm_bytes=2
@@ -18,7 +18,7 @@ functions:
     mem: scratch_words=0 stable_words=4 stable_mode=StaticAbs(base=0xa0) entry_abs_words=0 abs_words_end=4
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=21197 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=197
+  case ok: calldata_len=0 success reason=Return gas_used=21187 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=187
 
 
 --------------- DEBUG ---------------
@@ -59,15 +59,11 @@ read_view:
 entry:
   block0:
     PUSH1 0xa0 (160)  // v0.*@Data = alloca @Data;
-    DUP1  // v1.*i256 = gep v0 0.i256 0.i256;
-    POP
-    PUSH1 0xa0 (160)
+    PUSH1 0xa0 (160)  // v1.*i256 = gep v0 0.i256 0.i256;
     PUSH1 0xa (10)  // mstore v1 10.i256 i256;
     SWAP1
     MSTORE
-    DUP1  // v2.*i256 = gep v0 0.i256 1.i256;
-    POP
-    PUSH1 0xc0 (192)
+    PUSH1 0xc0 (192)  // v2.*i256 = gep v0 0.i256 1.i256;
     PUSH1 0x14 (20)  // mstore v2 20.i256 i256;
     SWAP1
     MSTORE

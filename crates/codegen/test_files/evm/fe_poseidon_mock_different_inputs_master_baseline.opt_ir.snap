@@ -113,9 +113,9 @@ func private %mix(v0.*[i256; 3]) -> *[i256; 3] {
     block1:
         v9.i256 = phi (0.i256 block0) (v17 block3);
         v11.i1 = lt v9 3.i256;
-        br v11 block2 block4;
+        br v11 block15 block4;
 
-    block2:
+    block15:
         v29.*i256 = gep v6 0.i256 v9;
         jump block5;
 
@@ -127,7 +127,7 @@ func private %mix(v0.*[i256; 3]) -> *[i256; 3] {
         return v6;
 
     block5:
-        v19.i256 = phi (0.i256 block2) (v63 block10);
+        v19.i256 = phi (0.i256 block15) (v63 block10);
         v21.i1 = lt v19 3.i256;
         br v21 block10 block3;
 
@@ -151,14 +151,14 @@ func private %mix(v0.*[i256; 3]) -> *[i256; 3] {
 
 func private %poseidon_mock(v0.i256, v1.i256) -> i256 {
     block0:
-        v54.i256 = evm_umod v0 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
-        v56.i256 = evm_umod v1 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
+        v58.i256 = evm_umod v0 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
+        v60.i256 = evm_umod v1 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
         v10.*i8 = evm_malloc 96.i256;
         v11.*[i256; 3] = bitcast v10 *[i256; 3];
         v13.*i256 = bitcast v11 *i256;
-        mstore v13 v54 i256;
+        mstore v13 v58 i256;
         v15.*i256 = gep v11 0.i256 1.i256;
-        mstore v15 v56 i256;
+        mstore v15 v60 i256;
         v17.*i256 = gep v11 0.i256 2.i256;
         mstore v17 0.i256 i256;
         v22.*i8 = evm_malloc 32.i256;
@@ -171,9 +171,9 @@ func private %poseidon_mock(v0.i256, v1.i256) -> i256 {
         v63.*[i256; 3] = phi (v11 block0) (v34 block3);
         v25.i256 = phi (0.i256 block0) (v39 block3);
         v27.i1 = lt v25 v24;
-        br v27 block2 block14;
+        br v27 block16 block14;
 
-    block2:
+    block16:
         v32.*[i256; 3] = call %ark v63 v66;
         v33.*[i256; 3] = call %sigma_full v32;
         v34.*[i256; 3] = call %mix v33;
@@ -189,9 +189,9 @@ func private %poseidon_mock(v0.i256, v1.i256) -> i256 {
         v73.*[i256; 3] = phi (v63 block14) (v54 block7);
         v45.i256 = phi (0.i256 block14) (v58 block7);
         v47.i1 = lt v45 v44;
-        br v47 block6 block8;
+        br v47 block20 block8;
 
-    block6:
+    block20:
         v52.*[i256; 3] = call %ark v73 v76;
         v53.*[i256; 3] = call %sigma_full v52;
         v54.*[i256; 3] = call %mix v53;
@@ -233,12 +233,12 @@ func private %range_known_const_s__usize___unknown__h4e84f6b6b8307914_seq_ha637d
 
 func public %entry() {
     block0:
-        v6.i256 = call %poseidon_mock 1.i256 2.i256;
+        v4.i256 = call %poseidon_mock 1.i256 2.i256;
         v7.i256 = call %poseidon_mock 3.i256 4.i256;
-        v8.i1 = eq v6 v7;
-        br v8 block3 block1;
+        v8.i1 = eq v4 v7;
+        br v8 block4 block1;
 
-    block3:
+    block4:
         evm_revert 0.i256 0.i256;
 
     block1:
