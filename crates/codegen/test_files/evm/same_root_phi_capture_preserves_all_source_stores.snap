@@ -6,16 +6,16 @@ input_file: test_files/evm/same_root_phi_capture_preserves_all_source_stores.snt
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 35 bytes
-  total: 35 bytes
+  section runtime: 33 bytes
+  total: 33 bytes
 
 functions:
   entry: ir_blocks=4 ir_insts=14 vcode_ops=30 fixups=2 imm_bytes=5
     mem: scratch_words=2 stable_words=0 stable_mode=None entry_abs_words=2 abs_words_end=2
 
 evm:
-  case field0: calldata_len=32 success reason=Return gas_used=21229 gas_refunded=0 logs=0 output=call len=32 tx_gas=21128 runtime_gas=101
-  case field1: calldata_len=32 success reason=Return gas_used=21228 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=88
+  case field0: calldata_len=32 success reason=Return gas_used=21224 gas_refunded=0 logs=0 output=call len=32 tx_gas=21128 runtime_gas=96
+  case field1: calldata_len=32 success reason=Return gas_used=21223 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=83
 
 
 --------------- DEBUG ---------------
@@ -29,9 +29,7 @@ entry:
     PUSH1 0xa (10)  // mstore v6 10.i256 i256;
     DUP2
     MSTORE
-    DUP1  // v9.*i256 = gep v5 0.i256 1.i256;
-    POP
-    PUSH1 0xc0 (192)
+    PUSH1 0xc0 (192)  // v9.*i256 = gep v5 0.i256 1.i256;
     PUSH1 0x14 (20)  // mstore v9 20.i256 i256;
     DUP2
     MSTORE

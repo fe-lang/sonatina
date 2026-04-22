@@ -6,18 +6,18 @@ input_file: test_files/evm/fe_vault_test_vault_multiuser_unoptimized.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 4353 bytes
-  total: 4353 bytes
+  section runtime: 4289 bytes
+  total: 4289 bytes
 
 object: Vault
-  section init: 841 bytes
-  section runtime: 823 bytes
-  total: 1664 bytes
+  section init: 839 bytes
+  section runtime: 821 bytes
+  total: 1660 bytes
 
 object: VaultUser
-  section init: 1109 bytes
-  section runtime: 1098 bytes
-  total: 2207 bytes
+  section init: 1095 bytes
+  section runtime: 1084 bytes
+  total: 2179 bytes
 
 functions:
   __Vault_recv_0_0: ir_blocks=17 ir_insts=45 vcode_ops=112 fixups=12 imm_bytes=1
@@ -84,7 +84,7 @@ functions:
     mem: scratch_words=0 stable_words=2 stable_mode=StaticAbs(base=0xa0) entry_abs_words=0 abs_words_end=2
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=527042 gas_refunded=79600 logs=0 output=call len=32 tx_gas=21000 runtime_gas=506042
+  case ok: calldata_len=0 success reason=Return gas_used=523486 gas_refunded=79600 logs=0 output=call len=32 tx_gas=21000 runtime_gas=502486
 
 
 --------------- DEBUG ---------------
@@ -408,9 +408,7 @@ __Vault_runtime:
     PUSH0  // mstore v32 0.i256 i256;
     DUP2
     MSTORE
-    DUP1  // v33.*i256 = gep v31 0.i256 1.i256;
-    POP
-    PUSH1 0xc0 (192)
+    PUSH1 0xc0 (192)  // v33.*i256 = gep v31 0.i256 1.i256;
     PUSH1 0x4 (4)  // mstore v33 4.i256 i256;
     SWAP1
     MSTORE
@@ -857,9 +855,7 @@ __VaultUser_runtime:
     PUSH0  // mstore v36 0.i256 i256;
     DUP2
     MSTORE
-    DUP1  // v37.*i256 = gep v35 0.i256 1.i256;
-    POP
-    PUSH1 0xc0 (192)
+    PUSH1 0xc0 (192)  // v37.*i256 = gep v35 0.i256 1.i256;
     PUSH1 0x4 (4)  // mstore v37 4.i256 i256;
     SWAP1
     MSTORE
@@ -987,9 +983,7 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Deposit_h
     JUMPI
   block6:
     JUMPDEST
-    DUP2  // v31.*i256 = gep v34 0.i256 1.i256;
-    POP
-    PUSH2 0x120 (288)
+    PUSH2 0x120 (288)  // v31.*i256 = gep v34 0.i256 1.i256;
     MSTORE  // mstore v31 v37 i256;
     DUP1  // call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_write_word v34 v3;
     SWAP6
@@ -1021,9 +1015,7 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Deposit_h
     SWAP7
     CALL
     RETURNDATASIZE  // v14.i256 = evm_return_data_size;
-    DUP1  // v15.*i256 = evm_malloc v14;
-    POP
-    PUSH1 0x40 (64)
+    PUSH1 0x40 (64)  // v15.*i256 = evm_malloc v14;
     MLOAD
     PUSH2 0x25f (607)
     DUP2
@@ -1074,9 +1066,7 @@ decode_returndata__u256__3271ca15373d4483:
     SWAP1  // mstore v7 v0 i256;
     DUP2
     MSTORE
-    DUP1  // v10.*i256 = gep v5 0.i256 1.i256;
-    POP
-    PUSH2 0x1c0 (448)
+    PUSH2 0x1c0 (448)  // v10.*i256 = gep v5 0.i256 1.i256;
     SWAP1  // mstore v10 v1 i256;
     SWAP2
     SWAP1
@@ -1209,9 +1199,7 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Withdraw_
     JUMPI
   block7:
     JUMPDEST
-    DUP2  // v29.*i256 = gep v39 0.i256 1.i256;
-    POP
-    PUSH2 0x120 (288)
+    PUSH2 0x120 (288)  // v29.*i256 = gep v39 0.i256 1.i256;
     MSTORE  // mstore v29 v42 i256;
     DUP1  // call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_write_word v39 v3;
     SWAP6
@@ -1243,9 +1231,7 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Withdraw_
     SWAP7
     CALL
     RETURNDATASIZE  // v14.i256 = evm_return_data_size;
-    DUP1  // v15.*i256 = evm_malloc v14;
-    POP
-    PUSH1 0x40 (64)
+    PUSH1 0x40 (64)  // v15.*i256 = evm_malloc v14;
     MLOAD
     PUSH2 0x25f (607)
     DUP2
@@ -1334,9 +1320,7 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__GetMyShar
     SWAP6
     CALL
     RETURNDATASIZE  // v14.i256 = evm_return_data_size;
-    DUP1  // v15.*i256 = evm_malloc v14;
-    POP
-    PUSH1 0x40 (64)
+    PUSH1 0x40 (64)  // v15.*i256 = evm_malloc v14;
     MLOAD
     PUSH2 0x25f (607)
     DUP2
@@ -1386,9 +1370,7 @@ create2_stor_arg0_root_stor__Evm_hef0af3106e109414_VaultUser_hcb553b593515d281__
     JUMPDEST
     PUSH0 0x0 (0)  // v18.i256 = sym_size &__VaultUser_init;
     PUSH0 0x0 (0)  // v19.i256 = sym_addr &__VaultUser_init;
-    DUP2  // v9.*i256 = evm_malloc v18;
-    POP
-    PUSH1 0x40 (64)
+    PUSH1 0x40 (64)  // v9.*i256 = evm_malloc v18;
     MLOAD
     PUSH1 0xdf (223)
     DUP2
@@ -1421,9 +1403,7 @@ create2_stor_arg0_root_stor__Evm_hef0af3106e109414_VaultUser_hcb553b593515d281__
     JUMPI
   block1:
     RETURNDATASIZE  // v24.i256 = evm_return_data_size;
-    DUP1  // v25.*i256 = evm_malloc v24;
-    POP
-    PUSH1 0x40 (64)
+    PUSH1 0x40 (64)  // v25.*i256 = evm_malloc v24;
     MLOAD
     PUSH1 0xdf (223)
     DUP2
@@ -1482,9 +1462,7 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__ProxyDepo
     JUMPI
   block6:
     JUMPDEST
-    DUP2  // v35.*i256 = gep v51 0.i256 1.i256;
-    POP
-    PUSH2 0x100 (256)
+    PUSH2 0x100 (256)  // v35.*i256 = gep v51 0.i256 1.i256;
     MSTORE  // mstore v35 v54 i256;
     DUP1  // call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_write_word v51 v46;
     SWAP2
@@ -1523,9 +1501,7 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__ProxyDepo
     SWAP7
     CALL
     RETURNDATASIZE  // v14.i256 = evm_return_data_size;
-    DUP1  // v15.*i256 = evm_malloc v14;
-    POP
-    PUSH1 0x40 (64)
+    PUSH1 0x40 (64)  // v15.*i256 = evm_malloc v14;
     MLOAD
     PUSH2 0x25f (607)
     DUP2
@@ -1614,9 +1590,7 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__GetTotalA
     SWAP6
     CALL
     RETURNDATASIZE  // v14.i256 = evm_return_data_size;
-    DUP1  // v15.*i256 = evm_malloc v14;
-    POP
-    PUSH1 0x40 (64)
+    PUSH1 0x40 (64)  // v15.*i256 = evm_malloc v14;
     MLOAD
     PUSH2 0x25f (607)
     DUP2
@@ -1702,9 +1676,7 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__GetTotalS
     SWAP6
     CALL
     RETURNDATASIZE  // v14.i256 = evm_return_data_size;
-    DUP1  // v15.*i256 = evm_malloc v14;
-    POP
-    PUSH1 0x40 (64)
+    PUSH1 0x40 (64)  // v15.*i256 = evm_malloc v14;
     MLOAD
     PUSH2 0x25f (607)
     DUP2
@@ -1770,9 +1742,7 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__AddYield_
     JUMPI
   block7:
     JUMPDEST
-    DUP2  // v28.*i256 = gep v43 0.i256 1.i256;
-    POP
-    PUSH2 0x100 (256)
+    PUSH2 0x100 (256)  // v28.*i256 = gep v43 0.i256 1.i256;
     MSTORE  // mstore v28 v47 i256;
     DUP1  // call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_write_word v43 v3;
     SWAP6
@@ -1804,9 +1774,7 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__AddYield_
     SWAP7
     CALL
     RETURNDATASIZE  // v14.i256 = evm_return_data_size;
-    DUP1  // v15.*i256 = evm_malloc v14;
-    POP
-    PUSH1 0x40 (64)
+    PUSH1 0x40 (64)  // v15.*i256 = evm_malloc v14;
     MLOAD
     PUSH2 0x19f (415)
     DUP2
@@ -1838,9 +1806,7 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__AddYield_
     SWAP2  // mstore v40 v16 i256;
     DUP3
     MSTORE
-    DUP2  // v41.*i256 = gep v39 0.i256 1.i256;
-    POP
-    PUSH2 0x100 (256)
+    PUSH2 0x100 (256)  // v41.*i256 = gep v39 0.i256 1.i256;
     MSTORE  // mstore v41 v14 i256;
     PUSH2 0x120 (288)  // v45.*@__fe_obj_SolDecoder_8 = alloca @__fe_obj_SolDecoder_8;
     SWAP1  // call %soldecoder_i__ha12a03fcb5ba844b_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b v45 v39;
@@ -1889,9 +1855,7 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__ProxyGetM
     JUMPI
   block7:
     JUMPDEST
-    DUP2  // v29.*i256 = gep v39 0.i256 1.i256;
-    POP
-    PUSH2 0x100 (256)
+    PUSH2 0x100 (256)  // v29.*i256 = gep v39 0.i256 1.i256;
     MSTORE  // mstore v29 v42 i256;
     DUP1  // call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_write_word v39 v3;
     SWAP6
@@ -1923,9 +1887,7 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__ProxyGetM
     SWAP7
     CALL
     RETURNDATASIZE  // v14.i256 = evm_return_data_size;
-    DUP1  // v15.*i256 = evm_malloc v14;
-    POP
-    PUSH1 0x40 (64)
+    PUSH1 0x40 (64)  // v15.*i256 = evm_malloc v14;
     MLOAD
     PUSH2 0x25f (607)
     DUP2
@@ -2000,9 +1962,7 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__ProxyWith
     JUMPI
   block7:
     JUMPDEST
-    DUP2  // v29.*i256 = gep v63 0.i256 1.i256;
-    POP
-    PUSH2 0x100 (256)
+    PUSH2 0x100 (256)  // v29.*i256 = gep v63 0.i256 1.i256;
     MSTORE  // mstore v29 v66 i256;
     DUP1  // call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_write_word v63 v58;
     SWAP2
@@ -2041,9 +2001,7 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__ProxyWith
     SWAP7
     CALL
     RETURNDATASIZE  // v14.i256 = evm_return_data_size;
-    DUP1  // v15.*i256 = evm_malloc v14;
-    POP
-    PUSH1 0x40 (64)
+    PUSH1 0x40 (64)  // v15.*i256 = evm_malloc v14;
     MLOAD
     PUSH2 0x25f (607)
     DUP2
@@ -2084,9 +2042,7 @@ entry:
   block0:
     PUSH0 0x0 (0)  // v53.i256 = sym_size &__Vault_init;
     PUSH0 0x0 (0)  // v54.i256 = sym_addr &__Vault_init;
-    DUP2  // v55.*i256 = evm_malloc v53;
-    POP
-    PUSH1 0x40 (64)
+    PUSH1 0x40 (64)  // v55.*i256 = evm_malloc v53;
     MLOAD
     PUSH2 0x25f (607)
     DUP2
@@ -2164,9 +2120,7 @@ entry:
     DUP3  // mstore v21 v59 i256;
     DUP2
     MSTORE
-    DUP1  // v22.*i256 = gep v20 0.i256 1.i256;
-    POP
-    PUSH1 0xc0 (192)
+    PUSH1 0xc0 (192)  // v22.*i256 = gep v20 0.i256 1.i256;
     PUSH2 0x3e8 (1000)  // mstore v22 1000.i256 i256;
     SWAP1
     MSTORE
@@ -2291,9 +2245,7 @@ entry:
     DUP3  // mstore v38 v59 i256;
     DUP2
     MSTORE
-    DUP1  // v39.*i256 = gep v37 0.i256 1.i256;
-    POP
-    PUSH1 0xc0 (192)
+    PUSH1 0xc0 (192)  // v39.*i256 = gep v37 0.i256 1.i256;
     PUSH2 0x270f (9999)  // mstore v39 9999.i256 i256;
     SWAP1
     MSTORE
@@ -2316,9 +2268,7 @@ entry:
     DUP3  // mstore v43 v59 i256;
     DUP2
     MSTORE
-    DUP1  // v44.*i256 = gep v42 0.i256 1.i256;
-    POP
-    PUSH1 0xc0 (192)
+    PUSH1 0xc0 (192)  // v44.*i256 = gep v42 0.i256 1.i256;
     PUSH2 0x3e8 (1000)  // mstore v44 1000.i256 i256;
     SWAP1
     MSTORE
@@ -2388,9 +2338,7 @@ entry:
   block3:
     JUMPDEST
     RETURNDATASIZE  // v61.i256 = evm_return_data_size;
-    DUP1  // v62.*i256 = evm_malloc v61;
-    POP
-    PUSH1 0x40 (64)
+    PUSH1 0x40 (64)  // v62.*i256 = evm_malloc v61;
     MLOAD
     PUSH1 0x9f (159)
     DUP2

@@ -6,8 +6,8 @@ input_file: test_files/evm/gep_negative_immediate_runtime.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 26 bytes
-  total: 26 bytes
+  section runtime: 23 bytes
+  total: 23 bytes
 
 functions:
   main: ir_blocks=1 ir_insts=5 vcode_ops=10 fixups=0 imm_bytes=3
@@ -16,7 +16,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=1 abs_words_end=0
 
 evm:
-  case ok: calldata_len=4 success reason=Return gas_used=21989 gas_refunded=0 logs=0 output=call len=32 tx_gas=21016 runtime_gas=973
+  case ok: calldata_len=4 success reason=Return gas_used=21984 gas_refunded=0 logs=0 output=call len=32 tx_gas=21016 runtime_gas=968
 
 
 --------------- DEBUG ---------------
@@ -25,9 +25,7 @@ evm:
 main:
   block0:
     JUMPDEST
-    PUSH1 0xa0 (160)  // v0.*i256 = alloca i256;
-    POP  // v1.*i256 = gep v0 255.i256;
-    PUSH2 0x2080 (8320)
+    PUSH2 0x2080 (8320)  // v1.*i256 = gep v0 255.i256;
     PUSH1 0x4d (77)  // mstore v1 77.i256 i256;
     DUP2
     MSTORE

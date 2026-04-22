@@ -6,18 +6,18 @@ input_file: test_files/evm/vault.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 4584 bytes
-  total: 4584 bytes
+  section runtime: 4572 bytes
+  total: 4572 bytes
 
 object: Vault
-  section init: 916 bytes
+  section init: 914 bytes
   section runtime: 745 bytes
-  total: 1661 bytes
+  total: 1659 bytes
 
 object: VaultUser
-  section init: 1182 bytes
-  section runtime: 1171 bytes
-  total: 2353 bytes
+  section init: 1180 bytes
+  section runtime: 1169 bytes
+  total: 2349 bytes
 
 functions:
   __Contract_runtime_entry: ir_blocks=1 ir_insts=85 vcode_ops=310 fixups=65 imm_bytes=50
@@ -94,7 +94,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=527042 gas_refunded=79600 logs=0 output=call len=0 tx_gas=21000 runtime_gas=506042
+  case ok: calldata_len=0 success reason=Return gas_used=526547 gas_refunded=79600 logs=0 output=call len=0 tx_gas=21000 runtime_gas=505547
 
 
 --------------- DEBUG ---------------
@@ -478,9 +478,7 @@ create2_stor__Evm_hef0af3106e109414_Vault_h1ad5e8742309bfc7__bb7e838f6c312aa8:
     JUMPI
   block1:
     RETURNDATASIZE  // v26.i256 = evm_return_data_size;
-    DUP1  // v27.*i256 = evm_malloc v26;
-    POP
-    PUSH1 0x40 (64)
+    PUSH1 0x40 (64)  // v27.*i256 = evm_malloc v26;
     MLOAD
     PUSH1 0x9f (159)
     DUP2
@@ -576,9 +574,7 @@ create2_stor__Evm_hef0af3106e109414_VaultUser_hcb553b593515d281__151df09479dab12
     JUMPI
   block1:
     RETURNDATASIZE  // v26.i256 = evm_return_data_size;
-    DUP1  // v27.*i256 = evm_malloc v26;
-    POP
-    PUSH1 0x40 (64)
+    PUSH1 0x40 (64)  // v27.*i256 = evm_malloc v26;
     MLOAD
     PUSH1 0x9f (159)
     DUP2
@@ -710,9 +706,7 @@ decode_returndata__u256__3271ca15373d4483:
     SWAP1  // mstore v10 v0 i256;
     DUP2
     MSTORE
-    DUP1  // v13.*i256 = gep v7 0.i256 1.i256;
-    POP
-    PUSH1 0xc0 (192)
+    PUSH1 0xc0 (192)  // v13.*i256 = gep v7 0.i256 1.i256;
     SWAP1  // mstore v13 v1 i256;
     SWAP2
     SWAP1
@@ -1365,9 +1359,7 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__AddYield_h1b194739dad02c
     SWAP2  // mstore v38 v18 i256;
     DUP3
     MSTORE
-    DUP2  // v39.*i256 = gep v36 0.i256 1.i256;
-    POP
-    PUSH1 0xc0 (192)
+    PUSH1 0xc0 (192)  // v39.*i256 = gep v36 0.i256 1.i256;
     MSTORE  // mstore v39 v16 i256;
     PUSH1 `pc + (4)`  // v40.i256 = call %soldecoder_i__ha12a03fcb5ba844b_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b v37;
     SWAP1
@@ -2026,9 +2018,7 @@ __Vault_init:
     SWAP2  // mstore v25 v19 i256;
     DUP3
     MSTORE
-    DUP2  // v29.*i256 = gep v23 0.i256 1.i256;
-    POP
-    PUSH1 0xc0 (192)
+    PUSH1 0xc0 (192)  // v29.*i256 = gep v23 0.i256 1.i256;
     MSTORE  // mstore v29 v17 i256;
     PUSH1 `pc + (4)`  // v30.i256 = call %soldecoder_i__ha12a03fcb5ba844b_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b v24;
     SWAP1

@@ -6,8 +6,8 @@ input_file: test_files/evm/malloc_return_escape_clobber_bug.sntn
 evm.config: stack_reach=16 vcode=false bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 73 bytes
-  total: 73 bytes
+  section runtime: 70 bytes
+  total: 70 bytes
 
 functions:
   big: ir_blocks=1 ir_insts=5 vcode_ops=10 fixups=0 imm_bytes=3
@@ -20,4 +20,4 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=8 abs_words_end=0
 
 evm:
-  case bug_demo: calldata_len=8 success reason=Return gas_used=21272 gas_refunded=0 logs=0 output=call len=32 tx_gas=21056 runtime_gas=216
+  case bug_demo: calldata_len=8 success reason=Return gas_used=21267 gas_refunded=0 logs=0 output=call len=32 tx_gas=21056 runtime_gas=211

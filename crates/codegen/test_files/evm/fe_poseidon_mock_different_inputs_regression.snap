@@ -6,8 +6,8 @@ input_file: test_files/evm/fe_poseidon_mock_different_inputs_regression.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 2532 bytes
-  total: 2532 bytes
+  section runtime: 2521 bytes
+  total: 2521 bytes
 
 functions:
   ark: ir_blocks=8 ir_insts=45 vcode_ops=131 fixups=8 imm_bytes=26
@@ -24,7 +24,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=48624 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=27624
+  case ok: calldata_len=0 success reason=Return gas_used=47692 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=26692
 
 
 --------------- DEBUG ---------------
@@ -102,9 +102,7 @@ ark:
     PUSH1 section_unit0
     JUMPI
   block4:
-    SWAP1  // v33.*i256 = gep v22 0.i256 v63;
-    SWAP1
-    PUSH1 0x20 (32)
+    PUSH1 0x20 (32)  // v33.*i256 = gep v22 0.i256 v63;
     MUL
     ADD
     MLOAD  // v34.i256 = mload v33 i256;
@@ -305,14 +303,10 @@ mix:
     DUP3
     CODECOPY
     DUP6  // v38.*[i256; 3] = gep v30 0.i256 v8;
-    SWAP1
-    SWAP1
     PUSH1 0x60 (96)
     MUL
     ADD
     DUP3  // v42.*i256 = gep v38 0.i256 v18;
-    SWAP1
-    SWAP1
     PUSH1 0x20 (32)
     MUL
     ADD
@@ -389,9 +383,7 @@ poseidon_mock:
     SWAP1
     MSTORE
     PUSH1 0xa0 (160)  // v19.*@__fe_obj_Range_0 = alloca @__fe_obj_Range_0;
-    DUP1  // v20.*i256 = gep v19 0.i256 1.i256;
-    POP
-    PUSH1 0xa0 (160)
+    PUSH1 0xa0 (160)  // v20.*i256 = gep v19 0.i256 1.i256;
     PUSH1 0x2 (2)  // mstore v20 2.i256 i256;
     SWAP1
     MSTORE
@@ -456,9 +448,7 @@ poseidon_mock:
   block14:
     JUMPDEST
     PUSH1 0xa0 (160)  // v39.*@__fe_obj_Range_0 = alloca @__fe_obj_Range_0;
-    DUP1  // v40.*i256 = gep v39 0.i256 1.i256;
-    POP
-    PUSH1 0xa0 (160)
+    PUSH1 0xa0 (160)  // v40.*i256 = gep v39 0.i256 1.i256;
     PUSH1 0x2 (2)  // mstore v40 2.i256 i256;
     SWAP1
     MSTORE

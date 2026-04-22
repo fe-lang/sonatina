@@ -11,8 +11,8 @@ object: Coin
   total: 1596 bytes
 
 object: Contract
-  section runtime: 2304 bytes
-  total: 2304 bytes
+  section runtime: 2300 bytes
+  total: 2300 bytes
 
 functions:
   __Contract_runtime_entry: ir_blocks=3 ir_insts=75 vcode_ops=264 fixups=39 imm_bytes=52
@@ -63,7 +63,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=280193 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=259193
+  case ok: calldata_len=0 success reason=Return gas_used=280188 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=259188
 
 
 --------------- DEBUG ---------------
@@ -2283,9 +2283,7 @@ __Contract_runtime_entry:
   block0:
     PUSH0 0x0 (0)  // v60.i256 = sym_size &__Coin_init;
     PUSH0 0x0 (0)  // v61.i256 = sym_addr &__Coin_init;
-    DUP2  // v62.*i256 = evm_malloc v60;
-    POP
-    PUSH1 0x40 (64)
+    PUSH1 0x40 (64)  // v62.*i256 = evm_malloc v60;
     MLOAD
     PUSH1 0x9f (159)
     DUP2
@@ -2528,9 +2526,7 @@ __Contract_runtime_entry:
   block3:
     JUMPDEST
     RETURNDATASIZE  // v68.i256 = evm_return_data_size;
-    DUP1  // v69.*i256 = evm_malloc v68;
-    POP
-    PUSH1 0x40 (64)
+    PUSH1 0x40 (64)  // v69.*i256 = evm_malloc v68;
     MLOAD
     PUSH1 0x9f (159)
     DUP2

@@ -1,15 +1,14 @@
 ---
 source: crates/codegen/tests/evm.rs
-assertion_line: 448
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/loops.sntn
 ---
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section init: 537 bytes
-  section runtime: 517 bytes
-  total: 1054 bytes
+  section init: 533 bytes
+  section runtime: 513 bytes
+  total: 1046 bytes
 
 functions:
   __Bench_recv_0_3: ir_blocks=4 ir_insts=7 vcode_ops=17 fixups=2 imm_bytes=1
@@ -28,13 +27,13 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=0
 
 evm:
-  deploy: success reason=Return gas_used=165166 gas_refunded=0 logs=0 output=create len=517 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
-  case counter: calldata_len=36 success reason=Return gas_used=25706 gas_refunded=0 logs=0 output=call len=32 tx_gas=21204 runtime_gas=4502
-  case sum: calldata_len=36 success reason=Return gas_used=30836 gas_refunded=0 logs=0 output=call len=32 tx_gas=21204 runtime_gas=9632
-  case xor_loop: calldata_len=68 success reason=Return gas_used=27874 gas_refunded=0 logs=0 output=call len=32 tx_gas=21344 runtime_gas=6530
-  case counter_unchecked: calldata_len=36 success reason=Return gas_used=25802 gas_refunded=0 logs=0 output=call len=32 tx_gas=21204 runtime_gas=4598
-  case sum_unchecked: calldata_len=36 success reason=Return gas_used=26930 gas_refunded=0 logs=0 output=call len=32 tx_gas=21204 runtime_gas=5726
-  case xor_loop_unchecked: calldata_len=68 success reason=Return gas_used=28011 gas_refunded=0 logs=0 output=call len=32 tx_gas=21344 runtime_gas=6667
+  deploy: success reason=Return gas_used=164302 gas_refunded=0 logs=0 output=create len=513 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
+  case counter: calldata_len=36 success reason=Return gas_used=25701 gas_refunded=0 logs=0 output=call len=32 tx_gas=21204 runtime_gas=4497
+  case sum: calldata_len=36 success reason=Return gas_used=30831 gas_refunded=0 logs=0 output=call len=32 tx_gas=21204 runtime_gas=9627
+  case xor_loop: calldata_len=68 success reason=Return gas_used=27869 gas_refunded=0 logs=0 output=call len=32 tx_gas=21344 runtime_gas=6525
+  case counter_unchecked: calldata_len=36 success reason=Return gas_used=25797 gas_refunded=0 logs=0 output=call len=32 tx_gas=21204 runtime_gas=4593
+  case sum_unchecked: calldata_len=36 success reason=Return gas_used=26925 gas_refunded=0 logs=0 output=call len=32 tx_gas=21204 runtime_gas=5721
+  case xor_loop_unchecked: calldata_len=68 success reason=Return gas_used=28001 gas_refunded=0 logs=0 output=call len=32 tx_gas=21344 runtime_gas=6657
 
 
 --------------- DEBUG ---------------
@@ -172,9 +171,7 @@ __Bench_runtime:
     PUSH0  // mstore v62 0.i256 i256;
     DUP2
     MSTORE
-    DUP1  // v66.*i256 = gep v61 0.i256 1.i256;
-    POP
-    PUSH1 0xc0 (192)
+    PUSH1 0xc0 (192)  // v66.*i256 = gep v61 0.i256 1.i256;
     PUSH1 0x4 (4)  // mstore v66 4.i256 i256;
     SWAP1
     MSTORE
@@ -426,9 +423,7 @@ __Bench_runtime:
     SWAP2  // mstore v81 v78 i256;
     DUP3
     MSTORE
-    DUP2  // v82.*i256 = gep v80 0.i256 1.i256;
-    POP
-    PUSH1 0xc0 (192)
+    PUSH1 0xc0 (192)  // v82.*i256 = gep v80 0.i256 1.i256;
     MSTORE  // mstore v82 v79 i256;
     PUSH1 `pc + (4)`  // v44.i256 = call %__Bench_recv_0_5 v80;
     SWAP1

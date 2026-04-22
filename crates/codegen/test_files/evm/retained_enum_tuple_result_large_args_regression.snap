@@ -6,8 +6,8 @@ input_file: test_files/evm/retained_enum_tuple_result_large_args_regression.sntn
 evm.config: stack_reach=16 vcode=false bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 229 bytes
-  total: 229 bytes
+  section runtime: 219 bytes
+  total: 219 bytes
 
 functions:
   vals_a: ir_blocks=1 ir_insts=11 vcode_ops=28 fixups=0 imm_bytes=5
@@ -22,4 +22,4 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=21857 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=857
+  case ok: calldata_len=0 success reason=Return gas_used=21825 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=825

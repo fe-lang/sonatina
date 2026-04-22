@@ -6,8 +6,8 @@ input_file: test_files/evm/returndata_decoder_object_miscompile.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 186 bytes
-  total: 186 bytes
+  section runtime: 184 bytes
+  total: 184 bytes
 
 functions:
   add_1: ir_blocks=3 ir_insts=5 vcode_ops=16 fixups=1 imm_bytes=0
@@ -18,7 +18,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=21565 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=565
+  case ok: calldata_len=0 success reason=Return gas_used=21560 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=560
 
 
 --------------- DEBUG ---------------
@@ -78,9 +78,7 @@ call_target:
     SWAP6
     CALL
     RETURNDATASIZE  // v16.i256 = evm_return_data_size;
-    DUP1  // v17.*i256 = evm_malloc v16;
-    POP
-    PUSH1 0x40 (64)
+    PUSH1 0x40 (64)  // v17.*i256 = evm_malloc v16;
     MLOAD
     PUSH1 0x9f (159)
     DUP2

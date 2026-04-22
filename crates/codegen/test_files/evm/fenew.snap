@@ -1,14 +1,13 @@
 ---
 source: crates/codegen/tests/evm.rs
-assertion_line: 448
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/fenew.sntn
 ---
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 598 bytes
-  total: 598 bytes
+  section runtime: 581 bytes
+  total: 581 bytes
 
 object: Counter
   section init: 92 bytes
@@ -32,7 +31,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case test_counter: calldata_len=0 success reason=Return gas_used=92198 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=71198
+  case test_counter: calldata_len=0 success reason=Return gas_used=92143 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=71143
 
 
 --------------- DEBUG ---------------
@@ -169,9 +168,7 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Get_h3927
     SWAP6
     CALL
     RETURNDATASIZE  // v14.i256 = evm_return_data_size;
-    DUP1  // v15.*i256 = evm_malloc v14;
-    POP
-    PUSH1 0x40 (64)
+    PUSH1 0x40 (64)  // v15.*i256 = evm_malloc v14;
     MLOAD
     PUSH2 0x15f (351)
     DUP2
@@ -203,9 +200,7 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Get_h3927
     SWAP2  // mstore v21 v16 i256;
     DUP3
     MSTORE
-    DUP2  // v22.*i256 = gep v20 0.i256 1.i256;
-    POP
-    PUSH1 0xc0 (192)
+    PUSH1 0xc0 (192)  // v22.*i256 = gep v20 0.i256 1.i256;
     MSTORE  // mstore v22 v14 i256;
     PUSH1 0xe0 (224)  // v53.*@__fe_obj_SolDecoder_4 = alloca @__fe_obj_SolDecoder_4;
     DUP1  // call %soldecoder_i__ha12a03fcb5ba844b_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b v53 v20;
@@ -215,13 +210,9 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Get_h3927
     PUSH1 FuncRef(42)
     JUMP
     JUMPDEST
-    DUP1  // v43.*i256 = gep v42 0.i256 1.i256;
-    POP
-    PUSH2 0x100 (256)
+    PUSH2 0x100 (256)  // v43.*i256 = gep v42 0.i256 1.i256;
     MLOAD  // v44.i256 = mload v43 i256;
-    DUP2  // v45.*i256 = gep v41 0.i256 1.i256;
-    POP
-    PUSH2 0x120 (288)
+    PUSH2 0x120 (288)  // v45.*i256 = gep v41 0.i256 1.i256;
     MLOAD  // v46.i256 = mload v45 i256;
     PUSH1 0x20 (32)  // v47.i256 = add v46 32.i256;
     DUP2
@@ -313,9 +304,7 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Increment
     SWAP6
     CALL
     RETURNDATASIZE  // v14.i256 = evm_return_data_size;
-    DUP1  // v15.*i256 = evm_malloc v14;
-    POP
-    PUSH1 0x40 (64)
+    PUSH1 0x40 (64)  // v15.*i256 = evm_malloc v14;
     MLOAD
     PUSH2 0x15f (351)
     DUP2
@@ -347,9 +336,7 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Increment
     SWAP2  // mstore v19 v16 i256;
     DUP3
     MSTORE
-    DUP2  // v20.*i256 = gep v18 0.i256 1.i256;
-    POP
-    PUSH1 0xc0 (192)
+    PUSH1 0xc0 (192)  // v20.*i256 = gep v18 0.i256 1.i256;
     MSTORE  // mstore v20 v14 i256;
     PUSH1 0xe0 (224)  // v38.*@__fe_obj_SolDecoder_4 = alloca @__fe_obj_SolDecoder_4;
     SWAP1  // call %soldecoder_i__ha12a03fcb5ba844b_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b v38 v18;
@@ -367,9 +354,7 @@ entry:
   block0:
     PUSH0 0x0 (0)  // v11.i256 = sym_size &__Counter_init;
     PUSH0 0x0 (0)  // v12.i256 = sym_addr &__Counter_init;
-    DUP2  // v13.*i256 = evm_malloc v11;
-    POP
-    PUSH1 0x40 (64)
+    PUSH1 0x40 (64)  // v13.*i256 = evm_malloc v11;
     MLOAD
     PUSH2 0x15f (351)
     DUP2
@@ -457,9 +442,7 @@ entry:
   block3:
     JUMPDEST
     RETURNDATASIZE  // v19.i256 = evm_return_data_size;
-    DUP1  // v20.*i256 = evm_malloc v19;
-    POP
-    PUSH1 0x40 (64)
+    PUSH1 0x40 (64)  // v20.*i256 = evm_malloc v19;
     MLOAD
     PUSH1 0x9f (159)
     DUP2

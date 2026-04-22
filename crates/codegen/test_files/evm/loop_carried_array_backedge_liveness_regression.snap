@@ -6,8 +6,8 @@ input_file: test_files/evm/loop_carried_array_backedge_liveness_regression.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 1048 bytes
-  total: 1048 bytes
+  section runtime: 807 bytes
+  total: 807 bytes
 
 functions:
   run: ir_blocks=7 ir_insts=266 vcode_ops=599 fixups=4 imm_bytes=141
@@ -20,7 +20,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=30 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=24201 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=3201
+  case ok: calldata_len=0 success reason=Return gas_used=23296 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=2296
 
 
 --------------- DEBUG ---------------
@@ -33,84 +33,56 @@ run:
     PUSH2 0x140 (320)  // v101.*[i256; 5] = alloca [i256; 5];
     PUSH2 0x1e0 (480)  // v95.*[i256; 5] = alloca [i256; 5];
     PUSH2 0x280 (640)  // v0.*[i256; 5] = alloca [i256; 5];
-    DUP1  // v1.*i256 = gep v0 0.i256 0.i256;
-    POP
-    PUSH2 0x280 (640)
+    PUSH2 0x280 (640)  // v1.*i256 = gep v0 0.i256 0.i256;
     PUSH0  // mstore v1 0.i256 i256;
     SWAP1
     MSTORE
-    DUP1  // v2.*i256 = gep v0 0.i256 1.i256;
-    POP
-    PUSH2 0x2a0 (672)
+    PUSH2 0x2a0 (672)  // v2.*i256 = gep v0 0.i256 1.i256;
     PUSH0  // mstore v2 0.i256 i256;
     SWAP1
     MSTORE
-    DUP1  // v3.*i256 = gep v0 0.i256 2.i256;
-    POP
-    PUSH2 0x2c0 (704)
+    PUSH2 0x2c0 (704)  // v3.*i256 = gep v0 0.i256 2.i256;
     PUSH0  // mstore v3 0.i256 i256;
     SWAP1
     MSTORE
-    DUP1  // v4.*i256 = gep v0 0.i256 3.i256;
-    POP
-    PUSH2 0x2e0 (736)
+    PUSH2 0x2e0 (736)  // v4.*i256 = gep v0 0.i256 3.i256;
     PUSH0  // mstore v4 0.i256 i256;
     SWAP1
     MSTORE
-    DUP1  // v5.*i256 = gep v0 0.i256 4.i256;
-    POP
-    PUSH2 0x300 (768)
+    PUSH2 0x300 (768)  // v5.*i256 = gep v0 0.i256 4.i256;
     PUSH0  // mstore v5 0.i256 i256;
     SWAP1
     MSTORE
-    DUP1  // v81.*i256 = gep v0 0.i64 0.i64;
-    POP
-    PUSH2 0x280 (640)
+    PUSH2 0x280 (640)  // v81.*i256 = gep v0 0.i64 0.i64;
     MLOAD  // v82.i256 = mload v81 i256;
-    DUP2  // v84.*i256 = gep v0 0.i64 1.i64;
-    POP
-    PUSH2 0x2a0 (672)
+    PUSH2 0x2a0 (672)  // v84.*i256 = gep v0 0.i64 1.i64;
     MLOAD  // v85.i256 = mload v84 i256;
-    DUP3  // v87.*i256 = gep v0 0.i64 2.i64;
-    POP
-    PUSH2 0x2c0 (704)
+    PUSH2 0x2c0 (704)  // v87.*i256 = gep v0 0.i64 2.i64;
     MLOAD  // v88.i256 = mload v87 i256;
-    DUP4  // v90.*i256 = gep v0 0.i64 3.i64;
-    POP
-    PUSH2 0x2e0 (736)
+    PUSH2 0x2e0 (736)  // v90.*i256 = gep v0 0.i64 3.i64;
     MLOAD  // v91.i256 = mload v90 i256;
     SWAP4  // v93.*i256 = gep v0 0.i64 4.i64;
     POP
     PUSH2 0x300 (768)
     MLOAD  // v94.i256 = mload v93 i256;
-    DUP6  // v96.*i256 = gep v95 0.i64 0.i64;
-    POP
-    PUSH2 0x1e0 (480)
+    PUSH2 0x1e0 (480)  // v96.*i256 = gep v95 0.i64 0.i64;
     SWAP4  // mstore v96 v82 i256;
     SWAP1
     SWAP4
     MSTORE
-    DUP5  // v97.*i256 = gep v95 0.i64 1.i64;
-    POP
-    PUSH2 0x200 (512)
+    PUSH2 0x200 (512)  // v97.*i256 = gep v95 0.i64 1.i64;
     SWAP1  // mstore v97 v85 i256;
     SWAP2
     SWAP1
     MSTORE
-    DUP4  // v98.*i256 = gep v95 0.i64 2.i64;
-    POP
-    PUSH2 0x220 (544)
+    PUSH2 0x220 (544)  // v98.*i256 = gep v95 0.i64 2.i64;
     MSTORE  // mstore v98 v88 i256;
-    DUP3  // v99.*i256 = gep v95 0.i64 3.i64;
-    POP
-    PUSH2 0x240 (576)
+    PUSH2 0x240 (576)  // v99.*i256 = gep v95 0.i64 3.i64;
     SWAP1  // mstore v99 v91 i256;
     SWAP2
     SWAP1
     MSTORE
-    DUP2  // v100.*i256 = gep v95 0.i64 4.i64;
-    POP
-    PUSH2 0x260 (608)
+    PUSH2 0x260 (608)  // v100.*i256 = gep v95 0.i64 4.i64;
     MSTORE  // mstore v100 v94 i256;
     PUSH0  // jump block1;
   block1:
@@ -130,305 +102,185 @@ run:
     JUMPI
   block3:
     PUSH2 0x280 (640)  // v11.*[i256; 5] = alloca [i256; 5];
-    DUP1  // v12.*i256 = gep v11 0.i256 0.i256;
-    POP
-    PUSH2 0x280 (640)
+    PUSH2 0x280 (640)  // v12.*i256 = gep v11 0.i256 0.i256;
     PUSH1 0xa (10)  // mstore v12 10.i256 i256;
     SWAP1
     MSTORE
-    DUP1  // v13.*i256 = gep v11 0.i256 1.i256;
-    POP
-    PUSH2 0x2a0 (672)
+    PUSH2 0x2a0 (672)  // v13.*i256 = gep v11 0.i256 1.i256;
     PUSH1 0xb (11)  // mstore v13 11.i256 i256;
     SWAP1
     MSTORE
-    DUP1  // v14.*i256 = gep v11 0.i256 2.i256;
-    POP
-    PUSH2 0x2c0 (704)
+    PUSH2 0x2c0 (704)  // v14.*i256 = gep v11 0.i256 2.i256;
     PUSH1 0xc (12)  // mstore v14 12.i256 i256;
     SWAP1
     MSTORE
-    DUP1  // v15.*i256 = gep v11 0.i256 3.i256;
-    POP
-    PUSH2 0x2e0 (736)
+    PUSH2 0x2e0 (736)  // v15.*i256 = gep v11 0.i256 3.i256;
     PUSH1 0xd (13)  // mstore v15 13.i256 i256;
     SWAP1
     MSTORE
-    DUP1  // v16.*i256 = gep v11 0.i256 4.i256;
-    POP
-    PUSH2 0x300 (768)
+    PUSH2 0x300 (768)  // v16.*i256 = gep v11 0.i256 4.i256;
     PUSH1 0xe (14)  // mstore v16 14.i256 i256;
     SWAP1
     MSTORE
-    DUP1  // v142.*i256 = gep v11 0.i64 0.i64;
-    POP
-    PUSH2 0x280 (640)
+    PUSH2 0x280 (640)  // v142.*i256 = gep v11 0.i64 0.i64;
     MLOAD  // v143.i256 = mload v142 i256;
-    DUP2  // v144.*i256 = gep v11 0.i64 1.i64;
-    POP
-    PUSH2 0x2a0 (672)
+    PUSH2 0x2a0 (672)  // v144.*i256 = gep v11 0.i64 1.i64;
     MLOAD  // v145.i256 = mload v144 i256;
-    DUP3  // v146.*i256 = gep v11 0.i64 2.i64;
-    POP
-    PUSH2 0x2c0 (704)
+    PUSH2 0x2c0 (704)  // v146.*i256 = gep v11 0.i64 2.i64;
     MLOAD  // v147.i256 = mload v146 i256;
-    DUP4  // v148.*i256 = gep v11 0.i64 3.i64;
-    POP
-    PUSH2 0x2e0 (736)
+    PUSH2 0x2e0 (736)  // v148.*i256 = gep v11 0.i64 3.i64;
     MLOAD  // v149.i256 = mload v148 i256;
     SWAP4  // v150.*i256 = gep v11 0.i64 4.i64;
     POP
     PUSH2 0x300 (768)
     MLOAD  // v151.i256 = mload v150 i256;
-    DUP9  // v153.*i256 = gep v152 0.i64 0.i64;
-    POP
-    PUSH1 0xa0 (160)
+    PUSH1 0xa0 (160)  // v153.*i256 = gep v152 0.i64 0.i64;
     SWAP4  // mstore v153 v143 i256;
     SWAP1
     SWAP4
     MSTORE
-    DUP8  // v154.*i256 = gep v152 0.i64 1.i64;
-    POP
-    PUSH1 0xc0 (192)
+    PUSH1 0xc0 (192)  // v154.*i256 = gep v152 0.i64 1.i64;
     SWAP1  // mstore v154 v145 i256;
     SWAP2
     SWAP1
     MSTORE
-    DUP7  // v155.*i256 = gep v152 0.i64 2.i64;
-    POP
-    PUSH1 0xe0 (224)
+    PUSH1 0xe0 (224)  // v155.*i256 = gep v152 0.i64 2.i64;
     MSTORE  // mstore v155 v147 i256;
-    DUP6  // v156.*i256 = gep v152 0.i64 3.i64;
-    POP
-    PUSH2 0x100 (256)
+    PUSH2 0x100 (256)  // v156.*i256 = gep v152 0.i64 3.i64;
     SWAP1  // mstore v156 v149 i256;
     SWAP2
     SWAP1
     MSTORE
-    DUP5  // v157.*i256 = gep v152 0.i64 4.i64;
-    POP
-    PUSH2 0x120 (288)
+    PUSH2 0x120 (288)  // v157.*i256 = gep v152 0.i64 4.i64;
     MSTORE  // mstore v157 v151 i256;
     PUSH1 block5  // jump block5;
     JUMP
   block4:
     JUMPDEST
     PUSH2 0x280 (640)  // v18.*[i256; 5] = alloca [i256; 5];
-    DUP1  // v19.*i256 = gep v18 0.i256 0.i256;
-    POP
-    PUSH2 0x280 (640)
+    PUSH2 0x280 (640)  // v19.*i256 = gep v18 0.i256 0.i256;
     PUSH1 0x14 (20)  // mstore v19 20.i256 i256;
     SWAP1
     MSTORE
-    DUP1  // v20.*i256 = gep v18 0.i256 1.i256;
-    POP
-    PUSH2 0x2a0 (672)
+    PUSH2 0x2a0 (672)  // v20.*i256 = gep v18 0.i256 1.i256;
     PUSH1 0x15 (21)  // mstore v20 21.i256 i256;
     SWAP1
     MSTORE
-    DUP1  // v21.*i256 = gep v18 0.i256 2.i256;
-    POP
-    PUSH2 0x2c0 (704)
+    PUSH2 0x2c0 (704)  // v21.*i256 = gep v18 0.i256 2.i256;
     PUSH1 0x16 (22)  // mstore v21 22.i256 i256;
     SWAP1
     MSTORE
-    DUP1  // v22.*i256 = gep v18 0.i256 3.i256;
-    POP
-    PUSH2 0x2e0 (736)
+    PUSH2 0x2e0 (736)  // v22.*i256 = gep v18 0.i256 3.i256;
     PUSH1 0x17 (23)  // mstore v22 23.i256 i256;
     SWAP1
     MSTORE
-    DUP1  // v23.*i256 = gep v18 0.i256 4.i256;
-    POP
-    PUSH2 0x300 (768)
+    PUSH2 0x300 (768)  // v23.*i256 = gep v18 0.i256 4.i256;
     PUSH1 0x18 (24)  // mstore v23 24.i256 i256;
     SWAP1
     MSTORE
-    DUP1  // v132.*i256 = gep v18 0.i64 0.i64;
-    POP
-    PUSH2 0x280 (640)
+    PUSH2 0x280 (640)  // v132.*i256 = gep v18 0.i64 0.i64;
     MLOAD  // v133.i256 = mload v132 i256;
-    DUP2  // v134.*i256 = gep v18 0.i64 1.i64;
-    POP
-    PUSH2 0x2a0 (672)
+    PUSH2 0x2a0 (672)  // v134.*i256 = gep v18 0.i64 1.i64;
     MLOAD  // v135.i256 = mload v134 i256;
-    DUP3  // v136.*i256 = gep v18 0.i64 2.i64;
-    POP
-    PUSH2 0x2c0 (704)
+    PUSH2 0x2c0 (704)  // v136.*i256 = gep v18 0.i64 2.i64;
     MLOAD  // v137.i256 = mload v136 i256;
-    DUP4  // v138.*i256 = gep v18 0.i64 3.i64;
-    POP
-    PUSH2 0x2e0 (736)
+    PUSH2 0x2e0 (736)  // v138.*i256 = gep v18 0.i64 3.i64;
     MLOAD  // v139.i256 = mload v138 i256;
     SWAP4  // v140.*i256 = gep v18 0.i64 4.i64;
     POP
     PUSH2 0x300 (768)
     MLOAD  // v141.i256 = mload v140 i256;
-    DUP9  // v158.*i256 = gep v152 0.i64 0.i64;
-    POP
-    PUSH1 0xa0 (160)
+    PUSH1 0xa0 (160)  // v158.*i256 = gep v152 0.i64 0.i64;
     SWAP4  // mstore v158 v133 i256;
     SWAP1
     SWAP4
     MSTORE
-    DUP8  // v159.*i256 = gep v152 0.i64 1.i64;
-    POP
-    PUSH1 0xc0 (192)
+    PUSH1 0xc0 (192)  // v159.*i256 = gep v152 0.i64 1.i64;
     SWAP1  // mstore v159 v135 i256;
     SWAP2
     SWAP1
     MSTORE
-    DUP7  // v160.*i256 = gep v152 0.i64 2.i64;
-    POP
-    PUSH1 0xe0 (224)
+    PUSH1 0xe0 (224)  // v160.*i256 = gep v152 0.i64 2.i64;
     MSTORE  // mstore v160 v137 i256;
-    DUP6  // v161.*i256 = gep v152 0.i64 3.i64;
-    POP
-    PUSH2 0x100 (256)
+    PUSH2 0x100 (256)  // v161.*i256 = gep v152 0.i64 3.i64;
     SWAP1  // mstore v161 v139 i256;
     SWAP2
     SWAP1
     MSTORE
-    DUP5  // v162.*i256 = gep v152 0.i64 4.i64;
-    POP
-    PUSH2 0x120 (288)
+    PUSH2 0x120 (288)  // v162.*i256 = gep v152 0.i64 4.i64;
     MSTORE  // mstore v162 v141 i256;
   block5:
     JUMPDEST
     PUSH2 0x280 (640)  // v26.*[i256; 5] = alloca [i256; 5];
-    DUP3  // v163.*i256 = gep v95 0.i64 0.i64;
-    POP
-    PUSH2 0x1e0 (480)
+    PUSH2 0x1e0 (480)  // v163.*i256 = gep v95 0.i64 0.i64;
     MLOAD  // v164.i256 = mload v163 i256;
-    DUP2  // v165.*i256 = gep v26 0.i64 0.i64;
-    POP
-    PUSH2 0x280 (640)
+    PUSH2 0x280 (640)  // v165.*i256 = gep v26 0.i64 0.i64;
     MSTORE  // mstore v165 v164 i256;
-    DUP3  // v166.*i256 = gep v95 0.i64 1.i64;
-    POP
-    PUSH2 0x200 (512)
+    PUSH2 0x200 (512)  // v166.*i256 = gep v95 0.i64 1.i64;
     MLOAD  // v167.i256 = mload v166 i256;
-    DUP2  // v168.*i256 = gep v26 0.i64 1.i64;
-    POP
-    PUSH2 0x2a0 (672)
+    PUSH2 0x2a0 (672)  // v168.*i256 = gep v26 0.i64 1.i64;
     MSTORE  // mstore v168 v167 i256;
-    DUP3  // v169.*i256 = gep v95 0.i64 2.i64;
-    POP
-    PUSH2 0x220 (544)
+    PUSH2 0x220 (544)  // v169.*i256 = gep v95 0.i64 2.i64;
     MLOAD  // v170.i256 = mload v169 i256;
-    DUP2  // v171.*i256 = gep v26 0.i64 2.i64;
-    POP
-    PUSH2 0x2c0 (704)
+    PUSH2 0x2c0 (704)  // v171.*i256 = gep v26 0.i64 2.i64;
     MSTORE  // mstore v171 v170 i256;
-    DUP3  // v172.*i256 = gep v95 0.i64 3.i64;
-    POP
-    PUSH2 0x240 (576)
+    PUSH2 0x240 (576)  // v172.*i256 = gep v95 0.i64 3.i64;
     MLOAD  // v173.i256 = mload v172 i256;
-    DUP2  // v174.*i256 = gep v26 0.i64 3.i64;
-    POP
-    PUSH2 0x2e0 (736)
+    PUSH2 0x2e0 (736)  // v174.*i256 = gep v26 0.i64 3.i64;
     MSTORE  // mstore v174 v173 i256;
-    DUP3  // v175.*i256 = gep v95 0.i64 4.i64;
-    POP
-    PUSH2 0x260 (608)
+    PUSH2 0x260 (608)  // v175.*i256 = gep v95 0.i64 4.i64;
     MLOAD  // v176.i256 = mload v175 i256;
-    DUP2  // v177.*i256 = gep v26 0.i64 4.i64;
-    POP
-    PUSH2 0x300 (768)
+    PUSH2 0x300 (768)  // v177.*i256 = gep v26 0.i64 4.i64;
     MSTORE  // mstore v177 v176 i256;
     PUSH2 0x320 (800)  // v27.*[i256; 5] = alloca [i256; 5];
-    DUP6  // v178.*i256 = gep v152 0.i64 0.i64;
-    POP
-    PUSH1 0xa0 (160)
+    PUSH1 0xa0 (160)  // v178.*i256 = gep v152 0.i64 0.i64;
     MLOAD  // v179.i256 = mload v178 i256;
-    DUP2  // v180.*i256 = gep v27 0.i64 0.i64;
-    POP
-    PUSH2 0x320 (800)
+    PUSH2 0x320 (800)  // v180.*i256 = gep v27 0.i64 0.i64;
     MSTORE  // mstore v180 v179 i256;
-    DUP6  // v181.*i256 = gep v152 0.i64 1.i64;
-    POP
-    PUSH1 0xc0 (192)
+    PUSH1 0xc0 (192)  // v181.*i256 = gep v152 0.i64 1.i64;
     MLOAD  // v182.i256 = mload v181 i256;
-    DUP2  // v183.*i256 = gep v27 0.i64 1.i64;
-    POP
-    PUSH2 0x340 (832)
+    PUSH2 0x340 (832)  // v183.*i256 = gep v27 0.i64 1.i64;
     MSTORE  // mstore v183 v182 i256;
-    DUP6  // v184.*i256 = gep v152 0.i64 2.i64;
-    POP
-    PUSH1 0xe0 (224)
+    PUSH1 0xe0 (224)  // v184.*i256 = gep v152 0.i64 2.i64;
     MLOAD  // v185.i256 = mload v184 i256;
-    DUP2  // v186.*i256 = gep v27 0.i64 2.i64;
-    POP
-    PUSH2 0x360 (864)
+    PUSH2 0x360 (864)  // v186.*i256 = gep v27 0.i64 2.i64;
     MSTORE  // mstore v186 v185 i256;
-    DUP6  // v187.*i256 = gep v152 0.i64 3.i64;
-    POP
-    PUSH2 0x100 (256)
+    PUSH2 0x100 (256)  // v187.*i256 = gep v152 0.i64 3.i64;
     MLOAD  // v188.i256 = mload v187 i256;
-    DUP2  // v189.*i256 = gep v27 0.i64 3.i64;
-    POP
-    PUSH2 0x380 (896)
+    PUSH2 0x380 (896)  // v189.*i256 = gep v27 0.i64 3.i64;
     MSTORE  // mstore v189 v188 i256;
-    DUP6  // v190.*i256 = gep v152 0.i64 4.i64;
-    POP
-    PUSH2 0x120 (288)
+    PUSH2 0x120 (288)  // v190.*i256 = gep v152 0.i64 4.i64;
     MLOAD  // v191.i256 = mload v190 i256;
-    DUP2  // v192.*i256 = gep v27 0.i64 4.i64;
-    POP
-    PUSH2 0x3a0 (928)
+    PUSH2 0x3a0 (928)  // v192.*i256 = gep v27 0.i64 4.i64;
     MSTORE  // mstore v192 v191 i256;
     PUSH2 0x3c0 (960)  // v28.*[i256; 5] = alloca [i256; 5];
-    DUP3  // v29.*i256 = gep v26 0.i256 0.i256;
-    POP
-    PUSH2 0x280 (640)
+    PUSH2 0x280 (640)  // v29.*i256 = gep v26 0.i256 0.i256;
     MLOAD  // v30.i256 = mload v29 i256;
-    DUP3  // v31.*i256 = gep v27 0.i256 0.i256;
-    POP
-    PUSH2 0x320 (800)
+    PUSH2 0x320 (800)  // v31.*i256 = gep v27 0.i256 0.i256;
     MLOAD  // v32.i256 = mload v31 i256;
     ADD  // v33.i256 = add v30 v32;
-    DUP2  // v34.*i256 = gep v28 0.i256 0.i256;
-    POP
-    PUSH2 0x3c0 (960)
+    PUSH2 0x3c0 (960)  // v34.*i256 = gep v28 0.i256 0.i256;
     MSTORE  // mstore v34 v33 i256;
-    DUP3  // v35.*i256 = gep v26 0.i256 1.i256;
-    POP
-    PUSH2 0x2a0 (672)
+    PUSH2 0x2a0 (672)  // v35.*i256 = gep v26 0.i256 1.i256;
     MLOAD  // v36.i256 = mload v35 i256;
-    DUP3  // v37.*i256 = gep v27 0.i256 1.i256;
-    POP
-    PUSH2 0x340 (832)
+    PUSH2 0x340 (832)  // v37.*i256 = gep v27 0.i256 1.i256;
     MLOAD  // v38.i256 = mload v37 i256;
     ADD  // v39.i256 = add v36 v38;
-    DUP2  // v40.*i256 = gep v28 0.i256 1.i256;
-    POP
-    PUSH2 0x3e0 (992)
+    PUSH2 0x3e0 (992)  // v40.*i256 = gep v28 0.i256 1.i256;
     MSTORE  // mstore v40 v39 i256;
-    DUP3  // v41.*i256 = gep v26 0.i256 2.i256;
-    POP
-    PUSH2 0x2c0 (704)
+    PUSH2 0x2c0 (704)  // v41.*i256 = gep v26 0.i256 2.i256;
     MLOAD  // v42.i256 = mload v41 i256;
-    DUP3  // v43.*i256 = gep v27 0.i256 2.i256;
-    POP
-    PUSH2 0x360 (864)
+    PUSH2 0x360 (864)  // v43.*i256 = gep v27 0.i256 2.i256;
     MLOAD  // v46.i256 = mload v43 i256;
     ADD  // v47.i256 = add v42 v46;
-    DUP2  // v48.*i256 = gep v28 0.i256 2.i256;
-    POP
-    PUSH2 0x400 (1024)
+    PUSH2 0x400 (1024)  // v48.*i256 = gep v28 0.i256 2.i256;
     MSTORE  // mstore v48 v47 i256;
-    DUP3  // v49.*i256 = gep v26 0.i256 3.i256;
-    POP
-    PUSH2 0x2e0 (736)
+    PUSH2 0x2e0 (736)  // v49.*i256 = gep v26 0.i256 3.i256;
     MLOAD  // v50.i256 = mload v49 i256;
-    DUP3  // v51.*i256 = gep v27 0.i256 3.i256;
-    POP
-    PUSH2 0x380 (896)
+    PUSH2 0x380 (896)  // v51.*i256 = gep v27 0.i256 3.i256;
     MLOAD  // v52.i256 = mload v51 i256;
     ADD  // v53.i256 = add v50 v52;
-    DUP2  // v54.*i256 = gep v28 0.i256 3.i256;
-    POP
-    PUSH2 0x420 (1056)
+    PUSH2 0x420 (1056)  // v54.*i256 = gep v28 0.i256 3.i256;
     MSTORE  // mstore v54 v53 i256;
     SWAP2  // v55.*i256 = gep v26 0.i256 4.i256;
     POP
@@ -439,153 +291,95 @@ run:
     PUSH2 0x3a0 (928)
     MLOAD  // v58.i256 = mload v57 i256;
     ADD  // v59.i256 = add v56 v58;
-    DUP2  // v60.*i256 = gep v28 0.i256 4.i256;
-    POP
-    PUSH2 0x440 (1088)
+    PUSH2 0x440 (1088)  // v60.*i256 = gep v28 0.i256 4.i256;
     MSTORE  // mstore v60 v59 i256;
-    DUP1  // v193.*i256 = gep v28 0.i64 0.i64;
-    POP
-    PUSH2 0x3c0 (960)
+    PUSH2 0x3c0 (960)  // v193.*i256 = gep v28 0.i64 0.i64;
     MLOAD  // v194.i256 = mload v193 i256;
-    DUP2  // v195.*i256 = gep v28 0.i64 1.i64;
-    POP
-    PUSH2 0x3e0 (992)
+    PUSH2 0x3e0 (992)  // v195.*i256 = gep v28 0.i64 1.i64;
     MLOAD  // v196.i256 = mload v195 i256;
-    DUP3  // v197.*i256 = gep v28 0.i64 2.i64;
-    POP
-    PUSH2 0x400 (1024)
+    PUSH2 0x400 (1024)  // v197.*i256 = gep v28 0.i64 2.i64;
     MLOAD  // v198.i256 = mload v197 i256;
-    DUP4  // v199.*i256 = gep v28 0.i64 3.i64;
-    POP
-    PUSH2 0x420 (1056)
+    PUSH2 0x420 (1056)  // v199.*i256 = gep v28 0.i64 3.i64;
     MLOAD  // v200.i256 = mload v199 i256;
     SWAP4  // v201.*i256 = gep v28 0.i64 4.i64;
     POP
     PUSH2 0x440 (1088)
     MLOAD  // v202.i256 = mload v201 i256;
     PUSH2 0x280 (640)  // v62.*[i256; 5] = alloca [i256; 5];
-    DUP1  // v203.*i256 = gep v62 0.i64 0.i64;
-    POP
-    PUSH2 0x280 (640)
+    PUSH2 0x280 (640)  // v203.*i256 = gep v62 0.i64 0.i64;
     SWAP5  // mstore v203 v194 i256;
     SWAP1
     SWAP5
     MSTORE
-    DUP4  // v204.*i256 = gep v62 0.i64 1.i64;
-    POP
-    PUSH2 0x2a0 (672)
+    PUSH2 0x2a0 (672)  // v204.*i256 = gep v62 0.i64 1.i64;
     SWAP3  // mstore v204 v196 i256;
     SWAP1
     SWAP3
     MSTORE
-    DUP3  // v205.*i256 = gep v62 0.i64 2.i64;
-    POP
-    PUSH2 0x2c0 (704)
+    PUSH2 0x2c0 (704)  // v205.*i256 = gep v62 0.i64 2.i64;
     MSTORE  // mstore v205 v198 i256;
-    DUP2  // v206.*i256 = gep v62 0.i64 3.i64;
-    POP
-    PUSH2 0x2e0 (736)
+    PUSH2 0x2e0 (736)  // v206.*i256 = gep v62 0.i64 3.i64;
     SWAP3  // mstore v206 v200 i256;
     SWAP1
     SWAP3
     MSTORE
-    DUP1  // v207.*i256 = gep v62 0.i64 4.i64;
-    POP
-    PUSH2 0x300 (768)
+    PUSH2 0x300 (768)  // v207.*i256 = gep v62 0.i64 4.i64;
     SWAP1  // mstore v207 v202 i256;
     SWAP2
     SWAP1
     MSTORE
-    DUP1  // v208.*i256 = gep v62 0.i64 0.i64;
-    POP
-    PUSH2 0x280 (640)
+    PUSH2 0x280 (640)  // v208.*i256 = gep v62 0.i64 0.i64;
     MLOAD  // v209.i256 = mload v208 i256;
-    DUP2  // v210.*i256 = gep v62 0.i64 1.i64;
-    POP
-    PUSH2 0x2a0 (672)
+    PUSH2 0x2a0 (672)  // v210.*i256 = gep v62 0.i64 1.i64;
     MLOAD  // v211.i256 = mload v210 i256;
-    DUP3  // v212.*i256 = gep v62 0.i64 2.i64;
-    POP
-    PUSH2 0x2c0 (704)
+    PUSH2 0x2c0 (704)  // v212.*i256 = gep v62 0.i64 2.i64;
     MLOAD  // v213.i256 = mload v212 i256;
-    DUP4  // v214.*i256 = gep v62 0.i64 3.i64;
-    POP
-    PUSH2 0x2e0 (736)
+    PUSH2 0x2e0 (736)  // v214.*i256 = gep v62 0.i64 3.i64;
     MLOAD  // v215.i256 = mload v214 i256;
     SWAP4  // v216.*i256 = gep v62 0.i64 4.i64;
     POP
     PUSH2 0x300 (768)
     MLOAD  // v217.i256 = mload v216 i256;
-    DUP8  // v218.*i256 = gep v101 0.i64 0.i64;
-    POP
-    PUSH2 0x140 (320)
+    PUSH2 0x140 (320)  // v218.*i256 = gep v101 0.i64 0.i64;
     SWAP4  // mstore v218 v209 i256;
     SWAP1
     SWAP4
     MSTORE
-    DUP7  // v219.*i256 = gep v101 0.i64 1.i64;
-    POP
-    PUSH2 0x160 (352)
+    PUSH2 0x160 (352)  // v219.*i256 = gep v101 0.i64 1.i64;
     SWAP1  // mstore v219 v211 i256;
     SWAP2
     SWAP1
     MSTORE
-    DUP6  // v220.*i256 = gep v101 0.i64 2.i64;
-    POP
-    PUSH2 0x180 (384)
+    PUSH2 0x180 (384)  // v220.*i256 = gep v101 0.i64 2.i64;
     MSTORE  // mstore v220 v213 i256;
-    DUP5  // v221.*i256 = gep v101 0.i64 3.i64;
-    POP
-    PUSH2 0x1a0 (416)
+    PUSH2 0x1a0 (416)  // v221.*i256 = gep v101 0.i64 3.i64;
     SWAP1  // mstore v221 v215 i256;
     SWAP2
     SWAP1
     MSTORE
-    DUP4  // v222.*i256 = gep v101 0.i64 4.i64;
-    POP
-    PUSH2 0x1c0 (448)
+    PUSH2 0x1c0 (448)  // v222.*i256 = gep v101 0.i64 4.i64;
     MSTORE  // mstore v222 v217 i256;
     PUSH1 0x1 (1)  // v45.i256 = add v8 1.i256;
     ADD
-    DUP3  // v102.*i256 = gep v101 0.i64 0.i64;
-    POP
-    PUSH2 0x140 (320)
+    PUSH2 0x140 (320)  // v102.*i256 = gep v101 0.i64 0.i64;
     MLOAD  // v103.i256 = mload v102 i256;
-    DUP3  // v104.*i256 = gep v95 0.i64 0.i64;
-    POP
-    PUSH2 0x1e0 (480)
+    PUSH2 0x1e0 (480)  // v104.*i256 = gep v95 0.i64 0.i64;
     MSTORE  // mstore v104 v103 i256;
-    DUP3  // v105.*i256 = gep v101 0.i64 1.i64;
-    POP
-    PUSH2 0x160 (352)
+    PUSH2 0x160 (352)  // v105.*i256 = gep v101 0.i64 1.i64;
     MLOAD  // v106.i256 = mload v105 i256;
-    DUP3  // v107.*i256 = gep v95 0.i64 1.i64;
-    POP
-    PUSH2 0x200 (512)
+    PUSH2 0x200 (512)  // v107.*i256 = gep v95 0.i64 1.i64;
     MSTORE  // mstore v107 v106 i256;
-    DUP3  // v108.*i256 = gep v101 0.i64 2.i64;
-    POP
-    PUSH2 0x180 (384)
+    PUSH2 0x180 (384)  // v108.*i256 = gep v101 0.i64 2.i64;
     MLOAD  // v109.i256 = mload v108 i256;
-    DUP3  // v110.*i256 = gep v95 0.i64 2.i64;
-    POP
-    PUSH2 0x220 (544)
+    PUSH2 0x220 (544)  // v110.*i256 = gep v95 0.i64 2.i64;
     MSTORE  // mstore v110 v109 i256;
-    DUP3  // v111.*i256 = gep v101 0.i64 3.i64;
-    POP
-    PUSH2 0x1a0 (416)
+    PUSH2 0x1a0 (416)  // v111.*i256 = gep v101 0.i64 3.i64;
     MLOAD  // v112.i256 = mload v111 i256;
-    DUP3  // v113.*i256 = gep v95 0.i64 3.i64;
-    POP
-    PUSH2 0x240 (576)
+    PUSH2 0x240 (576)  // v113.*i256 = gep v95 0.i64 3.i64;
     MSTORE  // mstore v113 v112 i256;
-    DUP3  // v114.*i256 = gep v101 0.i64 4.i64;
-    POP
-    PUSH2 0x1c0 (448)
+    PUSH2 0x1c0 (448)  // v114.*i256 = gep v101 0.i64 4.i64;
     MLOAD  // v115.i256 = mload v114 i256;
-    DUP3  // v116.*i256 = gep v95 0.i64 4.i64;
-    POP
-    PUSH2 0x260 (608)
+    PUSH2 0x260 (608)  // v116.*i256 = gep v95 0.i64 4.i64;
     MSTORE  // mstore v116 v115 i256;
     PUSH1 block1  // jump block1;
     JUMP
@@ -595,31 +389,23 @@ run:
     SWAP2
     POP
     POP
-    DUP1
-    POP
     PUSH2 0x1e0 (480)
     MLOAD  // v118.i256 = mload v117 i256;
     DUP3  // v119.*i256 = gep v78 0.i64 0.i64;
     MSTORE  // mstore v119 v118 i256;
-    DUP1  // v120.*i256 = gep v95 0.i64 1.i64;
-    POP
-    PUSH2 0x200 (512)
+    PUSH2 0x200 (512)  // v120.*i256 = gep v95 0.i64 1.i64;
     MLOAD  // v121.i256 = mload v120 i256;
     DUP3  // v122.*i256 = gep v78 0.i64 1.i64;
     PUSH1 0x20 (32)
     ADD
     MSTORE  // mstore v122 v121 i256;
-    DUP1  // v123.*i256 = gep v95 0.i64 2.i64;
-    POP
-    PUSH2 0x220 (544)
+    PUSH2 0x220 (544)  // v123.*i256 = gep v95 0.i64 2.i64;
     MLOAD  // v124.i256 = mload v123 i256;
     DUP3  // v125.*i256 = gep v78 0.i64 2.i64;
     PUSH1 0x40 (64)
     ADD
     MSTORE  // mstore v125 v124 i256;
-    DUP1  // v126.*i256 = gep v95 0.i64 3.i64;
-    POP
-    PUSH2 0x240 (576)
+    PUSH2 0x240 (576)  // v126.*i256 = gep v95 0.i64 3.i64;
     MLOAD  // v127.i256 = mload v126 i256;
     DUP3  // v128.*i256 = gep v78 0.i64 3.i64;
     PUSH1 0x60 (96)
@@ -659,62 +445,42 @@ test_run:
     PUSH1 FuncRef(0)
     JUMP
     JUMPDEST
-    DUP1  // v31.*i256 = gep v27 0.i64 0.i64;
-    POP
-    PUSH2 0x460 (1120)
+    PUSH2 0x460 (1120)  // v31.*i256 = gep v27 0.i64 0.i64;
     MLOAD  // v32.i256 = mload v31 i256;
-    DUP2  // v34.*i256 = gep v27 0.i64 1.i64;
-    POP
-    PUSH2 0x480 (1152)
+    PUSH2 0x480 (1152)  // v34.*i256 = gep v27 0.i64 1.i64;
     MLOAD  // v35.i256 = mload v34 i256;
-    DUP3  // v37.*i256 = gep v27 0.i64 2.i64;
-    POP
-    PUSH2 0x4a0 (1184)
+    PUSH2 0x4a0 (1184)  // v37.*i256 = gep v27 0.i64 2.i64;
     MLOAD  // v38.i256 = mload v37 i256;
-    DUP4  // v40.*i256 = gep v27 0.i64 3.i64;
-    POP
-    PUSH2 0x4c0 (1216)
+    PUSH2 0x4c0 (1216)  // v40.*i256 = gep v27 0.i64 3.i64;
     MLOAD  // v41.i256 = mload v40 i256;
     SWAP4  // v43.*i256 = gep v27 0.i64 4.i64;
     POP
     PUSH2 0x4e0 (1248)
     MLOAD  // v44.i256 = mload v43 i256;
     PUSH2 0x460 (1120)  // v1.*[i256; 5] = alloca [i256; 5];
-    DUP1  // v45.*i256 = gep v1 0.i64 0.i64;
-    POP
-    PUSH2 0x460 (1120)
+    PUSH2 0x460 (1120)  // v45.*i256 = gep v1 0.i64 0.i64;
     SWAP5  // mstore v45 v32 i256;
     SWAP1
     SWAP5
     MSTORE
-    DUP4  // v46.*i256 = gep v1 0.i64 1.i64;
-    POP
-    PUSH2 0x480 (1152)
+    PUSH2 0x480 (1152)  // v46.*i256 = gep v1 0.i64 1.i64;
     SWAP3  // mstore v46 v35 i256;
     SWAP1
     SWAP3
     MSTORE
-    DUP3  // v47.*i256 = gep v1 0.i64 2.i64;
-    POP
-    PUSH2 0x4a0 (1184)
+    PUSH2 0x4a0 (1184)  // v47.*i256 = gep v1 0.i64 2.i64;
     MSTORE  // mstore v47 v38 i256;
-    DUP2  // v48.*i256 = gep v1 0.i64 3.i64;
-    POP
-    PUSH2 0x4c0 (1216)
+    PUSH2 0x4c0 (1216)  // v48.*i256 = gep v1 0.i64 3.i64;
     SWAP3  // mstore v48 v41 i256;
     SWAP1
     SWAP3
     MSTORE
-    DUP1  // v49.*i256 = gep v1 0.i64 4.i64;
-    POP
-    PUSH2 0x4e0 (1248)
+    PUSH2 0x4e0 (1248)  // v49.*i256 = gep v1 0.i64 4.i64;
     SWAP1  // mstore v49 v44 i256;
     SWAP2
     SWAP1
     MSTORE
-    DUP1  // v2.*i256 = gep v1 0.i256 0.i256;
-    POP
-    PUSH2 0x460 (1120)
+    PUSH2 0x460 (1120)  // v2.*i256 = gep v1 0.i256 0.i256;
     MLOAD  // v3.i256 = mload v2 i256;
     PUSH1 0x1e (30)  // v4.i1 = eq v3 30.i256;
     EQ
@@ -723,9 +489,7 @@ test_run:
     PUSH1 FuncRef(1)
     JUMP
     JUMPDEST
-    DUP1  // v5.*i256 = gep v1 0.i256 1.i256;
-    POP
-    PUSH2 0x480 (1152)
+    PUSH2 0x480 (1152)  // v5.*i256 = gep v1 0.i256 1.i256;
     MLOAD  // v6.i256 = mload v5 i256;
     PUSH1 0x20 (32)  // v7.i1 = eq v6 32.i256;
     EQ
@@ -734,9 +498,7 @@ test_run:
     PUSH1 FuncRef(1)
     JUMP
     JUMPDEST
-    DUP1  // v8.*i256 = gep v1 0.i256 2.i256;
-    POP
-    PUSH2 0x4a0 (1184)
+    PUSH2 0x4a0 (1184)  // v8.*i256 = gep v1 0.i256 2.i256;
     MLOAD  // v9.i256 = mload v8 i256;
     PUSH1 0x22 (34)  // v10.i1 = eq v9 34.i256;
     EQ
@@ -745,9 +507,7 @@ test_run:
     PUSH1 FuncRef(1)
     JUMP
     JUMPDEST
-    DUP1  // v11.*i256 = gep v1 0.i256 3.i256;
-    POP
-    PUSH2 0x4c0 (1216)
+    PUSH2 0x4c0 (1216)  // v11.*i256 = gep v1 0.i256 3.i256;
     MLOAD  // v12.i256 = mload v11 i256;
     PUSH1 0x24 (36)  // v13.i1 = eq v12 36.i256;
     EQ

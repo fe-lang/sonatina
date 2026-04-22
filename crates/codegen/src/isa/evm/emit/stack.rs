@@ -212,7 +212,7 @@ pub(crate) fn prune_redundant_opcode_sequences(vcode: &mut VCode<OpCode>, block_
 
     for block in block_order.iter().copied() {
         let insts: Vec<VCodeInst> = vcode.block_insns(block).collect();
-        if insts.len() < 3 {
+        if insts.len() < 2 {
             continue;
         }
 
@@ -317,8 +317,8 @@ pub(crate) fn prune_redundant_opcode_sequences(vcode: &mut VCode<OpCode>, block_
             }
 
             let mut removed = false;
-            if run_end >= i + 3 {
-                for end in (i + 3..=run_end).rev() {
+            if run_end >= i + 2 {
+                for end in (i + 2..=run_end).rev() {
                     if is_noop_stack_peephole_sequence(vcode, &label_targets, &insts[i..end]) {
                         changed = true;
                         removed = true;

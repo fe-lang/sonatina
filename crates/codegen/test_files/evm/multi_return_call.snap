@@ -6,8 +6,8 @@ input_file: test_files/evm/multi_return_call.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=true evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 62 bytes
-  total: 62 bytes
+  section runtime: 60 bytes
+  total: 60 bytes
 
 functions:
   entry: ir_blocks=3 ir_insts=12 vcode_ops=36 fixups=3 imm_bytes=6
@@ -16,8 +16,8 @@ functions:
     mem: scratch_words=1 stable_words=0 stable_mode=None entry_abs_words=2 abs_words_end=1
 
 evm:
-  case no_overflow: calldata_len=64 success reason=Return gas_used=21444 gas_refunded=0 logs=0 output=call len=32 tx_gas=21280 runtime_gas=164
-  case overflow: calldata_len=64 success reason=Return gas_used=21818 gas_refunded=0 logs=0 output=call len=32 tx_gas=21652 runtime_gas=166
+  case no_overflow: calldata_len=64 success reason=Return gas_used=21438 gas_refunded=0 logs=0 output=call len=32 tx_gas=21280 runtime_gas=158
+  case overflow: calldata_len=64 success reason=Return gas_used=21812 gas_refunded=0 logs=0 output=call len=32 tx_gas=21652 runtime_gas=160
 
 
 --------------- DEBUG ---------------
@@ -157,7 +157,5 @@ pair_add:
     SWAP1  // v5.i1 = lt v4 v3;
     DUP2
     LT
-    SWAP1  // return (v4, v5);
-    SWAP1
-    SWAP2
+    SWAP2  // return (v4, v5);
     JUMP

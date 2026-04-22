@@ -6,8 +6,8 @@ input_file: test_files/evm/fe_result_and_then_chain_while_loop_struct_repro_unop
 evm.config: stack_reach=16 vcode=false bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 1112 bytes
-  total: 1112 bytes
+  section runtime: 1087 bytes
+  total: 1087 bytes
 
 functions:
   nibble: ir_blocks=3 ir_insts=10 vcode_ops=31 fixups=1 imm_bytes=4
@@ -66,4 +66,4 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=26207 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=5207
+  case ok: calldata_len=0 success reason=Return gas_used=26152 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=5152
