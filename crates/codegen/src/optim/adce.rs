@@ -3,10 +3,11 @@
 use std::collections::BTreeSet;
 
 use cranelift_entity::SecondaryMap;
+use rustc_hash::FxHashSet;
 use sonatina_ir::{BlockId, Function, InstId};
 
 use crate::{
-    cfg_edit::{CfgEditor, CleanupMode, remove_phi_incoming_from, simplify_trivial_phis_in_block},
+    cfg_edit::{CfgEditor, CleanupMode},
     optim::{call_purity::is_nonmutating_returning_call, cfg_cleanup::CfgCleanup},
     post_domtree::{PDFSet, PDTIdom, PostDomTree},
 };
@@ -38,9 +39,13 @@ impl AdceSolver {
         self.worklist.clear();
     }
 
-    pub fn run(&mut self, func: &mut Function) {
-        while self.run_dce(func) {}
-        CfgCleanup::new(CleanupMode::Strict).run(func);
+    pub fn run(&mut self, func: &mut Function) -> bool {
+        let mut changed = false;
+        while self.run_dce(func) {
+            changed = true;
+        }
+        let cleaned_cfg = CfgCleanup::new(CleanupMode::Strict).run(func);
+        changed || cleaned_cfg
     }
 
     /// Returns `true` if dead code elimination changed the function.
@@ -154,84 +159,32 @@ impl AdceSolver {
         }
 
         let blocks: Vec<_> = func.layout.iter_block().collect();
-        let mut dead_insts = Vec::new();
-        for block in blocks {
-            dead_insts.extend(
-                func.layout
-                    .iter_inst(block)
-                    .filter(|inst| !self.does_inst_live(*inst)),
-            );
-        }
-
-        let dead_blocks: Vec<_> = func
-            .layout
-            .iter_block()
+        let dead_blocks: Vec<_> = blocks
+            .iter()
+            .copied()
             .filter(|&block| !self.does_block_live(block))
             .collect();
-        let mut changed = !dead_blocks.is_empty();
-        for block in dead_blocks {
-            let succs: Vec<_> = func
-                .layout
-                .last_inst_of(block)
-                .and_then(|inst| func.dfg.branch_info(inst).map(|branch| branch.dests()))
-                .unwrap_or_default()
-                .to_vec();
-            for succ in succs {
-                if func.layout.is_block_inserted(succ) {
-                    remove_phi_incoming_from(func, succ, block);
-                    simplify_trivial_phis_in_block(func, succ);
-                }
-            }
-            for inst in func.layout.iter_inst(block).collect::<Vec<_>>() {
-                func.layout.remove_inst(inst);
-            }
-            func.layout.remove_block(block);
-            func.erase_block(block);
-        }
-
-        let dead_insts: Vec<_> = dead_insts
-            .into_iter()
-            .filter(|&inst| func.dfg.has_inst(inst))
+        let dead_insts: Vec<_> = blocks
+            .iter()
+            .copied()
+            .flat_map(|block| func.layout.iter_inst(block))
+            .filter(|&inst| !self.does_inst_live(inst))
             .collect();
-        let mut pending = dead_insts;
-        loop {
-            let mut next_pending = Vec::new();
-            let mut removed_any = false;
-            for inst in pending {
-                if !func.dfg.has_inst(inst) {
-                    continue;
-                }
-                if func
-                    .dfg
-                    .inst_results(inst)
-                    .iter()
-                    .all(|&result| func.dfg.users_num(result) == 0)
-                {
-                    if func.layout.is_inst_inserted(inst) {
-                        func.layout.remove_inst(inst);
-                    }
-                    func.erase_inst(inst);
-                    removed_any = true;
-                    changed = true;
-                } else {
-                    next_pending.push(inst);
+
+        let erased_dead_insts = erase_closed_dead_insts(func, dead_insts);
+
+        let mut changed = erased_dead_insts;
+        {
+            let mut editor = CfgEditor::new(func, CleanupMode::RepairWithUndef);
+            for block in blocks {
+                if editor.func().layout.is_block_inserted(block) && self.does_block_live(block) {
+                    changed |= self.modify_branch(&mut editor, block);
                 }
             }
-            if !removed_any {
-                break;
-            }
-            pending = next_pending;
+            changed |= editor.delete_blocks_unreachable(&dead_blocks);
         }
 
-        // Modify branch insts to remove unreachable edges via CfgEditor.
-        let mut editor = CfgEditor::new(func, CleanupMode::RepairWithUndef);
-        let blocks: Vec<_> = editor.func().layout.iter_block().collect();
-        let mut br_inst_modified = false;
-        for block in blocks {
-            br_inst_modified |= self.modify_branch(&mut editor, block);
-        }
-
-        changed || br_inst_modified
+        changed
     }
 
     fn living_post_dom(&self, mut block: BlockId) -> Option<BlockId> {
@@ -289,6 +242,40 @@ impl AdceSolver {
         }
 
         changed
+    }
+}
+
+fn erase_closed_dead_insts(func: &mut Function, insts: impl IntoIterator<Item = InstId>) -> bool {
+    let mut dead_insts = Vec::new();
+    let mut dead_set = FxHashSet::default();
+    for inst in insts {
+        if func.dfg.has_inst(inst) && func.layout.is_inst_inserted(inst) && dead_set.insert(inst) {
+            dead_insts.push(inst);
+        }
+    }
+    if dead_insts.is_empty() {
+        return false;
+    }
+
+    assert_closed_dead_inst_set(func, &dead_set);
+    for &inst in &dead_insts {
+        func.layout.remove_inst(inst);
+    }
+    func.erase_insts(&dead_insts);
+    true
+}
+
+fn assert_closed_dead_inst_set(func: &Function, dead_set: &FxHashSet<InstId>) {
+    for &inst in dead_set {
+        for &result in func.dfg.inst_results(inst) {
+            for &user in func.dfg.users(result) {
+                if func.dfg.has_inst(user) && !dead_set.contains(&user) {
+                    panic!(
+                        "ADCE dead instruction set is not closed: {inst:?} result {result:?} is used by live instruction {user:?}"
+                    );
+                }
+            }
+        }
     }
 }
 
@@ -409,6 +396,53 @@ func public %caller(v0.i256) -> i256 {
             assert!(
                 dumped.contains("return 7.i256;"),
                 "caller should still return the live constant:\n{dumped}"
+            );
+        });
+    }
+
+    #[test]
+    fn removes_dead_ssa_cycle_in_live_blocks() {
+        let source = r#"
+target = "evm-ethereum-osaka"
+
+type @pair = {i256, i256};
+
+func private %f(v0.i1) {
+    block0:
+        v1.@pair = insert_value undef.@pair 0.i256 4.i256;
+        v2.@pair = insert_value v1 1.i256 4.i256;
+        jump block1;
+
+    block1:
+        v3.@pair = phi (v2 block0) (v5 block2);
+        br v0 block2 block3;
+
+    block2:
+        v4.@pair = insert_value v3 0.i256 5.i256;
+        v5.@pair = insert_value v4 1.i256 6.i256;
+        jump block1;
+
+    block3:
+        return;
+}
+"#;
+
+        let parsed = parse_module(source);
+        let func_ref = only_func_ref(&parsed.module);
+
+        parsed.module.func_store.modify(func_ref, |func| {
+            assert!(AdceSolver::new().run(func));
+        });
+
+        parsed.module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            assert!(
+                !dumped.contains("insert_value") && !dumped.contains("@pair = phi"),
+                "ADCE should remove the unused aggregate cycle:\n{dumped}"
+            );
+            assert!(
+                dumped.contains("return;"),
+                "ADCE should preserve live control flow:\n{dumped}"
             );
         });
     }
