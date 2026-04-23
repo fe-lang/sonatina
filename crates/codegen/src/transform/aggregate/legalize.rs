@@ -13,7 +13,9 @@ use sonatina_ir::{
 };
 
 use crate::{
-    cfg_edit::CleanupMode, critical_edge::CriticalEdgeSplitter, optim::cfg_cleanup::CfgCleanup,
+    cfg_edit::CleanupMode,
+    critical_edge::CriticalEdgeSplitter,
+    optim::{adce::AdceSolver, cfg_cleanup::CfgCleanup},
 };
 
 use super::{cleanup::DeadPureInstCleanup, shape};
@@ -301,10 +303,12 @@ impl AggregateLowerToMemoryLegalize {
             let removed_mloads = self.remove_dead_aggregate_mloads(func);
             let removed_slots = self.remove_dead_materialized_slots(func);
             let removed_pure = self.dead_pure_cleanup.run_with_current_users(func);
+            let removed_dead = AdceSolver::new().run(func);
             let cleaned_cfg = pending_cfg_cleanup && CfgCleanup::new(CleanupMode::Strict).run(func);
             pending_cfg_cleanup = false;
 
-            let progress = removed_mloads || removed_slots || removed_pure || cleaned_cfg;
+            let progress =
+                removed_mloads || removed_slots || removed_pure || removed_dead || cleaned_cfg;
             changed |= progress;
             if !progress {
                 return changed;

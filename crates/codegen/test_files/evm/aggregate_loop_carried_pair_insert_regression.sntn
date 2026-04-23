@@ -1,0 +1,36 @@
+#! evm.config: { opt: 2 }
+#! evm.case: ok
+#!   calldata: u256(0)
+#!   expect: return u256(7)
+
+target = "evm-ethereum-osaka"
+
+type @pair = {i256, i256};
+
+func public %entry() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i32;
+        v1.i1 = eq v0 0.i256;
+        v2.@pair = insert_value undef.@pair 0.i8 4.i256;
+        v3.@pair = insert_value v2 1.i8 4.i256;
+        jump block1;
+
+    block1:
+        v4.@pair = phi (v3 block0) (v6 block2);
+        br v1 block2 block3;
+
+    block2:
+        v5.@pair = insert_value v4 0.i8 5.i256;
+        v6.@pair = insert_value v5 1.i8 6.i256;
+        jump block1;
+
+    block3:
+        mstore 0.i32 7.i256 i256;
+        evm_return 0.i8 32.i8;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}

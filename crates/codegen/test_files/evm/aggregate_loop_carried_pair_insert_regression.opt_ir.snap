@@ -1,0 +1,21 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: opt_ir_snapshot
+input_file: test_files/evm/aggregate_loop_carried_pair_insert_regression.sntn
+---
+target = "evm-ethereum-osaka"
+
+type @pair = {i256, i256};
+
+func public %entry() {
+    block0:
+        mstore 0.i32 7.i256 i256;
+        evm_return 0.i8 32.i8;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %entry;
+    }
+}
