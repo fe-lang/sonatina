@@ -10,6 +10,8 @@
 //! Mixed consumers such as `object_effects` receive both views through a
 //! domain-specific adapter instead of querying raw provenance facts directly.
 
+use std::collections::VecDeque;
+
 use cranelift_entity::SecondaryMap;
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
@@ -296,12 +298,6 @@ struct CaptureStateView<'a> {
     root_slices: &'a FxHashMap<ValueId, shape::AggregateSlice>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-struct RootTransfer {
-    roots: FxHashSet<ValueId>,
-    maybe_unknown: bool,
-}
-
 #[derive(Clone, Copy)]
 enum ProjectionTransferInst<'a> {
     Gep(&'a data::Gep),
@@ -322,6 +318,23 @@ enum CallReturnTransferKind {
     Unknown,
 }
 
+#[derive(Clone)]
+struct PossibleRootTransfer {
+    result: ValueId,
+    sources: SmallVec<[ValueId; 4]>,
+    kind: PossibleRootTransferKind,
+}
+
+#[derive(Clone, Copy)]
+enum PossibleRootTransferKind {
+    Sources,
+    FreshRoot,
+    Unknown,
+}
+
+type PossibleRootTransfers = SecondaryMap<ValueId, Option<PossibleRootTransfer>>;
+type PossibleRootUsers = SecondaryMap<ValueId, SmallVec<[ValueId; 4]>>;
+
 pub(crate) fn collect_root_provenance(
     func: &Function,
     module: &ModuleCtx,
@@ -340,11 +353,14 @@ pub(crate) fn collect_root_provenance(
         }));
     }
 
+    let (possible_root_transfers, possible_root_users) =
+        collect_possible_root_transfers(func, object_effects);
     compute_possible_roots(
         func,
+        &possible_root_transfers,
+        &possible_root_users,
         &mut provenance.possible_roots,
         &mut provenance.maybe_unknown,
-        object_effects,
     );
     let value_sccs = compute_supported_value_sccs(func, root_slices);
 
@@ -411,6 +427,7 @@ pub(crate) fn collect_root_provenance(
         func,
         root_slices,
         &exact_states,
+        &possible_root_transfers,
         &mut provenance.possible_roots,
         &mut provenance.maybe_unknown,
         object_effects,
@@ -501,45 +518,266 @@ fn collect_possible_projections(
 
 fn compute_possible_roots(
     func: &Function,
+    transfers: &PossibleRootTransfers,
+    users: &PossibleRootUsers,
     possible_roots: &mut SecondaryMap<ValueId, FxHashSet<ValueId>>,
     maybe_unknown: &mut SecondaryMap<ValueId, bool>,
-    object_effects: Option<&ObjectEffectSummaryMap>,
 ) {
-    loop {
-        let mut changed = false;
+    let mut pending = VecDeque::new();
+    let mut queued = SecondaryMap::<ValueId, bool>::default();
 
-        for block in func.layout.iter_block() {
-            for inst in func.layout.iter_inst(block) {
-                if !func.layout.is_inst_inserted(inst) {
-                    continue;
-                }
+    for value in func.dfg.value_ids() {
+        if !possible_roots[value].is_empty() || maybe_unknown[value] {
+            enqueue_possible_root_value(value, &mut pending, &mut queued);
+        }
+    }
 
-                let Some(updated) = possible_root_transfer(
-                    func,
-                    inst,
-                    possible_roots,
-                    maybe_unknown,
-                    object_effects,
-                ) else {
-                    continue;
-                };
-                let Some(result) = single_result_value(func, inst) else {
-                    continue;
-                };
+    for value in func.dfg.value_ids() {
+        if let Some(transfer) = &transfers[value]
+            && transfer.sources.is_empty()
+            && apply_possible_root_transfer(transfer, possible_roots, maybe_unknown)
+        {
+            enqueue_possible_root_value(value, &mut pending, &mut queued);
+        }
+    }
 
-                if updated.roots != possible_roots[result]
-                    || updated.maybe_unknown != maybe_unknown[result]
-                {
-                    possible_roots[result] = updated.roots;
-                    maybe_unknown[result] = updated.maybe_unknown;
-                    changed = true;
-                }
+    while let Some(value) = pending.pop_front() {
+        queued[value] = false;
+        for &result in &users[value] {
+            let Some(transfer) = &transfers[result] else {
+                continue;
+            };
+            if apply_possible_root_transfer(transfer, possible_roots, maybe_unknown) {
+                enqueue_possible_root_value(result, &mut pending, &mut queued);
             }
         }
+    }
+}
 
-        if !changed {
-            break;
+fn collect_possible_root_transfers(
+    func: &Function,
+    object_effects: Option<&ObjectEffectSummaryMap>,
+) -> (PossibleRootTransfers, PossibleRootUsers) {
+    let mut transfers = PossibleRootTransfers::default();
+    let mut users = PossibleRootUsers::default();
+
+    for block in func.layout.iter_block() {
+        for inst in func.layout.iter_inst(block) {
+            if !func.layout.is_inst_inserted(inst) {
+                continue;
+            }
+
+            let Some(transfer) = possible_root_transfer_for_inst(func, inst, object_effects) else {
+                continue;
+            };
+            for &source in &transfer.sources {
+                push_unique_value(&mut users[source], transfer.result);
+            }
+            let result = transfer.result;
+            transfers[result] = Some(transfer);
         }
+    }
+
+    (transfers, users)
+}
+
+fn possible_root_transfer_for_inst(
+    func: &Function,
+    inst: InstId,
+    object_effects: Option<&ObjectEffectSummaryMap>,
+) -> Option<PossibleRootTransfer> {
+    let result = single_result_value(func, inst)?;
+
+    if let Some(gep) = downcast::<&data::Gep>(func.inst_set(), func.dfg.inst(inst)) {
+        return gep
+            .values()
+            .first()
+            .copied()
+            .map(|source| PossibleRootTransfer::source(result, source));
+    }
+
+    if let Some(bitcast) = downcast::<&cast::Bitcast>(func.inst_set(), func.dfg.inst(inst)) {
+        return Some(PossibleRootTransfer::source(result, *bitcast.from()));
+    }
+
+    if let Some(obj_proj) = downcast::<&data::ObjProj>(func.inst_set(), func.dfg.inst(inst)) {
+        return obj_proj
+            .values()
+            .first()
+            .copied()
+            .map(|source| PossibleRootTransfer::source(result, source));
+    }
+
+    if let Some(obj_index) = downcast::<&data::ObjIndex>(func.inst_set(), func.dfg.inst(inst)) {
+        return Some(PossibleRootTransfer::source(result, *obj_index.object()));
+    }
+
+    if let Some(enum_proj) = downcast::<&data::EnumProj>(func.inst_set(), func.dfg.inst(inst)) {
+        return Some(PossibleRootTransfer::source(result, *enum_proj.object()));
+    }
+
+    if let Some(enum_assert_ref) =
+        downcast::<&data::EnumAssertVariantRef>(func.inst_set(), func.dfg.inst(inst))
+    {
+        return Some(PossibleRootTransfer::source(
+            result,
+            *enum_assert_ref.object(),
+        ));
+    }
+
+    if let Some(call) = downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(inst)) {
+        return call_possible_root_transfer(func, result, call, object_effects);
+    }
+
+    downcast::<&control_flow::Phi>(func.inst_set(), func.dfg.inst(inst))
+        .map(|phi| PossibleRootTransfer::sources(result, phi.args().iter().map(|(arg, _)| *arg)))
+}
+
+fn call_possible_root_transfer(
+    func: &Function,
+    result: ValueId,
+    call: &control_flow::Call,
+    object_effects: Option<&ObjectEffectSummaryMap>,
+) -> Option<PossibleRootTransfer> {
+    let Some(kind) = call_return_transfer_kind(object_effects, *call.callee()) else {
+        return reference_element_ty(func.ctx(), func.dfg.value_ty(result))
+            .map(|_| PossibleRootTransfer::unknown(result));
+    };
+
+    match kind {
+        CallReturnTransferKind::Arg { index, .. } => call
+            .args()
+            .get(index)
+            .copied()
+            .map(|source| PossibleRootTransfer::source(result, source)),
+        CallReturnTransferKind::FreshObject => Some(PossibleRootTransfer::fresh_root(result)),
+        CallReturnTransferKind::Unknown => {
+            reference_element_ty(func.ctx(), func.dfg.value_ty(result))
+                .map(|_| PossibleRootTransfer::unknown(result))
+        }
+    }
+}
+
+fn apply_possible_root_transfer(
+    transfer: &PossibleRootTransfer,
+    possible_roots: &mut SecondaryMap<ValueId, FxHashSet<ValueId>>,
+    maybe_unknown: &mut SecondaryMap<ValueId, bool>,
+) -> bool {
+    match transfer.kind {
+        PossibleRootTransferKind::Sources => {
+            apply_possible_root_sources(transfer, possible_roots, maybe_unknown)
+        }
+        PossibleRootTransferKind::FreshRoot => {
+            possible_roots[transfer.result].insert(transfer.result)
+        }
+        PossibleRootTransferKind::Unknown => {
+            let changed = !maybe_unknown[transfer.result];
+            maybe_unknown[transfer.result] = true;
+            changed
+        }
+    }
+}
+
+fn apply_possible_root_sources(
+    transfer: &PossibleRootTransfer,
+    possible_roots: &mut SecondaryMap<ValueId, FxHashSet<ValueId>>,
+    maybe_unknown: &mut SecondaryMap<ValueId, bool>,
+) -> bool {
+    let result = transfer.result;
+    let old_unknown = maybe_unknown[result];
+    let mut next_unknown = old_unknown;
+    let mut result_roots = std::mem::take(&mut possible_roots[result]);
+    let old_root_count = result_roots.len();
+
+    for &source in &transfer.sources {
+        next_unknown |= maybe_unknown[source];
+        if source != result {
+            result_roots.extend(possible_roots[source].iter().copied());
+        }
+    }
+
+    let roots_changed = result_roots.len() != old_root_count;
+    possible_roots[result] = result_roots;
+    maybe_unknown[result] = next_unknown;
+    roots_changed || old_unknown != next_unknown
+}
+
+fn union_possible_root_transfer_from_snapshot(
+    transfer: &PossibleRootTransfer,
+    snapshot_roots: &SecondaryMap<ValueId, FxHashSet<ValueId>>,
+    snapshot_maybe_unknown: &SecondaryMap<ValueId, bool>,
+    dst_roots: &mut FxHashSet<ValueId>,
+    dst_maybe_unknown: &mut bool,
+) -> bool {
+    match transfer.kind {
+        PossibleRootTransferKind::Sources => {
+            let old_root_count = dst_roots.len();
+            let old_unknown = *dst_maybe_unknown;
+            for &source in &transfer.sources {
+                dst_roots.extend(snapshot_roots[source].iter().copied());
+                *dst_maybe_unknown |= snapshot_maybe_unknown[source];
+            }
+            dst_roots.len() != old_root_count || old_unknown != *dst_maybe_unknown
+        }
+        PossibleRootTransferKind::FreshRoot => dst_roots.insert(transfer.result),
+        PossibleRootTransferKind::Unknown => {
+            let changed = !*dst_maybe_unknown;
+            *dst_maybe_unknown = true;
+            changed
+        }
+    }
+}
+
+fn enqueue_possible_root_value(
+    value: ValueId,
+    pending: &mut VecDeque<ValueId>,
+    queued: &mut SecondaryMap<ValueId, bool>,
+) {
+    if !queued[value] {
+        queued[value] = true;
+        pending.push_back(value);
+    }
+}
+
+impl PossibleRootTransfer {
+    fn source(result: ValueId, source: ValueId) -> Self {
+        Self::sources(result, [source])
+    }
+
+    fn sources(result: ValueId, sources: impl IntoIterator<Item = ValueId>) -> Self {
+        let mut unique_sources = SmallVec::new();
+        for source in sources {
+            if !unique_sources.contains(&source) {
+                unique_sources.push(source);
+            }
+        }
+        Self {
+            result,
+            sources: unique_sources,
+            kind: PossibleRootTransferKind::Sources,
+        }
+    }
+
+    fn fresh_root(result: ValueId) -> Self {
+        Self {
+            result,
+            sources: SmallVec::new(),
+            kind: PossibleRootTransferKind::FreshRoot,
+        }
+    }
+
+    fn unknown(result: ValueId) -> Self {
+        Self {
+            result,
+            sources: SmallVec::new(),
+            kind: PossibleRootTransferKind::Unknown,
+        }
+    }
+}
+
+fn push_unique_value(values: &mut SmallVec<[ValueId; 4]>, value: ValueId) {
+    if !values.contains(&value) {
+        values.push(value);
     }
 }
 
@@ -547,6 +785,7 @@ fn refine_possible_roots_from_objref_loads(
     func: &Function,
     root_slices: &FxHashMap<ValueId, shape::AggregateSlice>,
     exact_states: &SecondaryMap<ValueId, Option<ExactState>>,
+    possible_root_transfers: &PossibleRootTransfers,
     possible_roots: &mut SecondaryMap<ValueId, FxHashSet<ValueId>>,
     maybe_unknown: &mut SecondaryMap<ValueId, bool>,
     object_effects: Option<&ObjectEffectSummaryMap>,
@@ -584,17 +823,14 @@ fn refine_possible_roots_from_objref_loads(
                     continue;
                 }
 
-                if let Some(updated) = possible_root_transfer(
-                    func,
-                    inst,
-                    &possible_roots_snapshot,
-                    &maybe_unknown_snapshot,
-                    object_effects,
-                ) && let Some(result) = single_result_value(func, inst)
-                    && union_root_transfer(
+                if let Some(result) = single_result_value(func, inst)
+                    && let Some(transfer) = &possible_root_transfers[result]
+                    && union_possible_root_transfer_from_snapshot(
+                        transfer,
+                        &possible_roots_snapshot,
+                        &maybe_unknown_snapshot,
                         &mut possible_roots[result],
                         &mut maybe_unknown[result],
-                        &updated,
                     )
                 {
                     changed = true;
@@ -605,16 +841,15 @@ fn refine_possible_roots_from_objref_loads(
                     && reference_element_ty(func.ctx(), func.dfg.value_ty(*obj_load.object()))
                         .is_some()
                     && let Some(result) = single_result_value(func, inst)
-                {
-                    let loaded_roots =
-                        capture_roots_for_value(*obj_load.object(), capture_state, &root_captures);
-                    if union_root_transfer(
+                    && union_capture_roots_for_value(
+                        *obj_load.object(),
+                        capture_state,
+                        &root_captures,
                         &mut possible_roots[result],
                         &mut maybe_unknown[result],
-                        &loaded_roots,
-                    ) {
-                        changed = true;
-                    }
+                    )
+                {
+                    changed = true;
                 }
 
                 apply_inst_capture_transfer(
@@ -886,15 +1121,17 @@ fn exact_capture_destination_for_value(
     )
 }
 
-fn capture_roots_for_value(
+fn union_capture_roots_for_value(
     value: ValueId,
     capture_state: CaptureStateView<'_>,
     root_captures: &RootCaptureMap,
-) -> RootTransfer {
-    let mut transfer = RootTransfer {
-        maybe_unknown: capture_state.maybe_unknown[value],
-        ..RootTransfer::default()
-    };
+    dst_roots: &mut FxHashSet<ValueId>,
+    dst_maybe_unknown: &mut bool,
+) -> bool {
+    let old_root_count = dst_roots.len();
+    let old_unknown = *dst_maybe_unknown;
+    *dst_maybe_unknown |= capture_state.maybe_unknown[value];
+
     for (root, access_slice) in capture_destinations_for_value(value, None, capture_state) {
         let Some(captures) = root_captures.get(&root) else {
             continue;
@@ -902,14 +1139,15 @@ fn capture_roots_for_value(
         for capture in captures {
             if slices_overlap_relative(access_slice, capture.dst_slice) {
                 if let Some(src_root) = capture.src_root {
-                    transfer.roots.insert(src_root.value());
+                    dst_roots.insert(src_root.value());
                 } else {
-                    transfer.maybe_unknown = true;
+                    *dst_maybe_unknown = true;
                 }
             }
         }
     }
-    transfer
+
+    dst_roots.len() != old_root_count || old_unknown != *dst_maybe_unknown
 }
 
 fn whole_root_projection(
@@ -942,95 +1180,6 @@ pub(crate) fn offset_projection_slice(
             leaf_count: relative_slice.leaf_count,
         },
     )
-}
-
-fn union_root_set(dst: &mut FxHashSet<ValueId>, src: &FxHashSet<ValueId>) -> bool {
-    let before = dst.len();
-    dst.extend(src.iter().copied());
-    dst.len() != before
-}
-
-fn union_root_transfer(
-    dst_roots: &mut FxHashSet<ValueId>,
-    dst_maybe_unknown: &mut bool,
-    src: &RootTransfer,
-) -> bool {
-    let roots_changed = union_root_set(dst_roots, &src.roots);
-    let unknown_changed = !*dst_maybe_unknown && src.maybe_unknown;
-    *dst_maybe_unknown |= src.maybe_unknown;
-    roots_changed || unknown_changed
-}
-
-fn possible_root_transfer(
-    func: &Function,
-    inst: InstId,
-    possible_roots: &SecondaryMap<ValueId, FxHashSet<ValueId>>,
-    maybe_unknown: &SecondaryMap<ValueId, bool>,
-    object_effects: Option<&ObjectEffectSummaryMap>,
-) -> Option<RootTransfer> {
-    if let Some(gep) = downcast::<&data::Gep>(func.inst_set(), func.dfg.inst(inst)) {
-        return gep.values().first().map(|base| RootTransfer {
-            roots: possible_roots[*base].clone(),
-            maybe_unknown: maybe_unknown[*base],
-        });
-    }
-
-    if let Some(bitcast) = downcast::<&cast::Bitcast>(func.inst_set(), func.dfg.inst(inst)) {
-        return Some(RootTransfer {
-            roots: possible_roots[*bitcast.from()].clone(),
-            maybe_unknown: maybe_unknown[*bitcast.from()],
-        });
-    }
-
-    if let Some(obj_proj) = downcast::<&data::ObjProj>(func.inst_set(), func.dfg.inst(inst)) {
-        return obj_proj.values().first().map(|base| RootTransfer {
-            roots: possible_roots[*base].clone(),
-            maybe_unknown: maybe_unknown[*base],
-        });
-    }
-
-    if let Some(obj_index) = downcast::<&data::ObjIndex>(func.inst_set(), func.dfg.inst(inst)) {
-        return Some(RootTransfer {
-            roots: possible_roots[*obj_index.object()].clone(),
-            maybe_unknown: maybe_unknown[*obj_index.object()],
-        });
-    }
-
-    if let Some(enum_proj) = downcast::<&data::EnumProj>(func.inst_set(), func.dfg.inst(inst)) {
-        return Some(RootTransfer {
-            roots: possible_roots[*enum_proj.object()].clone(),
-            maybe_unknown: maybe_unknown[*enum_proj.object()],
-        });
-    }
-
-    if let Some(enum_assert_ref) =
-        downcast::<&data::EnumAssertVariantRef>(func.inst_set(), func.dfg.inst(inst))
-    {
-        return Some(RootTransfer {
-            roots: possible_roots[*enum_assert_ref.object()].clone(),
-            maybe_unknown: maybe_unknown[*enum_assert_ref.object()],
-        });
-    }
-
-    if let Some(call) = downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(inst)) {
-        return call_return_root_transfer(
-            func,
-            inst,
-            call,
-            possible_roots,
-            maybe_unknown,
-            object_effects,
-        );
-    }
-
-    downcast::<&control_flow::Phi>(func.inst_set(), func.dfg.inst(inst)).map(|phi| {
-        let mut transfer = RootTransfer::default();
-        for &(arg, _) in phi.args() {
-            transfer.roots.extend(possible_roots[arg].iter().copied());
-            transfer.maybe_unknown |= maybe_unknown[arg];
-        }
-        transfer
-    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1383,46 +1532,6 @@ fn supported_value_deps(func: &Function, inst: InstId) -> Option<Vec<ValueId>> {
 
     downcast::<&control_flow::Phi>(func.inst_set(), func.dfg.inst(inst))
         .map(|phi| phi.args().iter().map(|(arg, _)| *arg).collect())
-}
-
-fn call_return_root_transfer(
-    func: &Function,
-    inst: InstId,
-    call: &control_flow::Call,
-    possible_roots: &SecondaryMap<ValueId, FxHashSet<ValueId>>,
-    maybe_unknown: &SecondaryMap<ValueId, bool>,
-    object_effects: Option<&ObjectEffectSummaryMap>,
-) -> Option<RootTransfer> {
-    let [result] = func.dfg.inst_results(inst) else {
-        return None;
-    };
-    let Some(kind) = call_return_transfer_kind(object_effects, *call.callee()) else {
-        return reference_element_ty(func.ctx(), func.dfg.value_ty(*result)).map(|_| {
-            RootTransfer {
-                maybe_unknown: true,
-                ..RootTransfer::default()
-            }
-        });
-    };
-    match kind {
-        CallReturnTransferKind::Arg { index, .. } => {
-            call.args().get(index).map(|arg| RootTransfer {
-                roots: possible_roots[*arg].clone(),
-                maybe_unknown: maybe_unknown[*arg],
-            })
-        }
-        CallReturnTransferKind::FreshObject => {
-            let mut transfer = RootTransfer::default();
-            transfer.roots.insert(*result);
-            Some(transfer)
-        }
-        CallReturnTransferKind::Unknown => {
-            reference_element_ty(func.ctx(), func.dfg.value_ty(*result)).map(|_| RootTransfer {
-                maybe_unknown: true,
-                ..RootTransfer::default()
-            })
-        }
-    }
 }
 
 #[allow(clippy::too_many_arguments)]
