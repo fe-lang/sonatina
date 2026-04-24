@@ -788,11 +788,12 @@ fn record_enum_variant_capture_sources(
     let Some(enum_ty) = reference_element_ty(func.ctx(), func.dfg.value_ty(object)) else {
         return;
     };
+    let mut layout_cache = shape::AggregateLayoutCache::default();
     for (field_idx, &value) in values.iter().enumerate() {
         if reference_element_ty(func.ctx(), func.dfg.value_ty(value)).is_none() {
             continue;
         }
-        let Some(field_slice) = shape::enum_variant_field_slice(
+        let Some(field_slice) = layout_cache.enum_variant_field_slice(
             func.ctx(),
             enum_ty,
             variant,
@@ -1623,13 +1624,14 @@ impl ProjectionTransferInst<'_> {
         layout_cache: &mut shape::AggregateLayoutCache,
     ) -> Option<Projection> {
         match self {
-            Self::Gep(gep) => shape::aggregate_slice_for_gep_path(
-                module,
-                projection.slice.ty,
-                &gep.values()[1..],
-                &func.dfg,
-            )
-            .map(|sub| offset_projection(projection, sub)),
+            Self::Gep(gep) => layout_cache
+                .aggregate_slice_for_gep_path(
+                    module,
+                    projection.slice.ty,
+                    &gep.values()[1..],
+                    &func.dfg,
+                )
+                .map(|sub| offset_projection(projection, sub)),
             Self::Bitcast(_) => bitcast_projection_slice(
                 layout_cache,
                 module,
@@ -1640,23 +1642,25 @@ impl ProjectionTransferInst<'_> {
                 root_value: projection.root_value,
                 slice,
             }),
-            Self::ObjProj(obj_proj) => shape::aggregate_slice_for_object_path(
-                module,
-                projection.slice.ty,
-                &obj_proj.values()[1..],
-                &func.dfg,
-            )
-            .map(|sub| offset_projection(projection, sub)),
-            Self::ObjIndex(obj_index) => shape::aggregate_slice_for_object_path(
-                module,
-                projection.slice.ty,
-                &[*obj_index.index()],
-                &func.dfg,
-            )
-            .map(|sub| offset_projection(projection, sub)),
+            Self::ObjProj(obj_proj) => layout_cache
+                .aggregate_slice_for_object_path(
+                    module,
+                    projection.slice.ty,
+                    &obj_proj.values()[1..],
+                    &func.dfg,
+                )
+                .map(|sub| offset_projection(projection, sub)),
+            Self::ObjIndex(obj_index) => layout_cache
+                .aggregate_slice_for_object_path(
+                    module,
+                    projection.slice.ty,
+                    &[*obj_index.index()],
+                    &func.dfg,
+                )
+                .map(|sub| offset_projection(projection, sub)),
             Self::EnumProj(enum_proj) => {
                 let field_idx = shape::const_u32(&func.dfg, *enum_proj.field())?;
-                let sub = shape::enum_variant_field_slice(
+                let sub = layout_cache.enum_variant_field_slice(
                     module,
                     projection.slice.ty,
                     *enum_proj.variant(),
@@ -1807,10 +1811,10 @@ fn projection_slice_can_view_as(
         && from_leaf_tys.len() == to_leaf_tys.len()
         && (view_ty == slice.ty
             || from_leaf_tys.len() == 1
-                && shape::runtime_size_bytes(module, from_leaf_tys[0])
-                    == shape::runtime_size_bytes(module, to_leaf_tys[0])
-            || shape::is_supported_scalar_shape_ty(module, slice.ty)
-                && shape::is_supported_scalar_shape_ty(module, view_ty)
+                && layout_cache.runtime_size_bytes(module, from_leaf_tys[0])
+                    == layout_cache.runtime_size_bytes(module, to_leaf_tys[0])
+            || layout_cache.is_supported_scalar_shape_ty(module, slice.ty)
+                && layout_cache.is_supported_scalar_shape_ty(module, view_ty)
                 && layout_cache
                     .compatible_bitcast_runtime_leaves(module, slice.ty, view_ty)
                     .is_some())
@@ -1821,7 +1825,7 @@ fn projection_view_leaf_tys(
     module: &ModuleCtx,
     ty: Type,
 ) -> Option<Vec<Type>> {
-    if shape::is_supported_scalar_shape_ty(module, ty) {
+    if layout_cache.is_supported_scalar_shape_ty(module, ty) {
         return Some(
             layout_cache
                 .shape(module, ty)?
