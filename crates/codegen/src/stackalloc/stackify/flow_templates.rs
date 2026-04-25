@@ -18,7 +18,7 @@ use super::{
         improve_reachability_before_operands, inst_is_noop_alias_cast, last_use_values_in_inst,
         operand_order_for_evm, skip_pre_exit_cleanup,
     },
-    planner::{self, Planner},
+    planner::{self, OperandPrepMode::TemplateSim, Planner},
     slots::{FreeSlotPools, SpillSlotPools},
     spill::SpillSet,
     sym_stack::{StackItem, SymStack},
@@ -317,7 +317,7 @@ impl<'a, 'ctx> FlowTemplateSolver<'a, 'ctx> {
                             slots,
                         );
                         with_planner(ctx, mem, &mut stack, &mut actions, |planner| {
-                            planner.prepare_operands(&[cond], &consume_last_use)
+                            planner.prepare_operands(&[cond], &consume_last_use, TemplateSim)
                         });
 
                         // The backend consumes the condition value for the actual branch.
@@ -365,6 +365,7 @@ impl<'a, 'ctx> FlowTemplateSolver<'a, 'ctx> {
                                     planner.prepare_operands_for_commutative_pair(
                                         &mut compare_args,
                                         &consume_last_use,
+                                        TemplateSim,
                                     );
                                 });
                             },
@@ -415,7 +416,7 @@ impl<'a, 'ctx> FlowTemplateSolver<'a, 'ctx> {
             );
 
             with_planner(ctx, mem, &mut stack, &mut actions, |planner| {
-                planner.prepare_operands_for_inst(inst, &mut args, last_use)
+                planner.prepare_operands_for_inst(inst, &mut args, last_use, TemplateSim)
             });
 
             if is_call {

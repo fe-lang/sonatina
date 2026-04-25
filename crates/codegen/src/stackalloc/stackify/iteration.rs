@@ -9,7 +9,7 @@ use super::{
     alloc::StackifyAlloc,
     br_table::plan_br_table_compare_chain,
     builder::{StackifyContext, StackifyReachability},
-    planner::{self, Planner},
+    planner::{self, OperandPrepMode::Exact, Planner},
     slots::{FreeSlotPools, FreeSlots, SlotPool, SpillSlotPools},
     spill::SpillSet,
     sym_stack::{StackItem, SymStack},
@@ -422,7 +422,7 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
                         inst,
                         &mut state.free_slots,
                         |p| {
-                            p.prepare_operands(&[cond], &consume_last_use);
+                            p.prepare_operands(&[cond], &consume_last_use, Exact);
                         },
                     );
 
@@ -493,6 +493,7 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
                                     p.prepare_operands_for_commutative_pair(
                                         &mut compare_args,
                                         &consume_last_use,
+                                        Exact,
                                     );
                                 },
                             );
@@ -554,7 +555,7 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
 
         // Normal instruction.
         self.with_pre_actions_planner(&mut state.stack, inst, &mut state.free_slots, |p| {
-            p.prepare_operands_for_inst(inst, &mut args, &consume_last_use);
+            p.prepare_operands_for_inst(inst, &mut args, &consume_last_use, Exact);
         });
 
         if call_has_local_return {

@@ -8,7 +8,7 @@ use std::{
 };
 
 use super::{
-    Planner,
+    OperandPrepMode, Planner,
     normalize::SpillAwareCostModel,
     normalize_search::{
         CostModel, NormalizePlan, SearchCfg, Step, cost_for_steps, rebuild_operand_prep_plan,
@@ -271,6 +271,7 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
         args: &mut SmallVec<[ValueId; 8]>,
         consume_last_use: &BitSet<ValueId>,
         commutative_pair: bool,
+        mode: OperandPrepMode,
     ) {
         // If all operands are last-use values that are already in the required order on the
         // current stack top, avoid the operand-preparation machinery entirely. The instruction
@@ -300,6 +301,18 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
                 }
             }
 
+            if mode == OperandPrepMode::TemplateSim
+                && !args.iter().any(|&arg| consume_last_use.contains(arg))
+            {
+                let mut swapped = args.clone();
+                swapped.swap(0, 1);
+                if !self.stack_prefix_matches(args) && self.stack_prefix_matches(&swapped) {
+                    args.swap(0, 1);
+                }
+                self.prepare_operands(args.as_slice(), consume_last_use, mode);
+                return;
+            }
+
             let original_plan = self.solve_operand_prep_cached(args.as_slice(), consume_last_use);
 
             let mut swapped_args = args.clone();
@@ -321,7 +334,7 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
                     }
                 }
                 (None, None) => {
-                    self.prepare_operands_greedy(args.as_slice(), consume_last_use);
+                    self.prepare_operands_greedy(args.as_slice(), consume_last_use, mode);
                     return;
                 }
             };
@@ -330,12 +343,17 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
                 args.swap(0, 1);
             }
             if !self.apply_operand_prep_plan(&plan, args.as_slice()) {
-                self.prepare_operands_greedy(args.as_slice(), consume_last_use);
+                self.prepare_operands_greedy(
+                    args.as_slice(),
+                    consume_last_use,
+                    OperandPrepMode::Exact,
+                );
             }
+            debug_assert!(self.stack_prefix_matches(args.as_slice()));
             return;
         }
 
-        self.prepare_operands(args.as_slice(), consume_last_use);
+        self.prepare_operands(args.as_slice(), consume_last_use, mode);
     }
 
     pub(in super::super) fn prepare_operands_for_inst(
@@ -343,11 +361,13 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
         inst: InstId,
         args: &mut SmallVec<[ValueId; 8]>,
         consume_last_use: &BitSet<ValueId>,
+        mode: OperandPrepMode,
     ) {
         self.prepare_operands_maybe_commutative(
             args,
             consume_last_use,
             self.inst_is_commutative(inst),
+            mode,
         );
     }
 
@@ -355,8 +375,9 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
         &mut self,
         args: &mut SmallVec<[ValueId; 8]>,
         consume_last_use: &BitSet<ValueId>,
+        mode: OperandPrepMode,
     ) {
-        self.prepare_operands_maybe_commutative(args, consume_last_use, true);
+        self.prepare_operands_maybe_commutative(args, consume_last_use, true, mode);
     }
 
     fn stack_prefix_matches(&self, args: &[ValueId]) -> bool {
@@ -416,22 +437,37 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
         &mut self,
         args: &[ValueId],
         consume_last_use: &BitSet<ValueId>,
+        mode: OperandPrepMode,
     ) {
         if args.is_empty() {
             return;
         }
 
-        let Some(plan) = self.solve_operand_prep_cached(args, consume_last_use) else {
-            self.prepare_operands_greedy(args, consume_last_use);
+        if mode == OperandPrepMode::TemplateSim
+            && !args.iter().any(|&arg| consume_last_use.contains(arg))
+        {
+            self.prepare_operands_greedy(args, consume_last_use, mode);
+            debug_assert!(self.stack_prefix_matches(args));
             return;
-        };
-
-        if !self.apply_operand_prep_plan(&plan, args) {
-            self.prepare_operands_greedy(args, consume_last_use);
         }
+
+        if let Some(plan) = self.solve_operand_prep_cached(args, consume_last_use)
+            && self.apply_operand_prep_plan(&plan, args)
+        {
+            debug_assert!(self.stack_prefix_matches(args));
+            return;
+        }
+
+        self.prepare_operands_greedy(args, consume_last_use, OperandPrepMode::Exact);
+        debug_assert!(self.stack_prefix_matches(args));
     }
 
-    fn prepare_operands_greedy(&mut self, args: &[ValueId], consume_last_use: &BitSet<ValueId>) {
+    fn prepare_operands_greedy(
+        &mut self,
+        args: &[ValueId],
+        consume_last_use: &BitSet<ValueId>,
+        mode: OperandPrepMode,
+    ) {
         // Iterate in reverse so the final stack order is `args[0]` on top, then `args[1]`, ...
         let mut prepared: usize = 0;
         let mut consumed_from_stack: BitSet<ValueId> = BitSet::default();
@@ -448,11 +484,8 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
                 continue;
             }
 
-            // If this is a last-use, prefer consuming an existing stack copy (stable-rotated
-            // to the top) instead of duplicating it, but only when the swap chain is small.
-            //
-            // This is equivalent to a stable delete, except the pop is performed by the
-            // instruction consuming its operands.
+            // If this is a last-use, prefer consuming an existing stack copy instead of
+            // duplicating it, but only when the swap chain is small.
             if consume_last_use.contains(v)
                 && !consumed_from_stack.contains(v)
                 && let Some(pos) =
@@ -460,7 +493,11 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
                         .find_reachable_value_from(v, prepared, self.ctx.reach.swap_max)
                 && pos <= CONSUME_LAST_USE_MAX_SWAPS
             {
-                self.stack.stable_rotate_to_top(pos, self.actions);
+                if prepared == 0 {
+                    self.stack.swap(pos, self.actions);
+                } else {
+                    self.stack.stable_rotate_to_top(pos, self.actions);
+                }
                 consumed_from_stack.insert(v);
                 prepared += 1;
                 continue;
@@ -469,9 +506,10 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
             if let Some(pos) = self.stack.find_reachable_value(v, self.ctx.reach.dup_max) {
                 self.stack.dup(pos, self.actions);
                 prepared += 1;
-            } else if let Some(pos) =
-                self.stack
-                    .find_reachable_value_from(v, prepared, self.ctx.reach.swap_max)
+            } else if mode == OperandPrepMode::Exact
+                && let Some(pos) =
+                    self.stack
+                        .find_reachable_value_from(v, prepared, self.ctx.reach.swap_max)
             {
                 if prepared == 0 {
                     self.stack.stable_rotate_to_top(pos, self.actions);
@@ -857,7 +895,7 @@ block0:
             let mut actions = crate::stackalloc::Actions::new();
             {
                 let mut planner = Planner::new(&ctx, &mut stack, &mut actions, mem);
-                planner.prepare_operands_greedy(&args, &BitSet::default());
+                planner.prepare_operands_greedy(&args, &BitSet::default(), OperandPrepMode::Exact);
                 assert!(planner.stack_prefix_matches(&args));
             }
 
@@ -931,7 +969,7 @@ block0:
             let mut actions = crate::stackalloc::Actions::new();
             {
                 let mut planner = Planner::new(&ctx, &mut stack, &mut actions, mem);
-                planner.prepare_operands_greedy(&args, &BitSet::default());
+                planner.prepare_operands_greedy(&args, &BitSet::default(), OperandPrepMode::Exact);
                 assert!(planner.stack_prefix_matches(&args));
             }
 
@@ -947,6 +985,31 @@ block0:
             assert!(
                 spill_requests.is_empty(),
                 "prefix-free SWAP fallback must not request a spill"
+            );
+
+            let mut last_use = BitSet::default();
+            last_use.insert(func.arg_values[2]);
+            let mut stack = SymStack::entry_stack(func, false);
+            let mut actions = crate::stackalloc::Actions::new();
+            let mem = MemPlan::new(
+                SpillSet::new(&spill_set),
+                &mut spill_requests,
+                &ctx,
+                &spill_obj,
+                &ctx.exact_local_addr,
+                &mut free_slots,
+                &mut slots,
+            );
+            {
+                let mut planner = Planner::new(&ctx, &mut stack, &mut actions, mem);
+                planner.prepare_operands_greedy(&args, &last_use, OperandPrepMode::Exact);
+                assert!(planner.stack_prefix_matches(&args));
+            }
+
+            assert_eq!(
+                actions.as_slice(),
+                &[Action::StackSwap(2)],
+                "prefix-free last-use consume should use one SWAP"
             );
         });
     }
