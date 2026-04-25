@@ -6,8 +6,8 @@ input_file: test_files/evm/retained_enum_result_packed_array_pair_regression.snt
 evm.config: stack_reach=16 vcode=false bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 963 bytes
-  total: 963 bytes
+  section runtime: 879 bytes
+  total: 879 bytes
 
 functions:
   __fe_test_root_local_tuple_pack_then_verify_like_twice: ir_blocks=1 ir_insts=2 vcode_ops=5 fixups=2 imm_bytes=0
@@ -20,4 +20,4 @@ functions:
     mem: scratch_words=11 stable_words=0 stable_mode=None entry_abs_words=25 abs_words_end=11
 
 evm:
-  case ok: calldata_len=0 success reason=Stop gas_used=24241 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=3241
+  case ok: calldata_len=0 success reason=Stop gas_used=23954 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=2954

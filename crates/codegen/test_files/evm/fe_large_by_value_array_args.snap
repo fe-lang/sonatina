@@ -6,9 +6,9 @@ input_file: test_files/evm/fe_large_by_value_array_args.sntn
 evm.config: stack_reach=16 vcode=false bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section init: 4397 bytes
-  section runtime: 4386 bytes
-  total: 8783 bytes
+  section init: 3521 bytes
+  section runtime: 3510 bytes
+  total: 7031 bytes
 
 functions:
   __C_recv_0_0: ir_blocks=1 ir_insts=335 vcode_ops=860 fixups=2 imm_bytes=277
@@ -49,5 +49,5 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=54 abs_words_end=0
 
 evm:
-  deploy: success reason=Return gas_used=1000752 gas_refunded=0 logs=0 output=create len=4386 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
+  deploy: success reason=Return gas_used=811312 gas_refunded=0 logs=0 output=create len=3510 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
   <no evm.case directives>
