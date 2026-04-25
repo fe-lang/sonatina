@@ -12,7 +12,7 @@ use super::{
     normalize::SpillAwareCostModel,
     normalize_search::{
         CostModel, NormalizePlan, SearchCfg, Step, cost_for_steps, rebuild_operand_prep_plan,
-        solve_optimal_operand_prep_plan,
+        solve_greedy_operand_prep_plan, solve_optimal_operand_prep_plan,
     },
 };
 
@@ -463,6 +463,30 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
     }
 
     fn prepare_operands_greedy(
+        &mut self,
+        args: &[ValueId],
+        consume_last_use: &BitSet<ValueId>,
+        mode: OperandPrepMode,
+    ) {
+        let search_cfg = self.operand_prep_search_cfg(args.len());
+        let cost = SpillAwareCostModel::new(self.mem.spill_set());
+        if let Some(plan) = solve_greedy_operand_prep_plan(
+            self.ctx,
+            self.stack,
+            args,
+            consume_last_use,
+            mode == OperandPrepMode::Exact,
+            &cost,
+            search_cfg,
+        ) && self.apply_operand_prep_plan(&plan, args)
+        {
+            return;
+        }
+
+        self.prepare_operands_greedy_fallback(args, consume_last_use, mode);
+    }
+
+    fn prepare_operands_greedy_fallback(
         &mut self,
         args: &[ValueId],
         consume_last_use: &BitSet<ValueId>,
@@ -919,7 +943,7 @@ block0:
     }
 
     #[test]
-    fn greedy_swap_fallback_still_dupes_when_no_prefix_is_prepared() {
+    fn greedy_prefix_free_swap_path_uses_single_swap() {
         const SRC: &str = r#"
 target = "evm-ethereum-osaka"
 
@@ -975,12 +999,8 @@ block0:
 
             assert_eq!(
                 actions.as_slice(),
-                &[
-                    Action::StackSwap(1),
-                    Action::StackSwap(2),
-                    Action::StackDup(0)
-                ],
-                "expected prefix-free greedy fallback to keep using SWAP + DUP"
+                &[Action::StackSwap(2), Action::StackDup(0)],
+                "prefix-free copy should use one SWAP before DUP"
             );
             assert!(
                 spill_requests.is_empty(),
