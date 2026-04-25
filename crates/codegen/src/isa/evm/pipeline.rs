@@ -11,9 +11,8 @@ use crate::{
         aggregate::{
             AggregateExpandAbi, AggregateLowerToMemoryLegalize, LocalObjectArgMap,
             ObjectAggregateAbi, ObjectEffectSummaryMap, ObjectLowerToMemory,
-            assert_aggregate_legalized, cleanup_dead_aggregate_alloca_trees,
-            collect_local_object_arg_info_with_effects, compute_object_effect_summaries,
-            merge_local_object_arg_info,
+            assert_aggregate_legalized, collect_local_object_arg_info_with_effects,
+            compute_object_effect_summaries, merge_local_object_arg_info,
         },
         evm::{ConstDataLower, legalize_evm_section},
     },
@@ -357,19 +356,6 @@ impl EvmPipelineContext<'_> {
             false,
             false,
         );
-        {
-            let module = self.module();
-            let module_ctx = &module.ctx;
-            module.func_store.par_for_each(|func, function| {
-                let _span = trace_span!(
-                    "sonatina.codegen.evm.aggregate_scratch_cleanup.func",
-                    func_ref = func.as_u32()
-                )
-                .entered();
-                cleanup_dead_aggregate_alloca_trees(function, module_ctx);
-                assert_aggregate_legalized(function, module_ctx);
-            });
-        }
         Ok(())
     }
 }
