@@ -1865,12 +1865,12 @@ fn operand_prep_missing_count(
     missing
 }
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 struct PrepGreedyNode {
     state: PrepState,
-    steps: Vec<Step>,
     cost: Cost,
-    last_step: Option<Step>,
+    parent: Option<usize>,
+    step: Option<Step>,
     run_len: usize,
     run_start: usize,
     run_pos: usize,
@@ -1880,9 +1880,9 @@ struct PrepGreedyNode {
 
 fn prep_greedy_node(
     state: PrepState,
-    steps: Vec<Step>,
     cost: Cost,
-    last_step: Option<Step>,
+    parent: Option<usize>,
+    step: Option<Step>,
     goal_keys: &[u8],
     goal_counts: &[u8; 64],
     preserve_mask: u64,
@@ -1890,9 +1890,9 @@ fn prep_greedy_node(
     let (run_len, run_start, run_pos) = operand_prep_goal_run_anywhere(state, goal_keys);
     PrepGreedyNode {
         state,
-        steps,
         cost,
-        last_step,
+        parent,
+        step,
         run_len,
         run_start,
         run_pos,
@@ -1914,6 +1914,22 @@ fn prep_greedy_node_cmp(lhs: &PrepGreedyNode, rhs: &PrepGreedyNode) -> Ordering 
 
 fn prep_greedy_node_better(lhs: &PrepGreedyNode, rhs: &PrepGreedyNode) -> bool {
     prep_greedy_node_cmp(lhs, rhs).is_lt()
+}
+
+fn prep_greedy_steps(nodes: &[PrepGreedyNode], mut idx: usize) -> Vec<Step> {
+    let mut steps = Vec::new();
+    loop {
+        let node = nodes[idx];
+        if let Some(step) = node.step {
+            steps.push(step);
+        }
+        let Some(parent) = node.parent else {
+            break;
+        };
+        idx = parent;
+    }
+    steps.reverse();
+    steps
 }
 
 fn build_greedy_operand_prep_upper_bound(
@@ -1940,21 +1956,23 @@ fn build_greedy_operand_prep_upper_bound(
     let surplus_last_use_penalty = cost.cost_pop().saturating_add(cost.cost_swap(1));
     let max_depth = problem.goal_keys.len().saturating_add(cfg.swap_max).min(24);
     let beam_width = 192usize;
-    let mut frontier = vec![prep_greedy_node(
+    let mut nodes = vec![prep_greedy_node(
         problem.start_state,
-        Vec::new(),
         Cost::default(),
+        None,
         None,
         &problem.goal_keys,
         &problem.goal_counts,
         problem.preserve_mask,
     )];
-    let mut best_goal: Option<(Vec<Step>, Cost)> = None;
+    let mut frontier = vec![0usize];
+    let mut best_goal: Option<(usize, Cost)> = None;
 
     for _ in 0..max_depth {
-        let mut next_frontier: FxHashMap<PrepState, PrepGreedyNode> = FxHashMap::default();
+        let mut next_frontier: FxHashMap<PrepState, usize> = FxHashMap::default();
 
-        for node in frontier {
+        for node_idx in frontier {
+            let node = nodes[node_idx];
             if operand_prep_goal(
                 node.state,
                 &problem.goal_keys,
@@ -1966,7 +1984,7 @@ fn build_greedy_operand_prep_upper_bound(
                     .map(|(_, best_cost)| node.cost < *best_cost)
                     .unwrap_or(true)
                 {
-                    best_goal = Some((node.steps.clone(), node.cost));
+                    best_goal = Some((node_idx, node.cost));
                 }
                 continue;
             }
@@ -2005,23 +2023,23 @@ fn build_greedy_operand_prep_upper_bound(
                     return;
                 }
 
-                let mut steps = node.steps.clone();
-                steps.push(step);
                 let candidate = prep_greedy_node(
                     state,
-                    steps,
                     next_cost,
+                    Some(node_idx),
                     Some(step),
                     &problem.goal_keys,
                     &problem.goal_counts,
                     problem.preserve_mask,
                 );
-                if let Some(existing) = next_frontier.get(&state)
-                    && !prep_greedy_node_better(&candidate, existing)
+                if let Some(&existing) = next_frontier.get(&state)
+                    && !prep_greedy_node_better(&candidate, &nodes[existing])
                 {
                     return;
                 }
-                next_frontier.insert(state, candidate);
+                let candidate_idx = nodes.len();
+                nodes.push(candidate);
+                next_frontier.insert(state, candidate_idx);
             };
 
             if cur_len >= 2 {
@@ -2029,7 +2047,7 @@ fn build_greedy_operand_prep_upper_bound(
                     .saturating_sub(1)
                     .min(cfg.swap_max.saturating_sub(1));
                 for depth in 1..=max_depth {
-                    if matches!(node.last_step, Some(Step::Swap(d)) if d as usize == depth) {
+                    if matches!(node.step, Some(Step::Swap(d)) if d as usize == depth) {
                         continue;
                     }
                     if node.state.window.get(0) == node.state.window.get(depth) {
@@ -2169,11 +2187,16 @@ fn build_greedy_operand_prep_upper_bound(
         }
 
         frontier = next_frontier.into_values().collect();
-        frontier.sort_unstable_by(prep_greedy_node_cmp);
-        frontier.truncate(beam_width);
+        if frontier.len() > beam_width {
+            frontier.select_nth_unstable_by(beam_width, |&lhs, &rhs| {
+                prep_greedy_node_cmp(&nodes[lhs], &nodes[rhs])
+            });
+            frontier.truncate(beam_width);
+        }
+        frontier.sort_unstable_by(|&lhs, &rhs| prep_greedy_node_cmp(&nodes[lhs], &nodes[rhs]));
     }
 
-    best_goal
+    best_goal.map(|(idx, cost)| (prep_greedy_steps(&nodes, idx), cost))
 }
 
 pub(super) fn solve_greedy_operand_prep_plan(
