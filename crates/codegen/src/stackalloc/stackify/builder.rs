@@ -200,9 +200,9 @@ impl<'a> StackifyBuilder<'a> {
         // remove it from transfer regions (`T(B)` excludes `spill_set`), so future iterations
         // can rely on loads being correct.
         let mut spill_set: BitSet<ValueId> = BitSet::default();
-        let mut slots: SpillSlotPools = SpillSlotPools::default();
         loop {
             let checkpoint = observer.checkpoint();
+            let mut slots: SpillSlotPools = SpillSlotPools::default();
 
             let (mut alloc, spill_requests) =
                 Self::plan_iteration(&ctx, observer, SpillSet::new(&spill_set), &mut slots);
