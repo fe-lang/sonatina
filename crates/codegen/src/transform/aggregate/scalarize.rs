@@ -2889,13 +2889,15 @@ fn is_dead_inst_tree(
         return false;
     }
 
-    let dead = func.dfg.inst_result(inst).is_some_and(|result| {
-        func.dfg
-            .users(result)
-            .copied()
-            .filter(|user| func.layout.is_inst_inserted(*user))
-            .all(|user| is_dead_inst_tree(func, user, memo, visiting))
-    });
+    let results = func.dfg.inst_results(inst);
+    let dead = !results.is_empty()
+        && results.iter().copied().all(|result| {
+            func.dfg
+                .users(result)
+                .copied()
+                .filter(|user| func.layout.is_inst_inserted(*user))
+                .all(|user| is_dead_inst_tree(func, user, memo, visiting))
+        });
     visiting.remove(&inst);
     memo.insert(inst, dead);
     dead
