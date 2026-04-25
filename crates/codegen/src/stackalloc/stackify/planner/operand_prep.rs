@@ -105,10 +105,11 @@ fn commutative_plan_cmp_key(
 
 impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
     fn use_operand_prep_query_cache(&self, args_len: usize) -> bool {
-        // The exact solver already has its own structural cache. On the hot binary/unary path,
-        // building and hashing the outer query key can cost more than it saves. Queries beyond
-        // the operand-prep solver's exact-state limits cannot use the cache path at all.
-        args_len > 2 && args_len <= 21 && args_len <= OPERAND_PREP_QUERY_MASK_BITS
+        // The exact solver already has its own structural cache. Keep unary uncached because
+        // building and hashing the outer query key can cost more than it saves there. Binary
+        // queries are common enough in template solving to benefit from cross-pass reuse.
+        // Queries beyond the operand-prep solver's exact-state limits cannot use the cache path.
+        (2..=21).contains(&args_len) && args_len <= OPERAND_PREP_QUERY_MASK_BITS
     }
 
     fn operand_prep_query_mask(
@@ -299,28 +300,13 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
                 }
             }
 
-            let cost = SpillAwareCostModel::new(self.mem.spill_set());
-            let search_cfg = self.operand_prep_search_cfg(args.len());
-
-            let original_plan = solve_optimal_operand_prep_plan(
-                self.ctx,
-                self.stack,
-                args.as_slice(),
-                consume_last_use,
-                &cost,
-                search_cfg,
-            );
+            let original_plan = self.solve_operand_prep_cached(args.as_slice(), consume_last_use);
 
             let mut swapped_args = args.clone();
             swapped_args.swap(0, 1);
-            let swapped_plan = solve_optimal_operand_prep_plan(
-                self.ctx,
-                self.stack,
-                swapped_args.as_slice(),
-                consume_last_use,
-                &cost,
-                search_cfg,
-            );
+            let swapped_plan =
+                self.solve_operand_prep_cached(swapped_args.as_slice(), consume_last_use);
+            let cost = SpillAwareCostModel::new(self.mem.spill_set());
 
             let (plan, swapped) = match (original_plan, swapped_plan) {
                 (Some(plan), None) => (plan, false),
@@ -808,6 +794,9 @@ block0:
             let planner = Planner::new(&ctx, &mut stack, &mut actions, mem);
             let search_cfg = planner.operand_prep_search_cfg(args.len());
 
+            assert!(!planner.use_operand_prep_query_cache(1));
+            assert!(planner.use_operand_prep_query_cache(2));
+            assert!(planner.use_operand_prep_query_cache(3));
             assert!(!planner.use_operand_prep_query_cache(args.len()));
             assert_eq!(planner.operand_prep_query_mask(&args, |_| true), u64::MAX);
             assert_eq!(
