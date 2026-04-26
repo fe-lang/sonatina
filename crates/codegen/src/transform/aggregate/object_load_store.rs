@@ -10,16 +10,15 @@ use sonatina_ir::{
 use super::{
     LocalObjectArgInfo, LocalObjectArgMap, ObjectEffectSummaryMap, SliceSet,
     cleanup::DeadPureInstCleanup,
-    collect_root_provenance,
     object_state::{
         LiveLeafMap, clear_live_slice, enum_write_variant_slices, mark_live_slice,
         mark_live_tracked_object, mark_root_live, observed_roots_ignoring_pure_address_ops,
         slice_has_live_leaf, tracked_root_total_leaves, union_live_leaf_maps,
     },
     object_tracking::{
-        ObjectSlice, TrackedObject, collect_root_slices, collect_tracked_objects,
-        enum_tag_object_slice, enum_variant_field_object_slice, object_slice_overlaps_effect,
-        slice_is_covered_by, slices_overlap, whole_root_slice_for_value,
+        AggregateObjectFacts, ObjectSlice, TrackedObject, enum_tag_object_slice,
+        enum_variant_field_object_slice, object_slice_overlaps_effect, slice_is_covered_by,
+        slices_overlap, whole_root_slice_for_value,
     },
     provenance::{MayProvenance, MayRootSet},
     reconstruct::AggregateValueReconstructor,
@@ -68,21 +67,18 @@ impl ObjectLoadStore {
 
         loop {
             func.rebuild_users();
-            let root_slices = collect_root_slices(func, local_object_args, &mut self.layout_cache);
-            let provenance = collect_root_provenance(
+            let facts = AggregateObjectFacts::for_local_objects(
                 func,
-                func.ctx(),
-                &root_slices,
+                local_object_args,
                 &mut self.layout_cache,
                 object_effects,
             );
-            let tracked =
-                collect_tracked_objects(func, provenance.complete(), &mut self.layout_cache);
-            let may = provenance.may();
-            let live_out_roots = self.collect_live_out_roots(&tracked, func, local_object_args);
+            let tracked = facts.tracked();
+            let may = facts.may();
+            let live_out_roots = self.collect_live_out_roots(tracked, func, local_object_args);
 
-            let mut iter_changed = self.run_forward(func, &tracked, may, object_effects);
-            iter_changed |= self.run_backward(func, &tracked, may, &live_out_roots, object_effects);
+            let mut iter_changed = self.run_forward(func, tracked, may, object_effects);
+            iter_changed |= self.run_backward(func, tracked, may, &live_out_roots, object_effects);
 
             if iter_changed {
                 func.rebuild_users();

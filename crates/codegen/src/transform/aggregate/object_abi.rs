@@ -10,9 +10,9 @@ use sonatina_ir::{
 };
 
 use super::{
-    ObjectEffectSummaryMap, ObjectReturnEffect, collect_root_provenance,
-    compute_object_effect_summaries,
+    ObjectEffectSummaryMap, ObjectReturnEffect, compute_object_effect_summaries,
     object_locality::{self, LocalObjectArgInfo, LocalObjectArgMap, RootInit},
+    object_tracking::AggregateFacts,
     private_abi::{self, PrivateAbiPlan},
     provenance::{CompleteProvenance, CompleteRootSet, RootValue},
     shape,
@@ -236,10 +236,10 @@ impl ObjectReturnOutParam {
             return None;
         }
         let mut layout_cache = shape::AggregateLayoutCache::default();
-        let provenance_facts = collect_root_provenance(
+        let provenance_facts = AggregateFacts::from_root_slices(
             function,
             function.ctx(),
-            &root_slices,
+            root_slices,
             &mut layout_cache,
             Some(object_effects),
         );
@@ -266,7 +266,12 @@ impl ObjectReturnOutParam {
                     return None;
                 }
 
-                for root in self.returned_whole_roots(root, root_slice, &root_slices, provenance)? {
+                for root in self.returned_whole_roots(
+                    root,
+                    root_slice,
+                    provenance_facts.root_slices(),
+                    provenance,
+                )? {
                     if !seen_roots.insert(root) {
                         continue;
                     }
@@ -292,7 +297,7 @@ impl ObjectReturnOutParam {
             if !self.root_is_rewritable(
                 function,
                 root,
-                &root_slices,
+                provenance_facts.root_slices(),
                 provenance,
                 object_effects,
                 &allowed_roots,

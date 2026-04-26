@@ -14,7 +14,7 @@ use super::{
         kill_capture_access as kill_capture_projection_access,
         kill_capture_slice_set as kill_capture_exact_slice_set, slices_overlap_relative,
     },
-    collect_root_provenance,
+    object_tracking::AggregateFacts,
     provenance::{
         CompleteProvenance, CompleteRootSet, MayProvenance, RootValue, exact_capture_destination,
         observed_root_slices,
@@ -358,16 +358,16 @@ fn compute_summary_for_func(
             }
         }
 
-        let provenance = collect_root_provenance(
+        let facts = AggregateFacts::from_root_slices(
             function,
             function.ctx(),
-            &root_slices,
+            root_slices,
             layout_cache,
             Some(summaries),
         );
         let effect_provenance = EffectProvenance {
-            complete: provenance.complete(),
-            may: provenance.may(),
+            complete: facts.complete(),
+            may: facts.may(),
             arg_roots: &arg_roots,
         };
         let mut cfg = ControlFlowGraph::default();
@@ -377,7 +377,7 @@ fn compute_summary_for_func(
             function,
             &reachable,
             &arg_roots,
-            provenance.complete(),
+            facts.complete(),
             layout_cache,
         );
         let (block_entry_captures, exit_root_captures) = compute_capture_states_for_blocks(

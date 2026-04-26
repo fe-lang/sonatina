@@ -17,12 +17,11 @@ use crate::liveness::{InstLiveness, Liveness};
 use super::{
     LocalObjectArgInfo, ObjectEffectSummaryMap, ObjectMemoryAnalysis,
     abi::abi_leaf_count,
-    collect_local_object_arg_info_with_effects, collect_root_provenance,
-    compute_object_effect_summaries,
+    collect_local_object_arg_info_with_effects, compute_object_effect_summaries,
     object_abi::{fresh_root_blocks_are_pairwise_unreachable, whole_object_slice},
     object_locality,
     object_tracking::{
-        ObjectSlice, TrackedObject, collect_call_planner_root_slices, collect_tracked_objects,
+        AggregateFacts, AggregateObjectFacts, ObjectSlice, TrackedObject,
         object_slice_overlaps_effect, slices_overlap,
     },
     private_abi::{self, PrivateAbiPlan},
@@ -599,14 +598,14 @@ impl ObjectAggregateAbi {
         if root_slices.is_empty() {
             return None;
         }
-        let provenance = collect_root_provenance(
+        let facts = AggregateFacts::from_root_slices(
             function,
             function.ctx(),
-            &root_slices,
+            root_slices,
             &mut layout_cache,
             Some(object_effects),
         );
-        let complete_provenance = provenance.complete();
+        let complete_provenance = facts.complete();
         let mut roots = SmallVec::<[ValueId; 4]>::new();
         let mut seen = FxHashSet::default();
         let mut saw_return = false;
@@ -623,7 +622,7 @@ impl ObjectAggregateAbi {
                     function,
                     value,
                     root_slice,
-                    &root_slices,
+                    facts.root_slices(),
                     complete_provenance,
                 )? {
                     if seen.insert(root) {
@@ -643,7 +642,7 @@ impl ObjectAggregateAbi {
         let allowed_roots: FxHashSet<_> = roots.iter().copied().collect();
         let rewrite_ctx = ReturnRootRewriteCtx {
             root_slice,
-            root_slices: &root_slices,
+            root_slices: facts.root_slices(),
             provenance: complete_provenance,
             object_effects,
             allowed_roots: &allowed_roots,
@@ -1044,23 +1043,22 @@ impl ObjectAggregateAbi {
         inst_liveness.compute(function, &cfg, &liveness);
 
         let mut layout_cache = shape::AggregateLayoutCache::default();
-        let root_slices =
-            collect_call_planner_root_slices(function, object_effects, &mut layout_cache);
-        let root_total_leaves = root_slices
+        let facts =
+            AggregateObjectFacts::for_call_planner(function, object_effects, &mut layout_cache);
+        let root_total_leaves = facts
+            .root_slices()
             .iter()
             .map(|(&root, slice)| (root, slice.leaf_count))
             .collect();
-        let provenance = collect_root_provenance(
-            function,
-            function.ctx(),
-            &root_slices,
-            &mut layout_cache,
-            Some(object_effects),
-        );
-        let tracked = collect_tracked_objects(function, provenance.complete(), &mut layout_cache);
-
         let mut object_memory = ObjectMemoryAnalysis::default();
-        object_memory.compute_for_call_planner(function, local_object_args, object_effects);
+        object_memory.compute_with_facts(
+            function,
+            local_object_args,
+            Some(object_effects),
+            &facts,
+            true,
+        );
+        let (provenance, tracked) = facts.into_provenance_and_tracked();
 
         CallerElisionFacts {
             inst_liveness,

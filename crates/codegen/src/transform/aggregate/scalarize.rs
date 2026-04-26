@@ -14,7 +14,7 @@ use crate::cfg_edit::{CfgEditor, CleanupMode};
 use super::{
     LocalObjectArgInfo, LocalObjectArgMap, RootInit,
     cleanup::DeadPureInstCleanup,
-    collect_root_provenance,
+    object_tracking::AggregateFacts,
     promotion::SsaBuilder,
     provenance::{CompleteProvenance, ExactProjectionMap, RootValue},
     reconstruct::{
@@ -453,10 +453,15 @@ impl AggregateScalarize {
             candidate_roots.push((root_value, root_kind, shape_data));
         }
 
-        let provenance =
-            collect_root_provenance(func, module, &root_slices, &mut self.layout_cache, None);
+        let facts = AggregateFacts::from_root_slices(
+            func,
+            module,
+            root_slices,
+            &mut self.layout_cache,
+            None,
+        );
         for (root_value, root_kind, shape_data) in candidate_roots {
-            if !self.root_use_chain_is_promotable(func, module, root_value, provenance.complete()) {
+            if !self.root_use_chain_is_promotable(func, module, root_value, facts.complete()) {
                 continue;
             }
             promoted.push(PromotableRoot {
@@ -476,7 +481,10 @@ impl AggregateScalarize {
             });
         }
 
-        (promoted, provenance.into_exact_projection_map())
+        (
+            promoted,
+            facts.into_provenance().into_exact_projection_map(),
+        )
     }
 
     fn root_use_chain_is_promotable(
