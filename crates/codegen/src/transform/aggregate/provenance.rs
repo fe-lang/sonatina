@@ -71,7 +71,7 @@ impl From<RootValue> for ValueId {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct Projection {
     pub root_value: RootValue,
     pub slice: shape::AggregateSlice,
@@ -199,6 +199,15 @@ pub(crate) fn observed_root_slices<'a>(
 }
 
 impl ProvenanceFacts {
+    fn with_value_capacity(value_capacity: usize) -> Self {
+        Self {
+            exact: secondary_value_map(value_capacity),
+            possible_projections: secondary_value_map(value_capacity),
+            possible_roots: secondary_value_map(value_capacity),
+            maybe_unknown: secondary_value_map(value_capacity),
+        }
+    }
+
     pub(crate) fn complete(&self) -> CompleteProvenance<'_> {
         CompleteProvenance { facts: self }
     }
@@ -334,6 +343,13 @@ enum PossibleRootTransferKind {
 
 type PossibleRootTransfers = SecondaryMap<ValueId, Option<PossibleRootTransfer>>;
 type PossibleRootUsers = SecondaryMap<ValueId, SmallVec<[ValueId; 4]>>;
+type ProjectionTransferCache = FxHashMap<(InstId, Projection), Option<Projection>>;
+
+fn secondary_value_map<V: Clone + Default>(value_capacity: usize) -> SecondaryMap<ValueId, V> {
+    let mut map = SecondaryMap::with_capacity(value_capacity);
+    map.resize(value_capacity);
+    map
+}
 
 pub(crate) fn collect_root_provenance(
     func: &Function,
@@ -342,8 +358,10 @@ pub(crate) fn collect_root_provenance(
     layout_cache: &mut shape::AggregateLayoutCache,
     object_effects: Option<&ObjectEffectSummaryMap>,
 ) -> ProvenanceFacts {
-    let mut provenance = ProvenanceFacts::default();
-    let mut exact_states = SecondaryMap::default();
+    let value_capacity = func.dfg.values.len();
+    let mut provenance = ProvenanceFacts::with_value_capacity(value_capacity);
+    let mut exact_states = secondary_value_map(value_capacity);
+    let mut projection_transfer_cache = ProjectionTransferCache::default();
 
     for (&root_value, &slice) in root_slices {
         provenance.possible_roots[root_value].insert(root_value);
@@ -397,6 +415,7 @@ pub(crate) fn collect_root_provenance(
                         &provenance.maybe_unknown,
                         &value_sccs,
                         layout_cache,
+                        &mut projection_transfer_cache,
                         object_effects,
                     )
                 };
@@ -441,6 +460,7 @@ pub(crate) fn collect_root_provenance(
         &provenance.maybe_unknown,
         &exact_states,
         layout_cache,
+        &mut projection_transfer_cache,
         object_effects,
     );
 
@@ -456,9 +476,11 @@ fn collect_possible_projections(
     maybe_unknown: &SecondaryMap<ValueId, bool>,
     exact_states: &SecondaryMap<ValueId, Option<ExactState>>,
     layout_cache: &mut shape::AggregateLayoutCache,
+    projection_transfer_cache: &mut ProjectionTransferCache,
     object_effects: Option<&ObjectEffectSummaryMap>,
 ) -> SecondaryMap<ValueId, Vec<Projection>> {
-    let mut possible_projections = SecondaryMap::<ValueId, Vec<Projection>>::default();
+    let mut possible_projections: SecondaryMap<ValueId, Vec<Projection>> =
+        secondary_value_map(func.dfg.values.len());
 
     for (&root_value, &slice) in root_slices {
         possible_projections[root_value].push(Projection {
@@ -499,6 +521,7 @@ fn collect_possible_projections(
                         possible_roots,
                         maybe_unknown,
                         layout_cache,
+                        projection_transfer_cache,
                         object_effects,
                     )
                 };
@@ -524,7 +547,7 @@ fn compute_possible_roots(
     maybe_unknown: &mut SecondaryMap<ValueId, bool>,
 ) {
     let mut pending = VecDeque::new();
-    let mut queued = SecondaryMap::<ValueId, bool>::default();
+    let mut queued = secondary_value_map(func.dfg.values.len());
 
     for value in func.dfg.value_ids() {
         if !possible_roots[value].is_empty() || maybe_unknown[value] {
@@ -558,8 +581,9 @@ fn collect_possible_root_transfers(
     func: &Function,
     object_effects: Option<&ObjectEffectSummaryMap>,
 ) -> (PossibleRootTransfers, PossibleRootUsers) {
-    let mut transfers = PossibleRootTransfers::default();
-    let mut users = PossibleRootUsers::default();
+    let value_capacity = func.dfg.values.len();
+    let mut transfers = secondary_value_map(value_capacity);
+    let mut users = secondary_value_map(value_capacity);
 
     for block in func.layout.iter_block() {
         for inst in func.layout.iter_inst(block) {
@@ -1193,6 +1217,7 @@ fn derive_exact_state(
     maybe_unknown: &SecondaryMap<ValueId, bool>,
     value_sccs: &FxHashMap<ValueId, usize>,
     layout_cache: &mut shape::AggregateLayoutCache,
+    projection_transfer_cache: &mut ProjectionTransferCache,
     object_effects: Option<&ObjectEffectSummaryMap>,
 ) -> ExactState {
     if let Some(transfer) = projection_transfer_inst(func, inst) {
@@ -1203,9 +1228,17 @@ fn derive_exact_state(
         else {
             return pending_or_blocked(exact_states, source);
         };
-        return transfer
-            .map_projection(func, module, result, source_projection, layout_cache)
-            .map_or(ExactState::Blocked, ExactState::Exact);
+        return map_projection_cached(
+            projection_transfer_cache,
+            transfer,
+            func,
+            module,
+            inst,
+            result,
+            source_projection,
+            layout_cache,
+        )
+        .map_or(ExactState::Blocked, ExactState::Exact);
     }
 
     if let Some(call) = downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(inst)) {
@@ -1247,6 +1280,7 @@ fn derive_possible_projections(
     possible_roots: &SecondaryMap<ValueId, FxHashSet<ValueId>>,
     maybe_unknown: &SecondaryMap<ValueId, bool>,
     layout_cache: &mut shape::AggregateLayoutCache,
+    projection_transfer_cache: &mut ProjectionTransferCache,
     object_effects: Option<&ObjectEffectSummaryMap>,
 ) -> Vec<Projection> {
     let Some(root_value) = singleton_root(possible_roots, maybe_unknown, result) else {
@@ -1264,7 +1298,18 @@ fn derive_possible_projections(
             possible_roots,
             maybe_unknown,
             &possible_projections[source],
-            |projection| transfer.map_projection(func, module, result, projection, layout_cache),
+            |projection| {
+                map_projection_cached(
+                    projection_transfer_cache,
+                    transfer,
+                    func,
+                    module,
+                    inst,
+                    result,
+                    projection,
+                    layout_cache,
+                )
+            },
         );
     }
 
@@ -1780,6 +1825,27 @@ impl ProjectionTransferInst<'_> {
             Self::EnumAssertVariantRef(_) => Some(projection),
         }
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn map_projection_cached(
+    cache: &mut ProjectionTransferCache,
+    transfer: ProjectionTransferInst<'_>,
+    func: &Function,
+    module: &ModuleCtx,
+    inst: InstId,
+    result: ValueId,
+    projection: Projection,
+    layout_cache: &mut shape::AggregateLayoutCache,
+) -> Option<Projection> {
+    let key = (inst, projection);
+    if let Some(mapped) = cache.get(&key) {
+        return *mapped;
+    }
+
+    let mapped = transfer.map_projection(func, module, result, projection, layout_cache);
+    cache.insert(key, mapped);
+    mapped
 }
 
 fn offset_projection(projection: Projection, sub: shape::AggregateSlice) -> Projection {

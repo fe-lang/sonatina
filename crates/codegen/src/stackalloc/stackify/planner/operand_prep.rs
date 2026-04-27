@@ -238,6 +238,7 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
             consume_last_use,
             &cost,
             search_cfg,
+            self.search_scratch,
         );
         if let (Some(cache_key), Some(plan)) = (cache_key, &plan) {
             operand_prep_plan_cache()
@@ -567,7 +568,7 @@ mod tests {
             stackify::{
                 builder::StackifyReachability,
                 planner::{
-                    MemPlan, Planner,
+                    MemPlan, NormalizeSearchScratch, Planner,
                     normalize_search::{Cost, EstimatedCostModel, KeyInfo, Step},
                     test_utils::build_stackify_test_context,
                 },
@@ -655,7 +656,9 @@ block0:
 
                 let mut stack = SymStack::entry_stack(func, false);
                 let mut actions = crate::stackalloc::Actions::new();
-                let planner = Planner::new(&ctx, &mut stack, &mut actions, mem);
+                let mut search_scratch = NormalizeSearchScratch::default();
+                let planner =
+                    Planner::new(&ctx, &mut stack, &mut actions, mem, &mut search_scratch);
                 let search_cfg = planner.operand_prep_search_cfg(1);
                 planner.operand_prep_query_key(&[imm], &BitSet::default(), search_cfg)
             };
@@ -700,7 +703,8 @@ block0:
 
             let mut stack = SymStack::entry_stack(func, false);
             let mut actions = crate::stackalloc::Actions::new();
-            let planner = Planner::new(&ctx, &mut stack, &mut actions, mem);
+            let mut search_scratch = NormalizeSearchScratch::default();
+            let planner = Planner::new(&ctx, &mut stack, &mut actions, mem, &mut search_scratch);
             let search_cfg = planner.operand_prep_search_cfg(1);
             let key_after = planner.operand_prep_query_key(&[imm], &BitSet::default(), search_cfg);
 
@@ -766,7 +770,9 @@ block0:
             let current_args = [current_imm, imm2, imm3];
             let mut stack = SymStack::entry_stack(func, false);
             let mut actions = crate::stackalloc::Actions::new();
-            let mut planner = Planner::new(&ctx, &mut stack, &mut actions, mem);
+            let mut search_scratch = NormalizeSearchScratch::default();
+            let mut planner =
+                Planner::new(&ctx, &mut stack, &mut actions, mem, &mut search_scratch);
             let search_cfg = planner.operand_prep_search_cfg(current_args.len());
             let old_key = planner.operand_prep_query_key(&old_args, &BitSet::default(), search_cfg);
             let current_key =
@@ -853,7 +859,8 @@ block0:
             let args: Vec<_> = func.arg_values.iter().copied().collect();
             let mut stack = SymStack::entry_stack(func, false);
             let mut actions = crate::stackalloc::Actions::new();
-            let planner = Planner::new(&ctx, &mut stack, &mut actions, mem);
+            let mut search_scratch = NormalizeSearchScratch::default();
+            let planner = Planner::new(&ctx, &mut stack, &mut actions, mem, &mut search_scratch);
             let search_cfg = planner.operand_prep_search_cfg(args.len());
 
             assert!(!planner.use_operand_prep_query_cache(1));
@@ -918,7 +925,9 @@ block0:
             let mut stack = SymStack::entry_stack(func, false);
             let mut actions = crate::stackalloc::Actions::new();
             {
-                let mut planner = Planner::new(&ctx, &mut stack, &mut actions, mem);
+                let mut search_scratch = NormalizeSearchScratch::default();
+                let mut planner =
+                    Planner::new(&ctx, &mut stack, &mut actions, mem, &mut search_scratch);
                 planner.prepare_operands_greedy(&args, &BitSet::default(), OperandPrepMode::Exact);
                 assert!(planner.stack_prefix_matches(&args));
             }
@@ -992,7 +1001,9 @@ block0:
             let mut stack = SymStack::entry_stack(func, false);
             let mut actions = crate::stackalloc::Actions::new();
             {
-                let mut planner = Planner::new(&ctx, &mut stack, &mut actions, mem);
+                let mut search_scratch = NormalizeSearchScratch::default();
+                let mut planner =
+                    Planner::new(&ctx, &mut stack, &mut actions, mem, &mut search_scratch);
                 planner.prepare_operands_greedy(&args, &BitSet::default(), OperandPrepMode::Exact);
                 assert!(planner.stack_prefix_matches(&args));
             }
@@ -1021,7 +1032,9 @@ block0:
                 &mut slots,
             );
             {
-                let mut planner = Planner::new(&ctx, &mut stack, &mut actions, mem);
+                let mut search_scratch = NormalizeSearchScratch::default();
+                let mut planner =
+                    Planner::new(&ctx, &mut stack, &mut actions, mem, &mut search_scratch);
                 planner.prepare_operands_greedy(&args, &last_use, OperandPrepMode::Exact);
                 assert!(planner.stack_prefix_matches(&args));
             }

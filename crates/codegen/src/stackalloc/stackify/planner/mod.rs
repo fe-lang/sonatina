@@ -5,6 +5,8 @@ mod operand_prep;
 #[cfg(test)]
 mod test_utils;
 
+pub(super) use normalize_search::NormalizeSearchScratch;
+
 use crate::{
     analysis::memory_access::ExactLocalAddr,
     bitset::BitSet,
@@ -170,6 +172,7 @@ pub(super) struct Planner<'a, 'ctx: 'a> {
     stack: &'a mut SymStack,
     actions: &'a mut Actions,
     mem: MemPlan<'a>,
+    search_scratch: &'a mut NormalizeSearchScratch,
 }
 
 impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
@@ -178,12 +181,14 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
         stack: &'a mut SymStack,
         actions: &'a mut Actions,
         mem: MemPlan<'a>,
+        search_scratch: &'a mut NormalizeSearchScratch,
     ) -> Self {
         Self {
             ctx,
             stack,
             actions,
             mem,
+            search_scratch,
         }
     }
 

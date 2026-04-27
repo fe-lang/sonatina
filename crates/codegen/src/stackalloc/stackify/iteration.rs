@@ -9,7 +9,7 @@ use super::{
     alloc::StackifyAlloc,
     br_table::plan_br_table_compare_chain,
     builder::{StackifyContext, StackifyReachability},
-    planner::{self, OperandPrepMode::Exact, Planner},
+    planner::{self, NormalizeSearchScratch, OperandPrepMode::Exact, Planner},
     slots::{FreeSlotPools, FreeSlots, SlotPool, SpillSlotPools},
     spill::SpillSet,
     sym_stack::{StackItem, SymStack},
@@ -32,6 +32,7 @@ pub(super) struct IterationPlanner<'a, 'ctx, O: StackifyObserver> {
     spill_requests: &'a mut BitSet<ValueId>,
     inherited_stack: BTreeMap<BlockId, (BlockId, SymStack)>,
     planned_blocks: BitSet<BlockId>,
+    search_scratch: NormalizeSearchScratch,
     observer: &'a mut O,
 }
 
@@ -74,6 +75,7 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
             spill_requests,
             inherited_stack,
             planned_blocks: BitSet::default(),
+            search_scratch: NormalizeSearchScratch::default(),
             observer,
         }
     }
@@ -94,7 +96,7 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
             free_slots,
             &mut *self.slots,
         );
-        let mut planner = Planner::new(self.ctx, stack, actions, mem);
+        let mut planner = Planner::new(self.ctx, stack, actions, mem, &mut self.search_scratch);
         f(&mut planner)
     }
 
@@ -115,7 +117,7 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
             free_slots,
             &mut *self.slots,
         );
-        let mut planner = Planner::new(self.ctx, stack, actions, mem);
+        let mut planner = Planner::new(self.ctx, stack, actions, mem, &mut self.search_scratch);
         f(&mut planner)
     }
 
@@ -136,7 +138,7 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
             free_slots,
             &mut *self.slots,
         );
-        let mut planner = Planner::new(self.ctx, stack, actions, mem);
+        let mut planner = Planner::new(self.ctx, stack, actions, mem, &mut self.search_scratch);
         f(&mut planner)
     }
 

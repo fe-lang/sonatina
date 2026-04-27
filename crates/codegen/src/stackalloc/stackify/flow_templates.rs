@@ -1,4 +1,7 @@
-use std::{cmp::Ordering, collections::BTreeMap};
+use std::{
+    cmp::Ordering,
+    collections::{BTreeMap, VecDeque},
+};
 
 use cranelift_entity::SecondaryMap;
 use smallvec::SmallVec;
@@ -18,7 +21,7 @@ use super::{
         improve_reachability_before_operands, inst_is_noop_alias_cast, last_use_values_in_inst,
         operand_order_for_evm, skip_pre_exit_cleanup,
     },
-    planner::{self, OperandPrepMode::TemplateSim, Planner},
+    planner::{self, NormalizeSearchScratch, OperandPrepMode::TemplateSim, Planner},
     slots::{FreeSlotPools, SpillSlotPools},
     spill::SpillSet,
     sym_stack::{StackItem, SymStack},
@@ -44,6 +47,7 @@ struct FlowTemplateSolver<'a, 'ctx> {
     carry_in: &'a SecondaryMap<BlockId, BitSet<ValueId>>,
     state: &'a mut SecondaryMap<BlockId, LayoutState>,
     edge_cand: &'a mut EdgeCandMap,
+    search_scratch: NormalizeSearchScratch,
 }
 
 pub(super) fn solve_templates_from_flow(
@@ -99,6 +103,7 @@ pub(super) fn solve_templates_from_flow(
         carry_in: &carry_in,
         state: &mut state,
         edge_cand: &mut edge_cand,
+        search_scratch: NormalizeSearchScratch::default(),
     };
 
     for &scc in ctx.scc.topo_order() {
@@ -171,16 +176,32 @@ fn project_transfer(stack: &SymStack, carry_in: &BitSet<ValueId>) -> TransferOrd
     out
 }
 
+fn record_edge_candidate(
+    edge_cand: &mut EdgeCandMap,
+    changed_succs: &mut SmallVec<[BlockId; 4]>,
+    pred: BlockId,
+    succ: BlockId,
+    transfer: TransferOrder,
+) {
+    if edge_cand.get(&(pred, succ)) != Some(&transfer) {
+        edge_cand.insert((pred, succ), transfer);
+        if !changed_succs.contains(&succ) {
+            changed_succs.push(succ);
+        }
+    }
+}
+
 fn with_planner<'a, 'ctx, F>(
     ctx: &'a StackifyContext<'ctx>,
     mem: MemPlan<'a>,
+    search_scratch: &'a mut NormalizeSearchScratch,
     stack: &'a mut SymStack,
     actions: &'a mut Actions,
     f: F,
 ) where
     F: FnOnce(&mut Planner<'a, 'ctx>),
 {
-    let mut planner = Planner::new(ctx, stack, actions, mem);
+    let mut planner = Planner::new(ctx, stack, actions, mem, search_scratch);
     f(&mut planner);
 }
 
@@ -192,13 +213,19 @@ impl<'a, 'ctx> FlowTemplateSolver<'a, 'ctx> {
         }
     }
 
-    fn simulate_block_and_record_edges(&mut self, block: BlockId, template: &BlockTemplate) {
+    fn simulate_block_and_record_edges(
+        &mut self,
+        block: BlockId,
+        template: &BlockTemplate,
+    ) -> SmallVec<[BlockId; 4]> {
         let ctx = self.ctx;
         let spill = self.spill;
         let slots = &mut *self.slots;
         let spill_requests = &mut *self.spill_requests;
         let carry_in = self.carry_in;
         let edge_cand = &mut *self.edge_cand;
+        let search_scratch = &mut self.search_scratch;
+        let mut changed_succs = SmallVec::<[BlockId; 4]>::new();
 
         let mut free_slots: FreeSlotPools = FreeSlotPools::default();
         let mut actions: Actions = Actions::new();
@@ -289,8 +316,14 @@ impl<'a, 'ctx> FlowTemplateSolver<'a, 'ctx> {
                 match branch.branch_kind() {
                     BranchKind::Jump(jump) => {
                         let dest = *jump.dest();
-                        edge_cand.insert((block, dest), project_transfer(&stack, &carry_in[dest]));
-                        return;
+                        record_edge_candidate(
+                            edge_cand,
+                            &mut changed_succs,
+                            block,
+                            dest,
+                            project_transfer(&stack, &carry_in[dest]),
+                        );
+                        return changed_succs;
                     }
                     BranchKind::Br(br) => {
                         let cond = ctx.canonicalize_value(*br.cond());
@@ -316,21 +349,31 @@ impl<'a, 'ctx> FlowTemplateSolver<'a, 'ctx> {
                             &mut free_slots,
                             slots,
                         );
-                        with_planner(ctx, mem, &mut stack, &mut actions, |planner| {
-                            planner.prepare_operands(&[cond], &consume_last_use, TemplateSim)
-                        });
+                        with_planner(
+                            ctx,
+                            mem,
+                            search_scratch,
+                            &mut stack,
+                            &mut actions,
+                            |planner| {
+                                planner.prepare_operands(&[cond], &consume_last_use, TemplateSim)
+                            },
+                        );
 
                         // The backend consumes the condition value for the actual branch.
                         let mut post_branch_stack = stack.clone();
                         post_branch_stack.pop_operand();
 
                         for succ in branch.dests().iter().copied() {
-                            edge_cand.insert(
-                                (block, succ),
+                            record_edge_candidate(
+                                edge_cand,
+                                &mut changed_succs,
+                                block,
+                                succ,
                                 project_transfer(&post_branch_stack, &carry_in[succ]),
                             );
                         }
-                        return;
+                        return changed_succs;
                     }
                     BranchKind::BrTable(table) => {
                         let scrutinee = ctx.canonicalize_value(*table.scrutinee());
@@ -359,31 +402,45 @@ impl<'a, 'ctx> FlowTemplateSolver<'a, 'ctx> {
                                     slots,
                                 );
                                 let mut case_actions = Actions::new();
-                                with_planner(ctx, mem, case_stack, &mut case_actions, |planner| {
-                                    let consume_last_use = BitSet::<ValueId>::default();
-                                    let mut compare_args = smallvec::smallvec![scrutinee, case_val];
-                                    planner.prepare_operands_for_commutative_pair(
-                                        &mut compare_args,
-                                        &consume_last_use,
-                                        TemplateSim,
-                                    );
-                                });
+                                with_planner(
+                                    ctx,
+                                    mem,
+                                    search_scratch,
+                                    case_stack,
+                                    &mut case_actions,
+                                    |planner| {
+                                        let consume_last_use = BitSet::<ValueId>::default();
+                                        let mut compare_args =
+                                            smallvec::smallvec![scrutinee, case_val];
+                                        planner.prepare_operands_for_commutative_pair(
+                                            &mut compare_args,
+                                            &consume_last_use,
+                                            TemplateSim,
+                                        );
+                                    },
+                                );
                             },
                         );
 
                         for case in case_stacks {
-                            edge_cand.insert(
-                                (block, case.dest),
+                            record_edge_candidate(
+                                edge_cand,
+                                &mut changed_succs,
+                                block,
+                                case.dest,
                                 project_transfer(&case.post_compare_stack, &carry_in[case.dest]),
                             );
                         }
                         if let Some(default) = table.default() {
-                            edge_cand.insert(
-                                (block, *default),
+                            record_edge_candidate(
+                                edge_cand,
+                                &mut changed_succs,
+                                block,
+                                *default,
                                 project_transfer(&default_stack, &carry_in[*default]),
                             );
                         }
-                        return;
+                        return changed_succs;
                     }
                 }
             }
@@ -398,10 +455,15 @@ impl<'a, 'ctx> FlowTemplateSolver<'a, 'ctx> {
                     &mut free_slots,
                     slots,
                 );
-                with_planner(ctx, mem, &mut stack, &mut actions, |planner| {
-                    planner.plan_internal_return(inst)
-                });
-                return;
+                with_planner(
+                    ctx,
+                    mem,
+                    search_scratch,
+                    &mut stack,
+                    &mut actions,
+                    |planner| planner.plan_internal_return(inst),
+                );
+                return changed_succs;
             }
 
             // Normal instruction.
@@ -415,9 +477,14 @@ impl<'a, 'ctx> FlowTemplateSolver<'a, 'ctx> {
                 slots,
             );
 
-            with_planner(ctx, mem, &mut stack, &mut actions, |planner| {
-                planner.prepare_operands_for_inst(inst, &mut args, last_use, TemplateSim)
-            });
+            with_planner(
+                ctx,
+                mem,
+                search_scratch,
+                &mut stack,
+                &mut actions,
+                |planner| planner.prepare_operands_for_inst(inst, &mut args, last_use, TemplateSim),
+            );
 
             if is_call {
                 stack.push_call_continuation(&mut actions);
@@ -457,11 +524,18 @@ impl<'a, 'ctx> FlowTemplateSolver<'a, 'ctx> {
                     &mut free_slots,
                     slots,
                 );
-                with_planner(ctx, mem, &mut stack, &mut actions, |planner| {
-                    planner.emit_store_if_spilled_at_depth(res, depth)
-                });
+                with_planner(
+                    ctx,
+                    mem,
+                    search_scratch,
+                    &mut stack,
+                    &mut actions,
+                    |planner| planner.emit_store_if_spilled_at_depth(res, depth),
+                );
             }
         }
+
+        changed_succs
     }
 
     fn solve_scc(&mut self, scc: SccId) {
@@ -487,73 +561,48 @@ impl<'a, 'ctx> FlowTemplateSolver<'a, 'ctx> {
         self.seed_cyclic_scc(scc);
 
         const MAX_ITER: u32 = 32;
-        for _iter in 0..MAX_ITER {
-            for &block in &data.blocks_rpo {
-                let tmpl = self.template_for(block);
-                self.simulate_block_and_record_edges(block, &tmpl);
-            }
+        let mut budget = MAX_ITER as usize * data.blocks_rpo.len();
+        let mut queue = VecDeque::<BlockId>::new();
+        let mut in_queue = BitSet::<BlockId>::default();
 
-            let mut changed = false;
+        for &block in &data.blocks_rpo {
+            let tmpl = self.template_for(block);
+            self.simulate_block_and_record_edges(block, &tmpl);
+            budget = budget.saturating_sub(1);
+        }
 
-            // For single-entry cyclic SCCs (reducible loops), pin the header transfer once we have
-            // evidence of a real join conflict, preferring the backedge-derived candidate. This
-            // biases the fixed point toward the loop's steady-state layout instead of the function
-            // entry edge and avoids oscillation between competing layouts.
-            if let Some(header) = data.header()
-                && header != ctx.entry
-                && !self.state[header].pinned
-                && let Some(backedge_cand) =
-                    best_backedge_candidate(ctx, scc, header, &*self.edge_cand)
-                && header_has_conflict(ctx, header, &*self.edge_cand)
-            {
-                if self.state[header].transfer != backedge_cand {
-                    self.state[header].transfer = backedge_cand;
-                    changed = true;
-                }
-                self.state[header].pinned = true;
-            }
-
-            for &block in &data.blocks_rpo {
-                if self.state[block].pinned {
-                    continue;
-                }
-                let fallback = self.state[block].transfer.clone();
-                let new_t = choose_transfer_from_preds(
-                    ctx,
-                    block,
-                    self.carry_in,
-                    &*self.edge_cand,
-                    Some(scc),
-                    Some(&fallback),
-                );
-                if new_t != fallback {
-                    self.state[block].transfer = new_t;
-                    changed = true;
-                }
-            }
-            if !changed {
-                return;
+        if let Some(header) = self.maybe_pin_header(scc) {
+            enqueue_block(&mut queue, &mut in_queue, header);
+        }
+        for &block in &data.blocks_rpo {
+            if self.recompute_block_transfer(scc, block) {
+                enqueue_block(&mut queue, &mut in_queue, block);
             }
         }
 
-        for &block in &data.blocks_rpo {
-            if self.state[block].pinned {
-                continue;
+        while let Some(block) = queue.pop_front() {
+            in_queue.remove(block);
+            if budget == 0 {
+                self.finalize_cyclic_scc(scc);
+                return;
             }
-            let fallback = self.state[block].transfer.clone();
-            let cand = choose_transfer_from_preds(
-                ctx,
-                block,
-                self.carry_in,
-                &*self.edge_cand,
-                Some(scc),
-                Some(&fallback),
-            );
-            self.state[block].transfer = if cand.is_empty() {
-                canonical_transfer_order(&self.carry_in[block], &ctx.dom_depth, &ctx.def_info)
-            } else {
-                cand
-            };
+
+            let tmpl = self.template_for(block);
+            let changed_succs = self.simulate_block_and_record_edges(block, &tmpl);
+            budget -= 1;
+
+            if let Some(header) = data.header()
+                && changed_succs.contains(&header)
+                && let Some(header) = self.maybe_pin_header(scc)
+            {
+                enqueue_block(&mut queue, &mut in_queue, header);
+            }
+
+            for succ in changed_succs {
+                if ctx.scc.scc_of(succ) == Some(scc) && self.recompute_block_transfer(scc, succ) {
+                    enqueue_block(&mut queue, &mut in_queue, succ);
+                }
+            }
         }
     }
 
@@ -583,6 +632,75 @@ impl<'a, 'ctx> FlowTemplateSolver<'a, 'ctx> {
                     canonical_transfer_order(&carry_in[block], &ctx.dom_depth, &ctx.def_info);
             }
         }
+    }
+
+    fn maybe_pin_header(&mut self, scc: SccId) -> Option<BlockId> {
+        let ctx = self.ctx;
+        let header = ctx.scc.scc_data(scc).header()?;
+        if header == ctx.entry || self.state[header].pinned {
+            return None;
+        }
+
+        let backedge_cand = best_backedge_candidate(ctx, scc, header, &*self.edge_cand)?;
+        if !header_has_conflict(ctx, header, &*self.edge_cand) {
+            return None;
+        }
+
+        let changed = self.state[header].transfer != backedge_cand;
+        self.state[header].transfer = backedge_cand;
+        self.state[header].pinned = true;
+        changed.then_some(header)
+    }
+
+    fn recompute_block_transfer(&mut self, scc: SccId, block: BlockId) -> bool {
+        if self.state[block].pinned {
+            return false;
+        }
+
+        let fallback = self.state[block].transfer.clone();
+        let transfer = choose_transfer_from_preds(
+            self.ctx,
+            block,
+            self.carry_in,
+            &*self.edge_cand,
+            Some(scc),
+            Some(&fallback),
+        );
+        if transfer == fallback {
+            return false;
+        }
+
+        self.state[block].transfer = transfer;
+        true
+    }
+
+    fn finalize_cyclic_scc(&mut self, scc: SccId) {
+        let ctx = self.ctx;
+        for &block in &ctx.scc.scc_data(scc).blocks_rpo {
+            if self.state[block].pinned {
+                continue;
+            }
+            let fallback = self.state[block].transfer.clone();
+            let cand = choose_transfer_from_preds(
+                ctx,
+                block,
+                self.carry_in,
+                &*self.edge_cand,
+                Some(scc),
+                Some(&fallback),
+            );
+            self.state[block].transfer = if cand.is_empty() {
+                canonical_transfer_order(&self.carry_in[block], &ctx.dom_depth, &ctx.def_info)
+            } else {
+                cand
+            };
+        }
+    }
+}
+
+fn enqueue_block(queue: &mut VecDeque<BlockId>, in_queue: &mut BitSet<BlockId>, block: BlockId) {
+    if in_queue.insert(block) {
+        queue.push_back(block);
     }
 }
 
