@@ -65,8 +65,7 @@ fn plan_test_ctx_from_src(src: &str) -> PlanTestCtx {
             let mut cfg = ControlFlowGraph::default();
             cfg.compute(function);
 
-            let mut splitter = StackifyEdgeSplitter::new();
-            splitter.run(function, &mut cfg);
+            StackifyEdgeSplitter::run(function, &mut cfg);
 
             let mut liveness = Liveness::new();
             liveness.compute(function, &cfg);
@@ -1314,8 +1313,7 @@ block0:
             let mut cfg = ControlFlowGraph::new();
             cfg.compute(function);
 
-            let mut splitter = StackifyEdgeSplitter::new();
-            splitter.run(function, &mut cfg);
+            StackifyEdgeSplitter::run(function, &mut cfg);
 
             let mut liveness = Liveness::new();
             liveness.compute(function, &cfg);
@@ -2279,8 +2277,7 @@ block0:
             let mut cfg = ControlFlowGraph::new();
             cfg.compute(function);
 
-            let mut splitter = StackifyEdgeSplitter::new();
-            splitter.run(function, &mut cfg);
+            StackifyEdgeSplitter::run(function, &mut cfg);
 
             let mut liveness = Liveness::new();
             liveness.compute(function, &cfg);
@@ -2445,8 +2442,7 @@ block2:
             let mut cfg = ControlFlowGraph::new();
             cfg.compute(function);
 
-            let mut splitter = StackifyEdgeSplitter::new();
-            splitter.run(function, &mut cfg);
+            StackifyEdgeSplitter::run(function, &mut cfg);
 
             let mut liveness = Liveness::new();
             liveness.compute(function, &cfg);

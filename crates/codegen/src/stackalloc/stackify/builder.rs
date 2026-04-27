@@ -246,7 +246,7 @@ impl<'a> StackifyBuilder<'a> {
         let spill_obj = assign_spill_obj_ids(ctx.func, spill, &ctx.exact_local_addr);
         let interfaces = compute_block_interfaces(ctx, spill);
 
-        let mut templates = empty_transfer_templates(ctx, &interfaces.params);
+        let mut templates = initial_templates(ctx, &interfaces.params);
 
         let mut alloc = StackifyAlloc {
             pre_actions: SecondaryMap::new(),
@@ -287,16 +287,13 @@ impl<'a> StackifyBuilder<'a> {
     }
 }
 
-fn empty_transfer_templates(
+fn initial_templates(
     ctx: &StackifyContext<'_>,
     params: &SecondaryMap<BlockId, SmallVec<[ValueId; 4]>>,
 ) -> SecondaryMap<BlockId, BlockTemplate> {
     let mut templates = SecondaryMap::new();
     for block in ctx.func.layout.iter_block() {
-        templates[block] = BlockTemplate {
-            params: params[block].clone(),
-            transfer: SmallVec::new(),
-        };
+        templates[block] = BlockTemplate::new(params[block].clone());
     }
     templates
 }

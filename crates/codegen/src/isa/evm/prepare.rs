@@ -841,8 +841,7 @@ fn prepare_stackify_analysis(
 
     {
         let _span = trace_span!("sonatina.codegen.evm.stackify.split_edges").entered();
-        let mut splitter = StackifyEdgeSplitter::new();
-        splitter.run(function, &mut cfg);
+        StackifyEdgeSplitter::run(function, &mut cfg);
     }
 
     let (dom, block_order) = {

@@ -89,8 +89,7 @@ mod tests {
             let mut cfg = ControlFlowGraph::new();
             cfg.compute(function);
 
-            let mut splitter = StackifyEdgeSplitter::new();
-            splitter.run(function, &mut cfg);
+            StackifyEdgeSplitter::run(function, &mut cfg);
 
             let mut liveness = Liveness::new();
             liveness.compute(function, &cfg);
@@ -493,8 +492,7 @@ block3:
             let mut cfg = ControlFlowGraph::new();
             cfg.compute(function);
 
-            let mut splitter = StackifyEdgeSplitter::new();
-            splitter.run(function, &mut cfg);
+            StackifyEdgeSplitter::run(function, &mut cfg);
 
             let mut liveness = Liveness::new();
             liveness.compute(function, &cfg);

@@ -764,8 +764,7 @@ fn stackify_trace_for_fn(
     let mut cfg = ControlFlowGraph::new();
     cfg.compute(&function);
 
-    let mut splitter = StackifyEdgeSplitter::new();
-    splitter.run(&mut function, &mut cfg);
+    StackifyEdgeSplitter::run(&mut function, &mut cfg);
 
     let value_aliases = backend.compute_stackify_value_aliases(&function, module_ctx);
 

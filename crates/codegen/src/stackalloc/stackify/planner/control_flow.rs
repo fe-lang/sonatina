@@ -71,7 +71,7 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
         let mut desired: SmallVec<[ValueId; 16]> = SmallVec::new();
         desired.extend(tmpl.params.iter().take(args_prefix_len).copied());
         desired.extend(stack_phi_pairs.iter().map(|(_, src)| *src));
-        desired.extend(tmpl.transfer.iter().copied());
+        desired.extend(tmpl.transfer().iter().copied());
 
         self.normalize_to_exact(desired.as_slice());
 

@@ -8,18 +8,11 @@ use crate::{
     critical_edge::CriticalEdgeSplitter,
 };
 
-#[derive(Default)]
-pub struct StackifyEdgeSplitter {
-    critical: CriticalEdgeSplitter,
-}
+pub struct StackifyEdgeSplitter;
 
 impl StackifyEdgeSplitter {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn run(&mut self, func: &mut Function, cfg: &mut ControlFlowGraph) {
-        self.critical.run(func, cfg);
+    pub fn run(func: &mut Function, cfg: &mut ControlFlowGraph) {
+        CriticalEdgeSplitter::new().run(func, cfg);
 
         let mut scc = CfgSccAnalysis::new();
         scc.compute(cfg);
@@ -86,7 +79,7 @@ block1:
             let entry = cfg.entry().expect("missing entry");
             assert!(cfg.succs_of(entry).any(|&succ| succ == entry));
 
-            StackifyEdgeSplitter::new().run(function, &mut cfg);
+            StackifyEdgeSplitter::run(function, &mut cfg);
 
             assert!(!cfg.succs_of(entry).any(|&succ| succ == entry));
             assert!(cfg.preds_of(entry).any(|&pred| cfg.succ_num_of(pred) == 1));

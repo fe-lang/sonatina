@@ -24,7 +24,24 @@ pub(super) struct BlockTemplate {
     /// Stack-resident parameter prefix (entry args; non-spilled phi results elsewhere).
     pub(super) params: SmallVec<[ValueId; 4]>,
     /// Transfer region (top-first).
-    pub(super) transfer: SmallVec<[ValueId; 8]>,
+    transfer: Option<TransferOrder>,
+}
+
+impl BlockTemplate {
+    pub(super) fn new(params: SmallVec<[ValueId; 4]>) -> Self {
+        Self {
+            params,
+            transfer: None,
+        }
+    }
+
+    pub(super) fn transfer(&self) -> &TransferOrder {
+        self.transfer.as_ref().expect("block template is frozen")
+    }
+
+    pub(super) fn freeze_transfer(&mut self, transfer: TransferOrder) {
+        self.transfer.get_or_insert(transfer);
+    }
 }
 
 pub(super) struct BlockInterfaces {
@@ -86,12 +103,12 @@ pub(super) fn project_transfer(stack: &SymStack, carry_in: &BitSet<ValueId>) -> 
 pub(super) fn choose_transfer(
     ctx: &StackifyContext<'_>,
     block: BlockId,
-    candidates: &[(BlockId, &TransferOrder)],
+    candidates: &[(BlockId, TransferOrder)],
 ) -> TransferOrder {
     debug_assert!(!candidates.is_empty());
 
-    let first = candidates[0].1;
-    if candidates.iter().all(|(_, cand)| *cand == first) {
+    let first = &candidates[0].1;
+    if candidates.iter().all(|(_, cand)| cand == first) {
         return first.clone();
     }
 
@@ -100,7 +117,7 @@ pub(super) fn choose_transfer(
         .filter(|(pred, _)| ctx.dom.dominates(block, *pred))
         .min_by_key(|(pred, _)| pred.as_u32())
     {
-        return (*cand).clone();
+        return cand.clone();
     }
 
     candidates
@@ -108,7 +125,7 @@ pub(super) fn choose_transfer(
         .min_by(|(a_pred, a), (b_pred, b)| {
             lex_cmp(a, b).then_with(|| a_pred.as_u32().cmp(&b_pred.as_u32()))
         })
-        .map(|(_, cand)| (*cand).clone())
+        .map(|(_, cand)| cand.clone())
         .unwrap_or_default()
 }
 

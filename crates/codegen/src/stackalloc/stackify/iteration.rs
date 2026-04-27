@@ -7,7 +7,7 @@ use crate::{bitset::BitSet, isa::evm::immediate_u32, stackalloc::Actions};
 
 use super::{
     alloc::StackifyAlloc,
-    block_sim::{BlockSimMode, BlockSimState, BrTableEdgeKind, PlannerActionSink, run_block_sim},
+    block_sim::{BlockSimState, PlannerActionSink, run_block_sim},
     builder::{StackifyContext, StackifyReachability},
     planner::{self, NormalizeSearchScratch, Planner},
     slots::{FreeSlotPools, FreeSlots, SlotPool, SpillSlotPools},
@@ -36,7 +36,6 @@ pub(super) struct IterationPlanner<'a, 'ctx, O: StackifyObserver> {
     inherited_stack: BTreeMap<BlockId, (BlockId, SymStack)>,
     pending_edges: BTreeMap<BlockId, Vec<PendingEdge<O::DeferredExit>>>,
     planned_blocks: BitSet<BlockId>,
-    template_frozen: BitSet<BlockId>,
     search_scratch: NormalizeSearchScratch,
     observer: &'a mut O,
 }
@@ -76,7 +75,6 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
             inherited_stack,
             pending_edges: BTreeMap::new(),
             planned_blocks: BitSet::default(),
-            template_frozen: BitSet::default(),
             search_scratch: NormalizeSearchScratch::default(),
             observer,
         }
@@ -126,11 +124,11 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
         self.resolve_pending_edges(block);
 
         let inherited = self.inherited_stack.remove(&block);
-        if let Some((_pred, stack)) = inherited.as_ref()
-            && !self.terminal_chain_blocks[block]
-        {
+        if self.terminal_chain_blocks[block] {
+            self.freeze_template(block, TransferOrder::new());
+        } else if let Some((_pred, stack)) = inherited.as_ref() {
             self.freeze_template_from_stack(block, stack);
-        } else if block != self.ctx.entry && !self.terminal_chain_blocks[block] {
+        } else if block != self.ctx.entry {
             self.freeze_template_canonical(block);
         }
 
@@ -221,12 +219,8 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
                 )
             })
             .collect();
-        let candidates: Vec<(BlockId, &TransferOrder)> = projected
-            .iter()
-            .map(|(pred, order)| (*pred, order))
-            .collect();
-        if !candidates.is_empty() {
-            self.freeze_template(block, choose_transfer(self.ctx, block, &candidates));
+        if !projected.is_empty() {
+            self.freeze_template(block, choose_transfer(self.ctx, block, &projected));
         }
 
         let tmpl = self.templates[block].clone();
@@ -263,44 +257,44 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
     }
 
     fn freeze_template(&mut self, block: BlockId, transfer: TransferOrder) {
-        if self.template_frozen.insert(block) {
-            self.templates[block].transfer = transfer;
-        }
+        self.templates[block].freeze_transfer(transfer);
     }
-}
 
-impl<'a, 'ctx, O: StackifyObserver> BlockSimMode<'ctx> for IterationPlanner<'a, 'ctx, O> {
-    fn ctx(&self) -> &StackifyContext<'ctx> {
+    pub(super) fn ctx(&self) -> &StackifyContext<'ctx> {
         self.ctx
     }
 
-    fn call_uses_stack_continuation(&self, inst: InstId) -> bool {
+    pub(super) fn call_uses_stack_continuation(&self, inst: InstId) -> bool {
         call_has_local_return(self.ctx.func, inst)
     }
 
-    fn scratch_slots(&self) -> &SlotPool {
+    pub(super) fn scratch_slots(&self) -> &SlotPool {
         &self.slots.scratch
     }
 
-    fn clear_inst_actions(&mut self, inst: InstId) {
+    pub(super) fn clear_inst_actions(&mut self, inst: InstId) {
         self.alloc.pre_actions[inst].clear();
         self.alloc.post_actions[inst].clear();
         self.alloc.brtable_actions[inst].clear();
     }
 
-    fn pre_actions_len(&self, inst: InstId) -> usize {
+    pub(super) fn pre_actions_len(&self, inst: InstId) -> usize {
         self.alloc.pre_actions[inst].len()
     }
 
-    fn with_pre_actions<R>(&mut self, inst: InstId, f: impl FnOnce(&mut Actions) -> R) -> R {
+    pub(super) fn with_pre_actions<R>(
+        &mut self,
+        inst: InstId,
+        f: impl FnOnce(&mut Actions) -> R,
+    ) -> R {
         f(&mut self.alloc.pre_actions[inst])
     }
 
-    fn take_pre_actions_for_br_table(&mut self, inst: InstId) -> Actions {
+    pub(super) fn take_pre_actions_for_br_table(&mut self, inst: InstId) -> Actions {
         std::mem::take(&mut self.alloc.pre_actions[inst])
     }
 
-    fn with_planner<R>(
+    pub(super) fn with_planner<R>(
         &mut self,
         stack: &mut SymStack,
         free_slots: &mut FreeSlotPools,
@@ -376,7 +370,7 @@ impl<'a, 'ctx, O: StackifyObserver> BlockSimMode<'ctx> for IterationPlanner<'a, 
         }
     }
 
-    fn on_inst_start(
+    pub(super) fn on_inst_start(
         &mut self,
         state: &mut BlockSimState,
         inst: InstId,
@@ -396,7 +390,7 @@ impl<'a, 'ctx, O: StackifyObserver> BlockSimMode<'ctx> for IterationPlanner<'a, 
         );
     }
 
-    fn on_alias_noop(&mut self, inst: InstId, args: &[ValueId], results: &[ValueId]) {
+    pub(super) fn on_alias_noop(&mut self, inst: InstId, args: &[ValueId], results: &[ValueId]) {
         self.observer.on_inst_actions("cleanup", &[], None);
         self.observer.on_inst_actions("pre", &[], None);
         self.observer
@@ -404,27 +398,27 @@ impl<'a, 'ctx, O: StackifyObserver> BlockSimMode<'ctx> for IterationPlanner<'a, 
         self.observer.on_inst_actions("post", &[], None);
     }
 
-    fn on_cleanup_actions(&mut self, inst: InstId, start: usize, end: usize) {
+    pub(super) fn on_cleanup_actions(&mut self, inst: InstId, start: usize, end: usize) {
         self.observer
             .on_inst_actions("cleanup", &self.alloc.pre_actions[inst][start..end], None);
     }
 
-    fn on_pre_actions(&mut self, inst: InstId, start: usize) {
+    pub(super) fn on_pre_actions(&mut self, inst: InstId, start: usize) {
         self.observer
             .on_inst_actions("pre", &self.alloc.pre_actions[inst][start..], None);
     }
 
-    fn on_post_actions(&mut self, inst: InstId) {
+    pub(super) fn on_post_actions(&mut self, inst: InstId) {
         self.observer
             .on_inst_actions("post", &self.alloc.post_actions[inst], None);
     }
 
-    fn on_normal_inst(&mut self, inst: InstId, args: &[ValueId], results: &[ValueId]) {
+    pub(super) fn on_normal_inst(&mut self, inst: InstId, args: &[ValueId], results: &[ValueId]) {
         self.observer
             .on_inst_normal(self.ctx.func, inst, args, results);
     }
 
-    fn on_return(&mut self, inst: InstId, start: usize) {
+    pub(super) fn on_return(&mut self, inst: InstId, start: usize) {
         self.observer
             .on_inst_actions("return", &self.alloc.pre_actions[inst][start..], None);
         let ret_vals: SmallVec<[ValueId; 16]> = self
@@ -438,12 +432,11 @@ impl<'a, 'ctx, O: StackifyObserver> BlockSimMode<'ctx> for IterationPlanner<'a, 
             .on_inst_return(self.ctx.func, inst, ret_vals.as_slice());
     }
 
-    fn on_jump(
+    pub(super) fn on_jump(
         &mut self,
         state: &mut BlockSimState,
         inst: InstId,
         dest: BlockId,
-        _stack: SymStack,
         action_start: usize,
     ) {
         if self.terminal_chain_blocks[dest] {
@@ -493,14 +486,13 @@ impl<'a, 'ctx, O: StackifyObserver> BlockSimMode<'ctx> for IterationPlanner<'a, 
         self.observer.on_inst_jump(inst, dest);
     }
 
-    fn on_branch(&mut self, inst: InstId, cond: ValueId, dests: &[BlockId]) {
+    pub(super) fn on_branch(&mut self, inst: InstId, cond: ValueId, dests: &[BlockId]) {
         self.observer.on_inst_br(self.ctx.func, inst, cond, dests);
     }
 
-    fn on_branch_edge(
+    pub(super) fn on_branch_edge(
         &mut self,
         state: &mut BlockSimState,
-        _inst: InstId,
         succ: BlockId,
         stack: SymStack,
     ) {
@@ -518,13 +510,11 @@ impl<'a, 'ctx, O: StackifyObserver> BlockSimMode<'ctx> for IterationPlanner<'a, 
             .or_insert_with(|| (state.block, stack));
     }
 
-    fn on_br_table_edge(
+    pub(super) fn on_br_table_edge(
         &mut self,
         state: &mut BlockSimState,
-        _inst: InstId,
         succ: BlockId,
         stack: SymStack,
-        _kind: BrTableEdgeKind,
     ) {
         debug_assert!(
             !self.planned_blocks.contains(succ),
@@ -540,7 +530,7 @@ impl<'a, 'ctx, O: StackifyObserver> BlockSimMode<'ctx> for IterationPlanner<'a, 
             .or_insert_with(|| (state.block, stack));
     }
 
-    fn on_br_table(&mut self, inst: InstId) {
+    pub(super) fn on_br_table(&mut self, inst: InstId) {
         self.observer.on_inst_br_table(inst);
     }
 }

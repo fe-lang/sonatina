@@ -260,7 +260,7 @@ impl StackifyObserver for StackifyTrace {
             &mut self.out,
             "  {block:?} P={} T={}",
             fmt_values(func, &template.params),
-            fmt_values(func, &template.transfer)
+            fmt_values(func, template.transfer())
         );
     }
 
