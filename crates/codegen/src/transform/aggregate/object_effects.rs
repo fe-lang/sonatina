@@ -1,3 +1,6 @@
+use std::collections::{BTreeMap, BTreeSet};
+
+use crate::module_analysis::{CallGraph, CallGraphSccs, SccBuilder, SccRef};
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 use sonatina_ir::{
@@ -297,30 +300,130 @@ enum ReturnClass {
 pub(crate) fn compute_object_effect_summaries(module: &Module) -> ObjectEffectSummaryMap {
     let mut summaries = ObjectEffectSummaryMap::default();
     let mut layout_cache = shape::AggregateLayoutCache::default();
-    let mut funcs: Vec<_> = module.funcs();
-    funcs.sort_unstable_by_key(|func| func.as_u32());
+    let funcs = defined_object_effect_funcs(module);
+    if funcs.is_empty() {
+        return summaries;
+    }
 
-    loop {
-        let mut changed = false;
-        for func in funcs.iter().copied() {
-            let Some(sig) = module.ctx.get_sig(func) else {
-                continue;
-            };
-            if !sig.linkage().has_definition() {
-                continue;
-            }
+    let func_set = funcs.iter().copied().collect();
+    let call_graph = CallGraph::build_graph_subset(module, &func_set);
+    let sccs = SccBuilder::new().compute_scc(&call_graph);
+    let topo = topo_sort_object_effect_sccs(&func_set, &call_graph, &sccs);
 
-            let next = compute_summary_for_func(module, func, &summaries, &mut layout_cache);
-            if summaries.get(&func) != Some(&next) {
+    for scc_ref in topo.iter().rev().copied() {
+        let funcs = sorted_scc_funcs(&sccs, scc_ref);
+        if !sccs.scc_info(scc_ref).is_cycle {
+            for func in funcs {
+                let next = compute_summary_for_func(module, func, &summaries, &mut layout_cache);
                 summaries.insert(func, next);
-                changed = true;
             }
+            continue;
         }
 
-        if !changed {
-            return summaries;
+        initialize_object_effect_scc(module, &funcs, &mut summaries, &mut layout_cache);
+        loop {
+            let mut changed = false;
+            for &func in &funcs {
+                let next = compute_summary_for_func(module, func, &summaries, &mut layout_cache);
+                if summaries.get(&func) != Some(&next) {
+                    summaries.insert(func, next);
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
         }
     }
+
+    summaries
+}
+
+fn defined_object_effect_funcs(module: &Module) -> Vec<FuncRef> {
+    let mut funcs: Vec<_> = module
+        .funcs()
+        .into_iter()
+        .filter(|&func| {
+            module
+                .ctx
+                .get_sig(func)
+                .is_some_and(|sig| sig.linkage().has_definition())
+        })
+        .collect();
+    funcs.sort_unstable_by_key(|func| func.as_u32());
+    funcs
+}
+
+fn initialize_object_effect_scc(
+    module: &Module,
+    funcs: &[FuncRef],
+    summaries: &mut ObjectEffectSummaryMap,
+    layout_cache: &mut shape::AggregateLayoutCache,
+) {
+    for &func in funcs {
+        summaries.entry(func).or_insert_with(|| {
+            ObjectEffectSummary::conservative_unknown(&module.ctx, func, layout_cache)
+        });
+    }
+}
+
+fn sorted_scc_funcs(sccs: &CallGraphSccs, scc_ref: SccRef) -> Vec<FuncRef> {
+    let mut funcs: Vec<_> = sccs.scc_info(scc_ref).components.iter().copied().collect();
+    funcs.sort_unstable_by_key(|func| func.as_u32());
+    funcs
+}
+
+fn topo_sort_object_effect_sccs(
+    funcs: &FxHashSet<FuncRef>,
+    call_graph: &CallGraph,
+    sccs: &CallGraphSccs,
+) -> Vec<SccRef> {
+    let mut scc_refs = BTreeSet::new();
+    for &func in funcs {
+        scc_refs.insert(sccs.scc_ref(func));
+    }
+
+    let mut edges = BTreeMap::<SccRef, BTreeSet<SccRef>>::new();
+    let mut indegree = BTreeMap::<SccRef, usize>::new();
+    for &scc_ref in &scc_refs {
+        edges.insert(scc_ref, BTreeSet::new());
+        indegree.insert(scc_ref, 0);
+    }
+
+    for &func in funcs {
+        let from = sccs.scc_ref(func);
+        for &callee in call_graph.callee_of(func) {
+            let to = sccs.scc_ref(callee);
+            if from != to && edges.get_mut(&from).expect("missing SCC").insert(to) {
+                *indegree.get_mut(&to).expect("missing SCC") += 1;
+            }
+        }
+    }
+
+    let mut ready: BTreeSet<_> = indegree
+        .iter()
+        .filter_map(|(&scc_ref, &deg)| (deg == 0).then_some(scc_ref))
+        .collect();
+    let mut topo = Vec::with_capacity(scc_refs.len());
+    while let Some(scc_ref) = ready.pop_first() {
+        topo.push(scc_ref);
+        let tos: Vec<_> = edges
+            .get(&scc_ref)
+            .expect("missing SCC")
+            .iter()
+            .copied()
+            .collect();
+        for to in tos {
+            let deg = indegree.get_mut(&to).expect("missing SCC");
+            *deg = deg.checked_sub(1).expect("SCC indegree underflow");
+            if *deg == 0 {
+                ready.insert(to);
+            }
+        }
+    }
+
+    debug_assert_eq!(topo.len(), scc_refs.len(), "SCC topo sort incomplete");
+    topo
 }
 
 fn compute_summary_for_func(
@@ -1676,6 +1779,118 @@ mod tests {
                     (first_leaf..first_leaf + leaf_count).all(|leaf| leaves.contains(&leaf))
                 })
         })
+    }
+
+    fn arg_writes_exact_slice(
+        summary: &ObjectEffectSummary,
+        index: usize,
+        first_leaf: usize,
+        leaf_count: usize,
+    ) -> bool {
+        summary.arg_effects.get(index).is_some_and(|effect| {
+            !effect.writes.is_whole_root()
+                && effect.writes.exact_leaves().is_some_and(|leaves| {
+                    (first_leaf..first_leaf + leaf_count).all(|leaf| leaves.contains(&leaf))
+                })
+        })
+    }
+
+    #[test]
+    fn object_effects_propagates_acyclic_callee_slice_effects() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @Pair = { i256, i256 };
+
+func private %caller(v0.objref<@Pair>, v1.i256) {
+block0:
+    call %write_first v0 v1;
+    return;
+}
+
+func private %write_first(v0.objref<@Pair>, v1.i256) {
+block0:
+    v2.objref<i256> = obj.proj v0 0.i8;
+    obj.store v2 v1;
+    return;
+}
+"#,
+        );
+
+        let caller = lookup_func(&module, "caller");
+        let summary = compute_object_effect_summaries(&module)
+            .remove(&caller)
+            .expect("caller summary should exist");
+
+        assert!(
+            arg_writes_exact_slice(&summary, 0, 0, 1),
+            "caller should inherit the callee's exact write slice"
+        );
+        assert!(
+            !arg_writes_whole_root(&summary, 0),
+            "acyclic callee propagation should not degrade exact writes to whole-root writes"
+        );
+    }
+
+    #[test]
+    fn object_effects_keeps_external_callee_conservative() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @Pair = { i256, i256 };
+
+declare external %touch(objref<@Pair>);
+
+func private %caller(v0.objref<@Pair>) {
+block0:
+    call %touch v0;
+    return;
+}
+"#,
+        );
+
+        let caller = lookup_func(&module, "caller");
+        let summary = compute_object_effect_summaries(&module)
+            .remove(&caller)
+            .expect("caller summary should exist");
+
+        assert!(arg_reads_whole_root(&summary, 0));
+        assert!(arg_writes_whole_root(&summary, 0));
+    }
+
+    #[test]
+    fn object_effects_keeps_recursive_scc_conservative() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @Pair = { i256, i256 };
+
+func private %a(v0.objref<@Pair>) {
+block0:
+    call %b v0;
+    return;
+}
+
+func private %b(v0.objref<@Pair>) {
+block0:
+    call %a v0;
+    return;
+}
+"#,
+        );
+
+        let summaries = compute_object_effect_summaries(&module);
+        for name in ["a", "b"] {
+            let func = lookup_func(&module, name);
+            let summary = summaries
+                .get(&func)
+                .expect("recursive summary should exist");
+            assert!(arg_reads_whole_root(summary, 0));
+            assert!(arg_writes_whole_root(summary, 0));
+        }
     }
 
     #[test]
