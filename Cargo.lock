@@ -1395,6 +1395,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "parking_lot"
+version = "0.12.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f1bf18183cf54e8d6059647fc3063646a1801cf30896933ec2311622cc4b9a27"
+dependencies = [
+ "lock_api",
+ "parking_lot_core",
+]
+
+[[package]]
 name = "parking_lot_core"
 version = "0.9.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2158,6 +2168,7 @@ dependencies = [
  "dyn-clone",
  "indexmap",
  "insta",
+ "parking_lot",
  "primitive-types 0.14.0",
  "rayon",
  "rustc-hash",

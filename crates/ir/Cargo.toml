@@ -18,6 +18,7 @@ primitive-types = { version = "0.14", default-features = false }
 cranelift-entity = "0.126"
 smallvec = "1.15.1"
 rustc-hash = "2.0.0"
+parking_lot = "0.12"
 sonatina-triple = { path = "../triple", version = "0.0.3-alpha" }
 macros = { package = "sonatina-macros", path = "../macros", version = "0.0.3-alpha" }
 indexmap = "2.12.1"
