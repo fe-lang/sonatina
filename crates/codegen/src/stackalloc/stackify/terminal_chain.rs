@@ -6,11 +6,11 @@ use sonatina_ir::{
 
 use crate::bitset::BitSet;
 
-use super::{builder::StackifyContext, templates::BlockTemplate};
+use super::{builder::StackifyContext, templates::BlockInterfaces};
 
 pub(super) fn compute_terminal_chain_blocks(
     ctx: &StackifyContext<'_>,
-    templates: &SecondaryMap<BlockId, BlockTemplate>,
+    interfaces: &BlockInterfaces,
 ) -> SecondaryMap<BlockId, bool> {
     let mut terminal_chain_blocks = SecondaryMap::new();
 
@@ -18,8 +18,8 @@ pub(super) fn compute_terminal_chain_blocks(
         if !ctx.dom.is_reachable(block)
             || block == ctx.entry
             || !ctx.phi_results[block].is_empty()
-            || !templates[block].params.is_empty()
-            || !templates[block].transfer.is_empty()
+            || !interfaces.params[block].is_empty()
+            || !interfaces.carry_in[block].is_empty()
             || ctx
                 .scc
                 .scc_of(block)

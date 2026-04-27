@@ -6,8 +6,8 @@ input_file: test_files/evm/chz_castling_rights_gvn_regression_noopt.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 6820 bytes
-  total: 6820 bytes
+  section runtime: 6812 bytes
+  total: 6812 bytes
 
 functions:
   abs_diff: ir_blocks=9 ir_insts=36 vcode_ops=72 fixups=4 imm_bytes=14
@@ -18,7 +18,7 @@ functions:
     mem: scratch_words=2 stable_words=0 stable_mode=None entry_abs_words=264 abs_words_end=2
   set_piece: ir_blocks=3 ir_insts=29 vcode_ops=73 fixups=1 imm_bytes=14
     mem: scratch_words=3 stable_words=0 stable_mode=None entry_abs_words=264 abs_words_end=3
-  path_clear_file: ir_blocks=33 ir_insts=121 vcode_ops=301 fixups=23 imm_bytes=43
+  path_clear_file: ir_blocks=33 ir_insts=121 vcode_ops=293 fixups=23 imm_bytes=43
     mem: scratch_words=1 stable_words=5 stable_mode=StaticAbs(base=0x21a0) entry_abs_words=264 abs_words_end=269
   is_empty: ir_blocks=1 ir_insts=6 vcode_ops=12 fixups=0 imm_bytes=2
     mem: scratch_words=1 stable_words=0 stable_mode=None entry_abs_words=269 abs_words_end=1
@@ -92,7 +92,7 @@ functions:
     mem: scratch_words=1 stable_words=0 stable_mode=None entry_abs_words=162 abs_words_end=1
 
 evm:
-  case captured_rook_clears_castling_rights: calldata_len=0 success reason=Return gas_used=36844 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=15844
+  case captured_rook_clears_castling_rights: calldata_len=0 success reason=Return gas_used=36831 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=15831
 
 
 --------------- DEBUG ---------------
@@ -1655,17 +1655,14 @@ path_clear_file:
     SWAP6
     GT
     ISZERO  // br v17 block29 block30;
-    PUSH1 block30
+    PUSH1 block14
     JUMPI
   block29:
     SWAP1  // jump block8;
     POP
-    SWAP3
-    SWAP2
-    SWAP1
   block8:
     JUMPDEST
-    DUP1  // v80.i256 = mload v8 i256;
+    DUP2  // v80.i256 = mload v8 i256;
     MLOAD
     PUSH1 0xff (255)  // v81.i256 = and v80 255.i256;
     AND
@@ -1681,7 +1678,7 @@ path_clear_file:
     PUSH1 block20  // br v84 block31 block21;
     JUMPI
   block21:
-    DUP3  // v98.i256 = mload v7 i256;
+    DUP4  // v98.i256 = mload v7 i256;
     MLOAD
     PUSH1 0xff (255)  // v99.i256 = and v98 255.i256;
     AND
@@ -1691,7 +1688,7 @@ path_clear_file:
     PUSH1 block35
     JUMPI
   block9:
-    DUP1  // v30.i256 = mload v29 i256;
+    DUP2  // v30.i256 = mload v29 i256;
     MLOAD
     PUSH1 0xff (255)  // v85.i256 = and v30 255.i256;
     AND
@@ -1709,15 +1706,15 @@ path_clear_file:
   block22:
     PUSH0  // v100.i256 = or v87 0.i256;
     OR
-    DUP2  // mstore v29 v100 i256;
+    DUP3  // mstore v29 v100 i256;
     MSTORE
-    DUP4  // v36.i256 = mload v4 i256;
+    DUP1  // v36.i256 = mload v4 i256;
     MLOAD
-    DUP4  // v101.i256 = mload v5 i256;
+    DUP5  // v101.i256 = mload v5 i256;
     MLOAD
     PUSH1 0xff (255)  // v102.i256 = and v101 255.i256;
     AND
-    DUP3  // v103.i256 = mload v8 i256;
+    DUP4  // v103.i256 = mload v8 i256;
     MLOAD
     PUSH1 0xff (255)  // v104.i256 = and v103 255.i256;
     AND
@@ -1772,15 +1769,9 @@ path_clear_file:
     POP
     PUSH1 block7
     JUMP
-  block30:
-    JUMPDEST
-    SWAP4  // jump block14;
-    SWAP3
-    SWAP2
-    SWAP1
   block14:
     JUMPDEST
-    DUP3  // v89.i256 = mload v7 i256;
+    DUP4  // v89.i256 = mload v7 i256;
     MLOAD
     PUSH1 0xff (255)  // v90.i256 = and v89 255.i256;
     AND
@@ -1796,13 +1787,13 @@ path_clear_file:
     PUSH1 block20  // br v93 block33 block25;
     JUMPI
   block25:
-    DUP2  // mstore v9 v92 i256;
+    DUP3  // mstore v9 v92 i256;
     MSTORE
-    DUP2  // v111.i256 = mload v8 i256;
+    DUP3  // v111.i256 = mload v8 i256;
     MLOAD
     PUSH1 0xff (255)  // v112.i256 = and v111 255.i256;
     AND
-    DUP2  // v113.i256 = mload v9 i256;
+    DUP3  // v113.i256 = mload v9 i256;
     MLOAD
     PUSH1 0xff (255)  // v114.i256 = and v113 255.i256;
     AND
@@ -1812,7 +1803,7 @@ path_clear_file:
     PUSH1 block39
     JUMPI
   block15:
-    DUP2  // v57.i256 = mload v56 i256;
+    DUP3  // v57.i256 = mload v56 i256;
     MLOAD
     PUSH1 0xff (255)  // v94.i256 = and v57 255.i256;
     AND
@@ -1830,15 +1821,15 @@ path_clear_file:
   block26:
     PUSH0  // v115.i256 = or v96 0.i256;
     OR
-    DUP3  // mstore v56 v115 i256;
+    DUP4  // mstore v56 v115 i256;
     MSTORE
-    DUP5  // v63.i256 = mload v4 i256;
+    DUP1  // v63.i256 = mload v4 i256;
     MLOAD
-    DUP5  // v116.i256 = mload v5 i256;
+    DUP6  // v116.i256 = mload v5 i256;
     MLOAD
     PUSH1 0xff (255)  // v117.i256 = and v116 255.i256;
     AND
-    DUP4  // v118.i256 = mload v8 i256;
+    DUP5  // v118.i256 = mload v8 i256;
     MLOAD
     PUSH1 0xff (255)  // v119.i256 = and v118 255.i256;
     AND

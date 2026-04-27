@@ -18,8 +18,8 @@ use super::{
     spill::SpillSet,
     sym_stack::SymStack,
     templates::{
-        DefInfo, compute_def_info, compute_dom_depth, compute_phi_out_sources, compute_phi_results,
-        function_has_internal_return, seed_block_templates,
+        BlockTemplate, DefInfo, compute_block_interfaces, compute_def_info, compute_dom_depth,
+        compute_phi_out_sources, compute_phi_results, function_has_internal_return,
     },
     terminal_chain::compute_terminal_chain_blocks,
     trace::{NullObserver, StackifyObserver},
@@ -245,6 +245,7 @@ impl<'a> StackifyBuilder<'a> {
         }
 
         let spill_obj = assign_spill_obj_ids(ctx.func, spill, &ctx.exact_local_addr);
+        let interfaces = compute_block_interfaces(ctx, spill);
 
         let use_lazy_acyclic_templates = ctx
             .scc
@@ -253,16 +254,21 @@ impl<'a> StackifyBuilder<'a> {
             .all(|&scc| !ctx.scc.scc_data(scc).is_cycle);
         let lazy_carry_in;
         let mut templates = if use_lazy_acyclic_templates {
-            let seed = seed_block_templates(ctx, spill);
-            lazy_carry_in = Some(seed.carry_in);
-            seed.templates
+            lazy_carry_in = Some(&interfaces.carry_in);
+            empty_transfer_templates(ctx, &interfaces.params)
         } else {
             lazy_carry_in = None;
             // Template solving may encounter temporary unreachable values while iterating toward a
             // fixed point, but those requests are not necessarily required under the final chosen
             // templates. Treat spill discovery as the responsibility of the final planning pass.
             let mut solver_spill_requests: BitSet<ValueId> = BitSet::default();
-            solve_templates_from_flow(ctx, spill, &spill_obj, &mut solver_spill_requests)
+            solve_templates_from_flow(
+                ctx,
+                spill,
+                &spill_obj,
+                &interfaces,
+                &mut solver_spill_requests,
+            )
         };
 
         let mut alloc = StackifyAlloc {
@@ -275,7 +281,7 @@ impl<'a> StackifyBuilder<'a> {
         };
 
         let mut spill_requests: BitSet<ValueId> = BitSet::default();
-        let terminal_chain_blocks = compute_terminal_chain_blocks(ctx, &templates);
+        let terminal_chain_blocks = compute_terminal_chain_blocks(ctx, &interfaces);
 
         // Blocks that are reached from multi-way branches inherit a dynamic stack and
         // run an entry normalization prologue (single-pred only; critical edges split).
@@ -292,7 +298,7 @@ impl<'a> StackifyBuilder<'a> {
             slots,
             &mut templates,
             &terminal_chain_blocks,
-            lazy_carry_in.as_ref(),
+            lazy_carry_in,
             &mut alloc,
             &mut spill_requests,
             inherited_stack,
@@ -302,6 +308,20 @@ impl<'a> StackifyBuilder<'a> {
 
         (alloc, spill_requests)
     }
+}
+
+fn empty_transfer_templates(
+    ctx: &StackifyContext<'_>,
+    params: &SecondaryMap<BlockId, SmallVec<[ValueId; 4]>>,
+) -> SecondaryMap<BlockId, BlockTemplate> {
+    let mut templates = SecondaryMap::new();
+    for block in ctx.func.layout.iter_block() {
+        templates[block] = BlockTemplate {
+            params: params[block].clone(),
+            transfer: SmallVec::new(),
+        };
+    }
+    templates
 }
 
 fn assign_spill_obj_ids(

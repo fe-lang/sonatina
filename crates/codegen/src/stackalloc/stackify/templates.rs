@@ -23,27 +23,28 @@ pub(super) struct DefInfo {
 pub(super) struct BlockTemplate {
     /// Stack-resident parameter prefix (entry args; non-spilled phi results elsewhere).
     pub(super) params: SmallVec<[ValueId; 4]>,
-    /// Canonical transfer region (top-first).
+    /// Transfer region (top-first).
     pub(super) transfer: SmallVec<[ValueId; 8]>,
 }
 
-pub(super) struct TemplateSeed {
-    pub(super) params_map: SecondaryMap<BlockId, SmallVec<[ValueId; 4]>>,
+pub(super) struct BlockInterfaces {
+    pub(super) params: SecondaryMap<BlockId, SmallVec<[ValueId; 4]>>,
     pub(super) carry_in: SecondaryMap<BlockId, BitSet<ValueId>>,
-    pub(super) templates: SecondaryMap<BlockId, BlockTemplate>,
 }
 
-pub(super) fn seed_block_templates(ctx: &StackifyContext<'_>, spill: SpillSet<'_>) -> TemplateSeed {
-    let mut params_map: SecondaryMap<BlockId, SmallVec<[ValueId; 4]>> = SecondaryMap::new();
+pub(super) fn compute_block_interfaces(
+    ctx: &StackifyContext<'_>,
+    spill: SpillSet<'_>,
+) -> BlockInterfaces {
+    let mut params: SecondaryMap<BlockId, SmallVec<[ValueId; 4]>> = SecondaryMap::new();
     let mut carry_in: SecondaryMap<BlockId, BitSet<ValueId>> = SecondaryMap::new();
-    let mut templates: SecondaryMap<BlockId, BlockTemplate> = SecondaryMap::new();
 
     for block in ctx.func.layout.iter_block() {
-        let mut params = SmallVec::<[ValueId; 4]>::new();
+        let mut block_params = SmallVec::<[ValueId; 4]>::new();
         if block == ctx.entry {
-            params.extend(ctx.func.arg_values.iter().copied());
+            block_params.extend(ctx.func.arg_values.iter().copied());
         }
-        params.extend(
+        block_params.extend(
             ctx.phi_results[block]
                 .iter()
                 .copied()
@@ -58,18 +59,11 @@ pub(super) fn seed_block_templates(ctx: &StackifyContext<'_>, spill: SpillSet<'_
             &ctx.phi_results,
             spill,
         );
-        let transfer = canonical_transfer_order(&carry, &ctx.dom_depth, &ctx.def_info);
-
-        params_map[block] = params.clone();
+        params[block] = block_params;
         carry_in[block] = carry;
-        templates[block] = BlockTemplate { params, transfer };
     }
 
-    TemplateSeed {
-        params_map,
-        carry_in,
-        templates,
-    }
+    BlockInterfaces { params, carry_in }
 }
 
 pub(super) fn project_transfer(stack: &SymStack, carry_in: &BitSet<ValueId>) -> TransferOrder {

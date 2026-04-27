@@ -6,15 +6,15 @@ input_file: test_files/evm/chz_castling_rights_gvn_regression.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 2301 bytes
-  total: 2301 bytes
+  section runtime: 2298 bytes
+  total: 2298 bytes
 
 functions:
   abs_diff: ir_blocks=6 ir_insts=17 vcode_ops=38 fixups=3 imm_bytes=8
     mem: scratch_words=1 stable_words=0 stable_mode=None entry_abs_words=62 abs_words_end=1
   apply_rook: ir_blocks=18 ir_insts=155 vcode_ops=505 fixups=23 imm_bytes=116
     mem: scratch_words=8 stable_words=22 stable_mode=StaticAbs(base=0x5a0) entry_abs_words=40 abs_words_end=62
-  path_clear_file: ir_blocks=31 ir_insts=83 vcode_ops=230 fixups=18 imm_bytes=33
+  path_clear_file: ir_blocks=31 ir_insts=83 vcode_ops=227 fixups=18 imm_bytes=33
     mem: scratch_words=1 stable_words=1 stable_mode=StaticAbs(base=0x860) entry_abs_words=62 abs_words_end=63
   piece_at: ir_blocks=1 ir_insts=9 vcode_ops=19 fixups=0 imm_bytes=7
     mem: scratch_words=1 stable_words=0 stable_mode=None entry_abs_words=63 abs_words_end=1
@@ -32,7 +32,7 @@ functions:
     mem: scratch_words=1 stable_words=0 stable_mode=None entry_abs_words=40 abs_words_end=1
 
 evm:
-  case captured_rook_clears_castling_rights: calldata_len=0 success reason=Return gas_used=26096 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=5096
+  case captured_rook_clears_castling_rights: calldata_len=0 success reason=Return gas_used=26087 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=5087
 
 
 --------------- DEBUG ---------------
@@ -713,12 +713,9 @@ path_clear_file:
     SWAP2  // v114.i256 = and v1 255.i256;
     PUSH1 0xff (255)
     AND
-    SWAP1  // jump block14;
-    SWAP2
-    SWAP1
   block14:
     JUMPDEST
-    DUP2  // br v125 block25 block50;
+    DUP3  // br v125 block25 block50;
     ISZERO
     PUSH1 section_unit0
     JUMPI
@@ -727,7 +724,7 @@ path_clear_file:
     MLOAD
     PUSH1 0xff (255)  // v111.i256 = and v110 255.i256;
     AND
-    DUP4  // v55.i1 = gt v111 v91;
+    DUP3  // v55.i1 = gt v111 v91;
     DUP2
     GT
     ISZERO  // br v55 block15 block56;

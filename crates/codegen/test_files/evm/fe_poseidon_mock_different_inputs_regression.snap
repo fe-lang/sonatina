@@ -6,15 +6,15 @@ input_file: test_files/evm/fe_poseidon_mock_different_inputs_regression.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 2468 bytes
-  total: 2468 bytes
+  section runtime: 2466 bytes
+  total: 2466 bytes
 
 functions:
   ark: ir_blocks=8 ir_insts=45 vcode_ops=131 fixups=8 imm_bytes=26
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=6 abs_words_end=0
   sigma_full: ir_blocks=1 ir_insts=22 vcode_ops=60 fixups=0 imm_bytes=13
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=6 abs_words_end=0
-  mix: ir_blocks=7 ir_insts=37 vcode_ops=108 fixups=10 imm_bytes=22
+  mix: ir_blocks=7 ir_insts=37 vcode_ops=106 fixups=10 imm_bytes=22
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=6 abs_words_end=0
   poseidon_mock: ir_blocks=12 ir_insts=49 vcode_ops=150 fixups=19 imm_bytes=21
     mem: scratch_words=0 stable_words=6 stable_mode=StaticAbs(base=0xa0) entry_abs_words=0 abs_words_end=6
@@ -22,7 +22,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=47284 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=26284
+  case ok: calldata_len=0 success reason=Return gas_used=47140 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=26140
 
 
 --------------- DEBUG ---------------
@@ -269,8 +269,7 @@ mix:
     JUMP
   block15:
     JUMPDEST
-    SWAP1  // jump block5;
-    DUP6
+    DUP6  // jump block5;
     PUSH0
   block5:
     JUMPDEST
@@ -282,7 +281,6 @@ mix:
   block3:
     POP  // v16.i256 = add v8 1.i256;
     POP
-    SWAP1
     PUSH1 0x1 (1)
     ADD
     SWAP1  // v59.i256 = add v57 32.i256;
@@ -293,7 +291,7 @@ mix:
     JUMP
   block10:
     JUMPDEST
-    DUP3  // v29.i256 = mload v57 i256;
+    DUP4  // v29.i256 = mload v57 i256;
     MLOAD
     PUSH1 0x40 (64)  // v30.*[[i256; 3]; 3] = evm_malloc 288.i256;
     MLOAD
@@ -309,7 +307,7 @@ mix:
     DUP9
     DUP3
     CODECOPY
-    DUP6  // v38.*[i256; 3] = gep v30 0.i256 v8;
+    DUP5  // v38.*[i256; 3] = gep v30 0.i256 v8;
     PUSH1 0x60 (96)
     MUL
     ADD
@@ -326,7 +324,7 @@ mix:
     PUSH32 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001 (21888242871839275222246405745257275088548364400416034343698204186575808495617)  // v54.i256 = evm_add_mod v29 v52 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
     SWAP2
     ADDMOD
-    DUP4  // mstore v57 v54 i256;
+    DUP5  // mstore v57 v54 i256;
     MSTORE
     PUSH1 0x1 (1)  // v61.i256 = add v18 1.i256;
     ADD
