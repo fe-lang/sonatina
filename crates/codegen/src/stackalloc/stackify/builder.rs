@@ -329,7 +329,7 @@ fn compute_exact_local_addrs(
     func: &Function,
     value_aliases: &SecondaryMap<ValueId, Option<ValueId>>,
 ) -> SecondaryMap<ValueId, Option<ExactLocalAddr>> {
-    let analysis = MemoryAccessAnalysis::new();
+    let mut analysis = MemoryAccessAnalysis::new();
     let mut map: SecondaryMap<ValueId, Option<ExactLocalAddr>> = SecondaryMap::new();
     for value in func.dfg.value_ids() {
         let canonical = value_aliases[value].unwrap_or(value);
