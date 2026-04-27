@@ -5,7 +5,7 @@ use std::{
 
 use cranelift_entity::SecondaryMap;
 use smallvec::SmallVec;
-use sonatina_ir::{BlockId, ValueId, inst::control_flow::BranchKind};
+use sonatina_ir::{BlockId, InstId, ValueId};
 
 use crate::{
     bitset::BitSet,
@@ -14,14 +14,9 @@ use crate::{
 };
 
 use super::{
-    br_table::plan_br_table_compare_chain,
+    block_sim::{BlockSimMode, BlockSimState, BrTableEdgeKind, PlannerActionSink, run_block_sim},
     builder::StackifyContext,
-    iteration::{
-        clean_dead_stack_prefix, consume_operand_uses, count_block_uses,
-        improve_reachability_before_operands, inst_is_noop_alias_cast, last_use_values_in_inst,
-        operand_order_for_evm, skip_pre_exit_cleanup,
-    },
-    planner::{self, NormalizeSearchScratch, OperandPrepMode::TemplateSim, Planner},
+    planner::{NormalizeSearchScratch, OperandPrepMode, OperandPrepMode::TemplateSim, Planner},
     slots::{FreeSlotPools, SpillSlotPools},
     spill::SpillSet,
     sym_stack::{StackItem, SymStack},
@@ -47,6 +42,8 @@ struct FlowTemplateSolver<'a, 'ctx> {
     carry_in: &'a SecondaryMap<BlockId, BitSet<ValueId>>,
     state: &'a mut SecondaryMap<BlockId, LayoutState>,
     edge_cand: &'a mut EdgeCandMap,
+    actions: Actions,
+    changed_succs: SmallVec<[BlockId; 4]>,
     search_scratch: NormalizeSearchScratch,
 }
 
@@ -103,6 +100,8 @@ pub(super) fn solve_templates_from_flow(
         carry_in: &carry_in,
         state: &mut state,
         edge_cand: &mut edge_cand,
+        actions: Actions::new(),
+        changed_succs: SmallVec::new(),
         search_scratch: NormalizeSearchScratch::default(),
     };
 
@@ -191,20 +190,6 @@ fn record_edge_candidate(
     }
 }
 
-fn with_planner<'a, 'ctx, F>(
-    ctx: &'a StackifyContext<'ctx>,
-    mem: MemPlan<'a>,
-    search_scratch: &'a mut NormalizeSearchScratch,
-    stack: &'a mut SymStack,
-    actions: &'a mut Actions,
-    f: F,
-) where
-    F: FnOnce(&mut Planner<'a, 'ctx>),
-{
-    let mut planner = Planner::new(ctx, stack, actions, mem, search_scratch);
-    f(&mut planner);
-}
-
 impl<'a, 'ctx> FlowTemplateSolver<'a, 'ctx> {
     fn template_for(&self, block: BlockId) -> BlockTemplate {
         BlockTemplate {
@@ -218,324 +203,18 @@ impl<'a, 'ctx> FlowTemplateSolver<'a, 'ctx> {
         block: BlockId,
         template: &BlockTemplate,
     ) -> SmallVec<[BlockId; 4]> {
-        let ctx = self.ctx;
-        let spill = self.spill;
-        let slots = &mut *self.slots;
-        let spill_requests = &mut *self.spill_requests;
-        let carry_in = self.carry_in;
-        let edge_cand = &mut *self.edge_cand;
-        let search_scratch = &mut self.search_scratch;
-        let mut changed_succs = SmallVec::<[BlockId; 4]>::new();
-
-        let mut free_slots: FreeSlotPools = FreeSlotPools::default();
-        let mut actions: Actions = Actions::new();
-
-        let (mut remaining_uses, mut live_future) =
-            count_block_uses(ctx.func, block, &ctx.value_aliases);
-
-        let mut live_out = ctx.liveness.block_live_outs(block).clone();
-        live_out.union_with(&ctx.phi_out_sources[block]);
-
-        let mut stack = SymStack::from_template(template, ctx.has_internal_return);
-
-        let empty_last_use: BitSet<ValueId> = BitSet::default();
-
-        for inst in ctx.func.layout.iter_inst(block) {
-            if ctx.func.dfg.is_phi(inst) {
-                continue;
-            }
-
-            actions.clear();
-
-            let is_call = ctx.func.dfg.is_call(inst);
-            let is_normal =
-                ctx.func.dfg.branch_info(inst).is_none() && !ctx.func.dfg.is_return(inst);
-
-            let mut args = SmallVec::<[ValueId; 8]>::new();
-            let mut consume_last_use: BitSet<ValueId> = BitSet::default();
-            if is_normal {
-                args = operand_order_for_evm(ctx.func, inst, &ctx.value_aliases);
-                consume_last_use =
-                    last_use_values_in_inst(ctx.func, &args, &remaining_uses, &live_out);
-            }
-            let last_use = if is_normal {
-                &consume_last_use
-            } else {
-                &empty_last_use
-            };
-
-            let results: SmallVec<[ValueId; 4]> = ctx
-                .func
-                .dfg
-                .inst_results(inst)
-                .iter()
-                .map(|&v| ctx.canonicalize_value(v))
-                .collect();
-            let res = match results.as_slice() {
-                [res] => Some(*res),
-                _ => None,
-            };
-            if is_normal && inst_is_noop_alias_cast(ctx, inst, &args, res) {
-                // Typed alias-only no-op casts should be invisible to stack simulation:
-                // they do not move stack values, but still consume one SSA use.
-                consume_operand_uses(
-                    ctx.func,
-                    &args,
-                    &mut remaining_uses,
-                    &mut live_future,
-                    &live_out,
-                    &slots.scratch,
-                    &mut free_slots.scratch,
-                );
-                continue;
-            }
-
-            if !skip_pre_exit_cleanup(ctx.func, inst) {
-                clean_dead_stack_prefix(
-                    ctx.reach,
-                    &mut stack,
-                    &live_future,
-                    &live_out,
-                    &mut actions,
-                );
-            }
-
-            if is_normal && !skip_pre_exit_cleanup(ctx.func, inst) {
-                improve_reachability_before_operands(
-                    ctx.func,
-                    &args,
-                    ctx.reach,
-                    &mut stack,
-                    &live_future,
-                    &live_out,
-                    &mut actions,
-                );
-            }
-
-            if let Some(branch) = ctx.func.dfg.branch_info(inst) {
-                match branch.branch_kind() {
-                    BranchKind::Jump(jump) => {
-                        let dest = *jump.dest();
-                        record_edge_candidate(
-                            edge_cand,
-                            &mut changed_succs,
-                            block,
-                            dest,
-                            project_transfer(&stack, &carry_in[dest]),
-                        );
-                        return changed_succs;
-                    }
-                    BranchKind::Br(br) => {
-                        let cond = ctx.canonicalize_value(*br.cond());
-                        let consume_last_use =
-                            last_use_values_in_inst(ctx.func, &[cond], &remaining_uses, &live_out);
-
-                        improve_reachability_before_operands(
-                            ctx.func,
-                            &[cond],
-                            ctx.reach,
-                            &mut stack,
-                            &live_future,
-                            &live_out,
-                            &mut actions,
-                        );
-
-                        let mem = planner::MemPlan::new(
-                            spill,
-                            spill_requests,
-                            ctx,
-                            self.spill_obj,
-                            &ctx.exact_local_addr,
-                            &mut free_slots,
-                            slots,
-                        );
-                        with_planner(
-                            ctx,
-                            mem,
-                            search_scratch,
-                            &mut stack,
-                            &mut actions,
-                            |planner| {
-                                planner.prepare_operands(&[cond], &consume_last_use, TemplateSim)
-                            },
-                        );
-
-                        // The backend consumes the condition value for the actual branch.
-                        let mut post_branch_stack = stack.clone();
-                        post_branch_stack.pop_operand();
-
-                        for succ in branch.dests().iter().copied() {
-                            record_edge_candidate(
-                                edge_cand,
-                                &mut changed_succs,
-                                block,
-                                succ,
-                                project_transfer(&post_branch_stack, &carry_in[succ]),
-                            );
-                        }
-                        return changed_succs;
-                    }
-                    BranchKind::BrTable(table) => {
-                        let scrutinee = ctx.canonicalize_value(*table.scrutinee());
-
-                        improve_reachability_before_operands(
-                            ctx.func,
-                            &[scrutinee],
-                            ctx.reach,
-                            &mut stack,
-                            &live_future,
-                            &live_out,
-                            &mut actions,
-                        );
-
-                        let (case_stacks, default_stack) = plan_br_table_compare_chain(
-                            table.table(),
-                            &stack,
-                            |_, case_val, case_stack| {
-                                let mem = planner::MemPlan::new(
-                                    spill,
-                                    spill_requests,
-                                    ctx,
-                                    self.spill_obj,
-                                    &ctx.exact_local_addr,
-                                    &mut free_slots,
-                                    slots,
-                                );
-                                let mut case_actions = Actions::new();
-                                with_planner(
-                                    ctx,
-                                    mem,
-                                    search_scratch,
-                                    case_stack,
-                                    &mut case_actions,
-                                    |planner| {
-                                        let consume_last_use = BitSet::<ValueId>::default();
-                                        let mut compare_args =
-                                            smallvec::smallvec![scrutinee, case_val];
-                                        planner.prepare_operands_for_commutative_pair(
-                                            &mut compare_args,
-                                            &consume_last_use,
-                                            TemplateSim,
-                                        );
-                                    },
-                                );
-                            },
-                        );
-
-                        for case in case_stacks {
-                            record_edge_candidate(
-                                edge_cand,
-                                &mut changed_succs,
-                                block,
-                                case.dest,
-                                project_transfer(&case.post_compare_stack, &carry_in[case.dest]),
-                            );
-                        }
-                        if let Some(default) = table.default() {
-                            record_edge_candidate(
-                                edge_cand,
-                                &mut changed_succs,
-                                block,
-                                *default,
-                                project_transfer(&default_stack, &carry_in[*default]),
-                            );
-                        }
-                        return changed_succs;
-                    }
-                }
-            }
-
-            if ctx.func.dfg.is_return(inst) {
-                let mem = planner::MemPlan::new(
-                    spill,
-                    spill_requests,
-                    ctx,
-                    self.spill_obj,
-                    &ctx.exact_local_addr,
-                    &mut free_slots,
-                    slots,
-                );
-                with_planner(
-                    ctx,
-                    mem,
-                    search_scratch,
-                    &mut stack,
-                    &mut actions,
-                    |planner| planner.plan_internal_return(inst),
-                );
-                return changed_succs;
-            }
-
-            // Normal instruction.
-            let mem = planner::MemPlan::new(
-                spill,
-                spill_requests,
-                ctx,
-                self.spill_obj,
-                &ctx.exact_local_addr,
-                &mut free_slots,
-                slots,
-            );
-
-            with_planner(
-                ctx,
-                mem,
-                search_scratch,
-                &mut stack,
-                &mut actions,
-                |planner| planner.prepare_operands_for_inst(inst, &mut args, last_use, TemplateSim),
-            );
-
-            if is_call {
-                stack.push_call_continuation(&mut actions);
-                stack.position_call_ret_below_operands(args.len(), &mut actions);
-            }
-
-            consume_operand_uses(
-                ctx.func,
-                &args,
-                &mut remaining_uses,
-                &mut live_future,
-                &live_out,
-                &slots.scratch,
-                &mut free_slots.scratch,
-            );
-
-            stack.pop_n_operands(args.len());
-
-            if is_call {
-                stack.remove_call_ret_addr();
-            }
-
-            for &res in results.iter().rev() {
-                stack.push_value(res);
-            }
-
-            for (depth, &res) in results.iter().enumerate() {
-                if !live_future.contains(res) && !live_out.contains(res) {
-                    continue;
-                }
-                let mem = planner::MemPlan::new(
-                    spill,
-                    spill_requests,
-                    ctx,
-                    self.spill_obj,
-                    &ctx.exact_local_addr,
-                    &mut free_slots,
-                    slots,
-                );
-                with_planner(
-                    ctx,
-                    mem,
-                    search_scratch,
-                    &mut stack,
-                    &mut actions,
-                    |planner| planner.emit_store_if_spilled_at_depth(res, depth),
-                );
-            }
-        }
-
-        changed_succs
+        self.actions.clear();
+        self.changed_succs.clear();
+        let stack = SymStack::from_template(template, self.ctx.has_internal_return);
+        let state = BlockSimState::new(
+            self.ctx,
+            block,
+            stack,
+            FreeSlotPools::default(),
+            Actions::new(),
+        );
+        run_block_sim(self, state);
+        std::mem::take(&mut self.changed_succs)
     }
 
     fn solve_scc(&mut self, scc: SccId) {
@@ -695,6 +374,115 @@ impl<'a, 'ctx> FlowTemplateSolver<'a, 'ctx> {
                 cand
             };
         }
+    }
+}
+
+impl<'a, 'ctx> BlockSimMode<'ctx> for FlowTemplateSolver<'a, 'ctx> {
+    fn ctx(&self) -> &StackifyContext<'ctx> {
+        self.ctx
+    }
+
+    fn operand_prep_mode(&self) -> OperandPrepMode {
+        TemplateSim
+    }
+
+    fn call_uses_stack_continuation(&self, _inst: InstId) -> bool {
+        true
+    }
+
+    fn scratch_slots(&self) -> &super::slots::SlotPool {
+        &self.slots.scratch
+    }
+
+    fn clear_inst_actions(&mut self, _inst: InstId) {
+        self.actions.clear();
+    }
+
+    fn pre_actions_len(&self, _inst: InstId) -> usize {
+        self.actions.len()
+    }
+
+    fn with_pre_actions<R>(&mut self, _inst: InstId, f: impl FnOnce(&mut Actions) -> R) -> R {
+        f(&mut self.actions)
+    }
+
+    fn with_planner<R>(
+        &mut self,
+        stack: &mut SymStack,
+        free_slots: &mut FreeSlotPools,
+        sink: PlannerActionSink<'_>,
+        f: impl FnOnce(&mut Planner<'_, '_>) -> R,
+    ) -> R {
+        let ctx = self.ctx;
+        let mut case_actions;
+        let actions = match sink {
+            PlannerActionSink::BrTableCase { .. } => {
+                case_actions = Actions::new();
+                &mut case_actions
+            }
+            PlannerActionSink::Pre(_) | PlannerActionSink::Post(_) => &mut self.actions,
+        };
+        let mem = MemPlan::new(
+            self.spill,
+            &mut *self.spill_requests,
+            ctx,
+            self.spill_obj,
+            &ctx.exact_local_addr,
+            free_slots,
+            &mut *self.slots,
+        );
+        let mut planner = Planner::new(ctx, stack, actions, mem, &mut self.search_scratch);
+        f(&mut planner)
+    }
+
+    fn on_jump(
+        &mut self,
+        state: &mut BlockSimState,
+        _inst: InstId,
+        dest: BlockId,
+        stack: SymStack,
+        _action_start: usize,
+    ) {
+        record_edge_candidate(
+            self.edge_cand,
+            &mut self.changed_succs,
+            state.block,
+            dest,
+            project_transfer(&stack, &self.carry_in[dest]),
+        );
+    }
+
+    fn on_branch_edge(
+        &mut self,
+        state: &mut BlockSimState,
+        _inst: InstId,
+        succ: BlockId,
+        stack: SymStack,
+    ) {
+        record_edge_candidate(
+            self.edge_cand,
+            &mut self.changed_succs,
+            state.block,
+            succ,
+            project_transfer(&stack, &self.carry_in[succ]),
+        );
+    }
+
+    fn on_br_table_edge(
+        &mut self,
+        state: &mut BlockSimState,
+        _inst: InstId,
+        succ: BlockId,
+        stack: SymStack,
+        _kind: BrTableEdgeKind,
+    ) {
+        record_edge_candidate(
+            self.edge_cand,
+            &mut self.changed_succs,
+            state.block,
+            succ,
+            project_transfer(&stack, &self.carry_in[succ]),
+        );
     }
 }
 

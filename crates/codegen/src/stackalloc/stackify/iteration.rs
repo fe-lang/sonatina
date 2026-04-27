@@ -1,15 +1,15 @@
 use cranelift_entity::SecondaryMap;
 use smallvec::SmallVec;
-use sonatina_ir::{BlockId, Function, Immediate, InstId, ValueId, inst::control_flow::BranchKind};
+use sonatina_ir::{BlockId, Function, Immediate, InstId, ValueId};
 use std::collections::BTreeMap;
 
 use crate::{bitset::BitSet, isa::evm::immediate_u32, stackalloc::Actions};
 
 use super::{
     alloc::StackifyAlloc,
-    br_table::plan_br_table_compare_chain,
+    block_sim::{BlockSimMode, BlockSimState, BrTableEdgeKind, PlannerActionSink, run_block_sim},
     builder::{StackifyContext, StackifyReachability},
-    planner::{self, NormalizeSearchScratch, OperandPrepMode::Exact, Planner},
+    planner::{self, NormalizeSearchScratch, OperandPrepMode, OperandPrepMode::Exact, Planner},
     slots::{FreeSlotPools, FreeSlots, SlotPool, SpillSlotPools},
     spill::SpillSet,
     sym_stack::{StackItem, SymStack},
@@ -34,22 +34,6 @@ pub(super) struct IterationPlanner<'a, 'ctx, O: StackifyObserver> {
     planned_blocks: BitSet<BlockId>,
     search_scratch: NormalizeSearchScratch,
     observer: &'a mut O,
-}
-
-struct BlockPlanState {
-    block: BlockId,
-    free_slots: FreeSlotPools,
-    prologue: Actions,
-    injected_prologue: bool,
-    remaining_uses: BTreeMap<ValueId, u32>,
-    live_future: BitSet<ValueId>,
-    live_out: BitSet<ValueId>,
-    stack: SymStack,
-}
-
-enum InstOutcome {
-    Continue,
-    TerminateBlock,
 }
 
 impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
@@ -80,55 +64,13 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
         }
     }
 
-    fn with_planner<R>(
+    fn with_actions_planner<R>(
         &mut self,
         stack: &mut SymStack,
         actions: &mut Actions,
         free_slots: &mut FreeSlotPools,
         f: impl FnOnce(&mut Planner) -> R,
     ) -> R {
-        let mem = planner::MemPlan::new(
-            self.spill,
-            &mut *self.spill_requests,
-            self.ctx,
-            &self.alloc.spill_obj,
-            &self.alloc.exact_local_addr,
-            free_slots,
-            &mut *self.slots,
-        );
-        let mut planner = Planner::new(self.ctx, stack, actions, mem, &mut self.search_scratch);
-        f(&mut planner)
-    }
-
-    fn with_pre_actions_planner<R>(
-        &mut self,
-        stack: &mut SymStack,
-        inst: InstId,
-        free_slots: &mut FreeSlotPools,
-        f: impl FnOnce(&mut Planner) -> R,
-    ) -> R {
-        let actions = &mut self.alloc.pre_actions[inst];
-        let mem = planner::MemPlan::new(
-            self.spill,
-            &mut *self.spill_requests,
-            self.ctx,
-            &self.alloc.spill_obj,
-            &self.alloc.exact_local_addr,
-            free_slots,
-            &mut *self.slots,
-        );
-        let mut planner = Planner::new(self.ctx, stack, actions, mem, &mut self.search_scratch);
-        f(&mut planner)
-    }
-
-    fn with_post_actions_planner<R>(
-        &mut self,
-        stack: &mut SymStack,
-        inst: InstId,
-        free_slots: &mut FreeSlotPools,
-        f: impl FnOnce(&mut Planner) -> R,
-    ) -> R {
-        let actions = &mut self.alloc.post_actions[inst];
         let mem = planner::MemPlan::new(
             self.spill,
             &mut *self.spill_requests,
@@ -157,15 +99,11 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
     fn plan_block(&mut self, block: BlockId) {
         let mut free_slots: FreeSlotPools = FreeSlotPools::default();
         let mut prologue: Actions = Actions::new();
-        let injected_prologue = false;
 
         self.planned_blocks.insert(block);
 
-        // Track per-block remaining uses to implement `PopDeadTops`.
-        let (remaining_uses, live_future) =
-            count_block_uses(self.ctx.func, block, &self.ctx.value_aliases);
-        let mut live_out = self.ctx.liveness.block_live_outs(block).clone();
-        live_out.union_with(&self.ctx.phi_out_sources[block]);
+        let (remaining_uses, live_future, live_out) =
+            BlockSimState::block_live_sets(self.ctx, block);
 
         let inherited = self.inherited_stack.remove(&block);
         let stack = if self.terminal_chain_blocks[block] {
@@ -199,9 +137,14 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
                 // reshuffling that can cascade into SWAP/POP churn.
                 if has_phi_params || in_cycle {
                     let templates = self.templates;
-                    self.with_planner(&mut inh, &mut prologue, &mut free_slots, |planner| {
-                        planner.plan_edge_fixup(templates, pred, block);
-                    });
+                    self.with_actions_planner(
+                        &mut inh,
+                        &mut prologue,
+                        &mut free_slots,
+                        |planner| {
+                            planner.plan_edge_fixup(templates, pred, block);
+                        },
+                    );
                 }
                 self.observer.on_block_prologue(&prologue);
             }
@@ -210,28 +153,16 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
             SymStack::from_template(&self.templates[block], self.ctx.has_internal_return)
         };
 
-        let mut state = BlockPlanState {
+        let state = BlockSimState::with_live_sets(
             block,
+            stack,
             free_slots,
             prologue,
-            injected_prologue,
             remaining_uses,
             live_future,
             live_out,
-            stack,
-        };
-
-        let empty_last_use: BitSet<ValueId> = BitSet::default();
-        for inst in self.ctx.func.layout.iter_inst(block) {
-            if self.ctx.func.dfg.is_phi(inst) {
-                continue;
-            }
-
-            match self.plan_inst(&mut state, inst, &empty_last_use) {
-                InstOutcome::Continue => {}
-                InstOutcome::TerminateBlock => break,
-            }
-        }
+        );
+        let state = run_block_sim(self, state);
 
         // If the block had no lowered instructions, inject prologue into the terminator.
         if !state.prologue.is_empty()
@@ -241,385 +172,257 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
             self.alloc.pre_actions[term].extend_from_slice(&state.prologue);
         }
     }
+}
 
-    fn plan_inst(
+impl<'a, 'ctx, O: StackifyObserver> BlockSimMode<'ctx> for IterationPlanner<'a, 'ctx, O> {
+    fn ctx(&self) -> &StackifyContext<'ctx> {
+        self.ctx
+    }
+
+    fn operand_prep_mode(&self) -> OperandPrepMode {
+        Exact
+    }
+
+    fn call_uses_stack_continuation(&self, inst: InstId) -> bool {
+        call_has_local_return(self.ctx.func, inst)
+    }
+
+    fn scratch_slots(&self) -> &SlotPool {
+        &self.slots.scratch
+    }
+
+    fn clear_inst_actions(&mut self, inst: InstId) {
+        self.alloc.pre_actions[inst].clear();
+        self.alloc.post_actions[inst].clear();
+        self.alloc.brtable_actions[inst].clear();
+    }
+
+    fn pre_actions_len(&self, inst: InstId) -> usize {
+        self.alloc.pre_actions[inst].len()
+    }
+
+    fn with_pre_actions<R>(&mut self, inst: InstId, f: impl FnOnce(&mut Actions) -> R) -> R {
+        f(&mut self.alloc.pre_actions[inst])
+    }
+
+    fn take_pre_actions_for_br_table(&mut self, inst: InstId) -> Actions {
+        std::mem::take(&mut self.alloc.pre_actions[inst])
+    }
+
+    fn with_planner<R>(
         &mut self,
-        state: &mut BlockPlanState,
+        stack: &mut SymStack,
+        free_slots: &mut FreeSlotPools,
+        sink: PlannerActionSink<'_>,
+        f: impl FnOnce(&mut Planner<'_, '_>) -> R,
+    ) -> R {
+        match sink {
+            PlannerActionSink::Pre(inst) => {
+                let mem = planner::MemPlan::new(
+                    self.spill,
+                    &mut *self.spill_requests,
+                    self.ctx,
+                    &self.alloc.spill_obj,
+                    &self.alloc.exact_local_addr,
+                    free_slots,
+                    &mut *self.slots,
+                );
+                let mut planner = Planner::new(
+                    self.ctx,
+                    stack,
+                    &mut self.alloc.pre_actions[inst],
+                    mem,
+                    &mut self.search_scratch,
+                );
+                f(&mut planner)
+            }
+            PlannerActionSink::Post(inst) => {
+                let mem = planner::MemPlan::new(
+                    self.spill,
+                    &mut *self.spill_requests,
+                    self.ctx,
+                    &self.alloc.spill_obj,
+                    &self.alloc.exact_local_addr,
+                    free_slots,
+                    &mut *self.slots,
+                );
+                let mut planner = Planner::new(
+                    self.ctx,
+                    stack,
+                    &mut self.alloc.post_actions[inst],
+                    mem,
+                    &mut self.search_scratch,
+                );
+                f(&mut planner)
+            }
+            PlannerActionSink::BrTableCase {
+                inst,
+                case_idx,
+                prefix,
+            } => {
+                let mut actions = Actions::new();
+                if let Some(prefix) = prefix {
+                    actions.extend_from_slice(prefix);
+                }
+                let mem = planner::MemPlan::new(
+                    self.spill,
+                    &mut *self.spill_requests,
+                    self.ctx,
+                    &self.alloc.spill_obj,
+                    &self.alloc.exact_local_addr,
+                    free_slots,
+                    &mut *self.slots,
+                );
+                let result = {
+                    let mut planner =
+                        Planner::new(self.ctx, stack, &mut actions, mem, &mut self.search_scratch);
+                    f(&mut planner)
+                };
+                debug_assert_eq!(self.alloc.brtable_actions[inst].len(), case_idx);
+                self.alloc.brtable_actions[inst].push(actions);
+                result
+            }
+        }
+    }
+
+    fn on_inst_start(
+        &mut self,
+        state: &mut BlockSimState,
         inst: InstId,
-        empty_last_use: &BitSet<ValueId>,
-    ) -> InstOutcome {
-        // Inject prologue actions once, at the first lowered instruction.
+        last_use: &BitSet<ValueId>,
+    ) {
         if !state.prologue.is_empty() && !state.injected_prologue {
             self.alloc.pre_actions[inst].extend_from_slice(&state.prologue);
             state.injected_prologue = true;
         }
-
-        let is_call = self.ctx.func.dfg.is_call(inst);
-        let call_has_local_return = is_call && call_has_local_return(self.ctx.func, inst);
-        let is_normal =
-            self.ctx.func.dfg.branch_info(inst).is_none() && !self.ctx.func.dfg.is_return(inst);
-        let skip_cleanup = skip_pre_exit_cleanup(self.ctx.func, inst);
-
-        let mut args = SmallVec::<[ValueId; 8]>::new();
-        let mut consume_last_use: BitSet<ValueId> = BitSet::default();
-        if is_normal {
-            args = operand_order_for_evm(self.ctx.func, inst, &self.ctx.value_aliases);
-            consume_last_use = last_use_values_in_inst(
-                self.ctx.func,
-                &args,
-                &state.remaining_uses,
-                &state.live_out,
-            );
-        }
-        let last_use = if is_normal {
-            &consume_last_use
-        } else {
-            empty_last_use
-        };
         self.observer.on_inst_start(
             self.ctx.func,
             inst,
             &state.stack,
-            &state.live_future,
-            &state.live_out,
+            state.live_future(),
+            state.live_out(),
             last_use,
         );
+    }
 
-        let results: SmallVec<[ValueId; 4]> = self
+    fn on_alias_noop(&mut self, inst: InstId, args: &[ValueId], results: &[ValueId]) {
+        self.observer.on_inst_actions("cleanup", &[], None);
+        self.observer.on_inst_actions("pre", &[], None);
+        self.observer
+            .on_inst_normal(self.ctx.func, inst, args, results);
+        self.observer.on_inst_actions("post", &[], None);
+    }
+
+    fn on_cleanup_actions(&mut self, inst: InstId, start: usize, end: usize) {
+        self.observer
+            .on_inst_actions("cleanup", &self.alloc.pre_actions[inst][start..end], None);
+    }
+
+    fn on_pre_actions(&mut self, inst: InstId, start: usize) {
+        self.observer
+            .on_inst_actions("pre", &self.alloc.pre_actions[inst][start..], None);
+    }
+
+    fn on_post_actions(&mut self, inst: InstId) {
+        self.observer
+            .on_inst_actions("post", &self.alloc.post_actions[inst], None);
+    }
+
+    fn on_normal_inst(&mut self, inst: InstId, args: &[ValueId], results: &[ValueId]) {
+        self.observer
+            .on_inst_normal(self.ctx.func, inst, args, results);
+    }
+
+    fn on_return(&mut self, inst: InstId, start: usize) {
+        self.observer
+            .on_inst_actions("return", &self.alloc.pre_actions[inst][start..], None);
+        let ret_vals: SmallVec<[ValueId; 16]> = self
             .ctx
             .func
             .dfg
-            .inst_results(inst)
-            .iter()
-            .map(|&v| self.ctx.canonicalize_value(v))
-            .collect();
-        let res = match results.as_slice() {
-            [res] => Some(*res),
-            _ => None,
-        };
-        if is_normal && inst_is_noop_alias_cast(self.ctx, inst, &args, res) {
-            self.observer.on_inst_actions("cleanup", &[], None);
-            self.observer.on_inst_actions("pre", &[], None);
-            self.observer
-                .on_inst_normal(self.ctx.func, inst, &args, results.as_slice());
-
-            // The instruction is a typed alias-only cast for EVM stackify purposes:
-            // it does not consume or produce stack values, but it still counts as an SSA use.
-            consume_operand_uses(
-                self.ctx.func,
-                &args,
-                &mut state.remaining_uses,
-                &mut state.live_future,
-                &state.live_out,
-                &self.slots.scratch,
-                &mut state.free_slots.scratch,
-            );
-
-            self.observer.on_inst_actions("post", &[], None);
-            return InstOutcome::Continue;
-        }
-
-        // Stable cleanup: pop dead values (and dead chains under the top live value).
-        let before_cleanup_len = self.alloc.pre_actions[inst].len();
-        if !skip_cleanup {
-            clean_dead_stack_prefix(
-                self.ctx.reach,
-                &mut state.stack,
-                &state.live_future,
-                &state.live_out,
-                &mut self.alloc.pre_actions[inst],
-            );
-        }
-
-        // Try to improve operand reachability before operand preparation:
-        // - do nothing if all operands are already `DUP16`-reachable
-        // - otherwise, if an operand is close (within a small depth window), delete dead values,
-        //   redundant duplicates, and (small) immediates above it to pull it back into reach
-        // This helps avoid unnecessary spill-set growth.
-        if is_normal && !skip_cleanup {
-            improve_reachability_before_operands(
-                self.ctx.func,
-                &args,
-                self.ctx.reach,
-                &mut state.stack,
-                &state.live_future,
-                &state.live_out,
-                &mut self.alloc.pre_actions[inst],
-            );
-        }
-        let after_cleanup_len = self.alloc.pre_actions[inst].len();
-        self.observer.on_inst_actions(
-            "cleanup",
-            &self.alloc.pre_actions[inst][before_cleanup_len..after_cleanup_len],
-            None,
-        );
-
-        if let Some(branch) = self.ctx.func.dfg.branch_info(inst) {
-            match branch.branch_kind() {
-                BranchKind::Jump(jump) => {
-                    let dest = *jump.dest();
-                    if self.terminal_chain_blocks[dest] {
-                    } else if self.ctx.cfg.pred_num_of(dest) == 1
-                        && dest != self.ctx.entry
-                        && !self.planned_blocks.contains(dest)
-                    {
-                        // Match `br` lowering: single-predecessor blocks can inherit the
-                        // predecessor stack directly, and will normalize in a block prologue
-                        // only when required (phis/cycles). If the destination block has
-                        // already been planned, we must fix up the edge directly because there
-                        // will be no future block prologue to consume this inherited stack.
-                        self.inherited_stack
-                            .entry(dest)
-                            .or_insert_with(|| (state.block, state.stack.clone()));
-                    } else {
-                        // Multi-predecessor blocks, the already-planned entry block, and any
-                        // other already-planned destination must observe a single chosen entry
-                        // template at the edge. Fix up the predecessor stack to that template
-                        // (including per-edge phi sources).
-                        let templates = self.templates;
-                        let src = state.block;
-                        self.with_pre_actions_planner(
-                            &mut state.stack,
-                            inst,
-                            &mut state.free_slots,
-                            |p| {
-                                p.plan_edge_fixup(templates, src, dest);
-                            },
-                        );
-                    }
-
-                    self.observer.on_inst_actions(
-                        "exit",
-                        &self.alloc.pre_actions[inst][after_cleanup_len..],
-                        Some(dest),
-                    );
-                    self.observer.on_inst_jump(inst, dest);
-                    return InstOutcome::TerminateBlock;
-                }
-                BranchKind::Br(br) => {
-                    // Ensure the branch condition is on top for the backend's JUMPI sequence.
-                    // We intentionally do not canonicalize the transfer region here: branch
-                    // targets are single-predecessor blocks (after critical-edge splitting)
-                    // and will run an entry prologue to normalize to their templates.
-                    let cond = *br.cond();
-                    let cond = self.ctx.canonicalize_value(cond);
-                    let consume_last_use = last_use_values_in_inst(
-                        self.ctx.func,
-                        &[cond],
-                        &state.remaining_uses,
-                        &state.live_out,
-                    );
-
-                    improve_reachability_before_operands(
-                        self.ctx.func,
-                        &[cond],
-                        self.ctx.reach,
-                        &mut state.stack,
-                        &state.live_future,
-                        &state.live_out,
-                        &mut self.alloc.pre_actions[inst],
-                    );
-                    self.with_pre_actions_planner(
-                        &mut state.stack,
-                        inst,
-                        &mut state.free_slots,
-                        |p| {
-                            p.prepare_operands(&[cond], &consume_last_use, Exact);
-                        },
-                    );
-
-                    self.observer.on_inst_actions(
-                        "pre",
-                        &self.alloc.pre_actions[inst][after_cleanup_len..],
-                        None,
-                    );
-                    let dests = branch.dests();
-                    self.observer
-                        .on_inst_br(self.ctx.func, inst, cond, dests.as_slice());
-
-                    // The backend consumes the condition value for the actual branch.
-                    let mut post_branch_stack = state.stack.clone();
-                    post_branch_stack.pop_operand();
-
-                    for succ in dests.iter().copied() {
-                        debug_assert_eq!(
-                            self.ctx.cfg.pred_num_of(succ),
-                            1,
-                            "no critical edges: branch target must be single-pred"
-                        );
-                        self.inherited_stack
-                            .entry(succ)
-                            .or_insert_with(|| (state.block, post_branch_stack.clone()));
-                    }
-                    return InstOutcome::TerminateBlock;
-                }
-                BranchKind::BrTable(table) => {
-                    // Build per-case compare actions. As with `br`, we normalize successor entry
-                    // stacks in their block prologues, but unlike `br` the compare ladder does
-                    // not restore the original stack between cases. Each case must plan from the
-                    // non-taken stack left by the previous `EQ; JUMPI`.
-                    let scrutinee = *table.scrutinee();
-                    let scrutinee = self.ctx.canonicalize_value(scrutinee);
-
-                    improve_reachability_before_operands(
-                        self.ctx.func,
-                        &[scrutinee],
-                        self.ctx.reach,
-                        &mut state.stack,
-                        &state.live_future,
-                        &state.live_out,
-                        &mut self.alloc.pre_actions[inst],
-                    );
-
-                    // `br_table` lowering uses per-case `Allocator::read_br_table_case()` calls.
-                    // Treat any actions accumulated for this terminator as a "one-time prefix"
-                    // executed by the first case.
-                    let base_actions = self.alloc.pre_actions[inst].clone();
-                    self.alloc.pre_actions[inst].clear();
-
-                    let (case_stacks, default_stack) = plan_br_table_compare_chain(
-                        table.table(),
-                        &state.stack,
-                        |case_idx, case_val, case_stack| {
-                            let mut case_actions = Actions::new();
-                            if case_idx == 0 {
-                                case_actions.extend_from_slice(&base_actions);
-                            }
-                            self.with_planner(
-                                case_stack,
-                                &mut case_actions,
-                                &mut state.free_slots,
-                                |p| {
-                                    let consume_last_use = BitSet::<ValueId>::default();
-                                    let mut compare_args = smallvec::smallvec![scrutinee, case_val];
-                                    p.prepare_operands_for_commutative_pair(
-                                        &mut compare_args,
-                                        &consume_last_use,
-                                        Exact,
-                                    );
-                                },
-                            );
-                            debug_assert_eq!(self.alloc.brtable_actions[inst].len(), case_idx);
-                            self.alloc.brtable_actions[inst].push(case_actions);
-                        },
-                    );
-
-                    for case in case_stacks {
-                        debug_assert_eq!(
-                            self.ctx.cfg.pred_num_of(case.dest),
-                            1,
-                            "no critical edges: br_table target must be single-pred"
-                        );
-                        self.inherited_stack
-                            .entry(case.dest)
-                            .or_insert_with(|| (state.block, case.post_compare_stack));
-                    }
-
-                    if let Some(default) = table.default() {
-                        debug_assert_eq!(
-                            self.ctx.cfg.pred_num_of(*default),
-                            1,
-                            "no critical edges: br_table default must be single-pred"
-                        );
-                        self.inherited_stack
-                            .entry(*default)
-                            .or_insert_with(|| (state.block, default_stack));
-                    }
-
-                    self.observer.on_inst_br_table(inst);
-                    return InstOutcome::TerminateBlock;
-                }
-            }
-        }
-
-        if self.ctx.func.dfg.is_return(inst) {
-            // Internal return: ensure only (return_val?, ret_addr) remain above the opaque caller
-            // stack segment.
-            self.with_pre_actions_planner(&mut state.stack, inst, &mut state.free_slots, |p| {
-                p.plan_internal_return(inst);
-            });
-            self.observer.on_inst_actions(
-                "return",
-                &self.alloc.pre_actions[inst][after_cleanup_len..],
-                None,
-            );
-            let ret_vals: SmallVec<[ValueId; 16]> = self
-                .ctx
-                .func
-                .dfg
-                .return_args(inst)
-                .map(|args| args.iter().copied().collect())
-                .unwrap_or_default();
-            self.observer
-                .on_inst_return(self.ctx.func, inst, ret_vals.as_slice());
-            return InstOutcome::TerminateBlock;
-        }
-
-        // Normal instruction.
-        self.with_pre_actions_planner(&mut state.stack, inst, &mut state.free_slots, |p| {
-            p.prepare_operands_for_inst(inst, &mut args, &consume_last_use, Exact);
-        });
-
-        if call_has_local_return {
-            // Insert the continuation marker after operand preparation so operand prep cannot
-            // reorder it relative to the call operands.
-            state
-                .stack
-                .push_call_continuation(&mut self.alloc.pre_actions[inst]);
-            state
-                .stack
-                .position_call_ret_below_operands(args.len(), &mut self.alloc.pre_actions[inst]);
-        }
-
-        self.observer.on_inst_actions(
-            "pre",
-            &self.alloc.pre_actions[inst][after_cleanup_len..],
-            None,
-        );
+            .return_args(inst)
+            .map(|args| args.iter().copied().collect())
+            .unwrap_or_default();
         self.observer
-            .on_inst_normal(self.ctx.func, inst, &args, results.as_slice());
+            .on_inst_return(self.ctx.func, inst, ret_vals.as_slice());
+    }
 
-        consume_operand_uses(
-            self.ctx.func,
-            &args,
-            &mut state.remaining_uses,
-            &mut state.live_future,
-            &state.live_out,
-            &self.slots.scratch,
-            &mut state.free_slots.scratch,
-        );
-
-        let arity = args.len();
-        state.stack.pop_n_operands(arity);
-
-        // Call consumes the temporary continuation target (not an SSA value).
-        if call_has_local_return {
-            state.stack.remove_call_ret_addr();
-        }
-
-        for &res in results.iter().rev() {
-            state.stack.push_value(res);
-        }
-
-        for (depth, &res) in results.iter().enumerate() {
-            let res_live = state.live_future.contains(res) || state.live_out.contains(res);
-            if !res_live {
-                continue;
-            }
-            self.with_post_actions_planner(
+    fn on_jump(
+        &mut self,
+        state: &mut BlockSimState,
+        inst: InstId,
+        dest: BlockId,
+        _stack: SymStack,
+        action_start: usize,
+    ) {
+        if self.terminal_chain_blocks[dest] {
+        } else if self.ctx.cfg.pred_num_of(dest) == 1
+            && dest != self.ctx.entry
+            && !self.planned_blocks.contains(dest)
+        {
+            self.inherited_stack
+                .entry(dest)
+                .or_insert_with(|| (state.block, state.stack.clone()));
+        } else {
+            let templates = self.templates;
+            let src = state.block;
+            self.with_planner(
                 &mut state.stack,
-                inst,
                 &mut state.free_slots,
-                |planner| {
-                    planner.emit_store_if_spilled_at_depth(res, depth);
-                },
+                PlannerActionSink::Pre(inst),
+                |planner| planner.plan_edge_fixup(templates, src, dest),
             );
         }
 
-        self.observer
-            .on_inst_actions("post", &self.alloc.post_actions[inst], None);
+        self.observer.on_inst_actions(
+            "exit",
+            &self.alloc.pre_actions[inst][action_start..],
+            Some(dest),
+        );
+        self.observer.on_inst_jump(inst, dest);
+    }
 
-        InstOutcome::Continue
+    fn on_branch(&mut self, inst: InstId, cond: ValueId, dests: &[BlockId]) {
+        self.observer.on_inst_br(self.ctx.func, inst, cond, dests);
+    }
+
+    fn on_branch_edge(
+        &mut self,
+        state: &mut BlockSimState,
+        _inst: InstId,
+        succ: BlockId,
+        stack: SymStack,
+    ) {
+        debug_assert_eq!(
+            self.ctx.cfg.pred_num_of(succ),
+            1,
+            "no critical edges: branch target must be single-pred"
+        );
+        self.inherited_stack
+            .entry(succ)
+            .or_insert_with(|| (state.block, stack));
+    }
+
+    fn on_br_table_edge(
+        &mut self,
+        state: &mut BlockSimState,
+        _inst: InstId,
+        succ: BlockId,
+        stack: SymStack,
+        _kind: BrTableEdgeKind,
+    ) {
+        debug_assert_eq!(
+            self.ctx.cfg.pred_num_of(succ),
+            1,
+            "no critical edges: br_table target must be single-pred"
+        );
+        self.inherited_stack
+            .entry(succ)
+            .or_insert_with(|| (state.block, stack));
+    }
+
+    fn on_br_table(&mut self, inst: InstId) {
+        self.observer.on_inst_br_table(inst);
     }
 }
 

@@ -21,6 +21,7 @@
 //!   into the caller's preserved stack segment.
 
 mod alloc;
+mod block_sim;
 mod br_table;
 mod builder;
 mod flow_templates;
