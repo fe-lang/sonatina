@@ -19,7 +19,7 @@ use super::{
     sym_stack::SymStack,
     templates::{
         DefInfo, compute_def_info, compute_dom_depth, compute_phi_out_sources, compute_phi_results,
-        function_has_internal_return,
+        function_has_internal_return, seed_block_templates,
     },
     terminal_chain::compute_terminal_chain_blocks,
     trace::{NullObserver, StackifyObserver},
@@ -246,12 +246,24 @@ impl<'a> StackifyBuilder<'a> {
 
         let spill_obj = assign_spill_obj_ids(ctx.func, spill, &ctx.exact_local_addr);
 
-        // Template solving may encounter temporary unreachable values while iterating toward a
-        // fixed point, but those requests are not necessarily required under the final chosen
-        // templates. Treat spill discovery as the responsibility of the final planning pass.
-        let mut solver_spill_requests: BitSet<ValueId> = BitSet::default();
-        let templates =
-            solve_templates_from_flow(ctx, spill, &spill_obj, &mut solver_spill_requests);
+        let use_lazy_acyclic_templates = ctx
+            .scc
+            .topo_order()
+            .iter()
+            .all(|&scc| !ctx.scc.scc_data(scc).is_cycle);
+        let lazy_carry_in;
+        let mut templates = if use_lazy_acyclic_templates {
+            let seed = seed_block_templates(ctx, spill);
+            lazy_carry_in = Some(seed.carry_in);
+            seed.templates
+        } else {
+            lazy_carry_in = None;
+            // Template solving may encounter temporary unreachable values while iterating toward a
+            // fixed point, but those requests are not necessarily required under the final chosen
+            // templates. Treat spill discovery as the responsibility of the final planning pass.
+            let mut solver_spill_requests: BitSet<ValueId> = BitSet::default();
+            solve_templates_from_flow(ctx, spill, &spill_obj, &mut solver_spill_requests)
+        };
 
         let mut alloc = StackifyAlloc {
             pre_actions: SecondaryMap::new(),
@@ -278,8 +290,9 @@ impl<'a> StackifyBuilder<'a> {
             ctx,
             spill,
             slots,
-            &templates,
+            &mut templates,
             &terminal_chain_blocks,
+            lazy_carry_in.as_ref(),
             &mut alloc,
             &mut spill_requests,
             inherited_stack,

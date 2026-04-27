@@ -4,7 +4,13 @@ use sonatina_ir::{BlockId, Function, ValueId, cfg::ControlFlowGraph};
 
 use crate::{bitset::BitSet, domtree::DomTree, liveness::Liveness};
 
-use super::spill::SpillSet;
+use super::{
+    builder::StackifyContext,
+    spill::SpillSet,
+    sym_stack::{StackItem, SymStack},
+};
+
+pub(super) type TransferOrder = SmallVec<[ValueId; 8]>;
 
 #[derive(Clone, Copy, Debug)]
 pub(super) struct DefInfo {
@@ -19,6 +25,103 @@ pub(super) struct BlockTemplate {
     pub(super) params: SmallVec<[ValueId; 4]>,
     /// Canonical transfer region (top-first).
     pub(super) transfer: SmallVec<[ValueId; 8]>,
+}
+
+pub(super) struct TemplateSeed {
+    pub(super) params_map: SecondaryMap<BlockId, SmallVec<[ValueId; 4]>>,
+    pub(super) carry_in: SecondaryMap<BlockId, BitSet<ValueId>>,
+    pub(super) templates: SecondaryMap<BlockId, BlockTemplate>,
+}
+
+pub(super) fn seed_block_templates(ctx: &StackifyContext<'_>, spill: SpillSet<'_>) -> TemplateSeed {
+    let mut params_map: SecondaryMap<BlockId, SmallVec<[ValueId; 4]>> = SecondaryMap::new();
+    let mut carry_in: SecondaryMap<BlockId, BitSet<ValueId>> = SecondaryMap::new();
+    let mut templates: SecondaryMap<BlockId, BlockTemplate> = SecondaryMap::new();
+
+    for block in ctx.func.layout.iter_block() {
+        let mut params = SmallVec::<[ValueId; 4]>::new();
+        if block == ctx.entry {
+            params.extend(ctx.func.arg_values.iter().copied());
+        }
+        params.extend(
+            ctx.phi_results[block]
+                .iter()
+                .copied()
+                .filter(|v| !spill.contains(*v)),
+        );
+
+        let carry = live_in_non_params(
+            ctx.liveness,
+            ctx.func,
+            block,
+            ctx.entry,
+            &ctx.phi_results,
+            spill,
+        );
+        let transfer = canonical_transfer_order(&carry, &ctx.dom_depth, &ctx.def_info);
+
+        params_map[block] = params.clone();
+        carry_in[block] = carry;
+        templates[block] = BlockTemplate { params, transfer };
+    }
+
+    TemplateSeed {
+        params_map,
+        carry_in,
+        templates,
+    }
+}
+
+pub(super) fn project_transfer(stack: &SymStack, carry_in: &BitSet<ValueId>) -> TransferOrder {
+    let mut out = TransferOrder::new();
+    let mut seen: BitSet<ValueId> = BitSet::default();
+
+    let limit = stack.len_above_func_ret();
+    for i in 0..limit {
+        let Some(StackItem::Value(v)) = stack.item_at(i) else {
+            continue;
+        };
+        if carry_in.contains(*v) && seen.insert(*v) {
+            out.push(*v);
+        }
+    }
+
+    out
+}
+
+pub(super) fn choose_transfer(
+    ctx: &StackifyContext<'_>,
+    block: BlockId,
+    candidates: &[(BlockId, &TransferOrder)],
+) -> TransferOrder {
+    debug_assert!(!candidates.is_empty());
+
+    let first = candidates[0].1;
+    if candidates.iter().all(|(_, cand)| *cand == first) {
+        return first.clone();
+    }
+
+    if let Some((_pred, cand)) = candidates
+        .iter()
+        .filter(|(pred, _)| ctx.dom.dominates(block, *pred))
+        .min_by_key(|(pred, _)| pred.as_u32())
+    {
+        return (*cand).clone();
+    }
+
+    candidates
+        .iter()
+        .min_by(|(a_pred, a), (b_pred, b)| {
+            lex_cmp(a, b).then_with(|| a_pred.as_u32().cmp(&b_pred.as_u32()))
+        })
+        .map(|(_, cand)| (*cand).clone())
+        .unwrap_or_default()
+}
+
+fn lex_cmp(a: &[ValueId], b: &[ValueId]) -> std::cmp::Ordering {
+    a.iter()
+        .map(|v| v.as_u32())
+        .cmp(b.iter().map(|v| v.as_u32()))
 }
 
 pub(super) fn compute_dom_depth(dom: &DomTree, entry: BlockId) -> SecondaryMap<BlockId, u32> {

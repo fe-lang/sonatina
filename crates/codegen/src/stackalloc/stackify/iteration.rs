@@ -13,7 +13,7 @@ use super::{
     slots::{FreeSlotPools, FreeSlots, SlotPool, SpillSlotPools},
     spill::SpillSet,
     sym_stack::{StackItem, SymStack},
-    templates::BlockTemplate,
+    templates::{BlockTemplate, TransferOrder, choose_transfer, project_transfer},
     trace::StackifyObserver,
 };
 
@@ -26,14 +26,25 @@ pub(super) struct IterationPlanner<'a, 'ctx, O: StackifyObserver> {
     ctx: &'a StackifyContext<'ctx>,
     spill: SpillSet<'a>,
     slots: &'a mut SpillSlotPools,
-    templates: &'a SecondaryMap<BlockId, BlockTemplate>,
+    templates: &'a mut SecondaryMap<BlockId, BlockTemplate>,
     terminal_chain_blocks: &'a SecondaryMap<BlockId, bool>,
+    lazy_carry_in: Option<&'a SecondaryMap<BlockId, BitSet<ValueId>>>,
     alloc: &'a mut StackifyAlloc,
     spill_requests: &'a mut BitSet<ValueId>,
     inherited_stack: BTreeMap<BlockId, (BlockId, SymStack)>,
+    pending_edges: BTreeMap<BlockId, Vec<PendingEdge<O::DeferredExit>>>,
     planned_blocks: BitSet<BlockId>,
     search_scratch: NormalizeSearchScratch,
     observer: &'a mut O,
+}
+
+struct PendingEdge<D> {
+    pred: BlockId,
+    inst: InstId,
+    stack: SymStack,
+    free_slots: FreeSlotPools,
+    action_start: usize,
+    deferred_exit: D,
 }
 
 impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
@@ -42,8 +53,9 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
         ctx: &'a StackifyContext<'ctx>,
         spill: SpillSet<'a>,
         slots: &'a mut SpillSlotPools,
-        templates: &'a SecondaryMap<BlockId, BlockTemplate>,
+        templates: &'a mut SecondaryMap<BlockId, BlockTemplate>,
         terminal_chain_blocks: &'a SecondaryMap<BlockId, bool>,
+        lazy_carry_in: Option<&'a SecondaryMap<BlockId, BitSet<ValueId>>>,
         alloc: &'a mut StackifyAlloc,
         spill_requests: &'a mut BitSet<ValueId>,
         inherited_stack: BTreeMap<BlockId, (BlockId, SymStack)>,
@@ -55,9 +67,11 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
             slots,
             templates,
             terminal_chain_blocks,
+            lazy_carry_in,
             alloc,
             spill_requests,
             inherited_stack,
+            pending_edges: BTreeMap::new(),
             planned_blocks: BitSet::default(),
             search_scratch: NormalizeSearchScratch::default(),
             observer,
@@ -90,22 +104,35 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
                 continue;
             }
 
-            self.observer
-                .on_block_header(self.ctx.func, block, &self.templates[block]);
             self.plan_block(block);
         }
+
+        debug_assert!(
+            self.pending_edges.is_empty(),
+            "unresolved lazy stackify edges remain"
+        );
     }
 
     fn plan_block(&mut self, block: BlockId) {
         let mut free_slots: FreeSlotPools = FreeSlotPools::default();
         let mut prologue: Actions = Actions::new();
 
-        self.planned_blocks.insert(block);
-
         let (remaining_uses, live_future, live_out) =
             BlockSimState::block_live_sets(self.ctx, block);
+        self.resolve_pending_edges(block);
 
         let inherited = self.inherited_stack.remove(&block);
+        if let (Some(carry_in), Some((_pred, stack))) = (self.lazy_carry_in, inherited.as_ref())
+            && block != self.ctx.entry
+            && !self.terminal_chain_blocks[block]
+        {
+            self.templates[block].transfer = project_transfer(stack, &carry_in[block]);
+        }
+
+        self.observer
+            .on_block_header(self.ctx.func, block, &self.templates[block]);
+        self.planned_blocks.insert(block);
+
         let stack = if self.terminal_chain_blocks[block] {
             SymStack::opaque_prefix_empty(self.ctx.has_internal_return)
         } else if let Some((pred, mut inh)) = inherited {
@@ -136,13 +163,13 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
                 // template normalization. Keeping the inherited stack avoids pointless bottom
                 // reshuffling that can cascade into SWAP/POP churn.
                 if has_phi_params || in_cycle {
-                    let templates = self.templates;
+                    let tmpl = self.templates[block].clone();
                     self.with_actions_planner(
                         &mut inh,
                         &mut prologue,
                         &mut free_slots,
                         |planner| {
-                            planner.plan_edge_fixup(templates, pred, block);
+                            planner.plan_edge_fixup_to_template(&tmpl, pred, block);
                         },
                     );
                 }
@@ -170,6 +197,54 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
             && let Some(term) = self.ctx.func.layout.last_inst_of(block)
         {
             self.alloc.pre_actions[term].extend_from_slice(&state.prologue);
+        }
+    }
+
+    fn resolve_pending_edges(&mut self, block: BlockId) {
+        let Some(mut edges) = self.pending_edges.remove(&block) else {
+            return;
+        };
+        let carry_in = self
+            .lazy_carry_in
+            .expect("pending stackify edges require lazy template planning");
+        debug_assert!(
+            !self.inherited_stack.contains_key(&block),
+            "pending merge edges cannot also inherit one stack"
+        );
+        debug_assert!(
+            !self.planned_blocks.contains(block),
+            "pending edge target already planned"
+        );
+
+        let projected: Vec<(BlockId, TransferOrder)> = edges
+            .iter()
+            .map(|edge| (edge.pred, project_transfer(&edge.stack, &carry_in[block])))
+            .collect();
+        let candidates: Vec<(BlockId, &TransferOrder)> = projected
+            .iter()
+            .map(|(pred, order)| (*pred, order))
+            .collect();
+        if !candidates.is_empty() {
+            self.templates[block].transfer = choose_transfer(self.ctx, block, &candidates);
+        }
+
+        let tmpl = self.templates[block].clone();
+        for edge in edges.iter_mut() {
+            debug_assert_eq!(
+                self.alloc.pre_actions[edge.inst].len(),
+                edge.action_start,
+                "deferred edge action list changed before resolution"
+            );
+            self.with_planner(
+                &mut edge.stack,
+                &mut edge.free_slots,
+                PlannerActionSink::Pre(edge.inst),
+                |planner| planner.plan_edge_fixup_to_template(&tmpl, edge.pred, block),
+            );
+            self.observer.on_deferred_exit_actions(
+                edge.deferred_exit,
+                &self.alloc.pre_actions[edge.inst][edge.action_start..],
+            );
         }
     }
 }
@@ -356,6 +431,27 @@ impl<'a, 'ctx, O: StackifyObserver> BlockSimMode<'ctx> for IterationPlanner<'a, 
         action_start: usize,
     ) {
         if self.terminal_chain_blocks[dest] {
+        } else if self.lazy_carry_in.is_some()
+            && self.ctx.cfg.pred_num_of(dest) > 1
+            && dest != self.ctx.entry
+            && !self.planned_blocks.contains(dest)
+        {
+            debug_assert!(
+                self.ctx.scc.is_reachable(dest),
+                "lazy pending edge target must be reachable"
+            );
+            self.pending_edges
+                .entry(dest)
+                .or_default()
+                .push(PendingEdge {
+                    pred: state.block,
+                    inst,
+                    stack: state.stack.clone(),
+                    free_slots: state.free_slots.clone(),
+                    action_start,
+                    deferred_exit: self.observer.on_deferred_inst_jump(inst, dest),
+                });
+            return;
         } else if self.ctx.cfg.pred_num_of(dest) == 1
             && dest != self.ctx.entry
             && !self.planned_blocks.contains(dest)
@@ -364,13 +460,13 @@ impl<'a, 'ctx, O: StackifyObserver> BlockSimMode<'ctx> for IterationPlanner<'a, 
                 .entry(dest)
                 .or_insert_with(|| (state.block, state.stack.clone()));
         } else {
-            let templates = self.templates;
+            let tmpl = self.templates[dest].clone();
             let src = state.block;
             self.with_planner(
                 &mut state.stack,
                 &mut state.free_slots,
                 PlannerActionSink::Pre(inst),
-                |planner| planner.plan_edge_fixup(templates, src, dest),
+                |planner| planner.plan_edge_fixup_to_template(&tmpl, src, dest),
             );
         }
 

@@ -1,7 +1,4 @@
-use std::{
-    cmp::Ordering,
-    collections::{BTreeMap, VecDeque},
-};
+use std::collections::{BTreeMap, VecDeque};
 
 use cranelift_entity::SecondaryMap;
 use smallvec::SmallVec;
@@ -19,11 +16,13 @@ use super::{
     planner::{NormalizeSearchScratch, OperandPrepMode, OperandPrepMode::TemplateSim, Planner},
     slots::{FreeSlotPools, SpillSlotPools},
     spill::SpillSet,
-    sym_stack::{StackItem, SymStack},
-    templates::{BlockTemplate, canonical_transfer_order, live_in_non_params},
+    sym_stack::SymStack,
+    templates::{
+        BlockTemplate, TransferOrder, canonical_transfer_order, choose_transfer, project_transfer,
+        seed_block_templates,
+    },
 };
 
-type TransferOrder = SmallVec<[ValueId; 8]>;
 type EdgeCandMap = BTreeMap<(BlockId, BlockId), TransferOrder>;
 
 #[derive(Clone, Debug, Default)]
@@ -53,35 +52,14 @@ pub(super) fn solve_templates_from_flow(
     spill_obj: &SecondaryMap<ValueId, Option<crate::isa::evm::static_arena_alloc::StackObjId>>,
     spill_requests: &mut BitSet<ValueId>,
 ) -> SecondaryMap<BlockId, BlockTemplate> {
-    let mut params_map: SecondaryMap<BlockId, SmallVec<[ValueId; 4]>> = SecondaryMap::new();
-    let mut carry_in: SecondaryMap<BlockId, BitSet<ValueId>> = SecondaryMap::new();
+    let seed = seed_block_templates(ctx, spill);
+    let params_map = seed.params_map;
+    let carry_in = seed.carry_in;
     let mut state: SecondaryMap<BlockId, LayoutState> = SecondaryMap::new();
 
     for block in ctx.func.layout.iter_block() {
-        let mut params = SmallVec::<[ValueId; 4]>::new();
-        if block == ctx.entry {
-            params.extend(ctx.func.arg_values.iter().copied());
-        }
-        params.extend(
-            ctx.phi_results[block]
-                .iter()
-                .copied()
-                .filter(|v| !spill.contains(*v)),
-        );
-        params_map[block] = params;
-
-        let carry = live_in_non_params(
-            ctx.liveness,
-            ctx.func,
-            block,
-            ctx.entry,
-            &ctx.phi_results,
-            spill,
-        );
-        let transfer = canonical_transfer_order(&carry, &ctx.dom_depth, &ctx.def_info);
-        carry_in[block] = carry;
         state[block] = LayoutState {
-            transfer,
+            transfer: seed.templates[block].transfer.clone(),
             pinned: false,
         };
     }
@@ -121,58 +99,6 @@ pub(super) fn solve_templates_from_flow(
     }
 
     templates
-}
-
-fn choose_transfer(
-    ctx: &StackifyContext<'_>,
-    block: BlockId,
-    candidates: &[(BlockId, &TransferOrder)],
-) -> TransferOrder {
-    debug_assert!(!candidates.is_empty());
-
-    let first = candidates[0].1;
-    if candidates.iter().all(|(_, cand)| *cand == first) {
-        return first.clone();
-    }
-
-    if let Some((_pred, cand)) = candidates
-        .iter()
-        .filter(|(pred, _)| ctx.dom.dominates(block, *pred))
-        .min_by_key(|(pred, _)| pred.as_u32())
-    {
-        return (*cand).clone();
-    }
-
-    candidates
-        .iter()
-        .min_by(|(a_pred, a), (b_pred, b)| {
-            lex_cmp(a, b).then_with(|| a_pred.as_u32().cmp(&b_pred.as_u32()))
-        })
-        .map(|(_, cand)| (*cand).clone())
-        .unwrap_or_default()
-}
-
-fn lex_cmp(a: &[ValueId], b: &[ValueId]) -> Ordering {
-    a.iter()
-        .map(|v| v.as_u32())
-        .cmp(b.iter().map(|v| v.as_u32()))
-}
-
-fn project_transfer(stack: &SymStack, carry_in: &BitSet<ValueId>) -> TransferOrder {
-    let mut out = TransferOrder::new();
-    let mut seen: BitSet<ValueId> = BitSet::default();
-
-    let limit = stack.len_above_func_ret();
-    for i in 0..limit {
-        let Some(StackItem::Value(v)) = stack.item_at(i) else {
-            continue;
-        };
-        if carry_in.contains(*v) && seen.insert(*v) {
-            out.push(*v);
-        }
-    }
-
-    out
 }
 
 fn record_edge_candidate(
