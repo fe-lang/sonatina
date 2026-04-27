@@ -12,7 +12,7 @@ object: Contract
 functions:
   entry: ir_blocks=1 ir_insts=7 vcode_ops=27 fixups=2 imm_bytes=5
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  spill: ir_blocks=4 ir_insts=17 vcode_ops=130 fixups=6 imm_bytes=14
+  spill: ir_blocks=5 ir_insts=18 vcode_ops=130 fixups=6 imm_bytes=14
     mem: scratch_words=0 stable_words=5 stable_mode=StaticAbs(base=0x40) entry_abs_words=0 abs_words_end=5
   sum8: ir_blocks=1 ir_insts=8 vcode_ops=19 fixups=0 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=5 abs_words_end=0

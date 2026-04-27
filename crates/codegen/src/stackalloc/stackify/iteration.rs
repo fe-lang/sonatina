@@ -9,11 +9,13 @@ use super::{
     alloc::StackifyAlloc,
     block_sim::{BlockSimMode, BlockSimState, BrTableEdgeKind, PlannerActionSink, run_block_sim},
     builder::{StackifyContext, StackifyReachability},
-    planner::{self, NormalizeSearchScratch, OperandPrepMode, OperandPrepMode::Exact, Planner},
+    planner::{self, NormalizeSearchScratch, Planner},
     slots::{FreeSlotPools, FreeSlots, SlotPool, SpillSlotPools},
     spill::SpillSet,
     sym_stack::{StackItem, SymStack},
-    templates::{BlockTemplate, TransferOrder, choose_transfer, project_transfer},
+    templates::{
+        BlockTemplate, TransferOrder, canonical_transfer_order, choose_transfer, project_transfer,
+    },
     trace::StackifyObserver,
 };
 
@@ -28,12 +30,13 @@ pub(super) struct IterationPlanner<'a, 'ctx, O: StackifyObserver> {
     slots: &'a mut SpillSlotPools,
     templates: &'a mut SecondaryMap<BlockId, BlockTemplate>,
     terminal_chain_blocks: &'a SecondaryMap<BlockId, bool>,
-    lazy_carry_in: Option<&'a SecondaryMap<BlockId, BitSet<ValueId>>>,
+    carry_in: &'a SecondaryMap<BlockId, BitSet<ValueId>>,
     alloc: &'a mut StackifyAlloc,
     spill_requests: &'a mut BitSet<ValueId>,
     inherited_stack: BTreeMap<BlockId, (BlockId, SymStack)>,
     pending_edges: BTreeMap<BlockId, Vec<PendingEdge<O::DeferredExit>>>,
     planned_blocks: BitSet<BlockId>,
+    template_frozen: BitSet<BlockId>,
     search_scratch: NormalizeSearchScratch,
     observer: &'a mut O,
 }
@@ -55,7 +58,7 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
         slots: &'a mut SpillSlotPools,
         templates: &'a mut SecondaryMap<BlockId, BlockTemplate>,
         terminal_chain_blocks: &'a SecondaryMap<BlockId, bool>,
-        lazy_carry_in: Option<&'a SecondaryMap<BlockId, BitSet<ValueId>>>,
+        carry_in: &'a SecondaryMap<BlockId, BitSet<ValueId>>,
         alloc: &'a mut StackifyAlloc,
         spill_requests: &'a mut BitSet<ValueId>,
         inherited_stack: BTreeMap<BlockId, (BlockId, SymStack)>,
@@ -67,12 +70,13 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
             slots,
             templates,
             terminal_chain_blocks,
-            lazy_carry_in,
+            carry_in,
             alloc,
             spill_requests,
             inherited_stack,
             pending_edges: BTreeMap::new(),
             planned_blocks: BitSet::default(),
+            template_frozen: BitSet::default(),
             search_scratch: NormalizeSearchScratch::default(),
             observer,
         }
@@ -109,7 +113,7 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
 
         debug_assert!(
             self.pending_edges.is_empty(),
-            "unresolved lazy stackify edges remain"
+            "unresolved stackify edges remain"
         );
     }
 
@@ -122,11 +126,12 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
         self.resolve_pending_edges(block);
 
         let inherited = self.inherited_stack.remove(&block);
-        if let (Some(carry_in), Some((_pred, stack))) = (self.lazy_carry_in, inherited.as_ref())
-            && block != self.ctx.entry
+        if let Some((_pred, stack)) = inherited.as_ref()
             && !self.terminal_chain_blocks[block]
         {
-            self.templates[block].transfer = project_transfer(stack, &carry_in[block]);
+            self.freeze_template_from_stack(block, stack);
+        } else if block != self.ctx.entry && !self.terminal_chain_blocks[block] {
+            self.freeze_template_canonical(block);
         }
 
         self.observer
@@ -152,17 +157,11 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
                     &live_out,
                 );
                 let has_phi_params = !self.ctx.phi_results[block].is_empty();
-                let in_cycle = self
-                    .ctx
-                    .scc
-                    .scc_of(block)
-                    .map(|scc| self.ctx.scc.scc_data(scc).is_cycle)
-                    .unwrap_or(false);
 
-                // Single-predecessor, acyclic blocks without phis do not need exact entry
+                // Single-predecessor blocks without phis do not need exact entry
                 // template normalization. Keeping the inherited stack avoids pointless bottom
                 // reshuffling that can cascade into SWAP/POP churn.
-                if has_phi_params || in_cycle {
+                if has_phi_params {
                     let tmpl = self.templates[block].clone();
                     self.with_actions_planner(
                         &mut inh,
@@ -204,9 +203,6 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
         let Some(mut edges) = self.pending_edges.remove(&block) else {
             return;
         };
-        let carry_in = self
-            .lazy_carry_in
-            .expect("pending stackify edges require lazy template planning");
         debug_assert!(
             !self.inherited_stack.contains_key(&block),
             "pending merge edges cannot also inherit one stack"
@@ -218,14 +214,19 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
 
         let projected: Vec<(BlockId, TransferOrder)> = edges
             .iter()
-            .map(|edge| (edge.pred, project_transfer(&edge.stack, &carry_in[block])))
+            .map(|edge| {
+                (
+                    edge.pred,
+                    project_transfer(&edge.stack, &self.carry_in[block]),
+                )
+            })
             .collect();
         let candidates: Vec<(BlockId, &TransferOrder)> = projected
             .iter()
             .map(|(pred, order)| (*pred, order))
             .collect();
         if !candidates.is_empty() {
-            self.templates[block].transfer = choose_transfer(self.ctx, block, &candidates);
+            self.freeze_template(block, choose_transfer(self.ctx, block, &candidates));
         }
 
         let tmpl = self.templates[block].clone();
@@ -247,15 +248,30 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
             );
         }
     }
+
+    fn freeze_template_from_stack(&mut self, block: BlockId, stack: &SymStack) {
+        self.freeze_template(block, project_transfer(stack, &self.carry_in[block]));
+    }
+
+    fn freeze_template_canonical(&mut self, block: BlockId) {
+        let transfer = canonical_transfer_order(
+            &self.carry_in[block],
+            &self.ctx.dom_depth,
+            &self.ctx.def_info,
+        );
+        self.freeze_template(block, transfer);
+    }
+
+    fn freeze_template(&mut self, block: BlockId, transfer: TransferOrder) {
+        if self.template_frozen.insert(block) {
+            self.templates[block].transfer = transfer;
+        }
+    }
 }
 
 impl<'a, 'ctx, O: StackifyObserver> BlockSimMode<'ctx> for IterationPlanner<'a, 'ctx, O> {
     fn ctx(&self) -> &StackifyContext<'ctx> {
         self.ctx
-    }
-
-    fn operand_prep_mode(&self) -> OperandPrepMode {
-        Exact
     }
 
     fn call_uses_stack_continuation(&self, inst: InstId) -> bool {
@@ -431,14 +447,13 @@ impl<'a, 'ctx, O: StackifyObserver> BlockSimMode<'ctx> for IterationPlanner<'a, 
         action_start: usize,
     ) {
         if self.terminal_chain_blocks[dest] {
-        } else if self.lazy_carry_in.is_some()
-            && self.ctx.cfg.pred_num_of(dest) > 1
+        } else if self.ctx.cfg.pred_num_of(dest) > 1
             && dest != self.ctx.entry
             && !self.planned_blocks.contains(dest)
         {
             debug_assert!(
                 self.ctx.scc.is_reachable(dest),
-                "lazy pending edge target must be reachable"
+                "pending edge target must be reachable"
             );
             self.pending_edges
                 .entry(dest)
@@ -489,6 +504,10 @@ impl<'a, 'ctx, O: StackifyObserver> BlockSimMode<'ctx> for IterationPlanner<'a, 
         succ: BlockId,
         stack: SymStack,
     ) {
+        debug_assert!(
+            !self.planned_blocks.contains(succ),
+            "branch edge to planned block {succ:?} requires a split edge"
+        );
         debug_assert_eq!(
             self.ctx.cfg.pred_num_of(succ),
             1,
@@ -507,6 +526,10 @@ impl<'a, 'ctx, O: StackifyObserver> BlockSimMode<'ctx> for IterationPlanner<'a, 
         stack: SymStack,
         _kind: BrTableEdgeKind,
     ) {
+        debug_assert!(
+            !self.planned_blocks.contains(succ),
+            "br_table edge to planned block {succ:?} requires a split edge"
+        );
         debug_assert_eq!(
             self.ctx.cfg.pred_num_of(succ),
             1,

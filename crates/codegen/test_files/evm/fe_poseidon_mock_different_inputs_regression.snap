@@ -14,15 +14,15 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=6 abs_words_end=0
   sigma_full: ir_blocks=1 ir_insts=22 vcode_ops=60 fixups=0 imm_bytes=13
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=6 abs_words_end=0
-  mix: ir_blocks=7 ir_insts=37 vcode_ops=106 fixups=10 imm_bytes=22
+  mix: ir_blocks=10 ir_insts=40 vcode_ops=106 fixups=10 imm_bytes=22
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=6 abs_words_end=0
-  poseidon_mock: ir_blocks=12 ir_insts=49 vcode_ops=150 fixups=19 imm_bytes=21
+  poseidon_mock: ir_blocks=16 ir_insts=53 vcode_ops=151 fixups=19 imm_bytes=21
     mem: scratch_words=0 stable_words=6 stable_mode=StaticAbs(base=0xa0) entry_abs_words=0 abs_words_end=6
   entry: ir_blocks=3 ir_insts=7 vcode_ops=27 fixups=5 imm_bytes=6
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=47140 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=26140
+  case ok: calldata_len=0 success reason=Return gas_used=47128 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=26128
 
 
 --------------- DEBUG ---------------
@@ -256,7 +256,7 @@ mix:
     PUSH1 0x3 (3)  // v10.i1 = lt v8 3.i256;
     DUP2
     LT
-    PUSH1 block15  // br v10 block15 block4;
+    PUSH1 block15  // br v10 block23 block4;
     JUMPI
   block4:
     POP  // return v1;
@@ -276,12 +276,13 @@ mix:
     PUSH1 0x3 (3)  // v20.i1 = lt v18 3.i256;
     DUP2
     LT
-    PUSH1 block10  // br v20 block10 block3;
+    PUSH1 block10  // br v20 block25 block24;
     JUMPI
-  block3:
-    POP  // v16.i256 = add v8 1.i256;
+  block24:
+    POP  // jump block3;
     POP
-    PUSH1 0x1 (1)
+  block3:
+    PUSH1 0x1 (1)  // v16.i256 = add v8 1.i256;
     ADD
     SWAP1  // v59.i256 = add v57 32.i256;
     PUSH1 0x20 (32)
@@ -386,51 +387,9 @@ poseidon_mock:
     PUSH1 0x2 (2)  // v24.i1 = lt v22 2.i256;
     DUP4
     LT
-    ISZERO  // br v24 block16 block35;
-    PUSH1 block35
+    PUSH1 block16  // br v24 block38 block35;
     JUMPI
-  block16:
-    PUSH1 0xa0 (160)  // v68.*[i256; 3] = alloca [i256; 3];
-    DUP2  // call %ark v68 v60 v63;
-    DUP2
-    SWAP4
-    PUSH1 `pc + (4)`
-    SWAP3
-    PUSH1 FuncRef(0)
-    JUMP
-    JUMPDEST
-    PUSH2 0x100 (256)  // v69.*[i256; 3] = alloca [i256; 3];
-    DUP1  // call %sigma_full v69 v68;
-    SWAP3
-    PUSH1 `pc + (4)`
-    SWAP2
-    PUSH1 FuncRef(2)
-    JUMP
-    JUMPDEST
-    SWAP1  // v31.*[i256; 3] = call %mix v69;
-    PUSH1 `pc + (4)`
-    SWAP1
-    PUSH1 FuncRef(3)
-    JUMP
-    JUMPDEST
-    PUSH1 0x3 (3)  // v74.i256 = add v63 3.i256;
-    DUP3
-    ADD
-    SWAP2  // v75.i1 = lt v74 v63;
-    DUP3
-    LT
-    PUSH1 section_unit0  // br v75 block36 block3;
-    JUMPI
-  block3:
-    SWAP2  // v36.i256 = add v22 1.i256;
-    PUSH1 0x1 (1)
-    ADD
-    SWAP2  // jump block1;
-    SWAP1
-    PUSH1 block1
-    JUMP
   block35:
-    JUMPDEST
     PUSH0  // jump block5;
     SWAP3
     POP
@@ -439,7 +398,7 @@ poseidon_mock:
     PUSH1 0x2 (2)  // v44.i1 = lt v42 2.i256;
     DUP4
     LT
-    PUSH1 block20  // br v44 block20 block8;
+    PUSH1 block20  // br v44 block39 block8;
     JUMPI
   block8:
     POP  // v58.i256 = mload v57 i256;
@@ -482,7 +441,7 @@ poseidon_mock:
     SWAP2  // v77.i1 = lt v76 v73;
     DUP3
     LT
-    PUSH1 section_unit0  // br v77 block37 block7;
+    PUSH1 section_unit0  // br v77 block37 block41;
     JUMPI
   block7:
     SWAP2  // v55.i256 = add v42 1.i256;
@@ -491,6 +450,48 @@ poseidon_mock:
     SWAP2  // jump block5;
     SWAP1
     PUSH1 block5
+    JUMP
+  block16:
+    JUMPDEST
+    PUSH1 0xa0 (160)  // v68.*[i256; 3] = alloca [i256; 3];
+    DUP2  // call %ark v68 v60 v63;
+    DUP2
+    SWAP4
+    PUSH1 `pc + (4)`
+    SWAP3
+    PUSH1 FuncRef(0)
+    JUMP
+    JUMPDEST
+    PUSH2 0x100 (256)  // v69.*[i256; 3] = alloca [i256; 3];
+    DUP1  // call %sigma_full v69 v68;
+    SWAP3
+    PUSH1 `pc + (4)`
+    SWAP2
+    PUSH1 FuncRef(2)
+    JUMP
+    JUMPDEST
+    SWAP1  // v31.*[i256; 3] = call %mix v69;
+    PUSH1 `pc + (4)`
+    SWAP1
+    PUSH1 FuncRef(3)
+    JUMP
+    JUMPDEST
+    PUSH1 0x3 (3)  // v74.i256 = add v63 3.i256;
+    DUP3
+    ADD
+    SWAP2  // v75.i1 = lt v74 v63;
+    DUP3
+    LT
+    PUSH1 section_unit0  // br v75 block36 block40;
+    JUMPI
+  block3:
+    JUMPDEST
+    SWAP2  // v36.i256 = add v22 1.i256;
+    PUSH1 0x1 (1)
+    ADD
+    SWAP2  // jump block1;
+    SWAP1
+    PUSH1 block1
     JUMP
 
 // func public %entry()

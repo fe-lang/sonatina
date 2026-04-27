@@ -13,7 +13,7 @@ use super::{
         improve_reachability_before_operands, inst_is_noop_alias_cast, last_use_values_in_inst,
         operand_order_for_evm, skip_pre_exit_cleanup,
     },
-    planner::{OperandPrepMode, Planner},
+    planner::Planner,
     slots::{FreeSlotPools, SlotPool},
     sym_stack::SymStack,
 };
@@ -30,25 +30,6 @@ pub(super) struct BlockSimState {
 }
 
 impl BlockSimState {
-    pub(super) fn new(
-        ctx: &StackifyContext<'_>,
-        block: BlockId,
-        stack: SymStack,
-        free_slots: FreeSlotPools,
-        prologue: Actions,
-    ) -> Self {
-        let (remaining_uses, live_future, live_out) = Self::block_live_sets(ctx, block);
-        Self::with_live_sets(
-            block,
-            stack,
-            free_slots,
-            prologue,
-            remaining_uses,
-            live_future,
-            live_out,
-        )
-    }
-
     pub(super) fn block_live_sets(
         ctx: &StackifyContext<'_>,
         block: BlockId,
@@ -119,7 +100,6 @@ enum TerminatorInfo {
 
 pub(super) trait BlockSimMode<'ctx> {
     fn ctx(&self) -> &StackifyContext<'ctx>;
-    fn operand_prep_mode(&self) -> OperandPrepMode;
     fn call_uses_stack_continuation(&self, inst: InstId) -> bool;
     fn scratch_slots(&self) -> &SlotPool;
 
@@ -329,13 +309,12 @@ pub(super) fn run_block_sim<'ctx, M: BlockSimMode<'ctx>>(
                             actions,
                         );
                     });
-                    let prep_mode = mode.operand_prep_mode();
                     let mut stack = take_stack(&mut state.stack, mode.ctx().has_internal_return);
                     mode.with_planner(
                         &mut stack,
                         &mut state.free_slots,
                         PlannerActionSink::Pre(inst),
-                        |planner| planner.prepare_operands(&[cond], &consume_last_use, prep_mode),
+                        |planner| planner.prepare_operands(&[cond], &consume_last_use),
                     );
                     state.stack = stack;
 
@@ -370,7 +349,6 @@ pub(super) fn run_block_sim<'ctx, M: BlockSimMode<'ctx>>(
                     });
 
                     let base_actions = mode.take_pre_actions_for_br_table(inst);
-                    let prep_mode = mode.operand_prep_mode();
                     let (case_stacks, default_stack) = plan_br_table_compare_chain(
                         &table,
                         &state.stack,
@@ -390,7 +368,6 @@ pub(super) fn run_block_sim<'ctx, M: BlockSimMode<'ctx>>(
                                     planner.prepare_operands_for_commutative_pair(
                                         &mut compare_args,
                                         &consume_last_use,
-                                        prep_mode,
                                     );
                                 },
                             );
@@ -435,13 +412,12 @@ pub(super) fn run_block_sim<'ctx, M: BlockSimMode<'ctx>>(
             return state;
         }
 
-        let prep_mode = mode.operand_prep_mode();
         let mut stack = take_stack(&mut state.stack, mode.ctx().has_internal_return);
         mode.with_planner(
             &mut stack,
             &mut state.free_slots,
             PlannerActionSink::Pre(inst),
-            |planner| planner.prepare_operands_for_inst(inst, &mut args, last_use, prep_mode),
+            |planner| planner.prepare_operands_for_inst(inst, &mut args, last_use),
         );
         state.stack = stack;
 

@@ -12,7 +12,6 @@ use sonatina_ir::{BlockId, Function, ValueId, cfg::ControlFlowGraph};
 
 use super::{
     alloc::StackifyAlloc,
-    flow_templates::solve_templates_from_flow,
     iteration::IterationPlanner,
     slots::{FreeSlotPools, SpillSlotPools},
     spill::SpillSet,
@@ -247,29 +246,7 @@ impl<'a> StackifyBuilder<'a> {
         let spill_obj = assign_spill_obj_ids(ctx.func, spill, &ctx.exact_local_addr);
         let interfaces = compute_block_interfaces(ctx, spill);
 
-        let use_lazy_acyclic_templates = ctx
-            .scc
-            .topo_order()
-            .iter()
-            .all(|&scc| !ctx.scc.scc_data(scc).is_cycle);
-        let lazy_carry_in;
-        let mut templates = if use_lazy_acyclic_templates {
-            lazy_carry_in = Some(&interfaces.carry_in);
-            empty_transfer_templates(ctx, &interfaces.params)
-        } else {
-            lazy_carry_in = None;
-            // Template solving may encounter temporary unreachable values while iterating toward a
-            // fixed point, but those requests are not necessarily required under the final chosen
-            // templates. Treat spill discovery as the responsibility of the final planning pass.
-            let mut solver_spill_requests: BitSet<ValueId> = BitSet::default();
-            solve_templates_from_flow(
-                ctx,
-                spill,
-                &spill_obj,
-                &interfaces,
-                &mut solver_spill_requests,
-            )
-        };
+        let mut templates = empty_transfer_templates(ctx, &interfaces.params);
 
         let mut alloc = StackifyAlloc {
             pre_actions: SecondaryMap::new(),
@@ -298,7 +275,7 @@ impl<'a> StackifyBuilder<'a> {
             slots,
             &mut templates,
             &terminal_chain_blocks,
-            lazy_carry_in,
+            &interfaces.carry_in,
             &mut alloc,
             &mut spill_requests,
             inherited_stack,

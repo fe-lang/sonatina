@@ -10,7 +10,7 @@ object: Contract
   total: 103 bytes
 
 functions:
-  entry: ir_blocks=4 ir_insts=35 vcode_ops=80 fixups=2 imm_bytes=21
+  entry: ir_blocks=5 ir_insts=36 vcode_ops=80 fixups=2 imm_bytes=21
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
@@ -77,7 +77,7 @@ entry:
     PUSH1 0x4 (4)  // v27.i1 = lt v24 4.i256;
     DUP2
     LT
-    PUSH1 block4  // br v27 block4 block1;
+    PUSH1 block4  // br v27 block6 block1;
     JUMPI
   block1:
     POP  // mstore 0.i256 v26 i256;

@@ -23,12 +23,6 @@ use super::{
     sym_stack::SymStack,
 };
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum OperandPrepMode {
-    Exact,
-    TemplateSim,
-}
-
 #[derive(Clone)]
 pub(super) struct MemPlanSnapshot {
     free_slots: FreeSlotPools,

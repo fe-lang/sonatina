@@ -16,8 +16,8 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=11 abs_words_end=0
   assert: ir_blocks=3 ir_insts=3 vcode_ops=9 fixups=1 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=11 abs_words_end=0
-  verify_like: ir_blocks=19 ir_insts=92 vcode_ops=237 fixups=9 imm_bytes=33
+  verify_like: ir_blocks=28 ir_insts=101 vcode_ops=238 fixups=9 imm_bytes=33
     mem: scratch_words=11 stable_words=0 stable_mode=None entry_abs_words=11 abs_words_end=11
 
 evm:
-  case ok: calldata_len=0 success reason=Stop gas_used=23203 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=2203
+  case ok: calldata_len=0 success reason=Stop gas_used=23189 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=2189

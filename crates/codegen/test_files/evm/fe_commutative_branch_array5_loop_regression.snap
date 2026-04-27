@@ -6,16 +6,16 @@ input_file: test_files/evm/fe_commutative_branch_array5_loop_regression.sntn
 evm.config: stack_reach=16 vcode=false bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 518 bytes
-  total: 518 bytes
+  section runtime: 521 bytes
+  total: 521 bytes
 
 functions:
-  verify_checked: ir_blocks=12 ir_insts=90 vcode_ops=304 fixups=6 imm_bytes=91
-    mem: scratch_words=27 stable_words=0 stable_mode=None entry_abs_words=37 abs_words_end=27
+  verify_checked: ir_blocks=17 ir_insts=95 vcode_ops=311 fixups=6 imm_bytes=90
+    mem: scratch_words=28 stable_words=0 stable_mode=None entry_abs_words=38 abs_words_end=28
   run: ir_blocks=3 ir_insts=26 vcode_ops=73 fixups=3 imm_bytes=13
-    mem: scratch_words=0 stable_words=10 stable_mode=StaticAbs(base=0x400) entry_abs_words=27 abs_words_end=37
+    mem: scratch_words=0 stable_words=10 stable_mode=StaticAbs(base=0x420) entry_abs_words=28 abs_words_end=38
   entry: ir_blocks=1 ir_insts=2 vcode_ops=7 fixups=2 imm_bytes=0
-    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=27 abs_words_end=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=28 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=22040 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=1040
+  case ok: calldata_len=0 success reason=Return gas_used=22043 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=1043

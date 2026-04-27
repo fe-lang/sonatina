@@ -1,7 +1,6 @@
 use super::*;
 use crate::{
     analysis::func_behavior,
-    critical_edge::CriticalEdgeSplitter,
     domtree::DomTree,
     liveness::{InstLiveness, Liveness},
     machinst::{
@@ -11,6 +10,7 @@ use crate::{
     object::{CompileOptions, SymbolId, link::link_section},
     optim::pipeline::Pipeline,
     stackalloc::{Action, Actions, Allocator, StackifyBuilder},
+    stackify_edge::StackifyEdgeSplitter,
 };
 use cranelift_entity::SecondaryMap;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -65,7 +65,7 @@ fn plan_test_ctx_from_src(src: &str) -> PlanTestCtx {
             let mut cfg = ControlFlowGraph::default();
             cfg.compute(function);
 
-            let mut splitter = CriticalEdgeSplitter::new();
+            let mut splitter = StackifyEdgeSplitter::new();
             splitter.run(function, &mut cfg);
 
             let mut liveness = Liveness::new();
@@ -1314,7 +1314,7 @@ block0:
             let mut cfg = ControlFlowGraph::new();
             cfg.compute(function);
 
-            let mut splitter = CriticalEdgeSplitter::new();
+            let mut splitter = StackifyEdgeSplitter::new();
             splitter.run(function, &mut cfg);
 
             let mut liveness = Liveness::new();
@@ -2279,7 +2279,7 @@ block0:
             let mut cfg = ControlFlowGraph::new();
             cfg.compute(function);
 
-            let mut splitter = CriticalEdgeSplitter::new();
+            let mut splitter = StackifyEdgeSplitter::new();
             splitter.run(function, &mut cfg);
 
             let mut liveness = Liveness::new();
@@ -2445,7 +2445,7 @@ block2:
             let mut cfg = ControlFlowGraph::new();
             cfg.compute(function);
 
-            let mut splitter = CriticalEdgeSplitter::new();
+            let mut splitter = StackifyEdgeSplitter::new();
             splitter.run(function, &mut cfg);
 
             let mut liveness = Liveness::new();

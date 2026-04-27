@@ -5,8 +5,8 @@
 //!     - function args for the entry block
 //!     - non-spilled phi results for other blocks
 //!   - `T(B)` is a transfer region: live-in, non-phi values in a chosen order.
-//!     - `T(B)` is derived from simulated predecessor stacks (`cand(pred→B)`), not heuristics.
-//!     - Layouts are solved in reachable-CFG SCC topo order; cyclic SCCs use a fixed point.
+//!     - `T(B)` is frozen from the first real predecessor stack, a chosen pending merge stack, or
+//!       a deterministic fallback when the block must be emitted before any predecessor is planned.
 //! - For merge blocks, all incoming edges are normalized to the same `StackIn(B)` (often a no-op);
 //!   spilled phi results are stored directly on the incoming edge instead of being carried in
 //!   `P(B)`.
@@ -24,7 +24,6 @@ mod alloc;
 mod block_sim;
 mod br_table;
 mod builder;
-mod flow_templates;
 mod iteration;
 mod planner;
 mod slots;
@@ -53,11 +52,11 @@ mod tests {
     use super::StackifyBuilder;
     use crate::{
         analysis::func_behavior::analyze_module,
-        critical_edge::CriticalEdgeSplitter,
         domtree::DomTree,
         isa::evm::{EvmBackend, canonicalize_alias_value},
         liveness::{InstLiveness, Liveness},
         stackalloc::{Action, Allocator},
+        stackify_edge::StackifyEdgeSplitter,
     };
     use cranelift_entity::SecondaryMap;
     use sonatina_ir::{
@@ -90,7 +89,7 @@ mod tests {
             let mut cfg = ControlFlowGraph::new();
             cfg.compute(function);
 
-            let mut splitter = CriticalEdgeSplitter::new();
+            let mut splitter = StackifyEdgeSplitter::new();
             splitter.run(function, &mut cfg);
 
             let mut liveness = Liveness::new();
@@ -494,7 +493,7 @@ block3:
             let mut cfg = ControlFlowGraph::new();
             cfg.compute(function);
 
-            let mut splitter = CriticalEdgeSplitter::new();
+            let mut splitter = StackifyEdgeSplitter::new();
             splitter.run(function, &mut cfg);
 
             let mut liveness = Liveness::new();

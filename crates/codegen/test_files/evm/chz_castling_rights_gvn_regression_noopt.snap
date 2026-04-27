@@ -6,8 +6,8 @@ input_file: test_files/evm/chz_castling_rights_gvn_regression_noopt.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 6812 bytes
-  total: 6812 bytes
+  section runtime: 6810 bytes
+  total: 6810 bytes
 
 functions:
   abs_diff: ir_blocks=9 ir_insts=36 vcode_ops=72 fixups=4 imm_bytes=14
@@ -18,7 +18,7 @@ functions:
     mem: scratch_words=2 stable_words=0 stable_mode=None entry_abs_words=264 abs_words_end=2
   set_piece: ir_blocks=3 ir_insts=29 vcode_ops=73 fixups=1 imm_bytes=14
     mem: scratch_words=3 stable_words=0 stable_mode=None entry_abs_words=264 abs_words_end=3
-  path_clear_file: ir_blocks=33 ir_insts=121 vcode_ops=293 fixups=23 imm_bytes=43
+  path_clear_file: ir_blocks=45 ir_insts=133 vcode_ops=293 fixups=23 imm_bytes=43
     mem: scratch_words=1 stable_words=5 stable_mode=StaticAbs(base=0x21a0) entry_abs_words=264 abs_words_end=269
   is_empty: ir_blocks=1 ir_insts=6 vcode_ops=12 fixups=0 imm_bytes=2
     mem: scratch_words=1 stable_words=0 stable_mode=None entry_abs_words=269 abs_words_end=1
@@ -92,7 +92,7 @@ functions:
     mem: scratch_words=1 stable_words=0 stable_mode=None entry_abs_words=162 abs_words_end=1
 
 evm:
-  case captured_rook_clears_castling_rights: calldata_len=0 success reason=Return gas_used=36831 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=15831
+  case captured_rook_clears_castling_rights: calldata_len=0 success reason=Return gas_used=36803 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=15803
 
 
 --------------- DEBUG ---------------
@@ -1675,7 +1675,7 @@ path_clear_file:
     SWAP2
     EQ
     ISZERO
-    PUSH1 block20  // br v84 block31 block21;
+    PUSH1 block20  // br v84 block31 block43;
     JUMPI
   block21:
     DUP4  // v98.i256 = mload v7 i256;
@@ -1684,10 +1684,17 @@ path_clear_file:
     AND
     SWAP1  // v28.i1 = lt v83 v99;
     LT
-    ISZERO  // br v28 block9 block35;
-    PUSH1 block35
+    PUSH1 block9  // br v28 block47 block35;
     JUMPI
+  block35:
+    POP  // jump block7;
+    POP
+    POP
+    POP
+    PUSH1 block7
+    JUMP
   block9:
+    JUMPDEST
     DUP2  // v30.i256 = mload v29 i256;
     MLOAD
     PUSH1 0xff (255)  // v85.i256 = and v30 255.i256;
@@ -1701,7 +1708,7 @@ path_clear_file:
     SWAP2
     EQ
     ISZERO
-    PUSH1 block20  // br v88 block32 block22;
+    PUSH1 block20  // br v88 block32 block44;
     JUMPI
   block22:
     PUSH0  // v100.i256 = or v87 0.i256;
@@ -1727,7 +1734,7 @@ path_clear_file:
     SWAP2
     EQ
     ISZERO
-    PUSH1 block20  // br v107 block36 block23;
+    PUSH1 block20  // br v107 block36 block48;
     JUMPI
   block23:
     ADD  // v108.i256 = add v102 v106;
@@ -1738,7 +1745,7 @@ path_clear_file:
     SWAP2
     EQ
     ISZERO
-    PUSH1 block20  // br v110 block37 block24;
+    PUSH1 block20  // br v110 block37 block49;
     JUMPI
   block24:
     PUSH1 `pc + (4)`  // v46.i256 = call %piece_at v36 v109;
@@ -1751,7 +1758,7 @@ path_clear_file:
     PUSH1 FuncRef(12)
     JUMP
     JUMPDEST
-    PUSH1 block8  // br v48 block11 block38;
+    PUSH1 block8  // br v48 block11 block50;
     JUMPI
   block11:
     POP  // return 0.i1;
@@ -1760,14 +1767,6 @@ path_clear_file:
     POP
     PUSH0
     SWAP1
-    JUMP
-  block35:
-    JUMPDEST
-    POP  // jump block7;
-    POP
-    POP
-    POP
-    PUSH1 block7
     JUMP
   block14:
     JUMPDEST
@@ -1784,7 +1783,7 @@ path_clear_file:
     SWAP2
     EQ
     ISZERO
-    PUSH1 block20  // br v93 block33 block25;
+    PUSH1 block20  // br v93 block33 block45;
     JUMPI
   block25:
     DUP3  // mstore v9 v92 i256;
@@ -1799,10 +1798,23 @@ path_clear_file:
     AND
     SWAP1  // v55.i1 = gt v112 v114;
     GT
-    ISZERO  // br v55 block15 block39;
-    PUSH1 block39
+    PUSH1 block15  // br v55 block51 block39;
     JUMPI
+  block39:
+    POP  // jump block7;
+    POP
+    POP
+    POP
+    POP
+  block7:
+    JUMPDEST
+    PUSH1 0x1 (1)  // return 1.i1;
+    PUSH0
+    SIGNEXTEND
+    SWAP1
+    JUMP
   block15:
+    JUMPDEST
     DUP3  // v57.i256 = mload v56 i256;
     MLOAD
     PUSH1 0xff (255)  // v94.i256 = and v57 255.i256;
@@ -1816,7 +1828,7 @@ path_clear_file:
     SWAP1
     SWAP2
     LT
-    PUSH1 block20  // br v97 block34 block26;
+    PUSH1 block20  // br v97 block34 block46;
     JUMPI
   block26:
     PUSH0  // v115.i256 = or v96 0.i256;
@@ -1842,7 +1854,7 @@ path_clear_file:
     SWAP2
     EQ
     ISZERO
-    PUSH1 block20  // br v122 block40 block27;
+    PUSH1 block20  // br v122 block40 block52;
     JUMPI
   block27:
     ADD  // v123.i256 = add v117 v121;
@@ -1852,45 +1864,8 @@ path_clear_file:
     DUP1  // v125.i1 = ne v123 v124;
     SWAP2
     EQ
-    ISZERO
-    PUSH1 block20  // br v125 block41 block28;
+    PUSH1 block28  // br v125 block41 block53;
     JUMPI
-  block28:
-    PUSH1 `pc + (4)`  // v72.i256 = call %piece_at v63 v124;
-    SWAP2
-    PUSH1 FuncRef(28)
-    JUMP
-    JUMPDEST
-    PUSH1 `pc + (4)`  // v73.i1 = call %is_empty v72;
-    SWAP1
-    PUSH1 FuncRef(12)
-    JUMP
-    JUMPDEST
-    PUSH1 block14  // br v74 block17 block42;
-    JUMPI
-  block17:
-    POP  // return 0.i1;
-    POP
-    POP
-    POP
-    POP
-    PUSH0
-    SWAP1
-    JUMP
-  block39:
-    JUMPDEST
-    POP  // jump block7;
-    POP
-    POP
-    POP
-    POP
-  block7:
-    JUMPDEST
-    PUSH1 0x1 (1)  // return 1.i1;
-    PUSH0
-    SIGNEXTEND
-    SWAP1
-    JUMP
   block20:
     JUMPDEST
     PUSH32 0x4e487b7100000000000000000000000000000000000000000000000000000000 (35408467139433450592217433187231851964531694900788300625387963629091585785856)  // mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -1902,6 +1877,29 @@ path_clear_file:
     PUSH1 0x24 (36)  // evm_revert 0.i256 36.i256;
     PUSH0
     REVERT
+  block28:
+    JUMPDEST
+    PUSH1 `pc + (4)`  // v72.i256 = call %piece_at v63 v124;
+    SWAP2
+    PUSH1 FuncRef(28)
+    JUMP
+    JUMPDEST
+    PUSH1 `pc + (4)`  // v73.i1 = call %is_empty v72;
+    SWAP1
+    PUSH1 FuncRef(12)
+    JUMP
+    JUMPDEST
+    PUSH1 block14  // br v74 block17 block54;
+    JUMPI
+  block17:
+    POP  // return 0.i1;
+    POP
+    POP
+    POP
+    POP
+    PUSH0
+    SWAP1
+    JUMP
 
 // func private %is_empty(v0.i256) -> i1
 is_empty:

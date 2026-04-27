@@ -6,11 +6,11 @@ input_file: test_files/evm/loop_carried_array_backedge_liveness_regression.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 807 bytes
-  total: 807 bytes
+  section runtime: 806 bytes
+  total: 806 bytes
 
 functions:
-  run: ir_blocks=7 ir_insts=266 vcode_ops=599 fixups=4 imm_bytes=141
+  run: ir_blocks=10 ir_insts=269 vcode_ops=598 fixups=4 imm_bytes=141
     mem: scratch_words=30 stable_words=0 stable_mode=None entry_abs_words=35 abs_words_end=30
   assert: ir_blocks=3 ir_insts=4 vcode_ops=10 fixups=1 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=35 abs_words_end=0
@@ -20,7 +20,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=30 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=23296 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=2296
+  case ok: calldata_len=0 success reason=Return gas_used=23288 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=2288
 
 
 --------------- DEBUG ---------------
@@ -90,14 +90,49 @@ run:
     PUSH1 0x2 (2)  // v9.i1 = lt v8 2.i256;
     DUP2
     LT
-    ISZERO  // br v9 block2 block7;
-    PUSH1 block7
+    PUSH1 block2  // br v9 block8 block7;
     JUMPI
+  block7:
+    POP  // v117.*i256 = gep v95 0.i64 0.i64;
+    SWAP2
+    POP
+    POP
+    PUSH2 0x1e0 (480)
+    MLOAD  // v118.i256 = mload v117 i256;
+    DUP3  // v119.*i256 = gep v78 0.i64 0.i64;
+    MSTORE  // mstore v119 v118 i256;
+    PUSH2 0x200 (512)  // v120.*i256 = gep v95 0.i64 1.i64;
+    MLOAD  // v121.i256 = mload v120 i256;
+    DUP3  // v122.*i256 = gep v78 0.i64 1.i64;
+    PUSH1 0x20 (32)
+    ADD
+    MSTORE  // mstore v122 v121 i256;
+    PUSH2 0x220 (544)  // v123.*i256 = gep v95 0.i64 2.i64;
+    MLOAD  // v124.i256 = mload v123 i256;
+    DUP3  // v125.*i256 = gep v78 0.i64 2.i64;
+    PUSH1 0x40 (64)
+    ADD
+    MSTORE  // mstore v125 v124 i256;
+    PUSH2 0x240 (576)  // v126.*i256 = gep v95 0.i64 3.i64;
+    MLOAD  // v127.i256 = mload v126 i256;
+    DUP3  // v128.*i256 = gep v78 0.i64 3.i64;
+    PUSH1 0x60 (96)
+    ADD
+    MSTORE  // mstore v128 v127 i256;
+    POP  // v129.*i256 = gep v95 0.i64 4.i64;
+    PUSH2 0x260 (608)
+    MLOAD  // v130.i256 = mload v129 i256;
+    SWAP1  // v131.*i256 = gep v78 0.i64 4.i64;
+    PUSH1 0x80 (128)
+    ADD
+    MSTORE  // mstore v131 v130 i256;
+    JUMP  // return;
   block2:
+    JUMPDEST
     PUSH0  // v10.i1 = eq v8 0.i256;
     DUP2
     EQ
-    ISZERO  // br v10 block3 block4;
+    ISZERO  // br v10 block9 block10;
     PUSH1 block4
     JUMPI
   block3:
@@ -383,42 +418,6 @@ run:
     MSTORE  // mstore v116 v115 i256;
     PUSH1 block1  // jump block1;
     JUMP
-  block7:
-    JUMPDEST
-    POP  // v117.*i256 = gep v95 0.i64 0.i64;
-    SWAP2
-    POP
-    POP
-    PUSH2 0x1e0 (480)
-    MLOAD  // v118.i256 = mload v117 i256;
-    DUP3  // v119.*i256 = gep v78 0.i64 0.i64;
-    MSTORE  // mstore v119 v118 i256;
-    PUSH2 0x200 (512)  // v120.*i256 = gep v95 0.i64 1.i64;
-    MLOAD  // v121.i256 = mload v120 i256;
-    DUP3  // v122.*i256 = gep v78 0.i64 1.i64;
-    PUSH1 0x20 (32)
-    ADD
-    MSTORE  // mstore v122 v121 i256;
-    PUSH2 0x220 (544)  // v123.*i256 = gep v95 0.i64 2.i64;
-    MLOAD  // v124.i256 = mload v123 i256;
-    DUP3  // v125.*i256 = gep v78 0.i64 2.i64;
-    PUSH1 0x40 (64)
-    ADD
-    MSTORE  // mstore v125 v124 i256;
-    PUSH2 0x240 (576)  // v126.*i256 = gep v95 0.i64 3.i64;
-    MLOAD  // v127.i256 = mload v126 i256;
-    DUP3  // v128.*i256 = gep v78 0.i64 3.i64;
-    PUSH1 0x60 (96)
-    ADD
-    MSTORE  // mstore v128 v127 i256;
-    POP  // v129.*i256 = gep v95 0.i64 4.i64;
-    PUSH2 0x260 (608)
-    MLOAD  // v130.i256 = mload v129 i256;
-    SWAP1  // v131.*i256 = gep v78 0.i64 4.i64;
-    PUSH1 0x80 (128)
-    ADD
-    MSTORE  // mstore v131 v130 i256;
-    JUMP  // return;
 
 // func private %assert(v0.i1)
 assert:

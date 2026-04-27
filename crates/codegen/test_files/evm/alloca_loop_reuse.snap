@@ -6,14 +6,14 @@ input_file: test_files/evm/alloca_loop_reuse.sntn
 evm.config: stack_reach=16 vcode=false bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 52 bytes
-  total: 52 bytes
+  section runtime: 51 bytes
+  total: 51 bytes
 
 functions:
-  main: ir_blocks=4 ir_insts=12 vcode_ops=29 fixups=2 imm_bytes=6
+  main: ir_blocks=5 ir_insts=13 vcode_ops=28 fixups=2 imm_bytes=6
     mem: scratch_words=2 stable_words=0 stable_mode=None entry_abs_words=2 abs_words_end=2
   entry: ir_blocks=1 ir_insts=3 vcode_ops=9 fixups=2 imm_bytes=1
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=2 abs_words_end=0
 
 evm:
-  case ok: calldata_len=8 success reason=Return gas_used=21286 gas_refunded=0 logs=0 output=call len=32 tx_gas=21056 runtime_gas=230
+  case ok: calldata_len=8 success reason=Return gas_used=21278 gas_refunded=0 logs=0 output=call len=32 tx_gas=21056 runtime_gas=222
