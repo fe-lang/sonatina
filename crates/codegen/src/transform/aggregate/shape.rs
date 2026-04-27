@@ -3,7 +3,7 @@ use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{
     DataFlowGraph, Type, U256, ValueId,
     module::ModuleCtx,
-    types::{CompoundType, EnumVariantRef, TypeStore},
+    types::{CompoundType, EnumData, EnumVariantRef, TypeStore},
 };
 
 pub type FieldPath = SmallVec<[u32; 4]>;
@@ -126,10 +126,6 @@ impl AggregateLayoutCache {
         self.with_layout(module, |layout| layout.runtime_size_bytes(ty))
     }
 
-    pub fn runtime_size_align_bytes(&mut self, module: &ModuleCtx, ty: Type) -> Option<(u32, u32)> {
-        self.with_layout(module, |layout| layout.runtime_size_align_bytes(ty))
-    }
-
     pub fn is_supported_scalar_shape_ty(&mut self, module: &ModuleCtx, ty: Type) -> bool {
         self.with_layout(module, |layout| layout.is_supported_scalar_shape_ty(ty))
     }
@@ -197,6 +193,13 @@ fn compound_ty(types: &TypeStore, ty: Type) -> Option<&CompoundType> {
         return None;
     };
     Some(types.resolve_compound(cmpd))
+}
+
+fn enum_field_tys(data: &EnumData) -> SmallVec<[Type; 4]> {
+    data.variants
+        .iter()
+        .flat_map(|variant| variant.fields.iter().copied())
+        .collect()
 }
 
 impl LayoutCtx<'_> {
@@ -332,13 +335,9 @@ impl LayoutCtx<'_> {
             Some(CompoundType::Array { elem, .. }) => {
                 self.runtime_size_align_bytes(*elem).is_some()
             }
-            Some(CompoundType::Enum(data)) => data.variants.iter().all(|variant| {
-                variant
-                    .fields
-                    .iter()
-                    .copied()
-                    .all(|field_ty| self.runtime_size_align_bytes(field_ty).is_some())
-            }),
+            Some(CompoundType::Enum(data)) => enum_field_tys(data)
+                .into_iter()
+                .all(|field_ty| self.runtime_size_align_bytes(field_ty).is_some()),
             _ => false,
         }
     }
@@ -644,14 +643,9 @@ impl LayoutCtx<'_> {
                 });
                 path.pop();
 
-                let field_tys: SmallVec<[Type; 4]> = data
-                    .variants
-                    .iter()
-                    .flat_map(|variant| variant.fields.iter().copied())
-                    .collect();
                 let mut slot = 1u32;
                 let mut offset = base_offset.checked_add(tag_size)?;
-                for field_ty in field_tys {
+                for field_ty in enum_field_tys(data) {
                     let (field_size, field_align) = self.runtime_size_align_bytes(field_ty)?;
                     offset = align_to(offset, field_align)?;
                     path.push(slot);
@@ -697,13 +691,8 @@ impl LayoutCtx<'_> {
                 self.flattened_leaf_count(*elem)?.checked_mul(*len)
             }
             Some(CompoundType::Enum(data)) => {
-                let field_tys: SmallVec<[Type; 4]> = data
-                    .variants
-                    .iter()
-                    .flat_map(|variant| variant.fields.iter().copied())
-                    .collect();
                 let mut count = 1usize;
-                for field_ty in field_tys {
+                for field_ty in enum_field_tys(data) {
                     count = count.checked_add(self.flattened_leaf_count(field_ty)?)?;
                 }
                 Some(count)
@@ -747,14 +736,9 @@ impl LayoutCtx<'_> {
             }
             Some(CompoundType::Enum(data)) => {
                 let (tag_size, tag_align) = self.runtime_size_align_bytes(enum_tag_ty(ty)?)?;
-                let field_tys: SmallVec<[Type; 4]> = data
-                    .variants
-                    .iter()
-                    .flat_map(|variant| variant.fields.iter().copied())
-                    .collect();
                 let mut size = tag_size;
                 let mut align = tag_align;
-                for field_ty in field_tys {
+                for field_ty in enum_field_tys(data) {
                     let (field_size, field_align) = self.runtime_size_align_bytes(field_ty)?;
                     size = align_to(size, field_align)?;
                     size = size.checked_add(field_size)?;
@@ -777,9 +761,6 @@ impl LayoutCtx<'_> {
         let align = u32::try_from(self.module.align_of(ty).ok()?).ok()?;
         Some((size, align))
     }
-}
-
-impl LayoutCtx<'_> {
     fn runtime_leaf_range_for_slice(
         &mut self,
         root_ty: Type,
@@ -789,13 +770,12 @@ impl LayoutCtx<'_> {
             return None;
         }
 
-        let total_leaf_count = self.flattened_leaf_count(root_ty)?;
         let slice_end = slice.first_leaf.checked_add(slice.leaf_count)?;
-        if slice_end > total_leaf_count {
+        let shape = self.shape(root_ty)?;
+        if slice_end > shape.leaves.len() {
             return None;
         }
 
-        let shape = self.shape(root_ty)?;
         let first_runtime_leaf = shape.leaves[..slice.first_leaf]
             .iter()
             .filter(|leaf| leaf.size_bytes != 0)
@@ -993,13 +973,8 @@ impl LayoutCtx<'_> {
                     });
                 }
 
-                let field_tys: SmallVec<[Type; 4]> = data
-                    .variants
-                    .iter()
-                    .flat_map(|variant| variant.fields.iter().copied())
-                    .collect();
                 let mut child_first_leaf = base_first_leaf.checked_add(1)?;
-                for field_ty in field_tys {
+                for field_ty in enum_field_tys(data) {
                     let child_leaf_count = self.flattened_leaf_count(field_ty)?;
                     if child_first_leaf == target_first_leaf
                         && child_leaf_count == target_leaf_count
@@ -1125,14 +1100,9 @@ impl LayoutCtx<'_> {
                     });
                 }
 
-                let field_tys: SmallVec<[Type; 4]> = data
-                    .variants
-                    .iter()
-                    .flat_map(|variant| variant.fields.iter().copied())
-                    .collect();
                 let mut child_first_leaf = base_first_leaf.checked_add(1)?;
                 let mut child_first_runtime_leaf = base_first_runtime_leaf.checked_add(1)?;
-                for field_ty in field_tys {
+                for field_ty in enum_field_tys(data) {
                     let child_leaf_count = self.flattened_leaf_count(field_ty)?;
                     let child_runtime_leaf_count = self.runtime_leaf_count_for_ty(field_ty)?;
                     if child_first_runtime_leaf == target_first_runtime_leaf
@@ -1187,13 +1157,8 @@ impl LayoutCtx<'_> {
                 self.runtime_leaf_count_for_ty(*elem)?.checked_mul(*len)
             }
             Some(CompoundType::Enum(data)) => {
-                let field_tys: SmallVec<[Type; 4]> = data
-                    .variants
-                    .iter()
-                    .flat_map(|variant| variant.fields.iter().copied())
-                    .collect();
                 let mut count = 1usize;
-                for field_ty in field_tys {
+                for field_ty in enum_field_tys(data) {
                     count = count.checked_add(self.runtime_leaf_count_for_ty(field_ty)?)?;
                 }
                 Some(count)
@@ -1293,24 +1258,6 @@ impl LayoutCtx<'_> {
 
 pub fn aggregate_shape(module: &ModuleCtx, ty: Type) -> Option<AggregateShape> {
     with_uncached_layout(module, |layout| layout.shape(ty))
-}
-
-pub fn aggregate_runtime_leaves(module: &ModuleCtx, ty: Type) -> Option<RuntimeLeaves> {
-    with_uncached_layout(module, |layout| layout.runtime_leaves(ty))
-}
-
-pub fn aggregate_single_runtime_word_leaf(module: &ModuleCtx, ty: Type) -> Option<AggregateLeaf> {
-    with_uncached_layout(module, |layout| layout.single_runtime_word_leaf(ty))
-}
-
-pub fn compatible_aggregate_bitcast_runtime_leaves(
-    module: &ModuleCtx,
-    from_ty: Type,
-    to_ty: Type,
-) -> Option<(RuntimeLeaves, RuntimeLeaves)> {
-    with_uncached_layout(module, |layout| {
-        layout.compatible_bitcast_runtime_leaves(from_ty, to_ty)
-    })
 }
 
 pub fn runtime_leaf_range_for_slice(
@@ -1468,20 +1415,6 @@ pub fn enum_tag_ty(ty: Type) -> Option<Type> {
         return None;
     };
     Some(Type::EnumTag(enum_ty))
-}
-
-pub fn enum_child_count(module: &ModuleCtx, enum_ty: Type) -> Option<usize> {
-    with_uncached_layout(module, |layout| layout.enum_child_count(enum_ty))
-}
-
-pub fn enum_variant_field_slot(
-    module: &ModuleCtx,
-    variant: EnumVariantRef,
-    field: u32,
-) -> Option<u32> {
-    with_uncached_layout(module, |layout| {
-        layout.enum_variant_field_slot(variant, field)
-    })
 }
 
 pub fn enum_slot_info(module: &ModuleCtx, enum_ty: Type, idx: u32) -> Option<EnumSlotInfo> {
