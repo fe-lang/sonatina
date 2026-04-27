@@ -21,11 +21,11 @@ target = "evm-ethereum-london"
 # nextln:     jump block3;
 # nextln: 
 # nextln: block4:
+# nextln:     v16.i1 = phi (v2 block1) (1.i1 block2);
+# nextln:     v15.i1 = phi (0.i1 block1) (1.i1 block2);
 # nextln:     v5.i32 = phi (0.i32 block1) (-1.i32 block2);
-# nextln:     v6.i1 = ne v5 0.i32;
-# nextln:     v7.i1 = or v2 v6;
 # nextln:     v8.i32 = add v1 -1.i32;
-# nextln:     br v7 block1 block5;
+# nextln:     br v16 block1 block5;
 # nextln: 
 # nextln: block5:
 # nextln:     return;
