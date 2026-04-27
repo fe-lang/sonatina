@@ -7,7 +7,8 @@ use sonatina_ir::{
     },
 };
 
-pub fn legalize_multi_result(func: &mut Function) {
+pub fn legalize_multi_result(func: &mut Function) -> bool {
+    let mut changed = false;
     let blocks: Vec<_> = func.layout.iter_block().collect();
     for block in blocks {
         let insts: Vec<_> = func.layout.iter_inst(block).collect();
@@ -65,6 +66,8 @@ pub fn legalize_multi_result(func: &mut Function) {
             func.dfg.change_to_alias(results[1], lt_result);
             func.layout.remove_inst(inst);
             func.erase_inst(inst);
+            changed = true;
         }
     }
+    changed
 }

@@ -200,8 +200,13 @@ impl GvnSolver {
     }
     /// The main entry point of the struct.
     /// `cfg` and `domtree` is modified to reflect graph structure change.
-    pub fn run(&mut self, func: &mut Function, cfg: &mut ControlFlowGraph, domtree: &mut DomTree) {
-        self.run_with_object_memory(func, cfg, domtree, None);
+    pub fn run(
+        &mut self,
+        func: &mut Function,
+        cfg: &mut ControlFlowGraph,
+        domtree: &mut DomTree,
+    ) -> bool {
+        self.run_with_object_memory(func, cfg, domtree, None)
     }
 
     pub(crate) fn run_with_object_memory(
@@ -210,14 +215,14 @@ impl GvnSolver {
         cfg: &mut ControlFlowGraph,
         domtree: &mut DomTree,
         object_memory: Option<&ObjectMemoryAnalysis>,
-    ) {
+    ) -> bool {
         self.clear();
         cfg.compute(func);
         domtree.compute(cfg);
 
         // Return if the function has no blocks.
         if func.layout.entry_block().is_none() {
-            return;
+            return false;
         }
 
         // Make dummy INITIAL_CLASS to which all values belong before congruence finding.
@@ -429,7 +434,7 @@ impl GvnSolver {
 
         // Remove redundant insn and unreachable block.
         let mut remover = RedundantCodeRemover::new(self);
-        remover.remove_redundant_code(func, cfg, domtree, object_memory);
+        remover.remove_redundant_code(func, cfg, domtree, object_memory)
     }
 
     /// Clear all internal data of the solver.
@@ -2793,6 +2798,7 @@ struct RedundantCodeRemover<'a> {
     resolved_value_phis: FxHashMap<ValuePhi, ValueId>,
 
     renames: FxHashMap<ValueId, ValueId>,
+    changed: bool,
 }
 
 impl<'a> RedundantCodeRemover<'a> {
@@ -2802,12 +2808,14 @@ impl<'a> RedundantCodeRemover<'a> {
             avail_set: SecondaryMap::default(),
             resolved_value_phis: FxHashMap::default(),
             renames: FxHashMap::default(),
+            changed: false,
         }
     }
 
     fn change_to_alias(&mut self, func: &mut Function, value: ValueId, target: ValueId) {
         func.dfg.change_to_alias(value, target);
         self.renames.insert(value, target);
+        self.changed = true;
     }
 
     fn resolve_alias(&self, mut value: ValueId) -> ValueId {
@@ -2865,10 +2873,10 @@ impl<'a> RedundantCodeRemover<'a> {
         cfg: &mut ControlFlowGraph,
         domtree: &mut DomTree,
         object_memory: Option<&ObjectMemoryAnalysis>,
-    ) {
+    ) -> bool {
         // Remove unreachable edges and blocks before redundant code removal to calculate precise
         // dominator tree.
-        self.remove_unreachable_edges(func);
+        self.changed |= self.remove_unreachable_edges(func);
 
         // Recompute cfg and domtree.
         cfg.compute(func);
@@ -2891,6 +2899,7 @@ impl<'a> RedundantCodeRemover<'a> {
             self.resolve_value_phi_in_block(func, block);
             next_block = func.layout.next_block_of(block);
         }
+        self.changed
     }
 
     /// Remove redundant code in the block.
@@ -2951,17 +2960,13 @@ impl<'a> RedundantCodeRemover<'a> {
                     }
 
                     if changed && self.inst_results_are_dead(func, insn) {
-                        inserter.remove_inst(func);
-                        continue;
-                    }
-
-                    if changed && self.inst_results_are_dead(func, insn) {
+                        self.changed = true;
                         inserter.remove_inst(func);
                         continue;
                     }
 
                     if func.dfg.is_phi(insn) {
-                        self.rewrite_phi(func, insn, block);
+                        self.changed |= self.rewrite_phi(func, insn, block);
                     }
                     for &inst_result in &inst_results {
                         if aliased_results.contains(&inst_result) {
@@ -3023,6 +3028,7 @@ impl<'a> RedundantCodeRemover<'a> {
                     }
 
                     if changed && self.inst_results_are_dead(func, insn) {
+                        self.changed = true;
                         inserter.remove_inst(func);
                         continue;
                     }
@@ -3111,6 +3117,7 @@ impl<'a> RedundantCodeRemover<'a> {
                 let insn = inserter.insert_inst_data(func, phi);
                 let result = inserter.make_result(func, insn, ty);
                 inserter.attach_result(func, insn, result);
+                self.changed = true;
 
                 // Restore the inserter loc.
                 inserter.set_location(current_inserter_loc);
@@ -3125,8 +3132,9 @@ impl<'a> RedundantCodeRemover<'a> {
     }
 
     /// Remove unreachable edges and blocks.
-    fn remove_unreachable_edges(&self, func: &mut Function) {
+    fn remove_unreachable_edges(&self, func: &mut Function) -> bool {
         let mut editor = CfgEditor::new(func, CleanupMode::RepairWithUndef);
+        let mut changed = false;
 
         let blocks: Vec<_> = editor.func().layout.iter_block().collect();
         for block in blocks {
@@ -3148,7 +3156,7 @@ impl<'a> RedundantCodeRemover<'a> {
             if keep_mask.iter().all(|keep| *keep) {
                 continue;
             }
-            editor.retain_out_edges(block, &keep_mask);
+            changed |= editor.retain_out_edges(block, &keep_mask);
         }
 
         editor.recompute_cfg();
@@ -3160,17 +3168,19 @@ impl<'a> RedundantCodeRemover<'a> {
             .filter(|block| !reachable[*block])
             .collect();
         if !unreachable.is_empty() {
-            editor.delete_blocks_unreachable(&unreachable);
+            changed |= editor.delete_blocks_unreachable(&unreachable);
         }
+        changed
     }
 
     /// Rewrite phi insn when there is at least one unreachable incoming edge to the block.
-    fn rewrite_phi(&self, func: &mut Function, insn: InstId, block: BlockId) {
+    fn rewrite_phi(&self, func: &mut Function, insn: InstId, block: BlockId) -> bool {
         if !func.dfg.is_phi(insn) {
-            return;
+            return false;
         }
 
         let edges = &self.solver.blocks[block].in_edges;
+        let old_len = func.dfg.cast_phi(insn).unwrap().args().len();
         func.dfg.untrack_inst(insn);
         let phi = func.dfg.cast_phi_mut(insn).unwrap();
         phi.retain(|from| {
@@ -3179,7 +3189,9 @@ impl<'a> RedundantCodeRemover<'a> {
                 ReachableEdgeState::None
             )
         });
+        let changed = old_len != phi.args().len();
         func.dfg.attach_user(insn);
+        changed
     }
 }
 
