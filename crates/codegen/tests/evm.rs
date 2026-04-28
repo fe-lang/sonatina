@@ -26,6 +26,7 @@ use sonatina_codegen::{
         pipeline::Pipeline,
     },
     stackalloc::StackifyBuilder,
+    stackify_edge::StackifyEdgeSplitter,
 };
 use sonatina_ir::{
     BlockId, Function, U256 as IrU256,
@@ -759,20 +760,23 @@ fn stackify_trace_for_fn(
     backend: &EvmBackend,
     stackify_reach_depth: u8,
 ) -> String {
+    let mut function = function.clone();
     let mut cfg = ControlFlowGraph::new();
-    cfg.compute(function);
+    cfg.compute(&function);
 
-    let value_aliases = backend.compute_stackify_value_aliases(function, module_ctx);
+    StackifyEdgeSplitter::run(&mut function, &mut cfg);
+
+    let value_aliases = backend.compute_stackify_value_aliases(&function, module_ctx);
 
     let mut liveness = Liveness::new();
-    liveness.compute_with_value_normalizer(function, &cfg, |v| {
+    liveness.compute_with_value_normalizer(&function, &cfg, |v| {
         canonicalize_alias_value(&value_aliases, v)
     });
     let mut dom = DomTree::new();
     dom.compute(&cfg);
 
     let (_alloc, stackify) =
-        StackifyBuilder::new(function, &cfg, &dom, &liveness, stackify_reach_depth)
+        StackifyBuilder::new(&function, &cfg, &dom, &liveness, stackify_reach_depth)
             .with_value_aliases(&value_aliases)
             .compute_with_trace();
     stackify

@@ -10,7 +10,7 @@ object: Contract
   total: 216 bytes
 
 functions:
-  test_view_param_local_ref_take_reverse: ir_blocks=11 ir_insts=76 vcode_ops=179 fixups=9 imm_bytes=39
+  test_view_param_local_ref_take_reverse: ir_blocks=13 ir_insts=78 vcode_ops=179 fixups=9 imm_bytes=39
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   assert: ir_blocks=3 ir_insts=6 vcode_ops=10 fixups=1 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
@@ -112,7 +112,7 @@ test_view_param_local_ref_take_reverse:
     PUSH1 0x4 (4)  // v56.i1 = lt v55 4.i256;
     DUP3
     LT
-    PUSH1 block12  // br v58 block9 block12;
+    PUSH1 block12  // br v58 block9 block19;
     JUMPI
   block9:
     SWAP2  // v30.i1 = eq v53 26.i256;
@@ -150,7 +150,7 @@ test_view_param_local_ref_take_reverse:
     PUSH1 0x4 (4)  // v73.i1 = lt v72 4.i256;
     DUP3
     LT
-    PUSH1 block17  // br v75 block14 block17;
+    PUSH1 block17  // br v75 block14 block20;
     JUMPI
   block14:
     SWAP2  // v34.i1 = eq v70 10.i256;

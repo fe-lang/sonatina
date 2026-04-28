@@ -67,7 +67,7 @@ impl SccpSolver {
             aux_users_by_edge: FxHashMap::default(),
         }
     }
-    pub fn run(&mut self, func: &mut Function, cfg: &mut ControlFlowGraph) {
+    pub fn run(&mut self, func: &mut Function, cfg: &mut ControlFlowGraph) -> bool {
         self.clear();
 
         let cleanup_mode = if cfg!(debug_assertions) {
@@ -75,12 +75,12 @@ impl SccpSolver {
         } else {
             CleanupMode::RepairWithUndef
         };
-        CfgCleanup::new(cleanup_mode).run(func);
+        let mut changed = CfgCleanup::new(cleanup_mode).run(func);
         let constref_value_tys = collect_constref_value_tys(func);
         let const_paths = analyze_const_paths(func, &constref_value_tys);
 
         let Some(entry_block) = func.layout.entry_block() else {
-            return;
+            return changed;
         };
 
         // Function arguments must be `LatticeCell::Top`
@@ -127,16 +127,17 @@ impl SccpSolver {
         #[cfg(debug_assertions)]
         self.assert_no_executable_inst_results_are_bot(func);
 
-        self.remove_unreachable_edges(func, cleanup_mode);
+        changed |= self.remove_unreachable_edges(func, cleanup_mode);
         cfg.compute(func);
         let fold_known_bits = KnownBitsQuery::new(func);
-        self.fold_insts(func, cfg, &const_paths, &fold_known_bits);
+        changed |= self.fold_insts(func, cfg, &const_paths, &fold_known_bits);
 
-        CfgCleanup::new(cleanup_mode).run(func);
+        changed |= CfgCleanup::new(cleanup_mode).run(func);
         cfg.compute(func);
 
-        AdceSolver::new().run(func);
+        changed |= AdceSolver::new().run(func);
         cfg.compute(func);
+        changed
     }
 
     pub fn clear(&mut self) {
@@ -491,8 +492,9 @@ impl SccpSolver {
     }
 
     /// Remove unreachable edges and blocks.
-    fn remove_unreachable_edges(&self, func: &mut Function, mode: CleanupMode) {
+    fn remove_unreachable_edges(&self, func: &mut Function, mode: CleanupMode) -> bool {
         let mut editor = CfgEditor::new(func, mode);
+        let mut changed = false;
 
         let blocks: Vec<_> = editor.func().layout.iter_block().collect();
         let unreachable: Vec<_> = blocks
@@ -500,7 +502,7 @@ impl SccpSolver {
             .copied()
             .filter(|block| !self.reachable_blocks[*block])
             .collect();
-        editor.delete_blocks_unreachable(&unreachable);
+        changed |= editor.delete_blocks_unreachable(&unreachable);
 
         let blocks: Vec<_> = editor.func().layout.iter_block().collect();
         for block in blocks {
@@ -517,10 +519,11 @@ impl SccpSolver {
 
             for dest in branch_info.dests() {
                 if !self.is_reachable_edge(term, dest) {
-                    editor.remove_succ(block, dest);
+                    changed |= editor.remove_succ(block, dest);
                 }
             }
         }
+        changed
     }
 
     fn is_reachable_edge(&self, inst: InstId, dest: BlockId) -> bool {
@@ -533,17 +536,19 @@ impl SccpSolver {
         cfg: &ControlFlowGraph,
         const_paths: &ConstPathAnalysis,
         known_bits: &KnownBitsQuery,
-    ) {
+    ) -> bool {
         let mut rpo: Vec<_> = cfg.post_order().collect();
         rpo.reverse();
 
+        let mut changed = false;
         for block in rpo {
             let mut next_inst = func.layout.first_inst_of(block);
             while let Some(inst) = next_inst {
                 next_inst = func.layout.next_inst_of(inst);
-                self.fold(func, inst, const_paths, known_bits);
+                changed |= self.fold(func, inst, const_paths, known_bits);
             }
         }
+        changed
     }
 
     fn fold(
@@ -552,10 +557,10 @@ impl SccpSolver {
         inst: InstId,
         const_paths: &ConstPathAnalysis,
         known_bits: &KnownBitsQuery,
-    ) {
+    ) -> bool {
         let inst_results = func.dfg.inst_results(inst).to_vec();
         if inst_results.is_empty() {
-            return;
+            return false;
         }
 
         let mut changed = false;
@@ -614,7 +619,7 @@ impl SccpSolver {
                                 inst,
                                 Box::new(cast::Bitcast::new(bitcast, src, result_ty)),
                             );
-                            return;
+                            return true;
                         }
                     }
                     SimplifyAction::BuildIsZero(arg) => {
@@ -625,7 +630,7 @@ impl SccpSolver {
                         {
                             func.dfg
                                 .replace_inst(inst, Box::new(cmp::IsZero::new(is_zero, arg)));
-                            return;
+                            return true;
                         }
                     }
                     SimplifyAction::NoChange => {}
@@ -659,14 +664,16 @@ impl SccpSolver {
         if changed && self.inst_results_are_dead(func, inst) {
             InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
         } else if !changed && func.dfg.is_phi(inst) {
-            self.try_fold_phi(func, inst);
+            changed |= self.try_fold_phi(func, inst);
         }
+        changed
     }
 
-    fn try_fold_phi(&self, func: &mut Function, inst: InstId) {
+    fn try_fold_phi(&self, func: &mut Function, inst: InstId) -> bool {
         let block = func.layout.inst_block(inst);
         let phi_value = func.dfg.inst_result(inst).expect("phi has no result");
         let phi_ty = func.dfg.value_ty(phi_value);
+        let old_len = func.dfg.cast_phi(inst).unwrap().args().len();
 
         let reachable_preds: BTreeSet<_> = func
             .dfg
@@ -681,9 +688,10 @@ impl SccpSolver {
         func.dfg.untrack_inst(inst);
 
         let mut fold_arg = None;
-        {
+        let changed = {
             let phi = func.dfg.cast_phi_mut(inst).unwrap();
             phi.retain(|pred| reachable_preds.contains(&pred));
+            let changed = old_len != phi.args().len();
 
             let mut seen = BTreeSet::new();
             for &(_, pred) in phi.args() {
@@ -696,7 +704,8 @@ impl SccpSolver {
             if phi.args().len() == 1 {
                 fold_arg = Some(phi.args()[0].0);
             }
-        }
+            changed
+        };
 
         let fold_arg = if fold_arg.is_none() && func.dfg.cast_phi(inst).unwrap().args().is_empty() {
             Some(func.dfg.make_undef_value(phi_ty))
@@ -713,8 +722,10 @@ impl SccpSolver {
             };
             func.dfg.change_to_alias(phi_value, phi_arg);
             InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+            true
         } else {
             func.dfg.attach_user(inst);
+            changed
         }
     }
 

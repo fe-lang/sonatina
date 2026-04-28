@@ -12,7 +12,7 @@ object: Contract
 functions:
   entry: ir_blocks=1 ir_insts=3 vcode_ops=9 fixups=2 imm_bytes=1
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  const_loop: ir_blocks=4 ir_insts=8 vcode_ops=16 fixups=1 imm_bytes=3
+  const_loop: ir_blocks=5 ir_insts=9 vcode_ops=16 fixups=1 imm_bytes=3
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:

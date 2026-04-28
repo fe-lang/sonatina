@@ -1,8 +1,9 @@
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex};
 
 use bitflags::bitflags;
 use cranelift_entity::entity_impl;
 use dashmap::{DashMap, ReadOnlyView};
+use parking_lot::RwLock;
 use rayon::{iter::IntoParallelIterator, prelude::ParallelIterator};
 use rustc_hash::FxHashMap;
 use sonatina_triple::TargetTriple;
@@ -274,14 +275,12 @@ impl ModuleCtx {
         let func_effects = self
             .func_effects
             .read()
-            .unwrap()
             .iter()
             .map(|(&func_ref, effects)| (func_ref, effects.clone()))
             .collect();
         let func_hints = self
             .func_hints
             .read()
-            .unwrap()
             .iter()
             .map(|(&func_ref, &hints)| (func_ref, hints))
             .collect();
@@ -294,8 +293,8 @@ impl ModuleCtx {
             declared_funcs: Arc::new(declared_funcs),
             func_effects: Arc::new(RwLock::new(func_effects)),
             func_hints: Arc::new(RwLock::new(func_hints)),
-            type_store: Arc::new(RwLock::new(self.type_store.read().unwrap().clone())),
-            gv_store: Arc::new(RwLock::new(self.gv_store.read().unwrap().clone())),
+            type_store: Arc::new(RwLock::new(self.type_store.read().clone())),
+            gv_store: Arc::new(RwLock::new(self.gv_store.read().clone())),
         }
     }
 
@@ -314,8 +313,8 @@ impl ModuleCtx {
             declared_funcs: Arc::new(DashMap::new()),
             func_effects: Arc::new(RwLock::new(FxHashMap::default())),
             func_hints: Arc::new(RwLock::new(FxHashMap::default())),
-            type_store: Arc::new(RwLock::new(self.type_store.read().unwrap().clone())),
-            gv_store: Arc::new(RwLock::new(self.gv_store.read().unwrap().clone())),
+            type_store: Arc::new(RwLock::new(self.type_store.read().clone())),
+            gv_store: Arc::new(RwLock::new(self.gv_store.read().clone())),
         }
     }
 
@@ -402,26 +401,25 @@ impl ModuleCtx {
     pub fn func_effects(&self, func_ref: FuncRef) -> FuncEffectSummary {
         self.func_effects
             .read()
-            .unwrap()
             .get(&func_ref)
             .cloned()
             .unwrap_or_else(FuncEffectSummary::unknown_call)
     }
 
     pub fn has_func_effects(&self, func_ref: FuncRef) -> bool {
-        self.func_effects.read().unwrap().contains_key(&func_ref)
+        self.func_effects.read().contains_key(&func_ref)
     }
 
     pub fn set_all_func_effects(&self, new: FxHashMap<FuncRef, FuncEffectSummary>) {
-        *self.func_effects.write().unwrap() = new;
+        *self.func_effects.write() = new;
     }
 
     pub fn set_func_effects(&self, func_ref: FuncRef, effects: FuncEffectSummary) {
-        self.func_effects.write().unwrap().insert(func_ref, effects);
+        self.func_effects.write().insert(func_ref, effects);
     }
 
     pub fn clear_func_effects(&self, func_ref: FuncRef) {
-        self.func_effects.write().unwrap().remove(&func_ref);
+        self.func_effects.write().remove(&func_ref);
     }
 
     pub fn address_spaces(&self) -> &'static dyn AddressSpaceInfo {
@@ -431,14 +429,13 @@ impl ModuleCtx {
     pub fn func_hints(&self, func_ref: FuncRef) -> FuncHints {
         self.func_hints
             .read()
-            .unwrap()
             .get(&func_ref)
             .copied()
             .unwrap_or_default()
     }
 
     pub fn has_func_hints(&self, func_ref: FuncRef) -> bool {
-        self.func_hints.read().unwrap().contains_key(&func_ref)
+        self.func_hints.read().contains_key(&func_ref)
     }
 
     pub fn inline_hint(&self, func_ref: FuncRef) -> InlineHint {
@@ -446,20 +443,19 @@ impl ModuleCtx {
     }
 
     pub fn set_all_func_hints(&self, new: FxHashMap<FuncRef, FuncHints>) {
-        *self.func_hints.write().unwrap() = new;
+        *self.func_hints.write() = new;
     }
 
     pub fn set_func_hints(&self, func_ref: FuncRef, hints: FuncHints) {
         self.func_hints
             .write()
-            .unwrap()
             .entry(func_ref)
             .and_modify(|entry| *entry |= hints)
             .or_insert(hints);
     }
 
     pub fn set_inline_hint(&self, func_ref: FuncRef, hint: InlineHint) {
-        let mut hints = self.func_hints.write().unwrap();
+        let mut hints = self.func_hints.write();
         let remove = {
             let entry = hints.entry(func_ref).or_default();
             *entry = entry.with_inline_hint(hint);
@@ -471,11 +467,11 @@ impl ModuleCtx {
     }
 
     pub fn clear_func_hints(&self, func_ref: FuncRef) {
-        self.func_hints.write().unwrap().remove(&func_ref);
+        self.func_hints.write().remove(&func_ref);
     }
 
     pub fn clear_inline_hint(&self, func_ref: FuncRef) {
-        let mut hints = self.func_hints.write().unwrap();
+        let mut hints = self.func_hints.write();
         let remove = if let Some(entry) = hints.get_mut(&func_ref) {
             *entry = entry.with_inline_hint(InlineHint::Auto);
             entry.is_empty()
@@ -512,28 +508,28 @@ impl ModuleCtx {
     where
         F: FnOnce(&TypeStore) -> R,
     {
-        f(&self.type_store.read().unwrap())
+        f(&self.type_store.read())
     }
 
     pub fn with_ty_store_mut<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut TypeStore) -> R,
     {
-        f(&mut self.type_store.write().unwrap())
+        f(&mut self.type_store.write())
     }
 
     pub fn with_gv_store<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&GlobalVariableStore) -> R,
     {
-        f(&self.gv_store.read().unwrap())
+        f(&self.gv_store.read())
     }
 
     pub fn with_gv_store_mut<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut GlobalVariableStore) -> R,
     {
-        f(&mut self.gv_store.write().unwrap())
+        f(&mut self.gv_store.write())
     }
 }
 

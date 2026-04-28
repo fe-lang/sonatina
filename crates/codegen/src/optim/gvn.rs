@@ -200,8 +200,13 @@ impl GvnSolver {
     }
     /// The main entry point of the struct.
     /// `cfg` and `domtree` is modified to reflect graph structure change.
-    pub fn run(&mut self, func: &mut Function, cfg: &mut ControlFlowGraph, domtree: &mut DomTree) {
-        self.run_with_object_memory(func, cfg, domtree, None);
+    pub fn run(
+        &mut self,
+        func: &mut Function,
+        cfg: &mut ControlFlowGraph,
+        domtree: &mut DomTree,
+    ) -> bool {
+        self.run_with_object_memory(func, cfg, domtree, None)
     }
 
     pub(crate) fn run_with_object_memory(
@@ -210,14 +215,14 @@ impl GvnSolver {
         cfg: &mut ControlFlowGraph,
         domtree: &mut DomTree,
         object_memory: Option<&ObjectMemoryAnalysis>,
-    ) {
+    ) -> bool {
         self.clear();
         cfg.compute(func);
         domtree.compute(cfg);
 
         // Return if the function has no blocks.
         if func.layout.entry_block().is_none() {
-            return;
+            return false;
         }
 
         // Make dummy INITIAL_CLASS to which all values belong before congruence finding.
@@ -323,6 +328,8 @@ impl GvnSolver {
         // Make the entry block reachable.
         let entry = func.layout.entry_block().unwrap();
         self.blocks[entry].reachable = true;
+        let mut domtree_traversable = DominatorTreeTraversable::default();
+        domtree_traversable.compute(domtree);
 
         // Reassign congruence classes until no more change happens.
         let mut touched = SecondaryMap::<BlockId, bool>::default();
@@ -379,15 +386,20 @@ impl GvnSolver {
                 }
 
                 // If insn is terminator, analyze it to update edge and block reachability.
-                if let Some(last_insn) = func.layout.last_inst_of(block)
-                    && self.analyze_last_insn(func, domtree, block, last_insn)
-                {
-                    changed = true;
-                    block_changed = true;
-                    for edge in self.blocks[block].out_edges.clone() {
-                        let edge_data = self.edge_data(edge);
-                        if edge_data.reachable {
-                            next_touched_any |= Self::mark_touched(&mut next_touched, edge_data.to);
+                if let Some(last_insn) = func.layout.last_inst_of(block) {
+                    let edge_changes = self.analyze_last_insn(func, domtree, block, last_insn);
+                    if !edge_changes.is_empty() {
+                        changed = true;
+                        block_changed = true;
+                    }
+                    for change in edge_changes {
+                        next_touched_any |= Self::mark_touched(&mut next_touched, change.dest);
+                        if change.dest_was_reachable {
+                            next_touched_any |= self.mark_path_fact_dependents_touched(
+                                &domtree_traversable,
+                                &mut next_touched,
+                                change.dest,
+                            );
                         }
                     }
                 }
@@ -422,7 +434,7 @@ impl GvnSolver {
 
         // Remove redundant insn and unreachable block.
         let mut remover = RedundantCodeRemover::new(self);
-        remover.remove_redundant_code(func, cfg, domtree, object_memory);
+        remover.remove_redundant_code(func, cfg, domtree, object_memory)
     }
 
     /// Clear all internal data of the solver.
@@ -446,17 +458,44 @@ impl GvnSolver {
         }
     }
 
+    fn mark_path_fact_dependents_touched(
+        &self,
+        domtree_traversable: &DominatorTreeTraversable,
+        next_touched: &mut SecondaryMap<BlockId, bool>,
+        block: BlockId,
+    ) -> bool {
+        let mut changed = false;
+        let mut stack = vec![block];
+        while let Some(current) = stack.pop() {
+            if current != block && self.blocks[current].reachable {
+                changed |= Self::mark_touched(next_touched, current);
+            }
+            if self.blocks[current].reachable {
+                for edge in &self.blocks[current].out_edges {
+                    let edge_data = self.edge_data(*edge);
+                    if edge_data.reachable {
+                        // Phi keys in a successor can depend on path facts inferred at
+                        // `current` for the incoming argument from `current`.
+                        changed |= Self::mark_touched(next_touched, edge_data.to);
+                    }
+                }
+                stack.extend_from_slice(domtree_traversable.children_of(current));
+            }
+        }
+        changed
+    }
+
     /// Analyze the last insn of the block.
     /// This function updates reachability of the edges and blocks.
     ///
-    /// Returns `true` if reachability is changed.
+    /// Returns the edges whose reachability changed.
     fn analyze_last_insn(
         &mut self,
         func: &Function,
         domtree: &DomTree,
         block: BlockId,
         insn: InstId,
-    ) -> bool {
+    ) -> SmallVec<[EdgeReachabilityChange; 4]> {
         match func
             .dfg
             .branch_info(insn)
@@ -466,7 +505,7 @@ impl GvnSolver {
                 let out_edges = &self.blocks[block].out_edges;
                 debug_assert_eq!(out_edges.len(), 1);
                 let out_edge = out_edges[0];
-                self.mark_edge_reachable(out_edge)
+                self.mark_edge_reachable(out_edge).into_iter().collect()
             }
 
             Some(BranchKind::Br(branch)) => {
@@ -482,19 +521,17 @@ impl GvnSolver {
                 // Both CFG edges must be marked reachable; otherwise later edge-pruning can
                 // remove destination `X` and incorrectly turn the branch into `unreachable`.
                 if then_dest == else_dest {
-                    let changed = self.mark_edge_reachable(then_edge);
-                    return changed || self.mark_edge_reachable(else_edge);
+                    return self.mark_edges_reachable([then_edge, else_edge]);
                 }
 
                 // Try to infer reachability of edges.
                 if self.infer_edge_reachability(func, cond, then_edge, domtree) {
-                    self.mark_edge_reachable(then_edge)
+                    self.mark_edge_reachable(then_edge).into_iter().collect()
                 } else if self.infer_edge_reachability(func, cond, else_edge, domtree) {
-                    self.mark_edge_reachable(else_edge)
+                    self.mark_edge_reachable(else_edge).into_iter().collect()
                 } else {
                     // Mark both edges if inference failed.
-                    let changed = self.mark_edge_reachable(then_edge);
-                    changed || self.mark_edge_reachable(else_edge)
+                    self.mark_edges_reachable([then_edge, else_edge])
                 }
             }
 
@@ -509,7 +546,7 @@ impl GvnSolver {
                 for (idx, _) in br_table.table().iter().enumerate() {
                     let edge = out_edges[table_offset + idx];
                     if self.infer_edge_reachability(func, cond, edge, domtree) {
-                        return self.mark_edge_reachable(edge);
+                        return self.mark_edge_reachable(edge).into_iter().collect();
                     }
                 }
 
@@ -521,20 +558,15 @@ impl GvnSolver {
                         .value_imm(self.infer_value_at_block(func, domtree, cond, block))
                         .is_some()
                 {
-                    return self.mark_edge_reachable(out_edges[0]);
+                    return self.mark_edge_reachable(out_edges[0]).into_iter().collect();
                 }
 
                 // If none of entry values is congruent to the cond, then mark all edges as
                 // reachable.
-                let mut changed = false;
-                for edge in out_edges {
-                    changed |= self.mark_edge_reachable(edge);
-                }
-
-                changed
+                self.mark_edges_reachable(out_edges)
             }
 
-            None => false,
+            None => SmallVec::new(),
         }
     }
 
@@ -671,20 +703,32 @@ impl GvnSolver {
         self.update_class_value_phi(class, value_phi)
     }
 
+    fn mark_edges_reachable(
+        &mut self,
+        edges: impl IntoIterator<Item = Edge>,
+    ) -> SmallVec<[EdgeReachabilityChange; 4]> {
+        edges
+            .into_iter()
+            .filter_map(|edge| self.mark_edge_reachable(edge))
+            .collect()
+    }
+
     /// Mark the edge and its destinating block as reachable if they are still unreachable.
     ///
-    /// Returns `true` if edge becomes reachable.
-    fn mark_edge_reachable(&mut self, edge: Edge) -> bool {
-        let edge_data = &mut self.edges[edge];
-        let dest = edge_data.to;
-
-        if !edge_data.reachable {
-            edge_data.reachable = true;
-            self.blocks[dest].reachable = true;
-            true
-        } else {
-            false
+    /// Returns a change record if the edge becomes reachable.
+    fn mark_edge_reachable(&mut self, edge: Edge) -> Option<EdgeReachabilityChange> {
+        let dest = self.edges[edge].to;
+        if self.edges[edge].reachable {
+            return None;
         }
+
+        let dest_was_reachable = self.blocks[dest].reachable;
+        self.edges[edge].reachable = true;
+        self.blocks[dest].reachable = true;
+        Some(EdgeReachabilityChange {
+            dest,
+            dest_was_reachable,
+        })
     }
 
     /// Returns `true` if the `edge` is inferred as being reachable.
@@ -2304,6 +2348,12 @@ impl GvnInsn {
 struct Edge(u32);
 entity_impl!(Edge);
 
+#[derive(Debug, Clone, Copy)]
+struct EdgeReachabilityChange {
+    dest: BlockId,
+    dest_was_reachable: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum PredicateRelation {
     Eq { lhs: ValueId, rhs: ValueId },
@@ -2748,6 +2798,7 @@ struct RedundantCodeRemover<'a> {
     resolved_value_phis: FxHashMap<ValuePhi, ValueId>,
 
     renames: FxHashMap<ValueId, ValueId>,
+    changed: bool,
 }
 
 impl<'a> RedundantCodeRemover<'a> {
@@ -2757,12 +2808,14 @@ impl<'a> RedundantCodeRemover<'a> {
             avail_set: SecondaryMap::default(),
             resolved_value_phis: FxHashMap::default(),
             renames: FxHashMap::default(),
+            changed: false,
         }
     }
 
     fn change_to_alias(&mut self, func: &mut Function, value: ValueId, target: ValueId) {
         func.dfg.change_to_alias(value, target);
         self.renames.insert(value, target);
+        self.changed = true;
     }
 
     fn resolve_alias(&self, mut value: ValueId) -> ValueId {
@@ -2820,10 +2873,10 @@ impl<'a> RedundantCodeRemover<'a> {
         cfg: &mut ControlFlowGraph,
         domtree: &mut DomTree,
         object_memory: Option<&ObjectMemoryAnalysis>,
-    ) {
+    ) -> bool {
         // Remove unreachable edges and blocks before redundant code removal to calculate precise
         // dominator tree.
-        self.remove_unreachable_edges(func);
+        self.changed |= self.remove_unreachable_edges(func);
 
         // Recompute cfg and domtree.
         cfg.compute(func);
@@ -2846,6 +2899,7 @@ impl<'a> RedundantCodeRemover<'a> {
             self.resolve_value_phi_in_block(func, block);
             next_block = func.layout.next_block_of(block);
         }
+        self.changed
     }
 
     /// Remove redundant code in the block.
@@ -2906,17 +2960,13 @@ impl<'a> RedundantCodeRemover<'a> {
                     }
 
                     if changed && self.inst_results_are_dead(func, insn) {
-                        inserter.remove_inst(func);
-                        continue;
-                    }
-
-                    if changed && self.inst_results_are_dead(func, insn) {
+                        self.changed = true;
                         inserter.remove_inst(func);
                         continue;
                     }
 
                     if func.dfg.is_phi(insn) {
-                        self.rewrite_phi(func, insn, block);
+                        self.changed |= self.rewrite_phi(func, insn, block);
                     }
                     for &inst_result in &inst_results {
                         if aliased_results.contains(&inst_result) {
@@ -2978,6 +3028,7 @@ impl<'a> RedundantCodeRemover<'a> {
                     }
 
                     if changed && self.inst_results_are_dead(func, insn) {
+                        self.changed = true;
                         inserter.remove_inst(func);
                         continue;
                     }
@@ -3066,6 +3117,7 @@ impl<'a> RedundantCodeRemover<'a> {
                 let insn = inserter.insert_inst_data(func, phi);
                 let result = inserter.make_result(func, insn, ty);
                 inserter.attach_result(func, insn, result);
+                self.changed = true;
 
                 // Restore the inserter loc.
                 inserter.set_location(current_inserter_loc);
@@ -3080,8 +3132,9 @@ impl<'a> RedundantCodeRemover<'a> {
     }
 
     /// Remove unreachable edges and blocks.
-    fn remove_unreachable_edges(&self, func: &mut Function) {
+    fn remove_unreachable_edges(&self, func: &mut Function) -> bool {
         let mut editor = CfgEditor::new(func, CleanupMode::RepairWithUndef);
+        let mut changed = false;
 
         let blocks: Vec<_> = editor.func().layout.iter_block().collect();
         for block in blocks {
@@ -3103,7 +3156,7 @@ impl<'a> RedundantCodeRemover<'a> {
             if keep_mask.iter().all(|keep| *keep) {
                 continue;
             }
-            editor.retain_out_edges(block, &keep_mask);
+            changed |= editor.retain_out_edges(block, &keep_mask);
         }
 
         editor.recompute_cfg();
@@ -3115,17 +3168,19 @@ impl<'a> RedundantCodeRemover<'a> {
             .filter(|block| !reachable[*block])
             .collect();
         if !unreachable.is_empty() {
-            editor.delete_blocks_unreachable(&unreachable);
+            changed |= editor.delete_blocks_unreachable(&unreachable);
         }
+        changed
     }
 
     /// Rewrite phi insn when there is at least one unreachable incoming edge to the block.
-    fn rewrite_phi(&self, func: &mut Function, insn: InstId, block: BlockId) {
+    fn rewrite_phi(&self, func: &mut Function, insn: InstId, block: BlockId) -> bool {
         if !func.dfg.is_phi(insn) {
-            return;
+            return false;
         }
 
         let edges = &self.solver.blocks[block].in_edges;
+        let old_len = func.dfg.cast_phi(insn).unwrap().args().len();
         func.dfg.untrack_inst(insn);
         let phi = func.dfg.cast_phi_mut(insn).unwrap();
         phi.retain(|from| {
@@ -3134,7 +3189,9 @@ impl<'a> RedundantCodeRemover<'a> {
                 ReachableEdgeState::None
             )
         });
+        let changed = old_len != phi.args().len();
         func.dfg.attach_user(insn);
+        changed
     }
 }
 

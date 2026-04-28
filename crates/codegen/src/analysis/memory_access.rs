@@ -1,6 +1,6 @@
 use std::hash::{Hash, Hasher};
 
-use rustc_hash::{FxHashSet, FxHasher};
+use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
 use sonatina_ir::{
     AccessLoc, AddressSpaceId, Function, GlobalVariableRef, I256, Immediate, InstDowncast, InstId,
     Type, Value, ValueId,
@@ -121,15 +121,26 @@ pub struct ExactLocalAddr {
     pub offset_bytes: i64,
 }
 
-pub struct MemoryAccessAnalysis;
+pub struct MemoryAccessAnalysis {
+    canonical_addrs: FxHashMap<ValueId, CanonicalAddr>,
+    value_keys: FxHashMap<ValueId, Option<ValueKey>>,
+}
 
 impl MemoryAccessAnalysis {
     pub fn new() -> Self {
-        Self
+        Self {
+            canonical_addrs: FxHashMap::default(),
+            value_keys: FxHashMap::default(),
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.canonical_addrs.clear();
+        self.value_keys.clear();
     }
 
     pub fn trackable_exact_loc(
-        &self,
+        &mut self,
         func: &Function,
         access: &sonatina_ir::MemoryAccess,
     ) -> Option<TrackedLocKey> {
@@ -166,7 +177,7 @@ impl MemoryAccessAnalysis {
     }
 
     pub fn trackable_linear_range(
-        &self,
+        &mut self,
         func: &Function,
         access: &sonatina_ir::MemoryAccess,
     ) -> Option<LinearRangeKey> {
@@ -209,7 +220,7 @@ impl MemoryAccessAnalysis {
     }
 
     pub fn access_may_alias_key(
-        &self,
+        &mut self,
         func: &Function,
         access: &sonatina_ir::MemoryAccess,
         key: &TrackedLocKey,
@@ -245,7 +256,7 @@ impl MemoryAccessAnalysis {
         }
     }
 
-    pub fn exact_local_addr(&self, func: &Function, value: ValueId) -> Option<ExactLocalAddr> {
+    pub fn exact_local_addr(&mut self, func: &Function, value: ValueId) -> Option<ExactLocalAddr> {
         let canonical = self.canonical_linear_addr(func, value);
         let BaseObject::Alloca(root_alloca) = canonical.base else {
             return None;
@@ -447,48 +458,50 @@ impl MemoryAccessAnalysis {
         }
     }
 
-    fn canonical_linear_addr(&self, func: &Function, addr: ValueId) -> CanonicalAddr {
+    fn canonical_linear_addr(&mut self, func: &Function, addr: ValueId) -> CanonicalAddr {
         self.canonical_linear_addr_rec(func, addr, &mut FxHashSet::default())
     }
 
     fn canonical_linear_addr_rec(
-        &self,
+        &mut self,
         func: &Function,
         addr: ValueId,
         visiting: &mut FxHashSet<ValueId>,
     ) -> CanonicalAddr {
+        if let Some(canonical) = self.canonical_addrs.get(&addr) {
+            return canonical.clone();
+        }
+
         if !visiting.insert(addr) {
             return CanonicalAddr::unknown(addr);
         }
 
-        let Some(value) = func.dfg.get_value(addr) else {
-            visiting.remove(&addr);
-            return CanonicalAddr::unknown(addr);
-        };
-
-        let canonical = match value {
-            Value::Immediate { imm, .. } => CanonicalAddr {
+        let canonical = match func.dfg.get_value(addr) {
+            Some(Value::Immediate { imm, .. }) => CanonicalAddr {
                 base: BaseObject::Absolute(*imm),
                 offset: 0,
             },
-            Value::Global { gv, .. } => CanonicalAddr {
+            Some(Value::Global { gv, .. }) => CanonicalAddr {
                 base: BaseObject::Global(*gv),
                 offset: 0,
             },
-            Value::Arg { .. } => CanonicalAddr {
+            Some(Value::Arg { .. }) => CanonicalAddr {
                 base: BaseObject::Arg(addr),
                 offset: 0,
             },
-            Value::Undef { .. } => CanonicalAddr::unknown(addr),
-            Value::Inst { inst, .. } => self.canonical_addr_from_inst(func, addr, *inst, visiting),
+            Some(Value::Inst { inst, .. }) => {
+                self.canonical_addr_from_inst(func, addr, *inst, visiting)
+            }
+            Some(Value::Undef { .. }) | None => CanonicalAddr::unknown(addr),
         };
 
         visiting.remove(&addr);
+        self.canonical_addrs.insert(addr, canonical.clone());
         canonical
     }
 
     fn canonical_addr_from_inst(
-        &self,
+        &mut self,
         func: &Function,
         value: ValueId,
         inst: InstId,
@@ -577,16 +590,20 @@ impl MemoryAccessAnalysis {
         CanonicalAddr::unknown(value)
     }
 
-    fn trackable_value_key(&self, func: &Function, value: ValueId) -> Option<ValueKey> {
+    fn trackable_value_key(&mut self, func: &Function, value: ValueId) -> Option<ValueKey> {
         self.trackable_value_key_rec(func, value, &mut FxHashSet::default())
     }
 
     fn trackable_value_key_rec(
-        &self,
+        &mut self,
         func: &Function,
         value: ValueId,
         visiting: &mut FxHashSet<ValueId>,
     ) -> Option<ValueKey> {
+        if let Some(key) = self.value_keys.get(&value) {
+            return key.clone();
+        }
+
         if !visiting.insert(value) {
             return None;
         }
@@ -594,23 +611,24 @@ impl MemoryAccessAnalysis {
         // `None` means the value cannot be rebuilt from runtime-invariant leaves and must stay
         // out of exact keyed forwarding. Structural expression equality is not enough once phi
         // nodes or loop-carried values can vary across executions.
-        let key = match func.dfg.get_value(value)? {
-            Value::Immediate { imm, .. } => Some(ValueKey::Imm(*imm)),
-            Value::Arg { .. } => Some(ValueKey::Arg(value)),
-            Value::Inst {
+        let key = match func.dfg.get_value(value) {
+            Some(Value::Immediate { imm, .. }) => Some(ValueKey::Imm(*imm)),
+            Some(Value::Arg { .. }) => Some(ValueKey::Arg(value)),
+            Some(Value::Inst {
                 inst,
                 result_idx,
                 ty,
-            } => self.inst_value_key(func, *inst, *result_idx, *ty, visiting),
-            Value::Global { .. } | Value::Undef { .. } => None,
+            }) => self.inst_value_key(func, *inst, *result_idx, *ty, visiting),
+            Some(Value::Global { .. } | Value::Undef { .. }) | None => None,
         };
 
         visiting.remove(&value);
+        self.value_keys.insert(value, key.clone());
         key
     }
 
     fn inst_value_key(
-        &self,
+        &mut self,
         func: &Function,
         inst: InstId,
         result_idx: u16,
@@ -845,7 +863,7 @@ mod tests {
     };
 
     fn single_key(func: &Function, inst: InstId) -> TrackedLocKey {
-        let analysis = MemoryAccessAnalysis::new();
+        let mut analysis = MemoryAccessAnalysis::new();
         let effects = func.dfg.effects(inst);
         let access = effects.accesses.first().expect("expected one access");
         analysis
@@ -854,7 +872,7 @@ mod tests {
     }
 
     fn maybe_single_key(func: &Function, inst: InstId) -> Option<TrackedLocKey> {
-        let analysis = MemoryAccessAnalysis::new();
+        let mut analysis = MemoryAccessAnalysis::new();
         let effects = func.dfg.effects(inst);
         let access = effects.accesses.first().expect("expected one access");
         analysis.trackable_exact_loc(func, access)
@@ -1020,7 +1038,7 @@ mod tests {
         builder.insert_inst_no_result_with(|| Return::new_unit(is));
         builder.seal_all();
 
-        let analysis = MemoryAccessAnalysis::new();
+        let mut analysis = MemoryAccessAnalysis::new();
         let exact = analysis
             .exact_local_addr(&builder.func, addr)
             .expect("expected exact local addr");
@@ -1064,7 +1082,7 @@ mod tests {
         builder.insert_inst_no_result_with(|| Return::new_unit(is));
         builder.seal_all();
 
-        let analysis = MemoryAccessAnalysis::new();
+        let mut analysis = MemoryAccessAnalysis::new();
         let exact = analysis
             .exact_local_addr(&builder.func, addr)
             .expect("expected exact local addr");
@@ -1326,7 +1344,7 @@ mod tests {
         let inst = builder.func.layout.first_inst_of(block).expect("load");
         let key = single_key(&builder.func, inst);
         let zero = builder.make_imm_value(I256::from(0));
-        let analysis = MemoryAccessAnalysis::new();
+        let mut analysis = MemoryAccessAnalysis::new();
         let range = analysis
             .trackable_linear_range(
                 &builder.func,
@@ -1364,7 +1382,7 @@ mod tests {
         builder.func.layout.remove_inst(len_inst);
         builder.func.erase_inst(len_inst);
 
-        let analysis = MemoryAccessAnalysis::new();
+        let mut analysis = MemoryAccessAnalysis::new();
         assert_eq!(
             analysis.trackable_linear_range(
                 &builder.func,
@@ -1397,7 +1415,7 @@ mod tests {
         let key = single_key(&builder.func, inst);
         let range_addr = builder.make_imm_value(I256::from(0));
         let range_len = builder.make_imm_value(I256::from(32));
-        let analysis = MemoryAccessAnalysis::new();
+        let mut analysis = MemoryAccessAnalysis::new();
         let range = analysis
             .trackable_linear_range(
                 &builder.func,
@@ -1430,7 +1448,7 @@ mod tests {
         let inst = builder.func.layout.first_inst_of(block).expect("load");
         let key = single_key(&builder.func, inst);
         let range_len = builder.make_imm_value(I256::from(32));
-        let analysis = MemoryAccessAnalysis::new();
+        let mut analysis = MemoryAccessAnalysis::new();
         let range = analysis
             .trackable_linear_range(
                 &builder.func,
@@ -1449,7 +1467,7 @@ mod tests {
     fn immediate_exact_linear_access_tracks_as_absolute_key() {
         let mb = test_module_builder();
         let (_evm, builder) = test_func_builder(&mb, &[], Type::Unit);
-        let analysis = MemoryAccessAnalysis::new();
+        let mut analysis = MemoryAccessAnalysis::new();
         let addr = Immediate::from_i256(I256::from(64), Type::I256);
 
         let key = analysis
@@ -1661,7 +1679,7 @@ mod tests {
         let TrackedLocKey::Linear(key) = single_key(&builder.func, load_inst) else {
             panic!("expected a linear key");
         };
-        let analysis = MemoryAccessAnalysis::new();
+        let mut analysis = MemoryAccessAnalysis::new();
         let range_addr = builder.make_imm_value(I256::from(64));
         let range_len = builder.make_imm_value(I256::from(32));
         let range = analysis
@@ -1706,7 +1724,7 @@ mod tests {
             let TrackedLocKey::Linear(key) = single_key(&builder.func, load_inst) else {
                 panic!("expected a linear key");
             };
-            let analysis = MemoryAccessAnalysis::new();
+            let mut analysis = MemoryAccessAnalysis::new();
             let range_addr = builder.make_imm_value(I256::from(64));
             let range_len = builder.make_imm_value(I256::from(32));
             let range = analysis
@@ -1791,7 +1809,7 @@ mod tests {
         let TrackedLocKey::Linear(key) = single_key(&builder.func, load_inst) else {
             panic!("expected a linear key");
         };
-        let analysis = MemoryAccessAnalysis::new();
+        let mut analysis = MemoryAccessAnalysis::new();
         let range_addr = builder.make_imm_value(I256::from(64));
         let range_len = builder.make_imm_value(I256::from(32));
         let range = analysis
@@ -1831,7 +1849,7 @@ mod tests {
             panic!("expected a linear key");
         };
         let range_len = builder.make_imm_value(I256::from(32));
-        let analysis = MemoryAccessAnalysis::new();
+        let mut analysis = MemoryAccessAnalysis::new();
         let range = analysis
             .trackable_linear_range(
                 &builder.func,
@@ -1870,7 +1888,7 @@ mod tests {
         };
         let range_addr = builder.make_imm_value(I256::from(64));
         let range_len = builder.make_imm_value(I256::from(32));
-        let analysis = MemoryAccessAnalysis::new();
+        let mut analysis = MemoryAccessAnalysis::new();
         let range = analysis
             .trackable_linear_range(
                 &builder.func,
@@ -1917,7 +1935,7 @@ mod tests {
         };
         let range_addr = builder.make_imm_value(I256::from(64));
         let range_len = builder.make_imm_value(I256::from(32));
-        let analysis = MemoryAccessAnalysis::new();
+        let mut analysis = MemoryAccessAnalysis::new();
         let range = analysis
             .trackable_linear_range(
                 &builder.func,

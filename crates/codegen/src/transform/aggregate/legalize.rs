@@ -507,11 +507,11 @@ impl AggregateLowerToMemoryLegalize {
                 return true;
             }
 
-            let mut builder = BeforeCursor::new_before_inst(func, inst);
             let src_ptr = self.materialized_ptr(func, from, module);
             let dst_ptr = self.materialized_ptr(func, result, module);
             let (src_leaves, dst_leaves) =
                 self.aggregate_bitcast_leaf_layout(module, from_ty, to_ty);
+            let mut builder = BeforeCursor::new_before_inst(func, inst);
             self.emit_copy_leaf_slices_ptr_to_ptr(
                 func,
                 &mut builder,
@@ -577,8 +577,8 @@ impl AggregateLowerToMemoryLegalize {
                 )
             }
         } else {
-            let mut builder = BeforeCursor::new_before_inst(func, inst);
             let src_ptr = self.materialized_ptr(func, from, module);
+            let mut builder = BeforeCursor::new_before_inst(func, inst);
             let loaded =
                 self.emit_load_scalar_from_path(func, &mut builder, src_ptr, &leaf.path, leaf.ty);
             if leaf.ty == to_ty {
@@ -788,10 +788,10 @@ impl AggregateLowerToMemoryLegalize {
             return;
         }
 
+        let src_ptr = self.materialized_ptr(func, *extract.dest(), module);
         let src_shape = self.shape_or_panic(module, agg_ty);
         let src_leaf = &src_shape.leaves[slice.first_leaf];
         let mut builder = BeforeCursor::new_before_inst(func, inst);
-        let src_ptr = self.materialized_ptr(func, *extract.dest(), module);
         let load = self.emit_load_scalar_from_path(
             func,
             &mut builder,
@@ -857,8 +857,8 @@ impl AggregateLowerToMemoryLegalize {
             return;
         }
 
-        let mut builder = BeforeCursor::new_before_inst(func, inst);
         let src_ptr = self.materialized_ptr(func, src_value, module);
+        let mut builder = BeforeCursor::new_before_inst(func, inst);
         let elem_ptr =
             self.emit_gep_array_element_ptr(func, &mut builder, src_ptr, idx_value, elem);
         let loaded = self.emit_load_scalar_from_path(func, &mut builder, elem_ptr, &[], result_ty);
@@ -910,6 +910,9 @@ impl AggregateLowerToMemoryLegalize {
         }
 
         let agg_ty = *mload.ty();
+        // Aggregate mload has snapshot semantics. Any scalar leaf used through a static
+        // projection is loaded here, never at the later extract site. Uses that cannot be
+        // represented as static leaf ranges are materialized into a snapshot slot here.
         let plan = self.plan_mload_projection_uses(func, module, result, agg_ty);
         let mut builder = BeforeCursor::new_before_inst(func, inst);
         let src_ptr = self.aggregate_addr_as_typed_ptr(func, &mut builder, *mload.addr(), agg_ty);
@@ -1063,6 +1066,7 @@ impl AggregateLowerToMemoryLegalize {
                 plan.transparent_insts.push(user);
                 worklist.push(bitcast_result);
             }
+
             for &user in &users {
                 if !func.layout.is_inst_inserted(user) {
                     continue;
@@ -2441,229 +2445,6 @@ func private %f(v0.i256) -> i256 {
     }
 
     #[test]
-    fn late_dead_aggregate_alloca_cleanup_drops_dead_slot_trees() {
-        let module = parse_test_module(
-            r#"
-target = "evm-ethereum-osaka"
-
-type @pair = { i256, i256 };
-
-func private %f() -> i256 {
-    block0:
-        v0.*@pair = alloca @pair;
-        v1.*i256 = gep v0 0.i64 0.i8;
-        mstore v1 1.i256 i256;
-        v2.*i256 = gep v0 0.i64 1.i8;
-        mstore v2 2.i256 i256;
-        v3.*i256 = gep v0 0.i64 0.i8;
-        v4.i256 = mload v3 i256;
-        return 0.i256;
-}
-"#,
-        );
-        let ctx = module.ctx.clone();
-        let func_ref = lookup_func(&module, "f");
-        module.func_store.modify(func_ref, |func| {
-            assert!(cleanup_dead_aggregate_alloca_trees(func, &ctx));
-        });
-
-        module.func_store.view(func_ref, |func| {
-            for block in func.layout.iter_block() {
-                for inst in func.layout.iter_inst(block) {
-                    assert!(
-                        downcast::<&data::Alloca>(func.inst_set(), func.dfg.inst(inst)).is_none(),
-                        "dead aggregate alloca tree should be removed"
-                    );
-                }
-            }
-        });
-    }
-
-    #[test]
-    fn late_legalizer_materializes_surviving_extract_views_without_root_slots() {
-        let module = parse_test_module(
-            r#"
-target = "evm-ethereum-osaka"
-
-type @inner = { i256, i256 };
-type @outer = { @inner, i256 };
-
-func private %f() -> i256 {
-    block0:
-        v0.*@outer = alloca @outer;
-        v1.*i256 = gep v0 0.i64 0.i8 0.i8;
-        mstore v1 1.i256 i256;
-        v2.*i256 = gep v0 0.i64 0.i8 1.i8;
-        mstore v2 2.i256 i256;
-        v3.*i256 = gep v0 0.i64 1.i8;
-        mstore v3 3.i256 i256;
-        v4.@outer = mload v0 @outer;
-        v5.@inner = extract_value v4 0.i8;
-        v6.*@inner = alloca @inner;
-        mstore v6 v5 @inner;
-        return 0.i256;
-}
-"#,
-        );
-        let ctx = module.ctx.clone();
-        let func_ref = lookup_func(&module, "f");
-        module.func_store.modify(func_ref, |func| {
-            AggregateLowerToMemoryLegalize::default().run(func, &ctx);
-        });
-
-        module.func_store.view(func_ref, |func| {
-            assert_aggregate_legalized(func, &ctx);
-            let mut outer_allocas = 0;
-            let mut inner_allocas = 0;
-            for block in func.layout.iter_block() {
-                for inst in func.layout.iter_inst(block) {
-                    if let Some(alloca) =
-                        downcast::<&data::Alloca>(func.inst_set(), func.dfg.inst(inst))
-                    {
-                        match alloca.ty().resolve_compound(&ctx) {
-                            Some(CompoundType::Struct(data)) if data.name == "outer" => {
-                                outer_allocas += 1;
-                            }
-                            Some(CompoundType::Struct(data)) if data.name == "inner" => {
-                                inner_allocas += 1;
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-            }
-            assert_eq!(
-                outer_allocas, 1,
-                "root snapshot slot should not be materialized"
-            );
-            assert_eq!(
-                inner_allocas, 1,
-                "surviving child view should not need its own slot"
-            );
-        });
-    }
-
-    #[test]
-    fn late_legalizer_materializes_surviving_bitcast_views_without_root_slots() {
-        let module = parse_test_module(
-            r#"
-target = "evm-ethereum-osaka"
-
-type @pair = { i256, i256 };
-type @inner = { i256 };
-type @nested = { @inner, i256 };
-
-func private %f() -> i256 {
-    block0:
-        v0.*@pair = alloca @pair;
-        v1.*i256 = gep v0 0.i64 0.i8;
-        mstore v1 11.i256 i256;
-        v2.*i256 = gep v0 0.i64 1.i8;
-        mstore v2 22.i256 i256;
-        v3.@pair = mload v0 @pair;
-        v4.@nested = bitcast v3 @nested;
-        v5.*@nested = alloca @nested;
-        mstore v5 v4 @nested;
-        return 0.i256;
-}
-"#,
-        );
-        let ctx = module.ctx.clone();
-        let func_ref = lookup_func(&module, "f");
-        module.func_store.modify(func_ref, |func| {
-            AggregateLowerToMemoryLegalize::default().run(func, &ctx);
-        });
-
-        module.func_store.view(func_ref, |func| {
-            assert_aggregate_legalized(func, &ctx);
-            let mut pair_allocas = 0;
-            let mut nested_allocas = 0;
-            for block in func.layout.iter_block() {
-                for inst in func.layout.iter_inst(block) {
-                    if let Some(alloca) =
-                        downcast::<&data::Alloca>(func.inst_set(), func.dfg.inst(inst))
-                    {
-                        match alloca.ty().resolve_compound(&ctx) {
-                            Some(CompoundType::Struct(data)) if data.name == "pair" => {
-                                pair_allocas += 1;
-                            }
-                            Some(CompoundType::Struct(data)) if data.name == "nested" => {
-                                nested_allocas += 1;
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-            }
-            assert_eq!(
-                pair_allocas, 1,
-                "root snapshot slot should not be materialized"
-            );
-            assert_eq!(
-                nested_allocas, 1,
-                "surviving bitcast view should not need its own slot"
-            );
-        });
-    }
-
-    #[test]
-    fn late_legalizer_initializes_backedge_phi_source_slots_at_def_sites() {
-        let module = parse_test_module(
-            r#"
-target = "evm-ethereum-osaka"
-
-type @pair = { i256, i256 };
-
-func public %entry() {
-    block0:
-        v0.*@pair = alloca @pair;
-        v1.*i256 = gep v0 0.i64 0.i8;
-        mstore v1 1.i256 i256;
-        v2.*i256 = gep v0 0.i64 1.i8;
-        mstore v2 2.i256 i256;
-        v3.@pair = mload v0 @pair;
-        jump block1;
-
-    block1:
-        v4.@pair = phi (v3 block0) (v10 block2);
-        v5.i256 = phi (0.i256 block0) (1.i256 block2);
-        v6.i1 = eq v5 0.i256;
-        br v6 block2 block3;
-
-    block2:
-        v7.*@pair = alloca @pair;
-        v8.*i256 = gep v7 0.i64 0.i8;
-        mstore v8 10.i256 i256;
-        v9.*i256 = gep v7 0.i64 1.i8;
-        mstore v9 20.i256 i256;
-        v10.@pair = mload v7 @pair;
-        jump block1;
-
-    block3:
-        v11.i256 = extract_value v4 0.i8;
-        mstore 0.i32 v11 i256;
-        evm_return 0.i8 32.i8;
-}
-
-object @Contract {
-  section runtime {
-    entry %entry;
-  }
-}
-"#,
-        );
-        let ctx = module.ctx.clone();
-        let func_ref = lookup_func(&module, "entry");
-        module.func_store.modify(func_ref, |func| {
-            AggregateLowerToMemoryLegalize::default().run(func, &ctx);
-        });
-        module.func_store.view(func_ref, |func| {
-            assert_aggregate_legalized(func, &ctx);
-        });
-        assert_eq!(run_contract(&module), U256::from(10));
-    }
-
-    #[test]
     fn late_legalizer_preserves_snapshot_semantics_for_raw_aggregate_extracts() {
         let module = parse_test_module(
             r#"
@@ -2779,5 +2560,122 @@ object @Contract {
             assert_aggregate_legalized(func, &ctx);
         });
         assert_eq!(run_contract(&module), U256::from(11));
+    }
+
+    #[test]
+    fn late_legalizer_preserves_snapshot_semantics_for_stored_child_aggregates() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @inner = { i256, i256 };
+type @outer = { @inner, i256 };
+
+func public %entry() {
+    block0:
+        mstore 64.i32 10.i256 i256;
+        mstore 96.i32 20.i256 i256;
+        mstore 128.i32 30.i256 i256;
+        v0.@outer = mload 64.i32 @outer;
+        v1.@inner = extract_value v0 0.i8;
+        mstore 96.i32 99.i256 i256;
+        mstore 160.i32 v1 @inner;
+        v2.i256 = mload 192.i32 i256;
+        mstore 0.i32 v2 i256;
+        evm_return 0.i8 32.i8;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}
+"#,
+        );
+        let ctx = module.ctx.clone();
+        let func_ref = lookup_func(&module, "entry");
+        module.func_store.modify(func_ref, |func| {
+            AggregateLowerToMemoryLegalize::default().run(func, &ctx);
+        });
+        module.func_store.view(func_ref, |func| {
+            assert_aggregate_legalized(func, &ctx);
+        });
+        assert_eq!(run_contract(&module), U256::from(20));
+    }
+
+    #[test]
+    fn late_legalizer_preserves_snapshot_semantics_for_dynamic_extracts() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %entry() {
+    block0:
+        mstore 64.i32 11.i256 i256;
+        mstore 96.i32 22.i256 i256;
+        mstore 128.i32 33.i256 i256;
+        v0.[i256; 3] = mload 64.i32 [i256; 3];
+        mstore 96.i32 99.i256 i256;
+        v1.i256 = extract_value v0 1.i256;
+        mstore 0.i32 v1 i256;
+        evm_return 0.i8 32.i8;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}
+"#,
+        );
+        let ctx = module.ctx.clone();
+        let func_ref = lookup_func(&module, "entry");
+        module.func_store.modify(func_ref, |func| {
+            AggregateLowerToMemoryLegalize::default().run(func, &ctx);
+        });
+        module.func_store.view(func_ref, |func| {
+            assert_aggregate_legalized(func, &ctx);
+        });
+        assert_eq!(run_contract(&module), U256::from(22));
+    }
+
+    #[test]
+    fn late_legalizer_preserves_snapshot_semantics_for_dynamic_extracts_from_child_views() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @ret = { [i256; 3], i256 };
+
+func public %entry() {
+    block0:
+        mstore 64.i32 11.i256 i256;
+        mstore 96.i32 22.i256 i256;
+        mstore 128.i32 33.i256 i256;
+        mstore 160.i32 44.i256 i256;
+        v0.@ret = mload 64.i32 @ret;
+        v1.[i256; 3] = extract_value v0 0.i8;
+        mstore 96.i32 99.i256 i256;
+        v2.i256 = extract_value v1 1.i256;
+        mstore 0.i32 v2 i256;
+        evm_return 0.i8 32.i8;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}
+"#,
+        );
+        let ctx = module.ctx.clone();
+        let func_ref = lookup_func(&module, "entry");
+        module.func_store.modify(func_ref, |func| {
+            AggregateLowerToMemoryLegalize::default().run(func, &ctx);
+        });
+        module.func_store.view(func_ref, |func| {
+            assert_aggregate_legalized(func, &ctx);
+        });
+        assert_eq!(run_contract(&module), U256::from(22));
     }
 }

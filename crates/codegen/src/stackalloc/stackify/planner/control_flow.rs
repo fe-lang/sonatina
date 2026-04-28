@@ -1,4 +1,3 @@
-use cranelift_entity::SecondaryMap;
 use smallvec::SmallVec;
 use sonatina_ir::{BlockId, InstId, ValueId};
 
@@ -11,13 +10,12 @@ use super::{
 };
 
 impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
-    pub(in super::super) fn plan_edge_fixup(
+    pub(in super::super) fn plan_edge_fixup_to_template(
         &mut self,
-        templates: &SecondaryMap<BlockId, BlockTemplate>,
+        tmpl: &BlockTemplate,
         pred: BlockId,
         succ: BlockId,
     ) {
-        let tmpl = &templates[succ];
         let phi_results = &self.ctx.phi_results[succ];
 
         let phi_srcs: SmallVec<[ValueId; 4]> = phi_args_for_edge(self.ctx.func, pred, succ)
@@ -73,7 +71,7 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
         let mut desired: SmallVec<[ValueId; 16]> = SmallVec::new();
         desired.extend(tmpl.params.iter().take(args_prefix_len).copied());
         desired.extend(stack_phi_pairs.iter().map(|(_, src)| *src));
-        desired.extend(tmpl.transfer.iter().copied());
+        desired.extend(tmpl.transfer().iter().copied());
 
         self.normalize_to_exact(desired.as_slice());
 

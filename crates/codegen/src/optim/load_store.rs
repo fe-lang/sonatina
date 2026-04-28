@@ -41,14 +41,14 @@ impl LoadStoreSolver {
 
     pub fn run(&mut self, func: &mut Function, cfg: &mut ControlFlowGraph) -> bool {
         let mut changed_any = false;
-        let analysis = MemoryAccessAnalysis::new();
+        let mut analysis = MemoryAccessAnalysis::new();
 
         loop {
             cfg.compute(func);
 
-            let mut changed = self.run_forward(func, cfg, &analysis);
+            let mut changed = self.run_forward(func, cfg, &mut analysis);
             cfg.compute(func);
-            changed |= self.run_backward(func, cfg, &analysis);
+            changed |= self.run_backward(func, cfg, &mut analysis);
 
             if !changed {
                 return changed_any;
@@ -62,7 +62,7 @@ impl LoadStoreSolver {
         &mut self,
         func: &mut Function,
         cfg: &ControlFlowGraph,
-        analysis: &MemoryAccessAnalysis,
+        analysis: &mut MemoryAccessAnalysis,
     ) -> bool {
         let reachable = cfg.reachable_blocks();
         let order: Vec<_> = cfg
@@ -159,7 +159,7 @@ impl LoadStoreSolver {
         &mut self,
         func: &mut Function,
         cfg: &ControlFlowGraph,
-        analysis: &MemoryAccessAnalysis,
+        analysis: &mut MemoryAccessAnalysis,
     ) -> bool {
         let reachable = cfg.reachable_blocks();
         let committing_exit_reachable = blocks_reaching_committing_exit(func, cfg, &reachable);
@@ -278,7 +278,7 @@ fn meet_live(states: impl Iterator<Item = (LiveState, bool)>) -> LiveState {
 fn transfer_forward(
     func: &mut Function,
     inst: InstId,
-    analysis: &MemoryAccessAnalysis,
+    analysis: &mut MemoryAccessAnalysis,
     state: &mut AvailState,
     rewrite: bool,
 ) -> bool {
@@ -294,6 +294,7 @@ fn transfer_forward(
                     .expect("forwardable reads must produce a result");
                 func.dfg.change_to_alias(result, known);
                 remove_inst(func, inst);
+                analysis.clear();
                 return true;
             }
             return false;
@@ -332,6 +333,7 @@ fn transfer_forward(
         if state.exact.get(&key) == Some(&stored_value) && store_is_removable(func, inst) {
             if rewrite {
                 remove_inst(func, inst);
+                analysis.clear();
                 return true;
             }
             return false;
@@ -347,7 +349,7 @@ fn transfer_forward(
 fn transfer_backward(
     func: &mut Function,
     inst: InstId,
-    analysis: &MemoryAccessAnalysis,
+    analysis: &mut MemoryAccessAnalysis,
     live: &mut LiveState,
     committing_exit_reachable: bool,
     rewrite: bool,
@@ -384,6 +386,7 @@ fn transfer_backward(
                 if dead && store_is_removable(func, inst) {
                     if rewrite {
                         remove_inst(func, inst);
+                        analysis.clear();
                         return true;
                     }
                     return false;
@@ -405,7 +408,7 @@ fn transfer_backward(
 fn kill_aliasing_access(
     func: &Function,
     state: &mut AvailState,
-    analysis: &MemoryAccessAnalysis,
+    analysis: &mut MemoryAccessAnalysis,
     access: &sonatina_ir::MemoryAccess,
 ) {
     state
@@ -572,7 +575,7 @@ fn expected_loaded_value_type(key: &TrackedLocKey) -> Type {
 fn forwardable_read_key(
     func: &Function,
     inst: InstId,
-    analysis: &MemoryAccessAnalysis,
+    analysis: &mut MemoryAccessAnalysis,
     effects: &sonatina_ir::InstEffects,
 ) -> Option<TrackedLocKey> {
     let inst_data = func.dfg.inst(inst);
@@ -787,9 +790,9 @@ mod tests {
             .dfg
             .value_inst(live_load)
             .expect("live load should come from an instruction");
-        let analysis = MemoryAccessAnalysis::new();
+        let mut analysis = MemoryAccessAnalysis::new();
         let effects = builder.func.dfg.effects(live_inst);
-        let key = forwardable_read_key(&builder.func, live_inst, &analysis, &effects)
+        let key = forwardable_read_key(&builder.func, live_inst, &mut analysis, &effects)
             .expect("live load should be forwardable");
 
         let mut state = AvailState::default();
@@ -798,7 +801,7 @@ mod tests {
         assert!(!transfer_forward(
             &mut builder.func,
             live_inst,
-            &analysis,
+            &mut analysis,
             &mut state,
             true,
         ));

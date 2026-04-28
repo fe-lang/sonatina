@@ -1,0 +1,655 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: "String::from_utf8(out).unwrap()"
+input_file: test_files/evm/scratch_spill_same_block_overlap_regression.sntn
+---
+evm.config: stack_reach=8 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
+
+object: Contract
+  section runtime: 1010 bytes
+  total: 1010 bytes
+
+functions:
+  entry: ir_blocks=1 ir_insts=214 vcode_ops=776 fixups=2 imm_bytes=266
+    mem: scratch_words=22 stable_words=64 stable_mode=StaticAbs(base=0x300) entry_abs_words=22 abs_words_end=86
+  touch: ir_blocks=1 ir_insts=1 vcode_ops=3 fixups=0 imm_bytes=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=86 abs_words_end=0
+
+evm:
+  case copy_first_word: calldata_len=0 success reason=Return gas_used=23087 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=2087
+
+
+--------------- DEBUG ---------------
+
+// func public %entry()
+entry:
+  block0:
+    PUSH2 0x300 (768)  // v0.*[i256; 32] = alloca [i256; 32];
+    PUSH2 0x700 (1792)  // v1.*[i256; 32] = alloca [i256; 32];
+    PUSH1 0x1 (1)  // mstore v2 1.i256 i256;
+    DUP3
+    MSTORE
+    PUSH2 0x320 (800)  // v3.*i256 = gep v0 0.i256 1.i256;
+    PUSH1 0x2 (2)  // mstore v3 2.i256 i256;
+    DUP2
+    MSTORE
+    PUSH2 0x340 (832)  // v4.*i256 = gep v0 0.i256 2.i256;
+    PUSH1 0x3 (3)  // mstore v4 3.i256 i256;
+    DUP2
+    MSTORE
+    PUSH2 0x360 (864)  // v5.*i256 = gep v0 0.i256 3.i256;
+    PUSH1 0x4 (4)  // mstore v5 4.i256 i256;
+    DUP2
+    MSTORE
+    PUSH2 0x380 (896)  // v6.*i256 = gep v0 0.i256 4.i256;
+    PUSH1 0x5 (5)  // mstore v6 5.i256 i256;
+    DUP2
+    MSTORE
+    PUSH2 0x3a0 (928)  // v7.*i256 = gep v0 0.i256 5.i256;
+    PUSH1 0x6 (6)  // mstore v7 6.i256 i256;
+    DUP2
+    MSTORE
+    PUSH2 0x3c0 (960)  // v8.*i256 = gep v0 0.i256 6.i256;
+    PUSH1 0x7 (7)  // mstore v8 7.i256 i256;
+    DUP2
+    MSTORE
+    PUSH2 0x3e0 (992)  // v9.*i256 = gep v0 0.i256 7.i256;
+    PUSH1 0x8 (8)  // mstore v9 8.i256 i256;
+    DUP2
+    MSTORE
+    SWAP8  // v10.*i256 = gep v0 0.i256 8.i256;
+    PUSH2 0x400 (1024)
+    PUSH1 0x9 (9)  // mstore v10 9.i256 i256;
+    DUP2
+    MSTORE
+    PUSH2 0x420 (1056)  // v11.*i256 = gep v0 0.i256 9.i256;
+    PUSH1 0xa (10)  // mstore v11 10.i256 i256;
+    DUP2
+    MSTORE
+    PUSH2 0x440 (1088)  // v12.*i256 = gep v0 0.i256 10.i256;
+    PUSH1 0xb (11)  // mstore v12 11.i256 i256;
+    DUP2
+    MSTORE
+    PUSH2 0x460 (1120)  // v13.*i256 = gep v0 0.i256 11.i256;
+    PUSH1 0xc (12)  // mstore v13 12.i256 i256;
+    DUP2
+    MSTORE
+    PUSH2 0x480 (1152)  // v14.*i256 = gep v0 0.i256 12.i256;
+    PUSH1 0xd (13)  // mstore v14 13.i256 i256;
+    DUP2
+    MSTORE
+    PUSH2 0x4a0 (1184)  // v15.*i256 = gep v0 0.i256 13.i256;
+    PUSH1 0xe (14)  // mstore v15 14.i256 i256;
+    DUP2
+    MSTORE
+    PUSH2 0x4c0 (1216)  // v16.*i256 = gep v0 0.i256 14.i256;
+    PUSH1 0xf (15)  // mstore v16 15.i256 i256;
+    DUP2
+    MSTORE
+    PUSH2 0x4e0 (1248)  // v17.*i256 = gep v0 0.i256 15.i256;
+    PUSH1 0x10 (16)  // mstore v17 16.i256 i256;
+    DUP2
+    MSTORE
+    SWAP8  // v18.*i256 = gep v0 0.i256 16.i256;
+    PUSH2 0x500 (1280)
+    PUSH1 0x11 (17)  // mstore v18 17.i256 i256;
+    DUP2
+    MSTORE
+    PUSH2 0x520 (1312)  // v19.*i256 = gep v0 0.i256 17.i256;
+    PUSH1 0x12 (18)  // mstore v19 18.i256 i256;
+    DUP2
+    MSTORE
+    PUSH2 0x540 (1344)  // v20.*i256 = gep v0 0.i256 18.i256;
+    PUSH1 0x13 (19)  // mstore v20 19.i256 i256;
+    DUP2
+    MSTORE
+    PUSH2 0x560 (1376)  // v21.*i256 = gep v0 0.i256 19.i256;
+    PUSH1 0x14 (20)  // mstore v21 20.i256 i256;
+    DUP2
+    MSTORE
+    PUSH2 0x580 (1408)  // v22.*i256 = gep v0 0.i256 20.i256;
+    PUSH1 0x15 (21)  // mstore v22 21.i256 i256;
+    DUP2
+    MSTORE
+    PUSH2 0x5a0 (1440)  // v23.*i256 = gep v0 0.i256 21.i256;
+    PUSH1 0x16 (22)  // mstore v23 22.i256 i256;
+    DUP2
+    MSTORE
+    PUSH2 0x5c0 (1472)  // v24.*i256 = gep v0 0.i256 22.i256;
+    PUSH1 0x17 (23)  // mstore v24 23.i256 i256;
+    DUP2
+    MSTORE
+    PUSH2 0x5e0 (1504)  // v25.*i256 = gep v0 0.i256 23.i256;
+    PUSH1 0x18 (24)  // mstore v25 24.i256 i256;
+    DUP2
+    MSTORE
+    SWAP8  // v26.*i256 = gep v0 0.i256 24.i256;
+    PUSH2 0x600 (1536)
+    PUSH1 0x19 (25)  // mstore v26 25.i256 i256;
+    DUP2
+    MSTORE
+    PUSH2 0x620 (1568)  // v27.*i256 = gep v0 0.i256 25.i256;
+    PUSH1 0x1a (26)  // mstore v27 26.i256 i256;
+    DUP2
+    MSTORE
+    PUSH2 0x640 (1600)  // v28.*i256 = gep v0 0.i256 26.i256;
+    PUSH1 0x1b (27)  // mstore v28 27.i256 i256;
+    DUP2
+    MSTORE
+    PUSH2 0x660 (1632)  // v29.*i256 = gep v0 0.i256 27.i256;
+    PUSH1 0x1c (28)  // mstore v29 28.i256 i256;
+    DUP2
+    MSTORE
+    PUSH2 0x680 (1664)  // v30.*i256 = gep v0 0.i256 28.i256;
+    PUSH1 0x1d (29)  // mstore v30 29.i256 i256;
+    DUP2
+    MSTORE
+    PUSH2 0x6a0 (1696)  // v31.*i256 = gep v0 0.i256 29.i256;
+    PUSH1 0x1e (30)  // mstore v31 30.i256 i256;
+    DUP2
+    MSTORE
+    PUSH2 0x6c0 (1728)  // v32.*i256 = gep v0 0.i256 30.i256;
+    PUSH1 0x1f (31)  // mstore v32 31.i256 i256;
+    DUP2
+    MSTORE
+    PUSH2 0x6e0 (1760)  // v33.*i256 = gep v0 0.i256 31.i256;
+    PUSH1 0x20 (32)  // mstore v33 32.i256 i256;
+    DUP2
+    MSTORE
+    SWAP8  // v100.i256 = mload v2 i256;
+    DUP1
+    MLOAD
+    DUP1
+    PUSH0
+    MSTORE
+    PUSH2 0x320 (800)  // v101.i256 = mload v3 i256;
+    MLOAD
+    DUP1
+    PUSH1 0x20 (32)
+    MSTORE
+    PUSH2 0x340 (832)  // v102.i256 = mload v4 i256;
+    MLOAD
+    DUP1
+    PUSH1 0x40 (64)
+    MSTORE
+    PUSH2 0x360 (864)  // v103.i256 = mload v5 i256;
+    MLOAD
+    DUP1
+    PUSH1 0x60 (96)
+    MSTORE
+    PUSH2 0x380 (896)  // v104.i256 = mload v6 i256;
+    MLOAD
+    DUP1
+    PUSH1 0x80 (128)
+    MSTORE
+    PUSH2 0x3a0 (928)  // v105.i256 = mload v7 i256;
+    MLOAD
+    DUP1
+    PUSH1 0xa0 (160)
+    MSTORE
+    PUSH2 0x3c0 (960)  // v106.i256 = mload v8 i256;
+    MLOAD
+    DUP1
+    PUSH1 0xc0 (192)
+    MSTORE
+    PUSH2 0x3e0 (992)  // v107.i256 = mload v9 i256;
+    MLOAD
+    DUP1
+    PUSH1 0xe0 (224)
+    MSTORE
+    PUSH2 0x400 (1024)  // v108.i256 = mload v10 i256;
+    MLOAD
+    PUSH2 0x420 (1056)  // v109.i256 = mload v11 i256;
+    MLOAD
+    PUSH2 0x440 (1088)  // v110.i256 = mload v12 i256;
+    MLOAD
+    PUSH2 0x460 (1120)  // v111.i256 = mload v13 i256;
+    MLOAD
+    PUSH2 0x480 (1152)  // v112.i256 = mload v14 i256;
+    MLOAD
+    PUSH2 0x4a0 (1184)  // v113.i256 = mload v15 i256;
+    MLOAD
+    PUSH2 0x4c0 (1216)  // v114.i256 = mload v16 i256;
+    MLOAD
+    PUSH2 0x4e0 (1248)  // v115.i256 = mload v17 i256;
+    MLOAD
+    PUSH0  // mstore v116 v100 i256;
+    MLOAD
+    PUSH2 0x700 (1792)
+    MSTORE
+    PUSH2 0x720 (1824)  // v117.*i256 = gep v1 0.i256 1.i256;
+    PUSH1 0x20 (32)  // mstore v117 v101 i256;
+    MLOAD
+    SWAP1
+    MSTORE
+    PUSH2 0x740 (1856)  // v118.*i256 = gep v1 0.i256 2.i256;
+    PUSH1 0x40 (64)  // mstore v118 v102 i256;
+    MLOAD
+    SWAP1
+    MSTORE
+    PUSH2 0x760 (1888)  // v119.*i256 = gep v1 0.i256 3.i256;
+    PUSH1 0x60 (96)  // mstore v119 v103 i256;
+    MLOAD
+    SWAP1
+    MSTORE
+    PUSH2 0x780 (1920)  // v120.*i256 = gep v1 0.i256 4.i256;
+    PUSH1 0x80 (128)  // mstore v120 v104 i256;
+    MLOAD
+    SWAP1
+    MSTORE
+    PUSH2 0x7a0 (1952)  // v121.*i256 = gep v1 0.i256 5.i256;
+    PUSH1 0xa0 (160)  // mstore v121 v105 i256;
+    MLOAD
+    SWAP1
+    MSTORE
+    PUSH2 0x7c0 (1984)  // v122.*i256 = gep v1 0.i256 6.i256;
+    PUSH1 0xc0 (192)  // mstore v122 v106 i256;
+    MLOAD
+    SWAP1
+    MSTORE
+    PUSH2 0x7e0 (2016)  // v123.*i256 = gep v1 0.i256 7.i256;
+    PUSH1 0xe0 (224)  // mstore v123 v107 i256;
+    MLOAD
+    SWAP1
+    MSTORE
+    PUSH2 0x800 (2048)  // v124.*i256 = gep v1 0.i256 8.i256;
+    SWAP8  // mstore v124 v108 i256;
+    SWAP1
+    SWAP8
+    MSTORE
+    PUSH2 0x820 (2080)  // v125.*i256 = gep v1 0.i256 9.i256;
+    SWAP6  // mstore v125 v109 i256;
+    SWAP1
+    SWAP6
+    MSTORE
+    PUSH2 0x840 (2112)  // v126.*i256 = gep v1 0.i256 10.i256;
+    SWAP4  // mstore v126 v110 i256;
+    SWAP1
+    SWAP4
+    MSTORE
+    PUSH2 0x860 (2144)  // v127.*i256 = gep v1 0.i256 11.i256;
+    SWAP1  // mstore v127 v111 i256;
+    SWAP2
+    SWAP1
+    MSTORE
+    PUSH2 0x880 (2176)  // v128.*i256 = gep v1 0.i256 12.i256;
+    MSTORE  // mstore v128 v112 i256;
+    PUSH2 0x8a0 (2208)  // v129.*i256 = gep v1 0.i256 13.i256;
+    MSTORE  // mstore v129 v113 i256;
+    PUSH2 0x8c0 (2240)  // v130.*i256 = gep v1 0.i256 14.i256;
+    MSTORE  // mstore v130 v114 i256;
+    SWAP8  // v131.*i256 = gep v1 0.i256 15.i256;
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    PUSH2 0x8e0 (2272)
+    MSTORE  // mstore v131 v115 i256;
+    PUSH2 0x700 (1792)  // call %touch v1;
+    PUSH1 `pc + (4)`
+    SWAP1
+    PUSH1 FuncRef(1)
+    JUMP
+    JUMPDEST
+    MLOAD  // v34.i256 = mload v2 i256;
+    DUP1
+    PUSH0
+    MSTORE
+    PUSH2 0x320 (800)  // v35.i256 = mload v3 i256;
+    MLOAD
+    DUP1
+    PUSH1 0x20 (32)
+    MSTORE
+    PUSH2 0x340 (832)  // v36.i256 = mload v4 i256;
+    MLOAD
+    DUP1
+    PUSH1 0x40 (64)
+    MSTORE
+    PUSH2 0x360 (864)  // v37.i256 = mload v5 i256;
+    MLOAD
+    DUP1
+    PUSH1 0x60 (96)
+    MSTORE
+    PUSH2 0x380 (896)  // v38.i256 = mload v6 i256;
+    MLOAD
+    DUP1
+    PUSH1 0x80 (128)
+    MSTORE
+    PUSH2 0x3a0 (928)  // v39.i256 = mload v7 i256;
+    MLOAD
+    DUP1
+    PUSH1 0xa0 (160)
+    MSTORE
+    PUSH2 0x3c0 (960)  // v40.i256 = mload v8 i256;
+    MLOAD
+    DUP1
+    PUSH1 0xc0 (192)
+    MSTORE
+    PUSH2 0x3e0 (992)  // v41.i256 = mload v9 i256;
+    MLOAD
+    DUP1
+    PUSH1 0xe0 (224)
+    MSTORE
+    PUSH2 0x400 (1024)  // v42.i256 = mload v10 i256;
+    MLOAD
+    DUP1
+    PUSH2 0x100 (256)
+    MSTORE
+    PUSH2 0x420 (1056)  // v43.i256 = mload v11 i256;
+    MLOAD
+    DUP1
+    PUSH2 0x120 (288)
+    MSTORE
+    PUSH2 0x440 (1088)  // v44.i256 = mload v12 i256;
+    MLOAD
+    DUP1
+    PUSH2 0x140 (320)
+    MSTORE
+    PUSH2 0x460 (1120)  // v45.i256 = mload v13 i256;
+    MLOAD
+    DUP1
+    PUSH2 0x160 (352)
+    MSTORE
+    PUSH2 0x480 (1152)  // v46.i256 = mload v14 i256;
+    MLOAD
+    DUP1
+    PUSH2 0x180 (384)
+    MSTORE
+    PUSH2 0x4a0 (1184)  // v47.i256 = mload v15 i256;
+    MLOAD
+    DUP1
+    PUSH2 0x1a0 (416)
+    MSTORE
+    PUSH2 0x4c0 (1216)  // v48.i256 = mload v16 i256;
+    MLOAD
+    DUP1
+    PUSH2 0x1c0 (448)
+    MSTORE
+    PUSH2 0x4e0 (1248)  // v49.i256 = mload v17 i256;
+    MLOAD
+    DUP1
+    PUSH2 0x1e0 (480)
+    MSTORE
+    PUSH2 0x500 (1280)  // v50.i256 = mload v18 i256;
+    MLOAD
+    DUP1
+    PUSH2 0x200 (512)
+    MSTORE
+    PUSH2 0x520 (1312)  // v51.i256 = mload v19 i256;
+    MLOAD
+    DUP1
+    PUSH2 0x220 (544)
+    MSTORE
+    PUSH2 0x540 (1344)  // v52.i256 = mload v20 i256;
+    MLOAD
+    DUP1
+    PUSH2 0x240 (576)
+    MSTORE
+    PUSH2 0x560 (1376)  // v53.i256 = mload v21 i256;
+    MLOAD
+    DUP1
+    PUSH2 0x260 (608)
+    MSTORE
+    PUSH2 0x580 (1408)  // v54.i256 = mload v22 i256;
+    MLOAD
+    DUP1
+    PUSH2 0x280 (640)
+    MSTORE
+    PUSH2 0x5a0 (1440)  // v55.i256 = mload v23 i256;
+    MLOAD
+    DUP1
+    PUSH2 0x2a0 (672)
+    MSTORE
+    PUSH2 0x5c0 (1472)  // v56.i256 = mload v24 i256;
+    MLOAD
+    DUP1
+    PUSH2 0x2c0 (704)
+    MSTORE
+    PUSH2 0x5e0 (1504)  // v57.i256 = mload v25 i256;
+    MLOAD
+    DUP1
+    PUSH2 0x2e0 (736)
+    MSTORE
+    PUSH2 0x600 (1536)  // v58.i256 = mload v26 i256;
+    MLOAD
+    PUSH2 0x620 (1568)  // v59.i256 = mload v27 i256;
+    MLOAD
+    PUSH2 0x640 (1600)  // v60.i256 = mload v28 i256;
+    MLOAD
+    PUSH2 0x660 (1632)  // v61.i256 = mload v29 i256;
+    MLOAD
+    PUSH2 0x680 (1664)  // v62.i256 = mload v30 i256;
+    MLOAD
+    PUSH2 0x6a0 (1696)  // v63.i256 = mload v31 i256;
+    MLOAD
+    PUSH2 0x6c0 (1728)  // v64.i256 = mload v32 i256;
+    MLOAD
+    PUSH2 0x6e0 (1760)  // v65.i256 = mload v33 i256;
+    MLOAD
+    PUSH0  // mstore v66 v34 i256;
+    MLOAD
+    PUSH2 0x700 (1792)
+    MSTORE
+    PUSH2 0x720 (1824)  // v67.*i256 = gep v1 0.i256 1.i256;
+    PUSH1 0x20 (32)  // mstore v67 v35 i256;
+    MLOAD
+    SWAP1
+    MSTORE
+    PUSH2 0x740 (1856)  // v68.*i256 = gep v1 0.i256 2.i256;
+    PUSH1 0x40 (64)  // mstore v68 v36 i256;
+    MLOAD
+    SWAP1
+    MSTORE
+    PUSH2 0x760 (1888)  // v69.*i256 = gep v1 0.i256 3.i256;
+    PUSH1 0x60 (96)  // mstore v69 v37 i256;
+    MLOAD
+    SWAP1
+    MSTORE
+    PUSH2 0x780 (1920)  // v70.*i256 = gep v1 0.i256 4.i256;
+    PUSH1 0x80 (128)  // mstore v70 v38 i256;
+    MLOAD
+    SWAP1
+    MSTORE
+    PUSH2 0x7a0 (1952)  // v71.*i256 = gep v1 0.i256 5.i256;
+    PUSH1 0xa0 (160)  // mstore v71 v39 i256;
+    MLOAD
+    SWAP1
+    MSTORE
+    PUSH2 0x7c0 (1984)  // v72.*i256 = gep v1 0.i256 6.i256;
+    PUSH1 0xc0 (192)  // mstore v72 v40 i256;
+    MLOAD
+    SWAP1
+    MSTORE
+    PUSH2 0x7e0 (2016)  // v73.*i256 = gep v1 0.i256 7.i256;
+    PUSH1 0xe0 (224)  // mstore v73 v41 i256;
+    MLOAD
+    SWAP1
+    MSTORE
+    PUSH2 0x800 (2048)  // v74.*i256 = gep v1 0.i256 8.i256;
+    PUSH2 0x100 (256)  // mstore v74 v42 i256;
+    MLOAD
+    SWAP1
+    MSTORE
+    PUSH2 0x820 (2080)  // v75.*i256 = gep v1 0.i256 9.i256;
+    PUSH2 0x120 (288)  // mstore v75 v43 i256;
+    MLOAD
+    SWAP1
+    MSTORE
+    PUSH2 0x840 (2112)  // v76.*i256 = gep v1 0.i256 10.i256;
+    PUSH2 0x140 (320)  // mstore v76 v44 i256;
+    MLOAD
+    SWAP1
+    MSTORE
+    PUSH2 0x860 (2144)  // v77.*i256 = gep v1 0.i256 11.i256;
+    PUSH2 0x160 (352)  // mstore v77 v45 i256;
+    MLOAD
+    SWAP1
+    MSTORE
+    PUSH2 0x880 (2176)  // v78.*i256 = gep v1 0.i256 12.i256;
+    PUSH2 0x180 (384)  // mstore v78 v46 i256;
+    MLOAD
+    SWAP1
+    MSTORE
+    PUSH2 0x8a0 (2208)  // v79.*i256 = gep v1 0.i256 13.i256;
+    PUSH2 0x1a0 (416)  // mstore v79 v47 i256;
+    MLOAD
+    SWAP1
+    MSTORE
+    PUSH2 0x8c0 (2240)  // v80.*i256 = gep v1 0.i256 14.i256;
+    PUSH2 0x1c0 (448)  // mstore v80 v48 i256;
+    MLOAD
+    SWAP1
+    MSTORE
+    PUSH2 0x8e0 (2272)  // v81.*i256 = gep v1 0.i256 15.i256;
+    PUSH2 0x1e0 (480)  // mstore v81 v49 i256;
+    MLOAD
+    SWAP1
+    MSTORE
+    PUSH2 0x900 (2304)  // v82.*i256 = gep v1 0.i256 16.i256;
+    PUSH2 0x200 (512)  // mstore v82 v50 i256;
+    MLOAD
+    SWAP1
+    MSTORE
+    PUSH2 0x920 (2336)  // v83.*i256 = gep v1 0.i256 17.i256;
+    PUSH2 0x220 (544)  // mstore v83 v51 i256;
+    MLOAD
+    SWAP1
+    MSTORE
+    PUSH2 0x940 (2368)  // v84.*i256 = gep v1 0.i256 18.i256;
+    PUSH2 0x240 (576)  // mstore v84 v52 i256;
+    MLOAD
+    SWAP1
+    MSTORE
+    PUSH2 0x960 (2400)  // v85.*i256 = gep v1 0.i256 19.i256;
+    PUSH2 0x260 (608)  // mstore v85 v53 i256;
+    MLOAD
+    SWAP1
+    MSTORE
+    PUSH2 0x980 (2432)  // v86.*i256 = gep v1 0.i256 20.i256;
+    PUSH2 0x280 (640)  // mstore v86 v54 i256;
+    MLOAD
+    SWAP1
+    MSTORE
+    PUSH2 0x9a0 (2464)  // v87.*i256 = gep v1 0.i256 21.i256;
+    PUSH2 0x2a0 (672)  // mstore v87 v55 i256;
+    MLOAD
+    SWAP1
+    MSTORE
+    PUSH2 0x9c0 (2496)  // v88.*i256 = gep v1 0.i256 22.i256;
+    PUSH2 0x2c0 (704)  // mstore v88 v56 i256;
+    MLOAD
+    SWAP1
+    MSTORE
+    PUSH2 0x9e0 (2528)  // v89.*i256 = gep v1 0.i256 23.i256;
+    PUSH2 0x2e0 (736)  // mstore v89 v57 i256;
+    MLOAD
+    SWAP1
+    MSTORE
+    PUSH2 0xa00 (2560)  // v90.*i256 = gep v1 0.i256 24.i256;
+    SWAP8  // mstore v90 v58 i256;
+    SWAP1
+    SWAP8
+    MSTORE
+    PUSH2 0xa20 (2592)  // v91.*i256 = gep v1 0.i256 25.i256;
+    SWAP6  // mstore v91 v59 i256;
+    SWAP1
+    SWAP6
+    MSTORE
+    PUSH2 0xa40 (2624)  // v92.*i256 = gep v1 0.i256 26.i256;
+    SWAP4  // mstore v92 v60 i256;
+    SWAP1
+    SWAP4
+    MSTORE
+    PUSH2 0xa60 (2656)  // v93.*i256 = gep v1 0.i256 27.i256;
+    SWAP1  // mstore v93 v61 i256;
+    SWAP2
+    SWAP1
+    MSTORE
+    PUSH2 0xa80 (2688)  // v94.*i256 = gep v1 0.i256 28.i256;
+    MSTORE  // mstore v94 v62 i256;
+    PUSH2 0xaa0 (2720)  // v95.*i256 = gep v1 0.i256 29.i256;
+    MSTORE  // mstore v95 v63 i256;
+    PUSH2 0xac0 (2752)  // v96.*i256 = gep v1 0.i256 30.i256;
+    MSTORE  // mstore v96 v64 i256;
+    SWAP8  // v97.*i256 = gep v1 0.i256 31.i256;
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    SWAP8
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    SWAP8
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    SWAP8
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    SWAP8
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    SWAP8
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    SWAP6
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    PUSH2 0xae0 (2784)
+    MSTORE  // mstore v97 v65 i256;
+    SWAP1  // v98.i256 = mload v66 i256;
+    POP
+    MLOAD
+    PUSH0  // mstore 0.i256 v98 i256;
+    MSTORE
+    PUSH1 0x20 (32)  // evm_return 0.i256 32.i256;
+    PUSH0
+    RETURN
+
+// func private %touch(v0.*[i256; 32])
+touch:
+  block0:
+    JUMPDEST
+    POP  // return;
+    JUMP

@@ -10,6 +10,8 @@
 //! Mixed consumers such as `object_effects` receive both views through a
 //! domain-specific adapter instead of querying raw provenance facts directly.
 
+use std::collections::VecDeque;
+
 use cranelift_entity::SecondaryMap;
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
@@ -69,7 +71,7 @@ impl From<RootValue> for ValueId {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct Projection {
     pub root_value: RootValue,
     pub slice: shape::AggregateSlice,
@@ -197,6 +199,15 @@ pub(crate) fn observed_root_slices<'a>(
 }
 
 impl ProvenanceFacts {
+    fn with_value_capacity(value_capacity: usize) -> Self {
+        Self {
+            exact: secondary_value_map(value_capacity),
+            possible_projections: secondary_value_map(value_capacity),
+            possible_roots: secondary_value_map(value_capacity),
+            maybe_unknown: secondary_value_map(value_capacity),
+        }
+    }
+
     pub(crate) fn complete(&self) -> CompleteProvenance<'_> {
         CompleteProvenance { facts: self }
     }
@@ -296,12 +307,6 @@ struct CaptureStateView<'a> {
     root_slices: &'a FxHashMap<ValueId, shape::AggregateSlice>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-struct RootTransfer {
-    roots: FxHashSet<ValueId>,
-    maybe_unknown: bool,
-}
-
 #[derive(Clone, Copy)]
 enum ProjectionTransferInst<'a> {
     Gep(&'a data::Gep),
@@ -322,53 +327,111 @@ enum CallReturnTransferKind {
     Unknown,
 }
 
-pub(crate) fn collect_root_provenance(
-    func: &Function,
-    module: &ModuleCtx,
-    root_slices: &FxHashMap<ValueId, shape::AggregateSlice>,
-    layout_cache: &mut shape::AggregateLayoutCache,
-    object_effects: Option<&ObjectEffectSummaryMap>,
-) -> ProvenanceFacts {
-    let mut provenance = ProvenanceFacts::default();
-    let mut exact_states = SecondaryMap::default();
+#[derive(Clone)]
+struct PossibleRootTransfer {
+    result: ValueId,
+    sources: SmallVec<[ValueId; 4]>,
+    kind: PossibleRootTransferKind,
+}
 
-    for (&root_value, &slice) in root_slices {
-        provenance.possible_roots[root_value].insert(root_value);
-        exact_states[root_value] = Some(ExactState::Exact(Projection {
-            root_value: RootValue::new(root_value),
-            slice,
-        }));
+#[derive(Clone, Copy)]
+enum PossibleRootTransferKind {
+    Sources,
+    FreshRoot,
+    Unknown,
+}
+
+type PossibleRootTransfers = SecondaryMap<ValueId, Option<PossibleRootTransfer>>;
+type PossibleRootUsers = SecondaryMap<ValueId, SmallVec<[ValueId; 4]>>;
+type ProjectionTransferCache = FxHashMap<(InstId, Projection), Option<Projection>>;
+
+fn secondary_value_map<V: Clone + Default>(value_capacity: usize) -> SecondaryMap<ValueId, V> {
+    let mut map = SecondaryMap::with_capacity(value_capacity);
+    map.resize(value_capacity);
+    map
+}
+
+pub(crate) struct ProvenanceSnapshot<'a> {
+    value_capacity: usize,
+    single_result_insts: Vec<(InstId, ValueId)>,
+    possible_root_transfers: PossibleRootTransfers,
+    possible_root_users: PossibleRootUsers,
+    value_sccs: FxHashMap<ValueId, usize>,
+    cfg: ControlFlowGraph,
+    reachable: SecondaryMap<BlockId, bool>,
+    projection_transfer_cache: ProjectionTransferCache,
+    object_effects: Option<&'a ObjectEffectSummaryMap>,
+}
+
+impl<'a> ProvenanceSnapshot<'a> {
+    pub(crate) fn new(func: &Function, object_effects: Option<&'a ObjectEffectSummaryMap>) -> Self {
+        let value_capacity = func.dfg.values.len();
+        let single_result_insts = collect_single_result_insts(func);
+        let (possible_root_transfers, possible_root_users) =
+            collect_possible_root_transfers(func, object_effects);
+        let value_sccs = compute_supported_value_sccs(func);
+        let mut cfg = ControlFlowGraph::default();
+        cfg.compute(func);
+        let reachable = cfg.reachable_blocks();
+        Self {
+            value_capacity,
+            single_result_insts,
+            possible_root_transfers,
+            possible_root_users,
+            value_sccs,
+            cfg,
+            reachable,
+            projection_transfer_cache: ProjectionTransferCache::default(),
+            object_effects,
+        }
     }
 
-    compute_possible_roots(
-        func,
-        &mut provenance.possible_roots,
-        &mut provenance.maybe_unknown,
-        object_effects,
-    );
-    let value_sccs = compute_supported_value_sccs(func, root_slices);
+    pub(crate) fn object_effects(&self) -> Option<&'a ObjectEffectSummaryMap> {
+        self.object_effects
+    }
 
-    loop {
-        let mut changed = false;
+    pub(crate) fn collect_root_provenance(
+        &mut self,
+        func: &Function,
+        module: &ModuleCtx,
+        root_slices: &FxHashMap<ValueId, shape::AggregateSlice>,
+        layout_cache: &mut shape::AggregateLayoutCache,
+    ) -> ProvenanceFacts {
+        let mut provenance = ProvenanceFacts::with_value_capacity(self.value_capacity);
+        let mut exact_states = secondary_value_map(self.value_capacity);
 
-        for block in func.layout.iter_block() {
-            for inst in func.layout.iter_inst(block) {
-                if !func.layout.is_inst_inserted(inst) {
-                    continue;
-                }
+        for (&root_value, &slice) in root_slices {
+            provenance.possible_roots[root_value].insert(root_value);
+            exact_states[root_value] = Some(ExactState::Exact(Projection {
+                root_value: RootValue::new(root_value),
+                slice,
+            }));
+        }
 
-                let Some(result) = single_result_value(func, inst) else {
-                    continue;
-                };
+        compute_possible_roots(
+            func,
+            &self.possible_root_transfers,
+            &self.possible_root_users,
+            &mut provenance.possible_roots,
+            &mut provenance.maybe_unknown,
+        );
 
+        loop {
+            let mut changed = false;
+
+            for &(inst, result) in &self.single_result_insts {
                 let next = if let Some(&slice) = root_slices.get(&result) {
                     ExactState::Exact(Projection {
                         root_value: RootValue::new(result),
                         slice,
                     })
-                } else if let Some(projection) =
-                    fresh_call_root_projection(func, result, inst, object_effects, layout_cache)
-                {
+                } else if let Some(projection) = fresh_call_root_projection(
+                    func,
+                    result,
+                    inst,
+                    self.object_effects,
+                    layout_cache,
+                ) {
                     ExactState::Exact(projection)
                 } else {
                     derive_exact_state(
@@ -379,9 +442,10 @@ pub(crate) fn collect_root_provenance(
                         &exact_states,
                         &provenance.possible_roots,
                         &provenance.maybe_unknown,
-                        &value_sccs,
+                        &self.value_sccs,
                         layout_cache,
-                        object_effects,
+                        &mut self.projection_transfer_cache,
+                        self.object_effects,
                     )
                 };
 
@@ -392,42 +456,58 @@ pub(crate) fn collect_root_provenance(
                 exact_states[result] = Some(next);
                 changed = true;
             }
+
+            if !changed {
+                break;
+            }
         }
 
-        if !changed {
-            break;
+        for value in func.dfg.value_ids() {
+            provenance.exact[value] = match exact_states[value].unwrap_or(ExactState::Unknown) {
+                ExactState::Exact(projection) if !provenance.maybe_unknown[value] => {
+                    Some(projection)
+                }
+                ExactState::Unknown | ExactState::Blocked => None,
+                ExactState::Exact(_) => None,
+            };
         }
+
+        refine_possible_roots_from_objref_loads(
+            func,
+            root_slices,
+            &exact_states,
+            self,
+            &mut provenance.possible_roots,
+            &mut provenance.maybe_unknown,
+        );
+
+        provenance.possible_projections = collect_possible_projections(
+            func,
+            module,
+            root_slices,
+            &provenance.possible_roots,
+            &provenance.maybe_unknown,
+            &exact_states,
+            &self.single_result_insts,
+            layout_cache,
+            &mut self.projection_transfer_cache,
+            self.object_effects,
+        );
+
+        provenance
     }
+}
 
-    for value in func.dfg.value_ids() {
-        provenance.exact[value] = match exact_states[value].unwrap_or(ExactState::Unknown) {
-            ExactState::Exact(projection) if !provenance.maybe_unknown[value] => Some(projection),
-            ExactState::Unknown | ExactState::Blocked => None,
-            ExactState::Exact(_) => None,
-        };
-    }
-
-    refine_possible_roots_from_objref_loads(
-        func,
-        root_slices,
-        &exact_states,
-        &mut provenance.possible_roots,
-        &mut provenance.maybe_unknown,
-        object_effects,
-    );
-
-    provenance.possible_projections = collect_possible_projections(
-        func,
-        module,
-        root_slices,
-        &provenance.possible_roots,
-        &provenance.maybe_unknown,
-        &exact_states,
-        layout_cache,
-        object_effects,
-    );
-
-    provenance
+#[cfg(test)]
+pub(crate) fn collect_root_provenance(
+    func: &Function,
+    module: &ModuleCtx,
+    root_slices: &FxHashMap<ValueId, shape::AggregateSlice>,
+    layout_cache: &mut shape::AggregateLayoutCache,
+    object_effects: Option<&ObjectEffectSummaryMap>,
+) -> ProvenanceFacts {
+    let mut snapshot = ProvenanceSnapshot::new(func, object_effects);
+    snapshot.collect_root_provenance(func, module, root_slices, layout_cache)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -438,10 +518,13 @@ fn collect_possible_projections(
     possible_roots: &SecondaryMap<ValueId, FxHashSet<ValueId>>,
     maybe_unknown: &SecondaryMap<ValueId, bool>,
     exact_states: &SecondaryMap<ValueId, Option<ExactState>>,
+    single_result_insts: &[(InstId, ValueId)],
     layout_cache: &mut shape::AggregateLayoutCache,
+    projection_transfer_cache: &mut ProjectionTransferCache,
     object_effects: Option<&ObjectEffectSummaryMap>,
 ) -> SecondaryMap<ValueId, Vec<Projection>> {
-    let mut possible_projections = SecondaryMap::<ValueId, Vec<Projection>>::default();
+    let mut possible_projections: SecondaryMap<ValueId, Vec<Projection>> =
+        secondary_value_map(func.dfg.values.len());
 
     for (&root_value, &slice) in root_slices {
         possible_projections[root_value].push(Projection {
@@ -459,37 +542,29 @@ fn collect_possible_projections(
     loop {
         let mut changed = false;
 
-        for block in func.layout.iter_block() {
-            for inst in func.layout.iter_inst(block) {
-                if !func.layout.is_inst_inserted(inst) {
-                    continue;
-                }
+        for &(inst, result) in single_result_insts {
+            let next = if let Some(projection) =
+                exact_projection_of(exact_states, maybe_unknown, result)
+            {
+                vec![projection]
+            } else {
+                derive_possible_projections(
+                    func,
+                    module,
+                    inst,
+                    result,
+                    &possible_projections,
+                    possible_roots,
+                    maybe_unknown,
+                    layout_cache,
+                    projection_transfer_cache,
+                    object_effects,
+                )
+            };
 
-                let Some(result) = single_result_value(func, inst) else {
-                    continue;
-                };
-                let next = if let Some(projection) =
-                    exact_projection_of(exact_states, maybe_unknown, result)
-                {
-                    vec![projection]
-                } else {
-                    derive_possible_projections(
-                        func,
-                        module,
-                        inst,
-                        result,
-                        &possible_projections,
-                        possible_roots,
-                        maybe_unknown,
-                        layout_cache,
-                        object_effects,
-                    )
-                };
-
-                if next != possible_projections[result] {
-                    possible_projections[result] = next;
-                    changed = true;
-                }
+            if next != possible_projections[result] {
+                possible_projections[result] = next;
+                changed = true;
             }
         }
 
@@ -501,45 +576,281 @@ fn collect_possible_projections(
 
 fn compute_possible_roots(
     func: &Function,
+    transfers: &PossibleRootTransfers,
+    users: &PossibleRootUsers,
     possible_roots: &mut SecondaryMap<ValueId, FxHashSet<ValueId>>,
     maybe_unknown: &mut SecondaryMap<ValueId, bool>,
-    object_effects: Option<&ObjectEffectSummaryMap>,
 ) {
-    loop {
-        let mut changed = false;
+    let mut pending = VecDeque::new();
+    let mut queued = secondary_value_map(func.dfg.values.len());
 
-        for block in func.layout.iter_block() {
-            for inst in func.layout.iter_inst(block) {
-                if !func.layout.is_inst_inserted(inst) {
-                    continue;
-                }
+    for value in func.dfg.value_ids() {
+        if !possible_roots[value].is_empty() || maybe_unknown[value] {
+            enqueue_possible_root_value(value, &mut pending, &mut queued);
+        }
+    }
 
-                let Some(updated) = possible_root_transfer(
-                    func,
-                    inst,
-                    possible_roots,
-                    maybe_unknown,
-                    object_effects,
-                ) else {
-                    continue;
-                };
-                let Some(result) = single_result_value(func, inst) else {
-                    continue;
-                };
+    for value in func.dfg.value_ids() {
+        if let Some(transfer) = &transfers[value]
+            && transfer.sources.is_empty()
+            && apply_possible_root_transfer(transfer, possible_roots, maybe_unknown)
+        {
+            enqueue_possible_root_value(value, &mut pending, &mut queued);
+        }
+    }
 
-                if updated.roots != possible_roots[result]
-                    || updated.maybe_unknown != maybe_unknown[result]
-                {
-                    possible_roots[result] = updated.roots;
-                    maybe_unknown[result] = updated.maybe_unknown;
-                    changed = true;
-                }
+    while let Some(value) = pending.pop_front() {
+        queued[value] = false;
+        for &result in &users[value] {
+            let Some(transfer) = &transfers[result] else {
+                continue;
+            };
+            if apply_possible_root_transfer(transfer, possible_roots, maybe_unknown) {
+                enqueue_possible_root_value(result, &mut pending, &mut queued);
             }
         }
+    }
+}
 
-        if !changed {
-            break;
+fn collect_possible_root_transfers(
+    func: &Function,
+    object_effects: Option<&ObjectEffectSummaryMap>,
+) -> (PossibleRootTransfers, PossibleRootUsers) {
+    let value_capacity = func.dfg.values.len();
+    let mut transfers = secondary_value_map(value_capacity);
+    let mut users = secondary_value_map(value_capacity);
+
+    for block in func.layout.iter_block() {
+        for inst in func.layout.iter_inst(block) {
+            if !func.layout.is_inst_inserted(inst) {
+                continue;
+            }
+
+            let Some(transfer) = possible_root_transfer_for_inst(func, inst, object_effects) else {
+                continue;
+            };
+            for &source in &transfer.sources {
+                push_unique_value(&mut users[source], transfer.result);
+            }
+            let result = transfer.result;
+            transfers[result] = Some(transfer);
         }
+    }
+
+    (transfers, users)
+}
+
+fn collect_single_result_insts(func: &Function) -> Vec<(InstId, ValueId)> {
+    let mut insts = Vec::new();
+    for block in func.layout.iter_block() {
+        for inst in func.layout.iter_inst(block) {
+            if func.layout.is_inst_inserted(inst)
+                && let Some(result) = single_result_value(func, inst)
+            {
+                insts.push((inst, result));
+            }
+        }
+    }
+    insts
+}
+
+fn possible_root_transfer_for_inst(
+    func: &Function,
+    inst: InstId,
+    object_effects: Option<&ObjectEffectSummaryMap>,
+) -> Option<PossibleRootTransfer> {
+    let result = single_result_value(func, inst)?;
+
+    if let Some(gep) = downcast::<&data::Gep>(func.inst_set(), func.dfg.inst(inst)) {
+        return gep
+            .values()
+            .first()
+            .copied()
+            .map(|source| PossibleRootTransfer::source(result, source));
+    }
+
+    if let Some(bitcast) = downcast::<&cast::Bitcast>(func.inst_set(), func.dfg.inst(inst)) {
+        return Some(PossibleRootTransfer::source(result, *bitcast.from()));
+    }
+
+    if let Some(obj_proj) = downcast::<&data::ObjProj>(func.inst_set(), func.dfg.inst(inst)) {
+        return obj_proj
+            .values()
+            .first()
+            .copied()
+            .map(|source| PossibleRootTransfer::source(result, source));
+    }
+
+    if let Some(obj_index) = downcast::<&data::ObjIndex>(func.inst_set(), func.dfg.inst(inst)) {
+        return Some(PossibleRootTransfer::source(result, *obj_index.object()));
+    }
+
+    if let Some(enum_proj) = downcast::<&data::EnumProj>(func.inst_set(), func.dfg.inst(inst)) {
+        return Some(PossibleRootTransfer::source(result, *enum_proj.object()));
+    }
+
+    if let Some(enum_assert_ref) =
+        downcast::<&data::EnumAssertVariantRef>(func.inst_set(), func.dfg.inst(inst))
+    {
+        return Some(PossibleRootTransfer::source(
+            result,
+            *enum_assert_ref.object(),
+        ));
+    }
+
+    if let Some(call) = downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(inst)) {
+        return call_possible_root_transfer(func, result, call, object_effects);
+    }
+
+    downcast::<&control_flow::Phi>(func.inst_set(), func.dfg.inst(inst))
+        .map(|phi| PossibleRootTransfer::sources(result, phi.args().iter().map(|(arg, _)| *arg)))
+}
+
+fn call_possible_root_transfer(
+    func: &Function,
+    result: ValueId,
+    call: &control_flow::Call,
+    object_effects: Option<&ObjectEffectSummaryMap>,
+) -> Option<PossibleRootTransfer> {
+    let Some(kind) = call_return_transfer_kind(object_effects, *call.callee()) else {
+        return reference_element_ty(func.ctx(), func.dfg.value_ty(result))
+            .map(|_| PossibleRootTransfer::unknown(result));
+    };
+
+    match kind {
+        CallReturnTransferKind::Arg { index, .. } => call
+            .args()
+            .get(index)
+            .copied()
+            .map(|source| PossibleRootTransfer::source(result, source)),
+        CallReturnTransferKind::FreshObject => Some(PossibleRootTransfer::fresh_root(result)),
+        CallReturnTransferKind::Unknown => {
+            reference_element_ty(func.ctx(), func.dfg.value_ty(result))
+                .map(|_| PossibleRootTransfer::unknown(result))
+        }
+    }
+}
+
+fn apply_possible_root_transfer(
+    transfer: &PossibleRootTransfer,
+    possible_roots: &mut SecondaryMap<ValueId, FxHashSet<ValueId>>,
+    maybe_unknown: &mut SecondaryMap<ValueId, bool>,
+) -> bool {
+    match transfer.kind {
+        PossibleRootTransferKind::Sources => {
+            apply_possible_root_sources(transfer, possible_roots, maybe_unknown)
+        }
+        PossibleRootTransferKind::FreshRoot => {
+            possible_roots[transfer.result].insert(transfer.result)
+        }
+        PossibleRootTransferKind::Unknown => {
+            let changed = !maybe_unknown[transfer.result];
+            maybe_unknown[transfer.result] = true;
+            changed
+        }
+    }
+}
+
+fn apply_possible_root_sources(
+    transfer: &PossibleRootTransfer,
+    possible_roots: &mut SecondaryMap<ValueId, FxHashSet<ValueId>>,
+    maybe_unknown: &mut SecondaryMap<ValueId, bool>,
+) -> bool {
+    let result = transfer.result;
+    let old_unknown = maybe_unknown[result];
+    let mut next_unknown = old_unknown;
+    let mut result_roots = std::mem::take(&mut possible_roots[result]);
+    let old_root_count = result_roots.len();
+
+    for &source in &transfer.sources {
+        next_unknown |= maybe_unknown[source];
+        if source != result {
+            result_roots.extend(possible_roots[source].iter().copied());
+        }
+    }
+
+    let roots_changed = result_roots.len() != old_root_count;
+    possible_roots[result] = result_roots;
+    maybe_unknown[result] = next_unknown;
+    roots_changed || old_unknown != next_unknown
+}
+
+fn union_possible_root_transfer_from_snapshot(
+    transfer: &PossibleRootTransfer,
+    snapshot_roots: &SecondaryMap<ValueId, FxHashSet<ValueId>>,
+    snapshot_maybe_unknown: &SecondaryMap<ValueId, bool>,
+    dst_roots: &mut FxHashSet<ValueId>,
+    dst_maybe_unknown: &mut bool,
+) -> bool {
+    match transfer.kind {
+        PossibleRootTransferKind::Sources => {
+            let old_root_count = dst_roots.len();
+            let old_unknown = *dst_maybe_unknown;
+            for &source in &transfer.sources {
+                dst_roots.extend(snapshot_roots[source].iter().copied());
+                *dst_maybe_unknown |= snapshot_maybe_unknown[source];
+            }
+            dst_roots.len() != old_root_count || old_unknown != *dst_maybe_unknown
+        }
+        PossibleRootTransferKind::FreshRoot => dst_roots.insert(transfer.result),
+        PossibleRootTransferKind::Unknown => {
+            let changed = !*dst_maybe_unknown;
+            *dst_maybe_unknown = true;
+            changed
+        }
+    }
+}
+
+fn enqueue_possible_root_value(
+    value: ValueId,
+    pending: &mut VecDeque<ValueId>,
+    queued: &mut SecondaryMap<ValueId, bool>,
+) {
+    if !queued[value] {
+        queued[value] = true;
+        pending.push_back(value);
+    }
+}
+
+impl PossibleRootTransfer {
+    fn source(result: ValueId, source: ValueId) -> Self {
+        Self::sources(result, [source])
+    }
+
+    fn sources(result: ValueId, sources: impl IntoIterator<Item = ValueId>) -> Self {
+        let mut unique_sources = SmallVec::new();
+        for source in sources {
+            if !unique_sources.contains(&source) {
+                unique_sources.push(source);
+            }
+        }
+        Self {
+            result,
+            sources: unique_sources,
+            kind: PossibleRootTransferKind::Sources,
+        }
+    }
+
+    fn fresh_root(result: ValueId) -> Self {
+        Self {
+            result,
+            sources: SmallVec::new(),
+            kind: PossibleRootTransferKind::FreshRoot,
+        }
+    }
+
+    fn unknown(result: ValueId) -> Self {
+        Self {
+            result,
+            sources: SmallVec::new(),
+            kind: PossibleRootTransferKind::Unknown,
+        }
+    }
+}
+
+fn push_unique_value(values: &mut SmallVec<[ValueId; 4]>, value: ValueId) {
+    if !values.contains(&value) {
+        values.push(value);
     }
 }
 
@@ -547,14 +858,10 @@ fn refine_possible_roots_from_objref_loads(
     func: &Function,
     root_slices: &FxHashMap<ValueId, shape::AggregateSlice>,
     exact_states: &SecondaryMap<ValueId, Option<ExactState>>,
+    snapshot: &ProvenanceSnapshot<'_>,
     possible_roots: &mut SecondaryMap<ValueId, FxHashSet<ValueId>>,
     maybe_unknown: &mut SecondaryMap<ValueId, bool>,
-    object_effects: Option<&ObjectEffectSummaryMap>,
 ) {
-    let mut cfg = ControlFlowGraph::default();
-    cfg.compute(func);
-    let reachable = cfg.reachable_blocks();
-
     loop {
         let mut changed = false;
         let possible_roots_snapshot = possible_roots.clone();
@@ -568,13 +875,13 @@ fn refine_possible_roots_from_objref_loads(
         let block_entry_captures = compute_capture_states_for_blocks(
             func,
             capture_state,
-            object_effects,
-            &cfg,
-            &reachable,
+            snapshot.object_effects,
+            &snapshot.cfg,
+            &snapshot.reachable,
         );
 
         for block in func.layout.iter_block() {
-            if !reachable[block] {
+            if !snapshot.reachable[block] {
                 continue;
             }
 
@@ -584,17 +891,14 @@ fn refine_possible_roots_from_objref_loads(
                     continue;
                 }
 
-                if let Some(updated) = possible_root_transfer(
-                    func,
-                    inst,
-                    &possible_roots_snapshot,
-                    &maybe_unknown_snapshot,
-                    object_effects,
-                ) && let Some(result) = single_result_value(func, inst)
-                    && union_root_transfer(
+                if let Some(result) = single_result_value(func, inst)
+                    && let Some(transfer) = &snapshot.possible_root_transfers[result]
+                    && union_possible_root_transfer_from_snapshot(
+                        transfer,
+                        &possible_roots_snapshot,
+                        &maybe_unknown_snapshot,
                         &mut possible_roots[result],
                         &mut maybe_unknown[result],
-                        &updated,
                     )
                 {
                     changed = true;
@@ -605,23 +909,22 @@ fn refine_possible_roots_from_objref_loads(
                     && reference_element_ty(func.ctx(), func.dfg.value_ty(*obj_load.object()))
                         .is_some()
                     && let Some(result) = single_result_value(func, inst)
-                {
-                    let loaded_roots =
-                        capture_roots_for_value(*obj_load.object(), capture_state, &root_captures);
-                    if union_root_transfer(
+                    && union_capture_roots_for_value(
+                        *obj_load.object(),
+                        capture_state,
+                        &root_captures,
                         &mut possible_roots[result],
                         &mut maybe_unknown[result],
-                        &loaded_roots,
-                    ) {
-                        changed = true;
-                    }
+                    )
+                {
+                    changed = true;
                 }
 
                 apply_inst_capture_transfer(
                     func,
                     inst,
                     capture_state,
-                    object_effects,
+                    snapshot.object_effects,
                     &mut root_captures,
                 );
             }
@@ -788,11 +1091,12 @@ fn record_enum_variant_capture_sources(
     let Some(enum_ty) = reference_element_ty(func.ctx(), func.dfg.value_ty(object)) else {
         return;
     };
+    let mut layout_cache = shape::AggregateLayoutCache::default();
     for (field_idx, &value) in values.iter().enumerate() {
         if reference_element_ty(func.ctx(), func.dfg.value_ty(value)).is_none() {
             continue;
         }
-        let Some(field_slice) = shape::enum_variant_field_slice(
+        let Some(field_slice) = layout_cache.enum_variant_field_slice(
             func.ctx(),
             enum_ty,
             variant,
@@ -885,15 +1189,17 @@ fn exact_capture_destination_for_value(
     )
 }
 
-fn capture_roots_for_value(
+fn union_capture_roots_for_value(
     value: ValueId,
     capture_state: CaptureStateView<'_>,
     root_captures: &RootCaptureMap,
-) -> RootTransfer {
-    let mut transfer = RootTransfer {
-        maybe_unknown: capture_state.maybe_unknown[value],
-        ..RootTransfer::default()
-    };
+    dst_roots: &mut FxHashSet<ValueId>,
+    dst_maybe_unknown: &mut bool,
+) -> bool {
+    let old_root_count = dst_roots.len();
+    let old_unknown = *dst_maybe_unknown;
+    *dst_maybe_unknown |= capture_state.maybe_unknown[value];
+
     for (root, access_slice) in capture_destinations_for_value(value, None, capture_state) {
         let Some(captures) = root_captures.get(&root) else {
             continue;
@@ -901,14 +1207,15 @@ fn capture_roots_for_value(
         for capture in captures {
             if slices_overlap_relative(access_slice, capture.dst_slice) {
                 if let Some(src_root) = capture.src_root {
-                    transfer.roots.insert(src_root.value());
+                    dst_roots.insert(src_root.value());
                 } else {
-                    transfer.maybe_unknown = true;
+                    *dst_maybe_unknown = true;
                 }
             }
         }
     }
-    transfer
+
+    dst_roots.len() != old_root_count || old_unknown != *dst_maybe_unknown
 }
 
 fn whole_root_projection(
@@ -943,95 +1250,6 @@ pub(crate) fn offset_projection_slice(
     )
 }
 
-fn union_root_set(dst: &mut FxHashSet<ValueId>, src: &FxHashSet<ValueId>) -> bool {
-    let before = dst.len();
-    dst.extend(src.iter().copied());
-    dst.len() != before
-}
-
-fn union_root_transfer(
-    dst_roots: &mut FxHashSet<ValueId>,
-    dst_maybe_unknown: &mut bool,
-    src: &RootTransfer,
-) -> bool {
-    let roots_changed = union_root_set(dst_roots, &src.roots);
-    let unknown_changed = !*dst_maybe_unknown && src.maybe_unknown;
-    *dst_maybe_unknown |= src.maybe_unknown;
-    roots_changed || unknown_changed
-}
-
-fn possible_root_transfer(
-    func: &Function,
-    inst: InstId,
-    possible_roots: &SecondaryMap<ValueId, FxHashSet<ValueId>>,
-    maybe_unknown: &SecondaryMap<ValueId, bool>,
-    object_effects: Option<&ObjectEffectSummaryMap>,
-) -> Option<RootTransfer> {
-    if let Some(gep) = downcast::<&data::Gep>(func.inst_set(), func.dfg.inst(inst)) {
-        return gep.values().first().map(|base| RootTransfer {
-            roots: possible_roots[*base].clone(),
-            maybe_unknown: maybe_unknown[*base],
-        });
-    }
-
-    if let Some(bitcast) = downcast::<&cast::Bitcast>(func.inst_set(), func.dfg.inst(inst)) {
-        return Some(RootTransfer {
-            roots: possible_roots[*bitcast.from()].clone(),
-            maybe_unknown: maybe_unknown[*bitcast.from()],
-        });
-    }
-
-    if let Some(obj_proj) = downcast::<&data::ObjProj>(func.inst_set(), func.dfg.inst(inst)) {
-        return obj_proj.values().first().map(|base| RootTransfer {
-            roots: possible_roots[*base].clone(),
-            maybe_unknown: maybe_unknown[*base],
-        });
-    }
-
-    if let Some(obj_index) = downcast::<&data::ObjIndex>(func.inst_set(), func.dfg.inst(inst)) {
-        return Some(RootTransfer {
-            roots: possible_roots[*obj_index.object()].clone(),
-            maybe_unknown: maybe_unknown[*obj_index.object()],
-        });
-    }
-
-    if let Some(enum_proj) = downcast::<&data::EnumProj>(func.inst_set(), func.dfg.inst(inst)) {
-        return Some(RootTransfer {
-            roots: possible_roots[*enum_proj.object()].clone(),
-            maybe_unknown: maybe_unknown[*enum_proj.object()],
-        });
-    }
-
-    if let Some(enum_assert_ref) =
-        downcast::<&data::EnumAssertVariantRef>(func.inst_set(), func.dfg.inst(inst))
-    {
-        return Some(RootTransfer {
-            roots: possible_roots[*enum_assert_ref.object()].clone(),
-            maybe_unknown: maybe_unknown[*enum_assert_ref.object()],
-        });
-    }
-
-    if let Some(call) = downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(inst)) {
-        return call_return_root_transfer(
-            func,
-            inst,
-            call,
-            possible_roots,
-            maybe_unknown,
-            object_effects,
-        );
-    }
-
-    downcast::<&control_flow::Phi>(func.inst_set(), func.dfg.inst(inst)).map(|phi| {
-        let mut transfer = RootTransfer::default();
-        for &(arg, _) in phi.args() {
-            transfer.roots.extend(possible_roots[arg].iter().copied());
-            transfer.maybe_unknown |= maybe_unknown[arg];
-        }
-        transfer
-    })
-}
-
 #[allow(clippy::too_many_arguments)]
 fn derive_exact_state(
     func: &Function,
@@ -1043,6 +1261,7 @@ fn derive_exact_state(
     maybe_unknown: &SecondaryMap<ValueId, bool>,
     value_sccs: &FxHashMap<ValueId, usize>,
     layout_cache: &mut shape::AggregateLayoutCache,
+    projection_transfer_cache: &mut ProjectionTransferCache,
     object_effects: Option<&ObjectEffectSummaryMap>,
 ) -> ExactState {
     if let Some(transfer) = projection_transfer_inst(func, inst) {
@@ -1053,9 +1272,17 @@ fn derive_exact_state(
         else {
             return pending_or_blocked(exact_states, source);
         };
-        return transfer
-            .map_projection(func, module, result, source_projection, layout_cache)
-            .map_or(ExactState::Blocked, ExactState::Exact);
+        return map_projection_cached(
+            projection_transfer_cache,
+            transfer,
+            func,
+            module,
+            inst,
+            result,
+            source_projection,
+            layout_cache,
+        )
+        .map_or(ExactState::Blocked, ExactState::Exact);
     }
 
     if let Some(call) = downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(inst)) {
@@ -1097,6 +1324,7 @@ fn derive_possible_projections(
     possible_roots: &SecondaryMap<ValueId, FxHashSet<ValueId>>,
     maybe_unknown: &SecondaryMap<ValueId, bool>,
     layout_cache: &mut shape::AggregateLayoutCache,
+    projection_transfer_cache: &mut ProjectionTransferCache,
     object_effects: Option<&ObjectEffectSummaryMap>,
 ) -> Vec<Projection> {
     let Some(root_value) = singleton_root(possible_roots, maybe_unknown, result) else {
@@ -1114,7 +1342,18 @@ fn derive_possible_projections(
             possible_roots,
             maybe_unknown,
             &possible_projections[source],
-            |projection| transfer.map_projection(func, module, result, projection, layout_cache),
+            |projection| {
+                map_projection_cached(
+                    projection_transfer_cache,
+                    transfer,
+                    func,
+                    module,
+                    inst,
+                    result,
+                    projection,
+                    layout_cache,
+                )
+            },
         );
     }
 
@@ -1281,22 +1520,20 @@ fn projection_value_ty_matches(value_ty: Type, projection_ty: Type, module: &Mod
     reference_element_ty(module, value_ty).is_some_and(|pointee| pointee == projection_ty)
 }
 
-fn compute_supported_value_sccs(
-    func: &Function,
-    root_slices: &FxHashMap<ValueId, shape::AggregateSlice>,
-) -> FxHashMap<ValueId, usize> {
+fn compute_supported_value_sccs(func: &Function) -> FxHashMap<ValueId, usize> {
     let mut nodes = FxHashSet::default();
-    nodes.extend(root_slices.keys().copied());
 
     for block in func.layout.iter_block() {
         for inst in func.layout.iter_inst(block) {
             if !func.layout.is_inst_inserted(inst) {
                 continue;
             }
-            if supported_value_deps(func, inst).is_some()
-                && let Some(result) = single_result_value(func, inst)
-            {
+            if let (Some(result), Some(deps)) = (
+                single_result_value(func, inst),
+                supported_value_deps(func, inst),
+            ) {
                 nodes.insert(result);
+                nodes.extend(deps);
             }
         }
     }
@@ -1382,46 +1619,6 @@ fn supported_value_deps(func: &Function, inst: InstId) -> Option<Vec<ValueId>> {
 
     downcast::<&control_flow::Phi>(func.inst_set(), func.dfg.inst(inst))
         .map(|phi| phi.args().iter().map(|(arg, _)| *arg).collect())
-}
-
-fn call_return_root_transfer(
-    func: &Function,
-    inst: InstId,
-    call: &control_flow::Call,
-    possible_roots: &SecondaryMap<ValueId, FxHashSet<ValueId>>,
-    maybe_unknown: &SecondaryMap<ValueId, bool>,
-    object_effects: Option<&ObjectEffectSummaryMap>,
-) -> Option<RootTransfer> {
-    let [result] = func.dfg.inst_results(inst) else {
-        return None;
-    };
-    let Some(kind) = call_return_transfer_kind(object_effects, *call.callee()) else {
-        return reference_element_ty(func.ctx(), func.dfg.value_ty(*result)).map(|_| {
-            RootTransfer {
-                maybe_unknown: true,
-                ..RootTransfer::default()
-            }
-        });
-    };
-    match kind {
-        CallReturnTransferKind::Arg { index, .. } => {
-            call.args().get(index).map(|arg| RootTransfer {
-                roots: possible_roots[*arg].clone(),
-                maybe_unknown: maybe_unknown[*arg],
-            })
-        }
-        CallReturnTransferKind::FreshObject => {
-            let mut transfer = RootTransfer::default();
-            transfer.roots.insert(*result);
-            Some(transfer)
-        }
-        CallReturnTransferKind::Unknown => {
-            reference_element_ty(func.ctx(), func.dfg.value_ty(*result)).map(|_| RootTransfer {
-                maybe_unknown: true,
-                ..RootTransfer::default()
-            })
-        }
-    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1623,13 +1820,14 @@ impl ProjectionTransferInst<'_> {
         layout_cache: &mut shape::AggregateLayoutCache,
     ) -> Option<Projection> {
         match self {
-            Self::Gep(gep) => shape::aggregate_slice_for_gep_path(
-                module,
-                projection.slice.ty,
-                &gep.values()[1..],
-                &func.dfg,
-            )
-            .map(|sub| offset_projection(projection, sub)),
+            Self::Gep(gep) => layout_cache
+                .aggregate_slice_for_gep_path(
+                    module,
+                    projection.slice.ty,
+                    &gep.values()[1..],
+                    &func.dfg,
+                )
+                .map(|sub| offset_projection(projection, sub)),
             Self::Bitcast(_) => bitcast_projection_slice(
                 layout_cache,
                 module,
@@ -1640,23 +1838,25 @@ impl ProjectionTransferInst<'_> {
                 root_value: projection.root_value,
                 slice,
             }),
-            Self::ObjProj(obj_proj) => shape::aggregate_slice_for_object_path(
-                module,
-                projection.slice.ty,
-                &obj_proj.values()[1..],
-                &func.dfg,
-            )
-            .map(|sub| offset_projection(projection, sub)),
-            Self::ObjIndex(obj_index) => shape::aggregate_slice_for_object_path(
-                module,
-                projection.slice.ty,
-                &[*obj_index.index()],
-                &func.dfg,
-            )
-            .map(|sub| offset_projection(projection, sub)),
+            Self::ObjProj(obj_proj) => layout_cache
+                .aggregate_slice_for_object_path(
+                    module,
+                    projection.slice.ty,
+                    &obj_proj.values()[1..],
+                    &func.dfg,
+                )
+                .map(|sub| offset_projection(projection, sub)),
+            Self::ObjIndex(obj_index) => layout_cache
+                .aggregate_slice_for_object_path(
+                    module,
+                    projection.slice.ty,
+                    &[*obj_index.index()],
+                    &func.dfg,
+                )
+                .map(|sub| offset_projection(projection, sub)),
             Self::EnumProj(enum_proj) => {
                 let field_idx = shape::const_u32(&func.dfg, *enum_proj.field())?;
-                let sub = shape::enum_variant_field_slice(
+                let sub = layout_cache.enum_variant_field_slice(
                     module,
                     projection.slice.ty,
                     *enum_proj.variant(),
@@ -1667,6 +1867,27 @@ impl ProjectionTransferInst<'_> {
             Self::EnumAssertVariantRef(_) => Some(projection),
         }
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn map_projection_cached(
+    cache: &mut ProjectionTransferCache,
+    transfer: ProjectionTransferInst<'_>,
+    func: &Function,
+    module: &ModuleCtx,
+    inst: InstId,
+    result: ValueId,
+    projection: Projection,
+    layout_cache: &mut shape::AggregateLayoutCache,
+) -> Option<Projection> {
+    let key = (inst, projection);
+    if let Some(mapped) = cache.get(&key) {
+        return *mapped;
+    }
+
+    let mapped = transfer.map_projection(func, module, result, projection, layout_cache);
+    cache.insert(key, mapped);
+    mapped
 }
 
 fn offset_projection(projection: Projection, sub: shape::AggregateSlice) -> Projection {
@@ -1807,10 +2028,10 @@ fn projection_slice_can_view_as(
         && from_leaf_tys.len() == to_leaf_tys.len()
         && (view_ty == slice.ty
             || from_leaf_tys.len() == 1
-                && shape::runtime_size_bytes(module, from_leaf_tys[0])
-                    == shape::runtime_size_bytes(module, to_leaf_tys[0])
-            || shape::is_supported_scalar_shape_ty(module, slice.ty)
-                && shape::is_supported_scalar_shape_ty(module, view_ty)
+                && layout_cache.runtime_size_bytes(module, from_leaf_tys[0])
+                    == layout_cache.runtime_size_bytes(module, to_leaf_tys[0])
+            || layout_cache.is_supported_scalar_shape_ty(module, slice.ty)
+                && layout_cache.is_supported_scalar_shape_ty(module, view_ty)
                 && layout_cache
                     .compatible_bitcast_runtime_leaves(module, slice.ty, view_ty)
                     .is_some())
@@ -1821,7 +2042,7 @@ fn projection_view_leaf_tys(
     module: &ModuleCtx,
     ty: Type,
 ) -> Option<Vec<Type>> {
-    if shape::is_supported_scalar_shape_ty(module, ty) {
+    if layout_cache.is_supported_scalar_shape_ty(module, ty) {
         return Some(
             layout_cache
                 .shape(module, ty)?
@@ -2678,6 +2899,78 @@ block3:
             let may = provenance.may();
 
             assert_known_only(may.may_roots(loaded), &expected);
+        });
+    }
+
+    #[test]
+    fn loop_carried_projection_phi_keeps_exact_projection() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @Pair = { i256, i256 };
+
+func private %f(v0.i1) -> objref<i256> {
+block0:
+    v1.objref<@Pair> = obj.alloc @Pair;
+    v2.objref<i256> = obj.proj v1 0.i8;
+    jump block1;
+
+block1:
+    v3.objref<i256> = phi (v2 block0) (v3 block2);
+    br v0 block2 block3;
+
+block2:
+    jump block1;
+
+block3:
+    return v3;
+}
+"#,
+        );
+
+        let func_ref = lookup_func(&module, "f");
+        module.func_store.view(func_ref, |func| {
+            let mut layout_cache = shape::AggregateLayoutCache::default();
+            let root_slices = collect_root_slices(func, None, &mut layout_cache);
+            let provenance =
+                collect_root_provenance(func, func.ctx(), &root_slices, &mut layout_cache, None);
+            let projected = func
+                .layout
+                .iter_block()
+                .flat_map(|block| func.layout.iter_inst(block))
+                .find_map(|inst| {
+                    downcast::<&data::ObjProj>(func.inst_set(), func.dfg.inst(inst))
+                        .and_then(|_| func.dfg.inst_result(inst))
+                })
+                .expect("projection result should exist");
+            let phi_result = func
+                .layout
+                .iter_block()
+                .flat_map(|block| func.layout.iter_inst(block))
+                .find_map(|inst| {
+                    downcast::<&control_flow::Phi>(func.inst_set(), func.dfg.inst(inst))
+                        .and_then(|_| func.dfg.inst_result(inst))
+                })
+                .expect("phi result should exist");
+
+            let complete = provenance.complete();
+            let may = provenance.may();
+            let expected_projection = complete
+                .exact_projection(projected)
+                .expect("source projection should be exact");
+            assert_eq!(
+                complete.exact_projection(phi_result),
+                Some(expected_projection)
+            );
+            assert_eq!(
+                complete.complete_roots(phi_result),
+                Some(CompleteRootSet::Single(expected_projection.root_value))
+            );
+            assert_known_only(
+                may.may_roots(phi_result),
+                &[expected_projection.root_value.value()],
+            );
         });
     }
 

@@ -1,0 +1,1636 @@
+#! evm.config: { vcode: true, bytecode_hex: false, stackify_trace: false, evm_trace: false, opt: 2 }
+#! evm.case: captured_rook_clears_castling_rights
+#!   calldata:
+#!   expect: return u256(1)
+
+target = "evm-ethereum-osaka"
+
+type @layout_1 = {i256, i256, i1, i1, i1, i8, i1};
+type @layout_3 = {i8, i8, i8};
+type @layout_4 = {i256, i256};
+type @layout_0 = enum {
+    #NoPieceAtSource,
+    #WrongSideToMove,
+    #FriendlyOccupiedDestination,
+    #BadGeometry,
+    #BlockedPath,
+};
+type @layout_2 = enum {
+    #Err(@layout_0),
+    #Ok(@layout_1),
+};
+type @layout_5 = enum {
+    #Err(@layout_0),
+    #Ok(@layout_4),
+};
+
+func private %abs_diff(v0.i8, v1.i8) -> i8 {
+    block0:
+        v2.*i8 = alloca i8;
+        v3.*i8 = alloca i8;
+        mstore v2 v0 i8;
+        mstore v3 v1 i8;
+        jump block1;
+
+    block1:
+        v4.i8 = mload v2 i8;
+        v5.i8 = mload v3 i8;
+        v6.i1 = lt v4 v5;
+        v7.i1 = is_zero v6;
+        br v7 block2 block3;
+
+    block2:
+        v8.i8 = mload v2 i8;
+        v9.i8 = mload v3 i8;
+        (v10.i8, v11.i1) = usubo v8 v9;
+        br v11 block5 block6;
+
+    block3:
+        v17.i8 = mload v3 i8;
+        v18.i8 = mload v2 i8;
+        (v19.i8, v20.i1) = usubo v17 v18;
+        br v20 block5 block7;
+
+    block4:
+        v21.i8 = phi (v10 block6) (v19 block7);
+        return v21;
+
+    block5:
+        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
+        mstore 4.i256 17.i256 i256;
+        evm_revert 0.i256 36.i256;
+
+    block6:
+        jump block4;
+
+    block7:
+        jump block4;
+}
+
+func private %apply_rook(v0.i256, v1.i256, v2.i8, v3.i8, v4.i8, v5.i8, v6.i8, v7.i1) -> @layout_2 {
+    block0:
+        v8.*i256 = alloca i256;
+        v9.*i256 = alloca i256;
+        v10.*i8 = alloca i8;
+        v11.*i8 = alloca i8;
+        v12.*i8 = alloca i8;
+        v13.*i8 = alloca i8;
+        v14.*i8 = alloca i8;
+        v15.*i1 = alloca i1;
+        v16.*i256 = alloca i256;
+        v17.*i256 = alloca i256;
+        mstore v8 v0 i256;
+        mstore v9 v1 i256;
+        mstore v10 v2 i8;
+        mstore v11 v3 i8;
+        mstore v12 v4 i8;
+        mstore v13 v5 i8;
+        mstore v14 v6 i8;
+        mstore v15 v7 i1;
+        jump block1;
+
+    block1:
+        v18.i8 = mload v12 i8;
+        v20.i1 = eq v18 0.i8;
+        v21.i1 = is_zero v20;
+        br v21 block2 block3;
+
+    block2:
+        v22.@layout_0 = enum.make @layout_0 #BadGeometry;
+        v23.@layout_0 = enum.make @layout_0 #BadGeometry;
+        v24.@layout_2 = enum.make @layout_2 #Err v23;
+        return v24;
+
+    block3:
+        jump block4;
+
+    block4:
+        v25.i8 = mload v10 i8;
+        v26.i8 = call %sq_file v25;
+        v27.i8 = mload v10 i8;
+        v28.i8 = call %sq_rank v27;
+        v29.i8 = mload v11 i8;
+        v30.i8 = call %sq_file v29;
+        v31.i8 = mload v11 i8;
+        v32.i8 = call %sq_rank v31;
+        v33.i8 = call %abs_diff v30 v26;
+        v34.i8 = call %abs_diff v32 v28;
+        v35.i1 = eq v33 0.i8;
+        v36.i1 = eq v34 0.i8;
+        v37.i1 = is_zero v36;
+        v38.i1 = and v35 v37;
+        v39.i1 = is_zero v38;
+        br v39 block5 block6;
+
+    block5:
+        v40.@layout_0 = enum.make @layout_0 #BadGeometry;
+        v41.@layout_0 = enum.make @layout_0 #BadGeometry;
+        v42.@layout_2 = enum.make @layout_2 #Err v41;
+        return v42;
+
+    block6:
+        jump block7;
+
+    block7:
+        v43.i256 = mload v8 i256;
+        v47.i1 = call %path_clear_file v43 v26 v28 v32;
+        v48.i1 = is_zero v47;
+        br v48 block8 block9;
+
+    block8:
+        v49.@layout_0 = enum.make @layout_0 #BlockedPath;
+        v50.@layout_0 = enum.make @layout_0 #BlockedPath;
+        v51.@layout_2 = enum.make @layout_2 #Err v50;
+        return v51;
+
+    block9:
+        jump block10;
+
+    block10:
+        v52.i1 = mload v15 i1;
+        br v52 block11 block12;
+
+    block11:
+        v53.i8 = mload v10 i8;
+        v54.i1 = eq v53 0.i8;
+        br v54 block14 block15;
+
+    block12:
+        v55.i8 = mload v10 i8;
+        v57.i1 = eq v55 56.i8;
+        br v57 block20 block21;
+
+    block13:
+        v82.i8 = phi (v99 block16) (v100 block22);
+        v58.i256 = mload v8 i256;
+        v59.i8 = mload v14 i8;
+        v60.i1 = eq v59 0.i8;
+        v61.i1 = is_zero v60;
+        v62.i8 = mload v10 i8;
+        v63.i256 = call %clear_piece v58 v62;
+        mstore v16 v63 i256;
+        v64.i256 = mload v16 i256;
+        v65.i8 = mload v11 i8;
+        v66.i8 = mload v13 i8;
+        v67.i256 = call %set_piece v64 v65 v66;
+        mstore v17 v67 i256;
+        v68.i256 = mload v17 i256;
+        v69.i256 = mload v9 i256;
+        v71.objref<@layout_1> = obj.alloc @layout_1;
+        v73.objref<i256> = obj.proj v71 0.i256;
+        obj.store v73 v68;
+        v75.objref<i256> = obj.proj v71 1.i256;
+        obj.store v75 v69;
+        v77.objref<i1> = obj.proj v71 2.i256;
+        obj.store v77 v61;
+        v79.objref<i1> = obj.proj v71 3.i256;
+        obj.store v79 0.i1;
+        v81.objref<i1> = obj.proj v71 4.i256;
+        obj.store v81 0.i1;
+        v84.objref<i8> = obj.proj v71 5.i256;
+        obj.store v84 v82;
+        v86.objref<i1> = obj.proj v71 6.i256;
+        obj.store v86 0.i1;
+        v87.@layout_1 = obj.load v71;
+        v88.@layout_2 = enum.make @layout_2 #Ok v87;
+        return v88;
+
+    block14:
+        jump block16;
+
+    block15:
+        v90.i8 = mload v10 i8;
+        v92.i1 = eq v90 7.i8;
+        br v92 block17 block18;
+
+    block16:
+        v99.i8 = phi (2.i8 block14) (v101 block19);
+        jump block13;
+
+    block17:
+        jump block19;
+
+    block18:
+        jump block19;
+
+    block19:
+        v101.i8 = phi (1.i8 block17) (0.i8 block18);
+        jump block16;
+
+    block20:
+        jump block22;
+
+    block21:
+        v95.i8 = mload v10 i8;
+        v97.i1 = eq v95 63.i8;
+        br v97 block23 block24;
+
+    block22:
+        v100.i8 = phi (8.i8 block20) (v102 block25);
+        jump block13;
+
+    block23:
+        jump block25;
+
+    block24:
+        jump block25;
+
+    block25:
+        v102.i8 = phi (4.i8 block23) (0.i8 block24);
+        jump block22;
+}
+
+func private %clear_piece(v0.i256, v1.i8) -> i256 {
+    block0:
+        v2.*i256 = alloca i256;
+        v3.*i8 = alloca i8;
+        mstore v2 v0 i256;
+        mstore v3 v1 i8;
+        jump block1;
+
+    block1:
+        v4.i256 = mload v2 i256;
+        v5.i8 = mload v3 i8;
+        v7.i256 = call %set_piece v4 v5 0.i8;
+        return v7;
+}
+
+func private %decode_move(v0.i32) -> @layout_3 {
+    block0:
+        v1.*i32 = alloca i32;
+        mstore v1 v0 i32;
+        jump block1;
+
+    block1:
+        v2.i32 = mload v1 i32;
+        v4.i32 = and v2 63.i32;
+        v5.i8 = call %downcast_truncate__gcd17 v4;
+        v6.i32 = mload v1 i32;
+        v8.i32 = shr 6.i32 v6;
+        v9.i32 = and v8 63.i32;
+        v10.i8 = call %downcast_truncate__gcd17 v9;
+        v11.i32 = mload v1 i32;
+        v13.i32 = shr 12.i32 v11;
+        v15.i32 = and v13 7.i32;
+        v16.i8 = call %downcast_truncate__gcd17 v15;
+        v17.objref<@layout_3> = obj.alloc @layout_3;
+        v19.objref<i8> = obj.proj v17 0.i256;
+        obj.store v19 v5;
+        v21.objref<i8> = obj.proj v17 1.i256;
+        obj.store v21 v10;
+        v23.objref<i8> = obj.proj v17 2.i256;
+        obj.store v23 v16;
+        v24.@layout_3 = obj.load v17;
+        return v24;
+}
+
+func private %downcast_truncate__g0587(v0.i256) -> i8 {
+    block0:
+        v1.*i256 = alloca i256;
+        mstore v1 v0 i256;
+        jump block1;
+
+    block1:
+        v2.i256 = mload v1 i256;
+        v3.i256 = call %core__lib__num__impl_trait_u256_7874__to_word_23c1 v2;
+        br 0.i1 block2 block3;
+
+    block2:
+        v8.i256 = call %core__lib__num__sign_extend_4891 v3 255.i256 0.i256;
+        v9.i8 = call %core__lib__num__impl_trait_u8_5028__from_word_2024 v8;
+        jump block4;
+
+    block3:
+        v11.i256 = and v3 255.i256;
+        v12.i8 = call %core__lib__num__impl_trait_u8_5028__from_word_2024 v11;
+        jump block4;
+
+    block4:
+        v13.i8 = phi (v9 block2) (v12 block3);
+        return v13;
+}
+
+func private %downcast_truncate__gcd17(v0.i32) -> i8 {
+    block0:
+        v1.*i32 = alloca i32;
+        mstore v1 v0 i32;
+        jump block1;
+
+    block1:
+        v2.i32 = mload v1 i32;
+        v3.i256 = call %impl_trait_u32__to_word v2;
+        br 0.i1 block2 block3;
+
+    block2:
+        v8.i256 = call %core__lib__num__sign_extend_f418 v3 255.i256 0.i256;
+        v9.i8 = call %core__lib__num__impl_trait_u8_5028__from_word_1a32 v8;
+        jump block4;
+
+    block3:
+        v11.i256 = and v3 255.i256;
+        v12.i8 = call %core__lib__num__impl_trait_u8_5028__from_word_1a32 v11;
+        jump block4;
+
+    block4:
+        v13.i8 = phi (v9 block2) (v12 block3);
+        return v13;
+}
+
+func private %downcast_truncate__gaa7e(v0.i256) -> i16 {
+    block0:
+        v1.*i256 = alloca i256;
+        mstore v1 v0 i256;
+        jump block1;
+
+    block1:
+        v2.i256 = mload v1 i256;
+        v3.i256 = call %core__lib__num__impl_trait_u256_7874__to_word_7f21 v2;
+        br 0.i1 block2 block3;
+
+    block2:
+        v8.i256 = call %core__lib__num__sign_extend_9550 v3 65535.i256 0.i256;
+        v9.i16 = call %impl_trait_u16__from_word v8;
+        jump block4;
+
+    block3:
+        v11.i256 = and v3 65535.i256;
+        v12.i16 = call %impl_trait_u16__from_word v11;
+        jump block4;
+
+    block4:
+        v13.i16 = phi (v9 block2) (v12 block3);
+        return v13;
+}
+
+func private %encode_move(v0.i8, v1.i8, v2.i8) -> i32 {
+    block0:
+        v3.*i8 = alloca i8;
+        v4.*i8 = alloca i8;
+        v5.*i8 = alloca i8;
+        mstore v3 v0 i8;
+        mstore v4 v1 i8;
+        mstore v5 v2 i8;
+        jump block1;
+
+    block1:
+        v6.i8 = mload v3 i8;
+        v7.i32 = zext v6 i32;
+        v8.i8 = mload v4 i8;
+        v9.i32 = zext v8 i32;
+        v11.i32 = shl 6.i32 v9;
+        v12.i32 = or v7 v11;
+        v13.i8 = mload v5 i8;
+        v14.i32 = zext v13 i32;
+        v16.i32 = shl 12.i32 v14;
+        v17.i32 = or v12 v16;
+        return v17;
+}
+
+func private %core__lib__num__impl_trait_u8_5028__from_word_1a32(v0.i256) -> i8 {
+    block0:
+        v1.*i256 = alloca i256;
+        mstore v1 v0 i256;
+        jump block1;
+
+    block1:
+        v2.i256 = mload v1 i256;
+        v3.i8 = trunc v2 i8;
+        return v3;
+}
+
+func private %core__lib__num__impl_trait_u8_5028__from_word_2024(v0.i256) -> i8 {
+    block0:
+        v1.*i256 = alloca i256;
+        mstore v1 v0 i256;
+        jump block1;
+
+    block1:
+        v2.i256 = mload v1 i256;
+        v3.i8 = trunc v2 i8;
+        return v3;
+}
+
+func private %impl_trait_u16__from_word(v0.i256) -> i16 {
+    block0:
+        v1.*i256 = alloca i256;
+        mstore v1 v0 i256;
+        jump block1;
+
+    block1:
+        v2.i256 = mload v1 i256;
+        v3.i16 = trunc v2 i16;
+        return v3;
+}
+
+func private %is_black_piece(v0.i8) -> i1 {
+    block0:
+        v1.*i8 = alloca i8;
+        mstore v1 v0 i8;
+        jump block1;
+
+    block1:
+        v2.i8 = mload v1 i8;
+        v4.i1 = lt v2 8.i8;
+        v5.i1 = is_zero v4;
+        return v5;
+}
+
+func private %is_empty(v0.i8) -> i1 {
+    block0:
+        v1.*i8 = alloca i8;
+        mstore v1 v0 i8;
+        jump block1;
+
+    block1:
+        v2.i8 = mload v1 i8;
+        v4.i1 = eq v2 0.i8;
+        return v4;
+}
+
+func private %is_white_piece(v0.i8) -> i1 {
+    block0:
+        v1.*i8 = alloca i8;
+        mstore v1 v0 i8;
+        jump block1;
+
+    block1:
+        v2.i8 = mload v1 i8;
+        v4.i1 = eq v2 0.i8;
+        v5.i1 = is_zero v4;
+        v6.i8 = mload v1 i8;
+        v8.i1 = lt v6 8.i8;
+        v9.i1 = and v5 v8;
+        return v9;
+}
+
+func private %main_root() {
+    block0:
+        jump block1;
+
+    block1:
+        v0.@layout_5 = call %validate_rook_capture;
+        enum.assert_variant v0 #Ok;
+        v1.@layout_4 = enum.extract v0 #Ok 0.i256;
+        v2.i256 = extract_value v1 1.i256;
+        v3.i8 = call %meta_castling_rights v2;
+        v4.i256 = zext v3 i256;
+        mstore 0.i256 v4 i256;
+        evm_return 0.i256 32.i256;
+}
+
+func private %meta_castling_rights(v0.i256) -> i8 {
+    block0:
+        v1.*i256 = alloca i256;
+        mstore v1 v0 i256;
+        jump block1;
+
+    block1:
+        v2.i256 = mload v1 i256;
+        v4.i256 = shr 1.i256 v2;
+        v6.i256 = and v4 15.i256;
+        v7.i8 = call %downcast_truncate__g0587 v6;
+        return v7;
+}
+
+func private %meta_custom(v0.i1, v1.i8, v2.i8, v3.i16, v4.i16, v5.i8, v6.i8) -> i256 {
+    block0:
+        v7.*i1 = alloca i1;
+        v8.*i8 = alloca i8;
+        v9.*i8 = alloca i8;
+        v10.*i16 = alloca i16;
+        v11.*i16 = alloca i16;
+        v12.*i8 = alloca i8;
+        v13.*i8 = alloca i8;
+        v14.*i256 = alloca i256;
+        v15.*i256 = alloca i256;
+        v16.*i256 = alloca i256;
+        v17.*i256 = alloca i256;
+        v18.*i256 = alloca i256;
+        v19.*i256 = alloca i256;
+        v20.*i256 = alloca i256;
+        mstore v7 v0 i1;
+        mstore v8 v1 i8;
+        mstore v9 v2 i8;
+        mstore v10 v3 i16;
+        mstore v11 v4 i16;
+        mstore v12 v5 i8;
+        mstore v13 v6 i8;
+        jump block1;
+
+    block1:
+        v22.i1 = mload v7 i1;
+        v23.i256 = call %meta_set_side_to_move 0.i256 v22;
+        mstore v14 v23 i256;
+        v24.i256 = mload v14 i256;
+        v25.i8 = mload v8 i8;
+        v26.i256 = call %meta_set_castling_rights v24 v25;
+        mstore v15 v26 i256;
+        v27.i256 = mload v15 i256;
+        v28.i8 = mload v9 i8;
+        v29.i256 = call %meta_set_ep_file v27 v28;
+        mstore v16 v29 i256;
+        v30.i256 = mload v16 i256;
+        v31.i16 = mload v10 i16;
+        v32.i256 = call %meta_set_halfmove_clock v30 v31;
+        mstore v17 v32 i256;
+        v33.i256 = mload v17 i256;
+        v34.i16 = mload v11 i16;
+        v35.i256 = call %meta_set_fullmove_number v33 v34;
+        mstore v18 v35 i256;
+        v36.i256 = mload v18 i256;
+        v37.i8 = mload v12 i8;
+        v38.i256 = call %meta_set_white_king_sq v36 v37;
+        mstore v19 v38 i256;
+        v39.i256 = mload v19 i256;
+        v40.i8 = mload v13 i8;
+        v41.i256 = call %meta_set_black_king_sq v39 v40;
+        mstore v20 v41 i256;
+        v42.i256 = mload v20 i256;
+        return v42;
+}
+
+func private %meta_fullmove_number(v0.i256) -> i16 {
+    block0:
+        v1.*i256 = alloca i256;
+        mstore v1 v0 i256;
+        jump block1;
+
+    block1:
+        v2.i256 = mload v1 i256;
+        v4.i256 = shr 17.i256 v2;
+        v6.i256 = and v4 65535.i256;
+        v7.i16 = call %downcast_truncate__gaa7e v6;
+        return v7;
+}
+
+func private %meta_halfmove_clock(v0.i256) -> i16 {
+    block0:
+        v1.*i256 = alloca i256;
+        mstore v1 v0 i256;
+        jump block1;
+
+    block1:
+        v2.i256 = mload v1 i256;
+        v4.i256 = shr 9.i256 v2;
+        v6.i256 = and v4 255.i256;
+        v7.i16 = call %downcast_truncate__gaa7e v6;
+        return v7;
+}
+
+func private %meta_set_black_king_sq(v0.i256, v1.i8) -> i256 {
+    block0:
+        v2.*i256 = alloca i256;
+        v3.*i8 = alloca i8;
+        mstore v2 v0 i256;
+        mstore v3 v1 i8;
+        jump block1;
+
+    block1:
+        v4.i256 = mload v2 i256;
+        v9.i256 = and v4 -34634616274945.i256;
+        v10.i8 = mload v3 i8;
+        v11.i256 = zext v10 i256;
+        v12.i256 = and v11 63.i256;
+        v13.i256 = shl 39.i256 v12;
+        v14.i256 = or v9 v13;
+        return v14;
+}
+
+func private %meta_set_castling_rights(v0.i256, v1.i8) -> i256 {
+    block0:
+        v2.*i256 = alloca i256;
+        v3.*i8 = alloca i8;
+        mstore v2 v0 i256;
+        mstore v3 v1 i8;
+        jump block1;
+
+    block1:
+        v4.i256 = mload v2 i256;
+        v9.i256 = and v4 -31.i256;
+        v10.i8 = mload v3 i8;
+        v11.i256 = zext v10 i256;
+        v12.i256 = and v11 15.i256;
+        v13.i256 = shl 1.i256 v12;
+        v14.i256 = or v9 v13;
+        return v14;
+}
+
+func private %meta_set_ep_file(v0.i256, v1.i8) -> i256 {
+    block0:
+        v2.*i256 = alloca i256;
+        v3.*i8 = alloca i8;
+        mstore v2 v0 i256;
+        mstore v3 v1 i8;
+        jump block1;
+
+    block1:
+        v4.i256 = mload v2 i256;
+        v9.i256 = and v4 -481.i256;
+        v10.i8 = mload v3 i8;
+        v11.i256 = zext v10 i256;
+        v12.i256 = and v11 15.i256;
+        v13.i256 = shl 5.i256 v12;
+        v14.i256 = or v9 v13;
+        return v14;
+}
+
+func private %meta_set_fullmove_number(v0.i256, v1.i16) -> i256 {
+    block0:
+        v2.*i256 = alloca i256;
+        v3.*i16 = alloca i16;
+        mstore v2 v0 i256;
+        mstore v3 v1 i16;
+        jump block1;
+
+    block1:
+        v4.i256 = mload v2 i256;
+        v9.i256 = and v4 -8589803521.i256;
+        v10.i16 = mload v3 i16;
+        v11.i256 = zext v10 i256;
+        v12.i256 = and v11 65535.i256;
+        v13.i256 = shl 17.i256 v12;
+        v14.i256 = or v9 v13;
+        return v14;
+}
+
+func private %meta_set_halfmove_clock(v0.i256, v1.i16) -> i256 {
+    block0:
+        v2.*i256 = alloca i256;
+        v3.*i16 = alloca i16;
+        mstore v2 v0 i256;
+        mstore v3 v1 i16;
+        jump block1;
+
+    block1:
+        v4.i256 = mload v2 i256;
+        v9.i256 = and v4 -130561.i256;
+        v10.i16 = mload v3 i16;
+        v11.i256 = zext v10 i256;
+        v12.i256 = and v11 255.i256;
+        v13.i256 = shl 9.i256 v12;
+        v14.i256 = or v9 v13;
+        return v14;
+}
+
+func private %meta_set_side_to_move(v0.i256, v1.i1) -> i256 {
+    block0:
+        v2.*i256 = alloca i256;
+        v3.*i1 = alloca i1;
+        mstore v2 v0 i256;
+        mstore v3 v1 i1;
+        jump block1;
+
+    block1:
+        v4.i1 = mload v3 i1;
+        br v4 block2 block3;
+
+    block2:
+        jump block4;
+
+    block3:
+        jump block4;
+
+    block4:
+        v7.i256 = phi (1.i256 block2) (0.i256 block3);
+        v8.i256 = mload v2 i256;
+        v10.i256 = and v8 -2.i256;
+        v11.i256 = shl 0.i256 v7;
+        v12.i256 = or v10 v11;
+        return v12;
+}
+
+func private %meta_set_white_king_sq(v0.i256, v1.i8) -> i256 {
+    block0:
+        v2.*i256 = alloca i256;
+        v3.*i8 = alloca i8;
+        mstore v2 v0 i256;
+        mstore v3 v1 i8;
+        jump block1;
+
+    block1:
+        v4.i256 = mload v2 i256;
+        v9.i256 = and v4 -541165879297.i256;
+        v10.i8 = mload v3 i8;
+        v11.i256 = zext v10 i256;
+        v12.i256 = and v11 63.i256;
+        v13.i256 = shl 33.i256 v12;
+        v14.i256 = or v9 v13;
+        return v14;
+}
+
+func private %meta_side_to_move_is_white(v0.i256) -> i1 {
+    block0:
+        v1.*i256 = alloca i256;
+        mstore v1 v0 i256;
+        jump block1;
+
+    block1:
+        v2.i256 = mload v1 i256;
+        v4.i256 = shr 0.i256 v2;
+        v6.i256 = and v4 1.i256;
+        v7.i1 = eq v6 1.i256;
+        return v7;
+}
+
+func private %path_clear_file(v0.i256, v1.i8, v2.i8, v3.i8) -> i1 {
+    block0:
+        v4.*i256 = alloca i256;
+        v5.*i8 = alloca i8;
+        v6.*i8 = alloca i8;
+        v7.*i8 = alloca i8;
+        v8.*i8 = alloca i8;
+        v9.*i8 = alloca i8;
+        mstore v4 v0 i256;
+        mstore v5 v1 i8;
+        mstore v6 v2 i8;
+        mstore v7 v3 i8;
+        jump block1;
+
+    block1:
+        v10.i8 = mload v6 i8;
+        v11.i8 = mload v7 i8;
+        v12.i1 = eq v10 v11;
+        br v12 block2 block3;
+
+    block2:
+        return 1.i1;
+
+    block3:
+        jump block4;
+
+    block4:
+        v14.i8 = mload v6 i8;
+        mstore v8 v14 i8;
+        v15.i8 = mload v7 i8;
+        v16.i8 = mload v6 i8;
+        v17.i1 = gt v15 v16;
+        br v17 block5 block6;
+
+    block5:
+        jump block8;
+
+    block6:
+        jump block14;
+
+    block7:
+        return 1.i1;
+
+    block8:
+        v19.i8 = mload v8 i8;
+        (v20.i8, v21.i1) = uaddo v19 1.i8;
+        br v21 block20 block21;
+
+    block9:
+        v29.i256 = ptr_to_int v8 i256;
+        v30.i256 = mload v29 i256;
+        v31.i8 = trunc v30 i8;
+        (v32.i8, v33.i1) = uaddo v31 1.i8;
+        br v33 block20 block22;
+
+    block10:
+        jump block7;
+
+    block11:
+        return 0.i1;
+
+    block12:
+        jump block13;
+
+    block13:
+        jump block8;
+
+    block14:
+        v50.i8 = mload v7 i8;
+        (v51.i8, v52.i1) = uaddo v50 1.i8;
+        br v52 block20 block25;
+
+    block15:
+        v56.i256 = ptr_to_int v8 i256;
+        v57.i256 = mload v56 i256;
+        v58.i8 = trunc v57 i8;
+        (v59.i8, v60.i1) = usubo v58 1.i8;
+        br v60 block20 block26;
+
+    block16:
+        jump block7;
+
+    block17:
+        return 0.i1;
+
+    block18:
+        jump block19;
+
+    block19:
+        jump block14;
+
+    block20:
+        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
+        mstore 4.i256 17.i256 i256;
+        evm_revert 0.i256 36.i256;
+
+    block21:
+        v27.i8 = mload v7 i8;
+        v28.i1 = lt v20 v27;
+        br v28 block9 block10;
+
+    block22:
+        v35.i256 = zext v32 i256;
+        mstore v29 v35 i256;
+        v36.i256 = mload v4 i256;
+        v37.i8 = mload v5 i8;
+        v39.i8 = mload v8 i8;
+        (v40.i8, v41.i1) = umulo v39 8.i8;
+        br v41 block20 block23;
+
+    block23:
+        (v43.i8, v44.i1) = uaddo v37 v40;
+        br v44 block20 block24;
+
+    block24:
+        v46.i8 = call %piece_at v36 v43;
+        v47.i1 = call %is_empty v46;
+        v48.i1 = is_zero v47;
+        br v48 block11 block12;
+
+    block25:
+        mstore v9 v51 i8;
+        v53.i8 = mload v8 i8;
+        v54.i8 = mload v9 i8;
+        v55.i1 = gt v53 v54;
+        br v55 block15 block16;
+
+    block26:
+        v62.i256 = zext v59 i256;
+        mstore v56 v62 i256;
+        v63.i256 = mload v4 i256;
+        v64.i8 = mload v5 i8;
+        v65.i8 = mload v8 i8;
+        (v66.i8, v67.i1) = umulo v65 8.i8;
+        br v67 block20 block27;
+
+    block27:
+        (v69.i8, v70.i1) = uaddo v64 v66;
+        br v70 block20 block28;
+
+    block28:
+        v72.i8 = call %piece_at v63 v69;
+        v73.i1 = call %is_empty v72;
+        v74.i1 = is_zero v73;
+        br v74 block17 block18;
+}
+
+func private %piece_at(v0.i256, v1.i8) -> i8 {
+    block0:
+        v2.*i256 = alloca i256;
+        v3.*i8 = alloca i8;
+        mstore v2 v0 i256;
+        mstore v3 v1 i8;
+        jump block1;
+
+    block1:
+        v4.i8 = mload v3 i8;
+        v5.i256 = zext v4 i256;
+        (v7.i256, v8.i1) = umulo v5 4.i256;
+        br v8 block2 block3;
+
+    block2:
+        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
+        mstore 4.i256 17.i256 i256;
+        evm_revert 0.i256 36.i256;
+
+    block3:
+        v13.i256 = mload v2 i256;
+        v14.i256 = shr v7 v13;
+        v16.i256 = and v14 15.i256;
+        v17.i8 = call %downcast_truncate__g0587 v16;
+        return v17;
+}
+
+func private %piece_kind(v0.i8) -> i8 {
+    block0:
+        v1.*i8 = alloca i8;
+        mstore v1 v0 i8;
+        jump block1;
+
+    block1:
+        v2.i8 = mload v1 i8;
+        v4.i8 = and v2 7.i8;
+        return v4;
+}
+
+func private %set_piece(v0.i256, v1.i8, v2.i8) -> i256 {
+    block0:
+        v3.*i256 = alloca i256;
+        v4.*i8 = alloca i8;
+        v5.*i8 = alloca i8;
+        mstore v3 v0 i256;
+        mstore v4 v1 i8;
+        mstore v5 v2 i8;
+        jump block1;
+
+    block1:
+        v6.i8 = mload v4 i8;
+        v7.i256 = zext v6 i256;
+        (v9.i256, v10.i1) = umulo v7 4.i256;
+        br v10 block2 block3;
+
+    block2:
+        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
+        mstore 4.i256 17.i256 i256;
+        evm_revert 0.i256 36.i256;
+
+    block3:
+        v16.i256 = shl v9 15.i256;
+        v17.i256 = mload v3 i256;
+        v18.i256 = not v16;
+        v19.i256 = and v17 v18;
+        v20.i8 = mload v5 i8;
+        v21.i256 = zext v20 i256;
+        v22.i256 = and v21 15.i256;
+        v23.i256 = shl v9 v22;
+        v24.i256 = or v19 v23;
+        return v24;
+}
+
+func private %core__lib__num__sign_extend_4891(v0.i256, v1.i256, v2.i256) -> i256 {
+    block0:
+        v3.*i256 = alloca i256;
+        v4.*i256 = alloca i256;
+        v5.*i256 = alloca i256;
+        mstore v3 v0 i256;
+        mstore v4 v1 i256;
+        mstore v5 v2 i256;
+        jump block1;
+
+    block1:
+        v6.i256 = mload v3 i256;
+        v7.i256 = mload v4 i256;
+        v8.i256 = and v6 v7;
+        v9.i256 = mload v5 i256;
+        v10.i256 = and v8 v9;
+        v12.i1 = eq v10 0.i256;
+        v13.i1 = is_zero v12;
+        br v13 block2 block3;
+
+    block2:
+        v15.i256 = mload v4 i256;
+        v16.i256 = xor -1.i256 v15;
+        v18.i256 = or v8 v16;
+        jump block4;
+
+    block3:
+        jump block4;
+
+    block4:
+        v20.i256 = phi (v18 block2) (v8 block3);
+        return v20;
+}
+
+func private %core__lib__num__sign_extend_9550(v0.i256, v1.i256, v2.i256) -> i256 {
+    block0:
+        v3.*i256 = alloca i256;
+        v4.*i256 = alloca i256;
+        v5.*i256 = alloca i256;
+        mstore v3 v0 i256;
+        mstore v4 v1 i256;
+        mstore v5 v2 i256;
+        jump block1;
+
+    block1:
+        v6.i256 = mload v3 i256;
+        v7.i256 = mload v4 i256;
+        v8.i256 = and v6 v7;
+        v9.i256 = mload v5 i256;
+        v10.i256 = and v8 v9;
+        v12.i1 = eq v10 0.i256;
+        v13.i1 = is_zero v12;
+        br v13 block2 block3;
+
+    block2:
+        v15.i256 = mload v4 i256;
+        v16.i256 = xor -1.i256 v15;
+        v18.i256 = or v8 v16;
+        jump block4;
+
+    block3:
+        jump block4;
+
+    block4:
+        v20.i256 = phi (v18 block2) (v8 block3);
+        return v20;
+}
+
+func private %core__lib__num__sign_extend_f418(v0.i256, v1.i256, v2.i256) -> i256 {
+    block0:
+        v3.*i256 = alloca i256;
+        v4.*i256 = alloca i256;
+        v5.*i256 = alloca i256;
+        mstore v3 v0 i256;
+        mstore v4 v1 i256;
+        mstore v5 v2 i256;
+        jump block1;
+
+    block1:
+        v6.i256 = mload v3 i256;
+        v7.i256 = mload v4 i256;
+        v8.i256 = and v6 v7;
+        v9.i256 = mload v5 i256;
+        v10.i256 = and v8 v9;
+        v12.i1 = eq v10 0.i256;
+        v13.i1 = is_zero v12;
+        br v13 block2 block3;
+
+    block2:
+        v15.i256 = mload v4 i256;
+        v16.i256 = xor -1.i256 v15;
+        v18.i256 = or v8 v16;
+        jump block4;
+
+    block3:
+        jump block4;
+
+    block4:
+        v20.i256 = phi (v18 block2) (v8 block3);
+        return v20;
+}
+
+func private %sq_file(v0.i8) -> i8 {
+    block0:
+        v1.*i8 = alloca i8;
+        mstore v1 v0 i8;
+        jump block1;
+
+    block1:
+        v2.i8 = mload v1 i8;
+        v4.i8 = and v2 7.i8;
+        return v4;
+}
+
+func private %sq_rank(v0.i8) -> i8 {
+    block0:
+        v1.*i8 = alloca i8;
+        mstore v1 v0 i8;
+        jump block1;
+
+    block1:
+        v2.i8 = mload v1 i8;
+        v4.i8 = shr 3.i8 v2;
+        return v4;
+}
+
+func private %core__lib__num__impl_trait_u256_7874__to_word_23c1(v0.i256) -> i256 {
+    block0:
+        v1.*i256 = alloca i256;
+        mstore v1 v0 i256;
+        jump block1;
+
+    block1:
+        v2.i256 = mload v1 i256;
+        return v2;
+}
+
+func private %core__lib__num__impl_trait_u256_7874__to_word_7f21(v0.i256) -> i256 {
+    block0:
+        v1.*i256 = alloca i256;
+        mstore v1 v0 i256;
+        jump block1;
+
+    block1:
+        v2.i256 = mload v1 i256;
+        return v2;
+}
+
+func private %impl_trait_u32__to_word(v0.i32) -> i256 {
+    block0:
+        v1.*i32 = alloca i32;
+        mstore v1 v0 i32;
+        jump block1;
+
+    block1:
+        v2.i32 = mload v1 i32;
+        v3.i256 = zext v2 i256;
+        return v3;
+}
+
+func private %validate_rook_capture() -> @layout_5 {
+    block0:
+        v0.objref<@layout_2> = obj.alloc @layout_2;
+        v1.*i256 = alloca i256;
+        v2.*i256 = alloca i256;
+        v3.*i256 = alloca i256;
+        v4.*i256 = alloca i256;
+        v5.*i8 = alloca i8;
+        v6.*i8 = alloca i8;
+        v7.*i8 = alloca i8;
+        v8.*i8 = alloca i8;
+        v9.*i8 = alloca i8;
+        v10.*i8 = alloca i8;
+        v11.*i8 = alloca i8;
+        v12.*i256 = alloca i256;
+        v13.*i256 = alloca i256;
+        v14.*i256 = alloca i256;
+        v15.*i16 = alloca i16;
+        v16.*i256 = alloca i256;
+        v17.*i16 = alloca i16;
+        v18.*i256 = alloca i256;
+        v19.*i256 = alloca i256;
+        jump block1;
+
+    block1:
+        v23.i256 = call %set_piece 0.i256 4.i8 6.i8;
+        mstore v1 v23 i256;
+        v24.i256 = mload v1 i256;
+        v26.i256 = call %set_piece v24 0.i8 4.i8;
+        mstore v2 v26 i256;
+        v27.i256 = mload v2 i256;
+        v30.i256 = call %set_piece v27 60.i8 14.i8;
+        mstore v3 v30 i256;
+        v31.i256 = mload v3 i256;
+        v34.i256 = call %set_piece v31 56.i8 12.i8;
+        mstore v4 v34 i256;
+        v35.i256 = mload v4 i256;
+        v43.i256 = call %meta_custom 0.i1 3.i8 15.i8 0.i16 1.i16 4.i8 60.i8;
+        v44.i32 = call %encode_move 56.i8 0.i8 0.i8;
+        v45.@layout_3 = call %decode_move v44;
+        v46.objref<@layout_3> = obj.alloc @layout_3;
+        v47.objref<i8> = obj.proj v46 0.i256;
+        v48.i8 = extract_value v45 0.i256;
+        obj.store v47 v48;
+        v50.objref<i8> = obj.proj v46 1.i256;
+        v51.i8 = extract_value v45 1.i256;
+        obj.store v50 v51;
+        v53.objref<i8> = obj.proj v46 2.i256;
+        v54.i8 = extract_value v45 2.i256;
+        obj.store v53 v54;
+        v55.objref<i8> = obj.proj v46 0.i256;
+        v56.i8 = obj.load v55;
+        v57.objref<i8> = obj.proj v46 1.i256;
+        v58.i8 = obj.load v57;
+        v59.objref<i8> = obj.proj v46 2.i256;
+        v60.i8 = obj.load v59;
+        v61.i1 = call %meta_side_to_move_is_white v43;
+        v62.i8 = call %piece_at v35 v56;
+        v63.i1 = eq v62 0.i8;
+        br v63 block2 block3;
+
+    block2:
+        v64.@layout_0 = enum.make @layout_0 #NoPieceAtSource;
+        v65.@layout_0 = enum.make @layout_0 #NoPieceAtSource;
+        v66.@layout_5 = enum.make @layout_5 #Err v65;
+        return v66;
+
+    block3:
+        jump block4;
+
+    block4:
+        br v61 block5 block6;
+
+    block5:
+        v69.i1 = call %is_white_piece v62;
+        v70.i1 = is_zero v69;
+        br v70 block8 block9;
+
+    block6:
+        v72.i1 = call %is_black_piece v62;
+        v73.i1 = is_zero v72;
+        br v73 block11 block12;
+
+    block7:
+        v76.i8 = call %piece_at v35 v58;
+        v77.i1 = eq v76 0.i8;
+        v78.i1 = is_zero v77;
+        br v78 block14 block15;
+
+    block8:
+        v79.@layout_0 = enum.make @layout_0 #WrongSideToMove;
+        v80.@layout_0 = enum.make @layout_0 #WrongSideToMove;
+        v81.@layout_5 = enum.make @layout_5 #Err v80;
+        return v81;
+
+    block9:
+        jump block10;
+
+    block10:
+        jump block7;
+
+    block11:
+        v82.@layout_0 = enum.make @layout_0 #WrongSideToMove;
+        v83.@layout_0 = enum.make @layout_0 #WrongSideToMove;
+        v84.@layout_5 = enum.make @layout_5 #Err v83;
+        return v84;
+
+    block12:
+        jump block13;
+
+    block13:
+        jump block7;
+
+    block14:
+        br v61 block17 block18;
+
+    block15:
+        jump block16;
+
+    block16:
+        v94.@layout_2 = call %apply_rook v35 v43 v56 v58 v60 v62 v76 v61;
+        v95.enumtag(@layout_2) = enum.tag v94;
+        br_table v95 block72 (0.enumtag(@layout_2) block73) (1.enumtag(@layout_2) block74);
+
+    block17:
+        v129.i1 = call %is_white_piece v76;
+        br v129 block20 block21;
+
+    block18:
+        v131.i1 = call %is_black_piece v76;
+        br v131 block23 block24;
+
+    block19:
+        v133.i8 = call %piece_kind v76;
+        v134.i1 = eq v133 6.i8;
+        br v134 block26 block27;
+
+    block20:
+        v135.@layout_0 = enum.make @layout_0 #FriendlyOccupiedDestination;
+        v136.@layout_0 = enum.make @layout_0 #FriendlyOccupiedDestination;
+        v137.@layout_5 = enum.make @layout_5 #Err v136;
+        return v137;
+
+    block21:
+        jump block22;
+
+    block22:
+        jump block19;
+
+    block23:
+        v138.@layout_0 = enum.make @layout_0 #FriendlyOccupiedDestination;
+        v139.@layout_0 = enum.make @layout_0 #FriendlyOccupiedDestination;
+        v140.@layout_5 = enum.make @layout_5 #Err v139;
+        return v140;
+
+    block24:
+        jump block25;
+
+    block25:
+        jump block19;
+
+    block26:
+        v141.@layout_0 = enum.make @layout_0 #BadGeometry;
+        v142.@layout_0 = enum.make @layout_0 #BadGeometry;
+        v143.@layout_5 = enum.make @layout_5 #Err v142;
+        return v143;
+
+    block27:
+        jump block28;
+
+    block28:
+        jump block16;
+
+    block29:
+        v144.@layout_5 = phi (v147 block30) (v292 block70);
+        return v144;
+
+    block30:
+        v145.@layout_2 = obj.load v0;
+        enum.assert_variant v145 #Err;
+        v146.@layout_0 = enum.extract v145 #Err 0.i256;
+        v147.@layout_5 = enum.make @layout_5 #Err v146;
+        jump block29;
+
+    block31:
+        v148.@layout_2 = obj.load v0;
+        enum.assert_variant v148 #Ok;
+        v149.@layout_1 = enum.extract v148 #Ok 0.i256;
+        v150.objref<@layout_1> = obj.alloc @layout_1;
+        v151.objref<i256> = obj.proj v150 0.i256;
+        v152.i256 = extract_value v149 0.i256;
+        obj.store v151 v152;
+        v153.objref<i256> = obj.proj v150 1.i256;
+        v154.i256 = extract_value v149 1.i256;
+        obj.store v153 v154;
+        v155.objref<i1> = obj.proj v150 2.i256;
+        v156.i1 = extract_value v149 2.i256;
+        obj.store v155 v156;
+        v157.objref<i1> = obj.proj v150 3.i256;
+        v158.i1 = extract_value v149 3.i256;
+        obj.store v157 v158;
+        v159.objref<i1> = obj.proj v150 4.i256;
+        v160.i1 = extract_value v149 4.i256;
+        obj.store v159 v160;
+        v161.objref<i8> = obj.proj v150 5.i256;
+        v162.i8 = extract_value v149 5.i256;
+        obj.store v161 v162;
+        v163.objref<i1> = obj.proj v150 6.i256;
+        v164.i1 = extract_value v149 6.i256;
+        obj.store v163 v164;
+        jump block32;
+
+    block32:
+        v166.objref<i256> = obj.proj v150 0.i256;
+        v167.i256 = obj.load v166;
+        v168.objref<i256> = obj.proj v150 1.i256;
+        v169.i256 = obj.load v168;
+        v170.objref<i1> = obj.proj v150 2.i256;
+        v171.i1 = obj.load v170;
+        v172.objref<i1> = obj.proj v150 3.i256;
+        v173.i1 = obj.load v172;
+        v174.objref<i1> = obj.proj v150 4.i256;
+        v175.i1 = obj.load v174;
+        v176.objref<i8> = obj.proj v150 5.i256;
+        v177.i8 = obj.load v176;
+        v178.objref<i1> = obj.proj v150 6.i256;
+        v179.i1 = obj.load v178;
+        v181.i8 = call %meta_castling_rights v43;
+        br v179 block33 block34;
+
+    block33:
+        br v61 block36 block37;
+
+    block34:
+        jump block35;
+
+    block35:
+        v322.i8 = phi (v181 block34) (v323 block38);
+        v184.i1 = eq v177 0.i8;
+        v185.i1 = is_zero v184;
+        br v185 block39 block40;
+
+    block36:
+        v188.i8 = and v181 -4.i8;
+        mstore v5 v188 i8;
+        v189.i256 = mload v5 i256;
+        v190.i8 = trunc v189 i8;
+        jump block38;
+
+    block37:
+        v194.i8 = and v181 -13.i8;
+        mstore v6 v194 i8;
+        v195.i256 = mload v6 i256;
+        v196.i8 = trunc v195 i8;
+        jump block38;
+
+    block38:
+        v323.i8 = phi (v190 block36) (v196 block37);
+        jump block35;
+
+    block39:
+        v198.i8 = not v177;
+        v200.i8 = and v322 v198;
+        mstore v7 v200 i8;
+        v201.i256 = mload v7 i256;
+        v202.i8 = trunc v201 i8;
+        jump block41;
+
+    block40:
+        jump block41;
+
+    block41:
+        v334.i8 = phi (v202 block39) (v322 block40);
+        v204.i1 = eq v76 0.i8;
+        v205.i1 = is_zero v204;
+        br v205 block45 block43;
+
+    block42:
+        v207.i1 = call %is_white_piece v76;
+        br v207 block46 block47;
+
+    block43:
+        jump block44;
+
+    block44:
+        v209.i8 = phi (v334 block43) (v336 block48);
+        v210.i256 = call %meta_set_castling_rights v169 v209;
+        mstore v12 v210 i256;
+        v211.i256 = mload v12 i256;
+        br v175 block61 block62;
+
+    block45:
+        v214.i8 = call %piece_kind v76;
+        v215.i1 = eq v214 4.i8;
+        br v215 block42 block43;
+
+    block46:
+        v217.i1 = eq v58 0.i8;
+        br v217 block49 block50;
+
+    block47:
+        v219.i1 = eq v58 56.i8;
+        br v219 block55 block56;
+
+    block48:
+        v336.i8 = phi (v349 block51) (v350 block57);
+        jump block44;
+
+    block49:
+        v222.i8 = and v334 -3.i8;
+        mstore v8 v222 i8;
+        v223.i256 = mload v8 i256;
+        v224.i8 = trunc v223 i8;
+        jump block51;
+
+    block50:
+        v227.i1 = eq v58 7.i8;
+        br v227 block52 block53;
+
+    block51:
+        v349.i8 = phi (v224 block49) (v354 block54);
+        jump block48;
+
+    block52:
+        v230.i8 = and v334 -2.i8;
+        mstore v9 v230 i8;
+        v231.i256 = mload v9 i256;
+        v232.i8 = trunc v231 i8;
+        jump block54;
+
+    block53:
+        jump block54;
+
+    block54:
+        v354.i8 = phi (v232 block52) (v334 block53);
+        jump block51;
+
+    block55:
+        v235.i8 = and v334 -9.i8;
+        mstore v10 v235 i8;
+        v236.i256 = mload v10 i256;
+        v237.i8 = trunc v236 i8;
+        jump block57;
+
+    block56:
+        v240.i1 = eq v58 63.i8;
+        br v240 block58 block59;
+
+    block57:
+        v350.i8 = phi (v237 block55) (v357 block60);
+        jump block48;
+
+    block58:
+        v243.i8 = and v334 -5.i8;
+        mstore v11 v243 i8;
+        v244.i256 = mload v11 i256;
+        v245.i8 = trunc v244 i8;
+        jump block60;
+
+    block59:
+        jump block60;
+
+    block60:
+        v357.i8 = phi (v245 block58) (v334 block59);
+        jump block57;
+
+    block61:
+        v247.i8 = call %sq_file v56;
+        v249.i256 = call %meta_set_ep_file v211 v247;
+        mstore v13 v249 i256;
+        v250.i256 = mload v13 i256;
+        jump block63;
+
+    block62:
+        v252.i256 = call %meta_set_ep_file v211 15.i8;
+        mstore v14 v252 i256;
+        v253.i256 = mload v14 i256;
+        jump block63;
+
+    block63:
+        v392.i256 = phi (v250 block61) (v253 block62);
+        v255.i16 = call %meta_halfmove_clock v43;
+        br v173 block64 block67;
+
+    block64:
+        jump block66;
+
+    block65:
+        (v258.i16, v259.i1) = uaddo v255 1.i16;
+        br v259 block82 block83;
+
+    block66:
+        v266.i16 = phi (0.i16 block64) (v264 block83);
+        v267.i256 = call %meta_set_halfmove_clock v392 v266;
+        mstore v16 v267 i256;
+        v268.i256 = mload v16 i256;
+        v270.i16 = call %meta_fullmove_number v43;
+        v272.i1 = is_zero v61;
+        br v272 block68 block69;
+
+    block67:
+        br v171 block64 block65;
+
+    block68:
+        (v275.i16, v276.i1) = uaddo v270 1.i16;
+        br v276 block82 block84;
+
+    block69:
+        jump block70;
+
+    block70:
+        v280.i16 = phi (v278 block84) (v270 block69);
+        v281.i256 = call %meta_set_fullmove_number v268 v280;
+        mstore v18 v281 i256;
+        v282.i256 = mload v18 i256;
+        v284.i1 = is_zero v61;
+        v285.i256 = call %meta_set_side_to_move v282 v284;
+        mstore v19 v285 i256;
+        v286.i256 = mload v19 i256;
+        v287.objref<@layout_4> = obj.alloc @layout_4;
+        v289.objref<i256> = obj.proj v287 0.i256;
+        obj.store v289 v167;
+        v290.objref<i256> = obj.proj v287 1.i256;
+        obj.store v290 v286;
+        v291.@layout_4 = obj.load v287;
+        v292.@layout_5 = enum.make @layout_5 #Ok v291;
+        jump block29;
+
+    block71:
+        v126.@layout_2 = obj.load v0;
+        v127.enumtag(@layout_2) = enum.tag v126;
+        br_table v127 (0.enumtag(@layout_2) block30) (1.enumtag(@layout_2) block31);
+
+    block72:
+        unreachable;
+
+    block73:
+        enum.set_tag v0 #Err;
+        enum.assert_variant v94 #Err;
+        v98.objref<@layout_0> = enum.proj v0 #Err 0.i256;
+        v99.@layout_0 = enum.extract v94 #Err 0.i256;
+        v100.enumtag(@layout_0) = enum.tag v99;
+        br_table v100 block76 (0.enumtag(@layout_0) block77) (1.enumtag(@layout_0) block78) (2.enumtag(@layout_0) block79) (3.enumtag(@layout_0) block80) (4.enumtag(@layout_0) block81);
+
+    block74:
+        enum.set_tag v0 #Ok;
+        enum.assert_variant v94 #Ok;
+        v106.objref<@layout_1> = enum.proj v0 #Ok 0.i256;
+        v107.@layout_1 = enum.extract v94 #Ok 0.i256;
+        v108.objref<i256> = obj.proj v106 0.i256;
+        v109.i256 = extract_value v107 0.i256;
+        obj.store v108 v109;
+        v110.objref<i256> = obj.proj v106 1.i256;
+        v111.i256 = extract_value v107 1.i256;
+        obj.store v110 v111;
+        v112.objref<i1> = obj.proj v106 2.i256;
+        v113.i1 = extract_value v107 2.i256;
+        obj.store v112 v113;
+        v115.objref<i1> = obj.proj v106 3.i256;
+        v116.i1 = extract_value v107 3.i256;
+        obj.store v115 v116;
+        v118.objref<i1> = obj.proj v106 4.i256;
+        v119.i1 = extract_value v107 4.i256;
+        obj.store v118 v119;
+        v121.objref<i8> = obj.proj v106 5.i256;
+        v122.i8 = extract_value v107 5.i256;
+        obj.store v121 v122;
+        v124.objref<i1> = obj.proj v106 6.i256;
+        v125.i1 = extract_value v107 6.i256;
+        obj.store v124 v125;
+        jump block71;
+
+    block75:
+        jump block71;
+
+    block76:
+        unreachable;
+
+    block77:
+        enum.set_tag v98 #NoPieceAtSource;
+        jump block75;
+
+    block78:
+        enum.set_tag v98 #WrongSideToMove;
+        jump block75;
+
+    block79:
+        enum.set_tag v98 #FriendlyOccupiedDestination;
+        jump block75;
+
+    block80:
+        enum.set_tag v98 #BadGeometry;
+        jump block75;
+
+    block81:
+        enum.set_tag v98 #BlockedPath;
+        jump block75;
+
+    block82:
+        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
+        mstore 4.i256 17.i256 i256;
+        evm_revert 0.i256 36.i256;
+
+    block83:
+        mstore v15 v258 i16;
+        v263.i256 = mload v15 i256;
+        v264.i16 = trunc v263 i16;
+        jump block66;
+
+    block84:
+        mstore v17 v275 i16;
+        v277.i256 = mload v17 i256;
+        v278.i16 = trunc v277 i16;
+        jump block70;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %main_root;
+    }
+}

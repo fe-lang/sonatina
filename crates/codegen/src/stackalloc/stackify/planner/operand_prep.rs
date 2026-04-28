@@ -12,7 +12,7 @@ use super::{
     normalize::SpillAwareCostModel,
     normalize_search::{
         CostModel, NormalizePlan, SearchCfg, Step, cost_for_steps, rebuild_operand_prep_plan,
-        solve_optimal_operand_prep_plan,
+        solve_greedy_operand_prep_plan, solve_optimal_operand_prep_plan,
     },
 };
 
@@ -105,10 +105,11 @@ fn commutative_plan_cmp_key(
 
 impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
     fn use_operand_prep_query_cache(&self, args_len: usize) -> bool {
-        // The exact solver already has its own structural cache. On the hot binary/unary path,
-        // building and hashing the outer query key can cost more than it saves. Queries beyond
-        // the operand-prep solver's exact-state limits cannot use the cache path at all.
-        args_len > 2 && args_len <= 21 && args_len <= OPERAND_PREP_QUERY_MASK_BITS
+        // The exact solver already has its own structural cache. Keep unary uncached because
+        // building and hashing the outer query key can cost more than it saves there. Binary
+        // queries are common enough in template solving to benefit from cross-pass reuse.
+        // Queries beyond the operand-prep solver's exact-state limits cannot use the cache path.
+        (2..=21).contains(&args_len) && args_len <= OPERAND_PREP_QUERY_MASK_BITS
     }
 
     fn operand_prep_query_mask(
@@ -237,6 +238,7 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
             consume_last_use,
             &cost,
             search_cfg,
+            self.search_scratch,
         );
         if let (Some(cache_key), Some(plan)) = (cache_key, &plan) {
             operand_prep_plan_cache()
@@ -299,28 +301,13 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
                 }
             }
 
-            let cost = SpillAwareCostModel::new(self.mem.spill_set());
-            let search_cfg = self.operand_prep_search_cfg(args.len());
-
-            let original_plan = solve_optimal_operand_prep_plan(
-                self.ctx,
-                self.stack,
-                args.as_slice(),
-                consume_last_use,
-                &cost,
-                search_cfg,
-            );
+            let original_plan = self.solve_operand_prep_cached(args.as_slice(), consume_last_use);
 
             let mut swapped_args = args.clone();
             swapped_args.swap(0, 1);
-            let swapped_plan = solve_optimal_operand_prep_plan(
-                self.ctx,
-                self.stack,
-                swapped_args.as_slice(),
-                consume_last_use,
-                &cost,
-                search_cfg,
-            );
+            let swapped_plan =
+                self.solve_operand_prep_cached(swapped_args.as_slice(), consume_last_use);
+            let cost = SpillAwareCostModel::new(self.mem.spill_set());
 
             let (plan, swapped) = match (original_plan, swapped_plan) {
                 (Some(plan), None) => (plan, false),
@@ -346,6 +333,7 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
             if !self.apply_operand_prep_plan(&plan, args.as_slice()) {
                 self.prepare_operands_greedy(args.as_slice(), consume_last_use);
             }
+            debug_assert!(self.stack_prefix_matches(args.as_slice()));
             return;
         }
 
@@ -435,17 +423,41 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
             return;
         }
 
-        let Some(plan) = self.solve_operand_prep_cached(args, consume_last_use) else {
-            self.prepare_operands_greedy(args, consume_last_use);
+        if let Some(plan) = self.solve_operand_prep_cached(args, consume_last_use)
+            && self.apply_operand_prep_plan(&plan, args)
+        {
+            debug_assert!(self.stack_prefix_matches(args));
             return;
-        };
-
-        if !self.apply_operand_prep_plan(&plan, args) {
-            self.prepare_operands_greedy(args, consume_last_use);
         }
+
+        self.prepare_operands_greedy(args, consume_last_use);
+        debug_assert!(self.stack_prefix_matches(args));
     }
 
     fn prepare_operands_greedy(&mut self, args: &[ValueId], consume_last_use: &BitSet<ValueId>) {
+        let search_cfg = self.operand_prep_search_cfg(args.len());
+        let cost = SpillAwareCostModel::new(self.mem.spill_set());
+        if let Some(plan) = solve_greedy_operand_prep_plan(
+            self.ctx,
+            self.stack,
+            args,
+            consume_last_use,
+            true,
+            &cost,
+            search_cfg,
+        ) && self.apply_operand_prep_plan(&plan, args)
+        {
+            return;
+        }
+
+        self.prepare_operands_greedy_fallback(args, consume_last_use);
+    }
+
+    fn prepare_operands_greedy_fallback(
+        &mut self,
+        args: &[ValueId],
+        consume_last_use: &BitSet<ValueId>,
+    ) {
         // Iterate in reverse so the final stack order is `args[0]` on top, then `args[1]`, ...
         let mut prepared: usize = 0;
         let mut consumed_from_stack: BitSet<ValueId> = BitSet::default();
@@ -462,11 +474,8 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
                 continue;
             }
 
-            // If this is a last-use, prefer consuming an existing stack copy (stable-rotated
-            // to the top) instead of duplicating it, but only when the swap chain is small.
-            //
-            // This is equivalent to a stable delete, except the pop is performed by the
-            // instruction consuming its operands.
+            // If this is a last-use, prefer consuming an existing stack copy instead of
+            // duplicating it, but only when the swap chain is small.
             if consume_last_use.contains(v)
                 && !consumed_from_stack.contains(v)
                 && let Some(pos) =
@@ -474,7 +483,11 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
                         .find_reachable_value_from(v, prepared, self.ctx.reach.swap_max)
                 && pos <= CONSUME_LAST_USE_MAX_SWAPS
             {
-                self.stack.stable_rotate_to_top(pos, self.actions);
+                if prepared == 0 {
+                    self.stack.swap(pos, self.actions);
+                } else {
+                    self.stack.stable_rotate_to_top(pos, self.actions);
+                }
                 consumed_from_stack.insert(v);
                 prepared += 1;
                 continue;
@@ -519,7 +532,7 @@ mod tests {
             stackify::{
                 builder::StackifyReachability,
                 planner::{
-                    MemPlan, Planner,
+                    MemPlan, NormalizeSearchScratch, Planner,
                     normalize_search::{Cost, EstimatedCostModel, KeyInfo, Step},
                     test_utils::build_stackify_test_context,
                 },
@@ -607,7 +620,9 @@ block0:
 
                 let mut stack = SymStack::entry_stack(func, false);
                 let mut actions = crate::stackalloc::Actions::new();
-                let planner = Planner::new(&ctx, &mut stack, &mut actions, mem);
+                let mut search_scratch = NormalizeSearchScratch::default();
+                let planner =
+                    Planner::new(&ctx, &mut stack, &mut actions, mem, &mut search_scratch);
                 let search_cfg = planner.operand_prep_search_cfg(1);
                 planner.operand_prep_query_key(&[imm], &BitSet::default(), search_cfg)
             };
@@ -652,7 +667,8 @@ block0:
 
             let mut stack = SymStack::entry_stack(func, false);
             let mut actions = crate::stackalloc::Actions::new();
-            let planner = Planner::new(&ctx, &mut stack, &mut actions, mem);
+            let mut search_scratch = NormalizeSearchScratch::default();
+            let planner = Planner::new(&ctx, &mut stack, &mut actions, mem, &mut search_scratch);
             let search_cfg = planner.operand_prep_search_cfg(1);
             let key_after = planner.operand_prep_query_key(&[imm], &BitSet::default(), search_cfg);
 
@@ -718,7 +734,9 @@ block0:
             let current_args = [current_imm, imm2, imm3];
             let mut stack = SymStack::entry_stack(func, false);
             let mut actions = crate::stackalloc::Actions::new();
-            let mut planner = Planner::new(&ctx, &mut stack, &mut actions, mem);
+            let mut search_scratch = NormalizeSearchScratch::default();
+            let mut planner =
+                Planner::new(&ctx, &mut stack, &mut actions, mem, &mut search_scratch);
             let search_cfg = planner.operand_prep_search_cfg(current_args.len());
             let old_key = planner.operand_prep_query_key(&old_args, &BitSet::default(), search_cfg);
             let current_key =
@@ -805,9 +823,13 @@ block0:
             let args: Vec<_> = func.arg_values.iter().copied().collect();
             let mut stack = SymStack::entry_stack(func, false);
             let mut actions = crate::stackalloc::Actions::new();
-            let planner = Planner::new(&ctx, &mut stack, &mut actions, mem);
+            let mut search_scratch = NormalizeSearchScratch::default();
+            let planner = Planner::new(&ctx, &mut stack, &mut actions, mem, &mut search_scratch);
             let search_cfg = planner.operand_prep_search_cfg(args.len());
 
+            assert!(!planner.use_operand_prep_query_cache(1));
+            assert!(planner.use_operand_prep_query_cache(2));
+            assert!(planner.use_operand_prep_query_cache(3));
             assert!(!planner.use_operand_prep_query_cache(args.len()));
             assert_eq!(planner.operand_prep_query_mask(&args, |_| true), u64::MAX);
             assert_eq!(
@@ -867,7 +889,9 @@ block0:
             let mut stack = SymStack::entry_stack(func, false);
             let mut actions = crate::stackalloc::Actions::new();
             {
-                let mut planner = Planner::new(&ctx, &mut stack, &mut actions, mem);
+                let mut search_scratch = NormalizeSearchScratch::default();
+                let mut planner =
+                    Planner::new(&ctx, &mut stack, &mut actions, mem, &mut search_scratch);
                 planner.prepare_operands_greedy(&args, &BitSet::default());
                 assert!(planner.stack_prefix_matches(&args));
             }
@@ -892,7 +916,7 @@ block0:
     }
 
     #[test]
-    fn greedy_swap_fallback_still_dupes_when_no_prefix_is_prepared() {
+    fn greedy_prefix_free_swap_path_uses_single_swap() {
         const SRC: &str = r#"
 target = "evm-ethereum-osaka"
 
@@ -941,23 +965,48 @@ block0:
             let mut stack = SymStack::entry_stack(func, false);
             let mut actions = crate::stackalloc::Actions::new();
             {
-                let mut planner = Planner::new(&ctx, &mut stack, &mut actions, mem);
+                let mut search_scratch = NormalizeSearchScratch::default();
+                let mut planner =
+                    Planner::new(&ctx, &mut stack, &mut actions, mem, &mut search_scratch);
                 planner.prepare_operands_greedy(&args, &BitSet::default());
                 assert!(planner.stack_prefix_matches(&args));
             }
 
             assert_eq!(
                 actions.as_slice(),
-                &[
-                    Action::StackSwap(1),
-                    Action::StackSwap(2),
-                    Action::StackDup(0)
-                ],
-                "expected prefix-free greedy fallback to keep using SWAP + DUP"
+                &[Action::StackSwap(2), Action::StackDup(0)],
+                "prefix-free copy should use one SWAP before DUP"
             );
             assert!(
                 spill_requests.is_empty(),
                 "prefix-free SWAP fallback must not request a spill"
+            );
+
+            let mut last_use = BitSet::default();
+            last_use.insert(func.arg_values[2]);
+            let mut stack = SymStack::entry_stack(func, false);
+            let mut actions = crate::stackalloc::Actions::new();
+            let mem = MemPlan::new(
+                SpillSet::new(&spill_set),
+                &mut spill_requests,
+                &ctx,
+                &spill_obj,
+                &ctx.exact_local_addr,
+                &mut free_slots,
+                &mut slots,
+            );
+            {
+                let mut search_scratch = NormalizeSearchScratch::default();
+                let mut planner =
+                    Planner::new(&ctx, &mut stack, &mut actions, mem, &mut search_scratch);
+                planner.prepare_operands_greedy(&args, &last_use);
+                assert!(planner.stack_prefix_matches(&args));
+            }
+
+            assert_eq!(
+                actions.as_slice(),
+                &[Action::StackSwap(2)],
+                "prefix-free last-use consume should use one SWAP"
             );
         });
     }

@@ -14,9 +14,9 @@ use crate::cfg_edit::{CfgEditor, CleanupMode};
 use super::{
     LocalObjectArgInfo, LocalObjectArgMap, RootInit,
     cleanup::DeadPureInstCleanup,
-    collect_root_provenance,
+    object_tracking::AggregateFacts,
     promotion::SsaBuilder,
-    provenance::{CompleteProvenance, ExactProjectionMap, RootValue},
+    provenance::{CompleteProvenance, ExactProjectionMap, ProvenanceSnapshot, RootValue},
     reconstruct::{
         AggregateValueReconstructor, bitcast_before_inst, rebuild_scalar_shape_from_leaf_values,
     },
@@ -453,10 +453,16 @@ impl AggregateScalarize {
             candidate_roots.push((root_value, root_kind, shape_data));
         }
 
-        let provenance =
-            collect_root_provenance(func, module, &root_slices, &mut self.layout_cache, None);
+        let mut snapshot = ProvenanceSnapshot::new(func, None);
+        let facts = AggregateFacts::from_root_slices(
+            func,
+            module,
+            root_slices,
+            &mut self.layout_cache,
+            &mut snapshot,
+        );
         for (root_value, root_kind, shape_data) in candidate_roots {
-            if !self.root_use_chain_is_promotable(func, module, root_value, provenance.complete()) {
+            if !self.root_use_chain_is_promotable(func, module, root_value, facts.complete()) {
                 continue;
             }
             promoted.push(PromotableRoot {
@@ -476,7 +482,10 @@ impl AggregateScalarize {
             });
         }
 
-        (promoted, provenance.into_exact_projection_map())
+        (
+            promoted,
+            facts.into_provenance().into_exact_projection_map(),
+        )
     }
 
     fn root_use_chain_is_promotable(
@@ -2889,13 +2898,15 @@ fn is_dead_inst_tree(
         return false;
     }
 
-    let dead = func.dfg.inst_result(inst).is_some_and(|result| {
-        func.dfg
-            .users(result)
-            .copied()
-            .filter(|user| func.layout.is_inst_inserted(*user))
-            .all(|user| is_dead_inst_tree(func, user, memo, visiting))
-    });
+    let results = func.dfg.inst_results(inst);
+    let dead = !results.is_empty()
+        && results.iter().copied().all(|result| {
+            func.dfg
+                .users(result)
+                .copied()
+                .filter(|user| func.layout.is_inst_inserted(*user))
+                .all(|user| is_dead_inst_tree(func, user, memo, visiting))
+        });
     visiting.remove(&inst);
     memo.insert(inst, dead);
     dead

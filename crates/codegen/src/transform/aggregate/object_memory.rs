@@ -8,15 +8,14 @@ use sonatina_ir::{
 use crate::loop_analysis::{Loop, LoopTree};
 
 use super::{
-    LocalObjectArgInfo, ObjectEffectSummaryMap, RootInit, SliceSet, collect_root_provenance,
+    LocalObjectArgInfo, ObjectEffectSummaryMap, RootInit, SliceSet,
     object_state::{is_pure_object_address_inst, observed_roots_ignoring_pure_address_ops},
     object_tracking::{
-        ObjectSlice, TrackedObject, collect_call_planner_root_slices, collect_root_slices,
-        collect_tracked_objects, enum_tag_object_slice, enum_variant_field_object_slice,
-        object_slice_overlaps_effect, slice_is_covered_by, slices_overlap,
-        whole_root_slice_for_value,
+        AggregateObjectFacts, ObjectSlice, TrackedObject, enum_tag_object_slice,
+        enum_variant_field_object_slice, object_slice_overlaps_effect, slice_is_covered_by,
+        slices_overlap, whole_root_slice_for_value,
     },
-    provenance::{MayProvenance, MayRootSet},
+    provenance::{MayProvenance, MayRootSet, ProvenanceSnapshot},
     shape,
 };
 
@@ -118,14 +117,15 @@ impl ObjectMemoryAnalysis {
         local_object_args: Option<&FxHashMap<usize, LocalObjectArgInfo>>,
         object_effects: Option<&ObjectEffectSummaryMap>,
     ) {
-        self.layout_cache.clear();
-        self.read_states.clear();
-        self.clobbers.clear();
-        self.inst_pre_states.clear();
-        self.promote_loaded_values = false;
-
-        let root_slices = collect_root_slices(func, local_object_args, &mut self.layout_cache);
-        self.compute_with_root_slices(func, local_object_args, object_effects, &root_slices);
+        self.reset(false);
+        let mut snapshot = ProvenanceSnapshot::new(func, object_effects);
+        let facts = AggregateObjectFacts::for_local_objects(
+            func,
+            local_object_args,
+            &mut self.layout_cache,
+            &mut snapshot,
+        );
+        self.compute_from_facts(func, local_object_args, object_effects, &facts);
     }
 
     pub(crate) fn compute_with_loaded_value_carriers(
@@ -134,50 +134,47 @@ impl ObjectMemoryAnalysis {
         local_object_args: Option<&FxHashMap<usize, LocalObjectArgInfo>>,
         object_effects: Option<&ObjectEffectSummaryMap>,
     ) {
-        self.layout_cache.clear();
-        self.read_states.clear();
-        self.clobbers.clear();
-        self.inst_pre_states.clear();
-        self.promote_loaded_values = true;
-
-        let root_slices = collect_root_slices(func, local_object_args, &mut self.layout_cache);
-        self.compute_with_root_slices(func, local_object_args, object_effects, &root_slices);
+        self.reset(true);
+        let mut snapshot = ProvenanceSnapshot::new(func, object_effects);
+        let facts = AggregateObjectFacts::for_local_objects(
+            func,
+            local_object_args,
+            &mut self.layout_cache,
+            &mut snapshot,
+        );
+        self.compute_from_facts(func, local_object_args, object_effects, &facts);
     }
 
-    pub(crate) fn compute_for_call_planner(
-        &mut self,
-        func: &Function,
-        local_object_args: Option<&FxHashMap<usize, LocalObjectArgInfo>>,
-        object_effects: &ObjectEffectSummaryMap,
-    ) {
-        self.layout_cache.clear();
-        self.read_states.clear();
-        self.clobbers.clear();
-        self.inst_pre_states.clear();
-        self.promote_loaded_values = true;
-
-        let root_slices =
-            collect_call_planner_root_slices(func, object_effects, &mut self.layout_cache);
-        self.compute_with_root_slices(func, local_object_args, Some(object_effects), &root_slices);
-    }
-
-    fn compute_with_root_slices(
+    pub(crate) fn compute_with_facts(
         &mut self,
         func: &Function,
         local_object_args: Option<&FxHashMap<usize, LocalObjectArgInfo>>,
         object_effects: Option<&ObjectEffectSummaryMap>,
-        root_slices: &FxHashMap<ValueId, shape::AggregateSlice>,
+        facts: &AggregateObjectFacts,
+        promote_loaded_values: bool,
     ) {
-        let provenance = collect_root_provenance(
-            func,
-            func.ctx(),
-            root_slices,
-            &mut self.layout_cache,
-            object_effects,
-        );
-        let tracked = collect_tracked_objects(func, provenance.complete(), &mut self.layout_cache);
-        let may = provenance.may();
-        let relevant_slices = collect_relevant_slices(func, &tracked);
+        self.reset(promote_loaded_values);
+        self.compute_from_facts(func, local_object_args, object_effects, facts);
+    }
+
+    fn reset(&mut self, promote_loaded_values: bool) {
+        self.layout_cache.clear();
+        self.read_states.clear();
+        self.clobbers.clear();
+        self.inst_pre_states.clear();
+        self.promote_loaded_values = promote_loaded_values;
+    }
+
+    fn compute_from_facts(
+        &mut self,
+        func: &Function,
+        local_object_args: Option<&FxHashMap<usize, LocalObjectArgInfo>>,
+        object_effects: Option<&ObjectEffectSummaryMap>,
+        facts: &AggregateObjectFacts,
+    ) {
+        let tracked = facts.tracked();
+        let may = facts.may();
+        let relevant_slices = collect_relevant_slices(func, tracked);
         if relevant_slices.is_empty() {
             return;
         }
@@ -194,7 +191,7 @@ impl ObjectMemoryAnalysis {
         let initial_state = initial_state(
             func,
             local_object_args,
-            &tracked,
+            tracked,
             &relevant_slices,
             self.promote_loaded_values,
         );
@@ -232,7 +229,7 @@ impl ObjectMemoryAnalysis {
                 let mut state = in_state;
                 let transfer_ctx = TransferCtx {
                     func,
-                    tracked: &tracked,
+                    tracked,
                     provenance: may,
                     relevant_slices: &relevant_slices,
                     object_effects,
@@ -261,7 +258,7 @@ impl ObjectMemoryAnalysis {
             let mut state = in_states[block].clone();
             let transfer_ctx = TransferCtx {
                 func,
-                tracked: &tracked,
+                tracked,
                 provenance: may,
                 relevant_slices: &relevant_slices,
                 object_effects,

@@ -6,17 +6,17 @@ input_file: test_files/evm/fe_hash2_repro_loop_direct_const_unoptimized.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=true evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 141 bytes
-  total: 141 bytes
+  section runtime: 140 bytes
+  total: 140 bytes
 
 functions:
-  run: ir_blocks=4 ir_insts=32 vcode_ops=46 fixups=4 imm_bytes=9
+  run: ir_blocks=5 ir_insts=33 vcode_ops=45 fixups=4 imm_bytes=9
     mem: scratch_words=0 stable_words=4 stable_mode=StaticAbs(base=0x0) entry_abs_words=0 abs_words_end=4
   __repro_runtime_entry: ir_blocks=3 ir_insts=5 vcode_ops=16 fixups=3 imm_bytes=1
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=21229 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=229
+  case ok: calldata_len=0 success reason=Return gas_used=21223 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=223
 
 
 --------------- DEBUG ---------------
@@ -79,12 +79,34 @@ evm:
     - stack=[v9, v10, v13, <RET>]
       pre: [PUSH(1), DUP3]
       lt [v10, 1] -> v28
-    // br v28 block2 block3;
+    // br v28 block7 block3;
     - stack=[v28, v9, v10, v13, <RET>]
-      br [v28] -> [block2, block3]
-  block2 P=[] T=[v10, v13]
+      br [v28] -> [block7, block3]
+  block3 P=[] T=[v9]
+    inherited from block1: [v9, v10x, v13x, <RET>]
+    // v23.*i256 = bitcast v9 *i256;
+    - stack=[v9, v10x, v13x, <RET>]
+      bitcast [v9] -> v9
+    // v24.i256 = mload v23 i256;
+    - stack=[v9, v10x, v13x, <RET>], last_use=[v9]
+      cleanup: [SWAP2, POP, POP]
+      mload [v9] -> v24
+    // return v24;
+    - stack=[v24, <RET>]
+      return [v24]
+  block7 P=[] T=[v10, v13]
     inherited from block1: [v9x, v10, v13, <RET>]
-    prologue: [POP]
+    // jump block6;
+    - stack=[v9x, v10, v13, <RET>]
+      cleanup: [POP]
+      jump -> block6
+  block6 P=[] T=[v10, v13]
+    inherited from block7: [v10, v13, <RET>]
+    // jump block2;
+    - stack=[v10, v13, <RET>]
+      jump -> block2
+  block2 P=[] T=[v10, v13]
+    inherited from block6: [v10, v13, <RET>]
     // v12.*[i256; 1] = alloca [i256; 1];
     - stack=[v10, v13, <RET>]
       alloca [] -> v12
@@ -116,18 +138,6 @@ evm:
     - stack=[v30, v12, v13, <RET>]
       exit(block1): [SWAP1]
       jump -> block1
-  block3 P=[] T=[v9]
-    inherited from block1: [v9, v10x, v13x, <RET>]
-    // v23.*i256 = bitcast v9 *i256;
-    - stack=[v9, v10x, v13x, <RET>]
-      bitcast [v9] -> v9
-    // v24.i256 = mload v23 i256;
-    - stack=[v9, v10x, v13x, <RET>], last_use=[v9]
-      cleanup: [SWAP2, POP, POP]
-      mload [v9] -> v24
-    // return v24;
-    - stack=[v24, <RET>]
-      return [v24]
 
 // func private %__repro_runtime_entry()
   block0 P=[] T=[]
@@ -177,12 +187,20 @@ run:
     PUSH1 0x1 (1)  // v28.i1 = lt v11 1.i256;
     DUP3
     LT
-    ISZERO  // br v28 block2 block3;
-    PUSH1 block3
+    PUSH1 block6  // br v28 block6 block3;
     JUMPI
+  block3:
+    SWAP2  // v28.i256 = mload v27 i256;
+    POP
+    POP
+    MLOAD
+    SWAP1  // return v28;
+    JUMP
+  block6:
+    JUMPDEST
+    POP  // jump block2;
   block2:
-    POP  // v14.*[i256; 1] = alloca [i256; 1];
-    PUSH0
+    PUSH0  // v14.*[i256; 1] = alloca [i256; 1];
     PUSH1 0x20 (32)  // v19.*i256 = alloca i256;
     PUSH1 0x20 (32)  // evm_code_copy v20 v18 32.i256;
     DUP5
@@ -196,14 +214,6 @@ run:
     ADD
     SWAP1  // jump block1;
     PUSH1 block1
-    JUMP
-  block3:
-    JUMPDEST
-    SWAP2  // v28.i256 = mload v27 i256;
-    POP
-    POP
-    MLOAD
-    SWAP1  // return v28;
     JUMP
 
 // func private %__repro_runtime_entry()

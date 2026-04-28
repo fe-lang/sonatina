@@ -11,6 +11,7 @@ use crate::{
     machinst::lower::SectionWorkModule,
     module_analysis::{CallGraph, SccBuilder},
     stackalloc::{StackifyAlloc, StackifyBuilder},
+    stackify_edge::StackifyEdgeSplitter,
 };
 use sonatina_ir::{
     AccessKind, AccessLoc, Function, GlobalVariableRef, InstSetExt, Module, ValueId,
@@ -839,9 +840,8 @@ fn prepare_stackify_analysis(
     }
 
     {
-        let _span = trace_span!("sonatina.codegen.evm.stackify.split_critical_edges").entered();
-        let mut splitter = CriticalEdgeSplitter::new();
-        splitter.run(function, &mut cfg);
+        let _span = trace_span!("sonatina.codegen.evm.stackify.split_edges").entered();
+        StackifyEdgeSplitter::run(function, &mut cfg);
     }
 
     let (dom, block_order) = {

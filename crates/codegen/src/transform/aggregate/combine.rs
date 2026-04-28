@@ -9,18 +9,17 @@ use sonatina_ir::{
 };
 
 use super::{
-    collect_root_provenance, object_locality,
+    object_locality,
     object_state::{
         LiveLeafMap, clear_live_slice, enum_write_variant_slices, is_pure_object_address_inst,
         mark_live_slice, mark_root_live, observed_roots, slice_has_live_leaf,
         tracked_root_total_leaves, union_live_leaf_maps,
     },
     object_tracking::{
-        ObjectSlice, TrackedObject, collect_root_slices, collect_tracked_objects,
-        enum_tag_object_slice, enum_variant_field_object_slice, objref_element_ty, slices_overlap,
-        whole_root_slice,
+        AggregateObjectFacts, ObjectSlice, TrackedObject, enum_tag_object_slice,
+        enum_variant_field_object_slice, objref_element_ty, slices_overlap,
     },
-    provenance::{MayProvenance, MayRootSet, ProvenanceFacts, RootValue},
+    provenance::{MayProvenance, MayRootSet, ProvenanceSnapshot, RootValue},
     reconstruct::AggregateValueReconstructor,
     shape,
 };
@@ -158,18 +157,12 @@ struct PendingEnumWrite {
     kind: PendingEnumWriteKind,
     variant: EnumVariantRef,
 }
-fn collect_combine_enum_root_provenance(
+fn collect_combine_enum_facts(
     func: &Function,
     layout_cache: &mut shape::AggregateLayoutCache,
-) -> ProvenanceFacts {
-    let mut root_slices = collect_root_slices(func, None, layout_cache);
-    for &arg in &func.arg_values {
-        let Some(root_ty) = objref_element_ty(func.ctx(), func.dfg.value_ty(arg)) else {
-            continue;
-        };
-        root_slices.insert(arg, whole_root_slice(layout_cache, func.ctx(), root_ty));
-    }
-    collect_root_provenance(func, func.ctx(), &root_slices, layout_cache, None)
+) -> AggregateObjectFacts {
+    let mut snapshot = ProvenanceSnapshot::new(func, None);
+    AggregateObjectFacts::for_all_objref_args(func, layout_cache, &mut snapshot)
 }
 impl AggregateCombine {
     pub fn run(&mut self, func: &mut Function) -> bool {
@@ -180,16 +173,10 @@ impl AggregateCombine {
         loop {
             let mut iter_changed = false;
             let definitely_non_undef = compute_definitely_non_undef_aggregates(func);
-            let enum_root_provenance =
-                collect_combine_enum_root_provenance(func, &mut self.layout_cache);
-            let tracked = collect_tracked_objects(
-                func,
-                enum_root_provenance.complete(),
-                &mut self.layout_cache,
-            );
+            let enum_facts = collect_combine_enum_facts(func, &mut self.layout_cache);
             let enum_aliases = EnumAliasContext {
-                tracked: &tracked,
-                may: enum_root_provenance.may(),
+                tracked: enum_facts.tracked(),
+                may: enum_facts.may(),
             };
             let enum_entry_facts = compute_enum_object_entry_facts(func, enum_aliases);
             let blocks: Vec<_> = func.layout.iter_block().collect();
@@ -905,11 +892,10 @@ fn remove_dead_local_enum_writes(
         return false;
     }
 
-    let root_provenance = collect_combine_enum_root_provenance(func, layout_cache);
-    let tracked = collect_tracked_objects(func, root_provenance.complete(), layout_cache);
+    let facts = collect_combine_enum_facts(func, layout_cache);
     let enum_aliases = EnumAliasContext {
-        tracked: &tracked,
-        may: root_provenance.may(),
+        tracked: facts.tracked(),
+        may: facts.may(),
     };
     let mut cfg = ControlFlowGraph::new();
     cfg.compute(func);

@@ -3,7 +3,7 @@ use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{
     DataFlowGraph, Type, U256, ValueId,
     module::ModuleCtx,
-    types::{CompoundType, EnumVariantRef},
+    types::{CompoundType, EnumData, EnumVariantRef, TypeStore},
 };
 
 pub type FieldPath = SmallVec<[u32; 4]>;
@@ -54,37 +54,41 @@ impl EnumSlotInfo {
 pub struct AggregateLayoutCache {
     shape_cache: FxHashMap<Type, AggregateShape>,
     runtime_leaf_cache: FxHashMap<Type, RuntimeLeaves>,
+    size_align_cache: FxHashMap<Type, Option<(u32, u32)>>,
+    flattened_leaf_count_cache: FxHashMap<Type, Option<usize>>,
+    supported_aggregate_cache: FxHashMap<Type, bool>,
+    supported_scalar_shape_cache: FxHashMap<Type, bool>,
+    slice_path_cache: FxHashMap<(Type, FieldPath), Option<AggregateSlice>>,
 }
 
 impl AggregateLayoutCache {
     pub fn clear(&mut self) {
         self.shape_cache.clear();
         self.runtime_leaf_cache.clear();
+        self.size_align_cache.clear();
+        self.flattened_leaf_count_cache.clear();
+        self.supported_aggregate_cache.clear();
+        self.supported_scalar_shape_cache.clear();
+        self.slice_path_cache.clear();
+    }
+
+    fn with_layout<R>(&mut self, module: &ModuleCtx, f: impl FnOnce(&mut LayoutCtx<'_>) -> R) -> R {
+        module.with_ty_store(|types| {
+            let mut layout = LayoutCtx {
+                module,
+                types,
+                cache: Some(self),
+            };
+            f(&mut layout)
+        })
     }
 
     pub fn shape(&mut self, module: &ModuleCtx, ty: Type) -> Option<AggregateShape> {
-        if let Some(shape) = self.shape_cache.get(&ty) {
-            return Some(shape.clone());
-        }
-
-        let shape = aggregate_shape(module, ty)?;
-        self.shape_cache.insert(ty, shape.clone());
-        Some(shape)
+        self.with_layout(module, |layout| layout.shape(ty))
     }
 
     pub fn runtime_leaves(&mut self, module: &ModuleCtx, ty: Type) -> Option<RuntimeLeaves> {
-        if let Some(leaves) = self.runtime_leaf_cache.get(&ty) {
-            return Some(leaves.clone());
-        }
-
-        let leaves: RuntimeLeaves = self
-            .shape(module, ty)?
-            .leaves
-            .into_iter()
-            .filter(|leaf| leaf.size_bytes != 0)
-            .collect();
-        self.runtime_leaf_cache.insert(ty, leaves.clone());
-        Some(leaves)
+        self.with_layout(module, |layout| layout.runtime_leaves(ty))
     }
 
     pub fn single_runtime_word_leaf(
@@ -92,11 +96,7 @@ impl AggregateLayoutCache {
         module: &ModuleCtx,
         ty: Type,
     ) -> Option<AggregateLeaf> {
-        let runtime_leaves = self.runtime_leaves(module, ty)?;
-        let [leaf] = runtime_leaves.as_slice() else {
-            return None;
-        };
-        (leaf.size_bytes == 32).then(|| leaf.clone())
+        self.with_layout(module, |layout| layout.single_runtime_word_leaf(ty))
     }
 
     pub fn compatible_bitcast_runtime_leaves(
@@ -105,8 +105,152 @@ impl AggregateLayoutCache {
         from_ty: Type,
         to_ty: Type,
     ) -> Option<(RuntimeLeaves, RuntimeLeaves)> {
-        let src_leaves = self.runtime_leaves(module, from_ty)?;
-        let dst_leaves = self.runtime_leaves(module, to_ty)?;
+        self.with_layout(module, |layout| {
+            layout.compatible_bitcast_runtime_leaves(from_ty, to_ty)
+        })
+    }
+
+    pub fn compatible_bitcast_source_slice(
+        &mut self,
+        module: &ModuleCtx,
+        from_ty: Type,
+        to_ty: Type,
+        to_slice: AggregateSlice,
+    ) -> Option<AggregateSlice> {
+        self.with_layout(module, |layout| {
+            layout.compatible_bitcast_source_slice(from_ty, to_ty, to_slice)
+        })
+    }
+
+    pub fn runtime_size_bytes(&mut self, module: &ModuleCtx, ty: Type) -> Option<u32> {
+        self.with_layout(module, |layout| layout.runtime_size_bytes(ty))
+    }
+
+    pub fn is_supported_scalar_shape_ty(&mut self, module: &ModuleCtx, ty: Type) -> bool {
+        self.with_layout(module, |layout| layout.is_supported_scalar_shape_ty(ty))
+    }
+
+    pub fn is_supported_aggregate_ty(&mut self, module: &ModuleCtx, ty: Type) -> bool {
+        self.with_layout(module, |layout| layout.is_supported_aggregate_ty(ty))
+    }
+
+    pub fn aggregate_slice_for_gep_path(
+        &mut self,
+        module: &ModuleCtx,
+        base_pointee_ty: Type,
+        indices: &[ValueId],
+        dfg: &DataFlowGraph,
+    ) -> Option<AggregateSlice> {
+        self.with_layout(module, |layout| {
+            layout.aggregate_slice_for_gep_path(base_pointee_ty, indices, dfg)
+        })
+    }
+
+    pub fn aggregate_slice_for_object_path(
+        &mut self,
+        module: &ModuleCtx,
+        root_ty: Type,
+        indices: &[ValueId],
+        dfg: &DataFlowGraph,
+    ) -> Option<AggregateSlice> {
+        self.with_layout(module, |layout| {
+            layout.aggregate_slice_for_object_path(root_ty, indices, dfg)
+        })
+    }
+
+    pub fn enum_variant_field_slice(
+        &mut self,
+        module: &ModuleCtx,
+        enum_ty: Type,
+        variant: EnumVariantRef,
+        field: u32,
+    ) -> Option<AggregateSlice> {
+        self.with_layout(module, |layout| {
+            layout.enum_variant_field_slice(enum_ty, variant, field)
+        })
+    }
+}
+
+struct LayoutCtx<'a> {
+    module: &'a ModuleCtx,
+    types: &'a TypeStore,
+    cache: Option<&'a mut AggregateLayoutCache>,
+}
+
+fn with_uncached_layout<R>(module: &ModuleCtx, f: impl FnOnce(&mut LayoutCtx<'_>) -> R) -> R {
+    module.with_ty_store(|types| {
+        let mut layout = LayoutCtx {
+            module,
+            types,
+            cache: None,
+        };
+        f(&mut layout)
+    })
+}
+
+fn compound_ty(types: &TypeStore, ty: Type) -> Option<&CompoundType> {
+    let Type::Compound(cmpd) = ty else {
+        return None;
+    };
+    Some(types.resolve_compound(cmpd))
+}
+
+fn enum_field_tys(data: &EnumData) -> SmallVec<[Type; 4]> {
+    data.variants
+        .iter()
+        .flat_map(|variant| variant.fields.iter().copied())
+        .collect()
+}
+
+impl LayoutCtx<'_> {
+    fn shape(&mut self, ty: Type) -> Option<AggregateShape> {
+        if let Some(cache) = &mut self.cache
+            && let Some(shape) = cache.shape_cache.get(&ty)
+        {
+            return Some(shape.clone());
+        }
+
+        let shape = self.compute_shape(ty)?;
+        if let Some(cache) = &mut self.cache {
+            cache.shape_cache.insert(ty, shape.clone());
+        }
+        Some(shape)
+    }
+
+    fn runtime_leaves(&mut self, ty: Type) -> Option<RuntimeLeaves> {
+        if let Some(cache) = &mut self.cache
+            && let Some(leaves) = cache.runtime_leaf_cache.get(&ty)
+        {
+            return Some(leaves.clone());
+        }
+
+        let leaves: RuntimeLeaves = self
+            .shape(ty)?
+            .leaves
+            .into_iter()
+            .filter(|leaf| leaf.size_bytes != 0)
+            .collect();
+        if let Some(cache) = &mut self.cache {
+            cache.runtime_leaf_cache.insert(ty, leaves.clone());
+        }
+        Some(leaves)
+    }
+
+    fn single_runtime_word_leaf(&mut self, ty: Type) -> Option<AggregateLeaf> {
+        let runtime_leaves = self.runtime_leaves(ty)?;
+        let [leaf] = runtime_leaves.as_slice() else {
+            return None;
+        };
+        (leaf.size_bytes == 32).then(|| leaf.clone())
+    }
+
+    fn compatible_bitcast_runtime_leaves(
+        &mut self,
+        from_ty: Type,
+        to_ty: Type,
+    ) -> Option<(RuntimeLeaves, RuntimeLeaves)> {
+        let src_leaves = self.runtime_leaves(from_ty)?;
+        let dst_leaves = self.runtime_leaves(to_ty)?;
         if src_leaves.len() != dst_leaves.len() {
             return None;
         }
@@ -120,76 +264,1000 @@ impl AggregateLayoutCache {
             .then_some((src_leaves, dst_leaves))
     }
 
-    pub fn compatible_bitcast_source_slice(
+    fn compatible_bitcast_source_slice(
         &mut self,
-        module: &ModuleCtx,
         from_ty: Type,
         to_ty: Type,
         to_slice: AggregateSlice,
     ) -> Option<AggregateSlice> {
-        self.compatible_bitcast_runtime_leaves(module, from_ty, to_ty)?;
+        self.compatible_bitcast_runtime_leaves(from_ty, to_ty)?;
         let (first_runtime_leaf, runtime_leaf_count) =
-            runtime_leaf_range_for_slice(module, to_ty, to_slice)?;
-        aggregate_slice_for_runtime_leaf_range(
-            module,
-            from_ty,
-            first_runtime_leaf,
-            runtime_leaf_count,
+            self.runtime_leaf_range_for_slice(to_ty, to_slice)?;
+        self.aggregate_slice_for_runtime_leaf_range(from_ty, first_runtime_leaf, runtime_leaf_count)
+    }
+
+    fn runtime_size_bytes(&mut self, ty: Type) -> Option<u32> {
+        self.runtime_size_align_bytes(ty).map(|(size, _)| size)
+    }
+
+    fn runtime_size_align_bytes(&mut self, ty: Type) -> Option<(u32, u32)> {
+        if let Some(cache) = &mut self.cache
+            && let Some(size_align) = cache.size_align_cache.get(&ty)
+        {
+            return *size_align;
+        }
+
+        let size_align = self.compute_runtime_size_align_bytes(ty);
+        if let Some(cache) = &mut self.cache {
+            cache.size_align_cache.insert(ty, size_align);
+        }
+        size_align
+    }
+
+    fn is_supported_scalar_shape_ty(&mut self, ty: Type) -> bool {
+        if let Some(cache) = &mut self.cache
+            && let Some(supported) = cache.supported_scalar_shape_cache.get(&ty)
+        {
+            return *supported;
+        }
+
+        let supported = self.compute_is_supported_scalar_shape_ty(ty);
+        if let Some(cache) = &mut self.cache {
+            cache.supported_scalar_shape_cache.insert(ty, supported);
+        }
+        supported
+    }
+
+    fn is_supported_aggregate_ty(&mut self, ty: Type) -> bool {
+        if let Some(cache) = &mut self.cache
+            && let Some(supported) = cache.supported_aggregate_cache.get(&ty)
+        {
+            return *supported;
+        }
+
+        let supported = self.compute_is_supported_aggregate_ty(ty);
+        if let Some(cache) = &mut self.cache {
+            cache.supported_aggregate_cache.insert(ty, supported);
+        }
+        supported
+    }
+
+    fn compute_is_supported_scalar_shape_ty(&mut self, ty: Type) -> bool {
+        let types = self.types;
+        match compound_ty(types, ty) {
+            Some(CompoundType::Struct(s)) => {
+                !s.packed
+                    && s.fields
+                        .iter()
+                        .copied()
+                        .all(|field_ty| self.runtime_size_align_bytes(field_ty).is_some())
+            }
+            Some(CompoundType::Array { elem, .. }) => {
+                self.runtime_size_align_bytes(*elem).is_some()
+            }
+            Some(CompoundType::Enum(data)) => enum_field_tys(data)
+                .into_iter()
+                .all(|field_ty| self.runtime_size_align_bytes(field_ty).is_some()),
+            _ => false,
+        }
+    }
+
+    fn compute_is_supported_aggregate_ty(&mut self, ty: Type) -> bool {
+        let types = self.types;
+        match compound_ty(types, ty) {
+            Some(CompoundType::Struct(s)) => {
+                !s.packed
+                    && s.fields
+                        .iter()
+                        .copied()
+                        .all(|field_ty| self.runtime_size_align_bytes(field_ty).is_some())
+            }
+            Some(CompoundType::Array { elem, .. }) => {
+                self.runtime_size_align_bytes(*elem).is_some()
+            }
+            _ => false,
+        }
+    }
+
+    fn aggregate_slice_for_gep_path(
+        &mut self,
+        base_pointee_ty: Type,
+        indices: &[ValueId],
+        dfg: &DataFlowGraph,
+    ) -> Option<AggregateSlice> {
+        if !self.is_supported_aggregate_ty(base_pointee_ty) {
+            return None;
+        }
+        let (&first, rest) = indices.split_first()?;
+        if const_u32(dfg, first)? != 0 {
+            return None;
+        }
+
+        self.aggregate_slice_for_object_path(base_pointee_ty, rest, dfg)
+    }
+
+    fn aggregate_slice_for_object_path(
+        &mut self,
+        root_ty: Type,
+        indices: &[ValueId],
+        dfg: &DataFlowGraph,
+    ) -> Option<AggregateSlice> {
+        if !self.is_supported_aggregate_ty(root_ty) {
+            return None;
+        }
+
+        let mut current_ty = root_ty;
+        let mut path: FieldPath = smallvec![];
+        for &idx_value in indices {
+            let idx = usize::try_from(const_u32(dfg, idx_value)?).ok()?;
+            match compound_ty(self.types, current_ty)? {
+                CompoundType::Struct(s) => {
+                    if s.packed {
+                        return None;
+                    }
+                    current_ty = *s.fields.get(idx)?;
+                    path.push(u32::try_from(idx).ok()?);
+                }
+                CompoundType::Array { elem, len } => {
+                    if idx >= *len {
+                        return None;
+                    }
+                    current_ty = *elem;
+                    path.push(u32::try_from(idx).ok()?);
+                }
+                CompoundType::Enum(_)
+                | CompoundType::Ptr(_)
+                | CompoundType::ObjRef(_)
+                | CompoundType::ConstRef(_)
+                | CompoundType::Func { .. } => return None,
+            }
+        }
+
+        self.aggregate_slice_for_path(root_ty, &path)
+    }
+
+    fn enum_variant_field_slice(
+        &mut self,
+        enum_ty: Type,
+        variant: EnumVariantRef,
+        field: u32,
+    ) -> Option<AggregateSlice> {
+        let slot = self.enum_variant_field_slot(variant, field)?;
+        self.aggregate_slice_for_index(enum_ty, slot)
+    }
+
+    fn compute_shape(&mut self, ty: Type) -> Option<AggregateShape> {
+        if !self.is_supported_scalar_shape_ty(ty) {
+            return None;
+        }
+
+        let mut leaves: SmallVec<[AggregateLeaf; 4]> = SmallVec::new();
+        let mut path: FieldPath = SmallVec::new();
+        self.flatten_aggregate(ty, 0, &mut path, &mut leaves)?;
+
+        Some(AggregateShape {
+            root_ty: ty,
+            leaves,
+        })
+    }
+
+    fn aggregate_slice_for_index(&mut self, agg_ty: Type, idx: u32) -> Option<AggregateSlice> {
+        self.aggregate_slice_for_path(agg_ty, &[idx])
+    }
+
+    fn aggregate_slice_for_path(&mut self, root_ty: Type, path: &[u32]) -> Option<AggregateSlice> {
+        let path: FieldPath = path.iter().copied().collect();
+        if let Some(cache) = &mut self.cache
+            && let Some(slice) = cache.slice_path_cache.get(&(root_ty, path.clone()))
+        {
+            return *slice;
+        }
+
+        let slice = if self.is_supported_scalar_shape_ty(root_ty) {
+            self.aggregate_slice_info(root_ty, &path)
+                .map(|(ty, first_leaf, leaf_count)| AggregateSlice {
+                    ty,
+                    first_leaf,
+                    leaf_count,
+                })
+        } else {
+            None
+        };
+        if let Some(cache) = &mut self.cache {
+            cache.slice_path_cache.insert((root_ty, path), slice);
+        }
+        slice
+    }
+
+    fn aggregate_slice_info(&mut self, ty: Type, path: &[u32]) -> Option<(Type, usize, usize)> {
+        if path.is_empty() {
+            return Some((ty, 0, self.flattened_leaf_count(ty)?));
+        }
+
+        let idx = usize::try_from(path[0]).ok()?;
+        match compound_ty(self.types, ty)? {
+            CompoundType::Struct(s) => {
+                if s.packed {
+                    return None;
+                }
+
+                let child_ty = *s.fields.get(idx)?;
+                let prefix_fields: SmallVec<[Type; 4]> =
+                    s.fields.iter().take(idx).copied().collect();
+                let mut first_leaf = 0usize;
+                for field_ty in prefix_fields {
+                    first_leaf = first_leaf.checked_add(self.flattened_leaf_count(field_ty)?)?;
+                }
+
+                let (nested_ty, nested_first_leaf, leaf_count) =
+                    self.aggregate_slice_info(child_ty, &path[1..])?;
+                Some((
+                    nested_ty,
+                    first_leaf.checked_add(nested_first_leaf)?,
+                    leaf_count,
+                ))
+            }
+            CompoundType::Array { elem, len } => {
+                if idx >= *len {
+                    return None;
+                }
+
+                let elem = *elem;
+                let elem_leaf_count = self.flattened_leaf_count(elem)?;
+                let first_leaf = elem_leaf_count.checked_mul(idx)?;
+                let (nested_ty, nested_first_leaf, leaf_count) =
+                    self.aggregate_slice_info(elem, &path[1..])?;
+                Some((
+                    nested_ty,
+                    first_leaf.checked_add(nested_first_leaf)?,
+                    leaf_count,
+                ))
+            }
+            CompoundType::Enum(_) => {
+                let slot = self.enum_slot_info(ty, path[0])?;
+                match slot {
+                    EnumSlotInfo::Tag { ty: tag_ty } => (path.len() == 1).then_some((tag_ty, 0, 1)),
+                    EnumSlotInfo::VariantField {
+                        variant,
+                        field,
+                        ty: field_ty,
+                    } => {
+                        let first_leaf = self.enum_variant_field_first_leaf(ty, variant, field)?;
+                        let (nested_ty, nested_first_leaf, leaf_count) =
+                            self.aggregate_slice_info(field_ty, &path[1..])?;
+                        Some((
+                            nested_ty,
+                            first_leaf.checked_add(nested_first_leaf)?,
+                            leaf_count,
+                        ))
+                    }
+                }
+            }
+            CompoundType::Ptr(_)
+            | CompoundType::ObjRef(_)
+            | CompoundType::ConstRef(_)
+            | CompoundType::Func { .. } => None,
+        }
+    }
+
+    fn enum_variant_field_first_leaf(
+        &mut self,
+        enum_ty: Type,
+        variant: EnumVariantRef,
+        field: u32,
+    ) -> Option<usize> {
+        let slot = usize::try_from(self.enum_variant_field_slot(variant, field)?).ok()?;
+        let mut first_leaf = 0usize;
+        for idx in 0..slot {
+            let child_ty = self.aggregate_child_ty(enum_ty, u32::try_from(idx).ok()?)?;
+            first_leaf = first_leaf.checked_add(self.flattened_leaf_count(child_ty)?)?;
+        }
+        Some(first_leaf)
+    }
+
+    fn flattened_leaf_count(&mut self, ty: Type) -> Option<usize> {
+        if let Some(cache) = &mut self.cache
+            && let Some(count) = cache.flattened_leaf_count_cache.get(&ty)
+        {
+            return *count;
+        }
+
+        let count = self.compute_flattened_leaf_count(ty);
+        if let Some(cache) = &mut self.cache {
+            cache.flattened_leaf_count_cache.insert(ty, count);
+        }
+        count
+    }
+
+    fn struct_field_offset_bytes(
+        &mut self,
+        fields: &[Type],
+        packed: bool,
+        idx: usize,
+    ) -> Option<(u32, Type)> {
+        if packed {
+            return None;
+        }
+        let &field_ty = fields.get(idx)?;
+        let mut offset = 0u32;
+
+        for &ty in fields.iter().take(idx) {
+            let (_, align) = self.runtime_size_align_bytes(ty)?;
+            offset = align_to(offset, align)?;
+
+            let (size, _) = self.runtime_size_align_bytes(ty)?;
+            offset = offset.checked_add(size)?;
+        }
+
+        let (_, align) = self.runtime_size_align_bytes(field_ty)?;
+        offset = align_to(offset, align)?;
+        Some((offset, field_ty))
+    }
+
+    fn flatten_aggregate(
+        &mut self,
+        ty: Type,
+        base_offset: u32,
+        path: &mut FieldPath,
+        out: &mut SmallVec<[AggregateLeaf; 4]>,
+    ) -> Option<()> {
+        match compound_ty(self.types, ty) {
+            Some(CompoundType::Struct(s)) => {
+                if s.packed {
+                    return None;
+                }
+
+                let fields = s.fields.clone();
+                for (idx, &field_ty) in fields.iter().enumerate() {
+                    let (field_offset, _) = self.struct_field_offset_bytes(&fields, false, idx)?;
+                    let total_offset = base_offset.checked_add(field_offset)?;
+
+                    path.push(u32::try_from(idx).ok()?);
+                    self.flatten_aggregate(field_ty, total_offset, path, out)?;
+                    path.pop();
+                }
+                Some(())
+            }
+            Some(CompoundType::Array { elem, len }) => {
+                let elem = *elem;
+                let len = *len;
+                let elem_size = self.runtime_size_bytes(elem)?;
+                for idx in 0..len {
+                    let offset = elem_size.checked_mul(u32::try_from(idx).ok()?)?;
+                    let total_offset = base_offset.checked_add(offset)?;
+                    path.push(u32::try_from(idx).ok()?);
+                    self.flatten_aggregate(elem, total_offset, path, out)?;
+                    path.pop();
+                }
+                Some(())
+            }
+            Some(CompoundType::Enum(data)) => {
+                let tag_ty = enum_tag_ty(ty)?;
+                let tag_size = self.runtime_size_bytes(tag_ty)?;
+                path.push(0);
+                out.push(AggregateLeaf {
+                    path: path.clone(),
+                    ty: tag_ty,
+                    offset_bytes: base_offset,
+                    size_bytes: tag_size,
+                });
+                path.pop();
+
+                let mut slot = 1u32;
+                let mut offset = base_offset.checked_add(tag_size)?;
+                for field_ty in enum_field_tys(data) {
+                    let (field_size, field_align) = self.runtime_size_align_bytes(field_ty)?;
+                    offset = align_to(offset, field_align)?;
+                    path.push(slot);
+                    self.flatten_aggregate(field_ty, offset, path, out)?;
+                    path.pop();
+                    offset = offset.checked_add(field_size)?;
+                    slot = slot.checked_add(1)?;
+                }
+                Some(())
+            }
+            Some(CompoundType::Ptr(_))
+            | Some(CompoundType::ObjRef(_))
+            | Some(CompoundType::ConstRef(_))
+            | None => {
+                let size = self.runtime_size_bytes(ty)?;
+                out.push(AggregateLeaf {
+                    path: path.clone(),
+                    ty,
+                    offset_bytes: base_offset,
+                    size_bytes: size,
+                });
+                Some(())
+            }
+            Some(CompoundType::Func { .. }) => None,
+        }
+    }
+
+    fn compute_flattened_leaf_count(&mut self, ty: Type) -> Option<usize> {
+        match compound_ty(self.types, ty) {
+            Some(CompoundType::Struct(s)) => {
+                if s.packed {
+                    return None;
+                }
+
+                let fields = s.fields.clone();
+                let mut count = 0usize;
+                for field_ty in fields {
+                    count = count.checked_add(self.flattened_leaf_count(field_ty)?)?;
+                }
+                Some(count)
+            }
+            Some(CompoundType::Array { elem, len }) => {
+                self.flattened_leaf_count(*elem)?.checked_mul(*len)
+            }
+            Some(CompoundType::Enum(data)) => {
+                let mut count = 1usize;
+                for field_ty in enum_field_tys(data) {
+                    count = count.checked_add(self.flattened_leaf_count(field_ty)?)?;
+                }
+                Some(count)
+            }
+            Some(CompoundType::Func { .. }) => None,
+            Some(CompoundType::Ptr(_))
+            | Some(CompoundType::ObjRef(_))
+            | Some(CompoundType::ConstRef(_))
+            | None => Some(1),
+        }
+    }
+
+    fn compute_runtime_size_align_bytes(&mut self, ty: Type) -> Option<(u32, u32)> {
+        if ty.is_enum_tag() {
+            return self.primitive_size_align(self.module.type_layout.pointer_repl());
+        }
+
+        match compound_ty(self.types, ty) {
+            Some(CompoundType::Struct(s)) => {
+                if s.packed {
+                    return None;
+                }
+
+                let fields = s.fields.clone();
+                let mut size = 0u32;
+                let mut align = 1u32;
+                for field_ty in fields {
+                    let (field_size, field_align) = self.runtime_size_align_bytes(field_ty)?;
+                    size = align_to(size, field_align)?;
+                    size = size.checked_add(field_size)?;
+                    align = align.max(field_align);
+                }
+                Some((size, align))
+            }
+            Some(CompoundType::Array { elem, len }) => {
+                let (elem_size, elem_align) = self.runtime_size_align_bytes(*elem)?;
+                Some((
+                    elem_size.checked_mul(u32::try_from(*len).ok()?)?,
+                    elem_align,
+                ))
+            }
+            Some(CompoundType::Enum(data)) => {
+                let (tag_size, tag_align) = self.runtime_size_align_bytes(enum_tag_ty(ty)?)?;
+                let mut size = tag_size;
+                let mut align = tag_align;
+                for field_ty in enum_field_tys(data) {
+                    let (field_size, field_align) = self.runtime_size_align_bytes(field_ty)?;
+                    size = align_to(size, field_align)?;
+                    size = size.checked_add(field_size)?;
+                    align = align.max(field_align);
+                }
+                Some((size, align))
+            }
+            Some(CompoundType::Func { .. }) => None,
+            Some(CompoundType::Ptr(_))
+            | Some(CompoundType::ObjRef(_))
+            | Some(CompoundType::ConstRef(_)) => {
+                self.primitive_size_align(self.module.type_layout.pointer_repl())
+            }
+            None => self.primitive_size_align(ty),
+        }
+    }
+
+    fn primitive_size_align(&self, ty: Type) -> Option<(u32, u32)> {
+        let size = u32::try_from(self.module.size_of(ty).ok()?).ok()?;
+        let align = u32::try_from(self.module.align_of(ty).ok()?).ok()?;
+        Some((size, align))
+    }
+    fn runtime_leaf_range_for_slice(
+        &mut self,
+        root_ty: Type,
+        slice: AggregateSlice,
+    ) -> Option<(usize, usize)> {
+        if !self.is_supported_scalar_shape_ty(root_ty) {
+            return None;
+        }
+
+        let slice_end = slice.first_leaf.checked_add(slice.leaf_count)?;
+        let shape = self.shape(root_ty)?;
+        if slice_end > shape.leaves.len() {
+            return None;
+        }
+
+        let first_runtime_leaf = shape.leaves[..slice.first_leaf]
+            .iter()
+            .filter(|leaf| leaf.size_bytes != 0)
+            .count();
+        let runtime_leaf_count = shape.leaves[slice.first_leaf..slice_end]
+            .iter()
+            .filter(|leaf| leaf.size_bytes != 0)
+            .count();
+        Some((first_runtime_leaf, runtime_leaf_count))
+    }
+
+    fn aggregate_slice_for_leaf_range(
+        &mut self,
+        root_ty: Type,
+        first_leaf: usize,
+        leaf_count: usize,
+    ) -> Option<AggregateSlice> {
+        if !self.is_supported_scalar_shape_ty(root_ty) {
+            return None;
+        }
+
+        let total_leaf_count = self.flattened_leaf_count(root_ty)?;
+        if first_leaf.checked_add(leaf_count)? > total_leaf_count {
+            return None;
+        }
+        if first_leaf == 0 && leaf_count == total_leaf_count {
+            return Some(AggregateSlice {
+                ty: root_ty,
+                first_leaf: 0,
+                leaf_count,
+            });
+        }
+
+        self.aggregate_slice_for_leaf_range_impl(root_ty, first_leaf, leaf_count, 0)
+    }
+
+    fn aggregate_slice_for_runtime_leaf_range(
+        &mut self,
+        root_ty: Type,
+        first_runtime_leaf: usize,
+        target_runtime_leaf_count: usize,
+    ) -> Option<AggregateSlice> {
+        if !self.is_supported_scalar_shape_ty(root_ty) {
+            return None;
+        }
+
+        let total_runtime_leaf_count = self.runtime_leaf_count_for_ty(root_ty)?;
+        if first_runtime_leaf.checked_add(target_runtime_leaf_count)? > total_runtime_leaf_count {
+            return None;
+        }
+        if target_runtime_leaf_count == 0 {
+            return Some(AggregateSlice {
+                ty: root_ty,
+                first_leaf: self
+                    .flattened_leaf_boundary_for_runtime_leaf(root_ty, first_runtime_leaf)?,
+                leaf_count: 0,
+            });
+        }
+
+        let total_leaf_count = self.flattened_leaf_count(root_ty)?;
+        if first_runtime_leaf == 0 && target_runtime_leaf_count == total_runtime_leaf_count {
+            return Some(AggregateSlice {
+                ty: root_ty,
+                first_leaf: 0,
+                leaf_count: total_leaf_count,
+            });
+        }
+
+        self.aggregate_slice_for_runtime_leaf_range_impl(
+            root_ty,
+            (first_runtime_leaf, target_runtime_leaf_count),
+            (0, 0),
         )
+    }
+
+    fn aggregate_child_ty(&mut self, agg_ty: Type, idx: u32) -> Option<Type> {
+        let idx = usize::try_from(idx).ok()?;
+        match compound_ty(self.types, agg_ty)? {
+            CompoundType::Struct(s) => (!s.packed).then_some(*s.fields.get(idx)?),
+            CompoundType::Array { elem, len } => (idx < *len).then_some(*elem),
+            CompoundType::Enum(_) => self
+                .enum_slot_info(agg_ty, u32::try_from(idx).ok()?)
+                .map(|slot| slot.ty()),
+            CompoundType::Ptr(_)
+            | CompoundType::ObjRef(_)
+            | CompoundType::ConstRef(_)
+            | CompoundType::Func { .. } => None,
+        }
+    }
+
+    fn aggregate_child_count(&mut self, agg_ty: Type) -> Option<usize> {
+        match compound_ty(self.types, agg_ty)? {
+            CompoundType::Struct(s) => (!s.packed).then_some(s.fields.len()),
+            CompoundType::Array { len, .. } => Some(*len),
+            CompoundType::Enum(_) => self.enum_child_count(agg_ty),
+            CompoundType::Ptr(_)
+            | CompoundType::ObjRef(_)
+            | CompoundType::ConstRef(_)
+            | CompoundType::Func { .. } => None,
+        }
+    }
+
+    fn is_leaf_reifiable_ty(&mut self, ty: Type) -> bool {
+        match compound_ty(self.types, ty) {
+            Some(CompoundType::Struct(s)) => {
+                !s.packed
+                    && s.fields
+                        .iter()
+                        .copied()
+                        .all(|field_ty| self.is_leaf_reifiable_ty(field_ty))
+            }
+            Some(CompoundType::Array { elem, .. }) => self.is_leaf_reifiable_ty(*elem),
+            Some(CompoundType::Enum(_)) => false,
+            _ => true,
+        }
+    }
+
+    fn aggregate_slice_for_leaf_range_impl(
+        &mut self,
+        ty: Type,
+        target_first_leaf: usize,
+        target_leaf_count: usize,
+        base_first_leaf: usize,
+    ) -> Option<AggregateSlice> {
+        match compound_ty(self.types, ty)? {
+            CompoundType::Struct(s) => {
+                if s.packed {
+                    return None;
+                }
+
+                let fields = s.fields.clone();
+                let mut child_first_leaf = base_first_leaf;
+                for field_ty in fields {
+                    let child_leaf_count = self.flattened_leaf_count(field_ty)?;
+                    if child_first_leaf == target_first_leaf
+                        && child_leaf_count == target_leaf_count
+                    {
+                        return Some(AggregateSlice {
+                            ty: field_ty,
+                            first_leaf: target_first_leaf,
+                            leaf_count: target_leaf_count,
+                        });
+                    }
+                    if target_first_leaf >= child_first_leaf
+                        && target_first_leaf + target_leaf_count
+                            <= child_first_leaf + child_leaf_count
+                        && let Some(slice) = self.aggregate_slice_for_leaf_range_impl(
+                            field_ty,
+                            target_first_leaf,
+                            target_leaf_count,
+                            child_first_leaf,
+                        )
+                    {
+                        return Some(slice);
+                    }
+                    child_first_leaf = child_first_leaf.checked_add(child_leaf_count)?;
+                }
+                None
+            }
+            CompoundType::Array { elem, len } => {
+                let elem = *elem;
+                let elem_leaf_count = self.flattened_leaf_count(elem)?;
+                let mut child_first_leaf = base_first_leaf;
+                for _ in 0..*len {
+                    if child_first_leaf == target_first_leaf && elem_leaf_count == target_leaf_count
+                    {
+                        return Some(AggregateSlice {
+                            ty: elem,
+                            first_leaf: target_first_leaf,
+                            leaf_count: target_leaf_count,
+                        });
+                    }
+                    if target_first_leaf >= child_first_leaf
+                        && target_first_leaf + target_leaf_count
+                            <= child_first_leaf + elem_leaf_count
+                        && let Some(slice) = self.aggregate_slice_for_leaf_range_impl(
+                            elem,
+                            target_first_leaf,
+                            target_leaf_count,
+                            child_first_leaf,
+                        )
+                    {
+                        return Some(slice);
+                    }
+                    child_first_leaf = child_first_leaf.checked_add(elem_leaf_count)?;
+                }
+                None
+            }
+            CompoundType::Enum(data) => {
+                if target_first_leaf == base_first_leaf && target_leaf_count == 1 {
+                    return Some(AggregateSlice {
+                        ty: enum_tag_ty(ty)?,
+                        first_leaf: target_first_leaf,
+                        leaf_count: target_leaf_count,
+                    });
+                }
+
+                let mut child_first_leaf = base_first_leaf.checked_add(1)?;
+                for field_ty in enum_field_tys(data) {
+                    let child_leaf_count = self.flattened_leaf_count(field_ty)?;
+                    if child_first_leaf == target_first_leaf
+                        && child_leaf_count == target_leaf_count
+                    {
+                        return Some(AggregateSlice {
+                            ty: field_ty,
+                            first_leaf: target_first_leaf,
+                            leaf_count: target_leaf_count,
+                        });
+                    }
+                    if target_first_leaf >= child_first_leaf
+                        && target_first_leaf + target_leaf_count
+                            <= child_first_leaf + child_leaf_count
+                        && let Some(slice) = self.aggregate_slice_for_leaf_range_impl(
+                            field_ty,
+                            target_first_leaf,
+                            target_leaf_count,
+                            child_first_leaf,
+                        )
+                    {
+                        return Some(slice);
+                    }
+                    child_first_leaf = child_first_leaf.checked_add(child_leaf_count)?;
+                }
+                None
+            }
+            CompoundType::Ptr(_)
+            | CompoundType::ObjRef(_)
+            | CompoundType::ConstRef(_)
+            | CompoundType::Func { .. } => None,
+        }
+    }
+
+    fn aggregate_slice_for_runtime_leaf_range_impl(
+        &mut self,
+        ty: Type,
+        target: (usize, usize),
+        base: (usize, usize),
+    ) -> Option<AggregateSlice> {
+        let (target_first_runtime_leaf, target_runtime_leaf_count) = target;
+        let (base_first_leaf, base_first_runtime_leaf) = base;
+        match compound_ty(self.types, ty)? {
+            CompoundType::Struct(s) => {
+                if s.packed {
+                    return None;
+                }
+
+                let fields = s.fields.clone();
+                let mut child_first_leaf = base_first_leaf;
+                let mut child_first_runtime_leaf = base_first_runtime_leaf;
+                for field_ty in fields {
+                    let child_leaf_count = self.flattened_leaf_count(field_ty)?;
+                    let child_runtime_leaf_count = self.runtime_leaf_count_for_ty(field_ty)?;
+                    if child_first_runtime_leaf == target_first_runtime_leaf
+                        && child_runtime_leaf_count == target_runtime_leaf_count
+                    {
+                        return Some(AggregateSlice {
+                            ty: field_ty,
+                            first_leaf: child_first_leaf,
+                            leaf_count: child_leaf_count,
+                        });
+                    }
+                    if child_runtime_leaf_count != 0
+                        && target_first_runtime_leaf >= child_first_runtime_leaf
+                        && target_first_runtime_leaf + target_runtime_leaf_count
+                            <= child_first_runtime_leaf + child_runtime_leaf_count
+                        && let Some(slice) = self.aggregate_slice_for_runtime_leaf_range_impl(
+                            field_ty,
+                            target,
+                            (child_first_leaf, child_first_runtime_leaf),
+                        )
+                    {
+                        return Some(slice);
+                    }
+                    child_first_leaf = child_first_leaf.checked_add(child_leaf_count)?;
+                    child_first_runtime_leaf =
+                        child_first_runtime_leaf.checked_add(child_runtime_leaf_count)?;
+                }
+                None
+            }
+            CompoundType::Array { elem, len } => {
+                let elem = *elem;
+                let elem_leaf_count = self.flattened_leaf_count(elem)?;
+                let elem_runtime_leaf_count = self.runtime_leaf_count_for_ty(elem)?;
+                let mut child_first_leaf = base_first_leaf;
+                let mut child_first_runtime_leaf = base_first_runtime_leaf;
+                for _ in 0..*len {
+                    if child_first_runtime_leaf == target_first_runtime_leaf
+                        && elem_runtime_leaf_count == target_runtime_leaf_count
+                    {
+                        return Some(AggregateSlice {
+                            ty: elem,
+                            first_leaf: child_first_leaf,
+                            leaf_count: elem_leaf_count,
+                        });
+                    }
+                    if elem_runtime_leaf_count != 0
+                        && target_first_runtime_leaf >= child_first_runtime_leaf
+                        && target_first_runtime_leaf + target_runtime_leaf_count
+                            <= child_first_runtime_leaf + elem_runtime_leaf_count
+                        && let Some(slice) = self.aggregate_slice_for_runtime_leaf_range_impl(
+                            elem,
+                            target,
+                            (child_first_leaf, child_first_runtime_leaf),
+                        )
+                    {
+                        return Some(slice);
+                    }
+                    child_first_leaf = child_first_leaf.checked_add(elem_leaf_count)?;
+                    child_first_runtime_leaf =
+                        child_first_runtime_leaf.checked_add(elem_runtime_leaf_count)?;
+                }
+                None
+            }
+            CompoundType::Enum(data) => {
+                if target_first_runtime_leaf == base_first_runtime_leaf
+                    && target_runtime_leaf_count == 1
+                {
+                    return Some(AggregateSlice {
+                        ty: enum_tag_ty(ty)?,
+                        first_leaf: base_first_leaf,
+                        leaf_count: 1,
+                    });
+                }
+
+                let mut child_first_leaf = base_first_leaf.checked_add(1)?;
+                let mut child_first_runtime_leaf = base_first_runtime_leaf.checked_add(1)?;
+                for field_ty in enum_field_tys(data) {
+                    let child_leaf_count = self.flattened_leaf_count(field_ty)?;
+                    let child_runtime_leaf_count = self.runtime_leaf_count_for_ty(field_ty)?;
+                    if child_first_runtime_leaf == target_first_runtime_leaf
+                        && child_runtime_leaf_count == target_runtime_leaf_count
+                    {
+                        return Some(AggregateSlice {
+                            ty: field_ty,
+                            first_leaf: child_first_leaf,
+                            leaf_count: child_leaf_count,
+                        });
+                    }
+                    if child_runtime_leaf_count != 0
+                        && target_first_runtime_leaf >= child_first_runtime_leaf
+                        && target_first_runtime_leaf + target_runtime_leaf_count
+                            <= child_first_runtime_leaf + child_runtime_leaf_count
+                        && let Some(slice) = self.aggregate_slice_for_runtime_leaf_range_impl(
+                            field_ty,
+                            target,
+                            (child_first_leaf, child_first_runtime_leaf),
+                        )
+                    {
+                        return Some(slice);
+                    }
+                    child_first_leaf = child_first_leaf.checked_add(child_leaf_count)?;
+                    child_first_runtime_leaf =
+                        child_first_runtime_leaf.checked_add(child_runtime_leaf_count)?;
+                }
+                None
+            }
+            CompoundType::Ptr(_)
+            | CompoundType::ObjRef(_)
+            | CompoundType::ConstRef(_)
+            | CompoundType::Func { .. } => None,
+        }
+    }
+
+    fn runtime_leaf_count_for_ty(&mut self, ty: Type) -> Option<usize> {
+        match compound_ty(self.types, ty) {
+            Some(CompoundType::Struct(s)) => {
+                if s.packed {
+                    return None;
+                }
+
+                let fields = s.fields.clone();
+                let mut count = 0usize;
+                for field_ty in fields {
+                    count = count.checked_add(self.runtime_leaf_count_for_ty(field_ty)?)?;
+                }
+                Some(count)
+            }
+            Some(CompoundType::Array { elem, len }) => {
+                self.runtime_leaf_count_for_ty(*elem)?.checked_mul(*len)
+            }
+            Some(CompoundType::Enum(data)) => {
+                let mut count = 1usize;
+                for field_ty in enum_field_tys(data) {
+                    count = count.checked_add(self.runtime_leaf_count_for_ty(field_ty)?)?;
+                }
+                Some(count)
+            }
+            Some(CompoundType::Func { .. }) => None,
+            Some(CompoundType::Ptr(_))
+            | Some(CompoundType::ObjRef(_))
+            | Some(CompoundType::ConstRef(_))
+            | None => Some(usize::from(self.runtime_size_bytes(ty)? != 0)),
+        }
+    }
+
+    fn flattened_leaf_boundary_for_runtime_leaf(
+        &mut self,
+        root_ty: Type,
+        runtime_leaf_boundary: usize,
+    ) -> Option<usize> {
+        let shape = self.shape(root_ty)?;
+        let total_runtime_leaf_count = shape
+            .leaves
+            .iter()
+            .filter(|leaf| leaf.size_bytes != 0)
+            .count();
+        if runtime_leaf_boundary > total_runtime_leaf_count {
+            return None;
+        }
+
+        let mut seen_runtime_leaves = 0usize;
+        for (idx, leaf) in shape.leaves.iter().enumerate() {
+            if seen_runtime_leaves == runtime_leaf_boundary {
+                return Some(idx);
+            }
+            if leaf.size_bytes != 0 {
+                seen_runtime_leaves = seen_runtime_leaves.checked_add(1)?;
+            }
+        }
+        (seen_runtime_leaves == runtime_leaf_boundary).then_some(shape.leaves.len())
+    }
+
+    fn enum_child_count(&self, enum_ty: Type) -> Option<usize> {
+        let Type::Compound(enum_cmpd) = enum_ty else {
+            return None;
+        };
+        let data = self.types.enum_data(enum_cmpd)?;
+        let mut count = 1usize;
+        for variant in &data.variants {
+            count = count.checked_add(variant.fields.len())?;
+        }
+        Some(count)
+    }
+
+    fn enum_variant_field_slot(&self, variant: EnumVariantRef, field: u32) -> Option<u32> {
+        let data = self.types.enum_data(variant.enum_ty())?;
+        let field = usize::try_from(field).ok()?;
+        let variant_idx = usize::try_from(variant.index()).ok()?;
+        let mut slot = 1u32;
+        for (idx, variant_data) in data.variants.iter().enumerate() {
+            if idx == variant_idx {
+                variant_data.fields.get(field)?;
+                return slot.checked_add(u32::try_from(field).ok()?);
+            }
+            slot = slot.checked_add(u32::try_from(variant_data.fields.len()).ok()?)?;
+        }
+        None
+    }
+
+    fn enum_slot_info(&self, enum_ty: Type, idx: u32) -> Option<EnumSlotInfo> {
+        if idx == 0 {
+            return Some(EnumSlotInfo::Tag {
+                ty: enum_tag_ty(enum_ty)?,
+            });
+        }
+
+        let Type::Compound(enum_cmpd) = enum_ty else {
+            return None;
+        };
+        let data = self.types.enum_data(enum_cmpd)?;
+        let mut slot = 1u32;
+        for (variant_idx, variant_data) in data.variants.iter().enumerate() {
+            for (field_idx, &field_ty) in variant_data.fields.iter().enumerate() {
+                if slot == idx {
+                    return Some(EnumSlotInfo::VariantField {
+                        variant: EnumVariantRef::new(
+                            enum_cmpd,
+                            u32::try_from(variant_idx).expect("enum variant index overflow"),
+                        ),
+                        field: u32::try_from(field_idx).ok()?,
+                        ty: field_ty,
+                    });
+                }
+                slot = slot.checked_add(1)?;
+            }
+        }
+        None
     }
 }
 
 pub fn aggregate_shape(module: &ModuleCtx, ty: Type) -> Option<AggregateShape> {
-    if !is_supported_scalar_shape_ty(module, ty) {
-        return None;
-    }
-
-    let mut leaves: SmallVec<[AggregateLeaf; 4]> = SmallVec::new();
-    let mut path: FieldPath = SmallVec::new();
-    flatten_aggregate(module, ty, 0, &mut path, &mut leaves)?;
-
-    Some(AggregateShape {
-        root_ty: ty,
-        leaves,
-    })
-}
-
-pub fn aggregate_runtime_leaves(module: &ModuleCtx, ty: Type) -> Option<RuntimeLeaves> {
-    Some(
-        aggregate_shape(module, ty)?
-            .leaves
-            .into_iter()
-            .filter(|leaf| leaf.size_bytes != 0)
-            .collect(),
-    )
-}
-
-pub fn aggregate_single_runtime_word_leaf(module: &ModuleCtx, ty: Type) -> Option<AggregateLeaf> {
-    let runtime_leaves = aggregate_runtime_leaves(module, ty)?;
-    let [leaf] = runtime_leaves.as_slice() else {
-        return None;
-    };
-    (leaf.size_bytes == 32).then(|| leaf.clone())
-}
-
-pub fn compatible_aggregate_bitcast_runtime_leaves(
-    module: &ModuleCtx,
-    from_ty: Type,
-    to_ty: Type,
-) -> Option<(RuntimeLeaves, RuntimeLeaves)> {
-    let src_leaves = aggregate_runtime_leaves(module, from_ty)?;
-    let dst_leaves = aggregate_runtime_leaves(module, to_ty)?;
-    if src_leaves.len() != dst_leaves.len() {
-        return None;
-    }
-    src_leaves
-        .iter()
-        .zip(&dst_leaves)
-        .all(|(src_leaf, dst_leaf)| {
-            src_leaf.offset_bytes == dst_leaf.offset_bytes
-                && src_leaf.size_bytes == dst_leaf.size_bytes
-        })
-        .then_some((src_leaves, dst_leaves))
+    with_uncached_layout(module, |layout| layout.shape(ty))
 }
 
 pub fn runtime_leaf_range_for_slice(
@@ -197,26 +1265,9 @@ pub fn runtime_leaf_range_for_slice(
     root_ty: Type,
     slice: AggregateSlice,
 ) -> Option<(usize, usize)> {
-    if !is_supported_scalar_shape_ty(module, root_ty) {
-        return None;
-    }
-
-    let total_leaf_count = flattened_leaf_count(module, root_ty)?;
-    let slice_end = slice.first_leaf.checked_add(slice.leaf_count)?;
-    if slice_end > total_leaf_count {
-        return None;
-    }
-
-    let shape = aggregate_shape(module, root_ty)?;
-    let first_runtime_leaf = shape.leaves[..slice.first_leaf]
-        .iter()
-        .filter(|leaf| leaf.size_bytes != 0)
-        .count();
-    let runtime_leaf_count = shape.leaves[slice.first_leaf..slice_end]
-        .iter()
-        .filter(|leaf| leaf.size_bytes != 0)
-        .count();
-    Some((first_runtime_leaf, runtime_leaf_count))
+    with_uncached_layout(module, |layout| {
+        layout.runtime_leaf_range_for_slice(root_ty, slice)
+    })
 }
 
 pub fn aggregate_slice_for_index(
@@ -224,7 +1275,9 @@ pub fn aggregate_slice_for_index(
     agg_ty: Type,
     idx: u32,
 ) -> Option<AggregateSlice> {
-    aggregate_slice_for_path(module, agg_ty, &[idx])
+    with_uncached_layout(module, |layout| {
+        layout.aggregate_slice_for_index(agg_ty, idx)
+    })
 }
 
 pub fn aggregate_slice_for_path(
@@ -232,15 +1285,8 @@ pub fn aggregate_slice_for_path(
     root_ty: Type,
     path: &[u32],
 ) -> Option<AggregateSlice> {
-    if !is_supported_scalar_shape_ty(module, root_ty) {
-        return None;
-    }
-
-    let (ty, first_leaf, leaf_count) = aggregate_slice_info(module, root_ty, path)?;
-    Some(AggregateSlice {
-        ty,
-        first_leaf,
-        leaf_count,
+    with_uncached_layout(module, |layout| {
+        layout.aggregate_slice_for_path(root_ty, path)
     })
 }
 
@@ -250,23 +1296,9 @@ pub fn aggregate_slice_for_leaf_range(
     first_leaf: usize,
     leaf_count: usize,
 ) -> Option<AggregateSlice> {
-    if !is_supported_scalar_shape_ty(module, root_ty) {
-        return None;
-    }
-
-    let total_leaf_count = flattened_leaf_count(module, root_ty)?;
-    if first_leaf.checked_add(leaf_count)? > total_leaf_count {
-        return None;
-    }
-    if first_leaf == 0 && leaf_count == total_leaf_count {
-        return Some(AggregateSlice {
-            ty: root_ty,
-            first_leaf: 0,
-            leaf_count,
-        });
-    }
-
-    aggregate_slice_for_leaf_range_impl(module, root_ty, first_leaf, leaf_count, 0)
+    with_uncached_layout(module, |layout| {
+        layout.aggregate_slice_for_leaf_range(root_ty, first_leaf, leaf_count)
+    })
 }
 
 pub fn aggregate_slice_for_runtime_leaf_range(
@@ -275,43 +1307,13 @@ pub fn aggregate_slice_for_runtime_leaf_range(
     first_runtime_leaf: usize,
     target_runtime_leaf_count: usize,
 ) -> Option<AggregateSlice> {
-    if !is_supported_scalar_shape_ty(module, root_ty) {
-        return None;
-    }
-
-    let total_runtime_leaf_count = runtime_leaf_count_for_ty(module, root_ty)?;
-    if first_runtime_leaf.checked_add(target_runtime_leaf_count)? > total_runtime_leaf_count {
-        return None;
-    }
-    if target_runtime_leaf_count == 0 {
-        return Some(AggregateSlice {
-            ty: root_ty,
-            first_leaf: flattened_leaf_boundary_for_runtime_leaf(
-                module,
-                root_ty,
-                first_runtime_leaf,
-            )?,
-            leaf_count: 0,
-        });
-    }
-
-    let total_leaf_count = flattened_leaf_count(module, root_ty)?;
-    if first_runtime_leaf == 0 && target_runtime_leaf_count == total_runtime_leaf_count {
-        return Some(AggregateSlice {
-            ty: root_ty,
-            first_leaf: 0,
-            leaf_count: total_leaf_count,
-        });
-    }
-
-    aggregate_slice_for_runtime_leaf_range_impl(
-        module,
-        root_ty,
-        first_runtime_leaf,
-        target_runtime_leaf_count,
-        0,
-        0,
-    )
+    with_uncached_layout(module, |layout| {
+        layout.aggregate_slice_for_runtime_leaf_range(
+            root_ty,
+            first_runtime_leaf,
+            target_runtime_leaf_count,
+        )
+    })
 }
 
 pub fn aggregate_slice_for_gep_path(
@@ -320,48 +1322,9 @@ pub fn aggregate_slice_for_gep_path(
     indices: &[ValueId],
     dfg: &DataFlowGraph,
 ) -> Option<AggregateSlice> {
-    if !is_supported_aggregate_ty(module, base_pointee_ty) {
-        return None;
-    }
-    let (&first, rest) = indices.split_first()?;
-    if const_u32(dfg, first)? != 0 {
-        return None;
-    }
-
-    let mut current_ty = base_pointee_ty;
-    let mut path: FieldPath = smallvec![];
-    for &idx_value in rest {
-        let idx = const_u32(dfg, idx_value)? as usize;
-        let cmpd = current_ty.resolve_compound(module)?;
-        match cmpd {
-            CompoundType::Struct(s) => {
-                if s.packed {
-                    return None;
-                }
-                let field_ty = *s.fields.get(idx)?;
-                path.push(u32::try_from(idx).ok()?);
-                current_ty = field_ty;
-            }
-            CompoundType::Array { elem, len } => {
-                if idx >= len {
-                    return None;
-                }
-                path.push(u32::try_from(idx).ok()?);
-                current_ty = elem;
-            }
-            CompoundType::Enum(_) => {
-                return None;
-            }
-            CompoundType::Ptr(_)
-            | CompoundType::ObjRef(_)
-            | CompoundType::ConstRef(_)
-            | CompoundType::Func { .. } => {
-                return None;
-            }
-        }
-    }
-
-    aggregate_slice_for_path(module, base_pointee_ty, &path)
+    with_uncached_layout(module, |layout| {
+        layout.aggregate_slice_for_gep_path(base_pointee_ty, indices, dfg)
+    })
 }
 
 pub fn aggregate_slice_for_object_path(
@@ -370,70 +1333,17 @@ pub fn aggregate_slice_for_object_path(
     indices: &[ValueId],
     dfg: &DataFlowGraph,
 ) -> Option<AggregateSlice> {
-    if !is_supported_aggregate_ty(module, root_ty) {
-        return None;
-    }
-
-    let mut current_ty = root_ty;
-    let mut path: FieldPath = smallvec![];
-    for &idx_value in indices {
-        let idx = usize::try_from(const_u32(dfg, idx_value)?).ok()?;
-        match current_ty.resolve_compound(module)? {
-            CompoundType::Struct(s) => {
-                if s.packed {
-                    return None;
-                }
-                let field_ty = *s.fields.get(idx)?;
-                path.push(u32::try_from(idx).ok()?);
-                current_ty = field_ty;
-            }
-            CompoundType::Array { elem, len } => {
-                if idx >= len {
-                    return None;
-                }
-                path.push(u32::try_from(idx).ok()?);
-                current_ty = elem;
-            }
-            CompoundType::Enum(_) => {
-                return None;
-            }
-            CompoundType::Ptr(_)
-            | CompoundType::ObjRef(_)
-            | CompoundType::ConstRef(_)
-            | CompoundType::Func { .. } => {
-                return None;
-            }
-        }
-    }
-
-    aggregate_slice_for_path(module, root_ty, &path)
+    with_uncached_layout(module, |layout| {
+        layout.aggregate_slice_for_object_path(root_ty, indices, dfg)
+    })
 }
 
 pub fn aggregate_child_ty(module: &ModuleCtx, agg_ty: Type, idx: u32) -> Option<Type> {
-    let idx = usize::try_from(idx).ok()?;
-    match agg_ty.resolve_compound(module)? {
-        CompoundType::Struct(s) => (!s.packed).then_some(*s.fields.get(idx)?),
-        CompoundType::Array { elem, len } => (idx < len).then_some(elem),
-        CompoundType::Enum(_) => {
-            enum_slot_info(module, agg_ty, u32::try_from(idx).ok()?).map(|slot| slot.ty())
-        }
-        CompoundType::Ptr(_)
-        | CompoundType::ObjRef(_)
-        | CompoundType::ConstRef(_)
-        | CompoundType::Func { .. } => None,
-    }
+    with_uncached_layout(module, |layout| layout.aggregate_child_ty(agg_ty, idx))
 }
 
 pub fn aggregate_child_count(module: &ModuleCtx, agg_ty: Type) -> Option<usize> {
-    match agg_ty.resolve_compound(module)? {
-        CompoundType::Struct(s) => (!s.packed).then_some(s.fields.len()),
-        CompoundType::Array { len, .. } => Some(len),
-        CompoundType::Enum(_) => enum_child_count(module, agg_ty),
-        CompoundType::Ptr(_)
-        | CompoundType::ObjRef(_)
-        | CompoundType::ConstRef(_)
-        | CompoundType::Func { .. } => None,
-    }
+    with_uncached_layout(module, |layout| layout.aggregate_child_count(agg_ty))
 }
 
 pub fn struct_field_offset_bytes(
@@ -442,23 +1352,9 @@ pub fn struct_field_offset_bytes(
     idx: usize,
     module: &ModuleCtx,
 ) -> Option<(u32, Type)> {
-    if packed {
-        return None;
-    }
-    let &field_ty = fields.get(idx)?;
-    let mut offset = 0u32;
-
-    for &ty in fields.iter().take(idx) {
-        let (_, align) = runtime_size_align_bytes(module, ty)?;
-        offset = align_to(offset, align)?;
-
-        let (size, _) = runtime_size_align_bytes(module, ty)?;
-        offset = offset.checked_add(size)?;
-    }
-
-    let (_, align) = runtime_size_align_bytes(module, field_ty)?;
-    offset = align_to(offset, align)?;
-    Some((offset, field_ty))
+    with_uncached_layout(module, |layout| {
+        layout.struct_field_offset_bytes(fields, packed, idx)
+    })
 }
 
 pub fn align_to(offset: u32, align: u32) -> Option<u32> {
@@ -486,17 +1382,7 @@ pub fn const_u32(dfg: &DataFlowGraph, value: ValueId) -> Option<u32> {
 /// This intentionally excludes enums. Enums participate in scalar-shape
 /// flattening, but they must be rebuilt with enum-specific ops.
 pub fn is_supported_aggregate_ty(module: &ModuleCtx, ty: Type) -> bool {
-    match ty.resolve_compound(module) {
-        Some(CompoundType::Struct(s)) => {
-            !s.packed
-                && s.fields
-                    .iter()
-                    .copied()
-                    .all(|field_ty| runtime_size_align_bytes(module, field_ty).is_some())
-        }
-        Some(CompoundType::Array { elem, .. }) => runtime_size_align_bytes(module, elem).is_some(),
-        _ => false,
-    }
+    with_uncached_layout(module, |layout| layout.is_supported_aggregate_ty(ty))
 }
 
 /// Returns whether `ty` can be flattened into runtime leaves for scalar-shape
@@ -506,24 +1392,7 @@ pub fn is_supported_aggregate_ty(module: &ModuleCtx, ty: Type) -> bool {
 /// enum-bearing structs and arrays can still participate in scalar-shape
 /// analyses, even though enums are not generic aggregate-op destinations.
 pub fn is_supported_scalar_shape_ty(module: &ModuleCtx, ty: Type) -> bool {
-    match ty.resolve_compound(module) {
-        Some(CompoundType::Struct(s)) => {
-            !s.packed
-                && s.fields
-                    .iter()
-                    .copied()
-                    .all(|field_ty| runtime_size_align_bytes(module, field_ty).is_some())
-        }
-        Some(CompoundType::Array { elem, .. }) => runtime_size_align_bytes(module, elem).is_some(),
-        Some(CompoundType::Enum(data)) => data.variants.iter().all(|variant| {
-            variant
-                .fields
-                .iter()
-                .copied()
-                .all(|field_ty| runtime_size_align_bytes(module, field_ty).is_some())
-        }),
-        _ => false,
-    }
+    with_uncached_layout(module, |layout| layout.is_supported_scalar_shape_ty(ty))
 }
 
 /// Returns whether `ty` can always be rebuilt from an arbitrary runtime leaf
@@ -534,580 +1403,11 @@ pub fn is_supported_scalar_shape_ty(module: &ModuleCtx, ty: Type) -> bool {
 /// leaf SSA state would require recovering the active variant from dynamic tag
 /// leaves.
 pub fn is_leaf_reifiable_ty(module: &ModuleCtx, ty: Type) -> bool {
-    match ty.resolve_compound(module) {
-        Some(CompoundType::Struct(s)) => {
-            !s.packed
-                && s.fields
-                    .iter()
-                    .copied()
-                    .all(|field| is_leaf_reifiable_ty(module, field))
-        }
-        Some(CompoundType::Array { elem, .. }) => is_leaf_reifiable_ty(module, elem),
-        Some(CompoundType::Enum(_)) => false,
-        _ => true,
-    }
+    with_uncached_layout(module, |layout| layout.is_leaf_reifiable_ty(ty))
 }
 
 pub fn runtime_size_bytes(module: &ModuleCtx, ty: Type) -> Option<u32> {
-    runtime_size_align_bytes(module, ty).map(|(size, _)| size)
-}
-
-fn runtime_size_align_bytes(module: &ModuleCtx, ty: Type) -> Option<(u32, u32)> {
-    if ty.is_enum_tag() {
-        let word_ty = module.type_layout.pointer_repl();
-        let size = u32::try_from(module.size_of(word_ty).ok()?).ok()?;
-        let align = u32::try_from(module.align_of(word_ty).ok()?).ok()?;
-        return Some((size, align));
-    }
-
-    match ty.resolve_compound(module) {
-        Some(CompoundType::Struct(s)) => {
-            if s.packed {
-                return None;
-            }
-
-            let mut size = 0u32;
-            let mut align = 1u32;
-            for &field_ty in &s.fields {
-                let (field_size, field_align) = runtime_size_align_bytes(module, field_ty)?;
-                size = align_to(size, field_align)?;
-                size = size.checked_add(field_size)?;
-                align = align.max(field_align);
-            }
-            Some((size, align))
-        }
-        Some(CompoundType::Array { elem, len }) => {
-            let (elem_size, elem_align) = runtime_size_align_bytes(module, elem)?;
-            Some((elem_size.checked_mul(u32::try_from(len).ok()?)?, elem_align))
-        }
-        Some(CompoundType::Enum(_)) => {
-            let size = u32::try_from(module.size_of(ty).ok()?).ok()?;
-            let align = u32::try_from(module.align_of(ty).ok()?).ok()?;
-            Some((size, align))
-        }
-        Some(CompoundType::Func { .. }) => None,
-        Some(CompoundType::Ptr(_))
-        | Some(CompoundType::ObjRef(_))
-        | Some(CompoundType::ConstRef(_)) => {
-            let word_ty = module.type_layout.pointer_repl();
-            let size = u32::try_from(module.size_of(word_ty).ok()?).ok()?;
-            let align = u32::try_from(module.align_of(word_ty).ok()?).ok()?;
-            Some((size, align))
-        }
-        None => {
-            let size = u32::try_from(module.size_of(ty).ok()?).ok()?;
-            let align = u32::try_from(module.align_of(ty).ok()?).ok()?;
-            Some((size, align))
-        }
-    }
-}
-
-fn aggregate_slice_info(
-    module: &ModuleCtx,
-    ty: Type,
-    path: &[u32],
-) -> Option<(Type, usize, usize)> {
-    if path.is_empty() {
-        return Some((ty, 0, flattened_leaf_count(module, ty)?));
-    }
-
-    let idx = usize::try_from(path[0]).ok()?;
-    match ty.resolve_compound(module)? {
-        CompoundType::Struct(s) => {
-            if s.packed {
-                return None;
-            }
-
-            let child_ty = *s.fields.get(idx)?;
-            let mut first_leaf = 0usize;
-            for &field_ty in s.fields.iter().take(idx) {
-                first_leaf = first_leaf.checked_add(flattened_leaf_count(module, field_ty)?)?;
-            }
-
-            let (nested_ty, nested_first_leaf, leaf_count) =
-                aggregate_slice_info(module, child_ty, &path[1..])?;
-            Some((
-                nested_ty,
-                first_leaf.checked_add(nested_first_leaf)?,
-                leaf_count,
-            ))
-        }
-        CompoundType::Array { elem, len } => {
-            if idx >= len {
-                return None;
-            }
-
-            let elem_leaf_count = flattened_leaf_count(module, elem)?;
-            let first_leaf = elem_leaf_count.checked_mul(idx)?;
-            let (nested_ty, nested_first_leaf, leaf_count) =
-                aggregate_slice_info(module, elem, &path[1..])?;
-            Some((
-                nested_ty,
-                first_leaf.checked_add(nested_first_leaf)?,
-                leaf_count,
-            ))
-        }
-        CompoundType::Enum(_) => {
-            let slot = enum_slot_info(module, ty, path[0])?;
-            match slot {
-                EnumSlotInfo::Tag { ty: tag_ty } => (path.len() == 1).then_some((tag_ty, 0, 1)),
-                EnumSlotInfo::VariantField {
-                    variant,
-                    field,
-                    ty: field_ty,
-                } => {
-                    let first_leaf = enum_variant_field_first_leaf(module, ty, variant, field)?;
-                    let (nested_ty, nested_first_leaf, leaf_count) =
-                        aggregate_slice_info(module, field_ty, &path[1..])?;
-                    Some((
-                        nested_ty,
-                        first_leaf.checked_add(nested_first_leaf)?,
-                        leaf_count,
-                    ))
-                }
-            }
-        }
-        CompoundType::Ptr(_)
-        | CompoundType::ObjRef(_)
-        | CompoundType::ConstRef(_)
-        | CompoundType::Func { .. } => None,
-    }
-}
-
-fn aggregate_slice_for_leaf_range_impl(
-    module: &ModuleCtx,
-    ty: Type,
-    target_first_leaf: usize,
-    target_leaf_count: usize,
-    base_first_leaf: usize,
-) -> Option<AggregateSlice> {
-    match ty.resolve_compound(module)? {
-        CompoundType::Struct(s) => {
-            if s.packed {
-                return None;
-            }
-
-            let mut child_first_leaf = base_first_leaf;
-            for &field_ty in &s.fields {
-                let child_leaf_count = flattened_leaf_count(module, field_ty)?;
-                if child_first_leaf == target_first_leaf && child_leaf_count == target_leaf_count {
-                    return Some(AggregateSlice {
-                        ty: field_ty,
-                        first_leaf: target_first_leaf,
-                        leaf_count: target_leaf_count,
-                    });
-                }
-                if target_first_leaf >= child_first_leaf
-                    && target_first_leaf + target_leaf_count <= child_first_leaf + child_leaf_count
-                    && let Some(slice) = aggregate_slice_for_leaf_range_impl(
-                        module,
-                        field_ty,
-                        target_first_leaf,
-                        target_leaf_count,
-                        child_first_leaf,
-                    )
-                {
-                    return Some(slice);
-                }
-                child_first_leaf = child_first_leaf.checked_add(child_leaf_count)?;
-            }
-            None
-        }
-        CompoundType::Array { elem, len } => {
-            let elem_leaf_count = flattened_leaf_count(module, elem)?;
-            let mut child_first_leaf = base_first_leaf;
-            for _ in 0..len {
-                if child_first_leaf == target_first_leaf && elem_leaf_count == target_leaf_count {
-                    return Some(AggregateSlice {
-                        ty: elem,
-                        first_leaf: target_first_leaf,
-                        leaf_count: target_leaf_count,
-                    });
-                }
-                if target_first_leaf >= child_first_leaf
-                    && target_first_leaf + target_leaf_count <= child_first_leaf + elem_leaf_count
-                    && let Some(slice) = aggregate_slice_for_leaf_range_impl(
-                        module,
-                        elem,
-                        target_first_leaf,
-                        target_leaf_count,
-                        child_first_leaf,
-                    )
-                {
-                    return Some(slice);
-                }
-                child_first_leaf = child_first_leaf.checked_add(elem_leaf_count)?;
-            }
-            None
-        }
-        CompoundType::Enum(_) => {
-            if target_first_leaf == base_first_leaf && target_leaf_count == 1 {
-                return Some(AggregateSlice {
-                    ty: enum_tag_ty(ty)?,
-                    first_leaf: target_first_leaf,
-                    leaf_count: target_leaf_count,
-                });
-            }
-
-            let Type::Compound(enum_ty) = ty else {
-                return None;
-            };
-            let data = module.with_ty_store(|store| store.enum_data(enum_ty).cloned())?;
-            let mut child_first_leaf = base_first_leaf.checked_add(1)?;
-            for variant_data in &data.variants {
-                for &field_ty in &variant_data.fields {
-                    let child_leaf_count = flattened_leaf_count(module, field_ty)?;
-                    if child_first_leaf == target_first_leaf
-                        && child_leaf_count == target_leaf_count
-                    {
-                        return Some(AggregateSlice {
-                            ty: field_ty,
-                            first_leaf: target_first_leaf,
-                            leaf_count: target_leaf_count,
-                        });
-                    }
-                    if target_first_leaf >= child_first_leaf
-                        && target_first_leaf + target_leaf_count
-                            <= child_first_leaf + child_leaf_count
-                        && let Some(slice) = aggregate_slice_for_leaf_range_impl(
-                            module,
-                            field_ty,
-                            target_first_leaf,
-                            target_leaf_count,
-                            child_first_leaf,
-                        )
-                    {
-                        return Some(slice);
-                    }
-                    child_first_leaf = child_first_leaf.checked_add(child_leaf_count)?;
-                }
-            }
-            None
-        }
-        CompoundType::Ptr(_)
-        | CompoundType::ObjRef(_)
-        | CompoundType::ConstRef(_)
-        | CompoundType::Func { .. } => None,
-    }
-}
-
-fn aggregate_slice_for_runtime_leaf_range_impl(
-    module: &ModuleCtx,
-    ty: Type,
-    target_first_runtime_leaf: usize,
-    target_runtime_leaf_count: usize,
-    base_first_leaf: usize,
-    base_first_runtime_leaf: usize,
-) -> Option<AggregateSlice> {
-    match ty.resolve_compound(module)? {
-        CompoundType::Struct(s) => {
-            if s.packed {
-                return None;
-            }
-
-            let mut child_first_leaf = base_first_leaf;
-            let mut child_first_runtime_leaf = base_first_runtime_leaf;
-            for &field_ty in &s.fields {
-                let child_leaf_count = flattened_leaf_count(module, field_ty)?;
-                let child_runtime_leaf_count = runtime_leaf_count_for_ty(module, field_ty)?;
-                if child_first_runtime_leaf == target_first_runtime_leaf
-                    && child_runtime_leaf_count == target_runtime_leaf_count
-                {
-                    return Some(AggregateSlice {
-                        ty: field_ty,
-                        first_leaf: child_first_leaf,
-                        leaf_count: child_leaf_count,
-                    });
-                }
-                if child_runtime_leaf_count != 0
-                    && target_first_runtime_leaf >= child_first_runtime_leaf
-                    && target_first_runtime_leaf + target_runtime_leaf_count
-                        <= child_first_runtime_leaf + child_runtime_leaf_count
-                    && let Some(slice) = aggregate_slice_for_runtime_leaf_range_impl(
-                        module,
-                        field_ty,
-                        target_first_runtime_leaf,
-                        target_runtime_leaf_count,
-                        child_first_leaf,
-                        child_first_runtime_leaf,
-                    )
-                {
-                    return Some(slice);
-                }
-                child_first_leaf = child_first_leaf.checked_add(child_leaf_count)?;
-                child_first_runtime_leaf =
-                    child_first_runtime_leaf.checked_add(child_runtime_leaf_count)?;
-            }
-            None
-        }
-        CompoundType::Array { elem, len } => {
-            let elem_leaf_count = flattened_leaf_count(module, elem)?;
-            let elem_runtime_leaf_count = runtime_leaf_count_for_ty(module, elem)?;
-            let mut child_first_leaf = base_first_leaf;
-            let mut child_first_runtime_leaf = base_first_runtime_leaf;
-            for _ in 0..len {
-                if child_first_runtime_leaf == target_first_runtime_leaf
-                    && elem_runtime_leaf_count == target_runtime_leaf_count
-                {
-                    return Some(AggregateSlice {
-                        ty: elem,
-                        first_leaf: child_first_leaf,
-                        leaf_count: elem_leaf_count,
-                    });
-                }
-                if elem_runtime_leaf_count != 0
-                    && target_first_runtime_leaf >= child_first_runtime_leaf
-                    && target_first_runtime_leaf + target_runtime_leaf_count
-                        <= child_first_runtime_leaf + elem_runtime_leaf_count
-                    && let Some(slice) = aggregate_slice_for_runtime_leaf_range_impl(
-                        module,
-                        elem,
-                        target_first_runtime_leaf,
-                        target_runtime_leaf_count,
-                        child_first_leaf,
-                        child_first_runtime_leaf,
-                    )
-                {
-                    return Some(slice);
-                }
-                child_first_leaf = child_first_leaf.checked_add(elem_leaf_count)?;
-                child_first_runtime_leaf =
-                    child_first_runtime_leaf.checked_add(elem_runtime_leaf_count)?;
-            }
-            None
-        }
-        CompoundType::Enum(_) => {
-            if target_first_runtime_leaf == base_first_runtime_leaf
-                && target_runtime_leaf_count == 1
-            {
-                return Some(AggregateSlice {
-                    ty: enum_tag_ty(ty)?,
-                    first_leaf: base_first_leaf,
-                    leaf_count: 1,
-                });
-            }
-
-            let Type::Compound(enum_ty) = ty else {
-                return None;
-            };
-            let data = module.with_ty_store(|store| store.enum_data(enum_ty).cloned())?;
-            let mut child_first_leaf = base_first_leaf.checked_add(1)?;
-            let mut child_first_runtime_leaf = base_first_runtime_leaf.checked_add(1)?;
-            for variant_data in &data.variants {
-                for &field_ty in &variant_data.fields {
-                    let child_leaf_count = flattened_leaf_count(module, field_ty)?;
-                    let child_runtime_leaf_count = runtime_leaf_count_for_ty(module, field_ty)?;
-                    if child_first_runtime_leaf == target_first_runtime_leaf
-                        && child_runtime_leaf_count == target_runtime_leaf_count
-                    {
-                        return Some(AggregateSlice {
-                            ty: field_ty,
-                            first_leaf: child_first_leaf,
-                            leaf_count: child_leaf_count,
-                        });
-                    }
-                    if child_runtime_leaf_count != 0
-                        && target_first_runtime_leaf >= child_first_runtime_leaf
-                        && target_first_runtime_leaf + target_runtime_leaf_count
-                            <= child_first_runtime_leaf + child_runtime_leaf_count
-                        && let Some(slice) = aggregate_slice_for_runtime_leaf_range_impl(
-                            module,
-                            field_ty,
-                            target_first_runtime_leaf,
-                            target_runtime_leaf_count,
-                            child_first_leaf,
-                            child_first_runtime_leaf,
-                        )
-                    {
-                        return Some(slice);
-                    }
-                    child_first_leaf = child_first_leaf.checked_add(child_leaf_count)?;
-                    child_first_runtime_leaf =
-                        child_first_runtime_leaf.checked_add(child_runtime_leaf_count)?;
-                }
-            }
-            None
-        }
-        CompoundType::Ptr(_)
-        | CompoundType::ObjRef(_)
-        | CompoundType::ConstRef(_)
-        | CompoundType::Func { .. } => None,
-    }
-}
-
-fn flattened_leaf_count(module: &ModuleCtx, ty: Type) -> Option<usize> {
-    match ty.resolve_compound(module) {
-        Some(CompoundType::Struct(s)) => {
-            if s.packed {
-                return None;
-            }
-
-            let mut count = 0usize;
-            for &field_ty in &s.fields {
-                count = count.checked_add(flattened_leaf_count(module, field_ty)?)?;
-            }
-            Some(count)
-        }
-        Some(CompoundType::Array { elem, len }) => {
-            flattened_leaf_count(module, elem)?.checked_mul(len)
-        }
-        Some(CompoundType::Enum(data)) => {
-            let mut count = 1usize;
-            for variant in &data.variants {
-                for &field_ty in &variant.fields {
-                    count = count.checked_add(flattened_leaf_count(module, field_ty)?)?;
-                }
-            }
-            Some(count)
-        }
-        Some(CompoundType::Func { .. }) => None,
-        Some(CompoundType::Ptr(_))
-        | Some(CompoundType::ObjRef(_))
-        | Some(CompoundType::ConstRef(_))
-        | None => Some(1),
-    }
-}
-
-fn runtime_leaf_count_for_ty(module: &ModuleCtx, ty: Type) -> Option<usize> {
-    match ty.resolve_compound(module) {
-        Some(CompoundType::Struct(s)) => {
-            if s.packed {
-                return None;
-            }
-
-            let mut count = 0usize;
-            for &field_ty in &s.fields {
-                count = count.checked_add(runtime_leaf_count_for_ty(module, field_ty)?)?;
-            }
-            Some(count)
-        }
-        Some(CompoundType::Array { elem, len }) => {
-            runtime_leaf_count_for_ty(module, elem)?.checked_mul(len)
-        }
-        Some(CompoundType::Enum(data)) => {
-            let mut count = 1usize;
-            for variant in &data.variants {
-                for &field_ty in &variant.fields {
-                    count = count.checked_add(runtime_leaf_count_for_ty(module, field_ty)?)?;
-                }
-            }
-            Some(count)
-        }
-        Some(CompoundType::Func { .. }) => None,
-        Some(CompoundType::Ptr(_))
-        | Some(CompoundType::ObjRef(_))
-        | Some(CompoundType::ConstRef(_))
-        | None => Some(usize::from(runtime_size_bytes(module, ty)? != 0)),
-    }
-}
-
-fn flattened_leaf_boundary_for_runtime_leaf(
-    module: &ModuleCtx,
-    root_ty: Type,
-    runtime_leaf_boundary: usize,
-) -> Option<usize> {
-    let shape = aggregate_shape(module, root_ty)?;
-    let total_runtime_leaf_count = shape
-        .leaves
-        .iter()
-        .filter(|leaf| leaf.size_bytes != 0)
-        .count();
-    if runtime_leaf_boundary > total_runtime_leaf_count {
-        return None;
-    }
-
-    let mut seen_runtime_leaves = 0usize;
-    for (idx, leaf) in shape.leaves.iter().enumerate() {
-        if seen_runtime_leaves == runtime_leaf_boundary {
-            return Some(idx);
-        }
-        if leaf.size_bytes != 0 {
-            seen_runtime_leaves = seen_runtime_leaves.checked_add(1)?;
-        }
-    }
-    (seen_runtime_leaves == runtime_leaf_boundary).then_some(shape.leaves.len())
-}
-
-fn flatten_aggregate(
-    module: &ModuleCtx,
-    ty: Type,
-    base_offset: u32,
-    path: &mut FieldPath,
-    out: &mut SmallVec<[AggregateLeaf; 4]>,
-) -> Option<()> {
-    match ty.resolve_compound(module) {
-        Some(CompoundType::Struct(s)) => {
-            if s.packed {
-                return None;
-            }
-
-            for (idx, &field_ty) in s.fields.iter().enumerate() {
-                let (field_offset, _) =
-                    struct_field_offset_bytes(&s.fields, s.packed, idx, module)?;
-                let total_offset = base_offset.checked_add(field_offset)?;
-
-                path.push(u32::try_from(idx).ok()?);
-                flatten_aggregate(module, field_ty, total_offset, path, out)?;
-                path.pop();
-            }
-            Some(())
-        }
-        Some(CompoundType::Array { elem, len }) => {
-            let elem_size = runtime_size_bytes(module, elem)?;
-            for idx in 0..len {
-                let offset = elem_size.checked_mul(u32::try_from(idx).ok()?)?;
-                let total_offset = base_offset.checked_add(offset)?;
-                path.push(u32::try_from(idx).ok()?);
-                flatten_aggregate(module, elem, total_offset, path, out)?;
-                path.pop();
-            }
-            Some(())
-        }
-        Some(CompoundType::Enum(data)) => {
-            let tag_ty = enum_tag_ty(ty)?;
-            let tag_size = runtime_size_bytes(module, tag_ty)?;
-            path.push(0);
-            out.push(AggregateLeaf {
-                path: path.clone(),
-                ty: tag_ty,
-                offset_bytes: base_offset,
-                size_bytes: tag_size,
-            });
-            path.pop();
-
-            let Type::Compound(_enum_ty) = ty else {
-                return None;
-            };
-            let mut slot = 1u32;
-            let mut offset = base_offset.checked_add(tag_size)?;
-            for variant in &data.variants {
-                for &field_ty in &variant.fields {
-                    let (field_size, field_align) = runtime_size_align_bytes(module, field_ty)?;
-                    offset = align_to(offset, field_align)?;
-                    path.push(slot);
-                    flatten_aggregate(module, field_ty, offset, path, out)?;
-                    path.pop();
-                    offset = offset.checked_add(field_size)?;
-                    slot = slot.checked_add(1)?;
-                }
-            }
-            Some(())
-        }
-        Some(CompoundType::Ptr(_))
-        | Some(CompoundType::ObjRef(_))
-        | Some(CompoundType::ConstRef(_))
-        | None => {
-            let size = runtime_size_bytes(module, ty)?;
-            out.push(AggregateLeaf {
-                path: path.clone(),
-                ty,
-                offset_bytes: base_offset,
-                size_bytes: size,
-            });
-            Some(())
-        }
-        Some(CompoundType::Func { .. }) => None,
-    }
+    with_uncached_layout(module, |layout| layout.runtime_size_bytes(ty))
 }
 
 pub fn enum_tag_ty(ty: Type) -> Option<Type> {
@@ -1117,65 +1417,8 @@ pub fn enum_tag_ty(ty: Type) -> Option<Type> {
     Some(Type::EnumTag(enum_ty))
 }
 
-pub fn enum_child_count(module: &ModuleCtx, enum_ty: Type) -> Option<usize> {
-    let Type::Compound(enum_cmpd) = enum_ty else {
-        return None;
-    };
-    let data = module.with_ty_store(|store| store.enum_data(enum_cmpd).cloned())?;
-    let mut count = 1usize;
-    for variant in &data.variants {
-        count = count.checked_add(variant.fields.len())?;
-    }
-    Some(count)
-}
-
-pub fn enum_variant_field_slot(
-    module: &ModuleCtx,
-    variant: EnumVariantRef,
-    field: u32,
-) -> Option<u32> {
-    let data = module.with_ty_store(|store| store.enum_data(variant.enum_ty()).cloned())?;
-    let field = usize::try_from(field).ok()?;
-    let variant_idx = usize::try_from(variant.index()).ok()?;
-    let mut slot = 1u32;
-    for (idx, variant_data) in data.variants.iter().enumerate() {
-        if idx == variant_idx {
-            variant_data.fields.get(field)?;
-            return slot.checked_add(u32::try_from(field).ok()?);
-        }
-        slot = slot.checked_add(u32::try_from(variant_data.fields.len()).ok()?)?;
-    }
-    None
-}
-
 pub fn enum_slot_info(module: &ModuleCtx, enum_ty: Type, idx: u32) -> Option<EnumSlotInfo> {
-    if idx == 0 {
-        return Some(EnumSlotInfo::Tag {
-            ty: enum_tag_ty(enum_ty)?,
-        });
-    }
-
-    let Type::Compound(enum_cmpd) = enum_ty else {
-        return None;
-    };
-    let data = module.with_ty_store(|store| store.enum_data(enum_cmpd).cloned())?;
-    let mut slot = 1u32;
-    for (variant_idx, variant_data) in data.variants.iter().enumerate() {
-        for (field_idx, &field_ty) in variant_data.fields.iter().enumerate() {
-            if slot == idx {
-                return Some(EnumSlotInfo::VariantField {
-                    variant: EnumVariantRef::new(
-                        enum_cmpd,
-                        u32::try_from(variant_idx).expect("enum variant index overflow"),
-                    ),
-                    field: u32::try_from(field_idx).ok()?,
-                    ty: field_ty,
-                });
-            }
-            slot = slot.checked_add(1)?;
-        }
-    }
-    None
+    with_uncached_layout(module, |layout| layout.enum_slot_info(enum_ty, idx))
 }
 
 pub fn enum_tag_slice(module: &ModuleCtx, enum_ty: Type) -> Option<AggregateSlice> {
@@ -1188,26 +1431,9 @@ pub fn enum_variant_field_slice(
     variant: EnumVariantRef,
     field: u32,
 ) -> Option<AggregateSlice> {
-    aggregate_slice_for_index(
-        module,
-        enum_ty,
-        enum_variant_field_slot(module, variant, field)?,
-    )
-}
-
-fn enum_variant_field_first_leaf(
-    module: &ModuleCtx,
-    enum_ty: Type,
-    variant: EnumVariantRef,
-    field: u32,
-) -> Option<usize> {
-    let slot = usize::try_from(enum_variant_field_slot(module, variant, field)?).ok()?;
-    let mut first_leaf = 0usize;
-    for idx in 0..slot {
-        let child_ty = aggregate_child_ty(module, enum_ty, u32::try_from(idx).ok()?)?;
-        first_leaf = first_leaf.checked_add(flattened_leaf_count(module, child_ty)?)?;
-    }
-    Some(first_leaf)
+    with_uncached_layout(module, |layout| {
+        layout.enum_variant_field_slice(enum_ty, variant, field)
+    })
 }
 
 #[cfg(test)]

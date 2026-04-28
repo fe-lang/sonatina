@@ -108,7 +108,14 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
 
         let mut plan =
             if limit <= self.ctx.reach.swap_max && desired.len() <= self.ctx.reach.swap_max {
-                solve_optimal_normalize_plan(self.ctx, self.stack, desired, &cost, search_cfg)
+                solve_optimal_normalize_plan(
+                    self.ctx,
+                    self.stack,
+                    desired,
+                    &cost,
+                    search_cfg,
+                    self.search_scratch,
+                )
             } else {
                 None
             };
@@ -126,7 +133,13 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
 
             if start_repair <= self.ctx.reach.swap_max && goal_repair <= self.ctx.reach.swap_max {
                 plan = solve_optimal_repair_normalize_plan(
-                    self.ctx, self.stack, desired, base_len, &cost, search_cfg,
+                    self.ctx,
+                    self.stack,
+                    desired,
+                    base_len,
+                    &cost,
+                    search_cfg,
+                    self.search_scratch,
                 );
             }
         }

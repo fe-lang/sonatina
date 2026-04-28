@@ -152,8 +152,8 @@ pub(crate) fn enum_write_variant_slices(
 mod tests {
     use super::*;
     use crate::transform::aggregate::{
-        collect_root_provenance,
         object_tracking::{collect_root_slices, objref_element_ty},
+        provenance::collect_root_provenance,
         shape,
     };
     use sonatina_ir::module::FuncRef;

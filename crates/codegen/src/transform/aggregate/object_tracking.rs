@@ -8,7 +8,9 @@ use sonatina_ir::{
 
 use super::{
     LocalObjectArgInfo, ObjectEffectSummaryMap, ObjectReturnEffect,
-    provenance::{CompleteProvenance, CompleteRootSet},
+    provenance::{
+        CompleteProvenance, CompleteRootSet, MayProvenance, ProvenanceFacts, ProvenanceSnapshot,
+    },
     shape,
 };
 
@@ -25,6 +27,140 @@ pub(crate) struct ObjectSlice {
 pub(crate) enum TrackedObject {
     Exact(ObjectSlice),
     RootUnknown { root: ValueId, total_leaves: usize },
+}
+
+pub(crate) struct AggregateFacts {
+    root_slices: FxHashMap<ValueId, shape::AggregateSlice>,
+    provenance: ProvenanceFacts,
+}
+
+impl AggregateFacts {
+    pub(crate) fn from_root_slices(
+        func: &Function,
+        module: &ModuleCtx,
+        root_slices: FxHashMap<ValueId, shape::AggregateSlice>,
+        layout_cache: &mut shape::AggregateLayoutCache,
+        snapshot: &mut ProvenanceSnapshot<'_>,
+    ) -> Self {
+        let provenance = snapshot.collect_root_provenance(func, module, &root_slices, layout_cache);
+        Self {
+            root_slices,
+            provenance,
+        }
+    }
+
+    pub(crate) fn for_local_objects(
+        func: &Function,
+        local_object_args: Option<&FxHashMap<usize, LocalObjectArgInfo>>,
+        layout_cache: &mut shape::AggregateLayoutCache,
+        snapshot: &mut ProvenanceSnapshot<'_>,
+    ) -> Self {
+        let root_slices = collect_root_slices(func, local_object_args, layout_cache);
+        Self::from_root_slices(func, func.ctx(), root_slices, layout_cache, snapshot)
+    }
+
+    pub(crate) fn for_all_objref_args(
+        func: &Function,
+        layout_cache: &mut shape::AggregateLayoutCache,
+        snapshot: &mut ProvenanceSnapshot<'_>,
+    ) -> Self {
+        let root_slices = collect_all_objref_arg_root_slices(func, layout_cache);
+        Self::from_root_slices(func, func.ctx(), root_slices, layout_cache, snapshot)
+    }
+
+    pub(crate) fn for_call_planner(
+        func: &Function,
+        layout_cache: &mut shape::AggregateLayoutCache,
+        snapshot: &mut ProvenanceSnapshot<'_>,
+    ) -> Self {
+        let object_effects = snapshot
+            .object_effects()
+            .expect("call planner facts require object effects");
+        let root_slices = collect_call_planner_root_slices(func, object_effects, layout_cache);
+        Self::from_root_slices(func, func.ctx(), root_slices, layout_cache, snapshot)
+    }
+
+    pub(crate) fn root_slices(&self) -> &FxHashMap<ValueId, shape::AggregateSlice> {
+        &self.root_slices
+    }
+
+    pub(crate) fn complete(&self) -> CompleteProvenance<'_> {
+        self.provenance.complete()
+    }
+
+    pub(crate) fn may(&self) -> MayProvenance<'_> {
+        self.provenance.may()
+    }
+
+    pub(crate) fn into_provenance(self) -> ProvenanceFacts {
+        self.provenance
+    }
+}
+
+pub(crate) struct AggregateObjectFacts {
+    facts: AggregateFacts,
+    tracked: SecondaryMap<ValueId, Option<TrackedObject>>,
+}
+
+impl AggregateObjectFacts {
+    pub(crate) fn from_facts(
+        func: &Function,
+        facts: AggregateFacts,
+        layout_cache: &mut shape::AggregateLayoutCache,
+    ) -> Self {
+        let tracked = collect_tracked_objects(func, facts.complete(), layout_cache);
+        Self { facts, tracked }
+    }
+
+    pub(crate) fn for_local_objects(
+        func: &Function,
+        local_object_args: Option<&FxHashMap<usize, LocalObjectArgInfo>>,
+        layout_cache: &mut shape::AggregateLayoutCache,
+        snapshot: &mut ProvenanceSnapshot<'_>,
+    ) -> Self {
+        let facts =
+            AggregateFacts::for_local_objects(func, local_object_args, layout_cache, snapshot);
+        Self::from_facts(func, facts, layout_cache)
+    }
+
+    pub(crate) fn for_all_objref_args(
+        func: &Function,
+        layout_cache: &mut shape::AggregateLayoutCache,
+        snapshot: &mut ProvenanceSnapshot<'_>,
+    ) -> Self {
+        let facts = AggregateFacts::for_all_objref_args(func, layout_cache, snapshot);
+        Self::from_facts(func, facts, layout_cache)
+    }
+
+    pub(crate) fn for_call_planner(
+        func: &Function,
+        layout_cache: &mut shape::AggregateLayoutCache,
+        snapshot: &mut ProvenanceSnapshot<'_>,
+    ) -> Self {
+        let facts = AggregateFacts::for_call_planner(func, layout_cache, snapshot);
+        Self::from_facts(func, facts, layout_cache)
+    }
+
+    pub(crate) fn root_slices(&self) -> &FxHashMap<ValueId, shape::AggregateSlice> {
+        self.facts.root_slices()
+    }
+
+    pub(crate) fn tracked(&self) -> &SecondaryMap<ValueId, Option<TrackedObject>> {
+        &self.tracked
+    }
+
+    pub(crate) fn may(&self) -> MayProvenance<'_> {
+        self.facts.may()
+    }
+
+    pub(crate) fn into_provenance_and_tracked(
+        self,
+    ) -> (
+        ProvenanceFacts,
+        SecondaryMap<ValueId, Option<TrackedObject>>,
+    ) {
+        (self.facts.into_provenance(), self.tracked)
+    }
 }
 
 pub(crate) fn collect_root_slices(
@@ -44,21 +180,17 @@ pub(crate) fn collect_root_slices(
         }
     }
 
-    for block in func.layout.iter_block() {
-        for inst in func.layout.iter_inst(block) {
-            if let Some(obj_alloc) =
-                downcast::<&data::ObjAlloc>(func.inst_set(), func.dfg.inst(inst))
-                && let Some(result) = func.dfg.inst_result(inst)
-                && objref_element_ty(func.ctx(), func.dfg.value_ty(result)).is_some()
-            {
-                root_slices.insert(
-                    result,
-                    whole_root_slice(layout_cache, func.ctx(), *obj_alloc.ty()),
-                );
-            }
-        }
-    }
+    insert_produced_object_root_slices(func, &mut root_slices, layout_cache, None);
 
+    root_slices
+}
+
+pub(crate) fn collect_all_objref_arg_root_slices(
+    func: &Function,
+    layout_cache: &mut shape::AggregateLayoutCache,
+) -> FxHashMap<ValueId, shape::AggregateSlice> {
+    let mut root_slices = collect_root_slices(func, None, layout_cache);
+    insert_objref_arg_root_slices(func, &mut root_slices, layout_cache);
     root_slices
 }
 
@@ -68,14 +200,18 @@ pub(crate) fn collect_call_planner_root_slices(
     layout_cache: &mut shape::AggregateLayoutCache,
 ) -> FxHashMap<ValueId, shape::AggregateSlice> {
     let mut root_slices = FxHashMap::default();
+    insert_objref_arg_root_slices(func, &mut root_slices, layout_cache);
+    insert_produced_object_root_slices(func, &mut root_slices, layout_cache, Some(object_effects));
 
-    for &arg in &func.arg_values {
-        let Some(root_ty) = objref_element_ty(func.ctx(), func.dfg.value_ty(arg)) else {
-            continue;
-        };
-        root_slices.insert(arg, whole_root_slice(layout_cache, func.ctx(), root_ty));
-    }
+    root_slices
+}
 
+fn insert_produced_object_root_slices(
+    func: &Function,
+    root_slices: &mut FxHashMap<ValueId, shape::AggregateSlice>,
+    layout_cache: &mut shape::AggregateLayoutCache,
+    fresh_call_effects: Option<&ObjectEffectSummaryMap>,
+) {
     for block in func.layout.iter_block() {
         for inst in func.layout.iter_inst(block) {
             if let Some(obj_alloc) =
@@ -90,6 +226,9 @@ pub(crate) fn collect_call_planner_root_slices(
                 continue;
             }
 
+            let Some(object_effects) = fresh_call_effects else {
+                continue;
+            };
             let Some(call) = downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(inst))
             else {
                 continue;
@@ -109,8 +248,18 @@ pub(crate) fn collect_call_planner_root_slices(
             root_slices.insert(*result, whole_root_slice(layout_cache, func.ctx(), root_ty));
         }
     }
+}
 
-    root_slices
+fn insert_objref_arg_root_slices(
+    func: &Function,
+    root_slices: &mut FxHashMap<ValueId, shape::AggregateSlice>,
+    layout_cache: &mut shape::AggregateLayoutCache,
+) {
+    for &arg in &func.arg_values {
+        if let Some(root_ty) = objref_element_ty(func.ctx(), func.dfg.value_ty(arg)) {
+            root_slices.insert(arg, whole_root_slice(layout_cache, func.ctx(), root_ty));
+        }
+    }
 }
 
 pub(crate) fn collect_tracked_objects(

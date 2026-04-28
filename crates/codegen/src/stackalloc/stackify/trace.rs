@@ -22,6 +22,7 @@ use super::{
 /// Observers must support `checkpoint`/`rollback` so unsuccessful iterations can be discarded.
 pub(super) trait StackifyObserver {
     type Checkpoint: Copy;
+    type DeferredExit: Copy + Default;
 
     fn checkpoint(&mut self) -> Self::Checkpoint;
     fn rollback(&mut self, checkpoint: Self::Checkpoint);
@@ -71,6 +72,13 @@ pub(super) trait StackifyObserver {
 
     fn on_inst_jump(&mut self, _inst: InstId, _dest: BlockId) {}
 
+    fn on_deferred_inst_jump(&mut self, inst: InstId, dest: BlockId) -> Self::DeferredExit {
+        self.on_inst_jump(inst, dest);
+        Self::DeferredExit::default()
+    }
+
+    fn on_deferred_exit_actions(&mut self, _deferred: Self::DeferredExit, _actions: &[Action]) {}
+
     fn on_inst_br(&mut self, _func: &Function, _inst: InstId, _cond: ValueId, _dests: &[BlockId]) {}
 
     fn on_inst_br_table(&mut self, _inst: InstId) {}
@@ -82,6 +90,7 @@ pub(super) struct NullObserver;
 
 impl StackifyObserver for NullObserver {
     type Checkpoint = ();
+    type DeferredExit = ();
 
     fn checkpoint(&mut self) -> Self::Checkpoint {}
 
@@ -98,6 +107,7 @@ pub(super) struct StackifyTrace {
     out: String,
     action_chunks: Vec<ActionChunk>,
     inst_chunks: Vec<InstChunk>,
+    deferred_exit_chunks: Vec<DeferredExitChunk>,
 }
 
 struct ActionChunk {
@@ -108,6 +118,12 @@ struct ActionChunk {
 struct InstChunk {
     placeholder: String,
     inst: InstId,
+}
+
+struct DeferredExitChunk {
+    placeholder: String,
+    dest: BlockId,
+    actions: crate::stackalloc::Actions,
 }
 
 impl StackifyTrace {
@@ -163,6 +179,18 @@ impl StackifyTrace {
             let formatted = fmt_actions(&chunk.actions);
             trace = trace.replace(&chunk.placeholder, &formatted);
         }
+        for chunk in self.deferred_exit_chunks {
+            let formatted = if chunk.actions.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "      exit({:?}): {}\n",
+                    chunk.dest,
+                    fmt_actions(&chunk.actions)
+                )
+            };
+            trace = trace.replace(&chunk.placeholder, &formatted);
+        }
         for chunk in self.inst_chunks {
             let comment = fmt_inst_comment(func, chunk.inst);
             trace = trace.replace(&chunk.placeholder, &comment);
@@ -192,24 +220,39 @@ impl StackifyTrace {
         });
         placeholder
     }
+
+    fn push_deferred_exit_placeholder(&mut self, dest: BlockId) -> usize {
+        let idx = self.deferred_exit_chunks.len();
+        let placeholder = format!("@@DEFERRED_EXIT:{idx}@@");
+        self.deferred_exit_chunks.push(DeferredExitChunk {
+            placeholder: placeholder.clone(),
+            dest,
+            actions: crate::stackalloc::Actions::new(),
+        });
+        let _ = write!(&mut self.out, "{placeholder}");
+        idx
+    }
 }
 
 impl StackifyObserver for StackifyTrace {
-    type Checkpoint = (usize, usize, usize);
+    type Checkpoint = (usize, usize, usize, usize);
+    type DeferredExit = usize;
 
     fn checkpoint(&mut self) -> Self::Checkpoint {
         (
             self.out.len(),
             self.action_chunks.len(),
             self.inst_chunks.len(),
+            self.deferred_exit_chunks.len(),
         )
     }
 
     fn rollback(&mut self, checkpoint: Self::Checkpoint) {
-        let (out_len, action_chunk_len, inst_chunk_len) = checkpoint;
+        let (out_len, action_chunk_len, inst_chunk_len, deferred_exit_chunk_len) = checkpoint;
         self.out.truncate(out_len);
         self.action_chunks.truncate(action_chunk_len);
         self.inst_chunks.truncate(inst_chunk_len);
+        self.deferred_exit_chunks.truncate(deferred_exit_chunk_len);
     }
 
     fn on_block_header(&mut self, func: &Function, block: BlockId, template: &BlockTemplate) {
@@ -217,7 +260,7 @@ impl StackifyObserver for StackifyTrace {
             &mut self.out,
             "  {block:?} P={} T={}",
             fmt_values(func, &template.params),
-            fmt_values(func, &template.transfer)
+            fmt_values(func, template.transfer())
         );
     }
 
@@ -311,6 +354,18 @@ impl StackifyObserver for StackifyTrace {
 
     fn on_inst_jump(&mut self, _inst: InstId, dest: BlockId) {
         let _ = writeln!(&mut self.out, "      jump -> {dest:?}");
+    }
+
+    fn on_deferred_inst_jump(&mut self, _inst: InstId, dest: BlockId) -> Self::DeferredExit {
+        let token = self.push_deferred_exit_placeholder(dest);
+        self.on_inst_jump(_inst, dest);
+        token
+    }
+
+    fn on_deferred_exit_actions(&mut self, deferred: Self::DeferredExit, actions: &[Action]) {
+        self.deferred_exit_chunks[deferred]
+            .actions
+            .extend_from_slice(actions);
     }
 
     fn on_inst_br(&mut self, func: &Function, inst: InstId, cond: ValueId, dests: &[BlockId]) {

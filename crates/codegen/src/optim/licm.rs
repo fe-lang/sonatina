@@ -35,8 +35,13 @@ impl LicmSolver {
 
     /// Run loop invariant code motion ont the function.
     /// This method also modifies `cfg` and `lpt` htt
-    pub fn run(&mut self, func: &mut Function, cfg: &mut ControlFlowGraph, lpt: &mut LoopTree) {
-        self.run_with_object_memory(func, cfg, lpt, None);
+    pub fn run(
+        &mut self,
+        func: &mut Function,
+        cfg: &mut ControlFlowGraph,
+        lpt: &mut LoopTree,
+    ) -> bool {
+        self.run_with_object_memory(func, cfg, lpt, None)
     }
 
     pub(crate) fn run_with_object_memory(
@@ -45,13 +50,14 @@ impl LicmSolver {
         cfg: &mut ControlFlowGraph,
         lpt: &mut LoopTree,
         object_memory: Option<&ObjectMemoryAnalysis>,
-    ) {
+    ) -> bool {
         self.clear();
         cfg.compute(func);
         let mut domtree = DomTree::new();
         domtree.compute(cfg);
         lpt.compute(cfg, &domtree);
 
+        let mut changed = false;
         for lp in lpt.loops() {
             self.collect_invaliants(
                 func,
@@ -66,10 +72,12 @@ impl LicmSolver {
             if !self.invariants.is_empty() {
                 if let Some(preheader) = self.create_preheader(func, cfg, lpt, lp) {
                     self.hoist_invariants(func, preheader);
+                    changed = true;
                 }
                 self.invariants.clear();
             }
         }
+        changed
     }
 
     /// Collect loop invariants int the `lp`.

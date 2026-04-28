@@ -34,7 +34,7 @@ pub(super) fn build_stackify_test_context<'a>(
     let def_info = compute_def_info(func, entry, &value_aliases);
     let phi_results = compute_phi_results(func, &value_aliases);
     let phi_out_sources = compute_phi_out_sources(func, cfg, &value_aliases);
-    let analysis = MemoryAccessAnalysis::new();
+    let mut analysis = MemoryAccessAnalysis::new();
     let mut exact_local_addr: SecondaryMap<ValueId, Option<_>> = SecondaryMap::new();
     for value in func.dfg.values.keys() {
         exact_local_addr[value] =

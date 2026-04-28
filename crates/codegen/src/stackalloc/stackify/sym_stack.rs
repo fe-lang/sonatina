@@ -55,7 +55,7 @@ impl SymStack {
             .params
             .iter()
             .copied()
-            .chain(template.transfer.iter().copied())
+            .chain(template.transfer().iter().copied())
             .map(StackItem::Value)
             .collect();
         let func_ret_index = has_internal_return.then_some(items.len());

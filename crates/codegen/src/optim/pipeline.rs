@@ -9,6 +9,8 @@
 //! [`Step`] represents one unit of work in the pipeline. [`Pipeline`] holds
 //! an ordered sequence of steps and executes them against a module.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
 use sonatina_ir::{
     ControlFlowGraph, Function,
@@ -187,8 +189,19 @@ impl Pass {
         self.info().needs_func_behavior
     }
 
+    const fn needs_object_facts(self) -> bool {
+        matches!(
+            self,
+            Pass::ObjectLoadStore | Pass::AggregateScalarize | Pass::Licm | Pass::Gvn
+        )
+    }
+
     const fn invalidates_func_behavior(self) -> bool {
         self.info().invalidates_func_behavior
+    }
+
+    const fn invalidates_object_facts(self) -> bool {
+        !matches!(self, Pass::RebuildUsers)
     }
 }
 
@@ -410,6 +423,7 @@ impl Pipeline {
     ///    - `CfgCleanup`
     ///    - `AggregateCombine`
     ///    - `BranchCanonicalize`
+    ///    - `ObjectLoadStore`
     ///    - `AggregateScalarize`
     ///    - `LoadStore`
     ///    - `CheckedArithElim`
@@ -422,6 +436,7 @@ impl Pipeline {
     /// 6. Per-function cleanup:
     ///    - `CfgCleanup`
     ///    - `Sccp`
+    ///    - `BranchCanonicalize`
     ///    - `CfgCleanup`
     /// 7. `DeadFuncElim` — prune unreachable private definitions from object roots
     pub fn default_pipeline() -> Self {
@@ -524,47 +539,79 @@ pub(crate) fn run_function_pass_round(
     func_behavior_dirty: &mut bool,
     overrides: FuncPassOverrides<'_>,
 ) {
+    let mut round_facts = RoundFacts::default();
     for &pass in passes {
         if *func_behavior_dirty && pass.needs_func_behavior() {
             let _span = trace_span!("sonatina.optim.pipeline.func_behavior_analyze").entered();
             func_behavior::analyze_module(module);
             *func_behavior_dirty = false;
         }
-        run_module_pass(pass, module, overrides);
-        if pass.invalidates_func_behavior() {
+        let result = run_module_pass(pass, module, overrides, &mut round_facts);
+        if result.changed && result.invalidates_func_behavior {
             *func_behavior_dirty = true;
+        }
+        if result.changed && result.invalidates_object_facts {
+            round_facts.clear();
         }
     }
 }
 
-fn run_module_pass(pass: Pass, module: &Module, overrides: FuncPassOverrides<'_>) {
+#[derive(Default)]
+struct RoundFacts {
+    object_effects: Option<ObjectEffectSummaryMap>,
+    local_object_args: Option<LocalObjectArgMap>,
+}
+
+impl RoundFacts {
+    fn clear(&mut self) {
+        self.object_effects = None;
+        self.local_object_args = None;
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PassResult {
+    changed: bool,
+    invalidates_func_behavior: bool,
+    invalidates_object_facts: bool,
+}
+
+impl PassResult {
+    fn new(pass: Pass, changed: bool) -> Self {
+        Self {
+            changed,
+            invalidates_func_behavior: pass.invalidates_func_behavior(),
+            invalidates_object_facts: pass.invalidates_object_facts(),
+        }
+    }
+}
+
+fn run_module_pass(
+    pass: Pass,
+    module: &Module,
+    overrides: FuncPassOverrides<'_>,
+    round_facts: &mut RoundFacts,
+) -> PassResult {
     let _span = debug_span!("sonatina.optim.pipeline.pass_round", pass = pass.as_str()).entered();
-    let owned_object_effects = if overrides.object_effects.is_none() {
-        matches!(
-            pass,
-            Pass::ObjectLoadStore | Pass::AggregateScalarize | Pass::Gvn | Pass::Licm
-        )
-        .then(|| compute_object_effect_summaries(module))
-    } else {
-        None
-    };
-    let object_effects = overrides.object_effects.or(owned_object_effects.as_ref());
-    let owned_local_object_args = if overrides.local_object_args.is_none() {
-        object_effects
-            .map(|effects| collect_local_object_arg_info_with_effects(module, effects))
-            .or_else(|| {
-                matches!(
-                    pass,
-                    Pass::ObjectLoadStore | Pass::AggregateScalarize | Pass::Gvn | Pass::Licm
-                )
-                .then(|| collect_local_object_arg_info(module))
-            })
-    } else {
-        None
-    };
+    if pass.needs_object_facts() && overrides.object_effects.is_none() {
+        round_facts
+            .object_effects
+            .get_or_insert_with(|| compute_object_effect_summaries(module));
+    }
+    let object_effects = overrides
+        .object_effects
+        .or(round_facts.object_effects.as_ref());
+    if pass.needs_object_facts() && overrides.local_object_args.is_none() {
+        round_facts.local_object_args.get_or_insert_with(|| {
+            object_effects
+                .map(|effects| collect_local_object_arg_info_with_effects(module, effects))
+                .unwrap_or_else(|| collect_local_object_arg_info(module))
+        });
+    }
     let local_object_args = overrides
         .local_object_args
-        .or(owned_local_object_args.as_ref());
+        .or(round_facts.local_object_args.as_ref());
+    let changed = AtomicBool::new(false);
     if let Some(funcs) = overrides.funcs {
         funcs.par_iter().copied().for_each(|func_ref| {
             module.func_store.modify(func_ref, |func| {
@@ -574,14 +621,18 @@ fn run_module_pass(pass: Pass, module: &Module, overrides: FuncPassOverrides<'_>
                 )
                 .entered();
                 let mut ctx = PassContext::default();
-                run_pass(
+                if run_pass(
                     pass,
                     Some(func_ref),
                     func,
                     &mut ctx,
                     local_object_args,
                     object_effects,
-                );
+                )
+                .changed
+                {
+                    changed.store(true, Ordering::Relaxed);
+                }
             });
         });
     } else {
@@ -592,16 +643,21 @@ fn run_module_pass(pass: Pass, module: &Module, overrides: FuncPassOverrides<'_>
             )
             .entered();
             let mut ctx = PassContext::default();
-            run_pass(
+            if run_pass(
                 pass,
                 Some(func_ref),
                 func,
                 &mut ctx,
                 local_object_args,
                 object_effects,
-            );
+            )
+            .changed
+            {
+                changed.store(true, Ordering::Relaxed);
+            }
         });
     }
+    PassResult::new(pass, changed.load(Ordering::Relaxed))
 }
 
 /// Reusable analysis allocations for a single pass sequence on one function.
@@ -620,29 +676,29 @@ struct PassContext {
 /// current function state.
 fn run_pass(
     pass: Pass,
-    func_ref: Option<sonatina_ir::module::FuncRef>,
+    func_ref: Option<FuncRef>,
     func: &mut Function,
     ctx: &mut PassContext,
     local_object_args: Option<&LocalObjectArgMap>,
     object_effects: Option<&ObjectEffectSummaryMap>,
-) {
+) -> PassResult {
     let _span = trace_span!("sonatina.optim.pipeline.pass", pass = pass.as_str()).entered();
-    match pass {
+    let changed = match pass {
         Pass::LegalizeMultiResult => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.legalize_multi_result").entered();
-            legalize_multi_result(func);
+            legalize_multi_result(func)
         }
         Pass::CfgCleanup => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.cfg_cleanup").entered();
-            CfgCleanup::new(CleanupMode::Strict).run(func);
+            CfgCleanup::new(CleanupMode::Strict).run(func)
         }
         Pass::AggregateCombine => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.aggregate_combine").entered();
-            AggregateCombine::default().run(func);
+            AggregateCombine::default().run(func)
         }
         Pass::BranchCanonicalize => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.branch_canonicalize").entered();
-            BranchCanonicalize::new().run(func);
+            BranchCanonicalize::new().run(func)
         }
         Pass::ObjectLoadStore => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.object_load_store").entered();
@@ -654,17 +710,17 @@ fn run_pass(
                     func,
                     local_object_args,
                     object_effects,
-                );
+                )
             } else {
-                ObjectLoadStore::default().run(func);
+                ObjectLoadStore::default().run(func)
             }
         }
         Pass::AggregateScalarize => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.aggregate_scalarize").entered();
             if let (Some(func_ref), Some(local_object_args)) = (func_ref, local_object_args) {
-                AggregateScalarize::default().run_for_func(func_ref, func, local_object_args);
+                AggregateScalarize::default().run_for_func(func_ref, func, local_object_args)
             } else {
-                AggregateScalarize::default().run(func);
+                AggregateScalarize::default().run(func)
             }
         }
         Pass::LoadStore => {
@@ -676,43 +732,45 @@ fn run_pass(
             let mut solver = LoadStoreSolver::new();
             {
                 let _span = trace_span!("sonatina.optim.pipeline.load_store.solve").entered();
-                solver.run(func, &mut ctx.cfg);
+                solver.run(func, &mut ctx.cfg)
             }
         }
         Pass::ScalarCanonicalize => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.scalar_canonicalize").entered();
-            ScalarCanonicalize::new().run(func);
+            ScalarCanonicalize::new().run(func)
         }
         Pass::KnownBitsSimplify => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.known_bits_simplify").entered();
-            KnownBitsSimplify::new().run(func);
+            KnownBitsSimplify::new().run(func)
         }
         Pass::CheckedArithElim => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.checked_arith_elim").entered();
             if !has_supported_checked_arith(func) {
-                return;
-            }
-            {
-                let _span =
-                    trace_span!("sonatina.optim.pipeline.checked_arith_elim.compute_cfg").entered();
-                ctx.cfg.compute(func);
-            }
-            {
-                let _span =
-                    trace_span!("sonatina.optim.pipeline.checked_arith_elim.compute_domtree")
-                        .entered();
-                ctx.domtree.compute(&ctx.cfg);
-            }
-            {
-                let _span =
-                    trace_span!("sonatina.optim.pipeline.checked_arith_elim.compute_looptree")
-                        .entered();
-                ctx.lpt.compute(&ctx.cfg, &ctx.domtree);
-            }
-            {
-                let _span =
-                    trace_span!("sonatina.optim.pipeline.checked_arith_elim.solve").entered();
-                CheckedArithElim::new().run(func, &ctx.cfg, &ctx.lpt);
+                false
+            } else {
+                {
+                    let _span =
+                        trace_span!("sonatina.optim.pipeline.checked_arith_elim.compute_cfg")
+                            .entered();
+                    ctx.cfg.compute(func);
+                }
+                {
+                    let _span =
+                        trace_span!("sonatina.optim.pipeline.checked_arith_elim.compute_domtree")
+                            .entered();
+                    ctx.domtree.compute(&ctx.cfg);
+                }
+                {
+                    let _span =
+                        trace_span!("sonatina.optim.pipeline.checked_arith_elim.compute_looptree")
+                            .entered();
+                    ctx.lpt.compute(&ctx.cfg, &ctx.domtree);
+                }
+                {
+                    let _span =
+                        trace_span!("sonatina.optim.pipeline.checked_arith_elim.solve").entered();
+                    CheckedArithElim::new().run(func, &ctx.cfg, &ctx.lpt)
+                }
             }
         }
         Pass::Sccp => {
@@ -724,18 +782,19 @@ fn run_pass(
                 ctx.cfg.compute(func);
             }
             let mut solver = SccpSolver::new();
-            {
+            let changed = {
                 let _span = trace_span!("sonatina.optim.pipeline.sccp.solve").entered();
-                solver.run(func, &mut ctx.cfg);
-            }
-            {
+                solver.run(func, &mut ctx.cfg)
+            };
+            let cleaned = {
                 let _span = trace_span!("sonatina.optim.pipeline.sccp.cleanup").entered();
-                CfgCleanup::new(CleanupMode::Strict).run(func);
-            }
+                CfgCleanup::new(CleanupMode::Strict).run(func)
+            };
+            changed || cleaned
         }
         Pass::Adce => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.adce").entered();
-            AdceSolver::new().run(func);
+            AdceSolver::new().run(func)
         }
         Pass::Licm => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.licm").entered();
@@ -756,19 +815,20 @@ fn run_pass(
             let func_local_object_args = func_ref
                 .and_then(|func_ref| local_object_args.and_then(|args| args.get(&func_ref)));
             object_memory.compute(func, func_local_object_args, object_effects);
-            {
+            let changed = {
                 let _span = trace_span!("sonatina.optim.pipeline.licm.solve").entered();
                 solver.run_with_object_memory(
                     func,
                     &mut ctx.cfg,
                     &mut ctx.lpt,
                     Some(&object_memory),
-                );
-            }
-            {
+                )
+            };
+            let cleaned = {
                 let _span = trace_span!("sonatina.optim.pipeline.licm.cleanup").entered();
-                CfgCleanup::new(CleanupMode::Strict).run(func);
-            }
+                CfgCleanup::new(CleanupMode::Strict).run(func)
+            };
+            changed || cleaned
         }
         Pass::LoopStrengthReduce => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.loop_strength_reduce").entered();
@@ -792,7 +852,7 @@ fn run_pass(
             {
                 let _span =
                     trace_span!("sonatina.optim.pipeline.loop_strength_reduce.solve").entered();
-                LoopStrengthReduce::new().run(func, &mut ctx.cfg, &mut ctx.domtree, &mut ctx.lpt);
+                LoopStrengthReduce::new().run(func, &mut ctx.cfg, &mut ctx.domtree, &mut ctx.lpt)
             }
         }
         Pass::Gvn => {
@@ -817,14 +877,16 @@ fn run_pass(
                     &mut ctx.cfg,
                     &mut ctx.domtree,
                     Some(&object_memory),
-                );
+                )
             }
         }
         Pass::RebuildUsers => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.rebuild_users").entered();
             func.rebuild_users();
+            false
         }
-    }
+    };
+    PassResult::new(pass, changed)
 }
 
 #[cfg(test)]

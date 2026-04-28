@@ -12,14 +12,13 @@ use sonatina_ir::{BlockId, Function, ValueId, cfg::ControlFlowGraph};
 
 use super::{
     alloc::StackifyAlloc,
-    flow_templates::solve_templates_from_flow,
     iteration::IterationPlanner,
     slots::{FreeSlotPools, SpillSlotPools},
     spill::SpillSet,
     sym_stack::SymStack,
     templates::{
-        DefInfo, compute_def_info, compute_dom_depth, compute_phi_out_sources, compute_phi_results,
-        function_has_internal_return,
+        BlockTemplate, DefInfo, compute_block_interfaces, compute_def_info, compute_dom_depth,
+        compute_phi_out_sources, compute_phi_results, function_has_internal_return,
     },
     terminal_chain::compute_terminal_chain_blocks,
     trace::{NullObserver, StackifyObserver},
@@ -200,9 +199,9 @@ impl<'a> StackifyBuilder<'a> {
         // remove it from transfer regions (`T(B)` excludes `spill_set`), so future iterations
         // can rely on loads being correct.
         let mut spill_set: BitSet<ValueId> = BitSet::default();
-        let mut slots: SpillSlotPools = SpillSlotPools::default();
         loop {
             let checkpoint = observer.checkpoint();
+            let mut slots: SpillSlotPools = SpillSlotPools::default();
 
             let (mut alloc, spill_requests) =
                 Self::plan_iteration(&ctx, observer, SpillSet::new(&spill_set), &mut slots);
@@ -245,13 +244,9 @@ impl<'a> StackifyBuilder<'a> {
         }
 
         let spill_obj = assign_spill_obj_ids(ctx.func, spill, &ctx.exact_local_addr);
+        let interfaces = compute_block_interfaces(ctx, spill);
 
-        // Template solving may encounter temporary unreachable values while iterating toward a
-        // fixed point, but those requests are not necessarily required under the final chosen
-        // templates. Treat spill discovery as the responsibility of the final planning pass.
-        let mut solver_spill_requests: BitSet<ValueId> = BitSet::default();
-        let templates =
-            solve_templates_from_flow(ctx, spill, &spill_obj, &mut solver_spill_requests);
+        let mut templates = initial_templates(ctx, &interfaces.params);
 
         let mut alloc = StackifyAlloc {
             pre_actions: SecondaryMap::new(),
@@ -263,7 +258,7 @@ impl<'a> StackifyBuilder<'a> {
         };
 
         let mut spill_requests: BitSet<ValueId> = BitSet::default();
-        let terminal_chain_blocks = compute_terminal_chain_blocks(ctx, &templates);
+        let terminal_chain_blocks = compute_terminal_chain_blocks(ctx, &interfaces);
 
         // Blocks that are reached from multi-way branches inherit a dynamic stack and
         // run an entry normalization prologue (single-pred only; critical edges split).
@@ -278,8 +273,9 @@ impl<'a> StackifyBuilder<'a> {
             ctx,
             spill,
             slots,
-            &templates,
+            &mut templates,
             &terminal_chain_blocks,
+            &interfaces.carry_in,
             &mut alloc,
             &mut spill_requests,
             inherited_stack,
@@ -289,6 +285,17 @@ impl<'a> StackifyBuilder<'a> {
 
         (alloc, spill_requests)
     }
+}
+
+fn initial_templates(
+    ctx: &StackifyContext<'_>,
+    params: &SecondaryMap<BlockId, SmallVec<[ValueId; 4]>>,
+) -> SecondaryMap<BlockId, BlockTemplate> {
+    let mut templates = SecondaryMap::new();
+    for block in ctx.func.layout.iter_block() {
+        templates[block] = BlockTemplate::new(params[block].clone());
+    }
+    templates
 }
 
 fn assign_spill_obj_ids(
@@ -322,7 +329,7 @@ fn compute_exact_local_addrs(
     func: &Function,
     value_aliases: &SecondaryMap<ValueId, Option<ValueId>>,
 ) -> SecondaryMap<ValueId, Option<ExactLocalAddr>> {
-    let analysis = MemoryAccessAnalysis::new();
+    let mut analysis = MemoryAccessAnalysis::new();
     let mut map: SecondaryMap<ValueId, Option<ExactLocalAddr>> = SecondaryMap::new();
     for value in func.dfg.value_ids() {
         let canonical = value_aliases[value].unwrap_or(value);

@@ -6,31 +6,31 @@ input_file: test_files/evm/loops.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section init: 512 bytes
-  section runtime: 492 bytes
-  total: 1004 bytes
+  section init: 513 bytes
+  section runtime: 493 bytes
+  total: 1006 bytes
 
 functions:
-  __Bench_recv_0_3: ir_blocks=4 ir_insts=7 vcode_ops=17 fixups=2 imm_bytes=1
+  __Bench_recv_0_3: ir_blocks=5 ir_insts=8 vcode_ops=17 fixups=2 imm_bytes=1
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=0
-  __Bench_recv_0_4: ir_blocks=4 ir_insts=9 vcode_ops=23 fixups=2 imm_bytes=2
+  __Bench_recv_0_4: ir_blocks=5 ir_insts=10 vcode_ops=24 fixups=2 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=0
-  __Bench_recv_0_5: ir_blocks=4 ir_insts=14 vcode_ops=32 fixups=2 imm_bytes=2
+  __Bench_recv_0_5: ir_blocks=5 ir_insts=15 vcode_ops=32 fixups=2 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=0
   __Bench_init: ir_blocks=3 ir_insts=8 vcode_ops=16 fixups=3 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  __Bench_runtime: ir_blocks=36 ir_insts=96 vcode_ops=286 fixups=42 imm_bytes=23
+  __Bench_runtime: ir_blocks=41 ir_insts=101 vcode_ops=286 fixups=42 imm_bytes=23
     mem: scratch_words=0 stable_words=3 stable_mode=StaticAbs(base=0xa0) entry_abs_words=0 abs_words_end=3
   u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98: ir_blocks=5 ir_insts=18 vcode_ops=44 fixups=2 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=0
 
 evm:
-  deploy: success reason=Return gas_used=159758 gas_refunded=0 logs=0 output=create len=492 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
+  deploy: success reason=Return gas_used=159976 gas_refunded=0 logs=0 output=create len=493 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
   case counter: calldata_len=36 success reason=Return gas_used=25606 gas_refunded=0 logs=0 output=call len=32 tx_gas=21204 runtime_gas=4402
   case sum: calldata_len=36 success reason=Return gas_used=30736 gas_refunded=0 logs=0 output=call len=32 tx_gas=21204 runtime_gas=9532
   case xor_loop: calldata_len=68 success reason=Return gas_used=27743 gas_refunded=0 logs=0 output=call len=32 tx_gas=21344 runtime_gas=6399
   case counter_unchecked: calldata_len=36 success reason=Return gas_used=25702 gas_refunded=0 logs=0 output=call len=32 tx_gas=21204 runtime_gas=4498
-  case sum_unchecked: calldata_len=36 success reason=Return gas_used=26830 gas_refunded=0 logs=0 output=call len=32 tx_gas=21204 runtime_gas=5626
+  case sum_unchecked: calldata_len=36 success reason=Return gas_used=27232 gas_refunded=0 logs=0 output=call len=32 tx_gas=21204 runtime_gas=6028
   case xor_loop_unchecked: calldata_len=68 success reason=Return gas_used=27875 gas_refunded=0 logs=0 output=call len=32 tx_gas=21344 runtime_gas=6531
 
 
@@ -46,7 +46,7 @@ __Bench_recv_0_3:
     DUP2  // v5.i1 = lt v4 v0;
     DUP2
     LT
-    PUSH1 block4  // br v5 block4 block1;
+    PUSH1 block4  // br v5 block5 block1;
     JUMPI
   block1:
     SWAP1  // return v4;
@@ -71,9 +71,17 @@ __Bench_recv_0_4:
     DUP3  // v16.i1 = gt v7 v0;
     DUP3
     GT
-    PUSH1 block1  // br v16 block1 block4;
+    ISZERO  // br v16 block1 block5;
+    PUSH1 block4
     JUMPI
+  block1:
+    SWAP2  // return v4;
+    POP
+    POP
+    SWAP1
+    JUMP
   block4:
+    JUMPDEST
     DUP2  // v10.i256 = add v4 v7;
     ADD
     SWAP1  // v11.i256 = add 1.i256 v7;
@@ -81,13 +89,6 @@ __Bench_recv_0_4:
     ADD
     SWAP1  // jump block3;
     PUSH1 block3
-    JUMP
-  block1:
-    JUMPDEST
-    SWAP2  // return v4;
-    POP
-    POP
-    SWAP1
     JUMP
 
 // func private %__Bench_recv_0_5(v0.*@__fe_obj_XorLoopUnchecked_1) -> i256
@@ -107,7 +108,7 @@ __Bench_recv_0_5:
     DUP3  // v12.i1 = lt v11 v30;
     DUP3
     LT
-    PUSH1 block4  // br v12 block4 block1;
+    PUSH1 block4  // br v12 block5 block1;
     JUMPI
   block1:
     SWAP3  // return v9;
@@ -222,7 +223,7 @@ __Bench_runtime:
     DUP2  // v70.i1 = lt v69 v13;
     DUP2
     LT
-    PUSH1 block27  // br v70 block27 block24;
+    PUSH1 block27  // br v70 block54 block24;
     JUMPI
   block24:
     SWAP1  // mstore 0.i256 v69 i256;
@@ -258,7 +259,7 @@ __Bench_runtime:
     DUP3  // v91.i1 = gt v90 v19;
     DUP3
     GT
-    ISZERO  // br v91 block31 block34;
+    ISZERO  // br v91 block31 block55;
     PUSH1 block34
     JUMPI
   block31:
@@ -278,7 +279,7 @@ __Bench_runtime:
     SWAP1  // v99.i1 = lt v98 v88;
     DUP2
     LT
-    PUSH1 block36  // br v99 block51 block37;
+    PUSH1 block36  // br v99 block51 block56;
     JUMPI
   block37:
     PUSH1 0x1 (1)  // v100.i256 = add v90 1.i256;
@@ -287,7 +288,7 @@ __Bench_runtime:
     SWAP2  // v101.i1 = lt v100 v90;
     DUP3
     LT
-    ISZERO  // br v101 block53 block52;
+    ISZERO  // br v101 block53 block57;
     PUSH1 block33
     JUMPI
   block36:
@@ -322,7 +323,7 @@ __Bench_runtime:
     DUP4  // v81.i1 = lt v80 v73;
     DUP3
     LT
-    PUSH1 block45  // br v81 block45 block42;
+    PUSH1 block45  // br v81 block58 block42;
     JUMPI
   block42:
     SWAP3  // mstore 0.i256 v78 i256;
