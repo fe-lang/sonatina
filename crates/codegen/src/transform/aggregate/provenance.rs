@@ -2903,6 +2903,78 @@ block3:
     }
 
     #[test]
+    fn loop_carried_projection_phi_keeps_exact_projection() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @Pair = { i256, i256 };
+
+func private %f(v0.i1) -> objref<i256> {
+block0:
+    v1.objref<@Pair> = obj.alloc @Pair;
+    v2.objref<i256> = obj.proj v1 0.i8;
+    jump block1;
+
+block1:
+    v3.objref<i256> = phi (v2 block0) (v3 block2);
+    br v0 block2 block3;
+
+block2:
+    jump block1;
+
+block3:
+    return v3;
+}
+"#,
+        );
+
+        let func_ref = lookup_func(&module, "f");
+        module.func_store.view(func_ref, |func| {
+            let mut layout_cache = shape::AggregateLayoutCache::default();
+            let root_slices = collect_root_slices(func, None, &mut layout_cache);
+            let provenance =
+                collect_root_provenance(func, func.ctx(), &root_slices, &mut layout_cache, None);
+            let projected = func
+                .layout
+                .iter_block()
+                .flat_map(|block| func.layout.iter_inst(block))
+                .find_map(|inst| {
+                    downcast::<&data::ObjProj>(func.inst_set(), func.dfg.inst(inst))
+                        .and_then(|_| func.dfg.inst_result(inst))
+                })
+                .expect("projection result should exist");
+            let phi_result = func
+                .layout
+                .iter_block()
+                .flat_map(|block| func.layout.iter_inst(block))
+                .find_map(|inst| {
+                    downcast::<&control_flow::Phi>(func.inst_set(), func.dfg.inst(inst))
+                        .and_then(|_| func.dfg.inst_result(inst))
+                })
+                .expect("phi result should exist");
+
+            let complete = provenance.complete();
+            let may = provenance.may();
+            let expected_projection = complete
+                .exact_projection(projected)
+                .expect("source projection should be exact");
+            assert_eq!(
+                complete.exact_projection(phi_result),
+                Some(expected_projection)
+            );
+            assert_eq!(
+                complete.complete_roots(phi_result),
+                Some(CompleteRootSet::Single(expected_projection.root_value))
+            );
+            assert_known_only(
+                may.may_roots(phi_result),
+                &[expected_projection.root_value.value()],
+            );
+        });
+    }
+
+    #[test]
     fn phi_with_unknown_branch_stays_unknown() {
         let module = parse_test_module(
             r#"

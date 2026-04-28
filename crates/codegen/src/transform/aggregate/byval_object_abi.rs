@@ -553,6 +553,8 @@ impl ObjectAggregateAbi {
         let mut used_roots = FxHashSet::default();
         let mut folded = SmallVec::<[FoldedReturnRoot; 4]>::new();
         let mut hidden_out_idx = 0usize;
+        let mut layout_cache = shape::AggregateLayoutCache::default();
+        let mut snapshot = ProvenanceSnapshot::new(function, Some(object_effects));
         for (ret_idx, ret_plan) in plan.rets.iter().enumerate() {
             if ret_plan.kind != RetAbiKind::OutObject {
                 continue;
@@ -563,6 +565,7 @@ impl ObjectAggregateAbi {
                 ret_idx,
                 hidden_out_idx,
                 object_effects,
+                (&mut layout_cache, &mut snapshot),
             ) else {
                 hidden_out_idx += 1;
                 continue;
@@ -592,21 +595,24 @@ impl ObjectAggregateAbi {
         ret_idx: usize,
         hidden_out_idx: usize,
         object_effects: &ObjectEffectSummaryMap,
+        analysis: (
+            &mut shape::AggregateLayoutCache,
+            &mut ProvenanceSnapshot<'_>,
+        ),
     ) -> Option<SmallVec<[FoldedReturnRoot; 4]>> {
+        let (layout_cache, snapshot) = analysis;
         let ret_ty = plan.rets[ret_idx].original_ty;
-        let mut layout_cache = shape::AggregateLayoutCache::default();
-        let root_slice = whole_object_slice(&mut layout_cache, function.ctx(), ret_ty);
+        let root_slice = whole_object_slice(layout_cache, function.ctx(), ret_ty);
         let root_slices = self.collect_return_root_slices(function, ret_ty, root_slice);
         if root_slices.is_empty() {
             return None;
         }
-        let mut snapshot = ProvenanceSnapshot::new(function, Some(object_effects));
         let facts = AggregateFacts::from_root_slices(
             function,
             function.ctx(),
             root_slices,
-            &mut layout_cache,
-            &mut snapshot,
+            layout_cache,
+            snapshot,
         );
         let complete_provenance = facts.complete();
         let mut roots = SmallVec::<[ValueId; 4]>::new();
