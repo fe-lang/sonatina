@@ -19,7 +19,7 @@ use super::{
         AggregateObjectFacts, ObjectSlice, TrackedObject, enum_tag_object_slice,
         enum_variant_field_object_slice, objref_element_ty, slices_overlap,
     },
-    provenance::{MayProvenance, MayRootSet, RootValue},
+    provenance::{MayProvenance, MayRootSet, ProvenanceSnapshot, RootValue},
     reconstruct::AggregateValueReconstructor,
     shape,
 };
@@ -161,7 +161,8 @@ fn collect_combine_enum_facts(
     func: &Function,
     layout_cache: &mut shape::AggregateLayoutCache,
 ) -> AggregateObjectFacts {
-    AggregateObjectFacts::for_all_objref_args(func, layout_cache, None)
+    let mut snapshot = ProvenanceSnapshot::new(func, None);
+    AggregateObjectFacts::for_all_objref_args(func, layout_cache, &mut snapshot)
 }
 impl AggregateCombine {
     pub fn run(&mut self, func: &mut Function) -> bool {

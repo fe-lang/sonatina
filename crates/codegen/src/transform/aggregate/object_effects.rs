@@ -19,8 +19,8 @@ use super::{
     },
     object_tracking::AggregateFacts,
     provenance::{
-        CompleteProvenance, CompleteRootSet, MayProvenance, RootValue, exact_capture_destination,
-        observed_root_slices,
+        CompleteProvenance, CompleteRootSet, MayProvenance, ProvenanceSnapshot, RootValue,
+        exact_capture_destination, observed_root_slices,
     },
     shape,
 };
@@ -461,12 +461,13 @@ fn compute_summary_for_func(
             }
         }
 
+        let mut snapshot = ProvenanceSnapshot::new(function, Some(summaries));
         let facts = AggregateFacts::from_root_slices(
             function,
             function.ctx(),
             root_slices,
             layout_cache,
-            Some(summaries),
+            &mut snapshot,
         );
         let effect_provenance = EffectProvenance {
             complete: facts.complete(),

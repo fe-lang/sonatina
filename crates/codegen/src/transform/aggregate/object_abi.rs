@@ -14,7 +14,7 @@ use super::{
     object_locality::{self, LocalObjectArgInfo, LocalObjectArgMap, RootInit},
     object_tracking::AggregateFacts,
     private_abi::{self, PrivateAbiPlan},
-    provenance::{CompleteProvenance, CompleteRootSet, RootValue},
+    provenance::{CompleteProvenance, CompleteRootSet, ProvenanceSnapshot, RootValue},
     shape,
 };
 use crate::cfg_scc::CfgSccAnalysis;
@@ -236,12 +236,13 @@ impl ObjectReturnOutParam {
             return None;
         }
         let mut layout_cache = shape::AggregateLayoutCache::default();
+        let mut snapshot = ProvenanceSnapshot::new(function, Some(object_effects));
         let provenance_facts = AggregateFacts::from_root_slices(
             function,
             function.ctx(),
             root_slices,
             &mut layout_cache,
-            Some(object_effects),
+            &mut snapshot,
         );
         let provenance = provenance_facts.complete();
         let root_slice = whole_object_slice(&mut layout_cache, function.ctx(), out_elem_ty);

@@ -20,7 +20,7 @@ use super::{
         enum_variant_field_object_slice, object_slice_overlaps_effect, slice_is_covered_by,
         slices_overlap, whole_root_slice_for_value,
     },
-    provenance::{MayProvenance, MayRootSet},
+    provenance::{MayProvenance, MayRootSet, ProvenanceSnapshot},
     reconstruct::AggregateValueReconstructor,
     shape,
 };
@@ -67,11 +67,12 @@ impl ObjectLoadStore {
 
         loop {
             func.rebuild_users();
+            let mut snapshot = ProvenanceSnapshot::new(func, object_effects);
             let facts = AggregateObjectFacts::for_local_objects(
                 func,
                 local_object_args,
                 &mut self.layout_cache,
-                object_effects,
+                &mut snapshot,
             );
             let tracked = facts.tracked();
             let may = facts.may();

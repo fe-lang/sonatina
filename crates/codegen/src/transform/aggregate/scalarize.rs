@@ -16,7 +16,7 @@ use super::{
     cleanup::DeadPureInstCleanup,
     object_tracking::AggregateFacts,
     promotion::SsaBuilder,
-    provenance::{CompleteProvenance, ExactProjectionMap, RootValue},
+    provenance::{CompleteProvenance, ExactProjectionMap, ProvenanceSnapshot, RootValue},
     reconstruct::{
         AggregateValueReconstructor, bitcast_before_inst, rebuild_scalar_shape_from_leaf_values,
     },
@@ -453,12 +453,13 @@ impl AggregateScalarize {
             candidate_roots.push((root_value, root_kind, shape_data));
         }
 
+        let mut snapshot = ProvenanceSnapshot::new(func, None);
         let facts = AggregateFacts::from_root_slices(
             func,
             module,
             root_slices,
             &mut self.layout_cache,
-            None,
+            &mut snapshot,
         );
         for (root_value, root_kind, shape_data) in candidate_roots {
             if !self.root_use_chain_is_promotable(func, module, root_value, facts.complete()) {

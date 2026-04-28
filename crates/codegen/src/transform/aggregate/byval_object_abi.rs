@@ -25,7 +25,9 @@ use super::{
         object_slice_overlaps_effect, slices_overlap,
     },
     private_abi::{self, PrivateAbiPlan},
-    provenance::{CompleteProvenance, CompleteRootSet, ProvenanceFacts, RootValue},
+    provenance::{
+        CompleteProvenance, CompleteRootSet, ProvenanceFacts, ProvenanceSnapshot, RootValue,
+    },
     shape,
 };
 
@@ -598,12 +600,13 @@ impl ObjectAggregateAbi {
         if root_slices.is_empty() {
             return None;
         }
+        let mut snapshot = ProvenanceSnapshot::new(function, Some(object_effects));
         let facts = AggregateFacts::from_root_slices(
             function,
             function.ctx(),
             root_slices,
             &mut layout_cache,
-            Some(object_effects),
+            &mut snapshot,
         );
         let complete_provenance = facts.complete();
         let mut roots = SmallVec::<[ValueId; 4]>::new();
@@ -1043,8 +1046,9 @@ impl ObjectAggregateAbi {
         inst_liveness.compute(function, &cfg, &liveness);
 
         let mut layout_cache = shape::AggregateLayoutCache::default();
+        let mut snapshot = ProvenanceSnapshot::new(function, Some(object_effects));
         let facts =
-            AggregateObjectFacts::for_call_planner(function, object_effects, &mut layout_cache);
+            AggregateObjectFacts::for_call_planner(function, &mut layout_cache, &mut snapshot);
         let root_total_leaves = facts
             .root_slices()
             .iter()

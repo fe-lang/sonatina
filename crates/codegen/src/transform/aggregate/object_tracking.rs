@@ -9,8 +9,7 @@ use sonatina_ir::{
 use super::{
     LocalObjectArgInfo, ObjectEffectSummaryMap, ObjectReturnEffect,
     provenance::{
-        CompleteProvenance, CompleteRootSet, MayProvenance, ProvenanceFacts,
-        collect_root_provenance,
+        CompleteProvenance, CompleteRootSet, MayProvenance, ProvenanceFacts, ProvenanceSnapshot,
     },
     shape,
 };
@@ -41,10 +40,9 @@ impl AggregateFacts {
         module: &ModuleCtx,
         root_slices: FxHashMap<ValueId, shape::AggregateSlice>,
         layout_cache: &mut shape::AggregateLayoutCache,
-        object_effects: Option<&ObjectEffectSummaryMap>,
+        snapshot: &mut ProvenanceSnapshot<'_>,
     ) -> Self {
-        let provenance =
-            collect_root_provenance(func, module, &root_slices, layout_cache, object_effects);
+        let provenance = snapshot.collect_root_provenance(func, module, &root_slices, layout_cache);
         Self {
             root_slices,
             provenance,
@@ -55,34 +53,31 @@ impl AggregateFacts {
         func: &Function,
         local_object_args: Option<&FxHashMap<usize, LocalObjectArgInfo>>,
         layout_cache: &mut shape::AggregateLayoutCache,
-        object_effects: Option<&ObjectEffectSummaryMap>,
+        snapshot: &mut ProvenanceSnapshot<'_>,
     ) -> Self {
         let root_slices = collect_root_slices(func, local_object_args, layout_cache);
-        Self::from_root_slices(func, func.ctx(), root_slices, layout_cache, object_effects)
+        Self::from_root_slices(func, func.ctx(), root_slices, layout_cache, snapshot)
     }
 
     pub(crate) fn for_all_objref_args(
         func: &Function,
         layout_cache: &mut shape::AggregateLayoutCache,
-        object_effects: Option<&ObjectEffectSummaryMap>,
+        snapshot: &mut ProvenanceSnapshot<'_>,
     ) -> Self {
         let root_slices = collect_all_objref_arg_root_slices(func, layout_cache);
-        Self::from_root_slices(func, func.ctx(), root_slices, layout_cache, object_effects)
+        Self::from_root_slices(func, func.ctx(), root_slices, layout_cache, snapshot)
     }
 
     pub(crate) fn for_call_planner(
         func: &Function,
-        object_effects: &ObjectEffectSummaryMap,
         layout_cache: &mut shape::AggregateLayoutCache,
+        snapshot: &mut ProvenanceSnapshot<'_>,
     ) -> Self {
+        let object_effects = snapshot
+            .object_effects()
+            .expect("call planner facts require object effects");
         let root_slices = collect_call_planner_root_slices(func, object_effects, layout_cache);
-        Self::from_root_slices(
-            func,
-            func.ctx(),
-            root_slices,
-            layout_cache,
-            Some(object_effects),
-        )
+        Self::from_root_slices(func, func.ctx(), root_slices, layout_cache, snapshot)
     }
 
     pub(crate) fn root_slices(&self) -> &FxHashMap<ValueId, shape::AggregateSlice> {
@@ -121,32 +116,28 @@ impl AggregateObjectFacts {
         func: &Function,
         local_object_args: Option<&FxHashMap<usize, LocalObjectArgInfo>>,
         layout_cache: &mut shape::AggregateLayoutCache,
-        object_effects: Option<&ObjectEffectSummaryMap>,
+        snapshot: &mut ProvenanceSnapshot<'_>,
     ) -> Self {
-        let facts = AggregateFacts::for_local_objects(
-            func,
-            local_object_args,
-            layout_cache,
-            object_effects,
-        );
+        let facts =
+            AggregateFacts::for_local_objects(func, local_object_args, layout_cache, snapshot);
         Self::from_facts(func, facts, layout_cache)
     }
 
     pub(crate) fn for_all_objref_args(
         func: &Function,
         layout_cache: &mut shape::AggregateLayoutCache,
-        object_effects: Option<&ObjectEffectSummaryMap>,
+        snapshot: &mut ProvenanceSnapshot<'_>,
     ) -> Self {
-        let facts = AggregateFacts::for_all_objref_args(func, layout_cache, object_effects);
+        let facts = AggregateFacts::for_all_objref_args(func, layout_cache, snapshot);
         Self::from_facts(func, facts, layout_cache)
     }
 
     pub(crate) fn for_call_planner(
         func: &Function,
-        object_effects: &ObjectEffectSummaryMap,
         layout_cache: &mut shape::AggregateLayoutCache,
+        snapshot: &mut ProvenanceSnapshot<'_>,
     ) -> Self {
-        let facts = AggregateFacts::for_call_planner(func, object_effects, layout_cache);
+        let facts = AggregateFacts::for_call_planner(func, layout_cache, snapshot);
         Self::from_facts(func, facts, layout_cache)
     }
 

@@ -351,58 +351,87 @@ fn secondary_value_map<V: Clone + Default>(value_capacity: usize) -> SecondaryMa
     map
 }
 
-pub(crate) fn collect_root_provenance(
-    func: &Function,
-    module: &ModuleCtx,
-    root_slices: &FxHashMap<ValueId, shape::AggregateSlice>,
-    layout_cache: &mut shape::AggregateLayoutCache,
-    object_effects: Option<&ObjectEffectSummaryMap>,
-) -> ProvenanceFacts {
-    let value_capacity = func.dfg.values.len();
-    let mut provenance = ProvenanceFacts::with_value_capacity(value_capacity);
-    let mut exact_states = secondary_value_map(value_capacity);
-    let mut projection_transfer_cache = ProjectionTransferCache::default();
+pub(crate) struct ProvenanceSnapshot<'a> {
+    value_capacity: usize,
+    single_result_insts: Vec<(InstId, ValueId)>,
+    possible_root_transfers: PossibleRootTransfers,
+    possible_root_users: PossibleRootUsers,
+    value_sccs: FxHashMap<ValueId, usize>,
+    cfg: ControlFlowGraph,
+    reachable: SecondaryMap<BlockId, bool>,
+    projection_transfer_cache: ProjectionTransferCache,
+    object_effects: Option<&'a ObjectEffectSummaryMap>,
+}
 
-    for (&root_value, &slice) in root_slices {
-        provenance.possible_roots[root_value].insert(root_value);
-        exact_states[root_value] = Some(ExactState::Exact(Projection {
-            root_value: RootValue::new(root_value),
-            slice,
-        }));
+impl<'a> ProvenanceSnapshot<'a> {
+    pub(crate) fn new(func: &Function, object_effects: Option<&'a ObjectEffectSummaryMap>) -> Self {
+        let value_capacity = func.dfg.values.len();
+        let single_result_insts = collect_single_result_insts(func);
+        let (possible_root_transfers, possible_root_users) =
+            collect_possible_root_transfers(func, object_effects);
+        let value_sccs = compute_supported_value_sccs(func);
+        let mut cfg = ControlFlowGraph::default();
+        cfg.compute(func);
+        let reachable = cfg.reachable_blocks();
+        Self {
+            value_capacity,
+            single_result_insts,
+            possible_root_transfers,
+            possible_root_users,
+            value_sccs,
+            cfg,
+            reachable,
+            projection_transfer_cache: ProjectionTransferCache::default(),
+            object_effects,
+        }
     }
 
-    let (possible_root_transfers, possible_root_users) =
-        collect_possible_root_transfers(func, object_effects);
-    compute_possible_roots(
-        func,
-        &possible_root_transfers,
-        &possible_root_users,
-        &mut provenance.possible_roots,
-        &mut provenance.maybe_unknown,
-    );
-    let value_sccs = compute_supported_value_sccs(func, root_slices);
+    pub(crate) fn object_effects(&self) -> Option<&'a ObjectEffectSummaryMap> {
+        self.object_effects
+    }
 
-    loop {
-        let mut changed = false;
+    pub(crate) fn collect_root_provenance(
+        &mut self,
+        func: &Function,
+        module: &ModuleCtx,
+        root_slices: &FxHashMap<ValueId, shape::AggregateSlice>,
+        layout_cache: &mut shape::AggregateLayoutCache,
+    ) -> ProvenanceFacts {
+        let mut provenance = ProvenanceFacts::with_value_capacity(self.value_capacity);
+        let mut exact_states = secondary_value_map(self.value_capacity);
 
-        for block in func.layout.iter_block() {
-            for inst in func.layout.iter_inst(block) {
-                if !func.layout.is_inst_inserted(inst) {
-                    continue;
-                }
+        for (&root_value, &slice) in root_slices {
+            provenance.possible_roots[root_value].insert(root_value);
+            exact_states[root_value] = Some(ExactState::Exact(Projection {
+                root_value: RootValue::new(root_value),
+                slice,
+            }));
+        }
 
-                let Some(result) = single_result_value(func, inst) else {
-                    continue;
-                };
+        compute_possible_roots(
+            func,
+            &self.possible_root_transfers,
+            &self.possible_root_users,
+            &mut provenance.possible_roots,
+            &mut provenance.maybe_unknown,
+        );
 
+        loop {
+            let mut changed = false;
+
+            for &(inst, result) in &self.single_result_insts {
                 let next = if let Some(&slice) = root_slices.get(&result) {
                     ExactState::Exact(Projection {
                         root_value: RootValue::new(result),
                         slice,
                     })
-                } else if let Some(projection) =
-                    fresh_call_root_projection(func, result, inst, object_effects, layout_cache)
-                {
+                } else if let Some(projection) = fresh_call_root_projection(
+                    func,
+                    result,
+                    inst,
+                    self.object_effects,
+                    layout_cache,
+                ) {
                     ExactState::Exact(projection)
                 } else {
                     derive_exact_state(
@@ -413,10 +442,10 @@ pub(crate) fn collect_root_provenance(
                         &exact_states,
                         &provenance.possible_roots,
                         &provenance.maybe_unknown,
-                        &value_sccs,
+                        &self.value_sccs,
                         layout_cache,
-                        &mut projection_transfer_cache,
-                        object_effects,
+                        &mut self.projection_transfer_cache,
+                        self.object_effects,
                     )
                 };
 
@@ -427,44 +456,58 @@ pub(crate) fn collect_root_provenance(
                 exact_states[result] = Some(next);
                 changed = true;
             }
+
+            if !changed {
+                break;
+            }
         }
 
-        if !changed {
-            break;
+        for value in func.dfg.value_ids() {
+            provenance.exact[value] = match exact_states[value].unwrap_or(ExactState::Unknown) {
+                ExactState::Exact(projection) if !provenance.maybe_unknown[value] => {
+                    Some(projection)
+                }
+                ExactState::Unknown | ExactState::Blocked => None,
+                ExactState::Exact(_) => None,
+            };
         }
+
+        refine_possible_roots_from_objref_loads(
+            func,
+            root_slices,
+            &exact_states,
+            self,
+            &mut provenance.possible_roots,
+            &mut provenance.maybe_unknown,
+        );
+
+        provenance.possible_projections = collect_possible_projections(
+            func,
+            module,
+            root_slices,
+            &provenance.possible_roots,
+            &provenance.maybe_unknown,
+            &exact_states,
+            &self.single_result_insts,
+            layout_cache,
+            &mut self.projection_transfer_cache,
+            self.object_effects,
+        );
+
+        provenance
     }
+}
 
-    for value in func.dfg.value_ids() {
-        provenance.exact[value] = match exact_states[value].unwrap_or(ExactState::Unknown) {
-            ExactState::Exact(projection) if !provenance.maybe_unknown[value] => Some(projection),
-            ExactState::Unknown | ExactState::Blocked => None,
-            ExactState::Exact(_) => None,
-        };
-    }
-
-    refine_possible_roots_from_objref_loads(
-        func,
-        root_slices,
-        &exact_states,
-        &possible_root_transfers,
-        &mut provenance.possible_roots,
-        &mut provenance.maybe_unknown,
-        object_effects,
-    );
-
-    provenance.possible_projections = collect_possible_projections(
-        func,
-        module,
-        root_slices,
-        &provenance.possible_roots,
-        &provenance.maybe_unknown,
-        &exact_states,
-        layout_cache,
-        &mut projection_transfer_cache,
-        object_effects,
-    );
-
-    provenance
+#[cfg(test)]
+pub(crate) fn collect_root_provenance(
+    func: &Function,
+    module: &ModuleCtx,
+    root_slices: &FxHashMap<ValueId, shape::AggregateSlice>,
+    layout_cache: &mut shape::AggregateLayoutCache,
+    object_effects: Option<&ObjectEffectSummaryMap>,
+) -> ProvenanceFacts {
+    let mut snapshot = ProvenanceSnapshot::new(func, object_effects);
+    snapshot.collect_root_provenance(func, module, root_slices, layout_cache)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -475,6 +518,7 @@ fn collect_possible_projections(
     possible_roots: &SecondaryMap<ValueId, FxHashSet<ValueId>>,
     maybe_unknown: &SecondaryMap<ValueId, bool>,
     exact_states: &SecondaryMap<ValueId, Option<ExactState>>,
+    single_result_insts: &[(InstId, ValueId)],
     layout_cache: &mut shape::AggregateLayoutCache,
     projection_transfer_cache: &mut ProjectionTransferCache,
     object_effects: Option<&ObjectEffectSummaryMap>,
@@ -498,38 +542,29 @@ fn collect_possible_projections(
     loop {
         let mut changed = false;
 
-        for block in func.layout.iter_block() {
-            for inst in func.layout.iter_inst(block) {
-                if !func.layout.is_inst_inserted(inst) {
-                    continue;
-                }
+        for &(inst, result) in single_result_insts {
+            let next = if let Some(projection) =
+                exact_projection_of(exact_states, maybe_unknown, result)
+            {
+                vec![projection]
+            } else {
+                derive_possible_projections(
+                    func,
+                    module,
+                    inst,
+                    result,
+                    &possible_projections,
+                    possible_roots,
+                    maybe_unknown,
+                    layout_cache,
+                    projection_transfer_cache,
+                    object_effects,
+                )
+            };
 
-                let Some(result) = single_result_value(func, inst) else {
-                    continue;
-                };
-                let next = if let Some(projection) =
-                    exact_projection_of(exact_states, maybe_unknown, result)
-                {
-                    vec![projection]
-                } else {
-                    derive_possible_projections(
-                        func,
-                        module,
-                        inst,
-                        result,
-                        &possible_projections,
-                        possible_roots,
-                        maybe_unknown,
-                        layout_cache,
-                        projection_transfer_cache,
-                        object_effects,
-                    )
-                };
-
-                if next != possible_projections[result] {
-                    possible_projections[result] = next;
-                    changed = true;
-                }
+            if next != possible_projections[result] {
+                possible_projections[result] = next;
+                changed = true;
             }
         }
 
@@ -603,6 +638,20 @@ fn collect_possible_root_transfers(
     }
 
     (transfers, users)
+}
+
+fn collect_single_result_insts(func: &Function) -> Vec<(InstId, ValueId)> {
+    let mut insts = Vec::new();
+    for block in func.layout.iter_block() {
+        for inst in func.layout.iter_inst(block) {
+            if func.layout.is_inst_inserted(inst)
+                && let Some(result) = single_result_value(func, inst)
+            {
+                insts.push((inst, result));
+            }
+        }
+    }
+    insts
 }
 
 fn possible_root_transfer_for_inst(
@@ -809,15 +858,10 @@ fn refine_possible_roots_from_objref_loads(
     func: &Function,
     root_slices: &FxHashMap<ValueId, shape::AggregateSlice>,
     exact_states: &SecondaryMap<ValueId, Option<ExactState>>,
-    possible_root_transfers: &PossibleRootTransfers,
+    snapshot: &ProvenanceSnapshot<'_>,
     possible_roots: &mut SecondaryMap<ValueId, FxHashSet<ValueId>>,
     maybe_unknown: &mut SecondaryMap<ValueId, bool>,
-    object_effects: Option<&ObjectEffectSummaryMap>,
 ) {
-    let mut cfg = ControlFlowGraph::default();
-    cfg.compute(func);
-    let reachable = cfg.reachable_blocks();
-
     loop {
         let mut changed = false;
         let possible_roots_snapshot = possible_roots.clone();
@@ -831,13 +875,13 @@ fn refine_possible_roots_from_objref_loads(
         let block_entry_captures = compute_capture_states_for_blocks(
             func,
             capture_state,
-            object_effects,
-            &cfg,
-            &reachable,
+            snapshot.object_effects,
+            &snapshot.cfg,
+            &snapshot.reachable,
         );
 
         for block in func.layout.iter_block() {
-            if !reachable[block] {
+            if !snapshot.reachable[block] {
                 continue;
             }
 
@@ -848,7 +892,7 @@ fn refine_possible_roots_from_objref_loads(
                 }
 
                 if let Some(result) = single_result_value(func, inst)
-                    && let Some(transfer) = &possible_root_transfers[result]
+                    && let Some(transfer) = &snapshot.possible_root_transfers[result]
                     && union_possible_root_transfer_from_snapshot(
                         transfer,
                         &possible_roots_snapshot,
@@ -880,7 +924,7 @@ fn refine_possible_roots_from_objref_loads(
                     func,
                     inst,
                     capture_state,
-                    object_effects,
+                    snapshot.object_effects,
                     &mut root_captures,
                 );
             }
@@ -1476,22 +1520,20 @@ fn projection_value_ty_matches(value_ty: Type, projection_ty: Type, module: &Mod
     reference_element_ty(module, value_ty).is_some_and(|pointee| pointee == projection_ty)
 }
 
-fn compute_supported_value_sccs(
-    func: &Function,
-    root_slices: &FxHashMap<ValueId, shape::AggregateSlice>,
-) -> FxHashMap<ValueId, usize> {
+fn compute_supported_value_sccs(func: &Function) -> FxHashMap<ValueId, usize> {
     let mut nodes = FxHashSet::default();
-    nodes.extend(root_slices.keys().copied());
 
     for block in func.layout.iter_block() {
         for inst in func.layout.iter_inst(block) {
             if !func.layout.is_inst_inserted(inst) {
                 continue;
             }
-            if supported_value_deps(func, inst).is_some()
-                && let Some(result) = single_result_value(func, inst)
-            {
+            if let (Some(result), Some(deps)) = (
+                single_result_value(func, inst),
+                supported_value_deps(func, inst),
+            ) {
                 nodes.insert(result);
+                nodes.extend(deps);
             }
         }
     }
