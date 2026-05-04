@@ -11,7 +11,7 @@ use std::{
 
 use clap::{Parser, Subcommand};
 use sonatina_codegen::{
-    isa::evm::{EvmBackend, PushWidthPolicy},
+    isa::evm::{EvmBackend, LateCleanupProfile, PushWidthPolicy},
     object::{CompileOptions, ObjectArtifact, compile_all_objects},
     optim::pipeline::Pipeline,
 };
@@ -58,9 +58,28 @@ enum Command {
         #[arg(short = 'p', long = "profile")]
         profile: bool,
 
+        /// Build optimization level: 0 or 2
+        #[arg(short = 'O', long = "opt-level", value_name = "LEVEL", default_value = "0", value_parser = parse_build_opt_level)]
+        opt_level: BuildOptLevel,
+
         /// Input Sonatina IR file
         input: PathBuf,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BuildOptLevel {
+    O0,
+    O2,
+}
+
+impl BuildOptLevel {
+    fn late_cleanup_profile(self) -> LateCleanupProfile {
+        match self {
+            Self::O0 => LateCleanupProfile::Off,
+            Self::O2 => LateCleanupProfile::Speed,
+        }
+    }
 }
 
 fn main() {
@@ -68,9 +87,21 @@ fn main() {
     let exit_code = match cli.command {
         Command::Verify { input } => run_verify(&input),
         Command::Optimize { input, profile } => run_optimize(&input, profile),
-        Command::Build { input, profile } => run_build(&input, profile),
+        Command::Build {
+            input,
+            profile,
+            opt_level,
+        } => run_build(&input, profile, opt_level),
     };
     process::exit(exit_code);
+}
+
+fn parse_build_opt_level(level: &str) -> Result<BuildOptLevel, String> {
+    match level.strip_prefix('O').unwrap_or(level) {
+        "0" => Ok(BuildOptLevel::O0),
+        "2" => Ok(BuildOptLevel::O2),
+        _ => Err("supported build optimization levels are 0 and 2".to_string()),
+    }
 }
 
 fn run_verify(input: &Path) -> i32 {
@@ -136,7 +167,7 @@ fn run_optimize(input: &Path, profile: bool) -> i32 {
     0
 }
 
-fn run_build(input: &Path, profile: bool) -> i32 {
+fn run_build(input: &Path, profile: bool, opt_level: BuildOptLevel) -> i32 {
     let profiler = Profiler::start(profile);
     let total_start = Instant::now();
     let mut stages = Vec::new();
@@ -155,15 +186,18 @@ fn run_build(input: &Path, profile: bool) -> i32 {
         return code;
     }
 
-    measure_stage(&mut stages, "optimize", || {
-        Pipeline::size().run(&mut parsed.module);
-    });
+    if opt_level == BuildOptLevel::O2 {
+        measure_stage(&mut stages, "optimize", || {
+            Pipeline::speed().run(&mut parsed.module);
+        });
+    }
 
-    let artifacts =
-        match measure_stage(&mut stages, "codegen", || compile_artifacts(&parsed.module)) {
-            Ok(artifacts) => artifacts,
-            Err(code) => return code,
-        };
+    let artifacts = match measure_stage(&mut stages, "codegen", || {
+        compile_artifacts(&parsed.module, opt_level)
+    }) {
+        Ok(artifacts) => artifacts,
+        Err(code) => return code,
+    };
     let artifact = match select_artifact(&artifacts) {
         Ok(artifact) => artifact,
         Err(err) => {
@@ -230,13 +264,17 @@ fn verify_or_report(module: &Module, level: VerificationLevel) -> Result<(), i32
     if report.has_errors() { Err(1) } else { Ok(()) }
 }
 
-fn compile_artifacts(module: &Module) -> Result<Vec<ObjectArtifact>, i32> {
+fn compile_artifacts(
+    module: &Module,
+    opt_level: BuildOptLevel,
+) -> Result<Vec<ObjectArtifact>, i32> {
     let triple = TargetTriple::new(
         Architecture::Evm,
         Vendor::Ethereum,
         OperatingSystem::Evm(EvmVersion::Osaka),
     );
-    let backend = EvmBackend::new(Evm::new(triple));
+    let backend = EvmBackend::new(Evm::new(triple))
+        .with_late_cleanup_profile(opt_level.late_cleanup_profile());
     let opts = CompileOptions {
         fixup_policy: PushWidthPolicy::MinimalRelax,
         emit_symtab: false,
@@ -614,4 +652,50 @@ fn span_depth(
         parent = parent_map.get(&current).copied().flatten();
     }
     depth
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use clap::Parser;
+
+    use super::{BuildOptLevel, Cli, Command};
+
+    #[test]
+    fn build_defaults_to_o0() {
+        let cli = Cli::try_parse_from(["sonatina", "build", "foo.sntn"]).unwrap();
+        match cli.command {
+            Command::Build {
+                input, opt_level, ..
+            } => {
+                assert_eq!(input, PathBuf::from("foo.sntn"));
+                assert_eq!(opt_level, BuildOptLevel::O0);
+            }
+            _ => panic!("expected build command"),
+        }
+    }
+
+    #[test]
+    fn build_accepts_concatenated_o2() {
+        let cli = Cli::try_parse_from(["sonatina", "build", "foo.sntn", "-O2"]).unwrap();
+        match cli.command {
+            Command::Build {
+                input, opt_level, ..
+            } => {
+                assert_eq!(input, PathBuf::from("foo.sntn"));
+                assert_eq!(opt_level, BuildOptLevel::O2);
+            }
+            _ => panic!("expected build command"),
+        }
+    }
+
+    #[test]
+    fn build_rejects_unsupported_opt_level() {
+        let err = Cli::try_parse_from(["sonatina", "build", "foo.sntn", "-O3"]).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("supported build optimization levels are 0 and 2")
+        );
+    }
 }
