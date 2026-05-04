@@ -1,11 +1,12 @@
 use cranelift_entity::SecondaryMap;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 use sonatina_ir::{
-    Function, InstId, InstSetExt, ValueId,
+    Function, InstId, InstSetExt, Type, ValueId,
     inst::evm::inst_set::EvmInstKind,
     isa::{Isa, evm::Evm},
     module::{FuncRef, ModuleCtx},
+    types::{CompoundType, CompoundTypeRef},
 };
 
 use super::ptr_escape::PtrEscapeSummary;
@@ -27,15 +28,22 @@ impl PtrBase {
     }
 }
 
+/// Pointer provenance facts for an SSA value or modeled memory cell.
+///
+/// Exact `bases` may coexist with unknown flags. For example, a call result can
+/// be either a caller-local alloca or an unknown non-arg pointer; preserving the
+/// exact alloca base lets later escape analysis report the local escape.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Provenance {
     bases: SmallVec<[PtrBase; 4]>,
+    /// Arg attribution retained after exact arg bases are collapsed.
     unknown_arg_indices: SmallVec<[u32; 4]>,
+    /// The value may also be a non-arg pointer whose exact base is unknown.
     unknown_non_arg: bool,
 }
 
 impl Provenance {
-    pub(crate) fn is_empty(&self) -> bool {
+    pub(crate) fn has_no_known_bases(&self) -> bool {
         self.bases.is_empty()
     }
 
@@ -53,24 +61,35 @@ impl Provenance {
         true
     }
 
-    fn add_unknown_arg_indices_from_bases(&mut self) -> bool {
+    fn collapse_arg_bases_to_unknown_arg_indices(&mut self) -> bool {
+        let arg_indices: SmallVec<[u32; 4]> = self
+            .bases
+            .iter()
+            .filter_map(|base| match base {
+                PtrBase::Arg(idx) => Some(*idx),
+                _ => None,
+            })
+            .collect();
         let mut changed = false;
-        let arg_indices: SmallVec<[u32; 4]> = self.arg_indices().collect();
         for idx in arg_indices {
             changed |= self.add_unknown_arg_index(idx);
         }
-        changed
+
+        let old_len = self.bases.len();
+        self.bases.retain(|base| !matches!(base, PtrBase::Arg(_)));
+        changed || self.bases.len() != old_len
     }
 
     fn mark_unknown_non_arg(&mut self) -> bool {
-        let changed = !self.unknown_non_arg;
+        let mut changed = !self.unknown_non_arg;
         self.unknown_non_arg = true;
+        changed |= self.collapse_arg_bases_to_unknown_arg_indices();
         changed
     }
 
     fn poison_to_unknown_non_arg_preserving_arg_attribution(&mut self) -> bool {
-        let mut changed = self.add_unknown_arg_indices_from_bases();
-        changed |= self.mark_unknown_non_arg();
+        let mut changed = self.mark_unknown_non_arg();
+        // Memory clobbering intentionally loses exact bases. Plain union does not.
         if !self.bases.is_empty() {
             self.bases.clear();
             changed = true;
@@ -80,45 +99,33 @@ impl Provenance {
 
     pub(crate) fn union_with(&mut self, other: &Self) -> bool {
         let mut changed = false;
-
-        if self.unknown_non_arg {
-            if !self.bases.is_empty() {
-                self.bases.clear();
-                changed = true;
-            }
-            for idx in other.arg_indices() {
-                changed |= self.add_unknown_arg_index(idx);
-            }
-            return changed;
-        }
-
-        if other.unknown_non_arg {
-            changed |= self.add_unknown_arg_indices_from_bases();
-            for idx in other.arg_indices() {
-                changed |= self.add_unknown_arg_index(idx);
-            }
-            changed |= self.mark_unknown_non_arg();
-            if !self.bases.is_empty() {
-                self.bases.clear();
-                changed = true;
-            }
-            return changed;
-        }
+        let mut bases_changed = false;
 
         for base in other.bases.iter().copied() {
-            if !self.bases.contains(&base) {
-                self.bases.push(base);
-                changed = true;
+            match base {
+                PtrBase::Arg(idx) if self.unknown_non_arg => {
+                    changed |= self.add_unknown_arg_index(idx);
+                }
+                _ => {
+                    if !self.bases.contains(&base) {
+                        self.bases.push(base);
+                        bases_changed = true;
+                    }
+                }
             }
         }
 
-        if changed {
+        if bases_changed {
             self.bases.sort_unstable_by_key(|b| b.key());
             self.bases.dedup();
+            changed = true;
         }
 
         for idx in other.unknown_arg_indices.iter().copied() {
             changed |= self.add_unknown_arg_index(idx);
+        }
+        if other.unknown_non_arg {
+            changed |= self.mark_unknown_non_arg();
         }
         changed
     }
@@ -140,14 +147,18 @@ impl Provenance {
 
     pub(crate) fn is_local_addr(&self) -> bool {
         !self.is_unknown_ptr()
-            && !self.bases.is_empty()
+            && !self.has_no_known_bases()
             && self.bases.iter().all(|b| matches!(b, PtrBase::Alloca(_)))
     }
 
     pub(crate) fn may_be_nonlocal_nonarg(&self) -> bool {
         self.unknown_non_arg
             || self.bases.iter().any(|b| matches!(b, PtrBase::Malloc(_)))
-            || (self.bases.is_empty() && self.unknown_arg_indices.is_empty())
+            || (self.has_no_known_bases() && self.unknown_arg_indices.is_empty())
+    }
+
+    pub(crate) fn may_be_nonlocal_nonarg_without_malloc(&self) -> bool {
+        self.unknown_non_arg || (self.has_no_known_bases() && self.unknown_arg_indices.is_empty())
     }
 
     pub(crate) fn alloca_insts(&self) -> impl Iterator<Item = InstId> + '_ {
@@ -245,6 +256,75 @@ fn unmodeled_write_addr(data: &EvmInstKind) -> Option<ValueId> {
     }
 }
 
+fn call_result_provenance(
+    function: &Function,
+    module: &ModuleCtx,
+    call_args: &[ValueId],
+    summary: &PtrEscapeSummary,
+    prov: &SecondaryMap<ValueId, Provenance>,
+    ret_idx: usize,
+    def: ValueId,
+) -> Provenance {
+    let mut next = Provenance::default();
+    for &idx in summary.returned_arg_indices(ret_idx) {
+        if let Some(&arg) = call_args.get(idx as usize) {
+            let _ = next.union_with(&prov[arg]);
+        }
+    }
+    let def_ty = function.dfg.value_ty(def);
+    if summary.return_may_be_non_arg_pointer(ret_idx)
+        && type_can_carry_pointer_provenance(module, def_ty)
+    {
+        let _ = next.mark_unknown_non_arg();
+    } else if def_ty.is_pointer(module) && next.has_no_known_bases() && !next.is_unknown_ptr() {
+        // Pointer-typed calls with incomplete summaries still produce pointer values.
+        let _ = next.mark_unknown_non_arg();
+    }
+    next
+}
+
+pub(crate) fn type_can_carry_pointer_provenance(module: &ModuleCtx, ty: Type) -> bool {
+    // TODO: This is dual-use encoded-pointer carrier logic, not provenance-specific.
+    // Move it to a shared EVM helper with a clearer name and cache recursive type queries.
+    let mut seen = FxHashSet::default();
+    type_can_carry_pointer_provenance_inner(module, ty, &mut seen)
+}
+
+fn type_can_carry_pointer_provenance_inner(
+    module: &ModuleCtx,
+    ty: Type,
+    seen: &mut FxHashSet<CompoundTypeRef>,
+) -> bool {
+    match ty {
+        Type::I256 => true,
+        Type::I1 | Type::I8 | Type::I16 | Type::I32 | Type::I64 | Type::I128 | Type::Unit => false,
+        Type::EnumTag(_) => false,
+        Type::Compound(compound) => {
+            if !seen.insert(compound) {
+                return false;
+            }
+
+            match module.with_ty_store(|store| store.resolve_compound(compound).clone()) {
+                CompoundType::Ptr(_) | CompoundType::ObjRef(_) | CompoundType::ConstRef(_) => true,
+                CompoundType::Array { elem, .. } => {
+                    type_can_carry_pointer_provenance_inner(module, elem, seen)
+                }
+                CompoundType::Struct(data) => data
+                    .fields
+                    .iter()
+                    .any(|&field| type_can_carry_pointer_provenance_inner(module, field, seen)),
+                CompoundType::Enum(data) => data.variants.iter().any(|variant| {
+                    variant
+                        .fields
+                        .iter()
+                        .any(|&field| type_can_carry_pointer_provenance_inner(module, field, seen))
+                }),
+                CompoundType::Func { .. } => false,
+            }
+        }
+    }
+}
+
 pub(crate) struct ProvenanceInfo {
     pub(crate) value: SecondaryMap<ValueId, Provenance>,
     pub(crate) local_mem: FxHashMap<InstId, Provenance>,
@@ -267,7 +347,7 @@ pub(crate) fn compute_provenance(
     }
 
     for (idx, &arg) in function.arg_values.iter().enumerate() {
-        if function.dfg.value_ty(arg).is_pointer(module) {
+        if type_can_carry_pointer_provenance(module, function.dfg.value_ty(arg)) {
             prov[arg].bases.push(PtrBase::Arg(idx as u32));
         }
     }
@@ -309,7 +389,7 @@ pub(crate) fn compute_provenance(
                     changed |= poison_arg_mem(&mut arg_mem, &prov[dst]);
                 }
 
-                let call_summary = if let EvmInstKind::Call(call) = &data {
+                if let EvmInstKind::Call(call) = &data {
                     let summary = callee_summary(*call.callee());
                     let args = call.args();
                     summary.for_each_store_effect(args, |src_idx, dst_actual| {
@@ -320,10 +400,18 @@ pub(crate) fn compute_provenance(
                             changed |= store_arg_mem(&mut arg_mem, dst_addr, &src_prov);
                         }
                     });
-                    Some(summary)
-                } else {
-                    None
-                };
+                    for (ret_idx, &def) in function.dfg.inst_results(inst).iter().enumerate() {
+                        let next = call_result_provenance(
+                            function, module, args, &summary, &prov, ret_idx, def,
+                        );
+                        let cur = &mut prov[def];
+                        if *cur != next {
+                            *cur = next;
+                            changed = true;
+                        }
+                    }
+                    continue;
+                }
 
                 let [def] = function.dfg.inst_results(inst) else {
                     continue;
@@ -355,7 +443,7 @@ pub(crate) fn compute_provenance(
                         let from = *i2p.from();
                         let from_prov = &prov[from];
                         let _ = next.union_with(from_prov);
-                        if from_prov.bases.is_empty() && !from_prov.is_unknown_ptr() {
+                        if from_prov.has_no_known_bases() && !from_prov.is_unknown_ptr() {
                             let _ = next.mark_unknown_non_arg();
                         }
                     }
@@ -368,25 +456,6 @@ pub(crate) fn compute_provenance(
                     }
                     EvmInstKind::ExtractValue(ev) => {
                         let _ = next.union_with(&prov[*ev.dest()]);
-                    }
-                    EvmInstKind::Call(call) => {
-                        let summary = call_summary
-                            .as_ref()
-                            .expect("call summary should exist for call instructions");
-                        for (idx, &arg) in call.args().iter().enumerate() {
-                            if summary.arg_may_be_returned(idx) {
-                                let _ = next.union_with(&prov[arg]);
-                            }
-                        }
-                        if function.dfg.value_ty(*def).is_pointer(module)
-                            && next.bases.is_empty()
-                            && !next.is_unknown_ptr()
-                        {
-                            // Calls that return pointers with no tracked base still produce
-                            // pointer-typed results; treat these as unknown to avoid
-                            // unsoundly classifying overlapping mallocs as transient.
-                            let _ = next.mark_unknown_non_arg();
-                        }
                     }
                     EvmInstKind::Add(_)
                     | EvmInstKind::Sub(_)
@@ -445,12 +514,13 @@ pub(crate) fn compute_value_provenance(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{super::ptr_escape::compute_ptr_escape_summaries, *};
     use sonatina_parser::parse_module;
     use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
 
     fn ret_provenance(src: &str, func_name: &str) -> Provenance {
         let parsed = parse_module(src).expect("module parses");
+        let funcs = parsed.module.funcs();
         let func_ref = parsed
             .module
             .funcs()
@@ -464,9 +534,11 @@ mod tests {
             operating_system: OperatingSystem::Evm(EvmVersion::Osaka),
         });
 
+        let summaries = compute_ptr_escape_summaries(&parsed.module, &funcs, &isa);
+
         parsed.module.func_store.view(func_ref, |function| {
-            let prov = compute_value_provenance(function, &parsed.module.ctx, &isa, |_| {
-                PtrEscapeSummary::new(0)
+            let prov = compute_value_provenance(function, &parsed.module.ctx, &isa, |callee| {
+                PtrEscapeSummary::get_or_conservative(&summaries, &parsed.module.ctx, callee)
             });
 
             for block in function.layout.iter_block() {
@@ -485,6 +557,30 @@ mod tests {
 
             panic!("no return value in function");
         })
+    }
+
+    #[test]
+    fn union_preserves_exact_bases_when_unknown_non_arg_is_present() {
+        let alloca = InstId(1);
+        let malloc = InstId(2);
+        let mut lhs = Provenance {
+            bases: SmallVec::from_vec(vec![PtrBase::Alloca(alloca), PtrBase::Arg(0)]),
+            unknown_arg_indices: SmallVec::new(),
+            unknown_non_arg: false,
+        };
+        let rhs = Provenance {
+            bases: SmallVec::from_vec(vec![PtrBase::Malloc(malloc), PtrBase::Arg(1)]),
+            unknown_arg_indices: SmallVec::from_vec(vec![2]),
+            unknown_non_arg: true,
+        };
+
+        assert!(lhs.mark_unknown_non_arg());
+        assert!(lhs.union_with(&rhs));
+
+        assert!(lhs.is_unknown_ptr());
+        assert_eq!(lhs.alloca_insts().collect::<Vec<_>>(), vec![alloca]);
+        assert_eq!(lhs.malloc_insts().collect::<Vec<_>>(), vec![malloc]);
+        assert_eq!(lhs.arg_indices().collect::<Vec<_>>(), vec![0, 1, 2]);
     }
 
     #[test]
@@ -551,5 +647,151 @@ block0:
 
         assert!(ret_prov.is_unknown_ptr());
         assert_eq!(ret_prov.arg_indices().collect::<Vec<_>>(), vec![0]);
+    }
+
+    #[test]
+    fn mixed_unknown_call_result_preserves_alloca_through_carrier() {
+        let ret_prov = ret_provenance(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %maybe_arg(v0.*i8, v1.i1) -> *i8 {
+block0:
+    br v1 block1 block2;
+
+block1:
+    return v0;
+
+block2:
+    v2.*i8 = int_to_ptr 0.i32 *i8;
+    return v2;
+}
+
+func public %caller(v0.i1) -> *i8 {
+block0:
+    v1.*i8 = alloca i8;
+    v2.*i8 = call %maybe_arg v1 v0;
+    v3.i256 = ptr_to_int v2 i256;
+    v4.i256 = add v3 0.i256;
+    v5.*i8 = int_to_ptr v4 *i8;
+    return v5;
+}
+"#,
+            "caller",
+        );
+
+        assert!(ret_prov.is_unknown_ptr(), "{ret_prov:?}");
+        assert_eq!(ret_prov.alloca_insts().count(), 1, "{ret_prov:?}");
+    }
+
+    #[test]
+    fn call_result_preserves_i256_encoded_malloc_returned_in_aggregate() {
+        let ret_prov = ret_provenance(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @Bytes = {i256, i256};
+
+func public %from_ptr(v0.i256, v1.i256) -> @Bytes {
+block0:
+    v2.@Bytes = insert_value undef.@Bytes 0.i256 v0;
+    v3.@Bytes = insert_value v2 1.i256 v1;
+    return v3;
+}
+
+func public %caller() -> @Bytes {
+block0:
+    v0.*i8 = evm_malloc 32.i256;
+    v1.i256 = ptr_to_int v0 i256;
+    v2.@Bytes = call %from_ptr v1 32.i256;
+    return v2;
+}
+"#,
+            "caller",
+        );
+
+        assert!(!ret_prov.is_unknown_ptr(), "{ret_prov:?}");
+        assert_eq!(ret_prov.malloc_insts().count(), 1, "{ret_prov:?}");
+    }
+
+    #[test]
+    fn multi_result_call_preserves_i256_encoded_malloc_return() {
+        let ret_prov = ret_provenance(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %from_ptr(v0.i256, v1.i256) -> (i256, i256) {
+block0:
+    return (v0, v1);
+}
+
+func public %caller() -> i256 {
+block0:
+    v0.*i8 = evm_malloc 32.i256;
+    v1.i256 = ptr_to_int v0 i256;
+    (v2.i256, v3.i256) = call %from_ptr v1 32.i256;
+    return v2;
+}
+"#,
+            "caller",
+        );
+
+        assert!(!ret_prov.is_unknown_ptr(), "{ret_prov:?}");
+        assert_eq!(ret_prov.malloc_insts().count(), 1, "{ret_prov:?}");
+    }
+
+    #[test]
+    fn multi_result_call_does_not_taint_unrelated_i256_result() {
+        let ret_prov = ret_provenance(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %mk() -> (i256, i256) {
+block0:
+    v0.*i8 = evm_malloc 32.i256;
+    v1.i256 = ptr_to_int v0 i256;
+    return (7.i256, v1);
+}
+
+func public %caller() -> i256 {
+block0:
+    (v0.i256, v1.i256) = call %mk;
+    return v0;
+}
+"#,
+            "caller",
+        );
+
+        assert!(!ret_prov.is_unknown_ptr(), "{ret_prov:?}");
+        assert_eq!(ret_prov.malloc_insts().count(), 0, "{ret_prov:?}");
+    }
+
+    #[test]
+    fn call_result_marks_i256_encoded_non_arg_pointer_return_unknown() {
+        let ret_prov = ret_provenance(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %mk() -> i256 {
+block0:
+    v0.*i8 = evm_malloc 32.i256;
+    v1.i256 = ptr_to_int v0 i256;
+    return v1;
+}
+
+func public %caller() -> i256 {
+block0:
+    v0.i256 = call %mk;
+    return v0;
+}
+"#,
+            "caller",
+        );
+
+        assert!(ret_prov.is_unknown_ptr(), "{ret_prov:?}");
+        assert_eq!(
+            ret_prov.arg_indices().collect::<Vec<_>>(),
+            Vec::<u32>::new()
+        );
     }
 }

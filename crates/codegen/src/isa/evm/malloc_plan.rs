@@ -73,10 +73,7 @@ pub(crate) fn should_restore_free_ptr_on_internal_returns(
     }
 
     let prov_info = compute_provenance(function, module, isa, |callee| {
-        ptr_escape
-            .get(&callee)
-            .cloned()
-            .unwrap_or_else(|| conservative_unknown_ptr_summary(module, callee))
+        PtrEscapeSummary::get_or_conservative(ptr_escape, module, callee)
     });
     let prov = &prov_info.value;
     let local_mem = &prov_info.local_mem;
@@ -181,10 +178,7 @@ pub(crate) fn compute_transient_mallocs(
     }
 
     let prov_info = compute_provenance(function, module, isa, |callee| {
-        ptr_escape
-            .get(&callee)
-            .cloned()
-            .unwrap_or_else(|| conservative_unknown_ptr_summary(module, callee))
+        PtrEscapeSummary::get_or_conservative(ptr_escape, module, callee)
     });
     let prov = &prov_info.value;
     let local_mem = &prov_info.local_mem;
@@ -265,10 +259,7 @@ pub(crate) fn compute_malloc_escape_kinds_for_function(
     ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
 ) -> FxHashMap<InstId, MallocEscapeKind> {
     let prov_info = compute_provenance(function, module, isa, |callee| {
-        ptr_escape
-            .get(&callee)
-            .cloned()
-            .unwrap_or_else(|| conservative_unknown_ptr_summary(module, callee))
+        PtrEscapeSummary::get_or_conservative(ptr_escape, module, callee)
     });
     let prov = &prov_info.value;
     let local_mem = &prov_info.local_mem;
@@ -474,10 +465,6 @@ fn compute_malloc_escape_kinds(
     escape_kinds
 }
 
-fn conservative_unknown_ptr_summary(module: &ModuleCtx, func_ref: FuncRef) -> PtrEscapeSummary {
-    PtrEscapeSummary::conservative_unknown_ctx(module, func_ref)
-}
-
 fn value_may_be_heap_derived(
     function: &Function,
     module: &ModuleCtx,
@@ -486,5 +473,5 @@ fn value_may_be_heap_derived(
 ) -> bool {
     prov[value].malloc_insts().next().is_some()
         || prov[value].is_unknown_ptr()
-        || (function.dfg.value_ty(value).is_pointer(module) && prov[value].is_empty())
+        || (function.dfg.value_ty(value).is_pointer(module) && prov[value].has_no_known_bases())
 }

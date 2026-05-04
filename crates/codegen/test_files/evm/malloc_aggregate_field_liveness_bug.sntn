@@ -1,0 +1,74 @@
+#! evm.case: deploy_copied_runtime
+#!   calldata:
+#!   expect: return u256(42)
+
+target = "evm-ethereum-osaka"
+
+type @Bytes = { i256, i256 };
+
+func private %from_ptr(v0.i256, v1.i256) -> @Bytes {
+    block0:
+        v2.@Bytes = insert_value undef.@Bytes 0.i256 v0;
+        v3.@Bytes = insert_value v2 1.i256 v1;
+        return v3;
+}
+
+func private %new_bytes(v0.i256) -> @Bytes {
+    block0:
+        v1.*i8 = evm_malloc v0;
+        v2.i256 = evm_calldata_size;
+        evm_calldata_copy v1 v2 v0;
+        v3.i256 = ptr_to_int v1 i256;
+        v4.@Bytes = insert_value undef.@Bytes 0.i256 v3;
+        v5.@Bytes = insert_value v4 1.i256 v0;
+        return v5;
+}
+
+func private %write_len(v0.i256, v1.i256, v2.i256) {
+    block0:
+        v3.i256 = add v0 v1;
+        mstore v3 v2 i256;
+        return;
+}
+
+func private %copy_bytes(v0.i256, v1.i256, v2.i256, v3.i256) {
+    block0:
+        v4.i256 = add v0 v1;
+        evm_mcopy v4 v2 v3;
+        return;
+}
+
+func public %init() {
+    block0:
+        v0.*i8 = evm_malloc 8.i256;
+        v1.i256 = ptr_to_int v0 i256;
+        mstore v1 0x602a5f5260205ff3000000000000000000000000000000000000000000000000.i256 i256;
+        v3.@Bytes = call %from_ptr v1 8.i256;
+
+        v4.@Bytes = call %new_bytes 64.i256;
+        v5.i256 = extract_value v4 0.i256;
+        v6.i256 = extract_value v3 1.i256;
+        call %write_len v5 0.i256 v6;
+
+        v7.i256 = extract_value v4 0.i256;
+        v8.i256 = extract_value v3 0.i256;
+        v9.i256 = extract_value v3 1.i256;
+        call %copy_bytes v7 32.i256 v8 v9;
+
+        v10.i256 = add v7 32.i256;
+        evm_return v10 v9;
+}
+
+func public %fallback() {
+    block0:
+        evm_stop;
+}
+
+object @Contract {
+    section runtime {
+        entry %fallback;
+    }
+    section init {
+        entry %init;
+    }
+}
