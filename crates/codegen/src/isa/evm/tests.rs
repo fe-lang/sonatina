@@ -2724,7 +2724,7 @@ block2:
 "#,
     )
     .expect("module parses");
-    let backend = test_backend();
+    let backend = test_backend().with_late_cleanup_profile(LateCleanupProfile::Speed);
     let entry = find_func(&parsed.module, "main");
     let prepared = backend
         .prepare_section(work_module_with_entry(&parsed.module, &[entry], entry))
