@@ -31,7 +31,7 @@ impl Default for CompileOptions {
     fn default() -> Self {
         Self {
             fixup_policy: PushWidthPolicy::default(),
-            emit_symtab: true,
+            emit_symtab: false,
             emit_observability: false,
             verifier_cfg: VerifierConfig::for_level(VerificationLevel::Fast),
         }

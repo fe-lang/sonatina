@@ -415,7 +415,7 @@ pub(crate) fn compute_func_stack_objects(
         obj_id_by_local: &obj_id_by_local,
         alloca_ids: &alloca_ids,
     };
-    let (regions, call_sites) =
+    let (regions, mut call_sites) =
         compute_regions_and_calls(function, &cfg, &block_order, &mut liveness_ctx);
     for (idx, region) in regions.into_iter().enumerate() {
         objects[idx].region = region;
@@ -424,6 +424,11 @@ pub(crate) fn compute_func_stack_objects(
     let mut obj_size_words: FxHashMap<StackObjId, u32> = FxHashMap::default();
     for obj in &objects {
         obj_size_words.insert(obj.id, obj.size_words);
+    }
+    for call in &mut call_sites {
+        call.live_across_objs.retain(|obj| obj_size_words[obj] != 0);
+        call.callee_visible_objs
+            .retain(|obj| obj_size_words[obj] != 0);
     }
 
     let mut obj_facts: FxHashMap<StackObjId, ObjFacts> = FxHashMap::default();
@@ -474,6 +479,9 @@ pub(crate) fn compute_func_stack_objects(
         let facts = obj_facts
             .get_mut(&obj)
             .unwrap_or_else(|| panic!("missing object facts for obj {}", obj.as_u32()));
+        if facts.size_words == 0 {
+            continue;
+        }
         facts.must_stable = true;
         if matches!(facts.stable_reason, StableReason::None) {
             facts.stable_reason = StableReason::UnknownLocalPointerClosure;

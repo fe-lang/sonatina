@@ -61,7 +61,7 @@ impl EvmBackend {
             isa,
             stackify_reach_depth: 16,
             arena_cost_model: ArenaCostModel::default(),
-            late_cleanup_profile: LateCleanupProfile::Speed,
+            late_cleanup_profile: LateCleanupProfile::Off,
         }
     }
 

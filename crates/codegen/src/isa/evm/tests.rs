@@ -1753,6 +1753,48 @@ fn prepare_section_runs_raw_memory_cleanup_after_memory_legalize() {
 }
 
 #[test]
+fn prepare_section_places_zero_sized_callee_visible_alloca_without_cleanup() {
+    let parsed = parse_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+type @empty = {};
+type @wrapper = {@empty};
+
+func private %callee(v0.objref<@wrapper>) {
+block0:
+    return;
+}
+
+func public %entry() {
+block0:
+    v0.objref<@wrapper> = obj.alloc @wrapper;
+    call %callee v0;
+    evm_stop;
+}
+"#,
+    )
+    .unwrap();
+    let funcs = parsed.module.funcs();
+    let entry = find_func(&parsed.module, "entry");
+    let prepared = test_backend()
+        .with_late_cleanup_profile(LateCleanupProfile::Off)
+        .prepare_section(work_module_with_entry(&parsed.module, &funcs, entry))
+        .expect("zero-sized callee-visible alloca should lower without optional cleanup");
+    let plan = prepared.function_plan(entry).expect("entry plan");
+
+    assert_eq!(plan.mem_plan.scratch_words, 0);
+    assert_eq!(plan.mem_plan.stable_words, 0);
+    assert_eq!(plan.mem_plan.alloca_loc.len(), 1);
+    assert!(
+        plan.mem_plan
+            .alloca_loc
+            .values()
+            .all(|loc| matches!(loc, ObjLoc::ScratchAbs(0)))
+    );
+}
+
+#[test]
 fn lowering_elides_section_entry_jumpdest_for_noreturn_call() {
     let parsed = parse_module(
         r#"
@@ -2724,7 +2766,7 @@ block2:
 "#,
     )
     .expect("module parses");
-    let backend = test_backend();
+    let backend = test_backend().with_late_cleanup_profile(LateCleanupProfile::Speed);
     let entry = find_func(&parsed.module, "main");
     let prepared = backend
         .prepare_section(work_module_with_entry(&parsed.module, &[entry], entry))
@@ -2778,6 +2820,7 @@ block2:
         &SectionName("runtime".into()),
         &CompileOptions {
             fixup_policy: PushWidthPolicy::Push4,
+            emit_symtab: true,
             ..CompileOptions::default()
         },
     )
