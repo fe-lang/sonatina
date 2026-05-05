@@ -32,6 +32,7 @@ pub(crate) enum PtrTransferSource<'a> {
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum PtrTransferEvent<'a> {
     Return {
+        ret_idx: usize,
         value: ValueId,
     },
     Write {
@@ -98,8 +99,8 @@ pub(crate) fn for_each_ptr_transfer_at_inst<'a>(
             let Some(ret_args) = function.dfg.return_args(inst) else {
                 return;
             };
-            for &value in ret_args {
-                visit(PtrTransferEvent::Return { value });
+            for (ret_idx, &value) in ret_args.iter().enumerate() {
+                visit(PtrTransferEvent::Return { ret_idx, value });
             }
         }
         EvmInstKind::Mstore(mstore) => {
@@ -151,9 +152,7 @@ pub(crate) fn for_each_ptr_transfer_at_inst<'a>(
         EvmInstKind::Call(call) => {
             let callee = *call.callee();
             let callee_sum =
-                ctx.ptr_escape.get(&callee).cloned().unwrap_or_else(|| {
-                    PtrEscapeSummary::conservative_unknown_ctx(ctx.module, callee)
-                });
+                PtrEscapeSummary::get_or_conservative(ctx.ptr_escape, ctx.module, callee);
 
             for (arg_index, &value) in call.args().iter().enumerate() {
                 if callee_sum.arg_may_escape(arg_index) {
@@ -185,7 +184,7 @@ pub(crate) fn for_each_escape_event_at_inst<'a>(
 ) {
     let mut call_arg_escapes: SmallVec<[(FuncRef, usize, ValueId); 4]> = SmallVec::new();
     for_each_ptr_transfer_at_inst(function, inst, ctx, |event| match event {
-        PtrTransferEvent::Return { value } => visit(EscapeEvent {
+        PtrTransferEvent::Return { value, .. } => visit(EscapeEvent {
             sink: EscapeSink::Return,
             source: EscapeSource::Value(value),
         }),

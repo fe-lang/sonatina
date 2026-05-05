@@ -322,6 +322,12 @@ impl EvmPipelineContext<'_> {
                 assert_aggregate_legalized(function, module_ctx);
             });
         }
+        // Later memory planning reads summaries against the lowered call signatures.
+        self.ptr_escape = Some(compute_ptr_escape_summaries(
+            self.module(),
+            &self.funcs,
+            &self.backend.isa,
+        ));
         self.func_behavior_dirty = true;
         Ok(())
     }

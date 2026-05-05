@@ -48,7 +48,7 @@ fn addr_may_overlap_scratch(
     }
 
     let prov = &prov[addr];
-    prov.is_unknown_ptr() || prov.is_empty() || prov.has_any_arg()
+    prov.is_unknown_ptr() || prov.has_no_known_bases() || prov.has_any_arg()
 }
 
 pub(crate) fn inst_is_scratch_clobber(
@@ -98,10 +98,7 @@ pub(crate) fn compute_scratch_live_values(
     inst_liveness: &InstLiveness,
 ) -> BitSet<ValueId> {
     let prov = compute_value_provenance(function, module, isa, |callee| {
-        ptr_escape
-            .get(&callee)
-            .cloned()
-            .unwrap_or_else(|| PtrEscapeSummary::conservative_unknown_ctx(module, callee))
+        PtrEscapeSummary::get_or_conservative(ptr_escape, module, callee)
     });
 
     let mut scratch_live_values: BitSet<ValueId> = BitSet::default();

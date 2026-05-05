@@ -3,7 +3,7 @@ use cranelift_entity::SecondaryMap;
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 use sonatina_ir::{
-    Module, ValueId,
+    Function, InstId, Module, ValueId,
     isa::evm::Evm,
     module::{FuncRef, ModuleCtx},
 };
@@ -15,7 +15,7 @@ use super::{
     escape_scan::{
         EscapeScanCtx, PtrTransferEvent, PtrTransferSource, for_each_ptr_transfer_at_inst,
     },
-    provenance::{Provenance, compute_provenance},
+    provenance::{Provenance, compute_provenance, type_can_carry_pointer_provenance},
 };
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -63,7 +63,6 @@ impl ArgStoreLattice {
 pub(crate) struct PtrArgEscape {
     pub(crate) stores: ArgStoreLattice,
     pub(crate) arg_store_targets: SmallVec<[u32; 4]>,
-    pub(crate) may_be_returned: bool,
 }
 
 impl PtrArgEscape {
@@ -74,6 +73,23 @@ impl PtrArgEscape {
         self.arg_store_targets.push(dst_idx);
         self.arg_store_targets.sort_unstable();
         self.stores.record_arg()
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct PtrReturnEscape {
+    pub(crate) returned_args: SmallVec<[u32; 4]>,
+    pub(crate) non_arg_pointer: bool,
+}
+
+impl PtrReturnEscape {
+    fn record_arg(&mut self, arg_idx: u32) -> bool {
+        if self.returned_args.contains(&arg_idx) {
+            return false;
+        }
+        self.returned_args.push(arg_idx);
+        self.returned_args.sort_unstable();
+        true
     }
 }
 
@@ -89,35 +105,53 @@ impl PtrArgEscape {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PtrEscapeSummary {
     pub(crate) args: Vec<PtrArgEscape>,
-    pub(crate) returns_any_ptr: bool,
+    pub(crate) returns: Vec<PtrReturnEscape>,
 }
 
 impl PtrEscapeSummary {
-    pub(crate) fn new(arg_count: usize) -> Self {
+    fn new(arg_count: usize, ret_count: usize) -> Self {
         Self {
             args: vec![PtrArgEscape::default(); arg_count],
-            returns_any_ptr: false,
+            returns: vec![PtrReturnEscape::default(); ret_count],
         }
     }
 
-    pub(crate) fn conservative_unknown(module: &Module, func: FuncRef) -> Self {
-        Self::conservative_unknown_ctx(&module.ctx, func)
+    pub(crate) fn empty_for_func(module: &ModuleCtx, func: FuncRef) -> Self {
+        module.func_sig(func, |sig| Self::new(sig.args().len(), sig.ret_tys().len()))
     }
 
     pub(crate) fn conservative_unknown_ctx(module: &ModuleCtx, func: FuncRef) -> Self {
-        let arg_count = module.func_sig(func, |sig| sig.args().len());
-        let mut out = Self::new(arg_count);
-        out.returns_any_ptr = module.func_sig(func, |sig| {
-            sig.ret_tys().iter().any(|ty| ty.is_pointer(module))
+        let (arg_count, ret_count) =
+            module.func_sig(func, |sig| (sig.args().len(), sig.ret_tys().len()));
+        let mut out = Self::new(arg_count, ret_count);
+        module.func_sig(func, |sig| {
+            for (ret_idx, &ret_ty) in sig.ret_tys().iter().enumerate() {
+                if type_can_carry_pointer_provenance(module, ret_ty) {
+                    out.returns[ret_idx].non_arg_pointer = true;
+                    for arg_idx in 0..arg_count {
+                        let _ = out.returns[ret_idx].record_arg(arg_idx as u32);
+                    }
+                }
+            }
         });
         for arg in &mut out.args {
-            arg.may_be_returned = true;
             arg.stores.record_arg();
             arg.stores.record_nonlocal();
             arg.arg_store_targets
                 .extend((0..arg_count).map(|idx| idx as u32));
         }
         out
+    }
+
+    pub(crate) fn get_or_conservative(
+        summaries: &FxHashMap<FuncRef, Self>,
+        module: &ModuleCtx,
+        func: FuncRef,
+    ) -> Self {
+        summaries
+            .get(&func)
+            .cloned()
+            .unwrap_or_else(|| Self::conservative_unknown_ctx(module, func))
     }
 
     fn record_store_to_arg(&mut self, src_idx: usize, dst_idx: u32) {
@@ -139,9 +173,15 @@ impl PtrEscapeSummary {
         }
     }
 
-    fn record_returned_arg(&mut self, src_idx: usize) {
-        if let Some(arg) = self.args.get_mut(src_idx) {
-            arg.may_be_returned = true;
+    fn record_returned_arg(&mut self, ret_idx: usize, src_idx: usize) {
+        if let Some(ret) = self.returns.get_mut(ret_idx) {
+            let _ = ret.record_arg(src_idx as u32);
+        }
+    }
+
+    fn record_returned_non_arg_pointer(&mut self, ret_idx: usize) {
+        if let Some(ret) = self.returns.get_mut(ret_idx) {
+            ret.non_arg_pointer = true;
         }
     }
 
@@ -151,16 +191,34 @@ impl PtrEscapeSummary {
             .is_some_and(|arg| arg.stores.may_store_nonlocal())
     }
 
+    #[cfg(test)]
     pub(crate) fn arg_may_be_returned(&self, src_idx: usize) -> bool {
-        self.args
-            .get(src_idx)
-            .is_some_and(|arg| arg.may_be_returned)
+        self.returns
+            .iter()
+            .any(|ret| ret.returned_args.contains(&(src_idx as u32)))
+    }
+
+    pub(crate) fn returned_arg_indices(&self, ret_idx: usize) -> &[u32] {
+        self.returns
+            .get(ret_idx)
+            .map_or(&[], |ret| ret.returned_args.as_slice())
+    }
+
+    pub(crate) fn return_may_be_non_arg_pointer(&self, ret_idx: usize) -> bool {
+        self.returns
+            .get(ret_idx)
+            .is_some_and(|ret| ret.non_arg_pointer)
     }
 
     pub(crate) fn arg_store_targets(&self, src_idx: usize) -> &[u32] {
         self.args
             .get(src_idx)
             .map_or(&[], |arg| arg.arg_store_targets.as_slice())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn arg_count(&self) -> usize {
+        self.args.len()
     }
 
     #[cfg(test)]
@@ -227,8 +285,11 @@ pub(crate) fn compute_ptr_escape_summaries(
 
     let mut summaries: FxHashMap<FuncRef, PtrEscapeSummary> = FxHashMap::default();
     for &f in funcs {
-        let arg_count = module.func_store.view(f, |func| func.arg_values.len());
-        summaries.insert(f, PtrEscapeSummary::new(arg_count));
+        module.func_store.view(f, |func| {
+            let sig_arg_count = module.ctx.func_sig(f, |sig| sig.args().len());
+            debug_assert_eq!(func.arg_values.len(), sig_arg_count);
+        });
+        summaries.insert(f, PtrEscapeSummary::empty_for_func(&module.ctx, f));
     }
 
     for scc_ref in topo.into_iter().rev() {
@@ -331,14 +392,12 @@ fn compute_summary_for_func(
     summaries: &FxHashMap<FuncRef, PtrEscapeSummary>,
 ) -> PtrEscapeSummary {
     module.func_store.view(func, |function| {
-        let arg_count = function.arg_values.len();
-        let mut summary = PtrEscapeSummary::new(arg_count);
+        let sig_arg_count = module.ctx.func_sig(func, |sig| sig.args().len());
+        debug_assert_eq!(function.arg_values.len(), sig_arg_count);
+        let mut summary = PtrEscapeSummary::empty_for_func(&module.ctx, func);
 
         let prov_info = compute_provenance(function, &module.ctx, isa, |callee| {
-            summaries
-                .get(&callee)
-                .cloned()
-                .unwrap_or_else(|| PtrEscapeSummary::conservative_unknown(module, callee))
+            PtrEscapeSummary::get_or_conservative(summaries, &module.ctx, callee)
         });
         let prov = &prov_info.value;
         let local_mem = &prov_info.local_mem;
@@ -352,27 +411,43 @@ fn compute_summary_for_func(
             arg_mem,
         };
 
+        let malloc_escape = compute_local_malloc_escape(scan_ctx, function);
         for block in function.layout.iter_block() {
             for inst in function.layout.iter_inst(block) {
                 for_each_ptr_transfer_at_inst(function, inst, scan_ctx, |event| match event {
-                    PtrTransferEvent::Return { value, .. } => {
-                        if function.dfg.value_ty(value).is_pointer(&module.ctx) {
-                            summary.returns_any_ptr = true;
+                    PtrTransferEvent::Return { ret_idx, value } => {
+                        let ret_prov = &prov[value];
+                        if ret_prov.is_unknown_ptr()
+                            || ret_prov.malloc_insts().next().is_some()
+                            || (function.dfg.value_ty(value).is_pointer(&module.ctx)
+                                && ret_prov.has_no_known_bases())
+                        {
+                            summary.record_returned_non_arg_pointer(ret_idx);
                         }
 
                         for idx in prov[value].arg_indices() {
-                            summary.record_returned_arg(idx as usize);
+                            summary.record_returned_arg(ret_idx, idx as usize);
                         }
                     }
                     PtrTransferEvent::Write {
                         dest_prov, source, ..
                     } => match source {
                         PtrTransferSource::Value(value) => {
-                            record_escape_into_provenance(&mut summary, &prov[value], dest_prov);
+                            record_escape_into_provenance(
+                                &mut summary,
+                                &prov[value],
+                                dest_prov,
+                                &malloc_escape.escaping,
+                            );
                         }
                         PtrTransferSource::LocalMem { stored, .. }
                         | PtrTransferSource::ArgMem { stored } => {
-                            record_escape_into_provenance(&mut summary, stored, dest_prov);
+                            record_escape_into_provenance(
+                                &mut summary,
+                                stored,
+                                dest_prov,
+                                &malloc_escape.escaping,
+                            );
                         }
                         PtrTransferSource::UnknownCopy => {}
                     },
@@ -385,7 +460,12 @@ fn compute_summary_for_func(
                         value, dest_prov, ..
                     } => {
                         for arg_idx in prov[value].arg_indices() {
-                            record_escape_from_arg_index(&mut summary, arg_idx as usize, dest_prov);
+                            record_escape_from_arg_index(
+                                &mut summary,
+                                arg_idx as usize,
+                                dest_prov,
+                                &malloc_escape.escaping,
+                            );
                         }
                     }
                 });
@@ -396,13 +476,90 @@ fn compute_summary_for_func(
     })
 }
 
+#[derive(Default)]
+struct LocalMallocEscape {
+    contents: FxHashMap<InstId, Provenance>,
+    escaping: FxHashSet<InstId>,
+}
+
+impl LocalMallocEscape {
+    fn record_write(&mut self, src_prov: &Provenance, dst_prov: &Provenance) {
+        for malloc in dst_prov.malloc_insts() {
+            let _ = self
+                .contents
+                .entry(malloc)
+                .or_default()
+                .union_with(src_prov);
+        }
+
+        if dst_prov.has_any_arg() || dst_prov.may_be_nonlocal_nonarg_without_malloc() {
+            self.record_escape(src_prov);
+        }
+    }
+
+    fn record_escape(&mut self, prov: &Provenance) {
+        for malloc in prov.malloc_insts() {
+            self.escaping.insert(malloc);
+        }
+    }
+
+    fn close(&mut self) {
+        let mut worklist: SmallVec<[InstId; 8]> = self.escaping.iter().copied().collect();
+        while let Some(malloc) = worklist.pop() {
+            if let Some(stored) = self.contents.get(&malloc) {
+                for child in stored.malloc_insts() {
+                    if self.escaping.insert(child) {
+                        worklist.push(child);
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn compute_local_malloc_escape(
+    scan_ctx: EscapeScanCtx<'_>,
+    function: &Function,
+) -> LocalMallocEscape {
+    let mut out = LocalMallocEscape::default();
+    let prov = scan_ctx.prov;
+
+    for block in function.layout.iter_block() {
+        for inst in function.layout.iter_inst(block) {
+            for_each_ptr_transfer_at_inst(function, inst, scan_ctx, |event| match event {
+                PtrTransferEvent::Return { value, .. }
+                | PtrTransferEvent::CallArgEscape { value, .. } => out.record_escape(&prov[value]),
+                PtrTransferEvent::Write {
+                    dest_prov, source, ..
+                } => match source {
+                    PtrTransferSource::Value(value) => out.record_write(&prov[value], dest_prov),
+                    PtrTransferSource::LocalMem { stored, .. }
+                    | PtrTransferSource::ArgMem { stored } => {
+                        out.record_write(stored, dest_prov);
+                    }
+                    PtrTransferSource::UnknownCopy => {}
+                },
+                PtrTransferEvent::CallArgStore {
+                    value, dest_prov, ..
+                } => {
+                    out.record_write(&prov[value], dest_prov);
+                }
+            });
+        }
+    }
+
+    out.close();
+    out
+}
+
 fn record_escape_into_provenance(
     summary: &mut PtrEscapeSummary,
     src_prov: &Provenance,
     dst_prov: &Provenance,
+    escaping_mallocs: &FxHashSet<InstId>,
 ) {
     for arg_idx in src_prov.arg_indices() {
-        record_escape_from_arg_index(summary, arg_idx as usize, dst_prov);
+        record_escape_from_arg_index(summary, arg_idx as usize, dst_prov, escaping_mallocs);
     }
 }
 
@@ -410,14 +567,19 @@ fn record_escape_from_arg_index(
     summary: &mut PtrEscapeSummary,
     src_idx: usize,
     dst_prov: &Provenance,
+    escaping_mallocs: &FxHashSet<InstId>,
 ) {
-    if dst_prov.is_local_addr() {
+    if dst_prov.is_local_addr() || dst_prov.malloc_insts().next().is_some() {
         summary.record_store_local(src_idx);
     }
     for dst_idx in dst_prov.arg_indices() {
         summary.record_store_to_arg(src_idx, dst_idx);
     }
-    if dst_prov.may_be_nonlocal_nonarg() {
+    if dst_prov.may_be_nonlocal_nonarg_without_malloc()
+        || dst_prov
+            .malloc_insts()
+            .any(|malloc| escaping_mallocs.contains(&malloc))
+    {
         summary.record_store_nonlocal(src_idx);
     }
 }
@@ -430,15 +592,19 @@ mod tests {
     use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
 
     fn arg_may_escape(summary: &PtrEscapeSummary) -> Vec<bool> {
-        (0..summary.args.len())
+        (0..summary.arg_count())
             .map(|idx| summary.arg_may_escape(idx))
             .collect()
     }
 
     fn arg_may_be_returned(summary: &PtrEscapeSummary) -> Vec<bool> {
-        (0..summary.args.len())
+        (0..summary.arg_count())
             .map(|idx| summary.arg_may_be_returned(idx))
             .collect()
+    }
+
+    fn ret_args(summary: &PtrEscapeSummary, ret_idx: usize) -> Vec<u32> {
+        summary.returned_arg_indices(ret_idx).to_vec()
     }
 
     fn arg_store_targets(summary: &PtrEscapeSummary, idx: usize) -> Vec<u32> {
@@ -500,9 +666,7 @@ mod tests {
 
         parsed.module.func_store.view(func_ref, |function| {
             let prov = compute_provenance(function, &parsed.module.ctx, &isa, |callee| {
-                summaries.get(&callee).cloned().unwrap_or_else(|| {
-                    PtrEscapeSummary::conservative_unknown(&parsed.module, callee)
-                })
+                PtrEscapeSummary::get_or_conservative(&summaries, &parsed.module.ctx, callee)
             })
             .value;
             let call_inst = function
@@ -515,9 +679,11 @@ mod tests {
             else {
                 panic!("expected internal call");
             };
-            let callee_sum = summaries.get(call.callee()).cloned().unwrap_or_else(|| {
-                PtrEscapeSummary::conservative_unknown(&parsed.module, *call.callee())
-            });
+            let callee_sum = PtrEscapeSummary::get_or_conservative(
+                &summaries,
+                &parsed.module.ctx,
+                *call.callee(),
+            );
 
             callee_sum.call_arg_may_escape_nonlocal(arg_index, call.args(), &prov)
         })
@@ -546,9 +712,7 @@ mod tests {
 
         parsed.module.func_store.view(func_ref, |function| {
             let prov = compute_provenance(function, &parsed.module.ctx, &isa, |callee| {
-                summaries.get(&callee).cloned().unwrap_or_else(|| {
-                    PtrEscapeSummary::conservative_unknown(&parsed.module, callee)
-                })
+                PtrEscapeSummary::get_or_conservative(&summaries, &parsed.module.ctx, callee)
             })
             .value;
 
@@ -584,7 +748,8 @@ block0:
         );
 
         let g = &summaries["g"];
-        assert!(g.returns_any_ptr);
+        assert_eq!(ret_args(g, 0), vec![0]);
+        assert!(!g.return_may_be_non_arg_pointer(0));
         assert_eq!(arg_may_be_returned(g), vec![true]);
         assert_eq!(arg_may_escape(g), vec![false]);
     }
@@ -636,9 +801,147 @@ block0:
         );
 
         let f = &summaries["f"];
-        assert!(f.returns_any_ptr);
+        assert_eq!(ret_args(f, 0), vec![0]);
+        assert!(!f.return_may_be_non_arg_pointer(0));
         assert_eq!(arg_may_be_returned(f), vec![true]);
         assert_eq!(arg_may_escape(f), vec![false]);
+    }
+
+    #[test]
+    fn ptr_escape_tracks_i256_arg_returned_in_aggregate() {
+        let (summaries, _) = compute(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @Box = {i256};
+
+func public %box(v0.i256) -> @Box {
+block0:
+    v1.@Box = insert_value undef.@Box 0.i256 v0;
+    return v1;
+}
+"#,
+        );
+
+        let boxed = &summaries["box"];
+        assert_eq!(ret_args(boxed, 0), vec![0]);
+        assert_eq!(arg_may_be_returned(boxed), vec![true]);
+        assert_eq!(arg_may_escape(boxed), vec![false]);
+    }
+
+    #[test]
+    fn ptr_escape_tracks_i256_malloc_return_as_non_arg_pointer() {
+        let (summaries, _) = compute(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %mk() -> i256 {
+block0:
+    v0.*i8 = evm_malloc 32.i256;
+    v1.i256 = ptr_to_int v0 i256;
+    return v1;
+}
+"#,
+        );
+
+        let mk = &summaries["mk"];
+        assert!(mk.return_may_be_non_arg_pointer(0));
+        assert!(ret_args(mk, 0).is_empty());
+        assert_eq!(arg_may_be_returned(mk), Vec::<bool>::new());
+    }
+
+    #[test]
+    fn ptr_escape_keeps_i256_arg_store_into_local_malloc_local() {
+        let (summaries, _) = compute(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %scratch(v0.i256) {
+block0:
+    v1.*i8 = evm_malloc 32.i256;
+    v2.i256 = ptr_to_int v1 i256;
+    mstore v2 v0 i256;
+    return;
+}
+"#,
+        );
+
+        let scratch = &summaries["scratch"];
+        assert_eq!(arg_may_escape(scratch), vec![false]);
+        assert!(scratch.arg_store_lattice(0).may_store_local());
+        assert!(!scratch.arg_store_lattice(0).may_store_nonlocal());
+    }
+
+    #[test]
+    fn ptr_escape_marks_i256_arg_stored_into_returned_malloc_as_escaping() {
+        let (summaries, _) = compute(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %box(v0.i256) -> i256 {
+block0:
+    v1.*i8 = evm_malloc 32.i256;
+    v2.i256 = ptr_to_int v1 i256;
+    mstore v2 v0 i256;
+    return v2;
+}
+"#,
+        );
+
+        let boxed = &summaries["box"];
+        assert!(boxed.return_may_be_non_arg_pointer(0));
+        assert_eq!(arg_may_escape(boxed), vec![true]);
+        assert_eq!(arg_may_be_returned(boxed), vec![false]);
+    }
+
+    #[test]
+    fn ptr_escape_closes_escaping_malloc_contents() {
+        let (summaries, _) = compute(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %box(v0.i256) -> i256 {
+block0:
+    v1.*i8 = evm_malloc 32.i256;
+    v2.i256 = ptr_to_int v1 i256;
+    mstore v2 v0 i256;
+    v3.*i8 = evm_malloc 32.i256;
+    v4.i256 = ptr_to_int v3 i256;
+    mstore v4 v2 i256;
+    return v4;
+}
+"#,
+        );
+
+        let boxed = &summaries["box"];
+        assert!(boxed.return_may_be_non_arg_pointer(0));
+        assert_eq!(arg_may_escape(boxed), vec![true]);
+        assert_eq!(arg_may_be_returned(boxed), vec![false]);
+    }
+
+    #[test]
+    fn conservative_unknown_treats_i256_returns_as_pointer_carriers() {
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %f(v0.i256) -> i256 {
+block0:
+    return 0.i256;
+}
+"#,
+        )
+        .expect("module parses");
+        let f = parsed
+            .module
+            .funcs()
+            .into_iter()
+            .find(|&func| parsed.module.ctx.func_sig(func, |sig| sig.name() == "f"))
+            .expect("function exists");
+
+        let summary = PtrEscapeSummary::conservative_unknown_ctx(&parsed.module.ctx, f);
+        assert!(summary.return_may_be_non_arg_pointer(0));
+        assert_eq!(ret_args(&summary, 0), vec![0]);
     }
 
     #[test]
@@ -656,7 +959,7 @@ block0:
         );
 
         let f = &summaries["f"];
-        assert!(f.returns_any_ptr);
+        assert!(f.return_may_be_non_arg_pointer(0));
         assert_eq!(arg_may_be_returned(f), vec![false, false]);
         assert_eq!(arg_may_escape(f), vec![false, false]);
     }

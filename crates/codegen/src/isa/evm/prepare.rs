@@ -140,7 +140,7 @@ fn byte_ranges_overlap(lhs_start: u32, lhs_len: u32, rhs_start: u32, rhs_end: u3
 }
 
 fn addr_is_allocator_managed(prov: &Provenance) -> bool {
-    !prov.is_empty() && !prov.is_unknown_ptr() && !prov.has_any_arg()
+    !prov.has_no_known_bases() && !prov.is_unknown_ptr() && !prov.has_any_arg()
 }
 
 fn memory_access_may_touch_range(
@@ -226,10 +226,7 @@ fn function_memory_accesses_match(
     pred: impl Fn(&Function, &sonatina_ir::MemoryAccess, &SecondaryMap<ValueId, Provenance>) -> bool,
 ) -> bool {
     let prov = compute_value_provenance(function, module, &backend.isa, |callee| {
-        ptr_escape
-            .get(&callee)
-            .cloned()
-            .unwrap_or_else(|| PtrEscapeSummary::conservative_unknown_ctx(module, callee))
+        PtrEscapeSummary::get_or_conservative(ptr_escape, module, callee)
     });
 
     function.layout.iter_block().any(|block| {
@@ -380,10 +377,7 @@ fn reserve_function_memory_layout(
     ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
 ) {
     let prov = compute_value_provenance(function, module, &backend.isa, |callee| {
-        ptr_escape
-            .get(&callee)
-            .cloned()
-            .unwrap_or_else(|| PtrEscapeSummary::conservative_unknown_ctx(module, callee))
+        PtrEscapeSummary::get_or_conservative(ptr_escape, module, callee)
     });
 
     for block in function.layout.iter_block() {

@@ -210,10 +210,7 @@ pub(crate) fn compute_func_stack_objects(
     cfg.compute(function);
 
     let prov_info = compute_provenance(function, ctx.module, ctx.isa, |callee| {
-        ctx.ptr_escape
-            .get(&callee)
-            .cloned()
-            .unwrap_or_else(|| conservative_unknown_ptr_summary(ctx.module, callee))
+        PtrEscapeSummary::get_or_conservative(ctx.ptr_escape, ctx.module, callee)
     });
     let prov = &prov_info.value;
 
@@ -492,10 +489,6 @@ pub(crate) fn compute_func_stack_objects(
         call_sites,
         next_obj_id: next_id,
     }
-}
-
-fn conservative_unknown_ptr_summary(module: &ModuleCtx, func_ref: FuncRef) -> PtrEscapeSummary {
-    PtrEscapeSummary::conservative_unknown_ctx(module, func_ref)
 }
 
 fn compute_escaping_allocas(
@@ -1141,6 +1134,40 @@ block0:
 }
 "#,
             "mcopy_escape",
+            16,
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "alloca escapes in mixed_call_result_escape")]
+    fn alloca_escape_via_derived_mixed_unknown_call_result_panics() {
+        let _ = analyze_function(
+            r#"
+target = "evm-ethereum-osaka"
+
+func private %maybe_arg(v0.*i8, v1.i1) -> *i8 {
+block0:
+    br v1 block1 block2;
+
+block1:
+    return v0;
+
+block2:
+    v2.*i8 = int_to_ptr 0.i32 *i8;
+    return v2;
+}
+
+func private %mixed_call_result_escape(v0.i1) -> *i8 {
+block0:
+    v1.*i8 = alloca i8;
+    v2.*i8 = call %maybe_arg v1 v0;
+    v3.i256 = ptr_to_int v2 i256;
+    v4.i256 = add v3 0.i256;
+    v5.*i8 = int_to_ptr v4 *i8;
+    return v5;
+}
+"#,
+            "mixed_call_result_escape",
             16,
         );
     }

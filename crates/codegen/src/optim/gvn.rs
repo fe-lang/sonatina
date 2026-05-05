@@ -2501,7 +2501,7 @@ impl<'a, 'b> ValuePhiFinder<'a, 'b> {
             }
         }
 
-        result.canonicalize()
+        self.canonicalize_value_phi_insn(result)
     }
 
     fn compute_value_phi_for_binary<F>(
@@ -2599,7 +2599,7 @@ impl<'a, 'b> ValuePhiFinder<'a, 'b> {
             }
         }
 
-        result.canonicalize()
+        self.canonicalize_value_phi_insn(result)
     }
 
     fn compute_value_phi_for_cast<F>(
@@ -2633,7 +2633,26 @@ impl<'a, 'b> ValuePhiFinder<'a, 'b> {
             }
         }
 
-        result.canonicalize()
+        self.canonicalize_value_phi_insn(result)
+    }
+
+    fn canonicalize_value_phi_insn(&self, phi_insn: ValuePhiInsn) -> Option<ValuePhi> {
+        let mut reachable_preds: FxHashSet<_> = self
+            .solver
+            .reachable_in_edges(phi_insn.block)
+            .map(|edge| self.solver.edge_data(*edge).from)
+            .collect();
+
+        if phi_insn
+            .args
+            .iter()
+            .all(|(_, block)| reachable_preds.remove(block))
+            && reachable_preds.is_empty()
+        {
+            phi_insn.canonicalize()
+        } else {
+            None
+        }
     }
 
     /// Lookup value phi argument.
@@ -2716,13 +2735,15 @@ impl<'a, 'b> ValuePhiFinder<'a, 'b> {
                     }
                 }
 
-                return result.canonicalize();
+                return self.canonicalize_value_phi_insn(result);
             };
 
             // If the value is annotated with value phi, then return it.
             let class = self.solver.value_class(value);
             match &self.solver.classes[class].value_phi {
-                value_phi @ Some(ValuePhi::PhiInsn(..)) => value_phi.clone(),
+                Some(ValuePhi::PhiInsn(phi_insn)) => {
+                    self.canonicalize_value_phi_insn(phi_insn.clone())
+                }
                 _ => None,
             }
         })();
@@ -3208,7 +3229,7 @@ mod tests {
 
     use super::{
         BinaryInstKind, CanonicalRetouch, ClassData, GvnInsn, GvnSolver, InstClassKind, ValuePhi,
-        ValuePhiFinder, inst_to_gvn_key, make_gvn_binary_key,
+        ValuePhiFinder, ValuePhiInsn, inst_to_gvn_key, make_gvn_binary_key,
     };
     use crate::{
         analysis::known_bits::{KnownBitsQuery, count_query_news_for_test},
@@ -3560,6 +3581,71 @@ func private %entry(v0.i1) -> i32 {
             }
 
             let class = solver.make_class(GvnInsn::expr(phi_key, 0), None);
+            solver.assign_class(phi_value, class);
+
+            let known_bits = KnownBitsQuery::new(func);
+            let mut finder = ValuePhiFinder::new(&mut solver, &known_bits, func.arg_values[0]);
+            assert_eq!(finder.get_phi_of(func, phi_value), None);
+        });
+    }
+
+    #[test]
+    fn value_phi_finder_rejects_stale_cached_value_phi() {
+        let source = r#"
+target = "evm-ethereum-london"
+
+func private %entry(v0.i1) -> i32 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        jump block3;
+
+    block2:
+        jump block3;
+
+    block3:
+        v1.i32 = phi (1.i32 block1) (2.i32 block2);
+        return v1;
+}
+"#;
+
+        let module = parse_module(source).expect("parse should succeed").module;
+        let func_ref = module.funcs()[0];
+        module.func_store.modify(func_ref, |func| {
+            let mut solver = GvnSolver::new();
+            solver.classes.push(ClassData {
+                values: BTreeSet::new(),
+                gvn_insn: GvnInsn::Value(ValueId(u32::MAX)),
+                value_phi: None,
+            });
+
+            let blocks: Vec<_> = func.layout.iter_block().collect();
+            let [_, block1, block2, block3] = blocks.as_slice() else {
+                panic!("test function should have four blocks");
+            };
+            for pred in [*block1, *block2] {
+                solver.add_edge_info(pred, *block3, None, None, None);
+            }
+            let in_edges = solver.blocks[*block3].in_edges.clone();
+            for edge in in_edges {
+                solver.edges[edge].reachable = true;
+            }
+
+            let phi_inst = func
+                .layout
+                .iter_inst(*block3)
+                .find(|&inst| func.dfg.is_phi(inst))
+                .expect("test function should contain a phi instruction");
+            let phi_value = func
+                .dfg
+                .inst_result(phi_inst)
+                .expect("test function should contain a phi result");
+            let stale_value_phi = ValuePhi::PhiInsn(ValuePhiInsn {
+                block: *block3,
+                args: vec![(ValuePhi::Value(func.arg_values[0]), *block1)],
+            });
+            let class = solver.make_class(GvnInsn::Value(phi_value), Some(stale_value_phi));
             solver.assign_class(phi_value, class);
 
             let known_bits = KnownBitsQuery::new(func);
