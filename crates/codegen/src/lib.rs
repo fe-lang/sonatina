@@ -2,6 +2,9 @@ pub mod analysis;
 mod bitset;
 pub mod cfg_edit;
 pub mod cfg_scc;
+pub mod compile;
+
+pub use compile::{EvmCompile, OptLevel};
 pub mod critical_edge;
 pub mod domtree;
 pub mod isa;

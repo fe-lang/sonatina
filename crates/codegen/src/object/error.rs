@@ -3,6 +3,7 @@ use sonatina_ir::{
     module::FuncRef,
     object::{EmbedSymbol, ObjectName, SectionName},
 };
+use sonatina_triple::TargetTriple;
 use sonatina_verifier::VerificationReport;
 
 #[derive(Debug, Clone)]
@@ -41,6 +42,11 @@ pub enum ObjectCompileError {
     LinkError {
         object: ObjectName,
         section: SectionName,
+        message: String,
+    },
+
+    UnsupportedTarget {
+        target: TargetTriple,
         message: String,
     },
 }

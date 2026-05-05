@@ -11,13 +11,10 @@ use std::{
 
 use clap::{Parser, Subcommand};
 use sonatina_codegen::{
-    isa::evm::{EvmBackend, LateCleanupProfile, PushWidthPolicy},
-    object::{CompileOptions, ObjectArtifact, compile_all_objects},
-    optim::pipeline::Pipeline,
+    EvmCompile, OptLevel as CodegenOptLevel, object::ObjectArtifact, optim::pipeline::Pipeline,
 };
-use sonatina_ir::{ir_writer::ModuleWriter, isa::evm::Evm, module::Module};
+use sonatina_ir::{ir_writer::ModuleWriter, module::Module};
 use sonatina_parser::{ParsedModule, parse_module};
-use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
 use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module};
 use tracing::span::Id;
 use tracing_subscriber::{
@@ -74,10 +71,10 @@ enum BuildOptLevel {
 }
 
 impl BuildOptLevel {
-    fn late_cleanup_profile(self) -> LateCleanupProfile {
+    fn codegen(self) -> CodegenOptLevel {
         match self {
-            Self::O0 => LateCleanupProfile::Off,
-            Self::O2 => LateCleanupProfile::Speed,
+            Self::O0 => CodegenOptLevel::O0,
+            Self::O2 => CodegenOptLevel::O2,
         }
     }
 }
@@ -176,7 +173,7 @@ fn run_build(input: &Path, profile: bool, opt_level: BuildOptLevel) -> i32 {
         Ok(source) => source,
         Err(code) => return code,
     };
-    let mut parsed = match measure_stage(&mut stages, "parse", || parse_or_report(input, &source)) {
+    let parsed = match measure_stage(&mut stages, "parse", || parse_or_report(input, &source)) {
         Ok(parsed) => parsed,
         Err(code) => return code,
     };
@@ -186,14 +183,8 @@ fn run_build(input: &Path, profile: bool, opt_level: BuildOptLevel) -> i32 {
         return code;
     }
 
-    if opt_level == BuildOptLevel::O2 {
-        measure_stage(&mut stages, "optimize", || {
-            Pipeline::speed().run(&mut parsed.module);
-        });
-    }
-
     let artifacts = match measure_stage(&mut stages, "codegen", || {
-        compile_artifacts(&parsed.module, opt_level)
+        compile_artifacts(parsed.module, opt_level)
     }) {
         Ok(artifacts) => artifacts,
         Err(code) => return code,
@@ -264,31 +255,17 @@ fn verify_or_report(module: &Module, level: VerificationLevel) -> Result<(), i32
     if report.has_errors() { Err(1) } else { Ok(()) }
 }
 
-fn compile_artifacts(
-    module: &Module,
-    opt_level: BuildOptLevel,
-) -> Result<Vec<ObjectArtifact>, i32> {
-    let triple = TargetTriple::new(
-        Architecture::Evm,
-        Vendor::Ethereum,
-        OperatingSystem::Evm(EvmVersion::Osaka),
-    );
-    let backend = EvmBackend::new(Evm::new(triple))
-        .with_late_cleanup_profile(opt_level.late_cleanup_profile());
-    let opts = CompileOptions {
-        fixup_policy: PushWidthPolicy::MinimalRelax,
-        emit_symtab: false,
-        emit_observability: false,
-        verifier_cfg: VerifierConfig::for_level(VerificationLevel::Fast),
-    };
-
-    compile_all_objects(module, &backend, &opts).map_err(|errors| {
-        eprintln!("error: object compilation failed:");
-        for error in errors {
-            eprintln!("  {error:?}");
-        }
-        1
-    })
+fn compile_artifacts(module: Module, opt_level: BuildOptLevel) -> Result<Vec<ObjectArtifact>, i32> {
+    EvmCompile::new(module)
+        .with_opt_level(opt_level.codegen())
+        .compile()
+        .map_err(|errors| {
+            eprintln!("error: object compilation failed:");
+            for error in errors {
+                eprintln!("  {error:?}");
+            }
+            1
+        })
 }
 
 fn select_artifact(artifacts: &[ObjectArtifact]) -> Result<&ObjectArtifact, String> {
