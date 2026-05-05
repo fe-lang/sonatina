@@ -2820,6 +2820,7 @@ block2:
         &SectionName("runtime".into()),
         &CompileOptions {
             fixup_policy: PushWidthPolicy::Push4,
+            emit_symtab: true,
             ..CompileOptions::default()
         },
     )
