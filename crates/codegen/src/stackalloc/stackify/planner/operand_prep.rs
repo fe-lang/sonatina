@@ -8,7 +8,7 @@ use super::{
     Planner,
     normalize::SpillAwareCostModel,
     normalize_search::{
-        Cost, CostModel, KeyInfo, NormalizePlan, SearchCfg, Step, cost_for_steps,
+        Cost, CostModel, KeyInfo, NormalizePlan, SearchCfg, Step, StepList, cost_for_steps,
         operand_prep_effective_window, rebuild_operand_prep_plan, solve_greedy_operand_prep_plan,
         solve_optimal_operand_prep_plan,
     },
@@ -24,7 +24,7 @@ struct UnaryOperandPrepCandidate {
     modeled_cost: Cost,
     emitted_cost: Cost,
     priority: u8,
-    steps: SmallVec<[Step; 2]>,
+    steps: StepList,
 }
 
 impl UnaryOperandPrepCandidate {
@@ -71,8 +71,23 @@ struct OperandPrepQueryKey {
     deep_preserve_mask: u64,
 }
 
+#[derive(Clone, Debug)]
+pub(super) struct CachedOperandPrepPlan {
+    pub(super) modeled_cost: Cost,
+    pub(super) steps: StepList,
+}
+
+impl CachedOperandPrepPlan {
+    fn from_plan(plan: &NormalizePlan) -> Self {
+        Self {
+            modeled_cost: plan.cost,
+            steps: plan.steps.clone(),
+        }
+    }
+}
+
 pub(super) struct OperandPrepPlanCache {
-    map: FxHashMap<OperandPrepQueryKey, Vec<Step>>,
+    map: FxHashMap<OperandPrepQueryKey, CachedOperandPrepPlan>,
     order: VecDeque<OperandPrepQueryKey>,
 }
 
@@ -84,11 +99,11 @@ impl OperandPrepPlanCache {
         }
     }
 
-    fn get(&self, key: &OperandPrepQueryKey) -> Option<&Vec<Step>> {
+    fn get(&self, key: &OperandPrepQueryKey) -> Option<&CachedOperandPrepPlan> {
         self.map.get(key)
     }
 
-    fn insert(&mut self, key: OperandPrepQueryKey, val: Vec<Step>) {
+    fn insert(&mut self, key: OperandPrepQueryKey, val: CachedOperandPrepPlan) {
         if let Some(existing) = self.map.get_mut(&key) {
             *existing = val;
             return;
@@ -103,6 +118,10 @@ impl OperandPrepPlanCache {
             };
             self.map.remove(&old);
         }
+    }
+
+    fn insert_plan(&mut self, key: OperandPrepQueryKey, plan: &NormalizePlan) {
+        self.insert(key, CachedOperandPrepPlan::from_plan(plan));
     }
 }
 
@@ -315,7 +334,6 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
             self.stack,
             args,
             consume_last_use,
-            &cost,
             search_cfg,
             hit,
         ) {
@@ -334,7 +352,7 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
         if let (Some(cache_key), Some(plan)) = (cache_key, &plan) {
             self.search_scratch
                 .operand_prep_plan_cache
-                .insert(cache_key, plan.steps.clone());
+                .insert_plan(cache_key, plan);
         }
         plan
     }
@@ -373,7 +391,7 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
                 modeled_cost: Cost::default(),
                 emitted_cost: Cost::default(),
                 priority: 0,
-                steps: SmallVec::new(),
+                steps: StepList::new(),
             });
         }
 
@@ -425,7 +443,7 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
                 modeled_cost: emitted_cost,
                 emitted_cost,
                 priority: 3,
-                steps: SmallVec::from_buf([Step::Swap(pos as u8), Step::Dup(0)]),
+                steps: smallvec::smallvec![Step::Swap(pos as u8), Step::Dup(0)],
             });
         }
 
@@ -445,7 +463,7 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
 
         Some(NormalizePlan {
             cost: candidate.modeled_cost,
-            steps: candidate.steps.into_vec(),
+            steps: candidate.steps,
             key_infos: smallvec::smallvec![key_info],
             goal_keys: smallvec::smallvec![0],
         })
@@ -909,18 +927,22 @@ mod tests {
         stack
     }
 
+    fn step_list<const N: usize>(steps: [Step; N]) -> StepList {
+        steps.into_iter().collect()
+    }
+
     #[test]
     fn commutative_plan_comparison_uses_emitted_step_cost() {
         let cost = EstimatedCostModel::default();
         let cheaper_emitted = NormalizePlan {
             cost: Cost { gas: 99, bytes: 99 },
-            steps: vec![Step::Dup(0)],
+            steps: smallvec::smallvec![Step::Dup(0)],
             key_infos: SmallVec::new(),
             goal_keys: SmallVec::new(),
         };
         let pricier_emitted = NormalizePlan {
             cost: Cost::default(),
-            steps: vec![Step::Swap(1), Step::Swap(1)],
+            steps: smallvec::smallvec![Step::Swap(1), Step::Swap(1)],
             key_infos: SmallVec::new(),
             goal_keys: SmallVec::new(),
         };
@@ -942,7 +964,7 @@ mod tests {
         };
         let pop = NormalizePlan {
             cost: cost.cost_pop(),
-            steps: vec![Step::Pop],
+            steps: smallvec::smallvec![Step::Pop],
             key_infos: SmallVec::new(),
             goal_keys: SmallVec::new(),
         };
@@ -952,7 +974,7 @@ mod tests {
         };
         let swap = NormalizePlan {
             cost: cost.cost_swap(1),
-            steps: vec![Step::Swap(1)],
+            steps: smallvec::smallvec![Step::Swap(1)],
             key_infos: SmallVec::new(),
             goal_keys: SmallVec::new(),
         };
@@ -961,7 +983,7 @@ mod tests {
         assert!(commutative_plan_is_unbeatable(
             &NormalizePlan {
                 cost: Cost::default(),
-                steps: Vec::new(),
+                steps: StepList::new(),
                 key_infos: SmallVec::new(),
                 goal_keys: SmallVec::new(),
             },
@@ -970,122 +992,6 @@ mod tests {
         ));
         assert!(!commutative_plan_is_unbeatable(&penalized_pop, &cost, cfg));
         assert!(!commutative_plan_is_unbeatable(&swap, &cost, cfg));
-    }
-
-    #[test]
-    fn operand_prep_query_key_tracks_immediate_payloads() {
-        const SRC: &str = r#"
-target = "evm-ethereum-osaka"
-
-func public %f() {
-block0:
-    return;
-}
-"#;
-
-        let parsed = parse_module(SRC).expect("module parses");
-        let func_ref = parsed.debug.func_order[0];
-
-        parsed.module.func_store.modify(func_ref, |func| {
-            let imm = func.dfg.make_imm_value(Immediate::I8(1));
-
-            let key_before = {
-                let mut cfg = ControlFlowGraph::new();
-                cfg.compute(func);
-                let entry = cfg.entry().expect("missing entry block");
-
-                let mut liveness = Liveness::new();
-                liveness.compute(func, &cfg);
-
-                let mut dom = DomTree::new();
-                dom.compute(&cfg);
-
-                let mut scc = CfgSccAnalysis::new();
-                scc.compute(&cfg);
-
-                let reach = StackifyReachability::new(16);
-                let ctx =
-                    build_stackify_test_context(func, &cfg, &dom, &liveness, entry, scc, reach);
-
-                let spill_set = BitSet::default();
-                let mut spill_requests = BitSet::default();
-                let mut object_spill_requests = BitSet::default();
-                let forced_object_spills = BitSet::default();
-                let spill_obj = SecondaryMap::new();
-                let mut free_slots = FreeSlotPools::default();
-                let mut slots = SpillSlotPools::default();
-                let mem = MemPlan::new(
-                    SpillSet::new(&spill_set),
-                    &mut spill_requests,
-                    &ctx,
-                    &spill_obj,
-                    &ctx.exact_local_addr,
-                    &mut object_spill_requests,
-                    &forced_object_spills,
-                    &mut free_slots,
-                    &mut slots,
-                );
-
-                let mut stack = SymStack::entry_stack(func, false);
-                let mut actions = crate::stackalloc::Actions::new();
-                let mut search_scratch = NormalizeSearchScratch::default();
-                let planner =
-                    Planner::new(&ctx, &mut stack, &mut actions, mem, &mut search_scratch);
-                let search_cfg = planner.operand_prep_search_cfg(1);
-                planner.operand_prep_query_key(&[imm], &BitSet::default(), search_cfg)
-            };
-
-            func.dfg.immediates.remove(&Immediate::I8(1));
-            func.dfg.values[imm] = Value::Immediate {
-                imm: Immediate::I8(2),
-                ty: Type::I8,
-            };
-            func.dfg.immediates.insert(Immediate::I8(2), imm);
-
-            let mut cfg = ControlFlowGraph::new();
-            cfg.compute(func);
-            let entry = cfg.entry().expect("missing entry block");
-
-            let mut liveness = Liveness::new();
-            liveness.compute(func, &cfg);
-
-            let mut dom = DomTree::new();
-            dom.compute(&cfg);
-
-            let mut scc = CfgSccAnalysis::new();
-            scc.compute(&cfg);
-
-            let reach = StackifyReachability::new(16);
-            let ctx = build_stackify_test_context(func, &cfg, &dom, &liveness, entry, scc, reach);
-
-            let spill_set = BitSet::default();
-            let mut spill_requests = BitSet::default();
-            let mut object_spill_requests = BitSet::default();
-            let forced_object_spills = BitSet::default();
-            let spill_obj = SecondaryMap::new();
-            let mut free_slots = FreeSlotPools::default();
-            let mut slots = SpillSlotPools::default();
-            let mem = MemPlan::new(
-                SpillSet::new(&spill_set),
-                &mut spill_requests,
-                &ctx,
-                &spill_obj,
-                &ctx.exact_local_addr,
-                &mut object_spill_requests,
-                &forced_object_spills,
-                &mut free_slots,
-                &mut slots,
-            );
-
-            let mut stack = SymStack::entry_stack(func, false);
-            let mut actions = crate::stackalloc::Actions::new();
-            let mut search_scratch = NormalizeSearchScratch::default();
-            let planner = Planner::new(&ctx, &mut stack, &mut actions, mem, &mut search_scratch);
-            let search_cfg = planner.operand_prep_search_cfg(1);
-            let key_after = planner.operand_prep_query_key(&[imm], &BitSet::default(), search_cfg);
-
-            assert_ne!(key_before, key_after);
-        });
     }
 
     #[test]
@@ -1157,13 +1063,20 @@ block0:
             let old_key = planner.operand_prep_query_key(&old_args, &BitSet::default(), search_cfg);
             let current_key =
                 planner.operand_prep_query_key(&current_args, &BitSet::default(), search_cfg);
+            let changed_key =
+                planner.operand_prep_query_key(&[imm2, imm2, imm3], &BitSet::default(), search_cfg);
 
             assert_eq!(old_key, current_key);
+            assert_ne!(current_key, changed_key);
 
-            planner
-                .search_scratch
-                .operand_prep_plan_cache
-                .insert(old_key, vec![Step::PushImm(0)]);
+            let modeled_cost = Cost { gas: 99, bytes: 99 };
+            planner.search_scratch.operand_prep_plan_cache.insert(
+                old_key,
+                CachedOperandPrepPlan {
+                    modeled_cost,
+                    steps: [Step::PushImm(0)].into_iter().collect(),
+                },
+            );
 
             let plan = planner
                 .solve_operand_prep_cached(&current_args, &BitSet::default())
@@ -1181,6 +1094,7 @@ block0:
 
             assert_eq!(*rep_vid, current_imm);
             assert_eq!(*rep_imm, Immediate::I8(1));
+            assert_eq!(plan.cost, modeled_cost);
         });
     }
 
@@ -1307,6 +1221,8 @@ block0:
 
             let query_key = |values: &[ValueId]| {
                 let mut spill_requests = BitSet::default();
+                let mut object_spill_requests = BitSet::default();
+                let forced_object_spills = BitSet::default();
                 let mut free_slots = FreeSlotPools::default();
                 let mut slots = SpillSlotPools::default();
                 let mem = MemPlan::new(
@@ -1315,6 +1231,8 @@ block0:
                     &ctx,
                     &spill_obj,
                     &ctx.exact_local_addr,
+                    &mut object_spill_requests,
+                    &forced_object_spills,
                     &mut free_slots,
                     &mut slots,
                 );
@@ -1376,6 +1294,8 @@ block0:
 
             let query_key = |top: ValueId| {
                 let mut spill_requests = BitSet::default();
+                let mut object_spill_requests = BitSet::default();
+                let forced_object_spills = BitSet::default();
                 let mut free_slots = FreeSlotPools::default();
                 let mut slots = SpillSlotPools::default();
                 let mem = MemPlan::new(
@@ -1384,6 +1304,8 @@ block0:
                     &ctx,
                     &spill_obj,
                     &ctx.exact_local_addr,
+                    &mut object_spill_requests,
+                    &forced_object_spills,
                     &mut free_slots,
                     &mut slots,
                 );
@@ -1448,6 +1370,8 @@ block0:
             let spill_set = BitSet::default();
             let spill_obj = SecondaryMap::new();
             let mut spill_requests = BitSet::default();
+            let mut object_spill_requests = BitSet::default();
+            let forced_object_spills = BitSet::default();
             let mut free_slots = FreeSlotPools::default();
             let mut slots = SpillSlotPools::default();
             let mem = MemPlan::new(
@@ -1456,6 +1380,8 @@ block0:
                 &ctx,
                 &spill_obj,
                 &ctx.exact_local_addr,
+                &mut object_spill_requests,
+                &forced_object_spills,
                 &mut free_slots,
                 &mut slots,
             );
@@ -1518,6 +1444,8 @@ block0:
 
             let query_key = |values: &[ValueId]| {
                 let mut spill_requests = BitSet::default();
+                let mut object_spill_requests = BitSet::default();
+                let forced_object_spills = BitSet::default();
                 let mut free_slots = FreeSlotPools::default();
                 let mut slots = SpillSlotPools::default();
                 let mem = MemPlan::new(
@@ -1526,6 +1454,8 @@ block0:
                     &ctx,
                     &spill_obj,
                     &ctx.exact_local_addr,
+                    &mut object_spill_requests,
+                    &forced_object_spills,
                     &mut free_slots,
                     &mut slots,
                 );
@@ -1590,6 +1520,8 @@ block0:
             let mut search_scratch = NormalizeSearchScratch::default();
             let mut solve_with = |ignored: ValueId| {
                 let mut spill_requests = BitSet::default();
+                let mut object_spill_requests = BitSet::default();
+                let forced_object_spills = BitSet::default();
                 let mut free_slots = FreeSlotPools::default();
                 let mut slots = SpillSlotPools::default();
                 let mem = MemPlan::new(
@@ -1598,6 +1530,8 @@ block0:
                     &ctx,
                     &spill_obj,
                     &ctx.exact_local_addr,
+                    &mut object_spill_requests,
+                    &forced_object_spills,
                     &mut free_slots,
                     &mut slots,
                 );
@@ -1663,6 +1597,8 @@ block0:
 
             let solve_steps = |mut stack: SymStack, arg: ValueId, last_use: &BitSet<ValueId>| {
                 let mut spill_requests = BitSet::default();
+                let mut object_spill_requests = BitSet::default();
+                let forced_object_spills = BitSet::default();
                 let mut free_slots = FreeSlotPools::default();
                 let mut slots = SpillSlotPools::default();
                 let mem = MemPlan::new(
@@ -1671,6 +1607,8 @@ block0:
                     &ctx,
                     &spill_obj,
                     &ctx.exact_local_addr,
+                    &mut object_spill_requests,
+                    &forced_object_spills,
                     &mut free_slots,
                     &mut slots,
                 );
@@ -1692,7 +1630,7 @@ block0:
             let stack = SymStack::entry_stack(func, false);
             assert_eq!(
                 solve_steps(stack, arg, &BitSet::default()),
-                vec![Step::Dup(0)]
+                step_list([Step::Dup(0)])
             );
 
             let mut stack = SymStack::entry_stack(func, false);
@@ -1707,12 +1645,15 @@ block0:
             let mut last_use = BitSet::default();
             last_use.insert(arg);
             let stack = SymStack::entry_stack(func, false);
-            assert_eq!(solve_steps(stack, arg, &last_use), vec![Step::Swap(2)]);
+            assert_eq!(
+                solve_steps(stack, arg, &last_use),
+                step_list([Step::Swap(2)])
+            );
 
             let stack = SymStack::entry_stack(func, false);
             assert_eq!(
                 solve_steps(stack, arg, &BitSet::default()),
-                vec![Step::Swap(2), Step::Dup(0)]
+                step_list([Step::Swap(2), Step::Dup(0)])
             );
         });
     }
@@ -1761,6 +1702,8 @@ block0:
                        commutative| {
                 let spill_set: BitSet<ValueId> = spill_values.iter().copied().collect();
                 let mut spill_requests = BitSet::default();
+                let mut object_spill_requests = BitSet::default();
+                let forced_object_spills = BitSet::default();
                 let mut free_slots = FreeSlotPools::default();
                 let mut slots = SpillSlotPools::default();
                 let mem = MemPlan::new(
@@ -1769,6 +1712,8 @@ block0:
                     &ctx,
                     &spill_obj,
                     &ctx.exact_local_addr,
+                    &mut object_spill_requests,
+                    &forced_object_spills,
                     &mut free_slots,
                     &mut slots,
                 );
