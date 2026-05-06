@@ -13,7 +13,7 @@ use sonatina_ir::{BlockId, Function, ValueId, cfg::ControlFlowGraph};
 use super::{
     alloc::StackifyAlloc,
     iteration::IterationPlanner,
-    slots::{FreeSlotPools, SpillSlotPools},
+    slots::{FreeSlotPools, SpillSlotInterference, SpillSlotPools},
     spill::SpillSet,
     sym_stack::SymStack,
     templates::{
@@ -70,6 +70,7 @@ pub(super) struct StackifyContext<'a> {
     pub(super) def_info: SecondaryMap<ValueId, Option<DefInfo>>,
     pub(super) phi_results: SecondaryMap<BlockId, SmallVec<[ValueId; 4]>>,
     pub(super) phi_out_sources: SecondaryMap<BlockId, BitSet<ValueId>>,
+    pub(super) spill_slot_interference: SpillSlotInterference,
     pub(super) has_internal_return: bool,
     pub(super) reach: StackifyReachability,
     pub(super) value_aliases: SecondaryMap<ValueId, Option<ValueId>>,
@@ -169,6 +170,15 @@ impl<'a> StackifyBuilder<'a> {
         normalize_alias_map(self.func, &mut value_aliases);
 
         let exact_local_addr = compute_exact_local_addrs(self.func, &value_aliases);
+        let phi_results = compute_phi_results(self.func, &value_aliases);
+        let phi_out_sources = compute_phi_out_sources(self.func, self.cfg, &value_aliases);
+        let spill_slot_interference = SpillSlotInterference::compute(
+            self.func,
+            self.cfg,
+            self.liveness,
+            &phi_results,
+            &value_aliases,
+        );
 
         let ctx = StackifyContext {
             func: self.func,
@@ -181,8 +191,9 @@ impl<'a> StackifyBuilder<'a> {
             scc,
             dom_depth: compute_dom_depth(self.dom, entry),
             def_info: compute_def_info(self.func, entry, &value_aliases),
-            phi_results: compute_phi_results(self.func, &value_aliases),
-            phi_out_sources: compute_phi_out_sources(self.func, self.cfg, &value_aliases),
+            phi_results,
+            phi_out_sources,
+            spill_slot_interference,
             // Internal-return functions expect a caller-provided return address below their args.
             has_internal_return: function_has_internal_return(self.func),
             reach: self.reach,
@@ -233,7 +244,7 @@ impl<'a> StackifyBuilder<'a> {
                     .scratch
                     .try_ensure_slot(
                         spilled,
-                        ctx.liveness,
+                        &ctx.spill_slot_interference,
                         &mut arg_free_slots.scratch,
                         Some(ctx.scratch_spill_slots),
                     )

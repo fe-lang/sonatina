@@ -10,7 +10,6 @@ pub(super) use normalize_search::NormalizeSearchScratch;
 use crate::{
     analysis::memory_access::ExactLocalAddr,
     bitset::BitSet,
-    liveness::Liveness,
     stackalloc::{Action, Actions},
 };
 use cranelift_entity::{EntityRef, SecondaryMap};
@@ -18,7 +17,7 @@ use sonatina_ir::ValueId;
 
 use super::{
     StackifyContext,
-    slots::{FreeSlotPools, SpillSlotPools},
+    slots::{FreeSlotPools, SpillSlotInterference, SpillSlotPools},
     spill::{SpillDiscovery, SpillSet},
     sym_stack::SymStack,
 };
@@ -37,7 +36,7 @@ pub(super) struct MemPlan<'a> {
     exact_local_addr: &'a SecondaryMap<ValueId, Option<ExactLocalAddr>>,
     free_slots: &'a mut FreeSlotPools,
     slots: &'a mut SpillSlotPools,
-    liveness: &'a Liveness,
+    spill_slot_interference: &'a SpillSlotInterference,
     spill: SpillDiscovery<'a>,
 }
 
@@ -61,7 +60,7 @@ impl<'a> MemPlan<'a> {
             exact_local_addr,
             free_slots,
             slots,
-            liveness: ctx.liveness,
+            spill_slot_interference: &ctx.spill_slot_interference,
             spill: SpillDiscovery::new(spill, spill_requests),
         }
     }
@@ -101,7 +100,7 @@ impl<'a> MemPlan<'a> {
             && !self.scratch_live_values.contains(v)
             && let Some(slot) = self.slots.scratch.try_ensure_slot(
                 spilled,
-                self.liveness,
+                self.spill_slot_interference,
                 &mut self.free_slots.scratch,
                 Some(self.scratch_spill_slots),
             )
