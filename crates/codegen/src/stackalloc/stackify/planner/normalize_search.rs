@@ -47,6 +47,11 @@ impl Ord for Cost {
     }
 }
 
+const UNAVAILABLE_COST: Cost = Cost {
+    gas: u32::MAX,
+    bytes: u32::MAX,
+};
+
 pub(super) trait CostModel {
     fn cost_pop(&self) -> Cost;
     fn cost_dup(&self, pos: u8) -> Cost;
@@ -533,6 +538,107 @@ fn compute_cost_hash(cost: &impl CostModel, key_infos: &[KeyInfo], cfg: SearchCf
     }
 
     h.finish()
+}
+
+const OPERAND_PREP_DUP_COSTS: usize = 16;
+const OPERAND_PREP_SWAP_COSTS: usize = 17;
+const OPERAND_PREP_KEY_COSTS: usize = 64;
+
+#[derive(Clone)]
+struct OperandPrepCostTable {
+    pop: Cost,
+    dup: [Cost; OPERAND_PREP_DUP_COSTS],
+    swap: [Cost; OPERAND_PREP_SWAP_COSTS],
+    materialize: [Cost; OPERAND_PREP_KEY_COSTS],
+    min_dup_gas: u32,
+    surplus_last_use_penalty: Cost,
+}
+
+impl OperandPrepCostTable {
+    fn new(cost: &impl CostModel, key_infos: &[KeyInfo], cfg: SearchCfg) -> Option<Self> {
+        if cfg.dup_max > OPERAND_PREP_DUP_COSTS
+            || cfg.swap_max > OPERAND_PREP_SWAP_COSTS
+            || key_infos.len() > OPERAND_PREP_KEY_COSTS
+        {
+            return None;
+        }
+
+        let pop = cost.cost_pop();
+
+        let mut dup = [UNAVAILABLE_COST; OPERAND_PREP_DUP_COSTS];
+        for (pos, slot) in dup.iter_mut().take(cfg.dup_max).enumerate() {
+            *slot = cost.cost_dup(pos as u8);
+        }
+
+        let mut swap = [UNAVAILABLE_COST; OPERAND_PREP_SWAP_COSTS];
+        for (depth, slot) in swap.iter_mut().enumerate().take(cfg.swap_max).skip(1) {
+            *slot = cost.cost_swap(depth as u8);
+        }
+        if cfg.swap_max <= 1 {
+            swap[1] = cost.cost_swap(1);
+        }
+
+        let mut materialize = [UNAVAILABLE_COST; OPERAND_PREP_KEY_COSTS];
+        for (kid, info) in key_infos.iter().copied().enumerate() {
+            materialize[kid] = match info {
+                KeyInfo::Imm { canon, .. } => cost.cost_push_imm(canon),
+                KeyInfo::Val { vid } => cost.cost_load(vid),
+                KeyInfo::Ignored => UNAVAILABLE_COST,
+            };
+        }
+
+        let min_dup_gas = dup
+            .iter()
+            .take(cfg.dup_max)
+            .map(|cost| cost.gas)
+            .min()
+            .unwrap_or(u32::MAX);
+        let surplus_last_use_penalty = pop.saturating_add(swap[1]);
+
+        Some(Self {
+            pop,
+            dup,
+            swap,
+            materialize,
+            min_dup_gas,
+            surplus_last_use_penalty,
+        })
+    }
+
+    fn materialize_gas(&self, kid: u8) -> u32 {
+        self.materialize[kid as usize].gas
+    }
+
+    fn cost_hash(&self, key_infos: &[KeyInfo], cfg: SearchCfg) -> u64 {
+        let mut h = FxHasher::default();
+
+        write_cost_to_hash(&mut h, self.pop);
+        for &cost in self.dup.iter().take(cfg.dup_max) {
+            write_cost_to_hash(&mut h, cost);
+        }
+        for &cost in self.swap.iter().take(cfg.swap_max).skip(1) {
+            write_cost_to_hash(&mut h, cost);
+        }
+
+        for (kid, info) in key_infos.iter().enumerate() {
+            match info {
+                KeyInfo::Ignored => {
+                    h.write_u32(0);
+                    h.write_u32(0);
+                }
+                KeyInfo::Imm { .. } | KeyInfo::Val { .. } => {
+                    write_cost_to_hash(&mut h, self.materialize[kid]);
+                }
+            }
+        }
+
+        h.finish()
+    }
+}
+
+fn write_cost_to_hash(h: &mut FxHasher, cost: Cost) {
+    h.write_u32(cost.gas);
+    h.write_u32(cost.bytes);
 }
 
 fn common_suffix_len(state: PackedState, goal: PackedState) -> usize {
@@ -1726,7 +1832,7 @@ fn build_operand_prep_problem(
 
 fn operand_prep_cache_key(
     problem: &OperandPrepProblem,
-    cost: &impl CostModel,
+    costs: &OperandPrepCostTable,
     cfg: SearchCfg,
 ) -> PlanCacheKey {
     let effective_cfg = SearchCfg {
@@ -1739,7 +1845,7 @@ fn operand_prep_cache_key(
         swap_max: cfg.swap_max as u8,
         max_len: problem.max_len as u8,
         max_expansions: cfg.max_expansions as u32,
-        cost_hash: compute_cost_hash(cost, &problem.key_infos, effective_cfg),
+        cost_hash: costs.cost_hash(&problem.key_infos, effective_cfg),
         start: problem.start_state.window,
         goal: problem.goal_state,
         ctx: PackedState::EMPTY,
@@ -1768,6 +1874,20 @@ fn operand_prep_push0_cost(
     (push0_kid, push0_cost)
 }
 
+fn operand_prep_push0_cost_from_table(
+    problem: &OperandPrepProblem,
+    costs: &OperandPrepCostTable,
+) -> (Option<u8>, Option<Cost>) {
+    let push0_kid = problem.materializable_imm.iter().copied().find(|&kid| {
+        matches!(
+            problem.key_infos[kid as usize],
+            KeyInfo::Imm { canon, .. } if canon.is_zero()
+        )
+    });
+    let push0_cost = push0_kid.map(|kid| costs.materialize[kid as usize]);
+    (push0_kid, push0_cost)
+}
+
 fn prep_window_copy_count(state: PrepState, kid: u8) -> u8 {
     let mut count = 0u8;
     for idx in 0..state.window.len() {
@@ -1790,11 +1910,28 @@ fn prep_top_is_last_use(state: PrepState, last_use_mask: u64) -> bool {
 }
 
 fn prep_prefix_matches(window: PackedState, goal: &[u8]) -> bool {
-    window.len() >= goal.len()
-        && goal
-            .iter()
-            .enumerate()
-            .all(|(idx, &kid)| window.get(idx) == kid)
+    prep_prefix_len(window, goal) == goal.len()
+}
+
+fn prep_prefix_len(window: PackedState, goal: &[u8]) -> usize {
+    goal.iter()
+        .enumerate()
+        .take_while(|&(idx, &kid)| idx < window.len() && window.get(idx) == kid)
+        .count()
+}
+
+fn operand_prep_copy_can_help(
+    problem: &OperandPrepProblem,
+    state: PrepState,
+    kid: u8,
+    win: u8,
+) -> bool {
+    let bit = 1u64 << kid;
+    let prefix = prep_prefix_len(state.window, &problem.goal_keys);
+    win < problem.goal_counts[kid as usize]
+        || win.saturating_add(u8::from((state.tail & bit) != 0))
+            < prep_needed_copy_count(problem, state, kid)
+        || problem.goal_keys.get(prefix) == Some(&kid)
 }
 
 fn operand_prep_swap_pos(
@@ -2445,7 +2582,8 @@ pub(super) fn solve_optimal_operand_prep_plan(
         max_len: problem.max_len,
         ..cfg
     };
-    let cache_key = operand_prep_cache_key(&problem, cost, cfg);
+    let prep_costs = OperandPrepCostTable::new(cost, &problem.key_infos, cfg)?;
+    let cache_key = operand_prep_cache_key(&problem, &prep_costs, cfg);
 
     if let Some(hit) = scratch.plan_cache.get(&cache_key).cloned() {
         if debug {
@@ -2454,7 +2592,7 @@ pub(super) fn solve_optimal_operand_prep_plan(
         return match hit {
             PlanCacheVal::None => None,
             PlanCacheVal::Steps(steps) => Some(NormalizePlan {
-                cost: cost_for_steps(&steps, &problem.key_infos, cost),
+                cost: cost_for_steps_with_table(&steps, &prep_costs),
                 steps,
                 key_infos: problem.key_infos,
                 goal_keys: problem.goal_keys,
@@ -2479,9 +2617,8 @@ pub(super) fn solve_optimal_operand_prep_plan(
         });
     }
 
-    let (push0_kid, push0_cost) = operand_prep_push0_cost(&problem, cost);
-    let pop_cost = cost.cost_pop();
-    let surplus_last_use_penalty = pop_cost.saturating_add(cost.cost_swap(1));
+    let (push0_kid, push0_cost) = operand_prep_push0_cost_from_table(&problem, &prep_costs);
+    let surplus_last_use_penalty = prep_costs.surplus_last_use_penalty;
     let Some((linear_steps, linear_cost)) =
         build_linear_operand_prep_upper_bound(&problem, true, cost, cfg)
     else {
@@ -2551,15 +2688,14 @@ pub(super) fn solve_optimal_operand_prep_plan(
         );
     }
 
-    let dup_gas_lb = minimal_dup_gas(cost, cfg.dup_max);
+    let dup_gas_lb = prep_costs.min_dup_gas;
     let start_h = heuristic_operand_prep(
         problem.start_state,
         &problem.goal_counts,
         problem.goal_mask,
         problem.preserve_mask,
         dup_gas_lb,
-        &problem.key_infos,
-        cost,
+        &prep_costs,
     );
 
     if should_prune(start_h, upper_bound, true) {
@@ -2650,6 +2786,12 @@ pub(super) fn solve_optimal_operand_prep_plan(
 
         let cur_len = entry.state.window.len();
 
+        let mut win_counts = [0u8; 64];
+        for pos in 0..cur_len {
+            let kid = entry.state.window.get(pos) as usize;
+            win_counts[kid] = win_counts[kid].saturating_add(1);
+        }
+
         let mut dup_cost_for_kid = [Cost {
             gas: u32::MAX,
             bytes: u32::MAX,
@@ -2660,7 +2802,7 @@ pub(super) fn solve_optimal_operand_prep_plan(
             for pos in 0..=max_pos {
                 let kid = entry.state.window.get(pos) as usize;
                 duplicable |= 1u64 << kid;
-                dup_cost_for_kid[kid] = dup_cost_for_kid[kid].min(cost.cost_dup(pos as u8));
+                dup_cost_for_kid[kid] = dup_cost_for_kid[kid].min(prep_costs.dup[pos]);
             }
         }
 
@@ -2669,8 +2811,7 @@ pub(super) fn solve_optimal_operand_prep_plan(
             goal_mask: problem.goal_mask,
             preserve_mask: problem.preserve_mask,
             dup_gas: dup_gas_lb,
-            key_infos: &problem.key_infos,
-            cost,
+            costs: &prep_costs,
             upper_bound,
             nodes: &mut *nodes,
             open: &mut *open,
@@ -2693,7 +2834,7 @@ pub(super) fn solve_optimal_operand_prep_plan(
                 };
                 consider_prep_succ(
                     next,
-                    g.saturating_add(cost.cost_swap(depth as u8)),
+                    g.saturating_add(prep_costs.swap[depth]),
                     entry.state,
                     Step::Swap(depth as u8),
                     &mut consider_ctx,
@@ -2731,7 +2872,7 @@ pub(super) fn solve_optimal_operand_prep_plan(
                         kid,
                         &problem.goal_counts,
                         problem.last_use_mask,
-                        cost.cost_dup(pos as u8),
+                        prep_costs.dup[pos],
                         surplus_last_use_penalty,
                     )),
                     entry.state,
@@ -2768,10 +2909,7 @@ pub(super) fn solve_optimal_operand_prep_plan(
             if Some(kid) == push0_kid {
                 continue;
             }
-            let KeyInfo::Imm { canon, .. } = problem.key_infos[kid as usize] else {
-                unreachable!("expected imm key info")
-            };
-            let push_cost = cost.cost_push_imm(canon);
+            let push_cost = prep_costs.materialize[kid as usize];
             let bit = 1u64 << kid;
             let dominated = (duplicable & bit) != 0 && push_cost >= dup_cost_for_kid[kid as usize];
             if dominated {
@@ -2798,10 +2936,10 @@ pub(super) fn solve_optimal_operand_prep_plan(
 
         for &kid in &problem.materializable_val {
             let bit = 1u64 << kid;
+            if !operand_prep_copy_can_help(&problem, entry.state, kid, win_counts[kid as usize]) {
+                continue;
+            }
             let set_mem = (problem.preserve_mask & bit) != 0;
-            let KeyInfo::Val { vid } = problem.key_infos[kid as usize] else {
-                unreachable!("expected val key info")
-            };
             let next = prep_insert(
                 entry.state,
                 kid,
@@ -2817,7 +2955,7 @@ pub(super) fn solve_optimal_operand_prep_plan(
                     kid,
                     &problem.goal_counts,
                     problem.last_use_mask,
-                    cost.cost_load(vid),
+                    prep_costs.materialize[kid as usize],
                     surplus_last_use_penalty,
                 )),
                 entry.state,
@@ -3018,6 +3156,18 @@ pub(super) fn cost_for_steps(steps: &[Step], key_infos: &[KeyInfo], cost: &impl 
                 };
                 cost.cost_load(vid)
             }
+        };
+        acc.saturating_add(c)
+    })
+}
+
+fn cost_for_steps_with_table(steps: &[Step], costs: &OperandPrepCostTable) -> Cost {
+    steps.iter().fold(Cost::default(), |acc, step| {
+        let c = match *step {
+            Step::Pop => costs.pop,
+            Step::Dup(pos) => costs.dup[pos as usize],
+            Step::Swap(depth) => costs.swap[depth as usize],
+            Step::PushImm(kid) | Step::LoadVal(kid) => costs.materialize[kid as usize],
         };
         acc.saturating_add(c)
     })
@@ -4021,14 +4171,13 @@ fn operand_prep_goal(
     true
 }
 
-fn heuristic_operand_prep<C: CostModel>(
+fn heuristic_operand_prep(
     state: PrepState,
     goal_counts: &[u8; 64],
     goal_mask: u64,
     preserve_mask: u64,
     dup_gas: u32,
-    key_infos: &[KeyInfo],
-    cost: &C,
+    costs: &OperandPrepCostTable,
 ) -> Cost {
     let mut win_counts = [0u8; 64];
     for i in 0..state.window.len() {
@@ -4059,7 +4208,7 @@ fn heuristic_operand_prep<C: CostModel>(
             continue;
         }
 
-        let mat = materialize_cost_gas(kid, key_infos, cost);
+        let mat = costs.materialize_gas(kid);
         let per_copy = mat.min(dup_gas);
         if have_window == 0 {
             gas = gas.saturating_add(mat);
@@ -4074,24 +4223,23 @@ fn heuristic_operand_prep<C: CostModel>(
     Cost { gas, bytes: 0 }
 }
 
-struct PrepConsiderCtx<'a, C: CostModel> {
+struct PrepConsiderCtx<'a> {
     goal_counts: &'a [u8; 64],
     goal_mask: u64,
     preserve_mask: u64,
     dup_gas: u32,
-    key_infos: &'a [KeyInfo],
-    cost: &'a C,
+    costs: &'a OperandPrepCostTable,
     upper_bound: Cost,
     nodes: &'a mut FxHashMap<PrepState, SearchNode<PrepState>>,
     open: &'a mut BinaryHeap<PrepQueueEntry>,
 }
 
-fn consider_prep_succ<C: CostModel>(
+fn consider_prep_succ(
     state: PrepState,
     g: Cost,
     parent_state: PrepState,
     step: Step,
-    ctx: &mut PrepConsiderCtx<'_, C>,
+    ctx: &mut PrepConsiderCtx<'_>,
 ) {
     let h = heuristic_operand_prep(
         state,
@@ -4099,8 +4247,7 @@ fn consider_prep_succ<C: CostModel>(
         ctx.goal_mask,
         ctx.preserve_mask,
         ctx.dup_gas,
-        ctx.key_infos,
-        ctx.cost,
+        ctx.costs,
     );
     let f = g.saturating_add(h);
     if should_prune(f, ctx.upper_bound, true) {
@@ -4233,6 +4380,45 @@ mod tests {
         (0..state.len()).map(|idx| state.get(idx)).collect()
     }
 
+    fn prep_state(ids: &[u8], tail: u64, mem: u64) -> PrepState {
+        PrepState {
+            window: PackedState::from_ids(ids).unwrap(),
+            tail,
+            mem,
+        }
+    }
+
+    fn operand_prep_test_problem(goal: &[u8], preserve_mask: u64) -> OperandPrepProblem {
+        let mut goal_counts = [0u8; 64];
+        let mut goal_mask = 0u64;
+        for &kid in goal {
+            goal_counts[kid as usize] += 1;
+            goal_mask |= 1u64 << kid;
+        }
+        let mut key_infos = KeyInfos::new();
+        key_infos.resize(
+            goal.iter().copied().max().unwrap_or(0) as usize + 1,
+            KeyInfo::Ignored,
+        );
+        OperandPrepProblem {
+            key_infos,
+            goal_keys: goal.iter().copied().collect(),
+            goal_mask,
+            goal_counts,
+            preserve_mask,
+            last_use_mask: 0,
+            materializable_imm: KeyIds::new(),
+            materializable_val: KeyIds::new(),
+            start_state: prep_state(&[], 0, 0),
+            goal_state: PackedState::from_ids(goal).unwrap(),
+            max_len: 6,
+        }
+    }
+
+    fn copy_can_help(problem: &OperandPrepProblem, state: PrepState, kid: u8) -> bool {
+        operand_prep_copy_can_help(problem, state, kid, prep_window_copy_count(state, kid))
+    }
+
     #[test]
     fn packed_state_roundtrip_ops_and_layout() {
         assert_eq!(std::mem::size_of::<PackedState>(), 16);
@@ -4260,6 +4446,25 @@ mod tests {
         assert_eq!(packed_state_ids(state.push_truncated(4, 3)), [4, 1, 2]);
         assert_eq!(packed_state_ids(state.push_truncated(4, 5)), [4, 1, 2, 3]);
         assert!(PackedState::from_ids(&[63]).unwrap() < PackedState::from_ids(&[0, 0]).unwrap());
+    }
+
+    #[test]
+    fn operand_prep_copy_help_prunes_surplus_available_copy() {
+        let problem = operand_prep_test_problem(&[0], 0);
+        assert!(!copy_can_help(&problem, prep_state(&[0, 0], 0, 0), 0));
+    }
+
+    #[test]
+    fn operand_prep_copy_help_keeps_next_prefix_copy() {
+        let problem = operand_prep_test_problem(&[0, 1], 0);
+        assert!(copy_can_help(&problem, prep_state(&[0, 2, 1], 0, 0), 1));
+    }
+
+    #[test]
+    fn operand_prep_copy_help_keeps_preserve_deficit_only() {
+        let problem = operand_prep_test_problem(&[0], 1);
+        assert!(copy_can_help(&problem, prep_state(&[0], 0, 0), 0));
+        assert!(!copy_can_help(&problem, prep_state(&[0], 1, 0), 0));
     }
 
     fn consider_brute_succ(
