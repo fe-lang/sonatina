@@ -3,8 +3,16 @@ use sonatina_ir::{BlockId, Function, InstId, ValueId};
 
 use crate::{
     analysis::memory_access::ExactLocalAddr,
+    isa::evm::static_arena_alloc::StackObjId,
     stackalloc::{Action, Actions, Allocator},
 };
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SpillStorage {
+    Scratch(u32),
+    Object(StackObjId),
+    ExactLocal(ExactLocalAddr),
+}
 
 #[derive(Clone, Default)]
 pub struct StackifyAlloc {
@@ -14,8 +22,8 @@ pub struct StackifyAlloc {
     /// `br_table` lowering uses per-case action sequences stored in IR case order.
     pub(super) brtable_actions: SecondaryMap<InstId, Vec<Actions>>,
 
-    pub(crate) spill_obj:
-        SecondaryMap<ValueId, Option<crate::isa::evm::static_arena_alloc::StackObjId>>,
+    pub(crate) spill_storage: SecondaryMap<ValueId, Option<SpillStorage>>,
+    pub(crate) spill_obj: SecondaryMap<ValueId, Option<StackObjId>>,
     pub(crate) scratch_slot_of_value: SecondaryMap<ValueId, Option<u32>>,
     pub(crate) exact_local_addr: SecondaryMap<ValueId, Option<ExactLocalAddr>>,
 }
@@ -25,6 +33,99 @@ impl StackifyAlloc {
         self.scratch_slot_of_value
             .values()
             .any(|slot| slot.is_some())
+    }
+
+    pub(crate) fn storage_for_value(&self, value: ValueId) -> Option<SpillStorage> {
+        self.spill_storage[value]
+    }
+
+    pub(crate) fn for_each_action(&self, mut f: impl FnMut(&Action)) {
+        for actions in self.pre_actions.values() {
+            for action in actions {
+                f(action);
+            }
+        }
+        for actions in self.post_actions.values() {
+            for action in actions {
+                f(action);
+            }
+        }
+        for cases in self.brtable_actions.values() {
+            for actions in cases {
+                for action in actions {
+                    f(action);
+                }
+            }
+        }
+    }
+
+    pub(crate) fn validate_spill_storage(&self) {
+        for (value, storage) in self.spill_storage.iter() {
+            match storage {
+                Some(SpillStorage::Scratch(slot)) => {
+                    assert_eq!(
+                        self.scratch_slot_of_value[value],
+                        Some(*slot),
+                        "scratch storage map drift for value {}",
+                        value.as_u32()
+                    );
+                    assert_eq!(
+                        self.spill_obj[value],
+                        None,
+                        "scratch-spilled value {} must not have object storage",
+                        value.as_u32()
+                    );
+                }
+                Some(SpillStorage::Object(obj)) => {
+                    assert_eq!(
+                        self.spill_obj[value],
+                        Some(*obj),
+                        "object storage map drift for value {}",
+                        value.as_u32()
+                    );
+                    assert_eq!(
+                        self.scratch_slot_of_value[value],
+                        None,
+                        "object-spilled value {} must not have scratch storage",
+                        value.as_u32()
+                    );
+                }
+                Some(SpillStorage::ExactLocal(exact)) => {
+                    assert_eq!(
+                        self.exact_local_addr[value],
+                        Some(*exact),
+                        "exact local storage map drift for value {}",
+                        value.as_u32()
+                    );
+                }
+                None => {
+                    assert_eq!(
+                        self.scratch_slot_of_value[value],
+                        None,
+                        "unspilled value {} must not have scratch storage",
+                        value.as_u32()
+                    );
+                    assert_eq!(
+                        self.spill_obj[value],
+                        None,
+                        "unspilled value {} must not have object storage",
+                        value.as_u32()
+                    );
+                }
+            }
+        }
+
+        self.for_each_action(|action| {
+            if let Action::MemLoadObj(id) | Action::MemStoreObj(id) = action {
+                assert!(
+                    self.spill_storage.values().any(
+                        |storage| matches!(storage, Some(SpillStorage::Object(obj)) if obj == id)
+                    ),
+                    "stackify emitted object action for non-object spill {}",
+                    id.as_u32()
+                );
+            }
+        });
     }
 }
 
@@ -36,14 +137,16 @@ impl Allocator for StackifyAlloc {
                 idx < super::DUP_MAX,
                 "function arg depth exceeds DUP16 reach"
             );
-            if self.exact_local_addr[arg].is_some() {
-                continue;
-            } else if let Some(slot) = self.scratch_slot_of_value[arg] {
-                act.push(Action::StackDup(idx as u8));
-                act.push(Action::MemStoreAbs(slot * 32));
-            } else if let Some(obj) = self.spill_obj[arg] {
-                act.push(Action::StackDup(idx as u8));
-                act.push(Action::MemStoreObj(obj));
+            match self.storage_for_value(arg) {
+                Some(SpillStorage::Scratch(slot)) => {
+                    act.push(Action::StackDup(idx as u8));
+                    act.push(Action::MemStoreAbs(slot * 32));
+                }
+                Some(SpillStorage::Object(obj)) => {
+                    act.push(Action::StackDup(idx as u8));
+                    act.push(Action::MemStoreObj(obj));
+                }
+                Some(SpillStorage::ExactLocal(_)) | None => {}
             }
         }
         act

@@ -249,9 +249,6 @@ pub(crate) fn compute_func_stack_objects(
 
     let mut spilled_values: BitSet<ValueId> = BitSet::default();
     for (v, obj) in analysis.alloc.spill_obj.iter() {
-        if analysis.alloc.scratch_slot_of_value[v].is_some() {
-            continue;
-        }
         if obj.is_some() {
             spilled_values.insert(v);
             spill_obj[v] = *obj;

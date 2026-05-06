@@ -12,6 +12,7 @@ use crate::{bitset::BitSet, isa::evm::immediate_u32};
 use super::{
     super::Action,
     StackifyAlloc,
+    alloc::SpillStorage,
     sym_stack::{StackItem, SymStack},
     templates::BlockTemplate,
 };
@@ -136,20 +137,18 @@ impl StackifyTrace {
         let _ = writeln!(&mut out, "STACKIFY");
 
         let mut spill_set_by_slot: BTreeMap<(u8, u32), Vec<ValueId>> = BTreeMap::new();
-        for (v, slot) in alloc.scratch_slot_of_value.iter() {
-            if let Some(slot) = *slot {
-                spill_set_by_slot.entry((0, slot)).or_default().push(v);
-            }
-        }
-        for (v, obj) in alloc.spill_obj.iter() {
-            if alloc.scratch_slot_of_value[v].is_some() {
-                continue;
-            }
-            if let Some(obj) = *obj {
-                spill_set_by_slot
-                    .entry((1, obj.as_u32()))
-                    .or_default()
-                    .push(v);
+        for (v, storage) in alloc.spill_storage.iter() {
+            match storage {
+                Some(SpillStorage::Scratch(slot)) => {
+                    spill_set_by_slot.entry((0, *slot)).or_default().push(v);
+                }
+                Some(SpillStorage::Object(obj)) => {
+                    spill_set_by_slot
+                        .entry((1, obj.as_u32()))
+                        .or_default()
+                        .push(v);
+                }
+                Some(SpillStorage::ExactLocal(_)) | None => {}
             }
         }
         if !spill_set_by_slot.is_empty() {

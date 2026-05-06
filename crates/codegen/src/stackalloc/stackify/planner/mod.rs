@@ -27,6 +27,7 @@ pub(super) struct MemPlanSnapshot {
     free_slots: FreeSlotPools,
     slots: SpillSlotPools,
     spill_requests: BitSet<ValueId>,
+    object_spill_requests: BitSet<ValueId>,
 }
 
 pub(super) struct MemPlan<'a> {
@@ -34,6 +35,8 @@ pub(super) struct MemPlan<'a> {
     scratch_spill_slots: u32,
     spill_obj: &'a SecondaryMap<ValueId, Option<crate::isa::evm::static_arena_alloc::StackObjId>>,
     exact_local_addr: &'a SecondaryMap<ValueId, Option<ExactLocalAddr>>,
+    object_spill_requests: &'a mut BitSet<ValueId>,
+    forced_object_spills: &'a BitSet<ValueId>,
     free_slots: &'a mut FreeSlotPools,
     slots: &'a mut SpillSlotPools,
     spill_slot_interference: &'a SpillSlotInterference,
@@ -41,6 +44,7 @@ pub(super) struct MemPlan<'a> {
 }
 
 impl<'a> MemPlan<'a> {
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
         spill: SpillSet<'a>,
         spill_requests: &'a mut BitSet<ValueId>,
@@ -50,6 +54,8 @@ impl<'a> MemPlan<'a> {
             Option<crate::isa::evm::static_arena_alloc::StackObjId>,
         >,
         exact_local_addr: &'a SecondaryMap<ValueId, Option<ExactLocalAddr>>,
+        object_spill_requests: &'a mut BitSet<ValueId>,
+        forced_object_spills: &'a BitSet<ValueId>,
         free_slots: &'a mut FreeSlotPools,
         slots: &'a mut SpillSlotPools,
     ) -> Self {
@@ -58,6 +64,8 @@ impl<'a> MemPlan<'a> {
             scratch_spill_slots: ctx.scratch_spill_slots,
             spill_obj,
             exact_local_addr,
+            object_spill_requests,
+            forced_object_spills,
             free_slots,
             slots,
             spill_slot_interference: &ctx.spill_slot_interference,
@@ -74,6 +82,7 @@ impl<'a> MemPlan<'a> {
             free_slots: self.free_slots.clone(),
             slots: self.slots.clone(),
             spill_requests: self.spill.spill_requests().clone(),
+            object_spill_requests: (*self.object_spill_requests).clone(),
         }
     }
 
@@ -81,6 +90,17 @@ impl<'a> MemPlan<'a> {
         *self.free_slots = snapshot.free_slots;
         *self.slots = snapshot.slots;
         self.spill.restore_spill_requests(snapshot.spill_requests);
+        *self.object_spill_requests = snapshot.object_spill_requests;
+    }
+
+    fn must_use_object_storage(&self, v: ValueId) -> bool {
+        self.scratch_spill_slots == 0
+            || self.scratch_live_values.contains(v)
+            || self.forced_object_spills.contains(v)
+    }
+
+    fn request_object_storage(&mut self, v: ValueId) {
+        self.object_spill_requests.insert(v);
     }
 
     fn emit_store_for_spilled_value(&mut self, v: ValueId, actions: &mut Actions) {
@@ -96,17 +116,17 @@ impl<'a> MemPlan<'a> {
             return;
         }
 
-        if self.scratch_spill_slots != 0
-            && !self.scratch_live_values.contains(v)
-            && let Some(slot) = self.slots.scratch.try_ensure_slot(
+        if !self.must_use_object_storage(v) {
+            if let Some(slot) = self.slots.scratch.try_ensure_slot(
                 spilled,
                 self.spill_slot_interference,
                 &mut self.free_slots.scratch,
                 Some(self.scratch_spill_slots),
-            )
-        {
-            actions.push(Action::MemStoreAbs(slot * 32));
-            return;
+            ) {
+                actions.push(Action::MemStoreAbs(slot * 32));
+                return;
+            }
+            self.request_object_storage(v);
         }
 
         actions.push(Action::MemStoreObj(
@@ -133,11 +153,11 @@ impl<'a> MemPlan<'a> {
             };
         }
 
-        if self.scratch_spill_slots != 0
-            && !self.scratch_live_values.contains(v)
-            && let Some(slot) = self.slots.scratch.slot_for(v)
-        {
-            return Action::MemLoadAbs(slot * 32);
+        if !self.must_use_object_storage(v) {
+            if let Some(slot) = self.slots.scratch.slot_for(v) {
+                return Action::MemLoadAbs(slot * 32);
+            }
+            self.request_object_storage(v);
         }
 
         // Invariant: every spilled value has a `StackObjId` assigned by stackify's builder
