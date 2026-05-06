@@ -127,6 +127,31 @@ fn commutative_plan_cmp_key(
     )
 }
 
+fn minimum_positive_operand_prep_cost(cost: &impl CostModel, cfg: SearchCfg) -> Cost {
+    let mut best = cost.cost_pop().min(cost.cost_push_imm(I256::zero()));
+    for pos in 0..cfg.dup_max.min(usize::from(u8::MAX) + 1) {
+        best = best.min(cost.cost_dup(pos as u8));
+    }
+    for depth in 1..=cfg.swap_max.min(usize::from(u8::MAX)) {
+        best = best.min(cost.cost_swap(depth as u8));
+    }
+    best
+}
+
+fn commutative_plan_is_unbeatable(
+    plan: &NormalizePlan,
+    cost: &impl CostModel,
+    cfg: SearchCfg,
+) -> bool {
+    let key = commutative_plan_cmp_key(plan, cost);
+    if key.0 == Cost::default() {
+        return true;
+    }
+
+    let min = minimum_positive_operand_prep_cost(cost, cfg);
+    key == (min, min, 1)
+}
+
 impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
     fn use_operand_prep_query_cache(&self, args_len: usize) -> bool {
         // The exact solver already has its own structural cache. Keep unary uncached because
@@ -329,7 +354,7 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
         let top_matches = self
             .stack
             .top()
-            .is_some_and(|item| self.unary_operand_prep_item_matches_arg(item, arg, arg_imm));
+            .is_some_and(|item| self.operand_prep_item_matches_arg(item, arg, arg_imm));
         let preserve_satisfied = arg_is_imm || last_use || copy_count >= 2;
         let surplus_last_use_penalty = cost.cost_pop().saturating_add(cost.cost_swap(1));
 
@@ -438,7 +463,7 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
         }
     }
 
-    fn unary_operand_prep_item_matches_arg(
+    fn operand_prep_item_matches_arg(
         &self,
         item: &StackItem,
         arg: ValueId,
@@ -464,7 +489,7 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
         self.stack
             .iter()
             .take(self.stack.len_above_func_ret())
-            .filter(|item| self.unary_operand_prep_item_matches_arg(item, arg, arg_imm))
+            .filter(|item| self.operand_prep_item_matches_arg(item, arg, arg_imm))
             .count()
     }
 
@@ -484,7 +509,7 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
             .iter()
             .skip(start)
             .take(limit - start)
-            .position(|item| self.unary_operand_prep_item_matches_arg(item, arg, arg_imm))
+            .position(|item| self.operand_prep_item_matches_arg(item, arg, arg_imm))
             .map(|off| start + off)
     }
 
@@ -512,41 +537,38 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
         consume_last_use: &BitSet<ValueId>,
         commutative_pair: bool,
     ) {
-        // If all operands are last-use values that are already in the required order on the
-        // current stack top, avoid the operand-preparation machinery entirely. The instruction
-        // will consume them directly.
-        if !args.is_empty()
-            && args.iter().all(|&v| consume_last_use.contains(v))
-            && self.stack_prefix_matches(args)
-        {
-            return;
-        }
-
         // For commutative binary ops, try both operand orders and choose the cheaper
         // operand-preparation plan. This is purely a bytecode optimization (SSA semantics are
         // unchanged).
         if commutative_pair && args.len() == 2 && args[0] != args[1] {
-            // Fast path: if the operands are last-use and already occupy the top two stack slots
-            // (in either order), use that order and consume them as-is.
-            if consume_last_use.contains(args[0]) && consume_last_use.contains(args[1]) {
-                if self.stack_prefix_matches(args) {
-                    return;
-                }
-                let mut swapped: SmallVec<[ValueId; 8]> = args.clone();
-                swapped.swap(0, 1);
-                if self.stack_prefix_matches(&swapped) {
-                    args.swap(0, 1);
-                    return;
-                }
+            if self.stack_prefix_matches_and_preserved(args, consume_last_use) {
+                return;
             }
 
-            let original_plan = self.solve_operand_prep_cached(args.as_slice(), consume_last_use);
+            let mut swapped: SmallVec<[ValueId; 8]> = args.clone();
+            swapped.swap(0, 1);
+            if self.stack_prefix_matches_and_preserved(&swapped, consume_last_use) {
+                args.swap(0, 1);
+                return;
+            }
 
-            let mut swapped_args = args.clone();
+            let cost = SpillAwareCostModel::new(self.mem.spill_set());
+            let search_cfg = self.operand_prep_search_cfg(args.len());
+            let original_plan = self.solve_operand_prep_cached(args.as_slice(), consume_last_use);
+            if let Some(plan) = original_plan.as_ref()
+                && commutative_plan_is_unbeatable(plan, &cost, search_cfg)
+            {
+                if !self.apply_operand_prep_plan(plan, args.as_slice()) {
+                    self.prepare_operands_greedy(args.as_slice(), consume_last_use);
+                }
+                debug_assert!(self.stack_prefix_matches(args.as_slice()));
+                return;
+            }
+
+            let mut swapped_args: SmallVec<[ValueId; 8]> = args.clone();
             swapped_args.swap(0, 1);
             let swapped_plan =
                 self.solve_operand_prep_cached(swapped_args.as_slice(), consume_last_use);
-            let cost = SpillAwareCostModel::new(self.mem.spill_set());
 
             let (plan, swapped) = match (original_plan, swapped_plan) {
                 (Some(plan), None) => (plan, false),
@@ -611,6 +633,90 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
             .all(|(item, arg)| item == &StackItem::Value(arg))
     }
 
+    fn stack_item_matches_arg(&self, depth: usize, arg: ValueId) -> bool {
+        self.stack.item_at(depth).is_some_and(|item| {
+            self.operand_prep_item_matches_arg(item, arg, self.ctx.func.dfg.value_imm(arg))
+        })
+    }
+
+    fn stack_prefix_matches_and_preserved(
+        &mut self,
+        args: &[ValueId],
+        consume_last_use: &BitSet<ValueId>,
+    ) -> bool {
+        if args.is_empty() || self.stack.len_above_func_ret() < args.len() {
+            return false;
+        }
+
+        for (depth, &arg) in args.iter().enumerate() {
+            if !self.stack_item_matches_arg(depth, arg) {
+                return false;
+            }
+        }
+
+        let mut checked = BitSet::default();
+        let stack_len = self.stack.len_above_func_ret();
+        for &arg in args {
+            if self.ctx.func.dfg.value_is_imm(arg)
+                || consume_last_use.contains(arg)
+                || !checked.insert(arg)
+            {
+                continue;
+            }
+
+            let preserved_on_stack = self
+                .stack
+                .iter()
+                .take(stack_len)
+                .skip(args.len())
+                .any(|item| item == &StackItem::Value(arg));
+            if !preserved_on_stack && !self.mem.spill_set().contains(arg) {
+                return false;
+            }
+        }
+
+        self.rename_immediate_slots_to_match(args)
+    }
+
+    fn prepare_trivial_binary_operands(
+        &mut self,
+        args: &[ValueId],
+        consume_last_use: &BitSet<ValueId>,
+    ) -> bool {
+        let &[lhs, rhs] = args else {
+            return false;
+        };
+
+        if self.stack.len_above_func_ret() >= 3
+            && self.stack_item_matches_arg(0, rhs)
+            && self.stack_item_matches_arg(1, lhs)
+            && self.stack_item_matches_arg(2, rhs)
+        {
+            let stack_before = self.stack.clone();
+            let actions_before = self.actions.len();
+            self.stack.pop(self.actions);
+            if self.stack_prefix_matches_and_preserved(args, consume_last_use) {
+                return true;
+            }
+            *self.stack = stack_before;
+            self.actions.truncate(actions_before);
+        }
+
+        if !self.ctx.func.dfg.value_is_imm(lhs)
+            && !self.ctx.func.dfg.value_is_imm(rhs)
+            && self.stack_item_matches_arg(0, rhs)
+            && self.stack_item_matches_arg(1, lhs)
+        {
+            let reversed = [rhs, lhs];
+            if self.stack_prefix_matches_and_preserved(&reversed, consume_last_use) {
+                self.stack.swap(1, self.actions);
+                return true;
+            }
+        }
+
+        false
+    }
+
     fn operand_prep_search_cfg(&self, args_len: usize) -> SearchCfg {
         let max_len = if args_len > self.ctx.reach.swap_max {
             args_len.min(21)
@@ -659,6 +765,16 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
         consume_last_use: &BitSet<ValueId>,
     ) {
         if args.is_empty() {
+            return;
+        }
+
+        if self.stack_prefix_matches_and_preserved(args, consume_last_use) {
+            debug_assert!(self.stack_prefix_matches(args));
+            return;
+        }
+
+        if self.prepare_trivial_binary_operands(args, consume_last_use) {
+            debug_assert!(self.stack_prefix_matches(args));
             return;
         }
 
@@ -772,7 +888,7 @@ mod tests {
                 builder::StackifyReachability,
                 planner::{
                     MemPlan, NormalizeSearchScratch, Planner,
-                    normalize_search::{Cost, EstimatedCostModel, KeyInfo, Step},
+                    normalize_search::{Cost, EstimatedCostModel, KeyInfo, SearchCfg, Step},
                     test_utils::build_stackify_test_context,
                 },
                 slots::{FreeSlotPools, SpillSlotPools},
@@ -784,6 +900,14 @@ mod tests {
     use cranelift_entity::SecondaryMap;
     use sonatina_ir::{I256, Immediate, Type, Value, cfg::ControlFlowGraph};
     use sonatina_parser::parse_module;
+
+    fn stack_from_top(values: &[ValueId]) -> SymStack {
+        let mut stack = SymStack::opaque_prefix_empty(false);
+        for &value in values.iter().rev() {
+            stack.push_value(value);
+        }
+        stack
+    }
 
     #[test]
     fn commutative_plan_comparison_uses_emitted_step_cost() {
@@ -805,6 +929,47 @@ mod tests {
             commutative_plan_cmp_key(&cheaper_emitted, &cost)
                 < commutative_plan_cmp_key(&pricier_emitted, &cost)
         );
+    }
+
+    #[test]
+    fn commutative_unbeatable_plan_requires_full_minimum_key() {
+        let cost = EstimatedCostModel::default();
+        let cfg = SearchCfg {
+            dup_max: 16,
+            swap_max: 16,
+            max_len: 16,
+            max_expansions: 50_000,
+        };
+        let pop = NormalizePlan {
+            cost: cost.cost_pop(),
+            steps: vec![Step::Pop],
+            key_infos: SmallVec::new(),
+            goal_keys: SmallVec::new(),
+        };
+        let penalized_pop = NormalizePlan {
+            cost: Cost { gas: 99, bytes: 99 },
+            ..pop.clone()
+        };
+        let swap = NormalizePlan {
+            cost: cost.cost_swap(1),
+            steps: vec![Step::Swap(1)],
+            key_infos: SmallVec::new(),
+            goal_keys: SmallVec::new(),
+        };
+
+        assert!(commutative_plan_is_unbeatable(&pop, &cost, cfg));
+        assert!(commutative_plan_is_unbeatable(
+            &NormalizePlan {
+                cost: Cost::default(),
+                steps: Vec::new(),
+                key_infos: SmallVec::new(),
+                goal_keys: SmallVec::new(),
+            },
+            &cost,
+            cfg
+        ));
+        assert!(!commutative_plan_is_unbeatable(&penalized_pop, &cost, cfg));
+        assert!(!commutative_plan_is_unbeatable(&swap, &cost, cfg));
     }
 
     #[test]
@@ -1549,6 +1714,111 @@ block0:
                 solve_steps(stack, arg, &BitSet::default()),
                 vec![Step::Swap(2), Step::Dup(0)]
             );
+        });
+    }
+
+    #[test]
+    fn already_prepared_prefix_fast_path_preserves_top_operands() {
+        const SRC: &str = r#"
+target = "evm-ethereum-osaka"
+
+func public %f(v0.i256, v1.i256, v2.i256) {
+block0:
+    return;
+}
+"#;
+
+        let parsed = parse_module(SRC).expect("module parses");
+        let func_ref = parsed.debug.func_order[0];
+
+        parsed.module.func_store.modify(func_ref, |func| {
+            let old_imm = func.dfg.make_imm_value(Immediate::I8(7));
+            let current_imm = func.dfg.make_value(Value::Immediate {
+                imm: Immediate::I8(7),
+                ty: Type::I8,
+            });
+
+            let mut cfg = ControlFlowGraph::new();
+            cfg.compute(func);
+            let entry = cfg.entry().expect("missing entry block");
+
+            let mut liveness = Liveness::new();
+            liveness.compute(func, &cfg);
+
+            let mut dom = DomTree::new();
+            dom.compute(&cfg);
+
+            let mut scc = CfgSccAnalysis::new();
+            scc.compute(&cfg);
+
+            let reach = StackifyReachability::new(16);
+            let ctx = build_stackify_test_context(func, &cfg, &dom, &liveness, entry, scc, reach);
+            let spill_obj = SecondaryMap::new();
+            let run = |stack_values: &[ValueId],
+                       args_values: &[ValueId],
+                       spill_values: &[ValueId],
+                       last_use_values: &[ValueId],
+                       commutative| {
+                let spill_set: BitSet<ValueId> = spill_values.iter().copied().collect();
+                let mut spill_requests = BitSet::default();
+                let mut free_slots = FreeSlotPools::default();
+                let mut slots = SpillSlotPools::default();
+                let mem = MemPlan::new(
+                    SpillSet::new(&spill_set),
+                    &mut spill_requests,
+                    &ctx,
+                    &spill_obj,
+                    &ctx.exact_local_addr,
+                    &mut free_slots,
+                    &mut slots,
+                );
+                let mut stack = stack_from_top(stack_values);
+                let mut args: SmallVec<[ValueId; 8]> = args_values.iter().copied().collect();
+                let mut last_use = BitSet::default();
+                for &value in last_use_values {
+                    last_use.insert(value);
+                }
+                let mut actions = crate::stackalloc::Actions::new();
+                let mut search_scratch = NormalizeSearchScratch::default();
+                {
+                    let mut planner =
+                        Planner::new(&ctx, &mut stack, &mut actions, mem, &mut search_scratch);
+                    planner.prepare_operands_maybe_commutative(&mut args, &last_use, commutative);
+                    assert!(planner.stack_prefix_matches(&args));
+                }
+                (stack, args, actions, spill_requests)
+            };
+
+            let [x, y, z] = func.arg_values.as_slice() else {
+                panic!("expected three function args")
+            };
+
+            let (_, _, actions, _) = run(&[*x, *y, *x, *y], &[*x, *y], &[], &[], false);
+            assert!(actions.is_empty());
+
+            let (_, _, actions, _) = run(&[*x, *x, *x], &[*x, *x], &[], &[], false);
+            assert!(actions.is_empty());
+
+            let (_, _, actions, _) = run(&[*x, *x], &[*x, *x], &[], &[], false);
+            assert!(!actions.is_empty());
+
+            let (_, _, actions, spill_requests) = run(&[*z], &[*z], &[*z], &[], false);
+            assert!(actions.is_empty());
+            assert!(spill_requests.is_empty());
+
+            let (_, args, actions, _) = run(&[*y, *x], &[*x, *y], &[*x, *y], &[], true);
+            assert_eq!(args.as_slice(), &[*y, *x]);
+            assert!(actions.is_empty());
+
+            let (_, _, actions, _) = run(&[*y, *x, *y], &[*x, *y], &[], &[*x, *y], false);
+            assert_eq!(actions.as_slice(), &[Action::Pop]);
+
+            let (_, _, actions, _) = run(&[*y, *x, *x, *y], &[*x, *y], &[], &[], false);
+            assert_eq!(actions.as_slice(), &[Action::StackSwap(1)]);
+
+            let (stack, _, actions, _) = run(&[old_imm], &[current_imm], &[], &[], false);
+            assert_eq!(stack.item_at(0), Some(&StackItem::Value(current_imm)));
+            assert!(actions.is_empty());
         });
     }
 
