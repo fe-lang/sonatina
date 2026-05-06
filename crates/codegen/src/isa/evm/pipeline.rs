@@ -231,6 +231,9 @@ impl EvmPipelineContext<'_> {
         AggregateExpandAbi::default().run(module);
         legalize_evm_section(module, &self.funcs);
         self.func_behavior_dirty = true;
+        if self.backend.late_cleanup_profile == LateCleanupProfile::Off {
+            self.run_pass_round("post_evm_legalize", &[Pass::CfgCleanup], false, false);
+        }
         Ok(())
     }
 

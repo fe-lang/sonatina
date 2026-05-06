@@ -1,0 +1,127 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: opt_ir_snapshot
+input_file: test_files/evm/plank_slot0_unpack_aggregate_return_speed_bug.sntn
+---
+target = "evm-ethereum-osaka"
+
+type @Slot0 = {i256, i256, i256, i256, i256, i256, i1};
+
+func public %init() {
+    block0:
+        v0.i256 = sym_size &runtime;
+        v1.*i8 = evm_malloc v0;
+        v2.i256 = ptr_to_int v1 i256;
+        v3.i256 = sym_addr &runtime;
+        evm_code_copy v2 v3 v0;
+        evm_return v2 v0;
+}
+
+func private %unpack(v0.i256) -> @Slot0 {
+    block0:
+        v2.i256 = shr 160.i256 v0;
+        v4.i256 = and v2 16777215.i256;
+        v48.i1 = lt v4 8388608.i256;
+        br v48 block3 block2;
+
+    block2:
+        v9.i256 = or v4 -16777216.i256;
+        jump block3;
+
+    block3:
+        v11.i256 = phi (v9 block2) (v4 block0);
+        v14.i256 = shr 184.i256 v0;
+        v16.i256 = and v14 65535.i256;
+        v18.i256 = shr 200.i256 v0;
+        v19.i256 = and v18 65535.i256;
+        v21.i256 = shr 216.i256 v0;
+        v22.i256 = and v21 65535.i256;
+        v24.i256 = shr 232.i256 v0;
+        v26.i256 = and v24 255.i256;
+        v28.i256 = shr 240.i256 v0;
+        v30.i256 = and v28 1.i256;
+        v32.i1 = gt v30 0.i256;
+        v34.i256 = and v0 1461501637330902918203684832716283019655932542975.i256;
+        v36.@Slot0 = insert_value undef.@Slot0 0.i256 v34;
+        v37.@Slot0 = insert_value v36 1.i256 v11;
+        v39.@Slot0 = insert_value v37 2.i256 v16;
+        v41.@Slot0 = insert_value v39 3.i256 v19;
+        v43.@Slot0 = insert_value v41 4.i256 v22;
+        v45.@Slot0 = insert_value v43 5.i256 v26;
+        v47.@Slot0 = insert_value v45 6.i256 v32;
+        return v47;
+}
+
+func public %run() {
+    block0:
+        v1.i256 = evm_calldata_load 0.i256;
+        v3.i256 = shr 224.i256 v1;
+        v5.i1 = eq v3 4130829085.i256;
+        br v5 block2 block1;
+
+    block1:
+        v19.i1 = eq v3 944818109.i256;
+        br v19 block4 block9;
+
+    block2:
+        v7.i256 = evm_calldata_load 4.i256;
+        v9.i256 = and v7 1461501637330902918203684832716283019655932542975.i256;
+        v55.i256 = or v9 179764701391701058939053234424102811417679702786048.i256;
+        v64.i256 = or v55 1606938044258990275541962092341162602522202993782792835301376.i256;
+        v68.i256 = or v64 105312291668557186697918027683670432318895095400549111254310977536.i256;
+        v77.i256 = or v68 1766847064778384329583297500742918515827483896875618958121606201292619776.i256;
+        evm_sstore 6.i256 v77;
+        v15.*i8 = evm_malloc 0.i256;
+        v16.i256 = ptr_to_int v15 i256;
+        evm_return v16 0.i256;
+
+    block4:
+        v20.i256 = evm_sload 6.i256;
+        v21.@Slot0 = call %unpack v20;
+        v22.*i8 = evm_malloc 224.i256;
+        v23.i256 = ptr_to_int v22 i256;
+        v24.i256 = extract_value v21 0.i256;
+        mstore v23 v24 i256;
+        v26.i256 = add v23 32.i256;
+        v27.i256 = extract_value v21 1.i256;
+        mstore v26 v27 i256;
+        v29.i256 = add v23 64.i256;
+        v31.i256 = extract_value v21 2.i256;
+        mstore v29 v31 i256;
+        v33.i256 = add v23 96.i256;
+        v35.i256 = extract_value v21 3.i256;
+        mstore v33 v35 i256;
+        v37.i256 = add v23 128.i256;
+        v38.i256 = extract_value v21 4.i256;
+        mstore v37 v38 i256;
+        v40.i256 = add v23 160.i256;
+        v42.i256 = extract_value v21 5.i256;
+        mstore v40 v42 i256;
+        v44.i256 = add v23 192.i256;
+        v45.i1 = extract_value v21 6.i256;
+        br v45 block6 block7;
+
+    block6:
+        jump block7;
+
+    block7:
+        v46.i256 = phi (1.i256 block6) (0.i256 block4);
+        mstore v44 v46 i256;
+        evm_return v23 224.i256;
+
+    block9:
+        v49.*i8 = evm_malloc 0.i256;
+        v50.i256 = ptr_to_int v49 i256;
+        evm_revert v50 0.i256;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %run;
+    }
+    section init {
+        entry %init;
+        embed .runtime as &runtime;
+    }
+}
