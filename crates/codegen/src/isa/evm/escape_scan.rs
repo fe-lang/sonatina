@@ -37,6 +37,7 @@ pub(crate) enum PtrTransferEvent<'a> {
     },
     Write {
         kind: PtrWriteKind,
+        dest: ValueId,
         dest_prov: &'a Provenance,
         source: PtrTransferSource<'a>,
     },
@@ -49,6 +50,7 @@ pub(crate) enum PtrTransferEvent<'a> {
         callee: FuncRef,
         arg_index: usize,
         value: ValueId,
+        dest: ValueId,
         dest_prov: &'a Provenance,
     },
 }
@@ -107,6 +109,7 @@ pub(crate) fn for_each_ptr_transfer_at_inst<'a>(
             let dest = *mstore.addr();
             visit(PtrTransferEvent::Write {
                 kind: PtrWriteKind::Store,
+                dest,
                 dest_prov: &ctx.prov[dest],
                 source: PtrTransferSource::Value(*mstore.value()),
             });
@@ -115,6 +118,7 @@ pub(crate) fn for_each_ptr_transfer_at_inst<'a>(
             let dest = *mstore8.addr();
             visit(PtrTransferEvent::Write {
                 kind: PtrWriteKind::Store,
+                dest,
                 dest_prov: &ctx.prov[dest],
                 source: PtrTransferSource::Value(*mstore8.val()),
             });
@@ -127,6 +131,7 @@ pub(crate) fn for_each_ptr_transfer_at_inst<'a>(
                 if let Some(stored) = ctx.local_mem.get(&base) {
                     visit(PtrTransferEvent::Write {
                         kind: PtrWriteKind::Copy,
+                        dest,
                         dest_prov: &ctx.prov[dest],
                         source: PtrTransferSource::LocalMem { addr, stored },
                     });
@@ -136,6 +141,7 @@ pub(crate) fn for_each_ptr_transfer_at_inst<'a>(
                 if let Some(stored) = ctx.arg_mem.get(arg_index as usize) {
                     visit(PtrTransferEvent::Write {
                         kind: PtrWriteKind::Copy,
+                        dest,
                         dest_prov: &ctx.prov[dest],
                         source: PtrTransferSource::ArgMem { stored },
                     });
@@ -144,6 +150,7 @@ pub(crate) fn for_each_ptr_transfer_at_inst<'a>(
             if !src_prov.is_local_addr() {
                 visit(PtrTransferEvent::Write {
                     kind: PtrWriteKind::Copy,
+                    dest,
                     dest_prov: &ctx.prov[dest],
                     source: PtrTransferSource::UnknownCopy,
                 });
@@ -167,6 +174,7 @@ pub(crate) fn for_each_ptr_transfer_at_inst<'a>(
                         callee,
                         arg_index,
                         value,
+                        dest,
                         dest_prov: &ctx.prov[dest],
                     });
                 }
@@ -236,6 +244,7 @@ pub(crate) fn for_each_escape_event_at_inst<'a>(
             arg_index,
             value,
             dest_prov,
+            ..
         } => {
             if (dest_prov.has_any_arg() || dest_prov.may_be_nonlocal_nonarg())
                 && !call_arg_escapes.contains(&(callee, arg_index, value))

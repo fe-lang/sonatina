@@ -322,6 +322,75 @@ mod tests {
             "bounded swap search should only exact-score the shortlist cross-product",
         );
     }
+
+    #[test]
+    fn one_flip_search_uses_bounded_shortlists_once_candidate_count_exceeds_limit() {
+        let candidate_count = ONE_FLIP_FULL_LIMIT + 64;
+        let objects: Vec<_> = (0..candidate_count)
+            .map(|idx| {
+                stack_obj(
+                    idx as u32,
+                    StackObjKind::Alloca(InstId::from_u32(idx as u32)),
+                    1 + (idx % 5) as u32,
+                    region(0, 0, 1),
+                )
+            })
+            .collect();
+        let obj_size_words = objects.iter().map(|obj| (obj.id, obj.size_words)).collect();
+        let stack = FuncStackObjects {
+            objects,
+            obj_facts: FxHashMap::default(),
+            obj_size_words,
+            alloca_ids: FxHashMap::default(),
+            spill_obj: SecondaryMap::default(),
+            call_sites: Vec::new(),
+            next_obj_id: candidate_count as u32,
+        };
+        let sorted_objects: Vec<_> = stack.objects.iter().collect();
+        let candidates = sorted_objects
+            .iter()
+            .enumerate()
+            .map(|(local_idx, obj)| CandidateMeta {
+                obj_id: obj.id,
+                local_idx: LocalObjIdx::new(local_idx),
+                size_words: obj.size_words,
+                recursive_access_cost: (local_idx % 13) as u64,
+                shadow_copy_words: 0,
+                live_call_indices: SmallVec::new(),
+            })
+            .collect();
+        let cost_model = ArenaCostModel::default();
+        let problem = PlacementProblem {
+            stack: &stack,
+            sorted_objects,
+            sorted_calls: Vec::new(),
+            must_stable: BitSet::default(),
+            must_stable_by_local: vec![false; candidate_count],
+            candidates,
+            base_shadow_words_by_call: Vec::new(),
+            base_shadow_copy_words: 0,
+            base_recursive_access_cost: 0,
+            frame_setup_cost: 0,
+            shadow_cost_per_word: 0,
+            next_shadow_base_id: stack.next_obj_id,
+            is_recursive: false,
+            cost_model: &cost_model,
+            real_conflicts_by_local: vec![BitSet::default(); candidate_count],
+            shadow_conflicts_by_call: Vec::new(),
+        };
+        let mut state = PlacementState::new(&problem);
+        for candidate_idx in 0..candidate_count / 2 {
+            state.apply_add(&problem, candidate_idx);
+        }
+
+        let mut work = SearchWorkBuffers::default();
+        collect_one_flip_shortlists(&problem, &state, &mut work);
+
+        assert!(!work.add_shortlist.is_empty());
+        assert!(!work.remove_shortlist.is_empty());
+        assert!(work.add_shortlist.len() <= ONE_FLIP_SHORTLIST_PER_METRIC * 3);
+        assert!(work.remove_shortlist.len() <= ONE_FLIP_SHORTLIST_PER_METRIC * 3);
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -518,6 +587,8 @@ struct ShadowPackObj {
 
 const SWAP_FULL_PAIR_LIMIT: usize = 25_000;
 const SWAP_SHORTLIST_PER_METRIC: usize = 8;
+const ONE_FLIP_FULL_LIMIT: usize = 128;
+const ONE_FLIP_SHORTLIST_PER_METRIC: usize = 8;
 
 impl<'a> PlacementProblem<'a> {
     fn new(
@@ -1498,7 +1569,18 @@ fn find_best_exact_one_flip_move(
 ) -> Option<ExactMoveEval> {
     let _ = lb_state;
     work.one_flip_exact.clear();
-    for candidate_idx in 0..problem.candidates.len() {
+    let mut candidates = Vec::new();
+    if problem.candidates.len() <= ONE_FLIP_FULL_LIMIT {
+        candidates.extend(0..problem.candidates.len());
+    } else {
+        collect_one_flip_shortlists(problem, state, work);
+        candidates.extend(work.add_shortlist.iter().copied());
+        candidates.extend(work.remove_shortlist.iter().copied());
+        candidates.sort_unstable();
+        candidates.dedup();
+    }
+
+    for candidate_idx in candidates {
         let mv = if state.promoted[candidate_idx] {
             PlacementMove::Remove(candidate_idx)
         } else {
@@ -1517,6 +1599,17 @@ fn find_best_exact_one_flip_move(
             .then_with(|| cmp_move_tie_key(problem, a.mv, b.mv))
     });
     work.one_flip_exact.first().copied()
+}
+
+fn collect_one_flip_shortlists(
+    problem: &PlacementProblem<'_>,
+    state: &PlacementState,
+    work: &mut SearchWorkBuffers,
+) {
+    work.add_shortlist.clear();
+    work.remove_shortlist.clear();
+    collect_metric_shortlist(problem, state, false, ONE_FLIP_SHORTLIST_PER_METRIC, work);
+    collect_metric_shortlist(problem, state, true, ONE_FLIP_SHORTLIST_PER_METRIC, work);
 }
 
 fn find_best_exact_swap_move(
@@ -1587,8 +1680,8 @@ fn collect_swap_shortlists(
 ) {
     work.add_shortlist.clear();
     work.remove_shortlist.clear();
-    collect_metric_shortlist(problem, state, false, work);
-    collect_metric_shortlist(problem, state, true, work);
+    collect_metric_shortlist(problem, state, false, SWAP_SHORTLIST_PER_METRIC, work);
+    collect_metric_shortlist(problem, state, true, SWAP_SHORTLIST_PER_METRIC, work);
 
     work.add_shortlist
         .sort_unstable_by_key(|&candidate_idx| problem.candidates[candidate_idx].obj_id.as_u32());
@@ -1600,6 +1693,7 @@ fn collect_metric_shortlist(
     problem: &PlacementProblem<'_>,
     state: &PlacementState,
     promoted: bool,
+    per_metric: usize,
     work: &mut SearchWorkBuffers,
 ) {
     for metric in 0..3 {
@@ -1621,7 +1715,7 @@ fn collect_metric_shortlist(
                         .cmp(&problem.candidates[rhs].obj_id.as_u32())
                 })
         });
-        for &candidate_idx in candidates.iter().take(SWAP_SHORTLIST_PER_METRIC) {
+        for &candidate_idx in candidates.iter().take(per_metric) {
             if promoted {
                 push_unique_candidate(&mut work.remove_shortlist, candidate_idx);
             } else {
