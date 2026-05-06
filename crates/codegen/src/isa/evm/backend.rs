@@ -9,9 +9,12 @@ use sonatina_ir::{
 use sonatina_triple::{EvmVersion, OperatingSystem};
 use tracing::debug_span;
 
-use crate::machinst::{
-    lower::{FixupUpdate, LoweredFunction, SectionCodeUnit, SectionWorkModule},
-    vcode::{SymFixup, VCode, VCodeInst},
+use crate::{
+    machinst::{
+        lower::{FixupUpdate, LoweredFunction, SectionCodeUnit, SectionWorkModule},
+        vcode::{SymFixup, VCode, VCodeInst},
+    },
+    stackalloc::StackifySearchProfile,
 };
 
 use super::{
@@ -43,6 +46,7 @@ pub enum LateCleanupProfile {
 pub struct EvmBackend {
     pub(crate) isa: Evm,
     pub(crate) stackify_reach_depth: u8,
+    pub(crate) stackify_search_profile: StackifySearchProfile,
     pub(crate) arena_cost_model: ArenaCostModel,
     pub(crate) late_cleanup_profile: LateCleanupProfile,
 }
@@ -60,6 +64,7 @@ impl EvmBackend {
         Self {
             isa,
             stackify_reach_depth: 16,
+            stackify_search_profile: StackifySearchProfile::Exact,
             arena_cost_model: ArenaCostModel::default(),
             late_cleanup_profile: LateCleanupProfile::Off,
         }
@@ -76,6 +81,11 @@ impl EvmBackend {
 
     pub fn with_late_cleanup_profile(mut self, profile: LateCleanupProfile) -> Self {
         self.late_cleanup_profile = profile;
+        self
+    }
+
+    pub fn with_stackify_search_profile(mut self, profile: StackifySearchProfile) -> Self {
+        self.stackify_search_profile = profile;
         self
     }
 

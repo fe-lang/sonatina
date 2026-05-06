@@ -1,26 +1,27 @@
 ---
 source: crates/codegen/tests/evm.rs
+assertion_line: 455
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/loop_carried_array_backedge_liveness_regression.sntn
 ---
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 806 bytes
-  total: 806 bytes
+  section runtime: 849 bytes
+  total: 849 bytes
 
 functions:
-  run: ir_blocks=10 ir_insts=269 vcode_ops=598 fixups=4 imm_bytes=141
+  run: ir_blocks=10 ir_insts=269 vcode_ops=631 fixups=4 imm_bytes=141
     mem: scratch_words=30 stable_words=0 stable_mode=None entry_abs_words=35 abs_words_end=30
   assert: ir_blocks=3 ir_insts=4 vcode_ops=10 fixups=1 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=35 abs_words_end=0
-  test_run: ir_blocks=1 ir_insts=44 vcode_ops=116 fixups=12 imm_bytes=22
+  test_run: ir_blocks=1 ir_insts=44 vcode_ops=125 fixups=12 imm_bytes=22
     mem: scratch_words=0 stable_words=5 stable_mode=StaticAbs(base=0x460) entry_abs_words=30 abs_words_end=35
   __repro_runtime_entry: ir_blocks=1 ir_insts=2 vcode_ops=7 fixups=2 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=30 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=23288 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=2288
+  case ok: calldata_len=0 success reason=Return gas_used=23457 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=2457
 
 
 --------------- DEBUG ---------------
@@ -66,17 +67,23 @@ run:
     PUSH2 0x300 (768)
     MLOAD  // v94.i256 = mload v93 i256;
     PUSH2 0x1e0 (480)  // v96.*i256 = gep v95 0.i64 0.i64;
-    SWAP4  // mstore v96 v82 i256;
-    SWAP1
+    SWAP1  // mstore v96 v82 i256;
+    SWAP2
+    SWAP3
     SWAP4
+    SWAP1
     MSTORE
     PUSH2 0x200 (512)  // v97.*i256 = gep v95 0.i64 1.i64;
     SWAP1  // mstore v97 v85 i256;
     SWAP2
+    SWAP3
     SWAP1
     MSTORE
     PUSH2 0x220 (544)  // v98.*i256 = gep v95 0.i64 2.i64;
-    MSTORE  // mstore v98 v88 i256;
+    SWAP1  // mstore v98 v88 i256;
+    SWAP2
+    SWAP1
+    MSTORE
     PUSH2 0x240 (576)  // v99.*i256 = gep v95 0.i64 3.i64;
     SWAP1  // mstore v99 v91 i256;
     SWAP2
@@ -170,17 +177,23 @@ run:
     PUSH2 0x300 (768)
     MLOAD  // v151.i256 = mload v150 i256;
     PUSH1 0xa0 (160)  // v153.*i256 = gep v152 0.i64 0.i64;
-    SWAP4  // mstore v153 v143 i256;
-    SWAP1
+    SWAP1  // mstore v153 v143 i256;
+    SWAP2
+    SWAP3
     SWAP4
+    SWAP1
     MSTORE
     PUSH1 0xc0 (192)  // v154.*i256 = gep v152 0.i64 1.i64;
     SWAP1  // mstore v154 v145 i256;
     SWAP2
+    SWAP3
     SWAP1
     MSTORE
     PUSH1 0xe0 (224)  // v155.*i256 = gep v152 0.i64 2.i64;
-    MSTORE  // mstore v155 v147 i256;
+    SWAP1  // mstore v155 v147 i256;
+    SWAP2
+    SWAP1
+    MSTORE
     PUSH2 0x100 (256)  // v156.*i256 = gep v152 0.i64 3.i64;
     SWAP1  // mstore v156 v149 i256;
     SWAP2
@@ -226,17 +239,23 @@ run:
     PUSH2 0x300 (768)
     MLOAD  // v141.i256 = mload v140 i256;
     PUSH1 0xa0 (160)  // v158.*i256 = gep v152 0.i64 0.i64;
-    SWAP4  // mstore v158 v133 i256;
-    SWAP1
+    SWAP1  // mstore v158 v133 i256;
+    SWAP2
+    SWAP3
     SWAP4
+    SWAP1
     MSTORE
     PUSH1 0xc0 (192)  // v159.*i256 = gep v152 0.i64 1.i64;
     SWAP1  // mstore v159 v135 i256;
     SWAP2
+    SWAP3
     SWAP1
     MSTORE
     PUSH1 0xe0 (224)  // v160.*i256 = gep v152 0.i64 2.i64;
-    MSTORE  // mstore v160 v137 i256;
+    SWAP1  // mstore v160 v137 i256;
+    SWAP2
+    SWAP1
+    MSTORE
     PUSH2 0x100 (256)  // v161.*i256 = gep v152 0.i64 3.i64;
     SWAP1  // mstore v161 v139 i256;
     SWAP2
@@ -342,28 +361,37 @@ run:
     MLOAD  // v202.i256 = mload v201 i256;
     PUSH2 0x280 (640)  // v62.*[i256; 5] = alloca [i256; 5];
     PUSH2 0x280 (640)  // v203.*i256 = gep v62 0.i64 0.i64;
-    SWAP5  // mstore v203 v194 i256;
+    DUP6  // mstore v203 v194 i256;
     SWAP1
-    SWAP5
     MSTORE
     PUSH2 0x2a0 (672)  // v204.*i256 = gep v62 0.i64 1.i64;
-    SWAP3  // mstore v204 v196 i256;
-    SWAP1
+    SWAP1  // mstore v204 v196 i256;
+    SWAP2
     SWAP3
+    SWAP4
+    SWAP1
     MSTORE
     PUSH2 0x2c0 (704)  // v205.*i256 = gep v62 0.i64 2.i64;
-    MSTORE  // mstore v205 v198 i256;
-    PUSH2 0x2e0 (736)  // v206.*i256 = gep v62 0.i64 3.i64;
-    SWAP3  // mstore v206 v200 i256;
-    SWAP1
+    SWAP1  // mstore v205 v198 i256;
+    SWAP2
     SWAP3
+    SWAP1
+    MSTORE
+    PUSH2 0x2e0 (736)  // v206.*i256 = gep v62 0.i64 3.i64;
+    SWAP1  // mstore v206 v200 i256;
+    SWAP2
+    SWAP3
+    SWAP4
+    SWAP1
     MSTORE
     PUSH2 0x300 (768)  // v207.*i256 = gep v62 0.i64 4.i64;
     SWAP1  // mstore v207 v202 i256;
     SWAP2
     SWAP1
     MSTORE
-    PUSH2 0x280 (640)  // v208.*i256 = gep v62 0.i64 0.i64;
+    SWAP1  // v208.*i256 = gep v62 0.i64 0.i64;
+    POP
+    PUSH2 0x280 (640)
     MLOAD  // v209.i256 = mload v208 i256;
     PUSH2 0x2a0 (672)  // v210.*i256 = gep v62 0.i64 1.i64;
     MLOAD  // v211.i256 = mload v210 i256;
@@ -376,17 +404,23 @@ run:
     PUSH2 0x300 (768)
     MLOAD  // v217.i256 = mload v216 i256;
     PUSH2 0x140 (320)  // v218.*i256 = gep v101 0.i64 0.i64;
-    SWAP4  // mstore v218 v209 i256;
-    SWAP1
+    SWAP1  // mstore v218 v209 i256;
+    SWAP2
+    SWAP3
     SWAP4
+    SWAP1
     MSTORE
     PUSH2 0x160 (352)  // v219.*i256 = gep v101 0.i64 1.i64;
     SWAP1  // mstore v219 v211 i256;
     SWAP2
+    SWAP3
     SWAP1
     MSTORE
     PUSH2 0x180 (384)  // v220.*i256 = gep v101 0.i64 2.i64;
-    MSTORE  // mstore v220 v213 i256;
+    SWAP1  // mstore v220 v213 i256;
+    SWAP2
+    SWAP1
+    MSTORE
     PUSH2 0x1a0 (416)  // v221.*i256 = gep v101 0.i64 3.i64;
     SWAP1  // mstore v221 v215 i256;
     SWAP2
@@ -427,7 +461,7 @@ assert:
     JUMPI
   block1:
     PUSH0  // evm_revert 0.i256 0.i256;
-    PUSH0
+    DUP1
     REVERT
   block2:
     JUMPDEST
@@ -458,28 +492,37 @@ test_run:
     MLOAD  // v44.i256 = mload v43 i256;
     PUSH2 0x460 (1120)  // v1.*[i256; 5] = alloca [i256; 5];
     PUSH2 0x460 (1120)  // v45.*i256 = gep v1 0.i64 0.i64;
-    SWAP5  // mstore v45 v32 i256;
+    DUP6  // mstore v45 v32 i256;
     SWAP1
-    SWAP5
     MSTORE
     PUSH2 0x480 (1152)  // v46.*i256 = gep v1 0.i64 1.i64;
-    SWAP3  // mstore v46 v35 i256;
-    SWAP1
+    SWAP1  // mstore v46 v35 i256;
+    SWAP2
     SWAP3
+    SWAP4
+    SWAP1
     MSTORE
     PUSH2 0x4a0 (1184)  // v47.*i256 = gep v1 0.i64 2.i64;
-    MSTORE  // mstore v47 v38 i256;
-    PUSH2 0x4c0 (1216)  // v48.*i256 = gep v1 0.i64 3.i64;
-    SWAP3  // mstore v48 v41 i256;
-    SWAP1
+    SWAP1  // mstore v47 v38 i256;
+    SWAP2
     SWAP3
+    SWAP1
+    MSTORE
+    PUSH2 0x4c0 (1216)  // v48.*i256 = gep v1 0.i64 3.i64;
+    SWAP1  // mstore v48 v41 i256;
+    SWAP2
+    SWAP3
+    SWAP4
+    SWAP1
     MSTORE
     PUSH2 0x4e0 (1248)  // v49.*i256 = gep v1 0.i64 4.i64;
     SWAP1  // mstore v49 v44 i256;
     SWAP2
     SWAP1
     MSTORE
-    PUSH2 0x460 (1120)  // v2.*i256 = gep v1 0.i256 0.i256;
+    SWAP1  // v2.*i256 = gep v1 0.i256 0.i256;
+    POP
+    PUSH2 0x460 (1120)
     MLOAD  // v3.i256 = mload v2 i256;
     PUSH1 0x1e (30)  // v4.i1 = eq v3 30.i256;
     EQ
@@ -535,5 +578,5 @@ __repro_runtime_entry:
     JUMP
     JUMPDEST
     PUSH0  // evm_return 0.i256 0.i256;
-    PUSH0
+    DUP1
     RETURN

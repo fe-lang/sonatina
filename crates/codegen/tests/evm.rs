@@ -25,7 +25,7 @@ use sonatina_codegen::{
         dead_func::{collect_object_roots, run_dead_func_elim},
         pipeline::Pipeline,
     },
-    stackalloc::StackifyBuilder,
+    stackalloc::{StackifyBuilder, StackifySearchProfile},
     stackify_edge::StackifyEdgeSplitter,
 };
 use sonatina_ir::{
@@ -125,9 +125,10 @@ fn parse_sona(content: &str) -> ParsedModule {
 
 fn run_opt_pipeline(module: &mut Module, opt_pipeline: EvmOptPipeline) {
     match opt_pipeline {
-        EvmOptPipeline::None => {}
-        EvmOptPipeline::Size => Pipeline::size().run(module),
-        EvmOptPipeline::Speed => Pipeline::speed().run(module),
+        EvmOptPipeline::O0 => {}
+        EvmOptPipeline::O1 => Pipeline::speed().run(module),
+        EvmOptPipeline::Os => Pipeline::size().run(module),
+        EvmOptPipeline::O2 => Pipeline::speed().run(module),
     }
 }
 
@@ -135,7 +136,7 @@ fn prune_unreachable_funcs_for_optimized_evm_snapshots(
     module: &mut Module,
     opt_pipeline: EvmOptPipeline,
 ) {
-    if opt_pipeline != EvmOptPipeline::None {
+    if opt_pipeline != EvmOptPipeline::O0 {
         let roots = collect_object_roots(module);
         run_dead_func_elim(module, &roots, Default::default());
     }
@@ -155,14 +156,14 @@ fn test_evm(fixture: Fixture<&str>) {
     let emit_stackify_trace = cfg.stackify_trace.unwrap_or(false);
     let emit_evm_trace = cfg.evm_trace.unwrap_or(false);
     let emit_observability = cfg.emit_observability.unwrap_or(false);
-    let opt_pipeline = cfg.opt.unwrap_or(EvmOptPipeline::None);
+    let opt_pipeline = cfg.opt.unwrap_or(EvmOptPipeline::O0);
 
     let cases = evm_directives::parse_evm_cases(&parsed.debug.module_comments)
         .unwrap_or_else(|e| panic!("{}: {e}", fixture.path()));
 
     run_opt_pipeline(&mut parsed.module, opt_pipeline);
     prune_unreachable_funcs_for_optimized_evm_snapshots(&mut parsed.module, opt_pipeline);
-    let opt_ir_snapshot = (opt_pipeline != EvmOptPipeline::None).then(|| {
+    let opt_ir_snapshot = (opt_pipeline != EvmOptPipeline::O0).then(|| {
         let mut writer = ModuleWriter::with_debug_provider(&parsed.module, &parsed.debug);
         writer.dump_string()
     });
@@ -188,9 +189,15 @@ fn test_evm(fixture: Fixture<&str>) {
     }))
     .with_stackify_reach_depth(stackify_reach_depth)
     .with_late_cleanup_profile(match opt_pipeline {
-        EvmOptPipeline::None => LateCleanupProfile::Off,
-        EvmOptPipeline::Size => LateCleanupProfile::Size,
-        EvmOptPipeline::Speed => LateCleanupProfile::Speed,
+        EvmOptPipeline::O0 => LateCleanupProfile::Off,
+        EvmOptPipeline::O1 => LateCleanupProfile::Speed,
+        EvmOptPipeline::Os => LateCleanupProfile::Size,
+        EvmOptPipeline::O2 => LateCleanupProfile::Speed,
+    })
+    .with_stackify_search_profile(match opt_pipeline {
+        EvmOptPipeline::O0 => StackifySearchProfile::Fast,
+        EvmOptPipeline::O1 => StackifySearchProfile::GreedyWide,
+        EvmOptPipeline::Os | EvmOptPipeline::O2 => StackifySearchProfile::Exact,
     });
 
     let prepared = backend
@@ -293,10 +300,10 @@ fn test_evm(fixture: Fixture<&str>) {
         .unwrap_or_else(|errs| panic!("{}: object compile failed: {errs:?}", fixture.path()));
 
     let mut out = Vec::new();
-    let opt_pipeline_suffix = if opt_pipeline == EvmOptPipeline::None {
+    let opt_pipeline_suffix = if opt_pipeline == EvmOptPipeline::O0 {
         String::new()
     } else {
-        format!(" opt={}", opt_pipeline.as_u8())
+        format!(" opt={}", opt_pipeline.as_label())
     };
     writeln!(
         &mut out,

@@ -13,12 +13,14 @@ use crate::{
     isa::evm::{EvmBackend, LateCleanupProfile},
     object::{CompileOptions, ObjectArtifact, ObjectCompileError, compile_all_objects},
     optim::Pipeline,
+    stackalloc::StackifySearchProfile,
 };
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum OptLevel {
     #[default]
     O0,
+    O1,
     Os,
     O2,
 }
@@ -56,6 +58,7 @@ impl EvmCompile {
         if !self.optimized {
             match self.opt_level {
                 OptLevel::O0 => {}
+                OptLevel::O1 => Pipeline::speed().run(&mut self.module),
                 OptLevel::Os => Pipeline::size().run(&mut self.module),
                 OptLevel::O2 => Pipeline::speed().run(&mut self.module),
             }
@@ -80,8 +83,17 @@ impl OptLevel {
     fn late_cleanup_profile(self) -> LateCleanupProfile {
         match self {
             OptLevel::O0 => LateCleanupProfile::Off,
+            OptLevel::O1 => LateCleanupProfile::Speed,
             OptLevel::Os => LateCleanupProfile::Size,
             OptLevel::O2 => LateCleanupProfile::Speed,
+        }
+    }
+
+    fn stackify_search_profile(self) -> StackifySearchProfile {
+        match self {
+            OptLevel::O0 => StackifySearchProfile::Fast,
+            OptLevel::O1 => StackifySearchProfile::GreedyWide,
+            OptLevel::Os | OptLevel::O2 => StackifySearchProfile::Exact,
         }
     }
 }
@@ -99,7 +111,8 @@ fn evm_backend_for_module(
     }
 
     Ok(EvmBackend::new(Evm::new(target))
-        .with_late_cleanup_profile(opt_level.late_cleanup_profile()))
+        .with_late_cleanup_profile(opt_level.late_cleanup_profile())
+        .with_stackify_search_profile(opt_level.stackify_search_profile()))
 }
 
 fn evm_osaka_triple() -> TargetTriple {

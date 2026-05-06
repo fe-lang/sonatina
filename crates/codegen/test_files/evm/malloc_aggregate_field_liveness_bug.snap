@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/evm.rs
+assertion_line: 455
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/malloc_aggregate_field_liveness_bug.sntn
 ---
@@ -7,8 +8,8 @@ evm.config: stack_reach=16 vcode=false bytecode_hex=false stackify_trace=false e
 
 object: Contract
   section runtime: 1 bytes
-  section init: 278 bytes
-  total: 279 bytes
+  section init: 281 bytes
+  total: 282 bytes
 
 functions:
   from_ptr: ir_blocks=1 ir_insts=1 vcode_ops=4 fixups=0 imm_bytes=0
@@ -19,11 +20,11 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=12 abs_words_end=0
   copy_bytes: ir_blocks=1 ir_insts=3 vcode_ops=4 fixups=0 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=12 abs_words_end=0
-  init: ir_blocks=1 ir_insts=55 vcode_ops=152 fixups=9 imm_bytes=39
+  init: ir_blocks=1 ir_insts=55 vcode_ops=155 fixups=9 imm_bytes=39
     mem: scratch_words=0 stable_words=12 stable_mode=StaticAbs(base=0xa0) entry_abs_words=0 abs_words_end=12
   fallback: ir_blocks=1 ir_insts=1 vcode_ops=1 fixups=0 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  deploy: success reason=Return gas_used=59309 gas_refunded=0 logs=0 output=create len=8 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
+  deploy: success reason=Return gas_used=59366 gas_refunded=0 logs=0 output=create len=8 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
   case deploy_copied_runtime: calldata_len=0 success reason=Return gas_used=21016 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=16

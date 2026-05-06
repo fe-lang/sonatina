@@ -1,17 +1,18 @@
 ---
 source: crates/codegen/tests/evm.rs
+assertion_line: 455
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/fe_large_by_value_array_args.sntn
 ---
 evm.config: stack_reach=16 vcode=false bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section init: 3181 bytes
-  section runtime: 3170 bytes
-  total: 6351 bytes
+  section init: 3344 bytes
+  section runtime: 3333 bytes
+  total: 6677 bytes
 
 functions:
-  __C_recv_0_0: ir_blocks=1 ir_insts=260 vcode_ops=727 fixups=2 imm_bytes=234
+  __C_recv_0_0: ir_blocks=1 ir_insts=260 vcode_ops=738 fixups=2 imm_bytes=234
     mem: scratch_words=38 stable_words=38 stable_mode=StaticAbs(base=0xb00) entry_abs_words=83 abs_words_end=121
   prove_like: ir_blocks=1 ir_insts=152 vcode_ops=354 fixups=0 imm_bytes=94
     mem: scratch_words=36 stable_words=0 stable_mode=None entry_abs_words=121 abs_words_end=36
@@ -19,11 +20,11 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=38 abs_words_end=0
   __fe_contract_recv_abi_C_16909060: ir_blocks=5 ir_insts=232 vcode_ops=551 fixups=15 imm_bytes=137
     mem: scratch_words=4 stable_words=45 stable_mode=StaticAbs(base=0x560) entry_abs_words=38 abs_words_end=83
-  decoder_new: ir_blocks=1 ir_insts=155 vcode_ops=344 fixups=2 imm_bytes=91
-    mem: scratch_words=0 stable_words=40 stable_mode=StaticAbs(base=0xb00) entry_abs_words=83 abs_words_end=123
-  new_1: ir_blocks=1 ir_insts=74 vcode_ops=179 fixups=2 imm_bytes=44
-    mem: scratch_words=4 stable_words=15 stable_mode=StaticAbs(base=0x1000) entry_abs_words=123 abs_words_end=138
-  new_2: ir_blocks=1 ir_insts=37 vcode_ops=94 fixups=0 imm_bytes=22
+  decoder_new: ir_blocks=1 ir_insts=155 vcode_ops=365 fixups=2 imm_bytes=97
+    mem: scratch_words=2 stable_words=40 stable_mode=StaticAbs(base=0xb00) entry_abs_words=83 abs_words_end=123
+  new_1: ir_blocks=1 ir_insts=74 vcode_ops=202 fixups=2 imm_bytes=50
+    mem: scratch_words=5 stable_words=15 stable_mode=StaticAbs(base=0x1000) entry_abs_words=123 abs_words_end=138
+  new_2: ir_blocks=1 ir_insts=37 vcode_ops=110 fixups=0 imm_bytes=26
     mem: scratch_words=7 stable_words=0 stable_mode=None entry_abs_words=138 abs_words_end=7
   encode: ir_blocks=1 ir_insts=2 vcode_ops=7 fixups=2 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=83 abs_words_end=0
@@ -31,11 +32,11 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=83 abs_words_end=0
   add_0: ir_blocks=3 ir_insts=5 vcode_ops=16 fixups=1 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=83 abs_words_end=0
-  encoder_new: ir_blocks=1 ir_insts=47 vcode_ops=110 fixups=2 imm_bytes=27
-    mem: scratch_words=0 stable_words=12 stable_mode=StaticAbs(base=0xb00) entry_abs_words=83 abs_words_end=95
-  new_0: ir_blocks=1 ir_insts=14 vcode_ops=38 fixups=0 imm_bytes=7
+  encoder_new: ir_blocks=1 ir_insts=47 vcode_ops=126 fixups=2 imm_bytes=31
+    mem: scratch_words=1 stable_words=12 stable_mode=StaticAbs(base=0xb00) entry_abs_words=83 abs_words_end=95
+  new_0: ir_blocks=1 ir_insts=14 vcode_ops=54 fixups=0 imm_bytes=11
     mem: scratch_words=3 stable_words=0 stable_mode=None entry_abs_words=95 abs_words_end=3
-  finish: ir_blocks=1 ir_insts=67 vcode_ops=156 fixups=2 imm_bytes=38
+  finish: ir_blocks=1 ir_insts=67 vcode_ops=173 fixups=2 imm_bytes=40
     mem: scratch_words=12 stable_words=0 stable_mode=None entry_abs_words=83 abs_words_end=12
   sub: ir_blocks=3 ir_insts=5 vcode_ops=16 fixups=1 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=83 abs_words_end=0
@@ -49,5 +50,5 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=38 abs_words_end=0
 
 evm:
-  deploy: success reason=Return gas_used=737978 gas_refunded=0 logs=0 output=create len=3170 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
+  deploy: success reason=Return gas_used=773228 gas_refunded=0 logs=0 output=create len=3333 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
   <no evm.case directives>

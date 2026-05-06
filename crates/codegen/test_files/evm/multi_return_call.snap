@@ -1,23 +1,24 @@
 ---
 source: crates/codegen/tests/evm.rs
+assertion_line: 455
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/multi_return_call.sntn
 ---
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=true evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 60 bytes
-  total: 60 bytes
+  section runtime: 68 bytes
+  total: 68 bytes
 
 functions:
   entry: ir_blocks=3 ir_insts=12 vcode_ops=36 fixups=3 imm_bytes=6
-    mem: scratch_words=0 stable_words=1 stable_mode=StaticAbs(base=0x40) entry_abs_words=1 abs_words_end=2
-  pair_add: ir_blocks=1 ir_insts=6 vcode_ops=16 fixups=0 imm_bytes=1
+    mem: scratch_words=0 stable_words=1 stable_mode=StaticAbs(base=0x60) entry_abs_words=1 abs_words_end=2
+  pair_add: ir_blocks=1 ir_insts=6 vcode_ops=21 fixups=0 imm_bytes=2
     mem: scratch_words=1 stable_words=0 stable_mode=None entry_abs_words=2 abs_words_end=1
 
 evm:
-  case no_overflow: calldata_len=64 success reason=Return gas_used=21426 gas_refunded=0 logs=0 output=call len=32 tx_gas=21280 runtime_gas=146
-  case overflow: calldata_len=64 success reason=Return gas_used=21800 gas_refunded=0 logs=0 output=call len=32 tx_gas=21652 runtime_gas=148
+  case no_overflow: calldata_len=64 success reason=Return gas_used=21448 gas_refunded=0 logs=0 output=call len=32 tx_gas=21280 runtime_gas=168
+  case overflow: calldata_len=64 success reason=Return gas_used=21822 gas_refunded=0 logs=0 output=call len=32 tx_gas=21652 runtime_gas=170
 
 
 --------------- DEBUG ---------------
@@ -107,7 +108,7 @@ entry:
     CALLDATALOAD
     PUSH1 0x20 (32)  // v1.i256 = evm_calldata_load 32.i256;
     CALLDATALOAD
-    PUSH1 0x40 (64)  // v2.*i256 = alloca i256;
+    PUSH1 0x60 (96)  // v2.*i256 = alloca i256;
     PUSH1 0x7 (7)  // mstore v2 7.i256 i256;
     DUP2
     MSTORE
@@ -146,7 +147,7 @@ entry:
 pair_add:
   block0:
     JUMPDEST
-    PUSH1 0x20 (32)  // v2.*i256 = alloca i256;
+    PUSH1 0x40 (64)  // v2.*i256 = alloca i256;
     SWAP1  // mstore v2 v0 i256;
     DUP2
     MSTORE
@@ -154,8 +155,15 @@ pair_add:
     SWAP1  // v4.i256 = add v3 v1;
     DUP2
     ADD
-    SWAP1  // v5.i1 = lt v4 v3;
-    DUP2
-    LT
-    SWAP2  // return (v4, v5);
+    DUP1
+    PUSH0
+    MSTORE
+    LT  // v5.i1 = lt v4 v3;
+    DUP1
+    PUSH1 0x20 (32)
+    MSTORE
+    PUSH0  // return (v4, v5);
+    MLOAD
+    SWAP1
+    SWAP2
     JUMP

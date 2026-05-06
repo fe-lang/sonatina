@@ -924,11 +924,9 @@ pub(super) fn solve_optimal_normalize_plan(
 
         // If we already have a feasible incumbent (greedy or found) plan, don't let the exact
         // search blow up compile time or memory trying to prove optimality.
-        let max_states = if incumbent_steps.is_some() {
-            200_000usize
-        } else {
-            500_000usize
-        };
+        let max_states = ctx
+            .search_profile
+            .normalize_max_states(incumbent_steps.is_some());
         if nodes.len() > max_states || open.len() > max_states {
             if debug {
                 eprintln!(
@@ -1403,11 +1401,9 @@ pub(super) fn solve_optimal_repair_prefix_plan(
             break;
         }
 
-        let max_states = if incumbent_steps.is_some() {
-            200_000usize
-        } else {
-            500_000usize
-        };
+        let max_states = ctx
+            .search_profile
+            .normalize_max_states(incumbent_steps.is_some());
         if nodes.len() > max_states || open.len() > max_states {
             if debug {
                 eprintln!(
@@ -2214,6 +2210,8 @@ fn build_greedy_operand_prep_upper_bound(
     cost: &impl CostModel,
     cfg: SearchCfg,
     upper_bound: Cost,
+    beam_width: usize,
+    depth_slack: usize,
 ) -> Option<(StepList, Cost)> {
     let cfg = SearchCfg {
         max_len: problem.max_len,
@@ -2241,8 +2239,7 @@ fn build_greedy_operand_prep_upper_bound(
         cost.cost_push_imm(canon)
     });
     let surplus_last_use_penalty = cost.cost_pop().saturating_add(cost.cost_swap(1));
-    let max_depth = problem.goal_keys.len().saturating_add(cfg.swap_max).min(24);
-    let beam_width = 192usize;
+    let max_depth = problem.goal_keys.len().saturating_add(depth_slack).min(24);
     let mut nodes = vec![prep_greedy_node(
         problem.start_state,
         Cost::default(),
@@ -2491,8 +2488,19 @@ pub(super) fn solve_greedy_operand_prep_plan(
         max_len: problem.max_len,
         ..cfg
     };
-    let (steps, cost) =
+    let (linear_steps, linear_cost) =
         build_linear_operand_prep_upper_bound(&problem, allow_copy_swap, cost, cfg)?;
+    let (steps, cost) = build_greedy_operand_prep_upper_bound(
+        &problem,
+        cost,
+        cfg,
+        linear_cost,
+        ctx.search_profile.operand_prep_beam_width(),
+        ctx.search_profile
+            .operand_prep_beam_depth_slack(cfg.swap_max),
+    )
+    .filter(|(_, greedy_cost)| *greedy_cost < linear_cost)
+    .unwrap_or((linear_steps, linear_cost));
     Some(NormalizePlan {
         cost,
         steps,
@@ -2599,9 +2607,15 @@ pub(super) fn solve_optimal_operand_prep_plan(
     let mut incumbent_steps = linear_steps;
     let mut incumbent_cost = upper_bound;
 
-    if let Some((steps, greedy_cost)) =
-        build_greedy_operand_prep_upper_bound(&problem, cost, cfg, upper_bound)
-        && greedy_cost < upper_bound
+    if let Some((steps, greedy_cost)) = build_greedy_operand_prep_upper_bound(
+        &problem,
+        cost,
+        cfg,
+        upper_bound,
+        ctx.search_profile.operand_prep_beam_width(),
+        ctx.search_profile
+            .operand_prep_beam_depth_slack(cfg.swap_max),
+    ) && greedy_cost < upper_bound
     {
         if debug {
             eprintln!(
@@ -2718,7 +2732,7 @@ pub(super) fn solve_optimal_operand_prep_plan(
             break;
         }
 
-        let max_states = 400_000usize;
+        let max_states = ctx.search_profile.operand_prep_max_states();
         if nodes.len() > max_states || open.len() > max_states {
             if debug {
                 eprintln!(
@@ -6249,7 +6263,15 @@ block0:
                 build_linear_operand_prep_upper_bound(&problem, true, &cost, search_cfg)
                     .expect("expected linear incumbent");
             let (greedy_steps, greedy_cost) =
-                build_greedy_operand_prep_upper_bound(&problem, &cost, search_cfg, linear_cost)
+                build_greedy_operand_prep_upper_bound(
+                    &problem,
+                    &cost,
+                    search_cfg,
+                    linear_cost,
+                    ctx.search_profile.operand_prep_beam_width(),
+                    ctx.search_profile
+                        .operand_prep_beam_depth_slack(search_cfg.swap_max),
+                )
                     .expect("expected greedy incumbent");
             assert!(
                 greedy_cost < linear_cost,

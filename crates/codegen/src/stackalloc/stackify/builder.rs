@@ -32,6 +32,74 @@ pub(super) struct StackifyReachability {
     pub(super) swap_max: usize,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum StackifySearchProfile {
+    Fast,
+    GreedyWide,
+    #[default]
+    Exact,
+}
+
+impl StackifySearchProfile {
+    pub(super) fn use_exact_normalize(self) -> bool {
+        matches!(self, Self::GreedyWide | Self::Exact)
+    }
+
+    pub(super) fn use_exact_operand_prep(self) -> bool {
+        matches!(self, Self::GreedyWide | Self::Exact)
+    }
+
+    pub(super) fn exact_expansions(self) -> usize {
+        match self {
+            Self::Fast => 0,
+            Self::GreedyWide => 1_000,
+            Self::Exact => 50_000,
+        }
+    }
+
+    pub(super) fn operand_prep_exact_expansions(self) -> usize {
+        match self {
+            Self::Fast => 0,
+            Self::GreedyWide => 250,
+            Self::Exact => 50_000,
+        }
+    }
+
+    pub(super) fn normalize_max_states(self, have_incumbent: bool) -> usize {
+        match (self, have_incumbent) {
+            (Self::Fast, _) => 0,
+            (Self::GreedyWide, true) => 25_000,
+            (Self::GreedyWide, false) => 50_000,
+            (Self::Exact, true) => 200_000,
+            (Self::Exact, false) => 500_000,
+        }
+    }
+
+    pub(super) fn operand_prep_max_states(self) -> usize {
+        match self {
+            Self::Fast => 0,
+            Self::GreedyWide => 25_000,
+            Self::Exact => 400_000,
+        }
+    }
+
+    pub(super) fn operand_prep_beam_width(self) -> usize {
+        match self {
+            Self::Fast => 16,
+            Self::GreedyWide => 64,
+            Self::Exact => 192,
+        }
+    }
+
+    pub(super) fn operand_prep_beam_depth_slack(self, swap_max: usize) -> usize {
+        match self {
+            Self::Fast => 4,
+            Self::GreedyWide => swap_max,
+            Self::Exact => swap_max,
+        }
+    }
+}
+
 impl StackifyReachability {
     pub(super) fn new(reach_depth: u8) -> Self {
         assert!(
@@ -53,6 +121,7 @@ pub struct StackifyBuilder<'a> {
     dom: &'a DomTree,
     liveness: &'a Liveness,
     reach: StackifyReachability,
+    search_profile: StackifySearchProfile,
     scratch_live_values_override: Option<BitSet<ValueId>>,
     scratch_spill_slots: u32,
     value_aliases_override: Option<&'a SecondaryMap<ValueId, Option<ValueId>>>,
@@ -74,6 +143,7 @@ pub(super) struct StackifyContext<'a> {
     pub(super) spill_slot_interference: SpillSlotInterference,
     pub(super) has_internal_return: bool,
     pub(super) reach: StackifyReachability,
+    pub(super) search_profile: StackifySearchProfile,
     pub(super) value_aliases: SecondaryMap<ValueId, Option<ValueId>>,
     pub(super) exact_local_addr: SecondaryMap<ValueId, Option<ExactLocalAddr>>,
 }
@@ -98,10 +168,16 @@ impl<'a> StackifyBuilder<'a> {
             dom,
             liveness,
             reach: StackifyReachability::new(reach_depth),
+            search_profile: StackifySearchProfile::default(),
             scratch_live_values_override: None,
             scratch_spill_slots: 0,
             value_aliases_override: None,
         }
+    }
+
+    pub fn with_search_profile(mut self, profile: StackifySearchProfile) -> Self {
+        self.search_profile = profile;
+        self
     }
 
     pub(crate) fn with_scratch_live_values(mut self, scratch_live_values: BitSet<ValueId>) -> Self {
@@ -198,6 +274,7 @@ impl<'a> StackifyBuilder<'a> {
             // Internal-return functions expect a caller-provided return address below their args.
             has_internal_return: function_has_internal_return(self.func),
             reach: self.reach,
+            search_profile: self.search_profile,
             value_aliases,
             exact_local_addr,
         };

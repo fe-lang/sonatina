@@ -320,6 +320,18 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
             return Some(plan);
         }
 
+        if !self.ctx.search_profile.use_exact_operand_prep() {
+            return solve_greedy_operand_prep_plan(
+                self.ctx,
+                self.stack,
+                args,
+                consume_last_use,
+                true,
+                &cost,
+                search_cfg,
+            );
+        }
+
         let use_query_cache = self.use_operand_prep_query_cache(args.len());
         let cache_key = use_query_cache
             .then(|| self.operand_prep_query_key(args, consume_last_use, search_cfg));
@@ -745,7 +757,7 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
             dup_max: self.ctx.reach.dup_max,
             swap_max: self.ctx.reach.swap_max,
             max_len,
-            max_expansions: 50_000,
+            max_expansions: self.ctx.search_profile.operand_prep_exact_expansions(),
         }
     }
 

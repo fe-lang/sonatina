@@ -1,18 +1,19 @@
 ---
 source: crates/codegen/tests/evm.rs
+assertion_line: 455
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/arena_alloc_recursion_spills.sntn
 ---
 evm.config: stack_reach=4 vcode=false bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 241 bytes
-  total: 241 bytes
+  section runtime: 250 bytes
+  total: 250 bytes
 
 functions:
-  f: ir_blocks=3 ir_insts=28 vcode_ops=164 fixups=7 imm_bytes=38
+  f: ir_blocks=3 ir_insts=28 vcode_ops=169 fixups=7 imm_bytes=38
     mem: scratch_words=2 stable_words=1 stable_mode=DynamicFrame entry_abs_words=2 abs_words_end=2
-  sink8: ir_blocks=1 ir_insts=8 vcode_ops=19 fixups=0 imm_bytes=0
+  sink8: ir_blocks=1 ir_insts=8 vcode_ops=23 fixups=0 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=2 abs_words_end=0
   a: ir_blocks=1 ir_insts=2 vcode_ops=9 fixups=2 imm_bytes=1
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=2 abs_words_end=0
@@ -20,4 +21,4 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=2 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=22676 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=1676
+  case ok: calldata_len=0 success reason=Return gas_used=22757 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=1757
