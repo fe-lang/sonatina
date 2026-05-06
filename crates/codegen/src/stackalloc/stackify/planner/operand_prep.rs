@@ -1,15 +1,16 @@
 use crate::bitset::BitSet;
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
-use sonatina_ir::{Immediate, InstId, ValueId};
+use sonatina_ir::{I256, Immediate, InstId, ValueId};
 use std::collections::VecDeque;
 
 use super::{
     Planner,
     normalize::SpillAwareCostModel,
     normalize_search::{
-        CostModel, NormalizePlan, SearchCfg, Step, cost_for_steps, rebuild_operand_prep_plan,
-        solve_greedy_operand_prep_plan, solve_optimal_operand_prep_plan,
+        Cost, CostModel, KeyInfo, NormalizePlan, SearchCfg, Step, cost_for_steps,
+        operand_prep_effective_window, rebuild_operand_prep_plan, solve_greedy_operand_prep_plan,
+        solve_optimal_operand_prep_plan,
     },
 };
 
@@ -18,6 +19,25 @@ use super::super::{CONSUME_LAST_USE_MAX_SWAPS, sym_stack::StackItem};
 const OPERAND_PREP_PLAN_CACHE_CAP: usize = 4096;
 const OPERAND_PREP_QUERY_MASK_BITS: usize = u64::BITS as usize;
 
+#[derive(Clone)]
+struct UnaryOperandPrepCandidate {
+    modeled_cost: Cost,
+    emitted_cost: Cost,
+    priority: u8,
+    steps: SmallVec<[Step; 2]>,
+}
+
+impl UnaryOperandPrepCandidate {
+    fn cmp_key(&self) -> (Cost, Cost, usize, u8) {
+        (
+            self.modeled_cost,
+            self.emitted_cost,
+            self.steps.len(),
+            self.priority,
+        )
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum OperandPrepValueKey {
     Imm(Immediate),
@@ -25,8 +45,15 @@ enum OperandPrepValueKey {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum OperandPrepCanonicalKey {
+    Imm(I256),
+    Val(ValueId),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum OperandPrepStackKey {
     Value(OperandPrepValueKey),
+    Ignored,
     FuncRetAddr,
     CallRetAddr,
 }
@@ -126,10 +153,9 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
         &self,
         args: &[ValueId],
         consume_last_use: &BitSet<ValueId>,
-        search_cfg: SearchCfg,
+        window_len: usize,
     ) -> u64 {
         let start_limit = self.stack.len_above_func_ret();
-        let window_len = start_limit.min(search_cfg.max_len);
         if start_limit == window_len {
             return 0;
         }
@@ -157,10 +183,28 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
         }
     }
 
-    fn operand_prep_stack_key(&self, item: &StackItem) -> OperandPrepStackKey {
+    fn operand_prep_canonical_key(&self, value: ValueId) -> OperandPrepCanonicalKey {
+        if let Some(imm) = self.ctx.func.dfg.value_imm(value) {
+            OperandPrepCanonicalKey::Imm(imm.as_i256())
+        } else {
+            OperandPrepCanonicalKey::Val(value)
+        }
+    }
+
+    fn operand_prep_stack_key(
+        &self,
+        item: &StackItem,
+        relevant_values: &[(OperandPrepCanonicalKey, OperandPrepValueKey)],
+    ) -> OperandPrepStackKey {
         match *item {
             StackItem::Value(value) => {
-                OperandPrepStackKey::Value(self.operand_prep_value_key(value))
+                let key = self.operand_prep_canonical_key(value);
+                relevant_values
+                    .iter()
+                    .find_map(|&(relevant, arg_key)| {
+                        (relevant == key).then_some(OperandPrepStackKey::Value(arg_key))
+                    })
+                    .unwrap_or(OperandPrepStackKey::Ignored)
             }
             StackItem::FuncRetAddr => OperandPrepStackKey::FuncRetAddr,
             StackItem::CallRetAddr => OperandPrepStackKey::CallRetAddr,
@@ -173,22 +217,38 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
         consume_last_use: &BitSet<ValueId>,
         search_cfg: SearchCfg,
     ) -> OperandPrepQueryKey {
-        let stack_len = self.stack.len_above_func_ret().min(search_cfg.max_len);
+        let effective_window =
+            operand_prep_effective_window(self.ctx, self.stack, args, search_cfg);
+        let stack_len = self
+            .stack
+            .len_above_func_ret()
+            .min(effective_window.start_len);
+        let mut arg_keys: SmallVec<[OperandPrepValueKey; 8]> = SmallVec::new();
+        let mut relevant_values: SmallVec<[(OperandPrepCanonicalKey, OperandPrepValueKey); 8]> =
+            SmallVec::new();
+        for &arg in args {
+            let arg_key = self.operand_prep_value_key(arg);
+            let canonical_key = self.operand_prep_canonical_key(arg);
+            if !relevant_values
+                .iter()
+                .any(|&(relevant, _)| relevant == canonical_key)
+            {
+                relevant_values.push((canonical_key, arg_key));
+            }
+            arg_keys.push(arg_key);
+        }
         OperandPrepQueryKey {
             dup_max: search_cfg.dup_max as u8,
             swap_max: search_cfg.swap_max as u8,
-            max_len: search_cfg.max_len as u8,
+            max_len: effective_window.max_len as u8,
             max_expansions: search_cfg.max_expansions as u32,
             stack: self
                 .stack
                 .iter()
                 .take(stack_len)
-                .map(|item| self.operand_prep_stack_key(item))
+                .map(|item| self.operand_prep_stack_key(item, &relevant_values))
                 .collect(),
-            args: args
-                .iter()
-                .map(|&arg| self.operand_prep_value_key(arg))
-                .collect(),
+            args: arg_keys,
             last_use_mask: self.operand_prep_query_mask(args, |arg| consume_last_use.contains(arg)),
             spilled_arg_mask: self.operand_prep_query_mask(args, |arg| {
                 !self.ctx.func.dfg.value_is_imm(arg) && self.mem.spill_set().contains(arg)
@@ -196,7 +256,7 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
             deep_preserve_mask: self.operand_prep_deep_preserve_mask(
                 args,
                 consume_last_use,
-                search_cfg,
+                effective_window.start_len,
             ),
         }
     }
@@ -208,6 +268,14 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
     ) -> Option<NormalizePlan> {
         let search_cfg = self.operand_prep_search_cfg(args.len());
         let cost = SpillAwareCostModel::new(self.mem.spill_set());
+
+        if let [arg] = args
+            && let Some(plan) =
+                self.solve_unary_operand_prep_fast(*arg, consume_last_use, &cost, search_cfg)
+        {
+            return Some(plan);
+        }
+
         let use_query_cache = self.use_operand_prep_query_cache(args.len());
         let cache_key = use_query_cache
             .then(|| self.operand_prep_query_key(args, consume_last_use, search_cfg));
@@ -244,6 +312,180 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
                 .insert(cache_key, plan.steps.clone());
         }
         plan
+    }
+
+    fn solve_unary_operand_prep_fast(
+        &self,
+        arg: ValueId,
+        consume_last_use: &BitSet<ValueId>,
+        cost: &impl CostModel,
+        search_cfg: SearchCfg,
+    ) -> Option<NormalizePlan> {
+        let key_info = self.unary_operand_prep_key_info(arg);
+        let arg_imm = self.ctx.func.dfg.value_imm(arg);
+        let arg_is_imm = arg_imm.is_some();
+        let last_use = consume_last_use.contains(arg);
+        let copy_count = self.unary_operand_prep_copy_count(arg, arg_imm);
+        let top_matches = self
+            .stack
+            .top()
+            .is_some_and(|item| self.unary_operand_prep_item_matches_arg(item, arg, arg_imm));
+        let preserve_satisfied = arg_is_imm || last_use || copy_count >= 2;
+        let surplus_last_use_penalty = cost.cost_pop().saturating_add(cost.cost_swap(1));
+
+        let copy_cost = |base: Cost| {
+            if last_use && copy_count != 0 {
+                base.saturating_add(surplus_last_use_penalty)
+            } else {
+                base
+            }
+        };
+
+        let mut candidates: SmallVec<[UnaryOperandPrepCandidate; 6]> = SmallVec::new();
+
+        if top_matches && preserve_satisfied {
+            candidates.push(UnaryOperandPrepCandidate {
+                modeled_cost: Cost::default(),
+                emitted_cost: Cost::default(),
+                priority: 0,
+                steps: SmallVec::new(),
+            });
+        }
+
+        if let Some(imm) = arg_imm {
+            let emitted_cost = cost.cost_push_imm(imm.as_i256());
+            candidates.push(UnaryOperandPrepCandidate {
+                modeled_cost: copy_cost(emitted_cost),
+                emitted_cost,
+                priority: 4,
+                steps: smallvec::smallvec![Step::PushImm(0)],
+            });
+        }
+
+        if let Some(pos) = self.unary_operand_prep_find_arg(arg, arg_imm, 0, search_cfg.dup_max) {
+            let emitted_cost = cost.cost_dup(pos as u8);
+            candidates.push(UnaryOperandPrepCandidate {
+                modeled_cost: copy_cost(emitted_cost),
+                emitted_cost,
+                priority: 2,
+                steps: smallvec::smallvec![Step::Dup(pos as u8)],
+            });
+        }
+
+        if let Some(pos) = self.unary_operand_prep_find_arg(arg, arg_imm, 0, search_cfg.swap_max)
+            && pos != 0
+            && (arg_is_imm || last_use || copy_count >= 2)
+        {
+            let emitted_cost = cost.cost_swap(pos as u8);
+            candidates.push(UnaryOperandPrepCandidate {
+                modeled_cost: emitted_cost,
+                emitted_cost,
+                priority: 1,
+                steps: smallvec::smallvec![Step::Swap(pos as u8)],
+            });
+        }
+
+        if !arg_is_imm
+            && !last_use
+            && copy_count < 2
+            && let Some(pos) = self.unary_operand_prep_find_arg(
+                arg,
+                arg_imm,
+                search_cfg.dup_max,
+                search_cfg.swap_max,
+            )
+        {
+            let emitted_cost = cost.cost_swap(pos as u8).saturating_add(cost.cost_dup(0));
+            candidates.push(UnaryOperandPrepCandidate {
+                modeled_cost: emitted_cost,
+                emitted_cost,
+                priority: 3,
+                steps: SmallVec::from_buf([Step::Swap(pos as u8), Step::Dup(0)]),
+            });
+        }
+
+        if !arg_is_imm {
+            let emitted_cost = cost.cost_load(arg);
+            candidates.push(UnaryOperandPrepCandidate {
+                modeled_cost: copy_cost(emitted_cost),
+                emitted_cost,
+                priority: 5,
+                steps: smallvec::smallvec![Step::LoadVal(0)],
+            });
+        }
+
+        let candidate = candidates
+            .into_iter()
+            .min_by(|lhs, rhs| lhs.cmp_key().cmp(&rhs.cmp_key()))?;
+
+        Some(NormalizePlan {
+            cost: candidate.modeled_cost,
+            steps: candidate.steps.into_vec(),
+            key_infos: smallvec::smallvec![key_info],
+            goal_keys: smallvec::smallvec![0],
+        })
+    }
+
+    fn unary_operand_prep_key_info(&self, arg: ValueId) -> KeyInfo {
+        if let Some(imm) = self.ctx.func.dfg.value_imm(arg) {
+            KeyInfo::Imm {
+                canon: imm.as_i256(),
+                rep_vid: arg,
+                rep_imm: imm,
+            }
+        } else {
+            KeyInfo::Val { vid: arg }
+        }
+    }
+
+    fn unary_operand_prep_item_matches_arg(
+        &self,
+        item: &StackItem,
+        arg: ValueId,
+        arg_imm: Option<Immediate>,
+    ) -> bool {
+        let StackItem::Value(value) = *item else {
+            return false;
+        };
+
+        if let Some(arg_imm) = arg_imm {
+            return self
+                .ctx
+                .func
+                .dfg
+                .value_imm(value)
+                .is_some_and(|imm| imm.as_i256() == arg_imm.as_i256());
+        }
+
+        value == arg
+    }
+
+    fn unary_operand_prep_copy_count(&self, arg: ValueId, arg_imm: Option<Immediate>) -> usize {
+        self.stack
+            .iter()
+            .take(self.stack.len_above_func_ret())
+            .filter(|item| self.unary_operand_prep_item_matches_arg(item, arg, arg_imm))
+            .count()
+    }
+
+    fn unary_operand_prep_find_arg(
+        &self,
+        arg: ValueId,
+        arg_imm: Option<Immediate>,
+        start: usize,
+        max_depth: usize,
+    ) -> Option<usize> {
+        let limit = self.stack.len_above_func_ret().min(max_depth);
+        if start >= limit {
+            return None;
+        }
+
+        self.stack
+            .iter()
+            .skip(start)
+            .take(limit - start)
+            .position(|item| self.unary_operand_prep_item_matches_arg(item, arg, arg_imm))
+            .map(|off| start + off)
     }
 
     fn inst_is_commutative(&self, inst: InstId) -> bool {
@@ -540,7 +782,7 @@ mod tests {
         },
     };
     use cranelift_entity::SecondaryMap;
-    use sonatina_ir::{Immediate, Type, Value, cfg::ControlFlowGraph};
+    use sonatina_ir::{I256, Immediate, Type, Value, cfg::ControlFlowGraph};
     use sonatina_parser::parse_module;
 
     #[test]
@@ -549,14 +791,14 @@ mod tests {
         let cheaper_emitted = NormalizePlan {
             cost: Cost { gas: 99, bytes: 99 },
             steps: vec![Step::Dup(0)],
-            key_infos: Vec::new(),
-            goal_keys: Vec::new(),
+            key_infos: SmallVec::new(),
+            goal_keys: SmallVec::new(),
         };
         let pricier_emitted = NormalizePlan {
             cost: Cost::default(),
             steps: vec![Step::Swap(1), Step::Swap(1)],
-            key_infos: Vec::new(),
-            goal_keys: Vec::new(),
+            key_infos: SmallVec::new(),
+            goal_keys: SmallVec::new(),
         };
 
         assert!(
@@ -846,8 +1088,466 @@ block0:
             assert!(!planner.use_operand_prep_query_cache(args.len()));
             assert_eq!(planner.operand_prep_query_mask(&args, |_| true), u64::MAX);
             assert_eq!(
-                planner.operand_prep_deep_preserve_mask(&args, &BitSet::default(), search_cfg),
+                planner.operand_prep_deep_preserve_mask(
+                    &args,
+                    &BitSet::default(),
+                    search_cfg.max_len,
+                ),
                 u64::MAX << search_cfg.max_len
+            );
+        });
+    }
+
+    #[test]
+    fn operand_prep_query_key_ignores_irrelevant_slots_below_effective_window() {
+        const SRC: &str = r#"
+target = "evm-ethereum-osaka"
+
+func public %f() {
+block0:
+    return;
+}
+"#;
+
+        let parsed = parse_module(SRC).expect("module parses");
+        let func_ref = parsed.debug.func_order[0];
+
+        parsed.module.func_store.modify(func_ref, |func| {
+            let imm_args = [
+                func.dfg.make_imm_value(Immediate::I8(1)),
+                func.dfg.make_imm_value(Immediate::I8(2)),
+            ];
+            let top0 = func.dfg.make_undef_value(Type::I256);
+            let top1 = func.dfg.make_undef_value(Type::I256);
+            let ignored_a = func.dfg.make_undef_value(Type::I256);
+            let ignored_b = func.dfg.make_undef_value(Type::I256);
+
+            let mut cfg = ControlFlowGraph::new();
+            cfg.compute(func);
+            let entry = cfg.entry().expect("missing entry block");
+
+            let mut liveness = Liveness::new();
+            liveness.compute(func, &cfg);
+
+            let mut dom = DomTree::new();
+            dom.compute(&cfg);
+
+            let mut scc = CfgSccAnalysis::new();
+            scc.compute(&cfg);
+
+            let reach = StackifyReachability::new(16);
+            let ctx = build_stackify_test_context(func, &cfg, &dom, &liveness, entry, scc, reach);
+            let spill_set = BitSet::default();
+            let spill_obj = SecondaryMap::new();
+
+            let query_key = |values: &[ValueId]| {
+                let mut spill_requests = BitSet::default();
+                let mut free_slots = FreeSlotPools::default();
+                let mut slots = SpillSlotPools::default();
+                let mem = MemPlan::new(
+                    SpillSet::new(&spill_set),
+                    &mut spill_requests,
+                    &ctx,
+                    &spill_obj,
+                    &ctx.exact_local_addr,
+                    &mut free_slots,
+                    &mut slots,
+                );
+                let mut stack = SymStack::entry_stack(func, false);
+                for &value in values.iter().rev() {
+                    stack.push_value(value);
+                }
+                let mut actions = crate::stackalloc::Actions::new();
+                let mut search_scratch = NormalizeSearchScratch::default();
+                let planner =
+                    Planner::new(&ctx, &mut stack, &mut actions, mem, &mut search_scratch);
+                let search_cfg = planner.operand_prep_search_cfg(imm_args.len());
+                planner.operand_prep_query_key(&imm_args, &BitSet::default(), search_cfg)
+            };
+
+            let lhs = query_key(&[top0, top1, ignored_a]);
+            let rhs = query_key(&[top0, top1, ignored_b]);
+            assert_eq!(lhs, rhs);
+        });
+    }
+
+    #[test]
+    fn operand_prep_query_key_ignores_irrelevant_slots_inside_effective_window() {
+        const SRC: &str = r#"
+target = "evm-ethereum-osaka"
+
+func public %f() {
+block0:
+    return;
+}
+"#;
+
+        let parsed = parse_module(SRC).expect("module parses");
+        let func_ref = parsed.debug.func_order[0];
+
+        parsed.module.func_store.modify(func_ref, |func| {
+            let source = func.dfg.make_undef_value(Type::I256);
+            let ignored_a = func.dfg.make_undef_value(Type::I256);
+            let ignored_b = func.dfg.make_undef_value(Type::I256);
+            let args = [source];
+
+            let mut cfg = ControlFlowGraph::new();
+            cfg.compute(func);
+            let entry = cfg.entry().expect("missing entry block");
+
+            let mut liveness = Liveness::new();
+            liveness.compute(func, &cfg);
+
+            let mut dom = DomTree::new();
+            dom.compute(&cfg);
+
+            let mut scc = CfgSccAnalysis::new();
+            scc.compute(&cfg);
+
+            let reach = StackifyReachability::new(16);
+            let ctx = build_stackify_test_context(func, &cfg, &dom, &liveness, entry, scc, reach);
+            let spill_set = BitSet::default();
+            let spill_obj = SecondaryMap::new();
+
+            let query_key = |top: ValueId| {
+                let mut spill_requests = BitSet::default();
+                let mut free_slots = FreeSlotPools::default();
+                let mut slots = SpillSlotPools::default();
+                let mem = MemPlan::new(
+                    SpillSet::new(&spill_set),
+                    &mut spill_requests,
+                    &ctx,
+                    &spill_obj,
+                    &ctx.exact_local_addr,
+                    &mut free_slots,
+                    &mut slots,
+                );
+                let mut stack = SymStack::entry_stack(func, false);
+                stack.push_value(source);
+                stack.push_value(top);
+                let mut actions = crate::stackalloc::Actions::new();
+                let mut search_scratch = NormalizeSearchScratch::default();
+                let planner =
+                    Planner::new(&ctx, &mut stack, &mut actions, mem, &mut search_scratch);
+                let search_cfg = planner.operand_prep_search_cfg(args.len());
+                planner.operand_prep_query_key(&args, &BitSet::default(), search_cfg)
+            };
+
+            let lhs = query_key(ignored_a);
+            let rhs = query_key(ignored_b);
+
+            assert_eq!(lhs, rhs);
+            assert_eq!(lhs.stack[0], OperandPrepStackKey::Ignored);
+            assert_eq!(
+                lhs.stack[1],
+                OperandPrepStackKey::Value(OperandPrepValueKey::Val(source))
+            );
+        });
+    }
+
+    #[test]
+    fn operand_prep_query_key_keeps_canonical_immediate_sources_relevant() {
+        const SRC: &str = r#"
+target = "evm-ethereum-osaka"
+
+func public %f() {
+block0:
+    return;
+}
+"#;
+
+        let parsed = parse_module(SRC).expect("module parses");
+        let func_ref = parsed.debug.func_order[0];
+
+        parsed.module.func_store.modify(func_ref, |func| {
+            let arg = func.dfg.make_imm_value(Immediate::I8(1));
+            let stack_source = func.dfg.make_imm_value(Immediate::I256(I256::from(1)));
+            let ignored = func.dfg.make_undef_value(Type::I256);
+            let args = [arg];
+
+            let mut cfg = ControlFlowGraph::new();
+            cfg.compute(func);
+            let entry = cfg.entry().expect("missing entry block");
+
+            let mut liveness = Liveness::new();
+            liveness.compute(func, &cfg);
+
+            let mut dom = DomTree::new();
+            dom.compute(&cfg);
+
+            let mut scc = CfgSccAnalysis::new();
+            scc.compute(&cfg);
+
+            let reach = StackifyReachability::new(16);
+            let ctx = build_stackify_test_context(func, &cfg, &dom, &liveness, entry, scc, reach);
+            let spill_set = BitSet::default();
+            let spill_obj = SecondaryMap::new();
+            let mut spill_requests = BitSet::default();
+            let mut free_slots = FreeSlotPools::default();
+            let mut slots = SpillSlotPools::default();
+            let mem = MemPlan::new(
+                SpillSet::new(&spill_set),
+                &mut spill_requests,
+                &ctx,
+                &spill_obj,
+                &ctx.exact_local_addr,
+                &mut free_slots,
+                &mut slots,
+            );
+            let mut stack = SymStack::entry_stack(func, false);
+            stack.push_value(stack_source);
+            stack.push_value(ignored);
+            let mut actions = crate::stackalloc::Actions::new();
+            let mut search_scratch = NormalizeSearchScratch::default();
+            let planner = Planner::new(&ctx, &mut stack, &mut actions, mem, &mut search_scratch);
+            let search_cfg = planner.operand_prep_search_cfg(args.len());
+            let key = planner.operand_prep_query_key(&args, &BitSet::default(), search_cfg);
+
+            assert_eq!(key.stack[0], OperandPrepStackKey::Ignored);
+            assert_eq!(
+                key.stack[1],
+                OperandPrepStackKey::Value(OperandPrepValueKey::Imm(Immediate::I8(1)))
+            );
+        });
+    }
+
+    #[test]
+    fn operand_prep_query_key_tracks_relevant_source_inside_effective_window() {
+        const SRC: &str = r#"
+target = "evm-ethereum-osaka"
+
+func public %f() {
+block0:
+    return;
+}
+"#;
+
+        let parsed = parse_module(SRC).expect("module parses");
+        let func_ref = parsed.debug.func_order[0];
+
+        parsed.module.func_store.modify(func_ref, |func| {
+            let source = func.dfg.make_undef_value(Type::I256);
+            let imm = func.dfg.make_imm_value(Immediate::I8(3));
+            let top = func.dfg.make_undef_value(Type::I256);
+            let unrelated = func.dfg.make_undef_value(Type::I256);
+            let ignored = func.dfg.make_undef_value(Type::I256);
+            let args = [source, imm];
+
+            let mut cfg = ControlFlowGraph::new();
+            cfg.compute(func);
+            let entry = cfg.entry().expect("missing entry block");
+
+            let mut liveness = Liveness::new();
+            liveness.compute(func, &cfg);
+
+            let mut dom = DomTree::new();
+            dom.compute(&cfg);
+
+            let mut scc = CfgSccAnalysis::new();
+            scc.compute(&cfg);
+
+            let reach = StackifyReachability::new(16);
+            let ctx = build_stackify_test_context(func, &cfg, &dom, &liveness, entry, scc, reach);
+            let spill_set = BitSet::default();
+            let spill_obj = SecondaryMap::new();
+
+            let query_key = |values: &[ValueId]| {
+                let mut spill_requests = BitSet::default();
+                let mut free_slots = FreeSlotPools::default();
+                let mut slots = SpillSlotPools::default();
+                let mem = MemPlan::new(
+                    SpillSet::new(&spill_set),
+                    &mut spill_requests,
+                    &ctx,
+                    &spill_obj,
+                    &ctx.exact_local_addr,
+                    &mut free_slots,
+                    &mut slots,
+                );
+                let mut stack = SymStack::entry_stack(func, false);
+                for &value in values.iter().rev() {
+                    stack.push_value(value);
+                }
+                let mut actions = crate::stackalloc::Actions::new();
+                let mut search_scratch = NormalizeSearchScratch::default();
+                let planner =
+                    Planner::new(&ctx, &mut stack, &mut actions, mem, &mut search_scratch);
+                let search_cfg = planner.operand_prep_search_cfg(args.len());
+                planner.operand_prep_query_key(&args, &BitSet::default(), search_cfg)
+            };
+
+            let no_source = query_key(&[top, unrelated, ignored]);
+            let with_source = query_key(&[top, source, ignored]);
+            assert_ne!(no_source, with_source);
+        });
+    }
+
+    #[test]
+    fn operand_prep_query_cache_replays_across_ignored_live_values() {
+        const SRC: &str = r#"
+target = "evm-ethereum-osaka"
+
+func public %f() {
+block0:
+    return;
+}
+"#;
+
+        let parsed = parse_module(SRC).expect("module parses");
+        let func_ref = parsed.debug.func_order[0];
+
+        parsed.module.func_store.modify(func_ref, |func| {
+            let imm = func.dfg.make_imm_value(Immediate::I8(7));
+            let source = func.dfg.make_undef_value(Type::I256);
+            let ignored_a = func.dfg.make_undef_value(Type::I256);
+            let ignored_b = func.dfg.make_undef_value(Type::I256);
+            let args = [imm, source];
+            let mut last_use = BitSet::default();
+            last_use.insert(source);
+
+            let mut cfg = ControlFlowGraph::new();
+            cfg.compute(func);
+            let entry = cfg.entry().expect("missing entry block");
+
+            let mut liveness = Liveness::new();
+            liveness.compute(func, &cfg);
+
+            let mut dom = DomTree::new();
+            dom.compute(&cfg);
+
+            let mut scc = CfgSccAnalysis::new();
+            scc.compute(&cfg);
+
+            let reach = StackifyReachability::new(16);
+            let ctx = build_stackify_test_context(func, &cfg, &dom, &liveness, entry, scc, reach);
+            let spill_set = BitSet::default();
+            let spill_obj = SecondaryMap::new();
+            let mut search_scratch = NormalizeSearchScratch::default();
+            let mut solve_with = |ignored: ValueId| {
+                let mut spill_requests = BitSet::default();
+                let mut free_slots = FreeSlotPools::default();
+                let mut slots = SpillSlotPools::default();
+                let mem = MemPlan::new(
+                    SpillSet::new(&spill_set),
+                    &mut spill_requests,
+                    &ctx,
+                    &spill_obj,
+                    &ctx.exact_local_addr,
+                    &mut free_slots,
+                    &mut slots,
+                );
+                let mut stack = SymStack::entry_stack(func, false);
+                stack.push_value(ignored);
+                stack.push_value(source);
+                let mut actions = crate::stackalloc::Actions::new();
+                let mut planner =
+                    Planner::new(&ctx, &mut stack, &mut actions, mem, &mut search_scratch);
+                let plan = planner
+                    .solve_operand_prep_cached(&args, &last_use)
+                    .expect("expected operand-prep plan");
+                let steps = plan.steps.clone();
+
+                assert!(planner.apply_operand_prep_plan(&plan, &args));
+                (
+                    steps,
+                    planner.search_scratch.operand_prep_plan_cache.map.len(),
+                )
+            };
+
+            let (lhs_steps, lhs_cache_len) = solve_with(ignored_a);
+            let (rhs_steps, rhs_cache_len) = solve_with(ignored_b);
+
+            assert_eq!(lhs_cache_len, 1);
+            assert_eq!(rhs_cache_len, 1);
+            assert_eq!(lhs_steps, rhs_steps);
+        });
+    }
+
+    #[test]
+    fn unary_operand_prep_fast_path_handles_preserve_and_consume_cases() {
+        const SRC: &str = r#"
+target = "evm-ethereum-osaka"
+
+func public %f(v0.i256, v1.i256, v2.i256) {
+block0:
+    return;
+}
+"#;
+
+        let parsed = parse_module(SRC).expect("module parses");
+        let func_ref = parsed.debug.func_order[0];
+
+        parsed.module.func_store.modify(func_ref, |func| {
+            let mut cfg = ControlFlowGraph::new();
+            cfg.compute(func);
+            let entry = cfg.entry().expect("missing entry block");
+
+            let mut liveness = Liveness::new();
+            liveness.compute(func, &cfg);
+
+            let mut dom = DomTree::new();
+            dom.compute(&cfg);
+
+            let mut scc = CfgSccAnalysis::new();
+            scc.compute(&cfg);
+
+            let reach = StackifyReachability::new(2);
+            let ctx = build_stackify_test_context(func, &cfg, &dom, &liveness, entry, scc, reach);
+            let spill_set = BitSet::default();
+            let spill_obj = SecondaryMap::new();
+
+            let solve_steps = |mut stack: SymStack, arg: ValueId, last_use: &BitSet<ValueId>| {
+                let mut spill_requests = BitSet::default();
+                let mut free_slots = FreeSlotPools::default();
+                let mut slots = SpillSlotPools::default();
+                let mem = MemPlan::new(
+                    SpillSet::new(&spill_set),
+                    &mut spill_requests,
+                    &ctx,
+                    &spill_obj,
+                    &ctx.exact_local_addr,
+                    &mut free_slots,
+                    &mut slots,
+                );
+
+                let mut actions = crate::stackalloc::Actions::new();
+                let mut search_scratch = NormalizeSearchScratch::default();
+                let mut planner =
+                    Planner::new(&ctx, &mut stack, &mut actions, mem, &mut search_scratch);
+                let plan = planner
+                    .solve_operand_prep_cached(&[arg], last_use)
+                    .expect("unary fast path should produce a plan");
+                let steps = plan.steps.clone();
+
+                assert!(planner.apply_operand_prep_plan(&plan, &[arg]));
+                steps
+            };
+
+            let arg = func.arg_values[0];
+            let stack = SymStack::entry_stack(func, false);
+            assert_eq!(
+                solve_steps(stack, arg, &BitSet::default()),
+                vec![Step::Dup(0)]
+            );
+
+            let mut stack = SymStack::entry_stack(func, false);
+            let mut setup_actions = crate::stackalloc::Actions::new();
+            stack.dup(0, &mut setup_actions);
+            assert!(
+                solve_steps(stack, arg, &BitSet::default()).is_empty(),
+                "already-prepared non-last-use operand with a preserved copy should be a no-op"
+            );
+
+            let arg = func.arg_values[2];
+            let mut last_use = BitSet::default();
+            last_use.insert(arg);
+            let stack = SymStack::entry_stack(func, false);
+            assert_eq!(solve_steps(stack, arg, &last_use), vec![Step::Swap(2)]);
+
+            let stack = SymStack::entry_stack(func, false);
+            assert_eq!(
+                solve_steps(stack, arg, &BitSet::default()),
+                vec![Step::Swap(2), Step::Dup(0)]
             );
         });
     }
