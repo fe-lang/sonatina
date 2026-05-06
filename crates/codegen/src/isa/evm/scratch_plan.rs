@@ -47,8 +47,7 @@ fn addr_may_overlap_scratch(
         return imm_lt_u32(imm, SCRATCH_END_BYTES);
     }
 
-    let prov = &prov[addr];
-    prov.is_unknown_ptr() || prov.has_no_known_bases() || prov.has_any_arg()
+    prov[addr].is_unknown_ptr() || prov[addr].has_no_known_bases() || prov[addr].has_any_arg()
 }
 
 pub(crate) fn inst_is_scratch_clobber(
@@ -122,4 +121,94 @@ pub(crate) fn compute_scratch_live_values(
     }
 
     scratch_live_values
+}
+
+#[cfg(test)]
+mod tests {
+    use sonatina_ir::{InstSetExt, isa::Isa};
+    use sonatina_parser::parse_module;
+    use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
+
+    use super::{super::ptr_escape::compute_ptr_escape_summaries, *};
+
+    fn first_mstore_clobbers_scratch(src: &str, func_name: &str) -> bool {
+        let parsed = parse_module(src).expect("module parses");
+        let funcs = parsed.module.funcs();
+        let func_ref = parsed
+            .module
+            .funcs()
+            .into_iter()
+            .find(|&func| {
+                parsed
+                    .module
+                    .ctx
+                    .func_sig(func, |sig| sig.name() == func_name)
+            })
+            .expect("function exists");
+
+        let isa = Evm::new(TargetTriple {
+            architecture: Architecture::Evm,
+            vendor: Vendor::Ethereum,
+            operating_system: OperatingSystem::Evm(EvmVersion::Osaka),
+        });
+        let summaries = compute_ptr_escape_summaries(&parsed.module, &funcs, &isa);
+
+        parsed.module.func_store.view(func_ref, |function| {
+            let prov = compute_value_provenance(function, &parsed.module.ctx, &isa, |callee| {
+                PtrEscapeSummary::get_or_conservative(&summaries, &parsed.module.ctx, callee)
+            });
+            let mstore = function
+                .layout
+                .iter_block()
+                .flat_map(|block| function.layout.iter_inst(block))
+                .find(|&inst| {
+                    matches!(
+                        isa.inst_set().resolve_inst(function.dfg.inst(inst)),
+                        EvmInstKind::Mstore(_)
+                    )
+                })
+                .expect("mstore exists");
+
+            inst_is_scratch_clobber(function, &isa, mstore, &prov)
+        })
+    }
+
+    #[test]
+    fn allocator_managed_address_with_i256_offset_is_not_scratch_clobber() {
+        let clobbers = first_mstore_clobbers_scratch(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %f(v0.i256) {
+block0:
+    v1.*i8 = evm_malloc 96.i256;
+    v2.i256 = ptr_to_int v1 i256;
+    v3.i256 = add v2 v0;
+    mstore v3 1.i256 i256;
+    return;
+}
+"#,
+            "f",
+        );
+
+        assert!(!clobbers);
+    }
+
+    #[test]
+    fn plain_i256_address_remains_scratch_clobber() {
+        let clobbers = first_mstore_clobbers_scratch(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %f(v0.i256) {
+block0:
+    mstore v0 1.i256 i256;
+    return;
+}
+"#,
+            "f",
+        );
+
+        assert!(clobbers);
+    }
 }

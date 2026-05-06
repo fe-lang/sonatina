@@ -36,6 +36,10 @@ impl PostDomTree {
     }
 
     pub fn compute(&mut self, func: &Function) {
+        self.compute_with_extra_exits(func, &[]);
+    }
+
+    pub fn compute_with_extra_exits(&mut self, func: &Function, extra_exits: &[BlockId]) {
         self.clear();
 
         self.rcfg.compute(func);
@@ -51,10 +55,15 @@ impl PostDomTree {
         self.rcfg.add_succ_block(self.entry, real_entry);
         self.rcfg.add_succ_block(self.entry, self.exit);
 
-        // Add edges from real exit blocks to dummy exit block.
-        let real_exits = std::mem::take(&mut self.rcfg.exits);
-        for exit in &real_exits {
-            self.rcfg.add_succ_block(*exit, self.exit);
+        // Add edges from real and virtual exit blocks to dummy exit block.
+        let mut exits = std::mem::take(&mut self.rcfg.exits);
+        for &exit in extra_exits {
+            if !exits.contains(&exit) {
+                exits.push(exit);
+            }
+        }
+        for exit in exits {
+            self.rcfg.add_succ_block(exit, self.exit);
         }
 
         self.rcfg.reverse_edges(self.exit, &[self.entry]);

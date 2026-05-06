@@ -12,13 +12,9 @@ use sonatina_ir::{
     types::CompoundType,
 };
 
-use crate::{
-    cfg_edit::CleanupMode,
-    critical_edge::CriticalEdgeSplitter,
-    optim::{adce::AdceSolver, cfg_cleanup::CfgCleanup},
-};
+use crate::{critical_edge::CriticalEdgeSplitter, optim::adce::AdceSolver};
 
-use super::{cleanup::DeadPureInstCleanup, shape};
+use super::shape;
 
 #[derive(Clone, Copy)]
 struct AggregateProjectionView {
@@ -216,7 +212,6 @@ pub struct AggregateLowerToMemoryLegalize {
     slot_tree_queue: Vec<ValueId>,
     slot_tree_seen_insts: FxHashSet<InstId>,
     slot_tree_seen_values: FxHashSet<ValueId>,
-    dead_pure_cleanup: DeadPureInstCleanup,
 }
 
 #[derive(Default)]
@@ -250,7 +245,7 @@ impl AggregateLowerToMemoryLegalize {
         // Legalization uses `dfg.change_to_alias`, which requires up-to-date user sets.
         func.rebuild_users();
 
-        let (blocks, split_edges) = self.prepare_legalize_block_order(func, scan.has_agg_phi);
+        let blocks = self.prepare_legalize_block_order(func, scan.has_agg_phi);
         for block in blocks {
             for &inst in &scan.candidates[block] {
                 if !func.layout.is_inst_inserted(inst) {
@@ -261,7 +256,7 @@ impl AggregateLowerToMemoryLegalize {
         }
 
         if self.changed {
-            self.changed |= self.cleanup_legalized_artifacts(func, split_edges);
+            self.changed |= self.cleanup_legalized_artifacts(func);
         }
         assert_aggregate_legalized(func, module);
         self.changed
@@ -271,81 +266,43 @@ impl AggregateLowerToMemoryLegalize {
         &mut self,
         func: &mut Function,
         has_agg_phi: bool,
-    ) -> (SmallVec<[BlockId; 16]>, bool) {
+    ) -> SmallVec<[BlockId; 16]> {
         let entry = func
             .layout
             .entry_block()
             .expect("function must have entry block");
         if func.layout.next_block_of(entry).is_none() {
-            return (smallvec![entry], false);
+            return smallvec![entry];
         }
 
         let mut cfg = ControlFlowGraph::new();
         cfg.compute(func);
         if !has_agg_phi {
-            return (aggregate_legalize_block_order(func, &cfg), false);
+            return aggregate_legalize_block_order(func, &cfg);
         }
 
         let block_count = func.layout.iter_block().count();
         CriticalEdgeSplitter::new().run(func, &mut cfg);
         let changed = func.layout.iter_block().count() != block_count;
         self.changed |= changed;
-        (aggregate_legalize_block_order(func, &cfg), changed)
+        aggregate_legalize_block_order(func, &cfg)
     }
 
-    fn cleanup_legalized_artifacts(&mut self, func: &mut Function, split_edges: bool) -> bool {
-        // User sets stay current through legalization and CFG cleanup, so the cleanup
+    fn cleanup_legalized_artifacts(&mut self, func: &mut Function) -> bool {
+        // User sets stay current through legalization and cleanup, so the cleanup
         // phases can share the single rebuild done before rewriting starts.
         let mut changed = false;
-        let mut pending_cfg_cleanup = split_edges;
 
         loop {
-            let removed_mloads = self.remove_dead_aggregate_mloads(func);
             let removed_slots = self.remove_dead_materialized_slots(func);
-            let removed_pure = self.dead_pure_cleanup.run_with_current_users(func);
             let removed_dead = AdceSolver::new().run(func);
-            let cleaned_cfg = pending_cfg_cleanup && CfgCleanup::new(CleanupMode::Strict).run(func);
-            pending_cfg_cleanup = false;
 
-            let progress =
-                removed_mloads || removed_slots || removed_pure || removed_dead || cleaned_cfg;
+            let progress = removed_slots || removed_dead;
             changed |= progress;
             if !progress {
                 return changed;
             }
         }
-    }
-
-    fn remove_dead_aggregate_mloads(&self, func: &mut Function) -> bool {
-        let mut changed = false;
-        let blocks: Vec<_> = func.layout.iter_block().collect();
-        for block in blocks {
-            let insts: Vec<_> = func.layout.iter_inst(block).collect();
-            for inst in insts {
-                let Some(mload) = downcast::<&data::Mload>(func.inst_set(), func.dfg.inst(inst))
-                else {
-                    continue;
-                };
-                if !shape::is_supported_aggregate_ty(func.ctx(), *mload.ty()) {
-                    continue;
-                }
-                let Some(result) = func.dfg.inst_result(inst) else {
-                    continue;
-                };
-                if func
-                    .dfg
-                    .users(result)
-                    .copied()
-                    .any(|user| func.layout.is_inst_inserted(user))
-                {
-                    continue;
-                }
-
-                InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
-                changed = true;
-            }
-        }
-        changed
     }
 
     fn create_temp_alloca(&mut self, func: &mut Function, ty: Type) -> ValueId {
@@ -2032,8 +1989,8 @@ pub fn cleanup_dead_aggregate_alloca_trees(function: &mut Function, module: &Mod
     let mut changed = false;
     loop {
         let removed_slots = cleanup.remove_dead_materialized_slots(function);
-        let removed_pure = cleanup.dead_pure_cleanup.run_with_current_users(function);
-        let progress = removed_slots || removed_pure;
+        let removed_dead = AdceSolver::new().run(function);
+        let progress = removed_slots || removed_dead;
         changed |= progress;
         if !progress {
             return changed;

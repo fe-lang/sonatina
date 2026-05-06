@@ -605,6 +605,8 @@ block0:
 
                 let spill_set = BitSet::default();
                 let mut spill_requests = BitSet::default();
+                let mut object_spill_requests = BitSet::default();
+                let forced_object_spills = BitSet::default();
                 let spill_obj = SecondaryMap::new();
                 let mut free_slots = FreeSlotPools::default();
                 let mut slots = SpillSlotPools::default();
@@ -614,6 +616,8 @@ block0:
                     &ctx,
                     &spill_obj,
                     &ctx.exact_local_addr,
+                    &mut object_spill_requests,
+                    &forced_object_spills,
                     &mut free_slots,
                     &mut slots,
                 );
@@ -652,6 +656,8 @@ block0:
 
             let spill_set = BitSet::default();
             let mut spill_requests = BitSet::default();
+            let mut object_spill_requests = BitSet::default();
+            let forced_object_spills = BitSet::default();
             let spill_obj = SecondaryMap::new();
             let mut free_slots = FreeSlotPools::default();
             let mut slots = SpillSlotPools::default();
@@ -661,6 +667,8 @@ block0:
                 &ctx,
                 &spill_obj,
                 &ctx.exact_local_addr,
+                &mut object_spill_requests,
+                &forced_object_spills,
                 &mut free_slots,
                 &mut slots,
             );
@@ -717,6 +725,8 @@ block0:
 
             let spill_set = BitSet::default();
             let mut spill_requests = BitSet::default();
+            let mut object_spill_requests = BitSet::default();
+            let forced_object_spills = BitSet::default();
             let spill_obj = SecondaryMap::new();
             let mut free_slots = FreeSlotPools::default();
             let mut slots = SpillSlotPools::default();
@@ -726,6 +736,8 @@ block0:
                 &ctx,
                 &spill_obj,
                 &ctx.exact_local_addr,
+                &mut object_spill_requests,
+                &forced_object_spills,
                 &mut free_slots,
                 &mut slots,
             );
@@ -807,6 +819,8 @@ block0:
 
             let spill_set = BitSet::default();
             let mut spill_requests = BitSet::default();
+            let mut object_spill_requests = BitSet::default();
+            let forced_object_spills = BitSet::default();
             let spill_obj = SecondaryMap::new();
             let mut free_slots = FreeSlotPools::default();
             let mut slots = SpillSlotPools::default();
@@ -816,6 +830,8 @@ block0:
                 &ctx,
                 &spill_obj,
                 &ctx.exact_local_addr,
+                &mut object_spill_requests,
+                &forced_object_spills,
                 &mut free_slots,
                 &mut slots,
             );
@@ -872,6 +888,8 @@ block0:
 
             let spill_set = BitSet::default();
             let mut spill_requests = BitSet::default();
+            let mut object_spill_requests = BitSet::default();
+            let forced_object_spills = BitSet::default();
             let spill_obj = SecondaryMap::new();
             let mut free_slots = FreeSlotPools::default();
             let mut slots = SpillSlotPools::default();
@@ -881,6 +899,8 @@ block0:
                 &ctx,
                 &spill_obj,
                 &ctx.exact_local_addr,
+                &mut object_spill_requests,
+                &forced_object_spills,
                 &mut free_slots,
                 &mut slots,
             );
@@ -948,6 +968,8 @@ block0:
 
             let spill_set = BitSet::default();
             let mut spill_requests = BitSet::default();
+            let mut object_spill_requests = BitSet::default();
+            let forced_object_spills = BitSet::default();
             let spill_obj = SecondaryMap::new();
             let mut free_slots = FreeSlotPools::default();
             let mut slots = SpillSlotPools::default();
@@ -957,6 +979,8 @@ block0:
                 &ctx,
                 &spill_obj,
                 &ctx.exact_local_addr,
+                &mut object_spill_requests,
+                &forced_object_spills,
                 &mut free_slots,
                 &mut slots,
             );
@@ -986,12 +1010,16 @@ block0:
             last_use.insert(func.arg_values[2]);
             let mut stack = SymStack::entry_stack(func, false);
             let mut actions = crate::stackalloc::Actions::new();
+            let mut object_spill_requests = BitSet::default();
+            let forced_object_spills = BitSet::default();
             let mem = MemPlan::new(
                 SpillSet::new(&spill_set),
                 &mut spill_requests,
                 &ctx,
                 &spill_obj,
                 &ctx.exact_local_addr,
+                &mut object_spill_requests,
+                &forced_object_spills,
                 &mut free_slots,
                 &mut slots,
             );

@@ -1,13 +1,12 @@
 //! This module contains a solver for `Aggressive Dead code elimination (ADCE)`.
 
-use std::collections::BTreeSet;
-
 use cranelift_entity::SecondaryMap;
 use rustc_hash::FxHashSet;
-use sonatina_ir::{BlockId, Function, InstId};
+use sonatina_ir::{BlockId, ControlFlowGraph, Function, InstId};
 
 use crate::{
     cfg_edit::{CfgEditor, CleanupMode},
+    cfg_scc::{CfgSccAnalysis, SccId},
     optim::{call_purity::is_nonmutating_returning_call, cfg_cleanup::CfgCleanup},
     post_domtree::{PDFSet, PDTIdom, PostDomTree},
 };
@@ -15,26 +14,35 @@ use crate::{
 pub struct AdceSolver {
     live_insts: SecondaryMap<InstId, bool>,
     live_blocks: SecondaryMap<BlockId, bool>,
-    empty_blocks: BTreeSet<BlockId>,
     post_domtree: PostDomTree,
     worklist: Vec<InstId>,
+    call_policy: AdceCallPolicy,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AdceCallPolicy {
+    ConservativeCalls,
+    UseCurrentFuncEffects,
 }
 
 impl AdceSolver {
     pub fn new() -> Self {
+        Self::with_call_policy(AdceCallPolicy::ConservativeCalls)
+    }
+
+    pub fn with_call_policy(call_policy: AdceCallPolicy) -> Self {
         Self {
             live_insts: SecondaryMap::default(),
             live_blocks: SecondaryMap::default(),
-            empty_blocks: BTreeSet::default(),
             post_domtree: PostDomTree::default(),
             worklist: Vec::default(),
+            call_policy,
         }
     }
 
     pub fn clear(&mut self) {
         self.live_insts.clear();
         self.live_blocks.clear();
-        self.empty_blocks.clear();
         self.post_domtree.clear();
         self.worklist.clear();
     }
@@ -52,14 +60,10 @@ impl AdceSolver {
     fn run_dce(&mut self, func: &mut Function) -> bool {
         self.clear();
 
-        self.post_domtree.compute(func);
+        let divergent_blocks = divergent_blocks(func);
+        self.post_domtree
+            .compute_with_extra_exits(func, &divergent_blocks);
         let pdf_set = self.post_domtree.compute_df();
-
-        // TODO: We should remove this restriction.
-        // ref: <https://reviews.llvm.org/D35851>
-        if self.has_infinite_loop(func) {
-            return false;
-        }
 
         // The entry block must always be live — removing it would shift
         // the layout so a different block becomes the entry, breaking
@@ -73,9 +77,15 @@ impl AdceSolver {
 
         for block in func.layout.iter_block() {
             for inst in func.layout.iter_inst(block) {
-                if is_live_root_inst(func, inst) {
+                if is_live_root_inst(func, inst, self.call_policy) {
                     self.mark_inst(func, inst);
                 }
+            }
+        }
+        for block in divergent_blocks {
+            self.mark_block(block);
+            if let Some(term) = func.layout.last_inst_of(block) {
+                self.mark_inst(func, term);
             }
         }
 
@@ -84,16 +94,6 @@ impl AdceSolver {
         }
 
         self.eliminate_dead_code(func)
-    }
-
-    fn has_infinite_loop(&self, func: &Function) -> bool {
-        for block in func.layout.iter_block() {
-            if !self.post_domtree.is_reachable(block) {
-                return true;
-            }
-        }
-
-        false
     }
 
     fn mark_inst(&mut self, func: &Function, inst: InstId) {
@@ -245,6 +245,32 @@ impl AdceSolver {
     }
 }
 
+fn divergent_blocks(func: &Function) -> Vec<BlockId> {
+    let mut cfg = ControlFlowGraph::new();
+    cfg.compute(func);
+
+    let mut sccs = CfgSccAnalysis::new();
+    sccs.compute(&cfg);
+
+    let mut reaches_real_exit = SecondaryMap::<SccId, bool>::with_capacity(sccs.scc_count());
+    for &scc in sccs.topo_order().iter().rev() {
+        let data = sccs.scc_data(scc);
+        reaches_real_exit[scc] = data
+            .blocks_rpo
+            .iter()
+            .any(|block| cfg.exits.contains(block))
+            || data.succ_sccs.iter().any(|&succ| reaches_real_exit[succ]);
+    }
+
+    let mut blocks = Vec::new();
+    for &scc in sccs.topo_order() {
+        if !reaches_real_exit[scc] {
+            blocks.extend(sccs.scc_data(scc).blocks_rpo.iter().copied());
+        }
+    }
+    blocks
+}
+
 fn erase_closed_dead_insts(func: &mut Function, insts: impl IntoIterator<Item = InstId>) -> bool {
     let mut dead_insts = Vec::new();
     let mut dead_set = FxHashSet::default();
@@ -285,11 +311,17 @@ impl Default for AdceSolver {
     }
 }
 
-fn is_live_root_inst(func: &Function, inst_id: InstId) -> bool {
+fn is_live_root_inst(func: &Function, inst_id: InstId, call_policy: AdceCallPolicy) -> bool {
     if func.dfg.call_info(inst_id).is_some() {
-        // ADCE may erase whole unused read-only calls, so only calls that can
-        // mutate state or escape local control remain liveness roots.
-        return !is_nonmutating_returning_call(func, inst_id);
+        return match call_policy {
+            AdceCallPolicy::ConservativeCalls => true,
+            AdceCallPolicy::UseCurrentFuncEffects => {
+                // ADCE may erase whole unused read-only calls only when the
+                // caller guarantees function-effect summaries match the current
+                // call ABI and function bodies.
+                !is_nonmutating_returning_call(func, inst_id)
+            }
+        };
     }
 
     func.dfg.may_mutate_state(inst_id) || func.dfg.may_transfer_control(inst_id)
@@ -297,11 +329,11 @@ fn is_live_root_inst(func: &Function, inst_id: InstId) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use sonatina_ir::{Module, ir_writer::FuncWriter};
+    use sonatina_ir::{FuncEffectSummary, Module, ir_writer::FuncWriter};
 
     use crate::analysis::func_behavior;
 
-    use super::AdceSolver;
+    use super::{AdceCallPolicy, AdceSolver};
 
     fn parse_module(input: &str) -> sonatina_parser::ParsedModule {
         sonatina_parser::parse_module(input).unwrap_or_else(|errs| panic!("parse failed: {errs:?}"))
@@ -319,6 +351,19 @@ mod tests {
             .into_iter()
             .find(|&func_ref| module.ctx.func_sig(func_ref, |sig| sig.name() == name))
             .unwrap_or_else(|| panic!("missing function {name}"))
+    }
+
+    fn run_default_adce(input: &str) -> (bool, String) {
+        let parsed = parse_module(input);
+        let func_ref = only_func_ref(&parsed.module);
+        let changed = parsed
+            .module
+            .func_store
+            .modify(func_ref, |func| AdceSolver::new().run(func));
+        let dumped = parsed.module.func_store.view(func_ref, |func| {
+            FuncWriter::new(func_ref, func).dump_string()
+        });
+        (changed, dumped)
     }
 
     #[test]
@@ -344,25 +389,131 @@ func private %f(v0.i256) -> i256 {
 }
 "#;
 
+        let (_, dumped) = run_default_adce(source);
+        assert!(
+            dumped.contains("phi (v0 block0)") && dumped.contains("block0:\n        jump block1;"),
+            "ADCE must keep the entry predecessor for live phi values:\n{dumped}"
+        );
+    }
+
+    #[test]
+    fn preserves_branch_to_infinite_loop() {
+        let source = r#"
+target = "evm-ethereum-osaka"
+
+func private %f(v0.i1) -> i256 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        jump block1;
+
+    block2:
+        return 7.i256;
+}
+"#;
+
+        let (_, dumped) = run_default_adce(source);
+        assert!(
+            dumped.contains("br v0 block1 block2;")
+                && dumped.contains("block1:\n        jump block1;")
+                && dumped.contains("return 7.i256;"),
+            "ADCE must preserve divergence as control behavior:\n{dumped}"
+        );
+    }
+
+    #[test]
+    fn removes_dead_ssa_cycle_in_infinite_loop() {
+        let source = r#"
+target = "evm-ethereum-osaka"
+
+func private %f(v0.i1) {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        v1.i256 = phi (1.i256 block0) (v2 block1);
+        v2.i256 = add v1 1.i256;
+        jump block1;
+
+    block2:
+        return;
+}
+"#;
+
+        let (changed, dumped) = run_default_adce(source);
+        assert!(changed);
+        assert!(
+            !dumped.contains(" = phi ") && !dumped.contains(" = add "),
+            "ADCE should remove unused pure cycles inside divergent regions:\n{dumped}"
+        );
+        assert!(
+            dumped.contains("block1:\n        jump block1;"),
+            "ADCE should keep the divergent control sink:\n{dumped}"
+        );
+    }
+
+    #[test]
+    fn runs_on_function_with_no_real_exit() {
+        let source = r#"
+target = "evm-ethereum-osaka"
+
+func private %f() {
+    block0:
+        v0.i256 = add 1.i256 2.i256;
+        jump block0;
+}
+"#;
+
+        let (changed, dumped) = run_default_adce(source);
+        assert!(changed);
+        assert!(
+            !dumped.contains(" = add ") && dumped.contains("jump block0;"),
+            "ADCE should remove dead pure code even when the function never returns:\n{dumped}"
+        );
+    }
+
+    #[test]
+    fn removes_unused_read_only_call() {
+        let source = r#"
+target = "evm-ethereum-osaka"
+
+func private %reader(v0.i256) -> i256 {
+    block0:
+        v1.i256 = evm_sload v0;
+        return v1;
+}
+
+func public %caller(v0.i256) -> i256 {
+    block0:
+        v1.i256 = call %reader v0;
+        return 7.i256;
+}
+"#;
+
         let parsed = parse_module(source);
-        let func_ref = only_func_ref(&parsed.module);
+        func_behavior::analyze_module(&parsed.module);
+        let func_ref = find_func(&parsed.module, "caller");
 
         parsed.module.func_store.modify(func_ref, |func| {
-            AdceSolver::new().run(func);
+            AdceSolver::with_call_policy(AdceCallPolicy::UseCurrentFuncEffects).run(func);
         });
 
         parsed.module.func_store.view(func_ref, |func| {
             let dumped = FuncWriter::new(func_ref, func).dump_string();
             assert!(
-                dumped.contains("phi (v0 block0)")
-                    && dumped.contains("block0:\n        jump block1;"),
-                "ADCE must keep the entry predecessor for live phi values:\n{dumped}"
+                !dumped.contains("call %reader"),
+                "ADCE should remove unused read-only calls:\n{dumped}"
+            );
+            assert!(
+                dumped.contains("return 7.i256;"),
+                "caller should still return the live constant:\n{dumped}"
             );
         });
     }
 
     #[test]
-    fn removes_unused_read_only_call() {
+    fn conservative_call_policy_keeps_unused_read_only_call() {
         let source = r#"
 target = "evm-ethereum-osaka"
 
@@ -390,12 +541,52 @@ func public %caller(v0.i256) -> i256 {
         parsed.module.func_store.view(func_ref, |func| {
             let dumped = FuncWriter::new(func_ref, func).dump_string();
             assert!(
-                !dumped.contains("call %reader"),
-                "ADCE should remove unused read-only calls:\n{dumped}"
+                dumped.contains("call %reader"),
+                "conservative ADCE must keep calls even when stale summaries would classify them as elidable:\n{dumped}"
             );
+        });
+    }
+
+    #[test]
+    fn conservative_call_policy_keeps_out_pointer_call_with_stale_pure_summary() {
+        let source = r#"
+target = "evm-ethereum-osaka"
+
+func private %fill(v0.*i256) {
+    block0:
+        mstore v0 42.i256 i256;
+        return;
+}
+
+func public %caller() -> i256 {
+    block0:
+        v0.*i256 = alloca i256;
+        call %fill v0;
+        v1.i256 = mload v0 i256;
+        return v1;
+}
+"#;
+
+        let parsed = parse_module(source);
+        let fill = find_func(&parsed.module, "fill");
+        parsed.module.ctx.set_func_effects(
+            fill,
+            FuncEffectSummary {
+                will_return: true,
+                ..FuncEffectSummary::default()
+            },
+        );
+        let caller = find_func(&parsed.module, "caller");
+
+        parsed.module.func_store.modify(caller, |func| {
+            AdceSolver::new().run(func);
+        });
+
+        parsed.module.func_store.view(caller, |func| {
+            let dumped = FuncWriter::new(caller, func).dump_string();
             assert!(
-                dumped.contains("return 7.i256;"),
-                "caller should still return the live constant:\n{dumped}"
+                dumped.contains("call %fill"),
+                "conservative ADCE must not trust stale pure summaries for out-pointer calls:\n{dumped}"
             );
         });
     }
@@ -427,23 +618,15 @@ func private %f(v0.i1) {
 }
 "#;
 
-        let parsed = parse_module(source);
-        let func_ref = only_func_ref(&parsed.module);
-
-        parsed.module.func_store.modify(func_ref, |func| {
-            assert!(AdceSolver::new().run(func));
-        });
-
-        parsed.module.func_store.view(func_ref, |func| {
-            let dumped = FuncWriter::new(func_ref, func).dump_string();
-            assert!(
-                !dumped.contains("insert_value") && !dumped.contains("@pair = phi"),
-                "ADCE should remove the unused aggregate cycle:\n{dumped}"
-            );
-            assert!(
-                dumped.contains("return;"),
-                "ADCE should preserve live control flow:\n{dumped}"
-            );
-        });
+        let (changed, dumped) = run_default_adce(source);
+        assert!(changed);
+        assert!(
+            !dumped.contains("insert_value") && !dumped.contains("@pair = phi"),
+            "ADCE should remove the unused aggregate cycle:\n{dumped}"
+        );
+        assert!(
+            dumped.contains("return;"),
+            "ADCE should preserve live control flow:\n{dumped}"
+        );
     }
 }

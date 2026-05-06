@@ -31,7 +31,8 @@ mod exact_pack;
 mod object_liveness;
 
 pub(crate) use exact_pack::{
-    ExactPackItem, PackedObject, pack_exact_peak, pack_exact_with_offsets, pack_objects_presorted,
+    ExactPackItem, ExactPackWorkspace, PackedObject, pack_exact_peak_by,
+    pack_exact_with_offsets_by, pack_objects_presorted,
 };
 #[cfg(test)]
 pub(crate) use object_liveness::BlockLiveSegment;
@@ -249,9 +250,6 @@ pub(crate) fn compute_func_stack_objects(
 
     let mut spilled_values: BitSet<ValueId> = BitSet::default();
     for (v, obj) in analysis.alloc.spill_obj.iter() {
-        if analysis.alloc.scratch_slot_of_value[v].is_some() {
-            continue;
-        }
         if obj.is_some() {
             spilled_values.insert(v);
             spill_obj[v] = *obj;
@@ -1230,7 +1228,12 @@ block0:
         let _ = conflicts[0].insert(LocalObjIdx::new(1));
         let _ = conflicts[1].insert(LocalObjIdx::new(0));
 
-        let packed = pack_exact_with_offsets(&items, &conflicts);
+        let mut workspace = ExactPackWorkspace::default();
+        let packed = pack_exact_with_offsets_by(
+            &items,
+            |lhs, rhs| conflicts[lhs.index()].contains(rhs),
+            &mut workspace,
+        );
         assert_eq!(packed.offsets[&StackObjId::new(1)], 0);
         assert_eq!(packed.offsets[&StackObjId::new(2)], 3);
         assert_eq!(packed.offsets[&StackObjId::new(3)], 5);

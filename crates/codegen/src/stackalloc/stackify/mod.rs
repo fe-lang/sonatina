@@ -13,6 +13,9 @@
 //! - When a value cannot be duplicated from within `DUP16` reach, it is added to `spill_set`,
 //!   assigned a stack object, and reloaded from memory; `spill_set` is discovered via a
 //!   monotone fixed point.
+//! - Scratch spill slots use block liveness plus phi-edge interference, because phi sources and
+//!   results are simultaneous edge assignments even though normal liveness treats phi operands as
+//!   predecessor-tail uses.
 //!
 //! Notes specific to this codebase:
 //! - Critical edges must be split before running this allocator.

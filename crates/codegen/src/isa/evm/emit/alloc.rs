@@ -13,7 +13,9 @@ pub(crate) struct FinalAlloc {
 
 impl FinalAlloc {
     pub(crate) fn new(inner: StackifyAlloc, mem_plan: FuncMemPlan) -> Self {
-        Self { inner, mem_plan }
+        let alloc = Self { inner, mem_plan };
+        alloc.validate_object_actions();
+        alloc
     }
 
     fn abs_addr_for_word(&self, word_off: u32) -> u32 {
@@ -26,6 +28,19 @@ impl FinalAlloc {
             .get(&id)
             .copied()
             .unwrap_or_else(|| panic!("missing stack object location for obj {}", id.as_u32()))
+    }
+
+    fn validate_object_actions(&self) {
+        self.inner.for_each_action(|action| match action {
+            Action::MemLoadObj(id) | Action::MemStoreObj(id) => {
+                assert!(
+                    self.mem_plan.obj_loc.contains_key(id),
+                    "stackify emitted object action for unplaced stack object {}",
+                    id.as_u32()
+                );
+            }
+            _ => {}
+        });
     }
 
     fn dynamic_frame_layout(&self) -> DynamicFrameLayout {

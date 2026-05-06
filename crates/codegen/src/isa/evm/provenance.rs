@@ -51,14 +51,18 @@ impl Provenance {
         self.unknown_non_arg || !self.unknown_arg_indices.is_empty()
     }
 
-    fn add_unknown_arg_index(&mut self, idx: u32) -> bool {
-        if self.unknown_arg_indices.contains(&idx) {
+    fn insert_arg_index(indices: &mut SmallVec<[u32; 4]>, idx: u32) -> bool {
+        if indices.contains(&idx) {
             return false;
         }
-        self.unknown_arg_indices.push(idx);
-        self.unknown_arg_indices.sort_unstable();
-        self.unknown_arg_indices.dedup();
+        indices.push(idx);
+        indices.sort_unstable();
+        indices.dedup();
         true
+    }
+
+    fn add_unknown_arg_index(&mut self, idx: u32) -> bool {
+        Self::insert_arg_index(&mut self.unknown_arg_indices, idx)
     }
 
     fn collapse_arg_bases_to_unknown_arg_indices(&mut self) -> bool {
@@ -347,7 +351,7 @@ pub(crate) fn compute_provenance(
     }
 
     for (idx, &arg) in function.arg_values.iter().enumerate() {
-        if type_can_carry_pointer_provenance(module, function.dfg.value_ty(arg)) {
+        if function.dfg.value_ty(arg).is_pointer(module) {
             prov[arg].bases.push(PtrBase::Arg(idx as u32));
         }
     }
@@ -763,6 +767,34 @@ block0:
         );
 
         assert!(!ret_prov.is_unknown_ptr(), "{ret_prov:?}");
+        assert_eq!(ret_prov.malloc_insts().count(), 0, "{ret_prov:?}");
+    }
+
+    #[test]
+    fn scalar_i256_arg_forwarding_does_not_create_pointer_provenance() {
+        let ret_prov = ret_provenance(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %id(v0.i256) -> i256 {
+block0:
+    return v0;
+}
+
+func public %caller(v0.i256) -> i256 {
+block0:
+    v1.i256 = call %id v0;
+    return v1;
+}
+"#,
+            "caller",
+        );
+
+        assert!(!ret_prov.is_unknown_ptr(), "{ret_prov:?}");
+        assert_eq!(
+            ret_prov.arg_indices().collect::<Vec<_>>(),
+            Vec::<u32>::new()
+        );
         assert_eq!(ret_prov.malloc_insts().count(), 0, "{ret_prov:?}");
     }
 

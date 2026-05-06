@@ -34,6 +34,14 @@ pub(super) fn build_stackify_test_context<'a>(
     let def_info = compute_def_info(func, entry, &value_aliases);
     let phi_results = compute_phi_results(func, &value_aliases);
     let phi_out_sources = compute_phi_out_sources(func, cfg, &value_aliases);
+    let spill_slot_interference =
+        crate::stackalloc::stackify::slots::SpillSlotInterference::compute(
+            func,
+            cfg,
+            liveness,
+            &phi_results,
+            &value_aliases,
+        );
     let mut analysis = MemoryAccessAnalysis::new();
     let mut exact_local_addr: SecondaryMap<ValueId, Option<_>> = SecondaryMap::new();
     for value in func.dfg.values.keys() {
@@ -54,6 +62,7 @@ pub(super) fn build_stackify_test_context<'a>(
         def_info,
         phi_results,
         phi_out_sources,
+        spill_slot_interference,
         has_internal_return: function_has_internal_return(func),
         reach,
         value_aliases,

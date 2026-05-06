@@ -33,6 +33,8 @@ pub(super) struct IterationPlanner<'a, 'ctx, O: StackifyObserver> {
     carry_in: &'a SecondaryMap<BlockId, BitSet<ValueId>>,
     alloc: &'a mut StackifyAlloc,
     spill_requests: &'a mut BitSet<ValueId>,
+    object_spill_requests: &'a mut BitSet<ValueId>,
+    forced_object_spills: &'a BitSet<ValueId>,
     inherited_stack: BTreeMap<BlockId, (BlockId, SymStack)>,
     pending_edges: BTreeMap<BlockId, Vec<PendingEdge<O::DeferredExit>>>,
     planned_blocks: BitSet<BlockId>,
@@ -60,6 +62,8 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
         carry_in: &'a SecondaryMap<BlockId, BitSet<ValueId>>,
         alloc: &'a mut StackifyAlloc,
         spill_requests: &'a mut BitSet<ValueId>,
+        object_spill_requests: &'a mut BitSet<ValueId>,
+        forced_object_spills: &'a BitSet<ValueId>,
         inherited_stack: BTreeMap<BlockId, (BlockId, SymStack)>,
         observer: &'a mut O,
     ) -> Self {
@@ -72,6 +76,8 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
             carry_in,
             alloc,
             spill_requests,
+            object_spill_requests,
+            forced_object_spills,
             inherited_stack,
             pending_edges: BTreeMap::new(),
             planned_blocks: BitSet::default(),
@@ -93,6 +99,8 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
             self.ctx,
             &self.alloc.spill_obj,
             &self.alloc.exact_local_addr,
+            self.object_spill_requests,
+            self.forced_object_spills,
             free_slots,
             &mut *self.slots,
         );
@@ -309,6 +317,8 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
                     self.ctx,
                     &self.alloc.spill_obj,
                     &self.alloc.exact_local_addr,
+                    self.object_spill_requests,
+                    self.forced_object_spills,
                     free_slots,
                     &mut *self.slots,
                 );
@@ -328,6 +338,8 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
                     self.ctx,
                     &self.alloc.spill_obj,
                     &self.alloc.exact_local_addr,
+                    self.object_spill_requests,
+                    self.forced_object_spills,
                     free_slots,
                     &mut *self.slots,
                 );
@@ -355,6 +367,8 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
                     self.ctx,
                     &self.alloc.spill_obj,
                     &self.alloc.exact_local_addr,
+                    self.object_spill_requests,
+                    self.forced_object_spills,
                     free_slots,
                     &mut *self.slots,
                 );
