@@ -21,9 +21,10 @@ use super::{
     malloc_plan::MallocEscapeKind,
     ptr_escape::PtrEscapeSummary,
     static_arena_alloc::{
-        CallSiteObjects, ExactPackItem, FuncStackObjects, LiveRegion, LocalObjIdx, ObjFacts,
-        PackedObject, StableItemIdx, StackObj, StackObjId, StackObjKind, StaticArenaAllocCtx,
-        pack_exact_peak, pack_exact_with_offsets, pack_objects_presorted,
+        CallSiteObjects, ExactPackItem, ExactPackWorkspace, FuncStackObjects, LiveRegion,
+        LocalObjIdx, ObjFacts, PackedObject, StableItemIdx, StackObj, StackObjId, StackObjKind,
+        StaticArenaAllocCtx, pack_exact_peak_by, pack_exact_with_offsets_by,
+        pack_objects_presorted,
     },
 };
 use sonatina_ir::isa::evm::Evm;
@@ -200,21 +201,27 @@ mod tests {
         let _ = shadow_conflicts[0].insert(LocalObjIdx::new(0));
         let _ = shadow_conflicts[0].insert(LocalObjIdx::new(1));
 
+        let stable_ctx = StablePackCtx {
+            sorted_objects: &sorted_objects,
+            must_stable: &must_stable,
+            real_conflicts_by_local: &real_conflicts,
+            shadow_conflicts_by_call: &shadow_conflicts,
+        };
+        let mut entries = Vec::new();
         let mut items = Vec::new();
-        let mut conflicts = Vec::new();
-        build_stable_pack(
+        build_stable_pack_entries(
+            &mut entries,
             &mut items,
-            &mut conflicts,
             &[shadow],
-            StablePackCtx {
-                sorted_objects: &sorted_objects,
-                must_stable: &must_stable,
-                real_conflicts_by_local: &real_conflicts,
-                shadow_conflicts_by_call: &shadow_conflicts,
-            },
+            stable_ctx,
             &promoted_optional,
         );
-        let packed = pack_exact_with_offsets(&items, &conflicts);
+        let mut pack_workspace = ExactPackWorkspace::default();
+        let packed = pack_exact_with_offsets_by(
+            &items,
+            |lhs, rhs| stable_pack_entries_conflict(stable_ctx, &entries, lhs, rhs),
+            &mut pack_workspace,
+        );
 
         let real0_off = packed.offsets[&real0.id];
         let real1_off = packed.offsets[&real1.id];
@@ -226,15 +233,18 @@ mod tests {
         assert_eq!(shadow_off, 4);
     }
 
-    #[test]
-    fn swap_search_uses_bounded_shortlists_once_pair_count_exceeds_limit() {
-        let candidate_count = 320usize;
+    fn with_half_promoted_placement_problem(
+        candidate_count: usize,
+        size_mod: usize,
+        recursive_cost_mod: usize,
+        f: impl FnOnce(&PlacementProblem<'_>, &PlacementState),
+    ) {
         let objects: Vec<_> = (0..candidate_count)
             .map(|idx| {
                 stack_obj(
                     idx as u32,
                     StackObjKind::Alloca(InstId::from_u32(idx as u32)),
-                    1 + (idx % 3) as u32,
+                    1 + (idx % size_mod) as u32,
                     region(0, 0, 1),
                 )
             })
@@ -257,7 +267,7 @@ mod tests {
                 obj_id: obj.id,
                 local_idx: LocalObjIdx::new(local_idx),
                 size_words: obj.size_words,
-                recursive_access_cost: (local_idx % 11) as u64,
+                recursive_access_cost: (local_idx % recursive_cost_mod) as u64,
                 shadow_copy_words: 0,
                 live_call_indices: SmallVec::new(),
             })
@@ -286,110 +296,230 @@ mod tests {
             state.apply_add(&problem, candidate_idx);
         }
 
-        let feasible_add_count = state.promoted.iter().filter(|&&promoted| !promoted).count();
-        let feasible_remove_count = state.promoted_count;
-        assert!(
-            feasible_add_count.saturating_mul(feasible_remove_count) > SWAP_FULL_PAIR_LIMIT,
-            "test must exercise the bounded swap shortlist path"
-        );
+        f(&problem, &state);
+    }
 
-        let mut lb_state = PlacementLowerBoundState::new(&problem);
-        let mut search_work = SearchWorkBuffers::default();
-        let current_score = FuncPlacementScore {
-            scratch_words: u32::MAX,
-            stable_words: u32::MAX,
-            cost: u64::MAX,
+    fn with_two_call_shadow_delta_problem(
+        f: impl FnOnce(&PlacementProblem<'_>, &mut PlacementState),
+    ) {
+        let objects = vec![
+            stack_obj(
+                0,
+                StackObjKind::Alloca(InstId::from_u32(0)),
+                4,
+                region(0, 0, 1),
+            ),
+            stack_obj(
+                1,
+                StackObjKind::Alloca(InstId::from_u32(1)),
+                4,
+                region(1, 0, 1),
+            ),
+        ];
+        let obj_size_words = objects.iter().map(|obj| (obj.id, obj.size_words)).collect();
+        let call_sites = vec![
+            CallSiteObjects {
+                inst: InstId::from_u32(10),
+                call_rank: 10,
+                callee: FuncRef::from_u32(0),
+                result_count: 0,
+                arg_count: 0,
+                live_across_objs: vec![StackObjId::new(0)],
+                callee_visible_objs: Vec::new(),
+            },
+            CallSiteObjects {
+                inst: InstId::from_u32(11),
+                call_rank: 20,
+                callee: FuncRef::from_u32(0),
+                result_count: 0,
+                arg_count: 0,
+                live_across_objs: vec![StackObjId::new(1)],
+                callee_visible_objs: Vec::new(),
+            },
+        ];
+        let stack = FuncStackObjects {
+            objects,
+            obj_facts: FxHashMap::default(),
+            obj_size_words,
+            alloca_ids: FxHashMap::default(),
+            spill_obj: SecondaryMap::default(),
+            call_sites,
+            next_obj_id: 2,
         };
-        let _ = find_best_exact_swap_move(
-            &problem,
-            &state,
-            &mut lb_state,
-            current_score,
-            &mut FuncPlacementScoreWorkspace::default(),
-            &mut search_work,
-        );
+        let sorted_objects: Vec<_> = stack.objects.iter().collect();
+        let sorted_calls: Vec<_> = stack.call_sites.iter().collect();
+        let candidates = sorted_objects
+            .iter()
+            .enumerate()
+            .map(|(local_idx, obj)| CandidateMeta {
+                obj_id: obj.id,
+                local_idx: LocalObjIdx::new(local_idx),
+                size_words: obj.size_words,
+                recursive_access_cost: 0,
+                shadow_copy_words: u64::from(obj.size_words),
+                live_call_indices: smallvec![local_idx as u32],
+            })
+            .collect();
+        let mut shadow_conflicts_by_call = vec![BitSet::default(); 2];
+        let _ = shadow_conflicts_by_call[0].insert(LocalObjIdx::new(0));
+        let _ = shadow_conflicts_by_call[1].insert(LocalObjIdx::new(1));
+        let cost_model = ArenaCostModel::default();
+        let problem = PlacementProblem {
+            stack: &stack,
+            sorted_objects,
+            sorted_calls,
+            must_stable: BitSet::default(),
+            must_stable_by_local: vec![false; 2],
+            candidates,
+            base_shadow_words_by_call: vec![4, 4],
+            base_shadow_copy_words: 8,
+            base_recursive_access_cost: 0,
+            frame_setup_cost: 0,
+            shadow_cost_per_word: 0,
+            next_shadow_base_id: stack.next_obj_id,
+            is_recursive: false,
+            cost_model: &cost_model,
+            real_conflicts_by_local: vec![BitSet::default(); 2],
+            shadow_conflicts_by_call,
+        };
+        let mut state = PlacementState::new(&problem);
 
-        assert!(!search_work.add_shortlist.is_empty());
-        assert!(!search_work.remove_shortlist.is_empty());
-        assert!(search_work.add_shortlist.len() <= SWAP_SHORTLIST_PER_METRIC * 3);
-        assert!(search_work.remove_shortlist.len() <= SWAP_SHORTLIST_PER_METRIC * 3);
-        assert_eq!(
-            search_work.swap_exact.len(),
-            search_work
-                .add_shortlist
-                .len()
-                .saturating_mul(search_work.remove_shortlist.len()),
-            "bounded swap search should only exact-score the shortlist cross-product",
-        );
+        f(&problem, &mut state);
+    }
+
+    fn stable_peak_with_full_shadow_scan(
+        problem: &PlacementProblem<'_>,
+        state: &PlacementState,
+        mv: PlacementMove,
+    ) -> u32 {
+        let mut entries = Vec::new();
+        let mut items = Vec::new();
+        let (insert_idx, skip_idx) = stable_local_indices_for_move(problem, mv);
+        for local_idx in TrialLocalIter::new(&state.stable_real_locals, insert_idx, skip_idx) {
+            let obj = problem.sorted_objects[local_idx as usize];
+            push_stable_real_entry(&mut entries, local_idx, obj);
+        }
+        for call_idx in 0..problem.sorted_calls.len() {
+            let shadow_words = shadow_words_for_call_after_move(problem, state, mv, call_idx);
+            if shadow_words != 0 {
+                push_score_shadow_entry(&mut entries, problem, call_idx as u32, shadow_words);
+            }
+        }
+        finish_stable_pack_entries(&mut entries, &mut items);
+        let stable_ctx = StablePackCtx {
+            sorted_objects: &problem.sorted_objects,
+            must_stable: &problem.must_stable,
+            real_conflicts_by_local: &problem.real_conflicts_by_local,
+            shadow_conflicts_by_call: &problem.shadow_conflicts_by_call,
+        };
+        let mut pack_workspace = ExactPackWorkspace::default();
+        pack_exact_peak_by(
+            &items,
+            |lhs, rhs| stable_pack_entries_conflict(stable_ctx, &entries, lhs, rhs),
+            &mut pack_workspace,
+        )
+    }
+
+    fn has_stable_entry(entries: &[StablePackEntry], member: StablePackMember) -> bool {
+        entries.iter().any(|entry| entry.member == member)
+    }
+
+    #[test]
+    fn swap_search_uses_bounded_shortlists_once_pair_count_exceeds_limit() {
+        with_half_promoted_placement_problem(320, 3, 11, |problem, state| {
+            let feasible_add_count = state.promoted.iter().filter(|&&promoted| !promoted).count();
+            let feasible_remove_count = state.promoted_count;
+            assert!(
+                feasible_add_count.saturating_mul(feasible_remove_count) > SWAP_FULL_PAIR_LIMIT,
+                "test must exercise the bounded swap shortlist path"
+            );
+
+            let mut lb_state = PlacementLowerBoundState::new(problem);
+            let mut search_work = SearchWorkBuffers::default();
+            let current_score = FuncPlacementScore {
+                scratch_words: u32::MAX,
+                stable_words: u32::MAX,
+                cost: u64::MAX,
+            };
+            let _ = find_best_exact_swap_move(
+                problem,
+                state,
+                &mut lb_state,
+                current_score,
+                &mut FuncPlacementScoreWorkspace::default(),
+                &mut search_work,
+            );
+
+            assert!(!search_work.add_shortlist.is_empty());
+            assert!(!search_work.remove_shortlist.is_empty());
+            assert!(search_work.add_shortlist.len() <= SWAP_SHORTLIST_PER_METRIC * 3);
+            assert!(search_work.remove_shortlist.len() <= SWAP_SHORTLIST_PER_METRIC * 3);
+            assert_eq!(
+                search_work.swap_exact.len(),
+                search_work
+                    .add_shortlist
+                    .len()
+                    .saturating_mul(search_work.remove_shortlist.len()),
+                "bounded swap search should only exact-score the shortlist cross-product",
+            );
+        });
     }
 
     #[test]
     fn one_flip_search_uses_bounded_shortlists_once_candidate_count_exceeds_limit() {
-        let candidate_count = ONE_FLIP_FULL_LIMIT + 64;
-        let objects: Vec<_> = (0..candidate_count)
-            .map(|idx| {
-                stack_obj(
-                    idx as u32,
-                    StackObjKind::Alloca(InstId::from_u32(idx as u32)),
-                    1 + (idx % 5) as u32,
-                    region(0, 0, 1),
-                )
-            })
-            .collect();
-        let obj_size_words = objects.iter().map(|obj| (obj.id, obj.size_words)).collect();
-        let stack = FuncStackObjects {
-            objects,
-            obj_facts: FxHashMap::default(),
-            obj_size_words,
-            alloca_ids: FxHashMap::default(),
-            spill_obj: SecondaryMap::default(),
-            call_sites: Vec::new(),
-            next_obj_id: candidate_count as u32,
-        };
-        let sorted_objects: Vec<_> = stack.objects.iter().collect();
-        let candidates = sorted_objects
-            .iter()
-            .enumerate()
-            .map(|(local_idx, obj)| CandidateMeta {
-                obj_id: obj.id,
-                local_idx: LocalObjIdx::new(local_idx),
-                size_words: obj.size_words,
-                recursive_access_cost: (local_idx % 13) as u64,
-                shadow_copy_words: 0,
-                live_call_indices: SmallVec::new(),
-            })
-            .collect();
-        let cost_model = ArenaCostModel::default();
-        let problem = PlacementProblem {
-            stack: &stack,
-            sorted_objects,
-            sorted_calls: Vec::new(),
-            must_stable: BitSet::default(),
-            must_stable_by_local: vec![false; candidate_count],
-            candidates,
-            base_shadow_words_by_call: Vec::new(),
-            base_shadow_copy_words: 0,
-            base_recursive_access_cost: 0,
-            frame_setup_cost: 0,
-            shadow_cost_per_word: 0,
-            next_shadow_base_id: stack.next_obj_id,
-            is_recursive: false,
-            cost_model: &cost_model,
-            real_conflicts_by_local: vec![BitSet::default(); candidate_count],
-            shadow_conflicts_by_call: Vec::new(),
-        };
-        let mut state = PlacementState::new(&problem);
-        for candidate_idx in 0..candidate_count / 2 {
-            state.apply_add(&problem, candidate_idx);
-        }
+        with_half_promoted_placement_problem(ONE_FLIP_FULL_LIMIT + 64, 5, 13, |problem, state| {
+            let mut work = SearchWorkBuffers::default();
+            collect_one_flip_shortlists(problem, state, &mut work);
 
-        let mut work = SearchWorkBuffers::default();
-        collect_one_flip_shortlists(&problem, &state, &mut work);
+            assert!(!work.add_shortlist.is_empty());
+            assert!(!work.remove_shortlist.is_empty());
+            assert!(work.add_shortlist.len() <= ONE_FLIP_SHORTLIST_PER_METRIC * 3);
+            assert!(work.remove_shortlist.len() <= ONE_FLIP_SHORTLIST_PER_METRIC * 3);
+        });
+    }
 
-        assert!(!work.add_shortlist.is_empty());
-        assert!(!work.remove_shortlist.is_empty());
-        assert!(work.add_shortlist.len() <= ONE_FLIP_SHORTLIST_PER_METRIC * 3);
-        assert!(work.remove_shortlist.len() <= ONE_FLIP_SHORTLIST_PER_METRIC * 3);
+    #[test]
+    fn stable_score_shadow_delta_matches_full_call_scan() {
+        with_two_call_shadow_delta_problem(|problem, state| {
+            let mut workspace = FuncPlacementScoreWorkspace::default();
+
+            let add_move = PlacementMove::Add(0);
+            assert_eq!(
+                stable_peak_with_move(problem, state, add_move, &mut workspace),
+                stable_peak_with_full_shadow_scan(problem, state, add_move),
+            );
+            assert!(has_stable_entry(
+                &workspace.stable_entries,
+                StablePackMember::Real(LocalObjIdx::new(0)),
+            ));
+            assert!(!has_stable_entry(
+                &workspace.stable_entries,
+                StablePackMember::Shadow(0),
+            ));
+            assert!(has_stable_entry(
+                &workspace.stable_entries,
+                StablePackMember::Shadow(1),
+            ));
+
+            state.apply_add(problem, 0);
+            let remove_move = PlacementMove::Remove(0);
+            assert_eq!(
+                stable_peak_with_move(problem, state, remove_move, &mut workspace),
+                stable_peak_with_full_shadow_scan(problem, state, remove_move),
+            );
+            assert!(!has_stable_entry(
+                &workspace.stable_entries,
+                StablePackMember::Real(LocalObjIdx::new(0)),
+            ));
+            assert!(has_stable_entry(
+                &workspace.stable_entries,
+                StablePackMember::Shadow(0),
+            ));
+            assert!(has_stable_entry(
+                &workspace.stable_entries,
+                StablePackMember::Shadow(1),
+            ));
+        });
     }
 }
 
@@ -496,21 +626,41 @@ struct FuncPlacementScore {
 struct FuncPlacementWorkspace {
     scratch_pack: Vec<PackedObject>,
     shadow_objs: Vec<ShadowPackObj>,
+    stable_entries: Vec<StablePackEntry>,
     stable_items: Vec<ExactPackItem<StableItemIdx>>,
-    stable_conflicts: Vec<BitSet<StableItemIdx>>,
+    stable_pack: ExactPackWorkspace<StableItemIdx>,
 }
 
 #[derive(Default)]
 struct FuncPlacementScoreWorkspace {
+    scratch_items: Vec<ExactPackItem<LocalObjIdx>>,
+    stable_entries: Vec<StablePackEntry>,
     stable_items: Vec<ExactPackItem<StableItemIdx>>,
-    stable_conflicts: Vec<BitSet<StableItemIdx>>,
+    changed_shadow_calls: Vec<u32>,
+    scratch_pack: ExactPackWorkspace<LocalObjIdx>,
+    stable_pack: ExactPackWorkspace<StableItemIdx>,
 }
 
+#[derive(Clone, Copy)]
 struct StablePackCtx<'a> {
     sorted_objects: &'a [&'a StackObj],
     must_stable: &'a BitSet<StackObjId>,
     real_conflicts_by_local: &'a [BitSet<LocalObjIdx>],
     shadow_conflicts_by_call: &'a [BitSet<LocalObjIdx>],
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StablePackMember {
+    Real(LocalObjIdx),
+    Shadow(u32),
+}
+
+#[derive(Clone, Copy, Debug)]
+struct StablePackEntry {
+    sort_key: (u32, u32, u32),
+    member: StablePackMember,
+    id: StackObjId,
+    size_words: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -1210,23 +1360,25 @@ fn solve_func_placement(
     let problem = PlacementProblem::new(stack, facts, is_recursive, cost_model);
     let mut state = PlacementState::new(&problem);
     let mut lb_state = PlacementLowerBoundState::new(&problem);
+    let stable_item_capacity = problem
+        .sorted_objects
+        .len()
+        .saturating_add(problem.sorted_calls.len());
     let mut workspace = FuncPlacementWorkspace {
         scratch_pack: Vec::with_capacity(problem.sorted_objects.len()),
         shadow_objs: Vec::with_capacity(problem.sorted_calls.len()),
-        stable_items: Vec::with_capacity(
-            problem
-                .sorted_objects
-                .len()
-                .saturating_add(problem.sorted_calls.len()),
-        ),
-        stable_conflicts: Vec::with_capacity(
-            problem
-                .sorted_objects
-                .len()
-                .saturating_add(problem.sorted_calls.len()),
-        ),
+        stable_entries: Vec::with_capacity(stable_item_capacity),
+        stable_items: Vec::with_capacity(stable_item_capacity),
+        stable_pack: ExactPackWorkspace::with_capacity(stable_item_capacity),
     };
-    let mut score_workspace = FuncPlacementScoreWorkspace::default();
+    let mut score_workspace = FuncPlacementScoreWorkspace {
+        scratch_items: Vec::with_capacity(problem.sorted_objects.len()),
+        stable_entries: Vec::with_capacity(stable_item_capacity),
+        stable_items: Vec::with_capacity(stable_item_capacity),
+        changed_shadow_calls: Vec::new(),
+        scratch_pack: ExactPackWorkspace::with_capacity(problem.sorted_objects.len()),
+        stable_pack: ExactPackWorkspace::with_capacity(stable_item_capacity),
+    };
     let mut search_work = SearchWorkBuffers::default();
     let mut best_score =
         evaluate_func_placement_score(&problem, &state, PlacementMove::None, &mut score_workspace);
@@ -1337,19 +1489,24 @@ fn evaluate_func_placement(
         call_preserve.insert(call.inst, plan);
     }
 
-    build_stable_pack(
+    let stable_ctx = StablePackCtx {
+        sorted_objects: &problem.sorted_objects,
+        must_stable: &problem.must_stable,
+        real_conflicts_by_local: &problem.real_conflicts_by_local,
+        shadow_conflicts_by_call: &problem.shadow_conflicts_by_call,
+    };
+    build_stable_pack_entries(
+        &mut workspace.stable_entries,
         &mut workspace.stable_items,
-        &mut workspace.stable_conflicts,
         &workspace.shadow_objs,
-        StablePackCtx {
-            sorted_objects: &problem.sorted_objects,
-            must_stable: &problem.must_stable,
-            real_conflicts_by_local: &problem.real_conflicts_by_local,
-            shadow_conflicts_by_call: &problem.shadow_conflicts_by_call,
-        },
+        stable_ctx,
         promoted_optional,
     );
-    let stable_pack = pack_exact_with_offsets(&workspace.stable_items, &workspace.stable_conflicts);
+    let stable_pack = pack_exact_with_offsets_by(
+        &workspace.stable_items,
+        |lhs, rhs| stable_pack_entries_conflict(stable_ctx, &workspace.stable_entries, lhs, rhs),
+        &mut workspace.stable_pack,
+    );
     let stable_offsets = stable_pack.offsets;
     let stable_words = stable_pack.max_used;
 
@@ -1403,6 +1560,37 @@ fn evaluate_func_placement_score(
     )
 }
 
+fn score_move_if_better(
+    problem: &PlacementProblem<'_>,
+    state: &PlacementState,
+    mv: PlacementMove,
+    current_score: FuncPlacementScore,
+    workspace: &mut FuncPlacementScoreWorkspace,
+) -> Option<FuncPlacementScore> {
+    let (shadow_copy_words, recursive_access_cost) = additive_terms_with_move(problem, state, mv);
+    let scratch_words = scratch_peak_with_move(problem, state, mv, workspace);
+    let lower_bound = score_from_words(
+        problem,
+        recursive_access_cost,
+        shadow_copy_words,
+        scratch_words,
+        0,
+    );
+    if !is_better_score(lower_bound, current_score) {
+        return None;
+    }
+
+    let stable_words = stable_peak_with_move(problem, state, mv, workspace);
+    let exact = score_from_words(
+        problem,
+        recursive_access_cost,
+        shadow_copy_words,
+        scratch_words,
+        stable_words,
+    );
+    is_better_score(exact, current_score).then_some(exact)
+}
+
 fn score_from_words(
     problem: &PlacementProblem<'_>,
     recursive_access_cost: u64,
@@ -1429,10 +1617,10 @@ fn scratch_peak_with_move(
     mv: PlacementMove,
     workspace: &mut FuncPlacementScoreWorkspace,
 ) -> u32 {
-    let _ = workspace;
     let (insert_idx, skip_idx) = scratch_local_indices_for_move(problem, mv);
-    let items: Vec<_> = TrialLocalIter::new(&state.scratch_real_locals, insert_idx, skip_idx)
-        .map(|local_idx| {
+    workspace.scratch_items.clear();
+    workspace.scratch_items.extend(
+        TrialLocalIter::new(&state.scratch_real_locals, insert_idx, skip_idx).map(|local_idx| {
             let obj = problem.sorted_objects[local_idx as usize];
             ExactPackItem {
                 id: obj.id,
@@ -1440,9 +1628,13 @@ fn scratch_peak_with_move(
                 size_words: obj.size_words,
                 min_offset_words: 0,
             }
-        })
-        .collect();
-    pack_exact_peak(&items, &problem.real_conflicts_by_local)
+        }),
+    );
+    pack_exact_peak_by(
+        &workspace.scratch_items,
+        |lhs, rhs| problem.real_conflicts_by_local[lhs.index()].contains(rhs),
+        &mut workspace.scratch_pack,
+    )
 }
 
 fn stable_peak_with_move(
@@ -1451,46 +1643,25 @@ fn stable_peak_with_move(
     mv: PlacementMove,
     workspace: &mut FuncPlacementScoreWorkspace,
 ) -> u32 {
-    let promoted_optional = promoted_optional_with_move(problem, state, mv);
-    let shadow_objs = shadow_pack_objs_for_move(problem, state, mv);
-    build_stable_pack(
+    let stable_ctx = StablePackCtx {
+        sorted_objects: &problem.sorted_objects,
+        must_stable: &problem.must_stable,
+        real_conflicts_by_local: &problem.real_conflicts_by_local,
+        shadow_conflicts_by_call: &problem.shadow_conflicts_by_call,
+    };
+    build_stable_pack_entries_for_move(
+        &mut workspace.stable_entries,
         &mut workspace.stable_items,
-        &mut workspace.stable_conflicts,
-        &shadow_objs,
-        StablePackCtx {
-            sorted_objects: &problem.sorted_objects,
-            must_stable: &problem.must_stable,
-            real_conflicts_by_local: &problem.real_conflicts_by_local,
-            shadow_conflicts_by_call: &problem.shadow_conflicts_by_call,
-        },
-        &promoted_optional,
+        &mut workspace.changed_shadow_calls,
+        problem,
+        state,
+        mv,
     );
-    pack_exact_peak(&workspace.stable_items, &workspace.stable_conflicts)
-}
-
-fn promoted_optional_with_move(
-    problem: &PlacementProblem<'_>,
-    state: &PlacementState,
-    mv: PlacementMove,
-) -> BitSet<StackObjId> {
-    let mut promoted = problem.promoted_optional(state);
-    match mv {
-        PlacementMove::None => {}
-        PlacementMove::Add(candidate_idx) => {
-            let _ = promoted.insert(problem.candidates[candidate_idx].obj_id);
-        }
-        PlacementMove::Remove(candidate_idx) => {
-            promoted.remove(problem.candidates[candidate_idx].obj_id);
-        }
-        PlacementMove::Swap {
-            add_idx,
-            remove_idx,
-        } => {
-            promoted.remove(problem.candidates[remove_idx].obj_id);
-            let _ = promoted.insert(problem.candidates[add_idx].obj_id);
-        }
-    }
-    promoted
+    pack_exact_peak_by(
+        &workspace.stable_items,
+        |lhs, rhs| stable_pack_entries_conflict(stable_ctx, &workspace.stable_entries, lhs, rhs),
+        &mut workspace.stable_pack,
+    )
 }
 
 fn shadow_words_for_call_after_move(
@@ -1530,35 +1701,6 @@ fn shadow_words_for_call_after_move(
     shadow_words
 }
 
-fn shadow_pack_objs_for_move(
-    problem: &PlacementProblem<'_>,
-    state: &PlacementState,
-    mv: PlacementMove,
-) -> Vec<ShadowPackObj> {
-    let mut shadow_objs = Vec::new();
-    for (call_idx, &call) in problem.sorted_calls.iter().enumerate() {
-        let shadow_words = shadow_words_for_call_after_move(problem, state, mv, call_idx);
-        if shadow_words == 0 {
-            continue;
-        }
-        shadow_objs.push(ShadowPackObj {
-            call_idx: call_idx as u32,
-            obj: StackObj {
-                id: StackObjId::new(
-                    problem_shadow_order_id(problem.next_shadow_base_id, call_idx) as usize,
-                ),
-                kind: StackObjKind::Shadow(call.inst),
-                size_words: shadow_words,
-                region: LiveRegion::sort_only(call.call_rank),
-                access_weight: 0,
-                load_count: 0,
-                store_count: 0,
-            },
-        });
-    }
-    shadow_objs
-}
-
 fn find_best_exact_one_flip_move(
     problem: &PlacementProblem<'_>,
     state: &PlacementState,
@@ -1586,8 +1728,7 @@ fn find_best_exact_one_flip_move(
         } else {
             PlacementMove::Add(candidate_idx)
         };
-        let exact = evaluate_func_placement_score(problem, state, mv, exact_ws);
-        if is_better_score(exact, current_score) {
+        if let Some(exact) = score_move_if_better(problem, state, mv, current_score, exact_ws) {
             work.one_flip_exact.push(ExactMoveEval { mv, exact });
         }
     }
@@ -1641,8 +1782,9 @@ fn find_best_exact_swap_move(
                     add_idx,
                     remove_idx,
                 };
-                let exact = evaluate_func_placement_score(problem, state, mv, exact_ws);
-                if is_better_score(exact, current_score) {
+                if let Some(exact) =
+                    score_move_if_better(problem, state, mv, current_score, exact_ws)
+                {
                     work.swap_exact.push(ExactMoveEval { mv, exact });
                 }
             }
@@ -1655,8 +1797,9 @@ fn find_best_exact_swap_move(
                     add_idx,
                     remove_idx,
                 };
-                let exact = evaluate_func_placement_score(problem, state, mv, exact_ws);
-                if is_better_score(exact, current_score) {
+                if let Some(exact) =
+                    score_move_if_better(problem, state, mv, current_score, exact_ws)
+                {
                     work.swap_exact.push(ExactMoveEval { mv, exact });
                 }
             }
@@ -1846,77 +1989,171 @@ fn build_scratch_pack(
     }
 }
 
-fn build_stable_pack(
+fn build_stable_pack_entries(
+    stable_entries: &mut Vec<StablePackEntry>,
     stable_items: &mut Vec<ExactPackItem<StableItemIdx>>,
-    stable_conflicts: &mut Vec<BitSet<StableItemIdx>>,
     shadow_objs: &[ShadowPackObj],
     ctx: StablePackCtx<'_>,
     promoted_optional: &BitSet<StackObjId>,
 ) {
-    #[derive(Clone, Copy)]
-    enum StablePackMember {
-        Real(LocalObjIdx),
-        Shadow(u32),
-    }
-
+    stable_entries.clear();
     stable_items.clear();
-    stable_conflicts.clear();
-    let mut members = Vec::new();
     for (local_idx, &obj) in ctx.sorted_objects.iter().enumerate() {
         if !is_stable_real(ctx.must_stable, promoted_optional, obj.id) || obj.size_words == 0 {
             continue;
         }
-        members.push((
-            obj.region.sort_key(obj.id),
-            StablePackMember::Real(LocalObjIdx::new(local_idx)),
-            obj.id,
-            obj.size_words,
-        ));
+        push_stable_real_entry(stable_entries, local_idx as u32, obj);
     }
     for shadow in shadow_objs {
         if shadow.obj.size_words == 0 {
             continue;
         }
-        members.push((
-            shadow.obj.region.sort_key(shadow.obj.id),
-            StablePackMember::Shadow(shadow.call_idx),
-            shadow.obj.id,
-            shadow.obj.size_words,
-        ));
+        stable_entries.push(StablePackEntry {
+            sort_key: shadow.obj.region.sort_key(shadow.obj.id),
+            member: StablePackMember::Shadow(shadow.call_idx),
+            id: shadow.obj.id,
+            size_words: shadow.obj.size_words,
+        });
     }
-    members.sort_unstable_by_key(|(sort_key, _, _, _)| *sort_key);
+    finish_stable_pack_entries(stable_entries, stable_items);
+}
 
-    for (item_idx, (_sort_key, member, id, size_words)) in members.iter().enumerate() {
+fn build_stable_pack_entries_for_move(
+    stable_entries: &mut Vec<StablePackEntry>,
+    stable_items: &mut Vec<ExactPackItem<StableItemIdx>>,
+    changed_shadow_calls: &mut Vec<u32>,
+    problem: &PlacementProblem<'_>,
+    state: &PlacementState,
+    mv: PlacementMove,
+) {
+    stable_entries.clear();
+    stable_items.clear();
+    let (insert_idx, skip_idx) = stable_local_indices_for_move(problem, mv);
+    for local_idx in TrialLocalIter::new(&state.stable_real_locals, insert_idx, skip_idx) {
+        let obj = problem.sorted_objects[local_idx as usize];
+        push_stable_real_entry(stable_entries, local_idx, obj);
+    }
+    push_stable_shadow_entries_for_move(stable_entries, changed_shadow_calls, problem, state, mv);
+    finish_stable_pack_entries(stable_entries, stable_items);
+}
+
+fn push_stable_real_entry(
+    stable_entries: &mut Vec<StablePackEntry>,
+    local_idx: u32,
+    obj: &StackObj,
+) {
+    if obj.size_words == 0 {
+        return;
+    }
+    stable_entries.push(StablePackEntry {
+        sort_key: obj.region.sort_key(obj.id),
+        member: StablePackMember::Real(LocalObjIdx::new(local_idx as usize)),
+        id: obj.id,
+        size_words: obj.size_words,
+    });
+}
+
+fn push_stable_shadow_entries_for_move(
+    stable_entries: &mut Vec<StablePackEntry>,
+    changed_shadow_calls: &mut Vec<u32>,
+    problem: &PlacementProblem<'_>,
+    state: &PlacementState,
+    mv: PlacementMove,
+) {
+    collect_changed_shadow_calls(problem, mv, changed_shadow_calls);
+    for &call_idx in &state.nonzero_shadow_calls {
+        if changed_shadow_calls.binary_search(&call_idx).is_ok() {
+            continue;
+        }
+        push_score_shadow_entry(
+            stable_entries,
+            problem,
+            call_idx,
+            state.shadow_words_by_call[call_idx as usize],
+        );
+    }
+    for &call_idx in changed_shadow_calls.iter() {
+        let shadow_words = shadow_words_for_call_after_move(problem, state, mv, call_idx as usize);
+        if shadow_words != 0 {
+            push_score_shadow_entry(stable_entries, problem, call_idx, shadow_words);
+        }
+    }
+}
+
+fn collect_changed_shadow_calls(
+    problem: &PlacementProblem<'_>,
+    mv: PlacementMove,
+    changed_shadow_calls: &mut Vec<u32>,
+) {
+    changed_shadow_calls.clear();
+    match mv {
+        PlacementMove::None => {}
+        PlacementMove::Add(candidate_idx) | PlacementMove::Remove(candidate_idx) => {
+            changed_shadow_calls.extend(problem.candidates[candidate_idx].live_call_indices.iter());
+        }
+        PlacementMove::Swap {
+            add_idx,
+            remove_idx,
+        } => {
+            changed_shadow_calls.extend(problem.candidates[add_idx].live_call_indices.iter());
+            changed_shadow_calls.extend(problem.candidates[remove_idx].live_call_indices.iter());
+        }
+    }
+    changed_shadow_calls.sort_unstable();
+    changed_shadow_calls.dedup();
+}
+
+fn push_score_shadow_entry(
+    stable_entries: &mut Vec<StablePackEntry>,
+    problem: &PlacementProblem<'_>,
+    call_idx: u32,
+    size_words: u32,
+) {
+    let id = StackObjId::new(
+        problem_shadow_order_id(problem.next_shadow_base_id, call_idx as usize) as usize,
+    );
+    let call = problem.sorted_calls[call_idx as usize];
+    stable_entries.push(StablePackEntry {
+        sort_key: (call.call_rank, call.call_rank, id.as_u32()),
+        member: StablePackMember::Shadow(call_idx),
+        id,
+        size_words,
+    });
+}
+
+fn finish_stable_pack_entries(
+    stable_entries: &mut [StablePackEntry],
+    stable_items: &mut Vec<ExactPackItem<StableItemIdx>>,
+) {
+    stable_entries.sort_unstable_by_key(|entry| entry.sort_key);
+    for (item_idx, entry) in stable_entries.iter().enumerate() {
         stable_items.push(ExactPackItem {
-            id: *id,
+            id: entry.id,
             idx: StableItemIdx::new(item_idx),
-            size_words: *size_words,
+            size_words: entry.size_words,
             min_offset_words: 0,
         });
-        stable_conflicts.push(BitSet::default());
-        let _ = member;
     }
+}
 
-    for lhs_idx in 0..members.len() {
-        for rhs_idx in lhs_idx + 1..members.len() {
-            let conflicts = match (members[lhs_idx].1, members[rhs_idx].1) {
-                (StablePackMember::Real(lhs), StablePackMember::Real(rhs)) => {
-                    ctx.real_conflicts_by_local[lhs.index()].contains(rhs)
-                }
-                (StablePackMember::Real(local), StablePackMember::Shadow(call_idx))
-                | (StablePackMember::Shadow(call_idx), StablePackMember::Real(local)) => {
-                    ctx.shadow_conflicts_by_call[call_idx as usize].contains(local)
-                }
-                (StablePackMember::Shadow(_), StablePackMember::Shadow(_)) => false,
-            };
-            if !conflicts {
-                continue;
-            }
-            let lhs = StableItemIdx::new(lhs_idx);
-            let rhs = StableItemIdx::new(rhs_idx);
-            let _ = stable_conflicts[lhs.index()].insert(rhs);
-            let _ = stable_conflicts[rhs.index()].insert(lhs);
+fn stable_pack_entries_conflict(
+    ctx: StablePackCtx<'_>,
+    stable_entries: &[StablePackEntry],
+    lhs: StableItemIdx,
+    rhs: StableItemIdx,
+) -> bool {
+    match (
+        stable_entries[lhs.index()].member,
+        stable_entries[rhs.index()].member,
+    ) {
+        (StablePackMember::Real(lhs), StablePackMember::Real(rhs)) => {
+            ctx.real_conflicts_by_local[lhs.index()].contains(rhs)
         }
+        (StablePackMember::Real(local), StablePackMember::Shadow(call_idx))
+        | (StablePackMember::Shadow(call_idx), StablePackMember::Real(local)) => {
+            ctx.shadow_conflicts_by_call[call_idx as usize].contains(local)
+        }
+        (StablePackMember::Shadow(_), StablePackMember::Shadow(_)) => false,
     }
 }
 
@@ -2067,6 +2304,30 @@ fn scratch_local_indices_for_move(
         } => (
             Some(problem.candidates[remove_idx].local_idx.as_u32()),
             Some(problem.candidates[add_idx].local_idx.as_u32()),
+        ),
+    }
+}
+
+fn stable_local_indices_for_move(
+    problem: &PlacementProblem<'_>,
+    mv: PlacementMove,
+) -> (Option<u32>, Option<u32>) {
+    match mv {
+        PlacementMove::None => (None, None),
+        PlacementMove::Add(candidate_idx) => (
+            Some(problem.candidates[candidate_idx].local_idx.as_u32()),
+            None,
+        ),
+        PlacementMove::Remove(candidate_idx) => (
+            None,
+            Some(problem.candidates[candidate_idx].local_idx.as_u32()),
+        ),
+        PlacementMove::Swap {
+            add_idx,
+            remove_idx,
+        } => (
+            Some(problem.candidates[add_idx].local_idx.as_u32()),
+            Some(problem.candidates[remove_idx].local_idx.as_u32()),
         ),
     }
 }
