@@ -23,7 +23,7 @@ use crate::{
 };
 
 use super::{
-    adce::AdceSolver,
+    adce::{AdceCallPolicy, AdceSolver},
     aggregate::{
         AggregateCombine, AggregateScalarize, LocalObjectArgMap, ObjectEffectSummaryMap,
         ObjectLoadStore, ObjectMemoryAnalysis, collect_local_object_arg_info,
@@ -794,7 +794,7 @@ fn run_pass(
         }
         Pass::Adce => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.adce").entered();
-            AdceSolver::new().run(func)
+            AdceSolver::with_call_policy(AdceCallPolicy::UseCurrentFuncEffects).run(func)
         }
         Pass::Licm => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.licm").entered();

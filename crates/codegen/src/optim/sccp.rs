@@ -22,7 +22,7 @@ use sonatina_ir::{
 };
 
 use super::{
-    adce::AdceSolver,
+    adce::{AdceCallPolicy, AdceSolver},
     cfg_cleanup::CfgCleanup,
     const_eval::{BlockEdge, ConstPathAnalysis, analyze_const_paths, collect_constref_value_tys},
     sccp_simplify::{AuxDeps, SimplifyAction, SimplifyCtx, simplify_inst},
@@ -135,7 +135,7 @@ impl SccpSolver {
         changed |= CfgCleanup::new(cleanup_mode).run(func);
         cfg.compute(func);
 
-        changed |= AdceSolver::new().run(func);
+        changed |= AdceSolver::with_call_policy(AdceCallPolicy::UseCurrentFuncEffects).run(func);
         cfg.compute(func);
         changed
     }
