@@ -2,10 +2,7 @@ use crate::bitset::BitSet;
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 use sonatina_ir::{Immediate, InstId, ValueId};
-use std::{
-    collections::VecDeque,
-    sync::{Mutex, OnceLock},
-};
+use std::collections::VecDeque;
 
 use super::{
     Planner,
@@ -36,7 +33,6 @@ enum OperandPrepStackKey {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct OperandPrepQueryKey {
-    func_ptr: usize,
     dup_max: u8,
     swap_max: u8,
     max_len: u8,
@@ -48,7 +44,7 @@ struct OperandPrepQueryKey {
     deep_preserve_mask: u64,
 }
 
-struct OperandPrepPlanCache {
+pub(super) struct OperandPrepPlanCache {
     map: FxHashMap<OperandPrepQueryKey, Vec<Step>>,
     order: VecDeque<OperandPrepQueryKey>,
 }
@@ -83,9 +79,10 @@ impl OperandPrepPlanCache {
     }
 }
 
-fn operand_prep_plan_cache() -> &'static Mutex<OperandPrepPlanCache> {
-    static CACHE: OnceLock<Mutex<OperandPrepPlanCache>> = OnceLock::new();
-    CACHE.get_or_init(|| Mutex::new(OperandPrepPlanCache::new()))
+impl Default for OperandPrepPlanCache {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 fn commutative_plan_cmp_key(
@@ -178,7 +175,6 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
     ) -> OperandPrepQueryKey {
         let stack_len = self.stack.len_above_func_ret().min(search_cfg.max_len);
         OperandPrepQueryKey {
-            func_ptr: self.ctx.func as *const _ as usize,
             dup_max: search_cfg.dup_max as u8,
             swap_max: search_cfg.swap_max as u8,
             max_len: search_cfg.max_len as u8,
@@ -217,8 +213,10 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
             .then(|| self.operand_prep_query_key(args, consume_last_use, search_cfg));
 
         if let Some(hit) = cache_key.as_ref().and_then(|cache_key| {
-            let cache = operand_prep_plan_cache().lock().unwrap();
-            cache.get(cache_key).cloned()
+            self.search_scratch
+                .operand_prep_plan_cache
+                .get(cache_key)
+                .cloned()
         }) && let Some(plan) = rebuild_operand_prep_plan(
             self.ctx,
             self.stack,
@@ -241,9 +239,8 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
             self.search_scratch,
         );
         if let (Some(cache_key), Some(plan)) = (cache_key, &plan) {
-            operand_prep_plan_cache()
-                .lock()
-                .unwrap()
+            self.search_scratch
+                .operand_prep_plan_cache
                 .insert(cache_key, plan.steps.clone());
         }
         plan
@@ -756,9 +753,9 @@ block0:
 
             assert_eq!(old_key, current_key);
 
-            operand_prep_plan_cache()
-                .lock()
-                .unwrap()
+            planner
+                .search_scratch
+                .operand_prep_plan_cache
                 .insert(old_key, vec![Step::PushImm(0)]);
 
             let plan = planner

@@ -5,7 +5,7 @@ use std::{
     cmp::Ordering,
     collections::{BinaryHeap, VecDeque},
     hash::{Hash, Hasher},
-    sync::{Mutex, OnceLock},
+    sync::OnceLock,
 };
 
 use super::{
@@ -14,6 +14,7 @@ use super::{
         sym_stack::{StackItem, SymStack},
     },
     Planner,
+    operand_prep::OperandPrepPlanCache,
 };
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -356,7 +357,6 @@ const NORMALIZE_PLAN_CACHE_CAP: usize = 4096;
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 struct PlanCacheKey {
     mode: u8,
-    func_ptr: usize,
     dup_max: u8,
     swap_max: u8,
     max_len: u8,
@@ -414,6 +414,8 @@ impl<S: Eq + Hash, Q> SearchScratch<S, Q> {
 pub(in crate::stackalloc::stackify) struct NormalizeSearchScratch {
     exact: SearchScratch<PackedState, QueueEntry>,
     prep: SearchScratch<PrepState, PrepQueueEntry>,
+    plan_cache: PlanCache,
+    pub(super) operand_prep_plan_cache: OperandPrepPlanCache,
 }
 
 impl NormalizeSearchScratch {
@@ -468,9 +470,10 @@ impl PlanCache {
     }
 }
 
-fn plan_cache() -> &'static Mutex<PlanCache> {
-    static CACHE: OnceLock<Mutex<PlanCache>> = OnceLock::new();
-    CACHE.get_or_init(|| Mutex::new(PlanCache::new()))
+impl Default for PlanCache {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 fn normalize_search_debug_enabled() -> bool {
@@ -648,7 +651,6 @@ pub(super) fn solve_optimal_normalize_plan(
 
     let cache_key = PlanCacheKey {
         mode: 0,
-        func_ptr: ctx.func as *const _ as usize,
         dup_max: cfg.dup_max as u8,
         swap_max: cfg.swap_max as u8,
         max_len: cfg.max_len as u8,
@@ -662,10 +664,7 @@ pub(super) fn solve_optimal_normalize_plan(
         ctx_bits2: 0,
     };
 
-    if let Some(hit) = {
-        let cache = plan_cache().lock().unwrap();
-        cache.get(&cache_key).cloned()
-    } {
+    if let Some(hit) = scratch.plan_cache.get(&cache_key).cloned() {
         if debug {
             eprintln!("normalize_search: cache hit");
         }
@@ -681,9 +680,8 @@ pub(super) fn solve_optimal_normalize_plan(
     }
 
     if start == goal {
-        plan_cache()
-            .lock()
-            .unwrap()
+        scratch
+            .plan_cache
             .insert(cache_key, PlanCacheVal::Steps(Vec::new()));
         return Some(NormalizePlan {
             cost: Cost::default(),
@@ -991,7 +989,7 @@ pub(super) fn solve_optimal_normalize_plan(
         );
     }
 
-    plan_cache().lock().unwrap().insert(
+    scratch.plan_cache.insert(
         cache_key,
         incumbent_steps
             .as_ref()
@@ -1133,7 +1131,6 @@ pub(super) fn solve_optimal_repair_prefix_plan(
 
     let cache_key = PlanCacheKey {
         mode: 1,
-        func_ptr: ctx.func as *const _ as usize,
         dup_max: cfg.dup_max as u8,
         swap_max: cfg.swap_max as u8,
         max_len: cfg.max_len as u8,
@@ -1147,10 +1144,7 @@ pub(super) fn solve_optimal_repair_prefix_plan(
         ctx_bits2: 0,
     };
 
-    if let Some(hit) = {
-        let cache = plan_cache().lock().unwrap();
-        cache.get(&cache_key).cloned()
-    } {
+    if let Some(hit) = scratch.plan_cache.get(&cache_key).cloned() {
         if debug {
             eprintln!("repair_normalize_search: cache hit");
         }
@@ -1166,9 +1160,8 @@ pub(super) fn solve_optimal_repair_prefix_plan(
     }
 
     if start == goal {
-        plan_cache()
-            .lock()
-            .unwrap()
+        scratch
+            .plan_cache
             .insert(cache_key, PlanCacheVal::Steps(Vec::new()));
         return Some(NormalizePlan {
             cost: Cost::default(),
@@ -1515,7 +1508,7 @@ pub(super) fn solve_optimal_repair_prefix_plan(
         );
     }
 
-    plan_cache().lock().unwrap().insert(
+    scratch.plan_cache.insert(
         cache_key,
         incumbent_steps
             .as_ref()
@@ -1649,14 +1642,12 @@ fn build_operand_prep_problem(
 }
 
 fn operand_prep_cache_key(
-    ctx: &StackifyContext<'_>,
     problem: &OperandPrepProblem,
     cost: &impl CostModel,
     cfg: SearchCfg,
 ) -> PlanCacheKey {
     PlanCacheKey {
         mode: 2,
-        func_ptr: ctx.func as *const _ as usize,
         dup_max: cfg.dup_max as u8,
         swap_max: cfg.swap_max as u8,
         max_len: cfg.max_len as u8,
@@ -2351,12 +2342,9 @@ pub(super) fn solve_optimal_operand_prep_plan(
     }
 
     let problem = build_operand_prep_problem(ctx, stack, args, consume_last_use, cfg)?;
-    let cache_key = operand_prep_cache_key(ctx, &problem, cost, cfg);
+    let cache_key = operand_prep_cache_key(&problem, cost, cfg);
 
-    if let Some(hit) = {
-        let cache = plan_cache().lock().unwrap();
-        cache.get(&cache_key).cloned()
-    } {
+    if let Some(hit) = scratch.plan_cache.get(&cache_key).cloned() {
         if debug {
             eprintln!("operand_prep_search: cache hit");
         }
@@ -2377,9 +2365,8 @@ pub(super) fn solve_optimal_operand_prep_plan(
         problem.preserve_mask,
         &problem.goal_counts,
     ) {
-        plan_cache()
-            .lock()
-            .unwrap()
+        scratch
+            .plan_cache
             .insert(cache_key, PlanCacheVal::Steps(Vec::new()));
         return Some(NormalizePlan {
             cost: Cost::default(),
@@ -2398,10 +2385,7 @@ pub(super) fn solve_optimal_operand_prep_plan(
         if debug {
             eprintln!("operand_prep_search: linear greedy plan failed goal check");
         }
-        plan_cache()
-            .lock()
-            .unwrap()
-            .insert(cache_key, PlanCacheVal::None);
+        scratch.plan_cache.insert(cache_key, PlanCacheVal::None);
         return None;
     };
 
@@ -2428,9 +2412,8 @@ pub(super) fn solve_optimal_operand_prep_plan(
     }
 
     if high_arity_consuming {
-        plan_cache()
-            .lock()
-            .unwrap()
+        scratch
+            .plan_cache
             .insert(cache_key, PlanCacheVal::Steps(incumbent_steps.clone()));
 
         return Some(NormalizePlan {
@@ -2707,9 +2690,8 @@ pub(super) fn solve_optimal_operand_prep_plan(
         }
     }
 
-    plan_cache()
-        .lock()
-        .unwrap()
+    scratch
+        .plan_cache
         .insert(cache_key, PlanCacheVal::Steps(incumbent_steps.clone()));
 
     Some(NormalizePlan {

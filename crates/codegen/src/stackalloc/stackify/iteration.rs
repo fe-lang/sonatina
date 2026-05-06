@@ -38,7 +38,7 @@ pub(super) struct IterationPlanner<'a, 'ctx, O: StackifyObserver> {
     inherited_stack: BTreeMap<BlockId, (BlockId, SymStack)>,
     pending_edges: BTreeMap<BlockId, Vec<PendingEdge<O::DeferredExit>>>,
     planned_blocks: BitSet<BlockId>,
-    search_scratch: NormalizeSearchScratch,
+    search_scratch: &'a mut NormalizeSearchScratch,
     observer: &'a mut O,
 }
 
@@ -65,6 +65,7 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
         object_spill_requests: &'a mut BitSet<ValueId>,
         forced_object_spills: &'a BitSet<ValueId>,
         inherited_stack: BTreeMap<BlockId, (BlockId, SymStack)>,
+        search_scratch: &'a mut NormalizeSearchScratch,
         observer: &'a mut O,
     ) -> Self {
         Self {
@@ -81,7 +82,7 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
             inherited_stack,
             pending_edges: BTreeMap::new(),
             planned_blocks: BitSet::default(),
-            search_scratch: NormalizeSearchScratch::default(),
+            search_scratch,
             observer,
         }
     }
@@ -104,7 +105,7 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
             free_slots,
             &mut *self.slots,
         );
-        let mut planner = Planner::new(self.ctx, stack, actions, mem, &mut self.search_scratch);
+        let mut planner = Planner::new(self.ctx, stack, actions, mem, &mut *self.search_scratch);
         f(&mut planner)
     }
 
@@ -327,7 +328,7 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
                     stack,
                     &mut self.alloc.pre_actions[inst],
                     mem,
-                    &mut self.search_scratch,
+                    &mut *self.search_scratch,
                 );
                 f(&mut planner)
             }
@@ -348,7 +349,7 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
                     stack,
                     &mut self.alloc.post_actions[inst],
                     mem,
-                    &mut self.search_scratch,
+                    &mut *self.search_scratch,
                 );
                 f(&mut planner)
             }
@@ -373,8 +374,13 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
                     &mut *self.slots,
                 );
                 let result = {
-                    let mut planner =
-                        Planner::new(self.ctx, stack, &mut actions, mem, &mut self.search_scratch);
+                    let mut planner = Planner::new(
+                        self.ctx,
+                        stack,
+                        &mut actions,
+                        mem,
+                        &mut *self.search_scratch,
+                    );
                     f(&mut planner)
                 };
                 debug_assert_eq!(self.alloc.brtable_actions[inst].len(), case_idx);
