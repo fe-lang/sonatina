@@ -478,6 +478,18 @@ impl DataFlowGraph {
         true
     }
 
+    pub fn edit_phi<R>(
+        &mut self,
+        inst_id: InstId,
+        f: impl FnOnce(&mut control_flow::Phi) -> R,
+    ) -> Option<R> {
+        self.cast_phi(inst_id)?;
+        self.untrack_inst(inst_id);
+        let result = f(self.cast_phi_mut(inst_id).unwrap());
+        self.attach_user(inst_id);
+        Some(result)
+    }
+
     pub fn inst_set(&self) -> &'static dyn InstSetBase {
         self.ctx.inst_set
     }
@@ -488,7 +500,7 @@ impl DataFlowGraph {
         InstDowncast::downcast(is, inst)
     }
 
-    pub fn cast_phi_mut(&mut self, inst_id: InstId) -> Option<&mut control_flow::Phi> {
+    pub(crate) fn cast_phi_mut(&mut self, inst_id: InstId) -> Option<&mut control_flow::Phi> {
         let is = self.inst_set();
         let inst = self.inst_mut(inst_id);
         InstDowncastMut::downcast_mut(is, inst)
@@ -980,6 +992,35 @@ mod tests {
         dfg.cast_phi_mut(phi).unwrap().remove_phi_arg(block1);
         dfg.append_phi_arg(phi, added, block2);
 
+        assert!(dfg.users(kept).any(|&user| user == phi));
+        assert!(dfg.users(added).any(|&user| user == phi));
+        assert!(!dfg.users(removed).any(|&user| user == phi));
+    }
+
+    #[test]
+    fn edit_phi_retracks_replaced_args() {
+        let isa = test_isa();
+        let mut dfg = DataFlowGraph::new(ModuleCtx::new(&isa));
+        let block0 = dfg.make_block();
+        let block1 = dfg.make_block();
+        let block2 = dfg.make_block();
+        let kept = dfg.make_imm_value(Immediate::I32(1));
+        let removed = dfg.make_imm_value(Immediate::I32(2));
+        let added = dfg.make_imm_value(Immediate::I32(3));
+        let phi = dfg.make_inst(Phi::new(
+            dfg.inst_set().has_phi().unwrap(),
+            smallvec::smallvec![(kept, block0), (removed, block1)],
+        ));
+
+        let removed_value = dfg
+            .edit_phi(phi, |phi| {
+                let removed_value = phi.remove_phi_arg(block1);
+                phi.append_phi_arg(added, block2);
+                removed_value
+            })
+            .unwrap();
+
+        assert_eq!(removed_value, Some(removed));
         assert!(dfg.users(kept).any(|&user| user == phi));
         assert!(dfg.users(added).any(|&user| user == phi));
         assert!(!dfg.users(removed).any(|&user| user == phi));
