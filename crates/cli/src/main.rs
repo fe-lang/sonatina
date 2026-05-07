@@ -55,7 +55,7 @@ enum Command {
         #[arg(short = 'p', long = "profile")]
         profile: bool,
 
-        /// Build optimization level: 0 or 2
+        /// Build optimization level: 0, 1, 2, or s
         #[arg(short = 'O', long = "opt-level", value_name = "LEVEL", default_value = "0", value_parser = parse_build_opt_level)]
         opt_level: BuildOptLevel,
 
@@ -67,6 +67,8 @@ enum Command {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BuildOptLevel {
     O0,
+    O1,
+    Os,
     O2,
 }
 
@@ -74,6 +76,8 @@ impl BuildOptLevel {
     fn codegen(self) -> CodegenOptLevel {
         match self {
             Self::O0 => CodegenOptLevel::O0,
+            Self::O1 => CodegenOptLevel::O1,
+            Self::Os => CodegenOptLevel::Os,
             Self::O2 => CodegenOptLevel::O2,
         }
     }
@@ -96,8 +100,10 @@ fn main() {
 fn parse_build_opt_level(level: &str) -> Result<BuildOptLevel, String> {
     match level.strip_prefix('O').unwrap_or(level) {
         "0" => Ok(BuildOptLevel::O0),
+        "1" => Ok(BuildOptLevel::O1),
+        "s" => Ok(BuildOptLevel::Os),
         "2" => Ok(BuildOptLevel::O2),
-        _ => Err("supported build optimization levels are 0 and 2".to_string()),
+        _ => Err("supported build optimization levels are 0, 1, 2, and s".to_string()),
     }
 }
 
@@ -668,11 +674,26 @@ mod tests {
     }
 
     #[test]
+    fn build_accepts_o1_and_os() {
+        let cli = Cli::try_parse_from(["sonatina", "build", "foo.sntn", "-O1"]).unwrap();
+        match cli.command {
+            Command::Build { opt_level, .. } => assert_eq!(opt_level, BuildOptLevel::O1),
+            _ => panic!("expected build command"),
+        }
+
+        let cli = Cli::try_parse_from(["sonatina", "build", "foo.sntn", "-Os"]).unwrap();
+        match cli.command {
+            Command::Build { opt_level, .. } => assert_eq!(opt_level, BuildOptLevel::Os),
+            _ => panic!("expected build command"),
+        }
+    }
+
+    #[test]
     fn build_rejects_unsupported_opt_level() {
         let err = Cli::try_parse_from(["sonatina", "build", "foo.sntn", "-O3"]).unwrap_err();
         assert!(
             err.to_string()
-                .contains("supported build optimization levels are 0 and 2")
+                .contains("supported build optimization levels are 0, 1, 2, and s")
         );
     }
 }

@@ -1,24 +1,25 @@
 ---
 source: crates/codegen/tests/evm.rs
+assertion_line: 455
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/lazy_frame_exit_before_action_regression.sntn
 ---
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 213 bytes
-  total: 213 bytes
+  section runtime: 212 bytes
+  total: 212 bytes
 
 functions:
   f: ir_blocks=3 ir_insts=8 vcode_ops=71 fixups=5 imm_bytes=15
     mem: scratch_words=0 stable_words=1 stable_mode=DynamicFrame entry_abs_words=0 abs_words_end=0
-  g: ir_blocks=5 ir_insts=17 vcode_ops=96 fixups=9 imm_bytes=14
+  g: ir_blocks=5 ir_insts=17 vcode_ops=95 fixups=9 imm_bytes=14
     mem: scratch_words=0 stable_words=1 stable_mode=DynamicFrame entry_abs_words=0 abs_words_end=0
   entry: ir_blocks=1 ir_insts=3 vcode_ops=11 fixups=2 imm_bytes=1
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=21797 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=797
+  case ok: calldata_len=0 success reason=Return gas_used=21794 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=794
 
 
 --------------- DEBUG ---------------
@@ -168,9 +169,9 @@ g:
     PUSH1 FuncRef(1)
     JUMP
     JUMPDEST
-    SWAP2  // v7.i256 = add v2 v4;
+    SWAP4  // v7.i256 = add v2 v4;
     SWAP1
-    SWAP4
+    SWAP2
     ADD
     SWAP4  // v8.i256 = mload v1 i256;
     MLOAD
@@ -181,16 +182,15 @@ g:
     MLOAD
     PUSH1 0x80 (128)
     MSTORE
-    SWAP3  // v9.i1 = eq v3 v5;
+    SWAP2  // v9.i1 = eq v3 v5;
     SWAP1
-    SWAP2
     EQ
     ISZERO  // br v9 block3 block4;
     PUSH1 block4
     JUMPI
   block3:
-    SWAP1  // v10.i256 = add v6 v7;
-    SWAP2
+    SWAP2  // v10.i256 = add v6 v7;
+    SWAP1
     ADD
     ADD  // v11.i256 = add v10 v8;
     SWAP1  // return v11;

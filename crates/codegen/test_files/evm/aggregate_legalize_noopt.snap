@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/evm.rs
+assertion_line: 455
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/aggregate_legalize_noopt.sntn
 ---
@@ -56,16 +57,16 @@ agg_noopt:
     SWAP1
     MSTORE
     PUSH1 0xa0 (160)  // v19.*i256 = gep v12 0.i64 0.i64;
-    SWAP3  // mstore v19 v0 i256;
-    SWAP1
+    SWAP1  // mstore v19 v0 i256;
+    SWAP2
     SWAP3
+    SWAP1
     MSTORE
     PUSH1 0xa0 (160)  // v21.*i256 = gep v12 0.i64 0.i64;
     MLOAD  // v22.i256 = mload v21 i256;
     PUSH1 0x60 (96)  // v23.*i256 = gep v20 0.i64 0.i64;
     MSTORE  // mstore v23 v22 i256;
-    SWAP1  // v24.*i256 = gep v12 0.i64 1.i64;
-    POP
+    POP  // v24.*i256 = gep v12 0.i64 1.i64;
     PUSH1 0xc0 (192)
     MLOAD  // v25.i256 = mload v24 i256;
     PUSH1 0x80 (128)  // v26.*i256 = gep v20 0.i64 1.i64;

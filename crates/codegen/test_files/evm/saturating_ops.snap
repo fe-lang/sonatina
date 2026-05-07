@@ -4,7 +4,7 @@ assertion_line: 448
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/saturating_ops.sntn
 ---
-evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=1
+evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=s
 
 object: Contract
   section runtime: 758 bytes

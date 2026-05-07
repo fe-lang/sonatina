@@ -1,22 +1,23 @@
 ---
 source: crates/codegen/tests/evm.rs
+assertion_line: 455
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/fe_result_and_then_chain_while_loop_struct_repro_unoptimized.sntn
 ---
 evm.config: stack_reach=16 vcode=false bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 1088 bytes
-  total: 1088 bytes
+  section runtime: 1126 bytes
+  total: 1126 bytes
 
 functions:
-  nibble: ir_blocks=3 ir_insts=10 vcode_ops=31 fixups=1 imm_bytes=4
+  nibble: ir_blocks=3 ir_insts=10 vcode_ops=30 fixups=1 imm_bytes=4
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=13 abs_words_end=0
   result_and_then_chain_while_loop_struct_repro: ir_blocks=1 ir_insts=33 vcode_ops=92 fixups=10 imm_bytes=20
     mem: scratch_words=3 stable_words=10 stable_mode=StaticAbs(base=0x100) entry_abs_words=3 abs_words_end=13
   result_e__t__h7e70df4f5f6c66e_and_then__Error_hdf7f09d2a5744fe8_Ctx_h4952b3c1f066f039_Ctx_h4952b3c1f066f039_Step_h7b2dd1cd31620192__95260929b4acc4b4: ir_blocks=5 ir_insts=17 vcode_ops=52 fixups=6 imm_bytes=5
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=13 abs_words_end=0
-  step_h7b2dd1cd31620192_fn_h493f512f1483138_call: ir_blocks=16 ir_insts=59 vcode_ops=134 fixups=13 imm_bytes=19
+  step_h7b2dd1cd31620192_fn_h493f512f1483138_call: ir_blocks=16 ir_insts=59 vcode_ops=163 fixups=15 imm_bytes=23
     mem: scratch_words=3 stable_words=0 stable_mode=None entry_abs_words=13 abs_words_end=3
   u256_h3271ca15373d4483_eq_he50383edd273619f_eq: ir_blocks=1 ir_insts=2 vcode_ops=4 fixups=0 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=19 abs_words_end=0
@@ -58,7 +59,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=19 abs_words_end=0
   solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_set_pos: ir_blocks=1 ir_insts=3 vcode_ops=5 fixups=0 imm_bytes=1
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=19 abs_words_end=0
-  solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish: ir_blocks=3 ir_insts=13 vcode_ops=30 fixups=1 imm_bytes=2
+  solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish: ir_blocks=3 ir_insts=13 vcode_ops=32 fixups=1 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=19 abs_words_end=0
   assert: ir_blocks=3 ir_insts=4 vcode_ops=10 fixups=1 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=13 abs_words_end=0
@@ -66,4 +67,4 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=26116 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=5116
+  case ok: calldata_len=0 success reason=Return gas_used=26998 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=5998

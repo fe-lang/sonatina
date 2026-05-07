@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/evm.rs
+assertion_line: 455
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/malloc_transient_symbolic_size_free_ptr_guard.sntn
 ---
@@ -51,10 +52,10 @@ init:
     POP
     PUSH1 0x80 (128)
     JUMPDEST
-    DUP1  // evm_code_copy v3 v0 v1;
+    DUP2  // evm_code_copy v3 v0 v1;
+    SWAP1
+    SWAP2
     SWAP3
     DUP3
-    SWAP2
     CODECOPY
-    SWAP1  // evm_return v3 v1;
-    RETURN
+    RETURN  // evm_return v3 v1;

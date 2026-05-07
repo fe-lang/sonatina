@@ -1,24 +1,25 @@
 ---
 source: crates/codegen/tests/evm.rs
+assertion_line: 455
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/internal_call_preserve_with_lower_live_values.sntn
 ---
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=true evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 94 bytes
-  total: 94 bytes
+  section runtime: 95 bytes
+  total: 95 bytes
 
 functions:
   entry: ir_blocks=3 ir_insts=11 vcode_ops=40 fixups=5 imm_bytes=6
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   is_lt: ir_blocks=3 ir_insts=4 vcode_ops=14 fixups=1 imm_bytes=1
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  helper: ir_blocks=3 ir_insts=8 vcode_ops=22 fixups=1 imm_bytes=4
+  helper: ir_blocks=3 ir_insts=8 vcode_ops=23 fixups=1 imm_bytes=4
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=32 success reason=Return gas_used=21354 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=214
+  case ok: calldata_len=32 success reason=Return gas_used=21357 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=217
 
 
 --------------- DEBUG ---------------
@@ -170,7 +171,7 @@ entry:
   block2:
     JUMPDEST
     PUSH0  // mstore 0.i256 0.i256 i256;
-    PUSH0
+    DUP1
     MSTORE
     PUSH1 0x20 (32)  // evm_return 0.i256 32.i256;
     PUSH0
@@ -209,6 +210,7 @@ helper:
     PUSH1 0x8 (8)
     EQ
     SWAP2  // v6.i1 = and v3 v4;
+    SWAP1
     AND
     AND  // v7.i1 = and v6 v5;
     ISZERO  // br v7 block1 block2;

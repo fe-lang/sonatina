@@ -5,7 +5,7 @@ use crate::{
     isa::evm::normalize_alias_map,
     liveness::Liveness,
     stackalloc::stackify::{
-        builder::{StackifyContext, StackifyReachability},
+        builder::{StackifyContext, StackifyReachability, StackifySearchProfile},
         templates::{
             compute_def_info, compute_dom_depth, compute_phi_out_sources, compute_phi_results,
             function_has_internal_return,
@@ -65,6 +65,7 @@ pub(super) fn build_stackify_test_context<'a>(
         spill_slot_interference,
         has_internal_return: function_has_internal_return(func),
         reach,
+        search_profile: StackifySearchProfile::Exact,
         value_aliases,
         exact_local_addr,
     }

@@ -15,17 +15,19 @@ pub(crate) struct EvmConfig {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) enum EvmOptPipeline {
     #[default]
-    None,
-    Size,
-    Speed,
+    O0,
+    O1,
+    Os,
+    O2,
 }
 
 impl EvmOptPipeline {
-    pub(crate) fn as_u8(self) -> u8 {
+    pub(crate) fn as_label(self) -> &'static str {
         match self {
-            Self::None => 0,
-            Self::Size => 1,
-            Self::Speed => 2,
+            Self::O0 => "0",
+            Self::O1 => "1",
+            Self::Os => "s",
+            Self::O2 => "2",
         }
     }
 }
@@ -325,10 +327,11 @@ fn parse_bool_literal(lit: &str) -> Result<bool, String> {
 
 fn parse_opt_level_literal(lit: &str) -> Result<EvmOptPipeline, String> {
     match lit.trim() {
-        "0" => Ok(EvmOptPipeline::None),
-        "s" => Ok(EvmOptPipeline::Size),
-        "2" => Ok(EvmOptPipeline::Speed),
-        _ => Err("expected one of `0`, `s`, `2`".to_string()),
+        "0" => Ok(EvmOptPipeline::O0),
+        "1" => Ok(EvmOptPipeline::O1),
+        "s" => Ok(EvmOptPipeline::Os),
+        "2" => Ok(EvmOptPipeline::O2),
+        _ => Err("expected one of `0`, `1`, `s`, `2`".to_string()),
     }
 }
 
@@ -363,17 +366,24 @@ mod tests {
     use super::{EvmOptPipeline, parse_evm_config};
 
     #[test]
-    fn parse_opt_level_size() {
+    fn parse_opt_level_os() {
         let comments = vec!["#! evm.config: { opt: s }".to_string()];
         let cfg = parse_evm_config(&comments).expect("config parse should succeed");
-        assert_eq!(cfg.opt, Some(EvmOptPipeline::Size));
+        assert_eq!(cfg.opt, Some(EvmOptPipeline::Os));
     }
 
     #[test]
-    fn parse_opt_level_speed() {
+    fn parse_opt_level_o1() {
+        let comments = vec!["#! evm.config: { opt: 1 }".to_string()];
+        let cfg = parse_evm_config(&comments).expect("config parse should succeed");
+        assert_eq!(cfg.opt, Some(EvmOptPipeline::O1));
+    }
+
+    #[test]
+    fn parse_opt_level_o2() {
         let comments = vec!["#! evm.config: { opt: 2 }".to_string()];
         let cfg = parse_evm_config(&comments).expect("config parse should succeed");
-        assert_eq!(cfg.opt, Some(EvmOptPipeline::Speed));
+        assert_eq!(cfg.opt, Some(EvmOptPipeline::O2));
     }
 
     #[test]

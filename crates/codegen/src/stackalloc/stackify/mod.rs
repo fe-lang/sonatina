@@ -37,7 +37,7 @@ mod terminal_chain;
 mod trace;
 
 pub use alloc::StackifyAlloc;
-pub use builder::StackifyBuilder;
+pub use builder::{StackifyBuilder, StackifySearchProfile};
 
 use builder::StackifyContext;
 

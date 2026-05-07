@@ -889,6 +889,7 @@ fn prepare_stackify_analysis(
             &stack_liveness,
             backend.stackify_reach_depth,
         )
+        .with_search_profile(backend.stackify_search_profile)
         .with_scratch_live_values(canonical_scratch_live_values)
         .with_scratch_spills(scratch_plan::SCRATCH_SPILL_SLOTS)
         .with_value_aliases(&value_aliases)
