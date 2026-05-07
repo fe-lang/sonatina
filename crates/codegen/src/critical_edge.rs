@@ -71,6 +71,7 @@ impl CriticalEdge {
 
 #[cfg(test)]
 mod tests {
+    use smallvec::smallvec;
     use sonatina_ir::{
         Type,
         builder::test_util::*,
@@ -236,7 +237,7 @@ mod tests {
         builder.insert_inst_no_result_with(|| Jump::new(is, b));
 
         builder.switch_to_block(b);
-        let phi_res = builder.insert_inst_with(|| Phi::new(is, vec![(v1, a)]), Type::I8);
+        let phi_res = builder.insert_inst_with(|| Phi::new(is, smallvec![(v1, a)]), Type::I8);
         let add_res = builder.insert_inst_with(|| Add::new(is, phi_res, v1), Type::I8);
 
         builder.append_phi_arg(phi_res, add_res, b);
@@ -301,7 +302,7 @@ mod tests {
 
         builder.switch_to_block(c);
         let v = builder.make_imm_value(1i8);
-        builder.insert_inst_with(|| Phi::new(is, vec![(v, a), (v, b)]), Type::I8);
+        builder.insert_inst_with(|| Phi::new(is, smallvec![(v, a), (v, b)]), Type::I8);
         builder.insert_inst_no_result_with(|| Return::new_unit(is));
 
         builder.seal_all();

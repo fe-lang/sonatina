@@ -7,7 +7,7 @@ use crate::{BlockId, GlobalVariableRef, Type, ValueId, module::FuncRef, types::E
 use super::{
     Inst,
     cast::{Bitcast, IntToPtr, PtrToInt, Sext, Trunc, Zext},
-    control_flow::{Call, Phi},
+    control_flow::{Call, Phi, PhiArgs},
     data::{
         ConstRef, EnumAssertVariant, EnumAssertVariantRef, EnumExtract, EnumIsVariant, EnumMake,
         EnumProj, EnumSetTag, EnumWriteVariant, GetFunctionPtr, SymAddr, SymSize, SymbolRef,
@@ -106,7 +106,7 @@ pub struct OwnedInstKey {
     result_tys: SmallVec<[Type; 1]>,
     cast_ty: Option<Type>,
     extra_ty: Option<Type>,
-    phi_args: Vec<(ValueId, BlockId)>,
+    phi_args: PhiArgs,
     callee: Option<FuncRef>,
     opaque_data: Option<OpaqueInstData>,
     kind: InstClassKind,
@@ -130,14 +130,14 @@ impl OwnedInstKey {
             result_tys: result_tys.iter().copied().collect(),
             cast_ty: cast_ty(inst),
             extra_ty: inst_extra_ty(inst),
-            phi_args: Vec::new(),
+            phi_args: SmallVec::new(),
             callee: None,
             opaque_data: opaque_data(inst),
             kind: inst.kind(),
         };
 
         if let Some(phi) = downcast_ref::<Phi>(inst) {
-            key.phi_args = phi.args().to_vec();
+            key.phi_args = phi.args().iter().copied().collect();
         }
 
         if let Some(call) = downcast_ref::<Call>(inst) {
@@ -271,7 +271,7 @@ impl OwnedInstKey {
         matches!(self.kind, InstClassKind::Phi).then_some(self.phi_args.as_slice())
     }
 
-    pub fn with_phi_args(&self, phi_args: Vec<(ValueId, BlockId)>) -> Option<Self> {
+    pub fn with_phi_args(&self, phi_args: PhiArgs) -> Option<Self> {
         if !matches!(self.kind, InstClassKind::Phi) {
             return None;
         }

@@ -895,7 +895,7 @@ impl<'f> CfgEditor<'f> {
                 .unwrap_or_else(|| panic!("phi {phi_inst_id:?} has no result"));
             let phi_ty = self.func.dfg.value_ty(phi_result);
 
-            let mut new_phi = self.func.dfg.make_phi(vec![]);
+            let mut new_phi = self.func.dfg.make_phi(smallvec::SmallVec::new());
             self.func.dfg.untrack_inst(phi_inst_id);
             let old_phi = self.func.dfg.cast_phi_mut(phi_inst_id).unwrap();
 
@@ -1143,6 +1143,7 @@ pub fn prune_phi_to_preds(
 mod tests {
     use std::collections::BTreeSet;
 
+    use smallvec::{SmallVec, smallvec};
     use sonatina_ir::{
         Immediate, Module, Type, Value,
         builder::test_util::{dump_func, test_func_builder, test_module_builder},
@@ -1181,7 +1182,8 @@ mod tests {
         builder.switch_to_block(b2);
         let one = builder.make_imm_value(1i32);
         let two = builder.make_imm_value(2i32);
-        let phi = builder.insert_inst_with(|| Phi::new(is, vec![(one, b0), (two, b1)]), Type::I32);
+        let phi =
+            builder.insert_inst_with(|| Phi::new(is, smallvec![(one, b0), (two, b1)]), Type::I32);
         builder.insert_inst_no_result_with(|| Return::new_single(is, phi));
 
         builder.seal_all();
@@ -1240,7 +1242,7 @@ block2:
 
             let phi_inst = editor.func().layout.first_inst_of(*b1).unwrap();
             let phi = editor.func().dfg.cast_phi(phi_inst).unwrap();
-            assert_eq!(phi.args(), &[(phi.args()[0].0, *b0)]);
+            assert_eq!(phi.args().as_slice(), &[(phi.args()[0].0, *b0)]);
             assert_eq!(editor.cfg().pred_edges_as_slice(*b1).len(), 1);
             assert_eq!(editor.cfg().preds_as_slice(*b1), &[*b0]);
         });
@@ -1439,7 +1441,7 @@ block2:
         let phi_seed_1 = builder.make_imm_value(1i32);
         let phi_seed_2 = builder.make_imm_value(2i32);
         let v4 = builder.insert_inst_with(
-            || Phi::new(is, vec![(phi_seed_1, b1), (phi_seed_2, b2)]),
+            || Phi::new(is, smallvec![(phi_seed_1, b1), (phi_seed_2, b2)]),
             Type::I32,
         );
         builder.insert_inst_no_result_with(|| Jump::new(is, b4));
@@ -1553,7 +1555,7 @@ block2:
         let b2 = builder.append_block();
 
         builder.switch_to_block(b0);
-        let phi = builder.insert_inst_with(|| Phi::new(is, vec![]), Type::I32);
+        let phi = builder.insert_inst_with(|| Phi::new(is, SmallVec::new()), Type::I32);
         builder.insert_inst_no_result_with(|| Jump::new(is, b1));
 
         builder.switch_to_block(b1);
@@ -1597,7 +1599,7 @@ block2:
         builder.insert_inst_no_result_with(|| Jump::new(is, b1));
 
         builder.switch_to_block(b1);
-        let phi = builder.insert_inst_with(|| Phi::new(is, vec![(seed, b0)]), Type::I32);
+        let phi = builder.insert_inst_with(|| Phi::new(is, smallvec![(seed, b0)]), Type::I32);
         builder.insert_inst_no_result_with(|| Br::new(is, cond, b2, b3));
 
         builder.switch_to_block(b2);
@@ -1654,7 +1656,8 @@ block2:
         builder.insert_inst_no_result_with(|| Jump::new(is, b3));
 
         builder.switch_to_block(b3);
-        let phi = builder.insert_inst_with(|| Phi::new(is, vec![(v2, b2), (seed, b4)]), Type::I32);
+        let phi =
+            builder.insert_inst_with(|| Phi::new(is, smallvec![(v2, b2), (seed, b4)]), Type::I32);
         builder.insert_inst_no_result_with(|| Return::new_single(is, phi));
 
         builder.seal_all();

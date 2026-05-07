@@ -695,6 +695,7 @@ fn remove_inst(func: &mut Function, inst: InstId) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use smallvec::smallvec;
     use sonatina_ir::{
         I256, Immediate, InstSetBase, Linkage, Signature, Type,
         builder::test_util::*,
@@ -1318,9 +1319,8 @@ mod tests {
         let slot = builder.make_imm_value(I256::from(1));
         let value = builder.make_imm_value(I256::from(7));
         builder.insert_inst_no_result_with(|| EvmSstore::new(is, slot, value));
-        builder.insert_inst_no_result_with(|| {
-            control_flow::Call::new(has_call, callee, smallvec::smallvec![])
-        });
+        builder
+            .insert_inst_no_result_with(|| control_flow::Call::new(has_call, callee, smallvec![]));
         builder.insert_inst_no_result_with(|| control_flow::Unreachable::new_unchecked(is));
         builder.seal_all();
 
@@ -1355,9 +1355,8 @@ mod tests {
         let slot = builder.make_imm_value(I256::from(1));
         let value = builder.make_imm_value(I256::from(7));
         builder.insert_inst_no_result_with(|| EvmSstore::new(is, slot, value));
-        builder.insert_inst_no_result_with(|| {
-            control_flow::Call::new(has_call, callee, smallvec::smallvec![])
-        });
+        builder
+            .insert_inst_no_result_with(|| control_flow::Call::new(has_call, callee, smallvec![]));
         builder.insert_inst_no_result_with(|| control_flow::Unreachable::new_unchecked(is));
         builder.seal_all();
 

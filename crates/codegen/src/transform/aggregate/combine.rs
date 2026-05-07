@@ -711,7 +711,7 @@ impl AggregateCombine {
         let agg_ty = func.dfg.value_ty(*first_extract.dest());
         let res_ty = func.dfg.value_ty(result);
 
-        let mut agg_args = vec![(*first_extract.dest(), first_pred)];
+        let mut agg_args = smallvec::smallvec![(*first_extract.dest(), first_pred)];
         for &(incoming, pred) in phi.args().iter().skip(1) {
             let Some(extract_inst) = func.dfg.value_inst(incoming) else {
                 return false;
@@ -782,8 +782,8 @@ impl AggregateCombine {
         let payload_ty = func.dfg.value_ty(*first_insert.value());
         let result_ty = func.dfg.value_ty(result);
 
-        let mut base_args = vec![(*first_insert.dest(), first_pred)];
-        let mut payload_args = vec![(*first_insert.value(), first_pred)];
+        let mut base_args = smallvec::smallvec![(*first_insert.dest(), first_pred)];
+        let mut payload_args = smallvec::smallvec![(*first_insert.value(), first_pred)];
 
         for &(incoming, pred) in phi.args().iter().skip(1) {
             let Some(insert_inst) = func.dfg.value_inst(incoming) else {
@@ -1852,7 +1852,7 @@ fn append_phi_at_block_top(
     func: &mut Function,
     block: BlockId,
     ty: Type,
-    args: Vec<(ValueId, BlockId)>,
+    args: control_flow::PhiArgs,
 ) -> ValueId {
     let phi = control_flow::Phi::new_unchecked(func.inst_set(), args);
     let mut cursor = InstInserter::at_location(CursorLocation::BlockTop(block));

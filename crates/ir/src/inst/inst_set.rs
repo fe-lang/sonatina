@@ -366,7 +366,7 @@ mod tests {
             InstClassKind::Unary(UnaryInstKind::Snego)
         );
         assert_eq!(
-            Phi::new(inst_set.phi(), vec![(v, b0)]).kind(),
+            Phi::new(inst_set.phi(), smallvec::smallvec![(v, b0)]).kind(),
             InstClassKind::Phi
         );
         assert_eq!(Jump::new(inst_set.jump(), b0).kind(), InstClassKind::Opaque);

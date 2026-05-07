@@ -284,7 +284,7 @@ pub(super) fn try_inline_callsite_full(
                     func.dfg.change_to_alias(call_result, value);
                 }
                 _ => {
-                    let mut args = Vec::with_capacity(returns.len());
+                    let mut args = SmallVec::with_capacity(returns.len());
                     for return_site in &returns {
                         let value = return_site
                             .values
