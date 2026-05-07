@@ -677,7 +677,7 @@ fn imm_i64(imm: Immediate) -> Option<i64> {
 
 #[cfg(test)]
 mod tests {
-    use smallvec::smallvec;
+    use smallvec::{SmallVec, smallvec};
     use sonatina_ir::{
         ControlFlowGraph, Function, I256, Type,
         builder::test_util::*,
@@ -708,7 +708,7 @@ mod tests {
         builder.insert_inst_no_result_with(|| Jump::new(is, header));
 
         builder.switch_to_block(header);
-        let iv = builder.insert_inst_with(|| Phi::new(is, vec![]), Type::I256);
+        let iv = builder.insert_inst_with(|| Phi::new(is, SmallVec::new()), Type::I256);
         let cond = builder.make_imm_value(true);
         builder.insert_inst_no_result_with(|| Br::new(is, cond, latch, exit));
 
@@ -758,7 +758,7 @@ mod tests {
         builder.insert_inst_no_result_with(|| Jump::new(is, header));
 
         builder.switch_to_block(header);
-        let iv = builder.insert_inst_with(|| Phi::new(is, vec![]), Type::I256);
+        let iv = builder.insert_inst_with(|| Phi::new(is, SmallVec::new()), Type::I256);
         let cond = builder.make_imm_value(true);
         builder.insert_inst_no_result_with(|| Br::new(is, cond, latch, exit));
 
@@ -803,7 +803,7 @@ mod tests {
         builder.insert_inst_no_result_with(|| Jump::new(is, header));
 
         builder.switch_to_block(header);
-        let iv = builder.insert_inst_with(|| Phi::new(is, vec![]), Type::I256);
+        let iv = builder.insert_inst_with(|| Phi::new(is, SmallVec::new()), Type::I256);
         let cond = builder.make_imm_value(true);
         builder.insert_inst_no_result_with(|| Br::new(is, cond, latch, exit));
 
@@ -845,7 +845,7 @@ mod tests {
         builder.insert_inst_no_result_with(|| Jump::new(is, header));
 
         builder.switch_to_block(header);
-        let iv = builder.insert_inst_with(|| Phi::new(is, vec![]), Type::I256);
+        let iv = builder.insert_inst_with(|| Phi::new(is, SmallVec::new()), Type::I256);
         let cond = builder.make_imm_value(true);
         builder.insert_inst_no_result_with(|| Br::new(is, cond, latch0, exit));
 
@@ -896,7 +896,7 @@ mod tests {
         builder.insert_inst_no_result_with(|| Jump::new(is, header));
 
         builder.switch_to_block(header);
-        let iv = builder.insert_inst_with(|| Phi::new(is, vec![]), Type::I256);
+        let iv = builder.insert_inst_with(|| Phi::new(is, SmallVec::new()), Type::I256);
         let cond = builder.make_imm_value(true);
         builder.insert_inst_no_result_with(|| Br::new(is, cond, body, exit));
 
@@ -950,7 +950,7 @@ mod tests {
         builder.insert_inst_no_result_with(|| Jump::new(is, header));
 
         builder.switch_to_block(header);
-        let iv = builder.insert_inst_with(|| Phi::new(is, vec![]), Type::I256);
+        let iv = builder.insert_inst_with(|| Phi::new(is, SmallVec::new()), Type::I256);
         let cond = builder.make_imm_value(true);
         builder.insert_inst_no_result_with(|| Br::new(is, cond, body, exit));
 
@@ -1006,7 +1006,7 @@ mod tests {
         builder.insert_inst_no_result_with(|| Jump::new(is, header));
 
         builder.switch_to_block(header);
-        let iv = builder.insert_inst_with(|| Phi::new(is, vec![]), Type::I256);
+        let iv = builder.insert_inst_with(|| Phi::new(is, SmallVec::new()), Type::I256);
         let cond = builder.make_imm_value(true);
         builder.insert_inst_no_result_with(|| Br::new(is, cond, body, exit));
 
@@ -1062,8 +1062,8 @@ mod tests {
         builder.insert_inst_no_result_with(|| Jump::new(is, header));
 
         builder.switch_to_block(header);
-        let iv = builder.insert_inst_with(|| Phi::new(is, vec![]), Type::I256);
-        let other = builder.insert_inst_with(|| Phi::new(is, vec![]), Type::I256);
+        let iv = builder.insert_inst_with(|| Phi::new(is, SmallVec::new()), Type::I256);
+        let other = builder.insert_inst_with(|| Phi::new(is, SmallVec::new()), Type::I256);
         let cond = builder.make_imm_value(true);
         builder.insert_inst_no_result_with(|| Br::new(is, cond, body, exit));
 

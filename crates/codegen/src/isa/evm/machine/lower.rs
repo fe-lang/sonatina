@@ -1,5 +1,5 @@
 use cranelift_entity::SecondaryMap;
-use smallvec::SmallVec;
+use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{
     BlockId, Function, I256, Immediate, Inst, InstSetExt, Signature, Type, U256, Value, ValueId,
     cfg::ControlFlowGraph,
@@ -219,7 +219,7 @@ impl FuncLowerCtx<'_> {
                 }
                 let machine_inst = cursor.insert_inst_data(
                     &mut self.machine,
-                    control_flow::Phi::new_unchecked(self.is, Vec::new()),
+                    control_flow::Phi::new_unchecked(self.is, SmallVec::new()),
                 );
                 self.copy_frontend_origin_to_machine(source_inst, machine_inst);
                 let result_tys = self.machine_result_tys(source_inst)?;
@@ -811,7 +811,7 @@ impl FuncLowerCtx<'_> {
 
         let phi = self.append_inst_with_results_to(
             join_block,
-            control_flow::Phi::new(self.is, vec![(lhs, lhs_block), (rhs, rhs_block)]),
+            control_flow::Phi::new(self.is, smallvec![(lhs, lhs_block), (rhs, rhs_block)]),
             &[Type::I256],
         );
         self.current_block = Some(join_block);

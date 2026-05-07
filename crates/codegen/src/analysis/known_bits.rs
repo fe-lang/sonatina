@@ -682,6 +682,7 @@ fn bool_shape() -> KnownBits {
 
 #[cfg(test)]
 mod tests {
+    use smallvec::smallvec;
     use sonatina_ir::{
         Function, I256, Immediate, Type, U256,
         builder::test_util::*,
@@ -1082,8 +1083,10 @@ mod tests {
         builder.insert_inst_no_result_with(|| Jump::new(is, join));
 
         builder.switch_to_block(join);
-        let phi =
-            builder.insert_inst_with(|| Phi::new(is, vec![(lhs, left), (rhs, right)]), Type::I8);
+        let phi = builder.insert_inst_with(
+            || Phi::new(is, smallvec![(lhs, left), (rhs, right)]),
+            Type::I8,
+        );
         builder.insert_inst_no_result_with(|| Return::new_single(is, phi));
 
         builder.seal_all();
@@ -1272,8 +1275,10 @@ block0:
         builder.insert_inst_no_result_with(|| Jump::new(is, join));
 
         builder.switch_to_block(join);
-        let phi =
-            builder.insert_inst_with(|| Phi::new(is, vec![(ptr, left), (undef, right)]), ptr_ty);
+        let phi = builder.insert_inst_with(
+            || Phi::new(is, smallvec![(ptr, left), (undef, right)]),
+            ptr_ty,
+        );
         builder.insert_inst_no_result_with(|| Return::new_unit(is));
         builder.seal_all();
         builder.finish();

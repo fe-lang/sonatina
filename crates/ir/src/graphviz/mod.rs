@@ -24,6 +24,8 @@ pub fn render_to<W: io::Write>(
 
 #[cfg(test)]
 mod test {
+    use smallvec::smallvec;
+
     use super::*;
     use crate::{
         Type,
@@ -63,7 +65,7 @@ mod test {
         builder.insert_inst_no_result(jump);
 
         builder.switch_to_block(merge_block);
-        let phi = Phi::new(is, vec![(v1, then_block), (v2, else_block)]);
+        let phi = Phi::new(is, smallvec![(v1, then_block), (v2, else_block)]);
         let v3 = builder.insert_inst(phi, Type::I64);
         let add = Add::new(is, v3, arg0);
         builder.insert_inst(add, Type::I64);
