@@ -13,6 +13,7 @@ use sonatina_ir::{BlockId, Function, ValueId, cfg::ControlFlowGraph};
 use super::{
     alloc::{SpillStorage, StackifyAlloc},
     iteration::IterationPlanner,
+    planner::NormalizeSearchScratch,
     slots::{FreeSlotPools, SpillSlotInterference, SpillSlotPools},
     spill::SpillSet,
     sym_stack::SymStack,
@@ -211,6 +212,7 @@ impl<'a> StackifyBuilder<'a> {
         // can rely on loads being correct.
         let mut spill_set: BitSet<ValueId> = BitSet::default();
         let mut forced_object_spills: BitSet<ValueId> = BitSet::default();
+        let mut search_scratch = NormalizeSearchScratch::default();
         loop {
             let checkpoint = observer.checkpoint();
             let mut slots: SpillSlotPools = SpillSlotPools::default();
@@ -221,6 +223,7 @@ impl<'a> StackifyBuilder<'a> {
                 SpillSet::new(&spill_set),
                 &forced_object_spills,
                 &mut slots,
+                &mut search_scratch,
             );
 
             let spill_stable = spill_requests.is_subset(&spill_set);
@@ -249,6 +252,7 @@ impl<'a> StackifyBuilder<'a> {
         spill: SpillSet<'_>,
         forced_object_spills: &BitSet<ValueId>,
         slots: &mut SpillSlotPools,
+        search_scratch: &mut NormalizeSearchScratch,
     ) -> (StackifyAlloc, BitSet<ValueId>, BitSet<ValueId>) {
         let mut object_spill_requests: BitSet<ValueId> = BitSet::default();
         let mut arg_free_slots: FreeSlotPools = FreeSlotPools::default();
@@ -312,6 +316,7 @@ impl<'a> StackifyBuilder<'a> {
             &mut object_spill_requests,
             forced_object_spills,
             inherited_stack,
+            search_scratch,
             observer,
         );
         planner.plan_blocks();

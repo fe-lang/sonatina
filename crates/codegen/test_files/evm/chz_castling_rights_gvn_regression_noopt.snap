@@ -6,8 +6,8 @@ input_file: test_files/evm/chz_castling_rights_gvn_regression_noopt.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 6810 bytes
-  total: 6810 bytes
+  section runtime: 6792 bytes
+  total: 6792 bytes
 
 functions:
   abs_diff: ir_blocks=9 ir_insts=36 vcode_ops=72 fixups=4 imm_bytes=14
@@ -64,7 +64,7 @@ functions:
     mem: scratch_words=0 stable_words=26 stable_mode=StaticAbs(base=0x520) entry_abs_words=36 abs_words_end=62
   meta_castling_rights: ir_blocks=1 ir_insts=7 vcode_ops=17 fixups=2 imm_bytes=3
     mem: scratch_words=1 stable_words=0 stable_mode=None entry_abs_words=162 abs_words_end=1
-  validate_rook_capture: ir_blocks=74 ir_insts=565 vcode_ops=1878 fixups=112 imm_bytes=510
+  validate_rook_capture: ir_blocks=74 ir_insts=565 vcode_ops=1862 fixups=111 imm_bytes=510
     mem: scratch_words=7 stable_words=100 stable_mode=StaticAbs(base=0x860) entry_abs_words=62 abs_words_end=162
   meta_custom: ir_blocks=1 ir_insts=58 vcode_ops=143 fixups=14 imm_bytes=21
     mem: scratch_words=1 stable_words=13 stable_mode=StaticAbs(base=0x14e0) entry_abs_words=162 abs_words_end=175
@@ -92,7 +92,7 @@ functions:
     mem: scratch_words=1 stable_words=0 stable_mode=None entry_abs_words=162 abs_words_end=1
 
 evm:
-  case captured_rook_clears_castling_rights: calldata_len=0 success reason=Return gas_used=36803 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=15803
+  case captured_rook_clears_castling_rights: calldata_len=0 success reason=Return gas_used=36792 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=15792
 
 
 --------------- DEBUG ---------------
@@ -3001,8 +3001,7 @@ validate_rook_capture:
     PUSH1 block6
     JUMPI
   block5:
-    DUP1  // v69.i1 = call %is_white_piece v62;
-    PUSH1 `pc + (4)`
+    PUSH1 `pc + (4)`  // v69.i1 = call %is_white_piece v62;
     SWAP1
     PUSH1 FuncRef(13)
     JUMP
@@ -3011,7 +3010,6 @@ validate_rook_capture:
     JUMPI
   block8:
     POP  // v621.*i256 = gep v619 0.i64 0.i64;
-    POP
     POP
     POP
     POP
@@ -3122,13 +3120,11 @@ validate_rook_capture:
     POP
     POP
     POP
-    POP
     PUSH1 block7
     JUMP
   block6:
     JUMPDEST
-    DUP1  // v72.i1 = call %is_black_piece v62;
-    PUSH1 `pc + (4)`
+    PUSH1 `pc + (4)`  // v72.i1 = call %is_black_piece v62;
     SWAP1
     PUSH1 FuncRef(11)
     JUMP
@@ -3137,7 +3133,6 @@ validate_rook_capture:
     JUMPI
   block11:
     POP  // v442.*i256 = gep v440 0.i64 0.i64;
-    POP
     POP
     POP
     POP
@@ -3248,7 +3243,6 @@ validate_rook_capture:
     POP
     POP
     POP
-    POP
   block7:
     JUMPDEST
     PUSH2 0x1280 (4736)  // v76.i256 = call %piece_at v35 v367;
@@ -3275,18 +3269,16 @@ validate_rook_capture:
     PUSH1 block18
     JUMPI
   block17:
-    DUP1  // v129.i1 = call %is_white_piece v76;
-    PUSH1 `pc + (4)`
+    PUSH1 `pc + (4)`  // v129.i1 = call %is_white_piece v76;
     SWAP1
     PUSH1 FuncRef(13)
     JUMP
     JUMPDEST
     ISZERO  // br v129 block20 block105;
-    PUSH1 block105
+    PUSH1 block19
     JUMPI
   block20:
-    POP  // v615.*i256 = gep v613 0.i64 0.i64;
-    PUSH2 0xc40 (3136)
+    PUSH2 0xc40 (3136)  // v615.*i256 = gep v613 0.i64 0.i64;
     PUSH2 0x9e0 (2528)  // mstore v615 undef.i256 i256;
     MLOAD
     SWAP1
@@ -3308,25 +3300,18 @@ validate_rook_capture:
     SWAP3
     SWAP4
     JUMP
-  block105:
-    JUMPDEST
-    POP  // jump block19;
-    PUSH1 block19
-    JUMP
   block18:
     JUMPDEST
-    DUP1  // v131.i1 = call %is_black_piece v76;
-    PUSH1 `pc + (4)`
+    PUSH1 `pc + (4)`  // v131.i1 = call %is_black_piece v76;
     SWAP1
     PUSH1 FuncRef(11)
     JUMP
     JUMPDEST
     ISZERO  // br v131 block23 block106;
-    PUSH1 block106
+    PUSH1 block19
     JUMPI
   block23:
-    POP  // v448.*i256 = gep v446 0.i64 0.i64;
-    PUSH2 0x1000 (4096)
+    PUSH2 0x1000 (4096)  // v448.*i256 = gep v446 0.i64 0.i64;
     PUSH2 0xa40 (2624)  // mstore v448 undef.i256 i256;
     MLOAD
     SWAP1
@@ -3348,9 +3333,6 @@ validate_rook_capture:
     SWAP3
     SWAP4
     JUMP
-  block106:
-    JUMPDEST
-    POP  // jump block19;
   block19:
     JUMPDEST
     PUSH2 0x8c0 (2240)  // v133.i256 = call %piece_kind v76;

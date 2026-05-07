@@ -6,11 +6,11 @@ input_file: test_files/evm/fe_commutative_branch_array5_loop_regression.sntn
 evm.config: stack_reach=16 vcode=false bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 526 bytes
-  total: 526 bytes
+  section runtime: 527 bytes
+  total: 527 bytes
 
 functions:
-  verify_checked: ir_blocks=17 ir_insts=95 vcode_ops=311 fixups=6 imm_bytes=90
+  verify_checked: ir_blocks=17 ir_insts=95 vcode_ops=310 fixups=6 imm_bytes=91
     mem: scratch_words=28 stable_words=0 stable_mode=None entry_abs_words=38 abs_words_end=28
   run: ir_blocks=3 ir_insts=26 vcode_ops=73 fixups=3 imm_bytes=13
     mem: scratch_words=0 stable_words=10 stable_mode=StaticAbs(base=0x420) entry_abs_words=28 abs_words_end=38

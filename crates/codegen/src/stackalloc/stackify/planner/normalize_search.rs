@@ -1,11 +1,12 @@
 use crate::bitset::BitSet;
 use rustc_hash::{FxHashMap, FxHasher};
+use smallvec::SmallVec;
 use sonatina_ir::{I256, Immediate, ValueId};
 use std::{
     cmp::Ordering,
     collections::{BinaryHeap, VecDeque},
     hash::{Hash, Hasher},
-    sync::{Mutex, OnceLock},
+    sync::OnceLock,
 };
 
 use super::{
@@ -14,6 +15,7 @@ use super::{
         sym_stack::{StackItem, SymStack},
     },
     Planner,
+    operand_prep::{CachedOperandPrepPlan, OperandPrepPlanCache},
 };
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -44,6 +46,11 @@ impl Ord for Cost {
             .then_with(|| self.bytes.cmp(&other.bytes))
     }
 }
+
+const UNAVAILABLE_COST: Cost = Cost {
+    gas: u32::MAX,
+    bytes: u32::MAX,
+};
 
 pub(super) trait CostModel {
     fn cost_pop(&self) -> Cost;
@@ -128,7 +135,12 @@ pub(super) enum KeyInfo {
     Val {
         vid: ValueId,
     },
+    Ignored,
 }
+
+pub(super) type KeyInfos = SmallVec<[KeyInfo; 8]>;
+pub(super) type KeyIds = SmallVec<[u8; 8]>;
+type StackKeyIds = SmallVec<[u8; 21]>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Step {
@@ -138,6 +150,8 @@ pub(super) enum Step {
     PushImm(u8),
     LoadVal(u8),
 }
+
+pub(super) type StepList = SmallVec<[Step; 8]>;
 
 #[derive(Clone, Copy, Debug)]
 pub(super) struct SearchCfg {
@@ -151,10 +165,10 @@ pub(super) struct SearchCfg {
 pub(super) struct NormalizePlan {
     #[cfg_attr(not(test), allow(dead_code))]
     pub(super) cost: Cost,
-    pub(super) steps: Vec<Step>,
-    pub(super) key_infos: Vec<KeyInfo>,
+    pub(super) steps: StepList,
+    pub(super) key_infos: KeyInfos,
     #[allow(dead_code)]
-    pub(super) goal_keys: Vec<u8>,
+    pub(super) goal_keys: KeyIds,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -356,7 +370,6 @@ const NORMALIZE_PLAN_CACHE_CAP: usize = 4096;
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 struct PlanCacheKey {
     mode: u8,
-    func_ptr: usize,
     dup_max: u8,
     swap_max: u8,
     max_len: u8,
@@ -373,7 +386,7 @@ struct PlanCacheKey {
 #[derive(Clone, Debug)]
 enum PlanCacheVal {
     None,
-    Steps(Vec<Step>),
+    Steps(StepList),
 }
 
 struct PlanCache {
@@ -414,6 +427,8 @@ impl<S: Eq + Hash, Q> SearchScratch<S, Q> {
 pub(in crate::stackalloc::stackify) struct NormalizeSearchScratch {
     exact: SearchScratch<PackedState, QueueEntry>,
     prep: SearchScratch<PrepState, PrepQueueEntry>,
+    plan_cache: PlanCache,
+    pub(super) operand_prep_plan_cache: OperandPrepPlanCache,
 }
 
 impl NormalizeSearchScratch {
@@ -468,9 +483,10 @@ impl PlanCache {
     }
 }
 
-fn plan_cache() -> &'static Mutex<PlanCache> {
-    static CACHE: OnceLock<Mutex<PlanCache>> = OnceLock::new();
-    CACHE.get_or_init(|| Mutex::new(PlanCache::new()))
+impl Default for PlanCache {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 fn normalize_search_debug_enabled() -> bool {
@@ -516,10 +532,128 @@ fn compute_cost_hash(cost: &impl CostModel, key_infos: &[KeyInfo], cfg: SearchCf
                 h.write_u32(c.gas);
                 h.write_u32(c.bytes);
             }
+            KeyInfo::Ignored => {
+                h.write_u32(0);
+                h.write_u32(0);
+            }
         }
     }
 
     h.finish()
+}
+
+const OPERAND_PREP_DUP_COSTS: usize = 16;
+const OPERAND_PREP_SWAP_COSTS: usize = 17;
+const OPERAND_PREP_KEY_COSTS: usize = 64;
+
+#[derive(Clone)]
+struct OperandPrepCostTable {
+    pop: Cost,
+    dup: [Cost; OPERAND_PREP_DUP_COSTS],
+    swap: [Cost; OPERAND_PREP_SWAP_COSTS],
+    materialize: [Cost; OPERAND_PREP_KEY_COSTS],
+    min_dup_gas: u32,
+    surplus_last_use_penalty: Cost,
+}
+
+impl OperandPrepCostTable {
+    fn new(cost: &impl CostModel, key_infos: &[KeyInfo], cfg: SearchCfg) -> Option<Self> {
+        if cfg.dup_max > OPERAND_PREP_DUP_COSTS
+            || cfg.swap_max > OPERAND_PREP_SWAP_COSTS
+            || key_infos.len() > OPERAND_PREP_KEY_COSTS
+        {
+            return None;
+        }
+
+        let pop = cost.cost_pop();
+
+        let mut dup = [UNAVAILABLE_COST; OPERAND_PREP_DUP_COSTS];
+        for (pos, slot) in dup.iter_mut().take(cfg.dup_max).enumerate() {
+            *slot = cost.cost_dup(pos as u8);
+        }
+
+        let mut swap = [UNAVAILABLE_COST; OPERAND_PREP_SWAP_COSTS];
+        for (depth, slot) in swap.iter_mut().enumerate().take(cfg.swap_max).skip(1) {
+            *slot = cost.cost_swap(depth as u8);
+        }
+        if cfg.swap_max <= 1 {
+            swap[1] = cost.cost_swap(1);
+        }
+
+        let mut materialize = [UNAVAILABLE_COST; OPERAND_PREP_KEY_COSTS];
+        for (kid, info) in key_infos.iter().copied().enumerate() {
+            materialize[kid] = match info {
+                KeyInfo::Imm { canon, .. } => cost.cost_push_imm(canon),
+                KeyInfo::Val { vid } => cost.cost_load(vid),
+                KeyInfo::Ignored => UNAVAILABLE_COST,
+            };
+        }
+
+        let min_dup_gas = dup
+            .iter()
+            .take(cfg.dup_max)
+            .map(|cost| cost.gas)
+            .min()
+            .unwrap_or(u32::MAX);
+        let surplus_last_use_penalty = pop.saturating_add(swap[1]);
+
+        Some(Self {
+            pop,
+            dup,
+            swap,
+            materialize,
+            min_dup_gas,
+            surplus_last_use_penalty,
+        })
+    }
+
+    fn materialize_cost(&self, kid: u8) -> Cost {
+        self.materialize[kid as usize]
+    }
+
+    fn materialize_gas(&self, kid: u8) -> u32 {
+        self.materialize_cost(kid).gas
+    }
+
+    fn cost_hash(&self, key_infos: &[KeyInfo], cfg: SearchCfg) -> u64 {
+        let mut h = FxHasher::default();
+
+        write_cost_to_hash(&mut h, self.pop);
+        for &cost in self.dup.iter().take(cfg.dup_max) {
+            write_cost_to_hash(&mut h, cost);
+        }
+        for &cost in self.swap.iter().take(cfg.swap_max).skip(1) {
+            write_cost_to_hash(&mut h, cost);
+        }
+
+        for (kid, info) in key_infos.iter().enumerate() {
+            match info {
+                KeyInfo::Ignored => {
+                    h.write_u32(0);
+                    h.write_u32(0);
+                }
+                KeyInfo::Imm { .. } | KeyInfo::Val { .. } => {
+                    write_cost_to_hash(&mut h, self.materialize[kid]);
+                }
+            }
+        }
+
+        h.finish()
+    }
+}
+
+fn write_cost_to_hash(h: &mut FxHasher, cost: Cost) {
+    h.write_u32(cost.gas);
+    h.write_u32(cost.bytes);
+}
+
+fn find_push0_kid(key_infos: &[KeyInfo], materializable_imm: &[u8]) -> Option<u8> {
+    materializable_imm.iter().copied().find(|&kid| {
+        matches!(
+            key_infos[kid as usize],
+            KeyInfo::Imm { canon, .. } if canon.is_zero()
+        )
+    })
 }
 
 fn common_suffix_len(state: PackedState, goal: PackedState) -> usize {
@@ -605,11 +739,11 @@ pub(super) fn solve_optimal_normalize_plan(
     }
 
     let mut key_ids: FxHashMap<Key, u8> = FxHashMap::default();
-    let mut key_infos: Vec<KeyInfo> = Vec::new();
+    let mut key_infos: KeyInfos = SmallVec::new();
 
-    let mut goal_keys: Vec<u8> = Vec::with_capacity(desired.len());
-    let mut materializable_imm: Vec<u8> = Vec::new();
-    let mut materializable_val: Vec<u8> = Vec::new();
+    let mut goal_keys: KeyIds = SmallVec::new();
+    let mut materializable_imm: KeyIds = SmallVec::new();
+    let mut materializable_val: KeyIds = SmallVec::new();
     let mut seen_push: u64 = 0;
     let mut seen_load: u64 = 0;
 
@@ -629,7 +763,7 @@ pub(super) fn solve_optimal_normalize_plan(
         }
     }
 
-    let mut start_keys: Vec<u8> = Vec::with_capacity(start_limit);
+    let mut start_keys: StackKeyIds = SmallVec::new();
     for depth in 0..start_limit {
         let Some(StackItem::Value(v)) = stack.item_at(depth) else {
             return None;
@@ -648,7 +782,6 @@ pub(super) fn solve_optimal_normalize_plan(
 
     let cache_key = PlanCacheKey {
         mode: 0,
-        func_ptr: ctx.func as *const _ as usize,
         dup_max: cfg.dup_max as u8,
         swap_max: cfg.swap_max as u8,
         max_len: cfg.max_len as u8,
@@ -662,10 +795,7 @@ pub(super) fn solve_optimal_normalize_plan(
         ctx_bits2: 0,
     };
 
-    if let Some(hit) = {
-        let cache = plan_cache().lock().unwrap();
-        cache.get(&cache_key).cloned()
-    } {
+    if let Some(hit) = scratch.plan_cache.get(&cache_key).cloned() {
         if debug {
             eprintln!("normalize_search: cache hit");
         }
@@ -681,13 +811,12 @@ pub(super) fn solve_optimal_normalize_plan(
     }
 
     if start == goal {
-        plan_cache()
-            .lock()
-            .unwrap()
-            .insert(cache_key, PlanCacheVal::Steps(Vec::new()));
+        scratch
+            .plan_cache
+            .insert(cache_key, PlanCacheVal::Steps(StepList::new()));
         return Some(NormalizePlan {
             cost: Cost::default(),
-            steps: Vec::new(),
+            steps: StepList::new(),
             key_infos,
             goal_keys,
         });
@@ -700,7 +829,7 @@ pub(super) fn solve_optimal_normalize_plan(
     let goal_mask = key_mask_from_counts(&goal_counts);
 
     let mut upper_bound = estimate_flush_rebuild_cost(ctx, stack, desired, cost);
-    let mut incumbent_steps: Option<Vec<Step>> = None;
+    let mut incumbent_steps: Option<StepList> = None;
 
     if let Some(steps) = build_delete_tail_under_prefix_upper_bound(&start_keys, &goal_keys, cfg) {
         let greedy_cost = cost_for_steps(&steps, &key_infos, cost);
@@ -730,12 +859,7 @@ pub(super) fn solve_optimal_normalize_plan(
         }
     }
 
-    let push0_kid: Option<u8> = materializable_imm.iter().copied().find(|&kid| {
-        matches!(
-            key_infos[kid as usize],
-            KeyInfo::Imm { canon, .. } if canon.is_zero()
-        )
-    });
+    let push0_kid = find_push0_kid(&key_infos, &materializable_imm);
     let push0_cost = push0_kid.map(|kid| {
         let KeyInfo::Imm { canon, .. } = key_infos[kid as usize] else {
             unreachable!("expected imm key info")
@@ -873,17 +997,13 @@ pub(super) fn solve_optimal_normalize_plan(
         if cur_len < cfg.max_len
             && let (Some(kid), Some(push0_cost)) = (push0_kid, push0_cost)
         {
-            let bit = 1u64 << kid;
-            let dominated = (duplicable & bit) != 0 && push0_cost >= dup_cost_for_kid[kid as usize];
-            if !dominated {
-                consider_succ(
-                    entry.state.push(kid),
-                    g.saturating_add(push0_cost),
-                    entry.state,
-                    Step::PushImm(kid),
-                    &mut consider_ctx,
-                );
-            }
+            consider_succ(
+                entry.state.push(kid),
+                g.saturating_add(push0_cost),
+                entry.state,
+                Step::PushImm(kid),
+                &mut consider_ctx,
+            );
         }
 
         // SWAP
@@ -923,10 +1043,7 @@ pub(super) fn solve_optimal_normalize_plan(
                 }
                 seen |= bit;
 
-                if Some(kid) == push0_kid
-                    && let Some(push0_cost) = push0_cost
-                    && push0_cost < dup_cost_for_kid[kid as usize]
-                {
+                if Some(kid) == push0_kid {
                     continue;
                 }
                 consider_succ(
@@ -991,7 +1108,7 @@ pub(super) fn solve_optimal_normalize_plan(
         );
     }
 
-    plan_cache().lock().unwrap().insert(
+    scratch.plan_cache.insert(
         cache_key,
         incumbent_steps
             .as_ref()
@@ -1078,11 +1195,11 @@ pub(super) fn solve_optimal_repair_prefix_plan(
     }
 
     let mut key_ids: FxHashMap<Key, u8> = FxHashMap::default();
-    let mut key_infos: Vec<KeyInfo> = Vec::new();
+    let mut key_infos: KeyInfos = SmallVec::new();
 
-    let mut goal_keys: Vec<u8> = Vec::with_capacity(desired_prefix.len());
-    let mut materializable_imm: Vec<u8> = Vec::new();
-    let mut materializable_val: Vec<u8> = Vec::new();
+    let mut goal_keys: KeyIds = SmallVec::new();
+    let mut materializable_imm: KeyIds = SmallVec::new();
+    let mut materializable_val: KeyIds = SmallVec::new();
     let mut seen_push: u64 = 0;
     let mut seen_load: u64 = 0;
 
@@ -1102,7 +1219,7 @@ pub(super) fn solve_optimal_repair_prefix_plan(
         }
     }
 
-    let mut start_keys: Vec<u8> = Vec::with_capacity(start_repair);
+    let mut start_keys: StackKeyIds = SmallVec::new();
     for depth in 0..start_repair {
         let Some(StackItem::Value(v)) = stack.item_at(depth) else {
             return None;
@@ -1133,7 +1250,6 @@ pub(super) fn solve_optimal_repair_prefix_plan(
 
     let cache_key = PlanCacheKey {
         mode: 1,
-        func_ptr: ctx.func as *const _ as usize,
         dup_max: cfg.dup_max as u8,
         swap_max: cfg.swap_max as u8,
         max_len: cfg.max_len as u8,
@@ -1147,10 +1263,7 @@ pub(super) fn solve_optimal_repair_prefix_plan(
         ctx_bits2: 0,
     };
 
-    if let Some(hit) = {
-        let cache = plan_cache().lock().unwrap();
-        cache.get(&cache_key).cloned()
-    } {
+    if let Some(hit) = scratch.plan_cache.get(&cache_key).cloned() {
         if debug {
             eprintln!("repair_normalize_search: cache hit");
         }
@@ -1166,13 +1279,12 @@ pub(super) fn solve_optimal_repair_prefix_plan(
     }
 
     if start == goal {
-        plan_cache()
-            .lock()
-            .unwrap()
-            .insert(cache_key, PlanCacheVal::Steps(Vec::new()));
+        scratch
+            .plan_cache
+            .insert(cache_key, PlanCacheVal::Steps(StepList::new()));
         return Some(NormalizePlan {
             cost: Cost::default(),
-            steps: Vec::new(),
+            steps: StepList::new(),
             key_infos,
             goal_keys,
         });
@@ -1206,7 +1318,7 @@ pub(super) fn solve_optimal_repair_prefix_plan(
             upper_bound = upper_bound.saturating_add(cost.cost_load(v));
         }
     }
-    let mut incumbent_steps: Option<Vec<Step>> = None;
+    let mut incumbent_steps: Option<StepList> = None;
 
     if let Some(steps) = build_greedy_repair_prefix_upper_bound(
         &start_keys,
@@ -1228,12 +1340,7 @@ pub(super) fn solve_optimal_repair_prefix_plan(
         }
     }
 
-    let push0_kid: Option<u8> = materializable_imm.iter().copied().find(|&kid| {
-        matches!(
-            key_infos[kid as usize],
-            KeyInfo::Imm { canon, .. } if canon.is_zero()
-        )
-    });
+    let push0_kid = find_push0_kid(&key_infos, &materializable_imm);
     let push0_cost = push0_kid.map(|kid| {
         let KeyInfo::Imm { canon, .. } = key_infos[kid as usize] else {
             unreachable!("expected imm key info")
@@ -1380,17 +1487,13 @@ pub(super) fn solve_optimal_repair_prefix_plan(
         if cur_len < cfg.max_len
             && let (Some(kid), Some(push0_cost)) = (push0_kid, push0_cost)
         {
-            let bit = 1u64 << kid;
-            let dominated = (duplicable & bit) != 0 && push0_cost >= dup_cost_for_kid[kid as usize];
-            if !dominated {
-                consider_succ(
-                    entry.state.push(kid),
-                    g.saturating_add(push0_cost),
-                    entry.state,
-                    Step::PushImm(kid),
-                    &mut consider_ctx,
-                );
-            }
+            consider_succ(
+                entry.state.push(kid),
+                g.saturating_add(push0_cost),
+                entry.state,
+                Step::PushImm(kid),
+                &mut consider_ctx,
+            );
         }
 
         // SWAP (restricted to the repair region).
@@ -1446,10 +1549,7 @@ pub(super) fn solve_optimal_repair_prefix_plan(
                     }
                     seen |= bit;
 
-                    if Some(kid) == push0_kid
-                        && let Some(push0_cost) = push0_cost
-                        && push0_cost < dup_cost_for_kid[kid as usize]
-                    {
+                    if Some(kid) == push0_kid {
                         continue;
                     }
 
@@ -1515,7 +1615,7 @@ pub(super) fn solve_optimal_repair_prefix_plan(
         );
     }
 
-    plan_cache().lock().unwrap().insert(
+    scratch.plan_cache.insert(
         cache_key,
         incumbent_steps
             .as_ref()
@@ -1533,16 +1633,84 @@ pub(super) fn solve_optimal_repair_prefix_plan(
 }
 
 struct OperandPrepProblem {
-    key_infos: Vec<KeyInfo>,
-    goal_keys: Vec<u8>,
+    key_infos: KeyInfos,
+    goal_keys: KeyIds,
     goal_mask: u64,
     goal_counts: [u8; 64],
     preserve_mask: u64,
     last_use_mask: u64,
-    materializable_imm: Vec<u8>,
-    materializable_val: Vec<u8>,
+    materializable_imm: KeyIds,
+    materializable_val: KeyIds,
     start_state: PrepState,
     goal_state: PackedState,
+    max_len: usize,
+}
+
+impl OperandPrepProblem {
+    fn push0_kid(&self) -> Option<u8> {
+        find_push0_kid(&self.key_infos, &self.materializable_imm)
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct OperandPrepEffectiveWindow {
+    pub(super) start_len: usize,
+    pub(super) max_len: usize,
+}
+
+pub(super) fn operand_prep_effective_window(
+    ctx: &StackifyContext<'_>,
+    stack: &SymStack,
+    args: &[ValueId],
+    cfg: SearchCfg,
+) -> OperandPrepEffectiveWindow {
+    let arg_len = args.len().min(cfg.max_len);
+    if cfg.max_len == 0 || arg_len == 0 {
+        return OperandPrepEffectiveWindow {
+            start_len: 0,
+            max_len: arg_len,
+        };
+    }
+
+    let stack_cap = stack.len_above_func_ret().min(cfg.max_len);
+    let mut source_counts: FxHashMap<Key, usize> = FxHashMap::default();
+    for &arg in args {
+        *source_counts.entry(canonical_key(ctx, arg)).or_default() += 1;
+    }
+
+    let mut deepest_source: Option<usize> = None;
+    let mut remaining = args.len();
+    for depth in 0..stack_cap {
+        let Some(StackItem::Value(value)) = stack.item_at(depth) else {
+            continue;
+        };
+        let key = canonical_key(ctx, *value);
+        let Some(count) = source_counts.get_mut(&key) else {
+            continue;
+        };
+        if *count == 0 {
+            continue;
+        }
+
+        *count -= 1;
+        remaining -= 1;
+        deepest_source = Some(depth);
+        if remaining == 0 {
+            break;
+        }
+    }
+
+    let source_len = deepest_source.map_or(0, |depth| depth + 1);
+    let start_len = stack_cap.min(arg_len.max(source_len));
+    let max_len = if deepest_source.is_some() {
+        cfg.max_len.min(start_len.saturating_add(arg_len))
+    } else {
+        arg_len
+    }
+    .max(start_len)
+    .min(cfg.max_len);
+
+    OperandPrepEffectiveWindow { start_len, max_len }
 }
 
 fn build_operand_prep_problem(
@@ -1553,19 +1721,20 @@ fn build_operand_prep_problem(
     cfg: SearchCfg,
 ) -> Option<OperandPrepProblem> {
     let start_limit = stack.len_above_func_ret();
-    let window_len = start_limit.min(cfg.max_len);
+    let effective_window = operand_prep_effective_window(ctx, stack, args, cfg);
+    let window_len = start_limit.min(effective_window.start_len);
 
     let mut key_ids: FxHashMap<Key, u8> = FxHashMap::default();
-    let mut key_infos: Vec<KeyInfo> = Vec::new();
+    let mut key_infos: KeyInfos = SmallVec::new();
 
-    let mut goal_keys: Vec<u8> = Vec::with_capacity(args.len());
+    let mut goal_keys: KeyIds = SmallVec::new();
     let mut goal_mask: u64 = 0;
     let mut goal_counts: [u8; 64] = [0u8; 64];
     let mut preserve_mask: u64 = 0;
     let mut last_use_mask: u64 = 0;
 
-    let mut materializable_imm: Vec<u8> = Vec::new();
-    let mut materializable_val: Vec<u8> = Vec::new();
+    let mut materializable_imm: KeyIds = SmallVec::new();
+    let mut materializable_val: KeyIds = SmallVec::new();
     let mut seen_push: u64 = 0;
     let mut seen_load: u64 = 0;
 
@@ -1594,13 +1763,22 @@ fn build_operand_prep_problem(
         }
     }
 
-    let mut start_keys: Vec<u8> = Vec::with_capacity(window_len);
+    let mut start_keys: StackKeyIds = SmallVec::new();
     for depth in 0..window_len {
         let Some(StackItem::Value(v)) = stack.item_at(depth) else {
             return None;
         };
         let key = canonical_key(ctx, *v);
-        let kid = intern_key(ctx, key, *v, &mut key_ids, &mut key_infos)?;
+        let kid = if let Some(&kid) = key_ids.get(&key) {
+            kid
+        } else {
+            if key_infos.len() >= 64 {
+                return None;
+            }
+            let kid = key_infos.len() as u8;
+            key_infos.push(KeyInfo::Ignored);
+            kid
+        };
         start_keys.push(kid);
     }
 
@@ -1645,23 +1823,26 @@ fn build_operand_prep_problem(
             tail: tail_present,
             mem: 0,
         },
+        max_len: effective_window.max_len,
     })
 }
 
 fn operand_prep_cache_key(
-    ctx: &StackifyContext<'_>,
     problem: &OperandPrepProblem,
-    cost: &impl CostModel,
+    costs: &OperandPrepCostTable,
     cfg: SearchCfg,
 ) -> PlanCacheKey {
+    let effective_cfg = SearchCfg {
+        max_len: problem.max_len,
+        ..cfg
+    };
     PlanCacheKey {
         mode: 2,
-        func_ptr: ctx.func as *const _ as usize,
         dup_max: cfg.dup_max as u8,
         swap_max: cfg.swap_max as u8,
-        max_len: cfg.max_len as u8,
+        max_len: problem.max_len as u8,
         max_expansions: cfg.max_expansions as u32,
-        cost_hash: compute_cost_hash(cost, &problem.key_infos, cfg),
+        cost_hash: costs.cost_hash(&problem.key_infos, effective_cfg),
         start: problem.start_state.window,
         goal: problem.goal_state,
         ctx: PackedState::EMPTY,
@@ -1669,25 +1850,6 @@ fn operand_prep_cache_key(
         ctx_bits1: problem.last_use_mask,
         ctx_bits2: problem.start_state.tail,
     }
-}
-
-fn operand_prep_push0_cost(
-    problem: &OperandPrepProblem,
-    cost: &impl CostModel,
-) -> (Option<u8>, Option<Cost>) {
-    let push0_kid = problem.materializable_imm.iter().copied().find(|&kid| {
-        matches!(
-            problem.key_infos[kid as usize],
-            KeyInfo::Imm { canon, .. } if canon.is_zero()
-        )
-    });
-    let push0_cost = push0_kid.map(|kid| {
-        let KeyInfo::Imm { canon, .. } = problem.key_infos[kid as usize] else {
-            unreachable!("expected imm key info")
-        };
-        cost.cost_push_imm(canon)
-    });
-    (push0_kid, push0_cost)
 }
 
 fn prep_window_copy_count(state: PrepState, kid: u8) -> u8 {
@@ -1712,11 +1874,28 @@ fn prep_top_is_last_use(state: PrepState, last_use_mask: u64) -> bool {
 }
 
 fn prep_prefix_matches(window: PackedState, goal: &[u8]) -> bool {
-    window.len() >= goal.len()
-        && goal
-            .iter()
-            .enumerate()
-            .all(|(idx, &kid)| window.get(idx) == kid)
+    prep_prefix_len(window, goal) == goal.len()
+}
+
+fn prep_prefix_len(window: PackedState, goal: &[u8]) -> usize {
+    goal.iter()
+        .enumerate()
+        .take_while(|&(idx, &kid)| idx < window.len() && window.get(idx) == kid)
+        .count()
+}
+
+fn operand_prep_copy_can_help(
+    problem: &OperandPrepProblem,
+    state: PrepState,
+    kid: u8,
+    win: u8,
+) -> bool {
+    let bit = 1u64 << kid;
+    let prefix = prep_prefix_len(state.window, &problem.goal_keys);
+    win < problem.goal_counts[kid as usize]
+        || win.saturating_add(u8::from((state.tail & bit) != 0))
+            < prep_needed_copy_count(problem, state, kid)
+        || problem.goal_keys.get(prefix) == Some(&kid)
 }
 
 fn operand_prep_swap_pos(
@@ -1737,7 +1916,7 @@ fn operand_prep_swap_pos(
 
 fn apply_operand_prep_swap(
     state: &mut PrepState,
-    steps: &mut Vec<Step>,
+    steps: &mut StepList,
     total_cost: &mut Cost,
     pos: usize,
     goal_prefix: &[u8],
@@ -1778,7 +1957,7 @@ struct OperandPrepUpperBoundCtx<'a, C: CostModel> {
 fn apply_operand_prep_copy<C: CostModel>(
     ctx: &OperandPrepUpperBoundCtx<'_, C>,
     state: &mut PrepState,
-    steps: &mut Vec<Step>,
+    steps: &mut StepList,
     total_cost: &mut Cost,
     prepared: usize,
     kid: u8,
@@ -1843,7 +2022,11 @@ fn build_linear_operand_prep_upper_bound(
     allow_copy_swap: bool,
     cost: &impl CostModel,
     cfg: SearchCfg,
-) -> Option<(Vec<Step>, Cost)> {
+) -> Option<(StepList, Cost)> {
+    let cfg = SearchCfg {
+        max_len: problem.max_len,
+        ..cfg
+    };
     let ctx = OperandPrepUpperBoundCtx {
         problem,
         allow_copy_swap,
@@ -1851,7 +2034,7 @@ fn build_linear_operand_prep_upper_bound(
         cfg,
     };
     let mut state = problem.start_state;
-    let mut steps: Vec<Step> = Vec::new();
+    let mut steps = StepList::new();
     let mut total_cost = Cost::default();
     let mut prepared: usize = 0;
 
@@ -2010,8 +2193,8 @@ fn prep_greedy_node_better(lhs: &PrepGreedyNode, rhs: &PrepGreedyNode) -> bool {
     prep_greedy_node_cmp(lhs, rhs).is_lt()
 }
 
-fn prep_greedy_steps(nodes: &[PrepGreedyNode], mut idx: usize) -> Vec<Step> {
-    let mut steps = Vec::new();
+fn prep_greedy_steps(nodes: &[PrepGreedyNode], mut idx: usize) -> StepList {
+    let mut steps = StepList::new();
     loop {
         let node = nodes[idx];
         if let Some(step) = node.step {
@@ -2031,14 +2214,18 @@ fn build_greedy_operand_prep_upper_bound(
     cost: &impl CostModel,
     cfg: SearchCfg,
     upper_bound: Cost,
-) -> Option<(Vec<Step>, Cost)> {
+) -> Option<(StepList, Cost)> {
+    let cfg = SearchCfg {
+        max_len: problem.max_len,
+        ..cfg
+    };
     if operand_prep_goal(
         problem.start_state,
         &problem.goal_keys,
         problem.preserve_mask,
         &problem.goal_counts,
     ) {
-        return Some((Vec::new(), Cost::default()));
+        return Some((StepList::new(), Cost::default()));
     }
 
     let last_use_count = problem.last_use_mask.count_ones() as usize;
@@ -2046,7 +2233,13 @@ fn build_greedy_operand_prep_upper_bound(
         return None;
     }
 
-    let (push0_kid, push0_cost) = operand_prep_push0_cost(problem, cost);
+    let push0_kid = problem.push0_kid();
+    let push0_cost = push0_kid.map(|kid| {
+        let KeyInfo::Imm { canon, .. } = problem.key_infos[kid as usize] else {
+            unreachable!("expected imm key info")
+        };
+        cost.cost_push_imm(canon)
+    });
     let surplus_last_use_penalty = cost.cost_pop().saturating_add(cost.cost_swap(1));
     let max_depth = problem.goal_keys.len().saturating_add(cfg.swap_max).min(24);
     let beam_width = 192usize;
@@ -2173,10 +2366,7 @@ fn build_greedy_operand_prep_upper_bound(
                     }
                     seen_kids |= bit;
 
-                    if Some(kid) == push0_kid
-                        && let Some(push0_cost) = push0_cost
-                        && push0_cost < dup_cost_for_kid[kid as usize]
-                    {
+                    if Some(kid) == push0_kid {
                         continue;
                     }
 
@@ -2199,26 +2389,20 @@ fn build_greedy_operand_prep_upper_bound(
             }
 
             if let (Some(kid), Some(push0_cost)) = (push0_kid, push0_cost) {
-                let bit = 1u64 << kid;
-                let dominated =
-                    (duplicable & bit) != 0 && push0_cost >= dup_cost_for_kid[kid as usize];
-                if !dominated {
-                    let next =
-                        prep_insert(node.state, kid, problem.preserve_mask, false, cfg.max_len);
-                    consider(
+                let next = prep_insert(node.state, kid, problem.preserve_mask, false, cfg.max_len);
+                consider(
+                    next,
+                    node.cost.saturating_add(operand_prep_insert_cost(
+                        node.state,
                         next,
-                        node.cost.saturating_add(operand_prep_insert_cost(
-                            node.state,
-                            next,
-                            kid,
-                            &problem.goal_counts,
-                            problem.last_use_mask,
-                            push0_cost,
-                            surplus_last_use_penalty,
-                        )),
-                        Step::PushImm(kid),
-                    );
-                }
+                        kid,
+                        &problem.goal_counts,
+                        problem.last_use_mask,
+                        push0_cost,
+                        surplus_last_use_penalty,
+                    )),
+                    Step::PushImm(kid),
+                );
             }
 
             for &kid in &problem.materializable_imm {
@@ -2303,6 +2487,10 @@ pub(super) fn solve_greedy_operand_prep_plan(
     cfg: SearchCfg,
 ) -> Option<NormalizePlan> {
     let problem = build_operand_prep_problem(ctx, stack, args, consume_last_use, cfg)?;
+    let cfg = SearchCfg {
+        max_len: problem.max_len,
+        ..cfg
+    };
     let (steps, cost) =
         build_linear_operand_prep_upper_bound(&problem, allow_copy_swap, cost, cfg)?;
     Some(NormalizePlan {
@@ -2327,9 +2515,9 @@ pub(super) fn solve_optimal_operand_prep_plan(
     if args.is_empty() {
         return Some(NormalizePlan {
             cost: Cost::default(),
-            steps: Vec::new(),
-            key_infos: Vec::new(),
-            goal_keys: Vec::new(),
+            steps: StepList::new(),
+            key_infos: KeyInfos::new(),
+            goal_keys: KeyIds::new(),
         });
     }
 
@@ -2351,19 +2539,21 @@ pub(super) fn solve_optimal_operand_prep_plan(
     }
 
     let problem = build_operand_prep_problem(ctx, stack, args, consume_last_use, cfg)?;
-    let cache_key = operand_prep_cache_key(ctx, &problem, cost, cfg);
+    let cfg = SearchCfg {
+        max_len: problem.max_len,
+        ..cfg
+    };
+    let prep_costs = OperandPrepCostTable::new(cost, &problem.key_infos, cfg)?;
+    let cache_key = operand_prep_cache_key(&problem, &prep_costs, cfg);
 
-    if let Some(hit) = {
-        let cache = plan_cache().lock().unwrap();
-        cache.get(&cache_key).cloned()
-    } {
+    if let Some(hit) = scratch.plan_cache.get(&cache_key).cloned() {
         if debug {
             eprintln!("operand_prep_search: cache hit");
         }
         return match hit {
             PlanCacheVal::None => None,
             PlanCacheVal::Steps(steps) => Some(NormalizePlan {
-                cost: cost_for_steps(&steps, &problem.key_infos, cost),
+                cost: cost_for_steps_with_table(&steps, &prep_costs),
                 steps,
                 key_infos: problem.key_infos,
                 goal_keys: problem.goal_keys,
@@ -2377,31 +2567,27 @@ pub(super) fn solve_optimal_operand_prep_plan(
         problem.preserve_mask,
         &problem.goal_counts,
     ) {
-        plan_cache()
-            .lock()
-            .unwrap()
-            .insert(cache_key, PlanCacheVal::Steps(Vec::new()));
+        scratch
+            .plan_cache
+            .insert(cache_key, PlanCacheVal::Steps(StepList::new()));
         return Some(NormalizePlan {
             cost: Cost::default(),
-            steps: Vec::new(),
+            steps: StepList::new(),
             key_infos: problem.key_infos,
             goal_keys: problem.goal_keys,
         });
     }
 
-    let (push0_kid, push0_cost) = operand_prep_push0_cost(&problem, cost);
-    let pop_cost = cost.cost_pop();
-    let surplus_last_use_penalty = pop_cost.saturating_add(cost.cost_swap(1));
+    let push0_kid = problem.push0_kid();
+    let push0_cost = push0_kid.map(|kid| prep_costs.materialize_cost(kid));
+    let surplus_last_use_penalty = prep_costs.surplus_last_use_penalty;
     let Some((linear_steps, linear_cost)) =
         build_linear_operand_prep_upper_bound(&problem, true, cost, cfg)
     else {
         if debug {
             eprintln!("operand_prep_search: linear greedy plan failed goal check");
         }
-        plan_cache()
-            .lock()
-            .unwrap()
-            .insert(cache_key, PlanCacheVal::None);
+        scratch.plan_cache.insert(cache_key, PlanCacheVal::None);
         return None;
     };
 
@@ -2410,7 +2596,7 @@ pub(super) fn solve_optimal_operand_prep_plan(
         && problem.preserve_mask == 0;
 
     let mut upper_bound = linear_cost;
-    let mut incumbent_steps: Vec<Step> = linear_steps;
+    let mut incumbent_steps = linear_steps;
     let mut incumbent_cost = upper_bound;
 
     if let Some((steps, greedy_cost)) =
@@ -2427,30 +2613,62 @@ pub(super) fn solve_optimal_operand_prep_plan(
         incumbent_cost = greedy_cost;
     }
 
-    if high_arity_consuming {
-        plan_cache()
-            .lock()
-            .unwrap()
-            .insert(cache_key, PlanCacheVal::Steps(incumbent_steps.clone()));
+    let finish_incumbent = |scratch: &mut NormalizeSearchScratch,
+                            steps: StepList,
+                            plan_cost: Cost,
+                            key_infos: KeyInfos,
+                            goal_keys: KeyIds| {
+        scratch
+            .plan_cache
+            .insert(cache_key, PlanCacheVal::Steps(steps.clone()));
 
-        return Some(NormalizePlan {
-            cost: incumbent_cost,
-            steps: incumbent_steps,
-            key_infos: problem.key_infos,
-            goal_keys: problem.goal_keys,
-        });
+        Some(NormalizePlan {
+            cost: plan_cost,
+            steps,
+            key_infos,
+            goal_keys,
+        })
+    };
+
+    if high_arity_consuming {
+        return finish_incumbent(
+            scratch,
+            incumbent_steps,
+            incumbent_cost,
+            problem.key_infos,
+            problem.goal_keys,
+        );
     }
 
-    let dup_gas_lb = minimal_dup_gas(cost, cfg.dup_max);
+    if cfg.max_expansions == 0 {
+        return finish_incumbent(
+            scratch,
+            incumbent_steps,
+            incumbent_cost,
+            problem.key_infos,
+            problem.goal_keys,
+        );
+    }
+
+    let dup_gas_lb = prep_costs.min_dup_gas;
     let start_h = heuristic_operand_prep(
         problem.start_state,
         &problem.goal_counts,
         problem.goal_mask,
         problem.preserve_mask,
         dup_gas_lb,
-        &problem.key_infos,
-        cost,
+        &prep_costs,
     );
+
+    if should_prune(start_h, upper_bound, true) {
+        return finish_incumbent(
+            scratch,
+            incumbent_steps,
+            incumbent_cost,
+            problem.key_infos,
+            problem.goal_keys,
+        );
+    }
 
     scratch.clear_prep();
     let prep = &mut scratch.prep;
@@ -2530,6 +2748,12 @@ pub(super) fn solve_optimal_operand_prep_plan(
 
         let cur_len = entry.state.window.len();
 
+        let mut win_counts = [0u8; 64];
+        for pos in 0..cur_len {
+            let kid = entry.state.window.get(pos) as usize;
+            win_counts[kid] = win_counts[kid].saturating_add(1);
+        }
+
         let mut dup_cost_for_kid = [Cost {
             gas: u32::MAX,
             bytes: u32::MAX,
@@ -2540,7 +2764,7 @@ pub(super) fn solve_optimal_operand_prep_plan(
             for pos in 0..=max_pos {
                 let kid = entry.state.window.get(pos) as usize;
                 duplicable |= 1u64 << kid;
-                dup_cost_for_kid[kid] = dup_cost_for_kid[kid].min(cost.cost_dup(pos as u8));
+                dup_cost_for_kid[kid] = dup_cost_for_kid[kid].min(prep_costs.dup[pos]);
             }
         }
 
@@ -2549,8 +2773,7 @@ pub(super) fn solve_optimal_operand_prep_plan(
             goal_mask: problem.goal_mask,
             preserve_mask: problem.preserve_mask,
             dup_gas: dup_gas_lb,
-            key_infos: &problem.key_infos,
-            cost,
+            costs: &prep_costs,
             upper_bound,
             nodes: &mut *nodes,
             open: &mut *open,
@@ -2573,7 +2796,7 @@ pub(super) fn solve_optimal_operand_prep_plan(
                 };
                 consider_prep_succ(
                     next,
-                    g.saturating_add(cost.cost_swap(depth as u8)),
+                    g.saturating_add(prep_costs.swap[depth]),
                     entry.state,
                     Step::Swap(depth as u8),
                     &mut consider_ctx,
@@ -2595,10 +2818,7 @@ pub(super) fn solve_optimal_operand_prep_plan(
                 }
                 seen |= bit;
 
-                if Some(kid) == push0_kid
-                    && let Some(push0_cost) = push0_cost
-                    && push0_cost < dup_cost_for_kid[kid as usize]
-                {
+                if Some(kid) == push0_kid {
                     continue;
                 }
 
@@ -2611,7 +2831,7 @@ pub(super) fn solve_optimal_operand_prep_plan(
                         kid,
                         &problem.goal_counts,
                         problem.last_use_mask,
-                        cost.cost_dup(pos as u8),
+                        prep_costs.dup[pos],
                         surplus_last_use_penalty,
                     )),
                     entry.state,
@@ -2622,36 +2842,29 @@ pub(super) fn solve_optimal_operand_prep_plan(
         }
 
         if let (Some(kid), Some(push0_cost)) = (push0_kid, push0_cost) {
-            let bit = 1u64 << kid;
-            let dominated = (duplicable & bit) != 0 && push0_cost >= dup_cost_for_kid[kid as usize];
-            if !dominated {
-                let next = prep_insert(entry.state, kid, problem.preserve_mask, false, cfg.max_len);
-                consider_prep_succ(
-                    next,
-                    g.saturating_add(operand_prep_insert_cost(
-                        entry.state,
-                        next,
-                        kid,
-                        &problem.goal_counts,
-                        problem.last_use_mask,
-                        push0_cost,
-                        surplus_last_use_penalty,
-                    )),
+            let next = prep_insert(entry.state, kid, problem.preserve_mask, false, cfg.max_len);
+            consider_prep_succ(
+                next,
+                g.saturating_add(operand_prep_insert_cost(
                     entry.state,
-                    Step::PushImm(kid),
-                    &mut consider_ctx,
-                );
-            }
+                    next,
+                    kid,
+                    &problem.goal_counts,
+                    problem.last_use_mask,
+                    push0_cost,
+                    surplus_last_use_penalty,
+                )),
+                entry.state,
+                Step::PushImm(kid),
+                &mut consider_ctx,
+            );
         }
 
         for &kid in &problem.materializable_imm {
             if Some(kid) == push0_kid {
                 continue;
             }
-            let KeyInfo::Imm { canon, .. } = problem.key_infos[kid as usize] else {
-                unreachable!("expected imm key info")
-            };
-            let push_cost = cost.cost_push_imm(canon);
+            let push_cost = prep_costs.materialize[kid as usize];
             let bit = 1u64 << kid;
             let dominated = (duplicable & bit) != 0 && push_cost >= dup_cost_for_kid[kid as usize];
             if dominated {
@@ -2678,10 +2891,10 @@ pub(super) fn solve_optimal_operand_prep_plan(
 
         for &kid in &problem.materializable_val {
             let bit = 1u64 << kid;
+            if !operand_prep_copy_can_help(&problem, entry.state, kid, win_counts[kid as usize]) {
+                continue;
+            }
             let set_mem = (problem.preserve_mask & bit) != 0;
-            let KeyInfo::Val { vid } = problem.key_infos[kid as usize] else {
-                unreachable!("expected val key info")
-            };
             let next = prep_insert(
                 entry.state,
                 kid,
@@ -2697,7 +2910,7 @@ pub(super) fn solve_optimal_operand_prep_plan(
                     kid,
                     &problem.goal_counts,
                     problem.last_use_mask,
-                    cost.cost_load(vid),
+                    prep_costs.materialize[kid as usize],
                     surplus_last_use_penalty,
                 )),
                 entry.state,
@@ -2707,17 +2920,13 @@ pub(super) fn solve_optimal_operand_prep_plan(
         }
     }
 
-    plan_cache()
-        .lock()
-        .unwrap()
-        .insert(cache_key, PlanCacheVal::Steps(incumbent_steps.clone()));
-
-    Some(NormalizePlan {
-        cost: incumbent_cost,
-        steps: incumbent_steps,
-        key_infos: problem.key_infos,
-        goal_keys: problem.goal_keys,
-    })
+    finish_incumbent(
+        scratch,
+        incumbent_steps,
+        incumbent_cost,
+        problem.key_infos,
+        problem.goal_keys,
+    )
 }
 
 pub(super) fn rebuild_operand_prep_plan(
@@ -2725,23 +2934,22 @@ pub(super) fn rebuild_operand_prep_plan(
     stack: &SymStack,
     args: &[ValueId],
     consume_last_use: &BitSet<ValueId>,
-    cost: &impl CostModel,
     cfg: SearchCfg,
-    steps: Vec<Step>,
+    cached: CachedOperandPrepPlan,
 ) -> Option<NormalizePlan> {
     if args.is_empty() {
         return Some(NormalizePlan {
-            cost: Cost::default(),
-            steps,
-            key_infos: Vec::new(),
-            goal_keys: Vec::new(),
+            cost: cached.modeled_cost,
+            steps: cached.steps,
+            key_infos: KeyInfos::new(),
+            goal_keys: KeyIds::new(),
         });
     }
 
     let problem = build_operand_prep_problem(ctx, stack, args, consume_last_use, cfg)?;
     Some(NormalizePlan {
-        cost: cost_for_steps(&steps, &problem.key_infos, cost),
-        steps,
+        cost: cached.modeled_cost,
+        steps: cached.steps,
         key_infos: problem.key_infos,
         goal_keys: problem.goal_keys,
     })
@@ -2765,7 +2973,7 @@ fn intern_key(
     key: Key,
     rep_vid: ValueId,
     ids: &mut FxHashMap<Key, u8>,
-    infos: &mut Vec<KeyInfo>,
+    infos: &mut KeyInfos,
 ) -> Option<u8> {
     if let Some(&kid) = ids.get(&key) {
         return Some(kid);
@@ -2832,8 +3040,8 @@ fn reconstruct_steps<S: Eq + Hash + Copy>(
     start: S,
     goal: S,
     nodes: &FxHashMap<S, SearchNode<S>>,
-) -> Option<Vec<Step>> {
-    let mut steps: Vec<Step> = Vec::new();
+) -> Option<StepList> {
+    let mut steps = StepList::new();
     let mut cur = goal;
     while cur != start {
         let (prev, step) = nodes.get(&cur)?.parent?;
@@ -2907,6 +3115,18 @@ pub(super) fn cost_for_steps(steps: &[Step], key_infos: &[KeyInfo], cost: &impl 
     })
 }
 
+fn cost_for_steps_with_table(steps: &[Step], costs: &OperandPrepCostTable) -> Cost {
+    steps.iter().fold(Cost::default(), |acc, step| {
+        let c = match *step {
+            Step::Pop => costs.pop,
+            Step::Dup(pos) => costs.dup[pos as usize],
+            Step::Swap(depth) => costs.swap[depth as usize],
+            Step::PushImm(kid) | Step::LoadVal(kid) => costs.materialize[kid as usize],
+        };
+        acc.saturating_add(c)
+    })
+}
+
 fn apply_step_to_vec(cur: &mut Vec<u8>, step: Step) {
     match step {
         Step::Pop => {
@@ -2954,7 +3174,7 @@ fn apply_repair_step_to_vec(cur: &mut Vec<u8>, suffix_ctx_keys: &[u8], step: Ste
     }
 }
 
-fn build_star_swap_plan(cur: &mut Vec<u8>, goal: &[u8], swap_max: usize) -> Option<Vec<Step>> {
+fn build_star_swap_plan(cur: &mut Vec<u8>, goal: &[u8], swap_max: usize) -> Option<StepList> {
     if cur.len() != goal.len() {
         return None;
     }
@@ -2968,7 +3188,7 @@ fn build_star_swap_plan(cur: &mut Vec<u8>, goal: &[u8], swap_max: usize) -> Opti
 
     let n = cur.len();
     if n <= 1 {
-        return Some(Vec::new());
+        return Some(StepList::new());
     }
 
     let mut goal_pos: Vec<Vec<usize>> = vec![Vec::new(); 64];
@@ -2993,7 +3213,7 @@ fn build_star_swap_plan(cur: &mut Vec<u8>, goal: &[u8], swap_max: usize) -> Opti
     // - cycle containing 0: (0 a1 a2 .. ak) => (0 a1)(0 a2)...(0 ak)
     // - other cycle: (a1 a2 .. ak) => (0 a1)(0 a2)...(0 ak)(0 a1)
     let mut visited = vec![false; n];
-    let mut steps: Vec<Step> = Vec::new();
+    let mut steps = StepList::new();
 
     for i in 0..n {
         if visited[i] {
@@ -3049,7 +3269,7 @@ fn build_delete_tail_under_prefix_upper_bound(
     start_keys: &[u8],
     goal_keys: &[u8],
     cfg: SearchCfg,
-) -> Option<Vec<Step>> {
+) -> Option<StepList> {
     if goal_keys.len() >= start_keys.len() {
         return None;
     }
@@ -3065,7 +3285,7 @@ fn build_delete_tail_under_prefix_upper_bound(
 
     let keep = goal_keys.len();
     let mut cur: Vec<u8> = start_keys.to_vec();
-    let mut steps: Vec<Step> = Vec::new();
+    let mut steps = StepList::new();
 
     let mut dead = cur.len().saturating_sub(keep);
     let bury = keep.min(dead);
@@ -3100,7 +3320,7 @@ fn trim_excess_keys<F>(
     cur_counts: &mut [u8; 64],
     goal_counts: &[u8; 64],
     swap_max: usize,
-    steps: &mut Vec<Step>,
+    steps: &mut StepList,
     mut apply_step: F,
 ) -> Option<()>
 where
@@ -3135,7 +3355,7 @@ fn finish_count_fixup_plan(
     goal_keys: &[u8],
     goal_counts: &[u8; 64],
     swap_max: usize,
-    steps: &mut Vec<Step>,
+    steps: &mut StepList,
 ) -> Option<()> {
     if cur.len() != goal_keys.len() || cur_counts != goal_counts {
         return None;
@@ -3370,6 +3590,7 @@ fn materialize_copy_source<C: CostModel>(
             kid,
             cost: cost.cost_load(vid),
         },
+        KeyInfo::Ignored => unreachable!("ignored key is not materializable"),
     }
 }
 
@@ -3463,7 +3684,7 @@ fn trim_repair_excess_keys<C: CostModel>(
     cur: &mut Vec<u8>,
     cur_counts: &mut [u8; 64],
     env: &RepairGreedyEnv<'_, C>,
-    steps: &mut Vec<Step>,
+    steps: &mut StepList,
 ) -> Option<()> {
     while cur
         .iter()
@@ -3525,7 +3746,7 @@ fn trim_repair_excess_keys<C: CostModel>(
 fn apply_repair_candidate(
     cur: &mut Vec<u8>,
     suffix_ctx_keys: &[u8],
-    steps: &mut Vec<Step>,
+    steps: &mut StepList,
     candidate: CopySourceCandidate,
 ) -> u8 {
     let kid = candidate.kid();
@@ -3569,7 +3790,7 @@ fn build_greedy_repair_prefix_upper_bound(
     key_infos: &[KeyInfo],
     cost: &impl CostModel,
     cfg: SearchCfg,
-) -> Option<Vec<Step>> {
+) -> Option<StepList> {
     if start_keys.len() > cfg.swap_max
         || goal_keys.len() > cfg.swap_max
         || goal_keys.len() > cfg.max_len
@@ -3580,7 +3801,7 @@ fn build_greedy_repair_prefix_upper_bound(
     let goal_counts = compute_goal_counts(goal_keys);
     let mut cur = start_keys.to_vec();
     let mut cur_counts = compute_counts(&cur);
-    let mut steps = Vec::new();
+    let mut steps = StepList::new();
     let env = RepairGreedyEnv {
         goal_keys,
         goal_counts: &goal_counts,
@@ -3656,7 +3877,7 @@ fn build_dup_and_star_swap_upper_bound(
     goal_keys: &[u8],
     goal_counts: &[u8; 64],
     cfg: SearchCfg,
-) -> Option<Vec<Step>> {
+) -> Option<StepList> {
     if goal_keys.len() > cfg.max_len {
         return None;
     }
@@ -3672,7 +3893,7 @@ fn build_dup_and_star_swap_upper_bound(
         }
     }
 
-    let mut steps: Vec<Step> = Vec::new();
+    let mut steps = StepList::new();
 
     trim_excess_keys(
         &mut cur,
@@ -3734,6 +3955,7 @@ fn materialize_cost_gas(kid: u8, key_infos: &[KeyInfo], cost: &impl CostModel) -
     match key_infos[kid as usize] {
         KeyInfo::Imm { canon, .. } => cost.cost_push_imm(canon).gas,
         KeyInfo::Val { vid } => cost.cost_load(vid).gas,
+        KeyInfo::Ignored => u32::MAX,
     }
 }
 
@@ -3903,14 +4125,13 @@ fn operand_prep_goal(
     true
 }
 
-fn heuristic_operand_prep<C: CostModel>(
+fn heuristic_operand_prep(
     state: PrepState,
     goal_counts: &[u8; 64],
     goal_mask: u64,
     preserve_mask: u64,
     dup_gas: u32,
-    key_infos: &[KeyInfo],
-    cost: &C,
+    costs: &OperandPrepCostTable,
 ) -> Cost {
     let mut win_counts = [0u8; 64];
     for i in 0..state.window.len() {
@@ -3941,7 +4162,7 @@ fn heuristic_operand_prep<C: CostModel>(
             continue;
         }
 
-        let mat = materialize_cost_gas(kid, key_infos, cost);
+        let mat = costs.materialize_gas(kid);
         let per_copy = mat.min(dup_gas);
         if have_window == 0 {
             gas = gas.saturating_add(mat);
@@ -3956,24 +4177,23 @@ fn heuristic_operand_prep<C: CostModel>(
     Cost { gas, bytes: 0 }
 }
 
-struct PrepConsiderCtx<'a, C: CostModel> {
+struct PrepConsiderCtx<'a> {
     goal_counts: &'a [u8; 64],
     goal_mask: u64,
     preserve_mask: u64,
     dup_gas: u32,
-    key_infos: &'a [KeyInfo],
-    cost: &'a C,
+    costs: &'a OperandPrepCostTable,
     upper_bound: Cost,
     nodes: &'a mut FxHashMap<PrepState, SearchNode<PrepState>>,
     open: &'a mut BinaryHeap<PrepQueueEntry>,
 }
 
-fn consider_prep_succ<C: CostModel>(
+fn consider_prep_succ(
     state: PrepState,
     g: Cost,
     parent_state: PrepState,
     step: Step,
-    ctx: &mut PrepConsiderCtx<'_, C>,
+    ctx: &mut PrepConsiderCtx<'_>,
 ) {
     let h = heuristic_operand_prep(
         state,
@@ -3981,8 +4201,7 @@ fn consider_prep_succ<C: CostModel>(
         ctx.goal_mask,
         ctx.preserve_mask,
         ctx.dup_gas,
-        ctx.key_infos,
-        ctx.cost,
+        ctx.costs,
     );
     let f = g.saturating_add(h);
     if should_prune(f, ctx.upper_bound, true) {
@@ -4115,6 +4334,45 @@ mod tests {
         (0..state.len()).map(|idx| state.get(idx)).collect()
     }
 
+    fn prep_state(ids: &[u8], tail: u64, mem: u64) -> PrepState {
+        PrepState {
+            window: PackedState::from_ids(ids).unwrap(),
+            tail,
+            mem,
+        }
+    }
+
+    fn operand_prep_test_problem(goal: &[u8], preserve_mask: u64) -> OperandPrepProblem {
+        let mut goal_counts = [0u8; 64];
+        let mut goal_mask = 0u64;
+        for &kid in goal {
+            goal_counts[kid as usize] += 1;
+            goal_mask |= 1u64 << kid;
+        }
+        let mut key_infos = KeyInfos::new();
+        key_infos.resize(
+            goal.iter().copied().max().unwrap_or(0) as usize + 1,
+            KeyInfo::Ignored,
+        );
+        OperandPrepProblem {
+            key_infos,
+            goal_keys: goal.iter().copied().collect(),
+            goal_mask,
+            goal_counts,
+            preserve_mask,
+            last_use_mask: 0,
+            materializable_imm: KeyIds::new(),
+            materializable_val: KeyIds::new(),
+            start_state: prep_state(&[], 0, 0),
+            goal_state: PackedState::from_ids(goal).unwrap(),
+            max_len: 6,
+        }
+    }
+
+    fn copy_can_help(problem: &OperandPrepProblem, state: PrepState, kid: u8) -> bool {
+        operand_prep_copy_can_help(problem, state, kid, prep_window_copy_count(state, kid))
+    }
+
     #[test]
     fn packed_state_roundtrip_ops_and_layout() {
         assert_eq!(std::mem::size_of::<PackedState>(), 16);
@@ -4142,6 +4400,25 @@ mod tests {
         assert_eq!(packed_state_ids(state.push_truncated(4, 3)), [4, 1, 2]);
         assert_eq!(packed_state_ids(state.push_truncated(4, 5)), [4, 1, 2, 3]);
         assert!(PackedState::from_ids(&[63]).unwrap() < PackedState::from_ids(&[0, 0]).unwrap());
+    }
+
+    #[test]
+    fn operand_prep_copy_help_prunes_surplus_available_copy() {
+        let problem = operand_prep_test_problem(&[0], 0);
+        assert!(!copy_can_help(&problem, prep_state(&[0, 0], 0, 0), 0));
+    }
+
+    #[test]
+    fn operand_prep_copy_help_keeps_next_prefix_copy() {
+        let problem = operand_prep_test_problem(&[0, 1], 0);
+        assert!(copy_can_help(&problem, prep_state(&[0, 2, 1], 0, 0), 1));
+    }
+
+    #[test]
+    fn operand_prep_copy_help_keeps_preserve_deficit_only() {
+        let problem = operand_prep_test_problem(&[0], 1);
+        assert!(copy_can_help(&problem, prep_state(&[0], 0, 0), 0));
+        assert!(!copy_can_help(&problem, prep_state(&[0], 1, 0), 0));
     }
 
     fn consider_brute_succ(
@@ -5470,11 +5747,11 @@ func public %f() {
                     .unwrap_or(flush_cost);
 
                 let mut key_ids: FxHashMap<Key, u8> = FxHashMap::default();
-                let mut key_infos: Vec<KeyInfo> = Vec::new();
+                let mut key_infos: KeyInfos = SmallVec::new();
 
-                let mut goal_keys: Vec<u8> = Vec::with_capacity(desired.len());
-                let mut materializable_imm: Vec<u8> = Vec::new();
-                let mut materializable_val: Vec<u8> = Vec::new();
+                let mut goal_keys: KeyIds = SmallVec::new();
+                let mut materializable_imm: KeyIds = SmallVec::new();
+                let mut materializable_val: KeyIds = SmallVec::new();
                 let mut seen_push: u64 = 0;
                 let mut seen_load: u64 = 0;
 
@@ -5495,7 +5772,7 @@ func public %f() {
                     }
                 }
 
-                let mut start_keys: Vec<u8> = Vec::with_capacity(stack.len_above_func_ret());
+                let mut start_keys: StackKeyIds = SmallVec::new();
                 for depth in 0..stack.len_above_func_ret() {
                     let Some(StackItem::Value(v)) = stack.item_at(depth) else {
                         panic!("unexpected non-value in start stack");
@@ -5529,6 +5806,384 @@ func public %f() {
                     "solver not optimal: solver={solver_cost:?} brute={brute_cost:?} start={start_vals:?} desired={desired:?}"
                 );
             }
+        });
+    }
+
+    #[test]
+    fn operand_prep_effective_window_shrinks_materialize_only_query() {
+        const SRC: &str = r#"
+target = "evm-ethereum-osaka"
+
+func public %f() {
+block0:
+    return;
+}
+"#;
+        let parsed = parse_module(SRC).unwrap();
+        let func_ref = parsed.debug.func_order[0];
+
+        parsed.module.func_store.modify(func_ref, |func| {
+            let args = [
+                func.dfg.make_imm_value(Immediate::I8(1)),
+                func.dfg.make_imm_value(Immediate::I8(2)),
+            ];
+            let unrelated: Vec<ValueId> = (0..20)
+                .map(|_| func.dfg.make_undef_value(Type::I256))
+                .collect();
+
+            let mut cfg = ControlFlowGraph::new();
+            cfg.compute(func);
+            let entry = cfg.entry().expect("missing entry block");
+
+            let mut liveness = Liveness::new();
+            liveness.compute(func, &cfg);
+
+            let mut dom = DomTree::new();
+            dom.compute(&cfg);
+
+            let mut scc = CfgSccAnalysis::new();
+            scc.compute(&cfg);
+
+            let reach = StackifyReachability::new(16);
+            let ctx = build_stackify_test_context(func, &cfg, &dom, &liveness, entry, scc, reach);
+
+            let mut stack = SymStack::entry_stack(func, false);
+            for &value in unrelated.iter().rev() {
+                stack.push_value(value);
+            }
+
+            let search_cfg = SearchCfg {
+                dup_max: ctx.reach.dup_max,
+                swap_max: ctx.reach.swap_max,
+                max_len: ctx.reach.swap_max,
+                max_expansions: 0,
+            };
+            let problem =
+                build_operand_prep_problem(&ctx, &stack, &args, &BitSet::default(), search_cfg)
+                    .expect("expected operand-prep problem");
+
+            assert_eq!(problem.start_state.window.len(), args.len());
+            assert_eq!(problem.max_len, args.len());
+            assert_eq!(problem.start_state.tail, 0);
+
+            let cost = EstimatedCostModel::default();
+            let plan = solve_test_optimal_operand_prep_plan(
+                &ctx,
+                &stack,
+                &args,
+                &BitSet::default(),
+                &cost,
+                search_cfg,
+            )
+            .expect("expected operand-prep plan");
+            let replayed = replay_plan(&stack, &plan);
+            assert_eq!(replayed.item_at(0), Some(&StackItem::Value(args[0])));
+            assert_eq!(replayed.item_at(1), Some(&StackItem::Value(args[1])));
+        });
+    }
+
+    #[test]
+    fn operand_prep_effective_window_uses_tail_for_deep_preserve_copy() {
+        const SRC: &str = r#"
+target = "evm-ethereum-osaka"
+
+func public %f() {
+block0:
+    return;
+}
+"#;
+        let parsed = parse_module(SRC).unwrap();
+        let func_ref = parsed.debug.func_order[0];
+
+        parsed.module.func_store.modify(func_ref, |func| {
+            let x = func.dfg.make_undef_value(Type::I256);
+            let imm = func.dfg.make_imm_value(Immediate::I8(7));
+            let filler: Vec<ValueId> = (0..10)
+                .map(|_| func.dfg.make_undef_value(Type::I256))
+                .collect();
+
+            let mut cfg = ControlFlowGraph::new();
+            cfg.compute(func);
+            let entry = cfg.entry().expect("missing entry block");
+
+            let mut liveness = Liveness::new();
+            liveness.compute(func, &cfg);
+
+            let mut dom = DomTree::new();
+            dom.compute(&cfg);
+
+            let mut scc = CfgSccAnalysis::new();
+            scc.compute(&cfg);
+
+            let reach = StackifyReachability::new(16);
+            let ctx = build_stackify_test_context(func, &cfg, &dom, &liveness, entry, scc, reach);
+
+            let mut stack = SymStack::entry_stack(func, false);
+            stack.push_value(x);
+            for &value in filler.iter().rev() {
+                stack.push_value(value);
+            }
+            stack.push_value(x);
+
+            let args = [x, imm];
+            let search_cfg = SearchCfg {
+                dup_max: ctx.reach.dup_max,
+                swap_max: ctx.reach.swap_max,
+                max_len: ctx.reach.swap_max,
+                max_expansions: 0,
+            };
+            let problem =
+                build_operand_prep_problem(&ctx, &stack, &args, &BitSet::default(), search_cfg)
+                    .expect("expected operand-prep problem");
+
+            assert_eq!(problem.start_state.window.len(), args.len());
+            assert_eq!(problem.max_len, args.len() * 2);
+            assert_ne!(problem.preserve_mask, 0);
+            assert_eq!(
+                problem.start_state.tail & problem.preserve_mask,
+                problem.preserve_mask
+            );
+        });
+    }
+
+    #[test]
+    fn operand_prep_effective_window_keeps_deep_operand_source() {
+        const SRC: &str = r#"
+target = "evm-ethereum-osaka"
+
+func public %f() {
+block0:
+    return;
+}
+"#;
+        let parsed = parse_module(SRC).unwrap();
+        let func_ref = parsed.debug.func_order[0];
+
+        parsed.module.func_store.modify(func_ref, |func| {
+            let x = func.dfg.make_undef_value(Type::I256);
+            let imm = func.dfg.make_imm_value(Immediate::I8(9));
+            let filler: Vec<ValueId> = (0..15)
+                .map(|_| func.dfg.make_undef_value(Type::I256))
+                .collect();
+
+            let mut cfg = ControlFlowGraph::new();
+            cfg.compute(func);
+            let entry = cfg.entry().expect("missing entry block");
+
+            let mut liveness = Liveness::new();
+            liveness.compute(func, &cfg);
+
+            let mut dom = DomTree::new();
+            dom.compute(&cfg);
+
+            let mut scc = CfgSccAnalysis::new();
+            scc.compute(&cfg);
+
+            let reach = StackifyReachability::new(16);
+            let ctx = build_stackify_test_context(func, &cfg, &dom, &liveness, entry, scc, reach);
+
+            let mut stack = SymStack::entry_stack(func, false);
+            stack.push_value(x);
+            for &value in filler.iter().rev() {
+                stack.push_value(value);
+            }
+
+            let args = [imm, x];
+            let search_cfg = SearchCfg {
+                dup_max: ctx.reach.dup_max,
+                swap_max: ctx.reach.swap_max,
+                max_len: ctx.reach.swap_max,
+                max_expansions: 50_000,
+            };
+            let problem =
+                build_operand_prep_problem(&ctx, &stack, &args, &BitSet::default(), search_cfg)
+                    .expect("expected operand-prep problem");
+
+            assert_eq!(problem.start_state.window.len(), 16);
+            assert_eq!(problem.max_len, ctx.reach.swap_max);
+
+            let cost = EstimatedCostModel {
+                load_cost: Cost {
+                    gas: 1_000,
+                    bytes: 1_000,
+                },
+            };
+            let plan = solve_test_optimal_operand_prep_plan(
+                &ctx,
+                &stack,
+                &args,
+                &BitSet::default(),
+                &cost,
+                search_cfg,
+            )
+            .expect("expected operand-prep plan");
+
+            assert!(
+                plan.steps.iter().any(|step| matches!(step, Step::Dup(15))),
+                "expected plan to reuse deep source: {:?}",
+                plan.steps
+            );
+            assert!(
+                !plan
+                    .steps
+                    .iter()
+                    .any(|step| matches!(step, Step::LoadVal(_))),
+                "expected plan to avoid load: {:?}",
+                plan.steps
+            );
+        });
+    }
+
+    #[test]
+    fn operand_prep_anonymizes_ignored_values_in_effective_window() {
+        const SRC: &str = r#"
+target = "evm-ethereum-osaka"
+
+func public %f() {
+block0:
+    return;
+}
+"#;
+        let parsed = parse_module(SRC).unwrap();
+        let func_ref = parsed.debug.func_order[0];
+
+        parsed.module.func_store.modify(func_ref, |func| {
+            let x = func.dfg.make_undef_value(Type::I256);
+            let ignored_a = func.dfg.make_undef_value(Type::I256);
+            let ignored_b = func.dfg.make_undef_value(Type::I256);
+            let ignored_c = func.dfg.make_undef_value(Type::I256);
+            let ignored_d = func.dfg.make_undef_value(Type::I256);
+
+            let mut cfg = ControlFlowGraph::new();
+            cfg.compute(func);
+            let entry = cfg.entry().expect("missing entry block");
+
+            let mut liveness = Liveness::new();
+            liveness.compute(func, &cfg);
+
+            let mut dom = DomTree::new();
+            dom.compute(&cfg);
+
+            let mut scc = CfgSccAnalysis::new();
+            scc.compute(&cfg);
+
+            let reach = StackifyReachability::new(16);
+            let ctx = build_stackify_test_context(func, &cfg, &dom, &liveness, entry, scc, reach);
+            let search_cfg = SearchCfg {
+                dup_max: ctx.reach.dup_max,
+                swap_max: ctx.reach.swap_max,
+                max_len: ctx.reach.swap_max,
+                max_expansions: 50_000,
+            };
+
+            let build_problem = |top: ValueId, mid: ValueId| {
+                let mut stack = SymStack::entry_stack(func, false);
+                stack.push_value(x);
+                stack.push_value(mid);
+                stack.push_value(top);
+                build_operand_prep_problem(&ctx, &stack, &[x], &BitSet::default(), search_cfg)
+                    .expect("expected operand-prep problem")
+            };
+
+            let lhs = build_problem(ignored_a, ignored_b);
+            let rhs = build_problem(ignored_c, ignored_d);
+            let ids = packed_state_ids(lhs.start_state.window);
+
+            assert_eq!(ids.len(), 3);
+            assert_eq!(lhs.start_state.window, rhs.start_state.window);
+            assert_eq!(lhs.key_infos.len(), 3);
+            assert_ne!(ids[0], ids[1]);
+            assert_ne!(ids[0], ids[2]);
+            assert!(matches!(lhs.key_infos[ids[0] as usize], KeyInfo::Ignored));
+            assert!(matches!(lhs.key_infos[ids[1] as usize], KeyInfo::Ignored));
+            assert!(matches!(
+                lhs.key_infos[ids[2] as usize],
+                KeyInfo::Val { vid } if vid == x
+            ));
+            assert_eq!(lhs.goal_keys.as_slice(), &[ids[2]]);
+            assert_eq!(lhs.materializable_val.as_slice(), &[ids[2]]);
+        });
+    }
+
+    #[test]
+    fn operand_prep_duplicate_non_last_use_keeps_operand_and_preserve_copies() {
+        const SRC: &str = r#"
+target = "evm-ethereum-osaka"
+
+func public %f() {
+block0:
+    return;
+}
+"#;
+        let parsed = parse_module(SRC).unwrap();
+        let func_ref = parsed.debug.func_order[0];
+
+        parsed.module.func_store.modify(func_ref, |func| {
+            let x = func.dfg.make_undef_value(Type::I256);
+            let filler = func.dfg.make_undef_value(Type::I256);
+
+            let mut cfg = ControlFlowGraph::new();
+            cfg.compute(func);
+            let entry = cfg.entry().expect("missing entry block");
+
+            let mut liveness = Liveness::new();
+            liveness.compute(func, &cfg);
+
+            let mut dom = DomTree::new();
+            dom.compute(&cfg);
+
+            let mut scc = CfgSccAnalysis::new();
+            scc.compute(&cfg);
+
+            let reach = StackifyReachability::new(16);
+            let ctx = build_stackify_test_context(func, &cfg, &dom, &liveness, entry, scc, reach);
+
+            let mut stack = SymStack::entry_stack(func, false);
+            stack.push_value(x);
+            stack.push_value(filler);
+            stack.push_value(x);
+
+            let args = [x, x];
+            let search_cfg = SearchCfg {
+                dup_max: ctx.reach.dup_max,
+                swap_max: ctx.reach.swap_max,
+                max_len: ctx.reach.swap_max,
+                max_expansions: 50_000,
+            };
+            let problem =
+                build_operand_prep_problem(&ctx, &stack, &args, &BitSet::default(), search_cfg)
+                    .expect("expected operand-prep problem");
+
+            assert_eq!(problem.start_state.window.len(), 3);
+            assert_eq!(problem.max_len, 5);
+
+            let cost = EstimatedCostModel {
+                load_cost: Cost {
+                    gas: 1_000,
+                    bytes: 1_000,
+                },
+            };
+            let plan = solve_test_optimal_operand_prep_plan(
+                &ctx,
+                &stack,
+                &args,
+                &BitSet::default(),
+                &cost,
+                search_cfg,
+            )
+            .expect("expected operand-prep plan");
+
+            assert!(
+                !plan
+                    .steps
+                    .iter()
+                    .any(|step| matches!(step, Step::LoadVal(_))),
+                "expected stack copies to satisfy duplicate operands and preserve copy: {:?}",
+                plan.steps
+            );
+            let replayed = replay_plan(&stack, &plan);
+            assert_eq!(replayed.item_at(0), Some(&StackItem::Value(x)));
+            assert_eq!(replayed.item_at(1), Some(&StackItem::Value(x)));
         });
     }
 
@@ -5677,13 +6332,13 @@ block0:
 
             let plan = NormalizePlan {
                 cost: Cost::default(),
-                steps: vec![Step::PushImm(0)],
-                key_infos: vec![KeyInfo::Imm {
+                steps: smallvec::smallvec![Step::PushImm(0)],
+                key_infos: smallvec::smallvec![KeyInfo::Imm {
                     canon: I256::from(1),
                     rep_vid: imm1,
                     rep_imm: Immediate::I8(1),
                 }],
-                goal_keys: vec![0],
+                goal_keys: smallvec::smallvec![0],
             };
 
             assert!(
@@ -5757,13 +6412,13 @@ block0:
 
             let plan = NormalizePlan {
                 cost: Cost::default(),
-                steps: vec![Step::PushImm(0)],
-                key_infos: vec![KeyInfo::Imm {
+                steps: smallvec::smallvec![Step::PushImm(0)],
+                key_infos: smallvec::smallvec![KeyInfo::Imm {
                     canon: I256::from(1),
                     rep_vid: imm1,
                     rep_imm: Immediate::I8(1),
                 }],
-                goal_keys: vec![0],
+                goal_keys: smallvec::smallvec![0],
             };
 
             assert!(
