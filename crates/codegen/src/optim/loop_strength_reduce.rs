@@ -892,7 +892,8 @@ fn insert_addr_phi(
 
     let loc = last_phi.map_or(CursorLocation::BlockTop(header), CursorLocation::At);
     let mut cursor = InstInserter::at_location(loc);
-    let phi_inst = cursor.insert_inst_data(func, func.dfg.make_phi(vec![(init_addr, preheader)]));
+    let phi_inst =
+        cursor.insert_inst_data(func, func.dfg.make_phi(smallvec![(init_addr, preheader)]));
     let phi_value = cursor.make_result(func, phi_inst, Type::I256);
     cursor.attach_result(func, phi_inst, phi_value);
     Some(phi_value)

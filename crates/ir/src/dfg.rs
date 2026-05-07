@@ -51,10 +51,6 @@ impl ValueUsers {
     fn remove(&mut self, inst: &InstId) {
         self.0.remove(inst);
     }
-
-    fn union_with(&mut self, other: &Self) {
-        self.0 |= &other.0;
-    }
 }
 
 pub struct DataFlowGraph {
@@ -459,11 +455,39 @@ impl DataFlowGraph {
     }
 
     pub fn append_phi_arg(&mut self, inst_id: InstId, value: ValueId, block: BlockId) {
+        self.append_phi_arg_data(inst_id, value, block);
+        self.attach_user(inst_id);
+    }
+
+    pub(crate) fn append_phi_arg_to_tracked_phi(
+        &mut self,
+        inst_id: InstId,
+        value: ValueId,
+        block: BlockId,
+    ) {
+        if self.append_phi_arg_data(inst_id, value, block) {
+            self.users[value].insert(inst_id);
+        }
+    }
+
+    fn append_phi_arg_data(&mut self, inst_id: InstId, value: ValueId, block: BlockId) -> bool {
         let Some(phi) = self.cast_phi_mut(inst_id) else {
-            return;
+            return false;
         };
         phi.append_phi_arg(value, block);
+        true
+    }
+
+    pub fn edit_phi<R>(
+        &mut self,
+        inst_id: InstId,
+        f: impl FnOnce(&mut control_flow::Phi) -> R,
+    ) -> Option<R> {
+        self.cast_phi(inst_id)?;
+        self.untrack_inst(inst_id);
+        let result = f(self.cast_phi_mut(inst_id).unwrap());
         self.attach_user(inst_id);
+        Some(result)
     }
 
     pub fn inst_set(&self) -> &'static dyn InstSetBase {
@@ -476,7 +500,7 @@ impl DataFlowGraph {
         InstDowncast::downcast(is, inst)
     }
 
-    pub fn cast_phi_mut(&mut self, inst_id: InstId) -> Option<&mut control_flow::Phi> {
+    pub(crate) fn cast_phi_mut(&mut self, inst_id: InstId) -> Option<&mut control_flow::Phi> {
         let is = self.inst_set();
         let inst = self.inst_mut(inst_id);
         InstDowncastMut::downcast_mut(is, inst)
@@ -511,7 +535,7 @@ impl DataFlowGraph {
         InstDowncast::downcast(is, inst)
     }
 
-    pub fn make_phi(&self, args: Vec<(ValueId, BlockId)>) -> Phi {
+    pub fn make_phi(&self, args: control_flow::PhiArgs) -> Phi {
         Phi::new(self.inst_set().phi(), args)
     }
 
@@ -519,16 +543,44 @@ impl DataFlowGraph {
         Jump::new(self.inst_set().jump(), to)
     }
 
-    pub fn change_to_alias(&mut self, value: ValueId, alias: ValueId) {
+    pub(crate) fn change_to_alias_and_get_modified(
+        &mut self,
+        value: ValueId,
+        alias: ValueId,
+    ) -> SmallVec<[InstId; 4]> {
+        if value == alias {
+            return SmallVec::new();
+        }
+
         let users = std::mem::take(&mut self.users[value]);
+        let mut modified = SmallVec::new();
         for inst in users.iter() {
+            if !self.has_inst(*inst) {
+                continue;
+            }
+
+            let mut uses_value = false;
+            self.insts[*inst].for_each_value(&mut |user_value| {
+                uses_value |= user_value == value;
+            });
+            if !uses_value {
+                continue;
+            }
+
+            self.untrack_inst(*inst);
             self.insts[*inst].for_each_value_mut(&mut |user_value| {
                 if *user_value == value {
                     *user_value = alias;
                 }
             });
+            self.attach_user(*inst);
+            modified.push(*inst);
         }
-        self.users[alias].union_with(&users);
+        modified
+    }
+
+    pub fn change_to_alias(&mut self, value: ValueId, alias: ValueId) {
+        self.change_to_alias_and_get_modified(value, alias);
     }
 
     pub fn delete_inst(&mut self, inst_id: InstId) {
@@ -811,7 +863,10 @@ mod tests {
     use crate::{
         Type,
         builder::test_util::test_isa,
-        inst::arith::{Add, Uaddo},
+        inst::{
+            arith::{Add, Uaddo},
+            control_flow::Phi,
+        },
         module::ModuleCtx,
     };
 
@@ -916,6 +971,59 @@ mod tests {
         assert_eq!(live_values, vec![lhs, rhs]);
         let iterated_values: Vec<_> = dfg.values_iter().map(|(value, _)| value).collect();
         assert_eq!(iterated_values, live_values);
+    }
+
+    #[test]
+    fn append_phi_arg_retracks_existing_args_after_manual_phi_edit() {
+        let isa = test_isa();
+        let mut dfg = DataFlowGraph::new(ModuleCtx::new(&isa));
+        let block0 = dfg.make_block();
+        let block1 = dfg.make_block();
+        let block2 = dfg.make_block();
+        let kept = dfg.make_imm_value(Immediate::I32(1));
+        let removed = dfg.make_imm_value(Immediate::I32(2));
+        let added = dfg.make_imm_value(Immediate::I32(3));
+        let phi = dfg.make_inst(Phi::new(
+            dfg.inst_set().has_phi().unwrap(),
+            smallvec::smallvec![(kept, block0), (removed, block1)],
+        ));
+
+        dfg.untrack_inst(phi);
+        dfg.cast_phi_mut(phi).unwrap().remove_phi_arg(block1);
+        dfg.append_phi_arg(phi, added, block2);
+
+        assert!(dfg.users(kept).any(|&user| user == phi));
+        assert!(dfg.users(added).any(|&user| user == phi));
+        assert!(!dfg.users(removed).any(|&user| user == phi));
+    }
+
+    #[test]
+    fn edit_phi_retracks_replaced_args() {
+        let isa = test_isa();
+        let mut dfg = DataFlowGraph::new(ModuleCtx::new(&isa));
+        let block0 = dfg.make_block();
+        let block1 = dfg.make_block();
+        let block2 = dfg.make_block();
+        let kept = dfg.make_imm_value(Immediate::I32(1));
+        let removed = dfg.make_imm_value(Immediate::I32(2));
+        let added = dfg.make_imm_value(Immediate::I32(3));
+        let phi = dfg.make_inst(Phi::new(
+            dfg.inst_set().has_phi().unwrap(),
+            smallvec::smallvec![(kept, block0), (removed, block1)],
+        ));
+
+        let removed_value = dfg
+            .edit_phi(phi, |phi| {
+                let removed_value = phi.remove_phi_arg(block1);
+                phi.append_phi_arg(added, block2);
+                removed_value
+            })
+            .unwrap();
+
+        assert_eq!(removed_value, Some(removed));
+        assert!(dfg.users(kept).any(|&user| user == phi));
+        assert!(dfg.users(added).any(|&user| user == phi));
+        assert!(!dfg.users(removed).any(|&user| user == phi));
     }
 
     #[test]

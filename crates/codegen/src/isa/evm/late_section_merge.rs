@@ -448,6 +448,7 @@ fn apply_unlock_to_section_helper(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use smallvec::smallvec;
     use sonatina_parser::parse_module;
 
     fn test_module() -> (Module, FxHashMap<String, FuncRef>) {
@@ -496,9 +497,7 @@ block0:
     fn build_unique_stop_block(vcode: &mut VCode<OpCode>, block: BlockId, tag: u8) {
         vcode.add_inst_to_block(OpCode::JUMPDEST, None, block);
         let inst = vcode.add_inst_to_block(OpCode::PUSH1, None, block);
-        vcode
-            .inst_imm_bytes
-            .insert((inst, smallvec::smallvec![tag]));
+        vcode.inst_imm_bytes.insert((inst, smallvec![tag]));
         vcode.add_inst_to_block(OpCode::STOP, None, block);
     }
 

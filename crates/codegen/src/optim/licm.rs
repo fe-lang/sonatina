@@ -182,6 +182,7 @@ impl Default for LicmSolver {
 
 #[cfg(test)]
 mod tests {
+    use smallvec::SmallVec;
     use sonatina_ir::{
         ControlFlowGraph, I256, Type,
         builder::test_util::*,
@@ -212,7 +213,7 @@ mod tests {
         let arg0 = builder.args()[0];
 
         builder.switch_to_block(b0);
-        let v0 = builder.insert_inst_with(|| Phi::new(is, vec![]), Type::I32);
+        let v0 = builder.insert_inst_with(|| Phi::new(is, SmallVec::new()), Type::I32);
         let c1 = builder.make_imm_value(1i32);
         let invariant = builder.insert_inst_with(|| Add::new(is, arg0, c1), Type::I32);
         builder.insert_inst_no_result_with(|| Jump::new(is, b1));
@@ -276,7 +277,7 @@ mod tests {
         builder.insert_inst_no_result_with(|| Jump::new(is, header));
 
         builder.switch_to_block(header);
-        let idx = builder.insert_inst_with(|| Phi::new(is, vec![]), Type::I256);
+        let idx = builder.insert_inst_with(|| Phi::new(is, SmallVec::new()), Type::I256);
         let limit = builder.make_imm_value(I256::from(2u64));
         let cond = builder.insert_inst_with(|| Lt::new(is, idx, limit), Type::I1);
         builder.insert_inst_no_result_with(|| Br::new(is, cond, body, exit));

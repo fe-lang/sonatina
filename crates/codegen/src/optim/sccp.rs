@@ -673,7 +673,6 @@ impl SccpSolver {
         let block = func.layout.inst_block(inst);
         let phi_value = func.dfg.inst_result(inst).expect("phi has no result");
         let phi_ty = func.dfg.value_ty(phi_value);
-        let old_len = func.dfg.cast_phi(inst).unwrap().args().len();
 
         let reachable_preds: BTreeSet<_> = func
             .dfg
@@ -685,29 +684,30 @@ impl SccpSolver {
             .filter(|pred| self.is_reachable(func, *pred, block))
             .collect();
 
-        func.dfg.untrack_inst(inst);
+        let (changed, fold_arg, phi_empty) = func
+            .dfg
+            .edit_phi(inst, |phi| {
+                let old_len = phi.args().len();
+                phi.retain(|pred| reachable_preds.contains(&pred));
+                let changed = old_len != phi.args().len();
 
-        let mut fold_arg = None;
-        let changed = {
-            let phi = func.dfg.cast_phi_mut(inst).unwrap();
-            phi.retain(|pred| reachable_preds.contains(&pred));
-            let changed = old_len != phi.args().len();
+                let mut seen = BTreeSet::new();
+                for &(_, pred) in phi.args() {
+                    assert!(
+                        seen.insert(pred),
+                        "phi {inst:?} has duplicate incoming from {pred:?}"
+                    );
+                }
 
-            let mut seen = BTreeSet::new();
-            for &(_, pred) in phi.args() {
-                assert!(
-                    seen.insert(pred),
-                    "phi {inst:?} has duplicate incoming from {pred:?}"
-                );
-            }
+                (
+                    changed,
+                    (phi.args().len() == 1).then(|| phi.args()[0].0),
+                    phi.args().is_empty(),
+                )
+            })
+            .unwrap();
 
-            if phi.args().len() == 1 {
-                fold_arg = Some(phi.args()[0].0);
-            }
-            changed
-        };
-
-        let fold_arg = if fold_arg.is_none() && func.dfg.cast_phi(inst).unwrap().args().is_empty() {
+        let fold_arg = if fold_arg.is_none() && phi_empty {
             Some(func.dfg.make_undef_value(phi_ty))
         } else {
             fold_arg
@@ -724,7 +724,6 @@ impl SccpSolver {
             InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
             true
         } else {
-            func.dfg.attach_user(inst);
             changed
         }
     }

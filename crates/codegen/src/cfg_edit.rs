@@ -895,16 +895,20 @@ impl<'f> CfgEditor<'f> {
                 .unwrap_or_else(|| panic!("phi {phi_inst_id:?} has no result"));
             let phi_ty = self.func.dfg.value_ty(phi_result);
 
-            let mut new_phi = self.func.dfg.make_phi(vec![]);
-            self.func.dfg.untrack_inst(phi_inst_id);
-            let old_phi = self.func.dfg.cast_phi_mut(phi_inst_id).unwrap();
-
-            for &pred in outside_preds {
-                let value = old_phi.remove_phi_arg(pred).unwrap_or_else(|| {
-                    panic!("phi {phi_inst_id:?} in {lp_header:?} missing incoming from {pred:?}")
-                });
-                new_phi.append_phi_arg(value, pred);
-            }
+            let mut new_phi = self.func.dfg.make_phi(SmallVec::new());
+            self.func
+                .dfg
+                .edit_phi(phi_inst_id, |old_phi| {
+                    for &pred in outside_preds {
+                        let value = old_phi.remove_phi_arg(pred).unwrap_or_else(|| {
+                            panic!(
+                                "phi {phi_inst_id:?} in {lp_header:?} missing incoming from {pred:?}"
+                            )
+                        });
+                        new_phi.append_phi_arg(value, pred);
+                    }
+                })
+                .unwrap();
 
             let preheader_phi_result = match inserted_phis.get(&new_phi) {
                 Some(&value) => value,
@@ -973,16 +977,17 @@ fn append_phi_inputs_for_new_pred(
     assert_eq!(expected, provided, "phi mapping is incomplete");
 
     for &(phi_inst, incoming) in phi_inputs {
-        func.dfg.untrack_inst(phi_inst);
-        let phi = func.dfg.cast_phi_mut(phi_inst).unwrap();
-        assert!(
-            !phi.args()
-                .iter()
-                .any(|(_, existing_pred)| *existing_pred == pred),
-            "phi {phi_inst:?} already has incoming from {pred:?}"
-        );
-        phi.append_phi_arg(incoming, pred);
-        func.dfg.attach_user(phi_inst);
+        func.dfg
+            .edit_phi(phi_inst, |phi| {
+                assert!(
+                    !phi.args()
+                        .iter()
+                        .any(|(_, existing_pred)| *existing_pred == pred),
+                    "phi {phi_inst:?} already has incoming from {pred:?}"
+                );
+                phi.append_phi_arg(incoming, pred);
+            })
+            .unwrap();
     }
 }
 
@@ -998,10 +1003,9 @@ fn iter_phis_in_block(func: &Function, block: BlockId) -> impl Iterator<Item = I
 
 pub(crate) fn remove_phi_incoming_from(func: &mut Function, block: BlockId, pred: BlockId) {
     for phi_inst in iter_phis_in_block(func, block).collect::<Vec<_>>() {
-        func.dfg.untrack_inst(phi_inst);
-        let phi = func.dfg.cast_phi_mut(phi_inst).unwrap();
-        phi.retain(|b| b != pred);
-        func.dfg.attach_user(phi_inst);
+        func.dfg
+            .edit_phi(phi_inst, |phi| phi.retain(|b| b != pred))
+            .unwrap();
     }
 }
 
@@ -1012,22 +1016,25 @@ fn replace_phi_incoming_block(
     new_pred: BlockId,
 ) {
     for phi_inst in iter_phis_in_block(func, block).collect::<Vec<_>>() {
-        let phi = func.dfg.cast_phi_mut(phi_inst).unwrap();
-        assert!(
-            !phi.args().iter().any(|(_, pred)| *pred == new_pred),
-            "phi {phi_inst:?} already has incoming from {new_pred:?}"
-        );
-        let mut replaced = false;
-        for (_, pred) in phi.args_mut() {
-            if *pred == old_pred {
-                *pred = new_pred;
-                replaced = true;
-            }
-        }
-        assert!(
-            replaced,
-            "phi {phi_inst:?} in {block:?} missing incoming from {old_pred:?}"
-        );
+        func.dfg
+            .edit_phi(phi_inst, |phi| {
+                assert!(
+                    !phi.args().iter().any(|(_, pred)| *pred == new_pred),
+                    "phi {phi_inst:?} already has incoming from {new_pred:?}"
+                );
+                let mut replaced = false;
+                for (_, pred) in phi.args_mut() {
+                    if *pred == old_pred {
+                        *pred = new_pred;
+                        replaced = true;
+                    }
+                }
+                assert!(
+                    replaced,
+                    "phi {phi_inst:?} in {block:?} missing incoming from {old_pred:?}"
+                );
+            })
+            .unwrap();
     }
 }
 
@@ -1090,50 +1097,54 @@ pub fn prune_phi_to_preds(
     let mut changed = false;
 
     for phi_inst in iter_phis_in_block(func, block).collect::<Vec<_>>() {
-        func.dfg.untrack_inst(phi_inst);
         let phi_result = func.dfg.inst_result(phi_inst).expect("phi has no result");
         let ty = func.dfg.value_ty(phi_result);
-        let mut missing = Vec::new();
-        {
-            let phi = func.dfg.cast_phi_mut(phi_inst).unwrap();
-            let old_len = phi.args().len();
-            phi.retain(|pred| preds.binary_search(&pred).is_ok());
-            changed |= phi.args().len() != old_len;
+        let (removed_any, missing) = func
+            .dfg
+            .edit_phi(phi_inst, |phi| {
+                let mut missing = Vec::new();
+                let old_len = phi.args().len();
+                phi.retain(|pred| preds.binary_search(&pred).is_ok());
+                let removed_any = phi.args().len() != old_len;
 
-            let mut seen = Vec::with_capacity(phi.args().len());
-            for &(_, pred) in phi.args() {
-                assert!(
-                    !seen.contains(&pred),
-                    "phi {phi_inst:?} in {block:?} has duplicate incoming from {pred:?}"
-                );
-                seen.push(pred);
-            }
-            seen.sort_unstable();
-
-            for &pred in preds {
-                if seen.binary_search(&pred).is_ok() {
-                    continue;
+                let mut seen = Vec::with_capacity(phi.args().len());
+                for &(_, pred) in phi.args() {
+                    assert!(
+                        !seen.contains(&pred),
+                        "phi {phi_inst:?} in {block:?} has duplicate incoming from {pred:?}"
+                    );
+                    seen.push(pred);
                 }
+                seen.sort_unstable();
 
-                match mode {
-                    CleanupMode::Strict => {
-                        panic!("phi {phi_inst:?} in {block:?} missing incoming from {pred:?}");
+                for &pred in preds {
+                    if seen.binary_search(&pred).is_ok() {
+                        continue;
                     }
-                    CleanupMode::RepairWithUndef => missing.push(pred),
+
+                    match mode {
+                        CleanupMode::Strict => {
+                            panic!("phi {phi_inst:?} in {block:?} missing incoming from {pred:?}");
+                        }
+                        CleanupMode::RepairWithUndef => missing.push(pred),
+                    }
                 }
-            }
-        }
+                (removed_any, missing)
+            })
+            .unwrap();
+        changed |= removed_any;
 
         if matches!(mode, CleanupMode::RepairWithUndef) && !missing.is_empty() {
             let undef = func.dfg.make_undef_value(ty);
-            let phi = func.dfg.cast_phi_mut(phi_inst).unwrap();
-            for pred in missing {
-                phi.append_phi_arg(undef, pred);
-            }
+            func.dfg
+                .edit_phi(phi_inst, |phi| {
+                    for pred in missing {
+                        phi.append_phi_arg(undef, pred);
+                    }
+                })
+                .unwrap();
             changed = true;
         }
-
-        func.dfg.attach_user(phi_inst);
     }
 
     changed
@@ -1143,6 +1154,7 @@ pub fn prune_phi_to_preds(
 mod tests {
     use std::collections::BTreeSet;
 
+    use smallvec::{SmallVec, smallvec};
     use sonatina_ir::{
         Immediate, Module, Type, Value,
         builder::test_util::{dump_func, test_func_builder, test_module_builder},
@@ -1181,7 +1193,8 @@ mod tests {
         builder.switch_to_block(b2);
         let one = builder.make_imm_value(1i32);
         let two = builder.make_imm_value(2i32);
-        let phi = builder.insert_inst_with(|| Phi::new(is, vec![(one, b0), (two, b1)]), Type::I32);
+        let phi =
+            builder.insert_inst_with(|| Phi::new(is, smallvec![(one, b0), (two, b1)]), Type::I32);
         builder.insert_inst_no_result_with(|| Return::new_single(is, phi));
 
         builder.seal_all();
@@ -1240,7 +1253,7 @@ block2:
 
             let phi_inst = editor.func().layout.first_inst_of(*b1).unwrap();
             let phi = editor.func().dfg.cast_phi(phi_inst).unwrap();
-            assert_eq!(phi.args(), &[(phi.args()[0].0, *b0)]);
+            assert_eq!(phi.args().as_slice(), &[(phi.args()[0].0, *b0)]);
             assert_eq!(editor.cfg().pred_edges_as_slice(*b1).len(), 1);
             assert_eq!(editor.cfg().preds_as_slice(*b1), &[*b0]);
         });
@@ -1439,7 +1452,7 @@ block2:
         let phi_seed_1 = builder.make_imm_value(1i32);
         let phi_seed_2 = builder.make_imm_value(2i32);
         let v4 = builder.insert_inst_with(
-            || Phi::new(is, vec![(phi_seed_1, b1), (phi_seed_2, b2)]),
+            || Phi::new(is, smallvec![(phi_seed_1, b1), (phi_seed_2, b2)]),
             Type::I32,
         );
         builder.insert_inst_no_result_with(|| Jump::new(is, b4));
@@ -1553,7 +1566,7 @@ block2:
         let b2 = builder.append_block();
 
         builder.switch_to_block(b0);
-        let phi = builder.insert_inst_with(|| Phi::new(is, vec![]), Type::I32);
+        let phi = builder.insert_inst_with(|| Phi::new(is, SmallVec::new()), Type::I32);
         builder.insert_inst_no_result_with(|| Jump::new(is, b1));
 
         builder.switch_to_block(b1);
@@ -1597,7 +1610,7 @@ block2:
         builder.insert_inst_no_result_with(|| Jump::new(is, b1));
 
         builder.switch_to_block(b1);
-        let phi = builder.insert_inst_with(|| Phi::new(is, vec![(seed, b0)]), Type::I32);
+        let phi = builder.insert_inst_with(|| Phi::new(is, smallvec![(seed, b0)]), Type::I32);
         builder.insert_inst_no_result_with(|| Br::new(is, cond, b2, b3));
 
         builder.switch_to_block(b2);
@@ -1654,7 +1667,8 @@ block2:
         builder.insert_inst_no_result_with(|| Jump::new(is, b3));
 
         builder.switch_to_block(b3);
-        let phi = builder.insert_inst_with(|| Phi::new(is, vec![(v2, b2), (seed, b4)]), Type::I32);
+        let phi =
+            builder.insert_inst_with(|| Phi::new(is, smallvec![(v2, b2), (seed, b4)]), Type::I32);
         builder.insert_inst_no_result_with(|| Return::new_single(is, phi));
 
         builder.seal_all();

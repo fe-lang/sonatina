@@ -153,6 +153,7 @@ impl Default for PDFSet {
 mod tests {
     #![allow(clippy::many_single_char_names)]
 
+    use smallvec::smallvec;
     use sonatina_ir::{
         Type,
         builder::test_util::*,
@@ -212,7 +213,7 @@ mod tests {
 
         builder.switch_to_block(merge_block);
         let v3 = builder.insert_inst_with(
-            || Phi::new(is, vec![(v1, then_block), (v2, else_block)]),
+            || Phi::new(is, smallvec![(v1, then_block), (v2, else_block)]),
             Type::I64,
         );
         builder.insert_inst_with(|| Add::new(is, v3, arg0), Type::I64);

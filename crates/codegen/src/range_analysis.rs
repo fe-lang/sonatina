@@ -1708,6 +1708,7 @@ fn type_bits(ty: Type) -> u16 {
 
 #[cfg(test)]
 mod tests {
+    use smallvec::smallvec;
     use sonatina_ir::{
         Function, Type,
         builder::test_util::*,
@@ -1841,7 +1842,7 @@ mod tests {
             enum_ty,
             value: I256::from(1u8),
         });
-        let phi = builder.insert_inst_with(|| Phi::new(is, vec![(lhs, b0)]), tag_ty);
+        let phi = builder.insert_inst_with(|| Phi::new(is, smallvec![(lhs, b0)]), tag_ty);
         let eq = builder.insert_inst_with(|| Eq::new(is, phi, rhs), Type::I1);
         builder.insert_inst_no_result_with(|| Return::new_single(is, eq));
         builder.seal_all();
@@ -2374,7 +2375,8 @@ mod tests {
         builder.insert_inst_no_result_with(|| Jump::new(is, b3));
 
         builder.switch_to_block(b3);
-        let phi = builder.insert_inst_with(|| Phi::new(is, vec![(one, b1), (five, b2)]), Type::I8);
+        let phi =
+            builder.insert_inst_with(|| Phi::new(is, smallvec![(one, b1), (five, b2)]), Type::I8);
         builder.insert_inst_no_result_with(|| Return::new_single(is, phi));
 
         builder.seal_all();
@@ -2406,7 +2408,7 @@ mod tests {
         builder.insert_inst_no_result_with(|| Jump::new(is, b1));
 
         builder.switch_to_block(b1);
-        let iter = builder.insert_inst_with(|| Phi::new(is, vec![(zero, b0)]), Type::I8);
+        let iter = builder.insert_inst_with(|| Phi::new(is, smallvec![(zero, b0)]), Type::I8);
         let hundred = builder.make_imm_value(100i8);
         let cond = builder.insert_inst_with(|| Lt::new(is, iter, hundred), Type::I1);
         builder.insert_inst_no_result_with(|| Br::new(is, cond, b2, b3));
@@ -2454,7 +2456,7 @@ mod tests {
 
         builder.switch_to_block(b1);
         let cond = builder.args()[0];
-        let iter = builder.insert_inst_with(|| Phi::new(is, vec![(zero, b0)]), Type::I8);
+        let iter = builder.insert_inst_with(|| Phi::new(is, smallvec![(zero, b0)]), Type::I8);
         builder.insert_inst_no_result_with(|| Br::new(is, cond, b2, b3));
 
         builder.switch_to_block(b2);

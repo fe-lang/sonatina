@@ -8,6 +8,8 @@ use crate::{
     visitor::{Visitable, VisitableMut, Visitor, VisitorMut},
 };
 
+pub type PhiArgs = SmallVec<[(ValueId, BlockId); 2]>;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 #[inst(terminator)]
 pub struct Jump {
@@ -36,7 +38,7 @@ pub struct BrTable {
 #[inst(arity(at_least(1)))]
 #[inst(kind(phi))]
 pub struct Phi {
-    args: Vec<(ValueId, BlockId)>,
+    args: PhiArgs,
 }
 
 impl Phi {

@@ -244,13 +244,13 @@ pub(super) fn try_inline_callsite_full(
             .expect("verified phi fixup should resolve");
 
         let func = editor.func_mut();
-        func.dfg.untrack_inst(fixup.phi_inst);
-        if let Some(phi) = func.dfg.cast_phi_mut(fixup.phi_inst)
-            && fixup.arg_index < phi.args().len()
-        {
-            phi.args_mut()[fixup.arg_index].0 = mapped;
-        }
-        func.dfg.attach_user(fixup.phi_inst);
+        func.dfg
+            .edit_phi(fixup.phi_inst, |phi| {
+                if fixup.arg_index < phi.args().len() {
+                    phi.args_mut()[fixup.arg_index].0 = mapped;
+                }
+            })
+            .unwrap();
     }
 
     {
@@ -284,7 +284,7 @@ pub(super) fn try_inline_callsite_full(
                     func.dfg.change_to_alias(call_result, value);
                 }
                 _ => {
-                    let mut args = Vec::with_capacity(returns.len());
+                    let mut args = SmallVec::with_capacity(returns.len());
                     for return_site in &returns {
                         let value = return_site
                             .values

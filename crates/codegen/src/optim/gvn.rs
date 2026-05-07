@@ -914,7 +914,7 @@ impl GvnSolver {
         // And if the insn is phi, arguments from unreachable edges are omitted.
         let insn_expr = if let Some(phi_args) = insn_expr.phi_args() {
             let edges = &self.blocks[block].in_edges;
-            let mut canonical_phi_args = Vec::with_capacity(phi_args.len());
+            let mut canonical_phi_args = SmallVec::with_capacity(phi_args.len());
             for &(value, from) in phi_args {
                 match self.reachable_edge_state(edges, from, block) {
                     ReachableEdgeState::None => continue,
@@ -3125,7 +3125,7 @@ impl<'a> RedundantCodeRemover<'a> {
                 let current_inserter_loc = inserter.loc();
 
                 // Resolve phi value's arguments and append them to the newly inserted phi.
-                let mut phi_args = Vec::with_capacity(phi_insn.args.len());
+                let mut phi_args = SmallVec::with_capacity(phi_insn.args.len());
                 for (value_phi, phi_block) in &phi_insn.args {
                     let resolved =
                         self.resolve_value_phi(func, inserter, value_phi, ty, *phi_block);
@@ -3201,18 +3201,18 @@ impl<'a> RedundantCodeRemover<'a> {
         }
 
         let edges = &self.solver.blocks[block].in_edges;
-        let old_len = func.dfg.cast_phi(insn).unwrap().args().len();
-        func.dfg.untrack_inst(insn);
-        let phi = func.dfg.cast_phi_mut(insn).unwrap();
-        phi.retain(|from| {
-            !matches!(
-                self.solver.reachable_edge_state(edges, from, block),
-                ReachableEdgeState::None
-            )
-        });
-        let changed = old_len != phi.args().len();
-        func.dfg.attach_user(insn);
-        changed
+        func.dfg
+            .edit_phi(insn, |phi| {
+                let old_len = phi.args().len();
+                phi.retain(|from| {
+                    !matches!(
+                        self.solver.reachable_edge_state(edges, from, block),
+                        ReachableEdgeState::None
+                    )
+                });
+                old_len != phi.args().len()
+            })
+            .unwrap()
     }
 }
 

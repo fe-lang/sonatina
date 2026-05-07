@@ -1076,8 +1076,10 @@ mod tests {
         builder.insert_inst_no_result_with(|| Jump::new(is, join));
 
         builder.switch_to_block(join);
-        let phi =
-            builder.insert_inst_with(|| Phi::new(is, vec![(base, left), (base, right)]), ptr_ty);
+        let phi = builder.insert_inst_with(
+            || Phi::new(is, smallvec![(base, left), (base, right)]),
+            ptr_ty,
+        );
         let addr = builder.insert_inst_with(|| PtrToInt::new(is, phi, Type::I256), Type::I256);
         builder.insert_inst_no_result_with(|| Return::new_unit(is));
         builder.seal_all();
