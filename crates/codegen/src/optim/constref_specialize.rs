@@ -1,13 +1,15 @@
 use rustc_hash::FxHashMap;
-use smallvec::SmallVec;
+use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{
-    Function, GlobalVariableRef, Linkage, Module, Signature, Type, Value, ValueId,
+    Function, Immediate, Linkage, Module, Signature, Type, Value, ValueId,
     inst::{control_flow, data},
     module::{FuncHints, FuncRef},
     types::CompoundType,
 };
 
-use super::const_eval::{analyze_const_paths, collect_constref_value_tys};
+use super::const_eval::{
+    ConstPath, ConstPathAnalysis, ConstPathStep, analyze_const_paths, collect_constref_value_tys,
+};
 
 #[derive(Debug, Default)]
 pub(crate) struct ConstRefSpecializationStats {
@@ -23,10 +25,10 @@ struct SpecializationKey {
     bindings: Vec<ConstRefBinding>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct ConstRefBinding {
     arg_idx: usize,
-    global: GlobalVariableRef,
+    path: ConstPath,
 }
 
 #[derive(Debug)]
@@ -39,6 +41,12 @@ struct RewriteSite {
     caller: FuncRef,
     inst: sonatina_ir::InstId,
     key: SpecializationKey,
+}
+
+#[derive(Clone, Copy)]
+struct PrependedValue {
+    inst: sonatina_ir::InstId,
+    value: ValueId,
 }
 
 pub(crate) fn specialize_private_constrefs(
@@ -146,20 +154,23 @@ fn collect_rewrite_sites(
 fn collect_call_bindings(
     args: &[ValueId],
     candidate: &Candidate,
-    const_paths: &super::const_eval::ConstPathAnalysis,
+    const_paths: &ConstPathAnalysis,
 ) -> Vec<ConstRefBinding> {
     let mut bindings = Vec::new();
     for &arg_idx in &candidate.constref_args {
-        let Some(path) = args
-            .get(arg_idx)
-            .and_then(|&arg| const_paths.path(arg))
-            .filter(|path| path.steps.is_empty())
-        else {
+        let Some(path) = args.get(arg_idx).and_then(|&arg| const_paths.path(arg)) else {
             continue;
         };
+        if path
+            .steps
+            .iter()
+            .any(|step| matches!(step, ConstPathStep::IndexValue(_)))
+        {
+            continue;
+        }
         bindings.push(ConstRefBinding {
             arg_idx,
-            global: path.global,
+            path: path.clone(),
         });
     }
     bindings
@@ -203,8 +214,15 @@ fn fresh_func_name(module: &Module, key: &SpecializationKey, base: &str) -> Stri
         stem.push_str(&format!(
             "_a{}_g{}",
             binding.arg_idx,
-            binding.global.as_u32()
+            binding.path.global.as_u32()
         ));
+        for step in &binding.path.steps {
+            match step {
+                ConstPathStep::Field(idx) => stem.push_str(&format!("f{idx}")),
+                ConstPathStep::IndexConst(idx) => stem.push_str(&format!("i{idx}")),
+                ConstPathStep::IndexValue(_) => unreachable!("dynamic constref bindings rejected"),
+            }
+        }
     }
     if !func_name_exists(module, &stem) {
         return stem;
@@ -234,17 +252,44 @@ fn bind_constref_args(func: &mut Function, bindings: &[ConstRefBinding]) {
 
     for binding in bindings.iter().rev() {
         let arg = func.arg_values[binding.arg_idx];
-        let replacement = prepend_const_ref(func, entry, binding.global, func.dfg.value_ty(arg));
+        let replacement = prepend_const_path(func, entry, &binding.path);
+        debug_assert_eq!(func.dfg.value_ty(replacement), func.dfg.value_ty(arg));
         func.dfg.change_to_alias(arg, replacement);
     }
+}
+
+fn prepend_const_path(
+    func: &mut Function,
+    entry: sonatina_ir::BlockId,
+    path: &ConstPath,
+) -> ValueId {
+    let mut current_ty = func.ctx().with_gv_store(|store| store.ty(path.global));
+    let mut cursor = prepend_const_ref(
+        func,
+        entry,
+        path.global,
+        current_ty.to_const_ref(func.ctx()),
+    );
+
+    for step in &path.steps {
+        let (next, next_ty) = match step {
+            ConstPathStep::Field(idx) => prepend_const_proj(func, cursor, current_ty, *idx),
+            ConstPathStep::IndexConst(idx) => prepend_const_index(func, cursor, current_ty, *idx),
+            ConstPathStep::IndexValue(_) => unreachable!("dynamic constref bindings rejected"),
+        };
+        cursor = next;
+        current_ty = next_ty;
+    }
+
+    cursor.value
 }
 
 fn prepend_const_ref(
     func: &mut Function,
     entry: sonatina_ir::BlockId,
-    global: GlobalVariableRef,
+    global: sonatina_ir::GlobalVariableRef,
     ty: Type,
-) -> ValueId {
+) -> PrependedValue {
     let inst = func.dfg.make_inst(data::ConstRef::new(
         func.inst_set()
             .has_const_ref()
@@ -258,7 +303,73 @@ fn prepend_const_ref(
     });
     func.dfg.attach_result(inst, value);
     func.layout.prepend_inst(inst, entry);
-    value
+    PrependedValue { inst, value }
+}
+
+fn prepend_const_proj(
+    func: &mut Function,
+    base: PrependedValue,
+    base_ty: Type,
+    idx: usize,
+) -> (PrependedValue, Type) {
+    let Some(CompoundType::Struct(s)) = base_ty.resolve_compound(func.ctx()) else {
+        panic!("specialized const.proj base must be a struct");
+    };
+    assert!(
+        !s.packed,
+        "packed structs are unsupported in constref specialization"
+    );
+    let field_ty = *s
+        .fields
+        .get(idx)
+        .expect("specialized const.proj index out of bounds");
+    let index = func
+        .dfg
+        .make_imm_value(Immediate::I64(i64::try_from(idx).expect("index overflow")));
+    let inst = func.dfg.make_inst(data::ConstProj::new(
+        func.inst_set()
+            .has_const_proj()
+            .expect("target ISA should support const.proj"),
+        smallvec![base.value, index],
+    ));
+    let value = func.dfg.make_value(Value::Inst {
+        inst,
+        result_idx: 0,
+        ty: field_ty.to_const_ref(func.ctx()),
+    });
+    func.dfg.attach_result(inst, value);
+    func.layout.insert_inst_after(inst, base.inst);
+    (PrependedValue { inst, value }, field_ty)
+}
+
+fn prepend_const_index(
+    func: &mut Function,
+    base: PrependedValue,
+    base_ty: Type,
+    idx: usize,
+) -> (PrependedValue, Type) {
+    let Some(CompoundType::Array { elem, len }) = base_ty.resolve_compound(func.ctx()) else {
+        panic!("specialized const.index base must be an array");
+    };
+    assert!(idx < len, "specialized const.index index out of bounds");
+    let index = func
+        .dfg
+        .make_imm_value(Immediate::I64(i64::try_from(idx).expect("index overflow")));
+    let inst = func.dfg.make_inst(data::ConstIndex::new(
+        func.inst_set()
+            .has_const_index()
+            .expect("target ISA should support const.index"),
+        base.value,
+        index,
+    ));
+    let value = func.dfg.make_value(Value::Inst {
+        inst,
+        result_idx: 0,
+        ty: elem.to_const_ref(func.ctx()),
+    });
+    func.dfg.attach_result(inst, value);
+    func.layout.insert_inst_after(inst, base.inst);
+    (PrependedValue { inst, value }, elem)
 }
 
 fn rewrite_call_callee(function: &mut Function, inst: sonatina_ir::InstId, clone: FuncRef) -> bool {
@@ -333,6 +444,49 @@ func public %entry(v0.i256) -> i256 {
             sonatina_ir::ir_writer::FuncWriter::new(clone, func).dump_string()
         });
         assert!(clone_dump.contains("const.ref $zeros"));
+    }
+
+    #[test]
+    fn specializes_private_callee_for_static_constref_subpath() {
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+global private const [[i256; 2]; 2] $rows = [[1, 2], [7, 7]];
+
+func private %get(v0.constref<[i256; 2]>, v1.i256) -> i256 {
+    block0:
+        v2.constref<i256> = const.index v0 v1;
+        v3.i256 = const.load v2;
+        return v3;
+}
+
+func public %entry(v0.i256) -> i256 {
+    block0:
+        v1.constref<[[i256; 2]; 2]> = const.ref $rows;
+        v2.constref<[i256; 2]> = const.index v1 1.i8;
+        v3.i256 = call %get v2 v0;
+        return v3;
+}
+"#,
+        )
+        .expect("module parses");
+
+        let stats = specialize_private_constrefs(&parsed.module, &parsed.module.funcs());
+        assert!(stats.changed);
+        assert_eq!(stats.clones_created, 1);
+        assert_eq!(stats.calls_rewritten, 1);
+
+        let dumped = ModuleWriter::new(&parsed.module).dump_string();
+        assert!(dumped.contains("func private %get__constref_a0_g0i1"));
+        assert!(dumped.contains("call %get__constref_a0_g0i1"));
+
+        let clone = find_func(&parsed.module, "get__constref_a0_g0i1");
+        let clone_dump = parsed.module.func_store.view(clone, |func| {
+            sonatina_ir::ir_writer::FuncWriter::new(clone, func).dump_string()
+        });
+        assert!(clone_dump.contains("const.ref $rows"));
+        assert!(clone_dump.contains("const.index"));
     }
 
     fn find_func(module: &Module, name_prefix: &str) -> FuncRef {

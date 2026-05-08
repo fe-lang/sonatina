@@ -8,14 +8,14 @@ use sonatina_ir::{
     types::CompoundType,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum ConstPathStep {
     Field(usize),
     IndexConst(usize),
     IndexValue(ValueId),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct ConstPath {
     pub(crate) global: GlobalVariableRef,
     pub(crate) ty: Type,
