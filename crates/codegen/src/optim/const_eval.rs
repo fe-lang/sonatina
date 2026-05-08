@@ -319,6 +319,22 @@ pub(crate) fn eval_const_path_immediate(
     }
 }
 
+pub(crate) fn eval_const_path_domain_immediate(
+    module: &ModuleCtx,
+    path: &ConstPath,
+    resolve_index: impl Fn(ValueId) -> Option<Immediate>,
+) -> Option<Immediate> {
+    if let Some(imm) = eval_const_path_immediate(module, path, &resolve_index) {
+        return Some(imm);
+    }
+
+    module.with_gv_store(|store| {
+        let ty = store.ty(path.global);
+        let init = store.init_data(path.global)?;
+        eval_initializer_domain_immediate(module, ty, init, &path.steps, &resolve_index)
+    })
+}
+
 pub(crate) fn dynamic_index_values(path: &ConstPath) -> impl Iterator<Item = ValueId> + '_ {
     path.steps.iter().filter_map(|step| match step {
         ConstPathStep::IndexValue(value) => Some(*value),
@@ -407,6 +423,75 @@ where
                 return None;
             }
             eval_initializer_subtree(
+                module,
+                *s.fields.get(*idx)?,
+                fields.get(*idx)?,
+                rest,
+                resolve_index,
+            )
+        }
+        _ => None,
+    }
+}
+
+fn eval_initializer_domain_immediate<R>(
+    module: &ModuleCtx,
+    ty: Type,
+    init: &GvInitializer,
+    steps: &[ConstPathStep],
+    resolve_index: &R,
+) -> Option<Immediate>
+where
+    R: Fn(ValueId) -> Option<Immediate>,
+{
+    let Some((step, rest)) = steps.split_first() else {
+        return match init {
+            GvInitializer::Immediate(imm) if imm.ty() == ty => Some(*imm),
+            _ => None,
+        };
+    };
+
+    match (ty.resolve_compound(module)?, init, step) {
+        (
+            CompoundType::Array { elem, len },
+            GvInitializer::Array(items),
+            ConstPathStep::IndexConst(idx),
+        ) => {
+            (*idx < len).then_some(())?;
+            eval_initializer_domain_immediate(module, elem, items.get(*idx)?, rest, resolve_index)
+        }
+        (
+            CompoundType::Array { elem, len },
+            GvInitializer::Array(items),
+            ConstPathStep::IndexValue(value),
+        ) => {
+            if let Some(imm) = resolve_index(*value) {
+                let idx = imm.to_nonnegative_usize()?;
+                (idx < len).then_some(())?;
+                return eval_initializer_domain_immediate(
+                    module,
+                    elem,
+                    items.get(idx)?,
+                    rest,
+                    resolve_index,
+                );
+            }
+
+            if items.len() != len || items.is_empty() {
+                return None;
+            }
+
+            let mut values = items.iter().map(|item| {
+                eval_initializer_domain_immediate(module, elem, item, rest, resolve_index)
+            });
+            let first = values.next().flatten()?;
+            values.all(|value| value == Some(first)).then_some(first)
+        }
+        (CompoundType::Struct(s), GvInitializer::Struct(fields), ConstPathStep::Field(idx)) => {
+            if s.packed {
+                return None;
+            }
+            eval_initializer_domain_immediate(
                 module,
                 *s.fields.get(*idx)?,
                 fields.get(*idx)?,

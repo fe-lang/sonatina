@@ -13,7 +13,7 @@ use super::scalar_words::evm_scalar_word_bytes;
 use crate::{
     optim::const_eval::{
         ConstPath, ConstPathAnalysis, ConstPathStep, analyze_const_paths,
-        collect_constref_value_tys, const_path_steps, eval_const_path_immediate,
+        collect_constref_value_tys, const_path_steps, eval_const_path_domain_immediate,
         eval_const_path_subtree,
     },
     transform::aggregate::shape,
@@ -22,40 +22,9 @@ use crate::{
 type ConstOffsetTerms = Vec<(ValueId, u32)>;
 type ConstOffsetPlan = (Type, u32, ConstOffsetTerms);
 
-#[derive(Debug, Clone)]
-struct LoweredConstValue {
-    addr: ValueId,
-    ty: Type,
-    path: Option<ConstPath>,
-}
-
-struct ConstRewriteCtx<'a> {
+struct ConstRewriteInfo<'a> {
     constref_value_tys: &'a FxHashMap<ValueId, Type>,
     const_paths: &'a ConstPathAnalysis,
-    lowered_values: &'a mut FxHashMap<ValueId, LoweredConstValue>,
-}
-
-impl ConstRewriteCtx<'_> {
-    fn resolve(&self, value: ValueId) -> Option<LoweredConstValue> {
-        self.lowered_values.get(&value).cloned().or_else(|| {
-            self.constref_value_tys
-                .get(&value)
-                .copied()
-                .map(|ty| LoweredConstValue {
-                    addr: value,
-                    ty,
-                    path: self.const_paths.path(value).cloned(),
-                })
-        })
-    }
-
-    fn insert(&mut self, value: ValueId, lowered: LoweredConstValue) {
-        self.lowered_values.insert(value, lowered);
-    }
-
-    fn remove(&mut self, value: ValueId) {
-        self.lowered_values.remove(&value);
-    }
 }
 
 #[derive(Default)]
@@ -165,11 +134,9 @@ impl ConstDataLower {
         let constref_value_tys = collect_constref_value_tys(func);
         let const_paths = analyze_const_paths(func, &constref_value_tys);
         let mut changed = rewrite_function_types(func, types);
-        let mut lowered_values = FxHashMap::default();
-        let mut rewrite_ctx = ConstRewriteCtx {
+        let info = ConstRewriteInfo {
             constref_value_tys: &constref_value_tys,
             const_paths: &const_paths,
-            lowered_values: &mut lowered_values,
         };
         let blocks: Vec<_> = func.layout.iter_block().collect();
         for block in blocks {
@@ -178,13 +145,14 @@ impl ConstDataLower {
                 if !func.layout.is_inst_inserted(inst) {
                     continue;
                 }
-                changed |= self.rewrite_inst(module, func, inst, &mut rewrite_ctx);
+                changed |= self.rewrite_inst(module, func, inst, &info);
             }
         }
 
         if changed {
             func.rebuild_users();
         }
+        changed |= self.cleanup_const_carriers(module, func, &info);
         assert_no_const_ops(func);
         changed
     }
@@ -194,128 +162,159 @@ impl ConstDataLower {
         module: &Module,
         func: &mut Function,
         inst: InstId,
-        rewrite_ctx: &mut ConstRewriteCtx<'_>,
+        info: &ConstRewriteInfo<'_>,
     ) -> bool {
-        if let Some(const_ref) =
-            downcast::<&data::ConstRef>(func.inst_set(), func.dfg.inst(inst)).cloned()
-        {
-            return self.rewrite_const_ref(
-                module,
-                func,
-                inst,
-                const_ref.global().gv(),
-                rewrite_ctx,
-            );
-        }
-        if let Some(proj) =
-            downcast::<&data::ConstProj>(func.inst_set(), func.dfg.inst(inst)).cloned()
-        {
-            return self.rewrite_const_proj(func, inst, &proj, rewrite_ctx);
-        }
-        if let Some(index) =
-            downcast::<&data::ConstIndex>(func.inst_set(), func.dfg.inst(inst)).cloned()
-        {
-            return self.rewrite_const_index(
-                func,
-                inst,
-                *index.object(),
-                *index.index(),
-                rewrite_ctx,
-            );
-        }
         if let Some(load) =
             downcast::<&data::ConstLoad>(func.inst_set(), func.dfg.inst(inst)).cloned()
         {
-            return self.rewrite_const_load(module, func, inst, *load.object(), rewrite_ctx);
+            return self.rewrite_const_load(module, func, inst, *load.object(), info.const_paths);
         }
         if let Some(init) =
             downcast::<&data::ObjInitConst>(func.inst_set(), func.dfg.inst(inst)).cloned()
         {
-            return self.rewrite_obj_init_const(module, func, inst, init, rewrite_ctx);
+            return self.rewrite_obj_init_const(module, func, inst, init, info);
         }
         false
     }
 
-    fn rewrite_const_ref(
+    fn cleanup_const_carriers(
+        &mut self,
+        module: &Module,
+        func: &mut Function,
+        info: &ConstRewriteInfo<'_>,
+    ) -> bool {
+        let mut changed = false;
+        loop {
+            func.rebuild_users();
+            let mut local_changed = false;
+            for inst in inserted_insts(func).into_iter().rev() {
+                if self.remove_dead_const_carrier(func, inst, info.constref_value_tys) {
+                    local_changed = true;
+                }
+            }
+            changed |= local_changed;
+            if !local_changed {
+                break;
+            }
+        }
+
+        loop {
+            func.rebuild_users();
+            let mut local_changed = false;
+            for inst in inserted_insts(func).into_iter().rev() {
+                if self.remove_dead_const_carrier(func, inst, info.constref_value_tys)
+                    || self.rewrite_live_const_carrier(module, func, inst, info)
+                {
+                    local_changed = true;
+                }
+            }
+            changed |= local_changed;
+            if !local_changed {
+                break;
+            }
+        }
+
+        changed
+    }
+
+    fn remove_dead_const_carrier(
+        &mut self,
+        func: &mut Function,
+        inst: InstId,
+        constref_value_tys: &FxHashMap<ValueId, Type>,
+    ) -> bool {
+        if !is_constref_carrier(func, inst, constref_value_tys) {
+            return false;
+        }
+        let result = func
+            .dfg
+            .inst_result(inst)
+            .expect("constref carrier must have one result");
+        if func.dfg.users_num(result) != 0 {
+            return false;
+        }
+        remove_inst(func, inst);
+        true
+    }
+
+    fn rewrite_live_const_carrier(
         &mut self,
         module: &Module,
         func: &mut Function,
         inst: InstId,
-        global: GlobalVariableRef,
-        rewrite_ctx: &mut ConstRewriteCtx<'_>,
+        info: &ConstRewriteInfo<'_>,
     ) -> bool {
-        let blob = self.word_blob_global(module, global);
-        let replacement = insert_before_one(
-            func,
-            inst,
-            data::SymAddr::new_unchecked(func.inst_set(), data::SymbolRef::Global(blob)),
-            func.ctx().type_layout.pointer_repl(),
-        );
-        let result = func
-            .dfg
-            .inst_result(inst)
-            .expect("const.ref must have a result");
-        let ty = module.ctx.with_gv_store(|store| store.ty(global));
-        rewrite_ctx.insert(
-            replacement,
-            LoweredConstValue {
-                addr: replacement,
+        if let Some(const_ref) =
+            downcast::<&data::ConstRef>(func.inst_set(), func.dfg.inst(inst)).cloned()
+        {
+            let global = const_ref.global().gv();
+            let ty = module.ctx.with_gv_store(|store| store.ty(global));
+            let path = ConstPath {
+                global,
                 ty,
-                path: Some(ConstPath {
-                    global,
-                    ty,
-                    steps: Vec::new(),
-                }),
-            },
-        );
-        replace_with_alias(func, inst, replacement);
-        rewrite_ctx.remove(result);
-        true
+                steps: Vec::new(),
+            };
+            let replacement = self.materialize_const_path_addr(module, func, inst, &path);
+            replace_with_alias(func, inst, replacement);
+            return true;
+        }
+        if let Some(proj) =
+            downcast::<&data::ConstProj>(func.inst_set(), func.dfg.inst(inst)).cloned()
+        {
+            let Some((&base, rest)) = proj.values().split_first() else {
+                panic!("const.proj requires a base operand");
+            };
+            return self.rewrite_live_const_subref(module, func, inst, base, rest, info);
+        }
+        if let Some(index) =
+            downcast::<&data::ConstIndex>(func.inst_set(), func.dfg.inst(inst)).cloned()
+        {
+            return self.rewrite_live_const_subref(
+                module,
+                func,
+                inst,
+                *index.object(),
+                &[*index.index()],
+                info,
+            );
+        }
+        false
     }
 
-    fn rewrite_const_proj(
+    fn rewrite_live_const_subref(
         &mut self,
-        func: &mut Function,
-        inst: InstId,
-        proj: &data::ConstProj,
-        rewrite_ctx: &mut ConstRewriteCtx<'_>,
-    ) -> bool {
-        let Some((&base, rest)) = proj.values().split_first() else {
-            panic!("const.proj requires a base operand");
-        };
-        self.rewrite_const_subref(func, inst, base, rest, rewrite_ctx)
-    }
-
-    fn rewrite_const_index(
-        &mut self,
-        func: &mut Function,
-        inst: InstId,
-        object: ValueId,
-        index: ValueId,
-        rewrite_ctx: &mut ConstRewriteCtx<'_>,
-    ) -> bool {
-        self.rewrite_const_subref(func, inst, object, &[index], rewrite_ctx)
-    }
-
-    fn rewrite_const_subref(
-        &mut self,
+        module: &Module,
         func: &mut Function,
         inst: InstId,
         base: ValueId,
         indices: &[ValueId],
-        rewrite_ctx: &mut ConstRewriteCtx<'_>,
+        info: &ConstRewriteInfo<'_>,
     ) -> bool {
-        let base = rewrite_ctx.resolve(base).unwrap_or_else(|| {
-            panic!(
-                "unsupported const subreference source at inst {}",
-                inst.as_u32()
-            )
-        });
-        let (ty, steps) = const_path_steps(func, base.ty, indices).unwrap_or_else(|| {
+        let result = func
+            .dfg
+            .inst_result(inst)
+            .expect("const subreference must have a result");
+        if let Some(path) = info.const_paths.path(result) {
+            let replacement = self.materialize_const_path_addr(module, func, inst, path);
+            replace_with_alias(func, inst, replacement);
+            return true;
+        }
+
+        let base_ty = info
+            .constref_value_tys
+            .get(&base)
+            .copied()
+            .unwrap_or_else(|| {
+                panic!(
+                    "unsupported const subreference source at inst {}",
+                    inst.as_u32()
+                )
+            });
+        let (ty, steps) = const_path_steps(func, base_ty, indices).unwrap_or_else(|| {
             panic!(
                 "unsupported const projection/index at inst {} (base_ty: {:?}, indices: {:?})",
                 inst.as_u32(),
-                base.ty,
+                base_ty,
                 indices
                     .iter()
                     .map(|&index| func.dfg.value(index).clone())
@@ -323,32 +322,15 @@ impl ConstDataLower {
             )
         });
         let (_, const_offset_bytes, dynamic_terms) =
-            const_steps_offset_bytes(func.ctx(), base.ty, &steps).unwrap_or_else(|| {
+            const_steps_offset_bytes(func.ctx(), base_ty, &steps).unwrap_or_else(|| {
                 panic!(
                     "unsupported const projection/index offset computation at inst {}",
                     inst.as_u32()
                 )
             });
-        let replacement = const_addr_with_offset(
-            func,
-            inst,
-            base.addr,
-            const_offset_bytes,
-            dynamic_terms,
-            true,
-        );
-        rewrite_ctx.insert(
-            replacement,
-            LoweredConstValue {
-                addr: replacement,
-                ty,
-                path: base.path.map(|mut path| {
-                    path.ty = ty;
-                    path.steps.extend(steps);
-                    path
-                }),
-            },
-        );
+        let replacement =
+            const_addr_with_offset(func, inst, base, const_offset_bytes, dynamic_terms, true);
+        debug_assert_eq!(ty, info.constref_value_tys[&result]);
         replace_with_alias(func, inst, replacement);
         true
     }
@@ -359,26 +341,28 @@ impl ConstDataLower {
         func: &mut Function,
         inst: InstId,
         object: ValueId,
-        rewrite_ctx: &mut ConstRewriteCtx<'_>,
+        const_paths: &ConstPathAnalysis,
     ) -> bool {
-        let source = rewrite_ctx
-            .resolve(object)
-            .unwrap_or_else(|| panic!("unsupported const.load source at inst {}", inst.as_u32()));
         let result_ty = func
             .dfg
             .inst_result(inst)
             .map(|result| func.dfg.value_ty(result))
             .expect("const.load must have a result");
-        if let Some(path) = source.path.as_ref()
-            && let Some(imm) =
-                eval_const_path_immediate(&module.ctx, path, |value| func.dfg.value_imm(value))
-        {
-            let replacement = func.dfg.make_imm_value(imm);
-            replace_with_alias(func, inst, replacement);
-            return true;
-        }
+        let addr = if let Some(path) = const_paths.path(object) {
+            if let Some(imm) = eval_const_path_domain_immediate(&module.ctx, path, |value| {
+                func.dfg.value_imm(value)
+            }) {
+                let replacement = func.dfg.make_imm_value(imm);
+                replace_with_alias(func, inst, replacement);
+                return true;
+            }
 
-        let replacement = emit_const_load_from_addr(func, inst, source.addr, result_ty, None);
+            self.materialize_const_path_addr(module, func, inst, path)
+        } else {
+            object
+        };
+
+        let replacement = emit_const_load_from_addr(func, inst, addr, result_ty, None);
         replace_with_alias(func, inst, replacement);
         true
     }
@@ -389,35 +373,91 @@ impl ConstDataLower {
         func: &mut Function,
         inst: InstId,
         init: data::ObjInitConst,
-        rewrite_ctx: &mut ConstRewriteCtx<'_>,
+        info: &ConstRewriteInfo<'_>,
     ) -> bool {
-        let source = rewrite_ctx.resolve(*init.value()).unwrap_or_else(|| {
-            panic!(
-                "unsupported obj.init.const source at inst {}",
-                inst.as_u32()
-            )
-        });
-        if !source.ty.is_integral()
-            && let Some(copy_len_bytes) = word_blob_copy_len_bytes(func.ctx(), source.ty)
+        let value = *init.value();
+        let source_ty = info
+            .constref_value_tys
+            .get(&value)
+            .copied()
+            .unwrap_or_else(|| {
+                panic!(
+                    "unsupported obj.init.const source at inst {}",
+                    inst.as_u32()
+                )
+            });
+        if let Some(path) = info.const_paths.path(value) {
+            if let Some((ty, subtree_init)) =
+                eval_const_path_subtree(&module.ctx, path, |value| func.dfg.value_imm(value))
+                && should_inline_obj_init(func.ctx(), ty)
+            {
+                emit_obj_init(func, inst, *init.object(), ty, &subtree_init);
+            } else {
+                let addr = self.materialize_const_path_addr(module, func, inst, path);
+                if !path.ty.is_integral()
+                    && let Some(copy_len_bytes) = word_blob_copy_len_bytes(func.ctx(), path.ty)
+                {
+                    emit_obj_init_from_codecopy(
+                        func,
+                        inst,
+                        *init.object(),
+                        path.ty,
+                        addr,
+                        copy_len_bytes,
+                    );
+                } else {
+                    emit_obj_init_from_addr(func, inst, *init.object(), path.ty, addr);
+                }
+            }
+        } else if !source_ty.is_integral()
+            && let Some(copy_len_bytes) = word_blob_copy_len_bytes(func.ctx(), source_ty)
         {
             emit_obj_init_from_codecopy(
                 func,
                 inst,
                 *init.object(),
-                source.ty,
-                source.addr,
+                source_ty,
+                value,
                 copy_len_bytes,
             );
-        } else if let Some(path) = source.path.as_ref()
-            && let Some((ty, subtree_init)) =
-                eval_const_path_subtree(&module.ctx, path, |value| func.dfg.value_imm(value))
-        {
-            emit_obj_init(func, inst, *init.object(), ty, &subtree_init);
         } else {
-            emit_obj_init_from_addr(func, inst, *init.object(), source.ty, source.addr);
+            emit_obj_init_from_addr(func, inst, *init.object(), source_ty, value);
         }
         remove_inst(func, inst);
         true
+    }
+
+    fn materialize_const_path_addr(
+        &mut self,
+        module: &Module,
+        func: &mut Function,
+        before: InstId,
+        path: &ConstPath,
+    ) -> ValueId {
+        let blob = self.word_blob_global(module, path.global);
+        let base_addr = insert_before_one(
+            func,
+            before,
+            data::SymAddr::new_unchecked(func.inst_set(), data::SymbolRef::Global(blob)),
+            func.ctx().type_layout.pointer_repl(),
+        );
+        let root_ty = module.ctx.with_gv_store(|store| store.ty(path.global));
+        let (ty, const_offset_bytes, dynamic_terms) =
+            const_steps_offset_bytes(func.ctx(), root_ty, &path.steps).unwrap_or_else(|| {
+                panic!(
+                    "unsupported const path address computation for global {}",
+                    path.global.as_u32()
+                )
+            });
+        debug_assert_eq!(ty, path.ty);
+        const_addr_with_offset(
+            func,
+            before,
+            base_addr,
+            const_offset_bytes,
+            dynamic_terms,
+            false,
+        )
     }
 
     fn word_blob_global(
@@ -446,6 +486,13 @@ impl ConstDataLower {
                 source.as_u32()
             )
         });
+        if crate::object::data::encode_gv_initializer_to_bytes(&module.ctx, source)
+            .is_ok_and(|native| native == bytes)
+        {
+            self.word_blobs.insert(source, source);
+            return source;
+        }
+
         let blob_ty = module
             .ctx
             .with_ty_store_mut(|store| store.make_array(Type::I8, bytes.len()));
@@ -600,6 +647,33 @@ fn rewrite_function_types(func: &mut Function, types: &mut ConstRefTypeLowerer) 
     changed || visitor.changed
 }
 
+fn inserted_insts(func: &Function) -> Vec<InstId> {
+    func.layout
+        .iter_block()
+        .flat_map(|block| func.layout.iter_inst(block))
+        .collect()
+}
+
+fn is_constref_carrier(
+    func: &Function,
+    inst: InstId,
+    constref_value_tys: &FxHashMap<ValueId, Type>,
+) -> bool {
+    let Some([result]) = func.dfg.try_inst_results(inst) else {
+        return false;
+    };
+    let result = *result;
+    if !constref_value_tys.contains_key(&result) {
+        return false;
+    }
+
+    let inst_data = func.dfg.inst(inst);
+    downcast::<&data::ConstRef>(func.inst_set(), inst_data).is_some()
+        || downcast::<&data::ConstProj>(func.inst_set(), inst_data).is_some()
+        || downcast::<&data::ConstIndex>(func.inst_set(), inst_data).is_some()
+        || func.dfg.cast_phi(inst).is_some()
+}
+
 fn const_steps_offset_bytes(
     module: &ModuleCtx,
     base_ty: Type,
@@ -744,6 +818,11 @@ fn word_blob_copy_len_bytes(module: &ModuleCtx, ty: Type) -> Option<u32> {
         | CompoundType::Enum(_)
         | CompoundType::Func { .. } => None,
     }
+}
+
+fn should_inline_obj_init(module: &ModuleCtx, ty: Type) -> bool {
+    const MAX_INLINE_LEAVES: u32 = 4;
+    const_leaf_count(module, ty).is_some_and(|leaves| leaves <= MAX_INLINE_LEAVES)
 }
 
 fn emit_obj_init(
@@ -1100,7 +1179,7 @@ mod tests {
     use super::ConstDataLower;
     use crate::{
         isa::evm::EvmBackend,
-        object::{CompileOptions, compile_all_objects},
+        object::{CompileOptions, SymbolId, compile_all_objects},
     };
     use sonatina_ir::{
         global_variable::GvInitializer,
@@ -1235,7 +1314,8 @@ func private %entry(v0.i256) -> i256 {
 
         let mut writer = ModuleWriter::with_debug_provider(&parsed.module, &parsed.debug);
         let dumped = writer.dump_string();
-        assert!(dumped.contains("__sonatina_const_words_arr_"));
+        assert!(dumped.contains("sym_addr $arr"));
+        assert!(!dumped.contains("__sonatina_const_words_arr_"));
         assert!(dumped.contains("evm_code_copy"));
         assert!(dumped.contains("mload"));
         assert!(!dumped.contains("const."));
@@ -1319,14 +1399,14 @@ func private %entry() -> i256 {
             r#"
 target = "evm-ethereum-osaka"
 
-global private const [i256; 4] $arr = [1, 2, 3, 4];
+global private const [i8; 4] $arr = [1, 2, 3, 4];
 global private const [i8; 1] $__sonatina_const_words_arr_0 = [99];
 
-func private %entry(v0.i256) -> i256 {
+func private %entry(v0.i256) -> i8 {
     block0:
-        v1.constref<[i256; 4]> = const.ref $arr;
-        v2.constref<i256> = const.index v1 v0;
-        v3.i256 = const.load v2;
+        v1.constref<[i8; 4]> = const.ref $arr;
+        v2.constref<i8> = const.index v1 v0;
+        v3.i8 = const.load v2;
         return v3;
 }
 "#,
@@ -1351,7 +1431,7 @@ func private %entry(v0.i256) -> i256 {
     }
 
     #[test]
-    fn obj_init_const_aggregate_lowers_to_bulk_codecopy() {
+    fn obj_init_const_small_aggregate_lowers_to_stores() {
         let parsed = parse(
             r#"
 target = "evm-ethereum-osaka"
@@ -1378,14 +1458,15 @@ func private %entry() -> i256 {
             .func_store
             .view(entry, |func| FuncWriter::new(entry, func).dump_string());
         assert!(!dumped.contains("obj.init.const"));
-        assert!(dumped.contains("obj.materialize.stack"));
-        assert!(dumped.contains("evm_code_copy"));
-        assert!(!dumped.contains("obj.store"));
+        assert!(dumped.contains("obj.store"));
+        assert!(!dumped.contains("obj.materialize.stack"));
+        assert!(!dumped.contains("evm_code_copy"));
+        assert!(!dumped.contains("__sonatina_const_words"));
         assert!(!dumped.contains("const."));
     }
 
     #[test]
-    fn obj_init_const_bulk_codecopy_zero_extends_negative_narrow_words() {
+    fn obj_init_const_small_narrow_aggregate_lowers_to_store() {
         let parsed = parse(
             r#"
 target = "evm-ethereum-osaka"
@@ -1409,13 +1490,10 @@ func private %entry() -> i256 {
             .module
             .func_store
             .view(entry, |func| FuncWriter::new(entry, func).dump_string());
-        assert!(dumped.contains("evm_code_copy"));
-        assert!(!dumped.contains("obj.store"));
-        let blob_bytes = lowered_blob_bytes(&parsed, "arr");
-
-        assert_eq!(blob_bytes.len(), 32);
-        assert!(blob_bytes[..31].iter().all(|&byte| byte == 0));
-        assert_eq!(blob_bytes[31], 0xff);
+        assert!(dumped.contains("obj.store"));
+        assert!(!dumped.contains("evm_code_copy"));
+        assert!(!dumped.contains("__sonatina_const_words"));
+        assert!(!dumped.contains("const."));
     }
 
     #[test]
@@ -1553,6 +1631,33 @@ func private %entry() -> i256 {
             r#"
 target = "evm-ethereum-osaka"
 
+global private const [i8; 4] $arr = [1, 2, 3, 4];
+
+func private %entry(v0.i256) -> i8 {
+    block0:
+        v1.constref<[i8; 4]> = const.ref $arr;
+        v2.constref<i8> = const.index v1 v0;
+        v3.i8 = const.load v2;
+        return v3;
+}
+
+object @Contract {
+  section runtime { entry %entry; data $arr; }
+}
+"#,
+        );
+
+        let opts = CompileOptions::default();
+        compile_all_objects(&parsed.module, &test_backend(), &opts)
+            .expect("object compilation should include backend-synthesized const blobs");
+    }
+
+    #[test]
+    fn word_compatible_dynamic_const_load_reuses_explicit_data_symbol() {
+        let parsed = parse(
+            r#"
+target = "evm-ethereum-osaka"
+
 global private const [i256; 4] $arr = [1, 2, 3, 4];
 
 func private %entry(v0.i256) -> i256 {
@@ -1569,9 +1674,27 @@ object @Contract {
 "#,
         );
 
-        let opts = CompileOptions::default();
-        compile_all_objects(&parsed.module, &test_backend(), &opts)
-            .expect("object compilation should include backend-synthesized const blobs");
+        let arr = parsed
+            .module
+            .ctx
+            .with_gv_store(|store| store.lookup_gv("arr").expect("arr global should exist"));
+        let opts = CompileOptions {
+            emit_symtab: true,
+            ..Default::default()
+        };
+        let artifacts = compile_all_objects(&parsed.module, &test_backend(), &opts)
+            .expect("object compilation should reuse compatible explicit data");
+        let runtime = artifacts[0]
+            .sections
+            .values()
+            .next()
+            .expect("runtime section should exist");
+        let arr_def = runtime
+            .symtab
+            .get(&SymbolId::Global(arr))
+            .expect("arr symbol should be present");
+        assert_eq!(arr_def.size, 128);
+        assert_eq!(runtime.bytes.len(), 145);
     }
 
     #[test]
@@ -1580,14 +1703,14 @@ object @Contract {
             r#"
 target = "evm-ethereum-osaka"
 
-global private const [i256; 4] $arr = [1, 2, 3, 4];
+global private const [i8; 4] $arr = [1, 2, 3, 4];
 global private const [i8; 1] $__sonatina_const_words_arr_0 = [99];
 
-func private %entry(v0.i256) -> i256 {
+func private %entry(v0.i256) -> i8 {
     block0:
-        v1.constref<[i256; 4]> = const.ref $arr;
-        v2.constref<i256> = const.index v1 v0;
-        v3.i256 = const.load v2;
+        v1.constref<[i8; 4]> = const.ref $arr;
+        v2.constref<i8> = const.index v1 v0;
+        v3.i8 = const.load v2;
         return v3;
 }
 

@@ -1,0 +1,16 @@
+#! SCCP should fold const.load when every possible dynamic-index element has the same value.
+
+target = "evm-ethereum-osaka"
+
+global private const [i256; 4] $arr = [7, 7, 7, 7];
+
+# sameln: func public %const_load_uniform_dynamic_domain(v0.i8) -> i256 {
+# not:         const.load
+# check:         return 7.i256;
+func public %const_load_uniform_dynamic_domain(v0.i8) -> i256 {
+    block0:
+        v1.constref<[i256; 4]> = const.ref $arr;
+        v2.constref<i256> = const.index v1 v0;
+        v3.i256 = const.load v2;
+        return v3;
+}
