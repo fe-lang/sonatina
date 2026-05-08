@@ -249,21 +249,14 @@ func private %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4
 func private %decode_returndata__u256__3271ca15373d4483(v0.i256, v1.i256) -> i256 {
     block0:
         v11.i1 = lt v1 32.i256;
-        br v11 block1 block11;
+        br v11 block1 block2;
 
     block1:
         evm_revert 0.i256 0.i256;
 
-    block5:
-        evm_revert 0.i256 0.i256;
-
-    block8:
+    block2:
         v56.i256 = mload v0 i256;
         return v56;
-
-    block11:
-        v51.i1 = gt 32.i256 v1;
-        br v51 block5 block8;
 }
 
 func private %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head(v0.objref<@__fe_obj_SolEncoder_1>, v1.i256) -> i256 {

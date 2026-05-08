@@ -6,8 +6,8 @@ input_file: test_files/evm/fe_vault_test_vault_multiuser_unoptimized.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 4096 bytes
-  total: 4096 bytes
+  section runtime: 4089 bytes
+  total: 4089 bytes
 
 object: Vault
   section init: 792 bytes
@@ -44,7 +44,7 @@ functions:
     mem: scratch_words=0 stable_words=5 stable_mode=StaticAbs(base=0xe0) entry_abs_words=2 abs_words_end=7
   evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__GetTotalShares_hbe2278c3233da528__5145d089cb2da672: ir_blocks=5 ir_insts=26 vcode_ops=87 fixups=11 imm_bytes=11
     mem: scratch_words=0 stable_words=5 stable_mode=StaticAbs(base=0xe0) entry_abs_words=2 abs_words_end=7
-  evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__AddYield_h1b194739dad02c6e__f712b0a646b2bb64: ir_blocks=7 ir_insts=38 vcode_ops=122 fixups=14 imm_bytes=15
+  evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__AddYield_h1b194739dad02c6e__f712b0a646b2bb64: ir_blocks=5 ir_insts=35 vcode_ops=112 fixups=13 imm_bytes=15
     mem: scratch_words=0 stable_words=6 stable_mode=StaticAbs(base=0xe0) entry_abs_words=2 abs_words_end=8
   evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Withdraw_h97c67fe0f317b1b0__d9e92202bb8b3b1d: ir_blocks=5 ir_insts=29 vcode_ops=104 fixups=13 imm_bytes=12
     mem: scratch_words=0 stable_words=5 stable_mode=StaticAbs(base=0x100) entry_abs_words=3 abs_words_end=8
@@ -78,7 +78,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=496462 gas_refunded=79600 logs=0 output=call len=32 tx_gas=21000 runtime_gas=475462
+  case ok: calldata_len=0 success reason=Return gas_used=496441 gas_refunded=79600 logs=0 output=call len=32 tx_gas=21000 runtime_gas=475441
 
 
 --------------- DEBUG ---------------
@@ -174,9 +174,9 @@ test_vault_multiuser__StorPtr_Evm___207f35a85ac4062e:
     CREATE2
     DUP1  // v93.i1 = is_zero v92;
     ISZERO
-    PUSH1 block41  // br v93 block41 block5;
+    PUSH1 block41  // br v93 block41 block39;
     JUMPI
-  block5:
+  block39:
     DUP2  // v9.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Deposit_h19f638fdcaab3cd__dbfe67dc81c33b5b v81 100000.i256 0.i256 1000.i256;
     PUSH2 0x3e8 (1000)
     PUSH0
@@ -1135,12 +1135,6 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__AddYield_
     REVERT
   block9:
     JUMPDEST
-    PUSH0  // v31.i1 = lt v14 0.i256;
-    DUP2
-    LT
-    PUSH1 section_unit0  // br v31 block10 block11;
-    JUMPI
-  block11:
     PUSH1 0xe0 (224)  // v32.*@__fe_obj_MemoryBytes_6 = alloca @__fe_obj_MemoryBytes_6;
     SWAP2  // mstore v33 v16 i256;
     DUP3
@@ -2018,9 +2012,9 @@ runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2:
     PUSH1 0x4 (4)  // v7.i1 = lt v13 4.i256;
     SWAP1
     LT
-    PUSH1 section_unit0  // br v7 block1 block10;
+    PUSH1 section_unit0  // br v7 block1 block8;
     JUMPI
-  block10:
+  block8:
     JUMPDEST
     PUSH0  // v18.i256 = evm_calldata_load 0.i256;
     CALLDATALOAD

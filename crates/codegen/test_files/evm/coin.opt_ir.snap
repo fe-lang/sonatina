@@ -107,7 +107,7 @@ func private %__Coin_recv_0_0(v0.i256, v1.i256) -> i256 {
         v8.*i256 = gep v3 0.i256 1.i256;
         v9.i256 = mload v8 i256;
         v10.i1 = is_zero v5;
-        br v10 block1 block2;
+        br v10 block1 block3;
 
     block1:
         v15.i256 = evm_sload v1;
@@ -120,7 +120,7 @@ func private %__Coin_recv_0_0(v0.i256, v1.i256) -> i256 {
         v23.i256 = evm_sload v1;
         return v23;
 
-    block2:
+    block3:
         v25.i256 = add v1 1.i256;
         v26.i256 = evm_sload v25;
         v28.i256 = add v26 v9;
@@ -141,7 +141,7 @@ func private %__Coin_recv_0_1(v0.i256, v1.i256) -> i256 {
         v8.*i256 = gep v3 0.i256 1.i256;
         v9.i256 = mload v8 i256;
         v10.i1 = is_zero v5;
-        br v10 block1 block2;
+        br v10 block1 block7;
 
     block1:
         v15.i256 = evm_sload v1;
@@ -149,14 +149,6 @@ func private %__Coin_recv_0_1(v0.i256, v1.i256) -> i256 {
         v18.i256 = zext v17 i256;
         v35.i1 = is_zero v18;
         br v35 block4 block3;
-
-    block2:
-        v21.i256 = add v1 1.i256;
-        v22.i256 = evm_sload v21;
-        v24.i1 = lt v22 v9;
-        v25.i256 = zext v24 i256;
-        v36.i1 = is_zero v25;
-        br v36 block6 block5;
 
     block3:
         return 1.i256;
@@ -180,6 +172,14 @@ func private %__Coin_recv_0_1(v0.i256, v1.i256) -> i256 {
         v42.i256 = add v41 v9;
         evm_sstore v1 v42;
         return 0.i256;
+
+    block7:
+        v21.i256 = add v1 1.i256;
+        v22.i256 = evm_sload v21;
+        v24.i1 = lt v22 v9;
+        v25.i256 = zext v24 i256;
+        v36.i1 = is_zero v25;
+        br v36 block6 block5;
 }
 
 func private %__Coin_init() {
@@ -288,18 +288,18 @@ func private %__Coin_runtime() {
     block4:
         v21.i256 = call %soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563 v49;
         v78.i1 = is_zero v21;
-        br v78 block15 block16;
+        br v78 block15 block17;
 
     block15:
         v81.i256 = evm_sload 0.i256;
         jump block13;
 
-    block16:
+    block17:
         v84.i256 = evm_sload 1.i256;
         jump block13;
 
     block13:
-        v85.i256 = phi (v81 block15) (v84 block16);
+        v85.i256 = phi (v81 block15) (v84 block17);
         call %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f v85;
         unreachable;
 

@@ -62,9 +62,9 @@ func private %test_vault_multiuser__StorPtr_Evm___207f35a85ac4062e() {
     block44:
         v92.i256 = evm_create2 0.i256 v89 v86 1.i256;
         v93.i1 = is_zero v92;
-        br v93 block41 block5;
+        br v93 block41 block39;
 
-    block5:
+    block39:
         v9.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Deposit_h19f638fdcaab3cd__dbfe67dc81c33b5b v81 100000.i256 0.i256 1000.i256;
         v56.i1 = eq v9 1000.i256;
         br v56 block9 block11;
@@ -578,13 +578,6 @@ func private %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_s
         evm_revert v16 v14;
 
     block9:
-        v31.i1 = lt v14 0.i256;
-        br v31 block10 block11;
-
-    block10:
-        evm_revert 0.i256 0.i256;
-
-    block11:
         v32.objref<@__fe_obj_MemoryBytes_6> = obj.alloc @__fe_obj_MemoryBytes_6;
         v33.objref<i256> = obj.proj v32 0.i256;
         obj.store v33 v16;
@@ -744,12 +737,12 @@ func private %runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e
     block0:
         v13.i256 = evm_calldata_size;
         v7.i1 = lt v13 4.i256;
-        br v7 block1 block10;
+        br v7 block1 block8;
 
     block1:
         evm_revert 0.i256 0.i256;
 
-    block10:
+    block8:
         v18.i256 = evm_calldata_load 0.i256;
         v9.i256 = shr 224.i256 v18;
         v10.i32 = trunc v9 i32;

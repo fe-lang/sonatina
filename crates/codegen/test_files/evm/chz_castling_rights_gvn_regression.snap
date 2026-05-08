@@ -6,15 +6,15 @@ input_file: test_files/evm/chz_castling_rights_gvn_regression.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 2297 bytes
-  total: 2297 bytes
+  section runtime: 2288 bytes
+  total: 2288 bytes
 
 functions:
   abs_diff: ir_blocks=6 ir_insts=17 vcode_ops=38 fixups=3 imm_bytes=8
     mem: scratch_words=1 stable_words=0 stable_mode=None entry_abs_words=62 abs_words_end=1
   apply_rook: ir_blocks=18 ir_insts=155 vcode_ops=505 fixups=23 imm_bytes=116
     mem: scratch_words=8 stable_words=22 stable_mode=StaticAbs(base=0x5a0) entry_abs_words=40 abs_words_end=62
-  path_clear_file: ir_blocks=42 ir_insts=94 vcode_ops=226 fixups=18 imm_bytes=33
+  path_clear_file: ir_blocks=39 ir_insts=90 vcode_ops=220 fixups=17 imm_bytes=32
     mem: scratch_words=1 stable_words=1 stable_mode=StaticAbs(base=0x860) entry_abs_words=62 abs_words_end=63
   piece_at: ir_blocks=1 ir_insts=9 vcode_ops=19 fixups=0 imm_bytes=7
     mem: scratch_words=1 stable_words=0 stable_mode=None entry_abs_words=63 abs_words_end=1
@@ -32,7 +32,7 @@ functions:
     mem: scratch_words=1 stable_words=0 stable_mode=None entry_abs_words=40 abs_words_end=1
 
 evm:
-  case captured_rook_clears_castling_rights: calldata_len=0 success reason=Return gas_used=26077 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=5077
+  case captured_rook_clears_castling_rights: calldata_len=0 success reason=Return gas_used=25927 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=4927
 
 
 --------------- DEBUG ---------------
@@ -632,14 +632,14 @@ path_clear_file:
     DUP1  // v123.i1 = eq v81 v82;
     SWAP2
     EQ
-    ISZERO  // br v123 block60 block49;
+    ISZERO  // br v123 block59 block49;
     PUSH1 section_unit0
     JUMPI
   block21:
     DUP3  // v28.i1 = lt v82 v98;
     DUP2
     LT
-    PUSH1 block22  // br v28 block63 block52;
+    PUSH1 block22  // br v28 block62 block52;
     JUMPI
   block52:
     POP  // jump block7;
@@ -662,7 +662,7 @@ path_clear_file:
     DUP1  // v126.i1 = eq v104 v105;
     SWAP2
     EQ
-    ISZERO  // br v126 block64 block53;
+    ISZERO  // br v126 block63 block53;
     PUSH1 section_unit0
     JUMPI
   block23:
@@ -674,7 +674,7 @@ path_clear_file:
     DUP1  // v127.i1 = eq v107 v108;
     SWAP2
     EQ
-    ISZERO  // br v127 block65 block54;
+    ISZERO  // br v127 block64 block54;
     PUSH1 section_unit0
     JUMPI
   block24:
@@ -686,7 +686,7 @@ path_clear_file:
     JUMP
     JUMPDEST
     ISZERO  // v76.i1 = is_zero v46;
-    PUSH1 block8  // br v76 block66 block11;
+    PUSH1 block8  // br v76 block65 block11;
     JUMPI
   block11:
     POP  // return 0.i1;
@@ -714,7 +714,7 @@ path_clear_file:
     AND
   block14:
     JUMPDEST
-    DUP3  // br v125 block61 block50;
+    DUP3  // br v125 block60 block50;
     ISZERO
     PUSH1 section_unit0
     JUMPI
@@ -726,7 +726,7 @@ path_clear_file:
     DUP3  // v55.i1 = gt v111 v91;
     DUP2
     GT
-    PUSH1 block15  // br v55 block67 block56;
+    PUSH1 block15  // br v55 block66 block56;
     JUMPI
   block56:
     POP  // jump block7;
@@ -745,17 +745,10 @@ path_clear_file:
   block15:
     JUMPDEST
     PUSH1 0x1 (1)  // v94.i256 = sub v111 1.i256;
-    DUP2
+    SWAP1
     SUB
     PUSH1 0xff (255)  // v95.i256 = and v94 255.i256;
     AND
-    PUSH1 0x1 (1)  // v96.i1 = lt v111 1.i256;
-    SWAP1
-    SWAP2
-    LT
-    PUSH1 section_unit0  // br v96 block51 block62;
-    JUMPI
-  block26:
     DUP1  // mstore v56 v95 i256;
     DUP6
     MSTORE
@@ -767,7 +760,7 @@ path_clear_file:
     DUP1  // v128.i1 = eq v117 v118;
     SWAP2
     EQ
-    ISZERO  // br v128 block68 block57;
+    ISZERO  // br v128 block61 block51;
     PUSH1 section_unit0
     JUMPI
   block27:
@@ -780,7 +773,7 @@ path_clear_file:
     SWAP2
     EQ
     ISZERO
-    PUSH1 section_unit0  // br v129 block69 block58;
+    PUSH1 section_unit0  // br v129 block67 block57;
     JUMPI
   block28:
     JUMPDEST
@@ -792,7 +785,7 @@ path_clear_file:
     JUMP
     JUMPDEST
     ISZERO  // v77.i1 = is_zero v72;
-    PUSH1 block14  // br v77 block70 block17;
+    PUSH1 block14  // br v77 block68 block17;
     JUMPI
   block17:
     POP  // return 0.i1;

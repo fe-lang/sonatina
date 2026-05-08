@@ -1,0 +1,18 @@
+---
+source: crates/codegen/tests/opt_pipeline.rs
+input_file: test_files/opt_pipeline/range_branch_simplify.sntn
+---
+target = "evm-ethereum-osaka"
+
+func public %entry(v0.i256) -> i256 {
+    block0:
+        v1.i1 = lt v0 10.i256;
+        br v1 block1 block4;
+
+    block1:
+        v2.i256 = add v0 1.i256;
+        return v2;
+
+    block4:
+        return 100.i256;
+}

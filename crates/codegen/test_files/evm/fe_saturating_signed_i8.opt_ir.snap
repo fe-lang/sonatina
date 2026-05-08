@@ -54,10 +54,13 @@ func private %i8_h1bb527fe1af58754_saturatingmul_hf2bc6be7b84ff8f7_saturating_mu
         v34.i256 = xor v40 v41;
         v35.i256 = and v34 128.i256;
         v48.i1 = is_zero v35;
-        br v48 block20 block16;
+        br v48 block12 block16;
+
+    block12:
+        jump block16;
 
     block16:
-        v45.i8 = phi (0.i8 block0) (0.i8 block3) (-128.i8 block9) (v17 block19) (127.i8 block20) (127.i8 block7) (127.i8 block8);
+        v45.i8 = phi (0.i8 block0) (0.i8 block3) (-128.i8 block9) (v17 block19) (127.i8 block12) (127.i8 block7) (127.i8 block8);
         return v45;
 
     block17:
@@ -66,9 +69,6 @@ func private %i8_h1bb527fe1af58754_saturatingmul_hf2bc6be7b84ff8f7_saturating_mu
     block19:
         v44.i1 = eq v18 v1;
         br v44 block16 block9;
-
-    block20:
-        jump block16;
 }
 
 func private %__fe_sonatina_entry() {

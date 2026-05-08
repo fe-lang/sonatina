@@ -41,6 +41,7 @@ use super::{
     load_store::LoadStoreSolver,
     loop_strength_reduce::LoopStrengthReduce,
     multi_result_legalize::legalize_multi_result,
+    range_branch_simplify::{RangeBranchSimplify, has_conditional_branch},
     scalar_canonicalize::ScalarCanonicalize,
     sccp::SccpSolver,
 };
@@ -71,6 +72,8 @@ pub enum Pass {
     KnownBitsSimplify,
     /// Eliminate checked arithmetic and div/mod overflow flags proven unreachable by range analysis.
     CheckedArithElim,
+    /// Remove conditional branches whose truth is proven by range analysis.
+    RangeBranchSimplify,
     /// Sparse conditional constant propagation (composite: CfgCleanup + SCCP + CfgCleanup + ADCE).
     Sccp,
     /// Standalone aggressive dead code elimination.
@@ -145,6 +148,11 @@ impl Pass {
             },
             Pass::CheckedArithElim => PassInfo {
                 name: "checked_arith_elim",
+                needs_func_behavior: false,
+                invalidates_func_behavior: true,
+            },
+            Pass::RangeBranchSimplify => PassInfo {
+                name: "range_branch_simplify",
                 needs_func_behavior: false,
                 invalidates_func_behavior: true,
             },
@@ -259,6 +267,7 @@ const PRIMARY_FUNC_PASSES: &[Pass] = &[
     Pass::AggregateScalarize,
     Pass::LoadStore,
     Pass::CheckedArithElim,
+    Pass::RangeBranchSimplify,
     Pass::Sccp,
     Pass::ScalarCanonicalize,
     Pass::Gvn,
@@ -280,6 +289,7 @@ const SECONDARY_FUNC_PASSES: &[Pass] = &[
     Pass::AggregateScalarize,
     Pass::LoadStore,
     Pass::CheckedArithElim,
+    Pass::RangeBranchSimplify,
     Pass::Sccp,
     Pass::ScalarCanonicalize,
     Pass::Gvn,
@@ -407,6 +417,7 @@ impl Pipeline {
     ///    - `AggregateScalarize`
     ///    - `LoadStore`
     ///    - `CheckedArithElim`
+    ///    - `RangeBranchSimplify`
     ///    - `Sccp` — constant propagation + dead code elimination (composite)
     ///    - `ScalarCanonicalize` — local canonical forms for scalar SSA instructions
     ///    - `Gvn` — sparse predicated global value numbering with value-phi resolution
@@ -427,6 +438,7 @@ impl Pipeline {
     ///    - `AggregateScalarize`
     ///    - `LoadStore`
     ///    - `CheckedArithElim`
+    ///    - `RangeBranchSimplify`
     ///    - `Sccp`
     ///    - `ScalarCanonicalize`
     ///    - `Gvn`
@@ -770,6 +782,38 @@ fn run_pass(
                     let _span =
                         trace_span!("sonatina.optim.pipeline.checked_arith_elim.solve").entered();
                     CheckedArithElim::new().run(func, &ctx.cfg, &ctx.lpt)
+                }
+            }
+        }
+        Pass::RangeBranchSimplify => {
+            let _span = trace_span!("sonatina.optim.pipeline.pass.range_branch_simplify").entered();
+            if !has_conditional_branch(func) {
+                false
+            } else {
+                {
+                    let _span =
+                        trace_span!("sonatina.optim.pipeline.range_branch_simplify.compute_cfg")
+                            .entered();
+                    ctx.cfg.compute(func);
+                }
+                {
+                    let _span = trace_span!(
+                        "sonatina.optim.pipeline.range_branch_simplify.compute_domtree"
+                    )
+                    .entered();
+                    ctx.domtree.compute(&ctx.cfg);
+                }
+                {
+                    let _span = trace_span!(
+                        "sonatina.optim.pipeline.range_branch_simplify.compute_looptree"
+                    )
+                    .entered();
+                    ctx.lpt.compute(&ctx.cfg, &ctx.domtree);
+                }
+                {
+                    let _span = trace_span!("sonatina.optim.pipeline.range_branch_simplify.solve")
+                        .entered();
+                    RangeBranchSimplify::new().run(func, &ctx.cfg, &ctx.lpt)
                 }
             }
         }

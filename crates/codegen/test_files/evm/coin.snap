@@ -1284,9 +1284,9 @@ evm:
     - stack=[v7, v4, v1, <RET>], last_use=[v4]
       pre: [SWAP1]
       is_zero [v4] -> v8
-    // br v8 block1 block2;
+    // br v8 block1 block3;
     - stack=[v8, v7, v1, <RET>]
-      br [v8] -> [block1, block2]
+      br [v8] -> [block1, block3]
   block1 P=[] T=[v7, v1]
     inherited from block0: [v7, v1, <RET>]
     // v11.i256 = evm_sload v1;
@@ -1323,7 +1323,7 @@ evm:
     // return v17;
     - stack=[v17, <RET>]
       return [v17]
-  block2 P=[] T=[v7, v1]
+  block3 P=[] T=[v7, v1]
     inherited from block0: [v7, v1, <RET>]
     // v18.i256 = add v1 1.i256;
     - stack=[v7, v1, <RET>]
@@ -1387,9 +1387,9 @@ evm:
     - stack=[v7, v4, v1, <RET>], last_use=[v4]
       pre: [SWAP1]
       is_zero [v4] -> v8
-    // br v8 block1 block2;
+    // br v8 block1 block7;
     - stack=[v8, v7, v1, <RET>]
-      br [v8] -> [block1, block2]
+      br [v8] -> [block1, block7]
   block1 P=[] T=[v7, v1]
     inherited from block0: [v7, v1, <RET>]
     // v11.i256 = evm_sload v1;
@@ -1446,7 +1446,7 @@ evm:
     - stack=[<RET>]
       return: [PUSH(0)]
       return [0]
-  block2 P=[] T=[v7, v1]
+  block7 P=[] T=[v7, v1]
     inherited from block0: [v7, v1, <RET>]
     // v15.i256 = add v1 1.i256;
     - stack=[v7, v1, <RET>]
@@ -1470,14 +1470,14 @@ evm:
     - stack=[v36, v16, v15, v7, v1, <RET>]
       br [v36] -> [block6, block5]
   block5 P=[] T=[]
-    inherited from block2: [v16x, v15x, v7x, v1x, <RET>]
+    inherited from block7: [v16x, v15x, v7x, v1x, <RET>]
     // return 1.i256;
     - stack=[v16x, v15x, v7x, v1x, <RET>]
       cleanup: [POP, POP, POP, POP]
       return: [PUSH(1)]
       return [1]
   block6 P=[] T=[v16, v15, v7, v1]
-    inherited from block2: [v16, v15, v7, v1, <RET>]
+    inherited from block7: [v16, v15, v7, v1, <RET>]
     // v28.i256 = sub v16 v7;
     - stack=[v16, v15, v7, v1, <RET>], last_use=[v16]
       pre: [DUP3, SWAP1]
@@ -1829,9 +1829,9 @@ evm:
     // v78.i1 = is_zero v8;
     - stack=[v8], last_use=[v8]
       is_zero [v8] -> v78
-    // br v78 block15 block16;
+    // br v78 block15 block17;
     - stack=[v78]
-      br [v78] -> [block15, block16]
+      br [v78] -> [block15, block17]
   block15 P=[] T=[]
     inherited from block4: []
     // v81.i256 = evm_sload 0.i256;
@@ -1841,7 +1841,7 @@ evm:
     // jump block13;
     - stack=[v81]
       jump -> block13
-  block16 P=[] T=[]
+  block17 P=[] T=[]
     inherited from block4: []
     // v84.i256 = evm_sload 1.i256;
     - stack=[]
@@ -3271,7 +3271,7 @@ __Coin_recv_0_0:
     ADD
     MLOAD  // v9.i256 = mload v8 i256;
     SWAP1  // v10.i1 = is_zero v5;
-    PUSH1 block2  // br v10 block1 block2;
+    PUSH1 block3  // br v10 block1 block3;
     JUMPI
   block1:
     DUP2  // v15.i256 = evm_sload v1;
@@ -3293,7 +3293,7 @@ __Coin_recv_0_0:
     SLOAD  // v23.i256 = evm_sload v1;
     SWAP1  // return v23;
     JUMP
-  block2:
+  block3:
     JUMPDEST
     PUSH1 0x1 (1)  // v25.i256 = add v1 1.i256;
     DUP3
@@ -3329,7 +3329,7 @@ __Coin_recv_0_1:
     ADD
     MLOAD  // v9.i256 = mload v8 i256;
     SWAP1  // v10.i1 = is_zero v5;
-    PUSH1 block2  // br v10 block1 block2;
+    PUSH1 block7  // br v10 block1 block7;
     JUMPI
   block1:
     DUP2  // v15.i256 = evm_sload v1;
@@ -3367,7 +3367,7 @@ __Coin_recv_0_1:
     PUSH0  // return 0.i256;
     SWAP1
     JUMP
-  block2:
+  block7:
     JUMPDEST
     PUSH1 0x1 (1)  // v21.i256 = add v1 1.i256;
     DUP3
@@ -3680,14 +3680,14 @@ __Coin_runtime:
     PUSH1 FuncRef(60)
     JUMP
     JUMPDEST
-    PUSH1 block16  // br v78 block15 block16;
+    PUSH1 block17  // br v78 block15 block17;
     JUMPI
   block15:
     PUSH0  // v81.i256 = evm_sload 0.i256;
     SLOAD
     PUSH1 block13  // jump block13;
     JUMP
-  block16:
+  block17:
     JUMPDEST
     PUSH1 0x1 (1)  // v84.i256 = evm_sload 1.i256;
     SLOAD

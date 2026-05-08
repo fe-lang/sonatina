@@ -6,19 +6,19 @@ input_file: test_files/evm/fe_saturating_signed_i8.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=s
 
 object: Contract
-  section runtime: 184 bytes
-  total: 184 bytes
+  section runtime: 185 bytes
+  total: 185 bytes
 
 functions:
   saturating_signed_i8: ir_blocks=3 ir_insts=5 vcode_ops=18 fixups=3 imm_bytes=3
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  i8_h1bb527fe1af58754_saturatingmul_hf2bc6be7b84ff8f7_saturating_mul: ir_blocks=22 ir_insts=46 vcode_ops=125 fixups=15 imm_bytes=19
+  i8_h1bb527fe1af58754_saturatingmul_hf2bc6be7b84ff8f7_saturating_mul: ir_blocks=22 ir_insts=46 vcode_ops=124 fixups=15 imm_bytes=19
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   __fe_sonatina_entry: ir_blocks=1 ir_insts=2 vcode_ops=5 fixups=2 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Stop gas_used=21353 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=353
+  case ok: calldata_len=0 success reason=Stop gas_used=21357 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=357
 
 
 --------------- DEBUG ---------------
@@ -146,15 +146,16 @@ i8_h1bb527fe1af58754_saturatingmul_hf2bc6be7b84ff8f7_saturating_mul:
     XOR  // v34.i256 = xor v62 v73;
     PUSH1 0x80 (128)  // v35.i256 = and v34 128.i256;
     AND
-    PUSH1 block39  // br v48 block20 block39;
+    ISZERO  // v48.i1 = is_zero v35;
+    PUSH1 block39  // br v48 block39 block29;
     JUMPI
-  block20:
-    PUSH1 0x7f (127)  // jump block16;
+  block29:
+    PUSH1 0x80 (128)  // jump block16;
     PUSH1 block16
     JUMP
   block39:
     JUMPDEST
-    PUSH1 0x80 (128)  // jump block16;
+    PUSH1 0x7f (127)  // jump block16;
     PUSH1 block16
     JUMP
   block40:

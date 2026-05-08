@@ -368,6 +368,7 @@ impl EvmPipelineContext<'_> {
                 Pass::BranchCanonicalize,
                 Pass::LoadStore,
                 Pass::CheckedArithElim,
+                Pass::RangeBranchSimplify,
                 Pass::Sccp,
                 Pass::LoopStrengthReduce,
                 Pass::ScalarCanonicalize,
