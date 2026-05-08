@@ -12,7 +12,7 @@ use crate::{
     stackalloc::StackifyAlloc,
 };
 use sonatina_ir::{
-    AccessLoc, Function, GlobalVariableRef, InstSetExt, Module, ValueId,
+    AccessKind, AccessLoc, Function, GlobalVariableRef, InstSetExt, Module, ValueId,
     cfg::ControlFlowGraph,
     inst::evm::inst_set::EvmInstKind,
     isa::{
@@ -38,7 +38,7 @@ use super::{
     malloc_plan,
     memory_plan::{
         self, DYN_SP_SLOT, FREE_PTR_SLOT, FuncMemPlan, ProgramMemoryPlan, STATIC_BASE, WORD_BYTES,
-        compute_abs_clobber_words,
+        compute_abs_clobber_words_with_extra,
     },
     pipeline::EvmPipeline,
     provenance::{Provenance, compute_value_provenance},
@@ -125,7 +125,7 @@ impl MemoryAccessLen {
     }
 }
 
-fn value_imm_u32(function: &Function, value: ValueId) -> Option<u32> {
+pub(crate) fn value_imm_u32(function: &Function, value: ValueId) -> Option<u32> {
     function.dfg.value_imm(value).and_then(immediate_u32)
 }
 
@@ -203,7 +203,7 @@ fn memory_access_may_touch_range_from_effect(
     }
 }
 
-fn memory_access_may_touch_free_ptr_slot(
+pub(crate) fn memory_access_may_touch_free_ptr_slot(
     function: &Function,
     access: &sonatina_ir::MemoryAccess,
     prov: &SecondaryMap<ValueId, Provenance>,
@@ -263,6 +263,24 @@ pub(crate) fn function_may_touch_free_ptr_slot(
         backend,
         ptr_escape,
         memory_access_may_touch_free_ptr_slot,
+    )
+}
+
+pub(crate) fn function_may_write_free_ptr_slot(
+    function: &Function,
+    module: &ModuleCtx,
+    backend: &EvmBackend,
+    ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
+) -> bool {
+    function_memory_accesses_match(
+        function,
+        module,
+        backend,
+        ptr_escape,
+        |function, access, prov| {
+            access.kind == AccessKind::Write
+                && memory_access_may_touch_free_ptr_slot(function, access, prov)
+        },
     )
 }
 
@@ -481,7 +499,7 @@ fn prepare_machine_section_after_pipeline(
     let source_module = work.module();
     let pre_analyses = compute_high_evm_pre_analyses(source_module, &funcs, backend);
     let scratch_effects = FxHashSet::default();
-    let mut backend_spill_reserve_words = 0;
+    let mut backend_spill_reserve_words: FxHashMap<FuncRef, u32> = FxHashMap::default();
 
     for iteration in 0..4 {
         let placement = compute_semantic_memory_placement(
@@ -491,7 +509,7 @@ fn prepare_machine_section_after_pipeline(
             &ptr_escape,
             &scratch_effects,
             backend,
-            backend_spill_reserve_words,
+            &backend_spill_reserve_words,
         );
 
         let machine = lower_section_to_machine(&work, &funcs, &placement, backend)?;
@@ -514,7 +532,7 @@ fn prepare_machine_section_after_pipeline(
             static_chain_peak_words: placement.static_chain_peak_words,
         };
 
-        let mut actual_spill_words = 0;
+        let mut actual_spill_words: FxHashMap<FuncRef, u32> = FxHashMap::default();
         let mut function_plans = FxHashMap::default();
         let mut results: Vec<_> = machine_analyses
             .into_par_iter()
@@ -573,16 +591,26 @@ fn prepare_machine_section_after_pipeline(
             .collect();
         results.sort_unstable_by_key(|(func, ..)| func.as_u32());
         for (func, peak_words, plan) in results {
-            actual_spill_words = actual_spill_words.max(peak_words);
+            actual_spill_words.insert(func, peak_words);
             function_plans.insert(func, plan);
         }
 
+        let reserve_peak = backend_spill_reserve_words
+            .values()
+            .copied()
+            .max()
+            .unwrap_or(0);
+        let actual_peak = actual_spill_words.values().copied().max().unwrap_or(0);
         debug!(
             iteration,
-            backend_spill_reserve_words, actual_spill_words, "evm machine spill reserve iteration"
+            reserve_peak, actual_peak, "evm machine spill reserve iteration"
         );
 
-        if actual_spill_words <= backend_spill_reserve_words || iteration == 3 {
+        let spill_reserve_satisfied = actual_spill_words.iter().all(|(func, actual)| {
+            *actual <= backend_spill_reserve_words.get(func).copied().unwrap_or(0)
+        });
+
+        if spill_reserve_satisfied || iteration == 3 {
             let mut globals: Vec<_> = membership.globals.iter().copied().collect();
             globals.sort_unstable();
             return Ok(EvmPreparedSection {
@@ -598,7 +626,7 @@ fn prepare_machine_section_after_pipeline(
         backend_spill_reserve_words = actual_spill_words;
         debug!(
             iteration,
-            backend_spill_reserve_words, "rerunning evm machine prepare with larger spill reserve"
+            actual_peak, "rerunning evm machine prepare with larger spill reserve"
         );
     }
 
@@ -635,9 +663,11 @@ pub(crate) fn compute_return_escape_caller_clamp_words(
     module: &Module,
     funcs: &[FuncRef],
     plan: &ProgramMemoryPlan,
+    extra_clobber_words: &FxHashMap<FuncRef, u32>,
 ) -> FxHashMap<FuncRef, u32> {
     let funcs_set: FxHashSet<FuncRef> = funcs.iter().copied().collect();
-    let abs_clobber_words = compute_abs_clobber_words(module, funcs, plan);
+    let abs_clobber_words =
+        compute_abs_clobber_words_with_extra(module, funcs, plan, extra_clobber_words);
 
     let mut callers: FxHashMap<FuncRef, FxHashSet<FuncRef>> = FxHashMap::default();
     let mut clamp_words: FxHashMap<FuncRef, u32> = FxHashMap::default();

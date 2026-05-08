@@ -12,26 +12,33 @@ use sonatina_ir::{
 use super::{
     memory_plan::{
         FuncMemPlan, FuncPreAnalysis, ObjLoc, ProgramMemoryPlan, WORD_BYTES,
-        compute_abs_clobber_words,
+        compute_abs_clobber_words_with_extra,
     },
     provenance::compute_value_provenance,
     ptr_escape::PtrEscapeSummary,
 };
 use crate::liveness::InstLiveness;
 
-pub(crate) fn compute_semantic_malloc_future_abs_words(
+pub(crate) fn compute_semantic_malloc_future_abs_words_with_extra(
     module: &Module,
     funcs: &[FuncRef],
     plan: &ProgramMemoryPlan,
     analyses: &FxHashMap<FuncRef, FuncPreAnalysis>,
     isa: &Evm,
+    extra_clobber_words: &FxHashMap<FuncRef, u32>,
 ) -> FxHashMap<FuncRef, FxHashMap<InstId, u32>> {
-    compute_malloc_future_abs_words_with_analysis(module, funcs, plan, analyses, isa, |analysis| {
-        FutureBoundsAnalysis {
+    compute_malloc_future_abs_words_with_analysis(
+        module,
+        funcs,
+        plan,
+        analyses,
+        isa,
+        extra_clobber_words,
+        |analysis| FutureBoundsAnalysis {
             inst_liveness: &analysis.inst_liveness,
             canonicalize: &analysis.value_aliases,
-        }
-    })
+        },
+    )
 }
 
 fn compute_malloc_future_abs_words_with_analysis<A>(
@@ -40,12 +47,14 @@ fn compute_malloc_future_abs_words_with_analysis<A>(
     plan: &ProgramMemoryPlan,
     analyses: &FxHashMap<FuncRef, A>,
     isa: &Evm,
+    extra_clobber_words: &FxHashMap<FuncRef, u32>,
     analysis_view: impl Fn(&A) -> FutureBoundsAnalysis<'_> + Sync,
 ) -> FxHashMap<FuncRef, FxHashMap<InstId, u32>>
 where
     A: Sync,
 {
-    let abs_clobber_words = compute_abs_clobber_words(module, funcs, plan);
+    let abs_clobber_words =
+        compute_abs_clobber_words_with_extra(module, funcs, plan, extra_clobber_words);
     let mut results: Vec<_> = funcs
         .par_iter()
         .copied()

@@ -112,15 +112,17 @@ impl FuncMemPlan {
 impl ProgramMemoryPlan {
     pub(crate) fn set_arena_base(&mut self, arena_base: u32) {
         self.arena_base = arena_base;
-        self.global_dyn_base = abs_addr_for_word(
-            arena_base,
-            self.scratch_peak_words
-                .checked_add(self.static_chain_peak_words)
-                .expect("global dynamic base word overflow"),
-        );
+        let global_dyn_base_words = self
+            .scratch_peak_words
+            .checked_add(self.static_chain_peak_words)
+            .expect("global dynamic base word overflow");
+        self.global_dyn_base = abs_addr_for_word(arena_base, global_dyn_base_words);
 
         for func_plan in self.funcs.values_mut() {
             func_plan.arena_base = arena_base;
+            if func_plan.uses_dynamic_frame() {
+                func_plan.entry_abs_words = global_dyn_base_words;
+            }
         }
     }
 }
@@ -1328,10 +1330,11 @@ fn compute_program_memory_plan_from_stacks(
     }
 }
 
-pub(crate) fn compute_abs_clobber_words(
+pub(crate) fn compute_abs_clobber_words_with_extra(
     module: &Module,
     funcs: &[FuncRef],
     plan: &ProgramMemoryPlan,
+    extra_clobber_words: &FxHashMap<FuncRef, u32>,
 ) -> FxHashMap<FuncRef, u32> {
     let funcs_set: FxHashSet<FuncRef> = funcs.iter().copied().collect();
     let mut out: FxHashMap<FuncRef, u32> = FxHashMap::default();
@@ -1340,7 +1343,8 @@ pub(crate) fn compute_abs_clobber_words(
             .funcs
             .get(&func)
             .map(FuncMemPlan::abs_words_end)
-            .unwrap_or(0);
+            .unwrap_or(0)
+            .max(extra_clobber_words.get(&func).copied().unwrap_or(0));
         out.insert(func, local);
     }
 

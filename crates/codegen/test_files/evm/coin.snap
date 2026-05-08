@@ -6,15 +6,16 @@ input_file: test_files/evm/coin.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=true evm_trace=false emit_observability=false opt=2
 
 object: Coin
-  section init: 895 bytes
+  section init: 884 bytes
   section runtime: 702 bytes
-  total: 1597 bytes
+  total: 1586 bytes
 
 object: Contract
-  section runtime: 2311 bytes
-  total: 2311 bytes
+  section runtime: 2300 bytes
+  total: 2300 bytes
 
 functions:
+  mem: global_dyn_base=0xa0 arena_base=0xa0 scratch_peak_words=0 static_chain_peak_words=0
   __Contract_runtime_entry: ir_blocks=21 ir_insts=99 vcode_ops=279 fixups=39 imm_bytes=61
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   assert: ir_blocks=3 ir_insts=6 vcode_ops=12 fixups=1 imm_bytes=1
@@ -43,7 +44,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   __Coin_recv_0_1: ir_blocks=7 ir_insts=31 vcode_ops=82 fixups=3 imm_bytes=7
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  __Coin_init: ir_blocks=9 ir_insts=38 vcode_ops=89 fixups=7 imm_bytes=17
+  __Coin_init: ir_blocks=6 ir_insts=33 vcode_ops=81 fixups=6 imm_bytes=15
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   __Coin_runtime: ir_blocks=29 ir_insts=87 vcode_ops=216 fixups=30 imm_bytes=33
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
@@ -63,7 +64,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=280458 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=259458
+  case ok: calldata_len=0 success reason=Return gas_used=280435 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=259435
 
 
 --------------- DEBUG ---------------
@@ -1846,9 +1847,9 @@ evm:
     - stack=[v11, v9, v3, v1, v0]
       pre: [PUSH(159), DUP2]
       gt [v11, 159] -> v14
-    // br v14 block9 block4;
+    // br v14 block6 block4;
     - stack=[v14, v11, v9, v3, v1, v0]
-      br [v14] -> [block9, block4]
+      br [v14] -> [block6, block4]
   block4 P=[] T=[v9, v3, v1, v0]
     inherited from block2: [v11x, v9, v3, v1, v0]
     // jump block5;
@@ -1856,7 +1857,7 @@ evm:
       cleanup: [POP]
       exit(block5): [PUSH(160)]
       jump -> block5
-  block9 P=[] T=[v11, v9, v3, v1, v0]
+  block6 P=[] T=[v11, v9, v3, v1, v0]
     inherited from block2: [v11, v9, v3, v1, v0]
     // jump block5;
     - stack=[v11, v9, v3, v1, v0]
@@ -1886,51 +1887,31 @@ evm:
     - stack=[v9, v15, v1, v0]
       pre: [PUSH(64)]
       evm_mload [64] -> v21
-    // v22.i1 = gt v21 159.i256;
+    // v22.i256 = add v21 64.i256;
     - stack=[v21, v9, v15, v1, v0]
-      pre: [PUSH(159), DUP2]
-      gt [v21, 159] -> v22
-    // br v22 block10 block7;
-    - stack=[v22, v21, v9, v15, v1, v0]
-      br [v22] -> [block10, block7]
-  block7 P=[] T=[v9, v15, v1, v0]
-    inherited from block5: [v21x, v9, v15, v1, v0]
-    // jump block8;
-    - stack=[v21x, v9, v15, v1, v0]
-      cleanup: [POP]
-      exit(block8): [PUSH(160)]
-      jump -> block8
-  block10 P=[] T=[v21, v9, v15, v1, v0]
-    inherited from block5: [v21, v9, v15, v1, v0]
-    // jump block8;
-    - stack=[v21, v9, v15, v1, v0]
-      jump -> block8
-  block8 P=[v23] T=[v9, v15, v1, v0]
-    // v24.i256 = add v23 64.i256;
-    - stack=[v23, v9, v15, v1, v0]
       pre: [PUSH(64), DUP2]
-      add [v23, 64] -> v24
-    // evm_mstore 64.i256 v24;
-    - stack=[v24, v23, v9, v15, v1, v0], last_use=[v24]
+      add [v21, 64] -> v22
+    // evm_mstore 64.i256 v22;
+    - stack=[v22, v21, v9, v15, v1, v0], last_use=[v22]
       pre: [PUSH(64)]
-      evm_mstore [64, v24]
-    // evm_mstore v23 v15;
-    - stack=[v23, v9, v15, v1, v0], last_use=[v15]
+      evm_mstore [64, v22]
+    // evm_mstore v21 v15;
+    - stack=[v21, v9, v15, v1, v0], last_use=[v15]
       pre: [SWAP2, DUP3]
-      evm_mstore [v23, v15]
-    // v26.i256 = add v23 32.i256;
-    - stack=[v9, v23, v1, v0]
+      evm_mstore [v21, v15]
+    // v24.i256 = add v21 32.i256;
+    - stack=[v9, v21, v1, v0]
       pre: [PUSH(32), DUP3]
-      add [v23, 32] -> v26
-    // evm_mstore v26 v9;
-    - stack=[v26, v9, v23, v1, v0], last_use=[v9, v26]
-      evm_mstore [v26, v9]
-    // v27.i256 = call %soldecoder_i__ha12a03fcb5ba844b_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b v23;
-    - stack=[v23, v1, v0], last_use=[v23]
+      add [v21, 32] -> v24
+    // evm_mstore v24 v9;
+    - stack=[v24, v9, v21, v1, v0], last_use=[v9, v24]
+      evm_mstore [v24, v9]
+    // v25.i256 = call %soldecoder_i__ha12a03fcb5ba844b_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b v21;
+    - stack=[v21, v1, v0], last_use=[v21]
       pre: [PUSH_CONT, SWAP1]
-      call [v23] -> v27
+      call [v21] -> v25
     // evm_sstore 0.i256 0.i256;
-    - stack=[v27x, v1, v0]
+    - stack=[v25x, v1, v0]
       cleanup: [POP]
       pre: [PUSH(0), PUSH(0)]
       evm_sstore [0, 0]
@@ -3978,7 +3959,7 @@ __Coin_init:
     PUSH1 0x9f (159)  // v18.i1 = gt v15 v17;
     DUP2
     GT
-    PUSH1 block5  // br v18 block9 block4;
+    PUSH1 block5  // br v18 block6 block4;
     JUMPI
   block4:
     POP  // jump block5;
@@ -4002,29 +3983,19 @@ __Coin_init:
     CODECOPY
     PUSH1 0x40 (64)  // v26.i256 = evm_mload v14;
     MLOAD
-    PUSH1 0x9f (159)  // v27.i1 = gt v26 v17;
-    DUP2
-    GT
-    PUSH1 block8  // br v27 block10 block7;
-    JUMPI
-  block7:
-    POP  // jump block8;
-    PUSH1 0xa0 (160)
-  block8:
-    JUMPDEST
-    PUSH1 0x40 (64)  // v29.i256 = add v28 v14;
+    PUSH1 0x40 (64)  // v27.i256 = add v26 v14;
     DUP2
     ADD
-    PUSH1 0x40 (64)  // evm_mstore v14 v29;
+    PUSH1 0x40 (64)  // evm_mstore v14 v27;
     MSTORE
-    SWAP2  // evm_mstore v28 v19;
+    SWAP2  // evm_mstore v26 v19;
     DUP3
     MSTORE
-    PUSH1 0x20 (32)  // v32.i256 = add v28 v30;
+    PUSH1 0x20 (32)  // v29.i256 = add v26 v28;
     DUP3
     ADD
-    MSTORE  // evm_mstore v32 v12;
-    PUSH1 `pc + (4)`  // v33.i256 = call %soldecoder_i__ha12a03fcb5ba844b_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b v28;
+    MSTORE  // evm_mstore v29 v12;
+    PUSH1 `pc + (4)`  // v30.i256 = call %soldecoder_i__ha12a03fcb5ba844b_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b v26;
     SWAP1
     PUSH1 FuncRef(36)
     JUMP
@@ -4036,7 +4007,7 @@ __Coin_init:
     PUSH0  // evm_sstore v6 v9;
     PUSH1 0x1 (1)
     SSTORE
-    PUSH0  // evm_sstore 2.i256 v9;
+    PUSH0  // evm_sstore v32 v9;
     PUSH1 0x2 (2)
     SSTORE
     DUP1  // evm_code_copy v9 v1 v2;

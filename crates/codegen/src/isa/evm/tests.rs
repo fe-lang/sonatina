@@ -29,7 +29,8 @@ use self::{
         rewrite_evm_local_fallthrough_layout,
     },
     memory_plan::{
-        ArenaCostModel, ProgramMemoryPlan, compute_abs_clobber_words, compute_program_memory_plan,
+        ArenaCostModel, ProgramMemoryPlan, compute_abs_clobber_words_with_extra,
+        compute_program_memory_plan,
     },
     prepare::compute_return_escape_caller_clamp_words,
 };
@@ -861,8 +862,18 @@ block0:
 
     let mk = ctx.names["mk"];
     let main = ctx.names["main"];
-    let abs_clobber_words = compute_abs_clobber_words(&ctx.module, &ctx.funcs, &ctx.plan);
-    let clamp_words = compute_return_escape_caller_clamp_words(&ctx.module, &ctx.funcs, &ctx.plan);
+    let abs_clobber_words = compute_abs_clobber_words_with_extra(
+        &ctx.module,
+        &ctx.funcs,
+        &ctx.plan,
+        &FxHashMap::default(),
+    );
+    let clamp_words = compute_return_escape_caller_clamp_words(
+        &ctx.module,
+        &ctx.funcs,
+        &ctx.plan,
+        &FxHashMap::default(),
+    );
     let main_active_words = ctx.plan.funcs[&main].active_abs_words();
     let main_clobber_words = abs_clobber_words[&main];
 
@@ -871,6 +882,20 @@ block0:
         "test setup requires a caller whose future callee clobber exceeds its own active frame"
     );
     assert_eq!(clamp_words[&mk], main_clobber_words);
+
+    let extra_main_clobber_words = main_clobber_words
+        .checked_add(3)
+        .expect("test clobber overflow");
+    let mut extra_clobber_words = FxHashMap::default();
+    extra_clobber_words.insert(main, extra_main_clobber_words);
+    let clamp_words = compute_return_escape_caller_clamp_words(
+        &ctx.module,
+        &ctx.funcs,
+        &ctx.plan,
+        &extra_clobber_words,
+    );
+
+    assert_eq!(clamp_words[&mk], extra_main_clobber_words);
 }
 
 #[test]

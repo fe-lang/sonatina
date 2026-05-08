@@ -15,6 +15,7 @@ object: Counter
   total: 165 bytes
 
 functions:
+  mem: global_dyn_base=0x300 arena_base=0x180 scratch_peak_words=0 static_chain_peak_words=12
   test_counter__StorPtr_Evm___207f35a85ac4062e: ir_blocks=27 ir_insts=65 vcode_ops=172 fixups=19 imm_bytes=27
     mem: scratch_words=6 stable_words=6 stable_mode=StaticAbs(base=0x180) entry_abs_words=0 abs_words_end=6
   evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Get_h3927684624c88c53__624197e0d5a47bbd: ir_blocks=15 ir_insts=41 vcode_ops=108 fixups=8 imm_bytes=20
@@ -82,14 +83,14 @@ test_counter__StorPtr_Evm___207f35a85ac4062e:
     RETURNDATASIZE
     PUSH1 0x40 (64)  // v15.i256 = evm_mload v2;
     MLOAD
-    PUSH2 0x17f (383)  // v18.i1 = gt v15 383.i256;
+    PUSH2 0x23f (575)  // v18.i1 = gt v15 575.i256;
     DUP2
     GT
     PUSH1 block20  // br v18 block28 block19;
     JUMPI
   block19:
     POP  // jump block20;
-    PUSH2 0x180 (384)
+    PUSH2 0x240 (576)
   block20:
     JUMPDEST
     DUP2  // evm_return_data_copy v19 0.i256 v14;
@@ -185,17 +186,17 @@ test_counter__StorPtr_Evm___207f35a85ac4062e:
     PUSH1 FuncRef(42)
     JUMP
     JUMPDEST
-    PUSH0  // v40.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Get_h3927684624c88c53__624197e0d5a47bbd v12 100000.i256 0.i256;
+    PUSH0  // v41.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Get_h3927684624c88c53__624197e0d5a47bbd v12 100000.i256 0.i256;
     PUSH3 0x186a0 (100000)
     PUSH1 `pc + (4)`
     SWAP3
     PUSH1 FuncRef(10)
     JUMP
     JUMPDEST
-    PUSH1 0x1 (1)  // v42.i1 = eq v40 1.i256;
+    PUSH1 0x1 (1)  // v43.i1 = eq v41 1.i256;
     EQ
     ISZERO
-    PUSH1 section_unit0  // br v42 block14 block13;
+    PUSH1 section_unit0  // br v43 block14 block13;
     JUMPI
   block14:
     JUMPDEST

@@ -1,0 +1,75 @@
+#! evm.config: { vcode: true, bytecode_hex: false, stackify_trace: false, evm_trace: false }
+#! evm.case: ok
+#!   calldata:
+#!   expect: return u256(1)
+
+target = "evm-ethereum-osaka"
+
+func public %entry() {
+    block0:
+        (v0.*i8, v1.*i8) = call %two_mallocs;
+        v2.i256 = ptr_to_int v0 i256;
+        v3.i256 = ptr_to_int v1 i256;
+        v4.i1 = lt v2 v3;
+        v5.i256 = zext v4 i256;
+        mstore 0.i32 v5 i256;
+        evm_return 0.i8 32.i8;
+}
+
+func public %two_mallocs() -> (*i8, *i8) {
+    block0:
+        v0.*i8 = evm_malloc 32.i256;
+        v1.*i8 = evm_malloc 32.i256;
+        return (v0, v1);
+}
+
+func public %read_free_ptr() -> i256 {
+    block0:
+        v0.i256 = mload 64.i256 i256;
+        return v0;
+}
+
+func public %call_preserves_floor() -> (*i8, i256, *i8) {
+    block0:
+        v0.*i8 = evm_malloc 32.i256;
+        v1.i256 = call %read_free_ptr;
+        v2.*i8 = evm_malloc 32.i256;
+        return (v0, v1, v2);
+}
+
+func public %write_free_ptr() {
+    block0:
+        mstore 64.i256 32.i256 i256;
+        return;
+}
+
+func public %call_kills_floor() -> (*i8, *i8) {
+    block0:
+        v0.*i8 = evm_malloc 32.i256;
+        call %write_free_ptr;
+        v1.*i8 = evm_malloc 32.i256;
+        return (v0, v1);
+}
+
+func public %join_uses_min_floor(v0.i1) -> (*i8, *i8) {
+    block0:
+        v1.*i8 = evm_malloc 32.i256;
+        br v0 block1 block2;
+
+    block1:
+        mstore 64.i256 32.i256 i256;
+        jump block3;
+
+    block2:
+        jump block3;
+
+    block3:
+        v2.*i8 = evm_malloc 32.i256;
+        return (v1, v2);
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}

@@ -10,6 +10,7 @@ object: Contract
   total: 81 bytes
 
 functions:
+  mem: global_dyn_base=0x140 arena_base=0xc0 scratch_peak_words=4 static_chain_peak_words=0
   entry: ir_blocks=1 ir_insts=5 vcode_ops=14 fixups=2 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=4 abs_words_end=0
   agg_noopt: ir_blocks=1 ir_insts=16 vcode_ops=36 fixups=0 imm_bytes=16

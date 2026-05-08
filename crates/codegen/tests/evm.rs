@@ -837,7 +837,7 @@ fn parse_mem_plan_summary(mem_plan: &str) -> (Option<String>, HashMap<String, St
         let Some(rest) = line.strip_prefix("evm mem plan: ") else {
             continue;
         };
-        if rest.starts_with("dyn_base=") {
+        if rest.starts_with("global_dyn_base=") {
             header = Some(rest.to_string());
             continue;
         }

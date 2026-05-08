@@ -568,7 +568,13 @@ impl FuncLowerCtx<'_> {
                 needs_dyn_sp_clamp,
                 update_free_ptr,
             } => {
-                let base = self.emit_heap_base(min_base, needs_dyn_sp_clamp);
+                let known_free_ptr_floor = self
+                    .placement
+                    .free_ptr_floor_before_malloc
+                    .get(&source_inst)
+                    .copied()
+                    .flatten();
+                let base = self.emit_heap_base(min_base, needs_dyn_sp_clamp, known_free_ptr_floor);
                 if update_free_ptr {
                     let size = self.lower_malloc_aligned_size(source_inst)?;
                     let new_free =
@@ -720,11 +726,19 @@ impl FuncLowerCtx<'_> {
         Ok(self.emit_binary(logic::And::new(self.is, size, mask), Type::I256))
     }
 
-    fn emit_heap_base(&mut self, min_base: u32, needs_dyn_sp_clamp: bool) -> ValueId {
+    fn emit_heap_base(
+        &mut self,
+        min_base: u32,
+        needs_dyn_sp_clamp: bool,
+        known_free_ptr_floor: Option<u32>,
+    ) -> ValueId {
         let mut base = self.emit_mload_abs(FREE_PTR_SLOT as u32);
         if needs_dyn_sp_clamp {
             let dyn_sp = self.emit_mload_abs(DYN_SP_SLOT as u32);
             base = self.emit_word_max(base, dyn_sp);
+        }
+        if known_free_ptr_floor.is_some_and(|floor| floor >= min_base) {
+            return base;
         }
         self.emit_word_max_const_u32(base, min_base)
     }
