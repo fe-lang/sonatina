@@ -11,6 +11,8 @@ use sonatina_ir::{
 };
 
 use super::scalar_words::evm_scalar_word_bytes;
+pub(crate) const CONST_WORD_POOL_PREFIX: &str = "__sonatina_const_words_";
+
 use crate::{
     optim::const_eval::{
         ConstPath, ConstPathAnalysis, ConstPathStep, analyze_const_paths,
@@ -517,7 +519,10 @@ impl ConstDataLower {
                 .map(|byte| GvInitializer::make_imm(byte as i8))
                 .collect(),
         );
-        let symbol_base = format!("__sonatina_const_words_{source_symbol}_{}", source.as_u32());
+        let symbol_base = format!(
+            "{CONST_WORD_POOL_PREFIX}{source_symbol}_{}",
+            source.as_u32()
+        );
         let blob = module.ctx.with_gv_store_mut(|store| {
             let symbol = fresh_global_symbol(store, &symbol_base);
             store.make_gv(GlobalVariableData::constant(
@@ -1467,7 +1472,11 @@ mod tests {
             let source = store
                 .lookup_gv(source_symbol)
                 .unwrap_or_else(|| panic!("{source_symbol} global should exist"));
-            let symbol = format!("__sonatina_const_words_{source_symbol}_{}", source.as_u32());
+            let symbol = format!(
+                "{}{source_symbol}_{}",
+                super::CONST_WORD_POOL_PREFIX,
+                source.as_u32()
+            );
             store
                 .lookup_gv(&symbol)
                 .expect("synthesized blob should exist")

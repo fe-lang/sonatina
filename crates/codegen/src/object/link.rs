@@ -5,11 +5,12 @@ use crate::{
         lower::LoweredFunction,
         vcode::{SymFixup, SymFixupKind, VCodeFixup, VCodeInst},
     },
+    transform::evm::CONST_WORD_POOL_PREFIX,
 };
 use cranelift_entity::EntityRef;
 use rustc_hash::FxHashMap;
 use sonatina_ir::{
-    BlockId, GlobalVariableRef, Module,
+    BlockId, GlobalVariableRef, Linkage, Module,
     inst::data::SymbolRef,
     module::FuncRef,
     object::{EmbedSymbol, SectionName},
@@ -36,10 +37,188 @@ struct BuildSectionObservabilityInput<'a, Op> {
     layout: &'a ObjectLayout<Op>,
     funcs: &'a [FuncRef],
     symtab: &'a FxHashMap<SymbolId, SymbolDef>,
-    data: &'a [(GlobalVariableRef, Vec<u8>)],
+    data: &'a SectionDataPlan,
     embeds: &'a [(EmbedSymbol, Vec<u8>)],
     section: &'a SectionName,
     section_bytes: u32,
+}
+
+#[derive(Debug)]
+struct SectionDataPlan {
+    blobs: Vec<Vec<u8>>,
+    mergeable_blobs: Vec<bool>,
+    symbols: Vec<DataSymbolDef>,
+}
+
+#[derive(Debug)]
+struct DataSymbolDef {
+    gv: GlobalVariableRef,
+    blob: usize,
+    offset_in_blob: u32,
+    size: u32,
+}
+
+impl SectionDataPlan {
+    fn build(module: &Module, data: &[(GlobalVariableRef, Vec<u8>)]) -> Result<Self, String> {
+        let mut plan = Self {
+            blobs: Vec::new(),
+            mergeable_blobs: Vec::new(),
+            symbols: Vec::with_capacity(data.len()),
+        };
+        let mut mergeable = Vec::new();
+
+        for (idx, (gv, bytes)) in data.iter().enumerate() {
+            if is_mergeable_const_pool(module, *gv) {
+                mergeable.push((idx, *gv, bytes));
+            } else {
+                plan.push_unique(*gv, bytes)?;
+            }
+        }
+
+        mergeable.sort_by_key(|(idx, gv, bytes)| {
+            (
+                std::cmp::Reverse(bytes.len()),
+                gv.as_u32(),
+                u32::try_from(*idx).unwrap_or(u32::MAX),
+            )
+        });
+        for (_, gv, bytes) in mergeable {
+            plan.push_mergeable(gv, bytes)?;
+        }
+
+        Ok(plan)
+    }
+
+    fn push_unique(&mut self, gv: GlobalVariableRef, bytes: &[u8]) -> Result<(), String> {
+        self.push_blob(gv, bytes, false)
+    }
+
+    fn push_blob(
+        &mut self,
+        gv: GlobalVariableRef,
+        bytes: &[u8],
+        mergeable: bool,
+    ) -> Result<(), String> {
+        let blob = self.blobs.len();
+        self.blobs.push(bytes.to_vec());
+        self.mergeable_blobs.push(mergeable);
+        self.push_symbol(gv, blob, 0, bytes)
+    }
+
+    fn push_mergeable(&mut self, gv: GlobalVariableRef, bytes: &[u8]) -> Result<(), String> {
+        if let Some((blob, offset_in_blob)) = self.find_word_subrange(bytes)? {
+            return self.push_symbol(gv, blob, offset_in_blob, bytes);
+        }
+
+        if let Some((blob, offset_in_blob)) = self.append_word_overlap(bytes)? {
+            return self.push_symbol(gv, blob, offset_in_blob, bytes);
+        }
+
+        self.push_blob(gv, bytes, true)
+    }
+
+    fn push_symbol(
+        &mut self,
+        gv: GlobalVariableRef,
+        blob: usize,
+        offset_in_blob: u32,
+        bytes: &[u8],
+    ) -> Result<(), String> {
+        let size = bytes
+            .len()
+            .try_into()
+            .map_err(|_| "data size overflow".to_string())?;
+        self.symbols.push(DataSymbolDef {
+            gv,
+            blob,
+            offset_in_blob,
+            size,
+        });
+        Ok(())
+    }
+
+    fn find_word_subrange(&self, needle: &[u8]) -> Result<Option<(usize, u32)>, String> {
+        for (blob_idx, blob) in self.blobs.iter().enumerate() {
+            if !self.mergeable_blobs[blob_idx] {
+                continue;
+            }
+            for offset in word_offsets(blob.len(), needle.len()) {
+                if &blob[offset..offset + needle.len()] == needle {
+                    return Ok(Some((blob_idx, checked_u32(offset)?)));
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    fn append_word_overlap(&mut self, bytes: &[u8]) -> Result<Option<(usize, u32)>, String> {
+        for blob_idx in 0..self.blobs.len() {
+            if !self.mergeable_blobs[blob_idx] {
+                continue;
+            }
+            let blob = &mut self.blobs[blob_idx];
+            if let Some(overlap) = max_word_suffix_prefix_overlap(blob, bytes) {
+                let offset = blob
+                    .len()
+                    .checked_sub(overlap)
+                    .ok_or_else(|| "data overlap underflow".to_string())?;
+                blob.extend_from_slice(&bytes[overlap..]);
+                return Ok(Some((blob_idx, checked_u32(offset)?)));
+            }
+        }
+        Ok(None)
+    }
+
+    fn physical_size(&self) -> Result<u32, String> {
+        self.blobs.iter().try_fold(0u32, |total, blob| {
+            total
+                .checked_add(checked_u32(blob.len())?)
+                .ok_or_else(|| "data bytes overflow".to_string())
+        })
+    }
+}
+
+const EVM_WORD_BYTES: usize = 32;
+
+fn is_mergeable_const_pool(module: &Module, gv: GlobalVariableRef) -> bool {
+    module.ctx.with_gv_store(|store| {
+        let data = store.gv_data(gv);
+        data.linkage == Linkage::Private && data.symbol.starts_with(CONST_WORD_POOL_PREFIX)
+    })
+}
+
+fn word_offsets(blob_len: usize, needle_len: usize) -> impl Iterator<Item = usize> {
+    let aligned = needle_len != 0
+        && needle_len <= blob_len
+        && needle_len.is_multiple_of(EVM_WORD_BYTES)
+        && blob_len.is_multiple_of(EVM_WORD_BYTES);
+    let end = if aligned {
+        blob_len - needle_len + 1
+    } else {
+        0
+    };
+    (0..end).step_by(EVM_WORD_BYTES)
+}
+
+fn max_word_suffix_prefix_overlap(blob: &[u8], bytes: &[u8]) -> Option<usize> {
+    if !blob.len().is_multiple_of(EVM_WORD_BYTES) || !bytes.len().is_multiple_of(EVM_WORD_BYTES) {
+        return None;
+    }
+
+    let max_words = blob.len().min(bytes.len()) / EVM_WORD_BYTES;
+    for words in (1..=max_words).rev() {
+        let overlap = words * EVM_WORD_BYTES;
+        if blob[blob.len() - overlap..] == bytes[..overlap] {
+            return Some(overlap);
+        }
+    }
+    None
+}
+
+fn checked_u32(value: usize) -> Result<u32, String> {
+    value
+        .try_into()
+        .map_err(|_| "data offset overflow".to_string())
 }
 
 pub(crate) fn link_section(
@@ -53,6 +232,7 @@ pub(crate) fn link_section(
     const MAX_ITERS: usize = 64;
     let module = prepared.module();
     let funcs = prepared.funcs();
+    let data_plan = SectionDataPlan::build(module, data).map_err(LinkSectionError::Link)?;
 
     let _span = info_span!(
         "sonatina.codegen.link_section",
@@ -112,7 +292,8 @@ pub(crate) fn link_section(
 
         let (symtab, section_size) = {
             let _span = trace_span!("sonatina.codegen.link_section.build_symtab").entered();
-            build_section_symtab(&layout, funcs, data, embeds).map_err(LinkSectionError::Link)?
+            build_section_symtab(&layout, funcs, &data_plan, embeds)
+                .map_err(LinkSectionError::Link)?
         };
 
         let layout_changed =
@@ -148,7 +329,7 @@ pub(crate) fn link_section(
                     &mut |address, buf| backend.emit_label(address, buf),
                     &mut bytes,
                 );
-                for (_, blob) in data {
+                for blob in &data_plan.blobs {
                     bytes.extend_from_slice(blob);
                 }
                 for (_, blob) in embeds {
@@ -171,7 +352,7 @@ pub(crate) fn link_section(
                         layout: &layout,
                         funcs,
                         symtab: &symtab,
-                        data,
+                        data: &data_plan,
                         embeds,
                         section,
                         section_bytes,
@@ -230,7 +411,7 @@ fn apply_layout_sym_fixups(
 fn build_section_symtab<Op>(
     layout: &ObjectLayout<Op>,
     funcs: &[FuncRef],
-    data: &[(GlobalVariableRef, Vec<u8>)],
+    data: &SectionDataPlan,
     embeds: &[(EmbedSymbol, Vec<u8>)],
 ) -> Result<(FxHashMap<SymbolId, SymbolDef>, u32), String> {
     let mut symtab: FxHashMap<SymbolId, SymbolDef> = FxHashMap::default();
@@ -243,17 +424,29 @@ fn build_section_symtab<Op>(
         symtab.insert(SymbolId::Func(func), SymbolDef { offset, size });
     }
 
-    let mut cursor = layout.code_end();
-    for (gv, bytes) in data {
-        let size: u32 = bytes
-            .len()
-            .try_into()
-            .map_err(|_| "data size overflow".to_string())?;
-        let offset = cursor;
+    let data_start = layout.code_end();
+    let mut blob_offsets = Vec::with_capacity(data.blobs.len());
+    let mut cursor = data_start;
+    for blob in &data.blobs {
+        blob_offsets.push(cursor);
         cursor = cursor
-            .checked_add(size)
+            .checked_add(checked_u32(blob.len())?)
             .ok_or_else(|| "data offset overflow".to_string())?;
-        symtab.insert(SymbolId::Global(*gv), SymbolDef { offset, size });
+    }
+    for symbol in &data.symbols {
+        let blob_offset = *blob_offsets
+            .get(symbol.blob)
+            .ok_or_else(|| "data symbol references missing blob".to_string())?;
+        let offset = blob_offset
+            .checked_add(symbol.offset_in_blob)
+            .ok_or_else(|| "data symbol offset overflow".to_string())?;
+        symtab.insert(
+            SymbolId::Global(symbol.gv),
+            SymbolDef {
+                offset,
+                size: symbol.size,
+            },
+        );
     }
 
     for (symbol, bytes) in embeds {
@@ -316,16 +509,7 @@ fn build_section_observability<Op>(
 
     let code_bytes = layout.code_end();
 
-    let mut data_bytes = 0_u32;
-    for (_, blob) in data {
-        let sz: u32 = blob
-            .len()
-            .try_into()
-            .map_err(|_| "data bytes overflow".to_string())?;
-        data_bytes = data_bytes
-            .checked_add(sz)
-            .ok_or_else(|| "data bytes overflow".to_string())?;
-    }
+    let data_bytes = data.physical_size()?;
 
     let mut embed_bytes = 0_u32;
     for (_, blob) in embeds {
