@@ -863,6 +863,7 @@ fn emit_dynamic_domain_lookup(
     emit_packed_bool_lookup(func, before, index, &values)
         .or_else(|| emit_packed_byte_lookup(func, before, index, &values))
         .or_else(|| emit_affine_lookup(func, before, index, result_ty, &values))
+        .or_else(|| emit_power_of_two_lookup(func, before, index, result_ty, &values))
         .or_else(|| emit_sparse_one_exception_lookup(func, before, index, result_ty, &values))
         .or_else(|| emit_packed_subword_lookup(func, before, index, result_ty, &values))
 }
@@ -971,6 +972,56 @@ fn affine_sequence(values: &[Immediate]) -> Option<(Immediate, Immediate)> {
             value == base + stride * idx
         })
         .then_some((base, stride))
+}
+
+fn emit_power_of_two_lookup(
+    func: &mut Function,
+    before: InstId,
+    index: ValueId,
+    result_ty: Type,
+    values: &[Immediate],
+) -> Option<ValueId> {
+    if result_ty != Type::I256 {
+        return None;
+    }
+
+    let (base_exp, stride) = power_of_two_exponents(values)?;
+    let mut shift = zext_to_i256(func, before, index);
+    if stride != 1 {
+        let stride = imm_i256(func, stride);
+        shift = mul_i256(func, before, shift, stride);
+    }
+    if base_exp != 0 {
+        let base_exp = imm_i256(func, base_exp);
+        shift = add_i256(func, before, base_exp, shift);
+    }
+    let one = imm_i256(func, 1);
+    Some(shl_i256(func, before, one, shift))
+}
+
+fn power_of_two_exponents(values: &[Immediate]) -> Option<(u32, u32)> {
+    let mut exponents = values.iter().copied().map(power_of_two_exponent);
+    let base = exponents.next()??;
+    let next = exponents.next()??;
+    let stride = next.checked_sub(base)?;
+    if stride == 0 {
+        return None;
+    }
+    exponents
+        .enumerate()
+        .all(|(idx, exp)| {
+            let idx = u32::try_from(idx + 2).ok();
+            idx.and_then(|idx| base.checked_add(stride.checked_mul(idx)?)) == exp
+        })
+        .then_some((base, stride))
+}
+
+fn power_of_two_exponent(value: Immediate) -> Option<u32> {
+    let value = value.zext(Type::I256).as_i256().to_u256();
+    if value.is_zero() || value & (value - U256::one()) != U256::zero() {
+        return None;
+    }
+    (0..256u32).find(|&bit| value == U256::one() << bit as usize)
 }
 
 fn emit_packed_subword_lookup(
@@ -1481,6 +1532,15 @@ fn sub_i256(func: &mut Function, before: InstId, lhs: ValueId, rhs: ValueId) -> 
     )
 }
 
+fn shl_i256(func: &mut Function, before: InstId, value: ValueId, bits: ValueId) -> ValueId {
+    insert_before_one(
+        func,
+        before,
+        arith::Shl::new_unchecked(func.inst_set(), bits, value),
+        Type::I256,
+    )
+}
+
 fn shr_i256(func: &mut Function, before: InstId, value: ValueId, bits: ValueId) -> ValueId {
     insert_before_one(
         func,
@@ -1636,7 +1696,7 @@ func private %entry() -> i256 {
             r#"
 target = "evm-ethereum-osaka"
 
-global private const [i256; 4] $arr = [1, 2, 4, 8];
+global private const [i256; 4] $arr = [1, 3, 7, 15];
 
 func private %entry(v0.i256) -> i256 {
     block0:
@@ -1795,6 +1855,37 @@ func private %entry(v0.i256) -> i256 {
             .view(entry, |func| FuncWriter::new(entry, func).dump_string());
         assert!(dumped.contains("mul"));
         assert!(dumped.contains("add"));
+        assert!(!dumped.contains("evm_code_copy"));
+        assert!(!dumped.contains("__sonatina_const_words"));
+        assert!(!dumped.contains("const."));
+    }
+
+    #[test]
+    fn dynamic_const_load_power_of_two_i256_lowers_to_shift() {
+        let parsed = parse(
+            r#"
+target = "evm-ethereum-osaka"
+
+global private const [i256; 4] $arr = [1, 2, 4, 8];
+
+func private %entry(v0.i256) -> i256 {
+    block0:
+        v1.constref<[i256; 4]> = const.ref $arr;
+        v2.constref<i256> = const.index v1 v0;
+        v3.i256 = const.load v2;
+        return v3;
+}
+"#,
+        );
+
+        ConstDataLower::default().run(&parsed.module);
+
+        let entry = find_func_ref(&parsed, "entry");
+        let dumped = parsed
+            .module
+            .func_store
+            .view(entry, |func| FuncWriter::new(entry, func).dump_string());
+        assert!(dumped.contains("shl"));
         assert!(!dumped.contains("evm_code_copy"));
         assert!(!dumped.contains("__sonatina_const_words"));
         assert!(!dumped.contains("const."));
@@ -2184,7 +2275,7 @@ object @Contract {
             r#"
 target = "evm-ethereum-osaka"
 
-global private const [i256; 4] $arr = [1, 2, 4, 8];
+global private const [i256; 4] $arr = [1, 3, 7, 15];
 
 func private %entry(v0.i256) -> i256 {
     block0:
