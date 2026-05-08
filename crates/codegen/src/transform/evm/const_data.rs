@@ -1246,6 +1246,7 @@ fn packed_subword_width(ty: Type) -> Option<usize> {
     match ty {
         Type::I16 => Some(16),
         Type::I32 => Some(32),
+        Type::I64 => Some(64),
         _ => None,
     }
 }
@@ -2293,6 +2294,38 @@ func private %entry(v0.i256) -> i16 {
         v1.constref<[i16; 4]> = const.ref $arr;
         v2.constref<i16> = const.index v1 v0;
         v3.i16 = const.load v2;
+        return v3;
+}
+"#,
+        );
+
+        ConstDataLower::default().run(&parsed.module);
+
+        let entry = find_func_ref(&parsed, "entry");
+        let dumped = parsed
+            .module
+            .func_store
+            .view(entry, |func| FuncWriter::new(entry, func).dump_string());
+        assert!(dumped.contains("shr"));
+        assert!(dumped.contains("trunc"));
+        assert!(!dumped.contains("evm_code_copy"));
+        assert!(!dumped.contains("__sonatina_const_words"));
+        assert!(!dumped.contains("const."));
+    }
+
+    #[test]
+    fn dynamic_const_load_small_i64_lowers_to_packed_subword() {
+        let parsed = parse(
+            r#"
+target = "evm-ethereum-osaka"
+
+global private const [i64; 4] $arr = [11, 99, 42, 77];
+
+func private %entry(v0.i256) -> i64 {
+    block0:
+        v1.constref<[i64; 4]> = const.ref $arr;
+        v2.constref<i64> = const.index v1 v0;
+        v3.i64 = const.load v2;
         return v3;
 }
 "#,
