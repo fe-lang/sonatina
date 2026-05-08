@@ -401,9 +401,9 @@ impl ConstDataLower {
         if let Some(path) = info.const_paths.path(value) {
             if let Some((ty, subtree_init)) =
                 eval_const_path_subtree(&module.ctx, path, |value| func.dfg.value_imm(value))
-                && should_inline_obj_init(func.ctx(), ty)
             {
-                emit_obj_init(func, inst, *init.object(), ty, &subtree_init);
+                debug_assert_eq!(ty, path.ty);
+                self.emit_known_obj_init(module, func, inst, *init.object(), path, &subtree_init);
             } else {
                 let addr = self.materialize_const_path_addr(module, func, inst, path);
                 if !path.ty.is_integral()
@@ -437,6 +437,47 @@ impl ConstDataLower {
         }
         remove_inst(func, inst);
         true
+    }
+
+    fn emit_known_obj_init(
+        &mut self,
+        module: &Module,
+        func: &mut Function,
+        before: InstId,
+        object: ValueId,
+        path: &ConstPath,
+        init: &GvInitializer,
+    ) {
+        let ty = path.ty;
+        if ty.is_integral() || should_inline_obj_init(func.ctx(), ty) {
+            emit_obj_init(func, before, object, ty, init);
+            return;
+        }
+
+        if initializer_all_zero(&module.ctx, ty, init) {
+            emit_obj_zero_fill(func, before, object, ty);
+            return;
+        }
+
+        if let Some(splat) = initializer_scalar_splat(&module.ctx, ty, init)
+            && emit_obj_splat_fill(func, before, object, ty, splat)
+        {
+            return;
+        }
+
+        let Some(bytes) = encode_runtime_object_const_bytes(&module.ctx, ty, init) else {
+            panic!("unsupported runtime-object encoding for obj.init.const type {ty:?}");
+        };
+        let blob = self.bytes_blob_global(module, path.global, bytes);
+        let addr = insert_before_one(
+            func,
+            before,
+            data::SymAddr::new_unchecked(func.inst_set(), data::SymbolRef::Global(blob)),
+            func.ctx().type_layout.pointer_repl(),
+        );
+        let copy_len_bytes = shape::runtime_size_bytes(func.ctx(), ty)
+            .expect("runtime-object encoding requires a concrete runtime size");
+        emit_obj_init_from_codecopy(func, before, object, ty, addr, copy_len_bytes);
     }
 
     fn materialize_const_path_addr(
@@ -481,10 +522,9 @@ impl ConstDataLower {
             return blob;
         }
 
-        let (source_symbol, ty, init) = module.ctx.with_gv_store(|store| {
+        let (ty, init) = module.ctx.with_gv_store(|store| {
             let data = store.gv_data(source);
             (
-                data.symbol.clone(),
                 data.ty,
                 data.initializer
                     .clone()
@@ -498,18 +538,30 @@ impl ConstDataLower {
                 source.as_u32()
             )
         });
+        let blob = self.bytes_blob_global(module, source, bytes);
+        self.word_blobs.insert(source, blob);
+        blob
+    }
+
+    fn bytes_blob_global(
+        &mut self,
+        module: &Module,
+        source: GlobalVariableRef,
+        bytes: Vec<u8>,
+    ) -> GlobalVariableRef {
         if crate::object::data::encode_gv_initializer_to_bytes(&module.ctx, source)
             .is_ok_and(|native| native == bytes)
         {
-            self.word_blobs.insert(source, source);
             return source;
         }
 
         if let Some(&blob) = self.word_blobs_by_bytes.get(&bytes) {
-            self.word_blobs.insert(source, blob);
             return blob;
         }
 
+        let source_symbol = module
+            .ctx
+            .with_gv_store(|store| store.gv_data(source).symbol.clone());
         let blob_ty = module
             .ctx
             .with_ty_store_mut(|store| store.make_array(Type::I8, bytes.len()));
@@ -533,7 +585,6 @@ impl ConstDataLower {
                 blob_init,
             ))
         });
-        self.word_blobs.insert(source, blob);
         self.word_blobs_by_bytes.insert(bytes, blob);
         blob
     }
@@ -794,6 +845,127 @@ fn encode_const_words(
             }
             for (field_ty, field) in s.fields.into_iter().zip(fields) {
                 encode_const_words(module, field_ty, field, out)?;
+            }
+            Some(())
+        }
+        _ => None,
+    }
+}
+
+fn encode_runtime_object_const_bytes(
+    module: &ModuleCtx,
+    ty: Type,
+    init: &GvInitializer,
+) -> Option<Vec<u8>> {
+    if ty.is_integral() {
+        let GvInitializer::Immediate(imm) = init else {
+            return None;
+        };
+        if imm.ty() != ty {
+            return None;
+        }
+        return Some(evm_scalar_word_bytes(*imm)?.to_vec());
+    }
+
+    match (ty.resolve_compound(module)?, init) {
+        (CompoundType::Array { elem, len }, GvInitializer::Array(items)) => {
+            if items.len() != len {
+                return None;
+            }
+            let mut bytes = Vec::with_capacity(shape::runtime_size_bytes(module, ty)? as usize);
+            for item in items {
+                bytes.extend(encode_runtime_object_const_bytes(module, elem, item)?);
+            }
+            Some(bytes)
+        }
+        (CompoundType::Struct(s), GvInitializer::Struct(fields)) => {
+            if s.packed || fields.len() != s.fields.len() {
+                return None;
+            }
+            let mut bytes = vec![0; shape::runtime_size_bytes(module, ty)? as usize];
+            for (idx, (field_ty, field)) in s.fields.iter().copied().zip(fields).enumerate() {
+                let (offset, _) =
+                    shape::struct_field_offset_bytes(&s.fields, s.packed, idx, module)?;
+                let field_bytes = encode_runtime_object_const_bytes(module, field_ty, field)?;
+                let offset = offset as usize;
+                bytes
+                    .get_mut(offset..offset + field_bytes.len())?
+                    .copy_from_slice(&field_bytes);
+            }
+            Some(bytes)
+        }
+        _ => None,
+    }
+}
+
+fn initializer_all_zero(module: &ModuleCtx, ty: Type, init: &GvInitializer) -> bool {
+    if ty.is_integral() {
+        return matches!(init, GvInitializer::Immediate(imm) if imm.ty() == ty && imm.is_zero());
+    }
+
+    match (ty.resolve_compound(module), init) {
+        (Some(CompoundType::Array { elem, len }), GvInitializer::Array(items)) => {
+            items.len() == len
+                && items
+                    .iter()
+                    .all(|item| initializer_all_zero(module, elem, item))
+        }
+        (Some(CompoundType::Struct(s)), GvInitializer::Struct(fields)) => {
+            !s.packed
+                && fields.len() == s.fields.len()
+                && s.fields
+                    .iter()
+                    .copied()
+                    .zip(fields)
+                    .all(|(field_ty, field)| initializer_all_zero(module, field_ty, field))
+        }
+        _ => false,
+    }
+}
+
+fn initializer_scalar_splat(
+    module: &ModuleCtx,
+    ty: Type,
+    init: &GvInitializer,
+) -> Option<Immediate> {
+    let mut splat = None;
+    record_initializer_splat(module, ty, init, &mut splat)?;
+    splat
+}
+
+fn record_initializer_splat(
+    module: &ModuleCtx,
+    ty: Type,
+    init: &GvInitializer,
+    splat: &mut Option<Immediate>,
+) -> Option<()> {
+    if ty.is_integral() {
+        let GvInitializer::Immediate(imm) = init else {
+            return None;
+        };
+        if imm.ty() != ty || splat.as_ref().is_some_and(|&existing| existing != *imm) {
+            return None;
+        }
+        *splat = Some(*imm);
+        return Some(());
+    }
+
+    match (ty.resolve_compound(module)?, init) {
+        (CompoundType::Array { elem, len }, GvInitializer::Array(items)) => {
+            if items.len() != len {
+                return None;
+            }
+            for item in items {
+                record_initializer_splat(module, elem, item, splat)?;
+            }
+            Some(())
+        }
+        (CompoundType::Struct(s), GvInitializer::Struct(fields)) => {
+            if s.packed || fields.len() != s.fields.len() {
+                return None;
+            }
+            for (field_ty, field) in s.fields.iter().copied().zip(fields) {
+                record_initializer_splat(module, field_ty, field, splat)?;
             }
             Some(())
         }
@@ -1258,6 +1430,100 @@ fn emit_obj_init(
         }
         _ => panic!("unsupported obj.init.const type {ty:?}"),
     }
+}
+
+fn emit_obj_zero_fill(func: &mut Function, before: InstId, object: ValueId, ty: Type) {
+    let len = shape::runtime_size_bytes(func.ctx(), ty)
+        .expect("zero obj.init.const requires a concrete runtime size");
+    if len == 0 {
+        return;
+    }
+
+    let dst = insert_before_one(
+        func,
+        before,
+        data::ObjMaterializeStack::new_unchecked(func.inst_set(), object),
+        ty.to_ptr(func.ctx()),
+    );
+    let code_size = insert_before_one(
+        func,
+        before,
+        evm::EvmCodeSize::new_unchecked(func.inst_set()),
+        Type::I256,
+    );
+    let len = imm_i256(func, len);
+    insert_before_no_result(
+        func,
+        before,
+        evm::EvmCodeCopy::new_unchecked(func.inst_set(), dst, code_size, len),
+    );
+}
+
+fn emit_obj_splat_fill(
+    func: &mut Function,
+    before: InstId,
+    object: ValueId,
+    ty: Type,
+    value: Immediate,
+) -> bool {
+    let Some(total_len) = word_blob_copy_len_bytes(func.ctx(), ty) else {
+        return false;
+    };
+    if total_len <= 32 {
+        return false;
+    }
+
+    let dst = insert_before_one(
+        func,
+        before,
+        data::ObjMaterializeStack::new_unchecked(func.inst_set(), object),
+        ty.to_ptr(func.ctx()),
+    );
+    let word_ptr_ty = Type::I256.to_ptr(func.ctx());
+    let dst = insert_before_one(
+        func,
+        before,
+        cast::Bitcast::new_unchecked(func.inst_set(), dst, word_ptr_ty),
+        word_ptr_ty,
+    );
+    let value_id = func.dfg.make_imm_value(value);
+    insert_before_no_result(
+        func,
+        before,
+        data::Mstore::new_unchecked(func.inst_set(), dst, value_id, value.ty()),
+    );
+
+    let mut filled = 32u32;
+    while filled < total_len {
+        let chunk = filled.min(total_len - filled);
+        let dest = gep_word_offset(func, before, dst, filled / 32);
+        let copy_len = imm_i256(func, chunk);
+        insert_before_no_result(
+            func,
+            before,
+            evm::EvmMcopy::new_unchecked(func.inst_set(), dest, dst, copy_len),
+        );
+        filled += chunk;
+    }
+    true
+}
+
+fn gep_word_offset(
+    func: &mut Function,
+    before: InstId,
+    base: ValueId,
+    word_offset: u32,
+) -> ValueId {
+    if word_offset == 0 {
+        return base;
+    }
+    let index = imm_i256(func, word_offset);
+    insert_before_one(
+        func,
+        before,
+        data::Gep::new_unchecked(func.inst_set(), smallvec![base, index]),
+        Type::I256.to_ptr(func.ctx()),
+    )
 }
 
 fn emit_obj_init_from_codecopy(
@@ -2287,6 +2553,77 @@ func private %entry() -> i256 {
 
         assert!(words[4][..31].iter().all(|&byte| byte == 0));
         assert_eq!(words[4][31], 1);
+    }
+
+    #[test]
+    fn obj_init_const_zero_aggregate_lowers_to_zero_fill_without_blob() {
+        let parsed = parse(
+            r#"
+target = "evm-ethereum-osaka"
+
+global private const [i256; 5] $value = [0, 0, 0, 0, 0];
+
+func private %entry() -> i256 {
+    block0:
+        v0.objref<[i256; 5]> = obj.alloc [i256; 5];
+        v1.constref<[i256; 5]> = const.ref $value;
+        obj.init.const v0 v1;
+        return 0.i256;
+}
+"#,
+        );
+
+        ConstDataLower::default().run(&parsed.module);
+
+        let entry = find_func_ref(&parsed, "entry");
+        let dumped = parsed
+            .module
+            .func_store
+            .view(entry, |func| FuncWriter::new(entry, func).dump_string());
+        assert!(dumped.contains("evm_code_size"));
+        assert!(dumped.contains("evm_code_copy"));
+        assert!(!dumped.contains("obj.store"));
+        assert!(!dumped.contains("__sonatina_const_words"));
+        assert_eq!(
+            global_symbols_with_prefix(&parsed, "__sonatina_const_words_").len(),
+            0
+        );
+    }
+
+    #[test]
+    fn obj_init_const_splat_aggregate_lowers_to_mcopy_fill_without_blob() {
+        let parsed = parse(
+            r#"
+target = "evm-ethereum-osaka"
+
+global private const [i256; 5] $value = [7, 7, 7, 7, 7];
+
+func private %entry() -> i256 {
+    block0:
+        v0.objref<[i256; 5]> = obj.alloc [i256; 5];
+        v1.constref<[i256; 5]> = const.ref $value;
+        obj.init.const v0 v1;
+        return 0.i256;
+}
+"#,
+        );
+
+        ConstDataLower::default().run(&parsed.module);
+
+        let entry = find_func_ref(&parsed, "entry");
+        let dumped = parsed
+            .module
+            .func_store
+            .view(entry, |func| FuncWriter::new(entry, func).dump_string());
+        assert!(dumped.contains("mstore"));
+        assert!(dumped.contains("evm_mcopy"));
+        assert!(!dumped.contains("evm_code_copy"));
+        assert!(!dumped.contains("obj.store"));
+        assert!(!dumped.contains("__sonatina_const_words"));
+        assert_eq!(
+            global_symbols_with_prefix(&parsed, "__sonatina_const_words_").len(),
+            0
+        );
     }
 
     #[test]

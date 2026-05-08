@@ -1,7 +1,7 @@
 use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
     Function, Module, Type, ValueId,
-    inst::{cast, control_flow, data, downcast},
+    inst::{cast, control_flow, data, downcast, evm},
     module::{FuncRef, ModuleCtx},
 };
 use std::ops::ControlFlow;
@@ -308,6 +308,25 @@ pub(crate) fn raw_pointer_stays_local(function: &Function, root: ValueId) -> boo
                 if *store.value() == value {
                     return false;
                 }
+            }
+
+            if let Some(copy) =
+                downcast::<&evm::EvmCodeCopy>(function.inst_set(), function.dfg.inst(user))
+            {
+                if *copy.dst_addr() == value && *copy.code_offset() != value && *copy.len() != value
+                {
+                    continue;
+                }
+                return false;
+            }
+
+            if let Some(copy) =
+                downcast::<&evm::EvmMcopy>(function.inst_set(), function.dfg.inst(user))
+            {
+                if (*copy.dest() == value || *copy.addr() == value) && *copy.len() != value {
+                    continue;
+                }
+                return false;
             }
 
             if downcast::<&control_flow::Call>(function.inst_set(), function.dfg.inst(user))
