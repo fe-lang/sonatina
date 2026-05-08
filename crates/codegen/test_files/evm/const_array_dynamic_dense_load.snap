@@ -6,8 +6,8 @@ input_file: test_files/evm/const_array_dynamic_dense_load.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=true
 
 object: Contract
-  section runtime: 162 bytes
-  total: 162 bytes
+  section runtime: 194 bytes
+  total: 194 bytes
 
 functions:
   entry: ir_blocks=1 ir_insts=4 vcode_ops=12 fixups=2 imm_bytes=1
@@ -18,10 +18,10 @@ functions:
 --------------- OBSERVABILITY ---------------
 
 object schema=0.1.0
-totals section_bytes=162 code=34 data=128 embed=0 mapped=33 unmapped=1
+totals section_bytes=194 code=34 data=160 embed=0 mapped=33 unmapped=1
 
 section runtime schema=0.1.0
-bytes total=162 code=34 data=128 embed=0
+bytes total=194 code=34 data=160 embed=0
 coverage mapped=33 unmapped=1
 unmapped no_ir_inst=0 label_or_fixup_only=0 synthetic=1 unknown=0
 pc [0, 1) func=entry block=0 vcode=0 ir=0 reason=- frontend=-

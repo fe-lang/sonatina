@@ -24,6 +24,7 @@ use crate::{
 
 type ConstOffsetTerms = Vec<(ValueId, u32)>;
 type ConstOffsetPlan = (Type, u32, ConstOffsetTerms);
+type SparseExceptions = Vec<(usize, Immediate)>;
 
 struct ConstRewriteInfo<'a> {
     constref_value_tys: &'a FxHashMap<ValueId, Type>,
@@ -860,12 +861,28 @@ fn emit_dynamic_domain_lookup(
         return None;
     }
 
-    emit_packed_bool_lookup(func, before, index, &values)
-        .or_else(|| emit_packed_byte_lookup(func, before, index, &values))
-        .or_else(|| emit_affine_lookup(func, before, index, result_ty, &values))
-        .or_else(|| emit_power_of_two_lookup(func, before, index, result_ty, &values))
-        .or_else(|| emit_sparse_one_exception_lookup(func, before, index, result_ty, &values))
-        .or_else(|| emit_packed_subword_lookup(func, before, index, result_ty, &values))
+    emit_dynamic_values_lookup(func, before, index, result_ty, &values, true)
+}
+
+fn emit_dynamic_values_lookup(
+    func: &mut Function,
+    before: InstId,
+    index: ValueId,
+    result_ty: Type,
+    values: &[Immediate],
+    allow_periodic: bool,
+) -> Option<ValueId> {
+    emit_packed_bool_lookup(func, before, index, values)
+        .or_else(|| emit_packed_byte_lookup(func, before, index, values))
+        .or_else(|| emit_affine_lookup(func, before, index, result_ty, values))
+        .or_else(|| emit_power_of_two_lookup(func, before, index, result_ty, values))
+        .or_else(|| emit_packed_subword_lookup(func, before, index, result_ty, values))
+        .or_else(|| {
+            allow_periodic
+                .then(|| emit_periodic_lookup(func, before, index, result_ty, values))
+                .flatten()
+        })
+        .or_else(|| emit_sparse_lookup(func, before, index, result_ty, values))
 }
 
 fn emit_packed_bool_lookup(
@@ -1061,7 +1078,37 @@ fn packed_subword_width(ty: Type) -> Option<usize> {
     }
 }
 
-fn emit_sparse_one_exception_lookup(
+fn emit_periodic_lookup(
+    func: &mut Function,
+    before: InstId,
+    index: ValueId,
+    result_ty: Type,
+    values: &[Immediate],
+) -> Option<ValueId> {
+    let period = periodic_len(values)?;
+    let index = zext_to_i256(func, before, index);
+    let index = if period.is_power_of_two() {
+        let mask = imm_i256_usize(func, period - 1)?;
+        and_i256(func, before, index, mask)
+    } else {
+        let modulus = imm_i256_usize(func, period)?;
+        umod_i256(func, before, index, modulus)
+    };
+    emit_dynamic_values_lookup(func, before, index, result_ty, &values[..period], false)
+}
+
+fn periodic_len(values: &[Immediate]) -> Option<usize> {
+    (2..values.len())
+        .filter(|period| values.len().is_multiple_of(*period))
+        .find(|&period| {
+            values
+                .iter()
+                .enumerate()
+                .all(|(idx, value)| *value == values[idx % period])
+        })
+}
+
+fn emit_sparse_lookup(
     func: &mut Function,
     before: InstId,
     index: ValueId,
@@ -1072,37 +1119,44 @@ fn emit_sparse_one_exception_lookup(
         return None;
     }
 
-    let (default, exception_idx, exception) = sparse_one_exception(values)?;
+    let (default, default_count, exceptions) = sparse_exceptions(values)?;
+    if exceptions.len() > 4 || default_count == 1 && values.len() > 4 {
+        return None;
+    }
+
     let index = zext_to_i256(func, before, index);
-    let exception_idx = imm_i256_usize(func, exception_idx)?;
-    let is_exception = insert_before_one(
-        func,
-        before,
-        cmp::Eq::new_unchecked(func.inst_set(), index, exception_idx),
-        Type::I1,
-    );
-    let selector = zext_to_ty(func, before, is_exception, result_ty);
-    let delta = func.dfg.make_imm_value(exception - default);
-    let selected_delta = insert_before_one(
-        func,
-        before,
-        arith::Mul::new_unchecked(func.inst_set(), selector, delta),
-        result_ty,
-    );
-    if default.is_zero() {
-        Some(selected_delta)
-    } else {
-        let default = func.dfg.make_imm_value(default);
-        Some(insert_before_one(
+    let mut value = (!default.is_zero()).then(|| func.dfg.make_imm_value(default));
+    for (exception_idx, exception) in exceptions {
+        let exception_idx = imm_i256_usize(func, exception_idx)?;
+        let is_exception = insert_before_one(
             func,
             before,
-            arith::Add::new_unchecked(func.inst_set(), default, selected_delta),
+            cmp::Eq::new_unchecked(func.inst_set(), index, exception_idx),
+            Type::I1,
+        );
+        let selector = zext_to_ty(func, before, is_exception, result_ty);
+        let delta = func.dfg.make_imm_value(exception - default);
+        let selected_delta = insert_before_one(
+            func,
+            before,
+            arith::Mul::new_unchecked(func.inst_set(), selector, delta),
             result_ty,
-        ))
+        );
+        value = Some(if let Some(value) = value {
+            insert_before_one(
+                func,
+                before,
+                arith::Add::new_unchecked(func.inst_set(), value, selected_delta),
+                result_ty,
+            )
+        } else {
+            selected_delta
+        });
     }
+    Some(value.unwrap_or_else(|| func.dfg.make_imm_value(default)))
 }
 
-fn sparse_one_exception(values: &[Immediate]) -> Option<(Immediate, usize, Immediate)> {
+fn sparse_exceptions(values: &[Immediate]) -> Option<(Immediate, usize, SparseExceptions)> {
     let mut counts = FxHashMap::default();
     let mut order = Vec::new();
     for &value in values {
@@ -1123,16 +1177,13 @@ fn sparse_one_exception(values: &[Immediate]) -> Option<(Immediate, usize, Immed
         }
     }
 
-    let mut exceptions = values
+    let exceptions = values
         .iter()
         .copied()
         .enumerate()
-        .filter(|(_, value)| *value != default);
-    let (idx, exception) = exceptions.next()?;
-    exceptions
-        .next()
-        .is_none()
-        .then_some((default, idx, exception))
+        .filter(|(_, value)| *value != default)
+        .collect();
+    Some((default, default_count, exceptions))
 }
 
 fn unsigned_immediate(imm: Immediate) -> Option<U256> {
@@ -1541,6 +1592,15 @@ fn shl_i256(func: &mut Function, before: InstId, value: ValueId, bits: ValueId) 
     )
 }
 
+fn umod_i256(func: &mut Function, before: InstId, lhs: ValueId, rhs: ValueId) -> ValueId {
+    insert_before_one(
+        func,
+        before,
+        evm::EvmUmod::new_unchecked(func.inst_set(), lhs, rhs),
+        Type::I256,
+    )
+}
+
 fn shr_i256(func: &mut Function, before: InstId, value: ValueId, bits: ValueId) -> ValueId {
     insert_before_one(
         func,
@@ -1696,11 +1756,11 @@ func private %entry() -> i256 {
             r#"
 target = "evm-ethereum-osaka"
 
-global private const [i256; 4] $arr = [1, 3, 7, 15];
+global private const [i256; 5] $arr = [1, 3, 7, 15, 31];
 
 func private %entry(v0.i256) -> i256 {
     block0:
-        v1.constref<[i256; 4]> = const.ref $arr;
+        v1.constref<[i256; 5]> = const.ref $arr;
         v2.constref<i256> = const.index v1 v0;
         v3.i256 = const.load v2;
         return v3;
@@ -1797,12 +1857,12 @@ func private %entry() -> i256 {
             r#"
 target = "evm-ethereum-osaka"
 
-global private const [i64; 4] $arr = [1, 2, 4, 8];
+global private const [i64; 5] $arr = [1, 3, 7, 15, 31];
 global private const [i8; 1] $__sonatina_const_words_arr_0 = [99];
 
 func private %entry(v0.i256) -> i64 {
     block0:
-        v1.constref<[i64; 4]> = const.ref $arr;
+        v1.constref<[i64; 5]> = const.ref $arr;
         v2.constref<i64> = const.index v1 v0;
         v3.i64 = const.load v2;
         return v3;
@@ -1886,6 +1946,38 @@ func private %entry(v0.i256) -> i256 {
             .func_store
             .view(entry, |func| FuncWriter::new(entry, func).dump_string());
         assert!(dumped.contains("shl"));
+        assert!(!dumped.contains("evm_code_copy"));
+        assert!(!dumped.contains("__sonatina_const_words"));
+        assert!(!dumped.contains("const."));
+    }
+
+    #[test]
+    fn dynamic_const_load_periodic_i256_lowers_to_mod_expression() {
+        let parsed = parse(
+            r#"
+target = "evm-ethereum-osaka"
+
+global private const [i256; 6] $arr = [5, 13, 9, 5, 13, 9];
+
+func private %entry(v0.i256) -> i256 {
+    block0:
+        v1.constref<[i256; 6]> = const.ref $arr;
+        v2.constref<i256> = const.index v1 v0;
+        v3.i256 = const.load v2;
+        return v3;
+}
+"#,
+        );
+
+        ConstDataLower::default().run(&parsed.module);
+
+        let entry = find_func_ref(&parsed, "entry");
+        let dumped = parsed
+            .module
+            .func_store
+            .view(entry, |func| FuncWriter::new(entry, func).dump_string());
+        assert!(dumped.contains("evm_umod"));
+        assert!(dumped.contains("eq"));
         assert!(!dumped.contains("evm_code_copy"));
         assert!(!dumped.contains("__sonatina_const_words"));
         assert!(!dumped.contains("const."));
@@ -1987,6 +2079,39 @@ func private %entry(v0.i256) -> i1 {
     }
 
     #[test]
+    fn dynamic_const_load_small_i256_lowers_to_inline_selectors() {
+        let parsed = parse(
+            r#"
+target = "evm-ethereum-osaka"
+
+global private const [i256; 3] $arr = [5, 13, 9];
+
+func private %entry(v0.i256) -> i256 {
+    block0:
+        v1.constref<[i256; 3]> = const.ref $arr;
+        v2.constref<i256> = const.index v1 v0;
+        v3.i256 = const.load v2;
+        return v3;
+}
+"#,
+        );
+
+        ConstDataLower::default().run(&parsed.module);
+
+        let entry = find_func_ref(&parsed, "entry");
+        let dumped = parsed
+            .module
+            .func_store
+            .view(entry, |func| FuncWriter::new(entry, func).dump_string());
+        assert!(dumped.contains("eq"));
+        assert!(dumped.contains("mul"));
+        assert!(!dumped.contains("evm_umod"));
+        assert!(!dumped.contains("evm_code_copy"));
+        assert!(!dumped.contains("__sonatina_const_words"));
+        assert!(!dumped.contains("const."));
+    }
+
+    #[test]
     fn dynamic_const_load_single_sparse_exception_lowers_to_expression() {
         let parsed = parse(
             r#"
@@ -2024,15 +2149,15 @@ func private %entry(v0.i256) -> i256 {
             r#"
 target = "evm-ethereum-osaka"
 
-global private const [i64; 4] $a = [1, 2, 4, 8];
-global private const [i64; 4] $b = [1, 2, 4, 8];
+global private const [i64; 5] $a = [1, 3, 7, 15, 31];
+global private const [i64; 5] $b = [1, 3, 7, 15, 31];
 
 func private %entry(v0.i256) -> i64 {
     block0:
-        v1.constref<[i64; 4]> = const.ref $a;
+        v1.constref<[i64; 5]> = const.ref $a;
         v2.constref<i64> = const.index v1 v0;
         v3.i64 = const.load v2;
-        v4.constref<[i64; 4]> = const.ref $b;
+        v4.constref<[i64; 5]> = const.ref $b;
         v5.constref<i64> = const.index v4 v0;
         v6.i64 = const.load v5;
         v7.i64 = add v3 v6;
@@ -2248,11 +2373,11 @@ func private %entry() -> i256 {
             r#"
 target = "evm-ethereum-osaka"
 
-global private const [i64; 4] $arr = [1, 2, 4, 8];
+global private const [i64; 5] $arr = [1, 3, 7, 15, 31];
 
 func private %entry(v0.i256) -> i64 {
     block0:
-        v1.constref<[i64; 4]> = const.ref $arr;
+        v1.constref<[i64; 5]> = const.ref $arr;
         v2.constref<i64> = const.index v1 v0;
         v3.i64 = const.load v2;
         return v3;
@@ -2275,11 +2400,11 @@ object @Contract {
             r#"
 target = "evm-ethereum-osaka"
 
-global private const [i256; 4] $arr = [1, 3, 7, 15];
+global private const [i256; 5] $arr = [1, 3, 7, 15, 31];
 
 func private %entry(v0.i256) -> i256 {
     block0:
-        v1.constref<[i256; 4]> = const.ref $arr;
+        v1.constref<[i256; 5]> = const.ref $arr;
         v2.constref<i256> = const.index v1 v0;
         v3.i256 = const.load v2;
         return v3;
@@ -2310,8 +2435,8 @@ object @Contract {
             .symtab
             .get(&SymbolId::Global(arr))
             .expect("arr symbol should be present");
-        assert_eq!(arr_def.size, 128);
-        assert_eq!(runtime.bytes.len(), 145);
+        assert_eq!(arr_def.size, 160);
+        assert_eq!(runtime.bytes.len(), 177);
     }
 
     #[test]
@@ -2320,12 +2445,12 @@ object @Contract {
             r#"
 target = "evm-ethereum-osaka"
 
-global private const [i64; 4] $arr = [1, 2, 4, 8];
+global private const [i64; 5] $arr = [1, 3, 7, 15, 31];
 global private const [i8; 1] $__sonatina_const_words_arr_0 = [99];
 
 func private %entry(v0.i256) -> i64 {
     block0:
-        v1.constref<[i64; 4]> = const.ref $arr;
+        v1.constref<[i64; 5]> = const.ref $arr;
         v2.constref<i64> = const.index v1 v0;
         v3.i64 = const.load v2;
         return v3;

@@ -767,25 +767,25 @@ object @Contract {
             r#"
 target = "evm-ethereum-osaka"
 
-global private const [i64; 3] $a = [1, 2, 4];
-global private const [i64; 4] $b = [1, 2, 4, 8];
-global private const [i64; 3] $c = [2, 4, 8];
-global private const [i64; 3] $d = [8, 16, 32];
+global private const [i64; 5] $a = [1, 3, 7, 15, 31];
+global private const [i64; 6] $b = [1, 3, 7, 15, 31, 63];
+global private const [i64; 5] $c = [3, 7, 15, 31, 63];
+global private const [i64; 5] $d = [31, 63, 127, 255, 511];
 
 func private %runtime(v0.i256) -> i64 {
     block0:
-        v1.constref<[i64; 3]> = const.ref $a;
+        v1.constref<[i64; 5]> = const.ref $a;
         v2.constref<i64> = const.index v1 v0;
         v3.i64 = const.load v2;
-        v4.constref<[i64; 4]> = const.ref $b;
+        v4.constref<[i64; 6]> = const.ref $b;
         v5.constref<i64> = const.index v4 v0;
         v6.i64 = const.load v5;
-        v7.constref<[i64; 3]> = const.ref $c;
+        v7.constref<[i64; 5]> = const.ref $c;
         v8.constref<i64> = const.index v7 v0;
         v9.i64 = const.load v8;
         v10.i64 = add v3 v6;
         v11.i64 = add v10 v9;
-        v12.constref<[i64; 3]> = const.ref $d;
+        v12.constref<[i64; 5]> = const.ref $d;
         v13.constref<i64> = const.index v12 v0;
         v14.i64 = const.load v13;
         v15.i64 = add v11 v14;
@@ -814,7 +814,7 @@ object @Contract {
                 .as_ref()
                 .expect("runtime observability")
                 .data_bytes,
-            192
+            288
         );
     }
 
