@@ -6,8 +6,8 @@ input_file: test_files/evm/fe_enum_state_machine_test_order_initial_state_unopti
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 958 bytes
-  total: 958 bytes
+  section runtime: 962 bytes
+  total: 962 bytes
 
 object: Order
   section init: 478 bytes
@@ -83,13 +83,13 @@ test_order_initial_state__StorPtr_Evm___207f35a85ac4062e:
     RETURNDATASIZE  // v20.i256 = evm_return_data_size;
     PUSH1 0x40 (64)  // v21.*i256 = evm_malloc v20;
     MLOAD
-    PUSH1 0x9f (159)
+    PUSH2 0x13f (319)
     DUP2
     GT
     PUSH1 `pc + (4)`
     JUMPI
     POP
-    PUSH1 0xa0 (160)
+    PUSH2 0x140 (320)
     JUMPDEST
     DUP2  // evm_return_data_copy v22 0.i256 v20;
     PUSH0
@@ -217,13 +217,13 @@ test_order_initial_state__StorPtr_Evm___207f35a85ac4062e:
     RETURNDATASIZE  // v64.i256 = evm_return_data_size;
     PUSH1 0x40 (64)  // v65.*i256 = evm_malloc v64;
     MLOAD
-    PUSH1 0x9f (159)
+    PUSH2 0x13f (319)
     DUP2
     GT
     PUSH1 `pc + (4)`
     JUMPI
     POP
-    PUSH1 0xa0 (160)
+    PUSH2 0x140 (320)
     JUMPDEST
     DUP2  // evm_return_data_copy v66 0.i256 v64;
     PUSH0

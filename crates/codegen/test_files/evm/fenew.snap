@@ -6,8 +6,8 @@ input_file: test_files/evm/fenew.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 551 bytes
-  total: 551 bytes
+  section runtime: 555 bytes
+  total: 555 bytes
 
 object: Counter
   section init: 92 bytes
@@ -79,13 +79,13 @@ test_counter__StorPtr_Evm___207f35a85ac4062e:
     RETURNDATASIZE  // v21.i256 = evm_return_data_size;
     PUSH1 0x40 (64)  // v22.*i256 = evm_malloc v21;
     MLOAD
-    PUSH1 0x9f (159)
+    PUSH2 0x15f (351)
     DUP2
     GT
     PUSH1 `pc + (4)`
     JUMPI
     POP
-    PUSH1 0xa0 (160)
+    PUSH2 0x160 (352)
     JUMPDEST
     DUP2  // evm_return_data_copy v23 0.i256 v21;
     PUSH0

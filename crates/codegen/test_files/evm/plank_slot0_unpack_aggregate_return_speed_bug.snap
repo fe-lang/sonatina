@@ -6,9 +6,9 @@ input_file: test_files/evm/plank_slot0_unpack_aggregate_return_speed_bug.sntn
 evm.config: stack_reach=16 vcode=false bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 453 bytes
-  section init: 464 bytes
-  total: 917 bytes
+  section runtime: 457 bytes
+  section init: 468 bytes
+  total: 925 bytes
 
 functions:
   init: ir_blocks=1 ir_insts=6 vcode_ops=19 fixups=3 imm_bytes=5
@@ -19,6 +19,6 @@ functions:
     mem: scratch_words=0 stable_words=7 stable_mode=StaticAbs(base=0xa0) entry_abs_words=0 abs_words_end=7
 
 evm:
-  deploy: success reason=Return gas_used=149868 gas_refunded=0 logs=0 output=create len=453 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
+  deploy: success reason=Return gas_used=150732 gas_refunded=0 logs=0 output=create len=457 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
   case initialize: calldata_len=36 success reason=Return gas_used=43557 gas_refunded=0 logs=0 output=call len=0 tx_gas=21336 runtime_gas=22221
   case slot0: calldata_len=4 success reason=Return gas_used=23760 gas_refunded=0 logs=0 output=call len=224 tx_gas=21064 runtime_gas=2696

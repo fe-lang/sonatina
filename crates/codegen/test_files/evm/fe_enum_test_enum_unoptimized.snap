@@ -6,8 +6,8 @@ input_file: test_files/evm/fe_enum_test_enum_unoptimized.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 1091 bytes
-  total: 1091 bytes
+  section runtime: 1095 bytes
+  total: 1095 bytes
 
 object: EnumContract
   section init: 344 bytes
@@ -90,13 +90,13 @@ test_enum__StorPtr_Evm___207f35a85ac4062e:
     RETURNDATASIZE  // v25.i256 = evm_return_data_size;
     PUSH1 0x40 (64)  // v26.*i256 = evm_malloc v25;
     MLOAD
-    PUSH1 0x9f (159)
+    PUSH2 0x13f (319)
     DUP2
     GT
     PUSH1 `pc + (4)`
     JUMPI
     POP
-    PUSH1 0xa0 (160)
+    PUSH2 0x140 (320)
     JUMPDEST
     DUP2  // evm_return_data_copy v27 0.i256 v25;
     PUSH0
@@ -181,13 +181,13 @@ test_enum__StorPtr_Evm___207f35a85ac4062e:
     RETURNDATASIZE  // v52.i256 = evm_return_data_size;
     PUSH1 0x40 (64)  // v53.*i256 = evm_malloc v52;
     MLOAD
-    PUSH1 0x9f (159)
+    PUSH2 0x13f (319)
     DUP2
     GT
     PUSH1 `pc + (4)`
     JUMPI
     POP
-    PUSH1 0xa0 (160)
+    PUSH2 0x140 (320)
     JUMPDEST
     DUP2  // evm_return_data_copy v54 0.i256 v52;
     PUSH0
@@ -277,13 +277,13 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__MakeSome_
     RETURNDATASIZE  // v14.i256 = evm_return_data_size;
     PUSH1 0x40 (64)  // v15.*i256 = evm_malloc v14;
     MLOAD
-    PUSH2 0x13f (319)
+    PUSH2 0x1df (479)
     DUP2
     GT
     PUSH1 `pc + (4)`
     JUMPI
     POP
-    PUSH2 0x140 (320)
+    PUSH2 0x1e0 (480)
     JUMPDEST
     DUP2  // evm_return_data_copy v16 0.i256 v14;
     PUSH0
@@ -518,13 +518,13 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__IsSomeChe
     RETURNDATASIZE  // v14.i256 = evm_return_data_size;
     PUSH1 0x40 (64)  // v15.*i256 = evm_malloc v14;
     MLOAD
-    PUSH2 0x13f (319)
+    PUSH2 0x1df (479)
     DUP2
     GT
     PUSH1 `pc + (4)`
     JUMPI
     POP
-    PUSH2 0x140 (320)
+    PUSH2 0x1e0 (480)
     JUMPDEST
     DUP2  // evm_return_data_copy v16 0.i256 v14;
     PUSH0

@@ -126,13 +126,13 @@ test_vault_multiuser__StorPtr_Evm___207f35a85ac4062e:
     RETURNDATASIZE  // v83.i256 = evm_return_data_size;
     PUSH1 0x40 (64)  // v84.*i256 = evm_malloc v83;
     MLOAD
-    PUSH1 0x9f (159)
+    PUSH1 0xdf (223)
     DUP2
     GT
     PUSH1 `pc + (4)`
     JUMPI
     POP
-    PUSH1 0xa0 (160)
+    PUSH1 0xe0 (224)
     JUMPDEST
     DUP2  // evm_return_data_copy v85 0.i256 v83;
     PUSH0
@@ -400,13 +400,13 @@ test_vault_multiuser__StorPtr_Evm___207f35a85ac4062e:
     RETURNDATASIZE  // v94.i256 = evm_return_data_size;
     PUSH1 0x40 (64)  // v95.*i256 = evm_malloc v94;
     MLOAD
-    PUSH1 0x9f (159)
+    PUSH1 0xdf (223)
     DUP2
     GT
     PUSH1 `pc + (4)`
     JUMPI
     POP
-    PUSH1 0xa0 (160)
+    PUSH1 0xe0 (224)
     JUMPDEST
     DUP2  // evm_return_data_copy v96 0.i256 v94;
     PUSH0

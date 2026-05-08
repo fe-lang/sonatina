@@ -11,7 +11,7 @@ use crate::{bitset::BitSet, liveness::InstLiveness};
 
 use super::{
     memory_plan::WORD_BYTES,
-    provenance::{Provenance, compute_value_provenance},
+    provenance::{Provenance, compute_address_provenance},
     ptr_escape::PtrEscapeSummary,
 };
 
@@ -96,7 +96,7 @@ pub(crate) fn compute_scratch_live_values(
     scratch_effects: Option<&FxHashSet<FuncRef>>,
     inst_liveness: &InstLiveness,
 ) -> BitSet<ValueId> {
-    let prov = compute_value_provenance(function, module, isa, |callee| {
+    let prov = compute_address_provenance(function, module, isa, |callee| {
         PtrEscapeSummary::get_or_conservative(ptr_escape, module, callee)
     });
 
@@ -154,7 +154,7 @@ mod tests {
         let summaries = compute_ptr_escape_summaries(&parsed.module, &funcs, &isa);
 
         parsed.module.func_store.view(func_ref, |function| {
-            let prov = compute_value_provenance(function, &parsed.module.ctx, &isa, |callee| {
+            let prov = compute_address_provenance(function, &parsed.module.ctx, &isa, |callee| {
                 PtrEscapeSummary::get_or_conservative(&summaries, &parsed.module.ctx, callee)
             });
             let mstore = function

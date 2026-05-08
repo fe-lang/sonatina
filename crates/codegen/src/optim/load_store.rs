@@ -14,13 +14,13 @@ use sonatina_ir::{
 };
 
 use crate::analysis::memory_access::{
-    AliasResult, BaseObject, KeyExpr, LinearRangeKey, MemoryAccessAnalysis, RangeCoverage,
-    TrackedLocKey, ValueKey,
+    AliasResult, BaseObject, KeyExpr, KeyedLocKey, LinearLocKey, LinearRangeKey,
+    MemoryAccessAnalysis, RangeCoverage, TrackedLocKey, ValueKey,
 };
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct AvailState {
-    exact: FxHashMap<TrackedLocKey, ValueId>,
+    exact: ExactAvailState,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -29,6 +29,171 @@ struct LiveState {
     exit_live: FxHashSet<TrackedLocKey>,
     range_live: FxHashSet<LinearRangeKey>,
     whole_space_live: BitSet<AddressSpaceId>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct LinearBaseKey {
+    space: AddressSpaceId,
+    base: BaseObject,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct ExactAvailState {
+    linear_disjoint: FxHashMap<LinearBaseKey, FxHashMap<LinearLocKey, ValueId>>,
+    linear_ambiguous: FxHashMap<LinearBaseKey, FxHashMap<LinearLocKey, ValueId>>,
+    keyed: FxHashMap<KeyedLocKey, ValueId>,
+}
+
+impl ExactAvailState {
+    fn get(&self, key: &TrackedLocKey) -> Option<&ValueId> {
+        match key {
+            TrackedLocKey::Linear(key) => {
+                let base = LinearBaseKey::new(key.space, key.base.clone());
+                linear_map_for_base(self, &key.base)
+                    .get(&base)
+                    .and_then(|bucket| bucket.get(key))
+            }
+            TrackedLocKey::Keyed(key) => self.keyed.get(key),
+        }
+    }
+
+    fn insert(&mut self, key: TrackedLocKey, value: ValueId) {
+        match key {
+            TrackedLocKey::Linear(key) => {
+                let base = LinearBaseKey::new(key.space, key.base.clone());
+                linear_map_for_base_mut(self, &key.base)
+                    .entry(base)
+                    .or_default()
+                    .insert(key, value);
+            }
+            TrackedLocKey::Keyed(key) => {
+                self.keyed.insert(key, value);
+            }
+        }
+    }
+
+    fn retain<F>(&mut self, mut keep: F)
+    where
+        F: FnMut(&TrackedLocKey, &mut ValueId) -> bool,
+    {
+        retain_linear_map(&mut self.linear_disjoint, &mut keep);
+        retain_linear_map(&mut self.linear_ambiguous, &mut keep);
+        self.keyed.retain(|key, value| {
+            let tracked = TrackedLocKey::Keyed(key.clone());
+            keep(&tracked, value)
+        });
+    }
+
+    fn retain_no_alias_key(&mut self, analysis: &MemoryAccessAnalysis, key: &TrackedLocKey) {
+        match key {
+            TrackedLocKey::Linear(key) => {
+                let tracked = TrackedLocKey::Linear(key.clone());
+                self.retain_linear_candidates(key.space, &key.base, |other, _| {
+                    analysis.alias(&TrackedLocKey::Linear(other.clone()), &tracked)
+                        == AliasResult::NoAlias
+                });
+            }
+            TrackedLocKey::Keyed(key) => {
+                let tracked = TrackedLocKey::Keyed(key.clone());
+                self.keyed.retain(|other, _| {
+                    analysis.alias(&TrackedLocKey::Keyed(other.clone()), &tracked)
+                        == AliasResult::NoAlias
+                });
+            }
+        }
+    }
+
+    fn retain_no_alias_range(&mut self, analysis: &MemoryAccessAnalysis, range: &LinearRangeKey) {
+        self.retain_linear_candidates(range.space, &range.base, |key, _| {
+            !analysis.range_may_alias_key(range, &TrackedLocKey::Linear(key.clone()))
+        });
+    }
+
+    fn retain_linear_candidates<F>(&mut self, space: AddressSpaceId, base: &BaseObject, mut keep: F)
+    where
+        F: FnMut(&LinearLocKey, &mut ValueId) -> bool,
+    {
+        match base {
+            BaseObject::Alloca(_) | BaseObject::Malloc(_) | BaseObject::Global(_) => {
+                let base_key = LinearBaseKey::new(space, base.clone());
+                let remove_bucket = if let Some(bucket) = self.linear_disjoint.get_mut(&base_key) {
+                    bucket.retain(|key, value| keep(key, value));
+                    bucket.is_empty()
+                } else {
+                    false
+                };
+                if remove_bucket {
+                    self.linear_disjoint.remove(&base_key);
+                }
+                retain_linear_map_in_space(&mut self.linear_ambiguous, space, &mut keep);
+            }
+            BaseObject::Arg(_) | BaseObject::Absolute(_) | BaseObject::Unknown(_) => {
+                retain_linear_map_in_space(&mut self.linear_disjoint, space, &mut keep);
+                retain_linear_map_in_space(&mut self.linear_ambiguous, space, &mut keep);
+            }
+        }
+    }
+}
+
+impl LinearBaseKey {
+    fn new(space: AddressSpaceId, base: BaseObject) -> Self {
+        Self { space, base }
+    }
+}
+
+fn linear_map_for_base<'a>(
+    state: &'a ExactAvailState,
+    base: &BaseObject,
+) -> &'a FxHashMap<LinearBaseKey, FxHashMap<LinearLocKey, ValueId>> {
+    match base {
+        BaseObject::Alloca(_) | BaseObject::Malloc(_) | BaseObject::Global(_) => {
+            &state.linear_disjoint
+        }
+        BaseObject::Arg(_) | BaseObject::Absolute(_) | BaseObject::Unknown(_) => {
+            &state.linear_ambiguous
+        }
+    }
+}
+
+fn linear_map_for_base_mut<'a>(
+    state: &'a mut ExactAvailState,
+    base: &BaseObject,
+) -> &'a mut FxHashMap<LinearBaseKey, FxHashMap<LinearLocKey, ValueId>> {
+    match base {
+        BaseObject::Alloca(_) | BaseObject::Malloc(_) | BaseObject::Global(_) => {
+            &mut state.linear_disjoint
+        }
+        BaseObject::Arg(_) | BaseObject::Absolute(_) | BaseObject::Unknown(_) => {
+            &mut state.linear_ambiguous
+        }
+    }
+}
+
+fn retain_linear_map<F>(
+    map: &mut FxHashMap<LinearBaseKey, FxHashMap<LinearLocKey, ValueId>>,
+    keep: &mut F,
+) where
+    F: FnMut(&TrackedLocKey, &mut ValueId) -> bool,
+{
+    map.retain(|_, bucket| {
+        bucket.retain(|key, value| keep(&TrackedLocKey::Linear(key.clone()), value));
+        !bucket.is_empty()
+    });
+}
+
+fn retain_linear_map_in_space<F>(
+    map: &mut FxHashMap<LinearBaseKey, FxHashMap<LinearLocKey, ValueId>>,
+    space: AddressSpaceId,
+    keep: &mut F,
+) where
+    F: FnMut(&LinearLocKey, &mut ValueId) -> bool,
+{
+    map.retain(|base, bucket| {
+        if base.space == space {
+            bucket.retain(|key, value| keep(key, value));
+        }
+        !bucket.is_empty()
+    });
 }
 
 #[derive(Debug, Default)]
@@ -248,7 +413,7 @@ fn meet_forward(states: impl Iterator<Item = AvailState>) -> AvailState {
     out.exact.retain(|loc, value| {
         states[1..]
             .iter()
-            .all(|state| state.exact.get(loc) == Some(value))
+            .all(|state| state.exact.get(loc).copied() == Some(*value))
     });
     out
 }
@@ -411,15 +576,22 @@ fn kill_aliasing_access(
     analysis: &mut MemoryAccessAnalysis,
     access: &sonatina_ir::MemoryAccess,
 ) {
+    if let Some(range) = analysis.trackable_linear_range(func, access) {
+        state.exact.retain_no_alias_range(analysis, &range);
+        return;
+    }
+    if let Some(key) = analysis.trackable_exact_loc(func, access) {
+        state.exact.retain_no_alias_key(analysis, &key);
+        return;
+    }
+
     state
         .exact
         .retain(|key, _| !analysis.access_may_alias_key(func, access, key));
 }
 
 fn kill_aliasing_key(state: &mut AvailState, analysis: &MemoryAccessAnalysis, key: &TrackedLocKey) {
-    state
-        .exact
-        .retain(|other, _| analysis.alias(other, key) == AliasResult::NoAlias);
+    state.exact.retain_no_alias_key(analysis, key);
 }
 
 fn prune_dead_avail_state(func: &Function, state: &mut AvailState) {

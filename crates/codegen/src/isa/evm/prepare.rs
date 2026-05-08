@@ -38,7 +38,7 @@ use super::{
         WORD_BYTES, compute_abs_clobber_words, compute_program_memory_plan, topo_sort_sccs,
     },
     pipeline::EvmPipeline,
-    provenance::{Provenance, compute_value_provenance},
+    provenance::{Provenance, compute_address_provenance},
     ptr_escape::PtrEscapeSummary,
     scratch_effects, scratch_plan,
 };
@@ -225,7 +225,7 @@ fn function_memory_accesses_match(
     ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
     pred: impl Fn(&Function, &sonatina_ir::MemoryAccess, &SecondaryMap<ValueId, Provenance>) -> bool,
 ) -> bool {
-    let prov = compute_value_provenance(function, module, &backend.isa, |callee| {
+    let prov = compute_address_provenance(function, module, &backend.isa, |callee| {
         PtrEscapeSummary::get_or_conservative(ptr_escape, module, callee)
     });
 
@@ -376,7 +376,7 @@ fn reserve_function_memory_layout(
     backend: &EvmBackend,
     ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
 ) {
-    let prov = compute_value_provenance(function, module, &backend.isa, |callee| {
+    let prov = compute_address_provenance(function, module, &backend.isa, |callee| {
         PtrEscapeSummary::get_or_conservative(ptr_escape, module, callee)
     });
 
@@ -530,7 +530,7 @@ pub(crate) fn prepare_section(
 
     let malloc_bounds = {
         let _span = debug_span!("sonatina.codegen.evm.compute_malloc_future_abs_words").entered();
-        heap_plan::compute_malloc_future_abs_words(module, &funcs, &plan, &analyses, &backend.isa)
+        heap_plan::compute_malloc_future_abs_words(module, &funcs, &plan, &backend.isa)
     };
     for (func, bounds) in malloc_bounds {
         if let Some(mem_plan) = plan.funcs.get_mut(&func) {
