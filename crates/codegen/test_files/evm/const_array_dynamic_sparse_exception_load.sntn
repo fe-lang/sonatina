@@ -1,0 +1,30 @@
+#! evm.config: { vcode: true, emit_observability: true }
+#! evm.case: exception
+#!   calldata: u256(2)
+#!   expect: return u256(99)
+
+target = "evm-ethereum-osaka"
+
+global private const [i256; 4] $sparse = [0, 0, 99, 0];
+
+func public %entry() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i32;
+        v1.i256 = call %load_sparse v0;
+        mstore 0.i32 v1 i256;
+        evm_return 0.i8 32.i8;
+}
+
+func private %load_sparse(v0.i256) -> i256 {
+    block0:
+        v1.constref<[i256; 4]> = const.ref $sparse;
+        v2.constref<i256> = const.index v1 v0;
+        v3.i256 = const.load v2;
+        return v3;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}

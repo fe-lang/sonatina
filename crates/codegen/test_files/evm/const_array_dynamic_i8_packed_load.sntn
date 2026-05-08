@@ -1,0 +1,31 @@
+#! evm.config: { vcode: true, emit_observability: true }
+#! evm.case: index_2
+#!   calldata: u256(2)
+#!   expect: return u256(30)
+
+target = "evm-ethereum-osaka"
+
+global private const [i8; 4] $bytes = [10, 20, 30, 40];
+
+func public %entry() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i32;
+        v1.i8 = call %load_byte v0;
+        v2.i256 = zext v1 i256;
+        mstore 0.i32 v2 i256;
+        evm_return 0.i8 32.i8;
+}
+
+func private %load_byte(v0.i256) -> i8 {
+    block0:
+        v1.constref<[i8; 4]> = const.ref $bytes;
+        v2.constref<i8> = const.index v1 v0;
+        v3.i8 = const.load v2;
+        return v3;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}
