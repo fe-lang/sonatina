@@ -862,6 +862,7 @@ fn emit_dynamic_domain_lookup(
 
     emit_packed_bool_lookup(func, before, index, &values)
         .or_else(|| emit_packed_byte_lookup(func, before, index, &values))
+        .or_else(|| emit_affine_lookup(func, before, index, result_ty, &values))
         .or_else(|| emit_sparse_one_exception_lookup(func, before, index, result_ty, &values))
 }
 
@@ -927,6 +928,48 @@ fn emit_packed_byte_lookup(
         Type::I256,
     );
     Some(trunc_i256_to(func, before, byte, Type::I8))
+}
+
+fn emit_affine_lookup(
+    func: &mut Function,
+    before: InstId,
+    index: ValueId,
+    result_ty: Type,
+    values: &[Immediate],
+) -> Option<ValueId> {
+    let (base, stride) = affine_sequence(values)?;
+    let mut value = zext_to_i256(func, before, index);
+    if !stride.is_one() {
+        let stride = imm_i256_from_immediate(func, stride);
+        value = mul_i256(func, before, value, stride);
+    }
+    if !base.is_zero() {
+        let base = imm_i256_from_immediate(func, base);
+        value = add_i256(func, before, base, value);
+    }
+    Some(trunc_i256_to(func, before, value, result_ty))
+}
+
+fn affine_sequence(values: &[Immediate]) -> Option<(Immediate, Immediate)> {
+    if values.len() < 2 || values[0].ty() == Type::I1 {
+        return None;
+    }
+
+    let base = values[0];
+    let stride = values[1] - base;
+    if stride.is_zero() {
+        return None;
+    }
+
+    values
+        .iter()
+        .copied()
+        .enumerate()
+        .all(|(idx, value)| {
+            let idx = Immediate::from_i256(I256::from_usize(idx), base.ty());
+            value == base + stride * idx
+        })
+        .then_some((base, stride))
 }
 
 fn emit_sparse_one_exception_lookup(
@@ -1276,6 +1319,10 @@ fn imm_i256_u256(func: &mut Function, value: U256) -> ValueId {
     func.dfg.make_imm_value(Immediate::I256(I256::from(value)))
 }
 
+fn imm_i256_from_immediate(func: &mut Function, value: Immediate) -> ValueId {
+    func.dfg.make_imm_value(Immediate::I256(value.as_i256()))
+}
+
 fn const_addr_with_offset(
     func: &mut Function,
     before: InstId,
@@ -1537,7 +1584,7 @@ func private %entry() -> i256 {
             r#"
 target = "evm-ethereum-osaka"
 
-global private const [i256; 4] $arr = [1, 2, 3, 4];
+global private const [i256; 4] $arr = [1, 2, 4, 8];
 
 func private %entry(v0.i256) -> i256 {
     block0:
@@ -1638,7 +1685,7 @@ func private %entry() -> i256 {
             r#"
 target = "evm-ethereum-osaka"
 
-global private const [i16; 4] $arr = [1, 2, 3, 4];
+global private const [i16; 4] $arr = [1, 2, 4, 8];
 global private const [i8; 1] $__sonatina_const_words_arr_0 = [99];
 
 func private %entry(v0.i256) -> i16 {
@@ -1666,6 +1713,38 @@ func private %entry(v0.i256) -> i16 {
         let dumped = writer.dump_string();
         assert!(dumped.contains("evm_code_copy"));
         assert!(dumped.contains("mload"));
+        assert!(!dumped.contains("const."));
+    }
+
+    #[test]
+    fn dynamic_const_load_affine_i256_lowers_to_expression() {
+        let parsed = parse(
+            r#"
+target = "evm-ethereum-osaka"
+
+global private const [i256; 4] $arr = [10, 12, 14, 16];
+
+func private %entry(v0.i256) -> i256 {
+    block0:
+        v1.constref<[i256; 4]> = const.ref $arr;
+        v2.constref<i256> = const.index v1 v0;
+        v3.i256 = const.load v2;
+        return v3;
+}
+"#,
+        );
+
+        ConstDataLower::default().run(&parsed.module);
+
+        let entry = find_func_ref(&parsed, "entry");
+        let dumped = parsed
+            .module
+            .func_store
+            .view(entry, |func| FuncWriter::new(entry, func).dump_string());
+        assert!(dumped.contains("mul"));
+        assert!(dumped.contains("add"));
+        assert!(!dumped.contains("evm_code_copy"));
+        assert!(!dumped.contains("__sonatina_const_words"));
         assert!(!dumped.contains("const."));
     }
 
@@ -1770,8 +1849,8 @@ func private %entry(v0.i256) -> i256 {
             r#"
 target = "evm-ethereum-osaka"
 
-global private const [i16; 4] $a = [1, 2, 3, 4];
-global private const [i16; 4] $b = [1, 2, 3, 4];
+global private const [i16; 4] $a = [1, 2, 4, 8];
+global private const [i16; 4] $b = [1, 2, 4, 8];
 
 func private %entry(v0.i256) -> i16 {
     block0:
@@ -1994,7 +2073,7 @@ func private %entry() -> i256 {
             r#"
 target = "evm-ethereum-osaka"
 
-global private const [i16; 4] $arr = [1, 2, 3, 4];
+global private const [i16; 4] $arr = [1, 2, 4, 8];
 
 func private %entry(v0.i256) -> i16 {
     block0:
@@ -2021,7 +2100,7 @@ object @Contract {
             r#"
 target = "evm-ethereum-osaka"
 
-global private const [i256; 4] $arr = [1, 2, 3, 4];
+global private const [i256; 4] $arr = [1, 2, 4, 8];
 
 func private %entry(v0.i256) -> i256 {
     block0:
@@ -2066,7 +2145,7 @@ object @Contract {
             r#"
 target = "evm-ethereum-osaka"
 
-global private const [i16; 4] $arr = [1, 2, 3, 4];
+global private const [i16; 4] $arr = [1, 2, 4, 8];
 global private const [i8; 1] $__sonatina_const_words_arr_0 = [99];
 
 func private %entry(v0.i256) -> i16 {

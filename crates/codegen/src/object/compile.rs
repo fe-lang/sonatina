@@ -767,10 +767,10 @@ object @Contract {
             r#"
 target = "evm-ethereum-osaka"
 
-global private const [i16; 3] $a = [1, 2, 3];
-global private const [i16; 4] $b = [1, 2, 3, 4];
-global private const [i16; 3] $c = [2, 3, 4];
-global private const [i16; 3] $d = [4, 5, 6];
+global private const [i16; 3] $a = [1, 2, 4];
+global private const [i16; 4] $b = [1, 2, 4, 8];
+global private const [i16; 3] $c = [2, 4, 8];
+global private const [i16; 3] $d = [8, 16, 32];
 
 func private %runtime(v0.i256) -> i16 {
     block0:
