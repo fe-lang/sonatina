@@ -1,0 +1,93 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: "String::from_utf8(out).unwrap()"
+input_file: test_files/evm/constref_specialization_dynamic_splat.sntn
+---
+evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=true
+
+object: Contract
+  section runtime: 21 bytes
+  total: 21 bytes
+
+functions:
+  entry: ir_blocks=1 ir_insts=4 vcode_ops=12 fixups=2 imm_bytes=1
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
+  load__constref_a0_g0: ir_blocks=1 ir_insts=1 vcode_ops=5 fixups=0 imm_bytes=1
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
+  load: ir_blocks=1 ir_insts=6 vcode_ops=13 fixups=0 imm_bytes=3
+    mem: scratch_words=0 stable_words=1 stable_mode=StaticAbs(base=0x20) entry_abs_words=0 abs_words_end=1
+
+--------------- OBSERVABILITY ---------------
+
+object schema=0.1.0
+totals section_bytes=21 code=21 data=0 embed=0 mapped=20 unmapped=1
+
+section runtime schema=0.1.0
+bytes total=21 code=21 data=0 embed=0
+coverage mapped=20 unmapped=1
+unmapped no_ir_inst=0 label_or_fixup_only=0 synthetic=1 unknown=0
+pc [0, 1) func=entry block=0 vcode=0 ir=0 reason=- frontend=-
+pc [1, 2) func=entry block=0 vcode=1 ir=0 reason=- frontend=-
+pc [2, 4) func=entry block=0 vcode=2 ir=2 reason=- frontend=-
+pc [4, 5) func=entry block=0 vcode=3 ir=2 reason=- frontend=-
+pc [5, 7) func=entry block=0 vcode=4 ir=2 reason=- frontend=-
+pc [7, 8) func=entry block=0 vcode=5 ir=2 reason=- frontend=-
+pc [8, 9) func=entry block=0 vcode=6 ir=2 reason=- frontend=-
+pc [9, 10) func=entry block=0 vcode=7 ir=3 reason=- frontend=-
+pc [10, 11) func=entry block=0 vcode=8 ir=3 reason=- frontend=-
+pc [11, 13) func=entry block=0 vcode=9 ir=4 reason=- frontend=-
+pc [13, 14) func=entry block=0 vcode=10 ir=4 reason=- frontend=-
+pc [14, 15) func=entry block=0 vcode=11 ir=4 reason=- frontend=-
+pc [15, 16) func=load__constref_a0_g0 block=0 vcode=4 ir=- reason=synthetic frontend=-
+pc [16, 17) func=load__constref_a0_g0 block=0 vcode=0 ir=2 reason=- frontend=-
+pc [17, 19) func=load__constref_a0_g0 block=0 vcode=1 ir=2 reason=- frontend=-
+pc [19, 20) func=load__constref_a0_g0 block=0 vcode=2 ir=2 reason=- frontend=-
+pc [20, 21) func=load__constref_a0_g0 block=0 vcode=3 ir=2 reason=- frontend=-
+
+evm:
+  case index_3: calldata_len=32 success reason=Return gas_used=21193 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=53
+
+
+--------------- DEBUG ---------------
+
+// func public %entry()
+entry:
+  block0:
+    PUSH0  // v0.i256 = evm_calldata_load 0.i256;
+    CALLDATALOAD
+    PUSH1 `pc + (4)`  // v2.i256 = call %load__constref_a0_g0 v0;
+    SWAP1
+    PUSH1 FuncRef(2)
+    JUMP
+    JUMPDEST
+    PUSH0  // mstore 0.i256 v2 i256;
+    MSTORE
+    PUSH1 0x20 (32)  // evm_return 0.i256 32.i256;
+    PUSH0
+    RETURN
+
+// func private %load__constref_a0_g0(v1.i256) -> i256
+load__constref_a0_g0:
+  block0:
+    JUMPDEST
+    POP  // return 7.i256;
+    PUSH1 0x7 (7)
+    SWAP1
+    JUMP
+
+// func private %load(v0.i256, v1.i256) -> i256
+load:
+  block0:
+    SWAP1  // v7.i256 = mul v1 32.i256;
+    PUSH1 0x20 (32)
+    MUL
+    ADD  // v8.i256 = add v0 v7;
+    PUSH1 0x20 (32)  // v4.*i256 = alloca i256;
+    PUSH1 0x20 (32)  // evm_code_copy v4 v8 32.i256;
+    SWAP1
+    SWAP2
+    DUP3
+    CODECOPY
+    MLOAD  // v6.i256 = mload v4 i256;
+    SWAP1  // return v6;
+    JUMP

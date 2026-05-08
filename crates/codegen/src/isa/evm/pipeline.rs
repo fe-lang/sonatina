@@ -4,6 +4,7 @@ use tracing::{debug_span, info_span, trace_span};
 use crate::{
     machinst::lower::SectionWorkModule,
     optim::{
+        constref_specialize::specialize_private_constrefs,
         dead_arg::{DeadArgElimConfig, run_dead_arg_elim},
         pipeline::{FuncPassOverrides, Pass, run_function_pass_round},
     },
@@ -194,9 +195,21 @@ impl EvmPipelineContext<'_> {
     }
 
     fn run_enum_and_const_lowering(&mut self) -> Result<(), String> {
-        let module = self.module();
-        crate::transform::aggregate::EnumLowerToProduct.run(module);
-        ConstDataLower::default().run(module);
+        crate::transform::aggregate::EnumLowerToProduct.run(self.module());
+        let stats = specialize_private_constrefs(self.module(), &self.funcs);
+        if stats.changed {
+            run_dead_arg_elim(self.module(), DeadArgElimConfig::default());
+            self.funcs = self.work.function_emission_order(&self.work.membership());
+            self.func_behavior_dirty = true;
+            self.run_pass_round(
+                "constref_specialize",
+                &[Pass::Sccp, Pass::CfgCleanup],
+                false,
+                false,
+            );
+            self.funcs = self.work.function_emission_order(&self.work.membership());
+        }
+        ConstDataLower::default().run(self.module());
         self.func_behavior_dirty = true;
         Ok(())
     }
