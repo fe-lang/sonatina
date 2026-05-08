@@ -1,0 +1,33 @@
+#! evm.config: { vcode: true, emit_observability: true }
+#! evm.case: index_2
+#!   calldata: u256(2)
+#!   expect: return u256(7)
+
+target = "evm-ethereum-osaka"
+
+type @tables = { [i256; 5], [i256; 5], [i256; 5] };
+
+global private const @tables $tables = {[101, 102, 103, 104, 105], [1, 3, 7, 15, 31], [201, 202, 203, 204, 205]};
+
+func public %entry() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i32;
+        v1.i256 = call %load_dense_subpath v0;
+        mstore 0.i32 v1 i256;
+        evm_return 0.i8 32.i8;
+}
+
+func private %load_dense_subpath(v0.i256) -> i256 {
+    block0:
+        v1.constref<@tables> = const.ref $tables;
+        v2.constref<[i256; 5]> = const.proj v1 1.i8;
+        v3.constref<i256> = const.index v2 v0;
+        v4.i256 = const.load v3;
+        return v4;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}

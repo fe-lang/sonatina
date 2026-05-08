@@ -380,7 +380,7 @@ impl ConstDataLower {
             }
 
             if let Some(replacement) =
-                emit_dynamic_domain_lookup(module, func, inst, path, result_ty)
+                self.rewrite_dynamic_domain_load(module, func, inst, path, result_ty)
             {
                 replace_with_alias(func, inst, replacement);
                 return true;
@@ -621,6 +621,71 @@ impl ConstDataLower {
             dynamic_terms,
             false,
         )
+    }
+
+    fn rewrite_dynamic_domain_load(
+        &mut self,
+        module: &Module,
+        func: &mut Function,
+        before: InstId,
+        path: &ConstPath,
+        result_ty: Type,
+    ) -> Option<ValueId> {
+        let (index, values) =
+            eval_const_path_dynamic_domain_immediates(&module.ctx, path, |value| {
+                func.dfg.value_imm(value)
+            })?;
+        if !result_ty.is_integral() || values.iter().any(|imm| imm.ty() != result_ty) {
+            return None;
+        }
+
+        if let Some(replacement) =
+            emit_dynamic_values_lookup(func, before, index, result_ty, &values, true)
+        {
+            return Some(replacement);
+        }
+
+        let addr = self.materialize_dynamic_values_addr(
+            module,
+            func,
+            before,
+            path.global,
+            index,
+            &values,
+        )?;
+        Some(emit_const_load_from_addr(
+            func, before, addr, result_ty, None,
+        ))
+    }
+
+    fn materialize_dynamic_values_addr(
+        &mut self,
+        module: &Module,
+        func: &mut Function,
+        before: InstId,
+        source: GlobalVariableRef,
+        index: ValueId,
+        values: &[Immediate],
+    ) -> Option<ValueId> {
+        let mut bytes = Vec::with_capacity(values.len().checked_mul(32)?);
+        for &value in values {
+            bytes.extend_from_slice(&evm_scalar_word_bytes(value)?);
+        }
+        let blob = self.bytes_blob_global(module, source, bytes);
+        let base_addr = insert_before_one(
+            func,
+            before,
+            data::SymAddr::new_unchecked(func.inst_set(), data::SymbolRef::Global(blob)),
+            func.ctx().type_layout.pointer_repl(),
+        );
+        Some(const_addr_with_offset(
+            func,
+            before,
+            base_addr,
+            0,
+            vec![(index, 32)],
+            false,
+        ))
     }
 
     fn word_blob_global(
@@ -1176,23 +1241,6 @@ fn obj_init_children<'a>(
         }
         _ => None,
     }
-}
-
-fn emit_dynamic_domain_lookup(
-    module: &Module,
-    func: &mut Function,
-    before: InstId,
-    path: &ConstPath,
-    result_ty: Type,
-) -> Option<ValueId> {
-    let (index, values) = eval_const_path_dynamic_domain_immediates(&module.ctx, path, |value| {
-        func.dfg.value_imm(value)
-    })?;
-    if !result_ty.is_integral() || values.iter().any(|imm| imm.ty() != result_ty) {
-        return None;
-    }
-
-    emit_dynamic_values_lookup(func, before, index, result_ty, &values, true)
 }
 
 fn emit_dynamic_values_lookup(
