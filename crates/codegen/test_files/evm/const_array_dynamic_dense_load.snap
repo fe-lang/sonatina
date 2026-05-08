@@ -78,7 +78,7 @@ entry:
 load_dense:
   block0:
     JUMPDEST
-    PUSH0 0x0 (0)  // v4.i256 = sym_addr $dense;
+    PUSH0 0x0 (0)  // v4.i256 = sym_addr $__sonatina_const_words_dense_0;
     SWAP1  // v6.i256 = mul v0 32.i256;
     PUSH1 0x20 (32)
     MUL

@@ -6,6 +6,7 @@ use sonatina_ir::{
     global_variable::{GlobalVariableData, GlobalVariableStore, GvInitializer},
     inst::{arith, cast, cmp, data, downcast, evm, logic},
     module::ModuleCtx,
+    object::Directive,
     types::{CompoundType, CompoundTypeRef, StructData},
     visitor::VisitorMut,
 };
@@ -726,6 +727,7 @@ impl ConstDataLower {
     ) -> GlobalVariableRef {
         if crate::object::data::encode_gv_initializer_to_bytes(&module.ctx, source)
             .is_ok_and(|native| native == bytes)
+            && global_is_explicit_object_data(module, source)
         {
             return source;
         }
@@ -763,6 +765,17 @@ impl ConstDataLower {
         self.word_blobs_by_bytes.insert(bytes, blob);
         blob
     }
+}
+
+fn global_is_explicit_object_data(module: &Module, gv: GlobalVariableRef) -> bool {
+    module.objects.values().any(|object| {
+        object.sections.iter().any(|section| {
+            section
+                .directives
+                .iter()
+                .any(|directive| matches!(directive, Directive::Data(data) if *data == gv))
+        })
+    })
 }
 
 fn fresh_global_symbol(store: &GlobalVariableStore, base: &str) -> String {
@@ -2246,8 +2259,8 @@ func private %entry(v0.i256) -> i256 {
 
         let mut writer = ModuleWriter::with_debug_provider(&parsed.module, &parsed.debug);
         let dumped = writer.dump_string();
-        assert!(dumped.contains("sym_addr $arr"));
-        assert!(!dumped.contains("__sonatina_const_words_arr_"));
+        assert!(dumped.contains("sym_addr $__sonatina_const_words_arr_"));
+        assert!(!dumped.contains("sym_addr $arr"));
         assert!(dumped.contains("evm_code_copy"));
         assert!(dumped.contains("mload"));
         assert!(!dumped.contains("const."));
@@ -2667,6 +2680,43 @@ func private %entry(v0.i256) -> i64 {
         v5.constref<i64> = const.index v4 v0;
         v6.i64 = const.load v5;
         v7.i64 = add v3 v6;
+        return v7;
+}
+"#,
+        );
+
+        ConstDataLower::default().run(&parsed.module);
+
+        let symbols = global_symbols_with_prefix(&parsed, "__sonatina_const_words_");
+        assert_eq!(symbols.len(), 1, "{symbols:?}");
+    }
+
+    #[test]
+    fn dynamic_const_load_dedups_same_layout_internal_word_blobs() {
+        let parsed = parse(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @five = { i256, i256, i256, i256, i256 };
+
+global private const [i256; 5] $arr = [1, 3, 7, 15, 31];
+global private const @five $row = {1, 3, 7, 15, 31};
+
+func private %addr_row() -> constref<@five> {
+    block0:
+        v0.constref<@five> = const.ref $row;
+        return v0;
+}
+
+func private %entry(v0.i256) -> i256 {
+    block0:
+        v1.constref<[i256; 5]> = const.ref $arr;
+        v2.constref<i256> = const.index v1 v0;
+        v3.i256 = const.load v2;
+        v4.constref<@five> = call %addr_row;
+        v5.constref<i256> = const.proj v4 0.i8;
+        v6.i256 = const.load v5;
+        v7.i256 = add v3 v6;
         return v7;
 }
 "#,
