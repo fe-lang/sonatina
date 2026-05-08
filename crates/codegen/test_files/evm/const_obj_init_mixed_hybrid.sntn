@@ -1,0 +1,35 @@
+#! evm.config: { vcode: true, emit_observability: true }
+#! evm.case: ok
+#!   calldata:
+#!   expect: return u256(31)
+
+target = "evm-ethereum-osaka"
+
+type @mixed = { i256, [i256; 5], [i256; 5] };
+
+global private const @mixed $value = {1, [0, 0, 0, 0, 0], [10, 20, 30, 40, 50]};
+
+func public %entry() {
+    block0:
+        v0.objref<@mixed> = obj.alloc @mixed;
+        v1.constref<@mixed> = const.ref $value;
+        obj.init.const v0 v1;
+        v2.objref<i256> = obj.proj v0 0.i8;
+        v3.i256 = obj.load v2;
+        v4.objref<[i256; 5]> = obj.proj v0 1.i8;
+        v5.objref<i256> = obj.index v4 2.i8;
+        v6.i256 = obj.load v5;
+        v7.objref<[i256; 5]> = obj.proj v0 2.i8;
+        v8.objref<i256> = obj.index v7 2.i8;
+        v9.i256 = obj.load v8;
+        v10.i256 = add v3 v6;
+        v11.i256 = add v10 v9;
+        mstore 0.i32 v11 i256;
+        evm_return 0.i8 32.i8;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}

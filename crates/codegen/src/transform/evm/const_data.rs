@@ -31,6 +31,23 @@ struct ConstRewriteInfo<'a> {
     const_paths: &'a ConstPathAnalysis,
 }
 
+#[derive(Clone, Copy)]
+struct ObjInitConstSubtree<'a> {
+    source: GlobalVariableRef,
+    ty: Type,
+    init: &'a GvInitializer,
+}
+
+impl<'a> ObjInitConstSubtree<'a> {
+    fn child(self, ty: Type, init: &'a GvInitializer) -> Self {
+        Self {
+            source: self.source,
+            ty,
+            init,
+        }
+    }
+}
+
 #[derive(Default)]
 struct ConstRefTypeLowerer {
     compound_map: FxHashMap<CompoundTypeRef, Type>,
@@ -448,7 +465,29 @@ impl ConstDataLower {
         path: &ConstPath,
         init: &GvInitializer,
     ) {
-        let ty = path.ty;
+        self.emit_known_obj_init_for_ty(
+            module,
+            func,
+            before,
+            object,
+            ObjInitConstSubtree {
+                source: path.global,
+                ty: path.ty,
+                init,
+            },
+        );
+    }
+
+    fn emit_known_obj_init_for_ty(
+        &mut self,
+        module: &Module,
+        func: &mut Function,
+        before: InstId,
+        object: ValueId,
+        subtree: ObjInitConstSubtree<'_>,
+    ) {
+        let ty = subtree.ty;
+        let init = subtree.init;
         if ty.is_integral() || should_inline_obj_init(func.ctx(), ty) {
             emit_obj_init(func, before, object, ty, init);
             return;
@@ -465,10 +504,16 @@ impl ConstDataLower {
             return;
         }
 
+        if should_split_obj_init(&module.ctx, ty, init)
+            && self.emit_split_obj_init(module, func, before, object, subtree)
+        {
+            return;
+        }
+
         let Some(bytes) = encode_runtime_object_const_bytes(&module.ctx, ty, init) else {
             panic!("unsupported runtime-object encoding for obj.init.const type {ty:?}");
         };
-        let blob = self.bytes_blob_global(module, path.global, bytes);
+        let blob = self.bytes_blob_global(module, subtree.source, bytes);
         let addr = insert_before_one(
             func,
             before,
@@ -478,6 +523,71 @@ impl ConstDataLower {
         let copy_len_bytes = shape::runtime_size_bytes(func.ctx(), ty)
             .expect("runtime-object encoding requires a concrete runtime size");
         emit_obj_init_from_codecopy(func, before, object, ty, addr, copy_len_bytes);
+    }
+
+    fn emit_split_obj_init(
+        &mut self,
+        module: &Module,
+        func: &mut Function,
+        before: InstId,
+        object: ValueId,
+        subtree: ObjInitConstSubtree<'_>,
+    ) -> bool {
+        let ty = subtree.ty;
+        let init = subtree.init;
+        match (ty.resolve_compound(&module.ctx), init) {
+            (Some(CompoundType::Array { elem, len }), GvInitializer::Array(items)) => {
+                if items.len() != len || len > MAX_SPLIT_OBJ_INIT_ARRAY_LEN {
+                    return false;
+                }
+                for (idx, item) in items.iter().enumerate() {
+                    let index = func.dfg.make_imm_value(Immediate::I64(
+                        i64::try_from(idx).expect("index overflow"),
+                    ));
+                    let slot = insert_before_one(
+                        func,
+                        before,
+                        data::ObjIndex::new_unchecked(func.inst_set(), object, index),
+                        elem.to_obj_ref(func.ctx()),
+                    );
+                    self.emit_known_obj_init_for_ty(
+                        module,
+                        func,
+                        before,
+                        slot,
+                        subtree.child(elem, item),
+                    );
+                }
+                true
+            }
+            (Some(CompoundType::Struct(s)), GvInitializer::Struct(fields)) => {
+                if s.packed || fields.len() != s.fields.len() {
+                    return false;
+                }
+                for (idx, (field_ty, field)) in
+                    s.fields.iter().copied().zip(fields.iter()).enumerate()
+                {
+                    let index = func.dfg.make_imm_value(Immediate::I64(
+                        i64::try_from(idx).expect("index overflow"),
+                    ));
+                    let slot = insert_before_one(
+                        func,
+                        before,
+                        data::ObjProj::new_unchecked(func.inst_set(), smallvec![object, index]),
+                        field_ty.to_obj_ref(func.ctx()),
+                    );
+                    self.emit_known_obj_init_for_ty(
+                        module,
+                        func,
+                        before,
+                        slot,
+                        subtree.child(field_ty, field),
+                    );
+                }
+                true
+            }
+            _ => false,
+        }
     }
 
     fn materialize_const_path_addr(
@@ -1017,6 +1127,55 @@ fn word_blob_copy_len_bytes(module: &ModuleCtx, ty: Type) -> Option<u32> {
 fn should_inline_obj_init(module: &ModuleCtx, ty: Type) -> bool {
     const MAX_INLINE_LEAVES: u32 = 4;
     const_leaf_count(module, ty).is_some_and(|leaves| leaves <= MAX_INLINE_LEAVES)
+}
+
+const MAX_SPLIT_OBJ_INIT_ARRAY_LEN: usize = 8;
+
+fn should_split_obj_init(module: &ModuleCtx, ty: Type, init: &GvInitializer) -> bool {
+    let Some(children) = obj_init_children(module, ty, init) else {
+        return false;
+    };
+
+    let mut has_inline_child = false;
+    let mut has_large_child = false;
+    for (child_ty, child_init) in children {
+        has_inline_child |= child_ty.is_integral() || should_inline_obj_init(module, child_ty);
+        has_large_child |= !child_ty.is_integral() && !should_inline_obj_init(module, child_ty);
+        if obj_init_child_avoids_blob(module, child_ty, child_init)
+            || should_split_obj_init(module, child_ty, child_init)
+        {
+            return true;
+        }
+    }
+
+    has_inline_child && has_large_child
+}
+
+fn obj_init_child_avoids_blob(module: &ModuleCtx, ty: Type, init: &GvInitializer) -> bool {
+    !ty.is_integral()
+        && !should_inline_obj_init(module, ty)
+        && (initializer_all_zero(module, ty, init)
+            || initializer_scalar_splat(module, ty, init)
+                .is_some_and(|_| word_blob_copy_len_bytes(module, ty).is_some_and(|len| len > 32)))
+}
+
+fn obj_init_children<'a>(
+    module: &ModuleCtx,
+    ty: Type,
+    init: &'a GvInitializer,
+) -> Option<Vec<(Type, &'a GvInitializer)>> {
+    match (ty.resolve_compound(module)?, init) {
+        (CompoundType::Array { elem, len }, GvInitializer::Array(items)) => (items.len() == len
+            && len <= MAX_SPLIT_OBJ_INIT_ARRAY_LEN)
+            .then(|| items.iter().map(|item| (elem, item)).collect()),
+        (CompoundType::Struct(s), GvInitializer::Struct(fields)) => {
+            if s.packed || fields.len() != s.fields.len() {
+                return None;
+            }
+            Some(s.fields.iter().copied().zip(fields.iter()).collect())
+        }
+        _ => None,
+    }
 }
 
 fn emit_dynamic_domain_lookup(
@@ -2657,6 +2816,43 @@ func private %entry() -> i256 {
             global_symbols_with_prefix(&parsed, "__sonatina_const_words_").len(),
             0
         );
+    }
+
+    #[test]
+    fn obj_init_const_mixed_aggregate_lowers_to_split_strategies() {
+        let parsed = parse(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @mixed = { i256, [i256; 5], [i256; 5] };
+
+global private const @mixed $value = {1, [0, 0, 0, 0, 0], [10, 20, 30, 40, 50]};
+
+func private %entry() -> i256 {
+    block0:
+        v0.objref<@mixed> = obj.alloc @mixed;
+        v1.constref<@mixed> = const.ref $value;
+        obj.init.const v0 v1;
+        return 0.i256;
+}
+"#,
+        );
+
+        ConstDataLower::default().run(&parsed.module);
+
+        let entry = find_func_ref(&parsed, "entry");
+        let dumped = parsed
+            .module
+            .func_store
+            .view(entry, |func| FuncWriter::new(entry, func).dump_string());
+        assert!(dumped.contains("obj.store"));
+        assert!(dumped.contains("evm_code_size"));
+        assert_eq!(dumped.matches("evm_code_copy").count(), 2);
+        assert_eq!(
+            global_symbols_with_prefix(&parsed, "__sonatina_const_words_").len(),
+            1
+        );
+        assert!(!dumped.contains("obj.init.const"));
     }
 
     #[test]
