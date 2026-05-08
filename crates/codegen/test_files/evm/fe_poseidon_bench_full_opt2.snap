@@ -6,38 +6,22 @@ input_file: test_files/evm/fe_poseidon_bench_full_opt2.sntn
 evm.config: stack_reach=16 vcode=false bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section init: 14438 bytes
-  section runtime: 14419 bytes
-  total: 28857 bytes
+  section init: 18019 bytes
+  section runtime: 18000 bytes
+  total: 36019 bytes
 
 functions:
-  add: ir_blocks=1 ir_insts=5 vcode_ops=13 fixups=0 imm_bytes=4
-    mem: scratch_words=1 stable_words=0 stable_mode=None entry_abs_words=73 abs_words_end=1
   contract_init_root_PoseidonBench: ir_blocks=3 ir_insts=8 vcode_ops=17 fixups=3 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=2 abs_words_end=0
-  contract_recv_abi_PoseidonBench_1430137905: ir_blocks=7 ir_insts=43 vcode_ops=134 fixups=11 imm_bytes=32
+  contract_recv_abi_PoseidonBench_1430137905: ir_blocks=7 ir_insts=43 vcode_ops=139 fixups=11 imm_bytes=34
     mem: scratch_words=1 stable_words=4 stable_mode=StaticAbs(base=0xe0) entry_abs_words=2 abs_words_end=6
-  hash: ir_blocks=13 ir_insts=160 vcode_ops=404 fixups=50 imm_bytes=72
-    mem: scratch_words=0 stable_words=39 stable_mode=StaticAbs(base=0x160) entry_abs_words=6 abs_words_end=45
-  mul: ir_blocks=1 ir_insts=5 vcode_ops=13 fixups=0 imm_bytes=4
-    mem: scratch_words=1 stable_words=0 stable_mode=None entry_abs_words=73 abs_words_end=1
-  pow5: ir_blocks=1 ir_insts=6 vcode_ops=23 fixups=6 imm_bytes=0
-    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=55 abs_words_end=0
-  full_round__constref_a4_g1: ir_blocks=8 ir_insts=50 vcode_ops=135 fixups=19 imm_bytes=23
-    mem: scratch_words=0 stable_words=10 stable_mode=StaticAbs(base=0x640) entry_abs_words=45 abs_words_end=55
-  mds: ir_blocks=1 ir_insts=66 vcode_ops=211 fixups=30 imm_bytes=35
-    mem: scratch_words=0 stable_words=18 stable_mode=StaticAbs(base=0x780) entry_abs_words=55 abs_words_end=73
-  full_round__constref_a4_g2: ir_blocks=8 ir_insts=50 vcode_ops=135 fixups=19 imm_bytes=23
-    mem: scratch_words=0 stable_words=10 stable_mode=StaticAbs(base=0x640) entry_abs_words=45 abs_words_end=55
-  mds__constref_a3_g1: ir_blocks=1 ir_insts=31 vcode_ops=132 fixups=30 imm_bytes=18
-    mem: scratch_words=1 stable_words=0 stable_mode=None entry_abs_words=45 abs_words_end=1
+  hash: ir_blocks=13 ir_insts=646 vcode_ops=1542 fixups=10 imm_bytes=633
+    mem: scratch_words=0 stable_words=440 stable_mode=StaticAbs(base=0x160) entry_abs_words=6 abs_words_end=446
   std__lib__abi__sol__impl_trait_SolDecoder_68ab__read_word__g463e_f806: ir_blocks=5 ir_insts=27 vcode_ops=63 fixups=2 imm_bytes=10
     mem: scratch_words=2 stable_words=0 stable_mode=None entry_abs_words=6 abs_words_end=2
   contract_runtime_root_PoseidonBench: ir_blocks=3 ir_insts=6 vcode_ops=18 fixups=2 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=2 abs_words_end=0
-  full_round: ir_blocks=8 ir_insts=49 vcode_ops=135 fixups=18 imm_bytes=22
-    mem: scratch_words=0 stable_words=10 stable_mode=StaticAbs(base=0xe0) entry_abs_words=2 abs_words_end=12
 
 evm:
-  deploy: success reason=Return gas_used=3170889 gas_refunded=0 logs=0 output=create len=14419 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
-  case poseidon_1_2: calldata_len=68 success reason=Return gas_used=98714 gas_refunded=0 logs=0 output=call len=32 tx_gas=21344 runtime_gas=77370
+  deploy: success reason=Return gas_used=3942923 gas_refunded=0 logs=0 output=create len=18000 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
+  case poseidon_1_2: calldata_len=68 success reason=Return gas_used=59357 gas_refunded=0 logs=0 output=call len=32 tx_gas=21344 runtime_gas=38013

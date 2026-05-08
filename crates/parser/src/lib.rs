@@ -124,7 +124,8 @@ pub fn parse_module(input: &str) -> Result<ParsedModule, Vec<Error>> {
             let sig = Signature::new(&func.name.name, func.linkage, &params, &ret_tys);
 
             // Safe to unwrap: function name checked for duplicate above
-            builder.declare_function(sig).unwrap();
+            let func_ref = builder.declare_function(sig).unwrap();
+            builder.ctx.set_inline_hint(func_ref, func.inline_hint);
         }
     }
 
@@ -148,7 +149,11 @@ pub fn parse_module(input: &str) -> Result<ParsedModule, Vec<Error>> {
                 let sig = Signature::new(&sig.name.name, sig.linkage, &args, &ret_tys);
 
                 // Safe to unwrap: function name checked for duplicate above
-                Some(builder.declare_function(sig).unwrap())
+                let func_ref = builder.declare_function(sig).unwrap();
+                builder
+                    .ctx
+                    .set_inline_hint(func_ref, func.signature.inline_hint);
+                Some(func_ref)
             })
             .collect::<Vec<_>>()
     };
@@ -1048,6 +1053,69 @@ func public %caller(v0.i32, v1.i32) -> (i32, i1) {
         assert!(printed.contains("func private %pair_add(v0.i32, v1.i32) -> (i32, i1) {"));
         assert!(printed.contains("(v2.i32, v3.i1) = call %pair_add v0 v1;"));
         assert!(printed.contains("return (v2, v3);"));
+    }
+
+    #[test]
+    fn test_inline_hints_roundtrip() {
+        let s = r#"
+target = "evm-ethereum-london"
+
+declare inline(never) private %decl(i32);
+
+func inline private %hint(v0.i32) -> i32 {
+    block0:
+        return v0;
+}
+
+func inline(always) private %always(v0.i32) -> i32 {
+    block0:
+        return v0;
+}
+
+func inline(never) private %never(v0.i32) -> i32 {
+    block0:
+        return v0;
+}
+"#;
+
+        let parsed = parse_module(s).unwrap();
+        let hint_for = |name: &str| {
+            parsed
+                .module
+                .ctx
+                .declared_funcs
+                .iter()
+                .find_map(|entry| (entry.value().name() == name).then(|| *entry.key()))
+                .map(|func_ref| parsed.module.ctx.inline_hint(func_ref))
+                .expect("function should be declared")
+        };
+        assert_eq!(hint_for("decl"), ir::InlineHint::Never);
+        assert_eq!(hint_for("hint"), ir::InlineHint::Inline);
+        assert_eq!(hint_for("always"), ir::InlineHint::Always);
+        assert_eq!(hint_for("never"), ir::InlineHint::Never);
+
+        let mut w = ir::ir_writer::ModuleWriter::with_debug_provider(&parsed.module, &parsed.debug);
+        let printed = w.dump_string();
+        assert!(printed.contains("declare inline(never) private %decl(i32);"));
+        assert!(printed.contains("func inline private %hint(v0.i32) -> i32 {"));
+        assert!(printed.contains("func inline(always) private %always(v0.i32) -> i32 {"));
+        assert!(printed.contains("func inline(never) private %never(v0.i32) -> i32 {"));
+
+        let reparsed = parse_module(&printed).unwrap();
+        let reparsed_hint_for = |name: &str| {
+            reparsed
+                .module
+                .ctx
+                .declared_funcs
+                .iter()
+                .find_map(|entry| (entry.value().name() == name).then(|| *entry.key()))
+                .map(|func_ref| reparsed.module.ctx.inline_hint(func_ref))
+                .expect("function should be declared")
+        };
+        assert_eq!(reparsed_hint_for("decl"), ir::InlineHint::Never);
+        assert_eq!(reparsed_hint_for("hint"), ir::InlineHint::Inline);
+        assert_eq!(reparsed_hint_for("always"), ir::InlineHint::Always);
+        assert_eq!(reparsed_hint_for("never"), ir::InlineHint::Never);
     }
 
     #[test]

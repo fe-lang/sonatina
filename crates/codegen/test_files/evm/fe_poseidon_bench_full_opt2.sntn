@@ -83,7 +83,7 @@ func private %abi_single_root_size(v0.i256) -> i256 {
         return v3;
 }
 
-func private %add(v0.@layout_0, v1.@layout_0) -> @layout_0 {
+func inline(always) private %add(v0.@layout_0, v1.@layout_0) -> @layout_0 {
     block0:
         v2.objref<@layout_0> = obj.alloc @layout_0;
         v3.objref<@layout_0> = obj.alloc @layout_0;
@@ -456,7 +456,7 @@ func private %encoder_new(v0.i256) -> @layout_1 {
         return v3;
 }
 
-func private %full_round(v0.objref<@layout_0>, v1.objref<@layout_0>, v2.objref<@layout_0>, v3.i256, v4.constref<[[i256; 3]; 3]>) -> @layout_7 {
+func inline(always) private %full_round(v0.objref<@layout_0>, v1.objref<@layout_0>, v2.objref<@layout_0>, v3.i256, v4.constref<[[i256; 3]; 3]>) -> @layout_7 {
     block0:
         v5.*i256 = alloca i256;
         mstore v5 v3 i256;
@@ -1084,7 +1084,7 @@ func private %std__lib__evm__memory_input__impl_trait_MemoryBytes_c1cd__len_9b6d
         return v4;
 }
 
-func private %mds(v0.objref<@layout_0>, v1.objref<@layout_0>, v2.objref<@layout_0>, v3.constref<[[i256; 3]; 3]>) -> @layout_7 {
+func inline(always) private %mds(v0.objref<@layout_0>, v1.objref<@layout_0>, v2.objref<@layout_0>, v3.constref<[[i256; 3]; 3]>) -> @layout_7 {
     block0:
         jump block1;
 
@@ -1166,7 +1166,7 @@ func private %mds(v0.objref<@layout_0>, v1.objref<@layout_0>, v2.objref<@layout_
         return v81;
 }
 
-func private %mul(v0.@layout_0, v1.@layout_0) -> @layout_0 {
+func inline(always) private %mul(v0.@layout_0, v1.@layout_0) -> @layout_0 {
     block0:
         v2.objref<@layout_0> = obj.alloc @layout_0;
         v3.objref<@layout_0> = obj.alloc @layout_0;
@@ -1209,7 +1209,7 @@ func private %mulmod(v0.i256, v1.i256, v2.i256) -> i256 {
         return v9;
 }
 
-func private %impl_Fp__new(v0.i256) -> @layout_0 {
+func inline(always) private %impl_Fp__new(v0.i256) -> @layout_0 {
     block0:
         v1.*i256 = alloca i256;
         mstore v1 v0 i256;
@@ -1340,7 +1340,7 @@ func private %impl_trait_SolEncoder__pos(v0.objref<@layout_1>) -> i256 {
         return v4;
 }
 
-func private %pow5(v0.objref<@layout_0>) -> @layout_0 {
+func inline(always) private %pow5(v0.objref<@layout_0>) -> @layout_0 {
     block0:
         jump block1;
 

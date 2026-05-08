@@ -350,6 +350,7 @@ Module {
         Func {
             signature: FuncSignature {
                 linkage: Public,
+                inline_hint: Auto,
                 name: FunctionName {
                     name: "main",
                     ..

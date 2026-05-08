@@ -6,7 +6,7 @@ use derive_more::Debug as Dbg;
 use either::Either;
 use hex::FromHex;
 use ir::{EmbedSymbol, I256, ObjectName, U256};
-pub use ir::{Immediate, Linkage};
+pub use ir::{Immediate, InlineHint, Linkage};
 use pest::Parser as _;
 use smol_str::SmolStr;
 pub use sonatina_triple::{InvalidTriple, TargetTriple};
@@ -160,6 +160,7 @@ impl FromSyntax<Error> for SmolStr {
 #[derive(Debug)]
 pub struct FuncDeclaration {
     pub linkage: Linkage,
+    pub inline_hint: InlineHint,
     pub name: FunctionName,
     pub params: Vec<Type>,
     pub ret_types: Vec<Type>,
@@ -171,6 +172,7 @@ impl FromSyntax<Error> for FuncDeclaration {
 
         FuncDeclaration {
             linkage,
+            inline_hint: node.single_opt(Rule::inline_hint).unwrap_or_default(),
             name: node.single(Rule::function_identifier),
             params: node.descend_into(Rule::function_param_type_list, |n| n.multi(Rule::type_name)),
             ret_types: node
@@ -360,6 +362,7 @@ impl FromSyntax<Error> for Func {
 #[derive(Debug)]
 pub struct FuncSignature {
     pub linkage: Linkage,
+    pub inline_hint: InlineHint,
     pub name: FunctionName,
     pub params: Vec<ValueDeclaration>,
     pub ret_types: Vec<Type>,
@@ -371,11 +374,23 @@ impl FromSyntax<Error> for FuncSignature {
 
         FuncSignature {
             linkage,
+            inline_hint: node.single_opt(Rule::inline_hint).unwrap_or_default(),
             name: node.single(Rule::function_identifier),
             params: node.descend_into(Rule::function_params, |n| n.multi(Rule::value_declaration)),
             ret_types: node
                 .descend_into_opt(Rule::function_ret_type, |n| n.multi(Rule::type_name))
                 .unwrap_or_default(),
+        }
+    }
+}
+
+impl FromSyntax<Error> for InlineHint {
+    fn from_syntax(node: &mut Node<Error>) -> Self {
+        match node.txt.trim() {
+            "inline" => Self::Inline,
+            "inline(always)" => Self::Always,
+            "inline(never)" => Self::Never,
+            _ => unreachable!("unexpected inline hint syntax: {}", node.txt),
         }
     }
 }
