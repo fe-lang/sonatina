@@ -339,6 +339,76 @@ func public %entry() -> i256 {
 }
 
 #[test]
+fn sccp_does_not_materialize_negative_const_index_immediate() {
+    let (module, func_ref) = parse_test_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+global private const [i32; 2] $arr = [11, 22];
+
+func public %entry() -> i32 {
+    block0:
+        v0.i32 = sub 0.i32 1.i32;
+        v1.constref<[i32; 2]> = const.ref $arr;
+        v2.constref<i32> = const.index v1 v0;
+        v3.i32 = const.load v2;
+        return v3;
+}
+"#,
+    );
+    module.func_store.modify(func_ref, |func| {
+        let mut cfg = ControlFlowGraph::new();
+        SccpSolver::new().run(func, &mut cfg);
+    });
+    let dumped = module.func_store.view(func_ref, |func| {
+        FuncWriter::new(func_ref, func).dump_string()
+    });
+    assert!(
+        dumped.contains("const.index v1 v0"),
+        "SCCP should keep an invalid proven constant index in dynamic form:\n{dumped}"
+    );
+    assert!(
+        !dumped.contains("const.index v1 -1.i32"),
+        "SCCP must not materialize a negative const.index immediate:\n{dumped}"
+    );
+    assert_fast_verified(&module);
+}
+
+#[test]
+fn sccp_does_not_materialize_oob_obj_index_immediate() {
+    let (module, func_ref) = parse_test_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+func public %entry() -> unit {
+    block0:
+        v0.i32 = add 2.i32 0.i32;
+        v1.objref<[i32; 2]> = obj.alloc [i32; 2];
+        v2.objref<i32> = obj.index v1 v0;
+        obj.store v2 1.i32;
+        return;
+}
+"#,
+    );
+    module.func_store.modify(func_ref, |func| {
+        let mut cfg = ControlFlowGraph::new();
+        SccpSolver::new().run(func, &mut cfg);
+    });
+    let dumped = module.func_store.view(func_ref, |func| {
+        FuncWriter::new(func_ref, func).dump_string()
+    });
+    assert!(
+        dumped.contains("obj.index v1 v0"),
+        "SCCP should keep an out-of-bounds proven constant index in dynamic form:\n{dumped}"
+    );
+    assert!(
+        !dumped.contains("obj.index v1 2.i32"),
+        "SCCP must not materialize an out-of-bounds obj.index immediate:\n{dumped}"
+    );
+    assert_fast_verified(&module);
+}
+
+#[test]
 fn sccp_folds_const_load_through_same_path_phi() {
     let (module, func_ref) = parse_test_module(
         r#"

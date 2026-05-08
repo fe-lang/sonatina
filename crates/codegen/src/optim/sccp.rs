@@ -15,10 +15,11 @@ use sonatina_ir::{
     inst::{
         arith, cast, cmp,
         control_flow::{BranchInfo, BranchKind},
-        downcast,
+        data, downcast,
     },
     interpret::{Action, EvalValue, Interpret, State},
     prelude::*,
+    types::CompoundType,
 };
 
 use super::{
@@ -600,15 +601,19 @@ impl SccpSolver {
                         }
 
                         let new_value = func.dfg.make_imm_value(imm);
-                        func.dfg.change_to_alias(result, new_value);
-                        changed = true;
+                        if Self::alias_preserves_index_immediate_validity(func, result, new_value) {
+                            func.dfg.change_to_alias(result, new_value);
+                            changed = true;
+                        }
                     }
                     SimplifyAction::Copy(src) => {
                         let result_ty = func.dfg.value_ty(result);
                         let src_ty = func.dfg.value_ty(src);
                         if src_ty == result_ty {
-                            func.dfg.change_to_alias(result, src);
-                            changed = true;
+                            if Self::alias_preserves_index_immediate_validity(func, result, src) {
+                                func.dfg.change_to_alias(result, src);
+                                changed = true;
+                            }
                         } else if idx == 0
                             && inst_results.len() == 1
                             && let Some(bitcast) = func.inst_set().has_bitcast()
@@ -657,8 +662,10 @@ impl SccpSolver {
             }
 
             let new_value = func.dfg.make_imm_value(imm);
-            func.dfg.change_to_alias(result, new_value);
-            changed = true;
+            if Self::alias_preserves_index_immediate_validity(func, result, new_value) {
+                func.dfg.change_to_alias(result, new_value);
+                changed = true;
+            }
         }
 
         if changed && self.inst_results_are_dead(func, inst) {
@@ -720,13 +727,88 @@ impl SccpSolver {
             } else {
                 phi_arg
             };
-            func.dfg.change_to_alias(phi_value, phi_arg);
-            InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
-            true
+            if Self::alias_preserves_index_immediate_validity(func, phi_value, phi_arg) {
+                func.dfg.change_to_alias(phi_value, phi_arg);
+                InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+                true
+            } else {
+                func.dfg.attach_user(inst);
+                changed
+            }
         } else {
             func.dfg.attach_user(inst);
             changed
         }
+    }
+
+    fn alias_preserves_index_immediate_validity(
+        func: &Function,
+        result: ValueId,
+        alias: ValueId,
+    ) -> bool {
+        let Some(imm) = func.dfg.value_imm(alias) else {
+            return true;
+        };
+
+        func.dfg
+            .users(result)
+            .all(|&user| Self::index_user_accepts_imm(func, user, result, imm))
+    }
+
+    fn index_user_accepts_imm(
+        func: &Function,
+        user: InstId,
+        index_value: ValueId,
+        imm: Immediate,
+    ) -> bool {
+        let inst = func.dfg.inst(user);
+        if let Some(index) = downcast::<&data::ConstIndex>(func.inst_set(), inst)
+            && *index.index() == index_value
+        {
+            return Self::array_index_imm_is_valid(
+                imm,
+                Self::constref_array_len(func, *index.object()),
+            );
+        }
+
+        if let Some(index) = downcast::<&data::ObjIndex>(func.inst_set(), inst)
+            && *index.index() == index_value
+        {
+            return Self::array_index_imm_is_valid(
+                imm,
+                Self::objref_array_len(func, *index.object()),
+            );
+        }
+
+        true
+    }
+
+    fn array_index_imm_is_valid(imm: Immediate, len: Option<usize>) -> bool {
+        imm.to_nonnegative_usize()
+            .is_some_and(|index| len.is_some_and(|len| index < len))
+    }
+
+    fn constref_array_len(func: &Function, object: ValueId) -> Option<usize> {
+        let CompoundType::ConstRef(elem) =
+            func.dfg.value_ty(object).resolve_compound(func.ctx())?
+        else {
+            return None;
+        };
+        let CompoundType::Array { len, .. } = elem.resolve_compound(func.ctx())? else {
+            return None;
+        };
+        Some(len)
+    }
+
+    fn objref_array_len(func: &Function, object: ValueId) -> Option<usize> {
+        let CompoundType::ObjRef(elem) = func.dfg.value_ty(object).resolve_compound(func.ctx())?
+        else {
+            return None;
+        };
+        let CompoundType::Array { len, .. } = elem.resolve_compound(func.ctx())? else {
+            return None;
+        };
+        Some(len)
     }
 
     fn is_reachable(&self, func: &Function, from: BlockId, to: BlockId) -> bool {
