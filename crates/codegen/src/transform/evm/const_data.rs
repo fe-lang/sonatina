@@ -3,6 +3,7 @@ use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{
     Function, GlobalVariableRef, I256, Immediate, InstId, Linkage, Module, Type, U256, Value,
     ValueId,
+    effects::{OtherEffects, classify_inst_effects},
     global_variable::{GlobalVariableData, GlobalVariableStore, GvInitializer},
     inst::{arith, cast, cmp, data, downcast, evm, logic},
     module::ModuleCtx,
@@ -26,10 +27,40 @@ use crate::{
 type ConstOffsetTerms = Vec<(ValueId, u32)>;
 type ConstOffsetPlan = (Type, u32, ConstOffsetTerms);
 type SparseExceptions = Vec<(usize, Immediate)>;
+const MIN_ROW_COPY_WORDS: usize = 3;
 
 struct ConstRewriteInfo<'a> {
     constref_value_tys: &'a FxHashMap<ValueId, Type>,
     const_paths: &'a ConstPathAnalysis,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+enum ConstLoadRowBase {
+    WordBlob(GlobalVariableRef),
+    DynamicValues {
+        source: GlobalVariableRef,
+        values: Vec<Immediate>,
+    },
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct ConstLoadRowKey {
+    base: ConstLoadRowBase,
+    dynamic_terms: ConstOffsetTerms,
+}
+
+#[derive(Clone)]
+struct ConstLoadRowCandidate {
+    inst: InstId,
+    order: usize,
+    result_ty: Type,
+    key: ConstLoadRowKey,
+    word_offset: u32,
+}
+
+struct ConstLoadRowGroup {
+    key: ConstLoadRowKey,
+    candidates: Vec<ConstLoadRowCandidate>,
 }
 
 #[derive(Clone, Copy)]
@@ -161,6 +192,7 @@ impl ConstDataLower {
             constref_value_tys: &constref_value_tys,
             const_paths: &const_paths,
         };
+        changed |= self.rewrite_const_load_rows(module, func, &info);
         let blocks: Vec<_> = func.layout.iter_block().collect();
         for block in blocks {
             let insts: Vec<_> = func.layout.iter_inst(block).collect();
@@ -178,6 +210,228 @@ impl ConstDataLower {
         changed |= self.cleanup_const_carriers(module, func, &info);
         assert_no_const_ops(func);
         changed
+    }
+
+    fn rewrite_const_load_rows(
+        &mut self,
+        module: &Module,
+        func: &mut Function,
+        info: &ConstRewriteInfo<'_>,
+    ) -> bool {
+        let mut changed = false;
+        let blocks: Vec<_> = func.layout.iter_block().collect();
+        for block in blocks {
+            let insts: Vec<_> = func.layout.iter_inst(block).collect();
+            let mut segment = Vec::new();
+            for inst in insts {
+                if !func.layout.is_inst_inserted(inst) {
+                    continue;
+                }
+                if let Some(candidate) =
+                    const_load_row_candidate(module, func, inst, segment.len(), info)
+                {
+                    segment.push(candidate);
+                } else if const_load_row_barrier(func, inst) {
+                    changed |= self.rewrite_const_load_row_segment(module, func, &mut segment);
+                }
+            }
+            changed |= self.rewrite_const_load_row_segment(module, func, &mut segment);
+        }
+        changed
+    }
+
+    fn rewrite_const_load_row_segment(
+        &mut self,
+        module: &Module,
+        func: &mut Function,
+        segment: &mut Vec<ConstLoadRowCandidate>,
+    ) -> bool {
+        let mut groups = Vec::<ConstLoadRowGroup>::new();
+        for candidate in segment.drain(..) {
+            if let Some(group) = groups.iter_mut().find(|group| group.key == candidate.key) {
+                group.candidates.push(candidate);
+            } else {
+                groups.push(ConstLoadRowGroup {
+                    key: candidate.key.clone(),
+                    candidates: vec![candidate],
+                });
+            }
+        }
+
+        let mut changed = false;
+        for group in groups {
+            changed |= self.rewrite_const_load_row_group(module, func, group);
+        }
+        changed
+    }
+
+    fn rewrite_const_load_row_group(
+        &mut self,
+        module: &Module,
+        func: &mut Function,
+        mut group: ConstLoadRowGroup,
+    ) -> bool {
+        group
+            .candidates
+            .sort_unstable_by_key(|candidate| candidate.word_offset);
+
+        let mut changed = false;
+        let mut run = Vec::new();
+        let mut last_offset: Option<u32> = None;
+        let mut unique_offsets = 0usize;
+        let key = group.key;
+        for candidate in group.candidates {
+            match last_offset {
+                Some(offset)
+                    if offset
+                        .checked_add(1)
+                        .is_some_and(|next_offset| candidate.word_offset > next_offset) =>
+                {
+                    changed |=
+                        self.rewrite_const_load_row_run(module, func, &key, &run, unique_offsets);
+                    run.clear();
+                    unique_offsets = 1;
+                }
+                Some(offset) if candidate.word_offset == offset => {}
+                Some(_) | None => unique_offsets += 1,
+            }
+            last_offset = Some(candidate.word_offset);
+            run.push(candidate);
+        }
+        changed |= self.rewrite_const_load_row_run(module, func, &key, &run, unique_offsets);
+        changed
+    }
+
+    fn rewrite_const_load_row_run(
+        &mut self,
+        module: &Module,
+        func: &mut Function,
+        key: &ConstLoadRowKey,
+        candidates: &[ConstLoadRowCandidate],
+        unique_offsets: usize,
+    ) -> bool {
+        if unique_offsets < MIN_ROW_COPY_WORDS {
+            return false;
+        }
+
+        let min_word = candidates
+            .iter()
+            .map(|candidate| candidate.word_offset)
+            .min()
+            .expect("row run must be non-empty");
+        let max_word = candidates
+            .iter()
+            .map(|candidate| candidate.word_offset)
+            .max()
+            .expect("row run must be non-empty");
+        let row_words = max_word
+            .checked_sub(min_word)
+            .and_then(|span| span.checked_add(1))
+            .expect("row word span overflow");
+        let before = candidates
+            .iter()
+            .min_by_key(|candidate| candidate.order)
+            .expect("row run must be non-empty")
+            .inst;
+        let row_ptr = self.emit_const_load_row_copy(module, func, before, key, min_word, row_words);
+        for candidate in candidates {
+            let ptr = gep_word_offset(
+                func,
+                candidate.inst,
+                row_ptr,
+                candidate.word_offset - min_word,
+            );
+            let replacement = insert_before_one(
+                func,
+                candidate.inst,
+                data::Mload::new_unchecked(func.inst_set(), ptr, candidate.result_ty),
+                candidate.result_ty,
+            );
+            replace_with_alias(func, candidate.inst, replacement);
+        }
+        true
+    }
+
+    fn emit_const_load_row_copy(
+        &mut self,
+        module: &Module,
+        func: &mut Function,
+        before: InstId,
+        key: &ConstLoadRowKey,
+        min_word: u32,
+        row_words: u32,
+    ) -> ValueId {
+        let base_addr = self.materialize_const_load_row_base_addr(module, func, before, &key.base);
+        let row_addr = const_addr_with_offset(
+            func,
+            before,
+            base_addr,
+            min_word.checked_mul(32).expect("row byte offset overflow"),
+            key.dynamic_terms.clone(),
+            false,
+        );
+        let row_ty = func.ctx().with_ty_store_mut(|store| {
+            store.make_array(
+                Type::I256,
+                usize::try_from(row_words).expect("row word count overflow"),
+            )
+        });
+        let row_alloc = insert_before_one(
+            func,
+            before,
+            data::Alloca::new_unchecked(func.inst_set(), row_ty),
+            row_ty.to_ptr(func.ctx()),
+        );
+        let row_ptr_ty = Type::I256.to_ptr(func.ctx());
+        let row_ptr = insert_before_one(
+            func,
+            before,
+            cast::Bitcast::new_unchecked(func.inst_set(), row_alloc, row_ptr_ty),
+            row_ptr_ty,
+        );
+        let copy_len = imm_i256(
+            func,
+            row_words.checked_mul(32).expect("row copy length overflow"),
+        );
+        insert_before_no_result(
+            func,
+            before,
+            evm::EvmCodeCopy::new_unchecked(func.inst_set(), row_ptr, row_addr, copy_len),
+        );
+        row_ptr
+    }
+
+    fn materialize_const_load_row_base_addr(
+        &mut self,
+        module: &Module,
+        func: &mut Function,
+        before: InstId,
+        base: &ConstLoadRowBase,
+    ) -> ValueId {
+        let blob = match base {
+            ConstLoadRowBase::WordBlob(source) => self.word_blob_global(module, *source),
+            ConstLoadRowBase::DynamicValues { source, values } => {
+                let mut bytes = Vec::with_capacity(
+                    values
+                        .len()
+                        .checked_mul(32)
+                        .expect("dynamic const table size overflow"),
+                );
+                for &value in values {
+                    bytes.extend_from_slice(
+                        &evm_scalar_word_bytes(value)
+                            .expect("row candidate must have encodable scalar values"),
+                    );
+                }
+                self.bytes_blob_global(module, *source, bytes)
+            }
+        };
+        insert_before_one(
+            func,
+            before,
+            data::SymAddr::new_unchecked(func.inst_set(), data::SymbolRef::Global(blob)),
+            func.ctx().type_layout.pointer_repl(),
+        )
     }
 
     fn rewrite_inst(
@@ -913,6 +1167,215 @@ fn inserted_insts(func: &Function) -> Vec<InstId> {
         .iter_block()
         .flat_map(|block| func.layout.iter_inst(block))
         .collect()
+}
+
+fn const_load_row_candidate(
+    module: &Module,
+    func: &Function,
+    inst: InstId,
+    order: usize,
+    info: &ConstRewriteInfo<'_>,
+) -> Option<ConstLoadRowCandidate> {
+    let load = downcast::<&data::ConstLoad>(func.inst_set(), func.dfg.inst(inst)).cloned()?;
+    let result_ty = func
+        .dfg
+        .inst_result(inst)
+        .map(|result| func.dfg.value_ty(result))?;
+    if !result_ty.is_integral() {
+        return None;
+    }
+
+    let path = info.const_paths.path(*load.object())?;
+    if eval_const_path_domain_immediate(&module.ctx, path, |value| func.dfg.value_imm(value))
+        .is_some()
+    {
+        return None;
+    }
+
+    if let Some((index, values)) =
+        eval_const_path_dynamic_domain_immediates(&module.ctx, path, |value| {
+            func.dfg.value_imm(value)
+        })
+    {
+        if values.iter().any(|imm| imm.ty() != result_ty)
+            || can_emit_dynamic_values_lookup(result_ty, &values, true)
+            || values
+                .iter()
+                .any(|&value| evm_scalar_word_bytes(value).is_none())
+        {
+            return None;
+        }
+        let (word_offset, dynamic_terms) =
+            normalize_const_load_row_offset(func, 0, vec![(index, 32)])?;
+        return Some(ConstLoadRowCandidate {
+            inst,
+            order,
+            result_ty,
+            key: ConstLoadRowKey {
+                base: ConstLoadRowBase::DynamicValues {
+                    source: path.global,
+                    values,
+                },
+                dynamic_terms,
+            },
+            word_offset,
+        });
+    }
+
+    let root_ty = module.ctx.with_gv_store(|store| store.ty(path.global));
+    let (ty, const_offset_bytes, dynamic_terms) =
+        const_steps_offset_bytes(func.ctx(), root_ty, &path.steps)?;
+    if ty != result_ty {
+        return None;
+    }
+    let (word_offset, dynamic_terms) =
+        normalize_const_load_row_offset(func, const_offset_bytes, dynamic_terms)?;
+    Some(ConstLoadRowCandidate {
+        inst,
+        order,
+        result_ty,
+        key: ConstLoadRowKey {
+            base: ConstLoadRowBase::WordBlob(path.global),
+            dynamic_terms,
+        },
+        word_offset,
+    })
+}
+
+fn const_load_row_barrier(func: &Function, inst: InstId) -> bool {
+    let effects = classify_inst_effects(&func.dfg, inst);
+    !effects.accesses.is_empty()
+        || effects
+            .other
+            .intersects(OtherEffects::OBSERVE | OtherEffects::MUTATE | OtherEffects::CONTROL)
+}
+
+fn normalize_const_load_row_offset(
+    func: &Function,
+    const_offset_bytes: u32,
+    dynamic_terms: ConstOffsetTerms,
+) -> Option<(u32, ConstOffsetTerms)> {
+    let mut const_offset = i64::from(const_offset_bytes);
+    let mut normalized_terms = Vec::with_capacity(dynamic_terms.len());
+    for (value, stride_bytes) in dynamic_terms {
+        if stride_bytes % 32 != 0 {
+            return None;
+        }
+        let (base, value_offset) = normalize_index_value_offset(func, value)?;
+        const_offset =
+            const_offset.checked_add(value_offset.checked_mul(i64::from(stride_bytes))?)?;
+        normalized_terms.push((base, stride_bytes));
+    }
+    if const_offset < 0 || const_offset % 32 != 0 {
+        return None;
+    }
+
+    normalized_terms.sort_unstable_by_key(|(value, stride)| (value.0, *stride));
+    let mut combined: ConstOffsetTerms = Vec::with_capacity(normalized_terms.len());
+    for (value, stride) in normalized_terms {
+        if let Some((last_value, last_stride)) = combined.last_mut()
+            && *last_value == value
+        {
+            *last_stride = last_stride.checked_add(stride)?;
+            continue;
+        }
+        combined.push((value, stride));
+    }
+
+    Some((u32::try_from(const_offset / 32).ok()?, combined))
+}
+
+fn normalize_index_value_offset(func: &Function, value: ValueId) -> Option<(ValueId, i64)> {
+    if func.dfg.value_ty(value) != Type::I256 {
+        return Some((value, 0));
+    }
+    let Some((inst, result_idx)) = func.dfg.value_inst_result(value) else {
+        return Some((value, 0));
+    };
+    if result_idx != 0 {
+        return Some((value, 0));
+    }
+
+    let inst_data = func.dfg.inst(inst);
+    if let Some(add) = downcast::<&arith::Add>(func.inst_set(), inst_data) {
+        if let Some(offset) = additive_index_offset(func, *add.rhs())
+            && func.dfg.value_ty(*add.lhs()) == Type::I256
+        {
+            return Some((*add.lhs(), offset));
+        }
+        if let Some(offset) = additive_index_offset(func, *add.lhs())
+            && func.dfg.value_ty(*add.rhs()) == Type::I256
+        {
+            return Some((*add.rhs(), offset));
+        }
+    }
+
+    if let Some(sub) = downcast::<&arith::Sub>(func.inst_set(), inst_data)
+        && let Some(offset) = additive_index_offset(func, *sub.rhs()).and_then(i64::checked_neg)
+        && func.dfg.value_ty(*sub.lhs()) == Type::I256
+    {
+        return Some((*sub.lhs(), offset));
+    }
+
+    Some((value, 0))
+}
+
+fn additive_index_offset(func: &Function, value: ValueId) -> Option<i64> {
+    let imm = func.dfg.value_imm(value)?;
+    let value = imm.as_i256();
+    if value < I256::from(i64::MIN) || value > I256::from(i64::MAX) {
+        return None;
+    }
+    Some(value.trunc_to_i64())
+}
+
+fn can_emit_dynamic_values_lookup(
+    result_ty: Type,
+    values: &[Immediate],
+    allow_periodic: bool,
+) -> bool {
+    can_emit_packed_bool_lookup(values)
+        || can_emit_packed_byte_lookup(values)
+        || affine_sequence(values).is_some()
+        || can_emit_power_of_two_lookup(result_ty, values)
+        || can_emit_packed_subword_lookup(result_ty, values)
+        || allow_periodic
+            && periodic_len(values).is_some_and(|period| {
+                can_emit_dynamic_values_lookup(result_ty, &values[..period], false)
+            })
+        || can_emit_sparse_lookup(result_ty, values)
+}
+
+fn can_emit_packed_bool_lookup(values: &[Immediate]) -> bool {
+    values.len() <= 256 && values.iter().all(|imm| matches!(imm, Immediate::I1(_)))
+}
+
+fn can_emit_packed_byte_lookup(values: &[Immediate]) -> bool {
+    values.len() <= 32 && values.iter().all(|imm| imm.ty() == Type::I8)
+}
+
+fn can_emit_power_of_two_lookup(result_ty: Type, values: &[Immediate]) -> bool {
+    result_ty == Type::I256 && power_of_two_exponents(values).is_some()
+}
+
+fn can_emit_packed_subword_lookup(result_ty: Type, values: &[Immediate]) -> bool {
+    let Some(width) = packed_subword_width(result_ty) else {
+        return false;
+    };
+    !values.is_empty()
+        && values.len() <= 256 / width
+        && values
+            .iter()
+            .all(|&imm| unsigned_immediate_bits(imm, width).is_some())
+}
+
+fn can_emit_sparse_lookup(result_ty: Type, values: &[Immediate]) -> bool {
+    if result_ty == Type::I1 {
+        return false;
+    }
+    sparse_exceptions(values).is_some_and(|(_, default_count, exceptions)| {
+        exceptions.len() <= 4 && (default_count != 1 || values.len() <= 4)
+    })
 }
 
 fn is_constref_carrier(
@@ -2372,6 +2835,84 @@ func private %entry(v0.i256) -> i64 {
         let dumped = writer.dump_string();
         assert!(dumped.contains("evm_code_copy"));
         assert!(dumped.contains("mload"));
+        assert!(!dumped.contains("const."));
+    }
+
+    #[test]
+    fn adjacent_dynamic_const_loads_share_row_codecopy() {
+        let parsed = parse(
+            r#"
+target = "evm-ethereum-osaka"
+
+global private const [i256; 6] $arr = [11, 42, 7, 99, 5, 31];
+
+func private %entry(v0.i256) -> i256 {
+    block0:
+        v1.constref<[i256; 6]> = const.ref $arr;
+        v2.constref<i256> = const.index v1 v0;
+        v3.i256 = const.load v2;
+        v4.i256 = add v0 1.i256;
+        v5.constref<i256> = const.index v1 v4;
+        v6.i256 = const.load v5;
+        v7.i256 = add v0 2.i256;
+        v8.constref<i256> = const.index v1 v7;
+        v9.i256 = const.load v8;
+        v10.i256 = add v3 v6;
+        v11.i256 = add v10 v9;
+        return v11;
+}
+"#,
+        );
+
+        ConstDataLower::default().run(&parsed.module);
+
+        let entry = find_func_ref(&parsed, "entry");
+        let dumped = parsed
+            .module
+            .func_store
+            .view(entry, |func| FuncWriter::new(entry, func).dump_string());
+        assert_eq!(dumped.matches("evm_code_copy").count(), 1, "{dumped}");
+        assert_eq!(dumped.matches("mload").count(), 3, "{dumped}");
+        assert!(dumped.contains("alloca [i256; 3]"), "{dumped}");
+        assert!(!dumped.contains("const."));
+    }
+
+    #[test]
+    fn adjacent_dynamic_const_load_row_stops_at_memory_write() {
+        let parsed = parse(
+            r#"
+target = "evm-ethereum-osaka"
+
+global private const [i256; 6] $arr = [11, 42, 7, 99, 5, 31];
+
+func private %entry(v0.i256) -> i256 {
+    block0:
+        v1.constref<[i256; 6]> = const.ref $arr;
+        v2.constref<i256> = const.index v1 v0;
+        v3.i256 = const.load v2;
+        v4.*i256 = alloca i256;
+        mstore v4 v3 i256;
+        v5.i256 = add v0 1.i256;
+        v6.constref<i256> = const.index v1 v5;
+        v7.i256 = const.load v6;
+        v8.i256 = add v0 2.i256;
+        v9.constref<i256> = const.index v1 v8;
+        v10.i256 = const.load v9;
+        v11.i256 = add v7 v10;
+        return v11;
+}
+"#,
+        );
+
+        ConstDataLower::default().run(&parsed.module);
+
+        let entry = find_func_ref(&parsed, "entry");
+        let dumped = parsed
+            .module
+            .func_store
+            .view(entry, |func| FuncWriter::new(entry, func).dump_string());
+        assert_eq!(dumped.matches("evm_code_copy").count(), 3, "{dumped}");
+        assert!(!dumped.contains("alloca [i256; 3]"), "{dumped}");
         assert!(!dumped.contains("const."));
     }
 
