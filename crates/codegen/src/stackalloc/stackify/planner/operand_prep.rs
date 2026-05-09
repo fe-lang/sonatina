@@ -926,8 +926,10 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
                 }
                 if cache_preserve.contains(v) && prepared == 0 {
                     self.stack.push_imm(v, imm, self.actions);
+                    self.stack.dup(0, self.actions);
+                } else {
+                    self.stack.push_imm(v, imm, self.actions);
                 }
-                self.stack.push_imm(v, imm, self.actions);
                 prepared += 1;
                 continue;
             }

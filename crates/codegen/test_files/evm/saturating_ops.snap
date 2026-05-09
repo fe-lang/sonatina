@@ -6,11 +6,11 @@ input_file: test_files/evm/saturating_ops.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=s
 
 object: Contract
-  section runtime: 732 bytes
-  total: 732 bytes
+  section runtime: 700 bytes
+  total: 700 bytes
 
 functions:
-  entry: ir_blocks=43 ir_insts=93 vcode_ops=399 fixups=39 imm_bytes=73
+  entry: ir_blocks=43 ir_insts=93 vcode_ops=399 fixups=39 imm_bytes=71
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
@@ -209,7 +209,7 @@ entry:
   block15:
     JUMPDEST
     PUSH16 0xffffffffffffffffffffffffffffffff (340282366920938463463374607431768211455)  // v87.i256 = and v1 340282366920938463463374607431768211455.i256;
-    PUSH16 0xffffffffffffffffffffffffffffffff (340282366920938463463374607431768211455)
+    DUP1
     SWAP1
     SWAP2
     SWAP3
@@ -338,7 +338,7 @@ entry:
   block12:
     JUMPDEST
     PUSH16 0xffffffffffffffffffffffffffffffff (340282366920938463463374607431768211455)  // v77.i256 = and v1 340282366920938463463374607431768211455.i256;
-    PUSH16 0xffffffffffffffffffffffffffffffff (340282366920938463463374607431768211455)
+    DUP1
     SWAP1
     SWAP2
     SWAP3
