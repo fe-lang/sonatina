@@ -206,7 +206,7 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
 
         let mut mask = 0u64;
         for (idx, &arg) in args.iter().take(OPERAND_PREP_QUERY_MASK_BITS).enumerate() {
-            if self.ctx.func.dfg.value_is_imm(arg) || consume_last_use.contains(arg) {
+            if !self.ctx.tracks_value(arg) || consume_last_use.contains(arg) {
                 continue;
             }
 
@@ -380,12 +380,13 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
         let arg_imm = self.ctx.func.dfg.value_imm(arg);
         let arg_is_imm = arg_imm.is_some();
         let last_use = consume_last_use.contains(arg);
+        let preserve_needed = self.ctx.tracks_value(arg) && !last_use;
         let copy_count = self.unary_operand_prep_copy_count(arg, arg_imm);
         let top_matches = self
             .stack
             .top()
             .is_some_and(|item| self.operand_prep_item_matches_arg(item, arg, arg_imm));
-        let preserve_satisfied = arg_is_imm || last_use || copy_count >= 2;
+        let preserve_satisfied = !preserve_needed || copy_count >= 2;
         let surplus_last_use_penalty = cost.cost_pop().saturating_add(cost.cost_swap(1));
 
         let copy_cost = |base: Cost| {
@@ -408,12 +409,17 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
         }
 
         if let Some(imm) = arg_imm {
-            let emitted_cost = cost.cost_push_imm(imm.as_i256());
+            let mut steps = smallvec::smallvec![Step::PushImm(0)];
+            let mut emitted_cost = cost.cost_push_imm(imm.as_i256());
+            if preserve_needed && copy_count == 0 {
+                steps.push(Step::Dup(0));
+                emitted_cost = emitted_cost.saturating_add(cost.cost_dup(0));
+            }
             candidates.push(UnaryOperandPrepCandidate {
                 modeled_cost: copy_cost(emitted_cost),
                 emitted_cost,
                 priority: 4,
-                steps: smallvec::smallvec![Step::PushImm(0)],
+                steps,
             });
         }
 
@@ -429,7 +435,7 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
 
         if let Some(pos) = self.unary_operand_prep_find_arg(arg, arg_imm, 0, search_cfg.swap_max)
             && pos != 0
-            && (arg_is_imm || last_use || copy_count >= 2)
+            && preserve_satisfied
         {
             let emitted_cost = cost.cost_swap(pos as u8);
             candidates.push(UnaryOperandPrepCandidate {
@@ -687,20 +693,19 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
         let mut checked = BitSet::default();
         let stack_len = self.stack.len_above_func_ret();
         for &arg in args {
-            if self.ctx.func.dfg.value_is_imm(arg)
-                || consume_last_use.contains(arg)
-                || !checked.insert(arg)
+            if !self.ctx.tracks_value(arg) || consume_last_use.contains(arg) || !checked.insert(arg)
             {
                 continue;
             }
 
+            let arg_imm = self.ctx.func.dfg.value_imm(arg);
             let preserved_on_stack = self
                 .stack
                 .iter()
                 .take(stack_len)
                 .skip(args.len())
-                .any(|item| item == &StackItem::Value(arg));
-            if !preserved_on_stack && !self.mem.spill_set().contains(arg) {
+                .any(|item| self.operand_prep_item_matches_arg(item, arg, arg_imm));
+            if !preserved_on_stack && (arg_imm.is_some() || !self.mem.spill_set().contains(arg)) {
                 return false;
             }
         }
@@ -854,6 +859,13 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
                     .dfg
                     .value_imm(v)
                     .expect("imm value missing payload");
+                if self.ctx.tracked_immediates.contains(v)
+                    && let Some(pos) = self.stack.find_reachable_value(v, self.ctx.reach.dup_max)
+                {
+                    self.stack.dup(pos, self.actions);
+                    prepared += 1;
+                    continue;
+                }
                 self.stack.push_imm(v, imm, self.actions);
                 prepared += 1;
                 continue;

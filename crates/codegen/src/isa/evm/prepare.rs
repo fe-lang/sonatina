@@ -5,12 +5,15 @@ use tracing::{debug_span, info_span, trace_span};
 
 use crate::{
     analysis::func_behavior,
+    bitset::BitSet,
     critical_edge::CriticalEdgeSplitter,
     domtree::DomTree,
     liveness::{InstLiveness, Liveness},
     machinst::lower::SectionWorkModule,
     module_analysis::{CallGraph, SccBuilder},
-    stackalloc::{StackifyAlloc, StackifyBuilder},
+    stackalloc::{
+        Action, StackifyAlloc, StackifyBuilder, imm_push_data_len, operand_order_for_evm,
+    },
     stackify_edge::StackifyEdgeSplitter,
 };
 use sonatina_ir::{
@@ -819,6 +822,95 @@ pub(crate) fn prepare_free_ptr_restore(
     }
 }
 
+fn tracked_stack_immediates(
+    function: &Function,
+    value_aliases: &SecondaryMap<ValueId, Option<ValueId>>,
+) -> BitSet<ValueId> {
+    const MAX_TRACKED: usize = 1;
+    const MIN_PUSH_BYTES: usize = 16;
+    const MIN_USES: u32 = 4;
+
+    let mut uses: FxHashMap<ValueId, u32> = FxHashMap::default();
+    for block in function.layout.iter_block() {
+        for inst in function.layout.iter_inst(block) {
+            if function.dfg.is_phi(inst) {
+                continue;
+            }
+            for value in operand_order_for_evm(function, inst, value_aliases) {
+                if function.dfg.value_is_imm(value) {
+                    *uses.entry(value).or_default() += 1;
+                }
+            }
+        }
+    }
+
+    let mut ranked: Vec<_> = uses
+        .into_iter()
+        .filter_map(|(value, uses)| {
+            let bytes = imm_push_data_len(function.dfg.value_imm(value)?);
+            (uses >= MIN_USES && bytes >= MIN_PUSH_BYTES)
+                .then_some(((uses - 1) as usize * bytes, value))
+        })
+        .collect();
+    ranked.sort_unstable_by(|(a_score, a), (b_score, b)| {
+        b_score
+            .cmp(a_score)
+            .then_with(|| a.as_u32().cmp(&b.as_u32()))
+    });
+
+    ranked
+        .into_iter()
+        .take(MAX_TRACKED)
+        .map(|(_, value)| value)
+        .collect()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn compute_stackify_alloc(
+    function: &Function,
+    cfg: &ControlFlowGraph,
+    dom: &DomTree,
+    stack_liveness: &Liveness,
+    backend: &EvmBackend,
+    canonical_scratch_live_values: &BitSet<ValueId>,
+    value_aliases: &SecondaryMap<ValueId, Option<ValueId>>,
+    tracked_immediates: BitSet<ValueId>,
+) -> StackifyAlloc {
+    StackifyBuilder::new(
+        function,
+        cfg,
+        dom,
+        stack_liveness,
+        backend.stackify_reach_depth,
+    )
+    .with_search_profile(backend.stackify_search_profile)
+    .with_scratch_live_values(canonical_scratch_live_values.clone())
+    .with_scratch_spills(scratch_plan::SCRATCH_SPILL_SLOTS)
+    .with_value_aliases(value_aliases)
+    .with_tracked_immediates(tracked_immediates)
+    .compute()
+}
+
+fn stackify_alloc_size(alloc: &StackifyAlloc) -> u64 {
+    let mut size = 0u64;
+    alloc.for_each_action(|action| {
+        size += match *action {
+            Action::Push(imm) => 1 + imm_push_data_len(imm) as u64,
+            Action::StackDup(_) | Action::StackSwap(_) | Action::Pop => 1,
+            Action::PushContinuationOffset
+            | Action::MaterializeLocalAddr { .. }
+            | Action::PushFrameAddr { .. }
+            | Action::MemLoadAbs(_)
+            | Action::MemStoreAbs(_) => 3,
+            Action::MemLoadFrameSlot(_)
+            | Action::MemStoreFrameSlot(_)
+            | Action::MemLoadObj(_)
+            | Action::MemStoreObj(_) => 7,
+        };
+    });
+    size
+}
+
 fn prepare_stackify_analysis(
     function: &mut Function,
     module: &ModuleCtx,
@@ -856,9 +948,10 @@ fn prepare_stackify_analysis(
         inst_liveness
     };
 
-    let (value_aliases, stack_liveness, canonical_scratch_live_values) = {
+    let (value_aliases, tracked_immediates, stack_liveness, canonical_scratch_live_values) = {
         let _span = trace_span!("sonatina.codegen.evm.stackify.canonicalize_aliases").entered();
         let value_aliases = backend.compute_stackify_value_aliases(function, module);
+        let tracked_immediates = tracked_stack_immediates(function, &value_aliases);
 
         let mut stack_liveness = Liveness::new();
         stack_liveness.compute_with_value_normalizer(function, &cfg, |v| {
@@ -877,23 +970,53 @@ fn prepare_stackify_analysis(
         for v in scratch_live_values.iter() {
             canonical_scratch_live_values.insert(canonicalize_alias_value(&value_aliases, v));
         }
-        (value_aliases, stack_liveness, canonical_scratch_live_values)
+        (
+            value_aliases,
+            tracked_immediates,
+            stack_liveness,
+            canonical_scratch_live_values,
+        )
     };
 
     let alloc = {
         let _span = trace_span!("sonatina.codegen.evm.stackify.compute_alloc").entered();
-        StackifyBuilder::new(
+        let baseline_alloc = compute_stackify_alloc(
             function,
             &cfg,
             &dom,
             &stack_liveness,
-            backend.stackify_reach_depth,
-        )
-        .with_search_profile(backend.stackify_search_profile)
-        .with_scratch_live_values(canonical_scratch_live_values)
-        .with_scratch_spills(scratch_plan::SCRATCH_SPILL_SLOTS)
-        .with_value_aliases(&value_aliases)
-        .compute()
+            backend,
+            &canonical_scratch_live_values,
+            &value_aliases,
+            BitSet::default(),
+        );
+        if tracked_immediates.is_empty() {
+            baseline_alloc
+        } else {
+            let baseline_size = stackify_alloc_size(&baseline_alloc);
+            let mut candidate_liveness = Liveness::new();
+            candidate_liveness.compute_with_tracked_immediates(
+                function,
+                &cfg,
+                |v| canonicalize_alias_value(&value_aliases, v),
+                &tracked_immediates,
+            );
+            let candidate_alloc = compute_stackify_alloc(
+                function,
+                &cfg,
+                &dom,
+                &candidate_liveness,
+                backend,
+                &canonical_scratch_live_values,
+                &value_aliases,
+                tracked_immediates,
+            );
+            if stackify_alloc_size(&candidate_alloc) < baseline_size {
+                candidate_alloc
+            } else {
+                baseline_alloc
+            }
+        }
     };
 
     memory_plan::FuncAnalysis {

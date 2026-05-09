@@ -56,6 +56,16 @@ impl Liveness {
         cfg: &ControlFlowGraph,
         normalize: impl Fn(ValueId) -> ValueId + Copy,
     ) {
+        self.compute_with_tracked_immediates(func, cfg, normalize, &BitSet::default());
+    }
+
+    pub fn compute_with_tracked_immediates(
+        &mut self,
+        func: &Function,
+        cfg: &ControlFlowGraph,
+        normalize: impl Fn(ValueId) -> ValueId + Copy,
+        tracked_immediates: &BitSet<ValueId>,
+    ) {
         self.clear();
 
         for &arg in &func.arg_values {
@@ -64,6 +74,10 @@ impl Liveness {
                 continue;
             }
             self.defs[arg_norm] = Some(ValDef::FnArg);
+        }
+        for val in tracked_immediates.iter() {
+            debug_assert!(func.dfg.value_is_imm(val));
+            self.defs[val] = Some(ValDef::FnArg);
         }
         for block in cfg.post_order() {
             for_each_def(func, block, |val, is_phi_def| {
@@ -83,7 +97,7 @@ impl Liveness {
         for block in cfg.post_order() {
             for_each_use(func, block, |val, phi_source_block| {
                 let val = normalize(val);
-                if func.dfg.value_is_imm(val) {
+                if func.dfg.value_is_imm(val) && !tracked_immediates.contains(val) {
                     self.mark_use(val, block);
                 } else if let Some(pred_block) = phi_source_block {
                     // A phi input is considered to be a use by the associated
@@ -257,7 +271,8 @@ fn for_each_def(func: &Function, block: BlockId, mut f: impl FnMut(ValueId, bool
 #[cfg(test)]
 mod tests {
     use super::{InstLiveness, Liveness};
-    use sonatina_ir::{BlockId, cfg::ControlFlowGraph};
+    use crate::bitset::BitSet;
+    use sonatina_ir::{BlockId, I256, ValueId, cfg::ControlFlowGraph};
     use sonatina_parser::parse_module;
 
     const SRC: &str = r#"
@@ -407,5 +422,55 @@ block0:
             .view(caller, |function| inst_live.call_live_values(function));
         assert!(call_live.contains(v1));
         assert!(!call_live.contains(v2));
+    }
+
+    #[test]
+    fn tracked_immediates_participate_in_block_liveness() {
+        const SRC: &str = r#"
+target = "evm-ethereum-osaka"
+
+func public %f(v0.i256, v1.i1) -> i256 {
+block0:
+    br v1 block1 block2;
+
+block1:
+    jump block2;
+
+block2:
+    v2.i256 = add v0 340282366920938463463374607431768211455.i256;
+    return v2;
+}
+"#;
+
+        let parsed = parse_module(SRC).unwrap();
+        let funcref = *parsed.module.funcs().first().unwrap();
+        parsed.module.func_store.view(funcref, |function| {
+            let mut cfg = ControlFlowGraph::new();
+            cfg.compute(function);
+
+            let imm: ValueId = function
+                .dfg
+                .value_ids()
+                .find(|&value| {
+                    function
+                        .dfg
+                        .value_imm(value)
+                        .is_some_and(|imm| imm.as_i256() == I256::from(u128::MAX))
+                })
+                .expect("missing large immediate");
+
+            let mut untracked = Liveness::default();
+            untracked.compute(function, &cfg);
+            assert!(!untracked.block_live_ins(BlockId(2)).contains(imm));
+
+            let mut tracked_immediates = BitSet::default();
+            tracked_immediates.insert(imm);
+            let mut tracked = Liveness::default();
+            tracked.compute_with_tracked_immediates(function, &cfg, |v| v, &tracked_immediates);
+
+            assert!(tracked.block_live_ins(BlockId(2)).contains(imm));
+            assert!(tracked.block_live_outs(BlockId(0)).contains(imm));
+            assert!(tracked.block_live_outs(BlockId(1)).contains(imm));
+        });
     }
 }

@@ -38,6 +38,7 @@ mod trace;
 
 pub use alloc::StackifyAlloc;
 pub use builder::{StackifyBuilder, StackifySearchProfile};
+pub(crate) use iteration::{imm_push_data_len, operand_order_for_evm};
 
 use builder::StackifyContext;
 

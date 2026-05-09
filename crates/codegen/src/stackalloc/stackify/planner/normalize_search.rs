@@ -1744,7 +1744,7 @@ fn build_operand_prep_problem(
             last_use_mask |= 1u64 << kid;
         }
 
-        if !ctx.func.dfg.value_is_imm(v) && !consume_last_use.contains(v) {
+        if ctx.tracks_value(v) && !consume_last_use.contains(v) {
             preserve_mask |= 1u64 << kid;
         }
 

@@ -51,6 +51,18 @@ struct PendingEdge<D> {
     deferred_exit: D,
 }
 
+#[derive(Clone, Copy)]
+pub(super) struct ReachabilityValues<'a> {
+    pub(super) func: &'a Function,
+    pub(super) tracked_immediates: &'a BitSet<ValueId>,
+}
+
+impl ReachabilityValues<'_> {
+    fn tracks(self, value: ValueId) -> bool {
+        !self.func.dfg.value_is_imm(value) || self.tracked_immediates.contains(value)
+    }
+}
+
 impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
@@ -560,18 +572,17 @@ pub(super) fn skip_pre_exit_cleanup(func: &Function, inst: InstId) -> bool {
 }
 
 pub(super) fn count_block_uses(
-    func: &Function,
+    ctx: &StackifyContext<'_>,
     block: BlockId,
-    value_aliases: &SecondaryMap<ValueId, Option<ValueId>>,
 ) -> (BTreeMap<ValueId, u32>, BitSet<ValueId>) {
     let mut counts: BTreeMap<ValueId, u32> = BTreeMap::new();
-    for inst in func.layout.iter_inst(block) {
-        if func.dfg.is_phi(inst) {
+    for inst in ctx.func.layout.iter_inst(block) {
+        if ctx.func.dfg.is_phi(inst) {
             continue;
         }
-        for v in func.dfg.inst(inst).collect_values() {
-            let v = value_aliases[v].unwrap_or(v);
-            if func.dfg.value_is_imm(v) {
+        for v in ctx.func.dfg.inst(inst).collect_values() {
+            let v = ctx.canonicalize_value(v);
+            if !ctx.tracks_value(v) {
                 continue;
             }
             *counts.entry(v).or_insert(0) += 1;
@@ -645,7 +656,7 @@ pub(super) fn clean_dead_stack_prefix(
     }
 }
 
-pub(super) fn operand_order_for_evm(
+pub(crate) fn operand_order_for_evm(
     func: &Function,
     inst: InstId,
     value_aliases: &SecondaryMap<ValueId, Option<ValueId>>,
@@ -737,7 +748,7 @@ pub(super) fn inst_is_noop_alias_cast(
 }
 
 pub(super) fn consume_operand_uses(
-    func: &Function,
+    ctx: &StackifyContext<'_>,
     args: &[ValueId],
     remaining_uses: &mut BTreeMap<ValueId, u32>,
     live_future: &mut BitSet<ValueId>,
@@ -746,14 +757,14 @@ pub(super) fn consume_operand_uses(
     free_scratch_slots: &mut FreeSlots,
 ) {
     for &v in args {
-        if !func.dfg.value_is_imm(v)
+        if ctx.tracks_value(v)
             && let Some(n) = remaining_uses.get_mut(&v)
         {
             let before = *n;
             *n = n.saturating_sub(1);
             if before != 0 && *n == 0 {
                 live_future.remove(v);
-                if !live_out.contains(v) {
+                if !ctx.func.dfg.value_is_imm(v) && !live_out.contains(v) {
                     scratch_slots.release_if_assigned(v, free_scratch_slots);
                 }
             }
@@ -762,14 +773,14 @@ pub(super) fn consume_operand_uses(
 }
 
 pub(super) fn last_use_values_in_inst(
-    func: &Function,
+    ctx: &StackifyContext<'_>,
     args: &[ValueId],
     remaining_uses: &BTreeMap<ValueId, u32>,
     live_out: &BitSet<ValueId>,
 ) -> BitSet<ValueId> {
     let mut inst_counts: BTreeMap<ValueId, u32> = BTreeMap::new();
     for &v in args.iter() {
-        if func.dfg.value_is_imm(v) {
+        if !ctx.tracks_value(v) {
             continue;
         }
         *inst_counts.entry(v).or_insert(0) += 1;
@@ -786,7 +797,7 @@ pub(super) fn last_use_values_in_inst(
 }
 
 pub(super) fn improve_reachability_before_operands(
-    func: &Function,
+    values: ReachabilityValues<'_>,
     args: &[ValueId],
     reach: StackifyReachability,
     stack: &mut SymStack,
@@ -798,7 +809,7 @@ pub(super) fn improve_reachability_before_operands(
 
     let mut protected_args: BitSet<ValueId> = BitSet::default();
     for &arg in args.iter() {
-        if !func.dfg.value_is_imm(arg) {
+        if values.tracks(arg) {
             protected_args.insert(arg);
         }
     }
@@ -809,7 +820,7 @@ pub(super) fn improve_reachability_before_operands(
     // operand at depth 18-20).
     let mut needs_aggressive = false;
     for &arg in args.iter() {
-        if !func.dfg.value_is_imm(arg)
+        if values.tracks(arg)
             && stack.find_reachable_value(arg, reach.dup_max).is_none()
             && stack
                 .find_reachable_value(arg, AGGRESSIVE_REACHABILITY_DEPTH)
@@ -831,11 +842,11 @@ pub(super) fn improve_reachability_before_operands(
         let mut progressed = false;
 
         for &arg in args.iter() {
-            if !func.dfg.value_is_imm(arg)
+            if values.tracks(arg)
                 && stack.find_reachable_value(arg, reach.dup_max).is_none()
                 && let Some(pos) = stack.find_reachable_value(arg, AGGRESSIVE_REACHABILITY_DEPTH)
                 && let Some(victim) = choose_reachability_victim(
-                    func,
+                    values,
                     stack,
                     pos,
                     &protected_args,
@@ -858,7 +869,7 @@ pub(super) fn improve_reachability_before_operands(
 }
 
 fn choose_reachability_victim(
-    func: &Function,
+    values: ReachabilityValues<'_>,
     stack: &SymStack,
     above: usize,
     protected_args: &BitSet<ValueId>,
@@ -886,8 +897,9 @@ fn choose_reachability_victim(
     for (i, item) in stack.iter().take(above).enumerate() {
         if let StackItem::Value(v) = item
             && !protected_args.contains(*v)
-            && func.dfg.value_is_imm(*v)
-            && is_evictable_imm(func, *v)
+            && !values.tracked_immediates.contains(*v)
+            && values.func.dfg.value_is_imm(*v)
+            && is_evictable_imm(values.func, *v)
         {
             return Some(i);
         }
@@ -923,7 +935,7 @@ fn is_evictable_imm(func: &Function, v: ValueId) -> bool {
     imm_push_data_len(imm) <= MAX_PUSH_DATA_BYTES
 }
 
-fn imm_push_data_len(imm: Immediate) -> usize {
+pub(crate) fn imm_push_data_len(imm: Immediate) -> usize {
     if imm.is_zero() {
         return 0;
     }

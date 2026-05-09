@@ -125,6 +125,7 @@ pub struct StackifyBuilder<'a> {
     scratch_live_values_override: Option<BitSet<ValueId>>,
     scratch_spill_slots: u32,
     value_aliases_override: Option<&'a SecondaryMap<ValueId, Option<ValueId>>>,
+    tracked_immediates: BitSet<ValueId>,
 }
 
 pub(super) struct StackifyContext<'a> {
@@ -146,11 +147,16 @@ pub(super) struct StackifyContext<'a> {
     pub(super) search_profile: StackifySearchProfile,
     pub(super) value_aliases: SecondaryMap<ValueId, Option<ValueId>>,
     pub(super) exact_local_addr: SecondaryMap<ValueId, Option<ExactLocalAddr>>,
+    pub(super) tracked_immediates: BitSet<ValueId>,
 }
 
 impl StackifyContext<'_> {
     pub(super) fn canonicalize_value(&self, value: ValueId) -> ValueId {
         self.value_aliases[value].unwrap_or(value)
+    }
+
+    pub(super) fn tracks_value(&self, value: ValueId) -> bool {
+        !self.func.dfg.value_is_imm(value) || self.tracked_immediates.contains(value)
     }
 }
 
@@ -172,6 +178,7 @@ impl<'a> StackifyBuilder<'a> {
             scratch_live_values_override: None,
             scratch_spill_slots: 0,
             value_aliases_override: None,
+            tracked_immediates: BitSet::default(),
         }
     }
 
@@ -195,6 +202,11 @@ impl<'a> StackifyBuilder<'a> {
         value_aliases: &'a SecondaryMap<ValueId, Option<ValueId>>,
     ) -> Self {
         self.value_aliases_override = Some(value_aliases);
+        self
+    }
+
+    pub(crate) fn with_tracked_immediates(mut self, tracked_immediates: BitSet<ValueId>) -> Self {
+        self.tracked_immediates = tracked_immediates;
         self
     }
 
@@ -277,6 +289,7 @@ impl<'a> StackifyBuilder<'a> {
             search_profile: self.search_profile,
             value_aliases,
             exact_local_addr,
+            tracked_immediates: self.tracked_immediates,
         };
 
         // `spill_set` is discovered via a monotone fixed point:

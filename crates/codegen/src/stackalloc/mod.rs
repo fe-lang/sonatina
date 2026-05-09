@@ -5,6 +5,7 @@ use crate::isa::evm::static_arena_alloc::StackObjId;
 
 mod stackify;
 pub use stackify::{StackifyAlloc, StackifyBuilder, StackifySearchProfile};
+pub(crate) use stackify::{imm_push_data_len, operand_order_for_evm};
 
 pub type Actions = SmallVec<[Action; 2]>;
 

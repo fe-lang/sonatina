@@ -9,9 +9,9 @@ use super::{
     br_table::plan_br_table_compare_chain,
     builder::StackifyContext,
     iteration::{
-        IterationPlanner, clean_dead_stack_prefix, consume_operand_uses, count_block_uses,
-        improve_reachability_before_operands, inst_is_noop_alias_cast, last_use_values_in_inst,
-        operand_order_for_evm, skip_pre_exit_cleanup,
+        IterationPlanner, ReachabilityValues, clean_dead_stack_prefix, consume_operand_uses,
+        count_block_uses, improve_reachability_before_operands, inst_is_noop_alias_cast,
+        last_use_values_in_inst, operand_order_for_evm, skip_pre_exit_cleanup,
     },
     slots::FreeSlotPools,
     sym_stack::SymStack,
@@ -34,7 +34,7 @@ impl BlockSimState {
         ctx: &StackifyContext<'_>,
         block: BlockId,
     ) -> (BTreeMap<ValueId, u32>, BitSet<ValueId>, BitSet<ValueId>) {
-        let (remaining_uses, live_future) = count_block_uses(ctx.func, block, &ctx.value_aliases);
+        let (remaining_uses, live_future) = count_block_uses(ctx, block);
         let mut live_out = ctx.liveness.block_live_outs(block).clone();
         live_out.union_with(&ctx.phi_out_sources[block]);
         (remaining_uses, live_future, live_out)
@@ -138,7 +138,7 @@ pub(super) fn run_block_sim<O: StackifyObserver>(
         if is_normal {
             args = operand_order_for_evm(planner.ctx().func, inst, &planner.ctx().value_aliases);
             consume_last_use = last_use_values_in_inst(
-                planner.ctx().func,
+                planner.ctx(),
                 &args,
                 &state.remaining_uses,
                 &state.live_out,
@@ -166,7 +166,7 @@ pub(super) fn run_block_sim<O: StackifyObserver>(
         if is_normal && inst_is_noop_alias_cast(planner.ctx(), inst, &args, res) {
             planner.on_alias_noop(inst, &args, &results);
             consume_operand_uses(
-                planner.ctx().func,
+                planner.ctx(),
                 &args,
                 &mut state.remaining_uses,
                 &mut state.live_future,
@@ -193,10 +193,15 @@ pub(super) fn run_block_sim<O: StackifyObserver>(
 
         if is_normal && !skip_cleanup {
             let func = planner.ctx().func;
+            let tracked_immediates = planner.ctx().tracked_immediates.clone();
+            let values = ReachabilityValues {
+                func,
+                tracked_immediates: &tracked_immediates,
+            };
             let reach = planner.ctx().reach;
             planner.with_pre_actions(inst, |actions| {
                 improve_reachability_before_operands(
-                    func,
+                    values,
                     &args,
                     reach,
                     &mut state.stack,
@@ -217,17 +222,22 @@ pub(super) fn run_block_sim<O: StackifyObserver>(
                 }
                 TerminatorInfo::Br { cond, dests } => {
                     let consume_last_use = last_use_values_in_inst(
-                        planner.ctx().func,
+                        planner.ctx(),
                         &[cond],
                         &state.remaining_uses,
                         &state.live_out,
                     );
 
                     let func = planner.ctx().func;
+                    let tracked_immediates = planner.ctx().tracked_immediates.clone();
+                    let values = ReachabilityValues {
+                        func,
+                        tracked_immediates: &tracked_immediates,
+                    };
                     let reach = planner.ctx().reach;
                     planner.with_pre_actions(inst, |actions| {
                         improve_reachability_before_operands(
-                            func,
+                            values,
                             &[cond],
                             reach,
                             &mut state.stack,
@@ -262,10 +272,15 @@ pub(super) fn run_block_sim<O: StackifyObserver>(
                     default,
                 } => {
                     let func = planner.ctx().func;
+                    let tracked_immediates = planner.ctx().tracked_immediates.clone();
+                    let values = ReachabilityValues {
+                        func,
+                        tracked_immediates: &tracked_immediates,
+                    };
                     let reach = planner.ctx().reach;
                     planner.with_pre_actions(inst, |actions| {
                         improve_reachability_before_operands(
-                            func,
+                            values,
                             &[scrutinee],
                             reach,
                             &mut state.stack,
@@ -349,7 +364,7 @@ pub(super) fn run_block_sim<O: StackifyObserver>(
         planner.on_normal_inst(inst, &args, &results);
 
         consume_operand_uses(
-            planner.ctx().func,
+            planner.ctx(),
             &args,
             &mut state.remaining_uses,
             &mut state.live_future,
