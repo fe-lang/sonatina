@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use smallvec::SmallVec;
-use sonatina_ir::{BlockId, InstId, ValueId, inst::control_flow::BranchKind};
+use sonatina_ir::{BlockId, I256, InstId, ValueId, inst::control_flow::BranchKind};
 
 use crate::{bitset::BitSet, stackalloc::Actions};
 
@@ -9,12 +9,13 @@ use super::{
     br_table::plan_br_table_compare_chain,
     builder::StackifyContext,
     iteration::{
-        IterationPlanner, ReachabilityValues, clean_dead_stack_prefix, consume_operand_uses,
+        IterationPlanner, ReachabilityValues, cached_immediate_preserve_values_in_inst,
+        clean_dead_stack_prefix, consume_cached_immediate_uses, consume_operand_uses,
         count_block_uses, improve_reachability_before_operands, inst_is_noop_alias_cast,
         last_use_values_in_inst, operand_order_for_evm, skip_pre_exit_cleanup,
     },
     slots::FreeSlotPools,
-    sym_stack::SymStack,
+    sym_stack::{StackItem, SymStack},
     trace::StackifyObserver,
 };
 
@@ -24,20 +25,30 @@ pub(super) struct BlockSimState {
     pub(super) prologue: Actions,
     pub(super) injected_prologue: bool,
     remaining_uses: BTreeMap<ValueId, u32>,
+    cached_remaining_uses: BTreeMap<I256, u32>,
     live_future: BitSet<ValueId>,
     live_out: BitSet<ValueId>,
     pub(super) stack: SymStack,
 }
 
+pub(super) struct BlockLiveSets {
+    pub(super) remaining_uses: BTreeMap<ValueId, u32>,
+    pub(super) live_future: BitSet<ValueId>,
+    pub(super) live_out: BitSet<ValueId>,
+    pub(super) cached_remaining_uses: BTreeMap<I256, u32>,
+}
+
 impl BlockSimState {
-    pub(super) fn block_live_sets(
-        ctx: &StackifyContext<'_>,
-        block: BlockId,
-    ) -> (BTreeMap<ValueId, u32>, BitSet<ValueId>, BitSet<ValueId>) {
-        let (remaining_uses, live_future) = count_block_uses(ctx, block);
+    pub(super) fn block_live_sets(ctx: &StackifyContext<'_>, block: BlockId) -> BlockLiveSets {
+        let (remaining_uses, live_future, cached_remaining_uses) = count_block_uses(ctx, block);
         let mut live_out = ctx.liveness.block_live_outs(block).clone();
         live_out.union_with(&ctx.phi_out_sources[block]);
-        (remaining_uses, live_future, live_out)
+        BlockLiveSets {
+            remaining_uses,
+            live_future,
+            live_out,
+            cached_remaining_uses,
+        }
     }
 
     pub(super) fn with_live_sets(
@@ -45,18 +56,17 @@ impl BlockSimState {
         stack: SymStack,
         free_slots: FreeSlotPools,
         prologue: Actions,
-        remaining_uses: BTreeMap<ValueId, u32>,
-        live_future: BitSet<ValueId>,
-        live_out: BitSet<ValueId>,
+        live_sets: BlockLiveSets,
     ) -> Self {
         Self {
             block,
             free_slots,
             prologue,
             injected_prologue: false,
-            remaining_uses,
-            live_future,
-            live_out,
+            remaining_uses: live_sets.remaining_uses,
+            cached_remaining_uses: live_sets.cached_remaining_uses,
+            live_future: live_sets.live_future,
+            live_out: live_sets.live_out,
             stack,
         }
     }
@@ -113,6 +123,31 @@ fn terminator_info(ctx: &StackifyContext<'_>, inst: InstId) -> Option<Terminator
     }
 }
 
+fn cleanup_live_future_with_cached(
+    ctx: &StackifyContext<'_>,
+    stack: &SymStack,
+    live_future: &BitSet<ValueId>,
+    cached_remaining_uses: &BTreeMap<I256, u32>,
+) -> BitSet<ValueId> {
+    let mut live = live_future.clone();
+    if cached_remaining_uses.is_empty() {
+        return live;
+    }
+
+    for item in stack.iter() {
+        if let StackItem::Value(value) = item
+            && ctx.stack_caches_immediate(*value)
+            && let Some(imm) = ctx.func.dfg.value_imm(*value)
+            && cached_remaining_uses
+                .get(&imm.as_i256())
+                .is_some_and(|count| *count != 0)
+        {
+            live.insert(*value);
+        }
+    }
+    live
+}
+
 pub(super) fn run_block_sim<O: StackifyObserver>(
     planner: &mut IterationPlanner<'_, '_, O>,
     mut state: BlockSimState,
@@ -144,6 +179,15 @@ pub(super) fn run_block_sim<O: StackifyObserver>(
                 &state.live_out,
             );
         }
+        let cache_preserve = if is_normal {
+            cached_immediate_preserve_values_in_inst(
+                planner.ctx(),
+                &args,
+                &state.cached_remaining_uses,
+            )
+        } else {
+            BitSet::default()
+        };
         let last_use = if is_normal {
             &consume_last_use
         } else {
@@ -174,17 +218,24 @@ pub(super) fn run_block_sim<O: StackifyObserver>(
                 planner.scratch_slots(),
                 &mut state.free_slots.scratch,
             );
+            consume_cached_immediate_uses(planner.ctx(), &args, &mut state.cached_remaining_uses);
             continue;
         }
 
         let before_cleanup_len = planner.pre_actions_len(inst);
         if !skip_cleanup {
+            let cleanup_live_future = cleanup_live_future_with_cached(
+                planner.ctx(),
+                &state.stack,
+                &state.live_future,
+                &state.cached_remaining_uses,
+            );
             let reach = planner.ctx().reach;
             planner.with_pre_actions(inst, |actions| {
                 clean_dead_stack_prefix(
                     reach,
                     &mut state.stack,
-                    &state.live_future,
+                    &cleanup_live_future,
                     &state.live_out,
                     actions,
                 );
@@ -193,11 +244,7 @@ pub(super) fn run_block_sim<O: StackifyObserver>(
 
         if is_normal && !skip_cleanup {
             let func = planner.ctx().func;
-            let retained_immediates = planner.ctx().retained_immediates.clone();
-            let values = ReachabilityValues {
-                func,
-                retained_immediates: &retained_immediates,
-            };
+            let values = ReachabilityValues { func };
             let reach = planner.ctx().reach;
             planner.with_pre_actions(inst, |actions| {
                 improve_reachability_before_operands(
@@ -229,11 +276,7 @@ pub(super) fn run_block_sim<O: StackifyObserver>(
                     );
 
                     let func = planner.ctx().func;
-                    let retained_immediates = planner.ctx().retained_immediates.clone();
-                    let values = ReachabilityValues {
-                        func,
-                        retained_immediates: &retained_immediates,
-                    };
+                    let values = ReachabilityValues { func };
                     let reach = planner.ctx().reach;
                     planner.with_pre_actions(inst, |actions| {
                         improve_reachability_before_operands(
@@ -251,7 +294,13 @@ pub(super) fn run_block_sim<O: StackifyObserver>(
                         &mut stack,
                         &mut state.free_slots,
                         PlannerActionSink::Pre(inst),
-                        |planner| planner.prepare_operands(&[cond], &consume_last_use),
+                        |planner| {
+                            planner.prepare_operands(
+                                &[cond],
+                                &consume_last_use,
+                                &BitSet::default(),
+                            );
+                        },
                     );
                     state.stack = stack;
 
@@ -272,11 +321,7 @@ pub(super) fn run_block_sim<O: StackifyObserver>(
                     default,
                 } => {
                     let func = planner.ctx().func;
-                    let retained_immediates = planner.ctx().retained_immediates.clone();
-                    let values = ReachabilityValues {
-                        func,
-                        retained_immediates: &retained_immediates,
-                    };
+                    let values = ReachabilityValues { func };
                     let reach = planner.ctx().reach;
                     planner.with_pre_actions(inst, |actions| {
                         improve_reachability_before_operands(
@@ -310,6 +355,7 @@ pub(super) fn run_block_sim<O: StackifyObserver>(
                                     planner.prepare_operands_for_commutative_pair(
                                         &mut compare_args,
                                         &consume_last_use,
+                                        &BitSet::default(),
                                     );
                                 },
                             );
@@ -347,7 +393,7 @@ pub(super) fn run_block_sim<O: StackifyObserver>(
             &mut stack,
             &mut state.free_slots,
             PlannerActionSink::Pre(inst),
-            |planner| planner.prepare_operands_for_inst(inst, &mut args, last_use),
+            |planner| planner.prepare_operands_for_inst(inst, &mut args, last_use, &cache_preserve),
         );
         state.stack = stack;
 
@@ -372,6 +418,7 @@ pub(super) fn run_block_sim<O: StackifyObserver>(
             planner.scratch_slots(),
             &mut state.free_slots.scratch,
         );
+        consume_cached_immediate_uses(planner.ctx(), &args, &mut state.cached_remaining_uses);
 
         state.stack.pop_n_operands(args.len());
 

@@ -9,6 +9,7 @@ use crate::{
     critical_edge::CriticalEdgeSplitter,
     domtree::DomTree,
     liveness::{InstLiveness, Liveness},
+    loop_analysis::LoopTree,
     machinst::lower::SectionWorkModule,
     module_analysis::{CallGraph, SccBuilder},
     stackalloc::{
@@ -17,7 +18,8 @@ use crate::{
     stackify_edge::StackifyEdgeSplitter,
 };
 use sonatina_ir::{
-    AccessKind, AccessLoc, Function, GlobalVariableRef, Immediate, InstSetExt, Module, ValueId,
+    AccessKind, AccessLoc, BlockId, Function, GlobalVariableRef, I256, Immediate, InstSetExt,
+    Module, ValueId,
     cfg::ControlFlowGraph,
     inst::evm::inst_set::EvmInstKind,
     isa::{Isa, evm::space::MEMORY},
@@ -26,7 +28,7 @@ use sonatina_ir::{
 };
 
 use super::{
-    EvmBackend, LateCleanupProfile, canonicalize_alias_value,
+    EvmBackend, ImmediateMaterializationMode, LateCleanupProfile, canonicalize_alias_value,
     dyn_sp::{FuncDynSpPlan, compute_dyn_sp_plan},
     emit::{
         LateBlockAliasPlan, compute_function_entry_jump_targets, compute_late_block_alias_plan,
@@ -822,46 +824,99 @@ pub(crate) fn prepare_free_ptr_restore(
     }
 }
 
-fn retained_stack_immediates(
+#[derive(Default)]
+struct StackCachedImmediateStats {
+    uses: u32,
+    score: usize,
+    push_bytes: usize,
+    first_value: u32,
+}
+
+fn loop_weight(loops: &LoopTree, block: BlockId) -> usize {
+    let mut depth = 0usize;
+    let mut lp = loops.loop_of_block(block);
+    while let Some(cur) = lp {
+        depth += 1;
+        lp = loops.parent_loop(cur);
+    }
+    1usize << depth.min(6)
+}
+
+fn max_stack_cached_immediates(mode: ImmediateMaterializationMode) -> usize {
+    match mode {
+        ImmediateMaterializationMode::Gas | ImmediateMaterializationMode::Balanced => 1,
+        ImmediateMaterializationMode::Size => 2,
+    }
+}
+
+fn stack_cached_immediates(
     function: &Function,
+    cfg: &ControlFlowGraph,
+    dom: &DomTree,
     value_aliases: &SecondaryMap<ValueId, Option<ValueId>>,
-) -> BitSet<ValueId> {
-    const MAX_RETAINED: usize = 1;
+    mode: ImmediateMaterializationMode,
+) -> FxHashSet<I256> {
     const MIN_PUSH_BYTES: usize = 16;
     const MIN_USES: u32 = 4;
 
-    let mut uses: FxHashMap<ValueId, u32> = FxHashMap::default();
+    let mut loops = LoopTree::new();
+    loops.compute(cfg, dom);
+
+    let mut stats: FxHashMap<I256, StackCachedImmediateStats> = FxHashMap::default();
     for block in function.layout.iter_block() {
+        let weight = loop_weight(&loops, block);
         for inst in function.layout.iter_inst(block) {
             if function.dfg.is_phi(inst) {
                 continue;
             }
             for value in operand_order_for_evm(function, inst, value_aliases) {
-                if function.dfg.value_is_imm(value) {
-                    *uses.entry(value).or_default() += 1;
+                if let Some(imm) = function.dfg.value_imm(value) {
+                    let push_bytes = imm_push_data_len(imm);
+                    if push_bytes < MIN_PUSH_BYTES {
+                        continue;
+                    }
+                    let entry =
+                        stats
+                            .entry(imm.as_i256())
+                            .or_insert_with(|| StackCachedImmediateStats {
+                                push_bytes,
+                                first_value: value.as_u32(),
+                                ..StackCachedImmediateStats::default()
+                            });
+                    entry.uses += 1;
+                    entry.score += weight * push_bytes.saturating_sub(1);
+                    entry.first_value = entry.first_value.min(value.as_u32());
                 }
             }
         }
     }
 
-    let mut ranked: Vec<_> = uses
+    let mut ranked: Vec<_> = stats
         .into_iter()
-        .filter_map(|(value, uses)| {
-            let bytes = imm_push_data_len(function.dfg.value_imm(value)?);
-            (uses >= MIN_USES && bytes >= MIN_PUSH_BYTES)
-                .then_some(((uses - 1) as usize * bytes, value))
+        .filter_map(|(imm, stats)| {
+            (stats.uses >= MIN_USES).then_some((
+                stats.score,
+                stats.push_bytes,
+                stats.uses,
+                stats.first_value,
+                imm,
+            ))
         })
         .collect();
-    ranked.sort_unstable_by(|(a_score, a), (b_score, b)| {
-        b_score
-            .cmp(a_score)
-            .then_with(|| a.as_u32().cmp(&b.as_u32()))
-    });
+    ranked.sort_unstable_by(
+        |(a_score, a_bytes, a_uses, a_first, _), (b_score, b_bytes, b_uses, b_first, _)| {
+            b_score
+                .cmp(a_score)
+                .then_with(|| b_bytes.cmp(a_bytes))
+                .then_with(|| b_uses.cmp(a_uses))
+                .then_with(|| a_first.cmp(b_first))
+        },
+    );
 
     ranked
         .into_iter()
-        .take(MAX_RETAINED)
-        .map(|(_, value)| value)
+        .take(max_stack_cached_immediates(mode))
+        .map(|(_, _, _, _, imm)| imm)
         .collect()
 }
 
@@ -874,7 +929,7 @@ fn compute_stackify_alloc(
     backend: &EvmBackend,
     canonical_scratch_live_values: &BitSet<ValueId>,
     value_aliases: &SecondaryMap<ValueId, Option<ValueId>>,
-    retained_immediates: BitSet<ValueId>,
+    stack_cached_immediates: FxHashSet<I256>,
 ) -> StackifyAlloc {
     StackifyBuilder::new(
         function,
@@ -887,11 +942,11 @@ fn compute_stackify_alloc(
     .with_scratch_live_values(canonical_scratch_live_values.clone())
     .with_scratch_spills(scratch_plan::SCRATCH_SPILL_SLOTS)
     .with_value_aliases(value_aliases)
-    .with_retained_immediates(retained_immediates)
+    .with_stack_cached_immediates(stack_cached_immediates)
     .compute()
 }
 
-#[derive(Clone, Copy, Default, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Default, Eq, PartialEq)]
 struct StackifyAllocCost {
     gas: u64,
     bytes: u64,
@@ -901,6 +956,26 @@ impl StackifyAllocCost {
     fn add(&mut self, gas: u64, bytes: u64) {
         self.gas += gas;
         self.bytes += bytes;
+    }
+
+    fn is_better_than(self, other: Self, mode: ImmediateMaterializationMode) -> bool {
+        match mode {
+            ImmediateMaterializationMode::Gas => (self.gas, self.bytes) < (other.gas, other.bytes),
+            ImmediateMaterializationMode::Balanced => {
+                const MAX_GAS_REGRESSION: u64 = 64;
+                const MIN_BYTES_PER_GAS: u64 = 32;
+
+                if self.gas <= other.gas {
+                    return (self.gas, self.bytes) < (other.gas, other.bytes);
+                }
+
+                let gas_delta = self.gas - other.gas;
+                let byte_savings = other.bytes.saturating_sub(self.bytes);
+                gas_delta <= MAX_GAS_REGRESSION
+                    && byte_savings >= gas_delta.saturating_mul(MIN_BYTES_PER_GAS)
+            }
+            ImmediateMaterializationMode::Size => (self.bytes, self.gas) < (other.bytes, other.gas),
+        }
     }
 }
 
@@ -969,10 +1044,16 @@ fn prepare_stackify_analysis(
         inst_liveness
     };
 
-    let (value_aliases, retained_immediates, stack_liveness, canonical_scratch_live_values) = {
+    let (value_aliases, stack_cached_immediates, stack_liveness, canonical_scratch_live_values) = {
         let _span = trace_span!("sonatina.codegen.evm.stackify.canonicalize_aliases").entered();
         let value_aliases = backend.compute_stackify_value_aliases(function, module);
-        let retained_immediates = retained_stack_immediates(function, &value_aliases);
+        let stack_cached_immediates = stack_cached_immediates(
+            function,
+            &cfg,
+            &dom,
+            &value_aliases,
+            backend.immediate_materialization_mode,
+        );
 
         let mut stack_liveness = Liveness::new();
         stack_liveness.compute_with_value_normalizer(function, &cfg, |v| {
@@ -993,7 +1074,7 @@ fn prepare_stackify_analysis(
         }
         (
             value_aliases,
-            retained_immediates,
+            stack_cached_immediates,
             stack_liveness,
             canonical_scratch_live_values,
         )
@@ -1009,9 +1090,9 @@ fn prepare_stackify_analysis(
             backend,
             &canonical_scratch_live_values,
             &value_aliases,
-            BitSet::default(),
+            FxHashSet::default(),
         );
-        if retained_immediates.is_empty() {
+        if stack_cached_immediates.is_empty() {
             baseline_alloc
         } else {
             let baseline_cost = stackify_alloc_cost(&baseline_alloc);
@@ -1023,9 +1104,11 @@ fn prepare_stackify_analysis(
                 backend,
                 &canonical_scratch_live_values,
                 &value_aliases,
-                retained_immediates,
+                stack_cached_immediates,
             );
-            if stackify_alloc_cost(&candidate_alloc) < baseline_cost {
+            if stackify_alloc_cost(&candidate_alloc)
+                .is_better_than(baseline_cost, backend.immediate_materialization_mode)
+            {
                 candidate_alloc
             } else {
                 baseline_alloc

@@ -18,6 +18,12 @@ use super::{
     operand_prep::{CachedOperandPrepPlan, OperandPrepPlanCache},
 };
 
+#[derive(Clone, Copy)]
+pub(super) struct OperandPrepConstraints<'a> {
+    pub(super) consume_last_use: &'a BitSet<ValueId>,
+    pub(super) cache_preserve: &'a BitSet<ValueId>,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) struct Cost {
     pub(super) gas: u32,
@@ -1713,7 +1719,7 @@ fn build_operand_prep_problem(
     ctx: &StackifyContext<'_>,
     stack: &SymStack,
     args: &[ValueId],
-    consume_last_use: &BitSet<ValueId>,
+    constraints: OperandPrepConstraints<'_>,
     cfg: SearchCfg,
 ) -> Option<OperandPrepProblem> {
     let start_limit = stack.len_above_func_ret();
@@ -1740,11 +1746,13 @@ fn build_operand_prep_problem(
         goal_keys.push(kid);
         goal_mask |= 1u64 << kid;
         goal_counts[kid as usize] = goal_counts[kid as usize].saturating_add(1);
-        if consume_last_use.contains(v) {
+        if constraints.consume_last_use.contains(v) {
             last_use_mask |= 1u64 << kid;
         }
 
-        if ctx.retains_value(v) && !consume_last_use.contains(v) {
+        if constraints.cache_preserve.contains(v)
+            || (ctx.retains_value(v) && !constraints.consume_last_use.contains(v))
+        {
             preserve_mask |= 1u64 << kid;
         }
 
@@ -2478,12 +2486,12 @@ pub(super) fn solve_greedy_operand_prep_plan(
     ctx: &StackifyContext<'_>,
     stack: &SymStack,
     args: &[ValueId],
-    consume_last_use: &BitSet<ValueId>,
+    constraints: OperandPrepConstraints<'_>,
     allow_copy_swap: bool,
     cost: &impl CostModel,
     cfg: SearchCfg,
 ) -> Option<NormalizePlan> {
-    let problem = build_operand_prep_problem(ctx, stack, args, consume_last_use, cfg)?;
+    let problem = build_operand_prep_problem(ctx, stack, args, constraints, cfg)?;
     let cfg = SearchCfg {
         max_len: problem.max_len,
         ..cfg
@@ -2513,7 +2521,7 @@ pub(super) fn solve_optimal_operand_prep_plan(
     ctx: &StackifyContext<'_>,
     stack: &SymStack,
     args: &[ValueId],
-    consume_last_use: &BitSet<ValueId>,
+    constraints: OperandPrepConstraints<'_>,
     cost: &impl CostModel,
     cfg: SearchCfg,
     scratch: &mut NormalizeSearchScratch,
@@ -2546,7 +2554,7 @@ pub(super) fn solve_optimal_operand_prep_plan(
         return None;
     }
 
-    let problem = build_operand_prep_problem(ctx, stack, args, consume_last_use, cfg)?;
+    let problem = build_operand_prep_problem(ctx, stack, args, constraints, cfg)?;
     let cfg = SearchCfg {
         max_len: problem.max_len,
         ..cfg
@@ -2600,7 +2608,9 @@ pub(super) fn solve_optimal_operand_prep_plan(
     };
 
     let high_arity_consuming = args.len() > cfg.swap_max
-        && args.iter().all(|&v| consume_last_use.contains(v))
+        && args
+            .iter()
+            .all(|&v| constraints.consume_last_use.contains(v))
         && problem.preserve_mask == 0;
 
     let mut upper_bound = linear_cost;
@@ -2947,7 +2957,7 @@ pub(super) fn rebuild_operand_prep_plan(
     ctx: &StackifyContext<'_>,
     stack: &SymStack,
     args: &[ValueId],
-    consume_last_use: &BitSet<ValueId>,
+    constraints: OperandPrepConstraints<'_>,
     cfg: SearchCfg,
     cached: CachedOperandPrepPlan,
 ) -> Option<NormalizePlan> {
@@ -2960,7 +2970,7 @@ pub(super) fn rebuild_operand_prep_plan(
         });
     }
 
-    let problem = build_operand_prep_problem(ctx, stack, args, consume_last_use, cfg)?;
+    let problem = build_operand_prep_problem(ctx, stack, args, constraints, cfg)?;
     Some(NormalizePlan {
         cost: cached.modeled_cost,
         steps: cached.steps,
@@ -4639,7 +4649,18 @@ mod tests {
         cfg: SearchCfg,
     ) -> Option<NormalizePlan> {
         let mut scratch = NormalizeSearchScratch::default();
-        solve_optimal_operand_prep_plan(ctx, stack, args, consume_last_use, cost, cfg, &mut scratch)
+        solve_optimal_operand_prep_plan(
+            ctx,
+            stack,
+            args,
+            OperandPrepConstraints {
+                consume_last_use,
+                cache_preserve: &BitSet::default(),
+            },
+            cost,
+            cfg,
+            &mut scratch,
+        )
     }
 
     #[test]
@@ -5872,9 +5893,17 @@ block0:
                 max_len: ctx.reach.swap_max,
                 max_expansions: 0,
             };
-            let problem =
-                build_operand_prep_problem(&ctx, &stack, &args, &BitSet::default(), search_cfg)
-                    .expect("expected operand-prep problem");
+            let problem = build_operand_prep_problem(
+                &ctx,
+                &stack,
+                &args,
+                OperandPrepConstraints {
+                    consume_last_use: &BitSet::default(),
+                    cache_preserve: &BitSet::default(),
+                },
+                search_cfg,
+            )
+            .expect("expected operand-prep problem");
 
             assert_eq!(problem.start_state.window.len(), args.len());
             assert_eq!(problem.max_len, args.len());
@@ -5946,9 +5975,17 @@ block0:
                 max_len: ctx.reach.swap_max,
                 max_expansions: 0,
             };
-            let problem =
-                build_operand_prep_problem(&ctx, &stack, &args, &BitSet::default(), search_cfg)
-                    .expect("expected operand-prep problem");
+            let problem = build_operand_prep_problem(
+                &ctx,
+                &stack,
+                &args,
+                OperandPrepConstraints {
+                    consume_last_use: &BitSet::default(),
+                    cache_preserve: &BitSet::default(),
+                },
+                search_cfg,
+            )
+            .expect("expected operand-prep problem");
 
             assert_eq!(problem.start_state.window.len(), args.len());
             assert_eq!(problem.max_len, args.len() * 2);
@@ -6009,9 +6046,17 @@ block0:
                 max_len: ctx.reach.swap_max,
                 max_expansions: 50_000,
             };
-            let problem =
-                build_operand_prep_problem(&ctx, &stack, &args, &BitSet::default(), search_cfg)
-                    .expect("expected operand-prep problem");
+            let problem = build_operand_prep_problem(
+                &ctx,
+                &stack,
+                &args,
+                OperandPrepConstraints {
+                    consume_last_use: &BitSet::default(),
+                    cache_preserve: &BitSet::default(),
+                },
+                search_cfg,
+            )
+            .expect("expected operand-prep problem");
 
             assert_eq!(problem.start_state.window.len(), 16);
             assert_eq!(problem.max_len, ctx.reach.swap_max);
@@ -6095,8 +6140,17 @@ block0:
                 stack.push_value(x);
                 stack.push_value(mid);
                 stack.push_value(top);
-                build_operand_prep_problem(&ctx, &stack, &[x], &BitSet::default(), search_cfg)
-                    .expect("expected operand-prep problem")
+                build_operand_prep_problem(
+                    &ctx,
+                    &stack,
+                    &[x],
+                    OperandPrepConstraints {
+                        consume_last_use: &BitSet::default(),
+                        cache_preserve: &BitSet::default(),
+                    },
+                    search_cfg,
+                )
+                .expect("expected operand-prep problem")
             };
 
             let lhs = build_problem(ignored_a, ignored_b);
@@ -6164,9 +6218,17 @@ block0:
                 max_len: ctx.reach.swap_max,
                 max_expansions: 50_000,
             };
-            let problem =
-                build_operand_prep_problem(&ctx, &stack, &args, &BitSet::default(), search_cfg)
-                    .expect("expected operand-prep problem");
+            let problem = build_operand_prep_problem(
+                &ctx,
+                &stack,
+                &args,
+                OperandPrepConstraints {
+                    consume_last_use: &BitSet::default(),
+                    cache_preserve: &BitSet::default(),
+                },
+                search_cfg,
+            )
+            .expect("expected operand-prep problem");
 
             assert_eq!(problem.start_state.window.len(), 3);
             assert_eq!(problem.max_len, 5);
@@ -6257,7 +6319,16 @@ block0:
             };
             let cost = EstimatedCostModel::default();
             let problem =
-                build_operand_prep_problem(&ctx, &stack, &args, &consume_last_use, search_cfg)
+                build_operand_prep_problem(
+                    &ctx,
+                    &stack,
+                    &args,
+                    OperandPrepConstraints {
+                        consume_last_use: &consume_last_use,
+                        cache_preserve: &BitSet::default(),
+                    },
+                    search_cfg,
+                )
                     .expect("expected operand-prep problem");
             let (linear_steps, linear_cost) =
                 build_linear_operand_prep_upper_bound(&problem, true, &cost, search_cfg)

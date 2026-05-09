@@ -1,6 +1,6 @@
 use cranelift_entity::SecondaryMap;
 use smallvec::SmallVec;
-use sonatina_ir::{BlockId, Function, Immediate, InstId, ValueId};
+use sonatina_ir::{BlockId, Function, I256, Immediate, InstId, ValueId};
 use std::collections::BTreeMap;
 
 use crate::{bitset::BitSet, isa::evm::immediate_u32, stackalloc::Actions};
@@ -54,12 +54,11 @@ struct PendingEdge<D> {
 #[derive(Clone, Copy)]
 pub(super) struct ReachabilityValues<'a> {
     pub(super) func: &'a Function,
-    pub(super) retained_immediates: &'a BitSet<ValueId>,
 }
 
 impl ReachabilityValues<'_> {
     fn retains(self, value: ValueId) -> bool {
-        !self.func.dfg.value_is_imm(value) || self.retained_immediates.contains(value)
+        !self.func.dfg.value_is_imm(value)
     }
 }
 
@@ -140,8 +139,7 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
         let mut free_slots: FreeSlotPools = FreeSlotPools::default();
         let mut prologue: Actions = Actions::new();
 
-        let (remaining_uses, live_future, live_out) =
-            BlockSimState::block_live_sets(self.ctx, block);
+        let live_sets = BlockSimState::block_live_sets(self.ctx, block);
         self.resolve_pending_edges(block);
 
         let inherited = self.inherited_stack.remove(&block);
@@ -172,8 +170,8 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
                     block,
                     pred,
                     &inh,
-                    &live_future,
-                    &live_out,
+                    &live_sets.live_future,
+                    &live_sets.live_out,
                 );
                 let has_phi_params = !self.ctx.phi_results[block].is_empty();
 
@@ -198,15 +196,7 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
             SymStack::from_template(&self.templates[block], self.ctx.has_internal_return)
         };
 
-        let state = BlockSimState::with_live_sets(
-            block,
-            stack,
-            free_slots,
-            prologue,
-            remaining_uses,
-            live_future,
-            live_out,
-        );
+        let state = BlockSimState::with_live_sets(block, stack, free_slots, prologue, live_sets);
         let state = run_block_sim(self, state);
 
         // If the block had no lowered instructions, inject prologue into the terminator.
@@ -574,21 +564,71 @@ pub(super) fn skip_pre_exit_cleanup(func: &Function, inst: InstId) -> bool {
 pub(super) fn count_block_uses(
     ctx: &StackifyContext<'_>,
     block: BlockId,
-) -> (BTreeMap<ValueId, u32>, BitSet<ValueId>) {
+) -> (BTreeMap<ValueId, u32>, BitSet<ValueId>, BTreeMap<I256, u32>) {
     let mut counts: BTreeMap<ValueId, u32> = BTreeMap::new();
+    let mut cached_counts: BTreeMap<I256, u32> = BTreeMap::new();
     for inst in ctx.func.layout.iter_inst(block) {
         if ctx.func.dfg.is_phi(inst) {
             continue;
         }
         for v in operand_order_for_evm(ctx.func, inst, &ctx.value_aliases) {
-            if !ctx.retains_value(v) {
-                continue;
+            if ctx.retains_value(v) {
+                *counts.entry(v).or_insert(0) += 1;
+            } else if ctx.stack_caches_immediate(v)
+                && let Some(imm) = ctx.func.dfg.value_imm(v)
+            {
+                *cached_counts.entry(imm.as_i256()).or_insert(0) += 1;
             }
-            *counts.entry(v).or_insert(0) += 1;
         }
     }
     let live_future: BitSet<ValueId> = counts.keys().copied().collect();
-    (counts, live_future)
+    (counts, live_future, cached_counts)
+}
+
+pub(super) fn cached_immediate_preserve_values_in_inst(
+    ctx: &StackifyContext<'_>,
+    args: &[ValueId],
+    cached_remaining_uses: &BTreeMap<I256, u32>,
+) -> BitSet<ValueId> {
+    let mut inst_counts: BTreeMap<I256, u32> = BTreeMap::new();
+    for &value in args {
+        if ctx.stack_caches_immediate(value)
+            && let Some(imm) = ctx.func.dfg.value_imm(value)
+        {
+            *inst_counts.entry(imm.as_i256()).or_insert(0) += 1;
+        }
+    }
+
+    let mut preserve: BitSet<ValueId> = BitSet::default();
+    for &value in args {
+        if ctx.stack_caches_immediate(value)
+            && let Some(imm) = ctx.func.dfg.value_imm(value)
+            && cached_remaining_uses
+                .get(&imm.as_i256())
+                .copied()
+                .unwrap_or(0)
+                > inst_counts.get(&imm.as_i256()).copied().unwrap_or(0)
+        {
+            preserve.insert(value);
+        }
+    }
+    preserve
+}
+
+pub(super) fn consume_cached_immediate_uses(
+    ctx: &StackifyContext<'_>,
+    args: &[ValueId],
+    cached_remaining_uses: &mut BTreeMap<I256, u32>,
+) {
+    for &value in args {
+        if ctx.stack_caches_immediate(value)
+            && let Some(imm) = ctx.func.dfg.value_imm(value)
+            && let Some(count) = cached_remaining_uses.get_mut(&imm.as_i256())
+        {
+            *count = count.saturating_sub(1);
+        }
+    }
+    cached_remaining_uses.retain(|_, count| *count != 0);
 }
 
 fn pop_dead_tops(
@@ -896,7 +936,6 @@ fn choose_reachability_victim(
     for (i, item) in stack.iter().take(above).enumerate() {
         if let StackItem::Value(v) = item
             && !protected_args.contains(*v)
-            && !values.retained_immediates.contains(*v)
             && values.func.dfg.value_is_imm(*v)
             && is_evictable_imm(values.func, *v)
         {

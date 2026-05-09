@@ -10,7 +10,7 @@ use sonatina_ir::{Module, isa::evm::Evm};
 use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
 
 use crate::{
-    isa::evm::{EvmBackend, LateCleanupProfile},
+    isa::evm::{EvmBackend, ImmediateMaterializationMode, LateCleanupProfile},
     object::{CompileOptions, ObjectArtifact, ObjectCompileError, compile_all_objects},
     optim::Pipeline,
     stackalloc::StackifySearchProfile,
@@ -96,6 +96,14 @@ impl OptLevel {
             OptLevel::Os | OptLevel::O2 => StackifySearchProfile::Exact,
         }
     }
+
+    fn immediate_materialization_mode(self) -> ImmediateMaterializationMode {
+        match self {
+            OptLevel::Os => ImmediateMaterializationMode::Size,
+            OptLevel::O2 => ImmediateMaterializationMode::Balanced,
+            OptLevel::O0 | OptLevel::O1 => ImmediateMaterializationMode::Gas,
+        }
+    }
 }
 
 fn evm_backend_for_module(
@@ -112,7 +120,8 @@ fn evm_backend_for_module(
 
     Ok(EvmBackend::new(Evm::new(target))
         .with_late_cleanup_profile(opt_level.late_cleanup_profile())
-        .with_stackify_search_profile(opt_level.stackify_search_profile()))
+        .with_stackify_search_profile(opt_level.stackify_search_profile())
+        .with_immediate_materialization_mode(opt_level.immediate_materialization_mode()))
 }
 
 fn evm_osaka_triple() -> TargetTriple {
