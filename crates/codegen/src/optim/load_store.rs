@@ -1,11 +1,12 @@
 use cranelift_entity::SecondaryMap;
 use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
-    AccessKind, AddressSpaceId, ControlFlowGraph, Function, InstDowncast, InstId, Type, ValueId,
+    AccessKind, AccessLoc, AddressSpaceId, ControlFlowGraph, Function, InstDowncast, InstId, Type,
+    ValueId,
     bitset::BitSet,
     inst::{
         control_flow,
-        data::{Mload, Mstore},
+        data::{Alloca, Mload, Mstore},
         evm::{
             EvmCalldataLoad, EvmInvalid, EvmMstore8, EvmReturn, EvmRevert, EvmSelfDestruct,
             EvmSload, EvmSstore, EvmStop, EvmTload, EvmTstore,
@@ -29,6 +30,11 @@ struct LiveState {
     exit_live: FxHashSet<TrackedLocKey>,
     range_live: FxHashSet<LinearRangeKey>,
     whole_space_live: BitSet<AddressSpaceId>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct AllocaVisibility {
+    local_only: FxHashSet<InstId>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -329,6 +335,9 @@ impl LoadStoreSolver {
         let reachable = cfg.reachable_blocks();
         let committing_exit_reachable = blocks_reaching_committing_exit(func, cfg, &reachable);
         let order: Vec<_> = cfg.post_order().collect();
+        func.rebuild_users();
+        analysis.clear();
+        let alloca_visibility = collect_alloca_visibility(func, analysis);
 
         let mut in_states = SecondaryMap::<sonatina_ir::BlockId, LiveState>::new();
         let mut out_states = SecondaryMap::<sonatina_ir::BlockId, LiveState>::new();
@@ -364,6 +373,7 @@ impl LoadStoreSolver {
                         analysis,
                         &mut live,
                         committing_exit_reachable[block],
+                        &alloca_visibility,
                         false,
                     );
                 }
@@ -393,6 +403,7 @@ impl LoadStoreSolver {
                     analysis,
                     &mut live,
                     committing_exit_reachable[block],
+                    &alloca_visibility,
                     true,
                 ) {
                     changed = true;
@@ -438,6 +449,124 @@ fn meet_live(states: impl Iterator<Item = (LiveState, bool)>) -> LiveState {
     out.exit_live = exit_live;
 
     out
+}
+
+fn collect_alloca_visibility(
+    func: &Function,
+    analysis: &mut MemoryAccessAnalysis,
+) -> AllocaVisibility {
+    let mut local_only = FxHashSet::default();
+
+    for block in func.layout.iter_block() {
+        for inst in func.layout.iter_inst(block) {
+            if <&Alloca as InstDowncast>::downcast(func.inst_set(), func.dfg.inst(inst)).is_some()
+                && let Some(root) = func.dfg.inst_result(inst)
+                && alloca_stays_local(func, inst, root, analysis)
+            {
+                local_only.insert(inst);
+            }
+        }
+    }
+
+    AllocaVisibility { local_only }
+}
+
+fn alloca_stays_local(
+    func: &Function,
+    root_alloca: InstId,
+    root: ValueId,
+    analysis: &mut MemoryAccessAnalysis,
+) -> bool {
+    let mut seen = FxHashSet::default();
+    let mut worklist = vec![root];
+
+    while let Some(value) = worklist.pop() {
+        if !seen.insert(value) {
+            continue;
+        }
+
+        for &user in func.dfg.users(value) {
+            if !func.layout.is_inst_inserted(user) {
+                continue;
+            }
+            if let Some(result) = transparent_local_addr_result(func, root_alloca, user, analysis) {
+                worklist.push(result);
+            } else if !uses_value_only_as_local_memory_addr(
+                func,
+                root_alloca,
+                user,
+                value,
+                analysis,
+            ) {
+                return false;
+            }
+        }
+    }
+
+    true
+}
+
+fn transparent_local_addr_result(
+    func: &Function,
+    root_alloca: InstId,
+    inst: InstId,
+    analysis: &mut MemoryAccessAnalysis,
+) -> Option<ValueId> {
+    let [result] = func.dfg.try_inst_results(inst)? else {
+        return None;
+    };
+    let result = *result;
+    let exact = analysis.exact_local_addr(func, result)?;
+    (exact.root_alloca == root_alloca).then_some(result)
+}
+
+fn uses_value_only_as_local_memory_addr(
+    func: &Function,
+    root_alloca: InstId,
+    inst: InstId,
+    value: ValueId,
+    analysis: &mut MemoryAccessAnalysis,
+) -> bool {
+    let mut use_count = 0;
+    func.dfg.inst(inst).for_each_value(&mut |operand| {
+        use_count += usize::from(operand == value);
+    });
+    let allowed = func
+        .dfg
+        .effects(inst)
+        .accesses
+        .iter()
+        .filter(|access| access_uses_local_alloca_addr(func, root_alloca, access, value, analysis))
+        .count();
+    use_count == allowed
+}
+
+fn access_uses_local_alloca_addr(
+    func: &Function,
+    root_alloca: InstId,
+    access: &sonatina_ir::MemoryAccess,
+    value: ValueId,
+    analysis: &mut MemoryAccessAnalysis,
+) -> bool {
+    if access.space != func.ctx().address_spaces().default_space() {
+        return false;
+    }
+
+    match access.loc {
+        AccessLoc::LinearExact { addr, .. } if addr == value => {
+            matches!(
+                analysis.trackable_exact_loc(func, access),
+                Some(TrackedLocKey::Linear(key)) if key.base == BaseObject::Alloca(root_alloca)
+            )
+        }
+        AccessLoc::LinearRange { addr, len } if addr == value && len != value => {
+            matches!(
+                analysis.trackable_linear_range(func, access),
+                Some(range) if range.base == BaseObject::Alloca(root_alloca)
+            )
+        }
+        _ => false,
+    }
 }
 
 fn transfer_forward(
@@ -517,6 +646,7 @@ fn transfer_backward(
     analysis: &mut MemoryAccessAnalysis,
     live: &mut LiveState,
     committing_exit_reachable: bool,
+    alloca_visibility: &AllocaVisibility,
     rewrite: bool,
 ) -> bool {
     prune_dead_live_state(func, live);
@@ -539,7 +669,8 @@ fn transfer_backward(
                     continue;
                 };
 
-                let has_whole_space_live = live.whole_space_live.contains(access.space);
+                let has_whole_space_live =
+                    whole_space_liveness_may_observe_key(func, live, &key, alloca_visibility);
                 let has_exact_live = has_may_alias_live(&live.exact_live, &key, analysis);
                 let has_range_live = has_may_alias_live_range(&live.range_live, &key, analysis);
                 let live_at_exit = committing_exit_reachable
@@ -664,6 +795,31 @@ fn has_may_alias_live_range(
 ) -> bool {
     live.iter()
         .any(|range| analysis.range_may_alias_key(range, key))
+}
+
+fn whole_space_liveness_may_observe_key(
+    func: &Function,
+    live: &LiveState,
+    key: &TrackedLocKey,
+    alloca_visibility: &AllocaVisibility,
+) -> bool {
+    let space = match key {
+        TrackedLocKey::Linear(key) => key.space,
+        TrackedLocKey::Keyed(key) => key.space,
+    };
+    if !live.whole_space_live.contains(space) {
+        return false;
+    }
+
+    !matches!(
+        key,
+        TrackedLocKey::Linear(LinearLocKey {
+            space,
+            base: BaseObject::Alloca(alloca),
+            ..
+        }) if *space == func.ctx().address_spaces().default_space()
+            && alloca_visibility.local_only.contains(alloca)
+    )
 }
 
 fn kill_must_alias_live(

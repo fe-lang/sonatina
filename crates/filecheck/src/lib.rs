@@ -6,6 +6,7 @@ pub mod checked_arith_elim;
 pub mod gvn;
 pub mod insn_simplify;
 pub mod licm;
+pub mod load_store;
 pub mod loop_strength_reduce;
 pub mod range_branch_simplify;
 pub mod sccp;

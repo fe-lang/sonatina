@@ -53,7 +53,6 @@ func private %apply_rook(v0.i256, v1.i256, v2.i8, v3.i8, v4.i8, v5.i8, v6.i8, v7
         v9.*i256 = alloca i256;
         v10.*i8 = alloca i8;
         v11.*i8 = alloca i8;
-        v12.*i8 = alloca i8;
         v13.*i8 = alloca i8;
         v14.*i8 = alloca i8;
         v15.*i1 = alloca i1;
@@ -61,7 +60,6 @@ func private %apply_rook(v0.i256, v1.i256, v2.i8, v3.i8, v4.i8, v5.i8, v6.i8, v7
         mstore v9 v1 i256;
         mstore v10 v2 i8;
         mstore v11 v3 i8;
-        mstore v12 v4 i8;
         mstore v13 v5 i8;
         mstore v14 v6 i8;
         mstore v15 v7 i1;
@@ -75,12 +73,8 @@ func private %apply_rook(v0.i256, v1.i256, v2.i8, v3.i8, v4.i8, v5.i8, v6.i8, v7
 
     block4:
         v115.i8 = and v2 7.i8;
-        v100.*i8 = alloca i8;
-        mstore v100 v2 i8;
         v103.i8 = shr 3.i8 v2;
         v116.i8 = and v3 7.i8;
-        v104.*i8 = alloca i8;
-        mstore v104 v3 i8;
         v106.i8 = shr 3.i8 v3;
         v33.i8 = call %abs_diff v116 v115;
         v34.i8 = call %abs_diff v106 v103;
@@ -338,10 +332,6 @@ func private %set_piece(v0.i256, v1.i8, v2.i8) -> i256 {
 func private %validate_rook_capture() -> @layout_5 {
     block0:
         v0.objref<@layout_2> = obj.alloc @layout_2;
-        v1.*i256 = alloca i256;
-        v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        v4.*i256 = alloca i256;
         v5.*i8 = alloca i8;
         v6.*i8 = alloca i8;
         v7.*i8 = alloca i8;
@@ -349,30 +339,16 @@ func private %validate_rook_capture() -> @layout_5 {
         v15.*i16 = alloca i16;
         v17.*i16 = alloca i16;
         v23.i256 = call %set_piece 0.i256 4.i8 6.i8;
-        mstore v1 v23 i256;
         v26.i256 = call %set_piece v23 0.i8 4.i8;
-        mstore v2 v26 i256;
         v30.i256 = call %set_piece v26 60.i8 14.i8;
-        mstore v3 v30 i256;
         v34.i256 = call %set_piece v30 56.i8 12.i8;
-        mstore v4 v34 i256;
         v43.i256 = call %meta_custom 0.i1 3.i8 15.i8 0.i16 1.i16 4.i8 60.i8;
-        v247.*i8 = alloca i8;
-        v248.*i8 = alloca i8;
-        v249.*i8 = alloca i8;
-        mstore v247 56.i8 i8;
-        mstore v248 0.i8 i8;
-        mstore v249 0.i8 i8;
-        v286.*i32 = alloca i32;
-        mstore v286 56.i32 i32;
-        v262.*i256 = alloca i256;
-        mstore v262 v43 i256;
         v265.i256 = and v43 1.i256;
         v266.i1 = eq v265 1.i256;
-        v360.i256 = shr 224.i256 v34;
-        v361.i256 = and v360 15.i256;
-        v362.i8 = trunc v361 i8;
-        v267.i1 = is_zero v362;
+        v305.i256 = shr 224.i256 v34;
+        v307.i256 = and v305 15.i256;
+        v308.i8 = trunc v307 i8;
+        v267.i1 = is_zero v308;
         br v267 block2 block4;
 
     block2:
@@ -384,17 +360,17 @@ func private %validate_rook_capture() -> @layout_5 {
         br v266 block5 block6;
 
     block5:
-        v303.i1 = lt v362 8.i8;
-        br v303 block103 block8;
+        v312.i1 = lt v308 8.i8;
+        br v312 block95 block8;
 
     block6:
-        v305.i1 = lt v362 8.i8;
-        br v305 block11 block103;
+        v314.i1 = lt v308 8.i8;
+        br v314 block11 block95;
 
-    block103:
-        v366.i256 = and v34 15.i256;
-        v367.i8 = trunc v366 i8;
-        v268.i1 = is_zero v367;
+    block95:
+        v319.i256 = and v34 15.i256;
+        v320.i8 = trunc v319 i8;
+        v268.i1 = is_zero v320;
         br v268 block16 block14;
 
     block8:
@@ -411,21 +387,21 @@ func private %validate_rook_capture() -> @layout_5 {
         br v266 block17 block18;
 
     block16:
-        v94.@layout_2 = call %apply_rook v34 v43 56.i8 0.i8 0.i8 v362 v367 v266;
+        v94.@layout_2 = call %apply_rook v34 v43 56.i8 0.i8 0.i8 v308 v320 v266;
         v95.enumtag(@layout_2) = enum.tag v94;
         br_table v95 block72 (0.enumtag(@layout_2) block73) (1.enumtag(@layout_2) block74);
 
     block17:
-        v309.i1 = lt v367 8.i8;
-        br v309 block20 block19;
+        v323.i1 = lt v320 8.i8;
+        br v323 block20 block19;
 
     block18:
-        v311.i1 = lt v367 8.i8;
-        br v311 block19 block23;
+        v325.i1 = lt v320 8.i8;
+        br v325 block19 block23;
 
     block19:
-        v313.i8 = and v367 7.i8;
-        v134.i1 = eq v313 6.i8;
+        v327.i8 = and v320 7.i8;
+        v134.i1 = eq v327 6.i8;
         br v134 block26 block16;
 
     block20:
@@ -444,7 +420,7 @@ func private %validate_rook_capture() -> @layout_5 {
         return v143;
 
     block29:
-        v144.@layout_5 = phi (v147 block30) (v292 block107);
+        v144.@layout_5 = phi (v147 block30) (v292 block103);
         return v144;
 
     block30:
@@ -465,28 +441,28 @@ func private %validate_rook_capture() -> @layout_5 {
         v160.i1 = extract_value v149 4.i256;
         v162.i8 = extract_value v149 5.i256;
         v164.i1 = extract_value v149 6.i256;
-        v368.i256 = shr 1.i256 v43;
-        v369.i256 = and v368 15.i256;
-        v370.i8 = trunc v369 i8;
+        v328.i256 = shr 1.i256 v43;
+        v329.i256 = and v328 15.i256;
+        v330.i8 = trunc v329 i8;
         br v164 block33 block35;
 
     block33:
         br v266 block36 block37;
 
     block35:
-        v322.i8 = phi (v370 block31) (v190 block36) (v196 block37);
+        v322.i8 = phi (v330 block31) (v190 block36) (v196 block37);
         v269.i1 = is_zero v162;
         br v269 block41 block39;
 
     block36:
-        v188.i8 = and v370 -4.i8;
+        v188.i8 = and v330 -4.i8;
         mstore v5 v188 i8;
         v189.i256 = mload v5 i256;
         v190.i8 = trunc v189 i8;
         jump block35;
 
     block37:
-        v194.i8 = and v370 -13.i8;
+        v194.i8 = and v330 -13.i8;
         mstore v6 v194 i8;
         v195.i256 = mload v6 i256;
         v196.i8 = trunc v195 i8;
@@ -505,21 +481,21 @@ func private %validate_rook_capture() -> @layout_5 {
         br v268 block44 block45;
 
     block42:
-        v316.i1 = lt v367 8.i8;
-        br v316 block46 block44;
+        v333.i1 = lt v320 8.i8;
+        br v333 block46 block44;
 
     block44:
         v209.i8 = phi (v334 block41) (v334 block45) (v224 block46) (v334 block42);
-        v319.i256 = and v154 -31.i256;
-        v320.i256 = zext v209 i256;
-        v322.i256 = and v320 15.i256;
-        v323.i256 = shl 1.i256 v322;
-        v324.i256 = or v319 v323;
-        br v160 block61 block97;
+        v336.i256 = and v154 -31.i256;
+        v337.i256 = zext v209 i256;
+        v338.i256 = and v337 15.i256;
+        v339.i256 = shl 1.i256 v338;
+        v340.i256 = or v336 v339;
+        br v160 block61 block62;
 
     block45:
-        v325.i8 = and v367 7.i8;
-        v215.i1 = eq v325 4.i8;
+        v341.i8 = and v320 7.i8;
+        v215.i1 = eq v341 4.i8;
         br v215 block42 block44;
 
     block46:
@@ -530,61 +506,61 @@ func private %validate_rook_capture() -> @layout_5 {
         jump block44;
 
     block61:
-        v328.i256 = and v324 -481.i256;
+        v344.i256 = and v340 -481.i256;
         jump block63;
 
-    block97:
-        v333.i256 = and v324 -481.i256;
-        v337.i256 = or v333 480.i256;
+    block62:
+        v363.i256 = and v340 -481.i256;
+        v367.i256 = or v363 480.i256;
         jump block63;
 
     block63:
-        v392.i256 = phi (v328 block61) (v337 block97);
-        v371.i256 = shr 9.i256 v43;
-        v372.i256 = and v371 255.i256;
-        v373.i16 = trunc v372 i16;
+        v392.i256 = phi (v344 block61) (v367 block62);
+        v351.i256 = shr 9.i256 v43;
+        v352.i256 = and v351 255.i256;
+        v353.i16 = trunc v352 i16;
         br v158 block66 block67;
 
     block65:
-        (v258.i16, v259.i1) = uaddo v373 1.i16;
+        (v258.i16, v259.i1) = uaddo v353 1.i16;
         br v259 block82 block83;
 
     block66:
         v266.i16 = phi (v264 block83) (0.i16 block63) (0.i16 block67);
-        v339.i256 = and v392 -130561.i256;
-        v340.i256 = zext v266 i256;
-        v342.i256 = and v340 255.i256;
-        v344.i256 = shl 9.i256 v342;
-        v345.i256 = or v339 v344;
-        v375.i256 = shr 17.i256 v43;
-        v376.i256 = and v375 65535.i256;
-        v377.i16 = trunc v376 i16;
+        v369.i256 = and v392 -130561.i256;
+        v370.i256 = zext v266 i256;
+        v371.i256 = and v370 255.i256;
+        v372.i256 = shl 9.i256 v371;
+        v373.i256 = or v369 v372;
+        v355.i256 = shr 17.i256 v43;
+        v356.i256 = and v355 65535.i256;
+        v357.i16 = trunc v356 i16;
         br v266 block70 block68;
 
     block67:
         br v156 block66 block65;
 
     block68:
-        (v275.i16, v276.i1) = uaddo v377 1.i16;
+        (v275.i16, v276.i1) = uaddo v357 1.i16;
         br v276 block82 block84;
 
     block70:
-        v280.i16 = phi (v278 block84) (v377 block66);
-        v347.i256 = and v345 -8589803521.i256;
-        v348.i256 = zext v280 i256;
-        v349.i256 = shl 17.i256 v348;
-        v350.i256 = or v347 v349;
-        br v266 block106 block107;
+        v280.i16 = phi (v278 block84) (v357 block66);
+        v359.i256 = and v373 -8589803521.i256;
+        v360.i256 = zext v280 i256;
+        v361.i256 = shl 17.i256 v360;
+        v362.i256 = or v359 v361;
+        br v266 block102 block103;
 
-    block106:
-        jump block107;
+    block102:
+        jump block103;
 
-    block107:
-        v378.i256 = phi (1.i256 block70) (0.i256 block106);
-        v380.i256 = and v350 -2.i256;
-        v381.i256 = or v380 v378;
+    block103:
+        v377.i256 = phi (1.i256 block70) (0.i256 block102);
+        v379.i256 = and v362 -2.i256;
+        v380.i256 = or v379 v377;
         v275.@layout_4 = insert_value undef.@layout_4 0.i256 v152;
-        v276.@layout_4 = insert_value v275 1.i256 v381;
+        v276.@layout_4 = insert_value v275 1.i256 v380;
         v292.@layout_5 = enum.make @layout_5 #Ok v276;
         jump block29;
 

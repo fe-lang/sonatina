@@ -69,13 +69,13 @@ func private %contract_recv_abi_PoseidonBench_1430137905() {
         obj.store v30 v10;
         v32.objref<i256> = obj.proj v24 1.i256;
         obj.store v32 0.i256;
-        v76.i256 = call %std__lib__abi__sol__impl_trait_SolDecoder_68ab__read_word__g463e_f806 v1;
-        v77.i256 = call %std__lib__abi__sol__impl_trait_SolDecoder_68ab__read_word__g463e_f806 v1;
+        v76.i256 = call %decode_field v1;
+        v77.i256 = call %decode_field v1;
         v46.i256 = call %hash v76 v77;
-        v82.*i8 = evm_malloc 32.i256;
-        v83.i256 = ptr_to_int v82 i256;
-        (v85.i256, v86.i1) = uaddo v83 32.i256;
-        br v86 block8 block9;
+        v81.*i8 = evm_malloc 32.i256;
+        v82.i256 = ptr_to_int v81 i256;
+        (v83.i256, v84.i1) = uaddo v82 32.i256;
+        br v84 block8 block9;
 
     block8:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -83,8 +83,8 @@ func private %contract_recv_abi_PoseidonBench_1430137905() {
         evm_revert 0.i256 36.i256;
 
     block9:
-        mstore v83 v46 i256;
-        evm_return v83 32.i256;
+        mstore v82 v46 i256;
+        evm_return v82 32.i256;
 }
 
 func private %contract_runtime_root_PoseidonBench() {
@@ -100,6 +100,41 @@ func private %contract_runtime_root_PoseidonBench() {
     block3:
         call %contract_recv_abi_PoseidonBench_1430137905;
         unreachable;
+}
+
+func private %decode_field(v0.objref<@layout_4>) -> i256 {
+    block0:
+        v26.objref<@layout_3> = obj.proj v0 0.i256;
+        v27.objref<@layout_2> = obj.proj v26 0.i256;
+        v28.@layout_2 = obj.load v27;
+        v29.i256 = extract_value v28 1.i256;
+        v30.objref<i256> = obj.proj v26 1.i256;
+        v31.i256 = obj.load v30;
+        (v33.i256, v34.i1) = uaddo v31 32.i256;
+        br v34 block25 block26;
+
+    block22:
+        evm_revert 0.i256 0.i256;
+
+    block23:
+        v37.i256 = extract_value v28 0.i256;
+        v38.i256 = add v37 v31;
+        v39.i256 = mload v38 i256;
+        obj.store v30 v33;
+        return v39;
+
+    block24:
+        v36.i1 = gt v33 v29;
+        br v36 block22 block23;
+
+    block25:
+        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
+        mstore 4.i256 17.i256 i256;
+        evm_revert 0.i256 36.i256;
+
+    block26:
+        v35.i1 = lt v33 v31;
+        br v35 block22 block24;
 }
 
 func private %hash(v0.i256, v1.i256) -> i256 {
@@ -296,47 +331,6 @@ func private %hash(v0.i256, v1.i256) -> i256 {
         v4176.i256 = evm_mul_mod 19705173408229649878903981084052839426532978878058043055305024233888854471533.i256 v4172 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
         v4177.i256 = evm_add_mod v4175 v4176 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
         return v4177;
-}
-
-func private %std__lib__abi__sol__impl_trait_SolDecoder_68ab__read_word__g463e_f806(v0.objref<@layout_4>) -> i256 {
-    block0:
-        v1.*i256 = alloca i256;
-        v2.*i256 = alloca i256;
-        v5.objref<@layout_3> = obj.proj v0 0.i256;
-        v6.objref<@layout_2> = obj.proj v5 0.i256;
-        v7.@layout_2 = obj.load v6;
-        v13.i256 = extract_value v7 1.i256;
-        mstore v1 v13 i256;
-        v16.objref<i256> = obj.proj v5 1.i256;
-        v17.i256 = obj.load v16;
-        (v19.i256, v20.i1) = uaddo v17 32.i256;
-        br v20 block6 block7;
-
-    block2:
-        evm_revert 0.i256 0.i256;
-
-    block4:
-        v39.i256 = extract_value v7 0.i256;
-        v47.*i256 = alloca i256;
-        mstore v47 v17 i256;
-        v51.i256 = add v39 v17;
-        v52.i256 = mload v51 i256;
-        obj.store v16 v19;
-        return v52;
-
-    block5:
-        mstore v2 v13 i256;
-        v49.i1 = gt v19 v13;
-        br v49 block2 block4;
-
-    block6:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
-
-    block7:
-        v29.i1 = lt v19 v17;
-        br v29 block2 block5;
 }
 
 

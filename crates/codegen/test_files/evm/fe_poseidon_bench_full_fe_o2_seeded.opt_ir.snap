@@ -298,13 +298,10 @@ func private %hash(v0.i256, v1.i256) -> i256 {
 
 func private %std__lib__abi__sol__impl_trait_SolDecoder_68ab__read_word__g463e_f806(v0.objref<@layout_4>) -> i256 {
     block0:
-        v1.*i256 = alloca i256;
-        v2.*i256 = alloca i256;
         v5.objref<@layout_3> = obj.proj v0 0.i256;
         v6.objref<@layout_2> = obj.proj v5 0.i256;
         v7.@layout_2 = obj.load v6;
         v13.i256 = extract_value v7 1.i256;
-        mstore v1 v13 i256;
         v16.objref<i256> = obj.proj v5 1.i256;
         v17.i256 = obj.load v16;
         (v19.i256, v20.i1) = uaddo v17 32.i256;
@@ -315,15 +312,12 @@ func private %std__lib__abi__sol__impl_trait_SolDecoder_68ab__read_word__g463e_f
 
     block4:
         v39.i256 = extract_value v7 0.i256;
-        v53.*i256 = alloca i256;
-        mstore v53 v17 i256;
         v57.i256 = add v39 v17;
         v58.i256 = mload v57 i256;
         obj.store v16 v19;
         return v58;
 
     block5:
-        mstore v2 v13 i256;
         v49.i1 = gt v19 v13;
         br v49 block2 block4;
 
