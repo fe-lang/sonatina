@@ -6,16 +6,16 @@ input_file: test_files/evm/fe_poseidon_bench_full_opt2.sntn
 evm.config: stack_reach=16 vcode=false bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section init: 17935 bytes
-  section runtime: 17916 bytes
-  total: 35851 bytes
+  section init: 17910 bytes
+  section runtime: 17891 bytes
+  total: 35801 bytes
 
 functions:
   contract_init_root_PoseidonBench: ir_blocks=3 ir_insts=8 vcode_ops=17 fixups=3 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=2 abs_words_end=0
   contract_recv_abi_PoseidonBench_1430137905: ir_blocks=7 ir_insts=43 vcode_ops=139 fixups=11 imm_bytes=34
     mem: scratch_words=1 stable_words=4 stable_mode=StaticAbs(base=0xe0) entry_abs_words=2 abs_words_end=6
-  hash: ir_blocks=13 ir_insts=624 vcode_ops=1484 fixups=10 imm_bytes=615
+  hash: ir_blocks=13 ir_insts=617 vcode_ops=1466 fixups=10 imm_bytes=609
     mem: scratch_words=0 stable_words=440 stable_mode=StaticAbs(base=0x160) entry_abs_words=6 abs_words_end=446
   std__lib__abi__sol__impl_trait_SolDecoder_68ab__read_word__g463e_f806: ir_blocks=5 ir_insts=27 vcode_ops=63 fixups=2 imm_bytes=10
     mem: scratch_words=2 stable_words=0 stable_mode=None entry_abs_words=6 abs_words_end=2
@@ -23,5 +23,5 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=2 abs_words_end=0
 
 evm:
-  deploy: success reason=Return gas_used=3924796 gas_refunded=0 logs=0 output=create len=17916 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
-  case poseidon_1_2: calldata_len=68 success reason=Return gas_used=51251 gas_refunded=0 logs=0 output=call len=32 tx_gas=21344 runtime_gas=29907
+  deploy: success reason=Return gas_used=3919382 gas_refunded=0 logs=0 output=create len=17891 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
+  case poseidon_1_2: calldata_len=68 success reason=Return gas_used=51056 gas_refunded=0 logs=0 output=call len=32 tx_gas=21344 runtime_gas=29712

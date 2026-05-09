@@ -1191,7 +1191,6 @@ fn const_load_row_candidate(
     {
         return None;
     }
-
     if let Some((index, values)) =
         eval_const_path_dynamic_domain_immediates(&module.ctx, path, |value| {
             func.dfg.value_imm(value)
@@ -1285,39 +1284,45 @@ fn normalize_const_load_row_offset(
     Some((u32::try_from(const_offset / 32).ok()?, combined))
 }
 
-fn normalize_index_value_offset(func: &Function, value: ValueId) -> Option<(ValueId, i64)> {
-    if func.dfg.value_ty(value) != Type::I256 {
-        return Some((value, 0));
-    }
-    let Some((inst, result_idx)) = func.dfg.value_inst_result(value) else {
-        return Some((value, 0));
-    };
-    if result_idx != 0 {
-        return Some((value, 0));
-    }
-
-    let inst_data = func.dfg.inst(inst);
-    if let Some(add) = downcast::<&arith::Add>(func.inst_set(), inst_data) {
-        if let Some(offset) = additive_index_offset(func, *add.rhs())
-            && func.dfg.value_ty(*add.lhs()) == Type::I256
-        {
-            return Some((*add.lhs(), offset));
+fn normalize_index_value_offset(func: &Function, mut value: ValueId) -> Option<(ValueId, i64)> {
+    let mut offset = 0i64;
+    loop {
+        if func.dfg.value_ty(value) != Type::I256 {
+            return Some((value, offset));
         }
-        if let Some(offset) = additive_index_offset(func, *add.lhs())
-            && func.dfg.value_ty(*add.rhs()) == Type::I256
-        {
-            return Some((*add.rhs(), offset));
+        let Some((inst, 0)) = func.dfg.value_inst_result(value) else {
+            return Some((value, offset));
+        };
+
+        let inst_data = func.dfg.inst(inst);
+        if let Some(add) = downcast::<&arith::Add>(func.inst_set(), inst_data) {
+            if let Some(rhs_offset) = additive_index_offset(func, *add.rhs())
+                && func.dfg.value_ty(*add.lhs()) == Type::I256
+            {
+                value = *add.lhs();
+                offset = offset.checked_add(rhs_offset)?;
+                continue;
+            }
+            if let Some(lhs_offset) = additive_index_offset(func, *add.lhs())
+                && func.dfg.value_ty(*add.rhs()) == Type::I256
+            {
+                value = *add.rhs();
+                offset = offset.checked_add(lhs_offset)?;
+                continue;
+            }
         }
-    }
 
-    if let Some(sub) = downcast::<&arith::Sub>(func.inst_set(), inst_data)
-        && let Some(offset) = additive_index_offset(func, *sub.rhs()).and_then(i64::checked_neg)
-        && func.dfg.value_ty(*sub.lhs()) == Type::I256
-    {
-        return Some((*sub.lhs(), offset));
-    }
+        if let Some(sub) = downcast::<&arith::Sub>(func.inst_set(), inst_data)
+            && let Some(rhs_offset) = additive_index_offset(func, *sub.rhs())
+            && func.dfg.value_ty(*sub.lhs()) == Type::I256
+        {
+            value = *sub.lhs();
+            offset = offset.checked_sub(rhs_offset)?;
+            continue;
+        }
 
-    Some((value, 0))
+        return Some((value, offset));
+    }
 }
 
 fn additive_index_offset(func: &Function, value: ValueId) -> Option<i64> {
@@ -2860,6 +2865,46 @@ func private %entry(v0.i256) -> i256 {
         v10.i256 = add v3 v6;
         v11.i256 = add v10 v9;
         return v11;
+}
+"#,
+        );
+
+        ConstDataLower::default().run(&parsed.module);
+
+        let entry = find_func_ref(&parsed, "entry");
+        let dumped = parsed
+            .module
+            .func_store
+            .view(entry, |func| FuncWriter::new(entry, func).dump_string());
+        assert_eq!(dumped.matches("evm_code_copy").count(), 1, "{dumped}");
+        assert_eq!(dumped.matches("mload").count(), 3, "{dumped}");
+        assert!(dumped.contains("alloca [i256; 3]"), "{dumped}");
+        assert!(!dumped.contains("const."));
+    }
+
+    #[test]
+    fn adjacent_dynamic_const_loads_share_row_codecopy_with_nested_offset() {
+        let parsed = parse(
+            r#"
+target = "evm-ethereum-osaka"
+
+global private const [i256; 9] $arr = [11, 42, 7, 99, 5, 31, 17, 23, 13];
+
+func private %entry(v0.i256) -> i256 {
+    block0:
+        v1.constref<[i256; 9]> = const.ref $arr;
+        v2.i256 = add 3.i256 v0;
+        v3.constref<i256> = const.index v1 v2;
+        v4.i256 = const.load v3;
+        v5.i256 = add v2 1.i256;
+        v6.constref<i256> = const.index v1 v5;
+        v7.i256 = const.load v6;
+        v8.i256 = add v2 2.i256;
+        v9.constref<i256> = const.index v1 v8;
+        v10.i256 = const.load v9;
+        v11.i256 = add v4 v7;
+        v12.i256 = add v11 v10;
+        return v12;
 }
 "#,
         );
