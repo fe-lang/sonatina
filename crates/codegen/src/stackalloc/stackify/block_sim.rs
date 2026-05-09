@@ -193,10 +193,10 @@ pub(super) fn run_block_sim<O: StackifyObserver>(
 
         if is_normal && !skip_cleanup {
             let func = planner.ctx().func;
-            let tracked_immediates = planner.ctx().tracked_immediates.clone();
+            let retained_immediates = planner.ctx().retained_immediates.clone();
             let values = ReachabilityValues {
                 func,
-                tracked_immediates: &tracked_immediates,
+                retained_immediates: &retained_immediates,
             };
             let reach = planner.ctx().reach;
             planner.with_pre_actions(inst, |actions| {
@@ -229,10 +229,10 @@ pub(super) fn run_block_sim<O: StackifyObserver>(
                     );
 
                     let func = planner.ctx().func;
-                    let tracked_immediates = planner.ctx().tracked_immediates.clone();
+                    let retained_immediates = planner.ctx().retained_immediates.clone();
                     let values = ReachabilityValues {
                         func,
-                        tracked_immediates: &tracked_immediates,
+                        retained_immediates: &retained_immediates,
                     };
                     let reach = planner.ctx().reach;
                     planner.with_pre_actions(inst, |actions| {
@@ -272,10 +272,10 @@ pub(super) fn run_block_sim<O: StackifyObserver>(
                     default,
                 } => {
                     let func = planner.ctx().func;
-                    let tracked_immediates = planner.ctx().tracked_immediates.clone();
+                    let retained_immediates = planner.ctx().retained_immediates.clone();
                     let values = ReachabilityValues {
                         func,
-                        tracked_immediates: &tracked_immediates,
+                        retained_immediates: &retained_immediates,
                     };
                     let reach = planner.ctx().reach;
                     planner.with_pre_actions(inst, |actions| {

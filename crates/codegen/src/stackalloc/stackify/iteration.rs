@@ -54,12 +54,12 @@ struct PendingEdge<D> {
 #[derive(Clone, Copy)]
 pub(super) struct ReachabilityValues<'a> {
     pub(super) func: &'a Function,
-    pub(super) tracked_immediates: &'a BitSet<ValueId>,
+    pub(super) retained_immediates: &'a BitSet<ValueId>,
 }
 
 impl ReachabilityValues<'_> {
-    fn tracks(self, value: ValueId) -> bool {
-        !self.func.dfg.value_is_imm(value) || self.tracked_immediates.contains(value)
+    fn retains(self, value: ValueId) -> bool {
+        !self.func.dfg.value_is_imm(value) || self.retained_immediates.contains(value)
     }
 }
 
@@ -580,9 +580,8 @@ pub(super) fn count_block_uses(
         if ctx.func.dfg.is_phi(inst) {
             continue;
         }
-        for v in ctx.func.dfg.inst(inst).collect_values() {
-            let v = ctx.canonicalize_value(v);
-            if !ctx.tracks_value(v) {
+        for v in operand_order_for_evm(ctx.func, inst, &ctx.value_aliases) {
+            if !ctx.retains_value(v) {
                 continue;
             }
             *counts.entry(v).or_insert(0) += 1;
@@ -757,7 +756,7 @@ pub(super) fn consume_operand_uses(
     free_scratch_slots: &mut FreeSlots,
 ) {
     for &v in args {
-        if ctx.tracks_value(v)
+        if ctx.retains_value(v)
             && let Some(n) = remaining_uses.get_mut(&v)
         {
             let before = *n;
@@ -780,7 +779,7 @@ pub(super) fn last_use_values_in_inst(
 ) -> BitSet<ValueId> {
     let mut inst_counts: BTreeMap<ValueId, u32> = BTreeMap::new();
     for &v in args.iter() {
-        if !ctx.tracks_value(v) {
+        if !ctx.retains_value(v) {
             continue;
         }
         *inst_counts.entry(v).or_insert(0) += 1;
@@ -809,7 +808,7 @@ pub(super) fn improve_reachability_before_operands(
 
     let mut protected_args: BitSet<ValueId> = BitSet::default();
     for &arg in args.iter() {
-        if values.tracks(arg) {
+        if values.retains(arg) {
             protected_args.insert(arg);
         }
     }
@@ -820,7 +819,7 @@ pub(super) fn improve_reachability_before_operands(
     // operand at depth 18-20).
     let mut needs_aggressive = false;
     for &arg in args.iter() {
-        if values.tracks(arg)
+        if values.retains(arg)
             && stack.find_reachable_value(arg, reach.dup_max).is_none()
             && stack
                 .find_reachable_value(arg, AGGRESSIVE_REACHABILITY_DEPTH)
@@ -842,7 +841,7 @@ pub(super) fn improve_reachability_before_operands(
         let mut progressed = false;
 
         for &arg in args.iter() {
-            if values.tracks(arg)
+            if values.retains(arg)
                 && stack.find_reachable_value(arg, reach.dup_max).is_none()
                 && let Some(pos) = stack.find_reachable_value(arg, AGGRESSIVE_REACHABILITY_DEPTH)
                 && let Some(victim) = choose_reachability_victim(
@@ -897,7 +896,7 @@ fn choose_reachability_victim(
     for (i, item) in stack.iter().take(above).enumerate() {
         if let StackItem::Value(v) = item
             && !protected_args.contains(*v)
-            && !values.tracked_immediates.contains(*v)
+            && !values.retained_immediates.contains(*v)
             && values.func.dfg.value_is_imm(*v)
             && is_evictable_imm(values.func, *v)
         {

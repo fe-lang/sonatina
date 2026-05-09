@@ -206,7 +206,7 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
 
         let mut mask = 0u64;
         for (idx, &arg) in args.iter().take(OPERAND_PREP_QUERY_MASK_BITS).enumerate() {
-            if !self.ctx.tracks_value(arg) || consume_last_use.contains(arg) {
+            if !self.ctx.retains_value(arg) || consume_last_use.contains(arg) {
                 continue;
             }
 
@@ -380,7 +380,7 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
         let arg_imm = self.ctx.func.dfg.value_imm(arg);
         let arg_is_imm = arg_imm.is_some();
         let last_use = consume_last_use.contains(arg);
-        let preserve_needed = self.ctx.tracks_value(arg) && !last_use;
+        let preserve_needed = self.ctx.retains_value(arg) && !last_use;
         let copy_count = self.unary_operand_prep_copy_count(arg, arg_imm);
         let top_matches = self
             .stack
@@ -693,7 +693,9 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
         let mut checked = BitSet::default();
         let stack_len = self.stack.len_above_func_ret();
         for &arg in args {
-            if !self.ctx.tracks_value(arg) || consume_last_use.contains(arg) || !checked.insert(arg)
+            if !self.ctx.retains_value(arg)
+                || consume_last_use.contains(arg)
+                || !checked.insert(arg)
             {
                 continue;
             }
@@ -859,7 +861,7 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
                     .dfg
                     .value_imm(v)
                     .expect("imm value missing payload");
-                if self.ctx.tracked_immediates.contains(v)
+                if self.ctx.retained_immediates.contains(v)
                     && let Some(pos) = self.stack.find_reachable_value(v, self.ctx.reach.dup_max)
                 {
                     self.stack.dup(pos, self.actions);

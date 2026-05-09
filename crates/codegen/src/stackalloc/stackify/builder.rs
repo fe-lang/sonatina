@@ -125,7 +125,7 @@ pub struct StackifyBuilder<'a> {
     scratch_live_values_override: Option<BitSet<ValueId>>,
     scratch_spill_slots: u32,
     value_aliases_override: Option<&'a SecondaryMap<ValueId, Option<ValueId>>>,
-    tracked_immediates: BitSet<ValueId>,
+    retained_immediates: BitSet<ValueId>,
 }
 
 pub(super) struct StackifyContext<'a> {
@@ -147,7 +147,7 @@ pub(super) struct StackifyContext<'a> {
     pub(super) search_profile: StackifySearchProfile,
     pub(super) value_aliases: SecondaryMap<ValueId, Option<ValueId>>,
     pub(super) exact_local_addr: SecondaryMap<ValueId, Option<ExactLocalAddr>>,
-    pub(super) tracked_immediates: BitSet<ValueId>,
+    pub(super) retained_immediates: BitSet<ValueId>,
 }
 
 impl StackifyContext<'_> {
@@ -155,8 +155,8 @@ impl StackifyContext<'_> {
         self.value_aliases[value].unwrap_or(value)
     }
 
-    pub(super) fn tracks_value(&self, value: ValueId) -> bool {
-        !self.func.dfg.value_is_imm(value) || self.tracked_immediates.contains(value)
+    pub(super) fn retains_value(&self, value: ValueId) -> bool {
+        !self.func.dfg.value_is_imm(value) || self.retained_immediates.contains(value)
     }
 }
 
@@ -178,7 +178,7 @@ impl<'a> StackifyBuilder<'a> {
             scratch_live_values_override: None,
             scratch_spill_slots: 0,
             value_aliases_override: None,
-            tracked_immediates: BitSet::default(),
+            retained_immediates: BitSet::default(),
         }
     }
 
@@ -205,8 +205,8 @@ impl<'a> StackifyBuilder<'a> {
         self
     }
 
-    pub(crate) fn with_tracked_immediates(mut self, tracked_immediates: BitSet<ValueId>) -> Self {
-        self.tracked_immediates = tracked_immediates;
+    pub(crate) fn with_retained_immediates(mut self, retained_immediates: BitSet<ValueId>) -> Self {
+        self.retained_immediates = retained_immediates;
         self
     }
 
@@ -289,7 +289,7 @@ impl<'a> StackifyBuilder<'a> {
             search_profile: self.search_profile,
             value_aliases,
             exact_local_addr,
-            tracked_immediates: self.tracked_immediates,
+            retained_immediates: self.retained_immediates,
         };
 
         // `spill_set` is discovered via a monotone fixed point:

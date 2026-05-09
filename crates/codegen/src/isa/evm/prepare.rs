@@ -17,7 +17,7 @@ use crate::{
     stackify_edge::StackifyEdgeSplitter,
 };
 use sonatina_ir::{
-    AccessKind, AccessLoc, Function, GlobalVariableRef, InstSetExt, Module, ValueId,
+    AccessKind, AccessLoc, Function, GlobalVariableRef, Immediate, InstSetExt, Module, ValueId,
     cfg::ControlFlowGraph,
     inst::evm::inst_set::EvmInstKind,
     isa::{Isa, evm::space::MEMORY},
@@ -822,11 +822,11 @@ pub(crate) fn prepare_free_ptr_restore(
     }
 }
 
-fn tracked_stack_immediates(
+fn retained_stack_immediates(
     function: &Function,
     value_aliases: &SecondaryMap<ValueId, Option<ValueId>>,
 ) -> BitSet<ValueId> {
-    const MAX_TRACKED: usize = 1;
+    const MAX_RETAINED: usize = 1;
     const MIN_PUSH_BYTES: usize = 16;
     const MIN_USES: u32 = 4;
 
@@ -860,7 +860,7 @@ fn tracked_stack_immediates(
 
     ranked
         .into_iter()
-        .take(MAX_TRACKED)
+        .take(MAX_RETAINED)
         .map(|(_, value)| value)
         .collect()
 }
@@ -874,7 +874,7 @@ fn compute_stackify_alloc(
     backend: &EvmBackend,
     canonical_scratch_live_values: &BitSet<ValueId>,
     value_aliases: &SecondaryMap<ValueId, Option<ValueId>>,
-    tracked_immediates: BitSet<ValueId>,
+    retained_immediates: BitSet<ValueId>,
 ) -> StackifyAlloc {
     StackifyBuilder::new(
         function,
@@ -887,28 +887,49 @@ fn compute_stackify_alloc(
     .with_scratch_live_values(canonical_scratch_live_values.clone())
     .with_scratch_spills(scratch_plan::SCRATCH_SPILL_SLOTS)
     .with_value_aliases(value_aliases)
-    .with_tracked_immediates(tracked_immediates)
+    .with_retained_immediates(retained_immediates)
     .compute()
 }
 
-fn stackify_alloc_size(alloc: &StackifyAlloc) -> u64 {
-    let mut size = 0u64;
-    alloc.for_each_action(|action| {
-        size += match *action {
-            Action::Push(imm) => 1 + imm_push_data_len(imm) as u64,
-            Action::StackDup(_) | Action::StackSwap(_) | Action::Pop => 1,
-            Action::PushContinuationOffset
-            | Action::MaterializeLocalAddr { .. }
-            | Action::PushFrameAddr { .. }
-            | Action::MemLoadAbs(_)
-            | Action::MemStoreAbs(_) => 3,
-            Action::MemLoadFrameSlot(_)
-            | Action::MemStoreFrameSlot(_)
-            | Action::MemLoadObj(_)
-            | Action::MemStoreObj(_) => 7,
-        };
+#[derive(Clone, Copy, Default, Eq, Ord, PartialEq, PartialOrd)]
+struct StackifyAllocCost {
+    gas: u64,
+    bytes: u64,
+}
+
+impl StackifyAllocCost {
+    fn add(&mut self, gas: u64, bytes: u64) {
+        self.gas += gas;
+        self.bytes += bytes;
+    }
+}
+
+fn push_cost(imm: Immediate) -> StackifyAllocCost {
+    StackifyAllocCost {
+        gas: if imm.is_zero() { 2 } else { 3 },
+        bytes: 1 + imm_push_data_len(imm) as u64,
+    }
+}
+
+fn stackify_alloc_cost(alloc: &StackifyAlloc) -> StackifyAllocCost {
+    let mut cost = StackifyAllocCost::default();
+    alloc.for_each_action(|action| match *action {
+        Action::Push(imm) => {
+            let push = push_cost(imm);
+            cost.add(push.gas, push.bytes);
+        }
+        Action::StackDup(_) | Action::StackSwap(_) => cost.add(3, 1),
+        Action::Pop => cost.add(2, 1),
+        Action::PushContinuationOffset
+        | Action::MaterializeLocalAddr { .. }
+        | Action::PushFrameAddr { .. } => cost.add(3, 3),
+        Action::MemLoadAbs(_) | Action::MemStoreAbs(_) => cost.add(6, 3),
+        Action::MemLoadFrameSlot(_)
+        | Action::MemStoreFrameSlot(_)
+        | Action::MemLoadObj(_)
+        | Action::MemStoreObj(_) => cost.add(15, 7),
     });
-    size
+    cost
 }
 
 fn prepare_stackify_analysis(
@@ -948,10 +969,10 @@ fn prepare_stackify_analysis(
         inst_liveness
     };
 
-    let (value_aliases, tracked_immediates, stack_liveness, canonical_scratch_live_values) = {
+    let (value_aliases, retained_immediates, stack_liveness, canonical_scratch_live_values) = {
         let _span = trace_span!("sonatina.codegen.evm.stackify.canonicalize_aliases").entered();
         let value_aliases = backend.compute_stackify_value_aliases(function, module);
-        let tracked_immediates = tracked_stack_immediates(function, &value_aliases);
+        let retained_immediates = retained_stack_immediates(function, &value_aliases);
 
         let mut stack_liveness = Liveness::new();
         stack_liveness.compute_with_value_normalizer(function, &cfg, |v| {
@@ -972,7 +993,7 @@ fn prepare_stackify_analysis(
         }
         (
             value_aliases,
-            tracked_immediates,
+            retained_immediates,
             stack_liveness,
             canonical_scratch_live_values,
         )
@@ -990,28 +1011,21 @@ fn prepare_stackify_analysis(
             &value_aliases,
             BitSet::default(),
         );
-        if tracked_immediates.is_empty() {
+        if retained_immediates.is_empty() {
             baseline_alloc
         } else {
-            let baseline_size = stackify_alloc_size(&baseline_alloc);
-            let mut candidate_liveness = Liveness::new();
-            candidate_liveness.compute_with_tracked_immediates(
-                function,
-                &cfg,
-                |v| canonicalize_alias_value(&value_aliases, v),
-                &tracked_immediates,
-            );
+            let baseline_cost = stackify_alloc_cost(&baseline_alloc);
             let candidate_alloc = compute_stackify_alloc(
                 function,
                 &cfg,
                 &dom,
-                &candidate_liveness,
+                &stack_liveness,
                 backend,
                 &canonical_scratch_live_values,
                 &value_aliases,
-                tracked_immediates,
+                retained_immediates,
             );
-            if stackify_alloc_size(&candidate_alloc) < baseline_size {
+            if stackify_alloc_cost(&candidate_alloc) < baseline_cost {
                 candidate_alloc
             } else {
                 baseline_alloc
