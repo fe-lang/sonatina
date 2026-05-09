@@ -11,9 +11,9 @@ object: Contract
 
 functions:
   entry: ir_blocks=1 ir_insts=10 vcode_ops=26 fixups=4 imm_bytes=3
-    mem: scratch_words=0 stable_words=1 stable_mode=StaticAbs(base=0x20) entry_abs_words=0 abs_words_end=1
+    mem: scratch_words=1 stable_words=0 stable_mode=None entry_abs_words=1 abs_words_end=1
   load_arr: ir_blocks=1 ir_insts=7 vcode_ops=15 fixups=1 imm_bytes=4
-    mem: scratch_words=0 stable_words=1 stable_mode=StaticAbs(base=0x40) entry_abs_words=1 abs_words_end=2
+    mem: scratch_words=1 stable_words=0 stable_mode=None entry_abs_words=1 abs_words_end=1
   addr_row: ir_blocks=1 ir_insts=2 vcode_ops=4 fixups=1 imm_bytes=1
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=1 abs_words_end=0
 
@@ -73,7 +73,7 @@ pc [55, 56) func=load_arr block=0 vcode=12 ir=3 reason=- frontend=-
 pc [56, 57) func=load_arr block=0 vcode=13 ir=3 reason=- frontend=-
 
 evm:
-  case index_2: calldata_len=32 success reason=Return gas_used=21297 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=157
+  case index_2: calldata_len=32 success reason=Return gas_used=21294 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=154
 
 
 --------------- DEBUG ---------------
@@ -117,7 +117,7 @@ load_arr:
     PUSH1 0x20 (32)
     MUL
     ADD  // v7.i256 = add v4 v6;
-    PUSH1 0x40 (64)  // v8.*i256 = alloca i256;
+    PUSH1 0x20 (32)  // v8.*i256 = alloca i256;
     PUSH1 0x20 (32)  // evm_code_copy v8 v7 32.i256;
     SWAP1
     SWAP2

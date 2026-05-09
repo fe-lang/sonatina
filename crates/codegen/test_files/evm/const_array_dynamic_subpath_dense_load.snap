@@ -11,9 +11,9 @@ object: Contract
 
 functions:
   entry: ir_blocks=1 ir_insts=4 vcode_ops=12 fixups=2 imm_bytes=1
-    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=1 abs_words_end=0
   load_dense_subpath: ir_blocks=1 ir_insts=7 vcode_ops=15 fixups=1 imm_bytes=4
-    mem: scratch_words=0 stable_words=1 stable_mode=StaticAbs(base=0x20) entry_abs_words=0 abs_words_end=1
+    mem: scratch_words=1 stable_words=0 stable_mode=None entry_abs_words=1 abs_words_end=1
 
 --------------- OBSERVABILITY ---------------
 

@@ -11,11 +11,11 @@ object: Contract
 
 functions:
   entry: ir_blocks=1 ir_insts=4 vcode_ops=12 fixups=2 imm_bytes=1
-    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=1 abs_words_end=0
   load__constref_a0_g0i1: ir_blocks=1 ir_insts=1 vcode_ops=5 fixups=0 imm_bytes=1
-    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=1 abs_words_end=0
   load: ir_blocks=1 ir_insts=6 vcode_ops=13 fixups=0 imm_bytes=3
-    mem: scratch_words=0 stable_words=1 stable_mode=StaticAbs(base=0x20) entry_abs_words=0 abs_words_end=1
+    mem: scratch_words=1 stable_words=0 stable_mode=None entry_abs_words=1 abs_words_end=1
 
 --------------- OBSERVABILITY ---------------
 

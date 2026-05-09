@@ -249,7 +249,6 @@ fn unmodeled_write_addr(data: &EvmInstKind) -> Option<ValueId> {
         EvmInstKind::EvmMstore8(mstore8) => Some(*mstore8.addr()),
         EvmInstKind::EvmMcopy(mcopy) => Some(*mcopy.dest()),
         EvmInstKind::EvmCalldataCopy(copy) => Some(*copy.dst_addr()),
-        EvmInstKind::EvmCodeCopy(copy) => Some(*copy.dst_addr()),
         EvmInstKind::EvmExtCodeCopy(copy) => Some(*copy.dst_addr()),
         EvmInstKind::EvmReturnDataCopy(copy) => Some(*copy.dst_addr()),
         EvmInstKind::EvmCall(call) => Some(*call.ret_addr()),
@@ -766,6 +765,31 @@ block0:
 
         assert!(ret_prov.is_unknown_ptr());
         assert_eq!(ret_prov.arg_indices().collect::<Vec<_>>(), vec![0]);
+    }
+
+    #[test]
+    fn codecopy_does_not_introduce_pointer_provenance() {
+        let ret_prov = ret_provenance(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %f() -> *i8 {
+block0:
+    v0.*i256 = alloca i256;
+    v1.i256 = ptr_to_int v0 i256;
+    evm_code_copy v1 0.i256 32.i256;
+    v2.*i8 = mload v0 *i8;
+    return v2;
+}
+"#,
+            "f",
+        );
+
+        assert!(!ret_prov.is_unknown_ptr());
+        assert_eq!(
+            ret_prov.arg_indices().collect::<Vec<_>>(),
+            Vec::<u32>::new()
+        );
     }
 
     #[test]
