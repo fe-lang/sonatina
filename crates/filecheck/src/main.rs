@@ -1,10 +1,11 @@
 use sonatina_filecheck::{
     FileCheckRunner, adce::AdceTransform, aggregate_combine::AggregateCombineTransform,
-    aggregate_scalarize::AggregateScalarizeTransform, cfg_cleanup::CfgCleanupTransform,
-    checked_arith_elim::CheckedArithElimTransform, gvn::GvnTransform, licm::LicmTransformer,
+    aggregate_scalarize::AggregateScalarizeTransform,
+    branch_canonicalize::BranchCanonicalizeTransform, cfg_cleanup::CfgCleanupTransform,
+    checked_arith_elim::CheckedArithElimTransform, gvn::GvnTransform,
+    known_bits_simplify::KnownBitsSimplifyTransform, licm::LicmTransformer,
     load_store::LoadStoreTransform, loop_strength_reduce::LoopStrengthReduceTransform,
-    range_branch_simplify::RangeBranchSimplifyTransform,
-    sccp::SccpTransform,
+    range_branch_simplify::RangeBranchSimplifyTransform, sccp::SccpTransform,
 };
 
 fn main() {
@@ -12,6 +13,9 @@ fn main() {
     runner.run();
 
     runner.attach_transformer(CfgCleanupTransform::default());
+    runner.run();
+
+    runner.attach_transformer(BranchCanonicalizeTransform);
     runner.run();
 
     runner.attach_transformer(AggregateCombineTransform);
@@ -26,11 +30,15 @@ fn main() {
     runner.attach_transformer(CheckedArithElimTransform::default());
     runner.run();
 
-    runner.attach_transformer(LoadStoreTransform::default());
+    runner.attach_transformer(KnownBitsSimplifyTransform);
     runner.run();
 
     runner.attach_transformer(RangeBranchSimplifyTransform::default());
     runner.run();
+
+    runner.attach_transformer(LoadStoreTransform::default());
+    runner.run();
+
     runner.attach_transformer(GvnTransform::default());
     runner.run();
 

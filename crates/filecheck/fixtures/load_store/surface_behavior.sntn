@@ -1,0 +1,520 @@
+target = "evm-ethereum-london"
+
+func private %noreturn_helper() {
+    block0:
+        evm_stop;
+}
+
+func private %revert_helper() {
+    block0:
+        evm_revert 0.i256 0.i256;
+}
+
+#! Forward a local load from a dominating local store.
+# sameln: func public %forwards_local_mload_from_prior_store() -> i256 {
+# not:         mstore
+# not:         mload
+# check:       return 7.i256;
+func public %forwards_local_mload_from_prior_store() -> i256 {
+    block0:
+        v0.*i256 = alloca i256;
+        mstore v0 7.i256 i256;
+        v1.i256 = mload v0 i256;
+        return v1;
+}
+
+#! Forward loop-invariant local loads after initially unsolved backedges settle.
+# sameln: func public %forwards_loop_invariant_load_with_initially_unsolved_backedge(v0.i1) -> i256 {
+# not:         mload
+# check:       v8.i256 = add 7.i256 1.i256;
+# check:       return v2;
+func public %forwards_loop_invariant_load_with_initially_unsolved_backedge(v0.i1) -> i256 {
+    block0:
+        v1.*i256 = alloca i256;
+        mstore v1 7.i256 i256;
+        jump block1;
+
+    block1:
+        v2.i256 = phi (0.i256 block0) (v8 block2);
+        br v0 block3 block2;
+
+    block2:
+        v7.i256 = mload v1 i256;
+        v8.i256 = add v7 1.i256;
+        jump block1;
+
+    block3:
+        return v2;
+}
+
+#! Forward loop-invariant storage loads after initially unsolved backedges settle.
+# sameln: func public %forwards_loop_invariant_sload_with_initially_unsolved_backedge(v0.i1, v1.i256) -> i256 {
+# not:         evm_sload
+# check:       v7.i256 = add 7.i256 1.i256;
+# check:       return v3;
+func public %forwards_loop_invariant_sload_with_initially_unsolved_backedge(v0.i1, v1.i256) -> i256 {
+    block0:
+        v2.i256 = add v1 1.i256;
+        evm_sstore v2 7.i256;
+        jump block1;
+
+    block1:
+        v3.i256 = phi (0.i256 block0) (v7 block2);
+        br v0 block3 block2;
+
+    block2:
+        v6.i256 = evm_sload v2;
+        v7.i256 = add v6 1.i256;
+        jump block1;
+
+    block3:
+        return v3;
+}
+
+#! A loop backedge write prevents forwarding at the header.
+# sameln: func public %loop_backedge_write_prevents_header_forwarding() -> i256 {
+# check:       v5.i256 = mload v0 i256;
+# check:       v7.i256 = mload v0 i256;
+func public %loop_backedge_write_prevents_header_forwarding() -> i256 {
+    block0:
+        v0.*i256 = alloca i256;
+        mstore v0 7.i256 i256;
+        jump block1;
+
+    block1:
+        v1.i1 = phi (0.i1 block0) (1.i1 block2);
+        br v1 block3 block2;
+
+    block2:
+        v5.i256 = mload v0 i256;
+        v6.i256 = add v5 1.i256;
+        mstore v0 8.i256 i256;
+        jump block1;
+
+    block3:
+        v7.i256 = mload v0 i256;
+        return v7;
+}
+
+#! Disagreeing predecessor stores do not forward through a join.
+# sameln: func public %join_with_disagreeing_predecessor_values_does_not_forward(v0.i1) -> i256 {
+# check:       v2.i256 = mload v1 i256;
+# nextln:      return v2;
+func public %join_with_disagreeing_predecessor_values_does_not_forward(v0.i1) -> i256 {
+    block0:
+        v1.*i256 = alloca i256;
+        br v0 block1 block2;
+
+    block1:
+        mstore v1 7.i256 i256;
+        jump block3;
+
+    block2:
+        mstore v1 8.i256 i256;
+        jump block3;
+
+    block3:
+        v2.i256 = mload v1 i256;
+        return v2;
+}
+
+#! Overwritten local stores are removed when only the later store is read.
+# sameln: func public %removes_overwritten_local_store() -> i256 {
+# not:         mstore
+# check:       return 2.i256;
+func public %removes_overwritten_local_store() -> i256 {
+    block0:
+        v0.*i256 = alloca i256;
+        mstore v0 1.i256 i256;
+        mstore v0 2.i256 i256;
+        v1.i256 = mload v0 i256;
+        return v1;
+}
+
+#! Keccak reads memory contents, so it is not replaced with the stored value.
+# sameln: func public %does_not_forward_keccak_result_from_memory_contents() -> i256 {
+# check:       mstore v0 7.i256 i256;
+# nextln:      v1.i256 = evm_keccak256 v0 32.i256;
+# nextln:      return v1;
+func public %does_not_forward_keccak_result_from_memory_contents() -> i256 {
+    block0:
+        v0.*i256 = alloca i256;
+        mstore v0 7.i256 i256;
+        v1.i256 = evm_keccak256 v0 32.i256;
+        return v1;
+}
+
+#! Staticcall is a storage read barrier, but a preceding sstore still forwards.
+# sameln: func public %storage_write_survives_staticcall_read_barrier_while_sload_forwards() -> i256 {
+# check:       evm_sstore 1.i256 1.i256;
+# check:       evm_static_call
+# not:         evm_sload
+# check:       return 1.i256;
+func public %storage_write_survives_staticcall_read_barrier_while_sload_forwards() -> i256 {
+    block0:
+        v0.*i256 = alloca i256;
+        evm_sstore 1.i256 1.i256;
+        v1.i1 = evm_static_call 0.i256 0.i256 v0 0.i256 v0 0.i256;
+        v2.i256 = evm_sload 1.i256;
+        return v2;
+}
+
+#! Storage barriers do not invalidate unrelated memory facts.
+# sameln: func public %storage_barrier_does_not_kill_memory_fact() -> i256 {
+# not:         mload
+# check:       evm_sstore 1.i256 7.i256;
+# check:       return 7.i256;
+func public %storage_barrier_does_not_kill_memory_fact() -> i256 {
+    block0:
+        v0.*i256 = alloca i256;
+        mstore v0 7.i256 i256;
+        evm_sstore 1.i256 7.i256;
+        v1.i256 = mload v0 i256;
+        return v1;
+}
+
+#! Malloc reads and writes the free-memory pointer, so the second mload remains.
+# sameln: func public %mload_does_not_forward_across_malloc_free_ptr_barrier() -> i256 {
+# check:       v0.i256 = mload 64.i256 i256;
+# check:       v1.*i8 = evm_malloc 32.i256;
+# check:       v2.i256 = mload 64.i256 i256;
+func public %mload_does_not_forward_across_malloc_free_ptr_barrier() -> i256 {
+    block0:
+        v0.i256 = mload 64.i256 i256;
+        v1.*i8 = evm_malloc 32.i256;
+        v2.i256 = mload 64.i256 i256;
+        return v2;
+}
+
+#! Malloc reads the free-memory pointer, keeping a prior store to that slot live.
+# sameln: func public %malloc_read_keeps_prior_free_ptr_store_live() {
+# check:       mstore 64.i256 7.i256 i256;
+# check:       v0.*i8 = evm_malloc 32.i256;
+# check:       mstore 64.i256 8.i256 i256;
+func public %malloc_read_keeps_prior_free_ptr_store_live() {
+    block0:
+        mstore 64.i256 7.i256 i256;
+        v0.*i8 = evm_malloc 32.i256;
+        mstore 64.i256 8.i256 i256;
+        return;
+}
+
+#! A free-memory-pointer barrier does not kill unrelated malloc-region facts.
+# sameln: func public %malloc_free_ptr_barrier_does_not_kill_unrelated_malloc_fact() -> i256 {
+# not:         mload
+# check:       return 7.i256;
+func public %malloc_free_ptr_barrier_does_not_kill_unrelated_malloc_fact() -> i256 {
+    block0:
+        v0.*i8 = evm_malloc 32.i256;
+        mstore v0 7.i256 i256;
+        v1.*i8 = evm_malloc 32.i256;
+        v2.i256 = mload v0 i256;
+        return v2;
+}
+
+#! Create barriers prevent forwarding storage facts.
+# sameln: func public %sload_does_not_forward_across_create_barrier() -> i256 {
+# check:       evm_sstore 1.i256 1.i256;
+# check:       v1.i256 = evm_create 0.i256 v0 0.i256;
+# check:       v2.i256 = evm_sload 1.i256;
+func public %sload_does_not_forward_across_create_barrier() -> i256 {
+    block0:
+        v0.*i256 = alloca i256;
+        evm_sstore 1.i256 1.i256;
+        v1.i256 = evm_create 0.i256 v0 0.i256;
+        v2.i256 = evm_sload 1.i256;
+        return v2;
+}
+
+#! Create barriers keep overwritten sstores live.
+# sameln: func public %create_barrier_keeps_overwritten_sstore_live() {
+# check:       evm_sstore 1.i256 7.i256;
+# check:       v1.i256 = evm_create 0.i256 v0 0.i256;
+# check:       evm_sstore 1.i256 8.i256;
+func public %create_barrier_keeps_overwritten_sstore_live() {
+    block0:
+        v0.*i256 = alloca i256;
+        evm_sstore 1.i256 7.i256;
+        v1.i256 = evm_create 0.i256 v0 0.i256;
+        evm_sstore 1.i256 8.i256;
+        return;
+}
+
+#! Create2 barriers prevent forwarding transient storage facts.
+# sameln: func public %tload_does_not_forward_across_create2_barrier() -> i256 {
+# check:       evm_tstore 1.i256 1.i256;
+# check:       v1.i256 = evm_create2 0.i256 v0 0.i256 0.i256;
+# check:       v2.i256 = evm_tload 1.i256;
+func public %tload_does_not_forward_across_create2_barrier() -> i256 {
+    block0:
+        v0.*i256 = alloca i256;
+        evm_tstore 1.i256 1.i256;
+        v1.i256 = evm_create2 0.i256 v0 0.i256 0.i256;
+        v2.i256 = evm_tload 1.i256;
+        return v2;
+}
+
+#! Final storage writes are live on committing exits.
+# sameln: func public %keeps_final_sstore_at_function_exit() {
+# check:       evm_sstore 1.i256 7.i256;
+# nextln:      return;
+func public %keeps_final_sstore_at_function_exit() {
+    block0:
+        evm_sstore 1.i256 7.i256;
+        return;
+}
+
+#! Final storage writes are live before committing noreturn calls.
+# sameln: func public %keeps_final_sstore_before_noreturn_call_exit() {
+# check:       evm_sstore 1.i256 7.i256;
+# nextln:      call %noreturn_helper;
+func public %keeps_final_sstore_before_noreturn_call_exit() {
+    block0:
+        evm_sstore 1.i256 7.i256;
+        call %noreturn_helper;
+        unreachable;
+}
+
+#! Final storage writes are dead before reverting noreturn calls.
+# sameln: func public %removes_final_sstore_before_reverting_noreturn_call_exit() {
+# not:         evm_sstore
+# check:       call %revert_helper;
+func public %removes_final_sstore_before_reverting_noreturn_call_exit() {
+    block0:
+        evm_sstore 1.i256 7.i256;
+        call %revert_helper;
+        unreachable;
+}
+
+#! Final absolute memory stores are externally visible on returning exits.
+# sameln: func public %keeps_final_absolute_memory_store_at_function_exit() {
+# check:       mstore 64.i256 7.i256 i256;
+# nextln:      return;
+func public %keeps_final_absolute_memory_store_at_function_exit() {
+    block0:
+        mstore 64.i256 7.i256 i256;
+        return;
+}
+
+#! Overwritten absolute memory stores are removed before returning exits.
+# sameln: func public %removes_overwritten_absolute_memory_store_before_function_exit() {
+# not:         mstore 64.i256 7.i256 i256;
+# check:       mstore 64.i256 8.i256 i256;
+# nextln:      return;
+func public %removes_overwritten_absolute_memory_store_before_function_exit() {
+    block0:
+        mstore 64.i256 7.i256 i256;
+        mstore 64.i256 8.i256 i256;
+        return;
+}
+
+#! A store is live if any committing exit can observe its value.
+# sameln: func public %keeps_store_when_only_one_commit_path_overwrites_exit_visible_value(v0.i1) {
+# check:       mstore 64.i256 7.i256 i256;
+# check:       mstore 64.i256 8.i256 i256;
+func public %keeps_store_when_only_one_commit_path_overwrites_exit_visible_value(v0.i1) {
+    block0:
+        mstore 64.i256 7.i256 i256;
+        br v0 block1 block2;
+
+    block1:
+        mstore 64.i256 8.i256 i256;
+        return;
+
+    block2:
+        return;
+}
+
+#! Disjoint absolute memory stores are dead on revert exits.
+# sameln: func public %removes_disjoint_absolute_memory_store_on_revert_exit() {
+# not:         mstore
+# check:       evm_revert 0.i256 32.i256;
+func public %removes_disjoint_absolute_memory_store_on_revert_exit() {
+    block0:
+        mstore 64.i256 7.i256 i256;
+        evm_revert 0.i256 32.i256;
+}
+
+#! Zero-length revert payloads do not read absolute memory stores.
+# sameln: func public %removes_zero_length_absolute_memory_store_on_revert_exit() {
+# not:         mstore
+# check:       evm_revert 0.i256 0.i256;
+func public %removes_zero_length_absolute_memory_store_on_revert_exit() {
+    block0:
+        mstore 64.i256 7.i256 i256;
+        evm_revert 0.i256 0.i256;
+}
+
+#! Revert payload reads keep overlapping absolute memory stores live.
+# sameln: func public %keeps_absolute_memory_store_when_revert_payload_reads_it() {
+# check:       mstore 64.i256 7.i256 i256;
+# nextln:      evm_revert 64.i256 32.i256;
+func public %keeps_absolute_memory_store_when_revert_payload_reads_it() {
+    block0:
+        mstore 64.i256 7.i256 i256;
+        evm_revert 64.i256 32.i256;
+}
+
+#! Overwritten absolute memory stores are removed before revert payload reads.
+# sameln: func public %removes_overwritten_absolute_memory_store_before_revert_payload() {
+# not:         mstore 64.i256 7.i256 i256;
+# check:       mstore 64.i256 8.i256 i256;
+# nextln:      evm_revert 64.i256 32.i256;
+func public %removes_overwritten_absolute_memory_store_before_revert_payload() {
+    block0:
+        mstore 64.i256 7.i256 i256;
+        mstore 64.i256 8.i256 i256;
+        evm_revert 64.i256 32.i256;
+}
+
+#! Overwritten absolute memory stores are removed before return payload reads.
+# sameln: func public %removes_overwritten_absolute_memory_store_before_return_payload() {
+# not:         mstore 64.i256 7.i256 i256;
+# check:       mstore 64.i256 8.i256 i256;
+# nextln:      evm_return 64.i256 32.i256;
+func public %removes_overwritten_absolute_memory_store_before_return_payload() {
+    block0:
+        mstore 64.i256 7.i256 i256;
+        mstore 64.i256 8.i256 i256;
+        evm_return 64.i256 32.i256;
+}
+
+#! Partial overlap keeps both writes live before a revert payload read.
+# sameln: func public %keeps_partially_overwritten_absolute_memory_store_before_revert_payload() {
+# check:       mstore 64.i256 7.i256 i256;
+# nextln:      mstore 80.i256 8.i256 i256;
+# nextln:      evm_revert 64.i256 32.i256;
+func public %keeps_partially_overwritten_absolute_memory_store_before_revert_payload() {
+    block0:
+        mstore 64.i256 7.i256 i256;
+        mstore 80.i256 8.i256 i256;
+        evm_revert 64.i256 32.i256;
+}
+
+#! Storage writes are dead on revert exits.
+# sameln: func public %removes_final_sstore_on_revert_exit() {
+# not:         evm_sstore
+# check:       evm_revert 0.i256 0.i256;
+func public %removes_final_sstore_on_revert_exit() {
+    block0:
+        evm_sstore 1.i256 7.i256;
+        evm_revert 0.i256 0.i256;
+}
+
+#! Storage writes are live on selfdestruct exits.
+# sameln: func public %keeps_final_sstore_on_selfdestruct_exit() {
+# check:       evm_sstore 1.i256 7.i256;
+# nextln:      evm_self_destruct 0.i256;
+func public %keeps_final_sstore_on_selfdestruct_exit() {
+    block0:
+        evm_sstore 1.i256 7.i256;
+        evm_self_destruct 0.i256;
+}
+
+#! Storage writes are live if any exit commits.
+# sameln: func public %keeps_final_sstore_when_any_exit_commits(v0.i1) {
+# check:       evm_sstore 1.i256 7.i256;
+# check:       evm_stop;
+func public %keeps_final_sstore_when_any_exit_commits(v0.i1) {
+    block0:
+        evm_sstore 1.i256 7.i256;
+        br v0 block1 block2;
+
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block2:
+        evm_stop;
+}
+
+#! Repeated calldata loads are CSE'd.
+# sameln: func public %repeated_calldata_loads_cse() -> i256 {
+# check:       v0.i256 = evm_calldata_load 0.i32;
+# not:         evm_calldata_load
+# check:       return v0;
+func public %repeated_calldata_loads_cse() -> i256 {
+    block0:
+        v0.i256 = evm_calldata_load 0.i32;
+        v1.i256 = evm_calldata_load 0.i32;
+        return v1;
+}
+
+#! Repeated dynamic-key sloads forward across branches and joins.
+# sameln: func public %repeated_sloads_from_same_dynamic_key_forward_across_branch_and_join(v0.i1, v1.i256) -> i256 {
+# check:       v3.i256 = evm_sload v2;
+# not:         evm_sload
+# check:       return v3;
+func public %repeated_sloads_from_same_dynamic_key_forward_across_branch_and_join(v0.i1, v1.i256) -> i256 {
+    block0:
+        v2.i256 = add 1.i256 v1;
+        v3.i256 = evm_sload v2;
+        br v0 block1 block2;
+
+    block1:
+        v4.i256 = evm_sload v2;
+        jump block2;
+
+    block2:
+        v5.i256 = evm_sload v2;
+        return v5;
+}
+
+#! Loop-variant dynamic-key sloads do not forward across the backedge.
+# sameln: func public %does_not_forward_loop_variant_sload_across_backedge(v0.i1, v1.i256) -> i256 {
+# check:       v5.i256 = evm_sload v4;
+# nextln:      br v0 block3 block2;
+func public %does_not_forward_loop_variant_sload_across_backedge(v0.i1, v1.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v2.i256 = phi (0.i256 block0) (v7 block2);
+        v4.i256 = add v1 v2;
+        v5.i256 = evm_sload v4;
+        br v0 block3 block2;
+
+    block2:
+        v7.i256 = add v2 1.i256;
+        jump block1;
+
+    block3:
+        return v5;
+}
+
+#! Equivalent dynamic key expressions forward storage loads.
+# sameln: func public %forwards_sload_from_equivalent_dynamic_key_expression(v0.i256) -> i256 {
+# not:         evm_sload
+# check:       return 7.i256;
+func public %forwards_sload_from_equivalent_dynamic_key_expression(v0.i256) -> i256 {
+    block0:
+        v1.i256 = add 1.i256 v0;
+        v2.i256 = add 1.i256 v0;
+        evm_sstore v1 7.i256;
+        v3.i256 = evm_sload v2;
+        return v3;
+}
+
+#! Mstore8 does not forward from a wide value to a byte load.
+# sameln: func public %does_not_forward_mstore8_from_wide_value() -> i8 {
+# check:       evm_mstore8 v0 511.i256;
+# nextln:      v1.i8 = mload v0 i8;
+# nextln:      return v1;
+func public %does_not_forward_mstore8_from_wide_value() -> i8 {
+    block0:
+        v0.*i8 = alloca i8;
+        evm_mstore8 v0 511.i256;
+        v1.i8 = mload v0 i8;
+        return v1;
+}
+
+#! Narrow stored values do not forward to full-width sloads.
+# sameln: func public %does_not_forward_sload_from_narrow_stored_value() -> i256 {
+# check:       evm_sstore 1.i256 7.i32;
+# nextln:      v0.i256 = evm_sload 1.i256;
+# nextln:      return v0;
+func public %does_not_forward_sload_from_narrow_stored_value() -> i256 {
+    block0:
+        evm_sstore 1.i256 7.i32;
+        v0.i256 = evm_sload 1.i256;
+        return v0;
+}
