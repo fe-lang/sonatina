@@ -6,8 +6,8 @@ input_file: test_files/evm/fe_poseidon_mock_different_inputs_regression.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 2466 bytes
-  total: 2466 bytes
+  section runtime: 2274 bytes
+  total: 2274 bytes
 
 functions:
   ark: ir_blocks=8 ir_insts=45 vcode_ops=131 fixups=8 imm_bytes=26

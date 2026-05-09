@@ -6,8 +6,8 @@ input_file: test_files/evm/fe_poseidon_mock_different_inputs_master_baseline.snt
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 2536 bytes
-  total: 2536 bytes
+  section runtime: 2344 bytes
+  total: 2344 bytes
 
 functions:
   ark: ir_blocks=8 ir_insts=50 vcode_ops=145 fixups=9 imm_bytes=31

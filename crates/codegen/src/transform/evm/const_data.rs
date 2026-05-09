@@ -3645,6 +3645,139 @@ object @Contract {
     }
 
     #[test]
+    fn object_compile_drops_unreferenced_private_const_data() {
+        let parsed = parse(
+            r#"
+target = "evm-ethereum-osaka"
+
+global private const [i256; 2] $dead = [1, 2];
+
+func private %entry() {
+    block0:
+        evm_stop;
+}
+
+object @Contract {
+  section runtime { entry %entry; data $dead; }
+}
+"#,
+        );
+
+        let dead = parsed
+            .module
+            .ctx
+            .with_gv_store(|store| store.lookup_gv("dead").expect("dead global should exist"));
+        let opts = CompileOptions {
+            emit_symtab: true,
+            ..Default::default()
+        };
+        let artifacts = compile_all_objects(&parsed.module, &test_backend(), &opts)
+            .expect("object compilation should drop dead private const data");
+        let runtime = artifacts[0]
+            .sections
+            .values()
+            .next()
+            .expect("runtime section should exist");
+
+        assert!(!runtime.symtab.contains_key(&SymbolId::Global(dead)));
+        assert!(
+            runtime.bytes.len() < 64,
+            "dead data should not be appended: {} bytes",
+            runtime.bytes.len()
+        );
+    }
+
+    #[test]
+    fn object_compile_keeps_private_const_data_when_section_size_is_observed() {
+        let parsed = parse(
+            r#"
+target = "evm-ethereum-osaka"
+
+global private const [i256; 2] $data = [1, 2];
+
+func private %entry() {
+    block0:
+        v0.i256 = sym_size .;
+        mstore 0.i256 v0 i256;
+        evm_return 0.i256 32.i256;
+}
+
+object @Contract {
+  section runtime { entry %entry; data $data; }
+}
+"#,
+        );
+
+        let data = parsed
+            .module
+            .ctx
+            .with_gv_store(|store| store.lookup_gv("data").expect("data global should exist"));
+        let opts = CompileOptions {
+            emit_symtab: true,
+            ..Default::default()
+        };
+        let artifacts = compile_all_objects(&parsed.module, &test_backend(), &opts)
+            .expect("object compilation should preserve section-size-observed data");
+        let runtime = artifacts[0]
+            .sections
+            .values()
+            .next()
+            .expect("runtime section should exist");
+        let data_def = runtime
+            .symtab
+            .get(&SymbolId::Global(data))
+            .expect("section-size-observed data should be present");
+
+        assert_eq!(data_def.size, 64);
+        assert!(runtime.bytes.len() >= 64);
+    }
+
+    #[test]
+    fn object_compile_keeps_private_const_data_when_code_size_is_observed() {
+        let parsed = parse(
+            r#"
+target = "evm-ethereum-osaka"
+
+global private const [i256; 2] $data = [1, 2];
+
+func private %entry() {
+    block0:
+        v0.i256 = evm_code_size;
+        mstore 0.i256 v0 i256;
+        evm_return 0.i256 32.i256;
+}
+
+object @Contract {
+  section runtime { entry %entry; data $data; }
+}
+"#,
+        );
+
+        let data = parsed
+            .module
+            .ctx
+            .with_gv_store(|store| store.lookup_gv("data").expect("data global should exist"));
+        let opts = CompileOptions {
+            emit_symtab: true,
+            ..Default::default()
+        };
+        let artifacts = compile_all_objects(&parsed.module, &test_backend(), &opts)
+            .expect("object compilation should preserve code-size-observed data");
+        let runtime = artifacts[0]
+            .sections
+            .values()
+            .next()
+            .expect("runtime section should exist");
+        let data_def = runtime
+            .symtab
+            .get(&SymbolId::Global(data))
+            .expect("code-size-observed data should be present");
+
+        assert_eq!(data_def.size, 64);
+        assert!(runtime.bytes.len() >= 64);
+    }
+
+    #[test]
     fn word_compatible_dynamic_const_load_reuses_explicit_data_symbol() {
         let parsed = parse(
             r#"

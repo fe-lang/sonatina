@@ -6,9 +6,9 @@ input_file: test_files/evm/fe_poseidon_bench_full_fe_o2_seeded.sntn
 evm.config: stack_reach=16 vcode=false bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section init: 17927 bytes
-  section runtime: 17908 bytes
-  total: 35835 bytes
+  section init: 17351 bytes
+  section runtime: 17332 bytes
+  total: 34683 bytes
 
 functions:
   contract_init_root_PoseidonBench: ir_blocks=3 ir_insts=8 vcode_ops=17 fixups=3 imm_bytes=2
@@ -23,5 +23,5 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=4 abs_words_end=0
 
 evm:
-  deploy: success reason=Return gas_used=3923056 gas_refunded=0 logs=0 output=create len=17908 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
+  deploy: success reason=Return gas_used=3798457 gas_refunded=0 logs=0 output=create len=17332 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
   case poseidon_1_2: calldata_len=68 success reason=Return gas_used=49160 gas_refunded=0 logs=0 output=call len=32 tx_gas=21344 runtime_gas=27816
