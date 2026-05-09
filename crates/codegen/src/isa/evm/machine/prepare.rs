@@ -135,7 +135,6 @@ fn prepare_machine_stackify_analysis(
     )
     .with_scratch_live_values(scratch_live_values)
     .with_scratch_spills(scratch_plan::SCRATCH_SPILL_SLOTS)
-    .with_evm_machine_operand_order()
     .compute();
 
     MachineStackifyAnalysis { alloc, block_order }

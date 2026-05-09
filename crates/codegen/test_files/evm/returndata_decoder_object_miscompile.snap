@@ -6,18 +6,18 @@ input_file: test_files/evm/returndata_decoder_object_miscompile.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 117 bytes
-  total: 117 bytes
+  section runtime: 110 bytes
+  total: 110 bytes
 
 functions:
   mem: global_dyn_base=0x20 arena_base=0x20 scratch_peak_words=0 static_chain_peak_words=0
-  call_target: ir_blocks=7 ir_insts=15 vcode_ops=48 fixups=3 imm_bytes=9
+  call_target: ir_blocks=5 ir_insts=12 vcode_ops=39 fixups=2 imm_bytes=8
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   entry: ir_blocks=3 ir_insts=9 vcode_ops=25 fixups=3 imm_bytes=4
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=21312 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=312
+  case ok: calldata_len=0 success reason=Return gas_used=21293 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=293
 
 
 --------------- DEBUG ---------------
@@ -51,26 +51,20 @@ call_target:
   block4:
     JUMPDEST
     PUSH1 0x20 (32)  // v15.i1 = lt v13 v3;
-    DUP2
+    SWAP1
     LT
     ISZERO  // br v15 block5 block6;
     PUSH1 block6
     JUMPI
   block5:
-    JUMPDEST
     PUSH0  // evm_revert v10 v10;
     PUSH0
     REVERT
   block6:
     JUMPDEST
-    PUSH1 0x20 (32)  // v16.i1 = gt v3 v13;
-    GT
-    PUSH1 block5  // br v16 block7 block8;
-    JUMPI
-  block8:
-    PUSH1 0x20 (32)  // v17.i256 = evm_mload v3;
+    PUSH1 0x20 (32)  // v16.i256 = evm_mload v3;
     MLOAD
-    SWAP1  // return v17;
+    SWAP1  // return v16;
     JUMP
 
 // func public %entry()

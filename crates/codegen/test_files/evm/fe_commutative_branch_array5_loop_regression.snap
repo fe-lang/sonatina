@@ -6,12 +6,12 @@ input_file: test_files/evm/fe_commutative_branch_array5_loop_regression.sntn
 evm.config: stack_reach=16 vcode=false bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 326 bytes
-  total: 326 bytes
+  section runtime: 325 bytes
+  total: 325 bytes
 
 functions:
   mem: global_dyn_base=0x680 arena_base=0x340 scratch_peak_words=16 static_chain_peak_words=10
-  verify_checked: ir_blocks=12 ir_insts=68 vcode_ops=177 fixups=6 imm_bytes=35
+  verify_checked: ir_blocks=12 ir_insts=68 vcode_ops=176 fixups=6 imm_bytes=35
     mem: scratch_words=16 stable_words=0 stable_mode=None entry_abs_words=26 abs_words_end=16
   run: ir_blocks=3 ir_insts=14 vcode_ops=48 fixups=3 imm_bytes=15
     mem: scratch_words=26 stable_words=10 stable_mode=StaticAbs(base=0x540) entry_abs_words=16 abs_words_end=26
@@ -19,4 +19,4 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=16 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=21785 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=785
+  case ok: calldata_len=0 success reason=Return gas_used=21782 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=782

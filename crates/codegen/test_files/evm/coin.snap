@@ -6,19 +6,19 @@ input_file: test_files/evm/coin.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=true evm_trace=false emit_observability=false opt=2
 
 object: Coin
-  section init: 884 bytes
-  section runtime: 702 bytes
-  total: 1586 bytes
+  section init: 882 bytes
+  section runtime: 700 bytes
+  total: 1582 bytes
 
 object: Contract
-  section runtime: 2300 bytes
-  total: 2300 bytes
+  section runtime: 2288 bytes
+  total: 2288 bytes
 
 functions:
   mem: global_dyn_base=0xa0 arena_base=0xa0 scratch_peak_words=0 static_chain_peak_words=0
   __Contract_runtime_entry: ir_blocks=21 ir_insts=99 vcode_ops=279 fixups=39 imm_bytes=61
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  assert: ir_blocks=3 ir_insts=6 vcode_ops=12 fixups=1 imm_bytes=1
+  assert: ir_blocks=3 ir_insts=6 vcode_ops=13 fixups=1 imm_bytes=1
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__Credit_h1b40c7da4bcceeac__9489dcd0a297a0c: ir_blocks=6 ir_insts=37 vcode_ops=105 fixups=14 imm_bytes=15
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
@@ -64,7 +64,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=280435 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=259435
+  case ok: calldata_len=0 success reason=Return gas_used=279909 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=258909
 
 
 --------------- DEBUG ---------------
@@ -1682,9 +1682,9 @@ evm:
     - stack=[v5, v2, v1, <RET>], last_use=[v2]
       pre: [SWAP1]
       is_zero [v2] -> v6
-    // br v6 block1 block2;
+    // br v6 block1 block6;
     - stack=[v6, v5, v1, <RET>]
-      br [v6] -> [block1, block2]
+      br [v6] -> [block1, block6]
   block1 P=[] T=[v5, v1]
     inherited from block0: [v5, v1, <RET>]
     // v7.i256 = evm_sload v1;
@@ -1702,17 +1702,17 @@ evm:
     // v11.i1 = is_zero v10;
     - stack=[v10, v7, v5, v1, <RET>], last_use=[v10]
       is_zero [v10] -> v11
-    // br v11 block4 block3;
+    // br v11 block3 block2;
     - stack=[v11, v7, v5, v1, <RET>]
-      br [v11] -> [block4, block3]
-  block3 P=[] T=[]
+      br [v11] -> [block3, block2]
+  block2 P=[] T=[]
     inherited from block1: [v7x, v5x, v1x, <RET>]
     // return 1.i256;
     - stack=[v7x, v5x, v1x, <RET>]
       cleanup: [POP, POP, POP]
       return: [PUSH(1)]
       return [1]
-  block4 P=[] T=[v7, v5, v1]
+  block3 P=[] T=[v7, v5, v1]
     inherited from block1: [v7, v5, v1, <RET>]
     // v12.i256 = sub v7 v5;
     - stack=[v7, v5, v1, <RET>], last_use=[v7]
@@ -1742,7 +1742,7 @@ evm:
     - stack=[<RET>]
       return: [PUSH(0)]
       return [0]
-  block2 P=[] T=[v5, v1]
+  block6 P=[] T=[v5, v1]
     inherited from block0: [v5, v1, <RET>]
     // v17.i256 = add v1 1.i256;
     - stack=[v5, v1, <RET>]
@@ -1763,18 +1763,18 @@ evm:
     // v21.i1 = is_zero v20;
     - stack=[v20, v18, v17, v5, v1, <RET>], last_use=[v20]
       is_zero [v20] -> v21
-    // br v21 block6 block5;
+    // br v21 block5 block4;
     - stack=[v21, v18, v17, v5, v1, <RET>]
-      br [v21] -> [block6, block5]
-  block5 P=[] T=[]
-    inherited from block2: [v18x, v17x, v5x, v1x, <RET>]
+      br [v21] -> [block5, block4]
+  block4 P=[] T=[]
+    inherited from block6: [v18x, v17x, v5x, v1x, <RET>]
     // return 1.i256;
     - stack=[v18x, v17x, v5x, v1x, <RET>]
       cleanup: [POP, POP, POP, POP]
       return: [PUSH(1)]
       return [1]
-  block6 P=[] T=[v18, v17, v5, v1]
-    inherited from block2: [v18, v17, v5, v1, <RET>]
+  block5 P=[] T=[v18, v17, v5, v1]
+    inherited from block6: [v18, v17, v5, v1, <RET>]
     // v22.i256 = sub v18 v5;
     - stack=[v18, v17, v5, v1, <RET>], last_use=[v18]
       pre: [DUP3, SWAP1]
@@ -3052,7 +3052,7 @@ __Contract_runtime_entry:
 assert:
   block0:
     JUMPDEST
-    ISZERO  // v2.i1 = is_zero v0;
+    ISZERO
     PUSH1 section_unit0  // br v4 block2 block1;
     JUMPI
   block2:
@@ -3150,8 +3150,6 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__Credit_h1b40c7da4bcceeac
     DUP3
     RETURNDATACOPY
     SWAP2  // v34.i1 = is_zero v22;
-    ISZERO
-    ISZERO  // v37.i1 = is_zero v36;
     PUSH1 block2  // br v37 block2 block1;
     JUMPI
   block1:
@@ -3335,8 +3333,6 @@ solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head:
     JUMPDEST
     DUP1  // v3.i256 = evm_mload v0;
     MLOAD
-    ISZERO  // v4.i1 = is_zero v3;
-    ISZERO  // v7.i1 = is_zero v6;
     PUSH1 block7  // br v7 block7 block1;
     JUMPI
   block1:
@@ -3579,8 +3575,6 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__Transfer_hbe7d801e15d910
     DUP3
     RETURNDATACOPY
     SWAP2  // v34.i1 = is_zero v22;
-    ISZERO
-    ISZERO  // v37.i1 = is_zero v36;
     PUSH1 block2  // br v37 block2 block1;
     JUMPI
   block1:
@@ -3679,8 +3673,6 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__BalanceOf_h891837b06b561
     DUP3
     RETURNDATACOPY
     SWAP2  // v31.i1 = is_zero v26;
-    ISZERO
-    ISZERO  // v34.i1 = is_zero v33;
     PUSH1 block2  // br v34 block2 block1;
     JUMPI
   block1:
@@ -3771,8 +3763,6 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__TotalSupply_h7bb395110a2
     DUP3
     RETURNDATACOPY
     SWAP2  // v29.i1 = is_zero v20;
-    ISZERO
-    ISZERO  // v32.i1 = is_zero v31;
     PUSH1 block2  // br v32 block2 block1;
     JUMPI
   block1:
@@ -3860,7 +3850,7 @@ __Coin_recv_0_1:
     ADD
     MLOAD  // v6.i256 = evm_mload v5;
     SWAP1  // v8.i1 = is_zero v3;
-    PUSH1 block2  // br v8 block1 block2;
+    PUSH1 block6  // br v8 block1 block6;
     JUMPI
   block1:
     DUP2  // v9.i256 = evm_sload v1;
@@ -3869,16 +3859,16 @@ __Coin_recv_0_1:
     DUP2
     LT
     ISZERO  // v15.i1 = is_zero v12;
-    PUSH1 block4  // br v15 block4 block3;
+    PUSH1 block3  // br v15 block3 block2;
     JUMPI
-  block3:
+  block2:
     POP  // return v11;
     POP
     POP
     PUSH1 0x1 (1)
     SWAP1
     JUMP
-  block4:
+  block3:
     JUMPDEST
     DUP2  // v17.i256 = sub v9 v6;
     SWAP1
@@ -3898,7 +3888,7 @@ __Coin_recv_0_1:
     PUSH0  // return v22;
     SWAP1
     JUMP
-  block2:
+  block6:
     JUMPDEST
     PUSH1 0x1 (1)  // v24.i256 = add v1 v11;
     DUP3
@@ -3909,9 +3899,9 @@ __Coin_recv_0_1:
     DUP2
     LT
     ISZERO  // v30.i1 = is_zero v28;
-    PUSH1 block6  // br v30 block6 block5;
+    PUSH1 block5  // br v30 block5 block4;
     JUMPI
-  block5:
+  block4:
     POP  // return v11;
     POP
     POP
@@ -3919,7 +3909,7 @@ __Coin_recv_0_1:
     PUSH1 0x1 (1)
     SWAP1
     JUMP
-  block6:
+  block5:
     JUMPDEST
     DUP3  // v31.i256 = sub v25 v6;
     SWAP1
@@ -4330,8 +4320,6 @@ alloc:
     PUSH1 0x40 (64)  // v6.i256 = evm_mload v5;
     MLOAD
     DUP1  // v7.i1 = is_zero v6;
-    ISZERO
-    ISZERO  // v11.i1 = is_zero v10;
     PUSH1 block3  // br v11 block7 block1;
     JUMPI
   block1:

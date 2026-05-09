@@ -136,6 +136,7 @@ impl<'a> EvmFunctionLowering<'a> {
                     self.backend.late_cleanup_profile,
                 );
             });
+            prune_redundant_opcode_sequences(&mut vcode, &emitted_block_order);
         }
         {
             let _span =

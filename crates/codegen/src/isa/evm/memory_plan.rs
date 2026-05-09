@@ -1291,11 +1291,15 @@ fn compute_program_memory_plan_from_stacks(
         let mut alloca_loc: FxHashMap<InstId, ObjLoc> = FxHashMap::default();
         for (inst, id) in &stack.alloca_ids {
             let loc = obj_loc.get(id).copied().unwrap_or_else(|| {
-                panic!(
-                    "missing object location for alloca inst {} in func {}",
-                    inst.as_u32(),
-                    func.as_u32()
-                )
+                if stack.obj_size_words.get(id).copied() == Some(0) {
+                    ObjLoc::ScratchAbs(0)
+                } else {
+                    panic!(
+                        "missing object location for alloca inst {} in func {}",
+                        inst.as_u32(),
+                        func.as_u32()
+                    )
+                }
             });
             alloca_loc.insert(*inst, loc);
         }

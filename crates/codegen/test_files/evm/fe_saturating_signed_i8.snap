@@ -3,7 +3,7 @@ source: crates/codegen/tests/evm.rs
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/fe_saturating_signed_i8.sntn
 ---
-evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=1
+evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=s
 
 object: Contract
   section runtime: 185 bytes
@@ -72,10 +72,10 @@ i8_h1bb527fe1af58754_saturatingmul_hf2bc6be7b84ff8f7_saturating_mul:
     PUSH1 block8
     JUMPI
   block27:
-    POP  // jump block18;
+    POP  // jump block19;
     POP
     PUSH1 0x7f (127)
-    PUSH1 block18
+    PUSH1 block19
     JUMP
   block8:
     JUMPDEST
@@ -93,10 +93,10 @@ i8_h1bb527fe1af58754_saturatingmul_hf2bc6be7b84ff8f7_saturating_mul:
     PUSH1 block5
     JUMPI
   block29:
-    POP  // jump block18;
+    POP  // jump block19;
     POP
     PUSH1 0x7f (127)
-    PUSH1 block18
+    PUSH1 block19
     JUMP
   block5:
     JUMPDEST
@@ -129,9 +129,9 @@ i8_h1bb527fe1af58754_saturatingmul_hf2bc6be7b84ff8f7_saturating_mul:
     SWAP1  // v42.i1 = and v39 v40;
     SWAP4
     AND
-    PUSH1 section_unit0  // br v42 block19 block20;
+    PUSH1 section_unit0  // br v42 block20 block21;
     JUMPI
-  block20:
+  block21:
     JUMPDEST
     SWAP2  // v44.i1 = eq v38 v1;
     DUP4
@@ -148,37 +148,37 @@ i8_h1bb527fe1af58754_saturatingmul_hf2bc6be7b84ff8f7_saturating_mul:
     XOR  // v21.i256 = xor v35 v14;
     PUSH1 0x80 (128)  // v41.i256 = and v21 v10;
     AND
-    PUSH1 block30  // br v29 block21 block30;
+    PUSH1 block30  // br v29 block17 block30;
     JUMPI
-  block21:
-    PUSH1 0x7f (127)  // jump block18;
-    PUSH1 block18
+  block17:
+    PUSH1 0x7f (127)  // jump block19;
+    PUSH1 block19
     JUMP
   block30:
     JUMPDEST
-    PUSH1 0x80 (128)  // jump block18;
-    PUSH1 block18
+    PUSH1 0x80 (128)  // jump block19;
+    PUSH1 block19
     JUMP
   block31:
     JUMPDEST
-    SWAP2  // jump block18;
+    SWAP2  // jump block19;
     POP
     POP
-    PUSH1 block18
+    PUSH1 block19
     JUMP
   block24:
     JUMPDEST
-    POP  // jump block18;
+    POP  // jump block19;
     POP
     PUSH0
-    PUSH1 block18
+    PUSH1 block19
     JUMP
   block22:
     JUMPDEST
-    POP  // jump block18;
+    POP  // jump block19;
     POP
     PUSH0
-  block18:
+  block19:
     JUMPDEST
     SWAP1  // return v4;
     JUMP

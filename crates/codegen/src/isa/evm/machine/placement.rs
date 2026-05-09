@@ -126,6 +126,16 @@ pub(crate) fn compute_semantic_memory_placement(
             func_plan.return_escape_caller_abs_words = return_escape_caller_abs_words;
         }
     }
+    for (&func, &reserve_words) in backend_spill_reserve_words {
+        if let Some(func_plan) = semantic_plan.funcs.get_mut(&func)
+            && func_plan.uses_dynamic_frame()
+        {
+            func_plan.stable_words = func_plan
+                .stable_words
+                .checked_add(reserve_words)
+                .expect("dynamic frame backend spill reserve overflow");
+        }
+    }
 
     let has_dynamic_frames = semantic_plan
         .funcs

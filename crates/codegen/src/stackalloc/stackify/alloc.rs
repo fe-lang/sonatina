@@ -128,14 +128,6 @@ impl StackifyAlloc {
             }
         });
     }
-}
-impl StackifyAlloc {
-    pub(crate) fn uses_scratch_spills(&self) -> bool {
-        self.scratch_slot_of_value
-            .values()
-            .any(|slot| slot.is_some())
-    }
-
     pub(crate) fn remap_stack_objects(&mut self, remap: &FxHashMap<StackObjId, StackObjId>) {
         fn remap_actions(actions: &mut Actions, remap: &FxHashMap<StackObjId, StackObjId>) {
             for action in actions {
@@ -159,6 +151,18 @@ impl StackifyAlloc {
         for cases in self.brtable_actions.values_mut() {
             for actions in cases {
                 remap_actions(actions, remap);
+            }
+        }
+        for storage in self.spill_storage.values_mut() {
+            if let Some(SpillStorage::Object(obj)) = storage
+                && let Some(new_obj) = remap.get(obj)
+            {
+                *obj = *new_obj;
+            }
+        }
+        for obj in self.spill_obj.values_mut().flatten() {
+            if let Some(new_obj) = remap.get(obj) {
+                *obj = *new_obj;
             }
         }
     }

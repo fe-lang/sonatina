@@ -116,12 +116,6 @@ impl StackifyReachability {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum StackifyOperandMode {
-    HighEvm,
-    EvmMachine,
-}
-
 pub struct StackifyBuilder<'a> {
     func: &'a Function,
     cfg: &'a ControlFlowGraph,
@@ -133,7 +127,6 @@ pub struct StackifyBuilder<'a> {
     scratch_spill_slots: u32,
     value_aliases_override: Option<&'a SecondaryMap<ValueId, Option<ValueId>>>,
     stack_cached_immediates: FxHashSet<I256>,
-    operand_mode: StackifyOperandMode,
 }
 
 pub(super) struct StackifyContext<'a> {
@@ -156,7 +149,6 @@ pub(super) struct StackifyContext<'a> {
     pub(super) value_aliases: SecondaryMap<ValueId, Option<ValueId>>,
     pub(super) exact_local_addr: SecondaryMap<ValueId, Option<ExactLocalAddr>>,
     pub(super) stack_cached_immediates: FxHashSet<I256>,
-    pub(super) operand_mode: StackifyOperandMode,
 }
 
 impl StackifyContext<'_> {
@@ -195,7 +187,6 @@ impl<'a> StackifyBuilder<'a> {
             scratch_spill_slots: 0,
             value_aliases_override: None,
             stack_cached_immediates: FxHashSet::default(),
-            operand_mode: StackifyOperandMode::HighEvm,
         }
     }
 
@@ -219,18 +210,6 @@ impl<'a> StackifyBuilder<'a> {
         value_aliases: &'a SecondaryMap<ValueId, Option<ValueId>>,
     ) -> Self {
         self.value_aliases_override = Some(value_aliases);
-        self
-    }
-
-    pub(crate) fn with_stack_cached_immediates(
-        mut self,
-        stack_cached_immediates: FxHashSet<I256>,
-    ) -> Self {
-        self.stack_cached_immediates = stack_cached_immediates;
-        self
-    }
-    pub(crate) fn with_evm_machine_operand_order(mut self) -> Self {
-        self.operand_mode = StackifyOperandMode::EvmMachine;
         self
     }
 
@@ -314,7 +293,6 @@ impl<'a> StackifyBuilder<'a> {
             value_aliases,
             exact_local_addr,
             stack_cached_immediates: self.stack_cached_immediates,
-            operand_mode: self.operand_mode,
         };
 
         // `spill_set` is discovered via a monotone fixed point:

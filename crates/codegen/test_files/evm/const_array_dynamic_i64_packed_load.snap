@@ -6,11 +6,12 @@ input_file: test_files/evm/const_array_dynamic_i64_packed_load.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=true
 
 object: Contract
-  section runtime: 64 bytes
-  total: 64 bytes
+  section runtime: 62 bytes
+  total: 62 bytes
 
 functions:
-  entry: ir_blocks=1 ir_insts=5 vcode_ops=14 fixups=2 imm_bytes=1
+  mem: global_dyn_base=0x20 arena_base=0x20 scratch_peak_words=0 static_chain_peak_words=0
+  entry: ir_blocks=1 ir_insts=4 vcode_ops=12 fixups=2 imm_bytes=1
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   load_word: ir_blocks=1 ir_insts=5 vcode_ops=12 fixups=0 imm_bytes=4
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
@@ -18,11 +19,11 @@ functions:
 --------------- OBSERVABILITY ---------------
 
 object schema=0.1.0
-totals section_bytes=64 code=64 data=0 embed=0 mapped=63 unmapped=1
+totals section_bytes=62 code=62 data=0 embed=0 mapped=61 unmapped=1
 
 section runtime schema=0.1.0
-bytes total=64 code=64 data=0 embed=0
-coverage mapped=63 unmapped=1
+bytes total=62 code=62 data=0 embed=0
+coverage mapped=61 unmapped=1
 unmapped no_ir_inst=0 label_or_fixup_only=0 synthetic=1 unknown=0
 pc [0, 1) func=entry block=0 vcode=0 ir=0 reason=- frontend=-
 pc [1, 2) func=entry block=0 vcode=1 ir=0 reason=- frontend=-
@@ -31,28 +32,26 @@ pc [4, 5) func=entry block=0 vcode=3 ir=1 reason=- frontend=-
 pc [5, 7) func=entry block=0 vcode=4 ir=1 reason=- frontend=-
 pc [7, 8) func=entry block=0 vcode=5 ir=1 reason=- frontend=-
 pc [8, 9) func=entry block=0 vcode=6 ir=1 reason=- frontend=-
-pc [9, 10) func=entry block=0 vcode=7 ir=5 reason=- frontend=-
-pc [10, 11) func=entry block=0 vcode=8 ir=5 reason=- frontend=-
-pc [11, 12) func=entry block=0 vcode=9 ir=3 reason=- frontend=-
-pc [12, 13) func=entry block=0 vcode=10 ir=3 reason=- frontend=-
-pc [13, 15) func=entry block=0 vcode=11 ir=4 reason=- frontend=-
-pc [15, 16) func=entry block=0 vcode=12 ir=4 reason=- frontend=-
-pc [16, 17) func=entry block=0 vcode=13 ir=4 reason=- frontend=-
-pc [17, 18) func=load_word block=0 vcode=11 ir=- reason=synthetic frontend=-
-pc [18, 20) func=load_word block=0 vcode=0 ir=4 reason=- frontend=-
-pc [20, 21) func=load_word block=0 vcode=1 ir=4 reason=- frontend=-
-pc [21, 23) func=load_word block=0 vcode=2 ir=5 reason=- frontend=-
-pc [23, 24) func=load_word block=0 vcode=3 ir=5 reason=- frontend=-
-pc [24, 50) func=load_word block=0 vcode=4 ir=6 reason=- frontend=-
-pc [50, 51) func=load_word block=0 vcode=5 ir=6 reason=- frontend=-
-pc [51, 52) func=load_word block=0 vcode=6 ir=6 reason=- frontend=-
-pc [52, 61) func=load_word block=0 vcode=7 ir=8 reason=- frontend=-
-pc [61, 62) func=load_word block=0 vcode=8 ir=8 reason=- frontend=-
-pc [62, 63) func=load_word block=0 vcode=9 ir=3 reason=- frontend=-
-pc [63, 64) func=load_word block=0 vcode=10 ir=3 reason=- frontend=-
+pc [9, 10) func=entry block=0 vcode=7 ir=3 reason=- frontend=-
+pc [10, 11) func=entry block=0 vcode=8 ir=3 reason=- frontend=-
+pc [11, 13) func=entry block=0 vcode=9 ir=4 reason=- frontend=-
+pc [13, 14) func=entry block=0 vcode=10 ir=4 reason=- frontend=-
+pc [14, 15) func=entry block=0 vcode=11 ir=4 reason=- frontend=-
+pc [15, 16) func=load_word block=0 vcode=11 ir=- reason=synthetic frontend=-
+pc [16, 18) func=load_word block=0 vcode=0 ir=0 reason=- frontend=-
+pc [18, 19) func=load_word block=0 vcode=1 ir=0 reason=- frontend=-
+pc [19, 21) func=load_word block=0 vcode=2 ir=1 reason=- frontend=-
+pc [21, 22) func=load_word block=0 vcode=3 ir=1 reason=- frontend=-
+pc [22, 48) func=load_word block=0 vcode=4 ir=2 reason=- frontend=-
+pc [48, 49) func=load_word block=0 vcode=5 ir=2 reason=- frontend=-
+pc [49, 50) func=load_word block=0 vcode=6 ir=2 reason=- frontend=-
+pc [50, 59) func=load_word block=0 vcode=7 ir=3 reason=- frontend=-
+pc [59, 60) func=load_word block=0 vcode=8 ir=3 reason=- frontend=-
+pc [60, 61) func=load_word block=0 vcode=9 ir=4 reason=- frontend=-
+pc [61, 62) func=load_word block=0 vcode=10 ir=4 reason=- frontend=-
 
 evm:
-  case index_2: calldata_len=32 success reason=Return gas_used=21222 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=82
+  case index_2: calldata_len=32 success reason=Return gas_used=21215 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=75
 
 
 --------------- DEBUG ---------------
@@ -60,18 +59,16 @@ evm:
 // func public %entry()
 entry:
   block0:
-    PUSH0  // v0.i256 = evm_calldata_load 0.i256;
+    PUSH0  // v1.i256 = evm_calldata_load v0;
     CALLDATALOAD
-    PUSH1 `pc + (4)`  // v1.i256 = call %load_word v0;
+    PUSH1 `pc + (4)`  // v2.i256 = call %load_word v1;
     SWAP1
     PUSH1 FuncRef(1)
     JUMP
     JUMPDEST
-    PUSH0  // v6.i256 = or v1 0.i256;
-    OR
-    PUSH0  // mstore 0.i256 v6 i256;
+    PUSH0  // evm_mstore v0 v2;
     MSTORE
-    PUSH1 0x20 (32)  // evm_return 0.i256 32.i256;
+    PUSH1 0x20 (32)  // evm_return v0 32.i256;
     PUSH0
     RETURN
 
@@ -79,14 +76,14 @@ entry:
 load_word:
   block0:
     JUMPDEST
-    PUSH1 0x40 (64)  // v5.i256 = mul v0 64.i256;
-    MUL
-    PUSH1 0xc0 (192)  // v7.i256 = sub 192.i256 v5;
+    PUSH1 0x6 (6)  // v2.i256 = shl 6.i256 v0;
+    SHL
+    PUSH1 0xc0 (192)  // v4.i256 = sub v3 v2;
     SUB
-    PUSH25 0xb0000000000000063000000000000002a000000000000004d (69048119089253488435881637980457238460774759275945233743949)  // v9.i256 = shr v7 69048119089253488435881637980457238460774759275945233743949.i256;
+    PUSH25 0xb0000000000000063000000000000002a000000000000004d (69048119089253488435881637980457238460774759275945233743949)  // v6.i256 = shr v4 69048119089253488435881637980457238460774759275945233743949.i256;
     SWAP1
     SHR
-    PUSH8 0xffffffffffffffff (18446744073709551615)  // v12.i256 = and v9 18446744073709551615.i256;
+    PUSH8 0xffffffffffffffff (18446744073709551615)  // v8.i256 = and v6 18446744073709551615.i256;
     AND
-    SWAP1  // return v12;
+    SWAP1  // return v8;
     JUMP

@@ -2,8 +2,8 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
     BlockId, Function, InstId, InstSetExt, Module,
     cfg::ControlFlowGraph,
-    inst::{control_flow::BranchKind, data::SymbolRef, evm::inst_set::EvmInstKind},
-    isa::{Isa, evm::Evm},
+    inst::{control_flow::BranchKind, data::SymbolRef, evm::machine_inst_set::EvmMachineInstKind},
+    isa::{Isa, evm::EvmMachine},
     module::FuncRef,
 };
 
@@ -23,26 +23,26 @@ pub(crate) fn compute_function_entry_jump_targets(
 ) -> FxHashSet<FuncRef> {
     let funcs_set: FxHashSet<FuncRef> = funcs.iter().copied().collect();
     let mut targets = FxHashSet::default();
-    let evm_inst_set = Evm::new(module.ctx.triple).inst_set();
+    let evm_inst_set = EvmMachine::new(module.ctx.triple).inst_set();
 
     for &func_ref in funcs {
         module.func_store.view(func_ref, |function| {
             for block in function.layout.iter_block() {
                 for inst in function.layout.iter_inst(block) {
                     match evm_inst_set.resolve_inst(function.dfg.inst(inst)) {
-                        EvmInstKind::Call(call) => {
+                        EvmMachineInstKind::Call(call) => {
                             let callee = *call.callee();
                             if funcs_set.contains(&callee) {
                                 targets.insert(callee);
                             }
                         }
-                        EvmInstKind::GetFunctionPtr(get_fn) => {
+                        EvmMachineInstKind::GetFunctionPtr(get_fn) => {
                             let func = *get_fn.func();
                             if funcs_set.contains(&func) {
                                 targets.insert(func);
                             }
                         }
-                        EvmInstKind::SymAddr(sym_addr) => {
+                        EvmMachineInstKind::SymAddr(sym_addr) => {
                             if let SymbolRef::Func(func) = sym_addr.sym()
                                 && funcs_set.contains(func)
                             {

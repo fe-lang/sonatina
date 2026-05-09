@@ -6,8 +6,8 @@ input_file: test_files/evm/fe_enum_state_machine_test_order_initial_state_unopti
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 959 bytes
-  total: 959 bytes
+  section runtime: 952 bytes
+  total: 952 bytes
 
 object: Order
   section init: 474 bytes
@@ -18,7 +18,7 @@ functions:
   mem: global_dyn_base=0x140 arena_base=0xa0 scratch_peak_words=0 static_chain_peak_words=5
   test_order_initial_state__StorPtr_Evm___207f35a85ac4062e: ir_blocks=29 ir_insts=80 vcode_ops=217 fixups=26 imm_bytes=36
     mem: scratch_words=5 stable_words=5 stable_mode=StaticAbs(base=0xa0) entry_abs_words=0 abs_words_end=5
-  decode_returndata__u256__3271ca15373d4483: ir_blocks=5 ir_insts=8 vcode_ops=24 fixups=2 imm_bytes=2
+  decode_returndata__u256__3271ca15373d4483: ir_blocks=3 ir_insts=5 vcode_ops=15 fixups=1 imm_bytes=1
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=5 abs_words_end=0
   solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head: ir_blocks=9 ir_insts=26 vcode_ops=65 fixups=4 imm_bytes=8
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=5 abs_words_end=0
@@ -34,7 +34,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=170335 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=149335
+  case ok: calldata_len=0 success reason=Return gas_used=170297 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=149297
 
 
 --------------- DEBUG ---------------
@@ -257,20 +257,15 @@ decode_returndata__u256__3271ca15373d4483:
   block0:
     JUMPDEST
     PUSH1 0x20 (32)  // v5.i1 = lt v1 v3;
-    DUP3
+    SWAP1
+    SWAP2
     LT
-    PUSH1 section_unit0  // br v5 block1 block4;
+    PUSH1 section_unit0  // br v5 block1 block2;
     JUMPI
-  block4:
+  block2:
     JUMPDEST
-    SWAP1  // v10.i1 = gt v3 v1;
-    PUSH1 0x20 (32)
-    GT
-    PUSH1 section_unit0  // br v10 block2 block3;
-    JUMPI
-  block3:
-    MLOAD  // v11.i256 = evm_mload v0;
-    SWAP1  // return v11;
+    MLOAD  // v10.i256 = evm_mload v0;
+    SWAP1  // return v10;
     JUMP
 
 // func private %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head(v0.i256, v1.i256) -> i256

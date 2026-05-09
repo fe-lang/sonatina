@@ -1,8 +1,7 @@
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 use sonatina_ir::{
-    Function, InstId, InstSetExt, ValueId,
-    inst::evm::inst_set::EvmInstKind,
+    Function, InstId, ValueId,
     isa::{Isa, evm::Evm},
     module::ModuleCtx,
 };
@@ -321,55 +320,6 @@ impl EvmBackend {
                     )
                     .expect("mem plan write failed");
                 }
-            }
-
-            let mut allocas: Vec<(ValueId, u32, u32, String)> = Vec::new();
-            module.func_store.view(func, |function| {
-                for block in function.layout.iter_block() {
-                    for insn in function.layout.iter_inst(block) {
-                        let data = self.isa.inst_set().resolve_inst(function.dfg.inst(insn));
-                        let EvmInstKind::Alloca(alloca) = data else {
-                            continue;
-                        };
-                        let Some(value) = function.dfg.inst_result(insn) else {
-                            continue;
-                        };
-                        let loc = func_plan
-                            .alloca_loc
-                            .get(&insn)
-                            .copied()
-                            .expect("missing alloca plan");
-                        let offset_words = match loc {
-                            ObjLoc::ScratchAbs(off)
-                            | ObjLoc::StableAbs(off)
-                            | ObjLoc::StableFrame(off) => off,
-                            ObjLoc::StackPinned(depth) => u32::from(depth),
-                        };
-
-                        let size_bytes = self
-                            .isa
-                            .type_layout()
-                            .size_of(*alloca.ty(), &module.ctx)
-                            .expect("alloca has invalid type")
-                            as u32;
-                        let size_words = size_bytes.div_ceil(WORD_BYTES);
-                        allocas.push((value, offset_words, size_words, addr_of(loc)));
-                    }
-                }
-            });
-
-            if allocas.is_empty() {
-                continue;
-            }
-
-            allocas.sort_unstable_by_key(|(v, _, _, _)| v.as_u32());
-            for (value, offset_words, size_words, addr) in allocas {
-                writeln!(
-                    &mut out,
-                    "  alloca v{} offset_words={offset_words} size_words={size_words} addr={addr}",
-                    value.as_u32()
-                )
-                .expect("mem plan write failed");
             }
         }
 

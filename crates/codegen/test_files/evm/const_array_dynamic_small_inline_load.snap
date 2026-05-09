@@ -10,9 +10,10 @@ object: Contract
   total: 36 bytes
 
 functions:
+  mem: global_dyn_base=0x20 arena_base=0x20 scratch_peak_words=0 static_chain_peak_words=0
   entry: ir_blocks=1 ir_insts=4 vcode_ops=12 fixups=2 imm_bytes=1
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  load_small: ir_blocks=1 ir_insts=9 vcode_ops=16 fixups=0 imm_bytes=5
+  load_small: ir_blocks=1 ir_insts=9 vcode_ops=20 fixups=0 imm_bytes=7
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 --------------- OBSERVABILITY ---------------
@@ -36,25 +37,25 @@ pc [10, 11) func=entry block=0 vcode=8 ir=2 reason=- frontend=-
 pc [11, 13) func=entry block=0 vcode=9 ir=3 reason=- frontend=-
 pc [13, 14) func=entry block=0 vcode=10 ir=3 reason=- frontend=-
 pc [14, 15) func=entry block=0 vcode=11 ir=3 reason=- frontend=-
-pc [15, 16) func=load_small block=0 vcode=15 ir=- reason=synthetic frontend=-
-pc [16, 18) func=load_small block=0 vcode=0 ir=4 reason=- frontend=-
-pc [18, 19) func=load_small block=0 vcode=1 ir=4 reason=- frontend=-
-pc [19, 20) func=load_small block=0 vcode=2 ir=4 reason=- frontend=-
-pc [20, 22) func=load_small block=0 vcode=3 ir=6 reason=- frontend=-
-pc [22, 23) func=load_small block=0 vcode=4 ir=6 reason=- frontend=-
-pc [23, 25) func=load_small block=0 vcode=5 ir=7 reason=- frontend=-
-pc [25, 26) func=load_small block=0 vcode=6 ir=7 reason=- frontend=-
-pc [26, 27) func=load_small block=0 vcode=7 ir=8 reason=- frontend=-
-pc [27, 29) func=load_small block=0 vcode=8 ir=8 reason=- frontend=-
-pc [29, 30) func=load_small block=0 vcode=9 ir=8 reason=- frontend=-
-pc [30, 32) func=load_small block=0 vcode=10 ir=10 reason=- frontend=-
-pc [32, 33) func=load_small block=0 vcode=11 ir=10 reason=- frontend=-
-pc [33, 34) func=load_small block=0 vcode=12 ir=11 reason=- frontend=-
-pc [34, 35) func=load_small block=0 vcode=13 ir=3 reason=- frontend=-
-pc [35, 36) func=load_small block=0 vcode=14 ir=3 reason=- frontend=-
+pc [15, 16) func=load_small block=0 vcode=19 ir=- reason=synthetic frontend=-
+pc [16, 18) func=load_small block=0 vcode=0 ir=0 reason=- frontend=-
+pc [18, 19) func=load_small block=0 vcode=1 ir=0 reason=- frontend=-
+pc [19, 20) func=load_small block=0 vcode=2 ir=0 reason=- frontend=-
+pc [20, 22) func=load_small block=0 vcode=5 ir=2 reason=- frontend=-
+pc [22, 23) func=load_small block=0 vcode=6 ir=2 reason=- frontend=-
+pc [23, 25) func=load_small block=0 vcode=7 ir=3 reason=- frontend=-
+pc [25, 26) func=load_small block=0 vcode=8 ir=3 reason=- frontend=-
+pc [26, 27) func=load_small block=0 vcode=9 ir=4 reason=- frontend=-
+pc [27, 29) func=load_small block=0 vcode=10 ir=4 reason=- frontend=-
+pc [29, 30) func=load_small block=0 vcode=11 ir=4 reason=- frontend=-
+pc [30, 32) func=load_small block=0 vcode=14 ir=6 reason=- frontend=-
+pc [32, 33) func=load_small block=0 vcode=15 ir=6 reason=- frontend=-
+pc [33, 34) func=load_small block=0 vcode=16 ir=7 reason=- frontend=-
+pc [34, 35) func=load_small block=0 vcode=17 ir=8 reason=- frontend=-
+pc [35, 36) func=load_small block=0 vcode=18 ir=8 reason=- frontend=-
 
 evm:
-  case index_2: calldata_len=32 success reason=Return gas_used=21231 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=91
+  case index_2: calldata_len=32 success reason=Return gas_used=21227 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=87
 
 
 --------------- DEBUG ---------------
@@ -62,16 +63,16 @@ evm:
 // func public %entry()
 entry:
   block0:
-    PUSH0  // v0.i256 = evm_calldata_load 0.i256;
+    PUSH0  // v1.i256 = evm_calldata_load v0;
     CALLDATALOAD
-    PUSH1 `pc + (4)`  // v1.i256 = call %load_small v0;
+    PUSH1 `pc + (4)`  // v2.i256 = call %load_small v1;
     SWAP1
     PUSH1 FuncRef(1)
     JUMP
     JUMPDEST
-    PUSH0  // mstore 0.i256 v1 i256;
+    PUSH0  // evm_mstore v0 v2;
     MSTORE
-    PUSH1 0x20 (32)  // evm_return 0.i256 32.i256;
+    PUSH1 0x20 (32)  // evm_return v0 32.i256;
     PUSH0
     RETURN
 
@@ -79,18 +80,18 @@ entry:
 load_small:
   block0:
     JUMPDEST
-    PUSH1 0x1 (1)  // v6.i1 = eq v0 1.i256;
+    PUSH1 0x1 (1)  // v2.i1 = eq v0 v1;
     DUP2
     EQ
-    PUSH1 0x8 (8)  // v9.i256 = mul v17 8.i256;
-    MUL
-    PUSH1 0x5 (5)  // v10.i256 = add 5.i256 v9;
+    PUSH1 0x3 (3)  // v5.i256 = shl 3.i256 v3;
+    SHL
+    PUSH1 0x5 (5)  // v7.i256 = add 5.i256 v5;
     ADD
-    SWAP1  // v12.i1 = eq v0 2.i256;
+    SWAP1  // v9.i1 = eq v0 2.i256;
     PUSH1 0x2 (2)
     EQ
-    PUSH1 0x4 (4)  // v15.i256 = mul v18 4.i256;
-    MUL
-    ADD  // v16.i256 = add v10 v15;
-    SWAP1  // return v16;
+    PUSH1 0x2 (2)  // v12.i256 = shl 2.i256 v10;
+    SHL
+    ADD  // v13.i256 = add v7 v12;
+    SWAP1  // return v13;
     JUMP

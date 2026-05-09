@@ -4,7 +4,7 @@ use sonatina_ir::ValueId;
 
 use crate::stackalloc::StackifyAlloc;
 
-use super::super::{FuncMemPlan, ObjLoc, static_arena_alloc::StackObjId};
+use super::super::{FuncMemPlan, ObjLoc, memory_plan::StableMode, static_arena_alloc::StackObjId};
 
 pub(crate) struct FinalSpillAllocation {
     pub(crate) alloc: StackifyAlloc,
@@ -48,13 +48,27 @@ pub(crate) fn allocate_final_spills(
         });
     }
 
-    let start_word = mem_plan.abs_words_end();
+    let old_obj_count = u32::try_from(old_objs.len()).expect("spill count overflow");
+    let dynamic_frame_has_reserve = matches!(mem_plan.stable_mode, StableMode::DynamicFrame)
+        && old_obj_count <= mem_plan.stable_words;
+    let start_word = match mem_plan.stable_mode {
+        StableMode::DynamicFrame if dynamic_frame_has_reserve => {
+            mem_plan.stable_words - old_obj_count
+        }
+        StableMode::None | StableMode::StaticAbs { .. } => mem_plan.abs_words_end(),
+        StableMode::DynamicFrame => mem_plan.abs_words_end(),
+    };
     for (idx, old_obj) in old_objs.into_iter().enumerate() {
         let new_obj = remap[&old_obj];
         let word = start_word
             .checked_add(u32::try_from(idx).expect("spill count overflow"))
             .expect("final spill word overflow");
-        mem_plan.obj_loc.insert(new_obj, ObjLoc::ScratchAbs(word));
+        let loc = match mem_plan.stable_mode {
+            StableMode::DynamicFrame if dynamic_frame_has_reserve => ObjLoc::StableFrame(word),
+            StableMode::None | StableMode::StaticAbs { .. } => ObjLoc::ScratchAbs(word),
+            StableMode::DynamicFrame => ObjLoc::ScratchAbs(word),
+        };
+        mem_plan.obj_loc.insert(new_obj, loc);
     }
 
     alloc.remap_stack_objects(&remap);
@@ -63,10 +77,15 @@ pub(crate) fn allocate_final_spills(
         alloc.spill_obj[value] = Some(new_obj);
         mem_plan.spill_obj[value] = Some(new_obj);
     }
+    alloc.validate_spill_storage();
 
-    let peak_words = start_word
-        .checked_add(u32::try_from(remap.len()).expect("spill count overflow"))
-        .expect("final spill peak overflow");
+    let peak_words = if matches!(mem_plan.stable_mode, StableMode::DynamicFrame) {
+        old_obj_count
+    } else {
+        start_word
+            .checked_add(old_obj_count)
+            .expect("final spill peak overflow")
+    };
     mem_plan.scratch_words = mem_plan.scratch_words.max(peak_words);
 
     FinalSpillAllocation {

@@ -6,8 +6,8 @@ input_file: test_files/evm/fe_enum_test_enum_unoptimized.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 1104 bytes
-  total: 1104 bytes
+  section runtime: 1097 bytes
+  total: 1097 bytes
 
 object: EnumContract
   section init: 348 bytes
@@ -20,7 +20,7 @@ functions:
     mem: scratch_words=5 stable_words=5 stable_mode=StaticAbs(base=0x140) entry_abs_words=0 abs_words_end=5
   evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__MakeSome_hb4c3b28d7dc84c95__10de9d95694004b7: ir_blocks=8 ir_insts=28 vcode_ops=89 fixups=11 imm_bytes=16
     mem: scratch_words=10 stable_words=5 stable_mode=StaticAbs(base=0x1e0) entry_abs_words=5 abs_words_end=10
-  decode_returndata__u256__3271ca15373d4483: ir_blocks=5 ir_insts=8 vcode_ops=24 fixups=2 imm_bytes=2
+  decode_returndata__u256__3271ca15373d4483: ir_blocks=3 ir_insts=5 vcode_ops=15 fixups=1 imm_bytes=1
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=10 abs_words_end=0
   solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head: ir_blocks=9 ir_insts=26 vcode_ops=65 fixups=4 imm_bytes=8
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=10 abs_words_end=0
@@ -42,7 +42,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=125282 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=104282
+  case ok: calldata_len=0 success reason=Return gas_used=125225 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=104225
 
 
 --------------- DEBUG ---------------
@@ -90,29 +90,29 @@ test_enum__StorPtr_Evm___207f35a85ac4062e:
     PUSH1 block4  // br v13 block1 block4;
     JUMPI
   block1:
-    POP  // v14.i256 = evm_return_data_size;
+    POP  // v43.i256 = evm_return_data_size;
     POP
     RETURNDATASIZE
-    PUSH1 0x40 (64)  // v15.i256 = evm_mload v2;
+    PUSH1 0x40 (64)  // v44.i256 = evm_mload v2;
     MLOAD
-    PUSH2 0x1df (479)  // v18.i1 = gt v15 479.i256;
+    PUSH2 0x1df (479)  // v45.i1 = gt v44 479.i256;
     DUP2
     GT
-    PUSH1 block20  // br v18 block25 block19;
+    PUSH1 block23  // br v45 block25 block22;
     JUMPI
-  block19:
-    POP  // jump block20;
+  block22:
+    POP  // jump block23;
     PUSH2 0x1e0 (480)
-  block20:
+  block23:
     JUMPDEST
-    DUP2  // evm_return_data_copy v19 0.i256 v14;
+    DUP2  // evm_return_data_copy v46 0.i256 v43;
     PUSH0
     DUP3
     RETURNDATACOPY
-    REVERT  // evm_revert v19 v14;
+    REVERT  // evm_revert v46 v43;
   block4:
     JUMPDEST
-    DUP1  // v22.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__MakeSome_hb4c3b28d7dc84c95__10de9d95694004b7 v12 100000.i256 0.i256 42.i256;
+    DUP1  // v16.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__MakeSome_hb4c3b28d7dc84c95__10de9d95694004b7 v12 100000.i256 0.i256 42.i256;
     PUSH1 0x2a (42)
     PUSH0
     PUSH3 0x186a0 (100000)
@@ -121,14 +121,14 @@ test_enum__StorPtr_Evm___207f35a85ac4062e:
     PUSH1 FuncRef(9)
     JUMP
     JUMPDEST
-    PUSH1 0x2a (42)  // v23.i1 = eq v22 42.i256;
+    PUSH1 0x2a (42)  // v17.i1 = eq v16 42.i256;
     EQ
     ISZERO
-    PUSH1 section_unit0  // br v23 block6 block5;
+    PUSH1 section_unit0  // br v17 block6 block5;
     JUMPI
   block6:
     JUMPDEST
-    DUP1  // v25.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__IsSomeCheck_h24a3280701a16da1__395956188d9a6813 v12 100000.i256 0.i256 99.i256;
+    DUP1  // v19.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__IsSomeCheck_h24a3280701a16da1__395956188d9a6813 v12 100000.i256 0.i256 99.i256;
     PUSH1 0x63 (99)
     PUSH0
     PUSH3 0x186a0 (100000)
@@ -137,30 +137,30 @@ test_enum__StorPtr_Evm___207f35a85ac4062e:
     PUSH1 FuncRef(11)
     JUMP
     JUMPDEST
-    PUSH1 0x1 (1)  // v27.i1 = eq v25 1.i256;
+    PUSH1 0x1 (1)  // v21.i1 = eq v19 1.i256;
     EQ
     ISZERO
-    PUSH1 section_unit0  // br v27 block8 block7;
+    PUSH1 section_unit0  // br v21 block8 block7;
     JUMPI
   block8:
     PUSH0  // evm_mstore 320.i256 0.i256;
     PUSH2 0x140 (320)
     MSTORE
-    PUSH2 0x140 (320)  // v30.i256 = call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head 320.i256 4.i256;
+    PUSH2 0x140 (320)  // v24.i256 = call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head 320.i256 4.i256;
     PUSH1 0x4 (4)
     PUSH1 `pc + (4)`
     SWAP2
     PUSH1 FuncRef(35)
     JUMP
     JUMPDEST
-    PUSH32 0x455dd37300000000000000000000000000000000000000000000000000000000 (31375362698142810071693338840885679545176626209085102383094335935879449673728)  // evm_mstore v30 31375362698142810071693338840885679545176626209085102383094335935879449673728.i256;
+    PUSH32 0x455dd37300000000000000000000000000000000000000000000000000000000 (31375362698142810071693338840885679545176626209085102383094335935879449673728)  // evm_mstore v24 31375362698142810071693338840885679545176626209085102383094335935879449673728.i256;
     DUP2
     MSTORE
-    PUSH1 0x4 (4)  // v32.i256 = add v30 4.i256;
+    PUSH1 0x4 (4)  // v26.i256 = add v24 4.i256;
     DUP2
     ADD
-    LT  // v33.i1 = lt v32 v30;
-    PUSH1 section_unit0  // br v33 block9 block10;
+    LT  // v27.i1 = lt v26 v24;
+    PUSH1 section_unit0  // br v27 block9 block10;
     JUMPI
   block10:
     PUSH2 0x1a0 (416)  // call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish 416.i256 320.i256;
@@ -170,48 +170,48 @@ test_enum__StorPtr_Evm___207f35a85ac4062e:
     PUSH1 FuncRef(37)
     JUMP
     JUMPDEST
-    PUSH2 0x1a0 (416)  // v35.i256 = evm_mload 416.i256;
+    PUSH2 0x1a0 (416)  // v29.i256 = evm_mload 416.i256;
     MLOAD
-    PUSH2 0x1c0 (448)  // v38.i256 = evm_mload 448.i256;
+    PUSH2 0x1c0 (448)  // v32.i256 = evm_mload 448.i256;
     MLOAD
-    PUSH0  // v39.i256 = evm_call 100000.i256 v12 0.i256 v35 v38 0.i256 0.i256;
+    PUSH0  // v33.i256 = evm_call 100000.i256 v12 0.i256 v29 v32 0.i256 0.i256;
     SWAP2
     PUSH0
     PUSH0
     SWAP5
     PUSH3 0x186a0 (100000)
     CALL
-    RETURNDATASIZE  // v40.i256 = evm_return_data_size;
-    PUSH1 0x40 (64)  // v41.i256 = evm_mload v2;
+    RETURNDATASIZE  // v34.i256 = evm_return_data_size;
+    PUSH1 0x40 (64)  // v35.i256 = evm_mload v2;
     MLOAD
-    PUSH2 0x1df (479)  // v42.i1 = gt v41 479.i256;
+    PUSH2 0x1df (479)  // v38.i1 = gt v35 479.i256;
     DUP2
     GT
-    PUSH1 block23  // br v42 block26 block22;
+    PUSH1 block20  // br v38 block26 block19;
     JUMPI
-  block22:
-    POP  // jump block23;
+  block19:
+    POP  // jump block20;
     PUSH2 0x1e0 (480)
-  block23:
+  block20:
     JUMPDEST
-    DUP2  // evm_return_data_copy v43 0.i256 v40;
+    DUP2  // evm_return_data_copy v39 0.i256 v34;
     PUSH0
     DUP3
     RETURNDATACOPY
-    SWAP2  // v44.i1 = is_zero v39;
-    PUSH1 block12  // br v44 block11 block12;
+    SWAP2  // v40.i1 = is_zero v33;
+    PUSH1 block12  // br v40 block11 block12;
     JUMPI
   block11:
-    SWAP1  // evm_revert v43 v40;
+    SWAP1  // evm_revert v39 v34;
     REVERT
   block12:
     JUMPDEST
-    PUSH1 `pc + (4)`  // v45.i256 = call %decode_returndata__u256__3271ca15373d4483 v43 v40;
+    PUSH1 `pc + (4)`  // v41.i256 = call %decode_returndata__u256__3271ca15373d4483 v39 v34;
     SWAP2
     PUSH1 FuncRef(24)
     JUMP
     JUMPDEST
-    PUSH1 section_unit0  // br v46 block14 block13;
+    PUSH1 section_unit0  // br v42 block14 block13;
     JUMPI
   block14:
     PUSH1 0x40 (64)  // evm_mstore v2 v3;
@@ -315,20 +315,15 @@ decode_returndata__u256__3271ca15373d4483:
   block0:
     JUMPDEST
     PUSH1 0x20 (32)  // v5.i1 = lt v1 v3;
-    DUP3
+    SWAP1
+    SWAP2
     LT
-    PUSH1 section_unit0  // br v5 block1 block4;
+    PUSH1 section_unit0  // br v5 block1 block2;
     JUMPI
-  block4:
+  block2:
     JUMPDEST
-    SWAP1  // v10.i1 = gt v3 v1;
-    PUSH1 0x20 (32)
-    GT
-    PUSH1 section_unit0  // br v10 block2 block3;
-    JUMPI
-  block3:
-    MLOAD  // v11.i256 = evm_mload v0;
-    SWAP1  // return v11;
+    MLOAD  // v10.i256 = evm_mload v0;
+    SWAP1  // return v10;
     JUMP
 
 // func private %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head(v0.i256, v1.i256) -> i256

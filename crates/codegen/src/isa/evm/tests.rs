@@ -13,7 +13,7 @@ use crate::{
     stackify_edge::StackifyEdgeSplitter,
 };
 use cranelift_entity::SecondaryMap;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{
     BlockId, Immediate, InstId, InstSetBase, InstSetExt, Module, ValueId, cfg::ControlFlowGraph,
@@ -1543,13 +1543,7 @@ block0:
 
     assert_eq!(plan.mem_plan.scratch_words, 0);
     assert_eq!(plan.mem_plan.stable_words, 0);
-    assert_eq!(plan.mem_plan.alloca_loc.len(), 1);
-    assert!(
-        plan.mem_plan
-            .alloca_loc
-            .values()
-            .all(|loc| matches!(loc, ObjLoc::ScratchAbs(0)))
-    );
+    assert!(plan.mem_plan.alloca_loc.is_empty());
 }
 
 #[test]

@@ -6,19 +6,19 @@ input_file: test_files/evm/plank_erc20_v1.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 101 bytes
-  section init: 143 bytes
-  total: 244 bytes
+  section runtime: 102 bytes
+  section init: 144 bytes
+  total: 246 bytes
 
 functions:
   mem: global_dyn_base=0x0 arena_base=0x0 scratch_peak_words=0 static_chain_peak_words=0
   init: ir_blocks=3 ir_insts=15 vcode_ops=34 fixups=4 imm_bytes=7
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  run: ir_blocks=11 ir_insts=38 vcode_ops=91 fixups=5 imm_bytes=12
+  run: ir_blocks=11 ir_insts=38 vcode_ops=92 fixups=5 imm_bytes=12
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  deploy: success reason=Return gas_used=77835 gas_refunded=0 logs=0 output=create len=101 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
+  deploy: success reason=Return gas_used=78051 gas_refunded=0 logs=0 output=create len=102 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
   case balance-zero: calldata_len=36 success reason=Return gas_used=23432 gas_refunded=0 logs=0 output=call len=32 tx_gas=21192 runtime_gas=2240
 
 
@@ -138,7 +138,8 @@ run:
     KECCAK256
     DUP1  // v27.i256 = evm_sload v26;
     SLOAD
-    DUP3  // v28.i256 = add v27 v32;
+    SWAP1  // v28.i256 = add v27 v32;
+    SWAP2
     ADD
     SWAP1  // evm_sstore v26 v28;
     SSTORE

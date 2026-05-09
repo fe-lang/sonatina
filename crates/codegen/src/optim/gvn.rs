@@ -1266,17 +1266,6 @@ impl GvnSolver {
                     },
                     *insn_expr.result_tys().get(result_idx)?,
                 )?,
-                BinaryInstKind::EvmSignExtend => simplify_evm_signextend_known(
-                    KnownValueFact {
-                        imm: func.dfg.value_imm(lhs),
-                        may_be_undef: self.may_be_undef(func, lhs),
-                    },
-                    KnownValueFact {
-                        imm: func.dfg.value_imm(rhs),
-                        may_be_undef: self.may_be_undef(func, rhs),
-                    },
-                    *insn_expr.result_tys().get(result_idx)?,
-                )?,
                 BinaryInstKind::EvmByte => simplify_evm_byte_known(
                     KnownValueFact {
                         imm: func.dfg.value_imm(lhs),

@@ -6,8 +6,8 @@ input_file: test_files/evm/fe_vault_test_vault_multiuser_unoptimized.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 4148 bytes
-  total: 4148 bytes
+  section runtime: 4141 bytes
+  total: 4141 bytes
 
 object: Vault
   section init: 798 bytes
@@ -45,7 +45,7 @@ functions:
     mem: scratch_words=7 stable_words=5 stable_mode=StaticAbs(base=0x200) entry_abs_words=2 abs_words_end=7
   evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__GetTotalShares_hbe2278c3233da528__5145d089cb2da672: ir_blocks=8 ir_insts=26 vcode_ops=81 fixups=11 imm_bytes=14
     mem: scratch_words=7 stable_words=5 stable_mode=StaticAbs(base=0x200) entry_abs_words=2 abs_words_end=7
-  evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__AddYield_h1b194739dad02c6e__f712b0a646b2bb64: ir_blocks=10 ir_insts=33 vcode_ops=108 fixups=14 imm_bytes=20
+  evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__AddYield_h1b194739dad02c6e__f712b0a646b2bb64: ir_blocks=8 ir_insts=30 vcode_ops=98 fixups=13 imm_bytes=20
     mem: scratch_words=8 stable_words=6 stable_mode=StaticAbs(base=0x200) entry_abs_words=2 abs_words_end=8
   evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Withdraw_h97c67fe0f317b1b0__d9e92202bb8b3b1d: ir_blocks=8 ir_insts=28 vcode_ops=93 fixups=13 imm_bytes=16
     mem: scratch_words=8 stable_words=5 stable_mode=StaticAbs(base=0x220) entry_abs_words=3 abs_words_end=8
@@ -79,7 +79,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=498893 gas_refunded=79600 logs=0 output=call len=32 tx_gas=21000 runtime_gas=477893
+  case ok: calldata_len=0 success reason=Return gas_used=498872 gas_refunded=79600 logs=0 output=call len=32 tx_gas=21000 runtime_gas=477872
 
 
 --------------- DEBUG ---------------
@@ -1101,12 +1101,12 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__AddYield_
     PUSH2 0x2bf (703)  // v25.i1 = gt v22 703.i256;
     DUP2
     GT
-    PUSH1 block9  // br v25 block10 block8;
+    PUSH1 block7  // br v25 block8 block6;
     JUMPI
-  block8:
-    POP  // jump block9;
+  block6:
+    POP  // jump block7;
     PUSH2 0x2c0 (704)
-  block9:
+  block7:
     JUMPDEST
     DUP2  // evm_return_data_copy v26 v17 v21;
     PUSH0
@@ -1120,12 +1120,6 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__AddYield_
     REVERT
   block4:
     JUMPDEST
-    PUSH0  // v28.i1 = lt v21 v17;
-    DUP2
-    LT
-    PUSH1 section_unit0  // br v28 block5 block6;
-    JUMPI
-  block6:
     SWAP1  // evm_mstore v9 v26;
     PUSH2 0x200 (512)
     MSTORE
