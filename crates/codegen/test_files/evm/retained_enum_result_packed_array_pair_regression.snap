@@ -16,7 +16,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=11 abs_words_end=0
   assert: ir_blocks=3 ir_insts=3 vcode_ops=9 fixups=1 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=11 abs_words_end=0
-  verify_like: ir_blocks=28 ir_insts=101 vcode_ops=238 fixups=9 imm_bytes=33
+  verify_like: ir_blocks=28 ir_insts=99 vcode_ops=234 fixups=9 imm_bytes=31
     mem: scratch_words=11 stable_words=0 stable_mode=None entry_abs_words=11 abs_words_end=11
 
 evm:

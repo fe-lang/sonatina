@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/evm.rs
-assertion_line: 451
 expression: opt_ir_snapshot
 input_file: test_files/evm/retained_enum_result_packed_array_pair_regression.sntn
 ---
@@ -204,8 +203,6 @@ func private %verify_like(v0.[i256; 5], v1.[i8; 5], v2.i256) -> @__fe_layout_1 {
         v3.objref<[i256; 5]> = obj.alloc [i256; 5];
         v4.objref<[i8; 5]> = obj.alloc [i8; 5];
         v5.*i256 = alloca i256;
-        v6.*i256 = alloca i256;
-        v7.*i256 = alloca i256;
         v9.objref<i256> = obj.index v3 0.i256;
         v10.i256 = extract_value v0 0.i256;
         obj.store v9 v10;
