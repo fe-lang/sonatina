@@ -78,11 +78,11 @@ Sonatina currently performs the following optimizations:
 
 ```sh
 // Check if IR is valid
-cargo run -p sonatina -- verify input.sntn
+cargo run -p sonatina-cli -- verify input.sntn
 // Apply optimization passes and write out optimized sonatina IR
-cargo run -p sonatina -- optimize -p input.sntn
+cargo run -p sonatina-cli -- optimize -p input.sntn
 // Build EVM bytecode
-cargo run -p sonatina -- build -O s -p input.sntn
+cargo run -p sonatina-cli -- build -O s -p input.sntn
 ```
 
 ## Tests
