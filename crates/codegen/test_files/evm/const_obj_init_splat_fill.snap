@@ -6,24 +6,24 @@ input_file: test_files/evm/const_obj_init_splat_fill.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=true
 
 object: Contract
-  section runtime: 46 bytes
-  total: 46 bytes
+  section runtime: 42 bytes
+  total: 42 bytes
 
 functions:
-  mem: global_dyn_base=0x140 arena_base=0xa0 scratch_peak_words=0 static_chain_peak_words=5
+  mem: global_dyn_base=0xc0 arena_base=0x20 scratch_peak_words=0 static_chain_peak_words=5
   entry: ir_blocks=1 ir_insts=3 vcode_ops=9 fixups=2 imm_bytes=1
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  load_splat_object: ir_blocks=1 ir_insts=6 vcode_ops=20 fixups=0 imm_bytes=12
-    mem: scratch_words=5 stable_words=5 stable_mode=StaticAbs(base=0xa0) entry_abs_words=0 abs_words_end=5
+  load_splat_object: ir_blocks=1 ir_insts=6 vcode_ops=20 fixups=0 imm_bytes=10
+    mem: scratch_words=0 stable_words=5 stable_mode=StaticAbs(base=0x20) entry_abs_words=0 abs_words_end=5
 
 --------------- OBSERVABILITY ---------------
 
 object schema=0.1.0
-totals section_bytes=46 code=46 data=0 embed=0 mapped=45 unmapped=1
+totals section_bytes=42 code=42 data=0 embed=0 mapped=41 unmapped=1
 
 section runtime schema=0.1.0
-bytes total=46 code=46 data=0 embed=0
-coverage mapped=45 unmapped=1
+bytes total=42 code=42 data=0 embed=0
+coverage mapped=41 unmapped=1
 unmapped no_ir_inst=0 label_or_fixup_only=0 synthetic=1 unknown=0
 pc [0, 2) func=entry block=0 vcode=0 ir=0 reason=- frontend=-
 pc [2, 4) func=entry block=0 vcode=1 ir=0 reason=- frontend=-
@@ -39,24 +39,24 @@ pc [13, 15) func=load_splat_object block=0 vcode=0 ir=0 reason=- frontend=-
 pc [15, 17) func=load_splat_object block=0 vcode=1 ir=0 reason=- frontend=-
 pc [17, 18) func=load_splat_object block=0 vcode=2 ir=0 reason=- frontend=-
 pc [18, 20) func=load_splat_object block=0 vcode=3 ir=2 reason=- frontend=-
-pc [20, 22) func=load_splat_object block=0 vcode=4 ir=2 reason=- frontend=-
-pc [22, 24) func=load_splat_object block=0 vcode=5 ir=2 reason=- frontend=-
-pc [24, 25) func=load_splat_object block=0 vcode=6 ir=2 reason=- frontend=-
-pc [25, 27) func=load_splat_object block=0 vcode=7 ir=4 reason=- frontend=-
-pc [27, 29) func=load_splat_object block=0 vcode=8 ir=4 reason=- frontend=-
-pc [29, 31) func=load_splat_object block=0 vcode=9 ir=4 reason=- frontend=-
-pc [31, 32) func=load_splat_object block=0 vcode=10 ir=4 reason=- frontend=-
-pc [32, 34) func=load_splat_object block=0 vcode=11 ir=6 reason=- frontend=-
-pc [34, 36) func=load_splat_object block=0 vcode=12 ir=6 reason=- frontend=-
-pc [36, 39) func=load_splat_object block=0 vcode=13 ir=6 reason=- frontend=-
-pc [39, 40) func=load_splat_object block=0 vcode=14 ir=6 reason=- frontend=-
-pc [40, 43) func=load_splat_object block=0 vcode=15 ir=10 reason=- frontend=-
-pc [43, 44) func=load_splat_object block=0 vcode=16 ir=10 reason=- frontend=-
-pc [44, 45) func=load_splat_object block=0 vcode=17 ir=11 reason=- frontend=-
-pc [45, 46) func=load_splat_object block=0 vcode=18 ir=11 reason=- frontend=-
+pc [20, 21) func=load_splat_object block=0 vcode=4 ir=2 reason=- frontend=-
+pc [21, 23) func=load_splat_object block=0 vcode=5 ir=2 reason=- frontend=-
+pc [23, 24) func=load_splat_object block=0 vcode=6 ir=2 reason=- frontend=-
+pc [24, 26) func=load_splat_object block=0 vcode=7 ir=4 reason=- frontend=-
+pc [26, 28) func=load_splat_object block=0 vcode=8 ir=4 reason=- frontend=-
+pc [28, 30) func=load_splat_object block=0 vcode=9 ir=4 reason=- frontend=-
+pc [30, 31) func=load_splat_object block=0 vcode=10 ir=4 reason=- frontend=-
+pc [31, 33) func=load_splat_object block=0 vcode=11 ir=6 reason=- frontend=-
+pc [33, 34) func=load_splat_object block=0 vcode=12 ir=6 reason=- frontend=-
+pc [34, 36) func=load_splat_object block=0 vcode=13 ir=6 reason=- frontend=-
+pc [36, 37) func=load_splat_object block=0 vcode=14 ir=6 reason=- frontend=-
+pc [37, 39) func=load_splat_object block=0 vcode=15 ir=10 reason=- frontend=-
+pc [39, 40) func=load_splat_object block=0 vcode=16 ir=10 reason=- frontend=-
+pc [40, 41) func=load_splat_object block=0 vcode=17 ir=11 reason=- frontend=-
+pc [41, 42) func=load_splat_object block=0 vcode=18 ir=11 reason=- frontend=-
 
 evm:
-  case index_4: calldata_len=0 success reason=Return gas_used=21130 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=130
+  case index_4: calldata_len=0 success reason=Return gas_used=21118 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=118
 
 
 --------------- DEBUG ---------------
@@ -79,21 +79,21 @@ load_splat_object:
   block0:
     JUMPDEST
     PUSH1 0x7 (7)  // evm_mstore v0 v1;
-    PUSH1 0xa0 (160)
+    PUSH1 0x20 (32)
     MSTORE
-    PUSH1 0x20 (32)  // evm_mcopy 192.i256 v0 v2;
-    PUSH1 0xa0 (160)
-    PUSH1 0xc0 (192)
+    PUSH1 0x20 (32)  // evm_mcopy v3 v0 v0;
+    DUP1
+    PUSH1 0x40 (64)
     MCOPY
-    PUSH1 0x40 (64)  // evm_mcopy 224.i256 v0 64.i256;
-    PUSH1 0xa0 (160)
-    PUSH1 0xe0 (224)
+    PUSH1 0x40 (64)  // evm_mcopy 96.i256 v0 v3;
+    PUSH1 0x20 (32)
+    PUSH1 0x60 (96)
     MCOPY
-    PUSH1 0x20 (32)  // evm_mcopy 288.i256 v0 v2;
+    PUSH1 0x20 (32)  // evm_mcopy 160.i256 v0 v0;
+    DUP1
     PUSH1 0xa0 (160)
-    PUSH2 0x120 (288)
     MCOPY
-    PUSH2 0x120 (288)  // v13.i256 = evm_mload 288.i256;
+    PUSH1 0xa0 (160)  // v12.i256 = evm_mload 160.i256;
     MLOAD
-    SWAP1  // return v13;
+    SWAP1  // return v12;
     JUMP

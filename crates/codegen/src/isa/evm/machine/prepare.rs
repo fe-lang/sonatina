@@ -135,6 +135,7 @@ fn prepare_machine_stackify_analysis(
     )
     .with_scratch_live_values(scratch_live_values)
     .with_scratch_spills(scratch_plan::SCRATCH_SPILL_SLOTS)
+    .with_hot_immediate_caching()
     .compute();
 
     MachineStackifyAnalysis { alloc, block_order }

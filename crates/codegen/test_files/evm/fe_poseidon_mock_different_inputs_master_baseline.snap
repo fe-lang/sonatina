@@ -6,14 +6,14 @@ input_file: test_files/evm/fe_poseidon_mock_different_inputs_master_baseline.snt
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 2345 bytes
-  total: 2345 bytes
+  section runtime: 2090 bytes
+  total: 2090 bytes
 
 functions:
   mem: global_dyn_base=0xa0 arena_base=0xa0 scratch_peak_words=0 static_chain_peak_words=0
   ark: ir_blocks=20 ir_insts=66 vcode_ops=140 fixups=9 imm_bytes=31
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  sigma_full: ir_blocks=4 ir_insts=28 vcode_ops=81 fixups=1 imm_bytes=18
+  sigma_full: ir_blocks=4 ir_insts=28 vcode_ops=82 fixups=1 imm_bytes=10
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   mix: ir_blocks=13 ir_insts=47 vcode_ops=102 fixups=10 imm_bytes=22
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
@@ -23,7 +23,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=47810 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=26810
+  case ok: calldata_len=0 success reason=Return gas_used=47834 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=26834
 
 
 --------------- DEBUG ---------------
@@ -186,48 +186,49 @@ sigma_full:
     DUP1  // v2.i256 = evm_mload v0;
     MLOAD
     PUSH32 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001 (21888242871839275222246405745257275088548364400416034343698204186575808495617)  // v4.i256 = evm_mul_mod v2 v2 v3;
-    DUP2
+    DUP1
+    DUP3
     DUP1
     MULMOD
-    PUSH32 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001 (21888242871839275222246405745257275088548364400416034343698204186575808495617)  // v6.i256 = evm_mul_mod v4 v4 v3;
+    DUP2  // v6.i256 = evm_mul_mod v4 v4 v3;
     SWAP1
     DUP1
     MULMOD
-    SWAP1  // v7.i256 = evm_mul_mod v6 v2 v3;
-    PUSH32 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001 (21888242871839275222246405745257275088548364400416034343698204186575808495617)
-    SWAP2
+    SWAP2  // v7.i256 = evm_mul_mod v6 v2 v3;
+    DUP2
+    SWAP3
     MULMOD
     PUSH1 0x20 (32)  // v10.i256 = add v0 v8;
-    DUP3
+    DUP4
     ADD
     MLOAD  // v11.i256 = evm_mload v10;
-    PUSH32 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001 (21888242871839275222246405745257275088548364400416034343698204186575808495617)  // v12.i256 = evm_mul_mod v11 v11 v3;
+    DUP3  // v12.i256 = evm_mul_mod v11 v11 v3;
     DUP2
     DUP1
     MULMOD
-    PUSH32 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001 (21888242871839275222246405745257275088548364400416034343698204186575808495617)  // v14.i256 = evm_mul_mod v12 v12 v3;
+    DUP4  // v14.i256 = evm_mul_mod v12 v12 v3;
     SWAP1
     DUP1
     MULMOD
     SWAP1  // v15.i256 = evm_mul_mod v14 v11 v3;
-    PUSH32 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001 (21888242871839275222246405745257275088548364400416034343698204186575808495617)
+    DUP4
     SWAP2
     MULMOD
-    SWAP2  // v17.i256 = add v0 v16;
+    SWAP3  // v17.i256 = add v0 v16;
     PUSH1 0x40 (64)
     ADD
     MLOAD  // v18.i256 = evm_mload v17;
-    PUSH32 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001 (21888242871839275222246405745257275088548364400416034343698204186575808495617)  // v15.i256 = evm_mul_mod v18 v18 v3;
+    DUP3  // v15.i256 = evm_mul_mod v18 v18 v3;
     DUP2
     DUP1
     MULMOD
-    PUSH32 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001 (21888242871839275222246405745257275088548364400416034343698204186575808495617)  // v16.i256 = evm_mul_mod v15 v15 v3;
+    DUP4  // v16.i256 = evm_mul_mod v15 v15 v3;
     SWAP1
     DUP1
     MULMOD
-    SWAP1  // v17.i256 = evm_mul_mod v16 v18 v3;
-    PUSH32 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001 (21888242871839275222246405745257275088548364400416034343698204186575808495617)
+    SWAP3  // v17.i256 = evm_mul_mod v16 v18 v3;
     SWAP2
+    SWAP3
     MULMOD
     PUSH1 0x40 (64)  // v18.i256 = evm_mload v16;
     MLOAD

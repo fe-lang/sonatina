@@ -49,6 +49,15 @@ pub(crate) fn allocate_final_spills(
     }
 
     let old_obj_count = u32::try_from(old_objs.len()).expect("spill count overflow");
+    if old_obj_count == 0 {
+        alloc.validate_spill_storage();
+        return FinalSpillAllocation {
+            alloc,
+            peak_words: 0,
+            mem_plan,
+        };
+    }
+
     let dynamic_frame_has_reserve = matches!(mem_plan.stable_mode, StableMode::DynamicFrame)
         && old_obj_count <= mem_plan.stable_words;
     let start_word = match mem_plan.stable_mode {
@@ -92,5 +101,55 @@ pub(crate) fn allocate_final_spills(
         alloc,
         mem_plan,
         peak_words,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use cranelift_entity::SecondaryMap;
+    use rustc_hash::{FxHashMap, FxHashSet};
+
+    use crate::{
+        isa::evm::{
+            FuncMemPlan, machine::final_spills::allocate_final_spills,
+            malloc_plan::MallocEscapeKind, memory_plan::StableMode,
+        },
+        stackalloc::StackifyAlloc,
+    };
+
+    fn static_mem_plan(scratch_words: u32, stable_words: u32) -> FuncMemPlan {
+        FuncMemPlan {
+            arena_base: 0xa0,
+            scratch_words,
+            stable_words,
+            stable_mode: StableMode::StaticAbs {
+                base_word: scratch_words,
+            },
+            entry_abs_words: scratch_words,
+            obj_loc: FxHashMap::default(),
+            alloca_loc: FxHashMap::default(),
+            spill_obj: SecondaryMap::new(),
+            call_preserve: FxHashMap::default(),
+            malloc_future_abs_words: FxHashMap::default(),
+            transient_mallocs: FxHashSet::default(),
+            malloc_escape_kinds: FxHashMap::<_, MallocEscapeKind>::default(),
+            return_escape_caller_abs_words: 0,
+        }
+    }
+
+    #[test]
+    fn zero_final_spills_do_not_count_stable_words_as_scratch() {
+        let final_spills = allocate_final_spills(StackifyAlloc::default(), static_mem_plan(0, 5));
+
+        assert_eq!(final_spills.peak_words, 0);
+        assert_eq!(final_spills.mem_plan.scratch_words, 0);
+    }
+
+    #[test]
+    fn zero_final_spills_do_not_request_backend_spill_reserve() {
+        let final_spills = allocate_final_spills(StackifyAlloc::default(), static_mem_plan(3, 5));
+
+        assert_eq!(final_spills.peak_words, 0);
+        assert_eq!(final_spills.mem_plan.scratch_words, 3);
     }
 }

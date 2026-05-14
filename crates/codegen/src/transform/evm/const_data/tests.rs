@@ -1229,7 +1229,7 @@ object @Contract {
         .get(&SymbolId::Global(arr))
         .expect("arr symbol should be present");
     assert_eq!(arr_def.size, 160);
-    assert_eq!(runtime.bytes.len(), 177);
+    assert_eq!(runtime.bytes.len(), 176);
 }
 
 #[test]

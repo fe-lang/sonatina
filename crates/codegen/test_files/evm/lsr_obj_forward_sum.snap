@@ -10,12 +10,12 @@ object: Contract
   total: 60 bytes
 
 functions:
-  mem: global_dyn_base=0x100 arena_base=0x80 scratch_peak_words=4 static_chain_peak_words=0
+  mem: global_dyn_base=0xa0 arena_base=0x20 scratch_peak_words=4 static_chain_peak_words=0
   entry: ir_blocks=4 ir_insts=17 vcode_ops=45 fixups=2 imm_bytes=13
     mem: scratch_words=4 stable_words=0 stable_mode=None entry_abs_words=4 abs_words_end=4
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=21403 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=403
+  case ok: calldata_len=0 success reason=Return gas_used=21394 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=394
 
 
 --------------- DEBUG ---------------
@@ -24,38 +24,38 @@ evm:
 entry:
   block0:
     PUSH1 0x1 (1)  // evm_mstore v3 v4;
+    PUSH1 0x20 (32)
+    MSTORE
+    PUSH1 0x2 (2)  // evm_mstore 64.i256 2.i256;
+    PUSH1 0x40 (64)
+    MSTORE
+    PUSH1 0x3 (3)  // evm_mstore 96.i256 3.i256;
+    PUSH1 0x60 (96)
+    MSTORE
+    PUSH1 0x4 (4)  // evm_mstore 128.i256 4.i256;
     PUSH1 0x80 (128)
     MSTORE
-    PUSH1 0x2 (2)  // evm_mstore 160.i256 2.i256;
-    PUSH1 0xa0 (160)
-    MSTORE
-    PUSH1 0x3 (3)  // evm_mstore 192.i256 3.i256;
-    PUSH1 0xc0 (192)
-    MSTORE
-    PUSH1 0x4 (4)  // evm_mstore 224.i256 4.i256;
-    PUSH1 0xe0 (224)
-    MSTORE
-    PUSH1 0x80 (128)  // jump block1;
+    PUSH1 0x20 (32)  // jump block1;
     PUSH0
     PUSH0
   block1:
     JUMPDEST
-    PUSH1 0x4 (4)  // v14.i1 = lt v0 4.i256;
+    PUSH1 0x4 (4)  // v13.i1 = lt v0 4.i256;
     DUP2
     LT
-    ISZERO  // br v14 block2 block3;
+    ISZERO  // br v13 block2 block3;
     PUSH1 block3
     JUMPI
   block2:
-    DUP3  // v16.i256 = evm_mload v2;
+    DUP3  // v15.i256 = evm_mload v2;
     MLOAD
-    SWAP1  // v17.i256 = add v1 v16;
+    SWAP1  // v16.i256 = add v1 v15;
     SWAP2
     ADD
-    SWAP1  // v18.i256 = add v0 v4;
+    SWAP1  // v17.i256 = add v0 v4;
     PUSH1 0x1 (1)
     ADD
-    SWAP2  // v19.i256 = add v2 v5;
+    SWAP2  // v18.i256 = add v2 v3;
     PUSH1 0x20 (32)
     ADD
     SWAP2  // jump block1;
@@ -68,6 +68,6 @@ entry:
     POP
     PUSH0
     MSTORE
-    PUSH1 0x20 (32)  // evm_return 0.i256 v5;
+    PUSH1 0x20 (32)  // evm_return 0.i256 v3;
     PUSH0
     RETURN

@@ -16,7 +16,7 @@ functions:
   caller: ir_blocks=1 ir_insts=39 vcode_ops=157 fixups=2 imm_bytes=37
     mem: scratch_words=16 stable_words=1 stable_mode=StaticAbs(base=0x300) entry_abs_words=8 abs_words_end=16
   mid: ir_blocks=1 ir_insts=5 vcode_ops=29 fixups=2 imm_bytes=2
-    mem: scratch_words=10 stable_words=1 stable_mode=StaticAbs(base=0x320) entry_abs_words=9 abs_words_end=10
+    mem: scratch_words=0 stable_words=1 stable_mode=StaticAbs(base=0x320) entry_abs_words=9 abs_words_end=10
   callee: ir_blocks=1 ir_insts=25 vcode_ops=49 fixups=0 imm_bytes=16
     mem: scratch_words=8 stable_words=0 stable_mode=None entry_abs_words=10 abs_words_end=8
 

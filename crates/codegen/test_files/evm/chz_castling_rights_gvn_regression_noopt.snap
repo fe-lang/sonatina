@@ -20,7 +20,7 @@ functions:
   set_piece: ir_blocks=3 ir_insts=23 vcode_ops=54 fixups=1 imm_bytes=16
     mem: scratch_words=3 stable_words=0 stable_mode=None entry_abs_words=182 abs_words_end=3
   path_clear_file: ir_blocks=33 ir_insts=109 vcode_ops=244 fixups=22 imm_bytes=63
-    mem: scratch_words=187 stable_words=5 stable_mode=StaticAbs(base=0x3260) entry_abs_words=182 abs_words_end=187
+    mem: scratch_words=1 stable_words=5 stable_mode=StaticAbs(base=0x3260) entry_abs_words=182 abs_words_end=187
   is_empty: ir_blocks=1 ir_insts=5 vcode_ops=10 fixups=0 imm_bytes=3
     mem: scratch_words=1 stable_words=0 stable_mode=None entry_abs_words=187 abs_words_end=1
   piece_at: ir_blocks=3 ir_insts=17 vcode_ops=45 fixups=3 imm_bytes=12
@@ -38,7 +38,7 @@ functions:
   sq_rank: ir_blocks=1 ir_insts=5 vcode_ops=11 fixups=0 imm_bytes=4
     mem: scratch_words=1 stable_words=0 stable_mode=None entry_abs_words=182 abs_words_end=1
   decode_move: ir_blocks=1 ir_insts=22 vcode_ops=58 fixups=6 imm_bytes=18
-    mem: scratch_words=111 stable_words=1 stable_mode=StaticAbs(base=0x2960) entry_abs_words=110 abs_words_end=111
+    mem: scratch_words=3 stable_words=1 stable_mode=StaticAbs(base=0x2960) entry_abs_words=110 abs_words_end=111
   downcast_truncate__gcd17: ir_blocks=1 ir_insts=7 vcode_ops=21 fixups=4 imm_bytes=4
     mem: scratch_words=1 stable_words=0 stable_mode=None entry_abs_words=111 abs_words_end=1
   core__lib__num__impl_trait_u8_5028__from_word_1a32: ir_blocks=1 ir_insts=4 vcode_ops=9 fixups=0 imm_bytes=3
@@ -68,7 +68,7 @@ functions:
   validate_rook_capture: ir_blocks=74 ir_insts=354 vcode_ops=1198 fixups=109 imm_bytes=296
     mem: scratch_words=139 stable_words=71 stable_mode=StaticAbs(base=0x2080) entry_abs_words=39 abs_words_end=139
   meta_custom: ir_blocks=1 ir_insts=45 vcode_ops=112 fixups=14 imm_bytes=35
-    mem: scratch_words=123 stable_words=13 stable_mode=StaticAbs(base=0x2960) entry_abs_words=110 abs_words_end=123
+    mem: scratch_words=1 stable_words=13 stable_mode=StaticAbs(base=0x2960) entry_abs_words=110 abs_words_end=123
   meta_set_black_king_sq: ir_blocks=1 ir_insts=10 vcode_ops=21 fixups=0 imm_bytes=8
     mem: scratch_words=2 stable_words=0 stable_mode=None entry_abs_words=123 abs_words_end=2
   meta_set_castling_rights: ir_blocks=1 ir_insts=10 vcode_ops=21 fixups=0 imm_bytes=8

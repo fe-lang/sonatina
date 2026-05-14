@@ -11,7 +11,7 @@ object: Contract
 
 functions:
   mem: global_dyn_base=0x60 arena_base=0x60 scratch_peak_words=0 static_chain_peak_words=0
-  entry: ir_blocks=1 ir_insts=5 vcode_ops=12 fixups=2 imm_bytes=2
+  entry: ir_blocks=1 ir_insts=4 vcode_ops=10 fixups=2 imm_bytes=1
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   two_mallocs: ir_blocks=4 ir_insts=12 vcode_ops=27 fixups=1 imm_bytes=8
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
@@ -40,7 +40,7 @@ entry:
     JUMP
     JUMPDEST
     LT  // v2.i1 = lt v0 v1;
-    PUSH0  // evm_mstore v5 v4;
+    PUSH0  // evm_mstore v5 v2;
     MSTORE
     PUSH1 0x20 (32)  // evm_return v5 32.i256;
     PUSH0

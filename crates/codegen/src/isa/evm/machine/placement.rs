@@ -1,3 +1,4 @@
+use cranelift_entity::SecondaryMap;
 use rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
 use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
@@ -11,7 +12,7 @@ use super::{
     super::{
         EvmBackend, heap_plan, malloc_plan,
         mem_effects::compute_func_mem_effects,
-        memory_plan::{self, FuncPreAnalysis, ObjLoc, ProgramMemoryPlan, StableMode, WORD_BYTES},
+        memory_plan::{self, FuncPreAnalysis, ObjLoc, StableMode, WORD_BYTES},
         prepare::{
             ArenaBaseFacts, choose_arena_base, compute_return_escape_caller_clamp_words,
             function_may_touch_free_ptr_slot, function_may_write_free_ptr_slot,
@@ -28,7 +29,6 @@ pub(crate) struct EvmMemoryPlacementPlan {
     pub(crate) scratch_peak_words: u32,
     pub(crate) static_chain_peak_words: u32,
     pub(crate) funcs: FxHashMap<FuncRef, EvmFuncPlacementPlan>,
-    pub(crate) semantic_plan: ProgramMemoryPlan,
 }
 
 #[derive(Clone, Debug)]
@@ -36,6 +36,7 @@ pub(crate) struct EvmFuncPlacementPlan {
     pub(crate) arena_base: u32,
     pub(crate) stable_mode: StableMode,
     pub(crate) stable_words: u32,
+    pub(crate) mem_plan: memory_plan::FuncMemPlan,
     pub(crate) alloca_loc: FxHashMap<InstId, ObjLoc>,
     pub(crate) malloc_placements: FxHashMap<InstId, MallocPlacement>,
     pub(crate) free_ptr_floor_before_malloc: FxHashMap<InstId, Option<u32>>,
@@ -261,6 +262,7 @@ pub(crate) fn compute_semantic_memory_placement(
                 arena_base: func_plan.arena_base,
                 stable_mode: func_plan.stable_mode,
                 stable_words: func_plan.stable_words,
+                mem_plan: machine_mem_plan_from_semantic(func_plan),
                 alloca_loc: func_plan.alloca_loc.clone(),
                 malloc_placements,
                 free_ptr_floor_before_malloc,
@@ -274,8 +276,19 @@ pub(crate) fn compute_semantic_memory_placement(
         scratch_peak_words: semantic_plan.scratch_peak_words,
         static_chain_peak_words: semantic_plan.static_chain_peak_words,
         funcs: func_placements,
-        semantic_plan,
     }
+}
+
+fn machine_mem_plan_from_semantic(
+    func_plan: &memory_plan::FuncMemPlan,
+) -> memory_plan::FuncMemPlan {
+    let mut mem_plan = func_plan.clone();
+    mem_plan.alloca_loc.clear();
+    mem_plan.spill_obj = SecondaryMap::new();
+    mem_plan.malloc_future_abs_words.clear();
+    mem_plan.transient_mallocs.clear();
+    mem_plan.malloc_escape_kinds.clear();
+    mem_plan
 }
 
 struct MallocPlacementCtx<'a> {

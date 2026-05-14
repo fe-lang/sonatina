@@ -537,19 +537,17 @@ fn prepare_machine_section_after_pipeline(
         let mut results: Vec<_> = machine_analyses
             .into_par_iter()
             .map(|(func, analysis)| {
-                let mem_plan = placement
-                    .semantic_plan
+                let func_placement = placement
                     .funcs
                     .get(&func)
-                    .cloned()
-                    .unwrap_or_else(|| panic!("missing semantic plan for func {}", func.as_u32()));
-                let mut mem_plan = mem_plan;
+                    .unwrap_or_else(|| panic!("missing placement for func {}", func.as_u32()));
+                let mut mem_plan = func_placement.mem_plan.clone();
                 let func_map = machine
                     .source_to_machine
                     .funcs
                     .get(&func)
                     .unwrap_or_else(|| panic!("missing source map for func {}", func.as_u32()));
-                translate_semantic_mem_plan_to_machine(&mut mem_plan, func_map);
+                remap_machine_mem_plan_call_preserve(&mut mem_plan, func_map);
                 let final_spills = allocate_final_spills(analysis.alloc, mem_plan);
                 let dyn_sp_plan = conservative_machine_dyn_sp_plan(&final_spills.mem_plan);
                 let alias_plan = machine.work.module().func_store.view(func, |function| {
@@ -633,7 +631,7 @@ fn prepare_machine_section_after_pipeline(
     unreachable!("machine spill-reserve loop always returns by iteration cap")
 }
 
-fn translate_semantic_mem_plan_to_machine(mem_plan: &mut FuncMemPlan, map: &FuncMachineMap) {
+fn remap_machine_mem_plan_call_preserve(mem_plan: &mut FuncMemPlan, map: &FuncMachineMap) {
     let mut call_preserve = FxHashMap::default();
     for (source_inst, plan) in std::mem::take(&mut mem_plan.call_preserve) {
         if let Some(machine_inst) = map.insts[source_inst] {
@@ -641,11 +639,6 @@ fn translate_semantic_mem_plan_to_machine(mem_plan: &mut FuncMemPlan, map: &Func
         }
     }
     mem_plan.call_preserve = call_preserve;
-    mem_plan.alloca_loc.clear();
-    mem_plan.spill_obj = SecondaryMap::new();
-    mem_plan.malloc_future_abs_words.clear();
-    mem_plan.transient_mallocs.clear();
-    mem_plan.malloc_escape_kinds.clear();
 }
 
 fn conservative_machine_dyn_sp_plan(mem_plan: &FuncMemPlan) -> FuncDynSpPlan {
