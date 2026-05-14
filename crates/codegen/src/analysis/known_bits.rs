@@ -8,7 +8,12 @@ use std::{
 use cranelift_entity::SecondaryMap;
 use sonatina_ir::{
     Function, Immediate, Type, U256, Value, ValueId,
-    inst::{BinaryInstKind, CastInstKind, InstClassKind, UnaryInstKind},
+    inst::{BinaryInstKind, CastInstKind, InstClassKind, UnaryInstKind, data, downcast},
+};
+
+use crate::optim::const_eval::{
+    ConstPathAnalysis, analyze_const_paths, collect_constref_value_tys,
+    eval_const_path_dynamic_domain_immediates, eval_const_path_immediate,
 };
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -96,6 +101,7 @@ pub struct KnownBitsQuery {
     known: SecondaryMap<ValueId, KnownBits>,
     value_tys: SecondaryMap<ValueId, Option<Type>>,
     immediates: SecondaryMap<ValueId, Option<Immediate>>,
+    const_paths: ConstPathAnalysis,
 }
 
 #[cfg(test)]
@@ -116,8 +122,10 @@ impl KnownBitsQuery {
             known: SecondaryMap::default(),
             value_tys: SecondaryMap::default(),
             immediates: SecondaryMap::default(),
+            const_paths: ConstPathAnalysis::default(),
         };
         query.capture_value_metadata(func);
+        query.const_paths = analyze_const_paths(func, &collect_constref_value_tys(func));
         query.solve(func);
         query
     }
@@ -269,6 +277,10 @@ impl KnownBitsQuery {
         }
 
         let inst_data = func.dfg.inst(inst);
+        if let Some(load) = downcast::<&data::ConstLoad>(func.inst_set(), inst_data) {
+            return self.const_load_known_bits(func, *load.object(), ty);
+        }
+
         let args = inst_data.collect_values();
         match inst_data.kind() {
             InstClassKind::Binary(kind) => self.binary_known_bits(func, kind, ty, &args),
@@ -276,6 +288,29 @@ impl KnownBitsQuery {
             InstClassKind::Unary(kind) => self.unary_known_bits(func, kind, ty, &args),
             InstClassKind::Phi | InstClassKind::Opaque => KnownBits::unknown(ty),
         }
+    }
+
+    fn const_load_known_bits(&self, func: &Function, object: ValueId, ty: Type) -> KnownBits {
+        let Some(path) = self.const_paths.path(object) else {
+            return KnownBits::unknown(ty);
+        };
+        let module = func.ctx();
+        if let Some(imm) =
+            eval_const_path_immediate(module, path, |value| self.value_imm(func, value))
+        {
+            return KnownBits::from_imm(imm);
+        }
+
+        let Some((_, values)) = eval_const_path_dynamic_domain_immediates(module, path, |value| {
+            self.value_imm(func, value)
+        }) else {
+            return KnownBits::unknown(ty);
+        };
+        let mut values = values.into_iter().map(KnownBits::from_imm);
+        values
+            .next()
+            .map(|first| values.fold(first, |known, value| known.meet(value, ty)))
+            .unwrap_or_else(|| KnownBits::unknown(ty))
     }
 
     fn unary_known_bits(
@@ -1095,6 +1130,67 @@ block3:
     }
 
     #[test]
+    fn const_load_static_path_reports_exact_bits() {
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-london"
+
+global private const [i8; 4] $arr = [3, 5, 9, 12];
+
+func public %f() -> i8 {
+block0:
+    v0.constref<[i8; 4]> = const.ref $arr;
+    v1.constref<i8> = const.index v0 2.i8;
+    v2.i8 = const.load v1;
+    return v2;
+}
+"#,
+        )
+        .expect("module parses");
+        let func = parsed
+            .module
+            .func_store
+            .view(parsed.module.funcs()[0], |func| func.clone());
+        let load = find_const_load_result(&func);
+        let query = KnownBitsQuery::new(&func);
+
+        assert_eq!(
+            query.for_value(&func, load).exact_imm(Type::I8),
+            Some(Immediate::from_i256(I256::from(9u8), Type::I8))
+        );
+    }
+
+    #[test]
+    fn const_load_dynamic_domain_meets_element_bits() {
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-london"
+
+global private const [i8; 4] $arr = [0, 2, 4, 6];
+
+func public %f(v0.i256) -> i8 {
+block0:
+    v1.constref<[i8; 4]> = const.ref $arr;
+    v2.constref<i8> = const.index v1 v0;
+    v3.i8 = const.load v2;
+    return v3;
+}
+"#,
+        )
+        .expect("module parses");
+        let func = parsed
+            .module
+            .func_store
+            .view(parsed.module.funcs()[0], |func| func.clone());
+        let load = find_const_load_result(&func);
+        let query = KnownBitsQuery::new(&func);
+        let known = query.for_value(&func, load);
+
+        assert!(known.all_zero_in(U256::one()));
+        assert_eq!(known.exact_imm(Type::I8), None);
+    }
+
+    #[test]
     fn cast_rules_handle_zext_trunc_and_sext() {
         let mb = test_module_builder();
         let (evm, mut builder) = test_func_builder(&mb, &[], Type::I16);
@@ -1318,6 +1414,17 @@ block3:
             }
         }
         panic!("missing instruction kind {kind:?}");
+    }
+
+    fn find_const_load_result(func: &Function) -> ValueId {
+        for block in func.layout.iter_block() {
+            for inst in func.layout.iter_inst(block) {
+                if downcast::<&data::ConstLoad>(func.inst_set(), func.dfg.inst(inst)).is_some() {
+                    return func.dfg.inst_result(inst).expect("result");
+                }
+            }
+        }
+        panic!("missing const.load");
     }
 
     fn next_u256(rng: &mut XorShift64) -> U256 {

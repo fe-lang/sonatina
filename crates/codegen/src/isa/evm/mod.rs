@@ -23,7 +23,7 @@ pub(crate) mod static_arena_alloc;
 pub mod test_util;
 mod verify;
 
-pub use backend::{EvmBackend, LateCleanupProfile, PushWidthPolicy};
+pub use backend::{EvmBackend, ImmediateMaterializationMode, LateCleanupProfile, PushWidthPolicy};
 pub use late_alias::canonicalize_alias_value;
 pub use prepare::EvmPreparedSection;
 

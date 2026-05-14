@@ -1,0 +1,136 @@
+target = "evm-ethereum-osaka"
+
+# sameln: func public %dominated_repeated_check_folds(v0.i256) -> i256 {
+# check:       br v1 block1 block4;
+# not:         br v2
+# check:       jump block2;
+func public %dominated_repeated_check_folds(v0.i256) -> i256 {
+block0:
+    v1.i1 = lt v0 10.i256;
+    br v1 block1 block4;
+
+block1:
+    v2.i1 = lt v0 10.i256;
+    br v2 block2 block3;
+
+block2:
+    return 1.i256;
+
+block3:
+    return 2.i256;
+
+block4:
+    return 3.i256;
+}
+
+# sameln: func public %dominated_affine_check_uses_same_block_transfer(v0.i256) -> i256 {
+# not:         br v3
+# check:       jump block2;
+func public %dominated_affine_check_uses_same_block_transfer(v0.i256) -> i256 {
+block0:
+    v1.i1 = lt v0 10.i256;
+    br v1 block1 block4;
+
+block1:
+    v2.i256 = add v0 1.i256;
+    v3.i1 = lt v2 11.i256;
+    br v3 block2 block3;
+
+block2:
+    return v2;
+
+block3:
+    return 2.i256;
+
+block4:
+    return 3.i256;
+}
+
+# sameln: func public %counted_loop_affine_check_folds_but_loop_guard_remains() -> i256 {
+# check:       br v1 block2 block5;
+# not:         br v6
+# check:       jump block3;
+func public %counted_loop_affine_check_folds_but_loop_guard_remains() -> i256 {
+block0:
+    jump block1;
+
+block1:
+    v0.i256 = phi (0.i256 block0) (v4 block3);
+    v1.i1 = lt v0 57.i256;
+    br v1 block2 block5;
+
+block2:
+    v2.i256 = mul 5.i256 v0;
+    v3.i256 = add v2 4.i256;
+    v6.i1 = lt v3 285.i256;
+    br v6 block3 block4;
+
+block3:
+    v4.i256 = add v0 1.i256;
+    jump block1;
+
+block4:
+    return 999.i256;
+
+block5:
+    return v0;
+}
+
+# sameln: func public %unconstrained_check_remains(v0.i256) -> i256 {
+# check:       br v1 block1 block2;
+func public %unconstrained_check_remains(v0.i256) -> i256 {
+block0:
+    v1.i1 = lt v0 285.i256;
+    br v1 block1 block2;
+
+block1:
+    return 1.i256;
+
+block2:
+    return 2.i256;
+}
+
+# sameln: func public %zero_test_folds_when_range_excludes_zero(v0.i256) -> i256 {
+# not:         br v2
+# check:       jump block3;
+func public %zero_test_folds_when_range_excludes_zero(v0.i256) -> i256 {
+block0:
+    v1.i1 = ne v0 0.i256;
+    br v1 block1 block4;
+
+block1:
+    v2.i1 = is_zero v0;
+    br v2 block2 block3;
+
+block2:
+    return 1.i256;
+
+block3:
+    return 2.i256;
+
+block4:
+    return 3.i256;
+}
+
+# sameln: func public %bool_compare_normalization_folds(v0.i256) -> i256 {
+# not:         br v3
+# check:       jump block2;
+func public %bool_compare_normalization_folds(v0.i256) -> i256 {
+block0:
+    v1.i1 = lt v0 10.i256;
+    br v1 block1 block4;
+
+block1:
+    v2.i1 = lt v0 10.i256;
+    v3.i1 = eq v2 1.i1;
+    br v3 block2 block3;
+
+block2:
+    return 1.i256;
+
+block3:
+    return 2.i256;
+
+block4:
+    return 3.i256;
+}

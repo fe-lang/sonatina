@@ -4,6 +4,7 @@ use tracing::{debug_span, info_span, trace_span};
 use crate::{
     machinst::lower::SectionWorkModule,
     optim::{
+        constref_specialize::specialize_private_constrefs,
         dead_arg::{DeadArgElimConfig, run_dead_arg_elim},
         pipeline::{FuncPassOverrides, Pass, run_function_pass_round},
     },
@@ -193,10 +194,44 @@ impl EvmPipelineContext<'_> {
         }
     }
 
+    fn refresh_section_funcs(&mut self) {
+        let (membership, removed) = self.work.prune_unreachable_defined_funcs();
+        self.funcs = self.work.function_emission_order(&membership);
+        if removed != 0 {
+            self.func_behavior_dirty = true;
+        }
+    }
+
+    fn ensure_only_section_funcs_remain(&self) -> Result<(), String> {
+        let mut expected = self.funcs.clone();
+        expected.sort_unstable();
+        let actual = self.module().funcs();
+        if actual == expected {
+            return Ok(());
+        }
+
+        Err(format!(
+            "EVM section module still contains non-section functions before legalization: \
+             expected {expected:?}, found {actual:?}"
+        ))
+    }
+
     fn run_enum_and_const_lowering(&mut self) -> Result<(), String> {
-        let module = self.module();
-        crate::transform::aggregate::EnumLowerToProduct.run(module);
-        ConstDataLower::default().run(module);
+        crate::transform::aggregate::EnumLowerToProduct.run(self.module());
+        let stats = specialize_private_constrefs(self.module(), &self.funcs);
+        if stats.changed {
+            run_dead_arg_elim(self.module(), DeadArgElimConfig::default());
+            self.refresh_section_funcs();
+            self.func_behavior_dirty = true;
+            self.run_pass_round(
+                "constref_specialize",
+                &[Pass::Sccp, Pass::CfgCleanup],
+                false,
+                false,
+            );
+            self.refresh_section_funcs();
+        }
+        ConstDataLower::default().run(self.module());
         self.func_behavior_dirty = true;
         Ok(())
     }
@@ -226,10 +261,11 @@ impl EvmPipelineContext<'_> {
     }
 
     fn run_object_abi_and_type_lowering(&mut self) -> Result<(), String> {
-        let module = self.module();
-        ObjectLowerToMemory.run(module);
-        AggregateExpandAbi::default().run(module);
-        legalize_evm_section(module, &self.funcs);
+        ObjectLowerToMemory.run(self.module());
+        AggregateExpandAbi::default().run(self.module());
+        self.refresh_section_funcs();
+        self.ensure_only_section_funcs_remain()?;
+        legalize_evm_section(self.module(), &self.funcs);
         self.func_behavior_dirty = true;
         if self.backend.late_cleanup_profile == LateCleanupProfile::Off {
             self.run_pass_round("post_evm_legalize", &[Pass::CfgCleanup], false, false);
@@ -269,8 +305,7 @@ impl EvmPipelineContext<'_> {
     }
 
     fn run_validate_lowering_ir(&mut self) -> Result<(), String> {
-        let membership = self.work.membership();
-        self.funcs = self.work.function_emission_order(&membership);
+        self.refresh_section_funcs();
 
         if let Some((_, message)) = collect_unsupported_evm_calls(self.module(), &self.funcs, None)
             .into_iter()
@@ -301,29 +336,33 @@ impl EvmPipelineContext<'_> {
             let module = self.module();
             let module_ctx = &module.ctx;
             let backend = self.backend;
-            module.func_store.par_for_each(|func, function| {
+            for &func in &self.funcs {
                 let _span = trace_span!(
                     "sonatina.codegen.evm.prepare_free_ptr_restore.func",
                     func_ref = func.as_u32()
                 )
                 .entered();
-                prepare_free_ptr_restore(function, module_ctx, backend, ptr_escape);
-            });
+                module.func_store.modify(func, |function| {
+                    prepare_free_ptr_restore(function, module_ctx, backend, ptr_escape);
+                });
+            }
         }
         self.func_behavior_dirty = true;
 
         {
             let module = self.module();
             let module_ctx = &module.ctx;
-            module.func_store.par_for_each(|func, function| {
+            for &func in &self.funcs {
                 let _span = trace_span!(
                     "sonatina.codegen.evm.aggregate_legalize.func",
                     func_ref = func.as_u32()
                 )
                 .entered();
-                AggregateLowerToMemoryLegalize::default().run(function, module_ctx);
-                assert_aggregate_legalized(function, module_ctx);
-            });
+                module.func_store.modify(func, |function| {
+                    AggregateLowerToMemoryLegalize::default().run(function, module_ctx);
+                    assert_aggregate_legalized(function, module_ctx);
+                });
+            }
         }
         // Later memory planning reads summaries against the lowered call signatures.
         self.ptr_escape = Some(compute_ptr_escape_summaries(
@@ -355,6 +394,7 @@ impl EvmPipelineContext<'_> {
                 Pass::BranchCanonicalize,
                 Pass::LoadStore,
                 Pass::CheckedArithElim,
+                Pass::RangeBranchSimplify,
                 Pass::Sccp,
                 Pass::LoopStrengthReduce,
                 Pass::ScalarCanonicalize,
@@ -369,15 +409,17 @@ impl EvmPipelineContext<'_> {
         {
             let module = self.module();
             let module_ctx = &module.ctx;
-            module.func_store.par_for_each(|func, function| {
+            for &func in &self.funcs {
                 let _span = trace_span!(
                     "sonatina.codegen.evm.aggregate_scratch_cleanup.func",
                     func_ref = func.as_u32()
                 )
                 .entered();
-                cleanup_dead_aggregate_alloca_trees(function, module_ctx);
-                assert_aggregate_legalized(function, module_ctx);
-            });
+                module.func_store.modify(func, |function| {
+                    cleanup_dead_aggregate_alloca_trees(function, module_ctx);
+                    assert_aggregate_legalized(function, module_ctx);
+                });
+            }
         }
         Ok(())
     }

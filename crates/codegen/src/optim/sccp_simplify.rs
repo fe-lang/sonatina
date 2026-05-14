@@ -6,7 +6,9 @@ use sonatina_ir::{
 };
 
 use super::{
-    const_eval::{BlockEdge, ConstPathAnalysis, dynamic_index_values, eval_const_path_immediate},
+    const_eval::{
+        BlockEdge, ConstPathAnalysis, dynamic_index_values, eval_const_path_domain_immediate,
+    },
     sccp::LatticeCell,
     simplify_expr::{
         EvmModOp, ExprFactProvider, KnownValueFact, SimplifyExprResult, ZextI1CompareRewrite,
@@ -266,7 +268,7 @@ fn simplify_const_load(
             return SimplifyAction::NoChange;
         }
 
-        return eval_const_path_immediate(func.ctx(), &path, |value| {
+        return eval_const_path_domain_immediate(func.ctx(), &path, |value| {
             known_non_undef_imm(func, lattice, may_be_undef, value)
         })
         .map_or(SimplifyAction::NoChange, SimplifyAction::Const);
@@ -1070,19 +1072,91 @@ block0:
         );
 
         module.func_store.view(func_ref, |func| {
-            let inst = func
-                .layout
-                .iter_block()
-                .flat_map(|block| func.layout.iter_inst(block))
-                .find(|&inst| {
-                    downcast::<&data::ConstLoad>(func.inst_set(), func.dfg.inst(inst)).is_some()
-                })
-                .expect("missing const.load");
+            let inst = find_const_load_inst(func);
             let mut lattice = SecondaryMap::<_, LatticeCell>::default();
             lattice[func.arg_values[0]] = LatticeCell::Const(Immediate::from_i256(
                 I256::from(U256::one() << 200),
                 Type::I256,
             ));
+            let may_be_undef = SecondaryMap::<_, bool>::default();
+            let constref_value_tys = collect_constref_value_tys(func);
+            let const_paths = analyze_const_paths(func, &constref_value_tys);
+            let known_bits = KnownBitsQuery::new(func);
+            let is_edge_executable = |_, _| false;
+            let mut aux_deps = AuxDeps::default();
+            let mut simplify_ctx = SimplifyCtx {
+                const_paths: &const_paths,
+                known_bits: &known_bits,
+                is_edge_executable: &is_edge_executable,
+                aux_deps: &mut aux_deps,
+            };
+            let simplified = simplify_inst(func, &lattice, &may_be_undef, inst, &mut simplify_ctx);
+            assert!(matches!(simplified.as_slice(), [SimplifyAction::NoChange]));
+        });
+    }
+
+    #[test]
+    fn simplify_const_load_folds_unknown_dynamic_splat() {
+        let (module, func_ref) = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+global private const [i256; 4] $arr = [7, 7, 7, 7];
+
+func public %f(v0.i256) -> i256 {
+block0:
+    v1.constref<[i256; 4]> = const.ref $arr;
+    v2.constref<i256> = const.index v1 v0;
+    v3.i256 = const.load v2;
+    return v3;
+}
+"#,
+        );
+
+        module.func_store.view(func_ref, |func| {
+            let inst = find_const_load_inst(func);
+            let lattice = SecondaryMap::<_, LatticeCell>::default();
+            let may_be_undef = SecondaryMap::<_, bool>::default();
+            let constref_value_tys = collect_constref_value_tys(func);
+            let const_paths = analyze_const_paths(func, &constref_value_tys);
+            let known_bits = KnownBitsQuery::new(func);
+            let is_edge_executable = |_, _| false;
+            let mut aux_deps = AuxDeps::default();
+            let mut simplify_ctx = SimplifyCtx {
+                const_paths: &const_paths,
+                known_bits: &known_bits,
+                is_edge_executable: &is_edge_executable,
+                aux_deps: &mut aux_deps,
+            };
+            let simplified = simplify_inst(func, &lattice, &may_be_undef, inst, &mut simplify_ctx);
+            assert!(matches!(
+                simplified.as_slice(),
+                [SimplifyAction::Const(Immediate::I256(value))] if *value == I256::from(7)
+            ));
+        });
+    }
+
+    #[test]
+    fn simplify_const_load_keeps_unknown_dynamic_nonuniform_unfolded() {
+        let (module, func_ref) = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+global private const [i256; 4] $arr = [7, 8, 7, 8];
+
+func public %f(v0.i256) -> i256 {
+block0:
+    v1.constref<[i256; 4]> = const.ref $arr;
+    v2.constref<i256> = const.index v1 v0;
+    v3.i256 = const.load v2;
+    return v3;
+}
+"#,
+        );
+
+        module.func_store.view(func_ref, |func| {
+            let inst = find_const_load_inst(func);
+            let lattice = SecondaryMap::<_, LatticeCell>::default();
             let may_be_undef = SecondaryMap::<_, bool>::default();
             let constref_value_tys = collect_constref_value_tys(func);
             let const_paths = analyze_const_paths(func, &constref_value_tys);
@@ -1120,5 +1194,15 @@ block0:
             }
         }
         None
+    }
+
+    fn find_const_load_inst(func: &Function) -> InstId {
+        func.layout
+            .iter_block()
+            .flat_map(|block| func.layout.iter_inst(block))
+            .find(|&inst| {
+                downcast::<&data::ConstLoad>(func.inst_set(), func.dfg.inst(inst)).is_some()
+            })
+            .expect("missing const.load")
     }
 }

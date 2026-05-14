@@ -7,8 +7,9 @@ use crate::{
     liveness::Liveness,
 };
 use cranelift_entity::{EntityRef, SecondaryMap};
+use rustc_hash::FxHashSet;
 use smallvec::SmallVec;
-use sonatina_ir::{BlockId, Function, ValueId, cfg::ControlFlowGraph};
+use sonatina_ir::{BlockId, Function, I256, ValueId, cfg::ControlFlowGraph};
 
 use super::{
     alloc::{SpillStorage, StackifyAlloc},
@@ -125,6 +126,7 @@ pub struct StackifyBuilder<'a> {
     scratch_live_values_override: Option<BitSet<ValueId>>,
     scratch_spill_slots: u32,
     value_aliases_override: Option<&'a SecondaryMap<ValueId, Option<ValueId>>>,
+    stack_cached_immediates: FxHashSet<I256>,
 }
 
 pub(super) struct StackifyContext<'a> {
@@ -146,11 +148,23 @@ pub(super) struct StackifyContext<'a> {
     pub(super) search_profile: StackifySearchProfile,
     pub(super) value_aliases: SecondaryMap<ValueId, Option<ValueId>>,
     pub(super) exact_local_addr: SecondaryMap<ValueId, Option<ExactLocalAddr>>,
+    pub(super) stack_cached_immediates: FxHashSet<I256>,
 }
 
 impl StackifyContext<'_> {
     pub(super) fn canonicalize_value(&self, value: ValueId) -> ValueId {
         self.value_aliases[value].unwrap_or(value)
+    }
+
+    pub(super) fn retains_value(&self, value: ValueId) -> bool {
+        !self.func.dfg.value_is_imm(value)
+    }
+
+    pub(super) fn stack_caches_immediate(&self, value: ValueId) -> bool {
+        self.func
+            .dfg
+            .value_imm(value)
+            .is_some_and(|imm| self.stack_cached_immediates.contains(&imm.as_i256()))
     }
 }
 
@@ -172,6 +186,7 @@ impl<'a> StackifyBuilder<'a> {
             scratch_live_values_override: None,
             scratch_spill_slots: 0,
             value_aliases_override: None,
+            stack_cached_immediates: FxHashSet::default(),
         }
     }
 
@@ -195,6 +210,14 @@ impl<'a> StackifyBuilder<'a> {
         value_aliases: &'a SecondaryMap<ValueId, Option<ValueId>>,
     ) -> Self {
         self.value_aliases_override = Some(value_aliases);
+        self
+    }
+
+    pub(crate) fn with_stack_cached_immediates(
+        mut self,
+        stack_cached_immediates: FxHashSet<I256>,
+    ) -> Self {
+        self.stack_cached_immediates = stack_cached_immediates;
         self
     }
 
@@ -277,6 +300,7 @@ impl<'a> StackifyBuilder<'a> {
             search_profile: self.search_profile,
             value_aliases,
             exact_local_addr,
+            stack_cached_immediates: self.stack_cached_immediates,
         };
 
         // `spill_set` is discovered via a monotone fixed point:

@@ -6,8 +6,8 @@ input_file: test_files/evm/fe_enum_state_machine_test_order_initial_state_unopti
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 958 bytes
-  total: 958 bytes
+  section runtime: 955 bytes
+  total: 955 bytes
 
 object: Order
   section init: 478 bytes
@@ -17,7 +17,7 @@ object: Order
 functions:
   test_order_initial_state__StorPtr_Evm___207f35a85ac4062e: ir_blocks=17 ir_insts=74 vcode_ops=232 fixups=26 imm_bytes=30
     mem: scratch_words=0 stable_words=5 stable_mode=StaticAbs(base=0xa0) entry_abs_words=0 abs_words_end=5
-  decode_returndata__u256__3271ca15373d4483: ir_blocks=5 ir_insts=8 vcode_ops=24 fixups=2 imm_bytes=2
+  decode_returndata__u256__3271ca15373d4483: ir_blocks=3 ir_insts=5 vcode_ops=15 fixups=1 imm_bytes=1
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=5 abs_words_end=0
   solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head: ir_blocks=6 ir_insts=19 vcode_ops=66 fixups=4 imm_bytes=8
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=5 abs_words_end=0
@@ -33,7 +33,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=171209 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=150209
+  case ok: calldata_len=0 success reason=Return gas_used=171171 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=150171
 
 
 --------------- DEBUG ---------------
@@ -83,13 +83,13 @@ test_order_initial_state__StorPtr_Evm___207f35a85ac4062e:
     RETURNDATASIZE  // v20.i256 = evm_return_data_size;
     PUSH1 0x40 (64)  // v21.*i256 = evm_malloc v20;
     MLOAD
-    PUSH1 0x9f (159)
+    PUSH2 0x13f (319)
     DUP2
     GT
     PUSH1 `pc + (4)`
     JUMPI
     POP
-    PUSH1 0xa0 (160)
+    PUSH2 0x140 (320)
     JUMPDEST
     DUP2  // evm_return_data_copy v22 0.i256 v20;
     PUSH0
@@ -217,13 +217,13 @@ test_order_initial_state__StorPtr_Evm___207f35a85ac4062e:
     RETURNDATASIZE  // v64.i256 = evm_return_data_size;
     PUSH1 0x40 (64)  // v65.*i256 = evm_malloc v64;
     MLOAD
-    PUSH1 0x9f (159)
+    PUSH2 0x13f (319)
     DUP2
     GT
     PUSH1 `pc + (4)`
     JUMPI
     POP
-    PUSH1 0xa0 (160)
+    PUSH2 0x140 (320)
     JUMPDEST
     DUP2  // evm_return_data_copy v66 0.i256 v64;
     PUSH0
@@ -254,18 +254,13 @@ decode_returndata__u256__3271ca15373d4483:
   block0:
     JUMPDEST
     PUSH1 0x20 (32)  // v11.i1 = lt v1 32.i256;
-    DUP3
+    SWAP1
+    SWAP2
     LT
-    PUSH1 section_unit0  // br v11 block1 block11;
+    PUSH1 section_unit0  // br v11 block1 block2;
     JUMPI
-  block11:
+  block2:
     JUMPDEST
-    SWAP1  // v51.i1 = gt 32.i256 v1;
-    PUSH1 0x20 (32)
-    GT
-    PUSH1 section_unit0  // br v51 block5 block8;
-    JUMPI
-  block8:
     MLOAD  // v56.i256 = mload v0 i256;
     SWAP1  // return v56;
     JUMP

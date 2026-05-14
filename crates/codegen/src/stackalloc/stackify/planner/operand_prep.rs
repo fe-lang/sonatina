@@ -8,9 +8,9 @@ use super::{
     Planner,
     normalize::SpillAwareCostModel,
     normalize_search::{
-        Cost, CostModel, KeyInfo, NormalizePlan, SearchCfg, Step, StepList, cost_for_steps,
-        operand_prep_effective_window, rebuild_operand_prep_plan, solve_greedy_operand_prep_plan,
-        solve_optimal_operand_prep_plan,
+        Cost, CostModel, KeyInfo, NormalizePlan, OperandPrepConstraints, SearchCfg, Step, StepList,
+        cost_for_steps, operand_prep_effective_window, rebuild_operand_prep_plan,
+        solve_greedy_operand_prep_plan, solve_optimal_operand_prep_plan,
     },
 };
 
@@ -67,6 +67,7 @@ struct OperandPrepQueryKey {
     stack: SmallVec<[OperandPrepStackKey; 21]>,
     args: SmallVec<[OperandPrepValueKey; 8]>,
     last_use_mask: u64,
+    cache_preserve_mask: u64,
     spilled_arg_mask: u64,
     deep_preserve_mask: u64,
 }
@@ -197,6 +198,7 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
         &self,
         args: &[ValueId],
         consume_last_use: &BitSet<ValueId>,
+        cache_preserve: &BitSet<ValueId>,
         window_len: usize,
     ) -> u64 {
         let start_limit = self.stack.len_above_func_ret();
@@ -206,12 +208,18 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
 
         let mut mask = 0u64;
         for (idx, &arg) in args.iter().take(OPERAND_PREP_QUERY_MASK_BITS).enumerate() {
-            if self.ctx.func.dfg.value_is_imm(arg) || consume_last_use.contains(arg) {
+            if !cache_preserve.contains(arg)
+                && (!self.ctx.retains_value(arg) || consume_last_use.contains(arg))
+            {
                 continue;
             }
 
-            let found_in_tail = (window_len..start_limit)
-                .any(|depth| self.stack.item_at(depth) == Some(&StackItem::Value(arg)));
+            let arg_imm = self.ctx.func.dfg.value_imm(arg);
+            let found_in_tail = (window_len..start_limit).any(|depth| {
+                self.stack
+                    .item_at(depth)
+                    .is_some_and(|item| self.operand_prep_item_matches_arg(item, arg, arg_imm))
+            });
             if found_in_tail {
                 mask |= 1u64 << idx;
             }
@@ -259,6 +267,7 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
         &self,
         args: &[ValueId],
         consume_last_use: &BitSet<ValueId>,
+        cache_preserve: &BitSet<ValueId>,
         search_cfg: SearchCfg,
     ) -> OperandPrepQueryKey {
         let effective_window =
@@ -294,12 +303,15 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
                 .collect(),
             args: arg_keys,
             last_use_mask: self.operand_prep_query_mask(args, |arg| consume_last_use.contains(arg)),
+            cache_preserve_mask: self
+                .operand_prep_query_mask(args, |arg| cache_preserve.contains(arg)),
             spilled_arg_mask: self.operand_prep_query_mask(args, |arg| {
                 !self.ctx.func.dfg.value_is_imm(arg) && self.mem.spill_set().contains(arg)
             }),
             deep_preserve_mask: self.operand_prep_deep_preserve_mask(
                 args,
                 consume_last_use,
+                cache_preserve,
                 effective_window.start_len,
             ),
         }
@@ -309,13 +321,19 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
         &mut self,
         args: &[ValueId],
         consume_last_use: &BitSet<ValueId>,
+        cache_preserve: &BitSet<ValueId>,
     ) -> Option<NormalizePlan> {
         let search_cfg = self.operand_prep_search_cfg(args.len());
         let cost = SpillAwareCostModel::new(self.mem.spill_set());
 
         if let [arg] = args
-            && let Some(plan) =
-                self.solve_unary_operand_prep_fast(*arg, consume_last_use, &cost, search_cfg)
+            && let Some(plan) = self.solve_unary_operand_prep_fast(
+                *arg,
+                consume_last_use,
+                cache_preserve,
+                &cost,
+                search_cfg,
+            )
         {
             return Some(plan);
         }
@@ -325,7 +343,10 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
                 self.ctx,
                 self.stack,
                 args,
-                consume_last_use,
+                OperandPrepConstraints {
+                    consume_last_use,
+                    cache_preserve,
+                },
                 true,
                 &cost,
                 search_cfg,
@@ -333,8 +354,9 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
         }
 
         let use_query_cache = self.use_operand_prep_query_cache(args.len());
-        let cache_key = use_query_cache
-            .then(|| self.operand_prep_query_key(args, consume_last_use, search_cfg));
+        let cache_key = use_query_cache.then(|| {
+            self.operand_prep_query_key(args, consume_last_use, cache_preserve, search_cfg)
+        });
 
         if let Some(hit) = cache_key.as_ref().and_then(|cache_key| {
             self.search_scratch
@@ -345,7 +367,10 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
             self.ctx,
             self.stack,
             args,
-            consume_last_use,
+            OperandPrepConstraints {
+                consume_last_use,
+                cache_preserve,
+            },
             search_cfg,
             hit,
         ) {
@@ -356,7 +381,10 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
             self.ctx,
             self.stack,
             args,
-            consume_last_use,
+            OperandPrepConstraints {
+                consume_last_use,
+                cache_preserve,
+            },
             &cost,
             search_cfg,
             self.search_scratch,
@@ -373,6 +401,7 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
         &self,
         arg: ValueId,
         consume_last_use: &BitSet<ValueId>,
+        cache_preserve: &BitSet<ValueId>,
         cost: &impl CostModel,
         search_cfg: SearchCfg,
     ) -> Option<NormalizePlan> {
@@ -380,12 +409,14 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
         let arg_imm = self.ctx.func.dfg.value_imm(arg);
         let arg_is_imm = arg_imm.is_some();
         let last_use = consume_last_use.contains(arg);
+        let preserve_needed =
+            cache_preserve.contains(arg) || (self.ctx.retains_value(arg) && !last_use);
         let copy_count = self.unary_operand_prep_copy_count(arg, arg_imm);
         let top_matches = self
             .stack
             .top()
             .is_some_and(|item| self.operand_prep_item_matches_arg(item, arg, arg_imm));
-        let preserve_satisfied = arg_is_imm || last_use || copy_count >= 2;
+        let preserve_satisfied = !preserve_needed || copy_count >= 2;
         let surplus_last_use_penalty = cost.cost_pop().saturating_add(cost.cost_swap(1));
 
         let copy_cost = |base: Cost| {
@@ -408,12 +439,17 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
         }
 
         if let Some(imm) = arg_imm {
-            let emitted_cost = cost.cost_push_imm(imm.as_i256());
+            let mut steps = smallvec::smallvec![Step::PushImm(0)];
+            let mut emitted_cost = cost.cost_push_imm(imm.as_i256());
+            if preserve_needed && copy_count == 0 {
+                steps.push(Step::Dup(0));
+                emitted_cost = emitted_cost.saturating_add(cost.cost_dup(0));
+            }
             candidates.push(UnaryOperandPrepCandidate {
                 modeled_cost: copy_cost(emitted_cost),
                 emitted_cost,
                 priority: 4,
-                steps: smallvec::smallvec![Step::PushImm(0)],
+                steps,
             });
         }
 
@@ -429,7 +465,7 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
 
         if let Some(pos) = self.unary_operand_prep_find_arg(arg, arg_imm, 0, search_cfg.swap_max)
             && pos != 0
-            && (arg_is_imm || last_use || copy_count >= 2)
+            && preserve_satisfied
         {
             let emitted_cost = cost.cost_swap(pos as u8);
             candidates.push(UnaryOperandPrepCandidate {
@@ -565,31 +601,33 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
         &mut self,
         args: &mut SmallVec<[ValueId; 8]>,
         consume_last_use: &BitSet<ValueId>,
+        cache_preserve: &BitSet<ValueId>,
         commutative_pair: bool,
     ) {
         // For commutative binary ops, try both operand orders and choose the cheaper
         // operand-preparation plan. This is purely a bytecode optimization (SSA semantics are
         // unchanged).
         if commutative_pair && args.len() == 2 && args[0] != args[1] {
-            if self.stack_prefix_matches_and_preserved(args, consume_last_use) {
+            if self.stack_prefix_matches_and_preserved(args, consume_last_use, cache_preserve) {
                 return;
             }
 
             let mut swapped: SmallVec<[ValueId; 8]> = args.clone();
             swapped.swap(0, 1);
-            if self.stack_prefix_matches_and_preserved(&swapped, consume_last_use) {
+            if self.stack_prefix_matches_and_preserved(&swapped, consume_last_use, cache_preserve) {
                 args.swap(0, 1);
                 return;
             }
 
             let cost = SpillAwareCostModel::new(self.mem.spill_set());
             let search_cfg = self.operand_prep_search_cfg(args.len());
-            let original_plan = self.solve_operand_prep_cached(args.as_slice(), consume_last_use);
+            let original_plan =
+                self.solve_operand_prep_cached(args.as_slice(), consume_last_use, cache_preserve);
             if let Some(plan) = original_plan.as_ref()
                 && commutative_plan_is_unbeatable(plan, &cost, search_cfg)
             {
                 if !self.apply_operand_prep_plan(plan, args.as_slice()) {
-                    self.prepare_operands_greedy(args.as_slice(), consume_last_use);
+                    self.prepare_operands_greedy(args.as_slice(), consume_last_use, cache_preserve);
                 }
                 debug_assert!(self.stack_prefix_matches(args.as_slice()));
                 return;
@@ -597,8 +635,11 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
 
             let mut swapped_args: SmallVec<[ValueId; 8]> = args.clone();
             swapped_args.swap(0, 1);
-            let swapped_plan =
-                self.solve_operand_prep_cached(swapped_args.as_slice(), consume_last_use);
+            let swapped_plan = self.solve_operand_prep_cached(
+                swapped_args.as_slice(),
+                consume_last_use,
+                cache_preserve,
+            );
 
             let (plan, swapped) = match (original_plan, swapped_plan) {
                 (Some(plan), None) => (plan, false),
@@ -613,7 +654,7 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
                     }
                 }
                 (None, None) => {
-                    self.prepare_operands_greedy(args.as_slice(), consume_last_use);
+                    self.prepare_operands_greedy(args.as_slice(), consume_last_use, cache_preserve);
                     return;
                 }
             };
@@ -622,13 +663,13 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
                 args.swap(0, 1);
             }
             if !self.apply_operand_prep_plan(&plan, args.as_slice()) {
-                self.prepare_operands_greedy(args.as_slice(), consume_last_use);
+                self.prepare_operands_greedy(args.as_slice(), consume_last_use, cache_preserve);
             }
             debug_assert!(self.stack_prefix_matches(args.as_slice()));
             return;
         }
 
-        self.prepare_operands(args.as_slice(), consume_last_use);
+        self.prepare_operands(args.as_slice(), consume_last_use, cache_preserve);
     }
 
     pub(in super::super) fn prepare_operands_for_inst(
@@ -636,10 +677,12 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
         inst: InstId,
         args: &mut SmallVec<[ValueId; 8]>,
         consume_last_use: &BitSet<ValueId>,
+        cache_preserve: &BitSet<ValueId>,
     ) {
         self.prepare_operands_maybe_commutative(
             args,
             consume_last_use,
+            cache_preserve,
             self.inst_is_commutative(inst),
         );
     }
@@ -648,8 +691,9 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
         &mut self,
         args: &mut SmallVec<[ValueId; 8]>,
         consume_last_use: &BitSet<ValueId>,
+        cache_preserve: &BitSet<ValueId>,
     ) {
-        self.prepare_operands_maybe_commutative(args, consume_last_use, true);
+        self.prepare_operands_maybe_commutative(args, consume_last_use, cache_preserve, true);
     }
 
     fn stack_prefix_matches(&self, args: &[ValueId]) -> bool {
@@ -673,6 +717,7 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
         &mut self,
         args: &[ValueId],
         consume_last_use: &BitSet<ValueId>,
+        cache_preserve: &BitSet<ValueId>,
     ) -> bool {
         if args.is_empty() || self.stack.len_above_func_ret() < args.len() {
             return false;
@@ -687,20 +732,21 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
         let mut checked = BitSet::default();
         let stack_len = self.stack.len_above_func_ret();
         for &arg in args {
-            if self.ctx.func.dfg.value_is_imm(arg)
-                || consume_last_use.contains(arg)
+            if (!cache_preserve.contains(arg)
+                && (!self.ctx.retains_value(arg) || consume_last_use.contains(arg)))
                 || !checked.insert(arg)
             {
                 continue;
             }
 
+            let arg_imm = self.ctx.func.dfg.value_imm(arg);
             let preserved_on_stack = self
                 .stack
                 .iter()
                 .take(stack_len)
                 .skip(args.len())
-                .any(|item| item == &StackItem::Value(arg));
-            if !preserved_on_stack && !self.mem.spill_set().contains(arg) {
+                .any(|item| self.operand_prep_item_matches_arg(item, arg, arg_imm));
+            if !preserved_on_stack && (arg_imm.is_some() || !self.mem.spill_set().contains(arg)) {
                 return false;
             }
         }
@@ -712,6 +758,7 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
         &mut self,
         args: &[ValueId],
         consume_last_use: &BitSet<ValueId>,
+        cache_preserve: &BitSet<ValueId>,
     ) -> bool {
         let &[lhs, rhs] = args else {
             return false;
@@ -725,7 +772,7 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
             let stack_before = self.stack.clone();
             let actions_before = self.actions.len();
             self.stack.pop(self.actions);
-            if self.stack_prefix_matches_and_preserved(args, consume_last_use) {
+            if self.stack_prefix_matches_and_preserved(args, consume_last_use, cache_preserve) {
                 return true;
             }
             *self.stack = stack_before;
@@ -738,7 +785,8 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
             && self.stack_item_matches_arg(1, lhs)
         {
             let reversed = [rhs, lhs];
-            if self.stack_prefix_matches_and_preserved(&reversed, consume_last_use) {
+            if self.stack_prefix_matches_and_preserved(&reversed, consume_last_use, cache_preserve)
+            {
                 self.stack.swap(1, self.actions);
                 return true;
             }
@@ -793,40 +841,49 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
         &mut self,
         args: &[ValueId],
         consume_last_use: &BitSet<ValueId>,
+        cache_preserve: &BitSet<ValueId>,
     ) {
         if args.is_empty() {
             return;
         }
 
-        if self.stack_prefix_matches_and_preserved(args, consume_last_use) {
+        if self.stack_prefix_matches_and_preserved(args, consume_last_use, cache_preserve) {
             debug_assert!(self.stack_prefix_matches(args));
             return;
         }
 
-        if self.prepare_trivial_binary_operands(args, consume_last_use) {
+        if self.prepare_trivial_binary_operands(args, consume_last_use, cache_preserve) {
             debug_assert!(self.stack_prefix_matches(args));
             return;
         }
 
-        if let Some(plan) = self.solve_operand_prep_cached(args, consume_last_use)
+        if let Some(plan) = self.solve_operand_prep_cached(args, consume_last_use, cache_preserve)
             && self.apply_operand_prep_plan(&plan, args)
         {
             debug_assert!(self.stack_prefix_matches(args));
             return;
         }
 
-        self.prepare_operands_greedy(args, consume_last_use);
+        self.prepare_operands_greedy(args, consume_last_use, cache_preserve);
         debug_assert!(self.stack_prefix_matches(args));
     }
 
-    fn prepare_operands_greedy(&mut self, args: &[ValueId], consume_last_use: &BitSet<ValueId>) {
+    fn prepare_operands_greedy(
+        &mut self,
+        args: &[ValueId],
+        consume_last_use: &BitSet<ValueId>,
+        cache_preserve: &BitSet<ValueId>,
+    ) {
         let search_cfg = self.operand_prep_search_cfg(args.len());
         let cost = SpillAwareCostModel::new(self.mem.spill_set());
         if let Some(plan) = solve_greedy_operand_prep_plan(
             self.ctx,
             self.stack,
             args,
-            consume_last_use,
+            OperandPrepConstraints {
+                consume_last_use,
+                cache_preserve,
+            },
             true,
             &cost,
             search_cfg,
@@ -835,13 +892,14 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
             return;
         }
 
-        self.prepare_operands_greedy_fallback(args, consume_last_use);
+        self.prepare_operands_greedy_fallback(args, consume_last_use, cache_preserve);
     }
 
     fn prepare_operands_greedy_fallback(
         &mut self,
         args: &[ValueId],
         consume_last_use: &BitSet<ValueId>,
+        cache_preserve: &BitSet<ValueId>,
     ) {
         // Iterate in reverse so the final stack order is `args[0]` on top, then `args[1]`, ...
         let mut prepared: usize = 0;
@@ -854,7 +912,24 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
                     .dfg
                     .value_imm(v)
                     .expect("imm value missing payload");
-                self.stack.push_imm(v, imm, self.actions);
+                if self.ctx.stack_caches_immediate(v)
+                    && let Some(pos) = self.unary_operand_prep_find_arg(
+                        v,
+                        Some(imm),
+                        prepared,
+                        self.ctx.reach.dup_max,
+                    )
+                {
+                    self.stack.dup(pos, self.actions);
+                    prepared += 1;
+                    continue;
+                }
+                if cache_preserve.contains(v) && prepared == 0 {
+                    self.stack.push_imm(v, imm, self.actions);
+                    self.stack.dup(0, self.actions);
+                } else {
+                    self.stack.push_imm(v, imm, self.actions);
+                }
                 prepared += 1;
                 continue;
             }
@@ -1072,11 +1147,24 @@ block0:
             let mut planner =
                 Planner::new(&ctx, &mut stack, &mut actions, mem, &mut search_scratch);
             let search_cfg = planner.operand_prep_search_cfg(current_args.len());
-            let old_key = planner.operand_prep_query_key(&old_args, &BitSet::default(), search_cfg);
-            let current_key =
-                planner.operand_prep_query_key(&current_args, &BitSet::default(), search_cfg);
-            let changed_key =
-                planner.operand_prep_query_key(&[imm2, imm2, imm3], &BitSet::default(), search_cfg);
+            let old_key = planner.operand_prep_query_key(
+                &old_args,
+                &BitSet::default(),
+                &BitSet::default(),
+                search_cfg,
+            );
+            let current_key = planner.operand_prep_query_key(
+                &current_args,
+                &BitSet::default(),
+                &BitSet::default(),
+                search_cfg,
+            );
+            let changed_key = planner.operand_prep_query_key(
+                &[imm2, imm2, imm3],
+                &BitSet::default(),
+                &BitSet::default(),
+                search_cfg,
+            );
 
             assert_eq!(old_key, current_key);
             assert_ne!(current_key, changed_key);
@@ -1091,7 +1179,7 @@ block0:
             );
 
             let plan = planner
-                .solve_operand_prep_cached(&current_args, &BitSet::default())
+                .solve_operand_prep_cached(&current_args, &BitSet::default(), &BitSet::default())
                 .expect("cache hit should rebuild a plan");
 
             let [
@@ -1107,6 +1195,78 @@ block0:
             assert_eq!(*rep_vid, current_imm);
             assert_eq!(*rep_imm, Immediate::I8(1));
             assert_eq!(plan.cost, modeled_cost);
+        });
+    }
+
+    #[test]
+    fn cache_preserve_reuses_stack_immediate_copy() {
+        const SRC: &str = r#"
+target = "evm-ethereum-osaka"
+
+func public %f() {
+block0:
+    return;
+}
+"#;
+
+        let parsed = parse_module(SRC).expect("module parses");
+        let func_ref = parsed.debug.func_order[0];
+
+        parsed.module.func_store.modify(func_ref, |func| {
+            let arg = func.dfg.make_imm_value(Immediate::I8(7));
+
+            let mut cfg = ControlFlowGraph::new();
+            cfg.compute(func);
+            let entry = cfg.entry().expect("missing entry block");
+
+            let mut liveness = Liveness::new();
+            liveness.compute(func, &cfg);
+
+            let mut dom = DomTree::new();
+            dom.compute(&cfg);
+
+            let mut scc = CfgSccAnalysis::new();
+            scc.compute(&cfg);
+
+            let reach = StackifyReachability::new(16);
+            let ctx = build_stackify_test_context(func, &cfg, &dom, &liveness, entry, scc, reach);
+
+            let spill_set = BitSet::default();
+            let mut spill_requests = BitSet::default();
+            let mut object_spill_requests = BitSet::default();
+            let forced_object_spills = BitSet::default();
+            let spill_obj = SecondaryMap::new();
+            let mut free_slots = FreeSlotPools::default();
+            let mut slots = SpillSlotPools::default();
+            let mem = MemPlan::new(
+                SpillSet::new(&spill_set),
+                &mut spill_requests,
+                &ctx,
+                &spill_obj,
+                &ctx.exact_local_addr,
+                &mut object_spill_requests,
+                &forced_object_spills,
+                &mut free_slots,
+                &mut slots,
+            );
+
+            let mut stack = SymStack::entry_stack(func, false);
+            stack.push_value(arg);
+            let mut actions = crate::stackalloc::Actions::new();
+            let mut search_scratch = NormalizeSearchScratch::default();
+            let mut planner =
+                Planner::new(&ctx, &mut stack, &mut actions, mem, &mut search_scratch);
+            let mut cache_preserve = BitSet::default();
+            cache_preserve.insert(arg);
+
+            let plan = planner
+                .solve_operand_prep_cached(&[arg], &BitSet::default(), &cache_preserve)
+                .expect("expected cached immediate operand-prep plan");
+
+            assert_eq!(plan.steps, step_list([Step::Dup(0)]));
+            assert!(planner.apply_operand_prep_plan(&plan, &[arg]));
+            assert!(planner.stack_prefix_matches(&[arg]));
+            assert_eq!(planner.stack.len_above_func_ret(), 2);
         });
     }
 
@@ -1181,6 +1341,7 @@ block0:
             assert_eq!(
                 planner.operand_prep_deep_preserve_mask(
                     &args,
+                    &BitSet::default(),
                     &BitSet::default(),
                     search_cfg.max_len,
                 ),
@@ -1257,7 +1418,12 @@ block0:
                 let planner =
                     Planner::new(&ctx, &mut stack, &mut actions, mem, &mut search_scratch);
                 let search_cfg = planner.operand_prep_search_cfg(imm_args.len());
-                planner.operand_prep_query_key(&imm_args, &BitSet::default(), search_cfg)
+                planner.operand_prep_query_key(
+                    &imm_args,
+                    &BitSet::default(),
+                    &BitSet::default(),
+                    search_cfg,
+                )
             };
 
             let lhs = query_key(&[top0, top1, ignored_a]);
@@ -1329,7 +1495,12 @@ block0:
                 let planner =
                     Planner::new(&ctx, &mut stack, &mut actions, mem, &mut search_scratch);
                 let search_cfg = planner.operand_prep_search_cfg(args.len());
-                planner.operand_prep_query_key(&args, &BitSet::default(), search_cfg)
+                planner.operand_prep_query_key(
+                    &args,
+                    &BitSet::default(),
+                    &BitSet::default(),
+                    search_cfg,
+                )
             };
 
             let lhs = query_key(ignored_a);
@@ -1404,7 +1575,12 @@ block0:
             let mut search_scratch = NormalizeSearchScratch::default();
             let planner = Planner::new(&ctx, &mut stack, &mut actions, mem, &mut search_scratch);
             let search_cfg = planner.operand_prep_search_cfg(args.len());
-            let key = planner.operand_prep_query_key(&args, &BitSet::default(), search_cfg);
+            let key = planner.operand_prep_query_key(
+                &args,
+                &BitSet::default(),
+                &BitSet::default(),
+                search_cfg,
+            );
 
             assert_eq!(key.stack[0], OperandPrepStackKey::Ignored);
             assert_eq!(
@@ -1480,7 +1656,12 @@ block0:
                 let planner =
                     Planner::new(&ctx, &mut stack, &mut actions, mem, &mut search_scratch);
                 let search_cfg = planner.operand_prep_search_cfg(args.len());
-                planner.operand_prep_query_key(&args, &BitSet::default(), search_cfg)
+                planner.operand_prep_query_key(
+                    &args,
+                    &BitSet::default(),
+                    &BitSet::default(),
+                    search_cfg,
+                )
             };
 
             let no_source = query_key(&[top, unrelated, ignored]);
@@ -1554,7 +1735,7 @@ block0:
                 let mut planner =
                     Planner::new(&ctx, &mut stack, &mut actions, mem, &mut search_scratch);
                 let plan = planner
-                    .solve_operand_prep_cached(&args, &last_use)
+                    .solve_operand_prep_cached(&args, &last_use, &BitSet::default())
                     .expect("expected operand-prep plan");
                 let steps = plan.steps.clone();
 
@@ -1630,7 +1811,7 @@ block0:
                 let mut planner =
                     Planner::new(&ctx, &mut stack, &mut actions, mem, &mut search_scratch);
                 let plan = planner
-                    .solve_operand_prep_cached(&[arg], last_use)
+                    .solve_operand_prep_cached(&[arg], last_use, &BitSet::default())
                     .expect("unary fast path should produce a plan");
                 let steps = plan.steps.clone();
 
@@ -1711,7 +1892,7 @@ block0:
                        args_values: &[ValueId],
                        spill_values: &[ValueId],
                        last_use_values: &[ValueId],
-                       commutative| {
+                       commutative: bool| {
                 let spill_set: BitSet<ValueId> = spill_values.iter().copied().collect();
                 let mut spill_requests = BitSet::default();
                 let mut object_spill_requests = BitSet::default();
@@ -1740,7 +1921,12 @@ block0:
                 {
                     let mut planner =
                         Planner::new(&ctx, &mut stack, &mut actions, mem, &mut search_scratch);
-                    planner.prepare_operands_maybe_commutative(&mut args, &last_use, commutative);
+                    planner.prepare_operands_maybe_commutative(
+                        &mut args,
+                        &last_use,
+                        &BitSet::default(),
+                        commutative,
+                    );
                     assert!(planner.stack_prefix_matches(&args));
                 }
                 (stack, args, actions, spill_requests)
@@ -1836,7 +2022,7 @@ block0:
                 let mut search_scratch = NormalizeSearchScratch::default();
                 let mut planner =
                     Planner::new(&ctx, &mut stack, &mut actions, mem, &mut search_scratch);
-                planner.prepare_operands_greedy(&args, &BitSet::default());
+                planner.prepare_operands_greedy(&args, &BitSet::default(), &BitSet::default());
                 assert!(planner.stack_prefix_matches(&args));
             }
 
@@ -1916,7 +2102,7 @@ block0:
                 let mut search_scratch = NormalizeSearchScratch::default();
                 let mut planner =
                     Planner::new(&ctx, &mut stack, &mut actions, mem, &mut search_scratch);
-                planner.prepare_operands_greedy(&args, &BitSet::default());
+                planner.prepare_operands_greedy(&args, &BitSet::default(), &BitSet::default());
                 assert!(planner.stack_prefix_matches(&args));
             }
 
@@ -1951,7 +2137,7 @@ block0:
                 let mut search_scratch = NormalizeSearchScratch::default();
                 let mut planner =
                     Planner::new(&ctx, &mut stack, &mut actions, mem, &mut search_scratch);
-                planner.prepare_operands_greedy(&args, &last_use);
+                planner.prepare_operands_greedy(&args, &last_use, &BitSet::default());
                 assert!(planner.stack_prefix_matches(&args));
             }
 

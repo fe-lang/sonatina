@@ -7,8 +7,6 @@ target = "evm-ethereum-osaka"
 
 func public %entry() {
     block0:
-        v0.*i256 = alloca i256;
-        v1.**i256 = alloca *i256;
         return;
 }
 

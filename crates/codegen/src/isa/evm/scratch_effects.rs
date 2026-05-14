@@ -7,7 +7,7 @@ use sonatina_ir::{
 };
 
 use super::{
-    provenance::compute_value_provenance, ptr_escape::PtrEscapeSummary,
+    provenance::compute_address_provenance, ptr_escape::PtrEscapeSummary,
     scratch_plan::inst_is_scratch_clobber,
 };
 
@@ -30,7 +30,7 @@ pub(crate) fn compute_local_scratch_clobbers(
 }
 
 fn func_clobbers_scratch(function: &Function, module: &ModuleCtx, isa: &Evm) -> bool {
-    let prov = compute_value_provenance(function, module, isa, |callee| {
+    let prov = compute_address_provenance(function, module, isa, |callee| {
         PtrEscapeSummary::conservative_unknown_ctx(module, callee)
     });
 

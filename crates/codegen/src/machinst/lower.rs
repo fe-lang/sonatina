@@ -2,9 +2,12 @@ use super::vcode::{Label, SectionCodeUnitId, SymFixup, VCode, VCodeFixup, VCodeI
 use crate::stackalloc::Allocator;
 use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
-    BlockId, Function, GlobalVariableRef, Immediate, Inst, InstDowncast, InstId, Module, Type,
-    Value, ValueId,
-    inst::data::{GetFunctionPtr, SymAddr, SymSize, SymbolRef},
+    BlockId, Function, GlobalVariableRef, Immediate, Inst, InstDowncast, InstId, Linkage, Module,
+    Type, Value, ValueId,
+    inst::{
+        data::{GetFunctionPtr, SymAddr, SymSize, SymbolRef},
+        evm::EvmCodeSize,
+    },
     module::{FuncRef, ModuleCtx},
     object::EmbedSymbol,
 };
@@ -71,6 +74,14 @@ impl SectionWorkModule {
         build_section_membership(&self.module, self.entry, &self.includes, &self.data)
     }
 
+    pub fn prune_unreachable_defined_funcs(&self) -> (SectionMembership, usize) {
+        let membership = self.membership();
+        let removed = self
+            .module
+            .retain_defined_funcs(|func| membership.funcs.contains(&func));
+        (membership, removed)
+    }
+
     pub fn function_emission_order(&self, membership: &SectionMembership) -> Vec<FuncRef> {
         compute_section_function_emission_order(
             &self.module,
@@ -86,6 +97,7 @@ pub struct SectionMembership {
     pub funcs: FxHashSet<FuncRef>,
     pub globals: FxHashSet<GlobalVariableRef>,
     pub used_embed_symbols: FxHashSet<EmbedSymbol>,
+    observes_section_size: bool,
 }
 
 pub fn build_section_membership(
@@ -95,7 +107,6 @@ pub fn build_section_membership(
     data: &[GlobalVariableRef],
 ) -> SectionMembership {
     let mut membership = SectionMembership::default();
-    membership.globals.extend(data.iter().copied());
 
     let mut worklist = Vec::new();
     let roots = std::iter::once(entry).chain(includes.iter().copied());
@@ -122,14 +133,33 @@ pub fn build_section_membership(
                         record_section_symbol(module, sym.sym(), &mut membership, &mut worklist);
                     }
                     if let Some(sym) = <&SymSize as InstDowncast>::downcast(is, inst) {
+                        if matches!(sym.sym(), SymbolRef::CurrentSection) {
+                            membership.observes_section_size = true;
+                        }
                         record_section_symbol(module, sym.sym(), &mut membership, &mut worklist);
+                    }
+                    if <&EvmCodeSize as InstDowncast>::downcast(is, inst).is_some() {
+                        membership.observes_section_size = true;
                     }
                 }
             }
         });
     }
 
+    for &gv in data {
+        if membership.observes_section_size || should_root_explicit_data(module, gv) {
+            membership.globals.insert(gv);
+        }
+    }
+
     membership
+}
+
+fn should_root_explicit_data(module: &Module, gv: GlobalVariableRef) -> bool {
+    module.ctx.with_gv_store(|store| {
+        let data = store.gv_data(gv);
+        !data.is_const || data.linkage != Linkage::Private
+    })
 }
 
 pub fn compute_section_function_emission_order(

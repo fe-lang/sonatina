@@ -522,9 +522,7 @@ mod tests {
     }
 
     fn remove_func(module: &Module, func_ref: sonatina_ir::module::FuncRef) {
-        assert!(module.func_store.remove(func_ref).is_some());
-        assert!(module.ctx.declared_funcs.remove(&func_ref).is_some());
-        module.ctx.clear_func_metadata(func_ref);
+        assert!(module.remove_func(func_ref).is_some());
     }
 
     #[test]

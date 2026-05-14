@@ -318,6 +318,28 @@ pub(crate) fn checked_value_fact(
     }
 }
 
+pub(crate) fn condition_truth_in_env(
+    func: &Function,
+    env: &RangeEnv,
+    cond: ValueId,
+) -> Option<bool> {
+    match normalize_condition(func, env, cond) {
+        NormalizedCond::Constant(value) => Some(value),
+        NormalizedCond::Compare {
+            kind,
+            lhs,
+            rhs,
+            invert,
+        } => compare_truth_in_env(func, env, kind, lhs, rhs).map(|truth| truth ^ invert),
+        NormalizedCond::ZeroTest { value, invert } => {
+            zero_test_truth_in_env(func, env, value).map(|truth| truth ^ invert)
+        }
+        NormalizedCond::Value { value, invert } => {
+            exact_bool(func, env, value).map(|truth| truth ^ invert)
+        }
+    }
+}
+
 fn checked_binary_value_fact(
     kind: BinaryInstKind,
     lhs: RangeFact,
@@ -664,6 +686,32 @@ fn refine_zero_test_edge(
         refine_not_equal_immediate_edge(func, &mut refined, value, value_fact, zero);
     }
     Some(refined)
+}
+
+fn zero_test_truth_in_env(func: &Function, env: &RangeEnv, value: ValueId) -> Option<bool> {
+    let ty = func.dfg.value_ty(value);
+    if !supports_range_facts(ty) {
+        return None;
+    }
+
+    if let Some(imm) = exact_immediate(func, env, value) {
+        return Some(imm.is_zero());
+    }
+
+    let fact = fact_for_value(func, env, value);
+    let zero = Immediate::zero(ty);
+    let zero_unsigned = imm_to_unsigned(zero);
+    let zero_signed = zero.as_i256();
+
+    if fact.unsigned.lo > zero_unsigned
+        || fact.unsigned.hi < zero_unsigned
+        || fact.signed.lo > zero_signed
+        || fact.signed.hi < zero_signed
+    {
+        Some(false)
+    } else {
+        None
+    }
 }
 
 fn refine_compare_edge(

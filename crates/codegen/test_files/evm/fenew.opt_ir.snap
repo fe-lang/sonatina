@@ -34,9 +34,9 @@ func private %test_counter__StorPtr_Evm___207f35a85ac4062e() {
     block8:
         v19.i256 = evm_create2 0.i256 v14 v9 0.i256;
         v29.i1 = is_zero v19;
-        br v29 block3 block9;
+        br v29 block3 block1;
 
-    block9:
+    block1:
         v5.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Get_h3927684624c88c53__624197e0d5a47bbd v19 100000.i256 0.i256;
         v27.i1 = is_zero v5;
         br v27 block22 block15;
@@ -67,19 +67,12 @@ func private %test_counter__StorPtr_Evm___207f35a85ac4062e() {
         evm_revert v43 v41;
 
     block26:
-        v45.i1 = lt v41 0.i256;
-        br v45 block27 block28;
-
-    block27:
-        evm_revert 0.i256 0.i256;
-
-    block28:
-        v46.objref<@__fe_obj_MemoryBytes_2> = obj.alloc @__fe_obj_MemoryBytes_2;
-        v47.objref<i256> = obj.proj v46 0.i256;
-        obj.store v47 v43;
-        v48.objref<i256> = obj.proj v46 1.i256;
-        obj.store v48 v41;
-        v49.objref<@__fe_obj_SolDecoder_4> = call %soldecoder_i__ha12a03fcb5ba844b_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b v46;
+        v45.objref<@__fe_obj_MemoryBytes_2> = obj.alloc @__fe_obj_MemoryBytes_2;
+        v46.objref<i256> = obj.proj v45 0.i256;
+        obj.store v46 v43;
+        v47.objref<i256> = obj.proj v45 1.i256;
+        obj.store v47 v41;
+        v48.objref<@__fe_obj_SolDecoder_4> = call %soldecoder_i__ha12a03fcb5ba844b_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b v45;
         v7.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Get_h3927684624c88c53__624197e0d5a47bbd v19 100000.i256 0.i256;
         v28.i1 = eq v7 1.i256;
         br v28 block17 block19;

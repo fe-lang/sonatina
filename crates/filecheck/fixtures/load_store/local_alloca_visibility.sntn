@@ -1,0 +1,86 @@
+target = "evm-ethereum-london"
+
+declare external %callee(*i256);
+
+#! Unknown absolute reads cannot observe non-escaping local allocas.
+# sameln: func public %remove_local_store_before_unknown_read(v0.i256, v1.i256) -> i256 {
+# not:         mstore
+# check:       v4.i256 = mload v2 i256;
+# nextln:      return v4;
+func public %remove_local_store_before_unknown_read(v0.i256, v1.i256) -> i256 {
+    block0:
+        v2.i256 = add v0 v1;
+        v3.*i256 = alloca i256;
+        mstore v3 7.i256 i256;
+        v4.i256 = mload v2 i256;
+        return v4;
+}
+
+#! Exact local reads still observe stores to the same alloca.
+# sameln: func public %keep_local_store_read_by_exact_mload() -> i8 {
+# check:       evm_mstore8 v0 511.i256;
+# nextln:      v1.i8 = mload v0 i8;
+# nextln:      return v1;
+func public %keep_local_store_read_by_exact_mload() -> i8 {
+    block0:
+        v0.*i8 = alloca i8;
+        evm_mstore8 v0 511.i256;
+        v1.i8 = mload v0 i8;
+        return v1;
+}
+
+#! Return payload reads keep local stores live.
+# sameln: func public %keep_local_store_read_by_evm_return_payload() {
+# check:       mstore v0 7.i256 i256;
+# nextln:      evm_return v0 32.i256;
+func public %keep_local_store_read_by_evm_return_payload() {
+    block0:
+        v0.*i256 = alloca i256;
+        mstore v0 7.i256 i256;
+        evm_return v0 32.i256;
+}
+
+#! Passing the alloca address to an unknown call makes unknown reads observable.
+# sameln: func public %keep_local_store_when_alloca_address_escapes_to_call() {
+# check:       mstore v0 7.i256 i256;
+# nextln:      call %callee v0;
+# nextln:      return;
+func public %keep_local_store_when_alloca_address_escapes_to_call() {
+    block0:
+        v0.*i256 = alloca i256;
+        mstore v0 7.i256 i256;
+        call %callee v0;
+        return;
+}
+
+#! Storing the alloca address as data makes unknown reads observable.
+# sameln: func public %keep_local_store_when_alloca_address_is_stored_as_data(v0.i256, v1.i256) -> i256 {
+# check:       mstore v3 7.i256 i256;
+# nextln:      mstore 64.i256 v3 *i256;
+# nextln:      v4.i256 = mload v2 i256;
+# nextln:      return v4;
+func public %keep_local_store_when_alloca_address_is_stored_as_data(v0.i256, v1.i256) -> i256 {
+    block0:
+        v2.i256 = add v0 v1;
+        v3.*i256 = alloca i256;
+        mstore v3 7.i256 i256;
+        mstore 64.i256 v3 *i256;
+        v4.i256 = mload v2 i256;
+        return v4;
+}
+
+#! Untrackable reads derived from the alloca address keep local stores live.
+# sameln: func public %keep_local_store_when_alloca_derived_read_address_is_untrackable(v0.i256) -> i256 {
+# check:       mstore v1 7.i256 i256;
+# nextln:      v5.i256 = mload v4 i256;
+# nextln:      return v5;
+func public %keep_local_store_when_alloca_derived_read_address_is_untrackable(v0.i256) -> i256 {
+    block0:
+        v1.*i256 = alloca i256;
+        v2.i256 = ptr_to_int v1 i256;
+        v3.i256 = add v2 v0;
+        v4.*i256 = int_to_ptr v3 *i256;
+        mstore v1 7.i256 i256;
+        v5.i256 = mload v4 i256;
+        return v5;
+}

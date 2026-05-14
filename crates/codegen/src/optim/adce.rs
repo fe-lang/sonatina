@@ -2,7 +2,7 @@
 
 use cranelift_entity::SecondaryMap;
 use rustc_hash::FxHashSet;
-use sonatina_ir::{BlockId, ControlFlowGraph, Function, InstId};
+use sonatina_ir::{BlockId, ControlFlowGraph, Function, InstDowncast, InstId, inst::data::Alloca};
 
 use crate::{
     cfg_edit::{CfgEditor, CleanupMode},
@@ -324,6 +324,10 @@ fn is_live_root_inst(func: &Function, inst_id: InstId, call_policy: AdceCallPoli
         };
     }
 
+    if <&Alloca as InstDowncast>::downcast(func.inst_set(), func.dfg.inst(inst_id)).is_some() {
+        return false;
+    }
+
     func.dfg.may_mutate_state(inst_id) || func.dfg.may_transfer_control(inst_id)
 }
 
@@ -589,6 +593,50 @@ func public %caller() -> i256 {
                 "conservative ADCE must not trust stale pure summaries for out-pointer calls:\n{dumped}"
             );
         });
+    }
+
+    #[test]
+    fn removes_unused_alloca() {
+        let source = r#"
+target = "evm-ethereum-osaka"
+
+func private %f() {
+    block0:
+        v0.*i256 = alloca i256;
+        return;
+}
+"#;
+
+        let (changed, dumped) = run_default_adce(source);
+
+        assert!(changed);
+        assert!(
+            !dumped.contains("alloca"),
+            "unused alloca should not be an ADCE root:\n{dumped}"
+        );
+    }
+
+    #[test]
+    fn keeps_alloca_used_by_live_instruction() {
+        let source = r#"
+target = "evm-ethereum-osaka"
+
+func private %f() -> i256 {
+    block0:
+        v0.*i256 = alloca i256;
+        mstore v0 42.i256 i256;
+        v1.i256 = mload v0 i256;
+        return v1;
+}
+"#;
+
+        let (changed, dumped) = run_default_adce(source);
+
+        assert!(!changed);
+        assert!(
+            dumped.contains("alloca"),
+            "live pointer users should keep alloca live:\n{dumped}"
+        );
     }
 
     #[test]

@@ -6,17 +6,17 @@ input_file: test_files/evm/returndata_decoder_object_miscompile.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 124 bytes
-  total: 124 bytes
+  section runtime: 118 bytes
+  total: 118 bytes
 
 functions:
-  call_target: ir_blocks=9 ir_insts=23 vcode_ops=62 fixups=4 imm_bytes=7
+  call_target: ir_blocks=7 ir_insts=20 vcode_ops=54 fixups=3 imm_bytes=6
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   entry: ir_blocks=3 ir_insts=9 vcode_ops=25 fixups=3 imm_bytes=4
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=21343 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=343
+  case ok: calldata_len=0 success reason=Return gas_used=21324 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=324
 
 
 --------------- DEBUG ---------------
@@ -67,16 +67,11 @@ call_target:
   block11:
     JUMPDEST
     PUSH1 0x20 (32)  // v51.i1 = lt v16 32.i256;
-    DUP2
+    SWAP1
     LT
-    PUSH1 block7  // br v51 block12 block17;
+    PUSH1 block7  // br v51 block12 block13;
     JUMPI
-  block17:
-    PUSH1 0x20 (32)  // v71.i1 = gt 32.i256 v16;
-    GT
-    PUSH1 block7  // br v71 block18 block21;
-    JUMPI
-  block21:
+  block13:
     MLOAD  // v75.i256 = mload v18 i256;
     SWAP1  // return v75;
     JUMP

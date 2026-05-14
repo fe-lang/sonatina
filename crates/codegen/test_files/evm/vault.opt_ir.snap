@@ -146,16 +146,10 @@ func private %__Vault_recv_0_0(v0.i256, v1.i256) -> i256 {
         v9.i256 = add v1 1.i256;
         v10.i256 = evm_sload v9;
         v11.i1 = is_zero v10;
-        br v11 block5 block4;
-
-    block4:
-        v19.i256 = evm_sload v1;
-        v21.i256 = mul v0 v10;
-        v22.i256 = evm_udiv v21 v19;
-        jump block5;
+        br v11 block5 block6;
 
     block5:
-        v23.i256 = phi (v0 block2) (v22 block4);
+        v23.i256 = phi (v0 block2) (v22 block6);
         v25.i256 = evm_sload v1;
         v27.i256 = add v25 v0;
         evm_sstore v1 v27;
@@ -169,6 +163,12 @@ func private %__Vault_recv_0_0(v0.i256, v1.i256) -> i256 {
         v31.i256 = call %storagemap_storage_slot_with_salt__Address_h257056268eac7027__5ab99f7153cdba29 v32 0.i256;
         evm_sstore v31 v34;
         return v23;
+
+    block6:
+        v19.i256 = evm_sload v1;
+        v21.i256 = mul v0 v10;
+        v22.i256 = evm_udiv v21 v19;
+        jump block5;
 }
 
 func private %__Vault_recv_0_1(v0.i256, v1.i256) -> i256 {
@@ -594,15 +594,6 @@ func private %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__AddYield_h
         evm_revert v18 v16;
 
     block4:
-        v33.i1 = lt v16 0.i256;
-        v34.i256 = zext v33 i256;
-        v42.i1 = is_zero v34;
-        br v42 block6 block5;
-
-    block5:
-        evm_revert 0.i256 0.i256;
-
-    block6:
         v36.*@__fe_MemoryBytes_3 = alloca @__fe_MemoryBytes_3;
         v37.i256 = ptr_to_int v36 i256;
         v38.*i256 = bitcast v36 *i256;

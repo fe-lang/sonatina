@@ -696,6 +696,129 @@ object @Contract {
     }
 
     #[test]
+    fn compile_object_keeps_explicit_equal_data_symbols_unique() {
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+global public const [i8; 3] $a = [1, 2, 3];
+global public const [i8; 3] $b = [1, 2, 3];
+
+func public %runtime() {
+    block0:
+        evm_return 0.i256 0.i256;
+}
+
+object @Contract {
+  section runtime {
+    entry %runtime;
+    data $a;
+    data $b;
+  }
+}
+"#,
+        )
+        .unwrap();
+        let (a, b) = parsed.module.ctx.with_gv_store(|store| {
+            (
+                store.lookup_gv("a").expect("a global should exist"),
+                store.lookup_gv("b").expect("b global should exist"),
+            )
+        });
+        let artifact = compile_object(
+            &parsed.module,
+            &test_backend(),
+            "Contract",
+            &compile_opts(
+                PushWidthPolicy::Push4,
+                true,
+                true,
+                VerifierConfig::for_level(VerificationLevel::Standard),
+            ),
+        )
+        .unwrap();
+        let runtime = section(&artifact, "runtime");
+        let a_def = runtime
+            .symtab
+            .get(&SymbolId::Global(a))
+            .expect("a symbol should exist");
+        let b_def = runtime
+            .symtab
+            .get(&SymbolId::Global(b))
+            .expect("b symbol should exist");
+
+        assert_eq!(a_def.size, 3);
+        assert_eq!(b_def.size, 3);
+        assert_ne!(a_def.offset, b_def.offset);
+        assert!(runtime.bytes.ends_with(&[1, 2, 3, 1, 2, 3]));
+        assert_eq!(
+            runtime
+                .observability
+                .as_ref()
+                .expect("runtime observability")
+                .data_bytes,
+            6
+        );
+    }
+
+    #[test]
+    fn compile_object_dedups_synthesized_const_word_subranges_and_overlaps() {
+        let artifact = compile_fixture(
+            r#"
+target = "evm-ethereum-osaka"
+
+global private const [i64; 5] $a = [1, 3, 7, 15, 31];
+global private const [i64; 6] $b = [1, 3, 7, 15, 31, 63];
+global private const [i64; 5] $c = [3, 7, 15, 31, 63];
+global private const [i64; 5] $d = [31, 63, 127, 255, 511];
+
+func private %runtime(v0.i256) -> i64 {
+    block0:
+        v1.constref<[i64; 5]> = const.ref $a;
+        v2.constref<i64> = const.index v1 v0;
+        v3.i64 = const.load v2;
+        v4.constref<[i64; 6]> = const.ref $b;
+        v5.constref<i64> = const.index v4 v0;
+        v6.i64 = const.load v5;
+        v7.constref<[i64; 5]> = const.ref $c;
+        v8.constref<i64> = const.index v7 v0;
+        v9.i64 = const.load v8;
+        v10.i64 = add v3 v6;
+        v11.i64 = add v10 v9;
+        v12.constref<[i64; 5]> = const.ref $d;
+        v13.constref<i64> = const.index v12 v0;
+        v14.i64 = const.load v13;
+        v15.i64 = add v11 v14;
+        return v15;
+}
+
+object @Contract {
+  section runtime {
+    entry %runtime;
+  }
+}
+"#,
+            "Contract",
+            &compile_opts(
+                PushWidthPolicy::Push4,
+                false,
+                true,
+                VerifierConfig::for_level(VerificationLevel::Standard),
+            ),
+        );
+        let runtime = section(&artifact, "runtime");
+
+        assert_eq!(
+            runtime
+                .observability
+                .as_ref()
+                .expect("runtime observability")
+                .data_bytes,
+            288
+        );
+    }
+
+    #[test]
     fn compile_object_emits_observability_when_enabled() {
         let artifact = compile_fixture(
             r#"

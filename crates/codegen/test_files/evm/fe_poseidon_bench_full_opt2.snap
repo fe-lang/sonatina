@@ -1,0 +1,27 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: "String::from_utf8(out).unwrap()"
+input_file: test_files/evm/fe_poseidon_bench_full_opt2.sntn
+---
+evm.config: stack_reach=16 vcode=false bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
+
+object: Contract
+  section init: 13979 bytes
+  section runtime: 13960 bytes
+  total: 27939 bytes
+
+functions:
+  contract_init_root_PoseidonBench: ir_blocks=3 ir_insts=8 vcode_ops=17 fixups=3 imm_bytes=2
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=5 abs_words_end=0
+  contract_recv_abi_PoseidonBench_1430137905: ir_blocks=7 ir_insts=36 vcode_ops=120 fixups=11 imm_bytes=25
+    mem: scratch_words=0 stable_words=4 stable_mode=StaticAbs(base=0x140) entry_abs_words=5 abs_words_end=9
+  decode_field: ir_blocks=5 ir_insts=21 vcode_ops=49 fixups=2 imm_bytes=7
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=9 abs_words_end=0
+  hash: ir_blocks=13 ir_insts=189 vcode_ops=618 fixups=10 imm_bytes=77
+    mem: scratch_words=5 stable_words=0 stable_mode=None entry_abs_words=9 abs_words_end=5
+  contract_runtime_root_PoseidonBench: ir_blocks=3 ir_insts=6 vcode_ops=18 fixups=2 imm_bytes=2
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=5 abs_words_end=0
+
+evm:
+  deploy: success reason=Return gas_used=3071558 gas_refunded=0 logs=0 output=create len=13960 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
+  case poseidon_1_2: calldata_len=68 success reason=Return gas_used=49285 gas_refunded=0 logs=0 output=call len=32 tx_gas=21344 runtime_gas=27941

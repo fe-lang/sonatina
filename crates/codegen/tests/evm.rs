@@ -14,7 +14,10 @@ use revm::{
 
 use sonatina_codegen::{
     domtree::DomTree,
-    isa::evm::{EvmBackend, LateCleanupProfile, PushWidthPolicy, canonicalize_alias_value},
+    isa::evm::{
+        EvmBackend, ImmediateMaterializationMode, LateCleanupProfile, PushWidthPolicy,
+        canonicalize_alias_value,
+    },
     liveness::Liveness,
     machinst::{
         lower::{LoweredFunction, SectionCodeUnit, SectionWorkModule},
@@ -198,6 +201,11 @@ fn test_evm(fixture: Fixture<&str>) {
         EvmOptPipeline::O0 => StackifySearchProfile::Fast,
         EvmOptPipeline::O1 => StackifySearchProfile::GreedyWide,
         EvmOptPipeline::Os | EvmOptPipeline::O2 => StackifySearchProfile::Exact,
+    })
+    .with_immediate_materialization_mode(match opt_pipeline {
+        EvmOptPipeline::Os => ImmediateMaterializationMode::Size,
+        EvmOptPipeline::O2 => ImmediateMaterializationMode::Balanced,
+        EvmOptPipeline::O0 | EvmOptPipeline::O1 => ImmediateMaterializationMode::Gas,
     });
 
     let prepared = backend

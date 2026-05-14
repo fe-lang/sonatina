@@ -249,7 +249,6 @@ fn unmodeled_write_addr(data: &EvmInstKind) -> Option<ValueId> {
         EvmInstKind::EvmMstore8(mstore8) => Some(*mstore8.addr()),
         EvmInstKind::EvmMcopy(mcopy) => Some(*mcopy.dest()),
         EvmInstKind::EvmCalldataCopy(copy) => Some(*copy.dst_addr()),
-        EvmInstKind::EvmCodeCopy(copy) => Some(*copy.dst_addr()),
         EvmInstKind::EvmExtCodeCopy(copy) => Some(*copy.dst_addr()),
         EvmInstKind::EvmReturnDataCopy(copy) => Some(*copy.dst_addr()),
         EvmInstKind::EvmCall(call) => Some(*call.ret_addr()),
@@ -507,13 +506,127 @@ pub(crate) fn compute_provenance(
     }
 }
 
-pub(crate) fn compute_value_provenance(
+pub(crate) fn compute_address_provenance(
     function: &Function,
     module: &ModuleCtx,
     isa: &Evm,
     callee_summary: impl Fn(FuncRef) -> PtrEscapeSummary,
 ) -> SecondaryMap<ValueId, Provenance> {
-    compute_provenance(function, module, isa, callee_summary).value
+    let mut prov: SecondaryMap<ValueId, Provenance> = SecondaryMap::new();
+    for value in function.dfg.value_ids() {
+        let _ = &mut prov[value];
+    }
+
+    for (idx, &arg) in function.arg_values.iter().enumerate() {
+        if function.dfg.value_ty(arg).is_pointer(module) {
+            prov[arg].bases.push(PtrBase::Arg(idx as u32));
+        }
+    }
+
+    let mut changed = true;
+    while changed {
+        changed = false;
+
+        for block in function.layout.iter_block() {
+            for inst in function.layout.iter_inst(block) {
+                let data = isa.inst_set().resolve_inst(function.dfg.inst(inst));
+
+                if let EvmInstKind::Call(call) = &data {
+                    let summary = callee_summary(*call.callee());
+                    let args = call.args();
+                    for (ret_idx, &def) in function.dfg.inst_results(inst).iter().enumerate() {
+                        let next = call_result_provenance(
+                            function, module, args, &summary, &prov, ret_idx, def,
+                        );
+                        let cur = &mut prov[def];
+                        if *cur != next {
+                            *cur = next;
+                            changed = true;
+                        }
+                    }
+                    continue;
+                }
+
+                let [def] = function.dfg.inst_results(inst) else {
+                    continue;
+                };
+
+                let mut next = Provenance::default();
+                match data {
+                    EvmInstKind::Alloca(_) => next.bases.push(PtrBase::Alloca(inst)),
+                    EvmInstKind::EvmMalloc(_) => next.bases.push(PtrBase::Malloc(inst)),
+                    EvmInstKind::Phi(phi) => {
+                        for (val, _) in phi.args().iter() {
+                            let _ = next.union_with(&prov[*val]);
+                        }
+                    }
+                    EvmInstKind::Gep(gep) => {
+                        let Some(&base) = gep.values().first() else {
+                            continue;
+                        };
+                        let _ = next.union_with(&prov[base]);
+                    }
+                    EvmInstKind::Bitcast(bc) => {
+                        let _ = next.union_with(&prov[*bc.from()]);
+                    }
+                    EvmInstKind::IntToPtr(i2p) => {
+                        let from = *i2p.from();
+                        let from_prov = &prov[from];
+                        let _ = next.union_with(from_prov);
+                        if from_prov.has_no_known_bases() && !from_prov.is_unknown_ptr() {
+                            let _ = next.mark_unknown_non_arg();
+                        }
+                    }
+                    EvmInstKind::PtrToInt(p2i) => {
+                        let _ = next.union_with(&prov[*p2i.from()]);
+                    }
+                    EvmInstKind::InsertValue(iv) => {
+                        let _ = next.union_with(&prov[*iv.dest()]);
+                        let _ = next.union_with(&prov[*iv.value()]);
+                    }
+                    EvmInstKind::ExtractValue(ev) => {
+                        let _ = next.union_with(&prov[*ev.dest()]);
+                    }
+                    EvmInstKind::Add(_)
+                    | EvmInstKind::Sub(_)
+                    | EvmInstKind::Mul(_)
+                    | EvmInstKind::And(_)
+                    | EvmInstKind::Or(_)
+                    | EvmInstKind::Xor(_)
+                    | EvmInstKind::Shl(_)
+                    | EvmInstKind::Shr(_)
+                    | EvmInstKind::Sar(_)
+                    | EvmInstKind::Not(_)
+                    | EvmInstKind::Sext(_)
+                    | EvmInstKind::Zext(_)
+                    | EvmInstKind::Trunc(_)
+                    | EvmInstKind::EvmSdiv(_)
+                    | EvmInstKind::EvmUdiv(_)
+                    | EvmInstKind::EvmUmod(_)
+                    | EvmInstKind::EvmSmod(_)
+                    | EvmInstKind::EvmAddMod(_)
+                    | EvmInstKind::EvmMulMod(_)
+                    | EvmInstKind::EvmExp(_)
+                    | EvmInstKind::EvmSignExtend(_)
+                    | EvmInstKind::EvmByte(_)
+                    | EvmInstKind::EvmClz(_) => {
+                        function.dfg.inst(inst).for_each_value(&mut |v| {
+                            let _ = next.union_with(&prov[v]);
+                        });
+                    }
+                    _ => {}
+                }
+
+                let cur = &mut prov[*def];
+                if *cur != next {
+                    *cur = next;
+                    changed = true;
+                }
+            }
+        }
+    }
+
+    prov
 }
 
 #[cfg(test)]
@@ -541,9 +654,10 @@ mod tests {
         let summaries = compute_ptr_escape_summaries(&parsed.module, &funcs, &isa);
 
         parsed.module.func_store.view(func_ref, |function| {
-            let prov = compute_value_provenance(function, &parsed.module.ctx, &isa, |callee| {
+            let prov = compute_provenance(function, &parsed.module.ctx, &isa, |callee| {
                 PtrEscapeSummary::get_or_conservative(&summaries, &parsed.module.ctx, callee)
-            });
+            })
+            .value;
 
             for block in function.layout.iter_block() {
                 for inst in function.layout.iter_inst(block) {
@@ -651,6 +765,31 @@ block0:
 
         assert!(ret_prov.is_unknown_ptr());
         assert_eq!(ret_prov.arg_indices().collect::<Vec<_>>(), vec![0]);
+    }
+
+    #[test]
+    fn codecopy_does_not_introduce_pointer_provenance() {
+        let ret_prov = ret_provenance(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %f() -> *i8 {
+block0:
+    v0.*i256 = alloca i256;
+    v1.i256 = ptr_to_int v0 i256;
+    evm_code_copy v1 0.i256 32.i256;
+    v2.*i8 = mload v0 *i8;
+    return v2;
+}
+"#,
+            "f",
+        );
+
+        assert!(!ret_prov.is_unknown_ptr());
+        assert_eq!(
+            ret_prov.arg_indices().collect::<Vec<_>>(),
+            Vec::<u32>::new()
+        );
     }
 
     #[test]

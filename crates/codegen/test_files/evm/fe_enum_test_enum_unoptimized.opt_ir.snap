@@ -40,9 +40,9 @@ func private %test_enum__StorPtr_Evm___207f35a85ac4062e() {
     block8:
         v23.i256 = evm_create2 0.i256 v18 v13 0.i256;
         v34.i1 = is_zero v23;
-        br v34 block3 block9;
+        br v34 block3 block1;
 
-    block9:
+    block1:
         v6.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__MakeSome_hb4c3b28d7dc84c95__10de9d95694004b7 v23 100000.i256 0.i256 42.i256;
         v31.i1 = eq v6 42.i256;
         br v31 block13 block15;
@@ -240,21 +240,14 @@ func private %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4
 func private %decode_returndata__u256__3271ca15373d4483(v0.i256, v1.i256) -> i256 {
     block0:
         v11.i1 = lt v1 32.i256;
-        br v11 block1 block11;
+        br v11 block1 block2;
 
     block1:
         evm_revert 0.i256 0.i256;
 
-    block5:
-        evm_revert 0.i256 0.i256;
-
-    block8:
+    block2:
         v56.i256 = mload v0 i256;
         return v56;
-
-    block11:
-        v51.i1 = gt 32.i256 v1;
-        br v51 block5 block8;
 }
 
 func private %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head(v0.objref<@__fe_obj_SolEncoder_3>, v1.i256) -> i256 {

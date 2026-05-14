@@ -37,19 +37,12 @@ func private %call_target(v0.@Addr, v1.i256, v2.i256) -> i256 {
 
     block11:
         v51.i1 = lt v16 32.i256;
-        br v51 block12 block17;
+        br v51 block12 block13;
 
     block12:
         evm_revert 0.i256 0.i256;
 
-    block17:
-        v71.i1 = gt 32.i256 v16;
-        br v71 block18 block21;
-
-    block18:
-        evm_revert 0.i256 0.i256;
-
-    block21:
+    block13:
         v75.i256 = mload v18 i256;
         return v75;
 }

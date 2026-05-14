@@ -1042,9 +1042,9 @@ func private %test_const_array_loop() {
         v1194.i256 = phi (0.i256 block0) (v1161 block3);
         v1154.i256 = phi (0.i256 block0) (v1164 block3);
         v1156.i1 = lt v1154 128.i256;
-        br v1156 block16 block5;
+        br v1156 block14 block5;
 
-    block16:
+    block14:
         v1184.objref<i256> = obj.index v1 v1154;
         v1185.i256 = obj.load v1184;
         (v1161.i256, v1162.i1) = uaddo v1194 v1185;
@@ -1058,7 +1058,17 @@ func private %test_const_array_loop() {
         v1204.i256 = phi (0.i256 block1) (v1182 block7);
         v1166.i256 = phi (0.i256 block1) (v1185 block7);
         v1168.i1 = lt v1166 128.i256;
-        br v1168 block11 block8;
+        br v1168 block25 block8;
+
+    block25:
+        v1176.*i256 = gep v3 0.i256 v1166;
+        v1177.i256 = ptr_to_int v1176 i256;
+        v1178.*i256 = alloca i256;
+        v1179.i256 = ptr_to_int v1178 i256;
+        evm_code_copy v1179 v1177 32.i256;
+        v1180.i256 = mload v1179 i256;
+        (v1182.i256, v1183.i1) = uaddo v1204 v1180;
+        br v1183 block9 block7;
 
     block7:
         v1185.i256 = add v1166 1.i256;
@@ -1083,16 +1093,6 @@ func private %test_const_array_loop() {
 
     block9:
         evm_revert 0.i256 0.i256;
-
-    block11:
-        v1176.*i256 = gep v3 0.i256 v1166;
-        v1177.i256 = ptr_to_int v1176 i256;
-        v1178.*i256 = alloca i256;
-        v1179.i256 = ptr_to_int v1178 i256;
-        evm_code_copy v1179 v1177 32.i256;
-        v1180.i256 = mload v1179 i256;
-        (v1182.i256, v1183.i1) = uaddo v1204 v1180;
-        br v1183 block9 block7;
 }
 
 func private %__fe_sonatina_entry() {

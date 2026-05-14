@@ -7,13 +7,10 @@ target = "evm-ethereum-osaka"
 
 func private %verify_checked(v0.i256, v1.i256, v2.[i8; 5], v3.[i256; 5]) -> i1 {
     block0:
-        v4.*i256 = alloca i256;
         v7.*i256 = alloca i256;
         v8.objref<[i8; 5]> = obj.alloc [i8; 5];
         v9.objref<[i256; 5]> = obj.alloc [i256; 5];
-        v10.*i256 = alloca i256;
         v11.objref<[i256; 5]> = obj.alloc [i256; 5];
-        v12.*i256 = alloca i256;
         mstore v7 0.i256 i256;
         v43.i256 = ptr_to_int v7 i256;
         jump block1;

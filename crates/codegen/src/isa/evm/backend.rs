@@ -43,12 +43,20 @@ pub enum LateCleanupProfile {
     Size,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ImmediateMaterializationMode {
+    Gas,
+    Balanced,
+    Size,
+}
+
 pub struct EvmBackend {
     pub(crate) isa: Evm,
     pub(crate) stackify_reach_depth: u8,
     pub(crate) stackify_search_profile: StackifySearchProfile,
     pub(crate) arena_cost_model: ArenaCostModel,
     pub(crate) late_cleanup_profile: LateCleanupProfile,
+    pub(crate) immediate_materialization_mode: ImmediateMaterializationMode,
 }
 
 impl EvmBackend {
@@ -67,6 +75,7 @@ impl EvmBackend {
             stackify_search_profile: StackifySearchProfile::Exact,
             arena_cost_model: ArenaCostModel::default(),
             late_cleanup_profile: LateCleanupProfile::Off,
+            immediate_materialization_mode: ImmediateMaterializationMode::Gas,
         }
     }
 
@@ -86,6 +95,14 @@ impl EvmBackend {
 
     pub fn with_stackify_search_profile(mut self, profile: StackifySearchProfile) -> Self {
         self.stackify_search_profile = profile;
+        self
+    }
+
+    pub fn with_immediate_materialization_mode(
+        mut self,
+        mode: ImmediateMaterializationMode,
+    ) -> Self {
+        self.immediate_materialization_mode = mode;
         self
     }
 

@@ -68,5 +68,6 @@ pub(super) fn build_stackify_test_context<'a>(
         search_profile: StackifySearchProfile::Exact,
         value_aliases,
         exact_local_addr,
+        stack_cached_immediates: Default::default(),
     }
 }

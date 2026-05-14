@@ -1697,6 +1697,132 @@ object @Contract {
 }
 
 #[test]
+fn prepare_section_prunes_dead_constref_specialization_original() {
+    let parsed = parse_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+type @Err = enum {
+    #None,
+    #Bad,
+};
+
+type @Result = { i1, @Err };
+
+global private const [i256; 1] $values = [1];
+
+func private %verify(v0.constref<[i256; 1]>) -> @Result {
+block0:
+    v1.@Err = enum.make @Err #Bad;
+    v2.@Result = insert_value undef.@Result 0.i8 0.i1;
+    v3.@Result = insert_value v2 1.i8 v1;
+    return v3;
+}
+
+func public %entry() -> i256 {
+block0:
+    v0.constref<[i256; 1]> = const.ref $values;
+    v1.@Result = call %verify v0;
+    v2.i1 = extract_value v1 0.i8;
+    v3.@Err = extract_value v1 1.i8;
+    enum.assert_variant v3 #Bad;
+    return 1.i256;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}
+"#,
+    )
+    .unwrap();
+
+    let funcs = parsed.module.funcs();
+    let verify = find_func(&parsed.module, "verify");
+    let entry = find_func(&parsed.module, "entry");
+    let backend = test_backend().with_late_cleanup_profile(LateCleanupProfile::Speed);
+    let prepared = backend
+        .prepare_section(work_module_with_entry(&parsed.module, &funcs, entry))
+        .expect("prepare should succeed");
+
+    assert!(
+        prepared.module().ctx.get_sig(verify).is_none(),
+        "dead unspecialized original should be pruned"
+    );
+}
+
+#[test]
+fn prepare_section_keeps_live_unspecialized_constref_original() {
+    let parsed = parse_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+global private const [i256; 1] $values = [1];
+
+func private %verify(v0.constref<[i256; 1]>) -> i256 {
+block0:
+    v1.constref<i256> = const.index v0 0.i8;
+    v2.i256 = const.load v1;
+    return v2;
+}
+
+func private %dispatch(v0.constref<[i256; 1]>) -> i256 {
+block0:
+    v1.i256 = call %verify v0;
+    return v1;
+}
+
+func public %entry() -> i256 {
+block0:
+    v0.constref<[i256; 1]> = const.ref $values;
+    v1.i256 = call %verify v0;
+    v2.i256 = call %dispatch v0;
+    v3.i256 = add v1 v2;
+    return v3;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}
+"#,
+    )
+    .unwrap();
+
+    let funcs = parsed.module.funcs();
+    let verify = find_func(&parsed.module, "verify");
+    let entry = find_func(&parsed.module, "entry");
+    let backend = test_backend().with_late_cleanup_profile(LateCleanupProfile::Speed);
+    let prepared = backend
+        .prepare_section(work_module_with_entry(&parsed.module, &funcs, entry))
+        .expect("prepare should succeed");
+    let names: FxHashSet<_> = prepared
+        .module()
+        .funcs()
+        .into_iter()
+        .map(|func| {
+            prepared
+                .module()
+                .ctx
+                .func_sig(func, |sig| sig.name().to_string())
+        })
+        .collect();
+
+    assert!(
+        prepared.module().ctx.get_sig(verify).is_some(),
+        "original should remain live through the specialized dispatch clone"
+    );
+    assert!(
+        names
+            .iter()
+            .any(|name| name.starts_with("verify__constref")),
+        "direct static call should still produce a specialized clone: {names:?}"
+    );
+}
+
+#[test]
 fn prepare_section_runs_raw_memory_cleanup_after_memory_legalize() {
     let mut parsed = parse_module(include_str!(
         "../../../test_files/evm/fresh_equivalent_out_param_scalarizes.sntn"
