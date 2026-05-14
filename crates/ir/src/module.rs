@@ -97,6 +97,25 @@ impl Module {
         self.func_store.funcs()
     }
 
+    pub fn remove_func(&self, func_ref: FuncRef) -> Option<Function> {
+        let func = self.func_store.remove(func_ref)?;
+        self.ctx.remove_func_declaration(func_ref);
+        Some(func)
+    }
+
+    pub fn retain_defined_funcs<F>(&self, mut keep: F) -> usize
+    where
+        F: FnMut(FuncRef) -> bool,
+    {
+        let mut removed = 0;
+        for func_ref in self.funcs() {
+            if !keep(func_ref) && self.remove_func(func_ref).is_some() {
+                removed += 1;
+            }
+        }
+        removed
+    }
+
     pub fn clone_for_funcs(&self, funcs: &[FuncRef]) -> Self {
         let ctx = self.ctx.deep_clone();
         let cloned = Self {
@@ -488,6 +507,13 @@ impl ModuleCtx {
         self.clear_func_hints(func_ref);
     }
 
+    pub fn remove_func_declaration(&self, func_ref: FuncRef) -> Option<Signature> {
+        self.clear_func_metadata(func_ref);
+        self.declared_funcs
+            .remove(&func_ref)
+            .map(|(_, signature)| signature)
+    }
+
     /// Updated the function signature with the given linkage.
     ///
     /// # Panics
@@ -530,6 +556,68 @@ impl ModuleCtx {
         F: FnOnce(&mut GlobalVariableStore) -> R,
     {
         f(&mut self.gv_store.write())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
+
+    use crate::{builder::ModuleBuilder, isa::evm::Evm};
+
+    use super::*;
+
+    fn test_builder() -> ModuleBuilder {
+        ModuleBuilder::new(ModuleCtx::new(&Evm::new(TargetTriple {
+            architecture: Architecture::Evm,
+            vendor: Vendor::Ethereum,
+            operating_system: OperatingSystem::Evm(EvmVersion::Osaka),
+        })))
+    }
+
+    #[test]
+    fn retain_defined_funcs_removes_stale_function_metadata() {
+        let builder = test_builder();
+        let keep = builder
+            .declare_function(Signature::new_unit("keep", Linkage::Private, &[]))
+            .unwrap();
+        let remove = builder
+            .declare_function(Signature::new_unit("remove", Linkage::Private, &[]))
+            .unwrap();
+        builder
+            .ctx
+            .set_func_effects(remove, FuncEffectSummary::unknown_call());
+        builder.ctx.set_func_hints(remove, FuncHints::NOINLINE);
+        let module = builder.build();
+
+        assert_eq!(module.retain_defined_funcs(|func| func == keep), 1);
+
+        assert!(module.func_store.contains(keep));
+        assert!(!module.func_store.contains(remove));
+        assert!(module.ctx.get_sig(keep).is_some());
+        assert!(module.ctx.get_sig(remove).is_none());
+        assert!(!module.ctx.has_func_effects(remove));
+        assert!(!module.ctx.has_func_hints(remove));
+    }
+
+    #[test]
+    fn retain_defined_funcs_preserves_external_declarations_without_bodies() {
+        let builder = test_builder();
+        let remove = builder
+            .declare_function(Signature::new_unit("remove", Linkage::Private, &[]))
+            .unwrap();
+        let module = builder.build();
+        let external = FuncRef::from_u32(100);
+        module.ctx.declared_funcs.insert(
+            external,
+            Signature::new_unit("external", Linkage::External, &[]),
+        );
+
+        assert_eq!(module.retain_defined_funcs(|_| false), 1);
+
+        assert!(!module.func_store.contains(remove));
+        assert!(module.ctx.get_sig(remove).is_none());
+        assert!(module.ctx.get_sig(external).is_some());
     }
 }
 

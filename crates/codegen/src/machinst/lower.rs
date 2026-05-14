@@ -74,6 +74,14 @@ impl SectionWorkModule {
         build_section_membership(&self.module, self.entry, &self.includes, &self.data)
     }
 
+    pub fn prune_unreachable_defined_funcs(&self) -> (SectionMembership, usize) {
+        let membership = self.membership();
+        let removed = self
+            .module
+            .retain_defined_funcs(|func| membership.funcs.contains(&func));
+        (membership, removed)
+    }
+
     pub fn function_emission_order(&self, membership: &SectionMembership) -> Vec<FuncRef> {
         compute_section_function_emission_order(
             &self.module,

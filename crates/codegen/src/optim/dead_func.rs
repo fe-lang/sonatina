@@ -80,9 +80,7 @@ pub fn run_dead_func_elim(
             continue;
         }
 
-        module.func_store.remove(func_ref);
-        module.ctx.declared_funcs.remove(&func_ref);
-        module.ctx.clear_func_metadata(func_ref);
+        module.remove_func(func_ref);
         removed_defs += 1;
     }
 
