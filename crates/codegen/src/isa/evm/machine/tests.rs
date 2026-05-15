@@ -3,7 +3,9 @@ use sonatina_ir::{
     builder::ModuleBuilder,
     func_cursor::InstInserter,
     inst::{
-        control_flow::Return,
+        arith::Add,
+        cmp::{IsZero, Lt},
+        control_flow::{Br, BranchKind, Jump, Return},
         data::Alloca,
         evm::{EvmMload, EvmMstore},
     },
@@ -16,7 +18,7 @@ use sonatina_ir::{
 use sonatina_parser::parse_module;
 use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
 
-use super::verify::verify_machine_function;
+use super::{branch::canonicalize_machine_branch_conditions, verify::verify_machine_function};
 
 fn evm_triple() -> TargetTriple {
     TargetTriple::new(
@@ -71,6 +73,192 @@ fn machine_verify_accepts_word_machine_ir() {
     let module = mb.build();
     module.func_store.view(func_ref, |function| {
         verify_machine_function(func_ref, function).expect("valid machine IR should verify");
+    });
+}
+
+#[test]
+fn machine_verify_accepts_normalized_i1_as_word_operand() {
+    let mb = machine_builder();
+    let func_ref = mb
+        .declare_function(Signature::new_single(
+            "machine_normalized_i1_word",
+            Linkage::Public,
+            &[Type::I256, Type::I256],
+            Type::I256,
+        ))
+        .unwrap();
+    let machine = EvmMachine::new(mb.triple());
+    let is = machine.inst_set();
+    let mut builder = mb.func_builder::<InstInserter>(func_ref);
+
+    let block = builder.append_block();
+    builder.switch_to_block(block);
+    let lhs = builder.func.arg_values[0];
+    let rhs = builder.func.arg_values[1];
+    let cmp = builder.insert_inst(Lt::new(is, lhs, rhs), Type::I1);
+    let sum = builder.insert_inst(Add::new(is, lhs, cmp), Type::I256);
+    builder.insert_inst_no_result(Return::new_single(is, sum));
+    builder.seal_all();
+    builder.finish();
+
+    let module = mb.build();
+    module.func_store.view(func_ref, |function| {
+        verify_machine_function(func_ref, function)
+            .expect("normalized i1 values are valid word-shaped EVM operands");
+    });
+}
+
+#[test]
+fn machine_verify_accepts_i1_as_word_operand() {
+    let mb = machine_builder();
+    let func_ref = mb
+        .declare_function(Signature::new_single(
+            "machine_i1_word",
+            Linkage::Public,
+            &[Type::I256, Type::I1],
+            Type::I256,
+        ))
+        .unwrap();
+    let machine = EvmMachine::new(mb.triple());
+    let is = machine.inst_set();
+    let mut builder = mb.func_builder::<InstInserter>(func_ref);
+
+    let block = builder.append_block();
+    builder.switch_to_block(block);
+    let lhs = builder.func.arg_values[0];
+    let rhs = builder.func.arg_values[1];
+    let sum = builder.insert_inst(Add::new(is, lhs, rhs), Type::I256);
+    builder.insert_inst_no_result(Return::new_single(is, sum));
+    builder.seal_all();
+    builder.finish();
+
+    let module = mb.build();
+    module.func_store.view(func_ref, |function| {
+        verify_machine_function(func_ref, function)
+            .expect("current machine IR treats i1 values as word-shaped stack values");
+    });
+}
+
+#[test]
+fn machine_verify_accepts_word_typed_comparison() {
+    let mb = machine_builder();
+    let func_ref = mb
+        .declare_function(Signature::new_single(
+            "machine_word_cmp",
+            Linkage::Public,
+            &[Type::I256, Type::I256],
+            Type::I256,
+        ))
+        .unwrap();
+    let machine = EvmMachine::new(mb.triple());
+    let is = machine.inst_set();
+    let mut builder = mb.func_builder::<InstInserter>(func_ref);
+
+    let block = builder.append_block();
+    builder.switch_to_block(block);
+    let lhs = builder.func.arg_values[0];
+    let rhs = builder.func.arg_values[1];
+    let cmp = builder.insert_inst(Lt::new(is, lhs, rhs), Type::I256);
+    builder.insert_inst_no_result(Return::new_single(is, cmp));
+    builder.seal_all();
+    builder.finish();
+
+    let module = mb.build();
+    module.func_store.view(func_ref, |function| {
+        verify_machine_function(func_ref, function)
+            .expect("word-typed compare result is the machine zext-free form");
+    });
+}
+
+#[test]
+fn machine_verify_accepts_word_branch_condition() {
+    let mb = machine_builder();
+    let func_ref = mb
+        .declare_function(Signature::new_single(
+            "machine_word_branch",
+            Linkage::Public,
+            &[Type::I256],
+            Type::I256,
+        ))
+        .unwrap();
+    let machine = EvmMachine::new(mb.triple());
+    let is = machine.inst_set();
+    let mut builder = mb.func_builder::<InstInserter>(func_ref);
+
+    let entry = builder.append_block();
+    let nz = builder.append_block();
+    let z = builder.append_block();
+    builder.switch_to_block(entry);
+    let cond = builder.func.arg_values[0];
+    builder.insert_inst_no_result(Br::new(is, cond, nz, z));
+    builder.switch_to_block(nz);
+    builder.insert_inst_no_result(Return::new_single(is, cond));
+    builder.switch_to_block(z);
+    builder.insert_inst_no_result(Return::new_single(is, cond));
+    builder.seal_all();
+    builder.finish();
+
+    let module = mb.build();
+    module.func_store.view(func_ref, |function| {
+        verify_machine_function(func_ref, function)
+            .expect("machine branches can test any word-shaped EVM stack value");
+    });
+}
+
+#[test]
+fn machine_branch_canonicalize_folds_is_zero_into_branch_polarity() {
+    let mb = machine_builder();
+    let func_ref = mb
+        .declare_function(Signature::new_single(
+            "machine_branch_is_zero",
+            Linkage::Public,
+            &[Type::I256],
+            Type::I256,
+        ))
+        .unwrap();
+    let machine = EvmMachine::new(mb.triple());
+    let is = machine.inst_set();
+    let mut builder = mb.func_builder::<InstInserter>(func_ref);
+
+    let entry = builder.append_block();
+    let nz = builder.append_block();
+    let z = builder.append_block();
+    builder.switch_to_block(entry);
+    let arg = builder.func.arg_values[0];
+    let cond = builder.insert_inst(IsZero::new(is, arg), Type::I1);
+    builder.insert_inst_no_result(Br::new(is, cond, nz, z));
+    builder.switch_to_block(nz);
+    builder.insert_inst_no_result(Jump::new(is, z));
+    builder.switch_to_block(z);
+    builder.insert_inst_no_result(Return::new_single(is, arg));
+    builder.seal_all();
+    builder.finish();
+
+    let module = mb.build();
+    module.func_store.modify(func_ref, |function| {
+        assert!(canonicalize_machine_branch_conditions(function));
+        let term = function
+            .layout
+            .last_inst_of(entry)
+            .expect("entry has terminator");
+        let branch = function
+            .dfg
+            .branch_info(term)
+            .expect("entry terminator is branch");
+        let BranchKind::Br(br) = branch.branch_kind() else {
+            panic!("expected branch terminator");
+        };
+        assert_eq!(*br.cond(), arg);
+        assert_eq!(*br.nz_dest(), z);
+        assert_eq!(*br.z_dest(), nz);
+        assert!(
+            function.layout.iter_inst(entry).all(|inst| !matches!(
+                function.dfg.inst(inst).kind(),
+                sonatina_ir::inst::InstClassKind::Unary(sonatina_ir::inst::UnaryInstKind::IsZero)
+            )),
+            "dead is_zero should be removed"
+        );
+        verify_machine_function(func_ref, function).expect("rewritten machine IR should verify");
     });
 }
 

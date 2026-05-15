@@ -13,7 +13,7 @@ functions:
   mem: global_dyn_base=0x0 arena_base=0x0 scratch_peak_words=0 static_chain_peak_words=0
   saturating_signed_i8: ir_blocks=3 ir_insts=5 vcode_ops=18 fixups=3 imm_bytes=3
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  i8_h1bb527fe1af58754_saturatingmul_hf2bc6be7b84ff8f7_saturating_mul: ir_blocks=22 ir_insts=46 vcode_ops=125 fixups=15 imm_bytes=19
+  i8_h1bb527fe1af58754_saturatingmul_hf2bc6be7b84ff8f7_saturating_mul: ir_blocks=22 ir_insts=43 vcode_ops=123 fixups=15 imm_bytes=19
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   __fe_sonatina_entry: ir_blocks=1 ir_insts=2 vcode_ops=5 fixups=2 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
@@ -48,14 +48,14 @@ saturating_signed_i8:
 i8_h1bb527fe1af58754_saturatingmul_hf2bc6be7b84ff8f7_saturating_mul:
   block0:
     JUMPDEST
-    DUP1  // v6.i1 = is_zero v0;
+    DUP1  // br v0 block2 block22;
     ISZERO
-    PUSH1 block22  // br v6 block22 block2;
+    PUSH1 block22
     JUMPI
   block2:
-    DUP2  // v8.i1 = is_zero v1;
+    DUP2  // br v1 block1 block24;
     ISZERO
-    PUSH1 block24  // br v8 block24 block1;
+    PUSH1 block24
     JUMPI
   block1:
     PUSH1 0x80 (128)  // v12.i1 = eq v0 v10;
@@ -148,7 +148,7 @@ i8_h1bb527fe1af58754_saturatingmul_hf2bc6be7b84ff8f7_saturating_mul:
     XOR  // v21.i256 = xor v35 v14;
     PUSH1 0x80 (128)  // v41.i256 = and v21 v10;
     AND
-    PUSH1 block30  // br v29 block17 block30;
+    PUSH1 block30  // br v41 block30 block17;
     JUMPI
   block17:
     PUSH1 0x7f (127)  // jump block19;

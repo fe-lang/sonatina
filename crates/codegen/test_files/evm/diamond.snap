@@ -6,12 +6,12 @@ input_file: test_files/evm/diamond.sntn
 evm.config: stack_reach=16 vcode=false bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 39 bytes
-  total: 39 bytes
+  section runtime: 33 bytes
+  total: 33 bytes
 
 functions:
   mem: global_dyn_base=0x20 arena_base=0x20 scratch_peak_words=0 static_chain_peak_words=0
-  entry: ir_blocks=4 ir_insts=13 vcode_ops=25 fixups=2 imm_bytes=6
+  entry: ir_blocks=4 ir_insts=12 vcode_ops=23 fixups=2 imm_bytes=5
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:

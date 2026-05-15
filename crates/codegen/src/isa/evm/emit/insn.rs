@@ -16,7 +16,7 @@ use crate::{
 
 use super::{
     super::{DynSpInitKind, machine::lazy_frame::FrameSite, opcode::OpCode},
-    EvmFunctionLowering,
+    EvmMachineFunctionLowering,
     stack::{
         emit_narrow_signed_saturating_binary, emit_narrow_unsigned_saturating_binary,
         ensure_dyn_sp_init, fold_stack_actions, init_dyn_sp, low_bits_mask, scalar_bit_width,
@@ -24,7 +24,7 @@ use super::{
     },
 };
 
-impl EvmFunctionLowering<'_> {
+impl EvmMachineFunctionLowering<'_> {
     pub(crate) fn lower_insn(
         &self,
         ctx: &mut Lower<OpCode>,

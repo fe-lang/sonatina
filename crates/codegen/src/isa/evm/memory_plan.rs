@@ -15,8 +15,6 @@ use crate::{
     stackalloc::StackifyAlloc,
 };
 
-#[cfg(test)]
-use super::canonicalize_alias_value;
 use super::{
     frame_layout::DynamicFrameLayout,
     malloc_plan::MallocEscapeKind,
@@ -581,20 +579,6 @@ impl Default for ArenaCostModel {
     }
 }
 
-#[cfg(test)]
-pub(crate) struct FuncAnalysis {
-    pub(crate) alloc: StackifyAlloc,
-    pub(crate) block_order: Vec<BlockId>,
-    pub(crate) value_aliases: SecondaryMap<ValueId, Option<ValueId>>,
-}
-
-#[cfg(test)]
-impl FuncAnalysis {
-    pub(crate) fn canonicalize_value(&self, value: ValueId) -> ValueId {
-        canonicalize_alias_value(&self.value_aliases, value)
-    }
-}
-
 pub(crate) struct FuncPreAnalysis {
     pub(crate) inst_liveness: InstLiveness,
     pub(crate) block_order: Vec<BlockId>,
@@ -1035,47 +1019,6 @@ impl PlacementLowerBoundState {
     fn apply_swap(&mut self, problem: &PlacementProblem<'_>, add_idx: usize, remove_idx: usize) {
         let _ = (problem, add_idx, remove_idx);
     }
-}
-
-#[cfg(test)]
-pub(crate) fn compute_program_memory_plan(
-    module: &Module,
-    funcs: &[FuncRef],
-    analyses: &FxHashMap<FuncRef, FuncAnalysis>,
-    ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
-    isa: &Evm,
-    cost_model: &ArenaCostModel,
-) -> ProgramMemoryPlan {
-    let alloc_ctx = StaticArenaAllocCtx::new(&module.ctx, isa, ptr_escape);
-    let mut stack_results: Vec<_> = funcs
-        .par_iter()
-        .copied()
-        .map(|func| {
-            let analysis = analyses.get(&func).expect("missing FuncAnalysis");
-            let stack = module.func_store.view(func, |function| {
-                alloc_ctx.compute_func_stack_objects(func, function, analysis)
-            });
-            (func, stack)
-        })
-        .collect();
-    stack_results.sort_unstable_by_key(|(func, _)| func.as_u32());
-
-    let mut stacks: FxHashMap<FuncRef, FuncStackObjects> = FxHashMap::default();
-    for (func, stack) in stack_results {
-        stacks.insert(func, stack);
-    }
-
-    let plan = compute_program_memory_plan_from_stacks(module, funcs, &stacks, cost_model);
-
-    #[cfg(debug_assertions)]
-    {
-        let funcs_set: FxHashSet<FuncRef> = funcs.iter().copied().collect();
-        let call_graph = CallGraph::build_graph_subset(module, &funcs_set);
-        let scc = SccBuilder::new().compute_scc(&call_graph);
-        verify_program_memory_plan(funcs, &stacks, &scc, &plan);
-    }
-
-    plan
 }
 
 pub(crate) fn compute_semantic_program_memory_plan(
@@ -2607,6 +2550,9 @@ fn verify_program_memory_plan(
 
         if !is_recursive {
             for fact in stack.obj_facts.values() {
+                if fact.size_words == 0 {
+                    continue;
+                }
                 if fact.must_stable {
                     let loc = func_plan.obj_loc.get(&fact.id).copied().unwrap_or_else(|| {
                         panic!("missing object location for obj {}", fact.id.as_u32())
@@ -2627,6 +2573,9 @@ fn verify_program_memory_plan(
                 .get(&call.inst)
                 .map(|plan| &plan.mode);
             for &obj in &call.callee_visible_objs {
+                if stack.obj_size_words.get(&obj).copied() == Some(0) {
+                    continue;
+                }
                 let loc =
                     func_plan.obj_loc.get(&obj).copied().unwrap_or_else(|| {
                         panic!("missing object location for obj {}", obj.as_u32())

@@ -11,7 +11,7 @@ object: Contract
 
 functions:
   mem: global_dyn_base=0x20 arena_base=0x20 scratch_peak_words=0 static_chain_peak_words=0
-  entry: ir_blocks=8 ir_insts=19 vcode_ops=48 fixups=3 imm_bytes=12
+  entry: ir_blocks=8 ir_insts=18 vcode_ops=46 fixups=3 imm_bytes=12
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
@@ -34,12 +34,9 @@ evm:
     - stack=[v3]
       pre: [PUSH(1), DUP2]
       and [v3, 1] -> v5
-    // v6.i1 = is_zero v5;
-    - stack=[v5, v3], last_use=[v5]
-      is_zero [v5] -> v6
-    // br v6 block1 block8;
-    - stack=[v6, v3]
-      br [v6] -> [block1, block8]
+    // br v5 block8 block1;
+    - stack=[v5, v3]
+      br [v5] -> [block8, block1]
   block1 P=[] T=[v3]
     inherited from block0: [v3]
     // v7.i256 = add v3 1.i256;
@@ -113,7 +110,7 @@ entry:
     PUSH1 0x1 (1)  // v5.i256 = and v3 v4;
     DUP2
     AND
-    PUSH1 block6  // br v6 block1 block8;
+    PUSH1 block6  // br v5 block8 block1;
     JUMPI
   block1:
     PUSH1 0x1 (1)  // v7.i256 = add v3 v4;

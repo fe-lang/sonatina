@@ -781,7 +781,7 @@ fn stackify_trace_for_fn(
 
     StackifyEdgeSplitter::run(&mut function, &mut cfg);
 
-    let value_aliases = backend.compute_stackify_value_aliases(&function, module_ctx);
+    let value_aliases = backend.compute_high_evm_value_aliases(&function, module_ctx);
 
     let mut liveness = Liveness::new();
     liveness.compute_with_value_normalizer(&function, &cfg, |v| {

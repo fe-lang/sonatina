@@ -1,7 +1,7 @@
 use std::any::TypeId;
 
 use sonatina_ir::{
-    Function, Inst, InstSetExt, Module, Type,
+    Function, Inst, InstSetExt, Module, Type, ValueId,
     inst::{
         arith, cmp, control_flow, data,
         evm::{self, machine_inst_set::EvmMachineInstKind},
@@ -67,19 +67,27 @@ pub(crate) fn verify_machine_function(
                 | EvmMachineInstKind::Sub(_)
                 | EvmMachineInstKind::Shl(_)
                 | EvmMachineInstKind::Shr(_)
-                | EvmMachineInstKind::Sar(_)
-                | EvmMachineInstKind::Not(_)
+                | EvmMachineInstKind::Sar(_) => {
+                    verify_machine_arithmetic_inst(func_ref, function, inst)?
+                }
+                EvmMachineInstKind::Not(_)
                 | EvmMachineInstKind::And(_)
                 | EvmMachineInstKind::Or(_)
-                | EvmMachineInstKind::Xor(_)
-                | EvmMachineInstKind::Lt(_)
+                | EvmMachineInstKind::Xor(_) => {
+                    verify_machine_logic_inst(func_ref, function, inst)?
+                }
+                EvmMachineInstKind::Lt(_)
                 | EvmMachineInstKind::Gt(_)
                 | EvmMachineInstKind::Slt(_)
                 | EvmMachineInstKind::Sgt(_)
                 | EvmMachineInstKind::Eq(_)
-                | EvmMachineInstKind::IsZero(_)
-                | EvmMachineInstKind::Jump(_)
-                | EvmMachineInstKind::Br(_)
+                | EvmMachineInstKind::IsZero(_) => {
+                    verify_machine_bool_inst(func_ref, function, inst)?
+                }
+                EvmMachineInstKind::Br(br) => {
+                    verify_machine_branch_cond(func_ref, function, inst, *br.cond())?
+                }
+                EvmMachineInstKind::Jump(_)
                 | EvmMachineInstKind::Phi(_)
                 | EvmMachineInstKind::BrTable(_)
                 | EvmMachineInstKind::Call(_)
@@ -163,6 +171,133 @@ pub(crate) fn verify_machine_function(
     }
 
     Ok(())
+}
+
+fn verify_machine_arithmetic_inst(
+    func_ref: FuncRef,
+    function: &Function,
+    inst: sonatina_ir::InstId,
+) -> Result<(), String> {
+    let result_ty = function
+        .dfg
+        .inst_results(inst)
+        .first()
+        .copied()
+        .map(|result| function.dfg.value_ty(result));
+    if result_ty != Some(Type::I256) {
+        return Err(format!(
+            "EVM machine word instruction inst{} in func {} must produce i256, found {:?}",
+            inst.as_u32(),
+            func_ref.as_u32(),
+            result_ty
+        ));
+    }
+
+    for operand in function.dfg.inst(inst).collect_values() {
+        if !value_is_machine_word(function, operand) {
+            return Err(format!(
+                "EVM machine word instruction inst{} in func {} has non-word operand v{}.{:?}",
+                inst.as_u32(),
+                func_ref.as_u32(),
+                operand.as_u32(),
+                function.dfg.value_ty(operand)
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn verify_machine_logic_inst(
+    func_ref: FuncRef,
+    function: &Function,
+    inst: sonatina_ir::InstId,
+) -> Result<(), String> {
+    let result_ty = function
+        .dfg
+        .inst_results(inst)
+        .first()
+        .copied()
+        .map(|result| function.dfg.value_ty(result));
+    if matches!(result_ty, Some(Type::I1)) {
+        for operand in function.dfg.inst(inst).collect_values() {
+            if function.dfg.value_ty(operand) != Type::I1 {
+                return Err(format!(
+                    "EVM machine boolean logic instruction inst{} in func {} has non-i1 operand v{}.{:?}",
+                    inst.as_u32(),
+                    func_ref.as_u32(),
+                    operand.as_u32(),
+                    function.dfg.value_ty(operand)
+                ));
+            }
+        }
+        return Ok(());
+    }
+
+    verify_machine_arithmetic_inst(func_ref, function, inst)
+}
+
+fn verify_machine_bool_inst(
+    func_ref: FuncRef,
+    function: &Function,
+    inst: sonatina_ir::InstId,
+) -> Result<(), String> {
+    let result_ty = function
+        .dfg
+        .inst_results(inst)
+        .first()
+        .copied()
+        .map(|result| function.dfg.value_ty(result));
+    if !matches!(result_ty, Some(Type::I1 | Type::I256)) {
+        return Err(format!(
+            "EVM machine boolean instruction inst{} in func {} must produce i1 or i256, found {:?}",
+            inst.as_u32(),
+            func_ref.as_u32(),
+            result_ty
+        ));
+    }
+
+    let operands = function.dfg.inst(inst).collect_values();
+    if operands
+        .iter()
+        .all(|&operand| function.dfg.value_ty(operand) == Type::I1)
+    {
+        return Ok(());
+    }
+
+    for operand in operands {
+        if !value_is_machine_word(function, operand) {
+            return Err(format!(
+                "EVM machine boolean instruction inst{} in func {} has non-word operand v{}.{:?}",
+                inst.as_u32(),
+                func_ref.as_u32(),
+                operand.as_u32(),
+                function.dfg.value_ty(operand)
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn verify_machine_branch_cond(
+    func_ref: FuncRef,
+    function: &Function,
+    inst: sonatina_ir::InstId,
+    cond: ValueId,
+) -> Result<(), String> {
+    let cond_ty = function.dfg.value_ty(cond);
+    if value_is_machine_word(function, cond) {
+        return Ok(());
+    }
+    Err(format!(
+        "EVM machine branch inst{} in func {} condition must be i1 or i256, found v{}.{cond_ty:?}",
+        inst.as_u32(),
+        func_ref.as_u32(),
+        cond.as_u32()
+    ))
+}
+
+fn value_is_machine_word(function: &Function, value: ValueId) -> bool {
+    matches!(function.dfg.value_ty(value), Type::I1 | Type::I256)
 }
 
 fn verify_machine_type(

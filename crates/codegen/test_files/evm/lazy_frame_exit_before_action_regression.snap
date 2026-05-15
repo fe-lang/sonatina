@@ -6,8 +6,8 @@ input_file: test_files/evm/lazy_frame_exit_before_action_regression.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 215 bytes
-  total: 215 bytes
+  section runtime: 213 bytes
+  total: 213 bytes
 
 functions:
   mem: global_dyn_base=0xa0 arena_base=0xa0 scratch_peak_words=0 static_chain_peak_words=0
@@ -19,7 +19,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=21806 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=806
+  case ok: calldata_len=0 success reason=Return gas_used=21797 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=797
 
 
 --------------- DEBUG ---------------
@@ -69,11 +69,10 @@ f:
     POP
     PUSH1 0x80 (128)
     MSTORE
-    PUSH1 0x80 (128)
-    MLOAD
     PUSH1 0x40 (64)  // v5.i256 = sub v3 v4;
-    SWAP1
-    SUB
+    PUSH1 0x80 (128)  // v3.i256 = evm_mload v2;
+    MLOAD
+    SUB  // v5.i256 = sub v3 v4;
     PUSH1 0x1 (1)  // evm_mstore v5 1.i256;
     DUP2
     MSTORE
@@ -135,11 +134,10 @@ g:
     POP
     PUSH1 0x80 (128)
     MSTORE
-    PUSH1 0x80 (128)
-    MLOAD
     PUSH1 0x40 (64)  // v5.i256 = sub v3 v4;
-    SWAP1
-    SUB
+    PUSH1 0x80 (128)  // v3.i256 = evm_mload v2;
+    MLOAD
+    SUB  // v5.i256 = sub v3 v4;
     PUSH1 0x7 (7)  // evm_mstore v5 v6;
     DUP2
     MSTORE

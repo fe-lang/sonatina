@@ -1,3 +1,4 @@
+pub(crate) mod branch;
 pub(crate) mod final_spills;
 pub(crate) mod free_ptr_floor;
 pub(crate) mod lazy_frame;

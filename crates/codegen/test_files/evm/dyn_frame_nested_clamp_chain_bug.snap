@@ -6,8 +6,8 @@ input_file: test_files/evm/dyn_frame_nested_clamp_chain_bug.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 140 bytes
-  total: 140 bytes
+  section runtime: 139 bytes
+  total: 139 bytes
 
 functions:
   mem: global_dyn_base=0xa0 arena_base=0xa0 scratch_peak_words=0 static_chain_peak_words=0
@@ -17,7 +17,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=21748 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=748
+  case ok: calldata_len=0 success reason=Return gas_used=21739 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=739
 
 
 --------------- DEBUG ---------------
@@ -58,11 +58,10 @@ f:
     POP
     PUSH1 0x80 (128)
     MSTORE
+    PUSH1 0x40 (64)  // v4.i256 = sub v2 v3;
     PUSH1 0x80 (128)  // v2.i256 = evm_mload v1;
     MLOAD
-    PUSH1 0x40 (64)  // v4.i256 = sub v2 v3;
-    SWAP1
-    SUB
+    SUB  // v4.i256 = sub v2 v3;
     DUP2  // evm_mstore v4 v0;
     DUP2
     MSTORE

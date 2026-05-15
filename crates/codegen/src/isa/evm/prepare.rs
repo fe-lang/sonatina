@@ -518,7 +518,11 @@ fn prepare_machine_section_after_pipeline(
         );
 
         let machine = lower_section_to_machine(&work, &funcs, &placement, backend)?;
-        run_machine_opt_pipeline(machine.work.module(), &funcs)?;
+        run_machine_opt_pipeline(
+            machine.work.module(),
+            &funcs,
+            backend.late_cleanup_profile == LateCleanupProfile::Size,
+        )?;
 
         let machine_isa = EvmMachine::new(machine.work.module().ctx.triple);
         let machine_analyses = prepare_machine_stackify_analyses(
@@ -598,6 +602,7 @@ fn prepare_machine_section_after_pipeline(
                             function,
                             &block_aliases,
                             emitted_block_order,
+                            backend.late_cleanup_profile == LateCleanupProfile::Speed,
                         )
                     })
                 } else {
@@ -838,7 +843,7 @@ fn prepare_high_evm_pre_analysis(
 
     let value_aliases = {
         let _span = trace_span!("sonatina.codegen.evm.pre_analysis.canonicalize_aliases").entered();
-        backend.compute_stackify_value_aliases(function, module)
+        backend.compute_high_evm_value_aliases(function, module)
     };
 
     memory_plan::FuncPreAnalysis {

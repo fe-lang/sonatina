@@ -1,23 +1,23 @@
 use super::*;
 use crate::{
     analysis::func_behavior,
+    critical_edge::CriticalEdgeSplitter,
     domtree::DomTree,
-    liveness::Liveness,
+    liveness::{InstLiveness, Liveness},
     machinst::{
         lower::{LoweredFunction, SectionWorkModule},
         vcode::{Label, VCode, VCodeFixup},
     },
     object::{CompileOptions, SymbolId, link::link_section},
     optim::pipeline::Pipeline,
-    stackalloc::{Action, Actions, Allocator, StackifyBuilder},
-    stackify_edge::StackifyEdgeSplitter,
+    stackalloc::{Action, Actions, Allocator, StackifyAlloc, StackifyBuilder},
 };
-use cranelift_entity::SecondaryMap;
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{
-    BlockId, Immediate, InstId, InstSetBase, InstSetExt, Module, ValueId, cfg::ControlFlowGraph,
-    inst::evm::inst_set::EvmInstKind, ir_writer::FuncWriter, isa::Isa, object::SectionName,
+    BlockId, Function, Immediate, InstId, InstSetBase, InstSetExt, Module, ValueId,
+    cfg::ControlFlowGraph, inst::evm::inst_set::EvmInstKind, ir_writer::FuncWriter, isa::Isa,
+    module::ModuleCtx, object::SectionName,
 };
 use sonatina_parser::parse_module;
 use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
@@ -30,7 +30,7 @@ use self::{
     },
     memory_plan::{
         ArenaCostModel, ProgramMemoryPlan, compute_abs_clobber_words_with_extra,
-        compute_program_memory_plan,
+        compute_semantic_program_memory_plan,
     },
     prepare::compute_return_escape_caller_clamp_words,
 };
@@ -51,39 +51,19 @@ fn plan_test_ctx_from_src(src: &str) -> PlanTestCtx {
         operating_system: OperatingSystem::Evm(EvmVersion::Osaka),
     });
     let ptr_escape = compute_ptr_escape_summaries(&parsed.module, &funcs, &isa);
+    let backend = EvmBackend::new(isa);
 
-    let mut analyses: FxHashMap<FuncRef, memory_plan::FuncAnalysis> = FxHashMap::default();
+    let mut analyses: FxHashMap<FuncRef, memory_plan::FuncPreAnalysis> = FxHashMap::default();
     for &func in &funcs {
         parsed.module.func_store.modify(func, |function| {
-            let mut cfg = ControlFlowGraph::default();
-            cfg.compute(function);
-
-            StackifyEdgeSplitter::run(function, &mut cfg);
-
-            let mut liveness = Liveness::new();
-            liveness.compute(function, &cfg);
-
-            let mut dom = DomTree::new();
-            dom.compute(&cfg);
-
             analyses.insert(
                 func,
-                memory_plan::FuncAnalysis {
-                    alloc: StackifyBuilder::new(function, &cfg, &dom, &liveness, 16).compute(),
-                    block_order: dom.rpo().to_vec(),
-                    value_aliases: {
-                        let mut value_aliases = SecondaryMap::new();
-                        for value in function.dfg.value_ids() {
-                            value_aliases[value] = Some(value);
-                        }
-                        value_aliases
-                    },
-                },
+                compute_test_pre_analysis(function, &parsed.module.ctx, &backend),
             );
         });
     }
 
-    let plan = compute_program_memory_plan(
+    let plan = compute_semantic_program_memory_plan(
         &parsed.module,
         &funcs,
         &analyses,
@@ -107,6 +87,47 @@ fn plan_test_ctx_from_src(src: &str) -> PlanTestCtx {
         names,
         plan,
     }
+}
+
+fn compute_test_pre_analysis(
+    function: &mut Function,
+    module: &ModuleCtx,
+    backend: &EvmBackend,
+) -> memory_plan::FuncPreAnalysis {
+    let mut cfg = ControlFlowGraph::new();
+    cfg.compute(function);
+
+    CriticalEdgeSplitter::new().run(function, &mut cfg);
+
+    let mut dom = DomTree::new();
+    dom.compute(&cfg);
+
+    let mut liveness = Liveness::new();
+    liveness.compute(function, &cfg);
+
+    let mut inst_liveness = InstLiveness::new();
+    inst_liveness.compute(function, &cfg, &liveness);
+
+    memory_plan::FuncPreAnalysis {
+        inst_liveness,
+        block_order: dom.rpo().to_owned(),
+        value_aliases: backend.compute_high_evm_value_aliases(function, module),
+    }
+}
+
+fn compute_test_stackify_alloc(function: &mut Function) -> StackifyAlloc {
+    let mut cfg = ControlFlowGraph::new();
+    cfg.compute(function);
+
+    CriticalEdgeSplitter::new().run(function, &mut cfg);
+
+    let mut liveness = Liveness::new();
+    liveness.compute(function, &cfg);
+
+    let mut dom = DomTree::new();
+    dom.compute(&cfg);
+
+    StackifyBuilder::new(function, &cfg, &dom, &liveness, 16).compute()
 }
 
 fn find_func(module: &Module, name: &str) -> FuncRef {
@@ -168,15 +189,29 @@ fn rewrite_local_fallthrough_order_from_src(
     func_name: &str,
     block_order: &[u32],
 ) -> Vec<u32> {
+    rewrite_local_fallthrough_order_from_src_with_profile(src, func_name, block_order, true)
+}
+
+fn rewrite_local_fallthrough_order_from_src_with_profile(
+    src: &str,
+    func_name: &str,
+    block_order: &[u32],
+    prefer_speed: bool,
+) -> Vec<u32> {
     let parsed = parse_module(src).expect("module parses");
     let func = find_func(&parsed.module, func_name);
     let block_order: Vec<_> = block_order.iter().copied().map(BlockId).collect();
 
     parsed.module.func_store.view(func, |function| {
-        rewrite_evm_local_fallthrough_layout(function, &FxHashMap::default(), block_order)
-            .into_iter()
-            .map(|block| block.0)
-            .collect()
+        rewrite_evm_local_fallthrough_layout(
+            function,
+            &FxHashMap::default(),
+            block_order,
+            prefer_speed,
+        )
+        .into_iter()
+        .map(|block| block.0)
+        .collect()
     })
 }
 
@@ -219,6 +254,35 @@ block4:
 
 block1:
     return v1;
+}
+"#;
+
+const HOT_LOOP_LT_MULTI_BLOCK_BODY_SRC: &str = r#"
+target = "evm-ethereum-osaka"
+
+func public %main(v0.i1, v1.i256) -> i256 {
+block0:
+    jump block3;
+
+block3:
+    v2.i256 = phi (0.i256 block0) (v5 block7);
+    v3.i1 = lt v2 v1;
+    br v3 block4 block5;
+
+block4:
+    br v0 block6 block7;
+
+block6:
+    v4.i256 = add v2 2.i256;
+    jump block7;
+
+block7:
+    v5.i256 = phi (v2 block4) (v4 block6);
+    v6.i256 = add v5 1.i256;
+    jump block3;
+
+block5:
+    return v2;
 }
 "#;
 
@@ -334,6 +398,27 @@ block2:
 }
 "#;
 
+const NON_LOOP_DIAMOND_SRC: &str = r#"
+target = "evm-ethereum-osaka"
+
+func public %main(v0.i1, v1.i256) -> i256 {
+block0:
+    br v0 block1 block2;
+
+block1:
+    v2.i256 = add v1 1.i256;
+    jump block3;
+
+block2:
+    v3.i256 = add v1 2.i256;
+    jump block3;
+
+block3:
+    v4.i256 = phi (v2 block1) (v3 block2);
+    return v4;
+}
+"#;
+
 #[test]
 fn local_fallthrough_layout_rewrites_hot_loop_header_window() {
     let order =
@@ -357,6 +442,17 @@ fn local_fallthrough_layout_rewrites_lt_loop_body_fallthrough() {
 }
 
 #[test]
+fn local_fallthrough_layout_rewrites_lt_multi_block_loop_body() {
+    let order = rewrite_local_fallthrough_order_from_src(
+        HOT_LOOP_LT_MULTI_BLOCK_BODY_SRC,
+        "main",
+        &[0, 3, 4, 6, 7, 5],
+    );
+
+    assert_eq!(order, vec![0, 3, 5, 4, 6, 7]);
+}
+
+#[test]
 fn local_fallthrough_layout_skips_multi_pred_bodies() {
     let order = rewrite_local_fallthrough_order_from_src(
         HOT_LOOP_MULTI_PRED_BODY_SRC,
@@ -376,14 +472,14 @@ fn local_fallthrough_layout_skips_non_backedge_body_blocks() {
 }
 
 #[test]
-fn local_fallthrough_layout_skips_nonterminal_exits() {
+fn local_fallthrough_layout_rewrites_nonterminal_loop_exits() {
     let order = rewrite_local_fallthrough_order_from_src(
         HOT_LOOP_NONTERMINAL_EXIT_SRC,
         "main",
         &[0, 3, 1, 4, 2],
     );
 
-    assert_eq!(order, vec![0, 3, 1, 4, 2]);
+    assert_eq!(order, vec![0, 3, 4, 1, 2]);
 }
 
 #[test]
@@ -410,6 +506,26 @@ fn local_fallthrough_layout_skips_non_loop_branches() {
     let order = rewrite_local_fallthrough_order_from_src(NON_LOOP_BRANCH_SRC, "main", &[0, 1, 2]);
 
     assert_eq!(order, vec![0, 1, 2]);
+}
+
+#[test]
+fn local_fallthrough_layout_rewrites_non_loop_diamond() {
+    let order = rewrite_local_fallthrough_order_from_src_with_profile(
+        NON_LOOP_DIAMOND_SRC,
+        "main",
+        &[0, 1, 2, 3],
+        false,
+    );
+
+    assert_eq!(order, vec![0, 2, 1, 3]);
+}
+
+#[test]
+fn local_fallthrough_layout_skips_non_loop_diamond_for_speed() {
+    let order =
+        rewrite_local_fallthrough_order_from_src(NON_LOOP_DIAMOND_SRC, "main", &[0, 1, 2, 3]);
+
+    assert_eq!(order, vec![0, 1, 2, 3]);
 }
 
 #[test]
@@ -884,13 +1000,8 @@ block0:
         &ctx.plan,
         &FxHashMap::default(),
     );
-    let main_active_words = ctx.plan.funcs[&main].active_abs_words();
     let main_clobber_words = abs_clobber_words[&main];
 
-    assert!(
-        main_clobber_words > main_active_words,
-        "test setup requires a caller whose future callee clobber exceeds its own active frame"
-    );
     assert_eq!(clamp_words[&mk], main_clobber_words);
 
     let extra_main_clobber_words = main_clobber_words
@@ -948,34 +1059,16 @@ block0:
     }
     let caller = names["caller"];
 
-    let mut analyses: FxHashMap<FuncRef, memory_plan::FuncAnalysis> = FxHashMap::default();
+    let backend = EvmBackend::new(isa);
+    let mut pre_analyses: FxHashMap<FuncRef, memory_plan::FuncPreAnalysis> = FxHashMap::default();
+    let mut stack_allocs: FxHashMap<FuncRef, StackifyAlloc> = FxHashMap::default();
     for &func in &funcs {
         parsed.module.func_store.modify(func, |function| {
-            let mut cfg = ControlFlowGraph::new();
-            cfg.compute(function);
-
-            StackifyEdgeSplitter::run(function, &mut cfg);
-
-            let mut liveness = Liveness::new();
-            liveness.compute(function, &cfg);
-
-            let mut dom = DomTree::new();
-            dom.compute(&cfg);
-
-            analyses.insert(
+            pre_analyses.insert(
                 func,
-                memory_plan::FuncAnalysis {
-                    alloc: StackifyBuilder::new(function, &cfg, &dom, &liveness, 16).compute(),
-                    block_order: dom.rpo().to_vec(),
-                    value_aliases: {
-                        let mut value_aliases = SecondaryMap::new();
-                        for value in function.dfg.value_ids() {
-                            value_aliases[value] = Some(value);
-                        }
-                        value_aliases
-                    },
-                },
+                compute_test_pre_analysis(function, &parsed.module.ctx, &backend),
             );
+            stack_allocs.insert(func, compute_test_stackify_alloc(function));
         });
     }
 
@@ -993,10 +1086,9 @@ block0:
             .expect("missing call inst")
     });
 
-    let actions = analyses
+    let actions = stack_allocs
         .get(&caller)
         .expect("missing caller analysis")
-        .alloc
         .read(call_inst, &call_args);
     assert!(
         !actions
@@ -1005,10 +1097,10 @@ block0:
         "noreturn call should not materialize a local continuation: {actions:?}"
     );
 
-    let plan = compute_program_memory_plan(
+    let plan = compute_semantic_program_memory_plan(
         &parsed.module,
         &funcs,
-        &analyses,
+        &pre_analyses,
         &ptr_escape,
         &isa,
         &ArenaCostModel::default(),
@@ -2075,37 +2167,16 @@ block0:
     });
     let ptr_escape = compute_ptr_escape_summaries(&parsed.module, &funcs, &isa);
 
-    let mut analyses: FxHashMap<FuncRef, memory_plan::FuncAnalysis> = FxHashMap::default();
+    let backend = EvmBackend::new(isa);
+    let mut pre_analyses: FxHashMap<FuncRef, memory_plan::FuncPreAnalysis> = FxHashMap::default();
+    let mut stack_allocs: FxHashMap<FuncRef, StackifyAlloc> = FxHashMap::default();
     for &func in &funcs {
         parsed.module.func_store.modify(func, |function| {
-            let mut cfg = ControlFlowGraph::new();
-            cfg.compute(function);
-
-            StackifyEdgeSplitter::run(function, &mut cfg);
-
-            let mut liveness = Liveness::new();
-            liveness.compute(function, &cfg);
-
-            let mut dom = DomTree::new();
-            dom.compute(&cfg);
-
-            let block_order = dom.rpo().to_owned();
-            let alloc = StackifyBuilder::new(function, &cfg, &dom, &liveness, 16).compute();
-
-            analyses.insert(
+            pre_analyses.insert(
                 func,
-                memory_plan::FuncAnalysis {
-                    alloc,
-                    block_order,
-                    value_aliases: {
-                        let mut value_aliases = SecondaryMap::new();
-                        for value in function.dfg.value_ids() {
-                            value_aliases[value] = Some(value);
-                        }
-                        value_aliases
-                    },
-                },
+                compute_test_pre_analysis(function, &parsed.module.ctx, &backend),
             );
+            stack_allocs.insert(func, compute_test_stackify_alloc(function));
         });
     }
 
@@ -2114,10 +2185,10 @@ block0:
         w_code: 0,
         ..ArenaCostModel::default()
     };
-    let plan = compute_program_memory_plan(
+    let plan = compute_semantic_program_memory_plan(
         &parsed.module,
         &funcs,
-        &analyses,
+        &pre_analyses,
         &ptr_escape,
         &isa,
         &cost_model,
@@ -2145,13 +2216,15 @@ block0:
 
     assert_eq!(call_args.len(), 2, "test expects a 2-arg call");
 
-    let analysis = analyses.remove(&caller).expect("missing caller analysis");
+    let stack_alloc = stack_allocs
+        .remove(&caller)
+        .expect("missing caller analysis");
     let mem_plan = plan
         .funcs
         .get(&caller)
         .expect("missing caller plan")
         .clone();
-    let alloc = FinalAlloc::new(analysis.alloc, mem_plan);
+    let alloc = FinalAlloc::new(stack_alloc, mem_plan);
 
     let save_plan = alloc
         .mem_plan
@@ -2236,37 +2309,16 @@ block2:
     });
     let ptr_escape = compute_ptr_escape_summaries(&parsed.module, &funcs, &isa);
 
-    let mut analyses: FxHashMap<FuncRef, memory_plan::FuncAnalysis> = FxHashMap::default();
+    let backend = EvmBackend::new(isa);
+    let mut pre_analyses: FxHashMap<FuncRef, memory_plan::FuncPreAnalysis> = FxHashMap::default();
+    let mut stack_allocs: FxHashMap<FuncRef, StackifyAlloc> = FxHashMap::default();
     for &func in &funcs {
         parsed.module.func_store.modify(func, |function| {
-            let mut cfg = ControlFlowGraph::new();
-            cfg.compute(function);
-
-            StackifyEdgeSplitter::run(function, &mut cfg);
-
-            let mut liveness = Liveness::new();
-            liveness.compute(function, &cfg);
-
-            let mut dom = DomTree::new();
-            dom.compute(&cfg);
-
-            let block_order = dom.rpo().to_owned();
-            let alloc = StackifyBuilder::new(function, &cfg, &dom, &liveness, 16).compute();
-
-            analyses.insert(
+            pre_analyses.insert(
                 func,
-                memory_plan::FuncAnalysis {
-                    alloc,
-                    block_order,
-                    value_aliases: {
-                        let mut value_aliases = SecondaryMap::new();
-                        for value in function.dfg.value_ids() {
-                            value_aliases[value] = Some(value);
-                        }
-                        value_aliases
-                    },
-                },
+                compute_test_pre_analysis(function, &parsed.module.ctx, &backend),
             );
+            stack_allocs.insert(func, compute_test_stackify_alloc(function));
         });
     }
 
@@ -2275,10 +2327,10 @@ block2:
         w_code: 0,
         ..ArenaCostModel::default()
     };
-    let plan = compute_program_memory_plan(
+    let plan = compute_semantic_program_memory_plan(
         &parsed.module,
         &funcs,
-        &analyses,
+        &pre_analyses,
         &ptr_escape,
         &isa,
         &cost_model,
@@ -2307,13 +2359,15 @@ block2:
             panic!("missing call inst");
         });
 
-    let analysis = analyses.remove(&caller).expect("missing caller analysis");
+    let stack_alloc = stack_allocs
+        .remove(&caller)
+        .expect("missing caller analysis");
     let mem_plan = plan
         .funcs
         .get(&caller)
         .expect("missing caller plan")
         .clone();
-    let alloc = FinalAlloc::new(analysis.alloc, mem_plan);
+    let alloc = FinalAlloc::new(stack_alloc, mem_plan);
 
     let save_plan = alloc
         .mem_plan

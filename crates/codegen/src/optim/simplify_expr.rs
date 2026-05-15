@@ -3,8 +3,9 @@ use sonatina_ir::{
     inst::{BinaryInstKind, CastInstKind, InstClassKind, UnaryInstKind, cast, downcast},
 };
 
-use crate::analysis::known_bits::{
-    KnownBits, has_conflicting_known_bits, supports_known_bits, type_mask,
+use crate::{
+    analysis::known_bits::{KnownBits, has_conflicting_known_bits, supports_known_bits, type_mask},
+    range_analysis::RangeFact,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -23,6 +24,9 @@ impl SimplifyExprResult {
 pub(crate) trait ExprFactProvider {
     fn known_imm(&self, v: ValueId) -> Option<Immediate>;
     fn known_bits(&self, func: &Function, v: ValueId) -> KnownBits;
+    fn range(&self, _v: ValueId) -> Option<RangeFact> {
+        None
+    }
     fn same_non_undef(&self, lhs: ValueId, rhs: ValueId) -> bool;
     fn may_be_undef(&self, v: ValueId) -> bool;
 }
@@ -733,6 +737,7 @@ fn simplify_and_copy_with_facts(
         facts,
         KnownBits::all_zero_in,
     )
+    .or_else(|| simplify_low_mask_copy_with_range(func, value, keep_mask, facts))
 }
 
 fn simplify_or_copy_with_facts(
@@ -793,6 +798,26 @@ fn simplify_mask_copy_with_facts(
     }
 
     keeps_mask(facts.known_bits(func, value), proved_mask).then_some(value)
+}
+
+fn simplify_low_mask_copy_with_range(
+    func: &Function,
+    value: ValueId,
+    keep_mask: U256,
+    facts: &impl ExprFactProvider,
+) -> Option<ValueId> {
+    let ty = func.dfg.value_ty(value);
+    if !ty.is_integral() || !is_low_ones_mask(keep_mask, ty) {
+        return None;
+    }
+
+    let range = facts.range(value)?;
+    (range.unsigned.hi <= keep_mask).then_some(value)
+}
+
+fn is_low_ones_mask(mask: U256, ty: Type) -> bool {
+    let type_mask = type_mask(ty);
+    mask == type_mask || mask & (mask + U256::one()) == U256::zero()
 }
 
 #[cfg(test)]

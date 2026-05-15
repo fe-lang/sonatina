@@ -181,7 +181,7 @@ block3:
             dom.compute(&cfg);
 
             let value_aliases =
-                backend.compute_stackify_value_aliases(function, &parsed.module.ctx);
+                backend.compute_high_evm_value_aliases(function, &parsed.module.ctx);
 
             let mut liveness = Liveness::new();
             liveness.compute_with_value_normalizer(function, &cfg, |v| {

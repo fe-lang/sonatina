@@ -17,7 +17,7 @@ use crate::{
 };
 
 use super::{
-    emit::{EvmFunctionLowering, push_op},
+    emit::{EvmMachineFunctionLowering, push_op},
     late_alias::compute_evm_late_aliases,
     late_section_merge::run_late_section_terminal_outline,
     memory_plan::{ArenaCostModel, ObjLoc, PreserveMode, StableMode, WORD_BYTES},
@@ -118,7 +118,7 @@ impl EvmBackend {
         self.stackify_reach_depth
     }
 
-    pub fn compute_stackify_value_aliases(
+    pub fn compute_high_evm_value_aliases(
         &self,
         function: &Function,
         module: &ModuleCtx,
@@ -343,8 +343,8 @@ impl EvmBackend {
         let function_plan = prepared
             .function_plan(func)
             .ok_or_else(|| format!("missing prepared lowering for func {}", func.as_u32()))?;
-        EvmFunctionLowering::new(self, prepared.section_plan(), function_plan)
-            .lower_prepared_function(prepared.module(), func)
+        EvmMachineFunctionLowering::new(self, prepared.section_plan(), function_plan)
+            .lower_prepared_machine_function(prepared.module(), func)
     }
 
     pub fn post_lower_section(

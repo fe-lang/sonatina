@@ -20,8 +20,6 @@ use sonatina_ir::{
     module::{FuncRef, ModuleCtx},
 };
 
-#[cfg(test)]
-use super::memory_plan::FuncAnalysis;
 use super::{
     escape_scan::{EscapeScanCtx, EscapeSink, EscapeSource, for_each_escape_event_at_inst},
     memory_plan::{FuncPreAnalysis, WORD_BYTES},
@@ -43,6 +41,20 @@ pub(crate) use object_liveness::LiveRegion;
 use object_liveness::{
     AllocaClosureCtx, ComputeCtx as ObjectLivenessCtx, compute_regions_and_calls,
 };
+
+#[cfg(test)]
+pub(crate) struct FuncAnalysis {
+    pub(crate) alloc: StackifyAlloc,
+    pub(crate) block_order: Vec<BlockId>,
+    pub(crate) value_aliases: SecondaryMap<ValueId, Option<ValueId>>,
+}
+
+#[cfg(test)]
+impl FuncAnalysis {
+    pub(crate) fn canonicalize_value(&self, value: ValueId) -> ValueId {
+        super::canonicalize_alias_value(&self.value_aliases, value)
+    }
+}
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
 pub struct StackObjId(u32);
@@ -797,7 +809,7 @@ mod tests {
             dom.compute(&cfg);
 
             let value_aliases =
-                backend.compute_stackify_value_aliases(function, &parsed.module.ctx);
+                backend.compute_high_evm_value_aliases(function, &parsed.module.ctx);
 
             let mut stack_liveness = Liveness::new();
             stack_liveness.compute_with_value_normalizer(function, &cfg, |value| {

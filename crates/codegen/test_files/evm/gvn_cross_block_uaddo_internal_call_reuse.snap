@@ -6,16 +6,16 @@ input_file: test_files/evm/gvn_cross_block_uaddo_internal_call_reuse.sntn
 evm.config: stack_reach=4 vcode=true bytecode_hex=false stackify_trace=true evm_trace=false emit_observability=false opt=s
 
 object: Contract
-  section runtime: 98 bytes
-  total: 98 bytes
+  section runtime: 97 bytes
+  total: 97 bytes
 
 functions:
   mem: global_dyn_base=0x20 arena_base=0x20 scratch_peak_words=0 static_chain_peak_words=0
-  entry: ir_blocks=14 ir_insts=30 vcode_ops=74 fixups=7 imm_bytes=17
+  entry: ir_blocks=14 ir_insts=30 vcode_ops=73 fixups=7 imm_bytes=17
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=32 success reason=Return gas_used=21329 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=189
+  case ok: calldata_len=32 success reason=Return gas_used=21316 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=176
 
 
 --------------- DEBUG ---------------
@@ -185,24 +185,23 @@ entry:
   block5:
     PUSH1 0x5 (5)  // v13.i1 = eq v8 v12;
     EQ
-    ISZERO  // br v13 block6 block7;
-    PUSH1 block7
+    PUSH1 block6  // br v13 block6 block7;
     JUMPI
-  block6:
-    PUSH1 0x1 (1)  // evm_mstore v3 v7;
-    PUSH1 0x20 (32)
-    MSTORE
-    PUSH1 0x2a (42)  // evm_mstore 64.i256 42.i256;
-    PUSH1 0x40 (64)
-    MSTORE
-    PUSH1 block8  // jump block8;
-    JUMP
   block7:
-    JUMPDEST
     PUSH0  // evm_mstore v3 v5;
     PUSH1 0x20 (32)
     MSTORE
     PUSH0  // evm_mstore 64.i256 v5;
+    PUSH1 0x40 (64)
+    MSTORE
+    PUSH1 block8  // jump block8;
+    JUMP
+  block6:
+    JUMPDEST
+    PUSH1 0x1 (1)  // evm_mstore v3 v7;
+    PUSH1 0x20 (32)
+    MSTORE
+    PUSH1 0x2a (42)  // evm_mstore 64.i256 42.i256;
     PUSH1 0x40 (64)
     MSTORE
   block8:

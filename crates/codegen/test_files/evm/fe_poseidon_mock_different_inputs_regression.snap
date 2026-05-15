@@ -6,8 +6,8 @@ input_file: test_files/evm/fe_poseidon_mock_different_inputs_regression.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 2023 bytes
-  total: 2023 bytes
+  section runtime: 2025 bytes
+  total: 2025 bytes
 
 functions:
   mem: global_dyn_base=0x160 arena_base=0xa0 scratch_peak_words=0 static_chain_peak_words=6
@@ -17,13 +17,13 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=6 abs_words_end=0
   mix: ir_blocks=13 ir_insts=47 vcode_ops=102 fixups=10 imm_bytes=22
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=6 abs_words_end=0
-  poseidon_mock: ir_blocks=15 ir_insts=50 vcode_ops=149 fixups=19 imm_bytes=25
+  poseidon_mock: ir_blocks=15 ir_insts=50 vcode_ops=150 fixups=20 imm_bytes=25
     mem: scratch_words=0 stable_words=6 stable_mode=StaticAbs(base=0xa0) entry_abs_words=0 abs_words_end=6
   entry: ir_blocks=3 ir_insts=7 vcode_ops=28 fixups=5 imm_bytes=6
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=46893 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=25893
+  case ok: calldata_len=0 success reason=Return gas_used=46885 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=25885
 
 
 --------------- DEBUG ---------------
@@ -397,10 +397,23 @@ poseidon_mock:
     PUSH1 0x2 (2)  // v52.i1 = lt v63 v51;
     DUP4
     LT
-    ISZERO  // br v52 block2 block16;
-    PUSH1 block16
+    PUSH1 block2  // br v52 block2 block16;
     JUMPI
+  block16:
+    PUSH0  // jump block5;
+    SWAP3
+    POP
+  block5:
+    JUMPDEST
+    PUSH1 0x2 (2)  // v13.i1 = lt v24 v51;
+    DUP4
+    LT
+    PUSH1 block6  // br v13 block6 block8;
+    JUMPI
+    PUSH1 block8
+    JUMP
   block2:
+    JUMPDEST
     DUP1  // call %ark v53 v4 v3;
     PUSH1 0xa0 (160)
     SWAP2
@@ -439,20 +452,8 @@ poseidon_mock:
     SWAP1
     PUSH1 block1
     JUMP
-  block16:
-    JUMPDEST
-    PUSH0  // jump block5;
-    SWAP3
-    POP
-  block5:
-    JUMPDEST
-    PUSH1 0x2 (2)  // v13.i1 = lt v24 v51;
-    DUP4
-    LT
-    ISZERO  // br v13 block6 block8;
-    PUSH1 block8
-    JUMPI
   block6:
+    JUMPDEST
     DUP1  // call %ark v53 v22 v60;
     PUSH1 0xa0 (160)
     SWAP2

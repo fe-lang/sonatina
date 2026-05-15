@@ -3,7 +3,7 @@ use tracing::debug_span;
 
 use crate::optim::pipeline::{FuncPassOverrides, Pass, run_function_pass_round};
 
-use super::verify::verify_machine_module;
+use super::{branch::canonicalize_machine_branch_conditions, verify::verify_machine_module};
 
 const MACHINE_PASSES: &[Pass] = &[
     Pass::CfgCleanup,
@@ -15,7 +15,11 @@ const MACHINE_PASSES: &[Pass] = &[
     Pass::CfgCleanup,
 ];
 
-pub(crate) fn run_machine_opt_pipeline(module: &Module, funcs: &[FuncRef]) -> Result<(), String> {
+pub(crate) fn run_machine_opt_pipeline(
+    module: &Module,
+    funcs: &[FuncRef],
+    canonicalize_word_branches: bool,
+) -> Result<(), String> {
     let _span = debug_span!(
         "sonatina.codegen.evm.machine.pipeline",
         funcs = funcs.len(),
@@ -33,5 +37,12 @@ pub(crate) fn run_machine_opt_pipeline(module: &Module, funcs: &[FuncRef]) -> Re
             object_effects: None,
         },
     );
+    if canonicalize_word_branches {
+        for &func in funcs {
+            module
+                .func_store
+                .modify(func, canonicalize_machine_branch_conditions);
+        }
+    }
     verify_machine_module(module, funcs)
 }

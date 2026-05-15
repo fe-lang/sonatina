@@ -18,7 +18,6 @@ use tracing::trace_span;
 use crate::{
     machinst::lower::{Lower, LoweredFunction},
     stackalloc::{Action, Allocator},
-    transform::aggregate::assert_aggregate_legalized,
 };
 use sonatina_ir::{BlockId, Function, Module, module::FuncRef};
 
@@ -27,17 +26,20 @@ use super::{
     DynSpInitKind, DynamicFrameLayout, EvmBackend, EvmFunctionPlan, EvmSectionPlan,
     LateCleanupProfile,
     late_block_merge::run_late_block_merge,
-    machine::lazy_frame::{FrameSite, LazyFramePlan},
+    machine::{
+        lazy_frame::{FrameSite, LazyFramePlan},
+        verify::verify_machine_function,
+    },
     opcode::OpCode,
 };
 
-pub(crate) struct EvmFunctionLowering<'a> {
+pub(crate) struct EvmMachineFunctionLowering<'a> {
     backend: &'a EvmBackend,
     section_plan: &'a EvmSectionPlan,
     function_plan: &'a EvmFunctionPlan,
 }
 
-impl<'a> EvmFunctionLowering<'a> {
+impl<'a> EvmMachineFunctionLowering<'a> {
     pub(crate) fn new(
         backend: &'a EvmBackend,
         section_plan: &'a EvmSectionPlan,
@@ -183,23 +185,24 @@ impl<'a> EvmFunctionLowering<'a> {
         }
     }
 
-    pub(crate) fn lower_prepared_function(
+    pub(crate) fn lower_prepared_machine_function(
         &self,
         module: &Module,
         func: FuncRef,
     ) -> Result<LoweredFunction<OpCode>, String> {
         let mut emitted_block_order = self.function_plan.emitted_block_order.clone();
         let _span = trace_span!(
-            "sonatina.codegen.evm.lower_prepared_function",
+            "sonatina.codegen.evm.lower_prepared_machine_function",
             func_ref = func.as_u32(),
             blocks = emitted_block_order.len()
         )
         .entered();
-        module.func_store.view(func, |function| {
-            assert_aggregate_legalized(function, &module.ctx);
-        });
+        module
+            .func_store
+            .view(func, |function| verify_machine_function(func, function))?;
         let mut vcode = {
-            let _span = trace_span!("sonatina.codegen.evm.lower_prepared_function.lower").entered();
+            let _span =
+                trace_span!("sonatina.codegen.evm.lower_prepared_machine_function.lower").entered();
             module.func_store.view(func, |function| {
                 let mut alloc = FinalAlloc::new(
                     self.function_plan.alloc.clone(),
@@ -217,15 +220,17 @@ impl<'a> EvmFunctionLowering<'a> {
             })?
         };
         {
-            let _span =
-                trace_span!("sonatina.codegen.evm.lower_prepared_function.prune_redundant_opcodes")
-                    .entered();
+            let _span = trace_span!(
+                "sonatina.codegen.evm.lower_prepared_machine_function.prune_redundant_opcodes"
+            )
+            .entered();
             prune_redundant_opcode_sequences(&mut vcode, &emitted_block_order);
         }
         if self.backend.late_cleanup_profile != LateCleanupProfile::Off {
-            let _span =
-                trace_span!("sonatina.codegen.evm.lower_prepared_function.late_block_merge")
-                    .entered();
+            let _span = trace_span!(
+                "sonatina.codegen.evm.lower_prepared_machine_function.late_block_merge"
+            )
+            .entered();
             module.func_store.view(func, |function| {
                 run_late_block_merge(
                     &mut vcode,
@@ -240,9 +245,10 @@ impl<'a> EvmFunctionLowering<'a> {
             prune_redundant_opcode_sequences(&mut vcode, &emitted_block_order);
         }
         {
-            let _span =
-                trace_span!("sonatina.codegen.evm.lower_prepared_function.materialize_jumpdests")
-                    .entered();
+            let _span = trace_span!(
+                "sonatina.codegen.evm.lower_prepared_machine_function.materialize_jumpdests"
+            )
+            .entered();
             module.func_store.view(func, |function| {
                 materialize_jumpdests(
                     &mut vcode,

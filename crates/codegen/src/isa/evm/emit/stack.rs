@@ -148,6 +148,14 @@ fn push_immediate_u256(vcode: &VCode<OpCode>, inst: VCodeInst) -> Option<U256> {
     Some(U256::from_big_endian(&be))
 }
 
+fn is_unlabeled_literal_push(
+    vcode: &VCode<OpCode>,
+    label_targets: &FxHashSet<VCodeInst>,
+    inst: VCodeInst,
+) -> bool {
+    !label_targets.contains(&inst) && push_immediate_u256(vcode, inst).is_some()
+}
+
 fn is_noop_stack_peephole_ops(ops: &[StackPeepholeOp]) -> bool {
     let mut stack: SmallVec<[u16; 64]> = (0..32).collect();
     let initial = stack.clone();
@@ -311,6 +319,33 @@ pub(crate) fn prune_redundant_opcode_sequences(vcode: &mut VCode<OpCode>, block_
                             continue;
                         }
                     }
+                }
+            }
+
+            if i + 4 < insts.len() {
+                let addr_push = insts[i];
+                let mload = insts[i + 1];
+                let imm_push = insts[i + 2];
+                let swap = insts[i + 3];
+                let sub = insts[i + 4];
+                // `PUSH addr; MLOAD; PUSH imm; SWAP1; SUB` and
+                // `PUSH imm; PUSH addr; MLOAD; SUB` present the same stack to `SUB`.
+                if is_unlabeled_literal_push(vcode, &label_targets, addr_push)
+                    && is_plain_inst(vcode, &label_targets, mload)
+                    && (vcode.insts[mload] as u8) == (OpCode::MLOAD as u8)
+                    && is_unlabeled_literal_push(vcode, &label_targets, imm_push)
+                    && is_plain_inst(vcode, &label_targets, swap)
+                    && (vcode.insts[swap] as u8) == (OpCode::SWAP1 as u8)
+                    && is_plain_inst(vcode, &label_targets, sub)
+                    && (vcode.insts[sub] as u8) == (OpCode::SUB as u8)
+                {
+                    kept.push(imm_push);
+                    kept.push(addr_push);
+                    kept.push(mload);
+                    kept.push(sub);
+                    changed = true;
+                    i += 5;
+                    continue;
                 }
             }
 
@@ -875,6 +910,21 @@ mod tests {
 
     use super::*;
 
+    fn push_imm(vcode: &mut VCode<OpCode>, block: BlockId, bytes: &[u8]) -> VCodeInst {
+        let inst = vcode.add_inst_to_block(push_op(bytes.len()), None, block);
+        if !bytes.is_empty() {
+            vcode.inst_imm_bytes.insert((inst, bytes.into()));
+        }
+        inst
+    }
+
+    fn block_ops(vcode: &VCode<OpCode>, block: BlockId) -> Vec<u8> {
+        vcode
+            .block_insns(block)
+            .map(|inst| vcode.insts[inst] as u8)
+            .collect()
+    }
+
     #[test]
     fn i256_negative_mask_push_uses_compact_not_form() {
         let mask = Immediate::from_i256(!I256::from(31u8), Type::I256);
@@ -910,6 +960,38 @@ mod tests {
         assert_eq!(
             immediate_push_plan(value),
             ImmediatePushPlan::Plain(smallvec![0xe0])
+        );
+    }
+
+    #[test]
+    fn prune_reorders_literal_mload_sub_to_drop_swap() {
+        let mut vcode = VCode::<OpCode>::default();
+        let block = BlockId(0);
+        push_imm(&mut vcode, block, &[0x80]);
+        vcode.add_inst_to_block(OpCode::MLOAD, None, block);
+        push_imm(&mut vcode, block, &[0x40]);
+        vcode.add_inst_to_block(OpCode::SWAP1, None, block);
+        vcode.add_inst_to_block(OpCode::SUB, None, block);
+
+        prune_redundant_opcode_sequences(&mut vcode, &[block]);
+
+        let insts: Vec<_> = vcode.block_insns(block).collect();
+        assert_eq!(
+            block_ops(&vcode, block),
+            vec![
+                OpCode::PUSH1 as u8,
+                OpCode::PUSH1 as u8,
+                OpCode::MLOAD as u8,
+                OpCode::SUB as u8
+            ]
+        );
+        assert_eq!(
+            push_immediate_u256(&vcode, insts[0]),
+            Some(U256::from(0x40u8))
+        );
+        assert_eq!(
+            push_immediate_u256(&vcode, insts[1]),
+            Some(U256::from(0x80u8))
         );
     }
 }

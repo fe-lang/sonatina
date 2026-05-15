@@ -11,7 +11,7 @@ object: Contract
 
 functions:
   mem: global_dyn_base=0x80 arena_base=0x80 scratch_peak_words=0 static_chain_peak_words=0
-  entry: ir_blocks=3 ir_insts=13 vcode_ops=54 fixups=3 imm_bytes=23
+  entry: ir_blocks=3 ir_insts=12 vcode_ops=52 fixups=3 imm_bytes=23
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
@@ -25,7 +25,7 @@ entry:
   block0:
     PUSH0  // v1.i256 = evm_calldata_load v0;
     CALLDATALOAD
-    PUSH1 block2  // br v2 block1 block2;
+    PUSH1 block2  // br v1 block2 block1;
     JUMPI
   block1:
     PUSH1 0xaa (170)  // evm_mstore v0 170.i256;
