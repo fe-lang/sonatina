@@ -55,29 +55,41 @@ pub struct CachedSourceMapEntry {
 
 /// Compute a cache key for a function by hashing its IR content.
 ///
-/// The key is a SHA-256 hash of the function's structural content:
-/// instruction types, operand values, block structure, and source locations.
-/// Two functions with identical IR will produce the same key.
+/// The key combines the function's structural content: block topology,
+/// instruction identity, and source locations. Two functions with
+/// identical IR will produce the same key.
 pub fn compute_cache_key(func: &Function, func_ref: FuncRef) -> CacheKey {
     use std::collections::hash_map::DefaultHasher;
 
-    let mut hasher = DefaultHasher::new();
+    let mut hash = [0u8; 32];
 
-    // Hash the function reference for identity
-    func_ref.as_u32().hash(&mut hasher);
+    // Four independent hashers for better distribution across 256 bits
+    let mut hashers: [DefaultHasher; 4] = [
+        DefaultHasher::new(),
+        DefaultHasher::new(),
+        DefaultHasher::new(),
+        DefaultHasher::new(),
+    ];
 
-    // Hash the IR structure (blocks + instructions + source locations)
+    func_ref.as_u32().hash(&mut hashers[0]);
+    func.arg_values.len().hash(&mut hashers[1]);
+
+    let mut inst_count = 0u32;
     for block in func.layout.iter_block() {
-        block.hash(&mut hasher);
+        block.hash(&mut hashers[inst_count as usize % 4]);
         for inst in func.layout.iter_inst(block) {
-            inst.hash(&mut hasher);
-            func.source_locs[inst].hash(&mut hasher);
+            let idx = inst_count as usize % 4;
+            inst.hash(&mut hashers[idx]);
+            func.source_locs[inst].hash(&mut hashers[idx]);
+            inst_count += 1;
         }
     }
+    inst_count.hash(&mut hashers[3]);
 
-    let hash_value = hasher.finish();
-    let mut hash = [0u8; 32];
-    hash[..8].copy_from_slice(&hash_value.to_le_bytes());
+    for (i, hasher) in hashers.iter().enumerate() {
+        let h = hasher.finish();
+        hash[i * 8..(i + 1) * 8].copy_from_slice(&h.to_le_bytes());
+    }
 
     CacheKey { hash }
 }
