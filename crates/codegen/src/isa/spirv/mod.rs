@@ -215,7 +215,9 @@ fn emit_naga_block_instructions(
                     naga::Expression::Binary { op: naga::BinaryOperator::ShiftRight, left: val, right: bits_u32 },
                     naga::Span::UNDEFINED,
                 );
-                func.body.push(naga::Statement::Emit(naga::Range::new_from_bounds(bits_u32, h)), naga::Span::UNDEFINED);
+                // Only emit the Binary expression; Literal is a const expression
+                // that must NOT be emitted (it's always in scope in Naga)
+                func.body.push(naga::Statement::Emit(naga::Range::new_from_bounds(h, h)), naga::Span::UNDEFINED);
                 value_map.insert(result, h);
             }
         } else if let Some(lt) = <&sonatina_ir::inst::cmp::Lt as InstDowncast>::downcast(inst_set, inst_data) {
@@ -631,8 +633,14 @@ fn translate_to_naga(
                     naga::Expression::Load { pointer: field },
                     naga::Span::UNDEFINED,
                 );
+                // Emit AccessIndex and Load individually to avoid range
+                // overlap issues when there are 3+ parameters
                 func.body.push(
-                    naga::Statement::Emit(naga::Range::new_from_bounds(field, loaded)),
+                    naga::Statement::Emit(naga::Range::new_from_bounds(field, field)),
+                    naga::Span::UNDEFINED,
+                );
+                func.body.push(
+                    naga::Statement::Emit(naga::Range::new_from_bounds(loaded, loaded)),
                     naga::Span::UNDEFINED,
                 );
                 value_map.insert(arg_val, loaded);

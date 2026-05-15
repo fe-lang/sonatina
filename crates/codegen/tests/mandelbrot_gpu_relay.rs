@@ -58,7 +58,10 @@ fn try_gpu_step(wgsl: &str, z_re: i64, z_im: i64, c_re: i64) -> Option<i64> {
     eprintln!("    [GPU] adapter: {}", adapter.get_info().name);
 
     let (device, queue) = pollster::block_on(
-        adapter.request_device(&Default::default())
+        adapter.request_device(&wgpu::DeviceDescriptor {
+            required_features: wgpu::Features::SHADER_INT64,
+            ..Default::default()
+        })
     ).ok()?;
 
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
