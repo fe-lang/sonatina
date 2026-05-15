@@ -53,6 +53,63 @@ pub struct CachedSourceMapEntry {
     pub source_loc: u32,
 }
 
+impl CachedCompilation {
+    /// Serialize to a binary blob for persistent storage.
+    pub fn serialize(&self) -> Vec<u8> {
+        let mut buf = Vec::new();
+        let code_len = self.machine_code.len() as u32;
+        buf.extend_from_slice(&code_len.to_le_bytes());
+        buf.extend_from_slice(&self.machine_code);
+        let entries_len = self.source_map_entries.len() as u32;
+        buf.extend_from_slice(&entries_len.to_le_bytes());
+        for entry in &self.source_map_entries {
+            buf.extend_from_slice(&entry.offset.to_le_bytes());
+            buf.extend_from_slice(&entry.length.to_le_bytes());
+            buf.extend_from_slice(&entry.source_loc.to_le_bytes());
+        }
+        buf
+    }
+
+    /// Deserialize from a binary blob.
+    pub fn deserialize(data: &[u8]) -> Option<Self> {
+        let mut pos = 0;
+        if data.len() < 4 {
+            return None;
+        }
+        let code_len = u32::from_le_bytes(data[pos..pos + 4].try_into().ok()?) as usize;
+        pos += 4;
+        if data.len() < pos + code_len {
+            return None;
+        }
+        let machine_code = data[pos..pos + code_len].to_vec();
+        pos += code_len;
+        if data.len() < pos + 4 {
+            return None;
+        }
+        let entries_len = u32::from_le_bytes(data[pos..pos + 4].try_into().ok()?) as usize;
+        pos += 4;
+        let mut source_map_entries = Vec::with_capacity(entries_len);
+        for _ in 0..entries_len {
+            if data.len() < pos + 12 {
+                return None;
+            }
+            let offset = u32::from_le_bytes(data[pos..pos + 4].try_into().ok()?);
+            let length = u32::from_le_bytes(data[pos + 4..pos + 8].try_into().ok()?);
+            let source_loc = u32::from_le_bytes(data[pos + 8..pos + 12].try_into().ok()?);
+            source_map_entries.push(CachedSourceMapEntry {
+                offset,
+                length,
+                source_loc,
+            });
+            pos += 12;
+        }
+        Some(CachedCompilation {
+            machine_code,
+            source_map_entries,
+        })
+    }
+}
+
 /// Compute a cache key for a function by hashing its IR content.
 ///
 /// The key combines the function's structural content: block topology,
@@ -143,6 +200,31 @@ mod tests {
         cache.insert(key.clone(), value);
         assert!(cache.get(&key).is_some());
         assert_eq!(cache.get(&key).unwrap().machine_code, vec![0x60, 0x00]);
+    }
+
+    #[test]
+    fn cached_compilation_serialization_round_trip() {
+        let original = CachedCompilation {
+            machine_code: vec![0x60, 0x00, 0x60, 0x01, 0x01],
+            source_map_entries: vec![
+                CachedSourceMapEntry {
+                    offset: 0,
+                    length: 2,
+                    source_loc: 42,
+                },
+                CachedSourceMapEntry {
+                    offset: 2,
+                    length: 3,
+                    source_loc: 100,
+                },
+            ],
+        };
+        let serialized = original.serialize();
+        let deserialized = CachedCompilation::deserialize(&serialized).unwrap();
+        assert_eq!(deserialized.machine_code, original.machine_code);
+        assert_eq!(deserialized.source_map_entries.len(), 2);
+        assert_eq!(deserialized.source_map_entries[0].source_loc, 42);
+        assert_eq!(deserialized.source_map_entries[1].offset, 2);
     }
 
     #[test]
