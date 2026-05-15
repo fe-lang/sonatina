@@ -285,8 +285,6 @@ fn emit_naga_regions(
     phi_locals: &mut std::collections::HashMap<sonatina_ir::ValueId, naga::Handle<naga::LocalVariable>>,
     result_expr: &mut Option<naga::Handle<naga::Expression>>,
 ) {
-    use sonatina_ir::InstDowncast;
-
     let mut region_idx = 0;
     while region_idx < regions.len() {
         let region = &regions[region_idx];
@@ -366,11 +364,6 @@ fn emit_loop_region(
             break;
         }
     }
-
-    // Track how many expressions exist before the loop body begins.
-    // Expressions with index < pre_loop_expr_count were emitted in the outer
-    // scope and must NOT be re-emitted inside the loop or its nested blocks.
-    let pre_loop_expr_count = func.expressions.len();
 
     // Detect if any non-header body block has a Br (inner conditional)
     let has_inner_br = body.iter().any(|inner| {
