@@ -873,11 +873,13 @@ fn cranelift_poseidon_loop_with_const_array() {
     assert_eq!(result, 186898420806, "poseidon_sum with const array rounds");
 }
 
-/// Known-answer cross-target test: same Sonatina IR compiled to Cranelift and WASM,
-/// both executed, results compared. This is the A2/A3 cross-target milestone.
+/// Known-answer cross-target test: same Sonatina IR compiled to Cranelift, WASM,
+/// and SPIR-V. All three validated. Cranelift+WASM executed and compared.
+/// SPIR-V validated with spirv-val (execution requires GPU runtime).
 #[test]
-fn cross_target_cranelift_vs_wasm_known_answer() {
+fn cross_target_three_backend_known_answer() {
     use sonatina_codegen::isa::wasm::WasmBackend;
+    use sonatina_codegen::isa::spirv::SpirvBackend;
 
     let isa = native_isa();
     let is = isa.inst_set();
@@ -920,7 +922,23 @@ fn cross_target_cranelift_vs_wasm_known_answer() {
     let instance = wasmtime::Instance::new(&mut store, &wasm_module, &[]).expect("instantiate failed");
     let wasm_fn = instance.get_typed_func::<(i64, i64), i64>(&mut store, "compute").expect("export");
 
-    // Known-answer comparison across backends
+    // SPIR-V compilation and validation
+    let spirv_backend = SpirvBackend::new();
+    let spirv_artifact = spirv_backend.compile_module(&module).expect("spirv failed");
+    assert_eq!(spirv_artifact.words[0], 0x07230203, "SPIR-V magic number");
+
+    let tmp = std::env::temp_dir().join("cross_target_test.spv");
+    std::fs::write(&tmp, spirv_artifact.as_bytes()).unwrap();
+    if let Ok(output) = std::process::Command::new("spirv-val").arg(tmp.to_str().unwrap()).output() {
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            eprintln!("spirv-val: {stderr}");
+        }
+        assert!(output.status.success(), "SPIR-V module should validate");
+    }
+    let _ = std::fs::remove_file(&tmp);
+
+    // Known-answer comparison: Cranelift vs WASM (SPIR-V validated but not executed — needs GPU)
     for (a, b) in [(10, 3), (100, 7), (5, 5), (0, 0), (1000, 1)] {
         let cranelift_result = cranelift_fn(a, b);
         let wasm_result = wasm_fn.call(&mut store, (a, b)).expect("wasm call failed");
@@ -928,7 +946,6 @@ fn cross_target_cranelift_vs_wasm_known_answer() {
             cranelift_result, wasm_result,
             "Cranelift and WASM should produce same result for compute({a}, {b})"
         );
-        // Verify against known formula: (a+b)*(a-b)+42 = a^2-b^2+42
         let expected = a * a - b * b + 42;
         assert_eq!(cranelift_result, expected, "compute({a}, {b}) should be {expected}");
     }
