@@ -264,20 +264,14 @@ fn spirv_loop_sum_to_valid() {
     assert_eq!(artifact.words[0], 0x07230203, "valid SPIR-V magic");
     eprintln!("SPIR-V loop module: {} words", artifact.words.len());
 
-    // COMPROMISE: spirv-val reports dominance errors for loop SPIR-V
-    // because Naga's relaxed validation doesn't enforce expression scoping
-    // for loop bodies. The SPIR-V module structure is correct (valid magic,
-    // Naga validation passes) but spirv-val's stricter checks fail.
-    // Follow-up: fix Naga expression Emit placement for loop blocks.
     let tmp = std::env::temp_dir().join("spirv_loop_sum.spv");
     std::fs::write(&tmp, artifact.as_bytes()).unwrap();
     if let Ok(output) = std::process::Command::new("spirv-val").arg(tmp.to_str().unwrap()).output() {
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            eprintln!("spirv-val (expected dominance error for loops): {stderr}");
+            eprintln!("spirv-val: {stderr}");
         }
-        // Don't assert spirv-val success for loops — Naga emission
-        // with relaxed validation has known dominance issues
+        assert!(output.status.success(), "SPIR-V loop should validate with spirv-val");
     }
     let _ = std::fs::remove_file(&tmp);
 }
