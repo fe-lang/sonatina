@@ -872,3 +872,64 @@ fn cranelift_poseidon_loop_with_const_array() {
     let result = f();
     assert_eq!(result, 186898420806, "poseidon_sum with const array rounds");
 }
+
+/// Known-answer cross-target test: same Sonatina IR compiled to Cranelift and WASM,
+/// both executed, results compared. This is the A2/A3 cross-target milestone.
+#[test]
+fn cross_target_cranelift_vs_wasm_known_answer() {
+    use sonatina_codegen::isa::wasm::WasmBackend;
+
+    let isa = native_isa();
+    let is = isa.inst_set();
+    let mb = native_module_builder();
+
+    // fn compute(a: i64, b: i64) -> i64 { (a + b) * (a - b) + 42 }
+    let sig = Signature::new_single("compute", Linkage::Public, &[Type::I64, Type::I64], Type::I64);
+    let func_ref = mb.declare_function(sig).unwrap();
+    let mut fb = mb.func_builder::<InstInserter>(func_ref);
+    let entry = fb.append_block();
+    fb.switch_to_block(entry);
+    let a = fb.args()[0];
+    let b = fb.args()[1];
+    let sum = fb.insert_inst(arith::Add::new(is, a, b), Type::I64);
+    let diff = fb.insert_inst(arith::Sub::new(is, a, b), Type::I64);
+    let prod = fb.insert_inst(arith::Mul::new(is, sum, diff), Type::I64);
+    let c42 = fb.make_imm_value(42i64);
+    let result = fb.insert_inst(arith::Add::new(is, prod, c42), Type::I64);
+    fb.insert_inst_no_result(control_flow::Return::new_single(is, result));
+    fb.seal_all();
+    fb.finish();
+
+    let module = mb.build();
+
+    // Cranelift execution
+    let cranelift_backend = CraneliftBackend::new();
+    let cranelift_artifact = cranelift_backend.compile_module(&module).expect("cranelift failed");
+    let cranelift_fn: fn(i64, i64) -> i64 = unsafe {
+        let ptr = cranelift_artifact.get_func_ptr::<fn(i64, i64) -> i64>("compute").unwrap();
+        std::mem::transmute(ptr)
+    };
+
+    // WASM execution
+    let wasm_backend = WasmBackend::new();
+    let wasm_artifact = wasm_backend.compile_module(&module).expect("wasm failed");
+    wasmparser::validate(&wasm_artifact.bytes).expect("invalid wasm");
+    let engine = wasmtime::Engine::default();
+    let wasm_module = wasmtime::Module::new(&engine, &wasm_artifact.bytes).expect("load failed");
+    let mut store = wasmtime::Store::new(&engine, ());
+    let instance = wasmtime::Instance::new(&mut store, &wasm_module, &[]).expect("instantiate failed");
+    let wasm_fn = instance.get_typed_func::<(i64, i64), i64>(&mut store, "compute").expect("export");
+
+    // Known-answer comparison across backends
+    for (a, b) in [(10, 3), (100, 7), (5, 5), (0, 0), (1000, 1)] {
+        let cranelift_result = cranelift_fn(a, b);
+        let wasm_result = wasm_fn.call(&mut store, (a, b)).expect("wasm call failed");
+        assert_eq!(
+            cranelift_result, wasm_result,
+            "Cranelift and WASM should produce same result for compute({a}, {b})"
+        );
+        // Verify against known formula: (a+b)*(a-b)+42 = a^2-b^2+42
+        let expected = a * a - b * b + 42;
+        assert_eq!(cranelift_result, expected, "compute({a}, {b}) should be {expected}");
+    }
+}
