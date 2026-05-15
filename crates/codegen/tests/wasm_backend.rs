@@ -4,7 +4,7 @@ use sonatina_ir::{
     Linkage, Signature, Type,
     builder::ModuleBuilder,
     func_cursor::InstInserter,
-    inst::{arith, control_flow},
+    inst::{arith, cmp, control_flow},
     isa::{Isa, native::Native},
     module::ModuleCtx,
 };
@@ -153,4 +153,67 @@ fn wasm_constant_return_wasmtime() {
         .expect("the_answer export");
 
     assert_eq!(f.call(&mut store, ()).unwrap(), 42);
+}
+
+#[test]
+fn wasm_loop_sum_wasmtime() {
+    let isa = Native::new(native_triple());
+    let is = isa.inst_set();
+    let mb = native_module_builder();
+
+    // fn sum_to(n: i64) -> i64 { let mut acc=0, i=0; while i<n { acc+=i; i++; } return acc; }
+    let sig = Signature::new_single("sum_to", Linkage::Public, &[Type::I64], Type::I64);
+    let func_ref = mb.declare_function(sig).unwrap();
+
+    let mut fb = mb.func_builder::<InstInserter>(func_ref);
+    let entry = fb.append_block();
+    let loop_header = fb.append_block();
+    let loop_body = fb.append_block();
+    let exit = fb.append_block();
+
+    fb.switch_to_block(entry);
+    let n = fb.args()[0];
+    let init_acc = fb.make_imm_value(0i64);
+    let init_i = fb.make_imm_value(0i64);
+    fb.insert_inst_no_result(control_flow::Jump::new(is, loop_header));
+
+    fb.switch_to_block(loop_header);
+    let acc = fb.insert_inst(control_flow::Phi::new(is, vec![(init_acc, entry)]), Type::I64);
+    let i = fb.insert_inst(control_flow::Phi::new(is, vec![(init_i, entry)]), Type::I64);
+    let cond = fb.insert_inst(cmp::Lt::new(is, i, n), Type::I1);
+    fb.insert_inst_no_result(control_flow::Br::new(is, cond, loop_body, exit));
+
+    fb.switch_to_block(loop_body);
+    let new_acc = fb.insert_inst(arith::Add::new(is, acc, i), Type::I64);
+    let one = fb.make_imm_value(1i64);
+    let new_i = fb.insert_inst(arith::Add::new(is, i, one), Type::I64);
+    fb.append_phi_arg(acc, new_acc, loop_body);
+    fb.append_phi_arg(i, new_i, loop_body);
+    fb.insert_inst_no_result(control_flow::Jump::new(is, loop_header));
+
+    fb.switch_to_block(exit);
+    fb.insert_inst_no_result(control_flow::Return::new_single(is, acc));
+
+    fb.seal_all();
+    fb.finish();
+
+    let module = mb.build();
+    let backend = WasmBackend::new();
+    let artifact = backend.compile_module(&module).expect("WASM compilation failed");
+
+    wasmparser::validate(&artifact.bytes).expect("invalid WASM");
+
+    let engine = wasmtime::Engine::default();
+    let wasm_module = wasmtime::Module::new(&engine, &artifact.bytes).expect("load failed");
+    let mut store = wasmtime::Store::new(&engine, ());
+    let instance = wasmtime::Instance::new(&mut store, &wasm_module, &[]).expect("instantiate");
+
+    let f = instance.get_typed_func::<i64, i64>(&mut store, "sum_to").expect("sum_to export");
+
+    // sum_to(5) = 0+1+2+3+4 = 10
+    let r = f.call(&mut store, 5).unwrap();
+    eprintln!("sum_to(5) = {r}");
+    assert_eq!(r, 10);
+    assert_eq!(f.call(&mut store, 10).unwrap(), 45);
+    assert_eq!(f.call(&mut store, 0).unwrap(), 0);
 }

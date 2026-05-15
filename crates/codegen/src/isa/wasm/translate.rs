@@ -61,11 +61,19 @@ pub(super) fn translate_function_body(
         let param_count = function.arg_values.len() as u32;
         locals = LocalAllocator::new(param_count);
 
-        // Map function args to WASM params
         for (idx, &arg_value) in function.arg_values.iter().enumerate() {
             locals.map_value(arg_value, idx as u32);
         }
 
+        // Try structured CF first; fall back to linear for simple functions
+        let structured = crate::structurize::structurize_function(function);
+        if let Ok(ref scfg) = structured {
+            if scfg.regions.iter().any(|r| matches!(r, crate::structurize::Region::Loop { .. })) {
+                return emit_structured_regions(function, inst_set, &scfg.regions, module, &mut locals, &mut instructions);
+            }
+        }
+
+        // Linear fallback for non-loop functions
         for block in function.layout.iter_block() {
             for inst_id in function.layout.iter_inst(block) {
                 let inst_data = function.dfg.inst(inst_id);
@@ -314,6 +322,7 @@ pub(super) fn translate_function_body(
         Ok::<(), String>(())
     }).ok_or_else(|| "function has no body".to_string())??;
 
+
     // Build final function with locals
     let local_decls: Vec<(u32, ValType)> = locals.extra_locals
         .iter()
@@ -337,6 +346,208 @@ pub(super) fn translate_function_body(
 
     func.instruction(&Instruction::End);
     Ok(func)
+}
+
+fn emit_structured_regions(
+    function: &sonatina_ir::Function,
+    inst_set: &dyn InstSetBase,
+    regions: &[crate::structurize::Region],
+    module: &Module,
+    locals: &mut LocalAllocator,
+    instructions: &mut Vec<Instruction<'static>>,
+) -> Result<(), String> {
+    for region in regions {
+        match region {
+            crate::structurize::Region::Block(block_id) => {
+                emit_block_instructions_fallthrough(function, inst_set, *block_id, module, locals, instructions)?;
+            }
+            crate::structurize::Region::Loop { header, body } => {
+                // SSA destruction: allocate locals for phi nodes, initialize from entry values
+                for inst_id in function.layout.iter_inst(*header) {
+                    let inst_data = function.dfg.inst(inst_id);
+                    if let Some(phi) = <&sonatina_ir::inst::control_flow::Phi as InstDowncast>::downcast(inst_set, inst_data) {
+                        if let Some(result) = function.dfg.inst_result(inst_id) {
+                            let local = locals.alloc(ValType::I64);
+                            if let Some(&(init_val, _)) = phi.args().first() {
+                                emit_value_to_stack(function, init_val, locals, instructions)?;
+                            } else {
+                                instructions.push(Instruction::I64Const(0));
+                            }
+                            instructions.push(Instruction::LocalSet(local));
+                            locals.map_value(result, local);
+                        }
+                    } else {
+                        break;
+                    }
+                }
+
+                instructions.push(Instruction::Block(wasm_encoder::BlockType::Empty));
+                instructions.push(Instruction::Loop(wasm_encoder::BlockType::Empty));
+                // Emit loop body blocks with in_loop=true so jumps become br 0
+                for inner_region in body {
+                    match inner_region {
+                        crate::structurize::Region::Block(bid) => {
+                            emit_block_instructions(function, inst_set, *bid, module, locals, instructions)?;
+                        }
+                        other => {
+                            emit_structured_regions(function, inst_set, std::slice::from_ref(other), module, locals, instructions)?;
+                        }
+                    }
+                }
+                instructions.push(Instruction::End); // end loop
+                instructions.push(Instruction::End); // end block
+            }
+            crate::structurize::Region::IfThenElse { header, then_branch, else_branch, merge } => {
+                emit_block_instructions(function, inst_set, *header, module, locals, instructions)?;
+                if !then_branch.is_empty() || !else_branch.is_empty() {
+                    instructions.push(Instruction::If(wasm_encoder::BlockType::Empty));
+                    emit_structured_regions(function, inst_set, then_branch, module, locals, instructions)?;
+                    if !else_branch.is_empty() {
+                        instructions.push(Instruction::Else);
+                        emit_structured_regions(function, inst_set, else_branch, module, locals, instructions)?;
+                    }
+                    instructions.push(Instruction::End);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn emit_block_instructions_fallthrough(
+    function: &sonatina_ir::Function,
+    inst_set: &dyn InstSetBase,
+    block_id: BlockId,
+    module: &Module,
+    locals: &mut LocalAllocator,
+    instructions: &mut Vec<Instruction<'static>>,
+) -> Result<(), String> {
+    emit_block_instructions_inner(function, inst_set, block_id, module, locals, instructions, false)
+}
+
+fn emit_block_instructions(
+    function: &sonatina_ir::Function,
+    inst_set: &dyn InstSetBase,
+    block_id: BlockId,
+    module: &Module,
+    locals: &mut LocalAllocator,
+    instructions: &mut Vec<Instruction<'static>>,
+) -> Result<(), String> {
+    emit_block_instructions_inner(function, inst_set, block_id, module, locals, instructions, true)
+}
+
+fn emit_block_instructions_inner(
+    function: &sonatina_ir::Function,
+    inst_set: &dyn InstSetBase,
+    block_id: BlockId,
+    module: &Module,
+    locals: &mut LocalAllocator,
+    instructions: &mut Vec<Instruction<'static>>,
+    in_loop: bool,
+) -> Result<(), String> {
+    for inst_id in function.layout.iter_inst(block_id) {
+        let inst_data = function.dfg.inst(inst_id);
+
+        // Skip phi nodes — handled by the structured CF pass
+        if <&sonatina_ir::inst::control_flow::Phi as InstDowncast>::downcast(inst_set, inst_data).is_some() {
+            continue;
+        }
+
+        // Return
+        if let Some(ret) = <&sonatina_ir::inst::control_flow::Return as InstDowncast>::downcast(inst_set, inst_data) {
+            for &val_id in ret.args().as_slice() {
+                emit_value_to_stack(function, val_id, locals, instructions)?;
+            }
+            instructions.push(Instruction::Return);
+        }
+        // Jump → in loop: update phi locals and br 0; outside loop: fall through
+        else if let Some(jump) = <&sonatina_ir::inst::control_flow::Jump as InstDowncast>::downcast(inst_set, inst_data) {
+            if in_loop {
+                let target = *jump.dest();
+                for target_inst_id in function.layout.iter_inst(target) {
+                    let target_inst = function.dfg.inst(target_inst_id);
+                    if let Some(phi) = <&sonatina_ir::inst::control_flow::Phi as InstDowncast>::downcast(inst_set, target_inst) {
+                        if let Some(result) = function.dfg.inst_result(target_inst_id) {
+                            for &(val, from_block) in phi.args() {
+                                if from_block == block_id {
+                                    emit_value_to_stack(function, val, locals, instructions)?;
+                                    if let Some(local) = locals.get(result) {
+                                        instructions.push(Instruction::LocalSet(local));
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                    } else {
+                        break;
+                    }
+                }
+                instructions.push(Instruction::Br(0));
+            }
+            // Outside loop: fall through to next region
+        }
+        // Br → conditional: if cond true → continue loop body, false → break
+        else if let Some(br) = <&sonatina_ir::inst::control_flow::Br as InstDowncast>::downcast(inst_set, inst_data) {
+            emit_value_to_stack(function, *br.cond(), locals, instructions)?;
+            // In block { loop { ... } }: br_if 0 = continue loop, else fall through
+            // If cond is false (zero-dest = exit), we break: br 1
+            // If cond is true (nz-dest = loop body), we continue
+            // So: if NOT cond, break
+            instructions.push(Instruction::I32Eqz);
+            instructions.push(Instruction::BrIf(1)); // break out of block
+        }
+        // Add
+        else if let Some(add) = <&sonatina_ir::inst::arith::Add as InstDowncast>::downcast(inst_set, inst_data) {
+            if let Some(result) = function.dfg.inst_result(inst_id) {
+                let local = locals.alloc(ValType::I64);
+                emit_value_to_stack(function, *add.lhs(), locals, instructions)?;
+                emit_value_to_stack(function, *add.rhs(), locals, instructions)?;
+                instructions.push(Instruction::I64Add);
+                instructions.push(Instruction::LocalSet(local));
+                locals.map_value(result, local);
+            }
+        }
+        // Sub
+        else if let Some(sub) = <&sonatina_ir::inst::arith::Sub as InstDowncast>::downcast(inst_set, inst_data) {
+            if let Some(result) = function.dfg.inst_result(inst_id) {
+                let local = locals.alloc(ValType::I64);
+                emit_value_to_stack(function, *sub.lhs(), locals, instructions)?;
+                emit_value_to_stack(function, *sub.rhs(), locals, instructions)?;
+                instructions.push(Instruction::I64Sub);
+                instructions.push(Instruction::LocalSet(local));
+                locals.map_value(result, local);
+            }
+        }
+        // Mul
+        else if let Some(mul) = <&sonatina_ir::inst::arith::Mul as InstDowncast>::downcast(inst_set, inst_data) {
+            if let Some(result) = function.dfg.inst_result(inst_id) {
+                let local = locals.alloc(ValType::I64);
+                emit_value_to_stack(function, *mul.lhs(), locals, instructions)?;
+                emit_value_to_stack(function, *mul.rhs(), locals, instructions)?;
+                instructions.push(Instruction::I64Mul);
+                instructions.push(Instruction::LocalSet(local));
+                locals.map_value(result, local);
+            }
+        }
+        // Lt
+        else if let Some(lt) = <&sonatina_ir::inst::cmp::Lt as InstDowncast>::downcast(inst_set, inst_data) {
+            if let Some(result) = function.dfg.inst_result(inst_id) {
+                let local = locals.alloc(ValType::I32);
+                emit_value_to_stack(function, *lt.lhs(), locals, instructions)?;
+                emit_value_to_stack(function, *lt.rhs(), locals, instructions)?;
+                instructions.push(Instruction::I64LtU);
+                instructions.push(Instruction::LocalSet(local));
+                locals.map_value(result, local);
+            }
+        }
+        // Unreachable
+        else if <&sonatina_ir::inst::control_flow::Unreachable as InstDowncast>::downcast(inst_set, inst_data).is_some() {
+            instructions.push(Instruction::Unreachable);
+        }
+        // Skip other instructions in structured mode
+        else {}
+    }
+    Ok(())
 }
 
 fn emit_value_to_stack(
