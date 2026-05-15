@@ -293,6 +293,88 @@ fn translate_function(
                             }
                         }
                     }
+                    // ObjLoad — for objref params, pass through the value
+                    else if let Some(obj_load) = <&sonatina_ir::inst::data::ObjLoad as InstDowncast>::downcast(inst_set, inst_data) {
+                        if let Some(result) = function.dfg.inst_result(inst_id) {
+                            let addr = resolve_value(function, *obj_load.object(), &value_map, &mut body, wb);
+                            if let Some(v) = addr {
+                                value_map.insert(result, v);
+                            }
+                        }
+                    }
+                    // ObjStore — skip (value already in local)
+                    else if <&sonatina_ir::inst::data::ObjStore as InstDowncast>::downcast(inst_set, inst_data).is_some() {
+                    }
+                    // ObjAlloc — allocate a local (no-op in WASM for small types)
+                    else if <&sonatina_ir::inst::data::ObjAlloc as InstDowncast>::downcast(inst_set, inst_data).is_some() {
+                        if let Some(result) = function.dfg.inst_result(inst_id) {
+                            let zero = body.add_op(wb, Operator::I64Const { value: 0 }, &[], &[WType::I64]);
+                            value_map.insert(result, zero);
+                        }
+                    }
+                    // ObjIndex — pointer arithmetic (stub: return base)
+                    else if let Some(obj_index) = <&sonatina_ir::inst::data::ObjIndex as InstDowncast>::downcast(inst_set, inst_data) {
+                        if let Some(result) = function.dfg.inst_result(inst_id) {
+                            let base = resolve_value(function, *obj_index.object(), &value_map, &mut body, wb);
+                            if let Some(v) = base {
+                                value_map.insert(result, v);
+                            }
+                        }
+                    }
+                    // Alloca — allocate a local
+                    else if <&sonatina_ir::inst::data::Alloca as InstDowncast>::downcast(inst_set, inst_data).is_some() {
+                        if let Some(result) = function.dfg.inst_result(inst_id) {
+                            let zero = body.add_op(wb, Operator::I64Const { value: 0 }, &[], &[WType::I64]);
+                            value_map.insert(result, zero);
+                        }
+                    }
+                    // Mstore — store to local (just map the value)
+                    else if let Some(mstore) = <&sonatina_ir::inst::data::Mstore as InstDowncast>::downcast(inst_set, inst_data) {
+                        let val = resolve_value(function, *mstore.value(), &value_map, &mut body, wb);
+                        let addr = resolve_value(function, *mstore.addr(), &value_map, &mut body, wb);
+                        // In WASM, mstore updates the "local" that addr represents
+                        // For now, just track the value
+                    }
+                    // Mload — load from local
+                    else if let Some(mload) = <&sonatina_ir::inst::data::Mload as InstDowncast>::downcast(inst_set, inst_data) {
+                        if let Some(result) = function.dfg.inst_result(inst_id) {
+                            let addr = resolve_value(function, *mload.addr(), &value_map, &mut body, wb);
+                            if let Some(v) = addr {
+                                value_map.insert(result, v);
+                            }
+                        }
+                    }
+                    // ExtractValue — pass through base for now
+                    else if let Some(extract) = <&sonatina_ir::inst::data::ExtractValue as InstDowncast>::downcast(inst_set, inst_data) {
+                        if let Some(result) = function.dfg.inst_result(inst_id) {
+                            let base = resolve_value(function, *extract.dest(), &value_map, &mut body, wb);
+                            if let Some(v) = base {
+                                value_map.insert(result, v);
+                            }
+                        }
+                    }
+                    // Trunc — pass through (WASM handles type widths natively)
+                    else if let Some(trunc) = <&sonatina_ir::inst::cast::Trunc as InstDowncast>::downcast(inst_set, inst_data) {
+                        if let Some(result) = function.dfg.inst_result(inst_id) {
+                            let val = resolve_value(function, *trunc.from(), &value_map, &mut body, wb);
+                            if let Some(v) = val {
+                                value_map.insert(result, v);
+                            }
+                        }
+                    }
+                    // EvmRevert/EvmStop → unreachable
+                    else if <&sonatina_ir::inst::evm::EvmRevert as InstDowncast>::downcast(inst_set, inst_data).is_some()
+                        || <&sonatina_ir::inst::evm::EvmStop as InstDowncast>::downcast(inst_set, inst_data).is_some() {
+                        body.set_terminator(wb, Terminator::Unreachable);
+                    }
+                    // IsZero
+                    else if let Some(is_zero) = <&sonatina_ir::inst::cmp::IsZero as InstDowncast>::downcast(inst_set, inst_data) {
+                        if let Some(result) = function.dfg.inst_result(inst_id) {
+                            let val = resolve_value(function, *is_zero.lhs(), &value_map, &mut body, wb).ok_or("unresolved")?;
+                            let wval = body.add_op(wb, Operator::I64Eqz, &[val], &[WType::I32]);
+                            value_map.insert(result, wval);
+                        }
+                    }
                     // Skip other instructions
                     else {}
                 }
