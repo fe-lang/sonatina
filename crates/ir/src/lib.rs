@@ -1,6 +1,7 @@
 pub mod bitset;
 pub mod builder;
 pub mod cfg;
+pub mod debug_tags;
 pub mod dfg;
 pub mod effects;
 pub mod func_cursor;
