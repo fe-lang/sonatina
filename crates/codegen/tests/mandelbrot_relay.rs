@@ -44,7 +44,7 @@ fn build_mandelbrot_module() -> sonatina_ir::Module {
         let im_sq = fb.insert_inst(arith::Mul::new(is, z_im, z_im), Type::I64);
         let diff = fb.insert_inst(arith::Sub::new(is, re_sq, im_sq), Type::I64);
         let ten = fb.make_imm_value(10i64);
-        let shifted = fb.insert_inst(arith::Sar::new(is, diff, ten), Type::I64);
+        let shifted = fb.insert_inst(arith::Sar::new(is, ten, diff), Type::I64);
         let result = fb.insert_inst(arith::Add::new(is, shifted, c_re), Type::I64);
         fb.insert_inst_no_result(control_flow::Return::new_single(is, result));
         fb.seal_all();
@@ -67,7 +67,7 @@ fn build_mandelbrot_module() -> sonatina_ir::Module {
         let prod = fb.insert_inst(arith::Mul::new(is, z_re, z_im), Type::I64);
         let doubled = fb.insert_inst(arith::Mul::new(is, two, prod), Type::I64);
         let ten = fb.make_imm_value(10i64);
-        let shifted = fb.insert_inst(arith::Sar::new(is, doubled, ten), Type::I64);
+        let shifted = fb.insert_inst(arith::Sar::new(is, ten, doubled), Type::I64);
         let result = fb.insert_inst(arith::Add::new(is, shifted, c_im), Type::I64);
         fb.insert_inst_no_result(control_flow::Return::new_single(is, result));
         fb.seal_all();
