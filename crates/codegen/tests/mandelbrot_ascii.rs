@@ -93,11 +93,12 @@ fn build_mandelbrot_module() -> sonatina_ir::Module {
     mb.build()
 }
 
-const CHARS: &[u8] = b" .:-=+*#%@";
+const CHARS: &[u8] = b" .,:;+*%#@";
 
 fn escape_to_char(iters: i64, max: i64) -> char {
-    if iters >= max { return ' ' }
-    let idx = (iters as usize * CHARS.len()) / max as usize;
+    if iters >= max { return '@' } // in the set = dense
+    if iters <= 1 { return ' ' } // escaped immediately = blank
+    let idx = (iters as usize * (CHARS.len() - 1)) / max as usize;
     CHARS[idx.min(CHARS.len() - 1)] as char
 }
 
@@ -129,8 +130,9 @@ fn mandelbrot_64x64_ascii() {
     for row in 0..64 {
         let mut line = String::new();
         for col in 0..64 {
-            let c_re = -2560 + (col * 3584) / 64;
-            let c_im = -1536 + (row * 3072) / 64;
+            // Full domain: re [-2.0, 0.6], im [-1.2, 1.2] in ×1024 fixed-point
+            let c_re = -2048 + (col * 2662) / 64;
+            let c_im = -1229 + (row * 2458) / 64;
 
             let cl_iters = cl_fn(c_re, c_im, max_iter);
             let wasm_iters = wasm_fn.call(&mut store, (c_re, c_im, max_iter)).unwrap();
