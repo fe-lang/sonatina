@@ -926,6 +926,95 @@ block0:
 }
 
 #[test]
+fn terminal_return_payload_write_does_not_reserve_arena_base() {
+    let parsed = parse_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+func private %callee() -> i256 {
+block0:
+    v0.*i256 = alloca i256;
+    mstore v0 3.i256 i256;
+    v1.i256 = mload v0 i256;
+    return v1;
+}
+
+func public %entry() {
+block0:
+    v0.i256 = call %callee;
+    mstore 0.i32 v0 i256;
+    evm_return 0.i8 32.i8;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}
+"#,
+    )
+    .unwrap();
+
+    let funcs = parsed.module.funcs();
+    let callee = find_func(&parsed.module, "callee");
+    let entry = find_func(&parsed.module, "entry");
+    let backend = test_backend();
+    let prepared = backend
+        .prepare_section(work_module_with_entry(&parsed.module, &funcs, entry))
+        .expect("prepare should succeed");
+
+    assert_eq!(prepared.section_plan().arena_base, 0);
+    assert_eq!(
+        prepared
+            .function_plan(callee)
+            .expect("missing callee plan")
+            .mem_plan
+            .scratch_words,
+        1
+    );
+}
+
+#[test]
+fn terminal_return_payload_read_across_call_reserves_arena_base() {
+    let parsed = parse_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+func private %callee() -> i256 {
+block0:
+    v0.*i256 = alloca i256;
+    mstore v0 3.i256 i256;
+    v1.i256 = mload v0 i256;
+    return v1;
+}
+
+func public %entry() {
+block0:
+    mstore 0.i32 7.i256 i256;
+    v0.i256 = call %callee;
+    evm_return 0.i8 32.i8;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}
+"#,
+    )
+    .unwrap();
+
+    let funcs = parsed.module.funcs();
+    let entry = find_func(&parsed.module, "entry");
+    let backend = test_backend();
+    let prepared = backend
+        .prepare_section(work_module_with_entry(&parsed.module, &funcs, entry))
+        .expect("prepare should succeed");
+
+    assert_eq!(prepared.section_plan().arena_base, 0x20);
+}
+
+#[test]
 fn return_escape_clamp_uses_caller_transitive_clobber_bound() {
     let ctx = plan_test_ctx_from_src(
         r#"

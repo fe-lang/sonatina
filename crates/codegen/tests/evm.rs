@@ -14,10 +14,7 @@ use revm::{
 
 use sonatina_codegen::{
     domtree::DomTree,
-    isa::evm::{
-        EvmBackend, ImmediateMaterializationMode, LateCleanupProfile, PushWidthPolicy,
-        canonicalize_alias_value,
-    },
+    isa::evm::{EvmBackend, ImmediateMaterializationMode, LateCleanupProfile, PushWidthPolicy},
     liveness::Liveness,
     machinst::{
         lower::{LoweredFunction, SectionCodeUnit, SectionWorkModule},
@@ -36,7 +33,7 @@ use sonatina_ir::{
     cfg::ControlFlowGraph,
     ir_writer::{FuncWriteCtx, FunctionSignature, IrWrite, ModuleWriter},
     isa::evm::Evm,
-    module::{Module, ModuleCtx},
+    module::Module,
 };
 use sonatina_parser::{ParsedModule, parse_module};
 use sonatina_triple::{Architecture, OperatingSystem, Vendor};
@@ -259,12 +256,7 @@ fn test_evm(fixture: Fixture<&str>) {
                 let ctx = FuncWriteCtx::with_debug_provider(function, *fref, &parsed.debug);
 
                 if emit_stackify_trace {
-                    let stackify = stackify_trace_for_fn(
-                        function,
-                        &prepared.module().ctx,
-                        &backend,
-                        stackify_reach_depth,
-                    );
+                    let stackify = stackify_trace_for_machine_fn(function, stackify_reach_depth);
                     write!(&mut stackify_out, "// ").unwrap();
                     FunctionSignature.write(&mut stackify_out, &ctx).unwrap();
                     writeln!(&mut stackify_out).unwrap();
@@ -769,30 +761,20 @@ impl<W: Write, DB: revm::Database> revm::Inspector<DB> for TestInspector<W> {
     }
 }
 
-fn stackify_trace_for_fn(
-    function: &Function,
-    module_ctx: &ModuleCtx,
-    backend: &EvmBackend,
-    stackify_reach_depth: u8,
-) -> String {
+fn stackify_trace_for_machine_fn(function: &Function, stackify_reach_depth: u8) -> String {
     let mut function = function.clone();
     let mut cfg = ControlFlowGraph::new();
     cfg.compute(&function);
 
     StackifyEdgeSplitter::run(&mut function, &mut cfg);
 
-    let value_aliases = backend.compute_high_evm_value_aliases(&function, module_ctx);
-
     let mut liveness = Liveness::new();
-    liveness.compute_with_value_normalizer(&function, &cfg, |v| {
-        canonicalize_alias_value(&value_aliases, v)
-    });
+    liveness.compute(&function, &cfg);
     let mut dom = DomTree::new();
     dom.compute(&cfg);
 
     let (_alloc, stackify) =
         StackifyBuilder::new(&function, &cfg, &dom, &liveness, stackify_reach_depth)
-            .with_value_aliases(&value_aliases)
             .compute_with_trace();
     stackify
 }

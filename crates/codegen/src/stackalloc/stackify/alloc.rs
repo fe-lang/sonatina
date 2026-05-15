@@ -30,6 +30,12 @@ pub struct StackifyAlloc {
 }
 
 impl StackifyAlloc {
+    #[cfg(test)]
+    pub(crate) fn set_object_spill_for_test(&mut self, value: ValueId, obj: StackObjId) {
+        self.spill_obj[value] = Some(obj);
+        self.spill_storage[value] = Some(SpillStorage::Object(obj));
+    }
+
     pub(crate) fn uses_scratch_spills(&self) -> bool {
         self.scratch_slot_of_value
             .values()

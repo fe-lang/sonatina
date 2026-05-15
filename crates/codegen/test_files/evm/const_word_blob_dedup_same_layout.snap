@@ -6,14 +6,14 @@ input_file: test_files/evm/const_word_blob_dedup_same_layout.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=true
 
 object: Contract
-  section runtime: 213 bytes
-  total: 213 bytes
+  section runtime: 211 bytes
+  total: 211 bytes
 
 functions:
-  mem: global_dyn_base=0x40 arena_base=0x20 scratch_peak_words=1 static_chain_peak_words=0
-  entry: ir_blocks=1 ir_insts=8 vcode_ops=23 fixups=4 imm_bytes=3
+  mem: global_dyn_base=0x20 arena_base=0x0 scratch_peak_words=1 static_chain_peak_words=0
+  entry: ir_blocks=1 ir_insts=8 vcode_ops=23 fixups=4 imm_bytes=2
     mem: scratch_words=1 stable_words=0 stable_mode=None entry_abs_words=1 abs_words_end=1
-  load_arr: ir_blocks=1 ir_insts=6 vcode_ops=14 fixups=1 imm_bytes=4
+  load_arr: ir_blocks=1 ir_insts=6 vcode_ops=14 fixups=1 imm_bytes=3
     mem: scratch_words=1 stable_words=0 stable_mode=None entry_abs_words=1 abs_words_end=1
   addr_row: ir_blocks=1 ir_insts=2 vcode_ops=4 fixups=1 imm_bytes=1
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=1 abs_words_end=0
@@ -21,11 +21,11 @@ functions:
 --------------- OBSERVABILITY ---------------
 
 object schema=0.1.0
-totals section_bytes=213 code=53 data=160 embed=0 mapped=51 unmapped=2
+totals section_bytes=211 code=51 data=160 embed=0 mapped=49 unmapped=2
 
 section runtime schema=0.1.0
-bytes total=213 code=53 data=160 embed=0
-coverage mapped=51 unmapped=2
+bytes total=211 code=51 data=160 embed=0
+coverage mapped=49 unmapped=2
 unmapped no_ir_inst=0 label_or_fixup_only=0 synthetic=2 unknown=0
 pc [0, 1) func=entry block=0 vcode=0 ir=0 reason=- frontend=-
 pc [1, 2) func=entry block=0 vcode=1 ir=0 reason=- frontend=-
@@ -42,35 +42,35 @@ pc [15, 17) func=entry block=0 vcode=11 ir=4 reason=- frontend=-
 pc [17, 18) func=entry block=0 vcode=12 ir=4 reason=- frontend=-
 pc [18, 19) func=entry block=0 vcode=13 ir=4 reason=- frontend=-
 pc [19, 20) func=entry block=0 vcode=14 ir=4 reason=- frontend=-
-pc [20, 22) func=entry block=0 vcode=15 ir=5 reason=- frontend=-
-pc [22, 23) func=entry block=0 vcode=16 ir=5 reason=- frontend=-
-pc [23, 24) func=entry block=0 vcode=17 ir=6 reason=- frontend=-
-pc [24, 25) func=entry block=0 vcode=18 ir=7 reason=- frontend=-
-pc [25, 26) func=entry block=0 vcode=19 ir=7 reason=- frontend=-
-pc [26, 28) func=entry block=0 vcode=20 ir=8 reason=- frontend=-
-pc [28, 29) func=entry block=0 vcode=21 ir=8 reason=- frontend=-
-pc [29, 30) func=entry block=0 vcode=22 ir=8 reason=- frontend=-
-pc [30, 31) func=addr_row block=0 vcode=3 ir=- reason=synthetic frontend=-
-pc [31, 33) func=addr_row block=0 vcode=0 ir=0 reason=- frontend=-
-pc [33, 34) func=addr_row block=0 vcode=1 ir=1 reason=- frontend=-
-pc [34, 35) func=addr_row block=0 vcode=2 ir=1 reason=- frontend=-
-pc [35, 36) func=load_arr block=0 vcode=13 ir=- reason=synthetic frontend=-
-pc [36, 38) func=load_arr block=0 vcode=0 ir=0 reason=- frontend=-
-pc [38, 39) func=load_arr block=0 vcode=1 ir=1 reason=- frontend=-
-pc [39, 41) func=load_arr block=0 vcode=2 ir=1 reason=- frontend=-
-pc [41, 42) func=load_arr block=0 vcode=3 ir=1 reason=- frontend=-
-pc [42, 43) func=load_arr block=0 vcode=4 ir=2 reason=- frontend=-
-pc [43, 45) func=load_arr block=0 vcode=5 ir=3 reason=- frontend=-
-pc [45, 46) func=load_arr block=0 vcode=6 ir=3 reason=- frontend=-
-pc [46, 47) func=load_arr block=0 vcode=7 ir=3 reason=- frontend=-
-pc [47, 48) func=load_arr block=0 vcode=8 ir=3 reason=- frontend=-
-pc [48, 50) func=load_arr block=0 vcode=9 ir=4 reason=- frontend=-
-pc [50, 51) func=load_arr block=0 vcode=10 ir=4 reason=- frontend=-
-pc [51, 52) func=load_arr block=0 vcode=11 ir=5 reason=- frontend=-
-pc [52, 53) func=load_arr block=0 vcode=12 ir=5 reason=- frontend=-
+pc [20, 21) func=entry block=0 vcode=15 ir=5 reason=- frontend=-
+pc [21, 22) func=entry block=0 vcode=16 ir=5 reason=- frontend=-
+pc [22, 23) func=entry block=0 vcode=17 ir=6 reason=- frontend=-
+pc [23, 24) func=entry block=0 vcode=18 ir=7 reason=- frontend=-
+pc [24, 25) func=entry block=0 vcode=19 ir=7 reason=- frontend=-
+pc [25, 27) func=entry block=0 vcode=20 ir=8 reason=- frontend=-
+pc [27, 28) func=entry block=0 vcode=21 ir=8 reason=- frontend=-
+pc [28, 29) func=entry block=0 vcode=22 ir=8 reason=- frontend=-
+pc [29, 30) func=addr_row block=0 vcode=3 ir=- reason=synthetic frontend=-
+pc [30, 32) func=addr_row block=0 vcode=0 ir=0 reason=- frontend=-
+pc [32, 33) func=addr_row block=0 vcode=1 ir=1 reason=- frontend=-
+pc [33, 34) func=addr_row block=0 vcode=2 ir=1 reason=- frontend=-
+pc [34, 35) func=load_arr block=0 vcode=13 ir=- reason=synthetic frontend=-
+pc [35, 37) func=load_arr block=0 vcode=0 ir=0 reason=- frontend=-
+pc [37, 38) func=load_arr block=0 vcode=1 ir=1 reason=- frontend=-
+pc [38, 40) func=load_arr block=0 vcode=2 ir=1 reason=- frontend=-
+pc [40, 41) func=load_arr block=0 vcode=3 ir=1 reason=- frontend=-
+pc [41, 42) func=load_arr block=0 vcode=4 ir=2 reason=- frontend=-
+pc [42, 44) func=load_arr block=0 vcode=5 ir=3 reason=- frontend=-
+pc [44, 45) func=load_arr block=0 vcode=6 ir=3 reason=- frontend=-
+pc [45, 46) func=load_arr block=0 vcode=7 ir=3 reason=- frontend=-
+pc [46, 47) func=load_arr block=0 vcode=8 ir=3 reason=- frontend=-
+pc [47, 48) func=load_arr block=0 vcode=9 ir=4 reason=- frontend=-
+pc [48, 49) func=load_arr block=0 vcode=10 ir=4 reason=- frontend=-
+pc [49, 50) func=load_arr block=0 vcode=11 ir=5 reason=- frontend=-
+pc [50, 51) func=load_arr block=0 vcode=12 ir=5 reason=- frontend=-
 
 evm:
-  case index_2: calldata_len=32 success reason=Return gas_used=21281 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=141
+  case index_2: calldata_len=32 success reason=Return gas_used=21274 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=134
 
 
 --------------- DEBUG ---------------
@@ -89,11 +89,11 @@ entry:
     PUSH1 FuncRef(2)
     JUMP
     JUMPDEST
-    PUSH1 0x20 (32)  // evm_code_copy v5 v3 v5;
+    PUSH1 0x20 (32)  // evm_code_copy v0 v3 v5;
     SWAP1
-    DUP2
+    PUSH0
     CODECOPY
-    PUSH1 0x20 (32)  // v6.i256 = evm_mload v5;
+    PUSH0  // v6.i256 = evm_mload v0;
     MLOAD
     ADD  // v7.i256 = add v2 v6;
     PUSH0  // evm_mstore v0 v7;
@@ -111,13 +111,13 @@ load_arr:
     PUSH1 0x5 (5)
     SHL
     ADD  // v4.i256 = add v1 v3;
-    PUSH1 0x20 (32)  // evm_code_copy v2 v4 v2;
+    PUSH1 0x20 (32)  // evm_code_copy 0.i256 v4 v2;
     SWAP1
-    DUP2
+    PUSH0
     CODECOPY
-    PUSH1 0x20 (32)  // v5.i256 = evm_mload v2;
+    PUSH0  // v6.i256 = evm_mload 0.i256;
     MLOAD
-    SWAP1  // return v5;
+    SWAP1  // return v6;
     JUMP
 
 // func private %addr_row() -> i256

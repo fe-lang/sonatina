@@ -18,7 +18,7 @@ use crate::{
 
 use super::{
     emit::{EvmMachineFunctionLowering, push_op},
-    late_alias::compute_evm_late_aliases,
+    high_alias::compute_high_evm_aliases,
     late_section_merge::run_late_section_terminal_outline,
     memory_plan::{ArenaCostModel, ObjLoc, PreserveMode, StableMode, WORD_BYTES},
     opcode::OpCode,
@@ -118,12 +118,12 @@ impl EvmBackend {
         self.stackify_reach_depth
     }
 
-    pub fn compute_high_evm_value_aliases(
+    pub(crate) fn compute_high_evm_value_aliases(
         &self,
         function: &Function,
         module: &ModuleCtx,
     ) -> SecondaryMap<ValueId, Option<ValueId>> {
-        compute_evm_late_aliases(function, module, &self.isa)
+        compute_high_evm_aliases(function, module, &self.isa)
             .map()
             .clone()
     }

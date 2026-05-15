@@ -6,22 +6,22 @@ input_file: test_files/evm/gep_immediate_fold.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 66 bytes
-  total: 66 bytes
+  section runtime: 63 bytes
+  total: 63 bytes
 
 functions:
-  mem: global_dyn_base=0x80 arena_base=0x20 scratch_peak_words=3 static_chain_peak_words=0
+  mem: global_dyn_base=0x60 arena_base=0x0 scratch_peak_words=3 static_chain_peak_words=0
   fold_simple: ir_blocks=1 ir_insts=3 vcode_ops=8 fixups=0 imm_bytes=3
     mem: scratch_words=3 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=3
   fold_nested: ir_blocks=1 ir_insts=3 vcode_ops=8 fixups=0 imm_bytes=3
     mem: scratch_words=3 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=3
-  dynamic_index: ir_blocks=1 ir_insts=5 vcode_ops=11 fixups=0 imm_bytes=3
+  dynamic_index: ir_blocks=1 ir_insts=4 vcode_ops=9 fixups=0 imm_bytes=2
     mem: scratch_words=3 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=3
   entry: ir_blocks=1 ir_insts=7 vcode_ops=22 fixups=6 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=0
 
 evm:
-  case folded_and_fallback: calldata_len=8 success reason=Return gas_used=21228 gas_refunded=0 logs=0 output=call len=32 tx_gas=21056 runtime_gas=172
+  case folded_and_fallback: calldata_len=8 success reason=Return gas_used=21219 gas_refunded=0 logs=0 output=call len=32 tx_gas=21056 runtime_gas=163
 
 
 --------------- DEBUG ---------------
@@ -30,22 +30,22 @@ evm:
 fold_simple:
   block0:
     JUMPDEST
-    PUSH1 0x7 (7)  // evm_mstore 64.i256 v2;
-    PUSH1 0x40 (64)
+    PUSH1 0x7 (7)  // evm_mstore v1 7.i256;
+    PUSH1 0x20 (32)
     MSTORE
-    PUSH1 0x40 (64)  // v3.i256 = evm_mload 64.i256;
+    PUSH1 0x20 (32)  // v4.i256 = evm_mload v1;
     MLOAD
-    SWAP1  // return v3;
+    SWAP1  // return v4;
     JUMP
 
 // func public %fold_nested() -> i256
 fold_nested:
   block0:
     JUMPDEST
-    PUSH1 0x9 (9)  // evm_mstore 96.i256 v3;
-    PUSH1 0x60 (96)
+    PUSH1 0x9 (9)  // evm_mstore v1 v3;
+    PUSH1 0x40 (64)
     MSTORE
-    PUSH1 0x60 (96)  // v4.i256 = evm_mload 96.i256;
+    PUSH1 0x40 (64)  // v4.i256 = evm_mload v1;
     MLOAD
     SWAP1  // return v4;
     JUMP
@@ -54,15 +54,13 @@ fold_nested:
 dynamic_index:
   block0:
     JUMPDEST
-    PUSH1 0x5 (5)  // v2.i256 = shl 5.i256 v0;
+    PUSH1 0x5 (5)  // v3.i256 = shl 5.i256 v0;
     SHL
-    PUSH1 0x20 (32)  // v3.i256 = add v1 v2;
-    ADD
     PUSH1 0xb (11)  // evm_mstore v3 11.i256;
     DUP2
     MSTORE
-    MLOAD  // v5.i256 = evm_mload v3;
-    SWAP1  // return v5;
+    MLOAD  // v6.i256 = evm_mload v3;
+    SWAP1  // return v6;
     JUMP
 
 // func public %entry()

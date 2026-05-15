@@ -6,13 +6,13 @@ input_file: test_files/evm/fe_vault_test_vault_multiuser_unoptimized.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 4077 bytes
-  total: 4077 bytes
+  section runtime: 4071 bytes
+  total: 4071 bytes
 
 object: Vault
-  section init: 792 bytes
-  section runtime: 774 bytes
-  total: 1566 bytes
+  section init: 786 bytes
+  section runtime: 768 bytes
+  total: 1554 bytes
 
 object: VaultUser
   section init: 1033 bytes
@@ -55,7 +55,7 @@ functions:
     mem: scratch_words=0 stable_words=5 stable_mode=StaticAbs(base=0xe0) entry_abs_words=2 abs_words_end=7
   evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__ProxyWithdraw_h1ed1c85115544221__ae5519407fcbbd72: ir_blocks=8 ir_insts=32 vcode_ops=106 fixups=15 imm_bytes=18
     mem: scratch_words=0 stable_words=5 stable_mode=StaticAbs(base=0xe0) entry_abs_words=2 abs_words_end=7
-  __Vault_recv_0_0: ir_blocks=17 ir_insts=47 vcode_ops=111 fixups=12 imm_bytes=1
+  __Vault_recv_0_0: ir_blocks=17 ir_insts=44 vcode_ops=105 fixups=12 imm_bytes=1
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=0
   storagemap_storage_slot_with_salt__Address_h257056268eac7027__5ab99f7153cdba29: ir_blocks=6 ir_insts=14 vcode_ops=36 fixups=2 imm_bytes=5
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=0
@@ -79,7 +79,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=496003 gas_refunded=79600 logs=0 output=call len=32 tx_gas=21000 runtime_gas=475003
+  case ok: calldata_len=0 success reason=Return gas_used=494779 gas_refunded=79600 logs=0 output=call len=32 tx_gas=21000 runtime_gas=473779
 
 
 --------------- DEBUG ---------------
@@ -1549,19 +1549,13 @@ __Vault_recv_0_0:
     DUP1  // v16.i256 = mul v0 v13;
     DUP4
     MUL
-    DUP2  // v21.i1 = is_zero v13;
-    ISZERO
-    ISZERO  // v23.i1 = is_zero v21;
-    SWAP2  // v25.i256 = evm_udiv v16 v13;
+    SWAP1  // v25.i256 = evm_udiv v16 v13;
     DUP2
     DIV
-    DUP5  // v26.i1 = eq v25 v0;
+    DUP4  // v26.i1 = eq v25 v0;
     EQ
     ISZERO  // v18.i1 = is_zero v26;
-    SWAP1  // v19.i1 = and v23 v18;
-    SWAP2
-    AND
-    PUSH1 section_unit0  // br v19 block18 block13;
+    PUSH1 section_unit0  // br v18 block18 block13;
     JUMPI
   block13:
     DUP4  // v20.i256 = evm_sload v1;

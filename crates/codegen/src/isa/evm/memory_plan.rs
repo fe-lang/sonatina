@@ -123,6 +123,123 @@ impl ProgramMemoryPlan {
             }
         }
     }
+
+    pub(crate) fn apply_backend_spill_reserves(
+        &mut self,
+        module: &Module,
+        funcs: &[FuncRef],
+        reserve_words: &FxHashMap<FuncRef, u32>,
+    ) {
+        if reserve_words.is_empty() {
+            return;
+        }
+
+        for (&func, &reserve) in reserve_words {
+            if reserve != 0
+                && let Some(func_plan) = self.funcs.get_mut(&func)
+            {
+                func_plan.stable_words = func_plan
+                    .stable_words
+                    .checked_add(reserve)
+                    .expect("backend spill reserve overflow");
+            }
+        }
+
+        let funcs_set: FxHashSet<FuncRef> = funcs.iter().copied().collect();
+        let call_graph = CallGraph::build_graph_subset(module, &funcs_set);
+        let scc = SccBuilder::new().compute_scc(&call_graph);
+        let topo = topo_sort_sccs(&funcs_set, &call_graph, &scc);
+        let scc_edges = build_scc_edges(&funcs_set, &call_graph, &scc, &topo);
+
+        let mut scc_weights: FxHashMap<SccRef, u32> = FxHashMap::default();
+        for &scc_ref in &topo {
+            let mut weight = 0;
+            if !scc.scc_info(scc_ref).is_cycle {
+                for &func in scc
+                    .scc_info(scc_ref)
+                    .components
+                    .iter()
+                    .filter(|func| funcs_set.contains(func))
+                {
+                    weight = weight.max(self.funcs[&func].stable_words);
+                }
+            }
+            scc_weights.insert(scc_ref, weight);
+        }
+
+        let mut scc_prefix: FxHashMap<SccRef, u32> = FxHashMap::default();
+        for &scc_ref in &topo {
+            scc_prefix.entry(scc_ref).or_insert(0);
+        }
+        for &scc_ref in &topo {
+            let carry = scc_prefix[&scc_ref]
+                .checked_add(scc_weights[&scc_ref])
+                .expect("static chain prefix overflow");
+            if let Some(callees) = scc_edges.get(&scc_ref) {
+                for &callee_scc in callees {
+                    scc_prefix
+                        .entry(callee_scc)
+                        .and_modify(|prefix| *prefix = (*prefix).max(carry))
+                        .or_insert(carry);
+                }
+            }
+        }
+
+        self.static_chain_peak_words = topo
+            .iter()
+            .map(|scc_ref| {
+                scc_prefix[scc_ref]
+                    .checked_add(scc_weights[scc_ref])
+                    .expect("static chain peak overflow")
+            })
+            .max()
+            .unwrap_or(0);
+        let global_dyn_base_words = self
+            .scratch_peak_words
+            .checked_add(self.static_chain_peak_words)
+            .expect("global dynamic base word overflow");
+        self.global_dyn_base = abs_addr_for_word(self.arena_base, global_dyn_base_words);
+
+        for &scc_ref in &topo {
+            self.sccs.insert(
+                scc_ref,
+                SccMemPlan {
+                    is_recursive: scc.scc_info(scc_ref).is_cycle,
+                    static_chain_prefix_words: scc_prefix[&scc_ref],
+                },
+            );
+        }
+
+        for &func in funcs {
+            let scc_ref = scc.scc_ref(func);
+            let scc_plan = self
+                .sccs
+                .get(&scc_ref)
+                .unwrap_or_else(|| panic!("missing SCC plan for scc {}", scc_ref.as_u32()));
+            let stable_base_word = self
+                .scratch_peak_words
+                .checked_add(scc_plan.static_chain_prefix_words)
+                .expect("stable base word overflow");
+            let func_plan = self
+                .funcs
+                .get_mut(&func)
+                .unwrap_or_else(|| panic!("missing memory plan for func {}", func.as_u32()));
+            func_plan.stable_mode = if scc_plan.is_recursive {
+                StableMode::DynamicFrame
+            } else if func_plan.stable_words != 0 {
+                StableMode::StaticAbs {
+                    base_word: stable_base_word,
+                }
+            } else {
+                StableMode::None
+            };
+            func_plan.entry_abs_words = if scc_plan.is_recursive {
+                global_dyn_base_words
+            } else {
+                stable_base_word
+            };
+        }
+    }
 }
 
 #[cfg(test)]

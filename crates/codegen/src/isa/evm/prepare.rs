@@ -12,7 +12,8 @@ use crate::{
     stackalloc::StackifyAlloc,
 };
 use sonatina_ir::{
-    AccessKind, AccessLoc, Function, GlobalVariableRef, InstSetExt, Module, ValueId,
+    AccessKind, AccessLoc, Function, GlobalVariableRef, InstId, InstSetExt, MemoryAccess, Module,
+    ValueId,
     cfg::ControlFlowGraph,
     inst::evm::inst_set::EvmInstKind,
     isa::{
@@ -293,13 +294,13 @@ pub(crate) fn function_may_write_free_ptr_slot(
 pub(crate) enum MemoryLayoutReservation {
     None,
     Reserve { start: u32, len: u32 },
-    LegacyFloor,
+    ConservativeFloor,
 }
 
 #[derive(Default)]
 struct SectionMemoryLayout {
     max_reserved_end: u32,
-    legacy_floor: bool,
+    conservative_floor: bool,
 }
 
 impl SectionMemoryLayout {
@@ -307,7 +308,7 @@ impl SectionMemoryLayout {
         if len != 0 {
             match start.checked_add(len) {
                 Some(end) => self.max_reserved_end = self.max_reserved_end.max(end),
-                None => self.legacy_floor = true,
+                None => self.conservative_floor = true,
             }
         }
     }
@@ -316,13 +317,13 @@ impl SectionMemoryLayout {
         match reservation {
             MemoryLayoutReservation::None => {}
             MemoryLayoutReservation::Reserve { start, len } => self.reserve_len(start, len),
-            MemoryLayoutReservation::LegacyFloor => self.legacy_floor = true,
+            MemoryLayoutReservation::ConservativeFloor => self.conservative_floor = true,
         }
     }
 
     fn arena_base(&self) -> u32 {
         let base = align_to_word(self.max_reserved_end).unwrap_or(STATIC_BASE);
-        if self.legacy_floor {
+        if self.conservative_floor {
             base.max(STATIC_BASE)
         } else {
             base
@@ -352,20 +353,20 @@ fn memory_layout_reservation_for_addr_len(
     if function.dfg.value_is_imm(addr) {
         return match (value_imm_u32(function, addr), len.as_u32(function)) {
             (Some(start), Some(len)) => MemoryLayoutReservation::Reserve { start, len },
-            _ => MemoryLayoutReservation::LegacyFloor,
+            _ => MemoryLayoutReservation::ConservativeFloor,
         };
     }
 
     if addr_is_allocator_managed(&prov[addr]) {
         MemoryLayoutReservation::None
     } else {
-        MemoryLayoutReservation::LegacyFloor
+        MemoryLayoutReservation::ConservativeFloor
     }
 }
 
 fn memory_layout_reservation_from_effect(
     function: &Function,
-    access: &sonatina_ir::MemoryAccess,
+    access: &MemoryAccess,
     prov: &SecondaryMap<ValueId, Provenance>,
 ) -> MemoryLayoutReservation {
     if access.space != MEMORY {
@@ -380,7 +381,7 @@ fn memory_layout_reservation_from_effect(
             prov,
         ),
         AccessLoc::LinearExactImm { addr, bytes, .. } => immediate_u32(*addr)
-            .map_or(MemoryLayoutReservation::LegacyFloor, |start| {
+            .map_or(MemoryLayoutReservation::ConservativeFloor, |start| {
                 MemoryLayoutReservation::Reserve { start, len: *bytes }
             }),
         AccessLoc::LinearRange { addr, len } => memory_layout_reservation_for_addr_len(
@@ -389,9 +390,129 @@ fn memory_layout_reservation_from_effect(
             MemoryAccessLen::Value(*len),
             prov,
         ),
-        AccessLoc::WholeSpace | AccessLoc::Unknown => MemoryLayoutReservation::LegacyFloor,
+        AccessLoc::WholeSpace | AccessLoc::Unknown => MemoryLayoutReservation::ConservativeFloor,
         AccessLoc::KeyedExact { .. } => MemoryLayoutReservation::None,
     }
+}
+
+fn immediate_memory_access_range(function: &Function, access: &MemoryAccess) -> Option<(u32, u32)> {
+    let (start, len) = match &access.loc {
+        AccessLoc::LinearExact { addr, bytes, .. } => (value_imm_u32(function, *addr)?, *bytes),
+        AccessLoc::LinearExactImm { addr, bytes, .. } => (immediate_u32(*addr)?, *bytes),
+        AccessLoc::LinearRange { addr, len } => (
+            value_imm_u32(function, *addr)?,
+            value_imm_u32(function, *len)?,
+        ),
+        AccessLoc::WholeSpace | AccessLoc::Unknown | AccessLoc::KeyedExact { .. } => return None,
+    };
+
+    let end = start.checked_add(len)?;
+    Some((start, end))
+}
+
+fn terminal_payload_range(
+    function: &Function,
+    backend: &EvmBackend,
+    inst: InstId,
+) -> Option<(u32, u32)> {
+    match backend.isa.inst_set().resolve_inst(function.dfg.inst(inst)) {
+        EvmInstKind::EvmReturn(ret) => {
+            let start = value_imm_u32(function, *ret.addr())?;
+            let len = value_imm_u32(function, *ret.len())?;
+            Some((start, start.checked_add(len)?))
+        }
+        EvmInstKind::EvmRevert(revert) => {
+            let start = value_imm_u32(function, *revert.addr())?;
+            let len = value_imm_u32(function, *revert.len())?;
+            Some((start, start.checked_add(len)?))
+        }
+        _ => None,
+    }
+}
+
+fn access_is_terminal_payload_write(
+    function: &Function,
+    access: &MemoryAccess,
+    payload_start: u32,
+    payload_end: u32,
+) -> Option<(u32, u32)> {
+    if access.space != MEMORY || access.kind != AccessKind::Write {
+        return None;
+    }
+
+    let (start, end) = immediate_memory_access_range(function, access)?;
+    (payload_start <= start && end <= payload_end).then_some((start, end))
+}
+
+fn ranges_cover(range_start: u32, range_end: u32, ranges: &mut [(u32, u32)]) -> bool {
+    if range_start == range_end {
+        return true;
+    }
+
+    ranges.sort_unstable();
+    let mut covered_until = range_start;
+    for &(start, end) in ranges.iter() {
+        if end <= covered_until {
+            continue;
+        }
+        if covered_until < start {
+            return false;
+        }
+        covered_until = end;
+        if range_end <= covered_until {
+            return true;
+        }
+    }
+    false
+}
+
+fn terminal_payload_scratch_insts(function: &Function, backend: &EvmBackend) -> FxHashSet<InstId> {
+    let mut out = FxHashSet::default();
+    for block in function.layout.iter_block() {
+        let insts: Vec<_> = function.layout.iter_inst(block).collect();
+        let Some(&terminal) = insts.last() else {
+            continue;
+        };
+        let Some((payload_start, payload_end)) =
+            terminal_payload_range(function, backend, terminal)
+        else {
+            continue;
+        };
+
+        let mut suffix_insts = Vec::new();
+        let mut write_ranges = Vec::new();
+        for &inst in insts.iter().rev() {
+            let effects = function.dfg.effects(inst);
+            if inst == terminal {
+                suffix_insts.push(inst);
+                continue;
+            }
+            if effects.accesses.is_empty() && effects.other.is_empty() {
+                continue;
+            }
+
+            let mut inst_write_ranges = Vec::new();
+            for access in &effects.accesses {
+                let Some(range) =
+                    access_is_terminal_payload_write(function, access, payload_start, payload_end)
+                else {
+                    break;
+                };
+                inst_write_ranges.push(range);
+            }
+            if inst_write_ranges.len() != effects.accesses.len() || !effects.other.is_empty() {
+                break;
+            }
+
+            suffix_insts.push(inst);
+            write_ranges.extend(inst_write_ranges);
+        }
+
+        if ranges_cover(payload_start, payload_end, &mut write_ranges) {
+            out.extend(suffix_insts);
+        }
+    }
+    out
 }
 
 fn reserve_function_memory_layout(
@@ -407,9 +528,13 @@ fn reserve_function_memory_layout(
             .cloned()
             .unwrap_or_else(|| PtrEscapeSummary::conservative_unknown_ctx(module, callee))
     });
+    let terminal_payload_scratch = terminal_payload_scratch_insts(function, backend);
 
     for block in function.layout.iter_block() {
         for inst in function.layout.iter_inst(block) {
+            if terminal_payload_scratch.contains(&inst) {
+                continue;
+            }
             if matches!(
                 backend.isa.inst_set().resolve_inst(function.dfg.inst(inst)),
                 EvmInstKind::Call(_) | EvmInstKind::EvmMalloc(_) | EvmInstKind::EvmMsize(_)
@@ -557,7 +682,8 @@ fn prepare_machine_section_after_pipeline(
                     .get(&func)
                     .unwrap_or_else(|| panic!("missing source map for func {}", func.as_u32()));
                 remap_machine_mem_plan_call_preserve(&mut mem_plan, func_map);
-                let final_spills = allocate_final_spills(analysis.alloc, mem_plan);
+                let reserve_words = backend_spill_reserve_words.get(&func).copied().unwrap_or(0);
+                let final_spills = allocate_final_spills(analysis.alloc, mem_plan, reserve_words);
                 let frame_roots = machine
                     .work
                     .module()
@@ -610,7 +736,7 @@ fn prepare_machine_section_after_pipeline(
                 };
                 (
                     func,
-                    final_spills.peak_words,
+                    final_spills.required_reserve_words,
                     EvmFunctionPlan {
                         alloc: final_spills.alloc,
                         emitted_block_order,
@@ -624,8 +750,8 @@ fn prepare_machine_section_after_pipeline(
             })
             .collect();
         results.sort_unstable_by_key(|(func, ..)| func.as_u32());
-        for (func, peak_words, plan) in results {
-            actual_spill_words.insert(func, peak_words);
+        for (func, required_reserve_words, plan) in results {
+            actual_spill_words.insert(func, required_reserve_words);
             function_plans.insert(func, plan);
         }
 

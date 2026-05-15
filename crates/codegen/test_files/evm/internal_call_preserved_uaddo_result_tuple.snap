@@ -6,16 +6,16 @@ input_file: test_files/evm/internal_call_preserved_uaddo_result_tuple.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=true evm_trace=false emit_observability=false opt=s
 
 object: Contract
-  section runtime: 170 bytes
-  total: 170 bytes
+  section runtime: 166 bytes
+  total: 166 bytes
 
 functions:
   mem: global_dyn_base=0x220 arena_base=0x220 scratch_peak_words=0 static_chain_peak_words=0
-  entry: ir_blocks=23 ir_insts=59 vcode_ops=127 fixups=10 imm_bytes=26
+  entry: ir_blocks=23 ir_insts=58 vcode_ops=124 fixups=10 imm_bytes=25
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=32 success reason=Return gas_used=21500 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=360
+  case ok: calldata_len=32 success reason=Return gas_used=21494 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=354
 
 
 --------------- DEBUG ---------------
@@ -157,12 +157,11 @@ evm:
       pre: [PUSH(32), DUP2]
       add [v27, 32] -> v28
     // evm_mstore v28 42.i256;
-    - stack=[v28, v27], last_use=[v28]
-      pre: [PUSH(42), SWAP1]
+    - stack=[v28, v27]
+      pre: [PUSH(42), DUP2]
       evm_mstore [v28, 42]
     // jump block8;
-    - stack=[v27]
-      exit(block8): [DUP1]
+    - stack=[v28, v27]
       jump -> block8
   block7 P=[] T=[]
     inherited from block5: []
@@ -199,33 +198,29 @@ evm:
       pre: [PUSH(32), DUP2]
       add [v32, 32] -> v33
     // evm_mstore v33 0.i256;
-    - stack=[v33, v32], last_use=[v33]
-      pre: [PUSH(0), SWAP1]
+    - stack=[v33, v32]
+      pre: [PUSH(0), DUP2]
       evm_mstore [v33, 0]
     // jump block8;
-    - stack=[v32]
-      exit(block8): [DUP1]
+    - stack=[v33, v32]
       jump -> block8
-  block8 P=[v1, v2] T=[]
+  block8 P=[v40, v1] T=[]
     // v34.i256 = evm_mload v1;
-    - stack=[v1, v2], last_use=[v1]
+    - stack=[v40, v1], last_use=[v1]
+      pre: [SWAP1]
       evm_mload [v1] -> v34
     // v35.i1 = eq v34 1.i256;
-    - stack=[v34, v2], last_use=[v34]
+    - stack=[v34, v40], last_use=[v34]
       pre: [PUSH(1)]
       eq [1, v34] -> v35
     // br v35 block9 block28;
-    - stack=[v35, v2]
+    - stack=[v35, v40]
       br [v35] -> [block9, block28]
-  block9 P=[] T=[v2]
-    inherited from block8: [v2]
-    // v36.i256 = add v2 32.i256;
-    - stack=[v2], last_use=[v2]
-      pre: [PUSH(32)]
-      add [32, v2] -> v36
-    // v37.i256 = evm_mload v36;
-    - stack=[v36], last_use=[v36]
-      evm_mload [v36] -> v37
+  block9 P=[] T=[v40]
+    inherited from block8: [v40]
+    // v37.i256 = evm_mload v40;
+    - stack=[v40], last_use=[v40]
+      evm_mload [v40] -> v37
     // evm_mstore 0.i256 v37;
     - stack=[v37], last_use=[v37]
       pre: [PUSH(0)]
@@ -345,10 +340,9 @@ entry:
     DUP2
     ADD
     PUSH1 0x2a (42)  // evm_mstore v28 42.i256;
-    SWAP1
+    DUP2
     MSTORE
-    DUP1  // jump block8;
-    PUSH1 block8
+    PUSH1 block8  // jump block8;
     JUMP
   block7:
     JUMPDEST
@@ -371,21 +365,19 @@ entry:
     DUP2
     ADD
     PUSH0  // evm_mstore v33 v12;
-    SWAP1
+    DUP2
     MSTORE
-    DUP1  // jump block8;
   block8:
     JUMPDEST
-    MLOAD  // v34.i256 = evm_mload v1;
+    SWAP1  // v34.i256 = evm_mload v1;
+    MLOAD
     PUSH1 0x1 (1)  // v35.i1 = eq v34 1.i256;
     EQ
     ISZERO  // br v35 block9 block28;
     PUSH1 block12
     JUMPI
   block9:
-    PUSH1 0x20 (32)  // v36.i256 = add v30 v8;
-    ADD
-    MLOAD  // v37.i256 = evm_mload v36;
+    MLOAD  // v37.i256 = evm_mload v40;
     PUSH0  // evm_mstore v12 v37;
     MSTORE
     PUSH1 0x20 (32)  // evm_return v12 v8;

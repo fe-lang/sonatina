@@ -6,18 +6,18 @@ input_file: test_files/evm/returndata_decoder_object_miscompile.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 110 bytes
-  total: 110 bytes
+  section runtime: 105 bytes
+  total: 105 bytes
 
 functions:
-  mem: global_dyn_base=0x20 arena_base=0x20 scratch_peak_words=0 static_chain_peak_words=0
-  call_target: ir_blocks=5 ir_insts=12 vcode_ops=39 fixups=2 imm_bytes=8
+  mem: global_dyn_base=0x0 arena_base=0x0 scratch_peak_words=0 static_chain_peak_words=0
+  call_target: ir_blocks=5 ir_insts=12 vcode_ops=39 fixups=2 imm_bytes=3
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   entry: ir_blocks=3 ir_insts=9 vcode_ops=25 fixups=3 imm_bytes=4
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=21293 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=293
+  case ok: calldata_len=0 success reason=Return gas_used=21286 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=286
 
 
 --------------- DEBUG ---------------
@@ -27,9 +27,9 @@ call_target:
   block0:
     JUMPDEST
     PUSH32 0xcfae321700000000000000000000000000000000000000000000000000000000 (93936536753403694139279681939632466665208136910392087765254240489517648707584)  // evm_mstore v3 v4;
-    PUSH1 0x20 (32)
+    PUSH0
     MSTORE
-    PUSH1 0x20 (32)  // v11.i256 = evm_call v1 v0 v2 v3 v6 v10 v10;
+    PUSH0  // v10.i256 = evm_call v1 v0 v2 v3 v6 v3 v3;
     PUSH0
     SWAP4
     PUSH1 0x4 (4)
@@ -37,32 +37,32 @@ call_target:
     PUSH0
     SWAP5
     CALL
-    RETURNDATASIZE  // v13.i256 = evm_return_data_size;
-    DUP1  // evm_return_data_copy v3 v10 v13;
+    RETURNDATASIZE  // v11.i256 = evm_return_data_size;
+    DUP1  // evm_return_data_copy v3 v3 v11;
     PUSH0
-    PUSH1 0x20 (32)
+    PUSH0
     RETURNDATACOPY
-    SWAP1  // v14.i1 = is_zero v11;
-    PUSH1 block4  // br v14 block3 block4;
+    SWAP1  // v13.i1 = is_zero v10;
+    PUSH1 block4  // br v13 block3 block4;
     JUMPI
   block3:
-    PUSH1 0x20 (32)  // evm_revert v3 v13;
+    PUSH0  // evm_revert v3 v11;
     REVERT
   block4:
     JUMPDEST
-    PUSH1 0x20 (32)  // v15.i1 = lt v13 v3;
+    PUSH1 0x20 (32)  // v15.i1 = lt v11 v14;
     SWAP1
     LT
     ISZERO  // br v15 block5 block6;
     PUSH1 block6
     JUMPI
   block5:
-    PUSH0  // evm_revert v10 v10;
+    PUSH0  // evm_revert v3 v3;
     PUSH0
     REVERT
   block6:
     JUMPDEST
-    PUSH1 0x20 (32)  // v16.i256 = evm_mload v3;
+    PUSH0  // v16.i256 = evm_mload v3;
     MLOAD
     SWAP1  // return v16;
     JUMP

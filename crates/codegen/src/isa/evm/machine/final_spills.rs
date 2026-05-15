@@ -9,12 +9,13 @@ use super::super::{FuncMemPlan, ObjLoc, memory_plan::StableMode, static_arena_al
 pub(crate) struct FinalSpillAllocation {
     pub(crate) alloc: StackifyAlloc,
     pub(crate) mem_plan: FuncMemPlan,
-    pub(crate) peak_words: u32,
+    pub(crate) required_reserve_words: u32,
 }
 
 pub(crate) fn allocate_final_spills(
     mut alloc: StackifyAlloc,
     mut mem_plan: FuncMemPlan,
+    reserved_words: u32,
 ) -> FinalSpillAllocation {
     let mut next_obj = mem_plan
         .obj_loc
@@ -53,29 +54,33 @@ pub(crate) fn allocate_final_spills(
         alloc.validate_spill_storage();
         return FinalSpillAllocation {
             alloc,
-            peak_words: 0,
             mem_plan,
+            required_reserve_words: 0,
         };
     }
 
-    let dynamic_frame_has_reserve = matches!(mem_plan.stable_mode, StableMode::DynamicFrame)
-        && old_obj_count <= mem_plan.stable_words;
-    let start_word = match mem_plan.stable_mode {
-        StableMode::DynamicFrame if dynamic_frame_has_reserve => {
-            mem_plan.stable_words - old_obj_count
-        }
-        StableMode::None | StableMode::StaticAbs { .. } => mem_plan.abs_words_end(),
-        StableMode::DynamicFrame => mem_plan.abs_words_end(),
+    let stable_reserve_start = mem_plan.stable_words.checked_sub(reserved_words);
+    let use_stable_reserve = old_obj_count <= reserved_words
+        && stable_reserve_start.is_some()
+        && matches!(
+            mem_plan.stable_mode,
+            StableMode::StaticAbs { .. } | StableMode::DynamicFrame
+        );
+    let start_word = if use_stable_reserve {
+        stable_reserve_start.expect("checked above")
+    } else {
+        mem_plan.abs_words_end()
     };
     for (idx, old_obj) in old_objs.into_iter().enumerate() {
         let new_obj = remap[&old_obj];
         let word = start_word
             .checked_add(u32::try_from(idx).expect("spill count overflow"))
             .expect("final spill word overflow");
-        let loc = match mem_plan.stable_mode {
-            StableMode::DynamicFrame if dynamic_frame_has_reserve => ObjLoc::StableFrame(word),
-            StableMode::None | StableMode::StaticAbs { .. } => ObjLoc::ScratchAbs(word),
-            StableMode::DynamicFrame => ObjLoc::ScratchAbs(word),
+        let loc = match (use_stable_reserve, mem_plan.stable_mode) {
+            (true, StableMode::StaticAbs { .. }) => ObjLoc::StableAbs(word),
+            (true, StableMode::DynamicFrame) => ObjLoc::StableFrame(word),
+            (true, StableMode::None) => unreachable!("stable reserve requires stable mode"),
+            (false, _) => ObjLoc::ScratchAbs(word),
         };
         mem_plan.obj_loc.insert(new_obj, loc);
     }
@@ -88,31 +93,30 @@ pub(crate) fn allocate_final_spills(
     }
     alloc.validate_spill_storage();
 
-    let peak_words = if matches!(mem_plan.stable_mode, StableMode::DynamicFrame) {
-        old_obj_count
-    } else {
-        start_word
+    if !use_stable_reserve {
+        let scratch_peak_words = start_word
             .checked_add(old_obj_count)
-            .expect("final spill peak overflow")
-    };
-    mem_plan.scratch_words = mem_plan.scratch_words.max(peak_words);
+            .expect("final spill scratch peak overflow");
+        mem_plan.scratch_words = mem_plan.scratch_words.max(scratch_peak_words);
+    }
 
     FinalSpillAllocation {
         alloc,
         mem_plan,
-        peak_words,
+        required_reserve_words: old_obj_count,
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use cranelift_entity::SecondaryMap;
+    use cranelift_entity::{EntityRef, SecondaryMap};
     use rustc_hash::{FxHashMap, FxHashSet};
+    use sonatina_ir::ValueId;
 
     use crate::{
         isa::evm::{
-            FuncMemPlan, machine::final_spills::allocate_final_spills,
-            malloc_plan::MallocEscapeKind, memory_plan::StableMode,
+            FuncMemPlan, ObjLoc, machine::final_spills::allocate_final_spills,
+            malloc_plan::MallocEscapeKind, memory_plan::StableMode, static_arena_alloc::StackObjId,
         },
         stackalloc::StackifyAlloc,
     };
@@ -137,19 +141,65 @@ mod tests {
         }
     }
 
+    fn alloc_with_object_spills(values: &[(u32, u32)]) -> StackifyAlloc {
+        let mut alloc = StackifyAlloc::default();
+        for &(value, obj) in values {
+            let value = ValueId::from_u32(value);
+            let obj = StackObjId::new(obj as usize);
+            alloc.set_object_spill_for_test(value, obj);
+        }
+        alloc
+    }
+
     #[test]
     fn zero_final_spills_do_not_count_stable_words_as_scratch() {
-        let final_spills = allocate_final_spills(StackifyAlloc::default(), static_mem_plan(0, 5));
+        let final_spills =
+            allocate_final_spills(StackifyAlloc::default(), static_mem_plan(0, 5), 0);
 
-        assert_eq!(final_spills.peak_words, 0);
+        assert_eq!(final_spills.required_reserve_words, 0);
         assert_eq!(final_spills.mem_plan.scratch_words, 0);
     }
 
     #[test]
     fn zero_final_spills_do_not_request_backend_spill_reserve() {
-        let final_spills = allocate_final_spills(StackifyAlloc::default(), static_mem_plan(3, 5));
+        let final_spills =
+            allocate_final_spills(StackifyAlloc::default(), static_mem_plan(3, 5), 0);
 
-        assert_eq!(final_spills.peak_words, 0);
+        assert_eq!(final_spills.required_reserve_words, 0);
         assert_eq!(final_spills.mem_plan.scratch_words, 3);
+    }
+
+    #[test]
+    fn static_final_spills_use_reserved_stable_tail() {
+        let alloc = alloc_with_object_spills(&[(10, 0), (11, 1)]);
+        let final_spills = allocate_final_spills(alloc, static_mem_plan(3, 7), 2);
+
+        assert_eq!(final_spills.required_reserve_words, 2);
+        assert_eq!(final_spills.mem_plan.scratch_words, 3);
+        assert_eq!(
+            final_spills.mem_plan.obj_loc[&StackObjId::new(0)],
+            ObjLoc::StableAbs(5)
+        );
+        assert_eq!(
+            final_spills.mem_plan.obj_loc[&StackObjId::new(1)],
+            ObjLoc::StableAbs(6)
+        );
+    }
+
+    #[test]
+    fn insufficient_static_reserve_reports_required_words() {
+        let alloc = alloc_with_object_spills(&[(10, 0), (11, 1)]);
+        let final_spills = allocate_final_spills(alloc, static_mem_plan(3, 7), 1);
+
+        assert_eq!(final_spills.required_reserve_words, 2);
+        assert_eq!(final_spills.mem_plan.scratch_words, 12);
+        assert_eq!(
+            final_spills.mem_plan.obj_loc[&StackObjId::new(0)],
+            ObjLoc::ScratchAbs(10)
+        );
+        assert_eq!(
+            final_spills.mem_plan.obj_loc[&StackObjId::new(1)],
+            ObjLoc::ScratchAbs(11)
+        );
     }
 }

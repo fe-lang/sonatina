@@ -6,8 +6,8 @@ input_file: test_files/evm/malloc_transient_known_size_persistent_guard.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 82 bytes
-  total: 82 bytes
+  section runtime: 79 bytes
+  total: 79 bytes
 
 functions:
   mem: global_dyn_base=0xa0 arena_base=0xa0 scratch_peak_words=0 static_chain_peak_words=0
@@ -15,13 +15,13 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   scratch: ir_blocks=4 ir_insts=9 vcode_ops=17 fixups=1 imm_bytes=4
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  main: ir_blocks=1 ir_insts=6 vcode_ops=16 fixups=4 imm_bytes=0
+  main: ir_blocks=1 ir_insts=4 vcode_ops=13 fixups=4 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   entry: ir_blocks=1 ir_insts=3 vcode_ops=9 fixups=2 imm_bytes=1
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=8 success reason=Return gas_used=21282 gas_refunded=0 logs=0 output=call len=32 tx_gas=21056 runtime_gas=226
+  case ok: calldata_len=8 success reason=Return gas_used=21272 gas_refunded=0 logs=0 output=call len=32 tx_gas=21056 runtime_gas=216
 
 
 --------------- DEBUG ---------------
@@ -88,12 +88,9 @@ main:
     PUSH1 FuncRef(1)
     JUMP
     JUMPDEST
-    SWAP1  // v2.i256 = evm_mload v0;
+    POP  // v2.i256 = evm_mload v0;
     MLOAD
-    DUP2  // v3.i256 = add v2 v1;
-    ADD
-    SUB  // v4.i256 = sub v3 v1;
-    SWAP1  // return v4;
+    SWAP1  // return v2;
     JUMP
 
 // func public %entry()

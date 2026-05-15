@@ -6,21 +6,21 @@ input_file: test_files/evm/malloc_helper_before_lazy_enter.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 64 bytes
-  total: 64 bytes
+  section runtime: 62 bytes
+  total: 62 bytes
 
 functions:
-  mem: global_dyn_base=0x40 arena_base=0x20 scratch_peak_words=1 static_chain_peak_words=0
+  mem: global_dyn_base=0x20 arena_base=0x0 scratch_peak_words=1 static_chain_peak_words=0
   helper: ir_blocks=1 ir_insts=3 vcode_ops=8 fixups=0 imm_bytes=3
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=1 abs_words_end=0
-  ready: ir_blocks=3 ir_insts=6 vcode_ops=18 fixups=3 imm_bytes=2
+  ready: ir_blocks=3 ir_insts=6 vcode_ops=18 fixups=3 imm_bytes=0
     mem: scratch_words=1 stable_words=0 stable_mode=None entry_abs_words=1 abs_words_end=1
   entry: ir_blocks=1 ir_insts=9 vcode_ops=24 fixups=2 imm_bytes=4
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=1 abs_words_end=0
 
 evm:
-  case before_enter: calldata_len=8 success reason=Return gas_used=21206 gas_refunded=0 logs=0 output=call len=32 tx_gas=21056 runtime_gas=150
-  case active: calldata_len=8 success reason=Return gas_used=21160 gas_refunded=0 logs=0 output=call len=32 tx_gas=21044 runtime_gas=116
+  case before_enter: calldata_len=8 success reason=Return gas_used=21203 gas_refunded=0 logs=0 output=call len=32 tx_gas=21056 runtime_gas=147
+  case active: calldata_len=8 success reason=Return gas_used=21155 gas_refunded=0 logs=0 output=call len=32 tx_gas=21044 runtime_gas=111
 
 
 --------------- DEBUG ---------------
@@ -30,9 +30,9 @@ helper:
   block0:
     JUMPDEST
     PUSH1 0x6f (111)  // evm_mstore v0 v1;
-    PUSH1 0x40 (64)
+    PUSH1 0x20 (32)
     MSTORE
-    PUSH1 0x40 (64)  // v2.i256 = evm_mload v0;
+    PUSH1 0x20 (32)  // v2.i256 = evm_mload v0;
     MLOAD
     SWAP1  // return v2;
     JUMP
@@ -54,9 +54,9 @@ ready:
     JUMP
   block2:
     JUMPDEST
-    PUSH1 0x20 (32)  // evm_mstore v3 v1;
+    PUSH0  // evm_mstore v3 v1;
     MSTORE
-    PUSH1 0x20 (32)  // v4.i256 = evm_mload v3;
+    PUSH0  // v4.i256 = evm_mload v3;
     MLOAD
     SWAP1  // return v4;
     JUMP

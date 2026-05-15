@@ -26,7 +26,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   init__StorPtr_Evm___207f35a85ac4062e: ir_blocks=1 ir_insts=4 vcode_ops=8 fixups=2 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  runtime__StorPtr_Evm___207f35a85ac4062e: ir_blocks=13 ir_insts=61 vcode_ops=172 fixups=20 imm_bytes=43
+  runtime__StorPtr_Evm___207f35a85ac4062e: ir_blocks=13 ir_insts=59 vcode_ops=168 fixups=20 imm_bytes=41
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   hash2_at: ir_blocks=1 ir_insts=5 vcode_ops=15 fixups=0 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
@@ -1183,13 +1183,9 @@ evm:
     // v23.i1 = eq v17 v22;
     - stack=[v22, v17], last_use=[v17, v22]
       eq [v22, v17] -> v23
-    // v25.i256 = and v23 1.i256;
+    // call %abi_return_bool v23;
     - stack=[v23], last_use=[v23]
-      pre: [PUSH(1)]
-      and [1, v23] -> v25
-    // call %abi_return_bool v25;
-    - stack=[v25], last_use=[v25]
-      call [v25]
+      call [v23]
     // unreachable;
     - stack=[]
       unreachable []
@@ -1302,13 +1298,9 @@ evm:
     // v48.i1 = eq v43 v47;
     - stack=[v47, v43], last_use=[v43, v47]
       eq [v47, v43] -> v48
-    // v49.i256 = and v48 1.i256;
+    // call %abi_return_bool v48;
     - stack=[v48], last_use=[v48]
-      pre: [PUSH(1)]
-      and [1, v48] -> v49
-    // call %abi_return_bool v49;
-    - stack=[v49], last_use=[v49]
-      call [v49]
+      call [v48]
     // unreachable;
     - stack=[]
       unreachable []
@@ -2264,7 +2256,7 @@ runtime__StorPtr_Evm___207f35a85ac4062e:
     JUMP
     JUMPDEST
     EQ  // v30.i1 = eq v23 v29;
-    PUSH1 FuncRef(1)  // call %abi_return_bool v32;
+    PUSH1 FuncRef(1)  // call %abi_return_bool v30;
     JUMP
     INVALID  // unreachable;
   block9:
@@ -2351,7 +2343,7 @@ runtime__StorPtr_Evm___207f35a85ac4062e:
     JUMP
     JUMPDEST
     EQ  // v48.i1 = eq v64 v47;
-    PUSH1 FuncRef(1)  // call %abi_return_bool v49;
+    PUSH1 FuncRef(1)  // call %abi_return_bool v48;
     JUMP
     INVALID  // unreachable;
   block12:

@@ -6,16 +6,16 @@ input_file: test_files/evm/aggregate_legalize_dynamic_array_index.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 38 bytes
-  total: 38 bytes
+  section runtime: 34 bytes
+  total: 34 bytes
 
 functions:
-  mem: global_dyn_base=0xc0 arena_base=0x80 scratch_peak_words=2 static_chain_peak_words=0
-  entry: ir_blocks=1 ir_insts=12 vcode_ops=28 fixups=0 imm_bytes=10
-    mem: scratch_words=4 stable_words=0 stable_mode=None entry_abs_words=2 abs_words_end=4
+  mem: global_dyn_base=0xc0 arena_base=0x40 scratch_peak_words=2 static_chain_peak_words=2
+  entry: ir_blocks=1 ir_insts=10 vcode_ops=26 fixups=0 imm_bytes=8
+    mem: scratch_words=2 stable_words=2 stable_mode=StaticAbs(base=0x80) entry_abs_words=2 abs_words_end=4
 
 evm:
-  case ok: calldata_len=64 success reason=Return gas_used=21382 gas_refunded=0 logs=0 output=call len=32 tx_gas=21280 runtime_gas=102
+  case ok: calldata_len=64 success reason=Return gas_used=21370 gas_refunded=0 logs=0 output=call len=32 tx_gas=21280 runtime_gas=90
 
 
 --------------- DEBUG ---------------
@@ -27,25 +27,23 @@ entry:
     CALLDATALOAD
     PUSH1 0x20 (32)  // v4.i256 = evm_calldata_load v3;
     CALLDATALOAD
-    PUSH1 0xc0 (192)  // evm_mstore v0 undef.i256;
+    PUSH1 0x80 (128)  // evm_mstore v0 undef.i256;
     MLOAD
-    PUSH1 0x80 (128)
+    PUSH1 0x40 (64)
     MSTORE
-    PUSH1 0xe0 (224)  // evm_mstore 160.i256 undef.i256;
+    PUSH1 0xa0 (160)  // evm_mstore 96.i256 undef.i256;
     MLOAD
-    PUSH1 0xa0 (160)
+    PUSH1 0x60 (96)
     MSTORE
-    DUP2  // v8.i256 = shl 5.i256 v2;
+    SWAP1  // v8.i256 = shl 5.i256 v2;
     PUSH1 0x5 (5)
     SHL
-    PUSH1 0x80 (128)  // v9.i256 = add v0 v8;
+    PUSH1 0x40 (64)  // v9.i256 = add v0 v8;
     ADD
-    MSTORE  // evm_mstore v9 v4;
-    PUSH1 0x5 (5)  // v10.i256 = shl 5.i256 v2;
-    SHL
-    PUSH1 0x80 (128)  // v11.i256 = add v0 v10;
-    ADD
-    MLOAD  // v12.i256 = evm_mload v11;
+    SWAP1  // evm_mstore v9 v4;
+    DUP2
+    MSTORE
+    MLOAD  // v12.i256 = evm_mload v9;
     PUSH0  // evm_mstore v1 v12;
     MSTORE
     PUSH1 0x20 (32)  // evm_return v1 v3;

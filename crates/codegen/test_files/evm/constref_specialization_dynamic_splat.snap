@@ -10,12 +10,12 @@ object: Contract
   total: 21 bytes
 
 functions:
-  mem: global_dyn_base=0x40 arena_base=0x20 scratch_peak_words=1 static_chain_peak_words=0
+  mem: global_dyn_base=0x20 arena_base=0x0 scratch_peak_words=1 static_chain_peak_words=0
   entry: ir_blocks=1 ir_insts=4 vcode_ops=12 fixups=2 imm_bytes=1
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=1 abs_words_end=0
   load__constref_a0_g0: ir_blocks=1 ir_insts=1 vcode_ops=5 fixups=0 imm_bytes=1
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=1 abs_words_end=0
-  load: ir_blocks=1 ir_insts=5 vcode_ops=12 fixups=0 imm_bytes=3
+  load: ir_blocks=1 ir_insts=5 vcode_ops=12 fixups=0 imm_bytes=2
     mem: scratch_words=1 stable_words=0 stable_mode=None entry_abs_words=1 abs_words_end=1
 
 --------------- OBSERVABILITY ---------------
@@ -83,11 +83,11 @@ load:
     PUSH1 0x5 (5)
     SHL
     ADD  // v4.i256 = add v0 v3;
-    PUSH1 0x20 (32)  // evm_code_copy v2 v4 v2;
+    PUSH1 0x20 (32)  // evm_code_copy 0.i256 v4 v2;
     SWAP1
-    DUP2
+    PUSH0
     CODECOPY
-    PUSH1 0x20 (32)  // v5.i256 = evm_mload v2;
+    PUSH0  // v6.i256 = evm_mload 0.i256;
     MLOAD
-    SWAP1  // return v5;
+    SWAP1  // return v6;
     JUMP

@@ -12,7 +12,7 @@ object: Contract
 functions:
   mem: global_dyn_base=0xc0 arena_base=0xa0 scratch_peak_words=1 static_chain_peak_words=0
   f: ir_blocks=3 ir_insts=20 vcode_ops=109 fixups=5 imm_bytes=26
-    mem: scratch_words=1 stable_words=2 stable_mode=DynamicFrame entry_abs_words=1 abs_words_end=1
+    mem: scratch_words=0 stable_words=2 stable_mode=DynamicFrame entry_abs_words=1 abs_words_end=0
   sink8: ir_blocks=1 ir_insts=8 vcode_ops=18 fixups=0 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   a: ir_blocks=1 ir_insts=2 vcode_ops=9 fixups=2 imm_bytes=1

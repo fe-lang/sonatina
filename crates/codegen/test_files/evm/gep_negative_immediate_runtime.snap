@@ -10,14 +10,14 @@ object: Contract
   total: 25 bytes
 
 functions:
-  mem: global_dyn_base=0x40 arena_base=0x20 scratch_peak_words=1 static_chain_peak_words=0
+  mem: global_dyn_base=0x20 arena_base=0x0 scratch_peak_words=1 static_chain_peak_words=0
   main: ir_blocks=1 ir_insts=3 vcode_ops=8 fixups=0 imm_bytes=3
     mem: scratch_words=1 stable_words=0 stable_mode=None entry_abs_words=1 abs_words_end=1
   entry: ir_blocks=1 ir_insts=3 vcode_ops=9 fixups=2 imm_bytes=1
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=1 abs_words_end=0
 
 evm:
-  case ok: calldata_len=4 success reason=Return gas_used=21968 gas_refunded=0 logs=0 output=call len=32 tx_gas=21016 runtime_gas=952
+  case ok: calldata_len=4 success reason=Return gas_used=21964 gas_refunded=0 logs=0 output=call len=32 tx_gas=21016 runtime_gas=948
 
 
 --------------- DEBUG ---------------
@@ -26,10 +26,10 @@ evm:
 main:
   block0:
     JUMPDEST
-    PUSH1 0x4d (77)  // evm_mstore 8192.i256 77.i256;
-    PUSH2 0x2000 (8192)
+    PUSH1 0x4d (77)  // evm_mstore v1 77.i256;
+    PUSH2 0x1fe0 (8160)
     MSTORE
-    PUSH2 0x2000 (8192)  // v4.i256 = evm_mload 8192.i256;
+    PUSH2 0x1fe0 (8160)  // v4.i256 = evm_mload v1;
     MLOAD
     SWAP1  // return v4;
     JUMP

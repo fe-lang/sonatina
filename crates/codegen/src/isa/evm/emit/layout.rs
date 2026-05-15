@@ -299,7 +299,7 @@ fn is_local_diamond_no_invert_candidate(
 
     if [header, *nz_fallthrough, *z_fallthrough, *continuation]
         .into_iter()
-        .any(|block| canonical_late_alias_target(aliases, block) != block)
+        .any(|block| canonical_block_alias_target(aliases, block) != block)
     {
         return false;
     }
@@ -333,7 +333,7 @@ fn later_loop_header_no_invert_exit_region(
     let body = emitted_block_order[header_idx + 1];
     if [header, body]
         .into_iter()
-        .any(|block| canonical_late_alias_target(aliases, block) != block)
+        .any(|block| canonical_block_alias_target(aliases, block) != block)
     {
         return None;
     }
@@ -352,10 +352,10 @@ fn later_loop_header_no_invert_exit_region(
     let BranchKind::Br(br) = header_branch.branch_kind() else {
         return None;
     };
-    if canonical_late_alias_target(aliases, *br.nz_dest()) != body {
+    if canonical_block_alias_target(aliases, *br.nz_dest()) != body {
         return None;
     }
-    let exit = canonical_late_alias_target(aliases, *br.z_dest());
+    let exit = canonical_block_alias_target(aliases, *br.z_dest());
     if loops.is_in_loop(exit, lp) {
         return None;
     }
@@ -369,7 +369,7 @@ fn later_loop_header_no_invert_exit_region(
     let moved_region = &emitted_block_order[header_idx + 1..exit_idx];
     if moved_region
         .iter()
-        .any(|&block| canonical_late_alias_target(aliases, block) != block)
+        .any(|&block| canonical_block_alias_target(aliases, block) != block)
         || moved_region
             .iter()
             .any(|&block| !loops.is_in_loop(block, lp) || block_branches_to(function, block, exit))
@@ -379,7 +379,7 @@ fn later_loop_header_no_invert_exit_region(
 
     let mut exit_end = exit_idx + 1;
     if let Some(&next) = emitted_block_order.get(exit_end)
-        && canonical_late_alias_target(aliases, next) == next
+        && canonical_block_alias_target(aliases, next) == next
         && !loops.is_in_loop(next, lp)
         && block_branches_to(function, exit, next)
     {
@@ -400,7 +400,7 @@ fn is_hot_loop_header_fallthrough_candidate(
 ) -> bool {
     if [header, exit, body]
         .into_iter()
-        .any(|block| canonical_late_alias_target(aliases, block) != block)
+        .any(|block| canonical_block_alias_target(aliases, block) != block)
     {
         return false;
     }
@@ -437,8 +437,8 @@ fn is_hot_loop_header_fallthrough_candidate(
     let BranchKind::Br(br) = header_branch.branch_kind() else {
         return false;
     };
-    if canonical_late_alias_target(aliases, *br.nz_dest()) != exit
-        || canonical_late_alias_target(aliases, *br.z_dest()) != body
+    if canonical_block_alias_target(aliases, *br.nz_dest()) != exit
+        || canonical_block_alias_target(aliases, *br.z_dest()) != body
     {
         return false;
     }
@@ -450,7 +450,7 @@ fn is_hot_loop_header_fallthrough_candidate(
         return false;
     };
 
-    canonical_late_alias_target(aliases, *jump.dest()) == header
+    canonical_block_alias_target(aliases, *jump.dest()) == header
 }
 
 fn is_loop_header_no_invert_candidate(
@@ -464,7 +464,7 @@ fn is_loop_header_no_invert_candidate(
 ) -> bool {
     if [header, body, exit]
         .into_iter()
-        .any(|block| canonical_late_alias_target(aliases, block) != block)
+        .any(|block| canonical_block_alias_target(aliases, block) != block)
     {
         return false;
     }
@@ -501,8 +501,8 @@ fn is_loop_header_no_invert_candidate(
     let BranchKind::Br(br) = header_branch.branch_kind() else {
         return false;
     };
-    if canonical_late_alias_target(aliases, *br.nz_dest()) != body
-        || canonical_late_alias_target(aliases, *br.z_dest()) != exit
+    if canonical_block_alias_target(aliases, *br.nz_dest()) != body
+        || canonical_block_alias_target(aliases, *br.z_dest()) != exit
     {
         return false;
     }
@@ -536,7 +536,7 @@ fn block_jump_dest(function: &Function, block: BlockId) -> Option<BlockId> {
     Some(*jump.dest())
 }
 
-fn canonical_late_alias_target(aliases: &FxHashMap<BlockId, BlockId>, block: BlockId) -> BlockId {
+fn canonical_block_alias_target(aliases: &FxHashMap<BlockId, BlockId>, block: BlockId) -> BlockId {
     let mut block = block;
     while let Some(&next) = aliases.get(&block) {
         if next == block {

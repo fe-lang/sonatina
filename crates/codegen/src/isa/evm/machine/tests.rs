@@ -8,7 +8,9 @@ use sonatina_ir::{
         control_flow::{Br, BranchKind, Jump, Return},
         data::Alloca,
         evm::{EvmMload, EvmMstore},
+        logic::And,
     },
+    ir_writer::FuncWriter,
     isa::{
         Isa,
         evm::{Evm, EvmMachine},
@@ -18,7 +20,10 @@ use sonatina_ir::{
 use sonatina_parser::parse_module;
 use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
 
-use super::{branch::canonicalize_machine_branch_conditions, verify::verify_machine_function};
+use super::{
+    branch::canonicalize_machine_branch_conditions, pipeline::run_machine_opt_pipeline,
+    verify::verify_machine_function,
+};
 
 fn evm_triple() -> TargetTriple {
     TargetTriple::new(
@@ -167,6 +172,40 @@ fn machine_verify_accepts_word_typed_comparison() {
     module.func_store.view(func_ref, |function| {
         verify_machine_function(func_ref, function)
             .expect("word-typed compare result is the machine zext-free form");
+    });
+}
+
+#[test]
+fn machine_gvn_folds_i1_word_operand_constant_without_zext() {
+    let mb = machine_builder();
+    let func_ref = mb
+        .declare_function(Signature::new_single(
+            "machine_gvn_i1_word_const",
+            Linkage::Public,
+            &[],
+            Type::I256,
+        ))
+        .unwrap();
+    let machine = EvmMachine::new(mb.triple());
+    let is = machine.inst_set();
+    let mut builder = mb.func_builder::<InstInserter>(func_ref);
+
+    let block = builder.append_block();
+    builder.switch_to_block(block);
+    let one_i1 = builder.make_imm_value(Immediate::from(true));
+    let one_i256 = builder.make_imm_value(Immediate::from_i256(I256::from(1), Type::I256));
+    let masked = builder.insert_inst(And::new(is, one_i1, one_i256), Type::I256);
+    builder.insert_inst_no_result(Return::new_single(is, masked));
+    builder.seal_all();
+    builder.finish();
+
+    let module = mb.build();
+    run_machine_opt_pipeline(&module, &[func_ref], false)
+        .expect("GVN should fold normalized i1 word operands without panicking");
+    module.func_store.view(func_ref, |function| {
+        let dumped = FuncWriter::new(func_ref, function).dump_string();
+        assert!(dumped.contains("return 1.i256;"), "{dumped}");
+        assert!(!dumped.contains(" and "), "{dumped}");
     });
 }
 

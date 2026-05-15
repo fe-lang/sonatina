@@ -11,6 +11,7 @@ const MACHINE_PASSES: &[Pass] = &[
     Pass::ScalarCanonicalize,
     Pass::KnownBitsSimplify,
     Pass::Sccp,
+    Pass::Gvn,
     Pass::Adce,
     Pass::CfgCleanup,
 ];

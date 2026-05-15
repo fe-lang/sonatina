@@ -43,14 +43,14 @@ use object_liveness::{
 };
 
 #[cfg(test)]
-pub(crate) struct FuncAnalysis {
+pub(crate) struct StackifiedFuncAnalysis {
     pub(crate) alloc: StackifyAlloc,
     pub(crate) block_order: Vec<BlockId>,
     pub(crate) value_aliases: SecondaryMap<ValueId, Option<ValueId>>,
 }
 
 #[cfg(test)]
-impl FuncAnalysis {
+impl StackifiedFuncAnalysis {
     pub(crate) fn canonicalize_value(&self, value: ValueId) -> ValueId {
         super::canonicalize_alias_value(&self.value_aliases, value)
     }
@@ -144,7 +144,7 @@ pub(super) struct StackObjectInput<'a> {
 
 impl<'a> StackObjectInput<'a> {
     #[cfg(test)]
-    fn legacy(analysis: &'a FuncAnalysis) -> Self {
+    fn stackified(analysis: &'a StackifiedFuncAnalysis) -> Self {
         Self {
             stackify_alloc: Some(&analysis.alloc),
             block_order: &analysis.block_order,
@@ -189,7 +189,7 @@ impl<'a> StaticArenaAllocCtx<'a> {
         &self,
         func_ref: FuncRef,
         function: &Function,
-        analysis: &FuncAnalysis,
+        analysis: &StackifiedFuncAnalysis,
     ) -> FuncStackObjects {
         compute_func_stack_objects(func_ref, function, self, analysis)
     }
@@ -258,9 +258,9 @@ pub(crate) fn compute_func_stack_objects(
     func_ref: FuncRef,
     function: &Function,
     ctx: &StaticArenaAllocCtx<'_>,
-    analysis: &FuncAnalysis,
+    analysis: &StackifiedFuncAnalysis,
 ) -> FuncStackObjects {
-    let input = StackObjectInput::legacy(analysis);
+    let input = StackObjectInput::stackified(analysis);
     compute_func_stack_objects_from_input(func_ref, function, ctx, &input)
 }
 
@@ -776,7 +776,12 @@ mod tests {
         input: &str,
         func_name: &str,
         stack_reach: u8,
-    ) -> (ParsedModule, FuncRef, FuncAnalysis, FuncStackObjects) {
+    ) -> (
+        ParsedModule,
+        FuncRef,
+        StackifiedFuncAnalysis,
+        FuncStackObjects,
+    ) {
         let parsed = parse_module(input).expect("module parses");
         let isa = test_isa();
         let backend = EvmBackend::new(test_isa());
@@ -820,7 +825,7 @@ mod tests {
                 .with_value_aliases(&value_aliases)
                 .compute();
 
-            analysis = Some(FuncAnalysis {
+            analysis = Some(StackifiedFuncAnalysis {
                 alloc,
                 block_order: dom.rpo().to_vec(),
                 value_aliases,

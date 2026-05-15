@@ -11,10 +11,10 @@ object: Contract
   total: 26 bytes
 
 functions:
-  mem: global_dyn_base=0x20 arena_base=0x20 scratch_peak_words=0 static_chain_peak_words=0
+  mem: global_dyn_base=0x0 arena_base=0x0 scratch_peak_words=0 static_chain_peak_words=0
   entry: ir_blocks=1 ir_insts=2 vcode_ops=6 fixups=0 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  init: ir_blocks=1 ir_insts=4 vcode_ops=8 fixups=2 imm_bytes=4
+  init: ir_blocks=1 ir_insts=4 vcode_ops=8 fixups=2 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
@@ -41,7 +41,7 @@ init:
     PUSH0 0x0 (0)  // v1.i256 = sym_size &runtime;
     DUP1  // evm_code_copy v2 v0 v1;
     SWAP2
-    PUSH1 0x20 (32)
+    PUSH0
     CODECOPY
-    PUSH1 0x20 (32)  // evm_return v2 v1;
+    PUSH0  // evm_return v2 v1;
     RETURN

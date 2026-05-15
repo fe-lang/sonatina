@@ -6,68 +6,68 @@ input_file: test_files/evm/gvn_cross_block_tuple_call_reuse.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=true evm_trace=false emit_observability=false opt=s
 
 object: Contract
-  section runtime: 61 bytes
-  total: 61 bytes
+  section runtime: 59 bytes
+  total: 59 bytes
 
 functions:
-  mem: global_dyn_base=0x20 arena_base=0x20 scratch_peak_words=0 static_chain_peak_words=0
-  entry: ir_blocks=8 ir_insts=18 vcode_ops=46 fixups=3 imm_bytes=12
+  mem: global_dyn_base=0x0 arena_base=0x0 scratch_peak_words=0 static_chain_peak_words=0
+  entry: ir_blocks=8 ir_insts=18 vcode_ops=46 fixups=3 imm_bytes=10
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=32 success reason=Return gas_used=21269 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=129
+  case ok: calldata_len=32 success reason=Return gas_used=21264 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=124
 
 
 --------------- DEBUG ---------------
 
 // func public %entry()
   block0 P=[] T=[]
-    // evm_mstore 32.i256 99.i256;
+    // evm_mstore 0.i256 99.i256;
     - stack=[]
-      pre: [PUSH(99), PUSH(32)]
-      evm_mstore [32, 99]
-    // v3.i256 = evm_calldata_load 0.i256;
+      pre: [PUSH(99), PUSH(0)]
+      evm_mstore [0, 99]
+    // v2.i256 = evm_calldata_load 0.i256;
     - stack=[]
       pre: [PUSH(0)]
-      evm_calldata_load [0] -> v3
-    // v5.i256 = and v3 1.i256;
-    - stack=[v3]
+      evm_calldata_load [0] -> v2
+    // v4.i256 = and v2 1.i256;
+    - stack=[v2]
       pre: [PUSH(1), DUP2]
-      and [v3, 1] -> v5
-    // br v5 block8 block1;
-    - stack=[v5, v3]
-      br [v5] -> [block8, block1]
-  block1 P=[] T=[v3]
-    inherited from block0: [v3]
-    // v7.i256 = add v3 1.i256;
-    - stack=[v3]
+      and [v2, 1] -> v4
+    // br v4 block8 block1;
+    - stack=[v4, v2]
+      br [v4] -> [block8, block1]
+  block1 P=[] T=[v2]
+    inherited from block0: [v2]
+    // v6.i256 = add v2 1.i256;
+    - stack=[v2]
       pre: [PUSH(1), DUP2]
-      add [v3, 1] -> v7
-    // v8.i1 = lt v7 v3;
-    - stack=[v7, v3], last_use=[v3]
+      add [v2, 1] -> v6
+    // v7.i1 = lt v6 v2;
+    - stack=[v6, v2], last_use=[v2]
       pre: [SWAP1, DUP2]
-      lt [v7, v3] -> v8
-    // br v8 block7 block2;
-    - stack=[v8, v7]
-      br [v8] -> [block7, block2]
-  block2 P=[] T=[v7]
-    inherited from block1: [v7]
-    // v10.i1 = eq v7 5.i256;
-    - stack=[v7], last_use=[v7]
+      lt [v6, v2] -> v7
+    // br v7 block7 block2;
+    - stack=[v7, v6]
+      br [v7] -> [block7, block2]
+  block2 P=[] T=[v6]
+    inherited from block1: [v6]
+    // v9.i1 = eq v6 5.i256;
+    - stack=[v6], last_use=[v6]
       pre: [PUSH(5)]
-      eq [5, v7] -> v10
-    // br v10 block3 block9;
-    - stack=[v10]
-      br [v10] -> [block3, block9]
+      eq [5, v6] -> v9
+    // br v9 block3 block9;
+    - stack=[v9]
+      br [v9] -> [block3, block9]
   block3 P=[] T=[]
-    // evm_mstore 32.i256 1.i256;
+    // evm_mstore 0.i256 1.i256;
     - stack=[]
-      pre: [PUSH(1), PUSH(32)]
-      evm_mstore [32, 1]
-    // evm_mstore 64.i256 42.i256;
+      pre: [PUSH(1), PUSH(0)]
+      evm_mstore [0, 1]
+    // evm_mstore 32.i256 42.i256;
     - stack=[]
-      pre: [PUSH(42), PUSH(64)]
-      evm_mstore [64, 42]
+      pre: [PUSH(42), PUSH(32)]
+      evm_mstore [32, 42]
     // evm_mstore 0.i256 42.i256;
     - stack=[]
       pre: [PUSH(42), PUSH(0)]
@@ -103,53 +103,53 @@ evm:
 entry:
   block0:
     PUSH1 0x63 (99)  // evm_mstore v0 v1;
-    PUSH1 0x20 (32)
+    PUSH0
     MSTORE
-    PUSH0  // v3.i256 = evm_calldata_load v2;
+    PUSH0  // v2.i256 = evm_calldata_load v0;
     CALLDATALOAD
-    PUSH1 0x1 (1)  // v5.i256 = and v3 v4;
+    PUSH1 0x1 (1)  // v4.i256 = and v2 v3;
     DUP2
     AND
-    PUSH1 block6  // br v5 block8 block1;
+    PUSH1 block6  // br v4 block8 block1;
     JUMPI
   block1:
-    PUSH1 0x1 (1)  // v7.i256 = add v3 v4;
+    PUSH1 0x1 (1)  // v6.i256 = add v2 v3;
     DUP2
     ADD
-    SWAP1  // v8.i1 = lt v7 v3;
+    SWAP1  // v7.i1 = lt v6 v2;
     DUP2
     LT
-    PUSH1 block7  // br v8 block7 block2;
+    PUSH1 block7  // br v7 block7 block2;
     JUMPI
   block2:
-    PUSH1 0x5 (5)  // v10.i1 = eq v7 v9;
+    PUSH1 0x5 (5)  // v9.i1 = eq v6 v8;
     EQ
-    ISZERO  // br v10 block3 block9;
+    ISZERO  // br v9 block3 block9;
     PUSH1 block6
     JUMPI
   block3:
-    PUSH1 0x1 (1)  // evm_mstore v0 v4;
-    PUSH1 0x20 (32)
-    MSTORE
-    PUSH1 0x2a (42)  // evm_mstore v13 v12;
-    PUSH1 0x40 (64)
-    MSTORE
-    PUSH1 0x2a (42)  // evm_mstore v2 v12;
+    PUSH1 0x1 (1)  // evm_mstore v0 v3;
     PUSH0
     MSTORE
-    PUSH1 0x20 (32)  // evm_return v2 v0;
+    PUSH1 0x2a (42)  // evm_mstore v10 v12;
+    PUSH1 0x20 (32)
+    MSTORE
+    PUSH1 0x2a (42)  // evm_mstore v0 v12;
+    PUSH0
+    MSTORE
+    PUSH1 0x20 (32)  // evm_return v0 v10;
     PUSH0
     RETURN
   block7:
     JUMPDEST
-    PUSH0  // evm_revert v2 v2;
+    PUSH0  // evm_revert v0 v0;
     PUSH0
     REVERT
   block6:
     JUMPDEST
-    PUSH0  // evm_mstore v2 v2;
+    PUSH0  // evm_mstore v0 v0;
     PUSH0
     MSTORE
-    PUSH1 0x20 (32)  // evm_return v2 v0;
+    PUSH1 0x20 (32)  // evm_return v0 v10;
     PUSH0
     RETURN
