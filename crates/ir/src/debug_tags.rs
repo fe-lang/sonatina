@@ -1,5 +1,4 @@
-use std::collections::BTreeMap;
-use std::ops::Range;
+use std::{collections::BTreeMap, ops::Range};
 
 use crate::InstId;
 
