@@ -358,6 +358,34 @@ fn emit_naga_regions(
                                     let h = func.expressions.append(naga::Expression::Binary { op: naga::BinaryOperator::Add, left: lhs, right: rhs }, naga::Span::UNDEFINED);
                                     value_map.insert(result, h);
                                 }
+                            } else if let Some(sub) = <&sonatina_ir::inst::arith::Sub as InstDowncast>::downcast(inst_set, inst_data) {
+                                if let Some(result) = function.dfg.inst_result(inst_id) {
+                                    let lhs = resolve_naga_value(*sub.lhs(), function, value_map, phi_locals, func).unwrap();
+                                    let rhs = resolve_naga_value(*sub.rhs(), function, value_map, phi_locals, func).unwrap();
+                                    let h = func.expressions.append(naga::Expression::Binary { op: naga::BinaryOperator::Subtract, left: lhs, right: rhs }, naga::Span::UNDEFINED);
+                                    value_map.insert(result, h);
+                                }
+                            } else if let Some(mul) = <&sonatina_ir::inst::arith::Mul as InstDowncast>::downcast(inst_set, inst_data) {
+                                if let Some(result) = function.dfg.inst_result(inst_id) {
+                                    let lhs = resolve_naga_value(*mul.lhs(), function, value_map, phi_locals, func).unwrap();
+                                    let rhs = resolve_naga_value(*mul.rhs(), function, value_map, phi_locals, func).unwrap();
+                                    let h = func.expressions.append(naga::Expression::Binary { op: naga::BinaryOperator::Multiply, left: lhs, right: rhs }, naga::Span::UNDEFINED);
+                                    value_map.insert(result, h);
+                                }
+                            } else if let Some(sar) = <&sonatina_ir::inst::arith::Sar as InstDowncast>::downcast(inst_set, inst_data) {
+                                if let Some(result) = function.dfg.inst_result(inst_id) {
+                                    let val = resolve_naga_value(*sar.value(), function, value_map, phi_locals, func).unwrap();
+                                    let bits = resolve_naga_value(*sar.bits(), function, value_map, phi_locals, func).unwrap();
+                                    let bits_u32 = func.expressions.append(
+                                        naga::Expression::As { expr: bits, kind: naga::ScalarKind::Uint, convert: Some(4) },
+                                        naga::Span::UNDEFINED,
+                                    );
+                                    let h = func.expressions.append(
+                                        naga::Expression::Binary { op: naga::BinaryOperator::ShiftRight, left: val, right: bits_u32 },
+                                        naga::Span::UNDEFINED,
+                                    );
+                                    value_map.insert(result, h);
+                                }
                             }
                         }
                     }
@@ -371,6 +399,7 @@ fn emit_naga_regions(
                         | naga::Expression::Unary { .. }
                         | naga::Expression::Access { .. }
                         | naga::Expression::AccessIndex { .. }
+                        | naga::Expression::As { .. }
                     );
                     if needs_emit {
                         loop_body.push(
@@ -494,7 +523,8 @@ fn translate_to_naga(
         module.func_store.try_view(fr, |f| f.arg_values.len()).unwrap_or(0)
     }).unwrap_or(2);
 
-    let input_members: Vec<naga::StructMember> = (0..param_count).map(|i| {
+    let effective_params = param_count.max(1); // at least 1 member for valid struct
+    let input_members: Vec<naga::StructMember> = (0..effective_params).map(|i| {
         naga::StructMember {
             name: Some(format!("p{i}")),
             ty: i64_type,
@@ -502,7 +532,7 @@ fn translate_to_naga(
             offset: (i * 8) as u32,
         }
     }).collect();
-    let input_span = (param_count * 8) as u32;
+    let input_span = (effective_params * 8) as u32;
 
     let input_struct = naga_mod.types.insert(
         naga::Type {
