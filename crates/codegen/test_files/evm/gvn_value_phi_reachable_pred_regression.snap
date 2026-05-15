@@ -11,7 +11,7 @@ object: Contract
 
 functions:
   mem: global_dyn_base=0x0 arena_base=0x0 scratch_peak_words=0 static_chain_peak_words=0
-  entry: ir_blocks=6 ir_insts=14 vcode_ops=34 fixups=4 imm_bytes=7
+  entry: ir_blocks=6 ir_insts=13 vcode_ops=34 fixups=4 imm_bytes=7
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:

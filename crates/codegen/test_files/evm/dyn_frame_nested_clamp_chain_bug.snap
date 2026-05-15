@@ -65,7 +65,7 @@ f:
     DUP2  // evm_mstore v4 v0;
     DUP2
     MSTORE
-    DUP2  // v25.i1 = is_zero v0;
+    DUP2  // v25.i256 = is_zero v0;
     PUSH1 block2  // br v25 block1 block2;
     JUMPI
   block1:
@@ -90,12 +90,12 @@ f:
     DUP2  // v10.i256 = sub v9 v8;
     DUP2
     SUB
-    SWAP1  // v11.i1 = lt v8 v9;
+    SWAP1  // v11.i256 = lt v8 v9;
     DUP3
     LT
     MUL  // v12.i256 = mul v10 v11;
     ADD  // v13.i256 = add v8 v12;
-    PUSH1 0x9f (159)  // v16.i1 = gt v13 159.i256;
+    PUSH1 0x9f (159)  // v16.i256 = gt v13 159.i256;
     DUP2
     GT
     PUSH1 block5  // br v16 block6 block4;

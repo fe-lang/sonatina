@@ -23,7 +23,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case empty: calldata_len=0 success reason=Return gas_used=21004 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=4
+  case empty: calldata_len=0 success reason=Return gas_used=21005 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=5
 
 
 --------------- DEBUG ---------------
@@ -32,21 +32,21 @@ evm:
   block0 P=[] T=[]
     // evm_return 0.i256 0.i256;
     - stack=[]
-      pre: [PUSH(0), PUSH(0)]
+      pre: [PUSH(0), DUP1]
       evm_return [0, 0]
 
 // func private %exit_return()
   block0 P=[] T=[]
     // evm_return 0.i256 0.i256;
     - stack=[]
-      pre: [PUSH(0), PUSH(0)]
+      pre: [PUSH(0), DUP1]
       evm_return [0, 0]
 
 // func private %exit_revert()
   block0 P=[] T=[]
     // evm_revert 0.i256 0.i256;
     - stack=[]
-      pre: [PUSH(0), PUSH(0)]
+      pre: [PUSH(0), DUP1]
       evm_revert [0, 0]
 
 // func private %exit_stop()
@@ -65,21 +65,21 @@ evm:
 entry:
   block0:
     PUSH0  // evm_return 0.i256 0.i256;
-    PUSH0
+    DUP1
     RETURN
 
 // func private %exit_return()
 exit_return:
   block0:
     PUSH0  // evm_return v0 v0;
-    PUSH0
+    DUP1
     RETURN
 
 // func private %exit_revert()
 exit_revert:
   block0:
     PUSH0  // evm_revert v0 v0;
-    PUSH0
+    DUP1
     REVERT
 
 // func private %exit_stop()

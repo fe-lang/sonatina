@@ -13,7 +13,8 @@ use cranelift_entity::{PrimaryMap, SecondaryMap, entity_impl, packed_option::Pac
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 use sonatina_ir::{
-    BlockId, ControlFlowGraph, DataFlowGraph, Function, Immediate, InstId, Type, Value, ValueId,
+    BlockId, ControlFlowGraph, DataFlowGraph, Function, I256, Immediate, InstId, Type, Value,
+    ValueId,
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
     inst::{
         BinaryInstKind, CastInstKind, InstClassKind, InstKeyExt, OwnedInstKey, UnaryInstKind,
@@ -83,6 +84,18 @@ fn fold_result_imm(imm: Immediate, result_ty: Type) -> Option<Immediate> {
         Some(imm.zext(result_ty))
     } else {
         None
+    }
+}
+
+fn normalize_imm_for_type(imm: Immediate, ty: Type) -> Option<Immediate> {
+    if !ty.is_integral() {
+        None
+    } else if imm.ty() == ty {
+        Some(imm)
+    } else if imm.ty() == Type::I1 {
+        Some(imm.zext(ty))
+    } else {
+        Some(Immediate::from_i256(imm.as_i256(), ty))
     }
 }
 
@@ -311,7 +324,6 @@ impl GvnSolver {
                         }
                         BranchKind::Br(branch) => {
                             let cond = *branch.cond();
-                            debug_assert_eq!(func.dfg.value_ty(cond), Type::I1);
 
                             let then_block = *branch.nz_dest();
                             let else_block = *branch.z_dest();
@@ -323,23 +335,27 @@ impl GvnSolver {
                             let else_predicate =
                                 self.extract_edge_predicate(func, &known_bits, cond, false);
 
-                            // Make immediates to which the predicate and `cond` is evaluated when the edge is selected.
-                            let then_imm = self.make_imm(&mut func.dfg, true);
-                            let else_imm = self.make_imm(&mut func.dfg, false);
+                            // Make immediates to which the predicate and `cond` is evaluated when
+                            // the edge is selected. Word branches are truthy, so the zero edge is
+                            // exact but the nonzero edge is only exact when the condition is known
+                            // to be normalized to 0/1.
+                            let then_imm = self.branch_resolved_cond(func, &known_bits, cond, true);
+                            let else_imm =
+                                self.branch_resolved_cond(func, &known_bits, cond, false);
 
                             self.add_edge_info(
                                 block,
                                 then_block,
                                 Some(cond),
                                 then_predicate,
-                                Some(then_imm),
+                                then_imm,
                             );
                             self.add_edge_info(
                                 block,
                                 else_block,
                                 Some(cond),
                                 else_predicate,
-                                Some(else_imm),
+                                else_imm,
                             );
                         }
                         BranchKind::BrTable(br_table) => {
@@ -780,7 +796,7 @@ impl GvnSolver {
         // If `resolved_cond` doesn't exist, then the edge must be non conditional jump.
         let resolved_cond = match edge_data.resolved_cond.expand() {
             Some(cond) => cond,
-            None => return true,
+            None => return edge_data.cond.expand().is_none(),
         };
 
         let inferred_value = self.infer_value_at_block(func, domtree, cond, edge_data.from);
@@ -880,8 +896,10 @@ impl GvnSolver {
         let edge_data = self.edge_data(edge);
         let edge_cond = edge_data.cond.expand()?;
         // If value is congruent to edge cond value, then return resolved cond of the edge.
-        if self.is_congruent_value(edge_cond, value) {
-            return Some(edge_data.resolved_cond.unwrap());
+        if self.is_congruent_value(edge_cond, value)
+            && let Some(resolved_cond) = edge_data.resolved_cond.expand()
+        {
+            return Some(resolved_cond);
         }
 
         let predicate = edge_data.predicate.as_ref()?;
@@ -1018,6 +1036,7 @@ impl GvnSolver {
     ) -> Option<ValueId> {
         let imm = if let InstClassKind::Unary(kind) = insn_expr.kind() {
             let arg = func.dfg.value_imm(insn_expr.unary_arg()?)?;
+            let result_ty = *insn_expr.result_tys().get(result_idx)?;
             match kind {
                 UnaryInstKind::Neg => -arg,
                 UnaryInstKind::Snego => match result_idx {
@@ -1026,7 +1045,7 @@ impl GvnSolver {
                     _ => return None,
                 },
                 UnaryInstKind::Not => !arg,
-                UnaryInstKind::IsZero => arg.is_zero().into(),
+                UnaryInstKind::IsZero => fold_result_imm(arg.is_zero().into(), result_ty)?,
                 UnaryInstKind::EvmClz => fold_evm_clz(arg)?,
             }
         } else if let InstClassKind::Binary(kind) = insn_expr.kind() {
@@ -1405,6 +1424,7 @@ impl GvnSolver {
         insn_expr: &OwnedInstKey,
         result_idx: usize,
     ) -> Option<GvnInsn> {
+        let result_ty = *insn_expr.result_tys().get(result_idx)?;
         if let InstClassKind::Unary(kind) = insn_expr.kind() {
             let arg = insn_expr.unary_arg()?;
             if matches!(kind, UnaryInstKind::Snego) && !func.dfg.value_ty(arg).is_integral() {
@@ -1435,7 +1455,7 @@ impl GvnSolver {
                     .and_then(|_| inner.unary_arg())
             });
             if !simplified.is_no_change() {
-                return Some(self.simplify_expr_result_to_gvn(func, simplified));
+                return self.simplify_expr_result_to_gvn(func, simplified, result_ty);
             }
         }
 
@@ -1458,7 +1478,7 @@ impl GvnSolver {
             };
             let simplified = simplify_binary_with_facts(func, kind, lhs, rhs, &facts);
             if !simplified.is_no_change() {
-                return Some(self.simplify_expr_result_to_gvn(func, simplified));
+                return self.simplify_expr_result_to_gvn(func, simplified, result_ty);
             }
 
             if matches!(kind, BinaryInstKind::Sub)
@@ -1552,7 +1572,7 @@ impl GvnSolver {
             let (arg, ty) = insn_expr.cast_arg_ty()?;
             let simplified = simplify_cast(func, kind, arg, ty);
             if !simplified.is_no_change() {
-                return Some(self.simplify_expr_result_to_gvn(func, simplified));
+                return self.simplify_expr_result_to_gvn(func, simplified, result_ty);
             }
         }
 
@@ -1897,15 +1917,39 @@ impl GvnSolver {
         &mut self,
         func: &mut Function,
         simplified: SimplifyExprResult,
-    ) -> GvnInsn {
+        result_ty: Type,
+    ) -> Option<GvnInsn> {
         match simplified {
             SimplifyExprResult::Const(imm) => {
+                let imm = normalize_imm_for_type(imm, result_ty)?;
                 let value = self.make_imm(&mut func.dfg, imm);
-                GvnInsn::Value(value)
+                Some(GvnInsn::Value(value))
             }
-            SimplifyExprResult::Copy(value) => GvnInsn::Value(value),
+            SimplifyExprResult::Copy(value) if func.dfg.value_ty(value) == result_ty => {
+                Some(GvnInsn::Value(value))
+            }
+            SimplifyExprResult::Copy(_) => None,
             SimplifyExprResult::NoChange => unreachable!(),
         }
+    }
+
+    fn branch_resolved_cond(
+        &mut self,
+        func: &mut Function,
+        known_bits: &KnownBitsQuery,
+        cond: ValueId,
+        edge_truth: bool,
+    ) -> Option<ValueId> {
+        let cond_ty = func.dfg.value_ty(cond);
+        if cond_ty == Type::I1 {
+            return self.make_bool_imm(&mut func.dfg, cond_ty, edge_truth);
+        }
+
+        if cond_ty == Type::I256 && (!edge_truth || known_bits.fits_in_low_bits(func, cond, 1)) {
+            return self.make_bool_imm(&mut func.dfg, cond_ty, edge_truth);
+        }
+
+        None
     }
 
     fn extract_edge_predicate(
@@ -1944,7 +1988,8 @@ impl GvnSolver {
             if let InstClassKind::Binary(kind @ (BinaryInstKind::Eq | BinaryInstKind::Ne)) =
                 insn_expr.kind()
                 && let Some((lhs, rhs)) = insn_expr.binary_args()
-                && let Some((arg, imm)) = self.bool_compare_arg_and_const(func, lhs, rhs)
+                && let Some((arg, imm)) =
+                    self.bool_compare_arg_and_const(func, known_bits, lhs, rhs)
             {
                 expected_true = match kind {
                     BinaryInstKind::Eq => expected_true == imm,
@@ -1957,7 +2002,8 @@ impl GvnSolver {
                     continue;
                 }
 
-                let expected = self.make_imm(&mut func.dfg, expected_true);
+                let arg_ty = func.dfg.value_ty(arg);
+                let expected = self.make_bool_imm(&mut func.dfg, arg_ty, expected_true)?;
                 return Some(PredicateRelation::Eq {
                     lhs: arg,
                     rhs: expected,
@@ -1990,8 +2036,9 @@ impl GvnSolver {
                     });
                 }
 
-                if func.dfg.value_ty(arg) == Type::I1 {
-                    let one = self.make_imm(&mut func.dfg, true);
+                let arg_ty = func.dfg.value_ty(arg);
+                if arg_ty == Type::I1 || known_bits.fits_in_low_bits(func, arg, 1) {
+                    let one = self.make_bool_imm(&mut func.dfg, arg_ty, true)?;
                     return Some(PredicateRelation::Eq { lhs: arg, rhs: one });
                 }
             }
@@ -2002,24 +2049,54 @@ impl GvnSolver {
         None
     }
 
+    fn make_bool_imm(&mut self, dfg: &mut DataFlowGraph, ty: Type, value: bool) -> Option<ValueId> {
+        let imm = match ty {
+            Type::I1 => Immediate::from(value),
+            Type::I256 => Immediate::from_i256(I256::from(u8::from(value)), Type::I256),
+            _ => return None,
+        };
+        Some(self.make_imm(dfg, imm))
+    }
+
     fn bool_compare_arg_and_const(
         &self,
         func: &Function,
+        known_bits: &KnownBitsQuery,
         lhs: ValueId,
         rhs: ValueId,
     ) -> Option<(ValueId, bool)> {
-        match (Self::value_i1_imm(func, lhs), Self::value_i1_imm(func, rhs)) {
-            (Some(lhs_imm), None) => Some((rhs, lhs_imm)),
-            (None, Some(rhs_imm)) => Some((lhs, rhs_imm)),
+        match (
+            Self::value_bool_imm(func, lhs),
+            Self::value_bool_imm(func, rhs),
+        ) {
+            (Some(lhs_imm), None) if Self::is_normalized_bool(func, known_bits, rhs) => {
+                Some((rhs, lhs_imm))
+            }
+            (None, Some(rhs_imm)) if Self::is_normalized_bool(func, known_bits, lhs) => {
+                Some((lhs, rhs_imm))
+            }
             _ => None,
         }
     }
 
-    fn value_i1_imm(func: &Function, value: ValueId) -> Option<bool> {
-        let Immediate::I1(imm) = func.dfg.value_imm(value)? else {
-            return None;
-        };
-        Some(imm)
+    fn is_normalized_bool(func: &Function, known_bits: &KnownBitsQuery, value: ValueId) -> bool {
+        let ty = func.dfg.value_ty(value);
+        ty == Type::I1 || (ty == Type::I256 && known_bits.fits_in_low_bits(func, value, 1))
+    }
+
+    fn value_bool_imm(func: &Function, value: ValueId) -> Option<bool> {
+        let imm = func.dfg.value_imm(value)?;
+        match imm.ty() {
+            Type::I1 => {
+                let Immediate::I1(value) = imm else {
+                    unreachable!("i1 immediate must carry an i1 payload");
+                };
+                Some(value)
+            }
+            Type::I256 if imm.as_i256() == I256::from(0) => Some(false),
+            Type::I256 if imm.as_i256() == I256::from(1) => Some(true),
+            _ => None,
+        }
     }
 
     /// Make edge data and append incoming/outgoing edges of corresponding blocks.
@@ -3306,8 +3383,23 @@ mod tests {
         analysis::known_bits::{KnownBitsQuery, count_query_news_for_test},
         domtree::DomTree,
     };
-    use sonatina_ir::{ControlFlowGraph, Immediate, Type, ValueId};
+    use sonatina_ir::{ControlFlowGraph, Immediate, Type, ValueId, ir_writer::FuncWriter};
     use sonatina_parser::parse_module;
+
+    fn run_gvn(source: &str) -> String {
+        let module = parse_module(source).expect("parse should succeed").module;
+        let func_ref = module.funcs()[0];
+        module.func_store.modify(func_ref, |func| {
+            let mut cfg = ControlFlowGraph::default();
+            cfg.compute(func);
+            let mut domtree = DomTree::default();
+            domtree.compute(&cfg);
+            GvnSolver::new().run(func, &mut cfg, &mut domtree);
+        });
+        module.func_store.view(func_ref, |func| {
+            FuncWriter::new(func_ref, func).dump_string()
+        })
+    }
 
     #[test]
     fn update_class_value_phi_keeps_value_phi_table_synchronized() {
@@ -3368,6 +3460,59 @@ block2:
                 "GVN should build one known-bits snapshot per run"
             );
         });
+    }
+
+    #[test]
+    fn gvn_does_not_treat_i256_eq_one_as_bool_predicate_without_normalized_fact() {
+        let dumped = run_gvn(
+            r#"
+target = "evm-ethereum-london"
+
+func private %promo_piece(v0.i1, v1.i256) -> i256 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        v2.i1 = eq v1 1.i256;
+        br v2 block3 block4;
+
+    block2:
+        v3.i1 = eq v1 1.i256;
+        br v3 block3 block7;
+
+    block3:
+        v4.i256 = phi (2.i256 block1) (3.i256 block4) (4.i256 block5) (5.i256 block6) (10.i256 block2) (11.i256 block7) (12.i256 block8) (13.i256 block9);
+        return v4;
+
+    block4:
+        v5.i1 = eq v1 2.i256;
+        br v5 block3 block5;
+
+    block5:
+        v6.i1 = eq v1 3.i256;
+        br v6 block3 block6;
+
+    block6:
+        jump block3;
+
+    block7:
+        v7.i1 = eq v1 2.i256;
+        br v7 block3 block8;
+
+    block8:
+        v8.i1 = eq v1 3.i256;
+        br v8 block3 block9;
+
+    block9:
+        jump block3;
+}
+"#,
+        );
+
+        assert!(dumped.contains("eq v1 2.i256"), "{dumped}");
+        assert!(dumped.contains("eq v1 3.i256"), "{dumped}");
+        assert!(dumped.contains("(3.i256 block4)"), "{dumped}");
+        assert!(dumped.contains("(11.i256 block7)"), "{dumped}");
     }
 
     #[test]

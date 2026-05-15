@@ -47,32 +47,18 @@ evm:
       exit(block1): [PUSH(0), PUSH(32)]
       jump -> block1
   block1 P=[v0, v1] T=[v6]
-    // v8.i1 = lt v1 1.i256;
+    // v8.i256 = lt v1 1.i256;
     - stack=[v0, v1, v6, <RET>]
       pre: [PUSH(1), DUP3]
       lt [v1, 1] -> v8
-    // br v8 block4 block3;
+    // br v8 block2 block3;
     - stack=[v8, v0, v1, v6, <RET>]
-      br [v8] -> [block4, block3]
-  block3 P=[] T=[v0]
-    inherited from block1: [v0, v1x, v6x, <RET>]
-    // v12.i256 = evm_mload v0;
-    - stack=[v0, v1x, v6x, <RET>], last_use=[v0]
-      cleanup: [SWAP2, POP, POP]
-      evm_mload [v0] -> v12
-    // return v12;
-    - stack=[v12, <RET>]
-      return [v12]
-  block4 P=[] T=[v1, v6]
+      br [v8] -> [block2, block3]
+  block2 P=[] T=[v1, v6]
     inherited from block1: [v0x, v1, v6, <RET>]
-    // jump block2;
+    // evm_code_copy 64.i256 v6 32.i256;
     - stack=[v0x, v1, v6, <RET>]
       cleanup: [POP]
-      jump -> block2
-  block2 P=[] T=[v1, v6]
-    inherited from block4: [v1, v6, <RET>]
-    // evm_code_copy 64.i256 v6 32.i256;
-    - stack=[v1, v6, <RET>]
       pre: [PUSH(32), DUP3, PUSH(64)]
       evm_code_copy [64, v6, 32]
     // v10.i256 = evm_mload 64.i256;
@@ -91,6 +77,15 @@ evm:
     - stack=[v11, v6, <RET>]
       exit(block1): [PUSH(0)]
       jump -> block1
+  block3 P=[] T=[v0]
+    inherited from block1: [v0, v1x, v6x, <RET>]
+    // v12.i256 = evm_mload v0;
+    - stack=[v0, v1x, v6x, <RET>], last_use=[v0]
+      cleanup: [SWAP2, POP, POP]
+      evm_mload [v0] -> v12
+    // return v12;
+    - stack=[v12, <RET>]
+      return [v12]
 
 // func private %__repro_runtime_entry()
   block0 P=[] T=[]
@@ -98,7 +93,7 @@ evm:
     - stack=[]
       pre: [PUSH_CONT]
       call [] -> v0
-    // v2.i1 = eq v0 2.i256;
+    // v2.i256 = eq v0 2.i256;
     - stack=[v0], last_use=[v0]
       pre: [PUSH(2)]
       eq [2, v0] -> v2
@@ -134,7 +129,7 @@ run:
     PUSH1 0x20 (32)
   block1:
     JUMPDEST
-    PUSH1 0x1 (1)  // v10.i1 = lt v1 v9;
+    PUSH1 0x1 (1)  // v10.i256 = lt v1 v9;
     DUP3
     LT
     PUSH1 block2  // br v10 block2 block3;
@@ -170,7 +165,7 @@ __repro_runtime_entry:
     PUSH1 FuncRef(0)
     JUMP
     JUMPDEST
-    PUSH1 0x2 (2)  // v2.i1 = eq v0 2.i256;
+    PUSH1 0x2 (2)  // v2.i256 = eq v0 2.i256;
     EQ
     PUSH1 block2  // br v2 block2 block1;
     JUMPI

@@ -28,7 +28,7 @@ main:
     JUMPDEST
     PUSH0  // v1.i256 = evm_calldata_load v0;
     CALLDATALOAD
-    PUSH1 0x5 (5)  // v3.i1 = lt v1 v2;
+    PUSH1 0x5 (5)  // v3.i256 = lt v1 v2;
     SWAP1
     LT
     SWAP1  // return v3;

@@ -47,7 +47,8 @@ pub(crate) fn verify_machine_function(
             function,
             function.dfg.value_ty(value),
             "value type",
-        )?;
+        )
+        .map_err(|err| format!("{err} at v{}", value.as_u32()))?;
     }
 
     let is = EvmMachine::new(function.ctx().triple).inst_set();
@@ -212,27 +213,6 @@ fn verify_machine_logic_inst(
     function: &Function,
     inst: sonatina_ir::InstId,
 ) -> Result<(), String> {
-    let result_ty = function
-        .dfg
-        .inst_results(inst)
-        .first()
-        .copied()
-        .map(|result| function.dfg.value_ty(result));
-    if matches!(result_ty, Some(Type::I1)) {
-        for operand in function.dfg.inst(inst).collect_values() {
-            if function.dfg.value_ty(operand) != Type::I1 {
-                return Err(format!(
-                    "EVM machine boolean logic instruction inst{} in func {} has non-i1 operand v{}.{:?}",
-                    inst.as_u32(),
-                    func_ref.as_u32(),
-                    operand.as_u32(),
-                    function.dfg.value_ty(operand)
-                ));
-            }
-        }
-        return Ok(());
-    }
-
     verify_machine_arithmetic_inst(func_ref, function, inst)
 }
 
@@ -247,24 +227,16 @@ fn verify_machine_bool_inst(
         .first()
         .copied()
         .map(|result| function.dfg.value_ty(result));
-    if !matches!(result_ty, Some(Type::I1 | Type::I256)) {
+    if result_ty != Some(Type::I256) {
         return Err(format!(
-            "EVM machine boolean instruction inst{} in func {} must produce i1 or i256, found {:?}",
+            "EVM machine boolean instruction inst{} in func {} must produce i256, found {:?}",
             inst.as_u32(),
             func_ref.as_u32(),
             result_ty
         ));
     }
 
-    let operands = function.dfg.inst(inst).collect_values();
-    if operands
-        .iter()
-        .all(|&operand| function.dfg.value_ty(operand) == Type::I1)
-    {
-        return Ok(());
-    }
-
-    for operand in operands {
+    for operand in function.dfg.inst(inst).collect_values() {
         if !value_is_machine_word(function, operand) {
             return Err(format!(
                 "EVM machine boolean instruction inst{} in func {} has non-word operand v{}.{:?}",
@@ -289,7 +261,7 @@ fn verify_machine_branch_cond(
         return Ok(());
     }
     Err(format!(
-        "EVM machine branch inst{} in func {} condition must be i1 or i256, found v{}.{cond_ty:?}",
+        "EVM machine branch inst{} in func {} condition must be i256, found v{}.{cond_ty:?}",
         inst.as_u32(),
         func_ref.as_u32(),
         cond.as_u32()
@@ -297,7 +269,7 @@ fn verify_machine_branch_cond(
 }
 
 fn value_is_machine_word(function: &Function, value: ValueId) -> bool {
-    matches!(function.dfg.value_ty(value), Type::I1 | Type::I256)
+    function.dfg.value_ty(value) == Type::I256
 }
 
 fn verify_machine_type(
@@ -306,7 +278,7 @@ fn verify_machine_type(
     ty: Type,
     context: &str,
 ) -> Result<(), String> {
-    if matches!(ty, Type::I1 | Type::I256 | Type::Unit) {
+    if matches!(ty, Type::I256 | Type::Unit) {
         Ok(())
     } else {
         let name = function
@@ -314,7 +286,7 @@ fn verify_machine_type(
             .get_sig(func_ref)
             .map_or_else(|| format!("{func_ref:?}"), |sig| format!("%{}", sig.name()));
         Err(format!(
-            "EVM machine {context} must be i1, i256, or unit, found {ty:?} in {name}"
+            "EVM machine {context} must be i256 or unit, found {ty:?} in {name}"
         ))
     }
 }

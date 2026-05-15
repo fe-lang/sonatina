@@ -6,8 +6,8 @@ input_file: test_files/evm/gep_immediate_fold.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 63 bytes
-  total: 63 bytes
+  section runtime: 64 bytes
+  total: 64 bytes
 
 functions:
   mem: global_dyn_base=0x60 arena_base=0x0 scratch_peak_words=3 static_chain_peak_words=0
@@ -17,11 +17,11 @@ functions:
     mem: scratch_words=3 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=3
   dynamic_index: ir_blocks=1 ir_insts=4 vcode_ops=9 fixups=0 imm_bytes=2
     mem: scratch_words=3 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=3
-  entry: ir_blocks=1 ir_insts=7 vcode_ops=22 fixups=6 imm_bytes=2
+  entry: ir_blocks=1 ir_insts=7 vcode_ops=23 fixups=6 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=0
 
 evm:
-  case folded_and_fallback: calldata_len=8 success reason=Return gas_used=21219 gas_refunded=0 logs=0 output=call len=32 tx_gas=21056 runtime_gas=163
+  case folded_and_fallback: calldata_len=8 success reason=Return gas_used=21222 gas_refunded=0 logs=0 output=call len=32 tx_gas=21056 runtime_gas=166
 
 
 --------------- DEBUG ---------------
@@ -81,6 +81,7 @@ entry:
     JUMP
     JUMPDEST
     SWAP2  // v4.i256 = add v0 v1;
+    SWAP1
     ADD
     ADD  // v5.i256 = add v4 v3;
     PUSH0  // evm_mstore 0.i256 v5;

@@ -21,7 +21,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=30 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=22921 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=1921
+  case ok: calldata_len=0 success reason=Return gas_used=22922 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=1922
 
 
 --------------- DEBUG ---------------
@@ -70,14 +70,14 @@ run:
     PUSH0  // jump block1;
   block1:
     JUMPDEST
-    PUSH1 0x2 (2)  // v29.i1 = lt v1 v28;
+    PUSH1 0x2 (2)  // v29.i256 = lt v1 v28;
     DUP2
     LT
     ISZERO  // br v29 block2 block6;
     PUSH1 block6
     JUMPI
   block2:
-    DUP1  // v184.i1 = is_zero v1;
+    DUP1  // v184.i256 = is_zero v1;
     PUSH1 block4  // br v184 block3 block4;
     JUMPI
   block3:
@@ -337,7 +337,7 @@ run:
     MSTORE  // evm_mstore v183 v182;
     JUMP  // return;
 
-// func private %assert(v0.i1)
+// func private %assert(v0.i256)
 assert:
   block0:
     JUMPDEST
@@ -345,7 +345,7 @@ assert:
     JUMPI
   block1:
     PUSH0  // evm_revert 0.i256 0.i256;
-    PUSH0
+    DUP1
     REVERT
   block2:
     JUMPDEST
@@ -385,7 +385,7 @@ test_run:
     MSTORE
     PUSH2 0x460 (1120)  // v18.i256 = evm_mload v0;
     MLOAD
-    PUSH1 0x1e (30)  // v20.i1 = eq v18 30.i256;
+    PUSH1 0x1e (30)  // v20.i256 = eq v18 30.i256;
     EQ
     PUSH1 `pc + (4)`  // call %assert v20;
     SWAP1
@@ -394,7 +394,7 @@ test_run:
     JUMPDEST
     PUSH2 0x480 (1152)  // v22.i256 = evm_mload 1152.i256;
     MLOAD
-    PUSH1 0x20 (32)  // v23.i1 = eq v22 v2;
+    PUSH1 0x20 (32)  // v23.i256 = eq v22 v2;
     EQ
     PUSH1 `pc + (4)`  // call %assert v23;
     SWAP1
@@ -403,7 +403,7 @@ test_run:
     JUMPDEST
     PUSH2 0x4a0 (1184)  // v25.i256 = evm_mload 1184.i256;
     MLOAD
-    PUSH1 0x22 (34)  // v27.i1 = eq v25 34.i256;
+    PUSH1 0x22 (34)  // v27.i256 = eq v25 34.i256;
     EQ
     PUSH1 `pc + (4)`  // call %assert v27;
     SWAP1
@@ -412,7 +412,7 @@ test_run:
     JUMPDEST
     PUSH2 0x4c0 (1216)  // v29.i256 = evm_mload 1216.i256;
     MLOAD
-    PUSH1 0x24 (36)  // v31.i1 = eq v29 36.i256;
+    PUSH1 0x24 (36)  // v31.i256 = eq v29 36.i256;
     EQ
     PUSH1 `pc + (4)`  // call %assert v31;
     SWAP1
@@ -421,7 +421,7 @@ test_run:
     JUMPDEST
     PUSH2 0x4e0 (1248)  // v33.i256 = evm_mload 1248.i256;
     MLOAD
-    PUSH1 0x26 (38)  // v35.i1 = eq v33 38.i256;
+    PUSH1 0x26 (38)  // v35.i256 = eq v33 38.i256;
     EQ
     PUSH1 `pc + (4)`  // call %assert v35;
     SWAP1
@@ -438,5 +438,5 @@ __repro_runtime_entry:
     JUMP
     JUMPDEST
     PUSH0  // evm_return 0.i256 0.i256;
-    PUSH0
+    DUP1
     RETURN

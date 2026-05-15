@@ -32,11 +32,11 @@ pc [4, 5) func=entry block=0 vcode=3 ir=1 reason=- frontend=-
 pc [5, 7) func=entry block=0 vcode=4 ir=1 reason=- frontend=-
 pc [7, 8) func=entry block=0 vcode=5 ir=1 reason=- frontend=-
 pc [8, 9) func=entry block=0 vcode=6 ir=1 reason=- frontend=-
-pc [9, 10) func=entry block=0 vcode=7 ir=3 reason=- frontend=-
-pc [10, 11) func=entry block=0 vcode=8 ir=3 reason=- frontend=-
-pc [11, 13) func=entry block=0 vcode=9 ir=4 reason=- frontend=-
-pc [13, 14) func=entry block=0 vcode=10 ir=4 reason=- frontend=-
-pc [14, 15) func=entry block=0 vcode=11 ir=4 reason=- frontend=-
+pc [9, 10) func=entry block=0 vcode=7 ir=2 reason=- frontend=-
+pc [10, 11) func=entry block=0 vcode=8 ir=2 reason=- frontend=-
+pc [11, 13) func=entry block=0 vcode=9 ir=3 reason=- frontend=-
+pc [13, 14) func=entry block=0 vcode=10 ir=3 reason=- frontend=-
+pc [14, 15) func=entry block=0 vcode=11 ir=3 reason=- frontend=-
 pc [15, 16) func=load_bit block=0 vcode=9 ir=- reason=synthetic frontend=-
 pc [16, 18) func=load_bit block=0 vcode=0 ir=0 reason=- frontend=-
 pc [18, 19) func=load_bit block=0 vcode=1 ir=0 reason=- frontend=-
@@ -59,7 +59,7 @@ entry:
   block0:
     PUSH0  // v1.i256 = evm_calldata_load v0;
     CALLDATALOAD
-    PUSH1 `pc + (4)`  // v2.i1 = call %load_bit v1;
+    PUSH1 `pc + (4)`  // v2.i256 = call %load_bit v1;
     SWAP1
     PUSH1 FuncRef(1)
     JUMP
@@ -70,7 +70,7 @@ entry:
     PUSH0
     RETURN
 
-// func private %load_bit(v0.i256) -> i1
+// func private %load_bit(v0.i256) -> i256
 load_bit:
   block0:
     JUMPDEST
@@ -79,7 +79,7 @@ load_bit:
     SHR
     PUSH1 0x1 (1)  // v4.i256 = and v2 v3;
     AND
-    ISZERO  // v6.i1 = is_zero v4;
-    ISZERO  // v7.i1 = is_zero v6;
+    ISZERO  // v6.i256 = is_zero v4;
+    ISZERO  // v7.i256 = is_zero v6;
     SWAP1  // return v7;
     JUMP

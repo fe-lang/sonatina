@@ -2,13 +2,15 @@ use crate::{
     analysis::memory_access::MemoryAccessAnalysis,
     cfg_scc::CfgSccAnalysis,
     domtree::DomTree,
-    isa::evm::normalize_alias_map,
     liveness::Liveness,
-    stackalloc::stackify::{
-        builder::{StackifyContext, StackifyReachability, StackifySearchProfile},
-        templates::{
-            compute_def_info, compute_dom_depth, compute_phi_out_sources, compute_phi_results,
-            function_has_internal_return,
+    stackalloc::{
+        normalize_value_alias_map,
+        stackify::{
+            builder::{StackifyContext, StackifyReachability, StackifySearchProfile},
+            templates::{
+                compute_def_info, compute_dom_depth, compute_phi_out_sources, compute_phi_results,
+                function_has_internal_return,
+            },
         },
     },
 };
@@ -28,7 +30,7 @@ pub(super) fn build_stackify_test_context<'a>(
     for value in func.dfg.values.keys() {
         value_aliases[value] = Some(value);
     }
-    normalize_alias_map(func, &mut value_aliases);
+    normalize_value_alias_map(func, &mut value_aliases);
 
     let dom_depth = compute_dom_depth(dom, entry);
     let def_info = compute_def_info(func, entry, &value_aliases);

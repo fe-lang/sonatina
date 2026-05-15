@@ -6,16 +6,16 @@ input_file: test_files/evm/aggregate_legalize_bitcast.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 59 bytes
-  total: 59 bytes
+  section runtime: 56 bytes
+  total: 56 bytes
 
 functions:
-  mem: global_dyn_base=0x140 arena_base=0x40 scratch_peak_words=6 static_chain_peak_words=2
-  entry: ir_blocks=1 ir_insts=17 vcode_ops=40 fixups=0 imm_bytes=17
-    mem: scratch_words=6 stable_words=2 stable_mode=StaticAbs(base=0x100) entry_abs_words=6 abs_words_end=8
+  mem: global_dyn_base=0x100 arena_base=0x0 scratch_peak_words=6 static_chain_peak_words=2
+  entry: ir_blocks=1 ir_insts=17 vcode_ops=40 fixups=0 imm_bytes=16
+    mem: scratch_words=6 stable_words=2 stable_mode=StaticAbs(base=0xc0) entry_abs_words=6 abs_words_end=8
 
 evm:
-  case ok: calldata_len=64 success reason=Return gas_used=21424 gas_refunded=0 logs=0 output=call len=32 tx_gas=21280 runtime_gas=144
+  case ok: calldata_len=64 success reason=Return gas_used=21417 gas_refunded=0 logs=0 output=call len=32 tx_gas=21280 runtime_gas=137
 
 
 --------------- DEBUG ---------------
@@ -23,43 +23,43 @@ evm:
 // func public %entry()
 entry:
   block0:
-    PUSH0  // v4.i256 = evm_calldata_load v3;
+    PUSH0  // v3.i256 = evm_calldata_load v0;
     CALLDATALOAD
-    PUSH1 0x20 (32)  // v6.i256 = evm_calldata_load v5;
+    PUSH1 0x20 (32)  // v5.i256 = evm_calldata_load v4;
     CALLDATALOAD
-    PUSH2 0x100 (256)  // evm_mstore v2 undef.i256;
+    PUSH1 0xc0 (192)  // evm_mstore v2 undef.i256;
     MLOAD
-    PUSH1 0xc0 (192)
+    PUSH1 0x80 (128)
     MSTORE
-    PUSH2 0x120 (288)  // evm_mstore 224.i256 undef.i256;
+    PUSH1 0xe0 (224)  // evm_mstore 160.i256 undef.i256;
     MLOAD
-    PUSH1 0xe0 (224)
+    PUSH1 0xa0 (160)
     MSTORE
-    SWAP1  // evm_mstore v2 v4;
-    PUSH1 0xc0 (192)
+    SWAP1  // evm_mstore v2 v3;
+    PUSH1 0x80 (128)
     MSTORE
-    PUSH1 0xc0 (192)  // v10.i256 = evm_mload v2;
+    PUSH1 0x80 (128)  // v9.i256 = evm_mload v2;
     MLOAD
-    PUSH1 0x80 (128)  // evm_mstore v1 v10;
+    PUSH1 0x40 (64)  // evm_mstore v1 v9;
     MSTORE
-    PUSH1 0xe0 (224)  // v12.i256 = evm_mload 224.i256;
+    PUSH1 0xa0 (160)  // v11.i256 = evm_mload 160.i256;
     MLOAD
-    PUSH1 0xa0 (160)  // evm_mstore 160.i256 v12;
+    PUSH1 0x60 (96)  // evm_mstore 96.i256 v11;
     MSTORE
-    PUSH1 0xa0 (160)  // evm_mstore 160.i256 v6;
+    PUSH1 0x60 (96)  // evm_mstore 96.i256 v5;
     MSTORE
-    PUSH1 0x80 (128)  // v15.i256 = evm_mload v1;
+    PUSH1 0x40 (64)  // v14.i256 = evm_mload v1;
     MLOAD
-    PUSH1 0x40 (64)  // evm_mstore v0 v15;
+    PUSH0  // evm_mstore v0 v14;
     MSTORE
-    PUSH1 0xa0 (160)  // v17.i256 = evm_mload 160.i256;
+    PUSH1 0x60 (96)  // v16.i256 = evm_mload 96.i256;
     MLOAD
-    PUSH1 0x60 (96)  // evm_mstore 96.i256 v17;
+    PUSH1 0x20 (32)  // evm_mstore v4 v16;
     MSTORE
-    PUSH1 0x60 (96)  // v20.i256 = evm_mload 96.i256;
+    PUSH1 0x20 (32)  // v19.i256 = evm_mload v4;
     MLOAD
-    PUSH0  // evm_mstore v3 v20;
+    PUSH0  // evm_mstore v0 v19;
     MSTORE
-    PUSH1 0x20 (32)  // evm_return v3 v5;
+    PUSH1 0x20 (32)  // evm_return v0 v4;
     PUSH0
     RETURN

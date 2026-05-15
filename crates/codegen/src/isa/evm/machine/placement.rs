@@ -14,7 +14,7 @@ use super::{
     super::{
         EvmBackend, heap_plan, malloc_plan,
         mem_effects::compute_func_mem_effects,
-        memory_plan::{self, FuncPreAnalysis, ObjLoc, StableMode, WORD_BYTES},
+        memory_plan::{self, BackendSpillReserve, FuncPreAnalysis, ObjLoc, StableMode, WORD_BYTES},
         prepare::{
             ArenaBaseFacts, choose_arena_base, compute_return_escape_caller_clamp_words,
             function_may_touch_free_ptr_slot, function_may_write_free_ptr_slot,
@@ -63,7 +63,7 @@ pub(crate) fn compute_semantic_memory_placement(
     ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
     scratch_effects: &FxHashSet<FuncRef>,
     backend: &EvmBackend,
-    backend_spill_reserve_words: &FxHashMap<FuncRef, u32>,
+    backend_spill_reserves: &FxHashMap<FuncRef, BackendSpillReserve>,
 ) -> EvmMemoryPlacementPlan {
     let mut semantic_plan = memory_plan::compute_semantic_program_memory_plan(
         module,
@@ -73,6 +73,7 @@ pub(crate) fn compute_semantic_memory_placement(
         &backend.isa,
         &backend.arena_cost_model,
     );
+    semantic_plan.apply_backend_spill_reserves(module, funcs, backend_spill_reserves);
 
     let mem_effects =
         compute_func_mem_effects(module, funcs, &semantic_plan, scratch_effects, &backend.isa);
@@ -80,7 +81,7 @@ pub(crate) fn compute_semantic_memory_placement(
         module,
         funcs,
         &semantic_plan,
-        backend_spill_reserve_words,
+        &FxHashMap::default(),
     );
 
     let mut annotations: Vec<_> = funcs
@@ -129,15 +130,13 @@ pub(crate) fn compute_semantic_memory_placement(
             func_plan.return_escape_caller_abs_words = return_escape_caller_abs_words;
         }
     }
-    semantic_plan.apply_backend_spill_reserves(module, funcs, backend_spill_reserve_words);
-
     let has_dynamic_frames = semantic_plan
         .funcs
         .values()
         .any(memory_plan::FuncMemPlan::uses_dynamic_frame);
-    let backend_spill_reserve_peak = backend_spill_reserve_words
+    let backend_spill_scratch_reserve_peak = backend_spill_reserves
         .values()
-        .copied()
+        .map(|reserve| reserve.scratch_words)
         .max()
         .unwrap_or(0);
     let has_persistent_mallocs = funcs.iter().copied().any(|func| {
@@ -165,15 +164,15 @@ pub(crate) fn compute_semantic_memory_placement(
         ptr_escape,
         ArenaBaseFacts {
             has_dynamic_frames,
-            has_stackify_scratch_spills: false,
-            backend_spill_reserve_words: backend_spill_reserve_peak,
+            has_stackify_scratch_spills: !scratch_effects.is_empty(),
+            backend_spill_scratch_reserve_words: backend_spill_scratch_reserve_peak,
             has_persistent_mallocs,
         },
     );
     if has_dynamic_frames {
         semantic_plan.scratch_peak_words = semantic_plan
             .scratch_peak_words
-            .max(backend_spill_reserve_peak);
+            .max(backend_spill_scratch_reserve_peak);
     }
     semantic_plan.set_arena_base(arena_base);
 
@@ -183,12 +182,15 @@ pub(crate) fn compute_semantic_memory_placement(
         &semantic_plan,
         analyses,
         &backend.isa,
-        backend_spill_reserve_words,
+        &FxHashMap::default(),
     );
-    for (&func, &reserve_words) in backend_spill_reserve_words {
-        if let Some(bounds) = malloc_bounds.get_mut(&func) {
+    for (&func, &reserve) in backend_spill_reserves {
+        if let Some(bounds) = malloc_bounds.get_mut(&func)
+            && let Some(func_plan) = semantic_plan.funcs.get(&func)
+        {
+            let reserve_abs_words = backend_spill_reserve_abs_words(func_plan, reserve);
             for bound in bounds.values_mut() {
-                *bound = (*bound).max(reserve_words);
+                *bound = (*bound).max(reserve_abs_words);
             }
         }
     }
@@ -234,7 +236,7 @@ pub(crate) fn compute_semantic_memory_placement(
                     isa: &backend.isa,
                     func_plan,
                     global_dyn_base: semantic_plan.global_dyn_base,
-                    backend_spill_reserve_peak,
+                    backend_spill_reserve_peak: backend_spill_scratch_reserve_peak,
                     func_uses_dynamic_frame: func_plan.uses_dynamic_frame(),
                     entry_may_have_live_frame: entry_may_have_live_frame
                         .get(&func)
@@ -288,6 +290,25 @@ fn machine_mem_plan_from_semantic(
     mem_plan.transient_mallocs.clear();
     mem_plan.malloc_escape_kinds.clear();
     mem_plan
+}
+
+fn backend_spill_reserve_abs_words(
+    func_plan: &memory_plan::FuncMemPlan,
+    reserve: BackendSpillReserve,
+) -> u32 {
+    let scratch_end = if reserve.scratch_words == 0 {
+        0
+    } else {
+        func_plan.scratch_words
+    };
+    let stable_end = match func_plan.stable_mode {
+        StableMode::StaticAbs { base_word } if reserve.stable_words != 0 => base_word
+            .checked_add(func_plan.stable_words)
+            .expect("backend stable reserve end overflow"),
+        StableMode::None | StableMode::DynamicFrame | StableMode::StaticAbs { .. } => 0,
+    };
+
+    scratch_end.max(stable_end)
 }
 
 fn compute_entry_may_have_live_frame(
@@ -399,7 +420,9 @@ fn malloc_min_base(
         .malloc_future_abs_words
         .get(&inst)
         .copied()
-        .unwrap_or(dyn_base_words);
+        .unwrap_or(dyn_base_words)
+        .max(func_plan.return_escape_caller_abs_words)
+        .max(backend_spill_reserve_peak);
     let escape_kinds = func_plan
         .malloc_escape_kinds
         .get(&inst)
@@ -407,8 +430,6 @@ fn malloc_min_base(
         .unwrap_or_default();
     if escape_kinds.has_global_or_unknown() {
         future_words = future_words.max(dyn_base_words.max(backend_spill_reserve_peak));
-    } else if escape_kinds.is_return_only() {
-        future_words = future_words.max(func_plan.return_escape_caller_abs_words);
     }
 
     func_plan
@@ -419,4 +440,76 @@ fn malloc_min_base(
                 .expect("malloc minimum base overflow"),
         )
         .expect("malloc minimum base overflow")
+}
+
+#[cfg(test)]
+mod tests {
+    use rustc_hash::{FxHashMap, FxHashSet};
+    use sonatina_ir::InstId;
+
+    use super::*;
+    use crate::isa::evm::{STATIC_BASE, malloc_plan::MallocEscapeKind};
+
+    fn mem_plan_for_malloc(escape_kinds: MallocEscapeKind) -> memory_plan::FuncMemPlan {
+        let malloc = InstId::from_u32(7);
+        let mut malloc_future_abs_words = FxHashMap::default();
+        malloc_future_abs_words.insert(malloc, 1);
+        let mut malloc_escape_kinds = FxHashMap::default();
+        malloc_escape_kinds.insert(malloc, escape_kinds);
+
+        memory_plan::FuncMemPlan {
+            arena_base: STATIC_BASE,
+            scratch_words: 0,
+            stable_words: 0,
+            stable_mode: memory_plan::StableMode::None,
+            entry_abs_words: 0,
+            obj_loc: FxHashMap::default(),
+            alloca_loc: FxHashMap::default(),
+            spill_obj: SecondaryMap::new(),
+            call_preserve: FxHashMap::default(),
+            malloc_future_abs_words,
+            transient_mallocs: FxHashSet::default(),
+            malloc_escape_kinds,
+            return_escape_caller_abs_words: 10,
+        }
+    }
+
+    #[test]
+    fn local_malloc_honors_caller_clamp() {
+        let malloc = InstId::from_u32(7);
+        let min_base = malloc_min_base(
+            &mem_plan_for_malloc(MallocEscapeKind::default()),
+            STATIC_BASE + WORD_BYTES,
+            0,
+            malloc,
+        );
+
+        assert_eq!(min_base, STATIC_BASE + 10 * WORD_BYTES);
+    }
+
+    #[test]
+    fn global_or_unknown_escaping_malloc_honors_caller_clamp() {
+        let malloc = InstId::from_u32(7);
+        let min_base = malloc_min_base(
+            &mem_plan_for_malloc(MallocEscapeKind::UNKNOWN),
+            STATIC_BASE + WORD_BYTES,
+            0,
+            malloc,
+        );
+
+        assert_eq!(min_base, STATIC_BASE + 10 * WORD_BYTES);
+    }
+
+    #[test]
+    fn local_malloc_honors_backend_spill_reserve() {
+        let malloc = InstId::from_u32(7);
+        let min_base = malloc_min_base(
+            &mem_plan_for_malloc(MallocEscapeKind::default()),
+            STATIC_BASE + WORD_BYTES,
+            16,
+            malloc,
+        );
+
+        assert_eq!(min_base, STATIC_BASE + 16 * WORD_BYTES);
+    }
 }

@@ -40,10 +40,10 @@ pc [14, 15) func=entry block=0 vcode=11 ir=3 reason=- frontend=-
 pc [15, 16) func=load_sparse block=0 vcode=6 ir=- reason=synthetic frontend=-
 pc [16, 18) func=load_sparse block=0 vcode=0 ir=0 reason=- frontend=-
 pc [18, 19) func=load_sparse block=0 vcode=1 ir=0 reason=- frontend=-
-pc [19, 21) func=load_sparse block=0 vcode=2 ir=2 reason=- frontend=-
-pc [21, 22) func=load_sparse block=0 vcode=3 ir=2 reason=- frontend=-
-pc [22, 23) func=load_sparse block=0 vcode=4 ir=3 reason=- frontend=-
-pc [23, 24) func=load_sparse block=0 vcode=5 ir=3 reason=- frontend=-
+pc [19, 21) func=load_sparse block=0 vcode=2 ir=1 reason=- frontend=-
+pc [21, 22) func=load_sparse block=0 vcode=3 ir=1 reason=- frontend=-
+pc [22, 23) func=load_sparse block=0 vcode=4 ir=2 reason=- frontend=-
+pc [23, 24) func=load_sparse block=0 vcode=5 ir=2 reason=- frontend=-
 
 evm:
   case exception: calldata_len=32 success reason=Return gas_used=21202 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=62
@@ -71,9 +71,9 @@ entry:
 load_sparse:
   block0:
     JUMPDEST
-    PUSH1 0x2 (2)  // v2.i1 = eq v0 v1;
+    PUSH1 0x2 (2)  // v2.i256 = eq v0 v1;
     EQ
-    PUSH1 0x63 (99)  // v6.i256 = mul v2 99.i256;
+    PUSH1 0x63 (99)  // v4.i256 = mul v2 v3;
     MUL
-    SWAP1  // return v6;
+    SWAP1  // return v4;
     JUMP

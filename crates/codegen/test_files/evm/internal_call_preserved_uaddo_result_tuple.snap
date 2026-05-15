@@ -6,12 +6,12 @@ input_file: test_files/evm/internal_call_preserved_uaddo_result_tuple.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=true evm_trace=false emit_observability=false opt=s
 
 object: Contract
-  section runtime: 166 bytes
-  total: 166 bytes
+  section runtime: 164 bytes
+  total: 164 bytes
 
 functions:
   mem: global_dyn_base=0x220 arena_base=0x220 scratch_peak_words=0 static_chain_peak_words=0
-  entry: ir_blocks=23 ir_insts=58 vcode_ops=124 fixups=10 imm_bytes=25
+  entry: ir_blocks=23 ir_insts=58 vcode_ops=122 fixups=10 imm_bytes=25
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
@@ -26,7 +26,7 @@ evm:
     - stack=[]
       pre: [PUSH(64)]
       evm_mload [64] -> v4
-    // v7.i1 = gt v4 543.i256;
+    // v7.i256 = gt v4 543.i256;
     - stack=[v4]
       pre: [PUSH(543), DUP2]
       gt [v4, 543] -> v7
@@ -70,7 +70,7 @@ evm:
     - stack=[v14, v8]
       pre: [PUSH(1), DUP2]
       add [v14, 1] -> v16
-    // v17.i1 = lt v16 v14;
+    // v17.i256 = lt v16 v14;
     - stack=[v16, v14, v8], last_use=[v14]
       pre: [SWAP1, DUP2]
       lt [v16, v14] -> v17
@@ -79,7 +79,7 @@ evm:
       br [v17] -> [block13, block1]
   block1 P=[] T=[v16, v8]
     inherited from block16: [v16, v8]
-    // v19.i1 = lt v16 10.i256;
+    // v19.i256 = lt v16 10.i256;
     - stack=[v16, v8]
       pre: [PUSH(10), DUP2]
       lt [v16, 10] -> v19
@@ -90,13 +90,13 @@ evm:
     inherited from block1: [v16, v8]
     // jump block4;
     - stack=[v16, v8]
-      exit(block4): [PUSH(true)]
+      exit(block4): [PUSH(1)]
       jump -> block4
   block24 P=[] T=[v16, v8]
     inherited from block1: [v16, v8]
     // jump block4;
     - stack=[v16, v8]
-      exit(block4): [PUSH(false)]
+      exit(block4): [PUSH(0)]
       jump -> block4
   block4 P=[v0] T=[v16, v8]
     // br v0 block25 block5;
@@ -108,15 +108,15 @@ evm:
     - stack=[v16, v8], last_use=[v8]
       pre: [SWAP1]
       evm_mload [v8] -> v20
-    // v22.i1 = eq v16 5.i256;
+    // v22.i256 = eq v16 5.i256;
     - stack=[v20, v16], last_use=[v16]
       pre: [SWAP1, PUSH(5)]
       eq [5, v16] -> v22
-    // v23.i1 = eq v20 99.i256;
+    // v23.i256 = eq v20 99.i256;
     - stack=[v22, v20], last_use=[v20]
       pre: [SWAP1, PUSH(99)]
       eq [99, v20] -> v23
-    // v24.i1 = and v22 v23;
+    // v24.i256 = and v22 v23;
     - stack=[v23, v22], last_use=[v22, v23]
       and [v23, v22] -> v24
     // br v24 block6 block7;
@@ -128,7 +128,7 @@ evm:
     - stack=[]
       pre: [PUSH(64)]
       evm_mload [64] -> v25
-    // v26.i1 = gt v25 543.i256;
+    // v26.i256 = gt v25 543.i256;
     - stack=[v25]
       pre: [PUSH(543), DUP2]
       gt [v25, 543] -> v26
@@ -169,7 +169,7 @@ evm:
     - stack=[]
       pre: [PUSH(64)]
       evm_mload [64] -> v30
-    // v31.i1 = gt v30 543.i256;
+    // v31.i256 = gt v30 543.i256;
     - stack=[v30]
       pre: [PUSH(543), DUP2]
       gt [v30, 543] -> v31
@@ -204,23 +204,23 @@ evm:
     // jump block8;
     - stack=[v33, v32]
       jump -> block8
-  block8 P=[v40, v1] T=[]
+  block8 P=[v38, v1] T=[]
     // v34.i256 = evm_mload v1;
-    - stack=[v40, v1], last_use=[v1]
+    - stack=[v38, v1], last_use=[v1]
       pre: [SWAP1]
       evm_mload [v1] -> v34
-    // v35.i1 = eq v34 1.i256;
-    - stack=[v34, v40], last_use=[v34]
+    // v35.i256 = eq v34 1.i256;
+    - stack=[v34, v38], last_use=[v34]
       pre: [PUSH(1)]
       eq [1, v34] -> v35
     // br v35 block9 block28;
-    - stack=[v35, v40]
+    - stack=[v35, v38]
       br [v35] -> [block9, block28]
-  block9 P=[] T=[v40]
-    inherited from block8: [v40]
-    // v37.i256 = evm_mload v40;
-    - stack=[v40], last_use=[v40]
-      evm_mload [v40] -> v37
+  block9 P=[] T=[v38]
+    inherited from block8: [v38]
+    // v37.i256 = evm_mload v38;
+    - stack=[v38], last_use=[v38]
+      evm_mload [v38] -> v37
     // evm_mstore 0.i256 v37;
     - stack=[v37], last_use=[v37]
       pre: [PUSH(0)]
@@ -257,7 +257,7 @@ entry:
   block0:
     PUSH1 0x40 (64)  // v3.i256 = evm_mload v2;
     MLOAD
-    PUSH2 0x21f (543)  // v6.i1 = gt v3 v5;
+    PUSH2 0x21f (543)  // v6.i256 = gt v3 v5;
     DUP2
     GT
     PUSH1 block16  // br v6 block23 block15;
@@ -283,21 +283,19 @@ entry:
     PUSH1 0x1 (1)  // v16.i256 = add v13 1.i256;
     DUP2
     ADD
-    SWAP1  // v17.i1 = lt v16 v13;
+    SWAP1  // v17.i256 = lt v16 v13;
     DUP2
     LT
     PUSH1 block13  // br v17 block13 block1;
     JUMPI
   block1:
-    PUSH1 0xa (10)  // v19.i1 = lt v16 10.i256;
+    PUSH1 0xa (10)  // v19.i256 = lt v16 10.i256;
     DUP2
     LT
     PUSH1 block24  // br v19 block24 block3;
     JUMPI
   block3:
     PUSH1 0x1 (1)  // jump block4;
-    PUSH0
-    SIGNEXTEND
     PUSH1 block4
     JUMP
   block24:
@@ -310,20 +308,20 @@ entry:
   block5:
     SWAP1  // v20.i256 = evm_mload v7;
     MLOAD
-    SWAP1  // v22.i1 = eq v16 5.i256;
+    SWAP1  // v22.i256 = eq v16 5.i256;
     PUSH1 0x5 (5)
     EQ
-    SWAP1  // v23.i1 = eq v20 v10;
+    SWAP1  // v23.i256 = eq v20 v10;
     PUSH1 0x63 (99)
     EQ
-    AND  // v24.i1 = and v22 v23;
+    AND  // v24.i256 = and v22 v23;
     ISZERO  // br v24 block6 block7;
     PUSH1 block7
     JUMPI
   block6:
     PUSH1 0x40 (64)  // v25.i256 = evm_mload v2;
     MLOAD
-    PUSH2 0x21f (543)  // v26.i1 = gt v25 v5;
+    PUSH2 0x21f (543)  // v26.i256 = gt v25 v5;
     DUP2
     GT
     PUSH1 block19  // br v26 block26 block18;
@@ -348,7 +346,7 @@ entry:
     JUMPDEST
     PUSH1 0x40 (64)  // v30.i256 = evm_mload v2;
     MLOAD
-    PUSH2 0x21f (543)  // v31.i1 = gt v30 v5;
+    PUSH2 0x21f (543)  // v31.i256 = gt v30 v5;
     DUP2
     GT
     PUSH1 block22  // br v31 block27 block21;
@@ -371,13 +369,13 @@ entry:
     JUMPDEST
     SWAP1  // v34.i256 = evm_mload v1;
     MLOAD
-    PUSH1 0x1 (1)  // v35.i1 = eq v34 1.i256;
+    PUSH1 0x1 (1)  // v35.i256 = eq v34 1.i256;
     EQ
     ISZERO  // br v35 block9 block28;
     PUSH1 block12
     JUMPI
   block9:
-    MLOAD  // v37.i256 = evm_mload v40;
+    MLOAD  // v37.i256 = evm_mload v38;
     PUSH0  // evm_mstore v12 v37;
     MSTORE
     PUSH1 0x20 (32)  // evm_return v12 v8;

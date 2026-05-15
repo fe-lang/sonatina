@@ -29,8 +29,8 @@ use self::{
         rewrite_evm_local_fallthrough_layout,
     },
     memory_plan::{
-        ArenaCostModel, ProgramMemoryPlan, compute_abs_clobber_words_with_extra,
-        compute_semantic_program_memory_plan,
+        ArenaCostModel, BackendSpillReserve, ProgramMemoryPlan,
+        compute_abs_clobber_words_with_extra, compute_semantic_program_memory_plan,
     },
     prepare::compute_return_escape_caller_clamp_words,
 };
@@ -1093,11 +1093,15 @@ block0:
 
     assert_eq!(clamp_words[&mk], main_clobber_words);
 
+    let extra_reserve = BackendSpillReserve {
+        scratch_words: 3,
+        stable_words: 0,
+    };
     let extra_main_clobber_words = main_clobber_words
-        .checked_add(3)
+        .checked_add(extra_reserve.scratch_words)
         .expect("test clobber overflow");
     let mut extra_clobber_words = FxHashMap::default();
-    extra_clobber_words.insert(main, extra_main_clobber_words);
+    extra_clobber_words.insert(main, extra_reserve);
     let clamp_words = compute_return_escape_caller_clamp_words(
         &ctx.module,
         &ctx.funcs,
@@ -1106,6 +1110,126 @@ block0:
     );
 
     assert_eq!(clamp_words[&mk], extra_main_clobber_words);
+}
+
+#[test]
+fn return_escape_clamp_uses_reserved_static_chain_layout() {
+    let parsed = parse_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+func public %reserve_anchor() {
+block0:
+    return;
+}
+
+func public %use(v0.*i256) -> i256 {
+block0:
+    v1.i256 = mload v0 i256;
+    return v1;
+}
+
+func public %mk() -> *i256 {
+block0:
+    v0.*i8 = evm_malloc 32.i256;
+    v1.*i256 = bitcast v0 *i256;
+    mstore v1 111.i256 i256;
+    return v1;
+}
+
+func public %decode() -> i256 {
+block0:
+    v0.*i256 = alloca i256;
+    mstore v0 7.i256 i256;
+    v1.i256 = call %use v0;
+    return v1;
+}
+
+func public %main() -> i256 {
+block0:
+    v0.*i256 = call %mk;
+    v1.i256 = call %decode;
+    v2.i256 = mload v0 i256;
+    v3.i256 = add v1 v2;
+    return v3;
+}
+"#,
+    )
+    .expect("module parses");
+    let funcs = parsed.module.funcs();
+    let backend = test_backend();
+    let ptr_escape = compute_ptr_escape_summaries(&parsed.module, &funcs, &backend.isa);
+
+    let mut analyses = FxHashMap::default();
+    for &func in &funcs {
+        parsed.module.func_store.modify(func, |function| {
+            analyses.insert(
+                func,
+                compute_test_pre_analysis(function, &parsed.module.ctx, &backend),
+            );
+        });
+    }
+
+    let mut names = FxHashMap::default();
+    for &func in &funcs {
+        let name = parsed
+            .module
+            .ctx
+            .func_sig(func, |sig| sig.name().to_string());
+        names.insert(name, func);
+    }
+
+    let reserve_words = FxHashMap::from_iter([(
+        names["reserve_anchor"],
+        BackendSpillReserve {
+            scratch_words: 0,
+            stable_words: 8,
+        },
+    )]);
+    let placement = machine::placement::compute_semantic_memory_placement(
+        &parsed.module,
+        &funcs,
+        &analyses,
+        &ptr_escape,
+        &FxHashSet::default(),
+        &backend,
+        &reserve_words,
+    );
+
+    let mk = names["mk"];
+    let decode = names["decode"];
+    let mk_plan = &placement.funcs[&mk].mem_plan;
+    let decode_end_words = placement.funcs[&decode].mem_plan.abs_words_end();
+    assert!(
+        mk_plan.return_escape_caller_abs_words >= decode_end_words,
+        "return-escaping malloc clamp must include the post-reserve sibling callee frame"
+    );
+
+    let malloc = parsed.module.func_store.view(mk, |function| {
+        function
+            .layout
+            .iter_block()
+            .flat_map(|block| function.layout.iter_inst(block))
+            .find(|&inst| {
+                matches!(
+                    backend.isa.inst_set().resolve_inst(function.dfg.inst(inst)),
+                    EvmInstKind::EvmMalloc(_)
+                )
+            })
+            .expect("mk has a malloc")
+    });
+    let min_base = match placement.funcs[&mk].malloc_placements[&malloc] {
+        machine::placement::MallocPlacement::Heap { min_base, .. } => min_base,
+        machine::placement::MallocPlacement::Fixed { base } => base,
+    };
+    let min_base_words = min_base
+        .checked_sub(mk_plan.arena_base)
+        .expect("malloc min base below arena")
+        / WORD_BYTES;
+    assert!(
+        min_base_words >= decode_end_words,
+        "malloc min base must not overlap the sibling callee's reserved static frame"
+    );
 }
 
 #[test]

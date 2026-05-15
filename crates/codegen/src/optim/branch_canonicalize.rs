@@ -63,19 +63,22 @@ impl BranchCanonicalize {
         old_z_dest: BlockId,
     ) -> Option<Plan> {
         let original_cond = cond;
+        let cond_ty = func.dfg.value_ty(cond);
         let mut swap = false;
         let mut dead_insts = Vec::new();
 
         while let Some(inst) = func.dfg.value_inst(cond) {
-            if !matches!(
-                func.dfg.inst(inst).kind(),
-                InstClassKind::Unary(UnaryInstKind::IsZero | UnaryInstKind::Not)
-            ) {
+            let InstClassKind::Unary(kind @ (UnaryInstKind::IsZero | UnaryInstKind::Not)) =
+                func.dfg.inst(inst).kind()
+            else {
                 break;
-            }
+            };
 
             let arg = func.dfg.inst(inst).collect_values()[0];
-            if func.dfg.value_ty(arg) != Type::I1 {
+            let arg_ty = func.dfg.value_ty(arg);
+            if arg_ty != Type::I1
+                && !(cond_ty == Type::I256 && kind == UnaryInstKind::IsZero && arg_ty.is_integral())
+            {
                 break;
             }
 
@@ -86,12 +89,14 @@ impl BranchCanonicalize {
 
         let mut dead_cmp_inst = None;
         if let Some((cmp_inst, kind, lhs, rhs)) = compare_value(func, cond) {
-            if let Some(zero_compare) = zero_compare_branch_rewrite(func, term, kind, lhs, rhs) {
+            if let Some(zero_compare) =
+                zero_compare_branch_rewrite(func, term, kind, lhs, rhs, cond_ty)
+            {
                 cond = zero_compare.cond;
                 swap ^= zero_compare.swap;
                 dead_cmp_inst = Some(cmp_inst);
             } else if compare_cost(invert_compare(kind)) < compare_cost(kind) {
-                cond = insert_compare_before(func, term, invert_compare(kind), lhs, rhs);
+                cond = insert_compare_before(func, term, invert_compare(kind), lhs, rhs, cond_ty);
                 swap = !swap;
                 dead_cmp_inst = Some(cmp_inst);
             }
@@ -200,6 +205,7 @@ fn zero_compare_branch_rewrite(
     kind: BinaryInstKind,
     lhs: ValueId,
     rhs: ValueId,
+    result_ty: Type,
 ) -> Option<ZeroComparePlan> {
     if matches!(kind, BinaryInstKind::Eq | BinaryInstKind::Ne)
         && func.dfg.value_ty(lhs) == Type::I1
@@ -239,7 +245,7 @@ fn zero_compare_branch_rewrite(
     };
 
     Some(ZeroComparePlan {
-        cond: insert_is_zero_before(func, term, arg)?,
+        cond: insert_is_zero_before(func, term, arg, result_ty)?,
         swap,
     })
 }
@@ -262,6 +268,7 @@ fn insert_compare_before(
     kind: BinaryInstKind,
     lhs: ValueId,
     rhs: ValueId,
+    result_ty: Type,
 ) -> ValueId {
     let is = func.inst_set();
     let inst = match kind {
@@ -280,21 +287,26 @@ fn insert_compare_before(
     let value = func.dfg.make_value(Value::Inst {
         inst,
         result_idx: 0,
-        ty: Type::I1,
+        ty: result_ty,
     });
     func.dfg.attach_result(inst, value);
     func.layout.insert_inst_before(inst, before);
     value
 }
 
-fn insert_is_zero_before(func: &mut Function, before: InstId, arg: ValueId) -> Option<ValueId> {
+fn insert_is_zero_before(
+    func: &mut Function,
+    before: InstId,
+    arg: ValueId,
+    result_ty: Type,
+) -> Option<ValueId> {
     let inst = func
         .dfg
         .make_inst(cmp::IsZero::new(func.inst_set().has_is_zero()?, arg));
     let value = func.dfg.make_value(Value::Inst {
         inst,
         result_idx: 0,
-        ty: Type::I1,
+        ty: result_ty,
     });
     func.dfg.attach_result(inst, value);
     func.layout.insert_inst_before(inst, before);

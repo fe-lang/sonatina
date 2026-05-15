@@ -40,7 +40,7 @@ entry:
     PUSH0
   block1:
     JUMPDEST
-    PUSH1 0x4 (4)  // v14.i1 = lt v0 4.i256;
+    PUSH1 0x4 (4)  // v14.i256 = lt v0 4.i256;
     DUP2
     LT
     PUSH1 block2  // br v14 block2 block3;

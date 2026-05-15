@@ -12,7 +12,7 @@ use crate::{
     bitset::BitSet,
     liveness::InstLiveness,
     module_analysis::{CallGraph, CallGraphSccs, SccBuilder, SccRef},
-    stackalloc::StackifyAlloc,
+    stackalloc::{StackifyAlloc, StackifyTrace},
 };
 
 use super::{
@@ -42,6 +42,26 @@ pub struct ProgramMemoryPlan {
     pub funcs: FxHashMap<FuncRef, FuncMemPlan>,
     #[allow(dead_code)]
     pub sccs: FxHashMap<SccRef, SccMemPlan>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct BackendSpillReserve {
+    pub(crate) scratch_words: u32,
+    pub(crate) stable_words: u32,
+}
+
+impl BackendSpillReserve {
+    pub(crate) fn is_empty(self) -> bool {
+        self.scratch_words == 0 && self.stable_words == 0
+    }
+
+    pub(crate) fn max_words(self) -> u32 {
+        self.scratch_words.max(self.stable_words)
+    }
+
+    pub(crate) fn satisfies(self, required: Self) -> bool {
+        self.scratch_words >= required.scratch_words && self.stable_words >= required.stable_words
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -128,22 +148,33 @@ impl ProgramMemoryPlan {
         &mut self,
         module: &Module,
         funcs: &[FuncRef],
-        reserve_words: &FxHashMap<FuncRef, u32>,
+        reserves: &FxHashMap<FuncRef, BackendSpillReserve>,
     ) {
-        if reserve_words.is_empty() {
+        if reserves.values().all(|reserve| reserve.is_empty()) {
             return;
         }
 
-        for (&func, &reserve) in reserve_words {
-            if reserve != 0
+        for (&func, &reserve) in reserves {
+            if !reserve.is_empty()
                 && let Some(func_plan) = self.funcs.get_mut(&func)
             {
+                func_plan.scratch_words = func_plan
+                    .scratch_words
+                    .checked_add(reserve.scratch_words)
+                    .expect("backend scratch spill reserve overflow");
                 func_plan.stable_words = func_plan
                     .stable_words
-                    .checked_add(reserve)
-                    .expect("backend spill reserve overflow");
+                    .checked_add(reserve.stable_words)
+                    .expect("backend stable spill reserve overflow");
             }
         }
+
+        self.scratch_peak_words = self
+            .funcs
+            .values()
+            .map(|func_plan| func_plan.scratch_words)
+            .max()
+            .unwrap_or(0);
 
         let funcs_set: FxHashSet<FuncRef> = funcs.iter().copied().collect();
         let call_graph = CallGraph::build_graph_subset(module, &funcs_set);
@@ -246,6 +277,7 @@ impl ProgramMemoryPlan {
 mod tests {
     use super::*;
     use crate::isa::evm::static_arena_alloc::BlockLiveSegment;
+    use sonatina_parser::parse_module;
 
     fn region(block: u32, start_boundary: u32, end_boundary: u32) -> LiveRegion {
         LiveRegion {
@@ -269,6 +301,179 @@ mod tests {
             load_count: 0,
             store_count: 0,
         }
+    }
+
+    fn empty_func_plan(scratch_words: u32, stable_mode: StableMode) -> FuncMemPlan {
+        FuncMemPlan {
+            arena_base: STATIC_BASE,
+            scratch_words,
+            stable_words: 0,
+            stable_mode,
+            entry_abs_words: scratch_words,
+            obj_loc: FxHashMap::default(),
+            alloca_loc: FxHashMap::default(),
+            spill_obj: SecondaryMap::new(),
+            call_preserve: FxHashMap::default(),
+            malloc_future_abs_words: FxHashMap::default(),
+            transient_mallocs: FxHashSet::default(),
+            malloc_escape_kinds: FxHashMap::default(),
+            return_escape_caller_abs_words: 0,
+        }
+    }
+
+    #[test]
+    fn backend_spill_reserve_creates_stable_frame_for_functions_without_stable_frame() {
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %entry() {
+block0:
+    return;
+}
+"#,
+        )
+        .expect("module parses");
+        let func = parsed.module.funcs()[0];
+        let mut plan = ProgramMemoryPlan {
+            arena_base: STATIC_BASE,
+            scratch_peak_words: 3,
+            static_chain_peak_words: 0,
+            global_dyn_base: abs_addr_for_word(STATIC_BASE, 3),
+            funcs: FxHashMap::from_iter([(func, empty_func_plan(3, StableMode::None))]),
+            sccs: FxHashMap::default(),
+        };
+        let reserve_words = FxHashMap::from_iter([(
+            func,
+            BackendSpillReserve {
+                scratch_words: 0,
+                stable_words: 2,
+            },
+        )]);
+
+        plan.apply_backend_spill_reserves(&parsed.module, &[func], &reserve_words);
+
+        let func_plan = &plan.funcs[&func];
+        assert_eq!(func_plan.scratch_words, 3);
+        assert_eq!(func_plan.stable_words, 2);
+        assert_eq!(
+            func_plan.stable_mode,
+            StableMode::StaticAbs { base_word: 3 }
+        );
+        assert_eq!(plan.scratch_peak_words, 3);
+        assert_eq!(plan.global_dyn_base, abs_addr_for_word(STATIC_BASE, 5));
+    }
+
+    #[test]
+    fn backend_spill_reserve_extends_scratch_without_static_frame() {
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %entry() {
+block0:
+    return;
+}
+"#,
+        )
+        .expect("module parses");
+        let func = parsed.module.funcs()[0];
+        let mut plan = ProgramMemoryPlan {
+            arena_base: STATIC_BASE,
+            scratch_peak_words: 3,
+            static_chain_peak_words: 0,
+            global_dyn_base: abs_addr_for_word(STATIC_BASE, 3),
+            funcs: FxHashMap::from_iter([(func, empty_func_plan(3, StableMode::None))]),
+            sccs: FxHashMap::default(),
+        };
+        let reserve_words = FxHashMap::from_iter([(
+            func,
+            BackendSpillReserve {
+                scratch_words: 2,
+                stable_words: 0,
+            },
+        )]);
+
+        plan.apply_backend_spill_reserves(&parsed.module, &[func], &reserve_words);
+
+        let func_plan = &plan.funcs[&func];
+        assert_eq!(func_plan.scratch_words, 5);
+        assert_eq!(func_plan.stable_words, 0);
+        assert_eq!(func_plan.stable_mode, StableMode::None);
+        assert_eq!(plan.scratch_peak_words, 5);
+        assert_eq!(plan.global_dyn_base, abs_addr_for_word(STATIC_BASE, 5));
+    }
+
+    #[test]
+    fn abs_clobber_extra_reserve_extends_scratch_end() {
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %entry() {
+block0:
+    return;
+}
+"#,
+        )
+        .expect("module parses");
+        let func = parsed.module.funcs()[0];
+        let plan = ProgramMemoryPlan {
+            arena_base: STATIC_BASE,
+            scratch_peak_words: 3,
+            static_chain_peak_words: 0,
+            global_dyn_base: abs_addr_for_word(STATIC_BASE, 3),
+            funcs: FxHashMap::from_iter([(func, empty_func_plan(3, StableMode::None))]),
+            sccs: FxHashMap::default(),
+        };
+        let reserve_words = FxHashMap::from_iter([(
+            func,
+            BackendSpillReserve {
+                scratch_words: 2,
+                stable_words: 0,
+            },
+        )]);
+        let clobber_words =
+            compute_abs_clobber_words_with_extra(&parsed.module, &[func], &plan, &reserve_words);
+
+        assert_eq!(clobber_words[&func], 5);
+    }
+
+    #[test]
+    fn abs_clobber_extra_reserve_extends_static_stable_end() {
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %entry() {
+block0:
+    return;
+}
+"#,
+        )
+        .expect("module parses");
+        let func = parsed.module.funcs()[0];
+        let mut func_plan = empty_func_plan(1, StableMode::StaticAbs { base_word: 4 });
+        func_plan.stable_words = 4;
+        let plan = ProgramMemoryPlan {
+            arena_base: STATIC_BASE,
+            scratch_peak_words: 1,
+            static_chain_peak_words: 4,
+            global_dyn_base: abs_addr_for_word(STATIC_BASE, 5),
+            funcs: FxHashMap::from_iter([(func, func_plan)]),
+            sccs: FxHashMap::default(),
+        };
+        let reserve_words = FxHashMap::from_iter([(
+            func,
+            BackendSpillReserve {
+                scratch_words: 0,
+                stable_words: 2,
+            },
+        )]);
+        let clobber_words =
+            compute_abs_clobber_words_with_extra(&parsed.module, &[func], &plan, &reserve_words);
+
+        assert_eq!(clobber_words[&func], 10);
     }
 
     #[test]
@@ -705,6 +910,8 @@ pub(crate) struct FuncPreAnalysis {
 pub(crate) struct MachineStackifyAnalysis {
     pub(crate) alloc: StackifyAlloc,
     pub(crate) block_order: Vec<BlockId>,
+    pub(crate) stable_final_spill_values: BitSet<ValueId>,
+    pub(crate) trace: Option<StackifyTrace>,
 }
 
 #[derive(Clone, Debug)]
@@ -1398,17 +1605,17 @@ pub(crate) fn compute_abs_clobber_words_with_extra(
     module: &Module,
     funcs: &[FuncRef],
     plan: &ProgramMemoryPlan,
-    extra_clobber_words: &FxHashMap<FuncRef, u32>,
+    extra_reserves: &FxHashMap<FuncRef, BackendSpillReserve>,
 ) -> FxHashMap<FuncRef, u32> {
     let funcs_set: FxHashSet<FuncRef> = funcs.iter().copied().collect();
     let mut out: FxHashMap<FuncRef, u32> = FxHashMap::default();
     for &func in funcs {
-        let local = plan
-            .funcs
-            .get(&func)
-            .map(FuncMemPlan::abs_words_end)
-            .unwrap_or(0)
-            .max(extra_clobber_words.get(&func).copied().unwrap_or(0));
+        let extra_reserve = extra_reserves.get(&func).copied().unwrap_or_default();
+        let Some(func_plan) = plan.funcs.get(&func) else {
+            out.insert(func, extra_reserve.max_words());
+            continue;
+        };
+        let local = abs_words_end_with_extra_reserve(func_plan, extra_reserve);
         out.insert(func, local);
     }
 
@@ -1440,6 +1647,32 @@ pub(crate) fn compute_abs_clobber_words_with_extra(
     }
 
     out
+}
+
+fn abs_words_end_with_extra_reserve(
+    func_plan: &FuncMemPlan,
+    extra_reserve: BackendSpillReserve,
+) -> u32 {
+    let scratch_end = func_plan
+        .scratch_words
+        .checked_add(extra_reserve.scratch_words)
+        .expect("scratch reserve overflow");
+    let stable_end = match func_plan.stable_mode {
+        StableMode::None => extra_reserve.stable_words,
+        StableMode::StaticAbs { base_word } => {
+            if func_plan.stable_words == 0 && extra_reserve.stable_words == 0 {
+                0
+            } else {
+                base_word
+                    .checked_add(func_plan.stable_words)
+                    .and_then(|end| end.checked_add(extra_reserve.stable_words))
+                    .expect("stable reserve overflow")
+            }
+        }
+        StableMode::DynamicFrame => 0,
+    };
+
+    scratch_end.max(stable_end)
 }
 
 fn build_planner_facts(

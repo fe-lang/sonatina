@@ -6,22 +6,22 @@ input_file: test_files/evm/const_obj_init_mixed_hybrid.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=true
 
 object: Contract
-  section runtime: 197 bytes
-  total: 197 bytes
+  section runtime: 198 bytes
+  total: 198 bytes
 
 functions:
   mem: global_dyn_base=0x160 arena_base=0x0 scratch_peak_words=11 static_chain_peak_words=0
-  entry: ir_blocks=1 ir_insts=12 vcode_ops=27 fixups=1 imm_bytes=9
+  entry: ir_blocks=1 ir_insts=12 vcode_ops=28 fixups=1 imm_bytes=9
     mem: scratch_words=11 stable_words=0 stable_mode=None entry_abs_words=11 abs_words_end=11
 
 --------------- OBSERVABILITY ---------------
 
 object schema=0.1.0
-totals section_bytes=197 code=37 data=160 embed=0 mapped=37 unmapped=0
+totals section_bytes=198 code=38 data=160 embed=0 mapped=38 unmapped=0
 
 section runtime schema=0.1.0
-bytes total=197 code=37 data=160 embed=0
-coverage mapped=37 unmapped=0
+bytes total=198 code=38 data=160 embed=0
+coverage mapped=38 unmapped=0
 unmapped no_ir_inst=0 label_or_fixup_only=0 synthetic=0 unknown=0
 pc [0, 2) func=entry block=0 vcode=0 ir=0 reason=- frontend=-
 pc [2, 3) func=entry block=0 vcode=1 ir=0 reason=- frontend=-
@@ -44,15 +44,16 @@ pc [24, 27) func=entry block=0 vcode=17 ir=17 reason=- frontend=-
 pc [27, 28) func=entry block=0 vcode=18 ir=17 reason=- frontend=-
 pc [28, 29) func=entry block=0 vcode=19 ir=18 reason=- frontend=-
 pc [29, 30) func=entry block=0 vcode=20 ir=18 reason=- frontend=-
-pc [30, 31) func=entry block=0 vcode=21 ir=19 reason=- frontend=-
-pc [31, 32) func=entry block=0 vcode=22 ir=20 reason=- frontend=-
+pc [30, 31) func=entry block=0 vcode=21 ir=18 reason=- frontend=-
+pc [31, 32) func=entry block=0 vcode=22 ir=19 reason=- frontend=-
 pc [32, 33) func=entry block=0 vcode=23 ir=20 reason=- frontend=-
-pc [33, 35) func=entry block=0 vcode=24 ir=21 reason=- frontend=-
-pc [35, 36) func=entry block=0 vcode=25 ir=21 reason=- frontend=-
+pc [33, 34) func=entry block=0 vcode=24 ir=20 reason=- frontend=-
+pc [34, 36) func=entry block=0 vcode=25 ir=21 reason=- frontend=-
 pc [36, 37) func=entry block=0 vcode=26 ir=21 reason=- frontend=-
+pc [37, 38) func=entry block=0 vcode=27 ir=21 reason=- frontend=-
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=21136 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=136
+  case ok: calldata_len=0 success reason=Return gas_used=21139 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=139
 
 
 --------------- DEBUG ---------------
@@ -80,6 +81,7 @@ entry:
     PUSH2 0x100 (256)  // v20.i256 = evm_mload 256.i256;
     MLOAD
     SWAP2  // v21.i256 = add v9 v15;
+    SWAP1
     ADD
     ADD  // v22.i256 = add v21 v20;
     PUSH0  // evm_mstore v0 v22;

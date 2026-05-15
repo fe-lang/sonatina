@@ -11,7 +11,7 @@ object: Contract
 
 functions:
   mem: global_dyn_base=0x3e0 arena_base=0xa0 scratch_peak_words=16 static_chain_peak_words=10
-  verify_checked: ir_blocks=12 ir_insts=66 vcode_ops=171 fixups=6 imm_bytes=33
+  verify_checked: ir_blocks=12 ir_insts=65 vcode_ops=169 fixups=6 imm_bytes=33
     mem: scratch_words=16 stable_words=0 stable_mode=None entry_abs_words=26 abs_words_end=16
   run: ir_blocks=3 ir_insts=14 vcode_ops=48 fixups=3 imm_bytes=15
     mem: scratch_words=0 stable_words=10 stable_mode=StaticAbs(base=0x2a0) entry_abs_words=16 abs_words_end=26

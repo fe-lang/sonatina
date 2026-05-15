@@ -56,6 +56,7 @@ pub struct EvmBackend {
     pub(crate) arena_cost_model: ArenaCostModel,
     pub(crate) late_cleanup_profile: LateCleanupProfile,
     pub(crate) immediate_materialization_mode: ImmediateMaterializationMode,
+    pub(crate) capture_stackify_trace: bool,
 }
 
 impl EvmBackend {
@@ -75,6 +76,7 @@ impl EvmBackend {
             arena_cost_model: ArenaCostModel::default(),
             late_cleanup_profile: LateCleanupProfile::Off,
             immediate_materialization_mode: ImmediateMaterializationMode::Gas,
+            capture_stackify_trace: false,
         }
     }
 
@@ -94,6 +96,11 @@ impl EvmBackend {
 
     pub fn with_stackify_search_profile(mut self, profile: StackifySearchProfile) -> Self {
         self.stackify_search_profile = profile;
+        self
+    }
+
+    pub fn with_stackify_trace_capture(mut self, enable: bool) -> Self {
+        self.capture_stackify_trace = enable;
         self
     }
 

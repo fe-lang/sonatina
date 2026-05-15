@@ -20,7 +20,7 @@ evm:
 
 --------------- DEBUG ---------------
 
-// func public %entry(v0.i1, v1.i256, v2.i256) -> i256
+// func public %entry(v0.i256, v1.i256, v2.i256) -> i256
 entry:
   block0:
     ISZERO  // br v0 block1 block2;

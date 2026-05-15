@@ -11,7 +11,7 @@ object: Contract
 
 functions:
   mem: global_dyn_base=0x40 arena_base=0x0 scratch_peak_words=2 static_chain_peak_words=0
-  entry: ir_blocks=4 ir_insts=11 vcode_ops=23 fixups=2 imm_bytes=5
+  entry: ir_blocks=4 ir_insts=10 vcode_ops=23 fixups=2 imm_bytes=5
     mem: scratch_words=2 stable_words=0 stable_mode=None entry_abs_words=2 abs_words_end=2
 
 evm:
@@ -32,8 +32,8 @@ entry:
     PUSH1 0x14 (20)  // evm_mstore 32.i256 20.i256;
     PUSH1 0x20 (32)
     MSTORE
-    ISZERO  // v7.i1 = is_zero v2;
-    PUSH1 block4  // br v7 block4 block2;
+    ISZERO  // br v2 block2 block4;
+    PUSH1 block4
     JUMPI
   block2:
     PUSH1 0x20 (32)  // jump block3;

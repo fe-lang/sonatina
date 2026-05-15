@@ -44,7 +44,7 @@ fn expect_machine_rejects(src: &str) {
         let err = verify_machine_function(func, function)
             .expect_err("high-level IR should be rejected by machine verifier");
         assert!(
-            err.contains("unsupported instruction") || err.contains("must be i1, i256, or unit"),
+            err.contains("unsupported instruction") || err.contains("must be i256 or unit"),
             "{err}"
         );
     });
@@ -82,11 +82,11 @@ fn machine_verify_accepts_word_machine_ir() {
 }
 
 #[test]
-fn machine_verify_accepts_normalized_i1_as_word_operand() {
+fn machine_verify_rejects_i1_compare_result() {
     let mb = machine_builder();
     let func_ref = mb
         .declare_function(Signature::new_single(
-            "machine_normalized_i1_word",
+            "machine_i1_cmp",
             Linkage::Public,
             &[Type::I256, Type::I256],
             Type::I256,
@@ -108,13 +108,14 @@ fn machine_verify_accepts_normalized_i1_as_word_operand() {
 
     let module = mb.build();
     module.func_store.view(func_ref, |function| {
-        verify_machine_function(func_ref, function)
-            .expect("normalized i1 values are valid word-shaped EVM operands");
+        let err = verify_machine_function(func_ref, function)
+            .expect_err("machine IR should reject i1 compare results");
+        assert!(err.contains("must be i256 or unit"), "{err}");
     });
 }
 
 #[test]
-fn machine_verify_accepts_i1_as_word_operand() {
+fn machine_verify_rejects_i1_word_operand() {
     let mb = machine_builder();
     let func_ref = mb
         .declare_function(Signature::new_single(
@@ -139,8 +140,9 @@ fn machine_verify_accepts_i1_as_word_operand() {
 
     let module = mb.build();
     module.func_store.view(func_ref, |function| {
-        verify_machine_function(func_ref, function)
-            .expect("current machine IR treats i1 values as word-shaped stack values");
+        let err = verify_machine_function(func_ref, function)
+            .expect_err("machine IR should reject i1 operands");
+        assert!(err.contains("must be i256 or unit"), "{err}");
     });
 }
 
@@ -176,11 +178,11 @@ fn machine_verify_accepts_word_typed_comparison() {
 }
 
 #[test]
-fn machine_gvn_folds_i1_word_operand_constant_without_zext() {
+fn machine_gvn_folds_word_bool_constant_without_zext() {
     let mb = machine_builder();
     let func_ref = mb
         .declare_function(Signature::new_single(
-            "machine_gvn_i1_word_const",
+            "machine_gvn_word_bool_const",
             Linkage::Public,
             &[],
             Type::I256,
@@ -192,16 +194,16 @@ fn machine_gvn_folds_i1_word_operand_constant_without_zext() {
 
     let block = builder.append_block();
     builder.switch_to_block(block);
-    let one_i1 = builder.make_imm_value(Immediate::from(true));
-    let one_i256 = builder.make_imm_value(Immediate::from_i256(I256::from(1), Type::I256));
-    let masked = builder.insert_inst(And::new(is, one_i1, one_i256), Type::I256);
+    let lhs = builder.make_imm_value(Immediate::from_i256(I256::from(1), Type::I256));
+    let rhs = builder.make_imm_value(Immediate::from_i256(I256::from(1), Type::I256));
+    let masked = builder.insert_inst(And::new(is, lhs, rhs), Type::I256);
     builder.insert_inst_no_result(Return::new_single(is, masked));
     builder.seal_all();
     builder.finish();
 
     let module = mb.build();
     run_machine_opt_pipeline(&module, &[func_ref], false)
-        .expect("GVN should fold normalized i1 word operands without panicking");
+        .expect("GVN should fold word bool constants without panicking");
     module.func_store.view(func_ref, |function| {
         let dumped = FuncWriter::new(func_ref, function).dump_string();
         assert!(dumped.contains("return 1.i256;"), "{dumped}");
@@ -245,6 +247,40 @@ fn machine_verify_accepts_word_branch_condition() {
 }
 
 #[test]
+fn machine_gvn_accepts_truthy_word_branch_condition() {
+    let mb = machine_builder();
+    let func_ref = mb
+        .declare_function(Signature::new_single(
+            "machine_gvn_word_branch",
+            Linkage::Public,
+            &[Type::I256],
+            Type::I256,
+        ))
+        .unwrap();
+    let machine = EvmMachine::new(mb.triple());
+    let is = machine.inst_set();
+    let mut builder = mb.func_builder::<InstInserter>(func_ref);
+
+    let entry = builder.append_block();
+    let nz = builder.append_block();
+    let z = builder.append_block();
+    builder.switch_to_block(entry);
+    let cond = builder.func.arg_values[0];
+    builder.insert_inst_no_result(Br::new(is, cond, nz, z));
+    builder.switch_to_block(nz);
+    builder.insert_inst_no_result(Return::new_single(is, cond));
+    builder.switch_to_block(z);
+    let zero = builder.make_imm_value(Immediate::zero(Type::I256));
+    builder.insert_inst_no_result(Return::new_single(is, zero));
+    builder.seal_all();
+    builder.finish();
+
+    let module = mb.build();
+    run_machine_opt_pipeline(&module, &[func_ref], false)
+        .expect("GVN should accept truthy word branch conditions");
+}
+
+#[test]
 fn machine_branch_canonicalize_folds_is_zero_into_branch_polarity() {
     let mb = machine_builder();
     let func_ref = mb
@@ -264,7 +300,7 @@ fn machine_branch_canonicalize_folds_is_zero_into_branch_polarity() {
     let z = builder.append_block();
     builder.switch_to_block(entry);
     let arg = builder.func.arg_values[0];
-    let cond = builder.insert_inst(IsZero::new(is, arg), Type::I1);
+    let cond = builder.insert_inst(IsZero::new(is, arg), Type::I256);
     builder.insert_inst_no_result(Br::new(is, cond, nz, z));
     builder.switch_to_block(nz);
     builder.insert_inst_no_result(Jump::new(is, z));
@@ -331,7 +367,7 @@ fn machine_verify_rejects_high_level_ops_and_pointer_values() {
         let err = verify_machine_function(func_ref, function)
             .expect_err("pointer-typed high-level IR should be rejected");
         assert!(
-            err.contains("must be i1, i256, or unit") || err.contains("unsupported instruction"),
+            err.contains("must be i256 or unit") || err.contains("unsupported instruction"),
             "{err}"
         );
     });

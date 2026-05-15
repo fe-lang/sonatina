@@ -43,7 +43,7 @@ evm:
     - stack=[v2]
       pre: [PUSH(1), DUP2]
       add [v2, 1] -> v6
-    // v7.i1 = lt v6 v2;
+    // v7.i256 = lt v6 v2;
     - stack=[v6, v2], last_use=[v2]
       pre: [SWAP1, DUP2]
       lt [v6, v2] -> v7
@@ -52,7 +52,7 @@ evm:
       br [v7] -> [block7, block2]
   block2 P=[] T=[v6]
     inherited from block1: [v6]
-    // v9.i1 = eq v6 5.i256;
+    // v9.i256 = eq v6 5.i256;
     - stack=[v6], last_use=[v6]
       pre: [PUSH(5)]
       eq [5, v6] -> v9
@@ -116,13 +116,13 @@ entry:
     PUSH1 0x1 (1)  // v6.i256 = add v2 v3;
     DUP2
     ADD
-    SWAP1  // v7.i1 = lt v6 v2;
+    SWAP1  // v7.i256 = lt v6 v2;
     DUP2
     LT
     PUSH1 block7  // br v7 block7 block2;
     JUMPI
   block2:
-    PUSH1 0x5 (5)  // v9.i1 = eq v6 v8;
+    PUSH1 0x5 (5)  // v9.i256 = eq v6 v8;
     EQ
     ISZERO  // br v9 block3 block9;
     PUSH1 block6

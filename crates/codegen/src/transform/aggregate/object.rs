@@ -9,7 +9,7 @@ use sonatina_ir::{
 };
 
 use super::{
-    object_locality::{self, LocalObjectArgs, SpecialObjectUse},
+    object_locality::{self, LocalObjectArgMap, LocalObjectArgs, SpecialObjectUse},
     private_abi::{self, PrivateAbiPlan},
 };
 
@@ -41,6 +41,23 @@ pub struct ObjectLowerToMemory;
 impl ObjectLowerToMemory {
     pub fn run(&mut self, module: &Module) -> bool {
         let local_object_args = object_locality::collect_local_object_args(module);
+        self.run_with_local_object_arg_set(module, &local_object_args)
+    }
+
+    pub(crate) fn run_with_local_object_args(
+        &mut self,
+        module: &Module,
+        local_object_args: &LocalObjectArgMap,
+    ) -> bool {
+        let local_object_args = object_locality::info_to_local_object_args(local_object_args);
+        self.run_with_local_object_arg_set(module, &local_object_args)
+    }
+
+    fn run_with_local_object_arg_set(
+        &mut self,
+        module: &Module,
+        local_object_args: &LocalObjectArgs,
+    ) -> bool {
         let mut type_lowerer = ObjRefTypeLowerer::default();
         let mut plans = self.collect_plans(module, &mut type_lowerer);
         private_abi::retain_higher_order_safe_plans(module, &mut plans);
@@ -51,7 +68,7 @@ impl ObjectLowerToMemory {
 
         for func_ref in module.funcs() {
             changed |= module.func_store.modify(func_ref, |function| {
-                self.rewrite_function(function, &local_object_args, &mut type_lowerer)
+                self.rewrite_function(function, local_object_args, &mut type_lowerer)
             });
             changed |= type_lowerer.changed;
         }

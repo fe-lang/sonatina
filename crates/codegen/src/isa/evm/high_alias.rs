@@ -1,5 +1,4 @@
 use cranelift_entity::SecondaryMap;
-use smallvec::SmallVec;
 use sonatina_ir::{
     Function, InstSetExt, Type, ValueId,
     inst::evm::inst_set::EvmInstKind,
@@ -7,70 +6,11 @@ use sonatina_ir::{
     module::ModuleCtx,
 };
 
-use crate::bitset::BitSet;
+pub(crate) use crate::stackalloc::canonicalize_value_alias as canonicalize_alias_value;
 
 #[derive(Clone)]
 pub(crate) struct HighEvmValueAliasMap {
     rep_of: SecondaryMap<ValueId, Option<ValueId>>,
-}
-
-pub fn canonicalize_alias_value(
-    value_aliases: &SecondaryMap<ValueId, Option<ValueId>>,
-    value: ValueId,
-) -> ValueId {
-    let mut current = value;
-    loop {
-        let next = value_aliases[current].unwrap_or(current);
-        if next == current {
-            return current;
-        }
-        current = next;
-    }
-}
-
-pub(crate) fn normalize_alias_map(
-    function: &Function,
-    value_aliases: &mut SecondaryMap<ValueId, Option<ValueId>>,
-) {
-    for value in function.dfg.value_ids() {
-        let mut seen: BitSet<ValueId> = BitSet::default();
-        let mut path = SmallVec::<[ValueId; 8]>::new();
-        let mut current = value;
-        let mut rep = None;
-        loop {
-            if !seen.insert(current) {
-                // Invalid alias cycles should not be canonicalized to an arbitrary value from
-                // outside the cycle. Keep all traversed values self-canonical.
-                for v in path.iter().copied() {
-                    value_aliases[v] = Some(v);
-                }
-                break;
-            }
-            path.push(current);
-            let next = value_aliases[current].unwrap_or(current);
-            if next == current {
-                rep = Some(current);
-                break;
-            }
-            current = next;
-        }
-        if let Some(rep) = rep {
-            for v in path {
-                value_aliases[v] = Some(rep);
-            }
-        }
-    }
-
-    #[cfg(debug_assertions)]
-    for value in function.dfg.value_ids() {
-        let rep = value_aliases[value].unwrap_or(value);
-        debug_assert_eq!(
-            value_aliases[rep].unwrap_or(rep),
-            rep,
-            "value alias map is not one-hop canonical for v{}",
-            value.as_u32()
-        );
-    }
 }
 
 impl HighEvmValueAliasMap {

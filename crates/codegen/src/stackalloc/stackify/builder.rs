@@ -3,8 +3,8 @@ use crate::{
     bitset::BitSet,
     cfg_scc::CfgSccAnalysis,
     domtree::DomTree,
-    isa::evm::normalize_alias_map,
     liveness::Liveness,
+    stackalloc::normalize_value_alias_map,
 };
 use cranelift_entity::{EntityRef, SecondaryMap};
 use rustc_hash::FxHashSet;
@@ -241,9 +241,14 @@ impl<'a> StackifyBuilder<'a> {
 
     pub fn compute_with_trace(self) -> (StackifyAlloc, String) {
         let func = self.func;
+        let (alloc, trace) = self.compute_with_trace_capture();
+        let trace = trace.render(func, &alloc);
+        (alloc, trace)
+    }
+
+    pub(crate) fn compute_with_trace_capture(self) -> (StackifyAlloc, super::trace::StackifyTrace) {
         let mut trace = super::trace::StackifyTrace::default();
         let alloc = self.compute_with_observer(&mut trace);
-        let trace = trace.render(func, &alloc);
         (alloc, trace)
     }
 
@@ -280,7 +285,7 @@ impl<'a> StackifyBuilder<'a> {
             }
             aliases
         };
-        normalize_alias_map(self.func, &mut value_aliases);
+        normalize_value_alias_map(self.func, &mut value_aliases);
 
         let mut stack_cached_immediates = self.stack_cached_immediates;
         if self.cache_hot_immediates {
@@ -595,9 +600,8 @@ fn compute_exact_local_addrs(
 mod tests {
     use crate::{
         domtree::DomTree,
-        isa::evm::normalize_alias_map,
         liveness::Liveness,
-        stackalloc::{Action, StackifyBuilder},
+        stackalloc::{Action, StackifyBuilder, normalize_value_alias_map},
     };
     use cranelift_entity::SecondaryMap;
     use sonatina_ir::cfg::ControlFlowGraph;
@@ -642,7 +646,7 @@ block0:
             aliases[v2] = Some(v3);
             aliases[v3] = Some(v2);
 
-            normalize_alias_map(func, &mut aliases);
+            normalize_value_alias_map(func, &mut aliases);
 
             for value in [v0, v1, v2, v3] {
                 assert_eq!(aliases[value], Some(value));

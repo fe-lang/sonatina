@@ -3707,8 +3707,16 @@ object @Contract {
             verifier_cfg: VerifierConfig::for_level(VerificationLevel::Fast),
         };
         compile_all_objects(&module, &backend, &opts).expect("compile should succeed");
-        prepare_root(&module, &backend, lookup_func(&module, "entry"))
+        let prepared = prepare_root(&module, &backend, lookup_func(&module, "entry"))
             .expect("prepare should succeed");
+        let entry = lookup_func(prepared.module(), "entry");
+        prepared.module().func_store.view(entry, |function| {
+            let dumped = FuncWriter::new(entry, function).dump_string();
+            assert!(
+                !dumped.contains("evm_mload 64.i256") && !dumped.contains("evm_mstore 64.i256"),
+                "hidden aggregate return temp should stay local instead of using the free pointer:\n{dumped}"
+            );
+        });
     }
 
     #[test]

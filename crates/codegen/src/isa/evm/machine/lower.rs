@@ -108,7 +108,8 @@ fn machine_type(module: &ModuleCtx, ty: Type) -> Result<Type, String> {
         return Ok(Type::I256);
     }
     match ty {
-        Type::Unit | Type::I1 | Type::I256 => Ok(ty),
+        Type::Unit => Ok(Type::Unit),
+        Type::I1 | Type::I256 => Ok(Type::I256),
         Type::I8 | Type::I16 | Type::I32 | Type::I64 | Type::I128 | Type::EnumTag(_) => {
             Ok(Type::I256)
         }
@@ -409,35 +410,8 @@ impl FuncLowerCtx<'_> {
             ));
         }
         let addr = self.lower_value(*mstore.addr())?;
-        let value = if let Some(from) = self.source_i1_to_word_cast(*mstore.value()) {
-            self.lower_value(from)?
-        } else {
-            self.lower_value(*mstore.value())?
-        };
+        let value = self.lower_value(*mstore.value())?;
         self.insert_no_result(source_inst, evm::EvmMstore::new(self.is, addr, value))
-    }
-
-    fn source_i1_to_word_cast(&self, value: ValueId) -> Option<ValueId> {
-        if self.source.dfg.value_ty(value) != Type::I256 {
-            return None;
-        }
-        // EVM stores full stack words, and i1 values are already known 0/1 words.
-        let inst = self.source.dfg.value_inst(value)?;
-        match self.source_is.resolve_inst(self.source.dfg.inst(inst)) {
-            EvmInstKind::Zext(zext)
-                if *zext.ty() == Type::I256
-                    && self.source.dfg.value_ty(*zext.from()) == Type::I1 =>
-            {
-                Some(*zext.from())
-            }
-            EvmInstKind::Bitcast(bitcast)
-                if *bitcast.ty() == Type::I256
-                    && self.source.dfg.value_ty(*bitcast.from()) == Type::I1 =>
-            {
-                Some(*bitcast.from())
-            }
-            _ => None,
-        }
     }
 
     fn lower_binary_values(
@@ -460,8 +434,8 @@ impl FuncLowerCtx<'_> {
         source_inst: sonatina_ir::InstId,
         cmp_inst: I,
     ) -> Result<(), String> {
-        let cmp = self.emit_binary(cmp_inst, Type::I1);
-        let inverted = self.emit_unary(cmp::IsZero::new(self.is, cmp), Type::I1);
+        let cmp = self.emit_binary(cmp_inst, Type::I256);
+        let inverted = self.emit_unary(cmp::IsZero::new(self.is, cmp), Type::I256);
         self.alias_inst_single_result(source_inst, inverted)
     }
 
@@ -662,10 +636,8 @@ impl FuncLowerCtx<'_> {
         to: Type,
     ) -> Result<(), String> {
         let source_ty = self.source.dfg.value_ty(from);
-        if source_ty == Type::I1
-            && to == Type::I256
-            && let Some(value) = self.lower_normalized_i1_as_i256(from)?
-        {
+        if source_ty == Type::I1 && scalar_bits(to).is_some() {
+            let value = self.lower_value(from)?;
             return self.alias_inst_single_result(source_inst, value);
         }
         let value = self.lower_value(from)?;
@@ -680,51 +652,6 @@ impl FuncLowerCtx<'_> {
             value
         };
         self.alias_inst_single_result(source_inst, value)
-    }
-
-    fn lower_normalized_i1_as_i256(&mut self, from: ValueId) -> Result<Option<ValueId>, String> {
-        if let Some(imm) = self.source_value_imm_u32(from) {
-            return Ok(Some(self.i256_imm(imm)));
-        }
-
-        let Some(source_inst) = self.source.dfg.value_inst(from) else {
-            return Ok(None);
-        };
-        if self.source.dfg.users(from).count() != 1 {
-            return Ok(None);
-        }
-
-        let value = match self
-            .source_is
-            .resolve_inst(self.source.dfg.inst(source_inst))
-        {
-            EvmInstKind::Lt(_) => {
-                let (lhs, rhs) = self.lower_binary_values(source_inst)?;
-                self.emit_binary(cmp::Lt::new(self.is, lhs, rhs), Type::I256)
-            }
-            EvmInstKind::Gt(_) => {
-                let (lhs, rhs) = self.lower_binary_values(source_inst)?;
-                self.emit_binary(cmp::Gt::new(self.is, lhs, rhs), Type::I256)
-            }
-            EvmInstKind::Slt(_) => {
-                let (lhs, rhs) = self.lower_binary_values(source_inst)?;
-                self.emit_binary(cmp::Slt::new(self.is, lhs, rhs), Type::I256)
-            }
-            EvmInstKind::Sgt(_) => {
-                let (lhs, rhs) = self.lower_binary_values(source_inst)?;
-                self.emit_binary(cmp::Sgt::new(self.is, lhs, rhs), Type::I256)
-            }
-            EvmInstKind::Eq(_) => {
-                let (lhs, rhs) = self.lower_binary_values(source_inst)?;
-                self.emit_binary(cmp::Eq::new(self.is, lhs, rhs), Type::I256)
-            }
-            EvmInstKind::IsZero(is_zero) => {
-                let arg = self.lower_value(*is_zero.lhs())?;
-                self.emit_unary(cmp::IsZero::new(self.is, arg), Type::I256)
-            }
-            _ => return Ok(None),
-        };
-        Ok(Some(value))
     }
 
     fn lower_sext(
@@ -755,6 +682,10 @@ impl FuncLowerCtx<'_> {
         from: ValueId,
         to: Type,
     ) -> Result<(), String> {
+        if self.source.dfg.value_ty(from) == Type::I1 && scalar_bits(to).is_some() {
+            let value = self.lower_value(from)?;
+            return self.alias_inst_single_result(source_inst, value);
+        }
         let value = self.lower_value(from)?;
         let from_bits = word_bits(self.source.dfg.value_ty(from), self.source_module)
             .ok_or_else(|| "cannot bitcast from non-word type".to_string())?;
@@ -823,7 +754,7 @@ impl FuncLowerCtx<'_> {
 
     fn emit_word_max(&mut self, lhs: ValueId, rhs: ValueId) -> ValueId {
         let delta = self.emit_binary(arith::Sub::new(self.is, rhs, lhs), Type::I256);
-        let cond = self.emit_binary(cmp::Lt::new(self.is, lhs, rhs), Type::I1);
+        let cond = self.emit_binary(cmp::Lt::new(self.is, lhs, rhs), Type::I256);
         let selected_delta = self.emit_binary(arith::Mul::new(self.is, delta, cond), Type::I256);
         self.emit_binary(arith::Add::new(self.is, lhs, selected_delta), Type::I256)
     }
@@ -843,7 +774,7 @@ impl FuncLowerCtx<'_> {
         rhs: ValueId,
         compare_rhs: ValueId,
     ) -> ValueId {
-        let cond = self.emit_binary(cmp::Gt::new(self.is, lhs, compare_rhs), Type::I1);
+        let cond = self.emit_binary(cmp::Gt::new(self.is, lhs, compare_rhs), Type::I256);
         let from_block = self.current_block.expect("word max needs current block");
         let lhs_block = self.append_machine_block();
         let rhs_block = self.append_machine_block();
@@ -1168,7 +1099,6 @@ fn source_lowering_order(source: &Function) -> Vec<BlockId> {
 fn lower_immediate(imm: Immediate, ty: Type, module: &ModuleCtx) -> Result<Immediate, String> {
     let ty = machine_type(module, ty)?;
     Ok(match ty {
-        Type::I1 => Immediate::from_i256(imm.as_i256(), Type::I1),
         Type::I256 => {
             let bits = scalar_bits(imm.ty()).unwrap_or(256);
             let imm = if bits < 256 {
@@ -1179,7 +1109,7 @@ fn lower_immediate(imm: Immediate, ty: Type, module: &ModuleCtx) -> Result<Immed
             Immediate::from_i256(imm, Type::I256)
         }
         Type::Unit => return Err("unit immediate cannot be lowered".to_string()),
-        _ => unreachable!("machine_type only returns unit/i1/i256"),
+        _ => unreachable!("machine_type only returns unit/i256"),
     })
 }
 

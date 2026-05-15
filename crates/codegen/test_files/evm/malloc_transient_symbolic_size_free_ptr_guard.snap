@@ -44,7 +44,7 @@ init:
     PUSH0 0x0 (0)  // v3.i256 = sym_size &runtime;
     PUSH1 0x40 (64)  // v5.i256 = evm_mload 64.i256;
     MLOAD
-    PUSH1 0x7f (127)  // v8.i1 = gt v5 127.i256;
+    PUSH1 0x7f (127)  // v8.i256 = gt v5 127.i256;
     DUP2
     GT
     PUSH1 block3  // br v8 block4 block2;
@@ -54,10 +54,10 @@ init:
     PUSH1 0x80 (128)
   block3:
     JUMPDEST
-    DUP1  // evm_code_copy v9 v2 v3;
+    DUP2  // evm_code_copy v9 v2 v3;
+    SWAP1
+    SWAP2
     SWAP3
     DUP3
-    SWAP2
     CODECOPY
-    SWAP1  // evm_return v9 v3;
-    RETURN
+    RETURN  // evm_return v9 v3;

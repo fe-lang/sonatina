@@ -11,9 +11,9 @@ object: Contract
 
 functions:
   mem: global_dyn_base=0x0 arena_base=0x0 scratch_peak_words=0 static_chain_peak_words=0
-  call_target: ir_blocks=5 ir_insts=12 vcode_ops=39 fixups=2 imm_bytes=3
+  call_target: ir_blocks=5 ir_insts=11 vcode_ops=37 fixups=2 imm_bytes=3
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  entry: ir_blocks=3 ir_insts=9 vcode_ops=25 fixups=3 imm_bytes=4
+  entry: ir_blocks=3 ir_insts=8 vcode_ops=23 fixups=3 imm_bytes=4
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
@@ -42,15 +42,15 @@ call_target:
     PUSH0
     PUSH0
     RETURNDATACOPY
-    SWAP1  // v13.i1 = is_zero v10;
-    PUSH1 block4  // br v13 block3 block4;
+    SWAP1  // br v10 block4 block3;
+    PUSH1 block4
     JUMPI
   block3:
     PUSH0  // evm_revert v3 v11;
     REVERT
   block4:
     JUMPDEST
-    PUSH1 0x20 (32)  // v15.i1 = lt v11 v14;
+    PUSH1 0x20 (32)  // v15.i256 = lt v11 v14;
     SWAP1
     LT
     ISZERO  // br v15 block5 block6;
@@ -71,7 +71,7 @@ call_target:
 entry:
   block0:
     CALLDATASIZE  // v0.i256 = evm_calldata_size;
-    PUSH1 block2  // br v1 block1 block2;
+    PUSH1 block2  // br v0 block2 block1;
     JUMPI
   block1:
     ADDRESS  // v2.i256 = evm_address;

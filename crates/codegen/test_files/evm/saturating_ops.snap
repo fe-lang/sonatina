@@ -43,55 +43,55 @@ entry:
     PUSH1 block10
     JUMPI
   block1:
-    PUSH1 0x1 (1)  // v8.i1 = eq v1 v7;
+    PUSH1 0x1 (1)  // v8.i256 = eq v1 v7;
     DUP4
     EQ
     PUSH1 block11  // br v8 block11 block2;
     JUMPI
   block2:
-    PUSH1 0x2 (2)  // v38.i1 = eq v1 v35;
+    PUSH1 0x2 (2)  // v38.i256 = eq v1 v35;
     DUP4
     EQ
     PUSH1 block12  // br v38 block12 block3;
     JUMPI
   block3:
-    PUSH1 0x3 (3)  // v40.i1 = eq v1 v39;
+    PUSH1 0x3 (3)  // v40.i256 = eq v1 v39;
     DUP4
     EQ
     PUSH1 block13  // br v40 block13 block4;
     JUMPI
   block4:
-    PUSH1 0x4 (4)  // v10.i1 = eq v1 v9;
+    PUSH1 0x4 (4)  // v10.i256 = eq v1 v9;
     DUP4
     EQ
     PUSH1 block14  // br v10 block14 block5;
     JUMPI
   block5:
-    PUSH1 0x5 (5)  // v12.i1 = eq v1 v11;
+    PUSH1 0x5 (5)  // v12.i256 = eq v1 v11;
     DUP4
     EQ
     PUSH1 block15  // br v12 block15 block6;
     JUMPI
   block6:
-    PUSH1 0x6 (6)  // v14.i1 = eq v1 v13;
+    PUSH1 0x6 (6)  // v14.i256 = eq v1 v13;
     DUP4
     EQ
     PUSH1 block16  // br v14 block16 block7;
     JUMPI
   block7:
-    PUSH1 0x7 (7)  // v16.i1 = eq v1 v15;
+    PUSH1 0x7 (7)  // v16.i256 = eq v1 v15;
     DUP4
     EQ
     PUSH1 block17  // br v16 block17 block8;
     JUMPI
   block8:
-    PUSH1 0x8 (8)  // v18.i1 = eq v1 v17;
+    PUSH1 0x8 (8)  // v18.i256 = eq v1 v17;
     DUP4
     EQ
     PUSH1 block18  // br v18 block18 block9;
     JUMPI
   block9:
-    SWAP2  // v20.i1 = eq v1 v19;
+    SWAP2  // v20.i256 = eq v1 v19;
     PUSH1 0x9 (9)
     EQ
     ISZERO  // br v20 block19 block43;
@@ -194,7 +194,7 @@ entry:
     SWAP1
     POP
     JUMPDEST
-    SWAP1  // v29.i1 = eq v27 v28;
+    SWAP1  // v29.i256 = eq v27 v28;
     POP
     PUSH1 0x7f (127)
     NOT
@@ -240,7 +240,7 @@ entry:
     POP
     JUMPDEST
     AND  // v37.i256 = and v36 v30;
-    SWAP1  // v42.i1 = eq v37 v41;
+    SWAP1  // v42.i256 = eq v37 v41;
     POP
     PUSH16 0x7fffffffffffffffffffffffffffffff (170141183460469231731687303715884105727)
     EQ
@@ -284,7 +284,7 @@ entry:
     POP
     PUSH1 0xff (255)
     AND
-    PUSH1 0x80 (128)  // v47.i1 = eq v45 128.i256;
+    PUSH1 0x80 (128)  // v47.i256 = eq v45 128.i256;
     EQ
     PUSH1 block30  // br v47 block52 block53;
     JUMPI
@@ -326,7 +326,7 @@ entry:
     POP
     PUSH1 0xff (255)
     AND
-    PUSH1 0x7f (127)  // v53.i1 = eq v51 127.i256;
+    PUSH1 0x7f (127)  // v53.i256 = eq v51 127.i256;
     EQ
     PUSH1 block30  // br v53 block50 block51;
     JUMPI
@@ -361,7 +361,7 @@ entry:
     POP
     PUSH16 0xffffffffffffffffffffffffffffffff (340282366920938463463374607431768211455)
     JUMPDEST
-    EQ  // v57.i1 = eq v56 v30;
+    EQ  // v57.i256 = eq v56 v30;
     SWAP1  // br v57 block48 block49;
     POP
     PUSH1 block30
@@ -424,7 +424,7 @@ entry:
     POP
     PUSH1 0xff (255)
     JUMPDEST
-    SWAP1  // v65.i1 = eq v64 v43;
+    SWAP1  // v65.i256 = eq v64 v43;
     POP
     PUSH1 0xff (255)
     EQ

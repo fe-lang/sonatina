@@ -12,9 +12,9 @@ object: Contract
 
 functions:
   mem: global_dyn_base=0x1c0 arena_base=0xa0 scratch_peak_words=5 static_chain_peak_words=4
-  contract_init_root_PoseidonBench: ir_blocks=3 ir_insts=8 vcode_ops=16 fixups=3 imm_bytes=2
+  contract_init_root_PoseidonBench: ir_blocks=3 ir_insts=7 vcode_ops=16 fixups=3 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=5 abs_words_end=0
-  contract_recv_abi_PoseidonBench_1430137905: ir_blocks=13 ir_insts=42 vcode_ops=113 fixups=11 imm_bytes=27
+  contract_recv_abi_PoseidonBench_1430137905: ir_blocks=13 ir_insts=41 vcode_ops=113 fixups=11 imm_bytes=27
     mem: scratch_words=0 stable_words=4 stable_mode=StaticAbs(base=0x140) entry_abs_words=5 abs_words_end=9
   decode_field: ir_blocks=5 ir_insts=18 vcode_ops=49 fixups=2 imm_bytes=7
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=9 abs_words_end=0

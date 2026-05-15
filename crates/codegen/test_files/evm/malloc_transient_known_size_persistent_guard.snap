@@ -32,7 +32,7 @@ mk:
     JUMPDEST
     PUSH1 0x40 (64)  // v1.i256 = evm_mload v0;
     MLOAD
-    PUSH1 0x9f (159)  // v4.i1 = gt v1 159.i256;
+    PUSH1 0x9f (159)  // v4.i256 = gt v1 159.i256;
     DUP2
     GT
     PUSH1 block3  // br v4 block4 block2;
@@ -59,7 +59,7 @@ scratch:
     JUMPDEST
     PUSH1 0x40 (64)  // v1.i256 = evm_mload v0;
     MLOAD
-    PUSH1 0x9f (159)  // v4.i1 = gt v1 159.i256;
+    PUSH1 0x9f (159)  // v4.i256 = gt v1 159.i256;
     DUP2
     GT
     PUSH1 block3  // br v4 block4 block2;

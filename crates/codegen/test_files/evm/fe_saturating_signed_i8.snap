@@ -35,7 +35,7 @@ saturating_signed_i8:
     PUSH1 FuncRef(18)
     JUMP
     JUMPDEST
-    PUSH1 0x7f (127)  // v9.i1 = eq v6 v7;
+    PUSH1 0x7f (127)  // v9.i256 = eq v6 v7;
     EQ
     ISZERO
     PUSH1 section_unit0  // br v9 block2 block1;
@@ -58,14 +58,14 @@ i8_h1bb527fe1af58754_saturatingmul_hf2bc6be7b84ff8f7_saturating_mul:
     PUSH1 block24
     JUMPI
   block1:
-    PUSH1 0x80 (128)  // v12.i1 = eq v0 v10;
+    PUSH1 0x80 (128)  // v12.i256 = eq v0 v10;
     DUP2
     EQ
     ISZERO  // br v12 block9 block23;
     PUSH1 block8
     JUMPI
   block9:
-    PUSH1 0xff (255)  // v17.i1 = eq v1 v13;
+    PUSH1 0xff (255)  // v17.i256 = eq v1 v13;
     DUP3
     EQ
     ISZERO  // br v17 block27 block26;
@@ -79,14 +79,14 @@ i8_h1bb527fe1af58754_saturatingmul_hf2bc6be7b84ff8f7_saturating_mul:
     JUMP
   block8:
     JUMPDEST
-    PUSH1 0x80 (128)  // v18.i1 = eq v1 v10;
+    PUSH1 0x80 (128)  // v18.i256 = eq v1 v10;
     DUP3
     EQ
     ISZERO  // br v18 block10 block25;
     PUSH1 block5
     JUMPI
   block10:
-    PUSH1 0xff (255)  // v19.i1 = eq v0 v13;
+    PUSH1 0xff (255)  // v19.i256 = eq v0 v13;
     DUP2
     EQ
     ISZERO  // br v19 block29 block28;
@@ -120,20 +120,20 @@ i8_h1bb527fe1af58754_saturatingmul_hf2bc6be7b84ff8f7_saturating_mul:
     SDIV
     PUSH1 0xff (255)  // v38.i256 = and v36 v13;
     AND
-    PUSH1 0x80 (128)  // v39.i1 = eq v27 v10;
+    PUSH1 0x80 (128)  // v39.i256 = eq v27 v10;
     DUP4
     EQ
-    SWAP4  // v40.i1 = eq v0 v13;
+    SWAP4  // v40.i256 = eq v0 v13;
     PUSH1 0xff (255)
     EQ
-    SWAP1  // v42.i1 = and v39 v40;
+    SWAP1  // v42.i256 = and v39 v40;
     SWAP4
     AND
     PUSH1 section_unit0  // br v42 block20 block21;
     JUMPI
   block21:
     JUMPDEST
-    SWAP2  // v44.i1 = eq v38 v1;
+    SWAP2  // v44.i256 = eq v38 v1;
     DUP4
     EQ
     PUSH1 block31  // br v44 block31 block11;

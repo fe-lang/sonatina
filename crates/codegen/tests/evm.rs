@@ -13,9 +13,7 @@ use revm::{
 };
 
 use sonatina_codegen::{
-    domtree::DomTree,
     isa::evm::{EvmBackend, ImmediateMaterializationMode, LateCleanupProfile, PushWidthPolicy},
-    liveness::Liveness,
     machinst::{
         lower::{LoweredFunction, SectionCodeUnit, SectionWorkModule},
         vcode::{Label, VCodeFixup},
@@ -25,12 +23,10 @@ use sonatina_codegen::{
         dead_func::{collect_object_roots, run_dead_func_elim},
         pipeline::Pipeline,
     },
-    stackalloc::{StackifyBuilder, StackifySearchProfile},
-    stackify_edge::StackifyEdgeSplitter,
+    stackalloc::StackifySearchProfile,
 };
 use sonatina_ir::{
-    BlockId, Function, U256 as IrU256,
-    cfg::ControlFlowGraph,
+    BlockId, U256 as IrU256,
     ir_writer::{FuncWriteCtx, FunctionSignature, IrWrite, ModuleWriter},
     isa::evm::Evm,
     module::Module,
@@ -182,6 +178,12 @@ fn test_evm(fixture: Fixture<&str>) {
         })
         .collect();
 
+    let stackify_search_profile = match opt_pipeline {
+        EvmOptPipeline::O0 => StackifySearchProfile::Fast,
+        EvmOptPipeline::O1 => StackifySearchProfile::GreedyWide,
+        EvmOptPipeline::Os | EvmOptPipeline::O2 => StackifySearchProfile::Exact,
+    };
+
     let backend = EvmBackend::new(Evm::new(sonatina_triple::TargetTriple {
         architecture: Architecture::Evm,
         vendor: Vendor::Ethereum,
@@ -194,11 +196,8 @@ fn test_evm(fixture: Fixture<&str>) {
         EvmOptPipeline::Os => LateCleanupProfile::Size,
         EvmOptPipeline::O2 => LateCleanupProfile::Speed,
     })
-    .with_stackify_search_profile(match opt_pipeline {
-        EvmOptPipeline::O0 => StackifySearchProfile::Fast,
-        EvmOptPipeline::O1 => StackifySearchProfile::GreedyWide,
-        EvmOptPipeline::Os | EvmOptPipeline::O2 => StackifySearchProfile::Exact,
-    })
+    .with_stackify_search_profile(stackify_search_profile)
+    .with_stackify_trace_capture(emit_stackify_trace)
     .with_immediate_materialization_mode(match opt_pipeline {
         EvmOptPipeline::Os => ImmediateMaterializationMode::Size,
         EvmOptPipeline::O2 => ImmediateMaterializationMode::Balanced,
@@ -256,11 +255,13 @@ fn test_evm(fixture: Fixture<&str>) {
                 let ctx = FuncWriteCtx::with_debug_provider(function, *fref, &parsed.debug);
 
                 if emit_stackify_trace {
-                    let stackify = stackify_trace_for_machine_fn(function, stackify_reach_depth);
+                    let stackify = prepared
+                        .stackify_trace(*fref)
+                        .unwrap_or_else(|| panic!("missing stackify trace for {name}"));
                     write!(&mut stackify_out, "// ").unwrap();
                     FunctionSignature.write(&mut stackify_out, &ctx).unwrap();
                     writeln!(&mut stackify_out).unwrap();
-                    write!(&mut stackify_out, "{}", fmt_stackify_trace(&stackify)).unwrap();
+                    write!(&mut stackify_out, "{}", fmt_stackify_trace(stackify)).unwrap();
                     writeln!(&mut stackify_out).unwrap();
                 }
 
@@ -759,24 +760,6 @@ impl<W: Write, DB: revm::Database> revm::Inspector<DB> for TestInspector<W> {
     fn step_end(&mut self, _interp: &mut Interpreter, _context: &mut EvmContext<DB>) {
         // NOTE: annoying revm behavior: `interp.current_opcode()` now returns the next opcode.
     }
-}
-
-fn stackify_trace_for_machine_fn(function: &Function, stackify_reach_depth: u8) -> String {
-    let mut function = function.clone();
-    let mut cfg = ControlFlowGraph::new();
-    cfg.compute(&function);
-
-    StackifyEdgeSplitter::run(&mut function, &mut cfg);
-
-    let mut liveness = Liveness::new();
-    liveness.compute(&function, &cfg);
-    let mut dom = DomTree::new();
-    dom.compute(&cfg);
-
-    let (_alloc, stackify) =
-        StackifyBuilder::new(&function, &cfg, &dom, &liveness, stackify_reach_depth)
-            .compute_with_trace();
-    stackify
 }
 
 fn fmt_evm_stack(stack: &[U256]) -> String {

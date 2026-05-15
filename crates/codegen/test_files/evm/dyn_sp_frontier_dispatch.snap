@@ -37,7 +37,7 @@ ready:
     PUSH1 0x80 (128)
     MSTORE
     JUMPDEST
-    DUP1  // v13.i1 = is_zero v0;
+    DUP1  // v13.i256 = is_zero v0;
     PUSH1 block2  // br v13 block1 block2;
     JUMPI
   block1:
@@ -100,7 +100,7 @@ ready:
     SWAP1  // return v12;
     JUMP
 
-// func public %dispatch(v0.i1) -> i256
+// func public %dispatch(v0.i256) -> i256
 dispatch:
   block0:
     JUMPDEST
@@ -133,8 +133,8 @@ entry:
     CALLDATALOAD
     PUSH1 0xe0 (224)  // v3.i256 = shr v2 v1;
     SHR
-    ISZERO  // v4.i1 = is_zero v3;
-    ISZERO  // v5.i1 = is_zero v4;
+    ISZERO  // v4.i256 = is_zero v3;
+    ISZERO  // v5.i256 = is_zero v4;
     PUSH1 `pc + (4)`  // v6.i256 = call %dispatch v5;
     SWAP1
     PUSH1 FuncRef(1)

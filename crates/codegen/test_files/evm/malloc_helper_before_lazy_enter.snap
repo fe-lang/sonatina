@@ -37,7 +37,7 @@ helper:
     SWAP1  // return v2;
     JUMP
 
-// func public %ready(v0.i1, v1.i256) -> i256
+// func public %ready(v0.i256, v1.i256) -> i256
 ready:
   block0:
     JUMPDEST
@@ -74,9 +74,9 @@ entry:
     SHL
     PUSH1 0xe0 (224)  // v6.i256 = shr v2 v5;
     SHR
-    SWAP1  // v7.i1 = is_zero v3;
+    SWAP1  // v7.i256 = is_zero v3;
     ISZERO
-    ISZERO  // v8.i1 = is_zero v7;
+    ISZERO  // v8.i256 = is_zero v7;
     SWAP1  // v9.i256 = call %ready v8 v6;
     PUSH1 `pc + (4)`
     SWAP2

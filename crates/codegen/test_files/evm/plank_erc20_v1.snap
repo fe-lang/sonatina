@@ -12,9 +12,9 @@ object: Contract
 
 functions:
   mem: global_dyn_base=0x0 arena_base=0x0 scratch_peak_words=0 static_chain_peak_words=0
-  init: ir_blocks=3 ir_insts=15 vcode_ops=34 fixups=4 imm_bytes=7
+  init: ir_blocks=3 ir_insts=14 vcode_ops=34 fixups=4 imm_bytes=7
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  run: ir_blocks=11 ir_insts=38 vcode_ops=92 fixups=5 imm_bytes=12
+  run: ir_blocks=11 ir_insts=36 vcode_ops=92 fixups=5 imm_bytes=12
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
@@ -37,7 +37,7 @@ init:
     DUP1  // v7.i256 = shr v5 v4;
     PUSH1 0xa0 (160)
     SHR
-    PUSH1 section_unit0  // br v8 block2 block1;
+    PUSH1 section_unit0  // br v7 block1 block2;
     JUMPI
   block2:
     JUMPDEST
@@ -66,13 +66,13 @@ run:
     CALLDATALOAD
     PUSH1 0xe0 (224)  // v25.i256 = shr v5 v3;
     SHR
-    PUSH4 0xa9059cbb (2835717307)  // v8.i1 = eq v25 v7;
+    PUSH4 0xa9059cbb (2835717307)  // v8.i256 = eq v25 v7;
     DUP2
     EQ
     PUSH1 block2  // br v8 block2 block1;
     JUMPI
   block1:
-    PUSH4 0x70a08231 (1889567281)  // v11.i1 = eq v25 v10;
+    PUSH4 0x70a08231 (1889567281)  // v11.i256 = eq v25 v10;
     EQ
     ISZERO
     PUSH1 section_unit0  // br v11 block8 block7;
@@ -84,7 +84,7 @@ run:
     DUP1  // v18.i256 = shr v14 v13;
     PUSH1 0xa0 (160)
     SHR
-    PUSH1 section_unit0  // br v20 block10 block9;
+    PUSH1 section_unit0  // br v18 block9 block10;
     JUMPI
   block10:
     PUSH0  // evm_mstore v1 v13;
@@ -106,7 +106,7 @@ run:
     DUP1  // v28.i256 = shr v14 v27;
     PUSH1 0xa0 (160)
     SHR
-    PUSH1 section_unit0  // br v29 block4 block3;
+    PUSH1 section_unit0  // br v28 block3 block4;
     JUMPI
   block4:
     PUSH1 0x24 (36)  // v32.i256 = evm_calldata_load v31;
@@ -119,7 +119,7 @@ run:
     KECCAK256
     DUP1  // v23.i256 = evm_sload v22;
     SLOAD
-    DUP3  // v24.i1 = lt v23 v32;
+    DUP3  // v24.i256 = lt v23 v32;
     DUP2
     LT
     PUSH1 section_unit0  // br v24 block5 block6;

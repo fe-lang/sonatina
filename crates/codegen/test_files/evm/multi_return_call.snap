@@ -6,19 +6,19 @@ input_file: test_files/evm/multi_return_call.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=true evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 54 bytes
-  total: 54 bytes
+  section runtime: 64 bytes
+  total: 64 bytes
 
 functions:
-  mem: global_dyn_base=0x40 arena_base=0x0 scratch_peak_words=1 static_chain_peak_words=1
+  mem: global_dyn_base=0x80 arena_base=0x40 scratch_peak_words=1 static_chain_peak_words=1
   entry: ir_blocks=3 ir_insts=11 vcode_ops=31 fixups=3 imm_bytes=7
-    mem: scratch_words=0 stable_words=1 stable_mode=StaticAbs(base=0x20) entry_abs_words=1 abs_words_end=2
-  pair_add: ir_blocks=1 ir_insts=5 vcode_ops=15 fixups=0 imm_bytes=0
+    mem: scratch_words=0 stable_words=1 stable_mode=StaticAbs(base=0x60) entry_abs_words=1 abs_words_end=2
+  pair_add: ir_blocks=1 ir_insts=5 vcode_ops=20 fixups=0 imm_bytes=3
     mem: scratch_words=1 stable_words=0 stable_mode=None entry_abs_words=2 abs_words_end=1
 
 evm:
-  case no_overflow: calldata_len=64 success reason=Return gas_used=21403 gas_refunded=0 logs=0 output=call len=32 tx_gas=21280 runtime_gas=123
-  case overflow: calldata_len=64 success reason=Return gas_used=21777 gas_refunded=0 logs=0 output=call len=32 tx_gas=21652 runtime_gas=125
+  case no_overflow: calldata_len=64 success reason=Return gas_used=21430 gas_refunded=0 logs=0 output=call len=32 tx_gas=21280 runtime_gas=150
+  case overflow: calldata_len=64 success reason=Return gas_used=21804 gas_refunded=0 logs=0 output=call len=32 tx_gas=21652 runtime_gas=152
 
 
 --------------- DEBUG ---------------
@@ -33,25 +33,25 @@ evm:
     - stack=[v1]
       pre: [PUSH(32)]
       evm_calldata_load [32] -> v3
-    // evm_mstore 32.i256 7.i256;
+    // evm_mstore 96.i256 7.i256;
     - stack=[v3, v1]
-      pre: [PUSH(7), PUSH(32)]
-      evm_mstore [32, 7]
-    // (v5.i256, v6.i1) = call %pair_add v1 v3;
+      pre: [PUSH(7), PUSH(96)]
+      evm_mstore [96, 7]
+    // (v6.i256, v7.i256) = call %pair_add v1 v3;
     - stack=[v3, v1], last_use=[v1, v3]
       pre: [PUSH_CONT, SWAP2]
-      call [v3, v1] -> [v5, v6]
-    // v7.i256 = evm_mload 32.i256;
-    - stack=[v5, v6]
-      pre: [PUSH(32)]
-      evm_mload [32] -> v7
-    // v8.i256 = add v5 v7;
-    - stack=[v7, v5, v6], last_use=[v5, v7]
-      add [v7, v5] -> v8
-    // br v6 block1 block2;
-    - stack=[v8, v6]
+      call [v3, v1] -> [v6, v7]
+    // v8.i256 = evm_mload 96.i256;
+    - stack=[v6, v7]
+      pre: [PUSH(96)]
+      evm_mload [96] -> v8
+    // v9.i256 = add v6 v8;
+    - stack=[v8, v6, v7], last_use=[v6, v8]
+      add [v8, v6] -> v9
+    // br v7 block1 block2;
+    - stack=[v9, v7]
       pre: [SWAP1]
-      br [v6] -> [block1, block2]
+      br [v7] -> [block1, block2]
   block1 P=[] T=[]
     // evm_mstore 0.i256 1.i256;
     - stack=[]
@@ -61,38 +61,40 @@ evm:
     - stack=[]
       pre: [PUSH(32), PUSH(0)]
       evm_return [0, 32]
-  block2 P=[] T=[v8]
-    inherited from block0: [v8]
-    // evm_mstore 0.i256 v8;
-    - stack=[v8], last_use=[v8]
+  block2 P=[] T=[v9]
+    inherited from block0: [v9]
+    // evm_mstore 0.i256 v9;
+    - stack=[v9], last_use=[v9]
       pre: [PUSH(0)]
-      evm_mstore [0, v8]
+      evm_mstore [0, v9]
     // evm_return 0.i256 32.i256;
     - stack=[]
       pre: [PUSH(32), PUSH(0)]
       evm_return [0, 32]
 
-// func public %pair_add(v0.i256, v1.i256) -> (i256, i1)
+// func public %pair_add(v0.i256, v1.i256) -> (i256, i256)
+spill_set: s0=v4, s1=v5
   block0 P=[v0, v1] T=[]
-    // evm_mstore 0.i256 v0;
+    // evm_mstore 64.i256 v0;
     - stack=[v0, v1, <RET>], last_use=[v0]
-      pre: [PUSH(0)]
-      evm_mstore [0, v0]
-    // v3.i256 = evm_mload 0.i256;
+      pre: [PUSH(64)]
+      evm_mstore [64, v0]
+    // v3.i256 = evm_mload 64.i256;
     - stack=[v1, <RET>]
-      pre: [PUSH(0)]
-      evm_mload [0] -> v3
+      pre: [PUSH(64)]
+      evm_mload [64] -> v3
     // v4.i256 = add v3 v1;
     - stack=[v3, v1, <RET>], last_use=[v1]
       pre: [SWAP1, DUP2]
       add [v3, v1] -> v4
-    // v5.i1 = lt v4 v3;
+      post: [DUP1, MSTORE_ABS(0)]
+    // v5.i256 = lt v4 v3;
     - stack=[v4, v3, <RET>], last_use=[v3]
-      pre: [SWAP1, DUP2]
       lt [v4, v3] -> v5
+      post: [DUP1, MSTORE_ABS(32)]
     // return (v4, v5);
-    - stack=[v5, v4, <RET>]
-      return: [SWAP1]
+    - stack=[v5, <RET>]
+      return: [MLOAD_ABS(0)]
       return [v4, v5]
 
 // func public %entry()
@@ -102,18 +104,18 @@ entry:
     CALLDATALOAD
     PUSH1 0x20 (32)  // v3.i256 = evm_calldata_load v2;
     CALLDATALOAD
-    PUSH1 0x7 (7)  // evm_mstore v2 v4;
-    PUSH1 0x20 (32)
+    PUSH1 0x7 (7)  // evm_mstore v4 v5;
+    PUSH1 0x60 (96)
     MSTORE
-    PUSH1 `pc + (4)`  // (v5.i256, v6.i1) = call %pair_add v1 v3;
+    PUSH1 `pc + (4)`  // (v6.i256, v7.i256) = call %pair_add v1 v3;
     SWAP2
     PUSH1 FuncRef(1)
     JUMP
     JUMPDEST
-    PUSH1 0x20 (32)  // v7.i256 = evm_mload v2;
+    PUSH1 0x60 (96)  // v8.i256 = evm_mload v4;
     MLOAD
-    ADD  // v8.i256 = add v5 v7;
-    SWAP1  // br v6 block1 block2;
+    ADD  // v9.i256 = add v6 v8;
+    SWAP1  // br v7 block1 block2;
     ISZERO
     PUSH1 block2
     JUMPI
@@ -126,25 +128,32 @@ entry:
     RETURN
   block2:
     JUMPDEST
-    PUSH0  // evm_mstore v0 v8;
+    PUSH0  // evm_mstore v0 v9;
     MSTORE
     PUSH1 0x20 (32)  // evm_return v0 v2;
     PUSH0
     RETURN
 
-// func public %pair_add(v0.i256, v1.i256) -> (i256, i1)
+// func public %pair_add(v0.i256, v1.i256) -> (i256, i256)
 pair_add:
   block0:
     JUMPDEST
-    PUSH0  // evm_mstore v2 v0;
+    PUSH1 0x40 (64)  // evm_mstore v2 v0;
     MSTORE
-    PUSH0  // v3.i256 = evm_mload v2;
+    PUSH1 0x40 (64)  // v3.i256 = evm_mload v2;
     MLOAD
     SWAP1  // v4.i256 = add v3 v1;
     DUP2
     ADD
-    SWAP1  // v5.i1 = lt v4 v3;
-    DUP2
-    LT
-    SWAP2  // return (v4, v5);
+    DUP1
+    PUSH0
+    MSTORE
+    LT  // v5.i256 = lt v4 v3;
+    DUP1
+    PUSH1 0x20 (32)
+    MSTORE
+    PUSH0  // return (v4, v5);
+    MLOAD
+    SWAP1
+    SWAP2
     JUMP

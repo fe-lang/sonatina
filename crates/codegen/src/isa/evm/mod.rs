@@ -32,7 +32,7 @@ pub(crate) use emit::{
     immediate_u32, is_plain_inst, is_push_opcode, referenced_insn_label_targets,
 };
 pub(crate) use frame_layout::{DynamicFrameLayout, FrameLocalWord};
-pub(crate) use high_alias::{canonicalize_alias_value, normalize_alias_map};
+pub(crate) use high_alias::canonicalize_alias_value;
 pub(crate) use memory_plan::{
     DYN_SP_SLOT, FREE_PTR_SLOT, FuncMemPlan, ObjLoc, PreserveMode, STATIC_BASE, WORD_BYTES,
 };

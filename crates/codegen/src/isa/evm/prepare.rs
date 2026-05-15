@@ -15,7 +15,7 @@ use sonatina_ir::{
     AccessKind, AccessLoc, Function, GlobalVariableRef, InstId, InstSetExt, MemoryAccess, Module,
     ValueId,
     cfg::ControlFlowGraph,
-    inst::evm::inst_set::EvmInstKind,
+    inst::evm::{inst_set::EvmInstKind, machine_inst_set::EvmMachineInstKind},
     isa::{
         Isa,
         evm::{EvmMachine, space::MEMORY},
@@ -32,7 +32,10 @@ use super::{
         compute_late_block_alias_plan, immediate_u32, rewrite_evm_local_fallthrough_layout,
     },
     machine::{
-        final_spills::allocate_final_spills,
+        final_spills::{
+            FinalSpillChoiceCtx, FinalSpillObjects, MachineFinalSpillInput,
+            OptionalFinalSpillPlacement, allocate_final_spills,
+        },
         lazy_frame::{FrameSummary, compute_frame_summary, compute_machine_frame_roots},
         lower::lower_section_to_machine,
         module::FuncMachineMap,
@@ -42,8 +45,8 @@ use super::{
     },
     malloc_plan,
     memory_plan::{
-        self, DYN_SP_SLOT, FREE_PTR_SLOT, FuncMemPlan, ProgramMemoryPlan, STATIC_BASE, WORD_BYTES,
-        compute_abs_clobber_words_with_extra,
+        self, BackendSpillReserve, DYN_SP_SLOT, FREE_PTR_SLOT, FuncMemPlan, ProgramMemoryPlan,
+        STATIC_BASE, WORD_BYTES, compute_abs_clobber_words_with_extra,
     },
     pipeline::EvmPipeline,
     provenance::{Provenance, compute_value_provenance},
@@ -85,6 +88,12 @@ impl EvmPreparedSection {
         self.function_plans.get(&func)
     }
 
+    pub fn stackify_trace(&self, func: FuncRef) -> Option<&str> {
+        self.function_plans
+            .get(&func)
+            .and_then(|plan| plan.stackify_trace.as_deref())
+    }
+
     pub(crate) fn section_plan(&self) -> &EvmSectionPlan {
         &self.section_plan
     }
@@ -107,6 +116,7 @@ pub(crate) struct EvmFunctionPlan {
     pub(crate) frame_summary: FrameSummary,
     pub(crate) dyn_sp_plan: FuncDynSpPlan,
     pub(crate) function_entry_jumpdest: bool,
+    pub(crate) stackify_trace: Option<String>,
 }
 
 #[derive(Clone, Copy)]
@@ -551,10 +561,89 @@ fn reserve_function_memory_layout(
     }
 }
 
+fn machine_fixed_memory_write_floor_words(
+    function: &Function,
+    isa: &EvmMachine,
+    mem_plan: &FuncMemPlan,
+) -> u32 {
+    let mut floor_words = 0;
+    for block in function.layout.iter_block() {
+        for inst in function.layout.iter_inst(block) {
+            let Some(end) = machine_fixed_memory_write_end(function, isa, inst) else {
+                continue;
+            };
+            let Some(words) = fixed_write_end_to_spill_floor_words(mem_plan, end) else {
+                continue;
+            };
+            floor_words = floor_words.max(words);
+        }
+    }
+    floor_words
+}
+
+fn fixed_write_end_to_spill_floor_words(mem_plan: &FuncMemPlan, end: u32) -> Option<u32> {
+    if end <= mem_plan.arena_base {
+        return Some(0);
+    }
+    align_to_word(end.checked_sub(mem_plan.arena_base)?)?.checked_div(WORD_BYTES)
+}
+
+fn machine_fixed_memory_write_end(
+    function: &Function,
+    isa: &EvmMachine,
+    inst: InstId,
+) -> Option<u32> {
+    match isa.inst_set().resolve_inst(function.dfg.inst(inst)) {
+        EvmMachineInstKind::EvmMstore(mstore) => {
+            fixed_write_end(function, *mstore.addr(), WORD_BYTES)
+        }
+        EvmMachineInstKind::EvmMstore8(mstore8) => fixed_write_end(function, *mstore8.addr(), 1),
+        EvmMachineInstKind::EvmCalldataCopy(copy) => {
+            fixed_write_end_from_len_value(function, *copy.dst_addr(), *copy.len())
+        }
+        EvmMachineInstKind::EvmCodeCopy(copy) => {
+            fixed_write_end_from_len_value(function, *copy.dst_addr(), *copy.len())
+        }
+        EvmMachineInstKind::EvmExtCodeCopy(copy) => {
+            fixed_write_end_from_len_value(function, *copy.dst_addr(), *copy.len())
+        }
+        EvmMachineInstKind::EvmReturnDataCopy(copy) => {
+            fixed_write_end_from_len_value(function, *copy.dst_addr(), *copy.len())
+        }
+        EvmMachineInstKind::EvmMcopy(copy) => {
+            fixed_write_end_from_len_value(function, *copy.dest(), *copy.len())
+        }
+        EvmMachineInstKind::EvmCall(call) => {
+            fixed_write_end_from_len_value(function, *call.ret_addr(), *call.ret_offset())
+        }
+        EvmMachineInstKind::EvmCallCode(call) => {
+            fixed_write_end_from_len_value(function, *call.ret_addr(), *call.ret_offset())
+        }
+        EvmMachineInstKind::EvmDelegateCall(call) => {
+            fixed_write_end_from_len_value(function, *call.ret_addr(), *call.ret_len())
+        }
+        EvmMachineInstKind::EvmStaticCall(call) => {
+            fixed_write_end_from_len_value(function, *call.ret_addr(), *call.ret_len())
+        }
+        _ => None,
+    }
+}
+
+fn fixed_write_end_from_len_value(function: &Function, addr: ValueId, len: ValueId) -> Option<u32> {
+    fixed_write_end(function, addr, value_imm_u32(function, len)?)
+}
+
+fn fixed_write_end(function: &Function, addr: ValueId, len: u32) -> Option<u32> {
+    if len == 0 {
+        return None;
+    }
+    value_imm_u32(function, addr)?.checked_add(len)
+}
+
 pub(crate) struct ArenaBaseFacts {
     pub(crate) has_dynamic_frames: bool,
     pub(crate) has_stackify_scratch_spills: bool,
-    pub(crate) backend_spill_reserve_words: u32,
+    pub(crate) backend_spill_scratch_reserve_words: u32,
     pub(crate) has_persistent_mallocs: bool,
 }
 
@@ -569,10 +658,10 @@ pub(crate) fn choose_arena_base(
 
     let spill_reserve_words = if facts.has_stackify_scratch_spills {
         facts
-            .backend_spill_reserve_words
+            .backend_spill_scratch_reserve_words
             .max(scratch_plan::SCRATCH_SPILL_SLOTS)
     } else {
-        facts.backend_spill_reserve_words
+        facts.backend_spill_scratch_reserve_words
     };
     layout.reserve_len(0, spill_reserve_words * WORD_BYTES);
     if facts.has_stackify_scratch_spills {
@@ -628,8 +717,8 @@ fn prepare_machine_section_after_pipeline(
 ) -> Result<EvmPreparedSection, String> {
     let source_module = work.module();
     let pre_analyses = compute_high_evm_pre_analyses(source_module, &funcs, backend);
-    let scratch_effects = FxHashSet::default();
-    let mut backend_spill_reserve_words: FxHashMap<FuncRef, u32> = FxHashMap::default();
+    let mut scratch_effects = FxHashSet::default();
+    let mut backend_spill_reserves: FxHashMap<FuncRef, BackendSpillReserve> = FxHashMap::default();
 
     for iteration in 0..4 {
         let placement = compute_semantic_memory_placement(
@@ -639,7 +728,7 @@ fn prepare_machine_section_after_pipeline(
             &ptr_escape,
             &scratch_effects,
             backend,
-            &backend_spill_reserve_words,
+            &backend_spill_reserves,
         );
 
         let machine = lower_section_to_machine(&work, &funcs, &placement, backend)?;
@@ -656,20 +745,17 @@ fn prepare_machine_section_after_pipeline(
             backend,
             &machine_isa,
         )?;
+        // Recompute scratch effects from the current machine allocation. Final spills selected
+        // for scratch are added below, after optional spill placement has been chosen.
+        let mut actual_scratch_effects: FxHashSet<FuncRef> = machine_analyses
+            .iter()
+            .filter_map(|(&func, analysis)| analysis.alloc.uses_scratch_spills().then_some(func))
+            .collect();
         let function_entry_jump_targets =
             compute_function_entry_jump_targets(machine.work.module(), &funcs);
 
-        let section_plan = EvmSectionPlan {
-            arena_base: placement.arena_base,
-            dyn_base: placement.global_dyn_base,
-            scratch_peak_words: placement.scratch_peak_words,
-            static_chain_peak_words: placement.static_chain_peak_words,
-        };
-
-        let mut actual_spill_words: FxHashMap<FuncRef, u32> = FxHashMap::default();
-        let mut function_plans = FxHashMap::default();
-        let mut results: Vec<_> = machine_analyses
-            .into_par_iter()
+        let mut machine_final_spill_inputs: Vec<_> = machine_analyses
+            .into_iter()
             .map(|(func, analysis)| {
                 let func_placement = placement
                     .funcs
@@ -682,8 +768,98 @@ fn prepare_machine_section_after_pipeline(
                     .get(&func)
                     .unwrap_or_else(|| panic!("missing source map for func {}", func.as_u32()));
                 remap_machine_mem_plan_call_preserve(&mut mem_plan, func_map);
-                let reserve_words = backend_spill_reserve_words.get(&func).copied().unwrap_or(0);
-                let final_spills = allocate_final_spills(analysis.alloc, mem_plan, reserve_words);
+                let abs_spill_floor_words =
+                    machine
+                        .work
+                        .module()
+                        .func_store
+                        .view(func, |machine_function| {
+                            machine_fixed_memory_write_floor_words(
+                                machine_function,
+                                &machine_isa,
+                                &mem_plan,
+                            )
+                        });
+                let reserve = backend_spill_reserves
+                    .get(&func)
+                    .copied()
+                    .unwrap_or_default();
+                let spills = FinalSpillObjects::compute(
+                    &analysis.alloc,
+                    &analysis.stable_final_spill_values,
+                );
+                MachineFinalSpillInput {
+                    func,
+                    analysis,
+                    mem_plan,
+                    reserve,
+                    abs_spill_floor_words,
+                    spills,
+                }
+            })
+            .collect();
+        machine_final_spill_inputs.sort_unstable_by_key(|input| input.func.as_u32());
+
+        let optional_final_spill_placements = FinalSpillChoiceCtx {
+            source_module,
+            funcs: &funcs,
+            pre_analyses: &pre_analyses,
+            ptr_escape: &ptr_escape,
+            backend,
+            base_scratch_effects: &actual_scratch_effects,
+            inputs: &machine_final_spill_inputs,
+        }
+        .choose_optional_placements();
+
+        let section_plan = EvmSectionPlan {
+            arena_base: placement.arena_base,
+            dyn_base: placement.global_dyn_base,
+            scratch_peak_words: placement.scratch_peak_words,
+            static_chain_peak_words: placement.static_chain_peak_words,
+        };
+
+        let mut actual_spill_reserves: FxHashMap<FuncRef, BackendSpillReserve> =
+            FxHashMap::default();
+        let mut function_plans = FxHashMap::default();
+        let mut results: Vec<_> = machine_final_spill_inputs
+            .into_par_iter()
+            .map(|input| {
+                let MachineFinalSpillInput {
+                    func,
+                    analysis,
+                    mem_plan,
+                    reserve,
+                    abs_spill_floor_words,
+                    spills,
+                    ..
+                } = input;
+                let func_placement = placement
+                    .funcs
+                    .get(&func)
+                    .unwrap_or_else(|| panic!("missing placement for func {}", func.as_u32()));
+                let func_map = machine
+                    .source_to_machine
+                    .funcs
+                    .get(&func)
+                    .unwrap_or_else(|| panic!("missing source map for func {}", func.as_u32()));
+                let alloc = analysis.alloc;
+                let block_order = analysis.block_order;
+                let mut stackify_trace = analysis.trace;
+                let optional_placement = optional_final_spill_placements
+                    .get(&func)
+                    .copied()
+                    .unwrap_or(OptionalFinalSpillPlacement::Scratch);
+                let final_spills = allocate_final_spills(
+                    alloc,
+                    mem_plan,
+                    reserve,
+                    abs_spill_floor_words,
+                    spills,
+                    optional_placement,
+                );
+                if let Some(trace) = &mut stackify_trace {
+                    trace.remap_stack_objects(&final_spills.stack_obj_remap);
+                }
                 let frame_roots = machine
                     .work
                     .module()
@@ -714,7 +890,7 @@ fn prepare_machine_section_after_pipeline(
                         function,
                         &final_spills.alloc,
                         &frame_summary,
-                        &analysis.block_order,
+                        &block_order,
                     )
                 });
                 let LateBlockAliasPlan {
@@ -734,9 +910,16 @@ fn prepare_machine_section_after_pipeline(
                 } else {
                     emitted_block_order
                 };
+                let stackify_trace = stackify_trace.map(|trace| {
+                    machine
+                        .work
+                        .module()
+                        .func_store
+                        .view(func, |function| trace.render(function, &final_spills.alloc))
+                });
                 (
                     func,
-                    final_spills.required_reserve_words,
+                    final_spills.required_reserve,
                     EvmFunctionPlan {
                         alloc: final_spills.alloc,
                         emitted_block_order,
@@ -745,13 +928,17 @@ fn prepare_machine_section_after_pipeline(
                         frame_summary,
                         dyn_sp_plan: FuncDynSpPlan::default(),
                         function_entry_jumpdest: function_entry_jump_targets.contains(&func),
+                        stackify_trace,
                     },
                 )
             })
             .collect();
         results.sort_unstable_by_key(|(func, ..)| func.as_u32());
-        for (func, required_reserve_words, plan) in results {
-            actual_spill_words.insert(func, required_reserve_words);
+        for (func, required_reserve, plan) in results {
+            if required_reserve.scratch_words != 0 {
+                actual_scratch_effects.insert(func);
+            }
+            actual_spill_reserves.insert(func, required_reserve);
             function_plans.insert(func, plan);
         }
 
@@ -777,22 +964,31 @@ fn prepare_machine_section_after_pipeline(
                 .dyn_sp_plan = dyn_sp_plan;
         }
 
-        let reserve_peak = backend_spill_reserve_words
+        let reserve_peak = backend_spill_reserves
             .values()
-            .copied()
+            .map(|reserve| reserve.max_words())
             .max()
             .unwrap_or(0);
-        let actual_peak = actual_spill_words.values().copied().max().unwrap_or(0);
+        let actual_peak = actual_spill_reserves
+            .values()
+            .map(|reserve| reserve.max_words())
+            .max()
+            .unwrap_or(0);
         debug!(
             iteration,
             reserve_peak, actual_peak, "evm machine spill reserve iteration"
         );
 
-        let spill_reserve_satisfied = actual_spill_words.iter().all(|(func, actual)| {
-            *actual <= backend_spill_reserve_words.get(func).copied().unwrap_or(0)
+        let scratch_effects_satisfied = actual_scratch_effects == scratch_effects;
+        let spill_reserve_satisfied = actual_spill_reserves.iter().all(|(func, actual)| {
+            backend_spill_reserves
+                .get(func)
+                .copied()
+                .unwrap_or_default()
+                .satisfies(*actual)
         });
 
-        if spill_reserve_satisfied || iteration == 3 {
+        if (spill_reserve_satisfied && scratch_effects_satisfied) || iteration == 3 {
             let mut globals: Vec<_> = membership.globals.iter().copied().collect();
             globals.sort_unstable();
             return Ok(EvmPreparedSection {
@@ -805,10 +1001,11 @@ fn prepare_machine_section_after_pipeline(
             });
         }
 
-        backend_spill_reserve_words = actual_spill_words;
+        backend_spill_reserves = actual_spill_reserves;
+        scratch_effects = actual_scratch_effects;
         debug!(
             iteration,
-            actual_peak, "rerunning evm machine prepare with larger spill reserve"
+            actual_peak, "rerunning evm machine prepare with larger spill/scratch reserve"
         );
     }
 
@@ -829,7 +1026,7 @@ pub(crate) fn compute_return_escape_caller_clamp_words(
     module: &Module,
     funcs: &[FuncRef],
     plan: &ProgramMemoryPlan,
-    extra_clobber_words: &FxHashMap<FuncRef, u32>,
+    extra_clobber_words: &FxHashMap<FuncRef, BackendSpillReserve>,
 ) -> FxHashMap<FuncRef, u32> {
     let funcs_set: FxHashSet<FuncRef> = funcs.iter().copied().collect();
     let abs_clobber_words =

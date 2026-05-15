@@ -46,12 +46,7 @@ fn is_zero_branch_rewrite(
     }
 
     let arg = func.dfg.inst(cond_inst).collect_values()[0];
-    matches!(func.dfg.value_ty(arg), Type::I1 | Type::I256).then_some((
-        arg,
-        cond_inst,
-        *br.nz_dest(),
-        *br.z_dest(),
-    ))
+    (func.dfg.value_ty(arg) == Type::I256).then_some((arg, cond_inst, *br.nz_dest(), *br.z_dest()))
 }
 
 fn remove_dead_single_result_inst(func: &mut Function, inst: InstId) {

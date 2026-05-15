@@ -6,12 +6,12 @@ input_file: test_files/evm/gvn_cross_block_uaddo_internal_call_reuse.sntn
 evm.config: stack_reach=4 vcode=true bytecode_hex=false stackify_trace=true evm_trace=false emit_observability=false opt=s
 
 object: Contract
-  section runtime: 93 bytes
-  total: 93 bytes
+  section runtime: 91 bytes
+  total: 91 bytes
 
 functions:
   mem: global_dyn_base=0x0 arena_base=0x0 scratch_peak_words=0 static_chain_peak_words=0
-  entry: ir_blocks=14 ir_insts=30 vcode_ops=73 fixups=7 imm_bytes=13
+  entry: ir_blocks=14 ir_insts=30 vcode_ops=71 fixups=7 imm_bytes=13
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
@@ -34,7 +34,7 @@ evm:
     - stack=[v5]
       pre: [PUSH(1), DUP2]
       add [v5, 1] -> v7
-    // v8.i1 = lt v7 v5;
+    // v8.i256 = lt v7 v5;
     - stack=[v7, v5], last_use=[v5]
       pre: [SWAP1, DUP2]
       lt [v7, v5] -> v8
@@ -43,7 +43,7 @@ evm:
       br [v8] -> [block13, block1]
   block1 P=[] T=[v7]
     inherited from block0: [v7]
-    // v10.i1 = lt v7 10.i256;
+    // v10.i256 = lt v7 10.i256;
     - stack=[v7]
       pre: [PUSH(10), DUP2]
       lt [v7, 10] -> v10
@@ -54,13 +54,13 @@ evm:
     inherited from block1: [v7]
     // jump block4;
     - stack=[v7]
-      exit(block4): [PUSH(true)]
+      exit(block4): [PUSH(1)]
       jump -> block4
   block14 P=[] T=[v7]
     inherited from block1: [v7]
     // jump block4;
     - stack=[v7]
-      exit(block4): [PUSH(false)]
+      exit(block4): [PUSH(0)]
       jump -> block4
   block4 P=[v0] T=[v7]
     // br v0 block15 block5;
@@ -68,7 +68,7 @@ evm:
       br [v0] -> [block15, block5]
   block5 P=[] T=[v7]
     inherited from block4: [v7]
-    // v12.i1 = eq v7 5.i256;
+    // v12.i256 = eq v7 5.i256;
     - stack=[v7], last_use=[v7]
       pre: [PUSH(5)]
       eq [5, v7] -> v12
@@ -104,7 +104,7 @@ evm:
     - stack=[]
       pre: [PUSH(0)]
       evm_mload [0] -> v17
-    // v18.i1 = eq v17 1.i256;
+    // v18.i256 = eq v17 1.i256;
     - stack=[v17], last_use=[v17]
       pre: [PUSH(1)]
       eq [1, v17] -> v18
@@ -158,21 +158,19 @@ entry:
     PUSH1 0x1 (1)  // v7.i256 = add v5 v6;
     DUP2
     ADD
-    SWAP1  // v8.i1 = lt v7 v5;
+    SWAP1  // v8.i256 = lt v7 v5;
     DUP2
     LT
     PUSH1 block13  // br v8 block13 block1;
     JUMPI
   block1:
-    PUSH1 0xa (10)  // v10.i1 = lt v7 v9;
+    PUSH1 0xa (10)  // v10.i256 = lt v7 v9;
     DUP2
     LT
     PUSH1 block14  // br v10 block14 block3;
     JUMPI
   block3:
     PUSH1 0x1 (1)  // jump block4;
-    PUSH0
-    SIGNEXTEND
     PUSH1 block4
     JUMP
   block14:
@@ -183,7 +181,7 @@ entry:
     PUSH1 block12  // br v0 block15 block5;
     JUMPI
   block5:
-    PUSH1 0x5 (5)  // v12.i1 = eq v7 v11;
+    PUSH1 0x5 (5)  // v12.i256 = eq v7 v11;
     EQ
     PUSH1 block6  // br v12 block6 block7;
     JUMPI
@@ -208,7 +206,7 @@ entry:
     JUMPDEST
     PUSH0  // v17.i256 = evm_mload v3;
     MLOAD
-    PUSH1 0x1 (1)  // v18.i1 = eq v17 v6;
+    PUSH1 0x1 (1)  // v18.i256 = eq v17 v6;
     EQ
     ISZERO  // br v18 block9 block16;
     PUSH1 block12

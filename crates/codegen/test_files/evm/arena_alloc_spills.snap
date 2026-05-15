@@ -6,19 +6,19 @@ input_file: test_files/evm/arena_alloc_spills.sntn
 evm.config: stack_reach=16 vcode=false bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 371 bytes
-  total: 371 bytes
+  section runtime: 394 bytes
+  total: 394 bytes
 
 functions:
-  mem: global_dyn_base=0x300 arena_base=0xe0 scratch_peak_words=8 static_chain_peak_words=9
-  entry: ir_blocks=1 ir_insts=7 vcode_ops=27 fixups=2 imm_bytes=10
+  mem: global_dyn_base=0x240 arena_base=0xc0 scratch_peak_words=8 static_chain_peak_words=4
+  entry: ir_blocks=1 ir_insts=7 vcode_ops=30 fixups=2 imm_bytes=10
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=8 abs_words_end=0
-  caller: ir_blocks=1 ir_insts=39 vcode_ops=157 fixups=2 imm_bytes=37
-    mem: scratch_words=0 stable_words=8 stable_mode=StaticAbs(base=0x1e0) entry_abs_words=8 abs_words_end=16
+  caller: ir_blocks=1 ir_insts=39 vcode_ops=179 fixups=2 imm_bytes=39
+    mem: scratch_words=6 stable_words=3 stable_mode=StaticAbs(base=0x1c0) entry_abs_words=8 abs_words_end=11
   mid: ir_blocks=1 ir_insts=5 vcode_ops=29 fixups=2 imm_bytes=2
-    mem: scratch_words=0 stable_words=1 stable_mode=StaticAbs(base=0x2e0) entry_abs_words=16 abs_words_end=17
-  callee: ir_blocks=1 ir_insts=25 vcode_ops=49 fixups=0 imm_bytes=16
-    mem: scratch_words=8 stable_words=0 stable_mode=None entry_abs_words=17 abs_words_end=8
+    mem: scratch_words=0 stable_words=1 stable_mode=StaticAbs(base=0x220) entry_abs_words=11 abs_words_end=12
+  callee: ir_blocks=1 ir_insts=25 vcode_ops=50 fixups=0 imm_bytes=16
+    mem: scratch_words=8 stable_words=0 stable_mode=None entry_abs_words=12 abs_words_end=8
 
 evm:
-  case ok: calldata_len=8 success reason=Return gas_used=21907 gas_refunded=0 logs=0 output=call len=32 tx_gas=21056 runtime_gas=851
+  case ok: calldata_len=8 success reason=Return gas_used=21954 gas_refunded=0 logs=0 output=call len=32 tx_gas=21056 runtime_gas=898

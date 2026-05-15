@@ -122,12 +122,13 @@ fn prepare_machine_stackify_analysis(
     let mut inst_liveness = InstLiveness::new();
     inst_liveness.compute(function, &cfg, &liveness);
 
-    let scratch_live_values = scratch_plan::compute_machine_scratch_live_values(
+    let scratch_clobber_liveness = scratch_plan::MachineScratchClobberLiveness::compute(
         function,
         machine_isa,
         scratch_effects,
         &inst_liveness,
     );
+    let (scratch_live_values, stable_final_spill_values) = scratch_clobber_liveness.into_parts();
     let mut builder = StackifyBuilder::new(
         function,
         &cfg,
@@ -135,6 +136,7 @@ fn prepare_machine_stackify_analysis(
         &liveness,
         backend.stackify_reach_depth,
     )
+    .with_search_profile(backend.stackify_search_profile)
     .with_scratch_live_values(scratch_live_values)
     .with_scratch_spills(scratch_plan::SCRATCH_SPILL_SLOTS)
     .with_hot_immediate_caching();
@@ -145,9 +147,19 @@ fn prepare_machine_stackify_analysis(
             .with_hot_immediate_min_push_data_bytes(HOT_IMMEDIATE_SIZE_MIN_PUSH_DATA_BYTES);
     }
 
-    let alloc = builder.compute();
+    let (alloc, trace) = if backend.capture_stackify_trace {
+        let (alloc, trace) = builder.compute_with_trace_capture();
+        (alloc, Some(trace))
+    } else {
+        (builder.compute(), None)
+    };
 
-    MachineStackifyAnalysis { alloc, block_order }
+    MachineStackifyAnalysis {
+        alloc,
+        block_order,
+        stable_final_spill_values,
+        trace,
+    }
 }
 
 fn compute_local_machine_scratch_clobbers(
