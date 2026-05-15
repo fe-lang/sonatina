@@ -61,6 +61,8 @@ revm = { version = "18.0.0", default-features = false, features = ["std"] }
 sonatina-parser = { path = "../parser", version = "0.0.3-alpha" }
 wasmtime = "44.0.1"
 wasmparser = "0.248.0"
+wgpu = { version = "29", features = ["vulkan-portability"] }
+pollster = "0.4.0"
 
 [[test]]
 name = "cranelift_backend"
