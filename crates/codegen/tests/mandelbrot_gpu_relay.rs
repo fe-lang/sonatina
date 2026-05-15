@@ -51,7 +51,7 @@ fn try_gpu_step(wgsl: &str, z_re: i64, z_im: i64, c_re: i64) -> Option<i64> {
     let instance = wgpu::Instance::default();
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::LowPower,
-        force_fallback_adapter: true,
+        force_fallback_adapter: false,
         ..Default::default()
     })).ok()?;
 

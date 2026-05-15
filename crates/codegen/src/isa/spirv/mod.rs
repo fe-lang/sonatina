@@ -197,10 +197,18 @@ fn emit_naga_block_instructions(
         } else if let Some(sar) = <&sonatina_ir::inst::arith::Sar as InstDowncast>::downcast(inst_set, inst_data) {
             if let Some(result) = function.dfg.inst_result(inst_id) {
                 let val = resolve_naga_value(*sar.value(), function, value_map, phi_locals, func).unwrap();
-                let bits = resolve_naga_value(*sar.bits(), function, value_map, phi_locals, func).unwrap();
-                // Naga ShiftRight needs u32 for the shift amount
+                // ShiftRight needs u32 — create directly as U32 literal to avoid i64→u32 cast
+                let shift_amount = if let Some(imm) = function.dfg.value_imm(*sar.bits()) {
+                    let v = match imm {
+                        sonatina_ir::Immediate::I64(v) => v as u32,
+                        sonatina_ir::Immediate::I32(v) => v as u32,
+                        sonatina_ir::Immediate::I8(v) => v as u32,
+                        _ => 0,
+                    };
+                    v
+                } else { 0 };
                 let bits_u32 = func.expressions.append(
-                    naga::Expression::As { expr: bits, kind: naga::ScalarKind::Uint, convert: Some(4) },
+                    naga::Expression::Literal(naga::Literal::U32(shift_amount)),
                     naga::Span::UNDEFINED,
                 );
                 let h = func.expressions.append(
