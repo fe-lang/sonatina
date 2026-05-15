@@ -38,6 +38,7 @@ vec-collections = { version = "0.4.3", default-features = false }
 rspirv = { version = "0.13.0", optional = true }
 spirv = { version = "0.4.0", optional = true }
 waffle = { version = "0.2", optional = true }
+naga = { version = "29", features = ["spv-out", "wgsl-out"], optional = true }
 
 [features]
 cranelift = [
@@ -49,7 +50,7 @@ cranelift = [
     "dep:cranelift-object",
 ]
 wasm = ["dep:waffle", "dep:wasm-encoder"]
-spirv-backend = ["dep:rspirv", "dep:spirv"]
+spirv-backend = ["dep:naga"]
 
 [dev-dependencies]
 hex = "0.4.3"
