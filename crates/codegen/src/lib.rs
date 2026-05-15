@@ -4,6 +4,7 @@ mod bitset;
 pub mod cfg_edit;
 pub mod cfg_scc;
 pub mod compile;
+pub mod structurize;
 
 pub use backend::Backend;
 pub use compile::{Compile, EvmCompile, EvmCompiler, OptLevel};
