@@ -31,7 +31,7 @@ pub use effects::{
     EffectBits, EffectCostClass, FuncEffectSummary, InstEffectSummary, InstEffects, MemoryAccess,
     OtherEffects,
 };
-pub use function::{Function, Signature};
+pub use function::{Function, SOURCE_LOC_NONE, Signature, SourceLoc};
 pub use global_variable::{GlobalVariableData, GlobalVariableRef};
 pub use graphviz::render_to;
 pub use inst::{
