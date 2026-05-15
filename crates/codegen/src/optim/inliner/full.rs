@@ -182,6 +182,12 @@ pub(super) fn try_inline_callsite_full(
                 editor.append_inst_with_results(new_block, cloned, result_tys.as_slice());
             inserted_insts += 1;
 
+            // Propagate source location from callee instruction to inlined copy
+            let callee_source = callee.source_locs[old_inst];
+            if callee_source != 0 {
+                editor.func_mut().source_locs[new_inst] = callee_source;
+            }
+
             assert_eq!(
                 old_results.len(),
                 new_results.len(),
