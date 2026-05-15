@@ -16,6 +16,8 @@ use sonatina_ir::{
     module::FuncRef,
 };
 
+mod translate;
+
 use crate::backend::Backend;
 
 #[derive(Debug)]
@@ -65,30 +67,8 @@ impl Backend for WasmBackend {
         let funcs = module.funcs();
         let mut func_idx: u32 = 0;
 
-        // Known intrinsics to skip (handled as host imports by the runtime)
         let intrinsic_names: std::collections::HashSet<&str> =
             ["addmod", "mulmod"].into_iter().collect();
-
-        // Add import section for u256 intrinsics
-        let mut import_section = wasm_encoder::ImportSection::new();
-        import_section.import(
-            "env", "__u256_addmod",
-            wasm_encoder::EntityType::Function(func_idx),
-        );
-        type_section.ty().function(
-            vec![ValType::I32, ValType::I32, ValType::I32, ValType::I32], vec![],
-        );
-        func_idx += 1;
-
-        import_section.import(
-            "env", "__u256_eq",
-            wasm_encoder::EntityType::Function(func_idx),
-        );
-        type_section.ty().function(
-            vec![ValType::I32, ValType::I32], vec![ValType::I32],
-        );
-        func_idx += 1;
-        let import_func_count = func_idx;
 
         for &func_ref in &funcs {
             let has_body = module.func_store.try_view(func_ref, |f| {
@@ -118,9 +98,9 @@ impl Backend for WasmBackend {
 
             type_section.ty().function(params.clone(), results.clone());
             function_section.function(func_idx);
-            export_section.export(&name, ExportKind::Func, func_idx - import_func_count);
+            export_section.export(&name, ExportKind::Func, func_idx);
 
-            let wasm_func = translate_function(module, func_ref, &results)
+            let wasm_func = translate::translate_function_body(module, func_ref, &results)
                 .unwrap_or_else(|_| {
                     // Fallback: emit a stub function for complex bodies
                     let mut f = Function::new(vec![]);
@@ -141,7 +121,6 @@ impl Backend for WasmBackend {
         }
 
         wasm.section(&type_section);
-        wasm.section(&import_section);
         wasm.section(&function_section);
         wasm.section(&export_section);
         wasm.section(&code_section);
