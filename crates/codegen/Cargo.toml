@@ -66,15 +66,15 @@ pollster = "0.4.0"
 
 [[test]]
 name = "cranelift_backend"
-required-features = ["cranelift"]
+required-features = ["cranelift", "wasm", "spirv-backend"]
 
 [[test]]
 name = "wasm_backend"
-required-features = ["wasm"]
+required-features = ["cranelift", "wasm"]
 
 [[test]]
 name = "spirv_backend"
-required-features = ["spirv-backend"]
+required-features = ["cranelift", "wasm", "spirv-backend"]
 
 [[test]]
 name = "mandelbrot_snapshot"
