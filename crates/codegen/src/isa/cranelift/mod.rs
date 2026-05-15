@@ -1,4 +1,4 @@
-mod translate;
+pub(crate) mod translate;
 pub mod u256_runtime;
 
 use std::{collections::HashMap, sync::Arc};

@@ -83,7 +83,7 @@ pub(super) fn translate_module(
         };
         let wsig = wmod.signatures.push(sig_data);
 
-        let body = translate_function(module, func_ref, &wmod, wsig)?;
+        let body = translate_function(module, func_ref, &wmod, wsig, memory)?;
         let wfunc = wmod.funcs.push(FuncDecl::Body(wsig, format!("{name}"), body));
 
         wmod.exports.push(waffle::Export {
@@ -102,8 +102,11 @@ fn translate_function(
     func_ref: FuncRef,
     wmod: &WaffleModule,
     wsig: waffle::Signature,
+    memory: waffle::Memory,
 ) -> Result<FunctionBody, String> {
     let mut body = FunctionBody::new(wmod, wsig);
+    // Stack pointer for bump allocation in linear memory (starts at 1024 to leave space)
+    let mut stack_ptr: u32 = 1024;
 
     module
         .func_store
@@ -321,32 +324,68 @@ fn translate_function(
                             value_map.insert(result, wval);
                         }
                     }
-                    // ObjLoad — for objref params, pass through the value
+                    // ObjLoad — load i64 from linear memory at address
                     else if let Some(obj_load) = <&sonatina_ir::inst::data::ObjLoad as InstDowncast>::downcast(inst_set, inst_data) {
                         if let Some(result) = function.dfg.inst_result(inst_id) {
                             let addr = resolve_value(function, *obj_load.object(), &value_map, &mut body, wb);
                             if let Some(v) = addr {
-                                value_map.insert(result, v);
+                                let result_ty = function.dfg.value_ty(result);
+                                if result_ty == Type::I256 || matches!(result_ty, Type::Compound(_)) {
+                                    // For compound types / i256: pass through address
+                                    value_map.insert(result, v);
+                                } else {
+                                    // Load scalar from linear memory
+                                    let mem_arg = waffle::MemoryArg { align: 8, offset: 0, memory };
+                                    let loaded = body.add_op(wb, Operator::I64Load { memory: mem_arg }, &[v], &[WType::I64]);
+                                    value_map.insert(result, loaded);
+                                }
                             }
                         }
                     }
-                    // ObjStore — skip (value already in local)
-                    else if <&sonatina_ir::inst::data::ObjStore as InstDowncast>::downcast(inst_set, inst_data).is_some() {
+                    // ObjStore — store i64 to linear memory
+                    else if let Some(obj_store) = <&sonatina_ir::inst::data::ObjStore as InstDowncast>::downcast(inst_set, inst_data) {
+                        let dest = resolve_value(function, *obj_store.object(), &value_map, &mut body, wb);
+                        let val = resolve_value(function, *obj_store.value(), &value_map, &mut body, wb);
+                        if let (Some(d), Some(v)) = (dest, val) {
+                            let mem_arg = waffle::MemoryArg { align: 8, offset: 0, memory };
+                            body.add_op(wb, Operator::I64Store { memory: mem_arg }, &[d, v], &[]);
+                        }
                     }
-                    // ObjAlloc — allocate a local (no-op in WASM for small types)
+                    // ObjAlloc — bump allocate in linear memory
                     else if <&sonatina_ir::inst::data::ObjAlloc as InstDowncast>::downcast(inst_set, inst_data).is_some() {
                         if let Some(result) = function.dfg.inst_result(inst_id) {
-                            let zero = body.add_op(wb, Operator::I64Const { value: 0 }, &[], &[WType::I64]);
-                            value_map.insert(result, zero);
+                            let result_ty = function.dfg.value_ty(result);
+                            let alloc_size = module.ctx.size_of_unchecked(result_ty).max(8) as u32;
+                            let addr = body.add_op(wb, Operator::I32Const { value: stack_ptr }, &[], &[WType::I32]);
+                            stack_ptr += alloc_size;
+                            value_map.insert(result, addr);
                         }
                     }
-                    // ObjIndex — pointer arithmetic (stub: return base)
+                    // ObjIndex — pointer arithmetic: base + index * elem_size
                     else if let Some(obj_index) = <&sonatina_ir::inst::data::ObjIndex as InstDowncast>::downcast(inst_set, inst_data) {
                         if let Some(result) = function.dfg.inst_result(inst_id) {
-                            let base = resolve_value(function, *obj_index.object(), &value_map, &mut body, wb);
-                            if let Some(v) = base {
-                                value_map.insert(result, v);
-                            }
+                            let base = resolve_value(function, *obj_index.object(), &value_map, &mut body, wb).ok_or("unresolved obj_index base")?;
+                            let index_val_id = *obj_index.index();
+                            let index_ty = function.dfg.value_ty(index_val_id);
+                            let index = if index_ty == Type::I256 {
+                                if let Some(imm) = function.dfg.value_imm(index_val_id) {
+                                    let idx = match imm {
+                                        sonatina_ir::Immediate::I256(v) => v.to_u256().low_u64() as u32,
+                                        _ => 0,
+                                    };
+                                    body.add_op(wb, Operator::I32Const { value: idx }, &[], &[WType::I32])
+                                } else {
+                                    resolve_value(function, index_val_id, &value_map, &mut body, wb).ok_or("unresolved index")?
+                                }
+                            } else {
+                                resolve_value(function, index_val_id, &value_map, &mut body, wb).ok_or("unresolved index")?
+                            };
+                            let obj_ty = function.dfg.value_ty(*obj_index.object());
+                            let elem_size = crate::isa::cranelift::translate::compute_element_size(obj_ty, &module.ctx) as u32;
+                            let stride = body.add_op(wb, Operator::I32Const { value: elem_size }, &[], &[WType::I32]);
+                            let offset = body.add_op(wb, Operator::I32Mul, &[index, stride], &[WType::I32]);
+                            let addr = body.add_op(wb, Operator::I32Add, &[base, offset], &[WType::I32]);
+                            value_map.insert(result, addr);
                         }
                     }
                     // Alloca — allocate a local
@@ -372,21 +411,37 @@ fn translate_function(
                             }
                         }
                     }
-                    // ExtractValue — pass through base for now
+                    // ExtractValue — load at field offset from base address
                     else if let Some(extract) = <&sonatina_ir::inst::data::ExtractValue as InstDowncast>::downcast(inst_set, inst_data) {
                         if let Some(result) = function.dfg.inst_result(inst_id) {
-                            let base = resolve_value(function, *extract.dest(), &value_map, &mut body, wb);
-                            if let Some(v) = base {
-                                value_map.insert(result, v);
-                            }
+                            let base = resolve_value(function, *extract.dest(), &value_map, &mut body, wb).ok_or("unresolved extract base")?;
+                            let idx_val = function.dfg.value_imm(*extract.idx())
+                                .map(|imm| match imm {
+                                    sonatina_ir::Immediate::I8(v) => v as u32,
+                                    sonatina_ir::Immediate::I32(v) => v as u32,
+                                    sonatina_ir::Immediate::I64(v) => v as u32,
+                                    sonatina_ir::Immediate::I256(v) => v.to_u256().low_u64() as u32,
+                                    _ => 0,
+                                })
+                                .unwrap_or(0);
+                            let result_ty = function.dfg.value_ty(result);
+                            let elem_size = module.ctx.size_of_unchecked(result_ty) as u32;
+                            let offset = idx_val * elem_size;
+                            let mem_arg = waffle::MemoryArg { align: 8, offset, memory };
+                            let loaded = body.add_op(wb, Operator::I64Load { memory: mem_arg }, &[base], &[WType::I64]);
+                            value_map.insert(result, loaded);
                         }
                     }
-                    // Trunc — pass through (WASM handles type widths natively)
+                    // Trunc — wrap i64 to i32 if needed
                     else if let Some(trunc) = <&sonatina_ir::inst::cast::Trunc as InstDowncast>::downcast(inst_set, inst_data) {
                         if let Some(result) = function.dfg.inst_result(inst_id) {
-                            let val = resolve_value(function, *trunc.from(), &value_map, &mut body, wb);
-                            if let Some(v) = val {
-                                value_map.insert(result, v);
+                            let val = resolve_value(function, *trunc.from(), &value_map, &mut body, wb).ok_or("unresolved trunc")?;
+                            let to_ty = *trunc.ty();
+                            if matches!(to_ty, Type::I32 | Type::I16 | Type::I8 | Type::I1) {
+                                let wrapped = body.add_op(wb, Operator::I32WrapI64, &[val], &[WType::I32]);
+                                value_map.insert(result, wrapped);
+                            } else {
+                                value_map.insert(result, val);
                             }
                         }
                     }

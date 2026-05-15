@@ -1626,7 +1626,7 @@ fn is_undef_value(function: &Function, value_id: ValueId) -> bool {
     matches!(function.dfg.value(value_id), Value::Undef { .. })
 }
 
-fn compute_element_size(obj_ty: Type, ctx: &sonatina_ir::module::ModuleCtx) -> usize {
+pub(crate) fn compute_element_size(obj_ty: Type, ctx: &sonatina_ir::module::ModuleCtx) -> usize {
     if let Some(cmpd) = obj_ty.resolve_compound(ctx) {
         match cmpd {
             sonatina_ir::types::CompoundType::Array { elem, .. } => {
