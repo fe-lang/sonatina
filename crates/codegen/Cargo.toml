@@ -22,6 +22,7 @@ cranelift-module = { version = "0.126", optional = true }
 cranelift-jit = { version = "0.126", optional = true }
 cranelift-native = { version = "0.126", optional = true }
 cranelift-object = { version = "0.126", optional = true }
+wasm-encoder = { version = "0.227", optional = true }
 smallvec = "1.15.1"
 rustc-hash = "2.0.0"
 sonatina-ir = { path = "../ir", version = "0.0.3-alpha" }
@@ -44,6 +45,7 @@ cranelift = [
     "dep:cranelift-native",
     "dep:cranelift-object",
 ]
+wasm = ["dep:wasm-encoder"]
 
 [dev-dependencies]
 hex = "0.4.3"
