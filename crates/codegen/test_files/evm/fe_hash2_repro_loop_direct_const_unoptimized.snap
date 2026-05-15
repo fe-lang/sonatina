@@ -6,18 +6,18 @@ input_file: test_files/evm/fe_hash2_repro_loop_direct_const_unoptimized.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=true evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 138 bytes
-  total: 138 bytes
+  section runtime: 137 bytes
+  total: 137 bytes
 
 functions:
   mem: global_dyn_base=0x60 arena_base=0x0 scratch_peak_words=3 static_chain_peak_words=0
-  run: ir_blocks=4 ir_insts=17 vcode_ops=41 fixups=4 imm_bytes=12
+  run: ir_blocks=4 ir_insts=17 vcode_ops=40 fixups=4 imm_bytes=12
     mem: scratch_words=3 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=3
   __repro_runtime_entry: ir_blocks=3 ir_insts=5 vcode_ops=15 fixups=3 imm_bytes=1
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=21208 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=208
+  case ok: calldata_len=0 success reason=Return gas_used=21202 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=202
 
 
 --------------- DEBUG ---------------
@@ -137,10 +137,17 @@ run:
     PUSH1 0x1 (1)  // v10.i1 = lt v1 v9;
     DUP3
     LT
-    ISZERO  // br v10 block2 block3;
-    PUSH1 block3
+    PUSH1 block2  // br v10 block2 block3;
     JUMPI
+  block3:
+    SWAP2  // v14.i256 = evm_mload v0;
+    POP
+    POP
+    MLOAD
+    SWAP1  // return v14;
+    JUMP
   block2:
+    JUMPDEST
     POP  // evm_code_copy v5 v8 v2;
     PUSH1 0x20 (32)
     DUP3
@@ -154,14 +161,6 @@ run:
     ADD
     PUSH0  // jump block1;
     PUSH1 block1
-    JUMP
-  block3:
-    JUMPDEST
-    SWAP2  // v14.i256 = evm_mload v0;
-    POP
-    POP
-    MLOAD
-    SWAP1  // return v14;
     JUMP
 
 // func private %__repro_runtime_entry()

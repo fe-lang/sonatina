@@ -6,33 +6,33 @@ input_file: test_files/evm/loops.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section init: 517 bytes
-  section runtime: 497 bytes
-  total: 1014 bytes
+  section init: 513 bytes
+  section runtime: 493 bytes
+  total: 1006 bytes
 
 functions:
   mem: global_dyn_base=0x100 arena_base=0xa0 scratch_peak_words=0 static_chain_peak_words=3
-  __Bench_recv_0_3: ir_blocks=4 ir_insts=7 vcode_ops=18 fixups=2 imm_bytes=1
+  __Bench_recv_0_3: ir_blocks=4 ir_insts=7 vcode_ops=17 fixups=2 imm_bytes=1
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=0
   __Bench_recv_0_4: ir_blocks=4 ir_insts=9 vcode_ops=23 fixups=2 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=0
-  __Bench_recv_0_5: ir_blocks=4 ir_insts=13 vcode_ops=33 fixups=2 imm_bytes=2
+  __Bench_recv_0_5: ir_blocks=4 ir_insts=13 vcode_ops=32 fixups=2 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=0
   __Bench_init: ir_blocks=3 ir_insts=8 vcode_ops=16 fixups=3 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  __Bench_runtime: ir_blocks=36 ir_insts=89 vcode_ops=276 fixups=42 imm_bytes=32
+  __Bench_runtime: ir_blocks=36 ir_insts=89 vcode_ops=274 fixups=42 imm_bytes=32
     mem: scratch_words=0 stable_words=3 stable_mode=StaticAbs(base=0xa0) entry_abs_words=0 abs_words_end=3
   u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98: ir_blocks=5 ir_insts=16 vcode_ops=45 fixups=2 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=0
 
 evm:
-  deploy: success reason=Return gas_used=160840 gas_refunded=0 logs=0 output=create len=497 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
-  case counter: calldata_len=36 success reason=Return gas_used=25804 gas_refunded=0 logs=0 output=call len=32 tx_gas=21204 runtime_gas=4600
+  deploy: success reason=Return gas_used=159976 gas_refunded=0 logs=0 output=create len=493 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
+  case counter: calldata_len=36 success reason=Return gas_used=25600 gas_refunded=0 logs=0 output=call len=32 tx_gas=21204 runtime_gas=4396
   case sum: calldata_len=36 success reason=Return gas_used=30328 gas_refunded=0 logs=0 output=call len=32 tx_gas=21204 runtime_gas=9124
-  case xor_loop: calldata_len=68 success reason=Return gas_used=27938 gas_refunded=0 logs=0 output=call len=32 tx_gas=21344 runtime_gas=6594
-  case counter_unchecked: calldata_len=36 success reason=Return gas_used=25898 gas_refunded=0 logs=0 output=call len=32 tx_gas=21204 runtime_gas=4694
+  case xor_loop: calldata_len=68 success reason=Return gas_used=27734 gas_refunded=0 logs=0 output=call len=32 tx_gas=21344 runtime_gas=6390
+  case counter_unchecked: calldata_len=36 success reason=Return gas_used=25694 gas_refunded=0 logs=0 output=call len=32 tx_gas=21204 runtime_gas=4490
   case sum_unchecked: calldata_len=36 success reason=Return gas_used=26822 gas_refunded=0 logs=0 output=call len=32 tx_gas=21204 runtime_gas=5618
-  case xor_loop_unchecked: calldata_len=68 success reason=Return gas_used=28068 gas_refunded=0 logs=0 output=call len=32 tx_gas=21344 runtime_gas=6724
+  case xor_loop_unchecked: calldata_len=68 success reason=Return gas_used=27864 gas_refunded=0 logs=0 output=call len=32 tx_gas=21344 runtime_gas=6520
 
 
 --------------- DEBUG ---------------
@@ -47,19 +47,18 @@ __Bench_recv_0_3:
     DUP2  // v5.i1 = lt v4 v0;
     DUP2
     LT
-    ISZERO  // br v5 block2 block3;
-    PUSH1 block3
+    PUSH1 block2  // br v5 block2 block3;
     JUMPI
-  block2:
-    PUSH1 0x1 (1)  // v4.i256 = add v7 v4;
-    ADD
-    PUSH1 block1  // jump block1;
-    JUMP
   block3:
-    JUMPDEST
     SWAP1  // return v4;
     POP
     SWAP1
+    JUMP
+  block2:
+    JUMPDEST
+    PUSH1 0x1 (1)  // v4.i256 = add v7 v4;
+    ADD
+    PUSH1 block1  // jump block1;
     JUMP
 
 // func private %__Bench_recv_0_4(v0.i256) -> i256
@@ -109,10 +108,17 @@ __Bench_recv_0_5:
     DUP3  // v12.i1 = lt v31 v11;
     DUP3
     LT
-    ISZERO  // br v12 block2 block3;
-    PUSH1 block3
+    PUSH1 block2  // br v12 block2 block3;
     JUMPI
+  block3:
+    SWAP3  // return v30;
+    POP
+    POP
+    POP
+    SWAP1
+    JUMP
   block2:
+    JUMPDEST
     DUP4  // v27.i256 = xor v31 v9;
     DUP3
     XOR
@@ -122,14 +128,6 @@ __Bench_recv_0_5:
     ADD
     SWAP1  // jump block1;
     PUSH1 block1
-    JUMP
-  block3:
-    JUMPDEST
-    SWAP3  // return v30;
-    POP
-    POP
-    POP
-    SWAP1
     JUMP
 
 // func private %__Bench_init()
@@ -223,16 +221,9 @@ __Bench_runtime:
     DUP2  // v92.i1 = lt v45 v91;
     DUP2
     LT
-    ISZERO  // br v92 block8 block9;
-    PUSH1 block9
+    PUSH1 block8  // br v92 block8 block9;
     JUMPI
-  block8:
-    PUSH1 0x1 (1)  // v94.i256 = add v45 v93;
-    ADD
-    PUSH1 block7  // jump block7;
-    JUMP
   block9:
-    JUMPDEST
     SWAP1  // evm_mstore v66 v45;
     POP
     PUSH0
@@ -240,6 +231,12 @@ __Bench_runtime:
     PUSH1 0x20 (32)  // evm_return v66 v69;
     PUSH0
     RETURN
+  block8:
+    JUMPDEST
+    PUSH1 0x1 (1)  // v94.i256 = add v45 v93;
+    ADD
+    PUSH1 block7  // jump block7;
+    JUMP
   block10:
     JUMPDEST
     POP  // v95.i256 = evm_call_value;
@@ -322,10 +319,20 @@ __Bench_runtime:
     DUP4  // v28.i1 = lt v53 v26;
     DUP3
     LT
-    ISZERO  // br v28 block25 block26;
-    PUSH1 block26
+    PUSH1 block25  // br v28 block25 block26;
     JUMPI
+  block26:
+    SWAP3  // evm_mstore v66 v52;
+    POP
+    POP
+    POP
+    PUSH0
+    MSTORE
+    PUSH1 0x20 (32)  // evm_return v66 v69;
+    PUSH0
+    RETURN
   block25:
+    JUMPDEST
     DUP2  // v29.i256 = xor v27 v53;
     DUP4
     XOR
@@ -336,17 +343,6 @@ __Bench_runtime:
     SWAP1  // jump block24;
     PUSH1 block24
     JUMP
-  block26:
-    JUMPDEST
-    SWAP3  // evm_mstore v66 v52;
-    POP
-    POP
-    POP
-    PUSH0
-    MSTORE
-    PUSH1 0x20 (32)  // evm_return v66 v69;
-    PUSH0
-    RETURN
   block27:
     JUMPDEST
     CALLVALUE  // v33.i256 = evm_call_value;

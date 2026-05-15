@@ -15,7 +15,10 @@ use crate::{
 };
 use cranelift_entity::{EntityList, SecondaryMap};
 
-use super::super::OpCode;
+use super::super::{
+    OpCode,
+    machine::lazy_frame::{FrameSite, FrameSummary},
+};
 
 pub(crate) fn compute_function_entry_jump_targets(
     module: &Module,
@@ -137,6 +140,7 @@ pub(crate) struct LateBlockAliasPlan {
 pub(crate) fn compute_late_block_alias_plan(
     function: &Function,
     alloc: &StackifyAlloc,
+    frame_summary: &FrameSummary,
     block_order: &[BlockId],
 ) -> LateBlockAliasPlan {
     let mut raw_alias_targets: SecondaryMap<BlockId, Option<BlockId>> = SecondaryMap::new();
@@ -150,6 +154,7 @@ pub(crate) fn compute_late_block_alias_plan(
         if Some(block) == entry
             || !alloc.read(term, &[]).is_empty()
             || !alloc.write(term, &[]).is_empty()
+            || lazy_frame_mentions_trampoline_site(frame_summary, block, term)
         {
             continue;
         }
@@ -225,15 +230,17 @@ pub(crate) fn rewrite_evm_local_fallthrough_layout(
     let mut idx = 0;
     while idx + 2 < emitted_block_order.len() {
         let header = emitted_block_order[idx];
-        let exit = emitted_block_order[idx + 1];
-        let body = emitted_block_order[idx + 2];
+        let second = emitted_block_order[idx + 1];
+        let third = emitted_block_order[idx + 2];
         if is_hot_loop_header_fallthrough_candidate(
-            function, &cfg, &loops, aliases, header, exit, body,
+            function, &cfg, &loops, aliases, header, second, third,
+        ) || is_loop_header_no_invert_candidate(
+            function, &cfg, &loops, aliases, header, second, third,
         ) {
             tracing::trace!(
                 header = header.0,
-                body = body.0,
-                exit = exit.0,
+                second = second.0,
+                third = third.0,
                 "rewrote local EVM fallthrough layout"
             );
             emitted_block_order.swap(idx + 1, idx + 2);
@@ -314,6 +321,74 @@ fn is_hot_loop_header_fallthrough_candidate(
     canonical_late_alias_target(aliases, *jump.dest()) == header
 }
 
+fn is_loop_header_no_invert_candidate(
+    function: &Function,
+    cfg: &ControlFlowGraph,
+    loops: &LoopTree,
+    aliases: &FxHashMap<BlockId, BlockId>,
+    header: BlockId,
+    body: BlockId,
+    exit: BlockId,
+) -> bool {
+    if [header, body, exit]
+        .into_iter()
+        .any(|block| canonical_late_alias_target(aliases, block) != block)
+    {
+        return false;
+    }
+
+    let Some(lp) = loops.loop_of_block(header) else {
+        return false;
+    };
+    if loops.loop_header(lp) != header
+        || !loops.is_in_loop(body, lp)
+        || loops.is_in_loop(exit, lp)
+        || cfg.pred_num_of(body) != 1
+        || cfg.preds_as_slice(body) != [header]
+    {
+        return false;
+    }
+
+    let Some(header_term) = function.layout.last_inst_of(header) else {
+        return false;
+    };
+    let Some(body_term) = function.layout.last_inst_of(body) else {
+        return false;
+    };
+    let Some(exit_term) = function.layout.last_inst_of(exit) else {
+        return false;
+    };
+    if !function.dfg.is_exit(exit_term)
+        || function
+            .layout
+            .iter_inst(body)
+            .any(|inst| function.dfg.is_phi(inst))
+    {
+        return false;
+    }
+
+    let Some(header_branch) = function.dfg.branch_info(header_term) else {
+        return false;
+    };
+    let BranchKind::Br(br) = header_branch.branch_kind() else {
+        return false;
+    };
+    if canonical_late_alias_target(aliases, *br.nz_dest()) != body
+        || canonical_late_alias_target(aliases, *br.z_dest()) != exit
+    {
+        return false;
+    }
+
+    let Some(body_branch) = function.dfg.branch_info(body_term) else {
+        return false;
+    };
+    let BranchKind::Jump(jump) = body_branch.branch_kind() else {
+        return false;
+    };
+
+    canonical_late_alias_target(aliases, *jump.dest()) == header
+}
+
 fn canonical_late_alias_target(aliases: &FxHashMap<BlockId, BlockId>, block: BlockId) -> BlockId {
     let mut block = block;
     while let Some(&next) = aliases.get(&block) {
@@ -351,4 +426,25 @@ fn block_trampoline_jump_inst(function: &Function, block: BlockId) -> Option<Ins
     }
 
     Some(term)
+}
+
+fn lazy_frame_mentions_trampoline_site(
+    frame_summary: &FrameSummary,
+    block: BlockId,
+    term: InstId,
+) -> bool {
+    let Some(plan) = frame_summary.lowering.as_ref() else {
+        return false;
+    };
+
+    [
+        FrameSite::BlockEntry(block),
+        FrameSite::PreInst(term),
+        FrameSite::Inst(term),
+        FrameSite::PostInst(term),
+    ]
+    .into_iter()
+    .any(|site| {
+        plan.enter_before_site(site) || plan.exit_before_site(site) || plan.exit_after_site(site)
+    })
 }

@@ -6,18 +6,18 @@ input_file: test_files/evm/dyn_frame_sp_shift_bug.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 147 bytes
-  total: 147 bytes
+  section runtime: 136 bytes
+  total: 136 bytes
 
 functions:
   mem: global_dyn_base=0xa0 arena_base=0xa0 scratch_peak_words=0 static_chain_peak_words=0
-  f: ir_blocks=6 ir_insts=22 vcode_ops=101 fixups=6 imm_bytes=22
+  f: ir_blocks=6 ir_insts=22 vcode_ops=97 fixups=6 imm_bytes=22
     mem: scratch_words=0 stable_words=1 stable_mode=DynamicFrame entry_abs_words=0 abs_words_end=0
   entry: ir_blocks=1 ir_insts=3 vcode_ops=13 fixups=2 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=21528 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=528
+  case ok: calldata_len=0 success reason=Return gas_used=21473 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=473
 
 
 --------------- DEBUG ---------------
@@ -28,16 +28,12 @@ f:
     JUMPDEST
     PUSH1 0x80 (128)
     MLOAD
-    DUP1
-    PUSH1 `pc + (7)`
+    PUSH1 `pc + (5)`
     JUMPI
-    POP
     PUSH1 0xa0 (160)
-    DUP1
     PUSH1 0x80 (128)
     MSTORE
     JUMPDEST
-    POP
     PUSH1 0x80 (128)
     MLOAD
     DUP1

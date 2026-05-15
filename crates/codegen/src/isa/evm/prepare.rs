@@ -25,15 +25,19 @@ use sonatina_ir::{
 
 use super::{
     EvmBackend, LateCleanupProfile,
-    dyn_sp::{DynSpInitKind, FuncDynSpPlan},
+    dyn_sp::{FuncDynSpPlan, compute_machine_dyn_sp_plan},
     emit::{
-        LateBlockAliasPlan, compute_function_entry_jump_targets, compute_late_block_alias_plan,
-        immediate_u32, rewrite_evm_local_fallthrough_layout,
+        FinalAlloc, LateBlockAliasPlan, compute_function_entry_jump_targets,
+        compute_late_block_alias_plan, immediate_u32, rewrite_evm_local_fallthrough_layout,
     },
     machine::{
-        final_spills::allocate_final_spills, lower::lower_section_to_machine,
-        module::FuncMachineMap, pipeline::run_machine_opt_pipeline,
-        placement::compute_semantic_memory_placement, prepare::prepare_machine_stackify_analyses,
+        final_spills::allocate_final_spills,
+        lazy_frame::{FrameSummary, compute_frame_summary, compute_machine_frame_roots},
+        lower::lower_section_to_machine,
+        module::FuncMachineMap,
+        pipeline::run_machine_opt_pipeline,
+        placement::compute_semantic_memory_placement,
+        prepare::prepare_machine_stackify_analyses,
     },
     malloc_plan,
     memory_plan::{
@@ -99,6 +103,7 @@ pub(crate) struct EvmFunctionPlan {
     pub(crate) emitted_block_order: Vec<sonatina_ir::BlockId>,
     pub(crate) block_aliases: FxHashMap<sonatina_ir::BlockId, sonatina_ir::BlockId>,
     pub(crate) mem_plan: FuncMemPlan,
+    pub(crate) frame_summary: FrameSummary,
     pub(crate) dyn_sp_plan: FuncDynSpPlan,
     pub(crate) function_entry_jumpdest: bool,
 }
@@ -549,11 +554,36 @@ fn prepare_machine_section_after_pipeline(
                     .unwrap_or_else(|| panic!("missing source map for func {}", func.as_u32()));
                 remap_machine_mem_plan_call_preserve(&mut mem_plan, func_map);
                 let final_spills = allocate_final_spills(analysis.alloc, mem_plan);
-                let dyn_sp_plan = conservative_machine_dyn_sp_plan(&final_spills.mem_plan);
+                let frame_roots = machine
+                    .work
+                    .module()
+                    .func_store
+                    .view(func, |machine_function| {
+                        source_module.func_store.view(func, |source_function| {
+                            compute_machine_frame_roots(
+                                source_function,
+                                machine_function,
+                                func_map,
+                                &func_placement.alloca_loc,
+                                &backend.isa,
+                            )
+                        })
+                    });
+                let frame_summary = machine.work.module().func_store.view(func, |function| {
+                    let final_alloc =
+                        FinalAlloc::new(final_spills.alloc.clone(), final_spills.mem_plan.clone());
+                    compute_frame_summary(
+                        function,
+                        &final_alloc,
+                        &final_spills.mem_plan,
+                        &frame_roots,
+                    )
+                });
                 let alias_plan = machine.work.module().func_store.view(func, |function| {
                     compute_late_block_alias_plan(
                         function,
                         &final_spills.alloc,
+                        &frame_summary,
                         &analysis.block_order,
                     )
                 });
@@ -581,7 +611,8 @@ fn prepare_machine_section_after_pipeline(
                         emitted_block_order,
                         block_aliases,
                         mem_plan: final_spills.mem_plan,
-                        dyn_sp_plan,
+                        frame_summary,
+                        dyn_sp_plan: FuncDynSpPlan::default(),
                         function_entry_jumpdest: function_entry_jump_targets.contains(&func),
                     },
                 )
@@ -591,6 +622,28 @@ fn prepare_machine_section_after_pipeline(
         for (func, peak_words, plan) in results {
             actual_spill_words.insert(func, peak_words);
             function_plans.insert(func, plan);
+        }
+
+        let mem_plans: FxHashMap<FuncRef, FuncMemPlan> = function_plans
+            .iter()
+            .map(|(&func, plan)| (func, plan.mem_plan.clone()))
+            .collect();
+        let frame_summaries: FxHashMap<FuncRef, FrameSummary> = function_plans
+            .iter()
+            .map(|(&func, plan)| (func, plan.frame_summary.clone()))
+            .collect();
+        let dyn_sp_plans = compute_machine_dyn_sp_plan(
+            machine.work.module(),
+            &funcs,
+            machine.work.entry(),
+            &mem_plans,
+            &frame_summaries,
+        );
+        for (func, dyn_sp_plan) in dyn_sp_plans {
+            function_plans
+                .get_mut(&func)
+                .unwrap_or_else(|| panic!("missing function plan for {}", func.as_u32()))
+                .dyn_sp_plan = dyn_sp_plan;
         }
 
         let reserve_peak = backend_spill_reserve_words
@@ -639,17 +692,6 @@ fn remap_machine_mem_plan_call_preserve(mem_plan: &mut FuncMemPlan, map: &FuncMa
         }
     }
     mem_plan.call_preserve = call_preserve;
-}
-
-fn conservative_machine_dyn_sp_plan(mem_plan: &FuncMemPlan) -> FuncDynSpPlan {
-    if mem_plan.uses_dynamic_frame() {
-        FuncDynSpPlan {
-            entry_init: Some(DynSpInitKind::Checked),
-            entry_live_frame: true,
-        }
-    } else {
-        FuncDynSpPlan::default()
-    }
 }
 
 pub(crate) fn compute_return_escape_caller_clamp_words(

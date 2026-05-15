@@ -8,12 +8,14 @@ use crate::{
     domtree::DomTree,
     liveness::{InstLiveness, Liveness},
     module_analysis::{CallGraph, SccBuilder},
-    stackalloc::StackifyBuilder,
+    stackalloc::{
+        HOT_IMMEDIATE_SIZE_MIN_BLOCK_USES, HOT_IMMEDIATE_SIZE_MIN_PUSH_DATA_BYTES, StackifyBuilder,
+    },
 };
 
 use super::{
     super::{
-        EvmBackend,
+        EvmBackend, ImmediateMaterializationMode,
         memory_plan::{MachineStackifyAnalysis, topo_sort_sccs},
         scratch_plan,
     },
@@ -126,7 +128,7 @@ fn prepare_machine_stackify_analysis(
         scratch_effects,
         &inst_liveness,
     );
-    let alloc = StackifyBuilder::new(
+    let mut builder = StackifyBuilder::new(
         function,
         &cfg,
         &dom,
@@ -135,8 +137,15 @@ fn prepare_machine_stackify_analysis(
     )
     .with_scratch_live_values(scratch_live_values)
     .with_scratch_spills(scratch_plan::SCRATCH_SPILL_SLOTS)
-    .with_hot_immediate_caching()
-    .compute();
+    .with_hot_immediate_caching();
+
+    if backend.immediate_materialization_mode == ImmediateMaterializationMode::Size {
+        builder = builder
+            .with_hot_immediate_min_block_uses(HOT_IMMEDIATE_SIZE_MIN_BLOCK_USES)
+            .with_hot_immediate_min_push_data_bytes(HOT_IMMEDIATE_SIZE_MIN_PUSH_DATA_BYTES);
+    }
+
+    let alloc = builder.compute();
 
     MachineStackifyAnalysis { alloc, block_order }
 }

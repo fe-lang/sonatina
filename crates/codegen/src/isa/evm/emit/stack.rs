@@ -732,20 +732,16 @@ pub(crate) fn init_dyn_sp(ctx: &mut Lower<OpCode>, dyn_base: u32) {
 pub(crate) fn ensure_dyn_sp_init(ctx: &mut Lower<OpCode>, dyn_base: u32) {
     push_bytes(ctx, &[DYN_SP_SLOT]);
     ctx.push(OpCode::MLOAD);
-    ctx.push(OpCode::DUP1);
 
     let skip_init_push = ctx.push(OpCode::PUSH1);
     ctx.push(OpCode::JUMPI);
 
-    ctx.push(OpCode::POP);
     push_bytes(ctx, &u32_to_be(dyn_base));
-    ctx.push(OpCode::DUP1);
     push_bytes(ctx, &[DYN_SP_SLOT]);
     ctx.push(OpCode::MSTORE);
 
     let skip_init = ctx.push(OpCode::JUMPDEST);
     ctx.add_label_reference(skip_init_push, Label::Insn(skip_init));
-    ctx.push(OpCode::POP);
 }
 
 pub(crate) fn enter_frame_initialized(ctx: &mut Lower<OpCode>, frame_layout: DynamicFrameLayout) {

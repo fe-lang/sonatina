@@ -6,20 +6,20 @@ input_file: test_files/evm/lazy_frame_exit_before_action_regression.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 273 bytes
-  total: 273 bytes
+  section runtime: 215 bytes
+  total: 215 bytes
 
 functions:
   mem: global_dyn_base=0xa0 arena_base=0xa0 scratch_peak_words=0 static_chain_peak_words=0
-  f: ir_blocks=3 ir_insts=9 vcode_ops=79 fixups=5 imm_bytes=18
+  f: ir_blocks=3 ir_insts=9 vcode_ops=68 fixups=5 imm_bytes=15
     mem: scratch_words=0 stable_words=1 stable_mode=DynamicFrame entry_abs_words=0 abs_words_end=0
-  g: ir_blocks=5 ir_insts=18 vcode_ops=123 fixups=10 imm_bytes=23
+  g: ir_blocks=5 ir_insts=18 vcode_ops=97 fixups=9 imm_bytes=14
     mem: scratch_words=0 stable_words=1 stable_mode=DynamicFrame entry_abs_words=0 abs_words_end=0
   entry: ir_blocks=1 ir_insts=3 vcode_ops=11 fixups=2 imm_bytes=1
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=22246 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=1246
+  case ok: calldata_len=0 success reason=Return gas_used=21806 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=806
 
 
 --------------- DEBUG ---------------
@@ -30,17 +30,22 @@ f:
     JUMPDEST
     PUSH1 0x80 (128)
     MLOAD
-    DUP1
-    PUSH1 `pc + (7)`
+    PUSH1 `pc + (5)`
     JUMPI
-    POP
     PUSH1 0xa0 (160)
-    DUP1
     PUSH1 0x80 (128)
     MSTORE
     JUMPDEST
-    POP
-    PUSH1 0x80 (128)
+    ISZERO  // br v0 block1 block2;
+    PUSH1 block2
+    JUMPI
+  block1:
+    PUSH0  // return v1;
+    SWAP1
+    JUMP
+  block2:
+    JUMPDEST
+    PUSH1 0x80 (128)  // v3.i256 = evm_mload v2;
     MLOAD
     DUP1
     PUSH1 0x40 (64)
@@ -64,23 +69,7 @@ f:
     POP
     PUSH1 0x80 (128)
     MSTORE
-    ISZERO  // br v0 block1 block2;
-    PUSH1 block2
-    JUMPI
-  block1:
-    PUSH0  // return v1;
-    PUSH1 0x20 (32)
     PUSH1 0x80 (128)
-    MLOAD
-    SUB
-    MLOAD
-    PUSH1 0x80 (128)
-    MSTORE
-    SWAP1
-    JUMP
-  block2:
-    JUMPDEST
-    PUSH1 0x80 (128)  // v3.i256 = evm_mload v2;
     MLOAD
     PUSH1 0x40 (64)  // v5.i256 = sub v3 v4;
     SWAP1
@@ -98,34 +87,31 @@ f:
     JUMPDEST
     SWAP1  // v9.i256 = evm_mload v5;
     MLOAD
-    ADD  // v10.i256 = add v8 v9;
-    PUSH1 0x20 (32)  // return v10;
+    PUSH1 0x20 (32)
     PUSH1 0x80 (128)
     MLOAD
     SUB
     MLOAD
     PUSH1 0x80 (128)
     MSTORE
-    SWAP1
+    ADD  // v10.i256 = add v8 v9;
+    SWAP1  // return v10;
     JUMP
 
 // func public %g(v0.i1) -> i256
 g:
   block0:
     JUMPDEST
-    PUSH1 0x80 (128)
-    MLOAD
-    DUP1
-    PUSH1 `pc + (7)`
+    ISZERO  // br v0 block1 block2;
+    PUSH1 block2
     JUMPI
-    POP
-    PUSH1 0xa0 (160)
-    DUP1
-    PUSH1 0x80 (128)
-    MSTORE
+  block1:
+    PUSH0  // return v1;
+    SWAP1
+    JUMP
+  block2:
     JUMPDEST
-    POP
-    PUSH1 0x80 (128)
+    PUSH1 0x80 (128)  // v3.i256 = evm_mload v2;
     MLOAD
     DUP1
     PUSH1 0x40 (64)
@@ -149,23 +135,7 @@ g:
     POP
     PUSH1 0x80 (128)
     MSTORE
-    ISZERO  // br v0 block1 block2;
-    PUSH1 block2
-    JUMPI
-  block1:
-    PUSH0  // return v1;
-    PUSH1 0x20 (32)
     PUSH1 0x80 (128)
-    MLOAD
-    SUB
-    MLOAD
-    PUSH1 0x80 (128)
-    MSTORE
-    SWAP1
-    JUMP
-  block2:
-    JUMPDEST
-    PUSH1 0x80 (128)  // v3.i256 = evm_mload v2;
     MLOAD
     PUSH1 0x40 (64)  // v5.i256 = sub v3 v4;
     SWAP1
@@ -203,6 +173,13 @@ g:
     ADD
     SWAP4  // v15.i256 = evm_mload v5;
     MLOAD
+    PUSH1 0x20 (32)
+    PUSH1 0x80 (128)
+    MLOAD
+    SUB
+    MLOAD
+    PUSH1 0x80 (128)
+    MSTORE
     SWAP3  // v16.i1 = eq v9 v11;
     SWAP1
     SWAP2
@@ -215,14 +192,7 @@ g:
     SWAP2
     ADD
     ADD  // v18.i256 = add v17 v15;
-    PUSH1 0x20 (32)  // return v18;
-    PUSH1 0x80 (128)
-    MLOAD
-    SUB
-    MLOAD
-    PUSH1 0x80 (128)
-    MSTORE
-    SWAP1
+    SWAP1  // return v18;
     JUMP
   block4:
     JUMPDEST
@@ -230,13 +200,6 @@ g:
     POP
     POP
     PUSH0
-    PUSH1 0x20 (32)
-    PUSH1 0x80 (128)
-    MLOAD
-    SUB
-    MLOAD
-    PUSH1 0x80 (128)
-    MSTORE
     SWAP1
     JUMP
 

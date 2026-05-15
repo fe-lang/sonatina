@@ -350,6 +350,13 @@ fn local_fallthrough_layout_skips_lt_loop_headers() {
 }
 
 #[test]
+fn local_fallthrough_layout_rewrites_lt_loop_body_fallthrough() {
+    let order = rewrite_local_fallthrough_order_from_src(HOT_LOOP_LT_SRC, "main", &[0, 3, 4, 1]);
+
+    assert_eq!(order, vec![0, 3, 1, 4]);
+}
+
+#[test]
 fn local_fallthrough_layout_skips_multi_pred_bodies() {
     let order = rewrite_local_fallthrough_order_from_src(
         HOT_LOOP_MULTI_PRED_BODY_SRC,
@@ -522,7 +529,7 @@ fn prune_removes_two_inst_stack_noops() {
 }
 
 #[test]
-fn recursive_entry_lowering_checks_dyn_sp_before_reinit() {
+fn recursive_entry_lowering_uses_lazy_frame() {
     let parsed = parse_module(
         r#"
 target = "evm-ethereum-osaka"
@@ -557,6 +564,7 @@ block2:
         Some(DynSpInitKind::Checked)
     );
     assert!(function_plan.dyn_sp_plan.entry_live_frame);
+    assert!(function_plan.frame_summary.lowering.is_some());
 
     let lowered = backend
         .lower_function(&prepared, f)
@@ -566,7 +574,7 @@ block2:
     assert_eq!(
         first_mem_op,
         OpCode::MLOAD as u8,
-        "recursive entry lowering must guard dyn_sp init before writing it"
+        "recursive lazy frame lowering must read dyn_sp before writing it"
     );
 }
 
@@ -599,6 +607,7 @@ object @Contract {
         .function_plan(entry)
         .expect("missing function plan");
     assert_eq!(function_plan.dyn_sp_plan.entry_init, None);
+    assert!(function_plan.frame_summary.lowering.is_none());
 
     let lowered = backend
         .lower_function(&prepared, entry)
@@ -611,7 +620,7 @@ object @Contract {
 }
 
 #[test]
-fn recursive_entry_full_frame_checks_dyn_sp_before_reinit() {
+fn recursive_entry_without_live_frame_initializes_dyn_sp_directly() {
     let parsed = parse_module(
         r#"
 target = "evm-ethereum-osaka"
@@ -657,9 +666,10 @@ object @Contract {
     let function_plan = prepared.function_plan(f).expect("missing function plan");
     assert_eq!(
         function_plan.dyn_sp_plan.entry_init,
-        Some(DynSpInitKind::Checked)
+        Some(DynSpInitKind::Always)
     );
-    assert!(function_plan.dyn_sp_plan.entry_live_frame);
+    assert!(!function_plan.dyn_sp_plan.entry_live_frame);
+    assert!(function_plan.frame_summary.lowering.is_some());
 
     let lowered = backend
         .lower_function(&prepared, f)
@@ -667,8 +677,8 @@ object @Contract {
     let first_mem_op = first_memory_op(&lowered).expect("entry lowering should touch dyn_sp");
     assert_eq!(
         first_mem_op,
-        OpCode::MLOAD as u8,
-        "full-frame entry lowering must check dyn_sp before writing it"
+        OpCode::MSTORE as u8,
+        "entry without live-frame reentry should initialize dyn_sp directly"
     );
 }
 

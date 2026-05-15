@@ -128,6 +128,8 @@ pub struct StackifyBuilder<'a> {
     value_aliases_override: Option<&'a SecondaryMap<ValueId, Option<ValueId>>>,
     stack_cached_immediates: FxHashSet<I256>,
     cache_hot_immediates: bool,
+    hot_immediate_min_block_uses: u32,
+    hot_immediate_min_push_data_bytes: usize,
 }
 
 pub(super) struct StackifyContext<'a> {
@@ -189,6 +191,8 @@ impl<'a> StackifyBuilder<'a> {
             value_aliases_override: None,
             stack_cached_immediates: FxHashSet::default(),
             cache_hot_immediates: false,
+            hot_immediate_min_block_uses: HOT_IMMEDIATE_DEFAULT_MIN_BLOCK_USES,
+            hot_immediate_min_push_data_bytes: HOT_IMMEDIATE_DEFAULT_MIN_PUSH_DATA_BYTES,
         }
     }
 
@@ -217,6 +221,16 @@ impl<'a> StackifyBuilder<'a> {
 
     pub(crate) fn with_hot_immediate_caching(mut self) -> Self {
         self.cache_hot_immediates = true;
+        self
+    }
+
+    pub(crate) fn with_hot_immediate_min_push_data_bytes(mut self, bytes: usize) -> Self {
+        self.hot_immediate_min_push_data_bytes = bytes;
+        self
+    }
+
+    pub(crate) fn with_hot_immediate_min_block_uses(mut self, uses: u32) -> Self {
+        self.hot_immediate_min_block_uses = uses;
         self
     }
 
@@ -273,6 +287,8 @@ impl<'a> StackifyBuilder<'a> {
             stack_cached_immediates.extend(compute_hot_stack_cached_immediates(
                 self.func,
                 &value_aliases,
+                self.hot_immediate_min_block_uses,
+                self.hot_immediate_min_push_data_bytes,
             ));
         }
 
@@ -480,12 +496,16 @@ impl<'a> StackifyBuilder<'a> {
     }
 }
 
-const HOT_IMMEDIATE_MIN_BLOCK_USES: u32 = 4;
-const HOT_IMMEDIATE_MIN_PUSH_DATA_BYTES: usize = 16;
+const HOT_IMMEDIATE_DEFAULT_MIN_BLOCK_USES: u32 = 4;
+pub(crate) const HOT_IMMEDIATE_SIZE_MIN_BLOCK_USES: u32 = 3;
+const HOT_IMMEDIATE_DEFAULT_MIN_PUSH_DATA_BYTES: usize = 16;
+pub(crate) const HOT_IMMEDIATE_SIZE_MIN_PUSH_DATA_BYTES: usize = 2;
 
 fn compute_hot_stack_cached_immediates(
     func: &Function,
     value_aliases: &SecondaryMap<ValueId, Option<ValueId>>,
+    min_block_uses: u32,
+    min_push_data_bytes: usize,
 ) -> FxHashSet<I256> {
     let mut hot = FxHashSet::default();
 
@@ -511,8 +531,7 @@ fn compute_hot_stack_cached_immediates(
             counts
                 .into_iter()
                 .filter(|(_, (uses, push_data_bytes))| {
-                    *uses >= HOT_IMMEDIATE_MIN_BLOCK_USES
-                        && *push_data_bytes >= HOT_IMMEDIATE_MIN_PUSH_DATA_BYTES
+                    *uses >= min_block_uses && *push_data_bytes >= min_push_data_bytes
                 })
                 .map(|(imm, _)| imm),
         );
@@ -681,6 +700,113 @@ block0:
 
             assert_eq!(large_pushes, 1);
             assert!(dup_count >= 3);
+        });
+    }
+
+    #[test]
+    fn hot_immediate_caching_can_preserve_repeated_push2_immediate() {
+        const SRC: &str = r#"
+target = "evm-ethereum-osaka"
+
+func public %f(v0.i256) -> i256 {
+block0:
+    v1.i256 = add v0 256.i256;
+    v2.i256 = add v1 256.i256;
+    v3.i256 = add v2 256.i256;
+    v4.i256 = add v3 256.i256;
+    return v4;
+}
+"#;
+
+        let parsed = parse_module(SRC).expect("module parses");
+        let func_ref = parsed.debug.func_order[0];
+
+        parsed.module.func_store.view(func_ref, |func| {
+            let mut cfg = ControlFlowGraph::new();
+            cfg.compute(func);
+
+            let mut liveness = Liveness::new();
+            liveness.compute(func, &cfg);
+
+            let mut dom = DomTree::new();
+            dom.compute(&cfg);
+
+            let alloc = StackifyBuilder::new(func, &cfg, &dom, &liveness, 16)
+                .with_hot_immediate_caching()
+                .with_hot_immediate_min_push_data_bytes(
+                    super::HOT_IMMEDIATE_SIZE_MIN_PUSH_DATA_BYTES,
+                )
+                .compute();
+
+            let mut push2_count = 0;
+            let mut dup_count = 0;
+            alloc.for_each_action(|action| match action {
+                Action::Push(imm) if super::imm_push_data_len(*imm) == 2 => {
+                    push2_count += 1;
+                }
+                Action::StackDup(_) => {
+                    dup_count += 1;
+                }
+                _ => {}
+            });
+
+            assert_eq!(push2_count, 1);
+            assert!(dup_count >= 3);
+        });
+    }
+
+    #[test]
+    fn hot_immediate_caching_can_use_size_mode_use_threshold() {
+        const BIG: &str = "340282366920938463463374607431768211455";
+        let src = format!(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %f(v0.i256, v1.i256, v2.i256) -> i256 {{
+block0:
+    v3.i256 = and v0 {BIG}.i256;
+    v4.i256 = and v1 {BIG}.i256;
+    v5.i256 = and v2 {BIG}.i256;
+    return v5;
+}}
+"#
+        );
+
+        let parsed = parse_module(&src).expect("module parses");
+        let func_ref = parsed.debug.func_order[0];
+
+        parsed.module.func_store.view(func_ref, |func| {
+            let mut cfg = ControlFlowGraph::new();
+            cfg.compute(func);
+
+            let mut liveness = Liveness::new();
+            liveness.compute(func, &cfg);
+
+            let mut dom = DomTree::new();
+            dom.compute(&cfg);
+
+            let alloc = StackifyBuilder::new(func, &cfg, &dom, &liveness, 16)
+                .with_hot_immediate_caching()
+                .with_hot_immediate_min_block_uses(super::HOT_IMMEDIATE_SIZE_MIN_BLOCK_USES)
+                .with_hot_immediate_min_push_data_bytes(
+                    super::HOT_IMMEDIATE_SIZE_MIN_PUSH_DATA_BYTES,
+                )
+                .compute();
+
+            let mut large_pushes = 0;
+            let mut dup_count = 0;
+            alloc.for_each_action(|action| match action {
+                Action::Push(imm) if super::imm_push_data_len(*imm) >= 16 => {
+                    large_pushes += 1;
+                }
+                Action::StackDup(_) => {
+                    dup_count += 1;
+                }
+                _ => {}
+            });
+
+            assert_eq!(large_pushes, 1);
+            assert!(dup_count >= 2);
         });
     }
 }

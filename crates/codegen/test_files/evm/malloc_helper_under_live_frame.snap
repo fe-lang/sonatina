@@ -6,20 +6,20 @@ input_file: test_files/evm/malloc_helper_under_live_frame.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 163 bytes
-  total: 163 bytes
+  section runtime: 142 bytes
+  total: 142 bytes
 
 functions:
   mem: global_dyn_base=0xa0 arena_base=0xa0 scratch_peak_words=0 static_chain_peak_words=0
   helper: ir_blocks=4 ir_insts=14 vcode_ops=27 fixups=1 imm_bytes=5
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  ready: ir_blocks=3 ir_insts=13 vcode_ops=89 fixups=7 imm_bytes=18
+  ready: ir_blocks=3 ir_insts=13 vcode_ops=70 fixups=6 imm_bytes=12
     mem: scratch_words=0 stable_words=1 stable_mode=DynamicFrame entry_abs_words=0 abs_words_end=0
   entry: ir_blocks=1 ir_insts=5 vcode_ops=14 fixups=2 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=4 success reason=Return gas_used=21574 gas_refunded=0 logs=0 output=call len=32 tx_gas=21028 runtime_gas=546
+  case ok: calldata_len=4 success reason=Return gas_used=21423 gas_refunded=0 logs=0 output=call len=32 tx_gas=21028 runtime_gas=395
 
 
 --------------- DEBUG ---------------
@@ -61,19 +61,17 @@ helper:
 ready:
   block0:
     JUMPDEST
-    PUSH1 0x80 (128)
-    MLOAD
-    DUP1
-    PUSH1 `pc + (7)`
+    DUP1  // v15.i1 = is_zero v0;
+    PUSH1 block2  // br v15 block1 block2;
     JUMPI
-    POP
-    PUSH1 0xa0 (160)
-    DUP1
-    PUSH1 0x80 (128)
-    MSTORE
+  block1:
+    POP  // return v1;
+    PUSH0
+    SWAP1
+    JUMP
+  block2:
     JUMPDEST
-    POP
-    PUSH1 0x80 (128)
+    PUSH1 0x80 (128)  // v4.i256 = evm_mload v3;
     MLOAD
     DUP1
     PUSH1 0x40 (64)
@@ -97,24 +95,7 @@ ready:
     POP
     PUSH1 0x80 (128)
     MSTORE
-    DUP1  // v15.i1 = is_zero v0;
-    PUSH1 block2  // br v15 block1 block2;
-    JUMPI
-  block1:
-    POP  // return v1;
-    PUSH0
-    PUSH1 0x20 (32)
     PUSH1 0x80 (128)
-    MLOAD
-    SUB
-    MLOAD
-    PUSH1 0x80 (128)
-    MSTORE
-    SWAP1
-    JUMP
-  block2:
-    JUMPDEST
-    PUSH1 0x80 (128)  // v4.i256 = evm_mload v3;
     MLOAD
     PUSH1 0x40 (64)  // v6.i256 = sub v4 v5;
     SWAP1
@@ -137,17 +118,17 @@ ready:
     JUMPDEST
     SWAP1  // v12.i256 = evm_mload v6;
     MLOAD
-    SWAP2  // v13.i256 = add v8 v11;
-    ADD
-    ADD  // v14.i256 = add v13 v12;
-    PUSH1 0x20 (32)  // return v14;
+    PUSH1 0x20 (32)
     PUSH1 0x80 (128)
     MLOAD
     SUB
     MLOAD
     PUSH1 0x80 (128)
     MSTORE
-    SWAP1
+    SWAP2  // v13.i256 = add v8 v11;
+    ADD
+    ADD  // v14.i256 = add v13 v12;
+    SWAP1  // return v14;
     JUMP
 
 // func public %entry()

@@ -37,6 +37,9 @@ mod terminal_chain;
 mod trace;
 
 pub use alloc::StackifyAlloc;
+pub(crate) use builder::{
+    HOT_IMMEDIATE_SIZE_MIN_BLOCK_USES, HOT_IMMEDIATE_SIZE_MIN_PUSH_DATA_BYTES,
+};
 pub use builder::{StackifyBuilder, StackifySearchProfile};
 
 use builder::StackifyContext;

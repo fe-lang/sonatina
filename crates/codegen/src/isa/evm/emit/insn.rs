@@ -15,11 +15,12 @@ use crate::{
 };
 
 use super::{
-    super::opcode::OpCode,
+    super::{DynSpInitKind, machine::lazy_frame::FrameSite, opcode::OpCode},
     EvmFunctionLowering,
     stack::{
         emit_narrow_signed_saturating_binary, emit_narrow_unsigned_saturating_binary,
-        low_bits_mask, scalar_bit_width, swap_op,
+        ensure_dyn_sp_init, fold_stack_actions, init_dyn_sp, low_bits_mask, scalar_bit_width,
+        swap_op,
     },
 };
 
@@ -36,10 +37,10 @@ impl EvmFunctionLowering<'_> {
 
         let frame_layout = self.frame_layout();
         let emit_pre_actions = |ctx: &mut Lower<OpCode>, actions: &[Action]| {
-            self.emit_actions(ctx, actions, frame_layout)
+            self.emit_actions_for_site(ctx, actions, frame_layout, FrameSite::PreInst(insn))
         };
         let emit_post_actions = |ctx: &mut Lower<OpCode>, actions: &[Action]| {
-            self.emit_actions(ctx, actions, frame_layout)
+            self.emit_actions_for_site(ctx, actions, frame_layout, FrameSite::PostInst(insn))
         };
         let results: SmallVec<[ValueId; 4]> = ctx.insn_results(insn).iter().copied().collect();
         let args = ctx.insn_data(insn).collect_values();
@@ -128,7 +129,12 @@ impl EvmFunctionLowering<'_> {
 
                 for (case_idx, (_, dest)) in table.iter().enumerate() {
                     let dest = self.canonical_block_target(*dest);
-                    self.emit_actions(ctx, &alloc.read_br_table_case(insn, case_idx), frame_layout);
+                    self.emit_actions_for_site(
+                        ctx,
+                        &alloc.read_br_table_case(insn, case_idx),
+                        frame_layout,
+                        FrameSite::PreInst(insn),
+                    );
                     ctx.push(OpCode::EQ);
                     ctx.push_jump_target(OpCode::PUSH1, Label::Block(dest));
                     ctx.push(OpCode::JUMPI);
@@ -157,11 +163,32 @@ impl EvmFunctionLowering<'_> {
                         "expected continuation marker at split point"
                     );
 
-                    self.emit_actions(ctx, &actions, frame_layout);
+                    let prefix_folded_len = fold_stack_actions(&actions).len();
+                    self.emit_actions_for_site_from_offset(
+                        ctx,
+                        &actions,
+                        frame_layout,
+                        FrameSite::PreInst(insn),
+                        0,
+                    );
 
                     let push_callback = ctx.push(OpCode::PUSH1);
 
-                    self.emit_actions(ctx, &suffix, frame_layout);
+                    self.emit_actions_for_site_from_offset(
+                        ctx,
+                        &suffix,
+                        frame_layout,
+                        FrameSite::PreInst(insn),
+                        prefix_folded_len,
+                    );
+
+                    match self.frontier_init_kind(insn) {
+                        Some(DynSpInitKind::Always) => init_dyn_sp(ctx, self.dyn_base()),
+                        Some(DynSpInitKind::Checked) => {
+                            ensure_dyn_sp_init(ctx, self.dyn_base());
+                        }
+                        None => {}
+                    }
 
                     let p = ctx.push(OpCode::PUSH1);
                     ctx.add_label_reference(p, Label::Function(callee));
@@ -172,7 +199,20 @@ impl EvmFunctionLowering<'_> {
 
                     emit_post_actions(ctx, &alloc.write(insn, results.as_slice()));
                 } else {
-                    self.emit_actions(ctx, &actions, frame_layout);
+                    self.emit_actions_for_site(
+                        ctx,
+                        &actions,
+                        frame_layout,
+                        FrameSite::PreInst(insn),
+                    );
+
+                    match self.frontier_init_kind(insn) {
+                        Some(DynSpInitKind::Always) => init_dyn_sp(ctx, self.dyn_base()),
+                        Some(DynSpInitKind::Checked) => {
+                            ensure_dyn_sp_init(ctx, self.dyn_base());
+                        }
+                        None => {}
+                    }
 
                     let p = ctx.push(OpCode::PUSH1);
                     ctx.add_label_reference(p, Label::Function(callee));
@@ -181,7 +221,9 @@ impl EvmFunctionLowering<'_> {
             }
             EvmMachineInstKind::Return(_) => {
                 emit_pre_actions(ctx, &alloc.read(insn, &args));
-                if let Some(frame_layout) = frame_layout {
+                if !self.has_lazy_frame_lowering()
+                    && let Some(frame_layout) = frame_layout
+                {
                     super::stack::leave_frame(ctx, frame_layout);
                 }
 

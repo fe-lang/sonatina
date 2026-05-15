@@ -8,6 +8,8 @@ use sonatina_ir::{
     module::FuncRef,
 };
 
+use crate::module_analysis::CallGraph;
+
 use super::{
     super::{
         EvmBackend, heap_plan, malloc_plan,
@@ -162,6 +164,8 @@ pub(crate) fn compute_semantic_memory_placement(
             })
         })
     });
+    let entry_may_have_live_frame =
+        compute_entry_may_have_live_frame(module, funcs, &semantic_plan);
 
     let arena_base = choose_arena_base(
         module,
@@ -240,7 +244,11 @@ pub(crate) fn compute_semantic_memory_placement(
                     func_plan,
                     global_dyn_base: semantic_plan.global_dyn_base,
                     backend_spill_reserve_peak,
-                    has_dynamic_frames,
+                    func_uses_dynamic_frame: func_plan.uses_dynamic_frame(),
+                    entry_may_have_live_frame: entry_may_have_live_frame
+                        .get(&func)
+                        .copied()
+                        .unwrap_or(false),
                     has_persistent_mallocs,
                     free_ptr_slot_may_be_touched,
                 };
@@ -291,12 +299,56 @@ fn machine_mem_plan_from_semantic(
     mem_plan
 }
 
+fn compute_entry_may_have_live_frame(
+    module: &Module,
+    funcs: &[FuncRef],
+    semantic_plan: &memory_plan::ProgramMemoryPlan,
+) -> FxHashMap<FuncRef, bool> {
+    let funcs_set: FxHashSet<FuncRef> = funcs.iter().copied().collect();
+    let call_graph = CallGraph::build_graph_subset(module, &funcs_set);
+    let mut entry_may_have_live_frame: FxHashMap<FuncRef, bool> =
+        funcs.iter().copied().map(|func| (func, false)).collect();
+
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for &caller in funcs {
+            let caller_uses_dynamic_frame = semantic_plan
+                .funcs
+                .get(&caller)
+                .is_some_and(memory_plan::FuncMemPlan::uses_dynamic_frame);
+            let caller_live = entry_may_have_live_frame
+                .get(&caller)
+                .copied()
+                .unwrap_or(false);
+            if !caller_uses_dynamic_frame && !caller_live {
+                continue;
+            }
+
+            for &callee in call_graph.callee_of(caller) {
+                if funcs_set.contains(&callee)
+                    && !entry_may_have_live_frame
+                        .get(&callee)
+                        .copied()
+                        .unwrap_or(false)
+                {
+                    entry_may_have_live_frame.insert(callee, true);
+                    changed = true;
+                }
+            }
+        }
+    }
+
+    entry_may_have_live_frame
+}
+
 struct MallocPlacementCtx<'a> {
     isa: &'a Evm,
     func_plan: &'a memory_plan::FuncMemPlan,
     global_dyn_base: u32,
     backend_spill_reserve_peak: u32,
-    has_dynamic_frames: bool,
+    func_uses_dynamic_frame: bool,
+    entry_may_have_live_frame: bool,
     has_persistent_mallocs: bool,
     free_ptr_slot_may_be_touched: bool,
 }
@@ -316,7 +368,7 @@ fn compute_func_malloc_placements(
             }
 
             let transient = ctx.func_plan.transient_mallocs.contains(&inst);
-            let needs_dyn_sp_clamp = ctx.has_dynamic_frames;
+            let needs_dyn_sp_clamp = ctx.func_uses_dynamic_frame || ctx.entry_may_have_live_frame;
             let min_base = malloc_min_base(
                 ctx.func_plan,
                 ctx.global_dyn_base,

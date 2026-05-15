@@ -6,16 +6,16 @@ input_file: test_files/evm/lsr_obj_forward_sum.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 60 bytes
-  total: 60 bytes
+  section runtime: 59 bytes
+  total: 59 bytes
 
 functions:
   mem: global_dyn_base=0xa0 arena_base=0x20 scratch_peak_words=4 static_chain_peak_words=0
-  entry: ir_blocks=4 ir_insts=17 vcode_ops=45 fixups=2 imm_bytes=13
+  entry: ir_blocks=4 ir_insts=17 vcode_ops=44 fixups=2 imm_bytes=13
     mem: scratch_words=4 stable_words=0 stable_mode=None entry_abs_words=4 abs_words_end=4
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=21394 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=394
+  case ok: calldata_len=0 success reason=Return gas_used=21382 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=382
 
 
 --------------- DEBUG ---------------
@@ -43,10 +43,19 @@ entry:
     PUSH1 0x4 (4)  // v13.i1 = lt v0 4.i256;
     DUP2
     LT
-    ISZERO  // br v13 block2 block3;
-    PUSH1 block3
+    PUSH1 block2  // br v13 block2 block3;
     JUMPI
+  block3:
+    POP  // evm_mstore 0.i256 v1;
+    SWAP1
+    POP
+    PUSH0
+    MSTORE
+    PUSH1 0x20 (32)  // evm_return 0.i256 v3;
+    PUSH0
+    RETURN
   block2:
+    JUMPDEST
     DUP3  // v15.i256 = evm_mload v2;
     MLOAD
     SWAP1  // v16.i256 = add v1 v15;
@@ -61,13 +70,3 @@ entry:
     SWAP2  // jump block1;
     PUSH1 block1
     JUMP
-  block3:
-    JUMPDEST
-    POP  // evm_mstore 0.i256 v1;
-    SWAP1
-    POP
-    PUSH0
-    MSTORE
-    PUSH1 0x20 (32)  // evm_return 0.i256 v3;
-    PUSH0
-    RETURN
