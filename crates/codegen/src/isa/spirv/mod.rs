@@ -187,6 +187,22 @@ fn emit_naga_block_instructions(
                 func.body.push(naga::Statement::Emit(naga::Range::new_from_bounds(h, h)), naga::Span::UNDEFINED);
                 value_map.insert(result, h);
             }
+        } else if let Some(sar) = <&sonatina_ir::inst::arith::Sar as InstDowncast>::downcast(inst_set, inst_data) {
+            if let Some(result) = function.dfg.inst_result(inst_id) {
+                let val = resolve_naga_value(*sar.value(), function, value_map, phi_locals, func).unwrap();
+                let bits = resolve_naga_value(*sar.bits(), function, value_map, phi_locals, func).unwrap();
+                // Naga ShiftRight needs u32 for the shift amount
+                let bits_u32 = func.expressions.append(
+                    naga::Expression::As { expr: bits, kind: naga::ScalarKind::Uint, convert: Some(4) },
+                    naga::Span::UNDEFINED,
+                );
+                let h = func.expressions.append(
+                    naga::Expression::Binary { op: naga::BinaryOperator::ShiftRight, left: val, right: bits_u32 },
+                    naga::Span::UNDEFINED,
+                );
+                func.body.push(naga::Statement::Emit(naga::Range::new_from_bounds(bits_u32, h)), naga::Span::UNDEFINED);
+                value_map.insert(result, h);
+            }
         } else if let Some(lt) = <&sonatina_ir::inst::cmp::Lt as InstDowncast>::downcast(inst_set, inst_data) {
             if let Some(result) = function.dfg.inst_result(inst_id) {
                 let lhs = resolve_naga_value(*lt.lhs(), function, value_map, phi_locals, func).unwrap();
@@ -472,25 +488,28 @@ fn translate_to_naga(
         naga::Span::UNDEFINED,
     );
 
+    // Determine param count from first function
+    let funcs_peek = module.funcs();
+    let param_count = funcs_peek.first().map(|&fr| {
+        module.func_store.try_view(fr, |f| f.arg_values.len()).unwrap_or(0)
+    }).unwrap_or(2);
+
+    let input_members: Vec<naga::StructMember> = (0..param_count).map(|i| {
+        naga::StructMember {
+            name: Some(format!("p{i}")),
+            ty: i64_type,
+            binding: None,
+            offset: (i * 8) as u32,
+        }
+    }).collect();
+    let input_span = (param_count * 8) as u32;
+
     let input_struct = naga_mod.types.insert(
         naga::Type {
             name: Some("Input".into()),
             inner: naga::TypeInner::Struct {
-                members: vec![
-                    naga::StructMember {
-                        name: Some("a".into()),
-                        ty: i64_type,
-                        binding: None,
-                        offset: 0,
-                    },
-                    naga::StructMember {
-                        name: Some("b".into()),
-                        ty: i64_type,
-                        binding: None,
-                        offset: 8,
-                    },
-                ],
-                span: 16,
+                members: input_members,
+                span: input_span,
             },
         },
         naga::Span::UNDEFINED,

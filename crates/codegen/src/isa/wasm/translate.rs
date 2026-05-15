@@ -294,6 +294,33 @@ fn translate_function(
                             }
                         }
                     }
+                    // Sar (arithmetic shift right)
+                    else if let Some(sar) = <&sonatina_ir::inst::arith::Sar as InstDowncast>::downcast(inst_set, inst_data) {
+                        if let Some(result) = function.dfg.inst_result(inst_id) {
+                            let val = resolve_value(function, *sar.value(), &value_map, &mut body, wb).ok_or("unresolved sar val")?;
+                            let bits = resolve_value(function, *sar.bits(), &value_map, &mut body, wb).ok_or("unresolved sar bits")?;
+                            let wval = body.add_op(wb, Operator::I64ShrS, &[val, bits], &[WType::I64]);
+                            value_map.insert(result, wval);
+                        }
+                    }
+                    // Shr (logical shift right)
+                    else if let Some(shr) = <&sonatina_ir::inst::arith::Shr as InstDowncast>::downcast(inst_set, inst_data) {
+                        if let Some(result) = function.dfg.inst_result(inst_id) {
+                            let val = resolve_value(function, *shr.value(), &value_map, &mut body, wb).ok_or("unresolved shr val")?;
+                            let bits = resolve_value(function, *shr.bits(), &value_map, &mut body, wb).ok_or("unresolved shr bits")?;
+                            let wval = body.add_op(wb, Operator::I64ShrU, &[val, bits], &[WType::I64]);
+                            value_map.insert(result, wval);
+                        }
+                    }
+                    // Shl
+                    else if let Some(shl) = <&sonatina_ir::inst::arith::Shl as InstDowncast>::downcast(inst_set, inst_data) {
+                        if let Some(result) = function.dfg.inst_result(inst_id) {
+                            let val = resolve_value(function, *shl.value(), &value_map, &mut body, wb).ok_or("unresolved shl val")?;
+                            let bits = resolve_value(function, *shl.bits(), &value_map, &mut body, wb).ok_or("unresolved shl bits")?;
+                            let wval = body.add_op(wb, Operator::I64Shl, &[val, bits], &[WType::I64]);
+                            value_map.insert(result, wval);
+                        }
+                    }
                     // ObjLoad — for objref params, pass through the value
                     else if let Some(obj_load) = <&sonatina_ir::inst::data::ObjLoad as InstDowncast>::downcast(inst_set, inst_data) {
                         if let Some(result) = function.dfg.inst_result(inst_id) {
