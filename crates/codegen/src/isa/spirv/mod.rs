@@ -133,119 +133,145 @@ fn resolve_naga_value(
     None
 }
 
+/// Emit a single arithmetic/cmp instruction into the given target block.
+/// Returns the expression handle if an instruction was emitted, None otherwise.
+/// Skips Phi, Jump, Br, and Return instructions.
+#[cfg(feature = "spirv-backend")]
+fn emit_single_inst(
+    inst_id: sonatina_ir::InstId,
+    function: &sonatina_ir::Function,
+    inst_set: &dyn sonatina_ir::InstSetBase,
+    func: &mut naga::Function,
+    target: &mut naga::Block,
+    value_map: &mut std::collections::HashMap<sonatina_ir::ValueId, naga::Handle<naga::Expression>>,
+    phi_locals: &mut std::collections::HashMap<sonatina_ir::ValueId, naga::Handle<naga::LocalVariable>>,
+    result_expr: &mut Option<naga::Handle<naga::Expression>>,
+) -> bool {
+    use sonatina_ir::InstDowncast;
+    let inst_data = function.dfg.inst(inst_id);
+
+    // Skip phi/jump/br
+    if <&sonatina_ir::inst::control_flow::Phi as InstDowncast>::downcast(inst_set, inst_data).is_some() { return false; }
+    if <&sonatina_ir::inst::control_flow::Jump as InstDowncast>::downcast(inst_set, inst_data).is_some() { return false; }
+    if <&sonatina_ir::inst::control_flow::Br as InstDowncast>::downcast(inst_set, inst_data).is_some() { return false; }
+
+    if let Some(add) = <&sonatina_ir::inst::arith::Add as InstDowncast>::downcast(inst_set, inst_data) {
+        if let Some(result) = function.dfg.inst_result(inst_id) {
+            let lhs = resolve_naga_value(*add.lhs(), function, value_map, phi_locals, func).unwrap();
+            let rhs = resolve_naga_value(*add.rhs(), function, value_map, phi_locals, func).unwrap();
+            let h = func.expressions.append(
+                naga::Expression::Binary { op: naga::BinaryOperator::Add, left: lhs, right: rhs },
+                naga::Span::UNDEFINED,
+            );
+            target.push(naga::Statement::Emit(naga::Range::new_from_bounds(h, h)), naga::Span::UNDEFINED);
+            value_map.insert(result, h);
+            return true;
+        }
+    } else if let Some(sub) = <&sonatina_ir::inst::arith::Sub as InstDowncast>::downcast(inst_set, inst_data) {
+        if let Some(result) = function.dfg.inst_result(inst_id) {
+            let lhs = resolve_naga_value(*sub.lhs(), function, value_map, phi_locals, func).unwrap();
+            let rhs = resolve_naga_value(*sub.rhs(), function, value_map, phi_locals, func).unwrap();
+            let h = func.expressions.append(
+                naga::Expression::Binary { op: naga::BinaryOperator::Subtract, left: lhs, right: rhs },
+                naga::Span::UNDEFINED,
+            );
+            target.push(naga::Statement::Emit(naga::Range::new_from_bounds(h, h)), naga::Span::UNDEFINED);
+            value_map.insert(result, h);
+            return true;
+        }
+    } else if let Some(mul) = <&sonatina_ir::inst::arith::Mul as InstDowncast>::downcast(inst_set, inst_data) {
+        if let Some(result) = function.dfg.inst_result(inst_id) {
+            let lhs = resolve_naga_value(*mul.lhs(), function, value_map, phi_locals, func).unwrap();
+            let rhs = resolve_naga_value(*mul.rhs(), function, value_map, phi_locals, func).unwrap();
+            let h = func.expressions.append(
+                naga::Expression::Binary { op: naga::BinaryOperator::Multiply, left: lhs, right: rhs },
+                naga::Span::UNDEFINED,
+            );
+            target.push(naga::Statement::Emit(naga::Range::new_from_bounds(h, h)), naga::Span::UNDEFINED);
+            value_map.insert(result, h);
+            return true;
+        }
+    } else if let Some(sar) = <&sonatina_ir::inst::arith::Sar as InstDowncast>::downcast(inst_set, inst_data) {
+        if let Some(result) = function.dfg.inst_result(inst_id) {
+            let val = resolve_naga_value(*sar.value(), function, value_map, phi_locals, func).unwrap();
+            let shift_amount = if let Some(imm) = function.dfg.value_imm(*sar.bits()) {
+                match imm {
+                    sonatina_ir::Immediate::I64(v) => v as u32,
+                    sonatina_ir::Immediate::I32(v) => v as u32,
+                    sonatina_ir::Immediate::I8(v) => v as u32,
+                    _ => 0,
+                }
+            } else { 0 };
+            let bits_u32 = func.expressions.append(
+                naga::Expression::Literal(naga::Literal::U32(shift_amount)),
+                naga::Span::UNDEFINED,
+            );
+            let h = func.expressions.append(
+                naga::Expression::Binary { op: naga::BinaryOperator::ShiftRight, left: val, right: bits_u32 },
+                naga::Span::UNDEFINED,
+            );
+            target.push(naga::Statement::Emit(naga::Range::new_from_bounds(h, h)), naga::Span::UNDEFINED);
+            value_map.insert(result, h);
+            return true;
+        }
+    } else if let Some(lt) = <&sonatina_ir::inst::cmp::Lt as InstDowncast>::downcast(inst_set, inst_data) {
+        if let Some(result) = function.dfg.inst_result(inst_id) {
+            let lhs = resolve_naga_value(*lt.lhs(), function, value_map, phi_locals, func).unwrap();
+            let rhs = resolve_naga_value(*lt.rhs(), function, value_map, phi_locals, func).unwrap();
+            let h = func.expressions.append(
+                naga::Expression::Binary { op: naga::BinaryOperator::Less, left: lhs, right: rhs },
+                naga::Span::UNDEFINED,
+            );
+            target.push(naga::Statement::Emit(naga::Range::new_from_bounds(h, h)), naga::Span::UNDEFINED);
+            value_map.insert(result, h);
+            return true;
+        }
+    } else if let Some(ret) = <&sonatina_ir::inst::control_flow::Return as InstDowncast>::downcast(inst_set, inst_data) {
+        if let Some(&val_id) = ret.args().as_slice().first() {
+            let resolved = resolve_naga_value(val_id, function, value_map, phi_locals, func);
+            if let Some(h) = resolved {
+                if matches!(func.expressions[h], naga::Expression::Load { .. }) {
+                    target.push(naga::Statement::Emit(naga::Range::new_from_bounds(h, h)), naga::Span::UNDEFINED);
+                }
+            }
+            *result_expr = resolved;
+            return true;
+        }
+    }
+    false
+}
+
+/// Emit all non-control-flow instructions from a block into the target naga::Block.
+#[cfg(feature = "spirv-backend")]
+fn emit_block_to_target(
+    function: &sonatina_ir::Function,
+    inst_set: &dyn sonatina_ir::InstSetBase,
+    block: sonatina_ir::BlockId,
+    func: &mut naga::Function,
+    target: &mut naga::Block,
+    value_map: &mut std::collections::HashMap<sonatina_ir::ValueId, naga::Handle<naga::Expression>>,
+    phi_locals: &mut std::collections::HashMap<sonatina_ir::ValueId, naga::Handle<naga::LocalVariable>>,
+    result_expr: &mut Option<naga::Handle<naga::Expression>>,
+) {
+    for inst_id in function.layout.iter_inst(block) {
+        emit_single_inst(inst_id, function, inst_set, func, target, value_map, phi_locals, result_expr);
+    }
+}
+
 #[cfg(feature = "spirv-backend")]
 fn emit_naga_block_instructions(
     function: &sonatina_ir::Function,
     inst_set: &dyn sonatina_ir::InstSetBase,
     block: sonatina_ir::BlockId,
-    i64_type: naga::Handle<naga::Type>,
+    _i64_type: naga::Handle<naga::Type>,
     func: &mut naga::Function,
     value_map: &mut std::collections::HashMap<sonatina_ir::ValueId, naga::Handle<naga::Expression>>,
     phi_locals: &mut std::collections::HashMap<sonatina_ir::ValueId, naga::Handle<naga::LocalVariable>>,
     result_expr: &mut Option<naga::Handle<naga::Expression>>,
 ) {
-    use sonatina_ir::InstDowncast;
-
-    for inst_id in function.layout.iter_inst(block) {
-        let inst_data = function.dfg.inst(inst_id);
-
-        // Skip phi nodes
-        if <&sonatina_ir::inst::control_flow::Phi as InstDowncast>::downcast(inst_set, inst_data).is_some() {
-            continue;
-        }
-        // Skip Jump/Br (handled by structured region emitter)
-        if <&sonatina_ir::inst::control_flow::Jump as InstDowncast>::downcast(inst_set, inst_data).is_some() {
-            continue;
-        }
-        if <&sonatina_ir::inst::control_flow::Br as InstDowncast>::downcast(inst_set, inst_data).is_some() {
-            continue;
-        }
-
-        if let Some(add) = <&sonatina_ir::inst::arith::Add as InstDowncast>::downcast(inst_set, inst_data) {
-            if let Some(result) = function.dfg.inst_result(inst_id) {
-                let lhs = resolve_naga_value(*add.lhs(), function, value_map, phi_locals, func).unwrap();
-                let rhs = resolve_naga_value(*add.rhs(), function, value_map, phi_locals, func).unwrap();
-                let h = func.expressions.append(
-                    naga::Expression::Binary { op: naga::BinaryOperator::Add, left: lhs, right: rhs },
-                    naga::Span::UNDEFINED,
-                );
-                func.body.push(naga::Statement::Emit(naga::Range::new_from_bounds(h, h)), naga::Span::UNDEFINED);
-                value_map.insert(result, h);
-            }
-        } else if let Some(sub) = <&sonatina_ir::inst::arith::Sub as InstDowncast>::downcast(inst_set, inst_data) {
-            if let Some(result) = function.dfg.inst_result(inst_id) {
-                let lhs = resolve_naga_value(*sub.lhs(), function, value_map, phi_locals, func).unwrap();
-                let rhs = resolve_naga_value(*sub.rhs(), function, value_map, phi_locals, func).unwrap();
-                let h = func.expressions.append(
-                    naga::Expression::Binary { op: naga::BinaryOperator::Subtract, left: lhs, right: rhs },
-                    naga::Span::UNDEFINED,
-                );
-                func.body.push(naga::Statement::Emit(naga::Range::new_from_bounds(h, h)), naga::Span::UNDEFINED);
-                value_map.insert(result, h);
-            }
-        } else if let Some(mul) = <&sonatina_ir::inst::arith::Mul as InstDowncast>::downcast(inst_set, inst_data) {
-            if let Some(result) = function.dfg.inst_result(inst_id) {
-                let lhs = resolve_naga_value(*mul.lhs(), function, value_map, phi_locals, func).unwrap();
-                let rhs = resolve_naga_value(*mul.rhs(), function, value_map, phi_locals, func).unwrap();
-                let h = func.expressions.append(
-                    naga::Expression::Binary { op: naga::BinaryOperator::Multiply, left: lhs, right: rhs },
-                    naga::Span::UNDEFINED,
-                );
-                func.body.push(naga::Statement::Emit(naga::Range::new_from_bounds(h, h)), naga::Span::UNDEFINED);
-                value_map.insert(result, h);
-            }
-        } else if let Some(sar) = <&sonatina_ir::inst::arith::Sar as InstDowncast>::downcast(inst_set, inst_data) {
-            if let Some(result) = function.dfg.inst_result(inst_id) {
-                let val = resolve_naga_value(*sar.value(), function, value_map, phi_locals, func).unwrap();
-                // ShiftRight needs u32 — create directly as U32 literal to avoid i64→u32 cast
-                let shift_amount = if let Some(imm) = function.dfg.value_imm(*sar.bits()) {
-                    let v = match imm {
-                        sonatina_ir::Immediate::I64(v) => v as u32,
-                        sonatina_ir::Immediate::I32(v) => v as u32,
-                        sonatina_ir::Immediate::I8(v) => v as u32,
-                        _ => 0,
-                    };
-                    v
-                } else { 0 };
-                let bits_u32 = func.expressions.append(
-                    naga::Expression::Literal(naga::Literal::U32(shift_amount)),
-                    naga::Span::UNDEFINED,
-                );
-                let h = func.expressions.append(
-                    naga::Expression::Binary { op: naga::BinaryOperator::ShiftRight, left: val, right: bits_u32 },
-                    naga::Span::UNDEFINED,
-                );
-                // Only emit the Binary expression; Literal is a const expression
-                // that must NOT be emitted (it's always in scope in Naga)
-                func.body.push(naga::Statement::Emit(naga::Range::new_from_bounds(h, h)), naga::Span::UNDEFINED);
-                value_map.insert(result, h);
-            }
-        } else if let Some(lt) = <&sonatina_ir::inst::cmp::Lt as InstDowncast>::downcast(inst_set, inst_data) {
-            if let Some(result) = function.dfg.inst_result(inst_id) {
-                let lhs = resolve_naga_value(*lt.lhs(), function, value_map, phi_locals, func).unwrap();
-                let rhs = resolve_naga_value(*lt.rhs(), function, value_map, phi_locals, func).unwrap();
-                let bool_type = naga::Scalar { kind: naga::ScalarKind::Bool, width: 1 };
-                let _ = bool_type;
-                let h = func.expressions.append(
-                    naga::Expression::Binary { op: naga::BinaryOperator::Less, left: lhs, right: rhs },
-                    naga::Span::UNDEFINED,
-                );
-                func.body.push(naga::Statement::Emit(naga::Range::new_from_bounds(h, h)), naga::Span::UNDEFINED);
-                value_map.insert(result, h);
-            }
-        } else if let Some(ret) = <&sonatina_ir::inst::control_flow::Return as InstDowncast>::downcast(inst_set, inst_data) {
-            if let Some(&val_id) = ret.args().as_slice().first() {
-                let resolved = resolve_naga_value(val_id, function, value_map, phi_locals, func);
-                if let Some(h) = resolved {
-                    // Emit the resolved expression if it's a Load (from phi local)
-                    if matches!(func.expressions[h], naga::Expression::Load { .. }) {
-                        func.body.push(naga::Statement::Emit(naga::Range::new_from_bounds(h, h)), naga::Span::UNDEFINED);
-                    }
-                }
-                *result_expr = resolved;
-            }
-        }
-    }
+    let mut target = naga::Block::new();
+    emit_block_to_target(function, inst_set, block, func, &mut target, value_map, phi_locals, result_expr);
+    func.body.extend_block(target);
 }
 
 #[cfg(feature = "spirv-backend")]
@@ -261,241 +287,394 @@ fn emit_naga_regions(
 ) {
     use sonatina_ir::InstDowncast;
 
-    for region in regions {
+    let mut region_idx = 0;
+    while region_idx < regions.len() {
+        let region = &regions[region_idx];
         match region {
             crate::structurize::Region::Block(block_id) => {
                 emit_naga_block_instructions(
                     function, inst_set, *block_id, i64_type,
                     func, value_map, phi_locals, result_expr,
                 );
+                region_idx += 1;
             }
             crate::structurize::Region::Loop { header, body } => {
-                // Create LocalVariables for phi nodes in the loop header
-                for inst_id in function.layout.iter_inst(*header) {
-                    let inst_data = function.dfg.inst(inst_id);
-                    if let Some(phi) = <&sonatina_ir::inst::control_flow::Phi as InstDowncast>::downcast(inst_set, inst_data) {
-                        if let Some(result) = function.dfg.inst_result(inst_id) {
-                            let local = func.local_variables.append(
-                                naga::LocalVariable {
-                                    name: Some(format!("phi_{}", result.0)),
-                                    ty: i64_type,
-                                    init: None,
-                                },
-                                naga::Span::UNDEFINED,
-                            );
-                            phi_locals.insert(result, local);
-
-                            // Initialize from entry (first) phi arg
-                            if let Some(&(init_val, _)) = phi.args().first() {
-                                if let Some(init) = resolve_naga_value(init_val, function, value_map, phi_locals, func) {
-                                    let ptr = func.expressions.append(
-                                        naga::Expression::LocalVariable(local),
-                                        naga::Span::UNDEFINED,
-                                    );
-                                    func.body.push(
-                                        naga::Statement::Store { pointer: ptr, value: init },
-                                        naga::Span::UNDEFINED,
-                                    );
-                                }
-                            }
-                        }
-                    } else {
-                        break;
-                    }
-                }
-
-                // Build the loop body block
-                let mut loop_body = naga::Block::new();
-                let mut loop_continuing = naga::Block::new();
-
-                // Use Naga's If statement with Break for loop exit instead of
-                // break_if (simpler to get expression scoping right)
-                //
-                // Naga loop model: loop { body; continuing { break if X; } }
-                // Our model: while (cond) { body; update phis; }
-                // Translation: loop { if (!cond) { break; }; body; continuing { update phis; } }
-
-                // Build all loop body expressions first, then batch emit
-                let body_expr_start = func.expressions.len();
-
-                // Load phi values
-                for inst_id in function.layout.iter_inst(*header) {
-                    let inst_data = function.dfg.inst(inst_id);
-                    if let Some(_phi) = <&sonatina_ir::inst::control_flow::Phi as InstDowncast>::downcast(inst_set, inst_data) {
-                        if let Some(result) = function.dfg.inst_result(inst_id) {
-                            if let Some(&local) = phi_locals.get(&result) {
-                                let ptr = func.expressions.append(naga::Expression::LocalVariable(local), naga::Span::UNDEFINED);
-                                let loaded = func.expressions.append(naga::Expression::Load { pointer: ptr }, naga::Span::UNDEFINED);
-                                value_map.insert(result, loaded);
-                            }
-                        }
-                    } else { break; }
-                }
-
-                // Header comparison
-                for inst_id in function.layout.iter_inst(*header) {
-                    let inst_data = function.dfg.inst(inst_id);
-                    if <&sonatina_ir::inst::control_flow::Phi as InstDowncast>::downcast(inst_set, inst_data).is_some() { continue; }
-                    if <&sonatina_ir::inst::control_flow::Br as InstDowncast>::downcast(inst_set, inst_data).is_some() { continue; }
-                    if let Some(lt) = <&sonatina_ir::inst::cmp::Lt as InstDowncast>::downcast(inst_set, inst_data) {
-                        if let Some(result) = function.dfg.inst_result(inst_id) {
-                            let lhs = resolve_naga_value(*lt.lhs(), function, value_map, phi_locals, func).unwrap();
-                            let rhs = resolve_naga_value(*lt.rhs(), function, value_map, phi_locals, func).unwrap();
-                            let h = func.expressions.append(naga::Expression::Binary { op: naga::BinaryOperator::Less, left: lhs, right: rhs }, naga::Span::UNDEFINED);
-                            value_map.insert(result, h);
-                        }
-                    }
-                }
-
-                // NOT condition for break
-                let mut not_cond_handle = None;
-                for inst_id in function.layout.iter_inst(*header) {
-                    let inst_data = function.dfg.inst(inst_id);
-                    if let Some(br) = <&sonatina_ir::inst::control_flow::Br as InstDowncast>::downcast(inst_set, inst_data) {
-                        if let Some(c) = resolve_naga_value(*br.cond(), function, value_map, phi_locals, func) {
-                            not_cond_handle = Some(func.expressions.append(naga::Expression::Unary { op: naga::UnaryOperator::LogicalNot, expr: c }, naga::Span::UNDEFINED));
-                        }
-                        break;
-                    }
-                }
-
-                // Emit loop body blocks (excluding header)
-                // Body block instructions (no individual Emit — will batch below)
-                for inner in body {
-                    if let crate::structurize::Region::Block(bid) = inner {
-                        if *bid == *header { continue; }
-                        for inst_id in function.layout.iter_inst(*bid) {
-                            let inst_data = function.dfg.inst(inst_id);
-                            if <&sonatina_ir::inst::control_flow::Phi as InstDowncast>::downcast(inst_set, inst_data).is_some() { continue; }
-                            if <&sonatina_ir::inst::control_flow::Jump as InstDowncast>::downcast(inst_set, inst_data).is_some() { continue; }
-                            if let Some(add) = <&sonatina_ir::inst::arith::Add as InstDowncast>::downcast(inst_set, inst_data) {
-                                if let Some(result) = function.dfg.inst_result(inst_id) {
-                                    let lhs = resolve_naga_value(*add.lhs(), function, value_map, phi_locals, func).unwrap();
-                                    let rhs = resolve_naga_value(*add.rhs(), function, value_map, phi_locals, func).unwrap();
-                                    let h = func.expressions.append(naga::Expression::Binary { op: naga::BinaryOperator::Add, left: lhs, right: rhs }, naga::Span::UNDEFINED);
-                                    value_map.insert(result, h);
-                                }
-                            } else if let Some(sub) = <&sonatina_ir::inst::arith::Sub as InstDowncast>::downcast(inst_set, inst_data) {
-                                if let Some(result) = function.dfg.inst_result(inst_id) {
-                                    let lhs = resolve_naga_value(*sub.lhs(), function, value_map, phi_locals, func).unwrap();
-                                    let rhs = resolve_naga_value(*sub.rhs(), function, value_map, phi_locals, func).unwrap();
-                                    let h = func.expressions.append(naga::Expression::Binary { op: naga::BinaryOperator::Subtract, left: lhs, right: rhs }, naga::Span::UNDEFINED);
-                                    value_map.insert(result, h);
-                                }
-                            } else if let Some(mul) = <&sonatina_ir::inst::arith::Mul as InstDowncast>::downcast(inst_set, inst_data) {
-                                if let Some(result) = function.dfg.inst_result(inst_id) {
-                                    let lhs = resolve_naga_value(*mul.lhs(), function, value_map, phi_locals, func).unwrap();
-                                    let rhs = resolve_naga_value(*mul.rhs(), function, value_map, phi_locals, func).unwrap();
-                                    let h = func.expressions.append(naga::Expression::Binary { op: naga::BinaryOperator::Multiply, left: lhs, right: rhs }, naga::Span::UNDEFINED);
-                                    value_map.insert(result, h);
-                                }
-                            } else if let Some(sar) = <&sonatina_ir::inst::arith::Sar as InstDowncast>::downcast(inst_set, inst_data) {
-                                if let Some(result) = function.dfg.inst_result(inst_id) {
-                                    let val = resolve_naga_value(*sar.value(), function, value_map, phi_locals, func).unwrap();
-                                    let bits = resolve_naga_value(*sar.bits(), function, value_map, phi_locals, func).unwrap();
-                                    let bits_u32 = func.expressions.append(
-                                        naga::Expression::As { expr: bits, kind: naga::ScalarKind::Uint, convert: Some(4) },
-                                        naga::Span::UNDEFINED,
-                                    );
-                                    let h = func.expressions.append(
-                                        naga::Expression::Binary { op: naga::BinaryOperator::ShiftRight, left: val, right: bits_u32 },
-                                        naga::Span::UNDEFINED,
-                                    );
-                                    value_map.insert(result, h);
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // Emit only emittable expressions individually
-                for (h, expr) in func.expressions.iter().skip(body_expr_start) {
-                    let needs_emit = matches!(expr,
-                        naga::Expression::Load { .. }
-                        | naga::Expression::Binary { .. }
-                        | naga::Expression::Unary { .. }
-                        | naga::Expression::Access { .. }
-                        | naga::Expression::AccessIndex { .. }
-                        | naga::Expression::As { .. }
-                    );
-                    if needs_emit {
-                        loop_body.push(
-                            naga::Statement::Emit(naga::Range::new_from_bounds(h, h)),
-                            naga::Span::UNDEFINED,
-                        );
-                    }
-                }
-
-                // if (!cond) { break; }
-                if let Some(nc) = not_cond_handle {
-                    let mut break_body = naga::Block::new();
-                    break_body.push(naga::Statement::Break, naga::Span::UNDEFINED);
-                    loop_body.push(naga::Statement::If { condition: nc, accept: break_body, reject: naga::Block::new() }, naga::Span::UNDEFINED);
-                }
-
-                // Update phi locals at END of loop body
-                for inner in body {
-                    if let crate::structurize::Region::Block(bid) = inner {
-                        if *bid == *header { continue; }
-                        for inst_id in function.layout.iter_inst(*bid) {
-                            let inst_data = function.dfg.inst(inst_id);
-                            if <&sonatina_ir::inst::control_flow::Jump as InstDowncast>::downcast(inst_set, inst_data).is_some() {
-                                for target_inst_id in function.layout.iter_inst(*header) {
-                                    let target_inst = function.dfg.inst(target_inst_id);
-                                    if let Some(phi) = <&sonatina_ir::inst::control_flow::Phi as InstDowncast>::downcast(inst_set, target_inst) {
-                                        if let Some(result) = function.dfg.inst_result(target_inst_id) {
-                                            if let Some(&local) = phi_locals.get(&result) {
-                                                for &(val, from_block) in phi.args() {
-                                                    if from_block == *bid {
-                                                        if let Some(v) = resolve_naga_value(val, function, value_map, phi_locals, func) {
-                                                            let ptr = func.expressions.append(naga::Expression::LocalVariable(local), naga::Span::UNDEFINED);
-                                                            loop_body.push(naga::Statement::Store { pointer: ptr, value: v }, naga::Span::UNDEFINED);
-                                                        }
-                                                        break;
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    } else { break; }
-                                }
-                            }
-                        }
-                    }
-                }
-                let break_cond: Option<naga::Handle<naga::Expression>> = None;
-
-                // Emit the Naga Loop statement
-                func.body.push(
-                    naga::Statement::Loop {
-                        body: loop_body,
-                        continuing: loop_continuing,
-                        break_if: break_cond,
-                    },
-                    naga::Span::UNDEFINED,
+                region_idx += 1;
+                emit_loop_region(
+                    function, inst_set, *header, body, &regions[region_idx..],
+                    &mut region_idx, i64_type, func, value_map, phi_locals, result_expr,
                 );
-
-                // After the loop, phi values from the loop body are out of scope.
-                // Remove them from value_map so subsequent blocks (like exit)
-                // create fresh loads from the phi locals.
-                for inst_id in function.layout.iter_inst(*header) {
-                    let inst_data = function.dfg.inst(inst_id);
-                    if <&sonatina_ir::inst::control_flow::Phi as InstDowncast>::downcast(inst_set, inst_data).is_some() {
-                        if let Some(result) = function.dfg.inst_result(inst_id) {
-                            value_map.remove(&result);
-                        }
-                    } else {
-                        break;
-                    }
-                }
             }
-            crate::structurize::Region::IfThenElse { header, then_branch, else_branch, merge } => {
+            crate::structurize::Region::IfThenElse { header, then_branch: _, else_branch: _, merge: _ } => {
                 emit_naga_block_instructions(
                     function, inst_set, *header, i64_type,
                     func, value_map, phi_locals, result_expr,
                 );
+                region_idx += 1;
             }
         }
     }
+}
+
+/// Emit a Loop region, handling inner conditional branches and post-loop exit blocks.
+#[cfg(feature = "spirv-backend")]
+fn emit_loop_region(
+    function: &sonatina_ir::Function,
+    inst_set: &dyn sonatina_ir::InstSetBase,
+    header: sonatina_ir::BlockId,
+    body: &[crate::structurize::Region],
+    remaining_regions: &[crate::structurize::Region],
+    region_idx: &mut usize,
+    i64_type: naga::Handle<naga::Type>,
+    func: &mut naga::Function,
+    value_map: &mut std::collections::HashMap<sonatina_ir::ValueId, naga::Handle<naga::Expression>>,
+    phi_locals: &mut std::collections::HashMap<sonatina_ir::ValueId, naga::Handle<naga::LocalVariable>>,
+    result_expr: &mut Option<naga::Handle<naga::Expression>>,
+) {
+    use sonatina_ir::InstDowncast;
+
+    // Create LocalVariables for phi nodes in the loop header
+    for inst_id in function.layout.iter_inst(header) {
+        let inst_data = function.dfg.inst(inst_id);
+        if let Some(phi) = <&sonatina_ir::inst::control_flow::Phi as InstDowncast>::downcast(inst_set, inst_data) {
+            if let Some(result) = function.dfg.inst_result(inst_id) {
+                let local = func.local_variables.append(
+                    naga::LocalVariable {
+                        name: Some(format!("phi_{}", result.0)),
+                        ty: i64_type,
+                        init: None,
+                    },
+                    naga::Span::UNDEFINED,
+                );
+                phi_locals.insert(result, local);
+
+                // Initialize from entry (first) phi arg
+                if let Some(&(init_val, _)) = phi.args().first() {
+                    if let Some(init) = resolve_naga_value(init_val, function, value_map, phi_locals, func) {
+                        let ptr = func.expressions.append(
+                            naga::Expression::LocalVariable(local),
+                            naga::Span::UNDEFINED,
+                        );
+                        func.body.push(
+                            naga::Statement::Store { pointer: ptr, value: init },
+                            naga::Span::UNDEFINED,
+                        );
+                    }
+                }
+            }
+        } else {
+            break;
+        }
+    }
+
+    // Track how many expressions exist before the loop body begins.
+    // Expressions with index < pre_loop_expr_count were emitted in the outer
+    // scope and must NOT be re-emitted inside the loop or its nested blocks.
+    let pre_loop_expr_count = func.expressions.len();
+
+    // Detect if any non-header body block has a Br (inner conditional)
+    let has_inner_br = body.iter().any(|inner| {
+        if let crate::structurize::Region::Block(bid) = inner {
+            if *bid == header { return false; }
+            for inst_id in function.layout.iter_inst(*bid) {
+                let inst_data = function.dfg.inst(inst_id);
+                if <&sonatina_ir::inst::control_flow::Br as InstDowncast>::downcast(inst_set, inst_data).is_some() {
+                    return true;
+                }
+            }
+        }
+        false
+    });
+
+    // If there's an inner Br, create a result_local for the function result.
+    // Both exit paths (header exit, inner escape) store their return value here.
+    let result_local = if has_inner_br {
+        Some(func.local_variables.append(
+            naga::LocalVariable {
+                name: Some("loop_result".into()),
+                ty: i64_type,
+                init: None,
+            },
+            naga::Span::UNDEFINED,
+        ))
+    } else {
+        None
+    };
+
+    // Build the loop body
+    let mut loop_body = naga::Block::new();
+    let loop_continuing = naga::Block::new();
+
+    // Load phi values at top of each iteration
+    for inst_id in function.layout.iter_inst(header) {
+        let inst_data = function.dfg.inst(inst_id);
+        if <&sonatina_ir::inst::control_flow::Phi as InstDowncast>::downcast(inst_set, inst_data).is_some() {
+            if let Some(result) = function.dfg.inst_result(inst_id) {
+                if let Some(&local) = phi_locals.get(&result) {
+                    let ptr = func.expressions.append(naga::Expression::LocalVariable(local), naga::Span::UNDEFINED);
+                    let loaded = func.expressions.append(naga::Expression::Load { pointer: ptr }, naga::Span::UNDEFINED);
+                    // Only emit Load; LocalVariable is a const expression (always in scope)
+                    loop_body.push(naga::Statement::Emit(naga::Range::new_from_bounds(loaded, loaded)), naga::Span::UNDEFINED);
+                    value_map.insert(result, loaded);
+                }
+            }
+        } else { break; }
+    }
+
+    // Header comparison (non-phi, non-Br instructions)
+    for inst_id in function.layout.iter_inst(header) {
+        let inst_data = function.dfg.inst(inst_id);
+        if <&sonatina_ir::inst::control_flow::Phi as InstDowncast>::downcast(inst_set, inst_data).is_some() { continue; }
+        if <&sonatina_ir::inst::control_flow::Br as InstDowncast>::downcast(inst_set, inst_data).is_some() { continue; }
+        emit_single_inst(inst_id, function, inst_set, func, &mut loop_body, value_map, phi_locals, result_expr);
+    }
+
+    // Header Br: find exit block and its return value, then emit if NOT(cond) { store exit result; break; }
+    let mut header_exit_block = None;
+    for inst_id in function.layout.iter_inst(header) {
+        let inst_data = function.dfg.inst(inst_id);
+        if let Some(br) = <&sonatina_ir::inst::control_flow::Br as InstDowncast>::downcast(inst_set, inst_data) {
+            header_exit_block = Some(*br.z_dest());
+            if let Some(c) = resolve_naga_value(*br.cond(), function, value_map, phi_locals, func) {
+                let not_c = func.expressions.append(naga::Expression::Unary { op: naga::UnaryOperator::LogicalNot, expr: c }, naga::Span::UNDEFINED);
+                loop_body.push(naga::Statement::Emit(naga::Range::new_from_bounds(not_c, not_c)), naga::Span::UNDEFINED);
+                let mut break_block = naga::Block::new();
+                // If we have a result_local, store the exit block's return value
+                if let Some(res_local) = result_local {
+                    if let Some(ret_val) = find_block_return_value(*br.z_dest(), function, inst_set) {
+                        let expr_count_before = func.expressions.len();
+                        if let Some(v) = resolve_naga_value(ret_val, function, value_map, phi_locals, func) {
+                            // Only emit if resolve_naga_value created a new expression
+                            if v.index() >= expr_count_before {
+                                if matches!(func.expressions[v], naga::Expression::Load { .. }
+                                    | naga::Expression::Binary { .. }
+                                    | naga::Expression::Unary { .. }) {
+                                    break_block.push(naga::Statement::Emit(naga::Range::new_from_bounds(v, v)), naga::Span::UNDEFINED);
+                                }
+                            }
+                            let ptr = func.expressions.append(naga::Expression::LocalVariable(res_local), naga::Span::UNDEFINED);
+                            break_block.push(naga::Statement::Store { pointer: ptr, value: v }, naga::Span::UNDEFINED);
+                        }
+                    }
+                }
+                break_block.push(naga::Statement::Break, naga::Span::UNDEFINED);
+                loop_body.push(naga::Statement::If { condition: not_c, accept: break_block, reject: naga::Block::new() }, naga::Span::UNDEFINED);
+            }
+            break;
+        }
+    }
+
+    // Collect non-header body blocks
+    let non_header_blocks: Vec<sonatina_ir::BlockId> = body.iter().filter_map(|inner| {
+        if let crate::structurize::Region::Block(bid) = inner {
+            if *bid != header { return Some(*bid); }
+        }
+        None
+    }).collect();
+
+    if has_inner_br {
+        // Find the block with the inner Br
+        let mut br_block_idx = None;
+        for (idx, &bid) in non_header_blocks.iter().enumerate() {
+            for inst_id in function.layout.iter_inst(bid) {
+                let inst_data = function.dfg.inst(inst_id);
+                if <&sonatina_ir::inst::control_flow::Br as InstDowncast>::downcast(inst_set, inst_data).is_some() {
+                    br_block_idx = Some(idx);
+                    break;
+                }
+            }
+            if br_block_idx.is_some() { break; }
+        }
+
+        if let Some(br_idx) = br_block_idx {
+            let br_bid = non_header_blocks[br_idx];
+
+            // Emit compute instructions from the Br block into loop_body
+            let mut inner_cond_handle = None;
+            let mut inner_escape_block = None;
+            for inst_id in function.layout.iter_inst(br_bid) {
+                let inst_data = function.dfg.inst(inst_id);
+                if let Some(br) = <&sonatina_ir::inst::control_flow::Br as InstDowncast>::downcast(inst_set, inst_data) {
+                    inner_cond_handle = resolve_naga_value(*br.cond(), function, value_map, phi_locals, func);
+                    inner_escape_block = Some(*br.z_dest());
+                    continue;
+                }
+                emit_single_inst(inst_id, function, inst_set, func, &mut loop_body, value_map, phi_locals, result_expr);
+            }
+
+            if let Some(cond) = inner_cond_handle {
+                // Accept branch (condition true): continue blocks + phi updates
+                let mut accept_block = naga::Block::new();
+                for &bid in &non_header_blocks[br_idx + 1..] {
+                    emit_block_to_target(function, inst_set, bid, func, &mut accept_block, value_map, phi_locals, result_expr);
+
+                    // Phi updates for blocks that jump back to header
+                    for inst_id in function.layout.iter_inst(bid) {
+                        let inst_data = function.dfg.inst(inst_id);
+                        if <&sonatina_ir::inst::control_flow::Jump as InstDowncast>::downcast(inst_set, inst_data).is_some() {
+                            for target_inst_id in function.layout.iter_inst(header) {
+                                let target_inst = function.dfg.inst(target_inst_id);
+                                if let Some(phi) = <&sonatina_ir::inst::control_flow::Phi as InstDowncast>::downcast(inst_set, target_inst) {
+                                    if let Some(phi_result) = function.dfg.inst_result(target_inst_id) {
+                                        if let Some(&local) = phi_locals.get(&phi_result) {
+                                            for &(val, from_block) in phi.args() {
+                                                if from_block == bid {
+                                                    if let Some(v) = resolve_naga_value(val, function, value_map, phi_locals, func) {
+                                                        let ptr = func.expressions.append(naga::Expression::LocalVariable(local), naga::Span::UNDEFINED);
+                                                        accept_block.push(naga::Statement::Store { pointer: ptr, value: v }, naga::Span::UNDEFINED);
+                                                    }
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                    }
+                                } else { break; }
+                            }
+                        }
+                    }
+                }
+
+                // Reject branch (condition false, escape): store escape result, break
+                let mut reject_block = naga::Block::new();
+                if let (Some(res_local), Some(esc_bid)) = (result_local, inner_escape_block) {
+                    if let Some(ret_val) = find_block_return_value(esc_bid, function, inst_set) {
+                        let expr_count_before = func.expressions.len();
+                        if let Some(v) = resolve_naga_value(ret_val, function, value_map, phi_locals, func) {
+                            // Only emit if resolve_naga_value created a new expression
+                            // (existing expressions are already emitted in a parent scope)
+                            if v.index() >= expr_count_before {
+                                if matches!(func.expressions[v], naga::Expression::Load { .. }
+                                    | naga::Expression::Binary { .. }
+                                    | naga::Expression::Unary { .. }) {
+                                    reject_block.push(naga::Statement::Emit(naga::Range::new_from_bounds(v, v)), naga::Span::UNDEFINED);
+                                }
+                            }
+                            let ptr = func.expressions.append(naga::Expression::LocalVariable(res_local), naga::Span::UNDEFINED);
+                            reject_block.push(naga::Statement::Store { pointer: ptr, value: v }, naga::Span::UNDEFINED);
+                        }
+                    }
+                }
+                reject_block.push(naga::Statement::Break, naga::Span::UNDEFINED);
+
+                loop_body.push(
+                    naga::Statement::If { condition: cond, accept: accept_block, reject: reject_block },
+                    naga::Span::UNDEFINED,
+                );
+            }
+        }
+    } else {
+        // Simple loop body (no inner Br)
+        for &bid in &non_header_blocks {
+            emit_block_to_target(function, inst_set, bid, func, &mut loop_body, value_map, phi_locals, result_expr);
+
+            // Phi updates
+            for inst_id in function.layout.iter_inst(bid) {
+                let inst_data = function.dfg.inst(inst_id);
+                if <&sonatina_ir::inst::control_flow::Jump as InstDowncast>::downcast(inst_set, inst_data).is_some() {
+                    for target_inst_id in function.layout.iter_inst(header) {
+                        let target_inst = function.dfg.inst(target_inst_id);
+                        if let Some(phi) = <&sonatina_ir::inst::control_flow::Phi as InstDowncast>::downcast(inst_set, target_inst) {
+                            if let Some(phi_result) = function.dfg.inst_result(target_inst_id) {
+                                if let Some(&local) = phi_locals.get(&phi_result) {
+                                    for &(val, from_block) in phi.args() {
+                                        if from_block == bid {
+                                            if let Some(v) = resolve_naga_value(val, function, value_map, phi_locals, func) {
+                                                let ptr = func.expressions.append(naga::Expression::LocalVariable(local), naga::Span::UNDEFINED);
+                                                loop_body.push(naga::Statement::Store { pointer: ptr, value: v }, naga::Span::UNDEFINED);
+                                            }
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        } else { break; }
+                    }
+                }
+            }
+        }
+    }
+
+    // Emit the Naga Loop statement
+    func.body.push(
+        naga::Statement::Loop {
+            body: loop_body,
+            continuing: loop_continuing,
+            break_if: None,
+        },
+        naga::Span::UNDEFINED,
+    );
+
+    // After the loop, phi values from the loop body are out of scope.
+    for inst_id in function.layout.iter_inst(header) {
+        let inst_data = function.dfg.inst(inst_id);
+        if <&sonatina_ir::inst::control_flow::Phi as InstDowncast>::downcast(inst_set, inst_data).is_some() {
+            if let Some(result) = function.dfg.inst_result(inst_id) {
+                value_map.remove(&result);
+            }
+        } else {
+            break;
+        }
+    }
+
+    // If we used a result_local, load from it and set result_expr,
+    // then skip the post-loop return blocks
+    if let Some(res_local) = result_local {
+        let ptr = func.expressions.append(naga::Expression::LocalVariable(res_local), naga::Span::UNDEFINED);
+        let loaded = func.expressions.append(naga::Expression::Load { pointer: ptr }, naga::Span::UNDEFINED);
+        func.body.push(naga::Statement::Emit(naga::Range::new_from_bounds(loaded, loaded)), naga::Span::UNDEFINED);
+        *result_expr = Some(loaded);
+
+        // Skip the post-loop return blocks (they are the exit targets
+        // whose values we already captured into result_local)
+        let mut post_blocks_to_skip = std::collections::HashSet::new();
+        if let Some(exit_bid) = header_exit_block {
+            post_blocks_to_skip.insert(exit_bid);
+        }
+        // Also find the inner escape block
+        for inner in body {
+            if let crate::structurize::Region::Block(bid) = inner {
+                if *bid == header { continue; }
+                for inst_id in function.layout.iter_inst(*bid) {
+                    let inst_data = function.dfg.inst(inst_id);
+                    if let Some(br) = <&sonatina_ir::inst::control_flow::Br as InstDowncast>::downcast(inst_set, inst_data) {
+                        post_blocks_to_skip.insert(*br.z_dest());
+                    }
+                }
+            }
+        }
+
+        // Skip remaining regions that are post-loop return blocks
+        // we've already captured. remaining_regions starts at the
+        // current region_idx position, so offset 0 = next unprocessed region.
+        let mut skip_offset = 0;
+        while skip_offset < remaining_regions.len() {
+            if let crate::structurize::Region::Block(bid) = &remaining_regions[skip_offset] {
+                if post_blocks_to_skip.contains(bid) {
+                    *region_idx += 1;
+                    skip_offset += 1;
+                    continue;
+                }
+            }
+            break;
+        }
+    }
+}
+
+/// Find the return value (ValueId) of a block that contains a Return instruction.
+#[cfg(feature = "spirv-backend")]
+fn find_block_return_value(
+    block: sonatina_ir::BlockId,
+    function: &sonatina_ir::Function,
+    inst_set: &dyn sonatina_ir::InstSetBase,
+) -> Option<sonatina_ir::ValueId> {
+    use sonatina_ir::InstDowncast;
+    for inst_id in function.layout.iter_inst(block) {
+        let inst_data = function.dfg.inst(inst_id);
+        if let Some(ret) = <&sonatina_ir::inst::control_flow::Return as InstDowncast>::downcast(inst_set, inst_data) {
+            return ret.args().as_slice().first().copied();
+        }
+    }
+    None
 }
 
 #[cfg(feature = "spirv-backend")]

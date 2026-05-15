@@ -130,19 +130,13 @@ fn dump_all_backends() {
     eprintln!("  WASM:      compile={:?} render={:?}", wasm_compile, wasm_render);
 
     // SPIR-V — escape_time has loops+branches+3params, complex for Naga.
-    // Try compilation, report result but don't fail the test.
     let t0 = std::time::Instant::now();
     let spirv = SpirvBackend::new().with_workgroup_size(1,1,1);
-    match spirv.compile_module(&module) {
-        Ok(art) => {
-            let spirv_compile = t0.elapsed();
-            eprintln!("  SPIR-V:    compile={:?} (WGSL={}chars)", spirv_compile,
-                art.wgsl.as_ref().map(|w| w.len()).unwrap_or(0));
-        }
-        Err(e) => {
-            eprintln!("  SPIR-V:    complex CFG not yet supported ({:?})", e[0]);
-        }
-    }
+    let spirv_art = spirv.compile_module(&module).expect("SPIR-V escape_time compilation failed");
+    let spirv_compile = t0.elapsed();
+    eprintln!("  SPIR-V:    compile={:?} (WGSL={}chars)", spirv_compile,
+        spirv_art.wgsl.as_ref().map(|w| w.len()).unwrap_or(0));
+    assert_eq!(spirv_art.words[0], 0x07230203, "valid SPIR-V magic");
 
     // Verify identical
     let mismatches = cl_data.iter().zip(wasm_data.iter()).filter(|(a,b)| a != b).count();
