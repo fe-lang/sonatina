@@ -22,7 +22,8 @@ fn sonatina_to_waffle_type(ty: Type) -> Option<WType> {
         Type::Unit => None,
         Type::I1 | Type::I8 | Type::I16 | Type::I32 => Some(WType::I32),
         Type::I64 => Some(WType::I64),
-        Type::Compound(_) => Some(WType::I32),
+        // objref<T> / constref<T> — use the inner type's WASM representation
+        Type::Compound(_) => Some(WType::I64),
         _ => None,
     }
 }
