@@ -33,6 +33,17 @@ pub(super) fn translate_module(
     let mut wmod = WaffleModule::empty();
     let mut func_names = Vec::new();
 
+    // Add linear memory (1 page = 64KB, growable)
+    let memory = wmod.memories.push(waffle::MemoryData {
+        initial_pages: 1,
+        maximum_pages: Some(256),
+        segments: vec![],
+    });
+    wmod.exports.push(waffle::Export {
+        name: "memory".to_string(),
+        kind: ExportKind::Memory(memory),
+    });
+
     let funcs = module.funcs();
     let intrinsic_names: std::collections::HashSet<&str> =
         ["addmod", "mulmod"].into_iter().collect();
