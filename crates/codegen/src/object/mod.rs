@@ -5,13 +5,15 @@ pub mod error;
 pub mod link;
 pub mod resolve;
 
+pub use crate::cache::{
+    CacheKey, CachedCompilation, CompilationCache, InMemoryCache, compute_cache_key,
+};
 use crate::isa::evm::PushWidthPolicy;
 pub use artifact::{
     FrontendProvenanceMap, OBSERVABILITY_SCHEMA_VERSION, ObjectArtifact, ObjectObservability,
     PcMapEntry, SectionArtifact, SectionObservability, SymbolDef, SymbolId, UnmappedReason,
     UnmappedReasonCoverage,
 };
-pub use crate::cache::{CacheKey, CachedCompilation, CompilationCache, InMemoryCache, compute_cache_key};
 pub use compile::{compile_all_objects, compile_object};
 pub use data::encode_gv_initializer_to_bytes;
 pub use error::ObjectCompileError;

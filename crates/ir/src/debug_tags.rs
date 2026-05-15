@@ -92,7 +92,10 @@ mod tests {
         let mut tags = DebugTags::default();
         let from = InstId(0);
         let to = InstId(1);
-        tags.set(from, [DebugTag::SourceLoc(10), DebugTag::InlineCallsite(20)]);
+        tags.set(
+            from,
+            [DebugTag::SourceLoc(10), DebugTag::InlineCallsite(20)],
+        );
         tags.clone_tags(from, to);
         assert_eq!(tags.get(from), tags.get(to));
     }
