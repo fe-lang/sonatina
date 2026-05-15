@@ -26,6 +26,8 @@ impl std::fmt::Display for SpirvError {
 
 pub struct SpirvArtifact {
     pub words: Vec<u32>,
+    /// WGSL source for wgpu execution (available when spirv-backend feature is on)
+    pub wgsl: Option<String>,
 }
 
 impl SpirvArtifact {
@@ -83,7 +85,12 @@ impl Backend for SpirvBackend {
         let words = naga::back::spv::write_vec(&naga_mod, &info, &options, None)
             .map_err(|e| vec![SpirvError::Translation(format!("{e}"))])?;
 
-        Ok(SpirvArtifact { words })
+        // Also emit WGSL for wgpu execution
+        let wgsl = naga::back::wgsl::write_string(
+            &naga_mod, &info, naga::back::wgsl::WriterFlags::empty()
+        ).ok();
+
+        Ok(SpirvArtifact { words, wgsl })
     }
 }
 
