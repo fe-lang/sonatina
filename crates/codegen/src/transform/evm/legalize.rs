@@ -371,6 +371,12 @@ impl<'a> FunctionLegalizer<'a> {
             return;
         }
         if let Some((lhs, rhs)) =
+            downcast::<&EvmSdiv>(is, self.func.dfg.inst(inst)).map(|i| (*i.lhs(), *i.rhs()))
+        {
+            self.rewrite_evm_sdiv(inst, lhs, rhs);
+            return;
+        }
+        if let Some((lhs, rhs)) =
             downcast::<&EvmUdivo>(is, self.func.dfg.inst(inst)).map(|i| (*i.lhs(), *i.rhs()))
         {
             self.rewrite_evm_udivo(inst, lhs, rhs);
@@ -380,6 +386,12 @@ impl<'a> FunctionLegalizer<'a> {
             downcast::<&EvmSdivo>(is, self.func.dfg.inst(inst)).map(|i| (*i.lhs(), *i.rhs()))
         {
             self.rewrite_evm_sdivo(inst, lhs, rhs);
+            return;
+        }
+        if let Some((lhs, rhs)) =
+            downcast::<&EvmSmod>(is, self.func.dfg.inst(inst)).map(|i| (*i.lhs(), *i.rhs()))
+        {
+            self.rewrite_evm_smod(inst, lhs, rhs);
             return;
         }
         if let Some((lhs, rhs)) =
@@ -1764,6 +1776,10 @@ impl<'a> FunctionLegalizer<'a> {
         self.replace_with_aliases(inst, &[result, overflow]);
     }
 
+    fn rewrite_evm_sdiv(&mut self, inst: InstId, lhs: ValueId, rhs: ValueId) {
+        self.rewrite_signed_div_mod(inst, lhs, rhs, true);
+    }
+
     fn rewrite_evm_smodo(&mut self, inst: InstId, lhs: ValueId, rhs: ValueId) {
         let width = self
             .width_of(self.func.dfg.inst_results(inst)[0])
@@ -1795,6 +1811,10 @@ impl<'a> FunctionLegalizer<'a> {
             Some(ScalarWidth::Bool),
         );
         self.replace_with_aliases(inst, &[result, overflow]);
+    }
+
+    fn rewrite_evm_smod(&mut self, inst: InstId, lhs: ValueId, rhs: ValueId) {
+        self.rewrite_signed_div_mod(inst, lhs, rhs, false);
     }
 
     fn rewrite_add(&mut self, inst: InstId, lhs: ValueId, rhs: ValueId) {
