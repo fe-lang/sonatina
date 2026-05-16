@@ -633,10 +633,8 @@ impl SccpSolver {
                             && func.dfg.value_ty(result) == Type::I1
                             && func.inst_set().has_is_zero().is_some()
                         {
-                            func.dfg.replace_inst(
-                                inst,
-                                Box::new(cmp::IsZero::new(func.inst_set(), arg)),
-                            );
+                            func.dfg
+                                .replace_inst(inst, Box::new(cmp::IsZero::new(func.inst_set(), arg)));
                             return true;
                         }
                     }
@@ -1427,7 +1425,10 @@ block0:
         let base_word = fb.make_imm_value(Immediate::from_i256(I256::from(64u64), Type::I256));
         let base_ptr = fb.insert_inst(IntToPtr::new(is, base_word, ptr_outer_ty), ptr_outer_ty);
         let zero = fb.make_imm_value(Immediate::zero(Type::I8));
-        let gep = fb.insert_inst(Gep::new(is, smallvec![base_ptr, zero, zero]), ptr_i256_ty);
+        let gep = fb.insert_inst(
+            Gep::new(is, smallvec![base_ptr, zero, zero]),
+            ptr_i256_ty,
+        );
         let roundtrip = fb.insert_inst(PtrToInt::new(is, gep, Type::I256), Type::I256);
         fb.insert_inst_no_result(Return::new_unchecked(is, smallvec![roundtrip].into()));
         fb.seal_all();

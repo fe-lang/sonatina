@@ -7,8 +7,13 @@
 //! (limb[0] is least significant).
 
 /// u256 addition: result = a + b (wrapping)
+///
+/// # Safety
+///
+/// `a` and `b` must point to initialized 4-limb values and `result` must point
+/// to writable storage for one 4-limb value.
 #[unsafe(no_mangle)]
-pub extern "C" fn __u256_add(a: *const [u64; 4], b: *const [u64; 4], result: *mut [u64; 4]) {
+pub unsafe extern "C" fn __u256_add(a: *const [u64; 4], b: *const [u64; 4], result: *mut [u64; 4]) {
     let a = unsafe { &*a };
     let b = unsafe { &*b };
     let r = unsafe { &mut *result };
@@ -22,8 +27,13 @@ pub extern "C" fn __u256_add(a: *const [u64; 4], b: *const [u64; 4], result: *mu
 }
 
 /// u256 subtraction: result = a - b (wrapping)
+///
+/// # Safety
+///
+/// `a` and `b` must point to initialized 4-limb values and `result` must point
+/// to writable storage for one 4-limb value.
 #[unsafe(no_mangle)]
-pub extern "C" fn __u256_sub(a: *const [u64; 4], b: *const [u64; 4], result: *mut [u64; 4]) {
+pub unsafe extern "C" fn __u256_sub(a: *const [u64; 4], b: *const [u64; 4], result: *mut [u64; 4]) {
     let a = unsafe { &*a };
     let b = unsafe { &*b };
     let r = unsafe { &mut *result };
@@ -37,16 +47,24 @@ pub extern "C" fn __u256_sub(a: *const [u64; 4], b: *const [u64; 4], result: *mu
 }
 
 /// u256 equality: returns 1 if a == b, 0 otherwise
+///
+/// # Safety
+///
+/// `a` and `b` must point to initialized 4-limb values.
 #[unsafe(no_mangle)]
-pub extern "C" fn __u256_eq(a: *const [u64; 4], b: *const [u64; 4]) -> u64 {
+pub unsafe extern "C" fn __u256_eq(a: *const [u64; 4], b: *const [u64; 4]) -> u64 {
     let a = unsafe { &*a };
     let b = unsafe { &*b };
     (a == b) as u64
 }
 
 /// u256 less-than (unsigned): returns 1 if a < b, 0 otherwise
+///
+/// # Safety
+///
+/// `a` and `b` must point to initialized 4-limb values.
 #[unsafe(no_mangle)]
-pub extern "C" fn __u256_lt(a: *const [u64; 4], b: *const [u64; 4]) -> u64 {
+pub unsafe extern "C" fn __u256_lt(a: *const [u64; 4], b: *const [u64; 4]) -> u64 {
     let a = unsafe { &*a };
     let b = unsafe { &*b };
     for i in (0..4).rev() {
@@ -61,15 +79,24 @@ pub extern "C" fn __u256_lt(a: *const [u64; 4], b: *const [u64; 4]) -> u64 {
 }
 
 /// u256 is-zero: returns 1 if a == 0, 0 otherwise
+///
+/// # Safety
+///
+/// `a` must point to an initialized 4-limb value.
 #[unsafe(no_mangle)]
-pub extern "C" fn __u256_is_zero(a: *const [u64; 4]) -> u64 {
+pub unsafe extern "C" fn __u256_is_zero(a: *const [u64; 4]) -> u64 {
     let a = unsafe { &*a };
     (a[0] | a[1] | a[2] | a[3] == 0) as u64
 }
 
 /// u256 multiplication: result = a * b (wrapping, lower 256 bits)
+///
+/// # Safety
+///
+/// `a` and `b` must point to initialized 4-limb values and `result` must point
+/// to writable storage for one 4-limb value.
 #[unsafe(no_mangle)]
-pub extern "C" fn __u256_mul(a: *const [u64; 4], b: *const [u64; 4], result: *mut [u64; 4]) {
+pub unsafe extern "C" fn __u256_mul(a: *const [u64; 4], b: *const [u64; 4], result: *mut [u64; 4]) {
     let a = unsafe { &*a };
     let b = unsafe { &*b };
     let r = unsafe { &mut *result };
@@ -88,8 +115,13 @@ pub extern "C" fn __u256_mul(a: *const [u64; 4], b: *const [u64; 4], result: *mu
 }
 
 /// u256 addmod: result = (a + b) % m
+///
+/// # Safety
+///
+/// `a`, `b`, and `m` must point to initialized 4-limb values and `result` must
+/// point to writable storage for one 4-limb value.
 #[unsafe(no_mangle)]
-pub extern "C" fn __u256_addmod(
+pub unsafe extern "C" fn __u256_addmod(
     a: *const [u64; 4],
     b: *const [u64; 4],
     m: *const [u64; 4],
@@ -146,8 +178,13 @@ pub extern "C" fn __u256_addmod(
 }
 
 /// u256 mulmod: result = (a * b) % m
+///
+/// # Safety
+///
+/// `a`, `b`, and `m` must point to initialized 4-limb values and `result` must
+/// point to writable storage for one 4-limb value.
 #[unsafe(no_mangle)]
-pub extern "C" fn __u256_mulmod(
+pub unsafe extern "C" fn __u256_mulmod(
     a: *const [u64; 4],
     b: *const [u64; 4],
     m: *const [u64; 4],
@@ -226,7 +263,7 @@ mod tests {
         let a = [3u64, 0, 0, 0];
         let b = [4u64, 0, 0, 0];
         let mut r = [0u64; 4];
-        __u256_add(&a, &b, &mut r);
+        unsafe { __u256_add(&a, &b, &mut r) };
         assert_eq!(r, [7, 0, 0, 0]);
     }
 
@@ -235,7 +272,7 @@ mod tests {
         let a = [7u64, 0, 0, 0];
         let b = [3u64, 0, 0, 0];
         let mut r = [0u64; 4];
-        __u256_mul(&a, &b, &mut r);
+        unsafe { __u256_mul(&a, &b, &mut r) };
         assert_eq!(r, [21, 0, 0, 0]);
     }
 
@@ -245,7 +282,7 @@ mod tests {
         let b = [17u64, 0, 0, 0];
         let m = [100u64, 0, 0, 0];
         let mut r = [0u64; 4];
-        __u256_addmod(&a, &b, &m, &mut r);
+        unsafe { __u256_addmod(&a, &b, &m, &mut r) };
         assert_eq!(r, [59, 0, 0, 0]); // 42 + 17 = 59 < 100
     }
 
@@ -255,7 +292,7 @@ mod tests {
         let b = [20u64, 0, 0, 0];
         let m = [100u64, 0, 0, 0];
         let mut r = [0u64; 4];
-        __u256_addmod(&a, &b, &m, &mut r);
+        unsafe { __u256_addmod(&a, &b, &m, &mut r) };
         assert_eq!(r, [10, 0, 0, 0]); // (90 + 20) % 100 = 10
     }
 
@@ -265,7 +302,7 @@ mod tests {
         let b = [3u64, 0, 0, 0];
         let m = [100u64, 0, 0, 0];
         let mut r = [0u64; 4];
-        __u256_mulmod(&a, &b, &m, &mut r);
+        unsafe { __u256_mulmod(&a, &b, &m, &mut r) };
         assert_eq!(r, [21, 0, 0, 0]); // 7 * 3 = 21 < 100
     }
 
@@ -274,8 +311,8 @@ mod tests {
         let a = [42u64, 0, 0, 0];
         let b = [42u64, 0, 0, 0];
         let c = [43u64, 0, 0, 0];
-        assert_eq!(__u256_eq(&a, &b), 1);
-        assert_eq!(__u256_eq(&a, &c), 0);
+        assert_eq!(unsafe { __u256_eq(&a, &b) }, 1);
+        assert_eq!(unsafe { __u256_eq(&a, &c) }, 0);
     }
 
     #[test]
@@ -286,9 +323,9 @@ mod tests {
         let mut x2 = [0u64; 4];
         let mut x4 = [0u64; 4];
         let mut x5 = [0u64; 4];
-        __u256_mulmod(&three, &three, &m, &mut x2); // 9
-        __u256_mulmod(&x2, &x2, &m, &mut x4); // 81
-        __u256_mulmod(&x4, &three, &m, &mut x5); // 243
+        unsafe { __u256_mulmod(&three, &three, &m, &mut x2) }; // 9
+        unsafe { __u256_mulmod(&x2, &x2, &m, &mut x4) }; // 81
+        unsafe { __u256_mulmod(&x4, &three, &m, &mut x5) }; // 243
         assert_eq!(x5, [243, 0, 0, 0]);
     }
 }

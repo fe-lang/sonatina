@@ -241,7 +241,10 @@ impl AggregateExpandAbi {
 
                 func.dfg.replace_inst(
                     inst,
-                    Box::new(control_flow::Return::new(func.inst_set(), new_args.into())),
+                    Box::new(control_flow::Return::new(
+                        func.inst_set(),
+                        new_args.into(),
+                    )),
                 );
             }
         }
@@ -287,7 +290,11 @@ impl AggregateExpandAbi {
         let mut cursor = InstInserter::at_location(loc);
         let new_call = cursor.insert_inst_data(
             func,
-            control_flow::Call::new(func.inst_set(), *call.callee(), new_args),
+            control_flow::Call::new(
+                func.inst_set(),
+                *call.callee(),
+                new_args,
+            ),
         );
         let new_results = cursor.make_results(func, new_call, &plan.new_ret_tys);
         cursor.attach_results(func, new_call, &new_results);

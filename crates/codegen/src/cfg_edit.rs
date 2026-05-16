@@ -405,7 +405,10 @@ impl<'f> CfgEditor<'f> {
         inserter.insert_block_before(self.func, new_preheader);
 
         inserter.set_location(CursorLocation::BlockTop(new_preheader));
-        inserter.append_inst_data(self.func, Jump::new(self.func.inst_set(), lp_header));
+        inserter.append_inst_data(
+            self.func,
+            Jump::new(self.func.inst_set(), lp_header),
+        );
 
         for &pred in outside_preds {
             assert!(

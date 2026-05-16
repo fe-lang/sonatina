@@ -1,10 +1,12 @@
+#![allow(clippy::crosspointer_transmute)]
+
 use sonatina_codegen::{Backend, Compile, OptLevel, isa::cranelift::CraneliftBackend};
 use sonatina_ir::{
-    Linkage, Signature, Type,
+    I256, Immediate, Linkage, Signature, Type,
     builder::ModuleBuilder,
     func_cursor::InstInserter,
     global_variable::{GlobalVariableData, GvInitializer},
-    inst::{arith, cmp, control_flow, data},
+    inst::{arith, cast, cmp, control_flow, data},
     isa::{Isa, native::Native},
     module::ModuleCtx,
 };
@@ -118,6 +120,216 @@ fn cranelift_arithmetic_chain() {
 }
 
 #[test]
+fn cranelift_native_casts_round_trip_pointer_values() {
+    let isa = native_isa();
+    let is = isa.inst_set();
+    let mb = native_module_builder();
+    let objref_ty = mb.objref_type(Type::I64);
+
+    let sig = Signature::new_single("cast_round_trip", Linkage::Public, &[], Type::I64);
+    let func_ref = mb.declare_function(sig).unwrap();
+
+    let mut fb = mb.func_builder::<InstInserter>(func_ref);
+    let entry = fb.append_block();
+    fb.switch_to_block(entry);
+
+    let slot = fb.insert_inst(data::ObjAlloc::new(is, Type::I64), objref_ty);
+    let addr = fb.insert_inst(cast::PtrToInt::new(is, slot, Type::I64), Type::I64);
+    let cast_addr = fb.insert_inst(cast::Bitcast::new(is, addr, Type::I64), Type::I64);
+    let ptr = fb.insert_inst(cast::IntToPtr::new(is, cast_addr, objref_ty), objref_ty);
+    let value = fb.make_imm_value(123i64);
+    fb.insert_inst_no_result(data::ObjStore::new(is, ptr, value));
+    let loaded = fb.insert_inst(data::ObjLoad::new(is, ptr), Type::I64);
+    fb.insert_inst_no_result(control_flow::Return::new_single(is, loaded));
+    fb.seal_all();
+    fb.finish();
+
+    let module = mb.build();
+    let backend = CraneliftBackend::new();
+    let artifact = backend.compile_module(&module).expect("compilation failed");
+
+    let f: fn() -> i64 = unsafe {
+        let ptr = artifact
+            .get_func_ptr::<fn() -> i64>("cast_round_trip")
+            .unwrap();
+        std::mem::transmute(ptr)
+    };
+
+    assert_eq!(f(), 123);
+}
+
+#[test]
+fn cranelift_native_i256_address_casts_and_memory_round_trip() {
+    let isa = native_isa();
+    let is = isa.inst_set();
+    let mb = native_module_builder();
+    let ptr_ty = mb.ptr_type(Type::I32);
+
+    let sig = Signature::new_single("i256_memory_round_trip", Linkage::Public, &[], Type::I32);
+    let func_ref = mb.declare_function(sig).unwrap();
+
+    let mut fb = mb.func_builder::<InstInserter>(func_ref);
+    let entry = fb.append_block();
+    fb.switch_to_block(entry);
+
+    let slot = fb.insert_inst(data::Alloca::new(is, Type::I32), ptr_ty);
+    let zero = fb.make_imm_value(0i32);
+    fb.insert_inst_no_result(data::Mstore::new(is, slot, zero, Type::I32));
+
+    let slot_addr = fb.insert_inst(cast::PtrToInt::new(is, slot, Type::I256), Type::I256);
+    let loaded_word = fb.insert_inst(data::Mload::new(is, slot_addr, Type::I256), Type::I256);
+    let loaded_i32 = fb.insert_inst(cast::Trunc::new(is, loaded_word, Type::I32), Type::I32);
+    let five = fb.make_imm_value(5i32);
+    let scalar_sum = fb.insert_inst(arith::Add::new(is, loaded_i32, five), Type::I32);
+    let widened = fb.insert_inst(cast::Sext::new(is, scalar_sum, Type::I256), Type::I256);
+    let seven = fb.make_imm_value(Immediate::from_i256(I256::from(7u8), Type::I256));
+    let word_sum = fb.insert_inst(arith::Add::new(is, widened, seven), Type::I256);
+    let twenty = fb.make_imm_value(Immediate::from_i256(I256::from(20u8), Type::I256));
+    let is_below_twenty = fb.insert_inst(cmp::Lt::new(is, word_sum, twenty), Type::I1);
+
+    fb.insert_inst_no_result(data::Mstore::new(is, slot_addr, word_sum, Type::I256));
+    let stored_low = fb.insert_inst(data::Mload::new(is, slot, Type::I32), Type::I32);
+    let flag = fb.insert_inst(cast::Zext::new(is, is_below_twenty, Type::I32), Type::I32);
+    let result = fb.insert_inst(arith::Add::new(is, stored_low, flag), Type::I32);
+    fb.insert_inst_no_result(control_flow::Return::new_single(is, result));
+    fb.seal_all();
+    fb.finish();
+
+    let module = mb.build();
+    let backend = CraneliftBackend::new();
+    let artifact = backend.compile_module(&module).expect("compilation failed");
+
+    let f: fn() -> i32 = unsafe {
+        let ptr = artifact
+            .get_func_ptr::<fn() -> i32>("i256_memory_round_trip")
+            .unwrap();
+        std::mem::transmute(ptr)
+    };
+
+    assert_eq!(f(), 13);
+}
+
+#[test]
+fn cranelift_native_i256_bool_sext_is_zero_one() {
+    let isa = native_isa();
+    let is = isa.inst_set();
+    let mb = native_module_builder();
+
+    let sig = Signature::new_single("i256_bool_sext", Linkage::Public, &[], Type::I32);
+    let func_ref = mb.declare_function(sig).unwrap();
+
+    let mut fb = mb.func_builder::<InstInserter>(func_ref);
+    let entry = fb.append_block();
+    fb.switch_to_block(entry);
+
+    let true_value = fb.make_imm_value(true);
+    let widened = fb.insert_inst(cast::Sext::new(is, true_value, Type::I256), Type::I256);
+    let narrowed = fb.insert_inst(cast::Trunc::new(is, widened, Type::I32), Type::I32);
+    fb.insert_inst_no_result(control_flow::Return::new_single(is, narrowed));
+    fb.seal_all();
+    fb.finish();
+
+    let module = mb.build();
+    let backend = CraneliftBackend::new();
+    let artifact = backend.compile_module(&module).expect("compilation failed");
+
+    let f: fn() -> i32 = unsafe {
+        let ptr = artifact
+            .get_func_ptr::<fn() -> i32>("i256_bool_sext")
+            .unwrap();
+        std::mem::transmute(ptr)
+    };
+
+    assert_eq!(f(), 1);
+}
+
+#[test]
+fn cranelift_native_integer_edge_ops() {
+    let isa = native_isa();
+    let is = isa.inst_set();
+    let mb = native_module_builder();
+
+    let sig = Signature::new_single("integer_edge_ops", Linkage::Public, &[], Type::I64);
+    let func_ref = mb.declare_function(sig).unwrap();
+
+    let mut fb = mb.func_builder::<InstInserter>(func_ref);
+    let entry = fb.append_block();
+    fb.switch_to_block(entry);
+
+    let ten = fb.make_imm_value(10i64);
+    let three = fb.make_imm_value(3i64);
+    let neg_ten = fb.make_imm_value(-10i64);
+    let urem = fb.insert_inst(arith::Umod::new(is, ten, three), Type::I64);
+    let srem = fb.insert_inst(arith::Smod::new(is, neg_ten, three), Type::I64);
+
+    let i32_max = fb.make_imm_value(i32::MAX);
+    let i32_min = fb.make_imm_value(i32::MIN);
+    let i32_all_ones = fb.make_imm_value(-1i32);
+    let i32_one = fb.make_imm_value(1i32);
+    let i32_two = fb.make_imm_value(2i32);
+    let i32_zero = fb.make_imm_value(0i32);
+    let [_, uadd_overflow] = fb.insert_uaddo(i32_all_ones, i32_one);
+    let [_, sadd_overflow] = fb.insert_saddo(i32_max, i32_one);
+    let [_, usub_overflow] = fb.insert_usubo(i32_zero, i32_one);
+    let [_, ssub_overflow] = fb.insert_ssubo(i32_min, i32_one);
+    let [_, umul_overflow] = fb.insert_umulo(i32_all_ones, i32_two);
+    let [_, smul_overflow] = fb.insert_smulo(i32_max, i32_two);
+    let [_, neg_overflow] = fb.insert_snego(i32_min);
+
+    let i32_neg_six = fb.make_imm_value(-6i32);
+    let i32_ten = fb.make_imm_value(10i32);
+    let i32_five = fb.make_imm_value(5i32);
+    let i32_65536 = fb.make_imm_value(65_536i32);
+
+    let uaddsat = fb.insert_uaddsat(i32_neg_six, i32_ten);
+    let saddsat = fb.insert_saddsat(i32_max, i32_one);
+    let usubsat = fb.insert_usubsat(i32_five, i32_ten);
+    let ssubsat = fb.insert_ssubsat(i32_min, i32_one);
+    let umulsat = fb.insert_umulsat(i32_65536, i32_65536);
+    let smulsat_hi = fb.insert_smulsat(i32_max, i32_two);
+    let smulsat_lo = fb.insert_smulsat(i32_min, i32_two);
+
+    let mut acc = fb.insert_inst(arith::Add::new(is, urem, srem), Type::I64);
+    for value in [
+        uadd_overflow,
+        sadd_overflow,
+        usub_overflow,
+        ssub_overflow,
+        umul_overflow,
+        smul_overflow,
+        neg_overflow,
+    ] {
+        let extended = fb.insert_inst(cast::Zext::new(is, value, Type::I64), Type::I64);
+        acc = fb.insert_inst(arith::Add::new(is, acc, extended), Type::I64);
+    }
+    for value in [uaddsat, usubsat, umulsat] {
+        let extended = fb.insert_inst(cast::Zext::new(is, value, Type::I64), Type::I64);
+        acc = fb.insert_inst(arith::Add::new(is, acc, extended), Type::I64);
+    }
+    for value in [saddsat, ssubsat, smulsat_hi, smulsat_lo] {
+        let extended = fb.insert_inst(cast::Sext::new(is, value, Type::I64), Type::I64);
+        acc = fb.insert_inst(arith::Add::new(is, acc, extended), Type::I64);
+    }
+
+    fb.insert_inst_no_result(control_flow::Return::new_single(is, acc));
+    fb.seal_all();
+    fb.finish();
+
+    let module = mb.build();
+    let backend = CraneliftBackend::new();
+    let artifact = backend.compile_module(&module).expect("compilation failed");
+
+    let f: fn() -> i64 = unsafe {
+        let ptr = artifact
+            .get_func_ptr::<fn() -> i64>("integer_edge_ops")
+            .unwrap();
+        std::mem::transmute(ptr)
+    };
+
+    assert_eq!(f(), 8_589_934_595);
+}
+
+#[test]
 fn cranelift_through_generic_compile_pipeline() {
     let isa = native_isa();
     let is = isa.inst_set();
@@ -149,6 +361,220 @@ fn cranelift_through_generic_compile_pipeline() {
 
     assert_eq!(f(42), 42);
     assert_eq!(f(-1), -1);
+}
+
+#[test]
+fn cranelift_emits_native_object_for_main() {
+    let isa = native_isa();
+    let is = isa.inst_set();
+    let mb = {
+        let ctx = ModuleCtx::new(&isa);
+        ModuleBuilder::new(ctx)
+    };
+
+    let sig = Signature::new_single("main", Linkage::Public, &[], Type::I32);
+    let func_ref = mb.declare_function(sig).unwrap();
+
+    let mut fb = mb.func_builder::<InstInserter>(func_ref);
+    let entry = fb.append_block();
+    fb.switch_to_block(entry);
+    let status = fb.make_imm_value(42i32);
+    fb.insert_inst_no_result(control_flow::Return::new_single(is, status));
+    fb.seal_all();
+    fb.finish();
+
+    let module = mb.build();
+    let artifact = CraneliftBackend::new()
+        .compile_module_to_object(&module)
+        .expect("object compilation failed");
+
+    assert!(!artifact.bytes.is_empty());
+    assert!(artifact.func_map.contains_key("main"));
+}
+
+#[test]
+fn cranelift_emits_native_object_with_external_import_call() {
+    let isa = native_isa();
+    let is = isa.inst_set();
+    let mb = native_module_builder();
+
+    let putchar_sig = Signature::new_single("putchar", Linkage::External, &[Type::I32], Type::I32);
+    let putchar = mb.declare_function(putchar_sig).unwrap();
+    let main_sig = Signature::new_single("main", Linkage::Public, &[], Type::I32);
+    let main = mb.declare_function(main_sig).unwrap();
+
+    let mut fb = mb.func_builder::<InstInserter>(main);
+    let entry = fb.append_block();
+    fb.switch_to_block(entry);
+    let ch = fb.make_imm_value(65i32);
+    let _ = fb.insert_inst(
+        control_flow::Call::new(is, putchar, smallvec::smallvec![ch]),
+        Type::I32,
+    );
+    let status = fb.make_imm_value(0i32);
+    fb.insert_inst_no_result(control_flow::Return::new_single(is, status));
+    fb.seal_all();
+    fb.finish();
+
+    let module = mb.build();
+    let artifact = CraneliftBackend::new()
+        .compile_module_to_object(&module)
+        .expect("object compilation failed");
+
+    assert!(!artifact.bytes.is_empty());
+    assert!(artifact.func_map.contains_key("main"));
+    assert!(artifact.func_map.contains_key("putchar"));
+}
+
+#[test]
+fn cranelift_insert_value_builds_byte_array() {
+    let isa = native_isa();
+    let is = isa.inst_set();
+    let mb = native_module_builder();
+    let arr_ty = mb.declare_array_type(Type::I8, 4);
+
+    let sig = Signature::new_single("byte_array_sum", Linkage::Public, &[], Type::I32);
+    let func_ref = mb.declare_function(sig).unwrap();
+
+    let mut fb = mb.func_builder::<InstInserter>(func_ref);
+    let entry = fb.append_block();
+    fb.switch_to_block(entry);
+
+    let mut arr = fb.make_undef_value(arr_ty);
+    for (idx, byte) in [80i8, 85, 83, 72].into_iter().enumerate() {
+        let idx = fb.make_imm_value(idx as i64);
+        let byte = fb.make_imm_value(byte);
+        arr = fb.insert_inst(data::InsertValue::new(is, arr, idx, byte), arr_ty);
+    }
+
+    let mut sum = fb.make_imm_value(0i32);
+    for idx in 0..4 {
+        let idx = fb.make_imm_value(idx as i64);
+        let byte = fb.insert_inst(data::ExtractValue::new(is, arr, idx), Type::I8);
+        let widened = fb.insert_inst(cast::Zext::new(is, byte, Type::I32), Type::I32);
+        sum = fb.insert_inst(arith::Add::new(is, sum, widened), Type::I32);
+    }
+
+    fb.insert_inst_no_result(control_flow::Return::new_single(is, sum));
+    fb.seal_all();
+    fb.finish();
+
+    let module = mb.build();
+    let artifact = CraneliftBackend::new()
+        .compile_module_to_object(&module)
+        .expect("object compilation failed");
+
+    assert!(!artifact.bytes.is_empty());
+    assert!(artifact.func_map.contains_key("byte_array_sum"));
+}
+
+#[test]
+fn cranelift_aggregate_offsets_cover_aligned_struct_fields() {
+    let isa = native_isa();
+    let is = isa.inst_set();
+    let mb = native_module_builder();
+    let arr_ty = mb.declare_array_type(Type::I8, 16);
+    let struct_ty = mb.declare_struct_type("Input", &[arr_ty, Type::I256], false);
+    let struct_ref_ty = mb.objref_type(struct_ty);
+    let arr_ref_ty = mb.objref_type(arr_ty);
+    let byte_ref_ty = mb.objref_type(Type::I8);
+    let i256_ref_ty = mb.objref_type(Type::I256);
+
+    let sig = Signature::new_single("aligned_struct_fields", Linkage::Public, &[], Type::I8);
+    let func_ref = mb.declare_function(sig).unwrap();
+
+    let mut fb = mb.func_builder::<InstInserter>(func_ref);
+    let entry = fb.append_block();
+    fb.switch_to_block(entry);
+
+    let object = fb.insert_inst(data::ObjAlloc::new(is, struct_ty), struct_ref_ty);
+    let idx0 = fb.make_imm_value(0i64);
+    let idx1 = fb.make_imm_value(1i64);
+    let bytes = fb.insert_inst(
+        data::ObjProj::new(is, smallvec::smallvec![object, idx0]),
+        arr_ref_ty,
+    );
+    let first_byte = fb.insert_inst(data::ObjIndex::new(is, bytes, idx0), byte_ref_ty);
+    let byte = fb.make_imm_value(42i8);
+    fb.insert_inst_no_result(data::ObjStore::new(is, first_byte, byte));
+
+    let len = fb.insert_inst(
+        data::ObjProj::new(is, smallvec::smallvec![object, idx1]),
+        i256_ref_ty,
+    );
+    let len_value = fb.make_imm_value(Immediate::from_i256(I256::from(3u8), Type::I256));
+    fb.insert_inst_no_result(data::ObjStore::new(is, len, len_value));
+
+    let loaded = fb.insert_inst(data::ObjLoad::new(is, first_byte), Type::I8);
+    fb.insert_inst_no_result(control_flow::Return::new_single(is, loaded));
+    fb.seal_all();
+    fb.finish();
+
+    let module = mb.build();
+    let artifact = CraneliftBackend::new()
+        .compile_module_to_object(&module)
+        .expect("object compilation failed");
+
+    assert!(!artifact.bytes.is_empty());
+    assert!(artifact.func_map.contains_key("aligned_struct_fields"));
+}
+
+#[test]
+fn cranelift_sret_uses_full_aggregate_size() {
+    let isa = native_isa();
+    let is = isa.inst_set();
+    let mb = native_module_builder();
+    let arr_ty = mb.declare_array_type(Type::I8, 16);
+    let struct_ty = mb.declare_struct_type("InputReturn", &[arr_ty, Type::I256], false);
+
+    let make_sig = Signature::new_single("make_input", Linkage::Private, &[], struct_ty);
+    let make_ref = mb.declare_function(make_sig).unwrap();
+    let caller_sig = Signature::new_single("read_len", Linkage::Public, &[], Type::I32);
+    let caller_ref = mb.declare_function(caller_sig).unwrap();
+
+    {
+        let mut fb = mb.func_builder::<InstInserter>(make_ref);
+        let entry = fb.append_block();
+        fb.switch_to_block(entry);
+
+        let idx0 = fb.make_imm_value(0i64);
+        let first = fb.make_imm_value(1i8);
+        let bytes = fb.make_undef_value(arr_ty);
+        let bytes = fb.insert_inst(data::InsertValue::new(is, bytes, idx0, first), arr_ty);
+        let len = fb.make_imm_value(Immediate::from_i256(I256::from(3u8), Type::I256));
+        let idx1 = fb.make_imm_value(1i64);
+        let mut value = fb.make_undef_value(struct_ty);
+        value = fb.insert_inst(data::InsertValue::new(is, value, idx0, bytes), struct_ty);
+        value = fb.insert_inst(data::InsertValue::new(is, value, idx1, len), struct_ty);
+        fb.insert_inst_no_result(control_flow::Return::new_single(is, value));
+        fb.seal_all();
+        fb.finish();
+    }
+
+    {
+        let mut fb = mb.func_builder::<InstInserter>(caller_ref);
+        let entry = fb.append_block();
+        fb.switch_to_block(entry);
+
+        let value = fb.insert_inst(
+            control_flow::Call::new(is, make_ref, smallvec::smallvec![]),
+            struct_ty,
+        );
+        let idx1 = fb.make_imm_value(1i64);
+        let len = fb.insert_inst(data::ExtractValue::new(is, value, idx1), Type::I256);
+        let len = fb.insert_inst(cast::Trunc::new(is, len, Type::I32), Type::I32);
+        fb.insert_inst_no_result(control_flow::Return::new_single(is, len));
+        fb.seal_all();
+        fb.finish();
+    }
+
+    let module = mb.build();
+    let artifact = CraneliftBackend::new()
+        .compile_module_to_object(&module)
+        .expect("object compilation failed");
+
+    assert!(!artifact.bytes.is_empty());
+    assert!(artifact.func_map.contains_key("read_len"));
 }
 
 #[test]

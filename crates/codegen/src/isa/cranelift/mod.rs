@@ -8,7 +8,8 @@ use cranelift_codegen::{
     settings::{self, Configurable},
 };
 use cranelift_jit::{JITBuilder, JITModule};
-use cranelift_module::{FuncId, Module as ClifModule};
+use cranelift_module::FuncId;
+use cranelift_object::{ObjectBuilder, ObjectModule};
 
 use sonatina_ir::Module;
 use sonatina_triple::Architecture;
@@ -50,6 +51,11 @@ impl CraneliftArtifact {
     }
 }
 
+pub struct NativeObjectArtifact {
+    pub bytes: Vec<u8>,
+    pub func_map: HashMap<String, FuncId>,
+}
+
 pub struct CraneliftBackend {
     opt_level: settings::OptLevel,
 }
@@ -66,7 +72,7 @@ impl CraneliftBackend {
         self
     }
 
-    fn build_isa(&self) -> Result<Arc<dyn clif_isa::TargetIsa>, CraneliftError> {
+    fn build_isa(&self, is_pic: bool) -> Result<Arc<dyn clif_isa::TargetIsa>, CraneliftError> {
         let mut flag_builder = settings::builder();
         flag_builder
             .set(
@@ -78,12 +84,57 @@ impl CraneliftBackend {
                 },
             )
             .map_err(|e| CraneliftError::Compilation(e.to_string()))?;
+        flag_builder
+            .set("is_pic", if is_pic { "true" } else { "false" })
+            .map_err(|e| CraneliftError::Compilation(e.to_string()))?;
         let flags = settings::Flags::new(flag_builder);
         let isa = cranelift_native::builder()
             .map_err(|e| CraneliftError::UnsupportedTarget(e.to_string()))?
             .finish(flags)
             .map_err(|e| CraneliftError::Compilation(e.to_string()))?;
-        Ok(isa.into())
+        Ok(isa)
+    }
+
+    fn ensure_supported_target(&self, module: &Module) -> Result<(), CraneliftError> {
+        let triple = module.ctx.triple;
+        if matches!(
+            triple.architecture,
+            Architecture::X86_64 | Architecture::Aarch64
+        ) {
+            Ok(())
+        } else {
+            Err(CraneliftError::UnsupportedTarget(format!(
+                "CraneliftBackend requires x86_64 or aarch64 target, got {triple}"
+            )))
+        }
+    }
+
+    pub fn compile_module_to_object(
+        &self,
+        module: &Module,
+    ) -> Result<NativeObjectArtifact, Vec<CraneliftError>> {
+        self.ensure_supported_target(module).map_err(|e| vec![e])?;
+
+        let isa = self.build_isa(true).map_err(|e| vec![e])?;
+        let builder =
+            ObjectBuilder::new(isa, "sonatina", cranelift_module::default_libcall_names())
+                .map_err(|e| vec![CraneliftError::Compilation(e.to_string())])?;
+        let mut object = ObjectModule::new(builder);
+
+        let func_map = translate::translate_module(module, &mut object, true)
+            .map_err(|e| vec![CraneliftError::Translation(e)])?;
+        let product = object.finish();
+        let bytes = product
+            .emit()
+            .map_err(|e| vec![CraneliftError::Compilation(e.to_string())])?;
+
+        Ok(NativeObjectArtifact { bytes, func_map })
+    }
+}
+
+impl Default for CraneliftBackend {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -92,17 +143,9 @@ impl Backend for CraneliftBackend {
     type Error = CraneliftError;
 
     fn compile_module(&self, module: &Module) -> Result<Self::Artifact, Vec<Self::Error>> {
-        let triple = module.ctx.triple;
-        if !matches!(
-            triple.architecture,
-            Architecture::X86_64 | Architecture::Aarch64
-        ) {
-            return Err(vec![CraneliftError::UnsupportedTarget(format!(
-                "CraneliftBackend requires x86_64 or aarch64 target, got {triple}"
-            ))]);
-        }
+        self.ensure_supported_target(module).map_err(|e| vec![e])?;
 
-        let isa = self.build_isa().map_err(|e| vec![e])?;
+        let isa = self.build_isa(false).map_err(|e| vec![e])?;
         let mut builder = JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
 
         // Register u256 runtime intrinsics
@@ -117,7 +160,7 @@ impl Backend for CraneliftBackend {
 
         let mut jit = JITModule::new(builder);
 
-        let func_map = translate::translate_module(module, &mut jit)
+        let func_map = translate::translate_module(module, &mut jit, false)
             .map_err(|e| vec![CraneliftError::Translation(e)])?;
 
         jit.finalize_definitions()

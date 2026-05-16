@@ -100,10 +100,7 @@ pub struct EvmCompiler {
 }
 
 impl EvmCompiler {
-    pub fn from_module(
-        module: &Module,
-        opt_level: OptLevel,
-    ) -> Result<Self, Vec<ObjectCompileError>> {
+    pub fn from_module(module: &Module, opt_level: OptLevel) -> Result<Self, Vec<ObjectCompileError>> {
         let backend = evm_backend_for_module(module, opt_level)?;
         Ok(Self {
             evm_backend: backend,
