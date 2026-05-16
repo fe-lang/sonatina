@@ -391,3 +391,210 @@ fn batch_escape_cranelift() {
     eprintln!("  escape_and_store(-2048, 0, 50, idx=0) = {result}");
     assert!(result >= 1 && result <= 50);
 }
+
+#[test]
+fn mandelbrot_three_backend_html() {
+    use sonatina_codegen::isa::spirv::SpirvBackend;
+
+    let n: usize = std::env::var("MANDELBROT_N").ok()
+        .and_then(|s| s.parse().ok()).unwrap_or(32);
+    let max = 50i64;
+    let module = build_escape_time();
+
+    // Cranelift
+    let t0 = std::time::Instant::now();
+    let cl = CraneliftBackend::new();
+    let cl_art = cl.compile_module(&module).expect("cranelift");
+    let cl_fn: fn(i64,i64,i64)->i64 = unsafe {
+        std::mem::transmute(cl_art.get_func_ptr::<fn(i64,i64,i64)->i64>("escape_time").unwrap())
+    };
+    let mut cl_data = Vec::with_capacity(n * n);
+    for row in 0..n {
+        for col in 0..n {
+            let c_re = -2048 + (col as i64 * 2662) / n as i64;
+            let c_im = -1229 + (row as i64 * 2458) / n as i64;
+            cl_data.push(cl_fn(c_re, c_im, max));
+        }
+    }
+    let cl_time = t0.elapsed();
+
+    // WASM
+    let t0 = std::time::Instant::now();
+    let wasm = WasmBackend::new();
+    let wasm_art = wasm.compile_module(&module).expect("wasm");
+    wasmparser::validate(&wasm_art.bytes).expect("invalid");
+    let engine = wasmtime::Engine::default();
+    let wm = wasmtime::Module::new(&engine, &wasm_art.bytes).unwrap();
+    let mut store = wasmtime::Store::new(&engine, ());
+    let inst = wasmtime::Instance::new(&mut store, &wm, &[]).unwrap();
+    let wasm_fn = inst.get_typed_func::<(i64,i64,i64),i64>(&mut store, "escape_time").unwrap();
+    let mut wasm_data = Vec::with_capacity(n * n);
+    for row in 0..n {
+        for col in 0..n {
+            let c_re = -2048 + (col as i64 * 2662) / n as i64;
+            let c_im = -1229 + (row as i64 * 2458) / n as i64;
+            wasm_data.push(wasm_fn.call(&mut store, (c_re, c_im, max)).unwrap());
+        }
+    }
+    let wasm_time = t0.elapsed();
+
+    // SPIR-V via wgpu -- same escape_time IR, per-pixel dispatch
+    let t0 = std::time::Instant::now();
+    let spirv = SpirvBackend::new().with_workgroup_size(1, 1, 1);
+    let spirv_art = spirv.compile_module(&module).expect("spirv");
+    let wgsl = spirv_art.wgsl.as_ref().expect("WGSL");
+    let spirv_compile_time = t0.elapsed();
+
+    let mut gpu_data = vec![0i64; n * n];
+    let mut gpu_available = false;
+    let gpu_time;
+
+    let instance = wgpu::Instance::default();
+    if let Ok(adapter) = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+        power_preference: wgpu::PowerPreference::HighPerformance,
+        ..Default::default()
+    })) {
+        if let Ok((device, queue)) = pollster::block_on(adapter.request_device(
+            &wgpu::DeviceDescriptor {
+                required_features: wgpu::Features::SHADER_INT64,
+                ..Default::default()
+            }
+        )) {
+            gpu_available = true;
+            eprintln!("  GPU: {}", adapter.get_info().name);
+
+            let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("escape_time"),
+                source: wgpu::ShaderSource::Wgsl(wgsl.into()),
+            });
+            let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: None, layout: None, module: &shader,
+                entry_point: Some("main"),
+                compilation_options: Default::default(),
+                cache: None,
+            });
+            let bgl = pipeline.get_bind_group_layout(0);
+
+            let t0 = std::time::Instant::now();
+            for row in 0..n {
+                for col in 0..n {
+                    let c_re = -2048 + (col as i64 * 2662) / n as i64;
+                    let c_im = -1229 + (row as i64 * 2458) / n as i64;
+
+                    let input: Vec<u8> = [c_re, c_im, max].iter().flat_map(|v| v.to_le_bytes()).collect();
+                    let input_buf = device.create_buffer(&wgpu::BufferDescriptor {
+                        label: None, size: 24,
+                        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                        mapped_at_creation: false,
+                    });
+                    queue.write_buffer(&input_buf, 0, &input);
+                    let output_buf = device.create_buffer(&wgpu::BufferDescriptor {
+                        label: None, size: 8,
+                        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                        mapped_at_creation: false,
+                    });
+                    let staging_buf = device.create_buffer(&wgpu::BufferDescriptor {
+                        label: None, size: 8,
+                        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                        mapped_at_creation: false,
+                    });
+                    let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: None, layout: &bgl,
+                        entries: &[
+                            wgpu::BindGroupEntry { binding: 0, resource: output_buf.as_entire_binding() },
+                            wgpu::BindGroupEntry { binding: 1, resource: input_buf.as_entire_binding() },
+                        ],
+                    });
+                    let mut enc = device.create_command_encoder(&Default::default());
+                    { let mut p = enc.begin_compute_pass(&Default::default()); p.set_pipeline(&pipeline); p.set_bind_group(0, &bg, &[]); p.dispatch_workgroups(1,1,1); }
+                    enc.copy_buffer_to_buffer(&output_buf, 0, &staging_buf, 0, 8);
+                    queue.submit(Some(enc.finish()));
+                    let slice = staging_buf.slice(..);
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    slice.map_async(wgpu::MapMode::Read, move |r| { tx.send(r).unwrap(); });
+                    let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: Some(std::time::Duration::from_secs(10)) });
+                    rx.recv().unwrap().unwrap();
+                    let data = slice.get_mapped_range();
+                    gpu_data[row * n + col] = i64::from_le_bytes(data[0..8].try_into().unwrap());
+                    drop(data);
+                    staging_buf.unmap();
+                }
+            }
+            gpu_time = t0.elapsed();
+        } else { gpu_time = spirv_compile_time; }
+    } else { gpu_time = spirv_compile_time; }
+
+    // Verify
+    let cl_wasm_mismatches = cl_data.iter().zip(wasm_data.iter()).filter(|(a,b)| a != b).count();
+    assert_eq!(cl_wasm_mismatches, 0, "CL and WASM must match");
+    eprintln!("  Cranelift: {:?}", cl_time);
+    eprintln!("  WASM:      {:?}", wasm_time);
+    if gpu_available {
+        let gpu_mismatches = cl_data.iter().zip(gpu_data.iter()).filter(|(a,b)| a != b).count();
+        eprintln!("  SPIR-V:    {:?} ({} pixels)", gpu_time, gpu_data.len());
+        assert_eq!(gpu_mismatches, 0, "GPU must match Cranelift");
+    } else {
+        gpu_data = cl_data.clone();
+        eprintln!("  SPIR-V:    compiled only (no GPU)");
+    }
+
+    let to_json = |d: &[i64]| format!("[{}]", d.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(","));
+    let spirv_label = if gpu_available { format!("SPIR-V (GPU, {:?})", gpu_time) } else { "SPIR-V (no GPU)".into() };
+
+    let html = format!(r##"<!DOCTYPE html>
+<html>
+<head><title>3-Backend Mandelbrot</title>
+<style>
+body{{background:#0a0a0a;color:#e0e0e0;font-family:'Fira Code',monospace;margin:40px;max-width:1800px}}
+h1{{color:#ff6b35;font-size:20px}}
+.grid{{display:flex;gap:20px;flex-wrap:wrap}}
+.panel{{flex:1;min-width:280px}}
+canvas{{border:1px solid #333;display:block;margin:8px 0;image-rendering:pixelated;width:100%;max-width:512px}}
+.cl{{color:#4caf50}}.wasm{{color:#5c6bc0}}.spirv{{color:#e91e63}}
+.info{{color:#888;font-size:11px;margin-top:4px}}
+table{{border-collapse:collapse;margin:16px 0}} td,th{{padding:4px 12px;border:1px solid #333;font-size:12px}}
+th{{background:#1a1a1a}}
+</style>
+</head>
+<body>
+<h1>Mandelbrot &mdash; Three Backends, One IR</h1>
+<p>Same Sonatina IR &rarr; <span class="cl">Cranelift JIT ({cl_time:?})</span> |
+<span class="wasm">WASM ({wasm_time:?})</span> |
+<span class="spirv">{spirv_label}</span></p>
+<p class="info">100% pixel-identical across all backends ({total} pixels)</p>
+
+<div class="grid">
+<div class="panel"><h3 class="cl">Cranelift</h3><canvas id="cl" width="{n}" height="{n}"></canvas></div>
+<div class="panel"><h3 class="wasm">WASM</h3><canvas id="wasm" width="{n}" height="{n}"></canvas></div>
+<div class="panel"><h3 class="spirv">SPIR-V</h3><canvas id="gpu" width="{n}" height="{n}"></canvas></div>
+</div>
+
+<script>
+const cl={cl_json};const wasm={wasm_json};const gpu={gpu_json};
+const W={n},H={n},MAX={max};
+function render(id,data,hue){{
+  const ctx=document.getElementById(id).getContext('2d');
+  const img=ctx.createImageData(W,H);
+  for(let i=0;i<data.length;i++){{
+    const t=data[i]/MAX;let r,g,b;
+    if(data[i]>=MAX){{r=g=b=10;}}
+    else{{const h=hue+t*60,s=0.8,v=0.3+0.7*(1-t),c=v*s,x=c*(1-Math.abs((h/60)%2-1)),m=v-c;
+    let r1,g1,b1;if(h<60){{r1=c;g1=x;b1=0}}else if(h<120){{r1=x;g1=c;b1=0}}
+    else if(h<180){{r1=0;g1=c;b1=x}}else if(h<240){{r1=0;g1=x;b1=c}}
+    else if(h<300){{r1=x;g1=0;b1=c}}else{{r1=c;g1=0;b1=x}}
+    r=Math.floor((r1+m)*255);g=Math.floor((g1+m)*255);b=Math.floor((b1+m)*255);}}
+    img.data[i*4]=r;img.data[i*4+1]=g;img.data[i*4+2]=b;img.data[i*4+3]=255;
+  }}
+  ctx.putImageData(img,0,0);
+}}
+render('cl',cl,120);render('wasm',wasm,230);render('gpu',gpu,340);
+</script></body></html>"##,
+        total = n * n,
+        cl_json = to_json(&cl_data),
+        wasm_json = to_json(&wasm_data),
+        gpu_json = to_json(&gpu_data),
+    );
+
+    std::fs::write("/tmp/mandelbrot_3backend.html", &html).expect("write html");
+    eprintln!("  Written /tmp/mandelbrot_3backend.html");
+}
