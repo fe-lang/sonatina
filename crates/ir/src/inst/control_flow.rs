@@ -2,7 +2,7 @@ use macros::{Inst, inst_prop};
 use smallvec::{SmallVec, smallvec};
 
 use crate::{
-    BlockId, HasInst, Inst, InstSetBase, ValueId,
+    BlockId, Inst, InstSetBase, ValueId,
     ir_writer::{FuncWriteCtx, IrWrite},
     module::FuncRef,
     visitor::{Visitable, VisitableMut, Visitor, VisitorMut},
@@ -144,12 +144,12 @@ impl IrWrite<FuncWriteCtx<'_>> for ReturnArgs {
 }
 
 impl Return {
-    pub fn new_unit(has_inst: &dyn HasInst<Self>) -> Self {
-        Self::new(has_inst, ReturnArgs::default())
+    pub fn new_unit(isb: &dyn InstSetBase) -> Self {
+        Self::new(isb, ReturnArgs::default())
     }
 
-    pub fn new_single(has_inst: &dyn HasInst<Self>, arg: ValueId) -> Self {
-        Self::new(has_inst, ReturnArgs::from(smallvec![arg]))
+    pub fn new_single(isb: &dyn InstSetBase, arg: ValueId) -> Self {
+        Self::new(isb, ReturnArgs::from(smallvec![arg]))
     }
 
     pub fn returns_unit(&self) -> bool {
@@ -230,7 +230,7 @@ impl BranchInfo for Jump {
 
     fn remove_edges_to_block(&self, isb: &dyn InstSetBase, dest: BlockId) -> Box<dyn Inst> {
         if dest == self.dest {
-            Box::new(Unreachable::new_unchecked(isb))
+            Box::new(Unreachable::new(isb))
         } else {
             Box::new(*self)
         }
@@ -249,7 +249,7 @@ impl BranchInfo for Jump {
 
     fn remove_edge(&self, isb: &dyn InstSetBase, edge_idx: usize) -> Box<dyn Inst> {
         assert_eq!(edge_idx, 0, "jump edge index out of bounds: {edge_idx}");
-        Box::new(Unreachable::new_unchecked(isb))
+        Box::new(Unreachable::new(isb))
     }
 
     fn rewrite_edge_dest(
@@ -259,7 +259,7 @@ impl BranchInfo for Jump {
         to: BlockId,
     ) -> Box<dyn Inst> {
         assert_eq!(edge_idx, 0, "jump edge index out of bounds: {edge_idx}");
-        Box::new(Jump::new(isb.jump(), to))
+        Box::new(Jump::new(isb, to))
     }
 
     fn retain_edges(&self, isb: &dyn InstSetBase, keep_mask: &[bool]) -> Box<dyn Inst> {
@@ -272,7 +272,7 @@ impl BranchInfo for Jump {
         if keep_mask[0] {
             Box::new(*self)
         } else {
-            Box::new(Unreachable::new_unchecked(isb))
+            Box::new(Unreachable::new(isb))
         }
     }
 
@@ -295,13 +295,13 @@ impl BranchInfo for Br {
         let z = self.z_dest;
 
         if nz == dest && z == dest {
-            return Box::new(Unreachable::new_unchecked(isb));
+            return Box::new(Unreachable::new(isb));
         }
         if nz == dest {
-            return Box::new(Jump::new(isb.jump(), z));
+            return Box::new(Jump::new(isb, z));
         }
         if z == dest {
-            return Box::new(Jump::new(isb.jump(), nz));
+            return Box::new(Jump::new(isb, nz));
         }
 
         Box::new(self.clone())
@@ -322,8 +322,8 @@ impl BranchInfo for Br {
 
     fn remove_edge(&self, isb: &dyn InstSetBase, edge_idx: usize) -> Box<dyn Inst> {
         match edge_idx {
-            0 => Box::new(Jump::new(isb.jump(), self.z_dest)),
-            1 => Box::new(Jump::new(isb.jump(), self.nz_dest)),
+            0 => Box::new(Jump::new(isb, self.z_dest)),
+            1 => Box::new(Jump::new(isb, self.nz_dest)),
             _ => panic!("branch edge index out of bounds: {edge_idx}"),
         }
     }
@@ -351,9 +351,9 @@ impl BranchInfo for Br {
             keep_mask.len()
         );
         match keep_mask {
-            [false, false] => Box::new(Unreachable::new_unchecked(isb)),
-            [true, false] => Box::new(Jump::new(isb.jump(), self.nz_dest)),
-            [false, true] => Box::new(Jump::new(isb.jump(), self.z_dest)),
+            [false, false] => Box::new(Unreachable::new(isb)),
+            [true, false] => Box::new(Jump::new(isb, self.nz_dest)),
+            [false, true] => Box::new(Jump::new(isb, self.z_dest)),
             [true, true] => {
                 try_convert_branch_to_jump(isb, self).unwrap_or_else(|| Box::new(self.clone()))
             }
@@ -400,8 +400,8 @@ impl BranchInfo for BrTable {
 
         let dest_num = brt.dests().len();
         match dest_num {
-            0 => Box::new(Unreachable::new_unchecked(isb)),
-            1 => Box::new(Jump::new(isb.jump(), brt.dests()[0])),
+            0 => Box::new(Unreachable::new(isb)),
+            1 => Box::new(Jump::new(isb, brt.dests()[0])),
             _ => Box::new(brt),
         }
     }
@@ -484,8 +484,8 @@ impl BranchInfo for BrTable {
         *brt.default_mut() = default;
         *brt.table_mut() = table;
         match brt.num_dests() {
-            0 => Box::new(Unreachable::new_unchecked(isb)),
-            1 => Box::new(Jump::new(isb.jump(), brt.dests()[0])),
+            0 => Box::new(Unreachable::new(isb)),
+            1 => Box::new(Jump::new(isb, brt.dests()[0])),
             _ => try_convert_branch_to_jump(isb, &brt).unwrap_or_else(|| Box::new(brt)),
         }
     }
@@ -512,11 +512,11 @@ fn try_convert_branch_to_jump(
 ) -> Option<Box<dyn Inst>> {
     let dests = branch.dests();
     let Some(&first_dest) = dests.first() else {
-        return Some(Box::new(Unreachable::new_unchecked(isb)));
+        return Some(Box::new(Unreachable::new(isb)));
     };
 
     if dests.iter().all(|dest| *dest == first_dest) {
-        Some(Box::new(Jump::new(isb.jump(), first_dest)))
+        Some(Box::new(Jump::new(isb, first_dest)))
     } else {
         None
     }

@@ -362,7 +362,7 @@ impl<'f> CfgEditor<'f> {
         let mut cursor = InstInserter::at_location(CursorLocation::BlockTop(to));
         cursor.insert_block_before(self.func, mid);
         cursor.set_location(CursorLocation::BlockTop(mid));
-        cursor.append_inst_data(self.func, Jump::new(self.func.dfg.inst_set().jump(), to));
+        cursor.append_inst_data(self.func, Jump::new(self.func.inst_set(), to));
 
         self.func.dfg.rewrite_branch_edges_to_block(term, to, mid);
         replace_phi_incoming_block(self.func, to, from, mid);
@@ -405,10 +405,7 @@ impl<'f> CfgEditor<'f> {
         inserter.insert_block_before(self.func, new_preheader);
 
         inserter.set_location(CursorLocation::BlockTop(new_preheader));
-        inserter.append_inst_data(
-            self.func,
-            Jump::new(self.func.dfg.inst_set().jump(), lp_header),
-        );
+        inserter.append_inst_data(self.func, Jump::new(self.func.inst_set(), lp_header));
 
         for &pred in outside_preds {
             assert!(

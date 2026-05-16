@@ -707,6 +707,10 @@ fn module_ctx_from_triple(triple: TargetTriple) -> ModuleCtx {
             let isa = Evm::new(triple);
             ModuleCtx::new(&isa)
         }
+        Architecture::X86_64 | Architecture::Aarch64 => {
+            let isa = ir::isa::native::Native::new(triple);
+            ModuleCtx::new(&isa)
+        }
     }
 }
 

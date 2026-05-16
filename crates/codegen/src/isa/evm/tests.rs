@@ -2373,11 +2373,7 @@ object @Contract {
         function.dfg.replace_inst(
             term,
             Box::new(sonatina_ir::inst::evm::EvmRevert::new(
-                backend
-                    .isa
-                    .inst_set()
-                    .has_evm_revert()
-                    .expect("evm_revert supported"),
+                backend.isa.inst_set(),
                 addr,
                 len,
             )),

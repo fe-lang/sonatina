@@ -453,11 +453,7 @@ pub(super) fn apply_plan(
                 return false;
             }
 
-            let has_call = caller
-                .inst_set()
-                .has_call()
-                .expect("target ISA must support `call`");
-            let new_call = control_flow::Call::new(has_call, new_callee, args);
+            let new_call = control_flow::Call::new(caller.inst_set(), new_callee, args);
             caller.dfg.replace_inst(call_inst_id, Box::new(new_call));
             stats.calls_rewritten += 1;
             true

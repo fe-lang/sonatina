@@ -290,12 +290,9 @@ fn prepend_const_ref(
     global: sonatina_ir::GlobalVariableRef,
     ty: Type,
 ) -> PrependedValue {
-    let inst = func.dfg.make_inst(data::ConstRef::new(
-        func.inst_set()
-            .has_const_ref()
-            .expect("target ISA should support const.ref"),
-        global.into(),
-    ));
+    let inst = func
+        .dfg
+        .make_inst(data::ConstRef::new(func.inst_set(), global.into()));
     let value = func.dfg.make_value(Value::Inst {
         inst,
         result_idx: 0,
@@ -327,9 +324,7 @@ fn prepend_const_proj(
         .dfg
         .make_imm_value(Immediate::I64(i64::try_from(idx).expect("index overflow")));
     let inst = func.dfg.make_inst(data::ConstProj::new(
-        func.inst_set()
-            .has_const_proj()
-            .expect("target ISA should support const.proj"),
+        func.inst_set(),
         smallvec![base.value, index],
     ));
     let value = func.dfg.make_value(Value::Inst {
@@ -355,13 +350,9 @@ fn prepend_const_index(
     let index = func
         .dfg
         .make_imm_value(Immediate::I64(i64::try_from(idx).expect("index overflow")));
-    let inst = func.dfg.make_inst(data::ConstIndex::new(
-        func.inst_set()
-            .has_const_index()
-            .expect("target ISA should support const.index"),
-        base.value,
-        index,
-    ));
+    let inst = func
+        .dfg
+        .make_inst(data::ConstIndex::new(func.inst_set(), base.value, index));
     let value = func.dfg.make_value(Value::Inst {
         inst,
         result_idx: 0,
@@ -379,14 +370,7 @@ fn rewrite_call_callee(function: &mut Function, inst: sonatina_ir::InstId, clone
     let args: SmallVec<[_; 8]> = call.args().iter().copied().collect();
     function.dfg.replace_inst_preserving_results(
         inst,
-        Box::new(control_flow::Call::new(
-            function
-                .inst_set()
-                .has_call()
-                .expect("target ISA should support call"),
-            clone,
-            args,
-        )),
+        Box::new(control_flow::Call::new(function.inst_set(), clone, args)),
     );
     true
 }

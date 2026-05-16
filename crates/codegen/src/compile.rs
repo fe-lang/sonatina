@@ -1,20 +1,16 @@
 //! High-level compilation entrypoint that bundles the optimization pipeline
-//! and EVM codegen into a single API.
+//! and backend codegen into a single API.
 //!
-//! Frontends typically only need [`EvmCompile`]: hand it a lowered [`Module`]
-//! plus an [`OptLevel`], optionally inspect the optimized IR via
-//! [`EvmCompile::optimize`], then produce object artifacts via
-//! [`EvmCompile::compile`].
+//! [`Compile`] is the generic entry point: pair any [`Backend`] with a
+//! [`Module`] and an [`OptLevel`], optionally inspect the optimized IR,
+//! then produce artifacts.
+//!
+//! [`EvmCompile`] is a convenience wrapper that constructs an EVM backend
+//! from the module's target triple.
 
-use sonatina_ir::{Module, isa::evm::Evm};
-use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
+use sonatina_ir::Module;
 
-use crate::{
-    isa::evm::{EvmBackend, ImmediateMaterializationMode, LateCleanupProfile},
-    object::{CompileOptions, ObjectArtifact, ObjectCompileError, compile_all_objects},
-    optim::Pipeline,
-    stackalloc::StackifySearchProfile,
-};
+use crate::{backend::Backend, optim::Pipeline};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum OptLevel {
@@ -25,30 +21,26 @@ pub enum OptLevel {
     O2,
 }
 
-pub struct EvmCompile {
+/// Generic compilation pipeline: shared optimization + backend-specific codegen.
+pub struct Compile<B> {
     module: Module,
     opt_level: OptLevel,
-    emit_observability: bool,
+    backend: B,
     optimized: bool,
 }
 
-impl EvmCompile {
-    pub fn new(module: Module) -> Self {
+impl<B> Compile<B> {
+    pub fn new(module: Module, backend: B) -> Self {
         Self {
             module,
             opt_level: OptLevel::default(),
-            emit_observability: false,
+            backend,
             optimized: false,
         }
     }
 
     pub fn with_opt_level(mut self, level: OptLevel) -> Self {
         self.opt_level = level;
-        self
-    }
-
-    pub fn with_observability(mut self, on: bool) -> Self {
-        self.emit_observability = on;
         self
     }
 
@@ -67,20 +59,129 @@ impl EvmCompile {
         &self.module
     }
 
+    pub fn opt_level(&self) -> OptLevel {
+        self.opt_level
+    }
+
+    pub fn module(&self) -> &Module {
+        &self.module
+    }
+
+    pub fn backend(&self) -> &B {
+        &self.backend
+    }
+}
+
+impl<B: Backend> Compile<B> {
+    /// Optimize (if not already) and compile via the backend.
+    pub fn compile(mut self) -> Result<B::Artifact, Vec<B::Error>> {
+        self.optimize();
+        self.backend.compile_module(&self.module)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// EVM convenience wrapper
+// ---------------------------------------------------------------------------
+
+use sonatina_ir::isa::evm::Evm;
+use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
+
+use crate::{
+    isa::evm::{EvmBackend, ImmediateMaterializationMode, LateCleanupProfile},
+    object::{CompileOptions, ObjectArtifact, ObjectCompileError, compile_all_objects},
+    stackalloc::StackifySearchProfile,
+};
+
+/// EVM-specific backend wrapper that implements [`Backend`].
+pub struct EvmCompiler {
+    evm_backend: EvmBackend,
+    compile_options: CompileOptions,
+}
+
+impl EvmCompiler {
+    pub fn from_module(
+        module: &Module,
+        opt_level: OptLevel,
+    ) -> Result<Self, Vec<ObjectCompileError>> {
+        let backend = evm_backend_for_module(module, opt_level)?;
+        Ok(Self {
+            evm_backend: backend,
+            compile_options: CompileOptions::default(),
+        })
+    }
+
+    pub fn with_observability(mut self, on: bool) -> Self {
+        self.compile_options.emit_observability = on;
+        self
+    }
+
+    pub fn evm_backend(&self) -> &EvmBackend {
+        &self.evm_backend
+    }
+}
+
+impl Backend for EvmCompiler {
+    type Artifact = Vec<ObjectArtifact>;
+    type Error = ObjectCompileError;
+
+    fn compile_module(&self, module: &Module) -> Result<Self::Artifact, Vec<Self::Error>> {
+        compile_all_objects(module, &self.evm_backend, &self.compile_options)
+    }
+}
+
+/// Convenience type for EVM compilation, preserving the existing API.
+pub struct EvmCompile {
+    inner: Compile<EvmCompiler>,
+    emit_observability: bool,
+}
+
+impl EvmCompile {
+    pub fn new(module: Module) -> Self {
+        Self {
+            inner: Compile {
+                module,
+                opt_level: OptLevel::default(),
+                backend: EvmCompiler {
+                    evm_backend: EvmBackend::new(Evm::new(evm_osaka_triple())),
+                    compile_options: CompileOptions::default(),
+                },
+                optimized: false,
+            },
+            emit_observability: false,
+        }
+    }
+
+    pub fn with_opt_level(mut self, level: OptLevel) -> Self {
+        self.inner.opt_level = level;
+        self
+    }
+
+    pub fn with_observability(mut self, on: bool) -> Self {
+        self.emit_observability = on;
+        self
+    }
+
+    /// Run the optimization pipeline (idempotent) and return a reference to
+    /// the optimized module for inspection or IR dumping.
+    pub fn optimize(&mut self) -> &Module {
+        self.inner.optimize()
+    }
+
     /// Optimize (if not already) and compile every object in the module.
     pub fn compile(mut self) -> Result<Vec<ObjectArtifact>, Vec<ObjectCompileError>> {
-        self.optimize();
-        let backend = evm_backend_for_module(&self.module, self.opt_level)?;
+        self.inner.optimize();
+        let backend = evm_backend_for_module(&self.inner.module, self.inner.opt_level)?;
         let opts = CompileOptions {
             emit_observability: self.emit_observability,
             ..CompileOptions::default()
         };
-        compile_all_objects(&self.module, &backend, &opts)
+        compile_all_objects(&self.inner.module, &backend, &opts)
     }
 }
 
 impl OptLevel {
-    fn late_cleanup_profile(self) -> LateCleanupProfile {
+    pub(crate) fn late_cleanup_profile(self) -> LateCleanupProfile {
         match self {
             OptLevel::O0 => LateCleanupProfile::Off,
             OptLevel::O1 => LateCleanupProfile::Speed,
@@ -89,7 +190,7 @@ impl OptLevel {
         }
     }
 
-    fn stackify_search_profile(self) -> StackifySearchProfile {
+    pub(crate) fn stackify_search_profile(self) -> StackifySearchProfile {
         match self {
             OptLevel::O0 => StackifySearchProfile::Fast,
             OptLevel::O1 => StackifySearchProfile::GreedyWide,
@@ -97,7 +198,7 @@ impl OptLevel {
         }
     }
 
-    fn immediate_materialization_mode(self) -> ImmediateMaterializationMode {
+    pub(crate) fn immediate_materialization_mode(self) -> ImmediateMaterializationMode {
         match self {
             OptLevel::Os => ImmediateMaterializationMode::Size,
             OptLevel::O2 => ImmediateMaterializationMode::Balanced,

@@ -383,10 +383,7 @@ fn rewrite_calls(function: &mut Function, plans: &FxHashMap<FuncRef, FuncPlan>) 
             function.dfg.replace_inst_preserving_results(
                 inst,
                 Box::new(control_flow::Call::new(
-                    function
-                        .inst_set()
-                        .has_call()
-                        .expect("target ISA must support `call`"),
+                    function.inst_set(),
                     *call.callee(),
                     new_args,
                 )),

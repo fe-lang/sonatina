@@ -320,22 +320,43 @@ fn build_inst(func: &mut Function, replacement: InstSpec) -> Option<Box<dyn Inst
         InstSpec::Unary {
             kind: UnaryInstKind::IsZero,
             arg,
-        } => Some(Box::new(cmp::IsZero::new(is.has_is_zero()?, arg))),
+        } => {
+            is.has_is_zero()?;
+            Some(Box::new(cmp::IsZero::new(is, arg)))
+        }
         InstSpec::Unary { .. } => None,
         InstSpec::Binary { kind, lhs, rhs } => {
             let lhs = materialize_operand(func, lhs);
             let rhs = materialize_operand(func, rhs);
             match kind {
-                BinaryInstKind::Add => Some(Box::new(arith::Add::new(is.has_add()?, lhs, rhs))),
-                BinaryInstKind::Sub => Some(Box::new(arith::Sub::new(is.has_sub()?, lhs, rhs))),
-                BinaryInstKind::Shl => Some(Box::new(arith::Shl::new(is.has_shl()?, lhs, rhs))),
+                BinaryInstKind::Add => {
+                    is.has_add()?;
+                    Some(Box::new(arith::Add::new(is, lhs, rhs)))
+                }
+                BinaryInstKind::Sub => {
+                    is.has_sub()?;
+                    Some(Box::new(arith::Sub::new(is, lhs, rhs)))
+                }
+                BinaryInstKind::Shl => {
+                    is.has_shl()?;
+                    Some(Box::new(arith::Shl::new(is, lhs, rhs)))
+                }
                 _ => None,
             }
         }
         InstSpec::Cast { kind, from, ty } => match kind {
-            CastInstKind::Zext => Some(Box::new(cast::Zext::new(is.has_zext()?, from, ty))),
-            CastInstKind::Sext => Some(Box::new(cast::Sext::new(is.has_sext()?, from, ty))),
-            CastInstKind::Trunc => Some(Box::new(cast::Trunc::new(is.has_trunc()?, from, ty))),
+            CastInstKind::Zext => {
+                is.has_zext()?;
+                Some(Box::new(cast::Zext::new(is, from, ty)))
+            }
+            CastInstKind::Sext => {
+                is.has_sext()?;
+                Some(Box::new(cast::Sext::new(is, from, ty)))
+            }
+            CastInstKind::Trunc => {
+                is.has_trunc()?;
+                Some(Box::new(cast::Trunc::new(is, from, ty)))
+            }
             CastInstKind::Bitcast | CastInstKind::IntToPtr | CastInstKind::PtrToInt => None,
         },
     }

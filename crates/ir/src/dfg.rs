@@ -512,11 +512,11 @@ impl DataFlowGraph {
     }
 
     pub fn make_phi(&self, args: Vec<(ValueId, BlockId)>) -> Phi {
-        Phi::new(self.inst_set().phi(), args)
+        Phi::new(self.inst_set(), args)
     }
 
     pub fn make_jump(&self, to: BlockId) -> Jump {
-        Jump::new(self.inst_set().jump(), to)
+        Jump::new(self.inst_set(), to)
     }
 
     pub fn change_to_alias(&mut self, value: ValueId, alias: ValueId) {

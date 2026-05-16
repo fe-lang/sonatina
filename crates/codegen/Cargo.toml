@@ -16,6 +16,11 @@ keywords = ["compiler", "evm", "wasm", "smart-contract"]
 
 [dependencies]
 cranelift-entity = "0.126"
+cranelift-codegen = { version = "0.126", optional = true }
+cranelift-frontend = { version = "0.126", optional = true }
+cranelift-module = { version = "0.126", optional = true }
+cranelift-jit = { version = "0.126", optional = true }
+cranelift-native = { version = "0.126", optional = true }
 smallvec = "1.15.1"
 rustc-hash = "2.0.0"
 sonatina-ir = { path = "../ir", version = "0.0.3-alpha" }
@@ -29,6 +34,15 @@ indexmap = { version = "2.12" }
 tracing = "0.1"
 vec-collections = { version = "0.4.3", default-features = false }
 
+[features]
+cranelift = [
+    "dep:cranelift-codegen",
+    "dep:cranelift-frontend",
+    "dep:cranelift-module",
+    "dep:cranelift-jit",
+    "dep:cranelift-native",
+]
+
 [dev-dependencies]
 hex = "0.4.3"
 insta = "1.43"
@@ -36,3 +50,7 @@ dir-test = "0.4"
 derive_more = { version = "1", default-features = false, features = ["full"] }
 revm = { version = "18.0.0", default-features = false, features = ["std"] }
 sonatina-parser = { path = "../parser", version = "0.0.3-alpha" }
+
+[[test]]
+name = "cranelift_backend"
+required-features = ["cranelift"]

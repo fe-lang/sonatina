@@ -288,9 +288,9 @@ fn insert_compare_before(
 }
 
 fn insert_is_zero_before(func: &mut Function, before: InstId, arg: ValueId) -> Option<ValueId> {
-    let inst = func
-        .dfg
-        .make_inst(cmp::IsZero::new(func.inst_set().has_is_zero()?, arg));
+    let is = func.inst_set();
+    is.has_is_zero()?;
+    let inst = func.dfg.make_inst(cmp::IsZero::new(is, arg));
     let value = func.dfg.make_value(Value::Inst {
         inst,
         result_idx: 0,

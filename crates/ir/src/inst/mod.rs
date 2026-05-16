@@ -8,6 +8,7 @@ pub mod evm;
 #[macro_use]
 pub mod inst_set;
 pub mod logic;
+pub mod native;
 
 use std::{
     any::{Any, TypeId},

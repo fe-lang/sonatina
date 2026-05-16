@@ -36,7 +36,7 @@ fn build_br_table(
         table.push((value, block));
     }
 
-    Ok(BrTable::new(has_inst, scrutinee, default, table))
+    Ok(BrTable::new(fb.inst_set(), scrutinee, default, table))
 }
 
 fn build_phi(
@@ -63,7 +63,7 @@ fn build_phi(
     if let Some(arg) = ast_args.next() {
         Err(Box::new(Error::UnexpectedTrailingInstArg(arg.span)))
     } else {
-        Ok(Phi::new(has_inst, args))
+        Ok(Phi::new(fb.inst_set(), args))
     }
 }
 
@@ -91,7 +91,7 @@ fn build_call(
     if let Some(arg) = ast_args.next() {
         Err(Box::new(Error::UnexpectedTrailingInstArg(arg.span)))
     } else {
-        Ok(Call::new(has_inst, callee, args))
+        Ok(Call::new(fb.inst_set(), callee, args))
     }
 }
 
@@ -133,6 +133,6 @@ fn build_return(
     if let Some(arg) = ast_args.next() {
         Err(Box::new(Error::UnexpectedTrailingInstArg(arg.span)))
     } else {
-        Ok(Return::new(has_inst, args.into()))
+        Ok(Return::new(fb.inst_set(), args.into()))
     }
 }

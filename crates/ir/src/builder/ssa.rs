@@ -188,7 +188,7 @@ impl SsaBuilder {
     ) -> (InstId, ValueId) {
         let ty = self.var_ty(var);
         let is = func.dfg.inst_set();
-        let phi = control_flow::Phi::new(is.phi(), Vec::new());
+        let phi = control_flow::Phi::new(is, Vec::new());
         let mut cursor = InstInserter::at_location(CursorLocation::BlockTop(block));
 
         let inst = cursor.prepend_inst_data(func, phi);

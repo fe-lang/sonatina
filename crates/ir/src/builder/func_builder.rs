@@ -272,239 +272,71 @@ where
     }
 
     pub fn insert_uaddo(&mut self, lhs: ValueId, rhs: ValueId) -> [ValueId; 2] {
-        self.insert_checked_binary(
-            Uaddo::new(
-                self.inst_set()
-                    .has_uaddo()
-                    .expect("target ISA must support `uaddo`"),
-                lhs,
-                rhs,
-            ),
-            lhs,
-            rhs,
-        )
+        self.insert_checked_binary(Uaddo::new(self.inst_set(), lhs, rhs), lhs, rhs)
     }
 
     pub fn insert_saddo(&mut self, lhs: ValueId, rhs: ValueId) -> [ValueId; 2] {
-        self.insert_checked_binary(
-            Saddo::new(
-                self.inst_set()
-                    .has_saddo()
-                    .expect("target ISA must support `saddo`"),
-                lhs,
-                rhs,
-            ),
-            lhs,
-            rhs,
-        )
+        self.insert_checked_binary(Saddo::new(self.inst_set(), lhs, rhs), lhs, rhs)
     }
 
     pub fn insert_uaddsat(&mut self, lhs: ValueId, rhs: ValueId) -> ValueId {
-        self.insert_saturating_binary(
-            Uaddsat::new(
-                self.inst_set()
-                    .has_uaddsat()
-                    .expect("target ISA must support `uaddsat`"),
-                lhs,
-                rhs,
-            ),
-            lhs,
-            rhs,
-        )
+        self.insert_saturating_binary(Uaddsat::new(self.inst_set(), lhs, rhs), lhs, rhs)
     }
 
     pub fn insert_saddsat(&mut self, lhs: ValueId, rhs: ValueId) -> ValueId {
-        self.insert_saturating_binary(
-            Saddsat::new(
-                self.inst_set()
-                    .has_saddsat()
-                    .expect("target ISA must support `saddsat`"),
-                lhs,
-                rhs,
-            ),
-            lhs,
-            rhs,
-        )
+        self.insert_saturating_binary(Saddsat::new(self.inst_set(), lhs, rhs), lhs, rhs)
     }
 
     pub fn insert_usubo(&mut self, lhs: ValueId, rhs: ValueId) -> [ValueId; 2] {
-        self.insert_checked_binary(
-            Usubo::new(
-                self.inst_set()
-                    .has_usubo()
-                    .expect("target ISA must support `usubo`"),
-                lhs,
-                rhs,
-            ),
-            lhs,
-            rhs,
-        )
+        self.insert_checked_binary(Usubo::new(self.inst_set(), lhs, rhs), lhs, rhs)
     }
 
     pub fn insert_usubsat(&mut self, lhs: ValueId, rhs: ValueId) -> ValueId {
-        self.insert_saturating_binary(
-            Usubsat::new(
-                self.inst_set()
-                    .has_usubsat()
-                    .expect("target ISA must support `usubsat`"),
-                lhs,
-                rhs,
-            ),
-            lhs,
-            rhs,
-        )
+        self.insert_saturating_binary(Usubsat::new(self.inst_set(), lhs, rhs), lhs, rhs)
     }
 
     pub fn insert_ssubo(&mut self, lhs: ValueId, rhs: ValueId) -> [ValueId; 2] {
-        self.insert_checked_binary(
-            Ssubo::new(
-                self.inst_set()
-                    .has_ssubo()
-                    .expect("target ISA must support `ssubo`"),
-                lhs,
-                rhs,
-            ),
-            lhs,
-            rhs,
-        )
+        self.insert_checked_binary(Ssubo::new(self.inst_set(), lhs, rhs), lhs, rhs)
     }
 
     pub fn insert_ssubsat(&mut self, lhs: ValueId, rhs: ValueId) -> ValueId {
-        self.insert_saturating_binary(
-            Ssubsat::new(
-                self.inst_set()
-                    .has_ssubsat()
-                    .expect("target ISA must support `ssubsat`"),
-                lhs,
-                rhs,
-            ),
-            lhs,
-            rhs,
-        )
+        self.insert_saturating_binary(Ssubsat::new(self.inst_set(), lhs, rhs), lhs, rhs)
     }
 
     pub fn insert_umulo(&mut self, lhs: ValueId, rhs: ValueId) -> [ValueId; 2] {
-        self.insert_checked_binary(
-            Umulo::new(
-                self.inst_set()
-                    .has_umulo()
-                    .expect("target ISA must support `umulo`"),
-                lhs,
-                rhs,
-            ),
-            lhs,
-            rhs,
-        )
+        self.insert_checked_binary(Umulo::new(self.inst_set(), lhs, rhs), lhs, rhs)
     }
 
     pub fn insert_umulsat(&mut self, lhs: ValueId, rhs: ValueId) -> ValueId {
-        self.insert_saturating_binary(
-            Umulsat::new(
-                self.inst_set()
-                    .has_umulsat()
-                    .expect("target ISA must support `umulsat`"),
-                lhs,
-                rhs,
-            ),
-            lhs,
-            rhs,
-        )
+        self.insert_saturating_binary(Umulsat::new(self.inst_set(), lhs, rhs), lhs, rhs)
     }
 
     pub fn insert_smulo(&mut self, lhs: ValueId, rhs: ValueId) -> [ValueId; 2] {
-        self.insert_checked_binary(
-            Smulo::new(
-                self.inst_set()
-                    .has_smulo()
-                    .expect("target ISA must support `smulo`"),
-                lhs,
-                rhs,
-            ),
-            lhs,
-            rhs,
-        )
+        self.insert_checked_binary(Smulo::new(self.inst_set(), lhs, rhs), lhs, rhs)
     }
 
     pub fn insert_smulsat(&mut self, lhs: ValueId, rhs: ValueId) -> ValueId {
-        self.insert_saturating_binary(
-            Smulsat::new(
-                self.inst_set()
-                    .has_smulsat()
-                    .expect("target ISA must support `smulsat`"),
-                lhs,
-                rhs,
-            ),
-            lhs,
-            rhs,
-        )
+        self.insert_saturating_binary(Smulsat::new(self.inst_set(), lhs, rhs), lhs, rhs)
     }
 
     pub fn insert_snego(&mut self, arg: ValueId) -> [ValueId; 2] {
-        self.insert_checked_unary(
-            Snego::new(
-                self.inst_set()
-                    .has_snego()
-                    .expect("target ISA must support `snego`"),
-                arg,
-            ),
-            arg,
-        )
+        self.insert_checked_unary(Snego::new(self.inst_set(), arg), arg)
     }
 
     pub fn insert_evm_udivo(&mut self, lhs: ValueId, rhs: ValueId) -> [ValueId; 2] {
-        self.insert_checked_binary(
-            EvmUdivo::new(
-                self.inst_set()
-                    .has_evm_udivo()
-                    .expect("target ISA must support `evm_udivo`"),
-                lhs,
-                rhs,
-            ),
-            lhs,
-            rhs,
-        )
+        self.insert_checked_binary(EvmUdivo::new(self.inst_set(), lhs, rhs), lhs, rhs)
     }
 
     pub fn insert_evm_sdivo(&mut self, lhs: ValueId, rhs: ValueId) -> [ValueId; 2] {
-        self.insert_checked_binary(
-            EvmSdivo::new(
-                self.inst_set()
-                    .has_evm_sdivo()
-                    .expect("target ISA must support `evm_sdivo`"),
-                lhs,
-                rhs,
-            ),
-            lhs,
-            rhs,
-        )
+        self.insert_checked_binary(EvmSdivo::new(self.inst_set(), lhs, rhs), lhs, rhs)
     }
 
     pub fn insert_evm_umodo(&mut self, lhs: ValueId, rhs: ValueId) -> [ValueId; 2] {
-        self.insert_checked_binary(
-            EvmUmodo::new(
-                self.inst_set()
-                    .has_evm_umodo()
-                    .expect("target ISA must support `evm_umodo`"),
-                lhs,
-                rhs,
-            ),
-            lhs,
-            rhs,
-        )
+        self.insert_checked_binary(EvmUmodo::new(self.inst_set(), lhs, rhs), lhs, rhs)
     }
 
     pub fn insert_evm_smodo(&mut self, lhs: ValueId, rhs: ValueId) -> [ValueId; 2] {
-        self.insert_checked_binary(
-            EvmSmodo::new(
-                self.inst_set()
-                    .has_evm_smodo()
-                    .expect("target ISA must support `evm_smodo`"),
-                lhs,
-                rhs,
-            ),
-            lhs,
-            rhs,
-        )
+        self.insert_checked_binary(EvmSmodo::new(self.inst_set(), lhs, rhs), lhs, rhs)
     }
 
     pub fn insert_call_results(
@@ -515,13 +347,7 @@ where
         let ret_tys = self
             .module_builder
             .sig(callee, |sig| sig.ret_tys().to_vec());
-        let call = control_flow::Call::new(
-            self.inst_set()
-                .has_call()
-                .expect("target ISA must support `call`"),
-            callee,
-            args,
-        );
+        let call = control_flow::Call::new(self.inst_set(), callee, args);
         self.insert_inst_results(call, &ret_tys)
     }
 
@@ -540,28 +366,17 @@ where
 
     pub fn insert_return_values(&mut self, values: &[ValueId]) {
         self.insert_inst_no_result(control_flow::Return::new(
-            self.inst_set()
-                .has_return()
-                .expect("target ISA must support `return`"),
+            self.inst_set(),
             SmallVec::from_slice(values).into(),
         ));
     }
 
     pub fn insert_return(&mut self, value: ValueId) {
-        self.insert_inst_no_result(control_flow::Return::new_single(
-            self.inst_set()
-                .has_return()
-                .expect("target ISA must support `return`"),
-            value,
-        ));
+        self.insert_inst_no_result(control_flow::Return::new_single(self.inst_set(), value));
     }
 
     pub fn insert_return_unit(&mut self) {
-        self.insert_inst_no_result(control_flow::Return::new_unit(
-            self.inst_set()
-                .has_return()
-                .expect("target ISA must support `return`"),
-        ));
+        self.insert_inst_no_result(control_flow::Return::new_unit(self.inst_set()));
     }
 
     pub fn declare_var(&mut self, ty: Type) -> Variable {

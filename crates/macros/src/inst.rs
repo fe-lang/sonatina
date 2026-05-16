@@ -393,18 +393,18 @@ impl InstStruct {
         let has_inst_method = ty_name_to_method_name(&self.struct_name);
         quote! {
             #[allow(clippy::too_many_arguments)]
-            pub fn new(hi: &dyn crate::HasInst<Self>, #(#ctor_args),*) -> Self {
+            pub fn new(isb: &dyn crate::InstSetBase, #(#ctor_args),*) -> Self {
+                debug_assert!(isb.#has_inst_method().is_some(),
+                    "instruction set does not support this instruction");
                 Self {
                     #(#field_names: #field_names),*
                 }
             }
 
             #[allow(clippy::too_many_arguments)]
+            #[deprecated(note = "use `new` instead — it now accepts &dyn InstSetBase")]
             pub fn new_unchecked(isb: &dyn crate::InstSetBase, #(#ctor_args),*) -> Self {
-                isb.#has_inst_method().unwrap();
-                Self {
-                    #(#field_names: #field_names),*
-                }
+                Self::new(isb, #(#field_names),*)
             }
         }
     }

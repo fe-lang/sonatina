@@ -53,12 +53,12 @@ macro_rules! impl_inst_build {
             |ctx: &mut crate::BuildCtx,
             fb: &mut ir::builder::FunctionBuilder<ir::func_cursor::InstInserter>,
             args: &[crate::ast::InstArg],
-            has_inst| {
+            _has_inst| {
                 let mut arg_iter = args.iter();
                 $(
                     let $arg_name = crate::inst::process_arg!(ctx, fb, &mut arg_iter, $arg_kind);
                 )*
-                Ok(<$ty>::new(has_inst, $( $arg_name ),*))
+                Ok(<$ty>::new(fb.inst_set(), $( $arg_name ),*))
             }
         );
     };

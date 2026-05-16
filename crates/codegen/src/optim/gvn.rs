@@ -85,7 +85,8 @@ fn make_gvn_unary_key(
     let is = func.inst_set();
     match kind {
         UnaryInstKind::IsZero => {
-            Some(cmp::IsZero::new(is.has_is_zero()?, arg).owned_key(&[result_ty]))
+            is.has_is_zero()?;
+            Some(cmp::IsZero::new(is, arg).owned_key(&[result_ty]))
         }
         UnaryInstKind::Neg | UnaryInstKind::Not | UnaryInstKind::Snego | UnaryInstKind::EvmClz => {
             None
@@ -103,13 +104,16 @@ fn make_gvn_binary_key(
     let is = func.inst_set();
     match kind {
         BinaryInstKind::Add => {
-            Some(arith::Add::new(is.has_add()?, lhs, rhs).owned_key(&[result_ty]))
+            is.has_add()?;
+            Some(arith::Add::new(is, lhs, rhs).owned_key(&[result_ty]))
         }
         BinaryInstKind::Sub => {
-            Some(arith::Sub::new(is.has_sub()?, lhs, rhs).owned_key(&[result_ty]))
+            is.has_sub()?;
+            Some(arith::Sub::new(is, lhs, rhs).owned_key(&[result_ty]))
         }
         BinaryInstKind::Shl => {
-            Some(arith::Shl::new(is.has_shl()?, lhs, rhs).owned_key(&[result_ty]))
+            is.has_shl()?;
+            Some(arith::Shl::new(is, lhs, rhs).owned_key(&[result_ty]))
         }
         _ => None,
     }
