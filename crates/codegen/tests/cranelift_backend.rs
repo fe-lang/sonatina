@@ -878,15 +878,19 @@ fn cranelift_poseidon_loop_with_const_array() {
 /// SPIR-V validated with spirv-val (execution requires GPU runtime).
 #[test]
 fn cross_target_three_backend_known_answer() {
-    use sonatina_codegen::isa::wasm::WasmBackend;
-    use sonatina_codegen::isa::spirv::SpirvBackend;
+    use sonatina_codegen::isa::{spirv::SpirvBackend, wasm::WasmBackend};
 
     let isa = native_isa();
     let is = isa.inst_set();
     let mb = native_module_builder();
 
     // fn compute(a: i64, b: i64) -> i64 { (a + b) * (a - b) + 42 }
-    let sig = Signature::new_single("compute", Linkage::Public, &[Type::I64, Type::I64], Type::I64);
+    let sig = Signature::new_single(
+        "compute",
+        Linkage::Public,
+        &[Type::I64, Type::I64],
+        Type::I64,
+    );
     let func_ref = mb.declare_function(sig).unwrap();
     let mut fb = mb.func_builder::<InstInserter>(func_ref);
     let entry = fb.append_block();
@@ -906,9 +910,13 @@ fn cross_target_three_backend_known_answer() {
 
     // Cranelift execution
     let cranelift_backend = CraneliftBackend::new();
-    let cranelift_artifact = cranelift_backend.compile_module(&module).expect("cranelift failed");
+    let cranelift_artifact = cranelift_backend
+        .compile_module(&module)
+        .expect("cranelift failed");
     let cranelift_fn: fn(i64, i64) -> i64 = unsafe {
-        let ptr = cranelift_artifact.get_func_ptr::<fn(i64, i64) -> i64>("compute").unwrap();
+        let ptr = cranelift_artifact
+            .get_func_ptr::<fn(i64, i64) -> i64>("compute")
+            .unwrap();
         std::mem::transmute(ptr)
     };
 
@@ -919,8 +927,11 @@ fn cross_target_three_backend_known_answer() {
     let engine = wasmtime::Engine::default();
     let wasm_module = wasmtime::Module::new(&engine, &wasm_artifact.bytes).expect("load failed");
     let mut store = wasmtime::Store::new(&engine, ());
-    let instance = wasmtime::Instance::new(&mut store, &wasm_module, &[]).expect("instantiate failed");
-    let wasm_fn = instance.get_typed_func::<(i64, i64), i64>(&mut store, "compute").expect("export");
+    let instance =
+        wasmtime::Instance::new(&mut store, &wasm_module, &[]).expect("instantiate failed");
+    let wasm_fn = instance
+        .get_typed_func::<(i64, i64), i64>(&mut store, "compute")
+        .expect("export");
 
     // SPIR-V compilation and validation
     let spirv_backend = SpirvBackend::new();
@@ -929,7 +940,10 @@ fn cross_target_three_backend_known_answer() {
 
     let tmp = std::env::temp_dir().join("cross_target_test.spv");
     std::fs::write(&tmp, spirv_artifact.as_bytes()).unwrap();
-    if let Ok(output) = std::process::Command::new("spirv-val").arg(tmp.to_str().unwrap()).output() {
+    if let Ok(output) = std::process::Command::new("spirv-val")
+        .arg(tmp.to_str().unwrap())
+        .output()
+    {
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             eprintln!("spirv-val: {stderr}");
@@ -947,6 +961,9 @@ fn cross_target_three_backend_known_answer() {
             "Cranelift and WASM should produce same result for compute({a}, {b})"
         );
         let expected = a * a - b * b + 42;
-        assert_eq!(cranelift_result, expected, "compute({a}, {b}) should be {expected}");
+        assert_eq!(
+            cranelift_result, expected,
+            "compute({a}, {b}) should be {expected}"
+        );
     }
 }
