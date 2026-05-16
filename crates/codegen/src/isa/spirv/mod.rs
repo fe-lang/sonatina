@@ -266,7 +266,7 @@ fn emit_single_inst(
                 naga::Span::UNDEFINED,
             );
             target.push(naga::Statement::Emit(naga::Range::new_from_bounds(i32_idx, i32_idx)), naga::Span::UNDEFINED);
-            // Access returns a pointer into the storage buffer
+            // Access returns a pointer — no Emit needed (like LocalVariable/GlobalVariable)
             let h = func.expressions.append(
                 naga::Expression::Access { base, index: i32_idx },
                 naga::Span::UNDEFINED,
@@ -480,12 +480,12 @@ fn emit_loop_region(
                 let not_c = func.expressions.append(naga::Expression::Unary { op: naga::UnaryOperator::LogicalNot, expr: c }, naga::Span::UNDEFINED);
                 loop_body.push(naga::Statement::Emit(naga::Range::new_from_bounds(not_c, not_c)), naga::Span::UNDEFINED);
                 let mut break_block = naga::Block::new();
-                // If we have a result_local, store the exit block's return value
+                // Emit side effects (ObjStore etc.) from exit block before break
+                emit_obj_ops_from_block(function, inst_set, *br.z_dest(), func, &mut break_block, value_map, phi_locals);
                 if let Some(res_local) = result_local {
                     if let Some(ret_val) = find_block_return_value(*br.z_dest(), function, inst_set) {
                         let expr_count_before = func.expressions.len();
                         if let Some(v) = resolve_naga_value(ret_val, function, value_map, phi_locals, func) {
-                            // Only emit if resolve_naga_value created a new expression
                             if v.index() >= expr_count_before {
                                 if matches!(func.expressions[v], naga::Expression::Load { .. }
                                     | naga::Expression::Binary { .. }
@@ -575,23 +575,24 @@ fn emit_loop_region(
                     }
                 }
 
-                // Reject branch (condition false, escape): store escape result, break
+                // Reject branch (condition false, escape): emit side effects, store result, break
                 let mut reject_block = naga::Block::new();
-                if let (Some(res_local), Some(esc_bid)) = (result_local, inner_escape_block) {
-                    if let Some(ret_val) = find_block_return_value(esc_bid, function, inst_set) {
-                        let expr_count_before = func.expressions.len();
-                        if let Some(v) = resolve_naga_value(ret_val, function, value_map, phi_locals, func) {
-                            // Only emit if resolve_naga_value created a new expression
-                            // (existing expressions are already emitted in a parent scope)
-                            if v.index() >= expr_count_before {
-                                if matches!(func.expressions[v], naga::Expression::Load { .. }
-                                    | naga::Expression::Binary { .. }
-                                    | naga::Expression::Unary { .. }) {
-                                    reject_block.push(naga::Statement::Emit(naga::Range::new_from_bounds(v, v)), naga::Span::UNDEFINED);
+                if let Some(esc_bid) = inner_escape_block {
+                    emit_obj_ops_from_block(function, inst_set, esc_bid, func, &mut reject_block, value_map, phi_locals);
+                    if let Some(res_local) = result_local {
+                        if let Some(ret_val) = find_block_return_value(esc_bid, function, inst_set) {
+                            let expr_count_before = func.expressions.len();
+                            if let Some(v) = resolve_naga_value(ret_val, function, value_map, phi_locals, func) {
+                                if v.index() >= expr_count_before {
+                                    if matches!(func.expressions[v], naga::Expression::Load { .. }
+                                        | naga::Expression::Binary { .. }
+                                        | naga::Expression::Unary { .. }) {
+                                        reject_block.push(naga::Statement::Emit(naga::Range::new_from_bounds(v, v)), naga::Span::UNDEFINED);
+                                    }
                                 }
+                                let ptr = func.expressions.append(naga::Expression::LocalVariable(res_local), naga::Span::UNDEFINED);
+                                reject_block.push(naga::Statement::Store { pointer: ptr, value: v }, naga::Span::UNDEFINED);
                             }
-                            let ptr = func.expressions.append(naga::Expression::LocalVariable(res_local), naga::Span::UNDEFINED);
-                            reject_block.push(naga::Statement::Store { pointer: ptr, value: v }, naga::Span::UNDEFINED);
                         }
                     }
                 }
@@ -701,6 +702,45 @@ fn emit_loop_region(
     }
 }
 
+/// Emit only ObjIndex/ObjStore instructions from a block, creating fresh expressions.
+/// Used in break/escape paths inside loops where the full block can't be re-emitted.
+#[cfg(feature = "spirv-backend")]
+fn emit_obj_ops_from_block(
+    function: &sonatina_ir::Function,
+    inst_set: &dyn sonatina_ir::InstSetBase,
+    block: sonatina_ir::BlockId,
+    func: &mut naga::Function,
+    target: &mut naga::Block,
+    value_map: &mut std::collections::HashMap<sonatina_ir::ValueId, naga::Handle<naga::Expression>>,
+    phi_locals: &mut std::collections::HashMap<sonatina_ir::ValueId, naga::Handle<naga::LocalVariable>>,
+) {
+    use sonatina_ir::InstDowncast;
+    for inst_id in function.layout.iter_inst(block) {
+        let inst_data = function.dfg.inst(inst_id);
+
+        if let Some(obj_index) = <&sonatina_ir::inst::data::ObjIndex as InstDowncast>::downcast(inst_set, inst_data) {
+            if let Some(result) = function.dfg.inst_result(inst_id) {
+                let base = resolve_naga_value(*obj_index.object(), function, value_map, phi_locals, func).unwrap();
+                let index = resolve_naga_value(*obj_index.index(), function, value_map, phi_locals, func).unwrap();
+                let i32_idx = func.expressions.append(
+                    naga::Expression::As { expr: index, kind: naga::ScalarKind::Sint, convert: Some(4) },
+                    naga::Span::UNDEFINED,
+                );
+                target.push(naga::Statement::Emit(naga::Range::new_from_bounds(i32_idx, i32_idx)), naga::Span::UNDEFINED);
+                let h = func.expressions.append(
+                    naga::Expression::Access { base, index: i32_idx },
+                    naga::Span::UNDEFINED,
+                );
+                value_map.insert(result, h);
+            }
+        } else if let Some(obj_store) = <&sonatina_ir::inst::data::ObjStore as InstDowncast>::downcast(inst_set, inst_data) {
+            let dest = resolve_naga_value(*obj_store.object(), function, value_map, phi_locals, func).unwrap();
+            let val = resolve_naga_value(*obj_store.value(), function, value_map, phi_locals, func).unwrap();
+            target.push(naga::Statement::Store { pointer: dest, value: val }, naga::Span::UNDEFINED);
+        }
+    }
+}
+
 /// Find the return value (ValueId) of a block that contains a Return instruction.
 #[cfg(feature = "spirv-backend")]
 fn find_block_return_value(
@@ -786,7 +826,7 @@ fn translate_to_naga(
         )
     };
 
-    let effective_params = param_count.max(1); // at least 1 member for valid struct
+    let effective_params = param_count.max(1);
     let input_members: Vec<naga::StructMember> = (0..effective_params).map(|i| {
         naga::StructMember {
             name: Some(format!("p{i}")),
@@ -807,6 +847,23 @@ fn translate_to_naga(
         },
         naga::Span::UNDEFINED,
     );
+
+    // For batch mode: input is an array of structs, one per invocation
+    let input_type = if has_obj_alloc {
+        naga_mod.types.insert(
+            naga::Type {
+                name: Some("InputArray".into()),
+                inner: naga::TypeInner::Array {
+                    base: input_struct,
+                    size: naga::ArraySize::Dynamic,
+                    stride: input_span,
+                },
+            },
+            naga::Span::UNDEFINED,
+        )
+    } else {
+        input_struct
+    };
 
     let output_var = naga_mod.global_variables.append(
         naga::GlobalVariable {
@@ -829,17 +886,49 @@ fn translate_to_naga(
                 access: naga::StorageAccess::LOAD,
             },
             binding: Some(naga::ResourceBinding { group: 0, binding: 1 }),
-            ty: input_struct,
+            ty: input_type,
             init: None,
             memory_decorations: naga::ir::MemoryDecorations::empty(),
         },
         naga::Span::UNDEFINED,
     );
 
+    // u32 vec3 type for global_invocation_id
+    let u32_type = naga_mod.types.insert(
+        naga::Type {
+            name: None,
+            inner: naga::TypeInner::Scalar(naga::Scalar {
+                kind: naga::ScalarKind::Uint,
+                width: 4,
+            }),
+        },
+        naga::Span::UNDEFINED,
+    );
+    let vec3_u32_type = naga_mod.types.insert(
+        naga::Type {
+            name: None,
+            inner: naga::TypeInner::Vector {
+                size: naga::VectorSize::Tri,
+                scalar: naga::Scalar { kind: naga::ScalarKind::Uint, width: 4 },
+            },
+        },
+        naga::Span::UNDEFINED,
+    );
+
     // Build the entry point function
+    let arguments = if has_obj_alloc {
+        vec![naga::FunctionArgument {
+            name: Some("global_id".into()),
+            ty: vec3_u32_type,
+            binding: Some(naga::Binding::BuiltIn(naga::BuiltIn::GlobalInvocationId)),
+        }]
+    } else {
+        vec![]
+    };
+
     let mut func = naga::Function {
         name: Some("main".into()),
-        arguments: vec![],
+        arguments,
         result: None,
         local_variables: naga::Arena::new(),
         expressions: naga::Arena::new(),
@@ -862,7 +951,6 @@ fn translate_to_naga(
                 HashMap::new();
 
             // For batch mode (ObjAlloc), inject the output buffer into the value_map
-            // using a sentinel key so ObjAlloc can find it
             if has_obj_alloc {
                 let output_expr = func.expressions.append(
                     naga::Expression::GlobalVariable(output_var),
@@ -872,10 +960,46 @@ fn translate_to_naga(
             }
 
             // Load function args from input buffer
-            let input_expr = func.expressions.append(
+            let input_global = func.expressions.append(
                 naga::Expression::GlobalVariable(input_var),
                 naga::Span::UNDEFINED,
             );
+
+            // In batch mode, index into the input array with global_invocation_id.x
+            let input_expr = if has_obj_alloc {
+                let gid_u32 = func.expressions.append(
+                    naga::Expression::FunctionArgument(0),
+                    naga::Span::UNDEFINED,
+                );
+                let gid_x = func.expressions.append(
+                    naga::Expression::AccessIndex { base: gid_u32, index: 0 },
+                    naga::Span::UNDEFINED,
+                );
+                func.body.push(
+                    naga::Statement::Emit(naga::Range::new_from_bounds(gid_x, gid_x)),
+                    naga::Span::UNDEFINED,
+                );
+                // Cast u32 to i32 for Access index
+                let gid_i32 = func.expressions.append(
+                    naga::Expression::As {
+                        expr: gid_x,
+                        kind: naga::ScalarKind::Sint,
+                        convert: Some(4),
+                    },
+                    naga::Span::UNDEFINED,
+                );
+                func.body.push(
+                    naga::Statement::Emit(naga::Range::new_from_bounds(gid_i32, gid_i32)),
+                    naga::Span::UNDEFINED,
+                );
+                // input[gid.x] -> pointer to InputStruct for this invocation
+                func.expressions.append(
+                    naga::Expression::Access { base: input_global, index: gid_i32 },
+                    naga::Span::UNDEFINED,
+                )
+            } else {
+                input_global
+            };
 
             for (idx, &arg_val) in function.arg_values.iter().enumerate() {
                 let field = func.expressions.append(

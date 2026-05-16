@@ -438,12 +438,11 @@ fn mandelbrot_three_backend_html() {
     }
     let wasm_time = t0.elapsed();
 
-    // SPIR-V via wgpu -- same escape_time IR, per-pixel dispatch
-    let t0 = std::time::Instant::now();
-    let spirv = SpirvBackend::new().with_workgroup_size(1, 1, 1);
-    let spirv_art = spirv.compile_module(&module).expect("spirv");
+    // SPIR-V via wgpu -- batch dispatch: one launch, all pixels
+    let batch_module = build_escape_and_store();
+    let spirv = SpirvBackend::new().with_workgroup_size(64, 1, 1);
+    let spirv_art = spirv.compile_module(&batch_module).expect("spirv batch");
     let wgsl = spirv_art.wgsl.as_ref().expect("WGSL");
-    let spirv_compile_time = t0.elapsed();
 
     let mut gpu_data = vec![0i64; n * n];
     let mut gpu_available = false;
@@ -464,7 +463,7 @@ fn mandelbrot_three_backend_html() {
             eprintln!("  GPU: {}", adapter.get_info().name);
 
             let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("escape_time"),
+                label: Some("batch_mandelbrot"),
                 source: wgpu::ShaderSource::Wgsl(wgsl.into()),
             });
             let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -475,54 +474,73 @@ fn mandelbrot_three_backend_html() {
             });
             let bgl = pipeline.get_bind_group_layout(0);
 
-            let t0 = std::time::Instant::now();
+            let total = n * n;
+            // Build input: array of (c_re, c_im, max_iter, index) structs
+            let mut input_bytes = Vec::with_capacity(total * 32);
             for row in 0..n {
                 for col in 0..n {
-                    let c_re = -2048 + (col as i64 * 2662) / n as i64;
-                    let c_im = -1229 + (row as i64 * 2458) / n as i64;
-
-                    let input: Vec<u8> = [c_re, c_im, max].iter().flat_map(|v| v.to_le_bytes()).collect();
-                    let input_buf = device.create_buffer(&wgpu::BufferDescriptor {
-                        label: None, size: 24,
-                        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-                        mapped_at_creation: false,
-                    });
-                    queue.write_buffer(&input_buf, 0, &input);
-                    let output_buf = device.create_buffer(&wgpu::BufferDescriptor {
-                        label: None, size: 8,
-                        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-                        mapped_at_creation: false,
-                    });
-                    let staging_buf = device.create_buffer(&wgpu::BufferDescriptor {
-                        label: None, size: 8,
-                        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-                        mapped_at_creation: false,
-                    });
-                    let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                        label: None, layout: &bgl,
-                        entries: &[
-                            wgpu::BindGroupEntry { binding: 0, resource: output_buf.as_entire_binding() },
-                            wgpu::BindGroupEntry { binding: 1, resource: input_buf.as_entire_binding() },
-                        ],
-                    });
-                    let mut enc = device.create_command_encoder(&Default::default());
-                    { let mut p = enc.begin_compute_pass(&Default::default()); p.set_pipeline(&pipeline); p.set_bind_group(0, &bg, &[]); p.dispatch_workgroups(1,1,1); }
-                    enc.copy_buffer_to_buffer(&output_buf, 0, &staging_buf, 0, 8);
-                    queue.submit(Some(enc.finish()));
-                    let slice = staging_buf.slice(..);
-                    let (tx, rx) = std::sync::mpsc::channel();
-                    slice.map_async(wgpu::MapMode::Read, move |r| { tx.send(r).unwrap(); });
-                    let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: Some(std::time::Duration::from_secs(10)) });
-                    rx.recv().unwrap().unwrap();
-                    let data = slice.get_mapped_range();
-                    gpu_data[row * n + col] = i64::from_le_bytes(data[0..8].try_into().unwrap());
-                    drop(data);
-                    staging_buf.unmap();
+                    let c_re = -2048i64 + (col as i64 * 2662) / n as i64;
+                    let c_im = -1229i64 + (row as i64 * 2458) / n as i64;
+                    let idx = (row * n + col) as i64;
+                    for v in &[c_re, c_im, max, idx] {
+                        input_bytes.extend_from_slice(&v.to_le_bytes());
+                    }
                 }
             }
+
+            let input_buf = device.create_buffer(&wgpu::BufferDescriptor {
+                label: None, size: input_bytes.len() as u64,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            queue.write_buffer(&input_buf, 0, &input_bytes);
+
+            let output_size = (total * 8) as u64;
+            let output_buf = device.create_buffer(&wgpu::BufferDescriptor {
+                label: None, size: output_size,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            });
+            let staging_buf = device.create_buffer(&wgpu::BufferDescriptor {
+                label: None, size: output_size,
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+
+            let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: None, layout: &bgl,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: output_buf.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 1, resource: input_buf.as_entire_binding() },
+                ],
+            });
+
+            let t0 = std::time::Instant::now();
+            let workgroups = ((total + 63) / 64) as u32;
+            let mut enc = device.create_command_encoder(&Default::default());
+            {
+                let mut p = enc.begin_compute_pass(&Default::default());
+                p.set_pipeline(&pipeline);
+                p.set_bind_group(0, &bg, &[]);
+                p.dispatch_workgroups(workgroups, 1, 1);
+            }
+            enc.copy_buffer_to_buffer(&output_buf, 0, &staging_buf, 0, output_size);
+            queue.submit(Some(enc.finish()));
+
+            let slice = staging_buf.slice(..);
+            let (tx, rx) = std::sync::mpsc::channel();
+            slice.map_async(wgpu::MapMode::Read, move |r| { tx.send(r).unwrap(); });
+            let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: Some(std::time::Duration::from_secs(30)) });
+            rx.recv().unwrap().unwrap();
+            let data = slice.get_mapped_range();
+            gpu_data = data.chunks_exact(8)
+                .map(|c| i64::from_le_bytes(c.try_into().unwrap()))
+                .collect();
+            drop(data);
+            staging_buf.unmap();
             gpu_time = t0.elapsed();
-        } else { gpu_time = spirv_compile_time; }
-    } else { gpu_time = spirv_compile_time; }
+        } else { gpu_time = std::time::Duration::ZERO; }
+    } else { gpu_time = std::time::Duration::ZERO; }
 
     // Verify
     let cl_wasm_mismatches = cl_data.iter().zip(wasm_data.iter()).filter(|(a,b)| a != b).count();
