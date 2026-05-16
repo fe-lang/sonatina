@@ -226,6 +226,54 @@ fn emit_single_inst(
             value_map.insert(result, h);
             return true;
         }
+    } else if <&sonatina_ir::inst::data::ObjAlloc as InstDowncast>::downcast(inst_set, inst_data).is_some() {
+        // ObjAlloc in SPIR-V: the output storage buffer IS the allocation.
+        // Map the result to the output buffer global variable expression.
+        if let Some(result) = function.dfg.inst_result(inst_id) {
+            if let Some(&buf_expr) = value_map.get(&sonatina_ir::ValueId(u32::MAX)) {
+                value_map.insert(result, buf_expr);
+                return true;
+            }
+        }
+    } else if let Some(obj_store) = <&sonatina_ir::inst::data::ObjStore as InstDowncast>::downcast(inst_set, inst_data) {
+        // ObjStore: store value at the pointer (which is an Access expression into the buffer)
+        let dest = resolve_naga_value(*obj_store.object(), function, value_map, phi_locals, func).unwrap();
+        let val = resolve_naga_value(*obj_store.value(), function, value_map, phi_locals, func).unwrap();
+        target.push(naga::Statement::Store { pointer: dest, value: val }, naga::Span::UNDEFINED);
+        return true;
+    } else if let Some(obj_load) = <&sonatina_ir::inst::data::ObjLoad as InstDowncast>::downcast(inst_set, inst_data) {
+        if let Some(result) = function.dfg.inst_result(inst_id) {
+            let ptr = resolve_naga_value(*obj_load.object(), function, value_map, phi_locals, func).unwrap();
+            let h = func.expressions.append(
+                naga::Expression::Load { pointer: ptr },
+                naga::Span::UNDEFINED,
+            );
+            target.push(naga::Statement::Emit(naga::Range::new_from_bounds(h, h)), naga::Span::UNDEFINED);
+            value_map.insert(result, h);
+            return true;
+        }
+    } else if let Some(obj_index) = <&sonatina_ir::inst::data::ObjIndex as InstDowncast>::downcast(inst_set, inst_data) {
+        if let Some(result) = function.dfg.inst_result(inst_id) {
+            let base = resolve_naga_value(*obj_index.object(), function, value_map, phi_locals, func).unwrap();
+            let index = resolve_naga_value(*obj_index.index(), function, value_map, phi_locals, func).unwrap();
+            // Cast i64 index to i32 for array access
+            let i32_idx = func.expressions.append(
+                naga::Expression::As {
+                    expr: index,
+                    kind: naga::ScalarKind::Sint,
+                    convert: Some(4),
+                },
+                naga::Span::UNDEFINED,
+            );
+            target.push(naga::Statement::Emit(naga::Range::new_from_bounds(i32_idx, i32_idx)), naga::Span::UNDEFINED);
+            // Access returns a pointer into the storage buffer
+            let h = func.expressions.append(
+                naga::Expression::Access { base, index: i32_idx },
+                naga::Span::UNDEFINED,
+            );
+            value_map.insert(result, h);
+            return true;
+        }
     } else if let Some(ret) = <&sonatina_ir::inst::control_flow::Return as InstDowncast>::downcast(inst_set, inst_data) {
         if let Some(&val_id) = ret.args().as_slice().first() {
             let resolved = resolve_naga_value(val_id, function, value_map, phi_locals, func);
@@ -690,27 +738,53 @@ fn translate_to_naga(
         naga::Span::UNDEFINED,
     );
 
-    let output_struct = naga_mod.types.insert(
-        naga::Type {
-            name: Some("Output".into()),
-            inner: naga::TypeInner::Struct {
-                members: vec![naga::StructMember {
-                    name: Some("result".into()),
-                    ty: i64_type,
-                    binding: None,
-                    offset: 0,
-                }],
-                span: 8,
-            },
-        },
-        naga::Span::UNDEFINED,
-    );
-
-    // Determine param count from first function
+    // Scan first function for ObjAlloc to determine output mode
     let funcs_peek = module.funcs();
-    let param_count = funcs_peek.first().map(|&fr| {
-        module.func_store.try_view(fr, |f| f.arg_values.len()).unwrap_or(0)
-    }).unwrap_or(2);
+    let (param_count, has_obj_alloc) = funcs_peek.first().map(|&fr| {
+        module.func_store.try_view(fr, |f| {
+            let pc = f.arg_values.len();
+            let has_alloc = f.layout.iter_block().any(|bid| {
+                f.layout.iter_inst(bid).any(|iid| {
+                    let inst_data = f.dfg.inst(iid);
+                    <&sonatina_ir::inst::data::ObjAlloc as sonatina_ir::InstDowncast>::downcast(
+                        f.inst_set(), inst_data
+                    ).is_some()
+                })
+            });
+            (pc, has_alloc)
+        }).unwrap_or((0, false))
+    }).unwrap_or((2, false));
+
+    // Output type: dynamic array for batch (ObjAlloc) or single-value struct for scalar
+    let output_type = if has_obj_alloc {
+        naga_mod.types.insert(
+            naga::Type {
+                name: Some("OutputArray".into()),
+                inner: naga::TypeInner::Array {
+                    base: i64_type,
+                    size: naga::ArraySize::Dynamic,
+                    stride: 8,
+                },
+            },
+            naga::Span::UNDEFINED,
+        )
+    } else {
+        naga_mod.types.insert(
+            naga::Type {
+                name: Some("Output".into()),
+                inner: naga::TypeInner::Struct {
+                    members: vec![naga::StructMember {
+                        name: Some("result".into()),
+                        ty: i64_type,
+                        binding: None,
+                        offset: 0,
+                    }],
+                    span: 8,
+                },
+            },
+            naga::Span::UNDEFINED,
+        )
+    };
 
     let effective_params = param_count.max(1); // at least 1 member for valid struct
     let input_members: Vec<naga::StructMember> = (0..effective_params).map(|i| {
@@ -741,7 +815,7 @@ fn translate_to_naga(
                 access: naga::StorageAccess::LOAD | naga::StorageAccess::STORE,
             },
             binding: Some(naga::ResourceBinding { group: 0, binding: 0 }),
-            ty: output_struct,
+            ty: output_type,
             init: None,
             memory_decorations: naga::ir::MemoryDecorations::empty(),
         },
@@ -786,6 +860,16 @@ fn translate_to_naga(
             // Map phi values to LocalVariable handles for store/load in loops
             let mut phi_locals: HashMap<sonatina_ir::ValueId, naga::Handle<naga::LocalVariable>> =
                 HashMap::new();
+
+            // For batch mode (ObjAlloc), inject the output buffer into the value_map
+            // using a sentinel key so ObjAlloc can find it
+            if has_obj_alloc {
+                let output_expr = func.expressions.append(
+                    naga::Expression::GlobalVariable(output_var),
+                    naga::Span::UNDEFINED,
+                );
+                value_map.insert(sonatina_ir::ValueId(u32::MAX), output_expr);
+            }
 
             // Load function args from input buffer
             let input_expr = func.expressions.append(
@@ -842,27 +926,30 @@ fn translate_to_naga(
         });
     }
 
-    // Store result to output buffer
-    let output_expr = func.expressions.append(
-        naga::Expression::GlobalVariable(output_var),
-        naga::Span::UNDEFINED,
-    );
-    let result_field = func.expressions.append(
-        naga::Expression::AccessIndex { base: output_expr, index: 0 },
-        naga::Span::UNDEFINED,
-    );
-
-    let final_val = result_expr.unwrap_or_else(|| {
-        func.expressions.append(
-            naga::Expression::Literal(naga::Literal::I64(0)),
+    // For scalar output, store result to output buffer struct.
+    // For batch mode (ObjAlloc), ObjStore already wrote to the buffer.
+    if !has_obj_alloc {
+        let output_expr = func.expressions.append(
+            naga::Expression::GlobalVariable(output_var),
             naga::Span::UNDEFINED,
-        )
-    });
+        );
+        let result_field = func.expressions.append(
+            naga::Expression::AccessIndex { base: output_expr, index: 0 },
+            naga::Span::UNDEFINED,
+        );
 
-    func.body.push(
-        naga::Statement::Store { pointer: result_field, value: final_val },
-        naga::Span::UNDEFINED,
-    );
+        let final_val = result_expr.unwrap_or_else(|| {
+            func.expressions.append(
+                naga::Expression::Literal(naga::Literal::I64(0)),
+                naga::Span::UNDEFINED,
+            )
+        });
+
+        func.body.push(
+            naga::Statement::Store { pointer: result_field, value: final_val },
+            naga::Span::UNDEFINED,
+        );
+    }
 
     naga_mod.entry_points.push(naga::EntryPoint {
         name: "main".into(),

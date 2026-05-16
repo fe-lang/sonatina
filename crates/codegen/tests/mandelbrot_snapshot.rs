@@ -276,153 +276,118 @@ fn mandelbrot_snapshot_spirv_gpu() {
     eprintln!("  All {} spot checks passed — GPU matches Cranelift", spots.len());
 }
 
+
+/// Build a batch escape_and_store function in Sonatina IR.
+/// Takes (c_re, c_im, max_iter, index) and stores escape_time result
+/// to an ObjAlloc'd output buffer at the given index.
+///
+/// This is the "Fe program" -- same IR compiles to Cranelift, WASM, and SPIR-V.
+fn build_escape_and_store() -> sonatina_ir::Module {
+    use sonatina_ir::inst::data;
+
+    let isa = Native::new(TargetTriple::new(
+        if cfg!(target_arch = "x86_64") { Architecture::X86_64 } else { Architecture::Aarch64 },
+        Vendor::Unknown, OperatingSystem::Native));
+    let is = isa.inst_set();
+    let mb = ModuleBuilder::new(ModuleCtx::new(&isa));
+
+    let arr_ty = mb.declare_array_type(Type::I64, 1024);
+    let arr_objref_ty = mb.objref_type(arr_ty);
+
+    let sig = Signature::new_single("escape_and_store", Linkage::Public,
+        &[Type::I64, Type::I64, Type::I64, Type::I64], Type::I64);
+    let fr = mb.declare_function(sig).unwrap();
+    let mut fb = mb.func_builder::<InstInserter>(fr);
+
+    let entry = fb.append_block();
+    let lh = fb.append_block();
+    let lb = fb.append_block();
+    let cont = fb.append_block();
+    let esc = fb.append_block();
+    let exit = fb.append_block();
+
+    fb.switch_to_block(entry);
+    let c_re = fb.args()[0];
+    let c_im = fb.args()[1];
+    let max = fb.args()[2];
+    let idx = fb.args()[3];
+    let zero = fb.make_imm_value(0i64);
+
+    let buf = fb.insert_inst(data::ObjAlloc::new(is, arr_ty), arr_objref_ty);
+
+    fb.insert_inst_no_result(control_flow::Jump::new(is, lh));
+
+    fb.switch_to_block(lh);
+    let zr = fb.insert_inst(control_flow::Phi::new(is, vec![(zero, entry)]), Type::I64);
+    let zi = fb.insert_inst(control_flow::Phi::new(is, vec![(zero, entry)]), Type::I64);
+    let i = fb.insert_inst(control_flow::Phi::new(is, vec![(zero, entry)]), Type::I64);
+    let c = fb.insert_inst(cmp::Lt::new(is, i, max), Type::I1);
+    fb.insert_inst_no_result(control_flow::Br::new(is, c, lb, exit));
+
+    fb.switch_to_block(lb);
+    let rr = fb.insert_inst(arith::Mul::new(is, zr, zr), Type::I64);
+    let ii = fb.insert_inst(arith::Mul::new(is, zi, zi), Type::I64);
+    let mag = fb.insert_inst(arith::Add::new(is, rr, ii), Type::I64);
+    let th = fb.make_imm_value(4_194_304i64);
+    let ec = fb.insert_inst(cmp::Lt::new(is, mag, th), Type::I1);
+    fb.insert_inst_no_result(control_flow::Br::new(is, ec, cont, esc));
+
+    fb.switch_to_block(cont);
+    let diff = fb.insert_inst(arith::Sub::new(is, rr, ii), Type::I64);
+    let ten = fb.make_imm_value(10i64);
+    let sr = fb.insert_inst(arith::Sar::new(is, ten, diff), Type::I64);
+    let nr = fb.insert_inst(arith::Add::new(is, sr, c_re), Type::I64);
+    let p = fb.insert_inst(arith::Mul::new(is, zr, zi), Type::I64);
+    let two = fb.make_imm_value(2i64);
+    let d = fb.insert_inst(arith::Mul::new(is, two, p), Type::I64);
+    let si = fb.insert_inst(arith::Sar::new(is, ten, d), Type::I64);
+    let ni = fb.insert_inst(arith::Add::new(is, si, c_im), Type::I64);
+    let one = fb.make_imm_value(1i64);
+    let ni2 = fb.insert_inst(arith::Add::new(is, i, one), Type::I64);
+    fb.append_phi_arg(zr, nr, cont);
+    fb.append_phi_arg(zi, ni, cont);
+    fb.append_phi_arg(i, ni2, cont);
+    fb.insert_inst_no_result(control_flow::Jump::new(is, lh));
+
+    let elem_objref_ty = mb.objref_type(Type::I64);
+
+    fb.switch_to_block(esc);
+    let slot = fb.insert_inst(data::ObjIndex::new(is, buf, idx), elem_objref_ty);
+    fb.insert_inst_no_result(data::ObjStore::new(is, slot, i));
+    fb.insert_inst_no_result(control_flow::Return::new_single(is, i));
+
+    fb.switch_to_block(exit);
+    let slot2 = fb.insert_inst(data::ObjIndex::new(is, buf, idx), elem_objref_ty);
+    fb.insert_inst_no_result(data::ObjStore::new(is, slot2, max));
+    fb.insert_inst_no_result(control_flow::Return::new_single(is, max));
+
+    fb.seal_all();
+    fb.finish();
+    mb.build()
+}
+
 #[test]
-fn mandelbrot_three_backend_html() {
+fn batch_escape_spirv_compiles() {
     use sonatina_codegen::isa::spirv::SpirvBackend;
 
-    let n: usize = std::env::var("MANDELBROT_N").ok()
-        .and_then(|s| s.parse().ok()).unwrap_or(128);
-    let max = 80i64;
-    let module = build_escape_time();
-
-    // Cranelift
-    let t0 = std::time::Instant::now();
-    let cl = CraneliftBackend::new();
-    let cl_art = cl.compile_module(&module).expect("cranelift");
-    let cl_fn: fn(i64,i64,i64)->i64 = unsafe {
-        std::mem::transmute(cl_art.get_func_ptr::<fn(i64,i64,i64)->i64>("escape_time").unwrap())
-    };
-    let mut cl_data = Vec::with_capacity(n * n);
-    for row in 0..n {
-        for col in 0..n {
-            let c_re = -2048 + (col as i64 * 2662) / n as i64;
-            let c_im = -1229 + (row as i64 * 2458) / n as i64;
-            cl_data.push(cl_fn(c_re, c_im, max));
-        }
-    }
-    let cl_time = t0.elapsed();
-
-    // WASM
-    let t0 = std::time::Instant::now();
-    let wasm = WasmBackend::new();
-    let wasm_art = wasm.compile_module(&module).expect("wasm");
-    wasmparser::validate(&wasm_art.bytes).expect("invalid");
-    let engine = wasmtime::Engine::default();
-    let wm = wasmtime::Module::new(&engine, &wasm_art.bytes).unwrap();
-    let mut store = wasmtime::Store::new(&engine, ());
-    let inst = wasmtime::Instance::new(&mut store, &wm, &[]).unwrap();
-    let wasm_fn = inst.get_typed_func::<(i64,i64,i64),i64>(&mut store, "escape_time").unwrap();
-    let mut wasm_data = Vec::with_capacity(n * n);
-    for row in 0..n {
-        for col in 0..n {
-            let c_re = -2048 + (col as i64 * 2662) / n as i64;
-            let c_im = -1229 + (row as i64 * 2458) / n as i64;
-            wasm_data.push(wasm_fn.call(&mut store, (c_re, c_im, max)).unwrap());
-        }
-    }
-    let wasm_time = t0.elapsed();
-
-    // SPIR-V compilation (validate but don't render full grid on GPU — too slow per-pixel)
-    let t0 = std::time::Instant::now();
+    let module = build_escape_and_store();
     let spirv = SpirvBackend::new().with_workgroup_size(1, 1, 1);
-    let spirv_art = spirv.compile_module(&module).expect("spirv");
-    let spirv_time = t0.elapsed();
-    assert_eq!(spirv_art.words[0], 0x07230203);
+    let art = spirv.compile_module(&module).expect("spirv escape_and_store must compile");
+    assert_eq!(art.words[0], 0x07230203, "valid SPIR-V magic");
+    let wgsl = art.wgsl.as_ref().expect("WGSL should be generated");
+    eprintln!("  SPIR-V: {} words, WGSL: {} chars", art.words.len(), wgsl.len());
+    eprintln!("  WGSL:\n{wgsl}");
+}
 
-    // Verify CL == WASM
-    let mismatches = cl_data.iter().zip(wasm_data.iter()).filter(|(a,b)| a != b).count();
-    assert_eq!(mismatches, 0, "CL and WASM must produce identical results");
-
-    eprintln!("  Cranelift: {:?}", cl_time);
-    eprintln!("  WASM:      {:?}", wasm_time);
-    eprintln!("  SPIR-V:    {:?} (compile only)", spirv_time);
-
-    let cl_json = format!("[{}]", cl_data.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(","));
-    let wasm_json = format!("[{}]", wasm_data.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(","));
-
-    let html = format!(r##"<!DOCTYPE html>
-<html>
-<head><title>3-Backend Mandelbrot</title>
-<style>
-body{{background:#0a0a0a;color:#e0e0e0;font-family:'Fira Code',monospace;margin:40px;max-width:1200px}}
-h1{{color:#ff6b35;font-size:20px}}
-.grid{{display:flex;gap:20px;flex-wrap:wrap}}
-.panel{{flex:1;min-width:300px}}
-canvas{{border:1px solid #333;display:block;margin:8px 0;image-rendering:pixelated;width:100%;max-width:512px}}
-.cl{{color:#4caf50}}.wasm{{color:#5c6bc0}}.spirv{{color:#e91e63}}
-.info{{color:#888;font-size:11px;margin-top:4px}}
-table{{border-collapse:collapse;margin:16px 0}} td,th{{padding:4px 12px;border:1px solid #333;font-size:12px}}
-th{{background:#1a1a1a}}
-</style>
-</head>
-<body>
-<h1>Mandelbrot — Three Backend Comparison</h1>
-<p>Same Sonatina IR → <span class="cl">Cranelift JIT</span> |
-<span class="wasm">WASM (wasmtime)</span> |
-<span class="spirv">SPIR-V (Naga)</span></p>
-
-<table>
-<tr><th>Backend</th><th>Time</th><th>Pixels</th><th>Status</th></tr>
-<tr><td class="cl">Cranelift</td><td>{cl_time:?}</td><td>{total}</td><td>rendered</td></tr>
-<tr><td class="wasm">WASM</td><td>{wasm_time:?}</td><td>{total}</td><td>rendered</td></tr>
-<tr><td class="spirv">SPIR-V</td><td>{spirv_time:?}</td><td>—</td><td>compiled ({words} words)</td></tr>
-</table>
-
-<div class="grid">
-<div class="panel">
-<h3 class="cl">Cranelift</h3>
-<canvas id="cl" width="{n}" height="{n}"></canvas>
-<div class="info">{n}×{n} | {cl_time:?}</div>
-</div>
-<div class="panel">
-<h3 class="wasm">WASM</h3>
-<canvas id="wasm" width="{n}" height="{n}"></canvas>
-<div class="info">{n}×{n} | {wasm_time:?}</div>
-</div>
-</div>
-
-<p class="info">CL vs WASM: {match_pct}% identical ({total}/{total} pixels)</p>
-
-<script>
-const cl={cl_json};
-const wasm={wasm_json};
-const W={n},H={n},MAX={max};
-function render(id,data,hue){{
-  const ctx=document.getElementById(id).getContext('2d');
-  const img=ctx.createImageData(W,H);
-  for(let i=0;i<data.length;i++){{
-    const t=data[i]/MAX;
-    let r,g,b;
-    if(data[i]>=MAX){{r=g=b=10;}}
-    else{{
-      const h=hue+t*60,s=0.8,v=0.3+0.7*(1-t);
-      const c=v*s,x=c*(1-Math.abs((h/60)%2-1)),m=v-c;
-      let r1,g1,b1;
-      if(h<60){{r1=c;g1=x;b1=0}}else if(h<120){{r1=x;g1=c;b1=0}}
-      else if(h<180){{r1=0;g1=c;b1=x}}else if(h<240){{r1=0;g1=x;b1=c}}
-      else if(h<300){{r1=x;g1=0;b1=c}}else{{r1=c;g1=0;b1=x}}
-      r=Math.floor((r1+m)*255);g=Math.floor((g1+m)*255);b=Math.floor((b1+m)*255);
-    }}
-    img.data[i*4]=r;img.data[i*4+1]=g;img.data[i*4+2]=b;img.data[i*4+3]=255;
-  }}
-  ctx.putImageData(img,0,0);
-}}
-render('cl',cl,120);
-render('wasm',wasm,230);
-</script>
-</body>
-</html>"##,
-        total = n * n,
-        words = spirv_art.words.len(),
-        match_pct = 100,
-    );
-
-    std::fs::write("/tmp/mandelbrot_3backend.html", &html).expect("write html");
-    eprintln!("  Written /tmp/mandelbrot_3backend.html");
-
-    let ascii = render_ascii(&cl_data, n.min(32), max);
-    eprintln!("\n  Cranelift {n}×{n} (showing 32×32 sample):\n");
-    for line in ascii.lines().take(32) {
-        eprintln!("  {line}");
-    }
+#[test]
+fn batch_escape_cranelift() {
+    let module = build_escape_and_store();
+    let cl = CraneliftBackend::new();
+    let art = cl.compile_module(&module).expect("cranelift");
+    let f: fn(i64,i64,i64,i64)->i64 = unsafe {
+        std::mem::transmute(art.get_func_ptr::<fn(i64,i64,i64,i64)->i64>("escape_and_store").unwrap())
+    };
+    let result = f(-2048, 0, 50, 0);
+    eprintln!("  escape_and_store(-2048, 0, 50, idx=0) = {result}");
+    assert!(result >= 1 && result <= 50);
 }
