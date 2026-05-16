@@ -1,0 +1,26 @@
+#! evm.case: negative dividend
+#!   calldata: u256(0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff9) u256(3)
+#!   expect: return u256(0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe) u256(0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff)
+
+target = "evm-ethereum-osaka"
+
+func public %entry() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i32;
+        v1.i256 = evm_calldata_load 32.i32;
+        v2.i8 = trunc v0 i8;
+        v3.i8 = trunc v1 i8;
+        v4.i8 = evm_sdiv v2 v3;
+        v5.i8 = evm_smod v2 v3;
+        v6.i256 = sext v4 i256;
+        v7.i256 = sext v5 i256;
+        mstore 0.i8 v6 i256;
+        mstore 32.i8 v7 i256;
+        evm_return 0.i8 64.i8;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}
