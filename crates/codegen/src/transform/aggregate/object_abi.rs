@@ -583,9 +583,7 @@ impl ObjectReturnOutParam {
                 }
                 function.dfg.replace_inst(
                     inst,
-                    Box::new(control_flow::Return::new_unit(
-                        function.inst_set(),
-                    )),
+                    Box::new(control_flow::Return::new_unit(function.inst_set())),
                 );
             }
         }
@@ -664,11 +662,7 @@ impl ObjectReturnOutParam {
             .collect();
         let new_call = cursor.insert_inst_data(
             function,
-            control_flow::Call::new(
-                function.inst_set(),
-                *call.callee(),
-                new_args,
-            ),
+            control_flow::Call::new(function.inst_set(), *call.callee(), new_args),
         );
         cursor.attach_results(function, new_call, &[]);
 

@@ -1,5 +1,4 @@
-use sonatina_codegen::Backend;
-use sonatina_codegen::isa::spirv::SpirvBackend;
+use sonatina_codegen::{Backend, isa::spirv::SpirvBackend};
 use sonatina_ir::{
     Linkage, Signature, Type,
     builder::ModuleBuilder,
@@ -25,7 +24,9 @@ fn native_module_builder() -> ModuleBuilder {
 #[test]
 fn spirv_constant_return_valid() {
     let isa = Native::new(TargetTriple::new(
-        Architecture::X86_64, Vendor::Unknown, OperatingSystem::Native
+        Architecture::X86_64,
+        Vendor::Unknown,
+        OperatingSystem::Native,
     ));
     let is = isa.inst_set();
     let mb = native_module_builder();
@@ -44,14 +45,20 @@ fn spirv_constant_return_valid() {
 
     let module = mb.build();
     let backend = SpirvBackend::new();
-    let artifact = backend.compile_module(&module).expect("SPIR-V compilation failed");
+    let artifact = backend
+        .compile_module(&module)
+        .expect("SPIR-V compilation failed");
 
     // Basic structural validation: check magic number
     assert!(artifact.words.len() > 5, "SPIR-V module too small");
     assert_eq!(artifact.words[0], 0x07230203, "wrong SPIR-V magic number");
 
     let bytes = artifact.as_bytes();
-    eprintln!("SPIR-V module: {} words, {} bytes", artifact.words.len(), bytes.len());
+    eprintln!(
+        "SPIR-V module: {} words, {} bytes",
+        artifact.words.len(),
+        bytes.len()
+    );
 
     // Validate with spirv-val if available
     let tmp = std::env::temp_dir().join("test_spirv.spv");
@@ -63,8 +70,12 @@ fn spirv_constant_return_valid() {
         Ok(output) => {
             let stderr = String::from_utf8_lossy(&output.stderr);
             let stdout = String::from_utf8_lossy(&output.stdout);
-            if !stderr.is_empty() { eprintln!("spirv-val stderr: {stderr}"); }
-            if !stdout.is_empty() { eprintln!("spirv-val stdout: {stdout}"); }
+            if !stderr.is_empty() {
+                eprintln!("spirv-val stderr: {stderr}");
+            }
+            if !stdout.is_empty() {
+                eprintln!("spirv-val stdout: {stdout}");
+            }
             assert!(output.status.success(), "spirv-val validation failed");
         }
         Err(_) => {
@@ -77,7 +88,9 @@ fn spirv_constant_return_valid() {
 #[test]
 fn spirv_arithmetic_return_valid() {
     let isa = Native::new(TargetTriple::new(
-        Architecture::X86_64, Vendor::Unknown, OperatingSystem::Native
+        Architecture::X86_64,
+        Vendor::Unknown,
+        OperatingSystem::Native,
     ));
     let is = isa.inst_set();
     let mb = native_module_builder();
@@ -97,7 +110,9 @@ fn spirv_arithmetic_return_valid() {
 
     let module = mb.build();
     let backend = SpirvBackend::new().with_workgroup_size(1, 1, 1);
-    let artifact = backend.compile_module(&module).expect("SPIR-V compilation failed");
+    let artifact = backend
+        .compile_module(&module)
+        .expect("SPIR-V compilation failed");
 
     assert_eq!(artifact.words[0], 0x07230203);
     eprintln!("SPIR-V arithmetic module: {} words", artifact.words.len());
@@ -106,7 +121,9 @@ fn spirv_arithmetic_return_valid() {
 #[test]
 fn spirv_poseidon_sigma_valid() {
     let isa = Native::new(TargetTriple::new(
-        Architecture::X86_64, Vendor::Unknown, OperatingSystem::Native
+        Architecture::X86_64,
+        Vendor::Unknown,
+        OperatingSystem::Native,
     ));
     let is = isa.inst_set();
     let mb = native_module_builder();
@@ -132,7 +149,9 @@ fn spirv_poseidon_sigma_valid() {
 
     let module = mb.build();
     let backend = SpirvBackend::new().with_workgroup_size(1, 1, 1);
-    let artifact = backend.compile_module(&module).expect("SPIR-V compilation failed");
+    let artifact = backend
+        .compile_module(&module)
+        .expect("SPIR-V compilation failed");
 
     assert_eq!(artifact.words[0], 0x07230203, "SPIR-V magic");
     eprintln!("SPIR-V Poseidon module: {} words", artifact.words.len());
@@ -140,7 +159,10 @@ fn spirv_poseidon_sigma_valid() {
     // Validate with spirv-val
     let tmp = std::env::temp_dir().join("poseidon_spirv.spv");
     std::fs::write(&tmp, artifact.as_bytes()).unwrap();
-    if let Ok(output) = std::process::Command::new("spirv-val").arg(tmp.to_str().unwrap()).output() {
+    if let Ok(output) = std::process::Command::new("spirv-val")
+        .arg(tmp.to_str().unwrap())
+        .output()
+    {
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             eprintln!("spirv-val: {stderr}");
@@ -154,11 +176,12 @@ fn spirv_poseidon_sigma_valid() {
 /// SPIR-V validates. All use the same computation.
 #[test]
 fn three_backend_poseidon_known_answer() {
-    use sonatina_codegen::isa::cranelift::CraneliftBackend;
-    use sonatina_codegen::isa::wasm::WasmBackend;
+    use sonatina_codegen::isa::{cranelift::CraneliftBackend, wasm::WasmBackend};
 
     let isa = Native::new(TargetTriple::new(
-        Architecture::X86_64, Vendor::Unknown, OperatingSystem::Native
+        Architecture::X86_64,
+        Vendor::Unknown,
+        OperatingSystem::Native,
     ));
     let is = isa.inst_set();
     let mb = native_module_builder();
@@ -186,9 +209,8 @@ fn three_backend_poseidon_known_answer() {
     // Cranelift execution
     let cl = CraneliftBackend::new();
     let cl_art = cl.compile_module(&module).expect("cranelift");
-    let cl_fn: fn() -> i64 = unsafe {
-        std::mem::transmute(cl_art.get_func_ptr::<fn() -> i64>("poseidon").unwrap())
-    };
+    let cl_fn: fn() -> i64 =
+        unsafe { std::mem::transmute(cl_art.get_func_ptr::<fn() -> i64>("poseidon").unwrap()) };
     assert_eq!(cl_fn(), expected, "Cranelift Poseidon");
 
     // WASM execution
@@ -199,8 +221,14 @@ fn three_backend_poseidon_known_answer() {
     let wm = wasmtime::Module::new(&engine, &wasm_art.bytes).unwrap();
     let mut store = wasmtime::Store::new(&engine, ());
     let inst = wasmtime::Instance::new(&mut store, &wm, &[]).unwrap();
-    let wasm_fn = inst.get_typed_func::<(), i64>(&mut store, "poseidon").unwrap();
-    assert_eq!(wasm_fn.call(&mut store, ()).unwrap(), expected, "WASM Poseidon");
+    let wasm_fn = inst
+        .get_typed_func::<(), i64>(&mut store, "poseidon")
+        .unwrap();
+    assert_eq!(
+        wasm_fn.call(&mut store, ()).unwrap(),
+        expected,
+        "WASM Poseidon"
+    );
 
     // SPIR-V validation (execution requires GPU)
     let spirv = SpirvBackend::new();
@@ -208,7 +236,10 @@ fn three_backend_poseidon_known_answer() {
     assert_eq!(spirv_art.words[0], 0x07230203);
     let tmp = std::env::temp_dir().join("poseidon_3way.spv");
     std::fs::write(&tmp, spirv_art.as_bytes()).unwrap();
-    if let Ok(output) = std::process::Command::new("spirv-val").arg(tmp.to_str().unwrap()).output() {
+    if let Ok(output) = std::process::Command::new("spirv-val")
+        .arg(tmp.to_str().unwrap())
+        .output()
+    {
         assert!(output.status.success(), "SPIR-V Poseidon should validate");
     }
     let _ = std::fs::remove_file(&tmp);
@@ -217,7 +248,9 @@ fn three_backend_poseidon_known_answer() {
 #[test]
 fn spirv_loop_sum_to_valid() {
     let isa = Native::new(TargetTriple::new(
-        Architecture::X86_64, Vendor::Unknown, OperatingSystem::Native
+        Architecture::X86_64,
+        Vendor::Unknown,
+        OperatingSystem::Native,
     ));
     let is = isa.inst_set();
     let mb = native_module_builder();
@@ -239,7 +272,10 @@ fn spirv_loop_sum_to_valid() {
     fb.insert_inst_no_result(control_flow::Jump::new(is, loop_header));
 
     fb.switch_to_block(loop_header);
-    let acc = fb.insert_inst(control_flow::Phi::new(is, vec![(init_acc, entry)]), Type::I64);
+    let acc = fb.insert_inst(
+        control_flow::Phi::new(is, vec![(init_acc, entry)]),
+        Type::I64,
+    );
     let i = fb.insert_inst(control_flow::Phi::new(is, vec![(init_i, entry)]), Type::I64);
     let cond = fb.insert_inst(cmp::Lt::new(is, i, n), Type::I1);
     fb.insert_inst_no_result(control_flow::Br::new(is, cond, loop_body, exit));
@@ -259,19 +295,27 @@ fn spirv_loop_sum_to_valid() {
 
     let module = mb.build();
     let backend = SpirvBackend::new().with_workgroup_size(1, 1, 1);
-    let artifact = backend.compile_module(&module).expect("SPIR-V loop compilation failed");
+    let artifact = backend
+        .compile_module(&module)
+        .expect("SPIR-V loop compilation failed");
 
     assert_eq!(artifact.words[0], 0x07230203, "valid SPIR-V magic");
     eprintln!("SPIR-V loop module: {} words", artifact.words.len());
 
     let tmp = std::env::temp_dir().join("spirv_loop_sum.spv");
     std::fs::write(&tmp, artifact.as_bytes()).unwrap();
-    if let Ok(output) = std::process::Command::new("spirv-val").arg(tmp.to_str().unwrap()).output() {
+    if let Ok(output) = std::process::Command::new("spirv-val")
+        .arg(tmp.to_str().unwrap())
+        .output()
+    {
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             eprintln!("spirv-val: {stderr}");
         }
-        assert!(output.status.success(), "SPIR-V loop should validate with spirv-val");
+        assert!(
+            output.status.success(),
+            "SPIR-V loop should validate with spirv-val"
+        );
     }
     let _ = std::fs::remove_file(&tmp);
 }

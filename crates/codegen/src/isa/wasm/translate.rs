@@ -13,8 +13,7 @@ use waffle::{
 
 use sonatina_ir::{
     BlockId, Function, Immediate, InstDowncast, InstSetBase, Module, Signature, Type, Value,
-    ValueId,
-    module::FuncRef,
+    ValueId, module::FuncRef,
 };
 
 fn sonatina_to_waffle_type(ty: Type) -> Option<WType> {
@@ -84,7 +83,9 @@ pub(super) fn translate_module(
         let wsig = wmod.signatures.push(sig_data);
 
         let body = translate_function(module, func_ref, &wmod, wsig, memory)?;
-        let wfunc = wmod.funcs.push(FuncDecl::Body(wsig, format!("{name}"), body));
+        let wfunc = wmod
+            .funcs
+            .push(FuncDecl::Body(wsig, format!("{name}"), body));
 
         wmod.exports.push(waffle::Export {
             name: name.clone(),
@@ -490,21 +491,36 @@ fn resolve_value(
     match value {
         Value::Immediate { imm, ty } => {
             let wval = match imm {
-                Immediate::I1(b) => {
-                    body.add_op(block, Operator::I32Const { value: *b as u32 }, &[], &[WType::I32])
-                }
-                Immediate::I8(v) => {
-                    body.add_op(block, Operator::I32Const { value: *v as u32 }, &[], &[WType::I32])
-                }
-                Immediate::I16(v) => {
-                    body.add_op(block, Operator::I32Const { value: *v as u32 }, &[], &[WType::I32])
-                }
-                Immediate::I32(v) => {
-                    body.add_op(block, Operator::I32Const { value: *v as u32 }, &[], &[WType::I32])
-                }
-                Immediate::I64(v) => {
-                    body.add_op(block, Operator::I64Const { value: *v as u64 }, &[], &[WType::I64])
-                }
+                Immediate::I1(b) => body.add_op(
+                    block,
+                    Operator::I32Const { value: *b as u32 },
+                    &[],
+                    &[WType::I32],
+                ),
+                Immediate::I8(v) => body.add_op(
+                    block,
+                    Operator::I32Const { value: *v as u32 },
+                    &[],
+                    &[WType::I32],
+                ),
+                Immediate::I16(v) => body.add_op(
+                    block,
+                    Operator::I32Const { value: *v as u32 },
+                    &[],
+                    &[WType::I32],
+                ),
+                Immediate::I32(v) => body.add_op(
+                    block,
+                    Operator::I32Const { value: *v as u32 },
+                    &[],
+                    &[WType::I32],
+                ),
+                Immediate::I64(v) => body.add_op(
+                    block,
+                    Operator::I64Const { value: *v as u64 },
+                    &[],
+                    &[WType::I64],
+                ),
                 _ => return None,
             };
             Some(wval)
@@ -530,9 +546,9 @@ fn collect_phi_args(
     let mut args = Vec::new();
     for inst_id in function.layout.iter_inst(target_block) {
         let inst_data = function.dfg.inst(inst_id);
-        if let Some(phi) = <&sonatina_ir::inst::control_flow::Phi as InstDowncast>::downcast(
-            inst_set, inst_data,
-        ) {
+        if let Some(phi) =
+            <&sonatina_ir::inst::control_flow::Phi as InstDowncast>::downcast(inst_set, inst_data)
+        {
             for &(value, from_block) in phi.args() {
                 if from_block == source_block {
                     if let Some(wval) = resolve_value(function, value, value_map, body, wb) {

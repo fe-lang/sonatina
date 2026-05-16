@@ -1,5 +1,4 @@
-use sonatina_codegen::Backend;
-use sonatina_codegen::isa::wasm::WasmBackend;
+use sonatina_codegen::{Backend, isa::wasm::WasmBackend};
 use sonatina_ir::{
     Linkage, Signature, Type,
     builder::ModuleBuilder,
@@ -33,7 +32,12 @@ fn wasm_add_two_i64s_wasmtime() {
     let is = isa.inst_set();
     let mb = native_module_builder();
 
-    let sig = Signature::new_single("add_i64", Linkage::Public, &[Type::I64, Type::I64], Type::I64);
+    let sig = Signature::new_single(
+        "add_i64",
+        Linkage::Public,
+        &[Type::I64, Type::I64],
+        Type::I64,
+    );
     let func_ref = mb.declare_function(sig).unwrap();
 
     let mut fb = mb.func_builder::<InstInserter>(func_ref);
@@ -49,7 +53,9 @@ fn wasm_add_two_i64s_wasmtime() {
 
     let module = mb.build();
     let backend = WasmBackend::new();
-    let artifact = backend.compile_module(&module).expect("WASM compilation failed");
+    let artifact = backend
+        .compile_module(&module)
+        .expect("WASM compilation failed");
 
     // Validate WASM
     wasmparser::validate(&artifact.bytes).expect("produced invalid WASM");
@@ -66,10 +72,14 @@ fn wasm_add_two_i64s_wasmtime() {
         .get_typed_func::<(i64, i64), i64>(&mut store, "add_i64")
         .expect("add_i64 export should exist");
 
-    let result = add_fn.call(&mut store, (3, 4)).expect("call should succeed");
+    let result = add_fn
+        .call(&mut store, (3, 4))
+        .expect("call should succeed");
     assert_eq!(result, 7);
 
-    let result = add_fn.call(&mut store, (100, 200)).expect("call should succeed");
+    let result = add_fn
+        .call(&mut store, (100, 200))
+        .expect("call should succeed");
     assert_eq!(result, 300);
 }
 
@@ -98,13 +108,15 @@ fn wasm_arithmetic_chain_wasmtime() {
 
     let module = mb.build();
     let backend = WasmBackend::new();
-    let artifact = backend.compile_module(&module).expect("WASM compilation failed");
+    let artifact = backend
+        .compile_module(&module)
+        .expect("WASM compilation failed");
 
     wasmparser::validate(&artifact.bytes).expect("produced invalid WASM");
 
     let engine = wasmtime::Engine::default();
-    let wasm_module = wasmtime::Module::new(&engine, &artifact.bytes)
-        .expect("wasmtime should load the module");
+    let wasm_module =
+        wasmtime::Module::new(&engine, &artifact.bytes).expect("wasmtime should load the module");
     let mut store = wasmtime::Store::new(&engine, ());
     let instance = wasmtime::Instance::new(&mut store, &wasm_module, &[])
         .expect("wasmtime should instantiate");
@@ -139,7 +151,9 @@ fn wasm_constant_return_wasmtime() {
 
     let module = mb.build();
     let backend = WasmBackend::new();
-    let artifact = backend.compile_module(&module).expect("WASM compilation failed");
+    let artifact = backend
+        .compile_module(&module)
+        .expect("WASM compilation failed");
 
     wasmparser::validate(&artifact.bytes).expect("invalid WASM");
 
@@ -178,7 +192,10 @@ fn wasm_loop_sum_wasmtime() {
     fb.insert_inst_no_result(control_flow::Jump::new(is, loop_header));
 
     fb.switch_to_block(loop_header);
-    let acc = fb.insert_inst(control_flow::Phi::new(is, vec![(init_acc, entry)]), Type::I64);
+    let acc = fb.insert_inst(
+        control_flow::Phi::new(is, vec![(init_acc, entry)]),
+        Type::I64,
+    );
     let i = fb.insert_inst(control_flow::Phi::new(is, vec![(init_i, entry)]), Type::I64);
     let cond = fb.insert_inst(cmp::Lt::new(is, i, n), Type::I1);
     fb.insert_inst_no_result(control_flow::Br::new(is, cond, loop_body, exit));
@@ -199,7 +216,9 @@ fn wasm_loop_sum_wasmtime() {
 
     let module = mb.build();
     let backend = WasmBackend::new();
-    let artifact = backend.compile_module(&module).expect("WASM compilation failed");
+    let artifact = backend
+        .compile_module(&module)
+        .expect("WASM compilation failed");
 
     wasmparser::validate(&artifact.bytes).expect("invalid WASM");
 
@@ -208,7 +227,9 @@ fn wasm_loop_sum_wasmtime() {
     let mut store = wasmtime::Store::new(&engine, ());
     let instance = wasmtime::Instance::new(&mut store, &wasm_module, &[]).expect("instantiate");
 
-    let f = instance.get_typed_func::<i64, i64>(&mut store, "sum_to").expect("sum_to export");
+    let f = instance
+        .get_typed_func::<i64, i64>(&mut store, "sum_to")
+        .expect("sum_to export");
 
     // sum_to(5) = 0+1+2+3+4 = 10
     let r = f.call(&mut store, 5).unwrap();
@@ -268,17 +289,24 @@ fn wasm_poseidon_sigma_loop_wasmtime() {
 
     let module = mb.build();
     let backend = WasmBackend::new();
-    let artifact = backend.compile_module(&module).expect("WASM compilation failed");
+    let artifact = backend
+        .compile_module(&module)
+        .expect("WASM compilation failed");
     wasmparser::validate(&artifact.bytes).expect("invalid WASM");
 
     let engine = wasmtime::Engine::default();
     let wasm_module = wasmtime::Module::new(&engine, &artifact.bytes).expect("load");
     let mut store = wasmtime::Store::new(&engine, ());
     let instance = wasmtime::Instance::new(&mut store, &wasm_module, &[]).expect("instantiate");
-    let f = instance.get_typed_func::<(), i64>(&mut store, "poseidon_sigma").expect("export");
+    let f = instance
+        .get_typed_func::<(), i64>(&mut store, "poseidon_sigma")
+        .expect("export");
 
     let result = f.call(&mut store, ()).unwrap();
-    assert_eq!(result, 186898420806, "WASM Poseidon sigma should match Cranelift known answer");
+    assert_eq!(
+        result, 186898420806,
+        "WASM Poseidon sigma should match Cranelift known answer"
+    );
 }
 
 /// Cross-target loop known-answer: same loop IR → Cranelift + WASM, compare.
@@ -307,7 +335,10 @@ fn cross_target_loop_cranelift_vs_wasm() {
     fb.insert_inst_no_result(control_flow::Jump::new(is, loop_header));
 
     fb.switch_to_block(loop_header);
-    let acc = fb.insert_inst(control_flow::Phi::new(is, vec![(init_acc, entry)]), Type::I64);
+    let acc = fb.insert_inst(
+        control_flow::Phi::new(is, vec![(init_acc, entry)]),
+        Type::I64,
+    );
     let i = fb.insert_inst(control_flow::Phi::new(is, vec![(init_i, entry)]), Type::I64);
     let cond = fb.insert_inst(cmp::Lt::new(is, i, n), Type::I1);
     fb.insert_inst_no_result(control_flow::Br::new(is, cond, loop_body, exit));
@@ -330,9 +361,8 @@ fn cross_target_loop_cranelift_vs_wasm() {
     // Cranelift
     let cl = CraneliftBackend::new();
     let cl_art = cl.compile_module(&module).expect("cranelift");
-    let cl_fn: fn(i64) -> i64 = unsafe {
-        std::mem::transmute(cl_art.get_func_ptr::<fn(i64) -> i64>("sum_to").unwrap())
-    };
+    let cl_fn: fn(i64) -> i64 =
+        unsafe { std::mem::transmute(cl_art.get_func_ptr::<fn(i64) -> i64>("sum_to").unwrap()) };
 
     // WASM
     let wasm = WasmBackend::new();
@@ -342,7 +372,9 @@ fn cross_target_loop_cranelift_vs_wasm() {
     let wm = wasmtime::Module::new(&engine, &wasm_art.bytes).unwrap();
     let mut store = wasmtime::Store::new(&engine, ());
     let inst = wasmtime::Instance::new(&mut store, &wm, &[]).unwrap();
-    let wasm_fn = inst.get_typed_func::<i64, i64>(&mut store, "sum_to").unwrap();
+    let wasm_fn = inst
+        .get_typed_func::<i64, i64>(&mut store, "sum_to")
+        .unwrap();
 
     for n in [0, 1, 5, 10, 100] {
         let cl_result = cl_fn(n);

@@ -1178,11 +1178,7 @@ impl ObjectAggregateAbi {
 
         let new_call = pre_call.insert_inst_data(
             function,
-            control_flow::Call::new(
-                function.inst_set(),
-                *call.callee(),
-                new_args,
-            ),
+            control_flow::Call::new(function.inst_set(), *call.callee(), new_args),
         );
         let direct_ret_tys: SmallVec<[Type; 4]> = plan
             .rets

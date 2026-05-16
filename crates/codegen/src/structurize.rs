@@ -16,10 +16,7 @@ pub enum Region {
     /// A linear block (no nesting).
     Block(BlockId),
     /// A loop with a header and body regions.
-    Loop {
-        header: BlockId,
-        body: Vec<Region>,
-    },
+    Loop { header: BlockId, body: Vec<Region> },
     /// An if-then-else with condition block, then-regions, and else-regions.
     IfThenElse {
         header: BlockId,
@@ -85,7 +82,8 @@ fn build_regions(
 
         if let Some(lp) = loop_tree.loop_of_block(block) {
             if loop_tree.loop_header(lp) == block {
-                let body = collect_loop_body(block, lp, rpo, idx, loop_tree, cfg, domtree, &mut visited);
+                let body =
+                    collect_loop_body(block, lp, rpo, idx, loop_tree, cfg, domtree, &mut visited);
                 regions.push(Region::Loop {
                     header: block,
                     body,
@@ -127,7 +125,8 @@ fn collect_loop_body(
 
         if let Some(inner_lp) = loop_tree.loop_of_block(block) {
             if inner_lp != lp && loop_tree.loop_header(inner_lp) == block {
-                let inner_body = collect_loop_body(block, inner_lp, rpo, 0, loop_tree, cfg, domtree, visited);
+                let inner_body =
+                    collect_loop_body(block, inner_lp, rpo, 0, loop_tree, cfg, domtree, visited);
                 body.push(Region::Loop {
                     header: block,
                     body: inner_body,
@@ -147,13 +146,12 @@ fn collect_loop_body(
 mod tests {
     use super::*;
     use sonatina_ir::{
-        Module, Type,
+        Linkage, Module, Signature, Type,
         builder::ModuleBuilder,
         func_cursor::InstInserter,
-        inst::control_flow::{Jump, Br, Return},
+        inst::control_flow::{Br, Jump, Return},
         isa::{Isa, native::Native},
         module::ModuleCtx,
-        Linkage, Signature,
     };
     use sonatina_triple::{Architecture, OperatingSystem, TargetTriple, Vendor};
 
@@ -185,9 +183,9 @@ mod tests {
         fb.finish();
 
         let module = mb.build();
-        let result = module.func_store.view(func_ref, |func| {
-            structurize_function(func)
-        });
+        let result = module
+            .func_store
+            .view(func_ref, |func| structurize_function(func));
         let structured = result.unwrap();
         assert_eq!(structured.regions.len(), 2);
         assert!(matches!(structured.regions[0], Region::Block(_)));
@@ -219,12 +217,19 @@ mod tests {
         fb.finish();
 
         let module = mb.build();
-        let result = module.func_store.view(func_ref, |func| {
-            structurize_function(func)
-        });
+        let result = module
+            .func_store
+            .view(func_ref, |func| structurize_function(func));
         let structured = result.unwrap();
 
-        let has_loop = structured.regions.iter().any(|r| matches!(r, Region::Loop { .. }));
-        assert!(has_loop, "expected a loop region in {:?}", structured.regions);
+        let has_loop = structured
+            .regions
+            .iter()
+            .any(|r| matches!(r, Region::Loop { .. }));
+        assert!(
+            has_loop,
+            "expected a loop region in {:?}",
+            structured.regions
+        );
     }
 }

@@ -1,25 +1,38 @@
 //! Mandelbrot snapshot test: NxN escape times from each backend.
 //! Default N=32. Override with MANDELBROT_N env var.
 
-use sonatina_codegen::Backend;
-use sonatina_codegen::isa::cranelift::CraneliftBackend;
-use sonatina_codegen::isa::wasm::WasmBackend;
+use sonatina_codegen::{
+    Backend,
+    isa::{cranelift::CraneliftBackend, wasm::WasmBackend},
+};
 use sonatina_ir::{
     Linkage, Signature, Type,
-    builder::ModuleBuilder, func_cursor::InstInserter,
+    builder::ModuleBuilder,
+    func_cursor::InstInserter,
     inst::{arith, cmp, control_flow},
-    isa::{Isa, native::Native}, module::ModuleCtx,
+    isa::{Isa, native::Native},
+    module::ModuleCtx,
 };
 use sonatina_triple::{Architecture, OperatingSystem, TargetTriple, Vendor};
 
 fn build_escape_time() -> sonatina_ir::Module {
     let isa = Native::new(TargetTriple::new(
-        if cfg!(target_arch = "x86_64") { Architecture::X86_64 } else { Architecture::Aarch64 },
-        Vendor::Unknown, OperatingSystem::Native));
+        if cfg!(target_arch = "x86_64") {
+            Architecture::X86_64
+        } else {
+            Architecture::Aarch64
+        },
+        Vendor::Unknown,
+        OperatingSystem::Native,
+    ));
     let is = isa.inst_set();
     let mb = ModuleBuilder::new(ModuleCtx::new(&isa));
-    let sig = Signature::new_single("escape_time", Linkage::Public,
-        &[Type::I64, Type::I64, Type::I64], Type::I64);
+    let sig = Signature::new_single(
+        "escape_time",
+        Linkage::Public,
+        &[Type::I64, Type::I64, Type::I64],
+        Type::I64,
+    );
     let fr = mb.declare_function(sig).unwrap();
     let mut fb = mb.func_builder::<InstInserter>(fr);
     let entry = fb.append_block();
@@ -29,7 +42,9 @@ fn build_escape_time() -> sonatina_ir::Module {
     let esc = fb.append_block();
     let exit = fb.append_block();
     fb.switch_to_block(entry);
-    let c_re = fb.args()[0]; let c_im = fb.args()[1]; let max = fb.args()[2];
+    let c_re = fb.args()[0];
+    let c_im = fb.args()[1];
+    let max = fb.args()[2];
     let zero = fb.make_imm_value(0i64);
     fb.insert_inst_no_result(control_flow::Jump::new(is, lh));
     fb.switch_to_block(lh);
@@ -65,7 +80,8 @@ fn build_escape_time() -> sonatina_ir::Module {
     fb.insert_inst_no_result(control_flow::Return::new_single(is, i));
     fb.switch_to_block(exit);
     fb.insert_inst_no_result(control_flow::Return::new_single(is, max));
-    fb.seal_all(); fb.finish();
+    fb.seal_all();
+    fb.finish();
     mb.build()
 }
 
@@ -92,15 +108,20 @@ fn render_ascii(data: &[i64], n: usize, max: i64) -> String {
 
 #[test]
 fn mandelbrot_snapshot_cranelift() {
-    let n: usize = std::env::var("MANDELBROT_N").ok()
-        .and_then(|s| s.parse().ok()).unwrap_or(32);
+    let n: usize = std::env::var("MANDELBROT_N")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(32);
     let max = 50i64;
     let module = build_escape_time();
 
     let cl = CraneliftBackend::new();
     let art = cl.compile_module(&module).expect("cranelift");
-    let f: fn(i64,i64,i64)->i64 = unsafe {
-        std::mem::transmute(art.get_func_ptr::<fn(i64,i64,i64)->i64>("escape_time").unwrap())
+    let f: fn(i64, i64, i64) -> i64 = unsafe {
+        std::mem::transmute(
+            art.get_func_ptr::<fn(i64, i64, i64) -> i64>("escape_time")
+                .unwrap(),
+        )
     };
 
     let mut data = Vec::with_capacity(n * n);
@@ -118,8 +139,10 @@ fn mandelbrot_snapshot_cranelift() {
 
 #[test]
 fn mandelbrot_snapshot_wasm() {
-    let n: usize = std::env::var("MANDELBROT_N").ok()
-        .and_then(|s| s.parse().ok()).unwrap_or(32);
+    let n: usize = std::env::var("MANDELBROT_N")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(32);
     let max = 50i64;
     let module = build_escape_time();
 
@@ -130,7 +153,9 @@ fn mandelbrot_snapshot_wasm() {
     let wm = wasmtime::Module::new(&engine, &art.bytes).unwrap();
     let mut store = wasmtime::Store::new(&engine, ());
     let inst = wasmtime::Instance::new(&mut store, &wm, &[]).unwrap();
-    let f = inst.get_typed_func::<(i64,i64,i64),i64>(&mut store, "escape_time").unwrap();
+    let f = inst
+        .get_typed_func::<(i64, i64, i64), i64>(&mut store, "escape_time")
+        .unwrap();
 
     let mut data = Vec::with_capacity(n * n);
     for row in 0..n {
@@ -151,12 +176,18 @@ fn mandelbrot_snapshot_spirv_compiles() {
 
     let module = build_escape_time();
     let spirv = SpirvBackend::new().with_workgroup_size(1, 1, 1);
-    let art = spirv.compile_module(&module).expect("spirv escape_time must compile");
+    let art = spirv
+        .compile_module(&module)
+        .expect("spirv escape_time must compile");
     assert_eq!(art.words[0], 0x07230203, "valid SPIR-V magic number");
     assert!(art.wgsl.is_some(), "WGSL output must be generated");
     let wgsl = art.wgsl.as_ref().unwrap();
     assert!(wgsl.contains("fn main"), "WGSL must contain entry point");
-    eprintln!("  SPIR-V: {} words, WGSL: {} chars", art.words.len(), wgsl.len());
+    eprintln!(
+        "  SPIR-V: {} words, WGSL: {} chars",
+        art.words.len(),
+        wgsl.len()
+    );
 }
 
 #[test]
@@ -175,17 +206,22 @@ fn mandelbrot_snapshot_spirv_gpu() {
         ..Default::default()
     })) {
         Ok(a) => a,
-        Err(_) => { eprintln!("  No GPU adapter — skipping GPU snapshot"); return; }
+        Err(_) => {
+            eprintln!("  No GPU adapter — skipping GPU snapshot");
+            return;
+        }
     };
-    let (device, queue) = match pollster::block_on(adapter.request_device(
-        &wgpu::DeviceDescriptor {
+    let (device, queue) =
+        match pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             required_features: wgpu::Features::SHADER_INT64,
             ..Default::default()
-        }
-    )) {
-        Ok(dq) => dq,
-        Err(_) => { eprintln!("  No SHADER_INT64 support — skipping"); return; }
-    };
+        })) {
+            Ok(dq) => dq,
+            Err(_) => {
+                eprintln!("  No SHADER_INT64 support — skipping");
+                return;
+            }
+        };
 
     eprintln!("  GPU: {}", adapter.get_info().name);
 
@@ -197,53 +233,72 @@ fn mandelbrot_snapshot_spirv_gpu() {
     // Spot-check a few pixels against Cranelift
     let cl = CraneliftBackend::new();
     let cl_art = cl.compile_module(&module).expect("cranelift");
-    let cl_fn: fn(i64,i64,i64)->i64 = unsafe {
-        std::mem::transmute(cl_art.get_func_ptr::<fn(i64,i64,i64)->i64>("escape_time").unwrap())
+    let cl_fn: fn(i64, i64, i64) -> i64 = unsafe {
+        std::mem::transmute(
+            cl_art
+                .get_func_ptr::<fn(i64, i64, i64) -> i64>("escape_time")
+                .unwrap(),
+        )
     };
 
     let spots = [
-        (-2048i64, 0i64),    // far left
-        (0, 0),              // origin
-        (614, 0),            // right
-        (-512, 614),         // upper
-        (-1024, -614),       // lower left
+        (-2048i64, 0i64), // far left
+        (0, 0),           // origin
+        (614, 0),         // right
+        (-512, 614),      // upper
+        (-1024, -614),    // lower left
     ];
     let max = 50i64;
 
     for (c_re, c_im) in &spots {
         let expected = cl_fn(*c_re, *c_im, max);
 
-        let input: Vec<u8> = [*c_re, *c_im, max].iter().flat_map(|v| v.to_le_bytes()).collect();
+        let input: Vec<u8> = [*c_re, *c_im, max]
+            .iter()
+            .flat_map(|v| v.to_le_bytes())
+            .collect();
         let input_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: None, size: 24,
+            label: None,
+            size: 24,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         queue.write_buffer(&input_buf, 0, &input);
 
         let output_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: None, size: 8,
+            label: None,
+            size: 8,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
         let staging_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: None, size: 8,
+            label: None,
+            size: 8,
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
 
         let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: None, layout: None, module: &shader,
+            label: None,
+            layout: None,
+            module: &shader,
             entry_point: Some("main"),
             compilation_options: Default::default(),
             cache: None,
         });
         let bgl = pipeline.get_bind_group_layout(0);
         let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: None, layout: &bgl,
+            label: None,
+            layout: &bgl,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: output_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: input_buf.as_entire_binding() },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: output_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: input_buf.as_entire_binding(),
+                },
             ],
         });
 
@@ -259,7 +314,9 @@ fn mandelbrot_snapshot_spirv_gpu() {
 
         let slice = staging_buf.slice(..);
         let (tx, rx) = std::sync::mpsc::channel();
-        slice.map_async(wgpu::MapMode::Read, move |r| { tx.send(r).unwrap(); });
+        slice.map_async(wgpu::MapMode::Read, move |r| {
+            tx.send(r).unwrap();
+        });
         let _ = device.poll(wgpu::PollType::Wait {
             submission_index: None,
             timeout: Some(std::time::Duration::from_secs(10)),
@@ -271,11 +328,16 @@ fn mandelbrot_snapshot_spirv_gpu() {
         staging_buf.unmap();
 
         eprintln!("  ({c_re},{c_im}): CL={expected} GPU={gpu_result}");
-        assert_eq!(expected, gpu_result, "GPU must match Cranelift at ({c_re},{c_im})");
+        assert_eq!(
+            expected, gpu_result,
+            "GPU must match Cranelift at ({c_re},{c_im})"
+        );
     }
-    eprintln!("  All {} spot checks passed — GPU matches Cranelift", spots.len());
+    eprintln!(
+        "  All {} spot checks passed — GPU matches Cranelift",
+        spots.len()
+    );
 }
-
 
 /// Build a batch escape_and_store function in Sonatina IR.
 /// Takes (c_re, c_im, max_iter, index) and stores escape_time result
@@ -286,16 +348,26 @@ fn build_escape_and_store() -> sonatina_ir::Module {
     use sonatina_ir::inst::data;
 
     let isa = Native::new(TargetTriple::new(
-        if cfg!(target_arch = "x86_64") { Architecture::X86_64 } else { Architecture::Aarch64 },
-        Vendor::Unknown, OperatingSystem::Native));
+        if cfg!(target_arch = "x86_64") {
+            Architecture::X86_64
+        } else {
+            Architecture::Aarch64
+        },
+        Vendor::Unknown,
+        OperatingSystem::Native,
+    ));
     let is = isa.inst_set();
     let mb = ModuleBuilder::new(ModuleCtx::new(&isa));
 
     let arr_ty = mb.declare_array_type(Type::I64, 1024);
     let arr_objref_ty = mb.objref_type(arr_ty);
 
-    let sig = Signature::new_single("escape_and_store", Linkage::Public,
-        &[Type::I64, Type::I64, Type::I64, Type::I64], Type::I64);
+    let sig = Signature::new_single(
+        "escape_and_store",
+        Linkage::Public,
+        &[Type::I64, Type::I64, Type::I64, Type::I64],
+        Type::I64,
+    );
     let fr = mb.declare_function(sig).unwrap();
     let mut fb = mb.func_builder::<InstInserter>(fr);
 
@@ -372,10 +444,16 @@ fn batch_escape_spirv_compiles() {
 
     let module = build_escape_and_store();
     let spirv = SpirvBackend::new().with_workgroup_size(1, 1, 1);
-    let art = spirv.compile_module(&module).expect("spirv escape_and_store must compile");
+    let art = spirv
+        .compile_module(&module)
+        .expect("spirv escape_and_store must compile");
     assert_eq!(art.words[0], 0x07230203, "valid SPIR-V magic");
     let wgsl = art.wgsl.as_ref().expect("WGSL should be generated");
-    eprintln!("  SPIR-V: {} words, WGSL: {} chars", art.words.len(), wgsl.len());
+    eprintln!(
+        "  SPIR-V: {} words, WGSL: {} chars",
+        art.words.len(),
+        wgsl.len()
+    );
     eprintln!("  WGSL:\n{wgsl}");
 }
 
@@ -384,8 +462,11 @@ fn batch_escape_cranelift() {
     let module = build_escape_and_store();
     let cl = CraneliftBackend::new();
     let art = cl.compile_module(&module).expect("cranelift");
-    let f: fn(i64,i64,i64,i64)->i64 = unsafe {
-        std::mem::transmute(art.get_func_ptr::<fn(i64,i64,i64,i64)->i64>("escape_and_store").unwrap())
+    let f: fn(i64, i64, i64, i64) -> i64 = unsafe {
+        std::mem::transmute(
+            art.get_func_ptr::<fn(i64, i64, i64, i64) -> i64>("escape_and_store")
+                .unwrap(),
+        )
     };
     let result = f(-2048, 0, 50, 0);
     eprintln!("  escape_and_store(-2048, 0, 50, idx=0) = {result}");
@@ -396,8 +477,10 @@ fn batch_escape_cranelift() {
 fn mandelbrot_three_backend_html() {
     use sonatina_codegen::isa::spirv::SpirvBackend;
 
-    let n: usize = std::env::var("MANDELBROT_N").ok()
-        .and_then(|s| s.parse().ok()).unwrap_or(32);
+    let n: usize = std::env::var("MANDELBROT_N")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(32);
     let max = 50i64;
     let module = build_escape_time();
 
@@ -405,8 +488,12 @@ fn mandelbrot_three_backend_html() {
     let t0 = std::time::Instant::now();
     let cl = CraneliftBackend::new();
     let cl_art = cl.compile_module(&module).expect("cranelift");
-    let cl_fn: fn(i64,i64,i64)->i64 = unsafe {
-        std::mem::transmute(cl_art.get_func_ptr::<fn(i64,i64,i64)->i64>("escape_time").unwrap())
+    let cl_fn: fn(i64, i64, i64) -> i64 = unsafe {
+        std::mem::transmute(
+            cl_art
+                .get_func_ptr::<fn(i64, i64, i64) -> i64>("escape_time")
+                .unwrap(),
+        )
     };
     let mut cl_data = Vec::with_capacity(n * n);
     for row in 0..n {
@@ -427,7 +514,9 @@ fn mandelbrot_three_backend_html() {
     let wm = wasmtime::Module::new(&engine, &wasm_art.bytes).unwrap();
     let mut store = wasmtime::Store::new(&engine, ());
     let inst = wasmtime::Instance::new(&mut store, &wm, &[]).unwrap();
-    let wasm_fn = inst.get_typed_func::<(i64,i64,i64),i64>(&mut store, "escape_time").unwrap();
+    let wasm_fn = inst
+        .get_typed_func::<(i64, i64, i64), i64>(&mut store, "escape_time")
+        .unwrap();
     let mut wasm_data = Vec::with_capacity(n * n);
     for row in 0..n {
         for col in 0..n {
@@ -449,16 +538,18 @@ fn mandelbrot_three_backend_html() {
     let gpu_time;
 
     let instance = wgpu::Instance::default();
-    if let Ok(adapter) = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-        power_preference: wgpu::PowerPreference::HighPerformance,
-        ..Default::default()
-    })) {
-        if let Ok((device, queue)) = pollster::block_on(adapter.request_device(
-            &wgpu::DeviceDescriptor {
+    if let Ok(adapter) =
+        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            ..Default::default()
+        }))
+    {
+        if let Ok((device, queue)) =
+            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
                 required_features: wgpu::Features::SHADER_INT64,
                 ..Default::default()
-            }
-        )) {
+            }))
+        {
             gpu_available = true;
             eprintln!("  GPU: {}", adapter.get_info().name);
 
@@ -467,7 +558,9 @@ fn mandelbrot_three_backend_html() {
                 source: wgpu::ShaderSource::Wgsl(wgsl.into()),
             });
             let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: None, layout: None, module: &shader,
+                label: None,
+                layout: None,
+                module: &shader,
                 entry_point: Some("main"),
                 compilation_options: Default::default(),
                 cache: None,
@@ -489,7 +582,8 @@ fn mandelbrot_three_backend_html() {
             }
 
             let input_buf = device.create_buffer(&wgpu::BufferDescriptor {
-                label: None, size: input_bytes.len() as u64,
+                label: None,
+                size: input_bytes.len() as u64,
                 usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });
@@ -497,21 +591,30 @@ fn mandelbrot_three_backend_html() {
 
             let output_size = (total * 8) as u64;
             let output_buf = device.create_buffer(&wgpu::BufferDescriptor {
-                label: None, size: output_size,
+                label: None,
+                size: output_size,
                 usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
                 mapped_at_creation: false,
             });
             let staging_buf = device.create_buffer(&wgpu::BufferDescriptor {
-                label: None, size: output_size,
+                label: None,
+                size: output_size,
                 usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });
 
             let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: None, layout: &bgl,
+                label: None,
+                layout: &bgl,
                 entries: &[
-                    wgpu::BindGroupEntry { binding: 0, resource: output_buf.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 1, resource: input_buf.as_entire_binding() },
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: output_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: input_buf.as_entire_binding(),
+                    },
                 ],
             });
 
@@ -529,26 +632,44 @@ fn mandelbrot_three_backend_html() {
 
             let slice = staging_buf.slice(..);
             let (tx, rx) = std::sync::mpsc::channel();
-            slice.map_async(wgpu::MapMode::Read, move |r| { tx.send(r).unwrap(); });
-            let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: Some(std::time::Duration::from_secs(30)) });
+            slice.map_async(wgpu::MapMode::Read, move |r| {
+                tx.send(r).unwrap();
+            });
+            let _ = device.poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: Some(std::time::Duration::from_secs(30)),
+            });
             rx.recv().unwrap().unwrap();
             let data = slice.get_mapped_range();
-            gpu_data = data.chunks_exact(8)
+            gpu_data = data
+                .chunks_exact(8)
                 .map(|c| i64::from_le_bytes(c.try_into().unwrap()))
                 .collect();
             drop(data);
             staging_buf.unmap();
             gpu_time = t0.elapsed();
-        } else { gpu_time = std::time::Duration::ZERO; }
-    } else { gpu_time = std::time::Duration::ZERO; }
+        } else {
+            gpu_time = std::time::Duration::ZERO;
+        }
+    } else {
+        gpu_time = std::time::Duration::ZERO;
+    }
 
     // Verify
-    let cl_wasm_mismatches = cl_data.iter().zip(wasm_data.iter()).filter(|(a,b)| a != b).count();
+    let cl_wasm_mismatches = cl_data
+        .iter()
+        .zip(wasm_data.iter())
+        .filter(|(a, b)| a != b)
+        .count();
     assert_eq!(cl_wasm_mismatches, 0, "CL and WASM must match");
     eprintln!("  Cranelift: {:?}", cl_time);
     eprintln!("  WASM:      {:?}", wasm_time);
     if gpu_available {
-        let gpu_mismatches = cl_data.iter().zip(gpu_data.iter()).filter(|(a,b)| a != b).count();
+        let gpu_mismatches = cl_data
+            .iter()
+            .zip(gpu_data.iter())
+            .filter(|(a, b)| a != b)
+            .count();
         eprintln!("  SPIR-V:    {:?} ({} pixels)", gpu_time, gpu_data.len());
         assert_eq!(gpu_mismatches, 0, "GPU must match Cranelift");
     } else {
@@ -556,10 +677,23 @@ fn mandelbrot_three_backend_html() {
         eprintln!("  SPIR-V:    compiled only (no GPU)");
     }
 
-    let to_json = |d: &[i64]| format!("[{}]", d.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(","));
-    let spirv_label = if gpu_available { format!("SPIR-V (GPU, {:?})", gpu_time) } else { "SPIR-V (no GPU)".into() };
+    let to_json = |d: &[i64]| {
+        format!(
+            "[{}]",
+            d.iter()
+                .map(|v| v.to_string())
+                .collect::<Vec<_>>()
+                .join(",")
+        )
+    };
+    let spirv_label = if gpu_available {
+        format!("SPIR-V (GPU, {:?})", gpu_time)
+    } else {
+        "SPIR-V (no GPU)".into()
+    };
 
-    let html = format!(r##"<!DOCTYPE html>
+    let html = format!(
+        r##"<!DOCTYPE html>
 <html>
 <head><title>3-Backend Mandelbrot</title>
 <style>

@@ -2,33 +2,48 @@
 //! Cranelift does iters 0-16, WASM does 17-33, Cranelift does 34-50.
 //! The rendered image IS the relay — every pixel crossed backend boundaries.
 
-use sonatina_codegen::Backend;
-use sonatina_codegen::isa::cranelift::CraneliftBackend;
-use sonatina_codegen::isa::wasm::WasmBackend;
+use sonatina_codegen::{
+    Backend,
+    isa::{cranelift::CraneliftBackend, wasm::WasmBackend},
+};
 use sonatina_ir::{
     Linkage, Signature, Type,
-    builder::ModuleBuilder, func_cursor::InstInserter,
+    builder::ModuleBuilder,
+    func_cursor::InstInserter,
     inst::{arith, cmp, control_flow},
-    isa::{Isa, native::Native}, module::ModuleCtx,
+    isa::{Isa, native::Native},
+    module::ModuleCtx,
 };
 use sonatina_triple::{Architecture, OperatingSystem, TargetTriple, Vendor};
 
 fn build_step_module() -> sonatina_ir::Module {
     let isa = Native::new(TargetTriple::new(
-        if cfg!(target_arch = "x86_64") { Architecture::X86_64 } else { Architecture::Aarch64 },
-        Vendor::Unknown, OperatingSystem::Native));
+        if cfg!(target_arch = "x86_64") {
+            Architecture::X86_64
+        } else {
+            Architecture::Aarch64
+        },
+        Vendor::Unknown,
+        OperatingSystem::Native,
+    ));
     let is = isa.inst_set();
     let mb = ModuleBuilder::new(ModuleCtx::new(&isa));
 
     // step(z_re, z_im, c_re, c_im) -> (new_z_re, new_z_im) as two functions
     for (name, compute_re) in [("step_re", true), ("step_im", false)] {
-        let sig = Signature::new_single(name, Linkage::Public,
-            &[Type::I64, Type::I64, Type::I64], Type::I64);
+        let sig = Signature::new_single(
+            name,
+            Linkage::Public,
+            &[Type::I64, Type::I64, Type::I64],
+            Type::I64,
+        );
         let fr = mb.declare_function(sig).unwrap();
         let mut fb = mb.func_builder::<InstInserter>(fr);
         let entry = fb.append_block();
         fb.switch_to_block(entry);
-        let zr = fb.args()[0]; let zi = fb.args()[1]; let c = fb.args()[2];
+        let zr = fb.args()[0];
+        let zi = fb.args()[1];
+        let c = fb.args()[2];
         let ten = fb.make_imm_value(10i64);
 
         let result = if compute_re {
@@ -45,29 +60,34 @@ fn build_step_module() -> sonatina_ir::Module {
             fb.insert_inst(arith::Add::new(is, shifted, c), Type::I64)
         };
         fb.insert_inst_no_result(control_flow::Return::new_single(is, result));
-        fb.seal_all(); fb.finish();
+        fb.seal_all();
+        fb.finish();
     }
     mb.build()
 }
 
 struct RelayBackends {
-    cl_re: fn(i64,i64,i64)->i64,
-    cl_im: fn(i64,i64,i64)->i64,
+    cl_re: fn(i64, i64, i64) -> i64,
+    cl_im: fn(i64, i64, i64) -> i64,
 }
 
 fn relay_escape_time(
     cl: &RelayBackends,
-    wasm_re: &wasmtime::TypedFunc<(i64,i64,i64),i64>,
-    wasm_im: &wasmtime::TypedFunc<(i64,i64,i64),i64>,
+    wasm_re: &wasmtime::TypedFunc<(i64, i64, i64), i64>,
+    wasm_im: &wasmtime::TypedFunc<(i64, i64, i64), i64>,
     store: &mut wasmtime::Store<()>,
-    c_re: i64, c_im: i64, max_iter: i64, leg_size: i64,
-) -> (i64, i64) {  // (iterations, which_backend_finished)
+    c_re: i64,
+    c_im: i64,
+    max_iter: i64,
+    leg_size: i64,
+) -> (i64, i64) {
+    // (iterations, which_backend_finished)
     let mut zr: i64 = 0;
     let mut zi: i64 = 0;
 
     for iter in 0..max_iter {
         if zr.saturating_mul(zr).saturating_add(zi.saturating_mul(zi)) > 4_194_304 {
-            let backend = (iter / leg_size) % 2;  // 0=CL, 1=WASM
+            let backend = (iter / leg_size) % 2; // 0=CL, 1=WASM
             return (iter, backend);
         }
 
@@ -86,23 +106,37 @@ fn relay_escape_time(
         zr = new_re;
         zi = new_im;
     }
-    (max_iter, 2)  // in the set
+    (max_iter, 2) // in the set
 }
 
 #[test]
 fn mandelbrot_relay_render() {
     let module = build_step_module();
-    let n: usize = std::env::var("MANDELBROT_N").ok()
-        .and_then(|s| s.parse().ok()).unwrap_or(64);
+    let n: usize = std::env::var("MANDELBROT_N")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(64);
     let max_iter = 80i64;
-    let leg_size = 10i64;  // alternate every 10 iterations
+    let leg_size = 10i64; // alternate every 10 iterations
 
     // Cranelift
     let cl_backend = CraneliftBackend::new();
     let cl_art = cl_backend.compile_module(&module).expect("cranelift");
     let cl = RelayBackends {
-        cl_re: unsafe { std::mem::transmute(cl_art.get_func_ptr::<fn(i64,i64,i64)->i64>("step_re").unwrap()) },
-        cl_im: unsafe { std::mem::transmute(cl_art.get_func_ptr::<fn(i64,i64,i64)->i64>("step_im").unwrap()) },
+        cl_re: unsafe {
+            std::mem::transmute(
+                cl_art
+                    .get_func_ptr::<fn(i64, i64, i64) -> i64>("step_re")
+                    .unwrap(),
+            )
+        },
+        cl_im: unsafe {
+            std::mem::transmute(
+                cl_art
+                    .get_func_ptr::<fn(i64, i64, i64) -> i64>("step_im")
+                    .unwrap(),
+            )
+        },
     };
 
     // WASM
@@ -113,8 +147,12 @@ fn mandelbrot_relay_render() {
     let wm = wasmtime::Module::new(&engine, &wasm_art.bytes).unwrap();
     let mut store = wasmtime::Store::new(&engine, ());
     let inst = wasmtime::Instance::new(&mut store, &wm, &[]).unwrap();
-    let wasm_re = inst.get_typed_func::<(i64,i64,i64),i64>(&mut store, "step_re").unwrap();
-    let wasm_im = inst.get_typed_func::<(i64,i64,i64),i64>(&mut store, "step_im").unwrap();
+    let wasm_re = inst
+        .get_typed_func::<(i64, i64, i64), i64>(&mut store, "step_re")
+        .unwrap();
+    let wasm_im = inst
+        .get_typed_func::<(i64, i64, i64), i64>(&mut store, "step_im")
+        .unwrap();
 
     let t0 = std::time::Instant::now();
 
@@ -126,8 +164,7 @@ fn mandelbrot_relay_render() {
             let c_re = -2048 + (col as i64 * 2662) / n as i64;
             let c_im = -1229 + (row as i64 * 2458) / n as i64;
             let (iters, backend) = relay_escape_time(
-                &cl, &wasm_re, &wasm_im, &mut store,
-                c_re, c_im, max_iter, leg_size,
+                &cl, &wasm_re, &wasm_im, &mut store, c_re, c_im, max_iter, leg_size,
             );
             iters_data.push(iters);
             backend_data.push(backend);
@@ -146,10 +183,25 @@ fn mandelbrot_relay_render() {
     eprintln!("  In the set:           {set_count}");
 
     // Build HTML with real relay data
-    let iters_json = format!("[{}]", iters_data.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(","));
-    let backend_json = format!("[{}]", backend_data.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(","));
+    let iters_json = format!(
+        "[{}]",
+        iters_data
+            .iter()
+            .map(|v| v.to_string())
+            .collect::<Vec<_>>()
+            .join(",")
+    );
+    let backend_json = format!(
+        "[{}]",
+        backend_data
+            .iter()
+            .map(|v| v.to_string())
+            .collect::<Vec<_>>()
+            .join(",")
+    );
 
-    let html = format!(r##"<!DOCTYPE html>
+    let html = format!(
+        r##"<!DOCTYPE html>
 <html>
 <head><title>Mandelbrot Relay</title>
 <style>
@@ -198,7 +250,8 @@ for(let i=0;i<iters.length;i++){{
 ctx.putImageData(img,0,0);
 </script>
 </body>
-</html>"##);
+</html>"##
+    );
 
     std::fs::write("/tmp/mandelbrot_relay.html", &html).expect("write html");
     eprintln!("  Written /tmp/mandelbrot_relay.html");
@@ -209,10 +262,15 @@ ctx.putImageData(img,0,0);
     for row in 0..n.min(32) {
         for col in 0..n.min(32) {
             let idx = row * n + col * (n / 32);
-            let iters = iters_data[idx.min(iters_data.len()-1)];
-            let ch = if iters >= max_iter { '@' }
-                else if iters <= 1 { ' ' }
-                else { chars[((iters as usize * (chars.len()-1)) / max_iter as usize).min(chars.len()-1)] as char };
+            let iters = iters_data[idx.min(iters_data.len() - 1)];
+            let ch = if iters >= max_iter {
+                '@'
+            } else if iters <= 1 {
+                ' '
+            } else {
+                chars[((iters as usize * (chars.len() - 1)) / max_iter as usize)
+                    .min(chars.len() - 1)] as char
+            };
             ascii.push(ch);
         }
         ascii.push('\n');

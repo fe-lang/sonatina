@@ -339,7 +339,12 @@ fn build_enum_write_variant(
         .unwrap_or(ir::Type::Unit);
     let variant = ctx.enum_variant(&fb.module_builder, enum_ty, variant_name, args[1].span);
     let values = build_enum_payload_values(ctx, fb, &args[2..])?;
-    Ok(EnumWriteVariant::new(fb.inst_set(), object, variant, values))
+    Ok(EnumWriteVariant::new(
+        fb.inst_set(),
+        object,
+        variant,
+        values,
+    ))
 }
 
 fn build_enum_proj(

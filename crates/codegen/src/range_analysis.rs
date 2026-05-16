@@ -2192,8 +2192,7 @@ mod tests {
 
         builder.switch_to_block(b0);
         let arg = builder.args()[0];
-        let cond =
-            builder.insert_inst_with(|| IsZero::new(is, arg), Type::I1);
+        let cond = builder.insert_inst_with(|| IsZero::new(is, arg), Type::I1);
         builder.insert_inst_no_result_with(|| Br::new(is, cond, b1, b2));
 
         builder.switch_to_block(b1);

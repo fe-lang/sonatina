@@ -47,8 +47,8 @@ impl Backend for WasmBackend {
     type Error = WasmError;
 
     fn compile_module(&self, module: &Module) -> Result<Self::Artifact, Vec<Self::Error>> {
-        let (wasm_module, func_names) = translate::translate_module(module)
-            .map_err(|e| vec![WasmError::Translation(e)])?;
+        let (wasm_module, func_names) =
+            translate::translate_module(module).map_err(|e| vec![WasmError::Translation(e)])?;
 
         let bytes = wasm_module
             .to_wasm_bytes()
