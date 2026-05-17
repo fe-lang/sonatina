@@ -1,0 +1,117 @@
+#! evm.config: { stack_reach: 16, vcode: true }
+#! evm.case: left
+#!   calldata: u256(0)
+#!   expect: return u256(410)
+#! evm.case: right
+#!   calldata: u256(1)
+#!   expect: return u256(2410)
+
+target = "evm-ethereum-osaka"
+
+func private %join(v0.i1, v1.i256) -> i256 {
+block0:
+    br v0 block1 block2;
+
+block1:
+    v2.i256 = add v1 1.i256;
+    v3.i256 = add v1 2.i256;
+    v4.i256 = add v1 3.i256;
+    v5.i256 = add v1 4.i256;
+    v6.i256 = add v1 5.i256;
+    v7.i256 = add v1 6.i256;
+    v8.i256 = add v1 7.i256;
+    v9.i256 = add v1 8.i256;
+    v10.i256 = add v1 9.i256;
+    v11.i256 = add v1 10.i256;
+    v12.i256 = add v1 11.i256;
+    v13.i256 = add v1 12.i256;
+    v14.i256 = add v1 13.i256;
+    v15.i256 = add v1 14.i256;
+    v16.i256 = add v1 15.i256;
+    v17.i256 = add v1 16.i256;
+    v18.i256 = add v1 17.i256;
+    v19.i256 = add v1 18.i256;
+    v20.i256 = add v1 19.i256;
+    v21.i256 = add v1 20.i256;
+    jump block3;
+
+block2:
+    v22.i256 = add v1 101.i256;
+    v23.i256 = add v1 102.i256;
+    v24.i256 = add v1 103.i256;
+    v25.i256 = add v1 104.i256;
+    v26.i256 = add v1 105.i256;
+    v27.i256 = add v1 106.i256;
+    v28.i256 = add v1 107.i256;
+    v29.i256 = add v1 108.i256;
+    v30.i256 = add v1 109.i256;
+    v31.i256 = add v1 110.i256;
+    v32.i256 = add v1 111.i256;
+    v33.i256 = add v1 112.i256;
+    v34.i256 = add v1 113.i256;
+    v35.i256 = add v1 114.i256;
+    v36.i256 = add v1 115.i256;
+    v37.i256 = add v1 116.i256;
+    v38.i256 = add v1 117.i256;
+    v39.i256 = add v1 118.i256;
+    v40.i256 = add v1 119.i256;
+    v41.i256 = add v1 120.i256;
+    jump block3;
+
+block3:
+    v42.i256 = phi (v2 block1) (v22 block2);
+    v43.i256 = phi (v3 block1) (v23 block2);
+    v44.i256 = phi (v4 block1) (v24 block2);
+    v45.i256 = phi (v5 block1) (v25 block2);
+    v46.i256 = phi (v6 block1) (v26 block2);
+    v47.i256 = phi (v7 block1) (v27 block2);
+    v48.i256 = phi (v8 block1) (v28 block2);
+    v49.i256 = phi (v9 block1) (v29 block2);
+    v50.i256 = phi (v10 block1) (v30 block2);
+    v51.i256 = phi (v11 block1) (v31 block2);
+    v52.i256 = phi (v12 block1) (v32 block2);
+    v53.i256 = phi (v13 block1) (v33 block2);
+    v54.i256 = phi (v14 block1) (v34 block2);
+    v55.i256 = phi (v15 block1) (v35 block2);
+    v56.i256 = phi (v16 block1) (v36 block2);
+    v57.i256 = phi (v17 block1) (v37 block2);
+    v58.i256 = phi (v18 block1) (v38 block2);
+    v59.i256 = phi (v19 block1) (v39 block2);
+    v60.i256 = phi (v20 block1) (v40 block2);
+    v61.i256 = phi (v21 block1) (v41 block2);
+    v62.i256 = add v61 v60;
+    v63.i256 = add v62 v59;
+    v64.i256 = add v63 v58;
+    v65.i256 = add v64 v57;
+    v66.i256 = add v65 v56;
+    v67.i256 = add v66 v55;
+    v68.i256 = add v67 v54;
+    v69.i256 = add v68 v53;
+    v70.i256 = add v69 v52;
+    v71.i256 = add v70 v51;
+    v72.i256 = add v71 v50;
+    v73.i256 = add v72 v49;
+    v74.i256 = add v73 v48;
+    v75.i256 = add v74 v47;
+    v76.i256 = add v75 v46;
+    v77.i256 = add v76 v45;
+    v78.i256 = add v77 v44;
+    v79.i256 = add v78 v43;
+    v80.i256 = add v79 v42;
+    return v80;
+}
+
+func public %entry() {
+block0:
+    v0.i256 = evm_calldata_load 0.i32;
+    v1.i1 = eq v0 0.i256;
+    v2.i256 = call %join v1 10.i256;
+    mstore 0.i32 v2 i256;
+    evm_return 0.i8 32.i8;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}

@@ -16,6 +16,8 @@
 //! - Scratch spill slots use block liveness plus phi-edge interference, because phi sources and
 //!   results are simultaneous edge assignments even though normal liveness treats phi operands as
 //!   predecessor-tail uses.
+//! - Static-arena spill objects carry the same phi-edge interference in their live regions, so
+//!   edge stores can be emitted directly without first staging every phi source on the stack.
 //!
 //! Notes specific to this codebase:
 //! - Critical edges must be split before running this allocator.

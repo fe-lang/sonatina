@@ -1,6 +1,8 @@
 use smallvec::SmallVec;
 use sonatina_ir::{BlockId, InstId, ValueId};
 
+use crate::stackalloc::Action;
+
 use super::{
     super::{
         sym_stack::StackItem,
@@ -38,11 +40,8 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
             }
         }
 
-        // Memory-only phi results do not participate in the successor's stack template. Their
-        // spill slots are assigned with phi-edge interference, so stores can be emitted directly
-        // without clobbering later source loads on this edge.
         for &(phi_res, src) in &spilled_phi_pairs {
-            self.emit_store_spilled_value_from_source(phi_res, src);
+            self.emit_spilled_phi_store(phi_res, src);
         }
 
         // Normalize the predecessor stack directly to the successor entry template:
@@ -86,6 +85,24 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
             );
             self.stack.rename_value_at_depth(depth, phi_res);
         }
+    }
+
+    fn emit_spilled_phi_store(&mut self, phi_res: ValueId, src: ValueId) {
+        if self.ctx.func.dfg.value_is_imm(src) {
+            let imm = self
+                .ctx
+                .func
+                .dfg
+                .value_imm(src)
+                .expect("imm value missing payload");
+            self.actions.push(Action::Push(imm));
+        } else if let Some(pos) = self.stack.find_reachable_value(src, self.ctx.reach.dup_max) {
+            self.actions.push(Action::StackDup(pos as u8));
+        } else {
+            let act = self.mem.load_frame_slot_or_placeholder(src);
+            self.actions.push(act);
+        }
+        self.mem.emit_store_for_spilled_value(phi_res, self.actions);
     }
 
     pub fn plan_internal_return(&mut self, inst: InstId) {
