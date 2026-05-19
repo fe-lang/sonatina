@@ -233,13 +233,18 @@ pub(crate) fn memory_access_may_touch_free_ptr_slot(
     )
 }
 
-fn function_memory_accesses_match(
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct FreePtrSlotFacts {
+    pub(crate) touches: bool,
+    pub(crate) writes: bool,
+}
+
+pub(crate) fn function_free_ptr_slot_facts(
     function: &Function,
     module: &ModuleCtx,
     backend: &EvmBackend,
     ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
-    pred: impl Fn(&Function, &sonatina_ir::MemoryAccess, &SecondaryMap<ValueId, Provenance>) -> bool,
-) -> bool {
+) -> FreePtrSlotFacts {
     let prov = compute_value_provenance(function, module, &backend.isa, |callee| {
         ptr_escape
             .get(&callee)
@@ -247,57 +252,29 @@ fn function_memory_accesses_match(
             .unwrap_or_else(|| PtrEscapeSummary::conservative_unknown_ctx(module, callee))
     });
 
-    function.layout.iter_block().any(|block| {
-        function.layout.iter_inst(block).any(|inst| {
+    let mut facts = FreePtrSlotFacts::default();
+    for block in function.layout.iter_block() {
+        for inst in function.layout.iter_inst(block) {
             // Section callees are scanned directly; call summaries only expose whole-space writes.
             if matches!(
                 backend.isa.inst_set().resolve_inst(function.dfg.inst(inst)),
                 EvmInstKind::Call(_) | EvmInstKind::EvmMalloc(_)
             ) {
-                return false;
+                continue;
             }
 
-            function
-                .dfg
-                .effects(inst)
-                .accesses
-                .iter()
-                .any(|access| pred(function, access, &prov))
-        })
-    })
-}
-
-pub(crate) fn function_may_touch_free_ptr_slot(
-    function: &Function,
-    module: &ModuleCtx,
-    backend: &EvmBackend,
-    ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
-) -> bool {
-    function_memory_accesses_match(
-        function,
-        module,
-        backend,
-        ptr_escape,
-        memory_access_may_touch_free_ptr_slot,
-    )
-}
-
-pub(crate) fn function_may_write_free_ptr_slot(
-    function: &Function,
-    module: &ModuleCtx,
-    backend: &EvmBackend,
-    ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
-) -> bool {
-    function_memory_accesses_match(
-        function,
-        module,
-        backend,
-        ptr_escape,
-        |function, access, prov| {
-            access.kind == AccessKind::Write
-                && memory_access_may_touch_free_ptr_slot(function, access, prov)
-        },
-    )
+            for access in &function.dfg.effects(inst).accesses {
+                if memory_access_may_touch_free_ptr_slot(function, access, &prov) {
+                    facts.touches = true;
+                    facts.writes |= access.kind == AccessKind::Write;
+                    if facts.writes {
+                        return facts;
+                    }
+                }
+            }
+        }
+    }
+    facts
 }
 
 #[derive(Clone, Copy)]

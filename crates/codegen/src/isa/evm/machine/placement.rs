@@ -2,7 +2,7 @@ use cranelift_entity::SecondaryMap;
 use rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
 use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
-    InstId, InstSetExt, Module,
+    Function, InstId, InstSetExt, Module,
     inst::evm::inst_set::EvmInstKind,
     isa::{Isa, evm::Evm},
     module::FuncRef,
@@ -17,7 +17,7 @@ use super::{
         memory_plan::{self, BackendSpillReserve, FuncPreAnalysis, ObjLoc, StableMode, WORD_BYTES},
         prepare::{
             ArenaBaseFacts, choose_arena_base, compute_return_escape_caller_clamp_words,
-            function_may_touch_free_ptr_slot, function_may_write_free_ptr_slot,
+            function_free_ptr_slot_facts,
         },
         ptr_escape::PtrEscapeSummary,
     },
@@ -200,76 +200,53 @@ pub(crate) fn compute_semantic_memory_placement(
         }
     }
 
-    let local_free_ptr_touches: FxHashMap<FuncRef, bool> = funcs
+    let (free_ptr_slot_may_be_touched, free_ptr_write_summaries) =
+        compute_program_free_ptr_slot_facts(module, funcs, backend, ptr_escape);
+    let placement_ctx = MallocPlacementCtx {
+        isa: &backend.isa,
+        global_dyn_base: semantic_plan.global_dyn_base,
+        backend_spill_reserve_peak: backend_spill_scratch_reserve_peak,
+        entry_may_have_live_frame: &entry_may_have_live_frame,
+        has_persistent_mallocs,
+        free_ptr_slot_may_be_touched,
+    };
+    let func_placements = funcs
         .iter()
         .copied()
         .map(|func| {
-            let touches = module.func_store.view(func, |function| {
-                function_may_touch_free_ptr_slot(function, &module.ctx, backend, ptr_escape)
-            });
-            (func, touches)
+            let func_plan = semantic_plan
+                .funcs
+                .get(&func)
+                .unwrap_or_else(|| panic!("missing semantic plan for func {}", func.as_u32()));
+            let (malloc_placements, free_ptr_floor_before_malloc) =
+                module.func_store.view(func, |function| {
+                    let malloc_placements =
+                        placement_ctx.compute_func_malloc_placements(function, func, func_plan);
+                    let free_ptr_floor_before_malloc = compute_free_ptr_floor_before_malloc(
+                        function,
+                        &module.ctx,
+                        backend,
+                        ptr_escape,
+                        backend.isa.inst_set(),
+                        &malloc_placements,
+                        &free_ptr_write_summaries,
+                    );
+                    (malloc_placements, free_ptr_floor_before_malloc)
+                });
+            (
+                func,
+                EvmFuncPlacementPlan {
+                    arena_base: func_plan.arena_base,
+                    stable_mode: func_plan.stable_mode,
+                    stable_words: func_plan.stable_words,
+                    mem_plan: machine_mem_plan_from_semantic(func_plan),
+                    alloca_loc: func_plan.alloca_loc.clone(),
+                    malloc_placements,
+                    free_ptr_floor_before_malloc,
+                },
+            )
         })
         .collect();
-    let free_ptr_slot_may_be_touched = local_free_ptr_touches.values().copied().any(|touch| touch);
-    let local_free_ptr_writes: FxHashMap<FuncRef, bool> = funcs
-        .iter()
-        .copied()
-        .map(|func| {
-            let writes = module.func_store.view(func, |function| {
-                function_may_write_free_ptr_slot(function, &module.ctx, backend, ptr_escape)
-            });
-            (func, writes)
-        })
-        .collect();
-    let free_ptr_write_summaries =
-        compute_free_ptr_write_summaries(module, funcs, &local_free_ptr_writes, &backend.isa);
-
-    let mut func_placements: FxHashMap<FuncRef, EvmFuncPlacementPlan> = FxHashMap::default();
-    for &func in funcs {
-        let func_plan = semantic_plan
-            .funcs
-            .get(&func)
-            .unwrap_or_else(|| panic!("missing semantic plan for func {}", func.as_u32()));
-        let (malloc_placements, free_ptr_floor_before_malloc) =
-            module.func_store.view(func, |function| {
-                let ctx = MallocPlacementCtx {
-                    isa: &backend.isa,
-                    func_plan,
-                    global_dyn_base: semantic_plan.global_dyn_base,
-                    backend_spill_reserve_peak: backend_spill_scratch_reserve_peak,
-                    func_uses_dynamic_frame: func_plan.uses_dynamic_frame(),
-                    entry_may_have_live_frame: entry_may_have_live_frame
-                        .get(&func)
-                        .copied()
-                        .unwrap_or(false),
-                    has_persistent_mallocs,
-                    free_ptr_slot_may_be_touched,
-                };
-                let malloc_placements = compute_func_malloc_placements(function, &ctx);
-                let free_ptr_floor_before_malloc = compute_free_ptr_floor_before_malloc(
-                    function,
-                    &module.ctx,
-                    backend,
-                    ptr_escape,
-                    backend.isa.inst_set(),
-                    &malloc_placements,
-                    &free_ptr_write_summaries,
-                );
-                (malloc_placements, free_ptr_floor_before_malloc)
-            });
-        func_placements.insert(
-            func,
-            EvmFuncPlacementPlan {
-                arena_base: func_plan.arena_base,
-                stable_mode: func_plan.stable_mode,
-                stable_words: func_plan.stable_words,
-                mem_plan: machine_mem_plan_from_semantic(func_plan),
-                alloca_loc: func_plan.alloca_loc.clone(),
-                malloc_placements,
-                free_ptr_floor_before_malloc,
-            },
-        );
-    }
 
     EvmMemoryPlacementPlan {
         arena_base: semantic_plan.arena_base,
@@ -278,6 +255,92 @@ pub(crate) fn compute_semantic_memory_placement(
         static_chain_peak_words: semantic_plan.static_chain_peak_words,
         funcs: func_placements,
     }
+}
+
+struct MallocPlacementCtx<'a> {
+    isa: &'a Evm,
+    global_dyn_base: u32,
+    backend_spill_reserve_peak: u32,
+    entry_may_have_live_frame: &'a FxHashMap<FuncRef, bool>,
+    has_persistent_mallocs: bool,
+    free_ptr_slot_may_be_touched: bool,
+}
+
+impl MallocPlacementCtx<'_> {
+    fn compute_func_malloc_placements(
+        &self,
+        function: &Function,
+        func: FuncRef,
+        func_plan: &memory_plan::FuncMemPlan,
+    ) -> FxHashMap<InstId, MallocPlacement> {
+        let mut out = FxHashMap::default();
+        let needs_dyn_sp_clamp = func_plan.uses_dynamic_frame()
+            || self
+                .entry_may_have_live_frame
+                .get(&func)
+                .copied()
+                .unwrap_or(false);
+        for block in function.layout.iter_block() {
+            for inst in function.layout.iter_inst(block) {
+                if !matches!(
+                    self.isa.inst_set().resolve_inst(function.dfg.inst(inst)),
+                    EvmInstKind::EvmMalloc(_)
+                ) {
+                    continue;
+                }
+
+                let transient = func_plan.transient_mallocs.contains(&inst);
+                let min_base = malloc_min_base(
+                    func_plan,
+                    self.global_dyn_base,
+                    self.backend_spill_reserve_peak,
+                    inst,
+                );
+                let placement = if transient
+                    && !needs_dyn_sp_clamp
+                    && !self.has_persistent_mallocs
+                    && !self.free_ptr_slot_may_be_touched
+                {
+                    MallocPlacement::Fixed { base: min_base }
+                } else {
+                    MallocPlacement::Heap {
+                        min_base,
+                        needs_dyn_sp_clamp,
+                        update_free_ptr: !transient,
+                    }
+                };
+                out.insert(inst, placement);
+            }
+        }
+        out
+    }
+}
+
+fn compute_program_free_ptr_slot_facts(
+    module: &Module,
+    funcs: &[FuncRef],
+    backend: &EvmBackend,
+    ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
+) -> (bool, FxHashMap<FuncRef, bool>) {
+    let local_facts: FxHashMap<_, _> = funcs
+        .iter()
+        .copied()
+        .map(|func| {
+            let facts = module.func_store.view(func, |function| {
+                function_free_ptr_slot_facts(function, &module.ctx, backend, ptr_escape)
+            });
+            (func, facts)
+        })
+        .collect();
+    let local_writes = local_facts
+        .iter()
+        .map(|(&func, facts)| (func, facts.writes))
+        .collect();
+
+    (
+        local_facts.values().any(|facts| facts.touches),
+        compute_free_ptr_write_summaries(module, funcs, &local_writes, &backend.isa),
+    )
 }
 
 fn machine_mem_plan_from_semantic(
@@ -352,58 +415,6 @@ fn compute_entry_may_have_live_frame(
     }
 
     entry_may_have_live_frame
-}
-
-struct MallocPlacementCtx<'a> {
-    isa: &'a Evm,
-    func_plan: &'a memory_plan::FuncMemPlan,
-    global_dyn_base: u32,
-    backend_spill_reserve_peak: u32,
-    func_uses_dynamic_frame: bool,
-    entry_may_have_live_frame: bool,
-    has_persistent_mallocs: bool,
-    free_ptr_slot_may_be_touched: bool,
-}
-
-fn compute_func_malloc_placements(
-    function: &sonatina_ir::Function,
-    ctx: &MallocPlacementCtx<'_>,
-) -> FxHashMap<InstId, MallocPlacement> {
-    let mut out = FxHashMap::default();
-    for block in function.layout.iter_block() {
-        for inst in function.layout.iter_inst(block) {
-            if !matches!(
-                ctx.isa.inst_set().resolve_inst(function.dfg.inst(inst)),
-                EvmInstKind::EvmMalloc(_)
-            ) {
-                continue;
-            }
-
-            let transient = ctx.func_plan.transient_mallocs.contains(&inst);
-            let needs_dyn_sp_clamp = ctx.func_uses_dynamic_frame || ctx.entry_may_have_live_frame;
-            let min_base = malloc_min_base(
-                ctx.func_plan,
-                ctx.global_dyn_base,
-                ctx.backend_spill_reserve_peak,
-                inst,
-            );
-            let placement = if transient
-                && !needs_dyn_sp_clamp
-                && !ctx.has_persistent_mallocs
-                && !ctx.free_ptr_slot_may_be_touched
-            {
-                MallocPlacement::Fixed { base: min_base }
-            } else {
-                MallocPlacement::Heap {
-                    min_base,
-                    needs_dyn_sp_clamp,
-                    update_free_ptr: !transient,
-                }
-            };
-            out.insert(inst, placement);
-        }
-    }
-    out
 }
 
 fn malloc_min_base(
