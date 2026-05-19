@@ -267,6 +267,10 @@ impl InstSet {
                     debug_assert!(self.table.contains_key(&tid));
                     self.table[&tid].1(self, inst)
                 }
+
+                fn contains_inst_type_id(&self, tid: std::any::TypeId) -> bool {
+                    self.table.contains_key(&tid)
+                }
             }
         }
     }
