@@ -6,17 +6,18 @@ input_file: test_files/evm/call.sntn
 evm.config: stack_reach=16 vcode=false bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 86 bytes
-  total: 86 bytes
+  section runtime: 84 bytes
+  total: 84 bytes
 
 functions:
+  mem: global_dyn_base=0x0 arena_base=0x0 scratch_peak_words=0 static_chain_peak_words=0
   entry: ir_blocks=1 ir_insts=7 vcode_ops=20 fixups=2 imm_bytes=4
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   main: ir_blocks=5 ir_insts=8 vcode_ops=37 fixups=9 imm_bytes=1
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   square: ir_blocks=1 ir_insts=2 vcode_ops=5 fixups=0 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  invert: ir_blocks=1 ir_insts=2 vcode_ops=7 fixups=0 imm_bytes=1
+  invert: ir_blocks=1 ir_insts=2 vcode_ops=6 fixups=0 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:

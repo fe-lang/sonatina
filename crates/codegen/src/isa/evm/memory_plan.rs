@@ -12,11 +12,10 @@ use crate::{
     bitset::BitSet,
     liveness::InstLiveness,
     module_analysis::{CallGraph, CallGraphSccs, SccBuilder, SccRef},
-    stackalloc::StackifyAlloc,
+    stackalloc::{StackifyAlloc, StackifyTrace},
 };
 
 use super::{
-    canonicalize_alias_value,
     frame_layout::DynamicFrameLayout,
     malloc_plan::MallocEscapeKind,
     ptr_escape::PtrEscapeSummary,
@@ -43,6 +42,26 @@ pub struct ProgramMemoryPlan {
     pub funcs: FxHashMap<FuncRef, FuncMemPlan>,
     #[allow(dead_code)]
     pub sccs: FxHashMap<SccRef, SccMemPlan>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct BackendSpillReserve {
+    pub(crate) scratch_words: u32,
+    pub(crate) stable_words: u32,
+}
+
+impl BackendSpillReserve {
+    pub(crate) fn is_empty(self) -> bool {
+        self.scratch_words == 0 && self.stable_words == 0
+    }
+
+    pub(crate) fn max_words(self) -> u32 {
+        self.scratch_words.max(self.stable_words)
+    }
+
+    pub(crate) fn satisfies(self, required: Self) -> bool {
+        self.scratch_words >= required.scratch_words && self.stable_words >= required.stable_words
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -98,21 +117,6 @@ impl FuncMemPlan {
         self.entry_abs_words.max(self.abs_words_end())
     }
 
-    pub fn abs_addr_for_loc(&self, loc: ObjLoc) -> Option<u32> {
-        match loc {
-            ObjLoc::ScratchAbs(word) => Some(self.abs_addr_for_word(word)),
-            ObjLoc::StableAbs(word) => Some(
-                self.abs_addr_for_word(
-                    self.stable_base_word()
-                        .expect("stable absolute object missing base word")
-                        .checked_add(word)
-                        .expect("stable absolute word overflow"),
-                ),
-            ),
-            ObjLoc::StableFrame(_) | ObjLoc::StackPinned(_) => None,
-        }
-    }
-
     pub fn obj_word_offset(&self, obj: StackObjId) -> Option<u32> {
         self.obj_loc.get(&obj).and_then(|loc| match *loc {
             ObjLoc::ScratchAbs(word) | ObjLoc::StableAbs(word) | ObjLoc::StableFrame(word) => {
@@ -126,15 +130,145 @@ impl FuncMemPlan {
 impl ProgramMemoryPlan {
     pub(crate) fn set_arena_base(&mut self, arena_base: u32) {
         self.arena_base = arena_base;
-        self.global_dyn_base = abs_addr_for_word(
-            arena_base,
-            self.scratch_peak_words
-                .checked_add(self.static_chain_peak_words)
-                .expect("global dynamic base word overflow"),
-        );
+        let global_dyn_base_words = self
+            .scratch_peak_words
+            .checked_add(self.static_chain_peak_words)
+            .expect("global dynamic base word overflow");
+        self.global_dyn_base = abs_addr_for_word(arena_base, global_dyn_base_words);
 
         for func_plan in self.funcs.values_mut() {
             func_plan.arena_base = arena_base;
+            if func_plan.uses_dynamic_frame() {
+                func_plan.entry_abs_words = global_dyn_base_words;
+            }
+        }
+    }
+
+    pub(crate) fn apply_backend_spill_reserves(
+        &mut self,
+        module: &Module,
+        funcs: &[FuncRef],
+        reserves: &FxHashMap<FuncRef, BackendSpillReserve>,
+    ) {
+        if reserves.values().all(|reserve| reserve.is_empty()) {
+            return;
+        }
+
+        for (&func, &reserve) in reserves {
+            if !reserve.is_empty()
+                && let Some(func_plan) = self.funcs.get_mut(&func)
+            {
+                func_plan.scratch_words = func_plan
+                    .scratch_words
+                    .checked_add(reserve.scratch_words)
+                    .expect("backend scratch spill reserve overflow");
+                func_plan.stable_words = func_plan
+                    .stable_words
+                    .checked_add(reserve.stable_words)
+                    .expect("backend stable spill reserve overflow");
+            }
+        }
+
+        self.scratch_peak_words = self
+            .funcs
+            .values()
+            .map(|func_plan| func_plan.scratch_words)
+            .max()
+            .unwrap_or(0);
+
+        let funcs_set: FxHashSet<FuncRef> = funcs.iter().copied().collect();
+        let call_graph = CallGraph::build_graph_subset(module, &funcs_set);
+        let scc = SccBuilder::new().compute_scc(&call_graph);
+        let topo = topo_sort_sccs(&funcs_set, &call_graph, &scc);
+        let scc_edges = build_scc_edges(&funcs_set, &call_graph, &scc, &topo);
+
+        let mut scc_weights: FxHashMap<SccRef, u32> = FxHashMap::default();
+        for &scc_ref in &topo {
+            let mut weight = 0;
+            if !scc.scc_info(scc_ref).is_cycle {
+                for &func in scc
+                    .scc_info(scc_ref)
+                    .components
+                    .iter()
+                    .filter(|func| funcs_set.contains(func))
+                {
+                    weight = weight.max(self.funcs[&func].stable_words);
+                }
+            }
+            scc_weights.insert(scc_ref, weight);
+        }
+
+        let mut scc_prefix: FxHashMap<SccRef, u32> = FxHashMap::default();
+        for &scc_ref in &topo {
+            scc_prefix.entry(scc_ref).or_insert(0);
+        }
+        for &scc_ref in &topo {
+            let carry = scc_prefix[&scc_ref]
+                .checked_add(scc_weights[&scc_ref])
+                .expect("static chain prefix overflow");
+            if let Some(callees) = scc_edges.get(&scc_ref) {
+                for &callee_scc in callees {
+                    scc_prefix
+                        .entry(callee_scc)
+                        .and_modify(|prefix| *prefix = (*prefix).max(carry))
+                        .or_insert(carry);
+                }
+            }
+        }
+
+        self.static_chain_peak_words = topo
+            .iter()
+            .map(|scc_ref| {
+                scc_prefix[scc_ref]
+                    .checked_add(scc_weights[scc_ref])
+                    .expect("static chain peak overflow")
+            })
+            .max()
+            .unwrap_or(0);
+        let global_dyn_base_words = self
+            .scratch_peak_words
+            .checked_add(self.static_chain_peak_words)
+            .expect("global dynamic base word overflow");
+        self.global_dyn_base = abs_addr_for_word(self.arena_base, global_dyn_base_words);
+
+        for &scc_ref in &topo {
+            self.sccs.insert(
+                scc_ref,
+                SccMemPlan {
+                    is_recursive: scc.scc_info(scc_ref).is_cycle,
+                    static_chain_prefix_words: scc_prefix[&scc_ref],
+                },
+            );
+        }
+
+        for &func in funcs {
+            let scc_ref = scc.scc_ref(func);
+            let scc_plan = self
+                .sccs
+                .get(&scc_ref)
+                .unwrap_or_else(|| panic!("missing SCC plan for scc {}", scc_ref.as_u32()));
+            let stable_base_word = self
+                .scratch_peak_words
+                .checked_add(scc_plan.static_chain_prefix_words)
+                .expect("stable base word overflow");
+            let func_plan = self
+                .funcs
+                .get_mut(&func)
+                .unwrap_or_else(|| panic!("missing memory plan for func {}", func.as_u32()));
+            func_plan.stable_mode = if scc_plan.is_recursive {
+                StableMode::DynamicFrame
+            } else if func_plan.stable_words != 0 {
+                StableMode::StaticAbs {
+                    base_word: stable_base_word,
+                }
+            } else {
+                StableMode::None
+            };
+            func_plan.entry_abs_words = if scc_plan.is_recursive {
+                global_dyn_base_words
+            } else {
+                stable_base_word
+            };
         }
     }
 }
@@ -143,6 +277,7 @@ impl ProgramMemoryPlan {
 mod tests {
     use super::*;
     use crate::isa::evm::static_arena_alloc::BlockLiveSegment;
+    use sonatina_parser::parse_module;
 
     fn region(block: u32, start_boundary: u32, end_boundary: u32) -> LiveRegion {
         LiveRegion {
@@ -166,6 +301,179 @@ mod tests {
             load_count: 0,
             store_count: 0,
         }
+    }
+
+    fn empty_func_plan(scratch_words: u32, stable_mode: StableMode) -> FuncMemPlan {
+        FuncMemPlan {
+            arena_base: STATIC_BASE,
+            scratch_words,
+            stable_words: 0,
+            stable_mode,
+            entry_abs_words: scratch_words,
+            obj_loc: FxHashMap::default(),
+            alloca_loc: FxHashMap::default(),
+            spill_obj: SecondaryMap::new(),
+            call_preserve: FxHashMap::default(),
+            malloc_future_abs_words: FxHashMap::default(),
+            transient_mallocs: FxHashSet::default(),
+            malloc_escape_kinds: FxHashMap::default(),
+            return_escape_caller_abs_words: 0,
+        }
+    }
+
+    #[test]
+    fn backend_spill_reserve_creates_stable_frame_for_functions_without_stable_frame() {
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %entry() {
+block0:
+    return;
+}
+"#,
+        )
+        .expect("module parses");
+        let func = parsed.module.funcs()[0];
+        let mut plan = ProgramMemoryPlan {
+            arena_base: STATIC_BASE,
+            scratch_peak_words: 3,
+            static_chain_peak_words: 0,
+            global_dyn_base: abs_addr_for_word(STATIC_BASE, 3),
+            funcs: FxHashMap::from_iter([(func, empty_func_plan(3, StableMode::None))]),
+            sccs: FxHashMap::default(),
+        };
+        let reserve_words = FxHashMap::from_iter([(
+            func,
+            BackendSpillReserve {
+                scratch_words: 0,
+                stable_words: 2,
+            },
+        )]);
+
+        plan.apply_backend_spill_reserves(&parsed.module, &[func], &reserve_words);
+
+        let func_plan = &plan.funcs[&func];
+        assert_eq!(func_plan.scratch_words, 3);
+        assert_eq!(func_plan.stable_words, 2);
+        assert_eq!(
+            func_plan.stable_mode,
+            StableMode::StaticAbs { base_word: 3 }
+        );
+        assert_eq!(plan.scratch_peak_words, 3);
+        assert_eq!(plan.global_dyn_base, abs_addr_for_word(STATIC_BASE, 5));
+    }
+
+    #[test]
+    fn backend_spill_reserve_extends_scratch_without_static_frame() {
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %entry() {
+block0:
+    return;
+}
+"#,
+        )
+        .expect("module parses");
+        let func = parsed.module.funcs()[0];
+        let mut plan = ProgramMemoryPlan {
+            arena_base: STATIC_BASE,
+            scratch_peak_words: 3,
+            static_chain_peak_words: 0,
+            global_dyn_base: abs_addr_for_word(STATIC_BASE, 3),
+            funcs: FxHashMap::from_iter([(func, empty_func_plan(3, StableMode::None))]),
+            sccs: FxHashMap::default(),
+        };
+        let reserve_words = FxHashMap::from_iter([(
+            func,
+            BackendSpillReserve {
+                scratch_words: 2,
+                stable_words: 0,
+            },
+        )]);
+
+        plan.apply_backend_spill_reserves(&parsed.module, &[func], &reserve_words);
+
+        let func_plan = &plan.funcs[&func];
+        assert_eq!(func_plan.scratch_words, 5);
+        assert_eq!(func_plan.stable_words, 0);
+        assert_eq!(func_plan.stable_mode, StableMode::None);
+        assert_eq!(plan.scratch_peak_words, 5);
+        assert_eq!(plan.global_dyn_base, abs_addr_for_word(STATIC_BASE, 5));
+    }
+
+    #[test]
+    fn abs_clobber_extra_reserve_extends_scratch_end() {
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %entry() {
+block0:
+    return;
+}
+"#,
+        )
+        .expect("module parses");
+        let func = parsed.module.funcs()[0];
+        let plan = ProgramMemoryPlan {
+            arena_base: STATIC_BASE,
+            scratch_peak_words: 3,
+            static_chain_peak_words: 0,
+            global_dyn_base: abs_addr_for_word(STATIC_BASE, 3),
+            funcs: FxHashMap::from_iter([(func, empty_func_plan(3, StableMode::None))]),
+            sccs: FxHashMap::default(),
+        };
+        let reserve_words = FxHashMap::from_iter([(
+            func,
+            BackendSpillReserve {
+                scratch_words: 2,
+                stable_words: 0,
+            },
+        )]);
+        let clobber_words =
+            compute_abs_clobber_words_with_extra(&parsed.module, &[func], &plan, &reserve_words);
+
+        assert_eq!(clobber_words[&func], 5);
+    }
+
+    #[test]
+    fn abs_clobber_extra_reserve_extends_static_stable_end() {
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %entry() {
+block0:
+    return;
+}
+"#,
+        )
+        .expect("module parses");
+        let func = parsed.module.funcs()[0];
+        let mut func_plan = empty_func_plan(1, StableMode::StaticAbs { base_word: 4 });
+        func_plan.stable_words = 4;
+        let plan = ProgramMemoryPlan {
+            arena_base: STATIC_BASE,
+            scratch_peak_words: 1,
+            static_chain_peak_words: 4,
+            global_dyn_base: abs_addr_for_word(STATIC_BASE, 5),
+            funcs: FxHashMap::from_iter([(func, func_plan)]),
+            sccs: FxHashMap::default(),
+        };
+        let reserve_words = FxHashMap::from_iter([(
+            func,
+            BackendSpillReserve {
+                scratch_words: 0,
+                stable_words: 2,
+            },
+        )]);
+        let clobber_words =
+            compute_abs_clobber_words_with_extra(&parsed.module, &[func], &plan, &reserve_words);
+
+        assert_eq!(clobber_words[&func], 10);
     }
 
     #[test]
@@ -593,17 +901,17 @@ impl Default for ArenaCostModel {
     }
 }
 
-pub(crate) struct FuncAnalysis {
-    pub(crate) alloc: StackifyAlloc,
+pub(crate) struct FuncPreAnalysis {
     pub(crate) inst_liveness: InstLiveness,
     pub(crate) block_order: Vec<BlockId>,
     pub(crate) value_aliases: SecondaryMap<ValueId, Option<ValueId>>,
 }
 
-impl FuncAnalysis {
-    pub(crate) fn canonicalize_value(&self, value: ValueId) -> ValueId {
-        canonicalize_alias_value(&self.value_aliases, value)
-    }
+pub(crate) struct MachineStackifyAnalysis {
+    pub(crate) alloc: StackifyAlloc,
+    pub(crate) block_order: Vec<BlockId>,
+    pub(crate) stable_final_spill_values: BitSet<ValueId>,
+    pub(crate) trace: Option<StackifyTrace>,
 }
 
 #[derive(Clone, Debug)]
@@ -1037,12 +1345,50 @@ impl PlacementLowerBoundState {
     }
 }
 
-pub(crate) fn compute_program_memory_plan(
+pub(crate) fn compute_semantic_program_memory_plan(
     module: &Module,
     funcs: &[FuncRef],
-    analyses: &FxHashMap<FuncRef, FuncAnalysis>,
+    analyses: &FxHashMap<FuncRef, FuncPreAnalysis>,
     ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
     isa: &Evm,
+    cost_model: &ArenaCostModel,
+) -> ProgramMemoryPlan {
+    let alloc_ctx = StaticArenaAllocCtx::new(&module.ctx, isa, ptr_escape);
+    let mut stack_results: Vec<_> = funcs
+        .par_iter()
+        .copied()
+        .map(|func| {
+            let analysis = analyses.get(&func).expect("missing FuncPreAnalysis");
+            let stack = module.func_store.view(func, |function| {
+                alloc_ctx.compute_func_semantic_stack_objects(func, function, analysis)
+            });
+            (func, stack)
+        })
+        .collect();
+    stack_results.sort_unstable_by_key(|(func, _)| func.as_u32());
+
+    let mut stacks: FxHashMap<FuncRef, FuncStackObjects> = FxHashMap::default();
+    for (func, stack) in stack_results {
+        stacks.insert(func, stack);
+    }
+
+    let plan = compute_program_memory_plan_from_stacks(module, funcs, &stacks, cost_model);
+
+    #[cfg(debug_assertions)]
+    {
+        let funcs_set: FxHashSet<FuncRef> = funcs.iter().copied().collect();
+        let call_graph = CallGraph::build_graph_subset(module, &funcs_set);
+        let scc = SccBuilder::new().compute_scc(&call_graph);
+        verify_program_memory_plan(funcs, &stacks, &scc, &plan);
+    }
+
+    plan
+}
+
+fn compute_program_memory_plan_from_stacks(
+    module: &Module,
+    funcs: &[FuncRef],
+    stacks: &FxHashMap<FuncRef, FuncStackObjects>,
     cost_model: &ArenaCostModel,
 ) -> ProgramMemoryPlan {
     let funcs_set: FxHashSet<FuncRef> = funcs.iter().copied().collect();
@@ -1070,25 +1416,6 @@ pub(crate) fn compute_program_memory_plan(
     let scc = SccBuilder::new().compute_scc(&call_graph);
     let topo = topo_sort_sccs(&funcs_set, &call_graph, &scc);
     let scc_edges = build_scc_edges(&funcs_set, &call_graph, &scc, &topo);
-    let alloc_ctx = StaticArenaAllocCtx::new(&module.ctx, isa, ptr_escape);
-
-    let mut stack_results: Vec<_> = funcs
-        .par_iter()
-        .copied()
-        .map(|func| {
-            let analysis = analyses.get(&func).expect("missing FuncAnalysis");
-            let stack = module.func_store.view(func, |function| {
-                alloc_ctx.compute_func_stack_objects(func, function, analysis)
-            });
-            (func, stack)
-        })
-        .collect();
-    stack_results.sort_unstable_by_key(|(func, _)| func.as_u32());
-
-    let mut stacks: FxHashMap<FuncRef, FuncStackObjects> = FxHashMap::default();
-    for (func, stack) in stack_results {
-        stacks.insert(func, stack);
-    }
 
     let mut placement_results: Vec<_> = funcs
         .par_iter()
@@ -1231,11 +1558,15 @@ pub(crate) fn compute_program_memory_plan(
         let mut alloca_loc: FxHashMap<InstId, ObjLoc> = FxHashMap::default();
         for (inst, id) in &stack.alloca_ids {
             let loc = obj_loc.get(id).copied().unwrap_or_else(|| {
-                panic!(
-                    "missing object location for alloca inst {} in func {}",
-                    inst.as_u32(),
-                    func.as_u32()
-                )
+                if stack.obj_size_words.get(id).copied() == Some(0) {
+                    ObjLoc::ScratchAbs(0)
+                } else {
+                    panic!(
+                        "missing object location for alloca inst {} in func {}",
+                        inst.as_u32(),
+                        func.as_u32()
+                    )
+                }
             });
             alloca_loc.insert(*inst, loc);
         }
@@ -1260,34 +1591,31 @@ pub(crate) fn compute_program_memory_plan(
         );
     }
 
-    let plan = ProgramMemoryPlan {
+    ProgramMemoryPlan {
         arena_base,
         scratch_peak_words,
         static_chain_peak_words,
         global_dyn_base,
         funcs: funcs_plan,
         sccs: scc_plans,
-    };
-
-    #[cfg(debug_assertions)]
-    verify_program_memory_plan(module, funcs, analyses, ptr_escape, isa, &scc, &plan);
-
-    plan
+    }
 }
 
-pub(crate) fn compute_abs_clobber_words(
+pub(crate) fn compute_abs_clobber_words_with_extra(
     module: &Module,
     funcs: &[FuncRef],
     plan: &ProgramMemoryPlan,
+    extra_reserves: &FxHashMap<FuncRef, BackendSpillReserve>,
 ) -> FxHashMap<FuncRef, u32> {
     let funcs_set: FxHashSet<FuncRef> = funcs.iter().copied().collect();
     let mut out: FxHashMap<FuncRef, u32> = FxHashMap::default();
     for &func in funcs {
-        let local = plan
-            .funcs
-            .get(&func)
-            .map(FuncMemPlan::abs_words_end)
-            .unwrap_or(0);
+        let extra_reserve = extra_reserves.get(&func).copied().unwrap_or_default();
+        let Some(func_plan) = plan.funcs.get(&func) else {
+            out.insert(func, extra_reserve.max_words());
+            continue;
+        };
+        let local = abs_words_end_with_extra_reserve(func_plan, extra_reserve);
         out.insert(func, local);
     }
 
@@ -1319,6 +1647,32 @@ pub(crate) fn compute_abs_clobber_words(
     }
 
     out
+}
+
+fn abs_words_end_with_extra_reserve(
+    func_plan: &FuncMemPlan,
+    extra_reserve: BackendSpillReserve,
+) -> u32 {
+    let scratch_end = func_plan
+        .scratch_words
+        .checked_add(extra_reserve.scratch_words)
+        .expect("scratch reserve overflow");
+    let stable_end = match func_plan.stable_mode {
+        StableMode::None => extra_reserve.stable_words,
+        StableMode::StaticAbs { base_word } => {
+            if func_plan.stable_words == 0 && extra_reserve.stable_words == 0 {
+                0
+            } else {
+                base_word
+                    .checked_add(func_plan.stable_words)
+                    .and_then(|end| end.checked_add(extra_reserve.stable_words))
+                    .expect("stable reserve overflow")
+            }
+        }
+        StableMode::DynamicFrame => 0,
+    };
+
+    scratch_end.max(stable_end)
 }
 
 fn build_planner_facts(
@@ -2491,153 +2845,150 @@ fn problem_shadow_order_id(next_shadow_base_id: u32, call_idx: usize) -> u32 {
 
 #[cfg(debug_assertions)]
 fn verify_program_memory_plan(
-    module: &Module,
     funcs: &[FuncRef],
-    analyses: &FxHashMap<FuncRef, FuncAnalysis>,
-    ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
-    isa: &Evm,
+    stacks: &FxHashMap<FuncRef, FuncStackObjects>,
     scc: &CallGraphSccs,
     plan: &ProgramMemoryPlan,
 ) {
-    let alloc_ctx = StaticArenaAllocCtx::new(&module.ctx, isa, ptr_escape);
-
     for &func in funcs {
         let Some(func_plan) = plan.funcs.get(&func) else {
             continue;
         };
-        let analysis = analyses.get(&func).expect("missing analysis");
+        let stack = stacks.get(&func).expect("missing stack objects");
         let scc_ref = scc.scc_ref(func);
         let is_recursive = scc.scc_info(scc_ref).is_cycle;
 
-        module.func_store.view(func, |function| {
-            let stack = alloc_ctx.compute_func_stack_objects(func, function, analysis);
+        let mut scratch_offsets: FxHashMap<StackObjId, u32> = FxHashMap::default();
+        let mut stable_offsets: FxHashMap<StackObjId, u32> = FxHashMap::default();
+        for (obj, loc) in &func_plan.obj_loc {
+            match *loc {
+                ObjLoc::ScratchAbs(word) => {
+                    scratch_offsets.insert(*obj, word);
+                }
+                ObjLoc::StableAbs(word) | ObjLoc::StableFrame(word) => {
+                    stable_offsets.insert(*obj, word);
+                }
+                ObjLoc::StackPinned(_) => panic!("stack-pinned objects are not implemented"),
+            }
+        }
 
-            let mut scratch_offsets: FxHashMap<StackObjId, u32> = FxHashMap::default();
-            let mut stable_offsets: FxHashMap<StackObjId, u32> = FxHashMap::default();
-            for (obj, loc) in &func_plan.obj_loc {
-                match *loc {
-                    ObjLoc::ScratchAbs(word) => {
-                        scratch_offsets.insert(*obj, word);
-                    }
-                    ObjLoc::StableAbs(word) | ObjLoc::StableFrame(word) => {
-                        stable_offsets.insert(*obj, word);
-                    }
-                    ObjLoc::StackPinned(_) => panic!("stack-pinned objects are not implemented"),
+        let scratch_subset = subset_objects(&stack.objects, scratch_offsets.keys().copied());
+        verify_subset_packing(
+            func,
+            &scratch_subset,
+            &scratch_offsets,
+            func_plan.scratch_words,
+        );
+
+        let mut stable_subset = subset_objects(&stack.objects, stable_offsets.keys().copied());
+        for call in func_plan.call_preserve.values() {
+            let PreserveMode::ShadowRuns { shadow_obj, runs } = &call.mode else {
+                continue;
+            };
+            let size_words: u32 = runs.iter().map(|run| run.len_words).sum();
+            stable_subset.push(StackObj {
+                id: *shadow_obj,
+                kind: StackObjKind::Shadow(InstId::from_u32(0)),
+                size_words,
+                region: LiveRegion::sort_only(0),
+                access_weight: 0,
+                load_count: 0,
+                store_count: 0,
+            });
+        }
+        let _ = &stable_subset;
+
+        if !is_recursive {
+            for fact in stack.obj_facts.values() {
+                if fact.size_words == 0 {
+                    continue;
+                }
+                if fact.must_stable {
+                    let loc = func_plan.obj_loc.get(&fact.id).copied().unwrap_or_else(|| {
+                        panic!("missing object location for obj {}", fact.id.as_u32())
+                    });
+                    assert!(
+                        !matches!(loc, ObjLoc::ScratchAbs(_)),
+                        "callee-visible object {} in func {} was placed in scratch",
+                        fact.id.as_u32(),
+                        func.as_u32()
+                    );
                 }
             }
+        }
 
-            let scratch_subset = subset_objects(&stack.objects, scratch_offsets.keys().copied());
-            verify_subset_packing(
-                func,
-                &scratch_subset,
-                &scratch_offsets,
-                func_plan.scratch_words,
-            );
-
-            let mut stable_subset = subset_objects(&stack.objects, stable_offsets.keys().copied());
-            for call in func_plan.call_preserve.values() {
-                let PreserveMode::ShadowRuns { shadow_obj, runs } = &call.mode else {
+        for call in &stack.call_sites {
+            let saved = func_plan
+                .call_preserve
+                .get(&call.inst)
+                .map(|plan| &plan.mode);
+            for &obj in &call.callee_visible_objs {
+                if stack.obj_size_words.get(&obj).copied() == Some(0) {
                     continue;
-                };
-                let size_words: u32 = runs.iter().map(|run| run.len_words).sum();
-                stable_subset.push(StackObj {
-                    id: *shadow_obj,
-                    kind: StackObjKind::Shadow(InstId::from_u32(0)),
-                    size_words,
-                    region: LiveRegion::sort_only(0),
-                    access_weight: 0,
-                    load_count: 0,
-                    store_count: 0,
-                });
+                }
+                let loc =
+                    func_plan.obj_loc.get(&obj).copied().unwrap_or_else(|| {
+                        panic!("missing object location for obj {}", obj.as_u32())
+                    });
+                assert!(
+                    !matches!(loc, ObjLoc::ScratchAbs(_)),
+                    "callee-visible object {} in func {} at call {} was placed in scratch",
+                    obj.as_u32(),
+                    func.as_u32(),
+                    call.inst.as_u32()
+                );
             }
-            let _ = &stable_subset;
-
-            if !is_recursive {
-                for fact in stack.obj_facts.values() {
-                    if fact.must_stable {
-                        let loc = func_plan.obj_loc.get(&fact.id).copied().unwrap_or_else(|| {
-                            panic!("missing object location for obj {}", fact.id.as_u32())
-                        });
+            for &obj in &call.live_across_objs {
+                let loc =
+                    func_plan.obj_loc.get(&obj).copied().unwrap_or_else(|| {
+                        panic!("missing object location for obj {}", obj.as_u32())
+                    });
+                if matches!(loc, ObjLoc::ScratchAbs(_)) {
+                    let Some(PreserveMode::ShadowRuns { runs, .. }) = saved else {
+                        panic!(
+                            "scratch object {} in func {} at call {} is not preserved",
+                            obj.as_u32(),
+                            func.as_u32(),
+                            call.inst.as_u32()
+                        );
+                    };
+                    let Some(src_word) = func_plan.obj_loc.get(&obj).and_then(|loc| match loc {
+                        ObjLoc::ScratchAbs(word) => Some(*word),
+                        ObjLoc::StableAbs(_) | ObjLoc::StableFrame(_) | ObjLoc::StackPinned(_) => {
+                            None
+                        }
+                    }) else {
+                        continue;
+                    };
+                    let size = stack.obj_size_words[&obj];
+                    for word in src_word..src_word + size {
                         assert!(
-                            !matches!(loc, ObjLoc::ScratchAbs(_)),
-                            "callee-visible object {} in func {} was placed in scratch",
-                            fact.id.as_u32(),
-                            func.as_u32()
+                            runs.iter().any(|run| {
+                                let end = run
+                                    .scratch_src_word
+                                    .checked_add(run.len_words)
+                                    .expect("shadow run end overflow");
+                                (run.scratch_src_word..end).contains(&word)
+                            }),
+                            "scratch object {} in func {} at call {} missing preserved word {}",
+                            obj.as_u32(),
+                            func.as_u32(),
+                            call.inst.as_u32(),
+                            word
                         );
                     }
                 }
             }
+        }
 
-            for call in &stack.call_sites {
-                let saved = func_plan
-                    .call_preserve
-                    .get(&call.inst)
-                    .map(|plan| &plan.mode);
-                for &obj in &call.callee_visible_objs {
-                    let loc = func_plan.obj_loc.get(&obj).copied().unwrap_or_else(|| {
-                        panic!("missing object location for obj {}", obj.as_u32())
-                    });
-                    assert!(
-                        !matches!(loc, ObjLoc::ScratchAbs(_)),
-                        "callee-visible object {} in func {} at call {} was placed in scratch",
-                        obj.as_u32(),
-                        func.as_u32(),
-                        call.inst.as_u32()
-                    );
-                }
-                for &obj in &call.live_across_objs {
-                    let loc = func_plan.obj_loc.get(&obj).copied().unwrap_or_else(|| {
-                        panic!("missing object location for obj {}", obj.as_u32())
-                    });
-                    if matches!(loc, ObjLoc::ScratchAbs(_)) {
-                        let Some(PreserveMode::ShadowRuns { runs, .. }) = saved else {
-                            panic!(
-                                "scratch object {} in func {} at call {} is not preserved",
-                                obj.as_u32(),
-                                func.as_u32(),
-                                call.inst.as_u32()
-                            );
-                        };
-                        let Some(src_word) =
-                            func_plan.obj_loc.get(&obj).and_then(|loc| match loc {
-                                ObjLoc::ScratchAbs(word) => Some(*word),
-                                ObjLoc::StableAbs(_)
-                                | ObjLoc::StableFrame(_)
-                                | ObjLoc::StackPinned(_) => None,
-                            })
-                        else {
-                            continue;
-                        };
-                        let size = stack.obj_size_words[&obj];
-                        for word in src_word..src_word + size {
-                            assert!(
-                                runs.iter().any(|run| {
-                                    let end = run
-                                        .scratch_src_word
-                                        .checked_add(run.len_words)
-                                        .expect("shadow run end overflow");
-                                    (run.scratch_src_word..end).contains(&word)
-                                }),
-                                "scratch object {} in func {} at call {} missing preserved word {}",
-                                obj.as_u32(),
-                                func.as_u32(),
-                                call.inst.as_u32(),
-                                word
-                            );
-                        }
-                    }
-                }
-            }
-
-            if !stable_subset.is_empty() {
-                verify_subset_packing(
-                    func,
-                    &stable_subset,
-                    &stable_offsets,
-                    func_plan.stable_words,
-                );
-            }
-        });
+        if !stable_subset.is_empty() {
+            verify_subset_packing(
+                func,
+                &stable_subset,
+                &stable_offsets,
+                func_plan.stable_words,
+            );
+        }
     }
 }
 

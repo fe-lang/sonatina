@@ -5,7 +5,9 @@ use sonatina_triple::{Architecture, TargetTriple};
 use super::{Endian, Isa, TypeLayout, TypeLayoutError};
 use crate::{
     AddressSpaceDesc, AddressSpaceId, AddressSpaceInfo, AddressSpaceKind, Type,
-    inst::evm::inst_set::EvmInstSet, module::ModuleCtx, types::CompoundType,
+    inst::evm::{inst_set::EvmInstSet, machine_inst_set::EvmMachineInstSet},
+    module::ModuleCtx,
+    types::CompoundType,
 };
 
 pub mod space {
@@ -109,6 +111,41 @@ impl Isa for Evm {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct EvmMachine {
+    triple: TargetTriple,
+}
+
+impl EvmMachine {
+    pub fn new(triple: TargetTriple) -> Self {
+        assert!(matches!(triple.architecture, Architecture::Evm));
+        Self { triple }
+    }
+}
+
+impl Isa for EvmMachine {
+    type InstSet = EvmMachineInstSet;
+
+    fn triple(&self) -> TargetTriple {
+        self.triple
+    }
+
+    fn type_layout(&self) -> &'static dyn TypeLayout {
+        const TL: EvmTypeLayout = EvmTypeLayout {};
+        &TL
+    }
+
+    fn address_spaces(&self) -> &'static dyn AddressSpaceInfo {
+        static SPACES: EvmAddressSpaces = EvmAddressSpaces;
+        &SPACES
+    }
+
+    fn inst_set(&self) -> &'static Self::InstSet {
+        static IS: LazyLock<EvmMachineInstSet> = LazyLock::new(EvmMachineInstSet::new);
+        &IS
+    }
+}
+
 struct EvmTypeLayout {}
 impl TypeLayout for EvmTypeLayout {
     fn size_of(&self, ty: crate::Type, ctx: &ModuleCtx) -> Result<usize, TypeLayoutError> {
@@ -178,8 +215,8 @@ impl TypeLayout for EvmTypeLayout {
 mod tests {
     use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
 
-    use super::{Evm, space};
-    use crate::{AddressSpaceKind, isa::Isa};
+    use super::{Evm, EvmMachine, space};
+    use crate::{AddressSpaceKind, inst::inst_set::InstSetBase, isa::Isa};
 
     #[test]
     fn evm_address_spaces_match_expected_layout() {
@@ -198,5 +235,22 @@ mod tests {
         assert!(spaces.desc(space::CALLDATA).immutable);
         assert!(spaces.desc(space::CODE).immutable);
         assert!(!spaces.desc(space::RETURNDATA).immutable);
+    }
+
+    #[test]
+    fn evm_machine_reuses_evm_layout_and_has_machine_memory_ops() {
+        let triple = TargetTriple::new(
+            Architecture::Evm,
+            Vendor::Ethereum,
+            OperatingSystem::Evm(EvmVersion::Osaka),
+        );
+        let isa = EvmMachine::new(triple);
+
+        assert_eq!(isa.type_layout().pointer_repl(), crate::Type::I256);
+        assert_eq!(isa.address_spaces().default_space(), space::MEMORY);
+        assert!(isa.inst_set().has_evm_mload().is_some());
+        assert!(isa.inst_set().has_evm_mstore().is_some());
+        assert!(isa.inst_set().has_evm_malloc().is_none());
+        assert!(isa.inst_set().has_alloca().is_none());
     }
 }

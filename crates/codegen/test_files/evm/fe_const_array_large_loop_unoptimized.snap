@@ -6,14 +6,15 @@ input_file: test_files/evm/fe_const_array_large_loop_unoptimized.sntn
 evm.config: stack_reach=16 vcode=false bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=s
 
 object: Contract
-  section runtime: 6634 bytes
-  total: 6634 bytes
+  section runtime: 6252 bytes
+  total: 6252 bytes
 
 functions:
-  test_const_array_loop: ir_blocks=20 ir_insts=1071 vcode_ops=1884 fixups=9 imm_bytes=520
+  mem: global_dyn_base=0x1020 arena_base=0x0 scratch_peak_words=129 static_chain_peak_words=0
+  test_const_array_loop: ir_blocks=16 ir_insts=549 vcode_ops=1500 fixups=9 imm_bytes=394
     mem: scratch_words=129 stable_words=0 stable_mode=None entry_abs_words=129 abs_words_end=129
   __fe_sonatina_entry: ir_blocks=1 ir_insts=2 vcode_ops=5 fixups=2 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=129 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Stop gas_used=54069 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=33069
+  case ok: calldata_len=0 success reason=Stop gas_used=52538 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=31538

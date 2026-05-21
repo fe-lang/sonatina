@@ -5,7 +5,7 @@ use sonatina_codegen::{
 use sonatina_ir::{Module, ir_writer::ModuleWriter, isa::evm::Evm, module::FuncRef};
 use sonatina_parser::parse_module;
 use sonatina_triple::{Architecture, OperatingSystem, TargetTriple, Vendor};
-use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module};
+use sonatina_verifier::{VerificationLevel, VerifierConfig};
 
 fn evm_backend() -> EvmBackend {
     EvmBackend::new(Evm::new(TargetTriple {
@@ -90,12 +90,11 @@ func public %main(v0.i8, v1.i8) -> i8 {
         "prepare should not mutate the original module:\n{original}"
     );
 
-    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
-    let report = verify_module(prepared.module(), &cfg);
-    assert!(
-        !report.has_errors(),
-        "legalized module must verify:\n{report}"
-    );
+    for &func in prepared.funcs() {
+        backend
+            .lower_function(&prepared, func)
+            .expect("prepared machine function should verify and lower");
+    }
 }
 
 #[test]

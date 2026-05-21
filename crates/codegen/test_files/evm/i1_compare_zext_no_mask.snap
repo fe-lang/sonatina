@@ -1,0 +1,48 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: "String::from_utf8(out).unwrap()"
+input_file: test_files/evm/i1_compare_zext_no_mask.sntn
+---
+evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
+
+object: Contract
+  section runtime: 21 bytes
+  total: 21 bytes
+
+functions:
+  mem: global_dyn_base=0x0 arena_base=0x0 scratch_peak_words=0 static_chain_peak_words=0
+  main: ir_blocks=1 ir_insts=3 vcode_ops=8 fixups=0 imm_bytes=1
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
+  entry: ir_blocks=1 ir_insts=3 vcode_ops=9 fixups=2 imm_bytes=1
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
+
+evm:
+  case ok: calldata_len=32 success reason=Return gas_used=21194 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=54
+
+
+--------------- DEBUG ---------------
+
+// func public %main() -> i256
+main:
+  block0:
+    JUMPDEST
+    PUSH0  // v1.i256 = evm_calldata_load v0;
+    CALLDATALOAD
+    PUSH1 0x5 (5)  // v3.i256 = lt v1 v2;
+    SWAP1
+    LT
+    SWAP1  // return v3;
+    JUMP
+
+// func public %entry()
+entry:
+  block0:
+    PUSH1 `pc + (3)`  // v0.i256 = call %main;
+    PUSH1 FuncRef(0)
+    JUMP
+    JUMPDEST
+    PUSH0  // evm_mstore 0.i256 v0;
+    MSTORE
+    PUSH1 0x20 (32)  // evm_return 0.i256 32.i256;
+    PUSH0
+    RETURN

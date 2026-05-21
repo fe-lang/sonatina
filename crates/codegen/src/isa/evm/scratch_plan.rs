@@ -1,23 +1,106 @@
-use cranelift_entity::SecondaryMap;
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashSet;
 use sonatina_ir::{
     Function, Immediate, InstId, InstSetExt, U256, ValueId,
-    inst::evm::inst_set::EvmInstKind,
-    isa::{Isa, evm::Evm},
-    module::{FuncRef, ModuleCtx},
+    inst::evm::machine_inst_set::EvmMachineInstKind,
+    isa::{Isa, evm::EvmMachine},
+    module::FuncRef,
 };
 
 use crate::{bitset::BitSet, liveness::InstLiveness};
 
-use super::{
-    memory_plan::WORD_BYTES,
-    provenance::{Provenance, compute_address_provenance},
-    ptr_escape::PtrEscapeSummary,
-};
+use super::memory_plan::WORD_BYTES;
 
 pub(crate) const SCRATCH_SPILL_SLOTS: u32 = 2;
 
 const SCRATCH_END_BYTES: u32 = SCRATCH_SPILL_SLOTS * WORD_BYTES;
+
+pub(crate) struct MachineScratchClobberLiveness {
+    fixed_scratch_live_values: BitSet<ValueId>,
+    stable_final_spill_values: BitSet<ValueId>,
+}
+
+impl MachineScratchClobberLiveness {
+    pub(crate) fn compute(
+        function: &Function,
+        isa: &EvmMachine,
+        scratch_effects: Option<&FxHashSet<FuncRef>>,
+        inst_liveness: &InstLiveness,
+    ) -> Self {
+        let mut liveness = Self {
+            fixed_scratch_live_values: BitSet::default(),
+            stable_final_spill_values: BitSet::default(),
+        };
+
+        for block in function.layout.iter_block() {
+            for inst in function.layout.iter_inst(block) {
+                if let Some(call) = function.dfg.call_info(inst)
+                    && Self::callee_may_clobber_scratch(scratch_effects, call.callee())
+                {
+                    liveness.record_fixed_scratch_clobber(function, inst_liveness, inst);
+                    liveness.record_stable_final_spill_clobber(function, inst_liveness, inst);
+                } else if machine_inst_is_scratch_clobber(function, isa, inst) {
+                    liveness.record_fixed_scratch_clobber(function, inst_liveness, inst);
+                }
+            }
+        }
+
+        liveness
+    }
+
+    pub(crate) fn into_parts(self) -> (BitSet<ValueId>, BitSet<ValueId>) {
+        (
+            self.fixed_scratch_live_values,
+            self.stable_final_spill_values,
+        )
+    }
+
+    fn callee_may_clobber_scratch(
+        scratch_effects: Option<&FxHashSet<FuncRef>>,
+        callee: FuncRef,
+    ) -> bool {
+        scratch_effects.is_none_or(|effects| effects.contains(&callee))
+    }
+
+    fn record_fixed_scratch_clobber(
+        &mut self,
+        function: &Function,
+        inst_liveness: &InstLiveness,
+        inst: InstId,
+    ) {
+        Self::record_live_out_minus_defs(
+            &mut self.fixed_scratch_live_values,
+            function,
+            inst_liveness,
+            inst,
+        );
+    }
+
+    fn record_stable_final_spill_clobber(
+        &mut self,
+        function: &Function,
+        inst_liveness: &InstLiveness,
+        inst: InstId,
+    ) {
+        Self::record_live_out_minus_defs(
+            &mut self.stable_final_spill_values,
+            function,
+            inst_liveness,
+            inst,
+        );
+    }
+
+    fn record_live_out_minus_defs(
+        values: &mut BitSet<ValueId>,
+        function: &Function,
+        inst_liveness: &InstLiveness,
+        inst: InstId,
+    ) {
+        values.union_with(inst_liveness.live_out(inst));
+        for def in function.dfg.inst_results(inst) {
+            values.remove(*def);
+        }
+    }
+}
 
 fn imm_lt_u32(imm: Immediate, bound: u32) -> bool {
     match imm {
@@ -34,181 +117,227 @@ fn imm_lt_u32(imm: Immediate, bound: u32) -> bool {
     }
 }
 
-fn addr_may_overlap_scratch(
-    function: &Function,
-    addr: ValueId,
-    prov: &SecondaryMap<ValueId, Provenance>,
-) -> bool {
+fn machine_addr_may_overlap_scratch(function: &Function, addr: ValueId) -> bool {
     if function.dfg.value_is_imm(addr) {
         let imm = function
             .dfg
             .value_imm(addr)
             .expect("imm value missing payload");
-        return imm_lt_u32(imm, SCRATCH_END_BYTES);
+        imm_lt_u32(imm, SCRATCH_END_BYTES)
+    } else {
+        true
     }
-
-    prov[addr].is_unknown_ptr() || prov[addr].has_no_known_bases() || prov[addr].has_any_arg()
 }
 
-pub(crate) fn inst_is_scratch_clobber(
+pub(crate) fn machine_inst_is_scratch_clobber(
     function: &Function,
-    isa: &Evm,
+    isa: &EvmMachine,
     inst: InstId,
-    prov: &SecondaryMap<ValueId, Provenance>,
 ) -> bool {
     match isa.inst_set().resolve_inst(function.dfg.inst(inst)) {
-        EvmInstKind::Mstore(mstore) => addr_may_overlap_scratch(function, *mstore.addr(), prov),
-        EvmInstKind::EvmMstore8(mstore8) => {
-            addr_may_overlap_scratch(function, *mstore8.addr(), prov)
+        EvmMachineInstKind::EvmMstore(mstore) => {
+            machine_addr_may_overlap_scratch(function, *mstore.addr())
         }
-        EvmInstKind::EvmCalldataCopy(copy) => {
-            addr_may_overlap_scratch(function, *copy.dst_addr(), prov)
+        EvmMachineInstKind::EvmMstore8(mstore8) => {
+            machine_addr_may_overlap_scratch(function, *mstore8.addr())
         }
-        EvmInstKind::EvmCodeCopy(copy) => {
-            addr_may_overlap_scratch(function, *copy.dst_addr(), prov)
+        EvmMachineInstKind::EvmCalldataCopy(copy) => {
+            machine_addr_may_overlap_scratch(function, *copy.dst_addr())
         }
-        EvmInstKind::EvmExtCodeCopy(copy) => {
-            addr_may_overlap_scratch(function, *copy.dst_addr(), prov)
+        EvmMachineInstKind::EvmCodeCopy(copy) => {
+            machine_addr_may_overlap_scratch(function, *copy.dst_addr())
         }
-        EvmInstKind::EvmReturnDataCopy(copy) => {
-            addr_may_overlap_scratch(function, *copy.dst_addr(), prov)
+        EvmMachineInstKind::EvmExtCodeCopy(copy) => {
+            machine_addr_may_overlap_scratch(function, *copy.dst_addr())
         }
-        EvmInstKind::EvmMcopy(copy) => addr_may_overlap_scratch(function, *copy.dest(), prov),
-        EvmInstKind::EvmCall(call) => addr_may_overlap_scratch(function, *call.ret_addr(), prov),
-        EvmInstKind::EvmCallCode(call) => {
-            addr_may_overlap_scratch(function, *call.ret_addr(), prov)
+        EvmMachineInstKind::EvmReturnDataCopy(copy) => {
+            machine_addr_may_overlap_scratch(function, *copy.dst_addr())
         }
-        EvmInstKind::EvmDelegateCall(call) => {
-            addr_may_overlap_scratch(function, *call.ret_addr(), prov)
+        EvmMachineInstKind::EvmMcopy(copy) => {
+            machine_addr_may_overlap_scratch(function, *copy.dest())
         }
-        EvmInstKind::EvmStaticCall(call) => {
-            addr_may_overlap_scratch(function, *call.ret_addr(), prov)
+        EvmMachineInstKind::EvmCall(call) => {
+            machine_addr_may_overlap_scratch(function, *call.ret_addr())
+        }
+        EvmMachineInstKind::EvmCallCode(call) => {
+            machine_addr_may_overlap_scratch(function, *call.ret_addr())
+        }
+        EvmMachineInstKind::EvmDelegateCall(call) => {
+            machine_addr_may_overlap_scratch(function, *call.ret_addr())
+        }
+        EvmMachineInstKind::EvmStaticCall(call) => {
+            machine_addr_may_overlap_scratch(function, *call.ret_addr())
         }
         _ => false,
     }
 }
 
-pub(crate) fn compute_scratch_live_values(
-    function: &Function,
-    module: &ModuleCtx,
-    isa: &Evm,
-    ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
-    scratch_effects: Option<&FxHashSet<FuncRef>>,
-    inst_liveness: &InstLiveness,
-) -> BitSet<ValueId> {
-    let prov = compute_address_provenance(function, module, isa, |callee| {
-        PtrEscapeSummary::get_or_conservative(ptr_escape, module, callee)
-    });
-
-    let mut scratch_live_values: BitSet<ValueId> = BitSet::default();
-
-    for block in function.layout.iter_block() {
-        for inst in function.layout.iter_inst(block) {
-            let is_barrier = if let Some(call) = function.dfg.call_info(inst) {
-                let callee = call.callee();
-                scratch_effects.is_none_or(|effects| effects.contains(&callee))
-            } else {
-                inst_is_scratch_clobber(function, isa, inst, &prov)
-            };
-
-            if is_barrier {
-                scratch_live_values.union_with(inst_liveness.live_out(inst));
-                for def in function.dfg.inst_results(inst) {
-                    scratch_live_values.remove(*def);
-                }
-            }
-        }
-    }
-
-    scratch_live_values
-}
-
 #[cfg(test)]
 mod tests {
-    use sonatina_ir::{InstSetExt, isa::Isa};
-    use sonatina_parser::parse_module;
+    use rustc_hash::FxHashSet;
+    use smallvec::smallvec;
+    use sonatina_ir::{
+        I256, Immediate, InstSetBase, Linkage, Module, Signature, Type,
+        builder::{FunctionBuilder, ModuleBuilder},
+        cfg::ControlFlowGraph,
+        func_cursor::InstInserter,
+        inst::{
+            control_flow::{Call, Return},
+            evm::EvmMstore,
+        },
+        isa::{Isa, evm::EvmMachine},
+        module::{FuncRef, ModuleCtx},
+    };
     use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
 
-    use super::{super::ptr_escape::compute_ptr_escape_summaries, *};
+    use crate::liveness::Liveness;
 
-    fn first_mstore_clobbers_scratch(src: &str, func_name: &str) -> bool {
-        let parsed = parse_module(src).expect("module parses");
-        let funcs = parsed.module.funcs();
-        let func_ref = parsed
-            .module
-            .funcs()
-            .into_iter()
-            .find(|&func| {
-                parsed
-                    .module
-                    .ctx
-                    .func_sig(func, |sig| sig.name() == func_name)
-            })
-            .expect("function exists");
+    use super::*;
 
-        let isa = Evm::new(TargetTriple {
-            architecture: Architecture::Evm,
-            vendor: Vendor::Ethereum,
-            operating_system: OperatingSystem::Evm(EvmVersion::Osaka),
-        });
-        let summaries = compute_ptr_escape_summaries(&parsed.module, &funcs, &isa);
+    fn evm_triple() -> TargetTriple {
+        TargetTriple::new(
+            Architecture::Evm,
+            Vendor::Ethereum,
+            OperatingSystem::Evm(EvmVersion::Osaka),
+        )
+    }
 
-        parsed.module.func_store.view(func_ref, |function| {
-            let prov = compute_address_provenance(function, &parsed.module.ctx, &isa, |callee| {
-                PtrEscapeSummary::get_or_conservative(&summaries, &parsed.module.ctx, callee)
-            });
-            let mstore = function
-                .layout
-                .iter_block()
-                .flat_map(|block| function.layout.iter_inst(block))
-                .find(|&inst| {
-                    matches!(
-                        isa.inst_set().resolve_inst(function.dfg.inst(inst)),
-                        EvmInstKind::Mstore(_)
-                    )
-                })
-                .expect("mstore exists");
+    fn machine_builder() -> ModuleBuilder {
+        ModuleBuilder::new(ModuleCtx::new(&EvmMachine::new(evm_triple())))
+    }
 
-            inst_is_scratch_clobber(function, &isa, mstore, &prov)
+    fn i256(builder: &mut FunctionBuilder<InstInserter>, val: i64) -> ValueId {
+        builder.make_imm_value(Immediate::from_i256(I256::from(val), Type::I256))
+    }
+
+    fn define_unit_callee(builder: &ModuleBuilder, name: &str) -> FuncRef {
+        let func = builder
+            .declare_function(Signature::new_unit(name, Linkage::Private, &[]))
+            .expect("callee declaration succeeds");
+        let machine = EvmMachine::new(builder.triple());
+        let is = machine.inst_set();
+        let mut func_builder = builder.func_builder::<InstInserter>(func);
+        let entry = func_builder.append_block();
+        func_builder.switch_to_block(entry);
+        func_builder.insert_inst_no_result(Return::new_unit(is));
+        func_builder.seal_all();
+        func_builder.finish();
+        func
+    }
+
+    fn define_calling_return_arg(builder: &ModuleBuilder, name: &str, callee: FuncRef) -> FuncRef {
+        let func = builder
+            .declare_function(Signature::new_single(
+                name,
+                Linkage::Public,
+                &[Type::I256],
+                Type::I256,
+            ))
+            .expect("caller declaration succeeds");
+        let machine = EvmMachine::new(builder.triple());
+        let is = machine.inst_set();
+        let mut func_builder = builder.func_builder::<InstInserter>(func);
+        let entry = func_builder.append_block();
+        func_builder.switch_to_block(entry);
+        let arg = func_builder.func.arg_values[0];
+        func_builder.insert_inst_no_result(Call::new(
+            is.has_call().expect("machine ISA supports calls"),
+            callee,
+            smallvec![],
+        ));
+        func_builder.insert_inst_no_result(Return::new_single(is, arg));
+        func_builder.seal_all();
+        func_builder.finish();
+        func
+    }
+
+    fn define_local_scratch_clobber_return_arg(builder: &ModuleBuilder, name: &str) -> FuncRef {
+        let func = builder
+            .declare_function(Signature::new_single(
+                name,
+                Linkage::Public,
+                &[Type::I256],
+                Type::I256,
+            ))
+            .expect("caller declaration succeeds");
+        let machine = EvmMachine::new(builder.triple());
+        let is = machine.inst_set();
+        let mut func_builder = builder.func_builder::<InstInserter>(func);
+        let entry = func_builder.append_block();
+        func_builder.switch_to_block(entry);
+        let arg = func_builder.func.arg_values[0];
+        let addr = i256(&mut func_builder, 0);
+        let val = i256(&mut func_builder, 7);
+        func_builder.insert_inst_no_result(EvmMstore::new(is, addr, val));
+        func_builder.insert_inst_no_result(Return::new_single(is, arg));
+        func_builder.seal_all();
+        func_builder.finish();
+        func
+    }
+
+    fn analyze(
+        module: &Module,
+        func: FuncRef,
+        scratch_effects: &FxHashSet<FuncRef>,
+    ) -> (ValueId, BitSet<ValueId>, BitSet<ValueId>) {
+        let machine = EvmMachine::new(module.ctx.triple);
+        module.func_store.view(func, |function| {
+            let mut cfg = ControlFlowGraph::new();
+            cfg.compute(function);
+
+            let mut liveness = Liveness::new();
+            liveness.compute(function, &cfg);
+
+            let mut inst_liveness = InstLiveness::new();
+            inst_liveness.compute(function, &cfg, &liveness);
+
+            let scratch_liveness = MachineScratchClobberLiveness::compute(
+                function,
+                &machine,
+                Some(scratch_effects),
+                &inst_liveness,
+            );
+            let (fixed_scratch, stable_final) = scratch_liveness.into_parts();
+            (function.arg_values[0], fixed_scratch, stable_final)
         })
     }
 
     #[test]
-    fn allocator_managed_address_with_i256_offset_is_not_scratch_clobber() {
-        let clobbers = first_mstore_clobbers_scratch(
-            r#"
-target = "evm-ethereum-osaka"
+    fn scratch_clean_call_does_not_require_stable_final_spill() {
+        let builder = machine_builder();
+        let callee = define_unit_callee(&builder, "callee");
+        let caller = define_calling_return_arg(&builder, "caller", callee);
+        let module = builder.build();
+        let scratch_effects = FxHashSet::default();
+        let (arg, fixed_scratch, stable_final) = analyze(&module, caller, &scratch_effects);
 
-func public %f(v0.i256) {
-block0:
-    v1.*i8 = evm_malloc 96.i256;
-    v2.i256 = ptr_to_int v1 i256;
-    v3.i256 = add v2 v0;
-    mstore v3 1.i256 i256;
-    return;
-}
-"#,
-            "f",
-        );
-
-        assert!(!clobbers);
+        assert!(!fixed_scratch.contains(arg));
+        assert!(!stable_final.contains(arg));
     }
 
     #[test]
-    fn plain_i256_address_remains_scratch_clobber() {
-        let clobbers = first_mstore_clobbers_scratch(
-            r#"
-target = "evm-ethereum-osaka"
+    fn scratch_clobbering_call_requires_stable_final_spill() {
+        let builder = machine_builder();
+        let callee = define_unit_callee(&builder, "callee");
+        let caller = define_calling_return_arg(&builder, "caller", callee);
+        let module = builder.build();
+        let mut scratch_effects = FxHashSet::default();
+        scratch_effects.insert(callee);
+        let (arg, fixed_scratch, stable_final) = analyze(&module, caller, &scratch_effects);
 
-func public %f(v0.i256) {
-block0:
-    mstore v0 1.i256 i256;
-    return;
-}
-"#,
-            "f",
-        );
+        assert!(fixed_scratch.contains(arg));
+        assert!(stable_final.contains(arg));
+    }
 
-        assert!(clobbers);
+    #[test]
+    fn local_scratch_clobber_does_not_require_stable_final_spill() {
+        let builder = machine_builder();
+        let caller = define_local_scratch_clobber_return_arg(&builder, "caller");
+        let module = builder.build();
+        let scratch_effects = FxHashSet::default();
+        let (arg, fixed_scratch, stable_final) = analyze(&module, caller, &scratch_effects);
+
+        assert!(fixed_scratch.contains(arg));
+        assert!(!stable_final.contains(arg));
     }
 }

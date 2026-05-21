@@ -2,7 +2,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
     BlockId, Function, InstId, InstSetExt, Type, ValueId,
     cfg::ControlFlowGraph,
-    inst::evm::inst_set::EvmInstKind,
+    inst::evm::{inst_set::EvmInstKind, machine_inst_set::EvmMachineInstKind},
     isa::{Isa, evm::Evm},
 };
 
@@ -12,7 +12,8 @@ use crate::{
     stackalloc::{Action, Allocator},
 };
 
-use super::{FuncMemPlan, ObjLoc, fold_stack_actions};
+use super::module::FuncMachineMap;
+use crate::isa::evm::{FuncMemPlan, ObjLoc, emit::fold_stack_actions};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum FrameSite {
@@ -85,13 +86,19 @@ impl LazyFramePlan {
 pub(crate) struct FrameSummary {
     pub(crate) lowering: Option<LazyFramePlan>,
     pub(crate) full_body_active: bool,
-    pub(crate) active_pre_insts: FxHashSet<InstId>,
+    active_pre_insts: FxHashSet<InstId>,
 }
 
 impl FrameSummary {
     pub(crate) fn local_frame_active_before_inst(&self, inst: InstId) -> bool {
         self.full_body_active || self.active_pre_insts.contains(&inst)
     }
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct MachineFrameRoots {
+    root_def_insts: FxHashSet<InstId>,
+    rooted_values: FxHashSet<ValueId>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -126,17 +133,62 @@ struct RootUseDepCtx<'a> {
     order: &'a PointOrderTable,
 }
 
+pub(crate) fn compute_machine_frame_roots(
+    source: &Function,
+    machine: &Function,
+    map: &FuncMachineMap,
+    alloca_loc: &FxHashMap<InstId, ObjLoc>,
+    source_isa: &Evm,
+) -> MachineFrameRoots {
+    let source_roots = compute_source_rooted_frame_values(source, alloca_loc, source_isa);
+    let mut roots = MachineFrameRoots::default();
+    for source_value in source_roots {
+        let Some(machine_value) = map.values[source_value] else {
+            continue;
+        };
+        roots.rooted_values.insert(machine_value);
+        collect_root_def_insts(
+            machine,
+            machine_value,
+            &mut roots.root_def_insts,
+            &mut FxHashSet::default(),
+        );
+    }
+    roots
+}
+
+fn collect_root_def_insts(
+    function: &Function,
+    value: ValueId,
+    root_def_insts: &mut FxHashSet<InstId>,
+    seen: &mut FxHashSet<ValueId>,
+) {
+    if !seen.insert(value) {
+        return;
+    }
+    let Some(inst) = function.dfg.value_inst(value) else {
+        return;
+    };
+    if function.layout.try_inst_block(inst).is_none() {
+        return;
+    }
+    root_def_insts.insert(inst);
+    for operand in function.dfg.inst(inst).collect_values() {
+        collect_root_def_insts(function, operand, root_def_insts, seen);
+    }
+}
+
 pub(crate) fn compute_frame_summary(
     function: &Function,
     alloc: &dyn Allocator,
     mem_plan: &FuncMemPlan,
-    isa: &Evm,
+    roots: &MachineFrameRoots,
 ) -> FrameSummary {
     if mem_plan.dynamic_frame_layout().is_none() {
         return FrameSummary::default();
     }
 
-    let Some(plan) = compute_lazy_frame_plan_inner(function, alloc, mem_plan, isa) else {
+    let Some(plan) = compute_lazy_frame_plan_inner(function, alloc, roots) else {
         return FrameSummary {
             lowering: None,
             full_body_active: true,
@@ -144,7 +196,15 @@ pub(crate) fn compute_frame_summary(
         };
     };
 
-    let Some(active_pre_insts) = compute_active_pre_insts(function, alloc, isa, &plan) else {
+    if validate_lazy_frame_activity(function, alloc, &plan).is_none() {
+        return FrameSummary {
+            lowering: None,
+            full_body_active: true,
+            active_pre_insts: FxHashSet::default(),
+        };
+    };
+
+    let Some(active_pre_insts) = compute_active_pre_insts(function, alloc, &plan) else {
         return FrameSummary {
             lowering: Some(plan),
             full_body_active: true,
@@ -162,14 +222,13 @@ pub(crate) fn compute_frame_summary(
 fn compute_lazy_frame_plan_inner(
     function: &Function,
     alloc: &dyn Allocator,
-    mem_plan: &FuncMemPlan,
-    isa: &Evm,
+    roots: &MachineFrameRoots,
 ) -> Option<LazyFramePlan> {
     function.layout.entry_block()?;
 
     let mut cfg = ControlFlowGraph::default();
     cfg.compute(function);
-    let dep_points = collect_dep_points(function, &cfg, alloc, mem_plan, isa)?;
+    let dep_points = collect_dep_points(function, &cfg, alloc, roots)?;
     if dep_points.is_empty() {
         return None;
     }
@@ -243,7 +302,6 @@ fn compute_lazy_frame_plan_inner(
 fn compute_active_pre_insts(
     function: &Function,
     alloc: &dyn Allocator,
-    isa: &Evm,
     plan: &LazyFramePlan,
 ) -> Option<FxHashSet<InstId>> {
     let mut cfg = ControlFlowGraph::default();
@@ -252,7 +310,8 @@ fn compute_active_pre_insts(
     let mut active_at_entry: FxHashMap<BlockId, bool> = FxHashMap::default();
     active_at_entry.insert(entry_block, false);
     let mut worklist = vec![entry_block];
-    let mut active_pre_insts: FxHashSet<InstId> = FxHashSet::default();
+    let mut active_pre_insts = FxHashSet::default();
+    let machine_isa = sonatina_ir::isa::evm::EvmMachine::new(function.dfg.ctx.triple);
 
     while let Some(block) = worklist.pop() {
         let mut active = *active_at_entry
@@ -261,27 +320,19 @@ fn compute_active_pre_insts(
         apply_site_state(plan, FrameSite::BlockEntry(block), &mut active);
 
         for inst in function.layout.iter_inst(block) {
-            let data = isa.inst_set().resolve_inst(function.dfg.inst(inst));
+            let data = machine_isa.inst_set().resolve_inst(function.dfg.inst(inst));
             let args = function.dfg.inst(inst).collect_values();
             apply_site_state(plan, FrameSite::PreInst(inst), &mut active);
 
-            match &data {
-                EvmInstKind::Call(_) => {
-                    let mut actions = alloc.read(inst, &args);
-                    if let Some(cont_pos) = actions
-                        .iter()
-                        .position(|a| matches!(a, Action::PushContinuationOffset))
+            match data {
+                EvmMachineInstKind::Call(_) => {
+                    if let Some((prefix, suffix, prefix_len)) =
+                        split_call_actions(alloc.read(inst, &args))
                     {
-                        let suffix: Vec<Action> = actions.drain(cont_pos + 1..).collect();
-                        let marker = actions.remove(cont_pos);
-                        if marker != Action::PushContinuationOffset {
-                            return None;
-                        }
-                        let prefix_folded_len = fold_stack_actions(&actions).len();
                         apply_actions_state(
                             plan,
                             FrameSite::PreInst(inst),
-                            &actions,
+                            &prefix,
                             0,
                             &mut active,
                         );
@@ -289,20 +340,20 @@ fn compute_active_pre_insts(
                             plan,
                             FrameSite::PreInst(inst),
                             &suffix,
-                            prefix_folded_len,
+                            prefix_len,
                             &mut active,
                         );
                     } else {
                         apply_actions_state(
                             plan,
                             FrameSite::PreInst(inst),
-                            &actions,
+                            &alloc.read(inst, &args),
                             0,
                             &mut active,
                         );
                     }
                 }
-                EvmInstKind::BrTable(br) => {
+                EvmMachineInstKind::BrTable(br) => {
                     for (case_idx, _) in br.table().iter().enumerate() {
                         let actions = alloc.read_br_table_case(inst, case_idx);
                         if fold_stack_actions(&actions).iter().any(|action| {
@@ -325,7 +376,7 @@ fn compute_active_pre_insts(
             }
 
             apply_site_state(plan, FrameSite::Inst(inst), &mut active);
-            if matches!(data, EvmInstKind::Call(_) | EvmInstKind::EvmMalloc(_)) && active {
+            if matches!(data, EvmMachineInstKind::Call(_)) && active {
                 active_pre_insts.insert(inst);
             }
             apply_after_site_state(plan, FrameSite::Inst(inst), &mut active);
@@ -355,6 +406,92 @@ fn compute_active_pre_insts(
     }
 
     Some(active_pre_insts)
+}
+
+fn validate_lazy_frame_activity(
+    function: &Function,
+    alloc: &dyn Allocator,
+    plan: &LazyFramePlan,
+) -> Option<()> {
+    let mut cfg = ControlFlowGraph::default();
+    cfg.compute(function);
+    let entry_block = function.layout.entry_block()?;
+    let mut active_at_entry: FxHashMap<BlockId, bool> = FxHashMap::default();
+    active_at_entry.insert(entry_block, false);
+    let mut worklist = vec![entry_block];
+
+    while let Some(block) = worklist.pop() {
+        let mut active = *active_at_entry
+            .get(&block)
+            .unwrap_or_else(|| panic!("missing active state for block {}", block.as_u32()));
+        apply_site_state(plan, FrameSite::BlockEntry(block), &mut active);
+
+        for inst in function.layout.iter_inst(block) {
+            let args = function.dfg.inst(inst).collect_values();
+            apply_site_state(plan, FrameSite::PreInst(inst), &mut active);
+
+            if let Some((prefix, suffix, prefix_len)) = split_call_actions(alloc.read(inst, &args))
+            {
+                apply_actions_state(plan, FrameSite::PreInst(inst), &prefix, 0, &mut active);
+                apply_actions_state(
+                    plan,
+                    FrameSite::PreInst(inst),
+                    &suffix,
+                    prefix_len,
+                    &mut active,
+                );
+            } else {
+                apply_actions_state(
+                    plan,
+                    FrameSite::PreInst(inst),
+                    &alloc.read(inst, &args),
+                    0,
+                    &mut active,
+                );
+            }
+
+            apply_site_state(plan, FrameSite::Inst(inst), &mut active);
+            apply_after_site_state(plan, FrameSite::Inst(inst), &mut active);
+
+            apply_site_state(plan, FrameSite::PostInst(inst), &mut active);
+            apply_actions_state(
+                plan,
+                FrameSite::PostInst(inst),
+                &alloc.write(inst, function.dfg.inst_results(inst)),
+                0,
+                &mut active,
+            );
+            apply_after_site_state(plan, FrameSite::PostInst(inst), &mut active);
+        }
+
+        for succ in cfg.succs_of(block) {
+            let succ = *succ;
+            if let Some(prev) = active_at_entry.get(&succ) {
+                if *prev != active {
+                    return None;
+                }
+            } else {
+                active_at_entry.insert(succ, active);
+                worklist.push(succ);
+            }
+        }
+    }
+
+    Some(())
+}
+
+fn split_call_actions(
+    mut actions: smallvec::SmallVec<[Action; 2]>,
+) -> Option<(Vec<Action>, Vec<Action>, usize)> {
+    let cont_pos = actions
+        .iter()
+        .position(|action| matches!(action, Action::PushContinuationOffset))?;
+    let suffix: Vec<Action> = actions.drain(cont_pos + 1..).collect();
+    let marker = actions.remove(cont_pos);
+    debug_assert_eq!(marker, Action::PushContinuationOffset);
+    let prefix = actions.into_iter().collect::<Vec<_>>();
+    let prefix_len = fold_stack_actions(&prefix).len();
+    Some((prefix, suffix, prefix_len))
 }
 
 fn apply_site_state(plan: &LazyFramePlan, site: FrameSite, active: &mut bool) {
@@ -399,19 +536,17 @@ fn collect_dep_points(
     function: &Function,
     cfg: &ControlFlowGraph,
     alloc: &dyn Allocator,
-    mem_plan: &FuncMemPlan,
-    isa: &Evm,
+    roots: &MachineFrameRoots,
 ) -> Option<Vec<DepPoint>> {
-    let rooted = compute_rooted_frame_values(function, mem_plan, isa);
     let reachable_returns = compute_reachable_returns(function, cfg);
     let order = PointOrderTable::new(function)?;
     let root_use = RootUseDepCtx {
         reachable_returns: &reachable_returns,
-        rooted: &rooted,
+        rooted: &roots.rooted_values,
         order: &order,
     };
-    let mut out: Vec<DepPoint> = Vec::new();
-    let mut seen: FxHashSet<FrameInjectionPoint> = FxHashSet::default();
+    let mut out = Vec::new();
+    let mut seen = FxHashSet::default();
 
     let entry_block = function.layout.entry_block()?;
     collect_action_dep_points(
@@ -424,31 +559,24 @@ fn collect_dep_points(
         0,
     );
 
+    let machine_isa = sonatina_ir::isa::evm::EvmMachine::new(function.dfg.ctx.triple);
     for block in function.layout.iter_block() {
         for inst in function.layout.iter_inst(block) {
-            let data = isa.inst_set().resolve_inst(function.dfg.inst(inst));
+            let data = machine_isa.inst_set().resolve_inst(function.dfg.inst(inst));
             let args = function.dfg.inst(inst).collect_values();
 
             match &data {
-                EvmInstKind::Call(_) => {
-                    let mut actions = alloc.read(inst, &args);
-                    if let Some(cont_pos) = actions
-                        .iter()
-                        .position(|a| matches!(a, Action::PushContinuationOffset))
+                EvmMachineInstKind::Call(_) => {
+                    if let Some((prefix, suffix, prefix_len)) =
+                        split_call_actions(alloc.read(inst, &args))
                     {
-                        let suffix: Vec<Action> = actions.drain(cont_pos + 1..).collect();
-                        let marker = actions.remove(cont_pos);
-                        if marker != Action::PushContinuationOffset {
-                            return None;
-                        }
-                        let prefix_len = fold_stack_actions(&actions).len();
                         collect_action_dep_points(
                             &mut out,
                             &mut seen,
                             &order,
                             block,
                             FrameSite::PreInst(inst),
-                            &actions,
+                            &prefix,
                             0,
                         );
                         collect_action_dep_points(
@@ -467,12 +595,12 @@ fn collect_dep_points(
                             &order,
                             block,
                             FrameSite::PreInst(inst),
-                            &actions,
+                            &alloc.read(inst, &args),
                             0,
                         );
                     }
                 }
-                EvmInstKind::BrTable(br) => {
+                EvmMachineInstKind::BrTable(br) => {
                     for (case_idx, _) in br.table().iter().enumerate() {
                         let actions = alloc.read_br_table_case(inst, case_idx);
                         if fold_stack_actions(&actions).iter().any(|action| {
@@ -496,18 +624,13 @@ fn collect_dep_points(
                 ),
             }
 
-            if matches!(data, EvmInstKind::Alloca(_))
-                && matches!(
-                    mem_plan.alloca_loc.get(&inst).copied(),
-                    Some(ObjLoc::StableFrame(_))
-                )
-            {
+            if roots.root_def_insts.contains(&inst) {
                 push_dep_point(
                     &mut out,
                     &mut seen,
                     &order,
                     block,
-                    FrameInjectionPoint::BeforeSite(FrameSite::Inst(inst)),
+                    FrameInjectionPoint::BeforeSite(FrameSite::PreInst(inst)),
                 );
             }
 
@@ -526,17 +649,16 @@ fn collect_dep_points(
             );
         }
     }
-
     Some(out)
 }
 
-fn compute_rooted_frame_values(
+fn compute_source_rooted_frame_values(
     function: &Function,
-    mem_plan: &FuncMemPlan,
+    alloca_loc: &FxHashMap<InstId, ObjLoc>,
     isa: &Evm,
 ) -> FxHashSet<ValueId> {
-    let mut rooted: FxHashSet<ValueId> = FxHashSet::default();
-    for (&inst, &loc) in &mem_plan.alloca_loc {
+    let mut rooted = FxHashSet::default();
+    for (&inst, &loc) in alloca_loc {
         if matches!(loc, ObjLoc::StableFrame(_))
             && let Some(result) = function.dfg.inst_result(inst)
         {
@@ -593,43 +715,30 @@ fn collect_root_use_dep_points(
     root_use: &RootUseDepCtx<'_>,
     block: BlockId,
     inst: InstId,
-    data: &EvmInstKind,
+    data: &EvmMachineInstKind,
     out: &mut Vec<DepPoint>,
     seen: &mut FxHashSet<FrameInjectionPoint>,
 ) {
-    let operands = function.dfg.inst(inst).collect_values();
-    let rooted_operands: FxHashSet<ValueId> = operands
+    let rooted_operands: FxHashSet<ValueId> = function
+        .dfg
+        .inst(inst)
+        .collect_values()
         .into_iter()
         .filter(|value| root_use.rooted.contains(value))
         .collect();
-    if rooted_operands.is_empty() {
+    if rooted_operands.is_empty() || is_alias_preserving_root_use(function, inst, data) {
         return;
     }
 
-    if function.dfg.is_phi(inst)
-        || is_alias_preserving_root_use(function, inst, data, &rooted_operands)
-    {
-        return;
-    }
-
-    if function.dfg.is_return(inst) {
+    if !function.dfg.is_return(inst) {
         push_dep_point(
             out,
             seen,
             root_use.order,
             block,
-            FrameInjectionPoint::AfterSite(FrameSite::PreInst(inst)),
+            FrameInjectionPoint::BeforeSite(FrameSite::PostInst(inst)),
         );
-        return;
     }
-
-    push_dep_point(
-        out,
-        seen,
-        root_use.order,
-        block,
-        FrameInjectionPoint::AfterSite(FrameSite::PostInst(inst)),
-    );
 
     if is_escape_like_root_use(function, inst, data, &rooted_operands) {
         for &(ret_block, ret_inst) in root_use.reachable_returns.get(&block).into_iter().flatten() {
@@ -647,26 +756,19 @@ fn collect_root_use_dep_points(
 fn is_alias_preserving_root_use(
     function: &Function,
     inst: InstId,
-    data: &EvmInstKind,
-    rooted_operands: &FxHashSet<ValueId>,
+    data: &EvmMachineInstKind,
 ) -> bool {
-    if function.dfg.is_phi(inst) {
-        return true;
-    }
-    match data {
-        EvmInstKind::Bitcast(_) | EvmInstKind::IntToPtr(_) | EvmInstKind::PtrToInt(_) => true,
-        EvmInstKind::Gep(gep) => gep
-            .values()
-            .first()
-            .is_some_and(|value| rooted_operands.contains(value)),
-        _ => false,
-    }
+    function.dfg.is_phi(inst)
+        || matches!(
+            data,
+            EvmMachineInstKind::Add(_) | EvmMachineInstKind::Sub(_)
+        )
 }
 
 fn is_escape_like_root_use(
     function: &Function,
     inst: InstId,
-    data: &EvmInstKind,
+    data: &EvmMachineInstKind,
     rooted_operands: &FxHashSet<ValueId>,
 ) -> bool {
     if function.dfg.is_return(inst) {
@@ -674,14 +776,14 @@ fn is_escape_like_root_use(
     }
 
     match data {
-        EvmInstKind::Call(call) => call
+        EvmMachineInstKind::Call(call) => call
             .args()
             .iter()
             .any(|value| rooted_operands.contains(value)),
-        EvmInstKind::Mstore(mstore) => rooted_operands.contains(mstore.value()),
-        EvmInstKind::EvmMstore8(mstore8) => rooted_operands.contains(mstore8.val()),
-        EvmInstKind::EvmSstore(sstore) => rooted_operands.contains(sstore.val()),
-        EvmInstKind::EvmTstore(tstore) => rooted_operands.contains(tstore.val()),
+        EvmMachineInstKind::EvmMstore(mstore) => rooted_operands.contains(mstore.value()),
+        EvmMachineInstKind::EvmMstore8(mstore8) => rooted_operands.contains(mstore8.val()),
+        EvmMachineInstKind::EvmSstore(sstore) => rooted_operands.contains(sstore.val()),
+        EvmMachineInstKind::EvmTstore(tstore) => rooted_operands.contains(tstore.val()),
         _ => function.dfg.may_write_memory(inst),
     }
 }
@@ -729,7 +831,9 @@ fn collect_action_dep_points(
     for (index, action) in folded.iter().enumerate() {
         if matches!(
             action,
-            Action::MemLoadFrameSlot(_) | Action::MemStoreFrameSlot(_)
+            Action::MemLoadFrameSlot(_)
+                | Action::MemStoreFrameSlot(_)
+                | Action::PushFrameAddr { .. }
         ) {
             push_dep_point(
                 out,
@@ -935,357 +1039,4 @@ fn scalar_bit_width(ty: Type, module: &sonatina_ir::module::ModuleCtx) -> Option
         Type::Compound(_) => return None,
     };
     Some(bits)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{
-        critical_edge::CriticalEdgeSplitter,
-        isa::evm::{
-            emit::FinalAlloc,
-            memory_plan::{ArenaCostModel, FuncAnalysis, compute_program_memory_plan},
-            ptr_escape::compute_ptr_escape_summaries,
-        },
-        liveness::{InstLiveness, Liveness},
-        stackalloc::StackifyBuilder,
-    };
-    use cranelift_entity::SecondaryMap;
-    use rustc_hash::FxHashMap;
-    use sonatina_parser::parse_module;
-    use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
-
-    struct LazyPlanCtx {
-        module: sonatina_ir::Module,
-        func: sonatina_ir::module::FuncRef,
-        plan: LazyFramePlan,
-        summary: FrameSummary,
-    }
-
-    fn frame_summary_from_src(
-        src: &str,
-        func_name: &str,
-        cost_model: &ArenaCostModel,
-    ) -> (
-        sonatina_ir::Module,
-        sonatina_ir::module::FuncRef,
-        FrameSummary,
-    ) {
-        let parsed = parse_module(src).expect("module parses");
-        let funcs = parsed.module.funcs();
-        let isa = Evm::new(TargetTriple {
-            architecture: Architecture::Evm,
-            vendor: Vendor::Ethereum,
-            operating_system: OperatingSystem::Evm(EvmVersion::Osaka),
-        });
-        let ptr_escape = compute_ptr_escape_summaries(&parsed.module, &funcs, &isa);
-
-        let mut analyses: FxHashMap<sonatina_ir::module::FuncRef, FuncAnalysis> =
-            FxHashMap::default();
-        for &func in &funcs {
-            parsed.module.func_store.modify(func, |function| {
-                let mut cfg = ControlFlowGraph::default();
-                cfg.compute(function);
-                let mut splitter = CriticalEdgeSplitter::new();
-                splitter.run(function, &mut cfg);
-
-                let mut liveness = Liveness::new();
-                liveness.compute(function, &cfg);
-
-                let mut inst_liveness = InstLiveness::new();
-                inst_liveness.compute(function, &cfg, &liveness);
-
-                let mut dom = DomTree::new();
-                dom.compute(&cfg);
-
-                analyses.insert(
-                    func,
-                    FuncAnalysis {
-                        alloc: StackifyBuilder::new(function, &cfg, &dom, &liveness, 16).compute(),
-                        inst_liveness,
-                        block_order: dom.rpo().to_vec(),
-                        value_aliases: {
-                            let mut value_aliases = SecondaryMap::new();
-                            for value in function.dfg.value_ids() {
-                                value_aliases[value] = Some(value);
-                            }
-                            value_aliases
-                        },
-                    },
-                );
-            });
-        }
-
-        let plan = compute_program_memory_plan(
-            &parsed.module,
-            &funcs,
-            &analyses,
-            &ptr_escape,
-            &isa,
-            cost_model,
-        );
-        let func = funcs
-            .into_iter()
-            .find(|&func| {
-                parsed
-                    .module
-                    .ctx
-                    .func_sig(func, |sig| sig.name() == func_name)
-            })
-            .expect("function exists");
-        let analysis = analyses.remove(&func).expect("missing analysis");
-        let mem_plan = plan
-            .funcs
-            .get(&func)
-            .expect("missing function plan")
-            .clone();
-        let alloc = FinalAlloc::new(analysis.alloc, mem_plan.clone());
-        let summary = parsed.module.func_store.view(func, |function| {
-            compute_frame_summary(function, &alloc, &mem_plan, &isa)
-        });
-
-        (parsed.module, func, summary)
-    }
-
-    fn lazy_plan_from_src(src: &str, func_name: &str, cost_model: &ArenaCostModel) -> LazyPlanCtx {
-        let (module, func, summary) = frame_summary_from_src(src, func_name, cost_model);
-
-        LazyPlanCtx {
-            module,
-            func,
-            plan: summary.lowering.clone().expect("expected lazy frame plan"),
-            summary,
-        }
-    }
-
-    #[test]
-    fn visible_recursive_alloca_keeps_frame_live_until_return() {
-        let ctx = lazy_plan_from_src(
-            r#"
-target = "evm-ethereum-osaka"
-
-func public %f(v0.i1, v1.*i256) -> i256 {
-block0:
-    br v0 block1 block2;
-
-block1:
-    return 0.i256;
-
-block2:
-    v2.*i256 = alloca i256;
-    v3.i256 = call %f 1.i1 v2;
-    return v3;
-}
-"#,
-            "f",
-            &ArenaCostModel::default(),
-        );
-
-        let (alloca_inst, ret_inst) = ctx.module.func_store.view(ctx.func, |function| {
-            let mut alloca_inst = None;
-            let mut ret_inst = None;
-            for block in function.layout.iter_block() {
-                for inst in function.layout.iter_inst(block) {
-                    if function.dfg.is_return(inst) {
-                        ret_inst = Some(inst);
-                    } else if matches!(
-                        Evm::new(function.dfg.ctx.triple)
-                            .inst_set()
-                            .resolve_inst(function.dfg.inst(inst)),
-                        EvmInstKind::Alloca(_)
-                    ) {
-                        alloca_inst = Some(inst);
-                    }
-                }
-            }
-            (alloca_inst.expect("alloca"), ret_inst.expect("return"))
-        });
-
-        assert!(!ctx.plan.enter_before_site(FrameSite::EnterFunction));
-        assert!(ctx.plan.enter_before_site(FrameSite::Inst(alloca_inst)));
-        assert!(ctx.plan.exit_after_site(FrameSite::PreInst(ret_inst)));
-    }
-
-    #[test]
-    fn shadow_only_recursive_frame_skips_function_entry() {
-        let ctx = lazy_plan_from_src(
-            r#"
-target = "evm-ethereum-osaka"
-
-func public %f(v0.i1) -> i256 {
-block0:
-    br v0 block1 block2;
-
-block1:
-    return 0.i256;
-
-block2:
-    v1.*i256 = alloca i256;
-    mstore v1 1.i256 i256;
-    v2.i256 = call %f 0.i1;
-    v3.i256 = mload v1 i256;
-    return v3;
-}
-"#,
-            "f",
-            &ArenaCostModel {
-                w_save: 0,
-                w_code: 0,
-                ..ArenaCostModel::default()
-            },
-        );
-
-        assert!(!ctx.plan.enter_before_site(FrameSite::EnterFunction));
-        assert!(
-            ctx.plan
-                .exits
-                .iter()
-                .any(|point| matches!(point, FrameInjectionPoint::BeforeAction { .. }))
-        );
-    }
-
-    #[test]
-    fn visible_escape_beats_later_local_frame_touches_in_same_block() {
-        let ctx = lazy_plan_from_src(
-            r#"
-target = "evm-ethereum-osaka"
-
-func public %f(v0.i1, v1.*i256) -> i256 {
-block0:
-    br v0 block1 block2;
-
-block1:
-    return 0.i256;
-
-block2:
-    v2.*i256 = alloca i256;
-    v3.i256 = call %f 1.i1 v2;
-    mstore v2 7.i256 i256;
-    v4.i256 = mload v2 i256;
-    v5.i256 = add v3 v4;
-    return v5;
-}
-"#,
-            "f",
-            &ArenaCostModel::default(),
-        );
-
-        let ret_inst = ctx.module.func_store.view(ctx.func, |function| {
-            let mut ret_inst = None;
-            for block in function.layout.iter_block() {
-                for inst in function.layout.iter_inst(block) {
-                    if function.dfg.is_return(inst) {
-                        ret_inst = Some(inst);
-                    }
-                }
-            }
-            ret_inst.expect("return")
-        });
-
-        assert!(ctx.plan.exit_after_site(FrameSite::PreInst(ret_inst)));
-    }
-
-    #[test]
-    fn malloc_before_lazy_enter_is_not_marked_active() {
-        let ctx = lazy_plan_from_src(
-            r#"
-target = "evm-ethereum-osaka"
-
-func public %f(v0.i1, v1.i256) -> i256 {
-block0:
-    v2.*i8 = evm_malloc 32.i256;
-    br v0 block1 block2;
-
-block1:
-    return 0.i256;
-
-block2:
-    v3.*i256 = alloca i256;
-    mstore v3 v1 i256;
-    v4.i256 = call %f 1.i1 v1;
-    v5.i256 = mload v3 i256;
-    v6.i256 = add v4 v5;
-    return v6;
-}
-"#,
-            "f",
-            &ArenaCostModel::default(),
-        );
-
-        let malloc_inst = ctx.module.func_store.view(ctx.func, |function| {
-            function
-                .layout
-                .iter_block()
-                .flat_map(|block| function.layout.iter_inst(block))
-                .find(|&inst| {
-                    matches!(
-                        Evm::new(function.dfg.ctx.triple)
-                            .inst_set()
-                            .resolve_inst(function.dfg.inst(inst)),
-                        EvmInstKind::EvmMalloc(_)
-                    )
-                })
-                .expect("malloc")
-        });
-
-        assert!(!ctx.summary.local_frame_active_before_inst(malloc_inst));
-    }
-
-    #[test]
-    fn malloc_after_lazy_enter_is_marked_active() {
-        let ctx = lazy_plan_from_src(
-            r#"
-target = "evm-ethereum-osaka"
-
-func public %f(v0.i1, v1.i256) -> i256 {
-block0:
-    br v0 block1 block2;
-
-block1:
-    return 0.i256;
-
-block2:
-    v2.*i256 = alloca i256;
-    mstore v2 v1 i256;
-    v3.*i8 = evm_malloc 32.i256;
-    v4.i256 = call %f 1.i1 v1;
-    v5.i256 = mload v2 i256;
-    v6.i256 = add v4 v5;
-    return v6;
-}
-"#,
-            "f",
-            &ArenaCostModel::default(),
-        );
-
-        let malloc_inst = ctx.module.func_store.view(ctx.func, |function| {
-            function
-                .layout
-                .iter_block()
-                .flat_map(|block| function.layout.iter_inst(block))
-                .find(|&inst| {
-                    matches!(
-                        Evm::new(function.dfg.ctx.triple)
-                            .inst_set()
-                            .resolve_inst(function.dfg.inst(inst)),
-                        EvmInstKind::EvmMalloc(_)
-                    )
-                })
-                .expect("malloc")
-        });
-
-        assert!(ctx.summary.local_frame_active_before_inst(malloc_inst));
-    }
-
-    #[test]
-    fn full_body_active_summary_marks_all_insts_active() {
-        let summary = FrameSummary {
-            lowering: None,
-            full_body_active: true,
-            active_pre_insts: FxHashSet::default(),
-        };
-
-        assert!(summary.local_frame_active_before_inst(InstId::from_u32(0)));
-        assert!(summary.local_frame_active_before_inst(InstId::from_u32(1)));
-    }
 }

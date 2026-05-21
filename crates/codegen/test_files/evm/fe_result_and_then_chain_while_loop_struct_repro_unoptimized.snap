@@ -1,70 +1,70 @@
 ---
 source: crates/codegen/tests/evm.rs
-assertion_line: 455
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/fe_result_and_then_chain_while_loop_struct_repro_unoptimized.sntn
 ---
 evm.config: stack_reach=16 vcode=false bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 1126 bytes
-  total: 1126 bytes
+  section runtime: 913 bytes
+  total: 913 bytes
 
 functions:
-  nibble: ir_blocks=3 ir_insts=10 vcode_ops=30 fixups=1 imm_bytes=4
-    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=13 abs_words_end=0
-  result_and_then_chain_while_loop_struct_repro: ir_blocks=1 ir_insts=33 vcode_ops=92 fixups=10 imm_bytes=20
+  mem: global_dyn_base=0x300 arena_base=0xa0 scratch_peak_words=3 static_chain_peak_words=16
+  nibble: ir_blocks=3 ir_insts=9 vcode_ops=24 fixups=1 imm_bytes=3
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=14 abs_words_end=0
+  result_and_then_chain_while_loop_struct_repro: ir_blocks=1 ir_insts=16 vcode_ops=57 fixups=10 imm_bytes=18
     mem: scratch_words=3 stable_words=10 stable_mode=StaticAbs(base=0x100) entry_abs_words=3 abs_words_end=13
-  result_e__t__h7e70df4f5f6c66e_and_then__Error_hdf7f09d2a5744fe8_Ctx_h4952b3c1f066f039_Ctx_h4952b3c1f066f039_Step_h7b2dd1cd31620192__95260929b4acc4b4: ir_blocks=5 ir_insts=17 vcode_ops=52 fixups=6 imm_bytes=5
+  result_e__t__h7e70df4f5f6c66e_and_then__Error_hdf7f09d2a5744fe8_Ctx_h4952b3c1f066f039_Ctx_h4952b3c1f066f039_Step_h7b2dd1cd31620192__95260929b4acc4b4: ir_blocks=5 ir_insts=16 vcode_ops=48 fixups=6 imm_bytes=5
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=13 abs_words_end=0
-  step_h7b2dd1cd31620192_fn_h493f512f1483138_call: ir_blocks=16 ir_insts=59 vcode_ops=163 fixups=15 imm_bytes=23
-    mem: scratch_words=3 stable_words=0 stable_mode=None entry_abs_words=13 abs_words_end=3
+  step_h7b2dd1cd31620192_fn_h493f512f1483138_call: ir_blocks=12 ir_insts=41 vcode_ops=137 fixups=15 imm_bytes=20
+    mem: scratch_words=3 stable_words=1 stable_mode=StaticAbs(base=0x240) entry_abs_words=13 abs_words_end=14
   u256_h3271ca15373d4483_eq_he50383edd273619f_eq: ir_blocks=1 ir_insts=2 vcode_ops=4 fixups=0 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=19 abs_words_end=0
   u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt: ir_blocks=1 ir_insts=2 vcode_ops=4 fixups=0 imm_bytes=0
-    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=13 abs_words_end=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=14 abs_words_end=0
   u256_h3271ca15373d4483_ord_h264f6d6d75097a_gt: ir_blocks=1 ir_insts=2 vcode_ops=4 fixups=0 imm_bytes=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=14 abs_words_end=0
+  result_e__t__h7e70df4f5f6c66e_map__Error_hdf7f09d2a5744fe8_Ctx_h4952b3c1f066f039_u256_Extract_h744d40a291047a28__b3afeb8e69cf29b8: ir_blocks=5 ir_insts=19 vcode_ops=55 fixups=6 imm_bytes=7
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=13 abs_words_end=0
-  result_e__t__h7e70df4f5f6c66e_map__Error_hdf7f09d2a5744fe8_Ctx_h4952b3c1f066f039_u256_Extract_h744d40a291047a28__b3afeb8e69cf29b8: ir_blocks=5 ir_insts=21 vcode_ops=62 fixups=6 imm_bytes=7
+  extract_h744d40a291047a28_fn_h493f512f1483138_call: ir_blocks=1 ir_insts=2 vcode_ops=4 fixups=0 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=13 abs_words_end=0
-  extract_h744d40a291047a28_fn_h493f512f1483138_call: ir_blocks=1 ir_insts=3 vcode_ops=4 fixups=0 imm_bytes=0
+  result_e__t__h7e70df4f5f6c66e_unwrap__Error_hdf7f09d2a5744fe8_u256__c87495ea3a7b0d61: ir_blocks=4 ir_insts=13 vcode_ops=36 fixups=4 imm_bytes=4
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=13 abs_words_end=0
-  result_e__t__h7e70df4f5f6c66e_unwrap__Error_hdf7f09d2a5744fe8_u256__c87495ea3a7b0d61: ir_blocks=4 ir_insts=13 vcode_ops=39 fixups=4 imm_bytes=4
-    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=13 abs_words_end=0
-  revert__Error_hdf7f09d2a5744fe8__3dc0663d0c43952: ir_blocks=1 ir_insts=12 vcode_ops=45 fixups=10 imm_bytes=4
+  revert__Error_hdf7f09d2a5744fe8__3dc0663d0c43952: ir_blocks=1 ir_insts=8 vcode_ops=38 fixups=10 imm_bytes=7
     mem: scratch_words=0 stable_words=6 stable_mode=StaticAbs(base=0x240) entry_abs_words=13 abs_words_end=19
-  solencoder_h1b9228b90dad6928_new: ir_blocks=1 ir_insts=9 vcode_ops=23 fixups=0 imm_bytes=3
+  solencoder_h1b9228b90dad6928_new: ir_blocks=1 ir_insts=8 vcode_ops=22 fixups=0 imm_bytes=3
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=19 abs_words_end=0
-  abi_root_head_size__Error_hdf7f09d2a5744fe8__3dc0663d0c43952: ir_blocks=3 ir_insts=3 vcode_ops=12 fixups=1 imm_bytes=2
+  abi_root_head_size__Error_hdf7f09d2a5744fe8__3dc0663d0c43952: ir_blocks=1 ir_insts=1 vcode_ops=4 fixups=0 imm_bytes=1
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=19 abs_words_end=0
-  solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head: ir_blocks=4 ir_insts=20 vcode_ops=67 fixups=5 imm_bytes=10
+  solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head: ir_blocks=7 ir_insts=26 vcode_ops=65 fixups=5 imm_bytes=10
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=19 abs_words_end=0
-  encode_root__Sol_hfd482bb803ad8c5f_Error_hdf7f09d2a5744fe8_SolEncoder_h1b9228b90dad6928__4c76fab4070bc4f0: ir_blocks=3 ir_insts=5 vcode_ops=20 fixups=5 imm_bytes=0
+  encode_root__Sol_hfd482bb803ad8c5f_Error_hdf7f09d2a5744fe8_SolEncoder_h1b9228b90dad6928__4c76fab4070bc4f0: ir_blocks=1 ir_insts=2 vcode_ops=8 fixups=2 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=19 abs_words_end=0
-  encode_field__Sol_hfd482bb803ad8c5f_Error_hdf7f09d2a5744fe8_SolEncoder_h1b9228b90dad6928__4c76fab4070bc4f0: ir_blocks=5 ir_insts=17 vcode_ops=87 fixups=22 imm_bytes=1
+  encode_field__Sol_hfd482bb803ad8c5f_Error_hdf7f09d2a5744fe8_SolEncoder_h1b9228b90dad6928__4c76fab4070bc4f0: ir_blocks=1 ir_insts=2 vcode_ops=7 fixups=2 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=19 abs_words_end=0
   error_hdf7f09d2a5744fe8_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_SolEncoder_h1b9228b90dad6928__1a070c3866d16383: ir_blocks=1 ir_insts=3 vcode_ops=12 fixups=4 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=19 abs_words_end=0
-  solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_write_word: ir_blocks=1 ir_insts=7 vcode_ops=16 fixups=0 imm_bytes=3
+  solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_write_word: ir_blocks=1 ir_insts=6 vcode_ops=14 fixups=0 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=19 abs_words_end=0
   error_hdf7f09d2a5744fe8_to_word: ir_blocks=5 ir_insts=6 vcode_ops=26 fixups=4 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=19 abs_words_end=0
-  solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_base: ir_blocks=1 ir_insts=3 vcode_ops=6 fixups=0 imm_bytes=1
+  solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_base: ir_blocks=1 ir_insts=3 vcode_ops=5 fixups=0 imm_bytes=1
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=19 abs_words_end=0
-  solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_append_tail: ir_blocks=1 ir_insts=6 vcode_ops=31 fixups=1 imm_bytes=7
+  solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_append_tail: ir_blocks=4 ir_insts=14 vcode_ops=29 fixups=1 imm_bytes=7
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=19 abs_words_end=0
-  solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_pos: ir_blocks=1 ir_insts=3 vcode_ops=6 fixups=0 imm_bytes=1
+  solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_pos: ir_blocks=1 ir_insts=3 vcode_ops=5 fixups=0 imm_bytes=1
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=19 abs_words_end=0
-  solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_set_base: ir_blocks=1 ir_insts=3 vcode_ops=5 fixups=0 imm_bytes=1
+  solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_set_base: ir_blocks=1 ir_insts=3 vcode_ops=4 fixups=0 imm_bytes=1
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=19 abs_words_end=0
-  solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_set_pos: ir_blocks=1 ir_insts=3 vcode_ops=5 fixups=0 imm_bytes=1
+  solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_set_pos: ir_blocks=1 ir_insts=3 vcode_ops=4 fixups=0 imm_bytes=1
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=19 abs_words_end=0
-  solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish: ir_blocks=3 ir_insts=13 vcode_ops=32 fixups=1 imm_bytes=2
+  solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish: ir_blocks=3 ir_insts=11 vcode_ops=28 fixups=1 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=19 abs_words_end=0
-  assert: ir_blocks=3 ir_insts=4 vcode_ops=10 fixups=1 imm_bytes=0
+  assert: ir_blocks=3 ir_insts=3 vcode_ops=8 fixups=1 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=13 abs_words_end=0
   __fe_sonatina_entry: ir_blocks=1 ir_insts=2 vcode_ops=7 fixups=2 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=26998 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=5998
+  case ok: calldata_len=0 success reason=Return gas_used=26621 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=5621

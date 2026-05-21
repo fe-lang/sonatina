@@ -2,8 +2,8 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
     BlockId, Function, InstId, InstSetExt, Module,
     cfg::ControlFlowGraph,
-    inst::{control_flow::BranchKind, data::SymbolRef, evm::inst_set::EvmInstKind},
-    isa::{Isa, evm::Evm},
+    inst::{control_flow::BranchKind, data::SymbolRef, evm::machine_inst_set::EvmMachineInstKind},
+    isa::{Isa, evm::EvmMachine},
     module::FuncRef,
 };
 
@@ -15,7 +15,10 @@ use crate::{
 };
 use cranelift_entity::{EntityList, SecondaryMap};
 
-use super::super::{FrameSummary, OpCode, lazy_frame::FrameSite};
+use super::super::{
+    OpCode,
+    machine::lazy_frame::{FrameSite, FrameSummary},
+};
 
 pub(crate) fn compute_function_entry_jump_targets(
     module: &Module,
@@ -23,26 +26,26 @@ pub(crate) fn compute_function_entry_jump_targets(
 ) -> FxHashSet<FuncRef> {
     let funcs_set: FxHashSet<FuncRef> = funcs.iter().copied().collect();
     let mut targets = FxHashSet::default();
-    let evm_inst_set = Evm::new(module.ctx.triple).inst_set();
+    let evm_inst_set = EvmMachine::new(module.ctx.triple).inst_set();
 
     for &func_ref in funcs {
         module.func_store.view(func_ref, |function| {
             for block in function.layout.iter_block() {
                 for inst in function.layout.iter_inst(block) {
                     match evm_inst_set.resolve_inst(function.dfg.inst(inst)) {
-                        EvmInstKind::Call(call) => {
+                        EvmMachineInstKind::Call(call) => {
                             let callee = *call.callee();
                             if funcs_set.contains(&callee) {
                                 targets.insert(callee);
                             }
                         }
-                        EvmInstKind::GetFunctionPtr(get_fn) => {
+                        EvmMachineInstKind::GetFunctionPtr(get_fn) => {
                             let func = *get_fn.func();
                             if funcs_set.contains(&func) {
                                 targets.insert(func);
                             }
                         }
-                        EvmInstKind::SymAddr(sym_addr) => {
+                        EvmMachineInstKind::SymAddr(sym_addr) => {
                             if let SymbolRef::Func(func) = sym_addr.sym()
                                 && funcs_set.contains(func)
                             {
@@ -210,6 +213,7 @@ pub(crate) fn rewrite_evm_local_fallthrough_layout(
     function: &Function,
     aliases: &FxHashMap<BlockId, BlockId>,
     mut emitted_block_order: Vec<BlockId>,
+    prefer_speed: bool,
 ) -> Vec<BlockId> {
     if emitted_block_order.len() < 3 {
         return emitted_block_order;
@@ -225,20 +229,52 @@ pub(crate) fn rewrite_evm_local_fallthrough_layout(
     loops.compute(&cfg, &dom);
 
     let mut idx = 0;
-    while idx + 2 < emitted_block_order.len() {
+    while idx + 1 < emitted_block_order.len() {
         let header = emitted_block_order[idx];
-        let exit = emitted_block_order[idx + 1];
-        let body = emitted_block_order[idx + 2];
-        if is_hot_loop_header_fallthrough_candidate(
-            function, &cfg, &loops, aliases, header, exit, body,
-        ) {
+        let second = emitted_block_order[idx + 1];
+        let third = emitted_block_order.get(idx + 2).copied();
+        if let Some(third) = third
+            && (is_hot_loop_header_fallthrough_candidate(
+                function, &cfg, &loops, aliases, header, second, third,
+            ) || is_loop_header_no_invert_candidate(
+                function, &cfg, &loops, aliases, header, second, third,
+            ) || (!prefer_speed
+                && is_local_diamond_no_invert_candidate(
+                    function,
+                    aliases,
+                    &emitted_block_order,
+                    idx,
+                )))
+        {
             tracing::trace!(
                 header = header.0,
-                body = body.0,
-                exit = exit.0,
+                second = second.0,
+                third = third.0,
                 "rewrote local EVM fallthrough layout"
             );
             emitted_block_order.swap(idx + 1, idx + 2);
+            idx += 3;
+        } else if prefer_speed
+            && let Some(exit_region) = later_loop_header_no_invert_exit_region(
+                function,
+                &cfg,
+                &loops,
+                aliases,
+                &emitted_block_order,
+                idx,
+            )
+        {
+            let exit = emitted_block_order[exit_region.start];
+            let exit_blocks: Vec<_> = emitted_block_order.drain(exit_region).collect();
+            tracing::trace!(
+                header = header.0,
+                body = second.0,
+                exit = exit.0,
+                "moved local EVM loop exit before loop body"
+            );
+            for (offset, block) in exit_blocks.into_iter().enumerate() {
+                emitted_block_order.insert(idx + 1 + offset, block);
+            }
             idx += 3;
         } else {
             idx += 1;
@@ -246,6 +282,111 @@ pub(crate) fn rewrite_evm_local_fallthrough_layout(
     }
 
     emitted_block_order
+}
+
+fn is_local_diamond_no_invert_candidate(
+    function: &Function,
+    aliases: &FxHashMap<BlockId, BlockId>,
+    emitted_block_order: &[BlockId],
+    header_idx: usize,
+) -> bool {
+    let Some((&header, rest)) = emitted_block_order[header_idx..].split_first() else {
+        return false;
+    };
+    let [nz_fallthrough, z_fallthrough, continuation, ..] = rest else {
+        return false;
+    };
+
+    if [header, *nz_fallthrough, *z_fallthrough, *continuation]
+        .into_iter()
+        .any(|block| canonical_block_alias_target(aliases, block) != block)
+    {
+        return false;
+    }
+
+    let Some(header_term) = function.layout.last_inst_of(header) else {
+        return false;
+    };
+    let Some(header_branch) = function.dfg.branch_info(header_term) else {
+        return false;
+    };
+    let BranchKind::Br(br) = header_branch.branch_kind() else {
+        return false;
+    };
+    if *br.nz_dest() != *nz_fallthrough || *br.z_dest() != *z_fallthrough {
+        return false;
+    }
+
+    block_jump_dest(function, *nz_fallthrough) == Some(*continuation)
+        && block_jump_dest(function, *z_fallthrough) == Some(*continuation)
+}
+
+fn later_loop_header_no_invert_exit_region(
+    function: &Function,
+    cfg: &ControlFlowGraph,
+    loops: &LoopTree,
+    aliases: &FxHashMap<BlockId, BlockId>,
+    emitted_block_order: &[BlockId],
+    header_idx: usize,
+) -> Option<std::ops::Range<usize>> {
+    let header = emitted_block_order[header_idx];
+    let body = emitted_block_order[header_idx + 1];
+    if [header, body]
+        .into_iter()
+        .any(|block| canonical_block_alias_target(aliases, block) != block)
+    {
+        return None;
+    }
+
+    let lp = loops.loop_of_block(header)?;
+    if loops.loop_header(lp) != header
+        || !loops.is_in_loop(body, lp)
+        || cfg.pred_num_of(body) != 1
+        || cfg.preds_as_slice(body) != [header]
+    {
+        return None;
+    }
+
+    let header_term = function.layout.last_inst_of(header)?;
+    let header_branch = function.dfg.branch_info(header_term)?;
+    let BranchKind::Br(br) = header_branch.branch_kind() else {
+        return None;
+    };
+    if canonical_block_alias_target(aliases, *br.nz_dest()) != body {
+        return None;
+    }
+    let exit = canonical_block_alias_target(aliases, *br.z_dest());
+    if loops.is_in_loop(exit, lp) {
+        return None;
+    }
+
+    let exit_idx = emitted_block_order
+        .iter()
+        .enumerate()
+        .skip(header_idx + 2)
+        .find_map(|(idx, &block)| (block == exit).then_some(idx))?;
+
+    let moved_region = &emitted_block_order[header_idx + 1..exit_idx];
+    if moved_region
+        .iter()
+        .any(|&block| canonical_block_alias_target(aliases, block) != block)
+        || moved_region
+            .iter()
+            .any(|&block| !loops.is_in_loop(block, lp) || block_branches_to(function, block, exit))
+    {
+        return None;
+    }
+
+    let mut exit_end = exit_idx + 1;
+    if let Some(&next) = emitted_block_order.get(exit_end)
+        && canonical_block_alias_target(aliases, next) == next
+        && !loops.is_in_loop(next, lp)
+        && block_branches_to(function, exit, next)
+    {
+        exit_end += 1;
+    }
+
+    Some(exit_idx..exit_end)
 }
 
 fn is_hot_loop_header_fallthrough_candidate(
@@ -259,7 +400,7 @@ fn is_hot_loop_header_fallthrough_candidate(
 ) -> bool {
     if [header, exit, body]
         .into_iter()
-        .any(|block| canonical_late_alias_target(aliases, block) != block)
+        .any(|block| canonical_block_alias_target(aliases, block) != block)
     {
         return false;
     }
@@ -282,14 +423,10 @@ fn is_hot_loop_header_fallthrough_candidate(
     let Some(body_term) = function.layout.last_inst_of(body) else {
         return false;
     };
-    let Some(exit_term) = function.layout.last_inst_of(exit) else {
-        return false;
-    };
-    if !function.dfg.is_exit(exit_term)
-        || function
-            .layout
-            .iter_inst(body)
-            .any(|inst| function.dfg.is_phi(inst))
+    if function
+        .layout
+        .iter_inst(body)
+        .any(|inst| function.dfg.is_phi(inst))
     {
         return false;
     }
@@ -300,8 +437,8 @@ fn is_hot_loop_header_fallthrough_candidate(
     let BranchKind::Br(br) = header_branch.branch_kind() else {
         return false;
     };
-    if canonical_late_alias_target(aliases, *br.nz_dest()) != exit
-        || canonical_late_alias_target(aliases, *br.z_dest()) != body
+    if canonical_block_alias_target(aliases, *br.nz_dest()) != exit
+        || canonical_block_alias_target(aliases, *br.z_dest()) != body
     {
         return false;
     }
@@ -313,10 +450,93 @@ fn is_hot_loop_header_fallthrough_candidate(
         return false;
     };
 
-    canonical_late_alias_target(aliases, *jump.dest()) == header
+    canonical_block_alias_target(aliases, *jump.dest()) == header
 }
 
-fn canonical_late_alias_target(aliases: &FxHashMap<BlockId, BlockId>, block: BlockId) -> BlockId {
+fn is_loop_header_no_invert_candidate(
+    function: &Function,
+    cfg: &ControlFlowGraph,
+    loops: &LoopTree,
+    aliases: &FxHashMap<BlockId, BlockId>,
+    header: BlockId,
+    body: BlockId,
+    exit: BlockId,
+) -> bool {
+    if [header, body, exit]
+        .into_iter()
+        .any(|block| canonical_block_alias_target(aliases, block) != block)
+    {
+        return false;
+    }
+
+    let Some(lp) = loops.loop_of_block(header) else {
+        return false;
+    };
+    if loops.loop_header(lp) != header
+        || !loops.is_in_loop(body, lp)
+        || loops.is_in_loop(exit, lp)
+        || cfg.pred_num_of(body) != 1
+        || cfg.preds_as_slice(body) != [header]
+    {
+        return false;
+    }
+
+    let Some(header_term) = function.layout.last_inst_of(header) else {
+        return false;
+    };
+    let Some(body_term) = function.layout.last_inst_of(body) else {
+        return false;
+    };
+    if function
+        .layout
+        .iter_inst(body)
+        .any(|inst| function.dfg.is_phi(inst))
+    {
+        return false;
+    }
+
+    let Some(header_branch) = function.dfg.branch_info(header_term) else {
+        return false;
+    };
+    let BranchKind::Br(br) = header_branch.branch_kind() else {
+        return false;
+    };
+    if canonical_block_alias_target(aliases, *br.nz_dest()) != body
+        || canonical_block_alias_target(aliases, *br.z_dest()) != exit
+    {
+        return false;
+    }
+
+    let Some(body_branch) = function.dfg.branch_info(body_term) else {
+        return false;
+    };
+    if body_branch.dests().contains(&exit) {
+        return false;
+    }
+
+    true
+}
+
+fn block_branches_to(function: &Function, block: BlockId, dest: BlockId) -> bool {
+    function
+        .layout
+        .last_inst_of(block)
+        .and_then(|term| function.dfg.branch_info(term))
+        .is_some_and(|branch| branch.dests().contains(&dest))
+}
+
+fn block_jump_dest(function: &Function, block: BlockId) -> Option<BlockId> {
+    let branch = function
+        .layout
+        .last_inst_of(block)
+        .and_then(|term| function.dfg.branch_info(term))?;
+    let BranchKind::Jump(jump) = branch.branch_kind() else {
+        return None;
+    };
+    Some(*jump.dest())
+}
+
+fn canonical_block_alias_target(aliases: &FxHashMap<BlockId, BlockId>, block: BlockId) -> BlockId {
     let mut block = block;
     while let Some(&next) = aliases.get(&block) {
         if next == block {

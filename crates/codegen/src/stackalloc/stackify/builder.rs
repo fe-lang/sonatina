@@ -3,8 +3,8 @@ use crate::{
     bitset::BitSet,
     cfg_scc::CfgSccAnalysis,
     domtree::DomTree,
-    isa::evm::normalize_alias_map,
     liveness::Liveness,
+    stackalloc::normalize_value_alias_map,
 };
 use cranelift_entity::{EntityRef, SecondaryMap};
 use rustc_hash::FxHashSet;
@@ -13,7 +13,7 @@ use sonatina_ir::{BlockId, Function, I256, ValueId, cfg::ControlFlowGraph};
 
 use super::{
     alloc::{SpillStorage, StackifyAlloc},
-    iteration::IterationPlanner,
+    iteration::{IterationPlanner, imm_push_data_len, operand_order_for_stackify},
     planner::NormalizeSearchScratch,
     slots::{FreeSlotPools, SpillSlotInterference, SpillSlotPools},
     spill::SpillSet,
@@ -127,6 +127,9 @@ pub struct StackifyBuilder<'a> {
     scratch_spill_slots: u32,
     value_aliases_override: Option<&'a SecondaryMap<ValueId, Option<ValueId>>>,
     stack_cached_immediates: FxHashSet<I256>,
+    cache_hot_immediates: bool,
+    hot_immediate_min_block_uses: u32,
+    hot_immediate_min_push_data_bytes: usize,
 }
 
 pub(super) struct StackifyContext<'a> {
@@ -187,6 +190,9 @@ impl<'a> StackifyBuilder<'a> {
             scratch_spill_slots: 0,
             value_aliases_override: None,
             stack_cached_immediates: FxHashSet::default(),
+            cache_hot_immediates: false,
+            hot_immediate_min_block_uses: HOT_IMMEDIATE_DEFAULT_MIN_BLOCK_USES,
+            hot_immediate_min_push_data_bytes: HOT_IMMEDIATE_DEFAULT_MIN_PUSH_DATA_BYTES,
         }
     }
 
@@ -213,11 +219,18 @@ impl<'a> StackifyBuilder<'a> {
         self
     }
 
-    pub(crate) fn with_stack_cached_immediates(
-        mut self,
-        stack_cached_immediates: FxHashSet<I256>,
-    ) -> Self {
-        self.stack_cached_immediates = stack_cached_immediates;
+    pub(crate) fn with_hot_immediate_caching(mut self) -> Self {
+        self.cache_hot_immediates = true;
+        self
+    }
+
+    pub(crate) fn with_hot_immediate_min_push_data_bytes(mut self, bytes: usize) -> Self {
+        self.hot_immediate_min_push_data_bytes = bytes;
+        self
+    }
+
+    pub(crate) fn with_hot_immediate_min_block_uses(mut self, uses: u32) -> Self {
+        self.hot_immediate_min_block_uses = uses;
         self
     }
 
@@ -228,9 +241,14 @@ impl<'a> StackifyBuilder<'a> {
 
     pub fn compute_with_trace(self) -> (StackifyAlloc, String) {
         let func = self.func;
+        let (alloc, trace) = self.compute_with_trace_capture();
+        let trace = trace.render(func, &alloc);
+        (alloc, trace)
+    }
+
+    pub(crate) fn compute_with_trace_capture(self) -> (StackifyAlloc, super::trace::StackifyTrace) {
         let mut trace = super::trace::StackifyTrace::default();
         let alloc = self.compute_with_observer(&mut trace);
-        let trace = trace.render(func, &alloc);
         (alloc, trace)
     }
 
@@ -267,7 +285,17 @@ impl<'a> StackifyBuilder<'a> {
             }
             aliases
         };
-        normalize_alias_map(self.func, &mut value_aliases);
+        normalize_value_alias_map(self.func, &mut value_aliases);
+
+        let mut stack_cached_immediates = self.stack_cached_immediates;
+        if self.cache_hot_immediates {
+            stack_cached_immediates.extend(compute_hot_stack_cached_immediates(
+                self.func,
+                &value_aliases,
+                self.hot_immediate_min_block_uses,
+                self.hot_immediate_min_push_data_bytes,
+            ));
+        }
 
         let exact_local_addr = compute_exact_local_addrs(self.func, &value_aliases);
         let phi_results = compute_phi_results(self.func, &value_aliases);
@@ -300,7 +328,7 @@ impl<'a> StackifyBuilder<'a> {
             search_profile: self.search_profile,
             value_aliases,
             exact_local_addr,
-            stack_cached_immediates: self.stack_cached_immediates,
+            stack_cached_immediates,
         };
 
         // `spill_set` is discovered via a monotone fixed point:
@@ -473,6 +501,50 @@ impl<'a> StackifyBuilder<'a> {
     }
 }
 
+const HOT_IMMEDIATE_DEFAULT_MIN_BLOCK_USES: u32 = 4;
+pub(crate) const HOT_IMMEDIATE_SIZE_MIN_BLOCK_USES: u32 = 3;
+const HOT_IMMEDIATE_DEFAULT_MIN_PUSH_DATA_BYTES: usize = 16;
+pub(crate) const HOT_IMMEDIATE_SIZE_MIN_PUSH_DATA_BYTES: usize = 2;
+
+fn compute_hot_stack_cached_immediates(
+    func: &Function,
+    value_aliases: &SecondaryMap<ValueId, Option<ValueId>>,
+    min_block_uses: u32,
+    min_push_data_bytes: usize,
+) -> FxHashSet<I256> {
+    let mut hot = FxHashSet::default();
+
+    for block in func.layout.iter_block() {
+        let mut counts: BTreeMap<I256, (u32, usize)> = BTreeMap::new();
+        for inst in func.layout.iter_inst(block) {
+            if func.dfg.is_phi(inst) {
+                continue;
+            }
+
+            for value in operand_order_for_stackify(func, inst, value_aliases) {
+                let Some(imm) = func.dfg.value_imm(value) else {
+                    continue;
+                };
+
+                let entry = counts.entry(imm.as_i256()).or_insert((0, 0));
+                entry.0 += 1;
+                entry.1 = entry.1.max(imm_push_data_len(imm));
+            }
+        }
+
+        hot.extend(
+            counts
+                .into_iter()
+                .filter(|(_, (uses, push_data_bytes))| {
+                    *uses >= min_block_uses && *push_data_bytes >= min_push_data_bytes
+                })
+                .map(|(imm, _)| imm),
+        );
+    }
+
+    hot
+}
+
 fn initial_templates(
     ctx: &StackifyContext<'_>,
     params: &SecondaryMap<BlockId, SmallVec<[ValueId; 4]>>,
@@ -526,8 +598,13 @@ fn compute_exact_local_addrs(
 
 #[cfg(test)]
 mod tests {
-    use crate::isa::evm::normalize_alias_map;
+    use crate::{
+        domtree::DomTree,
+        liveness::Liveness,
+        stackalloc::{Action, StackifyBuilder, normalize_value_alias_map},
+    };
     use cranelift_entity::SecondaryMap;
+    use sonatina_ir::cfg::ControlFlowGraph;
     use sonatina_parser::parse_module;
 
     #[test]
@@ -569,11 +646,171 @@ block0:
             aliases[v2] = Some(v3);
             aliases[v3] = Some(v2);
 
-            normalize_alias_map(func, &mut aliases);
+            normalize_value_alias_map(func, &mut aliases);
 
             for value in [v0, v1, v2, v3] {
                 assert_eq!(aliases[value], Some(value));
             }
+        });
+    }
+
+    #[test]
+    fn hot_immediate_caching_preserves_repeated_large_immediate() {
+        const BIG: &str =
+            "21888242871839275222246405745257275088548364400416034343698204186575808495617";
+        let src = format!(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %f(v0.i256) -> i256 {{
+block0:
+    v1.i256 = add v0 {BIG}.i256;
+    v2.i256 = add v1 {BIG}.i256;
+    v3.i256 = add v2 {BIG}.i256;
+    v4.i256 = add v3 {BIG}.i256;
+    return v4;
+}}
+"#
+        );
+
+        let parsed = parse_module(&src).expect("module parses");
+        let func_ref = parsed.debug.func_order[0];
+
+        parsed.module.func_store.view(func_ref, |func| {
+            let mut cfg = ControlFlowGraph::new();
+            cfg.compute(func);
+
+            let mut liveness = Liveness::new();
+            liveness.compute(func, &cfg);
+
+            let mut dom = DomTree::new();
+            dom.compute(&cfg);
+
+            let alloc = StackifyBuilder::new(func, &cfg, &dom, &liveness, 16)
+                .with_hot_immediate_caching()
+                .compute();
+
+            let mut large_pushes = 0;
+            let mut dup_count = 0;
+            alloc.for_each_action(|action| match action {
+                Action::Push(imm) if super::imm_push_data_len(*imm) >= 16 => {
+                    large_pushes += 1;
+                }
+                Action::StackDup(_) => {
+                    dup_count += 1;
+                }
+                _ => {}
+            });
+
+            assert_eq!(large_pushes, 1);
+            assert!(dup_count >= 3);
+        });
+    }
+
+    #[test]
+    fn hot_immediate_caching_can_preserve_repeated_push2_immediate() {
+        const SRC: &str = r#"
+target = "evm-ethereum-osaka"
+
+func public %f(v0.i256) -> i256 {
+block0:
+    v1.i256 = add v0 256.i256;
+    v2.i256 = add v1 256.i256;
+    v3.i256 = add v2 256.i256;
+    v4.i256 = add v3 256.i256;
+    return v4;
+}
+"#;
+
+        let parsed = parse_module(SRC).expect("module parses");
+        let func_ref = parsed.debug.func_order[0];
+
+        parsed.module.func_store.view(func_ref, |func| {
+            let mut cfg = ControlFlowGraph::new();
+            cfg.compute(func);
+
+            let mut liveness = Liveness::new();
+            liveness.compute(func, &cfg);
+
+            let mut dom = DomTree::new();
+            dom.compute(&cfg);
+
+            let alloc = StackifyBuilder::new(func, &cfg, &dom, &liveness, 16)
+                .with_hot_immediate_caching()
+                .with_hot_immediate_min_push_data_bytes(
+                    super::HOT_IMMEDIATE_SIZE_MIN_PUSH_DATA_BYTES,
+                )
+                .compute();
+
+            let mut push2_count = 0;
+            let mut dup_count = 0;
+            alloc.for_each_action(|action| match action {
+                Action::Push(imm) if super::imm_push_data_len(*imm) == 2 => {
+                    push2_count += 1;
+                }
+                Action::StackDup(_) => {
+                    dup_count += 1;
+                }
+                _ => {}
+            });
+
+            assert_eq!(push2_count, 1);
+            assert!(dup_count >= 3);
+        });
+    }
+
+    #[test]
+    fn hot_immediate_caching_can_use_size_mode_use_threshold() {
+        const BIG: &str = "340282366920938463463374607431768211455";
+        let src = format!(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %f(v0.i256, v1.i256, v2.i256) -> i256 {{
+block0:
+    v3.i256 = and v0 {BIG}.i256;
+    v4.i256 = and v1 {BIG}.i256;
+    v5.i256 = and v2 {BIG}.i256;
+    return v5;
+}}
+"#
+        );
+
+        let parsed = parse_module(&src).expect("module parses");
+        let func_ref = parsed.debug.func_order[0];
+
+        parsed.module.func_store.view(func_ref, |func| {
+            let mut cfg = ControlFlowGraph::new();
+            cfg.compute(func);
+
+            let mut liveness = Liveness::new();
+            liveness.compute(func, &cfg);
+
+            let mut dom = DomTree::new();
+            dom.compute(&cfg);
+
+            let alloc = StackifyBuilder::new(func, &cfg, &dom, &liveness, 16)
+                .with_hot_immediate_caching()
+                .with_hot_immediate_min_block_uses(super::HOT_IMMEDIATE_SIZE_MIN_BLOCK_USES)
+                .with_hot_immediate_min_push_data_bytes(
+                    super::HOT_IMMEDIATE_SIZE_MIN_PUSH_DATA_BYTES,
+                )
+                .compute();
+
+            let mut large_pushes = 0;
+            let mut dup_count = 0;
+            alloc.for_each_action(|action| match action {
+                Action::Push(imm) if super::imm_push_data_len(*imm) >= 16 => {
+                    large_pushes += 1;
+                }
+                Action::StackDup(_) => {
+                    dup_count += 1;
+                }
+                _ => {}
+            });
+
+            assert_eq!(large_pushes, 1);
+            assert!(dup_count >= 2);
         });
     }
 }

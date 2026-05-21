@@ -9,8 +9,8 @@ pub(crate) use layout::{
     materialize_jumpdests, referenced_insn_label_targets, rewrite_evm_local_fallthrough_layout,
 };
 pub(crate) use stack::{
-    fold_stack_actions, immediate_u32, is_plain_inst, is_push_opcode, perform_actions,
-    prune_redundant_opcode_sequences, push_op,
+    fold_stack_actions, immediate_u32, is_plain_inst, is_push_opcode, perform_action,
+    perform_actions, prune_redundant_opcode_sequences, push_op,
 };
 
 use tracing::trace_span;
@@ -18,23 +18,28 @@ use tracing::trace_span;
 use crate::{
     machinst::lower::{Lower, LoweredFunction},
     stackalloc::{Action, Allocator},
-    transform::aggregate::assert_aggregate_legalized,
 };
-use sonatina_ir::{BlockId, Function, InstId, Module, module::FuncRef};
+use sonatina_ir::{BlockId, Function, Module, module::FuncRef};
 
-use self::stack::{enter_frame_initialized, leave_frame, perform_action};
+use self::stack::{enter_frame_initialized, leave_frame};
 use super::{
-    DynSpInitKind, DynamicFrameLayout, EvmBackend, EvmFunctionPlan, EvmSectionPlan, FrameSite,
-    LateCleanupProfile, LazyFramePlan, late_block_merge::run_late_block_merge, opcode::OpCode,
+    DynSpInitKind, DynamicFrameLayout, EvmBackend, EvmFunctionPlan, EvmSectionPlan,
+    LateCleanupProfile,
+    late_block_merge::run_late_block_merge,
+    machine::{
+        lazy_frame::{FrameSite, LazyFramePlan},
+        verify::verify_machine_function,
+    },
+    opcode::OpCode,
 };
 
-pub(crate) struct EvmFunctionLowering<'a> {
+pub(crate) struct EvmMachineFunctionLowering<'a> {
     backend: &'a EvmBackend,
     section_plan: &'a EvmSectionPlan,
     function_plan: &'a EvmFunctionPlan,
 }
 
-impl<'a> EvmFunctionLowering<'a> {
+impl<'a> EvmMachineFunctionLowering<'a> {
     pub(crate) fn new(
         backend: &'a EvmBackend,
         section_plan: &'a EvmSectionPlan,
@@ -59,6 +64,27 @@ impl<'a> EvmFunctionLowering<'a> {
         enter_frame_initialized(ctx, frame_layout);
     }
 
+    fn canonical_block_target(&self, block: BlockId) -> BlockId {
+        self.function_plan
+            .block_aliases
+            .get(&block)
+            .copied()
+            .unwrap_or(block)
+    }
+
+    fn is_elided_block(&self, block: BlockId) -> bool {
+        self.function_plan.block_aliases.contains_key(&block)
+    }
+
+    fn emit_actions(
+        &self,
+        ctx: &mut Lower<OpCode>,
+        actions: &[crate::stackalloc::Action],
+        frame_layout: Option<DynamicFrameLayout>,
+    ) {
+        perform_actions(ctx, actions, frame_layout);
+    }
+
     fn lazy_frame_plan_matches(&self, pred: impl FnOnce(&LazyFramePlan) -> bool) -> bool {
         self.function_plan
             .frame_summary
@@ -71,13 +97,7 @@ impl<'a> EvmFunctionLowering<'a> {
         self.function_plan.frame_summary.lowering.is_some()
     }
 
-    fn local_frame_active_before_inst(&self, inst: InstId) -> bool {
-        self.function_plan
-            .frame_summary
-            .local_frame_active_before_inst(inst)
-    }
-
-    fn frontier_init_kind(&self, inst: InstId) -> Option<DynSpInitKind> {
+    fn frontier_init_kind(&self, inst: sonatina_ir::InstId) -> Option<DynSpInitKind> {
         let plan = &self.function_plan.dyn_sp_plan;
         if plan.checked_frontier_init_calls.contains(&inst) {
             Some(DynSpInitKind::Checked)
@@ -86,22 +106,6 @@ impl<'a> EvmFunctionLowering<'a> {
         } else {
             None
         }
-    }
-
-    fn malloc_needs_dyn_sp_clamp(&self, inst: InstId) -> bool {
-        self.function_plan.dyn_sp_plan.entry_live_frame || self.local_frame_active_before_inst(inst)
-    }
-
-    fn canonical_block_target(&self, block: BlockId) -> BlockId {
-        self.function_plan
-            .block_aliases
-            .get(&block)
-            .copied()
-            .unwrap_or(block)
-    }
-
-    fn is_elided_block(&self, block: BlockId) -> bool {
-        self.function_plan.block_aliases.contains_key(&block)
     }
 
     fn emit_lazy_frame_enter_if_site_matches(
@@ -149,6 +153,7 @@ impl<'a> EvmFunctionLowering<'a> {
         action_index_offset: usize,
     ) {
         self.emit_lazy_frame_enter_if_site_matches(ctx, frame_layout, site);
+        self.emit_lazy_frame_leave_if_site_matches(ctx, frame_layout, site);
 
         let folded = fold_stack_actions(actions);
         for (index, action) in folded.iter().copied().enumerate() {
@@ -180,23 +185,24 @@ impl<'a> EvmFunctionLowering<'a> {
         }
     }
 
-    pub(crate) fn lower_prepared_function(
+    pub(crate) fn lower_prepared_machine_function(
         &self,
         module: &Module,
         func: FuncRef,
     ) -> Result<LoweredFunction<OpCode>, String> {
         let mut emitted_block_order = self.function_plan.emitted_block_order.clone();
         let _span = trace_span!(
-            "sonatina.codegen.evm.lower_prepared_function",
+            "sonatina.codegen.evm.lower_prepared_machine_function",
             func_ref = func.as_u32(),
             blocks = emitted_block_order.len()
         )
         .entered();
-        module.func_store.view(func, |function| {
-            assert_aggregate_legalized(function, &module.ctx);
-        });
+        module
+            .func_store
+            .view(func, |function| verify_machine_function(func, function))?;
         let mut vcode = {
-            let _span = trace_span!("sonatina.codegen.evm.lower_prepared_function.lower").entered();
+            let _span =
+                trace_span!("sonatina.codegen.evm.lower_prepared_machine_function.lower").entered();
             module.func_store.view(func, |function| {
                 let mut alloc = FinalAlloc::new(
                     self.function_plan.alloc.clone(),
@@ -214,15 +220,17 @@ impl<'a> EvmFunctionLowering<'a> {
             })?
         };
         {
-            let _span =
-                trace_span!("sonatina.codegen.evm.lower_prepared_function.prune_redundant_opcodes")
-                    .entered();
+            let _span = trace_span!(
+                "sonatina.codegen.evm.lower_prepared_machine_function.prune_redundant_opcodes"
+            )
+            .entered();
             prune_redundant_opcode_sequences(&mut vcode, &emitted_block_order);
         }
         if self.backend.late_cleanup_profile != LateCleanupProfile::Off {
-            let _span =
-                trace_span!("sonatina.codegen.evm.lower_prepared_function.late_block_merge")
-                    .entered();
+            let _span = trace_span!(
+                "sonatina.codegen.evm.lower_prepared_machine_function.late_block_merge"
+            )
+            .entered();
             module.func_store.view(func, |function| {
                 run_late_block_merge(
                     &mut vcode,
@@ -234,11 +242,13 @@ impl<'a> EvmFunctionLowering<'a> {
                     self.backend.late_cleanup_profile,
                 );
             });
+            prune_redundant_opcode_sequences(&mut vcode, &emitted_block_order);
         }
         {
-            let _span =
-                trace_span!("sonatina.codegen.evm.lower_prepared_function.materialize_jumpdests")
-                    .entered();
+            let _span = trace_span!(
+                "sonatina.codegen.evm.lower_prepared_machine_function.materialize_jumpdests"
+            )
+            .entered();
             module.func_store.view(func, |function| {
                 materialize_jumpdests(
                     &mut vcode,
@@ -280,7 +290,7 @@ impl<'a> EvmFunctionLowering<'a> {
             if let Some(frame_layout) = frame_layout {
                 self.emit_frame_enter(ctx, frame_layout);
             }
-            perform_actions(ctx, &actions, frame_layout);
+            self.emit_actions(ctx, &actions, frame_layout);
         }
     }
 

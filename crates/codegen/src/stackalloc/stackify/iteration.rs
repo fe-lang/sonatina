@@ -3,7 +3,7 @@ use smallvec::SmallVec;
 use sonatina_ir::{BlockId, Function, I256, Immediate, InstId, ValueId};
 use std::collections::BTreeMap;
 
-use crate::{bitset::BitSet, isa::evm::immediate_u32, stackalloc::Actions};
+use crate::{bitset::BitSet, stackalloc::Actions};
 
 use super::{
     alloc::StackifyAlloc,
@@ -17,11 +17,6 @@ use super::{
         BlockTemplate, TransferOrder, canonical_transfer_order, choose_transfer, project_transfer,
     },
     trace::StackifyObserver,
-};
-
-use sonatina_ir::{
-    InstDowncast,
-    inst::{cast, data, evm},
 };
 
 pub(super) struct IterationPlanner<'a, 'ctx, O: StackifyObserver> {
@@ -412,14 +407,6 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
         );
     }
 
-    pub(super) fn on_alias_noop(&mut self, inst: InstId, args: &[ValueId], results: &[ValueId]) {
-        self.observer.on_inst_actions("cleanup", &[], None);
-        self.observer.on_inst_actions("pre", &[], None);
-        self.observer
-            .on_inst_normal(self.ctx.func, inst, args, results);
-        self.observer.on_inst_actions("post", &[], None);
-    }
-
     pub(super) fn on_cleanup_actions(&mut self, inst: InstId, start: usize, end: usize) {
         self.observer
             .on_inst_actions("cleanup", &self.alloc.pre_actions[inst][start..end], None);
@@ -571,7 +558,7 @@ pub(super) fn count_block_uses(
         if ctx.func.dfg.is_phi(inst) {
             continue;
         }
-        for v in operand_order_for_evm(ctx.func, inst, &ctx.value_aliases) {
+        for v in operand_order_for_stackify(ctx.func, inst, &ctx.value_aliases) {
             if ctx.retains_value(v) {
                 *counts.entry(v).or_insert(0) += 1;
             } else if ctx.stack_caches_immediate(v)
@@ -695,50 +682,11 @@ pub(super) fn clean_dead_stack_prefix(
     }
 }
 
-pub(crate) fn operand_order_for_evm(
+pub(super) fn operand_order_for_stackify(
     func: &Function,
     inst: InstId,
     value_aliases: &SecondaryMap<ValueId, Option<ValueId>>,
 ) -> SmallVec<[ValueId; 8]> {
-    let is = func.inst_set();
-    let data = func.dfg.inst(inst);
-    if let Some(malloc) = <&evm::EvmMalloc as InstDowncast>::downcast(is, data) {
-        let size = *malloc.size();
-        if func.dfg.value_is_imm(size) {
-            // `evm_malloc` immediates are lowered as compile-time constants.
-            return SmallVec::new();
-        }
-
-        return smallvec::smallvec![value_aliases[size].unwrap_or(size)];
-    }
-
-    if let Some(gep) = <&data::Gep as InstDowncast>::downcast(is, data) {
-        let mut args: SmallVec<[ValueId; 8]> = SmallVec::new();
-        let values = gep.values().as_slice();
-        let Some((&base, indices)) = values.split_first() else {
-            panic!("gep without operands");
-        };
-        args.push(value_aliases[base].unwrap_or(base));
-
-        // GEP immediate indices are compile-time metadata for EVM lowering; they do not need to
-        // be materialized as runtime stack operands unless they fail immediate-u32 folding.
-        args.extend(
-            indices
-                .iter()
-                .copied()
-                .filter(|v| {
-                    !func.dfg.value_is_imm(*v)
-                        || func.dfg.value_imm(*v).and_then(immediate_u32).is_none()
-                })
-                .map(|v| value_aliases[v].unwrap_or(v)),
-        );
-        return args;
-    }
-
-    // This IR mostly already stores operands in the order expected by the EVM backend
-    // (e.g. `mstore addr value`, `gt lhs rhs`, `shl bits value`).
-    //
-    // Keeping this as a dedicated hook makes the required operand conventions explicit.
     let mut args: SmallVec<[ValueId; 8]> = func
         .dfg
         .inst(inst)
@@ -747,10 +695,6 @@ pub(crate) fn operand_order_for_evm(
         .map(|v| value_aliases[v].unwrap_or(v))
         .collect();
 
-    // For internal calls, we want the continuation address to end up directly under the call
-    // operands. We arrange the operands as a left rotation so that after the backend pushes the
-    // continuation (at the `Action::PushContinuationOffset` marker), a single `SWAP{arity}` places
-    // it under the operands and restores the callee ABI operand order.
     if call_has_local_return(func, inst) && !args.is_empty() {
         args.as_mut_slice().rotate_left(1);
     }
@@ -764,26 +708,6 @@ fn call_has_local_return(func: &Function, inst: InstId) -> bool {
             .func_effects(call.callee())
             .may_return_to_caller()
     })
-}
-
-pub(super) fn inst_is_noop_alias_cast(
-    ctx: &super::builder::StackifyContext<'_>,
-    inst: InstId,
-    args: &[ValueId],
-    res: Option<ValueId>,
-) -> bool {
-    let Some(res) = res else {
-        return false;
-    };
-    if args != [res] {
-        return false;
-    }
-
-    let is = ctx.func.inst_set();
-    let data = ctx.func.dfg.inst(inst);
-    <&cast::Bitcast as InstDowncast>::downcast(is, data).is_some()
-        || <&cast::IntToPtr as InstDowncast>::downcast(is, data).is_some()
-        || <&cast::PtrToInt as InstDowncast>::downcast(is, data).is_some()
 }
 
 pub(super) fn consume_operand_uses(

@@ -10,7 +10,8 @@ object: Contract
   total: 17 bytes
 
 functions:
-  entry: ir_blocks=5 ir_insts=8 vcode_ops=23 fixups=2 imm_bytes=1
+  mem: global_dyn_base=0x0 arena_base=0x0 scratch_peak_words=0 static_chain_peak_words=0
+  entry: ir_blocks=5 ir_insts=7 vcode_ops=21 fixups=2 imm_bytes=1
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
@@ -22,19 +23,19 @@ evm:
 // func public %entry()
 entry:
   block0:
-    PUSH0  // v0.i256 = evm_calldata_load 0.i256;
+    PUSH0  // v1.i256 = evm_calldata_load v0;
     CALLDATALOAD
-    DUP1  // v6.i1 = is_zero v0;
+    DUP1  // br v1 block2 block1;
     ISZERO
-    PUSH1 block4  // br v6 block1 block2;
+    PUSH1 block4
     JUMPI
   block2:
-    PUSH1 0x1 (1)  // v2.i1 = eq v0 1.i256;
+    PUSH1 0x1 (1)  // v4.i256 = eq v1 1.i256;
     EQ
-    PUSH1 block4  // br v2 block3 block4;
+    PUSH1 block4  // br v4 block3 block4;
     JUMPI
   block4:
     JUMPDEST
-    PUSH0  // evm_revert 0.i256 0.i256;
+    PUSH0  // evm_revert v0 v0;
     PUSH0
     REVERT

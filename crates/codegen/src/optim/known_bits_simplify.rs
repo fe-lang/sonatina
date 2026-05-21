@@ -2,13 +2,18 @@ use std::cell::RefCell;
 
 use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
-    Function, Immediate, InstId, Value, ValueId,
+    ControlFlowGraph, Function, Immediate, InstId, Value, ValueId,
     inst::{BinaryInstKind, InstClassKind},
 };
 
-use crate::analysis::{
-    known_bits::{KnownBits, type_mask},
-    scalar_facts::ScalarFacts,
+use crate::{
+    analysis::{
+        known_bits::{KnownBits, type_mask},
+        scalar_facts::ScalarFacts,
+    },
+    domtree::DomTree,
+    loop_analysis::LoopTree,
+    range_analysis::{RangeAnalysis, RangeEnv, RangeFact, transfer_inst},
 };
 
 use super::simplify_expr::{
@@ -43,7 +48,8 @@ enum ResolvedReplacement {
 struct LocalExprFacts<'a, 'b> {
     func: &'a Function,
     scalar_facts: &'b ScalarFacts<'a, 'b>,
-    may_be_undef: RefCell<FxHashMap<ValueId, bool>>,
+    range_env: Option<&'b RangeEnv>,
+    may_be_undef: &'b RefCell<FxHashMap<ValueId, bool>>,
 }
 
 impl ExprFactProvider for LocalExprFacts<'_, '_> {
@@ -58,6 +64,10 @@ impl ExprFactProvider for LocalExprFacts<'_, '_> {
 
         debug_assert_eq!(func.dfg.value_ty(v), self.func.dfg.value_ty(v));
         self.scalar_facts.known_bits(v)
+    }
+
+    fn range(&self, value: ValueId) -> Option<RangeFact> {
+        self.range_env.and_then(|env| env.get(&value).copied())
     }
 
     fn same_non_undef(&self, lhs: ValueId, rhs: ValueId) -> bool {
@@ -122,16 +132,45 @@ impl KnownBitsSimplify {
         self.plans.clear();
 
         let scalar_facts = ScalarFacts::new(func);
-        let facts = LocalExprFacts {
-            func,
-            scalar_facts: &scalar_facts,
-            may_be_undef: RefCell::default(),
-        };
+        let mut range_analysis = None;
+        if has_integral_and(func) {
+            let mut cfg = ControlFlowGraph::new();
+            cfg.compute(func);
+
+            let mut dom = DomTree::new();
+            dom.compute(&cfg);
+
+            let mut lpt = LoopTree::new();
+            lpt.compute(&cfg, &dom);
+
+            let mut analysis = RangeAnalysis::default();
+            analysis.compute(func, &cfg, &lpt);
+            range_analysis = Some(analysis);
+        }
+
+        let may_be_undef = RefCell::default();
         let blocks: Vec<_> = func.layout.iter_block().collect();
         for block in blocks {
+            let mut range_env = range_analysis
+                .as_ref()
+                .filter(|analysis| analysis.is_reachable(block))
+                .map(|analysis| analysis.entry_env(block).clone());
+
             for inst in func.layout.iter_inst(block) {
+                let facts = LocalExprFacts {
+                    func,
+                    scalar_facts: &scalar_facts,
+                    range_env: range_env.as_ref(),
+                    may_be_undef: &may_be_undef,
+                };
                 if let Some(plan) = self.plan_inst(func, &facts, inst) {
                     self.plans.push(plan);
+                }
+
+                if let Some(range_env) = range_env.as_mut()
+                    && !func.dfg.is_phi(inst)
+                {
+                    transfer_inst(func, range_env, inst);
                 }
             }
         }
@@ -209,19 +248,38 @@ impl KnownBitsSimplify {
         };
 
         match simplified {
-            SimplifyExprResult::Const(imm) => Some(RewritePlan::Const {
-                inst,
-                result: *result,
-                imm,
-            }),
-            SimplifyExprResult::Copy(replacement) => Some(RewritePlan::Copy {
-                inst,
-                result: *result,
-                replacement,
-            }),
+            SimplifyExprResult::Const(imm) if imm.ty() == func.dfg.value_ty(*result) => {
+                Some(RewritePlan::Const {
+                    inst,
+                    result: *result,
+                    imm,
+                })
+            }
+            SimplifyExprResult::Copy(replacement)
+                if func.dfg.value_ty(replacement) == func.dfg.value_ty(*result) =>
+            {
+                Some(RewritePlan::Copy {
+                    inst,
+                    result: *result,
+                    replacement,
+                })
+            }
+            SimplifyExprResult::Const(_) | SimplifyExprResult::Copy(_) => None,
             SimplifyExprResult::NoChange => None,
         }
     }
+}
+
+fn has_integral_and(func: &Function) -> bool {
+    func.layout.iter_block().any(|block| {
+        func.layout.iter_inst(block).any(|inst| {
+            let [result] = func.dfg.inst_results(inst) else {
+                return false;
+            };
+            func.dfg.inst(inst).kind() == InstClassKind::Binary(BinaryInstKind::And)
+                && func.dfg.value_ty(*result).is_integral()
+        })
+    })
 }
 
 impl Default for KnownBitsSimplify {

@@ -1,8 +1,7 @@
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 use sonatina_ir::{
-    Function, InstId, InstSetExt, ValueId,
-    inst::evm::inst_set::EvmInstKind,
+    Function, InstId, ValueId,
     isa::{Isa, evm::Evm},
     module::ModuleCtx,
 };
@@ -18,8 +17,8 @@ use crate::{
 };
 
 use super::{
-    emit::{EvmFunctionLowering, push_op},
-    late_alias::compute_evm_late_aliases,
+    emit::{EvmMachineFunctionLowering, push_op},
+    high_alias::compute_high_evm_aliases,
     late_section_merge::run_late_section_terminal_outline,
     memory_plan::{ArenaCostModel, ObjLoc, PreserveMode, StableMode, WORD_BYTES},
     opcode::OpCode,
@@ -57,6 +56,7 @@ pub struct EvmBackend {
     pub(crate) arena_cost_model: ArenaCostModel,
     pub(crate) late_cleanup_profile: LateCleanupProfile,
     pub(crate) immediate_materialization_mode: ImmediateMaterializationMode,
+    pub(crate) capture_stackify_trace: bool,
 }
 
 impl EvmBackend {
@@ -76,6 +76,7 @@ impl EvmBackend {
             arena_cost_model: ArenaCostModel::default(),
             late_cleanup_profile: LateCleanupProfile::Off,
             immediate_materialization_mode: ImmediateMaterializationMode::Gas,
+            capture_stackify_trace: false,
         }
     }
 
@@ -95,6 +96,11 @@ impl EvmBackend {
 
     pub fn with_stackify_search_profile(mut self, profile: StackifySearchProfile) -> Self {
         self.stackify_search_profile = profile;
+        self
+    }
+
+    pub fn with_stackify_trace_capture(mut self, enable: bool) -> Self {
+        self.capture_stackify_trace = enable;
         self
     }
 
@@ -119,12 +125,12 @@ impl EvmBackend {
         self.stackify_reach_depth
     }
 
-    pub fn compute_stackify_value_aliases(
+    pub(crate) fn compute_high_evm_value_aliases(
         &self,
         function: &Function,
         module: &ModuleCtx,
     ) -> SecondaryMap<ValueId, Option<ValueId>> {
-        compute_evm_late_aliases(function, module, &self.isa)
+        compute_high_evm_aliases(function, module, &self.isa)
             .map()
             .clone()
     }
@@ -322,55 +328,6 @@ impl EvmBackend {
                     .expect("mem plan write failed");
                 }
             }
-
-            let mut allocas: Vec<(ValueId, u32, u32, String)> = Vec::new();
-            module.func_store.view(func, |function| {
-                for block in function.layout.iter_block() {
-                    for insn in function.layout.iter_inst(block) {
-                        let data = self.isa.inst_set().resolve_inst(function.dfg.inst(insn));
-                        let EvmInstKind::Alloca(alloca) = data else {
-                            continue;
-                        };
-                        let Some(value) = function.dfg.inst_result(insn) else {
-                            continue;
-                        };
-                        let loc = func_plan
-                            .alloca_loc
-                            .get(&insn)
-                            .copied()
-                            .expect("missing alloca plan");
-                        let offset_words = match loc {
-                            ObjLoc::ScratchAbs(off)
-                            | ObjLoc::StableAbs(off)
-                            | ObjLoc::StableFrame(off) => off,
-                            ObjLoc::StackPinned(depth) => u32::from(depth),
-                        };
-
-                        let size_bytes = self
-                            .isa
-                            .type_layout()
-                            .size_of(*alloca.ty(), &module.ctx)
-                            .expect("alloca has invalid type")
-                            as u32;
-                        let size_words = size_bytes.div_ceil(WORD_BYTES);
-                        allocas.push((value, offset_words, size_words, addr_of(loc)));
-                    }
-                }
-            });
-
-            if allocas.is_empty() {
-                continue;
-            }
-
-            allocas.sort_unstable_by_key(|(v, _, _, _)| v.as_u32());
-            for (value, offset_words, size_words, addr) in allocas {
-                writeln!(
-                    &mut out,
-                    "  alloca v{} offset_words={offset_words} size_words={size_words} addr={addr}",
-                    value.as_u32()
-                )
-                .expect("mem plan write failed");
-            }
         }
 
         out
@@ -393,8 +350,8 @@ impl EvmBackend {
         let function_plan = prepared
             .function_plan(func)
             .ok_or_else(|| format!("missing prepared lowering for func {}", func.as_u32()))?;
-        EvmFunctionLowering::new(self, prepared.section_plan(), function_plan)
-            .lower_prepared_function(prepared.module(), func)
+        EvmMachineFunctionLowering::new(self, prepared.section_plan(), function_plan)
+            .lower_prepared_machine_function(prepared.module(), func)
     }
 
     pub fn post_lower_section(

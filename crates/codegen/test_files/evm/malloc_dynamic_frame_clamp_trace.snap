@@ -6,39 +6,36 @@ input_file: test_files/evm/malloc_dynamic_frame_clamp_trace.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 22 bytes
-  total: 22 bytes
+  section runtime: 21 bytes
+  total: 21 bytes
 
 functions:
-  dyn: ir_blocks=1 ir_insts=4 vcode_ops=59 fixups=4 imm_bytes=13
+  mem: global_dyn_base=0xa0 arena_base=0xa0 scratch_peak_words=0 static_chain_peak_words=0
+  dyn: ir_blocks=1 ir_insts=5 vcode_ops=56 fixups=4 imm_bytes=13
     mem: scratch_words=0 stable_words=1 stable_mode=DynamicFrame entry_abs_words=0 abs_words_end=0
-  main: ir_blocks=1 ir_insts=4 vcode_ops=8 fixups=0 imm_bytes=2
+  main: ir_blocks=1 ir_insts=3 vcode_ops=8 fixups=0 imm_bytes=3
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   entry: ir_blocks=1 ir_insts=3 vcode_ops=9 fixups=2 imm_bytes=1
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=8 success reason=Return gas_used=21114 gas_refunded=0 logs=0 output=call len=32 tx_gas=21056 runtime_gas=58
+  case ok: calldata_len=8 success reason=Return gas_used=21109 gas_refunded=0 logs=0 output=call len=32 tx_gas=21056 runtime_gas=53
 
 
 --------------- DEBUG ---------------
 
-// func public %dyn(v0.*i256) -> i256
+// func public %dyn(v0.i256) -> i256
 dyn:
   block0:
     JUMPDEST
     PUSH1 0x80 (128)
     MLOAD
-    DUP1
-    PUSH1 `pc + (7)`
+    PUSH1 `pc + (5)`
     JUMPI
-    POP
     PUSH1 0xa0 (160)
-    DUP1
     PUSH1 0x80 (128)
     MSTORE
     JUMPDEST
-    POP
     PUSH1 0x80 (128)
     MLOAD
     DUP1
@@ -63,20 +60,20 @@ dyn:
     POP
     PUSH1 0x80 (128)
     MSTORE
-    POP  // v1.*i256 = alloca i256;
-    PUSH1 0x40 (64)
-    PUSH1 0x80 (128)
+    POP  // v2.i256 = evm_mload v1;
+    PUSH1 0x40 (64)  // v4.i256 = sub v2 64.i256;
+    PUSH1 0x80 (128)  // v2.i256 = evm_mload v1;
     MLOAD
-    SUB
-    PUSH0  // mstore v1 0.i256 i256;
+    SUB  // v4.i256 = sub v2 64.i256;
+    PUSH0  // evm_mstore v4 0.i256;
     DUP2
     MSTORE
-    PUSH1 `pc + (4)`  // v2.i256 = call %dyn v1;
+    PUSH1 `pc + (4)`  // v6.i256 = call %dyn v4;
     SWAP1
     PUSH1 FuncRef(0)
     JUMP
     JUMPDEST
-    PUSH1 0x20 (32)  // return v2;
+    PUSH1 0x20 (32)  // return v6;
     PUSH1 0x80 (128)
     MLOAD
     SUB
@@ -90,11 +87,11 @@ dyn:
 main:
   block0:
     JUMPDEST
-    PUSH1 0xa0 (160)  // v0.*i256 = evm_malloc 32.i256;
-    PUSH1 0x6f (111)  // mstore v0 111.i256 i256;
-    DUP2
+    PUSH1 0x6f (111)  // evm_mstore v0 v1;
+    PUSH1 0xa0 (160)
     MSTORE
-    MLOAD  // v2.i256 = mload v0 i256;
+    PUSH1 0xa0 (160)  // v2.i256 = evm_mload v0;
+    MLOAD
     SWAP1  // return v2;
     JUMP
 
@@ -105,7 +102,7 @@ entry:
     PUSH1 FuncRef(1)
     JUMP
     JUMPDEST
-    PUSH0  // mstore 0.i256 v0 i256;
+    PUSH0  // evm_mstore 0.i256 v0;
     MSTORE
     PUSH1 0x20 (32)  // evm_return 0.i256 32.i256;
     PUSH0

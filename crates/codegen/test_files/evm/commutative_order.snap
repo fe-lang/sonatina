@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/evm.rs
-assertion_line: 412
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/commutative_order.sntn
 ---
@@ -11,6 +10,7 @@ object: Contract
   total: 71 bytes
 
 functions:
+  mem: global_dyn_base=0x0 arena_base=0x0 scratch_peak_words=0 static_chain_peak_words=0
   entry: ir_blocks=1 ir_insts=3 vcode_ops=26 fixups=2 imm_bytes=16
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   comm_add16: ir_blocks=1 ir_insts=3 vcode_ops=22 fixups=0 imm_bytes=2

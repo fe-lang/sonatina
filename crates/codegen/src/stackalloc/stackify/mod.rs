@@ -37,8 +37,11 @@ mod terminal_chain;
 mod trace;
 
 pub use alloc::StackifyAlloc;
+pub(crate) use builder::{
+    HOT_IMMEDIATE_SIZE_MIN_BLOCK_USES, HOT_IMMEDIATE_SIZE_MIN_PUSH_DATA_BYTES,
+};
 pub use builder::{StackifyBuilder, StackifySearchProfile};
-pub(crate) use iteration::{imm_push_data_len, operand_order_for_evm};
+pub(crate) use trace::StackifyTrace;
 
 use builder::StackifyContext;
 
@@ -57,9 +60,8 @@ mod tests {
     use crate::{
         analysis::func_behavior::analyze_module,
         domtree::DomTree,
-        isa::evm::{EvmBackend, canonicalize_alias_value},
         liveness::{InstLiveness, Liveness},
-        stackalloc::{Action, Allocator},
+        stackalloc::{Action, Allocator, canonicalize_value_alias},
         stackify_edge::StackifyEdgeSplitter,
     };
     use cranelift_entity::SecondaryMap;
@@ -67,10 +69,8 @@ mod tests {
         InstDowncast, ValueId,
         cfg::ControlFlowGraph,
         inst::{control_flow, control_flow::BranchKind, evm},
-        isa::evm::Evm,
     };
     use sonatina_parser::parse_module;
-    use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
     use std::fmt::Write;
 
     #[test]
@@ -133,141 +133,14 @@ mod tests {
     }
 
     #[test]
-    fn alias_aware_trace_keeps_noop_casts_action_free() {
-        const SRC: &str = r#"
-target = "evm-ethereum-osaka"
-
-func public %f(v0.i256, v1.i256) {
-block0:
-    v2.*i8 = int_to_ptr v0 *i8;
-    v3.*i32 = bitcast v2 *i32;
-    v4.*i256 = bitcast v3 *i256;
-    mstore v4 v1 i256;
-    return;
-}
-"#;
-
-        let parsed = parse_module(SRC).unwrap();
-        let fref = parsed
-            .module
-            .funcs()
-            .into_iter()
-            .find(|&f| parsed.module.ctx.func_sig(f, |sig| sig.name() == "f"))
-            .expect("missing f");
-        let backend = EvmBackend::new(Evm::new(TargetTriple {
-            architecture: Architecture::Evm,
-            vendor: Vendor::Ethereum,
-            operating_system: OperatingSystem::Evm(EvmVersion::Osaka),
-        }));
-
-        parsed.module.func_store.view(fref, |function| {
-            let mut cfg = ControlFlowGraph::new();
-            cfg.compute(function);
-
-            let mut dom = DomTree::new();
-            dom.compute(&cfg);
-
-            let value_aliases =
-                backend.compute_stackify_value_aliases(function, &parsed.module.ctx);
-
-            let mut liveness = Liveness::new();
-            liveness.compute_with_value_normalizer(function, &cfg, |v| {
-                canonicalize_alias_value(&value_aliases, v)
-            });
-
-            let (_, trace) = StackifyBuilder::new(function, &cfg, &dom, &liveness, 16)
-                .with_value_aliases(&value_aliases)
-                .compute_with_trace();
-
-            let lines: Vec<_> = trace.lines().collect();
-            for (i, line) in lines.iter().enumerate() {
-                if line.trim_start().starts_with("bitcast [") {
-                    let prev_is_pre = i > 0 && lines[i - 1].trim_start().starts_with("pre:");
-                    assert!(
-                        !prev_is_pre,
-                        "alias-only cast should not have stack prep actions:\n{trace}"
-                    );
-                }
-            }
-        });
-    }
-
-    #[test]
-    fn alias_aware_trace_keeps_multihop_noop_casts_action_free() {
-        const SRC: &str = r#"
-target = "evm-ethereum-osaka"
-
-func public %f(v0.i256, v1.i256) {
-block0:
-    v2.*i8 = int_to_ptr v0 *i8;
-    v3.*i32 = bitcast v2 *i32;
-    v4.*i256 = bitcast v3 *i256;
-    mstore v4 v1 i256;
-    return;
-}
-"#;
-
-        let parsed = parse_module(SRC).unwrap();
-        let fref = parsed
-            .module
-            .funcs()
-            .into_iter()
-            .find(|&f| parsed.module.ctx.func_sig(f, |sig| sig.name() == "f"))
-            .expect("missing f");
-
-        parsed.module.func_store.view(fref, |function| {
-            let mut cfg = ControlFlowGraph::new();
-            cfg.compute(function);
-
-            let mut dom = DomTree::new();
-            dom.compute(&cfg);
-
-            let v0 = parsed.debug.value(fref, "v0").expect("v0");
-            let v2 = parsed.debug.value(fref, "v2").expect("v2");
-            let v3 = parsed.debug.value(fref, "v3").expect("v3");
-            let v4 = parsed.debug.value(fref, "v4").expect("v4");
-
-            let mut value_aliases: SecondaryMap<ValueId, Option<ValueId>> = SecondaryMap::new();
-            for v in function.dfg.value_ids() {
-                value_aliases[v] = Some(v);
-            }
-            value_aliases[v2] = Some(v0);
-            value_aliases[v3] = Some(v2);
-            value_aliases[v4] = Some(v3);
-
-            let mut liveness = Liveness::new();
-            liveness.compute_with_value_normalizer(function, &cfg, |v| {
-                canonicalize_alias_value(&value_aliases, v)
-            });
-
-            let (_, trace) = StackifyBuilder::new(function, &cfg, &dom, &liveness, 16)
-                .with_value_aliases(&value_aliases)
-                .compute_with_trace();
-
-            let lines: Vec<_> = trace.lines().collect();
-            for (i, line) in lines.iter().enumerate() {
-                let op = line.trim_start();
-                if op.starts_with("bitcast [") || op.starts_with("int_to_ptr [") {
-                    let prev_is_pre = i > 0 && lines[i - 1].trim_start().starts_with("pre:");
-                    assert!(
-                        !prev_is_pre,
-                        "multi-hop alias no-op cast should not have stack prep actions:\n{trace}"
-                    );
-                }
-            }
-        });
-    }
-
-    #[test]
     fn br_table_case_actions_are_stored_by_case_order_for_alias_scrutinees() {
         const SRC: &str = r#"
 target = "evm-ethereum-osaka"
 
 func public %dispatch(v0.i256) -> i32 {
 block0:
-    v1.*i8 = int_to_ptr v0 *i8;
-    v2.i256 = ptr_to_int v1 i256;
-    br_table v2 block3 (0.i256 block1) (11.i256 block2);
+    v1.i256 = add v0 0.i256;
+    br_table v1 block3 (0.i256 block1) (11.i256 block2);
 
 block1:
     return 100.i32;
@@ -292,11 +165,6 @@ block3:
                     .func_sig(f, |sig| sig.name() == "dispatch")
             })
             .expect("missing dispatch");
-        let backend = EvmBackend::new(Evm::new(TargetTriple {
-            architecture: Architecture::Evm,
-            vendor: Vendor::Ethereum,
-            operating_system: OperatingSystem::Evm(EvmVersion::Osaka),
-        }));
 
         parsed.module.func_store.view(fref, |function| {
             let mut cfg = ControlFlowGraph::new();
@@ -304,18 +172,6 @@ block3:
 
             let mut dom = DomTree::new();
             dom.compute(&cfg);
-
-            let value_aliases =
-                backend.compute_stackify_value_aliases(function, &parsed.module.ctx);
-
-            let mut liveness = Liveness::new();
-            liveness.compute_with_value_normalizer(function, &cfg, |v| {
-                canonicalize_alias_value(&value_aliases, v)
-            });
-
-            let alloc = StackifyBuilder::new(function, &cfg, &dom, &liveness, 16)
-                .with_value_aliases(&value_aliases)
-                .compute();
 
             let term = function
                 .layout
@@ -331,6 +187,26 @@ block3:
                     )
                 })
                 .expect("missing br_table terminator");
+            let scrutinee = *function
+                .dfg
+                .cast_br_table(term)
+                .expect("br_table terminator should downcast")
+                .scrutinee();
+            let arg = function.arg_values[0];
+            let mut value_aliases: SecondaryMap<ValueId, Option<ValueId>> = SecondaryMap::new();
+            for value in function.dfg.value_ids() {
+                value_aliases[value] = Some(value);
+            }
+            value_aliases[scrutinee] = Some(arg);
+
+            let mut liveness = Liveness::new();
+            liveness.compute_with_value_normalizer(function, &cfg, |v| {
+                canonicalize_value_alias(&value_aliases, v)
+            });
+
+            let alloc = StackifyBuilder::new(function, &cfg, &dom, &liveness, 16)
+                .with_value_aliases(&value_aliases)
+                .compute();
 
             assert!(
                 alloc.pre_actions[term].is_empty(),

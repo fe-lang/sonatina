@@ -6,13 +6,14 @@ input_file: test_files/evm/gvn_value_phi_reachable_pred_regression.sntn
 evm.config: stack_reach=16 vcode=false bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 44 bytes
-  total: 44 bytes
+  section runtime: 45 bytes
+  total: 45 bytes
 
 functions:
-  entry: ir_blocks=7 ir_insts=15 vcode_ops=35 fixups=4 imm_bytes=7
+  mem: global_dyn_base=0x0 arena_base=0x0 scratch_peak_words=0 static_chain_peak_words=0
+  entry: ir_blocks=6 ir_insts=13 vcode_ops=34 fixups=4 imm_bytes=7
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case even: calldata_len=32 success reason=Return gas_used=21436 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=296
-  case odd: calldata_len=32 success reason=Return gas_used=21374 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=234
+  case even: calldata_len=32 success reason=Return gas_used=21429 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=289
+  case odd: calldata_len=32 success reason=Return gas_used=21387 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=247

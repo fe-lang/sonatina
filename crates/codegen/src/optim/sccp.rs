@@ -591,6 +591,10 @@ impl SccpSolver {
                 match action {
                     SimplifyAction::Const(imm) => {
                         let result_ty = func.dfg.value_ty(result);
+                        let Some(imm) = self.normalize_const_imm_for_value(func, result, imm)
+                        else {
+                            continue;
+                        };
                         debug_assert_eq!(
                             imm.ty(),
                             result_ty,
@@ -630,7 +634,7 @@ impl SccpSolver {
                     SimplifyAction::BuildIsZero(arg) => {
                         if idx == 0
                             && inst_results.len() == 1
-                            && func.dfg.value_ty(result) == Type::I1
+                            && matches!(func.dfg.value_ty(result), Type::I1 | Type::I256)
                             && let Some(is_zero) = func.inst_set().has_is_zero()
                         {
                             func.dfg
@@ -953,6 +957,8 @@ impl SccpSolver {
             None
         } else if imm.ty() == ty {
             Some(imm)
+        } else if imm.ty() == Type::I1 {
+            Some(imm.zext(ty))
         } else {
             Some(Immediate::from_i256(imm.as_i256(), ty))
         }

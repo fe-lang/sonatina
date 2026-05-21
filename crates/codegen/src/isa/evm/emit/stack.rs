@@ -32,6 +32,13 @@ enum StackPeepholeInput {
     Action(Action),
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum ImmediatePushPlan {
+    Plain(SmallVec<[u8; 8]>),
+    SignExtend(SmallVec<[u8; 8]>),
+    Not(SmallVec<[u8; 8]>),
+}
+
 const MAX_STACK_PEEPHOLE_WINDOW: usize = 24;
 
 fn classify_stack_peephole_input(input: StackPeepholeInput) -> Option<StackPeepholeOp> {
@@ -139,6 +146,14 @@ fn push_immediate_u256(vcode: &VCode<OpCode>, inst: VCodeInst) -> Option<U256> {
     let mut be = [0u8; 32];
     be[32 - bytes.len()..].copy_from_slice(bytes);
     Some(U256::from_big_endian(&be))
+}
+
+fn is_unlabeled_literal_push(
+    vcode: &VCode<OpCode>,
+    label_targets: &FxHashSet<VCodeInst>,
+    inst: VCodeInst,
+) -> bool {
+    !label_targets.contains(&inst) && push_immediate_u256(vcode, inst).is_some()
 }
 
 fn is_noop_stack_peephole_ops(ops: &[StackPeepholeOp]) -> bool {
@@ -307,6 +322,33 @@ pub(crate) fn prune_redundant_opcode_sequences(vcode: &mut VCode<OpCode>, block_
                 }
             }
 
+            if i + 4 < insts.len() {
+                let addr_push = insts[i];
+                let mload = insts[i + 1];
+                let imm_push = insts[i + 2];
+                let swap = insts[i + 3];
+                let sub = insts[i + 4];
+                // `PUSH addr; MLOAD; PUSH imm; SWAP1; SUB` and
+                // `PUSH imm; PUSH addr; MLOAD; SUB` present the same stack to `SUB`.
+                if is_unlabeled_literal_push(vcode, &label_targets, addr_push)
+                    && is_plain_inst(vcode, &label_targets, mload)
+                    && (vcode.insts[mload] as u8) == (OpCode::MLOAD as u8)
+                    && is_unlabeled_literal_push(vcode, &label_targets, imm_push)
+                    && is_plain_inst(vcode, &label_targets, swap)
+                    && (vcode.insts[swap] as u8) == (OpCode::SWAP1 as u8)
+                    && is_plain_inst(vcode, &label_targets, sub)
+                    && (vcode.insts[sub] as u8) == (OpCode::SUB as u8)
+                {
+                    kept.push(imm_push);
+                    kept.push(addr_push);
+                    kept.push(mload);
+                    kept.push(sub);
+                    changed = true;
+                    i += 5;
+                    continue;
+                }
+            }
+
             let run_limit = (i + MAX_STACK_PEEPHOLE_WINDOW).min(insts.len());
             let mut run_end = i;
             while run_end < run_limit
@@ -415,29 +457,18 @@ pub(crate) fn perform_action(
             debug_assert!((1..=16).contains(&n), "SWAP out of range: {n}");
             ctx.push(swap_op(n));
         }
-        Action::Push(imm) => {
-            if imm.is_zero() {
-                ctx.push(OpCode::PUSH0);
-            } else {
-                let bytes = match imm {
-                    Immediate::I1(v) => smallvec![v as u8],
-                    Immediate::I8(v) => SmallVec::from_slice(&v.to_be_bytes()),
-                    Immediate::I16(v) => shrink_bytes(&v.to_be_bytes()),
-                    Immediate::I32(v) => shrink_bytes(&v.to_be_bytes()),
-                    Immediate::I64(v) => shrink_bytes(&v.to_be_bytes()),
-                    Immediate::I128(v) => shrink_bytes(&v.to_be_bytes()),
-                    Immediate::I256(v) => shrink_bytes(&v.to_u256().to_big_endian()),
-                    Immediate::EnumTag { value, .. } => {
-                        shrink_bytes(&value.to_u256().to_big_endian())
-                    }
-                };
+        Action::Push(imm) => match immediate_push_plan(imm) {
+            ImmediatePushPlan::Plain(bytes) => push_bytes(ctx, &bytes),
+            ImmediatePushPlan::SignExtend(bytes) => {
                 push_bytes(ctx, &bytes);
-                if imm.is_negative() && bytes.len() < 32 {
-                    push_bytes(ctx, &u32_to_be((bytes.len() - 1) as u32));
-                    ctx.push(OpCode::SIGNEXTEND);
-                }
+                push_bytes(ctx, &u32_to_be((bytes.len() - 1) as u32));
+                ctx.push(OpCode::SIGNEXTEND);
             }
-        }
+            ImmediatePushPlan::Not(bytes) => {
+                push_bytes(ctx, &bytes);
+                ctx.push(OpCode::NOT);
+            }
+        },
         Action::Pop => {
             ctx.push(OpCode::POP);
         }
@@ -516,6 +547,61 @@ pub(crate) fn push_bytes(ctx: &mut Lower<OpCode>, bytes: &[u8]) {
     } else {
         ctx.push_with_imm(push_op(bytes.len()), bytes);
     }
+}
+
+fn immediate_push_plan(imm: Immediate) -> ImmediatePushPlan {
+    if imm.is_zero() {
+        return ImmediatePushPlan::Plain(smallvec![0]);
+    }
+
+    let bytes = immediate_bytes(imm);
+    if let Some(bytes) = compact_not_push_bytes(imm, &bytes) {
+        return ImmediatePushPlan::Not(bytes);
+    }
+    if imm.is_negative() && bytes.len() < 32 {
+        ImmediatePushPlan::SignExtend(bytes)
+    } else {
+        ImmediatePushPlan::Plain(bytes)
+    }
+}
+
+fn immediate_bytes(imm: Immediate) -> SmallVec<[u8; 8]> {
+    match imm {
+        Immediate::I1(v) => smallvec![v as u8],
+        Immediate::I8(v) => SmallVec::from_slice(&v.to_be_bytes()),
+        Immediate::I16(v) => shrink_bytes(&v.to_be_bytes()),
+        Immediate::I32(v) => shrink_bytes(&v.to_be_bytes()),
+        Immediate::I64(v) => shrink_bytes(&v.to_be_bytes()),
+        Immediate::I128(v) => shrink_bytes(&v.to_be_bytes()),
+        Immediate::I256(v) => shrink_bytes(&v.to_u256().to_big_endian()),
+        Immediate::EnumTag { value, .. } => shrink_bytes(&value.to_u256().to_big_endian()),
+    }
+}
+
+fn compact_not_push_bytes(imm: Immediate, bytes: &[u8]) -> Option<SmallVec<[u8; 8]>> {
+    let Immediate::I256(value) = imm else {
+        return None;
+    };
+    if !value.is_negative() {
+        return None;
+    }
+
+    let not_bytes = u256_to_be(&!value.to_u256());
+    let current_len = immediate_push_len(imm, bytes);
+    let not_len = push_len(&not_bytes) + 1;
+    (not_len < current_len).then_some(not_bytes)
+}
+
+fn immediate_push_len(imm: Immediate, bytes: &[u8]) -> usize {
+    let mut len = push_len(bytes);
+    if imm.is_negative() && bytes.len() < 32 {
+        len += push_len(&u32_to_be((bytes.len() - 1) as u32)) + 1;
+    }
+    len
+}
+
+fn push_len(bytes: &[u8]) -> usize {
+    if bytes == [0] { 1 } else { bytes.len() + 1 }
 }
 
 fn shrink_bytes(bytes: &[u8]) -> SmallVec<[u8; 8]> {
@@ -672,45 +758,6 @@ fn emit_max_top_two(ctx: &mut Lower<OpCode>) {
     ctx.push(OpCode::POP);
 }
 
-fn emit_max_top_with_const(ctx: &mut Lower<OpCode>, constant: &[u8]) {
-    let constant = U256::from_big_endian(constant);
-    if constant.is_zero() {
-        return;
-    }
-
-    let compare_const = u256_to_be(&(constant - U256::from(1_u8)));
-    push_bytes(ctx, &compare_const);
-    ctx.push(OpCode::DUP2);
-    ctx.push(OpCode::GT);
-
-    let keep_x_push = ctx.push(OpCode::PUSH1);
-    ctx.push(OpCode::JUMPI);
-
-    ctx.push(OpCode::POP);
-    push_bytes(ctx, &u256_to_be(&constant));
-
-    let keep_x = ctx.push(OpCode::JUMPDEST);
-    ctx.add_label_reference(keep_x_push, Label::Insn(keep_x));
-}
-
-pub(crate) fn emit_malloc_base(
-    ctx: &mut Lower<OpCode>,
-    min_base_bytes: u32,
-    needs_dyn_sp_clamp: bool,
-) {
-    push_bytes(ctx, &[FREE_PTR_SLOT]);
-    ctx.push(OpCode::MLOAD);
-
-    if needs_dyn_sp_clamp {
-        push_bytes(ctx, &[DYN_SP_SLOT]);
-        ctx.push(OpCode::MLOAD);
-        emit_max_top_two(ctx);
-    }
-
-    let min_base = u32_to_be(min_base_bytes);
-    emit_max_top_with_const(ctx, &min_base);
-}
-
 pub(crate) fn init_dyn_sp(ctx: &mut Lower<OpCode>, dyn_base: u32) {
     push_bytes(ctx, &u32_to_be(dyn_base));
     push_bytes(ctx, &[DYN_SP_SLOT]);
@@ -720,20 +767,16 @@ pub(crate) fn init_dyn_sp(ctx: &mut Lower<OpCode>, dyn_base: u32) {
 pub(crate) fn ensure_dyn_sp_init(ctx: &mut Lower<OpCode>, dyn_base: u32) {
     push_bytes(ctx, &[DYN_SP_SLOT]);
     ctx.push(OpCode::MLOAD);
-    ctx.push(OpCode::DUP1);
 
     let skip_init_push = ctx.push(OpCode::PUSH1);
     ctx.push(OpCode::JUMPI);
 
-    ctx.push(OpCode::POP);
     push_bytes(ctx, &u32_to_be(dyn_base));
-    ctx.push(OpCode::DUP1);
     push_bytes(ctx, &[DYN_SP_SLOT]);
     ctx.push(OpCode::MSTORE);
 
     let skip_init = ctx.push(OpCode::JUMPDEST);
     ctx.add_label_reference(skip_init_push, Label::Insn(skip_init));
-    ctx.push(OpCode::POP);
 }
 
 pub(crate) fn enter_frame_initialized(ctx: &mut Lower<OpCode>, frame_layout: DynamicFrameLayout) {
@@ -858,5 +901,97 @@ pub(crate) fn push_op(bytes: usize) -> OpCode {
         31 => OpCode::PUSH31,
         32 => OpCode::PUSH32,
         _ => unreachable!(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use sonatina_ir::I256;
+
+    use super::*;
+
+    fn push_imm(vcode: &mut VCode<OpCode>, block: BlockId, bytes: &[u8]) -> VCodeInst {
+        let inst = vcode.add_inst_to_block(push_op(bytes.len()), None, block);
+        if !bytes.is_empty() {
+            vcode.inst_imm_bytes.insert((inst, bytes.into()));
+        }
+        inst
+    }
+
+    fn block_ops(vcode: &VCode<OpCode>, block: BlockId) -> Vec<u8> {
+        vcode
+            .block_insns(block)
+            .map(|inst| vcode.insts[inst] as u8)
+            .collect()
+    }
+
+    #[test]
+    fn i256_negative_mask_push_uses_compact_not_form() {
+        let mask = Immediate::from_i256(!I256::from(31u8), Type::I256);
+
+        assert_eq!(
+            immediate_push_plan(mask),
+            ImmediatePushPlan::Not(smallvec![0x1f])
+        );
+    }
+
+    #[test]
+    fn i256_negative_one_push_uses_compact_not_form() {
+        let minus_one = Immediate::from_i256(I256::from(-1i8), Type::I256);
+
+        assert_eq!(
+            immediate_push_plan(minus_one),
+            ImmediatePushPlan::Not(smallvec![0])
+        );
+    }
+
+    #[test]
+    fn non_i256_negative_push_keeps_signextend_form() {
+        assert_eq!(
+            immediate_push_plan(Immediate::I8(-32)),
+            ImmediatePushPlan::SignExtend(smallvec![0xe0])
+        );
+    }
+
+    #[test]
+    fn positive_high_bit_i256_push_stays_plain() {
+        let value = Immediate::from_i256(I256::from(0xe0u16), Type::I256);
+
+        assert_eq!(
+            immediate_push_plan(value),
+            ImmediatePushPlan::Plain(smallvec![0xe0])
+        );
+    }
+
+    #[test]
+    fn prune_reorders_literal_mload_sub_to_drop_swap() {
+        let mut vcode = VCode::<OpCode>::default();
+        let block = BlockId(0);
+        push_imm(&mut vcode, block, &[0x80]);
+        vcode.add_inst_to_block(OpCode::MLOAD, None, block);
+        push_imm(&mut vcode, block, &[0x40]);
+        vcode.add_inst_to_block(OpCode::SWAP1, None, block);
+        vcode.add_inst_to_block(OpCode::SUB, None, block);
+
+        prune_redundant_opcode_sequences(&mut vcode, &[block]);
+
+        let insts: Vec<_> = vcode.block_insns(block).collect();
+        assert_eq!(
+            block_ops(&vcode, block),
+            vec![
+                OpCode::PUSH1 as u8,
+                OpCode::PUSH1 as u8,
+                OpCode::MLOAD as u8,
+                OpCode::SUB as u8
+            ]
+        );
+        assert_eq!(
+            push_immediate_u256(&vcode, insts[0]),
+            Some(U256::from(0x40u8))
+        );
+        assert_eq!(
+            push_immediate_u256(&vcode, insts[1]),
+            Some(U256::from(0x80u8))
+        );
     }
 }

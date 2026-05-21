@@ -1,24 +1,12 @@
-use rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
 use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{InstId, Module, module::FuncRef};
 
 use crate::module_analysis::{CallGraph, SccBuilder};
 
 use super::{
-    Evm,
-    emit::FinalAlloc,
-    lazy_frame::{FrameSummary, compute_frame_summary},
-    memory_plan::{self, ProgramMemoryPlan, topo_sort_sccs},
+    machine::lazy_frame::FrameSummary,
+    memory_plan::{self, FuncMemPlan},
 };
-
-#[derive(Clone, Default)]
-pub(crate) struct DynSpPlan {
-    pub(crate) entry_init: Option<DynSpInitKind>,
-    pub(crate) frontier_init_calls: FxHashMap<FuncRef, FxHashSet<InstId>>,
-    pub(crate) checked_frontier_init_calls: FxHashMap<FuncRef, FxHashSet<InstId>>,
-    pub(crate) entry_live_frame: FxHashMap<FuncRef, bool>,
-    pub(crate) frame_summaries: FxHashMap<FuncRef, FrameSummary>,
-}
 
 #[derive(Clone, Default)]
 pub(crate) struct FuncDynSpPlan {
@@ -70,42 +58,16 @@ impl EntryFrameState {
     }
 }
 
-pub(crate) fn compute_dyn_sp_plan(
+pub(crate) fn compute_machine_dyn_sp_plan(
     module: &Module,
     funcs: &[FuncRef],
     section_entry: FuncRef,
-    plan: &ProgramMemoryPlan,
-    analyses: &FxHashMap<FuncRef, memory_plan::FuncAnalysis>,
-    isa: &Evm,
-) -> DynSpPlan {
-    let mut frame_summaries: FxHashMap<FuncRef, FrameSummary> = FxHashMap::default();
-    let mut frame_summary_results: Vec<_> = funcs
-        .par_iter()
-        .copied()
-        .map(|func| {
-            let analysis = analyses
-                .get(&func)
-                .unwrap_or_else(|| panic!("missing analysis for func {}", func.as_u32()));
-            let mem_plan = plan
-                .funcs
-                .get(&func)
-                .cloned()
-                .unwrap_or_else(|| panic!("missing memory plan for func {}", func.as_u32()));
-            let summary = module.func_store.view(func, |function| {
-                let alloc = FinalAlloc::new(analysis.alloc.clone(), mem_plan.clone());
-                compute_frame_summary(function, &alloc, &mem_plan, isa)
-            });
-            (func, summary)
-        })
-        .collect();
-    frame_summary_results.sort_unstable_by_key(|(func, _)| func.as_u32());
-    for (func, summary) in frame_summary_results {
-        frame_summaries.insert(func, summary);
-    }
-
+    mem_plans: &FxHashMap<FuncRef, FuncMemPlan>,
+    frame_summaries: &FxHashMap<FuncRef, FrameSummary>,
+) -> FxHashMap<FuncRef, FuncDynSpPlan> {
     let funcs_set: FxHashSet<FuncRef> = funcs.iter().copied().collect();
     let call_graph = CallGraph::build_graph_subset(module, &funcs_set);
-    let mut reachable_funcs: FxHashSet<FuncRef> = FxHashSet::default();
+    let mut reachable_funcs = FxHashSet::default();
     let mut worklist = vec![section_entry];
     while let Some(func) = worklist.pop() {
         if !reachable_funcs.insert(func) {
@@ -116,14 +78,14 @@ pub(crate) fn compute_dyn_sp_plan(
         }
     }
 
-    let mut ordered_funcs: Vec<FuncRef> = funcs.to_vec();
+    let mut ordered_funcs = funcs.to_vec();
     ordered_funcs.sort_unstable_by_key(|func| func.as_u32());
     let mut ordered_reachable: Vec<FuncRef> = reachable_funcs.iter().copied().collect();
     ordered_reachable.sort_unstable_by_key(|func| func.as_u32());
 
     let scc = SccBuilder::new().compute_scc(&call_graph);
-    let topo = topo_sort_sccs(&reachable_funcs, &call_graph, &scc);
-    let mut ready_sccs: FxHashSet<_> = FxHashSet::default();
+    let topo = memory_plan::topo_sort_sccs(&reachable_funcs, &call_graph, &scc);
+    let mut ready_sccs = FxHashSet::default();
     for &scc_ref in &topo {
         if scc
             .scc_info(scc_ref)
@@ -132,9 +94,9 @@ pub(crate) fn compute_dyn_sp_plan(
             .copied()
             .filter(|func| reachable_funcs.contains(func))
             .any(|func| {
-                plan.funcs
+                mem_plans
                     .get(&func)
-                    .is_some_and(|func_plan| func_plan.dynamic_frame_layout().is_some())
+                    .is_some_and(FuncMemPlan::uses_dynamic_frame)
             })
         {
             ready_sccs.insert(scc_ref);
@@ -177,99 +139,85 @@ pub(crate) fn compute_dyn_sp_plan(
         }
     }
 
-    let mut frontier_init_calls: FxHashMap<FuncRef, FxHashSet<InstId>> = FxHashMap::default();
-    let mut checked_frontier_init_calls: FxHashMap<FuncRef, FxHashSet<InstId>> =
-        FxHashMap::default();
-    let mut frontier_init_results: Vec<_> = ordered_reachable
-        .par_iter()
+    let mut plans: FxHashMap<FuncRef, FuncDynSpPlan> = ordered_funcs
+        .iter()
         .copied()
-        .filter_map(|caller| {
-            let caller_scc = scc.scc_ref(caller);
-            if ready_sccs.contains(&caller_scc) {
-                return None;
-            }
-
-            let caller_summary = frame_summaries
-                .get(&caller)
-                .unwrap_or_else(|| panic!("missing frame summary for func {}", caller.as_u32()));
-            let caller_state = entry_states.get(&caller).copied().unwrap_or_default();
-            let (mut frontier_calls, mut checked_calls) =
-                (FxHashSet::default(), FxHashSet::default());
-            module.func_store.view(caller, |function| {
-                for block in function.layout.iter_block() {
-                    for inst in function.layout.iter_inst(block) {
-                        let Some(call) = function.dfg.call_info(inst) else {
-                            continue;
-                        };
-                        let callee = call.callee();
-                        if !reachable_funcs.contains(&callee) {
-                            continue;
-                        }
-                        let callee_scc = scc.scc_ref(callee);
-                        if caller_scc == callee_scc || !ready_sccs.contains(&callee_scc) {
-                            continue;
-                        }
-                        if caller_summary.local_frame_active_before_inst(inst) {
-                            continue;
-                        }
-
-                        match (
-                            caller_state.maybe_no_live_frame,
-                            caller_state.maybe_live_frame,
-                        ) {
-                            (true, false) => {
-                                frontier_calls.insert(inst);
-                            }
-                            (true, true) => {
-                                frontier_calls.insert(inst);
-                                checked_calls.insert(inst);
-                            }
-                            (false, true) | (false, false) => {}
-                        }
-                    }
-                }
-            });
-            (!frontier_calls.is_empty() || !checked_calls.is_empty()).then_some((
-                caller,
-                frontier_calls,
-                checked_calls,
-            ))
+        .map(|func| {
+            let state = entry_states.get(&func).copied().unwrap_or_default();
+            (
+                func,
+                FuncDynSpPlan {
+                    entry_init: None,
+                    frontier_init_calls: FxHashSet::default(),
+                    checked_frontier_init_calls: FxHashSet::default(),
+                    entry_live_frame: state.maybe_live_frame,
+                },
+            )
         })
         .collect();
-    frontier_init_results.sort_unstable_by_key(|(func, _, _)| func.as_u32());
-    for (caller, caller_frontier_init_calls, caller_checked_frontier_init_calls) in
-        frontier_init_results
-    {
-        if !caller_frontier_init_calls.is_empty() {
-            frontier_init_calls.insert(caller, caller_frontier_init_calls);
-        }
-        if !caller_checked_frontier_init_calls.is_empty() {
-            checked_frontier_init_calls.insert(caller, caller_checked_frontier_init_calls);
-        }
+
+    if ready_sccs.contains(&scc.scc_ref(section_entry)) {
+        let entry_live_frame = plans
+            .get(&section_entry)
+            .is_some_and(|plan| plan.entry_live_frame);
+        plans
+            .get_mut(&section_entry)
+            .expect("section entry plan missing")
+            .entry_init = Some(if entry_live_frame {
+            DynSpInitKind::Checked
+        } else {
+            DynSpInitKind::Always
+        });
     }
 
-    let mut entry_live_frame: FxHashMap<FuncRef, bool> = FxHashMap::default();
-    for func in ordered_funcs {
-        let state = entry_states.get(&func).copied().unwrap_or_default();
-        entry_live_frame.insert(func, state.maybe_live_frame);
-    }
-    let entry_init = if !ready_sccs.contains(&scc.scc_ref(section_entry)) {
-        None
-    } else if entry_live_frame
-        .get(&section_entry)
-        .copied()
-        .unwrap_or(false)
-    {
-        Some(DynSpInitKind::Checked)
-    } else {
-        Some(DynSpInitKind::Always)
-    };
+    for &caller in &ordered_reachable {
+        let caller_scc = scc.scc_ref(caller);
+        if ready_sccs.contains(&caller_scc) {
+            continue;
+        }
 
-    DynSpPlan {
-        entry_init,
-        frontier_init_calls,
-        checked_frontier_init_calls,
-        entry_live_frame,
-        frame_summaries,
+        let caller_summary = frame_summaries
+            .get(&caller)
+            .unwrap_or_else(|| panic!("missing frame summary for func {}", caller.as_u32()));
+        let caller_state = entry_states.get(&caller).copied().unwrap_or_default();
+        module.func_store.view(caller, |function| {
+            for block in function.layout.iter_block() {
+                for inst in function.layout.iter_inst(block) {
+                    let Some(call) = function.dfg.call_info(inst) else {
+                        continue;
+                    };
+                    let callee = call.callee();
+                    if !reachable_funcs.contains(&callee) {
+                        continue;
+                    }
+                    let callee_scc = scc.scc_ref(callee);
+                    if caller_scc == callee_scc
+                        || !ready_sccs.contains(&callee_scc)
+                        || caller_summary.local_frame_active_before_inst(inst)
+                    {
+                        continue;
+                    }
+
+                    let plan = plans
+                        .get_mut(&caller)
+                        .unwrap_or_else(|| panic!("missing dyn-sp plan for {}", caller.as_u32()));
+                    match (
+                        caller_state.maybe_no_live_frame,
+                        caller_state.maybe_live_frame,
+                    ) {
+                        (true, false) => {
+                            plan.frontier_init_calls.insert(inst);
+                        }
+                        (true, true) => {
+                            plan.frontier_init_calls.insert(inst);
+                            plan.checked_frontier_init_calls.insert(inst);
+                        }
+                        (false, true) | (false, false) => {}
+                    }
+                }
+            }
+        });
     }
+
+    plans
 }

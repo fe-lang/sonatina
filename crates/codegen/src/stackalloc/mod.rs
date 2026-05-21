@@ -1,11 +1,15 @@
+use crate::bitset::BitSet;
+use cranelift_entity::SecondaryMap;
 use smallvec::SmallVec;
 use sonatina_ir::{BlockId, Function, Immediate, InstId, ValueId};
 
 use crate::isa::evm::static_arena_alloc::StackObjId;
 
 mod stackify;
+pub(crate) use stackify::{
+    HOT_IMMEDIATE_SIZE_MIN_BLOCK_USES, HOT_IMMEDIATE_SIZE_MIN_PUSH_DATA_BYTES, StackifyTrace,
+};
 pub use stackify::{StackifyAlloc, StackifyBuilder, StackifySearchProfile};
-pub(crate) use stackify::{imm_push_data_len, operand_order_for_evm};
 
 pub type Actions = SmallVec<[Action; 2]>;
 
@@ -22,6 +26,65 @@ pub trait Allocator {
     fn write(&self, inst: InstId, vals: &[ValueId]) -> Actions;
 
     fn traverse_edge(&self, from: BlockId, to: BlockId) -> Actions;
+}
+
+pub(crate) fn canonicalize_value_alias(
+    value_aliases: &SecondaryMap<ValueId, Option<ValueId>>,
+    value: ValueId,
+) -> ValueId {
+    let mut current = value;
+    loop {
+        let next = value_aliases[current].unwrap_or(current);
+        if next == current {
+            return current;
+        }
+        current = next;
+    }
+}
+
+pub(crate) fn normalize_value_alias_map(
+    function: &Function,
+    value_aliases: &mut SecondaryMap<ValueId, Option<ValueId>>,
+) {
+    for value in function.dfg.value_ids() {
+        let mut seen: BitSet<ValueId> = BitSet::default();
+        let mut path = SmallVec::<[ValueId; 8]>::new();
+        let mut current = value;
+        let mut rep = None;
+        loop {
+            if !seen.insert(current) {
+                // Invalid alias cycles should not be canonicalized to an arbitrary value from
+                // outside the cycle. Keep all traversed values self-canonical.
+                for v in path.iter().copied() {
+                    value_aliases[v] = Some(v);
+                }
+                break;
+            }
+            path.push(current);
+            let next = value_aliases[current].unwrap_or(current);
+            if next == current {
+                rep = Some(current);
+                break;
+            }
+            current = next;
+        }
+        if let Some(rep) = rep {
+            for v in path {
+                value_aliases[v] = Some(rep);
+            }
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    for value in function.dfg.value_ids() {
+        let rep = value_aliases[value].unwrap_or(value);
+        debug_assert_eq!(
+            value_aliases[rep].unwrap_or(rep),
+            rep,
+            "value alias map is not one-hop canonical for v{}",
+            value.as_u32()
+        );
+    }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]

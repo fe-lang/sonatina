@@ -6,14 +6,15 @@ input_file: test_files/evm/alloca_diamond_reuse.sntn
 evm.config: stack_reach=16 vcode=false bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 42 bytes
-  total: 42 bytes
+  section runtime: 36 bytes
+  total: 36 bytes
 
 functions:
-  main: ir_blocks=4 ir_insts=8 vcode_ops=19 fixups=2 imm_bytes=4
+  mem: global_dyn_base=0x20 arena_base=0x0 scratch_peak_words=1 static_chain_peak_words=0
+  main: ir_blocks=4 ir_insts=6 vcode_ops=17 fixups=2 imm_bytes=2
     mem: scratch_words=1 stable_words=0 stable_mode=None entry_abs_words=1 abs_words_end=1
-  entry: ir_blocks=1 ir_insts=3 vcode_ops=13 fixups=2 imm_bytes=2
+  entry: ir_blocks=1 ir_insts=3 vcode_ops=11 fixups=2 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=1 abs_words_end=0
 
 evm:
-  case ok: calldata_len=8 success reason=Return gas_used=21154 gas_refunded=0 logs=0 output=call len=32 tx_gas=21056 runtime_gas=98
+  case ok: calldata_len=8 success reason=Return gas_used=21140 gas_refunded=0 logs=0 output=call len=32 tx_gas=21056 runtime_gas=84

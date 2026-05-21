@@ -6,22 +6,23 @@ input_file: test_files/evm/fe_poseidon_bench_full_fe_o2_seeded.sntn
 evm.config: stack_reach=16 vcode=false bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section init: 14014 bytes
-  section runtime: 13995 bytes
-  total: 28009 bytes
+  section init: 14003 bytes
+  section runtime: 13983 bytes
+  total: 27986 bytes
 
 functions:
-  contract_init_root_PoseidonBench: ir_blocks=3 ir_insts=8 vcode_ops=17 fixups=3 imm_bytes=2
+  mem: global_dyn_base=0x1a0 arena_base=0xa0 scratch_peak_words=4 static_chain_peak_words=4
+  contract_init_root_PoseidonBench: ir_blocks=3 ir_insts=7 vcode_ops=16 fixups=3 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=4 abs_words_end=0
-  contract_recv_abi_PoseidonBench_1430137905: ir_blocks=7 ir_insts=36 vcode_ops=120 fixups=11 imm_bytes=25
+  contract_recv_abi_PoseidonBench_1430137905: ir_blocks=13 ir_insts=41 vcode_ops=113 fixups=11 imm_bytes=27
     mem: scratch_words=0 stable_words=4 stable_mode=StaticAbs(base=0x120) entry_abs_words=4 abs_words_end=8
-  hash: ir_blocks=13 ir_insts=188 vcode_ops=618 fixups=10 imm_bytes=78
+  hash: ir_blocks=10 ir_insts=169 vcode_ops=593 fixups=10 imm_bytes=80
     mem: scratch_words=4 stable_words=0 stable_mode=None entry_abs_words=8 abs_words_end=4
-  std__lib__abi__sol__impl_trait_SolDecoder_68ab__read_word__g463e_f806: ir_blocks=5 ir_insts=21 vcode_ops=49 fixups=2 imm_bytes=7
+  std__lib__abi__sol__impl_trait_SolDecoder_68ab__read_word__g463e_f806: ir_blocks=5 ir_insts=18 vcode_ops=49 fixups=2 imm_bytes=7
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=8 abs_words_end=0
   contract_runtime_root_PoseidonBench: ir_blocks=3 ir_insts=6 vcode_ops=18 fixups=2 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=4 abs_words_end=0
 
 evm:
-  deploy: success reason=Return gas_used=3079128 gas_refunded=0 logs=0 output=create len=13995 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
-  case poseidon_1_2: calldata_len=68 success reason=Return gas_used=49117 gas_refunded=0 logs=0 output=call len=32 tx_gas=21344 runtime_gas=27773
+  deploy: success reason=Return gas_used=3076548 gas_refunded=0 logs=0 output=create len=13983 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
+  case poseidon_1_2: calldata_len=68 success reason=Return gas_used=48064 gas_refunded=0 logs=0 output=call len=32 tx_gas=21344 runtime_gas=26720

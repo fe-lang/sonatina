@@ -22,10 +22,11 @@ use sonatina_ir::{
 
 use super::{
     escape_scan::{EscapeScanCtx, EscapeSink, EscapeSource, for_each_escape_event_at_inst},
-    memory_plan::{FuncAnalysis, WORD_BYTES},
+    memory_plan::{FuncPreAnalysis, WORD_BYTES},
     provenance::{Provenance, compute_provenance},
     ptr_escape::PtrEscapeSummary,
 };
+use crate::stackalloc::StackifyAlloc;
 
 mod exact_pack;
 mod object_liveness;
@@ -40,6 +41,20 @@ pub(crate) use object_liveness::LiveRegion;
 use object_liveness::{
     AllocaClosureCtx, ComputeCtx as ObjectLivenessCtx, compute_regions_and_calls,
 };
+
+#[cfg(test)]
+pub(crate) struct StackifiedFuncAnalysis {
+    pub(crate) alloc: StackifyAlloc,
+    pub(crate) block_order: Vec<BlockId>,
+    pub(crate) value_aliases: SecondaryMap<ValueId, Option<ValueId>>,
+}
+
+#[cfg(test)]
+impl StackifiedFuncAnalysis {
+    pub(crate) fn canonicalize_value(&self, value: ValueId) -> ValueId {
+        super::canonicalize_alias_value(&self.value_aliases, value)
+    }
+}
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
 pub struct StackObjId(u32);
@@ -121,6 +136,35 @@ pub(crate) struct FuncStackObjects {
     pub(crate) next_obj_id: u32,
 }
 
+pub(super) struct StackObjectInput<'a> {
+    stackify_alloc: Option<&'a StackifyAlloc>,
+    block_order: &'a [BlockId],
+    value_aliases: &'a SecondaryMap<ValueId, Option<ValueId>>,
+}
+
+impl<'a> StackObjectInput<'a> {
+    #[cfg(test)]
+    fn stackified(analysis: &'a StackifiedFuncAnalysis) -> Self {
+        Self {
+            stackify_alloc: Some(&analysis.alloc),
+            block_order: &analysis.block_order,
+            value_aliases: &analysis.value_aliases,
+        }
+    }
+
+    fn semantic(analysis: &'a FuncPreAnalysis) -> Self {
+        Self {
+            stackify_alloc: None,
+            block_order: &analysis.block_order,
+            value_aliases: &analysis.value_aliases,
+        }
+    }
+
+    pub(super) fn canonicalize_value(&self, value: ValueId) -> ValueId {
+        super::canonicalize_alias_value(self.value_aliases, value)
+    }
+}
+
 pub(crate) struct StaticArenaAllocCtx<'a> {
     module: &'a ModuleCtx,
     isa: &'a Evm,
@@ -140,13 +184,23 @@ impl<'a> StaticArenaAllocCtx<'a> {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn compute_func_stack_objects(
         &self,
         func_ref: FuncRef,
         function: &Function,
-        analysis: &FuncAnalysis,
+        analysis: &StackifiedFuncAnalysis,
     ) -> FuncStackObjects {
         compute_func_stack_objects(func_ref, function, self, analysis)
+    }
+
+    pub(crate) fn compute_func_semantic_stack_objects(
+        &self,
+        func_ref: FuncRef,
+        function: &Function,
+        analysis: &FuncPreAnalysis,
+    ) -> FuncStackObjects {
+        compute_func_semantic_stack_objects(func_ref, function, self, analysis)
     }
 }
 
@@ -199,19 +253,43 @@ fn compute_block_order(function: &Function, block_order: &[BlockId]) -> Vec<Bloc
     blocks
 }
 
+#[cfg(test)]
 pub(crate) fn compute_func_stack_objects(
     func_ref: FuncRef,
     function: &Function,
     ctx: &StaticArenaAllocCtx<'_>,
-    analysis: &FuncAnalysis,
+    analysis: &StackifiedFuncAnalysis,
 ) -> FuncStackObjects {
-    let block_order = compute_block_order(function, &analysis.block_order);
-    let (inst_order, _inst_pos) = compute_inst_order(function, &analysis.block_order);
+    let input = StackObjectInput::stackified(analysis);
+    compute_func_stack_objects_from_input(func_ref, function, ctx, &input)
+}
+
+pub(crate) fn compute_func_semantic_stack_objects(
+    func_ref: FuncRef,
+    function: &Function,
+    ctx: &StaticArenaAllocCtx<'_>,
+    analysis: &FuncPreAnalysis,
+) -> FuncStackObjects {
+    let input = StackObjectInput::semantic(analysis);
+    compute_func_stack_objects_from_input(func_ref, function, ctx, &input)
+}
+
+fn compute_func_stack_objects_from_input(
+    func_ref: FuncRef,
+    function: &Function,
+    ctx: &StaticArenaAllocCtx<'_>,
+    analysis: &StackObjectInput<'_>,
+) -> FuncStackObjects {
+    let block_order = compute_block_order(function, analysis.block_order);
+    let (inst_order, _inst_pos) = compute_inst_order(function, analysis.block_order);
     let mut cfg = ControlFlowGraph::new();
     cfg.compute(function);
 
     let prov_info = compute_provenance(function, ctx.module, ctx.isa, |callee| {
-        PtrEscapeSummary::get_or_conservative(ctx.ptr_escape, ctx.module, callee)
+        ctx.ptr_escape
+            .get(&callee)
+            .cloned()
+            .unwrap_or_else(|| conservative_unknown_ptr_summary(ctx.module, callee))
     });
     let prov = &prov_info.value;
 
@@ -249,10 +327,15 @@ pub(crate) fn compute_func_stack_objects(
     }
 
     let mut spilled_values: BitSet<ValueId> = BitSet::default();
-    for (v, obj) in analysis.alloc.spill_obj.iter() {
-        if obj.is_some() {
-            spilled_values.insert(v);
-            spill_obj[v] = *obj;
+    if let Some(alloc) = analysis.stackify_alloc {
+        for (v, obj) in alloc.spill_obj.iter() {
+            if alloc.scratch_slot_of_value[v].is_some() {
+                continue;
+            }
+            if obj.is_some() {
+                spilled_values.insert(v);
+                spill_obj[v] = *obj;
+            }
         }
     }
 
@@ -270,14 +353,15 @@ pub(crate) fn compute_func_stack_objects(
         });
     }
 
-    let mut next_id: u32 = analysis
-        .alloc
-        .spill_obj
-        .values()
-        .filter_map(|o| *o)
-        .map(|id| id.as_u32())
-        .max()
-        .map_or(0, |n| n.checked_add(1).expect("stack object id overflow"));
+    let mut next_id: u32 = analysis.stackify_alloc.map_or(0, |alloc| {
+        alloc
+            .spill_obj
+            .values()
+            .filter_map(|o| *o)
+            .map(|id| id.as_u32())
+            .max()
+            .map_or(0, |n| n.checked_add(1).expect("stack object id overflow"))
+    });
 
     let mut alloca_ids: FxHashMap<InstId, StackObjId> = FxHashMap::default();
     for &inst in &inst_order {
@@ -413,7 +497,7 @@ pub(crate) fn compute_func_stack_objects(
         obj_id_by_local: &obj_id_by_local,
         alloca_ids: &alloca_ids,
     };
-    let (regions, mut call_sites) =
+    let (regions, call_sites) =
         compute_regions_and_calls(function, &cfg, &block_order, &mut liveness_ctx);
     for (idx, region) in regions.into_iter().enumerate() {
         objects[idx].region = region;
@@ -422,11 +506,6 @@ pub(crate) fn compute_func_stack_objects(
     let mut obj_size_words: FxHashMap<StackObjId, u32> = FxHashMap::default();
     for obj in &objects {
         obj_size_words.insert(obj.id, obj.size_words);
-    }
-    for call in &mut call_sites {
-        call.live_across_objs.retain(|obj| obj_size_words[obj] != 0);
-        call.callee_visible_objs
-            .retain(|obj| obj_size_words[obj] != 0);
     }
 
     let mut obj_facts: FxHashMap<StackObjId, ObjFacts> = FxHashMap::default();
@@ -477,9 +556,6 @@ pub(crate) fn compute_func_stack_objects(
         let facts = obj_facts
             .get_mut(&obj)
             .unwrap_or_else(|| panic!("missing object facts for obj {}", obj.as_u32()));
-        if facts.size_words == 0 {
-            continue;
-        }
         facts.must_stable = true;
         if matches!(facts.stable_reason, StableReason::None) {
             facts.stable_reason = StableReason::UnknownLocalPointerClosure;
@@ -495,6 +571,10 @@ pub(crate) fn compute_func_stack_objects(
         call_sites,
         next_obj_id: next_id,
     }
+}
+
+fn conservative_unknown_ptr_summary(module: &ModuleCtx, func_ref: FuncRef) -> PtrEscapeSummary {
+    PtrEscapeSummary::conservative_unknown_ctx(module, func_ref)
 }
 
 fn compute_escaping_allocas(
@@ -665,7 +745,7 @@ mod tests {
         critical_edge::CriticalEdgeSplitter,
         domtree::DomTree,
         isa::evm::{EvmBackend, canonicalize_alias_value},
-        liveness::{InstLiveness, Liveness},
+        liveness::Liveness,
         stackalloc::StackifyBuilder,
     };
     use sonatina_parser::{ParsedModule, parse_module};
@@ -696,7 +776,12 @@ mod tests {
         input: &str,
         func_name: &str,
         stack_reach: u8,
-    ) -> (ParsedModule, FuncRef, FuncAnalysis, FuncStackObjects) {
+    ) -> (
+        ParsedModule,
+        FuncRef,
+        StackifiedFuncAnalysis,
+        FuncStackObjects,
+    ) {
         let parsed = parse_module(input).expect("module parses");
         let isa = test_isa();
         let backend = EvmBackend::new(test_isa());
@@ -725,14 +810,11 @@ mod tests {
             let mut liveness = Liveness::new();
             liveness.compute(function, &cfg);
 
-            let mut inst_liveness = InstLiveness::new();
-            inst_liveness.compute(function, &cfg, &liveness);
-
             let mut dom = DomTree::new();
             dom.compute(&cfg);
 
             let value_aliases =
-                backend.compute_stackify_value_aliases(function, &parsed.module.ctx);
+                backend.compute_high_evm_value_aliases(function, &parsed.module.ctx);
 
             let mut stack_liveness = Liveness::new();
             stack_liveness.compute_with_value_normalizer(function, &cfg, |value| {
@@ -743,9 +825,8 @@ mod tests {
                 .with_value_aliases(&value_aliases)
                 .compute();
 
-            analysis = Some(FuncAnalysis {
+            analysis = Some(StackifiedFuncAnalysis {
                 alloc,
-                inst_liveness,
                 block_order: dom.rpo().to_vec(),
                 value_aliases,
             });
@@ -1145,40 +1226,6 @@ block0:
     }
 
     #[test]
-    #[should_panic(expected = "alloca escapes in mixed_call_result_escape")]
-    fn alloca_escape_via_derived_mixed_unknown_call_result_panics() {
-        let _ = analyze_function(
-            r#"
-target = "evm-ethereum-osaka"
-
-func private %maybe_arg(v0.*i8, v1.i1) -> *i8 {
-block0:
-    br v1 block1 block2;
-
-block1:
-    return v0;
-
-block2:
-    v2.*i8 = int_to_ptr 0.i32 *i8;
-    return v2;
-}
-
-func private %mixed_call_result_escape(v0.i1) -> *i8 {
-block0:
-    v1.*i8 = alloca i8;
-    v2.*i8 = call %maybe_arg v1 v0;
-    v3.i256 = ptr_to_int v2 i256;
-    v4.i256 = add v3 0.i256;
-    v5.*i8 = int_to_ptr v4 *i8;
-    return v5;
-}
-"#,
-            "mixed_call_result_escape",
-            16,
-        );
-    }
-
-    #[test]
     fn exact_pack_reuses_storage_for_branch_exclusive_regions() {
         let mut objects = vec![
             PackedObject {
@@ -1231,7 +1278,7 @@ block0:
         let mut workspace = ExactPackWorkspace::default();
         let packed = pack_exact_with_offsets_by(
             &items,
-            |lhs, rhs| conflicts[lhs.index()].contains(rhs),
+            |lhs, rhs| conflicts[lhs.as_u32() as usize].contains(rhs),
             &mut workspace,
         );
         assert_eq!(packed.offsets[&StackObjId::new(1)], 0);

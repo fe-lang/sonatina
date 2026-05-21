@@ -1,17 +1,19 @@
 ---
 source: crates/codegen/tests/evm.rs
+assertion_line: 457
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/unchecked_signed_narrow_div_mod.sntn
 ---
 evm.config: stack_reach=16 vcode=false bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 75 bytes
-  total: 75 bytes
+  section runtime: 48 bytes
+  total: 48 bytes
 
 functions:
-  entry: ir_blocks=1 ir_insts=23 vcode_ops=56 fixups=0 imm_bytes=19
+  mem: global_dyn_base=0x0 arena_base=0x0 scratch_peak_words=0 static_chain_peak_words=0
+  entry: ir_blocks=1 ir_insts=15 vcode_ops=37 fixups=0 imm_bytes=11
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case negative dividend: calldata_len=64 success reason=Return gas_used=21824 gas_refunded=0 logs=0 output=call len=64 tx_gas=21652 runtime_gas=172
+  case negative dividend: calldata_len=64 success reason=Return gas_used=21767 gas_refunded=0 logs=0 output=call len=64 tx_gas=21652 runtime_gas=115

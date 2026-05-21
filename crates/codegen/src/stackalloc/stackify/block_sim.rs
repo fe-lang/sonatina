@@ -11,8 +11,8 @@ use super::{
     iteration::{
         IterationPlanner, ReachabilityValues, cached_immediate_preserve_values_in_inst,
         clean_dead_stack_prefix, consume_cached_immediate_uses, consume_operand_uses,
-        count_block_uses, improve_reachability_before_operands, inst_is_noop_alias_cast,
-        last_use_values_in_inst, operand_order_for_evm, skip_pre_exit_cleanup,
+        count_block_uses, improve_reachability_before_operands, last_use_values_in_inst,
+        operand_order_for_stackify, skip_pre_exit_cleanup,
     },
     slots::FreeSlotPools,
     sym_stack::{StackItem, SymStack},
@@ -171,7 +171,8 @@ pub(super) fn run_block_sim<O: StackifyObserver>(
         let mut args = SmallVec::<[ValueId; 8]>::new();
         let mut consume_last_use: BitSet<ValueId> = BitSet::default();
         if is_normal {
-            args = operand_order_for_evm(planner.ctx().func, inst, &planner.ctx().value_aliases);
+            args =
+                operand_order_for_stackify(planner.ctx().func, inst, &planner.ctx().value_aliases);
             consume_last_use = last_use_values_in_inst(
                 planner.ctx(),
                 &args,
@@ -203,25 +204,6 @@ pub(super) fn run_block_sim<O: StackifyObserver>(
             .iter()
             .map(|&v| planner.ctx().canonicalize_value(v))
             .collect();
-        let res = match results.as_slice() {
-            [res] => Some(*res),
-            _ => None,
-        };
-        if is_normal && inst_is_noop_alias_cast(planner.ctx(), inst, &args, res) {
-            planner.on_alias_noop(inst, &args, &results);
-            consume_operand_uses(
-                planner.ctx(),
-                &args,
-                &mut state.remaining_uses,
-                &mut state.live_future,
-                &state.live_out,
-                planner.scratch_slots(),
-                &mut state.free_slots.scratch,
-            );
-            consume_cached_immediate_uses(planner.ctx(), &args, &mut state.cached_remaining_uses);
-            continue;
-        }
-
         let before_cleanup_len = planner.pre_actions_len(inst);
         if !skip_cleanup {
             let cleanup_live_future = cleanup_live_future_with_cached(

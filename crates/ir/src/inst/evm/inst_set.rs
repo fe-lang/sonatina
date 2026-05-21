@@ -138,6 +138,8 @@ pub struct EvmInstSet(
     evm::EvmBaseFee,
     evm::EvmBlobHash,
     evm::EvmBlobBaseFee,
+    evm::EvmMload,
+    evm::EvmMstore,
     evm::EvmMstore8,
     evm::EvmSload,
     evm::EvmSstore,

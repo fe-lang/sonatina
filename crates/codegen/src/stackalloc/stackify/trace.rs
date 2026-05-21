@@ -1,5 +1,6 @@
 use std::{collections::BTreeMap, fmt::Write};
 
+use rustc_hash::FxHashMap;
 use sonatina_ir::{
     BlockId, Function, InstId, ValueId,
     inst::{data, downcast},
@@ -7,7 +8,11 @@ use sonatina_ir::{
     module::FuncRef,
 };
 
-use crate::{bitset::BitSet, isa::evm::immediate_u32};
+use crate::{
+    bitset::BitSet,
+    isa::evm::{immediate_u32, static_arena_alloc::StackObjId},
+    stackalloc::Actions,
+};
 
 use super::{
     super::Action,
@@ -104,7 +109,7 @@ impl StackifyObserver for NullObserver {
 /// symbolic stacks at each instruction (dead values marked with `x`), and labels action groups
 /// such as cleanup, prelude, exit normalization, and internal returns.
 #[derive(Default)]
-pub(super) struct StackifyTrace {
+pub(crate) struct StackifyTrace {
     out: String,
     action_chunks: Vec<ActionChunk>,
     inst_chunks: Vec<InstChunk>,
@@ -128,7 +133,26 @@ struct DeferredExitChunk {
 }
 
 impl StackifyTrace {
-    pub(super) fn render(self, func: &Function, alloc: &StackifyAlloc) -> String {
+    pub(crate) fn remap_stack_objects(&mut self, remap: &FxHashMap<StackObjId, StackObjId>) {
+        fn remap_actions(actions: &mut Actions, remap: &FxHashMap<StackObjId, StackObjId>) {
+            for action in actions {
+                if let Action::MemLoadObj(obj) | Action::MemStoreObj(obj) = action
+                    && let Some(new_obj) = remap.get(obj)
+                {
+                    *obj = *new_obj;
+                }
+            }
+        }
+
+        for chunk in &mut self.action_chunks {
+            remap_actions(&mut chunk.actions, remap);
+        }
+        for chunk in &mut self.deferred_exit_chunks {
+            remap_actions(&mut chunk.actions, remap);
+        }
+    }
+
+    pub(crate) fn render(self, func: &Function, alloc: &StackifyAlloc) -> String {
         if func.layout.iter_block().next().is_none() {
             return "<empty function>\n".to_string();
         }

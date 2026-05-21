@@ -6,11 +6,12 @@ input_file: test_files/evm/arena_base_explicit_absolute_layout.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 22 bytes
-  total: 22 bytes
+  section runtime: 23 bytes
+  total: 23 bytes
 
 functions:
-  entry: ir_blocks=1 ir_insts=8 vcode_ops=16 fixups=0 imm_bytes=6
+  mem: global_dyn_base=0x80 arena_base=0x80 scratch_peak_words=0 static_chain_peak_words=0
+  entry: ir_blocks=1 ir_insts=7 vcode_ops=16 fixups=0 imm_bytes=7
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
@@ -22,18 +23,18 @@ evm:
 // func public %entry()
 entry:
   block0:
-    PUSH1 0x7 (7)  // mstore 96.i256 7.i256 i256;
+    PUSH1 0x7 (7)  // evm_mstore v0 v1;
     PUSH1 0x60 (96)
     MSTORE
-    PUSH1 0x80 (128)  // v0.*i256 = evm_malloc 32.i256;
-    PUSH1 0xb (11)  // mstore v0 11.i256 i256;
-    DUP2
+    PUSH1 0xb (11)  // evm_mstore v2 v3;
+    PUSH1 0x80 (128)
     MSTORE
-    MLOAD  // v2.i256 = mload v0 i256;
-    PUSH1 0x60 (96)  // v3.i256 = mload 96.i256 i256;
+    PUSH1 0x80 (128)  // v4.i256 = evm_mload v2;
     MLOAD
-    ADD  // v4.i256 = add v2 v3;
-    PUSH0  // mstore 0.i256 v4 i256;
+    PUSH1 0x60 (96)  // v5.i256 = evm_mload v0;
+    MLOAD
+    ADD  // v6.i256 = add v4 v5;
+    PUSH0  // evm_mstore 0.i256 v6;
     MSTORE
     PUSH1 0x20 (32)  // evm_return 0.i256 32.i256;
     PUSH0

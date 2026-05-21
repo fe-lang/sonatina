@@ -33,10 +33,6 @@ impl MallocEscapeKind {
         self.contains(Self::STORED_NON_LOCAL) || self.contains(Self::UNKNOWN)
     }
 
-    pub(crate) fn is_return_only(self) -> bool {
-        self.contains(Self::RETURNS_TO_CALLER) && !self.has_global_or_unknown()
-    }
-
     fn contains(self, other: Self) -> bool {
         self.0 & other.0 != 0
     }

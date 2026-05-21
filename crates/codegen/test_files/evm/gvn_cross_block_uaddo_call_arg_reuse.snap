@@ -10,7 +10,8 @@ object: Contract
   total: 45 bytes
 
 functions:
-  entry: ir_blocks=8 ir_insts=16 vcode_ops=39 fixups=3 imm_bytes=5
+  mem: global_dyn_base=0x0 arena_base=0x0 scratch_peak_words=0 static_chain_peak_words=0
+  entry: ir_blocks=8 ir_insts=15 vcode_ops=37 fixups=3 imm_bytes=5
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
@@ -21,53 +22,50 @@ evm:
 
 // func public %entry()
   block0 P=[] T=[]
-    // v0.i256 = evm_calldata_load 0.i256;
+    // v1.i256 = evm_calldata_load 0.i256;
     - stack=[]
       pre: [PUSH(0)]
-      evm_calldata_load [0] -> v0
-    // v1.i256 = and v0 1.i256;
-    - stack=[v0]
+      evm_calldata_load [0] -> v1
+    // v3.i256 = and v1 1.i256;
+    - stack=[v1]
       pre: [PUSH(1), DUP2]
-      and [v0, 1] -> v1
-    // v14.i1 = is_zero v1;
-    - stack=[v1, v0], last_use=[v1]
-      is_zero [v1] -> v14
-    // br v14 block1 block10;
-    - stack=[v14, v0]
-      br [v14] -> [block1, block10]
-  block1 P=[] T=[v0]
-    inherited from block0: [v0]
-    // v17.i256 = add v0 1.i256;
-    - stack=[v0]
+      and [v1, 1] -> v3
+    // br v3 block8 block1;
+    - stack=[v3, v1]
+      br [v3] -> [block8, block1]
+  block1 P=[] T=[v1]
+    inherited from block0: [v1]
+    // v5.i256 = add v1 1.i256;
+    - stack=[v1]
       pre: [PUSH(1), DUP2]
-      add [v0, 1] -> v17
-    // v18.i1 = lt v17 v0;
-    - stack=[v17, v0], last_use=[v0]
+      add [v1, 1] -> v5
+    // v6.i256 = lt v5 v1;
+    - stack=[v5, v1], last_use=[v1]
       pre: [SWAP1, DUP2]
-      lt [v17, v0] -> v18
-    // br v18 block7 block2;
-    - stack=[v18, v17]
-      br [v18] -> [block7, block2]
-  block2 P=[] T=[v17]
-    inherited from block1: [v17]
-    // v5.i1 = eq v17 5.i256;
-    - stack=[v17]
+      lt [v5, v1] -> v6
+    // br v6 block7 block2;
+    - stack=[v6, v5]
+      br [v6] -> [block7, block2]
+  block2 P=[] T=[v5]
+    inherited from block1: [v5]
+    // v8.i256 = eq v5 5.i256;
+    - stack=[v5]
       pre: [PUSH(5), DUP2]
-      eq [v17, 5] -> v5
-    // br v5 block4 block11;
-    - stack=[v5, v17]
-      br [v5] -> [block4, block11]
-  block4 P=[] T=[v17]
-    inherited from block2: [v17]
-    // mstore 0.i256 v17 i256;
-    - stack=[v17], last_use=[v17]
+      eq [v5, 5] -> v8
+    // br v8 block3 block9;
+    - stack=[v8, v5]
+      br [v8] -> [block3, block9]
+  block3 P=[] T=[v5]
+    inherited from block2: [v5]
+    // evm_mstore 0.i256 v5;
+    - stack=[v5], last_use=[v5]
       pre: [PUSH(0)]
-      mstore [0, v17]
+      evm_mstore [0, v5]
     // evm_return 0.i256 32.i256;
     - stack=[]
       pre: [PUSH(32), PUSH(0)]
       evm_return [0, 32]
-  block11 P=[] T=[]
+  block9 P=[] T=[]
     // jump block6;
     - stack=[]
       jump -> block6
@@ -76,15 +74,15 @@ evm:
     - stack=[]
       pre: [PUSH(0), PUSH(0)]
       evm_revert [0, 0]
-  block10 P=[] T=[]
+  block8 P=[] T=[]
     // jump block6;
     - stack=[]
       jump -> block6
   block6 P=[] T=[]
-    // mstore 0.i256 0.i256 i256;
+    // evm_mstore 0.i256 0.i256;
     - stack=[]
       pre: [PUSH(0), PUSH(0)]
-      mstore [0, 0]
+      evm_mstore [0, 0]
     // evm_return 0.i256 32.i256;
     - stack=[]
       pre: [PUSH(32), PUSH(0)]
@@ -93,45 +91,45 @@ evm:
 // func public %entry()
 entry:
   block0:
-    PUSH0  // v0.i256 = evm_calldata_load 0.i256;
+    PUSH0  // v1.i256 = evm_calldata_load v0;
     CALLDATALOAD
-    PUSH1 0x1 (1)  // v1.i256 = and v0 1.i256;
+    PUSH1 0x1 (1)  // v3.i256 = and v1 v2;
     DUP2
     AND
-    PUSH1 block6  // br v14 block1 block10;
+    PUSH1 block6  // br v3 block8 block1;
     JUMPI
   block1:
-    PUSH1 0x1 (1)  // v17.i256 = add v0 1.i256;
+    PUSH1 0x1 (1)  // v5.i256 = add v1 v2;
     DUP2
     ADD
-    SWAP1  // v18.i1 = lt v17 v0;
+    SWAP1  // v6.i256 = lt v5 v1;
     DUP2
     LT
-    PUSH1 block7  // br v18 block7 block2;
+    PUSH1 block7  // br v6 block7 block2;
     JUMPI
   block2:
-    PUSH1 0x5 (5)  // v5.i1 = eq v17 5.i256;
+    PUSH1 0x5 (5)  // v8.i256 = eq v5 v7;
     DUP2
     EQ
-    ISZERO  // br v5 block4 block11;
+    ISZERO  // br v8 block3 block9;
     PUSH1 block6
     JUMPI
-  block4:
-    PUSH0  // mstore 0.i256 v17 i256;
+  block3:
+    PUSH0  // evm_mstore v0 v5;
     MSTORE
-    PUSH1 0x20 (32)  // evm_return 0.i256 32.i256;
+    PUSH1 0x20 (32)  // evm_return v0 32.i256;
     PUSH0
     RETURN
   block7:
     JUMPDEST
-    PUSH0  // evm_revert 0.i256 0.i256;
+    PUSH0  // evm_revert v0 v0;
     PUSH0
     REVERT
   block6:
     JUMPDEST
-    PUSH0  // mstore 0.i256 0.i256 i256;
+    PUSH0  // evm_mstore v0 v0;
     PUSH0
     MSTORE
-    PUSH1 0x20 (32)  // evm_return 0.i256 32.i256;
+    PUSH1 0x20 (32)  // evm_return v0 32.i256;
     PUSH0
     RETURN

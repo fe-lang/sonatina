@@ -1,5 +1,6 @@
 use macros::Inst;
 pub mod inst_set;
+pub mod machine_inst_set;
 
 use crate::{Type, value::ValueId};
 
@@ -303,6 +304,19 @@ pub struct EvmBlobHash {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 #[inst(side_effect(crate::inst::SideEffect::Read))]
 pub struct EvmBlobBaseFee {}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(side_effect(crate::inst::SideEffect::Read))]
+pub struct EvmMload {
+    addr: ValueId,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(side_effect(crate::inst::SideEffect::Write))]
+pub struct EvmMstore {
+    addr: ValueId,
+    value: ValueId,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 #[inst(side_effect(crate::inst::SideEffect::Write))]

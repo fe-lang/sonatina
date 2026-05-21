@@ -126,3 +126,25 @@ block0:
     v3.i256 = zext v2 i256;
     return v3;
 }
+
+# sameln: func public %folds_range_proven_loop_increment_mask() -> i256 {
+# check:       v2.i256 = add v0 1.i256;
+# not:         and
+# check:       jump block1;
+func public %folds_range_proven_loop_increment_mask() -> i256 {
+block0:
+    jump block1;
+
+block1:
+    v0.i256 = phi (0.i256 block0) (v3 block2);
+    v1.i1 = lt v0 3.i256;
+    br v1 block2 block3;
+
+block2:
+    v2.i256 = add v0 1.i256;
+    v3.i256 = and v2 4294967295.i256;
+    jump block1;
+
+block3:
+    return v0;
+}

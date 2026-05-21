@@ -6,23 +6,24 @@ input_file: test_files/evm/const_obj_init_zero_fill.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=true
 
 object: Contract
-  section runtime: 32 bytes
-  total: 32 bytes
+  section runtime: 24 bytes
+  total: 24 bytes
 
 functions:
+  mem: global_dyn_base=0xa0 arena_base=0x0 scratch_peak_words=5 static_chain_peak_words=0
   entry: ir_blocks=1 ir_insts=3 vcode_ops=9 fixups=2 imm_bytes=1
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=5 abs_words_end=0
-  load_zero_object: ir_blocks=1 ir_insts=7 vcode_ops=18 fixups=0 imm_bytes=4
+  load_zero_object: ir_blocks=1 ir_insts=4 vcode_ops=10 fixups=0 imm_bytes=2
     mem: scratch_words=5 stable_words=0 stable_mode=None entry_abs_words=5 abs_words_end=5
 
 --------------- OBSERVABILITY ---------------
 
 object schema=0.1.0
-totals section_bytes=32 code=32 data=0 embed=0 mapped=31 unmapped=1
+totals section_bytes=24 code=24 data=0 embed=0 mapped=23 unmapped=1
 
 section runtime schema=0.1.0
-bytes total=32 code=32 data=0 embed=0
-coverage mapped=31 unmapped=1
+bytes total=24 code=24 data=0 embed=0
+coverage mapped=23 unmapped=1
 unmapped no_ir_inst=0 label_or_fixup_only=0 synthetic=1 unknown=0
 pc [0, 2) func=entry block=0 vcode=0 ir=0 reason=- frontend=-
 pc [2, 4) func=entry block=0 vcode=1 ir=0 reason=- frontend=-
@@ -33,25 +34,19 @@ pc [7, 8) func=entry block=0 vcode=5 ir=1 reason=- frontend=-
 pc [8, 10) func=entry block=0 vcode=6 ir=2 reason=- frontend=-
 pc [10, 11) func=entry block=0 vcode=7 ir=2 reason=- frontend=-
 pc [11, 12) func=entry block=0 vcode=8 ir=2 reason=- frontend=-
-pc [12, 13) func=load_zero_object block=0 vcode=17 ir=- reason=synthetic frontend=-
-pc [13, 15) func=load_zero_object block=0 vcode=0 ir=0 reason=- frontend=-
-pc [15, 16) func=load_zero_object block=0 vcode=1 ir=7 reason=- frontend=-
-pc [16, 18) func=load_zero_object block=0 vcode=2 ir=8 reason=- frontend=-
-pc [18, 19) func=load_zero_object block=0 vcode=3 ir=8 reason=- frontend=-
-pc [19, 20) func=load_zero_object block=0 vcode=4 ir=8 reason=- frontend=-
-pc [20, 21) func=load_zero_object block=0 vcode=5 ir=8 reason=- frontend=-
-pc [21, 22) func=load_zero_object block=0 vcode=6 ir=10 reason=- frontend=-
-pc [22, 24) func=load_zero_object block=0 vcode=7 ir=10 reason=- frontend=-
-pc [24, 25) func=load_zero_object block=0 vcode=8 ir=10 reason=- frontend=-
-pc [25, 27) func=load_zero_object block=0 vcode=11 ir=3 reason=- frontend=-
-pc [27, 28) func=load_zero_object block=0 vcode=12 ir=3 reason=- frontend=-
-pc [28, 29) func=load_zero_object block=0 vcode=13 ir=3 reason=- frontend=-
-pc [29, 30) func=load_zero_object block=0 vcode=14 ir=4 reason=- frontend=-
-pc [30, 31) func=load_zero_object block=0 vcode=15 ir=5 reason=- frontend=-
-pc [31, 32) func=load_zero_object block=0 vcode=16 ir=5 reason=- frontend=-
+pc [12, 13) func=load_zero_object block=0 vcode=9 ir=- reason=synthetic frontend=-
+pc [13, 14) func=load_zero_object block=0 vcode=0 ir=0 reason=- frontend=-
+pc [14, 16) func=load_zero_object block=0 vcode=1 ir=1 reason=- frontend=-
+pc [16, 17) func=load_zero_object block=0 vcode=2 ir=1 reason=- frontend=-
+pc [17, 18) func=load_zero_object block=0 vcode=3 ir=1 reason=- frontend=-
+pc [18, 19) func=load_zero_object block=0 vcode=4 ir=1 reason=- frontend=-
+pc [19, 21) func=load_zero_object block=0 vcode=5 ir=5 reason=- frontend=-
+pc [21, 22) func=load_zero_object block=0 vcode=6 ir=5 reason=- frontend=-
+pc [22, 23) func=load_zero_object block=0 vcode=7 ir=6 reason=- frontend=-
+pc [23, 24) func=load_zero_object block=0 vcode=8 ir=6 reason=- frontend=-
 
 evm:
-  case index_4: calldata_len=0 success reason=Return gas_used=21109 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=109
+  case index_4: calldata_len=0 success reason=Return gas_used=21086 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=86
 
 
 --------------- DEBUG ---------------
@@ -63,7 +58,7 @@ entry:
     PUSH1 FuncRef(1)
     JUMP
     JUMPDEST
-    PUSH0  // mstore 0.i256 v0 i256;
+    PUSH0  // evm_mstore 0.i256 v0;
     MSTORE
     PUSH1 0x20 (32)  // evm_return 0.i256 32.i256;
     PUSH0
@@ -73,18 +68,12 @@ entry:
 load_zero_object:
   block0:
     JUMPDEST
-    PUSH1 0x20 (32)  // v0.*[i256; 5] = alloca [i256; 5];
-    CODESIZE  // v6.i256 = evm_code_size;
-    PUSH1 0xa0 (160)  // evm_code_copy v0 v6 160.i256;
+    CODESIZE  // v1.i256 = evm_code_size;
+    PUSH1 0xa0 (160)  // evm_code_copy v0 v1 v2;
     SWAP1
-    DUP3
+    PUSH0
     CODECOPY
-    PUSH0  // v10.i256 = or 4.i256 0.i256;
-    PUSH1 0x4 (4)
-    OR
-    PUSH1 0x20 (32)  // v2.*i256 = gep v0 0.i256 v10;
-    MUL
-    ADD
-    MLOAD  // v3.i256 = mload v2 i256;
-    SWAP1  // return v3;
+    PUSH1 0x80 (128)  // v8.i256 = evm_mload 128.i256;
+    MLOAD
+    SWAP1  // return v8;
     JUMP

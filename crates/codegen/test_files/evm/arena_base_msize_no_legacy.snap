@@ -6,11 +6,12 @@ input_file: test_files/evm/arena_base_msize_no_legacy.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 14 bytes
-  total: 14 bytes
+  section runtime: 11 bytes
+  total: 11 bytes
 
 functions:
-  entry: ir_blocks=1 ir_insts=5 vcode_ops=11 fixups=0 imm_bytes=3
+  mem: global_dyn_base=0x0 arena_base=0x0 scratch_peak_words=0 static_chain_peak_words=0
+  entry: ir_blocks=1 ir_insts=3 vcode_ops=8 fixups=0 imm_bytes=3
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
@@ -22,14 +23,11 @@ evm:
 // func public %entry()
 entry:
   block0:
-    MSIZE  // v0.i256 = evm_msize;
-    PUSH1 0x20 (32)  // v1.i256 = add v0 32.i256;
-    ADD
-    POP  // v2.*i256 = evm_malloc v1;
-    PUSH0
-    PUSH1 0x1 (1)  // mstore v2 1.i256 i256;
+    PUSH1 0x40 (64)  // v4.i256 = evm_mload v3;
+    MLOAD
+    PUSH1 0x1 (1)  // evm_mstore v4 1.i256;
     DUP2
     MSTORE
-    PUSH1 0x20 (32)  // evm_return v2 32.i256;
+    PUSH1 0x20 (32)  // evm_return v4 v1;
     SWAP1
     RETURN

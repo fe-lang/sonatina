@@ -6,13 +6,14 @@ input_file: test_files/evm/malloc_return_escape_clobber_bug.sntn
 evm.config: stack_reach=16 vcode=false bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 70 bytes
-  total: 70 bytes
+  section runtime: 71 bytes
+  total: 71 bytes
 
 functions:
-  big: ir_blocks=1 ir_insts=5 vcode_ops=10 fixups=0 imm_bytes=3
+  mem: global_dyn_base=0x1a0 arena_base=0xa0 scratch_peak_words=8 static_chain_peak_words=0
+  big: ir_blocks=1 ir_insts=3 vcode_ops=8 fixups=0 imm_bytes=3
     mem: scratch_words=8 stable_words=0 stable_mode=None entry_abs_words=8 abs_words_end=8
-  mk: ir_blocks=1 ir_insts=3 vcode_ops=21 fixups=1 imm_bytes=6
+  mk: ir_blocks=4 ir_insts=10 vcode_ops=21 fixups=1 imm_bytes=6
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=8 abs_words_end=0
   main: ir_blocks=1 ir_insts=4 vcode_ops=13 fixups=4 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=8 abs_words_end=0

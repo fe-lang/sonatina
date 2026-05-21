@@ -10,9 +10,10 @@ object: Contract
   total: 50 bytes
 
 functions:
-  big: ir_blocks=1 ir_insts=5 vcode_ops=9 fixups=0 imm_bytes=3
+  mem: global_dyn_base=0x1a0 arena_base=0xa0 scratch_peak_words=8 static_chain_peak_words=0
+  big: ir_blocks=1 ir_insts=3 vcode_ops=7 fixups=0 imm_bytes=3
     mem: scratch_words=8 stable_words=0 stable_mode=None entry_abs_words=8 abs_words_end=8
-  mk: ir_blocks=1 ir_insts=3 vcode_ops=21 fixups=1 imm_bytes=6
+  mk: ir_blocks=4 ir_insts=10 vcode_ops=21 fixups=1 imm_bytes=6
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=8 abs_words_end=0
   main: ir_blocks=1 ir_insts=3 vcode_ops=8 fixups=2 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=8 abs_words_end=0
@@ -28,48 +29,50 @@ evm:
 // func public %big() -> i256
 big:
   block0:
-    PUSH1 0xa0 (160)  // v1.*i256 = gep v0 0.i256 0.i256;
-    PUSH2 0x3e7 (999)  // mstore v1 999.i256 i256;
-    DUP2
+    PUSH2 0x3e7 (999)  // evm_mstore v0 v1;
+    PUSH1 0xa0 (160)
     MSTORE
-    MLOAD  // v2.i256 = mload v1 i256;
+    PUSH1 0xa0 (160)  // v2.i256 = evm_mload v0;
+    MLOAD
     SWAP1  // return v2;
     JUMP
 
-// func public %mk() -> *i256
+// func public %mk() -> i256
 mk:
   block0:
     JUMPDEST
-    PUSH1 0x40 (64)  // v0.*i256 = evm_malloc 32.i256;
+    PUSH1 0x40 (64)  // v1.i256 = evm_mload v0;
     MLOAD
-    PUSH2 0x19f (415)
+    PUSH2 0x19f (415)  // v4.i256 = gt v1 415.i256;
     DUP2
     GT
-    PUSH1 `pc + (4)`
+    PUSH1 block3  // br v4 block4 block2;
     JUMPI
-    POP
+  block2:
+    POP  // jump block3;
     PUSH2 0x1a0 (416)
+  block3:
     JUMPDEST
-    DUP1
-    PUSH1 0x20 (32)
+    PUSH1 0x20 (32)  // v7.i256 = add v5 32.i256;
+    DUP2
     ADD
-    PUSH1 0x40 (64)
+    PUSH1 0x40 (64)  // evm_mstore v0 v7;
     MSTORE
-    PUSH1 0x6f (111)  // mstore v0 111.i256 i256;
+    PUSH1 0x6f (111)  // evm_mstore v5 111.i256;
     DUP2
     MSTORE
-    SWAP1  // return v0;
+    SWAP1  // return v5;
     JUMP
 
 // func public %main() -> i256
 main:
   block0:
     JUMPDEST
-    PUSH1 `pc + (3)`  // v0.*i256 = call %mk;
+    PUSH1 `pc + (3)`  // v0.i256 = call %mk;
     PUSH1 FuncRef(1)
     JUMP
     JUMPDEST
-    MLOAD  // v1.i256 = mload v0 i256;
+    MLOAD  // v1.i256 = evm_mload v0;
     SWAP1  // return v1;
     JUMP
 
@@ -80,7 +83,7 @@ entry:
     PUSH1 FuncRef(2)
     JUMP
     JUMPDEST
-    PUSH0  // mstore 0.i256 v0 i256;
+    PUSH0  // evm_mstore 0.i256 v0;
     MSTORE
     PUSH1 0x20 (32)  // evm_return 0.i256 32.i256;
     PUSH0

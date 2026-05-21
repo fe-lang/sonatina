@@ -1,3 +1,5 @@
+use std::any::TypeId;
+
 use macros::define_inst_set_base;
 
 use super::{Inst, arith, cast, cmp, control_flow, data, evm, logic};
@@ -148,6 +150,8 @@ define_inst_set_base! {
         evm::EvmBaseFee,
         evm::EvmBlobHash,
         evm::EvmBlobBaseFee,
+        evm::EvmMload,
+        evm::EvmMstore,
         evm::EvmMstore8,
         evm::EvmSload,
         evm::EvmSstore,
@@ -215,6 +219,11 @@ pub trait InstSetExt: InstSetBase {
 
     fn resolve_inst<'i>(&self, inst: &'i dyn Inst) -> Self::InstKind<'i>;
     fn resolve_inst_mut<'i>(&self, inst: &'i mut dyn Inst) -> Self::InstKindMut<'i>;
+    fn contains_inst_type_id(&self, tid: TypeId) -> bool;
+
+    fn contains_inst(&self, inst: &dyn Inst) -> bool {
+        self.contains_inst_type_id(inst.type_id())
+    }
 }
 
 #[cfg(test)]
