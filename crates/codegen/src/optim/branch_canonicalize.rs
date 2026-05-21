@@ -291,6 +291,7 @@ fn insert_compare_before(
     });
     func.dfg.attach_result(inst, value);
     func.layout.insert_inst_before(inst, before);
+    func.propagate_inst_provenance(inst, before);
     value
 }
 
@@ -310,6 +311,7 @@ fn insert_is_zero_before(
     });
     func.dfg.attach_result(inst, value);
     func.layout.insert_inst_before(inst, before);
+    func.propagate_inst_provenance(inst, before);
     Some(value)
 }
 

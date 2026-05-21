@@ -187,6 +187,9 @@ pub(super) fn try_inline_callsite_full(
                 new_inst,
                 Some(inline_callsite_tag),
             );
+            if let Some(prov) = callee.inst_provenance(old_inst) {
+                editor.func_mut().set_inst_provenance(new_inst, prov.to_string());
+            }
             inserted_insts += 1;
 
             assert_eq!(

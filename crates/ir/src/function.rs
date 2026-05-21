@@ -56,6 +56,18 @@ impl Function {
             .and_then(|o| o.as_deref())
     }
 
+    pub fn propagate_inst_provenance(&mut self, new_inst: InstId, source_inst: InstId) {
+        if let Some(prov) = self.inst_provenance.get(source_inst.0 as usize).cloned().flatten() {
+            self.set_inst_provenance(new_inst, prov);
+        }
+    }
+
+    pub fn make_inst_replacing<I: super::Inst>(&mut self, inst: I, source: InstId) -> InstId {
+        let new_id = self.dfg.make_inst(inst);
+        self.propagate_inst_provenance(new_id, source);
+        new_id
+    }
+
     pub fn inst_set(&self) -> &'static dyn InstSetBase {
         self.dfg.inst_set()
     }
