@@ -14,6 +14,7 @@ pub struct Function {
     pub dfg: DataFlowGraph,
     pub layout: Layout,
     pub debug: DebugMetadata,
+    pub inst_provenance: Vec<Option<String>>,
 }
 
 impl Function {
@@ -34,11 +35,25 @@ impl Function {
             dfg,
             layout: Layout::default(),
             debug: DebugMetadata::default(),
+            inst_provenance: Vec::new(),
         }
     }
 
     pub fn ctx(&self) -> &ModuleCtx {
         &self.dfg.ctx
+    }
+
+    pub fn set_inst_provenance(&mut self, inst: InstId, provenance: String) {
+        let idx = inst.0 as usize;
+        if idx >= self.inst_provenance.len() {
+            self.inst_provenance.resize(idx + 1, None);
+        }
+        self.inst_provenance[idx] = Some(provenance);
+    }
+
+    pub fn inst_provenance(&self, inst: InstId) -> Option<&str> {
+        self.inst_provenance.get(inst.0 as usize)
+            .and_then(|o| o.as_deref())
     }
 
     pub fn inst_set(&self) -> &'static dyn InstSetBase {

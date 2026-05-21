@@ -586,6 +586,11 @@ fn build_section_observability<Op>(
                 None
             };
 
+            let frontend_provenance = ir_inst.and_then(|iid| {
+                module.func_store.view(func, |function| {
+                    function.inst_provenance(iid).map(|s| s.to_string())
+                })
+            });
             pc_map.push(PcMapEntry {
                 pc_start,
                 pc_end,
@@ -594,7 +599,7 @@ fn build_section_observability<Op>(
                 block,
                 vcode_inst: insn,
                 ir_inst,
-                frontend_provenance: None,
+                frontend_provenance,
                 unmapped_reason,
             });
         }
