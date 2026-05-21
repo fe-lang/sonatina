@@ -261,20 +261,23 @@ fn has_reachable_committing_exit(
     func: &Function,
     effects: &SecondaryMap<FuncRef, FuncEffectSummary>,
 ) -> bool {
+    !blocks_that_may_reach_commit(func, |func_ref| effects[func_ref].clone()).is_empty()
+}
+
+pub(crate) fn blocks_that_may_reach_commit(
+    func: &Function,
+    effects: impl Fn(FuncRef) -> FuncEffectSummary,
+) -> FxHashSet<BlockId> {
     let Some(entry) = func.layout.entry_block() else {
-        return false;
+        return FxHashSet::default();
     };
 
     let mut cfg = ControlFlowGraph::new();
     cfg.compute(func);
     let reachable = cfg.reachable_blocks();
-    let reachable_exit_blocks: FxHashSet<BlockId> = cfg
-        .exits
-        .iter()
-        .copied()
-        .filter(|&block| reachable[block])
-        .collect();
+    let exit_blocks: FxHashSet<BlockId> = cfg.exits.iter().copied().collect();
 
+    let mut committing_blocks = FxHashSet::default();
     let mut visited = FxHashSet::default();
     let mut stack = vec![entry];
     while let Some(block) = stack.pop() {
@@ -282,27 +285,79 @@ fn has_reachable_committing_exit(
             continue;
         }
 
-        match block_terminal_call_commits_visible_writes(func, block, effects) {
-            Some(true) => return true,
-            Some(false) => continue,
-            None => {}
-        }
-
-        if reachable_exit_blocks.contains(&block)
-            && func
-                .layout
-                .last_inst_of(block)
-                .is_some_and(|term| is_committing_exit(func, term))
-        {
-            return true;
+        match block_commit_state(func, block, exit_blocks.contains(&block), &effects) {
+            BlockCommitState::Commits => {
+                committing_blocks.insert(block);
+                continue;
+            }
+            BlockCommitState::StopsBeforeCommit => continue,
+            BlockCommitState::Continues => {}
         }
 
         for &succ in cfg.succs_of(block) {
-            stack.push(succ);
+            if reachable[succ] {
+                stack.push(succ);
+            }
         }
     }
 
-    false
+    let effectively_reachable = visited;
+    let mut worklist: Vec<_> = committing_blocks.iter().copied().collect();
+    while let Some(block) = worklist.pop() {
+        for &pred in cfg.preds_of(block) {
+            if effectively_reachable.contains(&pred)
+                && block_commit_state(func, pred, exit_blocks.contains(&pred), &effects)
+                    == BlockCommitState::Continues
+                && committing_blocks.insert(pred)
+            {
+                worklist.push(pred);
+            }
+        }
+    }
+
+    committing_blocks
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BlockCommitState {
+    Commits,
+    StopsBeforeCommit,
+    Continues,
+}
+
+fn block_commit_state(
+    func: &Function,
+    block: BlockId,
+    is_exit_block: bool,
+    effects: &impl Fn(FuncRef) -> FuncEffectSummary,
+) -> BlockCommitState {
+    for inst in func.layout.iter_inst(block) {
+        if let Some(call) = func.dfg.call_info(inst) {
+            let effects = effects(call.callee());
+            if effects.noreturn {
+                return if effects.may_commit_visible_writes {
+                    BlockCommitState::Commits
+                } else {
+                    BlockCommitState::StopsBeforeCommit
+                };
+            }
+        }
+
+        if func.dfg.is_terminator(inst) {
+            break;
+        }
+    }
+
+    if is_exit_block
+        && func
+            .layout
+            .last_inst_of(block)
+            .is_some_and(|term| is_committing_exit(func, term))
+    {
+        BlockCommitState::Commits
+    } else {
+        BlockCommitState::Continues
+    }
 }
 
 fn has_reachable_return(
@@ -359,26 +414,6 @@ fn has_noreturn_call(
     }
 
     false
-}
-
-fn block_terminal_call_commits_visible_writes(
-    func: &Function,
-    block: BlockId,
-    effects: &SecondaryMap<FuncRef, FuncEffectSummary>,
-) -> Option<bool> {
-    for inst in func.layout.iter_inst(block) {
-        if let Some(call) = func.dfg.call_info(inst)
-            && effects[call.callee()].noreturn
-        {
-            return Some(effects[call.callee()].may_commit_visible_writes);
-        }
-
-        if func.dfg.is_terminator(inst) {
-            break;
-        }
-    }
-
-    None
 }
 
 fn compute_local_facts(func: &Function) -> LocalFacts {
@@ -466,7 +501,7 @@ fn is_return_like_exit(func: &Function, inst: sonatina_ir::InstId) -> bool {
     <&control_flow::Return as InstDowncast>::downcast(is, inst_data).is_some()
 }
 
-fn is_committing_exit(func: &Function, inst: sonatina_ir::InstId) -> bool {
+pub(crate) fn is_committing_exit(func: &Function, inst: sonatina_ir::InstId) -> bool {
     let inst_data = func.dfg.inst(inst);
     let is = func.inst_set();
 
@@ -654,6 +689,75 @@ func private %caller_revert() {
         let caller_revert_effects = module.ctx.func_effects(caller_revert);
         assert!(caller_revert_effects.noreturn);
         assert!(!caller_revert_effects.may_commit_visible_writes);
+    }
+
+    #[test]
+    fn committing_block_reachability_respects_noreturn_calls() {
+        let module = parse(
+            r#"
+target = "evm-ethereum-osaka"
+
+func private %commit() {
+    block0:
+        evm_return 0.i256 0.i256;
+}
+
+func private %revert_now() {
+    block0:
+        evm_revert 0.i256 0.i256;
+}
+
+func private %caller(v0.i1) {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        call %commit;
+        unreachable;
+
+    block2:
+        call %revert_now;
+        jump block1;
+}
+"#,
+        );
+
+        analyze_module(&module);
+
+        let caller = find_func(&module, "caller");
+        let commit = find_func(&module, "commit");
+        let revert_now = find_func(&module, "revert_now");
+        let (entry, commit_block, revert_block, committing_blocks) =
+            module.func_store.view(caller, |func| {
+                let find_call_block = |callee| {
+                    func.layout
+                        .iter_block()
+                        .find(|&block| {
+                            func.layout.iter_inst(block).any(|inst| {
+                                func.dfg
+                                    .call_info(inst)
+                                    .is_some_and(|call| call.callee() == callee)
+                            })
+                        })
+                        .expect("call block should exist")
+                };
+
+                (
+                    func.layout
+                        .entry_block()
+                        .expect("caller has an entry block"),
+                    find_call_block(commit),
+                    find_call_block(revert_now),
+                    blocks_that_may_reach_commit(func, |func_ref| {
+                        module.ctx.func_effects(func_ref)
+                    }),
+                )
+            });
+
+        assert!(committing_blocks.contains(&entry));
+        assert!(committing_blocks.contains(&commit_block));
+        assert!(!committing_blocks.contains(&revert_block));
+        assert_eq!(committing_blocks.len(), 2);
     }
 
     #[test]

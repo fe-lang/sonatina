@@ -63,8 +63,8 @@ func private %apply_rook(v0.i256, v1.i256, v2.i8, v3.i8, v4.i8, v5.i8, v6.i8, v7
         mstore v13 v5 i8;
         mstore v14 v6 i8;
         mstore v15 v7 i1;
-        v112.i1 = is_zero v4;
-        br v112 block4 block2;
+        v118.i1 = is_zero v4;
+        br v118 block4 block2;
 
     block2:
         v23.@layout_0 = enum.make @layout_0 #BadGeometry;
@@ -72,12 +72,12 @@ func private %apply_rook(v0.i256, v1.i256, v2.i8, v3.i8, v4.i8, v5.i8, v6.i8, v7
         return v24;
 
     block4:
-        v115.i8 = and v2 7.i8;
-        v103.i8 = shr 3.i8 v2;
-        v116.i8 = and v3 7.i8;
-        v106.i8 = shr 3.i8 v3;
-        v33.i8 = call %abs_diff v116 v115;
-        v34.i8 = call %abs_diff v106 v103;
+        v102.i8 = and v2 7.i8;
+        v106.i8 = shr 3.i8 v2;
+        v109.i8 = and v3 7.i8;
+        v112.i8 = shr 3.i8 v3;
+        v33.i8 = call %abs_diff v109 v102;
+        v34.i8 = call %abs_diff v112 v106;
         v35.i1 = is_zero v33;
         v36.i1 = is_zero v34;
         v37.i1 = is_zero v36;
@@ -91,7 +91,7 @@ func private %apply_rook(v0.i256, v1.i256, v2.i8, v3.i8, v4.i8, v5.i8, v6.i8, v7
 
     block7:
         v43.i256 = mload v8 i256;
-        v47.i1 = call %path_clear_file v43 v115 v103 v106;
+        v47.i1 = call %path_clear_file v43 v102 v106 v112;
         br v47 block10 block8;
 
     block8:
@@ -105,8 +105,8 @@ func private %apply_rook(v0.i256, v1.i256, v2.i8, v3.i8, v4.i8, v5.i8, v6.i8, v7
 
     block11:
         v53.i8 = mload v10 i8;
-        v113.i1 = is_zero v53;
-        br v113 block13 block15;
+        v119.i1 = is_zero v53;
+        br v119 block13 block15;
 
     block12:
         v55.i8 = mload v10 i8;
@@ -120,14 +120,26 @@ func private %apply_rook(v0.i256, v1.i256, v2.i8, v3.i8, v4.i8, v5.i8, v6.i8, v7
         v60.i1 = is_zero v59;
         v61.i1 = is_zero v60;
         v62.i8 = mload v10 i8;
-        v111.i256 = call %set_piece v58 v62 0.i8;
+        v121.i256 = zext v62 i256;
+        v122.i256 = shl 2.i256 v121;
+        v124.i256 = shl v122 15.i256;
+        v125.i256 = not v124;
+        v126.i256 = and v58 v125;
         v65.i8 = mload v11 i8;
         v66.i8 = mload v13 i8;
-        v67.i256 = call %set_piece v111 v65 v66;
+        v131.i256 = zext v65 i256;
+        v132.i256 = shl 2.i256 v131;
+        v133.i256 = shl v132 15.i256;
+        v134.i256 = not v133;
+        v135.i256 = and v126 v134;
+        v136.i256 = zext v66 i256;
+        v137.i256 = and v136 15.i256;
+        v138.i256 = shl v132 v137;
+        v139.i256 = or v135 v138;
         v69.i256 = mload v9 i256;
         v71.objref<@layout_1> = obj.alloc @layout_1;
         v73.objref<i256> = obj.proj v71 0.i256;
-        obj.store v73 v67;
+        obj.store v73 v139;
         v75.objref<i256> = obj.proj v71 1.i256;
         obj.store v75 v69;
         v77.objref<i1> = obj.proj v71 2.i256;
@@ -171,41 +183,6 @@ func private %main_root() {
         v4.i256 = zext v11 i256;
         mstore 0.i256 v4 i256;
         evm_return 0.i256 32.i256;
-}
-
-func private %meta_custom(v0.i1, v1.i8, v2.i8, v3.i16, v4.i16, v5.i8, v6.i8) -> i256 {
-    block0:
-        br v0 block11 block10;
-
-    block10:
-        jump block11;
-
-    block11:
-        v67.i256 = phi (1.i256 block0) (0.i256 block10);
-        v73.i256 = zext v1 i256;
-        v75.i256 = and v73 15.i256;
-        v76.i256 = shl 1.i256 v75;
-        v77.i256 = or v67 v76;
-        v80.i256 = zext v2 i256;
-        v81.i256 = and v80 15.i256;
-        v83.i256 = shl 5.i256 v81;
-        v84.i256 = or v77 v83;
-        v87.i256 = zext v3 i256;
-        v89.i256 = and v87 255.i256;
-        v91.i256 = shl 9.i256 v89;
-        v92.i256 = or v84 v91;
-        v96.i256 = zext v4 i256;
-        v97.i256 = shl 17.i256 v96;
-        v98.i256 = or v92 v97;
-        v49.i256 = zext v5 i256;
-        v51.i256 = and v49 63.i256;
-        v53.i256 = shl 33.i256 v51;
-        v54.i256 = or v98 v53;
-        v61.i256 = zext v6 i256;
-        v62.i256 = and v61 63.i256;
-        v64.i256 = shl 39.i256 v62;
-        v65.i256 = or v54 v64;
-        return v65;
 }
 
 func private %path_clear_file(v0.i256, v1.i8, v2.i8, v3.i8) -> i1 {
@@ -278,13 +255,13 @@ func private %path_clear_file(v0.i256, v1.i8, v2.i8, v3.i8) -> i1 {
 
     block23:
         (v43.i8, v44.i1) = uaddo v1 v40;
-        br v44 block20 block38;
+        br v44 block20 block24;
 
-    block38:
-        v78.i256 = zext v43 i256;
-        v80.i256 = shl 2.i256 v78;
-        v81.i256 = shr v80 v0;
-        v83.i256 = and v81 15.i256;
+    block24:
+        v80.i256 = zext v43 i256;
+        v81.i256 = shl 2.i256 v80;
+        v82.i256 = shr v81 v0;
+        v83.i256 = and v82 15.i256;
         v84.i8 = trunc v83 i8;
         v76.i1 = is_zero v84;
         br v76 block8 block11;
@@ -303,9 +280,9 @@ func private %path_clear_file(v0.i256, v1.i8, v2.i8, v3.i8) -> i1 {
 
     block27:
         (v69.i8, v70.i1) = uaddo v1 v66;
-        br v70 block20 block40;
+        br v70 block20 block28;
 
-    block40:
+    block28:
         v85.i256 = zext v69 i256;
         v86.i256 = shl 2.i256 v85;
         v87.i256 = shr v86 v0;
@@ -315,112 +292,20 @@ func private %path_clear_file(v0.i256, v1.i8, v2.i8, v3.i8) -> i1 {
         br v77 block14 block17;
 }
 
-func private %set_piece(v0.i256, v1.i8, v2.i8) -> i256 {
-    block0:
-        v7.i256 = zext v1 i256;
-        v26.i256 = shl 2.i256 v7;
-        v16.i256 = shl v26 15.i256;
-        v18.i256 = not v16;
-        v19.i256 = and v0 v18;
-        v21.i256 = zext v2 i256;
-        v22.i256 = and v21 15.i256;
-        v23.i256 = shl v26 v22;
-        v24.i256 = or v19 v23;
-        return v24;
-}
-
 func private %validate_rook_capture() -> @layout_5 {
     block0:
         v0.objref<@layout_2> = obj.alloc @layout_2;
-        v5.*i8 = alloca i8;
         v6.*i8 = alloca i8;
         v7.*i8 = alloca i8;
         v8.*i8 = alloca i8;
         v15.*i16 = alloca i16;
         v17.*i16 = alloca i16;
-        v23.i256 = call %set_piece 0.i256 4.i8 6.i8;
-        v26.i256 = call %set_piece v23 0.i8 4.i8;
-        v30.i256 = call %set_piece v26 60.i8 14.i8;
-        v34.i256 = call %set_piece v30 56.i8 12.i8;
-        v43.i256 = call %meta_custom 0.i1 3.i8 15.i8 0.i16 1.i16 4.i8 60.i8;
-        v265.i256 = and v43 1.i256;
-        v266.i1 = eq v265 1.i256;
-        v305.i256 = shr 224.i256 v34;
-        v307.i256 = and v305 15.i256;
-        v308.i8 = trunc v307 i8;
-        v267.i1 = is_zero v308;
-        br v267 block2 block4;
-
-    block2:
-        v65.@layout_0 = enum.make @layout_0 #NoPieceAtSource;
-        v66.@layout_5 = enum.make @layout_5 #Err v65;
-        return v66;
-
-    block4:
-        br v266 block5 block6;
-
-    block5:
-        v312.i1 = lt v308 8.i8;
-        br v312 block95 block8;
-
-    block6:
-        v314.i1 = lt v308 8.i8;
-        br v314 block11 block95;
-
-    block95:
-        v319.i256 = and v34 15.i256;
-        v320.i8 = trunc v319 i8;
-        v268.i1 = is_zero v320;
-        br v268 block16 block14;
-
-    block8:
-        v80.@layout_0 = enum.make @layout_0 #WrongSideToMove;
-        v81.@layout_5 = enum.make @layout_5 #Err v80;
-        return v81;
-
-    block11:
-        v83.@layout_0 = enum.make @layout_0 #WrongSideToMove;
-        v84.@layout_5 = enum.make @layout_5 #Err v83;
-        return v84;
-
-    block14:
-        br v266 block17 block18;
-
-    block16:
-        v94.@layout_2 = call %apply_rook v34 v43 56.i8 0.i8 0.i8 v308 v320 v266;
+        v94.@layout_2 = call %apply_rook 24736182426257386421843701014581903457152858201991735900572260061420060676.i256 33019708703206.i256 56.i8 0.i8 0.i8 12.i8 4.i8 0.i1;
         v95.enumtag(@layout_2) = enum.tag v94;
         br_table v95 block72 (0.enumtag(@layout_2) block73) (1.enumtag(@layout_2) block74);
 
-    block17:
-        v323.i1 = lt v320 8.i8;
-        br v323 block20 block19;
-
-    block18:
-        v325.i1 = lt v320 8.i8;
-        br v325 block19 block23;
-
-    block19:
-        v327.i8 = and v320 7.i8;
-        v134.i1 = eq v327 6.i8;
-        br v134 block26 block16;
-
-    block20:
-        v136.@layout_0 = enum.make @layout_0 #FriendlyOccupiedDestination;
-        v137.@layout_5 = enum.make @layout_5 #Err v136;
-        return v137;
-
-    block23:
-        v139.@layout_0 = enum.make @layout_0 #FriendlyOccupiedDestination;
-        v140.@layout_5 = enum.make @layout_5 #Err v139;
-        return v140;
-
-    block26:
-        v142.@layout_0 = enum.make @layout_0 #BadGeometry;
-        v143.@layout_5 = enum.make @layout_5 #Err v142;
-        return v143;
-
     block29:
-        v144.@layout_5 = phi (v147 block30) (v292 block103);
+        v144.@layout_5 = phi (v147 block30) (v292 block66);
         return v144;
 
     block30:
@@ -441,29 +326,15 @@ func private %validate_rook_capture() -> @layout_5 {
         v160.i1 = extract_value v149 4.i256;
         v162.i8 = extract_value v149 5.i256;
         v164.i1 = extract_value v149 6.i256;
-        v328.i256 = shr 1.i256 v43;
-        v329.i256 = and v328 15.i256;
-        v330.i8 = trunc v329 i8;
-        br v164 block33 block35;
-
-    block33:
-        br v266 block36 block37;
+        br v164 block37 block35;
 
     block35:
-        v322.i8 = phi (v330 block31) (v190 block36) (v196 block37);
-        v269.i1 = is_zero v162;
-        br v269 block41 block39;
-
-    block36:
-        v188.i8 = and v330 -4.i8;
-        mstore v5 v188 i8;
-        v189.i256 = mload v5 i256;
-        v190.i8 = trunc v189 i8;
-        jump block35;
+        v322.i8 = phi (3.i8 block31) (v196 block37);
+        v288.i1 = is_zero v162;
+        br v288 block41 block39;
 
     block37:
-        v194.i8 = and v330 -13.i8;
-        mstore v6 v194 i8;
+        mstore v6 3.i8 i8;
         v195.i256 = mload v6 i256;
         v196.i8 = trunc v195 i8;
         jump block35;
@@ -478,91 +349,53 @@ func private %validate_rook_capture() -> @layout_5 {
 
     block41:
         v334.i8 = phi (v202 block39) (v322 block35);
-        br v268 block44 block45;
-
-    block42:
-        v333.i1 = lt v320 8.i8;
-        br v333 block46 block44;
-
-    block44:
-        v209.i8 = phi (v334 block41) (v334 block45) (v224 block46) (v334 block42);
-        v336.i256 = and v154 -31.i256;
-        v337.i256 = zext v209 i256;
-        v338.i256 = and v337 15.i256;
-        v339.i256 = shl 1.i256 v338;
-        v340.i256 = or v336 v339;
-        br v160 block61 block62;
-
-    block45:
-        v341.i8 = and v320 7.i8;
-        v215.i1 = eq v341 4.i8;
-        br v215 block42 block44;
-
-    block46:
         v222.i8 = and v334 -3.i8;
         mstore v8 v222 i8;
         v223.i256 = mload v8 i256;
         v224.i8 = trunc v223 i8;
-        jump block44;
+        v388.i256 = and v154 -31.i256;
+        v389.i256 = zext v224 i256;
+        v390.i256 = and v389 15.i256;
+        v391.i256 = shl 1.i256 v390;
+        v392.i256 = or v388 v391;
+        br v160 block61 block62;
 
     block61:
-        v344.i256 = and v340 -481.i256;
+        v396.i256 = and v392 -481.i256;
         jump block63;
 
     block62:
-        v363.i256 = and v340 -481.i256;
-        v367.i256 = or v363 480.i256;
+        v401.i256 = and v392 -481.i256;
+        v405.i256 = or v401 480.i256;
         jump block63;
 
     block63:
-        v392.i256 = phi (v344 block61) (v367 block62);
-        v351.i256 = shr 9.i256 v43;
-        v352.i256 = and v351 255.i256;
-        v353.i16 = trunc v352 i16;
+        v392.i256 = phi (v396 block61) (v405 block62);
         br v158 block66 block67;
-
-    block65:
-        (v258.i16, v259.i1) = uaddo v353 1.i16;
-        br v259 block82 block83;
 
     block66:
         v266.i16 = phi (v264 block83) (0.i16 block63) (0.i16 block67);
-        v369.i256 = and v392 -130561.i256;
-        v370.i256 = zext v266 i256;
-        v371.i256 = and v370 255.i256;
-        v372.i256 = shl 9.i256 v371;
-        v373.i256 = or v369 v372;
-        v355.i256 = shr 17.i256 v43;
-        v356.i256 = and v355 65535.i256;
-        v357.i16 = trunc v356 i16;
-        br v266 block70 block68;
+        v412.i256 = and v392 -130561.i256;
+        v413.i256 = zext v266 i256;
+        v414.i256 = and v413 255.i256;
+        v415.i256 = shl 9.i256 v414;
+        v416.i256 = or v412 v415;
+        mstore v17 2.i16 i16;
+        v277.i256 = mload v17 i256;
+        v278.i16 = trunc v277 i16;
+        v422.i256 = and v416 -8589803521.i256;
+        v423.i256 = zext v278 i256;
+        v424.i256 = shl 17.i256 v423;
+        v425.i256 = or v422 v424;
+        v428.i256 = and v425 -2.i256;
+        v429.i256 = or v428 1.i256;
+        v301.@layout_4 = insert_value undef.@layout_4 0.i256 v152;
+        v302.@layout_4 = insert_value v301 1.i256 v429;
+        v292.@layout_5 = enum.make @layout_5 #Ok v302;
+        jump block29;
 
     block67:
-        br v156 block66 block65;
-
-    block68:
-        (v275.i16, v276.i1) = uaddo v357 1.i16;
-        br v276 block82 block84;
-
-    block70:
-        v280.i16 = phi (v278 block84) (v357 block66);
-        v359.i256 = and v373 -8589803521.i256;
-        v360.i256 = zext v280 i256;
-        v361.i256 = shl 17.i256 v360;
-        v362.i256 = or v359 v361;
-        br v266 block102 block103;
-
-    block102:
-        jump block103;
-
-    block103:
-        v377.i256 = phi (1.i256 block70) (0.i256 block102);
-        v379.i256 = and v362 -2.i256;
-        v380.i256 = or v379 v377;
-        v275.@layout_4 = insert_value undef.@layout_4 0.i256 v152;
-        v276.@layout_4 = insert_value v275 1.i256 v380;
-        v292.@layout_5 = enum.make @layout_5 #Ok v276;
-        jump block29;
+        br v156 block66 block83;
 
     block71:
         v126.@layout_2 = obj.load v0;
@@ -631,22 +464,11 @@ func private %validate_rook_capture() -> @layout_5 {
         enum.set_tag v98 #BlockedPath;
         jump block71;
 
-    block82:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
-
     block83:
-        mstore v15 v258 i16;
+        mstore v15 1.i16 i16;
         v263.i256 = mload v15 i256;
         v264.i16 = trunc v263 i16;
         jump block66;
-
-    block84:
-        mstore v17 v275 i16;
-        v277.i256 = mload v17 i256;
-        v278.i16 = trunc v277 i16;
-        jump block70;
 }
 
 

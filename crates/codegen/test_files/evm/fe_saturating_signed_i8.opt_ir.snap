@@ -5,19 +5,6 @@ input_file: test_files/evm/fe_saturating_signed_i8.sntn
 ---
 target = "evm-ethereum-osaka"
 
-func private %saturating_signed_i8() {
-    block0:
-        v9.i8 = call %i8_h1bb527fe1af58754_saturatingmul_hf2bc6be7b84ff8f7_saturating_mul 64.i8 4.i8;
-        v16.i1 = eq v9 127.i8;
-        br v16 block9 block11;
-
-    block11:
-        evm_revert 0.i256 0.i256;
-
-    block9:
-        return;
-}
-
 func private %i8_h1bb527fe1af58754_saturatingmul_hf2bc6be7b84ff8f7_saturating_mul(v0.i8, v1.i8) -> i8 {
     block0:
         v46.i1 = is_zero v0;
@@ -73,7 +60,14 @@ func private %i8_h1bb527fe1af58754_saturatingmul_hf2bc6be7b84ff8f7_saturating_mu
 
 func private %__fe_sonatina_entry() {
     block0:
-        call %saturating_signed_i8;
+        v2.i8 = call %i8_h1bb527fe1af58754_saturatingmul_hf2bc6be7b84ff8f7_saturating_mul 64.i8 4.i8;
+        v4.i1 = eq v2 127.i8;
+        br v4 block1 block3;
+
+    block3:
+        evm_revert 0.i256 0.i256;
+
+    block1:
         evm_stop;
 }
 

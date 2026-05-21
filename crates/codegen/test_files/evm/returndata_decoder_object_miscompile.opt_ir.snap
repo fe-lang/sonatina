@@ -11,42 +11,6 @@ type @Cursor = {@Bytes, i256};
 type @Decoder = {@Cursor, i256};
 type @CallData = {i256, i256};
 
-func private %call_target(v0.@Addr, v1.i256, v2.i256) -> i256 {
-    block0:
-        v25.*i8 = evm_malloc 4.i256;
-        v26.i256 = ptr_to_int v25 i256;
-        mstore v26 -21855552483912501284291303069055441188061847755248476274203343518395480932352.i256 i256;
-        (v27.i256, v28.i1) = uaddo v26 4.i256;
-        br v28 block7 block9;
-
-    block7:
-        evm_revert 0.i256 0.i256;
-
-    block9:
-        v35.i256 = bitcast v0 i256;
-        v15.i256 = evm_call v1 v35 v2 v26 4.i256 0.i256 0.i256;
-        v16.i256 = evm_return_data_size;
-        v17.*i8 = evm_malloc v16;
-        v18.i256 = ptr_to_int v17 i256;
-        evm_return_data_copy v18 0.i256 v16;
-        v34.i1 = is_zero v15;
-        br v34 block1 block11;
-
-    block1:
-        evm_revert v18 v16;
-
-    block11:
-        v51.i1 = lt v16 32.i256;
-        br v51 block12 block13;
-
-    block12:
-        evm_revert 0.i256 0.i256;
-
-    block13:
-        v75.i256 = mload v18 i256;
-        return v75;
-}
-
 func public %entry() {
     block0:
         v0.i256 = evm_calldata_size;
@@ -55,9 +19,37 @@ func public %entry() {
 
     block1:
         v3.i256 = evm_address;
-        v16.@Addr = insert_value undef.@Addr 0.i256 v3;
-        v6.i256 = call %call_target v16 100000.i256 0.i256;
-        mstore 0.i32 v6 i256;
+        v22.*i8 = evm_malloc 4.i256;
+        v23.i256 = ptr_to_int v22 i256;
+        mstore v23 -21855552483912501284291303069055441188061847755248476274203343518395480932352.i256 i256;
+        (v25.i256, v26.i1) = uaddo v23 4.i256;
+        br v26 block5 block6;
+
+    block5:
+        evm_revert 0.i256 0.i256;
+
+    block6:
+        v28.i256 = evm_call 100000.i256 v3 0.i256 v23 4.i256 0.i256 0.i256;
+        v29.i256 = evm_return_data_size;
+        v30.*i8 = evm_malloc v29;
+        v31.i256 = ptr_to_int v30 i256;
+        evm_return_data_copy v31 0.i256 v29;
+        v32.i1 = is_zero v28;
+        br v32 block7 block8;
+
+    block7:
+        evm_revert v31 v29;
+
+    block8:
+        v34.i1 = lt v29 32.i256;
+        br v34 block9 block10;
+
+    block9:
+        evm_revert 0.i256 0.i256;
+
+    block10:
+        v60.i256 = mload v31 i256;
+        mstore 0.i32 v60 i256;
         evm_return 0.i8 32.i8;
 
     block2:

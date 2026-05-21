@@ -2,12 +2,12 @@ use std::collections::BTreeSet;
 
 use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
-    BlockId, ControlFlowGraph, Function, InstDowncast, InstId, Module,
+    BlockId, ControlFlowGraph, Function, InstDowncast, InstId, Module, Value,
     inst::control_flow,
     module::{FuncHints, FuncRef},
 };
 
-use crate::module_analysis;
+use crate::{analysis::func_behavior::blocks_that_may_reach_commit, module_analysis};
 
 use super::aggregate::{
     collect_local_object_arg_info_with_effects, compute_object_effect_summaries,
@@ -22,7 +22,11 @@ mod trivial;
 struct CallSite {
     call_inst: InstId,
     callee: FuncRef,
-    has_result: bool,
+    arg_count: usize,
+    result_count: usize,
+    returns_to_caller: bool,
+    callee_may_commit: bool,
+    continuation_may_commit: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -48,9 +52,17 @@ pub struct InlinerConfig {
 
     pub inline_threshold: i32,
     pub inline_threshold_cold: i32,
+    pub small_function_block_limit: usize,
+    pub small_function_inst_limit: usize,
+    pub small_function_bonus: i32,
+    pub callsite_known_arg_use_bonus: i32,
+    pub callsite_known_arg_bonus_cap: i32,
     pub single_use_bonus: i32,
     pub leaf_bonus: i32,
     pub call_overhead_bonus: i32,
+    pub call_return_overhead_bonus: i32,
+    pub call_arg_shuffle_bonus: i32,
+    pub call_result_shuffle_bonus: i32,
     pub duplicated_block_penalty: i32,
     pub multi_use_inst_free_allowance: usize,
     pub multi_use_excess_inst_penalty: i32,
@@ -83,9 +95,17 @@ impl Default for InlinerConfig {
 
             inline_threshold: 24,
             inline_threshold_cold: 12,
+            small_function_block_limit: 0,
+            small_function_inst_limit: 0,
+            small_function_bonus: 0,
+            callsite_known_arg_use_bonus: 0,
+            callsite_known_arg_bonus_cap: 0,
             single_use_bonus: 12,
             leaf_bonus: 4,
             call_overhead_bonus: 6,
+            call_return_overhead_bonus: 0,
+            call_arg_shuffle_bonus: 0,
+            call_result_shuffle_bonus: 0,
             duplicated_block_penalty: 1,
             multi_use_inst_free_allowance: 5,
             multi_use_excess_inst_penalty: 1,
@@ -197,6 +217,9 @@ impl Inliner {
                     });
 
                     let callee_calls = call_counts.get(&site.callee).copied().unwrap_or(0);
+                    let known_arg_mask = module.func_store.view(caller_ref, |caller| {
+                        callsite_known_arg_mask(caller, site.call_inst)
+                    });
 
                     let trivial_plan = if let Some(callee) = snapshot_callee {
                         trivial::analyze_callee(
@@ -272,7 +295,12 @@ impl Inliner {
                             } else {
                                 inline_depth_by_func.get(&site.callee).copied().unwrap_or(0)
                             },
-                            call_has_result: site.has_result,
+                            call_arg_count: site.arg_count,
+                            call_result_count: site.result_count,
+                            call_returns_to_caller: site.returns_to_caller,
+                            call_callee_may_commit: site.callee_may_commit,
+                            call_continuation_may_commit: site.continuation_may_commit,
+                            known_arg_mask,
                         },
                         &self.config,
                     );
@@ -409,6 +437,8 @@ fn apply_inline_skip(decision: cost::InlineDecision, stats: &mut InlineStats) {
 
 fn collect_call_sites(func: &Function) -> Vec<CallSite> {
     let is = func.inst_set();
+    let committing_blocks =
+        blocks_that_may_reach_commit(func, |func_ref| func.ctx().func_effects(func_ref));
     let mut sites = Vec::new();
 
     for block in func.layout.iter_block() {
@@ -418,10 +448,15 @@ fn collect_call_sites(func: &Function) -> Vec<CallSite> {
                 continue;
             };
 
+            let effects = func.ctx().func_effects(*call.callee());
             sites.push(CallSite {
                 call_inst: inst_id,
                 callee: *call.callee(),
-                has_result: !func.dfg.inst_results(inst_id).is_empty(),
+                arg_count: call.args().len(),
+                result_count: func.dfg.inst_results(inst_id).len(),
+                returns_to_caller: effects.may_return_to_caller(),
+                callee_may_commit: effects.may_commit_visible_writes,
+                continuation_may_commit: committing_blocks.contains(&block),
             });
         }
     }
@@ -445,6 +480,27 @@ fn collect_iteration_call_data(
     }
 
     (sites_by_caller, counts)
+}
+
+fn callsite_known_arg_mask(func: &Function, call_inst: InstId) -> u128 {
+    let Some(call) = func.dfg.cast_call(call_inst) else {
+        return 0;
+    };
+
+    call.args()
+        .iter()
+        .take(u128::BITS as usize)
+        .enumerate()
+        .fold(0, |mask, (index, &arg)| {
+            if matches!(
+                func.dfg.value(arg),
+                Value::Immediate { .. } | Value::Global { .. }
+            ) {
+                mask | (1u128 << index)
+            } else {
+                mask
+            }
+        })
 }
 
 fn compute_reachable_blocks(func: &Function) -> FxHashSet<BlockId> {
