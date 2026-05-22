@@ -304,6 +304,15 @@ const POST_DEAD_ARG_CLEANUP_PASSES: &[Pass] = &[
     Pass::CfgCleanup,
 ];
 
+const POST_INLINE_CLEANUP_PASSES: &[Pass] = &[
+    Pass::CfgCleanup,
+    Pass::AggregateCombine,
+    Pass::BranchCanonicalize,
+    Pass::Sccp,
+    Pass::ScalarCanonicalize,
+    Pass::CfgCleanup,
+];
+
 fn size_inliner_config() -> InlinerConfig {
     InlinerConfig {
         // The size-oriented mode still runs the full optimization schedule, but
@@ -313,14 +322,22 @@ fn size_inliner_config() -> InlinerConfig {
         splice_max_insts: 6,
         max_inlinee_blocks: 8,
         max_inlinee_insts: 48,
-        max_growth_per_caller: 32,
-        max_total_growth: 160,
+        max_growth_per_caller: 64,
+        max_total_growth: 320,
         max_inline_depth: 3,
         inline_threshold: 10,
         inline_threshold_cold: 5,
+        small_function_block_limit: 4,
+        small_function_inst_limit: 16,
+        small_function_bonus: 4,
+        callsite_known_arg_use_bonus: 6,
+        callsite_known_arg_bonus_cap: 32,
         single_use_bonus: 8,
         leaf_bonus: 2,
         call_overhead_bonus: 6,
+        call_return_overhead_bonus: 6,
+        call_arg_shuffle_bonus: 2,
+        call_result_shuffle_bonus: 2,
         duplicated_block_penalty: 1,
         multi_use_inst_free_allowance: 5,
         multi_use_excess_inst_penalty: 1,
@@ -336,17 +353,25 @@ fn speed_inliner_config() -> InlinerConfig {
         // The speed-oriented mode stays more selective about inlining, because
         // on the EVM a smaller post-inline body often wins on runtime gas.
         enable_full_inliner: true,
-        splice_max_insts: 4,
+        splice_max_insts: 6,
         max_inlinee_blocks: 8,
         max_inlinee_insts: 32,
-        max_growth_per_caller: 24,
-        max_total_growth: 128,
+        max_growth_per_caller: 48,
+        max_total_growth: 256,
         max_inline_depth: 3,
         inline_threshold: 8,
         inline_threshold_cold: 4,
+        small_function_block_limit: 4,
+        small_function_inst_limit: 16,
+        small_function_bonus: 8,
+        callsite_known_arg_use_bonus: 8,
+        callsite_known_arg_bonus_cap: 64,
         single_use_bonus: 8,
         leaf_bonus: 2,
         call_overhead_bonus: 6,
+        call_return_overhead_bonus: 6,
+        call_arg_shuffle_bonus: 2,
+        call_result_shuffle_bonus: 2,
         duplicated_block_penalty: 1,
         multi_use_inst_free_allowance: 5,
         multi_use_excess_inst_penalty: 1,
@@ -370,6 +395,8 @@ impl Pipeline {
         p.add_step(Step::DeadFuncElim);
         p.add_step(Step::Inline);
         p.add_step(Step::FuncPasses(SECONDARY_FUNC_PASSES.to_vec()));
+        p.add_step(Step::Inline);
+        p.add_step(Step::FuncPasses(POST_INLINE_CLEANUP_PASSES.to_vec()));
         p.add_step(Step::DeadFuncElim);
         p
     }
@@ -986,12 +1013,12 @@ mod tests {
             Pipeline::speed().inliner_config.splice_max_insts
         );
         assert_eq!(
-            Pipeline::default().inliner_config.splice_max_insts,
-            Pipeline::speed().inliner_config.splice_max_insts
+            pipeline.inliner_config.max_total_growth,
+            Pipeline::speed().inliner_config.max_total_growth
         );
         assert_ne!(
-            pipeline.inliner_config.splice_max_insts,
-            Pipeline::size().inliner_config.splice_max_insts
+            pipeline.inliner_config.max_total_growth,
+            Pipeline::size().inliner_config.max_total_growth
         );
     }
 
@@ -2312,13 +2339,23 @@ func private %entry(v0.i32, v1.i32) -> i32 {
 
         let speed = Pipeline::speed();
         assert!(speed.inliner_config.enable_full_inliner);
-        assert!(size.inliner_config.splice_max_insts > speed.inliner_config.splice_max_insts);
+        assert_eq!(
+            speed.inliner_config.splice_max_insts,
+            size.inliner_config.splice_max_insts
+        );
         assert!(speed.inliner_config.max_inlinee_blocks > 0);
         assert!(speed.inliner_config.max_inlinee_insts > 0);
         assert!(
             size.inliner_config.max_growth_per_caller >= speed.inliner_config.max_growth_per_caller
         );
         assert!(size.inliner_config.max_total_growth >= speed.inliner_config.max_total_growth);
+        assert!(
+            speed.inliner_config.small_function_bonus > size.inliner_config.small_function_bonus
+        );
+        assert!(
+            speed.inliner_config.callsite_known_arg_use_bonus
+                > size.inliner_config.callsite_known_arg_use_bonus
+        );
         assert_ne!(
             speed.inliner_config.inline_threshold,
             size.inliner_config.inline_threshold
@@ -2410,7 +2447,19 @@ func private %costly(v0.i1, v1.i32) -> i32 {
         v5.i32 = add v4 1.i32;
         v6.i32 = add v5 1.i32;
         v7.i32 = add v6 1.i32;
-        return v7;
+        v8.i32 = add v7 1.i32;
+        v9.i32 = add v8 1.i32;
+        v10.i32 = add v9 1.i32;
+        v11.i32 = add v10 1.i32;
+        v12.i32 = add v11 1.i32;
+        v13.i32 = add v12 1.i32;
+        v14.i32 = add v13 1.i32;
+        v15.i32 = add v14 1.i32;
+        v16.i32 = add v15 1.i32;
+        v17.i32 = add v16 1.i32;
+        v18.i32 = add v17 1.i32;
+        v19.i32 = add v18 1.i32;
+        return v19;
 }
 
 func public %caller(v0.i1, v1.i32) -> i32 {

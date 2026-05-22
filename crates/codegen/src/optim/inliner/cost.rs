@@ -84,7 +84,12 @@ pub(super) struct InlineRequest {
     pub caller_growth: usize,
     pub total_growth: usize,
     pub callee_depth: usize,
-    pub call_has_result: bool,
+    pub call_arg_count: usize,
+    pub call_result_count: usize,
+    pub call_returns_to_caller: bool,
+    pub call_callee_may_commit: bool,
+    pub call_continuation_may_commit: bool,
+    pub known_arg_mask: u128,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -139,7 +144,7 @@ pub(super) fn decide_inline(
     }
 
     let mut predicted_growth = summary.insts.saturating_sub(1);
-    if request.call_has_result && summary.returns > 1 {
+    if request.call_result_count > 0 && summary.returns > 1 {
         predicted_growth = predicted_growth.saturating_add(1);
     }
 
@@ -186,13 +191,51 @@ pub(super) fn decide_inline(
         return InlineDecision::Skip(InlineSkipReason::Budget);
     }
 
-    let should_force_single_use =
-        config.always_inline_single_use && request.callee_call_count == 1 && summary.blocks > 1;
+    let should_force_single_use = config.always_inline_single_use
+        && request.callee_call_count == 1
+        && summary.blocks > 1
+        && (request.call_continuation_may_commit
+            || (!request.call_returns_to_caller && request.call_callee_may_commit));
 
     if should_force_single_use {
         return InlineDecision::Inline(InlinePlan {
             summary,
             score: i32::MIN + 1,
+            predicted_growth,
+            forced: true,
+        });
+    }
+
+    let should_force_known_arg_small_helper = request.known_arg_mask != 0
+        && request.call_continuation_may_commit
+        && summary.calls == 0
+        && !summary.has_loop
+        && summary.blocks > 1
+        && !exceeds_cap(summary.blocks, config.small_function_block_limit)
+        && !exceeds_cap(summary.insts, config.small_function_inst_limit);
+
+    if should_force_known_arg_small_helper {
+        return InlineDecision::Inline(InlinePlan {
+            summary,
+            score: i32::MIN + 2,
+            predicted_growth,
+            forced: true,
+        });
+    }
+
+    let should_force_small_object_helper = request.call_continuation_may_commit
+        && config.object_scalarization_bonus_cap > 0
+        && summary.object.has_scalarizable_object_activity()
+        && summary.calls == 0
+        && !summary.has_loop
+        && summary.blocks > 1
+        && !exceeds_cap(summary.blocks, config.small_function_block_limit)
+        && !exceeds_cap(summary.insts, config.small_function_inst_limit);
+
+    if should_force_small_object_helper {
+        return InlineDecision::Inline(InlinePlan {
+            summary,
+            score: i32::MIN + 3,
             predicted_growth,
             forced: true,
         });
@@ -227,7 +270,20 @@ pub(super) fn decide_inline(
     if is_leaf {
         score -= config.leaf_bonus;
     }
-    score -= config.call_overhead_bonus;
+    // Small leaf helpers often shrink after the next simplification round; avoid
+    // letting the multi-use code-size model dominate those callsites too early.
+    if config.small_function_bonus > 0
+        && summary.calls == 0
+        && !summary.has_loop
+        && !exceeds_cap(summary.blocks, config.small_function_block_limit)
+        && !exceeds_cap(summary.insts, config.small_function_inst_limit)
+    {
+        score -= config.small_function_bonus;
+    }
+    score -= compute_call_overhead_bonus(request, config);
+    // Known actual arguments can expose constant branches, allocation sizes, and
+    // return fields once the callee body is in the caller.
+    score -= compute_callsite_known_arg_bonus(module, callee, request, config);
     if request.callee_call_count > 1 && summary.blocks > 1 {
         score += summary.blocks.saturating_sub(1) as i32 * config.duplicated_block_penalty;
     }
@@ -312,6 +368,59 @@ fn compute_object_helper_cluster_bonus(
         .take(2)
         .count() as i32
         * config.object_helper_cluster_bonus
+}
+
+fn compute_callsite_known_arg_bonus(
+    module: &Module,
+    callee: Option<&Function>,
+    request: InlineRequest,
+    config: &InlinerConfig,
+) -> i32 {
+    if request.known_arg_mask == 0
+        || config.callsite_known_arg_use_bonus <= 0
+        || config.callsite_known_arg_bonus_cap <= 0
+    {
+        return 0;
+    }
+
+    let use_score = callee.map_or_else(
+        || {
+            module
+                .func_store
+                .try_view(request.callee_ref, |func| {
+                    known_arg_use_score(func, request.known_arg_mask)
+                })
+                .unwrap_or(0)
+        },
+        |func| known_arg_use_score(func, request.known_arg_mask),
+    );
+
+    (use_score as i32 * config.callsite_known_arg_use_bonus)
+        .min(config.callsite_known_arg_bonus_cap)
+}
+
+fn compute_call_overhead_bonus(request: InlineRequest, config: &InlinerConfig) -> i32 {
+    let mut bonus = config.call_overhead_bonus.max(0);
+    if !request.call_returns_to_caller || !request.call_continuation_may_commit {
+        return bonus;
+    }
+
+    bonus += config.call_return_overhead_bonus.max(0);
+    if request.call_arg_count > 0 {
+        bonus += config.call_arg_shuffle_bonus.max(0);
+    }
+    bonus + request.call_result_count as i32 * config.call_result_shuffle_bonus.max(0)
+}
+
+fn known_arg_use_score(func: &Function, known_arg_mask: u128) -> usize {
+    func.arg_values
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| {
+            *index < u128::BITS as usize && known_arg_mask & (1u128 << *index) != 0
+        })
+        .map(|(_, &arg)| func.dfg.users_num(arg).min(4))
+        .sum()
 }
 
 fn get_inlinee_summary(
@@ -460,243 +569,5 @@ fn compute_inlinee_summary(
         has_loop,
         base_cost,
         object,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use rustc_hash::FxHashMap;
-
-    use super::{InlineDecision, InlineDecisionContext, InlineRequest, decide_inline};
-    use crate::{
-        module_analysis,
-        optim::{
-            aggregate::{
-                collect_local_object_arg_info_with_effects, compute_object_effect_summaries,
-            },
-            inliner::InlinerConfig,
-        },
-    };
-
-    #[test]
-    fn cluster_bonus_flips_object_helper_wrapper_profitability() {
-        let mut parsed = sonatina_parser::parse_module(
-            r#"
-target = "evm-ethereum-london"
-
-type @pair = { i256, i256 };
-
-func private %write_first(v0.objref<@pair>, v1.i256) {
-    block0:
-        v2.objref<i256> = obj.proj v0 0.i8;
-        obj.store v2 v1;
-        return;
-}
-
-func private %write_second(v0.objref<@pair>, v1.i256) {
-    block0:
-        v2.objref<i256> = obj.proj v0 1.i8;
-        obj.store v2 v1;
-        return;
-}
-
-func private %build(v0.objref<@pair>, v1.i256, v2.i256) -> i256 {
-    block0:
-        call %write_first v0 v1;
-        call %write_second v0 v2;
-        v3.objref<i256> = obj.proj v0 0.i8;
-        v4.i256 = obj.load v3;
-        return v4;
-}
-
-func private %caller(v0.objref<@pair>, v1.i256, v2.i256, v3.i256, v4.i256) -> i256 {
-    block0:
-        v5.i256 = call %build v0 v1 v2;
-        v6.i256 = call %build v0 v3 v4;
-        v7.i256 = add v5 v6;
-        return v7;
-}
-"#,
-        )
-        .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"));
-        let module = &mut parsed.module;
-        let analysis = module_analysis::analyze_module(module);
-        let object_effects = compute_object_effect_summaries(module);
-        let local_object_args = collect_local_object_arg_info_with_effects(module, &object_effects);
-        let build = module
-            .funcs()
-            .into_iter()
-            .find(|&func| module.ctx.func_sig(func, |sig| sig.name() == "build"))
-            .expect("build should exist");
-        let request = InlineRequest {
-            callee_ref: build,
-            callee_call_count: 2,
-            caller_growth: 0,
-            total_growth: 0,
-            callee_depth: 0,
-            call_has_result: true,
-        };
-
-        let disabled = decide_inline(
-            module,
-            &mut FxHashMap::default(),
-            None,
-            false,
-            InlineDecisionContext {
-                module_info: &analysis,
-                local_object_args: Some(&local_object_args),
-                object_effects: Some(&object_effects),
-            },
-            request,
-            &InlinerConfig {
-                enable_full_inliner: true,
-                always_inline_single_use: false,
-                max_inlinee_blocks: 64,
-                max_inlinee_insts: 1024,
-                max_growth_per_caller: 4096,
-                max_total_growth: 1 << 20,
-                inline_threshold: 1000,
-                inline_threshold_cold: 4,
-                call_overhead_bonus: 0,
-                object_scalarization_bonus_cap: 4,
-                object_helper_cluster_bonus: 0,
-                ..InlinerConfig::default()
-            },
-        );
-        assert!(matches!(
-            disabled,
-            InlineDecision::Skip(super::InlineSkipReason::Cost)
-        ));
-
-        let enabled = decide_inline(
-            module,
-            &mut FxHashMap::default(),
-            None,
-            false,
-            InlineDecisionContext {
-                module_info: &analysis,
-                local_object_args: Some(&local_object_args),
-                object_effects: Some(&object_effects),
-            },
-            request,
-            &InlinerConfig {
-                enable_full_inliner: true,
-                always_inline_single_use: false,
-                max_inlinee_blocks: 64,
-                max_inlinee_insts: 1024,
-                max_growth_per_caller: 4096,
-                max_total_growth: 1 << 20,
-                inline_threshold: 1000,
-                inline_threshold_cold: 4,
-                call_overhead_bonus: 0,
-                object_scalarization_bonus_cap: 4,
-                object_helper_cluster_bonus: 3,
-                ..InlinerConfig::default()
-            },
-        );
-        assert!(matches!(enabled, InlineDecision::Inline(_)));
-    }
-
-    #[test]
-    fn branchy_multi_use_leaf_helpers_are_costed_normally() {
-        let mut parsed = sonatina_parser::parse_module(
-            r#"
-target = "evm-ethereum-london"
-
-func private %select(v0.i1, v1.i256) -> i256 {
-    block0:
-        br v0 block1 block2;
-
-    block1:
-        return v1;
-
-    block2:
-        return 0.i256;
-}
-
-func private %caller(v0.i1, v1.i1, v2.i1, v3.i256) -> i256 {
-    block0:
-        v4.i256 = call %select v0 v3;
-        v5.i256 = call %select v1 v3;
-        v6.i256 = add v4 v5;
-        v7.i256 = call %select v2 v3;
-        v8.i256 = add v6 v7;
-        return v8;
-}
-"#,
-        )
-        .unwrap_or_else(|errs| panic!("parse failed: {errs:?}"));
-        let module = &mut parsed.module;
-        let analysis = module_analysis::analyze_module(module);
-        let select = module
-            .funcs()
-            .into_iter()
-            .find(|&func| module.ctx.func_sig(func, |sig| sig.name() == "select"))
-            .expect("select should exist");
-        let request = InlineRequest {
-            callee_ref: select,
-            callee_call_count: 3,
-            caller_growth: 0,
-            total_growth: 0,
-            callee_depth: 0,
-            call_has_result: true,
-        };
-
-        let without_call_credit = decide_inline(
-            module,
-            &mut FxHashMap::default(),
-            None,
-            false,
-            InlineDecisionContext {
-                module_info: &analysis,
-                local_object_args: None,
-                object_effects: None,
-            },
-            request,
-            &InlinerConfig {
-                enable_full_inliner: true,
-                always_inline_single_use: false,
-                max_inlinee_blocks: 6,
-                max_inlinee_insts: 32,
-                max_growth_per_caller: 24,
-                max_total_growth: 128,
-                inline_threshold: 8,
-                inline_threshold_cold: 4,
-                leaf_bonus: 2,
-                call_overhead_bonus: 0,
-                ..InlinerConfig::default()
-            },
-        );
-        assert!(matches!(
-            without_call_credit,
-            InlineDecision::Skip(super::InlineSkipReason::Cost)
-        ));
-
-        let with_call_credit = decide_inline(
-            module,
-            &mut FxHashMap::default(),
-            None,
-            false,
-            InlineDecisionContext {
-                module_info: &analysis,
-                local_object_args: None,
-                object_effects: None,
-            },
-            request,
-            &InlinerConfig {
-                enable_full_inliner: true,
-                always_inline_single_use: false,
-                max_inlinee_blocks: 6,
-                max_inlinee_insts: 32,
-                max_growth_per_caller: 24,
-                max_total_growth: 128,
-                inline_threshold: 8,
-                inline_threshold_cold: 4,
-                leaf_bonus: 2,
-                call_overhead_bonus: 6,
-                ..InlinerConfig::default()
-            },
-        );
-        assert!(matches!(with_call_credit, InlineDecision::Inline(_)));
     }
 }

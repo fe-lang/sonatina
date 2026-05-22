@@ -46,24 +46,6 @@ func private %vals_b() -> [i256; 5] {
         return v6;
 }
 
-func private %check(v0.@Big, v1.[i256; 5], v2.[i256; 5]) -> @Ret {
-    block0:
-        v3.i1 = extract_value v0 0.i8;
-        v4.i256 = extract_value v1 1.i8;
-        v5.i1 = eq v4 7.i256;
-        v6.i1 = and v3 v5;
-        v7.i256 = extract_value v2 2.i8;
-        v8.i1 = eq v7 9.i256;
-        v9.i1 = and v6 v8;
-        v10.objref<@Ret> = obj.alloc @Ret;
-        v11.objref<i1> = obj.proj v10 0.i256;
-        obj.store v11 v9;
-        v12.objref<@MyErr> = obj.proj v10 1.i256;
-        enum.set_tag v12 #None;
-        v13.@Ret = obj.load v10;
-        return v13;
-}
-
 func private %run() {
     block0:
         v24.objref<@Big> = obj.alloc @Big;
@@ -83,12 +65,35 @@ func private %run() {
         v32.@Big = obj.load v24;
         v1.[i256; 5] = call %vals_a;
         v2.[i256; 5] = call %vals_b;
-        v3.@Ret = call %check v32 v1 v2;
+        v33.i1 = extract_value v32 0.i8;
+        v35.i256 = extract_value v1 1.i8;
+        v37.i1 = eq v35 7.i256;
+        v38.i1 = and v33 v37;
+        v40.i256 = extract_value v2 2.i8;
+        v42.i1 = eq v40 9.i256;
+        v43.i1 = and v38 v42;
+        v44.objref<@Ret> = obj.alloc @Ret;
+        v45.objref<i1> = obj.proj v44 0.i256;
+        obj.store v45 v43;
+        v46.objref<@MyErr> = obj.proj v44 1.i256;
+        enum.set_tag v46 #None;
+        v47.@Ret = obj.load v44;
         v4.[i256; 5] = call %vals_a;
         v5.[i256; 5] = call %vals_b;
-        v6.@Ret = call %check v32 v4 v5;
-        v7.i1 = extract_value v3 0.i8;
-        v8.i1 = extract_value v6 0.i8;
+        v49.i256 = extract_value v4 1.i8;
+        v50.i1 = eq v49 7.i256;
+        v51.i1 = and v33 v50;
+        v52.i256 = extract_value v5 2.i8;
+        v53.i1 = eq v52 9.i256;
+        v54.i1 = and v51 v53;
+        v55.objref<@Ret> = obj.alloc @Ret;
+        v56.objref<i1> = obj.proj v55 0.i256;
+        obj.store v56 v54;
+        v57.objref<@MyErr> = obj.proj v55 1.i256;
+        enum.set_tag v57 #None;
+        v58.@Ret = obj.load v55;
+        v7.i1 = extract_value v47 0.i8;
+        v8.i1 = extract_value v58 0.i8;
         v11.i1 = and v7 v8;
         br v11 block1 block2;
 

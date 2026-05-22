@@ -12,21 +12,21 @@ func public %init() {
         v3.i256 = sym_size .;
         evm_code_copy v2 v3 64.i256;
         v4.i256 = mload v2 i256;
-        v20.i256 = shr 160.i256 v4;
-        v21.i1 = is_zero v20;
-        br v21 block1 block3;
+        v17.i256 = shr 160.i256 v4;
+        v23.i1 = is_zero v17;
+        br v23 block1 block4;
 
-    block3:
+    block4:
         evm_revert 0.i256 0.i256;
 
     block1:
         v7.i256 = add v2 32.i256;
         v8.i256 = mload v7 i256;
-        v16.*i8 = evm_malloc 32.i256;
-        v17.i256 = ptr_to_int v16 i256;
-        mstore v17 v4 i256;
-        v18.i256 = evm_keccak256 v17 32.i256;
-        evm_sstore v18 v8;
+        v20.*i8 = evm_malloc 32.i256;
+        v21.i256 = ptr_to_int v20 i256;
+        mstore v21 v4 i256;
+        v22.i256 = evm_keccak256 v21 32.i256;
+        evm_sstore v22 v8;
         v10.i256 = sym_size &runtime;
         v11.*i8 = evm_malloc v10;
         v12.i256 = ptr_to_int v11 i256;
@@ -48,21 +48,21 @@ func public %run() {
 
     block2:
         v7.i256 = evm_calldata_load 4.i256;
-        v40.i256 = shr 160.i256 v7;
-        v41.i1 = is_zero v40;
-        br v41 block10 block12;
+        v29.i256 = shr 160.i256 v7;
+        v42.i1 = is_zero v29;
+        br v42 block10 block13;
 
-    block12:
+    block13:
         evm_revert 0.i256 0.i256;
 
     block10:
         v10.i256 = evm_calldata_load 36.i256;
         v11.i256 = evm_caller;
-        v28.*i8 = evm_malloc 32.i256;
-        v29.i256 = ptr_to_int v28 i256;
-        mstore v29 v11 i256;
-        v30.i256 = evm_keccak256 v29 32.i256;
-        v13.i256 = evm_sload v30;
+        v31.*i8 = evm_malloc 32.i256;
+        v32.i256 = ptr_to_int v31 i256;
+        mstore v32 v11 i256;
+        v33.i256 = evm_keccak256 v32 32.i256;
+        v13.i256 = evm_sload v33;
         v14.i1 = lt v13 v10;
         br v14 block5 block6;
 
@@ -71,14 +71,14 @@ func public %run() {
 
     block6:
         v18.i256 = sub v13 v10;
-        evm_sstore v30 v18;
-        v31.*i8 = evm_malloc 32.i256;
-        v32.i256 = ptr_to_int v31 i256;
-        mstore v32 v7 i256;
-        v33.i256 = evm_keccak256 v32 32.i256;
-        v21.i256 = evm_sload v33;
+        evm_sstore v33 v18;
+        v34.*i8 = evm_malloc 32.i256;
+        v35.i256 = ptr_to_int v34 i256;
+        mstore v35 v7 i256;
+        v36.i256 = evm_keccak256 v35 32.i256;
+        v21.i256 = evm_sload v36;
         v22.i256 = add v21 v10;
-        evm_sstore v33 v22;
+        evm_sstore v36 v22;
         evm_stop;
 
     block7:
@@ -86,19 +86,19 @@ func public %run() {
 
     block8:
         v26.i256 = evm_calldata_load 4.i256;
-        v42.i256 = shr 160.i256 v26;
-        v43.i1 = is_zero v42;
-        br v43 block14 block16;
+        v37.i256 = shr 160.i256 v26;
+        v43.i1 = is_zero v37;
+        br v43 block15 block18;
 
-    block16:
+    block18:
         evm_revert 0.i256 0.i256;
 
-    block14:
-        v34.*i8 = evm_malloc 32.i256;
-        v35.i256 = ptr_to_int v34 i256;
-        mstore v35 v26 i256;
-        v36.i256 = evm_keccak256 v35 32.i256;
-        v29.i256 = evm_sload v36;
+    block15:
+        v39.*i8 = evm_malloc 32.i256;
+        v40.i256 = ptr_to_int v39 i256;
+        mstore v40 v26 i256;
+        v41.i256 = evm_keccak256 v40 32.i256;
+        v29.i256 = evm_sload v41;
         v31.*i8 = evm_malloc 32.i256;
         v32.i256 = ptr_to_int v31 i256;
         mstore v32 v29 i256;

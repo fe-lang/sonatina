@@ -16,121 +16,184 @@ type @__fe_CallData_7 = {i256};
 type @__fe_Cursor_8 = {@__fe_CallData_7, i256};
 type @__fe_SolDecoder_9 = {@__fe_Cursor_8, i256};
 
-func private %__Contract_runtime_entry() {
+func private %test_coin__StorPtr_Evm___207f35a85ac4062e() {
     block0:
-        v60.i256 = sym_size &__Coin_init;
-        v61.i256 = sym_addr &__Coin_init;
-        v62.*i8 = evm_malloc v60;
-        v63.i256 = ptr_to_int v62 i256;
-        evm_code_copy v63 v61 v60;
-        v64.i256 = evm_create2 0.i256 v63 v60 0.i256;
-        v65.i1 = is_zero v64;
-        v66.i256 = zext v65 i256;
-        v67.i1 = is_zero v66;
-        br v67 block1 block3;
+        v61.i256 = sym_size &__Coin_init;
+        v62.i256 = sym_addr &__Coin_init;
+        v64.*i8 = evm_malloc v61;
+        v65.i256 = ptr_to_int v64 i256;
+        evm_code_copy v65 v62 v61;
+        v74.i256 = evm_create2 0.i256 v65 v61 0.i256;
+        v75.i1 = is_zero v74;
+        v76.i256 = zext v75 i256;
+        v93.i1 = is_zero v76;
+        br v93 block1 block3;
 
     block3:
-        v68.i256 = evm_return_data_size;
-        v69.*i8 = evm_malloc v68;
-        v70.i256 = ptr_to_int v69 i256;
-        evm_return_data_copy v70 0.i256 v68;
-        evm_revert v70 v68;
+        v78.i256 = evm_return_data_size;
+        v79.*i8 = evm_malloc v78;
+        v80.i256 = ptr_to_int v79 i256;
+        evm_return_data_copy v80 0.i256 v78;
+        evm_revert v80 v78;
 
     block1:
-        v13.i1 = is_zero v65;
-        v14.i256 = zext v13 i256;
-        call %assert v14;
-        v15.*i8 = evm_malloc 64.i256;
-        v16.i256 = ptr_to_int v15 i256;
-        v17.*@__fe_Credit_0 = bitcast v15 *@__fe_Credit_0;
-        v18.*i256 = bitcast v17 *i256;
-        mstore v18 0.i256 i256;
-        v20.*i256 = gep v17 0.i256 1.i256;
-        mstore v20 10.i256 i256;
-        v21.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__Credit_h1b40c7da4bcceeac__9489dcd0a297a0c v64 100000.i256 0.i256 v16;
-        v22.i1 = eq v21 10.i256;
-        v23.i256 = zext v22 i256;
-        call %assert v23;
-        v24.*i8 = evm_malloc 64.i256;
-        v25.i256 = ptr_to_int v24 i256;
-        v26.*@__fe_Credit_0 = bitcast v24 *@__fe_Credit_0;
-        v27.*i256 = bitcast v26 *i256;
-        mstore v27 1.i256 i256;
-        v29.*i256 = gep v26 0.i256 1.i256;
-        mstore v29 5.i256 i256;
-        v30.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__Credit_h1b40c7da4bcceeac__9489dcd0a297a0c v64 100000.i256 0.i256 v25;
-        v31.i1 = eq v30 5.i256;
-        v32.i256 = zext v31 i256;
-        call %assert v32;
-        v33.*i8 = evm_malloc 64.i256;
-        v34.i256 = ptr_to_int v33 i256;
-        v35.*@__fe_Transfer_1 = bitcast v33 *@__fe_Transfer_1;
-        v36.*i256 = bitcast v35 *i256;
-        mstore v36 0.i256 i256;
-        v38.*i256 = gep v35 0.i256 1.i256;
-        mstore v38 3.i256 i256;
-        v39.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__Transfer_hbe7d801e15d910f6__66cc42efa72ff9b1 v64 100000.i256 0.i256 v34;
-        v40.i1 = is_zero v39;
-        v41.i256 = zext v40 i256;
-        call %assert v41;
-        v42.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__BalanceOf_h891837b06b5610d4__9cd8cdf578aad9be v64 100000.i256 0.i256 0.i256;
-        v43.i1 = eq v42 7.i256;
-        v44.i256 = zext v43 i256;
-        call %assert v44;
-        v45.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__BalanceOf_h891837b06b5610d4__9cd8cdf578aad9be v64 100000.i256 0.i256 1.i256;
-        v46.i1 = eq v45 8.i256;
-        v47.i256 = zext v46 i256;
-        call %assert v47;
-        v48.*i8 = evm_malloc 64.i256;
-        v49.i256 = ptr_to_int v48 i256;
-        v50.*@__fe_Transfer_1 = bitcast v48 *@__fe_Transfer_1;
-        v51.*i256 = bitcast v50 *i256;
-        mstore v51 1.i256 i256;
-        v53.*i256 = gep v50 0.i256 1.i256;
+        v4.i1 = is_zero v75;
+        v5.i256 = zext v4 i256;
+        v81.i1 = is_zero v5;
+        v82.i256 = zext v81 i256;
+        v94.i1 = is_zero v82;
+        br v94 block5 block7;
+
+    block7:
+        evm_revert 0.i256 0.i256;
+
+    block5:
+        v8.*i8 = evm_malloc 64.i256;
+        v9.i256 = ptr_to_int v8 i256;
+        v10.*@__fe_Credit_0 = bitcast v8 *@__fe_Credit_0;
+        v11.*i256 = bitcast v10 *i256;
+        mstore v11 0.i256 i256;
+        v14.*i256 = gep v10 0.i256 1.i256;
+        mstore v14 10.i256 i256;
+        v16.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__Credit_h1b40c7da4bcceeac__9489dcd0a297a0c v74 100000.i256 0.i256 v9;
+        v17.i1 = eq v16 10.i256;
+        v18.i256 = zext v17 i256;
+        v84.i1 = is_zero v18;
+        v85.i256 = zext v84 i256;
+        v95.i1 = is_zero v85;
+        br v95 block9 block11;
+
+    block11:
+        evm_revert 0.i256 0.i256;
+
+    block9:
+        v19.*i8 = evm_malloc 64.i256;
+        v20.i256 = ptr_to_int v19 i256;
+        v21.*@__fe_Credit_0 = bitcast v19 *@__fe_Credit_0;
+        v22.*i256 = bitcast v21 *i256;
+        mstore v22 1.i256 i256;
+        v25.*i256 = gep v21 0.i256 1.i256;
+        mstore v25 5.i256 i256;
+        v26.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__Credit_h1b40c7da4bcceeac__9489dcd0a297a0c v74 100000.i256 0.i256 v20;
+        v27.i1 = eq v26 5.i256;
+        v28.i256 = zext v27 i256;
+        v87.i1 = is_zero v28;
+        v88.i256 = zext v87 i256;
+        v96.i1 = is_zero v88;
+        br v96 block13 block15;
+
+    block15:
+        evm_revert 0.i256 0.i256;
+
+    block13:
+        v29.*i8 = evm_malloc 64.i256;
+        v30.i256 = ptr_to_int v29 i256;
+        v31.*@__fe_Transfer_1 = bitcast v29 *@__fe_Transfer_1;
+        v32.*i256 = bitcast v31 *i256;
+        mstore v32 0.i256 i256;
+        v35.*i256 = gep v31 0.i256 1.i256;
+        mstore v35 3.i256 i256;
+        v36.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__Transfer_hbe7d801e15d910f6__66cc42efa72ff9b1 v74 100000.i256 0.i256 v30;
+        v37.i1 = is_zero v36;
+        v38.i256 = zext v37 i256;
+        v90.i1 = is_zero v38;
+        v91.i256 = zext v90 i256;
+        v97.i1 = is_zero v91;
+        br v97 block17 block19;
+
+    block19:
+        evm_revert 0.i256 0.i256;
+
+    block17:
+        v39.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__BalanceOf_h891837b06b5610d4__9cd8cdf578aad9be v74 100000.i256 0.i256 0.i256;
+        v41.i1 = eq v39 7.i256;
+        v42.i256 = zext v41 i256;
+        v107.i1 = is_zero v42;
+        v108.i256 = zext v107 i256;
+        v109.i1 = is_zero v108;
+        br v109 block22 block24;
+
+    block24:
+        evm_revert 0.i256 0.i256;
+
+    block22:
+        v43.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__BalanceOf_h891837b06b5610d4__9cd8cdf578aad9be v74 100000.i256 0.i256 1.i256;
+        v45.i1 = eq v43 8.i256;
+        v46.i256 = zext v45 i256;
+        v110.i1 = is_zero v46;
+        v111.i256 = zext v110 i256;
+        v112.i1 = is_zero v111;
+        br v112 block26 block28;
+
+    block28:
+        evm_revert 0.i256 0.i256;
+
+    block26:
+        v47.*i8 = evm_malloc 64.i256;
+        v48.i256 = ptr_to_int v47 i256;
+        v49.*@__fe_Transfer_1 = bitcast v47 *@__fe_Transfer_1;
+        v50.*i256 = bitcast v49 *i256;
+        mstore v50 1.i256 i256;
+        v53.*i256 = gep v49 0.i256 1.i256;
         mstore v53 20.i256 i256;
-        v54.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__Transfer_hbe7d801e15d910f6__66cc42efa72ff9b1 v64 100000.i256 0.i256 v49;
+        v54.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__Transfer_hbe7d801e15d910f6__66cc42efa72ff9b1 v74 100000.i256 0.i256 v48;
         v55.i1 = eq v54 1.i256;
         v56.i256 = zext v55 i256;
-        call %assert v56;
-        v57.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__TotalSupply_h7bb395110a25abc2__8d4065b5d6bedb33 v64 100000.i256 0.i256;
-        v58.i1 = eq v57 15.i256;
-        v59.i256 = zext v58 i256;
-        call %assert v59;
-        evm_return 0.i256 0.i256;
+        v113.i1 = is_zero v56;
+        v114.i256 = zext v113 i256;
+        v115.i1 = is_zero v114;
+        br v115 block35 block32;
+
+    block32:
+        evm_revert 0.i256 0.i256;
+
+    block35:
+        v116.i256 = call %solencoder_h1b9228b90dad6928_new;
+        v118.i256 = call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head v116 4.i256;
+        mstore v118 25896525104758109717587551599753715025570125426639959714953863856948019986432.i256 i256;
+        v120.i256 = add v118 4.i256;
+        v121.*@__fe_SolEncoder_3 = int_to_ptr v116 *@__fe_SolEncoder_3;
+        v122.*i256 = gep v121 0.i256 1.i256;
+        mstore v122 v120 i256;
+        v123.i256 = call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish v116;
+        v124.*@__fe_tuple_4 = int_to_ptr v123 *@__fe_tuple_4;
+        v125.*i256 = bitcast v124 *i256;
+        v126.i256 = mload v125 i256;
+        v127.*i256 = gep v124 0.i256 1.i256;
+        v128.i256 = mload v127 i256;
+        v129.i256 = evm_call 100000.i256 v74 0.i256 v126 v128 0.i256 0.i256;
+        v130.i256 = evm_return_data_size;
+        v131.*i8 = evm_malloc v130;
+        v132.i256 = ptr_to_int v131 i256;
+        evm_return_data_copy v132 0.i256 v130;
+        v133.i1 = is_zero v129;
+        v134.i256 = zext v133 i256;
+        v135.i1 = is_zero v134;
+        br v135 block37 block36;
+
+    block36:
+        evm_revert v132 v130;
+
+    block37:
+        v136.i256 = call %decode_returndata__u256__3271ca15373d4483 v132 v130;
+        v59.i1 = eq v136 15.i256;
+        v60.i256 = zext v59 i256;
+        v137.i1 = is_zero v60;
+        v138.i256 = zext v137 i256;
+        v139.i1 = is_zero v138;
+        br v139 block38 block40;
+
+    block40:
+        evm_revert 0.i256 0.i256;
+
+    block38:
+        return;
 }
 
-func private %__Coin_recv_0_0(v0.i256, v1.i256) -> i256 {
+func private %__Contract_runtime_entry() {
     block0:
-        v3.*@__fe_Credit_0 = int_to_ptr v0 *@__fe_Credit_0;
-        v4.*i256 = bitcast v3 *i256;
-        v5.i256 = mload v4 i256;
-        v8.*i256 = gep v3 0.i256 1.i256;
-        v9.i256 = mload v8 i256;
-        v10.i1 = is_zero v5;
-        br v10 block1 block3;
-
-    block1:
-        v15.i256 = evm_sload v1;
-        v17.i256 = add v15 v9;
-        evm_sstore v1 v17;
-        v19.i256 = add v1 2.i256;
-        v20.i256 = evm_sload v19;
-        v21.i256 = add v20 v9;
-        evm_sstore v19 v21;
-        v23.i256 = evm_sload v1;
-        return v23;
-
-    block3:
-        v25.i256 = add v1 1.i256;
-        v26.i256 = evm_sload v25;
-        v28.i256 = add v26 v9;
-        evm_sstore v25 v28;
-        v30.i256 = add v1 2.i256;
-        v31.i256 = evm_sload v30;
-        v32.i256 = add v31 v9;
-        evm_sstore v30 v32;
-        v35.i256 = evm_sload v25;
-        return v35;
+        call %test_coin__StorPtr_Evm___207f35a85ac4062e;
+        evm_return 0.i256 0.i256;
 }
 
 func private %__Coin_recv_0_1(v0.i256, v1.i256) -> i256 {
@@ -261,14 +324,35 @@ func private %__Coin_runtime() {
         v62.i256 = call %soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563 v49;
         v63.i256 = call %soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563 v49;
         v64.*i8 = evm_malloc 64.i256;
-        v65.i256 = ptr_to_int v64 i256;
         v66.*@__fe_Credit_0 = bitcast v64 *@__fe_Credit_0;
         v67.*i256 = bitcast v66 *i256;
         mstore v67 v62 i256;
         v69.*i256 = gep v66 0.i256 1.i256;
         mstore v69 v63 i256;
-        v15.i256 = call %__Coin_recv_0_0 v65 0.i256;
-        call %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f v15;
+        v98.i1 = is_zero v62;
+        br v98 block24 block25;
+
+    block24:
+        v99.i256 = evm_sload 0.i256;
+        v100.i256 = add v99 v63;
+        evm_sstore 0.i256 v100;
+        v102.i256 = evm_sload 2.i256;
+        v103.i256 = add v102 v63;
+        evm_sstore 2.i256 v103;
+        jump block22;
+
+    block25:
+        v106.i256 = evm_sload 1.i256;
+        v107.i256 = add v106 v63;
+        evm_sstore 1.i256 v107;
+        v109.i256 = evm_sload 2.i256;
+        v110.i256 = add v109 v63;
+        evm_sstore 2.i256 v110;
+        jump block22;
+
+    block22:
+        v112.i256 = phi (v100 block24) (v107 block25);
+        call %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f v112;
         unreachable;
 
     block3:
@@ -347,10 +431,16 @@ func private %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__Credit_h1b
         v33.*@__fe_Credit_0 = int_to_ptr v4 *@__fe_Credit_0;
         v34.*i256 = bitcast v33 *i256;
         v35.i256 = mload v34 i256;
-        call %u256_h3271ca15373d4483_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_SolEncoder_h1b9228b90dad6928__1a070c3866d16383 v35 v27;
+        v48.i256 = mload v32 i256;
+        mstore v48 v35 i256;
+        v49.i256 = add v48 32.i256;
+        mstore v32 v49 i256;
         v37.*i256 = gep v33 0.i256 1.i256;
         v38.i256 = mload v37 i256;
-        call %u256_h3271ca15373d4483_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_SolEncoder_h1b9228b90dad6928__1a070c3866d16383 v38 v27;
+        v52.i256 = mload v32 i256;
+        mstore v52 v38 i256;
+        v53.i256 = add v52 32.i256;
+        mstore v32 v53 i256;
         v39.i256 = call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish v27;
         v8.*@__fe_tuple_4 = int_to_ptr v39 *@__fe_tuple_4;
         v9.*i256 = bitcast v8 *i256;
@@ -387,10 +477,16 @@ func private %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__Transfer_h
         v33.*@__fe_Transfer_1 = int_to_ptr v4 *@__fe_Transfer_1;
         v34.*i256 = bitcast v33 *i256;
         v35.i256 = mload v34 i256;
-        call %u256_h3271ca15373d4483_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_SolEncoder_h1b9228b90dad6928__1a070c3866d16383 v35 v27;
+        v48.i256 = mload v32 i256;
+        mstore v48 v35 i256;
+        v49.i256 = add v48 32.i256;
+        mstore v32 v49 i256;
         v37.*i256 = gep v33 0.i256 1.i256;
         v38.i256 = mload v37 i256;
-        call %u256_h3271ca15373d4483_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_SolEncoder_h1b9228b90dad6928__1a070c3866d16383 v38 v27;
+        v52.i256 = mload v32 i256;
+        mstore v52 v38 i256;
+        v53.i256 = add v52 32.i256;
+        mstore v32 v53 i256;
         v39.i256 = call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish v27;
         v8.*@__fe_tuple_4 = int_to_ptr v39 *@__fe_tuple_4;
         v9.*i256 = bitcast v8 *i256;
@@ -424,7 +520,10 @@ func private %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__BalanceOf_
         v31.*@__fe_SolEncoder_3 = int_to_ptr v27 *@__fe_SolEncoder_3;
         v32.*i256 = gep v31 0.i256 1.i256;
         mstore v32 v30 i256;
-        call %u256_h3271ca15373d4483_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_SolEncoder_h1b9228b90dad6928__1a070c3866d16383 v4 v27;
+        v41.i256 = mload v32 i256;
+        mstore v41 v4 i256;
+        v42.i256 = add v41 32.i256;
+        mstore v32 v42 i256;
         v33.i256 = call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish v27;
         v8.*@__fe_tuple_4 = int_to_ptr v33 *@__fe_tuple_4;
         v9.*i256 = bitcast v8 *i256;
@@ -447,39 +546,6 @@ func private %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__BalanceOf_
     block2:
         v26.i256 = call %decode_returndata__u256__3271ca15373d4483 v18 v16;
         return v26;
-}
-
-func private %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__TotalSupply_h7bb395110a25abc2__8d4065b5d6bedb33(v1.i256, v2.i256, v3.i256) -> i256 {
-    block0:
-        v25.i256 = call %solencoder_h1b9228b90dad6928_new;
-        v26.i256 = call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head v25 4.i256;
-        mstore v26 25896525104758109717587551599753715025570125426639959714953863856948019986432.i256 i256;
-        v28.i256 = add v26 4.i256;
-        v29.*@__fe_SolEncoder_3 = int_to_ptr v25 *@__fe_SolEncoder_3;
-        v30.*i256 = gep v29 0.i256 1.i256;
-        mstore v30 v28 i256;
-        v31.i256 = call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish v25;
-        v7.*@__fe_tuple_4 = int_to_ptr v31 *@__fe_tuple_4;
-        v8.*i256 = bitcast v7 *i256;
-        v9.i256 = mload v8 i256;
-        v12.*i256 = gep v7 0.i256 1.i256;
-        v13.i256 = mload v12 i256;
-        v14.i256 = evm_call v2 v1 v3 v9 v13 0.i256 0.i256;
-        v15.i256 = evm_return_data_size;
-        v16.*i8 = evm_malloc v15;
-        v17.i256 = ptr_to_int v16 i256;
-        evm_return_data_copy v17 0.i256 v15;
-        v18.i1 = is_zero v14;
-        v19.i256 = zext v18 i256;
-        v32.i1 = is_zero v19;
-        br v32 block2 block1;
-
-    block1:
-        evm_revert v17 v15;
-
-    block2:
-        v25.i256 = call %decode_returndata__u256__3271ca15373d4483 v17 v15;
-        return v25;
 }
 
 func public %alloc(v0.i256) -> i256 {
@@ -515,7 +581,12 @@ func private %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4
     block0:
         v3.i256 = call %solencoder_h1b9228b90dad6928_new;
         v5.i256 = call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head v3 32.i256;
-        call %u256_h3271ca15373d4483_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_SolEncoder_h1b9228b90dad6928__1a070c3866d16383 v1 v3;
+        v14.*@__fe_SolEncoder_3 = int_to_ptr v3 *@__fe_SolEncoder_3;
+        v15.*i256 = gep v14 0.i256 1.i256;
+        v16.i256 = mload v15 i256;
+        mstore v16 v1 i256;
+        v17.i256 = add v16 32.i256;
+        mstore v15 v17 i256;
         v6.i256 = call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish v3;
         v7.*@__fe_tuple_4 = int_to_ptr v6 *@__fe_tuple_4;
         v8.*i256 = bitcast v7 *i256;
@@ -627,17 +698,6 @@ func private %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_
     block2:
         v25.i256 = mload v4 i256;
         return v25;
-}
-
-func private %u256_h3271ca15373d4483_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_SolEncoder_h1b9228b90dad6928__1a070c3866d16383(v0.i256, v1.i256) {
-    block0:
-        v5.*@__fe_SolEncoder_3 = int_to_ptr v1 *@__fe_SolEncoder_3;
-        v6.*i256 = gep v5 0.i256 1.i256;
-        v7.i256 = mload v6 i256;
-        mstore v7 v0 i256;
-        v8.i256 = add v7 32.i256;
-        mstore v6 v8 i256;
-        return;
 }
 
 func private %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish(v0.i256) -> i256 {
