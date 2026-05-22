@@ -32,6 +32,7 @@ use super::{
     branch_canonicalize::BranchCanonicalize,
     cfg_cleanup::CfgCleanup,
     checked_arith_elim::{CheckedArithElim, has_supported_checked_arith},
+    code_sink::CodeSink,
     dead_arg::{DeadArgElimConfig, run_dead_arg_elim},
     dead_func::{DeadFuncElimConfig, collect_object_roots, run_dead_func_elim},
     gvn::GvnSolver,
@@ -82,6 +83,8 @@ pub enum Pass {
     Licm,
     /// Loop strength reduction for affine memory addresses.
     LoopStrengthReduce,
+    /// Sink pure instructions into the blocks that use their results.
+    CodeSink,
     /// Complete Global Value Numbering (legacy sparse predicated solver).
     Gvn,
     /// Recompute `dfg.users` from layout-inserted instructions only.
@@ -176,6 +179,11 @@ impl Pass {
                 needs_func_behavior: false,
                 invalidates_func_behavior: true,
             },
+            Pass::CodeSink => PassInfo {
+                name: "code_sink",
+                needs_func_behavior: false,
+                invalidates_func_behavior: false,
+            },
             Pass::Gvn => PassInfo {
                 name: "gvn",
                 needs_func_behavior: true,
@@ -209,7 +217,7 @@ impl Pass {
     }
 
     const fn invalidates_object_facts(self) -> bool {
-        !matches!(self, Pass::RebuildUsers)
+        !matches!(self, Pass::CodeSink | Pass::RebuildUsers)
     }
 }
 
@@ -278,6 +286,7 @@ const PRIMARY_FUNC_PASSES: &[Pass] = &[
     Pass::KnownBitsSimplify,
     Pass::Sccp,
     Pass::BranchCanonicalize,
+    Pass::CodeSink,
     Pass::CfgCleanup,
 ];
 
@@ -294,6 +303,7 @@ const SECONDARY_FUNC_PASSES: &[Pass] = &[
     Pass::ScalarCanonicalize,
     Pass::Gvn,
     Pass::BranchCanonicalize,
+    Pass::CodeSink,
     Pass::CfgCleanup,
 ];
 
@@ -301,6 +311,7 @@ const POST_DEAD_ARG_CLEANUP_PASSES: &[Pass] = &[
     Pass::CfgCleanup,
     Pass::Sccp,
     Pass::BranchCanonicalize,
+    Pass::CodeSink,
     Pass::CfgCleanup,
 ];
 
@@ -310,6 +321,7 @@ const POST_INLINE_CLEANUP_PASSES: &[Pass] = &[
     Pass::BranchCanonicalize,
     Pass::Sccp,
     Pass::ScalarCanonicalize,
+    Pass::CodeSink,
     Pass::CfgCleanup,
 ];
 
@@ -925,6 +937,24 @@ fn run_pass(
                     trace_span!("sonatina.optim.pipeline.loop_strength_reduce.solve").entered();
                 LoopStrengthReduce::new().run(func, &mut ctx.cfg, &mut ctx.domtree, &mut ctx.lpt)
             }
+        }
+        Pass::CodeSink => {
+            let _span = trace_span!("sonatina.optim.pipeline.pass.code_sink").entered();
+            {
+                let _span = trace_span!("sonatina.optim.pipeline.code_sink.compute_cfg").entered();
+                ctx.cfg.compute(func);
+            }
+            {
+                let _span =
+                    trace_span!("sonatina.optim.pipeline.code_sink.compute_domtree").entered();
+                ctx.domtree.compute(&ctx.cfg);
+            }
+            {
+                let _span =
+                    trace_span!("sonatina.optim.pipeline.code_sink.compute_looptree").entered();
+                ctx.lpt.compute(&ctx.cfg, &ctx.domtree);
+            }
+            CodeSink::new().run(func, &mut ctx.cfg, &mut ctx.domtree, &mut ctx.lpt)
         }
         Pass::Gvn => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.gvn").entered();

@@ -6,16 +6,16 @@ input_file: test_files/evm/aggregate_legalize.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=s
 
 object: Contract
-  section runtime: 29 bytes
-  total: 29 bytes
+  section runtime: 25 bytes
+  total: 25 bytes
 
 functions:
   mem: global_dyn_base=0x0 arena_base=0x0 scratch_peak_words=0 static_chain_peak_words=0
-  entry: ir_blocks=4 ir_insts=10 vcode_ops=25 fixups=2 imm_bytes=2
+  entry: ir_blocks=4 ir_insts=10 vcode_ops=21 fixups=2 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=64 success reason=Return gas_used=21339 gas_refunded=0 logs=0 output=call len=32 tx_gas=21280 runtime_gas=59
+  case ok: calldata_len=64 success reason=Return gas_used=21334 gas_refunded=0 logs=0 output=call len=32 tx_gas=21280 runtime_gas=54
 
 
 --------------- DEBUG ---------------
@@ -27,25 +27,21 @@ entry:
     CALLDATALOAD
     PUSH1 0x20 (32)  // v4.i256 = evm_calldata_load v3;
     CALLDATALOAD
-    DUP1  // v5.i256 = add v2 v4;
-    DUP3
-    ADD
-    DUP3  // br v2 block2 block4;
+    DUP2  // br v2 block2 block4;
     PUSH1 block2
     JUMPI
   block4:
-    SWAP1  // jump block3;
-    POP
-    SWAP1
+    DUP2  // jump block3;
     PUSH1 block3
     JUMP
   block2:
     JUMPDEST
-    SWAP2  // jump block3;
-    POP
+    DUP1  // jump block3;
   block3:
     JUMPDEST
-    ADD  // v7.i256 = add v5 v0;
+    SWAP2  // v6.i256 = add v2 v4;
+    ADD
+    ADD  // v7.i256 = add v6 v0;
     PUSH0  // evm_mstore v1 v7;
     MSTORE
     PUSH1 0x20 (32)  // evm_return v1 v3;

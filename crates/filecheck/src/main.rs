@@ -2,7 +2,7 @@ use sonatina_filecheck::{
     FileCheckRunner, adce::AdceTransform, aggregate_combine::AggregateCombineTransform,
     aggregate_scalarize::AggregateScalarizeTransform,
     branch_canonicalize::BranchCanonicalizeTransform, cfg_cleanup::CfgCleanupTransform,
-    checked_arith_elim::CheckedArithElimTransform, gvn::GvnTransform,
+    checked_arith_elim::CheckedArithElimTransform, code_sink::CodeSinkTransform, gvn::GvnTransform,
     known_bits_simplify::KnownBitsSimplifyTransform, licm::LicmTransformer,
     load_store::LoadStoreTransform, loop_strength_reduce::LoopStrengthReduceTransform,
     range_branch_simplify::RangeBranchSimplifyTransform, sccp::SccpTransform,
@@ -46,6 +46,9 @@ fn main() {
     runner.run();
 
     runner.attach_transformer(LoopStrengthReduceTransform::default());
+    runner.run();
+
+    runner.attach_transformer(CodeSinkTransform::default());
     runner.run();
 
     runner.print_results();

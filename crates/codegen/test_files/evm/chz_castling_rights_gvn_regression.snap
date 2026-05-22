@@ -6,8 +6,8 @@ input_file: test_files/evm/chz_castling_rights_gvn_regression.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 1448 bytes
-  total: 1448 bytes
+  section runtime: 1447 bytes
+  total: 1447 bytes
 
 functions:
   mem: global_dyn_base=0x7e0 arena_base=0xa0 scratch_peak_words=1 static_chain_peak_words=57
@@ -19,11 +19,11 @@ functions:
     mem: scratch_words=1 stable_words=0 stable_mode=None entry_abs_words=58 abs_words_end=1
   main_root: ir_blocks=1 ir_insts=5 vcode_ops=16 fixups=2 imm_bytes=3
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=1 abs_words_end=0
-  validate_rook_capture: ir_blocks=25 ir_insts=86 vcode_ops=328 fixups=25 imm_bytes=86
+  validate_rook_capture: ir_blocks=25 ir_insts=86 vcode_ops=327 fixups=25 imm_bytes=86
     mem: scratch_words=0 stable_words=28 stable_mode=StaticAbs(base=0xc0) entry_abs_words=1 abs_words_end=29
 
 evm:
-  case captured_rook_clears_castling_rights: calldata_len=0 success reason=Return gas_used=23992 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=2992
+  case captured_rook_clears_castling_rights: calldata_len=0 success reason=Return gas_used=23989 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=2989
 
 
 --------------- DEBUG ---------------
@@ -1005,14 +1005,13 @@ validate_rook_capture:
     PUSH0  // jump block12;
   block12:
     JUMPDEST
-    SWAP1  // v145.i256 = and v1 v144;
+    PUSH1 0x9 (9)  // v145.i256 = shl v144 v2;
+    SHL
+    SWAP1  // v147.i256 = and v1 v146;
     PUSH3 0x1fe00 (130560)
     NOT
     AND
-    SWAP1  // v147.i256 = shl v146 v2;
-    PUSH1 0x9 (9)
-    SHL
-    OR  // v148.i256 = or v145 v147;
+    OR  // v148.i256 = or v147 v145;
     PUSH5 0x1fffe0000 (8589803520)  // v150.i256 = and v148 v149;
     NOT
     AND
