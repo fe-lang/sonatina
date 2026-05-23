@@ -1,0 +1,494 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: "String::from_utf8(out).unwrap()"
+input_file: test_files/evm/spilled_phi_object_interference.sntn
+---
+evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
+
+object: Contract
+  section runtime: 652 bytes
+  total: 652 bytes
+
+functions:
+  mem: global_dyn_base=0x560 arena_base=0x40 scratch_peak_words=0 static_chain_peak_words=41
+  join: ir_blocks=4 ir_insts=83 vcode_ops=445 fixups=2 imm_bytes=123
+    mem: scratch_words=0 stable_words=41 stable_mode=StaticAbs(base=0x40) entry_abs_words=0 abs_words_end=41
+  entry: ir_blocks=1 ir_insts=5 vcode_ops=14 fixups=2 imm_bytes=2
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
+
+evm:
+  case left: calldata_len=32 success reason=Return gas_used=21994 gas_refunded=0 logs=0 output=call len=32 tx_gas=21128 runtime_gas=866
+  case right: calldata_len=32 success reason=Return gas_used=22052 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=912
+
+
+--------------- DEBUG ---------------
+
+// func private %join(v0.i256, v1.i256) -> i256
+join:
+  block0:
+    JUMPDEST
+    ISZERO  // br v0 block1 block2;
+    PUSH1 block2
+    JUMPI
+  block1:
+    PUSH1 0x1 (1)  // v23.i256 = add v1 v22;
+    DUP2
+    ADD
+    DUP1
+    PUSH0
+    MSTORE
+    PUSH1 0x2 (2)  // v25.i256 = add v1 v24;
+    DUP3
+    ADD
+    DUP1
+    PUSH1 0x20 (32)
+    MSTORE
+    PUSH1 0x3 (3)  // v27.i256 = add v1 v26;
+    DUP4
+    ADD
+    DUP1
+    PUSH1 0xe0 (224)
+    MSTORE
+    PUSH1 0x4 (4)  // v29.i256 = add v1 v28;
+    DUP5
+    ADD
+    DUP1
+    PUSH2 0x100 (256)
+    MSTORE
+    PUSH1 0x5 (5)  // v31.i256 = add v1 v30;
+    DUP6
+    ADD
+    DUP1
+    PUSH2 0x120 (288)
+    MSTORE
+    PUSH1 0x6 (6)  // v33.i256 = add v1 v32;
+    DUP7
+    ADD
+    DUP1
+    PUSH2 0x140 (320)
+    MSTORE
+    PUSH1 0x7 (7)  // v35.i256 = add v1 v34;
+    DUP8
+    ADD
+    DUP1
+    PUSH2 0x160 (352)
+    MSTORE
+    PUSH1 0x8 (8)  // v37.i256 = add v1 v36;
+    DUP9
+    ADD
+    DUP1
+    PUSH2 0x180 (384)
+    MSTORE
+    PUSH1 0x9 (9)  // v39.i256 = add v1 v38;
+    DUP10
+    ADD
+    DUP1
+    PUSH2 0x1a0 (416)
+    MSTORE
+    PUSH1 0xa (10)  // v41.i256 = add v1 v40;
+    DUP11
+    ADD
+    DUP1
+    PUSH2 0x1c0 (448)
+    MSTORE
+    PUSH1 0xb (11)  // v43.i256 = add v1 v42;
+    DUP12
+    ADD
+    DUP1
+    PUSH2 0x1e0 (480)
+    MSTORE
+    PUSH1 0xc (12)  // v45.i256 = add v1 v44;
+    DUP13
+    ADD
+    DUP1
+    PUSH2 0x200 (512)
+    MSTORE
+    PUSH1 0xd (13)  // v47.i256 = add v1 v46;
+    DUP14
+    ADD
+    DUP1
+    PUSH2 0x220 (544)
+    MSTORE
+    PUSH1 0xe (14)  // v49.i256 = add v1 v48;
+    DUP15
+    ADD
+    DUP1
+    PUSH2 0x240 (576)
+    MSTORE
+    PUSH1 0xf (15)  // v51.i256 = add v1 v50;
+    DUP16
+    ADD
+    DUP1
+    PUSH2 0x260 (608)
+    MSTORE
+    DUP16  // v53.i256 = add v1 v52;
+    PUSH1 0x10 (16)
+    ADD
+    DUP1
+    PUSH2 0x280 (640)
+    MSTORE
+    SWAP16  // v55.i256 = add v1 v54;
+    DUP1
+    PUSH1 0x11 (17)
+    ADD
+    DUP1
+    PUSH2 0x2a0 (672)
+    MSTORE
+    PUSH1 0x12 (18)  // v57.i256 = add v1 v56;
+    DUP3
+    ADD
+    DUP1
+    PUSH2 0x2c0 (704)
+    MSTORE
+    PUSH1 0x13 (19)  // v59.i256 = add v1 v58;
+    DUP4
+    ADD
+    DUP1
+    PUSH2 0x2e0 (736)
+    MSTORE
+    SWAP3  // v61.i256 = add v1 v60;
+    PUSH1 0x14 (20)
+    ADD
+    DUP1
+    PUSH2 0x300 (768)
+    MSTORE
+    PUSH2 0x280 (640)  // jump block3;
+    MLOAD
+    PUSH1 0x40 (64)
+    MSTORE
+    DUP3
+    PUSH1 0x60 (96)
+    MSTORE
+    DUP2
+    PUSH1 0x80 (128)
+    MSTORE
+    DUP4
+    PUSH1 0xa0 (160)
+    MSTORE
+    DUP1
+    PUSH1 0xc0 (192)
+    MSTORE
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    PUSH2 0x260 (608)
+    MLOAD
+    PUSH2 0x240 (576)
+    MLOAD
+    PUSH2 0x220 (544)
+    MLOAD
+    PUSH2 0x200 (512)
+    MLOAD
+    PUSH2 0x1e0 (480)
+    MLOAD
+    PUSH2 0x1c0 (448)
+    MLOAD
+    PUSH2 0x1a0 (416)
+    MLOAD
+    PUSH2 0x180 (384)
+    MLOAD
+    PUSH2 0x160 (352)
+    MLOAD
+    PUSH2 0x140 (320)
+    MLOAD
+    PUSH2 0x120 (288)
+    MLOAD
+    PUSH2 0x100 (256)
+    MLOAD
+    PUSH1 0xe0 (224)
+    MLOAD
+    PUSH1 0x20 (32)
+    MLOAD
+    PUSH0
+    MLOAD
+    PUSH1 block3
+    JUMP
+  block2:
+    JUMPDEST
+    PUSH1 0x65 (101)  // v63.i256 = add v1 v62;
+    DUP2
+    ADD
+    DUP1
+    PUSH0
+    MSTORE
+    PUSH1 0x66 (102)  // v65.i256 = add v1 v64;
+    DUP3
+    ADD
+    DUP1
+    PUSH1 0x20 (32)
+    MSTORE
+    PUSH1 0x67 (103)  // v67.i256 = add v1 v66;
+    DUP4
+    ADD
+    DUP1
+    PUSH2 0x320 (800)
+    MSTORE
+    PUSH1 0x68 (104)  // v69.i256 = add v1 v68;
+    DUP5
+    ADD
+    DUP1
+    PUSH2 0x340 (832)
+    MSTORE
+    PUSH1 0x69 (105)  // v71.i256 = add v1 v70;
+    DUP6
+    ADD
+    DUP1
+    PUSH2 0x360 (864)
+    MSTORE
+    PUSH1 0x6a (106)  // v73.i256 = add v1 v72;
+    DUP7
+    ADD
+    DUP1
+    PUSH2 0x380 (896)
+    MSTORE
+    PUSH1 0x6b (107)  // v75.i256 = add v1 v74;
+    DUP8
+    ADD
+    DUP1
+    PUSH2 0x3a0 (928)
+    MSTORE
+    PUSH1 0x6c (108)  // v77.i256 = add v1 v76;
+    DUP9
+    ADD
+    DUP1
+    PUSH2 0x3c0 (960)
+    MSTORE
+    PUSH1 0x6d (109)  // v79.i256 = add v1 v78;
+    DUP10
+    ADD
+    DUP1
+    PUSH2 0x3e0 (992)
+    MSTORE
+    PUSH1 0x6e (110)  // v81.i256 = add v1 v80;
+    DUP11
+    ADD
+    DUP1
+    PUSH2 0x400 (1024)
+    MSTORE
+    PUSH1 0x6f (111)  // v83.i256 = add v1 111.i256;
+    DUP12
+    ADD
+    DUP1
+    PUSH2 0x420 (1056)
+    MSTORE
+    PUSH1 0x70 (112)  // v85.i256 = add v1 112.i256;
+    DUP13
+    ADD
+    DUP1
+    PUSH2 0x440 (1088)
+    MSTORE
+    PUSH1 0x71 (113)  // v87.i256 = add v1 113.i256;
+    DUP14
+    ADD
+    DUP1
+    PUSH2 0x460 (1120)
+    MSTORE
+    PUSH1 0x72 (114)  // v89.i256 = add v1 114.i256;
+    DUP15
+    ADD
+    DUP1
+    PUSH2 0x480 (1152)
+    MSTORE
+    PUSH1 0x73 (115)  // v91.i256 = add v1 115.i256;
+    DUP16
+    ADD
+    DUP1
+    PUSH2 0x4a0 (1184)
+    MSTORE
+    DUP16  // v93.i256 = add v1 116.i256;
+    PUSH1 0x74 (116)
+    ADD
+    DUP1
+    PUSH2 0x4c0 (1216)
+    MSTORE
+    SWAP16  // v95.i256 = add v1 117.i256;
+    DUP1
+    PUSH1 0x75 (117)
+    ADD
+    DUP1
+    PUSH2 0x4e0 (1248)
+    MSTORE
+    PUSH1 0x76 (118)  // v97.i256 = add v1 118.i256;
+    DUP3
+    ADD
+    DUP1
+    PUSH2 0x500 (1280)
+    MSTORE
+    PUSH1 0x77 (119)  // v99.i256 = add v1 119.i256;
+    DUP4
+    ADD
+    DUP1
+    PUSH2 0x520 (1312)
+    MSTORE
+    SWAP3  // v101.i256 = add v1 120.i256;
+    PUSH1 0x78 (120)
+    ADD
+    DUP1
+    PUSH2 0x540 (1344)
+    MSTORE
+    PUSH2 0x4c0 (1216)  // jump block3;
+    MLOAD
+    PUSH1 0x40 (64)
+    MSTORE
+    DUP3
+    PUSH1 0x60 (96)
+    MSTORE
+    DUP2
+    PUSH1 0x80 (128)
+    MSTORE
+    DUP4
+    PUSH1 0xa0 (160)
+    MSTORE
+    DUP1
+    PUSH1 0xc0 (192)
+    MSTORE
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    PUSH2 0x4a0 (1184)
+    MLOAD
+    PUSH2 0x480 (1152)
+    MLOAD
+    PUSH2 0x460 (1120)
+    MLOAD
+    PUSH2 0x440 (1088)
+    MLOAD
+    PUSH2 0x420 (1056)
+    MLOAD
+    PUSH2 0x400 (1024)
+    MLOAD
+    PUSH2 0x3e0 (992)
+    MLOAD
+    PUSH2 0x3c0 (960)
+    MLOAD
+    PUSH2 0x3a0 (928)
+    MLOAD
+    PUSH2 0x380 (896)
+    MLOAD
+    PUSH2 0x360 (864)
+    MLOAD
+    PUSH2 0x340 (832)
+    MLOAD
+    PUSH2 0x320 (800)
+    MLOAD
+    PUSH1 0x20 (32)
+    MLOAD
+    PUSH0
+    MLOAD
+  block3:
+    JUMPDEST
+    PUSH1 0xa0 (160)  // v102.i256 = add v21 v20;
+    MLOAD
+    PUSH1 0xc0 (192)
+    MLOAD
+    ADD
+    PUSH1 0x80 (128)  // v103.i256 = add v102 v19;
+    MLOAD
+    ADD
+    PUSH1 0x60 (96)  // v104.i256 = add v103 v18;
+    MLOAD
+    ADD
+    PUSH1 0x40 (64)  // v105.i256 = add v104 v17;
+    MLOAD
+    ADD
+    DUP16  // v106.i256 = add v105 v16;
+    ADD
+    DUP15  // v107.i256 = add v106 v15;
+    ADD
+    DUP14  // v108.i256 = add v107 v14;
+    ADD
+    DUP13  // v109.i256 = add v108 v13;
+    ADD
+    DUP12  // v110.i256 = add v109 v12;
+    ADD
+    DUP11  // v111.i256 = add v110 v11;
+    ADD
+    DUP10  // v112.i256 = add v111 v10;
+    ADD
+    DUP9  // v113.i256 = add v112 v9;
+    ADD
+    DUP8  // v114.i256 = add v113 v8;
+    ADD
+    DUP7  // v115.i256 = add v114 v7;
+    ADD
+    DUP6  // v116.i256 = add v115 v6;
+    ADD
+    SWAP1  // v117.i256 = add v116 v5;
+    SWAP2
+    SWAP3
+    SWAP4
+    ADD
+    SWAP1  // v118.i256 = add v117 v4;
+    SWAP2
+    SWAP3
+    ADD
+    SWAP1  // v119.i256 = add v118 v3;
+    SWAP2
+    ADD
+    ADD  // v120.i256 = add v119 v2;
+    SWAP11  // return v120;
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    POP
+    SWAP1
+    JUMP
+
+// func public %entry()
+entry:
+  block0:
+    PUSH0  // v1.i256 = evm_calldata_load v0;
+    CALLDATALOAD
+    ISZERO  // v2.i256 = is_zero v1;
+    PUSH1 0xa (10)  // v4.i256 = call %join v2 10.i256;
+    PUSH1 `pc + (4)`
+    SWAP2
+    PUSH1 FuncRef(0)
+    JUMP
+    JUMPDEST
+    PUSH0  // evm_mstore v0 v4;
+    MSTORE
+    PUSH1 0x20 (32)  // evm_return v0 32.i256;
+    PUSH0
+    RETURN

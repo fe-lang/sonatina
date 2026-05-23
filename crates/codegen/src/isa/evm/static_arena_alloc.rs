@@ -767,6 +767,7 @@ mod tests {
                 start_boundary,
                 end_boundary,
             }]),
+            phi_edges: BitSet::default(),
             first_rank: start_boundary,
             last_rank: end_boundary,
         }

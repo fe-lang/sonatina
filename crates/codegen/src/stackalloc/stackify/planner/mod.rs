@@ -214,52 +214,6 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
             .emit_store_if_spilled_at_depth(v, depth as u8, self.actions);
     }
 
-    pub(super) fn emit_store_spilled_value_from_source(
-        &mut self,
-        spilled_value: ValueId,
-        source: ValueId,
-    ) {
-        if !self.mem.spill_set().contains(spilled_value) {
-            return;
-        }
-
-        if self.ctx.func.dfg.value_is_imm(source) {
-            let imm = self
-                .ctx
-                .func
-                .dfg
-                .value_imm(source)
-                .expect("imm value missing payload");
-            self.actions.push(Action::Push(imm));
-            self.mem
-                .emit_store_for_spilled_value(spilled_value, self.actions);
-        } else if let Some(pos) = self
-            .stack
-            .find_reachable_value(source, self.ctx.reach.dup_max)
-        {
-            self.actions.push(Action::StackDup(pos as u8));
-            self.mem
-                .emit_store_for_spilled_value(spilled_value, self.actions);
-        } else if let Some(pos) = self
-            .stack
-            .find_reachable_value(source, self.ctx.reach.swap_max)
-        {
-            self.stack.stable_rotate_to_top(pos, self.actions);
-            self.stack.dup(0, self.actions);
-            self.mem
-                .emit_store_for_spilled_value(spilled_value, self.actions);
-            self.stack.pop_operand();
-            for depth in (1..=pos).rev() {
-                self.stack.swap(depth, self.actions);
-            }
-        } else {
-            let act = self.mem.load_frame_slot_or_placeholder(source);
-            self.actions.push(act);
-            self.mem
-                .emit_store_for_spilled_value(spilled_value, self.actions);
-        }
-    }
-
     fn push_value_from_spill_slot_or_mark(&mut self, load_from: ValueId, stack_as: ValueId) {
         debug_assert!(
             !self.ctx.func.dfg.value_is_imm(load_from),
