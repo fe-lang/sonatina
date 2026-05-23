@@ -4,6 +4,7 @@ pub mod aggregate_scalarize;
 pub mod branch_canonicalize;
 pub mod cfg_cleanup;
 pub mod checked_arith_elim;
+pub mod code_sink;
 pub mod gvn;
 pub mod insn_simplify;
 pub mod known_bits_simplify;

@@ -97,7 +97,6 @@ func public %run() {
         v40.i256 = add v23 160.i256;
         v42.i256 = extract_value v21 5.i256;
         mstore v40 v42 i256;
-        v44.i256 = add v23 192.i256;
         v45.i1 = extract_value v21 6.i256;
         br v45 block6 block7;
 
@@ -106,6 +105,7 @@ func public %run() {
 
     block7:
         v46.i256 = phi (1.i256 block6) (0.i256 block4);
+        v44.i256 = add v23 192.i256;
         mstore v44 v46 i256;
         evm_return v23 224.i256;
 

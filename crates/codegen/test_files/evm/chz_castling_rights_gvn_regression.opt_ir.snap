@@ -319,17 +319,12 @@ func private %validate_rook_capture() -> @layout_5 {
         v148.@layout_2 = obj.load v0;
         enum.assert_variant v148 #Ok;
         v149.@layout_1 = enum.extract v148 #Ok 0.i256;
-        v152.i256 = extract_value v149 0.i256;
-        v154.i256 = extract_value v149 1.i256;
-        v156.i1 = extract_value v149 2.i256;
-        v158.i1 = extract_value v149 3.i256;
-        v160.i1 = extract_value v149 4.i256;
-        v162.i8 = extract_value v149 5.i256;
         v164.i1 = extract_value v149 6.i256;
         br v164 block37 block35;
 
     block35:
         v322.i8 = phi (3.i8 block31) (v196 block37);
+        v162.i8 = extract_value v149 5.i256;
         v288.i1 = is_zero v162;
         br v288 block41 block39;
 
@@ -353,11 +348,13 @@ func private %validate_rook_capture() -> @layout_5 {
         mstore v8 v222 i8;
         v223.i256 = mload v8 i256;
         v224.i8 = trunc v223 i8;
+        v154.i256 = extract_value v149 1.i256;
         v388.i256 = and v154 -31.i256;
         v389.i256 = zext v224 i256;
         v390.i256 = and v389 15.i256;
         v391.i256 = shl 1.i256 v390;
         v392.i256 = or v388 v391;
+        v160.i1 = extract_value v149 4.i256;
         br v160 block61 block62;
 
     block61:
@@ -371,30 +368,33 @@ func private %validate_rook_capture() -> @layout_5 {
 
     block63:
         v392.i256 = phi (v396 block61) (v405 block62);
+        v158.i1 = extract_value v149 3.i256;
         br v158 block66 block67;
 
     block66:
         v266.i16 = phi (v264 block83) (0.i16 block63) (0.i16 block67);
-        v412.i256 = and v392 -130561.i256;
-        v413.i256 = zext v266 i256;
-        v414.i256 = and v413 255.i256;
-        v415.i256 = shl 9.i256 v414;
-        v416.i256 = or v412 v415;
         mstore v17 2.i16 i16;
         v277.i256 = mload v17 i256;
         v278.i16 = trunc v277 i16;
-        v422.i256 = and v416 -8589803521.i256;
         v423.i256 = zext v278 i256;
         v424.i256 = shl 17.i256 v423;
+        v417.i256 = zext v266 i256;
+        v418.i256 = and v417 255.i256;
+        v419.i256 = shl 9.i256 v418;
+        v416.i256 = and v392 -130561.i256;
+        v420.i256 = or v416 v419;
+        v422.i256 = and v420 -8589803521.i256;
         v425.i256 = or v422 v424;
         v428.i256 = and v425 -2.i256;
         v429.i256 = or v428 1.i256;
+        v152.i256 = extract_value v149 0.i256;
         v301.@layout_4 = insert_value undef.@layout_4 0.i256 v152;
         v302.@layout_4 = insert_value v301 1.i256 v429;
         v292.@layout_5 = enum.make @layout_5 #Ok v302;
         jump block29;
 
     block67:
+        v156.i1 = extract_value v149 2.i256;
         br v156 block66 block83;
 
     block71:
