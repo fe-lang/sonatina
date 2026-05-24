@@ -1,6 +1,7 @@
 pub mod bitset;
 pub mod builder;
 pub mod cfg;
+pub mod debug;
 pub mod dfg;
 pub mod effects;
 pub mod func_cursor;
@@ -25,6 +26,10 @@ mod bigint;
 pub use bigint::{I256, U256};
 pub use builder::Variable;
 pub use cfg::ControlFlowGraph;
+pub use debug::{
+    DebugConfidence, DebugLoc, DebugLocId, DebugMetadata, DebugTag, DebugTagId, DebugTagKind,
+    DebugTagPayload, FrontendOriginId, FrontendOriginKind, FrontendOriginRecord, SourceSpan,
+};
 pub use dfg::{Block, BlockId, DataFlowGraph};
 pub use effects::{
     AccessKind, AccessLoc, AddressSpaceDesc, AddressSpaceId, AddressSpaceInfo, AddressSpaceKind,
