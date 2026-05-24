@@ -5,6 +5,7 @@ use crate::{BuildCtx, Error, ast};
 
 super::impl_inst_build! {Mload, (addr: ValueId, ty: Type)}
 super::impl_inst_build! {Mstore, (addr: ValueId, value: ValueId, ty: Type)}
+super::impl_inst_build! {Memzero, (dest: ValueId, len: ValueId)}
 super::impl_inst_build_common! {Gep, build_gep}
 super::impl_inst_build! {GetFunctionPtr, (func: FuncRef)}
 super::impl_inst_build_common! {SymAddr, build_sym_addr}
