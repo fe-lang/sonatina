@@ -28,8 +28,9 @@ pub use bigint::{I256, U256};
 pub use builder::Variable;
 pub use cfg::ControlFlowGraph;
 pub use debug::{
-    DebugConfidence, DebugLoc, DebugLocId, DebugMetadata, DebugTag, DebugTagId, DebugTagKind,
-    DebugTagPayload, FrontendOriginId, FrontendOriginKind, FrontendOriginRecord, SourceSpan,
+    DebugConfidence, DebugInstBundle, DebugLoc, DebugLocId, DebugMetadata, DebugTag, DebugTagId,
+    DebugTagKind, DebugTagPayload, FrontendOriginId, FrontendOriginKind, FrontendOriginRecord,
+    SourceSpan,
 };
 pub use dfg::{Block, BlockId, DataFlowGraph};
 pub use effects::{

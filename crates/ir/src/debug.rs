@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use cranelift_entity::{PrimaryMap, SecondaryMap, entity_impl};
 
 use crate::InstId;
@@ -104,6 +106,13 @@ pub struct DebugTag {
     pub payload: DebugTagPayload,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DebugInstBundle {
+    frontend_origins: BTreeMap<FrontendOriginId, FrontendOriginRecord>,
+    loc: Option<DebugLoc>,
+    tags: Vec<DebugTag>,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct DebugMetadata {
     frontend_origins: PrimaryMap<FrontendOriginId, FrontendOriginRecord>,
@@ -185,4 +194,83 @@ impl DebugMetadata {
         self.inst_locs[to] = self.inst_debug_loc(from);
         self.inst_tags[to] = self.inst_debug_tags(from).to_vec();
     }
+
+    pub fn inst_debug_bundle(&self, inst: InstId) -> DebugInstBundle {
+        let loc = self
+            .inst_debug_loc(inst)
+            .and_then(|loc| self.debug_loc(loc).cloned());
+        let tags: Vec<_> = self
+            .inst_debug_tags(inst)
+            .iter()
+            .filter_map(|&tag| self.debug_tag(tag).cloned())
+            .collect();
+
+        let mut frontend_origins = BTreeMap::new();
+        if let Some(loc) = &loc {
+            self.collect_origin(loc.primary_origin, &mut frontend_origins);
+        }
+        for tag in &tags {
+            self.collect_origin(tag.origin, &mut frontend_origins);
+        }
+
+        DebugInstBundle {
+            frontend_origins,
+            loc,
+            tags,
+        }
+    }
+
+    pub fn apply_inst_debug_bundle(
+        &mut self,
+        inst: InstId,
+        bundle: &DebugInstBundle,
+        appended_tag: Option<DebugTagId>,
+    ) {
+        self.clear_inst_debug(inst);
+
+        let mut origin_map = BTreeMap::new();
+        for (&old_origin, record) in &bundle.frontend_origins {
+            let new_origin = self.add_frontend_origin(record.clone());
+            origin_map.insert(old_origin, new_origin);
+        }
+
+        if let Some(mut loc) = bundle.loc.clone() {
+            loc.primary_origin = map_origin(loc.primary_origin, &origin_map);
+            let loc = self.add_debug_loc(loc);
+            self.set_inst_debug_loc(inst, loc);
+        }
+
+        for mut tag in bundle.tags.clone() {
+            tag.origin = map_origin(tag.origin, &origin_map);
+            let tag = self.add_debug_tag(tag);
+            self.add_inst_debug_tag(inst, tag);
+        }
+
+        if let Some(tag) = appended_tag {
+            self.add_inst_debug_tag(inst, tag);
+        }
+    }
+
+    fn collect_origin(
+        &self,
+        origin: Option<FrontendOriginId>,
+        origins: &mut BTreeMap<FrontendOriginId, FrontendOriginRecord>,
+    ) {
+        let Some(origin) = origin else {
+            return;
+        };
+        if origins.contains_key(&origin) {
+            return;
+        }
+        if let Some(record) = self.frontend_origin(origin) {
+            origins.insert(origin, record.clone());
+        }
+    }
+}
+
+fn map_origin(
+    origin: Option<FrontendOriginId>,
+    origin_map: &BTreeMap<FrontendOriginId, FrontendOriginId>,
+) -> Option<FrontendOriginId> {
+    origin.and_then(|origin| origin_map.get(&origin).copied())
 }

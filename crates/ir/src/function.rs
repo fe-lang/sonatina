@@ -3,7 +3,8 @@ use std::io;
 use smallvec::SmallVec;
 
 use super::{
-    BlockId, DataFlowGraph, DebugLocId, DebugMetadata, DebugTagId, InstId, Layout, Type, ValueId,
+    BlockId, DataFlowGraph, DebugInstBundle, DebugLocId, DebugMetadata, DebugTagId, InstId, Layout,
+    Type, ValueId,
 };
 use crate::{InstSetBase, Linkage, ir_writer::IrWrite, module::ModuleCtx};
 
@@ -132,6 +133,32 @@ impl Function {
         debug_assert!(self.dfg.has_inst_slot(from));
         debug_assert!(self.dfg.has_inst_slot(to));
         self.debug.copy_inst_debug(from, to);
+    }
+
+    pub fn inst_debug_bundle(&self, inst: InstId) -> DebugInstBundle {
+        self.debug.inst_debug_bundle(inst)
+    }
+
+    pub fn apply_inst_debug_bundle(
+        &mut self,
+        inst: InstId,
+        bundle: &DebugInstBundle,
+        appended_tag: Option<DebugTagId>,
+    ) {
+        debug_assert!(self.dfg.has_inst_slot(inst));
+        self.debug
+            .apply_inst_debug_bundle(inst, bundle, appended_tag);
+    }
+
+    pub fn import_inst_debug_from(
+        &mut self,
+        source: &Function,
+        from: InstId,
+        to: InstId,
+        appended_tag: Option<DebugTagId>,
+    ) {
+        let bundle = source.inst_debug_bundle(from);
+        self.apply_inst_debug_bundle(to, &bundle, appended_tag);
     }
 }
 
@@ -354,6 +381,91 @@ mod tests {
         assert_eq!(builder.func.inst_debug_loc(first_inst), Some(loc));
         assert_eq!(builder.func.inst_debug_loc(second_inst), None);
         assert!(builder.func.inst_debug_tags(second_inst).is_empty());
+    }
+
+    #[test]
+    fn imported_debug_bundle_remaps_origin_records_and_appends_callsite_tag() {
+        let mb = test_module_builder();
+        let source_ref = mb
+            .declare_function(Signature::new_unit("source", Linkage::Private, &[]))
+            .unwrap();
+        let target_ref = mb
+            .declare_function(Signature::new_unit("target", Linkage::Private, &[]))
+            .unwrap();
+
+        let mut source = mb.func_builder::<InstInserter>(source_ref);
+        let source_block = source.append_block();
+        source.switch_to_block(source_block);
+        let lhs = source.make_imm_value(Immediate::I32(1));
+        let rhs = source.make_imm_value(Immediate::I32(2));
+        let has_add = source.inst_set().has_add().unwrap();
+        let source_value = source.insert_inst(Add::new(has_add, lhs, rhs), Type::I32);
+        let source_inst = source.func.dfg.value_inst(source_value).unwrap();
+
+        let origin = source.func.debug.add_frontend_origin(FrontendOriginRecord {
+            external_key: Some("source-frontend://expr/1".to_string()),
+            source_span: None,
+            display_label: Some("source add".to_string()),
+            kind: FrontendOriginKind::SourceExpr,
+        });
+        let loc = source.func.debug.add_debug_loc(DebugLoc {
+            primary_origin: Some(origin),
+            source_span: None,
+            confidence: DebugConfidence::Exact,
+        });
+        let source_tag = source.func.debug.add_debug_tag(DebugTag {
+            kind: DebugTagKind::FrontendLabel,
+            origin: Some(origin),
+            payload: DebugTagPayload::Text("callee label".to_string()),
+        });
+        source.func.set_inst_debug_loc(source_inst, loc);
+        source.func.add_inst_debug_tag(source_inst, source_tag);
+
+        let mut target = mb.func_builder::<InstInserter>(target_ref);
+        let target_block = target.append_block();
+        target.switch_to_block(target_block);
+        let lhs = target.make_imm_value(Immediate::I32(3));
+        let rhs = target.make_imm_value(Immediate::I32(4));
+        let has_add = target.inst_set().has_add().unwrap();
+        let target_value = target.insert_inst(Add::new(has_add, lhs, rhs), Type::I32);
+        let target_inst = target.func.dfg.value_inst(target_value).unwrap();
+
+        let callsite_tag = target.func.debug.add_debug_tag(DebugTag {
+            kind: DebugTagKind::InlineCallsite,
+            origin: None,
+            payload: DebugTagPayload::Text("callsite target->source".to_string()),
+        });
+        target.func.import_inst_debug_from(
+            &source.func,
+            source_inst,
+            target_inst,
+            Some(callsite_tag),
+        );
+
+        let imported_loc = target.func.inst_debug_loc(target_inst).unwrap();
+        let imported_origin = target
+            .func
+            .debug
+            .debug_loc(imported_loc)
+            .unwrap()
+            .primary_origin
+            .unwrap();
+        let imported_record = target.func.debug.frontend_origin(imported_origin).unwrap();
+        assert_eq!(
+            imported_record.external_key.as_deref(),
+            Some("source-frontend://expr/1")
+        );
+
+        let tags = target.func.inst_debug_tags(target_inst);
+        assert_eq!(tags.len(), 2);
+        assert_eq!(
+            target.func.debug.debug_tag(tags[0]).unwrap().kind,
+            DebugTagKind::FrontendLabel
+        );
+        assert_eq!(
+            target.func.debug.debug_tag(tags[1]).unwrap().kind,
+            DebugTagKind::InlineCallsite
+        );
     }
 }
 
