@@ -90,3 +90,8 @@ cargo run -p sonatina-cli -- build -O s -p input.sntn
 ```sh
 ./test_all.sh
 ```
+
+## Trace and Debug Substrate
+
+The frontend-neutral trace/debug/content-addressing scope is documented in
+[docs/trace-debug-content-addressing.md](docs/trace-debug-content-addressing.md).
