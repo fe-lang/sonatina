@@ -52,6 +52,7 @@ impl CodeSink {
 #[derive(Debug, Default)]
 struct SinkFacts {
     normal_exit_reachable: FxHashSet<BlockId>,
+    sink_candidates: FxHashSet<InstId>,
 }
 
 impl SinkFacts {
@@ -63,6 +64,14 @@ impl SinkFacts {
             if is_normal_exit_block(func, block) {
                 facts.normal_exit_reachable.insert(block);
                 worklist.push(block);
+            }
+        }
+
+        for block in func.layout.iter_block() {
+            for inst in func.layout.iter_inst(block) {
+                if func.dfg.can_speculate(inst) && !func.dfg.inst_results(inst).is_empty() {
+                    facts.sink_candidates.insert(inst);
+                }
             }
         }
 
@@ -79,6 +88,10 @@ impl SinkFacts {
 
     fn can_reach_normal_exit(&self, block: BlockId) -> bool {
         self.normal_exit_reachable.contains(&block)
+    }
+
+    fn is_sink_candidate(&self, inst: InstId) -> bool {
+        self.sink_candidates.contains(&inst)
     }
 }
 
@@ -103,7 +116,7 @@ fn find_sink_plan(
     for block in blocks.into_iter().rev() {
         let insts: Vec<_> = func.layout.iter_inst(block).collect();
         for inst in insts.into_iter().rev() {
-            if !func.dfg.can_speculate(inst) || func.dfg.inst_results(inst).is_empty() {
+            if !facts.is_sink_candidate(inst) {
                 continue;
             }
             if let Some(plan) = plan_sink_inst(func, cfg, domtree, lpt, facts, inst) {
