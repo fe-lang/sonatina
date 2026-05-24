@@ -17,6 +17,7 @@ pub mod linkage;
 pub mod module;
 pub mod module_linker;
 pub mod object;
+pub mod trace_view;
 pub mod types;
 pub mod value;
 pub mod visitor;
@@ -49,6 +50,7 @@ pub use module::{InlineHint, Module};
 pub use object::{
     Directive, Embed, EmbedSymbol, Object, ObjectName, Section, SectionName, SectionRef,
 };
+pub use trace_view::{CfgEdge, CfgEdgeKind, InstKindView, SonatinaTraceView};
 pub use types::Type;
 pub use value::{Immediate, Value, ValueId};
 
