@@ -1,10 +1,9 @@
-use rustc_hash::FxHashSet;
 use sonatina_ir::{
     BlockId, ControlFlowGraph, Function, InstId, Value, ValueId,
     inst::{downcast, evm},
 };
 
-use crate::{domtree::DomTree, loop_analysis::LoopTree};
+use crate::{bitset::BitSet, domtree::DomTree, loop_analysis::LoopTree};
 
 #[derive(Debug, Default)]
 pub struct CodeSink;
@@ -37,9 +36,19 @@ impl CodeSink {
         domtree.compute(cfg);
         lpt.compute(cfg, domtree);
         let facts = SinkFacts::compute(func, cfg);
+        let mut worklist = SinkWorklist::new(func, &facts);
+        let mut use_sites = Vec::new();
 
         let mut changed = false;
-        while let Some(plan) = find_sink_plan(func, cfg, domtree, lpt, &facts) {
+        while let Some(inst) = worklist.pop() {
+            if !func.layout.is_inst_inserted(inst) {
+                continue;
+            }
+            let Some(plan) = plan_sink_inst(func, cfg, domtree, lpt, &facts, inst, &mut use_sites)
+            else {
+                continue;
+            };
+            requeue_operand_defs(func, &facts, plan.inst, &mut worklist);
             func.layout.remove_inst(plan.inst);
             func.layout.insert_inst_before(plan.inst, plan.before);
             changed = true;
@@ -51,8 +60,8 @@ impl CodeSink {
 
 #[derive(Debug, Default)]
 struct SinkFacts {
-    normal_exit_reachable: FxHashSet<BlockId>,
-    sink_candidates: FxHashSet<InstId>,
+    normal_exit_reachable: BitSet<BlockId>,
+    sink_candidates: BitSet<InstId>,
 }
 
 impl SinkFacts {
@@ -87,11 +96,43 @@ impl SinkFacts {
     }
 
     fn can_reach_normal_exit(&self, block: BlockId) -> bool {
-        self.normal_exit_reachable.contains(&block)
+        self.normal_exit_reachable.contains(block)
     }
 
     fn is_sink_candidate(&self, inst: InstId) -> bool {
-        self.sink_candidates.contains(&inst)
+        self.sink_candidates.contains(inst)
+    }
+}
+
+#[derive(Debug, Default)]
+struct SinkWorklist {
+    insts: Vec<InstId>,
+    queued: BitSet<InstId>,
+}
+
+impl SinkWorklist {
+    fn new(func: &Function, facts: &SinkFacts) -> Self {
+        let mut worklist = Self::default();
+        for block in func.layout.iter_block() {
+            for inst in func.layout.iter_inst(block) {
+                if facts.is_sink_candidate(inst) {
+                    worklist.push(inst);
+                }
+            }
+        }
+        worklist
+    }
+
+    fn push(&mut self, inst: InstId) {
+        if self.queued.insert(inst) {
+            self.insts.push(inst);
+        }
+    }
+
+    fn pop(&mut self) -> Option<InstId> {
+        let inst = self.insts.pop()?;
+        self.queued.remove(inst);
+        Some(inst)
     }
 }
 
@@ -105,29 +146,6 @@ fn is_normal_exit_block(func: &Function, block: BlockId) -> bool {
         || downcast::<&evm::EvmSelfDestruct>(func.inst_set(), inst).is_some()
 }
 
-fn find_sink_plan(
-    func: &Function,
-    cfg: &ControlFlowGraph,
-    domtree: &DomTree,
-    lpt: &LoopTree,
-    facts: &SinkFacts,
-) -> Option<SinkPlan> {
-    let blocks: Vec<_> = func.layout.iter_block().collect();
-    for block in blocks.into_iter().rev() {
-        let insts: Vec<_> = func.layout.iter_inst(block).collect();
-        for inst in insts.into_iter().rev() {
-            if !facts.is_sink_candidate(inst) {
-                continue;
-            }
-            if let Some(plan) = plan_sink_inst(func, cfg, domtree, lpt, facts, inst) {
-                return Some(plan);
-            }
-        }
-    }
-
-    None
-}
-
 fn plan_sink_inst(
     func: &Function,
     cfg: &ControlFlowGraph,
@@ -135,9 +153,12 @@ fn plan_sink_inst(
     lpt: &LoopTree,
     facts: &SinkFacts,
     inst: InstId,
+    use_sites: &mut Vec<UseSite>,
 ) -> Option<SinkPlan> {
     let source_block = func.layout.inst_block(inst);
-    let use_sites = collect_use_sites(func, inst)?;
+    if !collect_use_sites(func, inst, use_sites) {
+        return None;
+    }
     let dest_block = nearest_common_dominator(domtree, use_sites.iter().map(|site| site.block))?;
 
     if dest_block == source_block
@@ -148,7 +169,7 @@ fn plan_sink_inst(
         return None;
     }
 
-    let before = insertion_anchor(func, dest_block, &use_sites)?;
+    let before = insertion_anchor(func, dest_block, use_sites)?;
     if operands_available_at(func, domtree, inst, dest_block, before) {
         Some(SinkPlan { inst, before })
     } else {
@@ -199,21 +220,40 @@ fn crosses_cold_guard_to_hot_continuation(
     false
 }
 
-fn collect_use_sites(func: &Function, inst: InstId) -> Option<Vec<UseSite>> {
-    let mut sites = Vec::new();
+fn requeue_operand_defs(
+    func: &Function,
+    facts: &SinkFacts,
+    inst: InstId,
+    worklist: &mut SinkWorklist,
+) {
+    func.dfg.inst(inst).for_each_value(&mut |value| {
+        if let Value::Inst { inst: def_inst, .. } = func.dfg.value(value)
+            && *def_inst != inst
+            && facts.is_sink_candidate(*def_inst)
+            && func.layout.is_inst_inserted(*def_inst)
+        {
+            worklist.push(*def_inst);
+        }
+    });
+}
+
+fn collect_use_sites(func: &Function, inst: InstId, sites: &mut Vec<UseSite>) -> bool {
+    sites.clear();
     for &result in func.dfg.inst_results(inst) {
         for &user in func.dfg.users(result) {
             if !func.dfg.has_inst(user) || !func.layout.is_inst_inserted(user) {
                 continue;
             }
             if user == inst {
-                return None;
+                return false;
             }
 
             if let Some(phi) = func.dfg.cast_phi(user) {
                 for &(arg, pred) in phi.args() {
                     if arg == result {
-                        let anchor = func.layout.last_inst_of(pred)?;
+                        let Some(anchor) = func.layout.last_inst_of(pred) else {
+                            return false;
+                        };
                         sites.push(UseSite {
                             block: pred,
                             anchor,
@@ -229,7 +269,7 @@ fn collect_use_sites(func: &Function, inst: InstId) -> Option<Vec<UseSite>> {
         }
     }
 
-    if sites.is_empty() { None } else { Some(sites) }
+    !sites.is_empty()
 }
 
 fn nearest_common_dominator(
@@ -244,38 +284,37 @@ fn nearest_common_dominator(
 }
 
 fn common_dominator(domtree: &DomTree, a: BlockId, b: BlockId) -> Option<BlockId> {
-    let mut ancestors = FxHashSet::default();
-    let mut cursor = Some(a);
-    while let Some(block) = cursor {
-        ancestors.insert(block);
-        cursor = domtree.idom_of(block);
+    let mut a = a;
+    let mut b = b;
+    let mut a_depth = domtree.depth_of(a)?;
+    let mut b_depth = domtree.depth_of(b)?;
+
+    while a_depth > b_depth {
+        a = domtree.idom_of(a)?;
+        a_depth -= 1;
+    }
+    while b_depth > a_depth {
+        b = domtree.idom_of(b)?;
+        b_depth -= 1;
+    }
+    while a != b {
+        a = domtree.idom_of(a)?;
+        b = domtree.idom_of(b)?;
     }
 
-    let mut cursor = Some(b);
-    while let Some(block) = cursor {
-        if ancestors.contains(&block) {
-            return Some(block);
-        }
-        cursor = domtree.idom_of(block);
-    }
-
-    None
+    Some(a)
 }
 
 fn insertion_anchor(func: &Function, block: BlockId, use_sites: &[UseSite]) -> Option<InstId> {
-    let anchors: FxHashSet<_> = use_sites
-        .iter()
-        .filter(|site| site.block == block)
-        .map(|site| site.anchor)
-        .collect();
-
-    if anchors.is_empty() {
+    if !use_sites.iter().any(|site| site.block == block) {
         return func.layout.last_inst_of(block);
     }
 
-    func.layout
-        .iter_inst(block)
-        .find(|inst| anchors.contains(inst))
+    func.layout.iter_inst(block).find(|&inst| {
+        use_sites
+            .iter()
+            .any(|site| site.block == block && site.anchor == inst)
+    })
 }
 
 fn operands_available_at(
