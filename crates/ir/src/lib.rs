@@ -1,6 +1,7 @@
 pub mod bitset;
 pub mod builder;
 pub mod cfg;
+pub mod content_address;
 pub mod debug;
 pub mod dfg;
 pub mod effects;
@@ -27,6 +28,9 @@ mod bigint;
 pub use bigint::{I256, U256};
 pub use builder::Variable;
 pub use cfg::ControlFlowGraph;
+pub use content_address::{
+    FunctionShapeHashes, ShapeDimension, ShapeHashPolicy, ShapeSccHash, hash_function_shape,
+};
 pub use debug::{
     DebugConfidence, DebugInstBundle, DebugLoc, DebugLocId, DebugMetadata, DebugTag, DebugTagId,
     DebugTagKind, DebugTagPayload, FrontendOriginId, FrontendOriginKind, FrontendOriginRecord,
