@@ -462,8 +462,10 @@ mod tests {
         Signature, Type,
         builder::ModuleBuilder,
         func_cursor::InstInserter,
-        inst::arith::Add,
-        inst::control_flow::{Br, Jump, Return},
+        inst::{
+            arith::Add,
+            control_flow::{Br, Jump, Return},
+        },
         isa::{Isa, evm::Evm},
         module::ModuleCtx,
     };
