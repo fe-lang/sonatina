@@ -13,11 +13,7 @@ use super::{
 };
 
 impl FunctionVerifier<'_> {
-    pub(super) fn check_dominance_rules(&mut self) {
-        if self.block_order.is_empty() {
-            return;
-        }
-
+    pub(super) fn compute_dominance_info(&mut self) {
         let mut covered = FxHashSet::default();
         let mut components = Vec::new();
 
@@ -41,13 +37,21 @@ impl FunctionVerifier<'_> {
             }
         }
 
-        let mut idom = FxHashMap::default();
+        self.idom.clear();
         let block_order_index = self.block_position_map();
         for (root, nodes) in components {
             let local = compute_idom(root, &nodes, &self.succs, &self.preds, &block_order_index);
-            idom.extend(local);
+            self.idom.extend(local);
+        }
+    }
+
+    pub(super) fn check_dominance_rules(&mut self) {
+        if self.block_order.is_empty() {
+            return;
         }
 
+        let idom = self.idom.clone();
+        let block_order_index = self.block_position_map();
         let blocks = self.block_order.clone();
         for block in blocks {
             if !idom.contains_key(&block) {

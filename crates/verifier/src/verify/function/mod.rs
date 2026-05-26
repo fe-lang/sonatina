@@ -56,6 +56,7 @@ pub(super) struct FunctionVerifier<'a> {
     pub(super) succs: FxHashMap<BlockId, Vec<BlockId>>,
     pub(super) preds: FxHashMap<BlockId, Vec<BlockId>>,
     pub(super) reachable: FxHashSet<BlockId>,
+    pub(super) idom: FxHashMap<BlockId, BlockId>,
 }
 
 trait FunctionPass {
@@ -154,6 +155,7 @@ impl<'a> FunctionVerifier<'a> {
             succs: FxHashMap::default(),
             preds: FxHashMap::default(),
             reachable: FxHashSet::default(),
+            idom: FxHashMap::default(),
         }
     }
 
@@ -162,6 +164,7 @@ impl<'a> FunctionVerifier<'a> {
         self.run_pass::<LayoutPass>();
         self.run_pass::<ReferentialPass>();
         self.run_pass::<CfgPass>();
+        self.compute_dominance_info();
         self.run_pass::<PhiPass>();
         self.run_pass::<TypePass>();
         self.run_pass::<DominancePass>();
