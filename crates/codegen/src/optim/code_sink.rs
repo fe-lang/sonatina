@@ -28,13 +28,10 @@ impl CodeSink {
     pub fn run(
         &mut self,
         func: &mut Function,
-        cfg: &mut ControlFlowGraph,
-        domtree: &mut DomTree,
-        lpt: &mut LoopTree,
+        cfg: &ControlFlowGraph,
+        domtree: &DomTree,
+        lpt: &LoopTree,
     ) -> bool {
-        cfg.compute(func);
-        domtree.compute(cfg);
-        lpt.compute(cfg, domtree);
         let facts = SinkFacts::compute(func, cfg);
         let mut worklist = SinkWorklist::new(func, &facts);
         let mut use_sites = Vec::new();

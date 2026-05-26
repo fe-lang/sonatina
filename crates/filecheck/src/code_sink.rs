@@ -22,7 +22,7 @@ impl FuncTransform for CodeSinkTransform {
         self.cfg.compute(func);
         self.domtree.compute(&self.cfg);
         self.lpt.compute(&self.cfg, &self.domtree);
-        CodeSink::new().run(func, &mut self.cfg, &mut self.domtree, &mut self.lpt);
+        CodeSink::new().run(func, &self.cfg, &self.domtree, &self.lpt);
         CfgCleanup::new(CleanupMode::Strict).run(func);
     }
 
