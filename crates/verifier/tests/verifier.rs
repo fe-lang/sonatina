@@ -205,6 +205,133 @@ block0:
 }
 
 #[test]
+fn dominating_enum_assert_variant_proves_value_extract() {
+    let src = r#"
+target = "evm-ethereum-osaka"
+
+type @OptionI256 = enum {
+    #None,
+    #Some(i256),
+};
+
+func private %ok(v0.@OptionI256, v1.i1) -> i256 {
+block0:
+    enum.assert_variant v0 #Some;
+    br v1 block1 block2;
+
+block1:
+    v2.i256 = enum.extract v0 #Some 0.i8;
+    return v2;
+
+block2:
+    return 0.i256;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&parsed.module, &cfg);
+    assert!(report.is_ok(), "expected no verifier errors, got {report}");
+}
+
+#[test]
+fn non_dominating_enum_assert_variant_does_not_prove_value_extract() {
+    let src = r#"
+target = "evm-ethereum-osaka"
+
+type @OptionI256 = enum {
+    #None,
+    #Some(i256),
+};
+
+func private %bad(v0.@OptionI256, v1.i1) -> i256 {
+block0:
+    br v1 block1 block2;
+
+block1:
+    enum.assert_variant v0 #Some;
+    jump block3;
+
+block2:
+    jump block3;
+
+block3:
+    v2.i256 = enum.extract v0 #Some 0.i8;
+    return v2;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&parsed.module, &cfg);
+    assert!(
+        has_code(&report, "IR0600"),
+        "expected enum.extract verification failure without dominating proof, got {report}"
+    );
+}
+
+#[test]
+fn dominating_assert_for_other_variant_does_not_prove_value_extract() {
+    let src = r#"
+target = "evm-ethereum-osaka"
+
+type @OptionI256 = enum {
+    #None,
+    #Some(i256),
+};
+
+func private %bad(v0.@OptionI256) -> i256 {
+block0:
+    enum.assert_variant v0 #None;
+    jump block1;
+
+block1:
+    v1.i256 = enum.extract v0 #Some 0.i8;
+    return v1;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&parsed.module, &cfg);
+    assert!(
+        has_code(&report, "IR0600"),
+        "expected enum.extract verification failure with wrong variant proof, got {report}"
+    );
+}
+
+#[test]
+fn dominating_assert_for_other_value_does_not_prove_value_extract() {
+    let src = r#"
+target = "evm-ethereum-osaka"
+
+type @OptionI256 = enum {
+    #None,
+    #Some(i256),
+};
+
+func private %bad(v0.@OptionI256) -> i256 {
+block0:
+    v1.@OptionI256 = enum.make @OptionI256 #Some (1.i256);
+    enum.assert_variant v1 #Some;
+    jump block1;
+
+block1:
+    v2.i256 = enum.extract v0 #Some 0.i8;
+    return v2;
+}
+"#;
+
+    let parsed = parse_module(src).expect("module should parse");
+    let cfg = VerifierConfig::for_level(VerificationLevel::Standard);
+    let report = verify_module(&parsed.module, &cfg);
+    assert!(
+        has_code(&report, "IR0600"),
+        "expected enum.extract verification failure with wrong value proof, got {report}"
+    );
+}
+
+#[test]
 fn enum_assert_variant_ref_proves_object_field_load() {
     let src = r#"
 target = "evm-ethereum-osaka"

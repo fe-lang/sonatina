@@ -954,7 +954,7 @@ fn run_pass(
                     trace_span!("sonatina.optim.pipeline.code_sink.compute_looptree").entered();
                 ctx.lpt.compute(&ctx.cfg, &ctx.domtree);
             }
-            CodeSink::new().run(func, &mut ctx.cfg, &mut ctx.domtree, &mut ctx.lpt)
+            CodeSink::new().run(func, &ctx.cfg, &ctx.domtree, &ctx.lpt)
         }
         Pass::Gvn => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.gvn").entered();

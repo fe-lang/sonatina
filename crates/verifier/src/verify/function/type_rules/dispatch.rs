@@ -15,7 +15,7 @@ use crate::{
     verify::type_utils::{is_const_ref_ty, is_integral_or_pointer, is_obj_ref_ty, is_pointer_ty},
 };
 
-use super::FunctionVerifier;
+use super::{super::analysis::dominates, FunctionVerifier};
 
 #[inst_prop]
 pub(super) trait VerifyInst {
@@ -612,7 +612,7 @@ fn variant_payload_tys(
     })
 }
 
-fn same_block_dominating_enum_assert(
+fn dominating_enum_assert(
     verifier: &FunctionVerifier<'_>,
     use_inst: InstId,
     value: ValueId,
@@ -636,6 +636,26 @@ fn same_block_dominating_enum_assert(
             && *assert_variant.variant() == variant
         {
             return true;
+        }
+    }
+
+    let block_order_index = verifier.block_position_map();
+    for (&proof_block, insts) in &verifier.block_to_insts {
+        if proof_block == block
+            || !dominates(proof_block, block, &verifier.idom, &block_order_index)
+        {
+            continue;
+        }
+
+        for &inst in insts {
+            if let Some(assert_variant) = sonatina_ir::inst::downcast::<&data::EnumAssertVariant>(
+                verifier.ctx.inst_set,
+                verifier.func.dfg.inst(inst),
+            ) && *assert_variant.value() == value
+                && *assert_variant.variant() == variant
+            {
+                return true;
+            }
         }
     }
 
@@ -1826,7 +1846,7 @@ impl VerifyInst for data::EnumExtract {
                 .map(|make| *make.variant() == *self.variant())
             })
             .unwrap_or(false)
-            || same_block_dominating_enum_assert(verifier, inst_id, *self.value(), *self.variant());
+            || dominating_enum_assert(verifier, inst_id, *self.value(), *self.variant());
 
         if !proven {
             verifier.emit(Diagnostic::error(

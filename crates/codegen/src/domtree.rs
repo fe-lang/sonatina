@@ -11,6 +11,7 @@ use sonatina_ir::{BlockId, ControlFlowGraph};
 #[derive(Default, Debug)]
 pub struct DomTree {
     doms: SecondaryMap<BlockId, PackedOption<BlockId>>,
+    depths: SecondaryMap<BlockId, u32>,
     rpo: Vec<BlockId>,
 }
 
@@ -21,6 +22,7 @@ impl DomTree {
 
     pub fn clear(&mut self) {
         self.doms.clear();
+        self.depths.clear();
         self.rpo.clear();
     }
 
@@ -32,6 +34,18 @@ impl DomTree {
             return None;
         }
         self.doms[block].expand()
+    }
+
+    /// Returns the block depth in the dominator tree.
+    /// Returns None if the block is unreachable from the entry block.
+    pub fn depth_of(&self, block: BlockId) -> Option<u32> {
+        if self.rpo.first().is_some_and(|&entry| entry == block)
+            || self.doms.get(block).is_some_and(PackedOption::is_some)
+        {
+            Some(self.depths[block])
+        } else {
+            None
+        }
     }
 
     /// Returns `true` if block1 strictly dominates block2.
@@ -69,6 +83,11 @@ impl DomTree {
         } else {
             self.doms.clear();
         }
+        if self.depths.capacity() < block_num {
+            self.depths = SecondaryMap::with_capacity(block_num);
+        } else {
+            self.depths.clear();
+        }
 
         let mut rpo_nums = SecondaryMap::with_capacity(block_num);
         for (i, &block) in self.rpo.iter().enumerate() {
@@ -101,6 +120,14 @@ impl DomTree {
                     self.doms[block] = new_dom.into();
                 }
             }
+        }
+
+        for &block in &self.rpo {
+            let depth = self.doms[block]
+                .expand()
+                .filter(|&idom| idom != block)
+                .map_or(0, |idom| self.depths[idom] + 1);
+            self.depths[block] = depth;
         }
     }
 
@@ -268,6 +295,10 @@ mod tests {
         assert_eq!(dom_tree.idom_of(then_block), Some(entry_block));
         assert_eq!(dom_tree.idom_of(else_block), Some(entry_block));
         assert_eq!(dom_tree.idom_of(merge_block), Some(entry_block));
+        assert_eq!(dom_tree.depth_of(entry_block), Some(0));
+        assert_eq!(dom_tree.depth_of(then_block), Some(1));
+        assert_eq!(dom_tree.depth_of(else_block), Some(1));
+        assert_eq!(dom_tree.depth_of(merge_block), Some(1));
 
         assert!(test_df(&df, entry_block, &[]));
         assert!(test_df(&df, then_block, &[merge_block]));
@@ -315,6 +346,7 @@ mod tests {
         assert_eq!(dom_tree.idom_of(c), Some(a));
         assert_eq!(dom_tree.idom_of(d), None);
         assert!(!dom_tree.is_reachable(d));
+        assert_eq!(dom_tree.depth_of(d), None);
         assert_eq!(dom_tree.idom_of(e), Some(a));
 
         assert!(test_df(&df, a, &[]));
