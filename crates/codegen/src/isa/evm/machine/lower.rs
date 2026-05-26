@@ -335,6 +335,7 @@ impl FuncLowerCtx<'_> {
             EvmInstKind::Alloca(_) => self.lower_alloca(source_inst),
             EvmInstKind::Gep(gep) => self.lower_gep(source_inst, gep.values()),
             EvmInstKind::EvmMalloc(_) => self.lower_malloc(source_inst),
+            EvmInstKind::Memzero(memzero) => self.lower_memzero(source_inst, memzero),
             EvmInstKind::Le(_) => {
                 let (lhs, rhs) = self.lower_binary_values(source_inst)?;
                 self.lower_inverted_cmp(source_inst, cmp::Gt::new(self.is, lhs, rhs))
@@ -674,6 +675,20 @@ impl FuncLowerCtx<'_> {
         let byte = self.i256_imm(u32::from(bits / 8 - 1));
         let extended = self.emit_binary(evm::EvmSignExtend::new(self.is, byte, value), Type::I256);
         self.alias_inst_single_result(source_inst, extended)
+    }
+
+    fn lower_memzero(
+        &mut self,
+        source_inst: sonatina_ir::InstId,
+        memzero: &data::Memzero,
+    ) -> Result<(), String> {
+        let dest = self.lower_value(*memzero.dest())?;
+        let len = self.lower_value(*memzero.len())?;
+        let calldata_size = self.emit_unary(evm::EvmCalldataSize::new(self.is), Type::I256);
+        self.insert_no_result(
+            source_inst,
+            evm::EvmCalldataCopy::new(self.is, dest, calldata_size, len),
+        )
     }
 
     fn lower_bitcast(

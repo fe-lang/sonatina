@@ -252,6 +252,7 @@ fn unmodeled_write_addr(data: &EvmInstKind) -> Option<ValueId> {
     match data {
         EvmInstKind::EvmMstore8(mstore8) => Some(*mstore8.addr()),
         EvmInstKind::EvmMcopy(mcopy) => Some(*mcopy.dest()),
+        EvmInstKind::Memzero(memzero) => Some(*memzero.dest()),
         EvmInstKind::EvmCalldataCopy(copy) => Some(*copy.dst_addr()),
         EvmInstKind::EvmExtCodeCopy(copy) => Some(*copy.dst_addr()),
         EvmInstKind::EvmReturnDataCopy(copy) => Some(*copy.dst_addr()),

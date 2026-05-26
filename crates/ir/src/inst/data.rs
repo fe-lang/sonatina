@@ -114,6 +114,13 @@ pub struct Mstore {
     ty: Type,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(side_effect(super::SideEffect::Write))]
+pub struct Memzero {
+    dest: ValueId,
+    len: ValueId,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
 #[inst(arity(at_least(2)))]
 pub struct Gep {

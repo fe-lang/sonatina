@@ -6,7 +6,8 @@ use crate::{
     DataFlowGraph, I256, Immediate, InstDowncast, InstId, Type, ValueId,
     bitset::BitSet,
     inst::{
-        SideEffect, control_flow, data,
+        SideEffect, control_flow,
+        data::{self, Memzero},
         evm::{
             EvmAddress, EvmBalance, EvmBaseFee, EvmBlobBaseFee, EvmBlobHash, EvmBlockHash, EvmCall,
             EvmCallCode, EvmCallValue, EvmCalldataCopy, EvmCalldataLoad, EvmCalldataSize,
@@ -698,6 +699,11 @@ fn classify_inst_effects_with<S: EffectSink>(
     if let Some(mcopy) = <&EvmMcopy as InstDowncast>::downcast(is, inst) {
         sink.read_range(MEMORY, *mcopy.addr(), *mcopy.len());
         sink.write_range(MEMORY, *mcopy.dest(), *mcopy.len());
+        return sink.finish();
+    }
+
+    if let Some(memzero) = <&Memzero as InstDowncast>::downcast(is, inst) {
+        sink.write_range(MEMORY, *memzero.dest(), *memzero.len());
         return sink.finish();
     }
 

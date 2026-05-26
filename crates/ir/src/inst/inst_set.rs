@@ -62,6 +62,7 @@ define_inst_set_base! {
         cast::PtrToInt,
         data::Mload,
         data::Mstore,
+        data::Memzero,
         data::Gep,
         data::GetFunctionPtr,
         data::SymAddr,

@@ -2469,6 +2469,31 @@ impl VerifyInst for control_flow::Return {
     }
 }
 
+impl VerifyInst for data::Memzero {
+    fn verify_inst(&self, verifier: &mut FunctionVerifier<'_>, inst_id: InstId) {
+        let location = verifier.inst_location(inst_id);
+        if let Some(dest_ty) = verifier.value_ty(*self.dest())
+            && !is_integral_or_pointer(verifier.ctx, dest_ty)
+        {
+            verifier.emit(Diagnostic::error(
+                DiagnosticCode::InstOperandTypeMismatch,
+                "memzero destination must be integral or pointer",
+                location.clone(),
+            ));
+        }
+        if let Some(len_ty) = verifier.value_ty(*self.len())
+            && !len_ty.is_integral()
+        {
+            verifier.emit(Diagnostic::error(
+                DiagnosticCode::InstOperandTypeMismatch,
+                "memzero length must be integral",
+                location.clone(),
+            ));
+        }
+        verifier.expect_no_result(inst_id, location);
+    }
+}
+
 impl VerifyInst for control_flow::Unreachable {
     fn verify_inst(&self, verifier: &mut FunctionVerifier<'_>, inst_id: InstId) {
         verifier.expect_no_result(inst_id, verifier.inst_location(inst_id));
