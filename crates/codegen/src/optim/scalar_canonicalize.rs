@@ -137,7 +137,7 @@ impl ScalarCanonicalize {
                     return None;
                 };
                 let ty = func.dfg.value_ty(*result);
-                if let super::simplify_expr::SimplifyExprResult::Copy(replacement) =
+                if let super::simplify_expr::SimplifiedResult::Copy(replacement) =
                     simplify_cast(func, kind, *from, ty)
                 {
                     return Some(RewritePlan::Copy {
