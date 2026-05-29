@@ -1,11 +1,11 @@
 use rustc_hash::FxHashMap;
 use sonatina_ir::{
     BlockId, ControlFlowGraph, Function, Linkage, Module,
-    inst::{data, downcast},
+    inst::{control_flow, data, downcast},
     module::{FuncHints, FuncRef},
 };
 
-use crate::{cfg_scc::CfgSccAnalysis, module_analysis::ModuleInfo};
+use crate::{cfg_scc::CfgSccAnalysis, module_analysis::ModuleInfo, transform::aggregate::shape};
 
 use super::{
     super::aggregate::{LocalObjectArgMap, ObjectEffectSummaryMap, ObjectReturnEffect},
@@ -45,23 +45,25 @@ pub(super) struct InlineeSummary {
     pub returns: usize,
     pub has_loop: bool,
     pub base_cost: i32,
-    pub object: ObjectOptimizationSummary,
+    pub scalarization: ScalarizationBenefitSummary,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
-pub(super) struct ObjectOptimizationSummary {
+pub(super) struct ScalarizationBenefitSummary {
     pub local_object_arg_count: usize,
     pub fresh_object_return_count: usize,
     pub object_store_count: usize,
     pub object_load_count: usize,
     pub object_slice_count: usize,
     pub enum_object_op_count: usize,
-    pub likely_scalarizable: bool,
-    pub scalarization_unlock_score: i32,
+    pub aggregate_insert_count: usize,
+    pub aggregate_extract_count: usize,
+    pub aggregate_return_count: usize,
+    pub score: i32,
 }
 
-impl ObjectOptimizationSummary {
-    fn tracked_root_count(self) -> usize {
+impl ScalarizationBenefitSummary {
+    fn tracked_object_root_count(self) -> usize {
         self.local_object_arg_count + self.fresh_object_return_count
     }
 
@@ -72,8 +74,20 @@ impl ObjectOptimizationSummary {
             + self.enum_object_op_count
     }
 
-    fn has_scalarizable_object_activity(self) -> bool {
-        self.likely_scalarizable && self.tracked_root_count() > 0 && self.object_op_count() > 0
+    fn aggregate_value_op_count(self) -> usize {
+        self.aggregate_insert_count + self.aggregate_extract_count
+    }
+
+    fn has_object_opportunity(self) -> bool {
+        self.tracked_object_root_count() > 0 && self.object_op_count() > 0
+    }
+
+    fn has_aggregate_value_opportunity(self) -> bool {
+        self.aggregate_value_op_count() > 0
+    }
+
+    fn has_opportunity(self) -> bool {
+        self.has_object_opportunity() || self.has_aggregate_value_opportunity()
     }
 }
 
@@ -206,36 +220,15 @@ pub(super) fn decide_inline(
         });
     }
 
-    let should_force_known_arg_small_helper = request.known_arg_mask != 0
-        && request.call_continuation_may_commit
-        && summary.calls == 0
-        && !summary.has_loop
-        && summary.blocks > 1
-        && !exceeds_cap(summary.blocks, config.small_function_block_limit)
-        && !exceeds_cap(summary.insts, config.small_function_inst_limit);
+    let should_force_small_cleanup_helper = request.call_continuation_may_commit
+        && is_multi_block_small_leaf_helper(summary, config)
+        && (request.known_arg_mask != 0
+            || (config.scalarization_bonus_cap > 0 && summary.scalarization.has_opportunity()));
 
-    if should_force_known_arg_small_helper {
+    if should_force_small_cleanup_helper {
         return InlineDecision::Inline(InlinePlan {
             summary,
             score: i32::MIN + 2,
-            predicted_growth,
-            forced: true,
-        });
-    }
-
-    let should_force_small_object_helper = request.call_continuation_may_commit
-        && config.object_scalarization_bonus_cap > 0
-        && summary.object.has_scalarizable_object_activity()
-        && summary.calls == 0
-        && !summary.has_loop
-        && summary.blocks > 1
-        && !exceeds_cap(summary.blocks, config.small_function_block_limit)
-        && !exceeds_cap(summary.insts, config.small_function_inst_limit);
-
-    if should_force_small_object_helper {
-        return InlineDecision::Inline(InlinePlan {
-            summary,
-            score: i32::MIN + 3,
             predicted_growth,
             forced: true,
         });
@@ -272,12 +265,7 @@ pub(super) fn decide_inline(
     }
     // Small leaf helpers often shrink after the next simplification round; avoid
     // letting the multi-use code-size model dominate those callsites too early.
-    if config.small_function_bonus > 0
-        && summary.calls == 0
-        && !summary.has_loop
-        && !exceeds_cap(summary.blocks, config.small_function_block_limit)
-        && !exceeds_cap(summary.insts, config.small_function_inst_limit)
-    {
+    if config.small_function_bonus > 0 && is_small_leaf_helper(summary, config) {
         score -= config.small_function_bonus;
     }
     score -= compute_call_overhead_bonus(request, config);
@@ -298,10 +286,10 @@ pub(super) fn decide_inline(
         score -= 2;
     }
     score -= summary
-        .object
-        .scalarization_unlock_score
-        .min(config.object_scalarization_bonus_cap);
-    score -= compute_object_helper_cluster_bonus(
+        .scalarization
+        .score
+        .min(config.scalarization_bonus_cap);
+    score -= compute_scalarization_helper_cluster_bonus(
         module,
         summary_cache,
         ctx,
@@ -330,7 +318,18 @@ fn exceeds_budget(used: usize, growth: usize, cap: usize) -> bool {
     cap > 0 && used.saturating_add(growth) > cap
 }
 
-fn compute_object_helper_cluster_bonus(
+fn is_small_leaf_helper(summary: InlineeSummary, config: &InlinerConfig) -> bool {
+    summary.calls == 0
+        && !summary.has_loop
+        && !exceeds_cap(summary.blocks, config.small_function_block_limit)
+        && !exceeds_cap(summary.insts, config.small_function_inst_limit)
+}
+
+fn is_multi_block_small_leaf_helper(summary: InlineeSummary, config: &InlinerConfig) -> bool {
+    summary.blocks > 1 && is_small_leaf_helper(summary, config)
+}
+
+fn compute_scalarization_helper_cluster_bonus(
     module: &Module,
     summary_cache: &mut FxHashMap<SummaryKey, InlineeSummary>,
     ctx: InlineDecisionContext<'_>,
@@ -338,9 +337,9 @@ fn compute_object_helper_cluster_bonus(
     summary: InlineeSummary,
     config: &InlinerConfig,
 ) -> i32 {
-    if config.object_helper_cluster_bonus <= 0
+    if config.scalarization_helper_cluster_bonus <= 0
         || module.ctx.func_linkage(callee_ref) != Linkage::Private
-        || !summary.object.has_scalarizable_object_activity()
+        || !summary.scalarization.has_opportunity()
     {
         return 0;
     }
@@ -362,12 +361,12 @@ fn compute_object_helper_cluster_bonus(
                 ctx.local_object_args,
                 ctx.object_effects,
             )
-            .object
-            .has_scalarizable_object_activity()
+            .scalarization
+            .has_opportunity()
         })
         .take(2)
         .count() as i32
-        * config.object_helper_cluster_bonus
+        * config.scalarization_helper_cluster_bonus
 }
 
 fn compute_callsite_known_arg_bonus(
@@ -481,7 +480,7 @@ fn compute_inlinee_summary(
     let mut phis = 0usize;
     let mut returns = 0usize;
     let mut base_cost = 0i32;
-    let mut object = ObjectOptimizationSummary {
+    let mut scalarization = ScalarizationBenefitSummary {
         local_object_arg_count: local_object_args
             .and_then(|args| args.get(&func_ref))
             .map_or(0, |args| args.len()),
@@ -499,22 +498,32 @@ fn compute_inlinee_summary(
             insts += 1;
 
             if downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst_id)).is_some() {
-                object.object_load_count += 1;
+                scalarization.object_load_count += 1;
             } else if downcast::<&data::ObjStore>(func.inst_set(), func.dfg.inst(inst_id)).is_some()
             {
-                object.object_store_count += 1;
+                scalarization.object_store_count += 1;
             } else if downcast::<&data::ObjProj>(func.inst_set(), func.dfg.inst(inst_id)).is_some()
                 || downcast::<&data::ObjIndex>(func.inst_set(), func.dfg.inst(inst_id)).is_some()
                 || downcast::<&data::EnumProj>(func.inst_set(), func.dfg.inst(inst_id)).is_some()
             {
-                object.object_slice_count += 1;
+                scalarization.object_slice_count += 1;
             } else if downcast::<&data::EnumGetTag>(func.inst_set(), func.dfg.inst(inst_id))
                 .is_some()
                 || downcast::<&data::EnumSetTag>(func.inst_set(), func.dfg.inst(inst_id)).is_some()
                 || downcast::<&data::EnumWriteVariant>(func.inst_set(), func.dfg.inst(inst_id))
                     .is_some()
             {
-                object.enum_object_op_count += 1;
+                scalarization.enum_object_op_count += 1;
+            } else if let Some(insert) =
+                downcast::<&data::InsertValue>(func.inst_set(), func.dfg.inst(inst_id))
+                && is_scalarizable_aggregate_value(func, *insert.dest())
+            {
+                scalarization.aggregate_insert_count += 1;
+            } else if let Some(extract) =
+                downcast::<&data::ExtractValue>(func.inst_set(), func.dfg.inst(inst_id))
+                && is_scalarizable_aggregate_value(func, *extract.dest())
+            {
+                scalarization.aggregate_extract_count += 1;
             }
 
             if func.dfg.is_phi(inst_id) {
@@ -525,6 +534,15 @@ fn compute_inlinee_summary(
 
             if func.dfg.is_return(inst_id) {
                 returns += 1;
+                if let Some(ret) =
+                    downcast::<&control_flow::Return>(func.inst_set(), func.dfg.inst(inst_id))
+                {
+                    scalarization.aggregate_return_count += ret
+                        .args()
+                        .iter()
+                        .filter(|&&arg| is_scalarizable_aggregate_value(func, arg))
+                        .count();
+                }
             }
 
             if func.dfg.is_call(inst_id) {
@@ -547,17 +565,7 @@ fn compute_inlinee_summary(
         .topo_order()
         .iter()
         .any(|&scc| cfg_scc.scc_data(scc).is_cycle);
-    object.likely_scalarizable = object.tracked_root_count() > 0 && object.object_op_count() > 0;
-    object.scalarization_unlock_score = if object.likely_scalarizable {
-        (object.local_object_arg_count as i32 * 4)
-            + (object.fresh_object_return_count as i32 * 5)
-            + (object.object_store_count.min(4) as i32 * 2)
-            + object.object_load_count.min(4) as i32
-            + object.object_slice_count.min(4) as i32
-            + (object.enum_object_op_count.min(4) as i32 * 2)
-    } else {
-        0
-    };
+    scalarization.score = compute_scalarization_benefit_score(scalarization);
 
     InlineeSummary {
         has_body: true,
@@ -568,6 +576,28 @@ fn compute_inlinee_summary(
         returns,
         has_loop,
         base_cost,
-        object,
+        scalarization,
     }
+}
+
+fn is_scalarizable_aggregate_value(func: &Function, value: sonatina_ir::ValueId) -> bool {
+    shape::is_supported_scalar_shape_ty(func.ctx(), func.dfg.value_ty(value))
+}
+
+fn compute_scalarization_benefit_score(summary: ScalarizationBenefitSummary) -> i32 {
+    let mut score = 0;
+    if summary.has_object_opportunity() {
+        score += (summary.local_object_arg_count as i32 * 4)
+            + (summary.fresh_object_return_count as i32 * 5)
+            + (summary.object_store_count.min(4) as i32 * 2)
+            + summary.object_load_count.min(4) as i32
+            + summary.object_slice_count.min(4) as i32
+            + (summary.enum_object_op_count.min(4) as i32 * 2);
+    }
+    if summary.has_aggregate_value_opportunity() {
+        score += (summary.aggregate_insert_count.min(6) as i32 * 2)
+            + summary.aggregate_extract_count.min(6) as i32
+            + (summary.aggregate_return_count.min(2) as i32 * 5);
+    }
+    score
 }

@@ -1,0 +1,29 @@
+target = "evm-ethereum-london"
+
+type @pair = { i256, i256 };
+
+func private %view(v0.i256, v1.i1) -> @pair {
+    block0:
+        br v1 block1 block2;
+
+    block1:
+        v2.@pair = insert_value undef.@pair 0.i8 v0;
+        v3.@pair = insert_value v2 1.i8 1.i256;
+        return v3;
+
+    block2:
+        v4.@pair = insert_value undef.@pair 0.i8 v0;
+        v5.@pair = insert_value v4 1.i8 2.i256;
+        return v5;
+}
+
+func public %caller(v0.i256, v1.i256, v2.i1) -> i256 {
+    block0:
+        v3.@pair = call %view v0 v2;
+        v4.@pair = call %view v1 v2;
+        v5.i256 = extract_value v3 0.i8;
+        v6.i256 = extract_value v4 1.i8;
+        v7.i256 = add v5 v6;
+        evm_sstore 0.i256 v7;
+        return v7;
+}

@@ -63,6 +63,36 @@ fn test_full(fixture: Fixture<ParsedModule>) {
     snap_test!(result, fixture_path);
 }
 
+#[dir_test(
+    dir: "$CARGO_MANIFEST_DIR/test_files/inliner_full_cost/",
+    glob: "*.sntn",
+    loader: common::parse_module,
+)]
+fn test_full_cost(fixture: Fixture<ParsedModule>) {
+    let fixture_path = fixture.path();
+    let mut parsed = fixture.into_content();
+    let module = &mut parsed.module;
+
+    let mut inliner = Inliner::new(object_aware_full_inliner_test_config());
+    let stats = inliner.run(module);
+    assert!(
+        stats.full_calls_inlined > 0,
+        "expected at least one full-inline in {}",
+        fixture_path
+    );
+    assert_module_verified(module);
+
+    let mut result = String::new();
+    for func_ref in module.funcs() {
+        module.func_store.view(func_ref, |func| {
+            result.push_str(&FuncWriter::new(func_ref, func).dump_string());
+        });
+        result.push_str("\n\n");
+    }
+
+    snap_test!(result, fixture_path);
+}
+
 #[test]
 fn no_op_rewrite_self_wrapper_is_not_counted_as_rewrite() {
     let source = r#"
@@ -1948,8 +1978,8 @@ fn object_aware_full_inliner_test_config() -> InlinerConfig {
         inline_threshold_cold: 4,
         leaf_bonus: 0,
         call_overhead_bonus: 0,
-        object_scalarization_bonus_cap: 10,
-        object_helper_cluster_bonus: 4,
+        scalarization_bonus_cap: 10,
+        scalarization_helper_cluster_bonus: 4,
         ..Default::default()
     }
 }

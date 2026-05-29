@@ -1,0 +1,62 @@
+---
+source: crates/codegen/tests/inliner.rs
+input_file: test_files/inliner_full_cost/aggregate_value_helper_by_cost.sntn
+---
+func private %view(v0.i256, v1.i1) -> @pair {
+    block0:
+        br v1 block1 block2;
+
+    block1:
+        v2.@pair = insert_value undef.@pair 0.i8 v0;
+        v3.@pair = insert_value v2 1.i8 1.i256;
+        return v3;
+
+    block2:
+        v4.@pair = insert_value undef.@pair 0.i8 v0;
+        v5.@pair = insert_value v4 1.i8 2.i256;
+        return v5;
+}
+
+
+func public %caller(v0.i256, v1.i256, v2.i1) -> i256 {
+    block0:
+        jump block2;
+
+    block2:
+        br v2 block3 block4;
+
+    block3:
+        v12.@pair = insert_value undef.@pair 0.i8 v0;
+        v14.@pair = insert_value v12 1.i8 1.i256;
+        jump block1;
+
+    block4:
+        v16.@pair = insert_value undef.@pair 0.i8 v0;
+        v18.@pair = insert_value v16 1.i8 2.i256;
+        jump block1;
+
+    block1:
+        v19.@pair = phi (v14 block3) (v18 block4);
+        jump block6;
+
+    block6:
+        br v2 block7 block8;
+
+    block7:
+        v21.@pair = insert_value undef.@pair 0.i8 v1;
+        v22.@pair = insert_value v21 1.i8 1.i256;
+        jump block5;
+
+    block8:
+        v24.@pair = insert_value undef.@pair 0.i8 v1;
+        v25.@pair = insert_value v24 1.i8 2.i256;
+        jump block5;
+
+    block5:
+        v26.@pair = phi (v22 block7) (v25 block8);
+        v5.i256 = extract_value v19 0.i8;
+        v6.i256 = extract_value v26 1.i8;
+        v7.i256 = add v5 v6;
+        evm_sstore 0.i256 v7;
+        return v7;
+}

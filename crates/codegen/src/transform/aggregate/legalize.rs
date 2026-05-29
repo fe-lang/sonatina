@@ -33,9 +33,17 @@ struct ScalarUse {
     result_ty: Type,
 }
 
+#[derive(Clone, Copy)]
+struct ZeroSizedScalarUse {
+    inst: InstId,
+    result: ValueId,
+    result_ty: Type,
+}
+
 #[derive(Default)]
 struct MloadProjectionPlan {
     scalar_uses: SmallVec<[ScalarUse; 4]>,
+    zero_sized_scalar_uses: SmallVec<[ZeroSizedScalarUse; 4]>,
     transparent_insts: SmallVec<[InstId; 8]>,
     demanded_root_runtime_leaves: SmallVec<[bool; 8]>,
 }
@@ -62,6 +70,14 @@ impl MloadProjectionPlan {
             result_ty,
         });
         self.mark_root_runtime_leaf(root_runtime_leaf);
+    }
+
+    fn add_zero_sized_scalar_use(&mut self, inst: InstId, result: ValueId, result_ty: Type) {
+        self.zero_sized_scalar_uses.push(ZeroSizedScalarUse {
+            inst,
+            result,
+            result_ty,
+        });
     }
 
     fn mark_root_runtime_leaf(&mut self, root_runtime_leaf: usize) {
@@ -608,14 +624,7 @@ impl AggregateLowerToMemoryLegalize {
         } else {
             let result_shape = self.shape_or_panic(module, result_ty);
             let leaf = &result_shape.leaves[slice.first_leaf];
-            self.emit_store_scalar_to_path(
-                func,
-                &mut builder,
-                dst_ptr,
-                &leaf.path,
-                *insert.value(),
-                leaf.ty,
-            );
+            self.emit_store_scalar_leaf_to_path(func, &mut builder, dst_ptr, leaf, *insert.value());
         }
 
         self.remove_if_results_dead(func, inst);
@@ -647,7 +656,9 @@ impl AggregateLowerToMemoryLegalize {
                 elem,
             );
         } else {
-            self.emit_store_scalar_to_path(func, builder, elem_ptr, &[], *insert.value(), elem);
+            if self.runtime_size_bytes_or_panic(module, elem) != 0 {
+                self.emit_store_scalar_to_path(func, builder, elem_ptr, &[], *insert.value(), elem);
+            }
         }
         self.remove_if_results_dead(func, inst);
     }
@@ -696,6 +707,16 @@ impl AggregateLowerToMemoryLegalize {
                 return;
             }
 
+            if child_view.runtime_leaf_count == 0
+                && self.runtime_size_bytes_or_panic(module, result_ty) != 0
+            {
+                panic!("zero-sized aggregate projection produced non-zero scalar extract");
+            }
+            if child_view.runtime_leaf_count == 0 {
+                let undef = func.dfg.make_undef_value(result_ty);
+                self.alias_and_remove(func, inst, result, undef);
+                return;
+            }
             if child_view.runtime_leaf_count != 1 {
                 panic!("scalar extract_value must resolve to one runtime leaf");
             }
@@ -748,6 +769,14 @@ impl AggregateLowerToMemoryLegalize {
         let src_ptr = self.materialized_ptr(func, *extract.dest(), module);
         let src_shape = self.shape_or_panic(module, agg_ty);
         let src_leaf = &src_shape.leaves[slice.first_leaf];
+        if src_leaf.size_bytes == 0 && self.runtime_size_bytes_or_panic(module, result_ty) != 0 {
+            panic!("zero-sized aggregate leaf produced non-zero scalar extract");
+        }
+        if src_leaf.size_bytes == 0 {
+            let undef = func.dfg.make_undef_value(result_ty);
+            self.alias_and_remove(func, inst, result, undef);
+            return;
+        }
         let mut builder = BeforeCursor::new_before_inst(func, inst);
         let load = self.emit_load_scalar_from_path(
             func,
@@ -809,6 +838,11 @@ impl AggregateLowerToMemoryLegalize {
         }
 
         if is_explicit_undef(func, src_value) {
+            let undef = func.dfg.make_undef_value(result_ty);
+            self.alias_and_remove(func, inst, result, undef);
+            return;
+        }
+        if self.runtime_size_bytes_or_panic(module, result_ty) == 0 {
             let undef = func.dfg.make_undef_value(result_ty);
             self.alias_and_remove(func, inst, result, undef);
             return;
@@ -898,6 +932,14 @@ impl AggregateLowerToMemoryLegalize {
             self.alias_and_remove(func, scalar_use.inst, scalar_use.result, replacement);
         }
 
+        for scalar_use in &plan.zero_sized_scalar_uses {
+            if !func.layout.is_inst_inserted(scalar_use.inst) {
+                continue;
+            }
+            let undef = func.dfg.make_undef_value(scalar_use.result_ty);
+            self.alias_and_remove(func, scalar_use.inst, scalar_use.result, undef);
+        }
+
         self.remove_dead_transparents(func, &plan.transparent_insts);
 
         let slot_was_requested = self.materialized_addr[result].is_some();
@@ -970,17 +1012,37 @@ impl AggregateLowerToMemoryLegalize {
                     continue;
                 };
                 let result_ty = func.dfg.value_ty(extract_result);
+                let result_is_aggregate = shape::is_supported_aggregate_ty(module, result_ty);
+                let result_size = (!result_is_aggregate)
+                    .then(|| self.runtime_size_bytes_or_panic(module, result_ty));
+                if shape::const_u32(&func.dfg, *extract.idx()).is_none()
+                    && result_size == Some(0)
+                    && matches!(
+                        view.agg_ty.resolve_compound(module),
+                        Some(CompoundType::Array { elem, .. }) if elem == result_ty
+                    )
+                {
+                    plan.add_zero_sized_scalar_use(user, extract_result, result_ty);
+                    continue;
+                }
                 let Some(child_view) = self.aggregate_projection_view_for_extract(
                     func, module, &view, &extract, result_ty,
                 ) else {
                     plan.mark_view_runtime_leaves(&view);
                     continue;
                 };
-                if shape::is_supported_aggregate_ty(module, result_ty) {
+                if result_is_aggregate {
                     views[extract_result] = Some(child_view);
                     self.projection_views[extract_result] = Some(child_view);
                     plan.transparent_insts.push(user);
                     worklist.push(extract_result);
+                    continue;
+                }
+                if child_view.runtime_leaf_count == 0 {
+                    if result_size != Some(0) {
+                        panic!("zero-sized aggregate projection produced non-zero scalar extract");
+                    }
+                    plan.add_zero_sized_scalar_use(user, extract_result, result_ty);
                     continue;
                 }
                 if child_view.runtime_leaf_count == 1 {
@@ -1139,6 +1201,12 @@ impl AggregateLowerToMemoryLegalize {
             .unwrap_or_else(|| panic!("unsupported aggregate type in legalizer: {ty:?}"))
     }
 
+    fn runtime_size_bytes_or_panic(&mut self, module: &ModuleCtx, ty: Type) -> u32 {
+        self.layout_cache
+            .runtime_size_bytes(module, ty)
+            .unwrap_or_else(|| panic!("unsupported type in aggregate legalizer: {ty:?}"))
+    }
+
     fn array_elem_ty_or_panic(&self, module: &ModuleCtx, ty: Type, ctx: &str) -> Type {
         let Some(CompoundType::Array { elem, .. }) = ty.resolve_compound(module) else {
             panic!("{ctx} dynamic index is only supported for arrays");
@@ -1219,6 +1287,41 @@ impl AggregateLowerToMemoryLegalize {
         dst_ty: Type,
     ) {
         let dst_leaves = self.runtime_leaves_or_panic(module, dst_ty);
+        self.emit_projection_view_to_runtime_leaves_from_snapshot(
+            func,
+            builder,
+            view,
+            dst_ptr,
+            &dst_leaves,
+        );
+    }
+
+    fn emit_projection_view_to_shape_leaves_from_snapshot(
+        &self,
+        func: &mut Function,
+        builder: &mut BeforeCursor,
+        view: &AggregateProjectionView,
+        dst_ptr: ValueId,
+        dst_leaves: &[shape::AggregateLeaf],
+    ) {
+        let runtime_dst_leaves = runtime_leaves_from_leaf_slice(dst_leaves);
+        self.emit_projection_view_to_runtime_leaves_from_snapshot(
+            func,
+            builder,
+            view,
+            dst_ptr,
+            &runtime_dst_leaves,
+        );
+    }
+
+    fn emit_projection_view_to_runtime_leaves_from_snapshot(
+        &self,
+        func: &mut Function,
+        builder: &mut BeforeCursor,
+        view: &AggregateProjectionView,
+        dst_ptr: ValueId,
+        dst_leaves: &[shape::AggregateLeaf],
+    ) {
         if dst_leaves.len() != view.runtime_leaf_count {
             panic!("aggregate projection runtime leaf count mismatch");
         }
@@ -1247,6 +1350,20 @@ impl AggregateLowerToMemoryLegalize {
                 dst_leaf.ty,
             );
         }
+    }
+
+    fn emit_store_scalar_leaf_to_path(
+        &self,
+        func: &mut Function,
+        builder: &mut BeforeCursor,
+        base_ptr: ValueId,
+        leaf: &shape::AggregateLeaf,
+        value: ValueId,
+    ) {
+        if leaf.size_bytes == 0 {
+            return;
+        }
+        self.emit_store_scalar_to_path(func, builder, base_ptr, &leaf.path, value, leaf.ty);
     }
 
     fn value_requires_materialized_slot(&self, func: &Function, value: ValueId) -> bool {
@@ -1306,15 +1423,94 @@ impl AggregateLowerToMemoryLegalize {
             return;
         }
 
+        self.emit_copy_aggregate_value_to_leaves(
+            func,
+            module,
+            builder,
+            value,
+            agg_ty,
+            AggregateLeafCopyDst {
+                ptr: dst_ptr,
+                leaves: &shape.leaves,
+            },
+        );
+    }
+
+    fn emit_copy_aggregate_value_to_leaves(
+        &mut self,
+        func: &mut Function,
+        module: &ModuleCtx,
+        builder: &mut BeforeCursor,
+        value: ValueId,
+        agg_ty: Type,
+        dst: AggregateLeafCopyDst<'_>,
+    ) {
+        if is_explicit_undef(func, value) {
+            return;
+        }
+
         if let Some(view) = self.projection_views[value] {
-            self.emit_projection_view_to_ptr_from_snapshot(
-                func, builder, module, &view, dst_ptr, agg_ty,
+            self.emit_projection_view_to_shape_leaves_from_snapshot(
+                func, builder, &view, dst.ptr, dst.leaves,
             );
             return;
         }
 
+        if let Some(def_inst) = func.dfg.value_inst(value)
+            && let Some(insert) =
+                downcast::<&data::InsertValue>(func.inst_set(), func.dfg.inst(def_inst)).cloned()
+            && func.dfg.value_ty(value) == agg_ty
+            && let Some(idx) = shape::const_u32(&func.dfg, *insert.idx())
+            && let Some(slice) = shape::aggregate_slice_for_index(module, agg_ty, idx)
+        {
+            self.emit_copy_aggregate_value_to_leaves(
+                func,
+                module,
+                builder,
+                *insert.dest(),
+                agg_ty,
+                dst,
+            );
+
+            let slice_end = slice
+                .first_leaf
+                .checked_add(slice.leaf_count)
+                .unwrap_or_else(|| panic!("aggregate slice leaf range overflow"));
+            let Some(dst_slice_leaves) = dst.leaves.get(slice.first_leaf..slice_end) else {
+                panic!("aggregate slice leaf range out of bounds");
+            };
+
+            if shape::is_supported_aggregate_ty(module, slice.ty) {
+                self.emit_copy_aggregate_value_to_leaves(
+                    func,
+                    module,
+                    builder,
+                    *insert.value(),
+                    slice.ty,
+                    AggregateLeafCopyDst {
+                        ptr: dst.ptr,
+                        leaves: dst_slice_leaves,
+                    },
+                );
+            } else {
+                let [leaf] = dst_slice_leaves else {
+                    panic!("scalar insert_value slice should contain one leaf");
+                };
+                self.emit_store_scalar_leaf_to_path(func, builder, dst.ptr, leaf, *insert.value());
+            }
+            return;
+        }
+
+        let shape = self.shape_or_panic(module, agg_ty);
         let src_ptr = self.materialized_ptr(func, value, module);
-        self.emit_copy_aggregate_ptr_to_ptr(func, module, builder, src_ptr, dst_ptr, agg_ty);
+        self.emit_copy_leaf_slices_ptr_to_ptr(
+            func,
+            builder,
+            src_ptr,
+            &shape.leaves,
+            dst.ptr,
+            dst.leaves,
+        );
     }
 
     fn emit_copy_aggregate_ptr_to_ptr(
@@ -1401,19 +1597,23 @@ impl AggregateLowerToMemoryLegalize {
             panic!("insert_value slice leaf mismatch during legalization");
         }
 
+        let dst_leaves =
+            &dst_shape.leaves[dst.slice.first_leaf..dst.slice.first_leaf + dst.slice.leaf_count];
         if is_explicit_undef(func, value) {
-            let dst_leaves = &dst_shape.leaves
-                [dst.slice.first_leaf..dst.slice.first_leaf + dst.slice.leaf_count];
             self.emit_store_undef_to_leaves(func, builder, dst.ptr, dst_leaves);
             return;
         }
 
-        let src_ptr = self.materialized_ptr(func, value, module);
-        let src_leaves = &payload_shape.leaves[..dst.slice.leaf_count];
-        let dst_leaves =
-            &dst_shape.leaves[dst.slice.first_leaf..dst.slice.first_leaf + dst.slice.leaf_count];
-        self.emit_copy_leaf_slices_ptr_to_ptr(
-            func, builder, src_ptr, src_leaves, dst.ptr, dst_leaves,
+        self.emit_copy_aggregate_value_to_leaves(
+            func,
+            module,
+            builder,
+            value,
+            payload_ty,
+            AggregateLeafCopyDst {
+                ptr: dst.ptr,
+                leaves: dst_leaves,
+            },
         );
     }
 
@@ -1706,6 +1906,20 @@ struct AggregateSliceCopySrc {
 struct AggregateSliceCopyDst {
     ptr: ValueId,
     ty: Type,
+}
+
+#[derive(Clone, Copy)]
+struct AggregateLeafCopyDst<'a> {
+    ptr: ValueId,
+    leaves: &'a [shape::AggregateLeaf],
+}
+
+fn runtime_leaves_from_leaf_slice(leaves: &[shape::AggregateLeaf]) -> shape::RuntimeLeaves {
+    leaves
+        .iter()
+        .filter(|leaf| leaf.size_bytes != 0)
+        .cloned()
+        .collect()
 }
 
 struct BeforeCursor {
@@ -2012,7 +2226,7 @@ mod tests {
             TransactTo, U256,
         },
     };
-    use sonatina_ir::{Module, isa::evm::Evm, module::FuncRef};
+    use sonatina_ir::{Module, ir_writer::FuncWriter, isa::evm::Evm, module::FuncRef};
     use sonatina_parser::parse_module;
     use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
     use sonatina_verifier::{VerificationLevel, VerifierConfig};
@@ -2027,6 +2241,58 @@ mod tests {
             .into_iter()
             .find(|&func_ref| module.ctx.func_sig(func_ref, |sig| sig.name() == name))
             .expect("function should exist")
+    }
+
+    fn dump_func(module: &Module, name: &str) -> String {
+        let func_ref = lookup_func(module, name);
+        module.func_store.view(func_ref, |func| {
+            FuncWriter::new(func_ref, func).dump_string()
+        })
+    }
+
+    fn count_aggregate_allocas(func: &Function, ctx: &ModuleCtx) -> usize {
+        let mut count = 0;
+        for block in func.layout.iter_block() {
+            for inst in func.layout.iter_inst(block) {
+                if let Some(alloca) =
+                    downcast::<&data::Alloca>(func.inst_set(), func.dfg.inst(inst))
+                    && shape::is_supported_aggregate_ty(ctx, *alloca.ty())
+                {
+                    count += 1;
+                }
+            }
+        }
+        count
+    }
+
+    fn assert_no_unit_memory_ops(func: &Function, dumped: &str) {
+        for block in func.layout.iter_block() {
+            for inst in func.layout.iter_inst(block) {
+                if let Some(mload) = downcast::<&data::Mload>(func.inst_set(), func.dfg.inst(inst))
+                {
+                    assert_ne!(*mload.ty(), Type::Unit, "unit load remains:\n{dumped}");
+                }
+                if let Some(mstore) =
+                    downcast::<&data::Mstore>(func.inst_set(), func.dfg.inst(inst))
+                {
+                    assert_ne!(*mstore.ty(), Type::Unit, "unit store remains:\n{dumped}");
+                }
+            }
+        }
+    }
+
+    fn assert_no_mloads(func: &Function, dumped: &str) {
+        for block in func.layout.iter_block() {
+            for inst in func.layout.iter_inst(block) {
+                if let Some(mload) = downcast::<&data::Mload>(func.inst_set(), func.dfg.inst(inst))
+                {
+                    panic!(
+                        "zero-sized projection extract should not demand a snapshot load, found {:?}:\n{dumped}",
+                        mload.ty()
+                    );
+                }
+            }
+        }
     }
 
     fn test_backend() -> EvmBackend {
@@ -2237,6 +2503,68 @@ func private %f(v0.i256) -> i256 {
     }
 
     #[test]
+    fn late_legalizer_copies_static_insert_webs_without_source_slots() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @chunk = { i256, i256, i256 };
+type @event = { @chunk, @chunk, @chunk, @chunk, @chunk };
+
+func private %make_chunk(v0.i256) -> (i256, i256, i256) {
+    block0:
+        v1.i256 = add v0 1.i256;
+        v2.i256 = add v0 2.i256;
+        return (v0, v1, v2);
+}
+
+func private %f(v0.i256, v1.i256, v2.i256, v3.i256, v4.i256, v5.i256, v6.i256, v7.i256, v8.i256) {
+    block0:
+        v9.@chunk = insert_value undef.@chunk 0.i8 v0;
+        v10.@chunk = insert_value v9 1.i8 v1;
+        v11.@chunk = insert_value v10 2.i8 v2;
+        v12.@chunk = insert_value undef.@chunk 0.i8 v3;
+        v13.@chunk = insert_value v12 1.i8 v4;
+        v14.@chunk = insert_value v13 2.i8 v5;
+        v15.@chunk = insert_value undef.@chunk 0.i8 v6;
+        v16.@chunk = insert_value v15 1.i8 v7;
+        v17.@chunk = insert_value v16 2.i8 v8;
+        (v18.i256, v19.i256, v20.i256) = call %make_chunk v0;
+        v21.@chunk = insert_value undef.@chunk 0.i8 v18;
+        v22.@chunk = insert_value v21 1.i8 v19;
+        v23.@chunk = insert_value v22 2.i8 v20;
+        (v24.i256, v25.i256, v26.i256) = call %make_chunk v3;
+        v27.@chunk = insert_value undef.@chunk 0.i8 v24;
+        v28.@chunk = insert_value v27 1.i8 v25;
+        v29.@chunk = insert_value v28 2.i8 v26;
+        v30.@event = insert_value undef.@event 0.i8 v11;
+        v31.@event = insert_value v30 1.i8 v14;
+        v32.@event = insert_value v31 2.i8 v17;
+        v33.@event = insert_value v32 3.i8 v23;
+        v34.@event = insert_value v33 4.i8 v29;
+        mstore 0.i32 v34 @event;
+        return;
+}
+"#,
+        );
+        let ctx = module.ctx.clone();
+        let func_ref = lookup_func(&module, "f");
+        module.func_store.modify(func_ref, |func| {
+            AggregateLowerToMemoryLegalize::default().run(func, &ctx);
+        });
+
+        let dumped = dump_func(&module, "f");
+        module.func_store.view(func_ref, |func| {
+            assert_aggregate_legalized(func, &ctx);
+            assert_eq!(
+                count_aggregate_allocas(func, &ctx),
+                0,
+                "static insert_value webs should copy directly to leaf stores:\n{dumped}"
+            );
+        });
+    }
+
+    #[test]
     fn late_legalizer_handles_pointer_valued_aggregates() {
         let module = parse_test_module(
             r#"
@@ -2345,6 +2673,153 @@ func private %f(v0.i256) -> i256 {
                     }
                 }
             }
+        });
+    }
+
+    #[test]
+    fn late_legalizer_copies_projection_views_with_zero_sized_leaves() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @outer = { unit, i256 };
+
+func public %entry() {
+    block0:
+        mstore 64.i32 77.i256 i256;
+        v0.@outer = mload 64.i32 @outer;
+        mstore 64.i32 99.i256 i256;
+        mstore 128.i32 v0 @outer;
+        v1.i256 = mload 128.i32 i256;
+        mstore 0.i32 v1 i256;
+        evm_return 0.i8 32.i8;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}
+"#,
+        );
+        let ctx = module.ctx.clone();
+        let func_ref = lookup_func(&module, "entry");
+        module.func_store.modify(func_ref, |func| {
+            AggregateLowerToMemoryLegalize::default().run(func, &ctx);
+        });
+
+        let dumped = dump_func(&module, "entry");
+        module.func_store.view(func_ref, |func| {
+            assert_aggregate_legalized(func, &ctx);
+            assert_eq!(
+                count_aggregate_allocas(func, &ctx),
+                0,
+                "projection view copy should stay scalarized:\n{dumped}"
+            );
+        });
+        assert_eq!(run_contract(&module), U256::from(77));
+    }
+
+    #[test]
+    fn late_legalizer_skips_zero_sized_insert_leaf_stores() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @outer = { unit, i256 };
+
+func private %f(v0.i256) {
+    block0:
+        v1.@outer = insert_value undef.@outer 0.i8 undef.unit;
+        v2.@outer = insert_value v1 1.i8 v0;
+        mstore 0.i32 v2 @outer;
+        return;
+}
+"#,
+        );
+        let ctx = module.ctx.clone();
+        let func_ref = lookup_func(&module, "f");
+        module.func_store.modify(func_ref, |func| {
+            AggregateLowerToMemoryLegalize::default().run(func, &ctx);
+        });
+
+        let dumped = dump_func(&module, "f");
+        module.func_store.view(func_ref, |func| {
+            assert_aggregate_legalized(func, &ctx);
+            assert_eq!(
+                count_aggregate_allocas(func, &ctx),
+                0,
+                "static insert_value webs should copy directly to leaf stores:\n{dumped}"
+            );
+            assert_no_unit_memory_ops(func, &dumped);
+        });
+    }
+
+    #[test]
+    fn late_legalizer_extracts_zero_sized_projection_leaves_as_undef() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @outer = { unit, i256 };
+
+func private %f() {
+    block0:
+        mstore 64.i32 55.i256 i256;
+        v0.@outer = mload 64.i32 @outer;
+        v1.unit = extract_value v0 0.i8;
+        v2.@outer = insert_value undef.@outer 0.i8 v1;
+        v3.@outer = insert_value v2 1.i8 89.i256;
+        mstore 0.i32 v3 @outer;
+        return;
+}
+"#,
+        );
+        let ctx = module.ctx.clone();
+        let func_ref = lookup_func(&module, "f");
+        module.func_store.modify(func_ref, |func| {
+            AggregateLowerToMemoryLegalize::default().run(func, &ctx);
+        });
+
+        let dumped = dump_func(&module, "f");
+        module.func_store.view(func_ref, |func| {
+            assert_aggregate_legalized(func, &ctx);
+            assert_no_mloads(func, &dumped);
+            assert_no_unit_memory_ops(func, &dumped);
+        });
+    }
+
+    #[test]
+    fn late_legalizer_skips_zero_sized_dynamic_array_leaf_ops() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func private %f(v0.i256) {
+    block0:
+        v1.[unit; 2] = insert_value undef.[unit; 2] v0 undef.unit;
+        v2.unit = extract_value v1 v0;
+        v3.[unit; 2] = insert_value v1 v0 v2;
+        mstore 0.i32 v3 [unit; 2];
+        return;
+}
+"#,
+        );
+        let ctx = module.ctx.clone();
+        let func_ref = lookup_func(&module, "f");
+        module.func_store.modify(func_ref, |func| {
+            AggregateLowerToMemoryLegalize::default().run(func, &ctx);
+        });
+
+        let dumped = dump_func(&module, "f");
+        module.func_store.view(func_ref, |func| {
+            assert_aggregate_legalized(func, &ctx);
+            assert_eq!(
+                count_aggregate_allocas(func, &ctx),
+                0,
+                "zero-sized dynamic array ops should not leave materialized slots:\n{dumped}"
+            );
+            assert_no_unit_memory_ops(func, &dumped);
         });
     }
 
