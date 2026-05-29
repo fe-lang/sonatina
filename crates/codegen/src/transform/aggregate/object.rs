@@ -4,9 +4,10 @@ use sonatina_ir::{
     Function, I256, Immediate, InstId, Module, Type, Value, ValueId,
     inst::{cast, data, downcast, evm},
     module::{FuncRef, ModuleCtx},
-    types::{CompoundType, CompoundTypeRef, StructData},
-    visitor::VisitorMut,
+    types::{CompoundType, CompoundTypeRef},
 };
+
+use crate::type_rewrite::{TypeRewrite, rewrite_compound_type_default, rewrite_function_type_uses};
 
 use super::{
     object_locality::{self, LocalObjectArgMap, LocalObjectArgs, SpecialObjectUse},
@@ -151,61 +152,7 @@ impl ObjectLowerToMemory {
     }
 
     fn rewrite_types(&self, func: &mut Function, type_lowerer: &mut ObjRefTypeLowerer) -> bool {
-        let mut changed = false;
-        for value in func.dfg.value_ids().collect::<Vec<_>>() {
-            let old_ty = func.dfg.value_ty(value);
-            let new_ty = type_lowerer.rewrite_type(func.ctx(), old_ty);
-            if new_ty == old_ty {
-                continue;
-            }
-
-            let replacement = match func.dfg.value(value).clone() {
-                Value::Immediate { imm, .. } => Value::Immediate { imm, ty: new_ty },
-                Value::Inst {
-                    inst, result_idx, ..
-                } => Value::Inst {
-                    inst,
-                    result_idx,
-                    ty: new_ty,
-                },
-                Value::Arg { idx, .. } => Value::Arg { idx, ty: new_ty },
-                Value::Global { gv, .. } => Value::Global { gv, ty: new_ty },
-                Value::Undef { .. } => Value::Undef { ty: new_ty },
-            };
-            func.dfg.values[value] = replacement;
-            changed = true;
-        }
-
-        struct TypeVisitor<'a> {
-            ctx: ModuleCtx,
-            type_lowerer: &'a mut ObjRefTypeLowerer,
-            changed: bool,
-        }
-
-        impl VisitorMut for TypeVisitor<'_> {
-            fn visit_ty(&mut self, item: &mut Type) {
-                let new_ty = self.type_lowerer.rewrite_type(&self.ctx, *item);
-                self.changed |= new_ty != *item;
-                *item = new_ty;
-            }
-        }
-
-        let mut visitor = TypeVisitor {
-            ctx: func.ctx().clone(),
-            type_lowerer,
-            changed: false,
-        };
-        let blocks: Vec<_> = func.layout.iter_block().collect();
-        for block in blocks {
-            let insts: Vec<_> = func.layout.iter_inst(block).collect();
-            for inst in insts {
-                if func.layout.is_inst_inserted(inst) {
-                    func.dfg.inst_mut(inst).accept_mut(&mut visitor);
-                }
-            }
-        }
-
-        changed || visitor.changed
+        rewrite_function_type_uses(func, type_lowerer, |_, _, _| None)
     }
 
     fn collect_alloc_kinds(
@@ -459,120 +406,35 @@ fn has_object_lowering_work(func: &Function) -> bool {
 #[derive(Default)]
 struct ObjRefTypeLowerer {
     changed: bool,
-    compound_map: FxHashMap<CompoundTypeRef, CompoundTypeRef>,
+    compound_map: FxHashMap<CompoundTypeRef, Type>,
 }
 
-impl ObjRefTypeLowerer {
-    fn rewrite_type(&mut self, ctx: &ModuleCtx, ty: Type) -> Type {
-        match ty {
-            Type::Compound(compound) => Type::Compound(self.rewrite_compound(ctx, compound)),
-            _ => ty,
+impl TypeRewrite for ObjRefTypeLowerer {
+    fn compound_map(&mut self) -> &mut FxHashMap<CompoundTypeRef, Type> {
+        &mut self.compound_map
+    }
+
+    fn rewrite_compound_type(
+        &mut self,
+        ctx: &ModuleCtx,
+        compound: CompoundTypeRef,
+        current: CompoundType,
+    ) -> Type {
+        match current {
+            CompoundType::ObjRef(elem) => {
+                let elem = self.rewrite_type(ctx, elem);
+                ctx.with_ty_store_mut(|store| store.make_ptr(elem))
+            }
+            _ => rewrite_compound_type_default(self, ctx, compound, current),
         }
     }
 
-    fn rewrite_compound(&mut self, ctx: &ModuleCtx, compound: CompoundTypeRef) -> CompoundTypeRef {
-        if let Some(&mapped) = self.compound_map.get(&compound) {
-            return mapped;
-        }
+    fn note_compound_remap(&mut self, _compound: CompoundTypeRef, _mapped: Type) {
+        self.changed = true;
+    }
 
-        let current = ctx.with_ty_store(|store| store.resolve_compound(compound).clone());
-        self.compound_map.insert(compound, compound);
-
-        let mapped = match current {
-            CompoundType::Array { elem, len } => {
-                let elem = self.rewrite_type(ctx, elem);
-                ctx.with_ty_store_mut(|store| {
-                    let Type::Compound(mapped) = store.make_array(elem, len) else {
-                        unreachable!();
-                    };
-                    mapped
-                })
-            }
-            CompoundType::Ptr(elem) => {
-                let elem = self.rewrite_type(ctx, elem);
-                ctx.with_ty_store_mut(|store| {
-                    let Type::Compound(mapped) = store.make_ptr(elem) else {
-                        unreachable!();
-                    };
-                    mapped
-                })
-            }
-            CompoundType::ObjRef(elem) => {
-                let elem = self.rewrite_type(ctx, elem);
-                let mapped = ctx.with_ty_store_mut(|store| {
-                    let Type::Compound(mapped) = store.make_ptr(elem) else {
-                        unreachable!();
-                    };
-                    mapped
-                });
-                self.changed = true;
-                mapped
-            }
-            CompoundType::ConstRef(elem) => {
-                let elem = self.rewrite_type(ctx, elem);
-                ctx.with_ty_store_mut(|store| {
-                    let Type::Compound(mapped) = store.make_const_ref(elem) else {
-                        unreachable!();
-                    };
-                    mapped
-                })
-            }
-            CompoundType::Enum(data) => {
-                let new_variants: Vec<_> = data
-                    .variants
-                    .iter()
-                    .map(|variant| sonatina_ir::types::VariantData {
-                        name: variant.name.clone(),
-                        explicit_discriminant: variant.explicit_discriminant,
-                        fields: variant
-                            .fields
-                            .iter()
-                            .map(|&field| self.rewrite_type(ctx, field))
-                            .collect(),
-                    })
-                    .collect();
-                if new_variants != data.variants {
-                    ctx.with_ty_store_mut(|store| {
-                        store.update_enum_variants(&data.name, &new_variants, data.repr)
-                    });
-                    self.changed = true;
-                }
-                compound
-            }
-            CompoundType::Func { args, ret_tys } => {
-                let args: Vec<_> = args
-                    .iter()
-                    .map(|&arg| self.rewrite_type(ctx, arg))
-                    .collect();
-                let ret_tys: Vec<_> = ret_tys
-                    .iter()
-                    .map(|&ret| self.rewrite_type(ctx, ret))
-                    .collect();
-                ctx.with_ty_store_mut(|store| {
-                    let Type::Compound(mapped) = store.make_func(&args, &ret_tys) else {
-                        unreachable!();
-                    };
-                    mapped
-                })
-            }
-            CompoundType::Struct(StructData { name, fields, .. }) => {
-                let new_fields: Vec<_> = fields
-                    .iter()
-                    .map(|&field| self.rewrite_type(ctx, field))
-                    .collect();
-                if new_fields != fields {
-                    ctx.with_ty_store_mut(|store| store.update_struct_fields(&name, &new_fields));
-                    self.changed = true;
-                }
-                compound
-            }
-        };
-
-        if mapped != compound {
-            self.changed = true;
-        }
-        self.compound_map.insert(compound, mapped);
-        mapped
+    fn note_named_compound_update(&mut self, _compound: CompoundTypeRef) {
+        self.changed = true;
     }
 }
 

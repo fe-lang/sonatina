@@ -361,6 +361,22 @@ impl DataFlowGraph {
         }
     }
 
+    pub fn retype_value(&mut self, value_id: ValueId, new_ty: Type) {
+        self.values[value_id] = match self.value(value_id).clone() {
+            Value::Immediate { imm, .. } => Value::Immediate { imm, ty: new_ty },
+            Value::Inst {
+                inst, result_idx, ..
+            } => Value::Inst {
+                inst,
+                result_idx,
+                ty: new_ty,
+            },
+            Value::Arg { idx, .. } => Value::Arg { idx, ty: new_ty },
+            Value::Global { gv, .. } => Value::Global { gv, ty: new_ty },
+            Value::Undef { .. } => Value::Undef { ty: new_ty },
+        };
+    }
+
     pub fn value_is_imm(&self, value_id: ValueId) -> bool {
         matches!(self.value(value_id), Value::Immediate { .. })
     }
