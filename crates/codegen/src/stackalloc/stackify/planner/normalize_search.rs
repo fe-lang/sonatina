@@ -4077,12 +4077,120 @@ mod tests {
         },
     };
     use cranelift_entity::SecondaryMap;
-    use sonatina_ir::{I256, Immediate, Type, U256, ValueId, cfg::ControlFlowGraph};
+    use sonatina_ir::{Function, I256, Immediate, Type, U256, ValueId, cfg::ControlFlowGraph};
     use sonatina_parser::parse_module;
     use std::cell::Cell;
 
+    macro_rules! with_stackify_ctx {
+        ($reach:expr, |$func:ident, $ctx:ident| { $($setup:stmt;)* } $body:block) => {{
+            const SRC: &str = r#"
+target = "evm-ethereum-osaka"
+
+func public %f() {
+    block0:
+        return;
+}
+"#;
+            let parsed = parse_module(SRC).unwrap();
+            let func_ref = parsed.debug.func_order[0];
+
+            parsed.module.func_store.modify(func_ref, |$func| {
+                $($setup)*
+
+                let mut cfg = ControlFlowGraph::new();
+                cfg.compute($func);
+                let entry = cfg.entry().expect("missing entry block");
+
+                let mut liveness = Liveness::new();
+                liveness.compute($func, &cfg);
+
+                let mut dom = DomTree::new();
+                dom.compute(&cfg);
+
+                let mut scc = CfgSccAnalysis::new();
+                scc.compute(&cfg);
+
+                let reach = StackifyReachability::new($reach);
+                let $ctx = build_stackify_test_context(
+                    $func, &cfg, &dom, &liveness, entry, scc, reach,
+                );
+
+                $body
+            })
+        }};
+    }
+
     fn packed_state_ids(state: PackedState) -> Vec<u8> {
         (0..state.len()).map(|idx| state.get(idx)).collect()
+    }
+
+    fn make_undefs(func: &mut Function, count: usize) -> Vec<ValueId> {
+        (0..count)
+            .map(|_| func.dfg.make_undef_value(Type::I256))
+            .collect()
+    }
+
+    fn push_values(stack: &mut SymStack, values: &[ValueId]) {
+        for &v in values.iter().rev() {
+            stack.push_value(v);
+        }
+    }
+
+    fn default_search_cfg(ctx: &StackifyContext<'_>, max_expansions: usize) -> SearchCfg {
+        SearchCfg {
+            dup_max: ctx.reach.dup_max,
+            swap_max: ctx.reach.swap_max,
+            max_len: ctx.reach.swap_max,
+            max_expansions,
+        }
+    }
+
+    fn expensive_load_cost() -> EstimatedCostModel {
+        EstimatedCostModel {
+            load_cost: Cost {
+                gas: 1_000,
+                bytes: 1_000,
+            },
+        }
+    }
+
+    fn build_test_operand_prep_problem(
+        ctx: &StackifyContext<'_>,
+        stack: &SymStack,
+        args: &[ValueId],
+        cfg: SearchCfg,
+    ) -> OperandPrepProblem {
+        build_operand_prep_problem(
+            ctx,
+            stack,
+            args,
+            OperandPrepConstraints {
+                consume_last_use: &BitSet::default(),
+                cache_preserve: &BitSet::default(),
+            },
+            cfg,
+        )
+        .expect("expected operand-prep problem")
+    }
+
+    fn rename_immediate_stack_values(
+        ctx: &StackifyContext<'_>,
+        stack: &mut SymStack,
+        desired: &[ValueId],
+    ) {
+        for (depth, &want) in desired.iter().enumerate() {
+            if let Some(want_imm) = ctx.func.dfg.value_imm(want).map(|imm| imm.as_i256()) {
+                let StackItem::Value(cur) = *stack.item_at(depth).unwrap() else {
+                    panic!("expected value on stack");
+                };
+                assert_eq!(
+                    ctx.func.dfg.value_imm(cur).unwrap().as_i256(),
+                    want_imm,
+                    "canonical immediate mismatch"
+                );
+                stack.rename_value_at_depth(depth, want);
+            }
+        }
     }
 
     fn prep_state(ids: &[u8], tail: u64, mem: u64) -> PrepState {
@@ -4510,48 +4618,16 @@ mod tests {
 
     #[test]
     fn immediate_reuse_across_value_ids() {
-        const SRC: &str = r#"
-target = "evm-ethereum-osaka"
-
-func public %f() {
-    block0:
-        return;
-}
-"#;
-        let parsed = parse_module(SRC).unwrap();
-        let func_ref = parsed.debug.func_order[0];
-
-        parsed.module.func_store.modify(func_ref, |func| {
+        with_stackify_ctx!(16, |func, ctx| {
             let v0 = func.dfg.make_imm_value(Immediate::I8(0));
             let v1 = func.dfg.make_imm_value(Immediate::I256(I256::zero()));
-
-            let mut cfg = ControlFlowGraph::new();
-            cfg.compute(func);
-            let entry = cfg.entry().expect("missing entry block");
-
-            let mut liveness = Liveness::new();
-            liveness.compute(func, &cfg);
-
-            let mut dom = DomTree::new();
-            dom.compute(&cfg);
-
-            let mut scc = CfgSccAnalysis::new();
-            scc.compute(&cfg);
-
-            let reach = StackifyReachability::new(16);
-            let ctx = build_stackify_test_context(func, &cfg, &dom, &liveness, entry, scc, reach);
-
+        } {
             let mut stack = SymStack::entry_stack(func, false);
             stack.push_value(v0);
             let desired = [v1];
 
             let cost = EstimatedCostModel::default();
-            let search_cfg = SearchCfg {
-                dup_max: ctx.reach.dup_max,
-                swap_max: ctx.reach.swap_max,
-                max_len: ctx.reach.swap_max,
-                max_expansions: 50_000,
-            };
+            let search_cfg = default_search_cfg(&ctx, 50_000);
 
             let plan = solve_test_optimal_normalize_plan(&ctx, &stack, &desired, &cost, search_cfg)
                 .expect("no plan");
@@ -4562,73 +4638,24 @@ func public %f() {
             );
 
             let mut replayed = stack.clone();
-            for (depth, &want) in desired.iter().enumerate() {
-                if ctx.func.dfg.value_is_imm(want) {
-                    let want_imm = ctx.func.dfg.value_imm(want).unwrap().as_i256();
-                    let StackItem::Value(cur) = *replayed.item_at(depth).unwrap() else {
-                        panic!("expected value on stack");
-                    };
-                    let cur_imm = ctx.func.dfg.value_imm(cur).unwrap().as_i256();
-                    assert_eq!(cur_imm, want_imm, "canonical immediate mismatch");
-                    replayed.rename_value_at_depth(depth, want);
-                }
-            }
-
+            rename_immediate_stack_values(&ctx, &mut replayed, &desired);
             assert!(stack_matches_exact(&replayed, &desired));
         });
     }
 
     #[test]
     fn repair_solver_can_dup_from_frozen_suffix_on_long_stacks() {
-        const SRC: &str = r#"
-target = "evm-ethereum-osaka"
-
-func public %f() {
-    block0:
-        return;
-}
-"#;
-        let parsed = parse_module(SRC).unwrap();
-        let func_ref = parsed.debug.func_order[0];
-
-        parsed.module.func_store.modify(func_ref, |func| {
+        with_stackify_ctx!(16, |func, ctx| {
             // Build a long stack with a large shared suffix and a small repair region:
             //   start:  [p0..p4, s0..s24]
             //   goal:   [s0, p0..p4, s0..s24]
             // where the shared suffix is [s0..s24] (25 items) and the repair region is <= SWAP17.
-            let mut prefix: Vec<ValueId> = Vec::new();
-            for _ in 0..5 {
-                prefix.push(func.dfg.make_undef_value(sonatina_ir::Type::I256));
-            }
-
-            let mut suffix: Vec<ValueId> = Vec::new();
-            for _ in 0..25 {
-                suffix.push(func.dfg.make_undef_value(sonatina_ir::Type::I256));
-            }
-
-            let mut cfg = ControlFlowGraph::new();
-            cfg.compute(func);
-            let entry = cfg.entry().expect("missing entry block");
-
-            let mut liveness = Liveness::new();
-            liveness.compute(func, &cfg);
-
-            let mut dom = DomTree::new();
-            dom.compute(&cfg);
-
-            let mut scc = CfgSccAnalysis::new();
-            scc.compute(&cfg);
-
-            let reach = StackifyReachability::new(16);
-            let ctx = build_stackify_test_context(func, &cfg, &dom, &liveness, entry, scc, reach);
-
+            let prefix = make_undefs(func, 5);
+            let suffix = make_undefs(func, 25);
+        } {
             let mut stack = SymStack::entry_stack(func, false);
-            for &v in suffix.iter().rev() {
-                stack.push_value(v);
-            }
-            for &v in prefix.iter().rev() {
-                stack.push_value(v);
-            }
+            push_values(&mut stack, &suffix);
+            push_values(&mut stack, &prefix);
 
             let mut desired: Vec<ValueId> = Vec::new();
             desired.push(suffix[0]);
@@ -4648,12 +4675,7 @@ func public %f() {
             );
 
             let cost = EstimatedCostModel::default();
-            let search_cfg = SearchCfg {
-                dup_max: ctx.reach.dup_max,
-                swap_max: ctx.reach.swap_max,
-                max_len: ctx.reach.swap_max,
-                max_expansions: 50_000,
-            };
+            let search_cfg = default_search_cfg(&ctx, 50_000);
 
             let plan = solve_test_optimal_repair_normalize_plan(
                 &ctx,
@@ -4684,47 +4706,15 @@ func public %f() {
 
     #[test]
     fn repair_greedy_builder_inserts_missing_keys_from_goal_suffix() {
-        const SRC: &str = r#"
-target = "evm-ethereum-osaka"
-
-func public %f() {
-    block0:
-        return;
-}
-"#;
-        let parsed = parse_module(SRC).unwrap();
-        let func_ref = parsed.debug.func_order[0];
-
-        parsed.module.func_store.modify(func_ref, |func| {
+        with_stackify_ctx!(16, |func, ctx| {
             let top = func.dfg.make_imm_value(Immediate::I8(9));
             let bottom = func.dfg.make_imm_value(Immediate::I8(7));
-
-            let mut cfg = ControlFlowGraph::new();
-            cfg.compute(func);
-            let entry = cfg.entry().expect("missing entry block");
-
-            let mut liveness = Liveness::new();
-            liveness.compute(func, &cfg);
-
-            let mut dom = DomTree::new();
-            dom.compute(&cfg);
-
-            let mut scc = CfgSccAnalysis::new();
-            scc.compute(&cfg);
-
-            let reach = StackifyReachability::new(16);
-            let ctx = build_stackify_test_context(func, &cfg, &dom, &liveness, entry, scc, reach);
-
+        } {
             let stack = SymStack::entry_stack(func, false);
             let desired = [top, bottom];
 
             let cost = EstimatedCostModel::default();
-            let search_cfg = SearchCfg {
-                dup_max: ctx.reach.dup_max,
-                swap_max: ctx.reach.swap_max,
-                max_len: ctx.reach.swap_max,
-                max_expansions: 0,
-            };
+            let search_cfg = default_search_cfg(&ctx, 0);
 
             let plan = solve_test_optimal_repair_prefix_plan(
                 &ctx,
@@ -4764,37 +4754,10 @@ func public %f() {
 
     #[test]
     fn repair_greedy_builder_keeps_costly_goal_key_accessible_while_trimming() {
-        const SRC: &str = r#"
-target = "evm-ethereum-osaka"
-
-func public %f() {
-    block0:
-        return;
-}
-"#;
-        let parsed = parse_module(SRC).unwrap();
-        let func_ref = parsed.debug.func_order[0];
-
-        parsed.module.func_store.modify(func_ref, |func| {
-            let a = func.dfg.make_undef_value(sonatina_ir::Type::I256);
-            let b = func.dfg.make_undef_value(sonatina_ir::Type::I256);
-
-            let mut cfg = ControlFlowGraph::new();
-            cfg.compute(func);
-            let entry = cfg.entry().expect("missing entry block");
-
-            let mut liveness = Liveness::new();
-            liveness.compute(func, &cfg);
-
-            let mut dom = DomTree::new();
-            dom.compute(&cfg);
-
-            let mut scc = CfgSccAnalysis::new();
-            scc.compute(&cfg);
-
-            let reach = StackifyReachability::new(16);
-            let ctx = build_stackify_test_context(func, &cfg, &dom, &liveness, entry, scc, reach);
-
+        with_stackify_ctx!(16, |func, ctx| {
+            let a = func.dfg.make_undef_value(Type::I256);
+            let b = func.dfg.make_undef_value(Type::I256);
+        } {
             let mut stack = SymStack::entry_stack(func, false);
             stack.push_value(a);
             stack.push_value(b);
@@ -4829,51 +4792,13 @@ func public %f() {
 
     #[test]
     fn repair_greedy_builder_can_dup_from_frozen_suffix_when_search_budget_is_zero() {
-        const SRC: &str = r#"
-target = "evm-ethereum-osaka"
-
-func public %f() {
-    block0:
-        return;
-}
-"#;
-        let parsed = parse_module(SRC).unwrap();
-        let func_ref = parsed.debug.func_order[0];
-
-        parsed.module.func_store.modify(func_ref, |func| {
-            let mut prefix: Vec<ValueId> = Vec::new();
-            for _ in 0..5 {
-                prefix.push(func.dfg.make_undef_value(sonatina_ir::Type::I256));
-            }
-
-            let mut suffix: Vec<ValueId> = Vec::new();
-            for _ in 0..25 {
-                suffix.push(func.dfg.make_undef_value(sonatina_ir::Type::I256));
-            }
-
-            let mut cfg = ControlFlowGraph::new();
-            cfg.compute(func);
-            let entry = cfg.entry().expect("missing entry block");
-
-            let mut liveness = Liveness::new();
-            liveness.compute(func, &cfg);
-
-            let mut dom = DomTree::new();
-            dom.compute(&cfg);
-
-            let mut scc = CfgSccAnalysis::new();
-            scc.compute(&cfg);
-
-            let reach = StackifyReachability::new(16);
-            let ctx = build_stackify_test_context(func, &cfg, &dom, &liveness, entry, scc, reach);
-
+        with_stackify_ctx!(16, |func, ctx| {
+            let prefix = make_undefs(func, 5);
+            let suffix = make_undefs(func, 25);
+        } {
             let mut stack = SymStack::entry_stack(func, false);
-            for &v in suffix.iter().rev() {
-                stack.push_value(v);
-            }
-            for &v in prefix.iter().rev() {
-                stack.push_value(v);
-            }
+            push_values(&mut stack, &suffix);
+            push_values(&mut stack, &prefix);
 
             let mut desired: Vec<ValueId> = Vec::new();
             desired.push(suffix[0]);
@@ -4881,12 +4806,7 @@ func public %f() {
             desired.extend(suffix.iter().copied());
 
             let cost = EstimatedCostModel::default();
-            let search_cfg = SearchCfg {
-                dup_max: ctx.reach.dup_max,
-                swap_max: ctx.reach.swap_max,
-                max_len: ctx.reach.swap_max,
-                max_expansions: 0,
-            };
+            let search_cfg = default_search_cfg(&ctx, 0);
 
             let plan = solve_test_optimal_repair_normalize_plan(
                 &ctx,
@@ -4919,48 +4839,16 @@ func public %f() {
 
     #[test]
     fn repair_greedy_builder_uses_swap_dup_for_deep_repair_source() {
-        const SRC: &str = r#"
-target = "evm-ethereum-osaka"
-
-func public %f() {
-    block0:
-        return;
-}
-"#;
-        let parsed = parse_module(SRC).unwrap();
-        let func_ref = parsed.debug.func_order[0];
-
-        parsed.module.func_store.modify(func_ref, |func| {
-            let extra = func.dfg.make_undef_value(sonatina_ir::Type::I256);
-            let mut mids: Vec<ValueId> = Vec::new();
-            for _ in 0..15 {
-                mids.push(func.dfg.make_undef_value(sonatina_ir::Type::I256));
-            }
-            let target = func.dfg.make_undef_value(sonatina_ir::Type::I256);
-            let suffix = func.dfg.make_undef_value(sonatina_ir::Type::I256);
-
-            let mut cfg = ControlFlowGraph::new();
-            cfg.compute(func);
-            let entry = cfg.entry().expect("missing entry block");
-
-            let mut liveness = Liveness::new();
-            liveness.compute(func, &cfg);
-
-            let mut dom = DomTree::new();
-            dom.compute(&cfg);
-
-            let mut scc = CfgSccAnalysis::new();
-            scc.compute(&cfg);
-
-            let reach = StackifyReachability::new(16);
-            let ctx = build_stackify_test_context(func, &cfg, &dom, &liveness, entry, scc, reach);
-
+        with_stackify_ctx!(16, |func, ctx| {
+            let extra = func.dfg.make_undef_value(Type::I256);
+            let mids = make_undefs(func, 15);
+            let target = func.dfg.make_undef_value(Type::I256);
+            let suffix = func.dfg.make_undef_value(Type::I256);
+        } {
             let mut stack = SymStack::entry_stack(func, false);
             stack.push_value(suffix);
             stack.push_value(target);
-            for &v in mids.iter().rev() {
-                stack.push_value(v);
-            }
+            push_values(&mut stack, &mids);
             stack.push_value(extra);
 
             let mut desired_prefix = Vec::with_capacity(17);
@@ -5012,40 +4900,13 @@ func public %f() {
 
     #[test]
     fn repair_greedy_builder_materializes_only_true_deficits() {
-        const SRC: &str = r#"
-target = "evm-ethereum-osaka"
-
-func public %f() {
-    block0:
-        return;
-}
-"#;
-        let parsed = parse_module(SRC).unwrap();
-        let func_ref = parsed.debug.func_order[0];
-
-        parsed.module.func_store.modify(func_ref, |func| {
-            let extra = func.dfg.make_undef_value(sonatina_ir::Type::I256);
-            let keep = func.dfg.make_undef_value(sonatina_ir::Type::I256);
-            let reuse = func.dfg.make_undef_value(sonatina_ir::Type::I256);
-            let suffix_tail = func.dfg.make_undef_value(sonatina_ir::Type::I256);
+        with_stackify_ctx!(16, |func, ctx| {
+            let extra = func.dfg.make_undef_value(Type::I256);
+            let keep = func.dfg.make_undef_value(Type::I256);
+            let reuse = func.dfg.make_undef_value(Type::I256);
+            let suffix_tail = func.dfg.make_undef_value(Type::I256);
             let missing = func.dfg.make_imm_value(Immediate::I8(7));
-
-            let mut cfg = ControlFlowGraph::new();
-            cfg.compute(func);
-            let entry = cfg.entry().expect("missing entry block");
-
-            let mut liveness = Liveness::new();
-            liveness.compute(func, &cfg);
-
-            let mut dom = DomTree::new();
-            dom.compute(&cfg);
-
-            let mut scc = CfgSccAnalysis::new();
-            scc.compute(&cfg);
-
-            let reach = StackifyReachability::new(16);
-            let ctx = build_stackify_test_context(func, &cfg, &dom, &liveness, entry, scc, reach);
-
+        } {
             let mut stack = SymStack::entry_stack(func, false);
             stack.push_value(suffix_tail);
             stack.push_value(reuse);
@@ -5056,12 +4917,7 @@ func public %f() {
             let desired_full = [missing, reuse, keep, reuse, suffix_tail];
 
             let cost = EstimatedCostModel::default();
-            let search_cfg = SearchCfg {
-                dup_max: ctx.reach.dup_max,
-                swap_max: ctx.reach.swap_max,
-                max_len: ctx.reach.swap_max,
-                max_expansions: 0,
-            };
+            let search_cfg = default_search_cfg(&ctx, 0);
 
             let plan = solve_test_optimal_repair_prefix_plan(
                 &ctx,
@@ -5104,40 +4960,13 @@ func public %f() {
 
     #[test]
     fn repair_greedy_builder_preserves_frozen_suffix() {
-        const SRC: &str = r#"
-target = "evm-ethereum-osaka"
-
-func public %f() {
-    block0:
-        return;
-}
-"#;
-        let parsed = parse_module(SRC).unwrap();
-        let func_ref = parsed.debug.func_order[0];
-
-        parsed.module.func_store.modify(func_ref, |func| {
-            let extra = func.dfg.make_undef_value(sonatina_ir::Type::I256);
-            let keep = func.dfg.make_undef_value(sonatina_ir::Type::I256);
-            let suffix0 = func.dfg.make_undef_value(sonatina_ir::Type::I256);
-            let suffix1 = func.dfg.make_undef_value(sonatina_ir::Type::I256);
-            let suffix2 = func.dfg.make_undef_value(sonatina_ir::Type::I256);
-
-            let mut cfg = ControlFlowGraph::new();
-            cfg.compute(func);
-            let entry = cfg.entry().expect("missing entry block");
-
-            let mut liveness = Liveness::new();
-            liveness.compute(func, &cfg);
-
-            let mut dom = DomTree::new();
-            dom.compute(&cfg);
-
-            let mut scc = CfgSccAnalysis::new();
-            scc.compute(&cfg);
-
-            let reach = StackifyReachability::new(16);
-            let ctx = build_stackify_test_context(func, &cfg, &dom, &liveness, entry, scc, reach);
-
+        with_stackify_ctx!(16, |func, ctx| {
+            let extra = func.dfg.make_undef_value(Type::I256);
+            let keep = func.dfg.make_undef_value(Type::I256);
+            let suffix0 = func.dfg.make_undef_value(Type::I256);
+            let suffix1 = func.dfg.make_undef_value(Type::I256);
+            let suffix2 = func.dfg.make_undef_value(Type::I256);
+        } {
             let mut stack = SymStack::entry_stack(func, false);
             stack.push_value(suffix2);
             stack.push_value(suffix1);
@@ -5149,12 +4978,7 @@ func public %f() {
             let desired_full = [suffix1, keep, suffix0, suffix1, suffix2];
 
             let cost = EstimatedCostModel::default();
-            let search_cfg = SearchCfg {
-                dup_max: ctx.reach.dup_max,
-                swap_max: ctx.reach.swap_max,
-                max_len: ctx.reach.swap_max,
-                max_expansions: 0,
-            };
+            let search_cfg = default_search_cfg(&ctx, 0);
 
             let plan = solve_test_optimal_repair_prefix_plan(
                 &ctx,
@@ -5181,46 +5005,14 @@ func public %f() {
 
     #[test]
     fn solver_returns_push_plan_even_when_equal_to_flush_upper_bound() {
-        const SRC: &str = r#"
-target = "evm-ethereum-osaka"
-
-func public %f() {
-    block0:
-        return;
-}
-"#;
-        let parsed = parse_module(SRC).unwrap();
-        let func_ref = parsed.debug.func_order[0];
-
-        parsed.module.func_store.modify(func_ref, |func| {
+        with_stackify_ctx!(16, |func, ctx| {
             let imm1 = func.dfg.make_imm_value(Immediate::I8(1));
-
-            let mut cfg = ControlFlowGraph::new();
-            cfg.compute(func);
-            let entry = cfg.entry().expect("missing entry block");
-
-            let mut liveness = Liveness::new();
-            liveness.compute(func, &cfg);
-
-            let mut dom = DomTree::new();
-            dom.compute(&cfg);
-
-            let mut scc = CfgSccAnalysis::new();
-            scc.compute(&cfg);
-
-            let reach = StackifyReachability::new(16);
-            let ctx = build_stackify_test_context(func, &cfg, &dom, &liveness, entry, scc, reach);
-
+        } {
             let stack = SymStack::entry_stack(func, false);
             let desired = [imm1];
 
             let cost = EstimatedCostModel::default();
-            let search_cfg = SearchCfg {
-                dup_max: ctx.reach.dup_max,
-                swap_max: ctx.reach.swap_max,
-                max_len: ctx.reach.swap_max,
-                max_expansions: 50_000,
-            };
+            let search_cfg = default_search_cfg(&ctx, 50_000);
 
             let plan = solve_test_optimal_normalize_plan(&ctx, &stack, &desired, &cost, search_cfg)
                 .expect("expected push plan");
@@ -5234,49 +5026,17 @@ func public %f() {
 
     #[test]
     fn solver_returns_push0_plan_when_optimal_equals_flush_upper_bound() {
-        const SRC: &str = r#"
-target = "evm-ethereum-osaka"
-
-func public %f() {
-    block0:
-        return;
-}
-"#;
-        let parsed = parse_module(SRC).unwrap();
-        let func_ref = parsed.debug.func_order[0];
-
-        parsed.module.func_store.modify(func_ref, |func| {
+        with_stackify_ctx!(16, |func, ctx| {
             let v0 = func.dfg.make_imm_value(Immediate::I8(0));
             let v1 = func.dfg.make_imm_value(Immediate::I256(I256::zero()));
-
-            let mut cfg = ControlFlowGraph::new();
-            cfg.compute(func);
-            let entry = cfg.entry().expect("missing entry block");
-
-            let mut liveness = Liveness::new();
-            liveness.compute(func, &cfg);
-
-            let mut dom = DomTree::new();
-            dom.compute(&cfg);
-
-            let mut scc = CfgSccAnalysis::new();
-            scc.compute(&cfg);
-
-            let reach = StackifyReachability::new(16);
-            let ctx = build_stackify_test_context(func, &cfg, &dom, &liveness, entry, scc, reach);
-
+        } {
             let mut stack = SymStack::entry_stack(func, false);
             stack.push_value(v0);
 
             let desired = [v1, v0];
 
             let cost = EstimatedCostModel::default();
-            let search_cfg = SearchCfg {
-                dup_max: ctx.reach.dup_max,
-                swap_max: ctx.reach.swap_max,
-                max_len: ctx.reach.swap_max,
-                max_expansions: 50_000,
-            };
+            let search_cfg = default_search_cfg(&ctx, 50_000);
 
             let plan = solve_test_optimal_normalize_plan(&ctx, &stack, &desired, &cost, search_cfg)
                 .expect("expected push0 plan");
@@ -5287,101 +5047,26 @@ func public %f() {
             );
 
             // Replay the plan and apply the immediate renaming contract to validate exactness.
-            let mut replayed = stack.clone();
-            let mut actions = crate::stackalloc::Actions::new();
-            for &step in &plan.steps {
-                match step {
-                    Step::Pop => replayed.pop(&mut actions),
-                    Step::Swap(d) => replayed.swap(d as usize, &mut actions),
-                    Step::Dup(p) => replayed.dup(p as usize, &mut actions),
-                    Step::PushImm(kid) => {
-                        let KeyInfo::Imm {
-                            rep_vid, rep_imm, ..
-                        } = plan.key_infos[kid as usize]
-                        else {
-                            panic!("expected imm key info");
-                        };
-                        replayed.push_imm(rep_vid, rep_imm, &mut actions);
-                    }
-                    Step::LoadVal(_) => panic!("unexpected load"),
-                }
-            }
-
-            for (depth, &want) in desired.iter().enumerate() {
-                if ctx.func.dfg.value_is_imm(want) {
-                    let want_imm = ctx.func.dfg.value_imm(want).unwrap().as_i256();
-                    let StackItem::Value(cur) = *replayed.item_at(depth).unwrap() else {
-                        panic!("expected value on stack");
-                    };
-                    let cur_imm = ctx.func.dfg.value_imm(cur).unwrap().as_i256();
-                    assert_eq!(cur_imm, want_imm, "canonical immediate mismatch");
-                    replayed.rename_value_at_depth(depth, want);
-                }
-            }
-
+            let mut replayed = replay_plan(&stack, &plan);
+            rename_immediate_stack_values(&ctx, &mut replayed, &desired);
             assert!(stack_matches_exact(&replayed, &desired));
         });
     }
 
     #[test]
     fn dup_pop_preferred_over_load_when_expensive() {
-        const SRC: &str = r#"
-target = "evm-ethereum-osaka"
-
-func public %f() {
-    block0:
-        return;
-}
-"#;
-        let parsed = parse_module(SRC).unwrap();
-        let func_ref = parsed.debug.func_order[0];
-
-        parsed.module.func_store.modify(func_ref, |func| {
-            let x = func.dfg.make_undef_value(sonatina_ir::Type::I256);
-            let y = func.dfg.make_undef_value(sonatina_ir::Type::I256);
-
-            let mut cfg = ControlFlowGraph::new();
-            cfg.compute(func);
-            let entry = cfg.entry().expect("missing entry block");
-
-            let mut liveness = Liveness::new();
-            liveness.compute(func, &cfg);
-
-            let mut dom = DomTree::new();
-            dom.compute(&cfg);
-
-            let mut scc = CfgSccAnalysis::new();
-            scc.compute(&cfg);
-
-            let reach = StackifyReachability::new(16);
-            let ctx = build_stackify_test_context(
-                func,
-                &cfg,
-                &dom,
-                &liveness,
-                entry,
-                scc,
-                reach,
-            );
-
+        with_stackify_ctx!(16, |func, ctx| {
+            let x = func.dfg.make_undef_value(Type::I256);
+            let y = func.dfg.make_undef_value(Type::I256);
+        } {
             let mut stack = SymStack::entry_stack(func, false);
             stack.push_value(y);
             stack.push_value(x); // [x, y]
 
             let desired = [x, x];
 
-            let cost = EstimatedCostModel {
-                load_cost: Cost {
-                    gas: 1_000,
-                    bytes: 1_000,
-                },
-            };
-            let search_cfg = SearchCfg {
-                dup_max: ctx.reach.dup_max,
-                swap_max: ctx.reach.swap_max,
-                max_len: ctx.reach.swap_max,
-                max_expansions: 50_000,
-            };
+            let cost = expensive_load_cost();
+            let search_cfg = default_search_cfg(&ctx, 50_000);
 
             let plan =
                 solve_test_optimal_normalize_plan(&ctx, &stack, &desired, &cost, search_cfg)
@@ -5397,8 +5082,11 @@ func public %f() {
                 plan.steps
             );
             assert!(
-                !plan.steps.iter().any(|s| matches!(s, Step::LoadVal(_))),
-                "expected plan to avoid LOAD: {:?}",
+                !plan
+                    .steps
+                    .iter()
+                    .any(|s| matches!(s, Step::PushImm(_) | Step::LoadVal(_))),
+                "expected plan to avoid materialization: {:?}",
                 plan.steps
             );
 
@@ -5406,83 +5094,24 @@ func public %f() {
                 .cost_load(x)
                 .saturating_add(cost.cost_swap(2))
                 .saturating_add(cost.cost_pop());
-            let plan_cost = plan.steps.iter().fold(Cost::default(), |acc, step| {
-                let c = match *step {
-                    Step::Pop => cost.cost_pop(),
-                    Step::Dup(pos) => cost.cost_dup(pos),
-                    Step::Swap(depth) => cost.cost_swap(depth),
-                    Step::PushImm(kid) => {
-                        let KeyInfo::Imm { canon, .. } = plan.key_infos[kid as usize] else {
-                            panic!("expected imm key info");
-                        };
-                        cost.cost_push_imm(canon)
-                    }
-                    Step::LoadVal(kid) => {
-                        let KeyInfo::Val { vid } = plan.key_infos[kid as usize] else {
-                            panic!("expected val key info");
-                        };
-                        cost.cost_load(vid)
-                    }
-                };
-                acc.saturating_add(c)
-            });
-
+            let plan_cost = cost_for_steps(&plan.steps, &plan.key_infos, &cost);
             assert!(
                 plan_cost < load_plan_cost,
                 "expected dup/pop plan to beat load plan: plan={plan_cost:?} load={load_plan_cost:?}"
             );
 
-            let mut replayed = stack.clone();
-            let mut actions = crate::stackalloc::Actions::new();
-            for &step in &plan.steps {
-                match step {
-                    Step::Pop => replayed.pop(&mut actions),
-                    Step::Swap(d) => replayed.swap(d as usize, &mut actions),
-                    Step::Dup(p) => replayed.dup(p as usize, &mut actions),
-                    Step::PushImm(_) | Step::LoadVal(_) => {
-                        panic!("unexpected materialization step: {step:?}");
-                    }
-                }
-            }
-
+            let replayed = replay_plan(&stack, &plan);
             assert!(stack_matches_exact(&replayed, &desired));
         });
     }
 
     #[test]
     fn permutation_only_sanity() {
-        const SRC: &str = r#"
-target = "evm-ethereum-osaka"
-
-func public %f() {
-    block0:
-        return;
-}
-"#;
-        let parsed = parse_module(SRC).unwrap();
-        let func_ref = parsed.debug.func_order[0];
-
-        parsed.module.func_store.modify(func_ref, |func| {
-            let a = func.dfg.make_undef_value(sonatina_ir::Type::I256);
-            let b = func.dfg.make_undef_value(sonatina_ir::Type::I256);
-            let c = func.dfg.make_undef_value(sonatina_ir::Type::I256);
-
-            let mut cfg = ControlFlowGraph::new();
-            cfg.compute(func);
-            let entry = cfg.entry().expect("missing entry block");
-
-            let mut liveness = Liveness::new();
-            liveness.compute(func, &cfg);
-
-            let mut dom = DomTree::new();
-            dom.compute(&cfg);
-
-            let mut scc = CfgSccAnalysis::new();
-            scc.compute(&cfg);
-
-            let reach = StackifyReachability::new(16);
-            let ctx = build_stackify_test_context(func, &cfg, &dom, &liveness, entry, scc, reach);
-
+        with_stackify_ctx!(16, |func, ctx| {
+            let a = func.dfg.make_undef_value(Type::I256);
+            let b = func.dfg.make_undef_value(Type::I256);
+            let c = func.dfg.make_undef_value(Type::I256);
+        } {
             let mut stack = SymStack::entry_stack(func, false);
             stack.push_value(c);
             stack.push_value(b);
@@ -5491,88 +5120,36 @@ func public %f() {
             let desired = [b, a, c];
 
             let cost = EstimatedCostModel::default();
-            let search_cfg = SearchCfg {
-                dup_max: ctx.reach.dup_max,
-                swap_max: ctx.reach.swap_max,
-                max_len: ctx.reach.swap_max,
-                max_expansions: 50_000,
-            };
+            let search_cfg = default_search_cfg(&ctx, 50_000);
 
             let plan = solve_test_optimal_normalize_plan(&ctx, &stack, &desired, &cost, search_cfg)
                 .expect("no plan");
             assert!(
-                !plan.steps.iter().any(|s| matches!(s, Step::LoadVal(_))),
-                "expected no loads for permutation: {:?}",
+                !plan
+                    .steps
+                    .iter()
+                    .any(|s| matches!(s, Step::PushImm(_) | Step::LoadVal(_))),
+                "expected no materialization for permutation: {:?}",
                 plan.steps
             );
 
-            let mut replayed = stack.clone();
-            let mut actions = crate::stackalloc::Actions::new();
-            for &step in &plan.steps {
-                match step {
-                    Step::Pop => replayed.pop(&mut actions),
-                    Step::Swap(d) => replayed.swap(d as usize, &mut actions),
-                    Step::Dup(p) => replayed.dup(p as usize, &mut actions),
-                    Step::PushImm(_) | Step::LoadVal(_) => {
-                        panic!("unexpected materialization step: {step:?}");
-                    }
-                }
-            }
-
+            let replayed = replay_plan(&stack, &plan);
             assert!(stack_matches_exact(&replayed, &desired));
         });
     }
 
     #[test]
     fn regression_harness_random_small_stacks() {
-        const SRC: &str = r#"
-target = "evm-ethereum-osaka"
-
-func public %f() {
-    block0:
-        return;
-}
-"#;
-        let parsed = parse_module(SRC).unwrap();
-        let func_ref = parsed.debug.func_order[0];
-
-        parsed.module.func_store.modify(func_ref, |func| {
+        with_stackify_ctx!(16, |func, ctx| {
             let imm0_a = func.dfg.make_imm_value(Immediate::I8(0));
             let imm0_b = func.dfg.make_imm_value(Immediate::I256(I256::zero()));
             let imm1 = func.dfg.make_imm_value(Immediate::I8(1));
             let imm_neg1 = func.dfg.make_imm_value(Immediate::I8(-1));
-
-            let a = func.dfg.make_undef_value(sonatina_ir::Type::I256);
-            let b = func.dfg.make_undef_value(sonatina_ir::Type::I256);
-            let c = func.dfg.make_undef_value(sonatina_ir::Type::I256);
-            let d = func.dfg.make_undef_value(sonatina_ir::Type::I256);
-
-            let pool: [ValueId; 8] = [imm0_a, imm0_b, imm1, imm_neg1, a, b, c, d];
-
-            let mut cfg = ControlFlowGraph::new();
-            cfg.compute(func);
-            let entry = cfg.entry().expect("missing entry block");
-
-            let mut liveness = Liveness::new();
-            liveness.compute(func, &cfg);
-
-            let mut dom = DomTree::new();
-            dom.compute(&cfg);
-
-            let mut scc = CfgSccAnalysis::new();
-            scc.compute(&cfg);
-
-            let reach = StackifyReachability::new(16);
-            let ctx = build_stackify_test_context(
-                func,
-                &cfg,
-                &dom,
-                &liveness,
-                entry,
-                scc,
-                reach,
-            );
-
+            let undef = make_undefs(func, 4);
+            let pool: [ValueId; 8] = [
+                imm0_a, imm0_b, imm1, imm_neg1, undef[0], undef[1], undef[2], undef[3],
+            ];
+        } {
             struct Rng(u64);
             impl Rng {
                 fn next_u32(&mut self) -> u32 {
@@ -5614,9 +5191,7 @@ func public %f() {
                 }
 
                 let mut stack = SymStack::entry_stack(ctx.func, false);
-                for &v in start_vals.iter().rev() {
-                    stack.push_value(v);
-                }
+                push_values(&mut stack, &start_vals);
 
                 let flush_cost = estimate_flush_rebuild_cost(&ctx, &stack, &desired, &cost);
                 let plan =
@@ -5691,64 +5266,18 @@ func public %f() {
 
     #[test]
     fn operand_prep_effective_window_shrinks_materialize_only_query() {
-        const SRC: &str = r#"
-target = "evm-ethereum-osaka"
-
-func public %f() {
-block0:
-    return;
-}
-"#;
-        let parsed = parse_module(SRC).unwrap();
-        let func_ref = parsed.debug.func_order[0];
-
-        parsed.module.func_store.modify(func_ref, |func| {
+        with_stackify_ctx!(16, |func, ctx| {
             let args = [
                 func.dfg.make_imm_value(Immediate::I8(1)),
                 func.dfg.make_imm_value(Immediate::I8(2)),
             ];
-            let unrelated: Vec<ValueId> = (0..20)
-                .map(|_| func.dfg.make_undef_value(Type::I256))
-                .collect();
-
-            let mut cfg = ControlFlowGraph::new();
-            cfg.compute(func);
-            let entry = cfg.entry().expect("missing entry block");
-
-            let mut liveness = Liveness::new();
-            liveness.compute(func, &cfg);
-
-            let mut dom = DomTree::new();
-            dom.compute(&cfg);
-
-            let mut scc = CfgSccAnalysis::new();
-            scc.compute(&cfg);
-
-            let reach = StackifyReachability::new(16);
-            let ctx = build_stackify_test_context(func, &cfg, &dom, &liveness, entry, scc, reach);
-
+            let unrelated = make_undefs(func, 20);
+        } {
             let mut stack = SymStack::entry_stack(func, false);
-            for &value in unrelated.iter().rev() {
-                stack.push_value(value);
-            }
+            push_values(&mut stack, &unrelated);
 
-            let search_cfg = SearchCfg {
-                dup_max: ctx.reach.dup_max,
-                swap_max: ctx.reach.swap_max,
-                max_len: ctx.reach.swap_max,
-                max_expansions: 0,
-            };
-            let problem = build_operand_prep_problem(
-                &ctx,
-                &stack,
-                &args,
-                OperandPrepConstraints {
-                    consume_last_use: &BitSet::default(),
-                    cache_preserve: &BitSet::default(),
-                },
-                search_cfg,
-            )
-            .expect("expected operand-prep problem");
+            let search_cfg = default_search_cfg(&ctx, 0);
+            let problem = build_test_operand_prep_problem(&ctx, &stack, &args, search_cfg);
 
             assert_eq!(problem.start_state.window.len(), args.len());
             assert_eq!(problem.max_len, args.len());
@@ -5772,65 +5301,19 @@ block0:
 
     #[test]
     fn operand_prep_effective_window_uses_tail_for_deep_preserve_copy() {
-        const SRC: &str = r#"
-target = "evm-ethereum-osaka"
-
-func public %f() {
-block0:
-    return;
-}
-"#;
-        let parsed = parse_module(SRC).unwrap();
-        let func_ref = parsed.debug.func_order[0];
-
-        parsed.module.func_store.modify(func_ref, |func| {
+        with_stackify_ctx!(16, |func, ctx| {
             let x = func.dfg.make_undef_value(Type::I256);
             let imm = func.dfg.make_imm_value(Immediate::I8(7));
-            let filler: Vec<ValueId> = (0..10)
-                .map(|_| func.dfg.make_undef_value(Type::I256))
-                .collect();
-
-            let mut cfg = ControlFlowGraph::new();
-            cfg.compute(func);
-            let entry = cfg.entry().expect("missing entry block");
-
-            let mut liveness = Liveness::new();
-            liveness.compute(func, &cfg);
-
-            let mut dom = DomTree::new();
-            dom.compute(&cfg);
-
-            let mut scc = CfgSccAnalysis::new();
-            scc.compute(&cfg);
-
-            let reach = StackifyReachability::new(16);
-            let ctx = build_stackify_test_context(func, &cfg, &dom, &liveness, entry, scc, reach);
-
+            let filler = make_undefs(func, 10);
+        } {
             let mut stack = SymStack::entry_stack(func, false);
             stack.push_value(x);
-            for &value in filler.iter().rev() {
-                stack.push_value(value);
-            }
+            push_values(&mut stack, &filler);
             stack.push_value(x);
 
             let args = [x, imm];
-            let search_cfg = SearchCfg {
-                dup_max: ctx.reach.dup_max,
-                swap_max: ctx.reach.swap_max,
-                max_len: ctx.reach.swap_max,
-                max_expansions: 0,
-            };
-            let problem = build_operand_prep_problem(
-                &ctx,
-                &stack,
-                &args,
-                OperandPrepConstraints {
-                    consume_last_use: &BitSet::default(),
-                    cache_preserve: &BitSet::default(),
-                },
-                search_cfg,
-            )
-            .expect("expected operand-prep problem");
+            let search_cfg = default_search_cfg(&ctx, 0);
+            let problem = build_test_operand_prep_problem(&ctx, &stack, &args, search_cfg);
 
             assert_eq!(problem.start_state.window.len(), args.len());
             assert_eq!(problem.max_len, args.len() * 2);
@@ -5844,74 +5327,23 @@ block0:
 
     #[test]
     fn operand_prep_effective_window_keeps_deep_operand_source() {
-        const SRC: &str = r#"
-target = "evm-ethereum-osaka"
-
-func public %f() {
-block0:
-    return;
-}
-"#;
-        let parsed = parse_module(SRC).unwrap();
-        let func_ref = parsed.debug.func_order[0];
-
-        parsed.module.func_store.modify(func_ref, |func| {
+        with_stackify_ctx!(16, |func, ctx| {
             let x = func.dfg.make_undef_value(Type::I256);
             let imm = func.dfg.make_imm_value(Immediate::I8(9));
-            let filler: Vec<ValueId> = (0..15)
-                .map(|_| func.dfg.make_undef_value(Type::I256))
-                .collect();
-
-            let mut cfg = ControlFlowGraph::new();
-            cfg.compute(func);
-            let entry = cfg.entry().expect("missing entry block");
-
-            let mut liveness = Liveness::new();
-            liveness.compute(func, &cfg);
-
-            let mut dom = DomTree::new();
-            dom.compute(&cfg);
-
-            let mut scc = CfgSccAnalysis::new();
-            scc.compute(&cfg);
-
-            let reach = StackifyReachability::new(16);
-            let ctx = build_stackify_test_context(func, &cfg, &dom, &liveness, entry, scc, reach);
-
+            let filler = make_undefs(func, 15);
+        } {
             let mut stack = SymStack::entry_stack(func, false);
             stack.push_value(x);
-            for &value in filler.iter().rev() {
-                stack.push_value(value);
-            }
+            push_values(&mut stack, &filler);
 
             let args = [imm, x];
-            let search_cfg = SearchCfg {
-                dup_max: ctx.reach.dup_max,
-                swap_max: ctx.reach.swap_max,
-                max_len: ctx.reach.swap_max,
-                max_expansions: 50_000,
-            };
-            let problem = build_operand_prep_problem(
-                &ctx,
-                &stack,
-                &args,
-                OperandPrepConstraints {
-                    consume_last_use: &BitSet::default(),
-                    cache_preserve: &BitSet::default(),
-                },
-                search_cfg,
-            )
-            .expect("expected operand-prep problem");
+            let search_cfg = default_search_cfg(&ctx, 50_000);
+            let problem = build_test_operand_prep_problem(&ctx, &stack, &args, search_cfg);
 
             assert_eq!(problem.start_state.window.len(), 16);
             assert_eq!(problem.max_len, ctx.reach.swap_max);
 
-            let cost = EstimatedCostModel {
-                load_cost: Cost {
-                    gas: 1_000,
-                    bytes: 1_000,
-                },
-            };
+            let cost = expensive_load_cost();
             let plan = solve_test_optimal_operand_prep_plan(
                 &ctx,
                 &stack,
@@ -5940,62 +5372,20 @@ block0:
 
     #[test]
     fn operand_prep_anonymizes_ignored_values_in_effective_window() {
-        const SRC: &str = r#"
-target = "evm-ethereum-osaka"
-
-func public %f() {
-block0:
-    return;
-}
-"#;
-        let parsed = parse_module(SRC).unwrap();
-        let func_ref = parsed.debug.func_order[0];
-
-        parsed.module.func_store.modify(func_ref, |func| {
+        with_stackify_ctx!(16, |func, ctx| {
             let x = func.dfg.make_undef_value(Type::I256);
             let ignored_a = func.dfg.make_undef_value(Type::I256);
             let ignored_b = func.dfg.make_undef_value(Type::I256);
             let ignored_c = func.dfg.make_undef_value(Type::I256);
             let ignored_d = func.dfg.make_undef_value(Type::I256);
-
-            let mut cfg = ControlFlowGraph::new();
-            cfg.compute(func);
-            let entry = cfg.entry().expect("missing entry block");
-
-            let mut liveness = Liveness::new();
-            liveness.compute(func, &cfg);
-
-            let mut dom = DomTree::new();
-            dom.compute(&cfg);
-
-            let mut scc = CfgSccAnalysis::new();
-            scc.compute(&cfg);
-
-            let reach = StackifyReachability::new(16);
-            let ctx = build_stackify_test_context(func, &cfg, &dom, &liveness, entry, scc, reach);
-            let search_cfg = SearchCfg {
-                dup_max: ctx.reach.dup_max,
-                swap_max: ctx.reach.swap_max,
-                max_len: ctx.reach.swap_max,
-                max_expansions: 50_000,
-            };
-
+        } {
+            let search_cfg = default_search_cfg(&ctx, 50_000);
             let build_problem = |top: ValueId, mid: ValueId| {
                 let mut stack = SymStack::entry_stack(func, false);
                 stack.push_value(x);
                 stack.push_value(mid);
                 stack.push_value(top);
-                build_operand_prep_problem(
-                    &ctx,
-                    &stack,
-                    &[x],
-                    OperandPrepConstraints {
-                        consume_last_use: &BitSet::default(),
-                        cache_preserve: &BitSet::default(),
-                    },
-                    search_cfg,
-                )
-                .expect("expected operand-prep problem")
+                build_test_operand_prep_problem(&ctx, &stack, &[x], search_cfg)
             };
 
             let lhs = build_problem(ignored_a, ignored_b);
@@ -6020,70 +5410,23 @@ block0:
 
     #[test]
     fn operand_prep_duplicate_non_last_use_keeps_operand_and_preserve_copies() {
-        const SRC: &str = r#"
-target = "evm-ethereum-osaka"
-
-func public %f() {
-block0:
-    return;
-}
-"#;
-        let parsed = parse_module(SRC).unwrap();
-        let func_ref = parsed.debug.func_order[0];
-
-        parsed.module.func_store.modify(func_ref, |func| {
+        with_stackify_ctx!(16, |func, ctx| {
             let x = func.dfg.make_undef_value(Type::I256);
             let filler = func.dfg.make_undef_value(Type::I256);
-
-            let mut cfg = ControlFlowGraph::new();
-            cfg.compute(func);
-            let entry = cfg.entry().expect("missing entry block");
-
-            let mut liveness = Liveness::new();
-            liveness.compute(func, &cfg);
-
-            let mut dom = DomTree::new();
-            dom.compute(&cfg);
-
-            let mut scc = CfgSccAnalysis::new();
-            scc.compute(&cfg);
-
-            let reach = StackifyReachability::new(16);
-            let ctx = build_stackify_test_context(func, &cfg, &dom, &liveness, entry, scc, reach);
-
+        } {
             let mut stack = SymStack::entry_stack(func, false);
             stack.push_value(x);
             stack.push_value(filler);
             stack.push_value(x);
 
             let args = [x, x];
-            let search_cfg = SearchCfg {
-                dup_max: ctx.reach.dup_max,
-                swap_max: ctx.reach.swap_max,
-                max_len: ctx.reach.swap_max,
-                max_expansions: 50_000,
-            };
-            let problem = build_operand_prep_problem(
-                &ctx,
-                &stack,
-                &args,
-                OperandPrepConstraints {
-                    consume_last_use: &BitSet::default(),
-                    cache_preserve: &BitSet::default(),
-                },
-                search_cfg,
-            )
-            .expect("expected operand-prep problem");
+            let search_cfg = default_search_cfg(&ctx, 50_000);
+            let problem = build_test_operand_prep_problem(&ctx, &stack, &args, search_cfg);
 
             assert_eq!(problem.start_state.window.len(), 3);
             assert_eq!(problem.max_len, 5);
 
-            let cost = EstimatedCostModel {
-                load_cost: Cost {
-                    gas: 1_000,
-                    bytes: 1_000,
-                },
-            };
+            let cost = expensive_load_cost();
             let plan = solve_test_optimal_operand_prep_plan(
                 &ctx,
                 &stack,
@@ -6110,46 +5453,15 @@ block0:
 
     #[test]
     fn operand_prep_greedy_upper_bound_beats_linear_on_high_arity_last_use_shuffle() {
-        const SRC: &str = r#"
-target = "evm-ethereum-osaka"
-
-func public %f() {
-block0:
-    return;
-}
-"#;
-        let parsed = parse_module(SRC).unwrap();
-        let func_ref = parsed.debug.func_order[0];
-
-        parsed.module.func_store.modify(func_ref, |func| {
-            let values: Vec<ValueId> = (0..9)
-                .map(|_| func.dfg.make_undef_value(Type::I256))
-                .collect();
+        with_stackify_ctx!(4, |func, ctx| {
+            let values = make_undefs(func, 9);
             let args: Vec<ValueId> = values[..8].to_vec();
             let start_vals = [
                 args[6], args[5], args[4], args[3], values[8], args[1], args[0], args[7],
             ];
-
-            let mut cfg = ControlFlowGraph::new();
-            cfg.compute(func);
-            let entry = cfg.entry().expect("missing entry block");
-
-            let mut liveness = Liveness::new();
-            liveness.compute(func, &cfg);
-
-            let mut dom = DomTree::new();
-            dom.compute(&cfg);
-
-            let mut scc = CfgSccAnalysis::new();
-            scc.compute(&cfg);
-
-            let reach = StackifyReachability::new(4);
-            let ctx = build_stackify_test_context(func, &cfg, &dom, &liveness, entry, scc, reach);
-
+        } {
             let mut stack = SymStack::entry_stack(func, false);
-            for &v in start_vals.iter().rev() {
-                stack.push_value(v);
-            }
+            push_values(&mut stack, &start_vals);
 
             let mut consume_last_use = BitSet::default();
             for &arg in &args {
@@ -6212,37 +5524,10 @@ block0:
 
     #[test]
     fn operand_prep_replay_failure_rolls_back_state() {
-        const SRC: &str = r#"
-target = "evm-ethereum-osaka"
-
-func public %f() {
-block0:
-    return;
-}
-"#;
-        let parsed = parse_module(SRC).unwrap();
-        let func_ref = parsed.debug.func_order[0];
-
-        parsed.module.func_store.modify(func_ref, |func| {
+        with_stackify_ctx!(16, |func, ctx| {
             let imm1 = func.dfg.make_imm_value(Immediate::I8(1));
             let imm2 = func.dfg.make_imm_value(Immediate::I8(2));
-
-            let mut cfg = ControlFlowGraph::new();
-            cfg.compute(func);
-            let entry = cfg.entry().expect("missing entry block");
-
-            let mut liveness = Liveness::new();
-            liveness.compute(func, &cfg);
-
-            let mut dom = DomTree::new();
-            dom.compute(&cfg);
-
-            let mut scc = CfgSccAnalysis::new();
-            scc.compute(&cfg);
-
-            let reach = StackifyReachability::new(16);
-            let ctx = build_stackify_test_context(func, &cfg, &dom, &liveness, entry, scc, reach);
-
+        } {
             let spill_set = BitSet::default();
             let mut spill_requests = BitSet::default();
             let mut object_spill_requests = BitSet::default();
@@ -6292,37 +5577,10 @@ block0:
 
     #[test]
     fn normalize_replay_failure_rolls_back_state() {
-        const SRC: &str = r#"
-target = "evm-ethereum-osaka"
-
-func public %f() {
-block0:
-    return;
-}
-"#;
-        let parsed = parse_module(SRC).unwrap();
-        let func_ref = parsed.debug.func_order[0];
-
-        parsed.module.func_store.modify(func_ref, |func| {
+        with_stackify_ctx!(16, |func, ctx| {
             let imm1 = func.dfg.make_imm_value(Immediate::I8(1));
             let imm2 = func.dfg.make_imm_value(Immediate::I8(2));
-
-            let mut cfg = ControlFlowGraph::new();
-            cfg.compute(func);
-            let entry = cfg.entry().expect("missing entry block");
-
-            let mut liveness = Liveness::new();
-            liveness.compute(func, &cfg);
-
-            let mut dom = DomTree::new();
-            dom.compute(&cfg);
-
-            let mut scc = CfgSccAnalysis::new();
-            scc.compute(&cfg);
-
-            let reach = StackifyReachability::new(16);
-            let ctx = build_stackify_test_context(func, &cfg, &dom, &liveness, entry, scc, reach);
-
+        } {
             let spill_set = BitSet::default();
             let mut spill_requests = BitSet::default();
             let mut object_spill_requests = BitSet::default();
