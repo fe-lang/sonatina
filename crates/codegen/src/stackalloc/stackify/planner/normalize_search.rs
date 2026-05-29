@@ -629,6 +629,13 @@ fn find_push0_kid(key_infos: &[KeyInfo], materializable_imm: &[u8]) -> Option<u8
     })
 }
 
+fn cost_push0_kid(kid: Option<u8>, key_infos: &[KeyInfo], cost: &impl CostModel) -> Option<Cost> {
+    kid.map(|kid| match key_infos[kid as usize] {
+        KeyInfo::Imm { canon, .. } => cost.cost_push_imm(canon),
+        _ => unreachable!("expected imm key info"),
+    })
+}
+
 fn common_suffix_len(state: PackedState, goal: PackedState) -> usize {
     let n = state.len();
     let m = goal.len();
@@ -661,40 +668,8 @@ fn should_prune(f: Cost, upper_bound: Cost, have_incumbent: bool) -> bool {
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum SearchStop {
-    QueueExhausted,
-    PrunedByBound,
-    MaxStates,
-    MaxExpansions,
-}
-
-#[cfg_attr(not(test), allow(dead_code))]
-#[derive(Clone, Copy, Debug)]
-struct SearchRunResult<S> {
-    best_goal: Option<(S, Cost)>,
-    upper_bound: Cost,
-    have_incumbent: bool,
-    stop: SearchStop,
-    expansions: usize,
-    nodes_len: usize,
-    open_len: usize,
-}
-
-#[derive(Clone, Copy)]
-struct SearchRunCfg {
-    upper_bound: Cost,
-    have_incumbent: bool,
-    max_expansions: usize,
-    debug: bool,
-    label: &'static str,
-}
-
 trait BoundedAStarProblem {
     type State: Copy + Eq + Hash + Ord;
-
-    fn start(&self) -> Self::State;
 
     fn is_goal(&self, state: Self::State) -> bool;
 
@@ -715,14 +690,17 @@ trait BoundedAStarProblem {
 fn run_bounded_astar<P>(
     problem: &P,
     scratch: &mut SearchScratch<P::State>,
-    cfg: SearchRunCfg,
-) -> SearchRunResult<P::State>
+    start: P::State,
+    mut upper_bound: Cost,
+    mut have_incumbent: bool,
+    max_expansions: usize,
+    debug_label: Option<&'static str>,
+) -> Option<(P::State, Cost)>
 where
     P: BoundedAStarProblem,
 {
     scratch.clear();
 
-    let start = problem.start();
     let start_h = problem.heuristic(start);
 
     scratch.nodes.insert(
@@ -739,11 +717,8 @@ where
         state: start,
     });
 
-    let mut upper_bound = cfg.upper_bound;
-    let mut have_incumbent = cfg.have_incumbent;
     let mut best_goal: Option<(P::State, Cost)> = None;
     let mut expansions = 0usize;
-    let mut stop = SearchStop::QueueExhausted;
 
     while let Some(entry) = scratch.open.pop() {
         let Some(node) = scratch.nodes.get(&entry.state).copied() else {
@@ -764,38 +739,31 @@ where
         }
 
         if should_prune(entry.f, upper_bound, have_incumbent) {
-            stop = SearchStop::PrunedByBound;
             break;
         }
 
         let max_states = problem.max_states(have_incumbent);
         if scratch.nodes.len() > max_states || scratch.open.len() > max_states {
-            if cfg.debug {
+            if let Some(label) = debug_label {
                 eprintln!(
-                    "{}: exceeded max_states={} (best_states={} open={})",
-                    cfg.label,
-                    max_states,
+                    "{label}: exceeded max_states={max_states} (best_states={} open={})",
                     scratch.nodes.len(),
                     scratch.open.len()
                 );
             }
-            stop = SearchStop::MaxStates;
-            break;
+            return best_goal;
         }
 
         expansions += 1;
-        if expansions > cfg.max_expansions {
-            if cfg.debug {
+        if expansions > max_expansions {
+            if let Some(label) = debug_label {
                 eprintln!(
-                    "{}: exceeded max_expansions={} (best_states={} open={})",
-                    cfg.label,
-                    cfg.max_expansions,
+                    "{label}: exceeded max_expansions={max_expansions} (best_states={} open={})",
                     scratch.nodes.len(),
                     scratch.open.len()
                 );
             }
-            stop = SearchStop::MaxExpansions;
-            break;
+            return best_goal;
         }
 
         let parent_state = entry.state;
@@ -834,48 +802,17 @@ where
         problem.expand_successors(parent_state, g, prev_step, &mut emit);
     }
 
-    if cfg.debug && matches!(stop, SearchStop::QueueExhausted | SearchStop::PrunedByBound) {
+    if let Some(label) = debug_label {
         eprintln!(
-            "{}: exhausted search (best_states={} upper_bound={upper_bound:?})",
-            cfg.label,
-            scratch.nodes.len()
+            "{label}: exhausted search (best_states={} upper_bound={upper_bound:?})",
+            scratch.nodes.len(),
         );
     }
 
-    SearchRunResult {
-        best_goal,
-        upper_bound,
-        have_incumbent,
-        stop,
-        expansions,
-        nodes_len: scratch.nodes.len(),
-        open_len: scratch.open.len(),
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum DupFilter {
-    AnyKey,
-    GoalKeysOnly,
-}
-
-#[derive(Clone, Copy)]
-struct DuplicableSummary {
-    mask: u64,
-    best_cost_by_kid: [Cost; 64],
-}
-
-impl Default for DuplicableSummary {
-    fn default() -> Self {
-        Self {
-            mask: 0,
-            best_cost_by_kid: [UNAVAILABLE_COST; 64],
-        }
-    }
+    best_goal
 }
 
 struct NormalizeWindowProblem<'a, C: CostModel> {
-    start: PackedState,
     goal: PackedState,
     cfg: SearchCfg,
     key_infos: &'a [KeyInfo],
@@ -890,9 +827,8 @@ struct NormalizeWindowProblem<'a, C: CostModel> {
     cost: &'a C,
     push0_kid: Option<u8>,
     push0_cost: Option<Cost>,
-    dup_filter: DupFilter,
-    max_states_without_incumbent: usize,
-    max_states_with_incumbent: usize,
+    dup_goal_keys_only: bool,
+    max_states: [usize; 2],
 }
 
 impl<'a, C: CostModel> NormalizeWindowProblem<'a, C> {
@@ -905,33 +841,20 @@ impl<'a, C: CostModel> NormalizeWindowProblem<'a, C> {
     }
 
     fn max_dup_pos(&self, state: PackedState) -> Option<usize> {
-        if self.cfg.dup_max == 0 {
-            return None;
-        }
-
         let total_len = state.len().saturating_add(self.suffix_ctx_keys.len());
-        if total_len == 0 {
-            return None;
-        }
-
-        Some(
-            total_len
-                .saturating_sub(1)
-                .min(self.cfg.dup_max.saturating_sub(1)),
-        )
+        (self.cfg.dup_max != 0 && total_len != 0)
+            .then_some(total_len.saturating_sub(1).min(self.cfg.dup_max - 1))
     }
 
     fn allow_dup_key(&self, kid: u8) -> bool {
-        match self.dup_filter {
-            DupFilter::AnyKey => true,
-            DupFilter::GoalKeysOnly => self.goal_counts[kid as usize] != 0,
-        }
+        !self.dup_goal_keys_only || self.goal_counts[kid as usize] != 0
     }
 
-    fn collect_duplicable(&self, state: PackedState) -> DuplicableSummary {
-        let mut summary = DuplicableSummary::default();
+    fn collect_duplicable(&self, state: PackedState) -> (u64, [Cost; 64]) {
+        let mut mask = 0;
+        let mut best_cost_by_kid = [UNAVAILABLE_COST; 64];
         let Some(max_pos) = self.max_dup_pos(state) else {
-            return summary;
+            return (mask, best_cost_by_kid);
         };
 
         for pos in 0..=max_pos {
@@ -939,22 +862,17 @@ impl<'a, C: CostModel> NormalizeWindowProblem<'a, C> {
                 continue;
             };
 
-            let idx = kid as usize;
-            summary.mask |= 1u64 << kid;
-            summary.best_cost_by_kid[idx] =
-                summary.best_cost_by_kid[idx].min(self.cost.cost_dup(pos as u8));
+            mask |= 1u64 << kid;
+            best_cost_by_kid[kid as usize] =
+                best_cost_by_kid[kid as usize].min(self.cost.cost_dup(pos as u8));
         }
 
-        summary
+        (mask, best_cost_by_kid)
     }
 }
 
 impl<C: CostModel> BoundedAStarProblem for NormalizeWindowProblem<'_, C> {
     type State = PackedState;
-
-    fn start(&self) -> PackedState {
-        self.start
-    }
 
     fn is_goal(&self, state: PackedState) -> bool {
         state == self.goal
@@ -974,11 +892,7 @@ impl<C: CostModel> BoundedAStarProblem for NormalizeWindowProblem<'_, C> {
     }
 
     fn max_states(&self, have_incumbent: bool) -> usize {
-        if have_incumbent {
-            self.max_states_with_incumbent
-        } else {
-            self.max_states_without_incumbent
-        }
+        self.max_states[usize::from(have_incumbent)]
     }
 
     fn expand_successors<F>(
@@ -993,7 +907,7 @@ impl<C: CostModel> BoundedAStarProblem for NormalizeWindowProblem<'_, C> {
         let cur_len = state.len();
         let suffix_k = common_suffix_len(state, self.goal);
         let suffix_start = cur_len.saturating_sub(suffix_k);
-        let duplicable = self.collect_duplicable(state);
+        let (duplicable, dup_cost_for_kid) = self.collect_duplicable(state);
 
         if cur_len != 0 {
             emit(
@@ -1079,8 +993,8 @@ impl<C: CostModel> BoundedAStarProblem for NormalizeWindowProblem<'_, C> {
                 };
                 let push_cost = self.cost.cost_push_imm(canon);
                 let bit = 1u64 << kid;
-                let dominated = (duplicable.mask & bit) != 0
-                    && push_cost >= duplicable.best_cost_by_kid[kid as usize];
+                let dominated =
+                    (duplicable & bit) != 0 && push_cost >= dup_cost_for_kid[kid as usize];
                 if dominated {
                     continue;
                 }
@@ -1093,7 +1007,7 @@ impl<C: CostModel> BoundedAStarProblem for NormalizeWindowProblem<'_, C> {
             }
 
             for &kid in self.materializable_val {
-                if (duplicable.mask & (1u64 << kid)) != 0 {
+                if (duplicable & (1u64 << kid)) != 0 {
                     continue;
                 }
                 let KeyInfo::Val { vid } = self.key_infos[kid as usize] else {
@@ -1281,15 +1195,9 @@ pub(super) fn solve_optimal_normalize_plan(
     }
 
     let push0_kid = find_push0_kid(&key_infos, &materializable_imm);
-    let push0_cost = push0_kid.map(|kid| {
-        let KeyInfo::Imm { canon, .. } = key_infos[kid as usize] else {
-            unreachable!("expected imm key info")
-        };
-        cost.cost_push_imm(canon)
-    });
+    let push0_cost = cost_push0_kid(push0_kid, &key_infos, cost);
 
     let problem = NormalizeWindowProblem {
-        start,
         goal,
         cfg,
         key_infos: &key_infos,
@@ -1304,24 +1212,24 @@ pub(super) fn solve_optimal_normalize_plan(
         cost,
         push0_kid,
         push0_cost,
-        dup_filter: DupFilter::AnyKey,
-        max_states_without_incumbent: ctx.search_profile.normalize_max_states(false),
-        max_states_with_incumbent: ctx.search_profile.normalize_max_states(true),
+        dup_goal_keys_only: false,
+        max_states: [
+            ctx.search_profile.normalize_max_states(false),
+            ctx.search_profile.normalize_max_states(true),
+        ],
     };
 
     let run = run_bounded_astar(
         &problem,
         &mut scratch.exact,
-        SearchRunCfg {
-            upper_bound,
-            have_incumbent: incumbent_steps.is_some(),
-            max_expansions: cfg.max_expansions,
-            debug,
-            label: "normalize_search",
-        },
+        start,
+        upper_bound,
+        incumbent_steps.is_some(),
+        cfg.max_expansions,
+        debug.then_some("normalize_search"),
     );
 
-    if let Some((goal_state, _goal_cost)) = run.best_goal {
+    if let Some((goal_state, _goal_cost)) = run {
         debug_assert_eq!(goal_state, goal);
         let steps = reconstruct_steps(start, goal_state, &scratch.exact.nodes)?;
         incumbent_steps = Some(steps);
@@ -1560,15 +1468,9 @@ pub(super) fn solve_optimal_repair_prefix_plan(
     }
 
     let push0_kid = find_push0_kid(&key_infos, &materializable_imm);
-    let push0_cost = push0_kid.map(|kid| {
-        let KeyInfo::Imm { canon, .. } = key_infos[kid as usize] else {
-            unreachable!("expected imm key info")
-        };
-        cost.cost_push_imm(canon)
-    });
+    let push0_cost = cost_push0_kid(push0_kid, &key_infos, cost);
 
     let problem = NormalizeWindowProblem {
-        start,
         goal,
         cfg,
         key_infos: &key_infos,
@@ -1583,24 +1485,24 @@ pub(super) fn solve_optimal_repair_prefix_plan(
         cost,
         push0_kid,
         push0_cost,
-        dup_filter: DupFilter::GoalKeysOnly,
-        max_states_without_incumbent: ctx.search_profile.normalize_max_states(false),
-        max_states_with_incumbent: ctx.search_profile.normalize_max_states(true),
+        dup_goal_keys_only: true,
+        max_states: [
+            ctx.search_profile.normalize_max_states(false),
+            ctx.search_profile.normalize_max_states(true),
+        ],
     };
 
     let run = run_bounded_astar(
         &problem,
         &mut scratch.exact,
-        SearchRunCfg {
-            upper_bound,
-            have_incumbent: incumbent_steps.is_some(),
-            max_expansions: cfg.max_expansions,
-            debug,
-            label: "repair_normalize_search",
-        },
+        start,
+        upper_bound,
+        incumbent_steps.is_some(),
+        cfg.max_expansions,
+        debug.then_some("repair_normalize_search"),
     );
 
-    if let Some((goal_state, _goal_cost)) = run.best_goal {
+    if let Some((goal_state, _goal_cost)) = run {
         debug_assert_eq!(goal_state, goal);
         let steps = reconstruct_steps(start, goal_state, &scratch.exact.nodes)?;
         incumbent_steps = Some(steps);
@@ -1656,10 +1558,6 @@ struct OperandPrepSearchProblem<'a> {
 
 impl BoundedAStarProblem for OperandPrepSearchProblem<'_> {
     type State = PrepState;
-
-    fn start(&self) -> PrepState {
-        self.problem.start_state
-    }
 
     fn is_goal(&self, state: PrepState) -> bool {
         operand_prep_goal(
@@ -2444,12 +2342,7 @@ fn build_greedy_operand_prep_upper_bound(
     }
 
     let push0_kid = problem.push0_kid();
-    let push0_cost = push0_kid.map(|kid| {
-        let KeyInfo::Imm { canon, .. } = problem.key_infos[kid as usize] else {
-            unreachable!("expected imm key info")
-        };
-        cost.cost_push_imm(canon)
-    });
+    let push0_cost = cost_push0_kid(push0_kid, &problem.key_infos, cost);
     let surplus_last_use_penalty = cost.cost_pop().saturating_add(cost.cost_swap(1));
     let max_depth = problem.goal_keys.len().saturating_add(depth_slack).min(24);
     let mut nodes = vec![prep_greedy_node(
@@ -2892,16 +2785,14 @@ pub(super) fn solve_optimal_operand_prep_plan(
     let run = run_bounded_astar(
         &search_problem,
         &mut scratch.prep,
-        SearchRunCfg {
-            upper_bound,
-            have_incumbent: true,
-            max_expansions: cfg.max_expansions,
-            debug,
-            label: "operand_prep_search",
-        },
+        problem.start_state,
+        upper_bound,
+        true,
+        cfg.max_expansions,
+        debug.then_some("operand_prep_search"),
     );
 
-    if let Some((goal_state, goal_cost)) = run.best_goal {
+    if let Some((goal_state, goal_cost)) = run {
         let steps = reconstruct_steps(problem.start_state, goal_state, &scratch.prep.nodes)?;
         incumbent_steps = steps;
         incumbent_cost = goal_cost;
@@ -4274,20 +4165,14 @@ mod tests {
     }
 
     struct DriverProblem<'a> {
-        start: u8,
         goal: u8,
         edges: &'a [(u8, u8, u32)],
-        max_states_without_incumbent: usize,
-        max_states_with_incumbent: usize,
-        saw_incumbent_state_limit: Option<&'a Cell<bool>>,
+        max_states: [usize; 2],
+        expansions: Option<&'a Cell<usize>>,
     }
 
     impl BoundedAStarProblem for DriverProblem<'_> {
         type State = u8;
-
-        fn start(&self) -> u8 {
-            self.start
-        }
 
         fn is_goal(&self, state: u8) -> bool {
             state == self.goal
@@ -4298,20 +4183,16 @@ mod tests {
         }
 
         fn max_states(&self, have_incumbent: bool) -> usize {
-            if have_incumbent {
-                if let Some(saw_incumbent_state_limit) = self.saw_incumbent_state_limit {
-                    saw_incumbent_state_limit.set(true);
-                }
-                self.max_states_with_incumbent
-            } else {
-                self.max_states_without_incumbent
-            }
+            self.max_states[usize::from(have_incumbent)]
         }
 
         fn expand_successors<F>(&self, state: u8, g: Cost, _prev_step: Option<Step>, emit: &mut F)
         where
             F: FnMut(u8, Cost, Step),
         {
+            if let Some(expansions) = self.expansions {
+                expansions.set(expansions.get() + 1);
+            }
             for &(_, to, edge_cost) in self.edges.iter().filter(|(from, _, _)| *from == state) {
                 emit(
                     to,
@@ -4325,118 +4206,70 @@ mod tests {
         }
     }
 
-    fn run_driver_problem(
+    fn driver_problem(goal: u8, edges: &[(u8, u8, u32)]) -> DriverProblem<'_> {
+        DriverProblem {
+            goal,
+            edges,
+            max_states: [64, 64],
+            expansions: None,
+        }
+    }
+
+    fn run_driver(
         problem: &DriverProblem<'_>,
         upper_bound: u32,
         have_incumbent: bool,
         max_expansions: usize,
-    ) -> SearchRunResult<u8> {
+    ) -> Option<(u8, Cost)> {
         let mut scratch = SearchScratch::default();
         run_bounded_astar(
             problem,
             &mut scratch,
-            SearchRunCfg {
-                upper_bound: Cost {
-                    gas: upper_bound,
-                    bytes: 0,
-                },
-                have_incumbent,
-                max_expansions,
-                debug: false,
-                label: "driver_test",
+            0,
+            Cost {
+                gas: upper_bound,
+                bytes: 0,
             },
+            have_incumbent,
+            max_expansions,
+            None,
         )
     }
 
     #[test]
-    fn driver_keeps_equal_bound_without_incumbent() {
-        let problem = DriverProblem {
-            start: 0,
-            goal: 1,
-            edges: &[(0, 1, 10)],
-            max_states_without_incumbent: 64,
-            max_states_with_incumbent: 64,
-            saw_incumbent_state_limit: None,
-        };
-
-        let run = run_driver_problem(&problem, 10, false, 8);
-
-        assert_eq!(run.best_goal, Some((1, Cost { gas: 10, bytes: 0 })));
-        assert_eq!(run.upper_bound.gas, 10);
-        assert!(run.have_incumbent);
-    }
-
-    #[test]
-    fn driver_prunes_equal_bound_with_incumbent() {
-        let problem = DriverProblem {
-            start: 0,
-            goal: 1,
-            edges: &[(0, 1, 10)],
-            max_states_without_incumbent: 64,
-            max_states_with_incumbent: 64,
-            saw_incumbent_state_limit: None,
-        };
-
-        let run = run_driver_problem(&problem, 10, true, 8);
-
-        assert_eq!(run.best_goal, None);
-        assert_eq!(run.nodes_len, 1);
-        assert_eq!(run.open_len, 0);
+    fn driver_bound_semantics() {
+        let problem = driver_problem(1, &[(0, 1, 10)]);
+        assert_eq!(
+            run_driver(&problem, 10, false, 8),
+            Some((1, Cost { gas: 10, bytes: 0 }))
+        );
+        assert_eq!(run_driver(&problem, 10, true, 8), None);
     }
 
     #[test]
     fn driver_ignores_stale_queue_entries() {
-        let problem = DriverProblem {
-            start: 0,
-            goal: 3,
-            edges: &[(0, 2, 10), (0, 1, 1), (1, 2, 1), (2, 3, 1)],
-            max_states_without_incumbent: 64,
-            max_states_with_incumbent: 64,
-            saw_incumbent_state_limit: None,
-        };
-
-        let run = run_driver_problem(&problem, 100, false, 8);
-
-        assert_eq!(run.best_goal, Some((3, Cost { gas: 3, bytes: 0 })));
-        assert_eq!(run.upper_bound.gas, 3);
+        let problem = driver_problem(3, &[(0, 2, 10), (0, 1, 1), (1, 2, 1), (2, 3, 1)]);
+        assert_eq!(
+            run_driver(&problem, 100, false, 8),
+            Some((3, Cost { gas: 3, bytes: 0 }))
+        );
     }
 
     #[test]
-    fn driver_expansion_limit_zero_does_not_expand_start() {
+    fn driver_expansion_and_state_limits() {
+        let expansions = Cell::new(0);
+        let mut problem = driver_problem(1, &[(0, 1, 1)]);
+        problem.expansions = Some(&expansions);
+        assert_eq!(run_driver(&problem, 100, false, 0), None);
+        assert_eq!(expansions.get(), 0);
+
         let problem = DriverProblem {
-            start: 0,
             goal: 1,
             edges: &[(0, 1, 1)],
-            max_states_without_incumbent: 64,
-            max_states_with_incumbent: 64,
-            saw_incumbent_state_limit: None,
+            max_states: [64, 0],
+            expansions: None,
         };
-
-        let run = run_driver_problem(&problem, 100, false, 0);
-
-        assert_eq!(run.best_goal, None);
-        assert_eq!(run.stop, SearchStop::MaxExpansions);
-        assert_eq!(run.expansions, 1);
-        assert_eq!(run.nodes_len, 1);
-    }
-
-    #[test]
-    fn driver_uses_incumbent_state_limit() {
-        let saw_incumbent_state_limit = Cell::new(false);
-        let problem = DriverProblem {
-            start: 0,
-            goal: 1,
-            edges: &[(0, 2, 1)],
-            max_states_without_incumbent: 64,
-            max_states_with_incumbent: 0,
-            saw_incumbent_state_limit: Some(&saw_incumbent_state_limit),
-        };
-
-        let run = run_driver_problem(&problem, 100, true, 8);
-
-        assert_eq!(run.best_goal, None);
-        assert_eq!(run.stop, SearchStop::MaxStates);
-        assert!(saw_incumbent_state_limit.get());
+        assert_eq!(run_driver(&problem, 100, true, 8), None);
     }
 
     #[test]
