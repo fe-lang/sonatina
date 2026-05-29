@@ -3,9 +3,10 @@ use sonatina_ir::{
     Function, Signature, Type, Value,
     inst::{data, downcast},
     module::{FuncRef, Module, ModuleCtx},
-    types::{CompoundType, CompoundTypeRef, StructData},
-    visitor::VisitorMut,
+    types::{CompoundType, CompoundTypeRef},
 };
+
+use crate::type_rewrite::{TypeRewrite, rewrite_compound_type_default, rewrite_function_type_uses};
 
 pub(crate) trait SignatureRewritePlan {
     fn new_arg_tys(&self) -> &[Type];
@@ -110,7 +111,7 @@ pub(crate) fn propagate_signature_rewrite_types(
 #[derive(Default)]
 struct SignatureRewriteTypeRewriter {
     sig_func_map: FxHashMap<CompoundTypeRef, FuncRef>,
-    compound_map: FxHashMap<CompoundTypeRef, CompoundTypeRef>,
+    compound_map: FxHashMap<CompoundTypeRef, Type>,
 }
 
 impl SignatureRewriteTypeRewriter {
@@ -120,22 +121,21 @@ impl SignatureRewriteTypeRewriter {
             compound_map: FxHashMap::default(),
         }
     }
+}
 
-    fn rewrite_type(&mut self, ctx: &ModuleCtx, ty: Type) -> Type {
-        match ty {
-            Type::Compound(compound) => Type::Compound(self.rewrite_compound(ctx, compound)),
-            _ => ty,
-        }
+impl TypeRewrite for SignatureRewriteTypeRewriter {
+    fn compound_map(&mut self) -> &mut FxHashMap<CompoundTypeRef, Type> {
+        &mut self.compound_map
     }
 
-    fn rewrite_compound(&mut self, ctx: &ModuleCtx, compound: CompoundTypeRef) -> CompoundTypeRef {
-        if let Some(&mapped) = self.compound_map.get(&compound) {
-            return mapped;
-        }
-
+    fn rewrite_compound_type(
+        &mut self,
+        ctx: &ModuleCtx,
+        compound: CompoundTypeRef,
+        current: CompoundType,
+    ) -> Type {
         if let Some(&func) = self.sig_func_map.get(&compound) {
-            self.compound_map.insert(compound, compound);
-            let mapped = ctx
+            return ctx
                 .get_sig(func)
                 .map(|sig| {
                     let args: Vec<_> = sig
@@ -148,100 +148,12 @@ impl SignatureRewriteTypeRewriter {
                         .iter()
                         .map(|&ret| self.rewrite_type(ctx, ret))
                         .collect();
-                    make_func_ty(ctx, &args, &ret_tys)
+                    Type::Compound(make_func_ty(ctx, &args, &ret_tys))
                 })
-                .unwrap_or(compound);
-            self.compound_map.insert(compound, mapped);
-            return mapped;
+                .unwrap_or(Type::Compound(compound));
         }
 
-        let current = ctx.with_ty_store(|store| store.resolve_compound(compound).clone());
-        self.compound_map.insert(compound, compound);
-
-        match current {
-            CompoundType::Array { elem, len } => {
-                let elem = self.rewrite_type(ctx, elem);
-                let mapped = ctx.with_ty_store_mut(|store| match store.make_array(elem, len) {
-                    Type::Compound(mapped) => mapped,
-                    _ => unreachable!(),
-                });
-                self.compound_map.insert(compound, mapped);
-                mapped
-            }
-            CompoundType::Ptr(elem) => {
-                let elem = self.rewrite_type(ctx, elem);
-                let mapped = ctx.with_ty_store_mut(|store| match store.make_ptr(elem) {
-                    Type::Compound(mapped) => mapped,
-                    _ => unreachable!(),
-                });
-                self.compound_map.insert(compound, mapped);
-                mapped
-            }
-            CompoundType::ObjRef(elem) => {
-                let elem = self.rewrite_type(ctx, elem);
-                let mapped = ctx.with_ty_store_mut(|store| match store.make_obj_ref(elem) {
-                    Type::Compound(mapped) => mapped,
-                    _ => unreachable!(),
-                });
-                self.compound_map.insert(compound, mapped);
-                mapped
-            }
-            CompoundType::ConstRef(elem) => {
-                let elem = self.rewrite_type(ctx, elem);
-                let mapped = ctx.with_ty_store_mut(|store| match store.make_const_ref(elem) {
-                    Type::Compound(mapped) => mapped,
-                    _ => unreachable!(),
-                });
-                self.compound_map.insert(compound, mapped);
-                mapped
-            }
-            CompoundType::Enum(data) => {
-                let new_variants: Vec<_> = data
-                    .variants
-                    .iter()
-                    .map(|variant| sonatina_ir::types::VariantData {
-                        name: variant.name.clone(),
-                        explicit_discriminant: variant.explicit_discriminant,
-                        fields: variant
-                            .fields
-                            .iter()
-                            .map(|&field| self.rewrite_type(ctx, field))
-                            .collect(),
-                    })
-                    .collect();
-                if new_variants != data.variants {
-                    ctx.with_ty_store_mut(|store| {
-                        store.update_enum_variants(&data.name, &new_variants, data.repr)
-                    });
-                }
-                compound
-            }
-            CompoundType::Func { args, ret_tys } => {
-                let args: Vec<_> = args
-                    .iter()
-                    .map(|&arg| self.rewrite_type(ctx, arg))
-                    .collect();
-                let ret_tys: Vec<_> = ret_tys
-                    .iter()
-                    .map(|&ret| self.rewrite_type(ctx, ret))
-                    .collect();
-                let mapped =
-                    ctx.with_ty_store_mut(|store| match store.make_func(&args, &ret_tys) {
-                        Type::Compound(mapped) => mapped,
-                        _ => unreachable!(),
-                    });
-                self.compound_map.insert(compound, mapped);
-                mapped
-            }
-            CompoundType::Struct(StructData { name, fields, .. }) => {
-                let fields: Vec<_> = fields
-                    .iter()
-                    .map(|&field| self.rewrite_type(ctx, field))
-                    .collect();
-                ctx.with_ty_store_mut(|store| store.update_struct_fields(&name, &fields));
-                compound
-            }
-        }
+        rewrite_compound_type_default(self, ctx, compound, current)
     }
 }
 
@@ -322,54 +234,9 @@ fn rewrite_function_types(
     old_sigs: &FxHashMap<FuncRef, Signature>,
     types: &mut SignatureRewriteTypeRewriter,
 ) {
-    let value_ids: Vec<_> = function.dfg.value_ids().collect();
-    for value_id in value_ids {
-        let old_ty = function.dfg.value_ty(value_id);
-        let new_ty = direct_get_function_ptr_ty(function, value_id, old_sigs)
-            .unwrap_or_else(|| types.rewrite_type(function.ctx(), old_ty));
-        if new_ty == old_ty {
-            continue;
-        }
-
-        function.dfg.values[value_id] = match function.dfg.value(value_id).clone() {
-            Value::Immediate { imm, .. } => Value::Immediate { imm, ty: new_ty },
-            Value::Inst {
-                inst, result_idx, ..
-            } => Value::Inst {
-                inst,
-                result_idx,
-                ty: new_ty,
-            },
-            Value::Arg { idx, .. } => Value::Arg { idx, ty: new_ty },
-            Value::Global { gv, .. } => Value::Global { gv, ty: new_ty },
-            Value::Undef { .. } => Value::Undef { ty: new_ty },
-        };
-    }
-
-    struct TypeVisitor<'a> {
-        ctx: ModuleCtx,
-        types: &'a mut SignatureRewriteTypeRewriter,
-    }
-
-    impl VisitorMut for TypeVisitor<'_> {
-        fn visit_ty(&mut self, item: &mut Type) {
-            *item = self.types.rewrite_type(&self.ctx, *item);
-        }
-    }
-
-    let mut visitor = TypeVisitor {
-        ctx: function.ctx().clone(),
-        types,
-    };
-    let blocks: Vec<_> = function.layout.iter_block().collect();
-    for block in blocks {
-        let insts: Vec<_> = function.layout.iter_inst(block).collect();
-        for inst in insts {
-            if function.layout.is_inst_inserted(inst) {
-                function.dfg.inst_mut(inst).accept_mut(&mut visitor);
-            }
-        }
-    }
+    rewrite_function_type_uses(function, types, |function, value, _| {
+        direct_get_function_ptr_ty(function, value, old_sigs)
+    });
 }
 
 #[derive(Default)]

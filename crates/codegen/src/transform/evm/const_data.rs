@@ -8,8 +8,7 @@ use sonatina_ir::{
     inst::{arith, cast, data, downcast, evm, logic},
     module::ModuleCtx,
     object::Directive,
-    types::{CompoundType, CompoundTypeRef, StructData},
-    visitor::VisitorMut,
+    types::{CompoundType, CompoundTypeRef},
 };
 
 use super::scalar_words::evm_scalar_word_bytes;
@@ -27,6 +26,7 @@ use crate::{
         eval_const_path_dynamic_domain_immediates, eval_const_path_subtree,
     },
     transform::aggregate::shape,
+    type_rewrite::{TypeRewrite, rewrite_compound_type_default, rewrite_function_type_uses},
 };
 
 type ConstOffsetTerms = Vec<(ValueId, u32)>;
@@ -100,79 +100,21 @@ struct ConstRefTypeLowerer {
     compound_map: FxHashMap<CompoundTypeRef, Type>,
 }
 
-impl ConstRefTypeLowerer {
-    fn rewrite_type(&mut self, ctx: &ModuleCtx, ty: Type) -> Type {
-        match ty {
-            Type::Compound(compound) => self.rewrite_compound(ctx, compound),
-            _ => ty,
-        }
+impl TypeRewrite for ConstRefTypeLowerer {
+    fn compound_map(&mut self) -> &mut FxHashMap<CompoundTypeRef, Type> {
+        &mut self.compound_map
     }
 
-    fn rewrite_compound(&mut self, ctx: &ModuleCtx, compound: CompoundTypeRef) -> Type {
-        if let Some(&mapped) = self.compound_map.get(&compound) {
-            return mapped;
-        }
-
-        let current = ctx.with_ty_store(|store| store.resolve_compound(compound).clone());
-        self.compound_map.insert(compound, Type::Compound(compound));
-
-        let mapped = match current {
-            CompoundType::Array { elem, len } => {
-                let elem = self.rewrite_type(ctx, elem);
-                ctx.with_ty_store_mut(|store| store.make_array(elem, len))
-            }
-            CompoundType::Ptr(elem) => {
-                let elem = self.rewrite_type(ctx, elem);
-                ctx.with_ty_store_mut(|store| store.make_ptr(elem))
-            }
-            CompoundType::ObjRef(elem) => {
-                let elem = self.rewrite_type(ctx, elem);
-                ctx.with_ty_store_mut(|store| store.make_obj_ref(elem))
-            }
+    fn rewrite_compound_type(
+        &mut self,
+        ctx: &ModuleCtx,
+        compound: CompoundTypeRef,
+        current: CompoundType,
+    ) -> Type {
+        match current {
             CompoundType::ConstRef(_) => ctx.type_layout.pointer_repl(),
-            CompoundType::Enum(data) => {
-                let new_variants: Vec<_> = data
-                    .variants
-                    .iter()
-                    .map(|variant| sonatina_ir::types::VariantData {
-                        name: variant.name.clone(),
-                        explicit_discriminant: variant.explicit_discriminant,
-                        fields: variant
-                            .fields
-                            .iter()
-                            .map(|&field| self.rewrite_type(ctx, field))
-                            .collect(),
-                    })
-                    .collect();
-                if new_variants != data.variants {
-                    ctx.with_ty_store_mut(|store| {
-                        store.update_enum_variants(&data.name, &new_variants, data.repr)
-                    });
-                }
-                Type::Compound(compound)
-            }
-            CompoundType::Func { args, ret_tys } => {
-                let args: Vec<_> = args
-                    .iter()
-                    .map(|&arg| self.rewrite_type(ctx, arg))
-                    .collect();
-                let ret_tys: Vec<_> = ret_tys
-                    .iter()
-                    .map(|&ret| self.rewrite_type(ctx, ret))
-                    .collect();
-                ctx.with_ty_store_mut(|store| store.make_func(&args, &ret_tys))
-            }
-            CompoundType::Struct(StructData { name, fields, .. }) => {
-                let fields: Vec<_> = fields
-                    .iter()
-                    .map(|&field| self.rewrite_type(ctx, field))
-                    .collect();
-                ctx.with_ty_store_mut(|store| store.update_struct_fields(&name, &fields));
-                Type::Compound(compound)
-            }
-        };
-        self.compound_map.insert(compound, mapped);
-        mapped
+            _ => rewrite_compound_type_default(self, ctx, compound, current),
+        }
     }
 }
 
@@ -1122,59 +1064,7 @@ fn rewrite_module_types(module: &Module, types: &mut ConstRefTypeLowerer) -> boo
 }
 
 fn rewrite_function_types(func: &mut Function, types: &mut ConstRefTypeLowerer) -> bool {
-    let mut changed = false;
-    for value in func.dfg.value_ids().collect::<Vec<_>>() {
-        let old_ty = func.dfg.value_ty(value);
-        let new_ty = types.rewrite_type(func.ctx(), old_ty);
-        if new_ty == old_ty {
-            continue;
-        }
-        func.dfg.values[value] = match func.dfg.value(value).clone() {
-            Value::Immediate { imm, .. } => Value::Immediate { imm, ty: new_ty },
-            Value::Inst {
-                inst, result_idx, ..
-            } => Value::Inst {
-                inst,
-                result_idx,
-                ty: new_ty,
-            },
-            Value::Arg { idx, .. } => Value::Arg { idx, ty: new_ty },
-            Value::Global { gv, .. } => Value::Global { gv, ty: new_ty },
-            Value::Undef { .. } => Value::Undef { ty: new_ty },
-        };
-        changed = true;
-    }
-
-    struct TypeVisitor<'a> {
-        ctx: ModuleCtx,
-        types: &'a mut ConstRefTypeLowerer,
-        changed: bool,
-    }
-
-    impl VisitorMut for TypeVisitor<'_> {
-        fn visit_ty(&mut self, item: &mut Type) {
-            let new_ty = self.types.rewrite_type(&self.ctx, *item);
-            self.changed |= new_ty != *item;
-            *item = new_ty;
-        }
-    }
-
-    let mut visitor = TypeVisitor {
-        ctx: func.ctx().clone(),
-        types,
-        changed: false,
-    };
-    let blocks: Vec<_> = func.layout.iter_block().collect();
-    for block in blocks {
-        let insts: Vec<_> = func.layout.iter_inst(block).collect();
-        for inst in insts {
-            if func.layout.is_inst_inserted(inst) {
-                func.dfg.inst_mut(inst).accept_mut(&mut visitor);
-            }
-        }
-    }
-
-    changed || visitor.changed
+    rewrite_function_type_uses(func, types, |_, _, _| None)
 }
 
 fn inserted_insts(func: &Function) -> Vec<InstId> {
