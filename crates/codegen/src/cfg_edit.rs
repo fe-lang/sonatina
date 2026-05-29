@@ -55,6 +55,21 @@ impl<'f> CfgEditor<'f> {
         })
     }
 
+    fn branch_terminator(&self, block: BlockId) -> InstId {
+        let Some(term) = self.func.layout.last_inst_of(block) else {
+            panic!("block {block:?} has no terminator");
+        };
+        assert!(
+            self.func.dfg.is_terminator(term),
+            "block {block:?} does not end with a terminator"
+        );
+        assert!(
+            self.func.dfg.branch_info(term).is_some(),
+            "terminator {term:?} has no branch info"
+        );
+        term
+    }
+
     pub fn truncate_block_from_inst(&mut self, first_inst: InstId) -> BlockId {
         assert!(self.func.layout.is_inst_inserted(first_inst));
         let block = self.func.layout.inst_block(first_inst);
@@ -154,17 +169,8 @@ impl<'f> CfgEditor<'f> {
     pub fn retain_out_edges(&mut self, from: BlockId, keep_mask: &[bool]) -> bool {
         assert!(self.func.layout.is_block_inserted(from));
 
-        let Some(term) = self.func.layout.last_inst_of(from) else {
-            panic!("block {from:?} has no terminator");
-        };
-        assert!(
-            self.func.dfg.is_terminator(term),
-            "block {from:?} does not end with a terminator"
-        );
-
-        let Some(branch_info) = self.func.dfg.branch_info(term) else {
-            panic!("terminator {term:?} has no branch info");
-        };
+        let term = self.branch_terminator(from);
+        let branch_info = self.func.dfg.branch_info(term).unwrap();
         let old_dests = branch_info.dests();
         assert_eq!(
             keep_mask.len(),
@@ -216,17 +222,8 @@ impl<'f> CfgEditor<'f> {
         assert!(self.func.layout.is_block_inserted(from));
         assert!(self.func.layout.is_block_inserted(new_to));
 
-        let Some(term) = self.func.layout.last_inst_of(from) else {
-            panic!("block {from:?} has no terminator");
-        };
-        assert!(
-            self.func.dfg.is_terminator(term),
-            "block {from:?} does not end with a terminator"
-        );
-
-        let Some(branch_info) = self.func.dfg.branch_info(term) else {
-            panic!("terminator {term:?} has no branch info");
-        };
+        let term = self.branch_terminator(from);
+        let branch_info = self.func.dfg.branch_info(term).unwrap();
         let old_dests = branch_info.dests();
         let old_to = *old_dests
             .get(edge_idx)
@@ -342,17 +339,8 @@ impl<'f> CfgEditor<'f> {
         assert!(self.func.layout.is_block_inserted(from));
         assert!(self.func.layout.is_block_inserted(to));
 
-        let Some(term) = self.func.layout.last_inst_of(from) else {
-            panic!("block {from:?} has no terminator");
-        };
-        assert!(
-            self.func.dfg.is_terminator(term),
-            "block {from:?} does not end with a terminator"
-        );
-
-        let Some(branch_info) = self.func.dfg.branch_info(term) else {
-            panic!("terminator {term:?} has no branch info");
-        };
+        let term = self.branch_terminator(from);
+        let branch_info = self.func.dfg.branch_info(term).unwrap();
         assert!(
             branch_info.dests().into_iter().any(|dest| dest == to),
             "edge {from:?} -> {to:?} does not exist"
@@ -416,17 +404,8 @@ impl<'f> CfgEditor<'f> {
                 "preheader predecessor {pred:?} is not inserted"
             );
 
-            let Some(last_inst) = self.func.layout.last_inst_of(pred) else {
-                panic!("block {pred:?} has no terminator");
-            };
-            assert!(
-                self.func.dfg.is_terminator(last_inst),
-                "block {pred:?} does not end with a terminator"
-            );
-
-            let Some(branch_info) = self.func.dfg.branch_info(last_inst) else {
-                panic!("terminator {last_inst:?} has no branch info");
-            };
+            let term = self.branch_terminator(pred);
+            let branch_info = self.func.dfg.branch_info(term).unwrap();
             assert!(
                 branch_info
                     .dests()
@@ -437,7 +416,7 @@ impl<'f> CfgEditor<'f> {
 
             self.func
                 .dfg
-                .rewrite_branch_edges_to_block(last_inst, lp_header, new_preheader);
+                .rewrite_branch_edges_to_block(term, lp_header, new_preheader);
         }
 
         self.rewrite_loop_header_phis_for_preheader(lp_header, outside_preds, new_preheader);
@@ -831,17 +810,8 @@ impl<'f> CfgEditor<'f> {
             panic!("branch target {old_to:?} is not inserted");
         }
 
-        let Some(term) = self.func.layout.last_inst_of(from) else {
-            panic!("block {from:?} has no terminator");
-        };
-        assert!(
-            self.func.dfg.is_terminator(term),
-            "block {from:?} does not end with a terminator"
-        );
-
-        let Some(branch_info) = self.func.dfg.branch_info(term) else {
-            panic!("terminator {term:?} has no branch info");
-        };
+        let term = self.branch_terminator(from);
+        let branch_info = self.func.dfg.branch_info(term).unwrap();
         if !branch_info.dests().into_iter().any(|dest| dest == old_to) {
             return false;
         }
