@@ -285,19 +285,19 @@ impl PackedState {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-struct QueueEntry {
+struct SearchQueueEntry<S> {
     f: Cost,
     g: Cost,
-    state: PackedState,
+    state: S,
 }
 
-impl PartialOrd for QueueEntry {
+impl<S: Ord> PartialOrd for SearchQueueEntry<S> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl Ord for QueueEntry {
+impl<S: Ord> Ord for SearchQueueEntry<S> {
     fn cmp(&self, other: &Self) -> Ordering {
         // Reverse ordering for min-heap behavior.
         other
@@ -327,29 +327,6 @@ impl Ord for PrepState {
             .cmp(&other.window)
             .then_with(|| self.tail.cmp(&other.tail))
             .then_with(|| self.mem.cmp(&other.mem))
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-struct PrepQueueEntry {
-    f: Cost,
-    g: Cost,
-    state: PrepState,
-}
-
-impl PartialOrd for PrepQueueEntry {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for PrepQueueEntry {
-    fn cmp(&self, other: &Self) -> Ordering {
-        other
-            .f
-            .cmp(&self.f)
-            .then_with(|| other.g.cmp(&self.g))
-            .then_with(|| other.state.cmp(&self.state))
     }
 }
 
@@ -402,9 +379,9 @@ struct PlanCache {
 
 const SEARCH_SCRATCH_REUSE_CAP: usize = 65_536;
 
-struct SearchScratch<S, Q> {
+struct SearchScratch<S> {
     nodes: FxHashMap<S, SearchNode<S>>,
-    open: BinaryHeap<Q>,
+    open: BinaryHeap<SearchQueueEntry<S>>,
 }
 
 #[derive(Clone, Copy)]
@@ -413,7 +390,7 @@ struct SearchNode<S> {
     parent: Option<(S, Step)>,
 }
 
-impl<S, Q> Default for SearchScratch<S, Q> {
+impl<S: Ord> Default for SearchScratch<S> {
     fn default() -> Self {
         Self {
             nodes: FxHashMap::default(),
@@ -422,7 +399,7 @@ impl<S, Q> Default for SearchScratch<S, Q> {
     }
 }
 
-impl<S: Eq + Hash, Q> SearchScratch<S, Q> {
+impl<S: Eq + Hash + Ord> SearchScratch<S> {
     fn clear(&mut self) {
         clear_hash_map(&mut self.nodes);
         clear_heap(&mut self.open);
@@ -431,20 +408,10 @@ impl<S: Eq + Hash, Q> SearchScratch<S, Q> {
 
 #[derive(Default)]
 pub(in crate::stackalloc::stackify) struct NormalizeSearchScratch {
-    exact: SearchScratch<PackedState, QueueEntry>,
-    prep: SearchScratch<PrepState, PrepQueueEntry>,
+    exact: SearchScratch<PackedState>,
+    prep: SearchScratch<PrepState>,
     plan_cache: PlanCache,
     pub(super) operand_prep_plan_cache: OperandPrepPlanCache,
-}
-
-impl NormalizeSearchScratch {
-    fn clear_exact(&mut self) {
-        self.exact.clear();
-    }
-
-    fn clear_prep(&mut self) {
-        self.prep.clear();
-    }
 }
 
 fn clear_hash_map<K: Eq + Hash, V>(map: &mut FxHashMap<K, V>) {
@@ -694,6 +661,454 @@ fn should_prune(f: Cost, upper_bound: Cost, have_incumbent: bool) -> bool {
     }
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SearchStop {
+    QueueExhausted,
+    PrunedByBound,
+    MaxStates,
+    MaxExpansions,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+#[derive(Clone, Copy, Debug)]
+struct SearchRunResult<S> {
+    best_goal: Option<(S, Cost)>,
+    upper_bound: Cost,
+    have_incumbent: bool,
+    stop: SearchStop,
+    expansions: usize,
+    nodes_len: usize,
+    open_len: usize,
+}
+
+#[derive(Clone, Copy)]
+struct SearchRunCfg {
+    upper_bound: Cost,
+    have_incumbent: bool,
+    max_expansions: usize,
+    debug: bool,
+    label: &'static str,
+}
+
+trait BoundedAStarProblem {
+    type State: Copy + Eq + Hash + Ord;
+
+    fn start(&self) -> Self::State;
+
+    fn is_goal(&self, state: Self::State) -> bool;
+
+    fn heuristic(&self, state: Self::State) -> Cost;
+
+    fn max_states(&self, have_incumbent: bool) -> usize;
+
+    fn expand_successors<F>(
+        &self,
+        state: Self::State,
+        g: Cost,
+        prev_step: Option<Step>,
+        emit: &mut F,
+    ) where
+        F: FnMut(Self::State, Cost, Step);
+}
+
+fn run_bounded_astar<P>(
+    problem: &P,
+    scratch: &mut SearchScratch<P::State>,
+    cfg: SearchRunCfg,
+) -> SearchRunResult<P::State>
+where
+    P: BoundedAStarProblem,
+{
+    scratch.clear();
+
+    let start = problem.start();
+    let start_h = problem.heuristic(start);
+
+    scratch.nodes.insert(
+        start,
+        SearchNode {
+            cost: Cost::default(),
+            parent: None,
+        },
+    );
+
+    scratch.open.push(SearchQueueEntry {
+        f: start_h,
+        g: Cost::default(),
+        state: start,
+    });
+
+    let mut upper_bound = cfg.upper_bound;
+    let mut have_incumbent = cfg.have_incumbent;
+    let mut best_goal: Option<(P::State, Cost)> = None;
+    let mut expansions = 0usize;
+    let mut stop = SearchStop::QueueExhausted;
+
+    while let Some(entry) = scratch.open.pop() {
+        let Some(node) = scratch.nodes.get(&entry.state).copied() else {
+            continue;
+        };
+        let g = node.cost;
+        if entry.g != g {
+            continue;
+        }
+
+        if problem.is_goal(entry.state) {
+            if !have_incumbent || g < upper_bound {
+                upper_bound = g;
+                have_incumbent = true;
+                best_goal = Some((entry.state, g));
+            }
+            continue;
+        }
+
+        if should_prune(entry.f, upper_bound, have_incumbent) {
+            stop = SearchStop::PrunedByBound;
+            break;
+        }
+
+        let max_states = problem.max_states(have_incumbent);
+        if scratch.nodes.len() > max_states || scratch.open.len() > max_states {
+            if cfg.debug {
+                eprintln!(
+                    "{}: exceeded max_states={} (best_states={} open={})",
+                    cfg.label,
+                    max_states,
+                    scratch.nodes.len(),
+                    scratch.open.len()
+                );
+            }
+            stop = SearchStop::MaxStates;
+            break;
+        }
+
+        expansions += 1;
+        if expansions > cfg.max_expansions {
+            if cfg.debug {
+                eprintln!(
+                    "{}: exceeded max_expansions={} (best_states={} open={})",
+                    cfg.label,
+                    cfg.max_expansions,
+                    scratch.nodes.len(),
+                    scratch.open.len()
+                );
+            }
+            stop = SearchStop::MaxExpansions;
+            break;
+        }
+
+        let parent_state = entry.state;
+        let prev_step = node.parent.map(|(_, step)| step);
+        let nodes = &mut scratch.nodes;
+        let open = &mut scratch.open;
+        let mut emit = |state: P::State, next_g: Cost, step: Step| {
+            let h = problem.heuristic(state);
+            let f = next_g.saturating_add(h);
+            if should_prune(f, upper_bound, have_incumbent) {
+                return;
+            }
+
+            let should_update = match nodes.get(&state) {
+                None => true,
+                Some(prev) => next_g < prev.cost,
+            };
+            if !should_update {
+                return;
+            }
+
+            nodes.insert(
+                state,
+                SearchNode {
+                    cost: next_g,
+                    parent: Some((parent_state, step)),
+                },
+            );
+            open.push(SearchQueueEntry {
+                f,
+                g: next_g,
+                state,
+            });
+        };
+
+        problem.expand_successors(parent_state, g, prev_step, &mut emit);
+    }
+
+    if cfg.debug && matches!(stop, SearchStop::QueueExhausted | SearchStop::PrunedByBound) {
+        eprintln!(
+            "{}: exhausted search (best_states={} upper_bound={upper_bound:?})",
+            cfg.label,
+            scratch.nodes.len()
+        );
+    }
+
+    SearchRunResult {
+        best_goal,
+        upper_bound,
+        have_incumbent,
+        stop,
+        expansions,
+        nodes_len: scratch.nodes.len(),
+        open_len: scratch.open.len(),
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DupFilter {
+    AnyKey,
+    GoalKeysOnly,
+}
+
+#[derive(Clone, Copy)]
+struct DuplicableSummary {
+    mask: u64,
+    best_cost_by_kid: [Cost; 64],
+}
+
+impl Default for DuplicableSummary {
+    fn default() -> Self {
+        Self {
+            mask: 0,
+            best_cost_by_kid: [UNAVAILABLE_COST; 64],
+        }
+    }
+}
+
+struct NormalizeWindowProblem<'a, C: CostModel> {
+    start: PackedState,
+    goal: PackedState,
+    cfg: SearchCfg,
+    key_infos: &'a [KeyInfo],
+    materializable_imm: &'a [u8],
+    materializable_val: &'a [u8],
+    goal_counts: [u8; 64],
+    goal_mask: u64,
+    suffix_ctx_keys: &'a [u8],
+    ctx_present: u64,
+    pop_gas: u32,
+    dup_gas_lb: u32,
+    cost: &'a C,
+    push0_kid: Option<u8>,
+    push0_cost: Option<Cost>,
+    dup_filter: DupFilter,
+    max_states_without_incumbent: usize,
+    max_states_with_incumbent: usize,
+}
+
+impl<'a, C: CostModel> NormalizeWindowProblem<'a, C> {
+    fn dup_source_at(&self, state: PackedState, pos: usize) -> Option<u8> {
+        if pos < state.len() {
+            Some(state.get(pos))
+        } else {
+            self.suffix_ctx_keys.get(pos - state.len()).copied()
+        }
+    }
+
+    fn max_dup_pos(&self, state: PackedState) -> Option<usize> {
+        if self.cfg.dup_max == 0 {
+            return None;
+        }
+
+        let total_len = state.len().saturating_add(self.suffix_ctx_keys.len());
+        if total_len == 0 {
+            return None;
+        }
+
+        Some(
+            total_len
+                .saturating_sub(1)
+                .min(self.cfg.dup_max.saturating_sub(1)),
+        )
+    }
+
+    fn allow_dup_key(&self, kid: u8) -> bool {
+        match self.dup_filter {
+            DupFilter::AnyKey => true,
+            DupFilter::GoalKeysOnly => self.goal_counts[kid as usize] != 0,
+        }
+    }
+
+    fn collect_duplicable(&self, state: PackedState) -> DuplicableSummary {
+        let mut summary = DuplicableSummary::default();
+        let Some(max_pos) = self.max_dup_pos(state) else {
+            return summary;
+        };
+
+        for pos in 0..=max_pos {
+            let Some(kid) = self.dup_source_at(state, pos) else {
+                continue;
+            };
+
+            let idx = kid as usize;
+            summary.mask |= 1u64 << kid;
+            summary.best_cost_by_kid[idx] =
+                summary.best_cost_by_kid[idx].min(self.cost.cost_dup(pos as u8));
+        }
+
+        summary
+    }
+}
+
+impl<C: CostModel> BoundedAStarProblem for NormalizeWindowProblem<'_, C> {
+    type State = PackedState;
+
+    fn start(&self) -> PackedState {
+        self.start
+    }
+
+    fn is_goal(&self, state: PackedState) -> bool {
+        state == self.goal
+    }
+
+    fn heuristic(&self, state: PackedState) -> Cost {
+        let heuristic = NormalizeHeuristic {
+            goal_counts: &self.goal_counts,
+            goal_mask: self.goal_mask,
+            ctx_present: self.ctx_present,
+            pop_gas: self.pop_gas,
+            dup_gas: self.dup_gas_lb,
+            key_infos: self.key_infos,
+            cost: self.cost,
+        };
+        heuristic_with_ctx(state, &heuristic)
+    }
+
+    fn max_states(&self, have_incumbent: bool) -> usize {
+        if have_incumbent {
+            self.max_states_with_incumbent
+        } else {
+            self.max_states_without_incumbent
+        }
+    }
+
+    fn expand_successors<F>(
+        &self,
+        state: PackedState,
+        g: Cost,
+        prev_step: Option<Step>,
+        emit: &mut F,
+    ) where
+        F: FnMut(PackedState, Cost, Step),
+    {
+        let cur_len = state.len();
+        let suffix_k = common_suffix_len(state, self.goal);
+        let suffix_start = cur_len.saturating_sub(suffix_k);
+        let duplicable = self.collect_duplicable(state);
+
+        if cur_len != 0 {
+            emit(
+                state.pop(),
+                g.saturating_add(self.cost.cost_pop()),
+                Step::Pop,
+            );
+        }
+
+        if cur_len < self.cfg.max_len
+            && let (Some(kid), Some(push0_cost)) = (self.push0_kid, self.push0_cost)
+        {
+            emit(
+                state.push(kid),
+                g.saturating_add(push0_cost),
+                Step::PushImm(kid),
+            );
+        }
+
+        if cur_len >= 2 {
+            let max_depth = cur_len
+                .saturating_sub(1)
+                .min(self.cfg.swap_max.saturating_sub(1));
+            for depth in 1..=max_depth {
+                if matches!(prev_step, Some(Step::Swap(d)) if d as usize == depth) {
+                    continue;
+                }
+                if state.get(0) == state.get(depth) {
+                    continue;
+                }
+                if depth >= suffix_start && depth < self.cfg.dup_max {
+                    continue;
+                }
+                emit(
+                    state.swap(depth),
+                    g.saturating_add(self.cost.cost_swap(depth as u8)),
+                    Step::Swap(depth as u8),
+                );
+            }
+        }
+
+        if cur_len < self.cfg.max_len
+            && let Some(max_pos) = self.max_dup_pos(state)
+        {
+            let mut seen: u64 = 0;
+            for pos in 0..=max_pos {
+                let Some(kid) = self.dup_source_at(state, pos) else {
+                    continue;
+                };
+                if !self.allow_dup_key(kid) {
+                    continue;
+                }
+                let bit = 1u64 << kid;
+                if (seen & bit) != 0 {
+                    continue;
+                }
+                seen |= bit;
+
+                if Some(kid) == self.push0_kid {
+                    continue;
+                }
+                let next = if pos < cur_len {
+                    state.dup(pos)
+                } else {
+                    state.push(kid)
+                };
+                emit(
+                    next,
+                    g.saturating_add(self.cost.cost_dup(pos as u8)),
+                    Step::Dup(pos as u8),
+                );
+            }
+        }
+
+        if cur_len < self.cfg.max_len {
+            for &kid in self.materializable_imm {
+                if Some(kid) == self.push0_kid {
+                    continue;
+                }
+
+                let KeyInfo::Imm { canon, .. } = self.key_infos[kid as usize] else {
+                    unreachable!("expected imm key info")
+                };
+                let push_cost = self.cost.cost_push_imm(canon);
+                let bit = 1u64 << kid;
+                let dominated = (duplicable.mask & bit) != 0
+                    && push_cost >= duplicable.best_cost_by_kid[kid as usize];
+                if dominated {
+                    continue;
+                }
+
+                emit(
+                    state.push(kid),
+                    g.saturating_add(push_cost),
+                    Step::PushImm(kid),
+                );
+            }
+
+            for &kid in self.materializable_val {
+                if (duplicable.mask & (1u64 << kid)) != 0 {
+                    continue;
+                }
+                let KeyInfo::Val { vid } = self.key_infos[kid as usize] else {
+                    unreachable!("expected val key info")
+                };
+                emit(
+                    state.push(kid),
+                    g.saturating_add(self.cost.cost_load(vid)),
+                    Step::LoadVal(kid),
+                );
+            }
+        }
+    }
+}
+
 pub(super) fn solve_optimal_normalize_plan(
     ctx: &StackifyContext<'_>,
     stack: &SymStack,
@@ -873,243 +1288,43 @@ pub(super) fn solve_optimal_normalize_plan(
         cost.cost_push_imm(canon)
     });
 
-    let heuristic = NormalizeHeuristic {
-        goal_counts: &goal_counts,
+    let problem = NormalizeWindowProblem {
+        start,
+        goal,
+        cfg,
+        key_infos: &key_infos,
+        materializable_imm: &materializable_imm,
+        materializable_val: &materializable_val,
+        goal_counts,
         goal_mask,
+        suffix_ctx_keys: &[],
         ctx_present: 0,
         pop_gas,
-        dup_gas: dup_gas_lb,
-        key_infos: &key_infos,
+        dup_gas_lb,
         cost,
+        push0_kid,
+        push0_cost,
+        dup_filter: DupFilter::AnyKey,
+        max_states_without_incumbent: ctx.search_profile.normalize_max_states(false),
+        max_states_with_incumbent: ctx.search_profile.normalize_max_states(true),
     };
-    let start_h = heuristic_with_ctx(start, &heuristic);
 
-    scratch.clear_exact();
-    let exact = &mut scratch.exact;
-    let nodes = &mut exact.nodes;
-    let open = &mut exact.open;
-
-    nodes.insert(
-        start,
-        SearchNode {
-            cost: Cost::default(),
-            parent: None,
+    let run = run_bounded_astar(
+        &problem,
+        &mut scratch.exact,
+        SearchRunCfg {
+            upper_bound,
+            have_incumbent: incumbent_steps.is_some(),
+            max_expansions: cfg.max_expansions,
+            debug,
+            label: "normalize_search",
         },
     );
 
-    open.push(QueueEntry {
-        f: start_h,
-        g: Cost::default(),
-        state: start,
-    });
-
-    let mut expansions: usize = 0;
-    while let Some(entry) = open.pop() {
-        let Some(node) = nodes.get(&entry.state) else {
-            continue;
-        };
-        let g = node.cost;
-        if entry.g != g {
-            continue;
-        }
-
-        if entry.state == goal {
-            let Some(steps) = reconstruct_steps(start, goal, nodes) else {
-                break;
-            };
-            if incumbent_steps.is_none() || g < upper_bound {
-                upper_bound = g;
-                incumbent_steps = Some(steps);
-            }
-            continue;
-        }
-
-        if should_prune(entry.f, upper_bound, incumbent_steps.is_some()) {
-            break;
-        }
-
-        // If we already have a feasible incumbent (greedy or found) plan, don't let the exact
-        // search blow up compile time or memory trying to prove optimality.
-        let max_states = ctx
-            .search_profile
-            .normalize_max_states(incumbent_steps.is_some());
-        if nodes.len() > max_states || open.len() > max_states {
-            if debug {
-                eprintln!(
-                    "normalize_search: exceeded max_states={} (best_states={} open={})",
-                    max_states,
-                    nodes.len(),
-                    open.len()
-                );
-            }
-            break;
-        }
-
-        expansions += 1;
-        if expansions > cfg.max_expansions {
-            if debug {
-                eprintln!(
-                    "normalize_search: exceeded max_expansions={} (best_states={} open={})",
-                    cfg.max_expansions,
-                    nodes.len(),
-                    open.len()
-                );
-            }
-            break;
-        }
-
-        let cur_len = entry.state.len();
-        let suffix_k = common_suffix_len(entry.state, goal);
-        let suffix_start = cur_len.saturating_sub(suffix_k);
-
-        let prev_step = node.parent.map(|(_, s)| s);
-
-        let mut dup_cost_for_kid = [Cost {
-            gas: u32::MAX,
-            bytes: u32::MAX,
-        }; 64];
-        let mut duplicable: u64 = 0;
-        if cur_len != 0 && cfg.dup_max != 0 {
-            let max_pos = cur_len.saturating_sub(1).min(cfg.dup_max.saturating_sub(1));
-            for pos in 0..=max_pos {
-                let kid = entry.state.get(pos) as usize;
-                duplicable |= 1u64 << kid;
-                dup_cost_for_kid[kid] = dup_cost_for_kid[kid].min(cost.cost_dup(pos as u8));
-            }
-        }
-
-        let mut consider_ctx = ConsiderCtx {
-            heuristic,
-            upper_bound,
-            have_incumbent: incumbent_steps.is_some(),
-            nodes: &mut *nodes,
-            open: &mut *open,
-        };
-
-        // POP
-        if cur_len != 0 {
-            consider_succ(
-                entry.state.pop(),
-                g.saturating_add(cost.cost_pop()),
-                entry.state,
-                Step::Pop,
-                &mut consider_ctx,
-            );
-        }
-
-        // PUSH0 (if present in the goal) before the 3-gas moves.
-        if cur_len < cfg.max_len
-            && let (Some(kid), Some(push0_cost)) = (push0_kid, push0_cost)
-        {
-            consider_succ(
-                entry.state.push(kid),
-                g.saturating_add(push0_cost),
-                entry.state,
-                Step::PushImm(kid),
-                &mut consider_ctx,
-            );
-        }
-
-        // SWAP
-        if cur_len >= 2 {
-            let max_depth = cur_len
-                .saturating_sub(1)
-                .min(cfg.swap_max.saturating_sub(1));
-            for depth in 1..=max_depth {
-                if matches!(prev_step, Some(Step::Swap(d)) if d as usize == depth) {
-                    continue;
-                }
-                if entry.state.get(0) == entry.state.get(depth) {
-                    continue;
-                }
-                if depth >= suffix_start && depth < cfg.dup_max {
-                    continue;
-                }
-                consider_succ(
-                    entry.state.swap(depth),
-                    g.saturating_add(cost.cost_swap(depth as u8)),
-                    entry.state,
-                    Step::Swap(depth as u8),
-                    &mut consider_ctx,
-                );
-            }
-        }
-
-        // DUP
-        if cur_len != 0 && cfg.dup_max != 0 && cur_len < cfg.max_len {
-            let max_pos = cur_len.saturating_sub(1).min(cfg.dup_max.saturating_sub(1));
-            let mut seen: u64 = 0;
-            for pos in 0..=max_pos {
-                let kid = entry.state.get(pos);
-                let bit = 1u64 << kid;
-                if (seen & bit) != 0 {
-                    continue;
-                }
-                seen |= bit;
-
-                if Some(kid) == push0_kid {
-                    continue;
-                }
-                consider_succ(
-                    entry.state.dup(pos),
-                    g.saturating_add(cost.cost_dup(pos as u8)),
-                    entry.state,
-                    Step::Dup(pos as u8),
-                    &mut consider_ctx,
-                );
-            }
-        }
-
-        if cur_len < cfg.max_len {
-            for &kid in &materializable_imm {
-                if Some(kid) == push0_kid {
-                    continue;
-                }
-
-                let KeyInfo::Imm { canon, .. } = key_infos[kid as usize] else {
-                    unreachable!("expected imm key info")
-                };
-                let push_cost = cost.cost_push_imm(canon);
-                let bit = 1u64 << kid;
-                let dominated =
-                    (duplicable & bit) != 0 && push_cost >= dup_cost_for_kid[kid as usize];
-                if dominated {
-                    continue;
-                }
-
-                consider_succ(
-                    entry.state.push(kid),
-                    g.saturating_add(push_cost),
-                    entry.state,
-                    Step::PushImm(kid),
-                    &mut consider_ctx,
-                );
-            }
-
-            for &kid in &materializable_val {
-                // If a value is duplicable, `DUP` dominates `LOAD` to the same successor state.
-                if (duplicable & (1u64 << kid)) != 0 {
-                    continue;
-                }
-                let KeyInfo::Val { vid } = key_infos[kid as usize] else {
-                    unreachable!("expected val key info")
-                };
-                consider_succ(
-                    entry.state.push(kid),
-                    g.saturating_add(cost.cost_load(vid)),
-                    entry.state,
-                    Step::LoadVal(kid),
-                    &mut consider_ctx,
-                );
-            }
-        }
-    }
-
-    if debug {
-        eprintln!(
-            "normalize_search: exhausted search (best_states={} upper_bound={upper_bound:?})",
-            nodes.len()
-        );
+    if let Some((goal_state, _goal_cost)) = run.best_goal {
+        debug_assert_eq!(goal_state, goal);
+        let steps = reconstruct_steps(start, goal_state, &scratch.exact.nodes)?;
+        incumbent_steps = Some(steps);
     }
 
     scratch.plan_cache.insert(
@@ -1352,269 +1567,43 @@ pub(super) fn solve_optimal_repair_prefix_plan(
         cost.cost_push_imm(canon)
     });
 
-    let heuristic = NormalizeHeuristic {
-        goal_counts: &goal_counts,
+    let problem = NormalizeWindowProblem {
+        start,
+        goal,
+        cfg,
+        key_infos: &key_infos,
+        materializable_imm: &materializable_imm,
+        materializable_val: &materializable_val,
+        goal_counts,
         goal_mask,
+        suffix_ctx_keys: &suffix_ctx_keys,
         ctx_present,
         pop_gas,
-        dup_gas: dup_gas_lb,
-        key_infos: &key_infos,
+        dup_gas_lb,
         cost,
+        push0_kid,
+        push0_cost,
+        dup_filter: DupFilter::GoalKeysOnly,
+        max_states_without_incumbent: ctx.search_profile.normalize_max_states(false),
+        max_states_with_incumbent: ctx.search_profile.normalize_max_states(true),
     };
-    let start_h = heuristic_with_ctx(start, &heuristic);
 
-    scratch.clear_exact();
-    let exact = &mut scratch.exact;
-    let nodes = &mut exact.nodes;
-    let open = &mut exact.open;
-
-    nodes.insert(
-        start,
-        SearchNode {
-            cost: Cost::default(),
-            parent: None,
+    let run = run_bounded_astar(
+        &problem,
+        &mut scratch.exact,
+        SearchRunCfg {
+            upper_bound,
+            have_incumbent: incumbent_steps.is_some(),
+            max_expansions: cfg.max_expansions,
+            debug,
+            label: "repair_normalize_search",
         },
     );
 
-    open.push(QueueEntry {
-        f: start_h,
-        g: Cost::default(),
-        state: start,
-    });
-
-    let mut expansions: usize = 0;
-    while let Some(entry) = open.pop() {
-        let Some(node) = nodes.get(&entry.state) else {
-            continue;
-        };
-        let g = node.cost;
-        if entry.g != g {
-            continue;
-        }
-
-        if entry.state == goal {
-            let Some(steps) = reconstruct_steps(start, goal, nodes) else {
-                break;
-            };
-            if incumbent_steps.is_none() || g < upper_bound {
-                upper_bound = g;
-                incumbent_steps = Some(steps);
-            }
-            continue;
-        }
-
-        if should_prune(entry.f, upper_bound, incumbent_steps.is_some()) {
-            break;
-        }
-
-        let max_states = ctx
-            .search_profile
-            .normalize_max_states(incumbent_steps.is_some());
-        if nodes.len() > max_states || open.len() > max_states {
-            if debug {
-                eprintln!(
-                    "repair_normalize_search: exceeded max_states={} (best_states={} open={})",
-                    max_states,
-                    nodes.len(),
-                    open.len()
-                );
-            }
-            break;
-        }
-
-        expansions += 1;
-        if expansions > cfg.max_expansions {
-            if debug {
-                eprintln!(
-                    "repair_normalize_search: exceeded max_expansions={} (best_states={} open={})",
-                    cfg.max_expansions,
-                    nodes.len(),
-                    open.len()
-                );
-            }
-            break;
-        }
-
-        let cur_len = entry.state.len();
-        let suffix_k = common_suffix_len(entry.state, goal);
-        let suffix_start = cur_len.saturating_sub(suffix_k);
-
-        let prev_step = node.parent.map(|(_, s)| s);
-
-        let mut dup_cost_for_kid = [Cost {
-            gas: u32::MAX,
-            bytes: u32::MAX,
-        }; 64];
-        let mut duplicable: u64 = 0;
-        if cfg.dup_max != 0 {
-            let total_len = cur_len.saturating_add(base_len);
-            if total_len != 0 {
-                let max_pos = total_len
-                    .saturating_sub(1)
-                    .min(cfg.dup_max.saturating_sub(1));
-                for pos in 0..=max_pos {
-                    let kid = if pos < cur_len {
-                        entry.state.get(pos)
-                    } else {
-                        let off = pos - cur_len;
-                        debug_assert!(off < suffix_ctx_keys.len());
-                        suffix_ctx_keys[off]
-                    } as usize;
-                    duplicable |= 1u64 << kid;
-                    dup_cost_for_kid[kid] = dup_cost_for_kid[kid].min(cost.cost_dup(pos as u8));
-                }
-            }
-        }
-
-        let mut consider_ctx = ConsiderCtx {
-            heuristic,
-            upper_bound,
-            have_incumbent: incumbent_steps.is_some(),
-            nodes: &mut *nodes,
-            open: &mut *open,
-        };
-
-        // POP (only within the repair region).
-        if cur_len != 0 {
-            consider_succ(
-                entry.state.pop(),
-                g.saturating_add(cost.cost_pop()),
-                entry.state,
-                Step::Pop,
-                &mut consider_ctx,
-            );
-        }
-
-        // PUSH0 (if present in the goal) before the 3-gas moves.
-        if cur_len < cfg.max_len
-            && let (Some(kid), Some(push0_cost)) = (push0_kid, push0_cost)
-        {
-            consider_succ(
-                entry.state.push(kid),
-                g.saturating_add(push0_cost),
-                entry.state,
-                Step::PushImm(kid),
-                &mut consider_ctx,
-            );
-        }
-
-        // SWAP (restricted to the repair region).
-        if cur_len >= 2 {
-            let max_depth = cur_len
-                .saturating_sub(1)
-                .min(cfg.swap_max.saturating_sub(1));
-            for depth in 1..=max_depth {
-                if matches!(prev_step, Some(Step::Swap(d)) if d as usize == depth) {
-                    continue;
-                }
-                if entry.state.get(0) == entry.state.get(depth) {
-                    continue;
-                }
-                if depth >= suffix_start && depth < cfg.dup_max {
-                    continue;
-                }
-                consider_succ(
-                    entry.state.swap(depth),
-                    g.saturating_add(cost.cost_swap(depth as u8)),
-                    entry.state,
-                    Step::Swap(depth as u8),
-                    &mut consider_ctx,
-                );
-            }
-        }
-
-        // DUP (can read from the repair region or the frozen suffix context).
-        if cfg.dup_max != 0 && cur_len < cfg.max_len {
-            let total_len = cur_len.saturating_add(base_len);
-            if total_len != 0 {
-                let max_pos = total_len
-                    .saturating_sub(1)
-                    .min(cfg.dup_max.saturating_sub(1));
-
-                let mut seen: u64 = 0;
-                for pos in 0..=max_pos {
-                    let kid = if pos < cur_len {
-                        entry.state.get(pos)
-                    } else {
-                        let off = pos - cur_len;
-                        debug_assert!(off < suffix_ctx_keys.len());
-                        suffix_ctx_keys[off]
-                    };
-
-                    if goal_counts[kid as usize] == 0 {
-                        continue;
-                    }
-
-                    let bit = 1u64 << kid;
-                    if (seen & bit) != 0 {
-                        continue;
-                    }
-                    seen |= bit;
-
-                    if Some(kid) == push0_kid {
-                        continue;
-                    }
-
-                    consider_succ(
-                        entry.state.push(kid),
-                        g.saturating_add(cost.cost_dup(pos as u8)),
-                        entry.state,
-                        Step::Dup(pos as u8),
-                        &mut consider_ctx,
-                    );
-                }
-            }
-        }
-
-        if cur_len < cfg.max_len {
-            for &kid in &materializable_imm {
-                if Some(kid) == push0_kid {
-                    continue;
-                }
-
-                let KeyInfo::Imm { canon, .. } = key_infos[kid as usize] else {
-                    unreachable!("expected imm key info")
-                };
-                let push_cost = cost.cost_push_imm(canon);
-                let bit = 1u64 << kid;
-                let dominated =
-                    (duplicable & bit) != 0 && push_cost >= dup_cost_for_kid[kid as usize];
-                if dominated {
-                    continue;
-                }
-
-                consider_succ(
-                    entry.state.push(kid),
-                    g.saturating_add(push_cost),
-                    entry.state,
-                    Step::PushImm(kid),
-                    &mut consider_ctx,
-                );
-            }
-
-            for &kid in &materializable_val {
-                if (duplicable & (1u64 << kid)) != 0 {
-                    continue;
-                }
-                let KeyInfo::Val { vid } = key_infos[kid as usize] else {
-                    unreachable!("expected val key info")
-                };
-                consider_succ(
-                    entry.state.push(kid),
-                    g.saturating_add(cost.cost_load(vid)),
-                    entry.state,
-                    Step::LoadVal(kid),
-                    &mut consider_ctx,
-                );
-            }
-        }
-    }
-
-    if debug {
-        eprintln!(
-            "repair_normalize_search: exhausted search (best_states={} upper_bound={upper_bound:?})",
-            nodes.len()
-        );
+    if let Some((goal_state, _goal_cost)) = run.best_goal {
+        debug_assert_eq!(goal_state, goal);
+        let steps = reconstruct_steps(start, goal_state, &scratch.exact.nodes)?;
+        incumbent_steps = Some(steps);
     }
 
     scratch.plan_cache.insert(
@@ -1651,6 +1640,221 @@ struct OperandPrepProblem {
 impl OperandPrepProblem {
     fn push0_kid(&self) -> Option<u8> {
         find_push0_kid(&self.key_infos, &self.materializable_imm)
+    }
+}
+
+struct OperandPrepSearchProblem<'a> {
+    problem: &'a OperandPrepProblem,
+    costs: &'a OperandPrepCostTable,
+    cfg: SearchCfg,
+    dup_gas_lb: u32,
+    surplus_last_use_penalty: Cost,
+    push0_kid: Option<u8>,
+    push0_cost: Option<Cost>,
+    max_states: usize,
+}
+
+impl BoundedAStarProblem for OperandPrepSearchProblem<'_> {
+    type State = PrepState;
+
+    fn start(&self) -> PrepState {
+        self.problem.start_state
+    }
+
+    fn is_goal(&self, state: PrepState) -> bool {
+        operand_prep_goal(
+            state,
+            &self.problem.goal_keys,
+            self.problem.preserve_mask,
+            &self.problem.goal_counts,
+        )
+    }
+
+    fn heuristic(&self, state: PrepState) -> Cost {
+        heuristic_operand_prep(
+            state,
+            &self.problem.goal_counts,
+            self.problem.goal_mask,
+            self.problem.preserve_mask,
+            self.dup_gas_lb,
+            self.costs,
+        )
+    }
+
+    fn max_states(&self, _have_incumbent: bool) -> usize {
+        self.max_states
+    }
+
+    fn expand_successors<F>(&self, state: PrepState, g: Cost, prev_step: Option<Step>, emit: &mut F)
+    where
+        F: FnMut(PrepState, Cost, Step),
+    {
+        let cur_len = state.window.len();
+
+        let mut win_counts = [0u8; 64];
+        for pos in 0..cur_len {
+            let kid = state.window.get(pos) as usize;
+            win_counts[kid] = win_counts[kid].saturating_add(1);
+        }
+
+        let mut dup_cost_for_kid = [UNAVAILABLE_COST; 64];
+        let mut duplicable: u64 = 0;
+        if self.cfg.dup_max != 0 && cur_len != 0 {
+            let max_pos = (cur_len - 1).min(self.cfg.dup_max.saturating_sub(1));
+            for pos in 0..=max_pos {
+                let kid = state.window.get(pos) as usize;
+                duplicable |= 1u64 << kid;
+                dup_cost_for_kid[kid] = dup_cost_for_kid[kid].min(self.costs.dup[pos]);
+            }
+        }
+
+        if cur_len >= 2 {
+            let max_depth = cur_len
+                .saturating_sub(1)
+                .min(self.cfg.swap_max.saturating_sub(1));
+            for depth in 1..=max_depth {
+                if matches!(prev_step, Some(Step::Swap(d)) if d as usize == depth) {
+                    continue;
+                }
+                if state.window.get(0) == state.window.get(depth) {
+                    continue;
+                }
+                let next = PrepState {
+                    window: state.window.swap(depth),
+                    ..state
+                };
+                emit(
+                    next,
+                    g.saturating_add(self.costs.swap[depth]),
+                    Step::Swap(depth as u8),
+                );
+            }
+        }
+
+        if self.cfg.dup_max != 0 && cur_len != 0 {
+            let max_pos = (cur_len - 1).min(self.cfg.dup_max.saturating_sub(1));
+            let mut seen: u64 = 0;
+            for pos in 0..=max_pos {
+                let kid = state.window.get(pos);
+                if self.problem.goal_counts[kid as usize] == 0 {
+                    continue;
+                }
+                let bit = 1u64 << kid;
+                if (seen & bit) != 0 {
+                    continue;
+                }
+                seen |= bit;
+
+                if Some(kid) == self.push0_kid {
+                    continue;
+                }
+
+                let next = prep_insert(
+                    state,
+                    kid,
+                    self.problem.preserve_mask,
+                    false,
+                    self.cfg.max_len,
+                );
+                emit(
+                    next,
+                    g.saturating_add(operand_prep_insert_cost(
+                        state,
+                        next,
+                        kid,
+                        &self.problem.goal_counts,
+                        self.problem.last_use_mask,
+                        self.costs.dup[pos],
+                        self.surplus_last_use_penalty,
+                    )),
+                    Step::Dup(pos as u8),
+                );
+            }
+        }
+
+        if let (Some(kid), Some(push0_cost)) = (self.push0_kid, self.push0_cost) {
+            let next = prep_insert(
+                state,
+                kid,
+                self.problem.preserve_mask,
+                false,
+                self.cfg.max_len,
+            );
+            emit(
+                next,
+                g.saturating_add(operand_prep_insert_cost(
+                    state,
+                    next,
+                    kid,
+                    &self.problem.goal_counts,
+                    self.problem.last_use_mask,
+                    push0_cost,
+                    self.surplus_last_use_penalty,
+                )),
+                Step::PushImm(kid),
+            );
+        }
+
+        for &kid in &self.problem.materializable_imm {
+            if Some(kid) == self.push0_kid {
+                continue;
+            }
+            let push_cost = self.costs.materialize[kid as usize];
+            let bit = 1u64 << kid;
+            let dominated = (duplicable & bit) != 0 && push_cost >= dup_cost_for_kid[kid as usize];
+            if dominated {
+                continue;
+            }
+
+            let next = prep_insert(
+                state,
+                kid,
+                self.problem.preserve_mask,
+                false,
+                self.cfg.max_len,
+            );
+            emit(
+                next,
+                g.saturating_add(operand_prep_insert_cost(
+                    state,
+                    next,
+                    kid,
+                    &self.problem.goal_counts,
+                    self.problem.last_use_mask,
+                    push_cost,
+                    self.surplus_last_use_penalty,
+                )),
+                Step::PushImm(kid),
+            );
+        }
+
+        for &kid in &self.problem.materializable_val {
+            let bit = 1u64 << kid;
+            if !operand_prep_copy_can_help(self.problem, state, kid, win_counts[kid as usize]) {
+                continue;
+            }
+            let set_mem = (self.problem.preserve_mask & bit) != 0;
+            let next = prep_insert(
+                state,
+                kid,
+                self.problem.preserve_mask,
+                set_mem,
+                self.cfg.max_len,
+            );
+            emit(
+                next,
+                g.saturating_add(operand_prep_insert_cost(
+                    state,
+                    next,
+                    kid,
+                    &self.problem.goal_counts,
+                    self.problem.last_use_mask,
+                    self.costs.materialize[kid as usize],
+                    self.surplus_last_use_penalty,
+                )),
+                Step::LoadVal(kid),
+            );
+        }
     }
 }
 
@@ -2674,274 +2878,33 @@ pub(super) fn solve_optimal_operand_prep_plan(
         );
     }
 
-    let dup_gas_lb = prep_costs.min_dup_gas;
-    let start_h = heuristic_operand_prep(
-        problem.start_state,
-        &problem.goal_counts,
-        problem.goal_mask,
-        problem.preserve_mask,
-        dup_gas_lb,
-        &prep_costs,
-    );
+    let search_problem = OperandPrepSearchProblem {
+        problem: &problem,
+        costs: &prep_costs,
+        cfg,
+        dup_gas_lb: prep_costs.min_dup_gas,
+        surplus_last_use_penalty,
+        push0_kid,
+        push0_cost,
+        max_states: ctx.search_profile.operand_prep_max_states(),
+    };
 
-    if should_prune(start_h, upper_bound, true) {
-        return finish_incumbent(
-            scratch,
-            incumbent_steps,
-            incumbent_cost,
-            problem.key_infos,
-            problem.goal_keys,
-        );
-    }
-
-    scratch.clear_prep();
-    let prep = &mut scratch.prep;
-    let nodes = &mut prep.nodes;
-    let open = &mut prep.open;
-
-    nodes.insert(
-        problem.start_state,
-        SearchNode {
-            cost: Cost::default(),
-            parent: None,
+    let run = run_bounded_astar(
+        &search_problem,
+        &mut scratch.prep,
+        SearchRunCfg {
+            upper_bound,
+            have_incumbent: true,
+            max_expansions: cfg.max_expansions,
+            debug,
+            label: "operand_prep_search",
         },
     );
 
-    open.push(PrepQueueEntry {
-        f: start_h,
-        g: Cost::default(),
-        state: problem.start_state,
-    });
-
-    let mut expansions: usize = 0;
-    while let Some(entry) = open.pop() {
-        let Some(node) = nodes.get(&entry.state) else {
-            continue;
-        };
-        let g = node.cost;
-        if entry.g != g {
-            continue;
-        }
-
-        if operand_prep_goal(
-            entry.state,
-            &problem.goal_keys,
-            problem.preserve_mask,
-            &problem.goal_counts,
-        ) {
-            let steps = reconstruct_steps(problem.start_state, entry.state, nodes)?;
-            if g < upper_bound {
-                upper_bound = g;
-                incumbent_steps = steps;
-                incumbent_cost = g;
-            }
-            continue;
-        }
-
-        if should_prune(entry.f, upper_bound, true) {
-            break;
-        }
-
-        let max_states = ctx.search_profile.operand_prep_max_states();
-        if nodes.len() > max_states || open.len() > max_states {
-            if debug {
-                eprintln!(
-                    "operand_prep_search: exceeded max_states={} (best_states={} open={})",
-                    max_states,
-                    nodes.len(),
-                    open.len()
-                );
-            }
-            break;
-        }
-
-        expansions += 1;
-        if expansions > cfg.max_expansions {
-            if debug {
-                eprintln!(
-                    "operand_prep_search: exceeded max_expansions={} (best_states={} open={})",
-                    cfg.max_expansions,
-                    nodes.len(),
-                    open.len()
-                );
-            }
-            break;
-        }
-
-        let prev_step = node.parent.map(|(_, s)| s);
-
-        let cur_len = entry.state.window.len();
-
-        let mut win_counts = [0u8; 64];
-        for pos in 0..cur_len {
-            let kid = entry.state.window.get(pos) as usize;
-            win_counts[kid] = win_counts[kid].saturating_add(1);
-        }
-
-        let mut dup_cost_for_kid = [Cost {
-            gas: u32::MAX,
-            bytes: u32::MAX,
-        }; 64];
-        let mut duplicable: u64 = 0;
-        if cfg.dup_max != 0 && cur_len != 0 {
-            let max_pos = (cur_len - 1).min(cfg.dup_max.saturating_sub(1));
-            for pos in 0..=max_pos {
-                let kid = entry.state.window.get(pos) as usize;
-                duplicable |= 1u64 << kid;
-                dup_cost_for_kid[kid] = dup_cost_for_kid[kid].min(prep_costs.dup[pos]);
-            }
-        }
-
-        let mut consider_ctx = PrepConsiderCtx {
-            goal_counts: &problem.goal_counts,
-            goal_mask: problem.goal_mask,
-            preserve_mask: problem.preserve_mask,
-            dup_gas: dup_gas_lb,
-            costs: &prep_costs,
-            upper_bound,
-            nodes: &mut *nodes,
-            open: &mut *open,
-        };
-
-        if cur_len >= 2 {
-            let max_depth = cur_len
-                .saturating_sub(1)
-                .min(cfg.swap_max.saturating_sub(1));
-            for depth in 1..=max_depth {
-                if matches!(prev_step, Some(Step::Swap(d)) if d as usize == depth) {
-                    continue;
-                }
-                if entry.state.window.get(0) == entry.state.window.get(depth) {
-                    continue;
-                }
-                let next = PrepState {
-                    window: entry.state.window.swap(depth),
-                    ..entry.state
-                };
-                consider_prep_succ(
-                    next,
-                    g.saturating_add(prep_costs.swap[depth]),
-                    entry.state,
-                    Step::Swap(depth as u8),
-                    &mut consider_ctx,
-                );
-            }
-        }
-
-        if cfg.dup_max != 0 && cur_len != 0 {
-            let max_pos = (cur_len - 1).min(cfg.dup_max.saturating_sub(1));
-            let mut seen: u64 = 0;
-            for pos in 0..=max_pos {
-                let kid = entry.state.window.get(pos);
-                if problem.goal_counts[kid as usize] == 0 {
-                    continue;
-                }
-                let bit = 1u64 << kid;
-                if (seen & bit) != 0 {
-                    continue;
-                }
-                seen |= bit;
-
-                if Some(kid) == push0_kid {
-                    continue;
-                }
-
-                let next = prep_insert(entry.state, kid, problem.preserve_mask, false, cfg.max_len);
-                consider_prep_succ(
-                    next,
-                    g.saturating_add(operand_prep_insert_cost(
-                        entry.state,
-                        next,
-                        kid,
-                        &problem.goal_counts,
-                        problem.last_use_mask,
-                        prep_costs.dup[pos],
-                        surplus_last_use_penalty,
-                    )),
-                    entry.state,
-                    Step::Dup(pos as u8),
-                    &mut consider_ctx,
-                );
-            }
-        }
-
-        if let (Some(kid), Some(push0_cost)) = (push0_kid, push0_cost) {
-            let next = prep_insert(entry.state, kid, problem.preserve_mask, false, cfg.max_len);
-            consider_prep_succ(
-                next,
-                g.saturating_add(operand_prep_insert_cost(
-                    entry.state,
-                    next,
-                    kid,
-                    &problem.goal_counts,
-                    problem.last_use_mask,
-                    push0_cost,
-                    surplus_last_use_penalty,
-                )),
-                entry.state,
-                Step::PushImm(kid),
-                &mut consider_ctx,
-            );
-        }
-
-        for &kid in &problem.materializable_imm {
-            if Some(kid) == push0_kid {
-                continue;
-            }
-            let push_cost = prep_costs.materialize[kid as usize];
-            let bit = 1u64 << kid;
-            let dominated = (duplicable & bit) != 0 && push_cost >= dup_cost_for_kid[kid as usize];
-            if dominated {
-                continue;
-            }
-
-            let next = prep_insert(entry.state, kid, problem.preserve_mask, false, cfg.max_len);
-            consider_prep_succ(
-                next,
-                g.saturating_add(operand_prep_insert_cost(
-                    entry.state,
-                    next,
-                    kid,
-                    &problem.goal_counts,
-                    problem.last_use_mask,
-                    push_cost,
-                    surplus_last_use_penalty,
-                )),
-                entry.state,
-                Step::PushImm(kid),
-                &mut consider_ctx,
-            );
-        }
-
-        for &kid in &problem.materializable_val {
-            let bit = 1u64 << kid;
-            if !operand_prep_copy_can_help(&problem, entry.state, kid, win_counts[kid as usize]) {
-                continue;
-            }
-            let set_mem = (problem.preserve_mask & bit) != 0;
-            let next = prep_insert(
-                entry.state,
-                kid,
-                problem.preserve_mask,
-                set_mem,
-                cfg.max_len,
-            );
-            consider_prep_succ(
-                next,
-                g.saturating_add(operand_prep_insert_cost(
-                    entry.state,
-                    next,
-                    kid,
-                    &problem.goal_counts,
-                    problem.last_use_mask,
-                    prep_costs.materialize[kid as usize],
-                    surplus_last_use_penalty,
-                )),
-                entry.state,
-                Step::LoadVal(kid),
-                &mut consider_ctx,
-            );
-        }
+    if let Some((goal_state, goal_cost)) = run.best_goal {
+        let steps = reconstruct_steps(problem.start_state, goal_state, &scratch.prep.nodes)?;
+        incumbent_steps = steps;
+        incumbent_cost = goal_cost;
     }
 
     finish_incumbent(
@@ -4201,94 +4164,6 @@ fn heuristic_operand_prep(
     Cost { gas, bytes: 0 }
 }
 
-struct PrepConsiderCtx<'a> {
-    goal_counts: &'a [u8; 64],
-    goal_mask: u64,
-    preserve_mask: u64,
-    dup_gas: u32,
-    costs: &'a OperandPrepCostTable,
-    upper_bound: Cost,
-    nodes: &'a mut FxHashMap<PrepState, SearchNode<PrepState>>,
-    open: &'a mut BinaryHeap<PrepQueueEntry>,
-}
-
-fn consider_prep_succ(
-    state: PrepState,
-    g: Cost,
-    parent_state: PrepState,
-    step: Step,
-    ctx: &mut PrepConsiderCtx<'_>,
-) {
-    let h = heuristic_operand_prep(
-        state,
-        ctx.goal_counts,
-        ctx.goal_mask,
-        ctx.preserve_mask,
-        ctx.dup_gas,
-        ctx.costs,
-    );
-    let f = g.saturating_add(h);
-    if should_prune(f, ctx.upper_bound, true) {
-        return;
-    }
-
-    let should_update = match ctx.nodes.get(&state) {
-        None => true,
-        Some(prev) => g < prev.cost,
-    };
-    if !should_update {
-        return;
-    }
-
-    ctx.nodes.insert(
-        state,
-        SearchNode {
-            cost: g,
-            parent: Some((parent_state, step)),
-        },
-    );
-    ctx.open.push(PrepQueueEntry { f, g, state });
-}
-
-struct ConsiderCtx<'a, C: CostModel> {
-    heuristic: NormalizeHeuristic<'a, C>,
-    upper_bound: Cost,
-    have_incumbent: bool,
-    nodes: &'a mut FxHashMap<PackedState, SearchNode<PackedState>>,
-    open: &'a mut BinaryHeap<QueueEntry>,
-}
-
-fn consider_succ<C: CostModel>(
-    state: PackedState,
-    g: Cost,
-    parent_state: PackedState,
-    step: Step,
-    ctx: &mut ConsiderCtx<'_, C>,
-) {
-    let h = heuristic_with_ctx(state, &ctx.heuristic);
-    let f = g.saturating_add(h);
-    if should_prune(f, ctx.upper_bound, ctx.have_incumbent) {
-        return;
-    }
-
-    let should_update = match ctx.nodes.get(&state) {
-        None => true,
-        Some(prev) => g < prev.cost,
-    };
-    if !should_update {
-        return;
-    }
-
-    ctx.nodes.insert(
-        state,
-        SearchNode {
-            cost: g,
-            parent: Some((parent_state, step)),
-        },
-    );
-    ctx.open.push(QueueEntry { f, g, state });
-}
-
 fn minimal_push_bytes(val: I256) -> usize {
     let bytes = val.to_u256().to_big_endian();
     let is_neg = (bytes[0] & 0x80) != 0;
@@ -4353,6 +4228,7 @@ mod tests {
     use cranelift_entity::SecondaryMap;
     use sonatina_ir::{I256, Immediate, Type, ValueId, cfg::ControlFlowGraph};
     use sonatina_parser::parse_module;
+    use std::cell::Cell;
 
     fn packed_state_ids(state: PackedState) -> Vec<u8> {
         (0..state.len()).map(|idx| state.get(idx)).collect()
@@ -4397,12 +4273,178 @@ mod tests {
         operand_prep_copy_can_help(problem, state, kid, prep_window_copy_count(state, kid))
     }
 
+    struct DriverProblem<'a> {
+        start: u8,
+        goal: u8,
+        edges: &'a [(u8, u8, u32)],
+        max_states_without_incumbent: usize,
+        max_states_with_incumbent: usize,
+        saw_incumbent_state_limit: Option<&'a Cell<bool>>,
+    }
+
+    impl BoundedAStarProblem for DriverProblem<'_> {
+        type State = u8;
+
+        fn start(&self) -> u8 {
+            self.start
+        }
+
+        fn is_goal(&self, state: u8) -> bool {
+            state == self.goal
+        }
+
+        fn heuristic(&self, _state: u8) -> Cost {
+            Cost::default()
+        }
+
+        fn max_states(&self, have_incumbent: bool) -> usize {
+            if have_incumbent {
+                if let Some(saw_incumbent_state_limit) = self.saw_incumbent_state_limit {
+                    saw_incumbent_state_limit.set(true);
+                }
+                self.max_states_with_incumbent
+            } else {
+                self.max_states_without_incumbent
+            }
+        }
+
+        fn expand_successors<F>(&self, state: u8, g: Cost, _prev_step: Option<Step>, emit: &mut F)
+        where
+            F: FnMut(u8, Cost, Step),
+        {
+            for &(_, to, edge_cost) in self.edges.iter().filter(|(from, _, _)| *from == state) {
+                emit(
+                    to,
+                    g.saturating_add(Cost {
+                        gas: edge_cost,
+                        bytes: 0,
+                    }),
+                    Step::Pop,
+                );
+            }
+        }
+    }
+
+    fn run_driver_problem(
+        problem: &DriverProblem<'_>,
+        upper_bound: u32,
+        have_incumbent: bool,
+        max_expansions: usize,
+    ) -> SearchRunResult<u8> {
+        let mut scratch = SearchScratch::default();
+        run_bounded_astar(
+            problem,
+            &mut scratch,
+            SearchRunCfg {
+                upper_bound: Cost {
+                    gas: upper_bound,
+                    bytes: 0,
+                },
+                have_incumbent,
+                max_expansions,
+                debug: false,
+                label: "driver_test",
+            },
+        )
+    }
+
+    #[test]
+    fn driver_keeps_equal_bound_without_incumbent() {
+        let problem = DriverProblem {
+            start: 0,
+            goal: 1,
+            edges: &[(0, 1, 10)],
+            max_states_without_incumbent: 64,
+            max_states_with_incumbent: 64,
+            saw_incumbent_state_limit: None,
+        };
+
+        let run = run_driver_problem(&problem, 10, false, 8);
+
+        assert_eq!(run.best_goal, Some((1, Cost { gas: 10, bytes: 0 })));
+        assert_eq!(run.upper_bound.gas, 10);
+        assert!(run.have_incumbent);
+    }
+
+    #[test]
+    fn driver_prunes_equal_bound_with_incumbent() {
+        let problem = DriverProblem {
+            start: 0,
+            goal: 1,
+            edges: &[(0, 1, 10)],
+            max_states_without_incumbent: 64,
+            max_states_with_incumbent: 64,
+            saw_incumbent_state_limit: None,
+        };
+
+        let run = run_driver_problem(&problem, 10, true, 8);
+
+        assert_eq!(run.best_goal, None);
+        assert_eq!(run.nodes_len, 1);
+        assert_eq!(run.open_len, 0);
+    }
+
+    #[test]
+    fn driver_ignores_stale_queue_entries() {
+        let problem = DriverProblem {
+            start: 0,
+            goal: 3,
+            edges: &[(0, 2, 10), (0, 1, 1), (1, 2, 1), (2, 3, 1)],
+            max_states_without_incumbent: 64,
+            max_states_with_incumbent: 64,
+            saw_incumbent_state_limit: None,
+        };
+
+        let run = run_driver_problem(&problem, 100, false, 8);
+
+        assert_eq!(run.best_goal, Some((3, Cost { gas: 3, bytes: 0 })));
+        assert_eq!(run.upper_bound.gas, 3);
+    }
+
+    #[test]
+    fn driver_expansion_limit_zero_does_not_expand_start() {
+        let problem = DriverProblem {
+            start: 0,
+            goal: 1,
+            edges: &[(0, 1, 1)],
+            max_states_without_incumbent: 64,
+            max_states_with_incumbent: 64,
+            saw_incumbent_state_limit: None,
+        };
+
+        let run = run_driver_problem(&problem, 100, false, 0);
+
+        assert_eq!(run.best_goal, None);
+        assert_eq!(run.stop, SearchStop::MaxExpansions);
+        assert_eq!(run.expansions, 1);
+        assert_eq!(run.nodes_len, 1);
+    }
+
+    #[test]
+    fn driver_uses_incumbent_state_limit() {
+        let saw_incumbent_state_limit = Cell::new(false);
+        let problem = DriverProblem {
+            start: 0,
+            goal: 1,
+            edges: &[(0, 2, 1)],
+            max_states_without_incumbent: 64,
+            max_states_with_incumbent: 0,
+            saw_incumbent_state_limit: Some(&saw_incumbent_state_limit),
+        };
+
+        let run = run_driver_problem(&problem, 100, true, 8);
+
+        assert_eq!(run.best_goal, None);
+        assert_eq!(run.stop, SearchStop::MaxStates);
+        assert!(saw_incumbent_state_limit.get());
+    }
+
     #[test]
     fn packed_state_roundtrip_ops_and_layout() {
         assert_eq!(std::mem::size_of::<PackedState>(), 16);
         assert_eq!(std::mem::size_of::<PrepState>(), 32);
-        assert_eq!(std::mem::size_of::<QueueEntry>(), 32);
-        assert_eq!(std::mem::size_of::<PrepQueueEntry>(), 48);
+        assert_eq!(std::mem::size_of::<SearchQueueEntry<PackedState>>(), 32);
+        assert_eq!(std::mem::size_of::<SearchQueueEntry<PrepState>>(), 48);
 
         assert_eq!(PackedState::from_ids(&[]), Some(PackedState::EMPTY));
         assert_eq!(PackedState::EMPTY.len(), 0);
@@ -4449,7 +4491,7 @@ mod tests {
         state: PackedState,
         g: Cost,
         best: &mut FxHashMap<PackedState, Cost>,
-        open: &mut BinaryHeap<QueueEntry>,
+        open: &mut BinaryHeap<SearchQueueEntry<PackedState>>,
     ) {
         let should_update = match best.get(&state) {
             None => true,
@@ -4460,7 +4502,7 @@ mod tests {
         }
 
         best.insert(state, g);
-        open.push(QueueEntry { f: g, g, state });
+        open.push(SearchQueueEntry { f: g, g, state });
     }
 
     fn brute_force_optimal_cost(
@@ -4475,8 +4517,8 @@ mod tests {
         let mut best: FxHashMap<PackedState, Cost> = FxHashMap::default();
         best.insert(start, Cost::default());
 
-        let mut open: BinaryHeap<QueueEntry> = BinaryHeap::new();
-        open.push(QueueEntry {
+        let mut open: BinaryHeap<SearchQueueEntry<PackedState>> = BinaryHeap::new();
+        open.push(SearchQueueEntry {
             f: Cost::default(),
             g: Cost::default(),
             state: start,
