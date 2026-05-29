@@ -743,7 +743,6 @@ block0:
                 "test must exercise the bounded swap shortlist path"
             );
 
-            let mut lb_state = PlacementLowerBoundState::new(problem);
             let mut search_work = SearchWorkBuffers::default();
             let current_score = FuncPlacementScore {
                 scratch_words: u32::MAX,
@@ -753,7 +752,6 @@ block0:
             let _ = find_best_exact_swap_move(
                 problem,
                 state,
-                &mut lb_state,
                 current_score,
                 &mut FuncPlacementScoreWorkspace::default(),
                 &mut search_work,
@@ -1033,10 +1031,8 @@ struct SearchWorkBuffers {
     swap_exact: Vec<ExactMoveEval>,
     add_shortlist: Vec<usize>,
     remove_shortlist: Vec<usize>,
+    metric_candidates: Vec<usize>,
 }
-
-#[derive(Default)]
-struct PlacementLowerBoundState;
 
 #[derive(Clone, Debug)]
 struct ShadowPackObj {
@@ -1048,6 +1044,11 @@ const SWAP_FULL_PAIR_LIMIT: usize = 25_000;
 const SWAP_SHORTLIST_PER_METRIC: usize = 8;
 const ONE_FLIP_FULL_LIMIT: usize = 128;
 const ONE_FLIP_SHORTLIST_PER_METRIC: usize = 8;
+const CANDIDATE_METRICS: [fn(&CandidateMeta) -> u64; 3] = [
+    |candidate| u64::from(candidate.size_words),
+    |candidate| candidate.shadow_copy_words,
+    |candidate| candidate.recursive_access_cost,
+];
 
 impl<'a> PlacementProblem<'a> {
     fn new(
@@ -1325,24 +1326,17 @@ impl PlacementState {
         self.apply_remove(problem, remove_idx);
         self.apply_add(problem, add_idx);
     }
-}
 
-impl PlacementLowerBoundState {
-    fn new(problem: &PlacementProblem<'_>) -> Self {
-        let _ = problem;
-        Self
-    }
-
-    fn apply_add(&mut self, problem: &PlacementProblem<'_>, candidate_idx: usize) {
-        let _ = (problem, candidate_idx);
-    }
-
-    fn apply_remove(&mut self, problem: &PlacementProblem<'_>, candidate_idx: usize) {
-        let _ = (problem, candidate_idx);
-    }
-
-    fn apply_swap(&mut self, problem: &PlacementProblem<'_>, add_idx: usize, remove_idx: usize) {
-        let _ = (problem, add_idx, remove_idx);
+    fn apply_move(&mut self, problem: &PlacementProblem<'_>, mv: PlacementMove) {
+        match mv {
+            PlacementMove::None => {}
+            PlacementMove::Add(candidate_idx) => self.apply_add(problem, candidate_idx),
+            PlacementMove::Remove(candidate_idx) => self.apply_remove(problem, candidate_idx),
+            PlacementMove::Swap {
+                add_idx,
+                remove_idx,
+            } => self.apply_swap(problem, add_idx, remove_idx),
+        }
     }
 }
 
@@ -1714,7 +1708,6 @@ fn solve_func_placement(
 ) -> FuncPlacementEval {
     let problem = PlacementProblem::new(stack, facts, is_recursive, cost_model);
     let mut state = PlacementState::new(&problem);
-    let mut lb_state = PlacementLowerBoundState::new(&problem);
     let stable_item_capacity = problem
         .sorted_objects
         .len()
@@ -1749,12 +1742,11 @@ fn solve_func_placement(
         if let Some(best_move) = find_best_exact_one_flip_move(
             &problem,
             &state,
-            &mut lb_state,
             best_score,
             &mut score_workspace,
             &mut search_work,
         ) {
-            apply_placement_move(&problem, &mut state, &mut lb_state, best_move.mv);
+            state.apply_move(&problem, best_move.mv);
             best_score = best_move.exact;
             continue;
         }
@@ -1762,12 +1754,11 @@ fn solve_func_placement(
         if let Some(best_move) = find_best_exact_swap_move(
             &problem,
             &state,
-            &mut lb_state,
             best_score,
             &mut score_workspace,
             &mut search_work,
         ) {
-            apply_placement_move(&problem, &mut state, &mut lb_state, best_move.mv);
+            state.apply_move(&problem, best_move.mv);
             best_score = best_move.exact;
             continue;
         }
@@ -1777,32 +1768,6 @@ fn solve_func_placement(
 
     let promoted_optional = problem.promoted_optional(&state);
     evaluate_func_placement(&problem, &promoted_optional, &state, &mut workspace)
-}
-
-fn apply_placement_move(
-    problem: &PlacementProblem<'_>,
-    state: &mut PlacementState,
-    lb_state: &mut PlacementLowerBoundState,
-    mv: PlacementMove,
-) {
-    match mv {
-        PlacementMove::None => {}
-        PlacementMove::Add(candidate_idx) => {
-            state.apply_add(problem, candidate_idx);
-            lb_state.apply_add(problem, candidate_idx);
-        }
-        PlacementMove::Remove(candidate_idx) => {
-            state.apply_remove(problem, candidate_idx);
-            lb_state.apply_remove(problem, candidate_idx);
-        }
-        PlacementMove::Swap {
-            add_idx,
-            remove_idx,
-        } => {
-            state.apply_swap(problem, add_idx, remove_idx);
-            lb_state.apply_swap(problem, add_idx, remove_idx);
-        }
-    }
 }
 
 fn evaluate_func_placement(
@@ -2059,12 +2024,10 @@ fn shadow_words_for_call_after_move(
 fn find_best_exact_one_flip_move(
     problem: &PlacementProblem<'_>,
     state: &PlacementState,
-    lb_state: &mut PlacementLowerBoundState,
     current_score: FuncPlacementScore,
     exact_ws: &mut FuncPlacementScoreWorkspace,
     work: &mut SearchWorkBuffers,
 ) -> Option<ExactMoveEval> {
-    let _ = lb_state;
     work.one_flip_exact.clear();
     let mut candidates = Vec::new();
     if problem.candidates.len() <= ONE_FLIP_FULL_LIMIT {
@@ -2111,7 +2074,6 @@ fn collect_one_flip_shortlists(
 fn find_best_exact_swap_move(
     problem: &PlacementProblem<'_>,
     state: &PlacementState,
-    lb_state: &mut PlacementLowerBoundState,
     current_score: FuncPlacementScore,
     exact_ws: &mut FuncPlacementScoreWorkspace,
     work: &mut SearchWorkBuffers,
@@ -2122,7 +2084,6 @@ fn find_best_exact_swap_move(
         return None;
     }
 
-    let _ = lb_state;
     work.swap_exact.clear();
     if feasible_add_count.saturating_mul(feasible_remove_count) <= SWAP_FULL_PAIR_LIMIT {
         for add_idx in 0..problem.candidates.len() {
@@ -2194,49 +2155,47 @@ fn collect_metric_shortlist(
     per_metric: usize,
     work: &mut SearchWorkBuffers,
 ) {
-    for metric in 0..3 {
-        let mut candidates: Vec<_> = problem
-            .candidates
-            .iter()
-            .enumerate()
-            .filter_map(|(candidate_idx, _)| {
-                (state.promoted[candidate_idx] == promoted).then_some(candidate_idx)
-            })
-            .collect();
-        candidates.sort_unstable_by(|&lhs, &rhs| {
-            candidate_metric(problem, rhs, metric)
-                .cmp(&candidate_metric(problem, lhs, metric))
-                .then_with(|| {
-                    problem.candidates[lhs]
-                        .obj_id
-                        .as_u32()
-                        .cmp(&problem.candidates[rhs].obj_id.as_u32())
-                })
-        });
-        for &candidate_idx in candidates.iter().take(per_metric) {
-            if promoted {
-                push_unique_candidate(&mut work.remove_shortlist, candidate_idx);
-            } else {
-                push_unique_candidate(&mut work.add_shortlist, candidate_idx);
+    for metric_of in CANDIDATE_METRICS {
+        work.metric_candidates.clear();
+        work.metric_candidates
+            .extend((0..problem.candidates.len()).filter(|&idx| state.promoted[idx] == promoted));
+        let keep = per_metric.min(work.metric_candidates.len());
+        if keep == 0 {
+            continue;
+        }
+        if keep < work.metric_candidates.len() {
+            work.metric_candidates
+                .select_nth_unstable_by(keep - 1, |&lhs, &rhs| {
+                    cmp_candidate_metric(problem, metric_of, lhs, rhs)
+                });
+        }
+        work.metric_candidates[..keep]
+            .sort_unstable_by(|&lhs, &rhs| cmp_candidate_metric(problem, metric_of, lhs, rhs));
+        let shortlist = if promoted {
+            &mut work.remove_shortlist
+        } else {
+            &mut work.add_shortlist
+        };
+        for pos in 0..keep {
+            let candidate_idx = work.metric_candidates[pos];
+            if !shortlist.contains(&candidate_idx) {
+                shortlist.push(candidate_idx);
             }
         }
     }
 }
 
-fn candidate_metric(problem: &PlacementProblem<'_>, candidate_idx: usize, metric: usize) -> u64 {
-    let candidate = &problem.candidates[candidate_idx];
-    match metric {
-        0 => u64::from(candidate.size_words),
-        1 => candidate.shadow_copy_words,
-        2 => candidate.recursive_access_cost,
-        _ => panic!("unknown candidate metric {metric}"),
-    }
-}
-
-fn push_unique_candidate(shortlist: &mut Vec<usize>, candidate_idx: usize) {
-    if !shortlist.contains(&candidate_idx) {
-        shortlist.push(candidate_idx);
-    }
+fn cmp_candidate_metric(
+    problem: &PlacementProblem<'_>,
+    metric_of: fn(&CandidateMeta) -> u64,
+    lhs: usize,
+    rhs: usize,
+) -> Ordering {
+    let lhs = &problem.candidates[lhs];
+    let rhs = &problem.candidates[rhs];
+    metric_of(rhs)
+        .cmp(&metric_of(lhs))
+        .then_with(|| lhs.obj_id.as_u32().cmp(&rhs.obj_id.as_u32()))
 }
 
 fn build_shadow_preserve_for_call(
