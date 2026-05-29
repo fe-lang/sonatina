@@ -67,8 +67,8 @@ pub struct InlinerConfig {
     pub multi_use_inst_free_allowance: usize,
     pub multi_use_excess_inst_penalty: i32,
     pub loop_penalty: i32,
-    pub object_scalarization_bonus_cap: i32,
-    pub object_helper_cluster_bonus: i32,
+    pub scalarization_bonus_cap: i32,
+    pub scalarization_helper_cluster_bonus: i32,
 }
 
 impl Default for InlinerConfig {
@@ -110,8 +110,8 @@ impl Default for InlinerConfig {
             multi_use_inst_free_allowance: 5,
             multi_use_excess_inst_penalty: 1,
             loop_penalty: 20,
-            object_scalarization_bonus_cap: 10,
-            object_helper_cluster_bonus: 4,
+            scalarization_bonus_cap: 10,
+            scalarization_helper_cluster_bonus: 4,
         }
     }
 }

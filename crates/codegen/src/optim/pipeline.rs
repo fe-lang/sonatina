@@ -354,8 +354,8 @@ fn size_inliner_config() -> InlinerConfig {
         multi_use_inst_free_allowance: 5,
         multi_use_excess_inst_penalty: 1,
         loop_penalty: 32,
-        object_scalarization_bonus_cap: 8,
-        object_helper_cluster_bonus: 3,
+        scalarization_bonus_cap: 8,
+        scalarization_helper_cluster_bonus: 3,
         ..InlinerConfig::default()
     }
 }
@@ -388,8 +388,8 @@ fn speed_inliner_config() -> InlinerConfig {
         multi_use_inst_free_allowance: 5,
         multi_use_excess_inst_penalty: 1,
         loop_penalty: 32,
-        object_scalarization_bonus_cap: 10,
-        object_helper_cluster_bonus: 4,
+        scalarization_bonus_cap: 10,
+        scalarization_helper_cluster_bonus: 4,
         ..InlinerConfig::default()
     }
 }
