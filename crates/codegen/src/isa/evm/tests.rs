@@ -925,6 +925,135 @@ block0:
     );
 }
 
+fn prepared_func_dump(src: &str, func_name: &str) -> String {
+    let parsed = parse_module(src).expect("module parses");
+    let funcs = parsed.module.funcs();
+    let entry = find_func(&parsed.module, func_name);
+    let backend = test_backend();
+    let prepared = backend
+        .prepare_section(work_module_with_entry(&parsed.module, &funcs, entry))
+        .expect("prepare should succeed");
+
+    prepared.module().func_store.view(entry, |function| {
+        FuncWriter::new(entry, function).dump_string()
+    })
+}
+
+#[test]
+fn terminal_private_checked_malloc_lowers_to_fixed_buffer_with_persistent_heap() {
+    let dumped = prepared_func_dump(
+        r#"
+target = "evm-ethereum-osaka"
+
+func private %mk(v0.i256) -> *i8 {
+block0:
+    v1.*i8 = evm_malloc 32.i256;
+    v2.i256 = ptr_to_int v1 i256;
+    mstore v2 v0 i256;
+    return v1;
+}
+
+func public %entry(v0.i1, v1.i256) {
+block0:
+    br v0 block1 block4;
+
+block1:
+    v2.*i8 = evm_malloc 64.i256;
+    v3.i256 = ptr_to_int v2 i256;
+    mstore v3 v1 i256;
+    (v4.i256, v5.i1) = uaddo v3 32.i256;
+    br v5 block2 block3;
+
+block2:
+    evm_revert 0.i256 0.i256;
+
+block3:
+    mstore v4 v1 i256;
+    evm_return v3 64.i256;
+
+block4:
+    v6.*i8 = call %mk v1;
+    v7.i256 = ptr_to_int v6 i256;
+    evm_return v7 32.i256;
+}
+"#,
+        "entry",
+    );
+
+    assert!(
+        !dumped.contains("evm_mload 64.i256"),
+        "terminal-private malloc should not lower through the heap free pointer:\n{dumped}"
+    );
+    assert!(
+        !dumped.contains("uaddo") && !dumped.contains(" lt "),
+        "fixed terminal buffer should fold checked address arithmetic:\n{dumped}"
+    );
+}
+
+#[test]
+fn terminal_private_malloc_keeps_heap_base_when_pointer_value_escapes_in_payload() {
+    let dumped = prepared_func_dump(
+        r#"
+target = "evm-ethereum-osaka"
+
+func public %entry() {
+block0:
+    v0.*i8 = evm_malloc 32.i256;
+    v1.i256 = ptr_to_int v0 i256;
+    mstore v1 v1 i256;
+    evm_return v1 32.i256;
+}
+"#,
+        "entry",
+    );
+
+    assert!(
+        dumped.contains("evm_mload 64.i256"),
+        "malloc address stored into returned bytes must remain heap-based:\n{dumped}"
+    );
+}
+
+#[test]
+fn terminal_private_checked_malloc_keeps_heap_base_when_overflow_flag_escapes() {
+    let dumped = prepared_func_dump(
+        r#"
+target = "evm-ethereum-osaka"
+
+func private %mk(v0.i256) -> *i8 {
+block0:
+    v1.*i8 = evm_malloc 32.i256;
+    v2.i256 = ptr_to_int v1 i256;
+    mstore v2 v0 i256;
+    return v1;
+}
+
+func public %entry(v0.i1, v1.i256) {
+block0:
+    br v0 block1 block2;
+
+block1:
+    v2.*i8 = evm_malloc 64.i256;
+    v3.i256 = ptr_to_int v2 i256;
+    (v4.i256, v5.i1) = uaddo v3 32.i256;
+    v6.i256 = zext v5 i256;
+    mstore v3 v6 i256;
+    evm_return v3 32.i256;
+
+block2:
+    v7.*i8 = call %mk v1;
+    v8.i256 = ptr_to_int v7 i256;
+    evm_return v8 32.i256;
+}
+"#,
+        "entry",
+    );
+
+    assert!(
+        dumped.contains("evm_mload 64.i256"),
+        "observable malloc-derived overflow flag must keep heap-based placement:\n{dumped}"
+    );
+}
+
 #[test]
 fn terminal_return_payload_write_does_not_reserve_arena_base() {
     let parsed = parse_module(

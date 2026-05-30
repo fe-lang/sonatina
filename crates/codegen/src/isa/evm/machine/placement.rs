@@ -2,13 +2,20 @@ use cranelift_entity::SecondaryMap;
 use rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
 use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
-    Function, InstId, InstSetExt, Module,
+    AccessKind, BlockId, Function, InstId, InstSetExt, Module, Value, ValueId,
+    cfg::ControlFlowGraph,
     inst::evm::inst_set::EvmInstKind,
-    isa::{Isa, evm::Evm},
-    module::FuncRef,
+    isa::{
+        Isa,
+        evm::{Evm, space::MEMORY},
+    },
+    module::{FuncRef, ModuleCtx},
 };
 
-use crate::module_analysis::CallGraph;
+use crate::{
+    isa::evm::provenance::{Provenance, compute_value_provenance},
+    module_analysis::CallGraph,
+};
 
 use super::{
     super::{
@@ -17,7 +24,7 @@ use super::{
         memory_plan::{self, BackendSpillReserve, FuncPreAnalysis, ObjLoc, StableMode, WORD_BYTES},
         prepare::{
             ArenaBaseFacts, choose_arena_base, compute_return_escape_caller_clamp_words,
-            function_free_ptr_slot_facts,
+            function_free_ptr_slot_facts, memory_access_may_touch_free_ptr_slot,
         },
         ptr_escape::PtrEscapeSummary,
     },
@@ -204,6 +211,8 @@ pub(crate) fn compute_semantic_memory_placement(
         compute_program_free_ptr_slot_facts(module, funcs, backend, ptr_escape);
     let placement_ctx = MallocPlacementCtx {
         isa: &backend.isa,
+        module: &module.ctx,
+        ptr_escape,
         global_dyn_base: semantic_plan.global_dyn_base,
         backend_spill_reserve_peak: backend_spill_scratch_reserve_peak,
         entry_may_have_live_frame: &entry_may_have_live_frame,
@@ -259,6 +268,8 @@ pub(crate) fn compute_semantic_memory_placement(
 
 struct MallocPlacementCtx<'a> {
     isa: &'a Evm,
+    module: &'a ModuleCtx,
+    ptr_escape: &'a FxHashMap<FuncRef, PtrEscapeSummary>,
     global_dyn_base: u32,
     backend_spill_reserve_peak: u32,
     entry_may_have_live_frame: &'a FxHashMap<FuncRef, bool>,
@@ -274,12 +285,33 @@ impl MallocPlacementCtx<'_> {
         func_plan: &memory_plan::FuncMemPlan,
     ) -> FxHashMap<InstId, MallocPlacement> {
         let mut out = FxHashMap::default();
+        let mut cfg = ControlFlowGraph::new();
+        cfg.compute(function);
         let needs_dyn_sp_clamp = func_plan.uses_dynamic_frame()
             || self
                 .entry_may_have_live_frame
                 .get(&func)
                 .copied()
                 .unwrap_or(false);
+        let prov = compute_value_provenance(function, self.module, self.isa, |callee| {
+            PtrEscapeSummary::get_or_conservative(self.ptr_escape, self.module, callee)
+        });
+        let exact_heap_base_before_malloc = ExactHeapBaseAnalysis {
+            function,
+            isa: self.isa,
+            cfg: &cfg,
+            func_plan,
+            prov: &prov,
+            entry_heap_base_is_exact: !needs_dyn_sp_clamp,
+        }
+        .compute();
+        let terminal_private_mallocs = TerminalPrivateMallocAnalysis::new(
+            function,
+            self.isa,
+            &cfg,
+            &exact_heap_base_before_malloc,
+        )
+        .compute();
         for block in function.layout.iter_block() {
             for inst in function.layout.iter_inst(block) {
                 if !matches!(
@@ -297,9 +329,10 @@ impl MallocPlacementCtx<'_> {
                     inst,
                 );
                 let placement = if transient
-                    && !needs_dyn_sp_clamp
-                    && !self.has_persistent_mallocs
-                    && !self.free_ptr_slot_may_be_touched
+                    && (terminal_private_mallocs.contains(&inst)
+                        || (!self.free_ptr_slot_may_be_touched
+                            && !needs_dyn_sp_clamp
+                            && !self.has_persistent_mallocs))
                 {
                     MallocPlacement::Fixed { base: min_base }
                 } else {
@@ -313,6 +346,470 @@ impl MallocPlacementCtx<'_> {
             }
         }
         out
+    }
+}
+
+struct TerminalPrivateMallocAnalysis<'a> {
+    function: &'a Function,
+    isa: &'a Evm,
+    cfg: &'a ControlFlowGraph,
+    exact_heap_base_before_malloc: &'a FxHashMap<InstId, bool>,
+    terminal_private_blocks: SecondaryMap<BlockId, bool>,
+}
+
+impl<'a> TerminalPrivateMallocAnalysis<'a> {
+    fn new(
+        function: &'a Function,
+        isa: &'a Evm,
+        cfg: &'a ControlFlowGraph,
+        exact_heap_base_before_malloc: &'a FxHashMap<InstId, bool>,
+    ) -> Self {
+        let mut terminal_private_blocks = SecondaryMap::new();
+        for block in function.layout.iter_block() {
+            let _ = &mut terminal_private_blocks[block];
+        }
+        Self {
+            function,
+            isa,
+            cfg,
+            exact_heap_base_before_malloc,
+            terminal_private_blocks,
+        }
+    }
+
+    fn compute(mut self) -> FxHashSet<InstId> {
+        self.compute_terminal_private_blocks();
+
+        let mut out = FxHashSet::default();
+        for block in self.function.layout.iter_block() {
+            for inst in self.function.layout.iter_inst(block) {
+                if matches!(self.resolve(inst), EvmInstKind::EvmMalloc(_))
+                    && self
+                        .suffix_is_terminal_private(block, self.function.layout.next_inst_of(inst))
+                    && self.malloc_is_private(inst)
+                {
+                    out.insert(inst);
+                }
+            }
+        }
+
+        out
+    }
+
+    fn compute_terminal_private_blocks(&mut self) {
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for block in self.function.layout.iter_block() {
+                let next = self.block_is_terminal_private(block);
+                changed |= self.terminal_private_blocks[block] != next;
+                self.terminal_private_blocks[block] = next;
+            }
+        }
+    }
+
+    fn block_is_terminal_private(&self, block: BlockId) -> bool {
+        for inst in self.function.layout.iter_inst(block) {
+            if self.inst_is_evm_terminal(inst) {
+                return true;
+            }
+            if self.function.dfg.inst(inst).is_terminator() {
+                return self.successors_are_terminal_private(block);
+            }
+            if !self.inst_allows_terminal_private_prefix(inst) {
+                return false;
+            }
+        }
+
+        self.successors_are_terminal_private(block)
+    }
+
+    fn successors_are_terminal_private(&self, block: BlockId) -> bool {
+        let mut succs = self.cfg.succs_of(block);
+        let Some(first) = succs.next() else {
+            return false;
+        };
+        self.terminal_private_blocks[*first]
+            && succs.all(|succ| self.terminal_private_blocks[*succ])
+    }
+
+    fn inst_is_evm_terminal(&self, inst: InstId) -> bool {
+        matches!(
+            self.resolve(inst),
+            EvmInstKind::EvmReturn(_) | EvmInstKind::EvmRevert(_)
+        )
+    }
+
+    fn inst_allows_terminal_private_prefix(&self, inst: InstId) -> bool {
+        let effects = self.function.dfg.effects(inst);
+        self.function.dfg.call_info(inst).is_none()
+            && effects.other.is_empty()
+            && effects
+                .accesses
+                .iter()
+                .all(|access| access.kind == AccessKind::Write && access.space == MEMORY)
+    }
+
+    fn suffix_is_terminal_private(&self, block: BlockId, mut cursor: Option<InstId>) -> bool {
+        while let Some(inst) = cursor {
+            if self.inst_is_evm_terminal(inst) {
+                return true;
+            }
+            if self.function.dfg.inst(inst).is_terminator() {
+                return self.successors_are_terminal_private(block);
+            }
+            if !self.inst_allows_terminal_private_prefix(inst) {
+                return false;
+            }
+            cursor = self.function.layout.next_inst_of(inst);
+        }
+
+        self.successors_are_terminal_private(block)
+    }
+
+    fn malloc_is_private(&self, inst: InstId) -> bool {
+        let Some(requires_exact_heap_base) = MallocUseAnalysis::new(self.function, self.isa, inst)
+            .private_address_uses_require_exact_heap_base()
+        else {
+            return false;
+        };
+
+        !requires_exact_heap_base
+            || self
+                .exact_heap_base_before_malloc
+                .get(&inst)
+                .copied()
+                .unwrap_or(false)
+    }
+
+    fn resolve(&self, inst: InstId) -> EvmInstKind<'_> {
+        self.isa
+            .inst_set()
+            .resolve_inst(self.function.dfg.inst(inst))
+    }
+}
+
+struct ExactHeapBaseAnalysis<'a> {
+    function: &'a Function,
+    isa: &'a Evm,
+    cfg: &'a ControlFlowGraph,
+    func_plan: &'a memory_plan::FuncMemPlan,
+    prov: &'a SecondaryMap<ValueId, Provenance>,
+    entry_heap_base_is_exact: bool,
+}
+
+impl<'a> ExactHeapBaseAnalysis<'a> {
+    fn compute(&self) -> FxHashMap<InstId, bool> {
+        let mut block_in = SecondaryMap::new();
+        let mut block_out = SecondaryMap::new();
+        for block in self.function.layout.iter_block() {
+            block_in[block] = self.entry_heap_base_is_exact;
+            block_out[block] = self.entry_heap_base_is_exact;
+        }
+
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for block in self.function.layout.iter_block() {
+                let next_in = self.block_entry_is_exact(&block_out, block);
+                let next_out = self.transfer_block(block, next_in, None);
+                changed |= block_in[block] != next_in || block_out[block] != next_out;
+                block_in[block] = next_in;
+                block_out[block] = next_out;
+            }
+        }
+
+        let mut exact_before_malloc = FxHashMap::default();
+        for block in self.function.layout.iter_block() {
+            self.transfer_block(block, block_in[block], Some(&mut exact_before_malloc));
+        }
+        exact_before_malloc
+    }
+
+    fn block_entry_is_exact(
+        &self,
+        block_out: &SecondaryMap<BlockId, bool>,
+        block: BlockId,
+    ) -> bool {
+        let mut preds = self.cfg.preds_of(block);
+        let Some(first) = preds.next() else {
+            return self.entry_heap_base_is_exact;
+        };
+        block_out[*first] && preds.all(|pred| block_out[*pred])
+    }
+
+    fn transfer_block(
+        &self,
+        block: BlockId,
+        mut exact: bool,
+        mut exact_before_malloc: Option<&mut FxHashMap<InstId, bool>>,
+    ) -> bool {
+        for inst in self.function.layout.iter_inst(block) {
+            match self.resolve(inst) {
+                EvmInstKind::EvmMalloc(_) => {
+                    if let Some(exact_before_malloc) = exact_before_malloc.as_deref_mut() {
+                        exact_before_malloc.insert(inst, exact);
+                    }
+                    if !self.func_plan.transient_mallocs.contains(&inst) {
+                        exact = false;
+                    }
+                }
+                EvmInstKind::Call(_) => exact = false,
+                _ if self.inst_writes_free_ptr_slot(inst) => exact = false,
+                _ => {}
+            }
+        }
+        exact
+    }
+
+    fn inst_writes_free_ptr_slot(&self, inst: InstId) -> bool {
+        self.function
+            .dfg
+            .effects(inst)
+            .accesses
+            .iter()
+            .any(|access| {
+                access.kind == AccessKind::Write
+                    && memory_access_may_touch_free_ptr_slot(self.function, access, self.prov)
+            })
+    }
+
+    fn resolve(&self, inst: InstId) -> EvmInstKind<'_> {
+        self.isa
+            .inst_set()
+            .resolve_inst(self.function.dfg.inst(inst))
+    }
+}
+
+struct MallocUseAnalysis<'a> {
+    function: &'a Function,
+    isa: &'a Evm,
+    malloc: InstId,
+    derived_values: FxHashSet<ValueId>,
+}
+
+impl<'a> MallocUseAnalysis<'a> {
+    fn new(function: &'a Function, isa: &'a Evm, malloc: InstId) -> Self {
+        let mut analysis = Self {
+            function,
+            isa,
+            malloc,
+            derived_values: function.dfg.inst_results(malloc).iter().copied().collect(),
+        };
+        analysis.compute_derived_values();
+        analysis
+    }
+
+    fn private_address_uses_require_exact_heap_base(&self) -> Option<bool> {
+        let mut requires_exact_heap_base = false;
+        for block in self.function.layout.iter_block() {
+            for inst in self.function.layout.iter_inst(block) {
+                if inst != self.malloc && self.inst_uses_derived_value(inst) {
+                    requires_exact_heap_base |= self.use_requires_exact_heap_base(inst)?;
+                }
+            }
+        }
+
+        Some(requires_exact_heap_base)
+    }
+
+    fn compute_derived_values(&mut self) {
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for block in self.function.layout.iter_block() {
+                for inst in self.function.layout.iter_inst(block) {
+                    if inst != self.malloc && self.inst_uses_derived_value(inst) {
+                        changed |= self.add_address_derived_results(inst);
+                    }
+                }
+            }
+        }
+    }
+
+    fn add_address_derived_results(&mut self, inst: InstId) -> bool {
+        match self.resolve(inst) {
+            EvmInstKind::Bitcast(_)
+            | EvmInstKind::IntToPtr(_)
+            | EvmInstKind::PtrToInt(_)
+            | EvmInstKind::Gep(_)
+            | EvmInstKind::Add(_)
+            | EvmInstKind::Sub(_)
+            | EvmInstKind::Phi(_) => {
+                let mut changed = false;
+                for result in self.function.dfg.inst_results(inst) {
+                    changed |= self.derived_values.insert(*result);
+                }
+                changed
+            }
+            EvmInstKind::Uaddo(_)
+            | EvmInstKind::Saddo(_)
+            | EvmInstKind::Usubo(_)
+            | EvmInstKind::Ssubo(_) => self
+                .function
+                .dfg
+                .inst_results(inst)
+                .first()
+                .is_some_and(|result| self.derived_values.insert(*result)),
+            _ => false,
+        }
+    }
+
+    fn use_requires_exact_heap_base(&self, inst: InstId) -> Option<bool> {
+        if self.inst_derives_address(inst) {
+            return self
+                .checked_overflow_flag(inst)
+                .map_or(Some(false), |flag| {
+                    self.checked_overflow_flag_is_private_control(flag)
+                });
+        }
+
+        match self.resolve(inst) {
+            EvmInstKind::Lt(lt) => {
+                self.address_overflow_predicate_requires_exact_heap_base(inst, *lt.lhs(), *lt.rhs())
+            }
+            EvmInstKind::Mstore(mstore) if !self.derived_values.contains(mstore.value()) => {
+                Some(false)
+            }
+            EvmInstKind::EvmMstore(mstore) if !self.derived_values.contains(mstore.value()) => {
+                Some(false)
+            }
+            EvmInstKind::EvmMstore8(mstore) if !self.derived_values.contains(mstore.val()) => {
+                Some(false)
+            }
+            EvmInstKind::EvmReturn(ret) if !self.derived_values.contains(ret.len()) => Some(false),
+            EvmInstKind::EvmRevert(revert) if !self.derived_values.contains(revert.len()) => {
+                Some(false)
+            }
+            _ => None,
+        }
+    }
+
+    fn inst_derives_address(&self, inst: InstId) -> bool {
+        matches!(
+            self.resolve(inst),
+            EvmInstKind::Bitcast(_)
+                | EvmInstKind::IntToPtr(_)
+                | EvmInstKind::PtrToInt(_)
+                | EvmInstKind::Gep(_)
+                | EvmInstKind::Add(_)
+                | EvmInstKind::Sub(_)
+                | EvmInstKind::Phi(_)
+                | EvmInstKind::Uaddo(_)
+                | EvmInstKind::Saddo(_)
+                | EvmInstKind::Usubo(_)
+                | EvmInstKind::Ssubo(_)
+        )
+    }
+
+    fn checked_overflow_flag(&self, inst: InstId) -> Option<ValueId> {
+        match self.resolve(inst) {
+            EvmInstKind::Uaddo(_)
+            | EvmInstKind::Saddo(_)
+            | EvmInstKind::Usubo(_)
+            | EvmInstKind::Ssubo(_) => self.function.dfg.inst_results(inst).get(1).copied(),
+            _ => None,
+        }
+    }
+
+    fn checked_overflow_flag_is_private_control(&self, flag: ValueId) -> Option<bool> {
+        let mut used = false;
+        for block in self.function.layout.iter_block() {
+            for user in self.function.layout.iter_inst(block) {
+                if !self.inst_uses_value(user, flag) {
+                    continue;
+                }
+
+                used = true;
+                let EvmInstKind::Br(br) = self.resolve(user) else {
+                    return None;
+                };
+                if br.cond() != &flag
+                    || self
+                        .function
+                        .dfg
+                        .inst(user)
+                        .collect_values()
+                        .iter()
+                        .any(|value| self.derived_values.contains(value))
+                {
+                    return None;
+                }
+            }
+        }
+        Some(used)
+    }
+
+    fn address_overflow_predicate_requires_exact_heap_base(
+        &self,
+        inst: InstId,
+        lhs: ValueId,
+        rhs: ValueId,
+    ) -> Option<bool> {
+        (self.value_is_add_of_base(lhs, rhs) && self.inst_result_uses_are_private_branches(inst))
+            .then_some(true)
+    }
+
+    fn value_is_add_of_base(&self, value: ValueId, base: ValueId) -> bool {
+        if !self.derived_values.contains(&value) || !self.derived_values.contains(&base) {
+            return false;
+        }
+
+        let Some(Value::Inst { inst, .. }) = self.function.dfg.get_value(value) else {
+            return false;
+        };
+        let EvmInstKind::Add(add) = self.resolve(*inst) else {
+            return false;
+        };
+
+        (*add.lhs() == base && self.function.dfg.value_is_imm(*add.rhs()))
+            || (*add.rhs() == base && self.function.dfg.value_is_imm(*add.lhs()))
+    }
+
+    fn inst_result_uses_are_private_branches(&self, inst: InstId) -> bool {
+        let [result] = self.function.dfg.inst_results(inst) else {
+            return false;
+        };
+
+        for block in self.function.layout.iter_block() {
+            for user in self.function.layout.iter_inst(block) {
+                if user == inst || !self.inst_uses_value(user, *result) {
+                    continue;
+                }
+
+                let EvmInstKind::Br(br) = self.resolve(user) else {
+                    return false;
+                };
+                if br.cond() != result {
+                    return false;
+                }
+            }
+        }
+
+        true
+    }
+
+    fn inst_uses_derived_value(&self, inst: InstId) -> bool {
+        self.function
+            .dfg
+            .inst(inst)
+            .collect_values()
+            .iter()
+            .any(|value| self.derived_values.contains(value))
+    }
+
+    fn inst_uses_value(&self, inst: InstId, value: ValueId) -> bool {
+        self.function
+            .dfg
+            .inst(inst)
+            .collect_values()
+            .contains(&value)
+    }
+
+    fn resolve(&self, inst: InstId) -> EvmInstKind<'_> {
+        self.isa
+            .inst_set()
+            .resolve_inst(self.function.dfg.inst(inst))
     }
 }
 

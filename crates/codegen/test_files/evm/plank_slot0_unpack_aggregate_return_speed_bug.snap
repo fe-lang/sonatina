@@ -6,9 +6,9 @@ input_file: test_files/evm/plank_slot0_unpack_aggregate_return_speed_bug.sntn
 evm.config: stack_reach=16 vcode=false bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 447 bytes
-  section init: 458 bytes
-  total: 905 bytes
+  section runtime: 394 bytes
+  section init: 405 bytes
+  total: 799 bytes
 
 functions:
   mem: global_dyn_base=0x180 arena_base=0xa0 scratch_peak_words=0 static_chain_peak_words=7
@@ -16,10 +16,10 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   unpack: ir_blocks=4 ir_insts=34 vcode_ops=78 fixups=1 imm_bytes=21
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=7 abs_words_end=0
-  run: ir_blocks=17 ir_insts=60 vcode_ops=138 fixups=9 imm_bytes=36
+  run: ir_blocks=8 ir_insts=36 vcode_ops=88 fixups=6 imm_bytes=31
     mem: scratch_words=0 stable_words=7 stable_mode=StaticAbs(base=0xa0) entry_abs_words=0 abs_words_end=7
 
 evm:
-  deploy: success reason=Return gas_used=148601 gas_refunded=0 logs=0 output=create len=447 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
-  case initialize: calldata_len=36 success reason=Return gas_used=43559 gas_refunded=0 logs=0 output=call len=0 tx_gas=21336 runtime_gas=22223
-  case slot0: calldata_len=4 success reason=Return gas_used=23756 gas_refunded=0 logs=0 output=call len=224 tx_gas=21064 runtime_gas=2692
+  deploy: success reason=Return gas_used=137131 gas_refunded=0 logs=0 output=create len=394 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
+  case initialize: calldata_len=36 success reason=Return gas_used=43514 gas_refunded=0 logs=0 output=call len=0 tx_gas=21336 runtime_gas=22178
+  case slot0: calldata_len=4 success reason=Return gas_used=23665 gas_refunded=0 logs=0 output=call len=224 tx_gas=21064 runtime_gas=2601
