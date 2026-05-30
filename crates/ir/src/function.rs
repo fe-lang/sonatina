@@ -52,12 +52,18 @@ impl Function {
     }
 
     pub fn inst_provenance(&self, inst: InstId) -> Option<&str> {
-        self.inst_provenance.get(inst.0 as usize)
+        self.inst_provenance
+            .get(inst.0 as usize)
             .and_then(|o| o.as_deref())
     }
 
     pub fn propagate_inst_provenance(&mut self, new_inst: InstId, source_inst: InstId) {
-        if let Some(prov) = self.inst_provenance.get(source_inst.0 as usize).cloned().flatten() {
+        if let Some(prov) = self
+            .inst_provenance
+            .get(source_inst.0 as usize)
+            .cloned()
+            .flatten()
+        {
             self.set_inst_provenance(new_inst, prov);
         }
     }

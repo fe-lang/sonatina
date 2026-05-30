@@ -129,6 +129,7 @@ struct FuncLowerCtx<'a> {
     source_block_order: Vec<BlockId>,
     block_terminal_map: SecondaryMap<BlockId, Option<BlockId>>,
     current_block: Option<BlockId>,
+    active_source_inst: Option<sonatina_ir::InstId>,
     pending_phis: Vec<(sonatina_ir::InstId, sonatina_ir::InstId)>,
 }
 
@@ -156,6 +157,7 @@ fn lower_function(
         source_block_order,
         block_terminal_map: SecondaryMap::new(),
         current_block: None,
+        active_source_inst: None,
         pending_phis: Vec::new(),
     };
 
@@ -217,6 +219,7 @@ impl FuncLowerCtx<'_> {
                     &mut self.machine,
                     control_flow::Phi::new_unchecked(self.is, Vec::new()),
                 );
+                self.copy_source_metadata_to_machine(source_inst, machine_inst);
                 let result_tys = self.machine_result_tys(source_inst)?;
                 let results = cursor.make_results(&mut self.machine, machine_inst, &result_tys);
                 cursor.attach_results(&mut self.machine, machine_inst, &results);
@@ -274,6 +277,13 @@ impl FuncLowerCtx<'_> {
             return Ok(());
         }
 
+        let previous = self.active_source_inst.replace(source_inst);
+        let result = self.lower_inst_active(source_inst);
+        self.active_source_inst = previous;
+        result
+    }
+
+    fn lower_inst_active(&mut self, source_inst: sonatina_ir::InstId) -> Result<(), String> {
         let data = self
             .source_is
             .resolve_inst(self.source.dfg.inst(source_inst));
@@ -955,6 +965,7 @@ impl FuncLowerCtx<'_> {
         let block = self.current_block.expect("insert needs current block");
         let mut cursor = InstInserter::at_location(CursorLocation::BlockBottom(block));
         let machine_inst = cursor.insert_inst_data_dyn(&mut self.machine, inst);
+        self.copy_source_metadata_to_machine(source_inst, machine_inst);
         let results = cursor.make_results(&mut self.machine, machine_inst, &result_tys);
         cursor.attach_results(&mut self.machine, machine_inst, &results);
         self.map_inst_results(source_inst, machine_inst, &results);
@@ -980,6 +991,9 @@ impl FuncLowerCtx<'_> {
     ) -> sonatina_ir::InstId {
         let mut cursor = InstInserter::at_location(CursorLocation::BlockBottom(block));
         let inst = cursor.insert_inst_data(&mut self.machine, inst);
+        if let Some(source_inst) = self.active_source_inst {
+            self.copy_source_metadata_to_machine(source_inst, inst);
+        }
         let results = cursor.make_results(&mut self.machine, inst, tys);
         cursor.attach_results(&mut self.machine, inst, &results);
         inst
@@ -991,7 +1005,24 @@ impl FuncLowerCtx<'_> {
         inst: I,
     ) -> sonatina_ir::InstId {
         let mut cursor = InstInserter::at_location(CursorLocation::BlockBottom(block));
-        cursor.insert_inst_data(&mut self.machine, inst)
+        let inst = cursor.insert_inst_data(&mut self.machine, inst);
+        if let Some(source_inst) = self.active_source_inst {
+            self.copy_source_metadata_to_machine(source_inst, inst);
+        }
+        inst
+    }
+
+    fn copy_source_metadata_to_machine(
+        &mut self,
+        source_inst: sonatina_ir::InstId,
+        machine_inst: sonatina_ir::InstId,
+    ) {
+        self.machine
+            .import_inst_debug_from(self.source, source_inst, machine_inst, None);
+        if let Some(provenance) = self.source.inst_provenance(source_inst) {
+            self.machine
+                .set_inst_provenance(machine_inst, provenance.to_string());
+        }
     }
 
     fn map_inst_results(
