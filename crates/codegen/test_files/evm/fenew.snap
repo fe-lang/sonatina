@@ -6,8 +6,8 @@ input_file: test_files/evm/fenew.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 258 bytes
-  total: 258 bytes
+  section runtime: 252 bytes
+  total: 252 bytes
 
 object: Counter
   section init: 92 bytes
@@ -28,7 +28,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case test_counter: calldata_len=0 success reason=Return gas_used=91088 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=70088
+  case test_counter: calldata_len=0 success reason=Return gas_used=91067 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=70067
 
 
 --------------- DEBUG ---------------

@@ -537,6 +537,26 @@ pub(crate) fn simplify_binary_with_facts(
                 return SimplifyExprResult::Const(Immediate::one(Type::I1));
             }
         }
+        BinaryInstKind::Gt | BinaryInstKind::Lt | BinaryInstKind::Ge | BinaryInstKind::Le
+            if ty.is_integral() =>
+        {
+            let zero = Immediate::zero(ty);
+            match kind {
+                BinaryInstKind::Gt if lhs_imm == Some(zero) => {
+                    return SimplifyExprResult::Const(Immediate::zero(Type::I1));
+                }
+                BinaryInstKind::Lt if rhs_imm == Some(zero) => {
+                    return SimplifyExprResult::Const(Immediate::zero(Type::I1));
+                }
+                BinaryInstKind::Ge if rhs_imm == Some(zero) => {
+                    return SimplifyExprResult::Const(Immediate::one(Type::I1));
+                }
+                BinaryInstKind::Le if lhs_imm == Some(zero) => {
+                    return SimplifyExprResult::Const(Immediate::one(Type::I1));
+                }
+                _ => {}
+            }
+        }
         BinaryInstKind::Shl | BinaryInstKind::Shr | BinaryInstKind::Sar => {
             let value_ty = func.dfg.value_ty(rhs);
             let value_zero = Immediate::zero(value_ty);
@@ -980,6 +1000,42 @@ mod tests {
         assert_eq!(
             simplify_binary_with_facts(&func, BinaryInstKind::Ne, lhs, rhs, &facts),
             SimplifyExprResult::Const(Immediate::I1(true))
+        );
+    }
+
+    #[test]
+    fn simplify_binary_with_facts_folds_unsigned_zero_bound_compares() {
+        let isa = test_isa();
+        let ctx = ModuleCtx::new(&isa);
+        let sig = Signature::new_single("f", Linkage::Private, &[Type::I256], Type::I1);
+        let mut func = Function::new(&ctx, &sig);
+        let value = func.arg_values[0];
+        let zero = func.dfg.make_imm_value(Immediate::zero(Type::I256));
+        let facts = MockFacts {
+            known_bits: Default::default(),
+            known_imm: [(zero, Immediate::zero(Type::I256))].into_iter().collect(),
+            may_be_undef: Default::default(),
+        };
+
+        assert_eq!(
+            simplify_binary_with_facts(&func, BinaryInstKind::Gt, zero, value, &facts),
+            SimplifyExprResult::Const(Immediate::I1(false))
+        );
+        assert_eq!(
+            simplify_binary_with_facts(&func, BinaryInstKind::Lt, value, zero, &facts),
+            SimplifyExprResult::Const(Immediate::I1(false))
+        );
+        assert_eq!(
+            simplify_binary_with_facts(&func, BinaryInstKind::Ge, value, zero, &facts),
+            SimplifyExprResult::Const(Immediate::I1(true))
+        );
+        assert_eq!(
+            simplify_binary_with_facts(&func, BinaryInstKind::Le, zero, value, &facts),
+            SimplifyExprResult::Const(Immediate::I1(true))
+        );
+        assert_eq!(
+            simplify_binary_with_facts(&func, BinaryInstKind::Sgt, zero, value, &facts),
+            SimplifyExprResult::NoChange
         );
     }
 

@@ -1004,108 +1004,56 @@ func private %contract_runtime_root_DepositContract() {
         evm_revert 0.i256 0.i256;
 
     block12:
-        v834.constref<@layout_5> = const.ref $const_region_0;
-        v835.objref<@layout_5> = obj.alloc @layout_5;
-        obj.init.const v835 v834;
-        v836.@layout_5 = obj.load v835;
         v22.i256 = evm_calldata_size;
-        v23.i256 = extract_value v836 0.i256;
-        v26.i1 = gt v23 v22;
-        br v26 block19 block18;
-
-    block18:
-        (v29.i256, v30.i1) = usubo v22 v23;
-        br v30 block20 block19;
-
-    block19:
-        v34.i256 = phi (0.i256 block12) (v29 block18);
-        v38.i1 = gt 36.i256 v34;
+        v38.i1 = gt 36.i256 v22;
         br v38 block23 block25;
-
-    block20:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
 
     block23:
         evm_revert 0.i256 0.i256;
 
     block25:
-        v47.i256 = evm_calldata_size;
-        v51.i1 = gt v23 v47;
-        br v51 block34 block33;
-
-    block33:
-        (v54.i256, v55.i1) = usubo v47 v23;
-        br v55 block35 block34;
-
-    block34:
-        v167.i256 = add v23 4.i256;
-        v168.i256 = evm_calldata_load v167;
+        v168.i256 = evm_calldata_load 4.i256;
         v181.i256 = shl 32.i256 v168;
         v822.i1 = is_zero v181;
         br v822 block101 block103;
 
-    block35:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
-
     block101:
         v187.i256 = shr 224.i256 v168;
-        v860.i1 = eq v187 33540519.i256;
-        br v860 block557 block558;
+        v861.i1 = eq v187 33540519.i256;
+        br v861 block557 block558;
 
     block556:
         jump block557;
 
     block557:
-        v863.i1 = phi (0.i1 block556) (1.i1 block101) (1.i1 block558);
-        v897.*i8 = evm_malloc 32.i256;
-        v898.i256 = ptr_to_int v897 i256;
-        br v863 block565 block566;
+        v864.i1 = phi (0.i1 block556) (1.i1 block101) (1.i1 block558);
+        v898.*i8 = evm_malloc 32.i256;
+        v899.i256 = ptr_to_int v898 i256;
+        br v864 block565 block566;
 
     block565:
-        mstore v898 1.i256 i256;
+        mstore v899 1.i256 i256;
         jump block567;
 
     block566:
-        mstore v898 0.i256 i256;
+        mstore v899 0.i256 i256;
         jump block567;
 
     block567:
-        evm_return v898 32.i256;
+        evm_return v899 32.i256;
 
     block558:
-        v862.i1 = eq v187 2237925639.i256;
-        br v862 block557 block556;
+        v863.i1 = eq v187 2237925639.i256;
+        br v863 block557 block556;
 
     block103:
         evm_revert 0.i256 0.i256;
 
     block135:
-        v837.constref<@layout_5> = const.ref $const_region_0;
-        v838.objref<@layout_5> = obj.alloc @layout_5;
-        obj.init.const v838 v837;
-        v839.@layout_5 = obj.load v838;
+        v837.@layout_5 = insert_value undef.@layout_5 0.i256 0.i256;
         v208.i256 = evm_calldata_size;
-        v209.i256 = extract_value v839 0.i256;
-        v212.i1 = gt v209 v208;
-        br v212 block142 block141;
-
-    block141:
-        (v215.i256, v216.i1) = usubo v208 v209;
-        br v216 block143 block142;
-
-    block142:
-        v217.i256 = phi (0.i256 block135) (v215 block141);
-        v221.i1 = gt 132.i256 v217;
+        v221.i1 = gt 132.i256 v208;
         br v221 block146 block148;
-
-    block143:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
 
     block146:
         evm_revert 0.i256 0.i256;
@@ -1114,24 +1062,9 @@ func private %contract_runtime_root_DepositContract() {
         v227.*i256 = alloca i256;
         mstore v227 4.i256 i256;
         v230.i256 = evm_calldata_size;
-        v234.i1 = gt v209 v230;
-        br v234 block157 block156;
-
-    block156:
-        (v237.i256, v238.i1) = usubo v230 v209;
-        br v238 block158 block157;
-
-    block157:
-        v239.i256 = phi (0.i256 block148) (v237 block156);
-        v256.i256 = add v209 4.i256;
-        v257.i256 = evm_calldata_load v256;
+        v257.i256 = evm_calldata_load 4.i256;
         (v263.i256, v264.i1) = uaddo 4.i256 v257;
         br v264 block175 block176;
-
-    block158:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
 
     block172:
         evm_revert 0.i256 0.i256;
@@ -1146,13 +1079,13 @@ func private %contract_runtime_root_DepositContract() {
         br v266 block172 block177;
 
     block177:
-        v272.@layout_7 = call %core__lib__abi__copy_dynamic_payload_from_with_input_len__g72ab_e4d7 v839 v263 v239;
+        v272.@layout_7 = call %core__lib__abi__copy_dynamic_payload_from_with_input_len__g72ab_e4d7 v837 v263 v230;
         v273.i256 = extract_value v272 0.i256;
         v274.i256 = extract_value v272 1.i256;
         v276.i256 = extract_value v272 2.i256;
-        v841.@layout_0 = insert_value undef.@layout_0 0.i256 v273;
-        v842.@layout_0 = insert_value v841 1.i256 v274;
-        v843.@layout_0 = insert_value v842 2.i256 v276;
+        v839.@layout_0 = insert_value undef.@layout_0 0.i256 v273;
+        v840.@layout_0 = insert_value v839 1.i256 v274;
+        v841.@layout_0 = insert_value v840 2.i256 v276;
         v360.i256 = mload v227 i256;
         (v362.i256, v363.i1) = uaddo v360 32.i256;
         br v363 block240 block242;
@@ -1163,8 +1096,7 @@ func private %contract_runtime_root_DepositContract() {
         evm_revert 0.i256 36.i256;
 
     block242:
-        v377.i256 = add v209 v362;
-        v378.i256 = evm_calldata_load v377;
+        v378.i256 = evm_calldata_load v362;
         (v384.i256, v385.i1) = uaddo v360 v378;
         br v385 block256 block257;
 
@@ -1181,13 +1113,13 @@ func private %contract_runtime_root_DepositContract() {
         br v387 block253 block258;
 
     block258:
-        v393.@layout_7 = call %core__lib__abi__copy_dynamic_payload_from_with_input_len__g72ab_e4d7 v839 v384 v239;
+        v393.@layout_7 = call %core__lib__abi__copy_dynamic_payload_from_with_input_len__g72ab_e4d7 v837 v384 v230;
         v394.i256 = extract_value v393 0.i256;
         v395.i256 = extract_value v393 1.i256;
         v396.i256 = extract_value v393 2.i256;
-        v845.@layout_0 = insert_value undef.@layout_0 0.i256 v394;
-        v846.@layout_0 = insert_value v845 1.i256 v395;
-        v847.@layout_0 = insert_value v846 2.i256 v396;
+        v843.@layout_0 = insert_value undef.@layout_0 0.i256 v394;
+        v844.@layout_0 = insert_value v843 1.i256 v395;
+        v845.@layout_0 = insert_value v844 2.i256 v396;
         v480.i256 = mload v227 i256;
         (v482.i256, v483.i1) = uaddo v480 32.i256;
         br v483 block240 block321;
@@ -1197,8 +1129,7 @@ func private %contract_runtime_root_DepositContract() {
         br v485 block240 block323;
 
     block323:
-        v499.i256 = add v209 v484;
-        v500.i256 = evm_calldata_load v499;
+        v500.i256 = evm_calldata_load v484;
         (v506.i256, v507.i1) = uaddo v480 v500;
         br v507 block337 block338;
 
@@ -1215,13 +1146,13 @@ func private %contract_runtime_root_DepositContract() {
         br v509 block334 block339;
 
     block339:
-        v515.@layout_7 = call %core__lib__abi__copy_dynamic_payload_from_with_input_len__g72ab_e4d7 v839 v506 v239;
+        v515.@layout_7 = call %core__lib__abi__copy_dynamic_payload_from_with_input_len__g72ab_e4d7 v837 v506 v230;
         v516.i256 = extract_value v515 0.i256;
         v517.i256 = extract_value v515 1.i256;
         v518.i256 = extract_value v515 2.i256;
-        v849.@layout_0 = insert_value undef.@layout_0 0.i256 v516;
-        v850.@layout_0 = insert_value v849 1.i256 v517;
-        v851.@layout_0 = insert_value v850 2.i256 v518;
+        v847.@layout_0 = insert_value undef.@layout_0 0.i256 v516;
+        v848.@layout_0 = insert_value v847 1.i256 v517;
+        v849.@layout_0 = insert_value v848 2.i256 v518;
         v602.i256 = mload v227 i256;
         (v604.i256, v605.i1) = uaddo v602 32.i256;
         br v605 block240 block402;
@@ -1235,10 +1166,9 @@ func private %contract_runtime_root_DepositContract() {
         br v609 block240 block405;
 
     block405:
-        v716.i256 = add v209 v608;
-        v717.i256 = evm_calldata_load v716;
+        v717.i256 = evm_calldata_load v608;
         v739.@layout_1 = insert_value undef.@layout_1 0.i256 v717;
-        call %__DepositContract_recv_0_0 v843 v847 v851 v739 0.i256;
+        call %__DepositContract_recv_0_0 v841 v845 v849 v739 0.i256;
         evm_return 0.i256 0.i256;
 
     block504:
@@ -1250,41 +1180,22 @@ func private %contract_runtime_root_DepositContract() {
         evm_revert 0.i256 0.i256;
 
     block506:
-        v852.constref<@layout_5> = const.ref $const_region_0;
-        v853.objref<@layout_5> = obj.alloc @layout_5;
-        obj.init.const v853 v852;
-        v854.@layout_5 = obj.load v853;
         v762.i256 = evm_calldata_size;
-        v763.i256 = extract_value v854 0.i256;
-        v766.i1 = gt v763 v762;
-        br v766 block513 block512;
-
-    block512:
-        (v769.i256, v770.i1) = usubo v762 v763;
-        br v770 block514 block513;
-
-    block513:
-        v771.i256 = phi (0.i256 block506) (v769 block512);
-        v774.i1 = gt 4.i256 v771;
+        v774.i1 = gt 4.i256 v762;
         br v774 block517 block560;
-
-    block514:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
 
     block517:
         evm_revert 0.i256 0.i256;
 
     block560:
-        v865.i256 = evm_sload 32.i256;
-        v867.i256 = and v865 18446744073709551615.i256;
-        v868.i64 = trunc v867 i64;
-        v870.*i8 = evm_malloc 64.i256;
-        v871.i256 = ptr_to_int v870 i256;
-        mstore v871 8.i256 i256;
-        (v872.i256, v873.i1) = uaddo v871 32.i256;
-        br v873 block561 block562;
+        v866.i256 = evm_sload 32.i256;
+        v868.i256 = and v866 18446744073709551615.i256;
+        v869.i64 = trunc v868 i64;
+        v871.*i8 = evm_malloc 64.i256;
+        v872.i256 = ptr_to_int v871 i256;
+        mstore v872 8.i256 i256;
+        (v873.i256, v874.i1) = uaddo v872 32.i256;
+        br v874 block561 block562;
 
     block561:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -1292,43 +1203,43 @@ func private %contract_runtime_root_DepositContract() {
         evm_revert 0.i256 36.i256;
 
     block562:
-        v874.i256 = zext v868 i256;
-        v876.i256 = and v874 71777214294589695.i256;
-        v877.i256 = shl 8.i256 v876;
-        v878.i256 = shr 8.i256 v874;
-        v879.i256 = and v878 71777214294589695.i256;
-        v880.i256 = or v877 v879;
-        v882.i256 = and v880 281470681808895.i256;
-        v884.i256 = shl 16.i256 v882;
-        v885.i256 = shr 16.i256 v880;
-        v886.i256 = and v885 281470681808895.i256;
-        v887.i256 = or v884 v886;
-        v888.i256 = shl 32.i256 v887;
-        v889.i256 = shr 32.i256 v887;
-        v890.i256 = or v888 v889;
-        v892.i256 = shl 192.i256 v890;
-        mstore v872 v892 i256;
-        v906.*i8 = evm_malloc 96.i256;
-        v907.i256 = ptr_to_int v906 i256;
-        v909.*i256 = alloca i256;
-        v910.i256 = add v907 32.i256;
-        mstore v909 v910 i256;
-        v911.i256 = ptr_to_int v909 i256;
-        mstore v907 32.i256 i256;
-        v912.i256 = mload v911 i256;
-        v914.i1 = is_zero v871;
-        br v914 block574 block575;
+        v875.i256 = zext v869 i256;
+        v877.i256 = and v875 71777214294589695.i256;
+        v878.i256 = shl 8.i256 v877;
+        v879.i256 = shr 8.i256 v875;
+        v880.i256 = and v879 71777214294589695.i256;
+        v881.i256 = or v878 v880;
+        v883.i256 = and v881 281470681808895.i256;
+        v885.i256 = shl 16.i256 v883;
+        v886.i256 = shr 16.i256 v881;
+        v887.i256 = and v886 281470681808895.i256;
+        v888.i256 = or v885 v887;
+        v889.i256 = shl 32.i256 v888;
+        v890.i256 = shr 32.i256 v888;
+        v891.i256 = or v889 v890;
+        v893.i256 = shl 192.i256 v891;
+        mstore v873 v893 i256;
+        v907.*i8 = evm_malloc 96.i256;
+        v908.i256 = ptr_to_int v907 i256;
+        v910.*i256 = alloca i256;
+        v911.i256 = add v908 32.i256;
+        mstore v910 v911 i256;
+        v912.i256 = ptr_to_int v910 i256;
+        mstore v908 32.i256 i256;
+        v913.i256 = mload v912 i256;
+        v915.i1 = is_zero v872;
+        br v915 block574 block575;
 
     block574:
-        mstore v912 8.i256 i256;
+        mstore v913 8.i256 i256;
         jump block576;
 
     block575:
-        evm_mcopy v912 v871 64.i256;
+        evm_mcopy v913 v872 64.i256;
         jump block576;
 
     block576:
-        evm_return v907 96.i256;
+        evm_return v908 96.i256;
 
     block530:
         v785.i256 = evm_call_value;
@@ -1339,38 +1250,19 @@ func private %contract_runtime_root_DepositContract() {
         evm_revert 0.i256 0.i256;
 
     block532:
-        v855.constref<@layout_5> = const.ref $const_region_0;
-        v856.objref<@layout_5> = obj.alloc @layout_5;
-        obj.init.const v856 v855;
-        v857.@layout_5 = obj.load v856;
         v795.i256 = evm_calldata_size;
-        v796.i256 = extract_value v857 0.i256;
-        v799.i1 = gt v796 v795;
-        br v799 block539 block538;
-
-    block538:
-        (v802.i256, v803.i1) = usubo v795 v796;
-        br v803 block540 block539;
-
-    block539:
-        v804.i256 = phi (0.i256 block532) (v802 block538);
-        v807.i1 = gt 4.i256 v804;
+        v807.i1 = gt 4.i256 v795;
         br v807 block543 block545;
-
-    block540:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
 
     block543:
         evm_revert 0.i256 0.i256;
 
     block545:
         v814.i256 = call %__DepositContract_recv_0_1 0.i256;
-        v920.*i8 = evm_malloc 32.i256;
-        v921.i256 = ptr_to_int v920 i256;
-        mstore v921 v814 i256;
-        evm_return v921 32.i256;
+        v921.*i8 = evm_malloc 32.i256;
+        v922.i256 = ptr_to_int v921 i256;
+        mstore v922 v814 i256;
+        evm_return v922 32.i256;
 }
 
 func private %core__lib__abi__copy_dynamic_payload_from_with_input_len__g72ab_e4d7(v0.@layout_5, v1.i256, v2.i256) -> @layout_7 {

@@ -4,12 +4,18 @@ use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{
     BlockId, Function, I256, Immediate, InstId, Type, Value, ValueId,
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
+    global_variable::GvInitializer,
     inst::{cast, cmp, control_flow, data, downcast},
     module::FuncRef,
     types::CompoundType,
 };
 
-use crate::cfg_edit::{CfgEditor, CleanupMode};
+use crate::{
+    cfg_edit::{CfgEditor, CleanupMode},
+    optim::const_eval::{
+        ConstPathAnalysis, analyze_const_paths, collect_constref_value_tys, eval_const_path_subtree,
+    },
+};
 
 use super::{
     LocalObjectArgInfo, LocalObjectArgMap, RootInit,
@@ -80,9 +86,11 @@ impl AggregateScalarize {
         let module = func.ctx().clone();
         func.rebuild_users();
         self.assert_cfg_cleaned_up(func);
+        let constref_value_tys = collect_constref_value_tys(func);
+        let const_paths = analyze_const_paths(func, &constref_value_tys);
 
         let (mut promoted_roots, mut projection_of) =
-            self.find_promotable_roots(func, &module, local_object_args);
+            self.find_promotable_roots(func, &module, local_object_args, &const_paths);
         let scalarizable = loop {
             let scalarizable = self.compute_scalarizable_aggregates(func, &module, &projection_of);
             let changed = self.filter_promotable_roots(
@@ -150,6 +158,7 @@ impl AggregateScalarize {
                     &projection_of,
                     &promoted_by_root,
                     &scalarizable,
+                    &const_paths,
                     &mut scalarized_agg,
                     &mut ssa,
                     &mut modified_leaves,
@@ -364,6 +373,7 @@ impl AggregateScalarize {
         func: &Function,
         module: &sonatina_ir::module::ModuleCtx,
         local_object_args: Option<&FxHashMap<usize, LocalObjectArgInfo>>,
+        const_paths: &ConstPathAnalysis,
     ) -> (Vec<PromotableRoot>, ExactProjectionMap) {
         let mut promoted = Vec::new();
 
@@ -462,7 +472,13 @@ impl AggregateScalarize {
             &mut snapshot,
         );
         for (root_value, root_kind, shape_data) in candidate_roots {
-            if !self.root_use_chain_is_promotable(func, module, root_value, facts.complete()) {
+            if !self.root_use_chain_is_promotable(
+                func,
+                module,
+                root_value,
+                facts.complete(),
+                const_paths,
+            ) {
                 continue;
             }
             promoted.push(PromotableRoot {
@@ -494,6 +510,7 @@ impl AggregateScalarize {
         module: &sonatina_ir::module::ModuleCtx,
         root_value: ValueId,
         provenance: CompleteProvenance<'_>,
+        const_paths: &ConstPathAnalysis,
     ) -> bool {
         let mut dead_use_cache = FxHashMap::default();
 
@@ -677,6 +694,22 @@ impl AggregateScalarize {
                     return false;
                 }
 
+                if let Some(init) =
+                    downcast::<&data::ObjInitConst>(func.inst_set(), func.dfg.inst(user))
+                    && *init.object() == ptr
+                {
+                    if self.obj_init_const_has_full_rewrite_plan(
+                        func,
+                        module,
+                        projection.slice,
+                        init,
+                        const_paths,
+                    ) {
+                        continue;
+                    }
+                    return false;
+                }
+
                 if let Some(enum_assert_ref) =
                     downcast::<&data::EnumAssertVariantRef>(func.inst_set(), func.dfg.inst(user))
                     && *enum_assert_ref.object() == ptr
@@ -784,6 +817,8 @@ impl AggregateScalarize {
                     .is_some_and(|obj_store| *obj_store.object() == value)
                     || downcast::<&data::Mstore>(func.inst_set(), func.dfg.inst(user))
                         .is_some_and(|mstore| *mstore.addr() == value)
+                    || downcast::<&data::ObjInitConst>(func.inst_set(), func.dfg.inst(user))
+                        .is_some_and(|init| *init.object() == value)
                     || downcast::<&data::EnumSetTag>(func.inst_set(), func.dfg.inst(user))
                         .is_some_and(|enum_set_tag| *enum_set_tag.object() == value)
                     || downcast::<&data::EnumWriteVariant>(func.inst_set(), func.dfg.inst(user))
@@ -1417,6 +1452,7 @@ impl AggregateScalarize {
         projection_of: &ExactProjectionMap,
         promoted_by_root: &FxHashMap<ValueId, PromotableRoot>,
         scalarizable: &SecondaryMap<ValueId, bool>,
+        const_paths: &ConstPathAnalysis,
         scalarized_agg: &mut SecondaryMap<ValueId, Option<LeafValues>>,
         ssa: &mut SsaBuilder,
         modified_leaves: &mut FxHashMap<ValueId, FxHashSet<usize>>,
@@ -1625,6 +1661,48 @@ impl AggregateScalarize {
                 projection.root_value.value(),
                 tag_leaf_idx..tag_leaf_idx + tag_slice.leaf_count,
             );
+            InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+            return;
+        }
+
+        if let Some(init) =
+            downcast::<&data::ObjInitConst>(func.inst_set(), func.dfg.inst(inst)).cloned()
+        {
+            let Some(projection) = projection_of.get(*init.object()) else {
+                return;
+            };
+            let Some(promoted) = promoted_by_root.get(&projection.root_value.value()) else {
+                return;
+            };
+            let ty = projection.slice.ty;
+            let Some(payload_imms) =
+                self.const_init_leaf_imms(func, module, *init.value(), ty, const_paths)
+            else {
+                return;
+            };
+            let Some(view_leaf_tys) = self.projection_view_leaf_tys(module, ty) else {
+                return;
+            };
+            let leaf_range = projection.slice.first_leaf
+                ..projection.slice.first_leaf + projection.slice.leaf_count;
+            let underlying_leaves = &promoted.shape.leaves[leaf_range.clone()];
+            if payload_imms.len() != projection.slice.leaf_count
+                || view_leaf_tys.len() != underlying_leaves.len()
+            {
+                return;
+            }
+            for (i, ((imm, view_ty), underlying_leaf)) in payload_imms
+                .into_iter()
+                .zip(view_leaf_tys)
+                .zip(underlying_leaves.iter())
+                .enumerate()
+            {
+                let var = promoted.leaf_vars[projection.slice.first_leaf + i];
+                let value = func.dfg.make_imm_value(imm);
+                let stored = bitcast_before_inst(func, inst, value, view_ty, underlying_leaf.ty);
+                ssa.def_var(var, stored, block);
+            }
+            record_modified_leaves(modified_leaves, projection.root_value.value(), leaf_range);
             InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
             return;
         }
@@ -2353,6 +2431,53 @@ impl AggregateScalarize {
             && shape::is_leaf_reifiable_ty(module, view_ty)
     }
 
+    fn obj_init_const_has_full_rewrite_plan(
+        &mut self,
+        func: &Function,
+        module: &sonatina_ir::module::ModuleCtx,
+        slice: shape::AggregateSlice,
+        init: &data::ObjInitConst,
+        const_paths: &ConstPathAnalysis,
+    ) -> bool {
+        self.projection_slice_can_view_as(module, slice, slice.ty)
+            && self
+                .const_init_leaf_imms(func, module, *init.value(), slice.ty, const_paths)
+                .is_some()
+    }
+
+    fn const_init_leaf_imms(
+        &mut self,
+        func: &Function,
+        module: &sonatina_ir::module::ModuleCtx,
+        value: ValueId,
+        ty: Type,
+        const_paths: &ConstPathAnalysis,
+    ) -> Option<SmallVec<[Immediate; 4]>> {
+        let path = const_paths.path(value)?;
+        let (subtree_ty, init) =
+            eval_const_path_subtree(module, path, |value| func.dfg.value_imm(value))?;
+        if subtree_ty != ty {
+            return None;
+        }
+
+        if !shape::is_supported_scalar_shape_ty(module, ty) {
+            return match init {
+                GvInitializer::Immediate(imm) if imm.ty() == ty => Some(smallvec![imm]),
+                _ => None,
+            };
+        }
+
+        let mut imms = SmallVec::new();
+        for leaf in self.aggregate_shape(module, ty)?.leaves {
+            let imm = initializer_leaf_immediate(module, ty, &init, &leaf.path)?;
+            if imm.ty() != leaf.ty {
+                return None;
+            }
+            imms.push(imm);
+        }
+        Some(imms)
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn promoted_projection_replacement_leaves(
         &mut self,
@@ -2708,6 +2833,19 @@ impl AggregateScalarize {
                         func.dfg.value_ty(*obj_store.value()),
                     ));
                 }
+                if let Some(init) =
+                    downcast::<&data::ObjInitConst>(func.inst_set(), func.dfg.inst(inst))
+                    && let Some(projection) = projection_of.get(*init.object())
+                    && promoted_by_root.contains_key(&projection.root_value.value())
+                {
+                    return Some(format!(
+                        "obj.init.const at block {} inst {} on promoted root {} to object {}",
+                        block.as_u32(),
+                        inst.as_u32(),
+                        projection.root_value.value().as_u32(),
+                        init.object().as_u32(),
+                    ));
+                }
             }
         }
         None
@@ -2767,6 +2905,38 @@ impl RootKind {
 
     fn is_arg_like(self) -> bool {
         matches!(self, Self::Arg { .. } | Self::SyntheticOutArg { .. })
+    }
+}
+
+fn initializer_leaf_immediate(
+    module: &sonatina_ir::module::ModuleCtx,
+    ty: Type,
+    init: &GvInitializer,
+    path: &[u32],
+) -> Option<Immediate> {
+    if path.is_empty() {
+        return match init {
+            GvInitializer::Immediate(imm) if imm.ty() == ty => Some(*imm),
+            _ => None,
+        };
+    }
+
+    let (&idx, rest) = path.split_first()?;
+
+    match (ty.resolve_compound(module)?, init) {
+        (CompoundType::Array { elem, len }, GvInitializer::Array(items)) => {
+            let idx = usize::try_from(idx).ok()?;
+            (idx < len).then_some(())?;
+            initializer_leaf_immediate(module, elem, items.get(idx)?, rest)
+        }
+        (CompoundType::Struct(s), GvInitializer::Struct(fields)) => {
+            if s.packed {
+                return None;
+            }
+            let idx = usize::try_from(idx).ok()?;
+            initializer_leaf_immediate(module, *s.fields.get(idx)?, fields.get(idx)?, rest)
+        }
+        _ => None,
     }
 }
 
@@ -3272,6 +3442,148 @@ func private %f(v0.i256, v1.i256) -> i256 {
 
         module.func_store.view(func_ref, |func| {
             assert_no_promoted_aggregate_artifacts(func, &ctx);
+        });
+    }
+
+    #[test]
+    fn scalarize_promotes_obj_init_const_root() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @pair = { i256, i256 };
+
+global private const @pair $pair = {11, 22};
+
+func private %f() -> i256 {
+    block0:
+        v0.objref<@pair> = obj.alloc @pair;
+        v1.constref<@pair> = const.ref $pair;
+        obj.init.const v0 v1;
+        v2.@pair = obj.load v0;
+        v3.i256 = extract_value v2 1.i8;
+        return v3;
+}
+"#,
+        );
+        let ctx = module.ctx.clone();
+        let func_ref = lookup_func(&module, "f");
+        module.func_store.modify(func_ref, |func| {
+            AggregateScalarize::default().run(func);
+        });
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            assert_no_promoted_aggregate_artifacts(func, &ctx);
+            assert!(!dumped.contains("obj.init.const"), "{dumped}");
+            assert!(dumped.contains("return 22.i256;"), "{dumped}");
+        });
+    }
+
+    #[test]
+    fn scalarize_promotes_projected_scalar_obj_init_const() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @pair = { i256, i256 };
+
+global private const i256 $field = 22;
+
+func private %f() -> i256 {
+    block0:
+        v0.objref<@pair> = obj.alloc @pair;
+        v1.objref<i256> = obj.proj v0 1.i8;
+        v2.constref<i256> = const.ref $field;
+        obj.init.const v1 v2;
+        v3.@pair = obj.load v0;
+        v4.i256 = extract_value v3 1.i8;
+        return v4;
+}
+"#,
+        );
+        let ctx = module.ctx.clone();
+        let func_ref = lookup_func(&module, "f");
+        module.func_store.modify(func_ref, |func| {
+            AggregateScalarize::default().run(func);
+        });
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            assert_no_promoted_aggregate_artifacts(func, &ctx);
+            assert!(!dumped.contains("obj.init.const"), "{dumped}");
+            assert!(dumped.contains("return 22.i256;"), "{dumped}");
+        });
+    }
+
+    #[test]
+    fn scalarize_promotes_nested_obj_init_const_root() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @inner = { i8, i256 };
+type @outer = { @inner, [i256; 2] };
+
+global private const @outer $outer = {{7, 11}, [22, 33]};
+
+func private %f() -> i256 {
+    block0:
+        v0.objref<@outer> = obj.alloc @outer;
+        v1.constref<@outer> = const.ref $outer;
+        obj.init.const v0 v1;
+        v2.@outer = obj.load v0;
+        v3.[i256; 2] = extract_value v2 1.i8;
+        v4.i256 = extract_value v3 0.i8;
+        return v4;
+}
+"#,
+        );
+        let ctx = module.ctx.clone();
+        let func_ref = lookup_func(&module, "f");
+        module.func_store.modify(func_ref, |func| {
+            AggregateScalarize::default().run(func);
+        });
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            assert_no_promoted_aggregate_artifacts(func, &ctx);
+            assert!(!dumped.contains("obj.init.const"), "{dumped}");
+            assert!(dumped.contains("return 22.i256;"), "{dumped}");
+        });
+    }
+
+    #[test]
+    fn scalarize_skips_dynamic_obj_init_const_source() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @pair = { i256, i256 };
+
+global private const [@pair; 2] $pairs = [{11, 22}, {33, 44}];
+
+func private %f(v0.i256) -> i256 {
+    block0:
+        v1.constref<[@pair; 2]> = const.ref $pairs;
+        v2.constref<@pair> = const.index v1 v0;
+        v3.objref<@pair> = obj.alloc @pair;
+        obj.init.const v3 v2;
+        v4.@pair = obj.load v3;
+        v5.i256 = extract_value v4 1.i8;
+        return v5;
+}
+"#,
+        );
+        let func_ref = lookup_func(&module, "f");
+        module.func_store.modify(func_ref, |func| {
+            AggregateScalarize::default().run(func);
+        });
+
+        module.func_store.view(func_ref, |func| {
+            let dumped = FuncWriter::new(func_ref, func).dump_string();
+            assert!(dumped.contains("obj.init.const"), "{dumped}");
+            assert!(dumped.contains("obj.load"), "{dumped}");
         });
     }
 
