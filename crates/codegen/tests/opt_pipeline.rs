@@ -105,6 +105,110 @@ func public %entry(v0.i256) -> i256 {
 }
 
 #[test]
+fn checked_arith_elim_folds_constant_malloc_offset() {
+    let (mut module, func_ref) = parse_test_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+func public %entry() -> i256 {
+    block0:
+        v0.*i8 = evm_malloc 64.i256;
+        v1.i256 = ptr_to_int v0 i256;
+        (v2.i256, v3.i1) = uaddo v1 32.i256;
+        br v3 block1 block2;
+
+    block1:
+        return 99.i256;
+
+    block2:
+        return v2;
+}
+"#,
+    );
+    Pipeline::size().run(&mut module);
+    assert_func_not_contains(&module, func_ref, "uaddo");
+    assert_func_not_contains(&module, func_ref, "return 99.i256");
+    assert_fast_verified(&module);
+}
+
+#[test]
+fn checked_arith_elim_keeps_malloc_offset_past_alloc_size() {
+    let (mut module, func_ref) = parse_test_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+func public %entry() -> i256 {
+    block0:
+        v0.*i8 = evm_malloc 64.i256;
+        v1.i256 = ptr_to_int v0 i256;
+        (v2.i256, v3.i1) = uaddo v1 96.i256;
+        br v3 block1 block2;
+
+    block1:
+        return 99.i256;
+
+    block2:
+        return v2;
+}
+"#,
+    );
+    Pipeline::size().run(&mut module);
+    assert_func_contains(&module, func_ref, "uaddo");
+    assert_fast_verified(&module);
+}
+
+#[test]
+fn checked_arith_elim_keeps_dynamic_malloc_offset() {
+    let (mut module, func_ref) = parse_test_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+func public %entry(v0.i256) -> i256 {
+    block0:
+        v1.*i8 = evm_malloc v0;
+        v2.i256 = ptr_to_int v1 i256;
+        (v3.i256, v4.i1) = uaddo v2 32.i256;
+        br v4 block1 block2;
+
+    block1:
+        return 99.i256;
+
+    block2:
+        return v3;
+}
+"#,
+    );
+    Pipeline::size().run(&mut module);
+    assert_func_contains(&module, func_ref, "uaddo");
+    assert_fast_verified(&module);
+}
+
+#[test]
+fn checked_arith_elim_keeps_non_malloc_pointer_offset() {
+    let (mut module, func_ref) = parse_test_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+func public %entry(v0.*i8) -> i256 {
+    block0:
+        v1.i256 = ptr_to_int v0 i256;
+        (v2.i256, v3.i1) = uaddo v1 32.i256;
+        br v3 block1 block2;
+
+    block1:
+        return 99.i256;
+
+    block2:
+        return v2;
+}
+"#,
+    );
+    Pipeline::size().run(&mut module);
+    assert_func_contains(&module, func_ref, "uaddo");
+    assert_fast_verified(&module);
+}
+
+#[test]
 fn sccp_folds_checked_overflow_identities() {
     let (module, func_ref) = parse_test_module(
         r#"

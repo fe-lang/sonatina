@@ -48,23 +48,16 @@ func private %test_counter__StorPtr_Evm___207f35a85ac4062e() {
         v38.*i8 = evm_malloc 4.i256;
         v39.i256 = ptr_to_int v38 i256;
         mstore v39 -21432072031172259149098304932151112453092825142662437103785846030156425068544.i256 i256;
-        (v41.i256, v42.i1) = uaddo v39 4.i256;
-        br v42 block23 block24;
+        v41.i256 = evm_call 100000.i256 v19 0.i256 v39 4.i256 0.i256 0.i256;
+        v42.i256 = evm_return_data_size;
+        v43.*i8 = evm_malloc v42;
+        v44.i256 = ptr_to_int v43 i256;
+        evm_return_data_copy v44 0.i256 v42;
+        v45.i1 = is_zero v41;
+        br v45 block23 block21;
 
     block23:
-        evm_revert 0.i256 0.i256;
-
-    block24:
-        v43.i256 = evm_call 100000.i256 v19 0.i256 v39 4.i256 0.i256 0.i256;
-        v44.i256 = evm_return_data_size;
-        v45.*i8 = evm_malloc v44;
-        v46.i256 = ptr_to_int v45 i256;
-        evm_return_data_copy v46 0.i256 v44;
-        v47.i1 = is_zero v43;
-        br v47 block25 block21;
-
-    block25:
-        evm_revert v46 v44;
+        evm_revert v44 v42;
 
     block21:
         v7.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Get_h3927684624c88c53__624197e0d5a47bbd v19 100000.i256 0.i256;
@@ -151,13 +144,6 @@ func private %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_s
         v25.*i8 = evm_malloc 4.i256;
         v26.i256 = ptr_to_int v25 i256;
         mstore v26 49437969891755755400450161744656089009884903607872082989584577758955590123520.i256 i256;
-        (v27.i256, v28.i1) = uaddo v26 4.i256;
-        br v28 block5 block6;
-
-    block5:
-        evm_revert 0.i256 0.i256;
-
-    block6:
         v13.i256 = evm_call v1 v0 v2 v26 4.i256 0.i256 0.i256;
         v14.i256 = evm_return_data_size;
         v15.*i8 = evm_malloc v14;

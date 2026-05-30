@@ -3,8 +3,12 @@ use std::collections::VecDeque;
 use cranelift_entity::SecondaryMap;
 use rustc_hash::FxHashMap;
 use sonatina_ir::{
-    BlockId, ControlFlowGraph, Function, I256, Immediate, InstId, Type, U256, Value, ValueId,
-    inst::{BinaryInstKind, CastInstKind, InstClassKind, UnaryInstKind, control_flow::BranchKind},
+    BlockId, ControlFlowGraph, Function, I256, Immediate, InstDowncast, InstId, Type, U256, Value,
+    ValueId,
+    inst::{
+        BinaryInstKind, CastInstKind, InstClassKind, UnaryInstKind, control_flow::BranchKind,
+        evm::EvmMalloc,
+    },
 };
 
 use crate::loop_analysis::LoopTree;
@@ -1086,6 +1090,15 @@ fn transfer_cast_inst(func: &Function, env: &mut RangeEnv, inst: InstId, kind: C
         return;
     };
     let arg_ty = func.dfg.value_ty(*arg);
+    if kind == CastInstKind::PtrToInt
+        && ty == Type::I256
+        && arg_ty.is_pointer(func.ctx())
+        && let Some(fact) = malloc_ptr_to_int_fact(func, *arg)
+    {
+        set_env_fact(func, env, result, fact);
+        return;
+    }
+
     if !ty.is_integral() || !arg_ty.is_integral() {
         clear_inst_results(func, env, inst);
         return;
@@ -1101,6 +1114,34 @@ fn transfer_cast_inst(func: &Function, env: &mut RangeEnv, inst: InstId, kind: C
         }
     };
     set_env_fact(func, env, result, fact);
+}
+
+fn malloc_ptr_to_int_fact(func: &Function, value: ValueId) -> Option<RangeFact> {
+    let Value::Inst {
+        inst,
+        result_idx: 0,
+        ..
+    } = func.dfg.get_value(value)?
+    else {
+        return None;
+    };
+    let malloc = <&EvmMalloc as InstDowncast>::downcast(func.inst_set(), func.dfg.inst(*inst))?;
+    let size = func.dfg.value_imm(*malloc.size())?;
+    if size.is_negative() {
+        return None;
+    }
+    let size = size.as_i256().to_u256();
+    if size > U256::from(u32::MAX) {
+        return None;
+    }
+    let full = RangeFact::full_for(Type::I256);
+    Some(RangeFact {
+        unsigned: UnsignedInterval {
+            lo: U256::zero(),
+            hi: unsigned_max(Type::I256) - size,
+        },
+        signed: full.signed,
+    })
 }
 
 fn transfer_snego_inst(func: &Function, env: &mut RangeEnv, inst: InstId) {

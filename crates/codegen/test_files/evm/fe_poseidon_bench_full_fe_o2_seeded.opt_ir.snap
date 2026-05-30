@@ -74,15 +74,6 @@ func private %contract_recv_abi_PoseidonBench_1430137905() {
         v46.i256 = call %hash v80 v81;
         v90.*i8 = evm_malloc 32.i256;
         v91.i256 = ptr_to_int v90 i256;
-        (v93.i256, v94.i1) = uaddo v91 32.i256;
-        br v94 block8 block9;
-
-    block8:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
-
-    block9:
         mstore v91 v46 i256;
         evm_return v91 32.i256;
 }
