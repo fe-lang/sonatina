@@ -10,7 +10,7 @@ use crate::{
 use cranelift_entity::EntityRef;
 use rustc_hash::FxHashMap;
 use sonatina_ir::{
-    BlockId, Function, GlobalVariableRef, InstId, Linkage, Module,
+    BlockId, GlobalVariableRef, Linkage, Module,
     inst::data::SymbolRef,
     module::FuncRef,
     object::{EmbedSymbol, SectionName},
@@ -588,10 +588,7 @@ fn build_section_observability<Op>(
 
             let frontend_provenance = ir_inst.and_then(|iid| {
                 module.func_store.view(func, |function| {
-                    function
-                        .inst_provenance(iid)
-                        .map(|s| s.to_string())
-                        .or_else(|| debug_frontend_external_key(function, iid))
+                    function.inst_provenance(iid).map(|s| s.to_string())
                 })
             });
             pc_map.push(PcMapEntry {
@@ -750,12 +747,6 @@ fn build_section_observability<Op>(
         unmapped_reason_coverage,
         pc_map,
     })
-}
-
-fn debug_frontend_external_key(function: &Function, inst: InstId) -> Option<String> {
-    let loc = function.inst_debug_loc(inst)?;
-    let origin = function.debug.debug_loc(loc)?.primary_origin?;
-    function.debug.frontend_origin(origin)?.external_key.clone()
 }
 
 fn classify_unmapped_reason<Op>(
