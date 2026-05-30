@@ -13,7 +13,7 @@ use sonatina_ir::{BlockId, Function, I256, ValueId, cfg::ControlFlowGraph};
 
 use super::{
     alloc::{SpillStorage, StackifyAlloc},
-    iteration::{IterationPlanner, imm_push_data_len, operand_order_for_stackify},
+    iteration::{IterationPlanner, imm_materialization_code_len, operand_order_for_stackify},
     planner::NormalizeSearchScratch,
     slots::{FreeSlotPools, SpillSlotInterference, SpillSlotPools},
     spill::SpillSet,
@@ -129,7 +129,7 @@ pub struct StackifyBuilder<'a> {
     stack_cached_immediates: FxHashSet<I256>,
     cache_hot_immediates: bool,
     hot_immediate_min_block_uses: u32,
-    hot_immediate_min_push_data_bytes: usize,
+    hot_immediate_min_materialization_bytes: usize,
 }
 
 pub(super) struct StackifyContext<'a> {
@@ -192,7 +192,8 @@ impl<'a> StackifyBuilder<'a> {
             stack_cached_immediates: FxHashSet::default(),
             cache_hot_immediates: false,
             hot_immediate_min_block_uses: HOT_IMMEDIATE_DEFAULT_MIN_BLOCK_USES,
-            hot_immediate_min_push_data_bytes: HOT_IMMEDIATE_DEFAULT_MIN_PUSH_DATA_BYTES,
+            hot_immediate_min_materialization_bytes:
+                HOT_IMMEDIATE_DEFAULT_MIN_MATERIALIZATION_BYTES,
         }
     }
 
@@ -224,8 +225,8 @@ impl<'a> StackifyBuilder<'a> {
         self
     }
 
-    pub(crate) fn with_hot_immediate_min_push_data_bytes(mut self, bytes: usize) -> Self {
-        self.hot_immediate_min_push_data_bytes = bytes;
+    pub(crate) fn with_hot_immediate_min_materialization_bytes(mut self, bytes: usize) -> Self {
+        self.hot_immediate_min_materialization_bytes = bytes;
         self
     }
 
@@ -293,7 +294,7 @@ impl<'a> StackifyBuilder<'a> {
                 self.func,
                 &value_aliases,
                 self.hot_immediate_min_block_uses,
-                self.hot_immediate_min_push_data_bytes,
+                self.hot_immediate_min_materialization_bytes,
             ));
         }
 
@@ -503,14 +504,14 @@ impl<'a> StackifyBuilder<'a> {
 
 const HOT_IMMEDIATE_DEFAULT_MIN_BLOCK_USES: u32 = 4;
 pub(crate) const HOT_IMMEDIATE_SIZE_MIN_BLOCK_USES: u32 = 3;
-const HOT_IMMEDIATE_DEFAULT_MIN_PUSH_DATA_BYTES: usize = 16;
-pub(crate) const HOT_IMMEDIATE_SIZE_MIN_PUSH_DATA_BYTES: usize = 2;
+const HOT_IMMEDIATE_DEFAULT_MIN_MATERIALIZATION_BYTES: usize = 17;
+pub(crate) const HOT_IMMEDIATE_SIZE_MIN_MATERIALIZATION_BYTES: usize = 3;
 
 fn compute_hot_stack_cached_immediates(
     func: &Function,
     value_aliases: &SecondaryMap<ValueId, Option<ValueId>>,
     min_block_uses: u32,
-    min_push_data_bytes: usize,
+    min_materialization_bytes: usize,
 ) -> FxHashSet<I256> {
     let mut hot = FxHashSet::default();
 
@@ -528,15 +529,15 @@ fn compute_hot_stack_cached_immediates(
 
                 let entry = counts.entry(imm.as_i256()).or_insert((0, 0));
                 entry.0 += 1;
-                entry.1 = entry.1.max(imm_push_data_len(imm));
+                entry.1 = entry.1.max(imm_materialization_code_len(imm));
             }
         }
 
         hot.extend(
             counts
                 .into_iter()
-                .filter(|(_, (uses, push_data_bytes))| {
-                    *uses >= min_block_uses && *push_data_bytes >= min_push_data_bytes
+                .filter(|(_, (uses, materialization_bytes))| {
+                    *uses >= min_block_uses && *materialization_bytes >= min_materialization_bytes
                 })
                 .map(|(imm, _)| imm),
         );
@@ -693,7 +694,7 @@ block0:
             let mut large_pushes = 0;
             let mut dup_count = 0;
             alloc.for_each_action(|action| match action {
-                Action::Push(imm) if super::imm_push_data_len(*imm) >= 16 => {
+                Action::Push(imm) if super::imm_materialization_code_len(*imm) >= 17 => {
                     large_pushes += 1;
                 }
                 Action::StackDup(_) => {
@@ -737,15 +738,15 @@ block0:
 
             let alloc = StackifyBuilder::new(func, &cfg, &dom, &liveness, 16)
                 .with_hot_immediate_caching()
-                .with_hot_immediate_min_push_data_bytes(
-                    super::HOT_IMMEDIATE_SIZE_MIN_PUSH_DATA_BYTES,
+                .with_hot_immediate_min_materialization_bytes(
+                    super::HOT_IMMEDIATE_SIZE_MIN_MATERIALIZATION_BYTES,
                 )
                 .compute();
 
             let mut push2_count = 0;
             let mut dup_count = 0;
             alloc.for_each_action(|action| match action {
-                Action::Push(imm) if super::imm_push_data_len(*imm) == 2 => {
+                Action::Push(imm) if super::imm_materialization_code_len(*imm) == 3 => {
                     push2_count += 1;
                 }
                 Action::StackDup(_) => {
@@ -792,15 +793,15 @@ block0:
             let alloc = StackifyBuilder::new(func, &cfg, &dom, &liveness, 16)
                 .with_hot_immediate_caching()
                 .with_hot_immediate_min_block_uses(super::HOT_IMMEDIATE_SIZE_MIN_BLOCK_USES)
-                .with_hot_immediate_min_push_data_bytes(
-                    super::HOT_IMMEDIATE_SIZE_MIN_PUSH_DATA_BYTES,
+                .with_hot_immediate_min_materialization_bytes(
+                    super::HOT_IMMEDIATE_SIZE_MIN_MATERIALIZATION_BYTES,
                 )
                 .compute();
 
             let mut large_pushes = 0;
             let mut dup_count = 0;
             alloc.for_each_action(|action| match action {
-                Action::Push(imm) if super::imm_push_data_len(*imm) >= 16 => {
+                Action::Push(imm) if super::imm_materialization_code_len(*imm) >= 17 => {
                     large_pushes += 1;
                 }
                 Action::StackDup(_) => {

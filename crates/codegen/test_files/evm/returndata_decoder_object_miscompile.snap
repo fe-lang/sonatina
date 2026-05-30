@@ -6,16 +6,16 @@ input_file: test_files/evm/returndata_decoder_object_miscompile.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 93 bytes
-  total: 93 bytes
+  section runtime: 68 bytes
+  total: 68 bytes
 
 functions:
   mem: global_dyn_base=0x0 arena_base=0x0 scratch_peak_words=0 static_chain_peak_words=0
-  entry: ir_blocks=7 ir_insts=17 vcode_ops=50 fixups=3 imm_bytes=7
+  entry: ir_blocks=7 ir_insts=17 vcode_ops=52 fixups=3 imm_bytes=8
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=21250 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=250
+  case ok: calldata_len=0 success reason=Return gas_used=21256 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=256
 
 
 --------------- DEBUG ---------------
@@ -28,7 +28,9 @@ entry:
     JUMPI
   block1:
     ADDRESS  // v2.i256 = evm_address;
-    PUSH32 0xcfae321700000000000000000000000000000000000000000000000000000000 (93936536753403694139279681939632466665208136910392087765254240489517648707584)  // evm_mstore v3 v4;
+    PUSH4 0xcfae3217 (3484299799)  // evm_mstore v3 v4;
+    PUSH1 0xe0 (224)
+    SHL
     PUSH0
     MSTORE
     PUSH0  // v9.i256 = evm_call 100000.i256 v2 v3 v3 v5 v3 v3;

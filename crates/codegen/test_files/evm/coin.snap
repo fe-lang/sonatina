@@ -11,14 +11,14 @@ object: Coin
   total: 1432 bytes
 
 object: Contract
-  section runtime: 2085 bytes
-  total: 2085 bytes
+  section runtime: 1985 bytes
+  total: 1985 bytes
 
 functions:
   mem: global_dyn_base=0xa0 arena_base=0xa0 scratch_peak_words=0 static_chain_peak_words=0
-  test_coin__StorPtr_Evm___207f35a85ac4062e: ir_blocks=39 ir_insts=120 vcode_ops=339 fixups=38 imm_bytes=66
+  test_coin__StorPtr_Evm___207f35a85ac4062e: ir_blocks=39 ir_insts=120 vcode_ops=341 fixups=38 imm_bytes=67
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__Credit_h1b40c7da4bcceeac__9489dcd0a297a0c: ir_blocks=3 ir_insts=35 vcode_ops=102 fixups=9 imm_bytes=14
+  evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__Credit_h1b40c7da4bcceeac__9489dcd0a297a0c: ir_blocks=3 ir_insts=35 vcode_ops=104 fixups=9 imm_bytes=15
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   decode_returndata__u256__3271ca15373d4483: ir_blocks=8 ir_insts=32 vcode_ops=84 fixups=5 imm_bytes=12
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
@@ -30,9 +30,9 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   solencoder_h1b9228b90dad6928_new: ir_blocks=4 ir_insts=14 vcode_ops=33 fixups=1 imm_bytes=7
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__Transfer_hbe7d801e15d910f6__66cc42efa72ff9b1: ir_blocks=3 ir_insts=35 vcode_ops=102 fixups=9 imm_bytes=14
+  evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__Transfer_hbe7d801e15d910f6__66cc42efa72ff9b1: ir_blocks=3 ir_insts=35 vcode_ops=104 fixups=9 imm_bytes=15
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__BalanceOf_h891837b06b5610d4__9cd8cdf578aad9be: ir_blocks=3 ir_insts=28 vcode_ops=88 fixups=9 imm_bytes=12
+  evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__BalanceOf_h891837b06b5610d4__9cd8cdf578aad9be: ir_blocks=3 ir_insts=28 vcode_ops=90 fixups=9 imm_bytes=13
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   __Contract_runtime_entry: ir_blocks=1 ir_insts=2 vcode_ops=7 fixups=2 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
@@ -60,7 +60,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=264924 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=243924
+  case ok: calldata_len=0 success reason=Return gas_used=264966 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=243966
 
 
 --------------- DEBUG ---------------
@@ -2850,7 +2850,9 @@ test_coin__StorPtr_Evm___207f35a85ac4062e:
     PUSH1 FuncRef(45)
     JUMP
     JUMPDEST
-    PUSH32 0x3940e9ee00000000000000000000000000000000000000000000000000000000 (25896525104758109717587551599753715025570125426639959714953863856948019986432)  // evm_mstore v76 25896525104758109717587551599753715025570125426639959714953863856948019986432.i256;
+    PUSH4 0x1ca074f7 (480277751)  // evm_mstore v76 25896525104758109717587551599753715025570125426639959714953863856948019986432.i256;
+    PUSH1 0xe1 (225)
+    SHL
     DUP2
     MSTORE
     PUSH1 0x4 (4)  // v78.i256 = add v76 4.i256;
@@ -2934,7 +2936,9 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__Credit_h1b40c7da4bcceeac
     PUSH1 FuncRef(45)
     JUMP
     JUMPDEST
-    PUSH32 0xab7ccc1c00000000000000000000000000000000000000000000000000000000 (77565994854904324023937311223486449794568501960910038851531794862588750200832)  // evm_mstore v10 v11;
+    PUSH4 0x2adf3307 (719270663)  // evm_mstore v10 v11;
+    PUSH1 0xe2 (226)
+    SHL
     DUP2
     MSTORE
     PUSH1 0x4 (4)  // v14.i256 = add v10 v13;
@@ -3339,7 +3343,9 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__Transfer_hbe7d801e15d910
     PUSH1 FuncRef(45)
     JUMP
     JUMPDEST
-    PUSH32 0xcf79e0a00000000000000000000000000000000000000000000000000000000 (5865256153521717170471777043062137194249213065319226468487051471953667817472)  // evm_mstore v10 v11;
+    PUSH4 0x67bcf05 (108777221)  // evm_mstore v10 v11;
+    PUSH1 0xe1 (225)
+    SHL
     DUP2
     MSTORE
     PUSH1 0x4 (4)  // v14.i256 = add v10 v13;
@@ -3447,7 +3453,9 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__BalanceOf_h891837b06b561
     PUSH1 FuncRef(45)
     JUMP
     JUMPDEST
-    PUSH32 0x6c65aae500000000000000000000000000000000000000000000000000000000 (49029418671242127934947299235358287917519191605832892196421926281513699115008)  // evm_mstore v10 v11;
+    PUSH4 0x6c65aae5 (1818602213)  // evm_mstore v10 v11;
+    PUSH1 0xe0 (224)
+    SHL
     DUP2
     MSTORE
     PUSH1 0x4 (4)  // v14.i256 = add v10 v13;

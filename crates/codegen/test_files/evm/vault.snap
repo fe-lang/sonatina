@@ -6,8 +6,8 @@ input_file: test_files/evm/vault.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 4289 bytes
-  total: 4289 bytes
+  section runtime: 3988 bytes
+  total: 3988 bytes
 
 object: Vault
   section init: 936 bytes
@@ -15,15 +15,15 @@ object: Vault
   total: 1725 bytes
 
 object: VaultUser
-  section init: 1121 bytes
-  section runtime: 1110 bytes
-  total: 2231 bytes
+  section init: 1045 bytes
+  section runtime: 1034 bytes
+  total: 2079 bytes
 
 functions:
   mem: global_dyn_base=0xe0 arena_base=0xa0 scratch_peak_words=0 static_chain_peak_words=2
-  test_vault_multiuser__StorPtr_Evm___207f35a85ac4062e: ir_blocks=58 ir_insts=178 vcode_ops=525 fixups=63 imm_bytes=92
+  test_vault_multiuser__StorPtr_Evm___207f35a85ac4062e: ir_blocks=58 ir_insts=178 vcode_ops=527 fixups=63 imm_bytes=93
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__Deposit_h19f638fdcaab3cd__dbfe67dc81c33b5b: ir_blocks=3 ir_insts=28 vcode_ops=88 fixups=9 imm_bytes=12
+  evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__Deposit_h19f638fdcaab3cd__dbfe67dc81c33b5b: ir_blocks=3 ir_insts=28 vcode_ops=90 fixups=9 imm_bytes=13
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   decode_returndata__u256__3271ca15373d4483: ir_blocks=5 ir_insts=21 vcode_ops=59 fixups=4 imm_bytes=7
     mem: scratch_words=0 stable_words=2 stable_mode=StaticAbs(base=0xa0) entry_abs_words=0 abs_words_end=2
@@ -35,19 +35,19 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=2 abs_words_end=0
   solencoder_h1b9228b90dad6928_new: ir_blocks=4 ir_insts=14 vcode_ops=33 fixups=1 imm_bytes=7
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=2 abs_words_end=0
-  evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__ProxyDeposit_he111d05e2ced69cd__69de45b2cdda8e37: ir_blocks=3 ir_insts=35 vcode_ops=102 fixups=9 imm_bytes=14
+  evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__ProxyDeposit_he111d05e2ced69cd__69de45b2cdda8e37: ir_blocks=3 ir_insts=35 vcode_ops=104 fixups=9 imm_bytes=15
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__GetTotalAssets_h830b2520704d49fc__947e7051a757f184: ir_blocks=3 ir_insts=24 vcode_ops=74 fixups=9 imm_bytes=11
+  evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__GetTotalAssets_h830b2520704d49fc__947e7051a757f184: ir_blocks=3 ir_insts=24 vcode_ops=76 fixups=9 imm_bytes=12
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__GetTotalShares_hbe2278c3233da528__5145d089cb2da672: ir_blocks=3 ir_insts=24 vcode_ops=74 fixups=9 imm_bytes=11
+  evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__GetTotalShares_hbe2278c3233da528__5145d089cb2da672: ir_blocks=3 ir_insts=24 vcode_ops=76 fixups=9 imm_bytes=12
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__AddYield_h1b194739dad02c6e__f712b0a646b2bb64: ir_blocks=3 ir_insts=30 vcode_ops=93 fixups=9 imm_bytes=15
+  evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__AddYield_h1b194739dad02c6e__f712b0a646b2bb64: ir_blocks=3 ir_insts=30 vcode_ops=95 fixups=9 imm_bytes=16
     mem: scratch_words=0 stable_words=2 stable_mode=StaticAbs(base=0xa0) entry_abs_words=0 abs_words_end=2
-  evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__Withdraw_h97c67fe0f317b1b0__d9e92202bb8b3b1d: ir_blocks=3 ir_insts=28 vcode_ops=88 fixups=9 imm_bytes=12
+  evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__Withdraw_h97c67fe0f317b1b0__d9e92202bb8b3b1d: ir_blocks=3 ir_insts=28 vcode_ops=90 fixups=9 imm_bytes=13
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__GetMyShares_h4b85c900112aeed6__1df2a8280dde4872: ir_blocks=3 ir_insts=24 vcode_ops=74 fixups=9 imm_bytes=11
+  evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__GetMyShares_h4b85c900112aeed6__1df2a8280dde4872: ir_blocks=3 ir_insts=24 vcode_ops=76 fixups=9 imm_bytes=12
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__ProxyWithdraw_h1ed1c85115544221__ae5519407fcbbd72: ir_blocks=3 ir_insts=35 vcode_ops=102 fixups=9 imm_bytes=14
+  evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__ProxyWithdraw_h1ed1c85115544221__ae5519407fcbbd72: ir_blocks=3 ir_insts=35 vcode_ops=104 fixups=9 imm_bytes=15
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   __Contract_runtime_entry: ir_blocks=1 ir_insts=2 vcode_ops=7 fixups=2 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
@@ -85,7 +85,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=520270 gas_refunded=79600 logs=0 output=call len=0 tx_gas=21000 runtime_gas=499270
+  case ok: calldata_len=0 success reason=Return gas_used=505123 gas_refunded=79600 logs=0 output=call len=0 tx_gas=21000 runtime_gas=484123
 
 
 --------------- DEBUG ---------------
@@ -401,7 +401,9 @@ test_vault_multiuser__StorPtr_Evm___207f35a85ac4062e:
     PUSH1 FuncRef(77)
     JUMP
     JUMPDEST
-    PUSH29 0x1200000000000000000000000000000000000000000000000000000000 (485279040008711516304006271566353352125468599605730304659864984485888)  // evm_mstore v84 485279040008711516304006271566353352125468599605730304659864984485888.i256;
+    PUSH1 0x9 (9)  // evm_mstore v84 485279040008711516304006271566353352125468599605730304659864984485888.i256;
+    PUSH1 0xe1 (225)
+    SHL
     DUP2
     MSTORE
     PUSH1 0x4 (4)  // v87.i256 = add v84 4.i256;
@@ -622,7 +624,9 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__Deposit_h19f638fdcaab3cd
     PUSH1 FuncRef(77)
     JUMP
     JUMPDEST
-    PUSH29 0x100000000000000000000000000000000000000000000000000000000 (26959946667150639794667015087019630673637144422540572481103610249216)  // evm_mstore v10 v11;
+    PUSH1 0x1 (1)  // evm_mstore v10 v11;
+    PUSH1 0xe0 (224)
+    SHL
     DUP2
     MSTORE
     PUSH1 0x4 (4)  // v13.i256 = add v10 v12;
@@ -986,7 +990,9 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__ProxyDeposit_he111d05e2c
     PUSH1 FuncRef(77)
     JUMP
     JUMPDEST
-    PUSH29 0x1000000000000000000000000000000000000000000000000000000000 (431359146674410236714672241392314090778194310760649159697657763987456)  // evm_mstore v10 v11;
+    PUSH1 0x1 (1)  // evm_mstore v10 v11;
+    PUSH1 0xe4 (228)
+    SHL
     DUP2
     MSTORE
     PUSH1 0x4 (4)  // v14.i256 = add v10 v13;
@@ -1094,7 +1100,9 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__GetTotalAssets_h830b2520
     PUSH1 FuncRef(77)
     JUMP
     JUMPDEST
-    PUSH29 0x400000000000000000000000000000000000000000000000000000000 (107839786668602559178668060348078522694548577690162289924414440996864)  // evm_mstore v9 v10;
+    PUSH1 0x1 (1)  // evm_mstore v9 v10;
+    PUSH1 0xe2 (226)
+    SHL
     DUP2
     MSTORE
     PUSH1 0x4 (4)  // v12.i256 = add v9 v8;
@@ -1174,7 +1182,9 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__GetTotalShares_hbe2278c3
     PUSH1 FuncRef(77)
     JUMP
     JUMPDEST
-    PUSH29 0x500000000000000000000000000000000000000000000000000000000 (134799733335753198973335075435098153368185722112702862405518051246080)  // evm_mstore v9 v10;
+    PUSH1 0x5 (5)  // evm_mstore v9 v10;
+    PUSH1 0xe0 (224)
+    SHL
     DUP2
     MSTORE
     PUSH1 0x4 (4)  // v12.i256 = add v9 v8;
@@ -1254,7 +1264,9 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__AddYield_h1b194739dad02c
     PUSH1 FuncRef(77)
     JUMP
     JUMPDEST
-    PUSH29 0x300000000000000000000000000000000000000000000000000000000 (80879840001451919384001045261058892020911433267621717443310830747648)  // evm_mstore v10 v11;
+    PUSH1 0x3 (3)  // evm_mstore v10 v11;
+    PUSH1 0xe0 (224)
+    SHL
     DUP2
     MSTORE
     PUSH1 0x4 (4)  // v14.i256 = add v10 v13;
@@ -1353,7 +1365,9 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__Withdraw_h97c67fe0f317b1
     PUSH1 FuncRef(77)
     JUMP
     JUMPDEST
-    PUSH29 0x200000000000000000000000000000000000000000000000000000000 (53919893334301279589334030174039261347274288845081144962207220498432)  // evm_mstore v10 v11;
+    PUSH1 0x1 (1)  // evm_mstore v10 v11;
+    PUSH1 0xe1 (225)
+    SHL
     DUP2
     MSTORE
     PUSH1 0x4 (4)  // v14.i256 = add v10 v13;
@@ -1447,7 +1461,9 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__GetMyShares_h4b85c900112
     PUSH1 FuncRef(77)
     JUMP
     JUMPDEST
-    PUSH29 0x600000000000000000000000000000000000000000000000000000000 (161759680002903838768002090522117784041822866535243434886621661495296)  // evm_mstore v9 v10;
+    PUSH1 0x3 (3)  // evm_mstore v9 v10;
+    PUSH1 0xe1 (225)
+    SHL
     DUP2
     MSTORE
     PUSH1 0x4 (4)  // v12.i256 = add v9 v8;
@@ -1527,7 +1543,9 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__ProxyWithdraw_h1ed1c8511
     PUSH1 FuncRef(77)
     JUMP
     JUMPDEST
-    PUSH29 0x1100000000000000000000000000000000000000000000000000000000 (458319093341560876509339256479333721451831455183189732178761374236672)  // evm_mstore v10 v11;
+    PUSH1 0x11 (17)  // evm_mstore v10 v11;
+    PUSH1 0xe0 (224)
+    SHL
     DUP2
     MSTORE
     PUSH1 0x4 (4)  // v14.i256 = add v10 v13;

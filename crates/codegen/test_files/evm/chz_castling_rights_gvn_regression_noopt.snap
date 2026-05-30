@@ -6,24 +6,24 @@ input_file: test_files/evm/chz_castling_rights_gvn_regression_noopt.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 4269 bytes
-  total: 4269 bytes
+  section runtime: 4144 bytes
+  total: 4144 bytes
 
 functions:
   mem: global_dyn_base=0x1020 arena_base=0xa0 scratch_peak_words=7 static_chain_peak_words=117
-  abs_diff: ir_blocks=9 ir_insts=33 vcode_ops=67 fixups=4 imm_bytes=20
+  abs_diff: ir_blocks=9 ir_insts=33 vcode_ops=69 fixups=4 imm_bytes=21
     mem: scratch_words=2 stable_words=0 stable_mode=None entry_abs_words=119 abs_words_end=2
   apply_rook: ir_blocks=18 ir_insts=121 vcode_ops=326 fixups=31 imm_bytes=78
     mem: scratch_words=7 stable_words=9 stable_mode=StaticAbs(base=0xe60) entry_abs_words=110 abs_words_end=119
   clear_piece: ir_blocks=1 ir_insts=7 vcode_ops=22 fixups=2 imm_bytes=5
     mem: scratch_words=2 stable_words=0 stable_mode=None entry_abs_words=119 abs_words_end=2
-  set_piece: ir_blocks=3 ir_insts=23 vcode_ops=54 fixups=1 imm_bytes=16
+  set_piece: ir_blocks=3 ir_insts=23 vcode_ops=56 fixups=1 imm_bytes=17
     mem: scratch_words=3 stable_words=0 stable_mode=None entry_abs_words=119 abs_words_end=3
-  path_clear_file: ir_blocks=33 ir_insts=109 vcode_ops=240 fixups=22 imm_bytes=63
+  path_clear_file: ir_blocks=33 ir_insts=109 vcode_ops=242 fixups=22 imm_bytes=64
     mem: scratch_words=1 stable_words=5 stable_mode=StaticAbs(base=0xf80) entry_abs_words=119 abs_words_end=124
   is_empty: ir_blocks=1 ir_insts=5 vcode_ops=10 fixups=0 imm_bytes=3
     mem: scratch_words=1 stable_words=0 stable_mode=None entry_abs_words=124 abs_words_end=1
-  piece_at: ir_blocks=3 ir_insts=17 vcode_ops=45 fixups=3 imm_bytes=12
+  piece_at: ir_blocks=3 ir_insts=17 vcode_ops=47 fixups=3 imm_bytes=13
     mem: scratch_words=2 stable_words=0 stable_mode=None entry_abs_words=124 abs_words_end=2
   downcast_truncate__g0587: ir_blocks=1 ir_insts=6 vcode_ops=19 fixups=4 imm_bytes=3
     mem: scratch_words=1 stable_words=0 stable_mode=None entry_abs_words=124 abs_words_end=1
@@ -65,7 +65,7 @@ functions:
     mem: scratch_words=0 stable_words=6 stable_mode=StaticAbs(base=0x180) entry_abs_words=7 abs_words_end=13
   meta_castling_rights: ir_blocks=1 ir_insts=6 vcode_ops=16 fixups=2 imm_bytes=4
     mem: scratch_words=1 stable_words=0 stable_mode=None entry_abs_words=110 abs_words_end=1
-  validate_rook_capture: ir_blocks=74 ir_insts=292 vcode_ops=1152 fixups=111 imm_bytes=305
+  validate_rook_capture: ir_blocks=74 ir_insts=292 vcode_ops=1154 fixups=111 imm_bytes=306
     mem: scratch_words=7 stable_words=97 stable_mode=StaticAbs(base=0x240) entry_abs_words=13 abs_words_end=110
   meta_custom: ir_blocks=1 ir_insts=45 vcode_ops=112 fixups=14 imm_bytes=35
     mem: scratch_words=1 stable_words=13 stable_mode=StaticAbs(base=0xe60) entry_abs_words=110 abs_words_end=123
@@ -163,7 +163,9 @@ abs_diff:
     JUMP
   block8:
     JUMPDEST
-    PUSH32 0x4e487b7100000000000000000000000000000000000000000000000000000000 (35408467139433450592217433187231851964531694900788300625387963629091585785856)  // evm_mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256;
+    PUSH4 0x4e487b71 (1313373041)  // evm_mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256;
+    PUSH1 0xe0 (224)
+    SHL
     PUSH0
     MSTORE
     PUSH1 0x11 (17)  // evm_mstore 4.i256 17.i256;
@@ -572,7 +574,9 @@ set_piece:
     PUSH1 block2  // br v23 block1 block2;
     JUMPI
   block1:
-    PUSH32 0x4e487b7100000000000000000000000000000000000000000000000000000000 (35408467139433450592217433187231851964531694900788300625387963629091585785856)  // evm_mstore v10 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256;
+    PUSH4 0x4e487b71 (1313373041)  // evm_mstore v10 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256;
+    PUSH1 0xe0 (224)
+    SHL
     PUSH0
     MSTORE
     PUSH1 0x11 (17)  // evm_mstore v17 17.i256;
@@ -856,7 +860,9 @@ path_clear_file:
     JUMP
   block24:
     JUMPDEST
-    PUSH32 0x4e487b7100000000000000000000000000000000000000000000000000000000 (35408467139433450592217433187231851964531694900788300625387963629091585785856)  // evm_mstore v40 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256;
+    PUSH4 0x4e487b71 (1313373041)  // evm_mstore v40 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256;
+    PUSH1 0xe0 (224)
+    SHL
     PUSH0
     MSTORE
     PUSH1 0x11 (17)  // evm_mstore 4.i256 17.i256;
@@ -904,7 +910,9 @@ piece_at:
     PUSH1 block2  // br v15 block1 block2;
     JUMPI
   block1:
-    PUSH32 0x4e487b7100000000000000000000000000000000000000000000000000000000 (35408467139433450592217433187231851964531694900788300625387963629091585785856)  // evm_mstore v8 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256;
+    PUSH4 0x4e487b71 (1313373041)  // evm_mstore v8 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256;
+    PUSH1 0xe0 (224)
+    SHL
     PUSH0
     MSTORE
     PUSH1 0x11 (17)  // evm_mstore v14 17.i256;
@@ -2513,7 +2521,9 @@ validate_rook_capture:
     JUMP
   block71:
     JUMPDEST
-    PUSH32 0x4e487b7100000000000000000000000000000000000000000000000000000000 (35408467139433450592217433187231851964531694900788300625387963629091585785856)  // evm_mstore v54 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256;
+    PUSH4 0x4e487b71 (1313373041)  // evm_mstore v54 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256;
+    PUSH1 0xe0 (224)
+    SHL
     PUSH0
     MSTORE
     PUSH1 0x11 (17)  // evm_mstore v55 17.i256;

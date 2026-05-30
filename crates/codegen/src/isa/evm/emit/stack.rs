@@ -1,6 +1,6 @@
 use cranelift_entity::EntityList;
 use rustc_hash::FxHashSet;
-use smallvec::{SmallVec, smallvec};
+use smallvec::SmallVec;
 use sonatina_ir::{BlockId, Immediate, Type, U256};
 
 use crate::{
@@ -11,7 +11,10 @@ use crate::{
     stackalloc::Action,
 };
 
-use super::super::{DYN_SP_SLOT, DynamicFrameLayout, FREE_PTR_SLOT, FrameLocalWord, OpCode};
+use super::super::{
+    DYN_SP_SLOT, DynamicFrameLayout, FREE_PTR_SLOT, FrameLocalWord, ImmediateMaterializationPlan,
+    OpCode, immediate_materialization_plan, u32_to_be, u256_to_be,
+};
 
 pub(crate) fn is_push_opcode(op: OpCode) -> bool {
     let byte = op as u8;
@@ -30,13 +33,6 @@ enum StackPeepholeOp {
 enum StackPeepholeInput {
     OpCode(OpCode),
     Action(Action),
-}
-
-#[derive(Debug, PartialEq, Eq)]
-enum ImmediatePushPlan {
-    Plain(SmallVec<[u8; 8]>),
-    SignExtend(SmallVec<[u8; 8]>),
-    Not(SmallVec<[u8; 8]>),
 }
 
 const MAX_STACK_PEEPHOLE_WINDOW: usize = 24;
@@ -457,18 +453,9 @@ pub(crate) fn perform_action(
             debug_assert!((1..=16).contains(&n), "SWAP out of range: {n}");
             ctx.push(swap_op(n));
         }
-        Action::Push(imm) => match immediate_push_plan(imm) {
-            ImmediatePushPlan::Plain(bytes) => push_bytes(ctx, &bytes),
-            ImmediatePushPlan::SignExtend(bytes) => {
-                push_bytes(ctx, &bytes);
-                push_bytes(ctx, &u32_to_be((bytes.len() - 1) as u32));
-                ctx.push(OpCode::SIGNEXTEND);
-            }
-            ImmediatePushPlan::Not(bytes) => {
-                push_bytes(ctx, &bytes);
-                ctx.push(OpCode::NOT);
-            }
-        },
+        Action::Push(imm) => {
+            emit_immediate_materialization(ctx, immediate_materialization_plan(imm));
+        }
         Action::Pop => {
             ctx.push(OpCode::POP);
         }
@@ -549,95 +536,23 @@ pub(crate) fn push_bytes(ctx: &mut Lower<OpCode>, bytes: &[u8]) {
     }
 }
 
-fn immediate_push_plan(imm: Immediate) -> ImmediatePushPlan {
-    if imm.is_zero() {
-        return ImmediatePushPlan::Plain(smallvec![0]);
-    }
-
-    let bytes = immediate_bytes(imm);
-    if let Some(bytes) = compact_not_push_bytes(imm, &bytes) {
-        return ImmediatePushPlan::Not(bytes);
-    }
-    if imm.is_negative() && bytes.len() < 32 {
-        ImmediatePushPlan::SignExtend(bytes)
-    } else {
-        ImmediatePushPlan::Plain(bytes)
-    }
-}
-
-fn immediate_bytes(imm: Immediate) -> SmallVec<[u8; 8]> {
-    match imm {
-        Immediate::I1(v) => smallvec![v as u8],
-        Immediate::I8(v) => SmallVec::from_slice(&v.to_be_bytes()),
-        Immediate::I16(v) => shrink_bytes(&v.to_be_bytes()),
-        Immediate::I32(v) => shrink_bytes(&v.to_be_bytes()),
-        Immediate::I64(v) => shrink_bytes(&v.to_be_bytes()),
-        Immediate::I128(v) => shrink_bytes(&v.to_be_bytes()),
-        Immediate::I256(v) => shrink_bytes(&v.to_u256().to_big_endian()),
-        Immediate::EnumTag { value, .. } => shrink_bytes(&value.to_u256().to_big_endian()),
-    }
-}
-
-fn compact_not_push_bytes(imm: Immediate, bytes: &[u8]) -> Option<SmallVec<[u8; 8]>> {
-    let Immediate::I256(value) = imm else {
-        return None;
-    };
-    if !value.is_negative() {
-        return None;
-    }
-
-    let not_bytes = u256_to_be(&!value.to_u256());
-    let current_len = immediate_push_len(imm, bytes);
-    let not_len = push_len(&not_bytes) + 1;
-    (not_len < current_len).then_some(not_bytes)
-}
-
-fn immediate_push_len(imm: Immediate, bytes: &[u8]) -> usize {
-    let mut len = push_len(bytes);
-    if imm.is_negative() && bytes.len() < 32 {
-        len += push_len(&u32_to_be((bytes.len() - 1) as u32)) + 1;
-    }
-    len
-}
-
-fn push_len(bytes: &[u8]) -> usize {
-    if bytes == [0] { 1 } else { bytes.len() + 1 }
-}
-
-fn shrink_bytes(bytes: &[u8]) -> SmallVec<[u8; 8]> {
-    assert!(!bytes.is_empty());
-
-    let is_neg = bytes[0].leading_ones() > 0;
-    let skip = if is_neg { 0xff } else { 0x00 };
-    let mut bytes = bytes
-        .iter()
-        .copied()
-        .skip_while(|b| *b == skip)
-        .collect::<SmallVec<[u8; 8]>>();
-
-    if is_neg && bytes.first().map(|&b| b < 0x80).unwrap_or(true) {
-        bytes.insert(0, 0xff);
-    }
-    bytes
-}
-
-pub(crate) fn u32_to_be(num: u32) -> SmallVec<[u8; 4]> {
-    if num == 0 {
-        smallvec![0]
-    } else {
-        num.to_be_bytes()
-            .into_iter()
-            .skip_while(|b| *b == 0)
-            .collect()
-    }
-}
-
-pub(crate) fn u256_to_be(num: &U256) -> SmallVec<[u8; 8]> {
-    if num.is_zero() {
-        smallvec![0]
-    } else {
-        let b = num.to_big_endian();
-        b.into_iter().skip_while(|b| *b == 0).collect()
+fn emit_immediate_materialization(ctx: &mut Lower<OpCode>, plan: ImmediateMaterializationPlan) {
+    match plan {
+        ImmediateMaterializationPlan::Plain(bytes) => push_bytes(ctx, &bytes),
+        ImmediateMaterializationPlan::SignExtend(bytes) => {
+            push_bytes(ctx, &bytes);
+            push_bytes(ctx, &u32_to_be((bytes.len() - 1) as u32));
+            ctx.push(OpCode::SIGNEXTEND);
+        }
+        ImmediateMaterializationPlan::Not(bytes) => {
+            push_bytes(ctx, &bytes);
+            ctx.push(OpCode::NOT);
+        }
+        ImmediateMaterializationPlan::Shl { value, shift } => {
+            push_bytes(ctx, &value);
+            push_bytes(ctx, &shift);
+            ctx.push(OpCode::SHL);
+        }
     }
 }
 
@@ -906,8 +821,6 @@ pub(crate) fn push_op(bytes: usize) -> OpCode {
 
 #[cfg(test)]
 mod tests {
-    use sonatina_ir::I256;
-
     use super::*;
 
     fn push_imm(vcode: &mut VCode<OpCode>, block: BlockId, bytes: &[u8]) -> VCodeInst {
@@ -923,44 +836,6 @@ mod tests {
             .block_insns(block)
             .map(|inst| vcode.insts[inst] as u8)
             .collect()
-    }
-
-    #[test]
-    fn i256_negative_mask_push_uses_compact_not_form() {
-        let mask = Immediate::from_i256(!I256::from(31u8), Type::I256);
-
-        assert_eq!(
-            immediate_push_plan(mask),
-            ImmediatePushPlan::Not(smallvec![0x1f])
-        );
-    }
-
-    #[test]
-    fn i256_negative_one_push_uses_compact_not_form() {
-        let minus_one = Immediate::from_i256(I256::from(-1i8), Type::I256);
-
-        assert_eq!(
-            immediate_push_plan(minus_one),
-            ImmediatePushPlan::Not(smallvec![0])
-        );
-    }
-
-    #[test]
-    fn non_i256_negative_push_keeps_signextend_form() {
-        assert_eq!(
-            immediate_push_plan(Immediate::I8(-32)),
-            ImmediatePushPlan::SignExtend(smallvec![0xe0])
-        );
-    }
-
-    #[test]
-    fn positive_high_bit_i256_push_stays_plain() {
-        let value = Immediate::from_i256(I256::from(0xe0u16), Type::I256);
-
-        assert_eq!(
-            immediate_push_plan(value),
-            ImmediatePushPlan::Plain(smallvec![0xe0])
-        );
     }
 
     #[test]

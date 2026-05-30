@@ -40,7 +40,7 @@ mod trace;
 
 pub use alloc::StackifyAlloc;
 pub(crate) use builder::{
-    HOT_IMMEDIATE_SIZE_MIN_BLOCK_USES, HOT_IMMEDIATE_SIZE_MIN_PUSH_DATA_BYTES,
+    HOT_IMMEDIATE_SIZE_MIN_BLOCK_USES, HOT_IMMEDIATE_SIZE_MIN_MATERIALIZATION_BYTES,
 };
 pub use builder::{StackifyBuilder, StackifySearchProfile};
 pub(crate) use trace::StackifyTrace;

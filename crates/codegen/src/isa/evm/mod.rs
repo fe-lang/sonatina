@@ -5,6 +5,7 @@ mod escape_scan;
 mod frame_layout;
 mod heap_plan;
 mod high_alias;
+mod immediate;
 mod late_block_merge;
 mod late_section_merge;
 mod machine;
@@ -33,6 +34,10 @@ pub(crate) use emit::{
 };
 pub(crate) use frame_layout::{DynamicFrameLayout, FrameLocalWord};
 pub(crate) use high_alias::canonicalize_alias_value;
+pub(crate) use immediate::{
+    ImmediateMaterializationPlan, immediate_materialization_code_len,
+    immediate_materialization_cost_i256, immediate_materialization_plan, u32_to_be, u256_to_be,
+};
 pub(crate) use memory_plan::{
     DYN_SP_SLOT, FREE_PTR_SLOT, FuncMemPlan, ObjLoc, PreserveMode, STATIC_BASE, WORD_BYTES,
 };
