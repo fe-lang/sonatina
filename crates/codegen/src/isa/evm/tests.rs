@@ -1317,7 +1317,11 @@ block0:
     )]);
     let placement = machine::placement::compute_semantic_memory_placement(
         &parsed.module,
-        &funcs,
+        machine::placement::MemoryPlacementSection {
+            funcs: &funcs,
+            entry: names["main"],
+            includes: &[],
+        },
         &analyses,
         &ptr_escape,
         &FxHashSet::default(),
@@ -1358,6 +1362,170 @@ block0:
     assert!(
         min_base_words >= decode_end_words,
         "malloc min base must not overlap the sibling callee's reserved static frame"
+    );
+}
+
+#[test]
+fn caller_free_ptr_floor_reaches_callee_malloc() {
+    let parsed = parse_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+func public %clobber_then_read(v0.*i256) -> i256 {
+block0:
+    v1.*i8 = evm_malloc 32.i256;
+    v2.*i256 = bitcast v1 *i256;
+    mstore v2 222.i256 i256;
+    v3.i256 = mload v0 i256;
+    return v3;
+}
+
+func public %main() -> i256 {
+block0:
+    v0.*i8 = evm_malloc 32.i256;
+    v1.*i256 = bitcast v0 *i256;
+    mstore v1 111.i256 i256;
+    v2.i256 = call %clobber_then_read v1;
+    return v2;
+}
+
+func public %entry() {
+block0:
+    v0.i256 = call %main;
+    mstore 0.i32 v0 i256;
+    evm_return 0.i8 32.i8;
+}
+"#,
+    )
+    .expect("module parses");
+    let funcs = parsed.module.funcs();
+    let backend = test_backend();
+    let ptr_escape = compute_ptr_escape_summaries(&parsed.module, &funcs, &backend.isa);
+
+    let mut analyses = FxHashMap::default();
+    for &func in &funcs {
+        parsed.module.func_store.modify(func, |function| {
+            analyses.insert(
+                func,
+                compute_test_pre_analysis(function, &parsed.module.ctx, &backend),
+            );
+        });
+    }
+
+    let clobber = find_func(&parsed.module, "clobber_then_read");
+    let entry = find_func(&parsed.module, "entry");
+    let placement = machine::placement::compute_semantic_memory_placement(
+        &parsed.module,
+        machine::placement::MemoryPlacementSection {
+            funcs: &funcs,
+            entry,
+            includes: &[],
+        },
+        &analyses,
+        &ptr_escape,
+        &FxHashSet::default(),
+        &backend,
+        &FxHashMap::default(),
+    );
+    let malloc = parsed.module.func_store.view(clobber, |function| {
+        function
+            .layout
+            .iter_block()
+            .flat_map(|block| function.layout.iter_inst(block))
+            .find(|&inst| {
+                matches!(
+                    backend.isa.inst_set().resolve_inst(function.dfg.inst(inst)),
+                    EvmInstKind::EvmMalloc(_)
+                )
+            })
+            .expect("clobber_then_read has a malloc")
+    });
+    assert_eq!(
+        placement.funcs[&clobber].free_ptr_floor_before_malloc[&malloc],
+        Some(0xa0)
+    );
+}
+
+#[test]
+fn callee_malloc_exit_floor_reaches_later_callee() {
+    let parsed = parse_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+func public %alloc() -> i256 {
+block0:
+    v0.*i8 = evm_malloc 32.i256;
+    v1.i256 = ptr_to_int v0 i256;
+    return v1;
+}
+
+func public %scratch(v0.i256) -> i256 {
+block0:
+    v1.*i8 = evm_malloc 32.i256;
+    v2.i256 = ptr_to_int v1 i256;
+    mstore v2 222.i256 i256;
+    return v0;
+}
+
+func public %entry() {
+block0:
+    v0.i256 = call %alloc;
+    v1.i256 = call %scratch v0;
+    mstore 0.i32 v1 i256;
+    evm_return 0.i8 32.i8;
+}
+"#,
+    )
+    .expect("module parses");
+    let funcs = parsed.module.funcs();
+    let backend = test_backend();
+    let ptr_escape = compute_ptr_escape_summaries(&parsed.module, &funcs, &backend.isa);
+
+    let mut analyses = FxHashMap::default();
+    for &func in &funcs {
+        parsed.module.func_store.modify(func, |function| {
+            analyses.insert(
+                func,
+                compute_test_pre_analysis(function, &parsed.module.ctx, &backend),
+            );
+        });
+    }
+
+    let entry = find_func(&parsed.module, "entry");
+    let scratch = find_func(&parsed.module, "scratch");
+    let placement = machine::placement::compute_semantic_memory_placement(
+        &parsed.module,
+        machine::placement::MemoryPlacementSection {
+            funcs: &funcs,
+            entry,
+            includes: &[],
+        },
+        &analyses,
+        &ptr_escape,
+        &FxHashSet::default(),
+        &backend,
+        &FxHashMap::default(),
+    );
+    let malloc = parsed.module.func_store.view(scratch, |function| {
+        function
+            .layout
+            .iter_block()
+            .flat_map(|block| function.layout.iter_inst(block))
+            .find(|&inst| {
+                matches!(
+                    backend.isa.inst_set().resolve_inst(function.dfg.inst(inst)),
+                    EvmInstKind::EvmMalloc(_)
+                )
+            })
+            .expect("scratch has a malloc")
+    });
+    let min_base = match placement.funcs[&scratch].malloc_placements[&malloc] {
+        machine::placement::MallocPlacement::Heap { min_base, .. } => min_base,
+        machine::placement::MallocPlacement::Fixed { base } => base,
+    };
+    assert_eq!(
+        placement.funcs[&scratch].free_ptr_floor_before_malloc[&malloc],
+        Some(min_base)
     );
 }
 

@@ -11,7 +11,7 @@ use super::{
         ptr_escape::PtrEscapeSummary,
         static_arena_alloc::StackObjId,
     },
-    placement::compute_semantic_memory_placement,
+    placement::{MemoryPlacementSection, compute_semantic_memory_placement},
 };
 
 pub(crate) struct FinalSpillAllocation {
@@ -115,6 +115,8 @@ type FinalSpillChoiceScore = (u32, u32, u32, u32, u64, u64);
 pub(crate) struct FinalSpillChoiceCtx<'a> {
     pub(crate) source_module: &'a Module,
     pub(crate) funcs: &'a [FuncRef],
+    pub(crate) section_entry: FuncRef,
+    pub(crate) section_includes: &'a [FuncRef],
     pub(crate) pre_analyses: &'a FxHashMap<FuncRef, FuncPreAnalysis>,
     pub(crate) ptr_escape: &'a FxHashMap<FuncRef, PtrEscapeSummary>,
     pub(crate) backend: &'a EvmBackend,
@@ -182,7 +184,11 @@ impl FinalSpillChoiceCtx<'_> {
 
         let placement = compute_semantic_memory_placement(
             self.source_module,
-            self.funcs,
+            MemoryPlacementSection {
+                funcs: self.funcs,
+                entry: self.section_entry,
+                includes: self.section_includes,
+            },
             self.pre_analyses,
             self.ptr_escape,
             &scratch_effects,

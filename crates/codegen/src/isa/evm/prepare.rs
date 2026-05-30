@@ -40,7 +40,7 @@ use super::{
         lower::lower_section_to_machine,
         module::FuncMachineMap,
         pipeline::run_machine_opt_pipeline,
-        placement::compute_semantic_memory_placement,
+        placement::{MemoryPlacementSection, compute_semantic_memory_placement},
         prepare::prepare_machine_stackify_analyses,
     },
     malloc_plan,
@@ -700,7 +700,11 @@ fn prepare_machine_section_after_pipeline(
     for iteration in 0..4 {
         let placement = compute_semantic_memory_placement(
             source_module,
-            &funcs,
+            MemoryPlacementSection {
+                funcs: &funcs,
+                entry: work.entry(),
+                includes: work.includes(),
+            },
             &pre_analyses,
             &ptr_escape,
             &scratch_effects,
@@ -780,6 +784,8 @@ fn prepare_machine_section_after_pipeline(
         let optional_final_spill_placements = FinalSpillChoiceCtx {
             source_module,
             funcs: &funcs,
+            section_entry: work.entry(),
+            section_includes: work.includes(),
             pre_analyses: &pre_analyses,
             ptr_escape: &ptr_escape,
             backend,

@@ -5,6 +5,16 @@
 
 target = "evm-ethereum-osaka"
 
+func public %entry() {
+    block0:
+        v5.*i8 = evm_malloc 32.i256;
+        v6.*i256 = bitcast v5 *i256;
+        mstore v6 222.i256 i256;
+        v0.i256 = call %main;
+        mstore 0.i32 v0 i256;
+        evm_return 0.i8 32.i8;
+}
+
 func public %mk() -> *i256 {
     block0:
         v0.*i8 = evm_malloc 32.i256;
@@ -30,13 +40,6 @@ func public %main() -> i256 {
         v3.i256 = add v2 v1;
         v4.i256 = sub v3 v1;
         return v4;
-}
-
-func public %entry() {
-    block0:
-        v0.i256 = call %main;
-        mstore 0.i32 v0 i256;
-        evm_return 0.i8 32.i8;
 }
 
 object @Contract {

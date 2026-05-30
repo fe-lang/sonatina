@@ -28,7 +28,10 @@ use super::{
         },
         ptr_escape::PtrEscapeSummary,
     },
-    free_ptr_floor::{compute_free_ptr_floor_before_malloc, compute_free_ptr_write_summaries},
+    free_ptr_floor::{
+        ProgramFreePtrFloorInput, compute_free_ptr_write_summaries,
+        compute_program_free_ptr_floor_before_malloc,
+    },
 };
 
 #[derive(Clone, Debug)]
@@ -63,15 +66,23 @@ pub(crate) enum MallocPlacement {
     },
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct MemoryPlacementSection<'a> {
+    pub(crate) funcs: &'a [FuncRef],
+    pub(crate) entry: FuncRef,
+    pub(crate) includes: &'a [FuncRef],
+}
+
 pub(crate) fn compute_semantic_memory_placement(
     module: &Module,
-    funcs: &[FuncRef],
+    section: MemoryPlacementSection<'_>,
     analyses: &FxHashMap<FuncRef, FuncPreAnalysis>,
     ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
     scratch_effects: &FxHashSet<FuncRef>,
     backend: &EvmBackend,
     backend_spill_reserves: &FxHashMap<FuncRef, BackendSpillReserve>,
 ) -> EvmMemoryPlacementPlan {
+    let funcs = section.funcs;
     let mut semantic_plan = memory_plan::compute_semantic_program_memory_plan(
         module,
         funcs,
@@ -216,9 +227,36 @@ pub(crate) fn compute_semantic_memory_placement(
         global_dyn_base: semantic_plan.global_dyn_base,
         backend_spill_reserve_peak: backend_spill_scratch_reserve_peak,
         entry_may_have_live_frame: &entry_may_have_live_frame,
+        section_entry: section.entry,
         has_persistent_mallocs,
         free_ptr_slot_may_be_touched,
     };
+    let malloc_placements: FxHashMap<_, _> = funcs
+        .iter()
+        .copied()
+        .map(|func| {
+            let func_plan = semantic_plan
+                .funcs
+                .get(&func)
+                .unwrap_or_else(|| panic!("missing semantic plan for func {}", func.as_u32()));
+            let malloc_placements = module.func_store.view(func, |function| {
+                placement_ctx.compute_func_malloc_placements(function, func, func_plan)
+            });
+            (func, malloc_placements)
+        })
+        .collect();
+    let free_ptr_floor_before_malloc =
+        compute_program_free_ptr_floor_before_malloc(ProgramFreePtrFloorInput {
+            module,
+            funcs,
+            section_entry: section.entry,
+            section_includes: section.includes,
+            backend,
+            ptr_escape,
+            source_is: backend.isa.inst_set(),
+            malloc_placements: &malloc_placements,
+            free_ptr_write_summaries: &free_ptr_write_summaries,
+        });
     let func_placements = funcs
         .iter()
         .copied()
@@ -227,21 +265,11 @@ pub(crate) fn compute_semantic_memory_placement(
                 .funcs
                 .get(&func)
                 .unwrap_or_else(|| panic!("missing semantic plan for func {}", func.as_u32()));
-            let (malloc_placements, free_ptr_floor_before_malloc) =
-                module.func_store.view(func, |function| {
-                    let malloc_placements =
-                        placement_ctx.compute_func_malloc_placements(function, func, func_plan);
-                    let free_ptr_floor_before_malloc = compute_free_ptr_floor_before_malloc(
-                        function,
-                        &module.ctx,
-                        backend,
-                        ptr_escape,
-                        backend.isa.inst_set(),
-                        &malloc_placements,
-                        &free_ptr_write_summaries,
-                    );
-                    (malloc_placements, free_ptr_floor_before_malloc)
-                });
+            let malloc_placements = malloc_placements.get(&func).cloned().unwrap_or_default();
+            let free_ptr_floor_before_malloc = free_ptr_floor_before_malloc
+                .get(&func)
+                .cloned()
+                .unwrap_or_default();
             (
                 func,
                 EvmFuncPlacementPlan {
@@ -273,6 +301,7 @@ struct MallocPlacementCtx<'a> {
     global_dyn_base: u32,
     backend_spill_reserve_peak: u32,
     entry_may_have_live_frame: &'a FxHashMap<FuncRef, bool>,
+    section_entry: FuncRef,
     has_persistent_mallocs: bool,
     free_ptr_slot_may_be_touched: bool,
 }
@@ -328,8 +357,21 @@ impl MallocPlacementCtx<'_> {
                     self.backend_spill_reserve_peak,
                     inst,
                 );
+                let exact_heap_base = exact_heap_base_before_malloc
+                    .get(&inst)
+                    .copied()
+                    .unwrap_or(false);
                 let placement = if transient
                     && (terminal_private_mallocs.contains(&inst)
+                        || (exact_heap_base
+                            && self.section_entry == func
+                            && function.arg_values.is_empty()
+                            && malloc_private_uses_are_compatible_with_fixed_base(
+                                function,
+                                self.isa,
+                                inst,
+                                exact_heap_base,
+                            ))
                         || (!self.free_ptr_slot_may_be_touched
                             && !needs_dyn_sp_clamp
                             && !self.has_persistent_mallocs))
@@ -468,18 +510,15 @@ impl<'a> TerminalPrivateMallocAnalysis<'a> {
     }
 
     fn malloc_is_private(&self, inst: InstId) -> bool {
-        let Some(requires_exact_heap_base) = MallocUseAnalysis::new(self.function, self.isa, inst)
-            .private_address_uses_require_exact_heap_base()
-        else {
-            return false;
-        };
-
-        !requires_exact_heap_base
-            || self
-                .exact_heap_base_before_malloc
+        malloc_private_uses_are_compatible_with_fixed_base(
+            self.function,
+            self.isa,
+            inst,
+            self.exact_heap_base_before_malloc
                 .get(&inst)
                 .copied()
-                .unwrap_or(false)
+                .unwrap_or(false),
+        )
     }
 
     fn resolve(&self, inst: InstId) -> EvmInstKind<'_> {
@@ -581,14 +620,19 @@ impl<'a> ExactHeapBaseAnalysis<'a> {
     }
 }
 
-struct MallocUseAnalysis<'a> {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PrivateMallocUseInfo {
+    requires_exact_heap_base: bool,
+}
+
+struct PrivateMallocUseAnalysis<'a> {
     function: &'a Function,
     isa: &'a Evm,
     malloc: InstId,
     derived_values: FxHashSet<ValueId>,
 }
 
-impl<'a> MallocUseAnalysis<'a> {
+impl<'a> PrivateMallocUseAnalysis<'a> {
     fn new(function: &'a Function, isa: &'a Evm, malloc: InstId) -> Self {
         let mut analysis = Self {
             function,
@@ -600,7 +644,7 @@ impl<'a> MallocUseAnalysis<'a> {
         analysis
     }
 
-    fn private_address_uses_require_exact_heap_base(&self) -> Option<bool> {
+    fn analyze_private_address_uses(&self) -> Option<PrivateMallocUseInfo> {
         let mut requires_exact_heap_base = false;
         for block in self.function.layout.iter_block() {
             for inst in self.function.layout.iter_inst(block) {
@@ -610,7 +654,9 @@ impl<'a> MallocUseAnalysis<'a> {
             }
         }
 
-        Some(requires_exact_heap_base)
+        Some(PrivateMallocUseInfo {
+            requires_exact_heap_base,
+        })
     }
 
     fn compute_derived_values(&mut self) {
@@ -811,6 +857,17 @@ impl<'a> MallocUseAnalysis<'a> {
             .inst_set()
             .resolve_inst(self.function.dfg.inst(inst))
     }
+}
+
+fn malloc_private_uses_are_compatible_with_fixed_base(
+    function: &Function,
+    isa: &Evm,
+    malloc: InstId,
+    exact_heap_base: bool,
+) -> bool {
+    PrivateMallocUseAnalysis::new(function, isa, malloc)
+        .analyze_private_address_uses()
+        .is_some_and(|info| !info.requires_exact_heap_base || exact_heap_base)
 }
 
 fn compute_program_free_ptr_slot_facts(
