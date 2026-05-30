@@ -6,16 +6,16 @@ input_file: test_files/evm/late_tail_merge_revert_after_store_speed.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 52 bytes
-  total: 52 bytes
+  section runtime: 38 bytes
+  total: 38 bytes
 
 functions:
   mem: global_dyn_base=0x0 arena_base=0x0 scratch_peak_words=0 static_chain_peak_words=0
-  entry: ir_blocks=3 ir_insts=12 vcode_ops=35 fixups=1 imm_bytes=16
+  entry: ir_blocks=3 ir_insts=12 vcode_ops=41 fixups=3 imm_bytes=18
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case default: calldata_len=0 revert gas_used=21070 output_len=128 tx_gas=21000 runtime_gas=70
+  case default: calldata_len=0 revert gas_used=21082 output_len=128 tx_gas=21000 runtime_gas=82
 
 
 --------------- DEBUG ---------------
@@ -29,34 +29,29 @@ entry:
     JUMPI
   block1:
     PUSH1 0xaa (170)  // evm_mstore v0 170.i256;
-    PUSH0
-    MSTORE
-    PUSH1 0x11 (17)  // evm_mstore 32.i256 17.i256;
-    PUSH1 0x20 (32)
-    MSTORE
-    PUSH1 0x22 (34)  // evm_mstore 64.i256 34.i256;
-    PUSH1 0x40 (64)
-    MSTORE
-    PUSH1 0x33 (51)  // evm_mstore 96.i256 51.i256;
-    PUSH1 0x60 (96)
-    MSTORE
-    PUSH1 0x80 (128)  // evm_revert v0 128.i256;
-    PUSH0
-    REVERT
+    PUSH0 __evm_shared_tail_0
+    JUMP
   block2:
     JUMPDEST
     PUSH1 0xbb (187)  // evm_mstore v0 187.i256;
+    PUSH0 __evm_shared_tail_0
+    JUMP
+
+// synthetic section unit
+__evm_shared_tail_0:
+  block0:
+    JUMPDEST
     PUSH0
     MSTORE
-    PUSH1 0x11 (17)  // evm_mstore 32.i256 17.i256;
+    PUSH1 0x11 (17)
     PUSH1 0x20 (32)
     MSTORE
-    PUSH1 0x22 (34)  // evm_mstore 64.i256 34.i256;
+    PUSH1 0x22 (34)
     PUSH1 0x40 (64)
     MSTORE
-    PUSH1 0x33 (51)  // evm_mstore 96.i256 51.i256;
+    PUSH1 0x33 (51)
     PUSH1 0x60 (96)
     MSTORE
-    PUSH1 0x80 (128)  // evm_revert v0 128.i256;
+    PUSH1 0x80 (128)
     PUSH0
     REVERT

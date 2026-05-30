@@ -23,6 +23,10 @@ entity_impl!(LabelId);
 pub struct SectionCodeUnitId(pub u32);
 entity_impl!(SectionCodeUnitId);
 
+pub fn section_code_unit_label_name(unit: SectionCodeUnitId) -> String {
+    format!("__evm_shared_tail_{}", unit.0)
+}
+
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum Label {
     Insn(VCodeInst),
@@ -144,7 +148,7 @@ where
                         }
                         Label::Function(func) => write!(w, " {func:?}"),
                         Label::SectionCodeUnit(unit) => {
-                            write!(w, " section_unit{}", unit.0)
+                            write!(w, " {}", section_code_unit_label_name(unit))
                         }
                     }?;
                 }

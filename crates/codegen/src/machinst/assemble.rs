@@ -11,7 +11,10 @@ use sonatina_ir::{
 
 use super::{
     lower::{FixupUpdate, SectionCodeUnit},
-    vcode::{Label, LabelId, SectionCodeUnitId, SymFixup, VCode, VCodeFixup, VCodeInst},
+    vcode::{
+        Label, LabelId, SectionCodeUnitId, SymFixup, VCode, VCodeFixup, VCodeInst,
+        section_code_unit_label_name,
+    },
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -425,7 +428,9 @@ where
                         Label::Block(BlockId(n)) => write!(w, " (block{n})")?,
                         Label::Insn(_) => {}
                         Label::Function(func) => write!(w, " ({func:?})")?,
-                        Label::SectionCodeUnit(unit) => write!(w, " (section_unit{})", unit.0)?,
+                        Label::SectionCodeUnit(unit) => {
+                            write!(w, " ({})", section_code_unit_label_name(unit))?
+                        }
                     };
                 }
 
@@ -475,7 +480,9 @@ where
                         Label::Block(BlockId(n)) => write!(w, " (block{n})")?,
                         Label::Insn(_) => {}
                         Label::Function(func) => write!(w, " ({func:?})")?,
-                        Label::SectionCodeUnit(unit) => write!(w, " (section_unit{})", unit.0)?,
+                        Label::SectionCodeUnit(unit) => {
+                            write!(w, " ({})", section_code_unit_label_name(unit))?
+                        }
                     };
                 }
                 writeln!(w)?;

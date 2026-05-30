@@ -16,7 +16,7 @@ use sonatina_codegen::{
     isa::evm::{EvmBackend, ImmediateMaterializationMode, LateCleanupProfile, PushWidthPolicy},
     machinst::{
         lower::{LoweredFunction, SectionCodeUnit, SectionWorkModule},
-        vcode::{Label, VCodeFixup},
+        vcode::{Label, VCodeFixup, section_code_unit_label_name},
     },
     object::{CompileOptions, compile_all_objects},
     optim::{
@@ -501,7 +501,9 @@ fn write_synthetic_section_unit<Op: fmt::Debug>(unit: &SectionCodeUnit<Op>, out:
                         write!(out, " `pc + ({offset})`").unwrap();
                     }
                     Label::Function(func) => write!(out, " {func:?}").unwrap(),
-                    Label::SectionCodeUnit(unit) => write!(out, " section_unit{}", unit.0).unwrap(),
+                    Label::SectionCodeUnit(unit) => {
+                        write!(out, " {}", section_code_unit_label_name(unit)).unwrap()
+                    }
                 }
             }
             writeln!(out).unwrap();

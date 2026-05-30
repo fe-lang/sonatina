@@ -1407,7 +1407,7 @@ leanimt_root_from_calldata:
     PUSH1 0x20 (32)  // v18.i256 = gt v2 v14;
     DUP4
     GT
-    PUSH1 section_unit0  // br v18 block1 block9;
+    PUSH1 __evm_shared_tail_0  // br v18 block1 block9;
     JUMPI
   block9:
     JUMPDEST
@@ -2173,7 +2173,7 @@ runtime__StorPtr_Evm___207f35a85ac4062e:
     PUSH4 0xdae4d242 (3672429122)  // v48.i256 = eq 3672429122.i256 v5;
     EQ
     ISZERO  // br v48 block6 block7;
-    PUSH1 section_unit0
+    PUSH1 __evm_shared_tail_0
     JUMPI
   block6:
     PUSH1 0x4 (4)  // v49.i256 = evm_calldata_load v11;

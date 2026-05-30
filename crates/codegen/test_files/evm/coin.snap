@@ -2644,7 +2644,7 @@ test_coin__StorPtr_Evm___207f35a85ac4062e:
     JUMPDEST
     DUP1  // br v20 block4 block3;
     ISZERO
-    PUSH1 section_unit0
+    PUSH1 __evm_shared_tail_0
     JUMPI
   block4:
     JUMPDEST
@@ -2686,7 +2686,7 @@ test_coin__StorPtr_Evm___207f35a85ac4062e:
     PUSH1 0xa (10)  // v37.i256 = eq v36 v34;
     EQ
     ISZERO
-    PUSH1 section_unit0  // br v37 block6 block5;
+    PUSH1 __evm_shared_tail_0  // br v37 block6 block5;
     JUMPI
   block6:
     PUSH1 0x40 (64)  // v41.i256 = evm_mload v0;
@@ -2727,7 +2727,7 @@ test_coin__StorPtr_Evm___207f35a85ac4062e:
     PUSH1 0x5 (5)  // v50.i256 = eq v49 v48;
     EQ
     ISZERO
-    PUSH1 section_unit0  // br v50 block8 block7;
+    PUSH1 __evm_shared_tail_0  // br v50 block8 block7;
     JUMPI
   block8:
     PUSH1 0x40 (64)  // v54.i256 = evm_mload v0;
@@ -2765,7 +2765,7 @@ test_coin__StorPtr_Evm___207f35a85ac4062e:
     PUSH1 FuncRef(14)
     JUMP
     JUMPDEST
-    PUSH1 section_unit0  // br v50 block9 block10;
+    PUSH1 __evm_shared_tail_0  // br v50 block9 block10;
     JUMPI
   block10:
     DUP1  // v54.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__BalanceOf_h891837b06b5610d4__9cd8cdf578aad9be v20 v35 v19 v19;
@@ -2780,7 +2780,7 @@ test_coin__StorPtr_Evm___207f35a85ac4062e:
     PUSH1 0x7 (7)  // v56.i256 = eq v54 7.i256;
     EQ
     ISZERO
-    PUSH1 section_unit0  // br v56 block12 block11;
+    PUSH1 __evm_shared_tail_0  // br v56 block12 block11;
     JUMPI
   block12:
     DUP1  // v59.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__BalanceOf_h891837b06b5610d4__9cd8cdf578aad9be v20 v35 v19 v46;
@@ -2795,7 +2795,7 @@ test_coin__StorPtr_Evm___207f35a85ac4062e:
     PUSH1 0x8 (8)  // v61.i256 = eq v59 8.i256;
     EQ
     ISZERO
-    PUSH1 section_unit0  // br v61 block14 block13;
+    PUSH1 __evm_shared_tail_0  // br v61 block14 block13;
     JUMPI
   block14:
     PUSH1 0x40 (64)  // v64.i256 = evm_mload v0;
@@ -2836,7 +2836,7 @@ test_coin__StorPtr_Evm___207f35a85ac4062e:
     PUSH1 0x1 (1)  // v71.i256 = eq v70 v46;
     EQ
     ISZERO
-    PUSH1 section_unit0  // br v71 block16 block15;
+    PUSH1 __evm_shared_tail_0  // br v71 block16 block15;
     JUMPI
   block16:
     PUSH1 `pc + (3)`  // v74.i256 = call %solencoder_h1b9228b90dad6928_new;
@@ -2912,7 +2912,7 @@ test_coin__StorPtr_Evm___207f35a85ac4062e:
     PUSH1 0xf (15)  // v94.i256 = eq v92 15.i256;
     EQ
     ISZERO
-    PUSH1 section_unit0  // br v94 block20 block19;
+    PUSH1 __evm_shared_tail_0  // br v94 block20 block19;
     JUMPI
   block20:
     PUSH1 0x40 (64)  // evm_mstore v0 v2;
@@ -3038,7 +3038,7 @@ decode_returndata__u256__3271ca15373d4483:
     PUSH1 0x20 (32)  // v8.i256 = lt v1 v6;
     DUP4
     LT
-    PUSH1 section_unit0  // br v8 block1 block2;
+    PUSH1 __evm_shared_tail_0  // br v8 block1 block2;
     JUMPI
   block2:
     JUMPDEST
@@ -3095,7 +3095,7 @@ decode_returndata__u256__3271ca15373d4483:
     SWAP1  // v23.i256 = or v21 v22;
     SWAP4
     OR
-    PUSH1 section_unit0  // br v23 block3 block4;
+    PUSH1 __evm_shared_tail_0  // br v23 block3 block4;
     JUMPI
   block4:
     SWAP3  // v25.i256 = evm_mload v15;
@@ -3641,7 +3641,7 @@ __Coin_init:
     DUP1  // v5.i256 = lt v3 v4;
     DUP3
     LT
-    PUSH1 section_unit0  // br v5 block1 block2;
+    PUSH1 __evm_shared_tail_0  // br v5 block1 block2;
     JUMPI
   block2:
     JUMPDEST
@@ -3718,7 +3718,7 @@ __Coin_runtime:
     PUSH1 0x4 (4)  // v13.i256 = lt v3 v8;
     SWAP1
     LT
-    PUSH1 section_unit0  // br v13 block1 block2;
+    PUSH1 __evm_shared_tail_0  // br v13 block1 block2;
     JUMPI
   block2:
     PUSH0  // v19.i256 = evm_calldata_load v17;
@@ -3963,7 +3963,7 @@ __Coin_runtime:
     PUSH4 0x3940e9ee (960555502)
     EQ
     ISZERO
-    PUSH1 section_unit0  // br v62 block13 block3;
+    PUSH1 __evm_shared_tail_0  // br v62 block13 block3;
     JUMPI
   block13:
     JUMPDEST
@@ -4044,7 +4044,7 @@ soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallData
     SWAP1  // v12.i256 = or v9 v10;
     SWAP5
     OR
-    PUSH1 section_unit0  // br v12 block1 block2;
+    PUSH1 __evm_shared_tail_0  // br v12 block1 block2;
     JUMPI
   block2:
     JUMPDEST
@@ -4062,7 +4062,7 @@ soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallData
 assert:
   block0:
     ISZERO
-    PUSH1 section_unit0  // br v0 block2 block1;
+    PUSH1 __evm_shared_tail_0  // br v0 block2 block1;
     JUMPI
   block2:
     JUMPDEST

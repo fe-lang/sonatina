@@ -62,7 +62,7 @@ test_counter__StorPtr_Evm___207f35a85ac4062e:
     DUP2  // v9.i256 = lt v8 v7;
     SWAP1
     LT
-    PUSH1 section_unit0  // br v9 block2 block3;
+    PUSH1 __evm_shared_tail_0  // br v9 block2 block3;
     JUMPI
   block3:
     PUSH0  // v11.i256 = evm_create2 0.i256 v7 v2 0.i256;
@@ -103,7 +103,7 @@ test_counter__StorPtr_Evm___207f35a85ac4062e:
     PUSH1 FuncRef(10)
     JUMP
     JUMPDEST
-    PUSH1 section_unit0  // br v14 block5 block6;
+    PUSH1 __evm_shared_tail_0  // br v14 block5 block6;
     JUMPI
   block6:
     PUSH1 0x40 (64)  // v16.i256 = evm_mload v5;
@@ -129,7 +129,7 @@ test_counter__StorPtr_Evm___207f35a85ac4062e:
     DUP2  // v22.i256 = lt v21 v18;
     SWAP1
     LT
-    PUSH1 section_unit0  // br v22 block7 block8;
+    PUSH1 __evm_shared_tail_0  // br v22 block7 block8;
     JUMPI
   block8:
     PUSH0  // v23.i256 = evm_call 100000.i256 v11 0.i256 v18 4.i256 0.i256 0.i256;
@@ -177,7 +177,7 @@ test_counter__StorPtr_Evm___207f35a85ac4062e:
     PUSH1 0x1 (1)  // v31.i256 = eq v29 1.i256;
     EQ
     ISZERO
-    PUSH1 section_unit0  // br v31 block12 block11;
+    PUSH1 __evm_shared_tail_0  // br v31 block12 block11;
     JUMPI
   block12:
     JUMPDEST
@@ -210,7 +210,7 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Get_h3927
     DUP2  // v17.i256 = lt v16 v13;
     SWAP1
     LT
-    PUSH1 section_unit0  // br v17 block1 block2;
+    PUSH1 __evm_shared_tail_0  // br v17 block1 block2;
     JUMPI
   block2:
     JUMPDEST
@@ -249,7 +249,7 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Get_h3927
     PUSH1 0x20 (32)  // v21.i256 = lt v15 32.i256;
     SWAP1
     LT
-    PUSH1 section_unit0  // br v21 block5 block6;
+    PUSH1 __evm_shared_tail_0  // br v21 block5 block6;
     JUMPI
   block6:
     MLOAD  // v22.i256 = evm_mload v18;
@@ -260,7 +260,7 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Get_h3927
 __Counter_init:
   block0:
     CALLVALUE  // v0.i256 = evm_call_value;
-    PUSH1 section_unit0  // br v0 block1 block2;
+    PUSH1 __evm_shared_tail_0  // br v0 block1 block2;
     JUMPI
   block2:
     JUMPDEST

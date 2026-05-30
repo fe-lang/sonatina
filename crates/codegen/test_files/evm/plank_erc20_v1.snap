@@ -37,7 +37,7 @@ init:
     DUP1  // v7.i256 = shr v5 v4;
     PUSH1 0xa0 (160)
     SHR
-    PUSH1 section_unit0  // br v7 block1 block2;
+    PUSH1 __evm_shared_tail_0  // br v7 block1 block2;
     JUMPI
   block2:
     JUMPDEST
@@ -75,7 +75,7 @@ run:
     PUSH4 0x70a08231 (1889567281)  // v11.i256 = eq v25 v10;
     EQ
     ISZERO
-    PUSH1 section_unit0  // br v11 block8 block7;
+    PUSH1 __evm_shared_tail_0  // br v11 block8 block7;
     JUMPI
   block8:
     JUMPDEST
@@ -84,7 +84,7 @@ run:
     DUP1  // v18.i256 = shr v14 v13;
     PUSH1 0xa0 (160)
     SHR
-    PUSH1 section_unit0  // br v18 block9 block10;
+    PUSH1 __evm_shared_tail_0  // br v18 block9 block10;
     JUMPI
   block10:
     PUSH0  // evm_mstore v1 v13;
@@ -106,7 +106,7 @@ run:
     DUP1  // v28.i256 = shr v14 v27;
     PUSH1 0xa0 (160)
     SHR
-    PUSH1 section_unit0  // br v28 block3 block4;
+    PUSH1 __evm_shared_tail_0  // br v28 block3 block4;
     JUMPI
   block4:
     PUSH1 0x24 (36)  // v32.i256 = evm_calldata_load v31;
@@ -122,7 +122,7 @@ run:
     DUP3  // v24.i256 = lt v23 v32;
     DUP2
     LT
-    PUSH1 section_unit0  // br v24 block5 block6;
+    PUSH1 __evm_shared_tail_0  // br v24 block5 block6;
     JUMPI
   block6:
     DUP3  // v25.i256 = sub v23 v32;

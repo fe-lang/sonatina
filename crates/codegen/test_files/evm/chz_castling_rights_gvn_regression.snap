@@ -52,7 +52,7 @@ abs_diff:
     AND
     SWAP2  // v9.i256 = lt v1 v0;
     LT
-    PUSH1 section_unit0  // br v9 block5 block6;
+    PUSH1 __evm_shared_tail_0  // br v9 block5 block6;
     JUMPI
   block4:
     JUMPDEST
@@ -372,7 +372,7 @@ path_clear_file:
     JUMPDEST
     DUP1  // br v59 block26 block31;
     ISZERO
-    PUSH1 section_unit0
+    PUSH1 __evm_shared_tail_0
     JUMPI
   block26:
     PUSH1 0xa0 (160)  // v60.i256 = evm_mload v4;
@@ -403,7 +403,7 @@ path_clear_file:
     SWAP2
     EQ
     ISZERO  // br v40 block27 block32;
-    PUSH1 section_unit0
+    PUSH1 __evm_shared_tail_0
     JUMPI
   block27:
     DUP5  // v41.i256 = add v1 v39;
@@ -415,7 +415,7 @@ path_clear_file:
     SWAP2
     EQ
     ISZERO  // br v44 block28 block38;
-    PUSH1 section_unit0
+    PUSH1 __evm_shared_tail_0
     JUMPI
   block28:
     PUSH1 0x2 (2)  // v46.i256 = shl v31 v43;
@@ -460,7 +460,7 @@ path_clear_file:
     SWAP2
     EQ
     ISZERO  // br v14 block22 block30;
-    PUSH1 section_unit0
+    PUSH1 __evm_shared_tail_0
     JUMPI
   block22:
     DUP4  // v15.i256 = lt v12 v3;
@@ -482,7 +482,7 @@ path_clear_file:
     SWAP2
     EQ
     ISZERO  // br v20 block24 block34;
-    PUSH1 section_unit0
+    PUSH1 __evm_shared_tail_0
     JUMPI
   block24:
     DUP2  // v21.i256 = add v1 v19;
@@ -494,7 +494,7 @@ path_clear_file:
     SWAP2
     EQ
     ISZERO  // br v30 block25 block35;
-    PUSH1 section_unit0
+    PUSH1 __evm_shared_tail_0
     JUMPI
   block25:
     PUSH1 0x2 (2)  // v32.i256 = shl v31 v29;

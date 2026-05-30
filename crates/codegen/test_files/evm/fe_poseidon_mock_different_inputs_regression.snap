@@ -64,7 +64,7 @@ ark:
     DUP9
     LT
     ISZERO  // br v24 block5 block20;
-    PUSH1 section_unit0
+    PUSH1 __evm_shared_tail_0
     JUMPI
   block5:
     DUP8  // v25.i256 = shl 5.i256 v3;
@@ -101,7 +101,7 @@ ark:
     DUP2
     LT
     ISZERO  // br v40 block6 block21;
-    PUSH1 section_unit0
+    PUSH1 __evm_shared_tail_0
     JUMPI
   block6:
     PUSH1 0x5 (5)  // v41.i256 = shl 5.i256 v39;
@@ -136,7 +136,7 @@ ark:
     DUP2
     LT
     ISZERO  // br v52 block7 block22;
-    PUSH1 section_unit0
+    PUSH1 __evm_shared_tail_0
     JUMPI
   block7:
     PUSH1 0x5 (5)  // v53.i256 = shl 5.i256 v51;
@@ -442,7 +442,7 @@ poseidon_mock:
     SWAP2  // v8.i256 = lt v7 v3;
     DUP3
     LT
-    PUSH1 section_unit0  // br v8 block17 block3;
+    PUSH1 __evm_shared_tail_0  // br v8 block17 block3;
     JUMPI
   block3:
     SWAP2  // v11.i256 = add v63 v9;
@@ -482,7 +482,7 @@ poseidon_mock:
     SWAP2  // v19.i256 = lt v18 v60;
     DUP3
     LT
-    PUSH1 section_unit0  // br v19 block18 block7;
+    PUSH1 __evm_shared_tail_0  // br v19 block18 block7;
     JUMPI
   block7:
     SWAP2  // v20.i256 = add v24 v9;
@@ -522,7 +522,7 @@ entry:
     JUMP
     JUMPDEST
     EQ  // v6.i256 = eq v2 v5;
-    PUSH1 section_unit0  // br v6 block1 block2;
+    PUSH1 __evm_shared_tail_0  // br v6 block1 block2;
     JUMPI
   block2:
     JUMPDEST

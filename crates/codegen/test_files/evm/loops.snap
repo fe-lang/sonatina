@@ -134,7 +134,7 @@ __Bench_recv_0_5:
 __Bench_init:
   block0:
     CALLVALUE  // v0.i256 = evm_call_value;
-    PUSH1 section_unit0  // br v0 block1 block2;
+    PUSH1 __evm_shared_tail_0  // br v0 block1 block2;
     JUMPI
   block2:
     JUMPDEST
@@ -436,7 +436,7 @@ u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_So
     SWAP1
     SWAP2
     LT
-    PUSH1 section_unit0  // br v6 block1 block2;
+    PUSH1 __evm_shared_tail_0  // br v6 block1 block2;
     JUMPI
   block2:
     JUMPDEST
@@ -451,7 +451,7 @@ u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_So
     SWAP4  // v21.i256 = gt v13 v5;
     DUP5
     GT
-    PUSH1 section_unit0  // br v21 block3 block4;
+    PUSH1 __evm_shared_tail_0  // br v21 block3 block4;
     JUMPI
   block4:
     SWAP1  // v11.i256 = add v12 v3;

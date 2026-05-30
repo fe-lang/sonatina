@@ -365,6 +365,7 @@ impl EvmBackend {
         Ok(run_late_section_terminal_outline(
             prepared.module(),
             lowered,
+            self.late_cleanup_profile,
         ))
     }
 
