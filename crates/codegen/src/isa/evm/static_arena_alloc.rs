@@ -35,12 +35,10 @@ pub(crate) use exact_pack::{
     ExactPackItem, ExactPackWorkspace, PackedObject, pack_exact_peak_by,
     pack_exact_with_offsets_by, pack_objects_presorted,
 };
-#[cfg(test)]
-pub(crate) use object_liveness::BlockLiveSegment;
-pub(crate) use object_liveness::LiveRegion;
 use object_liveness::{
     AllocaClosureCtx, ComputeCtx as ObjectLivenessCtx, compute_regions_and_calls,
 };
+pub(crate) use object_liveness::{BlockLiveSegment, LiveRegion};
 
 #[cfg(test)]
 pub(crate) struct StackifiedFuncAnalysis {
@@ -237,7 +235,7 @@ pub(crate) fn compute_inst_order(
     (order, pos)
 }
 
-fn compute_block_order(function: &Function, block_order: &[BlockId]) -> Vec<BlockId> {
+pub(crate) fn compute_block_order(function: &Function, block_order: &[BlockId]) -> Vec<BlockId> {
     let mut blocks = Vec::new();
     let mut seen: FxHashSet<BlockId> = FxHashSet::default();
     for &block in block_order {

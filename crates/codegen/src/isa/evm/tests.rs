@@ -940,6 +940,150 @@ fn prepared_func_dump(src: &str, func_name: &str) -> String {
 }
 
 #[test]
+fn non_terminal_private_transient_malloc_lowers_to_static_slot_with_persistent_heap() {
+    let dumped = prepared_func_dump(
+        r#"
+target = "evm-ethereum-osaka"
+
+func private %mk(v0.i256) -> *i8 {
+block0:
+    v1.*i8 = evm_malloc 32.i256;
+    v2.i256 = ptr_to_int v1 i256;
+    mstore v2 v0 i256;
+    return v1;
+}
+
+func public %entry(v0.i1, v1.i256) -> i256 {
+block0:
+    br v0 block1 block2;
+
+block1:
+    v2.*i8 = evm_malloc 64.i256;
+    v3.i256 = ptr_to_int v2 i256;
+    mstore v3 v1 i256;
+    v4.i256 = add v3 32.i256;
+    mstore v4 v1 i256;
+    v5.i256 = evm_keccak256 v3 64.i256;
+    return v5;
+
+block2:
+    v6.*i8 = call %mk v1;
+    v7.i256 = ptr_to_int v6 i256;
+    return v7;
+}
+"#,
+        "entry",
+    );
+
+    assert!(
+        dumped.contains("evm_keccak256"),
+        "test should contain the private scratch consumer:\n{dumped}"
+    );
+    assert!(
+        !dumped.contains("evm_mload 64.i256"),
+        "private transient malloc should not read the heap free pointer:\n{dumped}"
+    );
+    assert!(
+        !dumped.contains("evm_malloc") && !dumped.contains("ptr_to_int"),
+        "machine IR should replace the malloc address with a static slot:\n{dumped}"
+    );
+}
+
+#[test]
+fn disjoint_private_transient_mallocs_pack_into_same_static_slot() {
+    let dumped = prepared_func_dump(
+        r#"
+target = "evm-ethereum-osaka"
+
+func private %mk(v0.i256) -> *i8 {
+block0:
+    v1.*i8 = evm_malloc 32.i256;
+    v2.i256 = ptr_to_int v1 i256;
+    mstore v2 v0 i256;
+    return v1;
+}
+
+func public %entry(v0.i256) -> i256 {
+block0:
+    v1.*i8 = evm_malloc 64.i256;
+    v2.i256 = ptr_to_int v1 i256;
+    mstore v2 v0 i256;
+    v3.i256 = evm_keccak256 v2 64.i256;
+    v4.*i8 = evm_malloc 64.i256;
+    v5.i256 = ptr_to_int v4 i256;
+    mstore v5 v0 i256;
+    v6.i256 = evm_keccak256 v5 64.i256;
+    v7.i256 = add v3 v6;
+    return v7;
+}
+"#,
+        "entry",
+    );
+
+    let keccak_bases: Vec<_> = dumped
+        .lines()
+        .filter_map(|line| {
+            line.split("evm_keccak256 ")
+                .nth(1)
+                .and_then(|tail| tail.split_whitespace().next())
+        })
+        .collect();
+    assert_eq!(
+        keccak_bases.len(),
+        2,
+        "test should contain two private scratch consumers:\n{dumped}"
+    );
+    assert_eq!(
+        keccak_bases[0], keccak_bases[1],
+        "disjoint private buffers should share the packed static slot:\n{dumped}"
+    );
+    assert!(
+        !dumped.contains("evm_mload 64.i256"),
+        "packed private buffers should not use transient heap bases:\n{dumped}"
+    );
+}
+
+#[test]
+fn dynamic_private_transient_access_len_keeps_heap_base() {
+    let dumped = prepared_func_dump(
+        r#"
+target = "evm-ethereum-osaka"
+
+func private %mk(v0.i256) -> *i8 {
+block0:
+    v1.*i8 = evm_malloc 32.i256;
+    v2.i256 = ptr_to_int v1 i256;
+    mstore v2 v0 i256;
+    return v1;
+}
+
+func public %entry(v0.i1, v1.i256, v2.i256) -> i256 {
+block0:
+    br v0 block1 block2;
+
+block1:
+    v3.*i8 = evm_malloc 64.i256;
+    v4.i256 = ptr_to_int v3 i256;
+    mstore v4 v2 i256;
+    v5.i256 = evm_keccak256 v4 v1;
+    return v5;
+
+block2:
+    v6.*i8 = call %mk v2;
+    v7.i256 = ptr_to_int v6 i256;
+    return v7;
+}
+"#,
+        "entry",
+    );
+
+    assert!(
+        dumped.contains("evm_mload 64.i256"),
+        "dynamic private access length must retain the heap-derived base:\n{dumped}"
+    );
+}
+
+#[test]
 fn terminal_private_checked_malloc_lowers_to_fixed_buffer_with_persistent_heap() {
     let dumped = prepared_func_dump(
         r#"
@@ -1375,7 +1519,7 @@ func public %clobber_then_read(v0.*i256) -> i256 {
 block0:
     v1.*i8 = evm_malloc 32.i256;
     v2.*i256 = bitcast v1 *i256;
-    mstore v2 222.i256 i256;
+    mstore v2 v2 i256;
     v3.i256 = mload v0 i256;
     return v3;
 }
@@ -1463,7 +1607,7 @@ func public %scratch(v0.i256) -> i256 {
 block0:
     v1.*i8 = evm_malloc 32.i256;
     v2.i256 = ptr_to_int v1 i256;
-    mstore v2 222.i256 i256;
+    mstore v2 v2 i256;
     return v0;
 }
 

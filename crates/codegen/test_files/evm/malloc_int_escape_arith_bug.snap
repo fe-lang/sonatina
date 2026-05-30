@@ -6,15 +6,15 @@ input_file: test_files/evm/malloc_int_escape_arith_bug.sntn
 evm.config: stack_reach=16 vcode=false bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 52 bytes
-  total: 52 bytes
+  section runtime: 50 bytes
+  total: 50 bytes
 
 functions:
-  mem: global_dyn_base=0xa0 arena_base=0xa0 scratch_peak_words=0 static_chain_peak_words=0
-  main: ir_blocks=4 ir_insts=15 vcode_ops=31 fixups=1 imm_bytes=8
-    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
+  mem: global_dyn_base=0xc0 arena_base=0xa0 scratch_peak_words=1 static_chain_peak_words=0
+  main: ir_blocks=4 ir_insts=14 vcode_ops=29 fixups=1 imm_bytes=8
+    mem: scratch_words=1 stable_words=0 stable_mode=None entry_abs_words=1 abs_words_end=1
   entry: ir_blocks=1 ir_insts=3 vcode_ops=9 fixups=2 imm_bytes=1
-    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=1 abs_words_end=0
 
 evm:
-  case bug_demo: calldata_len=8 success reason=Return gas_used=21200 gas_refunded=0 logs=0 output=call len=32 tx_gas=21056 runtime_gas=144
+  case bug_demo: calldata_len=8 success reason=Return gas_used=21194 gas_refunded=0 logs=0 output=call len=32 tx_gas=21056 runtime_gas=138

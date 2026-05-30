@@ -6,20 +6,20 @@ input_file: test_files/evm/malloc_helper_under_live_frame.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 143 bytes
-  total: 143 bytes
+  section runtime: 121 bytes
+  total: 121 bytes
 
 functions:
-  mem: global_dyn_base=0xa0 arena_base=0xa0 scratch_peak_words=0 static_chain_peak_words=0
-  helper: ir_blocks=4 ir_insts=14 vcode_ops=27 fixups=1 imm_bytes=5
-    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
+  mem: global_dyn_base=0xc0 arena_base=0xa0 scratch_peak_words=1 static_chain_peak_words=0
+  helper: ir_blocks=1 ir_insts=3 vcode_ops=8 fixups=0 imm_bytes=3
+    mem: scratch_words=1 stable_words=0 stable_mode=None entry_abs_words=1 abs_words_end=1
   ready: ir_blocks=3 ir_insts=13 vcode_ops=72 fixups=6 imm_bytes=12
-    mem: scratch_words=0 stable_words=1 stable_mode=DynamicFrame entry_abs_words=0 abs_words_end=0
+    mem: scratch_words=0 stable_words=1 stable_mode=DynamicFrame entry_abs_words=1 abs_words_end=0
   entry: ir_blocks=1 ir_insts=5 vcode_ops=14 fixups=2 imm_bytes=2
-    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=1 abs_words_end=0
 
 evm:
-  case ok: calldata_len=4 success reason=Return gas_used=21426 gas_refunded=0 logs=0 output=call len=32 tx_gas=21028 runtime_gas=398
+  case ok: calldata_len=4 success reason=Return gas_used=21368 gas_refunded=0 logs=0 output=call len=32 tx_gas=21028 runtime_gas=340
 
 
 --------------- DEBUG ---------------
@@ -28,33 +28,12 @@ evm:
 helper:
   block0:
     JUMPDEST
-    PUSH1 0x40 (64)  // v1.i256 = evm_mload v0;
-    MLOAD
-    PUSH1 0x80 (128)  // v3.i256 = evm_mload v2;
-    MLOAD
-    DUP2  // v4.i256 = sub v3 v1;
-    DUP2
-    SUB
-    SWAP1  // v5.i256 = lt v1 v3;
-    DUP3
-    LT
-    MUL  // v6.i256 = mul v4 v5;
-    ADD  // v7.i256 = add v1 v6;
-    PUSH1 0x9f (159)  // v10.i256 = gt v7 159.i256;
-    DUP2
-    GT
-    PUSH1 block3  // br v10 block4 block2;
-    JUMPI
-  block2:
-    POP  // jump block3;
+    PUSH1 0x6f (111)  // evm_mstore v0 v1;
     PUSH1 0xa0 (160)
-  block3:
-    JUMPDEST
-    PUSH1 0x6f (111)  // evm_mstore v11 111.i256;
-    DUP2
     MSTORE
-    MLOAD  // v13.i256 = evm_mload v11;
-    SWAP1  // return v13;
+    PUSH1 0xa0 (160)  // v2.i256 = evm_mload v0;
+    MLOAD
+    SWAP1  // return v2;
     JUMP
 
 // func public %ready(v0.i256) -> i256

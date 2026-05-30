@@ -1,6 +1,7 @@
-use cranelift_entity::SecondaryMap;
+use cranelift_entity::{EntityRef, SecondaryMap};
 use rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
 use rustc_hash::{FxHashMap, FxHashSet};
+use smallvec::SmallVec;
 use sonatina_ir::{
     AccessKind, BlockId, Function, InstId, InstSetExt, Module, Value, ValueId,
     cfg::ControlFlowGraph,
@@ -13,6 +14,7 @@ use sonatina_ir::{
 };
 
 use crate::{
+    bitset::BitSet,
     isa::evm::provenance::{Provenance, compute_value_provenance},
     module_analysis::CallGraph,
 };
@@ -24,9 +26,13 @@ use super::{
         memory_plan::{self, BackendSpillReserve, FuncPreAnalysis, ObjLoc, StableMode, WORD_BYTES},
         prepare::{
             ArenaBaseFacts, choose_arena_base, compute_return_escape_caller_clamp_words,
-            function_free_ptr_slot_facts, memory_access_may_touch_free_ptr_slot,
+            function_free_ptr_slot_facts, memory_access_may_touch_free_ptr_slot, value_imm_u32,
         },
         ptr_escape::PtrEscapeSummary,
+        static_arena_alloc::{
+            BlockLiveSegment, LiveRegion, PackedObject, StackObjId, compute_block_order,
+            pack_objects_presorted,
+        },
     },
     free_ptr_floor::{
         ProgramFreePtrFloorInput, compute_free_ptr_write_summaries,
@@ -66,6 +72,66 @@ pub(crate) enum MallocPlacement {
     },
 }
 
+#[derive(Clone, Debug, Default)]
+struct PrivateStaticMallocProgramPlan {
+    funcs: FxHashMap<FuncRef, PrivateStaticMallocFuncPlan>,
+}
+
+impl PrivateStaticMallocProgramPlan {
+    fn backend_spill_reserves(&self) -> FxHashMap<FuncRef, BackendSpillReserve> {
+        self.funcs
+            .iter()
+            .filter_map(|(&func, plan)| {
+                (plan.extra_scratch_words != 0).then_some((
+                    func,
+                    BackendSpillReserve {
+                        scratch_words: plan.extra_scratch_words,
+                        stable_words: 0,
+                    },
+                ))
+            })
+            .collect()
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+struct PrivateStaticMallocFuncPlan {
+    word_offsets: FxHashMap<InstId, u32>,
+    extra_scratch_words: u32,
+}
+
+#[derive(Clone, Debug)]
+struct PrivateStaticMallocCandidate {
+    malloc: InstId,
+    size_words: u32,
+    region: LiveRegion,
+}
+
+struct PrivateStaticMallocProgramCtx<'a> {
+    module: &'a Module,
+    funcs: &'a [FuncRef],
+    analyses: &'a FxHashMap<FuncRef, FuncPreAnalysis>,
+    semantic_plan: &'a memory_plan::ProgramMemoryPlan,
+    ptr_escape: &'a FxHashMap<FuncRef, PtrEscapeSummary>,
+    isa: &'a Evm,
+    entry_may_have_live_frame: &'a FxHashMap<FuncRef, bool>,
+    has_persistent_mallocs: bool,
+    free_ptr_slot_may_be_touched: bool,
+}
+
+struct PrivateStaticMallocFuncCtx<'a> {
+    function: &'a Function,
+    func: FuncRef,
+    analysis: &'a FuncPreAnalysis,
+    func_plan: &'a memory_plan::FuncMemPlan,
+    module: &'a ModuleCtx,
+    ptr_escape: &'a FxHashMap<FuncRef, PtrEscapeSummary>,
+    isa: &'a Evm,
+    entry_may_have_live_frame: &'a FxHashMap<FuncRef, bool>,
+    has_persistent_mallocs: bool,
+    free_ptr_slot_may_be_touched: bool,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct MemoryPlacementSection<'a> {
     pub(crate) funcs: &'a [FuncRef],
@@ -95,12 +161,6 @@ pub(crate) fn compute_semantic_memory_placement(
 
     let mem_effects =
         compute_func_mem_effects(module, funcs, &semantic_plan, scratch_effects, &backend.isa);
-    let return_escape_caller_abs_words = compute_return_escape_caller_clamp_words(
-        module,
-        funcs,
-        &semantic_plan,
-        &FxHashMap::default(),
-    );
 
     let mut annotations: Vec<_> = funcs
         .par_iter()
@@ -127,25 +187,14 @@ pub(crate) fn compute_semantic_memory_placement(
                     );
                     (escape_kinds, transient)
                 });
-            (
-                func,
-                malloc_escape_kinds,
-                transient_mallocs,
-                return_escape_caller_abs_words
-                    .get(&func)
-                    .copied()
-                    .unwrap_or(0),
-            )
+            (func, malloc_escape_kinds, transient_mallocs)
         })
         .collect();
     annotations.sort_unstable_by_key(|(func, ..)| func.as_u32());
-    for (func, malloc_escape_kinds, transient_mallocs, return_escape_caller_abs_words) in
-        annotations
-    {
+    for (func, malloc_escape_kinds, transient_mallocs) in annotations {
         if let Some(func_plan) = semantic_plan.funcs.get_mut(&func) {
             func_plan.malloc_escape_kinds = malloc_escape_kinds;
             func_plan.transient_mallocs = transient_mallocs;
-            func_plan.return_escape_caller_abs_words = return_escape_caller_abs_words;
         }
     }
     let has_dynamic_frames = semantic_plan
@@ -174,6 +223,33 @@ pub(crate) fn compute_semantic_memory_placement(
     });
     let entry_may_have_live_frame =
         compute_entry_may_have_live_frame(module, funcs, &semantic_plan);
+    let (free_ptr_slot_may_be_touched, free_ptr_write_summaries) =
+        compute_program_free_ptr_slot_facts(module, funcs, backend, ptr_escape);
+    let private_static_mallocs =
+        compute_private_static_malloc_program_plan(PrivateStaticMallocProgramCtx {
+            module,
+            funcs,
+            analyses,
+            semantic_plan: &semantic_plan,
+            ptr_escape,
+            isa: &backend.isa,
+            entry_may_have_live_frame: &entry_may_have_live_frame,
+            has_persistent_mallocs,
+            free_ptr_slot_may_be_touched,
+        });
+    let private_static_reserves = private_static_mallocs.backend_spill_reserves();
+    semantic_plan.apply_backend_spill_reserves(module, funcs, &private_static_reserves);
+    let return_escape_caller_abs_words = compute_return_escape_caller_clamp_words(
+        module,
+        funcs,
+        &semantic_plan,
+        &FxHashMap::default(),
+    );
+    for (func, return_escape_caller_abs_words) in return_escape_caller_abs_words {
+        if let Some(func_plan) = semantic_plan.funcs.get_mut(&func) {
+            func_plan.return_escape_caller_abs_words = return_escape_caller_abs_words;
+        }
+    }
 
     let arena_base = choose_arena_base(
         module,
@@ -218,8 +294,6 @@ pub(crate) fn compute_semantic_memory_placement(
         }
     }
 
-    let (free_ptr_slot_may_be_touched, free_ptr_write_summaries) =
-        compute_program_free_ptr_slot_facts(module, funcs, backend, ptr_escape);
     let placement_ctx = MallocPlacementCtx {
         isa: &backend.isa,
         module: &module.ctx,
@@ -230,6 +304,7 @@ pub(crate) fn compute_semantic_memory_placement(
         section_entry: section.entry,
         has_persistent_mallocs,
         free_ptr_slot_may_be_touched,
+        private_static_mallocs: &private_static_mallocs,
     };
     let malloc_placements: FxHashMap<_, _> = funcs
         .iter()
@@ -304,6 +379,7 @@ struct MallocPlacementCtx<'a> {
     section_entry: FuncRef,
     has_persistent_mallocs: bool,
     free_ptr_slot_may_be_touched: bool,
+    private_static_mallocs: &'a PrivateStaticMallocProgramPlan,
 }
 
 impl MallocPlacementCtx<'_> {
@@ -336,6 +412,7 @@ impl MallocPlacementCtx<'_> {
         .compute();
         let terminal_private_mallocs = TerminalPrivateMallocAnalysis::new(
             function,
+            self.module,
             self.isa,
             &cfg,
             &exact_heap_base_before_malloc,
@@ -361,21 +438,34 @@ impl MallocPlacementCtx<'_> {
                     .get(&inst)
                     .copied()
                     .unwrap_or(false);
-                let placement = if transient
+                let fixed_by_terminal_or_program_rule = transient
                     && (terminal_private_mallocs.contains(&inst)
-                        || (exact_heap_base
-                            && self.section_entry == func
-                            && function.arg_values.is_empty()
-                            && malloc_private_uses_are_compatible_with_fixed_base(
-                                function,
-                                self.isa,
-                                inst,
-                                exact_heap_base,
-                            ))
                         || (!self.free_ptr_slot_may_be_touched
                             && !needs_dyn_sp_clamp
-                            && !self.has_persistent_mallocs))
-                {
+                            && !self.has_persistent_mallocs));
+                let fixed_by_exact_entry_rule = !fixed_by_terminal_or_program_rule
+                    && transient
+                    && exact_heap_base
+                    && self.section_entry == func
+                    && function.arg_values.is_empty()
+                    && malloc_private_uses_are_compatible_with_fixed_base(
+                        function,
+                        self.module,
+                        self.isa,
+                        inst,
+                        exact_heap_base,
+                    );
+                let private_static_base = self
+                    .private_static_mallocs
+                    .funcs
+                    .get(&func)
+                    .and_then(|plan| plan.word_offsets.get(&inst))
+                    .map(|&word| func_plan.abs_addr_for_word(word));
+                let placement = if fixed_by_terminal_or_program_rule {
+                    MallocPlacement::Fixed { base: min_base }
+                } else if transient && let Some(base) = private_static_base {
+                    MallocPlacement::Fixed { base }
+                } else if fixed_by_exact_entry_rule {
                     MallocPlacement::Fixed { base: min_base }
                 } else {
                     MallocPlacement::Heap {
@@ -391,8 +481,264 @@ impl MallocPlacementCtx<'_> {
     }
 }
 
+fn compute_private_static_malloc_program_plan(
+    ctx: PrivateStaticMallocProgramCtx<'_>,
+) -> PrivateStaticMallocProgramPlan {
+    let funcs = ctx
+        .funcs
+        .iter()
+        .copied()
+        .filter_map(|func| {
+            let function_plan = ctx.semantic_plan.funcs.get(&func)?;
+            let analysis = ctx
+                .analyses
+                .get(&func)
+                .unwrap_or_else(|| panic!("missing pre-analysis for func {}", func.as_u32()));
+            let plan = ctx.module.func_store.view(func, |function| {
+                compute_private_static_malloc_func_plan(PrivateStaticMallocFuncCtx {
+                    function,
+                    func,
+                    analysis,
+                    func_plan: function_plan,
+                    module: &ctx.module.ctx,
+                    ptr_escape: ctx.ptr_escape,
+                    isa: ctx.isa,
+                    entry_may_have_live_frame: ctx.entry_may_have_live_frame,
+                    has_persistent_mallocs: ctx.has_persistent_mallocs,
+                    free_ptr_slot_may_be_touched: ctx.free_ptr_slot_may_be_touched,
+                })
+            });
+            (!plan.word_offsets.is_empty()).then_some((func, plan))
+        })
+        .collect();
+
+    PrivateStaticMallocProgramPlan { funcs }
+}
+
+fn compute_private_static_malloc_func_plan(
+    ctx: PrivateStaticMallocFuncCtx<'_>,
+) -> PrivateStaticMallocFuncPlan {
+    let needs_dyn_sp_clamp = ctx.func_plan.uses_dynamic_frame()
+        || ctx
+            .entry_may_have_live_frame
+            .get(&ctx.func)
+            .copied()
+            .unwrap_or(false);
+    if !ctx.has_persistent_mallocs && !ctx.free_ptr_slot_may_be_touched && !needs_dyn_sp_clamp {
+        return PrivateStaticMallocFuncPlan::default();
+    }
+
+    let mut cfg = ControlFlowGraph::new();
+    cfg.compute(ctx.function);
+    let prov = compute_value_provenance(ctx.function, ctx.module, ctx.isa, |callee| {
+        PtrEscapeSummary::get_or_conservative(ctx.ptr_escape, ctx.module, callee)
+    });
+    let exact_heap_base_before_malloc = ExactHeapBaseAnalysis {
+        function: ctx.function,
+        isa: ctx.isa,
+        cfg: &cfg,
+        func_plan: ctx.func_plan,
+        prov: &prov,
+        entry_heap_base_is_exact: !needs_dyn_sp_clamp,
+    }
+    .compute();
+    let terminal_private_mallocs = TerminalPrivateMallocAnalysis::new(
+        ctx.function,
+        ctx.module,
+        ctx.isa,
+        &cfg,
+        &exact_heap_base_before_malloc,
+    )
+    .compute();
+
+    let mut candidates = Vec::new();
+    for block in ctx.function.layout.iter_block() {
+        for inst in ctx.function.layout.iter_inst(block) {
+            if terminal_private_mallocs.contains(&inst) {
+                continue;
+            }
+            if let Some(candidate) = private_static_malloc_candidate(
+                ctx.function,
+                ctx.analysis,
+                ctx.func_plan,
+                ctx.module,
+                ctx.isa,
+                inst,
+                exact_heap_base_before_malloc
+                    .get(&inst)
+                    .copied()
+                    .unwrap_or(false),
+            ) {
+                candidates.push(candidate);
+            }
+        }
+    }
+    if candidates.is_empty() {
+        return PrivateStaticMallocFuncPlan::default();
+    }
+
+    let mut objects: Vec<_> = candidates
+        .iter()
+        .enumerate()
+        .map(|(idx, candidate)| {
+            let id = StackObjId::new(idx);
+            PackedObject {
+                id,
+                size_words: candidate.size_words,
+                region: candidate.region.clone(),
+                min_offset_words: ctx.func_plan.scratch_words,
+            }
+        })
+        .collect();
+    objects.sort_unstable_by_key(|object| object.region.sort_key(object.id));
+    let (offsets, peak_words) = pack_objects_presorted(&objects);
+    let mut word_offsets = FxHashMap::default();
+    for (idx, candidate) in candidates.iter().enumerate() {
+        let id = StackObjId::new(idx);
+        let Some(&offset) = offsets.get(&id) else {
+            continue;
+        };
+        word_offsets.insert(candidate.malloc, offset);
+    }
+
+    PrivateStaticMallocFuncPlan {
+        word_offsets,
+        extra_scratch_words: peak_words
+            .checked_sub(ctx.func_plan.scratch_words)
+            .expect("private static malloc peak below scratch base"),
+    }
+}
+
+fn private_static_malloc_candidate(
+    function: &Function,
+    analysis: &FuncPreAnalysis,
+    func_plan: &memory_plan::FuncMemPlan,
+    module: &ModuleCtx,
+    isa: &Evm,
+    inst: InstId,
+    exact_heap_base: bool,
+) -> Option<PrivateStaticMallocCandidate> {
+    let EvmInstKind::EvmMalloc(malloc) = isa.inst_set().resolve_inst(function.dfg.inst(inst))
+    else {
+        return None;
+    };
+    if !func_plan.transient_mallocs.contains(&inst) {
+        return None;
+    }
+    let size_bytes = value_imm_u32(function, *malloc.size())?;
+    let size_words = aligned_malloc_words(size_bytes)?;
+    if size_words == 0 {
+        return None;
+    }
+
+    let malloc_uses = PrivateMallocUseAnalysis::new(function, module, isa, inst);
+    malloc_uses.analyze_static_private_address_uses(size_bytes, exact_heap_base)?;
+    if private_static_malloc_live_across_internal_call(function, analysis, &malloc_uses) {
+        return None;
+    }
+    let region = private_static_malloc_live_region(function, analysis, &malloc_uses)?;
+    Some(PrivateStaticMallocCandidate {
+        malloc: inst,
+        size_words,
+        region,
+    })
+}
+
+fn aligned_malloc_words(size_bytes: u32) -> Option<u32> {
+    size_bytes
+        .checked_add(WORD_BYTES - 1)
+        .map(|size| size / WORD_BYTES)
+}
+
+fn private_static_malloc_live_across_internal_call(
+    function: &Function,
+    analysis: &FuncPreAnalysis,
+    malloc_uses: &PrivateMallocUseAnalysis<'_>,
+) -> bool {
+    function.layout.iter_block().any(|block| {
+        function.layout.iter_inst(block).any(|inst| {
+            function.dfg.call_info(inst).is_some()
+                && (malloc_uses.inst_uses_derived_value(inst)
+                    || analysis
+                        .inst_liveness
+                        .live_out(inst)
+                        .iter()
+                        .any(|value| malloc_uses.is_derived_value(value)))
+        })
+    })
+}
+
+fn private_static_malloc_live_region(
+    function: &Function,
+    analysis: &FuncPreAnalysis,
+    malloc_uses: &PrivateMallocUseAnalysis<'_>,
+) -> Option<LiveRegion> {
+    let blocks = compute_block_order(function, &analysis.block_order);
+    let mut segments = SmallVec::<[BlockLiveSegment; 4]>::new();
+    let mut first_rank: Option<u32> = None;
+    let mut last_rank = 0;
+    let mut next_rank = 0u32;
+    let mut has_use = false;
+
+    for block in blocks {
+        let block_base_rank = next_rank;
+        let mut segment_start = None;
+        let mut segment_end = 0u32;
+        let mut inst_idx = 0u32;
+        for inst in function.layout.iter_inst(block) {
+            let uses_candidate =
+                inst != malloc_uses.malloc && malloc_uses.inst_uses_derived_value(inst);
+            has_use |= uses_candidate;
+            let live_after = analysis
+                .inst_liveness
+                .live_out(inst)
+                .iter()
+                .any(|value| malloc_uses.is_derived_value(value));
+            if inst == malloc_uses.malloc || uses_candidate || live_after {
+                segment_start.get_or_insert(inst_idx);
+                segment_end = inst_idx.checked_add(1)?;
+            }
+            inst_idx = inst_idx.checked_add(1)?;
+        }
+        next_rank = next_rank.checked_add(inst_idx)?;
+
+        if let Some(start_boundary) = segment_start
+            && start_boundary != segment_end
+        {
+            segments.push(BlockLiveSegment {
+                block,
+                start_boundary,
+                end_boundary: segment_end,
+            });
+            let start_rank = block_base_rank.checked_add(start_boundary)?;
+            let end_rank = block_base_rank.checked_add(segment_end)?;
+            first_rank = Some(first_rank.map_or(start_rank, |rank| rank.min(start_rank)));
+            last_rank = last_rank.max(end_rank);
+        }
+    }
+
+    if !has_use || segments.is_empty() {
+        return None;
+    }
+    segments.sort_unstable_by_key(|segment| {
+        (
+            segment.block.as_u32(),
+            segment.start_boundary,
+            segment.end_boundary,
+        )
+    });
+
+    Some(LiveRegion {
+        segments,
+        phi_edges: BitSet::default(),
+        first_rank: first_rank?,
+        last_rank,
+    })
+}
+
 struct TerminalPrivateMallocAnalysis<'a> {
     function: &'a Function,
+    module: &'a ModuleCtx,
     isa: &'a Evm,
     cfg: &'a ControlFlowGraph,
     exact_heap_base_before_malloc: &'a FxHashMap<InstId, bool>,
@@ -402,6 +748,7 @@ struct TerminalPrivateMallocAnalysis<'a> {
 impl<'a> TerminalPrivateMallocAnalysis<'a> {
     fn new(
         function: &'a Function,
+        module: &'a ModuleCtx,
         isa: &'a Evm,
         cfg: &'a ControlFlowGraph,
         exact_heap_base_before_malloc: &'a FxHashMap<InstId, bool>,
@@ -412,6 +759,7 @@ impl<'a> TerminalPrivateMallocAnalysis<'a> {
         }
         Self {
             function,
+            module,
             isa,
             cfg,
             exact_heap_base_before_malloc,
@@ -512,6 +860,7 @@ impl<'a> TerminalPrivateMallocAnalysis<'a> {
     fn malloc_is_private(&self, inst: InstId) -> bool {
         malloc_private_uses_are_compatible_with_fixed_base(
             self.function,
+            self.module,
             self.isa,
             inst,
             self.exact_heap_base_before_malloc
@@ -627,15 +976,17 @@ struct PrivateMallocUseInfo {
 
 struct PrivateMallocUseAnalysis<'a> {
     function: &'a Function,
+    module: &'a ModuleCtx,
     isa: &'a Evm,
     malloc: InstId,
     derived_values: FxHashSet<ValueId>,
 }
 
 impl<'a> PrivateMallocUseAnalysis<'a> {
-    fn new(function: &'a Function, isa: &'a Evm, malloc: InstId) -> Self {
+    fn new(function: &'a Function, module: &'a ModuleCtx, isa: &'a Evm, malloc: InstId) -> Self {
         let mut analysis = Self {
             function,
+            module,
             isa,
             malloc,
             derived_values: function.dfg.inst_results(malloc).iter().copied().collect(),
@@ -657,6 +1008,22 @@ impl<'a> PrivateMallocUseAnalysis<'a> {
         Some(PrivateMallocUseInfo {
             requires_exact_heap_base,
         })
+    }
+
+    fn analyze_static_private_address_uses(
+        &self,
+        alloc_size_bytes: u32,
+        exact_heap_base: bool,
+    ) -> Option<()> {
+        for block in self.function.layout.iter_block() {
+            for inst in self.function.layout.iter_inst(block) {
+                if inst != self.malloc && self.inst_uses_derived_value(inst) {
+                    self.static_private_use_is_bounded(inst, alloc_size_bytes, exact_heap_base)?;
+                }
+            }
+        }
+
+        Some(())
     }
 
     fn compute_derived_values(&mut self) {
@@ -729,6 +1096,374 @@ impl<'a> PrivateMallocUseAnalysis<'a> {
             }
             _ => None,
         }
+    }
+
+    fn static_private_use_is_bounded(
+        &self,
+        inst: InstId,
+        alloc_size_bytes: u32,
+        exact_heap_base: bool,
+    ) -> Option<()> {
+        if self.inst_derives_address(inst) {
+            if let Some(flag) = self.checked_overflow_flag(inst)
+                && self.value_is_used(flag)
+            {
+                return None;
+            }
+            return Some(());
+        }
+
+        match self.resolve(inst) {
+            EvmInstKind::Lt(lt)
+                if exact_heap_base && self.inst_result_uses_are_private_branches(inst) =>
+            {
+                self.static_overflow_predicate_is_false(*lt.lhs(), *lt.rhs(), alloc_size_bytes)
+            }
+            EvmInstKind::Mload(mload) => {
+                self.typed_addr_range_within_alloc(*mload.addr(), *mload.ty(), alloc_size_bytes)
+            }
+            EvmInstKind::Mstore(mstore) if !self.derived_values.contains(mstore.value()) => {
+                self.typed_addr_range_within_alloc(*mstore.addr(), *mstore.ty(), alloc_size_bytes)
+            }
+            EvmInstKind::EvmMload(mload) => {
+                self.addr_range_within_alloc(*mload.addr(), WORD_BYTES, alloc_size_bytes)
+            }
+            EvmInstKind::EvmMstore(mstore) if !self.derived_values.contains(mstore.value()) => {
+                self.addr_range_within_alloc(*mstore.addr(), WORD_BYTES, alloc_size_bytes)
+            }
+            EvmInstKind::EvmMstore8(mstore) if !self.derived_values.contains(mstore.val()) => {
+                self.addr_range_within_alloc(*mstore.addr(), 1, alloc_size_bytes)
+            }
+            EvmInstKind::EvmKeccak256(keccak) => {
+                let len = self.static_len(*keccak.len())?;
+                self.addr_range_within_alloc(*keccak.addr(), len, alloc_size_bytes)
+            }
+            EvmInstKind::EvmCalldataCopy(copy)
+                if self.values_are_not_derived([*copy.data_offset(), *copy.len()]) =>
+            {
+                let len = self.static_len(*copy.len())?;
+                self.addr_range_within_alloc(*copy.dst_addr(), len, alloc_size_bytes)
+            }
+            EvmInstKind::EvmCodeCopy(copy)
+                if self.values_are_not_derived([*copy.code_offset(), *copy.len()]) =>
+            {
+                let len = self.static_len(*copy.len())?;
+                self.addr_range_within_alloc(*copy.dst_addr(), len, alloc_size_bytes)
+            }
+            EvmInstKind::EvmReturnDataCopy(copy)
+                if self.values_are_not_derived([*copy.data_offset(), *copy.len()]) =>
+            {
+                let len = self.static_len(*copy.len())?;
+                self.addr_range_within_alloc(*copy.dst_addr(), len, alloc_size_bytes)
+            }
+            EvmInstKind::EvmExtCodeCopy(copy)
+                if self.values_are_not_derived([
+                    *copy.ext_addr(),
+                    *copy.code_offset(),
+                    *copy.len(),
+                ]) =>
+            {
+                let len = self.static_len(*copy.len())?;
+                self.addr_range_within_alloc(*copy.dst_addr(), len, alloc_size_bytes)
+            }
+            EvmInstKind::EvmMcopy(copy) if !self.derived_values.contains(copy.len()) => {
+                let len = self.static_len(*copy.len())?;
+                if self.derived_values.contains(copy.addr())
+                    && !self.derived_values.contains(copy.dest())
+                    && len != 0
+                {
+                    return None;
+                }
+                self.addr_range_within_alloc(*copy.dest(), len, alloc_size_bytes)?;
+                self.addr_range_within_alloc(*copy.addr(), len, alloc_size_bytes)
+            }
+            EvmInstKind::EvmLog0(log) if !self.derived_values.contains(log.len()) => {
+                let len = self.static_len(*log.len())?;
+                self.addr_range_within_alloc(*log.addr(), len, alloc_size_bytes)
+            }
+            EvmInstKind::EvmLog1(log)
+                if self.values_are_not_derived([*log.len(), *log.topic0()]) =>
+            {
+                let len = self.static_len(*log.len())?;
+                self.addr_range_within_alloc(*log.addr(), len, alloc_size_bytes)
+            }
+            EvmInstKind::EvmLog2(log)
+                if self.values_are_not_derived([*log.len(), *log.topic0(), *log.topic1()]) =>
+            {
+                let len = self.static_len(*log.len())?;
+                self.addr_range_within_alloc(*log.addr(), len, alloc_size_bytes)
+            }
+            EvmInstKind::EvmLog3(log)
+                if self.values_are_not_derived([
+                    *log.len(),
+                    *log.topic0(),
+                    *log.topic1(),
+                    *log.topic2(),
+                ]) =>
+            {
+                let len = self.static_len(*log.len())?;
+                self.addr_range_within_alloc(*log.addr(), len, alloc_size_bytes)
+            }
+            EvmInstKind::EvmLog4(log)
+                if self.values_are_not_derived([
+                    *log.len(),
+                    *log.topic0(),
+                    *log.topic1(),
+                    *log.topic2(),
+                    *log.topic3(),
+                ]) =>
+            {
+                let len = self.static_len(*log.len())?;
+                self.addr_range_within_alloc(*log.addr(), len, alloc_size_bytes)
+            }
+            EvmInstKind::EvmCreate(create)
+                if self.values_are_not_derived([*create.val(), *create.len()]) =>
+            {
+                let len = self.static_len(*create.len())?;
+                self.addr_range_within_alloc(*create.addr(), len, alloc_size_bytes)
+            }
+            EvmInstKind::EvmCreate2(create)
+                if self.values_are_not_derived([*create.val(), *create.len(), *create.salt()]) =>
+            {
+                let len = self.static_len(*create.len())?;
+                self.addr_range_within_alloc(*create.addr(), len, alloc_size_bytes)
+            }
+            EvmInstKind::EvmCall(call)
+                if self.values_are_not_derived([
+                    *call.gas(),
+                    *call.addr(),
+                    *call.val(),
+                    *call.arg_len(),
+                    *call.ret_offset(),
+                ]) =>
+            {
+                self.call_addr_ranges_are_bounded(
+                    *call.arg_addr(),
+                    *call.arg_len(),
+                    *call.ret_addr(),
+                    *call.ret_offset(),
+                    alloc_size_bytes,
+                )
+            }
+            EvmInstKind::EvmCallCode(call)
+                if self.values_are_not_derived([
+                    *call.gas(),
+                    *call.addr(),
+                    *call.val(),
+                    *call.arg_len(),
+                    *call.ret_offset(),
+                ]) =>
+            {
+                self.call_addr_ranges_are_bounded(
+                    *call.arg_addr(),
+                    *call.arg_len(),
+                    *call.ret_addr(),
+                    *call.ret_offset(),
+                    alloc_size_bytes,
+                )
+            }
+            EvmInstKind::EvmDelegateCall(call)
+                if self.values_are_not_derived([
+                    *call.gas(),
+                    *call.ext_addr(),
+                    *call.arg_len(),
+                    *call.ret_len(),
+                ]) =>
+            {
+                self.call_addr_ranges_are_bounded(
+                    *call.arg_addr(),
+                    *call.arg_len(),
+                    *call.ret_addr(),
+                    *call.ret_len(),
+                    alloc_size_bytes,
+                )
+            }
+            EvmInstKind::EvmStaticCall(call)
+                if self.values_are_not_derived([
+                    *call.gas(),
+                    *call.ext_addr(),
+                    *call.arg_len(),
+                    *call.ret_len(),
+                ]) =>
+            {
+                self.call_addr_ranges_are_bounded(
+                    *call.arg_addr(),
+                    *call.arg_len(),
+                    *call.ret_addr(),
+                    *call.ret_len(),
+                    alloc_size_bytes,
+                )
+            }
+            EvmInstKind::EvmReturn(ret) if !self.derived_values.contains(ret.len()) => {
+                let len = self.static_len(*ret.len())?;
+                self.addr_range_within_alloc(*ret.addr(), len, alloc_size_bytes)
+            }
+            EvmInstKind::EvmRevert(revert) if !self.derived_values.contains(revert.len()) => {
+                let len = self.static_len(*revert.len())?;
+                self.addr_range_within_alloc(*revert.addr(), len, alloc_size_bytes)
+            }
+            _ => None,
+        }
+    }
+
+    fn call_addr_ranges_are_bounded(
+        &self,
+        arg_addr: ValueId,
+        arg_len: ValueId,
+        ret_addr: ValueId,
+        ret_len: ValueId,
+        alloc_size_bytes: u32,
+    ) -> Option<()> {
+        let arg_len = self.static_len(arg_len)?;
+        let ret_len = self.static_len(ret_len)?;
+        if self.derived_values.contains(&arg_addr)
+            && !self.derived_values.contains(&ret_addr)
+            && ret_len != 0
+        {
+            return None;
+        }
+        self.addr_range_within_alloc(arg_addr, arg_len, alloc_size_bytes)?;
+        self.addr_range_within_alloc(ret_addr, ret_len, alloc_size_bytes)
+    }
+
+    fn typed_addr_range_within_alloc(
+        &self,
+        addr: ValueId,
+        ty: sonatina_ir::Type,
+        alloc_size_bytes: u32,
+    ) -> Option<()> {
+        let size = u32::try_from(self.module.size_of(ty).ok()?).ok()?;
+        self.addr_range_within_alloc(addr, size, alloc_size_bytes)
+    }
+
+    fn addr_range_within_alloc(
+        &self,
+        addr: ValueId,
+        len: u32,
+        alloc_size_bytes: u32,
+    ) -> Option<()> {
+        if len == 0 || !self.derived_values.contains(&addr) {
+            return Some(());
+        }
+
+        let offset = u32::try_from(self.derived_const_offset(addr)?).ok()?;
+        (offset.checked_add(len)? <= alloc_size_bytes).then_some(())
+    }
+
+    fn static_len(&self, len: ValueId) -> Option<u32> {
+        (!self.derived_values.contains(&len))
+            .then(|| value_imm_u32(self.function, len))
+            .flatten()
+    }
+
+    fn derived_const_offset(&self, value: ValueId) -> Option<i64> {
+        self.derived_const_offset_impl(value, &mut FxHashSet::default())
+    }
+
+    fn derived_const_offset_impl(
+        &self,
+        value: ValueId,
+        visiting: &mut FxHashSet<ValueId>,
+    ) -> Option<i64> {
+        if !self.derived_values.contains(&value) || !visiting.insert(value) {
+            return None;
+        }
+
+        let offset = match self.function.dfg.get_value(value)? {
+            Value::Inst {
+                inst, result_idx, ..
+            } if *inst == self.malloc && *result_idx == 0 => 0,
+            Value::Inst {
+                inst, result_idx, ..
+            } => match self.resolve(*inst) {
+                EvmInstKind::Bitcast(cast) => {
+                    self.derived_const_offset_impl(*cast.from(), visiting)?
+                }
+                EvmInstKind::IntToPtr(cast) => {
+                    self.derived_const_offset_impl(*cast.from(), visiting)?
+                }
+                EvmInstKind::PtrToInt(cast) => {
+                    self.derived_const_offset_impl(*cast.from(), visiting)?
+                }
+                EvmInstKind::Add(add) => self.add_const_offset(*add.lhs(), *add.rhs(), visiting)?,
+                EvmInstKind::Sub(sub) => {
+                    let lhs = self.derived_const_offset_impl(*sub.lhs(), visiting)?;
+                    let rhs = i64::from(value_imm_u32(self.function, *sub.rhs())?);
+                    lhs.checked_sub(rhs)?
+                }
+                EvmInstKind::Uaddo(add) if *result_idx == 0 => {
+                    self.add_const_offset(*add.lhs(), *add.rhs(), visiting)?
+                }
+                EvmInstKind::Saddo(add) if *result_idx == 0 => {
+                    self.add_const_offset(*add.lhs(), *add.rhs(), visiting)?
+                }
+                EvmInstKind::Usubo(sub) if *result_idx == 0 => {
+                    let lhs = self.derived_const_offset_impl(*sub.lhs(), visiting)?;
+                    let rhs = i64::from(value_imm_u32(self.function, *sub.rhs())?);
+                    lhs.checked_sub(rhs)?
+                }
+                EvmInstKind::Ssubo(sub) if *result_idx == 0 => {
+                    let lhs = self.derived_const_offset_impl(*sub.lhs(), visiting)?;
+                    let rhs = i64::from(value_imm_u32(self.function, *sub.rhs())?);
+                    lhs.checked_sub(rhs)?
+                }
+                EvmInstKind::Phi(phi) => {
+                    let mut args = phi.args().iter();
+                    let (first, _) = args.next()?;
+                    let first_offset = self.derived_const_offset_impl(*first, visiting)?;
+                    if args.all(|(arg, _)| {
+                        self.derived_const_offset_impl(*arg, visiting) == Some(first_offset)
+                    }) {
+                        first_offset
+                    } else {
+                        return None;
+                    }
+                }
+                _ => return None,
+            },
+            _ => return None,
+        };
+        visiting.remove(&value);
+        Some(offset)
+    }
+
+    fn add_const_offset(
+        &self,
+        lhs: ValueId,
+        rhs: ValueId,
+        visiting: &mut FxHashSet<ValueId>,
+    ) -> Option<i64> {
+        if self.derived_values.contains(&lhs) {
+            let lhs = self.derived_const_offset_impl(lhs, visiting)?;
+            let rhs = i64::from(value_imm_u32(self.function, rhs)?);
+            lhs.checked_add(rhs)
+        } else if self.derived_values.contains(&rhs) {
+            let lhs = i64::from(value_imm_u32(self.function, lhs)?);
+            let rhs = self.derived_const_offset_impl(rhs, visiting)?;
+            lhs.checked_add(rhs)
+        } else {
+            None
+        }
+    }
+
+    fn values_are_not_derived<const N: usize>(&self, values: [ValueId; N]) -> bool {
+        values
+            .into_iter()
+            .all(|value| !self.derived_values.contains(&value))
+    }
+
+    fn static_overflow_predicate_is_false(
+        &self,
+        lhs: ValueId,
+        rhs: ValueId,
+        alloc_size_bytes: u32,
+    ) -> Option<()> {
+        if !self.value_is_add_of_base(lhs, rhs) {
+            return None;
+        }
+
+        let offset = u32::try_from(self.derived_const_offset(lhs)?).ok()?;
+        (offset <= alloc_size_bytes).then_some(())
     }
 
     fn inst_derives_address(&self, inst: InstId) -> bool {
@@ -844,6 +1579,19 @@ impl<'a> PrivateMallocUseAnalysis<'a> {
             .any(|value| self.derived_values.contains(value))
     }
 
+    fn is_derived_value(&self, value: ValueId) -> bool {
+        self.derived_values.contains(&value)
+    }
+
+    fn value_is_used(&self, value: ValueId) -> bool {
+        self.function.layout.iter_block().any(|block| {
+            self.function
+                .layout
+                .iter_inst(block)
+                .any(|inst| self.inst_uses_value(inst, value))
+        })
+    }
+
     fn inst_uses_value(&self, inst: InstId, value: ValueId) -> bool {
         self.function
             .dfg
@@ -861,11 +1609,12 @@ impl<'a> PrivateMallocUseAnalysis<'a> {
 
 fn malloc_private_uses_are_compatible_with_fixed_base(
     function: &Function,
+    module: &ModuleCtx,
     isa: &Evm,
     malloc: InstId,
     exact_heap_base: bool,
 ) -> bool {
-    PrivateMallocUseAnalysis::new(function, isa, malloc)
+    PrivateMallocUseAnalysis::new(function, module, isa, malloc)
         .analyze_private_address_uses()
         .is_some_and(|info| !info.requires_exact_heap_base || exact_heap_base)
 }
