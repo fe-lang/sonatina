@@ -2080,6 +2080,81 @@ object @Contract {
 }
 
 #[test]
+fn prepare_section_binds_uniform_const_arg_before_late_dead_arg_elim() {
+    let parsed = parse_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+func private %helper(v0.i256, v1.i256) -> i256 {
+block0:
+    v2.i256 = add v0 v1;
+    return v2;
+}
+
+func public %entry(v0.i256) -> i256 {
+block0:
+    v1.i256 = add 1.i256 2.i256;
+    v2.i256 = call %helper v1 v0;
+    v3.i256 = call %helper 3.i256 v2;
+    return v3;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}
+"#,
+    )
+    .unwrap();
+
+    let funcs = parsed.module.funcs();
+    let mut names: FxHashMap<String, FuncRef> = FxHashMap::default();
+    for &func in &funcs {
+        let name = parsed
+            .module
+            .ctx
+            .func_sig(func, |sig| sig.name().to_string());
+        names.insert(name, func);
+    }
+
+    let backend = EvmBackend::new(Evm::new(TargetTriple {
+        architecture: Architecture::Evm,
+        vendor: Vendor::Ethereum,
+        operating_system: OperatingSystem::Evm(EvmVersion::Osaka),
+    }))
+    .with_late_cleanup_profile(LateCleanupProfile::Speed);
+    let prepared = backend
+        .prepare_section(work_module_with_entry(
+            &parsed.module,
+            &funcs,
+            names["entry"],
+        ))
+        .expect("prepare should succeed");
+
+    let helper_sig = prepared
+        .module()
+        .ctx
+        .get_sig(names["helper"])
+        .expect("helper signature should exist");
+    assert_eq!(
+        helper_sig.args().len(),
+        1,
+        "uniform const arg binding should expose removable helper arg"
+    );
+    prepared
+        .module()
+        .func_store
+        .view(names["entry"], |function| {
+            let dumped = FuncWriter::new(names["entry"], function).dump_string();
+            assert!(
+                !dumped.contains("call %helper 3.i256"),
+                "entry callsites should drop the bound constant:\n{dumped}"
+            );
+        });
+}
+
+#[test]
 fn prepare_section_prunes_dead_constref_specialization_original() {
     let parsed = parse_module(
         r#"
