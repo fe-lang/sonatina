@@ -67,6 +67,14 @@ impl EvmCompile {
         &self.module
     }
 
+    /// Run the optimization pipeline (idempotent) and return the optimized
+    /// module for consumers that need to attach codegen-owned metadata before
+    /// backend preparation.
+    pub fn optimize_mut(&mut self) -> &mut Module {
+        self.optimize();
+        &mut self.module
+    }
+
     /// Optimize (if not already) and compile every object in the module.
     pub fn compile(mut self) -> Result<Vec<ObjectArtifact>, Vec<ObjectCompileError>> {
         self.optimize();
@@ -159,5 +167,13 @@ mod tests {
             target.operating_system,
             OperatingSystem::Evm(EvmVersion::London)
         );
+    }
+
+    #[test]
+    fn optimize_mut_exposes_the_optimized_module() {
+        let mut compile = EvmCompile::new(module_for_evm(EvmVersion::Osaka));
+        let module = compile.optimize_mut();
+
+        assert_eq!(module.ctx.triple, evm_osaka_triple());
     }
 }
