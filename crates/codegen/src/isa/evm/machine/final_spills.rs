@@ -1,6 +1,6 @@
 use cranelift_entity::EntityRef;
 use rustc_hash::{FxHashMap, FxHashSet};
-use sonatina_ir::{Module, ValueId, module::FuncRef};
+use sonatina_ir::{InstId, Module, ValueId, module::FuncRef};
 
 use crate::{bitset::BitSet, stackalloc::StackifyAlloc};
 
@@ -9,7 +9,7 @@ use super::{
         EvmBackend, FuncMemPlan, ObjLoc,
         memory_plan::{
             BackendSpillReserve, FinalScratchReserveRange, FuncPreAnalysis,
-            MachineStackifyAnalysis, StableMode,
+            MachineStackifyAnalysis, StableMode, WORD_BYTES,
         },
         ptr_escape::PtrEscapeSummary,
         static_arena_alloc::StackObjId,
@@ -31,9 +31,16 @@ pub(crate) struct FinalSpillAllocationInput {
     pub(crate) mem_plan: FuncMemPlan,
     pub(crate) final_scratch_reserve: FinalScratchReserveRange,
     pub(crate) reserve: BackendSpillReserve,
-    pub(crate) abs_spill_floor_words: u32,
+    pub(crate) fixed_writes: Vec<FixedMemoryWriteRange>,
     pub(crate) spills: FinalSpillObjects,
     pub(crate) optional_placement: OptionalFinalSpillPlacement,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct FixedMemoryWriteRange {
+    pub(crate) inst: InstId,
+    pub(crate) start_byte: u32,
+    pub(crate) end_byte: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -85,6 +92,10 @@ impl FinalSpillObjects {
 
     pub(crate) fn required_reserve(
         &self,
+        mem_plan: &FuncMemPlan,
+        final_scratch_reserve: FinalScratchReserveRange,
+        current_reserve: BackendSpillReserve,
+        fixed_writes: &[FixedMemoryWriteRange],
         optional_placement: OptionalFinalSpillPlacement,
     ) -> BackendSpillReserve {
         if self.is_empty() {
@@ -102,8 +113,18 @@ impl FinalSpillObjects {
             .expect("final stable spill count overflow");
         let scratch_words = optional_words - optional_stable;
         BackendSpillReserve {
-            scratch_words,
-            stable_words,
+            scratch_words: required_scratch_reserve_words(
+                mem_plan,
+                final_scratch_reserve.start_word,
+                scratch_words,
+                fixed_writes,
+            ),
+            stable_words: required_stable_reserve_words(
+                mem_plan,
+                current_reserve.stable_words,
+                stable_words,
+                fixed_writes,
+            ),
         }
     }
 }
@@ -114,7 +135,7 @@ pub(crate) struct MachineFinalSpillInput {
     pub(crate) mem_plan: FuncMemPlan,
     pub(crate) final_scratch_reserve: FinalScratchReserveRange,
     pub(crate) reserve: BackendSpillReserve,
-    pub(crate) abs_spill_floor_words: u32,
+    pub(crate) fixed_writes: Vec<FixedMemoryWriteRange>,
     pub(crate) spills: FinalSpillObjects,
 }
 
@@ -233,9 +254,13 @@ impl FinalSpillChoiceCtx<'_> {
                     .unwrap_or(OptionalFinalSpillPlacement::Scratch);
                 (
                     input.func,
-                    input
-                        .reserve
-                        .pointwise_max(input.spills.required_reserve(choice)),
+                    input.reserve.pointwise_max(input.spills.required_reserve(
+                        &input.mem_plan,
+                        input.final_scratch_reserve,
+                        input.reserve,
+                        &input.fixed_writes,
+                        choice,
+                    )),
                 )
             })
             .collect()
@@ -251,7 +276,7 @@ pub(crate) fn allocate_final_spills(
         mut mem_plan,
         final_scratch_reserve,
         reserve,
-        abs_spill_floor_words,
+        fixed_writes,
         spills,
         optional_placement,
     } = input;
@@ -293,33 +318,40 @@ pub(crate) fn allocate_final_spills(
         }
     }
 
-    let required_reserve = spills.required_reserve(optional_placement);
+    let required_reserve = spills.required_reserve(
+        &mem_plan,
+        final_scratch_reserve,
+        reserve,
+        &fixed_writes,
+        optional_placement,
+    );
 
     let scratch_fallback = place_scratch_spills(
         &mut mem_plan,
         &scratch_objs,
         final_scratch_reserve,
         required_reserve.scratch_words,
-        abs_spill_floor_words,
+        &fixed_writes,
     );
     let stable_fallback = place_stable_spills(
         &mut mem_plan,
         &stable_objs,
-        reserve.stable_words,
+        reserve,
         required_reserve.stable_words,
-        abs_spill_floor_words,
+        &fixed_writes,
     );
     let used_fallback = scratch_fallback || stable_fallback;
     let final_objs: Vec<_> = remap.values().copied().collect();
     validate_final_spill_absolute_disjointness(func, &mem_plan, &final_objs)?;
+    validate_final_spills_disjoint_from_fixed_writes(func, &mem_plan, &final_objs, &fixed_writes)?;
     validate_final_spill_regions(
         func,
         &mem_plan,
         final_scratch_reserve,
+        reserve,
         &scratch_objs,
         &stable_objs,
-        scratch_fallback,
-        stable_fallback,
+        (scratch_fallback, stable_fallback),
     )?;
 
     alloc.remap_stack_objects(&remap);
@@ -356,72 +388,151 @@ fn spill_count(len: usize) -> u32 {
     u32::try_from(len).expect("spill count overflow")
 }
 
+fn required_scratch_reserve_words(
+    mem_plan: &FuncMemPlan,
+    final_scratch_start_word: u32,
+    spill_words: u32,
+    fixed_writes: &[FixedMemoryWriteRange],
+) -> u32 {
+    if spill_words == 0 {
+        return 0;
+    }
+
+    let forbidden = forbidden_arena_words(mem_plan, fixed_writes);
+    let start = first_safe_word_block(final_scratch_start_word, u32::MAX, spill_words, &forbidden)
+        .expect("final scratch spill reserve search overflow");
+    start
+        .checked_add(spill_words)
+        .and_then(|end| end.checked_sub(final_scratch_start_word))
+        .expect("final scratch spill reserve demand overflow")
+}
+
+fn required_stable_reserve_words(
+    mem_plan: &FuncMemPlan,
+    current_reserved_words: u32,
+    spill_words: u32,
+    fixed_writes: &[FixedMemoryWriteRange],
+) -> u32 {
+    if spill_words == 0 {
+        return 0;
+    }
+
+    match mem_plan.stable_mode {
+        StableMode::None | StableMode::DynamicFrame => spill_words,
+        StableMode::StaticAbs { .. } => {
+            let semantic_stable_words = mem_plan
+                .stable_words
+                .checked_sub(current_reserved_words)
+                .expect("reserved stable spill words exceed stable words");
+            let forbidden = forbidden_static_stable_offsets(mem_plan, fixed_writes);
+            let start =
+                first_safe_word_block(semantic_stable_words, u32::MAX, spill_words, &forbidden)
+                    .expect("final stable spill reserve search overflow");
+            start
+                .checked_add(spill_words)
+                .and_then(|end| end.checked_sub(semantic_stable_words))
+                .expect("final stable spill reserve demand overflow")
+        }
+    }
+}
+
 fn place_scratch_spills(
     mem_plan: &mut FuncMemPlan,
     objs: &[(StackObjId, StackObjId)],
     final_scratch_reserve: FinalScratchReserveRange,
     required_words: u32,
-    abs_spill_floor_words: u32,
+    fixed_writes: &[FixedMemoryWriteRange],
 ) -> bool {
     let spill_words = u32::try_from(objs.len()).expect("spill count overflow");
     if spill_words == 0 {
         return false;
     }
 
-    let use_reserved_range =
-        required_words <= final_scratch_reserve.words && final_scratch_reserve.words >= spill_words;
-    let start_word = if use_reserved_range {
-        final_scratch_reserve
-            .start_word
-            .checked_add(final_scratch_reserve.words - spill_words)
-            .expect("final scratch reserve range overflow")
+    let forbidden = forbidden_arena_words(mem_plan, fixed_writes);
+    let reserve_end = final_scratch_reserve
+        .start_word
+        .checked_add(final_scratch_reserve.words)
+        .expect("final scratch reserve range overflow");
+    let reserved_start = (required_words <= final_scratch_reserve.words)
+        .then(|| {
+            first_safe_word_block(
+                final_scratch_reserve.start_word,
+                reserve_end,
+                spill_words,
+                &forbidden,
+            )
+        })
+        .flatten();
+    let start_word = if let Some(start) = reserved_start {
+        start
     } else {
-        mem_plan.abs_words_end().max(abs_spill_floor_words)
+        mem_plan
+            .abs_words_end()
+            .max(spill_floor_words_from_fixed_writes(mem_plan, fixed_writes))
     };
     place_spills(mem_plan, objs, start_word, ObjLoc::ScratchAbs);
-    if !use_reserved_range {
+    if reserved_start.is_none() {
         let scratch_peak_words = start_word
             .checked_add(spill_words)
             .expect("final scratch spill peak overflow");
         mem_plan.scratch_words = mem_plan.scratch_words.max(scratch_peak_words);
     }
-    !use_reserved_range
+    reserved_start.is_none()
 }
 
 fn place_stable_spills(
     mem_plan: &mut FuncMemPlan,
     objs: &[(StackObjId, StackObjId)],
-    reserved_words: u32,
+    reserve: BackendSpillReserve,
     required_words: u32,
-    abs_spill_floor_words: u32,
+    fixed_writes: &[FixedMemoryWriteRange],
 ) -> bool {
     let spill_words = u32::try_from(objs.len()).expect("spill count overflow");
     if spill_words == 0 {
         return false;
     }
 
-    let tail_start = stable_tail_start(mem_plan, spill_words);
-    let use_reserved_tail = required_words <= reserved_words && tail_start.is_some();
-    let start_word = if use_reserved_tail {
-        tail_start.expect("checked above")
-    } else {
-        mem_plan.abs_words_end().max(abs_spill_floor_words)
-    };
     let stable_mode = mem_plan.stable_mode;
-    let loc = |word| match (use_reserved_tail, stable_mode) {
+    let reserved_start = match stable_mode {
+        StableMode::StaticAbs { .. } => {
+            let (reserve_start, reserve_end) = stable_reserve_range(mem_plan, reserve.stable_words)
+                .expect("static stable reserve exceeds stable words");
+            (required_words <= reserve.stable_words)
+                .then(|| {
+                    first_safe_word_block(
+                        reserve_start,
+                        reserve_end,
+                        spill_words,
+                        &forbidden_static_stable_offsets(mem_plan, fixed_writes),
+                    )
+                })
+                .flatten()
+        }
+        StableMode::DynamicFrame => stable_tail_start(mem_plan, spill_words)
+            .filter(|_| required_words <= reserve.stable_words),
+        StableMode::None => None,
+    };
+    let start_word = if let Some(start) = reserved_start {
+        start
+    } else {
+        mem_plan
+            .abs_words_end()
+            .max(spill_floor_words_from_fixed_writes(mem_plan, fixed_writes))
+    };
+    let loc = |word| match (reserved_start.is_some(), stable_mode) {
         (true, StableMode::StaticAbs { .. }) => ObjLoc::StableAbs(word),
         (true, StableMode::DynamicFrame) => ObjLoc::StableFrame(word),
         (true, StableMode::None) => unreachable!("stable tail requires stable mode"),
         (false, _) => ObjLoc::ScratchAbs(word),
     };
     place_spills(mem_plan, objs, start_word, loc);
-    if !use_reserved_tail {
+    if reserved_start.is_none() {
         let scratch_peak_words = start_word
             .checked_add(spill_words)
             .expect("final stable spill fallback peak overflow");
         mem_plan.scratch_words = mem_plan.scratch_words.max(scratch_peak_words);
     }
-    !use_reserved_tail
+    reserved_start.is_none()
 }
 
 fn place_spills(
@@ -444,6 +555,133 @@ fn stable_tail_start(mem_plan: &FuncMemPlan, spill_words: u32) -> Option<u32> {
             mem_plan.stable_words.checked_sub(spill_words)
         }
         StableMode::None => None,
+    }
+}
+
+fn stable_reserve_range(mem_plan: &FuncMemPlan, reserved_words: u32) -> Option<(u32, u32)> {
+    match mem_plan.stable_mode {
+        StableMode::StaticAbs { .. } | StableMode::DynamicFrame => Some((
+            mem_plan.stable_words.checked_sub(reserved_words)?,
+            mem_plan.stable_words,
+        )),
+        StableMode::None => None,
+    }
+}
+
+fn first_safe_word_block(
+    region_start_word: u32,
+    region_end_word: u32,
+    words: u32,
+    forbidden_word_ranges: &[(u32, u32)],
+) -> Option<u32> {
+    let mut candidate = region_start_word;
+    let forbidden_word_ranges = normalized_word_ranges(forbidden_word_ranges);
+    for &(start, end) in &forbidden_word_ranges {
+        if end <= candidate {
+            continue;
+        }
+        let candidate_end = candidate.checked_add(words)?;
+        if candidate_end <= start {
+            break;
+        }
+        candidate = candidate.max(end);
+        if candidate.checked_add(words)? > region_end_word {
+            return None;
+        }
+    }
+
+    (candidate.checked_add(words)? <= region_end_word).then_some(candidate)
+}
+
+fn normalized_word_ranges(ranges: &[(u32, u32)]) -> Vec<(u32, u32)> {
+    let mut ranges: Vec<_> = ranges
+        .iter()
+        .copied()
+        .filter(|(start, end)| start < end)
+        .collect();
+    ranges.sort_unstable();
+
+    let mut out: Vec<(u32, u32)> = Vec::new();
+    for (start, end) in ranges {
+        if let Some((_, last_end)) = out.last_mut()
+            && start <= *last_end
+        {
+            *last_end = (*last_end).max(end);
+            continue;
+        }
+        out.push((start, end));
+    }
+    out
+}
+
+fn spill_floor_words_from_fixed_writes(
+    mem_plan: &FuncMemPlan,
+    fixed_writes: &[FixedMemoryWriteRange],
+) -> u32 {
+    forbidden_arena_words(mem_plan, fixed_writes)
+        .iter()
+        .map(|(_, end)| *end)
+        .max()
+        .unwrap_or(0)
+}
+
+fn forbidden_arena_words(
+    mem_plan: &FuncMemPlan,
+    fixed_writes: &[FixedMemoryWriteRange],
+) -> Vec<(u32, u32)> {
+    normalized_word_ranges(
+        &fixed_writes
+            .iter()
+            .filter_map(|&write| fixed_write_forbidden_arena_words(mem_plan.arena_base, write))
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn fixed_write_forbidden_arena_words(
+    arena_base: u32,
+    write: FixedMemoryWriteRange,
+) -> Option<(u32, u32)> {
+    if write.end_byte <= arena_base {
+        return None;
+    }
+
+    let rel_start = write.start_byte.saturating_sub(arena_base);
+    let rel_end = write.end_byte.checked_sub(arena_base)?;
+    let start_word = rel_start / WORD_BYTES;
+    let end_word = align_word_offset(rel_end)?.checked_div(WORD_BYTES)?;
+    (start_word < end_word).then_some((start_word, end_word))
+}
+
+fn forbidden_static_stable_offsets(
+    mem_plan: &FuncMemPlan,
+    fixed_writes: &[FixedMemoryWriteRange],
+) -> Vec<(u32, u32)> {
+    let StableMode::StaticAbs { base_word } = mem_plan.stable_mode else {
+        return Vec::new();
+    };
+
+    normalized_word_ranges(
+        &forbidden_arena_words(mem_plan, fixed_writes)
+            .into_iter()
+            .filter_map(|(start_word, end_word)| {
+                if end_word <= base_word {
+                    return None;
+                }
+
+                let start = start_word.saturating_sub(base_word);
+                let end = end_word.checked_sub(base_word)?;
+                (start < end).then_some((start, end))
+            })
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn align_word_offset(bytes: u32) -> Option<u32> {
+    let rem = bytes % WORD_BYTES;
+    if rem == 0 {
+        Some(bytes)
+    } else {
+        bytes.checked_add(WORD_BYTES - rem)
     }
 }
 
@@ -511,15 +749,77 @@ fn validate_final_spill_absolute_disjointness(
     Ok(())
 }
 
+fn validate_final_spills_disjoint_from_fixed_writes(
+    func: FuncRef,
+    mem_plan: &FuncMemPlan,
+    final_objs: &[StackObjId],
+    fixed_writes: &[FixedMemoryWriteRange],
+) -> Result<(), String> {
+    for &obj in final_objs {
+        let loc = mem_plan.obj_loc.get(&obj).copied().ok_or_else(|| {
+            format!(
+                "missing final spill location in func {} for obj {}",
+                func.as_u32(),
+                obj.as_u32()
+            )
+        })?;
+        let Some((spill_start, spill_end)) = absolute_byte_range_for_loc(mem_plan, loc)? else {
+            continue;
+        };
+        for &write in fixed_writes {
+            if byte_ranges_overlap(spill_start, spill_end, write.start_byte, write.end_byte) {
+                return Err(format!(
+                    "EVM final spill fixed memory write overlap in func {}: obj {} {:?} [0x{:x}, 0x{:x}) overlaps inst {} fixed write [0x{:x}, 0x{:x})",
+                    func.as_u32(),
+                    obj.as_u32(),
+                    loc,
+                    spill_start,
+                    spill_end,
+                    write.inst.as_u32(),
+                    write.start_byte,
+                    write.end_byte,
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn absolute_byte_range_for_loc(
+    mem_plan: &FuncMemPlan,
+    loc: ObjLoc,
+) -> Result<Option<(u32, u32)>, String> {
+    let Some(word) = absolute_word_for_loc(mem_plan, loc)? else {
+        return Ok(None);
+    };
+    let start = mem_plan
+        .arena_base
+        .checked_add(
+            word.checked_mul(WORD_BYTES)
+                .ok_or_else(|| format!("final spill byte range overflow at word {word}"))?,
+        )
+        .ok_or_else(|| format!("final spill byte range overflow at word {word}"))?;
+    let end = start
+        .checked_add(WORD_BYTES)
+        .ok_or_else(|| format!("final spill byte range overflow at word {word}"))?;
+    Ok(Some((start, end)))
+}
+
+fn byte_ranges_overlap(a_start: u32, a_end: u32, b_start: u32, b_end: u32) -> bool {
+    a_start < b_end && b_start < a_end
+}
+
 fn validate_final_spill_regions(
     func: FuncRef,
     mem_plan: &FuncMemPlan,
     final_scratch_reserve: FinalScratchReserveRange,
+    reserve: BackendSpillReserve,
     scratch_objs: &[(StackObjId, StackObjId)],
     stable_objs: &[(StackObjId, StackObjId)],
-    scratch_fallback: bool,
-    stable_fallback: bool,
+    fallback: (bool, bool),
 ) -> Result<(), String> {
+    let (scratch_fallback, stable_fallback) = fallback;
     if !scratch_fallback {
         for &(_, obj) in scratch_objs {
             let loc = mem_plan.obj_loc.get(&obj).copied().ok_or_else(|| {
@@ -554,6 +854,7 @@ fn validate_final_spill_regions(
     }
 
     if !stable_fallback {
+        let reserved_stable_range = stable_reserve_range(mem_plan, reserve.stable_words);
         for &(_, obj) in stable_objs {
             let loc = mem_plan.obj_loc.get(&obj).copied().ok_or_else(|| {
                 format!(
@@ -576,6 +877,28 @@ fn validate_final_spill_regions(
                     mem_plan.stable_mode
                 ));
             }
+            let off = match loc {
+                ObjLoc::StableAbs(off) | ObjLoc::StableFrame(off) => off,
+                ObjLoc::ScratchAbs(_) | ObjLoc::StackPinned(_) => unreachable!("validated above"),
+            };
+            let Some((reserve_start, reserve_end)) = reserved_stable_range else {
+                return Err(format!(
+                    "stable final spill in func {} obj {} has no reserved stable tail with stable mode {:?}",
+                    func.as_u32(),
+                    obj.as_u32(),
+                    mem_plan.stable_mode
+                ));
+            };
+            if !(reserve_start <= off && off < reserve_end) {
+                return Err(format!(
+                    "stable final spill in func {} obj {} at offset {} is outside final stable reserve [{}, {})",
+                    func.as_u32(),
+                    obj.as_u32(),
+                    off,
+                    reserve_start,
+                    reserve_end
+                ));
+            }
         }
     }
 
@@ -586,12 +909,13 @@ fn validate_final_spill_regions(
 mod tests {
     use cranelift_entity::{EntityRef, SecondaryMap};
     use rustc_hash::{FxHashMap, FxHashSet};
-    use sonatina_ir::{ValueId, module::FuncRef};
+    use sonatina_ir::{InstId, ValueId, module::FuncRef};
 
     use super::{
-        FinalSpillAllocation, FinalSpillAllocationInput, FinalSpillObjects,
+        FinalSpillAllocation, FinalSpillAllocationInput, FinalSpillObjects, FixedMemoryWriteRange,
         OptionalFinalSpillPlacement, allocate_final_spills as alloc_final_spills,
         validate_final_spill_absolute_disjointness,
+        validate_final_spills_disjoint_from_fixed_writes,
     };
     use crate::{
         bitset::BitSet,
@@ -663,11 +987,30 @@ mod tests {
         values.iter().copied().map(ValueId::from_u32).collect()
     }
 
+    fn fixed_write(start_word: u32, words: u32) -> Vec<FixedMemoryWriteRange> {
+        let start_byte = 0xa0 + start_word * 32;
+        vec![FixedMemoryWriteRange {
+            inst: InstId::from_u32(0),
+            start_byte,
+            end_byte: start_byte + words * 32,
+        }]
+    }
+
     fn allocate_final_spills(
         alloc: StackifyAlloc,
         mem_plan: FuncMemPlan,
         reserve: BackendSpillReserve,
-        floor: u32,
+        stable: &BitSet<ValueId>,
+        placement: OptionalFinalSpillPlacement,
+    ) -> FinalSpillAllocation {
+        allocate_final_spills_with_writes(alloc, mem_plan, reserve, Vec::new(), stable, placement)
+    }
+
+    fn allocate_final_spills_with_writes(
+        alloc: StackifyAlloc,
+        mem_plan: FuncMemPlan,
+        reserve: BackendSpillReserve,
+        fixed_writes: Vec<FixedMemoryWriteRange>,
         stable: &BitSet<ValueId>,
         placement: OptionalFinalSpillPlacement,
     ) -> FinalSpillAllocation {
@@ -685,7 +1028,7 @@ mod tests {
             mem_plan,
             final_scratch_reserve,
             reserve,
-            abs_spill_floor_words: floor,
+            fixed_writes,
             spills,
             optional_placement: placement,
         })
@@ -698,7 +1041,6 @@ mod tests {
             StackifyAlloc::default(),
             static_mem_plan(0, 5),
             BackendSpillReserve::default(),
-            0,
             &BitSet::default(),
             OptionalFinalSpillPlacement::Scratch,
         );
@@ -716,7 +1058,6 @@ mod tests {
             StackifyAlloc::default(),
             static_mem_plan(3, 5),
             BackendSpillReserve::default(),
-            0,
             &BitSet::default(),
             OptionalFinalSpillPlacement::Scratch,
         );
@@ -735,7 +1076,6 @@ mod tests {
             alloc,
             static_mem_plan(3, 7),
             reserve(0, 2),
-            0,
             &stable_values(&[10, 11]),
             OptionalFinalSpillPlacement::Scratch,
         );
@@ -759,7 +1099,6 @@ mod tests {
             alloc,
             static_mem_plan(3, 7),
             reserve(0, 1),
-            0,
             &stable_values(&[10, 11]),
             OptionalFinalSpillPlacement::Scratch,
         );
@@ -783,46 +1122,30 @@ mod tests {
             alloc,
             static_mem_plan(3, 7),
             BackendSpillReserve::default(),
-            13,
             &stable_values(&[10, 11]),
             OptionalFinalSpillPlacement::Scratch,
         );
 
         assert_eq!(final_spills.required_reserve, reserve(0, 2));
-        assert_eq!(final_spills.mem_plan.scratch_words, 15);
+        assert_eq!(final_spills.mem_plan.scratch_words, 12);
         assert_eq!(
             final_spills.mem_plan.obj_loc[&StackObjId::new(0)],
-            ObjLoc::ScratchAbs(13)
+            ObjLoc::ScratchAbs(10)
         );
         assert_eq!(
             final_spills.mem_plan.obj_loc[&StackObjId::new(1)],
-            ObjLoc::ScratchAbs(14)
+            ObjLoc::ScratchAbs(11)
         );
     }
 
     #[test]
-    fn static_final_spills_do_not_chase_abs_spill_floor() {
+    fn stable_final_spills_use_reserved_tail_when_high_fixed_write_is_disjoint() {
         let alloc = alloc_with_object_spills(&[(10, 0), (11, 1)]);
-        let final_spills = allocate_final_spills(
-            alloc,
-            static_mem_plan(3, 7),
-            BackendSpillReserve::default(),
-            13,
-            &stable_values(&[10, 11]),
-            OptionalFinalSpillPlacement::Scratch,
-        );
-
-        assert_eq!(final_spills.required_reserve, reserve(0, 2));
-    }
-
-    #[test]
-    fn stable_final_spills_use_reserved_stable_tail_even_when_floor_is_higher() {
-        let alloc = alloc_with_object_spills(&[(10, 0), (11, 1)]);
-        let final_spills = allocate_final_spills(
+        let final_spills = allocate_final_spills_with_writes(
             alloc,
             static_mem_plan(3, 7),
             reserve(0, 2),
-            13,
+            fixed_write(12, 1),
             &stable_values(&[10, 11]),
             OptionalFinalSpillPlacement::Scratch,
         );
@@ -840,13 +1163,81 @@ mod tests {
     }
 
     #[test]
+    fn stable_final_spills_reject_reserved_tail_when_fixed_write_overlaps() {
+        let alloc = alloc_with_object_spills(&[(10, 0), (11, 1)]);
+        let final_spills = allocate_final_spills_with_writes(
+            alloc,
+            static_mem_plan(3, 7),
+            reserve(0, 2),
+            fixed_write(8, 1),
+            &stable_values(&[10, 11]),
+            OptionalFinalSpillPlacement::Scratch,
+        );
+
+        assert_eq!(final_spills.required_reserve, reserve(0, 3));
+        assert!(final_spills.used_fallback);
+        assert_eq!(final_spills.mem_plan.scratch_words, 12);
+        assert_eq!(
+            final_spills.mem_plan.obj_loc[&StackObjId::new(0)],
+            ObjLoc::ScratchAbs(10)
+        );
+        assert_eq!(
+            final_spills.mem_plan.obj_loc[&StackObjId::new(1)],
+            ObjLoc::ScratchAbs(11)
+        );
+
+        let alloc = alloc_with_object_spills(&[(10, 0), (11, 1)]);
+        let final_spills = allocate_final_spills_with_writes(
+            alloc,
+            static_mem_plan(3, 8),
+            reserve(0, 3),
+            fixed_write(8, 1),
+            &stable_values(&[10, 11]),
+            OptionalFinalSpillPlacement::Scratch,
+        );
+
+        assert_eq!(final_spills.required_reserve, reserve(0, 3));
+        assert!(!final_spills.used_fallback);
+        assert_eq!(
+            final_spills.mem_plan.obj_loc[&StackObjId::new(0)],
+            ObjLoc::StableAbs(6)
+        );
+        assert_eq!(
+            final_spills.mem_plan.obj_loc[&StackObjId::new(1)],
+            ObjLoc::StableAbs(7)
+        );
+    }
+
+    #[test]
+    fn stable_final_spills_use_lower_safe_subrange_when_top_conflicts() {
+        let alloc = alloc_with_object_spills(&[(10, 0), (11, 1)]);
+        let final_spills = allocate_final_spills_with_writes(
+            alloc,
+            static_mem_plan(3, 8),
+            reserve(0, 3),
+            fixed_write(10, 1),
+            &stable_values(&[10, 11]),
+            OptionalFinalSpillPlacement::Scratch,
+        );
+
+        assert_eq!(final_spills.required_reserve, reserve(0, 2));
+        assert_eq!(
+            final_spills.mem_plan.obj_loc[&StackObjId::new(0)],
+            ObjLoc::StableAbs(5)
+        );
+        assert_eq!(
+            final_spills.mem_plan.obj_loc[&StackObjId::new(1)],
+            ObjLoc::StableAbs(6)
+        );
+    }
+
+    #[test]
     fn scratch_final_spills_use_reserved_tail() {
         let alloc = alloc_with_object_spills(&[(10, 0), (11, 1)]);
         let final_spills = allocate_final_spills(
             alloc,
             scratch_mem_plan(5),
             reserve(2, 0),
-            0,
             &BitSet::default(),
             OptionalFinalSpillPlacement::Scratch,
         );
@@ -866,24 +1257,24 @@ mod tests {
     #[test]
     fn scratch_final_spills_fallback_clears_fixed_memory_floor() {
         let alloc = alloc_with_object_spills(&[(10, 0), (11, 1)]);
-        let final_spills = allocate_final_spills(
+        let final_spills = allocate_final_spills_with_writes(
             alloc,
             scratch_mem_plan(3),
             BackendSpillReserve::default(),
-            6,
+            fixed_write(6, 1),
             &BitSet::default(),
             OptionalFinalSpillPlacement::Scratch,
         );
 
         assert_eq!(final_spills.required_reserve, reserve(2, 0));
-        assert_eq!(final_spills.mem_plan.scratch_words, 8);
+        assert_eq!(final_spills.mem_plan.scratch_words, 9);
         assert_eq!(
             final_spills.mem_plan.obj_loc[&StackObjId::new(0)],
-            ObjLoc::ScratchAbs(6)
+            ObjLoc::ScratchAbs(7)
         );
         assert_eq!(
             final_spills.mem_plan.obj_loc[&StackObjId::new(1)],
-            ObjLoc::ScratchAbs(7)
+            ObjLoc::ScratchAbs(8)
         );
     }
 
@@ -894,7 +1285,6 @@ mod tests {
             alloc,
             static_mem_plan(3, 5),
             BackendSpillReserve::default(),
-            5,
             &BitSet::default(),
             OptionalFinalSpillPlacement::Scratch,
         );
@@ -912,19 +1302,88 @@ mod tests {
     }
 
     #[test]
-    fn scratch_final_spills_use_reserved_tail_even_below_fixed_memory_floor() {
+    fn scratch_final_spills_ignore_high_fixed_write_when_exact_range_is_disjoint() {
         let alloc = alloc_with_object_spills(&[(10, 0), (11, 1)]);
-        let final_spills = allocate_final_spills(
+        let final_spills = allocate_final_spills_with_writes(
             alloc,
             scratch_mem_plan(5),
             reserve(2, 0),
-            6,
+            fixed_write(6, 1),
             &BitSet::default(),
             OptionalFinalSpillPlacement::Scratch,
         );
 
         assert_eq!(final_spills.required_reserve, reserve(2, 0));
         assert_eq!(final_spills.mem_plan.scratch_words, 5);
+        assert_eq!(
+            final_spills.mem_plan.obj_loc[&StackObjId::new(0)],
+            ObjLoc::ScratchAbs(3)
+        );
+        assert_eq!(
+            final_spills.mem_plan.obj_loc[&StackObjId::new(1)],
+            ObjLoc::ScratchAbs(4)
+        );
+    }
+
+    #[test]
+    fn scratch_final_spills_reject_reserved_range_when_fixed_write_overlaps() {
+        let alloc = alloc_with_object_spills(&[(10, 0), (11, 1)]);
+        let final_spills = allocate_final_spills_with_writes(
+            alloc,
+            scratch_mem_plan(5),
+            reserve(2, 0),
+            fixed_write(3, 1),
+            &BitSet::default(),
+            OptionalFinalSpillPlacement::Scratch,
+        );
+
+        assert_eq!(final_spills.required_reserve, reserve(3, 0));
+        assert!(final_spills.used_fallback);
+        assert_eq!(final_spills.mem_plan.scratch_words, 7);
+        assert_eq!(
+            final_spills.mem_plan.obj_loc[&StackObjId::new(0)],
+            ObjLoc::ScratchAbs(5)
+        );
+        assert_eq!(
+            final_spills.mem_plan.obj_loc[&StackObjId::new(1)],
+            ObjLoc::ScratchAbs(6)
+        );
+
+        let alloc = alloc_with_object_spills(&[(10, 0), (11, 1)]);
+        let final_spills = allocate_final_spills_with_writes(
+            alloc,
+            scratch_mem_plan(6),
+            reserve(3, 0),
+            fixed_write(3, 1),
+            &BitSet::default(),
+            OptionalFinalSpillPlacement::Scratch,
+        );
+
+        assert_eq!(final_spills.required_reserve, reserve(3, 0));
+        assert!(!final_spills.used_fallback);
+        assert_eq!(
+            final_spills.mem_plan.obj_loc[&StackObjId::new(0)],
+            ObjLoc::ScratchAbs(4)
+        );
+        assert_eq!(
+            final_spills.mem_plan.obj_loc[&StackObjId::new(1)],
+            ObjLoc::ScratchAbs(5)
+        );
+    }
+
+    #[test]
+    fn scratch_final_spills_use_lower_safe_subrange_when_top_conflicts() {
+        let alloc = alloc_with_object_spills(&[(10, 0), (11, 1)]);
+        let final_spills = allocate_final_spills_with_writes(
+            alloc,
+            scratch_mem_plan(6),
+            reserve(3, 0),
+            fixed_write(5, 1),
+            &BitSet::default(),
+            OptionalFinalSpillPlacement::Scratch,
+        );
+
+        assert_eq!(final_spills.required_reserve, reserve(2, 0));
         assert_eq!(
             final_spills.mem_plan.obj_loc[&StackObjId::new(0)],
             ObjLoc::ScratchAbs(3)
@@ -948,7 +1407,7 @@ mod tests {
                 words: 2,
             },
             reserve: reserve(2, 0),
-            abs_spill_floor_words: 0,
+            fixed_writes: Vec::new(),
             spills,
             optional_placement: OptionalFinalSpillPlacement::Scratch,
         })
@@ -973,7 +1432,6 @@ mod tests {
             alloc,
             static_mem_plan(5, 5),
             reserve(2, 1),
-            0,
             &stable_values(&[12]),
             OptionalFinalSpillPlacement::Scratch,
         );
@@ -1010,5 +1468,39 @@ mod tests {
         .expect_err("overlap should be rejected");
 
         assert!(err.contains("absolute-memory overlap"));
+    }
+
+    #[test]
+    fn final_spill_validator_rejects_scratch_fixed_write_overlap() {
+        let mut mem_plan = scratch_mem_plan(5);
+        let scratch_obj = StackObjId::new(0);
+        mem_plan.obj_loc.insert(scratch_obj, ObjLoc::ScratchAbs(3));
+
+        let err = validate_final_spills_disjoint_from_fixed_writes(
+            FuncRef::from_u32(0),
+            &mem_plan,
+            &[scratch_obj],
+            &fixed_write(3, 1),
+        )
+        .expect_err("fixed write overlap should be rejected");
+
+        assert!(err.contains("fixed memory write overlap"));
+    }
+
+    #[test]
+    fn final_spill_validator_rejects_stable_fixed_write_overlap() {
+        let mut mem_plan = static_mem_plan(3, 7);
+        let stable_obj = StackObjId::new(0);
+        mem_plan.obj_loc.insert(stable_obj, ObjLoc::StableAbs(5));
+
+        let err = validate_final_spills_disjoint_from_fixed_writes(
+            FuncRef::from_u32(0),
+            &mem_plan,
+            &[stable_obj],
+            &fixed_write(8, 1),
+        )
+        .expect_err("fixed write overlap should be rejected");
+
+        assert!(err.contains("fixed memory write overlap"));
     }
 }
