@@ -18,6 +18,7 @@ use crate::{
 
 use super::{
     emit::{EvmMachineFunctionLowering, push_op},
+    exact_func_merge::run_exact_private_func_merge,
     high_alias::compute_high_evm_aliases,
     late_section_merge::run_late_section_terminal_outline,
     memory_plan::{ArenaCostModel, ObjLoc, PreserveMode, StableMode, WORD_BYTES},
@@ -357,16 +358,18 @@ impl EvmBackend {
     pub fn post_lower_section(
         &self,
         prepared: &EvmPreparedSection,
-        lowered: &mut [(super::FuncRef, LoweredFunction<OpCode>)],
+        lowered: &mut Vec<(super::FuncRef, LoweredFunction<OpCode>)>,
     ) -> Result<Vec<SectionCodeUnit<OpCode>>, String> {
         if self.late_cleanup_profile == LateCleanupProfile::Off {
             return Ok(Vec::new());
         }
-        Ok(run_late_section_terminal_outline(
+        let section_units = run_late_section_terminal_outline(
             prepared.module(),
-            lowered,
+            lowered.as_mut_slice(),
             self.late_cleanup_profile,
-        ))
+        );
+        run_exact_private_func_merge(prepared.module(), lowered);
+        Ok(section_units)
     }
 
     pub fn apply_sym_fixup(

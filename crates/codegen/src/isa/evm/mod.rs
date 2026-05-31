@@ -2,6 +2,7 @@ mod backend;
 pub(crate) mod dyn_sp;
 mod emit;
 mod escape_scan;
+mod exact_func_merge;
 mod frame_layout;
 mod heap_plan;
 mod high_alias;

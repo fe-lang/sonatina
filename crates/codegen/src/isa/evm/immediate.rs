@@ -25,6 +25,9 @@ pub(crate) enum ImmediateMaterializationPlan {
     Plain(SmallVec<[u8; 8]>),
     SignExtend(SmallVec<[u8; 8]>),
     Not(SmallVec<[u8; 8]>),
+    LowMask {
+        shift: SmallVec<[u8; 4]>,
+    },
     Shl {
         value: SmallVec<[u8; 8]>,
         shift: SmallVec<[u8; 4]>,
@@ -41,6 +44,10 @@ impl ImmediateMaterializationPlan {
             Self::Not(bytes) => {
                 push_cost(bytes).add(ImmediateMaterializationCost { gas: 3, bytes: 1 })
             }
+            Self::LowMask { shift } => push_cost(&[0])
+                .add(ImmediateMaterializationCost { gas: 3, bytes: 1 })
+                .add(push_cost(shift))
+                .add(ImmediateMaterializationCost { gas: 3, bytes: 1 }),
             Self::Shl { value, shift } => push_cost(value)
                 .add(push_cost(shift))
                 .add(ImmediateMaterializationCost { gas: 3, bytes: 1 }),
@@ -54,7 +61,9 @@ impl ImmediateMaterializationPlan {
 
 pub(crate) fn immediate_materialization_plan(imm: Immediate) -> ImmediateMaterializationPlan {
     let baseline = baseline_materialization_plan(imm);
-    shifted_materialization_plan(imm.as_i256(), &baseline).unwrap_or(baseline)
+    low_mask_materialization_plan(imm.as_i256(), &baseline)
+        .or_else(|| shifted_materialization_plan(imm.as_i256(), &baseline))
+        .unwrap_or(baseline)
 }
 
 pub(crate) fn immediate_materialization_cost_i256(value: I256) -> ImmediateMaterializationCost {
@@ -67,7 +76,9 @@ pub(crate) fn immediate_materialization_code_len(imm: Immediate) -> usize {
 
 fn immediate_materialization_plan_i256(value: I256) -> ImmediateMaterializationPlan {
     let baseline = baseline_i256_materialization_plan(value);
-    shifted_materialization_plan(value, &baseline).unwrap_or(baseline)
+    low_mask_materialization_plan(value, &baseline)
+        .or_else(|| shifted_materialization_plan(value, &baseline))
+        .unwrap_or(baseline)
 }
 
 fn baseline_materialization_plan(imm: Immediate) -> ImmediateMaterializationPlan {
@@ -126,6 +137,21 @@ fn shifted_materialization_plan(
     let shifted_cost = shifted.cost();
     (baseline_cost.bytes >= shifted_cost.bytes + SHIFTED_IMMEDIATE_MIN_BYTE_SAVINGS)
         .then_some(shifted)
+}
+
+fn low_mask_materialization_plan(
+    value: I256,
+    baseline: &ImmediateMaterializationPlan,
+) -> Option<ImmediateMaterializationPlan> {
+    let width = low_mask_bit_width(value.to_u256())?;
+    if width == 0 || width == 256 {
+        return None;
+    }
+
+    let plan = ImmediateMaterializationPlan::LowMask {
+        shift: u32_to_be(256 - width),
+    };
+    (plan.cost().bytes < baseline.cost().bytes).then_some(plan)
 }
 
 fn immediate_bytes(imm: Immediate) -> SmallVec<[u8; 8]> {
@@ -212,6 +238,30 @@ fn trailing_zero_bits(value: U256) -> u32 {
     }
     debug_assert!(bits < 256);
     bits
+}
+
+fn low_mask_bit_width(value: U256) -> Option<u32> {
+    let bytes = value.to_big_endian();
+    let mut bits = 0u32;
+
+    for (idx, &byte) in bytes.iter().enumerate().rev() {
+        if byte == 0xff {
+            bits += 8;
+            continue;
+        }
+
+        if byte == 0 {
+            return bytes[..=idx].iter().all(|&b| b == 0).then_some(bits);
+        }
+
+        if byte & byte.wrapping_add(1) == 0 && bytes[..idx].iter().all(|&b| b == 0) {
+            return Some(bits + byte.count_ones());
+        }
+
+        return None;
+    }
+
+    Some(256)
 }
 
 pub(crate) fn u32_to_be(num: u32) -> SmallVec<[u8; 4]> {
@@ -311,6 +361,40 @@ mod tests {
                 value: smallvec![0x01],
                 shift: smallvec![0xe0],
             }
+        );
+    }
+
+    #[test]
+    fn u160_mask_uses_compact_low_mask_form() {
+        let mask = (U256::one() << 160usize) - U256::one();
+
+        assert_eq!(
+            immediate_materialization_plan(Immediate::I256(I256::from_u256(mask))),
+            ImmediateMaterializationPlan::LowMask {
+                shift: smallvec![0x60],
+            }
+        );
+    }
+
+    #[test]
+    fn u128_mask_uses_compact_low_mask_form() {
+        let mask = (U256::one() << 128usize) - U256::one();
+
+        assert_eq!(
+            immediate_materialization_plan(Immediate::I256(I256::from_u256(mask))),
+            ImmediateMaterializationPlan::LowMask {
+                shift: smallvec![0x80],
+            }
+        );
+    }
+
+    #[test]
+    fn small_low_mask_stays_plain() {
+        let mask = (U256::one() << 32usize) - U256::one();
+
+        assert_eq!(
+            immediate_materialization_plan(Immediate::I256(I256::from_u256(mask))),
+            ImmediateMaterializationPlan::Plain(smallvec![0xff, 0xff, 0xff, 0xff])
         );
     }
 

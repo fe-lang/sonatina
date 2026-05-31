@@ -762,7 +762,7 @@ block0:
 
     #[test]
     fn hot_immediate_caching_can_use_size_mode_use_threshold() {
-        const BIG: &str = "340282366920938463463374607431768211455";
+        const BIG: &str = "340282366920938463463374607431768211454";
         let src = format!(
             r#"
 target = "evm-ethereum-osaka"

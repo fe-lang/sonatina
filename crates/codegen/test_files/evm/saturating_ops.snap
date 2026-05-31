@@ -6,21 +6,21 @@ input_file: test_files/evm/saturating_ops.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=s
 
 object: Contract
-  section runtime: 695 bytes
-  total: 695 bytes
+  section runtime: 659 bytes
+  total: 659 bytes
 
 functions:
   mem: global_dyn_base=0x0 arena_base=0x0 scratch_peak_words=0 static_chain_peak_words=0
-  entry: ir_blocks=43 ir_insts=88 vcode_ops=394 fixups=39 imm_bytes=71
+  entry: ir_blocks=43 ir_insts=88 vcode_ops=403 fixups=39 imm_bytes=71
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
   case uaddsat_u8: calldata_len=96 success reason=Return gas_used=21562 gas_refunded=0 logs=0 output=call len=32 tx_gas=21408 runtime_gas=154
   case usubsat_u8: calldata_len=96 success reason=Return gas_used=21597 gas_refunded=0 logs=0 output=call len=32 tx_gas=21420 runtime_gas=177
-  case umulsat_u128: calldata_len=96 success reason=Return gas_used=21806 gas_refunded=0 logs=0 output=call len=32 tx_gas=21600 runtime_gas=206
+  case umulsat_u128: calldata_len=96 success reason=Return gas_used=21814 gas_refunded=0 logs=0 output=call len=32 tx_gas=21600 runtime_gas=214
   case saddsat_i8: calldata_len=96 success reason=Return gas_used=21666 gas_refunded=0 logs=0 output=call len=32 tx_gas=21420 runtime_gas=246
   case ssubsat_i8: calldata_len=96 success reason=Return gas_used=21688 gas_refunded=0 logs=0 output=call len=32 tx_gas=21420 runtime_gas=268
-  case smulsat_i128: calldata_len=96 success reason=Return gas_used=21903 gas_refunded=0 logs=0 output=call len=32 tx_gas=21600 runtime_gas=303
+  case smulsat_i128: calldata_len=96 success reason=Return gas_used=21919 gas_refunded=0 logs=0 output=call len=32 tx_gas=21600 runtime_gas=319
   case evm_ssubsat_i8_signext_i256: calldata_len=96 success reason=Return gas_used=21711 gas_refunded=0 logs=0 output=call len=32 tx_gas=21420 runtime_gas=291
   case evm_uaddsat_i8_truncates_i256_inputs: calldata_len=96 success reason=Return gas_used=21695 gas_refunded=0 logs=0 output=call len=32 tx_gas=21408 runtime_gas=287
   case evm_usubsat_i8_truncates_i256_inputs: calldata_len=96 success reason=Return gas_used=21733 gas_refunded=0 logs=0 output=call len=32 tx_gas=21420 runtime_gas=313
@@ -205,7 +205,10 @@ entry:
     JUMP
   block15:
     JUMPDEST
-    PUSH16 0xffffffffffffffffffffffffffffffff (340282366920938463463374607431768211455)  // v31.i256 = and v3 v30;
+    PUSH0  // v31.i256 = and v3 v30;
+    NOT
+    PUSH1 0x80 (128)
+    SHR
     DUP1
     SWAP1
     SWAP2
@@ -242,7 +245,10 @@ entry:
     AND  // v37.i256 = and v36 v30;
     SWAP1  // v42.i256 = eq v37 v41;
     POP
-    PUSH16 0x7fffffffffffffffffffffffffffffff (170141183460469231731687303715884105727)
+    PUSH0
+    NOT
+    PUSH1 0x81 (129)
+    SHR
     EQ
     PUSH1 block30  // br v42 block54 block55;
     JUMPI
@@ -334,7 +340,10 @@ entry:
     JUMP
   block12:
     JUMPDEST
-    PUSH16 0xffffffffffffffffffffffffffffffff (340282366920938463463374607431768211455)  // v54.i256 = and v3 v30;
+    PUSH0  // v54.i256 = and v3 v30;
+    NOT
+    PUSH1 0x80 (128)
+    SHR
     DUP1
     SWAP1
     SWAP2
