@@ -1,0 +1,47 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: "String::from_utf8(out).unwrap()"
+input_file: test_files/evm/final_spill_call_target_live_across_packing.sntn
+---
+evm.config: stack_reach=4 vcode=false bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2 mem_plan_detail=true
+
+object: Contract
+  section runtime: 359 bytes
+  total: 359 bytes
+
+functions:
+  mem: global_dyn_base=0x4a0 arena_base=0x300 scratch_peak_words=6 static_chain_peak_words=7
+  entry: ir_blocks=1 ir_insts=4 vcode_ops=13 fixups=2 imm_bytes=2
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=6 abs_words_end=0
+  call_sha_after_packing: ir_blocks=1 ir_insts=33 vcode_ops=172 fixups=2 imm_bytes=51
+    mem: scratch_words=6 stable_words=7 stable_mode=StaticAbs(base=0x3c0) entry_abs_words=6 abs_words_end=13
+  pack_words: ir_blocks=1 ir_insts=16 vcode_ops=57 fixups=0 imm_bytes=12
+    mem: scratch_words=1 stable_words=0 stable_mode=None entry_abs_words=13 abs_words_end=1
+
+mem plan detail:
+evm mem plan: global_dyn_base=0x4a0 arena_base=0x300 scratch_peak_words=6 static_chain_peak_words=7
+evm mem plan: entry scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=6 abs_words_end=0
+evm mem plan: call_sha_after_packing scratch_words=6 stable_words=7 stable_mode=StaticAbs(base=0x3c0) entry_abs_words=6 abs_words_end=13
+  scratch_spill v3 slot=0 addr=0x0
+  scratch_spill v5 slot=1 addr=0x20
+  spill v7 offset_words=0 loc=ScratchAbs(0) addr=0x300
+  spill v9 offset_words=1 loc=ScratchAbs(1) addr=0x320
+  spill v11 offset_words=2 loc=ScratchAbs(2) addr=0x340
+  spill v13 offset_words=3 loc=ScratchAbs(3) addr=0x360
+  spill v15 offset_words=4 loc=ScratchAbs(4) addr=0x380
+  spill v17 offset_words=5 loc=ScratchAbs(5) addr=0x3a0
+  spill v19 offset_words=0 loc=StableAbs(0) addr=0x3c0
+  spill v21 offset_words=1 loc=StableAbs(1) addr=0x3e0
+  spill v23 offset_words=2 loc=StableAbs(2) addr=0x400
+  spill v25 offset_words=3 loc=StableAbs(3) addr=0x420
+  spill v27 offset_words=4 loc=StableAbs(4) addr=0x440
+  spill v29 offset_words=5 loc=StableAbs(5) addr=0x460
+  spill v31 offset_words=6 loc=StableAbs(6) addr=0x480
+evm mem plan: pack_words scratch_words=1 stable_words=0 stable_mode=None entry_abs_words=13 abs_words_end=1
+  scratch_spill v5 slot=0 addr=0x0
+  scratch_spill v6 slot=1 addr=0x20
+  spill v7 offset_words=0 loc=ScratchAbs(0) addr=0x300
+
+
+evm:
+  case ok: calldata_len=32 success reason=Return gas_used=22146 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=1006

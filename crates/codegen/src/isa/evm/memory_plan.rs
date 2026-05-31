@@ -55,12 +55,37 @@ impl BackendSpillReserve {
         self.scratch_words == 0 && self.stable_words == 0
     }
 
+    pub(crate) fn pointwise_max(self, other: Self) -> Self {
+        Self {
+            scratch_words: self.scratch_words.max(other.scratch_words),
+            stable_words: self.stable_words.max(other.stable_words),
+        }
+    }
+
     pub(crate) fn max_words(self) -> u32 {
         self.scratch_words.max(self.stable_words)
     }
 
     pub(crate) fn satisfies(self, required: Self) -> bool {
         self.scratch_words >= required.scratch_words && self.stable_words >= required.stable_words
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct FinalScratchReserveRange {
+    pub(crate) start_word: u32,
+    pub(crate) words: u32,
+}
+
+impl FinalScratchReserveRange {
+    pub(crate) fn contains(self, start_word: u32, words: u32) -> bool {
+        let Some(end_word) = start_word.checked_add(words) else {
+            return false;
+        };
+        let Some(reserve_end) = self.start_word.checked_add(self.words) else {
+            return false;
+        };
+        self.start_word <= start_word && end_word <= reserve_end
     }
 }
 

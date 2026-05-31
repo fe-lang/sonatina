@@ -1,0 +1,79 @@
+#! evm.config: { stack_reach: 4, mem_plan_detail: true, opt: 2 }
+#! evm.case: ok
+#!   calldata: u256(2)
+#!   expect: return u256(0xd6ba9329f8932c12192b37849f772104d20048f76434a3290512d9d814e4116f)
+
+target = "evm-ethereum-osaka"
+
+func public %entry() {
+block0:
+    v0.i256 = evm_calldata_load 0.i256;
+    v1.i256 = call %call_sha_after_packing v0 100000.i256;
+    mstore 0.i256 v1 i256;
+    evm_return 0.i256 32.i256;
+}
+
+func inline(never) private %call_sha_after_packing(v0.i256, v1.i256) -> i256 {
+block0:
+    v2.i256 = evm_calldata_load 32.i256;
+    v3.i256 = evm_calldata_load 64.i256;
+    v4.i256 = evm_calldata_load 96.i256;
+    v5.i256 = evm_calldata_load 128.i256;
+    v6.i256 = evm_calldata_load 160.i256;
+    v7.i256 = evm_calldata_load 192.i256;
+    v8.i256 = evm_calldata_load 224.i256;
+    v9.i256 = evm_calldata_load 256.i256;
+    v10.i256 = evm_calldata_load 288.i256;
+    v11.i256 = evm_calldata_load 320.i256;
+    v12.i256 = evm_calldata_load 352.i256;
+    v13.i256 = evm_calldata_load 384.i256;
+    v14.i256 = evm_calldata_load 416.i256;
+    v15.i256 = evm_calldata_load 448.i256;
+    v16.i256 = evm_calldata_load 480.i256;
+    v17.i256 = evm_calldata_load 512.i256;
+
+    v18.i256 = call %pack_words v2 v3 v4 v5 v6 v7 v8 v9;
+    v19.i256 = add v10 v11;
+    v20.i256 = add v12 v13;
+    v21.i256 = add v14 v15;
+    v22.i256 = add v16 v17;
+    v23.i256 = add v18 v19;
+    v24.i256 = add v20 v21;
+    v25.i256 = add v22 v23;
+    v26.i256 = add v24 v25;
+
+    mstore 0.i256 1.i256 i256;
+    mstore 32.i256 2.i256 i256;
+    mstore 64.i256 0.i256 i256;
+    v27.i256 = evm_static_call v1 v0 0.i256 64.i256 64.i256 32.i256;
+    v28.i256 = mload 64.i256 i256;
+    v29.i256 = mul v26 v27;
+    v30.i256 = add v28 v29;
+    return v30;
+}
+
+func inline(never) private %pack_words(v0.i256, v1.i256, v2.i256, v3.i256, v4.i256, v5.i256, v6.i256, v7.i256) -> i256 {
+block0:
+    mstore 512.i256 v0 i256;
+    mstore 544.i256 v1 i256;
+    mstore 576.i256 v2 i256;
+    mstore 608.i256 v3 i256;
+    mstore 640.i256 v4 i256;
+    mstore 672.i256 v5 i256;
+    mstore 704.i256 v6 i256;
+    mstore 736.i256 v7 i256;
+    v8.i256 = add v0 v1;
+    v9.i256 = add v2 v3;
+    v10.i256 = add v4 v5;
+    v11.i256 = add v6 v7;
+    v12.i256 = add v8 v9;
+    v13.i256 = add v10 v11;
+    v14.i256 = add v12 v13;
+    return v14;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}

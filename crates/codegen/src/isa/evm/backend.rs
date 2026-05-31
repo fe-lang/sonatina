@@ -300,7 +300,7 @@ impl EvmBackend {
                     .expect("mem plan write failed");
                 }
 
-                let mut spills: Vec<(ValueId, u32, String)> = Vec::new();
+                let mut spills: Vec<(ValueId, u32, ObjLoc, String)> = Vec::new();
                 module.func_store.view(func, |function| {
                     for v in function.dfg.value_ids() {
                         let Some(obj) = func_plan.spill_obj[v] else {
@@ -314,15 +314,15 @@ impl EvmBackend {
                         let offset_words = func_plan
                             .obj_word_offset(obj)
                             .expect("missing stack object offset");
-                        spills.push((v, offset_words, addr_of(loc)));
+                        spills.push((v, offset_words, loc, addr_of(loc)));
                     }
                 });
 
-                spills.sort_unstable_by_key(|(v, _, _)| v.as_u32());
-                for (v, offset_words, addr) in spills {
+                spills.sort_unstable_by_key(|(v, ..)| v.as_u32());
+                for (v, offset_words, loc, addr) in spills {
                     writeln!(
                         &mut out,
-                        "  spill v{} offset_words={offset_words} addr={addr}",
+                        "  spill v{} offset_words={offset_words} loc={loc:?} addr={addr}",
                         v.as_u32()
                     )
                     .expect("mem plan write failed");

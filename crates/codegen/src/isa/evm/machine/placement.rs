@@ -23,7 +23,10 @@ use super::{
     super::{
         EvmBackend, heap_plan, malloc_plan,
         mem_effects::compute_func_mem_effects,
-        memory_plan::{self, BackendSpillReserve, FuncPreAnalysis, ObjLoc, StableMode, WORD_BYTES},
+        memory_plan::{
+            self, BackendSpillReserve, FinalScratchReserveRange, FuncPreAnalysis, ObjLoc,
+            StableMode, WORD_BYTES,
+        },
         prepare::{
             ArenaBaseFacts, choose_arena_base, compute_return_escape_caller_clamp_words,
             function_free_ptr_slot_facts, memory_access_may_touch_free_ptr_slot, value_imm_u32,
@@ -54,6 +57,7 @@ pub(crate) struct EvmFuncPlacementPlan {
     pub(crate) arena_base: u32,
     pub(crate) stable_mode: StableMode,
     pub(crate) stable_words: u32,
+    pub(crate) final_scratch_reserve: FinalScratchReserveRange,
     pub(crate) mem_plan: memory_plan::FuncMemPlan,
     pub(crate) alloca_loc: FxHashMap<InstId, ObjLoc>,
     pub(crate) malloc_placements: FxHashMap<InstId, MallocPlacement>,
@@ -158,6 +162,8 @@ pub(crate) fn compute_semantic_memory_placement(
         &backend.arena_cost_model,
     );
     semantic_plan.apply_backend_spill_reserves(module, funcs, backend_spill_reserves);
+    let final_scratch_reserves =
+        final_scratch_reserve_ranges(funcs, &semantic_plan, backend_spill_reserves);
 
     let mem_effects =
         compute_func_mem_effects(module, funcs, &semantic_plan, scratch_effects, &backend.isa);
@@ -351,6 +357,10 @@ pub(crate) fn compute_semantic_memory_placement(
                     arena_base: func_plan.arena_base,
                     stable_mode: func_plan.stable_mode,
                     stable_words: func_plan.stable_words,
+                    final_scratch_reserve: final_scratch_reserves
+                        .get(&func)
+                        .copied()
+                        .unwrap_or_default(),
                     mem_plan: machine_mem_plan_from_semantic(func_plan),
                     alloca_loc: func_plan.alloca_loc.clone(),
                     malloc_placements,
@@ -479,6 +489,38 @@ impl MallocPlacementCtx<'_> {
         }
         out
     }
+}
+
+fn final_scratch_reserve_ranges(
+    funcs: &[FuncRef],
+    semantic_plan: &memory_plan::ProgramMemoryPlan,
+    backend_spill_reserves: &FxHashMap<FuncRef, BackendSpillReserve>,
+) -> FxHashMap<FuncRef, FinalScratchReserveRange> {
+    funcs
+        .iter()
+        .copied()
+        .map(|func| {
+            let reserve = backend_spill_reserves
+                .get(&func)
+                .copied()
+                .unwrap_or_default();
+            let func_plan = semantic_plan
+                .funcs
+                .get(&func)
+                .unwrap_or_else(|| panic!("missing semantic plan for func {}", func.as_u32()));
+            let start_word = func_plan
+                .scratch_words
+                .checked_sub(reserve.scratch_words)
+                .expect("backend scratch spill reserve exceeds scratch words");
+            (
+                func,
+                FinalScratchReserveRange {
+                    start_word,
+                    words: reserve.scratch_words,
+                },
+            )
+        })
+        .collect()
 }
 
 fn compute_private_static_malloc_program_plan(

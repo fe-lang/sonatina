@@ -33,8 +33,8 @@ use super::{
     },
     machine::{
         final_spills::{
-            FinalSpillChoiceCtx, FinalSpillObjects, MachineFinalSpillInput,
-            OptionalFinalSpillPlacement, allocate_final_spills,
+            FinalSpillAllocationInput, FinalSpillChoiceCtx, FinalSpillObjects,
+            MachineFinalSpillInput, OptionalFinalSpillPlacement, allocate_final_spills,
         },
         lazy_frame::{FrameSummary, compute_frame_summary, compute_machine_frame_roots},
         lower::lower_section_to_machine,
@@ -57,6 +57,7 @@ use super::{
 const FREE_PTR_SLOT_START: u32 = FREE_PTR_SLOT as u32;
 const FREE_PTR_SLOT_END: u32 = FREE_PTR_SLOT_START + WORD_BYTES;
 const DYN_SP_SLOT_START: u32 = DYN_SP_SLOT as u32;
+const MAX_FINAL_SPILL_RESERVE_ITERS: usize = 64;
 
 pub struct EvmPreparedSection {
     work: SectionWorkModule,
@@ -696,8 +697,9 @@ fn prepare_machine_section_after_pipeline(
     let pre_analyses = compute_high_evm_pre_analyses(source_module, &funcs, backend);
     let mut scratch_effects = FxHashSet::default();
     let mut backend_spill_reserves: FxHashMap<FuncRef, BackendSpillReserve> = FxHashMap::default();
+    let mut last_convergence_error = None;
 
-    for iteration in 0..4 {
+    for iteration in 0..MAX_FINAL_SPILL_RESERVE_ITERS {
         let placement = compute_semantic_memory_placement(
             source_module,
             MemoryPlacementSection {
@@ -773,6 +775,7 @@ fn prepare_machine_section_after_pipeline(
                     func,
                     analysis,
                     mem_plan,
+                    final_scratch_reserve: func_placement.final_scratch_reserve,
                     reserve,
                     abs_spill_floor_words,
                     spills,
@@ -804,13 +807,14 @@ fn prepare_machine_section_after_pipeline(
         let mut actual_spill_reserves: FxHashMap<FuncRef, BackendSpillReserve> =
             FxHashMap::default();
         let mut function_plans = FxHashMap::default();
-        let mut results: Vec<_> = machine_final_spill_inputs
+        let results: Vec<_> = machine_final_spill_inputs
             .into_par_iter()
             .map(|input| {
                 let MachineFinalSpillInput {
                     func,
                     analysis,
                     mem_plan,
+                    final_scratch_reserve,
                     reserve,
                     abs_spill_floor_words,
                     spills,
@@ -832,14 +836,16 @@ fn prepare_machine_section_after_pipeline(
                     .get(&func)
                     .copied()
                     .unwrap_or(OptionalFinalSpillPlacement::Scratch);
-                let final_spills = allocate_final_spills(
+                let final_spills = allocate_final_spills(FinalSpillAllocationInput {
+                    func,
                     alloc,
                     mem_plan,
+                    final_scratch_reserve,
                     reserve,
                     abs_spill_floor_words,
                     spills,
                     optional_placement,
-                );
+                })?;
                 if let Some(trace) = &mut stackify_trace {
                     trace.remap_stack_objects(&final_spills.stack_obj_remap);
                 }
@@ -900,9 +906,10 @@ fn prepare_machine_section_after_pipeline(
                         .func_store
                         .view(func, |function| trace.render(function, &final_spills.alloc))
                 });
-                (
+                Ok::<_, String>((
                     func,
                     final_spills.required_reserve,
+                    final_spills.used_fallback,
                     EvmFunctionPlan {
                         alloc: final_spills.alloc,
                         emitted_block_order,
@@ -913,15 +920,20 @@ fn prepare_machine_section_after_pipeline(
                         function_entry_jumpdest: function_entry_jump_targets.contains(&func),
                         stackify_trace,
                     },
-                )
+                ))
             })
             .collect();
+        let mut results = results.into_iter().collect::<Result<Vec<_>, _>>()?;
         results.sort_unstable_by_key(|(func, ..)| func.as_u32());
-        for (func, required_reserve, plan) in results {
+        let mut final_spill_fallback_funcs = Vec::new();
+        for (func, required_reserve, used_fallback, plan) in results {
             if required_reserve.scratch_words != 0 {
                 actual_scratch_effects.insert(func);
             }
             actual_spill_reserves.insert(func, required_reserve);
+            if used_fallback {
+                final_spill_fallback_funcs.push(func);
+            }
             function_plans.insert(func, plan);
         }
 
@@ -962,7 +974,9 @@ fn prepare_machine_section_after_pipeline(
             reserve_peak, actual_peak, "evm machine spill reserve iteration"
         );
 
-        let scratch_effects_satisfied = actual_scratch_effects == scratch_effects;
+        let scratch_effects_satisfied = actual_scratch_effects
+            .iter()
+            .all(|func| scratch_effects.contains(func));
         let spill_reserve_satisfied = actual_spill_reserves.iter().all(|(func, actual)| {
             backend_spill_reserves
                 .get(func)
@@ -970,8 +984,21 @@ fn prepare_machine_section_after_pipeline(
                 .unwrap_or_default()
                 .satisfies(*actual)
         });
+        last_convergence_error = Some(final_spill_convergence_error(
+            iteration,
+            &backend_spill_reserves,
+            &actual_spill_reserves,
+            &scratch_effects,
+            &actual_scratch_effects,
+            &section_plan,
+        ));
 
-        if (spill_reserve_satisfied && scratch_effects_satisfied) || iteration == 3 {
+        if spill_reserve_satisfied && scratch_effects_satisfied {
+            validate_committed_final_spill_section(
+                &section_plan,
+                &function_plans,
+                &final_spill_fallback_funcs,
+            )?;
             let mut globals: Vec<_> = membership.globals.iter().copied().collect();
             globals.sort_unstable();
             return Ok(EvmPreparedSection {
@@ -984,15 +1011,115 @@ fn prepare_machine_section_after_pipeline(
             });
         }
 
-        backend_spill_reserves = actual_spill_reserves;
-        scratch_effects = actual_scratch_effects;
+        backend_spill_reserves =
+            pointwise_max_reserve_maps(&backend_spill_reserves, &actual_spill_reserves);
+        scratch_effects.extend(actual_scratch_effects);
         debug!(
             iteration,
             actual_peak, "rerunning evm machine prepare with larger spill/scratch reserve"
         );
     }
 
-    unreachable!("machine spill-reserve loop always returns by iteration cap")
+    Err(last_convergence_error.unwrap_or_else(|| {
+        format!(
+            "EVM final-spill memory placement did not converge after {MAX_FINAL_SPILL_RESERVE_ITERS} iterations"
+        )
+    }))
+}
+
+fn pointwise_max_reserve_maps(
+    old: &FxHashMap<FuncRef, BackendSpillReserve>,
+    new: &FxHashMap<FuncRef, BackendSpillReserve>,
+) -> FxHashMap<FuncRef, BackendSpillReserve> {
+    let mut out = old.clone();
+    for (&func, &reserve) in new {
+        out.entry(func)
+            .and_modify(|cur| *cur = cur.pointwise_max(reserve))
+            .or_insert(reserve);
+    }
+    out
+}
+
+fn final_spill_convergence_error(
+    iteration: usize,
+    backend_spill_reserves: &FxHashMap<FuncRef, BackendSpillReserve>,
+    actual_spill_reserves: &FxHashMap<FuncRef, BackendSpillReserve>,
+    scratch_effects: &FxHashSet<FuncRef>,
+    actual_scratch_effects: &FxHashSet<FuncRef>,
+    section_plan: &EvmSectionPlan,
+) -> String {
+    let mut reserve_deltas: Vec<_> = actual_spill_reserves
+        .iter()
+        .filter_map(|(&func, &actual)| {
+            let current = backend_spill_reserves
+                .get(&func)
+                .copied()
+                .unwrap_or_default();
+            (!current.satisfies(actual)).then_some(format!(
+                "func{} previous={:?} actual={:?}",
+                func.as_u32(),
+                current,
+                actual
+            ))
+        })
+        .collect();
+    reserve_deltas.sort();
+
+    let mut scratch_delta: Vec<_> = actual_scratch_effects
+        .iter()
+        .filter(|func| !scratch_effects.contains(func))
+        .map(|func| format!("func{}", func.as_u32()))
+        .collect();
+    scratch_delta.sort();
+
+    format!(
+        "EVM final-spill memory placement did not converge after {MAX_FINAL_SPILL_RESERVE_ITERS} iterations; last_iteration={iteration}; arena_base=0x{:x}; scratch_peak_words={}; static_chain_peak_words={}; reserve_delta=[{}]; scratch_effect_delta=[{}]",
+        section_plan.arena_base,
+        section_plan.scratch_peak_words,
+        section_plan.static_chain_peak_words,
+        reserve_deltas.join(", "),
+        scratch_delta.join(", ")
+    )
+}
+
+fn validate_committed_final_spill_section(
+    section_plan: &EvmSectionPlan,
+    function_plans: &FxHashMap<FuncRef, EvmFunctionPlan>,
+    final_spill_fallback_funcs: &[FuncRef],
+) -> Result<(), String> {
+    if !final_spill_fallback_funcs.is_empty() {
+        let mut funcs: Vec<_> = final_spill_fallback_funcs
+            .iter()
+            .map(|func| format!("func{}", func.as_u32()))
+            .collect();
+        funcs.sort();
+        return Err(format!(
+            "EVM final-spill fallback placement reached committed section: funcs=[{}]; arena_base=0x{:x}; scratch_peak_words={}; static_chain_peak_words={}",
+            funcs.join(", "),
+            section_plan.arena_base,
+            section_plan.scratch_peak_words,
+            section_plan.static_chain_peak_words,
+        ));
+    }
+
+    for (&func, plan) in function_plans {
+        if let memory_plan::StableMode::StaticAbs { base_word } = plan.mem_plan.stable_mode
+            && plan.mem_plan.stable_words != 0
+            && base_word < plan.mem_plan.scratch_words
+        {
+            return Err(format!(
+                "EVM static stable frame starts inside scratch in committed final-spill plan: func{} stable_base_word={} scratch_words={} arena_base=0x{:x}; scratch_peak_words={}; static_chain_peak_words={}",
+                func.as_u32(),
+                base_word,
+                plan.mem_plan.scratch_words,
+                section_plan.arena_base,
+                section_plan.scratch_peak_words,
+                section_plan.static_chain_peak_words,
+            ));
+        }
+    }
+
+    Ok(())
 }
 
 fn remap_machine_mem_plan_call_preserve(mem_plan: &mut FuncMemPlan, map: &FuncMachineMap) {
