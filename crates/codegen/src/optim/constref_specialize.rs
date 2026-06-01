@@ -3,7 +3,7 @@ use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{
     Function, Immediate, Linkage, Module, Signature, Type, Value, ValueId,
     inst::{control_flow, data},
-    module::{FuncHints, FuncRef},
+    module::FuncRef,
     types::CompoundType,
 };
 
@@ -192,9 +192,7 @@ fn clone_specialized_func(module: &Module, key: &SpecializationKey) -> FuncRef {
         .insert(clone, specialized_sig(module, key, &sig));
     let hints = module.ctx.func_hints(key.callee);
     if !hints.is_empty() {
-        module
-            .ctx
-            .set_func_hints(clone, hints & !FuncHints::NOINLINE);
+        module.ctx.set_func_hints(clone, hints);
     }
     clone
 }
@@ -400,7 +398,10 @@ fn is_constref_ty(module: &Module, ty: Type) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use sonatina_ir::{ir_writer::ModuleWriter, module::FuncRef};
+    use sonatina_ir::{
+        ir_writer::ModuleWriter,
+        module::{FuncHints, FuncRef},
+    };
     use sonatina_parser::parse_module;
 
     use super::*;
@@ -487,6 +488,45 @@ func public %entry(v0.i256) -> i256 {
         });
         assert!(clone_dump.contains("const.ref $rows"));
         assert!(clone_dump.contains("const.index"));
+    }
+
+    #[test]
+    fn specialized_clone_preserves_noinline_hint() {
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+global private const [i256; 4] $zeros = [0, 0, 0, 0];
+
+func inline(never) private %get(v0.constref<[i256; 4]>, v1.i256) -> i256 {
+    block0:
+        v2.constref<i256> = const.index v0 v1;
+        v3.i256 = const.load v2;
+        return v3;
+}
+
+func public %entry(v0.i256) -> i256 {
+    block0:
+        v1.constref<[i256; 4]> = const.ref $zeros;
+        v2.i256 = call %get v1 v0;
+        return v2;
+}
+"#,
+        )
+        .expect("module parses");
+
+        let stats = specialize_private_constrefs(&parsed.module, &parsed.module.funcs());
+        assert!(stats.changed);
+
+        let clone = find_func(&parsed.module, "get__constref_a0_g");
+        assert!(
+            parsed
+                .module
+                .ctx
+                .func_hints(clone)
+                .contains(FuncHints::NOINLINE),
+            "specialized clones of noinline callees must remain noinline"
+        );
     }
 
     fn find_func(module: &Module, name_prefix: &str) -> FuncRef {
