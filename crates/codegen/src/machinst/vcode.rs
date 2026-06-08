@@ -94,6 +94,19 @@ impl<Op> VCode<Op> {
         }
     }
 
+    /// Rewrites each label payload in place and returns whether any label changed.
+    pub fn rewrite_labels(&mut self, mut rewrite: impl FnMut(Label) -> Label) -> bool {
+        let mut changed = false;
+        for label in self.labels.values_mut() {
+            let new_label = rewrite(*label);
+            if new_label != *label {
+                *label = new_label;
+                changed = true;
+            }
+        }
+        changed
+    }
+
     // pub fn emit(self, alloc: &sonatina_stackalloc::Output)
 }
 

@@ -6,7 +6,7 @@ use sonatina_ir::{
 };
 
 use crate::machinst::{
-    lower::LoweredFunction,
+    lower::{LoweredFunction, SectionCodeUnit},
     vcode::{Label, VCode, VCodeFixup, VCodeInst},
 };
 
@@ -36,6 +36,7 @@ enum FuncBodyFixupKey {
 pub(crate) fn run_exact_private_func_merge(
     module: &Module,
     lowered: &mut Vec<(FuncRef, LoweredFunction<OpCode>)>,
+    section_units: &mut [SectionCodeUnit<OpCode>],
 ) -> usize {
     let observed = collect_observed_func_symbols(module);
     let mut aliases = FxHashMap::default();
@@ -67,7 +68,7 @@ pub(crate) fn run_exact_private_func_merge(
         return 0;
     }
 
-    rewrite_function_labels(lowered, &aliases);
+    rewrite_function_labels(lowered, section_units, &aliases);
 
     let original_len = lowered.len();
     lowered.retain(|(func, _)| !aliases.contains_key(func));
@@ -216,18 +217,18 @@ fn canonical_func(func: FuncRef, aliases: &FxHashMap<FuncRef, FuncRef>) -> FuncR
 
 fn rewrite_function_labels(
     lowered: &mut [(FuncRef, LoweredFunction<OpCode>)],
+    section_units: &mut [SectionCodeUnit<OpCode>],
     aliases: &FxHashMap<FuncRef, FuncRef>,
 ) {
-    for (_, lowered_func) in lowered {
-        for label in lowered_func.vcode.labels.keys().collect::<Vec<_>>() {
-            let Label::Function(func) = lowered_func.vcode.labels[label] else {
-                continue;
-            };
-            let canonical = canonical_func(func, aliases);
-            if canonical != func {
-                lowered_func.vcode.labels[label] = Label::Function(canonical);
-            }
-        }
+    for vcode in lowered
+        .iter_mut()
+        .map(|(_, lowered_func)| &mut lowered_func.vcode)
+        .chain(section_units.iter_mut().map(|unit| &mut unit.vcode))
+    {
+        vcode.rewrite_labels(|label| match label {
+            Label::Function(func) => Label::Function(canonical_func(func, aliases)),
+            label => label,
+        });
     }
 }
 
@@ -235,11 +236,15 @@ fn rewrite_function_labels(
 mod tests {
     use smallvec::smallvec;
     use sonatina_ir::{
-        Linkage, Signature, builder::ModuleBuilder, isa::evm::Evm, module::ModuleCtx,
+        Linkage, Module, Signature, builder::ModuleBuilder, isa::evm::Evm, module::ModuleCtx,
     };
+    use sonatina_parser::parse_module;
     use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
 
-    use crate::machinst::vcode::VCode;
+    use crate::{
+        isa::evm::{LateCleanupProfile, late_section_merge::run_late_section_terminal_outline},
+        machinst::vcode::{SectionCodeUnitId, VCode},
+    };
 
     use super::*;
 
@@ -261,6 +266,51 @@ mod tests {
             vcode,
             block_order: vec![block],
         }
+    }
+
+    fn lowered_tail_call_to(dest: FuncRef) -> LoweredFunction<OpCode> {
+        let entry = sonatina_ir::BlockId(0);
+        let tail = sonatina_ir::BlockId(1);
+        let mut vcode = VCode::default();
+
+        let push_tail = vcode.add_inst_to_block(OpCode::PUSH1, None, entry);
+        let tail_label = vcode.labels.push(Label::Block(tail));
+        vcode
+            .fixups
+            .insert((push_tail, VCodeFixup::Label(tail_label)));
+        vcode.add_inst_to_block(OpCode::JUMP, None, entry);
+
+        vcode.add_inst_to_block(OpCode::JUMPDEST, None, tail);
+        let push_dest = vcode.add_inst_to_block(OpCode::PUSH1, None, tail);
+        let dest_label = vcode.labels.push(Label::Function(dest));
+        vcode
+            .fixups
+            .insert((push_dest, VCodeFixup::Label(dest_label)));
+        vcode.add_inst_to_block(OpCode::JUMP, None, tail);
+
+        LoweredFunction {
+            vcode,
+            block_order: vec![entry, tail],
+        }
+    }
+
+    fn find_func(module: &Module, name: &str) -> FuncRef {
+        module
+            .funcs()
+            .into_iter()
+            .find(|&func| module.ctx.func_sig(func, |sig| sig.name() == name))
+            .expect("function exists")
+    }
+
+    fn section_units_reference(section_units: &[SectionCodeUnit<OpCode>], target: FuncRef) -> bool {
+        section_units.iter().any(|unit| {
+            unit.vcode.fixups.values().any(|(_, fixup)| {
+                let VCodeFixup::Label(label) = fixup else {
+                    return false;
+                };
+                unit.vcode.labels[*label] == Label::Function(target)
+            })
+        })
     }
 
     #[test]
@@ -296,7 +346,10 @@ mod tests {
             (helper_b, lowered_push_stop(7)),
         ];
 
-        assert_eq!(run_exact_private_func_merge(&module, &mut lowered), 1);
+        assert_eq!(
+            run_exact_private_func_merge(&module, &mut lowered, &mut []),
+            1
+        );
         assert_eq!(lowered.len(), 2);
         assert!(lowered.iter().any(|(func, _)| *func == helper_a));
         assert!(!lowered.iter().any(|(func, _)| *func == helper_b));
@@ -306,5 +359,106 @@ mod tests {
             panic!("entry call should still use a function label");
         };
         assert_eq!(entry_vcode.labels[*label], Label::Function(helper_a));
+    }
+
+    #[test]
+    fn exact_private_func_merge_rewrites_section_unit_function_labels() {
+        let builder = test_module_builder();
+        let helper_a = builder
+            .declare_function(Signature::new_unit("helper_a", Linkage::Private, &[]))
+            .unwrap();
+        let helper_b = builder
+            .declare_function(Signature::new_unit("helper_b", Linkage::Private, &[]))
+            .unwrap();
+        let module = builder.build();
+
+        let block = sonatina_ir::BlockId(0);
+        let mut vcode = VCode::default();
+        let push = vcode.add_inst_to_block(OpCode::PUSH1, None, block);
+        let label = vcode.labels.push(Label::Function(helper_b));
+        vcode.fixups.insert((push, VCodeFixup::Label(label)));
+        vcode.add_inst_to_block(OpCode::JUMP, None, block);
+        let mut section_units = [SectionCodeUnit {
+            id: SectionCodeUnitId(0),
+            name: "__evm_shared_tail_0".to_string(),
+            vcode,
+            block_order: vec![block],
+        }];
+        let mut lowered = vec![
+            (helper_a, lowered_push_stop(7)),
+            (helper_b, lowered_push_stop(7)),
+        ];
+
+        assert_eq!(
+            run_exact_private_func_merge(&module, &mut lowered, &mut section_units),
+            1
+        );
+        assert!(!lowered.iter().any(|(func, _)| *func == helper_b));
+
+        let Some((_, VCodeFixup::Label(label))) = section_units[0].vcode.fixups.get(push) else {
+            panic!("section helper tail call should still use a function label");
+        };
+        assert_eq!(
+            section_units[0].vcode.labels[*label],
+            Label::Function(helper_a)
+        );
+    }
+
+    #[test]
+    fn exact_private_func_merge_rewrites_late_outlined_section_helper_labels() {
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %caller_a() {
+block0:
+    return;
+}
+
+func public %caller_b() {
+block0:
+    return;
+}
+
+func private %helper_a() {
+block0:
+    return;
+}
+
+func private %helper_b() {
+block0:
+    return;
+}
+"#,
+        )
+        .expect("module parses");
+        let caller_a = find_func(&parsed.module, "caller_a");
+        let caller_b = find_func(&parsed.module, "caller_b");
+        let helper_a = find_func(&parsed.module, "helper_a");
+        let helper_b = find_func(&parsed.module, "helper_b");
+        let mut lowered = vec![
+            (caller_a, lowered_tail_call_to(helper_b)),
+            (caller_b, lowered_tail_call_to(helper_b)),
+            (helper_a, lowered_push_stop(7)),
+            (helper_b, lowered_push_stop(7)),
+        ];
+
+        let mut section_units = run_late_section_terminal_outline(
+            &parsed.module,
+            &mut lowered,
+            LateCleanupProfile::Speed,
+        );
+        assert!(
+            section_units_reference(&section_units, helper_b),
+            "late section outline should clone the helper_b function label"
+        );
+
+        assert_eq!(
+            run_exact_private_func_merge(&parsed.module, &mut lowered, &mut section_units),
+            1
+        );
+        assert!(!lowered.iter().any(|(func, _)| *func == helper_b));
+        assert!(!section_units_reference(&section_units, helper_b));
+        assert!(section_units_reference(&section_units, helper_a));
     }
 }

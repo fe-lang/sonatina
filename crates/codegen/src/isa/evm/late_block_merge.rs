@@ -462,15 +462,10 @@ fn canonical_block(aliases: &FxHashMap<BlockId, BlockId>, mut block: BlockId) ->
 }
 
 fn rewrite_block_labels(vcode: &mut VCode<OpCode>, aliases: &FxHashMap<BlockId, BlockId>) {
-    let labels: Vec<_> = vcode.labels.keys().collect();
-    for label in labels {
-        if let Label::Block(block) = vcode.labels[label] {
-            let canonical = canonical_block(aliases, block);
-            if canonical != block {
-                vcode.labels[label] = Label::Block(canonical);
-            }
-        }
-    }
+    vcode.rewrite_labels(|label| match label {
+        Label::Block(block) => Label::Block(canonical_block(aliases, block)),
+        label => label,
+    });
 }
 
 pub(crate) fn layout_fallthrough_targets(

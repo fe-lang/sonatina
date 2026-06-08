@@ -363,12 +363,12 @@ impl EvmBackend {
         if self.late_cleanup_profile == LateCleanupProfile::Off {
             return Ok(Vec::new());
         }
-        let section_units = run_late_section_terminal_outline(
+        let mut section_units = run_late_section_terminal_outline(
             prepared.module(),
             lowered.as_mut_slice(),
             self.late_cleanup_profile,
         );
-        run_exact_private_func_merge(prepared.module(), lowered);
+        run_exact_private_func_merge(prepared.module(), lowered, &mut section_units);
         Ok(section_units)
     }
 
