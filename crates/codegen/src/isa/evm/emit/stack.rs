@@ -548,6 +548,12 @@ fn emit_immediate_materialization(ctx: &mut Lower<OpCode>, plan: ImmediateMateri
             push_bytes(ctx, &bytes);
             ctx.push(OpCode::NOT);
         }
+        ImmediateMaterializationPlan::LowMask { shift } => {
+            push_bytes(ctx, &[0]);
+            ctx.push(OpCode::NOT);
+            push_bytes(ctx, &shift);
+            ctx.push(OpCode::SHR);
+        }
         ImmediateMaterializationPlan::Shl { value, shift } => {
             push_bytes(ctx, &value);
             push_bytes(ctx, &shift);

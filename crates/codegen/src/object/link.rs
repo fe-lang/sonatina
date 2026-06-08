@@ -266,6 +266,10 @@ pub(crate) fn link_section(
             func: funcs[0],
             error,
         })?;
+    let layout_func_refs = lowered_funcs
+        .iter()
+        .map(|(func, _)| *func)
+        .collect::<Vec<_>>();
 
     let layout_funcs = lowered_funcs
         .into_iter()
@@ -292,7 +296,7 @@ pub(crate) fn link_section(
 
         let (symtab, section_size) = {
             let _span = trace_span!("sonatina.codegen.link_section.build_symtab").entered();
-            build_section_symtab(&layout, funcs, &data_plan, embeds)
+            build_section_symtab(&layout, &layout_func_refs, &data_plan, embeds)
                 .map_err(LinkSectionError::Link)?
         };
 
@@ -350,7 +354,7 @@ pub(crate) fn link_section(
                     build_section_observability(BuildSectionObservabilityInput {
                         module,
                         layout: &layout,
-                        funcs,
+                        funcs: &layout_func_refs,
                         symtab: &symtab,
                         data: &data_plan,
                         embeds,

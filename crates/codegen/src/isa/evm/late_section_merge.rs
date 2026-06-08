@@ -920,11 +920,10 @@ fn rewrite_block_labels_to_section_unit(
     block: BlockId,
     helper_id: SectionCodeUnitId,
 ) {
-    for label in vcode.labels.keys().collect::<Vec<_>>() {
-        if vcode.labels[label] == Label::Block(block) {
-            vcode.labels[label] = Label::SectionCodeUnit(helper_id);
-        }
-    }
+    vcode.rewrite_labels(|label| match label {
+        Label::Block(label_block) if label_block == block => Label::SectionCodeUnit(helper_id),
+        label => label,
+    });
 }
 
 fn apply_unlock_to_section_helper(
