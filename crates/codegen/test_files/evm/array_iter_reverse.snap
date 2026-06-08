@@ -114,7 +114,7 @@ test_view_param_local_ref_take_reverse:
     EQ
     PUSH1 block5  // br v40 block5 block4;
     JUMPI
-    PUSH1 section_unit0
+    PUSH1 __evm_shared_tail_0
     JUMP
   block2:
     JUMPDEST
@@ -171,7 +171,7 @@ test_view_param_local_ref_take_reverse:
     EQ
     PUSH1 block10  // br v51 block10 block9;
     JUMPI
-    PUSH1 section_unit0
+    PUSH1 __evm_shared_tail_0
     JUMP
   block7:
     JUMPDEST
@@ -198,7 +198,7 @@ test_view_param_local_ref_take_reverse:
 assert:
   block0:
     ISZERO
-    PUSH1 section_unit0  // br v0 block2 block1;
+    PUSH1 __evm_shared_tail_0  // br v0 block2 block1;
     JUMPI
   block2:
     JUMPDEST

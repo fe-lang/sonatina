@@ -7,7 +7,7 @@ use crate::isa::evm::static_arena_alloc::StackObjId;
 
 mod stackify;
 pub(crate) use stackify::{
-    HOT_IMMEDIATE_SIZE_MIN_BLOCK_USES, HOT_IMMEDIATE_SIZE_MIN_PUSH_DATA_BYTES, StackifyTrace,
+    HOT_IMMEDIATE_SIZE_MIN_BLOCK_USES, HOT_IMMEDIATE_SIZE_MIN_MATERIALIZATION_BYTES, StackifyTrace,
 };
 pub use stackify::{StackifyAlloc, StackifyBuilder, StackifySearchProfile};
 

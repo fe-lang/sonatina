@@ -9,7 +9,8 @@ use crate::{
     liveness::{InstLiveness, Liveness},
     module_analysis::{CallGraph, SccBuilder},
     stackalloc::{
-        HOT_IMMEDIATE_SIZE_MIN_BLOCK_USES, HOT_IMMEDIATE_SIZE_MIN_PUSH_DATA_BYTES, StackifyBuilder,
+        HOT_IMMEDIATE_SIZE_MIN_BLOCK_USES, HOT_IMMEDIATE_SIZE_MIN_MATERIALIZATION_BYTES,
+        StackifyBuilder,
     },
 };
 
@@ -144,7 +145,9 @@ fn prepare_machine_stackify_analysis(
     if backend.immediate_materialization_mode == ImmediateMaterializationMode::Size {
         builder = builder
             .with_hot_immediate_min_block_uses(HOT_IMMEDIATE_SIZE_MIN_BLOCK_USES)
-            .with_hot_immediate_min_push_data_bytes(HOT_IMMEDIATE_SIZE_MIN_PUSH_DATA_BYTES);
+            .with_hot_immediate_min_materialization_bytes(
+                HOT_IMMEDIATE_SIZE_MIN_MATERIALIZATION_BYTES,
+            );
     }
 
     let (alloc, trace) = if backend.capture_stackify_trace {

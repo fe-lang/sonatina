@@ -6,8 +6,8 @@ input_file: test_files/evm/fe_enum_state_machine_test_order_initial_state_unopti
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 856 bytes
-  total: 856 bytes
+  section runtime: 786 bytes
+  total: 786 bytes
 
 object: Order
   section init: 440 bytes
@@ -16,7 +16,7 @@ object: Order
 
 functions:
   mem: global_dyn_base=0x100 arena_base=0xa0 scratch_peak_words=0 static_chain_peak_words=3
-  test_order_initial_state__StorPtr_Evm___207f35a85ac4062e: ir_blocks=37 ir_insts=85 vcode_ops=228 fixups=22 imm_bytes=32
+  test_order_initial_state__StorPtr_Evm___207f35a85ac4062e: ir_blocks=37 ir_insts=85 vcode_ops=232 fixups=22 imm_bytes=34
     mem: scratch_words=0 stable_words=3 stable_mode=StaticAbs(base=0xa0) entry_abs_words=0 abs_words_end=3
   solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head: ir_blocks=9 ir_insts=25 vcode_ops=63 fixups=4 imm_bytes=8
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=0
@@ -30,7 +30,7 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=163098 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=142098
+  case ok: calldata_len=0 success reason=Return gas_used=163034 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=142034
 
 
 --------------- DEBUG ---------------
@@ -64,7 +64,7 @@ test_order_initial_state__StorPtr_Evm___207f35a85ac4062e:
     DUP2  // v9.i256 = lt v8 v7;
     SWAP1
     LT
-    PUSH1 section_unit0  // br v9 block2 block3;
+    PUSH1 __evm_shared_tail_0  // br v9 block2 block3;
     JUMPI
   block3:
     JUMPDEST
@@ -108,14 +108,16 @@ test_order_initial_state__StorPtr_Evm___207f35a85ac4062e:
     PUSH1 FuncRef(34)
     JUMP
     JUMPDEST
-    PUSH29 0x500000000000000000000000000000000000000000000000000000000 (134799733335753198973335075435098153368185722112702862405518051246080)  // evm_mstore v19 134799733335753198973335075435098153368185722112702862405518051246080.i256;
+    PUSH1 0x5 (5)  // evm_mstore v19 134799733335753198973335075435098153368185722112702862405518051246080.i256;
+    PUSH1 0xe0 (224)
+    SHL
     DUP2
     MSTORE
     PUSH1 0x4 (4)  // v21.i256 = add v19 4.i256;
     DUP2
     ADD
     LT  // v22.i256 = lt v21 v19;
-    PUSH1 section_unit0  // br v22 block5 block6;
+    PUSH1 __evm_shared_tail_0  // br v22 block5 block6;
     JUMPI
   block6:
     PUSH1 0xa0 (160)  // v23.i256 = evm_mload 160.i256;
@@ -129,7 +131,7 @@ test_order_initial_state__StorPtr_Evm___207f35a85ac4062e:
     SWAP1
     SWAP2
     LT
-    PUSH1 section_unit0  // br v27 block7 block8;
+    PUSH1 __evm_shared_tail_0  // br v27 block7 block8;
     JUMPI
   block8:
     PUSH0  // v29.i256 = evm_call 100000.i256 v11 0.i256 v23 v26 0.i256 0.i256;
@@ -168,11 +170,11 @@ test_order_initial_state__StorPtr_Evm___207f35a85ac4062e:
     PUSH1 0x20 (32)  // v36.i256 = lt v30 32.i256;
     SWAP1
     LT
-    PUSH1 section_unit0  // br v36 block11 block12;
+    PUSH1 __evm_shared_tail_0  // br v36 block11 block12;
     JUMPI
   block12:
     MLOAD  // v37.i256 = evm_mload v33;
-    PUSH1 section_unit0  // br v37 block13 block14;
+    PUSH1 __evm_shared_tail_0  // br v37 block13 block14;
     JUMPI
   block14:
     PUSH0  // evm_mstore 160.i256 0.i256;
@@ -185,14 +187,16 @@ test_order_initial_state__StorPtr_Evm___207f35a85ac4062e:
     PUSH1 FuncRef(34)
     JUMP
     JUMPDEST
-    PUSH29 0x100000000000000000000000000000000000000000000000000000000 (26959946667150639794667015087019630673637144422540572481103610249216)  // evm_mstore v39 26959946667150639794667015087019630673637144422540572481103610249216.i256;
+    PUSH1 0x1 (1)  // evm_mstore v39 26959946667150639794667015087019630673637144422540572481103610249216.i256;
+    PUSH1 0xe0 (224)
+    SHL
     DUP2
     MSTORE
     PUSH1 0x4 (4)  // v41.i256 = add v39 4.i256;
     DUP2
     ADD
     LT  // v42.i256 = lt v41 v39;
-    PUSH1 section_unit0  // br v42 block15 block16;
+    PUSH1 __evm_shared_tail_0  // br v42 block15 block16;
     JUMPI
   block16:
     PUSH1 0xa0 (160)  // v43.i256 = evm_mload 160.i256;
@@ -206,7 +210,7 @@ test_order_initial_state__StorPtr_Evm___207f35a85ac4062e:
     SWAP1
     SWAP2
     LT
-    PUSH1 section_unit0  // br v47 block17 block18;
+    PUSH1 __evm_shared_tail_0  // br v47 block17 block18;
     JUMPI
   block18:
     PUSH0  // v48.i256 = evm_call 100000.i256 v11 0.i256 v43 v46 0.i256 0.i256;
@@ -244,11 +248,11 @@ test_order_initial_state__StorPtr_Evm___207f35a85ac4062e:
     PUSH1 0x20 (32)  // v54.i256 = lt v49 32.i256;
     SWAP1
     LT
-    PUSH1 section_unit0  // br v54 block21 block22;
+    PUSH1 __evm_shared_tail_0  // br v54 block21 block22;
     JUMPI
   block22:
     MLOAD  // v55.i256 = evm_mload v52;
-    PUSH1 section_unit0  // br v55 block23 block24;
+    PUSH1 __evm_shared_tail_0  // br v55 block23 block24;
     JUMPI
   block24:
     JUMP  // return;
@@ -299,7 +303,7 @@ solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head:
     SWAP2  // v18.i256 = lt v17 v13;
     DUP3
     LT
-    PUSH1 section_unit0  // br v18 block4 block5;
+    PUSH1 __evm_shared_tail_0  // br v18 block4 block5;
     JUMPI
   block5:
     JUMPDEST
@@ -608,7 +612,7 @@ return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f
     DUP2
     ADD
     LT  // v8.i256 = lt v11 v10;
-    PUSH1 section_unit0  // br v8 block1 block2;
+    PUSH1 __evm_shared_tail_0  // br v8 block1 block2;
     JUMPI
   block2:
     JUMPDEST
@@ -623,7 +627,7 @@ return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f
     SWAP1
     SWAP2
     LT
-    PUSH1 section_unit0  // br v14 block3 block4;
+    PUSH1 __evm_shared_tail_0  // br v14 block3 block4;
     JUMPI
   block4:
     SWAP1  // evm_return v9 v13;

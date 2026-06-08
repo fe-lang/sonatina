@@ -1,4 +1,4 @@
-use crate::bitset::BitSet;
+use crate::{bitset::BitSet, isa::evm::immediate_materialization_cost_i256};
 use rustc_hash::{FxHashMap, FxHasher};
 use smallvec::SmallVec;
 use sonatina_ir::{I256, Immediate, ValueId};
@@ -93,31 +93,11 @@ impl CostModel for EstimatedCostModel {
     }
 
     fn cost_push_imm(&self, imm: I256) -> Cost {
-        if imm.is_zero() {
-            // PUSH0
-            return Cost { gas: 2, bytes: 1 };
+        let cost = immediate_materialization_cost_i256(imm);
+        Cost {
+            gas: cost.gas,
+            bytes: cost.bytes,
         }
-
-        let n = minimal_push_bytes(imm) as u32;
-        let mut cost = Cost {
-            gas: 3,
-            bytes: 1 + n,
-        };
-
-        // Approximate the EVM lowerer's sign-extension behavior for negative literals.
-        if imm.is_negative() && n < 32 {
-            // PUSH (n-1)
-            if n == 1 {
-                cost = cost.saturating_add(Cost { gas: 2, bytes: 1 }); // PUSH0
-            } else {
-                cost = cost.saturating_add(Cost { gas: 3, bytes: 2 }); // PUSH1 <idx>
-            }
-
-            // SIGNEXTEND
-            cost = cost.saturating_add(Cost { gas: 5, bytes: 1 });
-        }
-
-        cost
     }
 
     fn cost_load(&self, _v: ValueId) -> Cost {
@@ -4289,26 +4269,6 @@ fn consider_succ<C: CostModel>(
     ctx.open.push(QueueEntry { f, g, state });
 }
 
-fn minimal_push_bytes(val: I256) -> usize {
-    let bytes = val.to_u256().to_big_endian();
-    let is_neg = (bytes[0] & 0x80) != 0;
-    let skip = if is_neg { 0xff } else { 0x00 };
-
-    let mut idx = 0usize;
-    while idx < bytes.len() && bytes[idx] == skip {
-        idx += 1;
-    }
-
-    let mut len = bytes.len().saturating_sub(idx);
-
-    // Negative numbers need a leading 1 bit for SIGNEXTEND.
-    if is_neg && bytes.get(idx).map(|b| *b < 0x80).unwrap_or(true) {
-        len += 1;
-    }
-
-    len.max(1)
-}
-
 impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
     pub(super) fn replay_normalize_step(&mut self, step: Step, key_infos: &[KeyInfo]) -> bool {
         match step {
@@ -4351,7 +4311,7 @@ mod tests {
         },
     };
     use cranelift_entity::SecondaryMap;
-    use sonatina_ir::{I256, Immediate, Type, ValueId, cfg::ControlFlowGraph};
+    use sonatina_ir::{I256, Immediate, Type, U256, ValueId, cfg::ControlFlowGraph};
     use sonatina_parser::parse_module;
 
     fn packed_state_ids(state: PackedState) -> Vec<u8> {
@@ -4364,6 +4324,16 @@ mod tests {
             tail,
             mem,
         }
+    }
+
+    #[test]
+    fn estimated_cost_model_matches_shifted_immediate_materialization() {
+        let selector = I256::from_u256(U256::from(0x8c379a0u32) << 224usize);
+        let offset = I256::from_u256(U256::from(0x20u8) << 224usize);
+        let cost = EstimatedCostModel::default();
+
+        assert_eq!(cost.cost_push_imm(selector), Cost { gas: 9, bytes: 7 });
+        assert_eq!(cost.cost_push_imm(offset), Cost { gas: 9, bytes: 5 });
     }
 
     fn operand_prep_test_problem(goal: &[u8], preserve_mask: u64) -> OperandPrepProblem {

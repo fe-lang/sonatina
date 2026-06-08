@@ -11,27 +11,27 @@ object: Contract
   total: 4269 bytes
 
 functions:
-  mem: global_dyn_base=0x440 arena_base=0x440 scratch_peak_words=0 static_chain_peak_words=0
+  mem: global_dyn_base=0x480 arena_base=0x440 scratch_peak_words=2 static_chain_peak_words=0
   smt_store_zero_table: ir_blocks=1 ir_insts=33 vcode_ops=99 fixups=0 imm_bytes=63
-    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=2 abs_words_end=0
   abi_return_bool: ir_blocks=4 ir_insts=7 vcode_ops=16 fixups=2 imm_bytes=3
-    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=2 abs_words_end=0
   leanimt_root_from_calldata: ir_blocks=9 ir_insts=28 vcode_ops=73 fixups=5 imm_bytes=10
-    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=2 abs_words_end=0
   leanimt_update_root_from_calldata: ir_blocks=11 ir_insts=37 vcode_ops=95 fixups=6 imm_bytes=13
-    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=2 abs_words_end=0
   smt_root_from_calldata: ir_blocks=18 ir_insts=65 vcode_ops=165 fixups=13 imm_bytes=26
-    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=2 abs_words_end=0
   smt_update_root_from_calldata: ir_blocks=22 ir_insts=83 vcode_ops=214 fixups=15 imm_bytes=32
-    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=2 abs_words_end=0
   init__StorPtr_Evm___207f35a85ac4062e: ir_blocks=1 ir_insts=4 vcode_ops=8 fixups=2 imm_bytes=2
-    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=2 abs_words_end=0
   runtime__StorPtr_Evm___207f35a85ac4062e: ir_blocks=13 ir_insts=59 vcode_ops=168 fixups=20 imm_bytes=41
-    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=2 abs_words_end=0
   hash2_at: ir_blocks=1 ir_insts=5 vcode_ops=15 fixups=0 imm_bytes=2
-    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  hash2: ir_blocks=4 ir_insts=11 vcode_ops=25 fixups=1 imm_bytes=5
-    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=2 abs_words_end=0
+  hash2: ir_blocks=1 ir_insts=4 vcode_ops=9 fixups=0 imm_bytes=4
+    mem: scratch_words=2 stable_words=0 stable_mode=None entry_abs_words=2 abs_words_end=2
 
 evm:
   deploy: success reason=Return gas_used=513531 gas_refunded=0 logs=0 output=create len=2129 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
@@ -1258,49 +1258,21 @@ evm:
 
 // func public %hash2(v0.i256, v1.i256) -> i256
   block0 P=[v0, v1] T=[]
-    // v3.i256 = evm_mload 64.i256;
-    - stack=[v0, v1, <RET>]
-      pre: [PUSH(64)]
-      evm_mload [64] -> v3
-    // v6.i256 = gt v3 1087.i256;
-    - stack=[v3, v0, v1, <RET>]
-      pre: [PUSH(1087), DUP2]
-      gt [v3, 1087] -> v6
-    // br v6 block4 block2;
-    - stack=[v6, v3, v0, v1, <RET>]
-      br [v6] -> [block4, block2]
-  block2 P=[] T=[v0, v1]
-    inherited from block0: [v3x, v0, v1, <RET>]
-    // jump block3;
-    - stack=[v3x, v0, v1, <RET>]
-      cleanup: [POP]
-      exit(block3): [PUSH(1088)]
-      jump -> block3
-  block4 P=[] T=[v3, v0, v1]
-    inherited from block0: [v3, v0, v1, <RET>]
-    // jump block3;
-    - stack=[v3, v0, v1, <RET>]
-      jump -> block3
-  block3 P=[v7] T=[v0, v1]
-    // evm_mstore v7 v0;
-    - stack=[v7, v0, v1, <RET>], last_use=[v0]
-      pre: [SWAP1, DUP2]
-      evm_mstore [v7, v0]
-    // v9.i256 = add 32.i256 v7;
-    - stack=[v7, v1, <RET>]
-      pre: [DUP1, PUSH(32)]
-      add [32, v7] -> v9
-    // evm_mstore v9 v1;
-    - stack=[v9, v7, v1, <RET>], last_use=[v1, v9]
-      pre: [SWAP1, SWAP2, SWAP1]
-      evm_mstore [v9, v1]
-    // v10.i256 = evm_keccak256 v7 64.i256;
-    - stack=[v7, <RET>], last_use=[v7]
-      pre: [PUSH(64), SWAP1]
-      evm_keccak256 [v7, 64] -> v10
-    // return v10;
-    - stack=[v10, <RET>]
-      return [v10]
+    // evm_mstore 1088.i256 v0;
+    - stack=[v0, v1, <RET>], last_use=[v0]
+      pre: [PUSH(1088)]
+      evm_mstore [1088, v0]
+    // evm_mstore 1120.i256 v1;
+    - stack=[v1, <RET>], last_use=[v1]
+      pre: [PUSH(1120)]
+      evm_mstore [1120, v1]
+    // v6.i256 = evm_keccak256 1088.i256 64.i256;
+    - stack=[<RET>]
+      pre: [PUSH(64), PUSH(1088)]
+      evm_keccak256 [1088, 64] -> v6
+    // return v6;
+    - stack=[v6, <RET>]
+      return [v6]
 
 // func private %smt_store_zero_table()
 smt_store_zero_table:
@@ -1435,7 +1407,7 @@ leanimt_root_from_calldata:
     PUSH1 0x20 (32)  // v18.i256 = gt v2 v14;
     DUP4
     GT
-    PUSH1 section_unit0  // br v18 block1 block9;
+    PUSH1 __evm_shared_tail_0  // br v18 block1 block9;
     JUMPI
   block9:
     JUMPDEST
@@ -2201,7 +2173,7 @@ runtime__StorPtr_Evm___207f35a85ac4062e:
     PUSH4 0xdae4d242 (3672429122)  // v48.i256 = eq 3672429122.i256 v5;
     EQ
     ISZERO  // br v48 block6 block7;
-    PUSH1 section_unit0
+    PUSH1 __evm_shared_tail_0
     JUMPI
   block6:
     PUSH1 0x4 (4)  // v49.i256 = evm_calldata_load v11;
@@ -2250,32 +2222,14 @@ hash2_at:
 // func public %hash2(v0.i256, v1.i256) -> i256
 hash2:
   block0:
-    PUSH1 0x40 (64)  // v5.i256 = evm_mload v4;
-    MLOAD
-    PUSH2 0x43f (1087)  // v6.i256 = gt v5 v9;
-    DUP2
-    GT
-    PUSH1 block3  // br v6 block4 block2;
-    JUMPI
-  block2:
-    POP  // jump block3;
+    PUSH2 0x440 (1088)  // evm_mstore v4 v0;
+    MSTORE
+    PUSH2 0x460 (1120)  // evm_mstore 1120.i256 v1;
+    MSTORE
+    PUSH1 0x40 (64)  // v6.i256 = evm_keccak256 v4 v9;
     PUSH2 0x440 (1088)
-  block3:
-    JUMPDEST
-    SWAP1  // evm_mstore v7 v0;
-    DUP2
-    MSTORE
-    DUP1  // v9.i256 = add 32.i256 v7;
-    PUSH1 0x20 (32)
-    ADD
-    SWAP1  // evm_mstore v9 v1;
-    SWAP2
-    SWAP1
-    MSTORE
-    PUSH1 0x40 (64)  // v10.i256 = evm_keccak256 v7 v4;
-    SWAP1
     KECCAK256
-    SWAP1  // return v10;
+    SWAP1  // return v6;
     JUMP
 
 // synthetic section unit

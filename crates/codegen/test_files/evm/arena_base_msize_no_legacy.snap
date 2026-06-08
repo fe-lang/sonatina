@@ -6,16 +6,16 @@ input_file: test_files/evm/arena_base_msize_no_legacy.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 11 bytes
-  total: 11 bytes
+  section runtime: 8 bytes
+  total: 8 bytes
 
 functions:
   mem: global_dyn_base=0x0 arena_base=0x0 scratch_peak_words=0 static_chain_peak_words=0
-  entry: ir_blocks=1 ir_insts=3 vcode_ops=8 fixups=0 imm_bytes=3
+  entry: ir_blocks=1 ir_insts=2 vcode_ops=6 fixups=0 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=21030 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=30
+  case ok: calldata_len=0 success reason=Return gas_used=21016 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=16
 
 
 --------------- DEBUG ---------------
@@ -23,11 +23,9 @@ evm:
 // func public %entry()
 entry:
   block0:
-    PUSH1 0x40 (64)  // v4.i256 = evm_mload v3;
-    MLOAD
-    PUSH1 0x1 (1)  // evm_mstore v4 1.i256;
-    DUP2
+    PUSH1 0x1 (1)  // evm_mstore v3 1.i256;
+    PUSH0
     MSTORE
-    PUSH1 0x20 (32)  // evm_return v4 v1;
-    SWAP1
+    PUSH1 0x20 (32)  // evm_return v3 v1;
+    PUSH0
     RETURN

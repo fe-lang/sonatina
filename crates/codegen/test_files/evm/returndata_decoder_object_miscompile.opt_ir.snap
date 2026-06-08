@@ -22,34 +22,27 @@ func public %entry() {
         v22.*i8 = evm_malloc 4.i256;
         v23.i256 = ptr_to_int v22 i256;
         mstore v23 -21855552483912501284291303069055441188061847755248476274203343518395480932352.i256 i256;
-        (v25.i256, v26.i1) = uaddo v23 4.i256;
-        br v26 block5 block6;
+        v26.i256 = evm_call 100000.i256 v3 0.i256 v23 4.i256 0.i256 0.i256;
+        v27.i256 = evm_return_data_size;
+        v28.*i8 = evm_malloc v27;
+        v29.i256 = ptr_to_int v28 i256;
+        evm_return_data_copy v29 0.i256 v27;
+        v30.i1 = is_zero v26;
+        br v30 block5 block6;
 
     block5:
-        evm_revert 0.i256 0.i256;
+        evm_revert v29 v27;
 
     block6:
-        v28.i256 = evm_call 100000.i256 v3 0.i256 v23 4.i256 0.i256 0.i256;
-        v29.i256 = evm_return_data_size;
-        v30.*i8 = evm_malloc v29;
-        v31.i256 = ptr_to_int v30 i256;
-        evm_return_data_copy v31 0.i256 v29;
-        v32.i1 = is_zero v28;
+        v32.i1 = lt v27 32.i256;
         br v32 block7 block8;
 
     block7:
-        evm_revert v31 v29;
-
-    block8:
-        v34.i1 = lt v29 32.i256;
-        br v34 block9 block10;
-
-    block9:
         evm_revert 0.i256 0.i256;
 
-    block10:
-        v60.i256 = mload v31 i256;
-        mstore 0.i32 v60 i256;
+    block8:
+        v58.i256 = mload v29 i256;
+        mstore 0.i32 v58 i256;
         evm_return 0.i8 32.i8;
 
     block2:

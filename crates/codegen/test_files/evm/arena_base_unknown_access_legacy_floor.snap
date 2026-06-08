@@ -6,16 +6,16 @@ input_file: test_files/evm/arena_base_unknown_access_legacy_floor.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 31 bytes
-  total: 31 bytes
+  section runtime: 20 bytes
+  total: 20 bytes
 
 functions:
-  mem: global_dyn_base=0xa0 arena_base=0xa0 scratch_peak_words=0 static_chain_peak_words=0
-  entry: ir_blocks=4 ir_insts=12 vcode_ops=24 fixups=1 imm_bytes=6
-    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
+  mem: global_dyn_base=0xc0 arena_base=0xa0 scratch_peak_words=1 static_chain_peak_words=0
+  entry: ir_blocks=1 ir_insts=6 vcode_ops=15 fixups=0 imm_bytes=5
+    mem: scratch_words=1 stable_words=0 stable_mode=None entry_abs_words=1 abs_words_end=1
 
 evm:
-  case ok: calldata_len=32 success reason=Return gas_used=21261 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=121
+  case ok: calldata_len=32 success reason=Return gas_used=21230 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=90
 
 
 --------------- DEBUG ---------------
@@ -28,23 +28,12 @@ entry:
     PUSH1 0x63 (99)  // evm_mstore v1 v2;
     SWAP1
     MSTORE
-    PUSH1 0x40 (64)  // v4.i256 = evm_mload v3;
-    MLOAD
-    PUSH1 0x9f (159)  // v7.i256 = gt v4 159.i256;
-    DUP2
-    GT
-    PUSH1 block3  // br v7 block4 block2;
-    JUMPI
-  block2:
-    POP  // jump block3;
+    PUSH1 0xb (11)  // evm_mstore v3 11.i256;
     PUSH1 0xa0 (160)
-  block3:
-    JUMPDEST
-    PUSH1 0xb (11)  // evm_mstore v8 11.i256;
-    DUP2
     MSTORE
-    MLOAD  // v10.i256 = evm_mload v8;
-    PUSH0  // evm_mstore v0 v10;
+    PUSH1 0xa0 (160)  // v5.i256 = evm_mload v3;
+    MLOAD
+    PUSH0  // evm_mstore v0 v5;
     MSTORE
     PUSH1 0x20 (32)  // evm_return v0 32.i256;
     PUSH0

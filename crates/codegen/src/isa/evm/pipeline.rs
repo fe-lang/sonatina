@@ -7,6 +7,7 @@ use crate::{
         constref_specialize::specialize_private_constrefs,
         dead_arg::{DeadArgElimConfig, run_dead_arg_elim},
         pipeline::{FuncPassOverrides, Pass, run_function_pass_round},
+        uniform_const_arg::run_uniform_const_arg_binding,
     },
     transform::{
         aggregate::{
@@ -290,6 +291,19 @@ impl EvmPipelineContext<'_> {
             true,
             false,
         );
+        self.run_pass_round(
+            "uniform_const_arg_canonicalize",
+            &[
+                Pass::CfgCleanup,
+                Pass::ScalarCanonicalize,
+                Pass::KnownBitsSimplify,
+                Pass::Sccp,
+                Pass::CfgCleanup,
+            ],
+            false,
+            false,
+        );
+        run_uniform_const_arg_binding(self.work.module(), &self.funcs);
         run_dead_arg_elim(self.work.module(), DeadArgElimConfig::default());
         self.func_behavior_dirty = true;
         self.run_pass_round(

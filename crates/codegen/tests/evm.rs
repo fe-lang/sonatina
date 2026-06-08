@@ -16,7 +16,7 @@ use sonatina_codegen::{
     isa::evm::{EvmBackend, ImmediateMaterializationMode, LateCleanupProfile, PushWidthPolicy},
     machinst::{
         lower::{LoweredFunction, SectionCodeUnit, SectionWorkModule},
-        vcode::{Label, VCodeFixup},
+        vcode::{Label, VCodeFixup, section_code_unit_label_name},
     },
     object::{CompileOptions, compile_all_objects},
     optim::{
@@ -152,6 +152,7 @@ fn test_evm(fixture: Fixture<&str>) {
     let emit_stackify_trace = cfg.stackify_trace.unwrap_or(false);
     let emit_evm_trace = cfg.evm_trace.unwrap_or(false);
     let emit_observability = cfg.emit_observability.unwrap_or(false);
+    let emit_mem_plan_detail = cfg.mem_plan_detail.unwrap_or(false);
     let opt_pipeline = cfg.opt.unwrap_or(EvmOptPipeline::O0);
 
     let cases = evm_directives::parse_evm_cases(&parsed.debug.module_comments)
@@ -213,7 +214,11 @@ fn test_evm(fixture: Fixture<&str>) {
         ))
         .unwrap();
 
-    let mem_plan = backend.snapshot_mem_plan(&prepared);
+    let mem_plan = if emit_mem_plan_detail {
+        backend.snapshot_mem_plan_detail(&prepared)
+    } else {
+        backend.snapshot_mem_plan(&prepared)
+    };
     let (mem_plan_header, mem_plan_funcs) = parse_mem_plan_summary(&mem_plan);
 
     let mut lowered_funcs: Vec<_> = prepared
@@ -306,9 +311,14 @@ fn test_evm(fixture: Fixture<&str>) {
     } else {
         format!(" opt={}", opt_pipeline.as_label())
     };
+    let mem_plan_detail_suffix = if emit_mem_plan_detail {
+        " mem_plan_detail=true"
+    } else {
+        ""
+    };
     writeln!(
         &mut out,
-        "evm.config: stack_reach={stackify_reach_depth} vcode={emit_vcode} bytecode_hex={emit_bytecode_hex} stackify_trace={emit_stackify_trace} evm_trace={emit_evm_trace} emit_observability={emit_observability}{opt_pipeline_suffix}",
+        "evm.config: stack_reach={stackify_reach_depth} vcode={emit_vcode} bytecode_hex={emit_bytecode_hex} stackify_trace={emit_stackify_trace} evm_trace={emit_evm_trace} emit_observability={emit_observability}{opt_pipeline_suffix}{mem_plan_detail_suffix}",
     )
     .unwrap();
     writeln!(&mut out).unwrap();
@@ -347,6 +357,10 @@ fn test_evm(fixture: Fixture<&str>) {
         )
         .unwrap();
         writeln!(&mut out, "    mem: {}", stat.mem).unwrap();
+    }
+    if emit_mem_plan_detail {
+        writeln!(&mut out, "\nmem plan detail:").unwrap();
+        writeln!(&mut out, "{mem_plan}").unwrap();
     }
     writeln!(&mut out).unwrap();
 
@@ -501,7 +515,9 @@ fn write_synthetic_section_unit<Op: fmt::Debug>(unit: &SectionCodeUnit<Op>, out:
                         write!(out, " `pc + ({offset})`").unwrap();
                     }
                     Label::Function(func) => write!(out, " {func:?}").unwrap(),
-                    Label::SectionCodeUnit(unit) => write!(out, " section_unit{}", unit.0).unwrap(),
+                    Label::SectionCodeUnit(unit) => {
+                        write!(out, " {}", section_code_unit_label_name(unit)).unwrap()
+                    }
                 }
             }
             writeln!(out).unwrap();

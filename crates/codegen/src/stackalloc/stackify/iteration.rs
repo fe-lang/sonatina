@@ -3,7 +3,7 @@ use smallvec::SmallVec;
 use sonatina_ir::{BlockId, Function, I256, Immediate, InstId, ValueId};
 use std::collections::BTreeMap;
 
-use crate::{bitset::BitSet, stackalloc::Actions};
+use crate::{bitset::BitSet, isa::evm::immediate_materialization_code_len, stackalloc::Actions};
 
 use super::{
     alloc::StackifyAlloc,
@@ -890,51 +890,13 @@ fn choose_reachability_victim(
 }
 
 fn is_evictable_imm(func: &Function, v: ValueId) -> bool {
-    const MAX_PUSH_DATA_BYTES: usize = 2; // <= PUSH2
+    const MAX_MATERIALIZATION_BYTES: usize = 3; // PUSH2 or smaller.
     let Some(imm) = func.dfg.value_imm(v) else {
         return false;
     };
-    imm_push_data_len(imm) <= MAX_PUSH_DATA_BYTES
+    imm_materialization_code_len(imm) <= MAX_MATERIALIZATION_BYTES
 }
 
-pub(crate) fn imm_push_data_len(imm: Immediate) -> usize {
-    if imm.is_zero() {
-        return 0;
-    }
-
-    fn shrink_len(bytes: &[u8]) -> usize {
-        debug_assert!(!bytes.is_empty());
-
-        let is_neg = (bytes[0] & 0x80) != 0;
-        let skip = if is_neg { 0xff } else { 0x00 };
-
-        let mut idx: usize = 0;
-        while idx < bytes.len() && bytes[idx] == skip {
-            idx += 1;
-        }
-        let mut len = bytes.len().saturating_sub(idx);
-        if len == 0 {
-            len = 1;
-        }
-
-        // Negative numbers need a leading 1 bit for sign-extension.
-        if is_neg {
-            let first = bytes.get(idx).copied().unwrap_or(0xff);
-            if first < 0x80 {
-                len = len.saturating_add(1);
-            }
-        }
-        len
-    }
-
-    match imm {
-        Immediate::I1(v) => v as usize,
-        Immediate::I8(v) => shrink_len(&v.to_be_bytes()),
-        Immediate::I16(v) => shrink_len(&v.to_be_bytes()),
-        Immediate::I32(v) => shrink_len(&v.to_be_bytes()),
-        Immediate::I64(v) => shrink_len(&v.to_be_bytes()),
-        Immediate::I128(v) => shrink_len(&v.to_be_bytes()),
-        Immediate::I256(v) => shrink_len(&v.to_u256().to_big_endian()),
-        Immediate::EnumTag { value, .. } => shrink_len(&value.to_u256().to_big_endian()),
-    }
+pub(crate) fn imm_materialization_code_len(imm: Immediate) -> usize {
+    immediate_materialization_code_len(imm)
 }

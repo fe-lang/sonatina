@@ -9,6 +9,7 @@ pub(crate) struct EvmConfig {
     pub stackify_trace: Option<bool>,
     pub evm_trace: Option<bool>,
     pub emit_observability: Option<bool>,
+    pub mem_plan_detail: Option<bool>,
     pub opt: Option<EvmOptPipeline>,
 }
 
@@ -223,6 +224,13 @@ fn parse_evm_config_object(spec: &str, cfg: &mut EvmConfig) -> Result<(), String
                     return Err("duplicate `emit_observability`".to_string());
                 }
                 cfg.emit_observability =
+                    Some(parse_bool_literal(value).map_err(|e| format!("{key}: {e}"))?);
+            }
+            "mem_plan_detail" => {
+                if cfg.mem_plan_detail.is_some() {
+                    return Err("duplicate `mem_plan_detail`".to_string());
+                }
+                cfg.mem_plan_detail =
                     Some(parse_bool_literal(value).map_err(|e| format!("{key}: {e}"))?);
             }
             "opt" => {

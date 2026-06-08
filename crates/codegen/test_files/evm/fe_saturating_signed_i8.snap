@@ -107,7 +107,7 @@ i8_h1bb527fe1af58754_saturatingmul_hf2bc6be7b84ff8f7_saturating_mul:
     SWAP1  // v42.i256 = and v39 v40;
     SWAP4
     AND
-    PUSH1 section_unit0  // br v42 block20 block21;
+    PUSH1 __evm_shared_tail_0  // br v42 block20 block21;
     JUMPI
   block21:
     JUMPDEST
@@ -174,7 +174,7 @@ __fe_sonatina_entry:
     PUSH1 0x7f (127)  // v4.i256 = eq v2 127.i256;
     EQ
     ISZERO
-    PUSH1 section_unit0  // br v4 block2 block1;
+    PUSH1 __evm_shared_tail_0  // br v4 block2 block1;
     JUMPI
   block2:
     JUMPDEST

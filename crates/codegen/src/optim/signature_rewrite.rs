@@ -504,10 +504,7 @@ fn collect_planned_func_types<P: SignatureRewritePlan>(
         .collect()
 }
 
-fn collect_live_get_function_ptr_uses(
-    module: &Module,
-    planned_types: &FxHashSet<CompoundTypeRef>,
-) -> FxHashSet<CompoundTypeRef> {
+pub(crate) fn collect_live_get_function_ptr_funcs(module: &Module) -> FxHashSet<FuncRef> {
     let mut live = FxHashSet::default();
 
     for func in module.funcs() {
@@ -520,22 +517,34 @@ fn collect_live_get_function_ptr_uses(
                     ) else {
                         continue;
                     };
-                    let Some(sig) = module.ctx.get_sig(*get_fn.func()) else {
-                        continue;
-                    };
-                    let old_ty = make_func_ty(&module.ctx, sig.args(), sig.ret_tys());
-                    if !planned_types.contains(&old_ty) {
-                        continue;
-                    }
                     let Some(result) = function.dfg.inst_result(inst) else {
                         continue;
                     };
                     if function.dfg.users(result).next().is_some() {
-                        live.insert(old_ty);
+                        live.insert(*get_fn.func());
                     }
                 }
             }
         });
+    }
+
+    live
+}
+
+fn collect_live_get_function_ptr_uses(
+    module: &Module,
+    planned_types: &FxHashSet<CompoundTypeRef>,
+) -> FxHashSet<CompoundTypeRef> {
+    let mut live = FxHashSet::default();
+
+    for func in collect_live_get_function_ptr_funcs(module) {
+        let Some(sig) = module.ctx.get_sig(func) else {
+            continue;
+        };
+        let old_ty = make_func_ty(&module.ctx, sig.args(), sig.ret_tys());
+        if planned_types.contains(&old_ty) {
+            live.insert(old_ty);
+        }
     }
 
     live

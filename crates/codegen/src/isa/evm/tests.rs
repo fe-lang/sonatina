@@ -925,6 +925,279 @@ block0:
     );
 }
 
+fn prepared_func_dump(src: &str, func_name: &str) -> String {
+    let parsed = parse_module(src).expect("module parses");
+    let funcs = parsed.module.funcs();
+    let entry = find_func(&parsed.module, func_name);
+    let backend = test_backend();
+    let prepared = backend
+        .prepare_section(work_module_with_entry(&parsed.module, &funcs, entry))
+        .expect("prepare should succeed");
+
+    prepared.module().func_store.view(entry, |function| {
+        FuncWriter::new(entry, function).dump_string()
+    })
+}
+
+#[test]
+fn non_terminal_private_transient_malloc_lowers_to_static_slot_with_persistent_heap() {
+    let dumped = prepared_func_dump(
+        r#"
+target = "evm-ethereum-osaka"
+
+func private %mk(v0.i256) -> *i8 {
+block0:
+    v1.*i8 = evm_malloc 32.i256;
+    v2.i256 = ptr_to_int v1 i256;
+    mstore v2 v0 i256;
+    return v1;
+}
+
+func public %entry(v0.i1, v1.i256) -> i256 {
+block0:
+    br v0 block1 block2;
+
+block1:
+    v2.*i8 = evm_malloc 64.i256;
+    v3.i256 = ptr_to_int v2 i256;
+    mstore v3 v1 i256;
+    v4.i256 = add v3 32.i256;
+    mstore v4 v1 i256;
+    v5.i256 = evm_keccak256 v3 64.i256;
+    return v5;
+
+block2:
+    v6.*i8 = call %mk v1;
+    v7.i256 = ptr_to_int v6 i256;
+    return v7;
+}
+"#,
+        "entry",
+    );
+
+    assert!(
+        dumped.contains("evm_keccak256"),
+        "test should contain the private scratch consumer:\n{dumped}"
+    );
+    assert!(
+        !dumped.contains("evm_mload 64.i256"),
+        "private transient malloc should not read the heap free pointer:\n{dumped}"
+    );
+    assert!(
+        !dumped.contains("evm_malloc") && !dumped.contains("ptr_to_int"),
+        "machine IR should replace the malloc address with a static slot:\n{dumped}"
+    );
+}
+
+#[test]
+fn disjoint_private_transient_mallocs_pack_into_same_static_slot() {
+    let dumped = prepared_func_dump(
+        r#"
+target = "evm-ethereum-osaka"
+
+func private %mk(v0.i256) -> *i8 {
+block0:
+    v1.*i8 = evm_malloc 32.i256;
+    v2.i256 = ptr_to_int v1 i256;
+    mstore v2 v0 i256;
+    return v1;
+}
+
+func public %entry(v0.i256) -> i256 {
+block0:
+    v1.*i8 = evm_malloc 64.i256;
+    v2.i256 = ptr_to_int v1 i256;
+    mstore v2 v0 i256;
+    v3.i256 = evm_keccak256 v2 64.i256;
+    v4.*i8 = evm_malloc 64.i256;
+    v5.i256 = ptr_to_int v4 i256;
+    mstore v5 v0 i256;
+    v6.i256 = evm_keccak256 v5 64.i256;
+    v7.i256 = add v3 v6;
+    return v7;
+}
+"#,
+        "entry",
+    );
+
+    let keccak_bases: Vec<_> = dumped
+        .lines()
+        .filter_map(|line| {
+            line.split("evm_keccak256 ")
+                .nth(1)
+                .and_then(|tail| tail.split_whitespace().next())
+        })
+        .collect();
+    assert_eq!(
+        keccak_bases.len(),
+        2,
+        "test should contain two private scratch consumers:\n{dumped}"
+    );
+    assert_eq!(
+        keccak_bases[0], keccak_bases[1],
+        "disjoint private buffers should share the packed static slot:\n{dumped}"
+    );
+    assert!(
+        !dumped.contains("evm_mload 64.i256"),
+        "packed private buffers should not use transient heap bases:\n{dumped}"
+    );
+}
+
+#[test]
+fn dynamic_private_transient_access_len_keeps_heap_base() {
+    let dumped = prepared_func_dump(
+        r#"
+target = "evm-ethereum-osaka"
+
+func private %mk(v0.i256) -> *i8 {
+block0:
+    v1.*i8 = evm_malloc 32.i256;
+    v2.i256 = ptr_to_int v1 i256;
+    mstore v2 v0 i256;
+    return v1;
+}
+
+func public %entry(v0.i1, v1.i256, v2.i256) -> i256 {
+block0:
+    br v0 block1 block2;
+
+block1:
+    v3.*i8 = evm_malloc 64.i256;
+    v4.i256 = ptr_to_int v3 i256;
+    mstore v4 v2 i256;
+    v5.i256 = evm_keccak256 v4 v1;
+    return v5;
+
+block2:
+    v6.*i8 = call %mk v2;
+    v7.i256 = ptr_to_int v6 i256;
+    return v7;
+}
+"#,
+        "entry",
+    );
+
+    assert!(
+        dumped.contains("evm_mload 64.i256"),
+        "dynamic private access length must retain the heap-derived base:\n{dumped}"
+    );
+}
+
+#[test]
+fn terminal_private_checked_malloc_lowers_to_fixed_buffer_with_persistent_heap() {
+    let dumped = prepared_func_dump(
+        r#"
+target = "evm-ethereum-osaka"
+
+func private %mk(v0.i256) -> *i8 {
+block0:
+    v1.*i8 = evm_malloc 32.i256;
+    v2.i256 = ptr_to_int v1 i256;
+    mstore v2 v0 i256;
+    return v1;
+}
+
+func public %entry(v0.i1, v1.i256) {
+block0:
+    br v0 block1 block4;
+
+block1:
+    v2.*i8 = evm_malloc 64.i256;
+    v3.i256 = ptr_to_int v2 i256;
+    mstore v3 v1 i256;
+    (v4.i256, v5.i1) = uaddo v3 32.i256;
+    br v5 block2 block3;
+
+block2:
+    evm_revert 0.i256 0.i256;
+
+block3:
+    mstore v4 v1 i256;
+    evm_return v3 64.i256;
+
+block4:
+    v6.*i8 = call %mk v1;
+    v7.i256 = ptr_to_int v6 i256;
+    evm_return v7 32.i256;
+}
+"#,
+        "entry",
+    );
+
+    assert!(
+        !dumped.contains("evm_mload 64.i256"),
+        "terminal-private malloc should not lower through the heap free pointer:\n{dumped}"
+    );
+    assert!(
+        !dumped.contains("uaddo") && !dumped.contains(" lt "),
+        "fixed terminal buffer should fold checked address arithmetic:\n{dumped}"
+    );
+}
+
+#[test]
+fn terminal_private_malloc_keeps_heap_base_when_pointer_value_escapes_in_payload() {
+    let dumped = prepared_func_dump(
+        r#"
+target = "evm-ethereum-osaka"
+
+func public %entry() {
+block0:
+    v0.*i8 = evm_malloc 32.i256;
+    v1.i256 = ptr_to_int v0 i256;
+    mstore v1 v1 i256;
+    evm_return v1 32.i256;
+}
+"#,
+        "entry",
+    );
+
+    assert!(
+        dumped.contains("evm_mload 64.i256"),
+        "malloc address stored into returned bytes must remain heap-based:\n{dumped}"
+    );
+}
+
+#[test]
+fn terminal_private_checked_malloc_keeps_heap_base_when_overflow_flag_escapes() {
+    let dumped = prepared_func_dump(
+        r#"
+target = "evm-ethereum-osaka"
+
+func private %mk(v0.i256) -> *i8 {
+block0:
+    v1.*i8 = evm_malloc 32.i256;
+    v2.i256 = ptr_to_int v1 i256;
+    mstore v2 v0 i256;
+    return v1;
+}
+
+func public %entry(v0.i1, v1.i256) {
+block0:
+    br v0 block1 block2;
+
+block1:
+    v2.*i8 = evm_malloc 64.i256;
+    v3.i256 = ptr_to_int v2 i256;
+    (v4.i256, v5.i1) = uaddo v3 32.i256;
+    v6.i256 = zext v5 i256;
+    mstore v3 v6 i256;
+    evm_return v3 32.i256;
+
+block2:
+    v7.*i8 = call %mk v1;
+    v8.i256 = ptr_to_int v7 i256;
+    evm_return v8 32.i256;
+}
+"#,
+        "entry",
+    );
+
+    assert!(
+        dumped.contains("evm_mload 64.i256"),
+        "observable malloc-derived overflow flag must keep heap-based placement:\n{dumped}"
+    );
+}
+
 #[test]
 fn terminal_return_payload_write_does_not_reserve_arena_base() {
     let parsed = parse_module(
@@ -1188,7 +1461,11 @@ block0:
     )]);
     let placement = machine::placement::compute_semantic_memory_placement(
         &parsed.module,
-        &funcs,
+        machine::placement::MemoryPlacementSection {
+            funcs: &funcs,
+            entry: names["main"],
+            includes: &[],
+        },
         &analyses,
         &ptr_escape,
         &FxHashSet::default(),
@@ -1229,6 +1506,170 @@ block0:
     assert!(
         min_base_words >= decode_end_words,
         "malloc min base must not overlap the sibling callee's reserved static frame"
+    );
+}
+
+#[test]
+fn caller_free_ptr_floor_reaches_callee_malloc() {
+    let parsed = parse_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+func public %clobber_then_read(v0.*i256) -> i256 {
+block0:
+    v1.*i8 = evm_malloc 32.i256;
+    v2.*i256 = bitcast v1 *i256;
+    mstore v2 v2 i256;
+    v3.i256 = mload v0 i256;
+    return v3;
+}
+
+func public %main() -> i256 {
+block0:
+    v0.*i8 = evm_malloc 32.i256;
+    v1.*i256 = bitcast v0 *i256;
+    mstore v1 111.i256 i256;
+    v2.i256 = call %clobber_then_read v1;
+    return v2;
+}
+
+func public %entry() {
+block0:
+    v0.i256 = call %main;
+    mstore 0.i32 v0 i256;
+    evm_return 0.i8 32.i8;
+}
+"#,
+    )
+    .expect("module parses");
+    let funcs = parsed.module.funcs();
+    let backend = test_backend();
+    let ptr_escape = compute_ptr_escape_summaries(&parsed.module, &funcs, &backend.isa);
+
+    let mut analyses = FxHashMap::default();
+    for &func in &funcs {
+        parsed.module.func_store.modify(func, |function| {
+            analyses.insert(
+                func,
+                compute_test_pre_analysis(function, &parsed.module.ctx, &backend),
+            );
+        });
+    }
+
+    let clobber = find_func(&parsed.module, "clobber_then_read");
+    let entry = find_func(&parsed.module, "entry");
+    let placement = machine::placement::compute_semantic_memory_placement(
+        &parsed.module,
+        machine::placement::MemoryPlacementSection {
+            funcs: &funcs,
+            entry,
+            includes: &[],
+        },
+        &analyses,
+        &ptr_escape,
+        &FxHashSet::default(),
+        &backend,
+        &FxHashMap::default(),
+    );
+    let malloc = parsed.module.func_store.view(clobber, |function| {
+        function
+            .layout
+            .iter_block()
+            .flat_map(|block| function.layout.iter_inst(block))
+            .find(|&inst| {
+                matches!(
+                    backend.isa.inst_set().resolve_inst(function.dfg.inst(inst)),
+                    EvmInstKind::EvmMalloc(_)
+                )
+            })
+            .expect("clobber_then_read has a malloc")
+    });
+    assert_eq!(
+        placement.funcs[&clobber].free_ptr_floor_before_malloc[&malloc],
+        Some(0xa0)
+    );
+}
+
+#[test]
+fn callee_malloc_exit_floor_reaches_later_callee() {
+    let parsed = parse_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+func public %alloc() -> i256 {
+block0:
+    v0.*i8 = evm_malloc 32.i256;
+    v1.i256 = ptr_to_int v0 i256;
+    return v1;
+}
+
+func public %scratch(v0.i256) -> i256 {
+block0:
+    v1.*i8 = evm_malloc 32.i256;
+    v2.i256 = ptr_to_int v1 i256;
+    mstore v2 v2 i256;
+    return v0;
+}
+
+func public %entry() {
+block0:
+    v0.i256 = call %alloc;
+    v1.i256 = call %scratch v0;
+    mstore 0.i32 v1 i256;
+    evm_return 0.i8 32.i8;
+}
+"#,
+    )
+    .expect("module parses");
+    let funcs = parsed.module.funcs();
+    let backend = test_backend();
+    let ptr_escape = compute_ptr_escape_summaries(&parsed.module, &funcs, &backend.isa);
+
+    let mut analyses = FxHashMap::default();
+    for &func in &funcs {
+        parsed.module.func_store.modify(func, |function| {
+            analyses.insert(
+                func,
+                compute_test_pre_analysis(function, &parsed.module.ctx, &backend),
+            );
+        });
+    }
+
+    let entry = find_func(&parsed.module, "entry");
+    let scratch = find_func(&parsed.module, "scratch");
+    let placement = machine::placement::compute_semantic_memory_placement(
+        &parsed.module,
+        machine::placement::MemoryPlacementSection {
+            funcs: &funcs,
+            entry,
+            includes: &[],
+        },
+        &analyses,
+        &ptr_escape,
+        &FxHashSet::default(),
+        &backend,
+        &FxHashMap::default(),
+    );
+    let malloc = parsed.module.func_store.view(scratch, |function| {
+        function
+            .layout
+            .iter_block()
+            .flat_map(|block| function.layout.iter_inst(block))
+            .find(|&inst| {
+                matches!(
+                    backend.isa.inst_set().resolve_inst(function.dfg.inst(inst)),
+                    EvmInstKind::EvmMalloc(_)
+                )
+            })
+            .expect("scratch has a malloc")
+    });
+    let min_base = match placement.funcs[&scratch].malloc_placements[&malloc] {
+        machine::placement::MallocPlacement::Heap { min_base, .. } => min_base,
+        machine::placement::MallocPlacement::Fixed { base } => base,
+    };
+    assert_eq!(
+        placement.funcs[&scratch].free_ptr_floor_before_malloc[&malloc],
+        Some(min_base)
     );
 }
 
@@ -1636,6 +2077,81 @@ object @Contract {
         2,
         "prepare should not mutate the original module"
     );
+}
+
+#[test]
+fn prepare_section_binds_uniform_const_arg_before_late_dead_arg_elim() {
+    let parsed = parse_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+func private %helper(v0.i256, v1.i256) -> i256 {
+block0:
+    v2.i256 = add v0 v1;
+    return v2;
+}
+
+func public %entry(v0.i256) -> i256 {
+block0:
+    v1.i256 = add 1.i256 2.i256;
+    v2.i256 = call %helper v1 v0;
+    v3.i256 = call %helper 3.i256 v2;
+    return v3;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}
+"#,
+    )
+    .unwrap();
+
+    let funcs = parsed.module.funcs();
+    let mut names: FxHashMap<String, FuncRef> = FxHashMap::default();
+    for &func in &funcs {
+        let name = parsed
+            .module
+            .ctx
+            .func_sig(func, |sig| sig.name().to_string());
+        names.insert(name, func);
+    }
+
+    let backend = EvmBackend::new(Evm::new(TargetTriple {
+        architecture: Architecture::Evm,
+        vendor: Vendor::Ethereum,
+        operating_system: OperatingSystem::Evm(EvmVersion::Osaka),
+    }))
+    .with_late_cleanup_profile(LateCleanupProfile::Speed);
+    let prepared = backend
+        .prepare_section(work_module_with_entry(
+            &parsed.module,
+            &funcs,
+            names["entry"],
+        ))
+        .expect("prepare should succeed");
+
+    let helper_sig = prepared
+        .module()
+        .ctx
+        .get_sig(names["helper"])
+        .expect("helper signature should exist");
+    assert_eq!(
+        helper_sig.args().len(),
+        1,
+        "uniform const arg binding should expose removable helper arg"
+    );
+    prepared
+        .module()
+        .func_store
+        .view(names["entry"], |function| {
+            let dumped = FuncWriter::new(names["entry"], function).dump_string();
+            assert!(
+                !dumped.contains("call %helper 3.i256"),
+                "entry callsites should drop the bound constant:\n{dumped}"
+            );
+        });
 }
 
 #[test]
