@@ -1,8 +1,8 @@
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 use sonatina_ir::{
-    BlockId, ControlFlowGraph, Function, Inst, InstId, Module, Type, Value, ValueId,
-    module::FuncRef, visitor::Visitor,
+    BlockId, ControlFlowGraph, DebugTag, DebugTagKind, DebugTagPayload, Function, Inst, InstId,
+    Module, Type, Value, ValueId, module::FuncRef, visitor::Visitor,
 };
 use sonatina_verifier::{VerifierConfig, verify_function};
 
@@ -113,6 +113,7 @@ pub(super) fn try_inline_callsite_full(
     let reachable: FxHashSet<BlockId> = rpo.iter().copied().collect();
     validate_full_inline_callee_rewriteability(module, callee_ref, callee, &rpo, &reachable)?;
 
+    let inline_callsite_tag = make_inline_callsite_tag(caller, call_inst, callee_ref);
     let mut editor = CfgEditor::new(caller, CleanupMode::Strict);
     let (callsite_block, cont_block) = editor.split_block_at(call_inst);
 
@@ -180,6 +181,12 @@ pub(super) fn try_inline_callsite_full(
 
             let (new_inst, new_results) =
                 editor.append_inst_with_results(new_block, cloned, result_tys.as_slice());
+            editor.func_mut().import_inst_debug_from(
+                callee,
+                old_inst,
+                new_inst,
+                Some(inline_callsite_tag),
+            );
             inserted_insts += 1;
 
             assert_eq!(
@@ -217,7 +224,13 @@ pub(super) fn try_inline_callsite_full(
                 .unwrap_or_default();
 
             let jump = editor.func_mut().dfg.make_jump(cont_block);
-            editor.append_inst_with_result(new_block, Box::new(jump), None);
+            let (new_jump, _) = editor.append_inst_with_result(new_block, Box::new(jump), None);
+            editor.func_mut().import_inst_debug_from(
+                callee,
+                term_id,
+                new_jump,
+                Some(inline_callsite_tag),
+            );
             inserted_insts += 1;
 
             returns.push(ReturnSite {
@@ -233,7 +246,13 @@ pub(super) fn try_inline_callsite_full(
                     .rewrite_inst_operands(term.as_mut(), false)
                     .expect("validated callee should be rewriteable");
             }
-            editor.append_inst_with_result(new_block, term, None);
+            let (new_term, _) = editor.append_inst_with_result(new_block, term, None);
+            editor.func_mut().import_inst_debug_from(
+                callee,
+                term_id,
+                new_term,
+                Some(inline_callsite_tag),
+            );
             inserted_insts += 1;
         }
     }
@@ -335,6 +354,23 @@ pub(super) fn try_inline_callsite_full(
 enum ValueValidationMode {
     RequireMapped,
     AllowForwardRefsInPhi,
+}
+
+fn make_inline_callsite_tag(
+    caller: &mut Function,
+    call_inst: InstId,
+    callee_ref: FuncRef,
+) -> sonatina_ir::DebugTagId {
+    let origin = caller
+        .inst_debug_loc(call_inst)
+        .and_then(|loc| caller.debug.debug_loc(loc))
+        .and_then(|loc| loc.primary_origin);
+
+    caller.debug.add_debug_tag(DebugTag {
+        kind: DebugTagKind::InlineCallsite,
+        origin,
+        payload: DebugTagPayload::Text(format!("inlined callee {callee_ref:?}")),
+    })
 }
 
 struct OperandValidator<'a> {
