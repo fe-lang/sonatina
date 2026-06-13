@@ -393,7 +393,7 @@ struct SearchNode<S> {
     parent: Option<(S, Step)>,
 }
 
-impl<S, Q> Default for SearchScratch<S, Q> {
+impl<S, Q: Ord> Default for SearchScratch<S, Q> {
     fn default() -> Self {
         Self {
             nodes: FxHashMap::default(),
