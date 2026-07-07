@@ -80,14 +80,10 @@ impl BlockSimState {
     }
 }
 
-pub(super) enum PlannerActionSink<'a> {
+pub(super) enum PlannerActionSink {
     Pre(InstId),
     Post(InstId),
-    BrTableCase {
-        inst: InstId,
-        case_idx: usize,
-        prefix: Option<&'a Actions>,
-    },
+    BrTableCase { inst: InstId, case_idx: usize },
 }
 
 enum TerminatorInfo {
@@ -319,20 +315,14 @@ pub(super) fn run_block_sim<O: StackifyObserver>(
                         );
                     });
 
-                    let base_actions = planner.take_pre_actions_for_br_table(inst);
                     let (case_stacks, default_stack) = plan_br_table_compare_chain(
                         &table,
                         &state.stack,
                         |case_idx, case_val, case_stack| {
-                            let prefix = (case_idx == 0).then_some(&base_actions);
                             planner.with_planner(
                                 case_stack,
                                 &mut state.free_slots,
-                                PlannerActionSink::BrTableCase {
-                                    inst,
-                                    case_idx,
-                                    prefix,
-                                },
+                                PlannerActionSink::BrTableCase { inst, case_idx },
                                 |planner| {
                                     let consume_last_use = BitSet::<ValueId>::default();
                                     let mut compare_args = smallvec::smallvec![scrutinee, case_val];

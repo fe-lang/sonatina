@@ -310,15 +310,11 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
         f(&mut self.alloc.pre_actions[inst])
     }
 
-    pub(super) fn take_pre_actions_for_br_table(&mut self, inst: InstId) -> Actions {
-        std::mem::take(&mut self.alloc.pre_actions[inst])
-    }
-
     pub(super) fn with_planner<R>(
         &mut self,
         stack: &mut SymStack,
         free_slots: &mut FreeSlotPools,
-        sink: PlannerActionSink<'_>,
+        sink: PlannerActionSink,
         f: impl FnOnce(&mut Planner<'_, '_>) -> R,
     ) -> R {
         match sink {
@@ -364,15 +360,8 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
                 );
                 f(&mut planner)
             }
-            PlannerActionSink::BrTableCase {
-                inst,
-                case_idx,
-                prefix,
-            } => {
+            PlannerActionSink::BrTableCase { inst, case_idx } => {
                 let mut actions = Actions::new();
-                if let Some(prefix) = prefix {
-                    actions.extend_from_slice(prefix);
-                }
                 let mem = planner::MemPlan::new(
                     self.spill,
                     &mut *self.spill_requests,

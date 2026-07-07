@@ -212,20 +212,27 @@ block3:
                 .with_value_aliases(&value_aliases)
                 .compute();
 
+            // The br_table terminator's accumulated pre-actions (dead-prefix cleanup,
+            // reachability rescue, prologue injection) are read from `pre_actions[term]` like
+            // every other instruction and are no longer hoisted into case 0. For this function
+            // that set is empty; the stored case lists therefore hold only per-case compare
+            // preparation, in IR case order.
             assert!(
                 alloc.pre_actions[term].is_empty(),
-                "br_table pre-actions should be hoisted into case actions"
+                "br_table pre-actions are read from pre_inst, not hoisted into case 0"
             );
             assert_eq!(alloc.brtable_actions[term].len(), 2);
 
             let first = alloc.br_table_case(term, 0);
             let second = alloc.br_table_case(term, 1);
+            // Case 0 is exactly its compare preparation (materializing the case scrutinee), with
+            // no hoisted cleanup/rescue prefix in front of it.
             assert!(
-                !first.is_empty(),
-                "expected first br_table case to include compare preparation"
+                matches!(first.as_slice(), [Action::Push(_)]),
+                "case 0 should hold only compare preparation, not a hoisted base-action prefix"
             );
             assert!(
-                !second.is_empty(),
+                matches!(second.first(), Some(Action::Push(_))),
                 "expected later br_table case to include compare preparation"
             );
         });

@@ -121,6 +121,8 @@ impl EvmMachineFunctionLowering<'_> {
                     "br_table has duplicate scrutinee values"
                 );
 
+                emit_pre_actions(ctx, alloc.pre_inst(insn));
+
                 for (case_idx, (_, dest)) in table.iter().enumerate() {
                     let dest = self.canonical_block_target(*dest);
                     self.emit_actions_for_site(
