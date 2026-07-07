@@ -367,18 +367,15 @@ pub(super) fn run_block_sim<O: StackifyObserver>(
             &mut stack,
             &mut state.free_slots,
             PlannerActionSink::Pre(inst),
-            |planner| planner.prepare_operands_for_inst(inst, &mut args, last_use, &cache_preserve),
+            |planner| {
+                if call_has_stack_continuation {
+                    planner.prepare_internal_call(inst, &mut args, last_use, &cache_preserve);
+                } else {
+                    planner.prepare_operands_for_inst(inst, &mut args, last_use, &cache_preserve);
+                }
+            },
         );
         state.stack = stack;
-
-        if call_has_stack_continuation {
-            planner.with_pre_actions(inst, |actions| {
-                state.stack.push_call_continuation(actions);
-                state
-                    .stack
-                    .position_call_ret_below_operands(args.len(), actions);
-            });
-        }
 
         planner.on_pre_actions(inst, after_cleanup_len);
         planner.on_normal_inst(inst, &args, &results);
@@ -397,7 +394,7 @@ pub(super) fn run_block_sim<O: StackifyObserver>(
         state.stack.pop_n_operands(args.len());
 
         if call_has_stack_continuation {
-            state.stack.remove_call_ret_addr();
+            state.stack.pop_call_ret_addr();
         }
 
         for &res in results.iter().rev() {

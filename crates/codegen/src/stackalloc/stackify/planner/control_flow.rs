@@ -1,7 +1,7 @@
 use smallvec::SmallVec;
 use sonatina_ir::{BlockId, InstId, ValueId};
 
-use crate::stackalloc::Action;
+use crate::{bitset::BitSet, stackalloc::Action};
 
 use super::{
     super::{
@@ -103,6 +103,33 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
             self.actions.push(act);
         }
         self.mem.emit_store_for_spilled_value(phi_res, self.actions);
+    }
+
+    /// Prepare the operands and return continuation for an internal `call`.
+    ///
+    /// EVM internal-call ABI: at the `JUMP` into the callee the stack must read
+    /// `[arg0, arg1, …, argN-1, cont, <caller values the callee cannot see>]`, where `cont` is the
+    /// return-continuation address the callee jumps back to. This method arranges exactly that
+    /// shape, in three pre-coordinated steps so a single `SWAP` finishes it:
+    ///
+    /// 1. `args` arrive already rotated left by one (see `operand_order_for_stackify`), so operand
+    ///    preparation leaves `[arg1, …, argN-1, arg0, <caller values>]` on top.
+    /// 2. `push_call_continuation` pushes `cont`: `[cont, arg1, …, argN-1, arg0, …]`.
+    /// 3. `position_call_ret_below_operands(argc)` swaps `cont` with the bottom operand `arg0`,
+    ///    yielding `[arg0, arg1, …, argN-1, cont, …]` — ABI order with the continuation directly
+    ///    below the args. When `argc == 0` the continuation is already on top and the swap is
+    ///    skipped.
+    pub(in super::super) fn prepare_internal_call(
+        &mut self,
+        inst: InstId,
+        args: &mut SmallVec<[ValueId; 8]>,
+        consume_last_use: &BitSet<ValueId>,
+        cache_preserve: &BitSet<ValueId>,
+    ) {
+        self.prepare_operands_for_inst(inst, args, consume_last_use, cache_preserve);
+        self.stack.push_call_continuation(self.actions);
+        self.stack
+            .position_call_ret_below_operands(args.len(), self.actions);
     }
 
     pub fn plan_internal_return(&mut self, inst: InstId) {

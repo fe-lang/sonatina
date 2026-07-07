@@ -702,6 +702,7 @@ pub(super) fn operand_order_for_stackify(
         .collect();
 
     if call_has_local_return(func, inst) && !args.is_empty() {
+        // Rotation pairs with `Planner::prepare_internal_call`; see the ABI note there.
         args.as_mut_slice().rotate_left(1);
     }
 
