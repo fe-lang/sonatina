@@ -18,8 +18,7 @@ use super::{
         BackendSpillReserve, FuncMemPlan, FuncPreAnalysis, ObjLoc, PreserveMode, ProgramMemoryPlan,
         WORD_BYTES, compute_abs_clobber_words_with_extra,
     },
-    ptr_escape::PtrEscapeSummary,
-    ptr_provenance::{Provenance, compute_value_provenance},
+    ptr_provenance::Provenance,
 };
 use crate::{liveness::InstLiveness, module_analysis::CallGraphSchedule};
 
@@ -39,8 +38,10 @@ pub(crate) fn compute_semantic_malloc_future_abs_words_with_extra(
         isa,
         extra_clobber_words,
         |analysis| FutureBoundsAnalysis {
+            cfg: &analysis.cfg,
             inst_liveness: &analysis.inst_liveness,
             canonicalize: &analysis.value_aliases,
+            prov_conservative: &analysis.prov_conservative_value,
         },
     )
 }
@@ -73,8 +74,6 @@ where
                 .unwrap_or_else(|| panic!("missing analysis for func {}", f.as_u32()));
             let analysis = analysis_view(analysis);
             let map = module.func_store.view(f, |function| {
-                let mut cfg = ControlFlowGraph::new();
-                cfg.compute(function);
                 let ctx = FutureBoundsCtx {
                     module: &module.ctx,
                     isa,
@@ -83,7 +82,7 @@ where
                     abs_clobber_words: &abs_clobber_words,
                     analysis,
                 };
-                compute_future_bounds_for_func(function, &cfg, &ctx)
+                compute_future_bounds_for_func(function, &ctx)
             });
             (f, map)
         })
@@ -98,8 +97,12 @@ where
 }
 
 struct FutureBoundsAnalysis<'a> {
+    cfg: &'a ControlFlowGraph,
     inst_liveness: &'a InstLiveness,
     canonicalize: &'a SecondaryMap<ValueId, Option<ValueId>>,
+    /// Deliberately computed with all-conservative callee summaries: heap
+    /// bounds must hold regardless of callee escape behavior.
+    prov_conservative: &'a SecondaryMap<ValueId, Provenance>,
 }
 
 struct FutureBoundsCtx<'a> {
@@ -113,12 +116,10 @@ struct FutureBoundsCtx<'a> {
 
 fn compute_future_bounds_for_func(
     function: &Function,
-    cfg: &ControlFlowGraph,
     ctx: &FutureBoundsCtx<'_>,
 ) -> FxHashMap<InstId, u32> {
-    let prov = compute_value_provenance(function, ctx.module, ctx.isa, |callee| {
-        PtrEscapeSummary::conservative_unknown_ctx(ctx.module, callee)
-    });
+    let cfg = ctx.analysis.cfg;
+    let prov = ctx.analysis.prov_conservative;
 
     let mut alloca_end_words: FxHashMap<InstId, u32> = FxHashMap::default();
     for (&inst, &loc) in &ctx.func_plan.alloca_loc {
@@ -244,7 +245,7 @@ fn compute_future_bounds_for_func(
             static_bound = static_bound.max(static_write_bound(
                 function,
                 ctx,
-                &prov,
+                prov,
                 &alloca_end_words,
                 inst,
             ));
@@ -314,7 +315,7 @@ fn compute_future_bounds_for_func(
             static_bound = static_bound.max(static_write_bound(
                 function,
                 ctx,
-                &prov,
+                prov,
                 &alloca_end_words,
                 inst,
             ));
@@ -432,11 +433,13 @@ mod tests {
     };
 
     struct TestAnalysis {
+        cfg: ControlFlowGraph,
         inst_liveness: InstLiveness,
         value_aliases: SecondaryMap<ValueId, Option<ValueId>>,
+        prov_conservative: SecondaryMap<ValueId, Provenance>,
     }
 
-    fn compute_test_analysis(function: &Function) -> TestAnalysis {
+    fn compute_test_analysis(module: &ModuleCtx, isa: &Evm, function: &Function) -> TestAnalysis {
         let mut cfg = ControlFlowGraph::new();
         cfg.compute(function);
 
@@ -451,9 +454,22 @@ mod tests {
             let _ = &mut value_aliases[value];
         }
 
+        let prov_conservative = crate::isa::evm::ptr_provenance::compute_value_provenance(
+            function,
+            module,
+            isa,
+            |callee| {
+                crate::isa::evm::ptr_escape::PtrEscapeSummary::conservative_unknown_ctx(
+                    module, callee,
+                )
+            },
+        );
+
         TestAnalysis {
+            cfg,
             inst_liveness,
             value_aliases,
+            prov_conservative,
         }
     }
 
@@ -511,7 +527,10 @@ block0:
                 .func_sig(func, |sig| sig.name().to_string());
             names.insert(name, func);
             parsed.module.func_store.view(func, |function| {
-                analyses.insert(func, compute_test_analysis(function));
+                analyses.insert(
+                    func,
+                    compute_test_analysis(&parsed.module.ctx, &isa, function),
+                );
             });
         }
         let caller = names["caller"];
@@ -580,8 +599,10 @@ block0:
             &isa,
             &FxHashMap::default(),
             |analysis| FutureBoundsAnalysis {
+                cfg: &analysis.cfg,
                 inst_liveness: &analysis.inst_liveness,
                 canonicalize: &analysis.value_aliases,
+                prov_conservative: &analysis.prov_conservative,
             },
         );
 
@@ -612,7 +633,9 @@ block0:
             vendor: Vendor::Ethereum,
             operating_system: OperatingSystem::Evm(EvmVersion::Osaka),
         });
-        let analysis = parsed.module.func_store.view(func, compute_test_analysis);
+        let analysis = parsed.module.func_store.view(func, |function| {
+            compute_test_analysis(&parsed.module.ctx, &isa, function)
+        });
         let analyses = FxHashMap::from_iter([(func, analysis)]);
 
         let (malloc_inst, alloca_inst) = parsed.module.func_store.view(func, |function| {
@@ -657,8 +680,10 @@ block0:
             &isa,
             &FxHashMap::default(),
             |analysis| FutureBoundsAnalysis {
+                cfg: &analysis.cfg,
                 inst_liveness: &analysis.inst_liveness,
                 canonicalize: &analysis.value_aliases,
+                prov_conservative: &analysis.prov_conservative,
             },
         );
 

@@ -53,7 +53,7 @@ use super::{
     },
     pipeline::EvmPipeline,
     ptr_escape::PtrEscapeSummary,
-    ptr_provenance::{Provenance, compute_value_provenance},
+    ptr_provenance::{Provenance, compute_provenance, compute_value_provenance},
 };
 
 const FREE_PTR_SLOT_START: u32 = FREE_PTR_SLOT as u32;
@@ -244,17 +244,9 @@ pub(crate) struct FreePtrSlotFacts {
 
 pub(crate) fn function_free_ptr_slot_facts(
     function: &Function,
-    module: &ModuleCtx,
     backend: &EvmBackend,
-    ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
+    prov: &SecondaryMap<ValueId, Provenance>,
 ) -> FreePtrSlotFacts {
-    let prov = compute_value_provenance(function, module, &backend.isa, |callee| {
-        ptr_escape
-            .get(&callee)
-            .cloned()
-            .unwrap_or_else(|| PtrEscapeSummary::conservative_unknown_ctx(module, callee))
-    });
-
     let mut facts = FreePtrSlotFacts::default();
     for block in function.layout.iter_block() {
         for inst in function.layout.iter_inst(block) {
@@ -267,7 +259,7 @@ pub(crate) fn function_free_ptr_slot_facts(
             }
 
             for access in &function.dfg.effects(inst).accesses {
-                if memory_access_may_touch_free_ptr_slot(function, access, &prov) {
+                if memory_access_may_touch_free_ptr_slot(function, access, prov) {
                     facts.touches = true;
                     facts.writes |= access.kind == AccessKind::Write;
                     if facts.writes {
@@ -508,16 +500,9 @@ fn terminal_payload_scratch_insts(function: &Function, backend: &EvmBackend) -> 
 fn reserve_function_memory_layout(
     layout: &mut SectionMemoryLayout,
     function: &Function,
-    module: &ModuleCtx,
     backend: &EvmBackend,
-    ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
+    prov: &SecondaryMap<ValueId, Provenance>,
 ) {
-    let prov = compute_value_provenance(function, module, &backend.isa, |callee| {
-        ptr_escape
-            .get(&callee)
-            .cloned()
-            .unwrap_or_else(|| PtrEscapeSummary::conservative_unknown_ctx(module, callee))
-    });
     let terminal_payload_scratch = terminal_payload_scratch_insts(function, backend);
 
     for block in function.layout.iter_block() {
@@ -534,7 +519,7 @@ fn reserve_function_memory_layout(
 
             for access in &function.dfg.effects(inst).accesses {
                 layout.apply(memory_layout_reservation_from_effect(
-                    function, access, &prov,
+                    function, access, prov,
                 ));
             }
         }
@@ -638,7 +623,7 @@ pub(crate) fn choose_arena_base(
     module: &Module,
     funcs: &[FuncRef],
     backend: &EvmBackend,
-    ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
+    analyses: &FxHashMap<FuncRef, memory_plan::FuncPreAnalysis>,
     facts: ArenaBaseFacts,
 ) -> u32 {
     let mut layout = SectionMemoryLayout::default();
@@ -663,8 +648,11 @@ pub(crate) fn choose_arena_base(
     }
 
     for &func in funcs {
+        let analysis = analyses
+            .get(&func)
+            .unwrap_or_else(|| panic!("missing pre-analysis for func {}", func.as_u32()));
         module.func_store.view(func, |function| {
-            reserve_function_memory_layout(&mut layout, function, &module.ctx, backend, ptr_escape);
+            reserve_function_memory_layout(&mut layout, function, backend, &analysis.prov.value);
         });
     }
 
@@ -703,7 +691,7 @@ fn prepare_machine_section_after_pipeline(
     membership: SectionMembership,
 ) -> Result<EvmPreparedSection, String> {
     let source_module = work.module();
-    let pre_analyses = compute_high_evm_pre_analyses(source_module, &funcs, backend);
+    let pre_analyses = compute_high_evm_pre_analyses(source_module, &funcs, backend, &ptr_escape);
     let schedule = CallGraphSchedule::compute(source_module, &funcs);
     let mut fixed_slot_effects = FxHashSet::default();
     let mut backend_spill_reserves: FxHashMap<FuncRef, BackendSpillReserve> = FxHashMap::default();
@@ -1270,11 +1258,15 @@ pub(crate) fn prepare_free_ptr_restore(
         let mut inst_liveness = InstLiveness::new();
         inst_liveness.compute(function, &cfg, &liveness);
 
+        let prov_info = compute_provenance(function, module, &backend.isa, |callee| {
+            PtrEscapeSummary::get_or_conservative(ptr_escape, module, callee)
+        });
         let transient_mallocs = malloc_plan::compute_transient_mallocs(
             function,
             module,
             &backend.isa,
             ptr_escape,
+            &prov_info,
             None,
             &inst_liveness,
         );
@@ -1285,6 +1277,7 @@ pub(crate) fn prepare_free_ptr_restore(
                 module,
                 &backend.isa,
                 ptr_escape,
+                &prov_info,
                 &transient_mallocs,
             )
         {
@@ -1301,6 +1294,7 @@ fn prepare_high_evm_pre_analysis(
     function: &mut Function,
     module: &ModuleCtx,
     backend: &EvmBackend,
+    ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
 ) -> memory_plan::FuncPreAnalysis {
     let _span = trace_span!("sonatina.codegen.evm.prepare_high_evm_pre_analysis").entered();
     let mut cfg = ControlFlowGraph::new();
@@ -1337,10 +1331,31 @@ fn prepare_high_evm_pre_analysis(
         backend.compute_high_evm_value_aliases(function, module)
     };
 
+    let (prov, prov_conservative_value) = {
+        let _span = trace_span!("sonatina.codegen.evm.pre_analysis.compute_provenance").entered();
+        let prov = compute_provenance(function, module, &backend.isa, |callee| {
+            PtrEscapeSummary::get_or_conservative(ptr_escape, module, callee)
+        });
+        let conservative = compute_value_provenance(function, module, &backend.isa, |callee| {
+            PtrEscapeSummary::conservative_unknown_ctx(module, callee)
+        });
+        (prov, conservative)
+    };
+
+    let inst_count = function
+        .layout
+        .iter_block()
+        .map(|block| function.layout.iter_inst(block).count())
+        .sum();
+
     memory_plan::FuncPreAnalysis {
+        cfg,
         inst_liveness,
         block_order,
         value_aliases,
+        prov,
+        prov_conservative_value,
+        inst_count,
     }
 }
 
@@ -1348,6 +1363,7 @@ fn compute_high_evm_pre_analyses(
     module: &Module,
     funcs: &[FuncRef],
     backend: &EvmBackend,
+    ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
 ) -> FxHashMap<FuncRef, memory_plan::FuncPreAnalysis> {
     let _span = debug_span!("sonatina.codegen.evm.compute_high_evm_pre_analyses").entered();
     let mut results: Vec<_> = funcs
@@ -1355,7 +1371,7 @@ fn compute_high_evm_pre_analyses(
         .copied()
         .map(|func| {
             let analysis = module.func_store.modify(func, |function| {
-                prepare_high_evm_pre_analysis(function, &module.ctx, backend)
+                prepare_high_evm_pre_analysis(function, &module.ctx, backend, ptr_escape)
             });
             (func, analysis)
         })

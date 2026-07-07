@@ -15,7 +15,7 @@ use sonatina_ir::{
 
 use crate::{
     bitset::BitSet,
-    isa::evm::ptr_provenance::{Provenance, compute_value_provenance},
+    isa::evm::ptr_provenance::Provenance,
     module_analysis::{CallGraphSchedule, SccRef},
 };
 
@@ -116,7 +116,6 @@ struct PrivateStaticMallocProgramCtx<'a> {
     funcs: &'a [FuncRef],
     analyses: &'a FxHashMap<FuncRef, FuncPreAnalysis>,
     semantic_plan: &'a memory_plan::ProgramMemoryPlan,
-    ptr_escape: &'a FxHashMap<FuncRef, PtrEscapeSummary>,
     isa: &'a Evm,
     entry_may_have_live_frame: &'a FxHashMap<FuncRef, bool>,
     has_persistent_mallocs: bool,
@@ -129,7 +128,6 @@ struct PrivateStaticMallocFuncCtx<'a> {
     analysis: &'a FuncPreAnalysis,
     func_plan: &'a memory_plan::FuncMemPlan,
     module: &'a ModuleCtx,
-    ptr_escape: &'a FxHashMap<FuncRef, PtrEscapeSummary>,
     isa: &'a Evm,
     entry_may_have_live_frame: &'a FxHashMap<FuncRef, bool>,
     has_persistent_mallocs: bool,
@@ -189,12 +187,14 @@ pub(crate) fn compute_semantic_memory_placement(
                         &module.ctx,
                         &backend.isa,
                         ptr_escape,
+                        &analysis.prov,
                     );
                     let transient = malloc_plan::compute_transient_mallocs(
                         function,
                         &module.ctx,
                         &backend.isa,
                         ptr_escape,
+                        &analysis.prov,
                         Some(&mem_effects),
                         &analysis.inst_liveness,
                     );
@@ -236,14 +236,13 @@ pub(crate) fn compute_semantic_memory_placement(
     });
     let entry_may_have_live_frame = compute_entry_may_have_live_frame(schedule, &semantic_plan);
     let (free_ptr_slot_may_be_touched, free_ptr_write_summaries) =
-        compute_program_free_ptr_slot_facts(module, funcs, backend, ptr_escape);
+        compute_program_free_ptr_slot_facts(module, funcs, backend, analyses);
     let private_static_mallocs =
         compute_private_static_malloc_program_plan(PrivateStaticMallocProgramCtx {
             module,
             funcs,
             analyses,
             semantic_plan: &semantic_plan,
-            ptr_escape,
             isa: &backend.isa,
             entry_may_have_live_frame: &entry_may_have_live_frame,
             has_persistent_mallocs,
@@ -263,7 +262,7 @@ pub(crate) fn compute_semantic_memory_placement(
         module,
         funcs,
         backend,
-        ptr_escape,
+        analyses,
         ArenaBaseFacts {
             has_dynamic_frames,
             has_stackify_fixed_slot_spills: !fixed_slot_effects.is_empty(),
@@ -305,7 +304,6 @@ pub(crate) fn compute_semantic_memory_placement(
     let placement_ctx = MallocPlacementCtx {
         isa: &backend.isa,
         module: &module.ctx,
-        ptr_escape,
         global_dyn_base: semantic_plan.global_dyn_base,
         backend_spill_reserve_peak: backend_spill_scratch_reserve_peak,
         entry_may_have_live_frame: &entry_may_have_live_frame,
@@ -322,8 +320,11 @@ pub(crate) fn compute_semantic_memory_placement(
                 .funcs
                 .get(&func)
                 .unwrap_or_else(|| panic!("missing semantic plan for func {}", func.as_u32()));
+            let analysis = analyses
+                .get(&func)
+                .unwrap_or_else(|| panic!("missing pre-analysis for func {}", func.as_u32()));
             let malloc_placements = module.func_store.view(func, |function| {
-                placement_ctx.compute_func_malloc_placements(function, func, func_plan)
+                placement_ctx.compute_func_malloc_placements(function, func, analysis, func_plan)
             });
             (func, malloc_placements)
         })
@@ -334,8 +335,7 @@ pub(crate) fn compute_semantic_memory_placement(
             funcs,
             section_entry: section.entry,
             section_includes: section.includes,
-            backend,
-            ptr_escape,
+            analyses,
             source_is: backend.isa.inst_set(),
             malloc_placements: &malloc_placements,
             free_ptr_write_summaries: &free_ptr_write_summaries,
@@ -384,7 +384,6 @@ pub(crate) fn compute_semantic_memory_placement(
 struct MallocPlacementCtx<'a> {
     isa: &'a Evm,
     module: &'a ModuleCtx,
-    ptr_escape: &'a FxHashMap<FuncRef, PtrEscapeSummary>,
     global_dyn_base: u32,
     backend_spill_reserve_peak: u32,
     entry_may_have_live_frame: &'a FxHashMap<FuncRef, bool>,
@@ -399,26 +398,24 @@ impl MallocPlacementCtx<'_> {
         &self,
         function: &Function,
         func: FuncRef,
+        analysis: &FuncPreAnalysis,
         func_plan: &memory_plan::FuncMemPlan,
     ) -> FxHashMap<InstId, MallocPlacement> {
         let mut out = FxHashMap::default();
-        let mut cfg = ControlFlowGraph::new();
-        cfg.compute(function);
+        let cfg = &analysis.cfg;
         let needs_dyn_sp_clamp = func_plan.uses_dynamic_frame()
             || self
                 .entry_may_have_live_frame
                 .get(&func)
                 .copied()
                 .unwrap_or(false);
-        let prov = compute_value_provenance(function, self.module, self.isa, |callee| {
-            PtrEscapeSummary::get_or_conservative(self.ptr_escape, self.module, callee)
-        });
+        let prov = &analysis.prov.value;
         let exact_heap_base_before_malloc = ExactHeapBaseAnalysis {
             function,
             isa: self.isa,
-            cfg: &cfg,
+            cfg,
             func_plan,
-            prov: &prov,
+            prov,
             entry_heap_base_is_exact: !needs_dyn_sp_clamp,
         }
         .compute();
@@ -426,7 +423,7 @@ impl MallocPlacementCtx<'_> {
             function,
             self.module,
             self.isa,
-            &cfg,
+            cfg,
             &exact_heap_base_before_malloc,
         )
         .compute();
@@ -545,7 +542,6 @@ fn compute_private_static_malloc_program_plan(
                     analysis,
                     func_plan: function_plan,
                     module: &ctx.module.ctx,
-                    ptr_escape: ctx.ptr_escape,
                     isa: ctx.isa,
                     entry_may_have_live_frame: ctx.entry_may_have_live_frame,
                     has_persistent_mallocs: ctx.has_persistent_mallocs,
@@ -572,17 +568,14 @@ fn compute_private_static_malloc_func_plan(
         return PrivateStaticMallocFuncPlan::default();
     }
 
-    let mut cfg = ControlFlowGraph::new();
-    cfg.compute(ctx.function);
-    let prov = compute_value_provenance(ctx.function, ctx.module, ctx.isa, |callee| {
-        PtrEscapeSummary::get_or_conservative(ctx.ptr_escape, ctx.module, callee)
-    });
+    let cfg = &ctx.analysis.cfg;
+    let prov = &ctx.analysis.prov.value;
     let exact_heap_base_before_malloc = ExactHeapBaseAnalysis {
         function: ctx.function,
         isa: ctx.isa,
-        cfg: &cfg,
+        cfg,
         func_plan: ctx.func_plan,
-        prov: &prov,
+        prov,
         entry_heap_base_is_exact: !needs_dyn_sp_clamp,
     }
     .compute();
@@ -590,7 +583,7 @@ fn compute_private_static_malloc_func_plan(
         ctx.function,
         ctx.module,
         ctx.isa,
-        &cfg,
+        cfg,
         &exact_heap_base_before_malloc,
     )
     .compute();
@@ -1667,14 +1660,17 @@ fn compute_program_free_ptr_slot_facts(
     module: &Module,
     funcs: &[FuncRef],
     backend: &EvmBackend,
-    ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
+    analyses: &FxHashMap<FuncRef, FuncPreAnalysis>,
 ) -> (bool, FxHashMap<FuncRef, bool>) {
     let local_facts: FxHashMap<_, _> = funcs
         .iter()
         .copied()
         .map(|func| {
+            let analysis = analyses
+                .get(&func)
+                .unwrap_or_else(|| panic!("missing pre-analysis for func {}", func.as_u32()));
             let facts = module.func_store.view(func, |function| {
-                function_free_ptr_slot_facts(function, &module.ctx, backend, ptr_escape)
+                function_free_ptr_slot_facts(function, backend, &analysis.prov.value)
             });
             (func, facts)
         })
