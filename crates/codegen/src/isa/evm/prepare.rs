@@ -49,6 +49,7 @@ use super::{
     memory_plan::{
         self, BackendSpillReserve, DYN_SP_SLOT, FREE_PTR_SLOT, MachineFuncPlan, ProgramMemoryPlan,
         STATIC_BASE, SemanticFuncPlan, WORD_BYTES, compute_abs_clobber_words_with_extra,
+        expect_func_entry,
     },
     pipeline::EvmPipeline,
     ptr_escape::PtrEscapeSummary,
@@ -147,7 +148,9 @@ pub(crate) fn value_imm_u32(function: &Function, value: ValueId) -> Option<u32> 
     function.dfg.value_imm(value).and_then(immediate_u32)
 }
 
-fn byte_ranges_overlap(lhs_start: u32, lhs_len: u32, rhs_start: u32, rhs_end: u32) -> bool {
+/// Overlap of `[lhs_start, lhs_start + lhs_len)` with `[rhs_start, rhs_end)`,
+/// treating an overflowing end as reaching the range (conservative).
+fn addr_len_overlaps_range(lhs_start: u32, lhs_len: u32, rhs_start: u32, rhs_end: u32) -> bool {
     if lhs_len == 0 {
         return false;
     }
@@ -178,7 +181,7 @@ fn memory_access_may_touch_range(
             return false;
         };
         return len.as_u32(function).map_or(addr < range_end, |len| {
-            byte_ranges_overlap(addr, len, range_start, range_end)
+            addr_len_overlaps_range(addr, len, range_start, range_end)
         });
     }
 
@@ -207,7 +210,7 @@ fn memory_access_may_touch_range_from_effect(
             prov,
         ),
         AccessLoc::LinearExactImm { addr, bytes, .. } => immediate_u32(*addr)
-            .is_some_and(|addr| byte_ranges_overlap(addr, *bytes, range_start, range_end)),
+            .is_some_and(|addr| addr_len_overlaps_range(addr, *bytes, range_start, range_end)),
         AccessLoc::LinearRange { addr, len } => memory_access_may_touch_range(
             function,
             *addr,
@@ -303,21 +306,12 @@ impl SectionMemoryLayout {
     }
 
     fn arena_base(&self) -> u32 {
-        let base = align_to_word(self.max_reserved_end).unwrap_or(STATIC_BASE);
+        let base = memory_plan::align_up_to_word(self.max_reserved_end).unwrap_or(STATIC_BASE);
         if self.conservative_floor {
             base.max(STATIC_BASE)
         } else {
             base
         }
-    }
-}
-
-fn align_to_word(bytes: u32) -> Option<u32> {
-    let rem = bytes % WORD_BYTES;
-    if rem == 0 {
-        Some(bytes)
-    } else {
-        bytes.checked_add(WORD_BYTES - rem)
     }
 }
 
@@ -647,9 +641,7 @@ pub(crate) fn choose_arena_base(
     }
 
     for &func in funcs {
-        let analysis = analyses
-            .get(&func)
-            .unwrap_or_else(|| panic!("missing pre-analysis for func {}", func.as_u32()));
+        let analysis = expect_func_entry(analyses, func, "pre-analysis");
         module.func_store.view(func, |function| {
             reserve_function_memory_layout(&mut layout, function, backend, &analysis.prov.value);
         });
@@ -739,15 +731,9 @@ fn prepare_machine_section_after_pipeline(
         let mut machine_final_spill_inputs: Vec<_> = machine_analyses
             .into_iter()
             .map(|(func, analysis)| {
-                let func_placement = placement
-                    .funcs
-                    .get(&func)
-                    .unwrap_or_else(|| panic!("missing placement for func {}", func.as_u32()));
-                let func_map = machine
-                    .source_to_machine
-                    .funcs
-                    .get(&func)
-                    .unwrap_or_else(|| panic!("missing source map for func {}", func.as_u32()));
+                let func_placement = expect_func_entry(&placement.funcs, func, "placement");
+                let func_map =
+                    expect_func_entry(&machine.source_to_machine.funcs, func, "source map");
                 let mem_plan = MachineFuncPlan::from_semantic(&func_placement.mem_plan, func_map);
                 let fixed_writes =
                     machine
@@ -815,15 +801,9 @@ fn prepare_machine_section_after_pipeline(
                     spills,
                     ..
                 } = input;
-                let func_placement = placement
-                    .funcs
-                    .get(&func)
-                    .unwrap_or_else(|| panic!("missing placement for func {}", func.as_u32()));
-                let func_map = machine
-                    .source_to_machine
-                    .funcs
-                    .get(&func)
-                    .unwrap_or_else(|| panic!("missing source map for func {}", func.as_u32()));
+                let func_placement = expect_func_entry(&placement.funcs, func, "placement");
+                let func_map =
+                    expect_func_entry(&machine.source_to_machine.funcs, func, "source map");
                 let alloc = analysis.alloc;
                 let block_order = analysis.block_order;
                 let mut stackify_trace = analysis.trace;

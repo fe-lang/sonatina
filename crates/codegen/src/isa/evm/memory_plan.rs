@@ -31,6 +31,36 @@ pub const FREE_PTR_SLOT: u8 = 0x40;
 pub const DYN_SP_SLOT: u8 = 0x80;
 pub const STATIC_BASE: u32 = 0xa0;
 
+/// Total-map lookup for per-function tables that are complete by
+/// construction; the panic identifies which table went missing.
+pub(crate) fn expect_func_entry<'a, V>(
+    map: &'a FxHashMap<FuncRef, V>,
+    func: FuncRef,
+    what: &str,
+) -> &'a V {
+    map.get(&func)
+        .unwrap_or_else(|| panic!("missing {what} for func{}", func.as_u32()))
+}
+
+/// Checked word-count addition with the uniform overflow policy: word counts
+/// derive from user-controlled type sizes, so a silent wrap would misplace
+/// memory. The panic backtrace identifies the site.
+#[inline]
+pub(crate) fn add_words(a: u32, b: u32) -> u32 {
+    a.checked_add(b).expect("word count overflow")
+}
+
+/// Rounds a byte count up to the next word multiple.
+#[inline]
+pub(crate) fn align_up_to_word(bytes: u32) -> Option<u32> {
+    let rem = bytes % WORD_BYTES;
+    if rem == 0 {
+        Some(bytes)
+    } else {
+        bytes.checked_add(WORD_BYTES - rem)
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct ProgramMemoryPlan {
     pub arena_base: u32,
@@ -197,10 +227,8 @@ impl MachineFuncPlan {
 impl ProgramMemoryPlan {
     pub(crate) fn set_arena_base(&mut self, arena_base: u32) {
         self.arena_base = arena_base;
-        let global_dyn_base_words = self
-            .scratch_peak_words
-            .checked_add(self.stable_chain_peak_words)
-            .expect("global dynamic base word overflow");
+        let global_dyn_base_words =
+            add_words(self.scratch_peak_words, self.stable_chain_peak_words);
         self.global_dyn_base = abs_addr_for_word(arena_base, global_dyn_base_words);
 
         for func_plan in self.funcs.values_mut() {
@@ -224,14 +252,8 @@ impl ProgramMemoryPlan {
             if !reserve.is_empty()
                 && let Some(func_plan) = self.funcs.get_mut(&func)
             {
-                func_plan.scratch_words = func_plan
-                    .scratch_words
-                    .checked_add(reserve.scratch_words)
-                    .expect("backend scratch spill reserve overflow");
-                func_plan.stable_words = func_plan
-                    .stable_words
-                    .checked_add(reserve.stable_words)
-                    .expect("backend stable spill reserve overflow");
+                func_plan.scratch_words = add_words(func_plan.scratch_words, reserve.scratch_words);
+                func_plan.stable_words = add_words(func_plan.stable_words, reserve.stable_words);
             }
         }
 
@@ -244,19 +266,14 @@ impl ProgramMemoryPlan {
 
         let chain = compute_stable_chain_layout(schedule, |func| self.funcs[&func].stable_words);
         self.stable_chain_peak_words = chain.peak_words;
-        let global_dyn_base_words = self
-            .scratch_peak_words
-            .checked_add(self.stable_chain_peak_words)
-            .expect("global dynamic base word overflow");
+        let global_dyn_base_words =
+            add_words(self.scratch_peak_words, self.stable_chain_peak_words);
         self.global_dyn_base = abs_addr_for_word(self.arena_base, global_dyn_base_words);
 
         for &func in schedule.funcs() {
             let scc_ref = schedule.sccs.scc_ref(func);
             let is_recursive = schedule.sccs.scc_info(scc_ref).is_cycle;
-            let stable_base_word = self
-                .scratch_peak_words
-                .checked_add(chain.scc_prefix[&scc_ref])
-                .expect("stable base word overflow");
+            let stable_base_word = add_words(self.scratch_peak_words, chain.scc_prefix[&scc_ref]);
             let func_plan = self
                 .funcs
                 .get_mut(&func)
@@ -308,9 +325,7 @@ fn compute_stable_chain_layout(
         scc_prefix.entry(scc_ref).or_insert(0);
     }
     for &scc_ref in &schedule.topo {
-        let carry = scc_prefix[&scc_ref]
-            .checked_add(scc_weights[&scc_ref])
-            .expect("stable chain prefix overflow");
+        let carry = add_words(scc_prefix[&scc_ref], scc_weights[&scc_ref]);
         for callee_scc in schedule.scc_edges.get(&scc_ref).into_iter().flatten() {
             scc_prefix
                 .entry(*callee_scc)
@@ -322,11 +337,7 @@ fn compute_stable_chain_layout(
     let peak_words = schedule
         .topo
         .iter()
-        .map(|scc_ref| {
-            scc_prefix[scc_ref]
-                .checked_add(scc_weights[scc_ref])
-                .expect("stable chain peak overflow")
-        })
+        .map(|scc_ref| add_words(scc_prefix[scc_ref], scc_weights[scc_ref]))
         .max()
         .unwrap_or(0);
 
@@ -650,9 +661,7 @@ fn compute_program_memory_plan_from_stacks(
         .par_iter()
         .copied()
         .map(|func| {
-            let stack = stacks
-                .get(&func)
-                .unwrap_or_else(|| panic!("missing object facts for func {}", func.as_u32()));
+            let stack = expect_func_entry(stacks, func, "object facts");
             let scc_ref = schedule.sccs.scc_ref(func);
             let is_recursive = schedule.sccs.scc_info(scc_ref).is_cycle;
             let facts = build_planner_facts(stack, &schedule.sccs, scc_ref, is_recursive);
@@ -679,29 +688,18 @@ fn compute_program_memory_plan_from_stacks(
     let stable_chain_peak_words = chain.peak_words;
 
     let arena_base = STATIC_BASE;
-    let global_dyn_base = abs_addr_for_word(
-        arena_base,
-        scratch_peak_words
-            .checked_add(stable_chain_peak_words)
-            .expect("global dynamic base word overflow"),
-    );
-    let global_dyn_base_words = scratch_peak_words
-        .checked_add(stable_chain_peak_words)
-        .expect("global dynamic base word overflow");
+    let global_dyn_base_words = add_words(scratch_peak_words, stable_chain_peak_words);
+    let global_dyn_base = abs_addr_for_word(arena_base, global_dyn_base_words);
 
     let mut funcs_plan: FxHashMap<FuncRef, SemanticFuncPlan> = FxHashMap::default();
     for &func in funcs {
-        let stack = stacks
-            .get(&func)
-            .unwrap_or_else(|| panic!("missing object facts for func {}", func.as_u32()));
+        let stack = expect_func_entry(stacks, func, "object facts");
         let placement = placements
             .remove(&func)
             .unwrap_or_else(|| panic!("missing placement for func {}", func.as_u32()));
         let scc_ref = schedule.sccs.scc_ref(func);
         let is_recursive = schedule.sccs.scc_info(scc_ref).is_cycle;
-        let stable_base_word = scratch_peak_words
-            .checked_add(chain.scc_prefix[&scc_ref])
-            .expect("stable base word overflow");
+        let stable_base_word = add_words(scratch_peak_words, chain.scc_prefix[&scc_ref]);
         let stable_mode = if is_recursive {
             StableMode::DynamicFrame
         } else if placement.stable_words != 0 {
@@ -802,10 +800,7 @@ impl SemanticFuncPlan {
     /// `StableMode::None` frame still accounts for a nonzero stable reserve
     /// (the reserve would force a stable frame into existence).
     pub(crate) fn abs_words_end_with_reserve(&self, extra_reserve: BackendSpillReserve) -> u32 {
-        let scratch_end = self
-            .scratch_words
-            .checked_add(extra_reserve.scratch_words)
-            .expect("scratch reserve overflow");
+        let scratch_end = add_words(self.scratch_words, extra_reserve.scratch_words);
         let stable_end = match self.stable_mode {
             StableMode::None => extra_reserve.stable_words,
             StableMode::StableAbs { base_word } => {

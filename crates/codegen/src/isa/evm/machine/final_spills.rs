@@ -4,6 +4,8 @@ use sonatina_ir::{InstId, Module, ValueId, module::FuncRef};
 
 use crate::{bitset::BitSet, module_analysis::CallGraphSchedule, stackalloc::StackifyAlloc};
 
+use crate::isa::evm::memory_plan::align_up_to_word;
+
 use super::{
     super::{
         EvmBackend, MachineFuncPlan, ObjLoc,
@@ -650,7 +652,7 @@ fn fixed_write_forbidden_arena_words(
     let rel_start = write.start_byte.saturating_sub(arena_base);
     let rel_end = write.end_byte.checked_sub(arena_base)?;
     let start_word = rel_start / WORD_BYTES;
-    let end_word = align_word_offset(rel_end)?.checked_div(WORD_BYTES)?;
+    let end_word = align_up_to_word(rel_end)?.checked_div(WORD_BYTES)?;
     (start_word < end_word).then_some((start_word, end_word))
 }
 
@@ -676,15 +678,6 @@ fn forbidden_static_stable_offsets(
             })
             .collect::<Vec<_>>(),
     )
-}
-
-fn align_word_offset(bytes: u32) -> Option<u32> {
-    let rem = bytes % WORD_BYTES;
-    if rem == 0 {
-        Some(bytes)
-    } else {
-        bytes.checked_add(WORD_BYTES - rem)
-    }
 }
 
 fn absolute_word_for_loc(mem_plan: &MachineFuncPlan, loc: ObjLoc) -> Result<Option<u32>, String> {
