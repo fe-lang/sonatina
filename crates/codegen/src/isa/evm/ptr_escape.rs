@@ -7,9 +7,8 @@ use sonatina_ir::{
     isa::{Isa, evm::Evm},
     module::{FuncRef, ModuleCtx},
 };
-use std::collections::{BTreeMap, BTreeSet};
 
-use crate::module_analysis::{CallGraph, CallGraphSccs, SccBuilder, SccRef};
+use crate::module_analysis::CallGraphSchedule;
 
 use super::{
     escape_scan::{
@@ -285,11 +284,7 @@ pub(crate) fn compute_ptr_escape_summaries(
     funcs: &[FuncRef],
     isa: &Evm,
 ) -> FxHashMap<FuncRef, PtrEscapeSummary> {
-    let funcs_set: FxHashSet<FuncRef> = funcs.iter().copied().collect();
-    let call_graph = CallGraph::build_graph_subset(module, &funcs_set);
-    let scc = SccBuilder::new().compute_scc(&call_graph);
-
-    let topo = topo_sort_sccs(&funcs_set, &call_graph, &scc);
+    let schedule = CallGraphSchedule::compute(module, funcs);
 
     let mut summaries: FxHashMap<FuncRef, PtrEscapeSummary> = FxHashMap::default();
     for &f in funcs {
@@ -300,19 +295,11 @@ pub(crate) fn compute_ptr_escape_summaries(
         summaries.insert(f, PtrEscapeSummary::empty_for_func(&module.ctx, f));
     }
 
-    for scc_ref in topo.into_iter().rev() {
-        let mut component: Vec<FuncRef> = scc
-            .scc_info(scc_ref)
-            .components
-            .iter()
-            .copied()
-            .filter(|f| funcs_set.contains(f))
-            .collect();
-        component.sort_unstable_by_key(|f| f.as_u32());
-
+    for &scc_ref in schedule.topo.iter().rev() {
+        let component = schedule.members(scc_ref);
         loop {
             let mut changed = false;
-            for &f in &component {
+            for &f in component {
                 let new_summary = compute_summary_for_func(module, f, isa, &summaries);
                 let cur = summaries.get(&f).expect("missing ptr escape summary");
                 if *cur != new_summary {
@@ -328,69 +315,6 @@ pub(crate) fn compute_ptr_escape_summaries(
     }
 
     summaries
-}
-
-fn topo_sort_sccs(
-    funcs: &FxHashSet<FuncRef>,
-    call_graph: &CallGraph,
-    scc: &CallGraphSccs,
-) -> Vec<SccRef> {
-    let mut sccs: BTreeSet<SccRef> = BTreeSet::new();
-    for &f in funcs {
-        sccs.insert(scc.scc_ref(f));
-    }
-
-    let mut edges: BTreeMap<SccRef, BTreeSet<SccRef>> = BTreeMap::new();
-    let mut indegree: BTreeMap<SccRef, usize> = BTreeMap::new();
-    for &s in &sccs {
-        edges.insert(s, BTreeSet::new());
-        indegree.insert(s, 0);
-    }
-
-    for &f in funcs {
-        let from = scc.scc_ref(f);
-        for &callee in call_graph.callee_of(f) {
-            let to = scc.scc_ref(callee);
-            if from == to {
-                continue;
-            }
-
-            let tos = edges.get_mut(&from).expect("missing scc");
-            if tos.insert(to) {
-                *indegree.get_mut(&to).expect("missing scc") += 1;
-            }
-        }
-    }
-
-    let mut ready: BTreeSet<SccRef> = BTreeSet::new();
-    for (&s, &deg) in &indegree {
-        if deg == 0 {
-            ready.insert(s);
-        }
-    }
-
-    let mut topo: Vec<SccRef> = Vec::with_capacity(sccs.len());
-    while let Some(&s) = ready.first() {
-        ready.remove(&s);
-        topo.push(s);
-
-        let tos: Vec<SccRef> = edges
-            .get(&s)
-            .expect("missing scc")
-            .iter()
-            .copied()
-            .collect();
-        for to in tos {
-            let deg = indegree.get_mut(&to).expect("missing scc");
-            *deg = deg.checked_sub(1).expect("indegree underflow");
-            if *deg == 0 {
-                ready.insert(to);
-            }
-        }
-    }
-
-    debug_assert_eq!(topo.len(), sccs.len(), "SCC topo sort incomplete");
-    topo
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

@@ -3,12 +3,11 @@ use rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 use sonatina_ir::{BlockId, InstId, Module, ValueId, module::FuncRef};
-use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{
     bitset::BitSet,
     liveness::InstLiveness,
-    module_analysis::{CallGraph, CallGraphSccs, SccBuilder, SccRef},
+    module_analysis::{CallGraphSccs, CallGraphSchedule, SccRef},
     stackalloc::{StackifyAlloc, StackifyTrace},
 };
 
@@ -169,8 +168,7 @@ impl ProgramMemoryPlan {
 
     pub(crate) fn apply_backend_spill_reserves(
         &mut self,
-        module: &Module,
-        funcs: &[FuncRef],
+        schedule: &CallGraphSchedule,
         reserves: &FxHashMap<FuncRef, BackendSpillReserve>,
     ) {
         if reserves.values().all(|reserve| reserve.is_empty()) {
@@ -199,80 +197,33 @@ impl ProgramMemoryPlan {
             .max()
             .unwrap_or(0);
 
-        let funcs_set: FxHashSet<FuncRef> = funcs.iter().copied().collect();
-        let call_graph = CallGraph::build_graph_subset(module, &funcs_set);
-        let scc = SccBuilder::new().compute_scc(&call_graph);
-        let topo = topo_sort_sccs(&funcs_set, &call_graph, &scc);
-        let scc_edges = build_scc_edges(&funcs_set, &call_graph, &scc, &topo);
-
-        let mut scc_weights: FxHashMap<SccRef, u32> = FxHashMap::default();
-        for &scc_ref in &topo {
-            let mut weight = 0;
-            if !scc.scc_info(scc_ref).is_cycle {
-                for &func in scc
-                    .scc_info(scc_ref)
-                    .components
-                    .iter()
-                    .filter(|func| funcs_set.contains(func))
-                {
-                    weight = weight.max(self.funcs[&func].stable_words);
-                }
-            }
-            scc_weights.insert(scc_ref, weight);
-        }
-
-        let mut scc_prefix: FxHashMap<SccRef, u32> = FxHashMap::default();
-        for &scc_ref in &topo {
-            scc_prefix.entry(scc_ref).or_insert(0);
-        }
-        for &scc_ref in &topo {
-            let carry = scc_prefix[&scc_ref]
-                .checked_add(scc_weights[&scc_ref])
-                .expect("static chain prefix overflow");
-            if let Some(callees) = scc_edges.get(&scc_ref) {
-                for &callee_scc in callees {
-                    scc_prefix
-                        .entry(callee_scc)
-                        .and_modify(|prefix| *prefix = (*prefix).max(carry))
-                        .or_insert(carry);
-                }
-            }
-        }
-
-        self.stable_chain_peak_words = topo
-            .iter()
-            .map(|scc_ref| {
-                scc_prefix[scc_ref]
-                    .checked_add(scc_weights[scc_ref])
-                    .expect("static chain peak overflow")
-            })
-            .max()
-            .unwrap_or(0);
+        let chain = compute_stable_chain_layout(schedule, |func| self.funcs[&func].stable_words);
+        self.stable_chain_peak_words = chain.peak_words;
         let global_dyn_base_words = self
             .scratch_peak_words
             .checked_add(self.stable_chain_peak_words)
             .expect("global dynamic base word overflow");
         self.global_dyn_base = abs_addr_for_word(self.arena_base, global_dyn_base_words);
 
-        for &scc_ref in &topo {
+        for &scc_ref in &schedule.topo {
             self.sccs.insert(
                 scc_ref,
                 SccMemPlan {
-                    is_recursive: scc.scc_info(scc_ref).is_cycle,
-                    static_chain_prefix_words: scc_prefix[&scc_ref],
+                    is_recursive: schedule.sccs.scc_info(scc_ref).is_cycle,
+                    stable_chain_prefix_words: chain.scc_prefix[&scc_ref],
                 },
             );
         }
 
-        for &func in funcs {
-            let scc_ref = scc.scc_ref(func);
+        for &func in schedule.funcs() {
+            let scc_ref = schedule.sccs.scc_ref(func);
             let scc_plan = self
                 .sccs
                 .get(&scc_ref)
                 .unwrap_or_else(|| panic!("missing SCC plan for scc {}", scc_ref.as_u32()));
             let stable_base_word = self
                 .scratch_peak_words
-                .checked_add(scc_plan.static_chain_prefix_words)
+                .checked_add(scc_plan.stable_chain_prefix_words)
                 .expect("stable base word overflow");
             let func_plan = self
                 .funcs
@@ -293,6 +244,63 @@ impl ProgramMemoryPlan {
                 stable_base_word
             };
         }
+    }
+}
+
+/// Static stable-chain layout over the call-graph condensation: for each SCC
+/// the maximum chain weight strictly above it (its frame base offset within
+/// the stable region) and the overall chain peak.
+struct StableChainLayout {
+    scc_prefix: FxHashMap<SccRef, u32>,
+    peak_words: u32,
+}
+
+fn compute_stable_chain_layout(
+    schedule: &CallGraphSchedule,
+    stable_words: impl Fn(FuncRef) -> u32,
+) -> StableChainLayout {
+    let mut scc_weights: FxHashMap<SccRef, u32> = FxHashMap::default();
+    for &scc_ref in &schedule.topo {
+        let mut weight = 0;
+        // Recursive SCCs live in dynamic frames, not the static chain.
+        if !schedule.sccs.scc_info(scc_ref).is_cycle {
+            for &func in schedule.members(scc_ref) {
+                weight = weight.max(stable_words(func));
+            }
+        }
+        scc_weights.insert(scc_ref, weight);
+    }
+
+    let mut scc_prefix: FxHashMap<SccRef, u32> = FxHashMap::default();
+    for &scc_ref in &schedule.topo {
+        scc_prefix.entry(scc_ref).or_insert(0);
+    }
+    for &scc_ref in &schedule.topo {
+        let carry = scc_prefix[&scc_ref]
+            .checked_add(scc_weights[&scc_ref])
+            .expect("stable chain prefix overflow");
+        for callee_scc in schedule.scc_edges.get(&scc_ref).into_iter().flatten() {
+            scc_prefix
+                .entry(*callee_scc)
+                .and_modify(|prefix| *prefix = (*prefix).max(carry))
+                .or_insert(carry);
+        }
+    }
+
+    let peak_words = schedule
+        .topo
+        .iter()
+        .map(|scc_ref| {
+            scc_prefix[scc_ref]
+                .checked_add(scc_weights[scc_ref])
+                .expect("stable chain peak overflow")
+        })
+        .max()
+        .unwrap_or(0);
+
+    StableChainLayout {
+        scc_prefix,
+        peak_words,
     }
 }
 
@@ -350,7 +358,8 @@ block0:
             },
         )]);
 
-        plan.apply_backend_spill_reserves(&parsed.module, &[func], &reserve_words);
+        let schedule = CallGraphSchedule::compute(&parsed.module, &[func]);
+        plan.apply_backend_spill_reserves(&schedule, &reserve_words);
 
         let func_plan = &plan.funcs[&func];
         assert_eq!(func_plan.scratch_words, 3);
@@ -393,7 +402,8 @@ block0:
             },
         )]);
 
-        plan.apply_backend_spill_reserves(&parsed.module, &[func], &reserve_words);
+        let schedule = CallGraphSchedule::compute(&parsed.module, &[func]);
+        plan.apply_backend_spill_reserves(&schedule, &reserve_words);
 
         let func_plan = &plan.funcs[&func];
         assert_eq!(func_plan.scratch_words, 5);
@@ -432,8 +442,11 @@ block0:
                 stable_words: 0,
             },
         )]);
-        let clobber_words =
-            compute_abs_clobber_words_with_extra(&parsed.module, &[func], &plan, &reserve_words);
+        let clobber_words = compute_abs_clobber_words_with_extra(
+            &CallGraphSchedule::compute(&parsed.module, &[func]),
+            &plan,
+            &reserve_words,
+        );
 
         assert_eq!(clobber_words[&func], 5);
     }
@@ -469,8 +482,11 @@ block0:
                 stable_words: 2,
             },
         )]);
-        let clobber_words =
-            compute_abs_clobber_words_with_extra(&parsed.module, &[func], &plan, &reserve_words);
+        let clobber_words = compute_abs_clobber_words_with_extra(
+            &CallGraphSchedule::compute(&parsed.module, &[func]),
+            &plan,
+            &reserve_words,
+        );
 
         assert_eq!(clobber_words[&func], 10);
     }
@@ -479,7 +495,7 @@ block0:
 #[derive(Clone, Debug)]
 pub struct SccMemPlan {
     pub is_recursive: bool,
-    pub static_chain_prefix_words: u32,
+    pub stable_chain_prefix_words: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -540,14 +556,15 @@ pub(crate) struct MachineStackifyAnalysis {
 
 pub(crate) fn compute_semantic_program_memory_plan(
     module: &Module,
-    funcs: &[FuncRef],
+    schedule: &CallGraphSchedule,
     analyses: &FxHashMap<FuncRef, FuncPreAnalysis>,
     ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
     isa: &Evm,
     cost_model: &ArenaCostModel,
 ) -> ProgramMemoryPlan {
     let alloc_ctx = StaticArenaAllocCtx::new(&module.ctx, isa, ptr_escape);
-    let mut stack_results: Vec<_> = funcs
+    let mut stack_results: Vec<_> = schedule
+        .funcs()
         .par_iter()
         .copied()
         .map(|func| {
@@ -565,25 +582,21 @@ pub(crate) fn compute_semantic_program_memory_plan(
         stacks.insert(func, stack);
     }
 
-    let plan = compute_program_memory_plan_from_stacks(module, funcs, &stacks, cost_model);
+    let plan = compute_program_memory_plan_from_stacks(module, schedule, &stacks, cost_model);
 
     #[cfg(debug_assertions)]
-    {
-        let funcs_set: FxHashSet<FuncRef> = funcs.iter().copied().collect();
-        let call_graph = CallGraph::build_graph_subset(module, &funcs_set);
-        let scc = SccBuilder::new().compute_scc(&call_graph);
-        verify_program_memory_plan(funcs, &stacks, &scc, &plan);
-    }
+    verify_program_memory_plan(schedule.funcs(), &stacks, &schedule.sccs, &plan);
 
     plan
 }
 
 fn compute_program_memory_plan_from_stacks(
     module: &Module,
-    funcs: &[FuncRef],
+    schedule: &CallGraphSchedule,
     stacks: &FxHashMap<FuncRef, FuncStackObjects>,
     cost_model: &ArenaCostModel,
 ) -> ProgramMemoryPlan {
+    let funcs = schedule.funcs();
     let funcs_set: FxHashSet<FuncRef> = funcs.iter().copied().collect();
 
     for &func in funcs {
@@ -605,11 +618,6 @@ fn compute_program_memory_plan_from_stacks(
         });
     }
 
-    let call_graph = CallGraph::build_graph_subset(module, &funcs_set);
-    let scc = SccBuilder::new().compute_scc(&call_graph);
-    let topo = topo_sort_sccs(&funcs_set, &call_graph, &scc);
-    let scc_edges = build_scc_edges(&funcs_set, &call_graph, &scc, &topo);
-
     let mut placement_results: Vec<_> = funcs
         .par_iter()
         .copied()
@@ -617,9 +625,9 @@ fn compute_program_memory_plan_from_stacks(
             let stack = stacks
                 .get(&func)
                 .unwrap_or_else(|| panic!("missing object facts for func {}", func.as_u32()));
-            let scc_ref = scc.scc_ref(func);
-            let is_recursive = scc.scc_info(scc_ref).is_cycle;
-            let facts = build_planner_facts(stack, &scc, scc_ref, is_recursive);
+            let scc_ref = schedule.sccs.scc_ref(func);
+            let is_recursive = schedule.sccs.scc_info(scc_ref).is_cycle;
+            let facts = build_planner_facts(stack, &schedule.sccs, scc_ref, is_recursive);
             (
                 func,
                 solve_func_placement(stack, &facts, is_recursive, cost_model),
@@ -639,49 +647,8 @@ fn compute_program_memory_plan_from_stacks(
         .max()
         .unwrap_or(0);
 
-    let mut scc_weights: FxHashMap<SccRef, u32> = FxHashMap::default();
-    for &scc_ref in &topo {
-        let mut weight = 0;
-        if !scc.scc_info(scc_ref).is_cycle {
-            for &func in scc
-                .scc_info(scc_ref)
-                .components
-                .iter()
-                .filter(|func| funcs_set.contains(func))
-            {
-                weight = weight.max(placements[&func].stable_words);
-            }
-        }
-        scc_weights.insert(scc_ref, weight);
-    }
-
-    let mut scc_prefix: FxHashMap<SccRef, u32> = FxHashMap::default();
-    for &scc_ref in &topo {
-        scc_prefix.entry(scc_ref).or_insert(0);
-    }
-    for &scc_ref in &topo {
-        let carry = scc_prefix[&scc_ref]
-            .checked_add(scc_weights[&scc_ref])
-            .expect("static chain prefix overflow");
-        if let Some(callees) = scc_edges.get(&scc_ref) {
-            for &callee_scc in callees {
-                scc_prefix
-                    .entry(callee_scc)
-                    .and_modify(|prefix| *prefix = (*prefix).max(carry))
-                    .or_insert(carry);
-            }
-        }
-    }
-
-    let stable_chain_peak_words = topo
-        .iter()
-        .map(|scc_ref| {
-            scc_prefix[scc_ref]
-                .checked_add(scc_weights[scc_ref])
-                .expect("static chain peak overflow")
-        })
-        .max()
-        .unwrap_or(0);
+    let chain = compute_stable_chain_layout(schedule, |func| placements[&func].stable_words);
+    let stable_chain_peak_words = chain.peak_words;
 
     let arena_base = STATIC_BASE;
     let global_dyn_base = abs_addr_for_word(
@@ -695,12 +662,12 @@ fn compute_program_memory_plan_from_stacks(
         .expect("global dynamic base word overflow");
 
     let mut scc_plans: FxHashMap<SccRef, SccMemPlan> = FxHashMap::default();
-    for &scc_ref in &topo {
+    for &scc_ref in &schedule.topo {
         scc_plans.insert(
             scc_ref,
             SccMemPlan {
-                is_recursive: scc.scc_info(scc_ref).is_cycle,
-                static_chain_prefix_words: scc_prefix[&scc_ref],
+                is_recursive: schedule.sccs.scc_info(scc_ref).is_cycle,
+                stable_chain_prefix_words: chain.scc_prefix[&scc_ref],
             },
         );
     }
@@ -713,12 +680,12 @@ fn compute_program_memory_plan_from_stacks(
         let placement = placements
             .remove(&func)
             .unwrap_or_else(|| panic!("missing placement for func {}", func.as_u32()));
-        let scc_ref = scc.scc_ref(func);
+        let scc_ref = schedule.sccs.scc_ref(func);
         let scc_plan = scc_plans
             .get(&scc_ref)
             .unwrap_or_else(|| panic!("missing SCC plan for scc {}", scc_ref.as_u32()));
         let stable_base_word = scratch_peak_words
-            .checked_add(scc_plan.static_chain_prefix_words)
+            .checked_add(scc_plan.stable_chain_prefix_words)
             .expect("stable base word overflow");
         let stable_mode = if scc_plan.is_recursive {
             StableMode::DynamicFrame
@@ -795,51 +762,21 @@ fn compute_program_memory_plan_from_stacks(
 }
 
 pub(crate) fn compute_abs_clobber_words_with_extra(
-    module: &Module,
-    funcs: &[FuncRef],
+    schedule: &CallGraphSchedule,
     plan: &ProgramMemoryPlan,
     extra_reserves: &FxHashMap<FuncRef, BackendSpillReserve>,
 ) -> FxHashMap<FuncRef, u32> {
-    let funcs_set: FxHashSet<FuncRef> = funcs.iter().copied().collect();
-    let mut out: FxHashMap<FuncRef, u32> = FxHashMap::default();
-    for &func in funcs {
-        let extra_reserve = extra_reserves.get(&func).copied().unwrap_or_default();
-        let Some(func_plan) = plan.funcs.get(&func) else {
-            out.insert(func, extra_reserve.max_words());
-            continue;
-        };
-        let local = abs_words_end_with_extra_reserve(func_plan, extra_reserve);
-        out.insert(func, local);
-    }
-
-    let mut changed = true;
-    while changed {
-        changed = false;
-        for &func in funcs {
-            let mut next = out.get(&func).copied().unwrap_or(0);
-            module.func_store.view(func, |function| {
-                for block in function.layout.iter_block() {
-                    for inst in function.layout.iter_inst(block) {
-                        let Some(call) = function.dfg.call_info(inst) else {
-                            continue;
-                        };
-                        let callee = call.callee();
-                        if funcs_set.contains(&callee) {
-                            next = next.max(out.get(&callee).copied().unwrap_or(0));
-                        }
-                    }
-                }
-            });
-
-            let cur = out.get(&func).copied().unwrap_or(0);
-            if next > cur {
-                out.insert(func, next);
-                changed = true;
-            }
-        }
-    }
-
-    out
+    schedule.join_over_callees(
+        |func| {
+            let extra_reserve = extra_reserves.get(&func).copied().unwrap_or_default();
+            plan.funcs
+                .get(&func)
+                .map_or(extra_reserve.max_words(), |func_plan| {
+                    abs_words_end_with_extra_reserve(func_plan, extra_reserve)
+                })
+        },
+        |acc, callee_end| *acc = (*acc).max(*callee_end),
+    )
 }
 
 fn abs_words_end_with_extra_reserve(
@@ -1122,97 +1059,4 @@ fn verify_subset_packing(
             );
         }
     }
-}
-
-pub(crate) fn topo_sort_sccs(
-    funcs: &FxHashSet<FuncRef>,
-    call_graph: &CallGraph,
-    scc: &CallGraphSccs,
-) -> Vec<SccRef> {
-    let mut sccs: BTreeSet<SccRef> = BTreeSet::new();
-    for &func in funcs {
-        sccs.insert(scc.scc_ref(func));
-    }
-
-    let mut edges: BTreeMap<SccRef, BTreeSet<SccRef>> = BTreeMap::new();
-    let mut indegree: BTreeMap<SccRef, usize> = BTreeMap::new();
-    for &scc_ref in &sccs {
-        edges.insert(scc_ref, BTreeSet::new());
-        indegree.insert(scc_ref, 0);
-    }
-
-    for &func in funcs {
-        let from = scc.scc_ref(func);
-        for &callee in call_graph.callee_of(func) {
-            let to = scc.scc_ref(callee);
-            if from == to {
-                continue;
-            }
-            let tos = edges.get_mut(&from).expect("missing SCC edge set");
-            if tos.insert(to) {
-                *indegree.get_mut(&to).expect("missing SCC indegree") += 1;
-            }
-        }
-    }
-
-    let mut ready: BTreeSet<SccRef> = BTreeSet::new();
-    for (&scc_ref, &deg) in &indegree {
-        if deg == 0 {
-            ready.insert(scc_ref);
-        }
-    }
-
-    let mut topo: Vec<SccRef> = Vec::with_capacity(sccs.len());
-    while let Some(&scc_ref) = ready.first() {
-        ready.remove(&scc_ref);
-        topo.push(scc_ref);
-
-        let tos: Vec<SccRef> = edges
-            .get(&scc_ref)
-            .expect("missing SCC edge set")
-            .iter()
-            .copied()
-            .collect();
-        for to in tos {
-            let deg = indegree.get_mut(&to).expect("missing SCC indegree");
-            *deg = deg.checked_sub(1).expect("SCC indegree underflow");
-            if *deg == 0 {
-                ready.insert(to);
-            }
-        }
-    }
-
-    debug_assert_eq!(topo.len(), sccs.len(), "SCC topo sort incomplete");
-    topo
-}
-
-pub(crate) fn build_scc_edges(
-    funcs: &FxHashSet<FuncRef>,
-    call_graph: &CallGraph,
-    scc: &CallGraphSccs,
-    topo: &[SccRef],
-) -> BTreeMap<SccRef, Vec<SccRef>> {
-    let mut edges: BTreeMap<SccRef, BTreeSet<SccRef>> = BTreeMap::new();
-    for &scc_ref in topo {
-        edges.insert(scc_ref, BTreeSet::new());
-    }
-
-    for &func in funcs {
-        let from = scc.scc_ref(func);
-        for &callee in call_graph.callee_of(func) {
-            let to = scc.scc_ref(callee);
-            if from != to {
-                edges
-                    .get_mut(&from)
-                    .expect("missing SCC edge set")
-                    .insert(to);
-            }
-        }
-    }
-
-    let mut out: BTreeMap<SccRef, Vec<SccRef>> = BTreeMap::new();
-    for (scc_ref, tos) in edges {
-        out.insert(scc_ref, tos.into_iter().collect());
-    }
-    out
 }

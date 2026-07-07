@@ -16,7 +16,7 @@ use sonatina_ir::{
 use crate::{
     bitset::BitSet,
     isa::evm::ptr_provenance::{Provenance, compute_value_provenance},
-    module_analysis::CallGraph,
+    module_analysis::{CallGraphSchedule, SccRef},
 };
 
 use super::{
@@ -136,8 +136,9 @@ struct PrivateStaticMallocFuncCtx<'a> {
     free_ptr_slot_may_be_touched: bool,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy)]
 pub(crate) struct MemoryPlacementSection<'a> {
+    pub(crate) schedule: &'a CallGraphSchedule,
     pub(crate) funcs: &'a [FuncRef],
     pub(crate) entry: FuncRef,
     pub(crate) includes: &'a [FuncRef],
@@ -152,22 +153,23 @@ pub(crate) fn compute_semantic_memory_placement(
     backend: &EvmBackend,
     backend_spill_reserves: &FxHashMap<FuncRef, BackendSpillReserve>,
 ) -> EvmMemoryPlacementPlan {
+    let schedule = section.schedule;
     let funcs = section.funcs;
     let mut semantic_plan = memory_plan::compute_semantic_program_memory_plan(
         module,
-        funcs,
+        schedule,
         analyses,
         ptr_escape,
         &backend.isa,
         &backend.arena_cost_model,
     );
-    semantic_plan.apply_backend_spill_reserves(module, funcs, backend_spill_reserves);
+    semantic_plan.apply_backend_spill_reserves(schedule, backend_spill_reserves);
     let final_scratch_reserves =
         final_scratch_reserve_ranges(funcs, &semantic_plan, backend_spill_reserves);
 
     let mem_effects = compute_func_mem_effects(
         module,
-        funcs,
+        schedule,
         &semantic_plan,
         fixed_slot_effects,
         &backend.isa,
@@ -232,8 +234,7 @@ pub(crate) fn compute_semantic_memory_placement(
             })
         })
     });
-    let entry_may_have_live_frame =
-        compute_entry_may_have_live_frame(module, funcs, &semantic_plan);
+    let entry_may_have_live_frame = compute_entry_may_have_live_frame(schedule, &semantic_plan);
     let (free_ptr_slot_may_be_touched, free_ptr_write_summaries) =
         compute_program_free_ptr_slot_facts(module, funcs, backend, ptr_escape);
     let private_static_mallocs =
@@ -249,13 +250,9 @@ pub(crate) fn compute_semantic_memory_placement(
             free_ptr_slot_may_be_touched,
         });
     let private_static_reserves = private_static_mallocs.backend_spill_reserves();
-    semantic_plan.apply_backend_spill_reserves(module, funcs, &private_static_reserves);
-    let return_escape_caller_abs_words = compute_return_escape_caller_clamp_words(
-        module,
-        funcs,
-        &semantic_plan,
-        &FxHashMap::default(),
-    );
+    semantic_plan.apply_backend_spill_reserves(schedule, &private_static_reserves);
+    let return_escape_caller_abs_words =
+        compute_return_escape_caller_clamp_words(schedule, &semantic_plan, &FxHashMap::default());
     for (func, return_escape_caller_abs_words) in return_escape_caller_abs_words {
         if let Some(func_plan) = semantic_plan.funcs.get_mut(&func) {
             func_plan.return_escape_caller_abs_words = return_escape_caller_abs_words;
@@ -283,7 +280,7 @@ pub(crate) fn compute_semantic_memory_placement(
 
     let mut malloc_bounds = heap_plan::compute_semantic_malloc_future_abs_words_with_extra(
         module,
-        funcs,
+        schedule,
         &semantic_plan,
         analyses,
         &backend.isa,
@@ -1725,41 +1722,33 @@ fn backend_spill_reserve_abs_words(
 }
 
 fn compute_entry_may_have_live_frame(
-    module: &Module,
-    funcs: &[FuncRef],
+    schedule: &CallGraphSchedule,
     semantic_plan: &memory_plan::ProgramMemoryPlan,
 ) -> FxHashMap<FuncRef, bool> {
-    let funcs_set: FxHashSet<FuncRef> = funcs.iter().copied().collect();
-    let call_graph = CallGraph::build_graph_subset(module, &funcs_set);
-    let mut entry_may_have_live_frame: FxHashMap<FuncRef, bool> =
-        funcs.iter().copied().map(|func| (func, false)).collect();
-
-    let mut changed = true;
-    while changed {
-        changed = false;
-        for &caller in funcs {
-            let caller_uses_dynamic_frame = semantic_plan
+    // A function may be entered while a dynamic frame is live iff some
+    // transitive caller uses a dynamic frame. One forward-topo pass over the
+    // condensation; a cyclic SCC with a dyn-frame member marks all members.
+    let scc_uses_dyn_frame = |scc_ref| {
+        schedule.members(scc_ref).iter().any(|func| {
+            semantic_plan
                 .funcs
-                .get(&caller)
-                .is_some_and(memory_plan::FuncMemPlan::uses_dynamic_frame);
-            let caller_live = entry_may_have_live_frame
-                .get(&caller)
-                .copied()
-                .unwrap_or(false);
-            if !caller_uses_dynamic_frame && !caller_live {
-                continue;
-            }
+                .get(func)
+                .is_some_and(memory_plan::FuncMemPlan::uses_dynamic_frame)
+        })
+    };
 
-            for &callee in call_graph.callee_of(caller) {
-                if funcs_set.contains(&callee)
-                    && !entry_may_have_live_frame
-                        .get(&callee)
-                        .copied()
-                        .unwrap_or(false)
-                {
-                    entry_may_have_live_frame.insert(callee, true);
-                    changed = true;
-                }
+    let mut incoming_live: FxHashMap<SccRef, bool> = FxHashMap::default();
+    let mut entry_may_have_live_frame: FxHashMap<FuncRef, bool> = FxHashMap::default();
+    for &scc_ref in &schedule.topo {
+        let members_use_dyn_frame = scc_uses_dyn_frame(scc_ref);
+        let live = incoming_live.get(&scc_ref).copied().unwrap_or(false)
+            || (schedule.sccs.scc_info(scc_ref).is_cycle && members_use_dyn_frame);
+        for &func in schedule.members(scc_ref) {
+            entry_may_have_live_frame.insert(func, live);
+        }
+        if live || members_use_dyn_frame {
+            for callee_scc in schedule.scc_edges.get(&scc_ref).into_iter().flatten() {
+                incoming_live.insert(*callee_scc, true);
             }
         }
     }

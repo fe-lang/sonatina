@@ -9,6 +9,7 @@ use crate::{
     domtree::DomTree,
     liveness::{InstLiveness, Liveness},
     machinst::lower::{SectionMembership, SectionWorkModule},
+    module_analysis::{CallGraphSchedule, SccRef},
     stackalloc::StackifyAlloc,
 };
 use sonatina_ir::{
@@ -703,6 +704,7 @@ fn prepare_machine_section_after_pipeline(
 ) -> Result<EvmPreparedSection, String> {
     let source_module = work.module();
     let pre_analyses = compute_high_evm_pre_analyses(source_module, &funcs, backend);
+    let schedule = CallGraphSchedule::compute(source_module, &funcs);
     let mut fixed_slot_effects = FxHashSet::default();
     let mut backend_spill_reserves: FxHashMap<FuncRef, BackendSpillReserve> = FxHashMap::default();
     let mut last_convergence_error = None;
@@ -711,6 +713,7 @@ fn prepare_machine_section_after_pipeline(
         let placement = compute_semantic_memory_placement(
             source_module,
             MemoryPlacementSection {
+                schedule: &schedule,
                 funcs: &funcs,
                 entry: work.entry(),
                 includes: work.includes(),
@@ -730,9 +733,10 @@ fn prepare_machine_section_after_pipeline(
         )?;
 
         let machine_isa = EvmMachine::new(machine.work.module().ctx.triple);
+        let machine_schedule = CallGraphSchedule::compute(machine.work.module(), &funcs);
         let machine_analyses = prepare_machine_stackify_analyses(
             machine.work.module(),
-            &funcs,
+            &machine_schedule,
             backend,
             &machine_isa,
         )?;
@@ -790,6 +794,7 @@ fn prepare_machine_section_after_pipeline(
 
         let optional_final_spill_placements = FinalSpillChoiceCtx {
             source_module,
+            schedule: &schedule,
             funcs: &funcs,
             section_entry: work.entry(),
             section_includes: work.includes(),
@@ -951,7 +956,7 @@ fn prepare_machine_section_after_pipeline(
             .collect();
         let dyn_sp_plans = compute_machine_dyn_sp_plan(
             machine.work.module(),
-            &funcs,
+            &machine_schedule,
             machine.work.entry(),
             &mem_plans,
             &frame_summaries,
@@ -1202,58 +1207,42 @@ fn remap_machine_mem_plan_call_preserve(mem_plan: &mut FuncMemPlan, map: &FuncMa
 }
 
 pub(crate) fn compute_return_escape_caller_clamp_words(
-    module: &Module,
-    funcs: &[FuncRef],
+    schedule: &CallGraphSchedule,
     plan: &ProgramMemoryPlan,
     extra_clobber_words: &FxHashMap<FuncRef, BackendSpillReserve>,
 ) -> FxHashMap<FuncRef, u32> {
-    let funcs_set: FxHashSet<FuncRef> = funcs.iter().copied().collect();
     let abs_clobber_words =
-        compute_abs_clobber_words_with_extra(module, funcs, plan, extra_clobber_words);
+        compute_abs_clobber_words_with_extra(schedule, plan, extra_clobber_words);
+    let clobber = |func: FuncRef| {
+        abs_clobber_words
+            .get(&func)
+            .copied()
+            .or_else(|| plan.funcs.get(&func).map(FuncMemPlan::active_abs_words))
+            .unwrap_or(0)
+    };
 
-    let mut callers: FxHashMap<FuncRef, FxHashSet<FuncRef>> = FxHashMap::default();
+    // clamp(f) = max over callers c of max(clobber(c), clamp(c)). One
+    // forward-topo pass over the condensation; within a cyclic SCC every
+    // member is transitively a caller of every other, so the SCC folds its
+    // own members' clobber bounds.
+    let mut incoming: FxHashMap<SccRef, u32> = FxHashMap::default();
     let mut clamp_words: FxHashMap<FuncRef, u32> = FxHashMap::default();
-    for &func in funcs {
-        clamp_words.insert(func, 0);
-    }
-
-    for &caller in funcs {
-        module.func_store.view(caller, |function| {
-            for block in function.layout.iter_block() {
-                for inst in function.layout.iter_inst(block) {
-                    let Some(call) = function.dfg.call_info(inst) else {
-                        continue;
-                    };
-                    let callee = call.callee();
-                    if funcs_set.contains(&callee) {
-                        callers.entry(callee).or_default().insert(caller);
-                    }
-                }
-            }
-        });
-    }
-
-    let mut changed = true;
-    while changed {
-        changed = false;
-
-        for &func in funcs {
-            let mut next = clamp_words.get(&func).copied().unwrap_or(0);
-            for caller in callers.get(&func).into_iter().flatten() {
-                let caller_clobber_words = abs_clobber_words
-                    .get(caller)
-                    .copied()
-                    .or_else(|| plan.funcs.get(caller).map(FuncMemPlan::active_abs_words))
-                    .unwrap_or(0);
-                let caller_transitive_words = clamp_words.get(caller).copied().unwrap_or(0);
-                next = next.max(caller_clobber_words.max(caller_transitive_words));
-            }
-
-            let cur = clamp_words.get(&func).copied().unwrap_or(0);
-            if next > cur {
-                clamp_words.insert(func, next);
-                changed = true;
-            }
+    for &scc_ref in &schedule.topo {
+        let members = schedule.members(scc_ref);
+        let scc_max_clobber = members.iter().map(|&func| clobber(func)).max().unwrap_or(0);
+        let mut clamp = incoming.get(&scc_ref).copied().unwrap_or(0);
+        if schedule.sccs.scc_info(scc_ref).is_cycle {
+            clamp = clamp.max(scc_max_clobber);
+        }
+        for &func in members {
+            clamp_words.insert(func, clamp);
+        }
+        let push = clamp.max(scc_max_clobber);
+        for callee_scc in schedule.scc_edges.get(&scc_ref).into_iter().flatten() {
+            incoming
+                .entry(*callee_scc)
+                .and_modify(|cur| *cur = (*cur).max(push))
+                .or_insert(push);
         }
     }
 

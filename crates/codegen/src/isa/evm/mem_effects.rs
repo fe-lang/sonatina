@@ -6,9 +6,8 @@ use sonatina_ir::{
     isa::{Isa, evm::Evm},
     module::FuncRef,
 };
-use std::collections::{BTreeMap, BTreeSet};
 
-use crate::module_analysis::{CallGraph, CallGraphSccs, SccBuilder, SccRef};
+use crate::module_analysis::CallGraphSchedule;
 
 use super::memory_plan::ProgramMemoryPlan;
 
@@ -21,7 +20,7 @@ pub(crate) struct FuncMemEffects {
 }
 
 impl FuncMemEffects {
-    fn union_with(&mut self, other: FuncMemEffects) {
+    fn union_with(&mut self, other: &FuncMemEffects) {
         self.touches_static_arena |= other.touches_static_arena;
         self.touches_fixed_slots |= other.touches_fixed_slots;
         self.touches_dyn_frame |= other.touches_dyn_frame;
@@ -29,22 +28,17 @@ impl FuncMemEffects {
     }
 }
 
+/// Computes, for each function, which memory regions it transitively touches
+/// (itself or through any callee).
 pub(crate) fn compute_func_mem_effects(
     module: &Module,
-    funcs: &[FuncRef],
+    schedule: &CallGraphSchedule,
     plan: &ProgramMemoryPlan,
     fixed_slot_effects: &FxHashSet<FuncRef>,
     isa: &Evm,
 ) -> FxHashMap<FuncRef, FuncMemEffects> {
-    let funcs_set: FxHashSet<FuncRef> = funcs.iter().copied().collect();
-    let call_graph = CallGraph::build_graph_subset(module, &funcs_set);
-    let scc = SccBuilder::new().compute_scc(&call_graph);
-
-    let topo = topo_sort_sccs(&funcs_set, &call_graph, &scc);
-    let edges = build_scc_edges(&funcs_set, &call_graph, &scc, &topo);
-
-    let mut local_effects: FxHashMap<FuncRef, FuncMemEffects> = FxHashMap::default();
-    let mut local_effect_results: Vec<_> = funcs
+    let mut local_effect_results: Vec<_> = schedule
+        .funcs()
         .par_iter()
         .copied()
         .map(|func| {
@@ -67,51 +61,10 @@ pub(crate) fn compute_func_mem_effects(
         })
         .collect();
     local_effect_results.sort_unstable_by_key(|(func, _)| func.as_u32());
-    for (func, effects) in local_effect_results {
-        local_effects.insert(func, effects);
-    }
+    let local_effects: FxHashMap<FuncRef, FuncMemEffects> =
+        local_effect_results.into_iter().collect();
 
-    let mut scc_effects: FxHashMap<SccRef, FuncMemEffects> = FxHashMap::default();
-    for scc_ref in &topo {
-        scc_effects.insert(*scc_ref, FuncMemEffects::default());
-    }
-
-    for scc_ref in &topo {
-        let mut eff = FuncMemEffects::default();
-        for &f in scc
-            .scc_info(*scc_ref)
-            .components
-            .iter()
-            .filter(|f| funcs_set.contains(f))
-        {
-            let local = local_effects
-                .get(&f)
-                .copied()
-                .unwrap_or_else(|| panic!("missing local effects for func {}", f.as_u32()));
-            eff.union_with(local);
-        }
-        scc_effects.insert(*scc_ref, eff);
-    }
-
-    for &scc_ref in topo.iter().rev() {
-        let mut eff = scc_effects
-            .get(&scc_ref)
-            .copied()
-            .unwrap_or_else(|| panic!("missing SCC effects for scc {}", scc_ref.as_u32()));
-        for &callee in edges.get(&scc_ref).into_iter().flatten() {
-            let callee_eff = scc_effects.get(&callee).copied().unwrap_or_else(|| {
-                panic!("missing SCC effects for callee scc {}", callee.as_u32())
-            });
-            eff.union_with(callee_eff);
-        }
-        scc_effects.insert(scc_ref, eff);
-    }
-
-    let mut out: FxHashMap<FuncRef, FuncMemEffects> = FxHashMap::default();
-    for &f in funcs {
-        out.insert(f, scc_effects[&scc.scc_ref(f)]);
-    }
-    out
+    schedule.join_over_callees(|func| local_effects[&func], FuncMemEffects::union_with)
 }
 
 fn func_uses_malloc(function: &Function, isa: &Evm) -> bool {
@@ -126,96 +79,4 @@ fn func_uses_malloc(function: &Function, isa: &Evm) -> bool {
         }
     }
     false
-}
-
-fn topo_sort_sccs(
-    funcs: &FxHashSet<FuncRef>,
-    call_graph: &CallGraph,
-    scc: &CallGraphSccs,
-) -> Vec<SccRef> {
-    let mut sccs: BTreeSet<SccRef> = BTreeSet::new();
-    for &f in funcs {
-        sccs.insert(scc.scc_ref(f));
-    }
-
-    let mut edges: BTreeMap<SccRef, BTreeSet<SccRef>> = BTreeMap::new();
-    let mut indegree: BTreeMap<SccRef, usize> = BTreeMap::new();
-    for &s in &sccs {
-        edges.insert(s, BTreeSet::new());
-        indegree.insert(s, 0);
-    }
-
-    for &f in funcs {
-        let from = scc.scc_ref(f);
-        for &callee in call_graph.callee_of(f) {
-            let to = scc.scc_ref(callee);
-            if from == to {
-                continue;
-            }
-
-            let tos = edges.get_mut(&from).expect("missing scc");
-            if tos.insert(to) {
-                *indegree.get_mut(&to).expect("missing scc") += 1;
-            }
-        }
-    }
-
-    let mut ready: BTreeSet<SccRef> = BTreeSet::new();
-    for (&s, &deg) in &indegree {
-        if deg == 0 {
-            ready.insert(s);
-        }
-    }
-
-    let mut topo: Vec<SccRef> = Vec::with_capacity(sccs.len());
-    while let Some(&s) = ready.first() {
-        ready.remove(&s);
-        topo.push(s);
-
-        let tos: Vec<SccRef> = edges
-            .get(&s)
-            .expect("missing scc")
-            .iter()
-            .copied()
-            .collect();
-        for to in tos {
-            let deg = indegree.get_mut(&to).expect("missing scc");
-            *deg = deg.checked_sub(1).expect("indegree underflow");
-            if *deg == 0 {
-                ready.insert(to);
-            }
-        }
-    }
-
-    debug_assert_eq!(topo.len(), sccs.len(), "SCC topo sort incomplete");
-    topo
-}
-
-fn build_scc_edges(
-    funcs: &FxHashSet<FuncRef>,
-    call_graph: &CallGraph,
-    scc: &CallGraphSccs,
-    topo: &[SccRef],
-) -> BTreeMap<SccRef, Vec<SccRef>> {
-    let mut edges: BTreeMap<SccRef, BTreeSet<SccRef>> = BTreeMap::new();
-    for &s in topo {
-        edges.insert(s, BTreeSet::new());
-    }
-
-    for &f in funcs {
-        let from = scc.scc_ref(f);
-        for &callee in call_graph.callee_of(f) {
-            let to = scc.scc_ref(callee);
-            if from == to {
-                continue;
-            }
-            edges.get_mut(&from).expect("missing scc").insert(to);
-        }
-    }
-
-    let mut out: BTreeMap<SccRef, Vec<SccRef>> = BTreeMap::new();
-    for (s, tos) in edges {
-        out.insert(s, tos.into_iter().collect());
-    }
-    out
 }

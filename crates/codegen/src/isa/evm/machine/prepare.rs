@@ -7,7 +7,7 @@ use crate::{
     critical_edge::CriticalEdgeSplitter,
     domtree::DomTree,
     liveness::{InstLiveness, Liveness},
-    module_analysis::{CallGraph, SccBuilder},
+    module_analysis::CallGraphSchedule,
     stackalloc::{
         HOT_IMMEDIATE_SIZE_MIN_BLOCK_USES, HOT_IMMEDIATE_SIZE_MIN_MATERIALIZATION_BYTES,
         StackifyBuilder,
@@ -16,39 +16,28 @@ use crate::{
 
 use super::{
     super::{
-        EvmBackend, ImmediateMaterializationMode, fixed_slots,
-        memory_plan::{MachineStackifyAnalysis, topo_sort_sccs},
+        EvmBackend, ImmediateMaterializationMode, fixed_slots, memory_plan::MachineStackifyAnalysis,
     },
     verify::verify_machine_module,
 };
 
 pub(crate) fn prepare_machine_stackify_analyses(
     module: &Module,
-    funcs: &[FuncRef],
+    schedule: &CallGraphSchedule,
     backend: &EvmBackend,
     machine_isa: &EvmMachine,
 ) -> Result<FxHashMap<FuncRef, MachineStackifyAnalysis>, String> {
-    verify_machine_module(module, funcs)?;
+    verify_machine_module(module, schedule.funcs())?;
     let _span = debug_span!("sonatina.codegen.evm.machine.prepare_stackify").entered();
-    let funcs_set: FxHashSet<FuncRef> = funcs.iter().copied().collect();
-    let call_graph = CallGraph::build_graph_subset(module, &funcs_set);
-    let scc = SccBuilder::new().compute_scc(&call_graph);
-    let topo = topo_sort_sccs(&funcs_set, &call_graph, &scc);
-    let local_scratch_clobbers = compute_local_machine_scratch_clobbers(module, funcs, machine_isa);
+    let local_scratch_clobbers =
+        compute_local_machine_scratch_clobbers(module, schedule.funcs(), machine_isa);
 
     let mut analyses = FxHashMap::default();
     let mut fixed_slot_effects = FxHashSet::default();
-    for &scc_ref in topo.iter().rev() {
-        let mut components: Vec<FuncRef> = scc
-            .scc_info(scc_ref)
-            .components
-            .iter()
-            .copied()
-            .filter(|func| funcs_set.contains(func))
-            .collect();
-        components.sort_unstable_by_key(|func| func.as_u32());
+    for &scc_ref in schedule.topo.iter().rev() {
+        let components = schedule.members(scc_ref);
 
-        let cycle_fixed_slot_effects = scc.scc_info(scc_ref).is_cycle.then(|| {
+        let cycle_fixed_slot_effects = schedule.sccs.scc_info(scc_ref).is_cycle.then(|| {
             let mut cycle_fixed_slot_effects = fixed_slot_effects.clone();
             cycle_fixed_slot_effects.extend(components.iter().copied());
             cycle_fixed_slot_effects
@@ -87,14 +76,15 @@ pub(crate) fn prepare_machine_stackify_analyses(
                 .copied()
                 .any(|func| local_scratch_clobbers.contains(&func))
             || components.iter().copied().any(|func| {
-                call_graph
+                schedule
+                    .call_graph
                     .callee_of(func)
                     .iter()
                     .copied()
                     .any(|callee| fixed_slot_effects.contains(&callee))
             });
         if scc_touches_fixed_slots {
-            fixed_slot_effects.extend(components);
+            fixed_slot_effects.extend(components.iter().copied());
         }
     }
 
