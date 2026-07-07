@@ -739,11 +739,10 @@ fn render_alloca_escapes(
 mod tests {
     use super::*;
     use crate::{
-        critical_edge::CriticalEdgeSplitter,
         domtree::DomTree,
         isa::evm::{EvmBackend, canonicalize_alias_value},
         liveness::Liveness,
-        stackalloc::StackifyBuilder,
+        stackalloc::{StackifyBuilder, StackifyEdgeSplitter},
     };
     use sonatina_parser::{ParsedModule, parse_module};
     use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
@@ -803,7 +802,7 @@ mod tests {
         parsed.module.func_store.modify(func_ref, |function| {
             let mut cfg = sonatina_ir::cfg::ControlFlowGraph::new();
             cfg.compute(function);
-            CriticalEdgeSplitter::new().run(function, &mut cfg);
+            StackifyEdgeSplitter::run(function, &mut cfg);
 
             let mut liveness = Liveness::new();
             liveness.compute(function, &cfg);

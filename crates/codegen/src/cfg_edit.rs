@@ -347,9 +347,18 @@ impl<'f> CfgEditor<'f> {
         );
 
         let mid = self.func.dfg.make_block();
-        let mut cursor = InstInserter::at_location(CursorLocation::BlockTop(to));
-        cursor.insert_block_before(self.func, mid);
-        cursor.set_location(CursorLocation::BlockTop(mid));
+        if self.func.layout.entry_block() == Some(to) {
+            // Splitting an edge whose destination is the entry block (e.g. a multiway self-loop
+            // on the entry): inserting `mid` immediately before `to` would make `mid` the new
+            // entry, because `Layout::insert_block_before` reassigns `entry_block` when `before`
+            // has no predecessor in the layout. Keep `to` as the entry by placing `mid` after it;
+            // layout order past the entry is only a fallthrough hint and is recomputed by later
+            // analyses.
+            self.func.layout.insert_block_after(mid, to);
+        } else {
+            self.func.layout.insert_block_before(mid, to);
+        }
+        let mut cursor = InstInserter::at_location(CursorLocation::BlockTop(mid));
         cursor.append_inst_data(self.func, Jump::new(self.func.dfg.inst_set().jump(), to));
 
         self.func.dfg.rewrite_branch_edges_to_block(term, to, mid);

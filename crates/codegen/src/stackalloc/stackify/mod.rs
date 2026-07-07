@@ -20,7 +20,10 @@
 //!   edge stores can be emitted directly without first staging every phi source on the stack.
 //!
 //! Notes specific to this codebase:
-//! - Critical edges must be split before running this allocator.
+//! - Run `StackifyEdgeSplitter` before this allocator: it establishes both split
+//!   preconditions, splitting critical edges *and* every multiway edge whose target is already
+//!   planned when the branch is reached (a self-loop or backedge, e.g. a multiway self-loop on
+//!   the entry block). Splitting only critical edges is not enough.
 //! - Internal calls rely on an implicit return address value on the EVM stack.
 //!   The allocator models this as a special stack item barrier to avoid popping
 //!   into the caller's preserved stack segment.
@@ -63,8 +66,7 @@ mod tests {
         analysis::func_behavior::analyze_module,
         domtree::DomTree,
         liveness::{InstLiveness, Liveness},
-        stackalloc::{Action, Allocator, canonicalize_value_alias},
-        stackify_edge::StackifyEdgeSplitter,
+        stackalloc::{Action, Allocator, StackifyEdgeSplitter, canonicalize_value_alias},
     };
     use cranelift_entity::SecondaryMap;
     use sonatina_ir::{

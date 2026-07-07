@@ -10,7 +10,9 @@ use crate::{
     },
     object::{CompileOptions, SymbolId, link::link_section},
     optim::pipeline::Pipeline,
-    stackalloc::{Action, Actions, Allocator, StackifyAlloc, StackifyBuilder},
+    stackalloc::{
+        Action, Actions, Allocator, StackifyAlloc, StackifyBuilder, StackifyEdgeSplitter,
+    },
 };
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::{SmallVec, smallvec};
@@ -135,7 +137,7 @@ fn compute_test_stackify_alloc(function: &mut Function) -> StackifyAlloc {
     let mut cfg = ControlFlowGraph::new();
     cfg.compute(function);
 
-    CriticalEdgeSplitter::new().run(function, &mut cfg);
+    StackifyEdgeSplitter::run(function, &mut cfg);
 
     let mut liveness = Liveness::new();
     liveness.compute(function, &cfg);
@@ -2764,6 +2766,47 @@ object @Contract {
         !ops.contains(&(OpCode::JUMPI as u8)),
         "branch with one canonical destination should not lower to JUMPI: {ops:?}"
     );
+}
+
+#[test]
+fn machine_pipeline_compiles_entry_self_loop() {
+    // Regression for the `StackifyEdgeSplitter` pipeline gap: a multiway self-loop on the entry
+    // block (`br v0 block0 block1`) is an in-cycle multiway edge that is *not* critical (block0's
+    // only predecessor is itself), so plain critical-edge splitting leaves it intact. Stackify
+    // then plans a branch edge back to the already-planned entry block, which trips the guard in
+    // `on_branch_edge` (previously a debug assert / silent miscompile). The machine pipeline runs
+    // `StackifyEdgeSplitter`, which splits the edge and makes the shape compile.
+    let parsed = parse_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+func public %f(v0.i1, v1.i256) {
+block0:
+    mstore v1 v1 i256;
+    br v0 block0 block1;
+
+block1:
+    evm_return 0.i256 0.i256;
+}
+
+object @Contract {
+  section runtime {
+    entry %f;
+  }
+}
+"#,
+    )
+    .unwrap();
+
+    let func = parsed.module.funcs()[0];
+    let backend = test_backend();
+    let prepared = backend
+        .prepare_section(work_module(&parsed.module, &[func]))
+        .expect("prepare should succeed for an entry self-loop");
+
+    backend
+        .lower_function(&prepared, func)
+        .expect("lowering an entry self-loop should succeed");
 }
 
 #[test]

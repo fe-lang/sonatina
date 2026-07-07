@@ -517,9 +517,10 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
         succ: BlockId,
         stack: SymStack,
     ) {
-        debug_assert!(
+        assert!(
             !self.planned_blocks.contains(succ),
-            "branch edge to planned block {succ:?} requires a split edge"
+            "multiway branch edge to already-planned block {succ:?}: run StackifyEdgeSplitter \
+             before stackify to split in-cycle multiway edges"
         );
         debug_assert_eq!(
             self.ctx.cfg.pred_num_of(succ),
@@ -537,9 +538,10 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
         succ: BlockId,
         stack: SymStack,
     ) {
-        debug_assert!(
+        assert!(
             !self.planned_blocks.contains(succ),
-            "br_table edge to planned block {succ:?} requires a split edge"
+            "multiway br_table edge to already-planned block {succ:?}: run StackifyEdgeSplitter \
+             before stackify to split in-cycle multiway edges"
         );
         debug_assert_eq!(
             self.ctx.cfg.pred_num_of(succ),
