@@ -65,7 +65,7 @@ fn plan_test_ctx_from_src(src: &str) -> PlanTestCtx {
 
     let plan = compute_semantic_program_memory_plan(
         &parsed.module,
-        &funcs,
+        &crate::module_analysis::CallGraphSchedule::compute(&parsed.module, &funcs),
         &analyses,
         &ptr_escape,
         &isa,
@@ -1351,14 +1351,12 @@ block0:
     let mk = ctx.names["mk"];
     let main = ctx.names["main"];
     let abs_clobber_words = compute_abs_clobber_words_with_extra(
-        &ctx.module,
-        &ctx.funcs,
+        &crate::module_analysis::CallGraphSchedule::compute(&ctx.module, &ctx.funcs),
         &ctx.plan,
         &FxHashMap::default(),
     );
     let clamp_words = compute_return_escape_caller_clamp_words(
-        &ctx.module,
-        &ctx.funcs,
+        &crate::module_analysis::CallGraphSchedule::compute(&ctx.module, &ctx.funcs),
         &ctx.plan,
         &FxHashMap::default(),
     );
@@ -1376,8 +1374,7 @@ block0:
     let mut extra_clobber_words = FxHashMap::default();
     extra_clobber_words.insert(main, extra_reserve);
     let clamp_words = compute_return_escape_caller_clamp_words(
-        &ctx.module,
-        &ctx.funcs,
+        &crate::module_analysis::CallGraphSchedule::compute(&ctx.module, &ctx.funcs),
         &ctx.plan,
         &extra_clobber_words,
     );
@@ -1459,9 +1456,11 @@ block0:
             stable_words: 8,
         },
     )]);
+    let schedule = crate::module_analysis::CallGraphSchedule::compute(&parsed.module, &funcs);
     let placement = machine::placement::compute_semantic_memory_placement(
         &parsed.module,
         machine::placement::MemoryPlacementSection {
+            schedule: &schedule,
             funcs: &funcs,
             entry: names["main"],
             includes: &[],
@@ -1558,9 +1557,11 @@ block0:
 
     let clobber = find_func(&parsed.module, "clobber_then_read");
     let entry = find_func(&parsed.module, "entry");
+    let schedule = crate::module_analysis::CallGraphSchedule::compute(&parsed.module, &funcs);
     let placement = machine::placement::compute_semantic_memory_placement(
         &parsed.module,
         machine::placement::MemoryPlacementSection {
+            schedule: &schedule,
             funcs: &funcs,
             entry,
             includes: &[],
@@ -1637,9 +1638,11 @@ block0:
 
     let entry = find_func(&parsed.module, "entry");
     let scratch = find_func(&parsed.module, "scratch");
+    let schedule = crate::module_analysis::CallGraphSchedule::compute(&parsed.module, &funcs);
     let placement = machine::placement::compute_semantic_memory_placement(
         &parsed.module,
         machine::placement::MemoryPlacementSection {
+            schedule: &schedule,
             funcs: &funcs,
             entry,
             includes: &[],
@@ -1753,7 +1756,7 @@ block0:
 
     let plan = compute_semantic_program_memory_plan(
         &parsed.module,
-        &funcs,
+        &crate::module_analysis::CallGraphSchedule::compute(&parsed.module, &funcs),
         &pre_analyses,
         &ptr_escape,
         &isa,
@@ -2916,7 +2919,7 @@ block0:
     };
     let plan = compute_semantic_program_memory_plan(
         &parsed.module,
-        &funcs,
+        &crate::module_analysis::CallGraphSchedule::compute(&parsed.module, &funcs),
         &pre_analyses,
         &ptr_escape,
         &isa,
@@ -3058,7 +3061,7 @@ block2:
     };
     let plan = compute_semantic_program_memory_plan(
         &parsed.module,
-        &funcs,
+        &crate::module_analysis::CallGraphSchedule::compute(&parsed.module, &funcs),
         &pre_analyses,
         &ptr_escape,
         &isa,

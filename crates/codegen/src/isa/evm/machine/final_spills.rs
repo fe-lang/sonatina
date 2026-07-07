@@ -2,7 +2,7 @@ use cranelift_entity::EntityRef;
 use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{InstId, Module, ValueId, module::FuncRef};
 
-use crate::{bitset::BitSet, stackalloc::StackifyAlloc};
+use crate::{bitset::BitSet, module_analysis::CallGraphSchedule, stackalloc::StackifyAlloc};
 
 use super::{
     super::{
@@ -143,6 +143,7 @@ type FinalSpillChoiceScore = (u32, u32, u32, u32, u64, u64);
 
 pub(crate) struct FinalSpillChoiceCtx<'a> {
     pub(crate) source_module: &'a Module,
+    pub(crate) schedule: &'a CallGraphSchedule,
     pub(crate) funcs: &'a [FuncRef],
     pub(crate) section_entry: FuncRef,
     pub(crate) section_includes: &'a [FuncRef],
@@ -214,6 +215,7 @@ impl FinalSpillChoiceCtx<'_> {
         let placement = compute_semantic_memory_placement(
             self.source_module,
             MemoryPlacementSection {
+                schedule: self.schedule,
                 funcs: self.funcs,
                 entry: self.section_entry,
                 includes: self.section_includes,

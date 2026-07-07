@@ -21,11 +21,11 @@ use super::{
     ptr_escape::PtrEscapeSummary,
     ptr_provenance::{Provenance, compute_value_provenance},
 };
-use crate::liveness::InstLiveness;
+use crate::{liveness::InstLiveness, module_analysis::CallGraphSchedule};
 
 pub(crate) fn compute_semantic_malloc_future_abs_words_with_extra(
     module: &Module,
-    funcs: &[FuncRef],
+    schedule: &CallGraphSchedule,
     plan: &ProgramMemoryPlan,
     analyses: &FxHashMap<FuncRef, FuncPreAnalysis>,
     isa: &Evm,
@@ -33,7 +33,7 @@ pub(crate) fn compute_semantic_malloc_future_abs_words_with_extra(
 ) -> FxHashMap<FuncRef, FxHashMap<InstId, u32>> {
     compute_malloc_future_abs_words_with_analysis(
         module,
-        funcs,
+        schedule,
         plan,
         analyses,
         isa,
@@ -47,7 +47,7 @@ pub(crate) fn compute_semantic_malloc_future_abs_words_with_extra(
 
 fn compute_malloc_future_abs_words_with_analysis<A>(
     module: &Module,
-    funcs: &[FuncRef],
+    schedule: &CallGraphSchedule,
     plan: &ProgramMemoryPlan,
     analyses: &FxHashMap<FuncRef, A>,
     isa: &Evm,
@@ -58,8 +58,9 @@ where
     A: Sync,
 {
     let abs_clobber_words =
-        compute_abs_clobber_words_with_extra(module, funcs, plan, extra_clobber_words);
-    let mut results: Vec<_> = funcs
+        compute_abs_clobber_words_with_extra(schedule, plan, extra_clobber_words);
+    let mut results: Vec<_> = schedule
+        .funcs()
         .par_iter()
         .copied()
         .map(|f| {
@@ -573,7 +574,7 @@ block0:
 
         let bounds = compute_malloc_future_abs_words_with_analysis(
             &parsed.module,
-            &funcs,
+            &crate::module_analysis::CallGraphSchedule::compute(&parsed.module, &funcs),
             &plan,
             &analyses,
             &isa,
@@ -650,7 +651,7 @@ block0:
 
         let bounds = compute_malloc_future_abs_words_with_analysis(
             &parsed.module,
-            &funcs,
+            &crate::module_analysis::CallGraphSchedule::compute(&parsed.module, &funcs),
             &plan,
             &analyses,
             &isa,
