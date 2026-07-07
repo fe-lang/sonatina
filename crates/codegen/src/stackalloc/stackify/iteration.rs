@@ -34,19 +34,21 @@ pub(super) struct IterationPlanner<'a, 'ctx, O: StackifyObserver> {
     object_spill_requests: &'a mut BitSet<ValueId>,
     forced_object_spills: &'a BitSet<ValueId>,
     inherited_stack: BTreeMap<BlockId, (BlockId, SymStack)>,
-    pending_edges: BTreeMap<BlockId, Vec<PendingEdge<O::DeferredExit>>>,
+    pending_edges: BTreeMap<BlockId, Vec<PendingEdge>>,
     planned_blocks: BitSet<BlockId>,
     search_scratch: &'a mut NormalizeSearchScratch,
     observer: &'a mut O,
 }
 
-struct PendingEdge<D> {
+struct PendingEdge {
     pred: BlockId,
     inst: InstId,
     stack: SymStack,
     free_slots: FreeSlotPools,
     action_start: usize,
-    deferred_exit: D,
+    /// Index of this edge's `DeferredExit` event in the observer's trace (0 for `NullObserver`),
+    /// used to backfill the exit fixup actions once the merge template is resolved.
+    trace_token: usize,
 }
 
 #[derive(Clone, Copy)]
@@ -250,7 +252,7 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
                 |planner| planner.plan_edge_fixup_to_template(&tmpl, edge.pred, block),
             );
             self.observer.on_deferred_exit_actions(
-                edge.deferred_exit,
+                edge.trace_token,
                 &self.alloc.pre_actions[edge.inst][edge.action_start..],
             );
         }
@@ -478,7 +480,7 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
                     stack: state.stack.clone(),
                     free_slots: state.free_slots.clone(),
                     action_start,
-                    deferred_exit: self.observer.on_deferred_inst_jump(inst, dest),
+                    trace_token: self.observer.on_deferred_inst_jump(inst, dest),
                 });
             return;
         } else if self.ctx.cfg.pred_num_of(dest) == 1

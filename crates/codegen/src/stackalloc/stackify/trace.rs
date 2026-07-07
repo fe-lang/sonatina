@@ -27,11 +27,8 @@ use super::{
 /// `StackifyBuilder::compute_with_trace` is allowed to run multiple fixed-point iterations.
 /// Observers must support `checkpoint`/`rollback` so unsuccessful iterations can be discarded.
 pub(super) trait StackifyObserver {
-    type Checkpoint: Copy;
-    type DeferredExit: Copy + Default;
-
-    fn checkpoint(&mut self) -> Self::Checkpoint;
-    fn rollback(&mut self, checkpoint: Self::Checkpoint);
+    fn checkpoint(&mut self) -> usize;
+    fn rollback(&mut self, checkpoint: usize);
 
     fn on_block_header(&mut self, _func: &Function, _block: BlockId, _template: &BlockTemplate) {}
 
@@ -78,12 +75,12 @@ pub(super) trait StackifyObserver {
 
     fn on_inst_jump(&mut self, _inst: InstId, _dest: BlockId) {}
 
-    fn on_deferred_inst_jump(&mut self, inst: InstId, dest: BlockId) -> Self::DeferredExit {
+    fn on_deferred_inst_jump(&mut self, inst: InstId, dest: BlockId) -> usize {
         self.on_inst_jump(inst, dest);
-        Self::DeferredExit::default()
+        0
     }
 
-    fn on_deferred_exit_actions(&mut self, _deferred: Self::DeferredExit, _actions: &[Action]) {}
+    fn on_deferred_exit_actions(&mut self, _deferred: usize, _actions: &[Action]) {}
 
     fn on_inst_br(&mut self, _func: &Function, _inst: InstId, _cond: ValueId, _dests: &[BlockId]) {}
 
@@ -95,12 +92,11 @@ pub(super) trait StackifyObserver {
 pub(super) struct NullObserver;
 
 impl StackifyObserver for NullObserver {
-    type Checkpoint = ();
-    type DeferredExit = ();
+    fn checkpoint(&mut self) -> usize {
+        0
+    }
 
-    fn checkpoint(&mut self) -> Self::Checkpoint {}
-
-    fn rollback(&mut self, _checkpoint: Self::Checkpoint) {}
+    fn rollback(&mut self, _checkpoint: usize) {}
 }
 
 /// A snapshot-oriented trace collector for stackify planning.
@@ -110,26 +106,30 @@ impl StackifyObserver for NullObserver {
 /// such as cleanup, prelude, exit normalization, and internal returns.
 #[derive(Default)]
 pub(crate) struct StackifyTrace {
-    out: String,
-    action_chunks: Vec<ActionChunk>,
-    inst_chunks: Vec<InstChunk>,
-    deferred_exit_chunks: Vec<DeferredExitChunk>,
+    events: Vec<TraceEvent>,
 }
 
-struct ActionChunk {
-    placeholder: String,
-    actions: crate::stackalloc::Actions,
-}
-
-struct InstChunk {
-    placeholder: String,
-    inst: InstId,
-}
-
-struct DeferredExitChunk {
-    placeholder: String,
-    dest: BlockId,
-    actions: crate::stackalloc::Actions,
+/// One recorded trace line (or line group). Everything that can be formatted at record time is
+/// pre-rendered into a `Line`; the two things that cannot are kept structured:
+/// - instruction comments need a `FuncWriteCtx` only available at render time (`InstHeader`);
+/// - action payloads (`Actions`/`DeferredExit`) are stored raw so downstream object-id remapping
+///   can rewrite them before render, and deferred-exit actions are filled in later by index.
+enum TraceEvent {
+    /// Fully pre-rendered text, including any trailing newline.
+    Line(String),
+    /// `// <inst comment>` line (rendered at the end) followed by `stack_line` (pre-rendered).
+    InstHeader { inst: InstId, stack_line: String },
+    /// An action group rendered as `{prefix}{actions}\n`. Only recorded for non-empty groups.
+    Actions {
+        prefix: String,
+        actions: crate::stackalloc::Actions,
+    },
+    /// A deferred exit whose `actions` are filled in when its edge resolves; renders as
+    /// `      exit({dest:?}): {actions}\n`, or nothing when no actions were added.
+    DeferredExit {
+        dest: BlockId,
+        actions: crate::stackalloc::Actions,
+    },
 }
 
 impl StackifyTrace {
@@ -144,11 +144,13 @@ impl StackifyTrace {
             }
         }
 
-        for chunk in &mut self.action_chunks {
-            remap_actions(&mut chunk.actions, remap);
-        }
-        for chunk in &mut self.deferred_exit_chunks {
-            remap_actions(&mut chunk.actions, remap);
+        for event in &mut self.events {
+            match event {
+                TraceEvent::Actions { actions, .. } | TraceEvent::DeferredExit { actions, .. } => {
+                    remap_actions(actions, remap);
+                }
+                TraceEvent::Line(_) | TraceEvent::InstHeader { .. } => {}
+            }
         }
     }
 
@@ -197,94 +199,56 @@ impl StackifyTrace {
         }
 
         let _ = writeln!(&mut out, "trace:");
-        let mut trace = self.out;
-        for chunk in self.action_chunks {
-            let formatted = fmt_actions(&chunk.actions);
-            trace = trace.replace(&chunk.placeholder, &formatted);
+        for event in &self.events {
+            match event {
+                TraceEvent::Line(line) => out.push_str(line),
+                TraceEvent::InstHeader { inst, stack_line } => {
+                    let _ = writeln!(&mut out, "    // {}", fmt_inst_comment(func, *inst));
+                    out.push_str(stack_line);
+                }
+                TraceEvent::Actions { prefix, actions } => {
+                    let _ = writeln!(&mut out, "{prefix}{}", fmt_actions(actions));
+                }
+                TraceEvent::DeferredExit { dest, actions } => {
+                    if !actions.is_empty() {
+                        let _ =
+                            writeln!(&mut out, "      exit({dest:?}): {}", fmt_actions(actions));
+                    }
+                }
+            }
         }
-        for chunk in self.deferred_exit_chunks {
-            let formatted = if chunk.actions.is_empty() {
-                String::new()
-            } else {
-                format!(
-                    "      exit({:?}): {}\n",
-                    chunk.dest,
-                    fmt_actions(&chunk.actions)
-                )
-            };
-            trace = trace.replace(&chunk.placeholder, &formatted);
-        }
-        for chunk in self.inst_chunks {
-            let comment = fmt_inst_comment(func, chunk.inst);
-            trace = trace.replace(&chunk.placeholder, &comment);
-        }
-        out.push_str(&trace);
         out
     }
 
-    fn push_actions_placeholder(&mut self, actions: &[Action]) -> String {
-        let idx = self.action_chunks.len();
-        let placeholder = format!("@@ACTIONS:{idx}@@");
+    fn push_line(&mut self, line: String) {
+        self.events.push(TraceEvent::Line(line));
+    }
+
+    fn push_actions(&mut self, prefix: String, actions: &[Action]) {
         let mut stored = crate::stackalloc::Actions::new();
         stored.extend_from_slice(actions);
-        self.action_chunks.push(ActionChunk {
-            placeholder: placeholder.clone(),
+        self.events.push(TraceEvent::Actions {
+            prefix,
             actions: stored,
         });
-        placeholder
-    }
-
-    fn push_inst_placeholder(&mut self, inst: InstId) -> String {
-        let idx = self.inst_chunks.len();
-        let placeholder = format!("@@INST:{idx}@@");
-        self.inst_chunks.push(InstChunk {
-            placeholder: placeholder.clone(),
-            inst,
-        });
-        placeholder
-    }
-
-    fn push_deferred_exit_placeholder(&mut self, dest: BlockId) -> usize {
-        let idx = self.deferred_exit_chunks.len();
-        let placeholder = format!("@@DEFERRED_EXIT:{idx}@@");
-        self.deferred_exit_chunks.push(DeferredExitChunk {
-            placeholder: placeholder.clone(),
-            dest,
-            actions: crate::stackalloc::Actions::new(),
-        });
-        let _ = write!(&mut self.out, "{placeholder}");
-        idx
     }
 }
 
 impl StackifyObserver for StackifyTrace {
-    type Checkpoint = (usize, usize, usize, usize);
-    type DeferredExit = usize;
-
-    fn checkpoint(&mut self) -> Self::Checkpoint {
-        (
-            self.out.len(),
-            self.action_chunks.len(),
-            self.inst_chunks.len(),
-            self.deferred_exit_chunks.len(),
-        )
+    fn checkpoint(&mut self) -> usize {
+        self.events.len()
     }
 
-    fn rollback(&mut self, checkpoint: Self::Checkpoint) {
-        let (out_len, action_chunk_len, inst_chunk_len, deferred_exit_chunk_len) = checkpoint;
-        self.out.truncate(out_len);
-        self.action_chunks.truncate(action_chunk_len);
-        self.inst_chunks.truncate(inst_chunk_len);
-        self.deferred_exit_chunks.truncate(deferred_exit_chunk_len);
+    fn rollback(&mut self, checkpoint: usize) {
+        self.events.truncate(checkpoint);
     }
 
     fn on_block_header(&mut self, func: &Function, block: BlockId, template: &BlockTemplate) {
-        let _ = writeln!(
-            &mut self.out,
-            "  {block:?} P={} T={}",
+        self.push_line(format!(
+            "  {block:?} P={} T={}\n",
             fmt_values(func, &template.params),
             fmt_values(func, template.transfer())
-        );
+        ));
     }
 
     fn on_block_inherited(
@@ -296,19 +260,17 @@ impl StackifyObserver for StackifyTrace {
         live_future: &BitSet<ValueId>,
         live_out: &BitSet<ValueId>,
     ) {
-        let _ = writeln!(
-            &mut self.out,
-            "    inherited from {pred:?}: {}",
+        self.push_line(format!(
+            "    inherited from {pred:?}: {}\n",
             fmt_stack(func, inherited_stack, live_future, live_out)
-        );
+        ));
     }
 
     fn on_block_prologue(&mut self, actions: &[Action]) {
         if actions.is_empty() {
             return;
         }
-        let placeholder = self.push_actions_placeholder(actions);
-        let _ = writeln!(&mut self.out, "    prologue: {placeholder}");
+        self.push_actions("    prologue: ".to_string(), actions);
     }
 
     fn on_inst_start(
@@ -320,34 +282,29 @@ impl StackifyObserver for StackifyTrace {
         live_out: &BitSet<ValueId>,
         last_use: &BitSet<ValueId>,
     ) {
-        let comment = self.push_inst_placeholder(inst);
-        let _ = writeln!(&mut self.out, "    // {comment}");
         let stack_start = fmt_stack(func, stack, live_future, live_out);
         let last_use_list: Vec<ValueId> = last_use.iter().collect();
-        if last_use_list.is_empty() {
-            let _ = writeln!(&mut self.out, "    - stack={stack_start}");
+        let stack_line = if last_use_list.is_empty() {
+            format!("    - stack={stack_start}\n")
         } else {
-            let _ = writeln!(
-                &mut self.out,
-                "    - stack={stack_start}, last_use={}",
+            format!(
+                "    - stack={stack_start}, last_use={}\n",
                 fmt_values(func, &last_use_list)
-            );
-        }
+            )
+        };
+        self.events
+            .push(TraceEvent::InstHeader { inst, stack_line });
     }
 
     fn on_inst_actions(&mut self, label: &'static str, actions: &[Action], dest: Option<BlockId>) {
         if actions.is_empty() {
             return;
         }
-        let placeholder = self.push_actions_placeholder(actions);
-        match (label, dest) {
-            ("exit", Some(dest)) => {
-                let _ = writeln!(&mut self.out, "      exit({dest:?}): {placeholder}");
-            }
-            _ => {
-                let _ = writeln!(&mut self.out, "      {label}: {placeholder}");
-            }
-        }
+        let prefix = match (label, dest) {
+            ("exit", Some(dest)) => format!("      exit({dest:?}): "),
+            _ => format!("      {label}: "),
+        };
+        self.push_actions(prefix, actions);
     }
 
     fn on_inst_normal(
@@ -358,59 +315,68 @@ impl StackifyObserver for StackifyTrace {
         results: &[ValueId],
     ) {
         let op_name = func.dfg.inst(inst).as_text();
-        let _ = write!(
-            &mut self.out,
-            "      {op_name} {}",
-            fmt_trace_operands(func, inst, args)
-        );
+        let mut line = format!("      {op_name} {}", fmt_trace_operands(func, inst, args));
         match results {
             [] => {}
             [result] => {
-                let _ = write!(&mut self.out, " -> {}", fmt_value(func, *result));
+                let _ = write!(&mut line, " -> {}", fmt_value(func, *result));
             }
             _ => {
-                let _ = write!(&mut self.out, " -> {}", fmt_values(func, results));
+                let _ = write!(&mut line, " -> {}", fmt_values(func, results));
             }
         }
-        let _ = writeln!(&mut self.out);
+        line.push('\n');
+        self.push_line(line);
     }
 
     fn on_inst_jump(&mut self, _inst: InstId, dest: BlockId) {
-        let _ = writeln!(&mut self.out, "      jump -> {dest:?}");
+        self.push_line(format!("      jump -> {dest:?}\n"));
     }
 
-    fn on_deferred_inst_jump(&mut self, _inst: InstId, dest: BlockId) -> Self::DeferredExit {
-        let token = self.push_deferred_exit_placeholder(dest);
-        self.on_inst_jump(_inst, dest);
+    fn on_deferred_inst_jump(&mut self, inst: InstId, dest: BlockId) -> usize {
+        let token = self.events.len();
+        self.events.push(TraceEvent::DeferredExit {
+            dest,
+            actions: crate::stackalloc::Actions::new(),
+        });
+        self.on_inst_jump(inst, dest);
         token
     }
 
-    fn on_deferred_exit_actions(&mut self, deferred: Self::DeferredExit, actions: &[Action]) {
-        self.deferred_exit_chunks[deferred]
-            .actions
-            .extend_from_slice(actions);
+    fn on_deferred_exit_actions(&mut self, deferred: usize, actions: &[Action]) {
+        let TraceEvent::DeferredExit {
+            actions: stored, ..
+        } = &mut self.events[deferred]
+        else {
+            debug_assert!(
+                false,
+                "deferred exit token does not point at a DeferredExit event"
+            );
+            return;
+        };
+        stored.extend_from_slice(actions);
     }
 
     fn on_inst_br(&mut self, func: &Function, inst: InstId, cond: ValueId, dests: &[BlockId]) {
         let op_name = func.dfg.inst(inst).as_text();
-        let _ = writeln!(
-            &mut self.out,
-            "      {op_name} {} -> {dests:?}",
+        self.push_line(format!(
+            "      {op_name} {} -> {dests:?}\n",
             fmt_values(func, &[cond])
-        );
+        ));
     }
 
     fn on_inst_br_table(&mut self, _inst: InstId) {
-        let _ = writeln!(&mut self.out, "      br_table");
+        self.push_line("      br_table\n".to_string());
     }
 
     fn on_inst_return(&mut self, func: &Function, inst: InstId, rets: &[ValueId]) {
         let op_name = func.dfg.inst(inst).as_text();
-        if rets.is_empty() {
-            let _ = writeln!(&mut self.out, "      {op_name} []");
+        let line = if rets.is_empty() {
+            format!("      {op_name} []\n")
         } else {
-            let _ = writeln!(&mut self.out, "      {op_name} {}", fmt_values(func, rets));
-        }
+            format!("      {op_name} {}\n", fmt_values(func, rets))
+        };
+        self.push_line(line);
     }
 }
 
