@@ -163,17 +163,16 @@ impl<'d, 'a, 'ctx, O: StackifyObserver> BlockPlanner<'d, 'a, 'ctx, O> {
 
         let before_cleanup_len = self.driver.pre_actions_len(inst);
         if !skip_cleanup {
-            let cleanup_live_future = self
-                .state
-                .uses
-                .cleanup_live(self.driver.ctx(), &self.state.stack);
+            // `live_future` includes cached immediates until their last in-block use, so
+            // dead-prefix cleanup does not drop a reusable cached-immediate stack copy.
+            let live_future = self.state.uses.live_future();
             let live_out = self.state.uses.live_out();
             let reach = self.driver.ctx().reach;
             self.driver.with_pre_actions(inst, |actions| {
                 clean_dead_stack_prefix(
                     reach,
                     &mut self.state.stack,
-                    &cleanup_live_future,
+                    live_future,
                     live_out,
                     actions,
                 );

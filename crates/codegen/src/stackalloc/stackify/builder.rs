@@ -184,15 +184,25 @@ impl StackifyContext<'_> {
         self.value_aliases[value].unwrap_or(value)
     }
 
+    /// The value is pinned to the stack: losing its last copy costs a spill/reload, so operand
+    /// preparation must preserve it. Immediates are never pinned — they can always be re-pushed.
     pub(super) fn retains_value(&self, value: ValueId) -> bool {
         !self.func.dfg.value_is_imm(value)
     }
 
+    /// The value is a hot cached immediate: rematerializable, but expensive enough to push that
+    /// planning prefers `DUP`ing an existing stack copy over re-pushing it.
     pub(super) fn stack_caches_immediate(&self, value: ValueId) -> bool {
         self.func
             .dfg
             .value_imm(value)
             .is_some_and(|imm| self.stack_cached_immediates.contains(&imm.as_i256()))
+    }
+
+    /// The value participates in per-block use counting (`UseTracker`): pinned values and cached
+    /// immediates alike are counted so they stay in `live_future` until their last in-block use.
+    pub(super) fn is_use_tracked(&self, value: ValueId) -> bool {
+        self.retains_value(value) || self.stack_caches_immediate(value)
     }
 }
 

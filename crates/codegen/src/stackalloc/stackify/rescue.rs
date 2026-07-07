@@ -164,12 +164,13 @@ fn choose_reachability_victim(
     let above = above.min(limit);
 
     // 1) Prefer deleting dead values, starting from the shallowest depth to minimize `SWAP*`
-    // chains. This includes immediates: if they're dead, removing them cannot introduce new
-    // rematerialization cost.
+    // chains. This includes immediates — even cached ones still in `live_future`: they are
+    // rematerializable, so deleting a copy never loses the value, and rescue deliberately trades
+    // a possible re-push for operand reachability.
     for (i, item) in stack.iter().take(above).enumerate() {
         if let StackItem::Value(v) = item
             && !protected_args.contains(*v)
-            && uses.is_dead(*v)
+            && (func.dfg.value_is_imm(*v) || uses.is_dead(*v))
         {
             return Some(i);
         }
