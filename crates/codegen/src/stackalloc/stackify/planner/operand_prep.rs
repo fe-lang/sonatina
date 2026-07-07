@@ -996,7 +996,7 @@ mod tests {
             stackify::{
                 builder::StackifyReachability,
                 planner::{
-                    MemPlan, NormalizeSearchScratch, Planner,
+                    MemPlan, MemState, NormalizeSearchScratch, Planner,
                     normalize_search::{Cost, EstimatedCostModel, KeyInfo, SearchCfg, Step},
                     test_utils::build_stackify_test_context,
                 },
@@ -1131,17 +1131,15 @@ block0:
             let spill_obj = SecondaryMap::new();
             let mut free_slots = FreeSlotPools::default();
             let mut slots = SpillSlotPools::default();
-            let mem = MemPlan::new(
-                SpillSet::new(&spill_set),
-                &mut spill_requests,
-                &ctx,
-                &spill_obj,
-                &ctx.exact_local_addr,
-                &mut object_spill_requests,
-                &forced_object_spills,
-                &mut free_slots,
-                &mut slots,
-            );
+            let mut mem_state = MemState {
+                spill: SpillSet::new(&spill_set),
+                spill_obj: &spill_obj,
+                spill_requests: &mut spill_requests,
+                object_spill_requests: &mut object_spill_requests,
+                forced_object_spills: &forced_object_spills,
+                slots: &mut slots,
+            };
+            let mem = MemPlan::new(&mut mem_state, &ctx, &ctx.exact_local_addr, &mut free_slots);
 
             let old_args = [old_imm, imm2, imm3];
             let current_args = [current_imm, imm2, imm3];
@@ -1242,17 +1240,15 @@ block0:
             let spill_obj = SecondaryMap::new();
             let mut free_slots = FreeSlotPools::default();
             let mut slots = SpillSlotPools::default();
-            let mem = MemPlan::new(
-                SpillSet::new(&spill_set),
-                &mut spill_requests,
-                &ctx,
-                &spill_obj,
-                &ctx.exact_local_addr,
-                &mut object_spill_requests,
-                &forced_object_spills,
-                &mut free_slots,
-                &mut slots,
-            );
+            let mut mem_state = MemState {
+                spill: SpillSet::new(&spill_set),
+                spill_obj: &spill_obj,
+                spill_requests: &mut spill_requests,
+                object_spill_requests: &mut object_spill_requests,
+                forced_object_spills: &forced_object_spills,
+                slots: &mut slots,
+            };
+            let mem = MemPlan::new(&mut mem_state, &ctx, &ctx.exact_local_addr, &mut free_slots);
 
             let mut stack = SymStack::entry_stack(func, false);
             stack.push_value(arg);
@@ -1318,17 +1314,15 @@ block0:
             let spill_obj = SecondaryMap::new();
             let mut free_slots = FreeSlotPools::default();
             let mut slots = SpillSlotPools::default();
-            let mem = MemPlan::new(
-                SpillSet::new(&spill_set),
-                &mut spill_requests,
-                &ctx,
-                &spill_obj,
-                &ctx.exact_local_addr,
-                &mut object_spill_requests,
-                &forced_object_spills,
-                &mut free_slots,
-                &mut slots,
-            );
+            let mut mem_state = MemState {
+                spill: SpillSet::new(&spill_set),
+                spill_obj: &spill_obj,
+                spill_requests: &mut spill_requests,
+                object_spill_requests: &mut object_spill_requests,
+                forced_object_spills: &forced_object_spills,
+                slots: &mut slots,
+            };
+            let mem = MemPlan::new(&mut mem_state, &ctx, &ctx.exact_local_addr, &mut free_slots);
 
             let args: Vec<_> = func.arg_values.iter().copied().collect();
             let mut stack = SymStack::entry_stack(func, false);
@@ -1402,17 +1396,16 @@ block0:
                 let forced_object_spills = BitSet::default();
                 let mut free_slots = FreeSlotPools::default();
                 let mut slots = SpillSlotPools::default();
-                let mem = MemPlan::new(
-                    SpillSet::new(&spill_set),
-                    &mut spill_requests,
-                    &ctx,
-                    &spill_obj,
-                    &ctx.exact_local_addr,
-                    &mut object_spill_requests,
-                    &forced_object_spills,
-                    &mut free_slots,
-                    &mut slots,
-                );
+                let mut mem_state = MemState {
+                    spill: SpillSet::new(&spill_set),
+                    spill_obj: &spill_obj,
+                    spill_requests: &mut spill_requests,
+                    object_spill_requests: &mut object_spill_requests,
+                    forced_object_spills: &forced_object_spills,
+                    slots: &mut slots,
+                };
+                let mem =
+                    MemPlan::new(&mut mem_state, &ctx, &ctx.exact_local_addr, &mut free_slots);
                 let mut stack = SymStack::entry_stack(func, false);
                 for &value in values.iter().rev() {
                     stack.push_value(value);
@@ -1480,17 +1473,16 @@ block0:
                 let forced_object_spills = BitSet::default();
                 let mut free_slots = FreeSlotPools::default();
                 let mut slots = SpillSlotPools::default();
-                let mem = MemPlan::new(
-                    SpillSet::new(&spill_set),
-                    &mut spill_requests,
-                    &ctx,
-                    &spill_obj,
-                    &ctx.exact_local_addr,
-                    &mut object_spill_requests,
-                    &forced_object_spills,
-                    &mut free_slots,
-                    &mut slots,
-                );
+                let mut mem_state = MemState {
+                    spill: SpillSet::new(&spill_set),
+                    spill_obj: &spill_obj,
+                    spill_requests: &mut spill_requests,
+                    object_spill_requests: &mut object_spill_requests,
+                    forced_object_spills: &forced_object_spills,
+                    slots: &mut slots,
+                };
+                let mem =
+                    MemPlan::new(&mut mem_state, &ctx, &ctx.exact_local_addr, &mut free_slots);
                 let mut stack = SymStack::entry_stack(func, false);
                 stack.push_value(source);
                 stack.push_value(top);
@@ -1561,17 +1553,15 @@ block0:
             let forced_object_spills = BitSet::default();
             let mut free_slots = FreeSlotPools::default();
             let mut slots = SpillSlotPools::default();
-            let mem = MemPlan::new(
-                SpillSet::new(&spill_set),
-                &mut spill_requests,
-                &ctx,
-                &spill_obj,
-                &ctx.exact_local_addr,
-                &mut object_spill_requests,
-                &forced_object_spills,
-                &mut free_slots,
-                &mut slots,
-            );
+            let mut mem_state = MemState {
+                spill: SpillSet::new(&spill_set),
+                spill_obj: &spill_obj,
+                spill_requests: &mut spill_requests,
+                object_spill_requests: &mut object_spill_requests,
+                forced_object_spills: &forced_object_spills,
+                slots: &mut slots,
+            };
+            let mem = MemPlan::new(&mut mem_state, &ctx, &ctx.exact_local_addr, &mut free_slots);
             let mut stack = SymStack::entry_stack(func, false);
             stack.push_value(stack_source);
             stack.push_value(ignored);
@@ -1640,17 +1630,16 @@ block0:
                 let forced_object_spills = BitSet::default();
                 let mut free_slots = FreeSlotPools::default();
                 let mut slots = SpillSlotPools::default();
-                let mem = MemPlan::new(
-                    SpillSet::new(&spill_set),
-                    &mut spill_requests,
-                    &ctx,
-                    &spill_obj,
-                    &ctx.exact_local_addr,
-                    &mut object_spill_requests,
-                    &forced_object_spills,
-                    &mut free_slots,
-                    &mut slots,
-                );
+                let mut mem_state = MemState {
+                    spill: SpillSet::new(&spill_set),
+                    spill_obj: &spill_obj,
+                    spill_requests: &mut spill_requests,
+                    object_spill_requests: &mut object_spill_requests,
+                    forced_object_spills: &forced_object_spills,
+                    slots: &mut slots,
+                };
+                let mem =
+                    MemPlan::new(&mut mem_state, &ctx, &ctx.exact_local_addr, &mut free_slots);
                 let mut stack = SymStack::entry_stack(func, false);
                 for &value in values.iter().rev() {
                     stack.push_value(value);
@@ -1721,17 +1710,16 @@ block0:
                 let forced_object_spills = BitSet::default();
                 let mut free_slots = FreeSlotPools::default();
                 let mut slots = SpillSlotPools::default();
-                let mem = MemPlan::new(
-                    SpillSet::new(&spill_set),
-                    &mut spill_requests,
-                    &ctx,
-                    &spill_obj,
-                    &ctx.exact_local_addr,
-                    &mut object_spill_requests,
-                    &forced_object_spills,
-                    &mut free_slots,
-                    &mut slots,
-                );
+                let mut mem_state = MemState {
+                    spill: SpillSet::new(&spill_set),
+                    spill_obj: &spill_obj,
+                    spill_requests: &mut spill_requests,
+                    object_spill_requests: &mut object_spill_requests,
+                    forced_object_spills: &forced_object_spills,
+                    slots: &mut slots,
+                };
+                let mem =
+                    MemPlan::new(&mut mem_state, &ctx, &ctx.exact_local_addr, &mut free_slots);
                 let mut stack = SymStack::entry_stack(func, false);
                 stack.push_value(ignored);
                 stack.push_value(source);
@@ -1798,17 +1786,16 @@ block0:
                 let forced_object_spills = BitSet::default();
                 let mut free_slots = FreeSlotPools::default();
                 let mut slots = SpillSlotPools::default();
-                let mem = MemPlan::new(
-                    SpillSet::new(&spill_set),
-                    &mut spill_requests,
-                    &ctx,
-                    &spill_obj,
-                    &ctx.exact_local_addr,
-                    &mut object_spill_requests,
-                    &forced_object_spills,
-                    &mut free_slots,
-                    &mut slots,
-                );
+                let mut mem_state = MemState {
+                    spill: SpillSet::new(&spill_set),
+                    spill_obj: &spill_obj,
+                    spill_requests: &mut spill_requests,
+                    object_spill_requests: &mut object_spill_requests,
+                    forced_object_spills: &forced_object_spills,
+                    slots: &mut slots,
+                };
+                let mem =
+                    MemPlan::new(&mut mem_state, &ctx, &ctx.exact_local_addr, &mut free_slots);
 
                 let mut actions = crate::stackalloc::Actions::new();
                 let mut search_scratch = NormalizeSearchScratch::default();
@@ -1903,17 +1890,16 @@ block0:
                 let forced_object_spills = BitSet::default();
                 let mut free_slots = FreeSlotPools::default();
                 let mut slots = SpillSlotPools::default();
-                let mem = MemPlan::new(
-                    SpillSet::new(&spill_set),
-                    &mut spill_requests,
-                    &ctx,
-                    &spill_obj,
-                    &ctx.exact_local_addr,
-                    &mut object_spill_requests,
-                    &forced_object_spills,
-                    &mut free_slots,
-                    &mut slots,
-                );
+                let mut mem_state = MemState {
+                    spill: SpillSet::new(&spill_set),
+                    spill_obj: &spill_obj,
+                    spill_requests: &mut spill_requests,
+                    object_spill_requests: &mut object_spill_requests,
+                    forced_object_spills: &forced_object_spills,
+                    slots: &mut slots,
+                };
+                let mem =
+                    MemPlan::new(&mut mem_state, &ctx, &ctx.exact_local_addr, &mut free_slots);
                 let mut stack = stack_from_top(stack_values);
                 let mut args: SmallVec<[ValueId; 8]> = args_values.iter().copied().collect();
                 let mut last_use = BitSet::default();
@@ -2007,17 +1993,15 @@ block0:
             let spill_obj = SecondaryMap::new();
             let mut free_slots = FreeSlotPools::default();
             let mut slots = SpillSlotPools::default();
-            let mem = MemPlan::new(
-                SpillSet::new(&spill_set),
-                &mut spill_requests,
-                &ctx,
-                &spill_obj,
-                &ctx.exact_local_addr,
-                &mut object_spill_requests,
-                &forced_object_spills,
-                &mut free_slots,
-                &mut slots,
-            );
+            let mut mem_state = MemState {
+                spill: SpillSet::new(&spill_set),
+                spill_obj: &spill_obj,
+                spill_requests: &mut spill_requests,
+                object_spill_requests: &mut object_spill_requests,
+                forced_object_spills: &forced_object_spills,
+                slots: &mut slots,
+            };
+            let mem = MemPlan::new(&mut mem_state, &ctx, &ctx.exact_local_addr, &mut free_slots);
 
             let args = [func.arg_values[1], func.arg_values[0]];
             let mut stack = SymStack::entry_stack(func, false);
@@ -2087,17 +2071,15 @@ block0:
             let spill_obj = SecondaryMap::new();
             let mut free_slots = FreeSlotPools::default();
             let mut slots = SpillSlotPools::default();
-            let mem = MemPlan::new(
-                SpillSet::new(&spill_set),
-                &mut spill_requests,
-                &ctx,
-                &spill_obj,
-                &ctx.exact_local_addr,
-                &mut object_spill_requests,
-                &forced_object_spills,
-                &mut free_slots,
-                &mut slots,
-            );
+            let mut mem_state = MemState {
+                spill: SpillSet::new(&spill_set),
+                spill_obj: &spill_obj,
+                spill_requests: &mut spill_requests,
+                object_spill_requests: &mut object_spill_requests,
+                forced_object_spills: &forced_object_spills,
+                slots: &mut slots,
+            };
+            let mem = MemPlan::new(&mut mem_state, &ctx, &ctx.exact_local_addr, &mut free_slots);
 
             let args = [func.arg_values[2]];
             let mut stack = SymStack::entry_stack(func, false);
@@ -2126,17 +2108,15 @@ block0:
             let mut actions = crate::stackalloc::Actions::new();
             let mut object_spill_requests = BitSet::default();
             let forced_object_spills = BitSet::default();
-            let mem = MemPlan::new(
-                SpillSet::new(&spill_set),
-                &mut spill_requests,
-                &ctx,
-                &spill_obj,
-                &ctx.exact_local_addr,
-                &mut object_spill_requests,
-                &forced_object_spills,
-                &mut free_slots,
-                &mut slots,
-            );
+            let mut mem_state = MemState {
+                spill: SpillSet::new(&spill_set),
+                spill_obj: &spill_obj,
+                spill_requests: &mut spill_requests,
+                object_spill_requests: &mut object_spill_requests,
+                forced_object_spills: &forced_object_spills,
+                slots: &mut slots,
+            };
+            let mem = MemPlan::new(&mut mem_state, &ctx, &ctx.exact_local_addr, &mut free_slots);
             {
                 let mut search_scratch = NormalizeSearchScratch::default();
                 let mut planner =

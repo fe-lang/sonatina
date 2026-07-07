@@ -4074,7 +4074,7 @@ mod tests {
         liveness::Liveness,
         stackalloc::stackify::{
             builder::StackifyReachability,
-            planner::{MemPlan, Planner, test_utils::build_stackify_test_context},
+            planner::{MemPlan, MemState, Planner, test_utils::build_stackify_test_context},
             slots::{FreeSlotPools, SpillSlotPools},
             spill::SpillSet,
             sym_stack::SymStack,
@@ -5541,17 +5541,15 @@ func public %f() {
             let spill_obj = SecondaryMap::new();
             let mut free_slots = FreeSlotPools::default();
             let mut slots = SpillSlotPools::default();
-            let mem = MemPlan::new(
-                SpillSet::new(&spill_set),
-                &mut spill_requests,
-                &ctx,
-                &spill_obj,
-                &ctx.exact_local_addr,
-                &mut object_spill_requests,
-                &forced_object_spills,
-                &mut free_slots,
-                &mut slots,
-            );
+            let mut mem_state = MemState {
+                spill: SpillSet::new(&spill_set),
+                spill_obj: &spill_obj,
+                spill_requests: &mut spill_requests,
+                object_spill_requests: &mut object_spill_requests,
+                forced_object_spills: &forced_object_spills,
+                slots: &mut slots,
+            };
+            let mem = MemPlan::new(&mut mem_state, &ctx, &ctx.exact_local_addr, &mut free_slots);
 
             let mut stack = SymStack::entry_stack(func, false);
             let mut actions = crate::stackalloc::Actions::new();
@@ -5594,17 +5592,15 @@ func public %f() {
             let spill_obj = SecondaryMap::new();
             let mut free_slots = FreeSlotPools::default();
             let mut slots = SpillSlotPools::default();
-            let mem = MemPlan::new(
-                SpillSet::new(&spill_set),
-                &mut spill_requests,
-                &ctx,
-                &spill_obj,
-                &ctx.exact_local_addr,
-                &mut object_spill_requests,
-                &forced_object_spills,
-                &mut free_slots,
-                &mut slots,
-            );
+            let mut mem_state = MemState {
+                spill: SpillSet::new(&spill_set),
+                spill_obj: &spill_obj,
+                spill_requests: &mut spill_requests,
+                object_spill_requests: &mut object_spill_requests,
+                forced_object_spills: &forced_object_spills,
+                slots: &mut slots,
+            };
+            let mem = MemPlan::new(&mut mem_state, &ctx, &ctx.exact_local_addr, &mut free_slots);
 
             let mut stack = SymStack::entry_stack(func, false);
             let mut actions = crate::stackalloc::Actions::new();

@@ -29,17 +29,19 @@
 //!   into the caller's preserved stack segment.
 
 mod alloc;
-mod block_sim;
+mod block;
 mod br_table;
 mod builder;
-mod iteration;
+mod driver;
 mod planner;
+mod rescue;
 mod slots;
 mod spill;
 mod sym_stack;
 mod templates;
 mod terminal_chain;
 mod trace;
+mod uses;
 
 pub use alloc::StackifyAlloc;
 pub(crate) use builder::{

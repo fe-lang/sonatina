@@ -14,8 +14,9 @@ use sonatina_ir::{BlockId, Function, I256, ValueId, cfg::ControlFlowGraph};
 
 use super::{
     alloc::{SpillStorage, StackifyAlloc},
-    iteration::{IterationPlanner, operand_order_for_stackify},
-    planner::{NormalizeSearchScratch, must_use_object_storage},
+    block::operand_order_for_stackify,
+    driver::FunctionPlanner,
+    planner::{MemState, NormalizeSearchScratch, must_use_object_storage},
     slots::{FreeSlotPools, SpillSlotInterference, SpillSlotPools},
     spill::SpillSet,
     sym_stack::SymStack,
@@ -465,18 +466,21 @@ impl<'a> StackifyBuilder<'a> {
         }
         inherited_stack.insert(ctx.entry, (ctx.entry, entry_stack));
 
-        let mut planner = IterationPlanner::new(
-            ctx,
+        let mem = MemState {
             spill,
+            spill_obj: &spill_obj,
+            spill_requests: &mut spill_requests,
+            object_spill_requests: &mut object_spill_requests,
+            forced_object_spills,
             slots,
+        };
+        let mut planner = FunctionPlanner::new(
+            ctx,
+            mem,
             &mut templates,
             &terminal_chain_blocks,
             &interfaces.carry_in,
             &mut alloc,
-            &spill_obj,
-            &mut spill_requests,
-            &mut object_spill_requests,
-            forced_object_spills,
             inherited_stack,
             search_scratch,
             observer,

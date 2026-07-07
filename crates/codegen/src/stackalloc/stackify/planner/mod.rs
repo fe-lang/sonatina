@@ -38,6 +38,21 @@ pub(super) fn must_use_object_storage(
     scratch_spill_slots == 0 || scratch_live_values.contains(v) || forced_object_spills.contains(v)
 }
 
+/// Driver-owned memory-planning state, grouped so `MemPlan::new` takes it in one reborrow rather
+/// than six separate arguments. Lives in `FunctionPlanner`; a `MemPlan` borrows its fields for the
+/// span of a single instruction/edge plan.
+pub(super) struct MemState<'a> {
+    pub(super) spill: SpillSet<'a>,
+    /// Provisional per-iteration object-id assignment (`assign_spill_obj_ids`), read by `MemPlan`
+    /// during planning before storage is finalized.
+    pub(super) spill_obj:
+        &'a SecondaryMap<ValueId, Option<crate::isa::evm::static_arena_alloc::StackObjId>>,
+    pub(super) spill_requests: &'a mut BitSet<ValueId>,
+    pub(super) object_spill_requests: &'a mut BitSet<ValueId>,
+    pub(super) forced_object_spills: &'a BitSet<ValueId>,
+    pub(super) slots: &'a mut SpillSlotPools,
+}
+
 #[derive(Clone)]
 pub(super) struct MemPlanSnapshot {
     free_slots: FreeSlotPools,
@@ -60,32 +75,23 @@ pub(super) struct MemPlan<'a> {
 }
 
 impl<'a> MemPlan<'a> {
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
-        spill: SpillSet<'a>,
-        spill_requests: &'a mut BitSet<ValueId>,
+        mem: &'a mut MemState<'_>,
         ctx: &'a StackifyContext<'_>,
-        spill_obj: &'a SecondaryMap<
-            ValueId,
-            Option<crate::isa::evm::static_arena_alloc::StackObjId>,
-        >,
         exact_local_addr: &'a SecondaryMap<ValueId, Option<ExactLocalAddr>>,
-        object_spill_requests: &'a mut BitSet<ValueId>,
-        forced_object_spills: &'a BitSet<ValueId>,
         free_slots: &'a mut FreeSlotPools,
-        slots: &'a mut SpillSlotPools,
     ) -> Self {
         Self {
             scratch_live_values: &ctx.scratch_live_values,
             scratch_spill_slots: ctx.scratch_spill_slots,
-            spill_obj,
+            spill_obj: mem.spill_obj,
             exact_local_addr,
-            object_spill_requests,
-            forced_object_spills,
+            object_spill_requests: &mut *mem.object_spill_requests,
+            forced_object_spills: mem.forced_object_spills,
             free_slots,
-            slots,
+            slots: &mut *mem.slots,
             spill_slot_interference: &ctx.spill_slot_interference,
-            spill: SpillDiscovery::new(spill, spill_requests),
+            spill: SpillDiscovery::new(mem.spill, &mut *mem.spill_requests),
         }
     }
 

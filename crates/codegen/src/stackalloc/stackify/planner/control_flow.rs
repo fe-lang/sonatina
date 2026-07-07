@@ -163,7 +163,7 @@ mod tests {
             stackify::{
                 builder::StackifyReachability,
                 planner::{
-                    MemPlan, NormalizeSearchScratch, Planner,
+                    MemPlan, MemState, NormalizeSearchScratch, Planner,
                     test_utils::build_stackify_test_context,
                 },
                 slots::{FreeSlotPools, SpillSlotPools},
@@ -263,17 +263,15 @@ block1:
                 )
                 .expect("source scratch slot");
 
-            let mem = MemPlan::new(
-                SpillSet::new(&spill_set),
-                &mut spill_requests,
-                &ctx,
-                &spill_obj,
-                &ctx.exact_local_addr,
-                &mut object_spill_requests,
-                &forced_object_spills,
-                &mut free_slots,
-                &mut slots,
-            );
+            let mut mem_state = MemState {
+                spill: SpillSet::new(&spill_set),
+                spill_obj: &spill_obj,
+                spill_requests: &mut spill_requests,
+                object_spill_requests: &mut object_spill_requests,
+                forced_object_spills: &forced_object_spills,
+                slots: &mut slots,
+            };
+            let mem = MemPlan::new(&mut mem_state, &ctx, &ctx.exact_local_addr, &mut free_slots);
             let mut stack = SymStack::opaque_prefix_empty(false);
             let mut actions = Actions::new();
             let mut search_scratch = NormalizeSearchScratch::default();
@@ -383,17 +381,15 @@ block1:
                 )
                 .expect("source scratch slot");
 
-            let mem = MemPlan::new(
-                SpillSet::new(&spill_set),
-                &mut spill_requests,
-                &ctx,
-                &spill_obj,
-                &ctx.exact_local_addr,
-                &mut object_spill_requests,
-                &forced_object_spills,
-                &mut free_slots,
-                &mut slots,
-            );
+            let mut mem_state = MemState {
+                spill: SpillSet::new(&spill_set),
+                spill_obj: &spill_obj,
+                spill_requests: &mut spill_requests,
+                object_spill_requests: &mut object_spill_requests,
+                forced_object_spills: &forced_object_spills,
+                slots: &mut slots,
+            };
+            let mem = MemPlan::new(&mut mem_state, &ctx, &ctx.exact_local_addr, &mut free_slots);
             let mut stack = SymStack::opaque_prefix_empty(false);
             let mut actions = Actions::new();
             let mut search_scratch = NormalizeSearchScratch::default();
