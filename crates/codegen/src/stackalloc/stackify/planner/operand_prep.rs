@@ -214,12 +214,8 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
                 continue;
             }
 
-            let arg_imm = self.ctx.func.dfg.value_imm(arg);
-            let found_in_tail = (window_len..start_limit).any(|depth| {
-                self.stack
-                    .item_at(depth)
-                    .is_some_and(|item| self.operand_prep_item_matches_arg(item, arg, arg_imm))
-            });
+            let found_in_tail = (window_len..start_limit)
+                .any(|depth| self.stack.item_at(depth) == Some(&StackItem::Value(arg)));
             if found_in_tail {
                 mask |= 1u64 << idx;
             }
@@ -411,11 +407,8 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
         let last_use = consume_last_use.contains(arg);
         let preserve_needed =
             cache_preserve.contains(arg) || (self.ctx.retains_value(arg) && !last_use);
-        let copy_count = self.unary_operand_prep_copy_count(arg, arg_imm);
-        let top_matches = self
-            .stack
-            .top()
-            .is_some_and(|item| self.operand_prep_item_matches_arg(item, arg, arg_imm));
+        let copy_count = self.unary_operand_prep_copy_count(arg);
+        let top_matches = self.stack.top() == Some(&StackItem::Value(arg));
         let preserve_satisfied = !preserve_needed || copy_count >= 2;
         let surplus_last_use_penalty = cost.cost_pop().saturating_add(cost.cost_swap(1));
 
@@ -453,7 +446,7 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
             });
         }
 
-        if let Some(pos) = self.unary_operand_prep_find_arg(arg, arg_imm, 0, search_cfg.dup_max) {
+        if let Some(pos) = self.stack.find_reachable_value(arg, search_cfg.dup_max) {
             let emitted_cost = cost.cost_dup(pos as u8);
             candidates.push(UnaryOperandPrepCandidate {
                 modeled_cost: copy_cost(emitted_cost),
@@ -463,7 +456,7 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
             });
         }
 
-        if let Some(pos) = self.unary_operand_prep_find_arg(arg, arg_imm, 0, search_cfg.swap_max)
+        if let Some(pos) = self.stack.find_reachable_value(arg, search_cfg.swap_max)
             && pos != 0
             && preserve_satisfied
         {
@@ -479,12 +472,9 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
         if !arg_is_imm
             && !last_use
             && copy_count < 2
-            && let Some(pos) = self.unary_operand_prep_find_arg(
-                arg,
-                arg_imm,
-                search_cfg.dup_max,
-                search_cfg.swap_max,
-            )
+            && let Some(pos) =
+                self.stack
+                    .find_reachable_value_from(arg, search_cfg.dup_max, search_cfg.swap_max)
         {
             let emitted_cost = cost.cost_swap(pos as u8).saturating_add(cost.cost_dup(0));
             candidates.push(UnaryOperandPrepCandidate {
@@ -529,54 +519,12 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
         }
     }
 
-    fn operand_prep_item_matches_arg(
-        &self,
-        item: &StackItem,
-        arg: ValueId,
-        arg_imm: Option<Immediate>,
-    ) -> bool {
-        let StackItem::Value(value) = *item else {
-            return false;
-        };
-
-        if let Some(arg_imm) = arg_imm {
-            return self
-                .ctx
-                .func
-                .dfg
-                .value_imm(value)
-                .is_some_and(|imm| imm.as_i256() == arg_imm.as_i256());
-        }
-
-        value == arg
-    }
-
-    fn unary_operand_prep_copy_count(&self, arg: ValueId, arg_imm: Option<Immediate>) -> usize {
+    fn unary_operand_prep_copy_count(&self, arg: ValueId) -> usize {
         self.stack
             .iter()
             .take(self.stack.len_above_func_ret())
-            .filter(|item| self.operand_prep_item_matches_arg(item, arg, arg_imm))
+            .filter(|&item| item == &StackItem::Value(arg))
             .count()
-    }
-
-    fn unary_operand_prep_find_arg(
-        &self,
-        arg: ValueId,
-        arg_imm: Option<Immediate>,
-        start: usize,
-        max_depth: usize,
-    ) -> Option<usize> {
-        let limit = self.stack.len_above_func_ret().min(max_depth);
-        if start >= limit {
-            return None;
-        }
-
-        self.stack
-            .iter()
-            .skip(start)
-            .take(limit - start)
-            .position(|item| self.operand_prep_item_matches_arg(item, arg, arg_imm))
-            .map(|off| start + off)
     }
 
     fn inst_is_commutative(&self, inst: InstId) -> bool {
@@ -708,9 +656,7 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
     }
 
     fn stack_item_matches_arg(&self, depth: usize, arg: ValueId) -> bool {
-        self.stack.item_at(depth).is_some_and(|item| {
-            self.operand_prep_item_matches_arg(item, arg, self.ctx.func.dfg.value_imm(arg))
-        })
+        self.stack.item_at(depth) == Some(&StackItem::Value(arg))
     }
 
     fn stack_prefix_matches_and_preserved(
@@ -719,14 +665,8 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
         consume_last_use: &BitSet<ValueId>,
         cache_preserve: &BitSet<ValueId>,
     ) -> bool {
-        if args.is_empty() || self.stack.len_above_func_ret() < args.len() {
+        if args.is_empty() || !self.stack_prefix_matches(args) {
             return false;
-        }
-
-        for (depth, &arg) in args.iter().enumerate() {
-            if !self.stack_item_matches_arg(depth, arg) {
-                return false;
-            }
         }
 
         let mut checked = BitSet::default();
@@ -739,19 +679,20 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
                 continue;
             }
 
-            let arg_imm = self.ctx.func.dfg.value_imm(arg);
             let preserved_on_stack = self
                 .stack
                 .iter()
                 .take(stack_len)
                 .skip(args.len())
-                .any(|item| self.operand_prep_item_matches_arg(item, arg, arg_imm));
-            if !preserved_on_stack && (arg_imm.is_some() || !self.mem.spill_set().contains(arg)) {
+                .any(|item| item == &StackItem::Value(arg));
+            if !preserved_on_stack
+                && (self.ctx.func.dfg.value_is_imm(arg) || !self.mem.spill_set().contains(arg))
+            {
                 return false;
             }
         }
 
-        self.rename_immediate_slots_to_match(args)
+        true
     }
 
     fn prepare_trivial_binary_operands(
@@ -831,7 +772,9 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
             }
         }
 
-        if !self.rename_immediate_slots_to_match(args) || !self.stack_prefix_matches(args) {
+        // Immediates are canonicalized to one ValueId per word, so a successful replay leaves the
+        // operand prefix equal to `args` by plain ValueId equality; any mismatch falls back.
+        if !self.stack_prefix_matches(args) {
             *self.stack = stack_before;
             self.actions.truncate(actions_before);
             self.mem.restore(mem_before);
@@ -917,12 +860,9 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
                     .value_imm(v)
                     .expect("imm value missing payload");
                 if self.ctx.stack_caches_immediate(v)
-                    && let Some(pos) = self.unary_operand_prep_find_arg(
-                        v,
-                        Some(imm),
-                        prepared,
-                        self.ctx.reach.dup_max,
-                    )
+                    && let Some(pos) =
+                        self.stack
+                            .find_reachable_value_from(v, prepared, self.ctx.reach.dup_max)
                 {
                     self.stack.dup(pos, self.actions);
                     prepared += 1;
@@ -1857,11 +1797,7 @@ block0:
         let func_ref = parsed.debug.func_order[0];
 
         parsed.module.func_store.modify(func_ref, |func| {
-            let old_imm = func.dfg.make_imm_value(Immediate::I8(7));
-            let current_imm = func.dfg.make_value(Value::Immediate {
-                imm: Immediate::I8(7),
-                ty: Type::I8,
-            });
+            let imm = func.dfg.make_imm_value(Immediate::I8(7));
 
             let mut cfg = ControlFlowGraph::new();
             cfg.compute(func);
@@ -1949,8 +1885,10 @@ block0:
             let (_, _, actions, _) = run(&[*y, *x, *x, *y], &[*x, *y], &[], &[], false);
             assert_eq!(actions.as_slice(), &[Action::StackSwap(1)]);
 
-            let (stack, _, actions, _) = run(&[old_imm], &[current_imm], &[], &[], false);
-            assert_eq!(stack.item_at(0), Some(&StackItem::Value(current_imm)));
+            // Immediates are canonicalized to one ValueId per word before planning, so a stack
+            // slot already holding that ValueId satisfies the prefix check with no actions.
+            let (stack, _, actions, _) = run(&[imm], &[imm], &[], &[], false);
+            assert_eq!(stack.item_at(0), Some(&StackItem::Value(imm)));
             assert!(actions.is_empty());
         });
     }

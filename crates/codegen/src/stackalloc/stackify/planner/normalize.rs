@@ -15,36 +15,6 @@ use std::sync::{
 };
 
 impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
-    pub(super) fn rename_immediate_slots_to_match(&mut self, desired: &[ValueId]) -> bool {
-        for (depth, &want) in desired.iter().enumerate() {
-            if self.ctx.func.dfg.value_is_imm(want) {
-                let want_imm = self
-                    .ctx
-                    .func
-                    .dfg
-                    .value_imm(want)
-                    .expect("imm value missing payload")
-                    .as_i256();
-                let Some(StackItem::Value(cur)) = self.stack.item_at(depth) else {
-                    return false;
-                };
-                let cur_imm = self
-                    .ctx
-                    .func
-                    .dfg
-                    .value_imm(*cur)
-                    .expect("expected immediate value on stack")
-                    .as_i256();
-                if cur_imm != want_imm {
-                    return false;
-                }
-                self.stack.rename_value_at_depth(depth, want);
-            }
-        }
-
-        true
-    }
-
     pub(super) fn normalize_to_exact(&mut self, desired: &[ValueId]) {
         // Contract: rewrite the current symbolic stack (above the function return barrier, if any)
         // so that it matches `desired` exactly (top-first).
@@ -75,7 +45,9 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
             }
         }
 
-        if !self.rename_immediate_slots_to_match(desired) || !matches_exact(self.stack, desired) {
+        // Immediates are canonicalized to one ValueId per word, so a successful replay leaves the
+        // stack equal to `desired` by plain ValueId equality; any mismatch falls back.
+        if !matches_exact(self.stack, desired) {
             *self.stack = stack_before;
             self.actions.truncate(actions_before);
             self.mem.restore(mem_before);
@@ -125,7 +97,7 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
             };
 
         if plan.is_none() {
-            let base_len = common_suffix_len_semantic(self.ctx.func, self.stack, desired);
+            let base_len = self.stack.common_suffix_len(desired);
             let start_repair = limit.saturating_sub(base_len);
             let goal_repair = desired.len().saturating_sub(base_len);
 
@@ -190,7 +162,7 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
     }
 
     fn flush_rebuild(&mut self, desired: &[ValueId]) {
-        let base_len = common_suffix_len_semantic(self.ctx.func, self.stack, desired);
+        let base_len = self.stack.common_suffix_len(desired);
 
         // Pop everything above the common base suffix.
         while self.stack.len_above_func_ret() > base_len {
@@ -215,11 +187,10 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
             }
         }
 
-        assert!(
-            self.rename_immediate_slots_to_match(desired),
-            "flush_rebuild failed to restore immediate value ids"
+        debug_assert!(
+            matches_exact(self.stack, desired),
+            "flush_rebuild must leave the stack equal to `desired`"
         );
-        debug_assert!(matches_exact(self.stack, desired));
     }
 }
 
@@ -302,48 +273,4 @@ fn dump_failed_normalization(stack: &SymStack, desired: &[ValueId]) {
         .collect();
     eprintln!("normalize_to_exact: start={start:?}");
     eprintln!("normalize_to_exact: desired={desired:?}");
-}
-
-fn common_suffix_len_semantic(
-    func: &sonatina_ir::Function,
-    stack: &SymStack,
-    desired: &[ValueId],
-) -> usize {
-    let limit = stack.len_above_func_ret();
-    let max = limit.min(desired.len());
-    let mut k = 0usize;
-
-    for off in 0..max {
-        let depth = limit - 1 - off;
-        let want = desired[desired.len() - 1 - off];
-
-        let Some(item) = stack.item_at(depth) else {
-            break;
-        };
-        let StackItem::Value(cur) = item else {
-            break;
-        };
-        let cur = *cur;
-
-        if func.dfg.value_is_imm(want) {
-            if !func.dfg.value_is_imm(cur) {
-                break;
-            }
-            let Some(want_imm) = func.dfg.value_imm(want) else {
-                break;
-            };
-            let Some(cur_imm) = func.dfg.value_imm(cur) else {
-                break;
-            };
-            if want_imm.as_i256() != cur_imm.as_i256() {
-                break;
-            }
-        } else if cur != want {
-            break;
-        }
-
-        k += 1;
-    }
-
-    k
 }
