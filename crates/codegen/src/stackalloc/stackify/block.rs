@@ -302,7 +302,7 @@ impl<'d, 'a, 'ctx, O: StackifyObserver> BlockPlanner<'d, 'a, 'ctx, O> {
 
         for succ in dests.iter().copied() {
             self.driver
-                .record_branch_edge(&mut self.state, succ, post_branch_stack.clone());
+                .record_branch_edge(&mut self.state, succ, &post_branch_stack);
         }
     }
 
@@ -338,11 +338,11 @@ impl<'d, 'a, 'ctx, O: StackifyObserver> BlockPlanner<'d, 'a, 'ctx, O> {
 
         for case in case_stacks {
             self.driver
-                .record_br_table_edge(&mut self.state, case.dest, case.post_compare_stack);
+                .record_br_table_edge(&mut self.state, case.dest, &case.post_compare_stack);
         }
         if let Some(default) = default {
             self.driver
-                .record_br_table_edge(&mut self.state, default, default_stack);
+                .record_br_table_edge(&mut self.state, default, &default_stack);
         }
 
         self.driver.observer().on_inst_br_table(inst);

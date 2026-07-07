@@ -1,6 +1,5 @@
 use cranelift_entity::SecondaryMap;
 use sonatina_ir::{BlockId, InstId, ValueId};
-use std::collections::BTreeMap;
 
 use crate::{bitset::BitSet, stackalloc::Actions};
 
@@ -8,12 +7,10 @@ use super::{
     alloc::StackifyAlloc,
     block::{BlockPlanner, BlockSimState, PlannerActionSink},
     builder::StackifyContext,
+    entry::{DeferredEdge, EdgeDisposition, EntryTable, RecordEdge, ResolvedEntry},
     planner::{self, MemState, NormalizeSearchScratch, Planner},
     slots::{FreeSlotPools, SlotPool},
     sym_stack::SymStack,
-    templates::{
-        BlockTemplate, TransferOrder, canonical_transfer_order, choose_transfer, project_transfer,
-    },
     trace::StackifyObserver,
     uses::UseTracker,
 };
@@ -23,26 +20,14 @@ pub(super) struct FunctionPlanner<'a, 'ctx, O: StackifyObserver> {
     /// Memory-planning state (spill set, provisional object ids, spill/object requests, slot
     /// pools) handed to each `MemPlan` in one reborrow.
     mem: MemState<'a>,
-    templates: &'a mut SecondaryMap<BlockId, BlockTemplate>,
-    terminal_chain_blocks: &'a BitSet<BlockId>,
     carry_in: &'a SecondaryMap<BlockId, BitSet<ValueId>>,
     alloc: &'a mut StackifyAlloc,
-    inherited_stack: BTreeMap<BlockId, (BlockId, SymStack)>,
-    pending_edges: BTreeMap<BlockId, Vec<PendingEdge>>,
-    planned_blocks: BitSet<BlockId>,
+    /// The block-entry state machine: classification + `Pending -> Frozen` lifecycle, owning the
+    /// frozen templates. Replaces the old `templates` / `inherited_stack` / `pending_edges` /
+    /// `planned_blocks` / `terminal_chain_blocks` tables.
+    entries: EntryTable,
     search_scratch: &'a mut NormalizeSearchScratch,
     observer: &'a mut O,
-}
-
-struct PendingEdge {
-    pred: BlockId,
-    inst: InstId,
-    stack: SymStack,
-    free_slots: FreeSlotPools,
-    action_start: usize,
-    /// Index of this edge's `DeferredExit` event in the observer's trace (0 for `NullObserver`),
-    /// used to backfill the exit fixup actions once the merge template is resolved.
-    trace_token: usize,
 }
 
 impl<'a, 'ctx, O: StackifyObserver> FunctionPlanner<'a, 'ctx, O> {
@@ -50,24 +35,18 @@ impl<'a, 'ctx, O: StackifyObserver> FunctionPlanner<'a, 'ctx, O> {
     pub(super) fn new(
         ctx: &'a StackifyContext<'ctx>,
         mem: MemState<'a>,
-        templates: &'a mut SecondaryMap<BlockId, BlockTemplate>,
-        terminal_chain_blocks: &'a BitSet<BlockId>,
         carry_in: &'a SecondaryMap<BlockId, BitSet<ValueId>>,
         alloc: &'a mut StackifyAlloc,
-        inherited_stack: BTreeMap<BlockId, (BlockId, SymStack)>,
+        entries: EntryTable,
         search_scratch: &'a mut NormalizeSearchScratch,
         observer: &'a mut O,
     ) -> Self {
         Self {
             ctx,
             mem,
-            templates,
-            terminal_chain_blocks,
             carry_in,
             alloc,
-            inherited_stack,
-            pending_edges: BTreeMap::new(),
-            planned_blocks: BitSet::default(),
+            entries,
             search_scratch,
             observer,
         }
@@ -99,37 +78,65 @@ impl<'a, 'ctx, O: StackifyObserver> FunctionPlanner<'a, 'ctx, O> {
             self.plan_block(block);
         }
 
-        debug_assert!(
-            self.pending_edges.is_empty(),
-            "unresolved stackify edges remain"
-        );
+        self.entries.debug_assert_no_pending_edges();
     }
 
     fn plan_block(&mut self, block: BlockId) {
         let mut free_slots: FreeSlotPools = FreeSlotPools::default();
-        let mut prologue: Actions = Actions::new();
 
         let uses = UseTracker::for_block(self.ctx, block);
-        self.resolve_pending_edges(block);
+        let (stack, prologue) = self.resolve_entry(block, &uses, &mut free_slots);
 
-        let inherited = self.inherited_stack.remove(&block);
-        if self.terminal_chain_blocks.contains(block) {
-            self.freeze_template(block, TransferOrder::new());
-        } else if let Some((_pred, stack)) = inherited.as_ref() {
-            self.freeze_template_from_stack(block, stack);
-        } else if block != self.ctx.entry {
-            self.freeze_template_canonical(block);
+        let state = BlockSimState::new(block, stack, free_slots, prologue, uses);
+        let state = BlockPlanner::new(self, state).run();
+
+        // The block walk injects the prologue on every non-phi instruction (including the
+        // terminator that every block has), so a non-empty prologue is always injected.
+        debug_assert!(
+            state.prologue.is_empty() || state.injected_prologue,
+            "prologue was not injected during the block walk"
+        );
+    }
+
+    /// Resolve `block`'s entry: freeze its template (via the entry table's single transfer-selection
+    /// point), plan the entry-specific fixups, and return the initial stack plus any prologue
+    /// actions. This subsumes the old `resolve_pending_edges` + the template/stack selection that
+    /// used to be inlined in `plan_block`.
+    fn resolve_entry(
+        &mut self,
+        block: BlockId,
+        uses: &UseTracker,
+        free_slots: &mut FreeSlotPools,
+    ) -> (SymStack, Actions) {
+        let mut prologue = Actions::new();
+        let resolved = self
+            .entries
+            .freeze_entry(self.ctx, &self.carry_in[block], block);
+
+        // Merge templates fix up their deferred edges *before* the block header fires, reproducing
+        // the old `resolve_pending_edges` ordering (deferred exit actions are traced ahead of
+        // `on_block_header`).
+        if let ResolvedEntry::Merge { deferred } = resolved {
+            self.plan_deferred_edges(block, deferred);
+            self.emit_block_header(block);
+            let stack =
+                SymStack::from_template(self.entries.template(block), self.ctx.has_internal_return);
+            return (stack, prologue);
         }
 
-        self.observer
-            .on_block_header(self.ctx.func, block, &self.templates[block]);
-        self.planned_blocks.insert(block);
+        self.emit_block_header(block);
 
-        let stack = if self.terminal_chain_blocks.contains(block) {
-            SymStack::opaque_prefix_empty(self.ctx.has_internal_return)
-        } else if let Some((pred, mut inh)) = inherited {
-            // Dynamic entry stack (single predecessor).
-            if block != self.ctx.entry {
+        let stack = match resolved {
+            ResolvedEntry::Merge { .. } => unreachable!("merge resolved above"),
+            ResolvedEntry::Opaque => SymStack::opaque_prefix_empty(self.ctx.has_internal_return),
+            ResolvedEntry::Fallback => {
+                SymStack::from_template(self.entries.template(block), self.ctx.has_internal_return)
+            }
+            ResolvedEntry::Entry { stack } => stack,
+            ResolvedEntry::Inherited {
+                pred,
+                stack: mut inh,
+            } => {
                 debug_assert_eq!(
                     self.ctx.cfg.pred_num_of(block),
                     1,
@@ -143,68 +150,29 @@ impl<'a, 'ctx, O: StackifyObserver> FunctionPlanner<'a, 'ctx, O> {
                     uses.live_future(),
                     uses.live_out(),
                 );
-                let has_phi_params = !self.ctx.phi_results[block].is_empty();
 
-                // Single-predecessor blocks without phis do not need exact entry
-                // template normalization. Keeping the inherited stack avoids pointless bottom
-                // reshuffling that can cascade into SWAP/POP churn.
-                if has_phi_params {
-                    let tmpl = self.templates[block].clone();
-                    self.with_actions_planner(
-                        &mut inh,
-                        &mut prologue,
-                        &mut free_slots,
-                        |planner| {
-                            planner.plan_edge_fixup_to_template(&tmpl, pred, block);
-                        },
-                    );
+                // Single-predecessor blocks without phis do not need exact entry template
+                // normalization. Keeping the inherited stack avoids pointless bottom reshuffling
+                // that can cascade into SWAP/POP churn.
+                if !self.ctx.phi_results[block].is_empty() {
+                    let tmpl = self.entries.template(block).clone();
+                    self.with_actions_planner(&mut inh, &mut prologue, free_slots, |planner| {
+                        planner.plan_edge_fixup_to_template(&tmpl, pred, block);
+                    });
                 }
                 self.observer.on_block_prologue(&prologue);
+                inh
             }
-            inh
-        } else {
-            SymStack::from_template(&self.templates[block], self.ctx.has_internal_return)
         };
 
-        let state = BlockSimState::new(block, stack, free_slots, prologue, uses);
-        let state = BlockPlanner::new(self, state).run();
-
-        // The block walk injects the prologue on every non-phi instruction (including the
-        // terminator that every block has), so a non-empty prologue is always injected.
-        debug_assert!(
-            state.prologue.is_empty() || state.injected_prologue,
-            "prologue was not injected during the block walk"
-        );
+        (stack, prologue)
     }
 
-    fn resolve_pending_edges(&mut self, block: BlockId) {
-        let Some(mut edges) = self.pending_edges.remove(&block) else {
-            return;
-        };
-        debug_assert!(
-            !self.inherited_stack.contains_key(&block),
-            "pending merge edges cannot also inherit one stack"
-        );
-        debug_assert!(
-            !self.planned_blocks.contains(block),
-            "pending edge target already planned"
-        );
-
-        let projected: Vec<(BlockId, TransferOrder)> = edges
-            .iter()
-            .map(|edge| {
-                (
-                    edge.pred,
-                    project_transfer(&edge.stack, &self.carry_in[block]),
-                )
-            })
-            .collect();
-        if !projected.is_empty() {
-            self.freeze_template(block, choose_transfer(self.ctx, block, &projected));
-        }
-
-        let tmpl = self.templates[block].clone();
-        for edge in edges.iter_mut() {
+    /// Fix each deferred merge edge up to the now-frozen template, in arrival order, backfilling the
+    /// observer's deferred-exit trace. Mirrors the old `resolve_pending_edges` fixup loop.
+    fn plan_deferred_edges(&mut self, block: BlockId, mut deferred: Vec<DeferredEdge>) {
+        let tmpl = self.entries.template(block).clone();
+        for edge in deferred.iter_mut() {
             debug_assert_eq!(
                 self.alloc.pre_actions[edge.inst].len(),
                 edge.action_start,
@@ -223,21 +191,9 @@ impl<'a, 'ctx, O: StackifyObserver> FunctionPlanner<'a, 'ctx, O> {
         }
     }
 
-    fn freeze_template_from_stack(&mut self, block: BlockId, stack: &SymStack) {
-        self.freeze_template(block, project_transfer(stack, &self.carry_in[block]));
-    }
-
-    fn freeze_template_canonical(&mut self, block: BlockId) {
-        let transfer = canonical_transfer_order(
-            &self.carry_in[block],
-            &self.ctx.dom_depth,
-            &self.ctx.def_info,
-        );
-        self.freeze_template(block, transfer);
-    }
-
-    fn freeze_template(&mut self, block: BlockId, transfer: TransferOrder) {
-        self.templates[block].freeze_transfer(transfer);
+    fn emit_block_header(&mut self, block: BlockId) {
+        self.observer
+            .on_block_header(self.ctx.func, block, self.entries.template(block));
     }
 
     pub(super) fn ctx(&self) -> &StackifyContext<'ctx> {
@@ -316,11 +272,11 @@ impl<'a, 'ctx, O: StackifyObserver> FunctionPlanner<'a, 'ctx, O> {
         (&mut *self.observer, &*self.alloc)
     }
 
-    /// Record a `jump` edge to `dest`, applying immediate normalization / inheritance / pending
-    /// deferral as appropriate. Returns `true` when the edge was deferred (a pending merge edge):
-    /// its exit + jump trace has already been emitted here (synchronously with capturing the
-    /// deferred trace token), so the caller emits nothing further. Returns `false` for a resolved
-    /// edge, so the caller emits the exit-normalization actions and the jump trace.
+    /// Record a `jump` edge to `dest`. Returns `true` when the edge was deferred (a pending merge
+    /// edge): its exit + jump trace has already been emitted synchronously with capturing the
+    /// deferred trace token, so the caller emits nothing further. Returns `false` for an opaque,
+    /// inherited, or fixed-up-now edge, so the caller emits the exit-normalization actions and the
+    /// jump trace.
     pub(super) fn record_jump_edge(
         &mut self,
         state: &mut BlockSimState,
@@ -328,86 +284,63 @@ impl<'a, 'ctx, O: StackifyObserver> FunctionPlanner<'a, 'ctx, O> {
         dest: BlockId,
         action_start: usize,
     ) -> bool {
-        if self.terminal_chain_blocks.contains(dest) {
-        } else if self.ctx.cfg.pred_num_of(dest) > 1
-            && dest != self.ctx.entry
-            && !self.planned_blocks.contains(dest)
-        {
-            debug_assert!(
-                self.ctx.scc.is_reachable(dest),
-                "pending edge target must be reachable"
-            );
-            self.pending_edges
-                .entry(dest)
-                .or_default()
-                .push(PendingEdge {
-                    pred: state.block,
-                    inst,
-                    stack: state.stack.clone(),
-                    free_slots: state.free_slots.clone(),
-                    action_start,
-                    trace_token: self.observer.on_deferred_inst_jump(inst, dest),
-                });
-            return true;
-        } else if self.ctx.cfg.pred_num_of(dest) == 1
-            && dest != self.ctx.entry
-            && !self.planned_blocks.contains(dest)
-        {
-            self.inherited_stack
-                .entry(dest)
-                .or_insert_with(|| (state.block, state.stack.clone()));
-        } else {
-            let tmpl = self.templates[dest].clone();
-            let src = state.block;
-            self.with_planner(
-                &mut state.stack,
-                &mut state.free_slots,
-                PlannerActionSink::Pre(inst),
-                |planner| planner.plan_edge_fixup_to_template(&tmpl, src, dest),
-            );
+        let disposition = self.entries.record_edge(
+            self.ctx,
+            self.observer,
+            RecordEdge::Jump {
+                inst,
+                free_slots: &state.free_slots,
+                action_start,
+            },
+            state.block,
+            dest,
+            &state.stack,
+        );
+        match disposition {
+            EdgeDisposition::Deferred => true,
+            EdgeDisposition::Recorded => false,
+            EdgeDisposition::FixupNow(tmpl) => {
+                let src = state.block;
+                self.with_planner(
+                    &mut state.stack,
+                    &mut state.free_slots,
+                    PlannerActionSink::Pre(inst),
+                    |planner| planner.plan_edge_fixup_to_template(&tmpl, src, dest),
+                );
+                false
+            }
         }
-        false
     }
 
     pub(super) fn record_branch_edge(
         &mut self,
         state: &mut BlockSimState,
         succ: BlockId,
-        stack: SymStack,
+        stack: &SymStack,
     ) {
-        assert!(
-            !self.planned_blocks.contains(succ),
-            "multiway branch edge to already-planned block {succ:?}: run StackifyEdgeSplitter \
-             before stackify to split in-cycle multiway edges"
+        self.entries.record_edge(
+            self.ctx,
+            self.observer,
+            RecordEdge::Multiway { label: "branch" },
+            state.block,
+            succ,
+            stack,
         );
-        debug_assert_eq!(
-            self.ctx.cfg.pred_num_of(succ),
-            1,
-            "no critical edges: branch target must be single-pred"
-        );
-        self.inherited_stack
-            .entry(succ)
-            .or_insert_with(|| (state.block, stack));
     }
 
     pub(super) fn record_br_table_edge(
         &mut self,
         state: &mut BlockSimState,
         succ: BlockId,
-        stack: SymStack,
+        stack: &SymStack,
     ) {
-        assert!(
-            !self.planned_blocks.contains(succ),
-            "multiway br_table edge to already-planned block {succ:?}: run StackifyEdgeSplitter \
-             before stackify to split in-cycle multiway edges"
+        self.entries.record_edge(
+            self.ctx,
+            self.observer,
+            RecordEdge::Multiway { label: "br_table" },
+            state.block,
+            succ,
+            stack,
         );
-        debug_assert_eq!(
-            self.ctx.cfg.pred_num_of(succ),
-            1,
-            "no critical edges: br_table target must be single-pred"
-        );
-        self.inherited_stack
-            .entry(succ)
-            .or_insert_with(|| (state.block, stack));
     }
 }

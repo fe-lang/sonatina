@@ -7,6 +7,9 @@
 //!   - `T(B)` is a transfer region: live-in, non-phi values in a chosen order.
 //!     - `T(B)` is frozen from the first real predecessor stack, a chosen pending merge stack, or
 //!       a deterministic fallback when the block must be emitted before any predecessor is planned.
+//!   - How each block obtains its entry stack (opaque terminal chain / inherited single-pred /
+//!     frozen merge / function entry) and the `Pending -> Frozen` freeze lifecycle live in one
+//!     place: the block-entry state machine in `entry.rs` (`record_edge` + `resolve_entry`).
 //! - For merge blocks, all incoming edges are normalized to the same `StackIn(B)` (often a no-op);
 //!   spilled phi results are stored directly on the incoming edge instead of being carried in
 //!   `P(B)`.
@@ -33,6 +36,7 @@ mod block;
 mod br_table;
 mod builder;
 mod driver;
+mod entry;
 mod planner;
 mod rescue;
 mod slots;

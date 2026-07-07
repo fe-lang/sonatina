@@ -278,8 +278,7 @@ block1:
             let mut planner =
                 Planner::new(&ctx, &mut stack, &mut actions, mem, &mut search_scratch);
 
-            let mut template = BlockTemplate::new(smallvec![]);
-            template.freeze_transfer(smallvec![]);
+            let template = BlockTemplate::new(smallvec![], smallvec![]);
             planner.plan_edge_fixup_to_template(&template, BlockId(0), BlockId(1));
 
             assert_eq!(
@@ -396,8 +395,7 @@ block1:
             let mut planner =
                 Planner::new(&ctx, &mut stack, &mut actions, mem, &mut search_scratch);
 
-            let mut template = BlockTemplate::new(smallvec![stack_phi]);
-            template.freeze_transfer(smallvec![]);
+            let template = BlockTemplate::new(smallvec![stack_phi], smallvec![]);
             planner.plan_edge_fixup_to_template(&template, BlockId(0), BlockId(1));
 
             assert_eq!(

@@ -16,12 +16,13 @@ use super::{
     alloc::{SpillStorage, StackifyAlloc},
     block::operand_order_for_stackify,
     driver::FunctionPlanner,
+    entry::EntryTable,
     planner::{MemState, NormalizeSearchScratch, must_use_object_storage},
     slots::{FreeSlotPools, SpillSlotInterference, SpillSlotPools},
     spill::SpillSet,
     sym_stack::SymStack,
     templates::{
-        BlockTemplate, DefInfo, compute_block_interfaces, compute_def_info, compute_dom_depth,
+        DefInfo, compute_block_interfaces, compute_def_info, compute_dom_depth,
         compute_phi_out_sources, compute_phi_results, function_has_internal_return,
     },
     terminal_chain::compute_terminal_chain_blocks,
@@ -444,8 +445,6 @@ impl<'a> StackifyBuilder<'a> {
         let spill_obj = assign_spill_obj_ids(ctx.func, spill, &ctx.exact_local_addr);
         let interfaces = compute_block_interfaces(ctx, spill);
 
-        let mut templates = initial_templates(ctx, &interfaces.params);
-
         let mut alloc = StackifyAlloc {
             pre_actions: SecondaryMap::new(),
             post_actions: SecondaryMap::new(),
@@ -457,14 +456,13 @@ impl<'a> StackifyBuilder<'a> {
         let mut spill_requests: BitSet<ValueId> = BitSet::default();
         let terminal_chain_blocks = compute_terminal_chain_blocks(ctx, &interfaces);
 
-        // Blocks that are reached from multi-way branches inherit a dynamic stack and
-        // run an entry normalization prologue (single-pred only; critical edges split).
-        let mut inherited_stack: BTreeMap<BlockId, (BlockId, SymStack)> = BTreeMap::new();
+        // The entry block enters with its ABI stack (function args ++ optional return address); the
+        // entry-state machine seeds this as the entry's inherited predecessor stack.
         let mut entry_stack = SymStack::entry_stack(ctx.func, ctx.has_internal_return);
         for (idx, &arg) in ctx.func.arg_values.iter().enumerate() {
             entry_stack.rename_value_at_depth(idx, ctx.canonicalize_value(arg));
         }
-        inherited_stack.insert(ctx.entry, (ctx.entry, entry_stack));
+        let entries = EntryTable::classify(ctx, &interfaces, &terminal_chain_blocks, entry_stack);
 
         let mem = MemState {
             spill,
@@ -477,11 +475,9 @@ impl<'a> StackifyBuilder<'a> {
         let mut planner = FunctionPlanner::new(
             ctx,
             mem,
-            &mut templates,
-            &terminal_chain_blocks,
             &interfaces.carry_in,
             &mut alloc,
-            inherited_stack,
+            entries,
             search_scratch,
             observer,
         );
@@ -569,17 +565,6 @@ fn compute_hot_stack_cached_immediates(
     }
 
     hot
-}
-
-fn initial_templates(
-    ctx: &StackifyContext<'_>,
-    params: &SecondaryMap<BlockId, SmallVec<[ValueId; 4]>>,
-) -> SecondaryMap<BlockId, BlockTemplate> {
-    let mut templates = SecondaryMap::new();
-    for block in ctx.func.layout.iter_block() {
-        templates[block] = BlockTemplate::new(params[block].clone());
-    }
-    templates
 }
 
 fn assign_spill_obj_ids(

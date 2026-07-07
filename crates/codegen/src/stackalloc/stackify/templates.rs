@@ -19,28 +19,24 @@ pub(super) struct DefInfo {
     def_index: u32,
 }
 
+/// A block's frozen entry template `StackIn(B) = P(B) ++ T(B)`. Constructed frozen (transfer
+/// already selected); the freeze lifecycle lives in `entry.rs`, so there is no lazy "freeze
+/// later" step here.
 #[derive(Clone, Debug, Default)]
 pub(super) struct BlockTemplate {
     /// Stack-resident parameter prefix (entry args; non-spilled phi results elsewhere).
     pub(super) params: SmallVec<[ValueId; 4]>,
     /// Transfer region (top-first).
-    transfer: Option<TransferOrder>,
+    transfer: TransferOrder,
 }
 
 impl BlockTemplate {
-    pub(super) fn new(params: SmallVec<[ValueId; 4]>) -> Self {
-        Self {
-            params,
-            transfer: None,
-        }
+    pub(super) fn new(params: SmallVec<[ValueId; 4]>, transfer: TransferOrder) -> Self {
+        Self { params, transfer }
     }
 
     pub(super) fn transfer(&self) -> &TransferOrder {
-        self.transfer.as_ref().expect("block template is frozen")
-    }
-
-    pub(super) fn freeze_transfer(&mut self, transfer: TransferOrder) {
-        self.transfer.get_or_insert(transfer);
+        &self.transfer
     }
 }
 
