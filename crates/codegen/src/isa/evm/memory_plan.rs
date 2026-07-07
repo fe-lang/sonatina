@@ -2,7 +2,7 @@ use cranelift_entity::SecondaryMap;
 use rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
-use sonatina_ir::{BlockId, InstId, Module, ValueId, module::FuncRef};
+use sonatina_ir::{BlockId, InstId, Module, ValueId, cfg::ControlFlowGraph, module::FuncRef};
 
 use crate::{
     bitset::BitSet,
@@ -16,6 +16,7 @@ use super::{
     malloc_plan::MallocEscapeKind,
     placement_search::{FuncPlacementEval, solve_func_placement},
     ptr_escape::PtrEscapeSummary,
+    ptr_provenance::{Provenance, ProvenanceInfo},
     static_arena_alloc::{
         FuncStackObjects, LiveRegion, ObjFacts, StackObj, StackObjId, StackObjKind,
         StaticArenaAllocCtx,
@@ -542,9 +543,19 @@ pub struct SaveRun {
 }
 
 pub(crate) struct FuncPreAnalysis {
+    pub(crate) cfg: ControlFlowGraph,
     pub(crate) inst_liveness: InstLiveness,
     pub(crate) block_order: Vec<BlockId>,
     pub(crate) value_aliases: SecondaryMap<ValueId, Option<ValueId>>,
+    /// Pointer provenance computed with the section's escape summaries.
+    pub(crate) prov: ProvenanceInfo,
+    /// Value provenance computed with all-conservative callee summaries.
+    /// Heap bounds deliberately use this weaker variant: they must hold even
+    /// where the real summaries would allow more reuse (see heap_plan).
+    pub(crate) prov_conservative_value: SecondaryMap<ValueId, Provenance>,
+    /// Instruction count at bundle-build time; used to assert the source IR
+    /// is not mutated between analysis and use.
+    pub(crate) inst_count: usize,
 }
 
 pub(crate) struct MachineStackifyAnalysis {
@@ -570,6 +581,15 @@ pub(crate) fn compute_semantic_program_memory_plan(
         .map(|func| {
             let analysis = analyses.get(&func).expect("missing FuncPreAnalysis");
             let stack = module.func_store.view(func, |function| {
+                debug_assert_eq!(
+                    analysis.inst_count,
+                    function
+                        .layout
+                        .iter_block()
+                        .map(|b| function.layout.iter_inst(b).count())
+                        .sum::<usize>(),
+                    "stale FuncPreAnalysis: source IR changed since the analysis bundle was built"
+                );
                 alloc_ctx.compute_func_semantic_stack_objects(func, function, analysis)
             });
             (func, stack)

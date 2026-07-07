@@ -58,7 +58,7 @@ fn plan_test_ctx_from_src(src: &str) -> PlanTestCtx {
         parsed.module.func_store.modify(func, |function| {
             analyses.insert(
                 func,
-                compute_test_pre_analysis(function, &parsed.module.ctx, &backend),
+                compute_test_pre_analysis(function, &parsed.module.ctx, &backend, &ptr_escape),
             );
         });
     }
@@ -93,6 +93,7 @@ fn compute_test_pre_analysis(
     function: &mut Function,
     module: &ModuleCtx,
     backend: &EvmBackend,
+    ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
 ) -> memory_plan::FuncPreAnalysis {
     let mut cfg = ControlFlowGraph::new();
     cfg.compute(function);
@@ -108,10 +109,32 @@ fn compute_test_pre_analysis(
     let mut inst_liveness = InstLiveness::new();
     inst_liveness.compute(function, &cfg, &liveness);
 
+    let prov = crate::isa::evm::ptr_provenance::compute_provenance(
+        function,
+        module,
+        &backend.isa,
+        |callee| PtrEscapeSummary::get_or_conservative(ptr_escape, module, callee),
+    );
+    let prov_conservative_value = crate::isa::evm::ptr_provenance::compute_value_provenance(
+        function,
+        module,
+        &backend.isa,
+        |callee| PtrEscapeSummary::conservative_unknown_ctx(module, callee),
+    );
+    let inst_count = function
+        .layout
+        .iter_block()
+        .map(|block| function.layout.iter_inst(block).count())
+        .sum();
+
     memory_plan::FuncPreAnalysis {
-        inst_liveness,
         block_order: dom.rpo().to_owned(),
         value_aliases: backend.compute_high_evm_value_aliases(function, module),
+        cfg,
+        inst_liveness,
+        prov,
+        prov_conservative_value,
+        inst_count,
     }
 }
 
@@ -1435,7 +1458,7 @@ block0:
         parsed.module.func_store.modify(func, |function| {
             analyses.insert(
                 func,
-                compute_test_pre_analysis(function, &parsed.module.ctx, &backend),
+                compute_test_pre_analysis(function, &parsed.module.ctx, &backend, &ptr_escape),
             );
         });
     }
@@ -1550,7 +1573,7 @@ block0:
         parsed.module.func_store.modify(func, |function| {
             analyses.insert(
                 func,
-                compute_test_pre_analysis(function, &parsed.module.ctx, &backend),
+                compute_test_pre_analysis(function, &parsed.module.ctx, &backend, &ptr_escape),
             );
         });
     }
@@ -1631,7 +1654,7 @@ block0:
         parsed.module.func_store.modify(func, |function| {
             analyses.insert(
                 func,
-                compute_test_pre_analysis(function, &parsed.module.ctx, &backend),
+                compute_test_pre_analysis(function, &parsed.module.ctx, &backend, &ptr_escape),
             );
         });
     }
@@ -1723,7 +1746,7 @@ block0:
         parsed.module.func_store.modify(func, |function| {
             pre_analyses.insert(
                 func,
-                compute_test_pre_analysis(function, &parsed.module.ctx, &backend),
+                compute_test_pre_analysis(function, &parsed.module.ctx, &backend, &ptr_escape),
             );
             stack_allocs.insert(func, compute_test_stackify_alloc(function));
         });
@@ -2906,7 +2929,7 @@ block0:
         parsed.module.func_store.modify(func, |function| {
             pre_analyses.insert(
                 func,
-                compute_test_pre_analysis(function, &parsed.module.ctx, &backend),
+                compute_test_pre_analysis(function, &parsed.module.ctx, &backend, &ptr_escape),
             );
             stack_allocs.insert(func, compute_test_stackify_alloc(function));
         });
@@ -3048,7 +3071,7 @@ block2:
         parsed.module.func_store.modify(func, |function| {
             pre_analyses.insert(
                 func,
-                compute_test_pre_analysis(function, &parsed.module.ctx, &backend),
+                compute_test_pre_analysis(function, &parsed.module.ctx, &backend, &ptr_escape),
             );
             stack_allocs.insert(func, compute_test_stackify_alloc(function));
         });

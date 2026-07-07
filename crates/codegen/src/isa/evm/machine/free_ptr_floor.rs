@@ -10,10 +10,10 @@ use sonatina_ir::{
 use std::iter;
 
 use crate::isa::evm::{
-    EvmBackend, FREE_PTR_SLOT, WORD_BYTES,
+    FREE_PTR_SLOT, WORD_BYTES,
+    memory_plan::FuncPreAnalysis,
     prepare::{memory_access_may_touch_free_ptr_slot, value_imm_u32},
-    ptr_escape::PtrEscapeSummary,
-    ptr_provenance::{Provenance, compute_value_provenance},
+    ptr_provenance::Provenance,
 };
 
 use super::placement::MallocPlacement;
@@ -90,8 +90,7 @@ pub(crate) struct ProgramFreePtrFloorInput<'a> {
     pub(crate) funcs: &'a [FuncRef],
     pub(crate) section_entry: FuncRef,
     pub(crate) section_includes: &'a [FuncRef],
-    pub(crate) backend: &'a EvmBackend,
-    pub(crate) ptr_escape: &'a FxHashMap<FuncRef, PtrEscapeSummary>,
+    pub(crate) analyses: &'a FxHashMap<FuncRef, FuncPreAnalysis>,
     pub(crate) source_is: &'a EvmInstSet,
     pub(crate) malloc_placements: &'a FxHashMap<FuncRef, FxHashMap<InstId, MallocPlacement>>,
     pub(crate) free_ptr_write_summaries: &'a FxHashMap<FuncRef, bool>,
@@ -105,8 +104,7 @@ pub(crate) fn compute_program_free_ptr_floor_before_malloc(
         funcs,
         section_entry,
         section_includes,
-        backend,
-        ptr_escape,
+        analyses,
         source_is,
         malloc_placements,
         free_ptr_write_summaries,
@@ -115,8 +113,7 @@ pub(crate) fn compute_program_free_ptr_floor_before_malloc(
     let exit_floor_summaries = compute_exit_floor_summaries(
         module,
         funcs,
-        backend,
-        ptr_escape,
+        analyses,
         source_is,
         malloc_placements,
         free_ptr_write_summaries,
@@ -142,8 +139,7 @@ pub(crate) fn compute_program_free_ptr_floor_before_malloc(
                 let malloc_placements = malloc_placements.get(&func).unwrap_or(&empty_placements);
                 FuncFreePtrFloorCtx {
                     module: &module.ctx,
-                    backend,
-                    ptr_escape,
+                    analysis: &analyses[&func],
                     source_is,
                     malloc_placements,
                     free_ptr_write_summaries,
@@ -183,8 +179,7 @@ pub(crate) fn compute_program_free_ptr_floor_before_malloc(
                 let malloc_placements = malloc_placements.get(&func).unwrap_or(&empty_placements);
                 FuncFreePtrFloorCtx {
                     module: &module.ctx,
-                    backend,
-                    ptr_escape,
+                    analysis: &analyses[&func],
                     source_is,
                     malloc_placements,
                     free_ptr_write_summaries,
@@ -201,8 +196,7 @@ pub(crate) fn compute_program_free_ptr_floor_before_malloc(
 fn compute_exit_floor_summaries(
     module: &Module,
     funcs: &[FuncRef],
-    backend: &EvmBackend,
-    ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
+    analyses: &FxHashMap<FuncRef, FuncPreAnalysis>,
     source_is: &EvmInstSet,
     malloc_placements: &FxHashMap<FuncRef, FxHashMap<InstId, MallocPlacement>>,
     free_ptr_write_summaries: &FxHashMap<FuncRef, bool>,
@@ -219,8 +213,7 @@ fn compute_exit_floor_summaries(
                 let malloc_placements = malloc_placements.get(&func).unwrap_or(&empty_placements);
                 FuncFreePtrFloorCtx {
                     module: &module.ctx,
-                    backend,
-                    ptr_escape,
+                    analysis: &analyses[&func],
                     source_is,
                     malloc_placements,
                     free_ptr_write_summaries,
@@ -247,8 +240,7 @@ struct FuncFreePtrFloors {
 
 struct FuncFreePtrFloorCtx<'a> {
     module: &'a ModuleCtx,
-    backend: &'a EvmBackend,
-    ptr_escape: &'a FxHashMap<FuncRef, PtrEscapeSummary>,
+    analysis: &'a FuncPreAnalysis,
     source_is: &'a EvmInstSet,
     malloc_placements: &'a FxHashMap<InstId, MallocPlacement>,
     free_ptr_write_summaries: &'a FxHashMap<FuncRef, bool>,
@@ -257,15 +249,8 @@ struct FuncFreePtrFloorCtx<'a> {
 
 impl FuncFreePtrFloorCtx<'_> {
     fn compute(&self, function: &Function, entry_floor: FreePtrFloor) -> FuncFreePtrFloors {
-        let mut cfg = ControlFlowGraph::new();
-        cfg.compute(function);
-
-        let prov = compute_value_provenance(function, self.module, &self.backend.isa, |callee| {
-            self.ptr_escape
-                .get(&callee)
-                .cloned()
-                .unwrap_or_else(|| PtrEscapeSummary::conservative_unknown_ctx(self.module, callee))
-        });
+        let cfg = &self.analysis.cfg;
+        let prov = &self.analysis.prov.value;
 
         let mut block_in = SecondaryMap::<BlockId, FreePtrFloor>::new();
         let mut block_out = SecondaryMap::<BlockId, FreePtrFloor>::new();
@@ -281,13 +266,13 @@ impl FuncFreePtrFloorCtx<'_> {
             malloc_placements: self.malloc_placements,
             free_ptr_write_summaries: self.free_ptr_write_summaries,
             exit_floor_summaries: self.exit_floor_summaries,
-            prov: &prov,
+            prov,
         };
         let mut changed = true;
         while changed {
             changed = false;
             for block in function.layout.iter_block() {
-                let entry = block_entry_floor(&cfg, block, &block_out, entry_floor);
+                let entry = block_entry_floor(cfg, block, &block_out, entry_floor);
                 let exit = transfer.block(block, entry, None, None);
                 if block_in[block] != entry {
                     block_in[block] = entry;

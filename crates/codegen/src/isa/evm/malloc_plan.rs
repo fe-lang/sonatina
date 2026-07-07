@@ -18,7 +18,7 @@ use super::{
     escape_scan::{EscapeScanCtx, EscapeSink, EscapeSource, for_each_escape_event_at_inst},
     mem_effects::FuncMemEffects,
     ptr_escape::PtrEscapeSummary,
-    ptr_provenance::{Provenance, compute_provenance},
+    ptr_provenance::{Provenance, ProvenanceInfo},
 };
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -47,6 +47,7 @@ pub(crate) fn should_restore_free_ptr_on_internal_returns(
     module: &ModuleCtx,
     isa: &Evm,
     ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
+    prov_info: &ProvenanceInfo,
     transient_mallocs: &FxHashSet<InstId>,
 ) -> bool {
     let mut has_internal_return = false;
@@ -68,9 +69,6 @@ pub(crate) fn should_restore_free_ptr_on_internal_returns(
         return false;
     }
 
-    let prov_info = compute_provenance(function, module, isa, |callee| {
-        PtrEscapeSummary::get_or_conservative(ptr_escape, module, callee)
-    });
     let prov = &prov_info.value;
     let local_mem = &prov_info.local_mem;
     let arg_mem = &prov_info.arg_mem;
@@ -154,6 +152,7 @@ pub(crate) fn compute_transient_mallocs(
     module: &ModuleCtx,
     isa: &Evm,
     ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
+    prov_info: &ProvenanceInfo,
     mem_effects: Option<&FxHashMap<FuncRef, FuncMemEffects>>,
     inst_liveness: &InstLiveness,
 ) -> FxHashSet<InstId> {
@@ -173,9 +172,6 @@ pub(crate) fn compute_transient_mallocs(
         return FxHashSet::default();
     }
 
-    let prov_info = compute_provenance(function, module, isa, |callee| {
-        PtrEscapeSummary::get_or_conservative(ptr_escape, module, callee)
-    });
     let prov = &prov_info.value;
     let local_mem = &prov_info.local_mem;
     let arg_mem = &prov_info.arg_mem;
@@ -253,10 +249,8 @@ pub(crate) fn compute_malloc_escape_kinds_for_function(
     module: &ModuleCtx,
     isa: &Evm,
     ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
+    prov_info: &ProvenanceInfo,
 ) -> FxHashMap<InstId, MallocEscapeKind> {
-    let prov_info = compute_provenance(function, module, isa, |callee| {
-        PtrEscapeSummary::get_or_conservative(ptr_escape, module, callee)
-    });
     let prov = &prov_info.value;
     let local_mem = &prov_info.local_mem;
     let arg_mem = &prov_info.arg_mem;

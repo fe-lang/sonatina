@@ -24,7 +24,7 @@ use super::{
     escape_scan::{EscapeScanCtx, EscapeSink, EscapeSource, for_each_escape_event_at_inst},
     memory_plan::{FuncPreAnalysis, WORD_BYTES},
     ptr_escape::PtrEscapeSummary,
-    ptr_provenance::{Provenance, compute_provenance},
+    ptr_provenance::{Provenance, ProvenanceInfo, compute_provenance},
 };
 use crate::stackalloc::StackifyAlloc;
 
@@ -138,6 +138,7 @@ pub(super) struct StackObjectInput<'a> {
     stackify_alloc: Option<&'a StackifyAlloc>,
     block_order: &'a [BlockId],
     value_aliases: &'a SecondaryMap<ValueId, Option<ValueId>>,
+    prov_info: Option<&'a ProvenanceInfo>,
 }
 
 impl<'a> StackObjectInput<'a> {
@@ -147,6 +148,7 @@ impl<'a> StackObjectInput<'a> {
             stackify_alloc: Some(&analysis.alloc),
             block_order: &analysis.block_order,
             value_aliases: &analysis.value_aliases,
+            prov_info: None,
         }
     }
 
@@ -155,6 +157,7 @@ impl<'a> StackObjectInput<'a> {
             stackify_alloc: None,
             block_order: &analysis.block_order,
             value_aliases: &analysis.value_aliases,
+            prov_info: Some(&analysis.prov),
         }
     }
 
@@ -283,12 +286,19 @@ fn compute_func_stack_objects_from_input(
     let mut cfg = ControlFlowGraph::new();
     cfg.compute(function);
 
-    let prov_info = compute_provenance(function, ctx.module, ctx.isa, |callee| {
-        ctx.ptr_escape
-            .get(&callee)
-            .cloned()
-            .unwrap_or_else(|| conservative_unknown_ptr_summary(ctx.module, callee))
-    });
+    let computed_prov_info;
+    let prov_info = match analysis.prov_info {
+        Some(prov_info) => prov_info,
+        None => {
+            computed_prov_info = compute_provenance(function, ctx.module, ctx.isa, |callee| {
+                ctx.ptr_escape
+                    .get(&callee)
+                    .cloned()
+                    .unwrap_or_else(|| conservative_unknown_ptr_summary(ctx.module, callee))
+            });
+            &computed_prov_info
+        }
+    };
     let prov = &prov_info.value;
 
     let mut local_edges: FxHashMap<InstId, FxHashSet<InstId>> = FxHashMap::default();
