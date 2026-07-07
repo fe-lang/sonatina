@@ -443,6 +443,7 @@ impl FuncLowerCtx<'_> {
     fn lower_alloca(&mut self, source_inst: sonatina_ir::InstId) -> Result<(), String> {
         let loc = self
             .placement
+            .mem_plan
             .alloca_loc
             .get(&source_inst)
             .copied()
@@ -453,8 +454,8 @@ impl FuncLowerCtx<'_> {
                 self.i256_imm(base)
             }
             ObjLoc::StableFrame(offset_words) => {
-                let layout =
-                    DynamicFrameLayout::new(self.placement.stable_words).ok_or_else(|| {
+                let layout = DynamicFrameLayout::new(self.placement.mem_plan.stable_words)
+                    .ok_or_else(|| {
                         "dynamic frame alloca missing stable frame layout".to_string()
                     })?;
                 let local_word = layout
@@ -468,11 +469,6 @@ impl FuncLowerCtx<'_> {
                     let offset = self.i256_imm(offset);
                     self.emit_binary(arith::Sub::new(self.is, dyn_sp, offset), Type::I256)
                 }
-            }
-            ObjLoc::StackPinned(depth) => {
-                return Err(format!(
-                    "stack-pinned alloca is not supported (depth={depth})"
-                ));
             }
         };
         self.alias_inst_single_result(source_inst, value)
@@ -1077,7 +1073,7 @@ impl FuncLowerCtx<'_> {
         match loc {
             ObjLoc::ScratchAbs(word) => self.word_addr(word),
             ObjLoc::StableAbs(word) => {
-                let base = match self.placement.stable_mode {
+                let base = match self.placement.mem_plan.stable_mode {
                     StableMode::StableAbs { base_word } => base_word,
                     StableMode::None | StableMode::DynamicFrame => {
                         return None;
@@ -1085,12 +1081,13 @@ impl FuncLowerCtx<'_> {
                 };
                 self.word_addr(base.checked_add(word)?)
             }
-            ObjLoc::StableFrame(_) | ObjLoc::StackPinned(_) => None,
+            ObjLoc::StableFrame(_) => None,
         }
     }
 
     fn word_addr(&self, word: u32) -> Option<u32> {
         self.placement
+            .mem_plan
             .arena_base
             .checked_add(word.checked_mul(WORD_BYTES)?)
     }

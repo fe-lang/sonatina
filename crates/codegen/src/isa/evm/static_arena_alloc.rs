@@ -118,8 +118,6 @@ pub(crate) struct CallSiteObjects {
     pub(crate) call_rank: u32,
     pub(crate) callee: FuncRef,
     pub(crate) result_count: u8,
-    #[allow(dead_code)]
-    pub(crate) arg_count: u8,
     pub(crate) live_across_objs: Vec<StackObjId>,
     pub(crate) callee_visible_objs: Vec<StackObjId>,
 }
@@ -129,7 +127,6 @@ pub(crate) struct FuncStackObjects {
     pub(crate) obj_facts: FxHashMap<StackObjId, ObjFacts>,
     pub(crate) obj_size_words: FxHashMap<StackObjId, u32>,
     pub(crate) alloca_ids: FxHashMap<InstId, StackObjId>,
-    pub(crate) spill_obj: SecondaryMap<ValueId, Option<StackObjId>>,
     pub(crate) call_sites: Vec<CallSiteObjects>,
     pub(crate) next_obj_id: u32,
 }
@@ -575,7 +572,6 @@ fn compute_func_stack_objects_from_input(
         obj_facts,
         obj_size_words,
         alloca_ids,
-        spill_obj,
         call_sites,
         next_obj_id: next_id,
     }

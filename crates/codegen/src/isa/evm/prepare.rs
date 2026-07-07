@@ -41,15 +41,14 @@ use super::{
         },
         lazy_frame::{FrameSummary, compute_frame_summary, compute_machine_frame_roots},
         lower::lower_section_to_machine,
-        module::FuncMachineMap,
         pipeline::run_machine_opt_pipeline,
         placement::{MemoryPlacementSection, compute_semantic_memory_placement},
         prepare::prepare_machine_stackify_analyses,
     },
     malloc_plan,
     memory_plan::{
-        self, BackendSpillReserve, DYN_SP_SLOT, FREE_PTR_SLOT, FuncMemPlan, ProgramMemoryPlan,
-        STATIC_BASE, WORD_BYTES, compute_abs_clobber_words_with_extra,
+        self, BackendSpillReserve, DYN_SP_SLOT, FREE_PTR_SLOT, MachineFuncPlan, ProgramMemoryPlan,
+        STATIC_BASE, SemanticFuncPlan, WORD_BYTES, compute_abs_clobber_words_with_extra,
     },
     pipeline::EvmPipeline,
     ptr_escape::PtrEscapeSummary,
@@ -115,7 +114,7 @@ pub(crate) struct EvmFunctionPlan {
     pub(crate) alloc: StackifyAlloc,
     pub(crate) emitted_block_order: Vec<sonatina_ir::BlockId>,
     pub(crate) block_aliases: FxHashMap<sonatina_ir::BlockId, sonatina_ir::BlockId>,
-    pub(crate) mem_plan: FuncMemPlan,
+    pub(crate) mem_plan: MachineFuncPlan,
     pub(crate) frame_summary: FrameSummary,
     pub(crate) dyn_sp_plan: FuncDynSpPlan,
     pub(crate) function_entry_jumpdest: bool,
@@ -744,13 +743,12 @@ fn prepare_machine_section_after_pipeline(
                     .funcs
                     .get(&func)
                     .unwrap_or_else(|| panic!("missing placement for func {}", func.as_u32()));
-                let mut mem_plan = func_placement.mem_plan.clone();
                 let func_map = machine
                     .source_to_machine
                     .funcs
                     .get(&func)
                     .unwrap_or_else(|| panic!("missing source map for func {}", func.as_u32()));
-                remap_machine_mem_plan_call_preserve(&mut mem_plan, func_map);
+                let mem_plan = MachineFuncPlan::from_semantic(&func_placement.mem_plan, func_map);
                 let fixed_writes =
                     machine
                         .work
@@ -856,7 +854,7 @@ fn prepare_machine_section_after_pipeline(
                                 source_function,
                                 machine_function,
                                 func_map,
-                                &func_placement.alloca_loc,
+                                &func_placement.mem_plan.alloca_loc,
                                 &backend.isa,
                             )
                         })
@@ -934,7 +932,7 @@ fn prepare_machine_section_after_pipeline(
             function_plans.insert(func, plan);
         }
 
-        let mem_plans: FxHashMap<FuncRef, FuncMemPlan> = function_plans
+        let mem_plans: FxHashMap<FuncRef, MachineFuncPlan> = function_plans
             .iter()
             .map(|(&func, plan)| (func, plan.mem_plan.clone()))
             .collect();
@@ -1184,16 +1182,6 @@ fn validate_committed_final_spill_section(
     Ok(())
 }
 
-fn remap_machine_mem_plan_call_preserve(mem_plan: &mut FuncMemPlan, map: &FuncMachineMap) {
-    let mut call_preserve = FxHashMap::default();
-    for (source_inst, plan) in std::mem::take(&mut mem_plan.call_preserve) {
-        if let Some(machine_inst) = map.insts[source_inst] {
-            call_preserve.insert(machine_inst, plan);
-        }
-    }
-    mem_plan.call_preserve = call_preserve;
-}
-
 pub(crate) fn compute_return_escape_caller_clamp_words(
     schedule: &CallGraphSchedule,
     plan: &ProgramMemoryPlan,
@@ -1205,7 +1193,11 @@ pub(crate) fn compute_return_escape_caller_clamp_words(
         abs_clobber_words
             .get(&func)
             .copied()
-            .or_else(|| plan.funcs.get(&func).map(FuncMemPlan::active_abs_words))
+            .or_else(|| {
+                plan.funcs
+                    .get(&func)
+                    .map(SemanticFuncPlan::active_abs_words)
+            })
             .unwrap_or(0)
     };
 

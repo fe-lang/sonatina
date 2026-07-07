@@ -21,7 +21,7 @@ use super::{
     exact_func_merge::run_exact_private_func_merge,
     high_alias::compute_high_evm_aliases,
     late_section_merge::run_late_section_terminal_outline,
-    memory_plan::{ArenaCostModel, ObjLoc, PreserveMode, StableMode, WORD_BYTES},
+    memory_plan::{ArenaCostModel, ObjLoc, StableMode, WORD_BYTES},
     opcode::OpCode,
     prepare::{self, EvmPreparedSection},
 };
@@ -218,7 +218,6 @@ impl EvmBackend {
                         .sp_relative_bytes(frame_layout.expect_local_word(off, "debug object"));
                     format!("sp-0x{addr_bytes:x}")
                 }
-                ObjLoc::StackPinned(depth) => format!("stack[{depth}]"),
             };
 
             if detail {
@@ -249,31 +248,17 @@ impl EvmBackend {
                         )
                     });
                     let callee_name = module.ctx.func_sig(callee, |sig| sig.name().to_string());
-                    match &plan.mode {
-                        PreserveMode::None => {}
-                        PreserveMode::ShadowRuns { shadow_obj, runs } => {
-                            let save_words: u32 = runs.iter().map(|run| run.len_words).sum();
-                            writeln!(
-                                &mut out,
-                                "  call inst{} callee=%{callee_name} preserve=ShadowRuns shadow_obj={} result_count={} save_words={} runs={runs:?}",
-                                inst.as_u32(),
-                                shadow_obj.as_u32(),
-                                plan.result_count,
-                                save_words,
-                            )
-                            .expect("mem plan write failed");
-                        }
-                        PreserveMode::TinyStackLift { word_offsets } => {
-                            writeln!(
-                                &mut out,
-                                "  call inst{} callee=%{callee_name} preserve=TinyStackLift result_count={} save_words={} save_offsets={word_offsets:?}",
-                                inst.as_u32(),
-                                plan.result_count,
-                                word_offsets.len(),
-                            )
-                            .expect("mem plan write failed");
-                        }
-                    }
+                    let runs = &plan.runs;
+                    let save_words: u32 = runs.iter().map(|run| run.len_words).sum();
+                    writeln!(
+                        &mut out,
+                        "  call inst{} callee=%{callee_name} preserve=ShadowRuns shadow_obj={} result_count={} save_words={} runs={runs:?}",
+                        inst.as_u32(),
+                        plan.shadow_obj.as_u32(),
+                        plan.result_count,
+                        save_words,
+                    )
+                    .expect("mem plan write failed");
                 }
 
                 let mut scratch_spills: Vec<(ValueId, u32)> = Vec::new();

@@ -13,7 +13,7 @@ use crate::{
 };
 
 use super::module::FuncMachineMap;
-use crate::isa::evm::{FuncMemPlan, ObjLoc, emit::fold_stack_actions};
+use crate::isa::evm::{MachineFuncPlan, ObjLoc, emit::fold_stack_actions};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum FrameSite {
@@ -181,7 +181,7 @@ fn collect_root_def_insts(
 pub(crate) fn compute_frame_summary(
     function: &Function,
     alloc: &dyn Allocator,
-    mem_plan: &FuncMemPlan,
+    mem_plan: &MachineFuncPlan,
     roots: &MachineFrameRoots,
 ) -> FrameSummary {
     if mem_plan.dynamic_frame_layout().is_none() {

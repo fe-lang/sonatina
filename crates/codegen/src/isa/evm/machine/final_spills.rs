@@ -6,7 +6,7 @@ use crate::{bitset::BitSet, module_analysis::CallGraphSchedule, stackalloc::Stac
 
 use super::{
     super::{
-        EvmBackend, FuncMemPlan, ObjLoc,
+        EvmBackend, MachineFuncPlan, ObjLoc,
         memory_plan::{
             BackendSpillReserve, FinalScratchReserveRange, FuncPreAnalysis,
             MachineStackifyAnalysis, StableMode, WORD_BYTES,
@@ -19,7 +19,7 @@ use super::{
 
 pub(crate) struct FinalSpillAllocation {
     pub(crate) alloc: StackifyAlloc,
-    pub(crate) mem_plan: FuncMemPlan,
+    pub(crate) mem_plan: MachineFuncPlan,
     pub(crate) required_reserve: BackendSpillReserve,
     pub(crate) stack_obj_remap: FxHashMap<StackObjId, StackObjId>,
     pub(crate) used_fallback: bool,
@@ -28,7 +28,7 @@ pub(crate) struct FinalSpillAllocation {
 pub(crate) struct FinalSpillAllocationInput {
     pub(crate) func: FuncRef,
     pub(crate) alloc: StackifyAlloc,
-    pub(crate) mem_plan: FuncMemPlan,
+    pub(crate) mem_plan: MachineFuncPlan,
     pub(crate) final_scratch_reserve: FinalScratchReserveRange,
     pub(crate) reserve: BackendSpillReserve,
     pub(crate) fixed_writes: Vec<FixedMemoryWriteRange>,
@@ -92,7 +92,7 @@ impl FinalSpillObjects {
 
     pub(crate) fn required_reserve(
         &self,
-        mem_plan: &FuncMemPlan,
+        mem_plan: &MachineFuncPlan,
         final_scratch_reserve: FinalScratchReserveRange,
         current_reserve: BackendSpillReserve,
         fixed_writes: &[FixedMemoryWriteRange],
@@ -132,7 +132,7 @@ impl FinalSpillObjects {
 pub(crate) struct MachineFinalSpillInput {
     pub(crate) func: FuncRef,
     pub(crate) analysis: MachineStackifyAnalysis,
-    pub(crate) mem_plan: FuncMemPlan,
+    pub(crate) mem_plan: MachineFuncPlan,
     pub(crate) final_scratch_reserve: FinalScratchReserveRange,
     pub(crate) reserve: BackendSpillReserve,
     pub(crate) fixed_writes: Vec<FixedMemoryWriteRange>,
@@ -391,7 +391,7 @@ fn spill_count(len: usize) -> u32 {
 }
 
 fn required_scratch_reserve_words(
-    mem_plan: &FuncMemPlan,
+    mem_plan: &MachineFuncPlan,
     final_scratch_start_word: u32,
     spill_words: u32,
     fixed_writes: &[FixedMemoryWriteRange],
@@ -410,7 +410,7 @@ fn required_scratch_reserve_words(
 }
 
 fn required_stable_reserve_words(
-    mem_plan: &FuncMemPlan,
+    mem_plan: &MachineFuncPlan,
     current_reserved_words: u32,
     spill_words: u32,
     fixed_writes: &[FixedMemoryWriteRange],
@@ -439,7 +439,7 @@ fn required_stable_reserve_words(
 }
 
 fn place_scratch_spills(
-    mem_plan: &mut FuncMemPlan,
+    mem_plan: &mut MachineFuncPlan,
     objs: &[(StackObjId, StackObjId)],
     final_scratch_reserve: FinalScratchReserveRange,
     required_words: u32,
@@ -483,7 +483,7 @@ fn place_scratch_spills(
 }
 
 fn place_stable_spills(
-    mem_plan: &mut FuncMemPlan,
+    mem_plan: &mut MachineFuncPlan,
     objs: &[(StackObjId, StackObjId)],
     reserve: BackendSpillReserve,
     required_words: u32,
@@ -538,7 +538,7 @@ fn place_stable_spills(
 }
 
 fn place_spills(
-    mem_plan: &mut FuncMemPlan,
+    mem_plan: &mut MachineFuncPlan,
     objs: &[(StackObjId, StackObjId)],
     start_word: u32,
     loc: impl Fn(u32) -> ObjLoc,
@@ -551,7 +551,7 @@ fn place_spills(
     }
 }
 
-fn stable_tail_start(mem_plan: &FuncMemPlan, spill_words: u32) -> Option<u32> {
+fn stable_tail_start(mem_plan: &MachineFuncPlan, spill_words: u32) -> Option<u32> {
     match mem_plan.stable_mode {
         StableMode::StableAbs { .. } | StableMode::DynamicFrame => {
             mem_plan.stable_words.checked_sub(spill_words)
@@ -560,7 +560,7 @@ fn stable_tail_start(mem_plan: &FuncMemPlan, spill_words: u32) -> Option<u32> {
     }
 }
 
-fn stable_reserve_range(mem_plan: &FuncMemPlan, reserved_words: u32) -> Option<(u32, u32)> {
+fn stable_reserve_range(mem_plan: &MachineFuncPlan, reserved_words: u32) -> Option<(u32, u32)> {
     match mem_plan.stable_mode {
         StableMode::StableAbs { .. } | StableMode::DynamicFrame => Some((
             mem_plan.stable_words.checked_sub(reserved_words)?,
@@ -617,7 +617,7 @@ fn normalized_word_ranges(ranges: &[(u32, u32)]) -> Vec<(u32, u32)> {
 }
 
 fn spill_floor_words_from_fixed_writes(
-    mem_plan: &FuncMemPlan,
+    mem_plan: &MachineFuncPlan,
     fixed_writes: &[FixedMemoryWriteRange],
 ) -> u32 {
     forbidden_arena_words(mem_plan, fixed_writes)
@@ -628,7 +628,7 @@ fn spill_floor_words_from_fixed_writes(
 }
 
 fn forbidden_arena_words(
-    mem_plan: &FuncMemPlan,
+    mem_plan: &MachineFuncPlan,
     fixed_writes: &[FixedMemoryWriteRange],
 ) -> Vec<(u32, u32)> {
     normalized_word_ranges(
@@ -655,7 +655,7 @@ fn fixed_write_forbidden_arena_words(
 }
 
 fn forbidden_static_stable_offsets(
-    mem_plan: &FuncMemPlan,
+    mem_plan: &MachineFuncPlan,
     fixed_writes: &[FixedMemoryWriteRange],
 ) -> Vec<(u32, u32)> {
     let StableMode::StableAbs { base_word } = mem_plan.stable_mode else {
@@ -687,7 +687,7 @@ fn align_word_offset(bytes: u32) -> Option<u32> {
     }
 }
 
-fn absolute_word_for_loc(mem_plan: &FuncMemPlan, loc: ObjLoc) -> Result<Option<u32>, String> {
+fn absolute_word_for_loc(mem_plan: &MachineFuncPlan, loc: ObjLoc) -> Result<Option<u32>, String> {
     match loc {
         ObjLoc::ScratchAbs(word) => Ok(Some(word)),
         ObjLoc::StableAbs(off) => mem_plan
@@ -697,13 +697,13 @@ fn absolute_word_for_loc(mem_plan: &FuncMemPlan, loc: ObjLoc) -> Result<Option<u
                     .ok_or_else(|| format!("final spill stable address overflow at offset {off}"))
             })
             .transpose(),
-        ObjLoc::StableFrame(_) | ObjLoc::StackPinned(_) => Ok(None),
+        ObjLoc::StableFrame(_) => Ok(None),
     }
 }
 
 fn validate_final_spill_absolute_disjointness(
     func: FuncRef,
-    mem_plan: &FuncMemPlan,
+    mem_plan: &MachineFuncPlan,
     final_objs: &[StackObjId],
 ) -> Result<(), String> {
     let mut ranges = Vec::new();
@@ -753,7 +753,7 @@ fn validate_final_spill_absolute_disjointness(
 
 fn validate_final_spills_disjoint_from_fixed_writes(
     func: FuncRef,
-    mem_plan: &FuncMemPlan,
+    mem_plan: &MachineFuncPlan,
     final_objs: &[StackObjId],
     fixed_writes: &[FixedMemoryWriteRange],
 ) -> Result<(), String> {
@@ -789,7 +789,7 @@ fn validate_final_spills_disjoint_from_fixed_writes(
 }
 
 fn absolute_byte_range_for_loc(
-    mem_plan: &FuncMemPlan,
+    mem_plan: &MachineFuncPlan,
     loc: ObjLoc,
 ) -> Result<Option<(u32, u32)>, String> {
     let Some(word) = absolute_word_for_loc(mem_plan, loc)? else {
@@ -814,7 +814,7 @@ fn byte_ranges_overlap(a_start: u32, a_end: u32, b_start: u32, b_end: u32) -> bo
 
 fn validate_final_spill_regions(
     func: FuncRef,
-    mem_plan: &FuncMemPlan,
+    mem_plan: &MachineFuncPlan,
     final_scratch_reserve: FinalScratchReserveRange,
     reserve: BackendSpillReserve,
     scratch_objs: &[(StackObjId, StackObjId)],
@@ -881,7 +881,7 @@ fn validate_final_spill_regions(
             }
             let off = match loc {
                 ObjLoc::StableAbs(off) | ObjLoc::StableFrame(off) => off,
-                ObjLoc::ScratchAbs(_) | ObjLoc::StackPinned(_) => unreachable!("validated above"),
+                ObjLoc::ScratchAbs(_) => unreachable!("validated above"),
             };
             let Some((reserve_start, reserve_end)) = reserved_stable_range else {
                 return Err(format!(
@@ -910,7 +910,7 @@ fn validate_final_spill_regions(
 #[cfg(test)]
 mod tests {
     use cranelift_entity::{EntityRef, SecondaryMap};
-    use rustc_hash::{FxHashMap, FxHashSet};
+    use rustc_hash::FxHashMap;
     use sonatina_ir::{InstId, ValueId, module::FuncRef};
 
     use super::{
@@ -922,16 +922,15 @@ mod tests {
     use crate::{
         bitset::BitSet,
         isa::evm::{
-            FuncMemPlan, ObjLoc,
-            malloc_plan::MallocEscapeKind,
+            MachineFuncPlan, ObjLoc,
             memory_plan::{BackendSpillReserve, FinalScratchReserveRange, StableMode},
             static_arena_alloc::StackObjId,
         },
         stackalloc::StackifyAlloc,
     };
 
-    fn static_mem_plan(scratch_words: u32, stable_words: u32) -> FuncMemPlan {
-        FuncMemPlan {
+    fn static_mem_plan(scratch_words: u32, stable_words: u32) -> MachineFuncPlan {
+        MachineFuncPlan {
             arena_base: 0xa0,
             scratch_words,
             stable_words,
@@ -943,15 +942,11 @@ mod tests {
             alloca_loc: FxHashMap::default(),
             spill_obj: SecondaryMap::new(),
             call_preserve: FxHashMap::default(),
-            malloc_future_abs_words: FxHashMap::default(),
-            transient_mallocs: FxHashSet::default(),
-            malloc_escape_kinds: FxHashMap::<_, MallocEscapeKind>::default(),
-            return_escape_caller_abs_words: 0,
         }
     }
 
-    fn scratch_mem_plan(scratch_words: u32) -> FuncMemPlan {
-        FuncMemPlan {
+    fn scratch_mem_plan(scratch_words: u32) -> MachineFuncPlan {
+        MachineFuncPlan {
             arena_base: 0xa0,
             scratch_words,
             stable_words: 0,
@@ -961,10 +956,6 @@ mod tests {
             alloca_loc: FxHashMap::default(),
             spill_obj: SecondaryMap::new(),
             call_preserve: FxHashMap::default(),
-            malloc_future_abs_words: FxHashMap::default(),
-            transient_mallocs: FxHashSet::default(),
-            malloc_escape_kinds: FxHashMap::<_, MallocEscapeKind>::default(),
-            return_escape_caller_abs_words: 0,
         }
     }
 
@@ -1000,7 +991,7 @@ mod tests {
 
     fn allocate_final_spills(
         alloc: StackifyAlloc,
-        mem_plan: FuncMemPlan,
+        mem_plan: MachineFuncPlan,
         reserve: BackendSpillReserve,
         stable: &BitSet<ValueId>,
         placement: OptionalFinalSpillPlacement,
@@ -1010,7 +1001,7 @@ mod tests {
 
     fn allocate_final_spills_with_writes(
         alloc: StackifyAlloc,
-        mem_plan: FuncMemPlan,
+        mem_plan: MachineFuncPlan,
         reserve: BackendSpillReserve,
         fixed_writes: Vec<FixedMemoryWriteRange>,
         stable: &BitSet<ValueId>,

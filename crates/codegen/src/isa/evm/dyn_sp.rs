@@ -3,7 +3,7 @@ use sonatina_ir::{InstId, Module, module::FuncRef};
 
 use crate::module_analysis::CallGraphSchedule;
 
-use super::{machine::lazy_frame::FrameSummary, memory_plan::FuncMemPlan};
+use super::{machine::lazy_frame::FrameSummary, memory_plan::MachineFuncPlan};
 
 #[derive(Clone, Default)]
 pub(crate) struct FuncDynSpPlan {
@@ -59,7 +59,7 @@ pub(crate) fn compute_machine_dyn_sp_plan(
     module: &Module,
     schedule: &CallGraphSchedule,
     section_entry: FuncRef,
-    mem_plans: &FxHashMap<FuncRef, FuncMemPlan>,
+    mem_plans: &FxHashMap<FuncRef, MachineFuncPlan>,
     frame_summaries: &FxHashMap<FuncRef, FrameSummary>,
 ) -> FxHashMap<FuncRef, FuncDynSpPlan> {
     let reachable_funcs = schedule.reachable_from(section_entry);
@@ -78,7 +78,7 @@ pub(crate) fn compute_machine_dyn_sp_plan(
             .any(|func| {
                 mem_plans
                     .get(&func)
-                    .is_some_and(FuncMemPlan::uses_dynamic_frame)
+                    .is_some_and(MachineFuncPlan::uses_dynamic_frame)
             })
         {
             ready_sccs.insert(scc_ref);

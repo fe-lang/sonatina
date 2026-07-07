@@ -41,7 +41,7 @@ pub(crate) use immediate::{
     immediate_materialization_cost_i256, immediate_materialization_plan, u32_to_be, u256_to_be,
 };
 pub(crate) use memory_plan::{
-    DYN_SP_SLOT, FREE_PTR_SLOT, FuncMemPlan, ObjLoc, PreserveMode, STATIC_BASE, WORD_BYTES,
+    DYN_SP_SLOT, FREE_PTR_SLOT, MachineFuncPlan, ObjLoc, STATIC_BASE, WORD_BYTES,
 };
 pub(crate) use opcode::OpCode;
 pub(crate) use prepare::{EvmFunctionPlan, EvmSectionPlan, prepare_free_ptr_restore};

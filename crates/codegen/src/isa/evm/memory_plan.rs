@@ -37,9 +37,7 @@ pub struct ProgramMemoryPlan {
     pub scratch_peak_words: u32,
     pub stable_chain_peak_words: u32,
     pub global_dyn_base: u32,
-    pub funcs: FxHashMap<FuncRef, FuncMemPlan>,
-    #[allow(dead_code)]
-    pub sccs: FxHashMap<SccRef, SccMemPlan>,
+    pub funcs: FxHashMap<FuncRef, SemanticFuncPlan>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -88,7 +86,7 @@ impl FinalScratchReserveRange {
 }
 
 #[derive(Clone, Debug)]
-pub struct FuncMemPlan {
+pub struct SemanticFuncPlan {
     pub arena_base: u32,
     pub scratch_words: u32,
     pub stable_words: u32,
@@ -96,7 +94,6 @@ pub struct FuncMemPlan {
     pub entry_abs_words: u32,
     pub obj_loc: FxHashMap<StackObjId, ObjLoc>,
     pub alloca_loc: FxHashMap<InstId, ObjLoc>,
-    pub spill_obj: SecondaryMap<ValueId, Option<StackObjId>>,
     pub call_preserve: FxHashMap<InstId, CallPreservePlan>,
     pub malloc_future_abs_words: FxHashMap<InstId, u32>,
     pub transient_mallocs: FxHashSet<InstId>,
@@ -104,49 +101,96 @@ pub struct FuncMemPlan {
     pub return_escape_caller_abs_words: u32,
 }
 
-impl FuncMemPlan {
-    pub fn abs_addr_for_word(&self, word: u32) -> u32 {
-        abs_addr_for_word(self.arena_base, word)
-    }
-
-    pub fn stable_base_word(&self) -> Option<u32> {
-        match self.stable_mode {
-            StableMode::StableAbs { base_word } => Some(base_word),
-            StableMode::None | StableMode::DynamicFrame => None,
-        }
-    }
-
-    pub fn dynamic_frame_layout(&self) -> Option<DynamicFrameLayout> {
-        matches!(self.stable_mode, StableMode::DynamicFrame)
-            .then(|| DynamicFrameLayout::new(self.stable_words))
-            .flatten()
-    }
-
-    pub fn uses_dynamic_frame(&self) -> bool {
-        matches!(self.stable_mode, StableMode::DynamicFrame)
-    }
-
-    pub fn abs_words_end(&self) -> u32 {
-        let stable_end = match self.stable_mode {
-            StableMode::StableAbs { base_word } if self.stable_words != 0 => base_word
-                .checked_add(self.stable_words)
-                .expect("stable absolute end overflow"),
-            StableMode::None | StableMode::DynamicFrame | StableMode::StableAbs { .. } => 0,
-        };
-        self.scratch_words.max(stable_end)
-    }
-
-    pub fn active_abs_words(&self) -> u32 {
-        self.entry_abs_words.max(self.abs_words_end())
-    }
-
-    pub fn obj_word_offset(&self, obj: StackObjId) -> Option<u32> {
-        self.obj_loc.get(&obj).and_then(|loc| match *loc {
-            ObjLoc::ScratchAbs(word) | ObjLoc::StableAbs(word) | ObjLoc::StableFrame(word) => {
-                Some(word)
+/// Frame-shape queries shared by the semantic and machine plans.
+macro_rules! impl_frame_queries {
+    ($plan:ty) => {
+        impl $plan {
+            pub fn abs_addr_for_word(&self, word: u32) -> u32 {
+                abs_addr_for_word(self.arena_base, word)
             }
-            ObjLoc::StackPinned(_) => None,
+
+            pub fn stable_base_word(&self) -> Option<u32> {
+                match self.stable_mode {
+                    StableMode::StableAbs { base_word } => Some(base_word),
+                    StableMode::None | StableMode::DynamicFrame => None,
+                }
+            }
+
+            pub fn dynamic_frame_layout(&self) -> Option<DynamicFrameLayout> {
+                matches!(self.stable_mode, StableMode::DynamicFrame)
+                    .then(|| DynamicFrameLayout::new(self.stable_words))
+                    .flatten()
+            }
+
+            pub fn uses_dynamic_frame(&self) -> bool {
+                matches!(self.stable_mode, StableMode::DynamicFrame)
+            }
+
+            pub fn abs_words_end(&self) -> u32 {
+                let stable_end = match self.stable_mode {
+                    StableMode::StableAbs { base_word } if self.stable_words != 0 => base_word
+                        .checked_add(self.stable_words)
+                        .expect("stable absolute end overflow"),
+                    StableMode::None | StableMode::DynamicFrame | StableMode::StableAbs { .. } => 0,
+                };
+                self.scratch_words.max(stable_end)
+            }
+        }
+    };
+}
+
+impl_frame_queries!(SemanticFuncPlan);
+impl_frame_queries!(MachineFuncPlan);
+
+/// The machine-side memory plan consumed by lowering, final spills, and
+/// emission. Constructing one forces the `call_preserve` remap from source to
+/// machine instruction ids; a missed remap would silently drop shadow saves.
+#[derive(Clone, Debug)]
+pub struct MachineFuncPlan {
+    pub arena_base: u32,
+    pub scratch_words: u32,
+    pub stable_words: u32,
+    pub stable_mode: StableMode,
+    pub entry_abs_words: u32,
+    pub obj_loc: FxHashMap<StackObjId, ObjLoc>,
+    /// Locations for source allocas whose addresses are rematerialized at
+    /// emission. Empty on the machine pipeline today (allocas are lowered to
+    /// immediates); populated directly by emission tests.
+    pub alloca_loc: FxHashMap<InstId, ObjLoc>,
+    /// Final-spill slots, populated by the machine final-spill pass.
+    pub spill_obj: SecondaryMap<ValueId, Option<StackObjId>>,
+    /// Shadow save/restore plans, keyed by *machine* call instruction.
+    pub call_preserve: FxHashMap<InstId, CallPreservePlan>,
+}
+
+impl MachineFuncPlan {
+    pub fn obj_word_offset(&self, obj: StackObjId) -> Option<u32> {
+        self.obj_loc.get(&obj).map(|loc| match *loc {
+            ObjLoc::ScratchAbs(word) | ObjLoc::StableAbs(word) | ObjLoc::StableFrame(word) => word,
         })
+    }
+
+    pub(crate) fn from_semantic(
+        plan: &SemanticFuncPlan,
+        map: &super::machine::module::FuncMachineMap,
+    ) -> Self {
+        let mut call_preserve = FxHashMap::default();
+        for (source_inst, preserve) in &plan.call_preserve {
+            if let Some(machine_inst) = map.insts[*source_inst] {
+                call_preserve.insert(machine_inst, preserve.clone());
+            }
+        }
+        Self {
+            arena_base: plan.arena_base,
+            scratch_words: plan.scratch_words,
+            stable_words: plan.stable_words,
+            stable_mode: plan.stable_mode,
+            entry_abs_words: plan.entry_abs_words,
+            obj_loc: plan.obj_loc.clone(),
+            alloca_loc: FxHashMap::default(),
+            spill_obj: SecondaryMap::new(),
+            call_preserve,
+        }
     }
 }
 
@@ -206,31 +250,18 @@ impl ProgramMemoryPlan {
             .expect("global dynamic base word overflow");
         self.global_dyn_base = abs_addr_for_word(self.arena_base, global_dyn_base_words);
 
-        for &scc_ref in &schedule.topo {
-            self.sccs.insert(
-                scc_ref,
-                SccMemPlan {
-                    is_recursive: schedule.sccs.scc_info(scc_ref).is_cycle,
-                    stable_chain_prefix_words: chain.scc_prefix[&scc_ref],
-                },
-            );
-        }
-
         for &func in schedule.funcs() {
             let scc_ref = schedule.sccs.scc_ref(func);
-            let scc_plan = self
-                .sccs
-                .get(&scc_ref)
-                .unwrap_or_else(|| panic!("missing SCC plan for scc {}", scc_ref.as_u32()));
+            let is_recursive = schedule.sccs.scc_info(scc_ref).is_cycle;
             let stable_base_word = self
                 .scratch_peak_words
-                .checked_add(scc_plan.stable_chain_prefix_words)
+                .checked_add(chain.scc_prefix[&scc_ref])
                 .expect("stable base word overflow");
             let func_plan = self
                 .funcs
                 .get_mut(&func)
                 .unwrap_or_else(|| panic!("missing memory plan for func {}", func.as_u32()));
-            func_plan.stable_mode = if scc_plan.is_recursive {
+            func_plan.stable_mode = if is_recursive {
                 StableMode::DynamicFrame
             } else if func_plan.stable_words != 0 {
                 StableMode::StableAbs {
@@ -239,7 +270,7 @@ impl ProgramMemoryPlan {
             } else {
                 StableMode::None
             };
-            func_plan.entry_abs_words = if scc_plan.is_recursive {
+            func_plan.entry_abs_words = if is_recursive {
                 global_dyn_base_words
             } else {
                 stable_base_word
@@ -311,8 +342,8 @@ mod tests {
 
     use sonatina_parser::parse_module;
 
-    fn empty_func_plan(scratch_words: u32, stable_mode: StableMode) -> FuncMemPlan {
-        FuncMemPlan {
+    fn empty_func_plan(scratch_words: u32, stable_mode: StableMode) -> SemanticFuncPlan {
+        SemanticFuncPlan {
             arena_base: STATIC_BASE,
             scratch_words,
             stable_words: 0,
@@ -320,7 +351,6 @@ mod tests {
             entry_abs_words: scratch_words,
             obj_loc: FxHashMap::default(),
             alloca_loc: FxHashMap::default(),
-            spill_obj: SecondaryMap::new(),
             call_preserve: FxHashMap::default(),
             malloc_future_abs_words: FxHashMap::default(),
             transient_mallocs: FxHashSet::default(),
@@ -349,7 +379,6 @@ block0:
             stable_chain_peak_words: 0,
             global_dyn_base: abs_addr_for_word(STATIC_BASE, 3),
             funcs: FxHashMap::from_iter([(func, empty_func_plan(3, StableMode::None))]),
-            sccs: FxHashMap::default(),
         };
         let reserve_words = FxHashMap::from_iter([(
             func,
@@ -393,7 +422,6 @@ block0:
             stable_chain_peak_words: 0,
             global_dyn_base: abs_addr_for_word(STATIC_BASE, 3),
             funcs: FxHashMap::from_iter([(func, empty_func_plan(3, StableMode::None))]),
-            sccs: FxHashMap::default(),
         };
         let reserve_words = FxHashMap::from_iter([(
             func,
@@ -434,7 +462,6 @@ block0:
             stable_chain_peak_words: 0,
             global_dyn_base: abs_addr_for_word(STATIC_BASE, 3),
             funcs: FxHashMap::from_iter([(func, empty_func_plan(3, StableMode::None))]),
-            sccs: FxHashMap::default(),
         };
         let reserve_words = FxHashMap::from_iter([(
             func,
@@ -474,7 +501,6 @@ block0:
             stable_chain_peak_words: 4,
             global_dyn_base: abs_addr_for_word(STATIC_BASE, 5),
             funcs: FxHashMap::from_iter([(func, func_plan)]),
-            sccs: FxHashMap::default(),
         };
         let reserve_words = FxHashMap::from_iter([(
             func,
@@ -493,12 +519,6 @@ block0:
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct SccMemPlan {
-    pub is_recursive: bool,
-    pub stable_chain_prefix_words: u32,
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StableMode {
     None,
@@ -513,26 +533,14 @@ pub enum ObjLoc {
     /// Local dynamic-frame word offset, excluding backend metadata such as the
     /// hidden caller-SP link slot.
     StableFrame(u32),
-    #[allow(dead_code)]
-    StackPinned(u8),
 }
 
+/// Shadow save/restore runs preserving caller scratch objects across a call.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CallPreservePlan {
-    pub mode: PreserveMode,
+    pub shadow_obj: StackObjId,
+    pub runs: SmallVec<[SaveRun; 2]>,
     pub result_count: u8,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum PreserveMode {
-    #[allow(dead_code)]
-    None,
-    ShadowRuns {
-        shadow_obj: StackObjId,
-        runs: SmallVec<[SaveRun; 2]>,
-    },
-    #[allow(dead_code)]
-    TinyStackLift { word_offsets: SmallVec<[u32; 4]> },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -681,18 +689,7 @@ fn compute_program_memory_plan_from_stacks(
         .checked_add(stable_chain_peak_words)
         .expect("global dynamic base word overflow");
 
-    let mut scc_plans: FxHashMap<SccRef, SccMemPlan> = FxHashMap::default();
-    for &scc_ref in &schedule.topo {
-        scc_plans.insert(
-            scc_ref,
-            SccMemPlan {
-                is_recursive: schedule.sccs.scc_info(scc_ref).is_cycle,
-                stable_chain_prefix_words: chain.scc_prefix[&scc_ref],
-            },
-        );
-    }
-
-    let mut funcs_plan: FxHashMap<FuncRef, FuncMemPlan> = FxHashMap::default();
+    let mut funcs_plan: FxHashMap<FuncRef, SemanticFuncPlan> = FxHashMap::default();
     for &func in funcs {
         let stack = stacks
             .get(&func)
@@ -701,13 +698,11 @@ fn compute_program_memory_plan_from_stacks(
             .remove(&func)
             .unwrap_or_else(|| panic!("missing placement for func {}", func.as_u32()));
         let scc_ref = schedule.sccs.scc_ref(func);
-        let scc_plan = scc_plans
-            .get(&scc_ref)
-            .unwrap_or_else(|| panic!("missing SCC plan for scc {}", scc_ref.as_u32()));
+        let is_recursive = schedule.sccs.scc_info(scc_ref).is_cycle;
         let stable_base_word = scratch_peak_words
-            .checked_add(scc_plan.stable_chain_prefix_words)
+            .checked_add(chain.scc_prefix[&scc_ref])
             .expect("stable base word overflow");
-        let stable_mode = if scc_plan.is_recursive {
+        let stable_mode = if is_recursive {
             StableMode::DynamicFrame
         } else if placement.stable_words != 0 {
             StableMode::StableAbs {
@@ -716,7 +711,7 @@ fn compute_program_memory_plan_from_stacks(
         } else {
             StableMode::None
         };
-        let entry_abs_words = if scc_plan.is_recursive {
+        let entry_abs_words = if is_recursive {
             global_dyn_base_words
         } else {
             stable_base_word
@@ -753,7 +748,7 @@ fn compute_program_memory_plan_from_stacks(
 
         funcs_plan.insert(
             func,
-            FuncMemPlan {
+            SemanticFuncPlan {
                 arena_base,
                 scratch_words: placement.scratch_words,
                 stable_words: placement.stable_words,
@@ -761,7 +756,6 @@ fn compute_program_memory_plan_from_stacks(
                 entry_abs_words,
                 obj_loc,
                 alloca_loc,
-                spill_obj: stack.spill_obj.clone(),
                 call_preserve: placement.call_preserve,
                 malloc_future_abs_words: FxHashMap::default(),
                 transient_mallocs: FxHashSet::default(),
@@ -777,7 +771,6 @@ fn compute_program_memory_plan_from_stacks(
         stable_chain_peak_words,
         global_dyn_base,
         funcs: funcs_plan,
-        sccs: scc_plans,
     }
 }
 
@@ -792,37 +785,44 @@ pub(crate) fn compute_abs_clobber_words_with_extra(
             plan.funcs
                 .get(&func)
                 .map_or(extra_reserve.max_words(), |func_plan| {
-                    abs_words_end_with_extra_reserve(func_plan, extra_reserve)
+                    func_plan.abs_words_end_with_reserve(extra_reserve)
                 })
         },
         |acc, callee_end| *acc = (*acc).max(*callee_end),
     )
 }
 
-fn abs_words_end_with_extra_reserve(
-    func_plan: &FuncMemPlan,
-    extra_reserve: BackendSpillReserve,
-) -> u32 {
-    let scratch_end = func_plan
-        .scratch_words
-        .checked_add(extra_reserve.scratch_words)
-        .expect("scratch reserve overflow");
-    let stable_end = match func_plan.stable_mode {
-        StableMode::None => extra_reserve.stable_words,
-        StableMode::StableAbs { base_word } => {
-            if func_plan.stable_words == 0 && extra_reserve.stable_words == 0 {
-                0
-            } else {
-                base_word
-                    .checked_add(func_plan.stable_words)
-                    .and_then(|end| end.checked_add(extra_reserve.stable_words))
-                    .expect("stable reserve overflow")
-            }
-        }
-        StableMode::DynamicFrame => 0,
-    };
+impl SemanticFuncPlan {
+    pub fn active_abs_words(&self) -> u32 {
+        self.entry_abs_words.max(self.abs_words_end())
+    }
 
-    scratch_end.max(stable_end)
+    /// The absolute clobber end of this frame if `extra_reserve` more words
+    /// were appended to each region. Unlike [`Self::abs_words_end`], a
+    /// `StableMode::None` frame still accounts for a nonzero stable reserve
+    /// (the reserve would force a stable frame into existence).
+    pub(crate) fn abs_words_end_with_reserve(&self, extra_reserve: BackendSpillReserve) -> u32 {
+        let scratch_end = self
+            .scratch_words
+            .checked_add(extra_reserve.scratch_words)
+            .expect("scratch reserve overflow");
+        let stable_end = match self.stable_mode {
+            StableMode::None => extra_reserve.stable_words,
+            StableMode::StableAbs { base_word } => {
+                if self.stable_words == 0 && extra_reserve.stable_words == 0 {
+                    0
+                } else {
+                    base_word
+                        .checked_add(self.stable_words)
+                        .and_then(|end| end.checked_add(extra_reserve.stable_words))
+                        .expect("stable reserve overflow")
+                }
+            }
+            StableMode::DynamicFrame => 0,
+        };
+
+        scratch_end.max(stable_end)
+    }
 }
 
 fn build_planner_facts(
@@ -889,7 +889,6 @@ fn verify_program_memory_plan(
                 ObjLoc::StableAbs(word) | ObjLoc::StableFrame(word) => {
                     stable_offsets.insert(*obj, word);
                 }
-                ObjLoc::StackPinned(_) => panic!("stack-pinned objects are not implemented"),
             }
         }
 
@@ -903,12 +902,9 @@ fn verify_program_memory_plan(
 
         let mut stable_subset = subset_objects(&stack.objects, stable_offsets.keys().copied());
         for call in func_plan.call_preserve.values() {
-            let PreserveMode::ShadowRuns { shadow_obj, runs } = &call.mode else {
-                continue;
-            };
-            let size_words: u32 = runs.iter().map(|run| run.len_words).sum();
+            let size_words: u32 = call.runs.iter().map(|run| run.len_words).sum();
             stable_subset.push(StackObj {
-                id: *shadow_obj,
+                id: call.shadow_obj,
                 kind: StackObjKind::Shadow(InstId::from_u32(0)),
                 size_words,
                 region: LiveRegion::sort_only(0),
@@ -939,10 +935,7 @@ fn verify_program_memory_plan(
         }
 
         for call in &stack.call_sites {
-            let saved = func_plan
-                .call_preserve
-                .get(&call.inst)
-                .map(|plan| &plan.mode);
+            let saved = func_plan.call_preserve.get(&call.inst);
             for &obj in &call.callee_visible_objs {
                 if stack.obj_size_words.get(&obj).copied() == Some(0) {
                     continue;
@@ -965,7 +958,7 @@ fn verify_program_memory_plan(
                         panic!("missing object location for obj {}", obj.as_u32())
                     });
                 if matches!(loc, ObjLoc::ScratchAbs(_)) {
-                    let Some(PreserveMode::ShadowRuns { runs, .. }) = saved else {
+                    let Some(preserve) = saved else {
                         panic!(
                             "scratch object {} in func {} at call {} is not preserved",
                             obj.as_u32(),
@@ -975,16 +968,14 @@ fn verify_program_memory_plan(
                     };
                     let Some(src_word) = func_plan.obj_loc.get(&obj).and_then(|loc| match loc {
                         ObjLoc::ScratchAbs(word) => Some(*word),
-                        ObjLoc::StableAbs(_) | ObjLoc::StableFrame(_) | ObjLoc::StackPinned(_) => {
-                            None
-                        }
+                        ObjLoc::StableAbs(_) | ObjLoc::StableFrame(_) => None,
                     }) else {
                         continue;
                     };
                     let size = stack.obj_size_words[&obj];
                     for word in src_word..src_word + size {
                         assert!(
-                            runs.iter().any(|run| {
+                            preserve.runs.iter().any(|run| {
                                 let end = run
                                     .scratch_src_word
                                     .checked_add(run.len_words)

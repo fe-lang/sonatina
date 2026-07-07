@@ -15,7 +15,7 @@ use std::cmp::Ordering;
 use crate::bitset::BitSet;
 
 use super::{
-    memory_plan::{CallPreservePlan, PreserveMode, STATIC_BASE, SaveRun, WORD_BYTES},
+    memory_plan::{CallPreservePlan, STATIC_BASE, SaveRun, WORD_BYTES},
     static_arena_alloc::{
         CallSiteObjects, ExactPackItem, ExactPackWorkspace, FuncStackObjects, LiveRegion,
         LocalObjIdx, ObjFacts, PackedObject, StableItemIdx, StackObj, StackObjId, StackObjKind,
@@ -1045,10 +1045,8 @@ fn build_shadow_preserve_for_call(
         store_count: 0,
     };
     let plan = CallPreservePlan {
-        mode: PreserveMode::ShadowRuns {
-            shadow_obj: shadow_obj.id,
-            runs,
-        },
+        shadow_obj: shadow_obj.id,
+        runs,
         result_count: call.result_count,
     };
     Some((shadow_obj, plan))
@@ -1317,11 +1315,11 @@ fn placement_cost(
 fn shadow_copy_words(call_preserve: &FxHashMap<InstId, CallPreservePlan>) -> u64 {
     call_preserve
         .values()
-        .map(|plan| match &plan.mode {
-            PreserveMode::ShadowRuns { runs, .. } => {
-                runs.iter().map(|run| u64::from(run.len_words)).sum()
-            }
-            PreserveMode::None | PreserveMode::TinyStackLift { .. } => 0,
+        .map(|plan| {
+            plan.runs
+                .iter()
+                .map(|run| u64::from(run.len_words))
+                .sum::<u64>()
         })
         .sum()
 }
@@ -1569,7 +1567,6 @@ fn problem_shadow_order_id(next_shadow_base_id: u32, call_idx: usize) -> u32 {
 mod tests {
     use super::*;
     use crate::isa::evm::static_arena_alloc::BlockLiveSegment;
-    use cranelift_entity::SecondaryMap;
     use sonatina_ir::{BlockId, module::FuncRef};
 
     fn region(block: u32, start_boundary: u32, end_boundary: u32) -> LiveRegion {
@@ -1684,7 +1681,6 @@ mod tests {
             obj_facts: FxHashMap::default(),
             obj_size_words,
             alloca_ids: FxHashMap::default(),
-            spill_obj: SecondaryMap::default(),
             call_sites: Vec::new(),
             next_obj_id: candidate_count as u32,
         };
@@ -1752,7 +1748,6 @@ mod tests {
                 call_rank: 10,
                 callee: FuncRef::from_u32(0),
                 result_count: 0,
-                arg_count: 0,
                 live_across_objs: vec![StackObjId::new(0)],
                 callee_visible_objs: Vec::new(),
             },
@@ -1761,7 +1756,6 @@ mod tests {
                 call_rank: 20,
                 callee: FuncRef::from_u32(0),
                 result_count: 0,
-                arg_count: 0,
                 live_across_objs: vec![StackObjId::new(1)],
                 callee_visible_objs: Vec::new(),
             },
@@ -1771,7 +1765,6 @@ mod tests {
             obj_facts: FxHashMap::default(),
             obj_size_words,
             alloca_ids: FxHashMap::default(),
-            spill_obj: SecondaryMap::default(),
             call_sites,
             next_obj_id: 2,
         };

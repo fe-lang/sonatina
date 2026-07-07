@@ -21,7 +21,7 @@ use sonatina_ir::{
 };
 
 use crate::isa::evm::{
-    memory_plan::FuncMemPlan, prepare::memory_access_may_touch_free_ptr_slot,
+    memory_plan::SemanticFuncPlan, prepare::memory_access_may_touch_free_ptr_slot,
     ptr_provenance::Provenance,
 };
 
@@ -113,7 +113,7 @@ pub(crate) fn compute_exact_heap_base_before_malloc(
     function: &Function,
     isa: &Evm,
     cfg: &ControlFlowGraph,
-    func_plan: &FuncMemPlan,
+    func_plan: &SemanticFuncPlan,
     prov: &SecondaryMap<ValueId, Provenance>,
     entry_heap_base_is_exact: bool,
 ) -> FxHashMap<InstId, bool> {

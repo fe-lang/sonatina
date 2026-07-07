@@ -2,17 +2,15 @@ use sonatina_ir::{BlockId, Function, I256, Immediate, InstId};
 
 use crate::stackalloc::{Action, Actions, Allocator, StackifyAlloc};
 
-use super::super::{
-    DynamicFrameLayout, FuncMemPlan, ObjLoc, PreserveMode, static_arena_alloc::StackObjId,
-};
+use super::super::{DynamicFrameLayout, MachineFuncPlan, ObjLoc, static_arena_alloc::StackObjId};
 
 pub(crate) struct FinalAlloc {
     inner: StackifyAlloc,
-    pub(crate) mem_plan: FuncMemPlan,
+    pub(crate) mem_plan: MachineFuncPlan,
 }
 
 impl FinalAlloc {
-    pub(crate) fn new(inner: StackifyAlloc, mem_plan: FuncMemPlan) -> Self {
+    pub(crate) fn new(inner: StackifyAlloc, mem_plan: MachineFuncPlan) -> Self {
         let alloc = Self { inner, mem_plan };
         alloc.validate_object_actions();
         alloc
@@ -84,9 +82,6 @@ impl FinalAlloc {
                 ))
             }
             ObjLoc::StableFrame(off) => frame(self.frame_action_offset(off, extra_words, kind)),
-            ObjLoc::StackPinned(depth) => {
-                panic!("stack-pinned objects are not supported in EVM lowering (depth={depth})")
-            }
         }
     }
 
@@ -151,9 +146,6 @@ impl FinalAlloc {
                 offset_words: self.frame_action_offset(off, 0, "exact local addr"),
                 extra_bytes: offset_bytes,
             },
-            ObjLoc::StackPinned(depth) => {
-                panic!("stack-pinned exact local addresses are not supported (depth={depth})")
-            }
         }
     }
 
@@ -166,9 +158,7 @@ impl FinalAlloc {
         let Some(plan) = self.mem_plan.call_preserve.get(&inst) else {
             return actions;
         };
-        let PreserveMode::ShadowRuns { shadow_obj, runs } = &plan.mode else {
-            return actions;
-        };
+        let (shadow_obj, runs) = (&plan.shadow_obj, &plan.runs);
         if runs.is_empty() {
             return actions;
         }
@@ -212,9 +202,7 @@ impl FinalAlloc {
         let Some(plan) = self.mem_plan.call_preserve.get(&inst) else {
             return actions;
         };
-        let PreserveMode::ShadowRuns { shadow_obj, runs } = &plan.mode else {
-            return actions;
-        };
+        let (shadow_obj, runs) = (&plan.shadow_obj, &plan.runs);
         if runs.is_empty() {
             return actions;
         }
@@ -295,19 +283,19 @@ impl Allocator for FinalAlloc {
 #[cfg(test)]
 mod tests {
     use cranelift_entity::SecondaryMap;
-    use rustc_hash::{FxHashMap, FxHashSet};
+    use rustc_hash::FxHashMap;
     use sonatina_ir::InstId;
 
     use super::{FinalAlloc, StackifyAlloc};
     use crate::{
-        isa::evm::{FuncMemPlan, ObjLoc, STATIC_BASE, memory_plan::StableMode},
+        isa::evm::{MachineFuncPlan, ObjLoc, STATIC_BASE, memory_plan::StableMode},
         stackalloc::Action,
     };
 
-    fn mem_plan_with_alloca(alloca: InstId, loc: ObjLoc, stable_words: u32) -> FuncMemPlan {
+    fn mem_plan_with_alloca(alloca: InstId, loc: ObjLoc, stable_words: u32) -> MachineFuncPlan {
         let mut alloca_loc = FxHashMap::default();
         alloca_loc.insert(alloca, loc);
-        FuncMemPlan {
+        MachineFuncPlan {
             arena_base: STATIC_BASE,
             scratch_words: 0,
             stable_words,
@@ -317,10 +305,6 @@ mod tests {
             alloca_loc,
             spill_obj: SecondaryMap::new(),
             call_preserve: FxHashMap::default(),
-            malloc_future_abs_words: FxHashMap::default(),
-            transient_mallocs: FxHashSet::default(),
-            malloc_escape_kinds: FxHashMap::default(),
-            return_escape_caller_abs_words: 0,
         }
     }
 
