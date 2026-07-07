@@ -768,7 +768,6 @@ block0:
                 "test must exercise the bounded swap shortlist path"
             );
 
-            let mut lb_state = PlacementLowerBoundState::new(problem);
             let mut search_work = SearchWorkBuffers::default();
             let current_score = FuncPlacementScore {
                 scratch_words: u32::MAX,
@@ -778,7 +777,6 @@ block0:
             let _ = find_best_exact_swap_move(
                 problem,
                 state,
-                &mut lb_state,
                 current_score,
                 &mut FuncPlacementScoreWorkspace::default(),
                 &mut search_work,
@@ -1059,9 +1057,6 @@ struct SearchWorkBuffers {
     add_shortlist: Vec<usize>,
     remove_shortlist: Vec<usize>,
 }
-
-#[derive(Default)]
-struct PlacementLowerBoundState;
 
 #[derive(Clone, Debug)]
 struct ShadowPackObj {
@@ -1349,25 +1344,6 @@ impl PlacementState {
         assert_ne!(add_idx, remove_idx, "swap requires distinct candidates");
         self.apply_remove(problem, remove_idx);
         self.apply_add(problem, add_idx);
-    }
-}
-
-impl PlacementLowerBoundState {
-    fn new(problem: &PlacementProblem<'_>) -> Self {
-        let _ = problem;
-        Self
-    }
-
-    fn apply_add(&mut self, problem: &PlacementProblem<'_>, candidate_idx: usize) {
-        let _ = (problem, candidate_idx);
-    }
-
-    fn apply_remove(&mut self, problem: &PlacementProblem<'_>, candidate_idx: usize) {
-        let _ = (problem, candidate_idx);
-    }
-
-    fn apply_swap(&mut self, problem: &PlacementProblem<'_>, add_idx: usize, remove_idx: usize) {
-        let _ = (problem, add_idx, remove_idx);
     }
 }
 
@@ -1739,7 +1715,6 @@ fn solve_func_placement(
 ) -> FuncPlacementEval {
     let problem = PlacementProblem::new(stack, facts, is_recursive, cost_model);
     let mut state = PlacementState::new(&problem);
-    let mut lb_state = PlacementLowerBoundState::new(&problem);
     let stable_item_capacity = problem
         .sorted_objects
         .len()
@@ -1774,12 +1749,11 @@ fn solve_func_placement(
         if let Some(best_move) = find_best_exact_one_flip_move(
             &problem,
             &state,
-            &mut lb_state,
             best_score,
             &mut score_workspace,
             &mut search_work,
         ) {
-            apply_placement_move(&problem, &mut state, &mut lb_state, best_move.mv);
+            apply_placement_move(&problem, &mut state, best_move.mv);
             best_score = best_move.exact;
             continue;
         }
@@ -1787,12 +1761,11 @@ fn solve_func_placement(
         if let Some(best_move) = find_best_exact_swap_move(
             &problem,
             &state,
-            &mut lb_state,
             best_score,
             &mut score_workspace,
             &mut search_work,
         ) {
-            apply_placement_move(&problem, &mut state, &mut lb_state, best_move.mv);
+            apply_placement_move(&problem, &mut state, best_move.mv);
             best_score = best_move.exact;
             continue;
         }
@@ -1807,26 +1780,16 @@ fn solve_func_placement(
 fn apply_placement_move(
     problem: &PlacementProblem<'_>,
     state: &mut PlacementState,
-    lb_state: &mut PlacementLowerBoundState,
     mv: PlacementMove,
 ) {
     match mv {
         PlacementMove::None => {}
-        PlacementMove::Add(candidate_idx) => {
-            state.apply_add(problem, candidate_idx);
-            lb_state.apply_add(problem, candidate_idx);
-        }
-        PlacementMove::Remove(candidate_idx) => {
-            state.apply_remove(problem, candidate_idx);
-            lb_state.apply_remove(problem, candidate_idx);
-        }
+        PlacementMove::Add(candidate_idx) => state.apply_add(problem, candidate_idx),
+        PlacementMove::Remove(candidate_idx) => state.apply_remove(problem, candidate_idx),
         PlacementMove::Swap {
             add_idx,
             remove_idx,
-        } => {
-            state.apply_swap(problem, add_idx, remove_idx);
-            lb_state.apply_swap(problem, add_idx, remove_idx);
-        }
+        } => state.apply_swap(problem, add_idx, remove_idx),
     }
 }
 
@@ -2084,12 +2047,10 @@ fn shadow_words_for_call_after_move(
 fn find_best_exact_one_flip_move(
     problem: &PlacementProblem<'_>,
     state: &PlacementState,
-    lb_state: &mut PlacementLowerBoundState,
     current_score: FuncPlacementScore,
     exact_ws: &mut FuncPlacementScoreWorkspace,
     work: &mut SearchWorkBuffers,
 ) -> Option<ExactMoveEval> {
-    let _ = lb_state;
     work.one_flip_exact.clear();
     let mut candidates = Vec::new();
     if problem.candidates.len() <= ONE_FLIP_FULL_LIMIT {
@@ -2136,7 +2097,6 @@ fn collect_one_flip_shortlists(
 fn find_best_exact_swap_move(
     problem: &PlacementProblem<'_>,
     state: &PlacementState,
-    lb_state: &mut PlacementLowerBoundState,
     current_score: FuncPlacementScore,
     exact_ws: &mut FuncPlacementScoreWorkspace,
     work: &mut SearchWorkBuffers,
@@ -2147,7 +2107,6 @@ fn find_best_exact_swap_move(
         return None;
     }
 
-    let _ = lb_state;
     work.swap_exact.clear();
     if feasible_add_count.saturating_mul(feasible_remove_count) <= SWAP_FULL_PAIR_LIMIT {
         for add_idx in 0..problem.candidates.len() {
