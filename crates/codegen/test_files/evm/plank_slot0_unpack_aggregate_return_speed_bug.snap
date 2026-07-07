@@ -11,13 +11,13 @@ object: Contract
   total: 551 bytes
 
 functions:
-  mem: global_dyn_base=0x180 arena_base=0xa0 scratch_peak_words=0 static_chain_peak_words=7
+  mem: global_dyn_base=0x180 arena_base=0xa0 scratch_peak_words=0 stable_chain_peak_words=7
   init: ir_blocks=4 ir_insts=10 vcode_ops=17 fixups=3 imm_bytes=5
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   unpack: ir_blocks=4 ir_insts=34 vcode_ops=81 fixups=1 imm_bytes=21
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=7 abs_words_end=0
   run: ir_blocks=8 ir_insts=36 vcode_ops=99 fixups=6 imm_bytes=35
-    mem: scratch_words=0 stable_words=7 stable_mode=StaticAbs(base=0xa0) entry_abs_words=0 abs_words_end=7
+    mem: scratch_words=0 stable_words=7 stable_mode=StableAbs(base=0xa0) entry_abs_words=0 abs_words_end=7
 
 evm:
   deploy: success reason=Return gas_used=111539 gas_refunded=0 logs=0 output=create len=270 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1

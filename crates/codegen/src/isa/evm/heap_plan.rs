@@ -18,8 +18,8 @@ use super::{
         BackendSpillReserve, FuncMemPlan, FuncPreAnalysis, ObjLoc, PreserveMode, ProgramMemoryPlan,
         WORD_BYTES, compute_abs_clobber_words_with_extra,
     },
-    provenance::{Provenance, compute_value_provenance},
     ptr_escape::PtrEscapeSummary,
+    ptr_provenance::{Provenance, compute_value_provenance},
 };
 use crate::liveness::InstLiveness;
 
@@ -542,7 +542,7 @@ block0:
         let mut caller_plan = empty_func_plan();
         caller_plan.scratch_words = 1;
         caller_plan.stable_words = 2;
-        caller_plan.stable_mode = StableMode::StaticAbs { base_word: 2 };
+        caller_plan.stable_mode = StableMode::StableAbs { base_word: 2 };
         caller_plan.entry_abs_words = 2;
         caller_plan.obj_loc.insert(shadow_obj, ObjLoc::StableAbs(0));
         caller_plan.call_preserve.insert(
@@ -563,7 +563,7 @@ block0:
         let mut plan = ProgramMemoryPlan {
             arena_base: STATIC_BASE,
             scratch_peak_words: 1,
-            static_chain_peak_words: 2,
+            stable_chain_peak_words: 2,
             global_dyn_base: STATIC_BASE + 96,
             funcs: FxHashMap::default(),
             sccs: FxHashMap::default(),
@@ -641,7 +641,7 @@ block0:
         let mut plan = ProgramMemoryPlan {
             arena_base: STATIC_BASE,
             scratch_peak_words: 4,
-            static_chain_peak_words: 0,
+            stable_chain_peak_words: 0,
             global_dyn_base: STATIC_BASE + 4 * WORD_BYTES,
             funcs: FxHashMap::default(),
             sccs: FxHashMap::default(),

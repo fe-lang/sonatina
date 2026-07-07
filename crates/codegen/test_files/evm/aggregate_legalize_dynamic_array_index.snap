@@ -10,9 +10,9 @@ object: Contract
   total: 30 bytes
 
 functions:
-  mem: global_dyn_base=0x80 arena_base=0x0 scratch_peak_words=2 static_chain_peak_words=2
+  mem: global_dyn_base=0x80 arena_base=0x0 scratch_peak_words=2 stable_chain_peak_words=2
   entry: ir_blocks=1 ir_insts=9 vcode_ops=24 fixups=0 imm_bytes=6
-    mem: scratch_words=2 stable_words=2 stable_mode=StaticAbs(base=0x40) entry_abs_words=2 abs_words_end=4
+    mem: scratch_words=2 stable_words=2 stable_mode=StableAbs(base=0x40) entry_abs_words=2 abs_words_end=4
 
 evm:
   case ok: calldata_len=64 success reason=Return gas_used=21357 gas_refunded=0 logs=0 output=call len=32 tx_gas=21280 runtime_gas=77

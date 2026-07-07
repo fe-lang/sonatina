@@ -161,11 +161,11 @@ impl EvmBackend {
         let mut out = String::new();
         writeln!(
             &mut out,
-            "evm mem plan: global_dyn_base=0x{:x} arena_base=0x{:x} scratch_peak_words={} static_chain_peak_words={}",
+            "evm mem plan: global_dyn_base=0x{:x} arena_base=0x{:x} scratch_peak_words={} stable_chain_peak_words={}",
             prepared.section_plan().dyn_base,
             prepared.section_plan().arena_base,
             prepared.section_plan().scratch_peak_words,
-            prepared.section_plan().static_chain_peak_words
+            prepared.section_plan().stable_chain_peak_words
         )
         .expect("mem plan write failed");
 
@@ -178,9 +178,9 @@ impl EvmBackend {
             let stable = match func_plan.stable_mode {
                 StableMode::None => "None".to_string(),
                 StableMode::DynamicFrame => "DynamicFrame".to_string(),
-                StableMode::StaticAbs { base_word } => {
+                StableMode::StableAbs { base_word } => {
                     format!(
-                        "StaticAbs(base=0x{:x})",
+                        "StableAbs(base=0x{:x})",
                         func_plan.abs_addr_for_word(base_word)
                     )
                 }

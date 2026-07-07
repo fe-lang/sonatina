@@ -8,7 +8,7 @@ use sonatina_ir::{
     module::{FuncRef, ModuleCtx},
 };
 
-use super::{provenance::Provenance, ptr_escape::PtrEscapeSummary};
+use super::{ptr_escape::PtrEscapeSummary, ptr_provenance::Provenance};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PtrWriteKind {

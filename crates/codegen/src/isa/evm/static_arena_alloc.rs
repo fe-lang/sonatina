@@ -23,8 +23,8 @@ use sonatina_ir::{
 use super::{
     escape_scan::{EscapeScanCtx, EscapeSink, EscapeSource, for_each_escape_event_at_inst},
     memory_plan::{FuncPreAnalysis, WORD_BYTES},
-    provenance::{Provenance, compute_provenance},
     ptr_escape::PtrEscapeSummary,
+    ptr_provenance::{Provenance, compute_provenance},
 };
 use crate::stackalloc::StackifyAlloc;
 

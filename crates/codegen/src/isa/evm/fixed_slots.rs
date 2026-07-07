@@ -10,36 +10,36 @@ use crate::{bitset::BitSet, liveness::InstLiveness};
 
 use super::memory_plan::WORD_BYTES;
 
-pub(crate) const SCRATCH_SPILL_SLOTS: u32 = 2;
+pub(crate) const FIXED_SPILL_SLOTS: u32 = 2;
 
-const SCRATCH_END_BYTES: u32 = SCRATCH_SPILL_SLOTS * WORD_BYTES;
+const FIXED_SLOTS_END_BYTES: u32 = FIXED_SPILL_SLOTS * WORD_BYTES;
 
-pub(crate) struct MachineScratchClobberLiveness {
-    fixed_scratch_live_values: BitSet<ValueId>,
+pub(crate) struct MachineFixedSlotClobberLiveness {
+    fixed_slot_live_values: BitSet<ValueId>,
     stable_final_spill_values: BitSet<ValueId>,
 }
 
-impl MachineScratchClobberLiveness {
+impl MachineFixedSlotClobberLiveness {
     pub(crate) fn compute(
         function: &Function,
         isa: &EvmMachine,
-        scratch_effects: Option<&FxHashSet<FuncRef>>,
+        fixed_slot_effects: Option<&FxHashSet<FuncRef>>,
         inst_liveness: &InstLiveness,
     ) -> Self {
         let mut liveness = Self {
-            fixed_scratch_live_values: BitSet::default(),
+            fixed_slot_live_values: BitSet::default(),
             stable_final_spill_values: BitSet::default(),
         };
 
         for block in function.layout.iter_block() {
             for inst in function.layout.iter_inst(block) {
                 if let Some(call) = function.dfg.call_info(inst)
-                    && Self::callee_may_clobber_scratch(scratch_effects, call.callee())
+                    && Self::callee_may_clobber_fixed_slots(fixed_slot_effects, call.callee())
                 {
-                    liveness.record_fixed_scratch_clobber(function, inst_liveness, inst);
+                    liveness.record_fixed_slot_clobber(function, inst_liveness, inst);
                     liveness.record_stable_final_spill_clobber(function, inst_liveness, inst);
-                } else if machine_inst_is_scratch_clobber(function, isa, inst) {
-                    liveness.record_fixed_scratch_clobber(function, inst_liveness, inst);
+                } else if machine_inst_is_fixed_slot_clobber(function, isa, inst) {
+                    liveness.record_fixed_slot_clobber(function, inst_liveness, inst);
                 }
             }
         }
@@ -48,27 +48,24 @@ impl MachineScratchClobberLiveness {
     }
 
     pub(crate) fn into_parts(self) -> (BitSet<ValueId>, BitSet<ValueId>) {
-        (
-            self.fixed_scratch_live_values,
-            self.stable_final_spill_values,
-        )
+        (self.fixed_slot_live_values, self.stable_final_spill_values)
     }
 
-    fn callee_may_clobber_scratch(
-        scratch_effects: Option<&FxHashSet<FuncRef>>,
+    fn callee_may_clobber_fixed_slots(
+        fixed_slot_effects: Option<&FxHashSet<FuncRef>>,
         callee: FuncRef,
     ) -> bool {
-        scratch_effects.is_none_or(|effects| effects.contains(&callee))
+        fixed_slot_effects.is_none_or(|effects| effects.contains(&callee))
     }
 
-    fn record_fixed_scratch_clobber(
+    fn record_fixed_slot_clobber(
         &mut self,
         function: &Function,
         inst_liveness: &InstLiveness,
         inst: InstId,
     ) {
         Self::record_live_out_minus_defs(
-            &mut self.fixed_scratch_live_values,
+            &mut self.fixed_slot_live_values,
             function,
             inst_liveness,
             inst,
@@ -117,56 +114,56 @@ fn imm_lt_u32(imm: Immediate, bound: u32) -> bool {
     }
 }
 
-fn machine_addr_may_overlap_scratch(function: &Function, addr: ValueId) -> bool {
+fn machine_addr_may_overlap_fixed_slots(function: &Function, addr: ValueId) -> bool {
     if function.dfg.value_is_imm(addr) {
         let imm = function
             .dfg
             .value_imm(addr)
             .expect("imm value missing payload");
-        imm_lt_u32(imm, SCRATCH_END_BYTES)
+        imm_lt_u32(imm, FIXED_SLOTS_END_BYTES)
     } else {
         true
     }
 }
 
-pub(crate) fn machine_inst_is_scratch_clobber(
+pub(crate) fn machine_inst_is_fixed_slot_clobber(
     function: &Function,
     isa: &EvmMachine,
     inst: InstId,
 ) -> bool {
     match isa.inst_set().resolve_inst(function.dfg.inst(inst)) {
         EvmMachineInstKind::EvmMstore(mstore) => {
-            machine_addr_may_overlap_scratch(function, *mstore.addr())
+            machine_addr_may_overlap_fixed_slots(function, *mstore.addr())
         }
         EvmMachineInstKind::EvmMstore8(mstore8) => {
-            machine_addr_may_overlap_scratch(function, *mstore8.addr())
+            machine_addr_may_overlap_fixed_slots(function, *mstore8.addr())
         }
         EvmMachineInstKind::EvmCalldataCopy(copy) => {
-            machine_addr_may_overlap_scratch(function, *copy.dst_addr())
+            machine_addr_may_overlap_fixed_slots(function, *copy.dst_addr())
         }
         EvmMachineInstKind::EvmCodeCopy(copy) => {
-            machine_addr_may_overlap_scratch(function, *copy.dst_addr())
+            machine_addr_may_overlap_fixed_slots(function, *copy.dst_addr())
         }
         EvmMachineInstKind::EvmExtCodeCopy(copy) => {
-            machine_addr_may_overlap_scratch(function, *copy.dst_addr())
+            machine_addr_may_overlap_fixed_slots(function, *copy.dst_addr())
         }
         EvmMachineInstKind::EvmReturnDataCopy(copy) => {
-            machine_addr_may_overlap_scratch(function, *copy.dst_addr())
+            machine_addr_may_overlap_fixed_slots(function, *copy.dst_addr())
         }
         EvmMachineInstKind::EvmMcopy(copy) => {
-            machine_addr_may_overlap_scratch(function, *copy.dest())
+            machine_addr_may_overlap_fixed_slots(function, *copy.dest())
         }
         EvmMachineInstKind::EvmCall(call) => {
-            machine_addr_may_overlap_scratch(function, *call.ret_addr())
+            machine_addr_may_overlap_fixed_slots(function, *call.ret_addr())
         }
         EvmMachineInstKind::EvmCallCode(call) => {
-            machine_addr_may_overlap_scratch(function, *call.ret_addr())
+            machine_addr_may_overlap_fixed_slots(function, *call.ret_addr())
         }
         EvmMachineInstKind::EvmDelegateCall(call) => {
-            machine_addr_may_overlap_scratch(function, *call.ret_addr())
+            machine_addr_may_overlap_fixed_slots(function, *call.ret_addr())
         }
         EvmMachineInstKind::EvmStaticCall(call) => {
-            machine_addr_may_overlap_scratch(function, *call.ret_addr())
+            machine_addr_may_overlap_fixed_slots(function, *call.ret_addr())
         }
         _ => false,
     }
@@ -278,7 +275,7 @@ mod tests {
     fn analyze(
         module: &Module,
         func: FuncRef,
-        scratch_effects: &FxHashSet<FuncRef>,
+        fixed_slot_effects: &FxHashSet<FuncRef>,
     ) -> (ValueId, BitSet<ValueId>, BitSet<ValueId>) {
         let machine = EvmMachine::new(module.ctx.triple);
         module.func_store.view(func, |function| {
@@ -291,10 +288,10 @@ mod tests {
             let mut inst_liveness = InstLiveness::new();
             inst_liveness.compute(function, &cfg, &liveness);
 
-            let scratch_liveness = MachineScratchClobberLiveness::compute(
+            let scratch_liveness = MachineFixedSlotClobberLiveness::compute(
                 function,
                 &machine,
-                Some(scratch_effects),
+                Some(fixed_slot_effects),
                 &inst_liveness,
             );
             let (fixed_scratch, stable_final) = scratch_liveness.into_parts();
@@ -308,8 +305,8 @@ mod tests {
         let callee = define_unit_callee(&builder, "callee");
         let caller = define_calling_return_arg(&builder, "caller", callee);
         let module = builder.build();
-        let scratch_effects = FxHashSet::default();
-        let (arg, fixed_scratch, stable_final) = analyze(&module, caller, &scratch_effects);
+        let fixed_slot_effects = FxHashSet::default();
+        let (arg, fixed_scratch, stable_final) = analyze(&module, caller, &fixed_slot_effects);
 
         assert!(!fixed_scratch.contains(arg));
         assert!(!stable_final.contains(arg));
@@ -321,9 +318,9 @@ mod tests {
         let callee = define_unit_callee(&builder, "callee");
         let caller = define_calling_return_arg(&builder, "caller", callee);
         let module = builder.build();
-        let mut scratch_effects = FxHashSet::default();
-        scratch_effects.insert(callee);
-        let (arg, fixed_scratch, stable_final) = analyze(&module, caller, &scratch_effects);
+        let mut fixed_slot_effects = FxHashSet::default();
+        fixed_slot_effects.insert(callee);
+        let (arg, fixed_scratch, stable_final) = analyze(&module, caller, &fixed_slot_effects);
 
         assert!(fixed_scratch.contains(arg));
         assert!(stable_final.contains(arg));
@@ -334,8 +331,8 @@ mod tests {
         let builder = machine_builder();
         let caller = define_local_scratch_clobber_return_arg(&builder, "caller");
         let module = builder.build();
-        let scratch_effects = FxHashSet::default();
-        let (arg, fixed_scratch, stable_final) = analyze(&module, caller, &scratch_effects);
+        let fixed_slot_effects = FxHashSet::default();
+        let (arg, fixed_scratch, stable_final) = analyze(&module, caller, &fixed_slot_effects);
 
         assert!(fixed_scratch.contains(arg));
         assert!(!stable_final.contains(arg));

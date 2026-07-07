@@ -15,7 +15,7 @@ object: Counter
   total: 165 bytes
 
 functions:
-  mem: global_dyn_base=0xa0 arena_base=0xa0 scratch_peak_words=0 static_chain_peak_words=0
+  mem: global_dyn_base=0xa0 arena_base=0xa0 scratch_peak_words=0 stable_chain_peak_words=0
   test_counter__StorPtr_Evm___207f35a85ac4062e: ir_blocks=23 ir_insts=50 vcode_ops=130 fixups=15 imm_bytes=19
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Get_h3927684624c88c53__624197e0d5a47bbd: ir_blocks=11 ir_insts=23 vcode_ops=58 fixups=4 imm_bytes=11

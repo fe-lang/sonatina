@@ -15,7 +15,7 @@ use super::{
     escape_scan::{
         EscapeScanCtx, PtrTransferEvent, PtrTransferSource, for_each_ptr_transfer_at_inst,
     },
-    provenance::{Provenance, compute_provenance, type_can_carry_pointer_provenance},
+    ptr_provenance::{Provenance, compute_provenance, type_can_carry_pointer_provenance},
 };
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

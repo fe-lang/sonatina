@@ -16,9 +16,8 @@ use crate::{
 
 use super::{
     super::{
-        EvmBackend, ImmediateMaterializationMode,
+        EvmBackend, ImmediateMaterializationMode, fixed_slots,
         memory_plan::{MachineStackifyAnalysis, topo_sort_sccs},
-        scratch_plan,
     },
     verify::verify_machine_module,
 };
@@ -38,7 +37,7 @@ pub(crate) fn prepare_machine_stackify_analyses(
     let local_scratch_clobbers = compute_local_machine_scratch_clobbers(module, funcs, machine_isa);
 
     let mut analyses = FxHashMap::default();
-    let mut scratch_effects = FxHashSet::default();
+    let mut fixed_slot_effects = FxHashSet::default();
     for &scc_ref in topo.iter().rev() {
         let mut components: Vec<FuncRef> = scc
             .scc_info(scc_ref)
@@ -49,12 +48,14 @@ pub(crate) fn prepare_machine_stackify_analyses(
             .collect();
         components.sort_unstable_by_key(|func| func.as_u32());
 
-        let cycle_scratch_effects = scc.scc_info(scc_ref).is_cycle.then(|| {
-            let mut cycle_scratch_effects = scratch_effects.clone();
-            cycle_scratch_effects.extend(components.iter().copied());
-            cycle_scratch_effects
+        let cycle_fixed_slot_effects = scc.scc_info(scc_ref).is_cycle.then(|| {
+            let mut cycle_fixed_slot_effects = fixed_slot_effects.clone();
+            cycle_fixed_slot_effects.extend(components.iter().copied());
+            cycle_fixed_slot_effects
         });
-        let analysis_scratch_effects = cycle_scratch_effects.as_ref().unwrap_or(&scratch_effects);
+        let analysis_fixed_slot_effects = cycle_fixed_slot_effects
+            .as_ref()
+            .unwrap_or(&fixed_slot_effects);
 
         let mut scc_results: Vec<_> = components
             .par_iter()
@@ -65,7 +66,7 @@ pub(crate) fn prepare_machine_stackify_analyses(
                         function,
                         backend,
                         machine_isa,
-                        Some(analysis_scratch_effects),
+                        Some(analysis_fixed_slot_effects),
                     )
                 });
                 let uses_scratch_spills = analysis.alloc.uses_scratch_spills();
@@ -80,7 +81,7 @@ pub(crate) fn prepare_machine_stackify_analyses(
             analyses.insert(func, analysis);
         }
 
-        let scc_touches_scratch = scc_uses_scratch_spills
+        let scc_touches_fixed_slots = scc_uses_scratch_spills
             || components
                 .iter()
                 .copied()
@@ -90,10 +91,10 @@ pub(crate) fn prepare_machine_stackify_analyses(
                     .callee_of(func)
                     .iter()
                     .copied()
-                    .any(|callee| scratch_effects.contains(&callee))
+                    .any(|callee| fixed_slot_effects.contains(&callee))
             });
-        if scc_touches_scratch {
-            scratch_effects.extend(components);
+        if scc_touches_fixed_slots {
+            fixed_slot_effects.extend(components);
         }
     }
 
@@ -104,7 +105,7 @@ fn prepare_machine_stackify_analysis(
     function: &mut sonatina_ir::Function,
     backend: &EvmBackend,
     machine_isa: &EvmMachine,
-    scratch_effects: Option<&FxHashSet<FuncRef>>,
+    fixed_slot_effects: Option<&FxHashSet<FuncRef>>,
 ) -> MachineStackifyAnalysis {
     let _span = trace_span!("sonatina.codegen.evm.machine.prepare_stackify_func").entered();
     let mut cfg = ControlFlowGraph::new();
@@ -123,10 +124,10 @@ fn prepare_machine_stackify_analysis(
     let mut inst_liveness = InstLiveness::new();
     inst_liveness.compute(function, &cfg, &liveness);
 
-    let scratch_clobber_liveness = scratch_plan::MachineScratchClobberLiveness::compute(
+    let scratch_clobber_liveness = fixed_slots::MachineFixedSlotClobberLiveness::compute(
         function,
         machine_isa,
-        scratch_effects,
+        fixed_slot_effects,
         &inst_liveness,
     );
     let (scratch_live_values, stable_final_spill_values) = scratch_clobber_liveness.into_parts();
@@ -139,7 +140,7 @@ fn prepare_machine_stackify_analysis(
     )
     .with_search_profile(backend.stackify_search_profile)
     .with_scratch_live_values(scratch_live_values)
-    .with_scratch_spills(scratch_plan::SCRATCH_SPILL_SLOTS)
+    .with_scratch_spills(fixed_slots::FIXED_SPILL_SLOTS)
     .with_hot_immediate_caching();
 
     if backend.immediate_materialization_mode == ImmediateMaterializationMode::Size {
@@ -177,7 +178,7 @@ fn compute_local_machine_scratch_clobbers(
             module.func_store.view(func, |function| {
                 function.layout.iter_block().any(|block| {
                     function.layout.iter_inst(block).any(|inst| {
-                        scratch_plan::machine_inst_is_scratch_clobber(function, machine_isa, inst)
+                        fixed_slots::machine_inst_is_fixed_slot_clobber(function, machine_isa, inst)
                     })
                 })
             })

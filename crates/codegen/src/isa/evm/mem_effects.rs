@@ -15,7 +15,7 @@ use super::memory_plan::ProgramMemoryPlan;
 #[derive(Clone, Copy, Default)]
 pub(crate) struct FuncMemEffects {
     pub(crate) touches_static_arena: bool,
-    pub(crate) touches_scratch: bool,
+    pub(crate) touches_fixed_slots: bool,
     pub(crate) touches_dyn_frame: bool,
     pub(crate) touches_heap_meta: bool,
 }
@@ -23,7 +23,7 @@ pub(crate) struct FuncMemEffects {
 impl FuncMemEffects {
     fn union_with(&mut self, other: FuncMemEffects) {
         self.touches_static_arena |= other.touches_static_arena;
-        self.touches_scratch |= other.touches_scratch;
+        self.touches_fixed_slots |= other.touches_fixed_slots;
         self.touches_dyn_frame |= other.touches_dyn_frame;
         self.touches_heap_meta |= other.touches_heap_meta;
     }
@@ -33,7 +33,7 @@ pub(crate) fn compute_func_mem_effects(
     module: &Module,
     funcs: &[FuncRef],
     plan: &ProgramMemoryPlan,
-    scratch_effects: &FxHashSet<FuncRef>,
+    fixed_slot_effects: &FxHashSet<FuncRef>,
     isa: &Evm,
 ) -> FxHashMap<FuncRef, FuncMemEffects> {
     let funcs_set: FxHashSet<FuncRef> = funcs.iter().copied().collect();
@@ -54,12 +54,12 @@ pub(crate) fn compute_func_mem_effects(
             });
             let touches_dyn_frame = func_plan.is_some_and(|p| p.dynamic_frame_layout().is_some());
             let touches_heap_meta = module.func_store.view(func, |f| func_uses_malloc(f, isa));
-            let touches_scratch = scratch_effects.contains(&func);
+            let touches_fixed_slots = fixed_slot_effects.contains(&func);
             (
                 func,
                 FuncMemEffects {
                     touches_static_arena,
-                    touches_scratch,
+                    touches_fixed_slots,
                     touches_dyn_frame,
                     touches_heap_meta,
                 },

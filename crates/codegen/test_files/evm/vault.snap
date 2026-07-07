@@ -20,13 +20,13 @@ object: VaultUser
   total: 2079 bytes
 
 functions:
-  mem: global_dyn_base=0xe0 arena_base=0xa0 scratch_peak_words=0 static_chain_peak_words=2
+  mem: global_dyn_base=0xe0 arena_base=0xa0 scratch_peak_words=0 stable_chain_peak_words=2
   test_vault_multiuser__StorPtr_Evm___207f35a85ac4062e: ir_blocks=58 ir_insts=178 vcode_ops=505 fixups=63 imm_bytes=82
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__Deposit_h19f638fdcaab3cd__dbfe67dc81c33b5b: ir_blocks=3 ir_insts=28 vcode_ops=90 fixups=9 imm_bytes=14
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   decode_returndata__u256__3271ca15373d4483: ir_blocks=5 ir_insts=21 vcode_ops=59 fixups=4 imm_bytes=7
-    mem: scratch_words=0 stable_words=2 stable_mode=StaticAbs(base=0xa0) entry_abs_words=0 abs_words_end=2
+    mem: scratch_words=0 stable_words=2 stable_mode=StableAbs(base=0xa0) entry_abs_words=0 abs_words_end=2
   soldecoder_i__ha12a03fcb5ba844b_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b: ir_blocks=7 ir_insts=30 vcode_ops=68 fixups=2 imm_bytes=14
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=2 abs_words_end=0
   solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head: ir_blocks=7 ir_insts=22 vcode_ops=50 fixups=3 imm_bytes=8
@@ -42,7 +42,7 @@ functions:
   evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__GetTotalShares_hbe2278c3233da528__5145d089cb2da672: ir_blocks=3 ir_insts=24 vcode_ops=77 fixups=9 imm_bytes=13
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__AddYield_h1b194739dad02c6e__f712b0a646b2bb64: ir_blocks=3 ir_insts=30 vcode_ops=95 fixups=9 imm_bytes=16
-    mem: scratch_words=0 stable_words=2 stable_mode=StaticAbs(base=0xa0) entry_abs_words=0 abs_words_end=2
+    mem: scratch_words=0 stable_words=2 stable_mode=StableAbs(base=0xa0) entry_abs_words=0 abs_words_end=2
   evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__Withdraw_h97c67fe0f317b1b0__d9e92202bb8b3b1d: ir_blocks=3 ir_insts=28 vcode_ops=90 fixups=9 imm_bytes=14
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__GetMyShares_h4b85c900112aeed6__1df2a8280dde4872: ir_blocks=3 ir_insts=24 vcode_ops=77 fixups=9 imm_bytes=13
@@ -56,7 +56,7 @@ functions:
   __Vault_recv_0_1: ir_blocks=13 ir_insts=42 vcode_ops=120 fixups=5 imm_bytes=11
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   __Vault_init: ir_blocks=6 ir_insts=26 vcode_ops=68 fixups=6 imm_bytes=12
-    mem: scratch_words=0 stable_words=2 stable_mode=StaticAbs(base=0xa0) entry_abs_words=0 abs_words_end=2
+    mem: scratch_words=0 stable_words=2 stable_mode=StableAbs(base=0xa0) entry_abs_words=0 abs_words_end=2
   __Vault_runtime: ir_blocks=18 ir_insts=53 vcode_ops=148 fixups=25 imm_bytes=14
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   runtime_decoder__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2: ir_blocks=10 ir_insts=32 vcode_ops=69 fixups=3 imm_bytes=18

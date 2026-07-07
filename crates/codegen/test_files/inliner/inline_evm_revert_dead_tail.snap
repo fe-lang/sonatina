@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/inliner.rs
-assertion_line: 29
 input_file: test_files/inliner/inline_evm_revert_dead_tail.sntn
 ---
 func private %revert(v0.i32) {

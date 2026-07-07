@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/inliner.rs
-assertion_line: 29
 input_file: test_files/inliner/inline_evm_revert_chain.sntn
 ---
 func private %abort_chain(v0.i32) {

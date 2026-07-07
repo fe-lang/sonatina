@@ -763,7 +763,7 @@ fn classify_inst_effects_with<S: EffectSink>(
             *call.arg_addr(),
             *call.arg_len(),
             *call.ret_addr(),
-            *call.ret_offset(),
+            *call.ret_len(),
             true,
         );
         return sink.finish();
@@ -775,7 +775,7 @@ fn classify_inst_effects_with<S: EffectSink>(
             *call.arg_addr(),
             *call.arg_len(),
             *call.ret_addr(),
-            *call.ret_offset(),
+            *call.ret_len(),
             true,
         );
         return sink.finish();

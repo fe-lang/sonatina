@@ -149,7 +149,7 @@ pub(crate) struct FinalSpillChoiceCtx<'a> {
     pub(crate) pre_analyses: &'a FxHashMap<FuncRef, FuncPreAnalysis>,
     pub(crate) ptr_escape: &'a FxHashMap<FuncRef, PtrEscapeSummary>,
     pub(crate) backend: &'a EvmBackend,
-    pub(crate) base_scratch_effects: &'a FxHashSet<FuncRef>,
+    pub(crate) base_fixed_slot_effects: &'a FxHashSet<FuncRef>,
     pub(crate) inputs: &'a [MachineFinalSpillInput],
 }
 
@@ -204,10 +204,10 @@ impl FinalSpillChoiceCtx<'_> {
         choices: &FxHashMap<FuncRef, OptionalFinalSpillPlacement>,
     ) -> FinalSpillChoiceScore {
         let reserves = self.final_spill_reserves(choices);
-        let mut scratch_effects = self.base_scratch_effects.clone();
+        let mut fixed_slot_effects = self.base_fixed_slot_effects.clone();
         for (&func, reserve) in &reserves {
             if reserve.scratch_words != 0 {
-                scratch_effects.insert(func);
+                fixed_slot_effects.insert(func);
             }
         }
 
@@ -220,7 +220,7 @@ impl FinalSpillChoiceCtx<'_> {
             },
             self.pre_analyses,
             self.ptr_escape,
-            &scratch_effects,
+            &fixed_slot_effects,
             self.backend,
             &reserves,
         );
@@ -229,7 +229,7 @@ impl FinalSpillChoiceCtx<'_> {
             placement.global_dyn_base,
             placement.arena_base,
             placement.scratch_peak_words,
-            placement.static_chain_peak_words,
+            placement.stable_chain_peak_words,
             reserves
                 .values()
                 .map(|reserve| u64::from(reserve.stable_words))
@@ -419,7 +419,7 @@ fn required_stable_reserve_words(
 
     match mem_plan.stable_mode {
         StableMode::None | StableMode::DynamicFrame => spill_words,
-        StableMode::StaticAbs { .. } => {
+        StableMode::StableAbs { .. } => {
             let semantic_stable_words = mem_plan
                 .stable_words
                 .checked_sub(current_reserved_words)
@@ -494,7 +494,7 @@ fn place_stable_spills(
 
     let stable_mode = mem_plan.stable_mode;
     let reserved_start = match stable_mode {
-        StableMode::StaticAbs { .. } => {
+        StableMode::StableAbs { .. } => {
             let (reserve_start, reserve_end) = stable_reserve_range(mem_plan, reserve.stable_words)
                 .expect("static stable reserve exceeds stable words");
             (required_words <= reserve.stable_words)
@@ -520,7 +520,7 @@ fn place_stable_spills(
             .max(spill_floor_words_from_fixed_writes(mem_plan, fixed_writes))
     };
     let loc = |word| match (reserved_start.is_some(), stable_mode) {
-        (true, StableMode::StaticAbs { .. }) => ObjLoc::StableAbs(word),
+        (true, StableMode::StableAbs { .. }) => ObjLoc::StableAbs(word),
         (true, StableMode::DynamicFrame) => ObjLoc::StableFrame(word),
         (true, StableMode::None) => unreachable!("stable tail requires stable mode"),
         (false, _) => ObjLoc::ScratchAbs(word),
@@ -551,7 +551,7 @@ fn place_spills(
 
 fn stable_tail_start(mem_plan: &FuncMemPlan, spill_words: u32) -> Option<u32> {
     match mem_plan.stable_mode {
-        StableMode::StaticAbs { .. } | StableMode::DynamicFrame => {
+        StableMode::StableAbs { .. } | StableMode::DynamicFrame => {
             mem_plan.stable_words.checked_sub(spill_words)
         }
         StableMode::None => None,
@@ -560,7 +560,7 @@ fn stable_tail_start(mem_plan: &FuncMemPlan, spill_words: u32) -> Option<u32> {
 
 fn stable_reserve_range(mem_plan: &FuncMemPlan, reserved_words: u32) -> Option<(u32, u32)> {
     match mem_plan.stable_mode {
-        StableMode::StaticAbs { .. } | StableMode::DynamicFrame => Some((
+        StableMode::StableAbs { .. } | StableMode::DynamicFrame => Some((
             mem_plan.stable_words.checked_sub(reserved_words)?,
             mem_plan.stable_words,
         )),
@@ -656,7 +656,7 @@ fn forbidden_static_stable_offsets(
     mem_plan: &FuncMemPlan,
     fixed_writes: &[FixedMemoryWriteRange],
 ) -> Vec<(u32, u32)> {
-    let StableMode::StaticAbs { base_word } = mem_plan.stable_mode else {
+    let StableMode::StableAbs { base_word } = mem_plan.stable_mode else {
         return Vec::new();
     };
 
@@ -865,7 +865,7 @@ fn validate_final_spill_regions(
             })?;
             let valid = matches!(
                 (mem_plan.stable_mode, loc),
-                (StableMode::StaticAbs { .. }, ObjLoc::StableAbs(_))
+                (StableMode::StableAbs { .. }, ObjLoc::StableAbs(_))
                     | (StableMode::DynamicFrame, ObjLoc::StableFrame(_))
             );
             if !valid {
@@ -933,7 +933,7 @@ mod tests {
             arena_base: 0xa0,
             scratch_words,
             stable_words,
-            stable_mode: StableMode::StaticAbs {
+            stable_mode: StableMode::StableAbs {
                 base_word: scratch_words,
             },
             entry_abs_words: scratch_words,

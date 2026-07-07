@@ -12,8 +12,8 @@ use std::iter;
 use crate::isa::evm::{
     EvmBackend, FREE_PTR_SLOT, WORD_BYTES,
     prepare::{memory_access_may_touch_free_ptr_slot, value_imm_u32},
-    provenance::{Provenance, compute_value_provenance},
     ptr_escape::PtrEscapeSummary,
+    ptr_provenance::{Provenance, compute_value_provenance},
 };
 
 use super::placement::MallocPlacement;
