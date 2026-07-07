@@ -23,8 +23,8 @@ use super::{
         EvmBackend, heap_plan, malloc_plan,
         mem_effects::compute_func_mem_effects,
         memory_plan::{
-            self, BackendSpillReserve, FinalScratchReserveRange, FuncPreAnalysis, ObjLoc,
-            StableMode, WORD_BYTES,
+            self, BackendSpillReserve, FinalScratchReserveRange, FuncPreAnalysis, StableMode,
+            WORD_BYTES,
         },
         prepare::{
             ArenaBaseFacts, choose_arena_base, compute_return_escape_caller_clamp_words,
@@ -54,12 +54,8 @@ pub(crate) struct EvmMemoryPlacementPlan {
 
 #[derive(Clone, Debug)]
 pub(crate) struct EvmFuncPlacementPlan {
-    pub(crate) arena_base: u32,
-    pub(crate) stable_mode: StableMode,
-    pub(crate) stable_words: u32,
     pub(crate) final_scratch_reserve: FinalScratchReserveRange,
-    pub(crate) mem_plan: memory_plan::FuncMemPlan,
-    pub(crate) alloca_loc: FxHashMap<InstId, ObjLoc>,
+    pub(crate) mem_plan: memory_plan::SemanticFuncPlan,
     pub(crate) malloc_placements: FxHashMap<InstId, MallocPlacement>,
     pub(crate) free_ptr_floor_before_malloc: FxHashMap<InstId, Option<u32>>,
 }
@@ -125,7 +121,7 @@ struct PrivateStaticMallocProgramCtx<'a> {
 struct PrivateStaticMallocFuncCtx<'a> {
     function: &'a Function,
     analysis: &'a FuncPreAnalysis,
-    func_plan: &'a memory_plan::FuncMemPlan,
+    func_plan: &'a memory_plan::SemanticFuncPlan,
     module: &'a ModuleCtx,
     isa: &'a Evm,
     heap_facts: &'a FuncHeapFacts,
@@ -212,7 +208,7 @@ pub(crate) fn compute_semantic_memory_placement(
     let has_dynamic_frames = semantic_plan
         .funcs
         .values()
-        .any(memory_plan::FuncMemPlan::uses_dynamic_frame);
+        .any(memory_plan::SemanticFuncPlan::uses_dynamic_frame);
     let backend_spill_scratch_reserve_peak = backend_spill_reserves
         .values()
         .map(|reserve| reserve.scratch_words)
@@ -384,15 +380,11 @@ pub(crate) fn compute_semantic_memory_placement(
             (
                 func,
                 EvmFuncPlacementPlan {
-                    arena_base: func_plan.arena_base,
-                    stable_mode: func_plan.stable_mode,
-                    stable_words: func_plan.stable_words,
                     final_scratch_reserve: final_scratch_reserves
                         .get(&func)
                         .copied()
                         .unwrap_or_default(),
-                    mem_plan: machine_mem_plan_from_semantic(func_plan),
-                    alloca_loc: func_plan.alloca_loc.clone(),
+                    mem_plan: func_plan.clone(),
                     malloc_placements,
                     free_ptr_floor_before_malloc,
                 },
@@ -423,7 +415,7 @@ fn compute_func_heap_facts(
     module: &ModuleCtx,
     isa: &Evm,
     analysis: &FuncPreAnalysis,
-    func_plan: &memory_plan::FuncMemPlan,
+    func_plan: &memory_plan::SemanticFuncPlan,
     entry_may_have_live_frame: &FxHashMap<FuncRef, bool>,
 ) -> FuncHeapFacts {
     let needs_dyn_sp_clamp = func_plan.uses_dynamic_frame()
@@ -471,7 +463,7 @@ impl MallocPlacementCtx<'_> {
         function: &Function,
         func: FuncRef,
         heap_facts: &FuncHeapFacts,
-        func_plan: &memory_plan::FuncMemPlan,
+        func_plan: &memory_plan::SemanticFuncPlan,
     ) -> FxHashMap<InstId, MallocPlacement> {
         let mut out = FxHashMap::default();
         let needs_dyn_sp_clamp = heap_facts.needs_dyn_sp_clamp;
@@ -678,7 +670,7 @@ fn compute_private_static_malloc_func_plan(
 fn private_static_malloc_candidate(
     function: &Function,
     analysis: &FuncPreAnalysis,
-    func_plan: &memory_plan::FuncMemPlan,
+    func_plan: &memory_plan::SemanticFuncPlan,
     module: &ModuleCtx,
     isa: &Evm,
     inst: InstId,
@@ -1624,20 +1616,8 @@ fn compute_program_free_ptr_slot_facts(
     )
 }
 
-fn machine_mem_plan_from_semantic(
-    func_plan: &memory_plan::FuncMemPlan,
-) -> memory_plan::FuncMemPlan {
-    let mut mem_plan = func_plan.clone();
-    mem_plan.alloca_loc.clear();
-    mem_plan.spill_obj = SecondaryMap::new();
-    mem_plan.malloc_future_abs_words.clear();
-    mem_plan.transient_mallocs.clear();
-    mem_plan.malloc_escape_kinds.clear();
-    mem_plan
-}
-
 fn backend_spill_reserve_abs_words(
-    func_plan: &memory_plan::FuncMemPlan,
+    func_plan: &memory_plan::SemanticFuncPlan,
     reserve: BackendSpillReserve,
 ) -> u32 {
     let scratch_end = if reserve.scratch_words == 0 {
@@ -1667,7 +1647,7 @@ fn compute_entry_may_have_live_frame(
             semantic_plan
                 .funcs
                 .get(func)
-                .is_some_and(memory_plan::FuncMemPlan::uses_dynamic_frame)
+                .is_some_and(memory_plan::SemanticFuncPlan::uses_dynamic_frame)
         })
     };
 
@@ -1691,7 +1671,7 @@ fn compute_entry_may_have_live_frame(
 }
 
 fn malloc_min_base(
-    func_plan: &memory_plan::FuncMemPlan,
+    func_plan: &memory_plan::SemanticFuncPlan,
     global_dyn_base: u32,
     backend_spill_reserve_peak: u32,
     inst: InstId,
@@ -1734,14 +1714,14 @@ mod tests {
     use super::*;
     use crate::isa::evm::{STATIC_BASE, malloc_plan::MallocEscapeKind};
 
-    fn mem_plan_for_malloc(escape_kinds: MallocEscapeKind) -> memory_plan::FuncMemPlan {
+    fn mem_plan_for_malloc(escape_kinds: MallocEscapeKind) -> memory_plan::SemanticFuncPlan {
         let malloc = InstId::from_u32(7);
         let mut malloc_future_abs_words = FxHashMap::default();
         malloc_future_abs_words.insert(malloc, 1);
         let mut malloc_escape_kinds = FxHashMap::default();
         malloc_escape_kinds.insert(malloc, escape_kinds);
 
-        memory_plan::FuncMemPlan {
+        memory_plan::SemanticFuncPlan {
             arena_base: STATIC_BASE,
             scratch_words: 0,
             stable_words: 0,
@@ -1749,7 +1729,6 @@ mod tests {
             entry_abs_words: 0,
             obj_loc: FxHashMap::default(),
             alloca_loc: FxHashMap::default(),
-            spill_obj: SecondaryMap::new(),
             call_preserve: FxHashMap::default(),
             malloc_future_abs_words,
             transient_mallocs: FxHashSet::default(),

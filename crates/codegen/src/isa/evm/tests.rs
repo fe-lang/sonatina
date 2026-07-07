@@ -2974,11 +2974,20 @@ block0:
     let stack_alloc = stack_allocs
         .remove(&caller)
         .expect("missing caller analysis");
-    let mem_plan = plan
-        .funcs
-        .get(&caller)
-        .expect("missing caller plan")
-        .clone();
+    let semantic_plan = plan.funcs.get(&caller).expect("missing caller plan");
+    // These tests run on source IR with an identity inst mapping, so the
+    // semantic call_preserve keys are already the "machine" keys.
+    let mem_plan = memory_plan::MachineFuncPlan {
+        arena_base: semantic_plan.arena_base,
+        scratch_words: semantic_plan.scratch_words,
+        stable_words: semantic_plan.stable_words,
+        stable_mode: semantic_plan.stable_mode,
+        entry_abs_words: semantic_plan.entry_abs_words,
+        obj_loc: semantic_plan.obj_loc.clone(),
+        alloca_loc: semantic_plan.alloca_loc.clone(),
+        spill_obj: Default::default(),
+        call_preserve: semantic_plan.call_preserve.clone(),
+    };
     let alloc = FinalAlloc::new(stack_alloc, mem_plan);
 
     let save_plan = alloc
@@ -2986,9 +2995,7 @@ block0:
         .call_preserve
         .get(&call_inst)
         .expect("expected non-empty call preserve entry for call");
-    let PreserveMode::ShadowRuns { shadow_obj, runs } = &save_plan.mode else {
-        panic!("expected shadow preserve plan for caller");
-    };
+    let (shadow_obj, runs) = (&save_plan.shadow_obj, &save_plan.runs);
     assert!(!runs.is_empty(), "expected at least one saved run");
 
     let actions = alloc.read(call_inst, &call_args);
@@ -3117,11 +3124,20 @@ block2:
     let stack_alloc = stack_allocs
         .remove(&caller)
         .expect("missing caller analysis");
-    let mem_plan = plan
-        .funcs
-        .get(&caller)
-        .expect("missing caller plan")
-        .clone();
+    let semantic_plan = plan.funcs.get(&caller).expect("missing caller plan");
+    // These tests run on source IR with an identity inst mapping, so the
+    // semantic call_preserve keys are already the "machine" keys.
+    let mem_plan = memory_plan::MachineFuncPlan {
+        arena_base: semantic_plan.arena_base,
+        scratch_words: semantic_plan.scratch_words,
+        stable_words: semantic_plan.stable_words,
+        stable_mode: semantic_plan.stable_mode,
+        entry_abs_words: semantic_plan.entry_abs_words,
+        obj_loc: semantic_plan.obj_loc.clone(),
+        alloca_loc: semantic_plan.alloca_loc.clone(),
+        spill_obj: Default::default(),
+        call_preserve: semantic_plan.call_preserve.clone(),
+    };
     let alloc = FinalAlloc::new(stack_alloc, mem_plan);
 
     let save_plan = alloc
@@ -3130,9 +3146,7 @@ block2:
         .get(&call_inst)
         .expect("expected non-empty call preserve entry for call");
     assert_eq!(save_plan.result_count, 2);
-    let PreserveMode::ShadowRuns { shadow_obj, runs } = &save_plan.mode else {
-        panic!("expected shadow preserve plan for caller");
-    };
+    let (shadow_obj, runs) = (&save_plan.shadow_obj, &save_plan.runs);
     assert!(!runs.is_empty(), "expected at least one saved run");
 
     let actions = alloc.write(call_inst, &call_results);

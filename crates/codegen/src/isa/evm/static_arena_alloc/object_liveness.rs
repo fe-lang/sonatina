@@ -629,7 +629,6 @@ pub(super) fn compute_regions_and_calls(
                 callee: *call.callee(),
                 result_count: u8::try_from(function.dfg.inst_results(inst).len())
                     .expect("call result count too large"),
-                arg_count: u8::try_from(call.args().len()).expect("call arg count too large"),
                 live_across_objs,
                 callee_visible_objs,
             });
