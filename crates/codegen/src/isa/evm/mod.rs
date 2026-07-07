@@ -15,6 +15,7 @@ mod mem_effects;
 mod memory_plan;
 pub mod opcode;
 mod pipeline;
+mod placement_search;
 mod prepare;
 mod provenance;
 mod ptr_escape;
