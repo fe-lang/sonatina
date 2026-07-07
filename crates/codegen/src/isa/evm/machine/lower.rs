@@ -1078,7 +1078,7 @@ impl FuncLowerCtx<'_> {
             ObjLoc::ScratchAbs(word) => self.word_addr(word),
             ObjLoc::StableAbs(word) => {
                 let base = match self.placement.stable_mode {
-                    StableMode::StaticAbs { base_word } => base_word,
+                    StableMode::StableAbs { base_word } => base_word,
                     StableMode::None | StableMode::DynamicFrame => {
                         return None;
                     }

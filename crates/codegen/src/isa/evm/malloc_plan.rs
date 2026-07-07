@@ -17,8 +17,8 @@ use crate::{bitset::BitSet, liveness::InstLiveness};
 use super::{
     escape_scan::{EscapeScanCtx, EscapeSink, EscapeSource, for_each_escape_event_at_inst},
     mem_effects::FuncMemEffects,
-    provenance::{Provenance, compute_provenance},
     ptr_escape::PtrEscapeSummary,
+    ptr_provenance::{Provenance, compute_provenance},
 };
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

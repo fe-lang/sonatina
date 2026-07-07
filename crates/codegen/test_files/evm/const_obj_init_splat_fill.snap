@@ -10,11 +10,11 @@ object: Contract
   total: 38 bytes
 
 functions:
-  mem: global_dyn_base=0xa0 arena_base=0x0 scratch_peak_words=0 static_chain_peak_words=5
+  mem: global_dyn_base=0xa0 arena_base=0x0 scratch_peak_words=0 stable_chain_peak_words=5
   entry: ir_blocks=1 ir_insts=3 vcode_ops=9 fixups=2 imm_bytes=1
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   load_splat_object: ir_blocks=1 ir_insts=6 vcode_ops=20 fixups=0 imm_bytes=6
-    mem: scratch_words=0 stable_words=5 stable_mode=StaticAbs(base=0x0) entry_abs_words=0 abs_words_end=5
+    mem: scratch_words=0 stable_words=5 stable_mode=StableAbs(base=0x0) entry_abs_words=0 abs_words_end=5
 
 --------------- OBSERVABILITY ---------------
 

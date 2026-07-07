@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/inliner.rs
-assertion_line: 29
 input_file: test_files/inliner/reject_terminator_splice_branchy_caller.sntn
 ---
 func private %revert_now() {

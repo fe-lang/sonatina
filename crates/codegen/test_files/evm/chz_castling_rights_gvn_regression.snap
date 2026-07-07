@@ -10,17 +10,17 @@ object: Contract
   total: 1176 bytes
 
 functions:
-  mem: global_dyn_base=0x4c0 arena_base=0xa0 scratch_peak_words=1 static_chain_peak_words=32
+  mem: global_dyn_base=0x4c0 arena_base=0xa0 scratch_peak_words=1 stable_chain_peak_words=32
   abs_diff: ir_blocks=6 ir_insts=15 vcode_ops=36 fixups=3 imm_bytes=7
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=33 abs_words_end=0
   apply_rook: ir_blocks=18 ir_insts=94 vcode_ops=254 fixups=19 imm_bytes=54
-    mem: scratch_words=0 stable_words=7 stable_mode=StaticAbs(base=0x3e0) entry_abs_words=26 abs_words_end=33
+    mem: scratch_words=0 stable_words=7 stable_mode=StableAbs(base=0x3e0) entry_abs_words=26 abs_words_end=33
   path_clear_file: ir_blocks=29 ir_insts=68 vcode_ops=186 fixups=13 imm_bytes=30
     mem: scratch_words=1 stable_words=0 stable_mode=None entry_abs_words=33 abs_words_end=1
   main_root: ir_blocks=1 ir_insts=5 vcode_ops=16 fixups=2 imm_bytes=3
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=1 abs_words_end=0
   validate_rook_capture: ir_blocks=25 ir_insts=83 vcode_ops=315 fixups=25 imm_bytes=80
-    mem: scratch_words=0 stable_words=25 stable_mode=StaticAbs(base=0xc0) entry_abs_words=1 abs_words_end=26
+    mem: scratch_words=0 stable_words=25 stable_mode=StableAbs(base=0xc0) entry_abs_words=1 abs_words_end=26
 
 evm:
   case captured_rook_clears_castling_rights: calldata_len=0 success reason=Return gas_used=23876 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=2876

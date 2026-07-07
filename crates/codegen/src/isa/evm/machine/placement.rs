@@ -15,7 +15,7 @@ use sonatina_ir::{
 
 use crate::{
     bitset::BitSet,
-    isa::evm::provenance::{Provenance, compute_value_provenance},
+    isa::evm::ptr_provenance::{Provenance, compute_value_provenance},
     module_analysis::CallGraph,
 };
 
@@ -48,7 +48,7 @@ pub(crate) struct EvmMemoryPlacementPlan {
     pub(crate) arena_base: u32,
     pub(crate) global_dyn_base: u32,
     pub(crate) scratch_peak_words: u32,
-    pub(crate) static_chain_peak_words: u32,
+    pub(crate) stable_chain_peak_words: u32,
     pub(crate) funcs: FxHashMap<FuncRef, EvmFuncPlacementPlan>,
 }
 
@@ -148,7 +148,7 @@ pub(crate) fn compute_semantic_memory_placement(
     section: MemoryPlacementSection<'_>,
     analyses: &FxHashMap<FuncRef, FuncPreAnalysis>,
     ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
-    scratch_effects: &FxHashSet<FuncRef>,
+    fixed_slot_effects: &FxHashSet<FuncRef>,
     backend: &EvmBackend,
     backend_spill_reserves: &FxHashMap<FuncRef, BackendSpillReserve>,
 ) -> EvmMemoryPlacementPlan {
@@ -165,8 +165,13 @@ pub(crate) fn compute_semantic_memory_placement(
     let final_scratch_reserves =
         final_scratch_reserve_ranges(funcs, &semantic_plan, backend_spill_reserves);
 
-    let mem_effects =
-        compute_func_mem_effects(module, funcs, &semantic_plan, scratch_effects, &backend.isa);
+    let mem_effects = compute_func_mem_effects(
+        module,
+        funcs,
+        &semantic_plan,
+        fixed_slot_effects,
+        &backend.isa,
+    );
 
     let mut annotations: Vec<_> = funcs
         .par_iter()
@@ -264,7 +269,7 @@ pub(crate) fn compute_semantic_memory_placement(
         ptr_escape,
         ArenaBaseFacts {
             has_dynamic_frames,
-            has_stackify_scratch_spills: !scratch_effects.is_empty(),
+            has_stackify_fixed_slot_spills: !fixed_slot_effects.is_empty(),
             backend_spill_scratch_reserve_words: backend_spill_scratch_reserve_peak,
             has_persistent_mallocs,
         },
@@ -374,7 +379,7 @@ pub(crate) fn compute_semantic_memory_placement(
         arena_base: semantic_plan.arena_base,
         global_dyn_base: semantic_plan.global_dyn_base,
         scratch_peak_words: semantic_plan.scratch_peak_words,
-        static_chain_peak_words: semantic_plan.static_chain_peak_words,
+        stable_chain_peak_words: semantic_plan.stable_chain_peak_words,
         funcs: func_placements,
     }
 }
@@ -1276,14 +1281,14 @@ impl<'a> PrivateMallocUseAnalysis<'a> {
                     *call.addr(),
                     *call.val(),
                     *call.arg_len(),
-                    *call.ret_offset(),
+                    *call.ret_len(),
                 ]) =>
             {
                 self.call_addr_ranges_are_bounded(
                     *call.arg_addr(),
                     *call.arg_len(),
                     *call.ret_addr(),
-                    *call.ret_offset(),
+                    *call.ret_len(),
                     alloc_size_bytes,
                 )
             }
@@ -1293,14 +1298,14 @@ impl<'a> PrivateMallocUseAnalysis<'a> {
                     *call.addr(),
                     *call.val(),
                     *call.arg_len(),
-                    *call.ret_offset(),
+                    *call.ret_len(),
                 ]) =>
             {
                 self.call_addr_ranges_are_bounded(
                     *call.arg_addr(),
                     *call.arg_len(),
                     *call.ret_addr(),
-                    *call.ret_offset(),
+                    *call.ret_len(),
                     alloc_size_bytes,
                 )
             }
@@ -1710,10 +1715,10 @@ fn backend_spill_reserve_abs_words(
         func_plan.scratch_words
     };
     let stable_end = match func_plan.stable_mode {
-        StableMode::StaticAbs { base_word } if reserve.stable_words != 0 => base_word
+        StableMode::StableAbs { base_word } if reserve.stable_words != 0 => base_word
             .checked_add(func_plan.stable_words)
             .expect("backend stable reserve end overflow"),
-        StableMode::None | StableMode::DynamicFrame | StableMode::StaticAbs { .. } => 0,
+        StableMode::None | StableMode::DynamicFrame | StableMode::StableAbs { .. } => 0,
     };
 
     scratch_end.max(stable_end)

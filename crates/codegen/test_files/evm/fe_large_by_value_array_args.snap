@@ -11,17 +11,17 @@ object: Contract
   total: 3151 bytes
 
 functions:
-  mem: global_dyn_base=0xa80 arena_base=0xa0 scratch_peak_words=38 static_chain_peak_words=41
+  mem: global_dyn_base=0xa80 arena_base=0xa0 scratch_peak_words=38 stable_chain_peak_words=41
   __C_recv_0_0: ir_blocks=1 ir_insts=122 vcode_ops=369 fixups=2 imm_bytes=217
-    mem: scratch_words=38 stable_words=38 stable_mode=StaticAbs(base=0x5c0) entry_abs_words=41 abs_words_end=79
+    mem: scratch_words=38 stable_words=38 stable_mode=StableAbs(base=0x5c0) entry_abs_words=41 abs_words_end=79
   prove_like: ir_blocks=1 ir_insts=10 vcode_ops=23 fixups=0 imm_bytes=9
     mem: scratch_words=8 stable_words=0 stable_mode=None entry_abs_words=79 abs_words_end=8
   __fe_contract_init_root_C: ir_blocks=1 ir_insts=4 vcode_ops=8 fixups=2 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=38 abs_words_end=0
   __fe_contract_recv_abi_C_16909060: ir_blocks=8 ir_insts=47 vcode_ops=128 fixups=15 imm_bytes=30
-    mem: scratch_words=4 stable_words=3 stable_mode=StaticAbs(base=0x560) entry_abs_words=38 abs_words_end=41
+    mem: scratch_words=4 stable_words=3 stable_mode=StableAbs(base=0x560) entry_abs_words=38 abs_words_end=41
   decoder_new: ir_blocks=1 ir_insts=36 vcode_ops=104 fixups=2 imm_bytes=40
-    mem: scratch_words=2 stable_words=17 stable_mode=StaticAbs(base=0x5c0) entry_abs_words=41 abs_words_end=58
+    mem: scratch_words=2 stable_words=17 stable_mode=StableAbs(base=0x5c0) entry_abs_words=41 abs_words_end=58
   new_1: ir_blocks=1 ir_insts=10 vcode_ops=53 fixups=2 imm_bytes=14
     mem: scratch_words=6 stable_words=0 stable_mode=None entry_abs_words=58 abs_words_end=6
   new_2: ir_blocks=1 ir_insts=7 vcode_ops=36 fixups=0 imm_bytes=10
@@ -33,7 +33,7 @@ functions:
   add_0: ir_blocks=3 ir_insts=5 vcode_ops=16 fixups=1 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=41 abs_words_end=0
   encoder_new: ir_blocks=1 ir_insts=8 vcode_ops=39 fixups=2 imm_bytes=10
-    mem: scratch_words=1 stable_words=3 stable_mode=StaticAbs(base=0x5c0) entry_abs_words=41 abs_words_end=44
+    mem: scratch_words=1 stable_words=3 stable_mode=StableAbs(base=0x5c0) entry_abs_words=41 abs_words_end=44
   new_0: ir_blocks=1 ir_insts=7 vcode_ops=38 fixups=0 imm_bytes=10
     mem: scratch_words=4 stable_words=0 stable_mode=None entry_abs_words=44 abs_words_end=4
   finish: ir_blocks=1 ir_insts=11 vcode_ops=41 fixups=2 imm_bytes=11

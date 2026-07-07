@@ -10,13 +10,13 @@ object: Contract
   total: 394 bytes
 
 functions:
-  mem: global_dyn_base=0x240 arena_base=0xc0 scratch_peak_words=8 static_chain_peak_words=4
+  mem: global_dyn_base=0x240 arena_base=0xc0 scratch_peak_words=8 stable_chain_peak_words=4
   entry: ir_blocks=1 ir_insts=7 vcode_ops=30 fixups=2 imm_bytes=10
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=8 abs_words_end=0
   caller: ir_blocks=1 ir_insts=39 vcode_ops=179 fixups=2 imm_bytes=39
-    mem: scratch_words=6 stable_words=3 stable_mode=StaticAbs(base=0x1c0) entry_abs_words=8 abs_words_end=11
+    mem: scratch_words=6 stable_words=3 stable_mode=StableAbs(base=0x1c0) entry_abs_words=8 abs_words_end=11
   mid: ir_blocks=1 ir_insts=5 vcode_ops=29 fixups=2 imm_bytes=2
-    mem: scratch_words=0 stable_words=1 stable_mode=StaticAbs(base=0x220) entry_abs_words=11 abs_words_end=12
+    mem: scratch_words=0 stable_words=1 stable_mode=StableAbs(base=0x220) entry_abs_words=11 abs_words_end=12
   callee: ir_blocks=1 ir_insts=25 vcode_ops=50 fixups=0 imm_bytes=16
     mem: scratch_words=8 stable_words=0 stable_mode=None entry_abs_words=12 abs_words_end=8
 

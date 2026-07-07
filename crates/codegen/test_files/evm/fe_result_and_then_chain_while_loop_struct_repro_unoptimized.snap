@@ -10,15 +10,15 @@ object: Contract
   total: 913 bytes
 
 functions:
-  mem: global_dyn_base=0x300 arena_base=0xa0 scratch_peak_words=3 static_chain_peak_words=16
+  mem: global_dyn_base=0x300 arena_base=0xa0 scratch_peak_words=3 stable_chain_peak_words=16
   nibble: ir_blocks=3 ir_insts=9 vcode_ops=24 fixups=1 imm_bytes=3
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=14 abs_words_end=0
   result_and_then_chain_while_loop_struct_repro: ir_blocks=1 ir_insts=16 vcode_ops=57 fixups=10 imm_bytes=18
-    mem: scratch_words=3 stable_words=10 stable_mode=StaticAbs(base=0x100) entry_abs_words=3 abs_words_end=13
+    mem: scratch_words=3 stable_words=10 stable_mode=StableAbs(base=0x100) entry_abs_words=3 abs_words_end=13
   result_e__t__h7e70df4f5f6c66e_and_then__Error_hdf7f09d2a5744fe8_Ctx_h4952b3c1f066f039_Ctx_h4952b3c1f066f039_Step_h7b2dd1cd31620192__95260929b4acc4b4: ir_blocks=5 ir_insts=16 vcode_ops=48 fixups=6 imm_bytes=5
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=13 abs_words_end=0
   step_h7b2dd1cd31620192_fn_h493f512f1483138_call: ir_blocks=12 ir_insts=41 vcode_ops=137 fixups=15 imm_bytes=20
-    mem: scratch_words=3 stable_words=1 stable_mode=StaticAbs(base=0x240) entry_abs_words=13 abs_words_end=14
+    mem: scratch_words=3 stable_words=1 stable_mode=StableAbs(base=0x240) entry_abs_words=13 abs_words_end=14
   u256_h3271ca15373d4483_eq_he50383edd273619f_eq: ir_blocks=1 ir_insts=2 vcode_ops=4 fixups=0 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=19 abs_words_end=0
   u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt: ir_blocks=1 ir_insts=2 vcode_ops=4 fixups=0 imm_bytes=0
@@ -32,7 +32,7 @@ functions:
   result_e__t__h7e70df4f5f6c66e_unwrap__Error_hdf7f09d2a5744fe8_u256__c87495ea3a7b0d61: ir_blocks=4 ir_insts=13 vcode_ops=36 fixups=4 imm_bytes=4
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=13 abs_words_end=0
   revert__Error_hdf7f09d2a5744fe8__3dc0663d0c43952: ir_blocks=1 ir_insts=8 vcode_ops=38 fixups=10 imm_bytes=7
-    mem: scratch_words=0 stable_words=6 stable_mode=StaticAbs(base=0x240) entry_abs_words=13 abs_words_end=19
+    mem: scratch_words=0 stable_words=6 stable_mode=StableAbs(base=0x240) entry_abs_words=13 abs_words_end=19
   solencoder_h1b9228b90dad6928_new: ir_blocks=1 ir_insts=8 vcode_ops=22 fixups=0 imm_bytes=3
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=19 abs_words_end=0
   abi_root_head_size__Error_hdf7f09d2a5744fe8__3dc0663d0c43952: ir_blocks=1 ir_insts=1 vcode_ops=4 fixups=0 imm_bytes=1

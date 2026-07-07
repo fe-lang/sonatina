@@ -31,6 +31,7 @@ use super::{
         FinalAlloc, LateBlockAliasPlan, compute_function_entry_jump_targets,
         compute_late_block_alias_plan, immediate_u32, rewrite_evm_local_fallthrough_layout,
     },
+    fixed_slots,
     machine::{
         final_spills::{
             FinalSpillAllocationInput, FinalSpillChoiceCtx, FinalSpillObjects,
@@ -50,9 +51,8 @@ use super::{
         STATIC_BASE, WORD_BYTES, compute_abs_clobber_words_with_extra,
     },
     pipeline::EvmPipeline,
-    provenance::{Provenance, compute_value_provenance},
     ptr_escape::PtrEscapeSummary,
-    scratch_plan,
+    ptr_provenance::{Provenance, compute_value_provenance},
 };
 
 const FREE_PTR_SLOT_START: u32 = FREE_PTR_SLOT as u32;
@@ -106,7 +106,7 @@ pub(crate) struct EvmSectionPlan {
     pub(crate) arena_base: u32,
     pub(crate) dyn_base: u32,
     pub(crate) scratch_peak_words: u32,
-    pub(crate) static_chain_peak_words: u32,
+    pub(crate) stable_chain_peak_words: u32,
 }
 
 #[derive(Clone)]
@@ -583,13 +583,11 @@ fn machine_fixed_memory_write_range(
         EvmMachineInstKind::EvmMcopy(copy) => {
             fixed_write_range_from_len_value(function, inst, *copy.dest(), *copy.len())
         }
-        // The current EvmCall/EvmCallCode machine instruction accessor is named
-        // ret_offset, but it is used here and by lowering as the return buffer length.
         EvmMachineInstKind::EvmCall(call) => {
-            fixed_write_range_from_len_value(function, inst, *call.ret_addr(), *call.ret_offset())
+            fixed_write_range_from_len_value(function, inst, *call.ret_addr(), *call.ret_len())
         }
         EvmMachineInstKind::EvmCallCode(call) => {
-            fixed_write_range_from_len_value(function, inst, *call.ret_addr(), *call.ret_offset())
+            fixed_write_range_from_len_value(function, inst, *call.ret_addr(), *call.ret_len())
         }
         EvmMachineInstKind::EvmDelegateCall(call) => {
             fixed_write_range_from_len_value(function, inst, *call.ret_addr(), *call.ret_len())
@@ -630,7 +628,7 @@ fn fixed_write_range(
 
 pub(crate) struct ArenaBaseFacts {
     pub(crate) has_dynamic_frames: bool,
-    pub(crate) has_stackify_scratch_spills: bool,
+    pub(crate) has_stackify_fixed_slot_spills: bool,
     pub(crate) backend_spill_scratch_reserve_words: u32,
     pub(crate) has_persistent_mallocs: bool,
 }
@@ -644,16 +642,16 @@ pub(crate) fn choose_arena_base(
 ) -> u32 {
     let mut layout = SectionMemoryLayout::default();
 
-    let spill_reserve_words = if facts.has_stackify_scratch_spills {
+    let spill_reserve_words = if facts.has_stackify_fixed_slot_spills {
         facts
             .backend_spill_scratch_reserve_words
-            .max(scratch_plan::SCRATCH_SPILL_SLOTS)
+            .max(fixed_slots::FIXED_SPILL_SLOTS)
     } else {
         facts.backend_spill_scratch_reserve_words
     };
     layout.reserve_len(0, spill_reserve_words * WORD_BYTES);
-    if facts.has_stackify_scratch_spills {
-        layout.reserve_len(0, scratch_plan::SCRATCH_SPILL_SLOTS * WORD_BYTES);
+    if facts.has_stackify_fixed_slot_spills {
+        layout.reserve_len(0, fixed_slots::FIXED_SPILL_SLOTS * WORD_BYTES);
     }
     if facts.has_persistent_mallocs {
         layout.reserve_len(FREE_PTR_SLOT_START, WORD_BYTES);
@@ -705,7 +703,7 @@ fn prepare_machine_section_after_pipeline(
 ) -> Result<EvmPreparedSection, String> {
     let source_module = work.module();
     let pre_analyses = compute_high_evm_pre_analyses(source_module, &funcs, backend);
-    let mut scratch_effects = FxHashSet::default();
+    let mut fixed_slot_effects = FxHashSet::default();
     let mut backend_spill_reserves: FxHashMap<FuncRef, BackendSpillReserve> = FxHashMap::default();
     let mut last_convergence_error = None;
 
@@ -719,7 +717,7 @@ fn prepare_machine_section_after_pipeline(
             },
             &pre_analyses,
             &ptr_escape,
-            &scratch_effects,
+            &fixed_slot_effects,
             backend,
             &backend_spill_reserves,
         );
@@ -738,9 +736,9 @@ fn prepare_machine_section_after_pipeline(
             backend,
             &machine_isa,
         )?;
-        // Recompute scratch effects from the current machine allocation. Final spills selected
-        // for scratch are added below, after optional spill placement has been chosen.
-        let mut actual_scratch_effects: FxHashSet<FuncRef> = machine_analyses
+        // Recompute fixed-slot effects from the current machine allocation. Final spills selected
+        // for fixed slots are added below, after optional spill placement has been chosen.
+        let mut actual_fixed_slot_effects: FxHashSet<FuncRef> = machine_analyses
             .iter()
             .filter_map(|(&func, analysis)| analysis.alloc.uses_scratch_spills().then_some(func))
             .collect();
@@ -798,7 +796,7 @@ fn prepare_machine_section_after_pipeline(
             pre_analyses: &pre_analyses,
             ptr_escape: &ptr_escape,
             backend,
-            base_scratch_effects: &actual_scratch_effects,
+            base_fixed_slot_effects: &actual_fixed_slot_effects,
             inputs: &machine_final_spill_inputs,
         }
         .choose_optional_placements();
@@ -807,7 +805,7 @@ fn prepare_machine_section_after_pipeline(
             arena_base: placement.arena_base,
             dyn_base: placement.global_dyn_base,
             scratch_peak_words: placement.scratch_peak_words,
-            static_chain_peak_words: placement.static_chain_peak_words,
+            stable_chain_peak_words: placement.stable_chain_peak_words,
         };
 
         let mut actual_spill_reserves: FxHashMap<FuncRef, BackendSpillReserve> =
@@ -934,7 +932,7 @@ fn prepare_machine_section_after_pipeline(
         let mut final_spill_fallback_funcs = Vec::new();
         for (func, required_reserve, used_fallback, plan) in results {
             if required_reserve.scratch_words != 0 {
-                actual_scratch_effects.insert(func);
+                actual_fixed_slot_effects.insert(func);
             }
             actual_spill_reserves.insert(func, required_reserve);
             if used_fallback {
@@ -980,9 +978,9 @@ fn prepare_machine_section_after_pipeline(
             reserve_peak, actual_peak, "evm machine spill reserve iteration"
         );
 
-        let scratch_effects_satisfied = actual_scratch_effects
+        let fixed_slot_effects_satisfied = actual_fixed_slot_effects
             .iter()
-            .all(|func| scratch_effects.contains(func));
+            .all(|func| fixed_slot_effects.contains(func));
         let spill_reserve_satisfied = actual_spill_reserves.iter().all(|(func, actual)| {
             backend_spill_reserves
                 .get(func)
@@ -995,13 +993,13 @@ fn prepare_machine_section_after_pipeline(
             iteration,
             &backend_spill_reserves,
             &actual_spill_reserves,
-            &scratch_effects,
-            &actual_scratch_effects,
+            &fixed_slot_effects,
+            &actual_fixed_slot_effects,
             &final_spill_fallback_funcs,
             &section_plan,
         ));
 
-        if spill_reserve_satisfied && scratch_effects_satisfied && fallback_satisfied {
+        if spill_reserve_satisfied && fixed_slot_effects_satisfied && fallback_satisfied {
             validate_committed_final_spill_section(&section_plan, &function_plans)?;
             let mut globals: Vec<_> = membership.globals.iter().copied().collect();
             globals.sort_unstable();
@@ -1014,7 +1012,7 @@ fn prepare_machine_section_after_pipeline(
                 function_plans,
             });
         }
-        if spill_reserve_satisfied && scratch_effects_satisfied && !fallback_satisfied {
+        if spill_reserve_satisfied && fixed_slot_effects_satisfied && !fallback_satisfied {
             return Err(final_spill_fallback_with_satisfied_reserves_error(
                 &final_spill_fallback_funcs,
                 &section_plan,
@@ -1023,7 +1021,7 @@ fn prepare_machine_section_after_pipeline(
 
         backend_spill_reserves =
             pointwise_max_reserve_maps(&backend_spill_reserves, &actual_spill_reserves);
-        scratch_effects.extend(actual_scratch_effects);
+        fixed_slot_effects.extend(actual_fixed_slot_effects);
         debug!(
             iteration,
             actual_peak, "rerunning evm machine prepare with larger spill/scratch reserve"
@@ -1054,8 +1052,8 @@ fn final_spill_convergence_error(
     iteration: usize,
     backend_spill_reserves: &FxHashMap<FuncRef, BackendSpillReserve>,
     actual_spill_reserves: &FxHashMap<FuncRef, BackendSpillReserve>,
-    scratch_effects: &FxHashSet<FuncRef>,
-    actual_scratch_effects: &FxHashSet<FuncRef>,
+    fixed_slot_effects: &FxHashSet<FuncRef>,
+    actual_fixed_slot_effects: &FxHashSet<FuncRef>,
     final_spill_fallback_funcs: &[FuncRef],
     section_plan: &EvmSectionPlan,
 ) -> String {
@@ -1076,9 +1074,9 @@ fn final_spill_convergence_error(
         .collect();
     reserve_deltas.sort();
 
-    let mut scratch_delta: Vec<_> = actual_scratch_effects
+    let mut scratch_delta: Vec<_> = actual_fixed_slot_effects
         .iter()
-        .filter(|func| !scratch_effects.contains(func))
+        .filter(|func| !fixed_slot_effects.contains(func))
         .map(|func| format!("func{}", func.as_u32()))
         .collect();
     scratch_delta.sort();
@@ -1090,10 +1088,10 @@ fn final_spill_convergence_error(
     fallback_funcs.sort();
 
     format!(
-        "EVM final-spill memory placement did not converge after {MAX_FINAL_SPILL_RESERVE_ITERS} iterations; last_iteration={iteration}; arena_base=0x{:x}; scratch_peak_words={}; static_chain_peak_words={}; reserve_delta=[{}]; scratch_effect_delta=[{}]; fallback_funcs=[{}]",
+        "EVM final-spill memory placement did not converge after {MAX_FINAL_SPILL_RESERVE_ITERS} iterations; last_iteration={iteration}; arena_base=0x{:x}; scratch_peak_words={}; stable_chain_peak_words={}; reserve_delta=[{}]; scratch_effect_delta=[{}]; fallback_funcs=[{}]",
         section_plan.arena_base,
         section_plan.scratch_peak_words,
-        section_plan.static_chain_peak_words,
+        section_plan.stable_chain_peak_words,
         reserve_deltas.join(", "),
         scratch_delta.join(", "),
         fallback_funcs.join(", ")
@@ -1110,11 +1108,11 @@ fn final_spill_fallback_with_satisfied_reserves_error(
         .collect();
     funcs.sort();
     format!(
-        "EVM final-spill placement used fallback despite satisfied reserves; this indicates incomplete reserve accounting: funcs=[{}]; arena_base=0x{:x}; scratch_peak_words={}; static_chain_peak_words={}",
+        "EVM final-spill placement used fallback despite satisfied reserves; this indicates incomplete reserve accounting: funcs=[{}]; arena_base=0x{:x}; scratch_peak_words={}; stable_chain_peak_words={}",
         funcs.join(", "),
         section_plan.arena_base,
         section_plan.scratch_peak_words,
-        section_plan.static_chain_peak_words,
+        section_plan.stable_chain_peak_words,
     )
 }
 
@@ -1140,21 +1138,21 @@ fn validate_committed_final_spill_section(
                 section_plan.arena_base
             ));
         }
-        if let memory_plan::StableMode::StaticAbs { base_word } = plan.mem_plan.stable_mode
+        if let memory_plan::StableMode::StableAbs { base_word } = plan.mem_plan.stable_mode
             && plan.mem_plan.stable_words != 0
             && base_word < plan.mem_plan.scratch_words
         {
             return Err(format!(
-                "EVM static stable frame starts inside scratch in committed final-spill plan: func{} stable_base_word={} scratch_words={} arena_base=0x{:x}; scratch_peak_words={}; static_chain_peak_words={}",
+                "EVM static stable frame starts inside scratch in committed final-spill plan: func{} stable_base_word={} scratch_words={} arena_base=0x{:x}; scratch_peak_words={}; stable_chain_peak_words={}",
                 func.as_u32(),
                 base_word,
                 plan.mem_plan.scratch_words,
                 section_plan.arena_base,
                 section_plan.scratch_peak_words,
-                section_plan.static_chain_peak_words,
+                section_plan.stable_chain_peak_words,
             ));
         }
-        if let memory_plan::StableMode::StaticAbs { base_word } = plan.mem_plan.stable_mode {
+        if let memory_plan::StableMode::StableAbs { base_word } = plan.mem_plan.stable_mode {
             let stable_end = base_word
                 .checked_add(plan.mem_plan.stable_words)
                 .ok_or_else(|| {
@@ -1167,24 +1165,24 @@ fn validate_committed_final_spill_section(
                 })?;
             let static_end = section_plan
                 .scratch_peak_words
-                .checked_add(section_plan.static_chain_peak_words)
+                .checked_add(section_plan.stable_chain_peak_words)
                 .ok_or_else(|| {
                     format!(
-                        "EVM committed final-spill section static end overflow: arena_base=0x{:x}; scratch_peak_words={}; static_chain_peak_words={}",
+                        "EVM committed final-spill section static end overflow: arena_base=0x{:x}; scratch_peak_words={}; stable_chain_peak_words={}",
                         section_plan.arena_base,
                         section_plan.scratch_peak_words,
-                        section_plan.static_chain_peak_words
+                        section_plan.stable_chain_peak_words
                     )
                 })?;
             if stable_end > static_end {
                 return Err(format!(
-                    "EVM committed final-spill plan exceeds section static memory: func{} stable_end={} static_end={} arena_base=0x{:x}; scratch_peak_words={}; static_chain_peak_words={}",
+                    "EVM committed final-spill plan exceeds section static memory: func{} stable_end={} static_end={} arena_base=0x{:x}; scratch_peak_words={}; stable_chain_peak_words={}",
                     func.as_u32(),
                     stable_end,
                     static_end,
                     section_plan.arena_base,
                     section_plan.scratch_peak_words,
-                    section_plan.static_chain_peak_words,
+                    section_plan.stable_chain_peak_words,
                 ));
             }
         }

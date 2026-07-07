@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/object_load_store.rs
-assertion_line: 41
 input_file: test_files/object_load_store/enum_write_payload_forwards_load.sntn
 ---
 target = "evm-ethereum-osaka"

@@ -35,7 +35,7 @@ pub const STATIC_BASE: u32 = 0xa0;
 pub struct ProgramMemoryPlan {
     pub arena_base: u32,
     pub scratch_peak_words: u32,
-    pub static_chain_peak_words: u32,
+    pub stable_chain_peak_words: u32,
     pub global_dyn_base: u32,
     pub funcs: FxHashMap<FuncRef, FuncMemPlan>,
     #[allow(dead_code)]
@@ -111,7 +111,7 @@ impl FuncMemPlan {
 
     pub fn stable_base_word(&self) -> Option<u32> {
         match self.stable_mode {
-            StableMode::StaticAbs { base_word } => Some(base_word),
+            StableMode::StableAbs { base_word } => Some(base_word),
             StableMode::None | StableMode::DynamicFrame => None,
         }
     }
@@ -128,10 +128,10 @@ impl FuncMemPlan {
 
     pub fn abs_words_end(&self) -> u32 {
         let stable_end = match self.stable_mode {
-            StableMode::StaticAbs { base_word } if self.stable_words != 0 => base_word
+            StableMode::StableAbs { base_word } if self.stable_words != 0 => base_word
                 .checked_add(self.stable_words)
                 .expect("stable absolute end overflow"),
-            StableMode::None | StableMode::DynamicFrame | StableMode::StaticAbs { .. } => 0,
+            StableMode::None | StableMode::DynamicFrame | StableMode::StableAbs { .. } => 0,
         };
         self.scratch_words.max(stable_end)
     }
@@ -155,7 +155,7 @@ impl ProgramMemoryPlan {
         self.arena_base = arena_base;
         let global_dyn_base_words = self
             .scratch_peak_words
-            .checked_add(self.static_chain_peak_words)
+            .checked_add(self.stable_chain_peak_words)
             .expect("global dynamic base word overflow");
         self.global_dyn_base = abs_addr_for_word(arena_base, global_dyn_base_words);
 
@@ -239,7 +239,7 @@ impl ProgramMemoryPlan {
             }
         }
 
-        self.static_chain_peak_words = topo
+        self.stable_chain_peak_words = topo
             .iter()
             .map(|scc_ref| {
                 scc_prefix[scc_ref]
@@ -250,7 +250,7 @@ impl ProgramMemoryPlan {
             .unwrap_or(0);
         let global_dyn_base_words = self
             .scratch_peak_words
-            .checked_add(self.static_chain_peak_words)
+            .checked_add(self.stable_chain_peak_words)
             .expect("global dynamic base word overflow");
         self.global_dyn_base = abs_addr_for_word(self.arena_base, global_dyn_base_words);
 
@@ -281,7 +281,7 @@ impl ProgramMemoryPlan {
             func_plan.stable_mode = if scc_plan.is_recursive {
                 StableMode::DynamicFrame
             } else if func_plan.stable_words != 0 {
-                StableMode::StaticAbs {
+                StableMode::StableAbs {
                     base_word: stable_base_word,
                 }
             } else {
@@ -337,7 +337,7 @@ block0:
         let mut plan = ProgramMemoryPlan {
             arena_base: STATIC_BASE,
             scratch_peak_words: 3,
-            static_chain_peak_words: 0,
+            stable_chain_peak_words: 0,
             global_dyn_base: abs_addr_for_word(STATIC_BASE, 3),
             funcs: FxHashMap::from_iter([(func, empty_func_plan(3, StableMode::None))]),
             sccs: FxHashMap::default(),
@@ -357,7 +357,7 @@ block0:
         assert_eq!(func_plan.stable_words, 2);
         assert_eq!(
             func_plan.stable_mode,
-            StableMode::StaticAbs { base_word: 3 }
+            StableMode::StableAbs { base_word: 3 }
         );
         assert_eq!(plan.scratch_peak_words, 3);
         assert_eq!(plan.global_dyn_base, abs_addr_for_word(STATIC_BASE, 5));
@@ -380,7 +380,7 @@ block0:
         let mut plan = ProgramMemoryPlan {
             arena_base: STATIC_BASE,
             scratch_peak_words: 3,
-            static_chain_peak_words: 0,
+            stable_chain_peak_words: 0,
             global_dyn_base: abs_addr_for_word(STATIC_BASE, 3),
             funcs: FxHashMap::from_iter([(func, empty_func_plan(3, StableMode::None))]),
             sccs: FxHashMap::default(),
@@ -420,7 +420,7 @@ block0:
         let plan = ProgramMemoryPlan {
             arena_base: STATIC_BASE,
             scratch_peak_words: 3,
-            static_chain_peak_words: 0,
+            stable_chain_peak_words: 0,
             global_dyn_base: abs_addr_for_word(STATIC_BASE, 3),
             funcs: FxHashMap::from_iter([(func, empty_func_plan(3, StableMode::None))]),
             sccs: FxHashMap::default(),
@@ -452,12 +452,12 @@ block0:
         )
         .expect("module parses");
         let func = parsed.module.funcs()[0];
-        let mut func_plan = empty_func_plan(1, StableMode::StaticAbs { base_word: 4 });
+        let mut func_plan = empty_func_plan(1, StableMode::StableAbs { base_word: 4 });
         func_plan.stable_words = 4;
         let plan = ProgramMemoryPlan {
             arena_base: STATIC_BASE,
             scratch_peak_words: 1,
-            static_chain_peak_words: 4,
+            stable_chain_peak_words: 4,
             global_dyn_base: abs_addr_for_word(STATIC_BASE, 5),
             funcs: FxHashMap::from_iter([(func, func_plan)]),
             sccs: FxHashMap::default(),
@@ -485,7 +485,7 @@ pub struct SccMemPlan {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StableMode {
     None,
-    StaticAbs { base_word: u32 },
+    StableAbs { base_word: u32 },
     DynamicFrame,
 }
 
@@ -673,7 +673,7 @@ fn compute_program_memory_plan_from_stacks(
         }
     }
 
-    let static_chain_peak_words = topo
+    let stable_chain_peak_words = topo
         .iter()
         .map(|scc_ref| {
             scc_prefix[scc_ref]
@@ -687,11 +687,11 @@ fn compute_program_memory_plan_from_stacks(
     let global_dyn_base = abs_addr_for_word(
         arena_base,
         scratch_peak_words
-            .checked_add(static_chain_peak_words)
+            .checked_add(stable_chain_peak_words)
             .expect("global dynamic base word overflow"),
     );
     let global_dyn_base_words = scratch_peak_words
-        .checked_add(static_chain_peak_words)
+        .checked_add(stable_chain_peak_words)
         .expect("global dynamic base word overflow");
 
     let mut scc_plans: FxHashMap<SccRef, SccMemPlan> = FxHashMap::default();
@@ -723,7 +723,7 @@ fn compute_program_memory_plan_from_stacks(
         let stable_mode = if scc_plan.is_recursive {
             StableMode::DynamicFrame
         } else if placement.stable_words != 0 {
-            StableMode::StaticAbs {
+            StableMode::StableAbs {
                 base_word: stable_base_word,
             }
         } else {
@@ -742,7 +742,7 @@ fn compute_program_memory_plan_from_stacks(
         for (&obj, &word) in &placement.stable_offsets {
             let loc = match stable_mode {
                 StableMode::None => panic!("stable offsets present without stable mode"),
-                StableMode::StaticAbs { .. } => ObjLoc::StableAbs(word),
+                StableMode::StableAbs { .. } => ObjLoc::StableAbs(word),
                 StableMode::DynamicFrame => ObjLoc::StableFrame(word),
             };
             obj_loc.insert(obj, loc);
@@ -787,7 +787,7 @@ fn compute_program_memory_plan_from_stacks(
     ProgramMemoryPlan {
         arena_base,
         scratch_peak_words,
-        static_chain_peak_words,
+        stable_chain_peak_words,
         global_dyn_base,
         funcs: funcs_plan,
         sccs: scc_plans,
@@ -852,7 +852,7 @@ fn abs_words_end_with_extra_reserve(
         .expect("scratch reserve overflow");
     let stable_end = match func_plan.stable_mode {
         StableMode::None => extra_reserve.stable_words,
-        StableMode::StaticAbs { base_word } => {
+        StableMode::StableAbs { base_word } => {
             if func_plan.stable_words == 0 && extra_reserve.stable_words == 0 {
                 0
             } else {

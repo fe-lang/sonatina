@@ -3,6 +3,7 @@ pub(crate) mod dyn_sp;
 mod emit;
 mod escape_scan;
 mod exact_func_merge;
+mod fixed_slots;
 mod frame_layout;
 mod heap_plan;
 mod high_alias;
@@ -17,9 +18,8 @@ pub mod opcode;
 mod pipeline;
 mod placement_search;
 mod prepare;
-mod provenance;
 mod ptr_escape;
-mod scratch_plan;
+mod ptr_provenance;
 pub(crate) mod static_arena_alloc;
 #[doc(hidden)]
 pub mod test_util;
