@@ -10,13 +10,16 @@ use super::{
     super::{
         EvmBackend, MachineFuncPlan, ObjLoc,
         memory_plan::{
-            BackendSpillReserve, FinalScratchReserveRange, FuncPreAnalysis,
+            self, BackendSpillReserve, FinalScratchReserveRange, FuncPreAnalysis,
             MachineStackifyAnalysis, StableMode, WORD_BYTES,
         },
+        prepare::{ArenaBaseFacts, SectionMemoryLayout, choose_arena_base},
         ptr_escape::PtrEscapeSummary,
         static_arena_alloc::StackObjId,
     },
-    placement::{MemoryPlacementSection, compute_semantic_memory_placement},
+    placement::{
+        EvmMemoryPlacementPlan, MemoryPlacementSection, compute_semantic_memory_placement,
+    },
 };
 
 pub(crate) struct FinalSpillAllocation {
@@ -146,6 +149,8 @@ type FinalSpillChoiceScore = (u32, u32, u32, u32, u64, u64);
 pub(crate) struct FinalSpillChoiceCtx<'a> {
     pub(crate) source_module: &'a Module,
     pub(crate) schedule: &'a CallGraphSchedule,
+    pub(crate) base_placement: &'a EvmMemoryPlacementPlan,
+    pub(crate) fixed_reservations: &'a SectionMemoryLayout,
     pub(crate) funcs: &'a [FuncRef],
     pub(crate) section_entry: FuncRef,
     pub(crate) section_includes: &'a [FuncRef],
@@ -202,13 +207,131 @@ impl FinalSpillChoiceCtx<'_> {
         choices
     }
 
+    /// Scores a choice assignment with the closed-form marginal model: the
+    /// per-function placements themselves are reserve-independent, so a trial
+    /// reserve only shifts each function's frame words by its delta over the
+    /// committed reserve, and the section aggregates are recomputed directly.
+    ///
+    /// Two second-order feedback paths are deliberately approximated by
+    /// holding them at their base-placement values (a trial reserve cannot
+    /// change them exactly without a full replan): private-static-malloc
+    /// extra scratch, and transient-malloc flips induced by new fixed-slot
+    /// effects. Set SONATINA_SPILL_SCORE_XCHECK=1 in a debug build to
+    /// cross-check against the full replan.
     fn score(
         &self,
         choices: &FxHashMap<FuncRef, OptionalFinalSpillPlacement>,
     ) -> FinalSpillChoiceScore {
         let reserves = self.final_spill_reserves(choices);
+        let marginal = self.score_marginal(&reserves);
+        #[cfg(debug_assertions)]
+        if std::env::var_os("SONATINA_SPILL_SCORE_XCHECK").is_some() {
+            let replanned = self.score_by_replanning(&reserves);
+            if marginal != replanned {
+                eprintln!(
+                    "SPILL_SCORE_XCHECK mismatch: marginal={marginal:?} replanned={replanned:?}"
+                );
+            }
+        }
+        marginal
+    }
+
+    fn score_marginal(
+        &self,
+        reserves: &FxHashMap<FuncRef, BackendSpillReserve>,
+    ) -> FinalSpillChoiceScore {
+        let committed = |func: FuncRef| {
+            self.inputs
+                .iter()
+                .find(|input| input.func == func)
+                .map(|input| input.reserve)
+                .unwrap_or_default()
+        };
+        let trial_words = |func: FuncRef| -> (u32, u32) {
+            let base = &self.base_placement.funcs[&func].mem_plan;
+            let trial = reserves.get(&func).copied().unwrap_or_default();
+            let committed = committed(func);
+            let scratch_delta = trial
+                .scratch_words
+                .checked_sub(committed.scratch_words)
+                .expect("trial reserve below committed reserve");
+            let stable_delta = trial
+                .stable_words
+                .checked_sub(committed.stable_words)
+                .expect("trial reserve below committed reserve");
+            (
+                memory_plan::add_words(base.scratch_words, scratch_delta),
+                memory_plan::add_words(base.stable_words, stable_delta),
+            )
+        };
+
+        let reserve_scratch_peak = reserves
+            .values()
+            .map(|reserve| reserve.scratch_words)
+            .max()
+            .unwrap_or(0);
+        let has_dynamic_frames = self
+            .base_placement
+            .funcs
+            .values()
+            .any(|plan| plan.mem_plan.uses_dynamic_frame());
+
+        let mut scratch_peak_words = self
+            .funcs
+            .iter()
+            .map(|&func| trial_words(func).0)
+            .max()
+            .unwrap_or(0);
+        if has_dynamic_frames {
+            scratch_peak_words = scratch_peak_words.max(reserve_scratch_peak);
+        }
+        let chain =
+            memory_plan::compute_stable_chain_layout(self.schedule, |func| trial_words(func).1);
+
+        let has_stackify_fixed_slot_spills = !self.base_fixed_slot_effects.is_empty()
+            || reserves.values().any(|reserve| reserve.scratch_words != 0);
+        let arena_base = choose_arena_base(
+            self.fixed_reservations,
+            ArenaBaseFacts {
+                has_dynamic_frames,
+                has_stackify_fixed_slot_spills,
+                backend_spill_scratch_reserve_words: reserve_scratch_peak,
+                has_persistent_mallocs: self.base_placement.has_persistent_mallocs,
+            },
+        );
+        let global_dyn_base = arena_base
+            .checked_add(
+                memory_plan::add_words(scratch_peak_words, chain.peak_words)
+                    .checked_mul(WORD_BYTES)
+                    .expect("global dynamic base overflow"),
+            )
+            .expect("global dynamic base overflow");
+
+        (
+            global_dyn_base,
+            arena_base,
+            scratch_peak_words,
+            chain.peak_words,
+            reserves
+                .values()
+                .map(|reserve| u64::from(reserve.stable_words))
+                .sum(),
+            reserves
+                .values()
+                .map(|reserve| u64::from(reserve.scratch_words))
+                .sum(),
+        )
+    }
+
+    /// The pre-marginal-model scorer: a full section replan per evaluation.
+    /// Kept as the cross-check oracle for the marginal model.
+    #[cfg(debug_assertions)]
+    fn score_by_replanning(
+        &self,
+        reserves: &FxHashMap<FuncRef, BackendSpillReserve>,
+    ) -> FinalSpillChoiceScore {
         let mut fixed_slot_effects = self.base_fixed_slot_effects.clone();
-        for (&func, reserve) in &reserves {
+        for (&func, reserve) in reserves {
             if reserve.scratch_words != 0 {
                 fixed_slot_effects.insert(func);
             }
@@ -221,12 +344,13 @@ impl FinalSpillChoiceCtx<'_> {
                 funcs: self.funcs,
                 entry: self.section_entry,
                 includes: self.section_includes,
+                fixed_reservations: self.fixed_reservations,
             },
             self.pre_analyses,
             self.ptr_escape,
             &fixed_slot_effects,
             self.backend,
-            &reserves,
+            reserves,
         );
 
         (
