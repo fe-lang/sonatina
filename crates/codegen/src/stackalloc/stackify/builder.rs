@@ -312,6 +312,11 @@ impl<'a> StackifyBuilder<'a> {
             aliases
         };
         normalize_value_alias_map(self.func, &mut value_aliases);
+        // Collapse numerically-equal immediates onto one representative ValueId, then re-normalize.
+        // The imm pass keeps the map one-hop canonical, so re-running is idempotent; it re-validates
+        // the invariant in debug builds over the post-canonicalization map.
+        canonicalize_immediate_aliases(self.func, &mut value_aliases);
+        normalize_value_alias_map(self.func, &mut value_aliases);
 
         let mut stack_cached_immediates = self.stack_cached_immediates;
         if self.cache_hot_immediates {
@@ -567,6 +572,49 @@ fn compute_hot_stack_cached_immediates(
     hot
 }
 
+/// Aliases every immediate value to one canonical representative `ValueId` per distinct materialized
+/// 256-bit word.
+///
+/// Numerically equal immediates are interchangeable on the EVM stack: equal `as_i256()` means an
+/// identical stack word (types like `I8(-1)` and `I256(-1)` sign-extend to the same word), which the
+/// materialization/rename machinery already relies on. Giving them one identity lets ordinary
+/// `ValueId` equality subsume the semantic-equality checks scattered across stackify.
+///
+/// The representative is the class member with the cheapest materialization, then the lowest id —
+/// deterministic, and the whole class is pushed via `Action::Push(rep's Immediate)`, so it never
+/// materializes worse than its best member (equal-word plans can differ across immediate types,
+/// e.g. `I256(-1)` gets a compact `NOT`-based plan that `I8(-1)` does not). The canonical `c` is
+/// read first, and imm-ness is keyed off `c`, so pre-existing (e.g. GVN-provided) aliases are
+/// respected and folded through.
+///
+/// Assumes `value_aliases` is already one-hop canonical (post `normalize_value_alias_map`). The pass
+/// preserves that: each re-aliased `v` points to `rep`, which is the canonical of some value and is
+/// itself never re-aliased (it is its own word's representative), hence self-canonical.
+fn canonicalize_immediate_aliases(
+    func: &Function,
+    value_aliases: &mut SecondaryMap<ValueId, Option<ValueId>>,
+) {
+    let mut rep_of: BTreeMap<I256, (usize, ValueId)> = BTreeMap::new();
+    for v in func.dfg.value_ids() {
+        let c = value_aliases[v].unwrap_or(v);
+        if let Some(imm) = func.dfg.value_imm(c) {
+            let key = (immediate_materialization_code_len(imm), c);
+            let entry = rep_of.entry(imm.as_i256()).or_insert(key);
+            *entry = key.min(*entry);
+        }
+    }
+
+    for v in func.dfg.value_ids() {
+        let c = value_aliases[v].unwrap_or(v);
+        if let Some(imm) = func.dfg.value_imm(c) {
+            let (_, rep) = rep_of[&imm.as_i256()];
+            if rep != c {
+                value_aliases[v] = Some(rep);
+            }
+        }
+    }
+}
+
 fn assign_spill_obj_ids(
     func: &Function,
     spill: SpillSet<'_>,
@@ -767,6 +815,83 @@ block0:
 
             assert_eq!(push2_count, 1);
             assert!(dup_count >= 3);
+        });
+    }
+
+    #[test]
+    fn canonicalize_immediates_collapses_numerically_equal_differently_typed_immediates() {
+        use sonatina_ir::I256;
+
+        // The DFG interns immediates per `Immediate` (type-inclusive), so `1.i8` and `1.i256` become
+        // distinct ValueIds that share `as_i256() == 1`. Stage-1 canonicalization must collapse them
+        // onto one representative, and the resulting map must stay one-hop canonical.
+        const SRC: &str = r#"
+target = "evm-ethereum-osaka"
+
+func public %f(v0.i256, v1.i8) -> i256 {
+block0:
+    v2.i8 = add v1 1.i8;
+    v3.i256 = zext v2 i256;
+    v4.i256 = add v0 1.i256;
+    v5.i256 = add v3 v4;
+    return v5;
+}
+"#;
+
+        let parsed = parse_module(SRC).expect("module parses");
+        let func_ref = parsed.debug.func_order[0];
+
+        parsed.module.func_store.view(func_ref, |func| {
+            // Collect the immediate value ids whose 256-bit word is 1, lowest id first.
+            let mut imm_ones: Vec<_> = func
+                .dfg
+                .value_ids()
+                .filter(|&v| {
+                    func.dfg
+                        .value_imm(v)
+                        .is_some_and(|imm| imm.as_i256() == I256::one())
+                })
+                .collect();
+            imm_ones.sort_unstable_by_key(|v| v.as_u32());
+
+            // The scenario is real: two distinct ValueIds, equal word, different types.
+            assert_eq!(
+                imm_ones.len(),
+                2,
+                "parser should intern 1.i8 and 1.i256 as distinct value ids"
+            );
+            let ty0 = func.dfg.value_imm(imm_ones[0]).unwrap().ty();
+            let ty1 = func.dfg.value_imm(imm_ones[1]).unwrap().ty();
+            assert_ne!(ty0, ty1, "the two immediates must have different types");
+
+            let mut aliases: SecondaryMap<_, Option<_>> = SecondaryMap::new();
+            for value in func.dfg.value_ids() {
+                aliases[value] = Some(value);
+            }
+            normalize_value_alias_map(func, &mut aliases);
+            super::canonicalize_immediate_aliases(func, &mut aliases);
+
+            // Both immediates canonicalize to the lowest-id representative.
+            let rep = imm_ones[0];
+            for &v in &imm_ones {
+                assert_eq!(aliases[v].unwrap_or(v), rep);
+            }
+
+            // The map remains one-hop canonical: re-running normalization is a no-op.
+            let before = aliases.clone();
+            normalize_value_alias_map(func, &mut aliases);
+            for value in func.dfg.value_ids() {
+                assert_eq!(aliases[value], before[value]);
+            }
+
+            // compute() integrates the canonicalization end-to-end without panicking.
+            let mut cfg = ControlFlowGraph::new();
+            cfg.compute(func);
+            let mut liveness = Liveness::new();
+            liveness.compute(func, &cfg);
+            let mut dom = DomTree::new();
+            dom.compute(&cfg);
+            let _ = StackifyBuilder::new(func, &cfg, &dom, &liveness, 16).compute();
         });
     }
 
