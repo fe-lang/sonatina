@@ -321,13 +321,12 @@ fn compute_active_pre_insts(
 
         for inst in function.layout.iter_inst(block) {
             let data = machine_isa.inst_set().resolve_inst(function.dfg.inst(inst));
-            let args = function.dfg.inst(inst).collect_values();
             apply_site_state(plan, FrameSite::PreInst(inst), &mut active);
 
             match data {
                 EvmMachineInstKind::Call(_) => {
                     if let Some((prefix, suffix, prefix_len)) =
-                        split_call_actions(alloc.read(inst, &args))
+                        split_call_actions(alloc.pre_inst(inst).clone())
                     {
                         apply_actions_state(
                             plan,
@@ -347,7 +346,7 @@ fn compute_active_pre_insts(
                         apply_actions_state(
                             plan,
                             FrameSite::PreInst(inst),
-                            &alloc.read(inst, &args),
+                            alloc.pre_inst(inst),
                             0,
                             &mut active,
                         );
@@ -355,8 +354,8 @@ fn compute_active_pre_insts(
                 }
                 EvmMachineInstKind::BrTable(br) => {
                     for (case_idx, _) in br.table().iter().enumerate() {
-                        let actions = alloc.read_br_table_case(inst, case_idx);
-                        if fold_stack_actions(&actions).iter().any(|action| {
+                        let actions = alloc.br_table_case(inst, case_idx);
+                        if fold_stack_actions(actions).iter().any(|action| {
                             matches!(
                                 action,
                                 Action::MemLoadFrameSlot(_) | Action::MemStoreFrameSlot(_)
@@ -369,7 +368,7 @@ fn compute_active_pre_insts(
                 _ => apply_actions_state(
                     plan,
                     FrameSite::PreInst(inst),
-                    &alloc.read(inst, &args),
+                    alloc.pre_inst(inst),
                     0,
                     &mut active,
                 ),
@@ -385,7 +384,7 @@ fn compute_active_pre_insts(
             apply_actions_state(
                 plan,
                 FrameSite::PostInst(inst),
-                &alloc.write(inst, function.dfg.inst_results(inst)),
+                alloc.post_inst(inst),
                 0,
                 &mut active,
             );
@@ -427,10 +426,10 @@ fn validate_lazy_frame_activity(
         apply_site_state(plan, FrameSite::BlockEntry(block), &mut active);
 
         for inst in function.layout.iter_inst(block) {
-            let args = function.dfg.inst(inst).collect_values();
             apply_site_state(plan, FrameSite::PreInst(inst), &mut active);
 
-            if let Some((prefix, suffix, prefix_len)) = split_call_actions(alloc.read(inst, &args))
+            if let Some((prefix, suffix, prefix_len)) =
+                split_call_actions(alloc.pre_inst(inst).clone())
             {
                 apply_actions_state(plan, FrameSite::PreInst(inst), &prefix, 0, &mut active);
                 apply_actions_state(
@@ -444,7 +443,7 @@ fn validate_lazy_frame_activity(
                 apply_actions_state(
                     plan,
                     FrameSite::PreInst(inst),
-                    &alloc.read(inst, &args),
+                    alloc.pre_inst(inst),
                     0,
                     &mut active,
                 );
@@ -457,7 +456,7 @@ fn validate_lazy_frame_activity(
             apply_actions_state(
                 plan,
                 FrameSite::PostInst(inst),
-                &alloc.write(inst, function.dfg.inst_results(inst)),
+                alloc.post_inst(inst),
                 0,
                 &mut active,
             );
@@ -563,12 +562,11 @@ fn collect_dep_points(
     for block in function.layout.iter_block() {
         for inst in function.layout.iter_inst(block) {
             let data = machine_isa.inst_set().resolve_inst(function.dfg.inst(inst));
-            let args = function.dfg.inst(inst).collect_values();
 
             match &data {
                 EvmMachineInstKind::Call(_) => {
                     if let Some((prefix, suffix, prefix_len)) =
-                        split_call_actions(alloc.read(inst, &args))
+                        split_call_actions(alloc.pre_inst(inst).clone())
                     {
                         collect_action_dep_points(
                             &mut out,
@@ -595,15 +593,15 @@ fn collect_dep_points(
                             &order,
                             block,
                             FrameSite::PreInst(inst),
-                            &alloc.read(inst, &args),
+                            alloc.pre_inst(inst),
                             0,
                         );
                     }
                 }
                 EvmMachineInstKind::BrTable(br) => {
                     for (case_idx, _) in br.table().iter().enumerate() {
-                        let actions = alloc.read_br_table_case(inst, case_idx);
-                        if fold_stack_actions(&actions).iter().any(|action| {
+                        let actions = alloc.br_table_case(inst, case_idx);
+                        if fold_stack_actions(actions).iter().any(|action| {
                             matches!(
                                 action,
                                 Action::MemLoadFrameSlot(_) | Action::MemStoreFrameSlot(_)
@@ -619,7 +617,7 @@ fn collect_dep_points(
                     &order,
                     block,
                     FrameSite::PreInst(inst),
-                    &alloc.read(inst, &args),
+                    alloc.pre_inst(inst),
                     0,
                 ),
             }
@@ -644,7 +642,7 @@ fn collect_dep_points(
                 &order,
                 block,
                 FrameSite::PostInst(inst),
-                &alloc.write(inst, function.dfg.inst_results(inst)),
+                alloc.post_inst(inst),
                 0,
             );
         }

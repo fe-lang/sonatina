@@ -216,8 +216,8 @@ block3:
             );
             assert_eq!(alloc.brtable_actions[term].len(), 2);
 
-            let first = alloc.read_br_table_case(term, 0);
-            let second = alloc.read_br_table_case(term, 1);
+            let first = alloc.br_table_case(term, 0);
+            let second = alloc.br_table_case(term, 1);
             assert!(
                 !first.is_empty(),
                 "expected first br_table case to include compare preparation"

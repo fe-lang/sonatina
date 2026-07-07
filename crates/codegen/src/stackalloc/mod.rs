@@ -1,7 +1,7 @@
 use crate::bitset::BitSet;
 use cranelift_entity::SecondaryMap;
 use smallvec::SmallVec;
-use sonatina_ir::{BlockId, Function, Immediate, InstId, ValueId};
+use sonatina_ir::{Function, Immediate, InstId, ValueId};
 
 use crate::isa::evm::static_arena_alloc::StackObjId;
 
@@ -14,18 +14,15 @@ pub use stackify::{StackifyAlloc, StackifyBuilder, StackifySearchProfile};
 pub type Actions = SmallVec<[Action; 2]>;
 
 pub trait Allocator {
+    /// Actions to run at function entry (function-argument spill stores).
     fn enter_function(&self, function: &Function) -> Actions;
 
-    // xxx rename these to make it clear that these are pre- and post-insn operations
-    /// Return the actions required to place `vals` on the stack,
-    /// in the specified order. I.e. the first `Value` in `vals`
-    /// will be on the top of the stack.
-    fn read(&self, inst: InstId, vals: &[ValueId]) -> Actions;
-    /// Return the actions required for the `case_index`th `br_table` compare in IR order.
-    fn read_br_table_case(&self, inst: InstId, case_index: usize) -> Actions;
-    fn write(&self, inst: InstId, vals: &[ValueId]) -> Actions;
-
-    fn traverse_edge(&self, from: BlockId, to: BlockId) -> Actions;
+    /// Actions to run immediately before `inst`'s opcode(s).
+    fn pre_inst(&self, inst: InstId) -> &Actions;
+    /// Actions to run immediately after `inst`'s opcode(s).
+    fn post_inst(&self, inst: InstId) -> &Actions;
+    /// Actions preparing the `case_index`th `br_table` compare, in IR case order.
+    fn br_table_case(&self, inst: InstId, case_index: usize) -> &Actions;
 }
 
 pub(crate) fn canonicalize_value_alias(

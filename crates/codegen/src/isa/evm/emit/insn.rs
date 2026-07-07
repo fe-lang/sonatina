@@ -1,7 +1,7 @@
 use rustc_hash::FxHashSet;
 use smallvec::SmallVec;
 use sonatina_ir::{
-    InstId, InstSetExt, U256, ValueId,
+    InstId, InstSetExt, U256,
     inst::evm::machine_inst_set::EvmMachineInstKind,
     isa::{Isa, evm::EvmMachine},
 };
@@ -25,12 +25,7 @@ use super::{
 };
 
 impl EvmMachineFunctionLowering<'_> {
-    pub(crate) fn lower_insn(
-        &self,
-        ctx: &mut Lower<OpCode>,
-        alloc: &mut dyn Allocator,
-        insn: InstId,
-    ) {
+    pub(crate) fn lower_insn(&self, ctx: &mut Lower<OpCode>, alloc: &dyn Allocator, insn: InstId) {
         if self.is_elided_block(ctx.insn_block(insn)) {
             return;
         }
@@ -42,17 +37,16 @@ impl EvmMachineFunctionLowering<'_> {
         let emit_post_actions = |ctx: &mut Lower<OpCode>, actions: &[Action]| {
             self.emit_actions_for_site(ctx, actions, frame_layout, FrameSite::PostInst(insn))
         };
-        let results: SmallVec<[ValueId; 4]> = ctx.insn_results(insn).iter().copied().collect();
         let args = ctx.insn_data(insn).collect_values();
         let machine = EvmMachine::new(ctx.module.triple);
         let data = machine.inst_set().resolve_inst(ctx.insn_data(insn));
 
         let basic_op = |ctx: &mut Lower<OpCode>, ops: &[OpCode]| {
-            emit_pre_actions(ctx, &alloc.read(insn, &args));
+            emit_pre_actions(ctx, alloc.pre_inst(insn));
             for op in ops {
                 ctx.push(*op);
             }
-            emit_post_actions(ctx, &alloc.write(insn, results.as_slice()));
+            emit_post_actions(ctx, alloc.post_inst(insn));
         };
 
         match &data {
@@ -74,7 +68,7 @@ impl EvmMachineFunctionLowering<'_> {
             EvmMachineInstKind::Xor(_) => basic_op(ctx, &[OpCode::XOR]),
             EvmMachineInstKind::Jump(jump) => {
                 let dest = self.canonical_block_target(*jump.dest());
-                emit_pre_actions(ctx, &alloc.read(insn, &[]));
+                emit_pre_actions(ctx, alloc.pre_inst(insn));
 
                 if !ctx.is_next_block(dest) {
                     let push_op = ctx.push(OpCode::PUSH1);
@@ -86,7 +80,7 @@ impl EvmMachineFunctionLowering<'_> {
                 let nz_dest = self.canonical_block_target(*br.nz_dest());
                 let z_dest = self.canonical_block_target(*br.z_dest());
 
-                emit_pre_actions(ctx, &alloc.read(insn, &args));
+                emit_pre_actions(ctx, alloc.pre_inst(insn));
                 if nz_dest == z_dest {
                     ctx.push(OpCode::POP);
                     if !ctx.is_next_block(nz_dest) {
@@ -109,7 +103,7 @@ impl EvmMachineFunctionLowering<'_> {
             }
             EvmMachineInstKind::Phi(_) => {}
             EvmMachineInstKind::Unreachable(_) => {
-                emit_pre_actions(ctx, &alloc.read(insn, &[]));
+                emit_pre_actions(ctx, alloc.pre_inst(insn));
                 ctx.push(OpCode::INVALID);
             }
             EvmMachineInstKind::BrTable(br) => {
@@ -131,7 +125,7 @@ impl EvmMachineFunctionLowering<'_> {
                     let dest = self.canonical_block_target(*dest);
                     self.emit_actions_for_site(
                         ctx,
-                        &alloc.read_br_table_case(insn, case_idx),
+                        alloc.br_table_case(insn, case_idx),
                         frame_layout,
                         FrameSite::PreInst(insn),
                     );
@@ -149,7 +143,7 @@ impl EvmMachineFunctionLowering<'_> {
             }
             EvmMachineInstKind::Call(call) => {
                 let callee = *call.callee();
-                let mut actions = alloc.read(insn, &args);
+                let mut actions = alloc.pre_inst(insn).clone();
 
                 let cont_pos = actions
                     .iter()
@@ -197,7 +191,7 @@ impl EvmMachineFunctionLowering<'_> {
                     let jumpdest_op = ctx.push(OpCode::JUMPDEST);
                     ctx.add_label_reference(push_callback, Label::Insn(jumpdest_op));
 
-                    emit_post_actions(ctx, &alloc.write(insn, results.as_slice()));
+                    emit_post_actions(ctx, alloc.post_inst(insn));
                 } else {
                     self.emit_actions_for_site(
                         ctx,
@@ -220,7 +214,7 @@ impl EvmMachineFunctionLowering<'_> {
                 }
             }
             EvmMachineInstKind::Return(_) => {
-                emit_pre_actions(ctx, &alloc.read(insn, &args));
+                emit_pre_actions(ctx, alloc.pre_inst(insn));
                 if !self.has_lazy_frame_lowering()
                     && let Some(frame_layout) = frame_layout
                 {
@@ -243,14 +237,14 @@ impl EvmMachineFunctionLowering<'_> {
                     bits < 256,
                     "full-width saturating add must be legalized earlier"
                 );
-                emit_pre_actions(ctx, &alloc.read(insn, &args));
+                emit_pre_actions(ctx, alloc.pre_inst(insn));
                 emit_narrow_unsigned_saturating_binary(
                     ctx,
                     OpCode::ADD,
                     bits,
                     low_bits_mask(bits).unwrap(),
                 );
-                emit_post_actions(ctx, &alloc.write(insn, results.as_slice()));
+                emit_post_actions(ctx, alloc.post_inst(insn));
             }
             EvmMachineInstKind::EvmSaddsat(sat) => {
                 let bits = scalar_bit_width(*sat.ty(), ctx.module)
@@ -259,9 +253,9 @@ impl EvmMachineFunctionLowering<'_> {
                     bits < 256,
                     "full-width saturating add must be legalized earlier"
                 );
-                emit_pre_actions(ctx, &alloc.read(insn, &args));
+                emit_pre_actions(ctx, alloc.pre_inst(insn));
                 emit_narrow_signed_saturating_binary(ctx, OpCode::ADD, bits);
-                emit_post_actions(ctx, &alloc.write(insn, results.as_slice()));
+                emit_post_actions(ctx, alloc.post_inst(insn));
             }
             EvmMachineInstKind::EvmUsubsat(sat) => {
                 let bits = scalar_bit_width(*sat.ty(), ctx.module)
@@ -270,9 +264,9 @@ impl EvmMachineFunctionLowering<'_> {
                     bits < 256,
                     "full-width saturating sub must be legalized earlier"
                 );
-                emit_pre_actions(ctx, &alloc.read(insn, &args));
+                emit_pre_actions(ctx, alloc.pre_inst(insn));
                 emit_narrow_unsigned_saturating_binary(ctx, OpCode::SUB, bits, U256::zero());
-                emit_post_actions(ctx, &alloc.write(insn, results.as_slice()));
+                emit_post_actions(ctx, alloc.post_inst(insn));
             }
             EvmMachineInstKind::EvmSsubsat(sat) => {
                 let bits = scalar_bit_width(*sat.ty(), ctx.module)
@@ -281,9 +275,9 @@ impl EvmMachineFunctionLowering<'_> {
                     bits < 256,
                     "full-width saturating sub must be legalized earlier"
                 );
-                emit_pre_actions(ctx, &alloc.read(insn, &args));
+                emit_pre_actions(ctx, alloc.pre_inst(insn));
                 emit_narrow_signed_saturating_binary(ctx, OpCode::SUB, bits);
-                emit_post_actions(ctx, &alloc.write(insn, results.as_slice()));
+                emit_post_actions(ctx, alloc.post_inst(insn));
             }
             EvmMachineInstKind::EvmUmulsat(sat) => {
                 let bits = scalar_bit_width(*sat.ty(), ctx.module)
@@ -292,14 +286,14 @@ impl EvmMachineFunctionLowering<'_> {
                     bits < 256,
                     "full-width saturating mul must be legalized earlier"
                 );
-                emit_pre_actions(ctx, &alloc.read(insn, &args));
+                emit_pre_actions(ctx, alloc.pre_inst(insn));
                 emit_narrow_unsigned_saturating_binary(
                     ctx,
                     OpCode::MUL,
                     bits,
                     low_bits_mask(bits).unwrap(),
                 );
-                emit_post_actions(ctx, &alloc.write(insn, results.as_slice()));
+                emit_post_actions(ctx, alloc.post_inst(insn));
             }
             EvmMachineInstKind::EvmSmulsat(sat) => {
                 let bits = scalar_bit_width(*sat.ty(), ctx.module)
@@ -308,9 +302,9 @@ impl EvmMachineFunctionLowering<'_> {
                     bits < 256,
                     "full-width saturating mul must be legalized earlier"
                 );
-                emit_pre_actions(ctx, &alloc.read(insn, &args));
+                emit_pre_actions(ctx, alloc.pre_inst(insn));
                 emit_narrow_signed_saturating_binary(ctx, OpCode::MUL, bits);
-                emit_post_actions(ctx, &alloc.write(insn, results.as_slice()));
+                emit_post_actions(ctx, alloc.post_inst(insn));
             }
             EvmMachineInstKind::EvmUmod(_) => basic_op(ctx, &[OpCode::MOD]),
             EvmMachineInstKind::EvmSmod(_) => basic_op(ctx, &[OpCode::SMOD]),
@@ -373,14 +367,14 @@ impl EvmMachineFunctionLowering<'_> {
             EvmMachineInstKind::EvmSelfDestruct(_) => basic_op(ctx, &[OpCode::SELFDESTRUCT]),
             EvmMachineInstKind::GetFunctionPtr(get_fn) => {
                 let func = *get_fn.func();
-                emit_pre_actions(ctx, &alloc.read(insn, &args));
+                emit_pre_actions(ctx, alloc.pre_inst(insn));
                 ctx.push_jump_target(OpCode::PUSH1, Label::Function(func));
-                emit_post_actions(ctx, &alloc.write(insn, results.as_slice()));
+                emit_post_actions(ctx, alloc.post_inst(insn));
             }
             EvmMachineInstKind::EvmInvalid(_) => basic_op(ctx, &[OpCode::INVALID]),
             EvmMachineInstKind::SymAddr(sym_addr) => {
                 let sym = sym_addr.sym().clone();
-                emit_pre_actions(ctx, &alloc.read(insn, &args));
+                emit_pre_actions(ctx, alloc.pre_inst(insn));
                 ctx.push_sym_fixup(
                     OpCode::PUSH0,
                     SymFixup {
@@ -388,11 +382,11 @@ impl EvmMachineFunctionLowering<'_> {
                         sym,
                     },
                 );
-                emit_post_actions(ctx, &alloc.write(insn, results.as_slice()));
+                emit_post_actions(ctx, alloc.post_inst(insn));
             }
             EvmMachineInstKind::SymSize(sym_size) => {
                 let sym = sym_size.sym().clone();
-                emit_pre_actions(ctx, &alloc.read(insn, &args));
+                emit_pre_actions(ctx, alloc.pre_inst(insn));
                 ctx.push_sym_fixup(
                     OpCode::PUSH0,
                     SymFixup {
@@ -400,7 +394,7 @@ impl EvmMachineFunctionLowering<'_> {
                         sym,
                     },
                 );
-                emit_post_actions(ctx, &alloc.write(insn, results.as_slice()));
+                emit_post_actions(ctx, alloc.post_inst(insn));
             }
         }
     }

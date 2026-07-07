@@ -17,6 +17,7 @@ use sonatina_ir::ValueId;
 
 use super::{
     StackifyContext,
+    alloc::SpillStorage,
     slots::{FreeSlotPools, SpillSlotInterference, SpillSlotPools},
     spill::{SpillDiscovery, SpillSet},
     sym_stack::SymStack,
@@ -123,15 +124,22 @@ impl<'a> MemPlan<'a> {
                 &mut self.free_slots.scratch,
                 Some(self.scratch_spill_slots),
             ) {
-                actions.push(Action::MemStoreAbs(slot * 32));
+                actions.push(
+                    SpillStorage::Scratch(slot)
+                        .store_action()
+                        .expect("scratch storage has a store action"),
+                );
                 return;
             }
             self.request_object_storage(v);
         }
 
-        actions.push(Action::MemStoreObj(
-            self.spill_obj[v].expect("spilled value missing stack object id"),
-        ));
+        let obj = self.spill_obj[v].expect("spilled value missing stack object id");
+        actions.push(
+            SpillStorage::Object(obj)
+                .store_action()
+                .expect("object storage has a store action"),
+        );
     }
 
     fn load_frame_slot_or_placeholder(&mut self, v: ValueId) -> Action {

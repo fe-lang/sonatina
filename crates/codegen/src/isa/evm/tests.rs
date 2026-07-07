@@ -1754,24 +1754,19 @@ block0:
         });
     }
 
-    let (call_inst, call_args) = parsed.module.func_store.view(caller, |function| {
+    let call_inst = parsed.module.func_store.view(caller, |function| {
         function
             .layout
             .iter_block()
             .flat_map(|block| function.layout.iter_inst(block))
-            .find_map(|inst| {
-                function
-                    .dfg
-                    .cast_call(inst)
-                    .map(|call| (inst, call.args().clone()))
-            })
+            .find_map(|inst| function.dfg.cast_call(inst).map(|_| inst))
             .expect("missing call inst")
     });
 
     let actions = stack_allocs
         .get(&caller)
         .expect("missing caller analysis")
-        .read(call_inst, &call_args);
+        .pre_inst(call_inst);
     assert!(
         !actions
             .iter()
@@ -3000,7 +2995,7 @@ block0:
     let (shadow_obj, runs) = (&save_plan.shadow_obj, &save_plan.runs);
     assert!(!runs.is_empty(), "expected at least one saved run");
 
-    let actions = alloc.read(call_inst, &call_args);
+    let actions = alloc.pre_inst(call_inst);
     let cont_pos = actions
         .iter()
         .position(|a| matches!(a, Action::PushContinuationOffset))
@@ -3107,21 +3102,17 @@ block2:
     }
     let caller = names["caller"];
 
-    let (call_inst, call_results): (InstId, SmallVec<[ValueId; 8]>) =
-        parsed.module.func_store.view(caller, |function| {
-            for block in function.layout.iter_block() {
-                for inst in function.layout.iter_inst(block) {
-                    if function.dfg.call_info(inst).is_none() {
-                        continue;
-                    }
-                    return (
-                        inst,
-                        function.dfg.inst_results(inst).iter().copied().collect(),
-                    );
+    let call_inst: InstId = parsed.module.func_store.view(caller, |function| {
+        for block in function.layout.iter_block() {
+            for inst in function.layout.iter_inst(block) {
+                if function.dfg.call_info(inst).is_none() {
+                    continue;
                 }
+                return inst;
             }
-            panic!("missing call inst");
-        });
+        }
+        panic!("missing call inst");
+    });
 
     let stack_alloc = stack_allocs
         .remove(&caller)
@@ -3151,7 +3142,7 @@ block2:
     let (shadow_obj, runs) = (&save_plan.shadow_obj, &save_plan.runs);
     assert!(!runs.is_empty(), "expected at least one saved run");
 
-    let actions = alloc.write(call_inst, &call_results);
+    let actions = alloc.post_inst(call_inst);
     let mut expected = Actions::new();
     let shadow_loc = alloc.obj_loc_for_id(*shadow_obj);
     for run in runs.iter().rev() {

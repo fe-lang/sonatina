@@ -1,6 +1,6 @@
 use cranelift_entity::SecondaryMap;
 use rustc_hash::FxHashMap;
-use sonatina_ir::{BlockId, Function, InstId, ValueId};
+use sonatina_ir::{Function, InstId, ValueId};
 
 use crate::{
     analysis::memory_access::ExactLocalAddr,
@@ -13,6 +13,18 @@ pub(crate) enum SpillStorage {
     Scratch(u32),
     Object(StackObjId),
     ExactLocal(ExactLocalAddr),
+}
+
+impl SpillStorage {
+    /// The action that stores a value from the stack top into this storage.
+    /// `None` for storage materialized without a store (exact local addresses).
+    pub(super) fn store_action(self) -> Option<Action> {
+        match self {
+            SpillStorage::Scratch(slot) => Some(Action::MemStoreAbs(slot * 32)),
+            SpillStorage::Object(obj) => Some(Action::MemStoreObj(obj)),
+            SpillStorage::ExactLocal(_) => None,
+        }
+    }
 }
 
 #[derive(Clone, Default)]
@@ -134,6 +146,34 @@ impl StackifyAlloc {
             }
         });
     }
+    /// Ensure `inst`'s pre/post action entries exist (empty if never planned), so that map-wide
+    /// transforms like [`Self::rewrite_action_lists`] visit them.
+    pub(crate) fn touch_inst_actions(&mut self, inst: InstId) {
+        let _ = &mut self.pre_actions[inst];
+        let _ = &mut self.post_actions[inst];
+    }
+
+    /// Replace every stored pre/post/`br_table` action list in place with the result of the
+    /// given transforms (each consumes the old list and returns the rewritten one).
+    pub(crate) fn rewrite_action_lists(
+        &mut self,
+        mut pre: impl FnMut(InstId, Actions) -> Actions,
+        mut post: impl FnMut(InstId, Actions) -> Actions,
+        mut br_case: impl FnMut(Actions) -> Actions,
+    ) {
+        for (inst, actions) in self.pre_actions.iter_mut() {
+            *actions = pre(inst, std::mem::take(actions));
+        }
+        for (inst, actions) in self.post_actions.iter_mut() {
+            *actions = post(inst, std::mem::take(actions));
+        }
+        for cases in self.brtable_actions.values_mut() {
+            for actions in cases.iter_mut() {
+                *actions = br_case(std::mem::take(actions));
+            }
+        }
+    }
+
     pub(crate) fn remap_stack_objects(&mut self, remap: &FxHashMap<StackObjId, StackObjId>) {
         fn remap_actions(actions: &mut Actions, remap: &FxHashMap<StackObjId, StackObjId>) {
             for action in actions {
@@ -182,29 +222,24 @@ impl Allocator for StackifyAlloc {
                 idx < super::DUP_MAX,
                 "function arg depth exceeds DUP16 reach"
             );
-            match self.storage_for_value(arg) {
-                Some(SpillStorage::Scratch(slot)) => {
-                    act.push(Action::StackDup(idx as u8));
-                    act.push(Action::MemStoreAbs(slot * 32));
-                }
-                Some(SpillStorage::Object(obj)) => {
-                    act.push(Action::StackDup(idx as u8));
-                    act.push(Action::MemStoreObj(obj));
-                }
-                Some(SpillStorage::ExactLocal(_)) | None => {}
+            if let Some(store) = self
+                .storage_for_value(arg)
+                .and_then(SpillStorage::store_action)
+            {
+                act.push(Action::StackDup(idx as u8));
+                act.push(store);
             }
         }
         act
     }
 
-    fn read(&self, inst: InstId, _vals: &[ValueId]) -> Actions {
-        self.pre_actions[inst].clone()
+    fn pre_inst(&self, inst: InstId) -> &Actions {
+        &self.pre_actions[inst]
     }
 
-    fn read_br_table_case(&self, inst: InstId, case_index: usize) -> Actions {
+    fn br_table_case(&self, inst: InstId, case_index: usize) -> &Actions {
         self.brtable_actions[inst]
             .get(case_index)
-            .cloned()
             .unwrap_or_else(|| {
                 panic!(
                     "missing br_table case actions for inst {} case {}",
@@ -214,11 +249,7 @@ impl Allocator for StackifyAlloc {
             })
     }
 
-    fn write(&self, inst: InstId, _vals: &[ValueId]) -> Actions {
-        self.post_actions[inst].clone()
-    }
-
-    fn traverse_edge(&self, _from: BlockId, _to: BlockId) -> Actions {
-        Actions::new()
+    fn post_inst(&self, inst: InstId) -> &Actions {
+        &self.post_actions[inst]
     }
 }
