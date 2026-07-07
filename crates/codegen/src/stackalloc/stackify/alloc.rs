@@ -35,27 +35,57 @@ pub struct StackifyAlloc {
     /// `br_table` lowering uses per-case action sequences stored in IR case order.
     pub(super) brtable_actions: SecondaryMap<InstId, Vec<Actions>>,
 
+    /// Finalized storage for every spilled value. Single source of truth; the
+    /// object/scratch projections below are derived from it on demand.
     pub(crate) spill_storage: SecondaryMap<ValueId, Option<SpillStorage>>,
-    pub(crate) spill_obj: SecondaryMap<ValueId, Option<StackObjId>>,
-    pub(crate) scratch_slot_of_value: SecondaryMap<ValueId, Option<u32>>,
     pub(crate) exact_local_addr: SecondaryMap<ValueId, Option<ExactLocalAddr>>,
 }
 
 impl StackifyAlloc {
     #[cfg(test)]
     pub(crate) fn set_object_spill_for_test(&mut self, value: ValueId, obj: StackObjId) {
-        self.spill_obj[value] = Some(obj);
-        self.spill_storage[value] = Some(SpillStorage::Object(obj));
+        self.set_spill_object(value, obj);
     }
 
     pub(crate) fn uses_scratch_spills(&self) -> bool {
-        self.scratch_slot_of_value
+        self.spill_storage
             .values()
-            .any(|slot| slot.is_some())
+            .any(|storage| matches!(storage, Some(SpillStorage::Scratch(_))))
     }
 
     pub(crate) fn storage_for_value(&self, value: ValueId) -> Option<SpillStorage> {
         self.spill_storage[value]
+    }
+
+    #[cfg(test)]
+    pub(crate) fn spill_obj(&self, value: ValueId) -> Option<StackObjId> {
+        match self.spill_storage[value] {
+            Some(SpillStorage::Object(obj)) => Some(obj),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn scratch_slot(&self, value: ValueId) -> Option<u32> {
+        match self.spill_storage[value] {
+            Some(SpillStorage::Scratch(slot)) => Some(slot),
+            _ => None,
+        }
+    }
+
+    /// Iterate `(value, obj)` pairs for every object-stored spill.
+    pub(crate) fn object_spills(&self) -> impl Iterator<Item = (ValueId, StackObjId)> + '_ {
+        self.spill_storage.iter().filter_map(|(value, storage)| {
+            if let Some(SpillStorage::Object(obj)) = storage {
+                Some((value, *obj))
+            } else {
+                None
+            }
+        })
+    }
+
+    /// The one mutation downstream needs (final spill re-homing).
+    pub(crate) fn set_spill_object(&mut self, value: ValueId, obj: StackObjId) {
+        self.spill_storage[value] = Some(SpillStorage::Object(obj));
     }
 
     pub(crate) fn for_each_action(&self, mut f: impl FnMut(&Action)) {
@@ -79,61 +109,6 @@ impl StackifyAlloc {
     }
 
     pub(crate) fn validate_spill_storage(&self) {
-        for (value, storage) in self.spill_storage.iter() {
-            match storage {
-                Some(SpillStorage::Scratch(slot)) => {
-                    assert_eq!(
-                        self.scratch_slot_of_value[value],
-                        Some(*slot),
-                        "scratch storage map drift for value {}",
-                        value.as_u32()
-                    );
-                    assert_eq!(
-                        self.spill_obj[value],
-                        None,
-                        "scratch-spilled value {} must not have object storage",
-                        value.as_u32()
-                    );
-                }
-                Some(SpillStorage::Object(obj)) => {
-                    assert_eq!(
-                        self.spill_obj[value],
-                        Some(*obj),
-                        "object storage map drift for value {}",
-                        value.as_u32()
-                    );
-                    assert_eq!(
-                        self.scratch_slot_of_value[value],
-                        None,
-                        "object-spilled value {} must not have scratch storage",
-                        value.as_u32()
-                    );
-                }
-                Some(SpillStorage::ExactLocal(exact)) => {
-                    assert_eq!(
-                        self.exact_local_addr[value],
-                        Some(*exact),
-                        "exact local storage map drift for value {}",
-                        value.as_u32()
-                    );
-                }
-                None => {
-                    assert_eq!(
-                        self.scratch_slot_of_value[value],
-                        None,
-                        "unspilled value {} must not have scratch storage",
-                        value.as_u32()
-                    );
-                    assert_eq!(
-                        self.spill_obj[value],
-                        None,
-                        "unspilled value {} must not have object storage",
-                        value.as_u32()
-                    );
-                }
-            }
-        }
-
         self.for_each_action(|action| {
             if let Action::MemLoadObj(id) | Action::MemStoreObj(id) = action {
                 assert!(
@@ -203,11 +178,6 @@ impl StackifyAlloc {
             if let Some(SpillStorage::Object(obj)) = storage
                 && let Some(new_obj) = remap.get(obj)
             {
-                *obj = *new_obj;
-            }
-        }
-        for obj in self.spill_obj.values_mut().flatten() {
-            if let Some(new_obj) = remap.get(obj) {
                 *obj = *new_obj;
             }
         }

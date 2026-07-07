@@ -116,8 +116,8 @@ mod tests {
                 .with_scratch_spills(2)
                 .compute();
 
-            for (v, slot) in alloc.scratch_slot_of_value.iter() {
-                if slot.is_some() {
+            for v in function.dfg.value_ids() {
+                if alloc.scratch_slot(v).is_some() {
                     assert!(
                         !scratch_live_values.contains(v),
                         "scratch spill used for a scratch-live value"
@@ -128,7 +128,7 @@ mod tests {
             assert!(
                 scratch_live_values
                     .iter()
-                    .any(|v| alloc.spill_obj[v].is_some()),
+                    .any(|v| alloc.spill_obj(v).is_some()),
                 "expected at least one scratch-live value to spill to a stack object"
             );
         });
@@ -297,7 +297,7 @@ block2:
                 alloc.pre_actions[jump_inst]
             );
             assert!(
-                alloc.spill_obj[v1].is_some(),
+                alloc.spill_obj(v1).is_some(),
                 "expected dropped entry arg to become spill-reloadable on the backedge"
             );
         });
@@ -386,7 +386,7 @@ block3:
             let alloc = StackifyBuilder::new(function, &cfg, &dom, &liveness, 16).compute();
 
             assert!(
-                alloc.spill_obj[deep_phi].is_some(),
+                alloc.spill_obj(deep_phi).is_some(),
                 "expected deepest phi to spill so merge repair must store it"
             );
             assert!(

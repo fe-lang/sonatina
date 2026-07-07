@@ -347,14 +347,15 @@ impl<'a> StackifyBuilder<'a> {
             let checkpoint = observer.checkpoint();
             let mut slots: SpillSlotPools = SpillSlotPools::default();
 
-            let (mut alloc, spill_requests, object_spill_requests) = Self::plan_iteration(
-                &ctx,
-                observer,
-                SpillSet::new(&spill_set),
-                &forced_object_spills,
-                &mut slots,
-                &mut search_scratch,
-            );
+            let (mut alloc, spill_obj, spill_requests, object_spill_requests) =
+                Self::plan_iteration(
+                    &ctx,
+                    observer,
+                    SpillSet::new(&spill_set),
+                    &forced_object_spills,
+                    &mut slots,
+                    &mut search_scratch,
+                );
 
             let spill_stable = spill_requests.is_subset(&spill_set);
             let object_spills_stable = object_spill_requests.is_subset(&forced_object_spills);
@@ -365,6 +366,7 @@ impl<'a> StackifyBuilder<'a> {
                     &forced_object_spills,
                     &mut slots,
                     &mut alloc,
+                    &spill_obj,
                 );
                 alloc.validate_spill_storage();
                 return alloc;
@@ -383,7 +385,12 @@ impl<'a> StackifyBuilder<'a> {
         forced_object_spills: &BitSet<ValueId>,
         slots: &mut SpillSlotPools,
         search_scratch: &mut NormalizeSearchScratch,
-    ) -> (StackifyAlloc, BitSet<ValueId>, BitSet<ValueId>) {
+    ) -> (
+        StackifyAlloc,
+        SecondaryMap<ValueId, Option<crate::isa::evm::static_arena_alloc::StackObjId>>,
+        BitSet<ValueId>,
+        BitSet<ValueId>,
+    ) {
         let mut object_spill_requests: BitSet<ValueId> = BitSet::default();
         let mut arg_free_slots: FreeSlotPools = FreeSlotPools::default();
         for &arg in ctx.func.arg_values.iter() {
@@ -417,8 +424,6 @@ impl<'a> StackifyBuilder<'a> {
             post_actions: SecondaryMap::new(),
             brtable_actions: SecondaryMap::new(),
             spill_storage: SecondaryMap::new(),
-            spill_obj,
-            scratch_slot_of_value: SecondaryMap::new(),
             exact_local_addr: ctx.exact_local_addr.clone(),
         };
 
@@ -442,6 +447,7 @@ impl<'a> StackifyBuilder<'a> {
             &terminal_chain_blocks,
             &interfaces.carry_in,
             &mut alloc,
+            &spill_obj,
             &mut spill_requests,
             &mut object_spill_requests,
             forced_object_spills,
@@ -451,7 +457,7 @@ impl<'a> StackifyBuilder<'a> {
         );
         planner.plan_blocks();
 
-        (alloc, spill_requests, object_spill_requests)
+        (alloc, spill_obj, spill_requests, object_spill_requests)
     }
 
     fn finalize_spill_storage(
@@ -460,19 +466,12 @@ impl<'a> StackifyBuilder<'a> {
         forced_object_spills: &BitSet<ValueId>,
         slots: &mut SpillSlotPools,
         alloc: &mut StackifyAlloc,
+        spill_obj: &SecondaryMap<ValueId, Option<crate::isa::evm::static_arena_alloc::StackObjId>>,
     ) {
         let scratch_slots = slots.scratch.take_slot_map();
-        let raw_spill_obj = alloc.spill_obj.clone();
         let mut spill_storage: SecondaryMap<ValueId, Option<SpillStorage>> = SecondaryMap::new();
-        let mut spill_obj: SecondaryMap<
-            ValueId,
-            Option<crate::isa::evm::static_arena_alloc::StackObjId>,
-        > = SecondaryMap::new();
-        let mut scratch_slot_of_value: SecondaryMap<ValueId, Option<u32>> = SecondaryMap::new();
         for value in ctx.func.dfg.value_ids() {
             let _ = &mut spill_storage[value];
-            let _ = &mut spill_obj[value];
-            let _ = &mut scratch_slot_of_value[value];
         }
 
         for value in spill.bitset().iter() {
@@ -482,12 +481,10 @@ impl<'a> StackifyBuilder<'a> {
                 || ctx.scratch_live_values.contains(value)
                 || forced_object_spills.contains(value)
             {
-                let obj = raw_spill_obj[value].expect("object spill missing stack object id");
+                let obj = spill_obj[value].expect("object spill missing stack object id");
                 spill_storage[value] = Some(SpillStorage::Object(obj));
-                spill_obj[value] = Some(obj);
             } else if let Some(slot) = scratch_slots[value] {
                 spill_storage[value] = Some(SpillStorage::Scratch(slot));
-                scratch_slot_of_value[value] = Some(slot);
             } else {
                 panic!(
                     "spilled value {} has no stable scratch slot or object storage",
@@ -497,8 +494,6 @@ impl<'a> StackifyBuilder<'a> {
         }
 
         alloc.spill_storage = spill_storage;
-        alloc.spill_obj = spill_obj;
-        alloc.scratch_slot_of_value = scratch_slot_of_value;
     }
 }
 
