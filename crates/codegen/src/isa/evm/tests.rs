@@ -1480,10 +1480,13 @@ block0:
         },
     )]);
     let schedule = crate::module_analysis::CallGraphSchedule::compute(&parsed.module, &funcs);
+    let fixed_reservations =
+        prepare::scan_fixed_reservations(&parsed.module, &funcs, &backend, &analyses);
     let placement = machine::placement::compute_semantic_memory_placement(
         &parsed.module,
         machine::placement::MemoryPlacementSection {
             schedule: &schedule,
+            fixed_reservations: &fixed_reservations,
             funcs: &funcs,
             entry: names["main"],
             includes: &[],
@@ -1581,10 +1584,13 @@ block0:
     let clobber = find_func(&parsed.module, "clobber_then_read");
     let entry = find_func(&parsed.module, "entry");
     let schedule = crate::module_analysis::CallGraphSchedule::compute(&parsed.module, &funcs);
+    let fixed_reservations =
+        prepare::scan_fixed_reservations(&parsed.module, &funcs, &backend, &analyses);
     let placement = machine::placement::compute_semantic_memory_placement(
         &parsed.module,
         machine::placement::MemoryPlacementSection {
             schedule: &schedule,
+            fixed_reservations: &fixed_reservations,
             funcs: &funcs,
             entry,
             includes: &[],
@@ -1662,10 +1668,13 @@ block0:
     let entry = find_func(&parsed.module, "entry");
     let scratch = find_func(&parsed.module, "scratch");
     let schedule = crate::module_analysis::CallGraphSchedule::compute(&parsed.module, &funcs);
+    let fixed_reservations =
+        prepare::scan_fixed_reservations(&parsed.module, &funcs, &backend, &analyses);
     let placement = machine::placement::compute_semantic_memory_placement(
         &parsed.module,
         machine::placement::MemoryPlacementSection {
             schedule: &schedule,
+            fixed_reservations: &fixed_reservations,
             funcs: &funcs,
             entry,
             includes: &[],

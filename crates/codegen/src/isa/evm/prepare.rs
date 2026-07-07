@@ -281,8 +281,8 @@ pub(crate) enum MemoryLayoutReservation {
     ConservativeFloor,
 }
 
-#[derive(Default)]
-struct SectionMemoryLayout {
+#[derive(Clone, Default)]
+pub(crate) struct SectionMemoryLayout {
     max_reserved_end: u32,
     conservative_floor: bool,
 }
@@ -612,14 +612,31 @@ pub(crate) struct ArenaBaseFacts {
     pub(crate) has_persistent_mallocs: bool,
 }
 
-pub(crate) fn choose_arena_base(
+/// The loop-invariant part of arena-base selection: fixed-address memory
+/// reservations scanned from every function's instructions. Computed once per
+/// section and combined with the iteration-dependent [`ArenaBaseFacts`] by
+/// [`choose_arena_base`].
+pub(crate) fn scan_fixed_reservations(
     module: &Module,
     funcs: &[FuncRef],
     backend: &EvmBackend,
     analyses: &FxHashMap<FuncRef, memory_plan::FuncPreAnalysis>,
+) -> SectionMemoryLayout {
+    let mut layout = SectionMemoryLayout::default();
+    for &func in funcs {
+        let analysis = expect_func_entry(analyses, func, "pre-analysis");
+        module.func_store.view(func, |function| {
+            reserve_function_memory_layout(&mut layout, function, backend, &analysis.prov.value);
+        });
+    }
+    layout
+}
+
+pub(crate) fn choose_arena_base(
+    fixed_reservations: &SectionMemoryLayout,
     facts: ArenaBaseFacts,
 ) -> u32 {
-    let mut layout = SectionMemoryLayout::default();
+    let mut layout = fixed_reservations.clone();
 
     let spill_reserve_words = if facts.has_stackify_fixed_slot_spills {
         facts
@@ -638,13 +655,6 @@ pub(crate) fn choose_arena_base(
     if facts.has_dynamic_frames {
         layout.reserve_len(FREE_PTR_SLOT_START, WORD_BYTES);
         layout.reserve_len(DYN_SP_SLOT_START, WORD_BYTES);
-    }
-
-    for &func in funcs {
-        let analysis = expect_func_entry(analyses, func, "pre-analysis");
-        module.func_store.view(func, |function| {
-            reserve_function_memory_layout(&mut layout, function, backend, &analysis.prov.value);
-        });
     }
 
     layout.arena_base()
@@ -684,6 +694,7 @@ fn prepare_machine_section_after_pipeline(
     let source_module = work.module();
     let pre_analyses = compute_high_evm_pre_analyses(source_module, &funcs, backend, &ptr_escape);
     let schedule = CallGraphSchedule::compute(source_module, &funcs);
+    let fixed_reservations = scan_fixed_reservations(source_module, &funcs, backend, &pre_analyses);
     let mut fixed_slot_effects = FxHashSet::default();
     let mut backend_spill_reserves: FxHashMap<FuncRef, BackendSpillReserve> = FxHashMap::default();
     let mut last_convergence_error = None;
@@ -696,6 +707,7 @@ fn prepare_machine_section_after_pipeline(
                 funcs: &funcs,
                 entry: work.entry(),
                 includes: work.includes(),
+                fixed_reservations: &fixed_reservations,
             },
             &pre_analyses,
             &ptr_escape,
@@ -767,6 +779,8 @@ fn prepare_machine_section_after_pipeline(
         let optional_final_spill_placements = FinalSpillChoiceCtx {
             source_module,
             schedule: &schedule,
+            base_placement: &placement,
+            fixed_reservations: &fixed_reservations,
             funcs: &funcs,
             section_entry: work.entry(),
             section_includes: work.includes(),
@@ -971,6 +985,18 @@ fn prepare_machine_section_after_pipeline(
         ));
 
         if spill_reserve_satisfied && fixed_slot_effects_satisfied && fallback_satisfied {
+            if std::env::var_os("SONATINA_MEM_LOOP_STATS").is_some() {
+                eprintln!(
+                    "MEM_LOOP_STATS funcs={} iterations={} final_spill_funcs={} optional_spill_funcs={}",
+                    funcs.len(),
+                    iteration + 1,
+                    actual_spill_reserves
+                        .values()
+                        .filter(|reserve| !reserve.is_empty())
+                        .count(),
+                    optional_final_spill_placements.len(),
+                );
+            }
             validate_committed_final_spill_section(&section_plan, &function_plans)?;
             let mut globals: Vec<_> = membership.globals.iter().copied().collect();
             globals.sort_unstable();

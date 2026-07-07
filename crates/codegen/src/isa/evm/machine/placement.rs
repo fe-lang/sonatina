@@ -27,8 +27,8 @@ use super::{
             WORD_BYTES, expect_func_entry,
         },
         prepare::{
-            ArenaBaseFacts, choose_arena_base, compute_return_escape_caller_clamp_words,
-            function_free_ptr_slot_facts, value_imm_u32,
+            ArenaBaseFacts, SectionMemoryLayout, choose_arena_base,
+            compute_return_escape_caller_clamp_words, function_free_ptr_slot_facts, value_imm_u32,
         },
         ptr_escape::PtrEscapeSummary,
         static_arena_alloc::{
@@ -49,6 +49,7 @@ pub(crate) struct EvmMemoryPlacementPlan {
     pub(crate) global_dyn_base: u32,
     pub(crate) scratch_peak_words: u32,
     pub(crate) stable_chain_peak_words: u32,
+    pub(crate) has_persistent_mallocs: bool,
     pub(crate) funcs: FxHashMap<FuncRef, EvmFuncPlacementPlan>,
 }
 
@@ -135,6 +136,7 @@ pub(crate) struct MemoryPlacementSection<'a> {
     pub(crate) funcs: &'a [FuncRef],
     pub(crate) entry: FuncRef,
     pub(crate) includes: &'a [FuncRef],
+    pub(crate) fixed_reservations: &'a SectionMemoryLayout,
 }
 
 pub(crate) fn compute_semantic_memory_placement(
@@ -275,10 +277,7 @@ pub(crate) fn compute_semantic_memory_placement(
     }
 
     let arena_base = choose_arena_base(
-        module,
-        funcs,
-        backend,
-        analyses,
+        section.fixed_reservations,
         ArenaBaseFacts {
             has_dynamic_frames,
             has_stackify_fixed_slot_spills: !fixed_slot_effects.is_empty(),
@@ -384,6 +383,7 @@ pub(crate) fn compute_semantic_memory_placement(
         global_dyn_base: semantic_plan.global_dyn_base,
         scratch_peak_words: semantic_plan.scratch_peak_words,
         stable_chain_peak_words: semantic_plan.stable_chain_peak_words,
+        has_persistent_mallocs,
         funcs: func_placements,
     }
 }

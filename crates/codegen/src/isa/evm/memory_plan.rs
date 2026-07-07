@@ -299,12 +299,12 @@ impl ProgramMemoryPlan {
 /// Static stable-chain layout over the call-graph condensation: for each SCC
 /// the maximum chain weight strictly above it (its frame base offset within
 /// the stable region) and the overall chain peak.
-struct StableChainLayout {
-    scc_prefix: FxHashMap<SccRef, u32>,
-    peak_words: u32,
+pub(crate) struct StableChainLayout {
+    pub(crate) scc_prefix: FxHashMap<SccRef, u32>,
+    pub(crate) peak_words: u32,
 }
 
-fn compute_stable_chain_layout(
+pub(crate) fn compute_stable_chain_layout(
     schedule: &CallGraphSchedule,
     stable_words: impl Fn(FuncRef) -> u32,
 ) -> StableChainLayout {
