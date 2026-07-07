@@ -165,6 +165,8 @@ impl SymStack {
     }
 
     /// Delete `stack[depth-1]` (1-indexed), preserving the relative order of the remaining items.
+    ///
+    /// Emits a `SWAP` chain, so its cost is O(depth).
     pub(super) fn stable_delete_at_depth(&mut self, depth: usize, actions: &mut Actions) {
         assert!(
             (1..=super::SWAP_WINDOW_MAX).contains(&depth),
@@ -203,6 +205,9 @@ impl SymStack {
         self.items.swap(0, depth);
     }
 
+    /// Rotate `stack[pos]` up to the top, preserving the relative order of the items below it.
+    ///
+    /// Emits a `SWAP` chain, so its cost is O(pos).
     pub(super) fn stable_rotate_to_top(&mut self, pos: usize, actions: &mut Actions) {
         if pos == 0 {
             return;

@@ -86,7 +86,7 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
     }
 
     fn try_normalize_to_exact(&mut self, desired: &[ValueId]) -> bool {
-        if !self.ctx.search_profile.use_exact_normalize() {
+        if !self.ctx.search_profile.budgets().exact_normalize {
             return false;
         }
 
@@ -107,7 +107,7 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
             swap_max: self.ctx.reach.swap_max,
             // Bound intermediate length to the stack reach window (+ optional slack).
             max_len: self.ctx.reach.swap_max,
-            max_expansions: self.ctx.search_profile.exact_expansions(),
+            max_expansions: self.ctx.search_profile.budgets().exact_expansions,
         };
 
         let mut plan =

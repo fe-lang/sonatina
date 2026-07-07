@@ -3,6 +3,7 @@ use crate::{
     bitset::BitSet,
     cfg_scc::CfgSccAnalysis,
     domtree::DomTree,
+    isa::evm::immediate_materialization_code_len,
     liveness::Liveness,
     stackalloc::normalize_value_alias_map,
 };
@@ -13,8 +14,8 @@ use sonatina_ir::{BlockId, Function, I256, ValueId, cfg::ControlFlowGraph};
 
 use super::{
     alloc::{SpillStorage, StackifyAlloc},
-    iteration::{IterationPlanner, imm_materialization_code_len, operand_order_for_stackify},
-    planner::NormalizeSearchScratch,
+    iteration::{IterationPlanner, operand_order_for_stackify},
+    planner::{NormalizeSearchScratch, must_use_object_storage},
     slots::{FreeSlotPools, SpillSlotInterference, SpillSlotPools},
     spill::SpillSet,
     sym_stack::SymStack,
@@ -41,62 +42,84 @@ pub enum StackifySearchProfile {
     Exact,
 }
 
+/// Operand-prep beam search depth slack: either a fixed amount or "as deep as `SWAP*` reach".
+#[derive(Clone, Copy, Debug)]
+pub(super) enum BeamSlack {
+    Fixed(usize),
+    SwapMax,
+}
+
+impl BeamSlack {
+    pub(super) fn resolve(self, swap_max: usize) -> usize {
+        match self {
+            BeamSlack::Fixed(n) => n,
+            BeamSlack::SwapMax => swap_max,
+        }
+    }
+}
+
+/// Search-effort knobs for a `StackifySearchProfile`, expressed as data instead of code.
+pub(super) struct SearchBudgets {
+    pub(super) exact_normalize: bool,
+    pub(super) exact_operand_prep: bool,
+    pub(super) exact_expansions: usize,
+    pub(super) operand_prep_exact_expansions: usize,
+    /// `(with incumbent, without incumbent)`.
+    normalize_max_states: (usize, usize),
+    pub(super) operand_prep_max_states: usize,
+    pub(super) operand_prep_beam_width: usize,
+    pub(super) operand_prep_beam_depth_slack: BeamSlack,
+}
+
+impl SearchBudgets {
+    pub(super) fn normalize_max_states(&self, have_incumbent: bool) -> usize {
+        if have_incumbent {
+            self.normalize_max_states.0
+        } else {
+            self.normalize_max_states.1
+        }
+    }
+}
+
+const FAST_BUDGETS: SearchBudgets = SearchBudgets {
+    exact_normalize: false,
+    exact_operand_prep: false,
+    exact_expansions: 0,
+    operand_prep_exact_expansions: 0,
+    normalize_max_states: (0, 0),
+    operand_prep_max_states: 0,
+    operand_prep_beam_width: 16,
+    operand_prep_beam_depth_slack: BeamSlack::Fixed(4),
+};
+
+const GREEDY_WIDE_BUDGETS: SearchBudgets = SearchBudgets {
+    exact_normalize: true,
+    exact_operand_prep: true,
+    exact_expansions: 1_000,
+    operand_prep_exact_expansions: 250,
+    normalize_max_states: (25_000, 50_000),
+    operand_prep_max_states: 25_000,
+    operand_prep_beam_width: 64,
+    operand_prep_beam_depth_slack: BeamSlack::SwapMax,
+};
+
+const EXACT_BUDGETS: SearchBudgets = SearchBudgets {
+    exact_normalize: true,
+    exact_operand_prep: true,
+    exact_expansions: 50_000,
+    operand_prep_exact_expansions: 50_000,
+    normalize_max_states: (200_000, 500_000),
+    operand_prep_max_states: 400_000,
+    operand_prep_beam_width: 192,
+    operand_prep_beam_depth_slack: BeamSlack::SwapMax,
+};
+
 impl StackifySearchProfile {
-    pub(super) fn use_exact_normalize(self) -> bool {
-        matches!(self, Self::GreedyWide | Self::Exact)
-    }
-
-    pub(super) fn use_exact_operand_prep(self) -> bool {
-        matches!(self, Self::GreedyWide | Self::Exact)
-    }
-
-    pub(super) fn exact_expansions(self) -> usize {
+    pub(super) fn budgets(self) -> &'static SearchBudgets {
         match self {
-            Self::Fast => 0,
-            Self::GreedyWide => 1_000,
-            Self::Exact => 50_000,
-        }
-    }
-
-    pub(super) fn operand_prep_exact_expansions(self) -> usize {
-        match self {
-            Self::Fast => 0,
-            Self::GreedyWide => 250,
-            Self::Exact => 50_000,
-        }
-    }
-
-    pub(super) fn normalize_max_states(self, have_incumbent: bool) -> usize {
-        match (self, have_incumbent) {
-            (Self::Fast, _) => 0,
-            (Self::GreedyWide, true) => 25_000,
-            (Self::GreedyWide, false) => 50_000,
-            (Self::Exact, true) => 200_000,
-            (Self::Exact, false) => 500_000,
-        }
-    }
-
-    pub(super) fn operand_prep_max_states(self) -> usize {
-        match self {
-            Self::Fast => 0,
-            Self::GreedyWide => 25_000,
-            Self::Exact => 400_000,
-        }
-    }
-
-    pub(super) fn operand_prep_beam_width(self) -> usize {
-        match self {
-            Self::Fast => 16,
-            Self::GreedyWide => 64,
-            Self::Exact => 192,
-        }
-    }
-
-    pub(super) fn operand_prep_beam_depth_slack(self, swap_max: usize) -> usize {
-        match self {
-            Self::Fast => 4,
-            Self::GreedyWide => swap_max,
-            Self::Exact => swap_max,
+            Self::Fast => &FAST_BUDGETS,
+            Self::GreedyWide => &GREEDY_WIDE_BUDGETS,
+            Self::Exact => &EXACT_BUDGETS,
         }
     }
 }
@@ -397,9 +420,12 @@ impl<'a> StackifyBuilder<'a> {
             let arg = ctx.canonicalize_value(arg);
             if let Some(spilled) = spill.spilled(arg)
                 && ctx.exact_local_addr[arg].is_none()
-                && ctx.scratch_spill_slots != 0
-                && !ctx.scratch_live_values.contains(arg)
-                && !forced_object_spills.contains(arg)
+                && !must_use_object_storage(
+                    ctx.scratch_spill_slots,
+                    &ctx.scratch_live_values,
+                    forced_object_spills,
+                    arg,
+                )
                 && slots
                     .scratch
                     .try_ensure_slot(
@@ -524,7 +550,7 @@ fn compute_hot_stack_cached_immediates(
 
                 let entry = counts.entry(imm.as_i256()).or_insert((0, 0));
                 entry.0 += 1;
-                entry.1 = entry.1.max(imm_materialization_code_len(imm));
+                entry.1 = entry.1.max(immediate_materialization_code_len(imm));
             }
         }
 
@@ -689,7 +715,7 @@ block0:
             let mut large_pushes = 0;
             let mut dup_count = 0;
             alloc.for_each_action(|action| match action {
-                Action::Push(imm) if super::imm_materialization_code_len(*imm) >= 17 => {
+                Action::Push(imm) if super::immediate_materialization_code_len(*imm) >= 17 => {
                     large_pushes += 1;
                 }
                 Action::StackDup(_) => {
@@ -741,7 +767,7 @@ block0:
             let mut push2_count = 0;
             let mut dup_count = 0;
             alloc.for_each_action(|action| match action {
-                Action::Push(imm) if super::imm_materialization_code_len(*imm) == 3 => {
+                Action::Push(imm) if super::immediate_materialization_code_len(*imm) == 3 => {
                     push2_count += 1;
                 }
                 Action::StackDup(_) => {
@@ -796,7 +822,7 @@ block0:
             let mut large_pushes = 0;
             let mut dup_count = 0;
             alloc.for_each_action(|action| match action {
-                Action::Push(imm) if super::imm_materialization_code_len(*imm) >= 17 => {
+                Action::Push(imm) if super::immediate_materialization_code_len(*imm) >= 17 => {
                     large_pushes += 1;
                 }
                 Action::StackDup(_) => {

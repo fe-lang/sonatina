@@ -338,7 +338,7 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
             return Some(plan);
         }
 
-        if !self.ctx.search_profile.use_exact_operand_prep() {
+        if !self.ctx.search_profile.budgets().exact_operand_prep {
             return solve_greedy_operand_prep_plan(
                 self.ctx,
                 self.stack,
@@ -805,7 +805,11 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
             dup_max: self.ctx.reach.dup_max,
             swap_max: self.ctx.reach.swap_max,
             max_len,
-            max_expansions: self.ctx.search_profile.operand_prep_exact_expansions(),
+            max_expansions: self
+                .ctx
+                .search_profile
+                .budgets()
+                .operand_prep_exact_expansions,
         }
     }
 

@@ -154,13 +154,15 @@ pub(super) fn run_block_sim<O: StackifyObserver>(
 ) -> BlockSimState {
     let empty_last_use: BitSet<ValueId> = BitSet::default();
 
-    let insts: Vec<_> = planner.ctx().func.layout.iter_inst(state.block).collect();
-    for inst in insts {
+    // `func` is a shared `&Function` copied out of the planner, so the layout iterator does not
+    // borrow the planner and is free to coexist with the `&mut planner` calls in the loop body.
+    let func = planner.ctx().func;
+    for inst in func.layout.iter_inst(state.block) {
         if planner.ctx().func.dfg.is_phi(inst) {
             continue;
         }
 
-        planner.clear_inst_actions(inst);
+        planner.debug_assert_inst_actions_empty(inst);
 
         let is_call = planner.ctx().func.dfg.is_call(inst);
         let call_has_stack_continuation = is_call && planner.call_uses_stack_continuation(inst);

@@ -1,6 +1,6 @@
 use cranelift_entity::SecondaryMap;
 use smallvec::SmallVec;
-use sonatina_ir::{BlockId, Function, I256, Immediate, InstId, ValueId};
+use sonatina_ir::{BlockId, Function, I256, InstId, ValueId};
 use std::collections::BTreeMap;
 
 use crate::{bitset::BitSet, isa::evm::immediate_materialization_code_len, stackalloc::Actions};
@@ -24,7 +24,7 @@ pub(super) struct IterationPlanner<'a, 'ctx, O: StackifyObserver> {
     spill: SpillSet<'a>,
     slots: &'a mut SpillSlotPools,
     templates: &'a mut SecondaryMap<BlockId, BlockTemplate>,
-    terminal_chain_blocks: &'a SecondaryMap<BlockId, bool>,
+    terminal_chain_blocks: &'a BitSet<BlockId>,
     carry_in: &'a SecondaryMap<BlockId, BitSet<ValueId>>,
     alloc: &'a mut StackifyAlloc,
     /// Provisional per-iteration object-id assignment (`assign_spill_obj_ids`), read by
@@ -67,7 +67,7 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
         spill: SpillSet<'a>,
         slots: &'a mut SpillSlotPools,
         templates: &'a mut SecondaryMap<BlockId, BlockTemplate>,
-        terminal_chain_blocks: &'a SecondaryMap<BlockId, bool>,
+        terminal_chain_blocks: &'a BitSet<BlockId>,
         carry_in: &'a SecondaryMap<BlockId, BitSet<ValueId>>,
         alloc: &'a mut StackifyAlloc,
         spill_obj: &'a SecondaryMap<
@@ -146,7 +146,7 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
         self.resolve_pending_edges(block);
 
         let inherited = self.inherited_stack.remove(&block);
-        if self.terminal_chain_blocks[block] {
+        if self.terminal_chain_blocks.contains(block) {
             self.freeze_template(block, TransferOrder::new());
         } else if let Some((_pred, stack)) = inherited.as_ref() {
             self.freeze_template_from_stack(block, stack);
@@ -158,7 +158,7 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
             .on_block_header(self.ctx.func, block, &self.templates[block]);
         self.planned_blocks.insert(block);
 
-        let stack = if self.terminal_chain_blocks[block] {
+        let stack = if self.terminal_chain_blocks.contains(block) {
             SymStack::opaque_prefix_empty(self.ctx.has_internal_return)
         } else if let Some((pred, mut inh)) = inherited {
             // Dynamic entry stack (single predecessor).
@@ -202,13 +202,12 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
         let state = BlockSimState::with_live_sets(block, stack, free_slots, prologue, live_sets);
         let state = run_block_sim(self, state);
 
-        // If the block had no lowered instructions, inject prologue into the terminator.
-        if !state.prologue.is_empty()
-            && !state.injected_prologue
-            && let Some(term) = self.ctx.func.layout.last_inst_of(block)
-        {
-            self.alloc.pre_actions[term].extend_from_slice(&state.prologue);
-        }
+        // `on_inst_start` runs for every non-phi instruction (including the terminator that every
+        // block has), so a non-empty prologue is always injected during `run_block_sim`.
+        debug_assert!(
+            state.prologue.is_empty() || state.injected_prologue,
+            "prologue was not injected during the block walk"
+        );
     }
 
     fn resolve_pending_edges(&mut self, block: BlockId) {
@@ -286,10 +285,15 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
         &self.slots.scratch
     }
 
-    pub(super) fn clear_inst_actions(&mut self, inst: InstId) {
-        self.alloc.pre_actions[inst].clear();
-        self.alloc.post_actions[inst].clear();
-        self.alloc.brtable_actions[inst].clear();
+    pub(super) fn debug_assert_inst_actions_empty(&self, inst: InstId) {
+        // Within one fixed-point iteration each inst is visited once on a fresh `StackifyAlloc`,
+        // so its action buffers are always still empty when the walk reaches it.
+        debug_assert!(
+            self.alloc.pre_actions[inst].is_empty()
+                && self.alloc.post_actions[inst].is_empty()
+                && self.alloc.brtable_actions[inst].is_empty(),
+            "inst action buffers are not empty at the start of the block walk"
+        );
     }
 
     pub(super) fn pre_actions_len(&self, inst: InstId) -> usize {
@@ -456,7 +460,7 @@ impl<'a, 'ctx, O: StackifyObserver> IterationPlanner<'a, 'ctx, O> {
         dest: BlockId,
         action_start: usize,
     ) {
-        if self.terminal_chain_blocks[dest] {
+        if self.terminal_chain_blocks.contains(dest) {
         } else if self.ctx.cfg.pred_num_of(dest) > 1
             && dest != self.ctx.entry
             && !self.planned_blocks.contains(dest)
@@ -659,10 +663,11 @@ pub(super) fn clean_dead_stack_prefix(
         let Some(StackItem::Value(top)) = stack.top() else {
             break;
         };
-        if !live_future.contains(*top) && !live_out.contains(*top) {
-            // Should have been handled by `pop_dead_tops`, but keep looping defensively.
-            continue;
-        }
+        // `pop_dead_tops` only stops on a live value (or a non-`Value`, handled above).
+        debug_assert!(
+            live_future.contains(*top) || live_out.contains(*top),
+            "pop_dead_tops left a dead value on top"
+        );
 
         let is_dead = |v: ValueId| !live_future.contains(v) && !live_out.contains(v);
         let dead_run = stack
@@ -902,9 +907,5 @@ fn is_evictable_imm(func: &Function, v: ValueId) -> bool {
     let Some(imm) = func.dfg.value_imm(v) else {
         return false;
     };
-    imm_materialization_code_len(imm) <= MAX_MATERIALIZATION_BYTES
-}
-
-pub(crate) fn imm_materialization_code_len(imm: Immediate) -> usize {
-    immediate_materialization_code_len(imm)
+    immediate_materialization_code_len(imm) <= MAX_MATERIALIZATION_BYTES
 }

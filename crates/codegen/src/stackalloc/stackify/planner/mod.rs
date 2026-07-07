@@ -23,6 +23,21 @@ use super::{
     sym_stack::SymStack,
 };
 
+/// Storage-eligibility policy, owned in one place and shared by `MemPlan` and the entry-arg
+/// scratch pre-pass in the builder.
+///
+/// A spilled value must use arena (object) storage rather than a reusable scratch slot when there
+/// are no scratch slots, when it is live across a scratch clobber, or when a previous fixed-point
+/// iteration already forced object storage for it.
+pub(super) fn must_use_object_storage(
+    scratch_spill_slots: u32,
+    scratch_live_values: &BitSet<ValueId>,
+    forced_object_spills: &BitSet<ValueId>,
+    v: ValueId,
+) -> bool {
+    scratch_spill_slots == 0 || scratch_live_values.contains(v) || forced_object_spills.contains(v)
+}
+
 #[derive(Clone)]
 pub(super) struct MemPlanSnapshot {
     free_slots: FreeSlotPools,
@@ -95,9 +110,12 @@ impl<'a> MemPlan<'a> {
     }
 
     fn must_use_object_storage(&self, v: ValueId) -> bool {
-        self.scratch_spill_slots == 0
-            || self.scratch_live_values.contains(v)
-            || self.forced_object_spills.contains(v)
+        must_use_object_storage(
+            self.scratch_spill_slots,
+            self.scratch_live_values,
+            self.forced_object_spills,
+            v,
+        )
     }
 
     fn request_object_storage(&mut self, v: ValueId) {

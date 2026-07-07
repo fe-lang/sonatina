@@ -112,13 +112,15 @@ pub(super) fn choose_transfer(
         return first.clone();
     }
 
-    if let Some((_pred, cand)) = candidates
-        .iter()
-        .filter(|(pred, _)| ctx.dom.dominates(block, *pred))
-        .min_by_key(|(pred, _)| pred.as_u32())
-    {
-        return cand.clone();
-    }
+    // Candidates are predecessors already planned before `block` in dominator-tree RPO. A
+    // dominator always precedes its dominated nodes in RPO, so an already-planned predecessor
+    // can never be dominated by `block`; a `dominates(block, pred)` candidate is impossible here.
+    debug_assert!(
+        candidates
+            .iter()
+            .all(|(pred, _)| !ctx.dom.dominates(block, *pred)),
+        "merge predecessor dominated by its own merge block"
+    );
 
     candidates
         .iter()

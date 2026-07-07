@@ -1194,8 +1194,8 @@ pub(super) fn solve_optimal_normalize_plan(
         push0_cost,
         dup_goal_keys_only: false,
         max_states: [
-            ctx.search_profile.normalize_max_states(false),
-            ctx.search_profile.normalize_max_states(true),
+            ctx.search_profile.budgets().normalize_max_states(false),
+            ctx.search_profile.budgets().normalize_max_states(true),
         ],
     };
 
@@ -1467,8 +1467,8 @@ pub(super) fn solve_optimal_repair_prefix_plan(
         push0_cost,
         dup_goal_keys_only: true,
         max_states: [
-            ctx.search_profile.normalize_max_states(false),
-            ctx.search_profile.normalize_max_states(true),
+            ctx.search_profile.budgets().normalize_max_states(false),
+            ctx.search_profile.budgets().normalize_max_states(true),
         ],
     };
 
@@ -2580,9 +2580,11 @@ pub(super) fn solve_greedy_operand_prep_plan(
         cost,
         cfg,
         linear_cost,
-        ctx.search_profile.operand_prep_beam_width(),
+        ctx.search_profile.budgets().operand_prep_beam_width,
         ctx.search_profile
-            .operand_prep_beam_depth_slack(cfg.swap_max),
+            .budgets()
+            .operand_prep_beam_depth_slack
+            .resolve(cfg.swap_max),
     )
     .filter(|(_, greedy_cost)| *greedy_cost < linear_cost)
     .unwrap_or((linear_steps, linear_cost));
@@ -2699,9 +2701,11 @@ pub(super) fn solve_optimal_operand_prep_plan(
         cost,
         cfg,
         upper_bound,
-        ctx.search_profile.operand_prep_beam_width(),
+        ctx.search_profile.budgets().operand_prep_beam_width,
         ctx.search_profile
-            .operand_prep_beam_depth_slack(cfg.swap_max),
+            .budgets()
+            .operand_prep_beam_depth_slack
+            .resolve(cfg.swap_max),
     ) && greedy_cost < upper_bound
     {
         if debug {
@@ -2759,7 +2763,7 @@ pub(super) fn solve_optimal_operand_prep_plan(
         surplus_last_use_penalty,
         push0_kid,
         push0_cost,
-        max_states: ctx.search_profile.operand_prep_max_states(),
+        max_states: ctx.search_profile.budgets().operand_prep_max_states,
     };
 
     let run = run_bounded_astar(
@@ -5496,9 +5500,11 @@ func public %f() {
                     &cost,
                     search_cfg,
                     linear_cost,
-                    ctx.search_profile.operand_prep_beam_width(),
+                    ctx.search_profile.budgets().operand_prep_beam_width,
                     ctx.search_profile
-                        .operand_prep_beam_depth_slack(search_cfg.swap_max),
+                        .budgets()
+                        .operand_prep_beam_depth_slack
+                        .resolve(search_cfg.swap_max),
                 )
                     .expect("expected greedy incumbent");
             assert!(
