@@ -24,7 +24,7 @@ use super::{
         mem_effects::compute_func_mem_effects,
         memory_plan::{
             self, BackendSpillReserve, FinalScratchReserveRange, FuncPreAnalysis, StableMode,
-            WORD_BYTES,
+            WORD_BYTES, expect_func_entry,
         },
         prepare::{
             ArenaBaseFacts, choose_arena_base, compute_return_escape_caller_clamp_words,
@@ -172,9 +172,7 @@ pub(crate) fn compute_semantic_memory_placement(
         .par_iter()
         .copied()
         .map(|func| {
-            let analysis = analyses
-                .get(&func)
-                .unwrap_or_else(|| panic!("missing pre-analysis for func {}", func.as_u32()));
+            let analysis = expect_func_entry(analyses, func, "pre-analysis");
             let (malloc_escape_kinds, transient_mallocs) =
                 module.func_store.view(func, |function| {
                     let escape_kinds = malloc_plan::compute_malloc_escape_kinds_for_function(
@@ -236,13 +234,8 @@ pub(crate) fn compute_semantic_memory_placement(
         .par_iter()
         .copied()
         .map(|func| {
-            let func_plan = semantic_plan
-                .funcs
-                .get(&func)
-                .unwrap_or_else(|| panic!("missing semantic plan for func {}", func.as_u32()));
-            let analysis = analyses
-                .get(&func)
-                .unwrap_or_else(|| panic!("missing pre-analysis for func {}", func.as_u32()));
+            let func_plan = expect_func_entry(&semantic_plan.funcs, func, "semantic plan");
+            let analysis = expect_func_entry(analyses, func, "pre-analysis");
             let facts = module.func_store.view(func, |function| {
                 compute_func_heap_facts(
                     function,
@@ -338,10 +331,7 @@ pub(crate) fn compute_semantic_memory_placement(
         .iter()
         .copied()
         .map(|func| {
-            let func_plan = semantic_plan
-                .funcs
-                .get(&func)
-                .unwrap_or_else(|| panic!("missing semantic plan for func {}", func.as_u32()));
+            let func_plan = expect_func_entry(&semantic_plan.funcs, func, "semantic plan");
             let malloc_placements = module.func_store.view(func, |function| {
                 placement_ctx.compute_func_malloc_placements(
                     function,
@@ -368,10 +358,7 @@ pub(crate) fn compute_semantic_memory_placement(
         .iter()
         .copied()
         .map(|func| {
-            let func_plan = semantic_plan
-                .funcs
-                .get(&func)
-                .unwrap_or_else(|| panic!("missing semantic plan for func {}", func.as_u32()));
+            let func_plan = expect_func_entry(&semantic_plan.funcs, func, "semantic plan");
             let malloc_placements = malloc_placements.get(&func).cloned().unwrap_or_default();
             let free_ptr_floor_before_malloc = free_ptr_floor_before_malloc
                 .get(&func)
@@ -545,10 +532,7 @@ fn final_scratch_reserve_ranges(
                 .get(&func)
                 .copied()
                 .unwrap_or_default();
-            let func_plan = semantic_plan
-                .funcs
-                .get(&func)
-                .unwrap_or_else(|| panic!("missing semantic plan for func {}", func.as_u32()));
+            let func_plan = expect_func_entry(&semantic_plan.funcs, func, "semantic plan");
             let start_word = func_plan
                 .scratch_words
                 .checked_sub(reserve.scratch_words)
@@ -573,10 +557,7 @@ fn compute_private_static_malloc_program_plan(
         .copied()
         .filter_map(|func| {
             let function_plan = ctx.semantic_plan.funcs.get(&func)?;
-            let analysis = ctx
-                .analyses
-                .get(&func)
-                .unwrap_or_else(|| panic!("missing pre-analysis for func {}", func.as_u32()));
+            let analysis = expect_func_entry(ctx.analyses, func, "pre-analysis");
             let plan = ctx.module.func_store.view(func, |function| {
                 compute_private_static_malloc_func_plan(PrivateStaticMallocFuncCtx {
                     function,
@@ -1596,9 +1577,7 @@ fn compute_program_free_ptr_slot_facts(
         .iter()
         .copied()
         .map(|func| {
-            let analysis = analyses
-                .get(&func)
-                .unwrap_or_else(|| panic!("missing pre-analysis for func {}", func.as_u32()));
+            let analysis = expect_func_entry(analyses, func, "pre-analysis");
             let facts = module.func_store.view(func, |function| {
                 function_free_ptr_slot_facts(function, backend, &analysis.prov.value)
             });

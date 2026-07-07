@@ -16,7 +16,7 @@ use super::{
     immediate_u32,
     memory_plan::{
         BackendSpillReserve, FuncPreAnalysis, ObjLoc, ProgramMemoryPlan, SemanticFuncPlan,
-        WORD_BYTES, compute_abs_clobber_words_with_extra,
+        WORD_BYTES, compute_abs_clobber_words_with_extra, expect_func_entry,
     },
     ptr_provenance::Provenance,
 };
@@ -65,13 +65,8 @@ where
         .par_iter()
         .copied()
         .map(|f| {
-            let func_plan = plan
-                .funcs
-                .get(&f)
-                .unwrap_or_else(|| panic!("missing memory plan for func {}", f.as_u32()));
-            let analysis = analyses
-                .get(&f)
-                .unwrap_or_else(|| panic!("missing analysis for func {}", f.as_u32()));
+            let func_plan = expect_func_entry(&plan.funcs, f, "memory plan");
+            let analysis = expect_func_entry(analyses, f, "analysis");
             let analysis = analysis_view(analysis);
             let map = module.func_store.view(f, |function| {
                 let ctx = FutureBoundsCtx {

@@ -18,7 +18,9 @@ use sonatina_ir::{
     types::CompoundType,
 };
 
-use crate::{domtree::DomTree, machinst::lower::SectionWorkModule};
+use crate::{
+    domtree::DomTree, isa::evm::memory_plan::align_up_to_word, machinst::lower::SectionWorkModule,
+};
 
 use super::{
     super::{
@@ -1147,7 +1149,5 @@ fn scalar_bits(ty: Type) -> Option<u16> {
 }
 
 fn align_malloc_size(size: u32) -> Result<u32, String> {
-    size.checked_add(31)
-        .map(|size| size & !31)
-        .ok_or_else(|| "malloc size alignment overflow".to_string())
+    align_up_to_word(size).ok_or_else(|| "malloc size alignment overflow".to_string())
 }
