@@ -882,6 +882,11 @@ fn simplify_snego_zero(
     facts: &impl ExprFactProvider,
 ) -> Option<SimplifiedInst> {
     let arg_ty = func.dfg.value_ty(arg);
+    if !arg_ty.is_integral() {
+        // `Immediate::zero` is only defined for integral types, and snego
+        // itself is verified to take an integral operand.
+        return None;
+    }
     (defined_imm(facts, arg) == Some(Immediate::zero(arg_ty)))
         .then(|| checked_value_no_overflow(SimplifiedResult::Const(Immediate::zero(arg_ty))))
 }
@@ -1776,6 +1781,41 @@ mod tests {
         let simplified =
             simplify_binary_with_facts(&func, BinaryInstKind::And, value, mask, &facts);
         assert_eq!(simplified, SimplifiedResult::NoChange);
+    }
+
+    #[test]
+    fn simplify_binary_with_facts_preserves_undef_through_absorbing_identities() {
+        let isa = test_isa();
+        let ctx = ModuleCtx::new(&isa);
+        let sig = Signature::new_single("f", Linkage::Private, &[Type::I256], Type::I256);
+        let mut func = Function::new(&ctx, &sig);
+        let value = func.arg_values[0];
+        let zero = func.dfg.make_imm_value(Immediate::zero(Type::I256));
+        let one = func.dfg.make_imm_value(Immediate::one(Type::I256));
+        let all_one = func.dfg.make_imm_value(Immediate::all_one(Type::I256));
+        let facts = MockFacts {
+            known_bits: Default::default(),
+            known_imm: [
+                (zero, Immediate::zero(Type::I256)),
+                (one, Immediate::one(Type::I256)),
+                (all_one, Immediate::all_one(Type::I256)),
+            ]
+            .into_iter()
+            .collect(),
+            may_be_undef: [(value, true)].into_iter().collect(),
+        };
+
+        for (kind, lhs, rhs) in [
+            (BinaryInstKind::Mul, value, zero),
+            (BinaryInstKind::And, value, zero),
+            (BinaryInstKind::Or, value, all_one),
+            (BinaryInstKind::Umod, value, one),
+        ] {
+            assert_eq!(
+                simplify_binary_with_facts(&func, kind, lhs, rhs, &facts),
+                SimplifiedResult::NoChange
+            );
+        }
     }
 
     #[test]
