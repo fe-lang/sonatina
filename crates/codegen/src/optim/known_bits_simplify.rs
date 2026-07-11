@@ -17,8 +17,7 @@ use crate::{
 };
 
 use super::simplify_expr::{
-    ExprFactProvider, SimplifyExprResult, simplify_binary_with_facts,
-    simplify_unary_with_same_inner,
+    ExprFactProvider, SimplifiedResult, simplify_binary_with_facts, simplify_unary_with_same_inner,
 };
 
 pub struct KnownBitsSimplify {
@@ -243,19 +242,19 @@ impl KnownBitsSimplify {
                     )
                 }
             }
-            InstClassKind::Cast(_) => SimplifyExprResult::NoChange,
-            InstClassKind::Phi | InstClassKind::Opaque => SimplifyExprResult::NoChange,
+            InstClassKind::Cast(_) => SimplifiedResult::NoChange,
+            InstClassKind::Phi | InstClassKind::Opaque => SimplifiedResult::NoChange,
         };
 
         match simplified {
-            SimplifyExprResult::Const(imm) if imm.ty() == func.dfg.value_ty(*result) => {
+            SimplifiedResult::Const(imm) if imm.ty() == func.dfg.value_ty(*result) => {
                 Some(RewritePlan::Const {
                     inst,
                     result: *result,
                     imm,
                 })
             }
-            SimplifyExprResult::Copy(replacement)
+            SimplifiedResult::Copy(replacement)
                 if func.dfg.value_ty(replacement) == func.dfg.value_ty(*result) =>
             {
                 Some(RewritePlan::Copy {
@@ -264,8 +263,8 @@ impl KnownBitsSimplify {
                     replacement,
                 })
             }
-            SimplifyExprResult::Const(_) | SimplifyExprResult::Copy(_) => None,
-            SimplifyExprResult::NoChange => None,
+            SimplifiedResult::Const(_) | SimplifiedResult::Copy(_) => None,
+            SimplifiedResult::NoChange => None,
         }
     }
 }
@@ -295,7 +294,7 @@ fn simplify_binary_with_demanded_bits(
     rhs: ValueId,
     result: ValueId,
     facts: &LocalExprFacts<'_, '_>,
-) -> SimplifyExprResult {
+) -> SimplifiedResult {
     match kind {
         BinaryInstKind::And => simplify_copy_when_only_undemanded_bits_change(
             func,
@@ -315,7 +314,7 @@ fn simplify_binary_with_demanded_bits(
                 |ty, imm| type_mask(ty) & !KnownBits::from_imm(imm).known_one,
             )
         })
-        .map_or(SimplifyExprResult::NoChange, SimplifyExprResult::Copy),
+        .map_or(SimplifiedResult::NoChange, SimplifiedResult::Copy),
         BinaryInstKind::Or | BinaryInstKind::Xor => simplify_copy_when_only_undemanded_bits_change(
             func,
             lhs,
@@ -334,8 +333,8 @@ fn simplify_binary_with_demanded_bits(
                 |ty, imm| KnownBits::from_imm(imm).known_one & type_mask(ty),
             )
         })
-        .map_or(SimplifyExprResult::NoChange, SimplifyExprResult::Copy),
-        _ => SimplifyExprResult::NoChange,
+        .map_or(SimplifiedResult::NoChange, SimplifiedResult::Copy),
+        _ => SimplifiedResult::NoChange,
     }
 }
 

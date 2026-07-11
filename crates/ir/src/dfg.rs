@@ -361,6 +361,24 @@ impl DataFlowGraph {
         }
     }
 
+    pub fn retype_value(&mut self, value_id: ValueId, new_ty: Type) {
+        match &mut self.values[value_id] {
+            Value::Immediate { imm, ty } => {
+                assert_eq!(
+                    imm.ty(),
+                    new_ty,
+                    "cannot retype immediate from {:?} to {new_ty:?}",
+                    imm.ty()
+                );
+                *ty = new_ty;
+            }
+            Value::Inst { ty, .. }
+            | Value::Arg { ty, .. }
+            | Value::Global { ty, .. }
+            | Value::Undef { ty } => *ty = new_ty,
+        }
+    }
+
     pub fn value_is_imm(&self, value_id: ValueId) -> bool {
         matches!(self.value(value_id), Value::Immediate { .. })
     }
@@ -814,6 +832,38 @@ mod tests {
         inst::arith::{Add, Uaddo},
         module::ModuleCtx,
     };
+
+    #[test]
+    fn retype_value_updates_non_immediate_type() {
+        let isa = test_isa();
+        let mut dfg = DataFlowGraph::new(ModuleCtx::new(&isa));
+        let value = dfg.make_undef_value(Type::I8);
+
+        dfg.retype_value(value, Type::I16);
+
+        assert_eq!(dfg.value_ty(value), Type::I16);
+    }
+
+    #[test]
+    fn retype_value_preserves_immediate_interning() {
+        let isa = test_isa();
+        let mut dfg = DataFlowGraph::new(ModuleCtx::new(&isa));
+        let value = dfg.make_imm_value(Immediate::I32(1));
+
+        dfg.retype_value(value, Type::I32);
+
+        assert_eq!(dfg.make_imm_value(Immediate::I32(1)), value);
+    }
+
+    #[test]
+    #[should_panic(expected = "cannot retype immediate")]
+    fn retype_value_rejects_immediate_type_changes() {
+        let isa = test_isa();
+        let mut dfg = DataFlowGraph::new(ModuleCtx::new(&isa));
+        let value = dfg.make_imm_value(Immediate::I32(1));
+
+        dfg.retype_value(value, Type::I64);
+    }
 
     #[test]
     fn inst_results_track_order_and_result_slots() {

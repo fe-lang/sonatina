@@ -44,6 +44,18 @@ enum RootKind {
     SyntheticOutArg { index: usize },
 }
 
+enum RootUseKind {
+    ProjectionPreserving { result: ValueId },
+    SameProjection { result: ValueId, allow_dead: bool },
+    LoadView { ty: Type },
+    StoreView { ty: Type },
+    ConstInit { value: ValueId },
+    EnumTagRead { ty: Type },
+    EnumMutation,
+    DeadUse,
+    EscapingOrUnsupported,
+}
+
 #[derive(Clone)]
 struct PromotableRoot {
     root_value: ValueId,
@@ -513,12 +525,13 @@ impl AggregateScalarize {
         const_paths: &ConstPathAnalysis,
     ) -> bool {
         let mut dead_use_cache = FxHashMap::default();
+        let root = RootValue::new(root_value);
 
         for ptr in func.dfg.value_ids() {
             let Some(projection) = provenance.exact_projection(ptr) else {
                 continue;
             };
-            if projection.root_value != RootValue::new(root_value) {
+            if projection.root_value != root {
                 continue;
             }
 
@@ -527,233 +540,74 @@ impl AggregateScalarize {
                     continue;
                 }
 
-                if let Some(gep) = downcast::<&data::Gep>(func.inst_set(), func.dfg.inst(user))
-                    && gep.values().first() == Some(&ptr)
-                {
-                    let Some(result) = func.dfg.inst_result(user) else {
-                        return false;
-                    };
-                    if provenance
-                        .exact_projection(result)
-                        .is_some_and(|next| next.root_value == RootValue::new(root_value))
-                    {
-                        continue;
+                match classify_root_use(func, user, ptr, &mut dead_use_cache) {
+                    RootUseKind::ProjectionPreserving { result } => {
+                        if !provenance
+                            .exact_projection(result)
+                            .is_some_and(|next| next.root_value == root)
+                            && !is_dead_inst_tree(
+                                func,
+                                user,
+                                &mut dead_use_cache,
+                                &mut FxHashSet::default(),
+                            )
+                        {
+                            return false;
+                        }
                     }
-                }
-
-                if let Some(bitcast) =
-                    downcast::<&cast::Bitcast>(func.inst_set(), func.dfg.inst(user))
-                    && *bitcast.from() == ptr
-                {
-                    let Some(result) = func.dfg.inst_result(user) else {
-                        return false;
-                    };
-                    if provenance
-                        .exact_projection(result)
-                        .is_some_and(|next| next.root_value == RootValue::new(root_value))
-                    {
-                        continue;
+                    RootUseKind::SameProjection { result, allow_dead } => {
+                        if provenance.exact_projection(result) != Some(projection)
+                            && (!allow_dead
+                                || !is_dead_inst_tree(
+                                    func,
+                                    user,
+                                    &mut dead_use_cache,
+                                    &mut FxHashSet::default(),
+                                ))
+                        {
+                            return false;
+                        }
                     }
-                }
-
-                if let Some(obj_proj) =
-                    downcast::<&data::ObjProj>(func.inst_set(), func.dfg.inst(user))
-                    && obj_proj.values().first() == Some(&ptr)
-                {
-                    let Some(result) = func.dfg.inst_result(user) else {
-                        return false;
-                    };
-                    if provenance
-                        .exact_projection(result)
-                        .is_some_and(|next| next.root_value == RootValue::new(root_value))
-                    {
-                        continue;
-                    }
-                }
-
-                if let Some(obj_index) =
-                    downcast::<&data::ObjIndex>(func.inst_set(), func.dfg.inst(user))
-                    && *obj_index.object() == ptr
-                {
-                    let Some(result) = func.dfg.inst_result(user) else {
-                        return false;
-                    };
-                    if provenance
-                        .exact_projection(result)
-                        .is_some_and(|next| next.root_value == RootValue::new(root_value))
-                    {
-                        continue;
-                    }
-                }
-
-                if let Some(enum_proj) =
-                    downcast::<&data::EnumProj>(func.inst_set(), func.dfg.inst(user))
-                    && *enum_proj.object() == ptr
-                {
-                    let Some(result) = func.dfg.inst_result(user) else {
-                        return false;
-                    };
-                    if provenance
-                        .exact_projection(result)
-                        .is_some_and(|next| next.root_value == RootValue::new(root_value))
-                    {
-                        continue;
-                    }
-                }
-
-                if let Some(phi) =
-                    downcast::<&control_flow::Phi>(func.inst_set(), func.dfg.inst(user))
-                    && phi.args().iter().any(|(arg, _)| *arg == ptr)
-                {
-                    let Some(result) = func.dfg.inst_result(user) else {
-                        return false;
-                    };
-                    if provenance.exact_projection(result) == Some(projection) {
-                        continue;
-                    }
-                }
-
-                if let Some(mload) = downcast::<&data::Mload>(func.inst_set(), func.dfg.inst(user))
-                    && *mload.addr() == ptr
-                {
-                    let load_ty = *mload.ty();
-                    if (!shape::is_supported_scalar_shape_ty(module, load_ty)
-                        && self.projection_slice_can_view_as(module, projection.slice, load_ty))
-                        || (shape::is_supported_scalar_shape_ty(module, load_ty)
-                            && self.projection_load_has_full_rewrite_plan(
+                    RootUseKind::LoadView { ty } => {
+                        if (shape::is_supported_scalar_shape_ty(module, ty)
+                            && !self.projection_load_has_full_rewrite_plan(
                                 module,
                                 projection.slice,
-                                load_ty,
+                                ty,
                             ))
-                    {
-                        continue;
+                            || (!shape::is_supported_scalar_shape_ty(module, ty)
+                                && !self.projection_slice_can_view_as(module, projection.slice, ty))
+                        {
+                            return false;
+                        }
                     }
-                    return false;
-                }
-
-                if let Some(obj_load) =
-                    downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(user))
-                    && *obj_load.object() == ptr
-                {
-                    let Some(result) = func.dfg.inst_result(user) else {
-                        return false;
-                    };
-                    let load_ty = func.dfg.value_ty(result);
-                    if (!shape::is_supported_scalar_shape_ty(module, load_ty)
-                        && self.projection_slice_can_view_as(module, projection.slice, load_ty))
-                        || (shape::is_supported_scalar_shape_ty(module, load_ty)
-                            && self.projection_load_has_full_rewrite_plan(
-                                module,
-                                projection.slice,
-                                load_ty,
-                            ))
-                    {
-                        continue;
+                    RootUseKind::StoreView { ty } | RootUseKind::EnumTagRead { ty } => {
+                        if !self.projection_slice_can_view_as(module, projection.slice, ty) {
+                            return false;
+                        }
                     }
-                    return false;
-                }
-
-                if let Some(enum_get_tag) =
-                    downcast::<&data::EnumGetTag>(func.inst_set(), func.dfg.inst(user))
-                    && *enum_get_tag.object() == ptr
-                {
-                    let Some(result) = func.dfg.inst_result(user) else {
-                        return false;
-                    };
-                    if self.projection_slice_can_view_as(
-                        module,
-                        projection.slice,
-                        func.dfg.value_ty(result),
-                    ) {
-                        continue;
+                    RootUseKind::ConstInit { value } => {
+                        if !self.obj_init_const_has_full_rewrite_plan(
+                            func,
+                            module,
+                            projection.slice,
+                            value,
+                            const_paths,
+                        ) {
+                            return false;
+                        }
                     }
-                    return false;
-                }
-
-                if let Some(mstore) =
-                    downcast::<&data::Mstore>(func.inst_set(), func.dfg.inst(user))
-                    && *mstore.addr() == ptr
-                {
-                    if self.projection_slice_can_view_as(module, projection.slice, *mstore.ty()) {
-                        continue;
+                    RootUseKind::EnumMutation => {
+                        if !matches!(
+                            projection.slice.ty.resolve_compound(module),
+                            Some(sonatina_ir::types::CompoundType::Enum(_))
+                        ) {
+                            return false;
+                        }
                     }
-                    return false;
+                    RootUseKind::DeadUse => {}
+                    RootUseKind::EscapingOrUnsupported => return false,
                 }
-
-                if let Some(obj_store) =
-                    downcast::<&data::ObjStore>(func.inst_set(), func.dfg.inst(user))
-                    && *obj_store.object() == ptr
-                {
-                    if self.projection_slice_can_view_as(
-                        module,
-                        projection.slice,
-                        func.dfg.value_ty(*obj_store.value()),
-                    ) {
-                        continue;
-                    }
-                    return false;
-                }
-
-                if let Some(init) =
-                    downcast::<&data::ObjInitConst>(func.inst_set(), func.dfg.inst(user))
-                    && *init.object() == ptr
-                {
-                    if self.obj_init_const_has_full_rewrite_plan(
-                        func,
-                        module,
-                        projection.slice,
-                        init,
-                        const_paths,
-                    ) {
-                        continue;
-                    }
-                    return false;
-                }
-
-                if let Some(enum_assert_ref) =
-                    downcast::<&data::EnumAssertVariantRef>(func.inst_set(), func.dfg.inst(user))
-                    && *enum_assert_ref.object() == ptr
-                {
-                    let Some(result) = func.dfg.inst_result(user) else {
-                        return false;
-                    };
-                    if provenance.exact_projection(result) == Some(projection) {
-                        continue;
-                    }
-                    return false;
-                }
-
-                if let Some(enum_set_tag) =
-                    downcast::<&data::EnumSetTag>(func.inst_set(), func.dfg.inst(user))
-                    && *enum_set_tag.object() == ptr
-                {
-                    if matches!(
-                        projection.slice.ty.resolve_compound(module),
-                        Some(sonatina_ir::types::CompoundType::Enum(_))
-                    ) {
-                        continue;
-                    }
-                    return false;
-                }
-
-                if let Some(enum_write_variant) =
-                    downcast::<&data::EnumWriteVariant>(func.inst_set(), func.dfg.inst(user))
-                    && *enum_write_variant.object() == ptr
-                {
-                    if matches!(
-                        projection.slice.ty.resolve_compound(module),
-                        Some(sonatina_ir::types::CompoundType::Enum(_))
-                    ) {
-                        continue;
-                    }
-                    return false;
-                }
-
-                if is_dead_inst_tree(func, user, &mut dead_use_cache, &mut FxHashSet::default()) {
-                    continue;
-                }
-
-                return false;
             }
         }
 
@@ -2436,12 +2290,12 @@ impl AggregateScalarize {
         func: &Function,
         module: &sonatina_ir::module::ModuleCtx,
         slice: shape::AggregateSlice,
-        init: &data::ObjInitConst,
+        value: ValueId,
         const_paths: &ConstPathAnalysis,
     ) -> bool {
         self.projection_slice_can_view_as(module, slice, slice.ty)
             && self
-                .const_init_leaf_imms(func, module, *init.value(), slice.ty, const_paths)
+                .const_init_leaf_imms(func, module, value, slice.ty, const_paths)
                 .is_some()
     }
 
@@ -3051,6 +2905,110 @@ fn replace_scalar_phi_value(
             }
         }
     }
+}
+
+fn classify_root_use(
+    func: &Function,
+    user: InstId,
+    ptr: ValueId,
+    dead_use_cache: &mut FxHashMap<InstId, bool>,
+) -> RootUseKind {
+    let inst = func.dfg.inst(user);
+    let is = func.inst_set();
+    let result = || func.dfg.inst_result(user);
+    let projection_preserving = || {
+        result().map_or(RootUseKind::EscapingOrUnsupported, |result| {
+            RootUseKind::ProjectionPreserving { result }
+        })
+    };
+    let same_projection = |allow_dead| {
+        result().map_or(RootUseKind::EscapingOrUnsupported, |result| {
+            RootUseKind::SameProjection { result, allow_dead }
+        })
+    };
+
+    if downcast::<&data::Gep>(is, inst).is_some_and(|gep| gep.values().first() == Some(&ptr))
+        || downcast::<&cast::Bitcast>(is, inst).is_some_and(|bitcast| *bitcast.from() == ptr)
+        || downcast::<&data::ObjProj>(is, inst)
+            .is_some_and(|obj_proj| obj_proj.values().first() == Some(&ptr))
+        || downcast::<&data::ObjIndex>(is, inst).is_some_and(|obj_index| *obj_index.object() == ptr)
+        || downcast::<&data::EnumProj>(is, inst).is_some_and(|enum_proj| *enum_proj.object() == ptr)
+    {
+        return projection_preserving();
+    }
+
+    if downcast::<&control_flow::Phi>(is, inst)
+        .is_some_and(|phi| phi.args().iter().any(|(arg, _)| *arg == ptr))
+    {
+        return same_projection(true);
+    }
+
+    if downcast::<&data::EnumAssertVariantRef>(is, inst)
+        .is_some_and(|enum_assert_ref| *enum_assert_ref.object() == ptr)
+    {
+        return same_projection(false);
+    }
+
+    if let Some(mload) = downcast::<&data::Mload>(is, inst)
+        && *mload.addr() == ptr
+    {
+        return RootUseKind::LoadView { ty: *mload.ty() };
+    }
+
+    if let Some(obj_load) = downcast::<&data::ObjLoad>(is, inst)
+        && *obj_load.object() == ptr
+    {
+        return result().map_or(RootUseKind::EscapingOrUnsupported, |result| {
+            RootUseKind::LoadView {
+                ty: func.dfg.value_ty(result),
+            }
+        });
+    }
+
+    if let Some(enum_get_tag) = downcast::<&data::EnumGetTag>(is, inst)
+        && *enum_get_tag.object() == ptr
+    {
+        return result().map_or(RootUseKind::EscapingOrUnsupported, |result| {
+            RootUseKind::EnumTagRead {
+                ty: func.dfg.value_ty(result),
+            }
+        });
+    }
+
+    if let Some(mstore) = downcast::<&data::Mstore>(is, inst)
+        && *mstore.addr() == ptr
+    {
+        return RootUseKind::StoreView { ty: *mstore.ty() };
+    }
+
+    if let Some(obj_store) = downcast::<&data::ObjStore>(is, inst)
+        && *obj_store.object() == ptr
+    {
+        return RootUseKind::StoreView {
+            ty: func.dfg.value_ty(*obj_store.value()),
+        };
+    }
+
+    if let Some(init) = downcast::<&data::ObjInitConst>(is, inst)
+        && *init.object() == ptr
+    {
+        return RootUseKind::ConstInit {
+            value: *init.value(),
+        };
+    }
+
+    if downcast::<&data::EnumSetTag>(is, inst).is_some_and(|set_tag| *set_tag.object() == ptr)
+        || downcast::<&data::EnumWriteVariant>(is, inst)
+            .is_some_and(|write_variant| *write_variant.object() == ptr)
+    {
+        return RootUseKind::EnumMutation;
+    }
+
+    if is_dead_inst_tree(func, user, dead_use_cache, &mut FxHashSet::default()) {
+        return RootUseKind::DeadUse;
+    }
+
+    RootUseKind::EscapingOrUnsupported
 }
 
 fn is_dead_inst_tree(
