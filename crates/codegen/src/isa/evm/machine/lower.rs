@@ -18,7 +18,9 @@ use sonatina_ir::{
     types::CompoundType,
 };
 
-use crate::{domtree::DomTree, machinst::lower::SectionWorkModule};
+use crate::{
+    domtree::DomTree, isa::evm::memory_plan::align_up_to_word, machinst::lower::SectionWorkModule,
+};
 
 use super::{
     super::{
@@ -443,6 +445,7 @@ impl FuncLowerCtx<'_> {
     fn lower_alloca(&mut self, source_inst: sonatina_ir::InstId) -> Result<(), String> {
         let loc = self
             .placement
+            .mem_plan
             .alloca_loc
             .get(&source_inst)
             .copied()
@@ -453,8 +456,8 @@ impl FuncLowerCtx<'_> {
                 self.i256_imm(base)
             }
             ObjLoc::StableFrame(offset_words) => {
-                let layout =
-                    DynamicFrameLayout::new(self.placement.stable_words).ok_or_else(|| {
+                let layout = DynamicFrameLayout::new(self.placement.mem_plan.stable_words)
+                    .ok_or_else(|| {
                         "dynamic frame alloca missing stable frame layout".to_string()
                     })?;
                 let local_word = layout
@@ -468,11 +471,6 @@ impl FuncLowerCtx<'_> {
                     let offset = self.i256_imm(offset);
                     self.emit_binary(arith::Sub::new(self.is, dyn_sp, offset), Type::I256)
                 }
-            }
-            ObjLoc::StackPinned(depth) => {
-                return Err(format!(
-                    "stack-pinned alloca is not supported (depth={depth})"
-                ));
             }
         };
         self.alias_inst_single_result(source_inst, value)
@@ -1077,20 +1075,21 @@ impl FuncLowerCtx<'_> {
         match loc {
             ObjLoc::ScratchAbs(word) => self.word_addr(word),
             ObjLoc::StableAbs(word) => {
-                let base = match self.placement.stable_mode {
-                    StableMode::StaticAbs { base_word } => base_word,
+                let base = match self.placement.mem_plan.stable_mode {
+                    StableMode::StableAbs { base_word } => base_word,
                     StableMode::None | StableMode::DynamicFrame => {
                         return None;
                     }
                 };
                 self.word_addr(base.checked_add(word)?)
             }
-            ObjLoc::StableFrame(_) | ObjLoc::StackPinned(_) => None,
+            ObjLoc::StableFrame(_) => None,
         }
     }
 
     fn word_addr(&self, word: u32) -> Option<u32> {
         self.placement
+            .mem_plan
             .arena_base
             .checked_add(word.checked_mul(WORD_BYTES)?)
     }
@@ -1150,7 +1149,5 @@ fn scalar_bits(ty: Type) -> Option<u16> {
 }
 
 fn align_malloc_size(size: u32) -> Result<u32, String> {
-    size.checked_add(31)
-        .map(|size| size & !31)
-        .ok_or_else(|| "malloc size alignment overflow".to_string())
+    align_up_to_word(size).ok_or_else(|| "malloc size alignment overflow".to_string())
 }

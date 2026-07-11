@@ -1,20 +1,22 @@
 use cranelift_entity::SecondaryMap;
 use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
-    AccessKind, BlockId, Function, InstId, InstSetExt, Module, ValueId,
+    BlockId, Function, InstId, InstSetExt, Module, ValueId,
     cfg::ControlFlowGraph,
     inst::evm::inst_set::{EvmInstKind, EvmInstSet},
-    isa::{Isa, evm::Evm},
     module::{FuncRef, ModuleCtx},
 };
 use std::iter;
 
-use crate::isa::evm::{
-    EvmBackend, FREE_PTR_SLOT, WORD_BYTES,
-    prepare::{memory_access_may_touch_free_ptr_slot, value_imm_u32},
-    provenance::{Provenance, compute_value_provenance},
-    ptr_escape::PtrEscapeSummary,
+use crate::{
+    isa::evm::{
+        FREE_PTR_SLOT, WORD_BYTES, memory_plan::FuncPreAnalysis, prepare::value_imm_u32,
+        ptr_provenance::Provenance,
+    },
+    module_analysis::CallGraphSchedule,
 };
+
+use super::heap_state::{inst_writes_free_ptr_slot, run_forward_heap_dataflow};
 
 use super::placement::MallocPlacement;
 
@@ -48,41 +50,18 @@ impl FreePtrFloor {
     }
 }
 
+/// Whether each function may (transitively) write the free-pointer slot.
+///
+/// All callees are section-internal at this stage (the memory planner asserts
+/// it), so a join over callees on the condensation suffices.
 pub(crate) fn compute_free_ptr_write_summaries(
-    module: &Module,
-    funcs: &[FuncRef],
+    schedule: &CallGraphSchedule,
     local_writes: &FxHashMap<FuncRef, bool>,
-    isa: &Evm,
 ) -> FxHashMap<FuncRef, bool> {
-    let funcs_set: FxHashSet<FuncRef> = funcs.iter().copied().collect();
-    let mut writes = local_writes.clone();
-    let mut changed = true;
-    while changed {
-        changed = false;
-        for &func in funcs {
-            let mut func_writes = writes.get(&func).copied().unwrap_or(true);
-            if !func_writes {
-                func_writes = module.func_store.view(func, |function| {
-                    function.layout.iter_block().any(|block| {
-                        function.layout.iter_inst(block).any(|inst| {
-                            let EvmInstKind::Call(call) =
-                                isa.inst_set().resolve_inst(function.dfg.inst(inst))
-                            else {
-                                return false;
-                            };
-                            let callee = *call.callee();
-                            !funcs_set.contains(&callee)
-                                || writes.get(&callee).copied().unwrap_or(true)
-                        })
-                    })
-                });
-            }
-            if writes.insert(func, func_writes) != Some(func_writes) {
-                changed = true;
-            }
-        }
-    }
-    writes
+    schedule.join_over_callees(
+        |func| local_writes.get(&func).copied().unwrap_or(true),
+        |acc, callee_writes| *acc |= *callee_writes,
+    )
 }
 
 pub(crate) struct ProgramFreePtrFloorInput<'a> {
@@ -90,8 +69,7 @@ pub(crate) struct ProgramFreePtrFloorInput<'a> {
     pub(crate) funcs: &'a [FuncRef],
     pub(crate) section_entry: FuncRef,
     pub(crate) section_includes: &'a [FuncRef],
-    pub(crate) backend: &'a EvmBackend,
-    pub(crate) ptr_escape: &'a FxHashMap<FuncRef, PtrEscapeSummary>,
+    pub(crate) analyses: &'a FxHashMap<FuncRef, FuncPreAnalysis>,
     pub(crate) source_is: &'a EvmInstSet,
     pub(crate) malloc_placements: &'a FxHashMap<FuncRef, FxHashMap<InstId, MallocPlacement>>,
     pub(crate) free_ptr_write_summaries: &'a FxHashMap<FuncRef, bool>,
@@ -105,8 +83,7 @@ pub(crate) fn compute_program_free_ptr_floor_before_malloc(
         funcs,
         section_entry,
         section_includes,
-        backend,
-        ptr_escape,
+        analyses,
         source_is,
         malloc_placements,
         free_ptr_write_summaries,
@@ -115,8 +92,7 @@ pub(crate) fn compute_program_free_ptr_floor_before_malloc(
     let exit_floor_summaries = compute_exit_floor_summaries(
         module,
         funcs,
-        backend,
-        ptr_escape,
+        analyses,
         source_is,
         malloc_placements,
         free_ptr_write_summaries,
@@ -142,8 +118,7 @@ pub(crate) fn compute_program_free_ptr_floor_before_malloc(
                 let malloc_placements = malloc_placements.get(&func).unwrap_or(&empty_placements);
                 FuncFreePtrFloorCtx {
                     module: &module.ctx,
-                    backend,
-                    ptr_escape,
+                    analysis: &analyses[&func],
                     source_is,
                     malloc_placements,
                     free_ptr_write_summaries,
@@ -183,8 +158,7 @@ pub(crate) fn compute_program_free_ptr_floor_before_malloc(
                 let malloc_placements = malloc_placements.get(&func).unwrap_or(&empty_placements);
                 FuncFreePtrFloorCtx {
                     module: &module.ctx,
-                    backend,
-                    ptr_escape,
+                    analysis: &analyses[&func],
                     source_is,
                     malloc_placements,
                     free_ptr_write_summaries,
@@ -201,8 +175,7 @@ pub(crate) fn compute_program_free_ptr_floor_before_malloc(
 fn compute_exit_floor_summaries(
     module: &Module,
     funcs: &[FuncRef],
-    backend: &EvmBackend,
-    ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
+    analyses: &FxHashMap<FuncRef, FuncPreAnalysis>,
     source_is: &EvmInstSet,
     malloc_placements: &FxHashMap<FuncRef, FxHashMap<InstId, MallocPlacement>>,
     free_ptr_write_summaries: &FxHashMap<FuncRef, bool>,
@@ -219,8 +192,7 @@ fn compute_exit_floor_summaries(
                 let malloc_placements = malloc_placements.get(&func).unwrap_or(&empty_placements);
                 FuncFreePtrFloorCtx {
                     module: &module.ctx,
-                    backend,
-                    ptr_escape,
+                    analysis: &analyses[&func],
                     source_is,
                     malloc_placements,
                     free_ptr_write_summaries,
@@ -247,8 +219,7 @@ struct FuncFreePtrFloors {
 
 struct FuncFreePtrFloorCtx<'a> {
     module: &'a ModuleCtx,
-    backend: &'a EvmBackend,
-    ptr_escape: &'a FxHashMap<FuncRef, PtrEscapeSummary>,
+    analysis: &'a FuncPreAnalysis,
     source_is: &'a EvmInstSet,
     malloc_placements: &'a FxHashMap<InstId, MallocPlacement>,
     free_ptr_write_summaries: &'a FxHashMap<FuncRef, bool>,
@@ -257,63 +228,43 @@ struct FuncFreePtrFloorCtx<'a> {
 
 impl FuncFreePtrFloorCtx<'_> {
     fn compute(&self, function: &Function, entry_floor: FreePtrFloor) -> FuncFreePtrFloors {
-        let mut cfg = ControlFlowGraph::new();
-        cfg.compute(function);
+        let cfg = &self.analysis.cfg;
+        let prov = &self.analysis.prov.value;
 
-        let prov = compute_value_provenance(function, self.module, &self.backend.isa, |callee| {
-            self.ptr_escape
-                .get(&callee)
-                .cloned()
-                .unwrap_or_else(|| PtrEscapeSummary::conservative_unknown_ctx(self.module, callee))
-        });
-
-        let mut block_in = SecondaryMap::<BlockId, FreePtrFloor>::new();
-        let mut block_out = SecondaryMap::<BlockId, FreePtrFloor>::new();
-        for block in function.dfg.block_ids() {
-            block_in[block] = entry_floor;
-            block_out[block] = entry_floor;
-        }
-
-        let transfer = TransferCtx {
+        let transfer_ctx = TransferCtx {
             function,
             module: self.module,
             source_is: self.source_is,
             malloc_placements: self.malloc_placements,
             free_ptr_write_summaries: self.free_ptr_write_summaries,
             exit_floor_summaries: self.exit_floor_summaries,
-            prov: &prov,
+            prov,
         };
-        let mut changed = true;
-        while changed {
-            changed = false;
-            for block in function.layout.iter_block() {
-                let entry = block_entry_floor(&cfg, block, &block_out, entry_floor);
-                let exit = transfer.block(block, entry, None, None);
-                if block_in[block] != entry {
-                    block_in[block] = entry;
-                    changed = true;
-                }
-                if block_out[block] != exit {
-                    block_out[block] = exit;
-                    changed = true;
-                }
-            }
-        }
+        let transfer = |inst, floor| transfer_ctx.transfer_inst(inst, floor);
+        let states = run_forward_heap_dataflow(
+            function,
+            entry_floor,
+            |block, block_out| block_entry_floor(cfg, block, block_out, entry_floor),
+            transfer,
+        );
 
         let mut before_malloc = FxHashMap::default();
         let mut before_call = Vec::new();
-        for block in function.layout.iter_block() {
-            transfer.block(
-                block,
-                block_in[block],
-                Some(&mut before_malloc),
-                Some(&mut before_call),
-            );
-        }
+        states.for_each_inst_state(function, transfer, |inst, floor| {
+            match self.source_is.resolve_inst(function.dfg.inst(inst)) {
+                EvmInstKind::EvmMalloc(_) => {
+                    if self.malloc_placements.contains_key(&inst) {
+                        before_malloc.insert(inst, floor.as_option());
+                    }
+                }
+                EvmInstKind::Call(call) => before_call.push((*call.callee(), floor)),
+                _ => {}
+            }
+        });
         FuncFreePtrFloors {
             before_malloc,
             before_call,
-            exit_floor: function_exit_floor(function, self.source_is, &block_out),
+            exit_floor: function_exit_floor(function, self.source_is, &states.block_out),
         }
     }
 }
@@ -340,6 +291,11 @@ fn function_exit_floor(
     out.unwrap_or(FreePtrFloor::Unknown)
 }
 
+// PARITY: the accumulator starts at Unknown and `join(Unknown, _) = Unknown`,
+// so any block with predecessors currently loses its floor entirely. This is
+// conservative (never unsound) but likely unintended; fixing it to fold from
+// the first predecessor is a snapshot-visible precision change to make
+// separately.
 fn block_entry_floor(
     cfg: &ControlFlowGraph,
     block: BlockId,
@@ -366,58 +322,42 @@ struct TransferCtx<'a> {
 }
 
 impl TransferCtx<'_> {
-    fn block(
-        &self,
-        block: BlockId,
-        mut floor: FreePtrFloor,
-        mut before_malloc: Option<&mut FxHashMap<InstId, Option<u32>>>,
-        mut before_call: Option<&mut Vec<(FuncRef, FreePtrFloor)>>,
-    ) -> FreePtrFloor {
-        for inst in self.function.layout.iter_inst(block) {
-            match self.source_is.resolve_inst(self.function.dfg.inst(inst)) {
-                EvmInstKind::EvmMalloc(_) => {
-                    if let Some(placement) = self.malloc_placements.get(&inst).copied() {
-                        if let Some(before_malloc) = before_malloc.as_deref_mut() {
-                            before_malloc.insert(inst, floor.as_option());
-                        }
-                        if let MallocPlacement::Heap {
-                            min_base,
-                            update_free_ptr: true,
-                            ..
-                        } = placement
-                        {
-                            // Compiler-managed free-pointer updates are part of the allocator
-                            // invariant: they cannot wrap below the established floor.
-                            floor = floor.establish_min(min_base);
-                        }
-                    }
+    fn transfer_inst(&self, inst: InstId, mut floor: FreePtrFloor) -> FreePtrFloor {
+        match self.source_is.resolve_inst(self.function.dfg.inst(inst)) {
+            EvmInstKind::EvmMalloc(_) => {
+                if let Some(MallocPlacement::Heap {
+                    min_base,
+                    update_free_ptr: true,
+                    ..
+                }) = self.malloc_placements.get(&inst).copied()
+                {
+                    // Compiler-managed free-pointer updates are part of the allocator
+                    // invariant: they cannot wrap below the established floor.
+                    floor = floor.establish_min(min_base);
                 }
-                EvmInstKind::Call(call) => {
-                    if let Some(before_call) = before_call.as_deref_mut() {
-                        before_call.push((*call.callee(), floor));
-                    }
-                    if self
-                        .free_ptr_write_summaries
-                        .get(call.callee())
-                        .copied()
-                        .unwrap_or(true)
-                    {
-                        floor = FreePtrFloor::Unknown;
-                    } else if let Some(exit_floor) = self
-                        .exit_floor_summaries
-                        .get(call.callee())
-                        .copied()
-                        .flatten()
-                    {
-                        floor = floor.establish_min(exit_floor);
-                    }
+            }
+            EvmInstKind::Call(call) => {
+                if self
+                    .free_ptr_write_summaries
+                    .get(call.callee())
+                    .copied()
+                    .unwrap_or(true)
+                {
+                    floor = FreePtrFloor::Unknown;
+                } else if let Some(exit_floor) = self
+                    .exit_floor_summaries
+                    .get(call.callee())
+                    .copied()
+                    .flatten()
+                {
+                    floor = floor.establish_min(exit_floor);
                 }
-                _ => {
-                    if let Some(stored_floor) = self.exact_free_ptr_store_floor(inst) {
-                        floor = stored_floor.map_or(FreePtrFloor::Unknown, FreePtrFloor::Known);
-                    } else if self.inst_writes_free_ptr_slot(inst) {
-                        floor = FreePtrFloor::Unknown;
-                    }
+            }
+            _ => {
+                if let Some(stored_floor) = self.exact_free_ptr_store_floor(inst) {
+                    floor = stored_floor.map_or(FreePtrFloor::Unknown, FreePtrFloor::Known);
+                } else if inst_writes_free_ptr_slot(self.function, inst, self.prov) {
+                    floor = FreePtrFloor::Unknown;
                 }
             }
         }
@@ -440,17 +380,5 @@ impl TransferCtx<'_> {
             }
             _ => None,
         }
-    }
-
-    fn inst_writes_free_ptr_slot(&self, inst: InstId) -> bool {
-        self.function
-            .dfg
-            .effects(inst)
-            .accesses
-            .iter()
-            .any(|access| {
-                access.kind == AccessKind::Write
-                    && memory_access_may_touch_free_ptr_slot(self.function, access, self.prov)
-            })
     }
 }

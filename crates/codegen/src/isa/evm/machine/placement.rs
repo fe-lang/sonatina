@@ -15,21 +15,19 @@ use sonatina_ir::{
 
 use crate::{
     bitset::BitSet,
-    isa::evm::provenance::{Provenance, compute_value_provenance},
-    module_analysis::CallGraph,
+    module_analysis::{CallGraphSchedule, SccRef},
 };
 
 use super::{
     super::{
         EvmBackend, heap_plan, malloc_plan,
-        mem_effects::compute_func_mem_effects,
         memory_plan::{
-            self, BackendSpillReserve, FinalScratchReserveRange, FuncPreAnalysis, ObjLoc,
-            StableMode, WORD_BYTES,
+            self, BackendSpillReserve, FinalScratchReserveRange, FuncPreAnalysis, StableMode,
+            WORD_BYTES, expect_func_entry,
         },
         prepare::{
-            ArenaBaseFacts, choose_arena_base, compute_return_escape_caller_clamp_words,
-            function_free_ptr_slot_facts, memory_access_may_touch_free_ptr_slot, value_imm_u32,
+            ArenaBaseFacts, SectionMemoryLayout, choose_arena_base,
+            compute_return_escape_caller_clamp_words, function_free_ptr_slot_facts, value_imm_u32,
         },
         ptr_escape::PtrEscapeSummary,
         static_arena_alloc::{
@@ -41,6 +39,7 @@ use super::{
         ProgramFreePtrFloorInput, compute_free_ptr_write_summaries,
         compute_program_free_ptr_floor_before_malloc,
     },
+    heap_state::compute_exact_heap_base_before_malloc,
 };
 
 #[derive(Clone, Debug)]
@@ -48,18 +47,15 @@ pub(crate) struct EvmMemoryPlacementPlan {
     pub(crate) arena_base: u32,
     pub(crate) global_dyn_base: u32,
     pub(crate) scratch_peak_words: u32,
-    pub(crate) static_chain_peak_words: u32,
+    pub(crate) stable_chain_peak_words: u32,
+    pub(crate) has_persistent_mallocs: bool,
     pub(crate) funcs: FxHashMap<FuncRef, EvmFuncPlacementPlan>,
 }
 
 #[derive(Clone, Debug)]
 pub(crate) struct EvmFuncPlacementPlan {
-    pub(crate) arena_base: u32,
-    pub(crate) stable_mode: StableMode,
-    pub(crate) stable_words: u32,
     pub(crate) final_scratch_reserve: FinalScratchReserveRange,
-    pub(crate) mem_plan: memory_plan::FuncMemPlan,
-    pub(crate) alloca_loc: FxHashMap<InstId, ObjLoc>,
+    pub(crate) mem_plan: memory_plan::SemanticFuncPlan,
     pub(crate) malloc_placements: FxHashMap<InstId, MallocPlacement>,
     pub(crate) free_ptr_floor_before_malloc: FxHashMap<InstId, Option<u32>>,
 }
@@ -116,31 +112,30 @@ struct PrivateStaticMallocProgramCtx<'a> {
     funcs: &'a [FuncRef],
     analyses: &'a FxHashMap<FuncRef, FuncPreAnalysis>,
     semantic_plan: &'a memory_plan::ProgramMemoryPlan,
-    ptr_escape: &'a FxHashMap<FuncRef, PtrEscapeSummary>,
     isa: &'a Evm,
-    entry_may_have_live_frame: &'a FxHashMap<FuncRef, bool>,
+    heap_facts: &'a FxHashMap<FuncRef, FuncHeapFacts>,
     has_persistent_mallocs: bool,
     free_ptr_slot_may_be_touched: bool,
 }
 
 struct PrivateStaticMallocFuncCtx<'a> {
     function: &'a Function,
-    func: FuncRef,
     analysis: &'a FuncPreAnalysis,
-    func_plan: &'a memory_plan::FuncMemPlan,
+    func_plan: &'a memory_plan::SemanticFuncPlan,
     module: &'a ModuleCtx,
-    ptr_escape: &'a FxHashMap<FuncRef, PtrEscapeSummary>,
     isa: &'a Evm,
-    entry_may_have_live_frame: &'a FxHashMap<FuncRef, bool>,
+    heap_facts: &'a FuncHeapFacts,
     has_persistent_mallocs: bool,
     free_ptr_slot_may_be_touched: bool,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy)]
 pub(crate) struct MemoryPlacementSection<'a> {
+    pub(crate) schedule: &'a CallGraphSchedule,
     pub(crate) funcs: &'a [FuncRef],
     pub(crate) entry: FuncRef,
     pub(crate) includes: &'a [FuncRef],
+    pub(crate) fixed_reservations: &'a SectionMemoryLayout,
 }
 
 pub(crate) fn compute_semantic_memory_placement(
@@ -148,33 +143,36 @@ pub(crate) fn compute_semantic_memory_placement(
     section: MemoryPlacementSection<'_>,
     analyses: &FxHashMap<FuncRef, FuncPreAnalysis>,
     ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
-    scratch_effects: &FxHashSet<FuncRef>,
+    fixed_slot_effects: &FxHashSet<FuncRef>,
     backend: &EvmBackend,
     backend_spill_reserves: &FxHashMap<FuncRef, BackendSpillReserve>,
 ) -> EvmMemoryPlacementPlan {
+    let schedule = section.schedule;
     let funcs = section.funcs;
     let mut semantic_plan = memory_plan::compute_semantic_program_memory_plan(
         module,
-        funcs,
+        schedule,
         analyses,
         ptr_escape,
         &backend.isa,
         &backend.arena_cost_model,
     );
-    semantic_plan.apply_backend_spill_reserves(module, funcs, backend_spill_reserves);
+    semantic_plan.apply_backend_spill_reserves(schedule, backend_spill_reserves);
     let final_scratch_reserves =
         final_scratch_reserve_ranges(funcs, &semantic_plan, backend_spill_reserves);
 
-    let mem_effects =
-        compute_func_mem_effects(module, funcs, &semantic_plan, scratch_effects, &backend.isa);
+    let transient_malloc_call_barriers = malloc_plan::compute_transient_malloc_call_barriers(
+        module,
+        schedule,
+        &semantic_plan.funcs,
+        &backend.isa,
+    );
 
     let mut annotations: Vec<_> = funcs
         .par_iter()
         .copied()
         .map(|func| {
-            let analysis = analyses
-                .get(&func)
-                .unwrap_or_else(|| panic!("missing pre-analysis for func {}", func.as_u32()));
+            let analysis = expect_func_entry(analyses, func, "pre-analysis");
             let (malloc_escape_kinds, transient_mallocs) =
                 module.func_store.view(func, |function| {
                     let escape_kinds = malloc_plan::compute_malloc_escape_kinds_for_function(
@@ -182,13 +180,15 @@ pub(crate) fn compute_semantic_memory_placement(
                         &module.ctx,
                         &backend.isa,
                         ptr_escape,
+                        &analysis.prov,
                     );
                     let transient = malloc_plan::compute_transient_mallocs(
                         function,
                         &module.ctx,
                         &backend.isa,
                         ptr_escape,
-                        Some(&mem_effects),
+                        &analysis.prov,
+                        Some(&transient_malloc_call_barriers),
                         &analysis.inst_liveness,
                     );
                     (escape_kinds, transient)
@@ -206,7 +206,7 @@ pub(crate) fn compute_semantic_memory_placement(
     let has_dynamic_frames = semantic_plan
         .funcs
         .values()
-        .any(memory_plan::FuncMemPlan::uses_dynamic_frame);
+        .any(memory_plan::SemanticFuncPlan::uses_dynamic_frame);
     let backend_spill_scratch_reserve_peak = backend_spill_reserves
         .values()
         .map(|reserve| reserve.scratch_words)
@@ -227,30 +227,47 @@ pub(crate) fn compute_semantic_memory_placement(
             })
         })
     });
-    let entry_may_have_live_frame =
-        compute_entry_may_have_live_frame(module, funcs, &semantic_plan);
+    let entry_may_have_live_frame = compute_entry_may_have_live_frame(schedule, &semantic_plan);
     let (free_ptr_slot_may_be_touched, free_ptr_write_summaries) =
-        compute_program_free_ptr_slot_facts(module, funcs, backend, ptr_escape);
+        compute_program_free_ptr_slot_facts(module, schedule, backend, analyses);
+    let mut heap_facts_results: Vec<_> = funcs
+        .par_iter()
+        .copied()
+        .map(|func| {
+            let func_plan = expect_func_entry(&semantic_plan.funcs, func, "semantic plan");
+            let analysis = expect_func_entry(analyses, func, "pre-analysis");
+            let facts = module.func_store.view(func, |function| {
+                compute_func_heap_facts(
+                    function,
+                    func,
+                    &module.ctx,
+                    &backend.isa,
+                    analysis,
+                    func_plan,
+                    &entry_may_have_live_frame,
+                )
+            });
+            (func, facts)
+        })
+        .collect();
+    heap_facts_results.sort_unstable_by_key(|(func, _)| func.as_u32());
+    let heap_facts: FxHashMap<FuncRef, FuncHeapFacts> = heap_facts_results.into_iter().collect();
+
     let private_static_mallocs =
         compute_private_static_malloc_program_plan(PrivateStaticMallocProgramCtx {
             module,
             funcs,
             analyses,
             semantic_plan: &semantic_plan,
-            ptr_escape,
             isa: &backend.isa,
-            entry_may_have_live_frame: &entry_may_have_live_frame,
+            heap_facts: &heap_facts,
             has_persistent_mallocs,
             free_ptr_slot_may_be_touched,
         });
     let private_static_reserves = private_static_mallocs.backend_spill_reserves();
-    semantic_plan.apply_backend_spill_reserves(module, funcs, &private_static_reserves);
-    let return_escape_caller_abs_words = compute_return_escape_caller_clamp_words(
-        module,
-        funcs,
-        &semantic_plan,
-        &FxHashMap::default(),
-    );
+    semantic_plan.apply_backend_spill_reserves(schedule, &private_static_reserves);
+    let return_escape_caller_abs_words =
+        compute_return_escape_caller_clamp_words(schedule, &semantic_plan, &FxHashMap::default());
     for (func, return_escape_caller_abs_words) in return_escape_caller_abs_words {
         if let Some(func_plan) = semantic_plan.funcs.get_mut(&func) {
             func_plan.return_escape_caller_abs_words = return_escape_caller_abs_words;
@@ -258,13 +275,10 @@ pub(crate) fn compute_semantic_memory_placement(
     }
 
     let arena_base = choose_arena_base(
-        module,
-        funcs,
-        backend,
-        ptr_escape,
+        section.fixed_reservations,
         ArenaBaseFacts {
             has_dynamic_frames,
-            has_stackify_scratch_spills: !scratch_effects.is_empty(),
+            has_stackify_fixed_slot_spills: !fixed_slot_effects.is_empty(),
             backend_spill_scratch_reserve_words: backend_spill_scratch_reserve_peak,
             has_persistent_mallocs,
         },
@@ -278,7 +292,7 @@ pub(crate) fn compute_semantic_memory_placement(
 
     let mut malloc_bounds = heap_plan::compute_semantic_malloc_future_abs_words_with_extra(
         module,
-        funcs,
+        schedule,
         &semantic_plan,
         analyses,
         &backend.isa,
@@ -303,10 +317,8 @@ pub(crate) fn compute_semantic_memory_placement(
     let placement_ctx = MallocPlacementCtx {
         isa: &backend.isa,
         module: &module.ctx,
-        ptr_escape,
         global_dyn_base: semantic_plan.global_dyn_base,
         backend_spill_reserve_peak: backend_spill_scratch_reserve_peak,
-        entry_may_have_live_frame: &entry_may_have_live_frame,
         section_entry: section.entry,
         has_persistent_mallocs,
         free_ptr_slot_may_be_touched,
@@ -316,12 +328,14 @@ pub(crate) fn compute_semantic_memory_placement(
         .iter()
         .copied()
         .map(|func| {
-            let func_plan = semantic_plan
-                .funcs
-                .get(&func)
-                .unwrap_or_else(|| panic!("missing semantic plan for func {}", func.as_u32()));
+            let func_plan = expect_func_entry(&semantic_plan.funcs, func, "semantic plan");
             let malloc_placements = module.func_store.view(func, |function| {
-                placement_ctx.compute_func_malloc_placements(function, func, func_plan)
+                placement_ctx.compute_func_malloc_placements(
+                    function,
+                    func,
+                    &heap_facts[&func],
+                    func_plan,
+                )
             });
             (func, malloc_placements)
         })
@@ -332,8 +346,7 @@ pub(crate) fn compute_semantic_memory_placement(
             funcs,
             section_entry: section.entry,
             section_includes: section.includes,
-            backend,
-            ptr_escape,
+            analyses,
             source_is: backend.isa.inst_set(),
             malloc_placements: &malloc_placements,
             free_ptr_write_summaries: &free_ptr_write_summaries,
@@ -342,10 +355,7 @@ pub(crate) fn compute_semantic_memory_placement(
         .iter()
         .copied()
         .map(|func| {
-            let func_plan = semantic_plan
-                .funcs
-                .get(&func)
-                .unwrap_or_else(|| panic!("missing semantic plan for func {}", func.as_u32()));
+            let func_plan = expect_func_entry(&semantic_plan.funcs, func, "semantic plan");
             let malloc_placements = malloc_placements.get(&func).cloned().unwrap_or_default();
             let free_ptr_floor_before_malloc = free_ptr_floor_before_malloc
                 .get(&func)
@@ -354,15 +364,11 @@ pub(crate) fn compute_semantic_memory_placement(
             (
                 func,
                 EvmFuncPlacementPlan {
-                    arena_base: func_plan.arena_base,
-                    stable_mode: func_plan.stable_mode,
-                    stable_words: func_plan.stable_words,
                     final_scratch_reserve: final_scratch_reserves
                         .get(&func)
                         .copied()
                         .unwrap_or_default(),
-                    mem_plan: machine_mem_plan_from_semantic(func_plan),
-                    alloca_loc: func_plan.alloca_loc.clone(),
+                    mem_plan: func_plan.clone(),
                     malloc_placements,
                     free_ptr_floor_before_malloc,
                 },
@@ -374,18 +380,62 @@ pub(crate) fn compute_semantic_memory_placement(
         arena_base: semantic_plan.arena_base,
         global_dyn_base: semantic_plan.global_dyn_base,
         scratch_peak_words: semantic_plan.scratch_peak_words,
-        static_chain_peak_words: semantic_plan.static_chain_peak_words,
+        stable_chain_peak_words: semantic_plan.stable_chain_peak_words,
+        has_persistent_mallocs,
         funcs: func_placements,
+    }
+}
+
+/// Per-function heap facts computed once and shared by malloc placement and
+/// private-static malloc planning.
+pub(crate) struct FuncHeapFacts {
+    exact_heap_base_before_malloc: FxHashMap<InstId, bool>,
+    terminal_private_mallocs: FxHashSet<InstId>,
+    needs_dyn_sp_clamp: bool,
+}
+
+fn compute_func_heap_facts(
+    function: &Function,
+    func: FuncRef,
+    module: &ModuleCtx,
+    isa: &Evm,
+    analysis: &FuncPreAnalysis,
+    func_plan: &memory_plan::SemanticFuncPlan,
+    entry_may_have_live_frame: &FxHashMap<FuncRef, bool>,
+) -> FuncHeapFacts {
+    let needs_dyn_sp_clamp = func_plan.uses_dynamic_frame()
+        || entry_may_have_live_frame
+            .get(&func)
+            .copied()
+            .unwrap_or(false);
+    let exact_heap_base_before_malloc = compute_exact_heap_base_before_malloc(
+        function,
+        isa,
+        &analysis.cfg,
+        func_plan,
+        &analysis.prov.value,
+        !needs_dyn_sp_clamp,
+    );
+    let terminal_private_mallocs = TerminalPrivateMallocAnalysis::new(
+        function,
+        module,
+        isa,
+        &analysis.cfg,
+        &exact_heap_base_before_malloc,
+    )
+    .compute();
+    FuncHeapFacts {
+        exact_heap_base_before_malloc,
+        terminal_private_mallocs,
+        needs_dyn_sp_clamp,
     }
 }
 
 struct MallocPlacementCtx<'a> {
     isa: &'a Evm,
     module: &'a ModuleCtx,
-    ptr_escape: &'a FxHashMap<FuncRef, PtrEscapeSummary>,
     global_dyn_base: u32,
     backend_spill_reserve_peak: u32,
-    entry_may_have_live_frame: &'a FxHashMap<FuncRef, bool>,
     section_entry: FuncRef,
     has_persistent_mallocs: bool,
     free_ptr_slot_may_be_touched: bool,
@@ -397,37 +447,13 @@ impl MallocPlacementCtx<'_> {
         &self,
         function: &Function,
         func: FuncRef,
-        func_plan: &memory_plan::FuncMemPlan,
+        heap_facts: &FuncHeapFacts,
+        func_plan: &memory_plan::SemanticFuncPlan,
     ) -> FxHashMap<InstId, MallocPlacement> {
         let mut out = FxHashMap::default();
-        let mut cfg = ControlFlowGraph::new();
-        cfg.compute(function);
-        let needs_dyn_sp_clamp = func_plan.uses_dynamic_frame()
-            || self
-                .entry_may_have_live_frame
-                .get(&func)
-                .copied()
-                .unwrap_or(false);
-        let prov = compute_value_provenance(function, self.module, self.isa, |callee| {
-            PtrEscapeSummary::get_or_conservative(self.ptr_escape, self.module, callee)
-        });
-        let exact_heap_base_before_malloc = ExactHeapBaseAnalysis {
-            function,
-            isa: self.isa,
-            cfg: &cfg,
-            func_plan,
-            prov: &prov,
-            entry_heap_base_is_exact: !needs_dyn_sp_clamp,
-        }
-        .compute();
-        let terminal_private_mallocs = TerminalPrivateMallocAnalysis::new(
-            function,
-            self.module,
-            self.isa,
-            &cfg,
-            &exact_heap_base_before_malloc,
-        )
-        .compute();
+        let needs_dyn_sp_clamp = heap_facts.needs_dyn_sp_clamp;
+        let exact_heap_base_before_malloc = &heap_facts.exact_heap_base_before_malloc;
+        let terminal_private_mallocs = &heap_facts.terminal_private_mallocs;
         for block in function.layout.iter_block() {
             for inst in function.layout.iter_inst(block) {
                 if !matches!(
@@ -504,10 +530,7 @@ fn final_scratch_reserve_ranges(
                 .get(&func)
                 .copied()
                 .unwrap_or_default();
-            let func_plan = semantic_plan
-                .funcs
-                .get(&func)
-                .unwrap_or_else(|| panic!("missing semantic plan for func {}", func.as_u32()));
+            let func_plan = expect_func_entry(&semantic_plan.funcs, func, "semantic plan");
             let start_word = func_plan
                 .scratch_words
                 .checked_sub(reserve.scratch_words)
@@ -532,20 +555,15 @@ fn compute_private_static_malloc_program_plan(
         .copied()
         .filter_map(|func| {
             let function_plan = ctx.semantic_plan.funcs.get(&func)?;
-            let analysis = ctx
-                .analyses
-                .get(&func)
-                .unwrap_or_else(|| panic!("missing pre-analysis for func {}", func.as_u32()));
+            let analysis = expect_func_entry(ctx.analyses, func, "pre-analysis");
             let plan = ctx.module.func_store.view(func, |function| {
                 compute_private_static_malloc_func_plan(PrivateStaticMallocFuncCtx {
                     function,
-                    func,
                     analysis,
                     func_plan: function_plan,
                     module: &ctx.module.ctx,
-                    ptr_escape: ctx.ptr_escape,
                     isa: ctx.isa,
-                    entry_may_have_live_frame: ctx.entry_may_have_live_frame,
+                    heap_facts: &ctx.heap_facts[&func],
                     has_persistent_mallocs: ctx.has_persistent_mallocs,
                     free_ptr_slot_may_be_touched: ctx.free_ptr_slot_may_be_touched,
                 })
@@ -560,38 +578,15 @@ fn compute_private_static_malloc_program_plan(
 fn compute_private_static_malloc_func_plan(
     ctx: PrivateStaticMallocFuncCtx<'_>,
 ) -> PrivateStaticMallocFuncPlan {
-    let needs_dyn_sp_clamp = ctx.func_plan.uses_dynamic_frame()
-        || ctx
-            .entry_may_have_live_frame
-            .get(&ctx.func)
-            .copied()
-            .unwrap_or(false);
-    if !ctx.has_persistent_mallocs && !ctx.free_ptr_slot_may_be_touched && !needs_dyn_sp_clamp {
+    if !ctx.has_persistent_mallocs
+        && !ctx.free_ptr_slot_may_be_touched
+        && !ctx.heap_facts.needs_dyn_sp_clamp
+    {
         return PrivateStaticMallocFuncPlan::default();
     }
 
-    let mut cfg = ControlFlowGraph::new();
-    cfg.compute(ctx.function);
-    let prov = compute_value_provenance(ctx.function, ctx.module, ctx.isa, |callee| {
-        PtrEscapeSummary::get_or_conservative(ctx.ptr_escape, ctx.module, callee)
-    });
-    let exact_heap_base_before_malloc = ExactHeapBaseAnalysis {
-        function: ctx.function,
-        isa: ctx.isa,
-        cfg: &cfg,
-        func_plan: ctx.func_plan,
-        prov: &prov,
-        entry_heap_base_is_exact: !needs_dyn_sp_clamp,
-    }
-    .compute();
-    let terminal_private_mallocs = TerminalPrivateMallocAnalysis::new(
-        ctx.function,
-        ctx.module,
-        ctx.isa,
-        &cfg,
-        &exact_heap_base_before_malloc,
-    )
-    .compute();
+    let exact_heap_base_before_malloc = &ctx.heap_facts.exact_heap_base_before_malloc;
+    let terminal_private_mallocs = &ctx.heap_facts.terminal_private_mallocs;
 
     let mut candidates = Vec::new();
     for block in ctx.function.layout.iter_block() {
@@ -654,7 +649,7 @@ fn compute_private_static_malloc_func_plan(
 fn private_static_malloc_candidate(
     function: &Function,
     analysis: &FuncPreAnalysis,
-    func_plan: &memory_plan::FuncMemPlan,
+    func_plan: &memory_plan::SemanticFuncPlan,
     module: &ModuleCtx,
     isa: &Evm,
     inst: InstId,
@@ -910,98 +905,6 @@ impl<'a> TerminalPrivateMallocAnalysis<'a> {
                 .copied()
                 .unwrap_or(false),
         )
-    }
-
-    fn resolve(&self, inst: InstId) -> EvmInstKind<'_> {
-        self.isa
-            .inst_set()
-            .resolve_inst(self.function.dfg.inst(inst))
-    }
-}
-
-struct ExactHeapBaseAnalysis<'a> {
-    function: &'a Function,
-    isa: &'a Evm,
-    cfg: &'a ControlFlowGraph,
-    func_plan: &'a memory_plan::FuncMemPlan,
-    prov: &'a SecondaryMap<ValueId, Provenance>,
-    entry_heap_base_is_exact: bool,
-}
-
-impl<'a> ExactHeapBaseAnalysis<'a> {
-    fn compute(&self) -> FxHashMap<InstId, bool> {
-        let mut block_in = SecondaryMap::new();
-        let mut block_out = SecondaryMap::new();
-        for block in self.function.layout.iter_block() {
-            block_in[block] = self.entry_heap_base_is_exact;
-            block_out[block] = self.entry_heap_base_is_exact;
-        }
-
-        let mut changed = true;
-        while changed {
-            changed = false;
-            for block in self.function.layout.iter_block() {
-                let next_in = self.block_entry_is_exact(&block_out, block);
-                let next_out = self.transfer_block(block, next_in, None);
-                changed |= block_in[block] != next_in || block_out[block] != next_out;
-                block_in[block] = next_in;
-                block_out[block] = next_out;
-            }
-        }
-
-        let mut exact_before_malloc = FxHashMap::default();
-        for block in self.function.layout.iter_block() {
-            self.transfer_block(block, block_in[block], Some(&mut exact_before_malloc));
-        }
-        exact_before_malloc
-    }
-
-    fn block_entry_is_exact(
-        &self,
-        block_out: &SecondaryMap<BlockId, bool>,
-        block: BlockId,
-    ) -> bool {
-        let mut preds = self.cfg.preds_of(block);
-        let Some(first) = preds.next() else {
-            return self.entry_heap_base_is_exact;
-        };
-        block_out[*first] && preds.all(|pred| block_out[*pred])
-    }
-
-    fn transfer_block(
-        &self,
-        block: BlockId,
-        mut exact: bool,
-        mut exact_before_malloc: Option<&mut FxHashMap<InstId, bool>>,
-    ) -> bool {
-        for inst in self.function.layout.iter_inst(block) {
-            match self.resolve(inst) {
-                EvmInstKind::EvmMalloc(_) => {
-                    if let Some(exact_before_malloc) = exact_before_malloc.as_deref_mut() {
-                        exact_before_malloc.insert(inst, exact);
-                    }
-                    if !self.func_plan.transient_mallocs.contains(&inst) {
-                        exact = false;
-                    }
-                }
-                EvmInstKind::Call(_) => exact = false,
-                _ if self.inst_writes_free_ptr_slot(inst) => exact = false,
-                _ => {}
-            }
-        }
-        exact
-    }
-
-    fn inst_writes_free_ptr_slot(&self, inst: InstId) -> bool {
-        self.function
-            .dfg
-            .effects(inst)
-            .accesses
-            .iter()
-            .any(|access| {
-                access.kind == AccessKind::Write
-                    && memory_access_may_touch_free_ptr_slot(self.function, access, self.prov)
-            })
     }
 
     fn resolve(&self, inst: InstId) -> EvmInstKind<'_> {
@@ -1276,14 +1179,14 @@ impl<'a> PrivateMallocUseAnalysis<'a> {
                     *call.addr(),
                     *call.val(),
                     *call.arg_len(),
-                    *call.ret_offset(),
+                    *call.ret_len(),
                 ]) =>
             {
                 self.call_addr_ranges_are_bounded(
                     *call.arg_addr(),
                     *call.arg_len(),
                     *call.ret_addr(),
-                    *call.ret_offset(),
+                    *call.ret_len(),
                     alloc_size_bytes,
                 )
             }
@@ -1293,14 +1196,14 @@ impl<'a> PrivateMallocUseAnalysis<'a> {
                     *call.addr(),
                     *call.val(),
                     *call.arg_len(),
-                    *call.ret_offset(),
+                    *call.ret_len(),
                 ]) =>
             {
                 self.call_addr_ranges_are_bounded(
                     *call.arg_addr(),
                     *call.arg_len(),
                     *call.ret_addr(),
-                    *call.ret_offset(),
+                    *call.ret_len(),
                     alloc_size_bytes,
                 )
             }
@@ -1663,16 +1566,18 @@ fn malloc_private_uses_are_compatible_with_fixed_base(
 
 fn compute_program_free_ptr_slot_facts(
     module: &Module,
-    funcs: &[FuncRef],
+    schedule: &CallGraphSchedule,
     backend: &EvmBackend,
-    ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
+    analyses: &FxHashMap<FuncRef, FuncPreAnalysis>,
 ) -> (bool, FxHashMap<FuncRef, bool>) {
-    let local_facts: FxHashMap<_, _> = funcs
+    let local_facts: FxHashMap<_, _> = schedule
+        .funcs()
         .iter()
         .copied()
         .map(|func| {
+            let analysis = expect_func_entry(analyses, func, "pre-analysis");
             let facts = module.func_store.view(func, |function| {
-                function_free_ptr_slot_facts(function, &module.ctx, backend, ptr_escape)
+                function_free_ptr_slot_facts(function, backend, &analysis.prov.value)
             });
             (func, facts)
         })
@@ -1684,24 +1589,12 @@ fn compute_program_free_ptr_slot_facts(
 
     (
         local_facts.values().any(|facts| facts.touches),
-        compute_free_ptr_write_summaries(module, funcs, &local_writes, &backend.isa),
+        compute_free_ptr_write_summaries(schedule, &local_writes),
     )
 }
 
-fn machine_mem_plan_from_semantic(
-    func_plan: &memory_plan::FuncMemPlan,
-) -> memory_plan::FuncMemPlan {
-    let mut mem_plan = func_plan.clone();
-    mem_plan.alloca_loc.clear();
-    mem_plan.spill_obj = SecondaryMap::new();
-    mem_plan.malloc_future_abs_words.clear();
-    mem_plan.transient_mallocs.clear();
-    mem_plan.malloc_escape_kinds.clear();
-    mem_plan
-}
-
 fn backend_spill_reserve_abs_words(
-    func_plan: &memory_plan::FuncMemPlan,
+    func_plan: &memory_plan::SemanticFuncPlan,
     reserve: BackendSpillReserve,
 ) -> u32 {
     let scratch_end = if reserve.scratch_words == 0 {
@@ -1710,51 +1603,43 @@ fn backend_spill_reserve_abs_words(
         func_plan.scratch_words
     };
     let stable_end = match func_plan.stable_mode {
-        StableMode::StaticAbs { base_word } if reserve.stable_words != 0 => base_word
+        StableMode::StableAbs { base_word } if reserve.stable_words != 0 => base_word
             .checked_add(func_plan.stable_words)
             .expect("backend stable reserve end overflow"),
-        StableMode::None | StableMode::DynamicFrame | StableMode::StaticAbs { .. } => 0,
+        StableMode::None | StableMode::DynamicFrame | StableMode::StableAbs { .. } => 0,
     };
 
     scratch_end.max(stable_end)
 }
 
 fn compute_entry_may_have_live_frame(
-    module: &Module,
-    funcs: &[FuncRef],
+    schedule: &CallGraphSchedule,
     semantic_plan: &memory_plan::ProgramMemoryPlan,
 ) -> FxHashMap<FuncRef, bool> {
-    let funcs_set: FxHashSet<FuncRef> = funcs.iter().copied().collect();
-    let call_graph = CallGraph::build_graph_subset(module, &funcs_set);
-    let mut entry_may_have_live_frame: FxHashMap<FuncRef, bool> =
-        funcs.iter().copied().map(|func| (func, false)).collect();
-
-    let mut changed = true;
-    while changed {
-        changed = false;
-        for &caller in funcs {
-            let caller_uses_dynamic_frame = semantic_plan
+    // A function may be entered while a dynamic frame is live iff some
+    // transitive caller uses a dynamic frame. One forward-topo pass over the
+    // condensation; a cyclic SCC with a dyn-frame member marks all members.
+    let scc_uses_dyn_frame = |scc_ref| {
+        schedule.members(scc_ref).iter().any(|func| {
+            semantic_plan
                 .funcs
-                .get(&caller)
-                .is_some_and(memory_plan::FuncMemPlan::uses_dynamic_frame);
-            let caller_live = entry_may_have_live_frame
-                .get(&caller)
-                .copied()
-                .unwrap_or(false);
-            if !caller_uses_dynamic_frame && !caller_live {
-                continue;
-            }
+                .get(func)
+                .is_some_and(memory_plan::SemanticFuncPlan::uses_dynamic_frame)
+        })
+    };
 
-            for &callee in call_graph.callee_of(caller) {
-                if funcs_set.contains(&callee)
-                    && !entry_may_have_live_frame
-                        .get(&callee)
-                        .copied()
-                        .unwrap_or(false)
-                {
-                    entry_may_have_live_frame.insert(callee, true);
-                    changed = true;
-                }
+    let mut incoming_live: FxHashMap<SccRef, bool> = FxHashMap::default();
+    let mut entry_may_have_live_frame: FxHashMap<FuncRef, bool> = FxHashMap::default();
+    for &scc_ref in &schedule.topo {
+        let members_use_dyn_frame = scc_uses_dyn_frame(scc_ref);
+        let live = incoming_live.get(&scc_ref).copied().unwrap_or(false)
+            || (schedule.sccs.scc_info(scc_ref).is_cycle && members_use_dyn_frame);
+        for &func in schedule.members(scc_ref) {
+            entry_may_have_live_frame.insert(func, live);
+        }
+        if live || members_use_dyn_frame {
+            for callee_scc in schedule.scc_edges.get(&scc_ref).into_iter().flatten() {
+                incoming_live.insert(*callee_scc, true);
             }
         }
     }
@@ -1763,7 +1648,7 @@ fn compute_entry_may_have_live_frame(
 }
 
 fn malloc_min_base(
-    func_plan: &memory_plan::FuncMemPlan,
+    func_plan: &memory_plan::SemanticFuncPlan,
     global_dyn_base: u32,
     backend_spill_reserve_peak: u32,
     inst: InstId,
@@ -1806,14 +1691,14 @@ mod tests {
     use super::*;
     use crate::isa::evm::{STATIC_BASE, malloc_plan::MallocEscapeKind};
 
-    fn mem_plan_for_malloc(escape_kinds: MallocEscapeKind) -> memory_plan::FuncMemPlan {
+    fn mem_plan_for_malloc(escape_kinds: MallocEscapeKind) -> memory_plan::SemanticFuncPlan {
         let malloc = InstId::from_u32(7);
         let mut malloc_future_abs_words = FxHashMap::default();
         malloc_future_abs_words.insert(malloc, 1);
         let mut malloc_escape_kinds = FxHashMap::default();
         malloc_escape_kinds.insert(malloc, escape_kinds);
 
-        memory_plan::FuncMemPlan {
+        memory_plan::SemanticFuncPlan {
             arena_base: STATIC_BASE,
             scratch_words: 0,
             stable_words: 0,
@@ -1821,7 +1706,6 @@ mod tests {
             entry_abs_words: 0,
             obj_loc: FxHashMap::default(),
             alloca_loc: FxHashMap::default(),
-            spill_obj: SecondaryMap::new(),
             call_preserve: FxHashMap::default(),
             malloc_future_abs_words,
             transient_mallocs: FxHashSet::default(),

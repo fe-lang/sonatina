@@ -15,17 +15,16 @@ use sonatina_ir::{
 use super::{
     immediate_u32,
     memory_plan::{
-        BackendSpillReserve, FuncMemPlan, FuncPreAnalysis, ObjLoc, PreserveMode, ProgramMemoryPlan,
-        WORD_BYTES, compute_abs_clobber_words_with_extra,
+        BackendSpillReserve, FuncPreAnalysis, ObjLoc, ProgramMemoryPlan, SemanticFuncPlan,
+        WORD_BYTES, compute_abs_clobber_words_with_extra, expect_func_entry,
     },
-    provenance::{Provenance, compute_value_provenance},
-    ptr_escape::PtrEscapeSummary,
+    ptr_provenance::Provenance,
 };
-use crate::liveness::InstLiveness;
+use crate::{liveness::InstLiveness, module_analysis::CallGraphSchedule};
 
 pub(crate) fn compute_semantic_malloc_future_abs_words_with_extra(
     module: &Module,
-    funcs: &[FuncRef],
+    schedule: &CallGraphSchedule,
     plan: &ProgramMemoryPlan,
     analyses: &FxHashMap<FuncRef, FuncPreAnalysis>,
     isa: &Evm,
@@ -33,21 +32,23 @@ pub(crate) fn compute_semantic_malloc_future_abs_words_with_extra(
 ) -> FxHashMap<FuncRef, FxHashMap<InstId, u32>> {
     compute_malloc_future_abs_words_with_analysis(
         module,
-        funcs,
+        schedule,
         plan,
         analyses,
         isa,
         extra_clobber_words,
         |analysis| FutureBoundsAnalysis {
+            cfg: &analysis.cfg,
             inst_liveness: &analysis.inst_liveness,
             canonicalize: &analysis.value_aliases,
+            prov_conservative: &analysis.prov_conservative_value,
         },
     )
 }
 
 fn compute_malloc_future_abs_words_with_analysis<A>(
     module: &Module,
-    funcs: &[FuncRef],
+    schedule: &CallGraphSchedule,
     plan: &ProgramMemoryPlan,
     analyses: &FxHashMap<FuncRef, A>,
     isa: &Evm,
@@ -58,22 +59,16 @@ where
     A: Sync,
 {
     let abs_clobber_words =
-        compute_abs_clobber_words_with_extra(module, funcs, plan, extra_clobber_words);
-    let mut results: Vec<_> = funcs
+        compute_abs_clobber_words_with_extra(schedule, plan, extra_clobber_words);
+    let mut results: Vec<_> = schedule
+        .funcs()
         .par_iter()
         .copied()
         .map(|f| {
-            let func_plan = plan
-                .funcs
-                .get(&f)
-                .unwrap_or_else(|| panic!("missing memory plan for func {}", f.as_u32()));
-            let analysis = analyses
-                .get(&f)
-                .unwrap_or_else(|| panic!("missing analysis for func {}", f.as_u32()));
+            let func_plan = expect_func_entry(&plan.funcs, f, "memory plan");
+            let analysis = expect_func_entry(analyses, f, "analysis");
             let analysis = analysis_view(analysis);
             let map = module.func_store.view(f, |function| {
-                let mut cfg = ControlFlowGraph::new();
-                cfg.compute(function);
                 let ctx = FutureBoundsCtx {
                     module: &module.ctx,
                     isa,
@@ -82,7 +77,7 @@ where
                     abs_clobber_words: &abs_clobber_words,
                     analysis,
                 };
-                compute_future_bounds_for_func(function, &cfg, &ctx)
+                compute_future_bounds_for_func(function, &ctx)
             });
             (f, map)
         })
@@ -97,27 +92,29 @@ where
 }
 
 struct FutureBoundsAnalysis<'a> {
+    cfg: &'a ControlFlowGraph,
     inst_liveness: &'a InstLiveness,
     canonicalize: &'a SecondaryMap<ValueId, Option<ValueId>>,
+    /// Deliberately computed with all-conservative callee summaries: heap
+    /// bounds must hold regardless of callee escape behavior.
+    prov_conservative: &'a SecondaryMap<ValueId, Provenance>,
 }
 
 struct FutureBoundsCtx<'a> {
     module: &'a ModuleCtx,
     isa: &'a Evm,
     plan: &'a ProgramMemoryPlan,
-    func_plan: &'a FuncMemPlan,
+    func_plan: &'a SemanticFuncPlan,
     abs_clobber_words: &'a FxHashMap<FuncRef, u32>,
     analysis: FutureBoundsAnalysis<'a>,
 }
 
 fn compute_future_bounds_for_func(
     function: &Function,
-    cfg: &ControlFlowGraph,
     ctx: &FutureBoundsCtx<'_>,
 ) -> FxHashMap<InstId, u32> {
-    let prov = compute_value_provenance(function, ctx.module, ctx.isa, |callee| {
-        PtrEscapeSummary::conservative_unknown_ctx(ctx.module, callee)
-    });
+    let cfg = ctx.analysis.cfg;
+    let prov = ctx.analysis.prov_conservative;
 
     let mut alloca_end_words: FxHashMap<InstId, u32> = FxHashMap::default();
     for (&inst, &loc) in &ctx.func_plan.alloca_loc {
@@ -142,10 +139,8 @@ fn compute_future_bounds_for_func(
     }
 
     let mut value_alloca_bound: SecondaryMap<ValueId, u32> = SecondaryMap::new();
-    let mut value_spill_bound: SecondaryMap<ValueId, u32> = SecondaryMap::new();
     for value in function.dfg.value_ids() {
         let _ = &mut value_alloca_bound[value];
-        let _ = &mut value_spill_bound[value];
     }
 
     for value in function.dfg.value_ids() {
@@ -156,13 +151,6 @@ fn compute_future_bounds_for_func(
             }
         }
         value_alloca_bound[value] = max_end;
-
-        if let Some(obj) = ctx.func_plan.spill_obj[value]
-            && let Some(loc) = ctx.func_plan.obj_loc.get(&obj).copied()
-            && let Some(start_word) = absolute_base_word_for_loc(ctx.func_plan, loc)
-        {
-            value_spill_bound[value] = start_word.checked_add(1).expect("spill end overflow");
-        }
     }
 
     fn call_bound(ctx: &FutureBoundsCtx<'_>, function: &Function, inst: InstId) -> u32 {
@@ -187,7 +175,6 @@ fn compute_future_bounds_for_func(
     fn live_bound(
         analysis: &FutureBoundsAnalysis<'_>,
         value_alloca_bound: &SecondaryMap<ValueId, u32>,
-        value_spill_bound: &SecondaryMap<ValueId, u32>,
         inst: InstId,
     ) -> u32 {
         analysis
@@ -195,7 +182,7 @@ fn compute_future_bounds_for_func(
             .live_out(inst)
             .iter()
             .map(|v| super::canonicalize_alias_value(analysis.canonicalize, v))
-            .map(|v| value_alloca_bound[v].max(value_spill_bound[v]))
+            .map(|v| value_alloca_bound[v])
             .max()
             .unwrap_or(0)
     }
@@ -234,16 +221,11 @@ fn compute_future_bounds_for_func(
         let mut static_bound = 0;
         for inst in function.layout.iter_inst(block) {
             bound = bound.max(call_bound(ctx, function, inst));
-            bound = bound.max(live_bound(
-                &ctx.analysis,
-                &value_alloca_bound,
-                &value_spill_bound,
-                inst,
-            ));
+            bound = bound.max(live_bound(&ctx.analysis, &value_alloca_bound, inst));
             static_bound = static_bound.max(static_write_bound(
                 function,
                 ctx,
-                &prov,
+                prov,
                 &alloca_end_words,
                 inst,
             ));
@@ -292,12 +274,7 @@ fn compute_future_bounds_for_func(
         let insts: Vec<InstId> = function.layout.iter_inst(block).collect();
         for inst in insts.into_iter().rev() {
             bound = bound.max(call_bound(ctx, function, inst));
-            bound = bound.max(live_bound(
-                &ctx.analysis,
-                &value_alloca_bound,
-                &value_spill_bound,
-                inst,
-            ));
+            bound = bound.max(live_bound(&ctx.analysis, &value_alloca_bound, inst));
 
             if matches!(
                 ctx.isa.inst_set().resolve_inst(function.dfg.inst(inst)),
@@ -313,7 +290,7 @@ fn compute_future_bounds_for_func(
             static_bound = static_bound.max(static_write_bound(
                 function,
                 ctx,
-                &prov,
+                prov,
                 &alloca_end_words,
                 inst,
             ));
@@ -324,7 +301,7 @@ fn compute_future_bounds_for_func(
 }
 
 fn static_write_access_bound(
-    func_plan: &FuncMemPlan,
+    func_plan: &SemanticFuncPlan,
     prov: &SecondaryMap<ValueId, Provenance>,
     alloca_end_words: &FxHashMap<InstId, u32>,
     access: &MemoryAccess,
@@ -351,7 +328,11 @@ fn static_write_access_bound(
     }
 }
 
-fn immediate_write_bound(func_plan: &FuncMemPlan, addr: sonatina_ir::Immediate, bytes: u32) -> u32 {
+fn immediate_write_bound(
+    func_plan: &SemanticFuncPlan,
+    addr: sonatina_ir::Immediate,
+    bytes: u32,
+) -> u32 {
     if bytes == 0 {
         return 0;
     }
@@ -370,23 +351,21 @@ fn immediate_write_bound(func_plan: &FuncMemPlan, addr: sonatina_ir::Immediate, 
         .unwrap_or_else(|| func_plan.abs_words_end())
 }
 
-fn absolute_base_word_for_loc(func_plan: &FuncMemPlan, loc: ObjLoc) -> Option<u32> {
+fn absolute_base_word_for_loc(func_plan: &SemanticFuncPlan, loc: ObjLoc) -> Option<u32> {
     match loc {
         ObjLoc::ScratchAbs(off) => Some(off),
         ObjLoc::StableAbs(off) => func_plan
             .stable_base_word()
             .and_then(|base| base.checked_add(off)),
-        ObjLoc::StableFrame(_) | ObjLoc::StackPinned(_) => None,
+        ObjLoc::StableFrame(_) => None,
     }
 }
 
-fn call_preserve_bound(func_plan: &FuncMemPlan, inst: InstId) -> u32 {
+fn call_preserve_bound(func_plan: &SemanticFuncPlan, inst: InstId) -> u32 {
     let Some(plan) = func_plan.call_preserve.get(&inst) else {
         return 0;
     };
-    let PreserveMode::ShadowRuns { shadow_obj, runs } = &plan.mode else {
-        return 0;
-    };
+    let (shadow_obj, runs) = (&plan.shadow_obj, &plan.runs);
     let Some(loc) = func_plan.obj_loc.get(shadow_obj).copied() else {
         panic!(
             "call preserve shadow object {} is not placed",
@@ -431,11 +410,13 @@ mod tests {
     };
 
     struct TestAnalysis {
+        cfg: ControlFlowGraph,
         inst_liveness: InstLiveness,
         value_aliases: SecondaryMap<ValueId, Option<ValueId>>,
+        prov_conservative: SecondaryMap<ValueId, Provenance>,
     }
 
-    fn compute_test_analysis(function: &Function) -> TestAnalysis {
+    fn compute_test_analysis(module: &ModuleCtx, isa: &Evm, function: &Function) -> TestAnalysis {
         let mut cfg = ControlFlowGraph::new();
         cfg.compute(function);
 
@@ -450,14 +431,27 @@ mod tests {
             let _ = &mut value_aliases[value];
         }
 
+        let prov_conservative = crate::isa::evm::ptr_provenance::compute_value_provenance(
+            function,
+            module,
+            isa,
+            |callee| {
+                crate::isa::evm::ptr_escape::PtrEscapeSummary::conservative_unknown_ctx(
+                    module, callee,
+                )
+            },
+        );
+
         TestAnalysis {
+            cfg,
             inst_liveness,
             value_aliases,
+            prov_conservative,
         }
     }
 
-    fn empty_func_plan() -> FuncMemPlan {
-        FuncMemPlan {
+    fn empty_func_plan() -> SemanticFuncPlan {
+        SemanticFuncPlan {
             arena_base: STATIC_BASE,
             scratch_words: 0,
             stable_words: 0,
@@ -465,7 +459,6 @@ mod tests {
             entry_abs_words: 0,
             obj_loc: FxHashMap::default(),
             alloca_loc: FxHashMap::default(),
-            spill_obj: SecondaryMap::new(),
             call_preserve: FxHashMap::default(),
             malloc_future_abs_words: FxHashMap::default(),
             transient_mallocs: FxHashSet::default(),
@@ -510,7 +503,10 @@ block0:
                 .func_sig(func, |sig| sig.name().to_string());
             names.insert(name, func);
             parsed.module.func_store.view(func, |function| {
-                analyses.insert(func, compute_test_analysis(function));
+                analyses.insert(
+                    func,
+                    compute_test_analysis(&parsed.module.ctx, &isa, function),
+                );
             });
         }
         let caller = names["caller"];
@@ -542,20 +538,18 @@ block0:
         let mut caller_plan = empty_func_plan();
         caller_plan.scratch_words = 1;
         caller_plan.stable_words = 2;
-        caller_plan.stable_mode = StableMode::StaticAbs { base_word: 2 };
+        caller_plan.stable_mode = StableMode::StableAbs { base_word: 2 };
         caller_plan.entry_abs_words = 2;
         caller_plan.obj_loc.insert(shadow_obj, ObjLoc::StableAbs(0));
         caller_plan.call_preserve.insert(
             call_inst,
             CallPreservePlan {
-                mode: PreserveMode::ShadowRuns {
-                    shadow_obj,
-                    runs: smallvec![SaveRun {
-                        scratch_src_word: 0,
-                        shadow_dst_word: 0,
-                        len_words: 2,
-                    }],
-                },
+                shadow_obj,
+                runs: smallvec![SaveRun {
+                    scratch_src_word: 0,
+                    shadow_dst_word: 0,
+                    len_words: 2,
+                }],
                 result_count: 1,
             },
         );
@@ -563,24 +557,25 @@ block0:
         let mut plan = ProgramMemoryPlan {
             arena_base: STATIC_BASE,
             scratch_peak_words: 1,
-            static_chain_peak_words: 2,
+            stable_chain_peak_words: 2,
             global_dyn_base: STATIC_BASE + 96,
             funcs: FxHashMap::default(),
-            sccs: FxHashMap::default(),
         };
         plan.funcs.insert(caller, caller_plan);
         plan.funcs.insert(callee, empty_func_plan());
 
         let bounds = compute_malloc_future_abs_words_with_analysis(
             &parsed.module,
-            &funcs,
+            &crate::module_analysis::CallGraphSchedule::compute(&parsed.module, &funcs),
             &plan,
             &analyses,
             &isa,
             &FxHashMap::default(),
             |analysis| FutureBoundsAnalysis {
+                cfg: &analysis.cfg,
                 inst_liveness: &analysis.inst_liveness,
                 canonicalize: &analysis.value_aliases,
+                prov_conservative: &analysis.prov_conservative,
             },
         );
 
@@ -611,7 +606,9 @@ block0:
             vendor: Vendor::Ethereum,
             operating_system: OperatingSystem::Evm(EvmVersion::Osaka),
         });
-        let analysis = parsed.module.func_store.view(func, compute_test_analysis);
+        let analysis = parsed.module.func_store.view(func, |function| {
+            compute_test_analysis(&parsed.module.ctx, &isa, function)
+        });
         let analyses = FxHashMap::from_iter([(func, analysis)]);
 
         let (malloc_inst, alloca_inst) = parsed.module.func_store.view(func, |function| {
@@ -641,23 +638,24 @@ block0:
         let mut plan = ProgramMemoryPlan {
             arena_base: STATIC_BASE,
             scratch_peak_words: 4,
-            static_chain_peak_words: 0,
+            stable_chain_peak_words: 0,
             global_dyn_base: STATIC_BASE + 4 * WORD_BYTES,
             funcs: FxHashMap::default(),
-            sccs: FxHashMap::default(),
         };
         plan.funcs.insert(func, func_plan);
 
         let bounds = compute_malloc_future_abs_words_with_analysis(
             &parsed.module,
-            &funcs,
+            &crate::module_analysis::CallGraphSchedule::compute(&parsed.module, &funcs),
             &plan,
             &analyses,
             &isa,
             &FxHashMap::default(),
             |analysis| FutureBoundsAnalysis {
+                cfg: &analysis.cfg,
                 inst_liveness: &analysis.inst_liveness,
                 canonicalize: &analysis.value_aliases,
+                prov_conservative: &analysis.prov_conservative,
             },
         );
 

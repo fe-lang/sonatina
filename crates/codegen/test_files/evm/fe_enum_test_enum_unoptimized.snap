@@ -15,17 +15,17 @@ object: EnumContract
   total: 579 bytes
 
 functions:
-  mem: global_dyn_base=0x160 arena_base=0xa0 scratch_peak_words=0 static_chain_peak_words=6
+  mem: global_dyn_base=0x160 arena_base=0xa0 scratch_peak_words=0 stable_chain_peak_words=6
   test_enum__StorPtr_Evm___207f35a85ac4062e: ir_blocks=54 ir_insts=127 vcode_ops=353 fixups=32 imm_bytes=53
-    mem: scratch_words=0 stable_words=3 stable_mode=StaticAbs(base=0xa0) entry_abs_words=0 abs_words_end=3
+    mem: scratch_words=0 stable_words=3 stable_mode=StableAbs(base=0xa0) entry_abs_words=0 abs_words_end=3
   solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head: ir_blocks=9 ir_insts=25 vcode_ops=63 fixups=4 imm_bytes=8
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=6 abs_words_end=0
   __EnumContract_init: ir_blocks=1 ir_insts=4 vcode_ops=8 fixups=2 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   __EnumContract_runtime: ir_blocks=7 ir_insts=18 vcode_ops=66 fixups=11 imm_bytes=11
-    mem: scratch_words=0 stable_words=3 stable_mode=StaticAbs(base=0xa0) entry_abs_words=0 abs_words_end=3
+    mem: scratch_words=0 stable_words=3 stable_mode=StableAbs(base=0xa0) entry_abs_words=0 abs_words_end=3
   return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f: ir_blocks=5 ir_insts=15 vcode_ops=48 fixups=4 imm_bytes=7
-    mem: scratch_words=0 stable_words=3 stable_mode=StaticAbs(base=0x100) entry_abs_words=3 abs_words_end=6
+    mem: scratch_words=0 stable_words=3 stable_mode=StableAbs(base=0x100) entry_abs_words=3 abs_words_end=6
   soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563: ir_blocks=9 ir_insts=22 vcode_ops=62 fixups=4 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=3 abs_words_end=0
   entry: ir_blocks=1 ir_insts=3 vcode_ops=10 fixups=2 imm_bytes=2

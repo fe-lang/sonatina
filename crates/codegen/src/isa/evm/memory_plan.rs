@@ -1,47 +1,72 @@
-use cranelift_entity::{EntityRef, SecondaryMap};
+use cranelift_entity::SecondaryMap;
 use rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
 use rustc_hash::{FxHashMap, FxHashSet};
-use smallvec::{SmallVec, smallvec};
-use sonatina_ir::{BlockId, InstId, Module, ValueId, module::FuncRef};
-use std::{
-    cmp::Ordering,
-    collections::{BTreeMap, BTreeSet},
-};
+use smallvec::SmallVec;
+use sonatina_ir::{BlockId, InstId, Module, ValueId, cfg::ControlFlowGraph, module::FuncRef};
 
 use crate::{
     bitset::BitSet,
     liveness::InstLiveness,
-    module_analysis::{CallGraph, CallGraphSccs, SccBuilder, SccRef},
+    module_analysis::{CallGraphSccs, CallGraphSchedule, SccRef},
     stackalloc::{StackifyAlloc, StackifyTrace},
 };
 
+#[cfg(debug_assertions)]
+use super::static_arena_alloc::{LiveRegion, StackObj, StackObjKind};
 use super::{
     frame_layout::DynamicFrameLayout,
     malloc_plan::MallocEscapeKind,
+    placement_search::{FuncPlacementEval, solve_func_placement},
     ptr_escape::PtrEscapeSummary,
-    static_arena_alloc::{
-        CallSiteObjects, ExactPackItem, ExactPackWorkspace, FuncStackObjects, LiveRegion,
-        LocalObjIdx, ObjFacts, PackedObject, StableItemIdx, StackObj, StackObjId, StackObjKind,
-        StaticArenaAllocCtx, pack_exact_peak_by, pack_exact_with_offsets_by,
-        pack_objects_presorted,
-    },
+    ptr_provenance::{Provenance, ProvenanceInfo},
+    static_arena_alloc::{FuncStackObjects, ObjFacts, StackObjId, StaticArenaAllocCtx},
 };
 use sonatina_ir::isa::evm::Evm;
+
+pub use super::placement_search::ArenaCostModel;
 
 pub const WORD_BYTES: u32 = 32;
 pub const FREE_PTR_SLOT: u8 = 0x40;
 pub const DYN_SP_SLOT: u8 = 0x80;
 pub const STATIC_BASE: u32 = 0xa0;
 
+/// Total-map lookup for per-function tables that are complete by
+/// construction; the panic identifies which table went missing.
+pub(crate) fn expect_func_entry<'a, V>(
+    map: &'a FxHashMap<FuncRef, V>,
+    func: FuncRef,
+    what: &str,
+) -> &'a V {
+    map.get(&func)
+        .unwrap_or_else(|| panic!("missing {what} for func{}", func.as_u32()))
+}
+
+/// Checked word-count addition with the uniform overflow policy: word counts
+/// derive from user-controlled type sizes, so a silent wrap would misplace
+/// memory. The panic backtrace identifies the site.
+#[inline]
+pub(crate) fn add_words(a: u32, b: u32) -> u32 {
+    a.checked_add(b).expect("word count overflow")
+}
+
+/// Rounds a byte count up to the next word multiple.
+#[inline]
+pub(crate) fn align_up_to_word(bytes: u32) -> Option<u32> {
+    let rem = bytes % WORD_BYTES;
+    if rem == 0 {
+        Some(bytes)
+    } else {
+        bytes.checked_add(WORD_BYTES - rem)
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct ProgramMemoryPlan {
     pub arena_base: u32,
     pub scratch_peak_words: u32,
-    pub static_chain_peak_words: u32,
+    pub stable_chain_peak_words: u32,
     pub global_dyn_base: u32,
-    pub funcs: FxHashMap<FuncRef, FuncMemPlan>,
-    #[allow(dead_code)]
-    pub sccs: FxHashMap<SccRef, SccMemPlan>,
+    pub funcs: FxHashMap<FuncRef, SemanticFuncPlan>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -90,7 +115,7 @@ impl FinalScratchReserveRange {
 }
 
 #[derive(Clone, Debug)]
-pub struct FuncMemPlan {
+pub struct SemanticFuncPlan {
     pub arena_base: u32,
     pub scratch_words: u32,
     pub stable_words: u32,
@@ -98,7 +123,6 @@ pub struct FuncMemPlan {
     pub entry_abs_words: u32,
     pub obj_loc: FxHashMap<StackObjId, ObjLoc>,
     pub alloca_loc: FxHashMap<InstId, ObjLoc>,
-    pub spill_obj: SecondaryMap<ValueId, Option<StackObjId>>,
     pub call_preserve: FxHashMap<InstId, CallPreservePlan>,
     pub malloc_future_abs_words: FxHashMap<InstId, u32>,
     pub transient_mallocs: FxHashSet<InstId>,
@@ -106,59 +130,104 @@ pub struct FuncMemPlan {
     pub return_escape_caller_abs_words: u32,
 }
 
-impl FuncMemPlan {
-    pub fn abs_addr_for_word(&self, word: u32) -> u32 {
-        abs_addr_for_word(self.arena_base, word)
-    }
-
-    pub fn stable_base_word(&self) -> Option<u32> {
-        match self.stable_mode {
-            StableMode::StaticAbs { base_word } => Some(base_word),
-            StableMode::None | StableMode::DynamicFrame => None,
-        }
-    }
-
-    pub fn dynamic_frame_layout(&self) -> Option<DynamicFrameLayout> {
-        matches!(self.stable_mode, StableMode::DynamicFrame)
-            .then(|| DynamicFrameLayout::new(self.stable_words))
-            .flatten()
-    }
-
-    pub fn uses_dynamic_frame(&self) -> bool {
-        matches!(self.stable_mode, StableMode::DynamicFrame)
-    }
-
-    pub fn abs_words_end(&self) -> u32 {
-        let stable_end = match self.stable_mode {
-            StableMode::StaticAbs { base_word } if self.stable_words != 0 => base_word
-                .checked_add(self.stable_words)
-                .expect("stable absolute end overflow"),
-            StableMode::None | StableMode::DynamicFrame | StableMode::StaticAbs { .. } => 0,
-        };
-        self.scratch_words.max(stable_end)
-    }
-
-    pub fn active_abs_words(&self) -> u32 {
-        self.entry_abs_words.max(self.abs_words_end())
-    }
-
-    pub fn obj_word_offset(&self, obj: StackObjId) -> Option<u32> {
-        self.obj_loc.get(&obj).and_then(|loc| match *loc {
-            ObjLoc::ScratchAbs(word) | ObjLoc::StableAbs(word) | ObjLoc::StableFrame(word) => {
-                Some(word)
+/// Frame-shape queries shared by the semantic and machine plans.
+macro_rules! impl_frame_queries {
+    ($plan:ty) => {
+        impl $plan {
+            pub fn abs_addr_for_word(&self, word: u32) -> u32 {
+                abs_addr_for_word(self.arena_base, word)
             }
-            ObjLoc::StackPinned(_) => None,
+
+            pub fn stable_base_word(&self) -> Option<u32> {
+                match self.stable_mode {
+                    StableMode::StableAbs { base_word } => Some(base_word),
+                    StableMode::None | StableMode::DynamicFrame => None,
+                }
+            }
+
+            pub fn dynamic_frame_layout(&self) -> Option<DynamicFrameLayout> {
+                matches!(self.stable_mode, StableMode::DynamicFrame)
+                    .then(|| DynamicFrameLayout::new(self.stable_words))
+                    .flatten()
+            }
+
+            pub fn uses_dynamic_frame(&self) -> bool {
+                matches!(self.stable_mode, StableMode::DynamicFrame)
+            }
+
+            pub fn abs_words_end(&self) -> u32 {
+                let stable_end = match self.stable_mode {
+                    StableMode::StableAbs { base_word } if self.stable_words != 0 => base_word
+                        .checked_add(self.stable_words)
+                        .expect("stable absolute end overflow"),
+                    StableMode::None | StableMode::DynamicFrame | StableMode::StableAbs { .. } => 0,
+                };
+                self.scratch_words.max(stable_end)
+            }
+        }
+    };
+}
+
+impl_frame_queries!(SemanticFuncPlan);
+impl_frame_queries!(MachineFuncPlan);
+
+/// The machine-side memory plan consumed by lowering, final spills, and
+/// emission. Constructing one forces the `call_preserve` remap from source to
+/// machine instruction ids; a missed remap would silently drop shadow saves.
+#[derive(Clone, Debug)]
+pub struct MachineFuncPlan {
+    pub arena_base: u32,
+    pub scratch_words: u32,
+    pub stable_words: u32,
+    pub stable_mode: StableMode,
+    pub entry_abs_words: u32,
+    pub obj_loc: FxHashMap<StackObjId, ObjLoc>,
+    /// Locations for source allocas whose addresses are rematerialized at
+    /// emission. Empty on the machine pipeline today (allocas are lowered to
+    /// immediates); populated directly by emission tests.
+    pub alloca_loc: FxHashMap<InstId, ObjLoc>,
+    /// Final-spill slots, populated by the machine final-spill pass.
+    pub spill_obj: SecondaryMap<ValueId, Option<StackObjId>>,
+    /// Shadow save/restore plans, keyed by *machine* call instruction.
+    pub call_preserve: FxHashMap<InstId, CallPreservePlan>,
+}
+
+impl MachineFuncPlan {
+    pub fn obj_word_offset(&self, obj: StackObjId) -> Option<u32> {
+        self.obj_loc.get(&obj).map(|loc| match *loc {
+            ObjLoc::ScratchAbs(word) | ObjLoc::StableAbs(word) | ObjLoc::StableFrame(word) => word,
         })
+    }
+
+    pub(crate) fn from_semantic(
+        plan: &SemanticFuncPlan,
+        map: &super::machine::module::FuncMachineMap,
+    ) -> Self {
+        let mut call_preserve = FxHashMap::default();
+        for (source_inst, preserve) in &plan.call_preserve {
+            if let Some(machine_inst) = map.insts[*source_inst] {
+                call_preserve.insert(machine_inst, preserve.clone());
+            }
+        }
+        Self {
+            arena_base: plan.arena_base,
+            scratch_words: plan.scratch_words,
+            stable_words: plan.stable_words,
+            stable_mode: plan.stable_mode,
+            entry_abs_words: plan.entry_abs_words,
+            obj_loc: plan.obj_loc.clone(),
+            alloca_loc: FxHashMap::default(),
+            spill_obj: SecondaryMap::new(),
+            call_preserve,
+        }
     }
 }
 
 impl ProgramMemoryPlan {
     pub(crate) fn set_arena_base(&mut self, arena_base: u32) {
         self.arena_base = arena_base;
-        let global_dyn_base_words = self
-            .scratch_peak_words
-            .checked_add(self.static_chain_peak_words)
-            .expect("global dynamic base word overflow");
+        let global_dyn_base_words =
+            add_words(self.scratch_peak_words, self.stable_chain_peak_words);
         self.global_dyn_base = abs_addr_for_word(arena_base, global_dyn_base_words);
 
         for func_plan in self.funcs.values_mut() {
@@ -171,8 +240,7 @@ impl ProgramMemoryPlan {
 
     pub(crate) fn apply_backend_spill_reserves(
         &mut self,
-        module: &Module,
-        funcs: &[FuncRef],
+        schedule: &CallGraphSchedule,
         reserves: &FxHashMap<FuncRef, BackendSpillReserve>,
     ) {
         if reserves.values().all(|reserve| reserve.is_empty()) {
@@ -183,14 +251,8 @@ impl ProgramMemoryPlan {
             if !reserve.is_empty()
                 && let Some(func_plan) = self.funcs.get_mut(&func)
             {
-                func_plan.scratch_words = func_plan
-                    .scratch_words
-                    .checked_add(reserve.scratch_words)
-                    .expect("backend scratch spill reserve overflow");
-                func_plan.stable_words = func_plan
-                    .stable_words
-                    .checked_add(reserve.stable_words)
-                    .expect("backend stable spill reserve overflow");
+                func_plan.scratch_words = add_words(func_plan.scratch_words, reserve.scratch_words);
+                func_plan.stable_words = add_words(func_plan.stable_words, reserve.stable_words);
             }
         }
 
@@ -201,95 +263,30 @@ impl ProgramMemoryPlan {
             .max()
             .unwrap_or(0);
 
-        let funcs_set: FxHashSet<FuncRef> = funcs.iter().copied().collect();
-        let call_graph = CallGraph::build_graph_subset(module, &funcs_set);
-        let scc = SccBuilder::new().compute_scc(&call_graph);
-        let topo = topo_sort_sccs(&funcs_set, &call_graph, &scc);
-        let scc_edges = build_scc_edges(&funcs_set, &call_graph, &scc, &topo);
-
-        let mut scc_weights: FxHashMap<SccRef, u32> = FxHashMap::default();
-        for &scc_ref in &topo {
-            let mut weight = 0;
-            if !scc.scc_info(scc_ref).is_cycle {
-                for &func in scc
-                    .scc_info(scc_ref)
-                    .components
-                    .iter()
-                    .filter(|func| funcs_set.contains(func))
-                {
-                    weight = weight.max(self.funcs[&func].stable_words);
-                }
-            }
-            scc_weights.insert(scc_ref, weight);
-        }
-
-        let mut scc_prefix: FxHashMap<SccRef, u32> = FxHashMap::default();
-        for &scc_ref in &topo {
-            scc_prefix.entry(scc_ref).or_insert(0);
-        }
-        for &scc_ref in &topo {
-            let carry = scc_prefix[&scc_ref]
-                .checked_add(scc_weights[&scc_ref])
-                .expect("static chain prefix overflow");
-            if let Some(callees) = scc_edges.get(&scc_ref) {
-                for &callee_scc in callees {
-                    scc_prefix
-                        .entry(callee_scc)
-                        .and_modify(|prefix| *prefix = (*prefix).max(carry))
-                        .or_insert(carry);
-                }
-            }
-        }
-
-        self.static_chain_peak_words = topo
-            .iter()
-            .map(|scc_ref| {
-                scc_prefix[scc_ref]
-                    .checked_add(scc_weights[scc_ref])
-                    .expect("static chain peak overflow")
-            })
-            .max()
-            .unwrap_or(0);
-        let global_dyn_base_words = self
-            .scratch_peak_words
-            .checked_add(self.static_chain_peak_words)
-            .expect("global dynamic base word overflow");
+        let chain = compute_stable_chain_layout(schedule, |func| self.funcs[&func].stable_words);
+        self.stable_chain_peak_words = chain.peak_words;
+        let global_dyn_base_words =
+            add_words(self.scratch_peak_words, self.stable_chain_peak_words);
         self.global_dyn_base = abs_addr_for_word(self.arena_base, global_dyn_base_words);
 
-        for &scc_ref in &topo {
-            self.sccs.insert(
-                scc_ref,
-                SccMemPlan {
-                    is_recursive: scc.scc_info(scc_ref).is_cycle,
-                    static_chain_prefix_words: scc_prefix[&scc_ref],
-                },
-            );
-        }
-
-        for &func in funcs {
-            let scc_ref = scc.scc_ref(func);
-            let scc_plan = self
-                .sccs
-                .get(&scc_ref)
-                .unwrap_or_else(|| panic!("missing SCC plan for scc {}", scc_ref.as_u32()));
-            let stable_base_word = self
-                .scratch_peak_words
-                .checked_add(scc_plan.static_chain_prefix_words)
-                .expect("stable base word overflow");
+        for &func in schedule.funcs() {
+            let scc_ref = schedule.sccs.scc_ref(func);
+            let is_recursive = schedule.sccs.scc_info(scc_ref).is_cycle;
+            let stable_base_word = add_words(self.scratch_peak_words, chain.scc_prefix[&scc_ref]);
             let func_plan = self
                 .funcs
                 .get_mut(&func)
                 .unwrap_or_else(|| panic!("missing memory plan for func {}", func.as_u32()));
-            func_plan.stable_mode = if scc_plan.is_recursive {
+            func_plan.stable_mode = if is_recursive {
                 StableMode::DynamicFrame
             } else if func_plan.stable_words != 0 {
-                StableMode::StaticAbs {
+                StableMode::StableAbs {
                     base_word: stable_base_word,
                 }
             } else {
                 StableMode::None
             };
-            func_plan.entry_abs_words = if scc_plan.is_recursive {
+            func_plan.entry_abs_words = if is_recursive {
                 global_dyn_base_words
             } else {
                 stable_base_word
@@ -298,39 +295,65 @@ impl ProgramMemoryPlan {
     }
 }
 
+/// Static stable-chain layout over the call-graph condensation: for each SCC
+/// the maximum chain weight strictly above it (its frame base offset within
+/// the stable region) and the overall chain peak.
+pub(crate) struct StableChainLayout {
+    pub(crate) scc_prefix: FxHashMap<SccRef, u32>,
+    pub(crate) peak_words: u32,
+}
+
+pub(crate) fn compute_stable_chain_layout(
+    schedule: &CallGraphSchedule,
+    stable_words: impl Fn(FuncRef) -> u32,
+) -> StableChainLayout {
+    let mut scc_weights: FxHashMap<SccRef, u32> = FxHashMap::default();
+    for &scc_ref in &schedule.topo {
+        let mut weight = 0;
+        // Recursive SCCs live in dynamic frames, not the static chain.
+        if !schedule.sccs.scc_info(scc_ref).is_cycle {
+            for &func in schedule.members(scc_ref) {
+                weight = weight.max(stable_words(func));
+            }
+        }
+        scc_weights.insert(scc_ref, weight);
+    }
+
+    let mut scc_prefix: FxHashMap<SccRef, u32> = FxHashMap::default();
+    for &scc_ref in &schedule.topo {
+        scc_prefix.entry(scc_ref).or_insert(0);
+    }
+    for &scc_ref in &schedule.topo {
+        let carry = add_words(scc_prefix[&scc_ref], scc_weights[&scc_ref]);
+        for callee_scc in schedule.scc_edges.get(&scc_ref).into_iter().flatten() {
+            scc_prefix
+                .entry(*callee_scc)
+                .and_modify(|prefix| *prefix = (*prefix).max(carry))
+                .or_insert(carry);
+        }
+    }
+
+    let peak_words = schedule
+        .topo
+        .iter()
+        .map(|scc_ref| add_words(scc_prefix[scc_ref], scc_weights[scc_ref]))
+        .max()
+        .unwrap_or(0);
+
+    StableChainLayout {
+        scc_prefix,
+        peak_words,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::isa::evm::static_arena_alloc::BlockLiveSegment;
+
     use sonatina_parser::parse_module;
 
-    fn region(block: u32, start_boundary: u32, end_boundary: u32) -> LiveRegion {
-        LiveRegion {
-            segments: SmallVec::from_vec(vec![BlockLiveSegment {
-                block: BlockId::from_u32(block),
-                start_boundary,
-                end_boundary,
-            }]),
-            phi_edges: BitSet::default(),
-            first_rank: start_boundary,
-            last_rank: end_boundary,
-        }
-    }
-
-    fn stack_obj(id: u32, kind: StackObjKind, size_words: u32, region: LiveRegion) -> StackObj {
-        StackObj {
-            id: StackObjId::new(id as usize),
-            kind,
-            size_words,
-            region,
-            access_weight: 0,
-            load_count: 0,
-            store_count: 0,
-        }
-    }
-
-    fn empty_func_plan(scratch_words: u32, stable_mode: StableMode) -> FuncMemPlan {
-        FuncMemPlan {
+    fn empty_func_plan(scratch_words: u32, stable_mode: StableMode) -> SemanticFuncPlan {
+        SemanticFuncPlan {
             arena_base: STATIC_BASE,
             scratch_words,
             stable_words: 0,
@@ -338,7 +361,6 @@ mod tests {
             entry_abs_words: scratch_words,
             obj_loc: FxHashMap::default(),
             alloca_loc: FxHashMap::default(),
-            spill_obj: SecondaryMap::new(),
             call_preserve: FxHashMap::default(),
             malloc_future_abs_words: FxHashMap::default(),
             transient_mallocs: FxHashSet::default(),
@@ -364,10 +386,9 @@ block0:
         let mut plan = ProgramMemoryPlan {
             arena_base: STATIC_BASE,
             scratch_peak_words: 3,
-            static_chain_peak_words: 0,
+            stable_chain_peak_words: 0,
             global_dyn_base: abs_addr_for_word(STATIC_BASE, 3),
             funcs: FxHashMap::from_iter([(func, empty_func_plan(3, StableMode::None))]),
-            sccs: FxHashMap::default(),
         };
         let reserve_words = FxHashMap::from_iter([(
             func,
@@ -377,14 +398,15 @@ block0:
             },
         )]);
 
-        plan.apply_backend_spill_reserves(&parsed.module, &[func], &reserve_words);
+        let schedule = CallGraphSchedule::compute(&parsed.module, &[func]);
+        plan.apply_backend_spill_reserves(&schedule, &reserve_words);
 
         let func_plan = &plan.funcs[&func];
         assert_eq!(func_plan.scratch_words, 3);
         assert_eq!(func_plan.stable_words, 2);
         assert_eq!(
             func_plan.stable_mode,
-            StableMode::StaticAbs { base_word: 3 }
+            StableMode::StableAbs { base_word: 3 }
         );
         assert_eq!(plan.scratch_peak_words, 3);
         assert_eq!(plan.global_dyn_base, abs_addr_for_word(STATIC_BASE, 5));
@@ -407,10 +429,9 @@ block0:
         let mut plan = ProgramMemoryPlan {
             arena_base: STATIC_BASE,
             scratch_peak_words: 3,
-            static_chain_peak_words: 0,
+            stable_chain_peak_words: 0,
             global_dyn_base: abs_addr_for_word(STATIC_BASE, 3),
             funcs: FxHashMap::from_iter([(func, empty_func_plan(3, StableMode::None))]),
-            sccs: FxHashMap::default(),
         };
         let reserve_words = FxHashMap::from_iter([(
             func,
@@ -420,7 +441,8 @@ block0:
             },
         )]);
 
-        plan.apply_backend_spill_reserves(&parsed.module, &[func], &reserve_words);
+        let schedule = CallGraphSchedule::compute(&parsed.module, &[func]);
+        plan.apply_backend_spill_reserves(&schedule, &reserve_words);
 
         let func_plan = &plan.funcs[&func];
         assert_eq!(func_plan.scratch_words, 5);
@@ -447,10 +469,9 @@ block0:
         let plan = ProgramMemoryPlan {
             arena_base: STATIC_BASE,
             scratch_peak_words: 3,
-            static_chain_peak_words: 0,
+            stable_chain_peak_words: 0,
             global_dyn_base: abs_addr_for_word(STATIC_BASE, 3),
             funcs: FxHashMap::from_iter([(func, empty_func_plan(3, StableMode::None))]),
-            sccs: FxHashMap::default(),
         };
         let reserve_words = FxHashMap::from_iter([(
             func,
@@ -459,8 +480,11 @@ block0:
                 stable_words: 0,
             },
         )]);
-        let clobber_words =
-            compute_abs_clobber_words_with_extra(&parsed.module, &[func], &plan, &reserve_words);
+        let clobber_words = compute_abs_clobber_words_with_extra(
+            &CallGraphSchedule::compute(&parsed.module, &[func]),
+            &plan,
+            &reserve_words,
+        );
 
         assert_eq!(clobber_words[&func], 5);
     }
@@ -479,15 +503,14 @@ block0:
         )
         .expect("module parses");
         let func = parsed.module.funcs()[0];
-        let mut func_plan = empty_func_plan(1, StableMode::StaticAbs { base_word: 4 });
+        let mut func_plan = empty_func_plan(1, StableMode::StableAbs { base_word: 4 });
         func_plan.stable_words = 4;
         let plan = ProgramMemoryPlan {
             arena_base: STATIC_BASE,
             scratch_peak_words: 1,
-            static_chain_peak_words: 4,
+            stable_chain_peak_words: 4,
             global_dyn_base: abs_addr_for_word(STATIC_BASE, 5),
             funcs: FxHashMap::from_iter([(func, func_plan)]),
-            sccs: FxHashMap::default(),
         };
         let reserve_words = FxHashMap::from_iter([(
             func,
@@ -496,375 +519,20 @@ block0:
                 stable_words: 2,
             },
         )]);
-        let clobber_words =
-            compute_abs_clobber_words_with_extra(&parsed.module, &[func], &plan, &reserve_words);
+        let clobber_words = compute_abs_clobber_words_with_extra(
+            &CallGraphSchedule::compute(&parsed.module, &[func]),
+            &plan,
+            &reserve_words,
+        );
 
         assert_eq!(clobber_words[&func], 10);
     }
-
-    #[test]
-    fn stable_pack_conflicts_shadow_with_callee_visible_objects() {
-        let real0 = stack_obj(
-            1,
-            StackObjKind::Alloca(InstId::from_u32(1)),
-            4,
-            region(0, 0, 2),
-        );
-        let real1 = stack_obj(
-            2,
-            StackObjKind::Alloca(InstId::from_u32(2)),
-            4,
-            region(1, 0, 2),
-        );
-        let shadow = ShadowPackObj {
-            call_idx: 0,
-            obj: stack_obj(
-                3,
-                StackObjKind::Shadow(InstId::from_u32(10)),
-                4,
-                LiveRegion::sort_only(10),
-            ),
-        };
-        let sorted_objects = vec![&real0, &real1];
-        let mut must_stable = BitSet::default();
-        let _ = must_stable.insert(real0.id);
-        let _ = must_stable.insert(real1.id);
-        let promoted_optional = BitSet::default();
-        let real_conflicts = vec![BitSet::default(), BitSet::default()];
-        let mut shadow_conflicts = vec![BitSet::default(); 1];
-        let _ = shadow_conflicts[0].insert(LocalObjIdx::new(0));
-        let _ = shadow_conflicts[0].insert(LocalObjIdx::new(1));
-
-        let stable_ctx = StablePackCtx {
-            sorted_objects: &sorted_objects,
-            must_stable: &must_stable,
-            real_conflicts_by_local: &real_conflicts,
-            shadow_conflicts_by_call: &shadow_conflicts,
-        };
-        let mut entries = Vec::new();
-        let mut items = Vec::new();
-        build_stable_pack_entries(
-            &mut entries,
-            &mut items,
-            &[shadow],
-            stable_ctx,
-            &promoted_optional,
-        );
-        let mut pack_workspace = ExactPackWorkspace::default();
-        let packed = pack_exact_with_offsets_by(
-            &items,
-            |lhs, rhs| stable_pack_entries_conflict(stable_ctx, &entries, lhs, rhs),
-            &mut pack_workspace,
-        );
-
-        let real0_off = packed.offsets[&real0.id];
-        let real1_off = packed.offsets[&real1.id];
-        let shadow_off = packed.offsets[&StackObjId::new(3)];
-        assert_eq!(real0_off, 0);
-        assert_eq!(real1_off, 0);
-        assert_ne!(shadow_off, real0_off);
-        assert_ne!(shadow_off, real1_off);
-        assert_eq!(shadow_off, 4);
-    }
-
-    fn with_half_promoted_placement_problem(
-        candidate_count: usize,
-        size_mod: usize,
-        recursive_cost_mod: usize,
-        f: impl FnOnce(&PlacementProblem<'_>, &PlacementState),
-    ) {
-        let objects: Vec<_> = (0..candidate_count)
-            .map(|idx| {
-                stack_obj(
-                    idx as u32,
-                    StackObjKind::Alloca(InstId::from_u32(idx as u32)),
-                    1 + (idx % size_mod) as u32,
-                    region(0, 0, 1),
-                )
-            })
-            .collect();
-        let obj_size_words = objects.iter().map(|obj| (obj.id, obj.size_words)).collect();
-        let stack = FuncStackObjects {
-            objects,
-            obj_facts: FxHashMap::default(),
-            obj_size_words,
-            alloca_ids: FxHashMap::default(),
-            spill_obj: SecondaryMap::default(),
-            call_sites: Vec::new(),
-            next_obj_id: candidate_count as u32,
-        };
-        let sorted_objects: Vec<_> = stack.objects.iter().collect();
-        let candidates = sorted_objects
-            .iter()
-            .enumerate()
-            .map(|(local_idx, obj)| CandidateMeta {
-                obj_id: obj.id,
-                local_idx: LocalObjIdx::new(local_idx),
-                size_words: obj.size_words,
-                recursive_access_cost: (local_idx % recursive_cost_mod) as u64,
-                shadow_copy_words: 0,
-                live_call_indices: SmallVec::new(),
-            })
-            .collect();
-        let cost_model = ArenaCostModel::default();
-        let problem = PlacementProblem {
-            stack: &stack,
-            sorted_objects,
-            sorted_calls: Vec::new(),
-            must_stable: BitSet::default(),
-            must_stable_by_local: vec![false; candidate_count],
-            candidates,
-            base_shadow_words_by_call: Vec::new(),
-            base_shadow_copy_words: 0,
-            base_recursive_access_cost: 0,
-            frame_setup_cost: 0,
-            shadow_cost_per_word: 0,
-            next_shadow_base_id: stack.next_obj_id,
-            is_recursive: false,
-            cost_model: &cost_model,
-            real_conflicts_by_local: vec![BitSet::default(); candidate_count],
-            shadow_conflicts_by_call: Vec::new(),
-        };
-        let mut state = PlacementState::new(&problem);
-        for candidate_idx in 0..candidate_count / 2 {
-            state.apply_add(&problem, candidate_idx);
-        }
-
-        f(&problem, &state);
-    }
-
-    fn with_two_call_shadow_delta_problem(
-        f: impl FnOnce(&PlacementProblem<'_>, &mut PlacementState),
-    ) {
-        let objects = vec![
-            stack_obj(
-                0,
-                StackObjKind::Alloca(InstId::from_u32(0)),
-                4,
-                region(0, 0, 1),
-            ),
-            stack_obj(
-                1,
-                StackObjKind::Alloca(InstId::from_u32(1)),
-                4,
-                region(1, 0, 1),
-            ),
-        ];
-        let obj_size_words = objects.iter().map(|obj| (obj.id, obj.size_words)).collect();
-        let call_sites = vec![
-            CallSiteObjects {
-                inst: InstId::from_u32(10),
-                call_rank: 10,
-                callee: FuncRef::from_u32(0),
-                result_count: 0,
-                arg_count: 0,
-                live_across_objs: vec![StackObjId::new(0)],
-                callee_visible_objs: Vec::new(),
-            },
-            CallSiteObjects {
-                inst: InstId::from_u32(11),
-                call_rank: 20,
-                callee: FuncRef::from_u32(0),
-                result_count: 0,
-                arg_count: 0,
-                live_across_objs: vec![StackObjId::new(1)],
-                callee_visible_objs: Vec::new(),
-            },
-        ];
-        let stack = FuncStackObjects {
-            objects,
-            obj_facts: FxHashMap::default(),
-            obj_size_words,
-            alloca_ids: FxHashMap::default(),
-            spill_obj: SecondaryMap::default(),
-            call_sites,
-            next_obj_id: 2,
-        };
-        let sorted_objects: Vec<_> = stack.objects.iter().collect();
-        let sorted_calls: Vec<_> = stack.call_sites.iter().collect();
-        let candidates = sorted_objects
-            .iter()
-            .enumerate()
-            .map(|(local_idx, obj)| CandidateMeta {
-                obj_id: obj.id,
-                local_idx: LocalObjIdx::new(local_idx),
-                size_words: obj.size_words,
-                recursive_access_cost: 0,
-                shadow_copy_words: u64::from(obj.size_words),
-                live_call_indices: smallvec![local_idx as u32],
-            })
-            .collect();
-        let mut shadow_conflicts_by_call = vec![BitSet::default(); 2];
-        let _ = shadow_conflicts_by_call[0].insert(LocalObjIdx::new(0));
-        let _ = shadow_conflicts_by_call[1].insert(LocalObjIdx::new(1));
-        let cost_model = ArenaCostModel::default();
-        let problem = PlacementProblem {
-            stack: &stack,
-            sorted_objects,
-            sorted_calls,
-            must_stable: BitSet::default(),
-            must_stable_by_local: vec![false; 2],
-            candidates,
-            base_shadow_words_by_call: vec![4, 4],
-            base_shadow_copy_words: 8,
-            base_recursive_access_cost: 0,
-            frame_setup_cost: 0,
-            shadow_cost_per_word: 0,
-            next_shadow_base_id: stack.next_obj_id,
-            is_recursive: false,
-            cost_model: &cost_model,
-            real_conflicts_by_local: vec![BitSet::default(); 2],
-            shadow_conflicts_by_call,
-        };
-        let mut state = PlacementState::new(&problem);
-
-        f(&problem, &mut state);
-    }
-
-    fn stable_peak_with_full_shadow_scan(
-        problem: &PlacementProblem<'_>,
-        state: &PlacementState,
-        mv: PlacementMove,
-    ) -> u32 {
-        let mut entries = Vec::new();
-        let mut items = Vec::new();
-        let (insert_idx, skip_idx) = stable_local_indices_for_move(problem, mv);
-        for local_idx in TrialLocalIter::new(&state.stable_real_locals, insert_idx, skip_idx) {
-            let obj = problem.sorted_objects[local_idx as usize];
-            push_stable_real_entry(&mut entries, local_idx, obj);
-        }
-        for call_idx in 0..problem.sorted_calls.len() {
-            let shadow_words = shadow_words_for_call_after_move(problem, state, mv, call_idx);
-            if shadow_words != 0 {
-                push_score_shadow_entry(&mut entries, problem, call_idx as u32, shadow_words);
-            }
-        }
-        finish_stable_pack_entries(&mut entries, &mut items);
-        let stable_ctx = StablePackCtx {
-            sorted_objects: &problem.sorted_objects,
-            must_stable: &problem.must_stable,
-            real_conflicts_by_local: &problem.real_conflicts_by_local,
-            shadow_conflicts_by_call: &problem.shadow_conflicts_by_call,
-        };
-        let mut pack_workspace = ExactPackWorkspace::default();
-        pack_exact_peak_by(
-            &items,
-            |lhs, rhs| stable_pack_entries_conflict(stable_ctx, &entries, lhs, rhs),
-            &mut pack_workspace,
-        )
-    }
-
-    fn has_stable_entry(entries: &[StablePackEntry], member: StablePackMember) -> bool {
-        entries.iter().any(|entry| entry.member == member)
-    }
-
-    #[test]
-    fn swap_search_uses_bounded_shortlists_once_pair_count_exceeds_limit() {
-        with_half_promoted_placement_problem(320, 3, 11, |problem, state| {
-            let feasible_add_count = state.promoted.iter().filter(|&&promoted| !promoted).count();
-            let feasible_remove_count = state.promoted_count;
-            assert!(
-                feasible_add_count.saturating_mul(feasible_remove_count) > SWAP_FULL_PAIR_LIMIT,
-                "test must exercise the bounded swap shortlist path"
-            );
-
-            let mut search_work = SearchWorkBuffers::default();
-            let current_score = FuncPlacementScore {
-                scratch_words: u32::MAX,
-                stable_words: u32::MAX,
-                cost: u64::MAX,
-            };
-            let _ = find_best_exact_swap_move(
-                problem,
-                state,
-                current_score,
-                &mut FuncPlacementScoreWorkspace::default(),
-                &mut search_work,
-            );
-
-            assert!(!search_work.add_shortlist.is_empty());
-            assert!(!search_work.remove_shortlist.is_empty());
-            assert!(search_work.add_shortlist.len() <= SWAP_SHORTLIST_PER_METRIC * 3);
-            assert!(search_work.remove_shortlist.len() <= SWAP_SHORTLIST_PER_METRIC * 3);
-            assert_eq!(
-                search_work.swap_exact.len(),
-                search_work
-                    .add_shortlist
-                    .len()
-                    .saturating_mul(search_work.remove_shortlist.len()),
-                "bounded swap search should only exact-score the shortlist cross-product",
-            );
-        });
-    }
-
-    #[test]
-    fn one_flip_search_uses_bounded_shortlists_once_candidate_count_exceeds_limit() {
-        with_half_promoted_placement_problem(ONE_FLIP_FULL_LIMIT + 64, 5, 13, |problem, state| {
-            let mut work = SearchWorkBuffers::default();
-            collect_one_flip_shortlists(problem, state, &mut work);
-
-            assert!(!work.add_shortlist.is_empty());
-            assert!(!work.remove_shortlist.is_empty());
-            assert!(work.add_shortlist.len() <= ONE_FLIP_SHORTLIST_PER_METRIC * 3);
-            assert!(work.remove_shortlist.len() <= ONE_FLIP_SHORTLIST_PER_METRIC * 3);
-        });
-    }
-
-    #[test]
-    fn stable_score_shadow_delta_matches_full_call_scan() {
-        with_two_call_shadow_delta_problem(|problem, state| {
-            let mut workspace = FuncPlacementScoreWorkspace::default();
-
-            let add_move = PlacementMove::Add(0);
-            assert_eq!(
-                stable_peak_with_move(problem, state, add_move, &mut workspace),
-                stable_peak_with_full_shadow_scan(problem, state, add_move),
-            );
-            assert!(has_stable_entry(
-                &workspace.stable_entries,
-                StablePackMember::Real(LocalObjIdx::new(0)),
-            ));
-            assert!(!has_stable_entry(
-                &workspace.stable_entries,
-                StablePackMember::Shadow(0),
-            ));
-            assert!(has_stable_entry(
-                &workspace.stable_entries,
-                StablePackMember::Shadow(1),
-            ));
-
-            state.apply_add(problem, 0);
-            let remove_move = PlacementMove::Remove(0);
-            assert_eq!(
-                stable_peak_with_move(problem, state, remove_move, &mut workspace),
-                stable_peak_with_full_shadow_scan(problem, state, remove_move),
-            );
-            assert!(!has_stable_entry(
-                &workspace.stable_entries,
-                StablePackMember::Real(LocalObjIdx::new(0)),
-            ));
-            assert!(has_stable_entry(
-                &workspace.stable_entries,
-                StablePackMember::Shadow(0),
-            ));
-            assert!(has_stable_entry(
-                &workspace.stable_entries,
-                StablePackMember::Shadow(1),
-            ));
-        });
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct SccMemPlan {
-    pub is_recursive: bool,
-    pub static_chain_prefix_words: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StableMode {
     None,
-    StaticAbs { base_word: u32 },
+    StableAbs { base_word: u32 },
     DynamicFrame,
 }
 
@@ -875,26 +543,14 @@ pub enum ObjLoc {
     /// Local dynamic-frame word offset, excluding backend metadata such as the
     /// hidden caller-SP link slot.
     StableFrame(u32),
-    #[allow(dead_code)]
-    StackPinned(u8),
 }
 
+/// Shadow save/restore runs preserving caller scratch objects across a call.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CallPreservePlan {
-    pub mode: PreserveMode,
+    pub shadow_obj: StackObjId,
+    pub runs: SmallVec<[SaveRun; 2]>,
     pub result_count: u8,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum PreserveMode {
-    #[allow(dead_code)]
-    None,
-    ShadowRuns {
-        shadow_obj: StackObjId,
-        runs: SmallVec<[SaveRun; 2]>,
-    },
-    #[allow(dead_code)]
-    TinyStackLift { word_offsets: SmallVec<[u32; 4]> },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -904,31 +560,17 @@ pub struct SaveRun {
     pub len_words: u32,
 }
 
-#[derive(Clone, Copy, Debug)]
-pub struct ArenaCostModel {
-    pub w_mem: u64,
-    pub w_save: u64,
-    pub w_code: u64,
-    pub w_stack: u64,
-    pub max_save_words_per_call: u32,
-}
-
-impl Default for ArenaCostModel {
-    fn default() -> Self {
-        Self {
-            w_mem: 3,
-            w_save: 1,
-            w_code: 50,
-            w_stack: 1,
-            max_save_words_per_call: 128,
-        }
-    }
-}
-
 pub(crate) struct FuncPreAnalysis {
+    pub(crate) cfg: ControlFlowGraph,
     pub(crate) inst_liveness: InstLiveness,
     pub(crate) block_order: Vec<BlockId>,
     pub(crate) value_aliases: SecondaryMap<ValueId, Option<ValueId>>,
+    /// Pointer provenance computed with the section's escape summaries.
+    pub(crate) prov: ProvenanceInfo,
+    /// Value provenance computed with all-conservative callee summaries.
+    /// Heap bounds deliberately use this weaker variant: they must hold even
+    /// where the real summaries would allow more reuse (see heap_plan).
+    pub(crate) prov_conservative_value: SecondaryMap<ValueId, Provenance>,
 }
 
 pub(crate) struct MachineStackifyAnalysis {
@@ -938,443 +580,17 @@ pub(crate) struct MachineStackifyAnalysis {
     pub(crate) trace: Option<StackifyTrace>,
 }
 
-#[derive(Clone, Debug)]
-struct FuncPlacementEval {
-    scratch_offsets: FxHashMap<StackObjId, u32>,
-    scratch_words: u32,
-    stable_offsets: FxHashMap<StackObjId, u32>,
-    stable_words: u32,
-    call_preserve: FxHashMap<InstId, CallPreservePlan>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct FuncPlacementScore {
-    scratch_words: u32,
-    stable_words: u32,
-    cost: u64,
-}
-
-#[derive(Default)]
-struct FuncPlacementWorkspace {
-    scratch_pack: Vec<PackedObject>,
-    shadow_objs: Vec<ShadowPackObj>,
-    stable_entries: Vec<StablePackEntry>,
-    stable_items: Vec<ExactPackItem<StableItemIdx>>,
-    stable_pack: ExactPackWorkspace<StableItemIdx>,
-}
-
-#[derive(Default)]
-struct FuncPlacementScoreWorkspace {
-    scratch_items: Vec<ExactPackItem<LocalObjIdx>>,
-    stable_entries: Vec<StablePackEntry>,
-    stable_items: Vec<ExactPackItem<StableItemIdx>>,
-    changed_shadow_calls: Vec<u32>,
-    scratch_pack: ExactPackWorkspace<LocalObjIdx>,
-    stable_pack: ExactPackWorkspace<StableItemIdx>,
-}
-
-#[derive(Clone, Copy)]
-struct StablePackCtx<'a> {
-    sorted_objects: &'a [&'a StackObj],
-    must_stable: &'a BitSet<StackObjId>,
-    real_conflicts_by_local: &'a [BitSet<LocalObjIdx>],
-    shadow_conflicts_by_call: &'a [BitSet<LocalObjIdx>],
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum StablePackMember {
-    Real(LocalObjIdx),
-    Shadow(u32),
-}
-
-#[derive(Clone, Copy, Debug)]
-struct StablePackEntry {
-    sort_key: (u32, u32, u32),
-    member: StablePackMember,
-    id: StackObjId,
-    size_words: u32,
-}
-
-#[derive(Clone, Debug)]
-struct CandidateMeta {
-    obj_id: StackObjId,
-    local_idx: LocalObjIdx,
-    size_words: u32,
-    recursive_access_cost: u64,
-    shadow_copy_words: u64,
-    live_call_indices: SmallVec<[u32; 4]>,
-}
-
-struct PlacementProblem<'a> {
-    stack: &'a FuncStackObjects,
-    sorted_objects: Vec<&'a StackObj>,
-    sorted_calls: Vec<&'a CallSiteObjects>,
-    must_stable: BitSet<StackObjId>,
-    must_stable_by_local: Vec<bool>,
-    candidates: Vec<CandidateMeta>,
-    base_shadow_words_by_call: Vec<u32>,
-    base_shadow_copy_words: u64,
-    base_recursive_access_cost: u64,
-    frame_setup_cost: u64,
-    shadow_cost_per_word: u64,
-    next_shadow_base_id: u32,
-    is_recursive: bool,
-    cost_model: &'a ArenaCostModel,
-    real_conflicts_by_local: Vec<BitSet<LocalObjIdx>>,
-    shadow_conflicts_by_call: Vec<BitSet<LocalObjIdx>>,
-}
-
-#[derive(Clone, Debug)]
-struct PlacementState {
-    promoted: Vec<bool>,
-    promoted_count: usize,
-    shadow_words_by_call: Vec<u32>,
-    shadow_copy_words: u64,
-    recursive_access_cost: u64,
-    scratch_real_locals: Vec<u32>,
-    stable_real_locals: Vec<u32>,
-    nonzero_shadow_calls: Vec<u32>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum PlacementMove {
-    None,
-    Add(usize),
-    Remove(usize),
-    Swap { add_idx: usize, remove_idx: usize },
-}
-
-#[derive(Clone, Copy, Debug)]
-struct ExactMoveEval {
-    mv: PlacementMove,
-    exact: FuncPlacementScore,
-}
-
-#[derive(Default)]
-struct SearchWorkBuffers {
-    one_flip_exact: Vec<ExactMoveEval>,
-    swap_exact: Vec<ExactMoveEval>,
-    add_shortlist: Vec<usize>,
-    remove_shortlist: Vec<usize>,
-    metric_candidates: Vec<usize>,
-}
-
-#[derive(Clone, Debug)]
-struct ShadowPackObj {
-    call_idx: u32,
-    obj: StackObj,
-}
-
-const SWAP_FULL_PAIR_LIMIT: usize = 25_000;
-const SWAP_SHORTLIST_PER_METRIC: usize = 8;
-const ONE_FLIP_FULL_LIMIT: usize = 128;
-const ONE_FLIP_SHORTLIST_PER_METRIC: usize = 8;
-const CANDIDATE_METRICS: [fn(&CandidateMeta) -> u64; 3] = [
-    |candidate| u64::from(candidate.size_words),
-    |candidate| candidate.shadow_copy_words,
-    |candidate| candidate.recursive_access_cost,
-];
-
-impl<'a> PlacementProblem<'a> {
-    fn new(
-        stack: &'a FuncStackObjects,
-        facts: &FxHashMap<StackObjId, ObjFacts>,
-        is_recursive: bool,
-        cost_model: &'a ArenaCostModel,
-    ) -> Self {
-        let mut sorted_objects: Vec<_> = stack.objects.iter().collect();
-        sorted_objects.sort_unstable_by_key(|obj| obj.region.sort_key(obj.id));
-        let sorted_calls: Vec<_> = stack.call_sites.iter().collect();
-        let mut local_obj_index_by_id = vec![u32::MAX; stack.next_obj_id as usize];
-        let mut must_stable_by_local = vec![false; sorted_objects.len()];
-        let mut must_stable = BitSet::default();
-        for (local_idx, &obj) in sorted_objects.iter().enumerate() {
-            local_obj_index_by_id[obj.id.as_u32() as usize] = local_idx as u32;
-            let fact = facts
-                .get(&obj.id)
-                .unwrap_or_else(|| panic!("missing object facts for obj {}", obj.id.as_u32()));
-            must_stable_by_local[local_idx] = fact.must_stable;
-            if fact.must_stable {
-                let _ = must_stable.insert(obj.id);
-            }
-        }
-
-        let mut candidates: Vec<_> = facts
-            .values()
-            .filter(|fact| !fact.must_stable && !fact.live_across_calls.is_empty())
-            .map(|fact| fact.id)
-            .collect();
-        candidates.sort_unstable_by_key(|id| id.as_u32());
-
-        let mut optional_idx_by_local = vec![u32::MAX; sorted_objects.len()];
-        let mut candidate_meta = Vec::with_capacity(candidates.len());
-        for obj_id in candidates {
-            let fact = facts
-                .get(&obj_id)
-                .unwrap_or_else(|| panic!("missing object facts for obj {}", obj_id.as_u32()));
-            let local_idx = *local_obj_index_by_id
-                .get(obj_id.as_u32() as usize)
-                .unwrap_or(&u32::MAX);
-            assert_ne!(
-                local_idx,
-                u32::MAX,
-                "missing sorted object index for obj {}",
-                obj_id.as_u32()
-            );
-            optional_idx_by_local[local_idx as usize] = candidate_meta.len() as u32;
-            candidate_meta.push(CandidateMeta {
-                obj_id,
-                local_idx: LocalObjIdx::new(local_idx as usize),
-                size_words: fact.size_words,
-                recursive_access_cost: recursive_access_cost(cost_model, is_recursive, fact),
-                shadow_copy_words: 0,
-                live_call_indices: SmallVec::new(),
-            });
-        }
-
-        let mut real_conflicts_by_local = vec![BitSet::default(); sorted_objects.len()];
-        for (lhs_idx, &lhs) in sorted_objects.iter().enumerate() {
-            for (rhs_idx, &rhs) in sorted_objects.iter().enumerate().skip(lhs_idx + 1) {
-                if lhs.size_words == 0 || rhs.size_words == 0 || !lhs.region.overlaps(&rhs.region) {
-                    continue;
-                }
-                let lhs_idx = LocalObjIdx::new(lhs_idx);
-                let rhs_idx = LocalObjIdx::new(rhs_idx);
-                let _ = real_conflicts_by_local[lhs_idx.index()].insert(rhs_idx);
-                let _ = real_conflicts_by_local[rhs_idx.index()].insert(lhs_idx);
-            }
-        }
-
-        let mut shadow_conflicts_by_call = vec![BitSet::default(); sorted_calls.len()];
-        let mut base_shadow_words_by_call = vec![0u32; sorted_calls.len()];
-        let mut base_shadow_copy_words = 0u64;
-        for (call_idx, &call) in sorted_calls.iter().enumerate() {
-            for &obj in &call.callee_visible_objs {
-                let local_idx = *local_obj_index_by_id
-                    .get(obj.as_u32() as usize)
-                    .unwrap_or(&u32::MAX);
-                assert_ne!(
-                    local_idx,
-                    u32::MAX,
-                    "missing sorted object index for obj {}",
-                    obj.as_u32()
-                );
-                let _ =
-                    shadow_conflicts_by_call[call_idx].insert(LocalObjIdx::new(local_idx as usize));
-            }
-            for &obj in &call.live_across_objs {
-                let size = stack
-                    .obj_size_words
-                    .get(&obj)
-                    .copied()
-                    .unwrap_or_else(|| panic!("missing object size for obj {}", obj.as_u32()));
-                if size == 0 {
-                    continue;
-                }
-                let local_idx = *local_obj_index_by_id
-                    .get(obj.as_u32() as usize)
-                    .unwrap_or(&u32::MAX);
-                assert_ne!(
-                    local_idx,
-                    u32::MAX,
-                    "missing sorted object index for obj {}",
-                    obj.as_u32()
-                );
-                let _ =
-                    shadow_conflicts_by_call[call_idx].insert(LocalObjIdx::new(local_idx as usize));
-                if must_stable_by_local[local_idx as usize] {
-                    continue;
-                }
-                base_shadow_words_by_call[call_idx] = base_shadow_words_by_call[call_idx]
-                    .checked_add(size)
-                    .expect("shadow words overflow");
-                base_shadow_copy_words = base_shadow_copy_words
-                    .checked_add(u64::from(size))
-                    .expect("shadow copy words overflow");
-                let optional_idx = optional_idx_by_local[local_idx as usize];
-                if optional_idx != u32::MAX {
-                    let candidate = &mut candidate_meta[optional_idx as usize];
-                    candidate.shadow_copy_words = candidate
-                        .shadow_copy_words
-                        .checked_add(u64::from(size))
-                        .expect("candidate shadow copy words overflow");
-                    candidate.live_call_indices.push(call_idx as u32);
-                }
-            }
-        }
-
-        let base_recursive_access_cost = facts
-            .values()
-            .filter(|fact| fact.must_stable)
-            .try_fold(0u64, |acc, fact| {
-                acc.checked_add(recursive_access_cost(cost_model, is_recursive, fact))
-            })
-            .expect("recursive access cost overflow");
-
-        Self {
-            stack,
-            sorted_objects,
-            sorted_calls,
-            must_stable,
-            must_stable_by_local,
-            candidates: candidate_meta,
-            base_shadow_words_by_call,
-            base_shadow_copy_words,
-            base_recursive_access_cost,
-            frame_setup_cost: frame_setup_cost(cost_model),
-            shadow_cost_per_word: shadow_cost_per_word(cost_model, is_recursive),
-            next_shadow_base_id: stack.next_obj_id,
-            is_recursive,
-            cost_model,
-            real_conflicts_by_local,
-            shadow_conflicts_by_call,
-        }
-    }
-
-    fn promoted_optional(&self, state: &PlacementState) -> BitSet<StackObjId> {
-        self.candidates
-            .iter()
-            .zip(&state.promoted)
-            .filter_map(|(candidate, &promoted)| promoted.then_some(candidate.obj_id))
-            .collect()
-    }
-}
-
-impl PlacementState {
-    fn new(problem: &PlacementProblem<'_>) -> Self {
-        Self {
-            promoted: vec![false; problem.candidates.len()],
-            promoted_count: 0,
-            shadow_words_by_call: problem.base_shadow_words_by_call.clone(),
-            shadow_copy_words: problem.base_shadow_copy_words,
-            recursive_access_cost: problem.base_recursive_access_cost,
-            scratch_real_locals: problem
-                .sorted_objects
-                .iter()
-                .enumerate()
-                .filter_map(|(local_idx, obj)| {
-                    (!problem.must_stable_by_local[local_idx] && obj.size_words != 0)
-                        .then_some(local_idx as u32)
-                })
-                .collect(),
-            stable_real_locals: problem
-                .sorted_objects
-                .iter()
-                .enumerate()
-                .filter_map(|(local_idx, obj)| {
-                    (problem.must_stable_by_local[local_idx] && obj.size_words != 0)
-                        .then_some(local_idx as u32)
-                })
-                .collect(),
-            nonzero_shadow_calls: problem
-                .base_shadow_words_by_call
-                .iter()
-                .enumerate()
-                .filter_map(|(call_idx, &shadow_words)| {
-                    (shadow_words != 0).then_some(call_idx as u32)
-                })
-                .collect(),
-        }
-    }
-
-    fn apply_add(&mut self, problem: &PlacementProblem<'_>, candidate_idx: usize) {
-        assert!(
-            !self.promoted[candidate_idx],
-            "candidate {} already promoted",
-            problem.candidates[candidate_idx].obj_id.as_u32()
-        );
-        self.promoted[candidate_idx] = true;
-        self.promoted_count += 1;
-        let candidate = &problem.candidates[candidate_idx];
-        if candidate.size_words != 0 {
-            remove_sorted_u32(&mut self.scratch_real_locals, candidate.local_idx.as_u32());
-            insert_sorted_u32(&mut self.stable_real_locals, candidate.local_idx.as_u32());
-        }
-        self.shadow_copy_words = self
-            .shadow_copy_words
-            .checked_sub(candidate.shadow_copy_words)
-            .expect("shadow copy words underflow");
-        self.recursive_access_cost = self
-            .recursive_access_cost
-            .checked_add(candidate.recursive_access_cost)
-            .expect("recursive access cost overflow");
-        for &call_idx in &candidate.live_call_indices {
-            let shadow_words = &mut self.shadow_words_by_call[call_idx as usize];
-            let was_nonzero = *shadow_words != 0;
-            *shadow_words = shadow_words
-                .checked_sub(candidate.size_words)
-                .expect("shadow words underflow");
-            if was_nonzero && *shadow_words == 0 {
-                remove_sorted_u32(&mut self.nonzero_shadow_calls, call_idx);
-            }
-        }
-    }
-
-    fn apply_remove(&mut self, problem: &PlacementProblem<'_>, candidate_idx: usize) {
-        assert!(
-            self.promoted[candidate_idx],
-            "candidate {} is not promoted",
-            problem.candidates[candidate_idx].obj_id.as_u32()
-        );
-        self.promoted[candidate_idx] = false;
-        self.promoted_count = self
-            .promoted_count
-            .checked_sub(1)
-            .expect("promoted count underflow");
-        let candidate = &problem.candidates[candidate_idx];
-        if candidate.size_words != 0 {
-            remove_sorted_u32(&mut self.stable_real_locals, candidate.local_idx.as_u32());
-            insert_sorted_u32(&mut self.scratch_real_locals, candidate.local_idx.as_u32());
-        }
-        self.shadow_copy_words = self
-            .shadow_copy_words
-            .checked_add(candidate.shadow_copy_words)
-            .expect("shadow copy words overflow");
-        self.recursive_access_cost = self
-            .recursive_access_cost
-            .checked_sub(candidate.recursive_access_cost)
-            .expect("recursive access cost underflow");
-        for &call_idx in &candidate.live_call_indices {
-            let shadow_words = &mut self.shadow_words_by_call[call_idx as usize];
-            let was_nonzero = *shadow_words != 0;
-            *shadow_words = shadow_words
-                .checked_add(candidate.size_words)
-                .expect("shadow words overflow");
-            if !was_nonzero && *shadow_words != 0 {
-                insert_sorted_u32(&mut self.nonzero_shadow_calls, call_idx);
-            }
-        }
-    }
-
-    fn apply_swap(&mut self, problem: &PlacementProblem<'_>, add_idx: usize, remove_idx: usize) {
-        assert_ne!(add_idx, remove_idx, "swap requires distinct candidates");
-        self.apply_remove(problem, remove_idx);
-        self.apply_add(problem, add_idx);
-    }
-
-    fn apply_move(&mut self, problem: &PlacementProblem<'_>, mv: PlacementMove) {
-        match mv {
-            PlacementMove::None => {}
-            PlacementMove::Add(candidate_idx) => self.apply_add(problem, candidate_idx),
-            PlacementMove::Remove(candidate_idx) => self.apply_remove(problem, candidate_idx),
-            PlacementMove::Swap {
-                add_idx,
-                remove_idx,
-            } => self.apply_swap(problem, add_idx, remove_idx),
-        }
-    }
-}
-
 pub(crate) fn compute_semantic_program_memory_plan(
     module: &Module,
-    funcs: &[FuncRef],
+    schedule: &CallGraphSchedule,
     analyses: &FxHashMap<FuncRef, FuncPreAnalysis>,
     ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
     isa: &Evm,
     cost_model: &ArenaCostModel,
 ) -> ProgramMemoryPlan {
     let alloc_ctx = StaticArenaAllocCtx::new(&module.ctx, isa, ptr_escape);
-    let mut stack_results: Vec<_> = funcs
+    let mut stack_results: Vec<_> = schedule
+        .funcs()
         .par_iter()
         .copied()
         .map(|func| {
@@ -1392,25 +608,21 @@ pub(crate) fn compute_semantic_program_memory_plan(
         stacks.insert(func, stack);
     }
 
-    let plan = compute_program_memory_plan_from_stacks(module, funcs, &stacks, cost_model);
+    let plan = compute_program_memory_plan_from_stacks(module, schedule, &stacks, cost_model);
 
     #[cfg(debug_assertions)]
-    {
-        let funcs_set: FxHashSet<FuncRef> = funcs.iter().copied().collect();
-        let call_graph = CallGraph::build_graph_subset(module, &funcs_set);
-        let scc = SccBuilder::new().compute_scc(&call_graph);
-        verify_program_memory_plan(funcs, &stacks, &scc, &plan);
-    }
+    verify_program_memory_plan(schedule.funcs(), &stacks, &schedule.sccs, &plan);
 
     plan
 }
 
 fn compute_program_memory_plan_from_stacks(
     module: &Module,
-    funcs: &[FuncRef],
+    schedule: &CallGraphSchedule,
     stacks: &FxHashMap<FuncRef, FuncStackObjects>,
     cost_model: &ArenaCostModel,
 ) -> ProgramMemoryPlan {
+    let funcs = schedule.funcs();
     let funcs_set: FxHashSet<FuncRef> = funcs.iter().copied().collect();
 
     for &func in funcs {
@@ -1432,21 +644,14 @@ fn compute_program_memory_plan_from_stacks(
         });
     }
 
-    let call_graph = CallGraph::build_graph_subset(module, &funcs_set);
-    let scc = SccBuilder::new().compute_scc(&call_graph);
-    let topo = topo_sort_sccs(&funcs_set, &call_graph, &scc);
-    let scc_edges = build_scc_edges(&funcs_set, &call_graph, &scc, &topo);
-
     let mut placement_results: Vec<_> = funcs
         .par_iter()
         .copied()
         .map(|func| {
-            let stack = stacks
-                .get(&func)
-                .unwrap_or_else(|| panic!("missing object facts for func {}", func.as_u32()));
-            let scc_ref = scc.scc_ref(func);
-            let is_recursive = scc.scc_info(scc_ref).is_cycle;
-            let facts = build_planner_facts(stack, &scc, scc_ref, is_recursive);
+            let stack = expect_func_entry(stacks, func, "object facts");
+            let scc_ref = schedule.sccs.scc_ref(func);
+            let is_recursive = schedule.sccs.scc_info(scc_ref).is_cycle;
+            let facts = build_planner_facts(stack, &schedule.sccs, scc_ref, is_recursive);
             (
                 func,
                 solve_func_placement(stack, &facts, is_recursive, cost_model),
@@ -1466,97 +671,32 @@ fn compute_program_memory_plan_from_stacks(
         .max()
         .unwrap_or(0);
 
-    let mut scc_weights: FxHashMap<SccRef, u32> = FxHashMap::default();
-    for &scc_ref in &topo {
-        let mut weight = 0;
-        if !scc.scc_info(scc_ref).is_cycle {
-            for &func in scc
-                .scc_info(scc_ref)
-                .components
-                .iter()
-                .filter(|func| funcs_set.contains(func))
-            {
-                weight = weight.max(placements[&func].stable_words);
-            }
-        }
-        scc_weights.insert(scc_ref, weight);
-    }
-
-    let mut scc_prefix: FxHashMap<SccRef, u32> = FxHashMap::default();
-    for &scc_ref in &topo {
-        scc_prefix.entry(scc_ref).or_insert(0);
-    }
-    for &scc_ref in &topo {
-        let carry = scc_prefix[&scc_ref]
-            .checked_add(scc_weights[&scc_ref])
-            .expect("static chain prefix overflow");
-        if let Some(callees) = scc_edges.get(&scc_ref) {
-            for &callee_scc in callees {
-                scc_prefix
-                    .entry(callee_scc)
-                    .and_modify(|prefix| *prefix = (*prefix).max(carry))
-                    .or_insert(carry);
-            }
-        }
-    }
-
-    let static_chain_peak_words = topo
-        .iter()
-        .map(|scc_ref| {
-            scc_prefix[scc_ref]
-                .checked_add(scc_weights[scc_ref])
-                .expect("static chain peak overflow")
-        })
-        .max()
-        .unwrap_or(0);
+    let chain = compute_stable_chain_layout(schedule, |func| placements[&func].stable_words);
+    let stable_chain_peak_words = chain.peak_words;
 
     let arena_base = STATIC_BASE;
-    let global_dyn_base = abs_addr_for_word(
-        arena_base,
-        scratch_peak_words
-            .checked_add(static_chain_peak_words)
-            .expect("global dynamic base word overflow"),
-    );
-    let global_dyn_base_words = scratch_peak_words
-        .checked_add(static_chain_peak_words)
-        .expect("global dynamic base word overflow");
+    let global_dyn_base_words = add_words(scratch_peak_words, stable_chain_peak_words);
+    let global_dyn_base = abs_addr_for_word(arena_base, global_dyn_base_words);
 
-    let mut scc_plans: FxHashMap<SccRef, SccMemPlan> = FxHashMap::default();
-    for &scc_ref in &topo {
-        scc_plans.insert(
-            scc_ref,
-            SccMemPlan {
-                is_recursive: scc.scc_info(scc_ref).is_cycle,
-                static_chain_prefix_words: scc_prefix[&scc_ref],
-            },
-        );
-    }
-
-    let mut funcs_plan: FxHashMap<FuncRef, FuncMemPlan> = FxHashMap::default();
+    let mut funcs_plan: FxHashMap<FuncRef, SemanticFuncPlan> = FxHashMap::default();
     for &func in funcs {
-        let stack = stacks
-            .get(&func)
-            .unwrap_or_else(|| panic!("missing object facts for func {}", func.as_u32()));
+        let stack = expect_func_entry(stacks, func, "object facts");
         let placement = placements
             .remove(&func)
             .unwrap_or_else(|| panic!("missing placement for func {}", func.as_u32()));
-        let scc_ref = scc.scc_ref(func);
-        let scc_plan = scc_plans
-            .get(&scc_ref)
-            .unwrap_or_else(|| panic!("missing SCC plan for scc {}", scc_ref.as_u32()));
-        let stable_base_word = scratch_peak_words
-            .checked_add(scc_plan.static_chain_prefix_words)
-            .expect("stable base word overflow");
-        let stable_mode = if scc_plan.is_recursive {
+        let scc_ref = schedule.sccs.scc_ref(func);
+        let is_recursive = schedule.sccs.scc_info(scc_ref).is_cycle;
+        let stable_base_word = add_words(scratch_peak_words, chain.scc_prefix[&scc_ref]);
+        let stable_mode = if is_recursive {
             StableMode::DynamicFrame
         } else if placement.stable_words != 0 {
-            StableMode::StaticAbs {
+            StableMode::StableAbs {
                 base_word: stable_base_word,
             }
         } else {
             StableMode::None
         };
-        let entry_abs_words = if scc_plan.is_recursive {
+        let entry_abs_words = if is_recursive {
             global_dyn_base_words
         } else {
             stable_base_word
@@ -1569,7 +709,7 @@ fn compute_program_memory_plan_from_stacks(
         for (&obj, &word) in &placement.stable_offsets {
             let loc = match stable_mode {
                 StableMode::None => panic!("stable offsets present without stable mode"),
-                StableMode::StaticAbs { .. } => ObjLoc::StableAbs(word),
+                StableMode::StableAbs { .. } => ObjLoc::StableAbs(word),
                 StableMode::DynamicFrame => ObjLoc::StableFrame(word),
             };
             obj_loc.insert(obj, loc);
@@ -1593,7 +733,7 @@ fn compute_program_memory_plan_from_stacks(
 
         funcs_plan.insert(
             func,
-            FuncMemPlan {
+            SemanticFuncPlan {
                 arena_base,
                 scratch_words: placement.scratch_words,
                 stable_words: placement.stable_words,
@@ -1601,7 +741,6 @@ fn compute_program_memory_plan_from_stacks(
                 entry_abs_words,
                 obj_loc,
                 alloca_loc,
-                spill_obj: stack.spill_obj.clone(),
                 call_preserve: placement.call_preserve,
                 malloc_future_abs_words: FxHashMap::default(),
                 transient_mallocs: FxHashSet::default(),
@@ -1614,85 +753,58 @@ fn compute_program_memory_plan_from_stacks(
     ProgramMemoryPlan {
         arena_base,
         scratch_peak_words,
-        static_chain_peak_words,
+        stable_chain_peak_words,
         global_dyn_base,
         funcs: funcs_plan,
-        sccs: scc_plans,
     }
 }
 
 pub(crate) fn compute_abs_clobber_words_with_extra(
-    module: &Module,
-    funcs: &[FuncRef],
+    schedule: &CallGraphSchedule,
     plan: &ProgramMemoryPlan,
     extra_reserves: &FxHashMap<FuncRef, BackendSpillReserve>,
 ) -> FxHashMap<FuncRef, u32> {
-    let funcs_set: FxHashSet<FuncRef> = funcs.iter().copied().collect();
-    let mut out: FxHashMap<FuncRef, u32> = FxHashMap::default();
-    for &func in funcs {
-        let extra_reserve = extra_reserves.get(&func).copied().unwrap_or_default();
-        let Some(func_plan) = plan.funcs.get(&func) else {
-            out.insert(func, extra_reserve.max_words());
-            continue;
-        };
-        let local = abs_words_end_with_extra_reserve(func_plan, extra_reserve);
-        out.insert(func, local);
-    }
-
-    let mut changed = true;
-    while changed {
-        changed = false;
-        for &func in funcs {
-            let mut next = out.get(&func).copied().unwrap_or(0);
-            module.func_store.view(func, |function| {
-                for block in function.layout.iter_block() {
-                    for inst in function.layout.iter_inst(block) {
-                        let Some(call) = function.dfg.call_info(inst) else {
-                            continue;
-                        };
-                        let callee = call.callee();
-                        if funcs_set.contains(&callee) {
-                            next = next.max(out.get(&callee).copied().unwrap_or(0));
-                        }
-                    }
-                }
-            });
-
-            let cur = out.get(&func).copied().unwrap_or(0);
-            if next > cur {
-                out.insert(func, next);
-                changed = true;
-            }
-        }
-    }
-
-    out
+    schedule.join_over_callees(
+        |func| {
+            let extra_reserve = extra_reserves.get(&func).copied().unwrap_or_default();
+            plan.funcs
+                .get(&func)
+                .map_or(extra_reserve.max_words(), |func_plan| {
+                    func_plan.abs_words_end_with_reserve(extra_reserve)
+                })
+        },
+        |acc, callee_end| *acc = (*acc).max(*callee_end),
+    )
 }
 
-fn abs_words_end_with_extra_reserve(
-    func_plan: &FuncMemPlan,
-    extra_reserve: BackendSpillReserve,
-) -> u32 {
-    let scratch_end = func_plan
-        .scratch_words
-        .checked_add(extra_reserve.scratch_words)
-        .expect("scratch reserve overflow");
-    let stable_end = match func_plan.stable_mode {
-        StableMode::None => extra_reserve.stable_words,
-        StableMode::StaticAbs { base_word } => {
-            if func_plan.stable_words == 0 && extra_reserve.stable_words == 0 {
-                0
-            } else {
-                base_word
-                    .checked_add(func_plan.stable_words)
-                    .and_then(|end| end.checked_add(extra_reserve.stable_words))
-                    .expect("stable reserve overflow")
-            }
-        }
-        StableMode::DynamicFrame => 0,
-    };
+impl SemanticFuncPlan {
+    pub fn active_abs_words(&self) -> u32 {
+        self.entry_abs_words.max(self.abs_words_end())
+    }
 
-    scratch_end.max(stable_end)
+    /// The absolute clobber end of this frame if `extra_reserve` more words
+    /// were appended to each region. Unlike [`Self::abs_words_end`], a
+    /// `StableMode::None` frame still accounts for a nonzero stable reserve
+    /// (the reserve would force a stable frame into existence).
+    pub(crate) fn abs_words_end_with_reserve(&self, extra_reserve: BackendSpillReserve) -> u32 {
+        let scratch_end = add_words(self.scratch_words, extra_reserve.scratch_words);
+        let stable_end = match self.stable_mode {
+            StableMode::None => extra_reserve.stable_words,
+            StableMode::StableAbs { base_word } => {
+                if self.stable_words == 0 && extra_reserve.stable_words == 0 {
+                    0
+                } else {
+                    base_word
+                        .checked_add(self.stable_words)
+                        .and_then(|end| end.checked_add(extra_reserve.stable_words))
+                        .expect("stable reserve overflow")
+                }
+            }
+            StableMode::DynamicFrame => 0,
+        };
+
+        scratch_end.max(stable_end)
+    }
 }
 
 fn build_planner_facts(
@@ -1725,1094 +837,6 @@ fn build_planner_facts(
     facts
 }
 
-fn solve_func_placement(
-    stack: &FuncStackObjects,
-    facts: &FxHashMap<StackObjId, ObjFacts>,
-    is_recursive: bool,
-    cost_model: &ArenaCostModel,
-) -> FuncPlacementEval {
-    let problem = PlacementProblem::new(stack, facts, is_recursive, cost_model);
-    let mut state = PlacementState::new(&problem);
-    let stable_item_capacity = problem
-        .sorted_objects
-        .len()
-        .saturating_add(problem.sorted_calls.len());
-    let mut workspace = FuncPlacementWorkspace {
-        scratch_pack: Vec::with_capacity(problem.sorted_objects.len()),
-        shadow_objs: Vec::with_capacity(problem.sorted_calls.len()),
-        stable_entries: Vec::with_capacity(stable_item_capacity),
-        stable_items: Vec::with_capacity(stable_item_capacity),
-        stable_pack: ExactPackWorkspace::with_capacity(stable_item_capacity),
-    };
-    let mut score_workspace = FuncPlacementScoreWorkspace {
-        scratch_items: Vec::with_capacity(problem.sorted_objects.len()),
-        stable_entries: Vec::with_capacity(stable_item_capacity),
-        stable_items: Vec::with_capacity(stable_item_capacity),
-        changed_shadow_calls: Vec::new(),
-        scratch_pack: ExactPackWorkspace::with_capacity(problem.sorted_objects.len()),
-        stable_pack: ExactPackWorkspace::with_capacity(stable_item_capacity),
-    };
-    let mut search_work = SearchWorkBuffers::default();
-    let mut best_score =
-        evaluate_func_placement_score(&problem, &state, PlacementMove::None, &mut score_workspace);
-    let mut iteration = 0usize;
-
-    loop {
-        iteration += 1;
-        debug_assert!(
-            iteration <= 1_000_000,
-            "placement local search did not converge"
-        );
-
-        if let Some(best_move) = find_best_exact_one_flip_move(
-            &problem,
-            &state,
-            best_score,
-            &mut score_workspace,
-            &mut search_work,
-        ) {
-            state.apply_move(&problem, best_move.mv);
-            best_score = best_move.exact;
-            continue;
-        }
-
-        if let Some(best_move) = find_best_exact_swap_move(
-            &problem,
-            &state,
-            best_score,
-            &mut score_workspace,
-            &mut search_work,
-        ) {
-            state.apply_move(&problem, best_move.mv);
-            best_score = best_move.exact;
-            continue;
-        }
-
-        break;
-    }
-
-    let promoted_optional = problem.promoted_optional(&state);
-    evaluate_func_placement(&problem, &promoted_optional, &state, &mut workspace)
-}
-
-fn evaluate_func_placement(
-    problem: &PlacementProblem<'_>,
-    promoted_optional: &BitSet<StackObjId>,
-    state: &PlacementState,
-    workspace: &mut FuncPlacementWorkspace,
-) -> FuncPlacementEval {
-    build_scratch_pack(
-        &mut workspace.scratch_pack,
-        &problem.sorted_objects,
-        &problem.must_stable,
-        promoted_optional,
-    );
-    let (scratch_offsets, scratch_words) = pack_objects_presorted(&workspace.scratch_pack);
-
-    workspace.shadow_objs.clear();
-    let mut call_preserve =
-        FxHashMap::with_capacity_and_hasher(problem.sorted_calls.len(), Default::default());
-    let mut next_obj_id = problem.next_shadow_base_id;
-    for (call_idx, &call) in problem.sorted_calls.iter().enumerate() {
-        let Some((shadow_obj, plan)) = build_shadow_preserve_for_call(
-            problem.stack,
-            call,
-            &problem.must_stable,
-            promoted_optional,
-            &scratch_offsets,
-            next_obj_id,
-        ) else {
-            continue;
-        };
-        next_obj_id = next_obj_id
-            .checked_add(1)
-            .expect("shadow object id overflow");
-        workspace.shadow_objs.push(ShadowPackObj {
-            call_idx: call_idx as u32,
-            obj: shadow_obj,
-        });
-        call_preserve.insert(call.inst, plan);
-    }
-
-    let stable_ctx = StablePackCtx {
-        sorted_objects: &problem.sorted_objects,
-        must_stable: &problem.must_stable,
-        real_conflicts_by_local: &problem.real_conflicts_by_local,
-        shadow_conflicts_by_call: &problem.shadow_conflicts_by_call,
-    };
-    build_stable_pack_entries(
-        &mut workspace.stable_entries,
-        &mut workspace.stable_items,
-        &workspace.shadow_objs,
-        stable_ctx,
-        promoted_optional,
-    );
-    let stable_pack = pack_exact_with_offsets_by(
-        &workspace.stable_items,
-        |lhs, rhs| stable_pack_entries_conflict(stable_ctx, &workspace.stable_entries, lhs, rhs),
-        &mut workspace.stable_pack,
-    );
-    let stable_offsets = stable_pack.offsets;
-    let stable_words = stable_pack.max_used;
-
-    let shadow_copy_words = shadow_copy_words(&call_preserve);
-    debug_assert_eq!(shadow_copy_words, state.shadow_copy_words);
-    let cost = placement_cost(
-        problem,
-        state.recursive_access_cost,
-        shadow_copy_words,
-        scratch_words,
-        stable_words,
-    );
-    debug_assert_eq!(
-        FuncPlacementScore {
-            scratch_words,
-            stable_words,
-            cost,
-        },
-        evaluate_func_placement_score(
-            problem,
-            state,
-            PlacementMove::None,
-            &mut FuncPlacementScoreWorkspace::default(),
-        )
-    );
-
-    FuncPlacementEval {
-        scratch_offsets,
-        scratch_words,
-        stable_offsets,
-        stable_words,
-        call_preserve,
-    }
-}
-
-fn evaluate_func_placement_score(
-    problem: &PlacementProblem<'_>,
-    state: &PlacementState,
-    mv: PlacementMove,
-    workspace: &mut FuncPlacementScoreWorkspace,
-) -> FuncPlacementScore {
-    let (shadow_copy_words, recursive_access_cost) = additive_terms_with_move(problem, state, mv);
-    let scratch_words = scratch_peak_with_move(problem, state, mv, workspace);
-    let stable_words = stable_peak_with_move(problem, state, mv, workspace);
-    score_from_words(
-        problem,
-        recursive_access_cost,
-        shadow_copy_words,
-        scratch_words,
-        stable_words,
-    )
-}
-
-fn score_move_if_better(
-    problem: &PlacementProblem<'_>,
-    state: &PlacementState,
-    mv: PlacementMove,
-    current_score: FuncPlacementScore,
-    workspace: &mut FuncPlacementScoreWorkspace,
-) -> Option<FuncPlacementScore> {
-    let (shadow_copy_words, recursive_access_cost) = additive_terms_with_move(problem, state, mv);
-    let scratch_words = scratch_peak_with_move(problem, state, mv, workspace);
-    let lower_bound = score_from_words(
-        problem,
-        recursive_access_cost,
-        shadow_copy_words,
-        scratch_words,
-        0,
-    );
-    if !is_better_score(lower_bound, current_score) {
-        return None;
-    }
-
-    let stable_words = stable_peak_with_move(problem, state, mv, workspace);
-    let exact = score_from_words(
-        problem,
-        recursive_access_cost,
-        shadow_copy_words,
-        scratch_words,
-        stable_words,
-    );
-    is_better_score(exact, current_score).then_some(exact)
-}
-
-fn score_from_words(
-    problem: &PlacementProblem<'_>,
-    recursive_access_cost: u64,
-    shadow_copy_words: u64,
-    scratch_words: u32,
-    stable_words: u32,
-) -> FuncPlacementScore {
-    FuncPlacementScore {
-        scratch_words,
-        stable_words,
-        cost: placement_cost(
-            problem,
-            recursive_access_cost,
-            shadow_copy_words,
-            scratch_words,
-            stable_words,
-        ),
-    }
-}
-
-fn scratch_peak_with_move(
-    problem: &PlacementProblem<'_>,
-    state: &PlacementState,
-    mv: PlacementMove,
-    workspace: &mut FuncPlacementScoreWorkspace,
-) -> u32 {
-    let (insert_idx, skip_idx) = scratch_local_indices_for_move(problem, mv);
-    workspace.scratch_items.clear();
-    workspace.scratch_items.extend(
-        TrialLocalIter::new(&state.scratch_real_locals, insert_idx, skip_idx).map(|local_idx| {
-            let obj = problem.sorted_objects[local_idx as usize];
-            ExactPackItem {
-                id: obj.id,
-                idx: LocalObjIdx::new(local_idx as usize),
-                size_words: obj.size_words,
-                min_offset_words: 0,
-            }
-        }),
-    );
-    pack_exact_peak_by(
-        &workspace.scratch_items,
-        |lhs, rhs| problem.real_conflicts_by_local[lhs.index()].contains(rhs),
-        &mut workspace.scratch_pack,
-    )
-}
-
-fn stable_peak_with_move(
-    problem: &PlacementProblem<'_>,
-    state: &PlacementState,
-    mv: PlacementMove,
-    workspace: &mut FuncPlacementScoreWorkspace,
-) -> u32 {
-    let stable_ctx = StablePackCtx {
-        sorted_objects: &problem.sorted_objects,
-        must_stable: &problem.must_stable,
-        real_conflicts_by_local: &problem.real_conflicts_by_local,
-        shadow_conflicts_by_call: &problem.shadow_conflicts_by_call,
-    };
-    build_stable_pack_entries_for_move(
-        &mut workspace.stable_entries,
-        &mut workspace.stable_items,
-        &mut workspace.changed_shadow_calls,
-        problem,
-        state,
-        mv,
-    );
-    pack_exact_peak_by(
-        &workspace.stable_items,
-        |lhs, rhs| stable_pack_entries_conflict(stable_ctx, &workspace.stable_entries, lhs, rhs),
-        &mut workspace.stable_pack,
-    )
-}
-
-fn shadow_words_for_call_after_move(
-    problem: &PlacementProblem<'_>,
-    state: &PlacementState,
-    mv: PlacementMove,
-    call_idx: usize,
-) -> u32 {
-    let mut shadow_words = state.shadow_words_by_call[call_idx];
-    let mut apply_candidate = |candidate_idx: usize, sign: i64| {
-        let candidate = &problem.candidates[candidate_idx];
-        if !candidate.live_call_indices.contains(&(call_idx as u32)) || candidate.size_words == 0 {
-            return;
-        }
-        if sign.is_negative() {
-            shadow_words = shadow_words
-                .checked_sub(candidate.size_words)
-                .expect("shadow words underflow");
-        } else {
-            shadow_words = shadow_words
-                .checked_add(candidate.size_words)
-                .expect("shadow words overflow");
-        }
-    };
-    match mv {
-        PlacementMove::None => {}
-        PlacementMove::Add(candidate_idx) => apply_candidate(candidate_idx, -1),
-        PlacementMove::Remove(candidate_idx) => apply_candidate(candidate_idx, 1),
-        PlacementMove::Swap {
-            add_idx,
-            remove_idx,
-        } => {
-            apply_candidate(add_idx, -1);
-            apply_candidate(remove_idx, 1);
-        }
-    }
-    shadow_words
-}
-
-fn find_best_exact_one_flip_move(
-    problem: &PlacementProblem<'_>,
-    state: &PlacementState,
-    current_score: FuncPlacementScore,
-    exact_ws: &mut FuncPlacementScoreWorkspace,
-    work: &mut SearchWorkBuffers,
-) -> Option<ExactMoveEval> {
-    work.one_flip_exact.clear();
-    let mut candidates = Vec::new();
-    if problem.candidates.len() <= ONE_FLIP_FULL_LIMIT {
-        candidates.extend(0..problem.candidates.len());
-    } else {
-        collect_one_flip_shortlists(problem, state, work);
-        candidates.extend(work.add_shortlist.iter().copied());
-        candidates.extend(work.remove_shortlist.iter().copied());
-        candidates.sort_unstable();
-        candidates.dedup();
-    }
-
-    for candidate_idx in candidates {
-        let mv = if state.promoted[candidate_idx] {
-            PlacementMove::Remove(candidate_idx)
-        } else {
-            PlacementMove::Add(candidate_idx)
-        };
-        if let Some(exact) = score_move_if_better(problem, state, mv, current_score, exact_ws) {
-            work.one_flip_exact.push(ExactMoveEval { mv, exact });
-        }
-    }
-    work.one_flip_exact.sort_unstable_by(|a, b| {
-        cmp_func_placement_score(a.exact, b.exact)
-            .then_with(|| {
-                resulting_promoted_count(state, a.mv).cmp(&resulting_promoted_count(state, b.mv))
-            })
-            .then_with(|| cmp_move_tie_key(problem, a.mv, b.mv))
-    });
-    work.one_flip_exact.first().copied()
-}
-
-fn collect_one_flip_shortlists(
-    problem: &PlacementProblem<'_>,
-    state: &PlacementState,
-    work: &mut SearchWorkBuffers,
-) {
-    work.add_shortlist.clear();
-    work.remove_shortlist.clear();
-    collect_metric_shortlist(problem, state, false, ONE_FLIP_SHORTLIST_PER_METRIC, work);
-    collect_metric_shortlist(problem, state, true, ONE_FLIP_SHORTLIST_PER_METRIC, work);
-}
-
-fn find_best_exact_swap_move(
-    problem: &PlacementProblem<'_>,
-    state: &PlacementState,
-    current_score: FuncPlacementScore,
-    exact_ws: &mut FuncPlacementScoreWorkspace,
-    work: &mut SearchWorkBuffers,
-) -> Option<ExactMoveEval> {
-    let feasible_add_count = state.promoted.iter().filter(|&&promoted| !promoted).count();
-    let feasible_remove_count = state.promoted_count;
-    if feasible_add_count == 0 || feasible_remove_count == 0 {
-        return None;
-    }
-
-    work.swap_exact.clear();
-    if feasible_add_count.saturating_mul(feasible_remove_count) <= SWAP_FULL_PAIR_LIMIT {
-        for add_idx in 0..problem.candidates.len() {
-            if state.promoted[add_idx] {
-                continue;
-            }
-            for remove_idx in 0..problem.candidates.len() {
-                if !state.promoted[remove_idx] {
-                    continue;
-                }
-                let mv = PlacementMove::Swap {
-                    add_idx,
-                    remove_idx,
-                };
-                if let Some(exact) =
-                    score_move_if_better(problem, state, mv, current_score, exact_ws)
-                {
-                    work.swap_exact.push(ExactMoveEval { mv, exact });
-                }
-            }
-        }
-    } else {
-        collect_swap_shortlists(problem, state, work);
-        for &add_idx in &work.add_shortlist {
-            for &remove_idx in &work.remove_shortlist {
-                let mv = PlacementMove::Swap {
-                    add_idx,
-                    remove_idx,
-                };
-                if let Some(exact) =
-                    score_move_if_better(problem, state, mv, current_score, exact_ws)
-                {
-                    work.swap_exact.push(ExactMoveEval { mv, exact });
-                }
-            }
-        }
-    }
-
-    work.swap_exact.sort_unstable_by(|a, b| {
-        cmp_func_placement_score(a.exact, b.exact)
-            .then_with(|| {
-                resulting_promoted_count(state, a.mv).cmp(&resulting_promoted_count(state, b.mv))
-            })
-            .then_with(|| cmp_move_tie_key(problem, a.mv, b.mv))
-    });
-    work.swap_exact.first().copied()
-}
-
-fn collect_swap_shortlists(
-    problem: &PlacementProblem<'_>,
-    state: &PlacementState,
-    work: &mut SearchWorkBuffers,
-) {
-    work.add_shortlist.clear();
-    work.remove_shortlist.clear();
-    collect_metric_shortlist(problem, state, false, SWAP_SHORTLIST_PER_METRIC, work);
-    collect_metric_shortlist(problem, state, true, SWAP_SHORTLIST_PER_METRIC, work);
-
-    work.add_shortlist
-        .sort_unstable_by_key(|&candidate_idx| problem.candidates[candidate_idx].obj_id.as_u32());
-    work.remove_shortlist
-        .sort_unstable_by_key(|&candidate_idx| problem.candidates[candidate_idx].obj_id.as_u32());
-}
-
-fn collect_metric_shortlist(
-    problem: &PlacementProblem<'_>,
-    state: &PlacementState,
-    promoted: bool,
-    per_metric: usize,
-    work: &mut SearchWorkBuffers,
-) {
-    for metric_of in CANDIDATE_METRICS {
-        work.metric_candidates.clear();
-        work.metric_candidates
-            .extend((0..problem.candidates.len()).filter(|&idx| state.promoted[idx] == promoted));
-        let keep = per_metric.min(work.metric_candidates.len());
-        if keep == 0 {
-            continue;
-        }
-        if keep < work.metric_candidates.len() {
-            work.metric_candidates
-                .select_nth_unstable_by(keep - 1, |&lhs, &rhs| {
-                    cmp_candidate_metric(problem, metric_of, lhs, rhs)
-                });
-        }
-        work.metric_candidates[..keep]
-            .sort_unstable_by(|&lhs, &rhs| cmp_candidate_metric(problem, metric_of, lhs, rhs));
-        let shortlist = if promoted {
-            &mut work.remove_shortlist
-        } else {
-            &mut work.add_shortlist
-        };
-        for pos in 0..keep {
-            let candidate_idx = work.metric_candidates[pos];
-            if !shortlist.contains(&candidate_idx) {
-                shortlist.push(candidate_idx);
-            }
-        }
-    }
-}
-
-fn cmp_candidate_metric(
-    problem: &PlacementProblem<'_>,
-    metric_of: fn(&CandidateMeta) -> u64,
-    lhs: usize,
-    rhs: usize,
-) -> Ordering {
-    let lhs = &problem.candidates[lhs];
-    let rhs = &problem.candidates[rhs];
-    metric_of(rhs)
-        .cmp(&metric_of(lhs))
-        .then_with(|| lhs.obj_id.as_u32().cmp(&rhs.obj_id.as_u32()))
-}
-
-fn build_shadow_preserve_for_call(
-    stack: &FuncStackObjects,
-    call: &CallSiteObjects,
-    must_stable: &BitSet<StackObjId>,
-    promoted_optional: &BitSet<StackObjId>,
-    scratch_offsets: &FxHashMap<StackObjId, u32>,
-    next_obj_id: u32,
-) -> Option<(StackObj, CallPreservePlan)> {
-    let mut ranges = SmallVec::<[(u32, u32); 8]>::new();
-    for &obj in &call.live_across_objs {
-        if is_stable_real(must_stable, promoted_optional, obj) {
-            continue;
-        }
-        let Some(&size) = stack.obj_size_words.get(&obj) else {
-            panic!("missing object size for obj {}", obj.as_u32());
-        };
-        if size == 0 {
-            continue;
-        }
-        let start = *scratch_offsets.get(&obj).unwrap_or_else(|| {
-            panic!(
-                "missing scratch offset for obj {} at call {}",
-                obj.as_u32(),
-                call.inst.as_u32()
-            )
-        });
-        ranges.push((start, size));
-    }
-
-    if ranges.is_empty() {
-        return None;
-    }
-
-    ranges.sort_unstable_by_key(|(start, _)| *start);
-    let mut shadow_words: u32 = 0;
-    let mut runs: SmallVec<[SaveRun; 2]> = smallvec![];
-    for (start, len) in ranges {
-        if let Some(last) = runs.last_mut() {
-            let last_end = last
-                .scratch_src_word
-                .checked_add(last.len_words)
-                .expect("shadow run end overflow");
-            if last_end == start {
-                last.len_words = last
-                    .len_words
-                    .checked_add(len)
-                    .expect("shadow run merge overflow");
-                shadow_words = shadow_words
-                    .checked_add(len)
-                    .expect("shadow object size overflow");
-                continue;
-            }
-        }
-        runs.push(SaveRun {
-            scratch_src_word: start,
-            shadow_dst_word: shadow_words,
-            len_words: len,
-        });
-        shadow_words = shadow_words
-            .checked_add(len)
-            .expect("shadow object size overflow");
-    }
-    if shadow_words == 0 {
-        return None;
-    }
-
-    let shadow_obj = StackObj {
-        id: StackObjId::new(next_obj_id as usize),
-        kind: StackObjKind::Shadow(call.inst),
-        size_words: shadow_words,
-        region: LiveRegion::sort_only(call.call_rank),
-        access_weight: 0,
-        load_count: 0,
-        store_count: 0,
-    };
-    let plan = CallPreservePlan {
-        mode: PreserveMode::ShadowRuns {
-            shadow_obj: shadow_obj.id,
-            runs,
-        },
-        result_count: call.result_count,
-    };
-    Some((shadow_obj, plan))
-}
-
-fn build_scratch_pack(
-    scratch_pack: &mut Vec<PackedObject>,
-    sorted_objects: &[&StackObj],
-    must_stable: &BitSet<StackObjId>,
-    promoted_optional: &BitSet<StackObjId>,
-) {
-    scratch_pack.clear();
-    for &obj in sorted_objects {
-        if is_stable_real(must_stable, promoted_optional, obj.id) {
-            continue;
-        }
-        scratch_pack.push(PackedObject {
-            id: obj.id,
-            size_words: obj.size_words,
-            region: obj.region.clone(),
-            min_offset_words: 0,
-        });
-    }
-}
-
-fn build_stable_pack_entries(
-    stable_entries: &mut Vec<StablePackEntry>,
-    stable_items: &mut Vec<ExactPackItem<StableItemIdx>>,
-    shadow_objs: &[ShadowPackObj],
-    ctx: StablePackCtx<'_>,
-    promoted_optional: &BitSet<StackObjId>,
-) {
-    stable_entries.clear();
-    stable_items.clear();
-    for (local_idx, &obj) in ctx.sorted_objects.iter().enumerate() {
-        if !is_stable_real(ctx.must_stable, promoted_optional, obj.id) || obj.size_words == 0 {
-            continue;
-        }
-        push_stable_real_entry(stable_entries, local_idx as u32, obj);
-    }
-    for shadow in shadow_objs {
-        if shadow.obj.size_words == 0 {
-            continue;
-        }
-        stable_entries.push(StablePackEntry {
-            sort_key: shadow.obj.region.sort_key(shadow.obj.id),
-            member: StablePackMember::Shadow(shadow.call_idx),
-            id: shadow.obj.id,
-            size_words: shadow.obj.size_words,
-        });
-    }
-    finish_stable_pack_entries(stable_entries, stable_items);
-}
-
-fn build_stable_pack_entries_for_move(
-    stable_entries: &mut Vec<StablePackEntry>,
-    stable_items: &mut Vec<ExactPackItem<StableItemIdx>>,
-    changed_shadow_calls: &mut Vec<u32>,
-    problem: &PlacementProblem<'_>,
-    state: &PlacementState,
-    mv: PlacementMove,
-) {
-    stable_entries.clear();
-    stable_items.clear();
-    let (insert_idx, skip_idx) = stable_local_indices_for_move(problem, mv);
-    for local_idx in TrialLocalIter::new(&state.stable_real_locals, insert_idx, skip_idx) {
-        let obj = problem.sorted_objects[local_idx as usize];
-        push_stable_real_entry(stable_entries, local_idx, obj);
-    }
-    push_stable_shadow_entries_for_move(stable_entries, changed_shadow_calls, problem, state, mv);
-    finish_stable_pack_entries(stable_entries, stable_items);
-}
-
-fn push_stable_real_entry(
-    stable_entries: &mut Vec<StablePackEntry>,
-    local_idx: u32,
-    obj: &StackObj,
-) {
-    if obj.size_words == 0 {
-        return;
-    }
-    stable_entries.push(StablePackEntry {
-        sort_key: obj.region.sort_key(obj.id),
-        member: StablePackMember::Real(LocalObjIdx::new(local_idx as usize)),
-        id: obj.id,
-        size_words: obj.size_words,
-    });
-}
-
-fn push_stable_shadow_entries_for_move(
-    stable_entries: &mut Vec<StablePackEntry>,
-    changed_shadow_calls: &mut Vec<u32>,
-    problem: &PlacementProblem<'_>,
-    state: &PlacementState,
-    mv: PlacementMove,
-) {
-    collect_changed_shadow_calls(problem, mv, changed_shadow_calls);
-    for &call_idx in &state.nonzero_shadow_calls {
-        if changed_shadow_calls.binary_search(&call_idx).is_ok() {
-            continue;
-        }
-        push_score_shadow_entry(
-            stable_entries,
-            problem,
-            call_idx,
-            state.shadow_words_by_call[call_idx as usize],
-        );
-    }
-    for &call_idx in changed_shadow_calls.iter() {
-        let shadow_words = shadow_words_for_call_after_move(problem, state, mv, call_idx as usize);
-        if shadow_words != 0 {
-            push_score_shadow_entry(stable_entries, problem, call_idx, shadow_words);
-        }
-    }
-}
-
-fn collect_changed_shadow_calls(
-    problem: &PlacementProblem<'_>,
-    mv: PlacementMove,
-    changed_shadow_calls: &mut Vec<u32>,
-) {
-    changed_shadow_calls.clear();
-    match mv {
-        PlacementMove::None => {}
-        PlacementMove::Add(candidate_idx) | PlacementMove::Remove(candidate_idx) => {
-            changed_shadow_calls.extend(problem.candidates[candidate_idx].live_call_indices.iter());
-        }
-        PlacementMove::Swap {
-            add_idx,
-            remove_idx,
-        } => {
-            changed_shadow_calls.extend(problem.candidates[add_idx].live_call_indices.iter());
-            changed_shadow_calls.extend(problem.candidates[remove_idx].live_call_indices.iter());
-        }
-    }
-    changed_shadow_calls.sort_unstable();
-    changed_shadow_calls.dedup();
-}
-
-fn push_score_shadow_entry(
-    stable_entries: &mut Vec<StablePackEntry>,
-    problem: &PlacementProblem<'_>,
-    call_idx: u32,
-    size_words: u32,
-) {
-    let id = StackObjId::new(
-        problem_shadow_order_id(problem.next_shadow_base_id, call_idx as usize) as usize,
-    );
-    let call = problem.sorted_calls[call_idx as usize];
-    stable_entries.push(StablePackEntry {
-        sort_key: (call.call_rank, call.call_rank, id.as_u32()),
-        member: StablePackMember::Shadow(call_idx),
-        id,
-        size_words,
-    });
-}
-
-fn finish_stable_pack_entries(
-    stable_entries: &mut [StablePackEntry],
-    stable_items: &mut Vec<ExactPackItem<StableItemIdx>>,
-) {
-    stable_entries.sort_unstable_by_key(|entry| entry.sort_key);
-    for (item_idx, entry) in stable_entries.iter().enumerate() {
-        stable_items.push(ExactPackItem {
-            id: entry.id,
-            idx: StableItemIdx::new(item_idx),
-            size_words: entry.size_words,
-            min_offset_words: 0,
-        });
-    }
-}
-
-fn stable_pack_entries_conflict(
-    ctx: StablePackCtx<'_>,
-    stable_entries: &[StablePackEntry],
-    lhs: StableItemIdx,
-    rhs: StableItemIdx,
-) -> bool {
-    match (
-        stable_entries[lhs.index()].member,
-        stable_entries[rhs.index()].member,
-    ) {
-        (StablePackMember::Real(lhs), StablePackMember::Real(rhs)) => {
-            ctx.real_conflicts_by_local[lhs.index()].contains(rhs)
-        }
-        (StablePackMember::Real(local), StablePackMember::Shadow(call_idx))
-        | (StablePackMember::Shadow(call_idx), StablePackMember::Real(local)) => {
-            ctx.shadow_conflicts_by_call[call_idx as usize].contains(local)
-        }
-        (StablePackMember::Shadow(_), StablePackMember::Shadow(_)) => false,
-    }
-}
-
-fn cmp_func_placement_score(a: FuncPlacementScore, b: FuncPlacementScore) -> Ordering {
-    a.cost
-        .cmp(&b.cost)
-        .then_with(|| a.stable_words.cmp(&b.stable_words))
-        .then_with(|| a.scratch_words.cmp(&b.scratch_words))
-}
-
-fn resulting_promoted_count(state: &PlacementState, mv: PlacementMove) -> usize {
-    match mv {
-        PlacementMove::None => state.promoted_count,
-        PlacementMove::Add(_) => state.promoted_count + 1,
-        PlacementMove::Remove(_) => state
-            .promoted_count
-            .checked_sub(1)
-            .expect("promoted count underflow"),
-        PlacementMove::Swap { .. } => state.promoted_count,
-    }
-}
-
-fn move_tie_key(problem: &PlacementProblem<'_>, mv: PlacementMove) -> (u8, u32, u32) {
-    match mv {
-        PlacementMove::Add(candidate_idx) => {
-            (0, problem.candidates[candidate_idx].obj_id.as_u32(), 0)
-        }
-        PlacementMove::Remove(candidate_idx) => {
-            (1, problem.candidates[candidate_idx].obj_id.as_u32(), 0)
-        }
-        PlacementMove::Swap {
-            add_idx,
-            remove_idx,
-        } => (
-            2,
-            problem.candidates[add_idx].obj_id.as_u32(),
-            problem.candidates[remove_idx].obj_id.as_u32(),
-        ),
-        PlacementMove::None => (3, u32::MAX, u32::MAX),
-    }
-}
-
-fn cmp_move_tie_key(
-    problem: &PlacementProblem<'_>,
-    a: PlacementMove,
-    b: PlacementMove,
-) -> Ordering {
-    move_tie_key(problem, a).cmp(&move_tie_key(problem, b))
-}
-
-fn placement_cost(
-    problem: &PlacementProblem<'_>,
-    recursive_access_cost: u64,
-    shadow_copy_words: u64,
-    scratch_words: u32,
-    stable_words: u32,
-) -> u64 {
-    let mut cost = evaluate_memory_cost(problem.cost_model, scratch_words, stable_words);
-    if problem.is_recursive && stable_words != 0 {
-        cost = cost
-            .checked_add(problem.frame_setup_cost)
-            .expect("frame setup total cost overflow");
-    }
-    cost = cost
-        .checked_add(recursive_access_cost)
-        .expect("frame access total cost overflow");
-    cost.checked_add(
-        problem
-            .shadow_cost_per_word
-            .checked_mul(shadow_copy_words)
-            .expect("shadow copy total cost overflow"),
-    )
-    .expect("shadow copy total cost overflow")
-}
-
-fn shadow_copy_words(call_preserve: &FxHashMap<InstId, CallPreservePlan>) -> u64 {
-    call_preserve
-        .values()
-        .map(|plan| match &plan.mode {
-            PreserveMode::ShadowRuns { runs, .. } => {
-                runs.iter().map(|run| u64::from(run.len_words)).sum()
-            }
-            PreserveMode::None | PreserveMode::TinyStackLift { .. } => 0,
-        })
-        .sum()
-}
-
-struct TrialLocalIter<'a> {
-    base: &'a [u32],
-    pos: usize,
-    insert_idx: Option<u32>,
-    skip_idx: Option<u32>,
-}
-
-impl<'a> TrialLocalIter<'a> {
-    fn new(base: &'a [u32], insert_idx: Option<u32>, skip_idx: Option<u32>) -> Self {
-        Self {
-            base,
-            pos: 0,
-            insert_idx,
-            skip_idx,
-        }
-    }
-}
-
-impl Iterator for TrialLocalIter<'_> {
-    type Item = u32;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            let base_idx = self.base.get(self.pos).copied();
-            if let Some(insert_idx) = self.insert_idx
-                && base_idx.is_none_or(|base_idx| insert_idx < base_idx)
-            {
-                self.insert_idx = None;
-                return Some(insert_idx);
-            }
-
-            let Some(base_idx) = base_idx else {
-                return self.insert_idx.take();
-            };
-            self.pos += 1;
-            if self.skip_idx == Some(base_idx) {
-                continue;
-            }
-            return Some(base_idx);
-        }
-    }
-}
-
-fn scratch_local_indices_for_move(
-    problem: &PlacementProblem<'_>,
-    mv: PlacementMove,
-) -> (Option<u32>, Option<u32>) {
-    match mv {
-        PlacementMove::None => (None, None),
-        PlacementMove::Add(candidate_idx) => (
-            None,
-            Some(problem.candidates[candidate_idx].local_idx.as_u32()),
-        ),
-        PlacementMove::Remove(candidate_idx) => (
-            Some(problem.candidates[candidate_idx].local_idx.as_u32()),
-            None,
-        ),
-        PlacementMove::Swap {
-            add_idx,
-            remove_idx,
-        } => (
-            Some(problem.candidates[remove_idx].local_idx.as_u32()),
-            Some(problem.candidates[add_idx].local_idx.as_u32()),
-        ),
-    }
-}
-
-fn stable_local_indices_for_move(
-    problem: &PlacementProblem<'_>,
-    mv: PlacementMove,
-) -> (Option<u32>, Option<u32>) {
-    match mv {
-        PlacementMove::None => (None, None),
-        PlacementMove::Add(candidate_idx) => (
-            Some(problem.candidates[candidate_idx].local_idx.as_u32()),
-            None,
-        ),
-        PlacementMove::Remove(candidate_idx) => (
-            None,
-            Some(problem.candidates[candidate_idx].local_idx.as_u32()),
-        ),
-        PlacementMove::Swap {
-            add_idx,
-            remove_idx,
-        } => (
-            Some(problem.candidates[add_idx].local_idx.as_u32()),
-            Some(problem.candidates[remove_idx].local_idx.as_u32()),
-        ),
-    }
-}
-
-fn additive_terms_with_move(
-    problem: &PlacementProblem<'_>,
-    state: &PlacementState,
-    mv: PlacementMove,
-) -> (u64, u64) {
-    match mv {
-        PlacementMove::None => (state.shadow_copy_words, state.recursive_access_cost),
-        PlacementMove::Add(candidate_idx) => {
-            let candidate = &problem.candidates[candidate_idx];
-            (
-                state
-                    .shadow_copy_words
-                    .checked_sub(candidate.shadow_copy_words)
-                    .expect("shadow copy words underflow"),
-                state
-                    .recursive_access_cost
-                    .checked_add(candidate.recursive_access_cost)
-                    .expect("recursive access cost overflow"),
-            )
-        }
-        PlacementMove::Remove(candidate_idx) => {
-            let candidate = &problem.candidates[candidate_idx];
-            (
-                state
-                    .shadow_copy_words
-                    .checked_add(candidate.shadow_copy_words)
-                    .expect("shadow copy words overflow"),
-                state
-                    .recursive_access_cost
-                    .checked_sub(candidate.recursive_access_cost)
-                    .expect("recursive access cost underflow"),
-            )
-        }
-        PlacementMove::Swap {
-            add_idx,
-            remove_idx,
-        } => {
-            let add_candidate = &problem.candidates[add_idx];
-            let remove_candidate = &problem.candidates[remove_idx];
-            (
-                state
-                    .shadow_copy_words
-                    .checked_sub(add_candidate.shadow_copy_words)
-                    .expect("shadow copy words underflow")
-                    .checked_add(remove_candidate.shadow_copy_words)
-                    .expect("shadow copy words overflow"),
-                state
-                    .recursive_access_cost
-                    .checked_add(add_candidate.recursive_access_cost)
-                    .expect("recursive access cost overflow")
-                    .checked_sub(remove_candidate.recursive_access_cost)
-                    .expect("recursive access cost underflow"),
-            )
-        }
-    }
-}
-
-fn insert_sorted_u32(values: &mut Vec<u32>, value: u32) {
-    match values.binary_search(&value) {
-        Ok(_) => {}
-        Err(index) => values.insert(index, value),
-    }
-}
-
-fn remove_sorted_u32(values: &mut Vec<u32>, value: u32) {
-    let index = values
-        .binary_search(&value)
-        .unwrap_or_else(|_| panic!("missing sorted value {value}"));
-    let _ = values.remove(index);
-}
-
-fn recursive_access_cost(cost_model: &ArenaCostModel, is_recursive: bool, fact: &ObjFacts) -> u64 {
-    if !is_recursive {
-        return 0;
-    }
-    cost_model
-        .w_stack
-        .checked_mul(fact.access_weight.saturating_mul(4))
-        .expect("frame access cost overflow")
-}
-
-fn frame_setup_cost(cost_model: &ArenaCostModel) -> u64 {
-    cost_model
-        .w_save
-        .checked_mul(32)
-        .expect("frame setup cost overflow")
-        .checked_add(
-            cost_model
-                .w_code
-                .checked_mul(16)
-                .expect("frame setup code cost overflow"),
-        )
-        .expect("frame setup total cost overflow")
-}
-
-fn shadow_cost_per_word(cost_model: &ArenaCostModel, is_recursive: bool) -> u64 {
-    let copy_units = if is_recursive { 16 } else { 12 };
-    cost_model
-        .w_save
-        .checked_mul(copy_units)
-        .expect("shadow copy gas cost overflow")
-        .checked_add(
-            cost_model
-                .w_code
-                .checked_mul(copy_units)
-                .expect("shadow copy code cost overflow"),
-        )
-        .expect("shadow copy total cost overflow")
-}
-
-fn is_stable_real(
-    must_stable: &BitSet<StackObjId>,
-    promoted_optional: &BitSet<StackObjId>,
-    obj: StackObjId,
-) -> bool {
-    must_stable.contains(obj) || promoted_optional.contains(obj)
-}
-
-fn is_better_score(candidate: FuncPlacementScore, current: FuncPlacementScore) -> bool {
-    cmp_func_placement_score(candidate, current) == Ordering::Less
-}
-
-fn evaluate_memory_cost(cost_model: &ArenaCostModel, scratch_words: u32, stable_words: u32) -> u64 {
-    let words = scratch_words
-        .checked_add(stable_words)
-        .expect("memory words overflow");
-    let total_words = (STATIC_BASE / WORD_BYTES)
-        .checked_add(words)
-        .expect("memory expansion words overflow");
-    cost_model
-        .w_mem
-        .checked_mul(mem_expansion_gas(total_words))
-        .expect("memory cost overflow")
-}
-
-fn mem_expansion_gas(words: u32) -> u64 {
-    let words = u128::from(words);
-    let lin = words.saturating_mul(3);
-    let quad = words.saturating_mul(words) / 512;
-    u64::try_from(lin.saturating_add(quad)).expect("memory expansion gas overflow")
-}
-
 fn abs_addr_for_word(arena_base: u32, word: u32) -> u32 {
     arena_base
         .checked_add(
@@ -2820,12 +844,6 @@ fn abs_addr_for_word(arena_base: u32, word: u32) -> u32 {
                 .expect("absolute address overflow"),
         )
         .expect("absolute address overflow")
-}
-
-fn problem_shadow_order_id(next_shadow_base_id: u32, call_idx: usize) -> u32 {
-    next_shadow_base_id
-        .checked_add(call_idx as u32)
-        .expect("shadow order id overflow")
 }
 
 #[cfg(debug_assertions)]
@@ -2853,7 +871,6 @@ fn verify_program_memory_plan(
                 ObjLoc::StableAbs(word) | ObjLoc::StableFrame(word) => {
                     stable_offsets.insert(*obj, word);
                 }
-                ObjLoc::StackPinned(_) => panic!("stack-pinned objects are not implemented"),
             }
         }
 
@@ -2867,12 +884,9 @@ fn verify_program_memory_plan(
 
         let mut stable_subset = subset_objects(&stack.objects, stable_offsets.keys().copied());
         for call in func_plan.call_preserve.values() {
-            let PreserveMode::ShadowRuns { shadow_obj, runs } = &call.mode else {
-                continue;
-            };
-            let size_words: u32 = runs.iter().map(|run| run.len_words).sum();
+            let size_words: u32 = call.runs.iter().map(|run| run.len_words).sum();
             stable_subset.push(StackObj {
-                id: *shadow_obj,
+                id: call.shadow_obj,
                 kind: StackObjKind::Shadow(InstId::from_u32(0)),
                 size_words,
                 region: LiveRegion::sort_only(0),
@@ -2903,10 +917,7 @@ fn verify_program_memory_plan(
         }
 
         for call in &stack.call_sites {
-            let saved = func_plan
-                .call_preserve
-                .get(&call.inst)
-                .map(|plan| &plan.mode);
+            let saved = func_plan.call_preserve.get(&call.inst);
             for &obj in &call.callee_visible_objs {
                 if stack.obj_size_words.get(&obj).copied() == Some(0) {
                     continue;
@@ -2929,7 +940,7 @@ fn verify_program_memory_plan(
                         panic!("missing object location for obj {}", obj.as_u32())
                     });
                 if matches!(loc, ObjLoc::ScratchAbs(_)) {
-                    let Some(PreserveMode::ShadowRuns { runs, .. }) = saved else {
+                    let Some(preserve) = saved else {
                         panic!(
                             "scratch object {} in func {} at call {} is not preserved",
                             obj.as_u32(),
@@ -2939,16 +950,14 @@ fn verify_program_memory_plan(
                     };
                     let Some(src_word) = func_plan.obj_loc.get(&obj).and_then(|loc| match loc {
                         ObjLoc::ScratchAbs(word) => Some(*word),
-                        ObjLoc::StableAbs(_) | ObjLoc::StableFrame(_) | ObjLoc::StackPinned(_) => {
-                            None
-                        }
+                        ObjLoc::StableAbs(_) | ObjLoc::StableFrame(_) => None,
                     }) else {
                         continue;
                     };
                     let size = stack.obj_size_words[&obj];
                     for word in src_word..src_word + size {
                         assert!(
-                            runs.iter().any(|run| {
+                            preserve.runs.iter().any(|run| {
                                 let end = run
                                     .scratch_src_word
                                     .checked_add(run.len_words)
@@ -3043,97 +1052,4 @@ fn verify_subset_packing(
             );
         }
     }
-}
-
-pub(crate) fn topo_sort_sccs(
-    funcs: &FxHashSet<FuncRef>,
-    call_graph: &CallGraph,
-    scc: &CallGraphSccs,
-) -> Vec<SccRef> {
-    let mut sccs: BTreeSet<SccRef> = BTreeSet::new();
-    for &func in funcs {
-        sccs.insert(scc.scc_ref(func));
-    }
-
-    let mut edges: BTreeMap<SccRef, BTreeSet<SccRef>> = BTreeMap::new();
-    let mut indegree: BTreeMap<SccRef, usize> = BTreeMap::new();
-    for &scc_ref in &sccs {
-        edges.insert(scc_ref, BTreeSet::new());
-        indegree.insert(scc_ref, 0);
-    }
-
-    for &func in funcs {
-        let from = scc.scc_ref(func);
-        for &callee in call_graph.callee_of(func) {
-            let to = scc.scc_ref(callee);
-            if from == to {
-                continue;
-            }
-            let tos = edges.get_mut(&from).expect("missing SCC edge set");
-            if tos.insert(to) {
-                *indegree.get_mut(&to).expect("missing SCC indegree") += 1;
-            }
-        }
-    }
-
-    let mut ready: BTreeSet<SccRef> = BTreeSet::new();
-    for (&scc_ref, &deg) in &indegree {
-        if deg == 0 {
-            ready.insert(scc_ref);
-        }
-    }
-
-    let mut topo: Vec<SccRef> = Vec::with_capacity(sccs.len());
-    while let Some(&scc_ref) = ready.first() {
-        ready.remove(&scc_ref);
-        topo.push(scc_ref);
-
-        let tos: Vec<SccRef> = edges
-            .get(&scc_ref)
-            .expect("missing SCC edge set")
-            .iter()
-            .copied()
-            .collect();
-        for to in tos {
-            let deg = indegree.get_mut(&to).expect("missing SCC indegree");
-            *deg = deg.checked_sub(1).expect("SCC indegree underflow");
-            if *deg == 0 {
-                ready.insert(to);
-            }
-        }
-    }
-
-    debug_assert_eq!(topo.len(), sccs.len(), "SCC topo sort incomplete");
-    topo
-}
-
-pub(crate) fn build_scc_edges(
-    funcs: &FxHashSet<FuncRef>,
-    call_graph: &CallGraph,
-    scc: &CallGraphSccs,
-    topo: &[SccRef],
-) -> BTreeMap<SccRef, Vec<SccRef>> {
-    let mut edges: BTreeMap<SccRef, BTreeSet<SccRef>> = BTreeMap::new();
-    for &scc_ref in topo {
-        edges.insert(scc_ref, BTreeSet::new());
-    }
-
-    for &func in funcs {
-        let from = scc.scc_ref(func);
-        for &callee in call_graph.callee_of(func) {
-            let to = scc.scc_ref(callee);
-            if from != to {
-                edges
-                    .get_mut(&from)
-                    .expect("missing SCC edge set")
-                    .insert(to);
-            }
-        }
-    }
-
-    let mut out: BTreeMap<SccRef, Vec<SccRef>> = BTreeMap::new();
-    for (scc_ref, tos) in edges {
-        out.insert(scc_ref, tos.into_iter().collect());
-    }
-    out
 }

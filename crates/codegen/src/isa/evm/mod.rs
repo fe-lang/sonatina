@@ -3,6 +3,7 @@ pub(crate) mod dyn_sp;
 mod emit;
 mod escape_scan;
 mod exact_func_merge;
+mod fixed_slots;
 mod frame_layout;
 mod heap_plan;
 mod high_alias;
@@ -11,14 +12,13 @@ mod late_block_merge;
 mod late_section_merge;
 mod machine;
 mod malloc_plan;
-mod mem_effects;
 mod memory_plan;
 pub mod opcode;
 mod pipeline;
+mod placement_search;
 mod prepare;
-mod provenance;
 mod ptr_escape;
-mod scratch_plan;
+mod ptr_provenance;
 pub(crate) mod static_arena_alloc;
 #[doc(hidden)]
 pub mod test_util;
@@ -40,7 +40,7 @@ pub(crate) use immediate::{
     immediate_materialization_cost_i256, immediate_materialization_plan, u32_to_be, u256_to_be,
 };
 pub(crate) use memory_plan::{
-    DYN_SP_SLOT, FREE_PTR_SLOT, FuncMemPlan, ObjLoc, PreserveMode, STATIC_BASE, WORD_BYTES,
+    DYN_SP_SLOT, FREE_PTR_SLOT, MachineFuncPlan, ObjLoc, STATIC_BASE, WORD_BYTES,
 };
 pub(crate) use opcode::OpCode;
 pub(crate) use prepare::{EvmFunctionPlan, EvmSectionPlan, prepare_free_ptr_restore};

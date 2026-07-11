@@ -10,13 +10,13 @@ object: Contract
   total: 687 bytes
 
 functions:
-  mem: global_dyn_base=0x500 arena_base=0xa0 scratch_peak_words=30 static_chain_peak_words=5
+  mem: global_dyn_base=0x500 arena_base=0xa0 scratch_peak_words=30 stable_chain_peak_words=5
   run: ir_blocks=7 ir_insts=140 vcode_ops=303 fixups=4 imm_bytes=131
     mem: scratch_words=30 stable_words=0 stable_mode=None entry_abs_words=35 abs_words_end=30
   assert: ir_blocks=3 ir_insts=3 vcode_ops=8 fixups=1 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=35 abs_words_end=0
   test_run: ir_blocks=1 ir_insts=27 vcode_ops=75 fixups=12 imm_bytes=21
-    mem: scratch_words=0 stable_words=5 stable_mode=StaticAbs(base=0x460) entry_abs_words=30 abs_words_end=35
+    mem: scratch_words=0 stable_words=5 stable_mode=StableAbs(base=0x460) entry_abs_words=30 abs_words_end=35
   __repro_runtime_entry: ir_blocks=1 ir_insts=2 vcode_ops=7 fixups=2 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=30 abs_words_end=0
 

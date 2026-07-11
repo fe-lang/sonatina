@@ -15,7 +15,7 @@ object: Contract
   total: 1963 bytes
 
 functions:
-  mem: global_dyn_base=0xa0 arena_base=0xa0 scratch_peak_words=0 static_chain_peak_words=0
+  mem: global_dyn_base=0xa0 arena_base=0xa0 scratch_peak_words=0 stable_chain_peak_words=0
   test_coin__StorPtr_Evm___207f35a85ac4062e: ir_blocks=39 ir_insts=120 vcode_ops=329 fixups=38 imm_bytes=61
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__Credit_h1b40c7da4bcceeac__9489dcd0a297a0c: ir_blocks=3 ir_insts=35 vcode_ops=104 fixups=9 imm_bytes=16

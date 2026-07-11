@@ -1,25 +1,34 @@
 use cranelift_entity::EntityRef;
 use rustc_hash::{FxHashMap, FxHashSet};
-use sonatina_ir::{InstId, Module, ValueId, module::FuncRef};
+#[cfg(debug_assertions)]
+use sonatina_ir::Module;
+use sonatina_ir::{InstId, ValueId, module::FuncRef};
 
-use crate::{bitset::BitSet, stackalloc::StackifyAlloc};
+use crate::{bitset::BitSet, module_analysis::CallGraphSchedule, stackalloc::StackifyAlloc};
 
+use crate::isa::evm::memory_plan::align_up_to_word;
+
+#[cfg(debug_assertions)]
+use super::{
+    super::{EvmBackend, memory_plan::FuncPreAnalysis, ptr_escape::PtrEscapeSummary},
+    placement::{MemoryPlacementSection, compute_semantic_memory_placement},
+};
 use super::{
     super::{
-        EvmBackend, FuncMemPlan, ObjLoc,
+        MachineFuncPlan, ObjLoc,
         memory_plan::{
-            BackendSpillReserve, FinalScratchReserveRange, FuncPreAnalysis,
-            MachineStackifyAnalysis, StableMode, WORD_BYTES,
+            self, BackendSpillReserve, FinalScratchReserveRange, MachineStackifyAnalysis,
+            StableMode, WORD_BYTES,
         },
-        ptr_escape::PtrEscapeSummary,
+        prepare::{ArenaBaseFacts, SectionMemoryLayout, choose_arena_base},
         static_arena_alloc::StackObjId,
     },
-    placement::{MemoryPlacementSection, compute_semantic_memory_placement},
+    placement::EvmMemoryPlacementPlan,
 };
 
 pub(crate) struct FinalSpillAllocation {
     pub(crate) alloc: StackifyAlloc,
-    pub(crate) mem_plan: FuncMemPlan,
+    pub(crate) mem_plan: MachineFuncPlan,
     pub(crate) required_reserve: BackendSpillReserve,
     pub(crate) stack_obj_remap: FxHashMap<StackObjId, StackObjId>,
     pub(crate) used_fallback: bool,
@@ -28,7 +37,7 @@ pub(crate) struct FinalSpillAllocation {
 pub(crate) struct FinalSpillAllocationInput {
     pub(crate) func: FuncRef,
     pub(crate) alloc: StackifyAlloc,
-    pub(crate) mem_plan: FuncMemPlan,
+    pub(crate) mem_plan: MachineFuncPlan,
     pub(crate) final_scratch_reserve: FinalScratchReserveRange,
     pub(crate) reserve: BackendSpillReserve,
     pub(crate) fixed_writes: Vec<FixedMemoryWriteRange>,
@@ -92,7 +101,7 @@ impl FinalSpillObjects {
 
     pub(crate) fn required_reserve(
         &self,
-        mem_plan: &FuncMemPlan,
+        mem_plan: &MachineFuncPlan,
         final_scratch_reserve: FinalScratchReserveRange,
         current_reserve: BackendSpillReserve,
         fixed_writes: &[FixedMemoryWriteRange],
@@ -132,7 +141,7 @@ impl FinalSpillObjects {
 pub(crate) struct MachineFinalSpillInput {
     pub(crate) func: FuncRef,
     pub(crate) analysis: MachineStackifyAnalysis,
-    pub(crate) mem_plan: FuncMemPlan,
+    pub(crate) mem_plan: MachineFuncPlan,
     pub(crate) final_scratch_reserve: FinalScratchReserveRange,
     pub(crate) reserve: BackendSpillReserve,
     pub(crate) fixed_writes: Vec<FixedMemoryWriteRange>,
@@ -141,16 +150,25 @@ pub(crate) struct MachineFinalSpillInput {
 
 type FinalSpillChoiceScore = (u32, u32, u32, u32, u64, u64);
 
-pub(crate) struct FinalSpillChoiceCtx<'a> {
+#[cfg(debug_assertions)]
+pub(crate) struct FinalSpillReplanCtx<'a> {
     pub(crate) source_module: &'a Module,
-    pub(crate) funcs: &'a [FuncRef],
     pub(crate) section_entry: FuncRef,
     pub(crate) section_includes: &'a [FuncRef],
     pub(crate) pre_analyses: &'a FxHashMap<FuncRef, FuncPreAnalysis>,
     pub(crate) ptr_escape: &'a FxHashMap<FuncRef, PtrEscapeSummary>,
     pub(crate) backend: &'a EvmBackend,
-    pub(crate) base_scratch_effects: &'a FxHashSet<FuncRef>,
+}
+
+pub(crate) struct FinalSpillChoiceCtx<'a> {
+    pub(crate) schedule: &'a CallGraphSchedule,
+    pub(crate) base_placement: &'a EvmMemoryPlacementPlan,
+    pub(crate) fixed_reservations: &'a SectionMemoryLayout,
+    pub(crate) funcs: &'a [FuncRef],
+    pub(crate) base_fixed_slot_effects: &'a FxHashSet<FuncRef>,
     pub(crate) inputs: &'a [MachineFinalSpillInput],
+    #[cfg(debug_assertions)]
+    pub(crate) replan: FinalSpillReplanCtx<'a>,
 }
 
 impl FinalSpillChoiceCtx<'_> {
@@ -199,37 +217,158 @@ impl FinalSpillChoiceCtx<'_> {
         choices
     }
 
+    /// Scores a choice assignment with the closed-form marginal model: the
+    /// per-function placements themselves are reserve-independent, so a trial
+    /// reserve only shifts each function's frame words by its delta over the
+    /// committed reserve, and the section aggregates are recomputed directly.
+    ///
+    /// Two second-order feedback paths are deliberately approximated by
+    /// holding them at their base-placement values (a trial reserve cannot
+    /// change them exactly without a full replan): private-static-malloc
+    /// extra scratch, and transient-malloc flips induced by new fixed-slot
+    /// effects. Set SONATINA_SPILL_SCORE_XCHECK=1 in a debug build to
+    /// cross-check against the full replan.
     fn score(
         &self,
         choices: &FxHashMap<FuncRef, OptionalFinalSpillPlacement>,
     ) -> FinalSpillChoiceScore {
         let reserves = self.final_spill_reserves(choices);
-        let mut scratch_effects = self.base_scratch_effects.clone();
-        for (&func, reserve) in &reserves {
+        let marginal = self.score_marginal(&reserves);
+        #[cfg(debug_assertions)]
+        if std::env::var_os("SONATINA_SPILL_SCORE_XCHECK").is_some() {
+            let replanned = self.score_by_replanning(&reserves);
+            if marginal != replanned {
+                eprintln!(
+                    "SPILL_SCORE_XCHECK mismatch: marginal={marginal:?} replanned={replanned:?}"
+                );
+            }
+        }
+        marginal
+    }
+
+    fn score_marginal(
+        &self,
+        reserves: &FxHashMap<FuncRef, BackendSpillReserve>,
+    ) -> FinalSpillChoiceScore {
+        let committed = |func: FuncRef| {
+            self.inputs
+                .iter()
+                .find(|input| input.func == func)
+                .map(|input| input.reserve)
+                .unwrap_or_default()
+        };
+        let trial_words = |func: FuncRef| -> (u32, u32) {
+            let base = &self.base_placement.funcs[&func].mem_plan;
+            let trial = reserves.get(&func).copied().unwrap_or_default();
+            let committed = committed(func);
+            let scratch_delta = trial
+                .scratch_words
+                .checked_sub(committed.scratch_words)
+                .expect("trial reserve below committed reserve");
+            let stable_delta = trial
+                .stable_words
+                .checked_sub(committed.stable_words)
+                .expect("trial reserve below committed reserve");
+            (
+                memory_plan::add_words(base.scratch_words, scratch_delta),
+                memory_plan::add_words(base.stable_words, stable_delta),
+            )
+        };
+
+        let reserve_scratch_peak = reserves
+            .values()
+            .map(|reserve| reserve.scratch_words)
+            .max()
+            .unwrap_or(0);
+        let has_dynamic_frames = self
+            .base_placement
+            .funcs
+            .values()
+            .any(|plan| plan.mem_plan.uses_dynamic_frame());
+
+        let mut scratch_peak_words = self
+            .funcs
+            .iter()
+            .map(|&func| trial_words(func).0)
+            .max()
+            .unwrap_or(0);
+        if has_dynamic_frames {
+            scratch_peak_words = scratch_peak_words.max(reserve_scratch_peak);
+        }
+        let chain =
+            memory_plan::compute_stable_chain_layout(self.schedule, |func| trial_words(func).1);
+
+        let has_stackify_fixed_slot_spills = !self.base_fixed_slot_effects.is_empty()
+            || reserves.values().any(|reserve| reserve.scratch_words != 0);
+        let arena_base = choose_arena_base(
+            self.fixed_reservations,
+            ArenaBaseFacts {
+                has_dynamic_frames,
+                has_stackify_fixed_slot_spills,
+                backend_spill_scratch_reserve_words: reserve_scratch_peak,
+                has_persistent_mallocs: self.base_placement.has_persistent_mallocs,
+            },
+        );
+        let global_dyn_base = arena_base
+            .checked_add(
+                memory_plan::add_words(scratch_peak_words, chain.peak_words)
+                    .checked_mul(WORD_BYTES)
+                    .expect("global dynamic base overflow"),
+            )
+            .expect("global dynamic base overflow");
+
+        (
+            global_dyn_base,
+            arena_base,
+            scratch_peak_words,
+            chain.peak_words,
+            reserves
+                .values()
+                .map(|reserve| u64::from(reserve.stable_words))
+                .sum(),
+            reserves
+                .values()
+                .map(|reserve| u64::from(reserve.scratch_words))
+                .sum(),
+        )
+    }
+
+    /// The pre-marginal-model scorer: a full section replan per evaluation.
+    /// Kept as the cross-check oracle for the marginal model.
+    #[cfg(debug_assertions)]
+    fn score_by_replanning(
+        &self,
+        reserves: &FxHashMap<FuncRef, BackendSpillReserve>,
+    ) -> FinalSpillChoiceScore {
+        let replan = &self.replan;
+        let mut fixed_slot_effects = self.base_fixed_slot_effects.clone();
+        for (&func, reserve) in reserves {
             if reserve.scratch_words != 0 {
-                scratch_effects.insert(func);
+                fixed_slot_effects.insert(func);
             }
         }
 
         let placement = compute_semantic_memory_placement(
-            self.source_module,
+            replan.source_module,
             MemoryPlacementSection {
+                schedule: self.schedule,
                 funcs: self.funcs,
-                entry: self.section_entry,
-                includes: self.section_includes,
+                entry: replan.section_entry,
+                includes: replan.section_includes,
+                fixed_reservations: self.fixed_reservations,
             },
-            self.pre_analyses,
-            self.ptr_escape,
-            &scratch_effects,
-            self.backend,
-            &reserves,
+            replan.pre_analyses,
+            replan.ptr_escape,
+            &fixed_slot_effects,
+            replan.backend,
+            reserves,
         );
 
         (
             placement.global_dyn_base,
             placement.arena_base,
             placement.scratch_peak_words,
-            placement.static_chain_peak_words,
+            placement.stable_chain_peak_words,
             reserves
                 .values()
                 .map(|reserve| u64::from(reserve.stable_words))
@@ -389,7 +528,7 @@ fn spill_count(len: usize) -> u32 {
 }
 
 fn required_scratch_reserve_words(
-    mem_plan: &FuncMemPlan,
+    mem_plan: &MachineFuncPlan,
     final_scratch_start_word: u32,
     spill_words: u32,
     fixed_writes: &[FixedMemoryWriteRange],
@@ -408,7 +547,7 @@ fn required_scratch_reserve_words(
 }
 
 fn required_stable_reserve_words(
-    mem_plan: &FuncMemPlan,
+    mem_plan: &MachineFuncPlan,
     current_reserved_words: u32,
     spill_words: u32,
     fixed_writes: &[FixedMemoryWriteRange],
@@ -419,7 +558,7 @@ fn required_stable_reserve_words(
 
     match mem_plan.stable_mode {
         StableMode::None | StableMode::DynamicFrame => spill_words,
-        StableMode::StaticAbs { .. } => {
+        StableMode::StableAbs { .. } => {
             let semantic_stable_words = mem_plan
                 .stable_words
                 .checked_sub(current_reserved_words)
@@ -437,7 +576,7 @@ fn required_stable_reserve_words(
 }
 
 fn place_scratch_spills(
-    mem_plan: &mut FuncMemPlan,
+    mem_plan: &mut MachineFuncPlan,
     objs: &[(StackObjId, StackObjId)],
     final_scratch_reserve: FinalScratchReserveRange,
     required_words: u32,
@@ -481,7 +620,7 @@ fn place_scratch_spills(
 }
 
 fn place_stable_spills(
-    mem_plan: &mut FuncMemPlan,
+    mem_plan: &mut MachineFuncPlan,
     objs: &[(StackObjId, StackObjId)],
     reserve: BackendSpillReserve,
     required_words: u32,
@@ -494,7 +633,7 @@ fn place_stable_spills(
 
     let stable_mode = mem_plan.stable_mode;
     let reserved_start = match stable_mode {
-        StableMode::StaticAbs { .. } => {
+        StableMode::StableAbs { .. } => {
             let (reserve_start, reserve_end) = stable_reserve_range(mem_plan, reserve.stable_words)
                 .expect("static stable reserve exceeds stable words");
             (required_words <= reserve.stable_words)
@@ -520,7 +659,7 @@ fn place_stable_spills(
             .max(spill_floor_words_from_fixed_writes(mem_plan, fixed_writes))
     };
     let loc = |word| match (reserved_start.is_some(), stable_mode) {
-        (true, StableMode::StaticAbs { .. }) => ObjLoc::StableAbs(word),
+        (true, StableMode::StableAbs { .. }) => ObjLoc::StableAbs(word),
         (true, StableMode::DynamicFrame) => ObjLoc::StableFrame(word),
         (true, StableMode::None) => unreachable!("stable tail requires stable mode"),
         (false, _) => ObjLoc::ScratchAbs(word),
@@ -536,7 +675,7 @@ fn place_stable_spills(
 }
 
 fn place_spills(
-    mem_plan: &mut FuncMemPlan,
+    mem_plan: &mut MachineFuncPlan,
     objs: &[(StackObjId, StackObjId)],
     start_word: u32,
     loc: impl Fn(u32) -> ObjLoc,
@@ -549,18 +688,18 @@ fn place_spills(
     }
 }
 
-fn stable_tail_start(mem_plan: &FuncMemPlan, spill_words: u32) -> Option<u32> {
+fn stable_tail_start(mem_plan: &MachineFuncPlan, spill_words: u32) -> Option<u32> {
     match mem_plan.stable_mode {
-        StableMode::StaticAbs { .. } | StableMode::DynamicFrame => {
+        StableMode::StableAbs { .. } | StableMode::DynamicFrame => {
             mem_plan.stable_words.checked_sub(spill_words)
         }
         StableMode::None => None,
     }
 }
 
-fn stable_reserve_range(mem_plan: &FuncMemPlan, reserved_words: u32) -> Option<(u32, u32)> {
+fn stable_reserve_range(mem_plan: &MachineFuncPlan, reserved_words: u32) -> Option<(u32, u32)> {
     match mem_plan.stable_mode {
-        StableMode::StaticAbs { .. } | StableMode::DynamicFrame => Some((
+        StableMode::StableAbs { .. } | StableMode::DynamicFrame => Some((
             mem_plan.stable_words.checked_sub(reserved_words)?,
             mem_plan.stable_words,
         )),
@@ -615,7 +754,7 @@ fn normalized_word_ranges(ranges: &[(u32, u32)]) -> Vec<(u32, u32)> {
 }
 
 fn spill_floor_words_from_fixed_writes(
-    mem_plan: &FuncMemPlan,
+    mem_plan: &MachineFuncPlan,
     fixed_writes: &[FixedMemoryWriteRange],
 ) -> u32 {
     forbidden_arena_words(mem_plan, fixed_writes)
@@ -626,7 +765,7 @@ fn spill_floor_words_from_fixed_writes(
 }
 
 fn forbidden_arena_words(
-    mem_plan: &FuncMemPlan,
+    mem_plan: &MachineFuncPlan,
     fixed_writes: &[FixedMemoryWriteRange],
 ) -> Vec<(u32, u32)> {
     normalized_word_ranges(
@@ -648,15 +787,15 @@ fn fixed_write_forbidden_arena_words(
     let rel_start = write.start_byte.saturating_sub(arena_base);
     let rel_end = write.end_byte.checked_sub(arena_base)?;
     let start_word = rel_start / WORD_BYTES;
-    let end_word = align_word_offset(rel_end)?.checked_div(WORD_BYTES)?;
+    let end_word = align_up_to_word(rel_end)?.checked_div(WORD_BYTES)?;
     (start_word < end_word).then_some((start_word, end_word))
 }
 
 fn forbidden_static_stable_offsets(
-    mem_plan: &FuncMemPlan,
+    mem_plan: &MachineFuncPlan,
     fixed_writes: &[FixedMemoryWriteRange],
 ) -> Vec<(u32, u32)> {
-    let StableMode::StaticAbs { base_word } = mem_plan.stable_mode else {
+    let StableMode::StableAbs { base_word } = mem_plan.stable_mode else {
         return Vec::new();
     };
 
@@ -676,16 +815,7 @@ fn forbidden_static_stable_offsets(
     )
 }
 
-fn align_word_offset(bytes: u32) -> Option<u32> {
-    let rem = bytes % WORD_BYTES;
-    if rem == 0 {
-        Some(bytes)
-    } else {
-        bytes.checked_add(WORD_BYTES - rem)
-    }
-}
-
-fn absolute_word_for_loc(mem_plan: &FuncMemPlan, loc: ObjLoc) -> Result<Option<u32>, String> {
+fn absolute_word_for_loc(mem_plan: &MachineFuncPlan, loc: ObjLoc) -> Result<Option<u32>, String> {
     match loc {
         ObjLoc::ScratchAbs(word) => Ok(Some(word)),
         ObjLoc::StableAbs(off) => mem_plan
@@ -695,13 +825,13 @@ fn absolute_word_for_loc(mem_plan: &FuncMemPlan, loc: ObjLoc) -> Result<Option<u
                     .ok_or_else(|| format!("final spill stable address overflow at offset {off}"))
             })
             .transpose(),
-        ObjLoc::StableFrame(_) | ObjLoc::StackPinned(_) => Ok(None),
+        ObjLoc::StableFrame(_) => Ok(None),
     }
 }
 
 fn validate_final_spill_absolute_disjointness(
     func: FuncRef,
-    mem_plan: &FuncMemPlan,
+    mem_plan: &MachineFuncPlan,
     final_objs: &[StackObjId],
 ) -> Result<(), String> {
     let mut ranges = Vec::new();
@@ -751,7 +881,7 @@ fn validate_final_spill_absolute_disjointness(
 
 fn validate_final_spills_disjoint_from_fixed_writes(
     func: FuncRef,
-    mem_plan: &FuncMemPlan,
+    mem_plan: &MachineFuncPlan,
     final_objs: &[StackObjId],
     fixed_writes: &[FixedMemoryWriteRange],
 ) -> Result<(), String> {
@@ -787,7 +917,7 @@ fn validate_final_spills_disjoint_from_fixed_writes(
 }
 
 fn absolute_byte_range_for_loc(
-    mem_plan: &FuncMemPlan,
+    mem_plan: &MachineFuncPlan,
     loc: ObjLoc,
 ) -> Result<Option<(u32, u32)>, String> {
     let Some(word) = absolute_word_for_loc(mem_plan, loc)? else {
@@ -812,7 +942,7 @@ fn byte_ranges_overlap(a_start: u32, a_end: u32, b_start: u32, b_end: u32) -> bo
 
 fn validate_final_spill_regions(
     func: FuncRef,
-    mem_plan: &FuncMemPlan,
+    mem_plan: &MachineFuncPlan,
     final_scratch_reserve: FinalScratchReserveRange,
     reserve: BackendSpillReserve,
     scratch_objs: &[(StackObjId, StackObjId)],
@@ -865,7 +995,7 @@ fn validate_final_spill_regions(
             })?;
             let valid = matches!(
                 (mem_plan.stable_mode, loc),
-                (StableMode::StaticAbs { .. }, ObjLoc::StableAbs(_))
+                (StableMode::StableAbs { .. }, ObjLoc::StableAbs(_))
                     | (StableMode::DynamicFrame, ObjLoc::StableFrame(_))
             );
             if !valid {
@@ -879,7 +1009,7 @@ fn validate_final_spill_regions(
             }
             let off = match loc {
                 ObjLoc::StableAbs(off) | ObjLoc::StableFrame(off) => off,
-                ObjLoc::ScratchAbs(_) | ObjLoc::StackPinned(_) => unreachable!("validated above"),
+                ObjLoc::ScratchAbs(_) => unreachable!("validated above"),
             };
             let Some((reserve_start, reserve_end)) = reserved_stable_range else {
                 return Err(format!(
@@ -908,7 +1038,7 @@ fn validate_final_spill_regions(
 #[cfg(test)]
 mod tests {
     use cranelift_entity::{EntityRef, SecondaryMap};
-    use rustc_hash::{FxHashMap, FxHashSet};
+    use rustc_hash::FxHashMap;
     use sonatina_ir::{InstId, ValueId, module::FuncRef};
 
     use super::{
@@ -920,20 +1050,19 @@ mod tests {
     use crate::{
         bitset::BitSet,
         isa::evm::{
-            FuncMemPlan, ObjLoc,
-            malloc_plan::MallocEscapeKind,
+            MachineFuncPlan, ObjLoc,
             memory_plan::{BackendSpillReserve, FinalScratchReserveRange, StableMode},
             static_arena_alloc::StackObjId,
         },
         stackalloc::StackifyAlloc,
     };
 
-    fn static_mem_plan(scratch_words: u32, stable_words: u32) -> FuncMemPlan {
-        FuncMemPlan {
+    fn static_mem_plan(scratch_words: u32, stable_words: u32) -> MachineFuncPlan {
+        MachineFuncPlan {
             arena_base: 0xa0,
             scratch_words,
             stable_words,
-            stable_mode: StableMode::StaticAbs {
+            stable_mode: StableMode::StableAbs {
                 base_word: scratch_words,
             },
             entry_abs_words: scratch_words,
@@ -941,15 +1070,11 @@ mod tests {
             alloca_loc: FxHashMap::default(),
             spill_obj: SecondaryMap::new(),
             call_preserve: FxHashMap::default(),
-            malloc_future_abs_words: FxHashMap::default(),
-            transient_mallocs: FxHashSet::default(),
-            malloc_escape_kinds: FxHashMap::<_, MallocEscapeKind>::default(),
-            return_escape_caller_abs_words: 0,
         }
     }
 
-    fn scratch_mem_plan(scratch_words: u32) -> FuncMemPlan {
-        FuncMemPlan {
+    fn scratch_mem_plan(scratch_words: u32) -> MachineFuncPlan {
+        MachineFuncPlan {
             arena_base: 0xa0,
             scratch_words,
             stable_words: 0,
@@ -959,10 +1084,6 @@ mod tests {
             alloca_loc: FxHashMap::default(),
             spill_obj: SecondaryMap::new(),
             call_preserve: FxHashMap::default(),
-            malloc_future_abs_words: FxHashMap::default(),
-            transient_mallocs: FxHashSet::default(),
-            malloc_escape_kinds: FxHashMap::<_, MallocEscapeKind>::default(),
-            return_escape_caller_abs_words: 0,
         }
     }
 
@@ -998,7 +1119,7 @@ mod tests {
 
     fn allocate_final_spills(
         alloc: StackifyAlloc,
-        mem_plan: FuncMemPlan,
+        mem_plan: MachineFuncPlan,
         reserve: BackendSpillReserve,
         stable: &BitSet<ValueId>,
         placement: OptionalFinalSpillPlacement,
@@ -1008,7 +1129,7 @@ mod tests {
 
     fn allocate_final_spills_with_writes(
         alloc: StackifyAlloc,
-        mem_plan: FuncMemPlan,
+        mem_plan: MachineFuncPlan,
         reserve: BackendSpillReserve,
         fixed_writes: Vec<FixedMemoryWriteRange>,
         stable: &BitSet<ValueId>,

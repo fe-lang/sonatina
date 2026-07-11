@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/evm.rs
-assertion_line: 457
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/unchecked_signed_narrow_div_mod.sntn
 ---
@@ -11,7 +10,7 @@ object: Contract
   total: 48 bytes
 
 functions:
-  mem: global_dyn_base=0x0 arena_base=0x0 scratch_peak_words=0 static_chain_peak_words=0
+  mem: global_dyn_base=0x0 arena_base=0x0 scratch_peak_words=0 stable_chain_peak_words=0
   entry: ir_blocks=1 ir_insts=15 vcode_ops=37 fixups=0 imm_bytes=11
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 

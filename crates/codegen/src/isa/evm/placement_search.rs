@@ -1,0 +1,1556 @@
+//! Per-function stable-placement search.
+//!
+//! Decides which call-crossing stack objects are promoted into the stable
+//! frame and which stay in the scratch overlay with shadow copies saved and
+//! restored around each call they span. The search is a steepest-descent walk
+//! over add/remove/swap moves, scored by exact interval packing plus the
+//! [`ArenaCostModel`] gas weights.
+
+use cranelift_entity::EntityRef;
+use rustc_hash::FxHashMap;
+use smallvec::{SmallVec, smallvec};
+use sonatina_ir::InstId;
+use std::cmp::Ordering;
+
+use crate::bitset::BitSet;
+
+use super::{
+    memory_plan::{CallPreservePlan, STATIC_BASE, SaveRun, WORD_BYTES},
+    static_arena_alloc::{
+        CallSiteObjects, ExactPackItem, ExactPackWorkspace, FuncStackObjects, LiveRegion,
+        LocalObjIdx, ObjFacts, PackedObject, StableItemIdx, StackObj, StackObjId, StackObjKind,
+        pack_exact_peak_by, pack_exact_with_offsets_by, pack_objects_presorted,
+    },
+};
+
+#[derive(Clone, Copy, Debug)]
+pub struct ArenaCostModel {
+    pub w_mem: u64,
+    pub w_save: u64,
+    pub w_code: u64,
+    pub w_stack: u64,
+    pub max_save_words_per_call: u32,
+}
+
+impl Default for ArenaCostModel {
+    fn default() -> Self {
+        Self {
+            w_mem: 3,
+            w_save: 1,
+            w_code: 50,
+            w_stack: 1,
+            max_save_words_per_call: 128,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct FuncPlacementEval {
+    pub(crate) scratch_offsets: FxHashMap<StackObjId, u32>,
+    pub(crate) scratch_words: u32,
+    pub(crate) stable_offsets: FxHashMap<StackObjId, u32>,
+    pub(crate) stable_words: u32,
+    pub(crate) call_preserve: FxHashMap<InstId, CallPreservePlan>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FuncPlacementScore {
+    scratch_words: u32,
+    stable_words: u32,
+    cost: u64,
+}
+
+#[derive(Default)]
+struct FuncPlacementWorkspace {
+    scratch_pack: Vec<PackedObject>,
+    shadow_objs: Vec<ShadowPackObj>,
+    stable_entries: Vec<StablePackEntry>,
+    stable_items: Vec<ExactPackItem<StableItemIdx>>,
+    stable_pack: ExactPackWorkspace<StableItemIdx>,
+}
+
+#[derive(Default)]
+struct FuncPlacementScoreWorkspace {
+    scratch_items: Vec<ExactPackItem<LocalObjIdx>>,
+    stable_entries: Vec<StablePackEntry>,
+    stable_items: Vec<ExactPackItem<StableItemIdx>>,
+    scratch_pack: ExactPackWorkspace<LocalObjIdx>,
+    stable_pack: ExactPackWorkspace<StableItemIdx>,
+}
+
+#[derive(Clone, Copy)]
+struct StablePackCtx<'a> {
+    sorted_objects: &'a [&'a StackObj],
+    must_stable: &'a BitSet<StackObjId>,
+    real_conflicts_by_local: &'a [BitSet<LocalObjIdx>],
+    shadow_conflicts_by_call: &'a [BitSet<LocalObjIdx>],
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StablePackMember {
+    Real(LocalObjIdx),
+    Shadow(u32),
+}
+
+#[derive(Clone, Copy, Debug)]
+struct StablePackEntry {
+    sort_key: (u32, u32, u32),
+    member: StablePackMember,
+    id: StackObjId,
+    size_words: u32,
+}
+
+#[derive(Clone, Debug)]
+struct CandidateMeta {
+    obj_id: StackObjId,
+    local_idx: LocalObjIdx,
+    size_words: u32,
+    recursive_access_cost: u64,
+    shadow_copy_words: u64,
+    live_call_indices: SmallVec<[u32; 4]>,
+}
+
+struct PlacementProblem<'a> {
+    stack: &'a FuncStackObjects,
+    sorted_objects: Vec<&'a StackObj>,
+    sorted_calls: Vec<&'a CallSiteObjects>,
+    must_stable: BitSet<StackObjId>,
+    must_stable_by_local: Vec<bool>,
+    candidates: Vec<CandidateMeta>,
+    base_shadow_words_by_call: Vec<u32>,
+    base_shadow_copy_words: u64,
+    base_recursive_access_cost: u64,
+    frame_setup_cost: u64,
+    shadow_cost_per_word: u64,
+    next_shadow_base_id: u32,
+    is_recursive: bool,
+    cost_model: &'a ArenaCostModel,
+    real_conflicts_by_local: Vec<BitSet<LocalObjIdx>>,
+    shadow_conflicts_by_call: Vec<BitSet<LocalObjIdx>>,
+}
+
+#[derive(Clone, Debug)]
+struct PlacementState {
+    promoted: Vec<bool>,
+    promoted_count: usize,
+    shadow_words_by_call: Vec<u32>,
+    shadow_copy_words: u64,
+    recursive_access_cost: u64,
+    scratch_real_locals: Vec<u32>,
+    stable_real_locals: Vec<u32>,
+    nonzero_shadow_calls: Vec<u32>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PlacementMove {
+    Add(usize),
+    Remove(usize),
+    Swap { add_idx: usize, remove_idx: usize },
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ExactMoveEval {
+    mv: PlacementMove,
+    exact: FuncPlacementScore,
+}
+
+#[derive(Default)]
+struct SearchWorkBuffers {
+    one_flip_exact: Vec<ExactMoveEval>,
+    swap_exact: Vec<ExactMoveEval>,
+    add_shortlist: Vec<usize>,
+    remove_shortlist: Vec<usize>,
+    metric_candidates: Vec<usize>,
+}
+
+#[derive(Clone, Debug)]
+struct ShadowPackObj {
+    call_idx: u32,
+    obj: StackObj,
+}
+
+const SWAP_FULL_PAIR_LIMIT: usize = 25_000;
+const SWAP_SHORTLIST_PER_METRIC: usize = 8;
+const ONE_FLIP_FULL_LIMIT: usize = 128;
+const ONE_FLIP_SHORTLIST_PER_METRIC: usize = 8;
+const CANDIDATE_METRICS: [fn(&CandidateMeta) -> u64; 3] = [
+    |candidate| u64::from(candidate.size_words),
+    |candidate| candidate.shadow_copy_words,
+    |candidate| candidate.recursive_access_cost,
+];
+
+impl<'a> PlacementProblem<'a> {
+    fn new(
+        stack: &'a FuncStackObjects,
+        facts: &FxHashMap<StackObjId, ObjFacts>,
+        is_recursive: bool,
+        cost_model: &'a ArenaCostModel,
+    ) -> Self {
+        let mut sorted_objects: Vec<_> = stack.objects.iter().collect();
+        sorted_objects.sort_unstable_by_key(|obj| obj.region.sort_key(obj.id));
+        let sorted_calls: Vec<_> = stack.call_sites.iter().collect();
+        let mut local_obj_index_by_id = vec![u32::MAX; stack.next_obj_id as usize];
+        let mut must_stable_by_local = vec![false; sorted_objects.len()];
+        let mut must_stable = BitSet::default();
+        for (local_idx, &obj) in sorted_objects.iter().enumerate() {
+            local_obj_index_by_id[obj.id.as_u32() as usize] = local_idx as u32;
+            let fact = facts
+                .get(&obj.id)
+                .unwrap_or_else(|| panic!("missing object facts for obj {}", obj.id.as_u32()));
+            must_stable_by_local[local_idx] = fact.must_stable;
+            if fact.must_stable {
+                let _ = must_stable.insert(obj.id);
+            }
+        }
+
+        let mut candidates: Vec<_> = facts
+            .values()
+            .filter(|fact| !fact.must_stable && !fact.live_across_calls.is_empty())
+            .map(|fact| fact.id)
+            .collect();
+        candidates.sort_unstable_by_key(|id| id.as_u32());
+
+        let mut optional_idx_by_local = vec![u32::MAX; sorted_objects.len()];
+        let mut candidate_meta = Vec::with_capacity(candidates.len());
+        for obj_id in candidates {
+            let fact = facts
+                .get(&obj_id)
+                .unwrap_or_else(|| panic!("missing object facts for obj {}", obj_id.as_u32()));
+            let local_idx = *local_obj_index_by_id
+                .get(obj_id.as_u32() as usize)
+                .unwrap_or(&u32::MAX);
+            assert_ne!(
+                local_idx,
+                u32::MAX,
+                "missing sorted object index for obj {}",
+                obj_id.as_u32()
+            );
+            optional_idx_by_local[local_idx as usize] = candidate_meta.len() as u32;
+            candidate_meta.push(CandidateMeta {
+                obj_id,
+                local_idx: LocalObjIdx::new(local_idx as usize),
+                size_words: fact.size_words,
+                recursive_access_cost: recursive_access_cost(cost_model, is_recursive, fact),
+                shadow_copy_words: 0,
+                live_call_indices: SmallVec::new(),
+            });
+        }
+
+        let mut real_conflicts_by_local = vec![BitSet::default(); sorted_objects.len()];
+        for (lhs_idx, &lhs) in sorted_objects.iter().enumerate() {
+            for (rhs_idx, &rhs) in sorted_objects.iter().enumerate().skip(lhs_idx + 1) {
+                if lhs.size_words == 0 || rhs.size_words == 0 || !lhs.region.overlaps(&rhs.region) {
+                    continue;
+                }
+                let lhs_idx = LocalObjIdx::new(lhs_idx);
+                let rhs_idx = LocalObjIdx::new(rhs_idx);
+                let _ = real_conflicts_by_local[lhs_idx.index()].insert(rhs_idx);
+                let _ = real_conflicts_by_local[rhs_idx.index()].insert(lhs_idx);
+            }
+        }
+
+        let mut shadow_conflicts_by_call = vec![BitSet::default(); sorted_calls.len()];
+        let mut base_shadow_words_by_call = vec![0u32; sorted_calls.len()];
+        let mut base_shadow_copy_words = 0u64;
+        for (call_idx, &call) in sorted_calls.iter().enumerate() {
+            for &obj in &call.callee_visible_objs {
+                let local_idx = *local_obj_index_by_id
+                    .get(obj.as_u32() as usize)
+                    .unwrap_or(&u32::MAX);
+                assert_ne!(
+                    local_idx,
+                    u32::MAX,
+                    "missing sorted object index for obj {}",
+                    obj.as_u32()
+                );
+                let _ =
+                    shadow_conflicts_by_call[call_idx].insert(LocalObjIdx::new(local_idx as usize));
+            }
+            for &obj in &call.live_across_objs {
+                let size = stack
+                    .obj_size_words
+                    .get(&obj)
+                    .copied()
+                    .unwrap_or_else(|| panic!("missing object size for obj {}", obj.as_u32()));
+                if size == 0 {
+                    continue;
+                }
+                let local_idx = *local_obj_index_by_id
+                    .get(obj.as_u32() as usize)
+                    .unwrap_or(&u32::MAX);
+                assert_ne!(
+                    local_idx,
+                    u32::MAX,
+                    "missing sorted object index for obj {}",
+                    obj.as_u32()
+                );
+                let _ =
+                    shadow_conflicts_by_call[call_idx].insert(LocalObjIdx::new(local_idx as usize));
+                if must_stable_by_local[local_idx as usize] {
+                    continue;
+                }
+                base_shadow_words_by_call[call_idx] = base_shadow_words_by_call[call_idx]
+                    .checked_add(size)
+                    .expect("shadow words overflow");
+                base_shadow_copy_words = base_shadow_copy_words
+                    .checked_add(u64::from(size))
+                    .expect("shadow copy words overflow");
+                let optional_idx = optional_idx_by_local[local_idx as usize];
+                if optional_idx != u32::MAX {
+                    let candidate = &mut candidate_meta[optional_idx as usize];
+                    candidate.shadow_copy_words = candidate
+                        .shadow_copy_words
+                        .checked_add(u64::from(size))
+                        .expect("candidate shadow copy words overflow");
+                    candidate.live_call_indices.push(call_idx as u32);
+                }
+            }
+        }
+
+        let base_recursive_access_cost = facts
+            .values()
+            .filter(|fact| fact.must_stable)
+            .try_fold(0u64, |acc, fact| {
+                acc.checked_add(recursive_access_cost(cost_model, is_recursive, fact))
+            })
+            .expect("recursive access cost overflow");
+
+        Self {
+            stack,
+            sorted_objects,
+            sorted_calls,
+            must_stable,
+            must_stable_by_local,
+            candidates: candidate_meta,
+            base_shadow_words_by_call,
+            base_shadow_copy_words,
+            base_recursive_access_cost,
+            frame_setup_cost: frame_setup_cost(cost_model),
+            shadow_cost_per_word: shadow_cost_per_word(cost_model, is_recursive),
+            next_shadow_base_id: stack.next_obj_id,
+            is_recursive,
+            cost_model,
+            real_conflicts_by_local,
+            shadow_conflicts_by_call,
+        }
+    }
+
+    fn promoted_optional(&self, state: &PlacementState) -> BitSet<StackObjId> {
+        self.candidates
+            .iter()
+            .zip(&state.promoted)
+            .filter_map(|(candidate, &promoted)| promoted.then_some(candidate.obj_id))
+            .collect()
+    }
+}
+
+impl PlacementState {
+    fn new(problem: &PlacementProblem<'_>) -> Self {
+        Self {
+            promoted: vec![false; problem.candidates.len()],
+            promoted_count: 0,
+            shadow_words_by_call: problem.base_shadow_words_by_call.clone(),
+            shadow_copy_words: problem.base_shadow_copy_words,
+            recursive_access_cost: problem.base_recursive_access_cost,
+            scratch_real_locals: problem
+                .sorted_objects
+                .iter()
+                .enumerate()
+                .filter_map(|(local_idx, obj)| {
+                    (!problem.must_stable_by_local[local_idx] && obj.size_words != 0)
+                        .then_some(local_idx as u32)
+                })
+                .collect(),
+            stable_real_locals: problem
+                .sorted_objects
+                .iter()
+                .enumerate()
+                .filter_map(|(local_idx, obj)| {
+                    (problem.must_stable_by_local[local_idx] && obj.size_words != 0)
+                        .then_some(local_idx as u32)
+                })
+                .collect(),
+            nonzero_shadow_calls: problem
+                .base_shadow_words_by_call
+                .iter()
+                .enumerate()
+                .filter_map(|(call_idx, &shadow_words)| {
+                    (shadow_words != 0).then_some(call_idx as u32)
+                })
+                .collect(),
+        }
+    }
+
+    fn apply_add(&mut self, problem: &PlacementProblem<'_>, candidate_idx: usize) {
+        assert!(
+            !self.promoted[candidate_idx],
+            "candidate {} already promoted",
+            problem.candidates[candidate_idx].obj_id.as_u32()
+        );
+        self.promoted[candidate_idx] = true;
+        self.promoted_count += 1;
+        let candidate = &problem.candidates[candidate_idx];
+        if candidate.size_words != 0 {
+            remove_sorted_u32(&mut self.scratch_real_locals, candidate.local_idx.as_u32());
+            insert_sorted_u32(&mut self.stable_real_locals, candidate.local_idx.as_u32());
+        }
+        self.shadow_copy_words = self
+            .shadow_copy_words
+            .checked_sub(candidate.shadow_copy_words)
+            .expect("shadow copy words underflow");
+        self.recursive_access_cost = self
+            .recursive_access_cost
+            .checked_add(candidate.recursive_access_cost)
+            .expect("recursive access cost overflow");
+        for &call_idx in &candidate.live_call_indices {
+            let shadow_words = &mut self.shadow_words_by_call[call_idx as usize];
+            let was_nonzero = *shadow_words != 0;
+            *shadow_words = shadow_words
+                .checked_sub(candidate.size_words)
+                .expect("shadow words underflow");
+            if was_nonzero && *shadow_words == 0 {
+                remove_sorted_u32(&mut self.nonzero_shadow_calls, call_idx);
+            }
+        }
+    }
+
+    fn apply_remove(&mut self, problem: &PlacementProblem<'_>, candidate_idx: usize) {
+        assert!(
+            self.promoted[candidate_idx],
+            "candidate {} is not promoted",
+            problem.candidates[candidate_idx].obj_id.as_u32()
+        );
+        self.promoted[candidate_idx] = false;
+        self.promoted_count = self
+            .promoted_count
+            .checked_sub(1)
+            .expect("promoted count underflow");
+        let candidate = &problem.candidates[candidate_idx];
+        if candidate.size_words != 0 {
+            remove_sorted_u32(&mut self.stable_real_locals, candidate.local_idx.as_u32());
+            insert_sorted_u32(&mut self.scratch_real_locals, candidate.local_idx.as_u32());
+        }
+        self.shadow_copy_words = self
+            .shadow_copy_words
+            .checked_add(candidate.shadow_copy_words)
+            .expect("shadow copy words overflow");
+        self.recursive_access_cost = self
+            .recursive_access_cost
+            .checked_sub(candidate.recursive_access_cost)
+            .expect("recursive access cost underflow");
+        for &call_idx in &candidate.live_call_indices {
+            let shadow_words = &mut self.shadow_words_by_call[call_idx as usize];
+            let was_nonzero = *shadow_words != 0;
+            *shadow_words = shadow_words
+                .checked_add(candidate.size_words)
+                .expect("shadow words overflow");
+            if !was_nonzero && *shadow_words != 0 {
+                insert_sorted_u32(&mut self.nonzero_shadow_calls, call_idx);
+            }
+        }
+    }
+
+    fn apply_swap(&mut self, problem: &PlacementProblem<'_>, add_idx: usize, remove_idx: usize) {
+        assert_ne!(add_idx, remove_idx, "swap requires distinct candidates");
+        self.apply_remove(problem, remove_idx);
+        self.apply_add(problem, add_idx);
+    }
+}
+
+pub(crate) fn solve_func_placement(
+    stack: &FuncStackObjects,
+    facts: &FxHashMap<StackObjId, ObjFacts>,
+    is_recursive: bool,
+    cost_model: &ArenaCostModel,
+) -> FuncPlacementEval {
+    let problem = PlacementProblem::new(stack, facts, is_recursive, cost_model);
+    let mut state = PlacementState::new(&problem);
+    let stable_item_capacity = problem
+        .sorted_objects
+        .len()
+        .saturating_add(problem.sorted_calls.len());
+    let mut workspace = FuncPlacementWorkspace {
+        scratch_pack: Vec::with_capacity(problem.sorted_objects.len()),
+        shadow_objs: Vec::with_capacity(problem.sorted_calls.len()),
+        stable_entries: Vec::with_capacity(stable_item_capacity),
+        stable_items: Vec::with_capacity(stable_item_capacity),
+        stable_pack: ExactPackWorkspace::with_capacity(stable_item_capacity),
+    };
+    let mut score_workspace = FuncPlacementScoreWorkspace {
+        scratch_items: Vec::with_capacity(problem.sorted_objects.len()),
+        stable_entries: Vec::with_capacity(stable_item_capacity),
+        stable_items: Vec::with_capacity(stable_item_capacity),
+        scratch_pack: ExactPackWorkspace::with_capacity(problem.sorted_objects.len()),
+        stable_pack: ExactPackWorkspace::with_capacity(stable_item_capacity),
+    };
+    let mut search_work = SearchWorkBuffers::default();
+    let mut best_score = evaluate_state_score(&problem, &state, &mut score_workspace);
+    let mut iteration = 0usize;
+
+    loop {
+        iteration += 1;
+        debug_assert!(
+            iteration <= 1_000_000,
+            "placement local search did not converge"
+        );
+
+        if let Some(best_move) = find_best_exact_one_flip_move(
+            &problem,
+            &state,
+            best_score,
+            &mut score_workspace,
+            &mut search_work,
+        ) {
+            apply_placement_move(&problem, &mut state, best_move.mv);
+            best_score = best_move.exact;
+            continue;
+        }
+
+        if let Some(best_move) = find_best_exact_swap_move(
+            &problem,
+            &state,
+            best_score,
+            &mut score_workspace,
+            &mut search_work,
+        ) {
+            apply_placement_move(&problem, &mut state, best_move.mv);
+            best_score = best_move.exact;
+            continue;
+        }
+
+        break;
+    }
+
+    let promoted_optional = problem.promoted_optional(&state);
+
+    #[cfg(debug_assertions)]
+    if std::env::var_os("SONATINA_PLACEMENT_STATS").is_some() {
+        let exhaustive = exhaustive_best_score(&problem, &mut score_workspace);
+        let verdict = match exhaustive {
+            None => "skipped".to_string(),
+            Some(best) => {
+                if best == best_score {
+                    "equal".to_string()
+                } else if is_better_score(best, best_score) {
+                    format!("search_suboptimal search={best_score:?} exhaustive={best:?}")
+                } else {
+                    format!("SEARCH_BEATS_EXHAUSTIVE_BUG search={best_score:?} exhaustive={best:?}")
+                }
+            }
+        };
+        eprintln!(
+            "PLACEMENT_STATS candidates={} iterations={} {verdict}",
+            problem.candidates.len(),
+            iteration,
+        );
+    }
+
+    evaluate_func_placement(&problem, &promoted_optional, &state, &mut workspace)
+}
+
+/// Debug-only oracle: the optimal score over all promotion subsets, for
+/// candidate counts small enough to enumerate. Used by
+/// SONATINA_PLACEMENT_STATS to measure how far the local search is from
+/// optimal on a corpus.
+#[cfg(debug_assertions)]
+fn exhaustive_best_score(
+    problem: &PlacementProblem<'_>,
+    workspace: &mut FuncPlacementScoreWorkspace,
+) -> Option<FuncPlacementScore> {
+    const EXHAUSTIVE_LIMIT: usize = 14;
+    let n = problem.candidates.len();
+    if n == 0 || n > EXHAUSTIVE_LIMIT {
+        return None;
+    }
+
+    let mut best: Option<FuncPlacementScore> = None;
+    for mask in 0u32..(1u32 << n) {
+        let mut state = PlacementState::new(problem);
+        for candidate_idx in 0..n {
+            if mask & (1 << candidate_idx) != 0 {
+                state.apply_add(problem, candidate_idx);
+            }
+        }
+        let score = evaluate_state_score(problem, &state, workspace);
+        best = Some(match best {
+            None => score,
+            Some(cur) if is_better_score(score, cur) => score,
+            Some(cur) => cur,
+        });
+    }
+    best
+}
+
+fn apply_placement_move(
+    problem: &PlacementProblem<'_>,
+    state: &mut PlacementState,
+    mv: PlacementMove,
+) {
+    match mv {
+        PlacementMove::Add(candidate_idx) => state.apply_add(problem, candidate_idx),
+        PlacementMove::Remove(candidate_idx) => state.apply_remove(problem, candidate_idx),
+        PlacementMove::Swap {
+            add_idx,
+            remove_idx,
+        } => state.apply_swap(problem, add_idx, remove_idx),
+    }
+}
+
+fn evaluate_func_placement(
+    problem: &PlacementProblem<'_>,
+    promoted_optional: &BitSet<StackObjId>,
+    state: &PlacementState,
+    workspace: &mut FuncPlacementWorkspace,
+) -> FuncPlacementEval {
+    build_scratch_pack(
+        &mut workspace.scratch_pack,
+        &problem.sorted_objects,
+        &problem.must_stable,
+        promoted_optional,
+    );
+    let (scratch_offsets, scratch_words) = pack_objects_presorted(&workspace.scratch_pack);
+
+    workspace.shadow_objs.clear();
+    let mut call_preserve =
+        FxHashMap::with_capacity_and_hasher(problem.sorted_calls.len(), Default::default());
+    let mut next_obj_id = problem.next_shadow_base_id;
+    for (call_idx, &call) in problem.sorted_calls.iter().enumerate() {
+        let Some((shadow_obj, plan)) = build_shadow_preserve_for_call(
+            problem.stack,
+            call,
+            &problem.must_stable,
+            promoted_optional,
+            &scratch_offsets,
+            next_obj_id,
+        ) else {
+            continue;
+        };
+        next_obj_id = next_obj_id
+            .checked_add(1)
+            .expect("shadow object id overflow");
+        workspace.shadow_objs.push(ShadowPackObj {
+            call_idx: call_idx as u32,
+            obj: shadow_obj,
+        });
+        call_preserve.insert(call.inst, plan);
+    }
+
+    let stable_ctx = StablePackCtx {
+        sorted_objects: &problem.sorted_objects,
+        must_stable: &problem.must_stable,
+        real_conflicts_by_local: &problem.real_conflicts_by_local,
+        shadow_conflicts_by_call: &problem.shadow_conflicts_by_call,
+    };
+    build_stable_pack_entries(
+        &mut workspace.stable_entries,
+        &mut workspace.stable_items,
+        &workspace.shadow_objs,
+        stable_ctx,
+        promoted_optional,
+    );
+    let stable_pack = pack_exact_with_offsets_by(
+        &workspace.stable_items,
+        |lhs, rhs| stable_pack_entries_conflict(stable_ctx, &workspace.stable_entries, lhs, rhs),
+        &mut workspace.stable_pack,
+    );
+    let stable_offsets = stable_pack.offsets;
+    let stable_words = stable_pack.max_used;
+
+    let shadow_copy_words = shadow_copy_words(&call_preserve);
+    debug_assert_eq!(shadow_copy_words, state.shadow_copy_words);
+    let cost = placement_cost(
+        problem,
+        state.recursive_access_cost,
+        shadow_copy_words,
+        scratch_words,
+        stable_words,
+    );
+    debug_assert_eq!(
+        FuncPlacementScore {
+            scratch_words,
+            stable_words,
+            cost,
+        },
+        evaluate_state_score(problem, state, &mut FuncPlacementScoreWorkspace::default())
+    );
+
+    FuncPlacementEval {
+        scratch_offsets,
+        scratch_words,
+        stable_offsets,
+        stable_words,
+        call_preserve,
+    }
+}
+
+fn evaluate_state_score(
+    problem: &PlacementProblem<'_>,
+    state: &PlacementState,
+    workspace: &mut FuncPlacementScoreWorkspace,
+) -> FuncPlacementScore {
+    let scratch_words = scratch_peak_of_state(problem, state, workspace);
+    let stable_words = stable_peak_of_state(problem, state, workspace);
+    score_from_words(
+        problem,
+        state.recursive_access_cost,
+        state.shadow_copy_words,
+        scratch_words,
+        stable_words,
+    )
+}
+
+fn score_move_if_better(
+    problem: &PlacementProblem<'_>,
+    state: &PlacementState,
+    mv: PlacementMove,
+    current_score: FuncPlacementScore,
+    workspace: &mut FuncPlacementScoreWorkspace,
+) -> Option<FuncPlacementScore> {
+    let mut trial = state.clone();
+    apply_placement_move(problem, &mut trial, mv);
+    let exact = evaluate_state_score(problem, &trial, workspace);
+    is_better_score(exact, current_score).then_some(exact)
+}
+
+fn score_from_words(
+    problem: &PlacementProblem<'_>,
+    recursive_access_cost: u64,
+    shadow_copy_words: u64,
+    scratch_words: u32,
+    stable_words: u32,
+) -> FuncPlacementScore {
+    FuncPlacementScore {
+        scratch_words,
+        stable_words,
+        cost: placement_cost(
+            problem,
+            recursive_access_cost,
+            shadow_copy_words,
+            scratch_words,
+            stable_words,
+        ),
+    }
+}
+
+fn scratch_peak_of_state(
+    problem: &PlacementProblem<'_>,
+    state: &PlacementState,
+    workspace: &mut FuncPlacementScoreWorkspace,
+) -> u32 {
+    workspace.scratch_items.clear();
+    workspace
+        .scratch_items
+        .extend(state.scratch_real_locals.iter().map(|&local_idx| {
+            let obj = problem.sorted_objects[local_idx as usize];
+            ExactPackItem {
+                id: obj.id,
+                idx: LocalObjIdx::new(local_idx as usize),
+                size_words: obj.size_words,
+                min_offset_words: 0,
+            }
+        }));
+    pack_exact_peak_by(
+        &workspace.scratch_items,
+        |lhs, rhs| problem.real_conflicts_by_local[lhs.index()].contains(rhs),
+        &mut workspace.scratch_pack,
+    )
+}
+
+fn stable_peak_of_state(
+    problem: &PlacementProblem<'_>,
+    state: &PlacementState,
+    workspace: &mut FuncPlacementScoreWorkspace,
+) -> u32 {
+    let stable_ctx = StablePackCtx {
+        sorted_objects: &problem.sorted_objects,
+        must_stable: &problem.must_stable,
+        real_conflicts_by_local: &problem.real_conflicts_by_local,
+        shadow_conflicts_by_call: &problem.shadow_conflicts_by_call,
+    };
+    workspace.stable_entries.clear();
+    workspace.stable_items.clear();
+    for &local_idx in &state.stable_real_locals {
+        let obj = problem.sorted_objects[local_idx as usize];
+        push_stable_real_entry(&mut workspace.stable_entries, local_idx, obj);
+    }
+    for &call_idx in &state.nonzero_shadow_calls {
+        push_score_shadow_entry(
+            &mut workspace.stable_entries,
+            problem,
+            call_idx,
+            state.shadow_words_by_call[call_idx as usize],
+        );
+    }
+    finish_stable_pack_entries(&mut workspace.stable_entries, &mut workspace.stable_items);
+    pack_exact_peak_by(
+        &workspace.stable_items,
+        |lhs, rhs| stable_pack_entries_conflict(stable_ctx, &workspace.stable_entries, lhs, rhs),
+        &mut workspace.stable_pack,
+    )
+}
+
+fn find_best_exact_one_flip_move(
+    problem: &PlacementProblem<'_>,
+    state: &PlacementState,
+    current_score: FuncPlacementScore,
+    exact_ws: &mut FuncPlacementScoreWorkspace,
+    work: &mut SearchWorkBuffers,
+) -> Option<ExactMoveEval> {
+    work.one_flip_exact.clear();
+    let mut candidates = Vec::new();
+    if problem.candidates.len() <= ONE_FLIP_FULL_LIMIT {
+        candidates.extend(0..problem.candidates.len());
+    } else {
+        collect_one_flip_shortlists(problem, state, work);
+        candidates.extend(work.add_shortlist.iter().copied());
+        candidates.extend(work.remove_shortlist.iter().copied());
+        candidates.sort_unstable();
+        candidates.dedup();
+    }
+
+    for candidate_idx in candidates {
+        let mv = if state.promoted[candidate_idx] {
+            PlacementMove::Remove(candidate_idx)
+        } else {
+            PlacementMove::Add(candidate_idx)
+        };
+        if let Some(exact) = score_move_if_better(problem, state, mv, current_score, exact_ws) {
+            work.one_flip_exact.push(ExactMoveEval { mv, exact });
+        }
+    }
+    work.one_flip_exact.sort_unstable_by(|a, b| {
+        cmp_func_placement_score(a.exact, b.exact)
+            .then_with(|| {
+                resulting_promoted_count(state, a.mv).cmp(&resulting_promoted_count(state, b.mv))
+            })
+            .then_with(|| cmp_move_tie_key(problem, a.mv, b.mv))
+    });
+    work.one_flip_exact.first().copied()
+}
+
+fn collect_one_flip_shortlists(
+    problem: &PlacementProblem<'_>,
+    state: &PlacementState,
+    work: &mut SearchWorkBuffers,
+) {
+    work.add_shortlist.clear();
+    work.remove_shortlist.clear();
+    collect_metric_shortlist(problem, state, false, ONE_FLIP_SHORTLIST_PER_METRIC, work);
+    collect_metric_shortlist(problem, state, true, ONE_FLIP_SHORTLIST_PER_METRIC, work);
+}
+
+fn find_best_exact_swap_move(
+    problem: &PlacementProblem<'_>,
+    state: &PlacementState,
+    current_score: FuncPlacementScore,
+    exact_ws: &mut FuncPlacementScoreWorkspace,
+    work: &mut SearchWorkBuffers,
+) -> Option<ExactMoveEval> {
+    let feasible_add_count = state.promoted.iter().filter(|&&promoted| !promoted).count();
+    let feasible_remove_count = state.promoted_count;
+    if feasible_add_count == 0 || feasible_remove_count == 0 {
+        return None;
+    }
+
+    work.swap_exact.clear();
+    if feasible_add_count.saturating_mul(feasible_remove_count) <= SWAP_FULL_PAIR_LIMIT {
+        for add_idx in 0..problem.candidates.len() {
+            if state.promoted[add_idx] {
+                continue;
+            }
+            for remove_idx in 0..problem.candidates.len() {
+                if !state.promoted[remove_idx] {
+                    continue;
+                }
+                let mv = PlacementMove::Swap {
+                    add_idx,
+                    remove_idx,
+                };
+                if let Some(exact) =
+                    score_move_if_better(problem, state, mv, current_score, exact_ws)
+                {
+                    work.swap_exact.push(ExactMoveEval { mv, exact });
+                }
+            }
+        }
+    } else {
+        collect_swap_shortlists(problem, state, work);
+        for &add_idx in &work.add_shortlist {
+            for &remove_idx in &work.remove_shortlist {
+                let mv = PlacementMove::Swap {
+                    add_idx,
+                    remove_idx,
+                };
+                if let Some(exact) =
+                    score_move_if_better(problem, state, mv, current_score, exact_ws)
+                {
+                    work.swap_exact.push(ExactMoveEval { mv, exact });
+                }
+            }
+        }
+    }
+
+    work.swap_exact.sort_unstable_by(|a, b| {
+        cmp_func_placement_score(a.exact, b.exact)
+            .then_with(|| {
+                resulting_promoted_count(state, a.mv).cmp(&resulting_promoted_count(state, b.mv))
+            })
+            .then_with(|| cmp_move_tie_key(problem, a.mv, b.mv))
+    });
+    work.swap_exact.first().copied()
+}
+
+fn collect_swap_shortlists(
+    problem: &PlacementProblem<'_>,
+    state: &PlacementState,
+    work: &mut SearchWorkBuffers,
+) {
+    work.add_shortlist.clear();
+    work.remove_shortlist.clear();
+    collect_metric_shortlist(problem, state, false, SWAP_SHORTLIST_PER_METRIC, work);
+    collect_metric_shortlist(problem, state, true, SWAP_SHORTLIST_PER_METRIC, work);
+
+    work.add_shortlist
+        .sort_unstable_by_key(|&candidate_idx| problem.candidates[candidate_idx].obj_id.as_u32());
+    work.remove_shortlist
+        .sort_unstable_by_key(|&candidate_idx| problem.candidates[candidate_idx].obj_id.as_u32());
+}
+
+fn collect_metric_shortlist(
+    problem: &PlacementProblem<'_>,
+    state: &PlacementState,
+    promoted: bool,
+    per_metric: usize,
+    work: &mut SearchWorkBuffers,
+) {
+    for metric_of in CANDIDATE_METRICS {
+        work.metric_candidates.clear();
+        work.metric_candidates
+            .extend((0..problem.candidates.len()).filter(|&idx| state.promoted[idx] == promoted));
+        let keep = per_metric.min(work.metric_candidates.len());
+        if keep == 0 {
+            continue;
+        }
+        if keep < work.metric_candidates.len() {
+            work.metric_candidates
+                .select_nth_unstable_by(keep - 1, |&lhs, &rhs| {
+                    cmp_candidate_metric(problem, metric_of, lhs, rhs)
+                });
+        }
+        work.metric_candidates[..keep]
+            .sort_unstable_by(|&lhs, &rhs| cmp_candidate_metric(problem, metric_of, lhs, rhs));
+        let shortlist = if promoted {
+            &mut work.remove_shortlist
+        } else {
+            &mut work.add_shortlist
+        };
+        for pos in 0..keep {
+            let candidate_idx = work.metric_candidates[pos];
+            if !shortlist.contains(&candidate_idx) {
+                shortlist.push(candidate_idx);
+            }
+        }
+    }
+}
+
+fn cmp_candidate_metric(
+    problem: &PlacementProblem<'_>,
+    metric_of: fn(&CandidateMeta) -> u64,
+    lhs: usize,
+    rhs: usize,
+) -> Ordering {
+    let lhs = &problem.candidates[lhs];
+    let rhs = &problem.candidates[rhs];
+    metric_of(rhs)
+        .cmp(&metric_of(lhs))
+        .then_with(|| lhs.obj_id.as_u32().cmp(&rhs.obj_id.as_u32()))
+}
+
+fn build_shadow_preserve_for_call(
+    stack: &FuncStackObjects,
+    call: &CallSiteObjects,
+    must_stable: &BitSet<StackObjId>,
+    promoted_optional: &BitSet<StackObjId>,
+    scratch_offsets: &FxHashMap<StackObjId, u32>,
+    next_obj_id: u32,
+) -> Option<(StackObj, CallPreservePlan)> {
+    let mut ranges = SmallVec::<[(u32, u32); 8]>::new();
+    for &obj in &call.live_across_objs {
+        if is_stable_real(must_stable, promoted_optional, obj) {
+            continue;
+        }
+        let Some(&size) = stack.obj_size_words.get(&obj) else {
+            panic!("missing object size for obj {}", obj.as_u32());
+        };
+        if size == 0 {
+            continue;
+        }
+        let start = *scratch_offsets.get(&obj).unwrap_or_else(|| {
+            panic!(
+                "missing scratch offset for obj {} at call {}",
+                obj.as_u32(),
+                call.inst.as_u32()
+            )
+        });
+        ranges.push((start, size));
+    }
+
+    if ranges.is_empty() {
+        return None;
+    }
+
+    ranges.sort_unstable_by_key(|(start, _)| *start);
+    let mut shadow_words: u32 = 0;
+    let mut runs: SmallVec<[SaveRun; 2]> = smallvec![];
+    for (start, len) in ranges {
+        if let Some(last) = runs.last_mut() {
+            let last_end = last
+                .scratch_src_word
+                .checked_add(last.len_words)
+                .expect("shadow run end overflow");
+            if last_end == start {
+                last.len_words = last
+                    .len_words
+                    .checked_add(len)
+                    .expect("shadow run merge overflow");
+                shadow_words = shadow_words
+                    .checked_add(len)
+                    .expect("shadow object size overflow");
+                continue;
+            }
+        }
+        runs.push(SaveRun {
+            scratch_src_word: start,
+            shadow_dst_word: shadow_words,
+            len_words: len,
+        });
+        shadow_words = shadow_words
+            .checked_add(len)
+            .expect("shadow object size overflow");
+    }
+    if shadow_words == 0 {
+        return None;
+    }
+
+    let shadow_obj = StackObj {
+        id: StackObjId::new(next_obj_id as usize),
+        kind: StackObjKind::Shadow(call.inst),
+        size_words: shadow_words,
+        region: LiveRegion::sort_only(call.call_rank),
+        access_weight: 0,
+        load_count: 0,
+        store_count: 0,
+    };
+    let plan = CallPreservePlan {
+        shadow_obj: shadow_obj.id,
+        runs,
+        result_count: call.result_count,
+    };
+    Some((shadow_obj, plan))
+}
+
+fn build_scratch_pack(
+    scratch_pack: &mut Vec<PackedObject>,
+    sorted_objects: &[&StackObj],
+    must_stable: &BitSet<StackObjId>,
+    promoted_optional: &BitSet<StackObjId>,
+) {
+    scratch_pack.clear();
+    for &obj in sorted_objects {
+        if is_stable_real(must_stable, promoted_optional, obj.id) {
+            continue;
+        }
+        scratch_pack.push(PackedObject {
+            id: obj.id,
+            size_words: obj.size_words,
+            region: obj.region.clone(),
+            min_offset_words: 0,
+        });
+    }
+}
+
+fn build_stable_pack_entries(
+    stable_entries: &mut Vec<StablePackEntry>,
+    stable_items: &mut Vec<ExactPackItem<StableItemIdx>>,
+    shadow_objs: &[ShadowPackObj],
+    ctx: StablePackCtx<'_>,
+    promoted_optional: &BitSet<StackObjId>,
+) {
+    stable_entries.clear();
+    stable_items.clear();
+    for (local_idx, &obj) in ctx.sorted_objects.iter().enumerate() {
+        if !is_stable_real(ctx.must_stable, promoted_optional, obj.id) || obj.size_words == 0 {
+            continue;
+        }
+        push_stable_real_entry(stable_entries, local_idx as u32, obj);
+    }
+    for shadow in shadow_objs {
+        if shadow.obj.size_words == 0 {
+            continue;
+        }
+        stable_entries.push(StablePackEntry {
+            sort_key: shadow.obj.region.sort_key(shadow.obj.id),
+            member: StablePackMember::Shadow(shadow.call_idx),
+            id: shadow.obj.id,
+            size_words: shadow.obj.size_words,
+        });
+    }
+    finish_stable_pack_entries(stable_entries, stable_items);
+}
+
+fn push_stable_real_entry(
+    stable_entries: &mut Vec<StablePackEntry>,
+    local_idx: u32,
+    obj: &StackObj,
+) {
+    if obj.size_words == 0 {
+        return;
+    }
+    stable_entries.push(StablePackEntry {
+        sort_key: obj.region.sort_key(obj.id),
+        member: StablePackMember::Real(LocalObjIdx::new(local_idx as usize)),
+        id: obj.id,
+        size_words: obj.size_words,
+    });
+}
+
+fn push_score_shadow_entry(
+    stable_entries: &mut Vec<StablePackEntry>,
+    problem: &PlacementProblem<'_>,
+    call_idx: u32,
+    size_words: u32,
+) {
+    let id = StackObjId::new(
+        problem_shadow_order_id(problem.next_shadow_base_id, call_idx as usize) as usize,
+    );
+    let call = problem.sorted_calls[call_idx as usize];
+    stable_entries.push(StablePackEntry {
+        sort_key: (call.call_rank, call.call_rank, id.as_u32()),
+        member: StablePackMember::Shadow(call_idx),
+        id,
+        size_words,
+    });
+}
+
+fn finish_stable_pack_entries(
+    stable_entries: &mut [StablePackEntry],
+    stable_items: &mut Vec<ExactPackItem<StableItemIdx>>,
+) {
+    stable_entries.sort_unstable_by_key(|entry| entry.sort_key);
+    for (item_idx, entry) in stable_entries.iter().enumerate() {
+        stable_items.push(ExactPackItem {
+            id: entry.id,
+            idx: StableItemIdx::new(item_idx),
+            size_words: entry.size_words,
+            min_offset_words: 0,
+        });
+    }
+}
+
+fn stable_pack_entries_conflict(
+    ctx: StablePackCtx<'_>,
+    stable_entries: &[StablePackEntry],
+    lhs: StableItemIdx,
+    rhs: StableItemIdx,
+) -> bool {
+    match (
+        stable_entries[lhs.index()].member,
+        stable_entries[rhs.index()].member,
+    ) {
+        (StablePackMember::Real(lhs), StablePackMember::Real(rhs)) => {
+            ctx.real_conflicts_by_local[lhs.index()].contains(rhs)
+        }
+        (StablePackMember::Real(local), StablePackMember::Shadow(call_idx))
+        | (StablePackMember::Shadow(call_idx), StablePackMember::Real(local)) => {
+            ctx.shadow_conflicts_by_call[call_idx as usize].contains(local)
+        }
+        (StablePackMember::Shadow(_), StablePackMember::Shadow(_)) => false,
+    }
+}
+
+fn cmp_func_placement_score(a: FuncPlacementScore, b: FuncPlacementScore) -> Ordering {
+    a.cost
+        .cmp(&b.cost)
+        .then_with(|| a.stable_words.cmp(&b.stable_words))
+        .then_with(|| a.scratch_words.cmp(&b.scratch_words))
+}
+
+fn resulting_promoted_count(state: &PlacementState, mv: PlacementMove) -> usize {
+    match mv {
+        PlacementMove::Add(_) => state.promoted_count + 1,
+        PlacementMove::Remove(_) => state
+            .promoted_count
+            .checked_sub(1)
+            .expect("promoted count underflow"),
+        PlacementMove::Swap { .. } => state.promoted_count,
+    }
+}
+
+fn move_tie_key(problem: &PlacementProblem<'_>, mv: PlacementMove) -> (u8, u32, u32) {
+    match mv {
+        PlacementMove::Add(candidate_idx) => {
+            (0, problem.candidates[candidate_idx].obj_id.as_u32(), 0)
+        }
+        PlacementMove::Remove(candidate_idx) => {
+            (1, problem.candidates[candidate_idx].obj_id.as_u32(), 0)
+        }
+        PlacementMove::Swap {
+            add_idx,
+            remove_idx,
+        } => (
+            2,
+            problem.candidates[add_idx].obj_id.as_u32(),
+            problem.candidates[remove_idx].obj_id.as_u32(),
+        ),
+    }
+}
+
+fn cmp_move_tie_key(
+    problem: &PlacementProblem<'_>,
+    a: PlacementMove,
+    b: PlacementMove,
+) -> Ordering {
+    move_tie_key(problem, a).cmp(&move_tie_key(problem, b))
+}
+
+fn placement_cost(
+    problem: &PlacementProblem<'_>,
+    recursive_access_cost: u64,
+    shadow_copy_words: u64,
+    scratch_words: u32,
+    stable_words: u32,
+) -> u64 {
+    let mut cost = evaluate_memory_cost(problem.cost_model, scratch_words, stable_words);
+    if problem.is_recursive && stable_words != 0 {
+        cost = cost
+            .checked_add(problem.frame_setup_cost)
+            .expect("frame setup total cost overflow");
+    }
+    cost = cost
+        .checked_add(recursive_access_cost)
+        .expect("frame access total cost overflow");
+    cost.checked_add(
+        problem
+            .shadow_cost_per_word
+            .checked_mul(shadow_copy_words)
+            .expect("shadow copy total cost overflow"),
+    )
+    .expect("shadow copy total cost overflow")
+}
+
+fn shadow_copy_words(call_preserve: &FxHashMap<InstId, CallPreservePlan>) -> u64 {
+    call_preserve
+        .values()
+        .map(|plan| {
+            plan.runs
+                .iter()
+                .map(|run| u64::from(run.len_words))
+                .sum::<u64>()
+        })
+        .sum()
+}
+
+fn insert_sorted_u32(values: &mut Vec<u32>, value: u32) {
+    match values.binary_search(&value) {
+        Ok(_) => {}
+        Err(index) => values.insert(index, value),
+    }
+}
+
+fn remove_sorted_u32(values: &mut Vec<u32>, value: u32) {
+    let index = values
+        .binary_search(&value)
+        .unwrap_or_else(|_| panic!("missing sorted value {value}"));
+    let _ = values.remove(index);
+}
+
+fn recursive_access_cost(cost_model: &ArenaCostModel, is_recursive: bool, fact: &ObjFacts) -> u64 {
+    if !is_recursive {
+        return 0;
+    }
+    cost_model
+        .w_stack
+        .checked_mul(fact.access_weight.saturating_mul(4))
+        .expect("frame access cost overflow")
+}
+
+fn frame_setup_cost(cost_model: &ArenaCostModel) -> u64 {
+    cost_model
+        .w_save
+        .checked_mul(32)
+        .expect("frame setup cost overflow")
+        .checked_add(
+            cost_model
+                .w_code
+                .checked_mul(16)
+                .expect("frame setup code cost overflow"),
+        )
+        .expect("frame setup total cost overflow")
+}
+
+fn shadow_cost_per_word(cost_model: &ArenaCostModel, is_recursive: bool) -> u64 {
+    let copy_units = if is_recursive { 16 } else { 12 };
+    cost_model
+        .w_save
+        .checked_mul(copy_units)
+        .expect("shadow copy gas cost overflow")
+        .checked_add(
+            cost_model
+                .w_code
+                .checked_mul(copy_units)
+                .expect("shadow copy code cost overflow"),
+        )
+        .expect("shadow copy total cost overflow")
+}
+
+fn is_stable_real(
+    must_stable: &BitSet<StackObjId>,
+    promoted_optional: &BitSet<StackObjId>,
+    obj: StackObjId,
+) -> bool {
+    must_stable.contains(obj) || promoted_optional.contains(obj)
+}
+
+fn is_better_score(candidate: FuncPlacementScore, current: FuncPlacementScore) -> bool {
+    cmp_func_placement_score(candidate, current) == Ordering::Less
+}
+
+fn evaluate_memory_cost(cost_model: &ArenaCostModel, scratch_words: u32, stable_words: u32) -> u64 {
+    let words = scratch_words
+        .checked_add(stable_words)
+        .expect("memory words overflow");
+    let total_words = (STATIC_BASE / WORD_BYTES)
+        .checked_add(words)
+        .expect("memory expansion words overflow");
+    cost_model
+        .w_mem
+        .checked_mul(mem_expansion_gas(total_words))
+        .expect("memory cost overflow")
+}
+
+fn mem_expansion_gas(words: u32) -> u64 {
+    let words = u128::from(words);
+    let lin = words.saturating_mul(3);
+    let quad = words.saturating_mul(words) / 512;
+    u64::try_from(lin.saturating_add(quad)).expect("memory expansion gas overflow")
+}
+
+fn problem_shadow_order_id(next_shadow_base_id: u32, call_idx: usize) -> u32 {
+    next_shadow_base_id
+        .checked_add(call_idx as u32)
+        .expect("shadow order id overflow")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::isa::evm::static_arena_alloc::BlockLiveSegment;
+    use sonatina_ir::BlockId;
+
+    fn region(block: u32, start_boundary: u32, end_boundary: u32) -> LiveRegion {
+        LiveRegion {
+            segments: SmallVec::from_vec(vec![BlockLiveSegment {
+                block: BlockId::from_u32(block),
+                start_boundary,
+                end_boundary,
+            }]),
+            phi_edges: BitSet::default(),
+            first_rank: start_boundary,
+            last_rank: end_boundary,
+        }
+    }
+
+    fn stack_obj(id: u32, kind: StackObjKind, size_words: u32, region: LiveRegion) -> StackObj {
+        StackObj {
+            id: StackObjId::new(id as usize),
+            kind,
+            size_words,
+            region,
+            access_weight: 0,
+            load_count: 0,
+            store_count: 0,
+        }
+    }
+
+    #[test]
+    fn stable_pack_conflicts_shadow_with_callee_visible_objects() {
+        let real0 = stack_obj(
+            1,
+            StackObjKind::Alloca(InstId::from_u32(1)),
+            4,
+            region(0, 0, 2),
+        );
+        let real1 = stack_obj(
+            2,
+            StackObjKind::Alloca(InstId::from_u32(2)),
+            4,
+            region(1, 0, 2),
+        );
+        let shadow = ShadowPackObj {
+            call_idx: 0,
+            obj: stack_obj(
+                3,
+                StackObjKind::Shadow(InstId::from_u32(10)),
+                4,
+                LiveRegion::sort_only(10),
+            ),
+        };
+        let sorted_objects = vec![&real0, &real1];
+        let mut must_stable = BitSet::default();
+        let _ = must_stable.insert(real0.id);
+        let _ = must_stable.insert(real1.id);
+        let promoted_optional = BitSet::default();
+        let real_conflicts = vec![BitSet::default(), BitSet::default()];
+        let mut shadow_conflicts = vec![BitSet::default(); 1];
+        let _ = shadow_conflicts[0].insert(LocalObjIdx::new(0));
+        let _ = shadow_conflicts[0].insert(LocalObjIdx::new(1));
+
+        let stable_ctx = StablePackCtx {
+            sorted_objects: &sorted_objects,
+            must_stable: &must_stable,
+            real_conflicts_by_local: &real_conflicts,
+            shadow_conflicts_by_call: &shadow_conflicts,
+        };
+        let mut entries = Vec::new();
+        let mut items = Vec::new();
+        build_stable_pack_entries(
+            &mut entries,
+            &mut items,
+            &[shadow],
+            stable_ctx,
+            &promoted_optional,
+        );
+        let mut pack_workspace = ExactPackWorkspace::default();
+        let packed = pack_exact_with_offsets_by(
+            &items,
+            |lhs, rhs| stable_pack_entries_conflict(stable_ctx, &entries, lhs, rhs),
+            &mut pack_workspace,
+        );
+
+        let real0_off = packed.offsets[&real0.id];
+        let real1_off = packed.offsets[&real1.id];
+        let shadow_off = packed.offsets[&StackObjId::new(3)];
+        assert_eq!(real0_off, 0);
+        assert_eq!(real1_off, 0);
+        assert_ne!(shadow_off, real0_off);
+        assert_ne!(shadow_off, real1_off);
+        assert_eq!(shadow_off, 4);
+    }
+
+    fn with_half_promoted_placement_problem(
+        candidate_count: usize,
+        size_mod: usize,
+        recursive_cost_mod: usize,
+        f: impl FnOnce(&PlacementProblem<'_>, &PlacementState),
+    ) {
+        let objects: Vec<_> = (0..candidate_count)
+            .map(|idx| {
+                stack_obj(
+                    idx as u32,
+                    StackObjKind::Alloca(InstId::from_u32(idx as u32)),
+                    1 + (idx % size_mod) as u32,
+                    region(0, 0, 1),
+                )
+            })
+            .collect();
+        let obj_size_words = objects.iter().map(|obj| (obj.id, obj.size_words)).collect();
+        let stack = FuncStackObjects {
+            objects,
+            obj_facts: FxHashMap::default(),
+            obj_size_words,
+            alloca_ids: FxHashMap::default(),
+            call_sites: Vec::new(),
+            next_obj_id: candidate_count as u32,
+        };
+        let sorted_objects: Vec<_> = stack.objects.iter().collect();
+        let candidates = sorted_objects
+            .iter()
+            .enumerate()
+            .map(|(local_idx, obj)| CandidateMeta {
+                obj_id: obj.id,
+                local_idx: LocalObjIdx::new(local_idx),
+                size_words: obj.size_words,
+                recursive_access_cost: (local_idx % recursive_cost_mod) as u64,
+                shadow_copy_words: 0,
+                live_call_indices: SmallVec::new(),
+            })
+            .collect();
+        let cost_model = ArenaCostModel::default();
+        let problem = PlacementProblem {
+            stack: &stack,
+            sorted_objects,
+            sorted_calls: Vec::new(),
+            must_stable: BitSet::default(),
+            must_stable_by_local: vec![false; candidate_count],
+            candidates,
+            base_shadow_words_by_call: Vec::new(),
+            base_shadow_copy_words: 0,
+            base_recursive_access_cost: 0,
+            frame_setup_cost: 0,
+            shadow_cost_per_word: 0,
+            next_shadow_base_id: stack.next_obj_id,
+            is_recursive: false,
+            cost_model: &cost_model,
+            real_conflicts_by_local: vec![BitSet::default(); candidate_count],
+            shadow_conflicts_by_call: Vec::new(),
+        };
+        let mut state = PlacementState::new(&problem);
+        for candidate_idx in 0..candidate_count / 2 {
+            state.apply_add(&problem, candidate_idx);
+        }
+
+        f(&problem, &state);
+    }
+
+    #[test]
+    fn swap_search_uses_bounded_shortlists_once_pair_count_exceeds_limit() {
+        with_half_promoted_placement_problem(320, 3, 11, |problem, state| {
+            let feasible_add_count = state.promoted.iter().filter(|&&promoted| !promoted).count();
+            let feasible_remove_count = state.promoted_count;
+            assert!(
+                feasible_add_count.saturating_mul(feasible_remove_count) > SWAP_FULL_PAIR_LIMIT,
+                "test must exercise the bounded swap shortlist path"
+            );
+
+            let mut search_work = SearchWorkBuffers::default();
+            let current_score = FuncPlacementScore {
+                scratch_words: u32::MAX,
+                stable_words: u32::MAX,
+                cost: u64::MAX,
+            };
+            let _ = find_best_exact_swap_move(
+                problem,
+                state,
+                current_score,
+                &mut FuncPlacementScoreWorkspace::default(),
+                &mut search_work,
+            );
+
+            assert!(!search_work.add_shortlist.is_empty());
+            assert!(!search_work.remove_shortlist.is_empty());
+            assert!(search_work.add_shortlist.len() <= SWAP_SHORTLIST_PER_METRIC * 3);
+            assert!(search_work.remove_shortlist.len() <= SWAP_SHORTLIST_PER_METRIC * 3);
+            assert_eq!(
+                search_work.swap_exact.len(),
+                search_work
+                    .add_shortlist
+                    .len()
+                    .saturating_mul(search_work.remove_shortlist.len()),
+                "bounded swap search should only exact-score the shortlist cross-product",
+            );
+        });
+    }
+
+    #[test]
+    fn one_flip_search_uses_bounded_shortlists_once_candidate_count_exceeds_limit() {
+        with_half_promoted_placement_problem(ONE_FLIP_FULL_LIMIT + 64, 5, 13, |problem, state| {
+            let mut work = SearchWorkBuffers::default();
+            collect_one_flip_shortlists(problem, state, &mut work);
+
+            assert!(!work.add_shortlist.is_empty());
+            assert!(!work.remove_shortlist.is_empty());
+            assert!(work.add_shortlist.len() <= ONE_FLIP_SHORTLIST_PER_METRIC * 3);
+            assert!(work.remove_shortlist.len() <= ONE_FLIP_SHORTLIST_PER_METRIC * 3);
+        });
+    }
+}

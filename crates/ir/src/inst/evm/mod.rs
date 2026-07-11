@@ -429,7 +429,7 @@ pub struct EvmCall {
     arg_addr: ValueId,
     arg_len: ValueId,
     ret_addr: ValueId,
-    ret_offset: ValueId,
+    ret_len: ValueId,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
@@ -441,7 +441,7 @@ pub struct EvmCallCode {
     arg_addr: ValueId,
     arg_len: ValueId,
     ret_addr: ValueId,
-    ret_offset: ValueId,
+    ret_len: ValueId,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]

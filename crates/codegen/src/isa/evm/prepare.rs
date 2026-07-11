@@ -9,6 +9,7 @@ use crate::{
     domtree::DomTree,
     liveness::{InstLiveness, Liveness},
     machinst::lower::{SectionMembership, SectionWorkModule},
+    module_analysis::{CallGraphSchedule, SccRef},
     stackalloc::StackifyAlloc,
 };
 use sonatina_ir::{
@@ -24,6 +25,8 @@ use sonatina_ir::{
     object::EmbedSymbol,
 };
 
+#[cfg(debug_assertions)]
+use super::machine::final_spills::FinalSpillReplanCtx;
 use super::{
     EvmBackend, LateCleanupProfile,
     dyn_sp::{FuncDynSpPlan, compute_machine_dyn_sp_plan},
@@ -31,6 +34,7 @@ use super::{
         FinalAlloc, LateBlockAliasPlan, compute_function_entry_jump_targets,
         compute_late_block_alias_plan, immediate_u32, rewrite_evm_local_fallthrough_layout,
     },
+    fixed_slots,
     machine::{
         final_spills::{
             FinalSpillAllocationInput, FinalSpillChoiceCtx, FinalSpillObjects,
@@ -39,20 +43,19 @@ use super::{
         },
         lazy_frame::{FrameSummary, compute_frame_summary, compute_machine_frame_roots},
         lower::lower_section_to_machine,
-        module::FuncMachineMap,
         pipeline::run_machine_opt_pipeline,
         placement::{MemoryPlacementSection, compute_semantic_memory_placement},
         prepare::prepare_machine_stackify_analyses,
     },
     malloc_plan,
     memory_plan::{
-        self, BackendSpillReserve, DYN_SP_SLOT, FREE_PTR_SLOT, FuncMemPlan, ProgramMemoryPlan,
-        STATIC_BASE, WORD_BYTES, compute_abs_clobber_words_with_extra,
+        self, BackendSpillReserve, DYN_SP_SLOT, FREE_PTR_SLOT, MachineFuncPlan, ProgramMemoryPlan,
+        STATIC_BASE, SemanticFuncPlan, WORD_BYTES, compute_abs_clobber_words_with_extra,
+        expect_func_entry,
     },
     pipeline::EvmPipeline,
-    provenance::{Provenance, compute_value_provenance},
     ptr_escape::PtrEscapeSummary,
-    scratch_plan,
+    ptr_provenance::{Provenance, compute_provenance, compute_value_provenance},
 };
 
 const FREE_PTR_SLOT_START: u32 = FREE_PTR_SLOT as u32;
@@ -106,7 +109,7 @@ pub(crate) struct EvmSectionPlan {
     pub(crate) arena_base: u32,
     pub(crate) dyn_base: u32,
     pub(crate) scratch_peak_words: u32,
-    pub(crate) static_chain_peak_words: u32,
+    pub(crate) stable_chain_peak_words: u32,
 }
 
 #[derive(Clone)]
@@ -114,7 +117,7 @@ pub(crate) struct EvmFunctionPlan {
     pub(crate) alloc: StackifyAlloc,
     pub(crate) emitted_block_order: Vec<sonatina_ir::BlockId>,
     pub(crate) block_aliases: FxHashMap<sonatina_ir::BlockId, sonatina_ir::BlockId>,
-    pub(crate) mem_plan: FuncMemPlan,
+    pub(crate) mem_plan: MachineFuncPlan,
     pub(crate) frame_summary: FrameSummary,
     pub(crate) dyn_sp_plan: FuncDynSpPlan,
     pub(crate) function_entry_jumpdest: bool,
@@ -147,7 +150,9 @@ pub(crate) fn value_imm_u32(function: &Function, value: ValueId) -> Option<u32> 
     function.dfg.value_imm(value).and_then(immediate_u32)
 }
 
-fn byte_ranges_overlap(lhs_start: u32, lhs_len: u32, rhs_start: u32, rhs_end: u32) -> bool {
+/// Overlap of `[lhs_start, lhs_start + lhs_len)` with `[rhs_start, rhs_end)`,
+/// treating an overflowing end as reaching the range (conservative).
+fn addr_len_overlaps_range(lhs_start: u32, lhs_len: u32, rhs_start: u32, rhs_end: u32) -> bool {
     if lhs_len == 0 {
         return false;
     }
@@ -178,7 +183,7 @@ fn memory_access_may_touch_range(
             return false;
         };
         return len.as_u32(function).map_or(addr < range_end, |len| {
-            byte_ranges_overlap(addr, len, range_start, range_end)
+            addr_len_overlaps_range(addr, len, range_start, range_end)
         });
     }
 
@@ -207,7 +212,7 @@ fn memory_access_may_touch_range_from_effect(
             prov,
         ),
         AccessLoc::LinearExactImm { addr, bytes, .. } => immediate_u32(*addr)
-            .is_some_and(|addr| byte_ranges_overlap(addr, *bytes, range_start, range_end)),
+            .is_some_and(|addr| addr_len_overlaps_range(addr, *bytes, range_start, range_end)),
         AccessLoc::LinearRange { addr, len } => memory_access_may_touch_range(
             function,
             *addr,
@@ -243,17 +248,9 @@ pub(crate) struct FreePtrSlotFacts {
 
 pub(crate) fn function_free_ptr_slot_facts(
     function: &Function,
-    module: &ModuleCtx,
     backend: &EvmBackend,
-    ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
+    prov: &SecondaryMap<ValueId, Provenance>,
 ) -> FreePtrSlotFacts {
-    let prov = compute_value_provenance(function, module, &backend.isa, |callee| {
-        ptr_escape
-            .get(&callee)
-            .cloned()
-            .unwrap_or_else(|| PtrEscapeSummary::conservative_unknown_ctx(module, callee))
-    });
-
     let mut facts = FreePtrSlotFacts::default();
     for block in function.layout.iter_block() {
         for inst in function.layout.iter_inst(block) {
@@ -266,7 +263,7 @@ pub(crate) fn function_free_ptr_slot_facts(
             }
 
             for access in &function.dfg.effects(inst).accesses {
-                if memory_access_may_touch_free_ptr_slot(function, access, &prov) {
+                if memory_access_may_touch_free_ptr_slot(function, access, prov) {
                     facts.touches = true;
                     facts.writes |= access.kind == AccessKind::Write;
                     if facts.writes {
@@ -286,8 +283,8 @@ pub(crate) enum MemoryLayoutReservation {
     ConservativeFloor,
 }
 
-#[derive(Default)]
-struct SectionMemoryLayout {
+#[derive(Clone, Default)]
+pub(crate) struct SectionMemoryLayout {
     max_reserved_end: u32,
     conservative_floor: bool,
 }
@@ -311,21 +308,12 @@ impl SectionMemoryLayout {
     }
 
     fn arena_base(&self) -> u32 {
-        let base = align_to_word(self.max_reserved_end).unwrap_or(STATIC_BASE);
+        let base = memory_plan::align_up_to_word(self.max_reserved_end).unwrap_or(STATIC_BASE);
         if self.conservative_floor {
             base.max(STATIC_BASE)
         } else {
             base
         }
-    }
-}
-
-fn align_to_word(bytes: u32) -> Option<u32> {
-    let rem = bytes % WORD_BYTES;
-    if rem == 0 {
-        Some(bytes)
-    } else {
-        bytes.checked_add(WORD_BYTES - rem)
     }
 }
 
@@ -507,16 +495,9 @@ fn terminal_payload_scratch_insts(function: &Function, backend: &EvmBackend) -> 
 fn reserve_function_memory_layout(
     layout: &mut SectionMemoryLayout,
     function: &Function,
-    module: &ModuleCtx,
     backend: &EvmBackend,
-    ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
+    prov: &SecondaryMap<ValueId, Provenance>,
 ) {
-    let prov = compute_value_provenance(function, module, &backend.isa, |callee| {
-        ptr_escape
-            .get(&callee)
-            .cloned()
-            .unwrap_or_else(|| PtrEscapeSummary::conservative_unknown_ctx(module, callee))
-    });
     let terminal_payload_scratch = terminal_payload_scratch_insts(function, backend);
 
     for block in function.layout.iter_block() {
@@ -533,7 +514,7 @@ fn reserve_function_memory_layout(
 
             for access in &function.dfg.effects(inst).accesses {
                 layout.apply(memory_layout_reservation_from_effect(
-                    function, access, &prov,
+                    function, access, prov,
                 ));
             }
         }
@@ -583,13 +564,11 @@ fn machine_fixed_memory_write_range(
         EvmMachineInstKind::EvmMcopy(copy) => {
             fixed_write_range_from_len_value(function, inst, *copy.dest(), *copy.len())
         }
-        // The current EvmCall/EvmCallCode machine instruction accessor is named
-        // ret_offset, but it is used here and by lowering as the return buffer length.
         EvmMachineInstKind::EvmCall(call) => {
-            fixed_write_range_from_len_value(function, inst, *call.ret_addr(), *call.ret_offset())
+            fixed_write_range_from_len_value(function, inst, *call.ret_addr(), *call.ret_len())
         }
         EvmMachineInstKind::EvmCallCode(call) => {
-            fixed_write_range_from_len_value(function, inst, *call.ret_addr(), *call.ret_offset())
+            fixed_write_range_from_len_value(function, inst, *call.ret_addr(), *call.ret_len())
         }
         EvmMachineInstKind::EvmDelegateCall(call) => {
             fixed_write_range_from_len_value(function, inst, *call.ret_addr(), *call.ret_len())
@@ -630,43 +609,51 @@ fn fixed_write_range(
 
 pub(crate) struct ArenaBaseFacts {
     pub(crate) has_dynamic_frames: bool,
-    pub(crate) has_stackify_scratch_spills: bool,
+    pub(crate) has_stackify_fixed_slot_spills: bool,
     pub(crate) backend_spill_scratch_reserve_words: u32,
     pub(crate) has_persistent_mallocs: bool,
 }
 
-pub(crate) fn choose_arena_base(
+/// The loop-invariant part of arena-base selection: fixed-address memory
+/// reservations scanned from every function's instructions. Computed once per
+/// section and combined with the iteration-dependent [`ArenaBaseFacts`] by
+/// [`choose_arena_base`].
+pub(crate) fn scan_fixed_reservations(
     module: &Module,
     funcs: &[FuncRef],
     backend: &EvmBackend,
-    ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
+    analyses: &FxHashMap<FuncRef, memory_plan::FuncPreAnalysis>,
+) -> SectionMemoryLayout {
+    let mut layout = SectionMemoryLayout::default();
+    for &func in funcs {
+        let analysis = expect_func_entry(analyses, func, "pre-analysis");
+        module.func_store.view(func, |function| {
+            reserve_function_memory_layout(&mut layout, function, backend, &analysis.prov.value);
+        });
+    }
+    layout
+}
+
+pub(crate) fn choose_arena_base(
+    fixed_reservations: &SectionMemoryLayout,
     facts: ArenaBaseFacts,
 ) -> u32 {
-    let mut layout = SectionMemoryLayout::default();
+    let mut layout = fixed_reservations.clone();
 
-    let spill_reserve_words = if facts.has_stackify_scratch_spills {
+    let spill_reserve_words = if facts.has_stackify_fixed_slot_spills {
         facts
             .backend_spill_scratch_reserve_words
-            .max(scratch_plan::SCRATCH_SPILL_SLOTS)
+            .max(fixed_slots::FIXED_SPILL_SLOTS)
     } else {
         facts.backend_spill_scratch_reserve_words
     };
     layout.reserve_len(0, spill_reserve_words * WORD_BYTES);
-    if facts.has_stackify_scratch_spills {
-        layout.reserve_len(0, scratch_plan::SCRATCH_SPILL_SLOTS * WORD_BYTES);
-    }
     if facts.has_persistent_mallocs {
         layout.reserve_len(FREE_PTR_SLOT_START, WORD_BYTES);
     }
     if facts.has_dynamic_frames {
         layout.reserve_len(FREE_PTR_SLOT_START, WORD_BYTES);
         layout.reserve_len(DYN_SP_SLOT_START, WORD_BYTES);
-    }
-
-    for &func in funcs {
-        module.func_store.view(func, |function| {
-            reserve_function_memory_layout(&mut layout, function, &module.ctx, backend, ptr_escape);
-        });
     }
 
     layout.arena_base()
@@ -704,8 +691,10 @@ fn prepare_machine_section_after_pipeline(
     membership: SectionMembership,
 ) -> Result<EvmPreparedSection, String> {
     let source_module = work.module();
-    let pre_analyses = compute_high_evm_pre_analyses(source_module, &funcs, backend);
-    let mut scratch_effects = FxHashSet::default();
+    let pre_analyses = compute_high_evm_pre_analyses(source_module, &funcs, backend, &ptr_escape);
+    let schedule = CallGraphSchedule::compute(source_module, &funcs);
+    let fixed_reservations = scan_fixed_reservations(source_module, &funcs, backend, &pre_analyses);
+    let mut fixed_slot_effects = FxHashSet::default();
     let mut backend_spill_reserves: FxHashMap<FuncRef, BackendSpillReserve> = FxHashMap::default();
     let mut last_convergence_error = None;
 
@@ -713,13 +702,15 @@ fn prepare_machine_section_after_pipeline(
         let placement = compute_semantic_memory_placement(
             source_module,
             MemoryPlacementSection {
+                schedule: &schedule,
                 funcs: &funcs,
                 entry: work.entry(),
                 includes: work.includes(),
+                fixed_reservations: &fixed_reservations,
             },
             &pre_analyses,
             &ptr_escape,
-            &scratch_effects,
+            &fixed_slot_effects,
             backend,
             &backend_spill_reserves,
         );
@@ -732,15 +723,16 @@ fn prepare_machine_section_after_pipeline(
         )?;
 
         let machine_isa = EvmMachine::new(machine.work.module().ctx.triple);
+        let machine_schedule = CallGraphSchedule::compute(machine.work.module(), &funcs);
         let machine_analyses = prepare_machine_stackify_analyses(
             machine.work.module(),
-            &funcs,
+            &machine_schedule,
             backend,
             &machine_isa,
         )?;
-        // Recompute scratch effects from the current machine allocation. Final spills selected
-        // for scratch are added below, after optional spill placement has been chosen.
-        let mut actual_scratch_effects: FxHashSet<FuncRef> = machine_analyses
+        // Recompute fixed-slot effects from the current machine allocation. Final spills selected
+        // for fixed slots are added below, after optional spill placement has been chosen.
+        let mut actual_fixed_slot_effects: FxHashSet<FuncRef> = machine_analyses
             .iter()
             .filter_map(|(&func, analysis)| analysis.alloc.uses_scratch_spills().then_some(func))
             .collect();
@@ -750,17 +742,10 @@ fn prepare_machine_section_after_pipeline(
         let mut machine_final_spill_inputs: Vec<_> = machine_analyses
             .into_iter()
             .map(|(func, analysis)| {
-                let func_placement = placement
-                    .funcs
-                    .get(&func)
-                    .unwrap_or_else(|| panic!("missing placement for func {}", func.as_u32()));
-                let mut mem_plan = func_placement.mem_plan.clone();
-                let func_map = machine
-                    .source_to_machine
-                    .funcs
-                    .get(&func)
-                    .unwrap_or_else(|| panic!("missing source map for func {}", func.as_u32()));
-                remap_machine_mem_plan_call_preserve(&mut mem_plan, func_map);
+                let func_placement = expect_func_entry(&placement.funcs, func, "placement");
+                let func_map =
+                    expect_func_entry(&machine.source_to_machine.funcs, func, "source map");
+                let mem_plan = MachineFuncPlan::from_semantic(&func_placement.mem_plan, func_map);
                 let fixed_writes =
                     machine
                         .work
@@ -791,15 +776,21 @@ fn prepare_machine_section_after_pipeline(
         machine_final_spill_inputs.sort_unstable_by_key(|input| input.func.as_u32());
 
         let optional_final_spill_placements = FinalSpillChoiceCtx {
-            source_module,
+            schedule: &schedule,
+            base_placement: &placement,
+            fixed_reservations: &fixed_reservations,
             funcs: &funcs,
-            section_entry: work.entry(),
-            section_includes: work.includes(),
-            pre_analyses: &pre_analyses,
-            ptr_escape: &ptr_escape,
-            backend,
-            base_scratch_effects: &actual_scratch_effects,
+            base_fixed_slot_effects: &actual_fixed_slot_effects,
             inputs: &machine_final_spill_inputs,
+            #[cfg(debug_assertions)]
+            replan: FinalSpillReplanCtx {
+                source_module,
+                section_entry: work.entry(),
+                section_includes: work.includes(),
+                pre_analyses: &pre_analyses,
+                ptr_escape: &ptr_escape,
+                backend,
+            },
         }
         .choose_optional_placements();
 
@@ -807,7 +798,7 @@ fn prepare_machine_section_after_pipeline(
             arena_base: placement.arena_base,
             dyn_base: placement.global_dyn_base,
             scratch_peak_words: placement.scratch_peak_words,
-            static_chain_peak_words: placement.static_chain_peak_words,
+            stable_chain_peak_words: placement.stable_chain_peak_words,
         };
 
         let mut actual_spill_reserves: FxHashMap<FuncRef, BackendSpillReserve> =
@@ -826,15 +817,9 @@ fn prepare_machine_section_after_pipeline(
                     spills,
                     ..
                 } = input;
-                let func_placement = placement
-                    .funcs
-                    .get(&func)
-                    .unwrap_or_else(|| panic!("missing placement for func {}", func.as_u32()));
-                let func_map = machine
-                    .source_to_machine
-                    .funcs
-                    .get(&func)
-                    .unwrap_or_else(|| panic!("missing source map for func {}", func.as_u32()));
+                let func_placement = expect_func_entry(&placement.funcs, func, "placement");
+                let func_map =
+                    expect_func_entry(&machine.source_to_machine.funcs, func, "source map");
                 let alloc = analysis.alloc;
                 let block_order = analysis.block_order;
                 let mut stackify_trace = analysis.trace;
@@ -865,7 +850,7 @@ fn prepare_machine_section_after_pipeline(
                                 source_function,
                                 machine_function,
                                 func_map,
-                                &func_placement.alloca_loc,
+                                &func_placement.mem_plan.alloca_loc,
                                 &backend.isa,
                             )
                         })
@@ -934,7 +919,7 @@ fn prepare_machine_section_after_pipeline(
         let mut final_spill_fallback_funcs = Vec::new();
         for (func, required_reserve, used_fallback, plan) in results {
             if required_reserve.scratch_words != 0 {
-                actual_scratch_effects.insert(func);
+                actual_fixed_slot_effects.insert(func);
             }
             actual_spill_reserves.insert(func, required_reserve);
             if used_fallback {
@@ -943,7 +928,7 @@ fn prepare_machine_section_after_pipeline(
             function_plans.insert(func, plan);
         }
 
-        let mem_plans: FxHashMap<FuncRef, FuncMemPlan> = function_plans
+        let mem_plans: FxHashMap<FuncRef, MachineFuncPlan> = function_plans
             .iter()
             .map(|(&func, plan)| (func, plan.mem_plan.clone()))
             .collect();
@@ -953,7 +938,7 @@ fn prepare_machine_section_after_pipeline(
             .collect();
         let dyn_sp_plans = compute_machine_dyn_sp_plan(
             machine.work.module(),
-            &funcs,
+            &machine_schedule,
             machine.work.entry(),
             &mem_plans,
             &frame_summaries,
@@ -980,9 +965,9 @@ fn prepare_machine_section_after_pipeline(
             reserve_peak, actual_peak, "evm machine spill reserve iteration"
         );
 
-        let scratch_effects_satisfied = actual_scratch_effects
+        let fixed_slot_effects_satisfied = actual_fixed_slot_effects
             .iter()
-            .all(|func| scratch_effects.contains(func));
+            .all(|func| fixed_slot_effects.contains(func));
         let spill_reserve_satisfied = actual_spill_reserves.iter().all(|(func, actual)| {
             backend_spill_reserves
                 .get(func)
@@ -995,13 +980,25 @@ fn prepare_machine_section_after_pipeline(
             iteration,
             &backend_spill_reserves,
             &actual_spill_reserves,
-            &scratch_effects,
-            &actual_scratch_effects,
+            &fixed_slot_effects,
+            &actual_fixed_slot_effects,
             &final_spill_fallback_funcs,
             &section_plan,
         ));
 
-        if spill_reserve_satisfied && scratch_effects_satisfied && fallback_satisfied {
+        if spill_reserve_satisfied && fixed_slot_effects_satisfied && fallback_satisfied {
+            if std::env::var_os("SONATINA_MEM_LOOP_STATS").is_some() {
+                eprintln!(
+                    "MEM_LOOP_STATS funcs={} iterations={} final_spill_funcs={} optional_spill_funcs={}",
+                    funcs.len(),
+                    iteration + 1,
+                    actual_spill_reserves
+                        .values()
+                        .filter(|reserve| !reserve.is_empty())
+                        .count(),
+                    optional_final_spill_placements.len(),
+                );
+            }
             validate_committed_final_spill_section(&section_plan, &function_plans)?;
             let mut globals: Vec<_> = membership.globals.iter().copied().collect();
             globals.sort_unstable();
@@ -1014,7 +1011,7 @@ fn prepare_machine_section_after_pipeline(
                 function_plans,
             });
         }
-        if spill_reserve_satisfied && scratch_effects_satisfied && !fallback_satisfied {
+        if spill_reserve_satisfied && fixed_slot_effects_satisfied && !fallback_satisfied {
             return Err(final_spill_fallback_with_satisfied_reserves_error(
                 &final_spill_fallback_funcs,
                 &section_plan,
@@ -1023,7 +1020,7 @@ fn prepare_machine_section_after_pipeline(
 
         backend_spill_reserves =
             pointwise_max_reserve_maps(&backend_spill_reserves, &actual_spill_reserves);
-        scratch_effects.extend(actual_scratch_effects);
+        fixed_slot_effects.extend(actual_fixed_slot_effects);
         debug!(
             iteration,
             actual_peak, "rerunning evm machine prepare with larger spill/scratch reserve"
@@ -1054,8 +1051,8 @@ fn final_spill_convergence_error(
     iteration: usize,
     backend_spill_reserves: &FxHashMap<FuncRef, BackendSpillReserve>,
     actual_spill_reserves: &FxHashMap<FuncRef, BackendSpillReserve>,
-    scratch_effects: &FxHashSet<FuncRef>,
-    actual_scratch_effects: &FxHashSet<FuncRef>,
+    fixed_slot_effects: &FxHashSet<FuncRef>,
+    actual_fixed_slot_effects: &FxHashSet<FuncRef>,
     final_spill_fallback_funcs: &[FuncRef],
     section_plan: &EvmSectionPlan,
 ) -> String {
@@ -1076,9 +1073,9 @@ fn final_spill_convergence_error(
         .collect();
     reserve_deltas.sort();
 
-    let mut scratch_delta: Vec<_> = actual_scratch_effects
+    let mut scratch_delta: Vec<_> = actual_fixed_slot_effects
         .iter()
-        .filter(|func| !scratch_effects.contains(func))
+        .filter(|func| !fixed_slot_effects.contains(func))
         .map(|func| format!("func{}", func.as_u32()))
         .collect();
     scratch_delta.sort();
@@ -1090,10 +1087,10 @@ fn final_spill_convergence_error(
     fallback_funcs.sort();
 
     format!(
-        "EVM final-spill memory placement did not converge after {MAX_FINAL_SPILL_RESERVE_ITERS} iterations; last_iteration={iteration}; arena_base=0x{:x}; scratch_peak_words={}; static_chain_peak_words={}; reserve_delta=[{}]; scratch_effect_delta=[{}]; fallback_funcs=[{}]",
+        "EVM final-spill memory placement did not converge after {MAX_FINAL_SPILL_RESERVE_ITERS} iterations; last_iteration={iteration}; arena_base=0x{:x}; scratch_peak_words={}; stable_chain_peak_words={}; reserve_delta=[{}]; scratch_effect_delta=[{}]; fallback_funcs=[{}]",
         section_plan.arena_base,
         section_plan.scratch_peak_words,
-        section_plan.static_chain_peak_words,
+        section_plan.stable_chain_peak_words,
         reserve_deltas.join(", "),
         scratch_delta.join(", "),
         fallback_funcs.join(", ")
@@ -1110,11 +1107,11 @@ fn final_spill_fallback_with_satisfied_reserves_error(
         .collect();
     funcs.sort();
     format!(
-        "EVM final-spill placement used fallback despite satisfied reserves; this indicates incomplete reserve accounting: funcs=[{}]; arena_base=0x{:x}; scratch_peak_words={}; static_chain_peak_words={}",
+        "EVM final-spill placement used fallback despite satisfied reserves; this indicates incomplete reserve accounting: funcs=[{}]; arena_base=0x{:x}; scratch_peak_words={}; stable_chain_peak_words={}",
         funcs.join(", "),
         section_plan.arena_base,
         section_plan.scratch_peak_words,
-        section_plan.static_chain_peak_words,
+        section_plan.stable_chain_peak_words,
     )
 }
 
@@ -1140,21 +1137,21 @@ fn validate_committed_final_spill_section(
                 section_plan.arena_base
             ));
         }
-        if let memory_plan::StableMode::StaticAbs { base_word } = plan.mem_plan.stable_mode
+        if let memory_plan::StableMode::StableAbs { base_word } = plan.mem_plan.stable_mode
             && plan.mem_plan.stable_words != 0
             && base_word < plan.mem_plan.scratch_words
         {
             return Err(format!(
-                "EVM static stable frame starts inside scratch in committed final-spill plan: func{} stable_base_word={} scratch_words={} arena_base=0x{:x}; scratch_peak_words={}; static_chain_peak_words={}",
+                "EVM static stable frame starts inside scratch in committed final-spill plan: func{} stable_base_word={} scratch_words={} arena_base=0x{:x}; scratch_peak_words={}; stable_chain_peak_words={}",
                 func.as_u32(),
                 base_word,
                 plan.mem_plan.scratch_words,
                 section_plan.arena_base,
                 section_plan.scratch_peak_words,
-                section_plan.static_chain_peak_words,
+                section_plan.stable_chain_peak_words,
             ));
         }
-        if let memory_plan::StableMode::StaticAbs { base_word } = plan.mem_plan.stable_mode {
+        if let memory_plan::StableMode::StableAbs { base_word } = plan.mem_plan.stable_mode {
             let stable_end = base_word
                 .checked_add(plan.mem_plan.stable_words)
                 .ok_or_else(|| {
@@ -1167,24 +1164,24 @@ fn validate_committed_final_spill_section(
                 })?;
             let static_end = section_plan
                 .scratch_peak_words
-                .checked_add(section_plan.static_chain_peak_words)
+                .checked_add(section_plan.stable_chain_peak_words)
                 .ok_or_else(|| {
                     format!(
-                        "EVM committed final-spill section static end overflow: arena_base=0x{:x}; scratch_peak_words={}; static_chain_peak_words={}",
+                        "EVM committed final-spill section static end overflow: arena_base=0x{:x}; scratch_peak_words={}; stable_chain_peak_words={}",
                         section_plan.arena_base,
                         section_plan.scratch_peak_words,
-                        section_plan.static_chain_peak_words
+                        section_plan.stable_chain_peak_words
                     )
                 })?;
             if stable_end > static_end {
                 return Err(format!(
-                    "EVM committed final-spill plan exceeds section static memory: func{} stable_end={} static_end={} arena_base=0x{:x}; scratch_peak_words={}; static_chain_peak_words={}",
+                    "EVM committed final-spill plan exceeds section static memory: func{} stable_end={} static_end={} arena_base=0x{:x}; scratch_peak_words={}; stable_chain_peak_words={}",
                     func.as_u32(),
                     stable_end,
                     static_end,
                     section_plan.arena_base,
                     section_plan.scratch_peak_words,
-                    section_plan.static_chain_peak_words,
+                    section_plan.stable_chain_peak_words,
                 ));
             }
         }
@@ -1193,69 +1190,47 @@ fn validate_committed_final_spill_section(
     Ok(())
 }
 
-fn remap_machine_mem_plan_call_preserve(mem_plan: &mut FuncMemPlan, map: &FuncMachineMap) {
-    let mut call_preserve = FxHashMap::default();
-    for (source_inst, plan) in std::mem::take(&mut mem_plan.call_preserve) {
-        if let Some(machine_inst) = map.insts[source_inst] {
-            call_preserve.insert(machine_inst, plan);
-        }
-    }
-    mem_plan.call_preserve = call_preserve;
-}
-
 pub(crate) fn compute_return_escape_caller_clamp_words(
-    module: &Module,
-    funcs: &[FuncRef],
+    schedule: &CallGraphSchedule,
     plan: &ProgramMemoryPlan,
     extra_clobber_words: &FxHashMap<FuncRef, BackendSpillReserve>,
 ) -> FxHashMap<FuncRef, u32> {
-    let funcs_set: FxHashSet<FuncRef> = funcs.iter().copied().collect();
     let abs_clobber_words =
-        compute_abs_clobber_words_with_extra(module, funcs, plan, extra_clobber_words);
+        compute_abs_clobber_words_with_extra(schedule, plan, extra_clobber_words);
+    let clobber = |func: FuncRef| {
+        abs_clobber_words
+            .get(&func)
+            .copied()
+            .or_else(|| {
+                plan.funcs
+                    .get(&func)
+                    .map(SemanticFuncPlan::active_abs_words)
+            })
+            .unwrap_or(0)
+    };
 
-    let mut callers: FxHashMap<FuncRef, FxHashSet<FuncRef>> = FxHashMap::default();
+    // clamp(f) = max over callers c of max(clobber(c), clamp(c)). One
+    // forward-topo pass over the condensation; within a cyclic SCC every
+    // member is transitively a caller of every other, so the SCC folds its
+    // own members' clobber bounds.
+    let mut incoming: FxHashMap<SccRef, u32> = FxHashMap::default();
     let mut clamp_words: FxHashMap<FuncRef, u32> = FxHashMap::default();
-    for &func in funcs {
-        clamp_words.insert(func, 0);
-    }
-
-    for &caller in funcs {
-        module.func_store.view(caller, |function| {
-            for block in function.layout.iter_block() {
-                for inst in function.layout.iter_inst(block) {
-                    let Some(call) = function.dfg.call_info(inst) else {
-                        continue;
-                    };
-                    let callee = call.callee();
-                    if funcs_set.contains(&callee) {
-                        callers.entry(callee).or_default().insert(caller);
-                    }
-                }
-            }
-        });
-    }
-
-    let mut changed = true;
-    while changed {
-        changed = false;
-
-        for &func in funcs {
-            let mut next = clamp_words.get(&func).copied().unwrap_or(0);
-            for caller in callers.get(&func).into_iter().flatten() {
-                let caller_clobber_words = abs_clobber_words
-                    .get(caller)
-                    .copied()
-                    .or_else(|| plan.funcs.get(caller).map(FuncMemPlan::active_abs_words))
-                    .unwrap_or(0);
-                let caller_transitive_words = clamp_words.get(caller).copied().unwrap_or(0);
-                next = next.max(caller_clobber_words.max(caller_transitive_words));
-            }
-
-            let cur = clamp_words.get(&func).copied().unwrap_or(0);
-            if next > cur {
-                clamp_words.insert(func, next);
-                changed = true;
-            }
+    for &scc_ref in &schedule.topo {
+        let members = schedule.members(scc_ref);
+        let scc_max_clobber = members.iter().map(|&func| clobber(func)).max().unwrap_or(0);
+        let mut clamp = incoming.get(&scc_ref).copied().unwrap_or(0);
+        if schedule.sccs.scc_info(scc_ref).is_cycle {
+            clamp = clamp.max(scc_max_clobber);
+        }
+        for &func in members {
+            clamp_words.insert(func, clamp);
+        }
+        let push = clamp.max(scc_max_clobber);
+        for callee_scc in schedule.scc_edges.get(&scc_ref).into_iter().flatten() {
+            incoming
+                .entry(*callee_scc)
+                .and_modify(|cur| *cur = (*cur).max(push))
+                .or_insert(push);
         }
     }
 
@@ -1283,11 +1258,15 @@ pub(crate) fn prepare_free_ptr_restore(
         let mut inst_liveness = InstLiveness::new();
         inst_liveness.compute(function, &cfg, &liveness);
 
+        let prov_info = compute_provenance(function, module, &backend.isa, |callee| {
+            PtrEscapeSummary::get_or_conservative(ptr_escape, module, callee)
+        });
         let transient_mallocs = malloc_plan::compute_transient_mallocs(
             function,
             module,
             &backend.isa,
             ptr_escape,
+            &prov_info,
             None,
             &inst_liveness,
         );
@@ -1298,6 +1277,7 @@ pub(crate) fn prepare_free_ptr_restore(
                 module,
                 &backend.isa,
                 ptr_escape,
+                &prov_info,
                 &transient_mallocs,
             )
         {
@@ -1314,6 +1294,7 @@ fn prepare_high_evm_pre_analysis(
     function: &mut Function,
     module: &ModuleCtx,
     backend: &EvmBackend,
+    ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
 ) -> memory_plan::FuncPreAnalysis {
     let _span = trace_span!("sonatina.codegen.evm.prepare_high_evm_pre_analysis").entered();
     let mut cfg = ControlFlowGraph::new();
@@ -1350,10 +1331,24 @@ fn prepare_high_evm_pre_analysis(
         backend.compute_high_evm_value_aliases(function, module)
     };
 
+    let (prov, prov_conservative_value) = {
+        let _span = trace_span!("sonatina.codegen.evm.pre_analysis.compute_provenance").entered();
+        let prov = compute_provenance(function, module, &backend.isa, |callee| {
+            PtrEscapeSummary::get_or_conservative(ptr_escape, module, callee)
+        });
+        let conservative = compute_value_provenance(function, module, &backend.isa, |callee| {
+            PtrEscapeSummary::conservative_unknown_ctx(module, callee)
+        });
+        (prov, conservative)
+    };
+
     memory_plan::FuncPreAnalysis {
+        cfg,
         inst_liveness,
         block_order,
         value_aliases,
+        prov,
+        prov_conservative_value,
     }
 }
 
@@ -1361,6 +1356,7 @@ fn compute_high_evm_pre_analyses(
     module: &Module,
     funcs: &[FuncRef],
     backend: &EvmBackend,
+    ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
 ) -> FxHashMap<FuncRef, memory_plan::FuncPreAnalysis> {
     let _span = debug_span!("sonatina.codegen.evm.compute_high_evm_pre_analyses").entered();
     let mut results: Vec<_> = funcs
@@ -1368,7 +1364,7 @@ fn compute_high_evm_pre_analyses(
         .copied()
         .map(|func| {
             let analysis = module.func_store.modify(func, |function| {
-                prepare_high_evm_pre_analysis(function, &module.ctx, backend)
+                prepare_high_evm_pre_analysis(function, &module.ctx, backend, ptr_escape)
             });
             (func, analysis)
         })

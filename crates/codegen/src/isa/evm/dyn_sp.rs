@@ -1,12 +1,9 @@
 use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{InstId, Module, module::FuncRef};
 
-use crate::module_analysis::{CallGraph, SccBuilder};
+use crate::module_analysis::CallGraphSchedule;
 
-use super::{
-    machine::lazy_frame::FrameSummary,
-    memory_plan::{self, FuncMemPlan},
-};
+use super::{machine::lazy_frame::FrameSummary, memory_plan::MachineFuncPlan};
 
 #[derive(Clone, Default)]
 pub(crate) struct FuncDynSpPlan {
@@ -60,43 +57,28 @@ impl EntryFrameState {
 
 pub(crate) fn compute_machine_dyn_sp_plan(
     module: &Module,
-    funcs: &[FuncRef],
+    schedule: &CallGraphSchedule,
     section_entry: FuncRef,
-    mem_plans: &FxHashMap<FuncRef, FuncMemPlan>,
+    mem_plans: &FxHashMap<FuncRef, MachineFuncPlan>,
     frame_summaries: &FxHashMap<FuncRef, FrameSummary>,
 ) -> FxHashMap<FuncRef, FuncDynSpPlan> {
-    let funcs_set: FxHashSet<FuncRef> = funcs.iter().copied().collect();
-    let call_graph = CallGraph::build_graph_subset(module, &funcs_set);
-    let mut reachable_funcs = FxHashSet::default();
-    let mut worklist = vec![section_entry];
-    while let Some(func) = worklist.pop() {
-        if !reachable_funcs.insert(func) {
-            continue;
-        }
-        for &callee in call_graph.callee_of(func) {
-            worklist.push(callee);
-        }
-    }
+    let reachable_funcs = schedule.reachable_from(section_entry);
 
-    let mut ordered_funcs = funcs.to_vec();
-    ordered_funcs.sort_unstable_by_key(|func| func.as_u32());
+    let ordered_funcs = schedule.funcs().to_vec();
     let mut ordered_reachable: Vec<FuncRef> = reachable_funcs.iter().copied().collect();
     ordered_reachable.sort_unstable_by_key(|func| func.as_u32());
 
-    let scc = SccBuilder::new().compute_scc(&call_graph);
-    let topo = memory_plan::topo_sort_sccs(&reachable_funcs, &call_graph, &scc);
     let mut ready_sccs = FxHashSet::default();
-    for &scc_ref in &topo {
-        if scc
-            .scc_info(scc_ref)
-            .components
+    for &scc_ref in &schedule.topo {
+        if schedule
+            .members(scc_ref)
             .iter()
             .copied()
             .filter(|func| reachable_funcs.contains(func))
             .any(|func| {
                 mem_plans
                     .get(&func)
-                    .is_some_and(FuncMemPlan::uses_dynamic_frame)
+                    .is_some_and(MachineFuncPlan::uses_dynamic_frame)
             })
         {
             ready_sccs.insert(scc_ref);
@@ -156,7 +138,7 @@ pub(crate) fn compute_machine_dyn_sp_plan(
         })
         .collect();
 
-    if ready_sccs.contains(&scc.scc_ref(section_entry)) {
+    if ready_sccs.contains(&schedule.sccs.scc_ref(section_entry)) {
         let entry_live_frame = plans
             .get(&section_entry)
             .is_some_and(|plan| plan.entry_live_frame);
@@ -171,7 +153,7 @@ pub(crate) fn compute_machine_dyn_sp_plan(
     }
 
     for &caller in &ordered_reachable {
-        let caller_scc = scc.scc_ref(caller);
+        let caller_scc = schedule.sccs.scc_ref(caller);
         if ready_sccs.contains(&caller_scc) {
             continue;
         }
@@ -190,7 +172,7 @@ pub(crate) fn compute_machine_dyn_sp_plan(
                     if !reachable_funcs.contains(&callee) {
                         continue;
                     }
-                    let callee_scc = scc.scc_ref(callee);
+                    let callee_scc = schedule.sccs.scc_ref(callee);
                     if caller_scc == callee_scc
                         || !ready_sccs.contains(&callee_scc)
                         || caller_summary.local_frame_active_before_inst(inst)

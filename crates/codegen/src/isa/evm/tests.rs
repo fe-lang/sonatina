@@ -58,14 +58,14 @@ fn plan_test_ctx_from_src(src: &str) -> PlanTestCtx {
         parsed.module.func_store.modify(func, |function| {
             analyses.insert(
                 func,
-                compute_test_pre_analysis(function, &parsed.module.ctx, &backend),
+                compute_test_pre_analysis(function, &parsed.module.ctx, &backend, &ptr_escape),
             );
         });
     }
 
     let plan = compute_semantic_program_memory_plan(
         &parsed.module,
-        &funcs,
+        &crate::module_analysis::CallGraphSchedule::compute(&parsed.module, &funcs),
         &analyses,
         &ptr_escape,
         &isa,
@@ -93,6 +93,7 @@ fn compute_test_pre_analysis(
     function: &mut Function,
     module: &ModuleCtx,
     backend: &EvmBackend,
+    ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
 ) -> memory_plan::FuncPreAnalysis {
     let mut cfg = ControlFlowGraph::new();
     cfg.compute(function);
@@ -108,10 +109,25 @@ fn compute_test_pre_analysis(
     let mut inst_liveness = InstLiveness::new();
     inst_liveness.compute(function, &cfg, &liveness);
 
+    let prov = crate::isa::evm::ptr_provenance::compute_provenance(
+        function,
+        module,
+        &backend.isa,
+        |callee| PtrEscapeSummary::get_or_conservative(ptr_escape, module, callee),
+    );
+    let prov_conservative_value = crate::isa::evm::ptr_provenance::compute_value_provenance(
+        function,
+        module,
+        &backend.isa,
+        |callee| PtrEscapeSummary::conservative_unknown_ctx(module, callee),
+    );
     memory_plan::FuncPreAnalysis {
-        inst_liveness,
         block_order: dom.rpo().to_owned(),
         value_aliases: backend.compute_high_evm_value_aliases(function, module),
+        cfg,
+        inst_liveness,
+        prov,
+        prov_conservative_value,
     }
 }
 
@@ -1351,14 +1367,12 @@ block0:
     let mk = ctx.names["mk"];
     let main = ctx.names["main"];
     let abs_clobber_words = compute_abs_clobber_words_with_extra(
-        &ctx.module,
-        &ctx.funcs,
+        &crate::module_analysis::CallGraphSchedule::compute(&ctx.module, &ctx.funcs),
         &ctx.plan,
         &FxHashMap::default(),
     );
     let clamp_words = compute_return_escape_caller_clamp_words(
-        &ctx.module,
-        &ctx.funcs,
+        &crate::module_analysis::CallGraphSchedule::compute(&ctx.module, &ctx.funcs),
         &ctx.plan,
         &FxHashMap::default(),
     );
@@ -1376,8 +1390,7 @@ block0:
     let mut extra_clobber_words = FxHashMap::default();
     extra_clobber_words.insert(main, extra_reserve);
     let clamp_words = compute_return_escape_caller_clamp_words(
-        &ctx.module,
-        &ctx.funcs,
+        &crate::module_analysis::CallGraphSchedule::compute(&ctx.module, &ctx.funcs),
         &ctx.plan,
         &extra_clobber_words,
     );
@@ -1438,7 +1451,7 @@ block0:
         parsed.module.func_store.modify(func, |function| {
             analyses.insert(
                 func,
-                compute_test_pre_analysis(function, &parsed.module.ctx, &backend),
+                compute_test_pre_analysis(function, &parsed.module.ctx, &backend, &ptr_escape),
             );
         });
     }
@@ -1459,9 +1472,14 @@ block0:
             stable_words: 8,
         },
     )]);
+    let schedule = crate::module_analysis::CallGraphSchedule::compute(&parsed.module, &funcs);
+    let fixed_reservations =
+        prepare::scan_fixed_reservations(&parsed.module, &funcs, &backend, &analyses);
     let placement = machine::placement::compute_semantic_memory_placement(
         &parsed.module,
         machine::placement::MemoryPlacementSection {
+            schedule: &schedule,
+            fixed_reservations: &fixed_reservations,
             funcs: &funcs,
             entry: names["main"],
             includes: &[],
@@ -1551,16 +1569,21 @@ block0:
         parsed.module.func_store.modify(func, |function| {
             analyses.insert(
                 func,
-                compute_test_pre_analysis(function, &parsed.module.ctx, &backend),
+                compute_test_pre_analysis(function, &parsed.module.ctx, &backend, &ptr_escape),
             );
         });
     }
 
     let clobber = find_func(&parsed.module, "clobber_then_read");
     let entry = find_func(&parsed.module, "entry");
+    let schedule = crate::module_analysis::CallGraphSchedule::compute(&parsed.module, &funcs);
+    let fixed_reservations =
+        prepare::scan_fixed_reservations(&parsed.module, &funcs, &backend, &analyses);
     let placement = machine::placement::compute_semantic_memory_placement(
         &parsed.module,
         machine::placement::MemoryPlacementSection {
+            schedule: &schedule,
+            fixed_reservations: &fixed_reservations,
             funcs: &funcs,
             entry,
             includes: &[],
@@ -1630,16 +1653,21 @@ block0:
         parsed.module.func_store.modify(func, |function| {
             analyses.insert(
                 func,
-                compute_test_pre_analysis(function, &parsed.module.ctx, &backend),
+                compute_test_pre_analysis(function, &parsed.module.ctx, &backend, &ptr_escape),
             );
         });
     }
 
     let entry = find_func(&parsed.module, "entry");
     let scratch = find_func(&parsed.module, "scratch");
+    let schedule = crate::module_analysis::CallGraphSchedule::compute(&parsed.module, &funcs);
+    let fixed_reservations =
+        prepare::scan_fixed_reservations(&parsed.module, &funcs, &backend, &analyses);
     let placement = machine::placement::compute_semantic_memory_placement(
         &parsed.module,
         machine::placement::MemoryPlacementSection {
+            schedule: &schedule,
+            fixed_reservations: &fixed_reservations,
             funcs: &funcs,
             entry,
             includes: &[],
@@ -1720,7 +1748,7 @@ block0:
         parsed.module.func_store.modify(func, |function| {
             pre_analyses.insert(
                 func,
-                compute_test_pre_analysis(function, &parsed.module.ctx, &backend),
+                compute_test_pre_analysis(function, &parsed.module.ctx, &backend, &ptr_escape),
             );
             stack_allocs.insert(func, compute_test_stackify_alloc(function));
         });
@@ -1753,7 +1781,7 @@ block0:
 
     let plan = compute_semantic_program_memory_plan(
         &parsed.module,
-        &funcs,
+        &crate::module_analysis::CallGraphSchedule::compute(&parsed.module, &funcs),
         &pre_analyses,
         &ptr_escape,
         &isa,
@@ -2903,7 +2931,7 @@ block0:
         parsed.module.func_store.modify(func, |function| {
             pre_analyses.insert(
                 func,
-                compute_test_pre_analysis(function, &parsed.module.ctx, &backend),
+                compute_test_pre_analysis(function, &parsed.module.ctx, &backend, &ptr_escape),
             );
             stack_allocs.insert(func, compute_test_stackify_alloc(function));
         });
@@ -2916,7 +2944,7 @@ block0:
     };
     let plan = compute_semantic_program_memory_plan(
         &parsed.module,
-        &funcs,
+        &crate::module_analysis::CallGraphSchedule::compute(&parsed.module, &funcs),
         &pre_analyses,
         &ptr_escape,
         &isa,
@@ -2948,11 +2976,20 @@ block0:
     let stack_alloc = stack_allocs
         .remove(&caller)
         .expect("missing caller analysis");
-    let mem_plan = plan
-        .funcs
-        .get(&caller)
-        .expect("missing caller plan")
-        .clone();
+    let semantic_plan = plan.funcs.get(&caller).expect("missing caller plan");
+    // These tests run on source IR with an identity inst mapping, so the
+    // semantic call_preserve keys are already the "machine" keys.
+    let mem_plan = memory_plan::MachineFuncPlan {
+        arena_base: semantic_plan.arena_base,
+        scratch_words: semantic_plan.scratch_words,
+        stable_words: semantic_plan.stable_words,
+        stable_mode: semantic_plan.stable_mode,
+        entry_abs_words: semantic_plan.entry_abs_words,
+        obj_loc: semantic_plan.obj_loc.clone(),
+        alloca_loc: semantic_plan.alloca_loc.clone(),
+        spill_obj: Default::default(),
+        call_preserve: semantic_plan.call_preserve.clone(),
+    };
     let alloc = FinalAlloc::new(stack_alloc, mem_plan);
 
     let save_plan = alloc
@@ -2960,9 +2997,7 @@ block0:
         .call_preserve
         .get(&call_inst)
         .expect("expected non-empty call preserve entry for call");
-    let PreserveMode::ShadowRuns { shadow_obj, runs } = &save_plan.mode else {
-        panic!("expected shadow preserve plan for caller");
-    };
+    let (shadow_obj, runs) = (&save_plan.shadow_obj, &save_plan.runs);
     assert!(!runs.is_empty(), "expected at least one saved run");
 
     let actions = alloc.read(call_inst, &call_args);
@@ -3045,7 +3080,7 @@ block2:
         parsed.module.func_store.modify(func, |function| {
             pre_analyses.insert(
                 func,
-                compute_test_pre_analysis(function, &parsed.module.ctx, &backend),
+                compute_test_pre_analysis(function, &parsed.module.ctx, &backend, &ptr_escape),
             );
             stack_allocs.insert(func, compute_test_stackify_alloc(function));
         });
@@ -3058,7 +3093,7 @@ block2:
     };
     let plan = compute_semantic_program_memory_plan(
         &parsed.module,
-        &funcs,
+        &crate::module_analysis::CallGraphSchedule::compute(&parsed.module, &funcs),
         &pre_analyses,
         &ptr_escape,
         &isa,
@@ -3091,11 +3126,20 @@ block2:
     let stack_alloc = stack_allocs
         .remove(&caller)
         .expect("missing caller analysis");
-    let mem_plan = plan
-        .funcs
-        .get(&caller)
-        .expect("missing caller plan")
-        .clone();
+    let semantic_plan = plan.funcs.get(&caller).expect("missing caller plan");
+    // These tests run on source IR with an identity inst mapping, so the
+    // semantic call_preserve keys are already the "machine" keys.
+    let mem_plan = memory_plan::MachineFuncPlan {
+        arena_base: semantic_plan.arena_base,
+        scratch_words: semantic_plan.scratch_words,
+        stable_words: semantic_plan.stable_words,
+        stable_mode: semantic_plan.stable_mode,
+        entry_abs_words: semantic_plan.entry_abs_words,
+        obj_loc: semantic_plan.obj_loc.clone(),
+        alloca_loc: semantic_plan.alloca_loc.clone(),
+        spill_obj: Default::default(),
+        call_preserve: semantic_plan.call_preserve.clone(),
+    };
     let alloc = FinalAlloc::new(stack_alloc, mem_plan);
 
     let save_plan = alloc
@@ -3104,9 +3148,7 @@ block2:
         .get(&call_inst)
         .expect("expected non-empty call preserve entry for call");
     assert_eq!(save_plan.result_count, 2);
-    let PreserveMode::ShadowRuns { shadow_obj, runs } = &save_plan.mode else {
-        panic!("expected shadow preserve plan for caller");
-    };
+    let (shadow_obj, runs) = (&save_plan.shadow_obj, &save_plan.runs);
     assert!(!runs.is_empty(), "expected at least one saved run");
 
     let actions = alloc.write(call_inst, &call_results);

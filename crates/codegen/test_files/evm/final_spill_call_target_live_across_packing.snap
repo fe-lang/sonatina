@@ -10,18 +10,18 @@ object: Contract
   total: 359 bytes
 
 functions:
-  mem: global_dyn_base=0x4a0 arena_base=0x300 scratch_peak_words=6 static_chain_peak_words=7
+  mem: global_dyn_base=0x4a0 arena_base=0x300 scratch_peak_words=6 stable_chain_peak_words=7
   entry: ir_blocks=1 ir_insts=4 vcode_ops=13 fixups=2 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=6 abs_words_end=0
   call_sha_after_packing: ir_blocks=1 ir_insts=33 vcode_ops=172 fixups=2 imm_bytes=51
-    mem: scratch_words=6 stable_words=7 stable_mode=StaticAbs(base=0x3c0) entry_abs_words=6 abs_words_end=13
+    mem: scratch_words=6 stable_words=7 stable_mode=StableAbs(base=0x3c0) entry_abs_words=6 abs_words_end=13
   pack_words: ir_blocks=1 ir_insts=16 vcode_ops=57 fixups=0 imm_bytes=12
     mem: scratch_words=1 stable_words=0 stable_mode=None entry_abs_words=13 abs_words_end=1
 
 mem plan detail:
-evm mem plan: global_dyn_base=0x4a0 arena_base=0x300 scratch_peak_words=6 static_chain_peak_words=7
+evm mem plan: global_dyn_base=0x4a0 arena_base=0x300 scratch_peak_words=6 stable_chain_peak_words=7
 evm mem plan: entry scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=6 abs_words_end=0
-evm mem plan: call_sha_after_packing scratch_words=6 stable_words=7 stable_mode=StaticAbs(base=0x3c0) entry_abs_words=6 abs_words_end=13
+evm mem plan: call_sha_after_packing scratch_words=6 stable_words=7 stable_mode=StableAbs(base=0x3c0) entry_abs_words=6 abs_words_end=13
   scratch_spill v3 slot=0 addr=0x0
   scratch_spill v5 slot=1 addr=0x20
   spill v7 offset_words=0 loc=ScratchAbs(0) addr=0x300

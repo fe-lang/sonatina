@@ -1,8 +1,9 @@
 use core::fmt;
+use std::collections::{BTreeMap, BTreeSet};
 
 use cranelift_entity::{PrimaryMap, SecondaryMap, entity_impl};
 use dashmap::{DashMap, ReadOnlyView};
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
     Linkage, Module,
     module::{FuncRef, ModuleCtx},
@@ -592,5 +593,160 @@ func private %live() -> i32 {
         assert_eq!(funcs, vec![entry, live]);
         assert!(info.func_info.get(&entry).is_some());
         assert!(info.func_info.get(&live).is_some());
+    }
+}
+
+/// A call-graph condensation schedule for a set of functions: the call graph,
+/// its strongly connected components, a callers-before-callees topological
+/// order over the condensation, and the deduplicated condensation edges.
+///
+/// Compute this once per module (or per section) and share it; every
+/// interprocedural propagation in the backend is a single pass over it.
+#[derive(Debug, Clone)]
+pub struct CallGraphSchedule {
+    pub call_graph: CallGraph,
+    pub sccs: CallGraphSccs,
+    /// Condensation SCCs ordered callers-before-callees.
+    pub topo: Vec<SccRef>,
+    /// Condensation edges: caller SCC -> callee SCCs (deduplicated, sorted).
+    pub scc_edges: BTreeMap<SccRef, Vec<SccRef>>,
+    funcs: Vec<FuncRef>,
+    members: BTreeMap<SccRef, Vec<FuncRef>>,
+}
+
+impl CallGraphSchedule {
+    pub fn compute(module: &Module, funcs: &[FuncRef]) -> Self {
+        let funcs_set: FxHashSet<FuncRef> = funcs.iter().copied().collect();
+        let call_graph = CallGraph::build_graph_subset(module, &funcs_set);
+        let sccs = SccBuilder::new().compute_scc(&call_graph);
+
+        let mut scc_set: BTreeSet<SccRef> = BTreeSet::new();
+        let mut members: BTreeMap<SccRef, Vec<FuncRef>> = BTreeMap::new();
+        let mut ordered_funcs: Vec<FuncRef> = funcs.to_vec();
+        ordered_funcs.sort_unstable_by_key(|func| func.as_u32());
+        for &func in &ordered_funcs {
+            let scc_ref = sccs.scc_ref(func);
+            scc_set.insert(scc_ref);
+            members.entry(scc_ref).or_default().push(func);
+        }
+
+        let mut edges: BTreeMap<SccRef, BTreeSet<SccRef>> = BTreeMap::new();
+        let mut indegree: BTreeMap<SccRef, usize> = BTreeMap::new();
+        for &scc_ref in &scc_set {
+            edges.insert(scc_ref, BTreeSet::new());
+            indegree.insert(scc_ref, 0);
+        }
+        for &func in &ordered_funcs {
+            let from = sccs.scc_ref(func);
+            for &callee in call_graph.callee_of(func) {
+                let to = sccs.scc_ref(callee);
+                if from == to {
+                    continue;
+                }
+                let tos = edges.get_mut(&from).expect("missing SCC edge set");
+                if tos.insert(to) {
+                    *indegree.get_mut(&to).expect("missing SCC indegree") += 1;
+                }
+            }
+        }
+
+        let mut ready: BTreeSet<SccRef> = BTreeSet::new();
+        for (&scc_ref, &deg) in &indegree {
+            if deg == 0 {
+                ready.insert(scc_ref);
+            }
+        }
+        let mut topo: Vec<SccRef> = Vec::with_capacity(scc_set.len());
+        while let Some(&scc_ref) = ready.first() {
+            ready.remove(&scc_ref);
+            topo.push(scc_ref);
+            for &to in edges.get(&scc_ref).expect("missing SCC edge set") {
+                let deg = indegree.get_mut(&to).expect("missing SCC indegree");
+                *deg = deg.checked_sub(1).expect("SCC indegree underflow");
+                if *deg == 0 {
+                    ready.insert(to);
+                }
+            }
+        }
+        debug_assert_eq!(topo.len(), scc_set.len(), "SCC topo sort incomplete");
+
+        let scc_edges = edges
+            .into_iter()
+            .map(|(scc_ref, tos)| (scc_ref, tos.into_iter().collect()))
+            .collect();
+
+        Self {
+            call_graph,
+            sccs,
+            topo,
+            scc_edges,
+            funcs: ordered_funcs,
+            members,
+        }
+    }
+
+    /// The scheduled functions, sorted by id.
+    pub fn funcs(&self) -> &[FuncRef] {
+        &self.funcs
+    }
+
+    /// The scheduled members of an SCC, sorted by id.
+    pub fn members(&self, scc_ref: SccRef) -> &[FuncRef] {
+        self.members
+            .get(&scc_ref)
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+    }
+
+    pub fn is_recursive(&self, func: FuncRef) -> bool {
+        self.sccs.scc_of(func).is_cycle
+    }
+
+    /// Joins a per-function local value downward along call edges:
+    /// `out(f) = join(local(f), out(g))` for every callee `g`, with all members of
+    /// an SCC sharing the joined value of the whole SCC. One reverse-topo pass.
+    pub fn join_over_callees<T: Clone>(
+        &self,
+        mut local: impl FnMut(FuncRef) -> T,
+        mut join: impl FnMut(&mut T, &T),
+    ) -> FxHashMap<FuncRef, T> {
+        let mut scc_vals: BTreeMap<SccRef, T> = BTreeMap::new();
+        for &scc_ref in self.topo.iter().rev() {
+            let members = self.members(scc_ref);
+            let mut val = local(members[0]);
+            for &func in &members[1..] {
+                let member_local = local(func);
+                join(&mut val, &member_local);
+            }
+            for callee_scc in self.scc_edges.get(&scc_ref).into_iter().flatten() {
+                let callee_val = scc_vals
+                    .get(callee_scc)
+                    .expect("callee SCC scheduled after caller");
+                join(&mut val, callee_val);
+            }
+            scc_vals.insert(scc_ref, val);
+        }
+
+        let mut out = FxHashMap::default();
+        for &func in &self.funcs {
+            out.insert(func, scc_vals[&self.sccs.scc_ref(func)].clone());
+        }
+        out
+    }
+
+    /// The set of scheduled functions reachable from `root` via call edges
+    /// (including `root` itself).
+    pub fn reachable_from(&self, root: FuncRef) -> FxHashSet<FuncRef> {
+        let mut reachable = FxHashSet::default();
+        let mut worklist = vec![root];
+        while let Some(func) = worklist.pop() {
+            if !reachable.insert(func) {
+                continue;
+            }
+            for &callee in self.call_graph.callee_of(func) {
+                worklist.push(callee);
+            }
+        }
+        reachable
     }
 }
