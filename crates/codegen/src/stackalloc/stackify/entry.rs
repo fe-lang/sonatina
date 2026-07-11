@@ -271,13 +271,17 @@ impl EntryTable {
         }
     }
 
-    /// Store a single-pred block's inherited predecessor stack. First writer wins: with split
-    /// critical edges a single-pred block receives exactly one edge, except the degenerate
-    /// `br c b b` double edge whose two stacks are identical, so keeping the first is correct.
+    /// Store a single-pred block's inherited predecessor stack. Critical, retreating, and
+    /// duplicate-target multiway edges are split beforehand, so exactly one edge may write it.
     fn set_inherited(&mut self, block: BlockId, pred: BlockId, stack: &SymStack) {
         match &mut self.entries[block].state {
             EntryState::Pending { inherited, .. } => {
-                inherited.get_or_insert_with(|| (pred, stack.clone()));
+                assert!(
+                    inherited.is_none(),
+                    "multiple edges attempted to inherit block {block:?}: run \
+                     StackifyEdgeSplitter before stackify"
+                );
+                *inherited = Some((pred, stack.clone()));
             }
             EntryState::Frozen(_) => unreachable!("inherit into already-frozen block {block:?}"),
         }

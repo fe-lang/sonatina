@@ -23,10 +23,11 @@
 //!   edge stores can be emitted directly without first staging every phi source on the stack.
 //!
 //! Notes specific to this codebase:
-//! - Run `StackifyEdgeSplitter` before this allocator: it establishes both split
-//!   preconditions, splitting critical edges *and* every multiway edge whose target is already
-//!   planned when the branch is reached (a self-loop or backedge, e.g. a multiway self-loop on
-//!   the entry block). Splitting only critical edges is not enough.
+//! - Run `StackifyEdgeSplitter` before this allocator: it canonicalizes all-identical branches
+//!   and establishes all split preconditions, splitting critical edges, duplicate-target edge
+//!   slots, and every multiway edge whose target is already planned when the branch is reached
+//!   (a self-loop or backedge, e.g. a multiway self-loop on the entry block). Splitting only
+//!   critical edges is not enough.
 //! - Internal calls rely on an implicit return address value on the EVM stack.
 //!   The allocator models this as a special stack item barrier to avoid popping
 //!   into the caller's preserved stack segment.

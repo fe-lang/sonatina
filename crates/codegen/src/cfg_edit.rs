@@ -335,17 +335,7 @@ impl<'f> CfgEditor<'f> {
         (from, new_block)
     }
 
-    pub fn split_edge(&mut self, from: BlockId, to: BlockId) -> BlockId {
-        assert!(self.func.layout.is_block_inserted(from));
-        assert!(self.func.layout.is_block_inserted(to));
-
-        let term = self.branch_terminator(from);
-        let branch_info = self.func.dfg.branch_info(term).unwrap();
-        assert!(
-            branch_info.dests().into_iter().any(|dest| dest == to),
-            "edge {from:?} -> {to:?} does not exist"
-        );
-
+    fn insert_edge_block(&mut self, to: BlockId) -> BlockId {
         let mid = self.func.dfg.make_block();
         if self.func.layout.entry_block() == Some(to) {
             // Splitting an edge whose destination is the entry block (e.g. a multiway self-loop
@@ -361,8 +351,63 @@ impl<'f> CfgEditor<'f> {
         let mut cursor = InstInserter::at_location(CursorLocation::BlockTop(mid));
         cursor.append_inst_data(self.func, Jump::new(self.func.dfg.inst_set().jump(), to));
 
+        mid
+    }
+
+    /// Split every parallel edge from `from` to `to` through one new jump block.
+    ///
+    /// Use [`Self::split_edge_at`] when parallel edge slots must remain distinct (for example,
+    /// stackify `br_table` cases whose outgoing symbolic stacks differ).
+    pub fn split_edge(&mut self, from: BlockId, to: BlockId) -> BlockId {
+        assert!(self.func.layout.is_block_inserted(from));
+        assert!(self.func.layout.is_block_inserted(to));
+
+        let term = self.branch_terminator(from);
+        let branch_info = self.func.dfg.branch_info(term).unwrap();
+        assert!(
+            branch_info.dests().into_iter().any(|dest| dest == to),
+            "edge {from:?} -> {to:?} does not exist"
+        );
+
+        let mid = self.insert_edge_block(to);
+
         self.func.dfg.rewrite_branch_edges_to_block(term, to, mid);
         replace_phi_incoming_block(self.func, to, from, mid);
+
+        self.recompute_cfg();
+        mid
+    }
+
+    /// Split one outgoing branch edge slot through its own new jump block.
+    ///
+    /// Phi nodes are keyed by predecessor block rather than edge slot. If another parallel edge
+    /// from `from` to the same target remains, its incoming value is copied for the new block;
+    /// otherwise the predecessor label is moved from `from` to the new block.
+    pub fn split_edge_at(&mut self, from: BlockId, branch_slot: usize) -> BlockId {
+        assert!(self.func.layout.is_block_inserted(from));
+
+        let term = self.branch_terminator(from);
+        let branch_info = self.func.dfg.branch_info(term).unwrap();
+        let dests = branch_info.dests();
+        let to = *dests
+            .get(branch_slot)
+            .unwrap_or_else(|| panic!("outgoing edge slot out of bounds: {branch_slot}"));
+        assert!(self.func.layout.is_block_inserted(to));
+
+        let has_parallel_edge = dests
+            .iter()
+            .enumerate()
+            .any(|(slot, &dest)| slot != branch_slot && dest == to);
+        let mid = self.insert_edge_block(to);
+        self.func
+            .dfg
+            .rewrite_branch_edge_dest(term, branch_slot, mid);
+
+        if has_parallel_edge {
+            copy_phi_incoming_block(self.func, to, from, mid);
+        } else {
+            replace_phi_incoming_block(self.func, to, from, mid);
+        }
 
         self.recompute_cfg();
         mid
@@ -1010,6 +1055,33 @@ fn replace_phi_incoming_block(
     }
 }
 
+fn copy_phi_incoming_block(
+    func: &mut Function,
+    block: BlockId,
+    old_pred: BlockId,
+    new_pred: BlockId,
+) {
+    let phi_inputs = iter_phis_in_block(func, block)
+        .map(|phi_inst| {
+            let phi = func.dfg.cast_phi(phi_inst).unwrap();
+            let mut incoming = phi
+                .args()
+                .iter()
+                .filter(|(_, pred)| *pred == old_pred)
+                .map(|(value, _)| *value);
+            let value = incoming.next().unwrap_or_else(|| {
+                panic!("phi {phi_inst:?} in {block:?} missing incoming from {old_pred:?}")
+            });
+            assert!(
+                incoming.next().is_none(),
+                "phi {phi_inst:?} in {block:?} has duplicate incoming from {old_pred:?}"
+            );
+            (phi_inst, value)
+        })
+        .collect::<Vec<_>>();
+    append_phi_inputs_for_new_pred(func, block, new_pred, &phi_inputs);
+}
+
 pub(crate) fn simplify_trivial_phis_in_block(func: &mut Function, block: BlockId) -> bool {
     let mut changed = false;
     let mut next_inst = func.layout.first_inst_of(block);
@@ -1338,6 +1410,53 @@ block2:
             assert_eq!(*jump.dest(), *b1);
             assert_eq!(editor.cfg().preds_as_slice(*b1), &[*b0]);
             assert_eq!(editor.cfg().pred_edges_as_slice(*b1).len(), 1);
+        });
+    }
+
+    #[test]
+    fn split_edge_at_preserves_parallel_phi_inputs() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func private %f() -> i32 {
+block0:
+    br_table 0.i8 block1 (0.i8 block1) (1.i8 block2);
+
+block1:
+    v0.i32 = phi (7.i32 block0);
+    return v0;
+
+block2:
+    return 9.i32;
+}
+"#,
+        );
+        let func_ref = module.funcs()[0];
+        module.func_store.modify(func_ref, |func| {
+            let blocks: Vec<_> = func.layout.iter_block().collect();
+            let [b0, b1, b2] = blocks.as_slice() else {
+                panic!("expected three blocks");
+            };
+
+            let phi_inst = func.layout.first_inst_of(*b1).unwrap();
+            let incoming = func.dfg.cast_phi(phi_inst).unwrap().args()[0].0;
+            let mut editor = CfgEditor::new(func, CleanupMode::Strict);
+            let first_mid = editor.split_edge_at(*b0, 0);
+            let second_mid = editor.split_edge_at(*b0, 1);
+
+            let term = editor.func().layout.last_inst_of(*b0).unwrap();
+            let dests = editor.func().dfg.branch_info(term).unwrap().dests();
+            assert_eq!(dests.as_slice(), &[first_mid, second_mid, *b2]);
+
+            let phi = editor.func().dfg.cast_phi(phi_inst).unwrap();
+            assert_eq!(phi.args().len(), 2);
+            assert!(phi.args().iter().all(
+                |&(value, pred)| value == incoming && (pred == first_mid || pred == second_mid)
+            ));
+            assert_eq!(editor.cfg().preds_as_slice(*b1).len(), 2);
+            assert!(editor.cfg().preds_of(*b1).any(|&pred| pred == first_mid));
+            assert!(editor.cfg().preds_of(*b1).any(|&pred| pred == second_mid));
         });
     }
 

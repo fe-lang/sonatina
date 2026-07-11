@@ -2769,15 +2769,18 @@ object @Contract {
 }
 
 #[test]
-fn machine_pipeline_compiles_entry_self_loop() {
+fn machine_pipeline_compiles_multiway_entry_self_loops() {
     // Regression for the `StackifyEdgeSplitter` pipeline gap: a multiway self-loop on the entry
     // block (`br v0 block0 block1`) is an in-cycle multiway edge that is *not* critical (block0's
     // only predecessor is itself), so plain critical-edge splitting leaves it intact. Stackify
     // then plans a branch edge back to the already-planned entry block, which trips the guard in
     // `on_branch_edge` (previously a debug assert / silent miscompile). The machine pipeline runs
-    // `StackifyEdgeSplitter`, which splits the edge and makes the shape compile.
-    let parsed = parse_module(
-        r#"
+    // `StackifyEdgeSplitter`, which splits the edge and makes the shape compile. The
+    // all-duplicate form is canonicalized to a jump before edge classification.
+    let sources = [
+        (
+            "mixed targets",
+            r#"
 target = "evm-ethereum-osaka"
 
 func public %f(v0.i1, v1.i256) {
@@ -2795,18 +2798,38 @@ object @Contract {
   }
 }
 "#,
-    )
-    .unwrap();
+        ),
+        (
+            "duplicate targets",
+            r#"
+target = "evm-ethereum-osaka"
 
-    let func = parsed.module.funcs()[0];
+func public %f(v0.i1, v1.i256) {
+block0:
+    mstore v1 v1 i256;
+    br v0 block0 block0;
+}
+
+object @Contract {
+  section runtime {
+    entry %f;
+  }
+}
+"#,
+        ),
+    ];
     let backend = test_backend();
-    let prepared = backend
-        .prepare_section(work_module(&parsed.module, &[func]))
-        .expect("prepare should succeed for an entry self-loop");
+    for (label, source) in sources {
+        let parsed = parse_module(source).unwrap();
+        let func = parsed.module.funcs()[0];
+        let prepared = backend
+            .prepare_section(work_module(&parsed.module, &[func]))
+            .unwrap_or_else(|err| panic!("prepare should succeed for {label}: {err}"));
 
-    backend
-        .lower_function(&prepared, func)
-        .expect("lowering an entry self-loop should succeed");
+        backend
+            .lower_function(&prepared, func)
+            .unwrap_or_else(|err| panic!("lowering should succeed for {label}: {err}"));
+    }
 }
 
 #[test]
