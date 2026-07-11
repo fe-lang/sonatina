@@ -12,7 +12,6 @@ mod late_block_merge;
 mod late_section_merge;
 mod machine;
 mod malloc_plan;
-mod mem_effects;
 mod memory_plan;
 pub mod opcode;
 mod pipeline;

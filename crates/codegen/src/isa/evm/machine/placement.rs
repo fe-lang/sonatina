@@ -21,7 +21,6 @@ use crate::{
 use super::{
     super::{
         EvmBackend, heap_plan, malloc_plan,
-        mem_effects::compute_func_mem_effects,
         memory_plan::{
             self, BackendSpillReserve, FinalScratchReserveRange, FuncPreAnalysis, StableMode,
             WORD_BYTES, expect_func_entry,
@@ -162,11 +161,10 @@ pub(crate) fn compute_semantic_memory_placement(
     let final_scratch_reserves =
         final_scratch_reserve_ranges(funcs, &semantic_plan, backend_spill_reserves);
 
-    let mem_effects = compute_func_mem_effects(
+    let transient_malloc_call_barriers = malloc_plan::compute_transient_malloc_call_barriers(
         module,
         schedule,
-        &semantic_plan,
-        fixed_slot_effects,
+        &semantic_plan.funcs,
         &backend.isa,
     );
 
@@ -190,7 +188,7 @@ pub(crate) fn compute_semantic_memory_placement(
                         &backend.isa,
                         ptr_escape,
                         &analysis.prov,
-                        Some(&mem_effects),
+                        Some(&transient_malloc_call_barriers),
                         &analysis.inst_liveness,
                     );
                     (escape_kinds, transient)

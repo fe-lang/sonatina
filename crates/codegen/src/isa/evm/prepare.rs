@@ -25,6 +25,8 @@ use sonatina_ir::{
     object::EmbedSymbol,
 };
 
+#[cfg(debug_assertions)]
+use super::machine::final_spills::FinalSpillReplanCtx;
 use super::{
     EvmBackend, LateCleanupProfile,
     dyn_sp::{FuncDynSpPlan, compute_machine_dyn_sp_plan},
@@ -646,9 +648,6 @@ pub(crate) fn choose_arena_base(
         facts.backend_spill_scratch_reserve_words
     };
     layout.reserve_len(0, spill_reserve_words * WORD_BYTES);
-    if facts.has_stackify_fixed_slot_spills {
-        layout.reserve_len(0, fixed_slots::FIXED_SPILL_SLOTS * WORD_BYTES);
-    }
     if facts.has_persistent_mallocs {
         layout.reserve_len(FREE_PTR_SLOT_START, WORD_BYTES);
     }
@@ -777,18 +776,21 @@ fn prepare_machine_section_after_pipeline(
         machine_final_spill_inputs.sort_unstable_by_key(|input| input.func.as_u32());
 
         let optional_final_spill_placements = FinalSpillChoiceCtx {
-            source_module,
             schedule: &schedule,
             base_placement: &placement,
             fixed_reservations: &fixed_reservations,
             funcs: &funcs,
-            section_entry: work.entry(),
-            section_includes: work.includes(),
-            pre_analyses: &pre_analyses,
-            ptr_escape: &ptr_escape,
-            backend,
             base_fixed_slot_effects: &actual_fixed_slot_effects,
             inputs: &machine_final_spill_inputs,
+            #[cfg(debug_assertions)]
+            replan: FinalSpillReplanCtx {
+                source_module,
+                section_entry: work.entry(),
+                section_includes: work.includes(),
+                pre_analyses: &pre_analyses,
+                ptr_escape: &ptr_escape,
+                backend,
+            },
         }
         .choose_optional_placements();
 
@@ -1340,12 +1342,6 @@ fn prepare_high_evm_pre_analysis(
         (prov, conservative)
     };
 
-    let inst_count = function
-        .layout
-        .iter_block()
-        .map(|block| function.layout.iter_inst(block).count())
-        .sum();
-
     memory_plan::FuncPreAnalysis {
         cfg,
         inst_liveness,
@@ -1353,7 +1349,6 @@ fn prepare_high_evm_pre_analysis(
         value_aliases,
         prov,
         prov_conservative_value,
-        inst_count,
     }
 }
 

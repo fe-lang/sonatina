@@ -1,25 +1,29 @@
 use cranelift_entity::EntityRef;
 use rustc_hash::{FxHashMap, FxHashSet};
-use sonatina_ir::{InstId, Module, ValueId, module::FuncRef};
+#[cfg(debug_assertions)]
+use sonatina_ir::Module;
+use sonatina_ir::{InstId, ValueId, module::FuncRef};
 
 use crate::{bitset::BitSet, module_analysis::CallGraphSchedule, stackalloc::StackifyAlloc};
 
 use crate::isa::evm::memory_plan::align_up_to_word;
 
+#[cfg(debug_assertions)]
+use super::{
+    super::{EvmBackend, memory_plan::FuncPreAnalysis, ptr_escape::PtrEscapeSummary},
+    placement::{MemoryPlacementSection, compute_semantic_memory_placement},
+};
 use super::{
     super::{
-        EvmBackend, MachineFuncPlan, ObjLoc,
+        MachineFuncPlan, ObjLoc,
         memory_plan::{
-            self, BackendSpillReserve, FinalScratchReserveRange, FuncPreAnalysis,
-            MachineStackifyAnalysis, StableMode, WORD_BYTES,
+            self, BackendSpillReserve, FinalScratchReserveRange, MachineStackifyAnalysis,
+            StableMode, WORD_BYTES,
         },
         prepare::{ArenaBaseFacts, SectionMemoryLayout, choose_arena_base},
-        ptr_escape::PtrEscapeSummary,
         static_arena_alloc::StackObjId,
     },
-    placement::{
-        EvmMemoryPlacementPlan, MemoryPlacementSection, compute_semantic_memory_placement,
-    },
+    placement::EvmMemoryPlacementPlan,
 };
 
 pub(crate) struct FinalSpillAllocation {
@@ -146,19 +150,25 @@ pub(crate) struct MachineFinalSpillInput {
 
 type FinalSpillChoiceScore = (u32, u32, u32, u32, u64, u64);
 
-pub(crate) struct FinalSpillChoiceCtx<'a> {
+#[cfg(debug_assertions)]
+pub(crate) struct FinalSpillReplanCtx<'a> {
     pub(crate) source_module: &'a Module,
-    pub(crate) schedule: &'a CallGraphSchedule,
-    pub(crate) base_placement: &'a EvmMemoryPlacementPlan,
-    pub(crate) fixed_reservations: &'a SectionMemoryLayout,
-    pub(crate) funcs: &'a [FuncRef],
     pub(crate) section_entry: FuncRef,
     pub(crate) section_includes: &'a [FuncRef],
     pub(crate) pre_analyses: &'a FxHashMap<FuncRef, FuncPreAnalysis>,
     pub(crate) ptr_escape: &'a FxHashMap<FuncRef, PtrEscapeSummary>,
     pub(crate) backend: &'a EvmBackend,
+}
+
+pub(crate) struct FinalSpillChoiceCtx<'a> {
+    pub(crate) schedule: &'a CallGraphSchedule,
+    pub(crate) base_placement: &'a EvmMemoryPlacementPlan,
+    pub(crate) fixed_reservations: &'a SectionMemoryLayout,
+    pub(crate) funcs: &'a [FuncRef],
     pub(crate) base_fixed_slot_effects: &'a FxHashSet<FuncRef>,
     pub(crate) inputs: &'a [MachineFinalSpillInput],
+    #[cfg(debug_assertions)]
+    pub(crate) replan: FinalSpillReplanCtx<'a>,
 }
 
 impl FinalSpillChoiceCtx<'_> {
@@ -330,6 +340,7 @@ impl FinalSpillChoiceCtx<'_> {
         &self,
         reserves: &FxHashMap<FuncRef, BackendSpillReserve>,
     ) -> FinalSpillChoiceScore {
+        let replan = &self.replan;
         let mut fixed_slot_effects = self.base_fixed_slot_effects.clone();
         for (&func, reserve) in reserves {
             if reserve.scratch_words != 0 {
@@ -338,18 +349,18 @@ impl FinalSpillChoiceCtx<'_> {
         }
 
         let placement = compute_semantic_memory_placement(
-            self.source_module,
+            replan.source_module,
             MemoryPlacementSection {
                 schedule: self.schedule,
                 funcs: self.funcs,
-                entry: self.section_entry,
-                includes: self.section_includes,
+                entry: replan.section_entry,
+                includes: replan.section_includes,
                 fixed_reservations: self.fixed_reservations,
             },
-            self.pre_analyses,
-            self.ptr_escape,
+            replan.pre_analyses,
+            replan.ptr_escape,
             &fixed_slot_effects,
-            self.backend,
+            replan.backend,
             reserves,
         );
 

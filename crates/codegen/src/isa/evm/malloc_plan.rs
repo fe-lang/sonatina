@@ -1,7 +1,8 @@
 use cranelift_entity::SecondaryMap;
+use rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
 use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
-    BlockId, Function, InstId, InstSetExt, Type, ValueId,
+    BlockId, Function, InstId, InstSetExt, Module, Type, ValueId,
     cfg::ControlFlowGraph,
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
     inst::{
@@ -12,11 +13,11 @@ use sonatina_ir::{
     module::{FuncRef, ModuleCtx},
 };
 
-use crate::{bitset::BitSet, liveness::InstLiveness};
+use crate::{bitset::BitSet, liveness::InstLiveness, module_analysis::CallGraphSchedule};
 
 use super::{
     escape_scan::{EscapeScanCtx, EscapeSink, EscapeSource, for_each_escape_event_at_inst},
-    mem_effects::FuncMemEffects,
+    memory_plan::SemanticFuncPlan,
     ptr_escape::PtrEscapeSummary,
     ptr_provenance::{Provenance, ProvenanceInfo},
 };
@@ -40,6 +41,38 @@ impl MallocEscapeKind {
     fn union(self, other: Self) -> Self {
         Self(self.0 | other.0)
     }
+}
+
+pub(crate) type TransientMallocCallBarriers = FxHashMap<FuncRef, bool>;
+
+/// Computes whether calls to each function can invalidate transient mallocs.
+pub(crate) fn compute_transient_malloc_call_barriers(
+    module: &Module,
+    schedule: &CallGraphSchedule,
+    semantic_plans: &FxHashMap<FuncRef, SemanticFuncPlan>,
+    isa: &Evm,
+) -> TransientMallocCallBarriers {
+    let mut local_results: Vec<_> = schedule
+        .funcs()
+        .par_iter()
+        .copied()
+        .map(|func| {
+            let uses_dynamic_frame = semantic_plans
+                .get(&func)
+                .is_some_and(|plan| plan.dynamic_frame_layout().is_some());
+            let uses_malloc = module
+                .func_store
+                .view(func, |function| func_uses_malloc(function, isa));
+            (func, uses_dynamic_frame || uses_malloc)
+        })
+        .collect();
+    local_results.sort_unstable_by_key(|(func, _)| func.as_u32());
+    let local_barriers: TransientMallocCallBarriers = local_results.into_iter().collect();
+
+    schedule.join_over_callees(
+        |func| local_barriers[&func],
+        |barrier, callee_barrier| *barrier |= *callee_barrier,
+    )
 }
 
 pub(crate) fn should_restore_free_ptr_on_internal_returns(
@@ -153,7 +186,7 @@ pub(crate) fn compute_transient_mallocs(
     isa: &Evm,
     ptr_escape: &FxHashMap<FuncRef, PtrEscapeSummary>,
     prov_info: &ProvenanceInfo,
-    mem_effects: Option<&FxHashMap<FuncRef, FuncMemEffects>>,
+    call_barriers: Option<&TransientMallocCallBarriers>,
     inst_liveness: &InstLiveness,
 ) -> FxHashSet<InstId> {
     let mut mallocs: FxHashSet<InstId> = FxHashSet::default();
@@ -212,14 +245,13 @@ pub(crate) fn compute_transient_mallocs(
             };
 
             let callee = call_info.callee();
-            let is_barrier = mem_effects.is_none_or(|effects| {
-                let eff = effects.get(&callee).copied().unwrap_or_else(|| {
+            let is_barrier = call_barriers.is_none_or(|barriers| {
+                *barriers.get(&callee).unwrap_or_else(|| {
                     panic!(
-                        "missing mem effects for callee {} in transient malloc analysis",
+                        "missing transient malloc call barrier for callee {}",
                         callee.as_u32()
                     )
-                });
-                eff.touches_heap_meta || eff.touches_dyn_frame
+                })
             });
             if !is_barrier {
                 continue;
@@ -242,6 +274,17 @@ pub(crate) fn compute_transient_mallocs(
     }
 
     mallocs
+}
+
+fn func_uses_malloc(function: &Function, isa: &Evm) -> bool {
+    function.layout.iter_block().any(|block| {
+        function.layout.iter_inst(block).any(|inst| {
+            matches!(
+                isa.inst_set().resolve_inst(function.dfg.inst(inst)),
+                EvmInstKind::EvmMalloc(_)
+            )
+        })
+    })
 }
 
 pub(crate) fn compute_malloc_escape_kinds_for_function(

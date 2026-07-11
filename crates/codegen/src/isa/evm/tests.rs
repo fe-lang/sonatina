@@ -121,12 +121,6 @@ fn compute_test_pre_analysis(
         &backend.isa,
         |callee| PtrEscapeSummary::conservative_unknown_ctx(module, callee),
     );
-    let inst_count = function
-        .layout
-        .iter_block()
-        .map(|block| function.layout.iter_inst(block).count())
-        .sum();
-
     memory_plan::FuncPreAnalysis {
         block_order: dom.rpo().to_owned(),
         value_aliases: backend.compute_high_evm_value_aliases(function, module),
@@ -134,7 +128,6 @@ fn compute_test_pre_analysis(
         inst_liveness,
         prov,
         prov_conservative_value,
-        inst_count,
     }
 }
 
