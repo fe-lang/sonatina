@@ -1238,22 +1238,31 @@ pub(crate) fn simplify_binary_with_facts(
                 return SimplifiedResult::Const(Immediate::one(Type::I1));
             }
         }
-        BinaryInstKind::Gt | BinaryInstKind::Lt | BinaryInstKind::Ge | BinaryInstKind::Le
-            if ty.is_integral() =>
-        {
+        BinaryInstKind::Gt | BinaryInstKind::Lt | BinaryInstKind::Ge | BinaryInstKind::Le => {
+            if !ty.is_integral() {
+                return SimplifiedResult::NoChange;
+            }
+            if facts.same_non_undef(lhs, rhs) {
+                return SimplifiedResult::Const(Immediate::I1(matches!(
+                    kind,
+                    BinaryInstKind::Ge | BinaryInstKind::Le
+                )));
+            }
+
             let zero = Immediate::zero(ty);
             match kind {
+                _ if !lhs_defined || !rhs_defined => {}
                 BinaryInstKind::Gt if lhs_imm == Some(zero) => {
-                    return SimplifyExprResult::Const(Immediate::zero(Type::I1));
+                    return SimplifiedResult::Const(Immediate::zero(Type::I1));
                 }
                 BinaryInstKind::Lt if rhs_imm == Some(zero) => {
-                    return SimplifyExprResult::Const(Immediate::zero(Type::I1));
+                    return SimplifiedResult::Const(Immediate::zero(Type::I1));
                 }
                 BinaryInstKind::Ge if rhs_imm == Some(zero) => {
-                    return SimplifyExprResult::Const(Immediate::one(Type::I1));
+                    return SimplifiedResult::Const(Immediate::one(Type::I1));
                 }
                 BinaryInstKind::Le if lhs_imm == Some(zero) => {
-                    return SimplifyExprResult::Const(Immediate::one(Type::I1));
+                    return SimplifiedResult::Const(Immediate::one(Type::I1));
                 }
                 _ => {}
             }
@@ -1286,12 +1295,12 @@ pub(crate) fn simplify_binary_with_facts(
                 return SimplifiedResult::Copy(value);
             }
         }
-        BinaryInstKind::Lt | BinaryInstKind::Gt | BinaryInstKind::Slt | BinaryInstKind::Sgt => {
+        BinaryInstKind::Slt | BinaryInstKind::Sgt => {
             if facts.same_non_undef(lhs, rhs) {
                 return SimplifiedResult::Const(Immediate::I1(false));
             }
         }
-        BinaryInstKind::Le | BinaryInstKind::Ge | BinaryInstKind::Sle | BinaryInstKind::Sge => {
+        BinaryInstKind::Sle | BinaryInstKind::Sge => {
             if facts.same_non_undef(lhs, rhs) {
                 return SimplifiedResult::Const(Immediate::I1(true));
             }
@@ -1735,24 +1744,51 @@ mod tests {
 
         assert_eq!(
             simplify_binary_with_facts(&func, BinaryInstKind::Gt, zero, value, &facts),
-            SimplifyExprResult::Const(Immediate::I1(false))
+            SimplifiedResult::Const(Immediate::I1(false))
         );
         assert_eq!(
             simplify_binary_with_facts(&func, BinaryInstKind::Lt, value, zero, &facts),
-            SimplifyExprResult::Const(Immediate::I1(false))
+            SimplifiedResult::Const(Immediate::I1(false))
         );
         assert_eq!(
             simplify_binary_with_facts(&func, BinaryInstKind::Ge, value, zero, &facts),
-            SimplifyExprResult::Const(Immediate::I1(true))
+            SimplifiedResult::Const(Immediate::I1(true))
         );
         assert_eq!(
             simplify_binary_with_facts(&func, BinaryInstKind::Le, zero, value, &facts),
-            SimplifyExprResult::Const(Immediate::I1(true))
+            SimplifiedResult::Const(Immediate::I1(true))
         );
         assert_eq!(
             simplify_binary_with_facts(&func, BinaryInstKind::Sgt, zero, value, &facts),
-            SimplifyExprResult::NoChange
+            SimplifiedResult::NoChange
         );
+    }
+
+    #[test]
+    fn simplify_binary_with_facts_preserves_undef_in_unsigned_zero_bound_compares() {
+        let isa = test_isa();
+        let ctx = ModuleCtx::new(&isa);
+        let sig = Signature::new_single("f", Linkage::Private, &[Type::I256], Type::I1);
+        let mut func = Function::new(&ctx, &sig);
+        let value = func.arg_values[0];
+        let zero = func.dfg.make_imm_value(Immediate::zero(Type::I256));
+        let facts = MockFacts {
+            known_bits: Default::default(),
+            known_imm: [(zero, Immediate::zero(Type::I256))].into_iter().collect(),
+            may_be_undef: [(value, true)].into_iter().collect(),
+        };
+
+        for (kind, lhs, rhs) in [
+            (BinaryInstKind::Gt, zero, value),
+            (BinaryInstKind::Lt, value, zero),
+            (BinaryInstKind::Ge, value, zero),
+            (BinaryInstKind::Le, zero, value),
+        ] {
+            assert_eq!(
+                simplify_binary_with_facts(&func, kind, lhs, rhs, &facts),
+                SimplifiedResult::NoChange
+            );
+        }
     }
 
     #[test]

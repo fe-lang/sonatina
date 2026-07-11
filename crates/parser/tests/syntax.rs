@@ -82,7 +82,7 @@ impl fmt::Debug for PairsWrapper<'_> {
             writeln!(f, "{rule:?} \"{}\"", pair.as_str(),)?;
             let pairs = pair.into_inner();
             if pairs.len() > 0 {
-                write!(indented(f).with_str("  "), "{:?}", &PairsWrapper(pairs))?;
+                write!(indented(f).with_str("  "), "{:?}", PairsWrapper(pairs))?;
             }
         }
         Ok(())

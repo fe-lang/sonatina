@@ -733,9 +733,8 @@ fn materialize_invariant_in_preheader(
                         Sub::new_unchecked(func.inst_set(), lhs, rhs),
                         func.dfg.value_ty(value),
                     )
-                } else if let Some(gep) =
-                    <&Gep as InstDowncast>::downcast(is, func.dfg.inst(inst)).cloned()
-                {
+                } else {
+                    let gep = <&Gep as InstDowncast>::downcast(is, func.dfg.inst(inst)).cloned()?;
                     let (&base, indices) = gep.values().split_first()?;
                     const_gep_offset(func, base, indices)?;
                     let base = materialize_invariant_in_preheader(
@@ -750,8 +749,6 @@ fn materialize_invariant_in_preheader(
                         Gep::new_unchecked(func.inst_set(), values),
                         func.dfg.value_ty(value),
                     )
-                } else {
-                    return None;
                 }
             }
         }
