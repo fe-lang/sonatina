@@ -354,54 +354,28 @@ impl<'f> CfgEditor<'f> {
         mid
     }
 
-    /// Split every parallel edge from `from` to `to` through one new jump block.
-    ///
-    /// Use [`Self::split_edge_at`] when parallel edge slots must remain distinct (for example,
-    /// stackify `br_table` cases whose outgoing symbolic stacks differ).
-    pub fn split_edge(&mut self, from: BlockId, to: BlockId) -> BlockId {
-        assert!(self.func.layout.is_block_inserted(from));
-        assert!(self.func.layout.is_block_inserted(to));
-
-        let term = self.branch_terminator(from);
-        let branch_info = self.func.dfg.branch_info(term).unwrap();
-        assert!(
-            branch_info.dests().into_iter().any(|dest| dest == to),
-            "edge {from:?} -> {to:?} does not exist"
-        );
-
-        let mid = self.insert_edge_block(to);
-
-        self.func.dfg.rewrite_branch_edges_to_block(term, to, mid);
-        replace_phi_incoming_block(self.func, to, from, mid);
-
-        self.recompute_cfg();
-        mid
-    }
-
     /// Split one outgoing branch edge slot through its own new jump block.
     ///
     /// Phi nodes are keyed by predecessor block rather than edge slot. If another parallel edge
     /// from `from` to the same target remains, its incoming value is copied for the new block;
     /// otherwise the predecessor label is moved from `from` to the new block.
-    pub fn split_edge_at(&mut self, from: BlockId, branch_slot: usize) -> BlockId {
+    pub fn split_out_edge(&mut self, from: BlockId, edge_idx: usize) -> BlockId {
         assert!(self.func.layout.is_block_inserted(from));
 
         let term = self.branch_terminator(from);
         let branch_info = self.func.dfg.branch_info(term).unwrap();
         let dests = branch_info.dests();
         let to = *dests
-            .get(branch_slot)
-            .unwrap_or_else(|| panic!("outgoing edge slot out of bounds: {branch_slot}"));
+            .get(edge_idx)
+            .unwrap_or_else(|| panic!("outgoing edge index out of bounds: {edge_idx}"));
         assert!(self.func.layout.is_block_inserted(to));
 
         let has_parallel_edge = dests
             .iter()
             .enumerate()
-            .any(|(slot, &dest)| slot != branch_slot && dest == to);
+            .any(|(other_idx, &dest)| other_idx != edge_idx && dest == to);
         let mid = self.insert_edge_block(to);
-        self.func
-            .dfg
-            .rewrite_branch_edge_dest(term, branch_slot, mid);
+        self.func.dfg.rewrite_branch_edge_dest(term, edge_idx, mid);
 
         if has_parallel_edge {
             copy_phi_incoming_block(self.func, to, from, mid);
@@ -1414,7 +1388,7 @@ block2:
     }
 
     #[test]
-    fn split_edge_at_preserves_parallel_phi_inputs() {
+    fn split_out_edge_preserves_parallel_phi_inputs() {
         let module = parse_test_module(
             r#"
 target = "evm-ethereum-osaka"
@@ -1442,8 +1416,8 @@ block2:
             let phi_inst = func.layout.first_inst_of(*b1).unwrap();
             let incoming = func.dfg.cast_phi(phi_inst).unwrap().args()[0].0;
             let mut editor = CfgEditor::new(func, CleanupMode::Strict);
-            let first_mid = editor.split_edge_at(*b0, 0);
-            let second_mid = editor.split_edge_at(*b0, 1);
+            let first_mid = editor.split_out_edge(*b0, 0);
+            let second_mid = editor.split_out_edge(*b0, 1);
 
             let term = editor.func().layout.last_inst_of(*b0).unwrap();
             let dests = editor.func().dfg.branch_info(term).unwrap().dests();

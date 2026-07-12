@@ -1,80 +1,47 @@
-use sonatina_ir::{ControlFlowGraph, Function, InstId};
+use sonatina_ir::{BlockId, ControlFlowGraph, Function};
 
 use crate::cfg_edit::{CfgEditor, CleanupMode};
 
-#[derive(Debug)]
-pub struct CriticalEdgeSplitter {
-    critical_edges: Vec<CriticalEdge>,
-}
-
-impl Default for CriticalEdgeSplitter {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+#[derive(Debug, Default)]
+pub struct CriticalEdgeSplitter;
 
 impl CriticalEdgeSplitter {
     pub fn new() -> Self {
-        Self {
-            critical_edges: Vec::default(),
-        }
+        Self
     }
 
     pub fn run(&mut self, func: &mut Function, cfg: &mut ControlFlowGraph) {
-        self.clear();
-
+        let mut critical_edges = Vec::<(BlockId, usize)>::new();
         for block in func.layout.iter_block() {
-            if let Some(last_inst) = func.layout.last_inst_of(block) {
-                self.add_critical_edges(last_inst, func, cfg);
+            if cfg.succ_num_of(block) < 2 {
+                continue;
+            }
+
+            // Preserve the historical destination ordering for ordinary distinct edges so bridge
+            // creation does not perturb later fallthrough placement. Parallel slots for one
+            // target are still kept distinct and ordered by their branch slot.
+            for &to in cfg.succs_of(block) {
+                if cfg.pred_num_of(to) < 2 {
+                    continue;
+                }
+                critical_edges.extend(
+                    cfg.succ_edges_of(block)
+                        .map(|&edge| cfg.edge_data(edge))
+                        .filter(|edge| edge.to == to)
+                        .map(|edge| (block, edge.branch_slot)),
+                );
             }
         }
 
-        let edges = std::mem::take(&mut self.critical_edges);
-        let mut editor = CfgEditor::new(func, CleanupMode::Strict);
-        for edge in edges {
-            let from = editor.func().layout.inst_block(edge.inst);
-            editor.split_edge_at(from, edge.branch_slot);
-        }
-
-        cfg.compute(editor.func());
-    }
-
-    pub fn clear(&mut self) {
-        self.critical_edges.clear();
-    }
-
-    fn add_critical_edges(&mut self, inst_id: InstId, func: &Function, cfg: &ControlFlowGraph) {
-        let block = func.layout.inst_block(inst_id);
-        if cfg.succ_num_of(block) < 2 {
+        if critical_edges.is_empty() {
             return;
         }
 
-        // Preserve the historical destination ordering for ordinary distinct edges so bridge
-        // creation does not perturb later fallthrough placement. Parallel slots for one target
-        // are still kept distinct and ordered by their branch slot.
-        for &to in cfg.succs_of(block) {
-            if cfg.pred_num_of(to) < 2 {
-                continue;
-            }
-            self.critical_edges.extend(
-                cfg.succ_edges_of(block)
-                    .map(|&edge| cfg.edge_data(edge))
-                    .filter(|edge| edge.to == to)
-                    .map(|edge| CriticalEdge::new(inst_id, edge.branch_slot)),
-            );
+        let mut editor = CfgEditor::new(func, CleanupMode::Strict);
+        for (from, branch_slot) in critical_edges {
+            editor.split_out_edge(from, branch_slot);
         }
-    }
-}
-
-#[derive(Debug)]
-struct CriticalEdge {
-    inst: InstId,
-    branch_slot: usize,
-}
-
-impl CriticalEdge {
-    fn new(inst: InstId, branch_slot: usize) -> Self {
-        Self { inst, branch_slot }
+        cfg.clone_from(editor.cfg());
     }
 }
 

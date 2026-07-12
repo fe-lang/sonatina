@@ -34,28 +34,22 @@ impl StackifyEdgeSplitter {
         // An all-identical multiway terminator has one semantic destination and needs no per-edge
         // stack state. Canonicalize it before classifying critical or retreating edges; duplicate
         // destinations that remain (e.g. a subset of br_table cases) do require distinct bridges.
-        let terms: Vec<_> = func
+        let redundant_terms: Vec<_> = func
             .layout
             .iter_block()
-            .filter_map(|block| func.layout.last_inst_of(block))
+            .filter_map(|block| {
+                let edge_count = cfg.succ_edges_as_slice(block).len();
+                (edge_count > 1 && cfg.succ_num_of(block) == 1)
+                    .then(|| (func.layout.last_inst_of(block).unwrap(), edge_count))
+            })
             .collect();
-        let mut canonicalized = false;
-        for term in terms {
-            let Some(branch) = func.dfg.branch_info(term) else {
-                continue;
-            };
-            let dests = branch.dests();
-            if dests.len() < 2 || dests.iter().any(|&dest| dest != dests[0]) {
-                continue;
-            }
-
+        for &(term, edge_count) in &redundant_terms {
             // Retaining every edge invokes the branch instruction's canonical representation:
             // `Br` and `BrTable` both collapse an all-identical destination set to `Jump`.
-            let keep_mask = vec![true; dests.len()];
+            let keep_mask = vec![true; edge_count];
             func.dfg.retain_branch_edges(term, &keep_mask);
-            canonicalized = true;
         }
-        if canonicalized {
+        if !redundant_terms.is_empty() {
             cfg.compute(func);
         }
 
@@ -71,14 +65,8 @@ impl StackifyEdgeSplitter {
 
         let mut edges = Vec::<(BlockId, BlockId, usize)>::new();
         for from in func.layout.iter_block() {
-            let Some(term) = func.layout.last_inst_of(from) else {
-                continue;
-            };
-            let Some(branch) = func.dfg.branch_info(term) else {
-                continue;
-            };
-            let dests = branch.dests();
-            if dests.len() < 2 {
+            let outgoing = cfg.succ_edges_as_slice(from);
+            if outgoing.len() < 2 {
                 continue;
             }
             let Some(from_rank) = plan_rank[from] else {
@@ -86,11 +74,13 @@ impl StackifyEdgeSplitter {
             };
 
             let mut dest_counts = BTreeMap::<BlockId, usize>::new();
-            for &to in &dests {
-                *dest_counts.entry(to).or_default() += 1;
+            for &edge in outgoing {
+                *dest_counts.entry(cfg.edge_data(edge).to).or_default() += 1;
             }
 
-            for (branch_slot, to) in dests.into_iter().enumerate() {
+            for &edge in outgoing {
+                let edge = cfg.edge_data(edge);
+                let to = edge.to;
                 // Retreating edge: `to` is planned before (backedge) or together with (self-loop)
                 // `from`, so `to` is already planned when `from`'s terminator is simulated.
                 // Duplicate-target edge slots also need separate bridges: br_table cases can
@@ -98,7 +88,7 @@ impl StackifyEdgeSplitter {
                 let duplicate = dest_counts[&to] > 1;
                 let retreating = plan_rank[to].is_some_and(|to_rank| to_rank <= from_rank);
                 if duplicate || retreating {
-                    edges.push((from, to, branch_slot));
+                    edges.push((from, to, edge.branch_slot));
                 }
             }
         }
@@ -112,9 +102,9 @@ impl StackifyEdgeSplitter {
         edges.sort_unstable();
         let mut editor = CfgEditor::new(func, CleanupMode::Strict);
         for (from, _, branch_slot) in edges {
-            editor.split_edge_at(from, branch_slot);
+            editor.split_out_edge(from, branch_slot);
         }
-        cfg.compute(editor.func());
+        cfg.clone_from(editor.cfg());
     }
 }
 
