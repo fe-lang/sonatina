@@ -321,13 +321,12 @@ fn compute_active_pre_insts(
 
         for inst in function.layout.iter_inst(block) {
             let data = machine_isa.inst_set().resolve_inst(function.dfg.inst(inst));
-            let args = function.dfg.inst(inst).collect_values();
             apply_site_state(plan, FrameSite::PreInst(inst), &mut active);
 
             match data {
                 EvmMachineInstKind::Call(_) => {
                     if let Some((prefix, suffix, prefix_len)) =
-                        split_call_actions(alloc.read(inst, &args))
+                        split_call_actions(alloc.pre_inst(inst).clone())
                     {
                         apply_actions_state(
                             plan,
@@ -347,21 +346,31 @@ fn compute_active_pre_insts(
                         apply_actions_state(
                             plan,
                             FrameSite::PreInst(inst),
-                            &alloc.read(inst, &args),
+                            alloc.pre_inst(inst),
                             0,
                             &mut active,
                         );
                     }
                 }
                 EvmMachineInstKind::BrTable(br) => {
+                    // Emit replays `FrameSite::PreInst` from action index 0 for the base
+                    // pre-actions *and* again for every case's compare prep, so an injection
+                    // point planned inside the base actions would fire once per case. Bail to
+                    // the always-active frame whenever the base actions touch the frame, exactly
+                    // as for frame actions inside a case.
+                    if actions_touch_frame(alloc.pre_inst(inst)) {
+                        return None;
+                    }
+                    apply_actions_state(
+                        plan,
+                        FrameSite::PreInst(inst),
+                        alloc.pre_inst(inst),
+                        0,
+                        &mut active,
+                    );
                     for (case_idx, _) in br.table().iter().enumerate() {
-                        let actions = alloc.read_br_table_case(inst, case_idx);
-                        if fold_stack_actions(&actions).iter().any(|action| {
-                            matches!(
-                                action,
-                                Action::MemLoadFrameSlot(_) | Action::MemStoreFrameSlot(_)
-                            )
-                        }) {
+                        let actions = alloc.br_table_case(inst, case_idx);
+                        if actions_touch_frame(actions) {
                             return None;
                         }
                     }
@@ -369,7 +378,7 @@ fn compute_active_pre_insts(
                 _ => apply_actions_state(
                     plan,
                     FrameSite::PreInst(inst),
-                    &alloc.read(inst, &args),
+                    alloc.pre_inst(inst),
                     0,
                     &mut active,
                 ),
@@ -385,7 +394,7 @@ fn compute_active_pre_insts(
             apply_actions_state(
                 plan,
                 FrameSite::PostInst(inst),
-                &alloc.write(inst, function.dfg.inst_results(inst)),
+                alloc.post_inst(inst),
                 0,
                 &mut active,
             );
@@ -427,10 +436,10 @@ fn validate_lazy_frame_activity(
         apply_site_state(plan, FrameSite::BlockEntry(block), &mut active);
 
         for inst in function.layout.iter_inst(block) {
-            let args = function.dfg.inst(inst).collect_values();
             apply_site_state(plan, FrameSite::PreInst(inst), &mut active);
 
-            if let Some((prefix, suffix, prefix_len)) = split_call_actions(alloc.read(inst, &args))
+            if let Some((prefix, suffix, prefix_len)) =
+                split_call_actions(alloc.pre_inst(inst).clone())
             {
                 apply_actions_state(plan, FrameSite::PreInst(inst), &prefix, 0, &mut active);
                 apply_actions_state(
@@ -444,7 +453,7 @@ fn validate_lazy_frame_activity(
                 apply_actions_state(
                     plan,
                     FrameSite::PreInst(inst),
-                    &alloc.read(inst, &args),
+                    alloc.pre_inst(inst),
                     0,
                     &mut active,
                 );
@@ -457,7 +466,7 @@ fn validate_lazy_frame_activity(
             apply_actions_state(
                 plan,
                 FrameSite::PostInst(inst),
-                &alloc.write(inst, function.dfg.inst_results(inst)),
+                alloc.post_inst(inst),
                 0,
                 &mut active,
             );
@@ -563,12 +572,11 @@ fn collect_dep_points(
     for block in function.layout.iter_block() {
         for inst in function.layout.iter_inst(block) {
             let data = machine_isa.inst_set().resolve_inst(function.dfg.inst(inst));
-            let args = function.dfg.inst(inst).collect_values();
 
             match &data {
                 EvmMachineInstKind::Call(_) => {
                     if let Some((prefix, suffix, prefix_len)) =
-                        split_call_actions(alloc.read(inst, &args))
+                        split_call_actions(alloc.pre_inst(inst).clone())
                     {
                         collect_action_dep_points(
                             &mut out,
@@ -595,20 +603,29 @@ fn collect_dep_points(
                             &order,
                             block,
                             FrameSite::PreInst(inst),
-                            &alloc.read(inst, &args),
+                            alloc.pre_inst(inst),
                             0,
                         );
                     }
                 }
                 EvmMachineInstKind::BrTable(br) => {
+                    // See `compute_active_pre_insts`: base pre-actions that touch the frame make
+                    // the lazy plan invalid, because emit replays their action indexes per case.
+                    if actions_touch_frame(alloc.pre_inst(inst)) {
+                        return None;
+                    }
+                    collect_action_dep_points(
+                        &mut out,
+                        &mut seen,
+                        &order,
+                        block,
+                        FrameSite::PreInst(inst),
+                        alloc.pre_inst(inst),
+                        0,
+                    );
                     for (case_idx, _) in br.table().iter().enumerate() {
-                        let actions = alloc.read_br_table_case(inst, case_idx);
-                        if fold_stack_actions(&actions).iter().any(|action| {
-                            matches!(
-                                action,
-                                Action::MemLoadFrameSlot(_) | Action::MemStoreFrameSlot(_)
-                            )
-                        }) {
+                        let actions = alloc.br_table_case(inst, case_idx);
+                        if actions_touch_frame(actions) {
                             return None;
                         }
                     }
@@ -619,7 +636,7 @@ fn collect_dep_points(
                     &order,
                     block,
                     FrameSite::PreInst(inst),
-                    &alloc.read(inst, &args),
+                    alloc.pre_inst(inst),
                     0,
                 ),
             }
@@ -644,7 +661,7 @@ fn collect_dep_points(
                 &order,
                 block,
                 FrameSite::PostInst(inst),
-                &alloc.write(inst, function.dfg.inst_results(inst)),
+                alloc.post_inst(inst),
                 0,
             );
         }
@@ -851,6 +868,17 @@ fn collect_action_dep_points(
     }
 }
 
+fn actions_touch_frame(actions: &[Action]) -> bool {
+    fold_stack_actions(actions).iter().any(|action| {
+        matches!(
+            action,
+            Action::MemLoadFrameSlot(_)
+                | Action::MemStoreFrameSlot(_)
+                | Action::PushFrameAddr { .. }
+        )
+    })
+}
+
 fn push_dep_point(
     out: &mut Vec<DepPoint>,
     seen: &mut FxHashSet<FrameInjectionPoint>,
@@ -1039,4 +1067,137 @@ fn scalar_bit_width(ty: Type, module: &sonatina_ir::module::ModuleCtx) -> Option
         Type::Compound(_) => return None,
     };
     Some(bits)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::stackalloc::Actions;
+    use cranelift_entity::SecondaryMap;
+    use sonatina_parser::parse_module;
+
+    #[derive(Default)]
+    struct TestAlloc {
+        enter: Actions,
+        pre: SecondaryMap<InstId, Actions>,
+        post: SecondaryMap<InstId, Actions>,
+        cases: SecondaryMap<InstId, Vec<Actions>>,
+    }
+
+    impl TestAlloc {
+        fn for_function(function: &Function) -> Self {
+            let mut alloc = Self::default();
+            for block in function.layout.iter_block() {
+                for inst in function.layout.iter_inst(block) {
+                    let _ = &mut alloc.pre[inst];
+                    let _ = &mut alloc.post[inst];
+                }
+            }
+            alloc
+        }
+    }
+
+    impl Allocator for TestAlloc {
+        fn enter_function(&self, _function: &Function) -> Actions {
+            self.enter.clone()
+        }
+
+        fn pre_inst(&self, inst: InstId) -> &Actions {
+            &self.pre[inst]
+        }
+
+        fn post_inst(&self, inst: InstId) -> &Actions {
+            &self.post[inst]
+        }
+
+        fn br_table_case(&self, inst: InstId, case_index: usize) -> &Actions {
+            &self.cases[inst][case_index]
+        }
+    }
+
+    #[test]
+    fn br_table_frame_actions_abort_lazy_frame_dependency_collection() {
+        const SRC: &str = r#"
+target = "evm-ethereum-osaka"
+
+func public %dispatch(v0.i256) -> i256 {
+block0:
+    v1.i256 = add v0 1.i256;
+    br_table v0 block3 (0.i256 block1) (11.i256 block2);
+
+block1:
+    return v1;
+
+block2:
+    return v1;
+
+block3:
+    return v1;
+}
+"#;
+
+        let parsed = parse_module(SRC).expect("module parses");
+        let func_ref = parsed.debug.func_order[0];
+
+        parsed.module.func_store.view(func_ref, |function| {
+            let term = function
+                .layout
+                .iter_block()
+                .flat_map(|block| function.layout.iter_inst(block))
+                .find(|&inst| function.dfg.cast_br_table(inst).is_some())
+                .expect("missing br_table terminator");
+            let case_count = function
+                .dfg
+                .cast_br_table(term)
+                .expect("br_table terminator should downcast")
+                .table()
+                .len();
+            let root = parsed.debug.value(func_ref, "v1").expect("v1 exists");
+            let root_def = function
+                .dfg
+                .value_inst(root)
+                .expect("v1 should be instruction-defined");
+            let mut roots = MachineFrameRoots::default();
+            roots.root_def_insts.insert(root_def);
+            roots.rooted_values.insert(root);
+            let mut cfg = ControlFlowGraph::default();
+            cfg.compute(function);
+
+            let mut clean_alloc = TestAlloc::for_function(function);
+            clean_alloc.cases[term] = vec![Actions::new(); case_count];
+            let clean_dep_points = collect_dep_points(function, &cfg, &clean_alloc, &roots)
+                .expect("control br_table should allow lazy-frame dependency collection");
+            assert!(
+                !clean_dep_points.is_empty(),
+                "control br_table should collect lazy-frame dependency points"
+            );
+
+            let mut base_action_alloc = TestAlloc::for_function(function);
+            base_action_alloc.pre[term].push(Action::MemLoadFrameSlot(0));
+            base_action_alloc.cases[term] = vec![Actions::new(); case_count];
+            assert!(
+                collect_dep_points(function, &cfg, &base_action_alloc, &roots).is_none(),
+                "frame-touching br_table base actions must abort dependency collection"
+            );
+
+            let mut case_action_alloc = TestAlloc::for_function(function);
+            case_action_alloc.cases[term] = vec![Actions::new(); case_count];
+            case_action_alloc.cases[term][1].push(Action::MemStoreFrameSlot(0));
+            assert!(
+                collect_dep_points(function, &cfg, &case_action_alloc, &roots).is_none(),
+                "frame-touching br_table case actions must abort dependency collection"
+            );
+
+            let mut case_address_alloc = TestAlloc::for_function(function);
+            case_address_alloc.cases[term] = vec![Actions::new(); case_count];
+            case_address_alloc.cases[term][0].push(Action::PushFrameAddr {
+                offset_words: 0,
+                extra_bytes: 0,
+            });
+            assert!(
+                collect_dep_points(function, &cfg, &case_address_alloc, &roots).is_none(),
+                "frame-address br_table case actions must abort dependency collection"
+            );
+        });
+    }
 }

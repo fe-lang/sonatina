@@ -1,7 +1,7 @@
 use smallvec::SmallVec;
 use sonatina_ir::{BlockId, InstId, ValueId};
 
-use crate::stackalloc::Action;
+use crate::{bitset::BitSet, stackalloc::Action};
 
 use super::{
     super::{
@@ -105,6 +105,33 @@ impl<'a, 'ctx: 'a> Planner<'a, 'ctx> {
         self.mem.emit_store_for_spilled_value(phi_res, self.actions);
     }
 
+    /// Prepare the operands and return continuation for an internal `call`.
+    ///
+    /// EVM internal-call ABI: at the `JUMP` into the callee the stack must read
+    /// `[arg0, arg1, …, argN-1, cont, <caller values the callee cannot see>]`, where `cont` is the
+    /// return-continuation address the callee jumps back to. This method arranges exactly that
+    /// shape, in three pre-coordinated steps so a single `SWAP` finishes it:
+    ///
+    /// 1. `args` arrive already rotated left by one (see `operand_order_for_stackify`), so operand
+    ///    preparation leaves `[arg1, …, argN-1, arg0, <caller values>]` on top.
+    /// 2. `push_call_continuation` pushes `cont`: `[cont, arg1, …, argN-1, arg0, …]`.
+    /// 3. `position_call_ret_below_operands(argc)` swaps `cont` with the bottom operand `arg0`,
+    ///    yielding `[arg0, arg1, …, argN-1, cont, …]` — ABI order with the continuation directly
+    ///    below the args. When `argc == 0` the continuation is already on top and the swap is
+    ///    skipped.
+    pub(in super::super) fn prepare_internal_call(
+        &mut self,
+        inst: InstId,
+        args: &mut SmallVec<[ValueId; 8]>,
+        consume_last_use: &BitSet<ValueId>,
+        cache_preserve: &BitSet<ValueId>,
+    ) {
+        self.prepare_operands_for_inst(inst, args, consume_last_use, cache_preserve);
+        self.stack.push_call_continuation(self.actions);
+        self.stack
+            .position_call_ret_below_operands(args.len(), self.actions);
+    }
+
     pub fn plan_internal_return(&mut self, inst: InstId) {
         let ret_vals: SmallVec<[ValueId; 16]> = self
             .ctx
@@ -136,7 +163,7 @@ mod tests {
             stackify::{
                 builder::StackifyReachability,
                 planner::{
-                    MemPlan, NormalizeSearchScratch, Planner,
+                    MemPlan, MemState, NormalizeSearchScratch, Planner,
                     test_utils::build_stackify_test_context,
                 },
                 slots::{FreeSlotPools, SpillSlotPools},
@@ -236,25 +263,22 @@ block1:
                 )
                 .expect("source scratch slot");
 
-            let mem = MemPlan::new(
-                SpillSet::new(&spill_set),
-                &mut spill_requests,
-                &ctx,
-                &spill_obj,
-                &ctx.exact_local_addr,
-                &mut object_spill_requests,
-                &forced_object_spills,
-                &mut free_slots,
-                &mut slots,
-            );
+            let mut mem_state = MemState {
+                spill: SpillSet::new(&spill_set),
+                spill_obj: &spill_obj,
+                spill_requests: &mut spill_requests,
+                object_spill_requests: &mut object_spill_requests,
+                forced_object_spills: &forced_object_spills,
+                slots: &mut slots,
+            };
+            let mem = MemPlan::new(&mut mem_state, &ctx, &ctx.exact_local_addr, &mut free_slots);
             let mut stack = SymStack::opaque_prefix_empty(false);
             let mut actions = Actions::new();
             let mut search_scratch = NormalizeSearchScratch::default();
             let mut planner =
                 Planner::new(&ctx, &mut stack, &mut actions, mem, &mut search_scratch);
 
-            let mut template = BlockTemplate::new(smallvec![]);
-            template.freeze_transfer(smallvec![]);
+            let template = BlockTemplate::new(smallvec![], smallvec![]);
             planner.plan_edge_fixup_to_template(&template, BlockId(0), BlockId(1));
 
             assert_eq!(
@@ -356,25 +380,22 @@ block1:
                 )
                 .expect("source scratch slot");
 
-            let mem = MemPlan::new(
-                SpillSet::new(&spill_set),
-                &mut spill_requests,
-                &ctx,
-                &spill_obj,
-                &ctx.exact_local_addr,
-                &mut object_spill_requests,
-                &forced_object_spills,
-                &mut free_slots,
-                &mut slots,
-            );
+            let mut mem_state = MemState {
+                spill: SpillSet::new(&spill_set),
+                spill_obj: &spill_obj,
+                spill_requests: &mut spill_requests,
+                object_spill_requests: &mut object_spill_requests,
+                forced_object_spills: &forced_object_spills,
+                slots: &mut slots,
+            };
+            let mem = MemPlan::new(&mut mem_state, &ctx, &ctx.exact_local_addr, &mut free_slots);
             let mut stack = SymStack::opaque_prefix_empty(false);
             let mut actions = Actions::new();
             let mut search_scratch = NormalizeSearchScratch::default();
             let mut planner =
                 Planner::new(&ctx, &mut stack, &mut actions, mem, &mut search_scratch);
 
-            let mut template = BlockTemplate::new(smallvec![stack_phi]);
-            template.freeze_transfer(smallvec![]);
+            let template = BlockTemplate::new(smallvec![stack_phi], smallvec![]);
             planner.plan_edge_fixup_to_template(&template, BlockId(0), BlockId(1));
 
             assert_eq!(

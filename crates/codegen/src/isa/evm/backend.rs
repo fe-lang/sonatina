@@ -265,7 +265,7 @@ impl EvmBackend {
                 if let Some(alloc) = prepared.function_plan(func).map(|plan| &plan.alloc) {
                     module.func_store.view(func, |function| {
                         for v in function.dfg.value_ids() {
-                            let Some(slot) = alloc.scratch_slot_of_value[v] else {
+                            let Some(slot) = alloc.scratch_slot(v) else {
                                 continue;
                             };
                             scratch_spills.push((v, slot));

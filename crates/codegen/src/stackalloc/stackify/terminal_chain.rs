@@ -11,8 +11,8 @@ use super::{builder::StackifyContext, templates::BlockInterfaces};
 pub(super) fn compute_terminal_chain_blocks(
     ctx: &StackifyContext<'_>,
     interfaces: &BlockInterfaces,
-) -> SecondaryMap<BlockId, bool> {
-    let mut terminal_chain_blocks = SecondaryMap::new();
+) -> BitSet<BlockId> {
+    let mut terminal_chain_blocks = BitSet::default();
 
     for &block in ctx.dom.rpo().iter().rev() {
         if !ctx.dom.is_reachable(block)
@@ -35,7 +35,7 @@ pub(super) fn compute_terminal_chain_blocks(
         let is = ctx.func.inst_set();
         let inst = ctx.func.dfg.inst(term);
 
-        terminal_chain_blocks[block] =
+        let is_terminal =
             <&evm::EvmRevert as InstDowncast>::downcast(is, inst).is_some()
                 || <&evm::EvmReturn as InstDowncast>::downcast(is, inst).is_some()
                 || <&evm::EvmStop as InstDowncast>::downcast(is, inst).is_some()
@@ -49,9 +49,12 @@ pub(super) fn compute_terminal_chain_blocks(
                             .dests()
                             .iter()
                             .copied()
-                            .all(|dest| terminal_chain_blocks[dest]),
+                            .all(|dest| terminal_chain_blocks.contains(dest)),
                     }
                 });
+        if is_terminal {
+            terminal_chain_blocks.insert(block);
+        }
     }
 
     terminal_chain_blocks

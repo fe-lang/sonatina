@@ -4,13 +4,12 @@ use sonatina_ir::{Module, cfg::ControlFlowGraph, isa::evm::EvmMachine, module::F
 use tracing::{debug_span, trace_span};
 
 use crate::{
-    critical_edge::CriticalEdgeSplitter,
     domtree::DomTree,
     liveness::{InstLiveness, Liveness},
     module_analysis::CallGraphSchedule,
     stackalloc::{
         HOT_IMMEDIATE_SIZE_MIN_BLOCK_USES, HOT_IMMEDIATE_SIZE_MIN_MATERIALIZATION_BYTES,
-        StackifyBuilder,
+        StackifyBuilder, StackifyEdgeSplitter,
     },
 };
 
@@ -101,8 +100,10 @@ fn prepare_machine_stackify_analysis(
     let mut cfg = ControlFlowGraph::new();
     cfg.compute(function);
 
-    let mut splitter = CriticalEdgeSplitter::new();
-    splitter.run(function, &mut cfg);
+    // `StackifyEdgeSplitter` subsumes critical-edge splitting and additionally splits in-cycle
+    // multiway edges, establishing stackify's edge preconditions (see `stackalloc::stackify`).
+    // Split first, then compute domtree/liveness over the post-split CFG below.
+    StackifyEdgeSplitter::run(function, &mut cfg);
 
     let mut dom = DomTree::new();
     dom.compute(&cfg);

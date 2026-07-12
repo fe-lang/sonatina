@@ -496,7 +496,7 @@ pub(crate) fn allocate_final_spills(
     alloc.remap_stack_objects(&remap);
     for (value, old_obj) in spills.spilled_values {
         let new_obj = remap[&old_obj];
-        alloc.spill_obj[value] = Some(new_obj);
+        alloc.set_spill_object(value, new_obj);
         mem_plan.spill_obj[value] = Some(new_obj);
     }
     alloc.validate_spill_storage();
@@ -511,16 +511,7 @@ pub(crate) fn allocate_final_spills(
 }
 
 fn final_spilled_values(alloc: &StackifyAlloc) -> Vec<(ValueId, StackObjId)> {
-    alloc
-        .spill_obj
-        .iter()
-        .filter_map(|(value, obj)| {
-            let obj = (*obj)?;
-            alloc.scratch_slot_of_value[value]
-                .is_none()
-                .then_some((value, obj))
-        })
-        .collect()
+    alloc.object_spills().collect()
 }
 
 fn spill_count(len: usize) -> u32 {

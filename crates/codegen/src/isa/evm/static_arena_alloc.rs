@@ -333,14 +333,9 @@ fn compute_func_stack_objects_from_input(
 
     let mut spilled_values: BitSet<ValueId> = BitSet::default();
     if let Some(alloc) = analysis.stackify_alloc {
-        for (v, obj) in alloc.spill_obj.iter() {
-            if alloc.scratch_slot_of_value[v].is_some() {
-                continue;
-            }
-            if obj.is_some() {
-                spilled_values.insert(v);
-                spill_obj[v] = *obj;
-            }
+        for (v, obj) in alloc.object_spills() {
+            spilled_values.insert(v);
+            spill_obj[v] = Some(obj);
         }
     }
 
@@ -360,10 +355,8 @@ fn compute_func_stack_objects_from_input(
 
     let mut next_id: u32 = analysis.stackify_alloc.map_or(0, |alloc| {
         alloc
-            .spill_obj
-            .values()
-            .filter_map(|o| *o)
-            .map(|id| id.as_u32())
+            .object_spills()
+            .map(|(_, id)| id.as_u32())
             .max()
             .map_or(0, |n| n.checked_add(1).expect("stack object id overflow"))
     });
@@ -746,11 +739,10 @@ fn render_alloca_escapes(
 mod tests {
     use super::*;
     use crate::{
-        critical_edge::CriticalEdgeSplitter,
         domtree::DomTree,
         isa::evm::{EvmBackend, canonicalize_alias_value},
         liveness::Liveness,
-        stackalloc::StackifyBuilder,
+        stackalloc::{StackifyBuilder, StackifyEdgeSplitter},
     };
     use sonatina_parser::{ParsedModule, parse_module};
     use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
@@ -810,7 +802,7 @@ mod tests {
         parsed.module.func_store.modify(func_ref, |function| {
             let mut cfg = sonatina_ir::cfg::ControlFlowGraph::new();
             cfg.compute(function);
-            CriticalEdgeSplitter::new().run(function, &mut cfg);
+            StackifyEdgeSplitter::run(function, &mut cfg);
 
             let mut liveness = Liveness::new();
             liveness.compute(function, &cfg);
@@ -859,7 +851,10 @@ mod tests {
                 .value(func_ref, "v5")
                 .expect("aliased pointer value exists"),
         );
-        let spill_obj = analysis.alloc.spill_obj[spill_value].expect("spill object exists");
+        let spill_obj = analysis
+            .alloc
+            .spill_obj(spill_value)
+            .expect("spill object exists");
 
         let call = stack
             .call_sites
@@ -945,8 +940,10 @@ block3:
         let (parsed, func_ref, analysis, stack) = analyze_function(&src, "loop_spill", 16);
         let spilled =
             analysis.canonicalize_value(parsed.debug.value(func_ref, "v18").expect("v18 exists"));
-        let spill_obj =
-            analysis.alloc.spill_obj[spilled].expect("loop-carried phi spill object exists");
+        let spill_obj = analysis
+            .alloc
+            .spill_obj(spilled)
+            .expect("loop-carried phi spill object exists");
         let region = &stack.obj_facts[&spill_obj].region;
         assert!(
             region
@@ -1081,7 +1078,7 @@ block3:
                         .value(func_ref, &name)
                         .expect("branch value exists"),
                 );
-                let obj = analysis.alloc.spill_obj[value]?;
+                let obj = analysis.alloc.spill_obj(value)?;
                 Some(&stack.obj_facts[&obj].region)
             })
             .expect("left branch should produce a spilled phi operand value");
@@ -1094,7 +1091,7 @@ block3:
                         .value(func_ref, &name)
                         .expect("branch value exists"),
                 );
-                let obj = analysis.alloc.spill_obj[value]?;
+                let obj = analysis.alloc.spill_obj(value)?;
                 Some(&stack.obj_facts[&obj].region)
             })
             .expect("right branch should produce a spilled phi operand value");

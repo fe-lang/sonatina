@@ -17,10 +17,41 @@ use sonatina_ir::ValueId;
 
 use super::{
     StackifyContext,
+    alloc::SpillStorage,
     slots::{FreeSlotPools, SpillSlotInterference, SpillSlotPools},
     spill::{SpillDiscovery, SpillSet},
     sym_stack::SymStack,
 };
+
+/// Storage-eligibility policy, owned in one place and shared by `MemPlan` and the entry-arg
+/// scratch pre-pass in the builder.
+///
+/// A spilled value must use arena (object) storage rather than a reusable scratch slot when there
+/// are no scratch slots, when it is live across a scratch clobber, or when a previous fixed-point
+/// iteration already forced object storage for it.
+pub(super) fn must_use_object_storage(
+    scratch_spill_slots: u32,
+    scratch_live_values: &BitSet<ValueId>,
+    forced_object_spills: &BitSet<ValueId>,
+    v: ValueId,
+) -> bool {
+    scratch_spill_slots == 0 || scratch_live_values.contains(v) || forced_object_spills.contains(v)
+}
+
+/// Driver-owned memory-planning state, grouped so `MemPlan::new` takes it in one reborrow rather
+/// than six separate arguments. Lives in `FunctionPlanner`; a `MemPlan` borrows its fields for the
+/// span of a single instruction/edge plan.
+pub(super) struct MemState<'a> {
+    pub(super) spill: SpillSet<'a>,
+    /// Provisional per-iteration object-id assignment (`assign_spill_obj_ids`), read by `MemPlan`
+    /// during planning before storage is finalized.
+    pub(super) spill_obj:
+        &'a SecondaryMap<ValueId, Option<crate::isa::evm::static_arena_alloc::StackObjId>>,
+    pub(super) spill_requests: &'a mut BitSet<ValueId>,
+    pub(super) object_spill_requests: &'a mut BitSet<ValueId>,
+    pub(super) forced_object_spills: &'a BitSet<ValueId>,
+    pub(super) slots: &'a mut SpillSlotPools,
+}
 
 #[derive(Clone)]
 pub(super) struct MemPlanSnapshot {
@@ -44,32 +75,23 @@ pub(super) struct MemPlan<'a> {
 }
 
 impl<'a> MemPlan<'a> {
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
-        spill: SpillSet<'a>,
-        spill_requests: &'a mut BitSet<ValueId>,
+        mem: &'a mut MemState<'_>,
         ctx: &'a StackifyContext<'_>,
-        spill_obj: &'a SecondaryMap<
-            ValueId,
-            Option<crate::isa::evm::static_arena_alloc::StackObjId>,
-        >,
         exact_local_addr: &'a SecondaryMap<ValueId, Option<ExactLocalAddr>>,
-        object_spill_requests: &'a mut BitSet<ValueId>,
-        forced_object_spills: &'a BitSet<ValueId>,
         free_slots: &'a mut FreeSlotPools,
-        slots: &'a mut SpillSlotPools,
     ) -> Self {
         Self {
             scratch_live_values: &ctx.scratch_live_values,
             scratch_spill_slots: ctx.scratch_spill_slots,
-            spill_obj,
+            spill_obj: mem.spill_obj,
             exact_local_addr,
-            object_spill_requests,
-            forced_object_spills,
+            object_spill_requests: &mut *mem.object_spill_requests,
+            forced_object_spills: mem.forced_object_spills,
             free_slots,
-            slots,
+            slots: &mut *mem.slots,
             spill_slot_interference: &ctx.spill_slot_interference,
-            spill: SpillDiscovery::new(spill, spill_requests),
+            spill: SpillDiscovery::new(mem.spill, &mut *mem.spill_requests),
         }
     }
 
@@ -94,9 +116,12 @@ impl<'a> MemPlan<'a> {
     }
 
     fn must_use_object_storage(&self, v: ValueId) -> bool {
-        self.scratch_spill_slots == 0
-            || self.scratch_live_values.contains(v)
-            || self.forced_object_spills.contains(v)
+        must_use_object_storage(
+            self.scratch_spill_slots,
+            self.scratch_live_values,
+            self.forced_object_spills,
+            v,
+        )
     }
 
     fn request_object_storage(&mut self, v: ValueId) {
@@ -123,15 +148,22 @@ impl<'a> MemPlan<'a> {
                 &mut self.free_slots.scratch,
                 Some(self.scratch_spill_slots),
             ) {
-                actions.push(Action::MemStoreAbs(slot * 32));
+                actions.push(
+                    SpillStorage::Scratch(slot)
+                        .store_action()
+                        .expect("scratch storage has a store action"),
+                );
                 return;
             }
             self.request_object_storage(v);
         }
 
-        actions.push(Action::MemStoreObj(
-            self.spill_obj[v].expect("spilled value missing stack object id"),
-        ));
+        let obj = self.spill_obj[v].expect("spilled value missing stack object id");
+        actions.push(
+            SpillStorage::Object(obj)
+                .store_action()
+                .expect("object storage has a store action"),
+        );
     }
 
     fn load_frame_slot_or_placeholder(&mut self, v: ValueId) -> Action {

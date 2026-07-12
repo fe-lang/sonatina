@@ -10,7 +10,9 @@ use crate::{
     },
     object::{CompileOptions, SymbolId, link::link_section},
     optim::pipeline::Pipeline,
-    stackalloc::{Action, Actions, Allocator, StackifyAlloc, StackifyBuilder},
+    stackalloc::{
+        Action, Actions, Allocator, StackifyAlloc, StackifyBuilder, StackifyEdgeSplitter,
+    },
 };
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::{SmallVec, smallvec};
@@ -135,7 +137,7 @@ fn compute_test_stackify_alloc(function: &mut Function) -> StackifyAlloc {
     let mut cfg = ControlFlowGraph::new();
     cfg.compute(function);
 
-    CriticalEdgeSplitter::new().run(function, &mut cfg);
+    StackifyEdgeSplitter::run(function, &mut cfg);
 
     let mut liveness = Liveness::new();
     liveness.compute(function, &cfg);
@@ -1754,24 +1756,19 @@ block0:
         });
     }
 
-    let (call_inst, call_args) = parsed.module.func_store.view(caller, |function| {
+    let call_inst = parsed.module.func_store.view(caller, |function| {
         function
             .layout
             .iter_block()
             .flat_map(|block| function.layout.iter_inst(block))
-            .find_map(|inst| {
-                function
-                    .dfg
-                    .cast_call(inst)
-                    .map(|call| (inst, call.args().clone()))
-            })
+            .find_map(|inst| function.dfg.cast_call(inst).map(|_| inst))
             .expect("missing call inst")
     });
 
     let actions = stack_allocs
         .get(&caller)
         .expect("missing caller analysis")
-        .read(call_inst, &call_args);
+        .pre_inst(call_inst);
     assert!(
         !actions
             .iter()
@@ -2772,6 +2769,70 @@ object @Contract {
 }
 
 #[test]
+fn machine_pipeline_compiles_multiway_entry_self_loops() {
+    // Regression for the `StackifyEdgeSplitter` pipeline gap: a multiway self-loop on the entry
+    // block (`br v0 block0 block1`) is an in-cycle multiway edge that is *not* critical (block0's
+    // only predecessor is itself), so plain critical-edge splitting leaves it intact. Stackify
+    // then plans a branch edge back to the already-planned entry block, which trips the guard in
+    // `on_branch_edge` (previously a debug assert / silent miscompile). The machine pipeline runs
+    // `StackifyEdgeSplitter`, which splits the edge and makes the shape compile. The
+    // all-duplicate form is canonicalized to a jump before edge classification.
+    let sources = [
+        (
+            "mixed targets",
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %f(v0.i1, v1.i256) {
+block0:
+    mstore v1 v1 i256;
+    br v0 block0 block1;
+
+block1:
+    evm_return 0.i256 0.i256;
+}
+
+object @Contract {
+  section runtime {
+    entry %f;
+  }
+}
+"#,
+        ),
+        (
+            "duplicate targets",
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %f(v0.i1, v1.i256) {
+block0:
+    mstore v1 v1 i256;
+    br v0 block0 block0;
+}
+
+object @Contract {
+  section runtime {
+    entry %f;
+  }
+}
+"#,
+        ),
+    ];
+    let backend = test_backend();
+    for (label, source) in sources {
+        let parsed = parse_module(source).unwrap();
+        let func = parsed.module.funcs()[0];
+        let prepared = backend
+            .prepare_section(work_module(&parsed.module, &[func]))
+            .unwrap_or_else(|err| panic!("prepare should succeed for {label}: {err}"));
+
+        backend
+            .lower_function(&prepared, func)
+            .unwrap_or_else(|err| panic!("lowering should succeed for {label}: {err}"));
+    }
+}
+
+#[test]
 fn prepared_section_is_reusable_across_lower_calls() {
     let parsed = parse_module(
         r#"
@@ -3000,7 +3061,7 @@ block0:
     let (shadow_obj, runs) = (&save_plan.shadow_obj, &save_plan.runs);
     assert!(!runs.is_empty(), "expected at least one saved run");
 
-    let actions = alloc.read(call_inst, &call_args);
+    let actions = alloc.pre_inst(call_inst);
     let cont_pos = actions
         .iter()
         .position(|a| matches!(a, Action::PushContinuationOffset))
@@ -3107,21 +3168,17 @@ block2:
     }
     let caller = names["caller"];
 
-    let (call_inst, call_results): (InstId, SmallVec<[ValueId; 8]>) =
-        parsed.module.func_store.view(caller, |function| {
-            for block in function.layout.iter_block() {
-                for inst in function.layout.iter_inst(block) {
-                    if function.dfg.call_info(inst).is_none() {
-                        continue;
-                    }
-                    return (
-                        inst,
-                        function.dfg.inst_results(inst).iter().copied().collect(),
-                    );
+    let call_inst: InstId = parsed.module.func_store.view(caller, |function| {
+        for block in function.layout.iter_block() {
+            for inst in function.layout.iter_inst(block) {
+                if function.dfg.call_info(inst).is_none() {
+                    continue;
                 }
+                return inst;
             }
-            panic!("missing call inst");
-        });
+        }
+        panic!("missing call inst");
+    });
 
     let stack_alloc = stack_allocs
         .remove(&caller)
@@ -3151,7 +3208,7 @@ block2:
     let (shadow_obj, runs) = (&save_plan.shadow_obj, &save_plan.runs);
     assert!(!runs.is_empty(), "expected at least one saved run");
 
-    let actions = alloc.write(call_inst, &call_results);
+    let actions = alloc.post_inst(call_inst);
     let mut expected = Actions::new();
     let shadow_loc = alloc.obj_loc_for_id(*shadow_obj);
     for run in runs.iter().rev() {

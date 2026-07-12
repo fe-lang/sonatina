@@ -165,6 +165,8 @@ impl SymStack {
     }
 
     /// Delete `stack[depth-1]` (1-indexed), preserving the relative order of the remaining items.
+    ///
+    /// Emits a `SWAP` chain, so its cost is O(depth).
     pub(super) fn stable_delete_at_depth(&mut self, depth: usize, actions: &mut Actions) {
         assert!(
             (1..=super::SWAP_WINDOW_MAX).contains(&depth),
@@ -203,6 +205,9 @@ impl SymStack {
         self.items.swap(0, depth);
     }
 
+    /// Rotate `stack[pos]` up to the top, preserving the relative order of the items below it.
+    ///
+    /// Emits a `SWAP` chain, so its cost is O(pos).
     pub(super) fn stable_rotate_to_top(&mut self, pos: usize, actions: &mut Actions) {
         if pos == 0 {
             return;
@@ -219,17 +224,20 @@ impl SymStack {
         self.pushed_above_barrier();
     }
 
+    /// Push the internal-call return continuation onto the stack.
+    ///
+    /// One step of the internal-call ABI setup; see `Planner::prepare_internal_call` for the
+    /// full callee-entry stack shape and how the continuation is repositioned afterwards.
     pub(super) fn push_call_continuation(&mut self, actions: &mut Actions) {
         actions.push(Action::PushContinuationOffset);
         self.push_call_ret_addr();
     }
 
-    /// Ensure the call continuation address sits immediately below the `operand_count`
-    /// call operands at the top of the stack.
+    /// Move the call continuation from the top of the stack to just below the `operand_count`
+    /// call operands, using a single `SWAP`.
     ///
-    /// This matches the EVM backend's internal-call ABI, where the callee expects its return
-    /// address (`FuncRetAddr`) to sit below its arguments and above any caller values that must
-    /// survive the call.
+    /// Relies on the operands having been prepared as a left-rotation of callee ABI order; see
+    /// `Planner::prepare_internal_call` for the internal-call ABI this completes.
     pub(super) fn position_call_ret_below_operands(
         &mut self,
         operand_count: usize,
@@ -253,9 +261,8 @@ impl SymStack {
             "call operand count exceeds stack depth"
         );
 
-        // During call operand preparation we arrange the operands as a left-rotation of the
-        // callee ABI order. With that setup, a single swap with the bottom operand moves the
-        // continuation behind the operands and restores the ABI operand order.
+        // One swap with the bottom operand moves the continuation behind the operands and
+        // restores ABI operand order (the operands were pre-rotated for exactly this).
         self.swap(operand_count, actions);
 
         debug_assert_eq!(
@@ -265,14 +272,19 @@ impl SymStack {
         );
     }
 
-    pub(super) fn remove_call_ret_addr(&mut self) {
-        let Some(pos) = self.items.iter().position(|i| *i == StackItem::CallRetAddr) else {
-            panic!("expected StackItem::CallRetAddr")
-        };
-        self.items.remove(pos);
-        if self.func_ret_index.is_some_and(|idx| pos < idx) {
-            self.popped_above_barrier();
-        }
+    /// Pop the internal-call return continuation marker, which must be on top.
+    ///
+    /// After a call's operands are popped the continuation is by construction the top item (it was
+    /// positioned at depth `argc` by `position_call_ret_below_operands`, or left on top when
+    /// `argc == 0`). See `Planner::prepare_internal_call` for the full ABI sequence.
+    pub(super) fn pop_call_ret_addr(&mut self) {
+        assert_eq!(
+            self.items.front(),
+            Some(&StackItem::CallRetAddr),
+            "call return address must be on top of the stack after popping call operands"
+        );
+        self.items.pop_front();
+        self.popped_above_barrier();
     }
 
     pub(super) fn pop_operand(&mut self) {

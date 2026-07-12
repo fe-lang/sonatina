@@ -152,8 +152,8 @@ pub(crate) fn compute_late_block_alias_plan(
         };
 
         if Some(block) == entry
-            || !alloc.read(term, &[]).is_empty()
-            || !alloc.write(term, &[]).is_empty()
+            || !alloc.pre_inst(term).is_empty()
+            || !alloc.post_inst(term).is_empty()
             || lazy_frame_mentions_trampoline_site(frame_summary, block, term)
         {
             continue;

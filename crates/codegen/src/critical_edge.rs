@@ -1,71 +1,47 @@
-use sonatina_ir::{BlockId, ControlFlowGraph, Function, InstId};
+use sonatina_ir::{BlockId, ControlFlowGraph, Function};
 
 use crate::cfg_edit::{CfgEditor, CleanupMode};
 
-#[derive(Debug)]
-pub struct CriticalEdgeSplitter {
-    critical_edges: Vec<CriticalEdge>,
-}
-
-impl Default for CriticalEdgeSplitter {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+#[derive(Debug, Default)]
+pub struct CriticalEdgeSplitter;
 
 impl CriticalEdgeSplitter {
     pub fn new() -> Self {
-        Self {
-            critical_edges: Vec::default(),
-        }
+        Self
     }
 
     pub fn run(&mut self, func: &mut Function, cfg: &mut ControlFlowGraph) {
-        self.clear();
-
+        let mut critical_edges = Vec::<(BlockId, usize)>::new();
         for block in func.layout.iter_block() {
-            if let Some(last_inst) = func.layout.last_inst_of(block) {
-                self.add_critical_edges(last_inst, func, cfg);
+            if cfg.succ_num_of(block) < 2 {
+                continue;
+            }
+
+            // Preserve the historical destination ordering for ordinary distinct edges so bridge
+            // creation does not perturb later fallthrough placement. Parallel slots for one
+            // target are still kept distinct and ordered by their branch slot.
+            for &to in cfg.succs_of(block) {
+                if cfg.pred_num_of(to) < 2 {
+                    continue;
+                }
+                critical_edges.extend(
+                    cfg.succ_edges_of(block)
+                        .map(|&edge| cfg.edge_data(edge))
+                        .filter(|edge| edge.to == to)
+                        .map(|edge| (block, edge.branch_slot)),
+                );
             }
         }
 
-        let edges = std::mem::take(&mut self.critical_edges);
-        let mut editor = CfgEditor::new(func, CleanupMode::Strict);
-        for edge in edges {
-            let from = editor.func().layout.inst_block(edge.inst);
-            editor.split_edge(from, edge.to);
-        }
-
-        cfg.compute(editor.func());
-    }
-
-    pub fn clear(&mut self) {
-        self.critical_edges.clear();
-    }
-
-    fn add_critical_edges(&mut self, inst_id: InstId, func: &Function, cfg: &ControlFlowGraph) {
-        let block = func.layout.inst_block(inst_id);
-        if cfg.succ_num_of(block) < 2 {
+        if critical_edges.is_empty() {
             return;
         }
 
-        for &succ in cfg.succs_of(block) {
-            if cfg.pred_num_of(succ) > 1 {
-                self.critical_edges.push(CriticalEdge::new(inst_id, succ));
-            }
+        let mut editor = CfgEditor::new(func, CleanupMode::Strict);
+        for (from, branch_slot) in critical_edges {
+            editor.split_out_edge(from, branch_slot);
         }
-    }
-}
-
-#[derive(Debug)]
-struct CriticalEdge {
-    inst: InstId,
-    to: BlockId,
-}
-
-impl CriticalEdge {
-    fn new(inst: InstId, to: BlockId) -> Self {
-        Self { inst, to }
+        cfg.clone_from(editor.cfg());
     }
 }
 
@@ -80,6 +56,7 @@ mod tests {
         },
         isa::Isa,
     };
+    use sonatina_parser::parse_module;
 
     use super::*;
 
@@ -413,5 +390,79 @@ mod tests {
             .func_store
             .view(func_ref, |func| cfg_split.compute(func));
         assert_eq!(cfg, cfg_split);
+    }
+
+    #[test]
+    fn critical_edge_br_table_splits_duplicate_target_slots_individually() {
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+func private %f(v0.i1, v1.i8) -> i8 {
+block0:
+    br v0 block1 block2;
+
+block1:
+    br_table v1 block3 (0.i8 block3) (1.i8 block4);
+
+block2:
+    jump block3;
+
+block3:
+    v2.i8 = phi (7.i8 block1) (9.i8 block2);
+    return v2;
+
+block4:
+    return 11.i8;
+}
+"#,
+        )
+        .expect("module parses");
+        let func_ref = parsed.module.funcs()[0];
+        parsed.module.func_store.modify(func_ref, |func| {
+            let blocks: Vec<_> = func.layout.iter_block().collect();
+            let [_, duplicate_pred, other_pred, target, distinct_target] = blocks.as_slice() else {
+                panic!("expected five blocks");
+            };
+            let phi_inst = func.layout.first_inst_of(*target).unwrap();
+            let duplicate_incoming = func
+                .dfg
+                .cast_phi(phi_inst)
+                .unwrap()
+                .args()
+                .iter()
+                .find(|(_, pred)| pred == duplicate_pred)
+                .unwrap()
+                .0;
+
+            let mut cfg = ControlFlowGraph::default();
+            cfg.compute(func);
+            CriticalEdgeSplitter::new().run(func, &mut cfg);
+
+            let term = func.layout.last_inst_of(*duplicate_pred).unwrap();
+            let dests = func.dfg.branch_info(term).unwrap().dests();
+            assert_eq!(dests.len(), 3);
+            assert_ne!(dests[0], dests[1]);
+            assert_eq!(dests[2], *distinct_target);
+            assert!(
+                dests[..2]
+                    .iter()
+                    .all(|&mid| { cfg.succs_of(mid).eq(std::iter::once(target)) })
+            );
+
+            let phi = func.dfg.cast_phi(phi_inst).unwrap();
+            assert_eq!(phi.args().len(), 3);
+            assert!(!phi.args().iter().any(|(_, pred)| pred == duplicate_pred));
+            assert!(phi.args().iter().any(|(_, pred)| pred == other_pred));
+            assert_eq!(
+                phi.args()
+                    .iter()
+                    .filter(|(value, pred)| {
+                        *value == duplicate_incoming && *pred != *other_pred
+                    })
+                    .count(),
+                2
+            );
+        });
     }
 }

@@ -7,6 +7,9 @@
 //!   - `T(B)` is a transfer region: live-in, non-phi values in a chosen order.
 //!     - `T(B)` is frozen from the first real predecessor stack, a chosen pending merge stack, or
 //!       a deterministic fallback when the block must be emitted before any predecessor is planned.
+//!   - How each block obtains its entry stack (opaque terminal chain / inherited single-pred /
+//!     frozen merge / function entry) and the `Pending -> Frozen` freeze lifecycle live in one
+//!     place: the block-entry state machine in `entry.rs` (`record_edge` + `resolve_entry`).
 //! - For merge blocks, all incoming edges are normalized to the same `StackIn(B)` (often a no-op);
 //!   spilled phi results are stored directly on the incoming edge instead of being carried in
 //!   `P(B)`.
@@ -20,23 +23,30 @@
 //!   edge stores can be emitted directly without first staging every phi source on the stack.
 //!
 //! Notes specific to this codebase:
-//! - Critical edges must be split before running this allocator.
+//! - Run `StackifyEdgeSplitter` before this allocator: it canonicalizes all-identical branches
+//!   and establishes all split preconditions, splitting critical edges, duplicate-target edge
+//!   slots, and every multiway edge whose target is already planned when the branch is reached
+//!   (a self-loop or backedge, e.g. a multiway self-loop on the entry block). Splitting only
+//!   critical edges is not enough.
 //! - Internal calls rely on an implicit return address value on the EVM stack.
 //!   The allocator models this as a special stack item barrier to avoid popping
 //!   into the caller's preserved stack segment.
 
 mod alloc;
-mod block_sim;
+mod block;
 mod br_table;
 mod builder;
-mod iteration;
+mod driver;
+mod entry;
 mod planner;
+mod rescue;
 mod slots;
 mod spill;
 mod sym_stack;
 mod templates;
 mod terminal_chain;
 mod trace;
+mod uses;
 
 pub use alloc::StackifyAlloc;
 pub(crate) use builder::{
@@ -63,8 +73,7 @@ mod tests {
         analysis::func_behavior::analyze_module,
         domtree::DomTree,
         liveness::{InstLiveness, Liveness},
-        stackalloc::{Action, Allocator, canonicalize_value_alias},
-        stackify_edge::StackifyEdgeSplitter,
+        stackalloc::{Action, Allocator, StackifyEdgeSplitter, canonicalize_value_alias},
     };
     use cranelift_entity::SecondaryMap;
     use sonatina_ir::{
@@ -116,8 +125,8 @@ mod tests {
                 .with_scratch_spills(2)
                 .compute();
 
-            for (v, slot) in alloc.scratch_slot_of_value.iter() {
-                if slot.is_some() {
+            for v in function.dfg.value_ids() {
+                if alloc.scratch_slot(v).is_some() {
                     assert!(
                         !scratch_live_values.contains(v),
                         "scratch spill used for a scratch-live value"
@@ -128,7 +137,7 @@ mod tests {
             assert!(
                 scratch_live_values
                     .iter()
-                    .any(|v| alloc.spill_obj[v].is_some()),
+                    .any(|v| alloc.spill_obj(v).is_some()),
                 "expected at least one scratch-live value to spill to a stack object"
             );
         });
@@ -210,20 +219,27 @@ block3:
                 .with_value_aliases(&value_aliases)
                 .compute();
 
+            // The br_table terminator's accumulated pre-actions (dead-prefix cleanup,
+            // reachability rescue, prologue injection) are read from `pre_actions[term]` like
+            // every other instruction and are no longer hoisted into case 0. For this function
+            // that set is empty; the stored case lists therefore hold only per-case compare
+            // preparation, in IR case order.
             assert!(
                 alloc.pre_actions[term].is_empty(),
-                "br_table pre-actions should be hoisted into case actions"
+                "br_table pre-actions are read from pre_inst, not hoisted into case 0"
             );
             assert_eq!(alloc.brtable_actions[term].len(), 2);
 
-            let first = alloc.read_br_table_case(term, 0);
-            let second = alloc.read_br_table_case(term, 1);
+            let first = alloc.br_table_case(term, 0);
+            let second = alloc.br_table_case(term, 1);
+            // Case 0 is exactly its compare preparation (materializing the case scrutinee), with
+            // no hoisted cleanup/rescue prefix in front of it.
             assert!(
-                !first.is_empty(),
-                "expected first br_table case to include compare preparation"
+                matches!(first.as_slice(), [Action::Push(_)]),
+                "case 0 should hold only compare preparation, not a hoisted base-action prefix"
             );
             assert!(
-                !second.is_empty(),
+                matches!(second.first(), Some(Action::Push(_))),
                 "expected later br_table case to include compare preparation"
             );
         });
@@ -297,7 +313,7 @@ block2:
                 alloc.pre_actions[jump_inst]
             );
             assert!(
-                alloc.spill_obj[v1].is_some(),
+                alloc.spill_obj(v1).is_some(),
                 "expected dropped entry arg to become spill-reloadable on the backedge"
             );
         });
@@ -386,7 +402,7 @@ block3:
             let alloc = StackifyBuilder::new(function, &cfg, &dom, &liveness, 16).compute();
 
             assert!(
-                alloc.spill_obj[deep_phi].is_some(),
+                alloc.spill_obj(deep_phi).is_some(),
                 "expected deepest phi to spill so merge repair must store it"
             );
             assert!(

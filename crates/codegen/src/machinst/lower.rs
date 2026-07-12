@@ -346,10 +346,10 @@ impl<'a, Op: Default> Lower<'a, Op> {
 
     pub fn lower(
         mut self,
-        alloc: &mut dyn Allocator,
-        mut enter_block: impl FnMut(&mut Self, &mut dyn Allocator, BlockId),
-        mut enter_function: impl FnMut(&mut Self, &mut dyn Allocator, &Function),
-        mut lower_insn: impl FnMut(&mut Self, &mut dyn Allocator, InstId),
+        alloc: &dyn Allocator,
+        mut enter_block: impl FnMut(&mut Self, &dyn Allocator, BlockId),
+        mut enter_function: impl FnMut(&mut Self, &dyn Allocator, &Function),
+        mut lower_insn: impl FnMut(&mut Self, &dyn Allocator, InstId),
     ) -> CodegenResult<VCode<Op>> {
         let function = self.function;
         let entry = function.layout.entry_block();

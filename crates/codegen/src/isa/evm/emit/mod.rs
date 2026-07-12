@@ -204,14 +204,14 @@ impl<'a> EvmMachineFunctionLowering<'a> {
             let _span =
                 trace_span!("sonatina.codegen.evm.lower_prepared_machine_function.lower").entered();
             module.func_store.view(func, |function| {
-                let mut alloc = FinalAlloc::new(
+                let alloc = FinalAlloc::new(
                     self.function_plan.alloc.clone(),
                     self.function_plan.mem_plan.clone(),
                 );
                 let lower = Lower::new(&module.ctx, function, &emitted_block_order);
                 lower
                     .lower(
-                        &mut alloc,
+                        &alloc,
                         |ctx, alloc, block| self.enter_block(ctx, alloc, block),
                         |ctx, alloc, function| self.enter_function(ctx, alloc, function),
                         |ctx, alloc, insn| self.lower_insn(ctx, alloc, insn),
@@ -265,12 +265,7 @@ impl<'a> EvmMachineFunctionLowering<'a> {
         })
     }
 
-    fn enter_function(
-        &self,
-        ctx: &mut Lower<OpCode>,
-        alloc: &mut dyn Allocator,
-        function: &Function,
-    ) {
+    fn enter_function(&self, ctx: &mut Lower<OpCode>, alloc: &dyn Allocator, function: &Function) {
         let frame_layout = self.frame_layout();
         let actions = alloc.enter_function(function);
         debug_assert!(
@@ -294,7 +289,7 @@ impl<'a> EvmMachineFunctionLowering<'a> {
         }
     }
 
-    fn enter_block(&self, ctx: &mut Lower<OpCode>, _: &mut dyn Allocator, block: BlockId) {
+    fn enter_block(&self, ctx: &mut Lower<OpCode>, _: &dyn Allocator, block: BlockId) {
         if self.is_elided_block(block) {
             return;
         }
