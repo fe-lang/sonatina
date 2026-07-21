@@ -5,8 +5,8 @@ use std::collections::BTreeMap;
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 use sonatina_ir::{
-    Function, GlobalVariableRef, Immediate, Inst, InstDowncast, InstId, Module, Type, Value,
-    ValueId, inst::control_flow, module::FuncRef,
+    Function, GlobalVariableRef, Immediate, Inst, InstAttribution, InstDowncast, InstId, Module,
+    Type, Value, ValueId, inst::control_flow, module::FuncRef,
 };
 
 use crate::{
@@ -44,6 +44,7 @@ pub(super) enum InlinePlan {
 }
 
 struct TemplateInst {
+    attribution: InstAttribution,
     inst: Box<dyn Inst>,
     old_results: InstResultTemplates,
 }
@@ -65,6 +66,7 @@ struct TerminatorSplicePlan {
     callee_args: Vec<ValueId>,
     const_values: BTreeMap<ValueId, ValueTemplate>,
     body: Vec<TemplateInst>,
+    terminator_attribution: InstAttribution,
     terminator: Box<dyn Inst>,
 }
 
@@ -377,6 +379,7 @@ pub(super) fn materialize_plan(callee: &Function, summary: &InlinePlanSummary) -
                 callee_args: summary.callee_args.clone(),
                 const_values: summary.const_values.clone(),
                 body: materialize_body_templates(callee, &summary.body),
+                terminator_attribution: callee.inst_attribution(summary.term_inst_id),
                 terminator: callee.dfg.clone_inst(summary.term_inst_id),
             })
         }
@@ -389,6 +392,7 @@ fn materialize_body_templates(
 ) -> Vec<TemplateInst> {
     body.iter()
         .map(|summary| TemplateInst {
+            attribution: callee.inst_attribution(summary.inst_id),
             inst: callee.dfg.clone_inst(summary.inst_id),
             old_results: summary.old_results.clone(),
         })
@@ -508,25 +512,30 @@ fn apply_splice_single_block(
         return false;
     }
 
-    apply_splice_body(splice_plan.body, &mut value_map, |new_inst, result_tys| {
-        let new_inst_id = caller.dfg.make_inst_dyn(new_inst);
-        caller.layout.insert_inst_before(new_inst_id, call_inst_id);
-        let new_results: SmallVec<[ValueId; 2]> = result_tys
-            .iter()
-            .enumerate()
-            .map(|(result_idx, ty)| {
-                caller.dfg.make_value(Value::Inst {
-                    inst: new_inst_id,
-                    result_idx: result_idx.try_into().expect("too many instruction results"),
-                    ty: *ty,
+    apply_splice_body(
+        splice_plan.body,
+        &mut value_map,
+        |attribution, new_inst, result_tys| {
+            let new_inst_id = caller.dfg.make_inst_dyn(new_inst);
+            caller.layout.insert_inst_before(new_inst_id, call_inst_id);
+            let new_results: SmallVec<[ValueId; 2]> = result_tys
+                .iter()
+                .enumerate()
+                .map(|(result_idx, ty)| {
+                    caller.dfg.make_value(Value::Inst {
+                        inst: new_inst_id,
+                        result_idx: result_idx.try_into().expect("too many instruction results"),
+                        ty: *ty,
+                    })
                 })
-            })
-            .collect();
-        caller
-            .dfg
-            .attach_results(new_inst_id, new_results.as_slice());
-        new_results
-    });
+                .collect();
+            caller
+                .dfg
+                .attach_results(new_inst_id, new_results.as_slice());
+            caller.apply_inst_attribution(new_inst_id, attribution);
+            new_results
+        },
+    );
 
     for (&old_ret, &call_res) in splice_plan.ret_values.iter().zip(call_results.iter()) {
         let new_ret = *value_map
@@ -585,14 +594,25 @@ fn apply_splice_single_block_terminator(
 
     let mut editor = CfgEditor::new(caller, CleanupMode::Strict);
     let call_block = editor.truncate_block_from_inst(call_inst_id);
-    apply_splice_body(splice_plan.body, &mut value_map, |new_inst, result_tys| {
-        let (_, new_results) = editor.append_inst_with_results(call_block, new_inst, result_tys);
-        new_results
-    });
+    apply_splice_body(
+        splice_plan.body,
+        &mut value_map,
+        |attribution, new_inst, result_tys| {
+            let (new_inst_id, new_results) =
+                editor.append_inst_with_results(call_block, new_inst, result_tys);
+            editor
+                .func_mut()
+                .apply_inst_attribution(new_inst_id, attribution);
+            new_results
+        },
+    );
 
     let mut new_term = splice_plan.terminator;
     rewrite_inst_values_checked(new_term.as_mut(), &value_map);
-    editor.append_inst_with_results(call_block, new_term, &[]);
+    let (new_term_id, _) = editor.append_inst_with_results(call_block, new_term, &[]);
+    editor
+        .func_mut()
+        .apply_inst_attribution(new_term_id, &splice_plan.terminator_attribution);
     editor.recompute_cfg();
 
     stats.calls_spliced += 1;
@@ -622,7 +642,7 @@ fn build_splice_value_map(
 fn apply_splice_body(
     body: Vec<TemplateInst>,
     value_map: &mut FxHashMap<ValueId, ValueId>,
-    mut insert: impl FnMut(Box<dyn Inst>, &[Type]) -> SmallVec<[ValueId; 2]>,
+    mut insert: impl FnMut(&InstAttribution, Box<dyn Inst>, &[Type]) -> SmallVec<[ValueId; 2]>,
 ) {
     for template_inst in body {
         let mut new_inst = template_inst.inst;
@@ -632,7 +652,7 @@ fn apply_splice_body(
             .iter()
             .map(|(_, ty)| *ty)
             .collect();
-        let inserted_results = insert(new_inst, result_tys.as_slice());
+        let inserted_results = insert(&template_inst.attribution, new_inst, result_tys.as_slice());
         assert_eq!(
             inserted_results.len(),
             template_inst.old_results.len(),
@@ -785,4 +805,85 @@ fn rewrite_inst_values(inst: &mut dyn Inst, value_map: &FxHashMap<ValueId, Value
         }
     });
     all_mapped
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use smallvec::smallvec;
+    use sonatina_ir::{
+        Linkage, Signature, Type, builder::test_util::test_module_builder,
+        func_cursor::InstInserter, inst::arith::Add,
+    };
+
+    use super::*;
+    use crate::optim::inliner::Inliner;
+
+    #[test]
+    fn single_block_splice_preserves_frontend_origin() {
+        let mb = test_module_builder();
+        let callee_ref = mb
+            .declare_function(Signature::new_single(
+                "callee",
+                Linkage::Private,
+                &[],
+                Type::I32,
+            ))
+            .unwrap();
+        let caller_ref = mb
+            .declare_function(Signature::new_single(
+                "caller",
+                Linkage::Public,
+                &[],
+                Type::I32,
+            ))
+            .unwrap();
+
+        {
+            let mut callee = mb.func_builder::<InstInserter>(callee_ref);
+            let block = callee.append_block();
+            callee.switch_to_block(block);
+            let lhs = callee.make_imm_value(1i32);
+            let rhs = callee.make_imm_value(2i32);
+            let has_add = callee.inst_set().has_add().unwrap();
+            let result = callee.insert_inst(Add::new(has_add, lhs, rhs), Type::I32);
+            let add_inst = callee.func.dfg.value_inst(result).unwrap();
+            callee
+                .func
+                .set_inst_frontend_origin(add_inst, Arc::from("callee-origin://add"));
+            callee.insert_return(result);
+            callee.seal_all();
+            callee.finish();
+        }
+
+        {
+            let mut caller = mb.func_builder::<InstInserter>(caller_ref);
+            let block = caller.append_block();
+            caller.switch_to_block(block);
+            let result = caller.insert_call(callee_ref, smallvec![]).unwrap();
+            caller.insert_return(result);
+            caller.seal_all();
+            caller.finish();
+        }
+
+        let mut module = mb.build();
+        let mut inliner = Inliner::new(InlinerConfig::default());
+        let stats = inliner.run(&mut module);
+        assert_eq!(stats.calls_spliced, 1);
+
+        module.func_store.view(caller_ref, |caller| {
+            let inlined_add = caller
+                .layout
+                .iter_block()
+                .flat_map(|block| caller.layout.iter_inst(block))
+                .find(|&inst| caller.dfg.inst(inst).as_text() == "add")
+                .expect("callee add should be spliced into caller");
+
+            assert_eq!(
+                caller.inst_frontend_origin(inlined_add),
+                Some("callee-origin://add")
+            );
+        });
+    }
 }

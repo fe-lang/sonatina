@@ -233,5 +233,6 @@ fn insert_plain_value(
     });
     func.dfg.attach_result(inst, value);
     func.layout.insert_inst_before(inst, before);
+    func.propagate_inst_attribution(inst, before);
     value
 }
