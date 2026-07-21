@@ -1,15 +1,25 @@
 use std::io;
 
+use cranelift_entity::SecondaryMap;
 use smallvec::SmallVec;
 
 use super::{BlockId, DataFlowGraph, InstId, Layout, Type, ValueId};
 use crate::{InstSetBase, Linkage, ir_writer::IrWrite, module::ModuleCtx};
+
+/// Opaque source location ordinal attached to instructions by the frontend.
+/// The frontend assigns meaning to these values via a lookup table.
+/// Default value (u32::MAX) means "no source location."
+pub type SourceLoc = u32;
+
+/// Default value indicating no source location.
+pub const SOURCE_LOC_NONE: SourceLoc = u32::MAX;
 
 #[derive(Clone)]
 pub struct Function {
     pub arg_values: smallvec::SmallVec<[ValueId; 8]>,
     pub dfg: DataFlowGraph,
     pub layout: Layout,
+    pub source_locs: SecondaryMap<InstId, SourceLoc>,
 }
 
 impl Function {
@@ -29,6 +39,7 @@ impl Function {
             arg_values,
             dfg,
             layout: Layout::default(),
+            source_locs: SecondaryMap::new(),
         }
     }
 
