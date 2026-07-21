@@ -337,6 +337,7 @@ fn prepend_const_proj(
     });
     func.dfg.attach_result(inst, value);
     func.layout.insert_inst_after(inst, base.inst);
+    func.propagate_inst_attribution(inst, base.inst);
     (PrependedValue { inst, value }, field_ty)
 }
 
@@ -367,6 +368,7 @@ fn prepend_const_index(
     });
     func.dfg.attach_result(inst, value);
     func.layout.insert_inst_after(inst, base.inst);
+    func.propagate_inst_attribution(inst, base.inst);
     (PrependedValue { inst, value }, elem)
 }
 

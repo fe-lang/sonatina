@@ -131,6 +131,7 @@ struct FuncLowerCtx<'a> {
     source_block_order: Vec<BlockId>,
     block_terminal_map: SecondaryMap<BlockId, Option<BlockId>>,
     current_block: Option<BlockId>,
+    active_source_inst: Option<sonatina_ir::InstId>,
     pending_phis: Vec<(sonatina_ir::InstId, sonatina_ir::InstId)>,
 }
 
@@ -158,6 +159,7 @@ fn lower_function(
         source_block_order,
         block_terminal_map: SecondaryMap::new(),
         current_block: None,
+        active_source_inst: None,
         pending_phis: Vec::new(),
     };
 
@@ -219,6 +221,7 @@ impl FuncLowerCtx<'_> {
                     &mut self.machine,
                     control_flow::Phi::new_unchecked(self.is, Vec::new()),
                 );
+                self.copy_frontend_origin_to_machine(source_inst, machine_inst);
                 let result_tys = self.machine_result_tys(source_inst)?;
                 let results = cursor.make_results(&mut self.machine, machine_inst, &result_tys);
                 cursor.attach_results(&mut self.machine, machine_inst, &results);
@@ -276,6 +279,13 @@ impl FuncLowerCtx<'_> {
             return Ok(());
         }
 
+        let previous = self.active_source_inst.replace(source_inst);
+        let result = self.lower_inst_active(source_inst);
+        self.active_source_inst = previous;
+        result
+    }
+
+    fn lower_inst_active(&mut self, source_inst: sonatina_ir::InstId) -> Result<(), String> {
         let data = self
             .source_is
             .resolve_inst(self.source.dfg.inst(source_inst));
@@ -934,11 +944,12 @@ impl FuncLowerCtx<'_> {
         inst: I,
     ) -> Result<(), String> {
         let result_tys = self.machine_result_tys(source_inst)?;
-        let machine_inst = self.append_inst_with_results_to(
+        let machine_inst = self.append_inst_with_results_raw(
             self.current_block.expect("insert needs current block"),
             inst,
             &result_tys,
         );
+        self.set_exact_lowering_provenance(source_inst, machine_inst);
         let results = self.machine.dfg.inst_results(machine_inst).to_vec();
         self.map_inst_results(source_inst, machine_inst, &results);
         Ok(())
@@ -953,6 +964,7 @@ impl FuncLowerCtx<'_> {
         let block = self.current_block.expect("insert needs current block");
         let mut cursor = InstInserter::at_location(CursorLocation::BlockBottom(block));
         let machine_inst = cursor.insert_inst_data_dyn(&mut self.machine, inst);
+        self.set_exact_lowering_provenance(source_inst, machine_inst);
         let results = cursor.make_results(&mut self.machine, machine_inst, &result_tys);
         cursor.attach_results(&mut self.machine, machine_inst, &results);
         self.map_inst_results(source_inst, machine_inst, &results);
@@ -965,12 +977,30 @@ impl FuncLowerCtx<'_> {
         inst: I,
     ) -> Result<(), String> {
         let block = self.current_block.expect("insert needs current block");
-        let machine_inst = self.append_inst_no_result_to(block, inst);
+        let machine_inst = self.append_inst_no_result_raw(block, inst);
+        self.set_exact_lowering_provenance(source_inst, machine_inst);
         self.map.insts[source_inst] = Some(machine_inst);
         Ok(())
     }
 
+    /// Glue path: machine instructions synthesized around the active source
+    /// instruction inherit its debug context.
     fn append_inst_with_results_to<I: Inst>(
+        &mut self,
+        block: BlockId,
+        inst: I,
+        tys: &[Type],
+    ) -> sonatina_ir::InstId {
+        let inst = self.append_inst_with_results_raw(block, inst, tys);
+        if let Some(source_inst) = self.active_source_inst {
+            self.copy_frontend_origin_to_machine(source_inst, inst);
+        }
+        inst
+    }
+
+    /// Exact path: the caller copies the debug bundle from its explicit
+    /// source instruction exactly once (via `set_exact_lowering_provenance`).
+    fn append_inst_with_results_raw<I: Inst>(
         &mut self,
         block: BlockId,
         inst: I,
@@ -988,8 +1018,38 @@ impl FuncLowerCtx<'_> {
         block: BlockId,
         inst: I,
     ) -> sonatina_ir::InstId {
+        let inst = self.append_inst_no_result_raw(block, inst);
+        if let Some(source_inst) = self.active_source_inst {
+            self.copy_frontend_origin_to_machine(source_inst, inst);
+        }
+        inst
+    }
+
+    fn append_inst_no_result_raw<I: Inst>(
+        &mut self,
+        block: BlockId,
+        inst: I,
+    ) -> sonatina_ir::InstId {
         let mut cursor = InstInserter::at_location(CursorLocation::BlockBottom(block));
         cursor.insert_inst_data(&mut self.machine, inst)
+    }
+
+    fn copy_frontend_origin_to_machine(
+        &mut self,
+        source_inst: sonatina_ir::InstId,
+        machine_inst: sonatina_ir::InstId,
+    ) {
+        self.machine
+            .import_inst_frontend_origin_from(self.source, source_inst, machine_inst);
+    }
+
+    fn set_exact_lowering_provenance(
+        &mut self,
+        source_inst: sonatina_ir::InstId,
+        machine_inst: sonatina_ir::InstId,
+    ) {
+        self.machine
+            .import_inst_attribution_from(self.source, source_inst, machine_inst);
     }
 
     fn map_inst_results(

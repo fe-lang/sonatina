@@ -180,6 +180,9 @@ pub(super) fn try_inline_callsite_full(
 
             let (new_inst, new_results) =
                 editor.append_inst_with_results(new_block, cloned, result_tys.as_slice());
+            editor
+                .func_mut()
+                .import_inst_attribution_from(callee, old_inst, new_inst);
             inserted_insts += 1;
 
             assert_eq!(
@@ -217,7 +220,10 @@ pub(super) fn try_inline_callsite_full(
                 .unwrap_or_default();
 
             let jump = editor.func_mut().dfg.make_jump(cont_block);
-            editor.append_inst_with_result(new_block, Box::new(jump), None);
+            let (new_jump, _) = editor.append_inst_with_result(new_block, Box::new(jump), None);
+            editor
+                .func_mut()
+                .import_inst_attribution_from(callee, term_id, new_jump);
             inserted_insts += 1;
 
             returns.push(ReturnSite {
@@ -233,7 +239,10 @@ pub(super) fn try_inline_callsite_full(
                     .rewrite_inst_operands(term.as_mut(), false)
                     .expect("validated callee should be rewriteable");
             }
-            editor.append_inst_with_result(new_block, term, None);
+            let (new_term, _) = editor.append_inst_with_result(new_block, term, None);
+            editor
+                .func_mut()
+                .import_inst_attribution_from(callee, term_id, new_term);
             inserted_insts += 1;
         }
     }
@@ -297,6 +306,10 @@ pub(super) fn try_inline_callsite_full(
 
                     let phi = func.dfg.make_phi(args);
                     let phi_inst = func.dfg.make_inst(phi);
+                    // The return-merge phi carries the call's result; it
+                    // inherits the call instruction's attribution like every
+                    // other transplanted instruction.
+                    func.propagate_inst_attribution(phi_inst, call_inst);
                     func.layout.prepend_inst(phi_inst, cont_block);
 
                     let phi_value = func.dfg.make_value(Value::Inst {

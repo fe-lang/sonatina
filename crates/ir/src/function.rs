@@ -1,15 +1,24 @@
-use std::io;
+use std::{io, sync::Arc};
+
+use cranelift_entity::SecondaryMap;
 
 use smallvec::SmallVec;
 
 use super::{BlockId, DataFlowGraph, InstId, Layout, Type, ValueId};
 use crate::{InstSetBase, Linkage, ir_writer::IrWrite, module::ModuleCtx};
 
+#[derive(Clone, Debug, Default)]
+pub struct InstAttribution {
+    frontend_origin: Option<Arc<str>>,
+    provenance: Option<Arc<str>>,
+}
+
 #[derive(Clone)]
 pub struct Function {
     pub arg_values: smallvec::SmallVec<[ValueId; 8]>,
     pub dfg: DataFlowGraph,
     pub layout: Layout,
+    inst_attribution: SecondaryMap<InstId, InstAttribution>,
 }
 
 impl Function {
@@ -29,11 +38,69 @@ impl Function {
             arg_values,
             dfg,
             layout: Layout::default(),
+            inst_attribution: SecondaryMap::new(),
         }
     }
 
     pub fn ctx(&self) -> &ModuleCtx {
         &self.dfg.ctx
+    }
+
+    pub fn set_inst_frontend_origin(&mut self, inst: InstId, origin: Arc<str>) {
+        self.inst_attribution[inst].frontend_origin = Some(origin);
+    }
+
+    pub fn inst_frontend_origin(&self, inst: InstId) -> Option<&str> {
+        self.inst_attribution
+            .get(inst)
+            .and_then(|attribution| attribution.frontend_origin.as_deref())
+    }
+
+    pub fn set_inst_provenance(&mut self, inst: InstId, provenance: String) {
+        self.inst_attribution[inst].provenance = Some(Arc::from(provenance));
+    }
+
+    pub fn inst_provenance(&self, inst: InstId) -> Option<&str> {
+        self.inst_attribution
+            .get(inst)
+            .and_then(|attribution| attribution.provenance.as_deref())
+    }
+
+    fn clear_inst_attribution(&mut self, inst: InstId) {
+        self.inst_attribution[inst] = InstAttribution::default();
+    }
+
+    pub fn inst_attribution(&self, inst: InstId) -> InstAttribution {
+        self.inst_attribution.get(inst).cloned().unwrap_or_default()
+    }
+
+    pub fn apply_inst_attribution(&mut self, inst: InstId, attribution: &InstAttribution) {
+        self.inst_attribution[inst] = attribution.clone();
+    }
+
+    pub fn propagate_inst_attribution(&mut self, new_inst: InstId, source_inst: InstId) {
+        let attribution = self.inst_attribution(source_inst);
+        self.apply_inst_attribution(new_inst, &attribution);
+    }
+
+    pub fn import_inst_attribution_from(&mut self, source: &Function, from: InstId, to: InstId) {
+        let attribution = source.inst_attribution(from);
+        self.apply_inst_attribution(to, &attribution);
+    }
+
+    pub fn import_inst_frontend_origin_from(
+        &mut self,
+        source: &Function,
+        from: InstId,
+        to: InstId,
+    ) {
+        if let Some(origin) = source
+            .inst_attribution
+            .get(from)
+            .and_then(|attribution| attribution.frontend_origin.clone())
+        {
+            self.inst_attribution[to].frontend_origin = Some(origin);
+        }
     }
 
     pub fn inst_set(&self) -> &'static dyn InstSetBase {
@@ -51,6 +118,7 @@ impl Function {
         if inst_results_have_stale_users(self, &[inst]) {
             self.rebuild_users();
         }
+        self.clear_inst_attribution(inst);
         self.dfg.delete_inst(inst);
     }
 
@@ -72,6 +140,7 @@ impl Function {
         }
 
         for &inst in insts {
+            self.clear_inst_attribution(inst);
             self.dfg.delete_inst(inst);
         }
     }
@@ -122,6 +191,8 @@ fn inst_results_have_stale_users(func: &Function, insts: &[InstId]) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use crate::{
         Immediate, Linkage, Signature, Type, builder::test_util::test_module_builder,
         func_cursor::InstInserter, inst::arith::Add,
@@ -229,6 +300,52 @@ mod tests {
 
         assert!(!builder.func.dfg.has_inst(producer_inst));
         assert!(!builder.func.dfg.has_inst(consumer_inst));
+    }
+
+    #[test]
+    fn attribution_is_shared_and_cleared_with_the_instruction() {
+        let mb = test_module_builder();
+        let sig = Signature::new_unit("test_func", Linkage::Public, &[]);
+        let func_ref = mb.declare_function(sig).unwrap();
+
+        let mut builder = mb.func_builder::<InstInserter>(func_ref);
+        let entry = builder.append_block();
+        builder.switch_to_block(entry);
+
+        let lhs = builder.make_imm_value(Immediate::I32(1));
+        let rhs = builder.make_imm_value(Immediate::I32(2));
+        let has_add = builder.inst_set().has_add().unwrap();
+        let first = builder.insert_inst(Add::new(has_add, lhs, rhs), Type::I32);
+        let first_inst = builder.func.dfg.value_inst(first).unwrap();
+        let second = builder.insert_inst(Add::new(has_add, first, lhs), Type::I32);
+        let second_inst = builder.func.dfg.value_inst(second).unwrap();
+
+        let origin: Arc<str> = Arc::from("fake-dsl://module::expr@7");
+        builder
+            .func
+            .set_inst_frontend_origin(first_inst, Arc::clone(&origin));
+        builder
+            .func
+            .propagate_inst_attribution(second_inst, first_inst);
+
+        assert_eq!(
+            builder.func.inst_frontend_origin(second_inst),
+            Some("fake-dsl://module::expr@7")
+        );
+        assert!(Arc::ptr_eq(
+            builder.func.inst_attribution[first_inst]
+                .frontend_origin
+                .as_ref()
+                .unwrap(),
+            builder.func.inst_attribution[second_inst]
+                .frontend_origin
+                .as_ref()
+                .unwrap()
+        ));
+
+        builder.func.layout.remove_inst(second_inst);
+        builder.func.erase_inst(second_inst);
+        assert_eq!(builder.func.inst_frontend_origin(second_inst), None);
     }
 }
 
