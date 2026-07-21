@@ -648,7 +648,7 @@ fn insert_result_inst(
     ty: Type,
 ) -> ValueId {
     let mut cursor = InstInserter::at_location(inst_insert_loc(function, before));
-    let inst = cursor.insert_inst_data_dyn(function, data);
+    let inst = cursor.insert_inst_data_dyn_from(function, before, data);
     let value = cursor.make_result(function, inst, ty);
     cursor.attach_result(function, inst, value);
     value
@@ -660,7 +660,7 @@ fn insert_no_result_inst(
     data: Box<dyn sonatina_ir::Inst>,
 ) {
     let mut cursor = InstInserter::at_location(inst_insert_loc(function, before));
-    let _ = cursor.insert_inst_data_dyn(function, data);
+    let _ = cursor.insert_inst_data_dyn_from(function, before, data);
 }
 
 fn inst_insert_loc(function: &Function, inst: sonatina_ir::InstId) -> CursorLocation {

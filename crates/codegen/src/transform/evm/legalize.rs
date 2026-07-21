@@ -569,6 +569,7 @@ impl<'a> FunctionLegalizer<'a> {
         widths: &[Option<ScalarWidth>],
     ) -> SmallVec<[ValueId; 2]> {
         let inst = self.func.dfg.make_inst(data);
+        self.func.propagate_inst_attribution(inst, before);
         self.func.layout.insert_inst_before(inst, before);
         let mut results = SmallVec::new();
         for (idx, &ty) in result_tys.iter().enumerate() {

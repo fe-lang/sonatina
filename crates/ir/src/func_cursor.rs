@@ -49,9 +49,36 @@ pub trait FuncCursor {
         self.insert_inst_data_dyn(func, Box::new(data))
     }
 
+    /// Insert an instruction derived from `source` and copy its attribution.
+    ///
+    /// Lowering and legalization passes should use this instead of a bare
+    /// insertion when the new instruction is part of the semantic replacement
+    /// for an existing instruction.
+    fn insert_inst_data_from<I: Inst>(
+        &mut self,
+        func: &mut Function,
+        source: InstId,
+        data: I,
+    ) -> InstId {
+        self.insert_inst_data_dyn_from(func, source, Box::new(data))
+    }
+
     fn insert_inst_data_dyn(&mut self, func: &mut Function, data: Box<dyn Inst>) -> InstId {
         let inst = func.dfg.make_inst_dyn(data);
         self.insert_inst(func, inst);
+        inst
+    }
+
+    /// Dynamic counterpart of [`FuncCursor::insert_inst_data_from`].
+    fn insert_inst_data_dyn_from(
+        &mut self,
+        func: &mut Function,
+        source: InstId,
+        data: Box<dyn Inst>,
+    ) -> InstId {
+        let attribution = func.inst_attribution(source);
+        let inst = self.insert_inst_data_dyn(func, data);
+        func.apply_inst_attribution(inst, &attribution);
         inst
     }
 

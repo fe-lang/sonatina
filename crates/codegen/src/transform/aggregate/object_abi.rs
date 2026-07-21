@@ -652,8 +652,9 @@ impl ObjectReturnOutParam {
             (function.arg_values[0], original_loc)
         } else {
             let mut cursor = InstInserter::at_location(original_loc);
-            let out_alloc = cursor.insert_inst_data(
+            let out_alloc = cursor.insert_inst_data_from(
                 function,
+                inst,
                 data::ObjAlloc::new_unchecked(function.inst_set(), callee_plan.out_elem_ty),
             );
             let out_arg = cursor.make_result(function, out_alloc, callee_plan.out_ty);
@@ -665,8 +666,9 @@ impl ObjectReturnOutParam {
         let new_args = std::iter::once(out_arg)
             .chain(call.args().iter().copied())
             .collect();
-        let new_call = cursor.insert_inst_data(
+        let new_call = cursor.insert_inst_data_from(
             function,
+            inst,
             control_flow::Call::new(
                 function
                     .inst_set()

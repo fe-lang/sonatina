@@ -415,9 +415,26 @@ fn compile_section(
             section = %section_name.0
         )
         .entered();
-        link_section(backend, &prepared, &data, &embeds, section_name, opts).map_err(
-            |e| match e {
-                LinkSectionError::Backend { func, error } => {
+        link_section(
+            backend,
+            &prepared,
+            object_name,
+            &data,
+            &embeds,
+            section_name,
+            opts,
+        )
+        .map_err(|e| match e {
+            LinkSectionError::Backend { func, error } => {
+                vec![ObjectCompileError::BackendError {
+                    object: object_name.clone(),
+                    section: section_name.clone(),
+                    func,
+                    message: error,
+                }]
+            }
+            LinkSectionError::BackendFixup { owner, error } => match owner {
+                CodeUnitOwner::Function(func) => {
                     vec![ObjectCompileError::BackendError {
                         object: object_name.clone(),
                         section: section_name.clone(),
@@ -425,28 +442,18 @@ fn compile_section(
                         message: error,
                     }]
                 }
-                LinkSectionError::BackendFixup { owner, error } => match owner {
-                    CodeUnitOwner::Function(func) => {
-                        vec![ObjectCompileError::BackendError {
-                            object: object_name.clone(),
-                            section: section_name.clone(),
-                            func,
-                            message: error,
-                        }]
-                    }
-                    CodeUnitOwner::SectionUnit(_) => vec![ObjectCompileError::LinkError {
-                        object: object_name.clone(),
-                        section: section_name.clone(),
-                        message: format!("{owner}: {error}"),
-                    }],
-                },
-                LinkSectionError::Link(message) => vec![ObjectCompileError::LinkError {
+                CodeUnitOwner::SectionUnit(_) => vec![ObjectCompileError::LinkError {
                     object: object_name.clone(),
                     section: section_name.clone(),
-                    message,
+                    message: format!("{owner}: {error}"),
                 }],
             },
-        )?
+            LinkSectionError::Link(message) => vec![ObjectCompileError::LinkError {
+                object: object_name.clone(),
+                section: section_name.clone(),
+                message,
+            }],
+        })?
     };
 
     cache.insert(section_id, artifact);
@@ -501,7 +508,8 @@ mod tests {
     use crate::{
         isa::evm::{EvmBackend, PushWidthPolicy},
         object::{
-            CompileOptions, FrontendProvenanceMap, OBSERVABILITY_SCHEMA_VERSION, artifact::SymbolId,
+            CompileOptions, OBSERVABILITY_SCHEMA_VERSION, PcAttribution, PostOptProvenanceMap,
+            artifact::SymbolId,
         },
     };
     use sonatina_ir::{
@@ -881,16 +889,114 @@ object @Contract {
             .sections
             .values()
             .flat_map(|section| section.pc_map.iter())
-            .find_map(|entry| entry.ir_inst.map(|ir_inst| (entry.func, ir_inst)))
+            .find_map(|entry| Some((entry.unit.function()?, entry.attribution.ir_inst()?)))
             .expect("expected ir-backed pc-map entry");
-        let mut map = FrontendProvenanceMap::default();
-        map.insert(target, "mir_stmt:1".to_string());
-        enriched.apply_frontend_provenance(&map);
+        let target_bytes: u32 = enriched
+            .sections
+            .values()
+            .flat_map(|section| section.pc_map.iter())
+            .filter(|entry| {
+                entry.unit.function() == Some(target.0)
+                    && entry.attribution.ir_inst() == Some(target.1)
+            })
+            .map(|entry| entry.pc_end - entry.pc_start)
+            .sum();
+        assert!(target_bytes > 0);
+        let mapped_before = enriched.total_mapped_code_bytes;
+        let unmapped_before = enriched.total_unmapped_code_bytes;
+        let missing_before: u32 = enriched
+            .sections
+            .values()
+            .map(|section| section.unmapped_reason_coverage.missing_provenance)
+            .sum();
+        let mut map = PostOptProvenanceMap::default();
+        map.insert(target, "post-opt:mir_stmt:1".to_string());
+        enriched.apply_post_opt_provenance(&map);
+        assert_eq!(
+            enriched.total_mapped_code_bytes,
+            mapped_before + target_bytes
+        );
+        assert_eq!(
+            enriched.total_unmapped_code_bytes + target_bytes,
+            unmapped_before
+        );
+        let missing_after: u32 = enriched
+            .sections
+            .values()
+            .map(|section| section.unmapped_reason_coverage.missing_provenance)
+            .sum();
+        assert_eq!(missing_after + target_bytes, missing_before);
+        assert!(enriched.sections.values().all(|section| {
+            section.mapped_code_bytes + section.unmapped_code_bytes == section.code_bytes
+                && section.unmapped_reason_coverage.total_bytes() == section.unmapped_code_bytes
+        }));
         assert!(
             enriched
                 .to_json()
-                .contains("\"frontend_provenance\":\"mir_stmt:1\"")
+                .contains("\"post_opt_provenance\":\"post-opt:mir_stmt:1\"")
         );
+    }
+
+    #[test]
+    fn mandatory_evm_preparation_preserves_stamped_provenance() {
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+global private const [i256; 2] $values = [11, 22];
+
+func public %runtime(v0.i256) -> i256 {
+    block0:
+        v1.constref<[i256; 2]> = const.ref $values;
+        v2.constref<i256> = const.index v1 v0;
+        v3.i256 = const.load v2;
+        return v3;
+}
+
+object @Contract {
+  section runtime {
+    entry %runtime;
+  }
+}
+"#,
+        )
+        .unwrap();
+        let func = parsed.module.funcs()[0];
+        parsed.module.func_store.modify(func, |function| {
+            let const_load = function
+                .layout
+                .iter_block()
+                .flat_map(|block| function.layout.iter_inst(block))
+                .find(|&inst| function.dfg.inst(inst).as_text() == "const.load")
+                .expect("fixture should contain const.load");
+            function.set_inst_provenance(const_load, "post-opt:const-load".to_string());
+        });
+
+        let artifact = compile_object(
+            &parsed.module,
+            &test_backend(),
+            "Contract",
+            &compile_opts(
+                PushWidthPolicy::Push4,
+                false,
+                true,
+                VerifierConfig::for_level(VerificationLevel::Standard),
+            ),
+        )
+        .unwrap();
+        let runtime = section(&artifact, "runtime");
+        let observability = runtime
+            .observability
+            .as_ref()
+            .expect("runtime observability");
+
+        assert!(observability.pc_map.iter().any(|entry| {
+            matches!(
+                &entry.attribution,
+                PcAttribution::Mapped { post_opt_provenance, .. }
+                    if post_opt_provenance == "post-opt:const-load"
+            )
+        }));
     }
 
     #[test]

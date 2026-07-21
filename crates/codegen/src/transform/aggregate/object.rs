@@ -473,6 +473,7 @@ fn zext_before(func: &mut Function, before: InstId, value: ValueId, ty: Type) ->
     let inst = func
         .dfg
         .make_inst(cast::Zext::new_unchecked(func.inst_set(), value, ty));
+    func.propagate_inst_attribution(inst, before);
     func.layout.insert_inst_before(inst, before);
     let result = func.dfg.make_value(Value::Inst {
         inst,
