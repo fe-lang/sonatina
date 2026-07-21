@@ -6,7 +6,7 @@
 //! [`EvmCompile::optimize`], then produce object artifacts via
 //! [`EvmCompile::compile`].
 
-use sonatina_ir::{Module, isa::evm::Evm};
+use sonatina_ir::{InstId, Module, isa::evm::Evm, module::FuncRef};
 use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
 
 use crate::{
@@ -65,6 +65,34 @@ impl EvmCompile {
             self.optimized = true;
         }
         &self.module
+    }
+
+    /// Stamp codegen-owned provenance after optimization without exposing
+    /// unrestricted structural mutation of the optimized module.
+    pub fn stamp_post_opt_provenance(
+        &mut self,
+        func: FuncRef,
+        inst: InstId,
+        provenance: impl Into<String>,
+    ) -> Result<(), String> {
+        self.optimize();
+        if !self.module.funcs().contains(&func) {
+            return Err(format!("cannot stamp undefined function {func:?}"));
+        }
+        let valid = self
+            .module
+            .func_store
+            .view(func, |function| function.dfg.has_inst(inst));
+        if !valid {
+            return Err(format!(
+                "cannot stamp missing inst{} in function {func:?}",
+                inst.0
+            ));
+        }
+        self.module.func_store.modify(func, |function| {
+            function.set_inst_provenance(inst, provenance.into());
+        });
+        Ok(())
     }
 
     /// Optimize (if not already) and compile every object in the module.
@@ -134,7 +162,7 @@ fn evm_osaka_triple() -> TargetTriple {
 
 #[cfg(test)]
 mod tests {
-    use sonatina_ir::{Module, isa::evm::Evm};
+    use sonatina_ir::{InstId, Module, isa::evm::Evm, module::FuncRef};
     use sonatina_triple::{EvmVersion, OperatingSystem, TargetTriple};
 
     use super::{EvmCompile, ObjectCompileError, evm_osaka_triple};
@@ -159,5 +187,16 @@ mod tests {
             target.operating_system,
             OperatingSystem::Evm(EvmVersion::London)
         );
+    }
+
+    #[test]
+    fn post_opt_provenance_stamping_is_metadata_only() {
+        let mut compile = EvmCompile::new(module_for_evm(EvmVersion::Osaka));
+        let error = compile
+            .stamp_post_opt_provenance(FuncRef::from_u32(0), InstId(0), "post-opt:test")
+            .expect_err("undefined functions must be rejected");
+
+        assert!(error.contains("undefined function"));
+        assert_eq!(compile.optimize().ctx.triple, evm_osaka_triple());
     }
 }
