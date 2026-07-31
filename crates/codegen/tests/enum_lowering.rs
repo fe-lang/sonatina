@@ -11,6 +11,7 @@ use sonatina_ir::{
     I256, Immediate, Linkage, Module, Signature, Type,
     builder::{ModuleBuilder, ObjectBuilder},
     func_cursor::InstInserter,
+    global_variable::{GlobalVariableData, GvInitializer},
     inst::{
         control_flow::BrTable,
         data::{EnumAssertVariantRef, EnumGetTag, EnumProj, EnumSetTag, ObjAlloc, ObjLoad},
@@ -50,6 +51,104 @@ fn test_enum_lowering(fixture: Fixture<&str>) {
 
     let mut writer = ModuleWriter::with_debug_provider(&parsed.module, &parsed.debug);
     snap_test!(writer.dump_string(), fixture.path());
+}
+
+#[test]
+fn enum_tag_global_initializers_follow_lowered_types() {
+    let triple = TargetTriple::new(
+        Architecture::Evm,
+        Vendor::Ethereum,
+        OperatingSystem::Evm(EvmVersion::Osaka),
+    );
+    let isa = Evm::new(triple);
+    let builder = ModuleBuilder::new(ModuleCtx::new(&isa));
+    let enum_ty = builder.declare_enum_type(
+        "Flag",
+        &[
+            VariantData {
+                name: "Off".to_string(),
+                explicit_discriminant: Some(0),
+                fields: vec![],
+            },
+            VariantData {
+                name: "On".to_string(),
+                explicit_discriminant: Some(1),
+                fields: vec![],
+            },
+        ],
+        EnumReprHint::Default,
+    );
+    let Type::Compound(enum_ty) = enum_ty else {
+        unreachable!();
+    };
+    let tags_ty = builder.declare_array_type(Type::EnumTag(enum_ty), 2);
+    let wrapper_ty = builder.declare_struct_type("Flags", &[tags_ty, Type::I64], false);
+    let initializer = GvInitializer::make_struct(vec![
+        GvInitializer::make_array(vec![
+            GvInitializer::Immediate(Immediate::EnumTag {
+                enum_ty,
+                value: I256::zero(),
+            }),
+            GvInitializer::Immediate(Immediate::EnumTag {
+                enum_ty,
+                value: I256::from(1),
+            }),
+        ]),
+        GvInitializer::make_imm(7i64),
+    ]);
+    let global = builder.declare_gv(GlobalVariableData::constant(
+        "flags".to_string(),
+        wrapper_ty,
+        Linkage::Private,
+        initializer,
+    ));
+    let module = builder.build();
+
+    let before = verify_module(
+        &module,
+        &VerifierConfig::for_level(VerificationLevel::Standard),
+    );
+    assert!(
+        !before.has_errors(),
+        "global should initially verify:\n{before}"
+    );
+
+    assert!(EnumLowerToProduct.run(&module));
+
+    let after = verify_module(
+        &module,
+        &VerifierConfig::for_level(VerificationLevel::Standard),
+    );
+    assert!(
+        !after.has_errors(),
+        "lowered global should still verify:\n{after}"
+    );
+    module.ctx.with_gv_store(|store| {
+        let data = store.gv_data(global);
+        let Some(CompoundType::Struct(wrapper)) = data.ty.resolve_compound(&module.ctx) else {
+            panic!("wrapper should remain a struct")
+        };
+        let Some(CompoundType::Array { elem, len: 2 }) =
+            wrapper.fields[0].resolve_compound(&module.ctx)
+        else {
+            panic!("tag array should remain an array")
+        };
+        assert_eq!(elem, Type::I1);
+
+        let Some(GvInitializer::Struct(fields)) = &data.initializer else {
+            panic!("wrapper initializer should remain a struct")
+        };
+        let GvInitializer::Array(tags) = &fields[0] else {
+            panic!("tag initializer should remain an array")
+        };
+        assert_eq!(
+            tags,
+            &vec![
+                GvInitializer::Immediate(Immediate::I1(false)),
+                GvInitializer::Immediate(Immediate::I1(true))
+            ]
+        );
+    });
 }
 
 #[test]

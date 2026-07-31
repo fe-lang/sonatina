@@ -3,6 +3,7 @@ use smallvec::smallvec;
 use sonatina_ir::{
     Function, I256, Immediate, Module, Type, Value, ValueId,
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
+    global_variable::GvInitializer,
     inst::{cmp, data, downcast},
     module::ModuleCtx,
     types::{CompoundType, CompoundTypeRef, EnumData, EnumVariantRef},
@@ -261,20 +262,74 @@ fn rewrite_global_types(module: &Module, lowerer: &mut EnumTypeLowerer) -> bool 
         .with_gv_store(|store| store.all_gv_refs().collect());
     let mut changed = false;
 
-    module.ctx.with_gv_store_mut(|store| {
-        for gv in globals {
-            let Some(gv_data) = store.get(gv).cloned() else {
-                continue;
-            };
-            let new_ty = lowerer.rewrite_type(&module.ctx, gv_data.ty);
-            if new_ty != gv_data.ty {
+    for gv in globals {
+        let Some(gv_data) = module.ctx.with_gv_store(|store| store.get(gv).cloned()) else {
+            continue;
+        };
+        let (new_ty, new_initializer) = if let Some(initializer) = gv_data.initializer.clone() {
+            let (new_ty, initializer) =
+                rewrite_global_initializer(&module.ctx, lowerer, gv_data.ty, initializer);
+            (new_ty, Some(initializer))
+        } else {
+            (lowerer.rewrite_type(&module.ctx, gv_data.ty), None)
+        };
+
+        if new_ty != gv_data.ty || new_initializer != gv_data.initializer {
+            module.ctx.with_gv_store_mut(|store| {
                 store.update_ty(gv, new_ty);
-                changed = true;
-            }
+                store.update_initializer(gv, new_initializer);
+            });
+            changed = true;
         }
-    });
+    }
 
     changed
+}
+
+fn rewrite_global_initializer(
+    ctx: &ModuleCtx,
+    lowerer: &mut EnumTypeLowerer,
+    ty: Type,
+    initializer: GvInitializer,
+) -> (Type, GvInitializer) {
+    let compound = ty.resolve_compound(ctx);
+    let new_ty = lowerer.rewrite_type(ctx, ty);
+    let initializer = match (ty, compound, initializer) {
+        (
+            Type::EnumTag(expected_enum),
+            _,
+            GvInitializer::Immediate(Immediate::EnumTag { enum_ty, value }),
+        ) if enum_ty == expected_enum => {
+            GvInitializer::Immediate(Immediate::from_i256(value, new_ty))
+        }
+        (
+            Type::Compound(_),
+            Some(CompoundType::Array { elem, .. }),
+            GvInitializer::Array(items),
+        ) => GvInitializer::Array(
+            items
+                .into_iter()
+                .map(|item| rewrite_global_initializer(ctx, lowerer, elem, item).1)
+                .collect(),
+        ),
+        (Type::Compound(_), Some(CompoundType::Struct(data)), GvInitializer::Struct(fields)) => {
+            GvInitializer::Struct(
+                fields
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, field)| {
+                        if let Some(field_ty) = data.fields.get(index) {
+                            rewrite_global_initializer(ctx, lowerer, *field_ty, field).1
+                        } else {
+                            field
+                        }
+                    })
+                    .collect(),
+            )
+        }
+        (_, _, initializer) => initializer,
+    };
+    (new_ty, initializer)
 }
 
 fn rewrite_function_enum_insts(function: &mut Function, lowerer: &mut EnumTypeLowerer) -> bool {
