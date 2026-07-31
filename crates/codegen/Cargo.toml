@@ -16,6 +16,12 @@ keywords = ["compiler", "evm", "wasm", "smart-contract"]
 
 [dependencies]
 cranelift-entity = "0.126"
+cranelift-codegen = { version = "0.134.3", default-features = false, features = ["std", "unwind", "host-arch"], optional = true }
+cranelift-frontend = { version = "0.134.3", optional = true }
+cranelift-module = { version = "0.134.3", optional = true }
+cranelift-native = { version = "0.134.3", optional = true }
+cranelift-object = { version = "0.134.3", optional = true }
+cranelift-jit = { version = "0.134.3", optional = true }
 smallvec = "1.15.1"
 rustc-hash = "2.0.0"
 sonatina-ir = { path = "../ir", version = "0.0.3-alpha" }
@@ -36,3 +42,22 @@ dir-test = "0.4"
 derive_more = { version = "1", default-features = false, features = ["full"] }
 revm = { version = "18.0.0", default-features = false, features = ["std"] }
 sonatina-parser = { path = "../parser", version = "0.0.3-alpha" }
+object = { version = "0.39.1", default-features = false, features = ["read", "std"] }
+
+[features]
+cranelift = [
+    "dep:cranelift-codegen",
+    "dep:cranelift-frontend",
+    "dep:cranelift-module",
+    "dep:cranelift-native",
+    "dep:cranelift-object",
+]
+cranelift-jit = ["cranelift", "dep:cranelift-jit"]
+
+[[test]]
+name = "cranelift_object"
+required-features = ["cranelift"]
+
+[[test]]
+name = "cranelift_jit"
+required-features = ["cranelift-jit"]

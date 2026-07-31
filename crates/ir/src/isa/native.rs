@@ -73,14 +73,18 @@ impl Isa for Native {
     }
 
     fn inst_set(&self) -> &'static Self::InstSet {
-        static IS: LazyLock<NativeInstSet> = LazyLock::new(NativeInstSet::new);
-        &IS
+        inst_set()
     }
 }
 
 struct NativeTypeLayout;
 
 const NATIVE_TYPE_LAYOUT: NativeTypeLayout = NativeTypeLayout;
+
+pub fn inst_set() -> &'static NativeInstSet {
+    static INST_SET: LazyLock<NativeInstSet> = LazyLock::new(NativeInstSet::new);
+    &INST_SET
+}
 
 impl TypeLayout for NativeTypeLayout {
     fn size_of(&self, ty: Type, ctx: &ModuleCtx) -> Result<usize, TypeLayoutError> {
@@ -97,6 +101,9 @@ impl TypeLayout for NativeTypeLayout {
                 match ctx.with_ty_store(|store| store.resolve_compound(compound).clone()) {
                     CompoundType::Array { elem, len } => self.size_of(elem, ctx)? * len,
                     CompoundType::Struct(data) => {
+                        if data.packed {
+                            return Err(TypeLayoutError::UnsupportedType(ty));
+                        }
                         let mut size = 0usize;
                         let mut struct_align = 1usize;
                         for field in data.fields {
@@ -122,12 +129,15 @@ impl TypeLayout for NativeTypeLayout {
             Type::I32 => 4,
             Type::I64 => 8,
             Type::I128 => 16,
-            Type::I256 => 32,
+            Type::I256 => 16,
             Type::EnumTag(_) => return Err(TypeLayoutError::UnrepresentableType(ty)),
             Type::Compound(compound) => {
                 match ctx.with_ty_store(|store| store.resolve_compound(compound).clone()) {
                     CompoundType::Array { elem, .. } => self.align_of(elem, ctx)?,
                     CompoundType::Struct(data) => {
+                        if data.packed {
+                            return Err(TypeLayoutError::UnsupportedType(ty));
+                        }
                         let mut align = 1usize;
                         for field in data.fields {
                             align = align.max(self.align_of(field, ctx)?);
@@ -175,10 +185,17 @@ mod tests {
         let structure = module
             .ctx
             .with_ty_store_mut(|store| store.make_struct("Aligned", &[Type::I8, Type::I64], false));
+        let packed = module
+            .ctx
+            .with_ty_store_mut(|store| store.make_struct("Packed", &[Type::I8, Type::I64], true));
 
         assert_eq!(module.ctx.size_of_unchecked(pointer), 8);
         assert_eq!(module.ctx.align_of_unchecked(pointer), 8);
+        assert_eq!(module.ctx.size_of_unchecked(Type::I256), 32);
+        assert_eq!(module.ctx.align_of_unchecked(Type::I256), 16);
         assert_eq!(module.ctx.size_of_unchecked(structure), 16);
         assert_eq!(module.ctx.align_of_unchecked(structure), 8);
+        assert!(module.ctx.size_of(packed).is_err());
+        assert!(module.ctx.align_of(packed).is_err());
     }
 }
