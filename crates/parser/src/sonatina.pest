@@ -17,7 +17,8 @@ ident_start_char = { ASCII_ALPHA | "_" }
 ident_body_char  = { ASCII_ALPHANUMERIC | "_" }
 
 target_specifier = _{ "target" ~ "=" ~ "\"" ~ target_triple ~ "\"" }
-target_triple    = @{ ASCII_ALPHA* ~ "-" ~ ASCII_ALPHA* ~ "-" ~ ASCII_ALPHA* }
+target_triple    = @{ triple_component ~ "-" ~ triple_component ~ "-" ~ triple_component }
+triple_component = _{ (ASCII_ALPHANUMERIC | "_")+ }
 
 declaration              = _{ function_declaration | struct_declaration | enum_declaration | gv_declaration }
 function_declaration     =  { "declare" ~ inline_hint? ~ linkage ~ function_identifier ~ function_param_type_list ~ function_ret_type? ~ ";" }
