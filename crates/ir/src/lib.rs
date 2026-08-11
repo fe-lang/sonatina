@@ -1,6 +1,8 @@
 pub mod bitset;
 pub mod builder;
 pub mod cfg;
+pub mod content_address;
+pub mod debug;
 pub mod dfg;
 pub mod effects;
 pub mod func_cursor;
@@ -16,6 +18,7 @@ pub mod linkage;
 pub mod module;
 pub mod module_linker;
 pub mod object;
+pub mod trace_view;
 pub mod types;
 pub mod value;
 pub mod visitor;
@@ -25,6 +28,14 @@ mod bigint;
 pub use bigint::{I256, U256};
 pub use builder::Variable;
 pub use cfg::ControlFlowGraph;
+pub use content_address::{
+    FunctionShapeHashes, ShapeDimension, ShapeHashPolicy, ShapeSccHash, hash_function_shape,
+};
+pub use debug::{
+    DebugConfidence, DebugInstBundle, DebugLoc, DebugLocId, DebugMetadata, DebugTag, DebugTagId,
+    DebugTagKind, DebugTagPayload, FrontendOriginId, FrontendOriginKind, FrontendOriginRecord,
+    SourceSpan,
+};
 pub use dfg::{Block, BlockId, DataFlowGraph};
 pub use effects::{
     AccessKind, AccessLoc, AddressSpaceDesc, AddressSpaceId, AddressSpaceInfo, AddressSpaceKind,
@@ -44,6 +55,7 @@ pub use module::{InlineHint, Module};
 pub use object::{
     Directive, Embed, EmbedSymbol, Object, ObjectName, Section, SectionName, SectionRef,
 };
+pub use trace_view::{CfgEdge, CfgEdgeKind, InstKindView, SonatinaTraceView};
 pub use types::Type;
 pub use value::{Immediate, Value, ValueId};
 

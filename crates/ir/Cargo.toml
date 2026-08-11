@@ -30,6 +30,7 @@ smol_str = "0.3.1"
 bitflags = "2.10.0"
 bit-set = "0.8.0"
 vec-collections = { version = "0.4.3", default-features = false }
+blake3 = "1.5"
 
 [dev-dependencies]
 sonatina-parser = { path = "../parser", version = "0.0.3-alpha" }
