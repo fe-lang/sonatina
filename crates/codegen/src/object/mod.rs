@@ -5,6 +5,9 @@ pub mod error;
 pub mod link;
 pub mod resolve;
 
+pub use crate::cache::{
+    CacheKey, CachedCompilation, CompilationCache, InMemoryCache, compute_cache_key,
+};
 use crate::isa::evm::PushWidthPolicy;
 pub use artifact::{
     FrontendProvenanceMap, OBSERVABILITY_SCHEMA_VERSION, ObjectArtifact, ObjectObservability,

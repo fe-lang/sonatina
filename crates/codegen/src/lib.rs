@@ -1,5 +1,6 @@
 pub mod analysis;
 mod bitset;
+pub mod cache;
 pub mod cfg_edit;
 pub mod cfg_scc;
 pub mod compile;
