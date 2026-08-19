@@ -194,7 +194,11 @@ fn unique_needle_pc(bytes: &[u8], needle: &[u8]) -> u32 {
         .filter(|(_, w)| *w == needle)
         .map(|(i, _)| i)
         .collect();
-    assert_eq!(hits.len(), 1, "marker byte pattern must be unique: {hits:?}");
+    assert_eq!(
+        hits.len(),
+        1,
+        "marker byte pattern must be unique: {hits:?}"
+    );
     hits[0] as u32
 }
 
@@ -291,7 +295,11 @@ fn compile_fully_stamped(
     // stamp encoding its own id.
     compile.stamp_all_post_opt_provenance(|func, inst| Some(stamp_string(func, inst)));
 
-    (compile.compile().expect("compile succeeds"), expected, stamped)
+    (
+        compile.compile().expect("compile succeeds"),
+        expected,
+        stamped,
+    )
 }
 
 /// Stamp every optimized inst and compile, no marker expectation (for fixtures
@@ -307,6 +315,14 @@ fn stamp_all_and_compile(source: &str, opt: OptLevel) -> Vec<ObjectArtifact> {
 
 // ---- the suite -----------------------------------------------------------
 
+/// Markers expected to lose their stamp at a given opt level, by mandatory-prep
+/// pass (R1#1). Empty at this commit: every marker maps at every level. When a
+/// prep change legitimately drops one, register it here with the cause, which
+/// keeps the loss a reviewed diff instead of sanctioned silence.
+fn expected_marker_losses(_opt: OptLevel) -> Vec<u32> {
+    Vec::new()
+}
+
 #[test]
 fn exact_mapping_is_content_correct_and_conserved_at_all_opt_levels() {
     for opt in [OptLevel::O0, OptLevel::O2, OptLevel::Os] {
@@ -318,6 +334,7 @@ fn exact_mapping_is_content_correct_and_conserved_at_all_opt_levels() {
         // outcome, with inter-entry and trailing gaps counted unmapped.
         assert_conserved(obs);
 
+        let mut lost_markers: Vec<u32> = Vec::new();
         for &marker in &MARKERS {
             let pc = unique_needle_pc(&runtime.bytes, &push3_needle(marker));
             let entry = entry_covering(obs, pc);
@@ -328,7 +345,8 @@ fn exact_mapping_is_content_correct_and_conserved_at_all_opt_levels() {
                 // marker. This is the assertion the three shipped id-pun rounds
                 // would fail, and that any reintroduced positional/id join fails.
                 PcAttribution::Mapped {
-                    post_opt_provenance, ..
+                    post_opt_provenance,
+                    ..
                 } => {
                     assert_eq!(
                         post_opt_provenance, &expected[&marker],
@@ -344,10 +362,24 @@ fn exact_mapping_is_content_correct_and_conserved_at_all_opt_levels() {
                         UnmappedReason::MissingProvenance,
                         "marker lost with an unexpected reason"
                     );
-                    eprintln!("KNOWN-LOSS opt={opt:?} marker={marker:#x}: prep dropped the stamp");
+                    lost_markers.push(marker);
                 }
             }
         }
+
+        // Completeness floor (HARD): the expected-loss register is empty, so at
+        // this commit every marker maps at every opt level. A marker landing in
+        // the KNOWN-LOSS arm above is a provenance-carry regression until it is
+        // registered in expected_marker_losses together with the mandatory-prep
+        // pass that legitimately causes it (R1#1). This turns the suite into the
+        // measured R1#1 sensor rather than a sanctioned silence.
+        assert_eq!(
+            lost_markers,
+            expected_marker_losses(opt),
+            "opt={opt:?}: markers lost their stamps; if a mandatory-prep change \
+             caused this legitimately, register the loss with a reason instead \
+             of weakening this assert"
+        );
 
         // Fixture validity (HARD): replay the exact join the removed
         // post-hoc-provenance code did. It keyed the optimized provenance map by
@@ -369,12 +401,12 @@ fn exact_mapping_is_content_correct_and_conserved_at_all_opt_levels() {
             let Some(m) = e.attribution.machine_inst() else {
                 continue;
             };
-            let pun_answer: Option<String> =
-                if stamped.contains(&(func.as_u32(), m.raw().as_u32())) {
-                    Some(stamp_string(func, OptInstId(m.raw())))
-                } else {
-                    None
-                };
+            let pun_answer: Option<String> = if stamped.contains(&(func.as_u32(), m.raw().as_u32()))
+            {
+                Some(stamp_string(func, OptInstId(m.raw())))
+            } else {
+                None
+            };
             let actual_answer: Option<String> =
                 e.attribution.post_opt_provenance().map(str::to_string);
             if pun_answer != actual_answer {
@@ -466,8 +498,7 @@ fn synthetic_units_are_unique_across_sections() {
     // The property: object+section fully disambiguates those colliding ids, so
     // every (section, raw-unit) pair maps to its own distinct identity and no
     // identity is shared across sections.
-    let distinct_section_unit_pairs: usize =
-        sections_by_raw_unit.values().map(|s| s.len()).sum();
+    let distinct_section_unit_pairs: usize = sections_by_raw_unit.values().map(|s| s.len()).sum();
     assert_eq!(
         identities.len(),
         distinct_section_unit_pairs,

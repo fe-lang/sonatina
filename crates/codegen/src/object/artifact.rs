@@ -58,7 +58,7 @@ pub struct SymbolDef {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum UnmappedReason {
     MissingProvenance,
-    NoIrInst,
+    NoMachineInst,
     LabelOrFixupOnly,
     Synthetic,
     Unknown,
@@ -68,7 +68,7 @@ impl UnmappedReason {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::MissingProvenance => "missing_provenance",
-            Self::NoIrInst => "no_ir_inst",
+            Self::NoMachineInst => "no_machine_inst",
             Self::LabelOrFixupOnly => "label_or_fixup_only",
             Self::Synthetic => "synthetic",
             Self::Unknown => "unknown",
@@ -79,7 +79,7 @@ impl UnmappedReason {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct UnmappedReasonCoverage {
     pub missing_provenance: u32,
-    pub no_ir_inst: u32,
+    pub no_machine_inst: u32,
     pub label_or_fixup_only: u32,
     pub synthetic: u32,
     pub unknown: u32,
@@ -91,8 +91,8 @@ impl UnmappedReasonCoverage {
             UnmappedReason::MissingProvenance => {
                 self.missing_provenance = self.missing_provenance.saturating_add(bytes);
             }
-            UnmappedReason::NoIrInst => {
-                self.no_ir_inst = self.no_ir_inst.saturating_add(bytes);
+            UnmappedReason::NoMachineInst => {
+                self.no_machine_inst = self.no_machine_inst.saturating_add(bytes);
             }
             UnmappedReason::LabelOrFixupOnly => {
                 self.label_or_fixup_only = self.label_or_fixup_only.saturating_add(bytes);
@@ -108,7 +108,7 @@ impl UnmappedReasonCoverage {
 
     pub fn total_bytes(self) -> u32 {
         self.missing_provenance
-            .saturating_add(self.no_ir_inst)
+            .saturating_add(self.no_machine_inst)
             .saturating_add(self.label_or_fixup_only)
             .saturating_add(self.synthetic)
             .saturating_add(self.unknown)
@@ -225,9 +225,9 @@ impl SectionObservability {
         .expect("in-memory write should not fail");
         writeln!(
             &mut out,
-            "unmapped missing_provenance={} no_ir_inst={} label_or_fixup_only={} synthetic={} unknown={}",
+            "unmapped missing_provenance={} no_machine_inst={} label_or_fixup_only={} synthetic={} unknown={}",
             self.unmapped_reason_coverage.missing_provenance,
-            self.unmapped_reason_coverage.no_ir_inst,
+            self.unmapped_reason_coverage.no_machine_inst,
             self.unmapped_reason_coverage.label_or_fixup_only,
             self.unmapped_reason_coverage.synthetic,
             self.unmapped_reason_coverage.unknown,
@@ -250,7 +250,7 @@ impl SectionObservability {
                 .unwrap_or("-".into());
             writeln!(
                 &mut out,
-                "pc [{}, {}) func={} block={} vcode={} ir={} reason={} post_opt={}",
+                "pc [{}, {}) func={} block={} vcode={} machine={} reason={} post_opt={}",
                 entry.pc_start,
                 entry.pc_end,
                 entry.func_name,
@@ -306,9 +306,9 @@ impl SectionObservability {
             .expect("in-memory write should not fail");
         write!(
             &mut out,
-            "\"missing_provenance\":{},\"no_ir_inst\":{},\"label_or_fixup_only\":{},\"synthetic\":{},\"unknown\":{}",
+            "\"missing_provenance\":{},\"no_machine_inst\":{},\"label_or_fixup_only\":{},\"synthetic\":{},\"unknown\":{}",
             self.unmapped_reason_coverage.missing_provenance,
-            self.unmapped_reason_coverage.no_ir_inst,
+            self.unmapped_reason_coverage.no_machine_inst,
             self.unmapped_reason_coverage.label_or_fixup_only,
             self.unmapped_reason_coverage.synthetic,
             self.unmapped_reason_coverage.unknown

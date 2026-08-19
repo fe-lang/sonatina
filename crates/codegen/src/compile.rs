@@ -27,7 +27,10 @@ pub enum OptLevel {
 
 /// An optimized-IR instruction id, the namespace a frontend stamps provenance
 /// against. Distinct from `MachineInstId` so a machine id cannot be handed to
-/// the stamping door by mistake. Use `.raw()` to cross to a bare `InstId`.
+/// the stamping door by mistake. Use `.raw()` to cross to a bare `InstId`. The
+/// inner field is pub on purpose: crossing namespaces requires writing the wrap
+/// explicitly, which is the reviewable act; the type does not try to prevent
+/// deliberate reconstruction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(transparent)]
 pub struct OptInstId(pub InstId);
@@ -80,8 +83,12 @@ impl EvmCompile {
         &self.module
     }
 
-    /// Stamp codegen-owned provenance after optimization without exposing
-    /// unrestricted structural mutation of the optimized module.
+    /// Stamp codegen-owned provenance after optimization. This is the sanctioned
+    /// door and the easy path, but it does not revoke the module's interior
+    /// mutability: `optimize()` still returns a `&Module` whose `pub func_store`
+    /// can be mutated, so the door disincentivizes reaching around the stamping
+    /// path, it does not close it. A read-only view return type is the real
+    /// close, deferred to the next API window.
     pub fn stamp_post_opt_provenance(
         &mut self,
         func: FuncRef,

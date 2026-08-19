@@ -782,7 +782,7 @@ fn classify_unmapped_reason<Op>(
     } else if is_block_head {
         UnmappedReason::Synthetic
     } else {
-        UnmappedReason::NoIrInst
+        UnmappedReason::NoMachineInst
     }
 }
 

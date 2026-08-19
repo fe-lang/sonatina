@@ -24,20 +24,20 @@ totals section_bytes=17 code=17 data=0 embed=0 mapped=0 unmapped=17
 section runtime schema=0.3.0
 bytes total=17 code=17 data=0 embed=0
 coverage mapped=0 unmapped=17
-unmapped missing_provenance=16 no_ir_inst=0 label_or_fixup_only=0 synthetic=1 unknown=0
-pc [0, 2) func=entry block=0 vcode=0 ir=0 reason=missing_provenance post_opt=-
-pc [2, 4) func=entry block=0 vcode=1 ir=0 reason=missing_provenance post_opt=-
-pc [4, 5) func=entry block=0 vcode=2 ir=0 reason=missing_provenance post_opt=-
-pc [5, 6) func=entry block=0 vcode=3 ir=0 reason=missing_provenance post_opt=-
-pc [6, 7) func=entry block=0 vcode=4 ir=1 reason=missing_provenance post_opt=-
-pc [7, 8) func=entry block=0 vcode=5 ir=1 reason=missing_provenance post_opt=-
-pc [8, 10) func=entry block=0 vcode=6 ir=2 reason=missing_provenance post_opt=-
-pc [10, 11) func=entry block=0 vcode=7 ir=2 reason=missing_provenance post_opt=-
-pc [11, 12) func=entry block=0 vcode=8 ir=2 reason=missing_provenance post_opt=-
-pc [12, 13) func=main block=0 vcode=3 ir=- reason=synthetic post_opt=-
-pc [13, 15) func=main block=0 vcode=0 ir=0 reason=missing_provenance post_opt=-
-pc [15, 16) func=main block=0 vcode=1 ir=0 reason=missing_provenance post_opt=-
-pc [16, 17) func=main block=0 vcode=2 ir=0 reason=missing_provenance post_opt=-
+unmapped missing_provenance=16 no_machine_inst=0 label_or_fixup_only=0 synthetic=1 unknown=0
+pc [0, 2) func=entry block=0 vcode=0 machine=0 reason=missing_provenance post_opt=-
+pc [2, 4) func=entry block=0 vcode=1 machine=0 reason=missing_provenance post_opt=-
+pc [4, 5) func=entry block=0 vcode=2 machine=0 reason=missing_provenance post_opt=-
+pc [5, 6) func=entry block=0 vcode=3 machine=0 reason=missing_provenance post_opt=-
+pc [6, 7) func=entry block=0 vcode=4 machine=1 reason=missing_provenance post_opt=-
+pc [7, 8) func=entry block=0 vcode=5 machine=1 reason=missing_provenance post_opt=-
+pc [8, 10) func=entry block=0 vcode=6 machine=2 reason=missing_provenance post_opt=-
+pc [10, 11) func=entry block=0 vcode=7 machine=2 reason=missing_provenance post_opt=-
+pc [11, 12) func=entry block=0 vcode=8 machine=2 reason=missing_provenance post_opt=-
+pc [12, 13) func=main block=0 vcode=3 machine=- reason=synthetic post_opt=-
+pc [13, 15) func=main block=0 vcode=0 machine=0 reason=missing_provenance post_opt=-
+pc [15, 16) func=main block=0 vcode=1 machine=0 reason=missing_provenance post_opt=-
+pc [16, 17) func=main block=0 vcode=2 machine=0 reason=missing_provenance post_opt=-
 
 evm:
   case ok: calldata_len=0 success reason=Return gas_used=21043 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=43
