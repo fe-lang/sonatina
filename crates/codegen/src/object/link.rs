@@ -577,30 +577,30 @@ fn build_section_observability<Op>(
                 ));
             }
 
-            let ir_inst = func_layout.vcode().inst_ir[insn].expand();
-            if let Some(ir_inst) = ir_inst {
+            let machine_inst_id = func_layout.vcode().inst_ir[insn].expand();
+            if let Some(machine_inst_id) = machine_inst_id {
                 let valid = module
                     .func_store
-                    .view(func, |function| function.dfg.has_inst(ir_inst));
+                    .view(func, |function| function.dfg.has_inst(machine_inst_id));
                 if !valid {
                     return Err(format!(
-                        "invalid ir reference for func {:?}: vcode {:?} -> ir {:?}",
-                        func, insn, ir_inst
+                        "invalid machine-IR reference for func {:?}: vcode {:?} -> machine {:?}",
+                        func, insn, machine_inst_id
                     ));
                 }
             }
-            let attribution = match ir_inst {
-                Some(ir_inst) => {
+            let attribution = match machine_inst_id {
+                Some(machine_inst_id) => {
                     let post_opt_provenance = module.func_store.view(func, |function| {
-                        function.inst_provenance(ir_inst).map(str::to_owned)
+                        function.inst_provenance(machine_inst_id).map(str::to_owned)
                     });
                     match post_opt_provenance {
                         Some(post_opt_provenance) => PcAttribution::Mapped {
-                            machine_inst: MachineInstId(ir_inst),
+                            machine_inst: MachineInstId(machine_inst_id),
                             post_opt_provenance,
                         },
                         None => PcAttribution::Unmapped {
-                            machine_inst: Some(MachineInstId(ir_inst)),
+                            machine_inst: Some(MachineInstId(machine_inst_id)),
                             reason: UnmappedReason::MissingProvenance,
                         },
                     }

@@ -119,7 +119,9 @@ impl UnmappedReasonCoverage {
 ///
 /// It is a distinct type from an optimized-IR id so the two namespaces cannot
 /// be looked up against each other by accident. Use `.raw()` at the point you
-/// deliberately cross back to a bare `InstId`.
+/// deliberately cross back to a bare `InstId`. The inner field is pub on
+/// purpose: crossing namespaces requires writing the wrap explicitly, which is
+/// the reviewable act.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(transparent)]
 pub struct MachineInstId(pub InstId);

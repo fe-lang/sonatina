@@ -88,7 +88,8 @@ impl EvmCompile {
     /// mutability: `optimize()` still returns a `&Module` whose `pub func_store`
     /// can be mutated, so the door disincentivizes reaching around the stamping
     /// path, it does not close it. A read-only view return type is the real
-    /// close, deferred to the next API window.
+    /// close, deferred to the next API window and tracked as the ModuleView
+    /// follow-up so it does not calcify into a permanent excuse.
     pub fn stamp_post_opt_provenance(
         &mut self,
         func: FuncRef,
@@ -210,7 +211,7 @@ mod tests {
     use sonatina_ir::{InstId, Module, isa::evm::Evm, module::FuncRef};
     use sonatina_triple::{EvmVersion, OperatingSystem, TargetTriple};
 
-    use super::{EvmCompile, ObjectCompileError, evm_osaka_triple};
+    use super::{EvmCompile, ObjectCompileError, OptInstId, evm_osaka_triple};
 
     fn module_for_evm(version: EvmVersion) -> Module {
         let triple = evm_osaka_triple();
@@ -238,11 +239,7 @@ mod tests {
     fn post_opt_provenance_stamping_is_metadata_only() {
         let mut compile = EvmCompile::new(module_for_evm(EvmVersion::Osaka));
         let error = compile
-            .stamp_post_opt_provenance(
-                FuncRef::from_u32(0),
-                super::OptInstId(InstId(0)),
-                "post-opt:test",
-            )
+            .stamp_post_opt_provenance(FuncRef::from_u32(0), OptInstId(InstId(0)), "post-opt:test")
             .expect_err("undefined functions must be rejected");
 
         assert!(error.contains("undefined function"));
