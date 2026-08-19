@@ -945,6 +945,76 @@ object @Contract {
     }
 
     #[test]
+    fn observability_json_uses_machine_inst_key() {
+        // Wire-shape guard: the attribution id serializes under "machine_inst",
+        // never the old "ir_inst" name, for both mapped and unmapped entries.
+        // This is the only test that fails if a writer silently renames the field.
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+global private const [i256; 2] $values = [11, 22];
+
+func public %runtime(v0.i256) -> i256 {
+    block0:
+        v1.constref<[i256; 2]> = const.ref $values;
+        v2.constref<i256> = const.index v1 v0;
+        v3.i256 = const.load v2;
+        return v3;
+}
+
+object @Contract {
+  section runtime {
+    entry %runtime;
+  }
+}
+"#,
+        )
+        .unwrap();
+        let func = parsed.module.funcs()[0];
+        parsed.module.func_store.modify(func, |function| {
+            let const_load = function
+                .layout
+                .iter_block()
+                .flat_map(|block| function.layout.iter_inst(block))
+                .find(|&inst| function.dfg.inst(inst).as_text() == "const.load")
+                .expect("fixture should contain const.load");
+            function.set_inst_provenance(const_load, "post-opt:const-load".to_string());
+        });
+
+        let artifact = compile_object(
+            &parsed.module,
+            &test_backend(),
+            "Contract",
+            &compile_opts(
+                PushWidthPolicy::Push4,
+                false,
+                true,
+                VerifierConfig::for_level(VerificationLevel::Standard),
+            ),
+        )
+        .unwrap();
+        let json = section(&artifact, "runtime")
+            .observability
+            .as_ref()
+            .expect("runtime observability")
+            .to_json();
+
+        assert!(
+            !json.contains("\"ir_inst\""),
+            "attribution must not serialize the renamed ir_inst key: {json}"
+        );
+        assert!(
+            json.contains("\"status\":\"mapped\",\"machine_inst\":"),
+            "mapped entry must serialize machine_inst: {json}"
+        );
+        assert!(
+            json.contains("\"status\":\"unmapped\",\"machine_inst\":"),
+            "unmapped entry must serialize machine_inst: {json}"
+        );
+    }
+
+    #[test]
     fn compile_object_omits_observability_when_disabled() {
         let artifact = compile_fixture(
             r#"

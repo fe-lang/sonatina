@@ -109,6 +109,30 @@ impl EvmCompile {
         Ok(())
     }
 
+    /// Stamp post-optimization provenance across every function in one pass.
+    ///
+    /// The closure returns `Some(provenance)` to stamp a live instruction or
+    /// `None` to leave it unstamped. Stamping many instructions this way runs
+    /// one function-list scan instead of the per-call rescan that
+    /// [`Self::stamp_post_opt_provenance`] pays.
+    pub fn stamp_all_post_opt_provenance(
+        &mut self,
+        mut f: impl FnMut(FuncRef, OptInstId) -> Option<String>,
+    ) {
+        self.optimize();
+        let funcs = self.module.funcs();
+        for func in funcs {
+            self.module.func_store.modify(func, |function| {
+                let insts: Vec<_> = function.dfg.inst_ids().collect();
+                for inst in insts {
+                    if let Some(provenance) = f(func, OptInstId(inst)) {
+                        function.set_inst_provenance(inst, provenance);
+                    }
+                }
+            });
+        }
+    }
+
     /// Optimize (if not already) and compile every object in the module.
     pub fn compile(mut self) -> Result<Vec<ObjectArtifact>, Vec<ObjectCompileError>> {
         self.optimize();
