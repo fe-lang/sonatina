@@ -20,8 +20,9 @@ use tracing::{debug_span, info_span, trace_span};
 use super::{
     CompileOptions,
     artifact::{
-        OBSERVABILITY_SCHEMA_VERSION, PcAttribution, PcMapEntry, PcMapUnit, SectionArtifact,
-        SectionObservability, SymbolDef, SymbolId, UnmappedReason, UnmappedReasonCoverage,
+        MachineInstId, OBSERVABILITY_SCHEMA_VERSION, PcAttribution, PcMapEntry, PcMapUnit,
+        SectionArtifact, SectionObservability, SymbolDef, SymbolId, UnmappedReason,
+        UnmappedReasonCoverage,
     },
 };
 
@@ -595,17 +596,17 @@ fn build_section_observability<Op>(
                     });
                     match post_opt_provenance {
                         Some(post_opt_provenance) => PcAttribution::Mapped {
-                            ir_inst,
+                            machine_inst: MachineInstId(ir_inst),
                             post_opt_provenance,
                         },
                         None => PcAttribution::Unmapped {
-                            ir_inst: Some(ir_inst),
+                            machine_inst: Some(MachineInstId(ir_inst)),
                             reason: UnmappedReason::MissingProvenance,
                         },
                     }
                 }
                 None => PcAttribution::Unmapped {
-                    ir_inst: None,
+                    machine_inst: None,
                     reason: classify_unmapped_reason(func_layout, insn, is_head),
                 },
             };
@@ -654,7 +655,7 @@ fn build_section_observability<Op>(
                 block,
                 vcode_inst: insn,
                 attribution: PcAttribution::Unmapped {
-                    ir_inst: None,
+                    machine_inst: None,
                     reason: UnmappedReason::Synthetic,
                 },
             });

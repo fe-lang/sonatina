@@ -3510,8 +3510,8 @@ object @Contract {
         .filter(|entry| {
             entry
                 .attribution
-                .ir_inst()
-                .is_some_and(|inst| exact_machine_insts.contains(&inst))
+                .machine_inst()
+                .is_some_and(|inst| exact_machine_insts.contains(&inst.raw()))
         })
         .collect();
     assert!(!exact_ranges.is_empty());
@@ -3529,8 +3529,8 @@ object @Contract {
         .filter(|entry| {
             entry
                 .attribution
-                .ir_inst()
-                .is_some_and(|inst| glue_machine_insts.contains(&inst))
+                .machine_inst()
+                .is_some_and(|inst| glue_machine_insts.contains(&inst.raw()))
         })
         .collect();
     assert!(!glue_ranges.is_empty());

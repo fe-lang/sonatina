@@ -115,6 +115,21 @@ impl UnmappedReasonCoverage {
     }
 }
 
+/// A machine-IR instruction id, recovered from the vcode `inst_ir` table.
+///
+/// It is a distinct type from an optimized-IR id so the two namespaces cannot
+/// be looked up against each other by accident. Use `.raw()` at the point you
+/// deliberately cross back to a bare `InstId`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(transparent)]
+pub struct MachineInstId(pub InstId);
+
+impl MachineInstId {
+    pub fn raw(self) -> InstId {
+        self.0
+    }
+}
+
 /// The trace attribution of an emitted PC range.
 ///
 /// A range is mapped only when its machine-IR instruction carries provenance
@@ -123,20 +138,20 @@ impl UnmappedReasonCoverage {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PcAttribution {
     Mapped {
-        ir_inst: InstId,
+        machine_inst: MachineInstId,
         post_opt_provenance: String,
     },
     Unmapped {
-        ir_inst: Option<InstId>,
+        machine_inst: Option<MachineInstId>,
         reason: UnmappedReason,
     },
 }
 
 impl PcAttribution {
-    pub fn ir_inst(&self) -> Option<InstId> {
+    pub fn machine_inst(&self) -> Option<MachineInstId> {
         match self {
-            Self::Mapped { ir_inst, .. } => Some(*ir_inst),
-            Self::Unmapped { ir_inst, .. } => *ir_inst,
+            Self::Mapped { machine_inst, .. } => Some(*machine_inst),
+            Self::Unmapped { machine_inst, .. } => *machine_inst,
         }
     }
 
@@ -230,8 +245,8 @@ impl SectionObservability {
             let post_opt = entry.attribution.post_opt_provenance().unwrap_or("-");
             let ir = entry
                 .attribution
-                .ir_inst()
-                .map(|ir| ir.0.to_string())
+                .machine_inst()
+                .map(|ir| ir.raw().0.to_string())
                 .unwrap_or("-".into());
             writeln!(
                 &mut out,
@@ -346,22 +361,22 @@ impl SectionObservability {
 
             match &entry.attribution {
                 PcAttribution::Mapped {
-                    ir_inst,
+                    machine_inst,
                     post_opt_provenance,
                 } => write!(
                     &mut out,
-                    ",\"attribution\":{{\"status\":\"mapped\",\"ir_inst\":{},\"post_opt_provenance\":\"{}\"}}",
-                    ir_inst.0,
+                    ",\"attribution\":{{\"status\":\"mapped\",\"machine_inst\":{},\"post_opt_provenance\":\"{}\"}}",
+                    machine_inst.raw().0,
                     json_escape(post_opt_provenance)
                 ),
-                PcAttribution::Unmapped { ir_inst, reason } => {
+                PcAttribution::Unmapped { machine_inst, reason } => {
                     write!(
                         &mut out,
-                        ",\"attribution\":{{\"status\":\"unmapped\",\"ir_inst\":"
+                        ",\"attribution\":{{\"status\":\"unmapped\",\"machine_inst\":"
                     )
                     .expect("in-memory write should not fail");
-                    if let Some(ir_inst) = ir_inst {
-                        write!(&mut out, "{}", ir_inst.0)
+                    if let Some(machine_inst) = machine_inst {
+                        write!(&mut out, "{}", machine_inst.raw().0)
                             .expect("in-memory write should not fail");
                     } else {
                         write!(&mut out, "null").expect("in-memory write should not fail");

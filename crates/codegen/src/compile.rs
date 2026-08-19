@@ -25,6 +25,19 @@ pub enum OptLevel {
     O2,
 }
 
+/// An optimized-IR instruction id, the namespace a frontend stamps provenance
+/// against. Distinct from `MachineInstId` so a machine id cannot be handed to
+/// the stamping door by mistake. Use `.raw()` to cross to a bare `InstId`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(transparent)]
+pub struct OptInstId(pub InstId);
+
+impl OptInstId {
+    pub fn raw(self) -> InstId {
+        self.0
+    }
+}
+
 pub struct EvmCompile {
     module: Module,
     opt_level: OptLevel,
@@ -72,10 +85,11 @@ impl EvmCompile {
     pub fn stamp_post_opt_provenance(
         &mut self,
         func: FuncRef,
-        inst: InstId,
+        inst: OptInstId,
         provenance: impl Into<String>,
     ) -> Result<(), String> {
         self.optimize();
+        let inst = inst.raw();
         if !self.module.funcs().contains(&func) {
             return Err(format!("cannot stamp undefined function {func:?}"));
         }
@@ -193,7 +207,11 @@ mod tests {
     fn post_opt_provenance_stamping_is_metadata_only() {
         let mut compile = EvmCompile::new(module_for_evm(EvmVersion::Osaka));
         let error = compile
-            .stamp_post_opt_provenance(FuncRef::from_u32(0), InstId(0), "post-opt:test")
+            .stamp_post_opt_provenance(
+                FuncRef::from_u32(0),
+                super::OptInstId(InstId(0)),
+                "post-opt:test",
+            )
             .expect_err("undefined functions must be rejected");
 
         assert!(error.contains("undefined function"));
