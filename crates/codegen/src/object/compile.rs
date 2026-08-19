@@ -507,10 +507,7 @@ mod tests {
     use super::*;
     use crate::{
         isa::evm::{EvmBackend, PushWidthPolicy},
-        object::{
-            CompileOptions, OBSERVABILITY_SCHEMA_VERSION, PcAttribution, PostOptProvenanceMap,
-            artifact::SymbolId,
-        },
+        object::{CompileOptions, OBSERVABILITY_SCHEMA_VERSION, PcAttribution, artifact::SymbolId},
     };
     use sonatina_ir::{
         InstDowncastMut, Type, inst::arith::Add, ir_writer::ModuleWriter, isa::evm::Evm,
@@ -882,58 +879,6 @@ object @Contract {
         assert_eq!(
             runtime_obs.mapped_code_bytes + runtime_obs.unmapped_code_bytes,
             runtime_obs.code_bytes
-        );
-
-        let mut enriched = artifact.observability().expect("object observability");
-        let target = enriched
-            .sections
-            .values()
-            .flat_map(|section| section.pc_map.iter())
-            .find_map(|entry| Some((entry.unit.function()?, entry.attribution.ir_inst()?)))
-            .expect("expected ir-backed pc-map entry");
-        let target_bytes: u32 = enriched
-            .sections
-            .values()
-            .flat_map(|section| section.pc_map.iter())
-            .filter(|entry| {
-                entry.unit.function() == Some(target.0)
-                    && entry.attribution.ir_inst() == Some(target.1)
-            })
-            .map(|entry| entry.pc_end - entry.pc_start)
-            .sum();
-        assert!(target_bytes > 0);
-        let mapped_before = enriched.total_mapped_code_bytes;
-        let unmapped_before = enriched.total_unmapped_code_bytes;
-        let missing_before: u32 = enriched
-            .sections
-            .values()
-            .map(|section| section.unmapped_reason_coverage.missing_provenance)
-            .sum();
-        let mut map = PostOptProvenanceMap::default();
-        map.insert(target, "post-opt:mir_stmt:1".to_string());
-        enriched.apply_post_opt_provenance(&map);
-        assert_eq!(
-            enriched.total_mapped_code_bytes,
-            mapped_before + target_bytes
-        );
-        assert_eq!(
-            enriched.total_unmapped_code_bytes + target_bytes,
-            unmapped_before
-        );
-        let missing_after: u32 = enriched
-            .sections
-            .values()
-            .map(|section| section.unmapped_reason_coverage.missing_provenance)
-            .sum();
-        assert_eq!(missing_after + target_bytes, missing_before);
-        assert!(enriched.sections.values().all(|section| {
-            section.mapped_code_bytes + section.unmapped_code_bytes == section.code_bytes
-                && section.unmapped_reason_coverage.total_bytes() == section.unmapped_code_bytes
-        }));
-        assert!(
-            enriched
-                .to_json()
-                .contains("\"post_opt_provenance\":\"post-opt:mir_stmt:1\"")
         );
     }
 

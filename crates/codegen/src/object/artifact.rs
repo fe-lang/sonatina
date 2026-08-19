@@ -10,7 +10,6 @@ use sonatina_ir::{
 use std::fmt::Write as _;
 
 pub const OBSERVABILITY_SCHEMA_VERSION: &str = "0.3.0";
-pub type PostOptProvenanceMap = FxHashMap<(FuncRef, InstId), String>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum PcMapUnit {
@@ -189,48 +188,6 @@ pub struct SectionObservability {
 }
 
 impl SectionObservability {
-    fn recompute_coverage(&mut self) {
-        let mut mapped_code_bytes = 0_u32;
-        let mut unmapped_code_bytes = 0_u32;
-        let mut reasons = UnmappedReasonCoverage::default();
-        let mut cursor = 0_u32;
-
-        for entry in &self.pc_map {
-            if entry.pc_start > cursor {
-                let gap = entry.pc_start - cursor;
-                unmapped_code_bytes = unmapped_code_bytes.saturating_add(gap);
-                reasons.add_bytes(UnmappedReason::Unknown, gap);
-            }
-
-            let span = entry.pc_end.saturating_sub(entry.pc_start);
-            match &entry.attribution {
-                PcAttribution::Mapped { .. } => {
-                    mapped_code_bytes = mapped_code_bytes.saturating_add(span);
-                }
-                PcAttribution::Unmapped { reason, .. } => {
-                    unmapped_code_bytes = unmapped_code_bytes.saturating_add(span);
-                    reasons.add_bytes(*reason, span);
-                }
-            }
-            cursor = cursor.max(entry.pc_end);
-        }
-
-        if cursor < self.code_bytes {
-            let gap = self.code_bytes - cursor;
-            unmapped_code_bytes = unmapped_code_bytes.saturating_add(gap);
-            reasons.add_bytes(UnmappedReason::Unknown, gap);
-        }
-
-        debug_assert_eq!(
-            mapped_code_bytes.saturating_add(unmapped_code_bytes),
-            self.code_bytes
-        );
-        debug_assert_eq!(reasons.total_bytes(), unmapped_code_bytes);
-        self.mapped_code_bytes = mapped_code_bytes;
-        self.unmapped_code_bytes = unmapped_code_bytes;
-        self.unmapped_reason_coverage = reasons;
-    }
-
     pub fn to_text(&self) -> String {
         let mut out = String::new();
         writeln!(
@@ -494,36 +451,6 @@ impl ObjectObservability {
 
         write!(&mut out, "]}}").expect("in-memory write should not fail");
         out
-    }
-
-    /// Enrich PC-map entries with provenance stamped after optimization.
-    ///
-    /// Entries become mapped only when the supplied `(FuncRef, InstId)` key has
-    /// post-optimization provenance. Coverage and reason totals are recomputed.
-    pub fn apply_post_opt_provenance(&mut self, provenance: &PostOptProvenanceMap) {
-        for section in self.sections.values_mut() {
-            for entry in &mut section.pc_map {
-                let Some(ir_inst) = entry.attribution.ir_inst() else {
-                    continue;
-                };
-                if let Some(func) = entry.unit.function()
-                    && let Some(value) = provenance.get(&(func, ir_inst))
-                {
-                    entry.attribution = PcAttribution::Mapped {
-                        ir_inst,
-                        post_opt_provenance: value.clone(),
-                    };
-                }
-            }
-            section.recompute_coverage();
-        }
-
-        self.total_mapped_code_bytes = self.sections.values().fold(0_u32, |total, section| {
-            total.saturating_add(section.mapped_code_bytes)
-        });
-        self.total_unmapped_code_bytes = self.sections.values().fold(0_u32, |total, section| {
-            total.saturating_add(section.unmapped_code_bytes)
-        });
     }
 }
 

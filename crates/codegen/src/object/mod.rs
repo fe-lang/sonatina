@@ -8,8 +8,8 @@ pub mod resolve;
 use crate::isa::evm::PushWidthPolicy;
 pub use artifact::{
     OBSERVABILITY_SCHEMA_VERSION, ObjectArtifact, ObjectObservability, PcAttribution, PcMapEntry,
-    PcMapUnit, PostOptProvenanceMap, SectionArtifact, SectionObservability, SymbolDef, SymbolId,
-    UnmappedReason, UnmappedReasonCoverage,
+    PcMapUnit, SectionArtifact, SectionObservability, SymbolDef, SymbolId, UnmappedReason,
+    UnmappedReasonCoverage,
 };
 pub use compile::{compile_all_objects, compile_object};
 pub use data::encode_gv_initializer_to_bytes;
