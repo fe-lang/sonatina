@@ -395,7 +395,7 @@ impl InstStruct {
             #[allow(clippy::too_many_arguments)]
             pub fn new(hi: &dyn crate::HasInst<Self>, #(#ctor_args),*) -> Self {
                 Self {
-                    #(#field_names: #field_names),*
+                    #(#field_names),*
                 }
             }
 
@@ -403,7 +403,7 @@ impl InstStruct {
             pub fn new_unchecked(isb: &dyn crate::InstSetBase, #(#ctor_args),*) -> Self {
                 isb.#has_inst_method().unwrap();
                 Self {
-                    #(#field_names: #field_names),*
+                    #(#field_names),*
                 }
             }
         }
