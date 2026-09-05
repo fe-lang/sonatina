@@ -1,10 +1,48 @@
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{
     DataFlowGraph, Type, U256, ValueId,
     module::ModuleCtx,
     types::{CompoundType, EnumData, EnumVariantRef, TypeStore},
 };
+
+// References embedded in SSA aggregates have no object slice/capture identity.
+// Classify by type so arguments, phi results and call returns share the boundary.
+pub(crate) fn is_reference_aggregate(module: &ModuleCtx, ty: Type) -> bool {
+    module.with_ty_store(|types| {
+        if !matches!(
+            compound_ty(types, ty),
+            Some(CompoundType::Array { .. } | CompoundType::Struct(_) | CompoundType::Enum(_))
+        ) {
+            return false;
+        }
+        let mut pending = vec![ty];
+        let mut seen = FxHashSet::default();
+        while let Some(ty) = pending.pop() {
+            if !seen.insert(ty) {
+                continue;
+            }
+            match compound_ty(types, ty) {
+                Some(
+                    CompoundType::ObjRef(_) | CompoundType::Ptr(_) | CompoundType::ConstRef(_),
+                ) => {
+                    return true;
+                }
+                Some(CompoundType::Array { elem, len }) if *len != 0 => pending.push(*elem),
+                Some(CompoundType::Struct(data)) => pending.extend(data.fields.iter().copied()),
+                Some(CompoundType::Enum(data)) => {
+                    pending.extend(
+                        data.variants
+                            .iter()
+                            .flat_map(|variant| variant.fields.iter().copied()),
+                    );
+                }
+                _ => {}
+            }
+        }
+        false
+    })
+}
 
 pub type FieldPath = SmallVec<[u32; 4]>;
 pub type RuntimeLeaves = SmallVec<[AggregateLeaf; 4]>;

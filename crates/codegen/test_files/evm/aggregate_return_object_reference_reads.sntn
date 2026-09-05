@@ -1,0 +1,68 @@
+#! evm.config: { opt: 2 }
+#! evm.case: first_element
+#!   calldata: u256(0)
+#!   expect: return u256(33)
+#! evm.case: second_element
+#!   calldata: u256(1)
+#!   expect: return u256(55)
+
+target = "evm-ethereum-osaka"
+
+type @Selection = { objref<i256>, i256 };
+type @Nested = { i256, @Selection };
+
+func inline(never) private %select(v0.objref<[i256; 2]>, v1.i256) -> @Nested {
+block0:
+    v2.objref<i256> = obj.index v0 v1;
+    v3.@Selection = insert_value undef.@Selection 0.i256 v2;
+    v4.@Selection = insert_value v3 1.i256 42.i256;
+    v5.@Nested = insert_value undef.@Nested 0.i256 7.i256;
+    v6.@Nested = insert_value v5 1.i256 v4;
+    return v6;
+}
+
+func inline(never) private %forward(v0.objref<[i256; 2]>, v1.i256) -> @Nested {
+block0:
+    v2.@Nested = call %select v0 v1;
+    return v2;
+}
+
+func inline(never) private %read(v0.objref<i256>) -> i256 {
+block0:
+    v1.i256 = obj.load v0;
+    return v1;
+}
+
+func inline(never) private %overwrite(v0.objref<i256>) {
+block0:
+    obj.store v0 22.i256;
+    return;
+}
+
+func public %entry() {
+block0:
+    v0.objref<[i256; 2]> = obj.alloc [i256; 2];
+    v1.objref<i256> = obj.index v0 0.i256;
+    obj.store v1 11.i256;
+    v2.objref<i256> = obj.index v0 1.i256;
+    obj.store v2 33.i256;
+    v3.i256 = evm_calldata_load 0.i256;
+    v4.i256 = and v3 1.i256;
+    v5.@Nested = call %forward v0 v4;
+    v6.@Selection = extract_value v5 1.i256;
+    v7.objref<i256> = extract_value v6 0.i256;
+    v8.i256 = call %read v7;
+    v9.objref<i256> = obj.index v0 v4;
+    obj.store v9 55.i256;
+    call %overwrite v7;
+    v10.i256 = obj.load v9;
+    v11.i256 = add v8 v10;
+    mstore 0.i256 v11 i256;
+    evm_return 0.i256 32.i256;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}

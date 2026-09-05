@@ -1,0 +1,43 @@
+#! evm.config: { opt: 2 }
+#! evm.case: mutate_returned_reference
+#!   calldata:
+#!   expect: return u256(22)
+
+target = "evm-ethereum-osaka"
+
+type @Selection = { objref<i256>, i256 };
+
+func inline(never) private %select(v0.objref<[i256; 2]>, v1.i256) -> @Selection {
+block0:
+    v2.objref<i256> = obj.index v0 v1;
+    v3.@Selection = insert_value undef.@Selection 0.i256 v2;
+    v4.@Selection = insert_value v3 1.i256 42.i256;
+    return v4;
+}
+
+func inline(never) private %overwrite(v0.objref<i256>) {
+block0:
+    obj.store v0 22.i256;
+    return;
+}
+
+func public %entry() {
+block0:
+    v0.objref<[i256; 2]> = obj.alloc [i256; 2];
+    v1.objref<i256> = obj.index v0 0.i256;
+    obj.store v1 11.i256;
+    v2.objref<i256> = obj.index v0 1.i256;
+    obj.store v2 33.i256;
+    v3.@Selection = call %select v0 0.i256;
+    v4.objref<i256> = extract_value v3 0.i256;
+    call %overwrite v4;
+    v5.i256 = obj.load v1;
+    mstore 0.i256 v5 i256;
+    evm_return 0.i256 32.i256;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}
