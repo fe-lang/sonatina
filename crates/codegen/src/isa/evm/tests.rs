@@ -3254,6 +3254,45 @@ fn prune_clears_ir_mapping_when_combining_different_attributions() {
 }
 
 #[test]
+fn prune_preserves_ir_mapping_when_combining_the_same_attribution() {
+    let mut vcode = VCode::<OpCode>::default();
+    let block = BlockId(0);
+    let owner = InstId(7);
+    let push = vcode.add_inst_to_block(OpCode::PUSH1, Some(owner), block);
+    vcode.inst_imm_bytes.insert((push, smallvec![0u8]));
+    let eq = vcode.add_inst_to_block(OpCode::EQ, Some(owner), block);
+
+    prune_redundant_opcode_sequences(&mut vcode, &[block]);
+
+    assert_eq!(vcode.block_insns(block).collect::<Vec<_>>(), vec![eq]);
+    assert_eq!(vcode.insts[eq] as u8, OpCode::ISZERO as u8);
+    assert_eq!(vcode.inst_ir[eq].expand(), Some(owner));
+}
+
+#[test]
+fn prune_preserves_surviving_owners_when_reordering_stack_operations() {
+    let mut vcode = VCode::<OpCode>::default();
+    let block = BlockId(0);
+    let addr = vcode.add_inst_to_block(OpCode::PUSH1, Some(InstId(1)), block);
+    vcode.inst_imm_bytes.insert((addr, smallvec![32u8]));
+    let load = vcode.add_inst_to_block(OpCode::MLOAD, Some(InstId(2)), block);
+    let imm = vcode.add_inst_to_block(OpCode::PUSH1, Some(InstId(3)), block);
+    vcode.inst_imm_bytes.insert((imm, smallvec![5u8]));
+    vcode.add_inst_to_block(OpCode::SWAP1, Some(InstId(4)), block);
+    let sub = vcode.add_inst_to_block(OpCode::SUB, Some(InstId(5)), block);
+
+    prune_redundant_opcode_sequences(&mut vcode, &[block]);
+
+    assert_eq!(
+        vcode.block_insns(block).collect::<Vec<_>>(),
+        vec![imm, addr, load, sub]
+    );
+    for (inst, owner) in [(addr, 1), (load, 2), (imm, 3), (sub, 5)] {
+        assert_eq!(vcode.inst_ir[inst].expand(), Some(InstId(owner)));
+    }
+}
+
+#[test]
 fn prune_removes_and_one_after_bool_producer() {
     let mut vcode = VCode::<OpCode>::default();
     let block = BlockId(0);
