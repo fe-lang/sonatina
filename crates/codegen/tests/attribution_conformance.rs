@@ -430,6 +430,66 @@ fn exact_mapping_is_content_correct_and_conserved_at_all_opt_levels() {
 }
 
 #[test]
+fn machine_inst_ids_are_scoped_to_function_units() {
+    // FIXTURE_B places multiple functions in each section. Their machine
+    // instruction arenas start at the same numeric IDs, so the compiled
+    // artifact is the regression oracle for a real cross-function collision,
+    // not a hand-built attribution table. Every mapped range must retain the
+    // provenance owner of its own function unit.
+    let artifacts = stamp_all_and_compile(FIXTURE_B, OptLevel::Os);
+    let mut functions_by_machine_id: HashMap<u32, HashSet<u32>> = HashMap::new();
+    let mut mapped_entries = 0usize;
+
+    for artifact in &artifacts {
+        for (_, section) in artifact.sections.iter() {
+            let Some(observability) = section.observability.as_ref() else {
+                continue;
+            };
+            for entry in &observability.pc_map {
+                let PcMapUnit::Function(func) = &entry.unit else {
+                    continue;
+                };
+                let PcAttribution::Mapped {
+                    machine_inst,
+                    post_opt_provenance,
+                } = &entry.attribution
+                else {
+                    continue;
+                };
+                mapped_entries += 1;
+
+                let mut fields = post_opt_provenance.split(':');
+                assert_eq!(fields.next(), Some("conformance"));
+                let provenance_func = fields
+                    .next()
+                    .and_then(|raw| raw.parse::<u32>().ok())
+                    .unwrap_or_else(|| panic!("malformed provenance: {post_opt_provenance}"));
+                assert_eq!(
+                    provenance_func,
+                    func.as_u32(),
+                    "mapped range for function {func:?} has another function's provenance"
+                );
+                functions_by_machine_id
+                    .entry(machine_inst.raw().as_u32())
+                    .or_default()
+                    .insert(func.as_u32());
+            }
+        }
+    }
+
+    assert!(
+        mapped_entries > 0,
+        "fixture must emit mapped function ranges"
+    );
+    assert!(
+        functions_by_machine_id
+            .values()
+            .any(|funcs| funcs.len() >= 2),
+        "compiled fixture must contain a machine-ID collision across functions"
+    );
+}
+
+#[test]
 fn synthetic_units_are_unique_across_sections() {
     // Late section-terminal outlining runs only under a non-Off cleanup profile.
     // Os selects Size, which outlines the byte-identical terminal blocks of the

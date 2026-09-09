@@ -11,6 +11,12 @@ use std::fmt::Write as _;
 
 pub const OBSERVABILITY_SCHEMA_VERSION: &str = "0.3.0";
 
+/// The owner of a PC-map range.
+///
+/// Function machine-instruction IDs are local to their function unit. A
+/// function unit and its [`MachineInstId`] must therefore be kept together
+/// when consuming an attribution. Synthetic units have no machine instruction
+/// owner and are always reported as unmapped.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum PcMapUnit {
     Function(FuncRef),
@@ -121,7 +127,11 @@ impl UnmappedReasonCoverage {
 /// be looked up against each other by accident. Use `.raw()` at the point you
 /// deliberately cross back to a bare `InstId`. The inner field is pub on
 /// purpose: crossing namespaces requires writing the wrap explicitly, which is
-/// the reviewable act.
+/// the reviewable act. The numeric ID is local to the [`PcMapUnit::Function`]
+/// that owns the PC range, not globally unique across functions. Consumers
+/// must retain `(PcMapUnit, MachineInstId)` together with the enclosing object
+/// and section when consuming a PC map. IDs are not stable across separate
+/// compilations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(transparent)]
 pub struct MachineInstId(pub InstId);
@@ -137,6 +147,11 @@ impl MachineInstId {
 /// A range is mapped only when its machine-IR instruction carries provenance
 /// stamped after optimization. Machine-IR identity alone is retained on the
 /// unmapped side for diagnostics, but never contributes to mapped coverage.
+/// The provenance string is a scalar anchor supplied through the public API
+/// after optimization and carried by codegen. It identifies one
+/// post-optimization instruction, but does not promise exhaustive
+/// transformation ancestry or source ownership for every input that
+/// contributed to the emitted range.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PcAttribution {
     Mapped {
@@ -179,6 +194,11 @@ impl PcAttribution {
     }
 }
 
+/// One emitted PC interval and its owning code unit.
+///
+/// For a function unit, [`Self::unit`] scopes the optional machine instruction
+/// ID in [`Self::attribution`]. Numeric machine IDs must not be joined across
+/// entries from different function units.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PcMapEntry {
     pub pc_start: u32,
@@ -190,6 +210,13 @@ pub struct PcMapEntry {
     pub attribution: PcAttribution,
 }
 
+/// Observability captured while linking one section.
+///
+/// This schema describes EVM object-section bytes and program-counter ranges;
+/// it is not a target-neutral provenance format. This is an owned snapshot of
+/// the section at compilation time. It is not a live view of the module and
+/// does not retain historical states if the module
+/// is mutated between optimization, stamping, and compilation.
 #[derive(Debug, Clone)]
 pub struct SectionObservability {
     pub schema_version: &'static str,
