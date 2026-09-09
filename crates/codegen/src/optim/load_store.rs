@@ -14,6 +14,8 @@ use sonatina_ir::{
     },
 };
 
+use super::dead_malloc::eliminate_dead_mallocs;
+
 use crate::analysis::memory_access::{
     AliasResult, BaseObject, KeyExpr, KeyedLocKey, LinearLocKey, LinearRangeKey,
     MemoryAccessAnalysis, RangeCoverage, TrackedLocKey, ValueKey,
@@ -220,6 +222,7 @@ impl LoadStoreSolver {
             let mut changed = self.run_forward(func, cfg, &mut analysis);
             cfg.compute(func);
             changed |= self.run_backward(func, cfg, &mut analysis);
+            changed |= eliminate_dead_mallocs(func);
 
             if !changed {
                 return changed_any;

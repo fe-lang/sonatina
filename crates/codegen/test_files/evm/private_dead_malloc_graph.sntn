@@ -1,0 +1,39 @@
+#! evm.config: { opt: 2 }
+#! evm.case: zero
+#!   calldata: 0x0000000000000000000000000000000000000000000000000000000000000000
+#!   expect: return 0x0000000000000000000000000000000000000000000000000000000000000000
+#! evm.case: boundary
+#!   calldata: 0x0000000000000000000000000000000000000000000000000000000000000020
+#!   expect: return 0x0000000000000000000000000000000000000000000000000000000000000020
+#! evm.case: remainder
+#!   calldata: 0x0000000000000000000000000000000000000000000000000000000000000021
+#!   expect: return 0x0000000000000000000000000000000000000000000000000000000000000021
+#! evm.case: high_bit
+#!   calldata: 0x8000000000000000000000000000000000000000000000000000000000000000
+#!   expect: return 0x8000000000000000000000000000000000000000000000000000000000000000
+#! evm.case: max
+#!   calldata: 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+#!   expect: return 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+
+target = "evm-ethereum-osaka"
+func public %main() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i256;
+        v1.*i8 = evm_malloc 32.i256;
+        v2.i256 = ptr_to_int v1 i256;
+        mstore v2 17.i256 i256;
+        v3.*i8 = evm_malloc 64.i256;
+        v4.i256 = ptr_to_int v3 i256;
+        mstore v4 v2 i256;
+        v5.i256 = add v4 32.i256;
+        mstore v5 0.i256 i256;
+        v6.*i8 = evm_malloc 32.i256;
+        v7.i256 = ptr_to_int v6 i256;
+        mstore v7 v0 i256;
+        evm_return v7 32.i256;
+}
+object @Contract {
+    section runtime {
+        entry %main;
+    }
+}

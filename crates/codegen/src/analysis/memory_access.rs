@@ -256,6 +256,18 @@ impl MemoryAccessAnalysis {
         }
     }
 
+    pub(crate) fn exact_malloc_addr(
+        &mut self,
+        func: &Function,
+        value: ValueId,
+    ) -> Option<(InstId, i64)> {
+        let canonical = self.canonical_linear_addr(func, value);
+        match canonical.base {
+            BaseObject::Malloc(root) => Some((root, canonical.offset)),
+            _ => None,
+        }
+    }
+
     pub fn exact_local_addr(&mut self, func: &Function, value: ValueId) -> Option<ExactLocalAddr> {
         let canonical = self.canonical_linear_addr(func, value);
         let BaseObject::Alloca(root_alloca) = canonical.base else {
@@ -566,10 +578,15 @@ impl MemoryAccessAnalysis {
         }
 
         if let Some(sub) = <&Sub as InstDowncast>::downcast(is, inst_data) {
-            if let Some(offset) = self.value_const_i64(func, *sub.rhs()) {
+            // A representable operand can have an unrepresentable negation.
+            // Such displacements must remain unknown to the address analysis.
+            if let Some(offset) = self
+                .value_const_i64(func, *sub.rhs())
+                .and_then(i64::checked_neg)
+            {
                 return self
                     .canonical_linear_addr_rec(func, *sub.lhs(), visiting)
-                    .with_offset(-offset)
+                    .with_offset(offset)
                     .unwrap_or_else(|| CanonicalAddr::unknown(value));
             }
             return CanonicalAddr::unknown(value);
@@ -958,6 +975,45 @@ mod tests {
             builder.insert_inst_with(|| Sub::new(is, addr_i256, delta), Type::I256)
         };
         builder.insert_inst_with(|| IntToPtr::new(is, shifted, ptr_ty), ptr_ty)
+    }
+
+    #[test]
+    fn subtraction_canonicalization_checks_signed_displacement_bounds() {
+        for kind in [AllocatorBaseKind::Alloca, AllocatorBaseKind::Malloc] {
+            for (delta, expected) in [
+                (i64::MIN, None),
+                (i64::MIN + 1, Some(i64::MAX)),
+                (i64::MAX, Some(i64::MIN + 1)),
+                (-32, Some(32)),
+                (32, Some(-32)),
+            ] {
+                let mb = test_module_builder();
+                let (evm, mut builder) = test_func_builder(&mb, &[], Type::Unit);
+                let is = evm.inst_set();
+                let block = builder.append_block();
+                builder.switch_to_block(block);
+                let ptr_ty = builder.ptr_type(Type::I8);
+                let base = insert_allocator_base(&mut builder, is, kind, ptr_ty);
+                let addr =
+                    builder.insert_inst_with(|| PtrToInt::new(is, base, Type::I256), Type::I256);
+                let delta_value = builder.make_imm_value(I256::from(delta));
+                let shifted =
+                    builder.insert_inst_with(|| Sub::new(is, addr, delta_value), Type::I256);
+                builder.insert_inst_no_result_with(|| Return::new_unit(is));
+                builder.seal_all();
+                let mut analysis = MemoryAccessAnalysis::new();
+                let canonical = analysis.canonical_linear_addr(&builder.func, shifted);
+                if let Some(offset) = expected {
+                    assert_eq!(
+                        canonical.base,
+                        analysis.canonical_linear_addr(&builder.func, base).base
+                    );
+                    assert_eq!(canonical.offset, offset, "delta {delta}");
+                } else {
+                    assert_eq!(canonical, CanonicalAddr::unknown(shifted));
+                }
+            }
+        }
     }
 
     #[test]

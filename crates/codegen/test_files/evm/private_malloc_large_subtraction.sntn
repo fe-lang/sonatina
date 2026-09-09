@@ -1,0 +1,26 @@
+#! evm.config: { opt: 2 }
+#! evm.case: input_0
+#!   calldata: 0x0000000000000000000000000000000000000000000000000000000000000000
+#!   expect: return 0x0000000000000000000000000000000000000000000000008000000000000000
+#! evm.case: input_1
+#!   calldata: 0x0000000000000000000000000000000000000000000000000000000000000001
+#!   expect: return 0x0000000000000000000000000000000000000000000000008000000000000001
+#! evm.case: input_2
+#!   calldata: 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+#!   expect: return 0x0000000000000000000000000000000000000000000000007fffffffffffffff
+
+target = "evm-ethereum-osaka"
+func public %entry() {
+block0:
+    v0.i256 = evm_calldata_load 0.i256;
+    v1.i256 = sub v0 -9223372036854775808.i256;
+    v2.*i8 = evm_malloc 32.i256;
+    mstore v2 v1 i256;
+    evm_return v2 32.i256;
+}
+
+object @Contract {
+    section runtime {
+        entry %entry;
+    }
+}
