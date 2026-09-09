@@ -19,6 +19,7 @@ use super::type_utils;
 
 mod analysis;
 mod dominance;
+mod enum_proofs;
 mod layout_cfg;
 mod metadata;
 mod phi;
@@ -57,6 +58,8 @@ pub(super) struct FunctionVerifier<'a> {
     pub(super) preds: FxHashMap<BlockId, Vec<BlockId>>,
     pub(super) reachable: FxHashSet<BlockId>,
     pub(super) idom: FxHashMap<BlockId, BlockId>,
+    analysis_cfg: analysis::AnalysisCfg,
+    enum_field_proofs: FxHashMap<InstId, enum_proofs::EnumFieldLoadProof>,
 }
 
 trait FunctionPass {
@@ -156,6 +159,8 @@ impl<'a> FunctionVerifier<'a> {
             preds: FxHashMap::default(),
             reachable: FxHashSet::default(),
             idom: FxHashMap::default(),
+            analysis_cfg: analysis::AnalysisCfg::default(),
+            enum_field_proofs: FxHashMap::default(),
         }
     }
 
