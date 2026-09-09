@@ -3739,3 +3739,58 @@ block2:
         "linked section must contain the resolved current-section size"
     );
 }
+
+#[test]
+fn caller_spills_survive_transitive_scratch_arena_clobbers() {
+    let fixture = include_str!("../../../test_files/evm/caller_spill_callee_scratch.sntn");
+    for indirect in [false, true] {
+        let source = if indirect {
+            fixture.replace("call %clobber;", "call %bridge;").replace(
+                "object @Contract",
+                "func private %bridge() -> i256 {\nblock0:\n    v0.i256 = call %clobber;\n    return v0;\n}\n\nobject @Contract",
+            )
+        } else {
+            fixture.to_owned()
+        };
+        let parsed = parse_module(&source).expect("module parses");
+        let entry = find_func(&parsed.module, "entry");
+        let clobber = find_func(&parsed.module, "clobber");
+        let backend = test_backend().with_stackify_reach_depth(4);
+        let prepared = backend
+            .prepare_section(work_module_with_entry(
+                &parsed.module,
+                &parsed.module.funcs(),
+                entry,
+            ))
+            .expect("prepare succeeds");
+        let callee_plan = &prepared.function_plan(clobber).unwrap().mem_plan;
+        let caller_plan = prepared.function_plan(entry).unwrap();
+        assert_eq!(callee_plan.scratch_words, 8);
+        assert!(callee_plan.arena_base >= 64);
+        assert!(
+            !prepared
+                .function_plan(clobber)
+                .unwrap()
+                .alloc
+                .uses_scratch_spills()
+        );
+        if indirect {
+            let bridge = find_func(&parsed.module, "bridge");
+            assert_eq!(
+                prepared
+                    .function_plan(bridge)
+                    .unwrap()
+                    .mem_plan
+                    .scratch_words,
+                0
+            );
+        }
+        assert_eq!(caller_plan.mem_plan.stable_words, 4);
+        for (_, object) in caller_plan.alloc.object_spills() {
+            assert!(matches!(
+                caller_plan.mem_plan.obj_loc[&object],
+                memory_plan::ObjLoc::StableAbs(_)
+            ));
+        }
+    }
+}
