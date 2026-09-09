@@ -1,11 +1,11 @@
 use rustc_hash::FxHashMap;
 use sonatina_ir::{
     Function, I256, Immediate, Inst, InstId, Type, Value, ValueId,
-    inst::{BinaryInstKind, CastInstKind, InstClassKind, UnaryInstKind, arith, cast, cmp},
+    inst::{BinaryInstKind, CastInstKind, InstClassKind, UnaryInstKind, arith, cast, cmp, logic},
 };
 
 use super::simplify_expr::{
-    ZextI1CompareRewrite, canonicalize_cast_chain, shift_amount_for_pow2_mul, simplify_cast,
+    ZextI1CompareRewrite, canonicalize_cast_chain, nontrivial_pow2_shift, simplify_cast,
     simplify_zext_i1_compare,
 };
 
@@ -210,6 +210,28 @@ fn canonicalize_binary_inst(
             rhs: Operand::Value(arg),
         }),
         BinaryInstKind::Mul => mul_pow2_rewrite(func, lhs, rhs),
+        BinaryInstKind::Udiv
+        | BinaryInstKind::EvmUdiv
+        | BinaryInstKind::Umod
+        | BinaryInstKind::EvmUmod => {
+            let divisor = func.dfg.value_imm(rhs)?;
+            let shift = nontrivial_pow2_shift(divisor)?;
+            Some(
+                if matches!(kind, BinaryInstKind::Udiv | BinaryInstKind::EvmUdiv) {
+                    InstSpec::Binary {
+                        kind: BinaryInstKind::Shr,
+                        lhs: Operand::Imm(Immediate::from_i256(I256::from(shift), divisor.ty())),
+                        rhs: Operand::Value(lhs),
+                    }
+                } else {
+                    InstSpec::Binary {
+                        kind: BinaryInstKind::And,
+                        lhs: Operand::Value(lhs),
+                        rhs: Operand::Imm(divisor - Immediate::one(divisor.ty())),
+                    }
+                },
+            )
+        }
         _ => None,
     }
 }
@@ -230,7 +252,7 @@ fn neg_source(func: &Function, value: ValueId) -> Option<ValueId> {
 
 fn mul_pow2_rewrite(func: &Function, lhs: ValueId, rhs: ValueId) -> Option<InstSpec> {
     if let Some(imm) = func.dfg.value_imm(lhs)
-        && let Some(shift) = shift_amount_for_pow2_mul(imm)
+        && let Some(shift) = nontrivial_pow2_shift(imm)
     {
         return Some(InstSpec::Binary {
             kind: BinaryInstKind::Shl,
@@ -239,7 +261,7 @@ fn mul_pow2_rewrite(func: &Function, lhs: ValueId, rhs: ValueId) -> Option<InstS
         });
     }
     if let Some(imm) = func.dfg.value_imm(rhs)
-        && let Some(shift) = shift_amount_for_pow2_mul(imm)
+        && let Some(shift) = nontrivial_pow2_shift(imm)
     {
         return Some(InstSpec::Binary {
             kind: BinaryInstKind::Shl,
@@ -329,6 +351,8 @@ fn build_inst(func: &mut Function, replacement: InstSpec) -> Option<Box<dyn Inst
                 BinaryInstKind::Add => Some(Box::new(arith::Add::new(is.has_add()?, lhs, rhs))),
                 BinaryInstKind::Sub => Some(Box::new(arith::Sub::new(is.has_sub()?, lhs, rhs))),
                 BinaryInstKind::Shl => Some(Box::new(arith::Shl::new(is.has_shl()?, lhs, rhs))),
+                BinaryInstKind::Shr => Some(Box::new(arith::Shr::new(is.has_shr()?, lhs, rhs))),
+                BinaryInstKind::And => Some(Box::new(logic::And::new(is.has_and()?, lhs, rhs))),
                 _ => None,
             }
         }
@@ -390,6 +414,8 @@ fn supports_inst_spec(func: &Function, replacement: InstSpec) -> bool {
             BinaryInstKind::Add => is.has_add().is_some(),
             BinaryInstKind::Sub => is.has_sub().is_some(),
             BinaryInstKind::Shl => is.has_shl().is_some(),
+            BinaryInstKind::Shr => is.has_shr().is_some(),
+            BinaryInstKind::And => is.has_and().is_some(),
             _ => false,
         },
         InstSpec::Cast { kind, .. } => match kind {
@@ -599,6 +625,64 @@ block0:
         assert!(!dumped.contains("uaddo"), "{dumped}");
         assert!(!dumped.contains(" = zext "), "{dumped}");
         assert!(!dumped.contains(" = trunc "), "{dumped}");
+    }
+
+    #[test]
+    fn rewrites_unsigned_power_of_two_division_and_remainder() {
+        for ty in ["i8", "i256"] {
+            let high = if ty == "i8" {
+                "-128"
+            } else {
+                "-57896044618658097711785492504343953926634992332820282019728792003956564819968"
+            };
+            let high_shift = if ty == "i8" { 7 } else { 255 };
+            for (op, replacement) in [
+                ("udiv", "shr"),
+                ("evm_udiv", "shr"),
+                ("umod", "and"),
+                ("evm_umod", "and"),
+            ] {
+                if ty != "i256" && op.starts_with("evm_") {
+                    continue;
+                }
+                for (divisor, shift) in [("32", 5), (high, high_shift)] {
+                    let source = format!(
+                        "target = \"evm-ethereum-osaka\"\nfunc public %f(v0.{ty}) -> {ty} {{\nblock0:\n v1.{ty} = {op} v0 {divisor}.{ty};\n return v1;\n}}"
+                    );
+                    let (module, f) = parse_test_module(&source);
+                    module
+                        .func_store
+                        .modify(f, |func| assert!(ScalarCanonicalize::new().run(func)));
+                    let dumped = dump_func(&module, f);
+                    assert!(dumped.contains(&format!(" = {replacement} ")), "{dumped}");
+                    if replacement == "shr" {
+                        assert!(dumped.contains(&format!("shr {shift}.{ty} v0")), "{dumped}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn preserves_signed_zero_and_non_power_of_two_divisors() {
+        for (op, divisor) in [
+            ("evm_udiv", 0),
+            ("evm_umod", 0),
+            ("udiv", 3),
+            ("umod", 3),
+            ("sdiv", 32),
+            ("smod", 32),
+            ("evm_sdiv", 32),
+            ("evm_smod", 32),
+        ] {
+            let source = format!(
+                "target = \"evm-ethereum-osaka\"\nfunc public %f(v0.i256) -> i256 {{\nblock0:\n v1.i256 = {op} v0 {divisor}.i256;\n return v1;\n}}"
+            );
+            let (module, f) = parse_test_module(&source);
+            module
+                .func_store
+                .modify(f, |func| assert!(!ScalarCanonicalize::new().run(func)));
+        }
     }
 
     fn parse_test_module(src: &str) -> (Module, FuncRef) {

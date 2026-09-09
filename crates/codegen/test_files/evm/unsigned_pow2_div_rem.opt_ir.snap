@@ -1,0 +1,26 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: opt_ir_snapshot
+input_file: test_files/evm/unsigned_pow2_div_rem.sntn
+---
+target = "evm-ethereum-osaka"
+
+func public %main() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i256;
+        v1.i256 = shr 5.i256 v0;
+        v2.i256 = and v0 31.i256;
+        v3.*i8 = evm_malloc 64.i256;
+        v4.i256 = ptr_to_int v3 i256;
+        mstore v4 v1 i256;
+        v5.i256 = add v4 32.i256;
+        mstore v5 v2 i256;
+        evm_return v4 64.i256;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %main;
+    }
+}
