@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/evm.rs
+assertion_line: 471
 expression: "String::from_utf8(out).unwrap()"
 input_file: test_files/evm/chz_castling_rights_gvn_regression_noopt.sntn
 ---
@@ -93,7 +94,7 @@ functions:
     mem: scratch_words=1 stable_words=0 stable_mode=None entry_abs_words=110 abs_words_end=1
 
 evm:
-  case captured_rook_clears_castling_rights: calldata_len=0 success reason=Return gas_used=32881 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=11881
+  case captured_rook_clears_castling_rights: calldata_len=0 success reason=Return gas_used=32853 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=11853
 
 
 --------------- DEBUG ---------------
@@ -565,9 +566,9 @@ set_piece:
     DUP1  // v18.i256 = shl 2.i256 v9;
     PUSH1 0x2 (2)
     SHL
-    PUSH1 0x4 (4)  // v21.i256 = evm_udiv v18 v17;
-    DUP2
-    DIV
+    DUP1  // v21.i256 = shr 2.i256 v18;
+    PUSH1 0x2 (2)
+    SHR
     SWAP1  // v22.i256 = eq v21 v9;
     SWAP2
     EQ
@@ -901,9 +902,9 @@ piece_at:
     DUP1  // v16.i256 = shl 2.i256 v7;
     PUSH1 0x2 (2)
     SHL
-    PUSH1 0x4 (4)  // v13.i256 = evm_udiv v16 v14;
-    DUP2
-    DIV
+    DUP1  // v13.i256 = shr 2.i256 v16;
+    PUSH1 0x2 (2)
+    SHR
     SWAP1  // v14.i256 = eq v13 v7;
     SWAP2
     EQ

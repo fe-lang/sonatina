@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/evm.rs
+assertion_line: 473
 expression: opt_ir_snapshot
 input_file: test_files/evm/fe_deposit_contract_unoptimized.sntn
 ---
@@ -577,7 +578,7 @@ func private %__DepositContract_recv_0_0(v0.@layout_0, v1.@layout_0, v2.@layout_
 
     block268:
         v498.i256 = mload v483 i256;
-        v561.i256 = evm_udiv v332 2.i256;
+        v561.i256 = shr 1.i256 v332;
         v562.i256 = add v281 1.i256;
         jump block26;
 }
@@ -672,7 +673,7 @@ func private %__DepositContract_recv_0_1(v0.i256) -> i256 {
 
     block7:
         v79.i256 = phi (v120 block48) (v139 block62);
-        v148.i256 = evm_udiv v67 2.i256;
+        v148.i256 = shr 1.i256 v67;
         v149.i256 = add v15 1.i256;
         jump block2;
 
@@ -1053,9 +1054,9 @@ func private %core__lib__abi__copy_dynamic_payload_from_with_input_len__g72ab_e4
 
     block30:
         v69.i256 = sub v42 1.i256;
-        v70.i256 = evm_udiv v69 32.i256;
-        (v71.i256, v72.i1) = uaddo v70 1.i256;
-        br v72 block31 block32;
+        v71.i256 = shr 5.i256 v69;
+        (v72.i256, v73.i1) = uaddo v71 1.i256;
+        br v73 block31 block32;
 
     block31:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -1063,12 +1064,12 @@ func private %core__lib__abi__copy_dynamic_payload_from_with_input_len__g72ab_e4
         evm_revert 0.i256 36.i256;
 
     block32:
-        (v73.i256, v74.i1) = umulo v71 32.i256;
-        br v74 block31 block27;
+        (v74.i256, v75.i1) = umulo v72 32.i256;
+        br v75 block31 block27;
 
     block27:
-        v75.i256 = phi (0.i256 block7) (v73 block32);
-        (v44.i256, v45.i1) = uaddo 32.i256 v75;
+        v76.i256 = phi (0.i256 block7) (v74 block32);
+        (v44.i256, v45.i1) = uaddo 32.i256 v76;
         br v45 block17 block18;
 
     block13:
