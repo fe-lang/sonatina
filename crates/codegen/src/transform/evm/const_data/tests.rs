@@ -824,7 +824,7 @@ func private %entry() -> i256 {
     let blob_bytes = lowered_blob_bytes(&parsed, "value");
     assert_eq!(blob_bytes.len(), 32 * 5);
 
-    let words: Vec<_> = blob_bytes.as_chunks::<32>().0.iter().collect();
+    let words = blob_bytes.as_chunks::<32>().0;
     assert!(words[0][..31].iter().all(|&byte| byte == 0));
     assert_eq!(words[0][31], 1);
 

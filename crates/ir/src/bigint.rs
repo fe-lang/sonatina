@@ -155,7 +155,7 @@ impl I256 {
 
     pub fn make_negative(abs: U256) -> Self {
         Self {
-            is_negative: true,
+            is_negative: !abs.is_zero(),
             abs,
         }
     }
@@ -326,3 +326,22 @@ impl_from!(u32, unsigned);
 impl_from!(u64, unsigned);
 impl_from!(u128, unsigned);
 impl_from!(usize, unsigned);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sdiv_zero_quotient_is_canonical_zero() {
+        let q = I256::from(-1i8).overflowing_div(I256::from(5i8)).0;
+        assert_eq!(q, I256::zero());
+        assert!(q.to_u256().is_zero());
+    }
+
+    #[test]
+    fn srem_zero_remainder_is_canonical_zero() {
+        let r = I256::from(-4i8).overflowing_rem(I256::from(2i8)).0;
+        assert_eq!(r, I256::zero());
+        assert!(r.to_u256().is_zero());
+    }
+}
