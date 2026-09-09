@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/opt_pipeline.rs
+assertion_line: 29
 input_file: test_files/opt_pipeline/storage_loop.sntn
 ---
 target = "evm-ethereum-osaka"
@@ -24,20 +25,6 @@ func private %__Foo_runtime() {
     block6:
         v11.i256 = evm_calldata_load 0.i256;
         v13.i256 = shr 224.i256 v11;
-        v17.i256 = evm_malloc 64.i256;
-        mstore v17 0.i256 i256;
-        v18.i256 = add v17 32.i256;
-        mstore v18 0.i256 i256;
-        v20.i256 = evm_malloc 64.i256;
-        mstore v20 0.i256 i256;
-        v21.i256 = add v20 32.i256;
-        mstore v21 4.i256 i256;
-        v22.i256 = evm_malloc 96.i256;
-        mstore v22 0.i256 i256;
-        v26.i256 = add v22 32.i256;
-        mstore v26 4.i256 i256;
-        v27.i256 = add v22 64.i256;
-        mstore v27 4.i256 i256;
         v5.i1 = eq v13 1.i256;
         br v5 block9 block1;
 
