@@ -17,6 +17,7 @@ use super::{
     super::{
         EvmBackend, ImmediateMaterializationMode, fixed_slots, memory_plan::MachineStackifyAnalysis,
     },
+    placement::EvmMemoryPlacementPlan,
     verify::verify_machine_module,
 };
 
@@ -25,6 +26,7 @@ pub(crate) fn prepare_machine_stackify_analyses(
     schedule: &CallGraphSchedule,
     backend: &EvmBackend,
     machine_isa: &EvmMachine,
+    placement: &EvmMemoryPlacementPlan,
 ) -> Result<FxHashMap<FuncRef, MachineStackifyAnalysis>, String> {
     verify_machine_module(module, schedule.funcs())?;
     let _span = debug_span!("sonatina.codegen.evm.machine.prepare_stackify").entered();
@@ -33,6 +35,7 @@ pub(crate) fn prepare_machine_stackify_analyses(
 
     let mut analyses = FxHashMap::default();
     let mut fixed_slot_effects = FxHashSet::default();
+    let mut scratch_arena_effects = FxHashSet::default();
     for &scc_ref in schedule.topo.iter().rev() {
         let components = schedule.members(scc_ref);
 
@@ -45,6 +48,15 @@ pub(crate) fn prepare_machine_stackify_analyses(
             .as_ref()
             .unwrap_or(&fixed_slot_effects);
 
+        let cycle_scratch_arena_effects = schedule.sccs.scc_info(scc_ref).is_cycle.then(|| {
+            let mut effects = scratch_arena_effects.clone();
+            effects.extend(components.iter().copied());
+            effects
+        });
+        let analysis_scratch_arena_effects = cycle_scratch_arena_effects
+            .as_ref()
+            .unwrap_or(&scratch_arena_effects);
+
         let mut scc_results: Vec<_> = components
             .par_iter()
             .copied()
@@ -54,17 +66,27 @@ pub(crate) fn prepare_machine_stackify_analyses(
                         function,
                         backend,
                         machine_isa,
-                        Some(analysis_fixed_slot_effects),
+                        analysis_fixed_slot_effects,
+                        analysis_scratch_arena_effects,
                     )
                 });
                 let uses_scratch_spills = analysis.alloc.uses_scratch_spills();
-                (func, analysis, uses_scratch_spills)
+                // Optional final spills may be assigned to the shared arena after
+                // stackification. Account for them before analyzing callers, even on
+                // the first placement iteration when no reserve exists yet.
+                let may_use_arena_spills = analysis
+                    .alloc
+                    .object_spills()
+                    .any(|(value, _)| !analysis.stable_final_spill_values.contains(value));
+                (func, analysis, uses_scratch_spills, may_use_arena_spills)
             })
             .collect();
-        scc_results.sort_unstable_by_key(|(func, _, _)| func.as_u32());
+        scc_results.sort_unstable_by_key(|(func, ..)| func.as_u32());
 
         let mut scc_uses_scratch_spills = false;
-        for (func, analysis, uses_scratch_spills) in scc_results {
+        let mut scc_may_use_arena_spills = false;
+        for (func, analysis, uses_scratch_spills, may_use_arena_spills) in scc_results {
+            scc_may_use_arena_spills |= may_use_arena_spills;
             scc_uses_scratch_spills |= uses_scratch_spills;
             analyses.insert(func, analysis);
         }
@@ -85,6 +107,20 @@ pub(crate) fn prepare_machine_stackify_analyses(
         if scc_touches_fixed_slots {
             fixed_slot_effects.extend(components.iter().copied());
         }
+        let scc_touches_scratch_arena = scc_may_use_arena_spills
+            || components
+                .iter()
+                .any(|func| placement.funcs[func].mem_plan.scratch_words != 0)
+            || components.iter().any(|func| {
+                schedule
+                    .call_graph
+                    .callee_of(*func)
+                    .iter()
+                    .any(|callee| scratch_arena_effects.contains(callee))
+            });
+        if scc_touches_scratch_arena {
+            scratch_arena_effects.extend(components.iter().copied());
+        }
     }
 
     Ok(analyses)
@@ -94,7 +130,8 @@ fn prepare_machine_stackify_analysis(
     function: &mut sonatina_ir::Function,
     backend: &EvmBackend,
     machine_isa: &EvmMachine,
-    fixed_slot_effects: Option<&FxHashSet<FuncRef>>,
+    fixed_slot_effects: &FxHashSet<FuncRef>,
+    scratch_arena_effects: &FxHashSet<FuncRef>,
 ) -> MachineStackifyAnalysis {
     let _span = trace_span!("sonatina.codegen.evm.machine.prepare_stackify_func").entered();
     let mut cfg = ControlFlowGraph::new();
@@ -115,10 +152,11 @@ fn prepare_machine_stackify_analysis(
     let mut inst_liveness = InstLiveness::new();
     inst_liveness.compute(function, &cfg, &liveness);
 
-    let scratch_clobber_liveness = fixed_slots::MachineFixedSlotClobberLiveness::compute(
+    let scratch_clobber_liveness = fixed_slots::MachineSpillClobberLiveness::compute(
         function,
         machine_isa,
         fixed_slot_effects,
+        scratch_arena_effects,
         &inst_liveness,
     );
     let (scratch_live_values, stable_final_spill_values) = scratch_clobber_liveness.into_parts();
