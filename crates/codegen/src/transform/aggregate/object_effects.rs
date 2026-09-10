@@ -1,4 +1,7 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    slice,
+};
 
 use crate::module_analysis::{CallGraph, CallGraphSccs, SccBuilder, SccRef};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -279,7 +282,9 @@ impl ObjectArgEffect {
             .unwrap_or(0);
         Self {
             local_only: false,
-            escapes: false,
+            // No per-field effects describe references embedded in SSA values.
+            // Keep this boundary conservative even for defined/forwarding callees.
+            escapes: shape::is_reference_aggregate(module, ty),
             reads: SliceSet::empty(total_leaves),
             writes: SliceSet::empty(total_leaves),
             materializes_stack: false,
@@ -612,6 +617,29 @@ fn compute_summary_for_func(
                         *mat_heap.object(),
                         true,
                     );
+                    continue;
+                }
+
+                let inst_data = function.dfg.inst(inst);
+                let aggregate_values =
+                    downcast::<&data::InsertValue>(function.inst_set(), inst_data)
+                        .map(|insert| slice::from_ref(insert.value()))
+                        .or_else(|| {
+                            downcast::<&data::EnumMake>(function.inst_set(), inst_data)
+                                .map(|make| make.values().as_slice())
+                        });
+                if let Some(values) = aggregate_values {
+                    // Capture summaries describe references stored in objects,
+                    // not references embedded in SSA aggregate values. Crossing
+                    // that boundary lets the reference escape our tracked uses,
+                    // including through an aggregate return or a later call.
+                    for &value in values {
+                        for (src_arg, _) in
+                            capture_source_slices(&root_captures, effect_provenance, value, None)
+                        {
+                            summary.arg_effects[src_arg].escapes = true;
+                        }
+                    }
                     continue;
                 }
 
@@ -1794,6 +1822,117 @@ mod tests {
                     (first_leaf..first_leaf + leaf_count).all(|leaf| leaves.contains(&leaf))
                 })
         })
+    }
+
+    #[test]
+    fn reference_aggregate_formals_require_alias_barriers() {
+        for (ty, barrier) in [
+            ("@Wrapper", true),
+            ("@Choice", true),
+            ("[@Wrapper; 2]", true),
+            ("@Pointers", true),
+            ("@Words", false),
+            ("[@Wrapper; 0]", false),
+        ] {
+            let source = format!(
+                r#"
+target = "evm-ethereum-osaka"
+type @Wrapper = {{ objref<i256> }};
+type @Choice = enum {{ #None, #Some(i256,@Wrapper) }};
+type @Pointers = {{ *i256 }};
+type @Words = {{ i256, i256 }};
+declare external %external({ty});
+func private %leaf(v0.{ty}) {{
+block0:
+    return;
+}}
+func private %forward(v0.{ty}) {{
+block0:
+    call %leaf v0;
+    return;
+}}
+"#
+            );
+            let module = parse_test_module(&source);
+            let summaries = compute_object_effect_summaries(&module);
+            for name in ["leaf", "forward", "external"] {
+                let func = lookup_func(&module, name);
+                let summary = summaries.get(&func).cloned().unwrap_or_else(|| {
+                    ObjectEffectSummary::conservative_unknown(
+                        &module.ctx,
+                        func,
+                        &mut shape::AggregateLayoutCache::default(),
+                    )
+                });
+                assert_eq!(
+                    summary.arg_effects[0].needs_unknown_object_barrier(),
+                    barrier,
+                    "{name}({ty})"
+                );
+                if barrier {
+                    assert!(!summary.arg_effects[0].local_only, "{name}({ty})");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn aggregate_return_reference_is_not_local_only() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+type @Selection = { objref<i256>, i256 };
+
+func private %select(v0.objref<[i256; 2]>, v1.i256) -> @Selection {
+block0:
+    v2.objref<i256> = obj.index v0 v1;
+    v3.@Selection = insert_value undef.@Selection 0.i256 v2;
+    v4.@Selection = insert_value v3 1.i256 42.i256;
+    return v4;
+}
+
+func private %forward(v0.objref<[i256; 2]>) -> @Selection {
+block0:
+    v1.@Selection = call %select v0 0.i256;
+    return v1;
+}
+"#,
+        );
+        let summaries = compute_object_effect_summaries(&module);
+        for name in ["select", "forward"] {
+            let summary = &summaries[&lookup_func(&module, name)];
+            assert!(!summary.arg_effects[0].local_only, "{name}");
+            assert!(summary.arg_effects[0].escapes, "{name}");
+        }
+    }
+
+    #[test]
+    fn enum_return_reference_is_not_local_only() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+type @Selection = enum { #None, #Some(i256,objref<i256>) };
+
+func private %select(v0.objref<[i256; 2]>, v1.i256) -> @Selection {
+block0:
+    v2.objref<i256> = obj.index v0 v1;
+    v4.@Selection = enum.make @Selection #Some (42.i256, v2);
+    return v4;
+}
+
+func private %forward(v0.objref<[i256; 2]>) -> @Selection {
+block0:
+    v1.@Selection = call %select v0 0.i256;
+    return v1;
+}
+"#,
+        );
+        let summaries = compute_object_effect_summaries(&module);
+        for name in ["select", "forward"] {
+            let summary = &summaries[&lookup_func(&module, name)];
+            assert!(!summary.arg_effects[0].local_only, "{name}");
+            assert!(summary.arg_effects[0].escapes, "{name}");
+        }
     }
 
     #[test]

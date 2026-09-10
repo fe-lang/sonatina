@@ -408,6 +408,20 @@ impl<'a> ProvenanceSnapshot<'a> {
             }));
         }
 
+        // An aggregate may carry aliases despite having no object root itself.
+        // Seed every value producer, including formals and multi-result calls,
+        // so all call-effect consumers see the same conservative boundary.
+        let mut reference_aggregates = FxHashMap::default();
+        for value in func.dfg.value_ids() {
+            let ty = func.dfg.value_ty(value);
+            if *reference_aggregates
+                .entry(ty)
+                .or_insert_with(|| shape::is_reference_aggregate(module, ty))
+            {
+                provenance.maybe_unknown[value] = true;
+            }
+        }
+
         compute_possible_roots(
             func,
             &self.possible_root_transfers,
@@ -696,6 +710,17 @@ fn possible_root_transfer_for_inst(
             result,
             *enum_assert_ref.object(),
         ));
+    }
+
+    // SSA aggregate fields are not represented in the object capture map. An
+    // extracted reference can alias an existing root, even though no root was
+    // recorded for the aggregate value itself. An empty known set is not a
+    // proof that this reference is disjoint from every tracked object.
+    if (downcast::<&data::ExtractValue>(func.inst_set(), func.dfg.inst(inst)).is_some()
+        || downcast::<&data::EnumExtract>(func.inst_set(), func.dfg.inst(inst)).is_some())
+        && reference_element_ty(func.ctx(), func.dfg.value_ty(result)).is_some()
+    {
+        return Some(PossibleRootTransfer::unknown(result));
     }
 
     if let Some(call) = downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(inst)) {
@@ -2105,6 +2130,77 @@ mod tests {
             root_slices.insert(arg, whole_root_slice(layout_cache, func.ctx(), root_ty));
         }
         root_slices
+    }
+
+    #[test]
+    fn aggregate_extracted_reference_has_unknown_provenance() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+type @Selection = { objref<i256>, i256 };
+declare external %select() -> @Selection;
+
+func private %f() -> objref<i256> {
+block0:
+    v0.@Selection = call %select;
+    v1.objref<i256> = extract_value v0 0.i256;
+    return v1;
+}
+"#,
+        );
+        module.func_store.view(lookup_func(&module, "f"), |func| {
+            let mut layout_cache = shape::AggregateLayoutCache::default();
+            let root_slices = collect_root_slices(func, None, &mut layout_cache);
+            let provenance =
+                collect_root_provenance(func, func.ctx(), &root_slices, &mut layout_cache, None);
+            let extracted = func
+                .layout
+                .iter_block()
+                .flat_map(|block| func.layout.iter_inst(block))
+                .find_map(|inst| {
+                    downcast::<&data::ExtractValue>(func.inst_set(), func.dfg.inst(inst))
+                        .and_then(|_| func.dfg.inst_result(inst))
+                })
+                .expect("reference extraction should exist");
+            assert_eq!(provenance.complete().complete_roots(extracted), None);
+            assert_known_and_unknown(provenance.may().may_roots(extracted), &[]);
+        });
+    }
+
+    #[test]
+    fn enum_extracted_reference_has_unknown_provenance() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+type @Selection = enum { #None, #Some(objref<i256>) };
+declare private %select() -> @Selection;
+
+func private %f() -> objref<i256> {
+block0:
+    v0.@Selection = call %select;
+    enum.assert_variant v0 #Some;
+    v1.objref<i256> = enum.extract v0 #Some 0.i256;
+    return v1;
+}
+"#,
+        );
+        module.func_store.view(lookup_func(&module, "f"), |func| {
+            let mut layout_cache = shape::AggregateLayoutCache::default();
+            let root_slices = collect_root_slices(func, None, &mut layout_cache);
+            let provenance =
+                collect_root_provenance(func, func.ctx(), &root_slices, &mut layout_cache, None);
+            let extracted = func
+                .layout
+                .iter_block()
+                .flat_map(|block| func.layout.iter_inst(block))
+                .find_map(|inst| {
+                    downcast::<&data::EnumExtract>(func.inst_set(), func.dfg.inst(inst))
+                        .and_then(|_| func.dfg.inst_result(inst))
+                })
+                .expect("reference extraction should exist");
+            assert_eq!(provenance.complete().complete_roots(extracted), None);
+            assert_known_and_unknown(provenance.may().may_roots(extracted), &[]);
+        });
     }
 
     #[test]

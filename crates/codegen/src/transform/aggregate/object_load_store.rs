@@ -1230,6 +1230,37 @@ mod tests {
     }
 
     #[test]
+    fn aggregate_argument_writes_invalidate_caller_loads() {
+        let module = parse_test_module(
+            r#"target = "evm-ethereum-osaka"
+type @Wrapper = { objref<i256> };
+func inline(never) private %overwrite(v0.@Wrapper) {
+block0:
+ v1.objref<i256> = extract_value v0 0.i8;
+ obj.store v1 22.i256;
+ return;
+}
+func public %entry() -> i256 {
+block0:
+ v0.objref<i256> = obj.alloc i256;
+ v1.@Wrapper = insert_value undef.@Wrapper 0.i8 v0;
+ obj.store v0 11.i256;
+ call %overwrite v1;
+ v2.i256 = obj.load v0;
+ return v2;
+}
+"#,
+        );
+        let entry = lookup_func(&module, "entry");
+        run_with_effects(&module, entry);
+        module.func_store.view(entry, |func| {
+            let dumped = FuncWriter::new(entry, func).dump_string();
+            assert!(dumped.contains("obj.load"), "{dumped}");
+            assert!(dumped.contains("obj.store"), "{dumped}");
+        });
+    }
+
+    #[test]
     fn forwards_local_object_arg_field_store_then_load() {
         let module = parse_test_module(
             r#"

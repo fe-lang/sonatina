@@ -1,0 +1,77 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: opt_ir_snapshot
+input_file: test_files/evm/aggregate_argument_reference_effects.sntn
+---
+target = "evm-ethereum-osaka"
+
+type @Wrapper = {objref<i256>};
+type @Choice = enum {
+    #None,
+    #Some(i256, @Wrapper),
+};
+
+func inline(never) private %read_struct(v0.@Wrapper) -> i256 {
+    block0:
+        v1.objref<i256> = extract_value v0 0.i8;
+        v2.i256 = obj.load v1;
+        return v2;
+}
+
+func inline(never) private %overwrite_struct(v0.@Wrapper, v1.i256) {
+    block0:
+        v2.objref<i256> = extract_value v0 0.i8;
+        obj.store v2 v1;
+        return;
+}
+
+func inline(never) private %read_enum(v0.@Choice) -> i256 {
+    block0:
+        enum.assert_variant v0 #Some;
+        v1.@Wrapper = enum.extract v0 #Some 1.i8;
+        v2.i256 = call %read_struct v1;
+        return v2;
+}
+
+func inline(never) private %overwrite_enum(v0.@Choice, v1.i256) {
+    block0:
+        enum.assert_variant v0 #Some;
+        v2.@Wrapper = enum.extract v0 #Some 1.i8;
+        call %overwrite_struct v2 v1;
+        return;
+}
+
+func inline(never) private %forward(v0.@Choice, v1.i256) {
+    block0:
+        call %overwrite_enum v0 v1;
+        return;
+}
+
+func public %entry() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i256;
+        v1.objref<i256> = obj.alloc i256;
+        v2.@Wrapper = insert_value undef.@Wrapper 0.i8 v1;
+        v3.@Choice = enum.make @Choice #Some 7.i256 v2;
+        obj.store v1 v0;
+        v4.i256 = call %read_struct v2;
+        v5.i256 = add v0 22.i256;
+        call %overwrite_struct v2 v5;
+        v6.i256 = obj.load v1;
+        v7.i256 = call %read_enum v3;
+        v8.i256 = add v0 44.i256;
+        call %forward v3 v8;
+        v9.i256 = obj.load v1;
+        v10.i256 = add v4 v6;
+        v11.i256 = add v7 v9;
+        v12.i256 = add v10 v11;
+        mstore 0.i256 v12 i256;
+        evm_return 0.i256 32.i256;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %entry;
+    }
+}
