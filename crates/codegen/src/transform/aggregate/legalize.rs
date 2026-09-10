@@ -1924,6 +1924,7 @@ fn runtime_leaves_from_leaf_slice(leaves: &[shape::AggregateLeaf]) -> shape::Run
 
 struct BeforeCursor {
     cursor: InstInserter,
+    source: InstId,
 }
 
 impl BeforeCursor {
@@ -1936,11 +1937,14 @@ impl BeforeCursor {
         };
         Self {
             cursor: InstInserter::at_location(loc),
+            source: inst,
         }
     }
 
     fn insert_no_result<I: Inst>(&mut self, func: &mut Function, inst_data: I) -> InstId {
-        let inst = self.cursor.insert_inst_data(func, inst_data);
+        let inst = self
+            .cursor
+            .insert_inst_data_from(func, self.source, inst_data);
         self.cursor.set_location(CursorLocation::At(inst));
         inst
     }

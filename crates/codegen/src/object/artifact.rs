@@ -1,4 +1,4 @@
-use crate::machinst::vcode::VCodeInst;
+use crate::machinst::vcode::{SectionCodeUnitId, VCodeInst};
 use cranelift_entity::EntityRef;
 use indexmap::IndexMap;
 use rustc_hash::FxHashMap;
@@ -9,8 +9,43 @@ use sonatina_ir::{
 };
 use std::fmt::Write as _;
 
-pub const OBSERVABILITY_SCHEMA_VERSION: &str = "0.1.0";
-pub type FrontendProvenanceMap = FxHashMap<(FuncRef, InstId), String>;
+pub const OBSERVABILITY_SCHEMA_VERSION: &str = "0.3.0";
+
+/// The owner of a PC-map range.
+///
+/// Function machine-instruction IDs are local to their function unit. A
+/// function unit and its [`MachineInstId`] must therefore be kept together
+/// when consuming an attribution. Synthetic units have no machine instruction
+/// owner and are always reported as unmapped.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum PcMapUnit {
+    Function(FuncRef),
+    Synthetic {
+        object: ObjectName,
+        section: SectionName,
+        unit: SectionCodeUnitId,
+    },
+}
+
+impl PcMapUnit {
+    pub fn function(&self) -> Option<FuncRef> {
+        match self {
+            Self::Function(func) => Some(*func),
+            Self::Synthetic { .. } => None,
+        }
+    }
+
+    pub(crate) fn sort_key(&self) -> (u8, u32, &str, &str, u32) {
+        match self {
+            Self::Function(func) => (0, func.as_u32(), "", "", 0),
+            Self::Synthetic {
+                object,
+                section,
+                unit,
+            } => (1, 0, object.0.as_str(), section.0.as_str(), unit.0),
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SymbolId {
@@ -28,7 +63,8 @@ pub struct SymbolDef {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum UnmappedReason {
-    NoIrInst,
+    MissingProvenance,
+    NoMachineInst,
     LabelOrFixupOnly,
     Synthetic,
     Unknown,
@@ -37,7 +73,8 @@ pub enum UnmappedReason {
 impl UnmappedReason {
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::NoIrInst => "no_ir_inst",
+            Self::MissingProvenance => "missing_provenance",
+            Self::NoMachineInst => "no_machine_inst",
             Self::LabelOrFixupOnly => "label_or_fixup_only",
             Self::Synthetic => "synthetic",
             Self::Unknown => "unknown",
@@ -47,7 +84,8 @@ impl UnmappedReason {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct UnmappedReasonCoverage {
-    pub no_ir_inst: u32,
+    pub missing_provenance: u32,
+    pub no_machine_inst: u32,
     pub label_or_fixup_only: u32,
     pub synthetic: u32,
     pub unknown: u32,
@@ -56,8 +94,11 @@ pub struct UnmappedReasonCoverage {
 impl UnmappedReasonCoverage {
     pub fn add_bytes(&mut self, reason: UnmappedReason, bytes: u32) {
         match reason {
-            UnmappedReason::NoIrInst => {
-                self.no_ir_inst = self.no_ir_inst.saturating_add(bytes);
+            UnmappedReason::MissingProvenance => {
+                self.missing_provenance = self.missing_provenance.saturating_add(bytes);
+            }
+            UnmappedReason::NoMachineInst => {
+                self.no_machine_inst = self.no_machine_inst.saturating_add(bytes);
             }
             UnmappedReason::LabelOrFixupOnly => {
                 self.label_or_fixup_only = self.label_or_fixup_only.saturating_add(bytes);
@@ -72,26 +113,110 @@ impl UnmappedReasonCoverage {
     }
 
     pub fn total_bytes(self) -> u32 {
-        self.no_ir_inst
+        self.missing_provenance
+            .saturating_add(self.no_machine_inst)
             .saturating_add(self.label_or_fixup_only)
             .saturating_add(self.synthetic)
             .saturating_add(self.unknown)
     }
 }
 
+/// A machine-IR instruction id, recovered from the vcode `inst_ir` table.
+///
+/// It is a distinct type from an optimized-IR id so the two namespaces cannot
+/// be looked up against each other by accident. Use `.raw()` at the point you
+/// deliberately cross back to a bare `InstId`. The inner field is pub on
+/// purpose: crossing namespaces requires writing the wrap explicitly, which is
+/// the reviewable act. The numeric ID is local to the [`PcMapUnit::Function`]
+/// that owns the PC range, not globally unique across functions. Consumers
+/// must retain `(PcMapUnit, MachineInstId)` together with the enclosing object
+/// and section when consuming a PC map. IDs are not stable across separate
+/// compilations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(transparent)]
+pub struct MachineInstId(pub InstId);
+
+impl MachineInstId {
+    pub fn raw(self) -> InstId {
+        self.0
+    }
+}
+
+/// The trace attribution of an emitted PC range.
+///
+/// A range is mapped only when its machine-IR instruction carries provenance
+/// stamped after optimization. Machine-IR identity alone is retained on the
+/// unmapped side for diagnostics, but never contributes to mapped coverage.
+/// The provenance string is a scalar anchor supplied through the public API
+/// after optimization and carried by codegen. It identifies one
+/// post-optimization instruction, but does not promise exhaustive
+/// transformation ancestry or source ownership for every input that
+/// contributed to the emitted range.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PcAttribution {
+    Mapped {
+        machine_inst: MachineInstId,
+        post_opt_provenance: String,
+    },
+    Unmapped {
+        machine_inst: Option<MachineInstId>,
+        reason: UnmappedReason,
+    },
+}
+
+impl PcAttribution {
+    pub fn machine_inst(&self) -> Option<MachineInstId> {
+        match self {
+            Self::Mapped { machine_inst, .. } => Some(*machine_inst),
+            Self::Unmapped { machine_inst, .. } => *machine_inst,
+        }
+    }
+
+    pub fn post_opt_provenance(&self) -> Option<&str> {
+        match self {
+            Self::Mapped {
+                post_opt_provenance,
+                ..
+            } => Some(post_opt_provenance),
+            Self::Unmapped { .. } => None,
+        }
+    }
+
+    pub fn unmapped_reason(&self) -> Option<UnmappedReason> {
+        match self {
+            Self::Mapped { .. } => None,
+            Self::Unmapped { reason, .. } => Some(*reason),
+        }
+    }
+
+    pub fn is_mapped(&self) -> bool {
+        matches!(self, Self::Mapped { .. })
+    }
+}
+
+/// One emitted PC interval and its owning code unit.
+///
+/// For a function unit, [`Self::unit`] scopes the optional machine instruction
+/// ID in [`Self::attribution`]. Numeric machine IDs must not be joined across
+/// entries from different function units.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PcMapEntry {
     pub pc_start: u32,
     pub pc_end: u32,
-    pub func: FuncRef,
+    pub unit: PcMapUnit,
     pub func_name: String,
     pub block: BlockId,
     pub vcode_inst: VCodeInst,
-    pub ir_inst: Option<InstId>,
-    pub frontend_provenance: Option<String>,
-    pub unmapped_reason: Option<UnmappedReason>,
+    pub attribution: PcAttribution,
 }
 
+/// Observability captured while linking one section.
+///
+/// This schema describes EVM object-section bytes and program-counter ranges;
+/// it is not a target-neutral provenance format. This is an owned snapshot of
+/// the section at compilation time. It is not a live view of the module and
+/// does not retain historical states if the module
+/// is mutated between optimization, stamping, and compilation.
 #[derive(Debug, Clone)]
 pub struct SectionObservability {
     pub schema_version: &'static str,
@@ -129,8 +254,9 @@ impl SectionObservability {
         .expect("in-memory write should not fail");
         writeln!(
             &mut out,
-            "unmapped no_ir_inst={} label_or_fixup_only={} synthetic={} unknown={}",
-            self.unmapped_reason_coverage.no_ir_inst,
+            "unmapped missing_provenance={} no_machine_inst={} label_or_fixup_only={} synthetic={} unknown={}",
+            self.unmapped_reason_coverage.missing_provenance,
+            self.unmapped_reason_coverage.no_machine_inst,
             self.unmapped_reason_coverage.label_or_fixup_only,
             self.unmapped_reason_coverage.synthetic,
             self.unmapped_reason_coverage.unknown,
@@ -138,28 +264,22 @@ impl SectionObservability {
         .expect("in-memory write should not fail");
 
         let mut entries = self.pc_map.clone();
-        entries.sort_by_key(|e| {
-            (
-                e.pc_start,
-                e.pc_end,
-                e.func.index(),
-                e.block.index(),
-                e.vcode_inst.index(),
-            )
-        });
+        sort_pc_map_entries(&mut entries);
         for entry in entries {
             let reason = entry
-                .unmapped_reason
+                .attribution
+                .unmapped_reason()
                 .map(UnmappedReason::as_str)
                 .unwrap_or("-");
-            let frontend = entry.frontend_provenance.as_deref().unwrap_or("-");
+            let post_opt = entry.attribution.post_opt_provenance().unwrap_or("-");
             let ir = entry
-                .ir_inst
-                .map(|ir| ir.0.to_string())
+                .attribution
+                .machine_inst()
+                .map(|ir| ir.raw().0.to_string())
                 .unwrap_or("-".into());
             writeln!(
                 &mut out,
-                "pc [{}, {}) func={} block={} vcode={} ir={} reason={} frontend={}",
+                "pc [{}, {}) func={} block={} vcode={} machine={} reason={} post_opt={}",
                 entry.pc_start,
                 entry.pc_end,
                 entry.func_name,
@@ -167,7 +287,7 @@ impl SectionObservability {
                 entry.vcode_inst.index(),
                 ir,
                 reason,
-                frontend
+                post_opt
             )
             .expect("in-memory write should not fail");
         }
@@ -215,8 +335,9 @@ impl SectionObservability {
             .expect("in-memory write should not fail");
         write!(
             &mut out,
-            "\"no_ir_inst\":{},\"label_or_fixup_only\":{},\"synthetic\":{},\"unknown\":{}",
-            self.unmapped_reason_coverage.no_ir_inst,
+            "\"missing_provenance\":{},\"no_machine_inst\":{},\"label_or_fixup_only\":{},\"synthetic\":{},\"unknown\":{}",
+            self.unmapped_reason_coverage.missing_provenance,
+            self.unmapped_reason_coverage.no_machine_inst,
             self.unmapped_reason_coverage.label_or_fixup_only,
             self.unmapped_reason_coverage.synthetic,
             self.unmapped_reason_coverage.unknown
@@ -226,15 +347,7 @@ impl SectionObservability {
 
         write!(&mut out, "\"pc_map\":[").expect("in-memory write should not fail");
         let mut entries = self.pc_map.clone();
-        entries.sort_by_key(|e| {
-            (
-                e.pc_start,
-                e.pc_end,
-                e.func.index(),
-                e.block.index(),
-                e.vcode_inst.index(),
-            )
-        });
+        sort_pc_map_entries(&mut entries);
         for (idx, entry) in entries.iter().enumerate() {
             if idx > 0 {
                 write!(&mut out, ",").expect("in-memory write should not fail");
@@ -242,13 +355,31 @@ impl SectionObservability {
             write!(&mut out, "{{").expect("in-memory write should not fail");
             write!(
                 &mut out,
-                "\"pc_start\":{},\"pc_end\":{},\"func\":{},\"block\":{},\"vcode_inst\":{}",
+                "\"pc_start\":{},\"pc_end\":{},\"block\":{},\"vcode_inst\":{}",
                 entry.pc_start,
                 entry.pc_end,
-                entry.func.index(),
                 entry.block.index(),
                 entry.vcode_inst.index()
             )
+            .expect("in-memory write should not fail");
+            match &entry.unit {
+                PcMapUnit::Function(func) => write!(
+                    &mut out,
+                    ",\"unit\":{{\"kind\":\"function\",\"func\":{}}}",
+                    func.index()
+                ),
+                PcMapUnit::Synthetic {
+                    object,
+                    section,
+                    unit,
+                } => write!(
+                    &mut out,
+                    ",\"unit\":{{\"kind\":\"synthetic\",\"object\":\"{}\",\"section\":\"{}\",\"unit\":{}}}",
+                    json_escape(&object.0),
+                    json_escape(&section.0),
+                    unit.0
+                ),
+            }
             .expect("in-memory write should not fail");
             write!(
                 &mut out,
@@ -257,31 +388,32 @@ impl SectionObservability {
             )
             .expect("in-memory write should not fail");
 
-            if let Some(ir_inst) = entry.ir_inst {
-                write!(&mut out, ",\"ir_inst\":{}", ir_inst.0)
-                    .expect("in-memory write should not fail");
-            } else {
-                write!(&mut out, ",\"ir_inst\":null").expect("in-memory write should not fail");
-            }
-
-            if let Some(reason) = entry.unmapped_reason {
-                write!(&mut out, ",\"reason\":\"{}\"", reason.as_str())
-                    .expect("in-memory write should not fail");
-            } else {
-                write!(&mut out, ",\"reason\":null").expect("in-memory write should not fail");
-            }
-
-            if let Some(frontend) = &entry.frontend_provenance {
-                write!(
+            match &entry.attribution {
+                PcAttribution::Mapped {
+                    machine_inst,
+                    post_opt_provenance,
+                } => write!(
                     &mut out,
-                    ",\"frontend_provenance\":\"{}\"",
-                    json_escape(frontend)
-                )
-                .expect("in-memory write should not fail");
-            } else {
-                write!(&mut out, ",\"frontend_provenance\":null")
+                    ",\"attribution\":{{\"status\":\"mapped\",\"machine_inst\":{},\"post_opt_provenance\":\"{}\"}}",
+                    machine_inst.raw().0,
+                    json_escape(post_opt_provenance)
+                ),
+                PcAttribution::Unmapped { machine_inst, reason } => {
+                    write!(
+                        &mut out,
+                        ",\"attribution\":{{\"status\":\"unmapped\",\"machine_inst\":"
+                    )
                     .expect("in-memory write should not fail");
+                    if let Some(machine_inst) = machine_inst {
+                        write!(&mut out, "{}", machine_inst.raw().0)
+                            .expect("in-memory write should not fail");
+                    } else {
+                        write!(&mut out, "null").expect("in-memory write should not fail");
+                    }
+                    write!(&mut out, ",\"reason\":\"{}\"}}", reason.as_str())
+                }
             }
+            .expect("in-memory write should not fail");
 
             write!(&mut out, "}}").expect("in-memory write should not fail");
         }
@@ -364,22 +496,16 @@ impl ObjectObservability {
         write!(&mut out, "]}}").expect("in-memory write should not fail");
         out
     }
+}
 
-    /// Enrich pc-map entries with frontend provenance attached to `(FuncRef, InstId)`.
-    ///
-    /// This is additive and does not require mutating Sonatina IR instructions.
-    pub fn apply_frontend_provenance(&mut self, provenance: &FrontendProvenanceMap) {
-        for section in self.sections.values_mut() {
-            for entry in &mut section.pc_map {
-                let Some(ir_inst) = entry.ir_inst else {
-                    continue;
-                };
-                if let Some(value) = provenance.get(&(entry.func, ir_inst)) {
-                    entry.frontend_provenance = Some(value.clone());
-                }
-            }
-        }
-    }
+fn sort_pc_map_entries(entries: &mut [PcMapEntry]) {
+    entries.sort_by(|a, b| {
+        (a.pc_start, a.pc_end)
+            .cmp(&(b.pc_start, b.pc_end))
+            .then_with(|| a.unit.sort_key().cmp(&b.unit.sort_key()))
+            .then_with(|| a.block.index().cmp(&b.block.index()))
+            .then_with(|| a.vcode_inst.index().cmp(&b.vcode_inst.index()))
+    });
 }
 
 #[derive(Debug, Clone)]

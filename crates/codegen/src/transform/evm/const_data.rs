@@ -1324,6 +1324,7 @@ fn insert_before_results<I: sonatina_ir::Inst>(
     result_tys: &[Type],
 ) -> SmallVec<[ValueId; 2]> {
     let inst = func.dfg.make_inst(data);
+    func.propagate_inst_attribution(inst, before);
     func.layout.insert_inst_before(inst, before);
     result_tys
         .iter()
@@ -1355,6 +1356,7 @@ pub(super) fn insert_before_no_result<I: sonatina_ir::Inst>(
     data: I,
 ) {
     let inst = func.dfg.make_inst(data);
+    func.propagate_inst_attribution(inst, before);
     func.layout.insert_inst_before(inst, before);
 }
 

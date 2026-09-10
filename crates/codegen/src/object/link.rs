@@ -13,15 +13,16 @@ use sonatina_ir::{
     BlockId, GlobalVariableRef, Linkage, Module,
     inst::data::SymbolRef,
     module::FuncRef,
-    object::{EmbedSymbol, SectionName},
+    object::{EmbedSymbol, ObjectName, SectionName},
 };
 use tracing::{debug_span, info_span, trace_span};
 
 use super::{
     CompileOptions,
     artifact::{
-        OBSERVABILITY_SCHEMA_VERSION, PcMapEntry, SectionArtifact, SectionObservability, SymbolDef,
-        SymbolId, UnmappedReason, UnmappedReasonCoverage,
+        MachineInstId, OBSERVABILITY_SCHEMA_VERSION, PcAttribution, PcMapEntry, PcMapUnit,
+        SectionArtifact, SectionObservability, SymbolDef, SymbolId, UnmappedReason,
+        UnmappedReasonCoverage,
     },
 };
 
@@ -34,6 +35,7 @@ pub(crate) enum LinkSectionError {
 
 struct BuildSectionObservabilityInput<'a, Op> {
     module: &'a Module,
+    object: &'a ObjectName,
     layout: &'a ObjectLayout<Op>,
     funcs: &'a [FuncRef],
     symtab: &'a FxHashMap<SymbolId, SymbolDef>,
@@ -224,6 +226,7 @@ fn checked_u32(value: usize) -> Result<u32, String> {
 pub(crate) fn link_section(
     backend: &EvmBackend,
     prepared: &EvmPreparedSection,
+    object: &ObjectName,
     data: &[(GlobalVariableRef, Vec<u8>)],
     embeds: &[(EmbedSymbol, Vec<u8>)],
     section: &SectionName,
@@ -353,6 +356,7 @@ pub(crate) fn link_section(
                         debug_span!("sonatina.codegen.link_section.build_observability").entered();
                     build_section_observability(BuildSectionObservabilityInput {
                         module,
+                        object,
                         layout: &layout,
                         funcs: &layout_func_refs,
                         symtab: &symtab,
@@ -502,6 +506,7 @@ fn build_section_observability<Op>(
 ) -> Result<SectionObservability, String> {
     let BuildSectionObservabilityInput {
         module,
+        object,
         layout,
         funcs,
         symtab,
@@ -572,49 +577,52 @@ fn build_section_observability<Op>(
                 ));
             }
 
-            let ir_inst = func_layout.vcode().inst_ir[insn].expand();
-            if let Some(ir_inst) = ir_inst {
+            let machine_inst_id = func_layout.vcode().inst_ir[insn].expand();
+            if let Some(machine_inst_id) = machine_inst_id {
                 let valid = module
                     .func_store
-                    .view(func, |function| function.dfg.has_inst(ir_inst));
+                    .view(func, |function| function.dfg.has_inst(machine_inst_id));
                 if !valid {
                     return Err(format!(
-                        "invalid ir reference for func {:?}: vcode {:?} -> ir {:?}",
-                        func, insn, ir_inst
+                        "invalid machine-IR reference for func {:?}: vcode {:?} -> machine {:?}",
+                        func, insn, machine_inst_id
                     ));
                 }
             }
-            let unmapped_reason = if ir_inst.is_none() {
-                Some(classify_unmapped_reason(func_layout, insn, is_head))
-            } else {
-                None
+            let attribution = match machine_inst_id {
+                Some(machine_inst_id) => {
+                    let post_opt_provenance = module.func_store.view(func, |function| {
+                        function.inst_provenance(machine_inst_id).map(str::to_owned)
+                    });
+                    match post_opt_provenance {
+                        Some(post_opt_provenance) => PcAttribution::Mapped {
+                            machine_inst: MachineInstId(machine_inst_id),
+                            post_opt_provenance,
+                        },
+                        None => PcAttribution::Unmapped {
+                            machine_inst: Some(MachineInstId(machine_inst_id)),
+                            reason: UnmappedReason::MissingProvenance,
+                        },
+                    }
+                }
+                None => PcAttribution::Unmapped {
+                    machine_inst: None,
+                    reason: classify_unmapped_reason(func_layout, insn, is_head),
+                },
             };
-
             pc_map.push(PcMapEntry {
                 pc_start,
                 pc_end,
-                func,
+                unit: PcMapUnit::Function(func),
                 func_name: func_name.clone(),
                 block,
                 vcode_inst: insn,
-                ir_inst,
-                frontend_provenance: None,
-                unmapped_reason,
+                attribution,
             });
         }
     }
 
-    let synthetic_func_base = funcs
-        .iter()
-        .map(|func| func.as_u32())
-        .max()
-        .map_or(0, |max| max.saturating_add(1));
-    for (idx, (unit_id, unit)) in layout.section_units().iter().enumerate() {
-        let func = FuncRef::from_u32(
-            synthetic_func_base
-                .checked_add(idx as u32)
-                .expect("synthetic observability func ref overflow"),
-        );
+    for (unit_id, unit) in layout.section_units().iter() {
         let func_name = unit.name().to_string();
         let layout = unit.layout();
         let func_end = layout.end();
@@ -642,25 +650,24 @@ fn build_section_observability<Op>(
             pc_map.push(PcMapEntry {
                 pc_start,
                 pc_end,
-                func,
+                unit: synthetic_pc_map_unit(object, section, *unit_id),
                 func_name: func_name.clone(),
                 block,
                 vcode_inst: insn,
-                ir_inst: None,
-                frontend_provenance: None,
-                unmapped_reason: Some(UnmappedReason::Synthetic),
+                attribution: PcAttribution::Unmapped {
+                    machine_inst: None,
+                    reason: UnmappedReason::Synthetic,
+                },
             });
         }
     }
 
-    pc_map.sort_by_key(|e| {
-        (
-            e.pc_start,
-            e.pc_end,
-            e.func.index(),
-            e.block.index(),
-            e.vcode_inst.index(),
-        )
+    pc_map.sort_by(|a, b| {
+        (a.pc_start, a.pc_end)
+            .cmp(&(b.pc_start, b.pc_end))
+            .then_with(|| a.unit.sort_key().cmp(&b.unit.sort_key()))
+            .then_with(|| a.block.index().cmp(&b.block.index()))
+            .then_with(|| a.vcode_inst.index().cmp(&b.vcode_inst.index()))
     });
 
     let mut mapped_code_bytes = 0_u32;
@@ -693,16 +700,18 @@ fn build_section_observability<Op>(
         }
 
         let span = entry.pc_end - entry.pc_start;
-        if entry.ir_inst.is_some() {
-            mapped_code_bytes = mapped_code_bytes
-                .checked_add(span)
-                .ok_or_else(|| "mapped code bytes overflow".to_string())?;
-        } else {
-            let reason = entry.unmapped_reason.unwrap_or(UnmappedReason::Unknown);
-            unmapped_code_bytes = unmapped_code_bytes
-                .checked_add(span)
-                .ok_or_else(|| "unmapped code bytes overflow".to_string())?;
-            unmapped_reason_coverage.add_bytes(reason, span);
+        match &entry.attribution {
+            PcAttribution::Mapped { .. } => {
+                mapped_code_bytes = mapped_code_bytes
+                    .checked_add(span)
+                    .ok_or_else(|| "mapped code bytes overflow".to_string())?;
+            }
+            PcAttribution::Unmapped { reason, .. } => {
+                unmapped_code_bytes = unmapped_code_bytes
+                    .checked_add(span)
+                    .ok_or_else(|| "unmapped code bytes overflow".to_string())?;
+                unmapped_reason_coverage.add_bytes(*reason, span);
+            }
         }
 
         cursor = cursor.max(entry.pc_end);
@@ -748,6 +757,18 @@ fn build_section_observability<Op>(
     })
 }
 
+fn synthetic_pc_map_unit(
+    object: &ObjectName,
+    section: &SectionName,
+    unit: crate::machinst::vcode::SectionCodeUnitId,
+) -> PcMapUnit {
+    PcMapUnit::Synthetic {
+        object: object.clone(),
+        section: section.clone(),
+        unit,
+    }
+}
+
 fn classify_unmapped_reason<Op>(
     func_layout: &crate::machinst::assemble::FuncLayout<Op>,
     insn: VCodeInst,
@@ -761,7 +782,7 @@ fn classify_unmapped_reason<Op>(
     } else if is_block_head {
         UnmappedReason::Synthetic
     } else {
-        UnmappedReason::NoIrInst
+        UnmappedReason::NoMachineInst
     }
 }
 
@@ -785,6 +806,30 @@ mod tests {
             vendor: Vendor::Ethereum,
             operating_system: OperatingSystem::Evm(EvmVersion::Osaka),
         }))
+    }
+
+    #[test]
+    fn synthetic_unit_identities_are_unique_across_objects_and_sections() {
+        let unit = SectionCodeUnitId(0);
+        let runtime_a = synthetic_pc_map_unit(
+            &sonatina_ir::object::ObjectName("A".into()),
+            &sonatina_ir::object::SectionName("runtime".into()),
+            unit,
+        );
+        let runtime_b = synthetic_pc_map_unit(
+            &sonatina_ir::object::ObjectName("B".into()),
+            &sonatina_ir::object::SectionName("runtime".into()),
+            unit,
+        );
+        let init_a = synthetic_pc_map_unit(
+            &sonatina_ir::object::ObjectName("A".into()),
+            &sonatina_ir::object::SectionName("init".into()),
+            unit,
+        );
+
+        assert_ne!(runtime_a, runtime_b);
+        assert_ne!(runtime_a, init_a);
+        assert_eq!(runtime_a.function(), None);
     }
 
     #[test]

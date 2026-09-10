@@ -317,8 +317,9 @@ pub(crate) fn bitcast_before_inst(
         CursorLocation::At,
     );
     let mut cursor = InstInserter::at_location(loc);
-    let bitcast_inst = cursor.insert_inst_data(
+    let bitcast_inst = cursor.insert_inst_data_from(
         func,
+        inst,
         cast::Bitcast::new_unchecked(func.inst_set(), value, to_ty),
     );
     let cast_value = func.dfg.make_value(Value::Inst {
@@ -524,8 +525,9 @@ fn extract_value_before_inst(
         CursorLocation::At,
     );
     let mut cursor = InstInserter::at_location(loc);
-    let extract_inst = cursor.insert_inst_data(
+    let extract_inst = cursor.insert_inst_data_from(
         func,
+        inst,
         data::ExtractValue::new_unchecked(func.inst_set(), aggregate, idx_value),
     );
     let extract_value = func.dfg.make_value(Value::Inst {
@@ -543,8 +545,11 @@ fn enum_tag_before_inst(func: &mut Function, inst: InstId, value: ValueId, ty: T
         CursorLocation::At,
     );
     let mut cursor = InstInserter::at_location(loc);
-    let enum_tag_inst =
-        cursor.insert_inst_data(func, data::EnumTag::new_unchecked(func.inst_set(), value));
+    let enum_tag_inst = cursor.insert_inst_data_from(
+        func,
+        inst,
+        data::EnumTag::new_unchecked(func.inst_set(), value),
+    );
     let enum_tag_value = func.dfg.make_value(Value::Inst {
         inst: enum_tag_inst,
         result_idx: 0,
@@ -566,8 +571,9 @@ fn insert_enum_make_before_inst(
         CursorLocation::At,
     );
     let mut cursor = InstInserter::at_location(loc);
-    let enum_make_inst = cursor.insert_inst_data(
+    let enum_make_inst = cursor.insert_inst_data_from(
         func,
+        inst,
         data::EnumMake::new_unchecked(func.inst_set(), ty, variant, values),
     );
     let enum_make_value = func.dfg.make_value(Value::Inst {
@@ -595,8 +601,9 @@ fn insert_value_before_inst(
         CursorLocation::At,
     );
     let mut cursor = InstInserter::at_location(loc);
-    let insert_inst = cursor.insert_inst_data(
+    let insert_inst = cursor.insert_inst_data_from(
         func,
+        inst,
         data::InsertValue::new_unchecked(func.inst_set(), dest, idx_value, value),
     );
     let insert_value = func.dfg.make_value(Value::Inst {

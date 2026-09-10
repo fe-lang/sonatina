@@ -90,13 +90,21 @@ impl BranchCanonicalize {
         let mut dead_cmp_inst = None;
         if let Some((cmp_inst, kind, lhs, rhs)) = compare_value(func, cond) {
             if let Some(zero_compare) =
-                zero_compare_branch_rewrite(func, term, kind, lhs, rhs, cond_ty)
+                zero_compare_branch_rewrite(func, term, cmp_inst, kind, lhs, rhs, cond_ty)
             {
                 cond = zero_compare.cond;
                 swap ^= zero_compare.swap;
                 dead_cmp_inst = Some(cmp_inst);
             } else if compare_cost(invert_compare(kind)) < compare_cost(kind) {
-                cond = insert_compare_before(func, term, invert_compare(kind), lhs, rhs, cond_ty);
+                cond = insert_compare_before(
+                    func,
+                    term,
+                    cmp_inst,
+                    invert_compare(kind),
+                    lhs,
+                    rhs,
+                    cond_ty,
+                );
                 swap = !swap;
                 dead_cmp_inst = Some(cmp_inst);
             }
@@ -202,6 +210,7 @@ fn compare_cost(kind: BinaryInstKind) -> u8 {
 fn zero_compare_branch_rewrite(
     func: &mut Function,
     term: InstId,
+    anchor: InstId,
     kind: BinaryInstKind,
     lhs: ValueId,
     rhs: ValueId,
@@ -245,7 +254,7 @@ fn zero_compare_branch_rewrite(
     };
 
     Some(ZeroComparePlan {
-        cond: insert_is_zero_before(func, term, arg, result_ty)?,
+        cond: insert_is_zero_before(func, term, anchor, arg, result_ty)?,
         swap,
     })
 }
@@ -265,6 +274,7 @@ fn i1_literal(func: &Function, value: ValueId) -> Option<bool> {
 fn insert_compare_before(
     func: &mut Function,
     before: InstId,
+    anchor: InstId,
     kind: BinaryInstKind,
     lhs: ValueId,
     rhs: ValueId,
@@ -291,12 +301,14 @@ fn insert_compare_before(
     });
     func.dfg.attach_result(inst, value);
     func.layout.insert_inst_before(inst, before);
+    func.propagate_inst_attribution(inst, anchor);
     value
 }
 
 fn insert_is_zero_before(
     func: &mut Function,
     before: InstId,
+    anchor: InstId,
     arg: ValueId,
     result_ty: Type,
 ) -> Option<ValueId> {
@@ -310,6 +322,7 @@ fn insert_is_zero_before(
     });
     func.dfg.attach_result(inst, value);
     func.layout.insert_inst_before(inst, before);
+    func.propagate_inst_attribution(inst, anchor);
     Some(value)
 }
 

@@ -8,7 +8,7 @@ use crate::{
         lower::{LoweredFunction, SectionWorkModule},
         vcode::{Label, VCode, VCodeFixup},
     },
-    object::{CompileOptions, SymbolId, link::link_section},
+    object::{CompileOptions, PcAttribution, SymbolId, UnmappedReason, link::link_section},
     optim::pipeline::Pipeline,
     stackalloc::{
         Action, Actions, Allocator, StackifyAlloc, StackifyBuilder, StackifyEdgeSplitter,
@@ -18,11 +18,16 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{
     BlockId, Function, Immediate, InstId, InstSetBase, InstSetExt, Module, ValueId,
-    cfg::ControlFlowGraph, inst::evm::inst_set::EvmInstKind, ir_writer::FuncWriter, isa::Isa,
-    module::ModuleCtx, object::SectionName,
+    cfg::ControlFlowGraph,
+    inst::evm::inst_set::EvmInstKind,
+    ir_writer::FuncWriter,
+    isa::Isa,
+    module::ModuleCtx,
+    object::{ObjectName, SectionName},
 };
 use sonatina_parser::parse_module;
 use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
+use std::sync::Arc;
 
 use self::{
     dyn_sp::DynSpInitKind,
@@ -3233,6 +3238,61 @@ block2:
 }
 
 #[test]
+fn prune_clears_ir_mapping_when_combining_different_attributions() {
+    let mut vcode = VCode::<OpCode>::default();
+    let block = BlockId(0);
+
+    let push = vcode.add_inst_to_block(OpCode::PUSH1, Some(InstId(1)), block);
+    vcode.inst_imm_bytes.insert((push, smallvec![0u8]));
+    let eq = vcode.add_inst_to_block(OpCode::EQ, Some(InstId(2)), block);
+
+    prune_redundant_opcode_sequences(&mut vcode, &[block]);
+
+    assert_eq!(vcode.block_insns(block).collect::<Vec<_>>(), vec![eq]);
+    assert_eq!(vcode.insts[eq] as u8, OpCode::ISZERO as u8);
+    assert_eq!(vcode.inst_ir[eq].expand(), None);
+}
+
+#[test]
+fn prune_preserves_ir_mapping_when_combining_the_same_attribution() {
+    let mut vcode = VCode::<OpCode>::default();
+    let block = BlockId(0);
+    let owner = InstId(7);
+    let push = vcode.add_inst_to_block(OpCode::PUSH1, Some(owner), block);
+    vcode.inst_imm_bytes.insert((push, smallvec![0u8]));
+    let eq = vcode.add_inst_to_block(OpCode::EQ, Some(owner), block);
+
+    prune_redundant_opcode_sequences(&mut vcode, &[block]);
+
+    assert_eq!(vcode.block_insns(block).collect::<Vec<_>>(), vec![eq]);
+    assert_eq!(vcode.insts[eq] as u8, OpCode::ISZERO as u8);
+    assert_eq!(vcode.inst_ir[eq].expand(), Some(owner));
+}
+
+#[test]
+fn prune_preserves_surviving_owners_when_reordering_stack_operations() {
+    let mut vcode = VCode::<OpCode>::default();
+    let block = BlockId(0);
+    let addr = vcode.add_inst_to_block(OpCode::PUSH1, Some(InstId(1)), block);
+    vcode.inst_imm_bytes.insert((addr, smallvec![32u8]));
+    let load = vcode.add_inst_to_block(OpCode::MLOAD, Some(InstId(2)), block);
+    let imm = vcode.add_inst_to_block(OpCode::PUSH1, Some(InstId(3)), block);
+    vcode.inst_imm_bytes.insert((imm, smallvec![5u8]));
+    vcode.add_inst_to_block(OpCode::SWAP1, Some(InstId(4)), block);
+    let sub = vcode.add_inst_to_block(OpCode::SUB, Some(InstId(5)), block);
+
+    prune_redundant_opcode_sequences(&mut vcode, &[block]);
+
+    assert_eq!(
+        vcode.block_insns(block).collect::<Vec<_>>(),
+        vec![imm, addr, load, sub]
+    );
+    for (inst, owner) in [(addr, 1), (load, 2), (imm, 3), (sub, 5)] {
+        assert_eq!(vcode.inst_ir[inst].expand(), Some(InstId(owner)));
+    }
+}
+
+#[test]
 fn prune_removes_and_one_after_bool_producer() {
     let mut vcode = VCode::<OpCode>::default();
     let block = BlockId(0);
@@ -3346,6 +3406,202 @@ fn prune_keeps_iszero_iszero_before_non_labeled_jumpi() {
 }
 
 #[test]
+fn exact_and_glue_lowering_have_distinct_pc_attribution() {
+    let mut parsed = parse_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+func public %runtime(v0.i256, v1.i256) {
+block0:
+    v2.i256 = add v0 v1;
+    v3.i1 = le v2 v1;
+    v4.i256 = zext v3 i256;
+    v5.i256 = add v2 v4;
+    mstore 0.i256 v5 i256;
+    evm_return 0.i256 32.i256;
+}
+
+object @Contract {
+  section runtime {
+    entry %runtime;
+  }
+}
+"#,
+    )
+    .expect("module parses");
+    let runtime = find_func(&parsed.module, "runtime");
+
+    parsed.module.func_store.modify(runtime, |function| {
+        let insts: Vec<_> = function
+            .layout
+            .iter_block()
+            .flat_map(|block| function.layout.iter_inst(block))
+            .collect();
+        let mut add_count = 0;
+        let mut le_count = 0;
+        for inst in insts {
+            match function.dfg.inst(inst).as_text() {
+                "add" if add_count == 0 => {
+                    function.set_inst_frontend_origin(inst, Arc::from("frontend:add"));
+                    add_count += 1;
+                }
+                "le" => {
+                    function.set_inst_frontend_origin(inst, Arc::from("frontend:le"));
+                    le_count += 1;
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(add_count, 1, "fixture should contain the exact add");
+        assert_eq!(le_count, 1, "fixture should contain the glue comparison");
+    });
+
+    Pipeline::speed().run(&mut parsed.module);
+    parsed.module.func_store.modify(runtime, |function| {
+        let insts: Vec<_> = function
+            .layout
+            .iter_block()
+            .flat_map(|block| function.layout.iter_inst(block))
+            .collect();
+        let mut stamped_add = false;
+        let mut stamped_le = false;
+        for inst in insts {
+            match function.inst_frontend_origin(inst) {
+                Some("frontend:add") => {
+                    function.set_inst_provenance(inst, "post-opt:add".to_string());
+                    stamped_add = true;
+                }
+                Some("frontend:le") => {
+                    function.set_inst_provenance(inst, "post-opt:le".to_string());
+                    stamped_le = true;
+                }
+                _ => {}
+            }
+        }
+        assert!(stamped_add);
+        assert!(stamped_le);
+    });
+
+    let backend = test_backend().with_late_cleanup_profile(LateCleanupProfile::Off);
+    let prepared = backend
+        .prepare_section(work_module_with_entry(&parsed.module, &[runtime], runtime))
+        .expect("prepare should succeed");
+
+    let (exact_machine_insts, glue_machine_insts) =
+        prepared.module().func_store.view(runtime, |function| {
+            let mut exact = FxHashSet::default();
+            let mut glue = FxHashSet::default();
+            for inst in function
+                .layout
+                .iter_block()
+                .flat_map(|block| function.layout.iter_inst(block))
+            {
+                match function.inst_frontend_origin(inst) {
+                    Some("frontend:add") => {
+                        assert_eq!(function.inst_provenance(inst), Some("post-opt:add"));
+                        exact.insert(inst);
+                    }
+                    Some("frontend:le") => {
+                        assert_eq!(
+                            function.inst_provenance(inst),
+                            None,
+                            "one-to-many lowering glue must not inherit exact provenance"
+                        );
+                        glue.insert(inst);
+                    }
+                    _ => {}
+                }
+            }
+            (exact, glue)
+        });
+    assert!(
+        !exact_machine_insts.is_empty(),
+        "exact add lowering should retain origin and provenance"
+    );
+    assert!(
+        !glue_machine_insts.is_empty(),
+        "comparison glue should retain only frontend origin"
+    );
+
+    let artifact = link_section(
+        &backend,
+        &prepared,
+        &ObjectName("Contract".into()),
+        &[],
+        &[],
+        &SectionName("runtime".into()),
+        &CompileOptions {
+            fixup_policy: PushWidthPolicy::Push4,
+            emit_symtab: true,
+            emit_observability: true,
+            ..CompileOptions::default()
+        },
+    )
+    .expect("linking should succeed");
+    let observability = artifact
+        .observability
+        .as_ref()
+        .expect("runtime observability");
+
+    let exact_ranges: Vec<_> = observability
+        .pc_map
+        .iter()
+        .filter(|entry| {
+            entry
+                .attribution
+                .machine_inst()
+                .is_some_and(|inst| exact_machine_insts.contains(&inst.raw()))
+        })
+        .collect();
+    assert!(!exact_ranges.is_empty());
+    assert!(exact_ranges.iter().all(|entry| matches!(
+        &entry.attribution,
+        PcAttribution::Mapped {
+            post_opt_provenance,
+            ..
+        } if post_opt_provenance == "post-opt:add"
+    )));
+
+    let glue_ranges: Vec<_> = observability
+        .pc_map
+        .iter()
+        .filter(|entry| {
+            entry
+                .attribution
+                .machine_inst()
+                .is_some_and(|inst| glue_machine_insts.contains(&inst.raw()))
+        })
+        .collect();
+    assert!(!glue_ranges.is_empty());
+    assert!(glue_ranges.iter().all(|entry| matches!(
+        &entry.attribution,
+        PcAttribution::Unmapped {
+            reason: UnmappedReason::MissingProvenance,
+            ..
+        }
+    )));
+
+    let exact_bytes: u32 = exact_ranges
+        .iter()
+        .map(|entry| entry.pc_end - entry.pc_start)
+        .sum();
+    let glue_bytes: u32 = glue_ranges
+        .iter()
+        .map(|entry| entry.pc_end - entry.pc_start)
+        .sum();
+    assert_eq!(observability.mapped_code_bytes, exact_bytes);
+    assert!(glue_bytes > 0);
+    assert!(
+        observability.unmapped_reason_coverage.missing_provenance >= glue_bytes,
+        "glue bytes must be counted under missing_provenance"
+    );
+    assert_eq!(
+        observability.mapped_code_bytes + observability.unmapped_code_bytes,
+        observability.code_bytes
+    );
+}
+
+#[test]
 fn link_section_resolves_sym_fixups_in_late_outlined_helper() {
     let parsed = parse_module(
         r#"
@@ -3451,6 +3707,7 @@ block2:
     let artifact = link_section(
         &backend,
         &prepared,
+        &sonatina_ir::object::ObjectName("test".into()),
         &[],
         &[],
         &SectionName("runtime".into()),

@@ -290,8 +290,9 @@ impl AggregateExpandAbi {
             CursorLocation::At,
         );
         let mut cursor = InstInserter::at_location(loc);
-        let new_call = cursor.insert_inst_data(
+        let new_call = cursor.insert_inst_data_from(
             func,
+            inst,
             control_flow::Call::new(
                 func.inst_set()
                     .has_call()
@@ -497,8 +498,9 @@ fn insert_value_before_inst(
         CursorLocation::At,
     );
     let mut cursor = InstInserter::at_location(loc);
-    let insert_inst = cursor.insert_inst_data(
+    let insert_inst = cursor.insert_inst_data_from(
         func,
+        inst,
         data::InsertValue::new_unchecked(func.inst_set(), dest, idx_value, value),
     );
     let insert_value = func.dfg.make_value(Value::Inst {

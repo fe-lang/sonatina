@@ -239,6 +239,9 @@ pub(crate) fn prune_redundant_opcode_sequences(vcode: &mut VCode<OpCode>, block_
                     && is_plain_inst(vcode, &label_targets, eq)
                     && (vcode.insts[eq] as u8) == (OpCode::EQ as u8)
                 {
+                    if vcode.inst_ir[push] != vcode.inst_ir[eq] {
+                        vcode.inst_ir[eq] = None.into();
+                    }
                     vcode.insts[eq] = OpCode::ISZERO;
                     kept.push(eq);
                     changed = true;
