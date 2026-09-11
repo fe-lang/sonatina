@@ -29,7 +29,7 @@ use crate::{
     optim::{
         aggregate::{ObjectMemoryAnalysis, ObjectReadGvnKey},
         simplify_expr::{
-            ExprFactProvider, SimplifiedResult, shift_amount_for_pow2_mul, simplify_key_with_facts,
+            ExprFactProvider, SimplifiedResult, nontrivial_pow2_shift, simplify_key_with_facts,
         },
     },
 };
@@ -1038,7 +1038,7 @@ impl GvnSolver {
 
                 if kind == BinaryInstKind::Mul {
                     if let Some(imm) = func.dfg.value_imm(lhs)
-                        && let Some(shift) = shift_amount_for_pow2_mul(imm)
+                        && let Some(shift) = nontrivial_pow2_shift(imm)
                     {
                         let shift = self.make_imm(
                             &mut func.dfg,
@@ -1051,7 +1051,7 @@ impl GvnSolver {
                         }
                     }
                     if let Some(imm) = func.dfg.value_imm(rhs)
-                        && let Some(shift) = shift_amount_for_pow2_mul(imm)
+                        && let Some(shift) = nontrivial_pow2_shift(imm)
                     {
                         let shift = self.make_imm(
                             &mut func.dfg,
