@@ -14,16 +14,17 @@ pub(crate) const FIXED_SPILL_SLOTS: u32 = 2;
 
 const FIXED_SLOTS_END_BYTES: u32 = FIXED_SPILL_SLOTS * WORD_BYTES;
 
-pub(crate) struct MachineFixedSlotClobberLiveness {
+pub(crate) struct MachineSpillClobberLiveness {
     fixed_slot_live_values: BitSet<ValueId>,
     stable_final_spill_values: BitSet<ValueId>,
 }
 
-impl MachineFixedSlotClobberLiveness {
+impl MachineSpillClobberLiveness {
     pub(crate) fn compute(
         function: &Function,
         isa: &EvmMachine,
-        fixed_slot_effects: Option<&FxHashSet<FuncRef>>,
+        fixed_slot_effects: &FxHashSet<FuncRef>,
+        scratch_arena_effects: &FxHashSet<FuncRef>,
         inst_liveness: &InstLiveness,
     ) -> Self {
         let mut liveness = Self {
@@ -33,11 +34,17 @@ impl MachineFixedSlotClobberLiveness {
 
         for block in function.layout.iter_block() {
             for inst in function.layout.iter_inst(block) {
-                if let Some(call) = function.dfg.call_info(inst)
-                    && Self::callee_may_clobber_fixed_slots(fixed_slot_effects, call.callee())
-                {
-                    liveness.record_fixed_slot_clobber(function, inst_liveness, inst);
-                    liveness.record_stable_final_spill_clobber(function, inst_liveness, inst);
+                if let Some(call) = function.dfg.call_info(inst) {
+                    let clobbers_fixed_slots = fixed_slot_effects.contains(&call.callee());
+                    if clobbers_fixed_slots {
+                        liveness.record_fixed_slot_clobber(function, inst_liveness, inst);
+                    }
+                    // Fixed slots occupy bytes 0..64; final scratch spills live in the
+                    // shared arena. A callee can overwrite the latter without touching
+                    // either fixed slot, including through private static mallocs.
+                    if clobbers_fixed_slots || scratch_arena_effects.contains(&call.callee()) {
+                        liveness.record_stable_final_spill_clobber(function, inst_liveness, inst);
+                    }
                 } else if machine_inst_is_fixed_slot_clobber(function, isa, inst) {
                     liveness.record_fixed_slot_clobber(function, inst_liveness, inst);
                 }
@@ -49,13 +56,6 @@ impl MachineFixedSlotClobberLiveness {
 
     pub(crate) fn into_parts(self) -> (BitSet<ValueId>, BitSet<ValueId>) {
         (self.fixed_slot_live_values, self.stable_final_spill_values)
-    }
-
-    fn callee_may_clobber_fixed_slots(
-        fixed_slot_effects: Option<&FxHashSet<FuncRef>>,
-        callee: FuncRef,
-    ) -> bool {
-        fixed_slot_effects.is_none_or(|effects| effects.contains(&callee))
     }
 
     fn record_fixed_slot_clobber(
@@ -92,9 +92,14 @@ impl MachineFixedSlotClobberLiveness {
         inst_liveness: &InstLiveness,
         inst: InstId,
     ) {
-        values.union_with(inst_liveness.live_out(inst));
-        for def in function.dfg.inst_results(inst) {
-            values.remove(*def);
+        // Exclude this instruction's results before adding its live-across set.
+        // Removing them from the accumulated set would erase liveness across
+        // other clobbers when block layout visits a use before its definition.
+        let defs = function.dfg.inst_results(inst);
+        for value in inst_liveness.live_out(inst).iter() {
+            if !defs.contains(&value) {
+                values.insert(value);
+            }
         }
     }
 }
@@ -185,6 +190,7 @@ mod tests {
         isa::{Isa, evm::EvmMachine},
         module::{FuncRef, ModuleCtx},
     };
+    use sonatina_parser::parse_module;
     use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
 
     use crate::liveness::Liveness;
@@ -276,6 +282,7 @@ mod tests {
         module: &Module,
         func: FuncRef,
         fixed_slot_effects: &FxHashSet<FuncRef>,
+        scratch_arena_effects: &FxHashSet<FuncRef>,
     ) -> (ValueId, BitSet<ValueId>, BitSet<ValueId>) {
         let machine = EvmMachine::new(module.ctx.triple);
         module.func_store.view(func, |function| {
@@ -288,15 +295,71 @@ mod tests {
             let mut inst_liveness = InstLiveness::new();
             inst_liveness.compute(function, &cfg, &liveness);
 
-            let scratch_liveness = MachineFixedSlotClobberLiveness::compute(
+            let scratch_liveness = MachineSpillClobberLiveness::compute(
                 function,
                 &machine,
-                Some(fixed_slot_effects),
+                fixed_slot_effects,
+                scratch_arena_effects,
                 &inst_liveness,
             );
             let (fixed_scratch, stable_final) = scratch_liveness.into_parts();
             (function.arg_values[0], fixed_scratch, stable_final)
         })
+    }
+
+    #[test]
+    fn call_result_liveness_is_independent_of_block_layout_order() {
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+func private %produce() -> i256 {
+block0:
+    return 42.i256;
+}
+func private %clobber() {
+block0:
+    return;
+}
+func public %caller(v0.i256) -> i256 {
+block0:
+    jump block2;
+block1:
+    call %clobber;
+    return v1;
+block2:
+    v1.i256 = call %produce;
+    jump block1;
+}
+"#,
+        )
+        .unwrap();
+        let funcs = parsed.module.funcs();
+        let [produce, clobber, caller] = funcs.as_slice() else {
+            panic!("three functions");
+        };
+        let result = parsed.module.func_store.view(*caller, |function| {
+            function
+                .layout
+                .iter_block()
+                .flat_map(|block| function.layout.iter_inst(block))
+                .find_map(|inst| {
+                    function
+                        .dfg
+                        .call_info(inst)
+                        .filter(|call| call.callee() == *produce)
+                        .map(|_| function.dfg.inst_results(inst)[0])
+                })
+                .unwrap()
+        });
+        for later_clobber in [false, true] {
+            let mut effects = FxHashSet::from_iter([*produce]);
+            if later_clobber {
+                effects.insert(*clobber);
+            }
+            let (_, fixed, stable) = analyze(&parsed.module, *caller, &effects, &effects);
+            assert_eq!(fixed.contains(result), later_clobber);
+            assert_eq!(stable.contains(result), later_clobber);
+        }
     }
 
     #[test]
@@ -306,10 +369,29 @@ mod tests {
         let caller = define_calling_return_arg(&builder, "caller", callee);
         let module = builder.build();
         let fixed_slot_effects = FxHashSet::default();
-        let (arg, fixed_scratch, stable_final) = analyze(&module, caller, &fixed_slot_effects);
+        let (arg, fixed_scratch, stable_final) =
+            analyze(&module, caller, &fixed_slot_effects, &FxHashSet::default());
 
         assert!(!fixed_scratch.contains(arg));
         assert!(!stable_final.contains(arg));
+    }
+
+    #[test]
+    fn arena_clobbering_call_requires_stable_spills_but_preserves_fixed_slots() {
+        let builder = machine_builder();
+        let callee = define_unit_callee(&builder, "callee");
+        let caller = define_calling_return_arg(&builder, "caller", callee);
+        let module = builder.build();
+        let scratch_arena_effects = FxHashSet::from_iter([callee]);
+        let (arg, fixed_scratch, stable_final) = analyze(
+            &module,
+            caller,
+            &FxHashSet::default(),
+            &scratch_arena_effects,
+        );
+
+        assert!(!fixed_scratch.contains(arg));
+        assert!(stable_final.contains(arg));
     }
 
     #[test]
@@ -320,7 +402,8 @@ mod tests {
         let module = builder.build();
         let mut fixed_slot_effects = FxHashSet::default();
         fixed_slot_effects.insert(callee);
-        let (arg, fixed_scratch, stable_final) = analyze(&module, caller, &fixed_slot_effects);
+        let (arg, fixed_scratch, stable_final) =
+            analyze(&module, caller, &fixed_slot_effects, &FxHashSet::default());
 
         assert!(fixed_scratch.contains(arg));
         assert!(stable_final.contains(arg));
@@ -332,7 +415,8 @@ mod tests {
         let caller = define_local_scratch_clobber_return_arg(&builder, "caller");
         let module = builder.build();
         let fixed_slot_effects = FxHashSet::default();
-        let (arg, fixed_scratch, stable_final) = analyze(&module, caller, &fixed_slot_effects);
+        let (arg, fixed_scratch, stable_final) =
+            analyze(&module, caller, &fixed_slot_effects, &FxHashSet::default());
 
         assert!(fixed_scratch.contains(arg));
         assert!(!stable_final.contains(arg));
