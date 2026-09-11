@@ -217,10 +217,15 @@ block0:
 
 #[test]
 fn call_returned_reference_arrays_keep_unrelated_objects_private() {
-    let source = include_str!("fixtures/enum_contract/private-unrelated-call.sntn")
+    for publication in ["", "call %consume v10;\n"] {
+        let source = include_str!("fixtures/enum_contract/private-unrelated-call.sntn")
         .replace(
             "func private %entry",
-            r#"func private %references() -> [objref<i256>; 2] {
+            r#"func private %consume(v100.[objref<i256>; 2]) {
+block0:
+ return;
+}
+func private %references() -> [objref<i256>; 2] {
 block0:
  v0.objref<i256> = obj.alloc i256;
  obj.store v0 31.i256;
@@ -232,11 +237,12 @@ func private %entry"#,
         )
         .replace(
             " v2.i256 = call %noise",
-            " v10.[objref<i256>; 2] = call %references;\n v2.i256 = call %noise",
+            &format!(" v10.[objref<i256>; 2] = call %references;\n {publication} v2.i256 = call %noise"),
         );
-    let run = execute(&source, 128);
-    assert_eq!(run.invalid_reads(), 0);
-    assert_eq!(run.returned, 1);
+        let run = execute(&source, 128);
+        assert_eq!(run.invalid_reads(), 0);
+        assert_eq!(run.returned, 1);
+    }
 }
 
 #[test]
@@ -584,7 +590,7 @@ block2:
     assert_eq!(run.invalid_reads(), 1);
     let preserved = source.replace("enum.set_tag v4 #None;", "enum.set_tag v4 #Some;");
     assert_eq!(execute(&preserved, 128).invalid_reads(), 0);
-    assert_eq!(execute(source, 4).exhausted, 1);
+    assert_eq!(concrete::execute(source, 4).exhausted, 1);
 }
 
 #[test]
@@ -882,12 +888,18 @@ block3:
  return v6;
 }
 "#;
-    assert_eq!(execute(source, 128).invalid_reads(), 1);
-    let source = source.replace(
-        "v6.i256 = obj.load v4;",
-        "obj.store v4 31.i256;\n v6.i256 = obj.load v4;",
+    let computed_index = source.replace(
+        "v4.objref<i256> = obj.index v1 v2;",
+        "v10.i8 = add v2 0.i8;\n v4.objref<i256> = obj.index v1 v10;",
     );
-    assert_eq!(execute(&source, 128).invalid_reads(), 0);
+    for source in [source, &computed_index] {
+        assert_eq!(execute(source, 128).invalid_reads(), 1);
+        let initialized = source.replace(
+            "v6.i256 = obj.load v4;",
+            "obj.store v4 31.i256;\n v6.i256 = obj.load v4;",
+        );
+        assert_eq!(execute(&initialized, 128).invalid_reads(), 0);
+    }
 }
 
 #[test]

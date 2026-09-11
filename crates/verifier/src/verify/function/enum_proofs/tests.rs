@@ -1,6 +1,9 @@
 use super::{FunctionVerifier, objects::State, solve, transfer};
 use crate::VerifierConfig;
-use sonatina_ir::{Type, ValueId};
+use sonatina_ir::{
+    Type, ValueId,
+    inst::{data, downcast},
+};
 use sonatina_parser::parse_module;
 
 use super::{
@@ -255,4 +258,69 @@ block0:
             }
         });
     }
+}
+
+#[test]
+fn rebinding_a_reference_does_not_retarget_a_stored_alias() {
+    let source = r#"
+target = "evm-ethereum-osaka"
+type @E = enum { #None, #Some(i256) };
+type @Holder = { objref<@E> };
+func private %entry() {
+block0:
+ v0.objref<@E> = obj.alloc @E;
+ enum.write_variant v0 #Some (17.i256);
+ v1.objref<@E> = obj.alloc @E;
+ enum.set_tag v1 #None;
+ v20.objref<@Holder> = obj.alloc @Holder;
+ v2.objref<objref<@E>> = obj.proj v20 0.i8;
+ v30.objref<@Holder> = obj.alloc @Holder;
+ v3.objref<objref<@E>> = obj.proj v30 0.i8;
+ obj.store v2 v0;
+ v4.objref<@E> = obj.load v2;
+ obj.store v3 v4;
+ obj.store v2 v1;
+ return;
+}
+"#;
+    let parsed = parse_module(source).unwrap();
+    let ctx = &parsed.module.ctx;
+    let cfg = VerifierConfig::default();
+    let func = parsed.module.funcs()[0];
+    parsed.module.func_store.view(func, |body| {
+        let mut verifier = FunctionVerifier::new(ctx, func, body, &cfg, None);
+        verifier.run();
+        assert!(verifier.report.is_ok(), "{}", verifier.report);
+        let mut state = State::boundary(&verifier);
+        let insts = &verifier.block_to_insts[&verifier.block_order[0]];
+        for &inst in insts {
+            assert!(transfer::instruction(&verifier, &mut state, inst).is_some());
+        }
+        // Reexecute the load, as on a loop revisit: it now returns the second
+        // object. The reference captured in v3 must still denote the first.
+        let load = insts
+            .iter()
+            .copied()
+            .find(|&inst| downcast::<&data::ObjLoad>(ctx.inst_set, body.dfg.inst(inst)).is_some())
+            .unwrap();
+        let result = body.dfg.inst_results(load)[0];
+        let old = state.reference(&verifier, result);
+        let ty = verifier.objref_ty(body.dfg.value_ty(result)).unwrap();
+        assert!(state.contents(ctx, &old, ty).active(1));
+        assert!(transfer::instruction(&verifier, &mut state, load).is_some());
+        let current = state.reference(&verifier, result);
+        assert!(state.contents(ctx, &current, ty).active(0));
+        let holder = insts
+            .iter()
+            .find_map(|&inst| {
+                let store = downcast::<&data::ObjStore>(ctx.inst_set, body.dfg.inst(inst))?;
+                (*store.value() == result).then_some(*store.object())
+            })
+            .unwrap();
+        let holder = state.reference(&verifier, holder);
+        let captured = state
+            .contents(ctx, &holder, body.dfg.value_ty(result))
+            .references;
+        assert!(state.contents(ctx, &captured, ty).active(1));
+    });
 }

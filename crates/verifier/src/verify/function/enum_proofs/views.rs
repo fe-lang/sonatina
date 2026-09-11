@@ -294,35 +294,48 @@ impl References {
                 .collect::<BTreeSet<_>>()
         };
         let added = replacements(self);
-        self.views = self.views.iter().cloned().map(|mut view| {
-            for step in &mut view.place.path {
-                if matches!(*step, Step::Index(Index::Symbol(id)) if ids.contains(&id)) { *step = Step::Index(Index::Unknown); }
-            }
-            view.guards = view.guards.into_iter().map(|mut guard| {
-                for step in &mut guard.place.path {
-                    if matches!(*step, Step::Index(Index::Symbol(id)) if ids.contains(&id)) { *step = Step::Index(Index::Unknown); }
-                }
-                if guard.witness.is_some_and(|id| ids.contains(&id)) { guard.witness = None; }
-                guard.anchor = guard.anchor.and_then(|anchor| {
-                    let replacement = named.get(&anchor.value).and_then(|source| {
-                        let source = anchor.path.iter().fold(source.clone(), |refs, &step| refs.project(step));
-                        replacements(&source).into_iter().next()
-                    });
-                    replacement.or_else(|| (!ids.contains(&anchor.value) && !anchor.path.iter().any(|step| matches!(*step, Step::Index(Index::Symbol(id)) if ids.contains(&id)))).then_some(anchor))
-                });
-                guard
-            }).collect();
-            view
-        }).collect();
-        if self.cache.is_some_and(|id| ids.contains(&id)) {
-            self.cache = None;
-        }
-        self.anchors.retain(|anchor| {
+        let retained = |anchor: &Anchor| {
             !ids.contains(&anchor.value)
                 && !anchor.path.iter().any(
                     |step| matches!(*step, Step::Index(Index::Symbol(id)) if ids.contains(&id)),
                 )
-        });
+        };
+        let retire_indices = |place: &mut Place| {
+            for step in &mut place.path {
+                if matches!(*step, Step::Index(Index::Symbol(id)) if ids.contains(&id)) {
+                    *step = Step::Index(Index::Unknown);
+                }
+            }
+        };
+        for mut view in std::mem::take(&mut self.views) {
+            retire_indices(&mut view.place);
+            let mut guards = BTreeSet::new();
+            for mut guard in view.guards {
+                retire_indices(&mut guard.place);
+                if guard.witness.is_some_and(|id| ids.contains(&id)) {
+                    guard.witness = None;
+                }
+                if let Some(anchor) = guard.anchor.take() {
+                    // Rebase the old ancestor onto a new phi endpoint before
+                    // deciding whether its old name can survive the binding.
+                    let replacement = named.get(&anchor.value).and_then(|source| {
+                        let source = anchor
+                            .path
+                            .iter()
+                            .fold(source.clone(), |refs, &step| refs.project(step));
+                        replacements(&source).into_iter().next()
+                    });
+                    guard.anchor = replacement.or_else(|| retained(&anchor).then_some(anchor));
+                }
+                guards.insert(guard);
+            }
+            view.guards = guards;
+            self.views.insert(view);
+        }
+        if self.cache.is_some_and(|id| ids.contains(&id)) {
+            self.cache = None;
+        }
+        self.anchors.retain(retained);
         self.anchors.extend(added);
     }
 
@@ -348,10 +361,14 @@ impl References {
                         rewrite(&mut guard.place);
                         if let Some(anchor) = &mut guard.anchor {
                             for step in &mut anchor.path {
-                                if matches!(*step, Step::Index(Index::Symbol(id)) if Some(id) == kill) { *step = Step::Index(Index::Unknown); }
+                                if matches!(*step, Step::Index(Index::Symbol(id)) if Some(id) == kill) {
+                                    *step = Step::Index(Index::Unknown);
+                                }
                             }
                         }
-                        if guard.anchor.as_ref().is_some_and(|a| Some(a.value) == kill) { guard.anchor = None; }
+                        if guard.anchor.as_ref().is_some_and(|a| Some(a.value) == kill) {
+                            guard.anchor = None;
+                        }
                         if kill.is_some() && guard.witness == kill {
                             guard.witness = None;
                         }

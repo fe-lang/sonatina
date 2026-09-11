@@ -266,16 +266,7 @@ impl State {
         self.value_observations
             .retain(|&key, (value, _)| key != id && *value != id);
         self.rewrite_references(ctx, &mut |refs| {
-            refs.rewrite(
-                |place| {
-                    for step in &mut place.path {
-                        if *step == Step::Index(Index::Symbol(id)) {
-                            *step = Step::Index(Index::Unknown);
-                        }
-                    }
-                },
-                Some(id),
-            );
+            refs.rewrite(|_| {}, Some(id));
         });
     }
 
@@ -393,7 +384,7 @@ impl State {
                     pending.extend(self.objects.keys().filter(|root| !seen.contains(root)));
                 }
             } else {
-                // Imported opaque roots can have symbolic pointee state without
+                // Imported roots can have symbolic pointee state without
                 // a concrete heap entry. Stores through those views also publish
                 // their contained references, even before another call occurs.
                 for fact in self.views.values().filter(|fact| {
