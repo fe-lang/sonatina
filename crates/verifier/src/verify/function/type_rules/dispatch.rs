@@ -15,7 +15,7 @@ use crate::{
     verify::type_utils::{is_const_ref_ty, is_integral_or_pointer, is_obj_ref_ty, is_pointer_ty},
 };
 
-use super::{super::analysis::dominates, FunctionVerifier};
+use super::FunctionVerifier;
 
 #[inst_prop]
 pub(super) trait VerifyInst {
@@ -610,56 +610,6 @@ fn variant_payload_tys(
             .enum_variant_data(variant)
             .map(|variant_data| variant_data.fields.clone())
     })
-}
-
-fn dominating_enum_assert(
-    verifier: &FunctionVerifier<'_>,
-    use_inst: InstId,
-    value: ValueId,
-    variant: EnumVariantRef,
-) -> bool {
-    let Some(block) = verifier.inst_to_block.get(&use_inst).copied() else {
-        return false;
-    };
-    let Some(insts) = verifier.block_to_insts.get(&block) else {
-        return false;
-    };
-
-    for &inst in insts {
-        if inst == use_inst {
-            break;
-        }
-        if let Some(assert_variant) = sonatina_ir::inst::downcast::<&data::EnumAssertVariant>(
-            verifier.ctx.inst_set,
-            verifier.func.dfg.inst(inst),
-        ) && *assert_variant.value() == value
-            && *assert_variant.variant() == variant
-        {
-            return true;
-        }
-    }
-
-    let block_order_index = verifier.block_position_map();
-    for (&proof_block, insts) in &verifier.block_to_insts {
-        if proof_block == block
-            || !dominates(proof_block, block, &verifier.idom, &block_order_index)
-        {
-            continue;
-        }
-
-        for &inst in insts {
-            if let Some(assert_variant) = sonatina_ir::inst::downcast::<&data::EnumAssertVariant>(
-                verifier.ctx.inst_set,
-                verifier.func.dfg.inst(inst),
-            ) && *assert_variant.value() == value
-                && *assert_variant.variant() == variant
-            {
-                return true;
-            }
-        }
-    }
-
-    false
 }
 
 fn expect_objref_result(
@@ -1340,17 +1290,6 @@ impl VerifyInst for data::ObjLoad {
                 location.clone(),
             ));
         }
-        if verifier
-            .enum_field_proofs
-            .get(&inst_id)
-            .is_some_and(|proof| !proof.is_proven())
-        {
-            verifier.emit(Diagnostic::error(
-                DiagnosticCode::InstOperandTypeMismatch,
-                "obj.load from enum.proj requires a proven initialized active variant field",
-                location.clone(),
-            ));
-        }
         verifier.expect_result_ty(inst_id, value_ty, location);
     }
 }
@@ -1568,28 +1507,6 @@ impl VerifyInst for data::EnumExtract {
         ) else {
             return;
         };
-
-        let proven = verifier
-            .func
-            .dfg
-            .value_inst(*self.value())
-            .and_then(|def_inst| {
-                sonatina_ir::inst::downcast::<&data::EnumMake>(
-                    verifier.ctx.inst_set,
-                    verifier.func.dfg.inst(def_inst),
-                )
-                .map(|make| *make.variant() == *self.variant())
-            })
-            .unwrap_or(false)
-            || dominating_enum_assert(verifier, inst_id, *self.value(), *self.variant());
-
-        if !proven {
-            verifier.emit(Diagnostic::error(
-                DiagnosticCode::InstOperandTypeMismatch,
-                "enum.extract requires a proven active variant at the use site",
-                location.clone(),
-            ));
-        }
 
         verifier.expect_result_ty(inst_id, field_ty, location);
     }

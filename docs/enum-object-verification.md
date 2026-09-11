@@ -1,10 +1,10 @@
 # Enum object verification
 
-This is the contract and implementation specification for the replacement enum
-analysis. It describes local verification at Standard and Full. The current
-instruction-pattern checker does not yet implement this contract: in particular,
-transporting a projected reference can bypass its read check. The replacement
-must enter production in one cutover, without consulting the old checker.
+This is the contract for local enum verification at Standard and Full. The
+forward analysis in `crates/verifier/src/verify/function/enum_proofs/` implements
+guarded references, immutable value snapshots, mutable objects and exposure in
+one dataflow. It replaces the producer-pattern checker and reverse freshness
+walk; read queries do not consult either former mechanism.
 
 ## Contract
 
@@ -26,7 +26,9 @@ scalar definedness, poison, `undef`, lifetime, bounds or borrowing. In particula
 ordinary whole object loads outside guarded views retain their existing local
 verification contract, but transport the source's known initialization state;
 copying an uninitialized object cannot manufacture initialized payload facts.
-The concrete tests use defined scalar inputs for claims about executed reads.
+Scalar SSA results follow the existing definedness contract after their source
+read is checked. Aggregate snapshots retain their source subtree facts. The
+concrete tests use defined scalar inputs for claims about executed reads.
 
 `enum.set_tag` selects a variant without initializing its fields. Setting the
 same tag preserves established selected-payload facts. Selecting a payloadless
@@ -107,17 +109,23 @@ by `a`; a join must overapproximate both operands.
 
 The finite vocabulary is derived from the validated function and its types:
 
-- Allocation identities are `Single(site)` for nonrepeating sites, or
-  `Recent(site)` and `Summary(site)` for sites on cycles. Incoming roots and
-  opaque/imported alternatives have distinct identities. There are at most two
-  identities per local allocation site, regardless of iteration count.
+- Allocation identities use `Recent(site)` and, when an allocation executes
+  again, `Summary(site)`. Nonrepeating sites remain singleton recent instances.
+  Incoming roots, summaries of nested incoming references, and opaque alternatives
+  have distinct identities. There are at most two local identities per allocation
+  site, regardless of iteration count. Nested incoming references use per-type
+  summary roots to keep recursive reference types finite; these roots do not
+  permit strong heap updates.
 - A location is an identity and a type-correct path within its allocation.
   Paths contain product fields, enum payload fields, and array indices. By-value
   recursive types are already invalid IR. Reference dereference selects another
   allocation; it does not extend the first allocation's structural path.
 - Array indices use constants occurring in accesses, symbolic SSA indices, or
   an unknown-index summary. Equal numeric constants normalize across widths.
-  Never enumerate an array merely because its declared length is large.
+  Never enumerate an array merely because its declared length is large. Array
+  default summaries describe physical storage; symbolic-index entries describe
+  selected-view guarantees. A failed index query is not itself a write footprint.
+  Joins preserve that distinction instead of inferring effects from sparse keys.
 - Materialize only paths demanded by instructions, their ancestors, and paths
   introduced by substitutions through those same finite typed access templates.
   If a substitution cannot retain a finite exact path, use an overlapping
@@ -156,8 +164,9 @@ use weak updates for candidate locations and invalidate overlapping must facts.
 
 A store through a multi-target symbolic view can establish a guarantee for that
 same view, while only weakly updating its candidate roots. Each predecessor must
-first transfer its incoming reference's guarantees to the phi result; intersect
-those guarantees afterwards. Otherwise two initialized branch-local allocations
+first substitute every incoming reference, guard ancestor, alias equality and
+observation endpoint together, then retire old names and install new phi values.
+Intersect the resulting guarantees afterwards. Otherwise two initialized branch-local allocations
 incorrectly lose readability when their references join.
 
 Every possibly aliasing mutation updates/invalidates affected symbolic-view
@@ -188,7 +197,8 @@ Instruction IDs are not dynamic mutation epochs.
 ## Solver and query boundary
 
 Validate structure, references, arity, local types and required SSA/CFG properties
-before semantic dataflow, including at Standard. Do not assume that computing
+before semantic dataflow. SSA availability is required at Standard as well as
+Full, including disconnected components. Do not assume that computing
 dominators validates operand availability. Malformed IR must receive diagnostics
 before any semantic transfer uses unchecked type/operand information.
 

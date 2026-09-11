@@ -20,7 +20,7 @@ impl FunctionVerifier<'_> {
             &self.succs,
             &self.reachable,
         );
-        let nodes = if self.cfg.should_run_deep_sanity() {
+        let nodes = if self.cfg.should_check_types() || self.cfg.should_run_deep_sanity() {
             self.block_order.iter().copied().collect()
         } else {
             self.reachable.clone()
