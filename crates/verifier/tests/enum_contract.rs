@@ -263,26 +263,30 @@ func private %entry"#,
 
 #[test]
 fn call_returned_objects_are_externally_reachable() {
-    let source = include_str!("fixtures/enum_contract/call-returned-raw-alias.sntn");
-    for write in [
-        "",
-        "mstore v100 0.i256 i256;",
-        "v9.*i256 = alloca i256;\n mstore v9 0.i256 i256;",
-    ] {
-        for observed in [false, true] {
-            let mut source = source.replace("mstore v100 0.i256 i256;", write);
-            if observed {
-                source = source
+    let source =
+        include_str!("fixtures/enum_contract/call-returned-raw-alias.sntn").replace("\r\n", "\n");
+    // include_str! retains checkout line endings; exercise both forms on every host.
+    for source in [source.clone(), source.replace('\n', "\r\n")] {
+        for write in [
+            "",
+            "mstore v100 0.i256 i256;",
+            "v9.*i256 = alloca i256;\n mstore v9 0.i256 i256;",
+        ] {
+            for observed in [false, true] {
+                let mut source = source.replace("mstore v100 0.i256 i256;", write);
+                if observed {
+                    source = source
                     .replace(" v2.objref<i256> = enum.proj v1 #Some 0.i8;", " v2.enumtag(@E) = enum.get_tag v1;")
                     .replace(" v3.i256 = obj.load v2;", " br_table v2 block2 (1.enumtag(@E) block1);\nblock1:\n v4.objref<i256> = enum.proj v1 #Some 0.i8;\n v3.i256 = obj.load v4;")
-                    .replace(" return v3;\n}", " return v3;\nblock2:\n return 0.i256;\n}");
+                    .replace(" return v3;", " return v3;\nblock2:\n return 0.i256;");
+                }
+                let run = execute(&source, 128);
+                assert_eq!(
+                    run.invalid_reads(),
+                    usize::from(write.starts_with("mstore"))
+                );
+                assert!(run.returned > 0);
             }
-            let run = execute(&source, 128);
-            assert_eq!(
-                run.invalid_reads(),
-                usize::from(write.starts_with("mstore"))
-            );
-            assert!(run.returned > 0);
         }
     }
 }
