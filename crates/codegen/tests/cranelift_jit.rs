@@ -76,6 +76,80 @@ fn jit_executes_a_native_c_abi_function() {
 }
 
 #[test]
+fn memzero_uses_i256_addresses_and_lengths() {
+    let isa = native_isa();
+    let instructions = isa.inst_set();
+    let builder = ModuleBuilder::new(ModuleCtx::new(&isa));
+    let function = builder
+        .declare_function(Signature::new_unit(
+            "zero_memory",
+            Linkage::Public,
+            &[Type::I256, Type::I256],
+        ))
+        .unwrap();
+    let mut function_builder = builder.func_builder::<InstInserter>(function);
+    let entry = function_builder.append_block();
+    function_builder.switch_to_block(entry);
+    function_builder.insert_inst_no_result(data::Memzero::new(
+        instructions,
+        function_builder.args()[0],
+        function_builder.args()[1],
+    ));
+    function_builder.insert_inst_no_result(control_flow::Return::new_unit(instructions));
+    function_builder.seal_all();
+    function_builder.finish();
+
+    let artifact = Compile::new(builder.build(), CraneliftJitBackend::new())
+        .compile()
+        .expect("memzero should compile");
+    let address = artifact.function_address("zero_memory").unwrap();
+    let zero_memory: unsafe extern "C" fn(*const u64, *const u64) =
+        unsafe { std::mem::transmute(address) };
+
+    let mut bytes = [0xa5u8; 8];
+    let dest = [bytes[2..].as_mut_ptr() as usize as u64, 0, 0, 0];
+    let len = [3, 0, 0, 0];
+    unsafe { zero_memory(dest.as_ptr(), len.as_ptr()) };
+    assert_eq!(bytes, [0xa5, 0xa5, 0, 0, 0, 0xa5, 0xa5, 0xa5]);
+}
+
+#[test]
+fn memzero_accepts_pointer_destinations() {
+    let isa = native_isa();
+    let instructions = isa.inst_set();
+    let builder = ModuleBuilder::new(ModuleCtx::new(&isa));
+    let pointer_type = builder.objref_type(Type::I8);
+    let function = builder
+        .declare_function(Signature::new_unit(
+            "zero_memory",
+            Linkage::Public,
+            &[pointer_type, Type::I64],
+        ))
+        .unwrap();
+    let mut function_builder = builder.func_builder::<InstInserter>(function);
+    let entry = function_builder.append_block();
+    function_builder.switch_to_block(entry);
+    function_builder.insert_inst_no_result(data::Memzero::new(
+        instructions,
+        function_builder.args()[0],
+        function_builder.args()[1],
+    ));
+    function_builder.insert_inst_no_result(control_flow::Return::new_unit(instructions));
+    function_builder.seal_all();
+    function_builder.finish();
+
+    let artifact = Compile::new(builder.build(), CraneliftJitBackend::new())
+        .compile()
+        .expect("memzero should compile");
+    let address = artifact.function_address("zero_memory").unwrap();
+    let zero_memory: unsafe extern "C" fn(*mut u8, u64) = unsafe { std::mem::transmute(address) };
+
+    let mut bytes = [0xa5u8; 4];
+    unsafe { zero_memory(bytes[1..].as_mut_ptr(), 2) };
+    assert_eq!(bytes, [0xa5, 0, 0, 0xa5]);
+}
+
+#[test]
 fn function_address_is_scoped_to_the_artifact() {
     let isa = native_isa();
     let builder = ModuleBuilder::new(ModuleCtx::new(&isa));

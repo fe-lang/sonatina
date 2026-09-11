@@ -96,7 +96,8 @@ fn translate_function(
     func_id_map: &HashMap<FuncRef, FuncId>,
     clif_module: &mut impl ClifModule,
 ) -> Result<(), String> {
-    let pointer_type = clif_module.target_config().pointer_type();
+    let target_config = clif_module.target_config();
+    let pointer_type = target_config.pointer_type();
     let mut ctx = clif_module.make_context();
     let sig = module.ctx.func_sig(func_ref, |sig| -> Result<_, String> {
         validate_cranelift_signature(&module.ctx, sig)?;
@@ -1305,8 +1306,7 @@ fn translate_function(
                     }
                 }
                 NativeInstKind::Mstore(mstore) => {
-                    let addr = resolve_address_value(
-                        module,
+                    let addr = resolve_pointer_sized_value(
                         function,
                         *mstore.addr(),
                         &value_map,
@@ -1326,9 +1326,26 @@ fn translate_function(
                         builder.ins().store(MemFlagsData::new(), val, addr, 0);
                     }
                 }
+                NativeInstKind::Memzero(memzero) => {
+                    let dest = resolve_pointer_sized_value(
+                        function,
+                        *memzero.dest(),
+                        &value_map,
+                        pointer_type,
+                        &mut builder,
+                    )?;
+                    let len = resolve_pointer_sized_value(
+                        function,
+                        *memzero.len(),
+                        &value_map,
+                        pointer_type,
+                        &mut builder,
+                    )?;
+                    let zero = builder.ins().iconst(clif::types::I8, 0);
+                    builder.call_memset(target_config, dest, zero, len);
+                }
                 NativeInstKind::Mload(mload) => {
-                    let addr = resolve_address_value(
-                        module,
+                    let addr = resolve_pointer_sized_value(
                         function,
                         *mload.addr(),
                         &value_map,
@@ -1574,20 +1591,20 @@ fn resolve_scalar_value(
     Ok(val)
 }
 
-fn resolve_address_value(
-    module: &Module,
+fn resolve_pointer_sized_value(
     function: &Function,
     value_id: ValueId,
     value_map: &HashMap<ValueId, clif::Value>,
     pointer_type: clif::Type,
     builder: &mut FunctionBuilder,
 ) -> Result<clif::Value, String> {
-    let val = resolve_scalar_value(module, function, value_id, value_map, pointer_type, builder)?;
-    if function.dfg.value_ty(value_id) == Type::I256 {
-        Ok(load_i256_limb(val, 0, builder))
+    let val = resolve_value(function, value_id, value_map, builder)?;
+    let val = if function.dfg.value_ty(value_id) == Type::I256 {
+        load_i256_limb(val, 0, builder)
     } else {
-        Ok(val)
-    }
+        val
+    };
+    Ok(resize_int_value(val, pointer_type, false, builder))
 }
 
 #[allow(clippy::too_many_arguments)]
