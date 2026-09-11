@@ -8,14 +8,13 @@ use sonatina_ir::{
 
 use crate::diagnostic::{Diagnostic, DiagnosticCode, Location};
 
-use super::{FunctionVerifier, enum_proofs};
+use super::FunctionVerifier;
 use dispatch::VerifyInst;
 
 mod dispatch;
 
 impl FunctionVerifier<'_> {
     pub(super) fn check_type_rules(&mut self) {
-        self.enum_field_proofs = enum_proofs::compute(self);
         let mut insts: Vec<_> = self
             .block_order
             .iter()

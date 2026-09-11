@@ -1,12 +1,35 @@
 //! Executable specification for the enum verifier replacement.
 //!
-//! These first-stage tests validate the independent execution oracle and fixture
-//! expectations. The production comparison becomes a required gate at cutover;
-//! the current verifier still has the documented acceptance/rejection defects.
+//! Concrete executions independently check rejection and required acceptance at
+//! both semantic verification levels. Exploration exhaustion is not a proof.
 #[path = "support/enum_concrete.rs"]
 mod concrete;
 
-use concrete::execute;
+use sonatina_parser::parse_module;
+use sonatina_verifier::{Location, VerificationLevel, VerifierConfig, verify_module};
+
+fn execute(source: &str, limit: usize) -> concrete::Execution {
+    let run = concrete::execute(source, limit);
+    if run.exhausted == 0 {
+        let parsed = parse_module(source).expect("valid fixture syntax");
+        for level in [VerificationLevel::Standard, VerificationLevel::Full] {
+            let report = verify_module(&parsed.module, &VerifierConfig::for_level(level));
+            for (&inst, &readable) in &run.reads {
+                let rejected = report.errors().any(|diagnostic| matches!(diagnostic.primary, Location::Inst { inst: at, .. } if at == inst));
+                assert_eq!(
+                    rejected, !readable,
+                    "{level:?} read {inst:?}: {source}\n{report}\n{run:?}"
+                );
+            }
+            assert_eq!(
+                report.is_ok(),
+                run.invalid_reads() == 0,
+                "{level:?}: {source}\n{report}\n{run:?}"
+            );
+        }
+    }
+    run
+}
 
 const CASES: &[(&str, &str, usize)] = &[
     (
@@ -408,5 +431,486 @@ fn copying_an_unwritten_nested_enum_does_not_initialize_its_payload() {
             assert_eq!(run.reads.len(), 1);
             assert_eq!(run.invalid_reads(), usize::from(!initialized), "{source}");
         }
+    }
+}
+
+#[test]
+fn a_store_through_a_phi_establishes_the_selected_view() {
+    for initialize in [true, false] {
+        let write = if initialize {
+            "obj.store v4 17.i256;"
+        } else {
+            ""
+        };
+        let source = format!(
+            r#"
+target = "evm-ethereum-osaka"
+type @E = enum {{ #None, #Some(i256) }};
+func private %entry(v100.i1) -> i256 {{
+block0:
+ v0.objref<@E> = obj.alloc @E;
+ enum.set_tag v0 #Some;
+ v1.objref<@E> = obj.alloc @E;
+ enum.set_tag v1 #Some;
+ br v100 block1 block2;
+block1:
+ jump block3;
+block2:
+ jump block3;
+block3:
+ v2.objref<@E> = phi (v0 block1) (v1 block2);
+ v4.objref<i256> = enum.proj v2 #Some 0.i8;
+ {write}
+ v5.objref<i256> = enum.proj v2 #Some 0.i256;
+ v6.i256 = obj.load v5;
+ return v6;
+}}
+"#
+        );
+        assert_eq!(
+            execute(&source, 128).invalid_reads(),
+            usize::from(!initialize)
+        );
+    }
+}
+
+#[test]
+fn immutable_and_paired_phi_observations_refine_only_the_observed_value() {
+    for immutable in [false, true] {
+        for predicate in [false, true] {
+            if predicate && !immutable {
+                continue;
+            }
+            let (ty, left, right, tag_left, tag_right, tag_ty, branch, read) = if immutable {
+                let (tag_left, tag_right, tag_ty, branch) = if predicate {
+                    (
+                        "v10.i1 = enum.is_variant v0 #Some;",
+                        "v11.i1 = enum.is_variant v1 #Some;",
+                        "i1",
+                        "br v3 block4 block5;",
+                    )
+                } else {
+                    (
+                        "v10.enumtag(@E) = enum.tag v0;",
+                        "v11.enumtag(@E) = enum.tag v1;",
+                        "enumtag(@E)",
+                        "br_table v3 block5 (1.enumtag(@E) block4);",
+                    )
+                };
+                (
+                    "@E",
+                    "v0.@E = enum.make @E #Some (17.i256);",
+                    "v1.@E = enum.make @E #None;",
+                    tag_left,
+                    tag_right,
+                    tag_ty,
+                    branch,
+                    "v5.i256 = enum.extract v2 #Some 0.i8;",
+                )
+            } else {
+                (
+                    "objref<@E>",
+                    "v0.objref<@E> = obj.alloc @E;\n enum.write_variant v0 #Some (17.i256);",
+                    "v1.objref<@E> = obj.alloc @E;\n enum.set_tag v1 #None;",
+                    "v10.enumtag(@E) = enum.get_tag v0;",
+                    "v11.enumtag(@E) = enum.get_tag v1;",
+                    "enumtag(@E)",
+                    "br_table v3 block5 (1.enumtag(@E) block4);",
+                    "v4.objref<i256> = enum.proj v2 #Some 0.i8;\n v5.i256 = obj.load v4;",
+                )
+            };
+            let source = format!(
+                r#"
+target = "evm-ethereum-osaka"
+type @E = enum {{ #None, #Some(i256) }};
+func private %entry(v100.i1) -> i256 {{
+block0:
+ br v100 block1 block2;
+block1:
+ {left}
+ {tag_left}
+ jump block3;
+block2:
+ {right}
+ {tag_right}
+ jump block3;
+block3:
+ v2.{ty} = phi (v0 block1) (v1 block2);
+ v3.{tag_ty} = phi (v10 block1) (v11 block2);
+ {branch}
+block4:
+ {read}
+ return v5;
+block5:
+ return 0.i256;
+}}
+"#
+            );
+            assert_eq!(execute(&source, 128).invalid_reads(), 0);
+        }
+    }
+}
+
+#[test]
+fn loop_index_rebinding_does_not_initialize_another_element() {
+    let source = r#"
+target = "evm-ethereum-osaka"
+type @E = enum { #Some([i256; 2]) };
+func private %entry() -> i256 {
+block0:
+ v0.objref<@E> = obj.alloc @E;
+ enum.set_tag v0 #Some;
+ v1.objref<[i256; 2]> = enum.proj v0 #Some 0.i8;
+ jump block1;
+block1:
+ v2.i8 = phi (0.i8 block0) (v3 block2);
+ v4.objref<i256> = obj.index v1 v2;
+ v5.i1 = lt v2 1.i8;
+ br v5 block2 block3;
+block2:
+ obj.store v4 17.i256;
+ v3.i8 = add v2 1.i8;
+ jump block1;
+block3:
+ v6.i256 = obj.load v4;
+ return v6;
+}
+"#;
+    assert_eq!(execute(source, 128).invalid_reads(), 1);
+    let source = source.replace(
+        "v6.i256 = obj.load v4;",
+        "obj.store v4 31.i256;\n v6.i256 = obj.load v4;",
+    );
+    assert_eq!(execute(&source, 128).invalid_reads(), 0);
+}
+
+#[test]
+fn inactive_reference_cells_survive_conditional_joins_and_exposure() {
+    for retain in [true, false] {
+        let write = if retain {
+            "enum.write_variant v2 #Hold (v0);"
+        } else {
+            ""
+        };
+        let source = format!(
+            r#"
+target = "evm-ethereum-osaka"
+type @E = enum {{ #None, #Some(i256) }};
+type @Holder = enum {{ #None, #Hold(objref<@E>) }};
+func private %entry(v100.i1, v101.*i256) -> i256 {{
+block0:
+ v0.objref<@E> = obj.alloc @E;
+ enum.write_variant v0 #Some (17.i256);
+ v1.objref<i256> = enum.proj v0 #Some 0.i8;
+ v2.objref<@Holder> = obj.alloc @Holder;
+ enum.set_tag v2 #None;
+ br v100 block1 block2;
+block1:
+ {write}
+ enum.set_tag v2 #None;
+ jump block3;
+block2:
+ jump block3;
+block3:
+ v3.*@Holder = obj.materialize.stack v2;
+ mstore v101 0.i256 i256;
+ v4.i256 = obj.load v1;
+ return v4;
+}}
+"#
+        );
+        assert_eq!(execute(&source, 128).invalid_reads(), usize::from(retain));
+    }
+}
+
+#[test]
+fn repeated_allocations_preserve_the_older_instances_exposure() {
+    let source = r#"
+target = "evm-ethereum-osaka"
+type @E = enum { #None, #Some(i256) };
+func private %entry(v100.*i256) -> i256 {
+block0:
+ v0.objref<@E> = obj.alloc @E;
+ enum.write_variant v0 #Some (17.i256);
+ jump block1;
+block1:
+ v1.i8 = phi (0.i8 block0) (v2 block1);
+ v3.objref<@E> = phi (v0 block0) (v4 block1);
+ v4.objref<@E> = obj.alloc @E;
+ enum.write_variant v4 #Some (31.i256);
+ v8.*@E = obj.materialize.stack v4;
+ v2.i8 = add v1 1.i8;
+ v7.i1 = lt v2 2.i8;
+ br v7 block1 block2;
+block2:
+ mstore v100 0.i256 i256;
+ v5.objref<i256> = enum.proj v3 #Some 0.i8;
+ v6.i256 = obj.load v5;
+ return v6;
+}
+"#;
+    assert_eq!(execute(source, 128).invalid_reads(), 1);
+    let private = source.replace("v8.*@E = obj.materialize.stack v4;", "");
+    assert_eq!(execute(&private, 128).invalid_reads(), 0);
+}
+
+#[test]
+fn opaque_results_retain_local_guards() {
+    for mutate in [false, true] {
+        let mutation = if mutate { "enum.set_tag v0 #None;" } else { "" };
+        let source = format!(
+            r#"
+target = "evm-ethereum-osaka"
+type @E = enum {{ #None, #Some(i256) }};
+func private %identity(v100.objref<i256>) -> objref<i256> {{
+block0:
+ return v100;
+}}
+func private %entry() -> i256 {{
+block0:
+ v0.objref<@E> = obj.alloc @E;
+ enum.write_variant v0 #Some (17.i256);
+ v1.objref<i256> = enum.proj v0 #Some 0.i8;
+ v2.objref<i256> = call %identity v1;
+ v3.objref<@E> = enum.assert_variant_ref v0 #Some;
+ {mutation}
+ v4.i256 = obj.load v2;
+ return v4;
+}}
+"#
+        );
+        let parsed = parse_module(&source).unwrap();
+        for level in [VerificationLevel::Standard, VerificationLevel::Full] {
+            let report = verify_module(&parsed.module, &VerifierConfig::for_level(level));
+            // The call may return a different object, but its possible local
+            // alias must still carry the guard of v1 after the parent retag.
+            assert_eq!(report.has_errors(), mutate, "{source}\n{report}");
+        }
+    }
+}
+
+#[test]
+fn imported_aggregate_references_predate_fresh_allocations() {
+    let source = r#"
+target = "evm-ethereum-osaka"
+type @E = enum { #None, #Some(i256) };
+type @Input = { objref<@E>, objref<@E> };
+func private %entry(v100.@Input) -> i256 {
+block0:
+ v0.objref<@E> = obj.alloc @E;
+ enum.write_variant v0 #Some (17.i256);
+ v1.objref<@E> = extract_value v100 0.i8;
+ enum.set_tag v1 #None;
+ v2.objref<i256> = enum.proj v0 #Some 0.i8;
+ v3.i256 = obj.load v2;
+ return v3;
+}
+"#;
+    for level in [VerificationLevel::Standard, VerificationLevel::Full] {
+        let parsed = parse_module(source).unwrap();
+        let report = verify_module(&parsed.module, &VerifierConfig::for_level(level));
+        assert!(report.is_ok(), "{report}");
+        let aliases = source.replace(
+            "v0.objref<@E> = obj.alloc @E;",
+            "v0.objref<@E> = extract_value v100 1.i8;",
+        );
+        let parsed = parse_module(&aliases).unwrap();
+        let report = verify_module(&parsed.module, &VerifierConfig::for_level(level));
+        assert!(report.has_errors(), "incoming fields can alias: {report}");
+    }
+}
+
+#[test]
+fn malformed_ssa_is_rejected_before_enum_dataflow_at_both_levels() {
+    let source = r#"
+target = "evm-ethereum-osaka"
+type @E = enum { #None, #Some(i256) };
+func private %entry() -> i256 {
+block0:
+ enum.write_variant v0 #Some (17.i256);
+ v1.objref<i256> = enum.proj v0 #Some 0.i8;
+ v0.objref<@E> = obj.alloc @E;
+ v2.i256 = obj.load v1;
+ return v2;
+}
+"#;
+    for level in [VerificationLevel::Standard, VerificationLevel::Full] {
+        let parsed = parse_module(source).unwrap();
+        let report = verify_module(&parsed.module, &VerifierConfig::for_level(level));
+        assert!(
+            report
+                .errors()
+                .any(|diagnostic| diagnostic.code.as_str() == "IR0500"),
+            "{report}"
+        );
+    }
+}
+
+#[test]
+fn scalar_interface_loads_can_initialize_enum_fields() {
+    let source = r#"
+target = "evm-ethereum-osaka"
+type @E = enum { #None, #Some(i256) };
+func private %entry(v100.objref<i256>) -> i256 {
+block0:
+ v0.i256 = obj.load v100;
+ v1.objref<@E> = obj.alloc @E;
+ enum.write_variant v1 #Some (v0);
+ v2.objref<i256> = enum.proj v1 #Some 0.i8;
+ v3.i256 = obj.load v2;
+ return v3;
+}
+"#;
+    assert_eq!(execute(source, 128).invalid_reads(), 0);
+}
+
+#[test]
+fn call_modified_reference_cells_preserve_possible_enum_obligations() {
+    for guarded in [false, true] {
+        let setup = if guarded {
+            "v0.objref<@E> = obj.alloc @E;\n enum.write_variant v0 #Some (17.i256);\n v1.objref<i256> = enum.proj v0 #Some 0.i8;"
+        } else {
+            "v0.objref<@Pair> = obj.alloc @Pair;\n v1.objref<i256> = obj.proj v0 0.i8;\n obj.store v1 17.i256;"
+        };
+        let source = format!(
+            r#"
+target = "evm-ethereum-osaka"
+type @E = enum {{ #None, #Some(i256) }};
+type @Pair = {{ i256 }};
+type @Holder = {{ objref<i256> }};
+func private %change(v100.objref<@Holder>, v101.objref<i256>) {{
+block0:
+ v0.objref<objref<i256>> = obj.proj v100 0.i8;
+ obj.store v0 v101;
+ return;
+}}
+func private %entry() -> i256 {{
+block0:
+ {setup}
+ v2.objref<@Holder> = obj.alloc @Holder;
+ v3.objref<objref<i256>> = obj.proj v2 0.i8;
+ obj.store v3 v1;
+ call %change v2 v1;
+ v4.objref<i256> = obj.load v3;
+ v5.i256 = obj.load v4;
+ return v5;
+}}
+"#
+        );
+        for level in [VerificationLevel::Standard, VerificationLevel::Full] {
+            let parsed = parse_module(&source).unwrap();
+            let report = verify_module(&parsed.module, &VerifierConfig::for_level(level));
+            // Calls invalidate mutable guarantees; the guarded candidate needs
+            // a new caller-side proof even if this particular callee is benign.
+            assert_eq!(report.has_errors(), guarded, "{source}\n{report}");
+        }
+    }
+}
+
+#[test]
+fn projections_preceding_a_phi_target_write_observe_its_postcondition() {
+    for write in [
+        "enum.write_variant v2 #Some (31.i256);",
+        "enum.set_tag v2 #Some;\n obj.store v3 31.i256;",
+    ] {
+        let source = format!(
+            r#"
+target = "evm-ethereum-osaka"
+type @E = enum {{ #None, #Some(i256) }};
+func private %entry(v100.i1) -> i256 {{
+block0:
+ v0.objref<@E> = obj.alloc @E;
+ enum.set_tag v0 #None;
+ v1.objref<@E> = obj.alloc @E;
+ enum.set_tag v1 #None;
+ br v100 block1 block2;
+block1:
+ jump block3;
+block2:
+ jump block3;
+block3:
+ v2.objref<@E> = phi (v0 block1) (v1 block2);
+ v3.objref<i256> = enum.proj v2 #Some 0.i8;
+ {write}
+ v4.i256 = obj.load v3;
+ return v4;
+}}
+"#
+        );
+        assert_eq!(execute(&source, 128).invalid_reads(), 0);
+    }
+}
+
+#[test]
+fn simultaneous_object_and_payload_phis_keep_their_relationship() {
+    for retag in [false, true] {
+        let mutation = if retag { "enum.set_tag v4 #None;" } else { "" };
+        let source = format!(
+            r#"
+target = "evm-ethereum-osaka"
+type @E = enum {{ #None, #Some(i256) }};
+func private %entry() -> i256 {{
+block0:
+ v0.objref<@E> = obj.alloc @E;
+ enum.set_tag v0 #None;
+ v1.objref<@E> = obj.alloc @E;
+ enum.set_tag v1 #None;
+ v2.objref<i256> = enum.proj v0 #Some 0.i8;
+ v3.objref<i256> = enum.proj v1 #Some 0.i8;
+ jump block1;
+block1:
+ v4.objref<@E> = phi (v0 block0) (v1 block2);
+ v5.objref<i256> = phi (v2 block0) (v3 block2);
+ v6.i8 = phi (0.i8 block0) (v7 block2);
+ enum.write_variant v4 #Some (31.i256);
+ {mutation}
+ v8.i256 = obj.load v5;
+ v7.i8 = add v6 1.i8;
+ v9.i1 = lt v7 2.i8;
+ br v9 block2 block3;
+block2:
+ jump block1;
+block3:
+ return v8;
+}}
+"#
+        );
+        assert_eq!(execute(&source, 128).invalid_reads(), usize::from(retag));
+    }
+}
+
+#[test]
+fn calls_do_not_reclassify_unresolved_local_references_as_imports() {
+    let source = r#"
+target = "evm-ethereum-osaka"
+type @E = enum { #None, #Some(i256) };
+func private %identity(v100.objref<i256>) -> objref<i256> {
+block0:
+ return v100;
+}
+func private %entry() -> i256 {
+block0:
+ v0.objref<@E> = obj.alloc @E;
+ enum.set_tag v0 #Some;
+ v1.objref<i256> = enum.proj v0 #Some 0.i8;
+ v2.objref<i256> = call %identity undef.objref<i256>;
+ v3.objref<@E> = enum.assert_variant_ref v0 #Some;
+ v4.i256 = obj.load v2;
+ return v4;
+}
+"#;
+    for level in [VerificationLevel::Standard, VerificationLevel::Full] {
+        let parsed = parse_module(source).unwrap();
+        let report = verify_module(&parsed.module, &VerifierConfig::for_level(level));
+        assert!(
+            report
+                .errors()
+                .any(|diagnostic| diagnostic.message == "unknown local reference provenance"),
+            "{report}"
+        );
+        let known = source.replace("call %identity undef.objref<i256>", "call %identity v1");
+        let parsed = parse_module(&known).unwrap();
+        let report = verify_module(&parsed.module, &VerifierConfig::for_level(level));
+        assert!(report.is_ok(), "{report}");
     }
 }

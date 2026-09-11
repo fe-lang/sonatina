@@ -1,283 +1,130 @@
-//! Enum proofs are must facts; raw exposure is a separate may fact.
-//!
-//! Typed places determine overlap. Typed mutations determine initialization
-//! and tag changes. Both load proofs and saved-tag freshness consume those
-//! same effects. Exposure joins by union; proofs join by intersection. All
-//! flows use the verifier's shared CFG domain, including virtual dead entries.
-use super::FunctionVerifier;
-use objects::{Effect, Mutation, Objects, Place, Relation};
-use rustc_hash::{FxHashMap, FxHashSet};
+//! Forward enum verification over guarded references, value snapshots, mutable
+//! objects, and exposure. Local typing and SSA availability are prerequisites.
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
+
 use sonatina_ir::{
-    BlockId, InstId, Type, ValueId,
+    BlockId, Type,
     inst::{control_flow, data, downcast},
-    types::{CompoundType, CompoundTypeRef, EnumVariantRef},
+    types::CompoundType,
 };
-use std::collections::VecDeque;
+
+use super::FunctionVerifier;
+use crate::diagnostic::{Diagnostic, DiagnosticCode};
+use objects::State;
+use value_state::ValueState;
+use views::{Anchor, References};
+
 mod objects;
+#[cfg(test)]
+mod tests;
+mod transfer;
+mod value_state;
+mod views;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(super) struct EnumFieldLoadProof {
-    active_variant: bool,
-    field_initialized: bool,
-}
-impl EnumFieldLoadProof {
-    const PROVEN: Self = Self {
-        active_variant: true,
-        field_initialized: true,
-    };
-    pub(super) fn is_proven(self) -> bool {
-        self.active_variant && self.field_initialized
-    }
-    fn intersect(self, other: Self) -> Self {
-        Self {
-            active_variant: self.active_variant && other.active_variant,
-            field_initialized: self.field_initialized && other.field_initialized,
-        }
-    }
-}
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-struct Field {
-    variant: EnumVariantRef,
-    index: usize,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Proof {
+    NoLocalEnumObligation,
+    Proven,
+    Unproved(&'static str),
 }
 
-pub(super) fn compute(verifier: &FunctionVerifier<'_>) -> FxHashMap<InstId, EnumFieldLoadProof> {
-    let mut objects = Objects::new(verifier);
-    let mut results = FxHashMap::default();
-    let mut requests: FxHashMap<Place, FxHashMap<Field, FxHashSet<InstId>>> = FxHashMap::default();
-    for &inst in verifier.block_to_insts.values().flatten() {
-        let Some(load) = verifier
-            .func
-            .dfg
-            .get_inst(inst)
-            .and_then(|i| downcast::<&data::ObjLoad>(verifier.ctx.inst_set, i))
-        else {
-            continue;
+fn read(
+    state: &State,
+    verifier: &FunctionVerifier<'_>,
+    refs: &References,
+    ty: Type,
+    tag_only: bool,
+) -> Proof {
+    if refs.unknown || refs.views.is_empty() {
+        Proof::Unproved("unknown local reference provenance")
+    } else if refs.views.iter().all(|view| view.guards.is_empty()) {
+        Proof::NoLocalEnumObligation
+    } else if !state.guards_hold(verifier.ctx, refs) {
+        Proof::Unproved("an ancestor enum variant is not proven active")
+    } else {
+        let initialized = |value: &ValueState| {
+            if tag_only {
+                value.tag_initialized
+            } else {
+                value.readable(verifier.ctx)
+            }
         };
-        if verifier
-            .value_ty(*load.object())
-            .and_then(|ty| verifier.objref_ty(ty))
-            .is_none()
-        {
-            continue;
-        }
-        let Some(proj) = verifier
-            .func
-            .dfg
-            .value_inst(*load.object())
-            .and_then(|i| verifier.func.dfg.get_inst(i))
-            .and_then(|i| downcast::<&data::EnumProj>(verifier.ctx.inst_set, i))
-        else {
-            continue;
-        };
-        results.insert(inst, EnumFieldLoadProof::default());
-        if let Some(index) = verifier
-            .value_imm(*proj.field())
-            .and_then(|i| i.to_nonnegative_usize())
-        {
-            requests
-                .entry(objects.place(*proj.object()))
-                .or_default()
-                .entry(Field {
-                    variant: *proj.variant(),
-                    index,
-                })
-                .or_default()
-                .insert(inst);
+        let value = state.contents(verifier.ctx, refs, ty);
+        let mut guarded = refs.clone();
+        guarded.views.retain(|view| !view.guards.is_empty());
+        guarded.cache = None;
+        // An imported, unguarded alternative has no local payload obligation.
+        // The symbolic view can prove all alternatives at once; otherwise only
+        // the guarded candidates demand a subtree proof.
+        if initialized(&value) || initialized(&state.contents(verifier.ctx, &guarded, ty)) {
+            Proof::Proven
+        } else {
+            Proof::Unproved("the demanded enum payload subtree is not proven initialized")
         }
     }
-    if requests.is_empty() {
-        return results;
+}
+
+pub(super) fn verify(verifier: &mut FunctionVerifier<'_>) {
+    // Enum projection is the only source of a local ancestor obligation.
+    // Imported references have no hidden guard under the interface contract.
+    if !verifier.block_to_insts.values().flatten().any(|&id| {
+        let inst = verifier.func.dfg.inst(id);
+        downcast::<&data::EnumProj>(verifier.ctx.inst_set, inst).is_some()
+            || downcast::<&data::EnumExtract>(verifier.ctx.inst_set, inst).is_some()
+            || downcast::<&data::EnumGetTag>(verifier.ctx.inst_set, inst).is_some()
+    }) {
+        return;
     }
-    let effects: FxHashMap<_, _> = verifier
-        .block_to_insts
-        .values()
-        .flatten()
-        .map(|&id| (id, objects.effect(id)))
-        .collect();
-    let mut branches: FxHashMap<Place, Vec<_>> = FxHashMap::default();
-    for (&pred, successors) in &verifier.analysis_cfg.succs {
-        let Some(branch) = verifier
-            .func
-            .layout
-            .last_inst_of(pred)
-            .and_then(|i| verifier.func.dfg.get_inst(i))
-            .and_then(|i| downcast::<&control_flow::BrTable>(verifier.ctx.inst_set, i))
-        else {
+    let entries = solve(verifier);
+    for block in verifier.block_order.clone() {
+        let Some(mut state) = entries.get(&block).cloned() else {
             continue;
         };
-        let Some(tag) = enum_get_tag_of_value(verifier, *branch.scrutinee()) else {
-            continue;
-        };
-        let Some(observation) = verifier.func.dfg.value_inst(*branch.scrutinee()) else {
-            continue;
-        };
-        let object = objects.place(*tag.object());
-        if !requests.contains_key(&object) {
-            continue;
-        }
-        for &succ in successors {
-            if let Some((_, variant)) = br_table_edge_variant(verifier, branch, succ) {
-                branches.entry(object.clone()).or_default().push((
-                    pred,
-                    succ,
-                    variant,
-                    observation,
+        for inst in verifier.block_to_insts[&block].clone() {
+            if let Proof::Unproved(reason) = transfer::instruction(verifier, &mut state, inst) {
+                verifier.emit(Diagnostic::error(
+                    DiagnosticCode::InstOperandTypeMismatch,
+                    reason,
+                    verifier.inst_location(inst),
                 ));
             }
         }
     }
-    for (object, fields) in requests {
-        let entries = solve(
-            verifier,
-            false,
-            !object.is_local(),
-            |a, b| a || b,
-            |_, _, x| x,
-            |id, x| effects[&id].exposure_after(&object, x),
-        );
-        let mut exposed = FxHashSet::default();
-        for (&block, &entry) in &entries {
-            let mut state = entry;
-            for &inst in verifier.block_to_insts.get(&block).into_iter().flatten() {
-                if state {
-                    exposed.insert(inst);
-                }
-                state = effects[&inst].exposure_after(&object, state);
-            }
-        }
-        let mut edges: FxHashMap<EnumVariantRef, FxHashSet<_>> = FxHashMap::default();
-        for &(pred, succ, variant, observation) in branches.get(&object).into_iter().flatten() {
-            if observation_reaches(verifier, &effects, &exposed, &object, observation, pred) {
-                edges.entry(variant).or_default().insert((pred, succ));
-            }
-        }
-        for (field, uses) in fields {
-            let payload = object.payload(field.variant, field.index);
-            let transfer = |id, proof| {
-                transfer(
-                    &object,
-                    &payload,
-                    field.variant,
-                    proof,
-                    &effects[&id],
-                    exposed.contains(&id),
-                )
-            };
-            let entries = solve(
-                verifier,
-                EnumFieldLoadProof::PROVEN,
-                EnumFieldLoadProof::default(),
-                EnumFieldLoadProof::intersect,
-                |pred, block, mut proof| {
-                    proof.active_variant |= edges
-                        .get(&field.variant)
-                        .is_some_and(|e| e.contains(&(pred, block)));
-                    proof
-                },
-                transfer,
-            );
-            for (block, mut proof) in entries {
-                for &inst in verifier.block_to_insts.get(&block).into_iter().flatten() {
-                    if uses.contains(&inst) {
-                        results.insert(inst, proof);
-                    }
-                    proof = transfer(inst, proof);
-                }
-            }
-        }
-    }
-    results
 }
 
-fn transfer(
-    object: &Place,
-    payload: &Place,
-    variant: EnumVariantRef,
-    mut proof: EnumFieldLoadProof,
-    effect: &Effect,
-    exposed: bool,
-) -> EnumFieldLoadProof {
-    match &effect.mutation {
-        Mutation::Assert(target, asserted) if target == object => {
-            return if *asserted == variant {
-                EnumFieldLoadProof::PROVEN
-            } else {
-                EnumFieldLoadProof::default()
-            };
-        }
-        Mutation::Write {
-            target,
-            tag,
-            complete,
-        } => match target.relation(object) {
-            Relation::Equal => {
-                if *tag != Some(variant) {
-                    return EnumFieldLoadProof::default();
-                }
-                proof.active_variant = true;
-                proof.field_initialized |= complete;
-                return proof;
-            }
-            Relation::Within => {
-                match target.relation(payload) {
-                    Relation::Disjoint => {}
-                    Relation::Equal | Relation::Contains => proof.field_initialized = *complete,
-                    Relation::Within => proof.field_initialized &= complete,
-                    Relation::MayOverlap => proof.field_initialized = false,
-                }
-                return proof;
-            }
-            Relation::Disjoint => return proof,
-            Relation::Contains | Relation::MayOverlap => return EnumFieldLoadProof::default(),
-        },
-        _ => {}
-    }
-    if effect.invalidates_tag(object, exposed) {
-        EnumFieldLoadProof::default()
-    } else {
-        proof
-    }
-}
-
-// The two finite monotone domains share scheduling and boundary semantics;
-// their initial element and join deliberately differ (may versus must).
-fn solve<T: Copy + Eq>(
-    verifier: &FunctionVerifier<'_>,
-    initial: T,
-    boundary: T,
-    join: impl Fn(T, T) -> T,
-    edge: impl Fn(BlockId, BlockId, T) -> T,
-    transfer: impl Fn(InstId, T) -> T,
-) -> FxHashMap<BlockId, T> {
+fn solve(verifier: &FunctionVerifier<'_>) -> BTreeMap<BlockId, State> {
     let cfg = &verifier.analysis_cfg;
-    let mut exits: FxHashMap<_, _> = cfg.blocks.iter().map(|&b| (b, initial)).collect();
-    let mut entries = FxHashMap::default();
-    let mut pending: VecDeque<_> = cfg.blocks.iter().copied().collect();
-    let mut queued: FxHashSet<_> = cfg.blocks.iter().copied().collect();
+    let mut entries = BTreeMap::new();
+    let mut pending = VecDeque::new();
+    let mut queued = BTreeSet::new();
+    for &block in &cfg.blocks {
+        if cfg.entries.contains(&block) {
+            let mut boundary = State::boundary(verifier);
+            // A virtual entry has no predecessor from which a phi can import
+            // facts. This is reachable unknown state, distinct from NoFlow.
+            phis(verifier, &mut boundary, None, block);
+            entries.insert(block, boundary);
+            pending.push_back(block);
+            queued.insert(block);
+        }
+    }
     while let Some(block) = pending.pop_front() {
         queued.remove(&block);
-        // Virtual entries also have real backedges: include them for may facts.
-        let incoming = cfg
-            .preds
-            .get(&block)
-            .into_iter()
-            .flatten()
-            .filter_map(|&p| exits.get(&p).map(|&x| edge(p, block, x)));
-        let entry = incoming
-            .chain(cfg.entries.contains(&block).then_some(boundary))
-            .reduce(&join)
-            .unwrap_or(boundary);
-        entries.insert(block, entry);
-        let exit = verifier
-            .block_to_insts
-            .get(&block)
-            .into_iter()
-            .flatten()
-            .fold(entry, |x, &id| transfer(id, x));
-        if exits.insert(block, exit) != Some(exit) {
-            for &succ in cfg.succs.get(&block).into_iter().flatten() {
-                if exits.contains_key(&succ) && queued.insert(succ) {
+        let mut state = entries[&block].clone();
+        for &inst in &verifier.block_to_insts[&block] {
+            transfer::instruction(verifier, &mut state, inst);
+        }
+        for &succ in cfg.succs.get(&block).into_iter().flatten() {
+            let Some(mut edge) = edge(verifier, &state, block, succ) else {
+                continue;
+            };
+            phis(verifier, &mut edge, Some(block), succ);
+            let next = entries
+                .get(&succ)
+                .map_or_else(|| edge.clone(), |old| old.join(verifier.ctx, &edge));
+            if entries.get(&succ) != Some(&next) {
+                entries.insert(succ, next);
+                if queued.insert(succ) {
                     pending.push_back(succ);
                 }
             }
@@ -286,118 +133,176 @@ fn solve<T: Copy + Eq>(
     entries
 }
 
-fn observation_reaches(
-    verifier: &FunctionVerifier<'_>,
-    effects: &FxHashMap<InstId, Effect>,
-    exposed: &FxHashSet<InstId>,
-    object: &Place,
-    observation: InstId,
-    branch: BlockId,
-) -> bool {
-    let cfg = &verifier.analysis_cfg;
-    let mut pending = vec![branch];
-    let mut seen = FxHashSet::default();
-    while let Some(block) = pending.pop() {
-        if !seen.insert(block) {
+fn phis(verifier: &FunctionVerifier<'_>, state: &mut State, pred: Option<BlockId>, block: BlockId) {
+    let ctx = verifier.ctx;
+    let mut incoming = vec![];
+    for &inst in &verifier.block_to_insts[&block] {
+        let Some(phi) = downcast::<&control_flow::Phi>(ctx.inst_set, verifier.func.dfg.inst(inst))
+        else {
             continue;
-        }
-        let Some(insts) = verifier.block_to_insts.get(&block) else {
-            return false;
         };
-        let mut found = false;
-        for &inst in insts.iter().rev() {
-            if inst == observation {
-                found = true;
-                break;
-            }
-            if effects[&inst].invalidates_tag(object, exposed.contains(&inst)) {
-                return false;
-            }
-        }
-        if found {
-            continue;
-        }
-        if cfg.entries.contains(&block) {
-            return false;
-        }
-        let Some(preds) = cfg.preds.get(&block).filter(|p| !p.is_empty()) else {
-            return false;
-        };
-        pending.extend(preds);
+        let id = verifier.func.dfg.inst_results(inst)[0];
+        let ty = verifier.func.dfg.value_ty(id);
+        let source =
+            pred.and_then(|pred| phi.args().iter().find(|(_, b)| *b == pred).map(|(v, _)| *v));
+        let value = source.map_or_else(|| ValueState::new(ty, false), |v| state.value(verifier, v));
+        let fact = verifier
+            .objref_ty(ty)
+            .map(|elem| state.fact(ctx, &value.references, elem));
+        incoming.push((id, source, value, fact));
     }
-    true
-}
-
-fn br_table_edge_variant(
-    verifier: &FunctionVerifier<'_>,
-    br_table: &control_flow::BrTable,
-    succ: BlockId,
-) -> Option<(ValueId, EnumVariantRef)> {
-    let enum_get_tag = enum_get_tag_of_value(verifier, *br_table.scrutinee())?;
-    let object = *enum_get_tag.object();
-    let Type::EnumTag(enum_ty) = verifier.value_ty(*br_table.scrutinee())? else {
-        return None;
-    };
-    let variant_count = verifier.ctx.with_ty_store(|store| {
-        let CompoundType::Enum(enum_data) = store.get_compound(enum_ty)? else {
-            return None;
-        };
-        Some(enum_data.variants.len())
-    })?;
-    let cases: Vec<_> = br_table
-        .table()
+    let mut observations = vec![];
+    let mut value_observations = vec![];
+    for &(id, source, _, _) in &incoming {
+        if let Some(refs) = source.and_then(|v| state.observations.get(&v)) {
+            let mapped = incoming
+                .iter()
+                .find(|(_, _, _, fact)| {
+                    fact.as_ref()
+                        .is_some_and(|fact| refs.same_location(&fact.references))
+                })
+                .map(|(id, ..)| *id);
+            observations.push((id, refs.clone(), mapped));
+        }
+        if let Some(&(value, predicate)) = source.and_then(|v| state.value_observations.get(&v)) {
+            let mapped = incoming
+                .iter()
+                .find(|(_, source, ..)| *source == Some(value))
+                .map(|(id, ..)| *id);
+            if mapped.is_some() || incoming.iter().all(|(id, ..)| *id != value) {
+                value_observations.push((id, (mapped.unwrap_or(value), predicate)));
+            }
+        }
+    }
+    // Read and substitute every operand against the predecessor's names, then
+    // retire all old bindings before installing any of the new phi bindings.
+    let ids: BTreeSet<_> = incoming.iter().map(|(id, ..)| *id).collect();
+    let aliases: Vec<_> = incoming
         .iter()
-        .map(|&(value, dest)| Some((enum_variant_for_tag_value(verifier, enum_ty, value)?, dest)))
-        .collect::<Option<_>>()?;
-
-    // A destination can be reached by several explicit cases and by the
-    // default. Prove a variant only when all tags reaching it agree, including
-    // the complement of the explicit cases when the default reaches it.
-    let mut proved_variant = None;
-    for idx in 0..variant_count {
-        let variant = EnumVariantRef::new(enum_ty, u32::try_from(idx).ok()?);
-        let mut explicit = false;
-        let mut reaches = false;
-        for &(case, dest) in &cases {
-            if case == variant {
-                explicit = true;
-                reaches |= dest == succ;
-            }
+        .filter_map(|(id, _, _, fact)| fact.as_ref().map(|fact| (*id, fact.references.clone())))
+        .collect();
+    let named = state
+        .views
+        .iter()
+        .map(|(&id, fact)| (id, fact.references.clone()))
+        .collect();
+    for (_, _, value, fact) in &mut incoming {
+        for &old in &ids {
+            value.forget_index(ctx, old);
         }
-        reaches |= !explicit && *br_table.default() == Some(succ);
-        if reaches {
-            if proved_variant.is_some() {
-                return None;
+        value.visit_references(ctx, &mut |refs| refs.substitute(&ids, &aliases, &named));
+        if let Some(fact) = fact {
+            for &old in &ids {
+                fact.value.forget_index(ctx, old);
             }
-            proved_variant = Some(variant);
+            fact.value
+                .visit_references(ctx, &mut |refs| refs.substitute(&ids, &aliases, &named));
         }
     }
-    Some((object, proved_variant?))
+    for (_, refs, _) in &mut observations {
+        refs.substitute(&ids, &aliases, &named);
+    }
+    for &id in &ids {
+        state.prepare_binding(ctx, id);
+    }
+    for (id, _, mut value, fact) in incoming {
+        if fact.is_some() {
+            value.references.anchors.insert(Anchor {
+                value: id,
+                path: vec![],
+            });
+        }
+        state.install(id, value, fact);
+    }
+    for (id, mut refs, mapped) in observations {
+        if let Some(mapped) = mapped {
+            refs = state.values[&mapped].references.clone();
+        }
+        state.observations.insert(id, refs);
+    }
+    state.value_observations.extend(value_observations);
 }
 
-fn enum_variant_for_tag_value(
+fn edge(
     verifier: &FunctionVerifier<'_>,
-    enum_ty: CompoundTypeRef,
-    value: ValueId,
-) -> Option<EnumVariantRef> {
-    let idx = verifier.value_imm(value)?.to_nonnegative_usize()?;
-    let variant_count = verifier.ctx.with_ty_store(|store| {
-        let CompoundType::Enum(enum_data) = store.get_compound(enum_ty)? else {
-            return None;
+    state: &State,
+    pred: BlockId,
+    succ: BlockId,
+) -> Option<State> {
+    let mut next = state.clone();
+    let inst = verifier
+        .func
+        .dfg
+        .inst(verifier.func.layout.last_inst_of(pred)?);
+    let table = downcast::<&control_flow::BrTable>(verifier.ctx.inst_set, inst);
+    let branch = downcast::<&control_flow::Br>(verifier.ctx.inst_set, inst);
+    let scrutinee = table
+        .map(|b| *b.scrutinee())
+        .or_else(|| branch.map(|b| *b.cond()));
+    let Some(scrutinee) = scrutinee else {
+        return Some(next);
+    };
+    let refs = state.observations.get(&scrutinee);
+    let immutable = state.value_observations.get(&scrutinee);
+    let value = if let Some(refs) = refs {
+        let Type::EnumTag(ty) = verifier.func.dfg.value_ty(scrutinee) else {
+            unreachable!("object tag observation")
         };
-        Some(enum_data.variants.len())
-    })?;
-    (idx < variant_count).then_some(EnumVariantRef::new(
-        enum_ty,
-        u32::try_from(idx).expect("enum variant index overflow"),
-    ))
-}
-
-fn enum_get_tag_of_value(
-    verifier: &FunctionVerifier<'_>,
-    value: ValueId,
-) -> Option<data::EnumGetTag> {
-    verifier.value_ty(value)?;
-    let inst = verifier.func.dfg.value_inst(value)?;
-    downcast::<&data::EnumGetTag>(verifier.ctx.inst_set, verifier.func.dfg.get_inst(inst)?).cloned()
+        state.contents(verifier.ctx, refs, Type::Compound(ty))
+    } else if let Some(&(value, _)) = immutable {
+        state.value(verifier, value)
+    } else {
+        return Some(next);
+    };
+    let Some(CompoundType::Enum(enumeration)) = value.ty.resolve_compound(verifier.ctx) else {
+        unreachable!("enum observation")
+    };
+    let tags: BTreeSet<_> = enumeration
+        .variants
+        .iter()
+        .enumerate()
+        .filter_map(|(index, _)| {
+            let case_index = immutable
+                .and_then(|(_, predicate)| *predicate)
+                .map_or(index, |variant| usize::from(index as u32 == variant));
+            let reaches = if let Some(table) = table {
+                let mut explicit = false;
+                let mut reaches = false;
+                for &(case, dest) in table.table() {
+                    if verifier
+                        .value_imm(case)
+                        .and_then(|n| n.to_nonnegative_usize())
+                        == Some(case_index)
+                    {
+                        explicit = true;
+                        reaches |= dest == succ;
+                    }
+                }
+                reaches || !explicit && *table.default() == Some(succ)
+            } else if let Some(branch) = branch
+                && let Some(&(_, Some(variant))) = immutable
+            {
+                (index as u32 == variant && *branch.nz_dest() == succ)
+                    || (index as u32 != variant && *branch.z_dest() == succ)
+            } else {
+                true
+            };
+            (reaches && value.possible(index as u32)).then_some(index as u32)
+        })
+        .collect();
+    if tags.is_empty() {
+        return None;
+    }
+    let refine = |value: &mut ValueState| {
+        value.tags = Some(tags.clone());
+        value.tag_initialized = true;
+    };
+    if let Some(refs) = refs {
+        next.write(verifier.ctx, refs, value.ty, true, refine);
+    } else if let Some(&(id, _)) = immutable {
+        let mut value = value;
+        refine(&mut value);
+        next.values.insert(id, value);
+    }
+    Some(next)
 }

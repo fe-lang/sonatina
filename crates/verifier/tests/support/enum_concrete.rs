@@ -517,6 +517,18 @@ fn execute_block(
             payloads[*tag] = make.values().iter().map(|&arg| value(arg)).collect();
             node.initialized = true;
             Some(node)
+        } else if let Some(tag) = downcast::<&data::EnumTag>(is, data) {
+            let Data::Enum { tag, .. } = value(*tag.value()).data else {
+                panic!("tag of non-enum")
+            };
+            Some(Node::scalar(tag as u64))
+        } else if let Some(test) = downcast::<&data::EnumIsVariant>(is, data) {
+            let Data::Enum { tag, .. } = value(*test.value()).data else {
+                panic!("test of non-enum")
+            };
+            Some(Node::scalar(u64::from(
+                tag == test.variant().index() as usize,
+            )))
         } else if let Some(assertion) = downcast::<&data::EnumAssertVariant>(is, data) {
             let node = value(*assertion.value());
             if !matches!(node.data, Data::Enum { tag, .. } if tag == assertion.variant().index() as usize)
