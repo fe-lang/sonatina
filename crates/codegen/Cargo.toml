@@ -16,12 +16,12 @@ keywords = ["compiler", "evm", "wasm", "smart-contract"]
 
 [dependencies]
 cranelift-entity = "0.126"
-cranelift-codegen = { version = "0.134.3", default-features = false, features = ["std", "unwind", "host-arch"], optional = true }
-cranelift-frontend = { version = "0.134.3", optional = true }
-cranelift-module = { version = "0.134.3", optional = true }
-cranelift-native = { version = "0.134.3", optional = true }
-cranelift-object = { version = "0.134.3", optional = true }
-cranelift-jit = { version = "0.134.3", optional = true }
+cranelift-codegen = { version = "0.135.0", default-features = false, features = ["std", "unwind", "host-arch"], optional = true }
+cranelift-frontend = { version = "0.135.0", optional = true }
+cranelift-module = { version = "0.135.0", optional = true }
+cranelift-native = { version = "0.135.0", optional = true }
+cranelift-object = { version = "0.135.0", optional = true }
+cranelift-jit = { version = "0.135.0", optional = true }
 smallvec = "1.15.1"
 rustc-hash = "2.0.0"
 sonatina-ir = { path = "../ir", version = "0.0.3-alpha" }

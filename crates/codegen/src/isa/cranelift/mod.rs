@@ -1,7 +1,7 @@
 //! Host-native code generation through upstream Cranelift.
 //!
 //! This module is available with the `cranelift` feature, which follows
-//! Cranelift 0.134's Rust 1.94 minimum supported Rust version.
+//! Cranelift 0.135's Rust 1.95 minimum supported Rust version.
 
 mod translate;
 
