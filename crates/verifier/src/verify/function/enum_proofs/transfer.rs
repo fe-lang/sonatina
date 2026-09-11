@@ -334,7 +334,7 @@ pub(super) fn instruction(
             _ => Source::Unsupported,
         };
         for &result in results {
-            let root = Root::Opaque(result);
+            let root = Root::Imported(result);
             let value = source.value(ctx, root, verifier.func.dfg.value_ty(result));
             let imported =
                 !matches!(source, Source::Unsupported) && !value.captured(ctx).views.is_empty();

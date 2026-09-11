@@ -183,3 +183,59 @@ block0:
         assert_eq!(run.returned, 1);
     }
 }
+
+#[test]
+fn writes_through_imports_preserve_only_unpublished_allocations() {
+    for raw_load in [false, true] {
+        for alias in [false, true] {
+            for mutation in [
+                "enum.set_tag v1 #None;",
+                "enum.write_variant v1 #None ();",
+                "v4.@E = enum.make @E #None ();\n obj.store v1 v4;",
+            ] {
+                let import = if raw_load {
+                    let stored = if alias { "v0" } else { "v9" };
+                    format!(
+                        "v10.*objref<@E> = alloca objref<@E>;\n mstore v10 {stored} objref<@E>;\n v1.objref<@E> = mload v10 objref<@E>;"
+                    )
+                } else if alias {
+                    "v1.objref<@E> = call %identity v0;".into()
+                } else {
+                    "v1.objref<@E> = call %allocate;".into()
+                };
+                let source = format!(
+                    r#"
+target = "evm-ethereum-osaka"
+type @E = enum {{ #None, #Some(i256) }};
+func private %allocate() -> objref<@E> {{
+block0:
+ v0.objref<@E> = obj.alloc @E;
+ enum.set_tag v0 #None;
+ return v0;
+}}
+func private %identity(v0.objref<@E>) -> objref<@E> {{
+block0:
+ return v0;
+}}
+func private %entry() -> i256 {{
+block0:
+ v0.objref<@E> = obj.alloc @E;
+ v9.objref<@E> = obj.alloc @E;
+ enum.set_tag v9 #None;
+ {import}
+ enum.write_variant v0 #Some (17.i256);
+ v2.objref<i256> = enum.proj v0 #Some 0.i8;
+ {mutation}
+ v3.i256 = obj.load v2;
+ return v3;
+}}
+"#
+                );
+                let run = execute(&source, 128);
+                assert_eq!(run.invalid_reads(), usize::from(alias));
+                assert_eq!(run.exhausted, 0);
+                assert_eq!(run.returned, 1);
+            }
+        }
+    }
+}

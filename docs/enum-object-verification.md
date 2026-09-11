@@ -90,6 +90,12 @@ from the capabilities available before the effect, keeping guards and private
 allocation separation. Imported holders remain externally accessible, so later
 stores into them publish contained references.
 
+Recovered references enumerate accessible local candidates separately from
+their external alternative. Only those explicit candidates can alias a local
+allocation; the external alternative is not a wildcard for private locals.
+External alternatives and incoming roots may alias one another. Unresolved
+provenance remains a separate unknown contributor that can alias any object.
+
 Materialization exposes the entire allocation, including siblings. Raw accesses
 remain subject to the existing raw-memory contract. A checked bounded write
 directly into an independent raw allocation is disjoint. Derived pointers and

@@ -20,21 +20,21 @@ pub(super) struct ImportSources {
 
 impl ImportSources {
     pub fn new(ctx: &ModuleCtx, state: &State, args: impl Iterator<Item = ValueState>) -> Self {
-        let mut effects = Self {
+        let mut sources = Self {
             candidates: FxHashMap::default(),
             unresolved: false,
         };
         for arg in args {
-            effects.unresolved |= arg.captured(ctx).unknown;
+            sources.unresolved |= arg.captured(ctx).unknown;
         }
         for value in state.values.values() {
-            effects.contents(ctx, value, &state.exposed);
+            sources.contents(ctx, value, &state.exposed);
         }
         for (&root, value) in &state.objects {
             if root.externally_accessible(&state.exposed) {
-                effects.unresolved |= value.captured(ctx).unknown;
-                effects.subobjects(ctx, value.ty, &References::root(root));
-                effects.contents(ctx, value, &state.exposed);
+                sources.unresolved |= value.captured(ctx).unknown;
+                sources.subobjects(ctx, value.ty, &References::root(root));
+                sources.contents(ctx, value, &state.exposed);
             }
         }
         for fact in state.views.values() {
@@ -44,12 +44,12 @@ impl ImportSources {
             // An unrelated unresolved SSA value is not itself a call input.
             // Unknown published inputs/contents are tracked separately above.
             if !refs.views.is_empty() {
-                effects.subobjects(ctx, fact.value.ty, &refs);
-                effects.unresolved |= fact.value.captured(ctx).unknown;
-                effects.contents(ctx, &fact.value, &state.exposed);
+                sources.subobjects(ctx, fact.value.ty, &refs);
+                sources.unresolved |= fact.value.captured(ctx).unknown;
+                sources.contents(ctx, &fact.value, &state.exposed);
             }
         }
-        effects
+        sources
     }
 
     fn contents(&mut self, ctx: &ModuleCtx, value: &ValueState, exposed: &BTreeSet<Root>) {

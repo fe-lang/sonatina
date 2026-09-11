@@ -8,13 +8,17 @@ pub(super) enum Root {
     IncomingNested(ValueId, CompoundTypeRef),
     Recent(ValueId),
     Summary(ValueId),
-    Opaque(ValueId),
+    Imported(ValueId),
     External,
 }
 
 impl Root {
+    fn is_local(self) -> bool {
+        matches!(self, Self::Recent(_) | Self::Summary(_))
+    }
+
     pub fn externally_accessible(self, exposed: &BTreeSet<Self>) -> bool {
-        !matches!(self, Self::Recent(_) | Self::Summary(_)) || exposed.contains(&self)
+        !self.is_local() || exposed.contains(&self)
     }
 
     pub fn single(self) -> bool {
@@ -22,16 +26,10 @@ impl Root {
     }
 
     pub fn may_alias(self, other: Self) -> bool {
-        self == other
-            || matches!(
-                (self, other),
-                (Self::Opaque(_), _)
-                    | (_, Self::Opaque(_))
-                    | (
-                        Self::Incoming(_) | Self::IncomingNested(..),
-                        Self::Incoming(_) | Self::IncomingNested(..)
-                    )
-            )
+        // Imported references carry accessible local candidates explicitly.
+        // Their external alternative must not also alias every private local
+        // allocation. Missing provenance is References::unknown, not a root.
+        self == other || !self.is_local() && !other.is_local()
     }
 }
 
