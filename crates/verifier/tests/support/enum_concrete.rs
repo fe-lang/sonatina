@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use sonatina_ir::{
     BlockId, Function, InstId, Type, Value, ValueId,
     inst::{arith, cmp, control_flow, data, downcast},
-    module::ModuleCtx,
+    module::{FuncRef, Module, ModuleCtx},
     types::CompoundType,
 };
 use sonatina_parser::parse_module;
@@ -229,6 +229,17 @@ struct World {
     values: BTreeMap<ValueId, Node>,
     objects: Vec<Object>,
     exposed: BTreeSet<usize>,
+    callers: Vec<Caller>,
+}
+
+#[derive(Clone, Debug)]
+struct Caller {
+    func: FuncRef,
+    block: BlockId,
+    pred: Option<BlockId>,
+    offset: usize,
+    values: BTreeMap<ValueId, Node>,
+    results: Vec<ValueId>,
 }
 
 impl World {
@@ -289,7 +300,7 @@ impl World {
 
 #[derive(Debug, Default)]
 pub struct Execution {
-    pub reads: BTreeMap<InstId, bool>,
+    pub reads: BTreeMap<(FuncRef, InstId), bool>,
     pub returned: usize,
     pub assumptions_pruned: usize,
     pub exhausted: usize,
@@ -297,8 +308,8 @@ pub struct Execution {
 }
 
 impl Execution {
-    fn read(&mut self, inst: InstId, valid: bool) {
-        *self.reads.entry(inst).or_insert(true) &= valid;
+    fn read(&mut self, func: FuncRef, inst: InstId, valid: bool) {
+        *self.reads.entry((func, inst)).or_insert(true) &= valid;
     }
 
     pub fn invalid_reads(&self) -> usize {
@@ -308,7 +319,7 @@ impl Execution {
 
 pub fn execute(source: &str, instruction_limit: usize) -> Execution {
     let parsed = parse_module(source).expect("contract fixture parses");
-    let func = parsed
+    let entry_func = parsed
         .module
         .funcs()
         .into_iter()
@@ -319,7 +330,7 @@ pub fn execute(source: &str, instruction_limit: usize) -> Execution {
                 .func_sig(func, |sig| sig.name() == "entry")
         })
         .expect("entry function");
-    parsed.module.func_store.view(func, |func| {
+    let mut pending = parsed.module.func_store.view(entry_func, |func| {
         let mut worlds = vec![World::default()];
         for &arg in &func.arg_values {
             let ty = func.dfg.value_ty(arg);
@@ -358,26 +369,36 @@ pub fn execute(source: &str, instruction_limit: usize) -> Execution {
             assert!(worlds.len() <= 4096, "concrete input bound exceeded");
         }
         let entry = func.layout.entry_block().expect("entry block");
-        let mut pending: Vec<_> = worlds
+        worlds
             .into_iter()
-            .map(|world| (entry, None, world, 0, 0))
-            .collect();
-        let mut execution = Execution::default();
-        while let Some(work) = pending.pop() {
-            execute_block(func, work, instruction_limit, &mut pending, &mut execution);
-            assert!(pending.len() <= 4096, "concrete path bound exceeded");
-        }
-        execution
-    })
+            .map(|world| (entry_func, entry, None, world, 0, 0))
+            .collect::<Vec<_>>()
+    });
+    let mut execution = Execution::default();
+    while let Some(work) = pending.pop() {
+        parsed.module.func_store.view(work.0, |func| {
+            execute_block(
+                &parsed.module,
+                func,
+                work,
+                instruction_limit,
+                &mut pending,
+                &mut execution,
+            )
+        });
+        assert!(pending.len() <= 4096, "concrete path bound exceeded");
+    }
+    execution
 }
 
 // A work item keeps the actual predecessor and its values; phi assignments are
 // simultaneous. This also preserves older dynamic references across backedges.
-type Work = (BlockId, Option<BlockId>, World, usize, usize);
+type Work = (FuncRef, BlockId, Option<BlockId>, World, usize, usize);
 
 fn execute_block(
+    module: &Module,
     func: &Function,
-    (block, pred, mut world, mut steps, offset): Work,
+    (func_ref, block, pred, mut world, mut steps, offset): Work,
     limit: usize,
     pending: &mut Vec<Work>,
     execution: &mut Execution,
@@ -451,14 +472,14 @@ fn execute_block(
             let view = value(*load.object()).view();
             let node = world.at(&view.location);
             if !view.guards.is_empty() {
-                execution.read(inst, world.guards_hold(&view) && node.readable());
+                execution.read(func_ref, inst, world.guards_hold(&view) && node.readable());
             }
             Some(node.clone())
         } else if let Some(tag) = downcast::<&data::EnumGetTag>(is, data) {
             let view = value(*tag.object()).view();
             let node = world.at(&view.location);
             if !view.guards.is_empty() {
-                execution.read(inst, world.guards_hold(&view) && node.initialized);
+                execution.read(func_ref, inst, world.guards_hold(&view) && node.initialized);
             }
             let Data::Enum { tag, .. } = node.data else {
                 panic!("tag of non-enum");
@@ -546,13 +567,20 @@ fn execute_block(
                 value(*extract.field()).integer() as usize,
             ));
             execution.read(
+                func_ref,
                 inst,
                 matches!(node.data, Data::Enum { tag, .. } if node.initialized && tag == variant)
                     && field.readable(),
             );
             Some(field.clone())
-        } else if let Some(materialize) = downcast::<&data::ObjMaterializeStack>(is, data) {
-            let object = value(*materialize.object()).view().location.object;
+        } else if let Some(object) = downcast::<&data::ObjMaterializeStack>(is, data)
+            .map(|materialize| *materialize.object())
+            .or_else(|| {
+                downcast::<&data::ObjMaterializeHeap>(is, data)
+                    .map(|materialize| *materialize.object())
+            })
+        {
+            let object = value(object).view().location.object;
             world.exposed.insert(object);
             world.close_exposure();
             Some(Node {
@@ -579,7 +607,7 @@ fn execute_block(
                 } else {
                     let mut changed = world.clone();
                     changed.objects[object].value.clear_readability();
-                    pending.push((block, pred, changed, steps, index + 1));
+                    pending.push((func_ref, block, pred, changed, steps, index + 1));
                 }
             }
             None
@@ -591,8 +619,39 @@ fn execute_block(
             Some(Node::scalar(u64::from(
                 value(*lt.lhs()).integer() < value(*lt.rhs()).integer(),
             )))
+        } else if let Some(call) = downcast::<&control_flow::Call>(is, data) {
+            let args: Vec<_> = call.args().iter().map(|&arg| value(arg)).collect();
+            let mut published = vec![];
+            for arg in &args {
+                arg.references(&mut published);
+            }
+            world.exposed.extend(published);
+            world.close_exposure();
+            world.callers.push(Caller {
+                func: func_ref,
+                block,
+                pred,
+                offset: index + 1,
+                values: std::mem::take(&mut world.values),
+                results: func.dfg.inst_results(inst).to_vec(),
+            });
+            module.func_store.view(*call.callee(), |callee| {
+                assert_eq!(args.len(), callee.arg_values.len());
+                world
+                    .values
+                    .extend(callee.arg_values.iter().copied().zip(args));
+                pending.push((
+                    *call.callee(),
+                    callee.layout.entry_block().expect("concrete call body"),
+                    None,
+                    world,
+                    steps,
+                    0,
+                ));
+            });
+            return;
         } else if let Some(jump) = downcast::<&control_flow::Jump>(is, data) {
-            pending.push((*jump.dest(), Some(block), world, steps, 0));
+            pending.push((func_ref, *jump.dest(), Some(block), world, steps, 0));
             return;
         } else if let Some(branch) = downcast::<&control_flow::Br>(is, data) {
             let dest = if value(*branch.cond()).integer() != 0 {
@@ -600,7 +659,7 @@ fn execute_block(
             } else {
                 *branch.z_dest()
             };
-            pending.push((dest, Some(block), world, steps, 0));
+            pending.push((func_ref, dest, Some(block), world, steps, 0));
             return;
         } else if let Some(branch) = downcast::<&control_flow::BrTable>(is, data) {
             let scrutinee = value(*branch.scrutinee()).integer();
@@ -611,10 +670,31 @@ fn execute_block(
                 .map(|(_, dest)| *dest)
                 .or(*branch.default());
             if let Some(dest) = dest {
-                pending.push((dest, Some(block), world, steps, 0));
+                pending.push((func_ref, dest, Some(block), world, steps, 0));
             }
             return;
-        } else if downcast::<&control_flow::Return>(is, data).is_some() {
+        } else if let Some(ret) = downcast::<&control_flow::Return>(is, data) {
+            let values: Vec<_> = ret.args().iter().map(|&arg| value(arg)).collect();
+            if let Some(caller) = world.callers.pop() {
+                assert_eq!(caller.results.len(), values.len());
+                let mut published = vec![];
+                for value in &values {
+                    value.references(&mut published);
+                }
+                world.exposed.extend(published);
+                world.close_exposure();
+                world.values = caller.values;
+                world.values.extend(caller.results.into_iter().zip(values));
+                pending.push((
+                    caller.func,
+                    caller.block,
+                    caller.pred,
+                    world,
+                    steps,
+                    caller.offset,
+                ));
+                return;
+            }
             execution.returned += 1;
             execution.max_objects = execution.max_objects.max(world.objects.len());
             return;

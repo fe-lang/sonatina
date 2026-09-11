@@ -61,8 +61,20 @@ reference recovered later from a holder or opaque call may alias a fresh local
 allocation. These are different origins. An unresolved local origin is never
 silently reclassified as an imported reference without an obligation.
 
-Calls may publish their reference-bearing arguments and invalidate mutable
-guarantees. Retain possible aliases through returned values. Hidden dereferences
+Calls publish their reference-bearing arguments and can mutate the objects
+reachable from those arguments or prior external exposure. Preserve facts and
+reference cells in fresh private objects that the call cannot reach. Incoming
+and opaque imported roots are externally accessible even without a local
+materialization. Apply this same accessibility rule to mutable object facts,
+cached view contents, ancestor guards and saved tag observations.
+
+A call can derive typed subobject references from accessible objects even when
+the caller has never formed those projections. Retain these alternatives and
+their ancestor guards in returned values and replaced reference cells. Include
+existing accessible references in immutable aggregates and in reference cells;
+the SSA name that first formed an alias need not remain bound. Unknown local
+inputs remain unknown local provenance. Genuine external alternatives retain
+the imported-reference contract. Hidden dereferences
 inside opaque callees and the truth of imported assumptions are outside this
 local proof. Passing a not-yet-initialized field to an initializing helper is
 permitted; ordinary signatures do not express the stronger contract needed to
@@ -126,8 +138,13 @@ The finite vocabulary is derived from the validated function and its types:
   default summaries describe physical storage; symbolic-index entries describe
   selected-view guarantees. A failed index query is not itself a write footprint.
   Joins preserve that distinction instead of inferring effects from sparse keys.
-- Materialize only paths demanded by instructions, their ancestors, and paths
-  introduced by substitutions through those same finite typed access templates.
+- Materialize paths demanded by instructions, their ancestors, and paths
+  introduced by substitutions through finite typed access templates. At call
+  boundaries also derive by-value structural subobjects of accessible typed
+  roots, including enum guards, without requiring matching caller instructions.
+  Arrays use one unknown-index alternative regardless of their declared length;
+  reference dereferences follow the finite root/containment graph rather than
+  recursively unfolding pointee types.
   If a substitution cannot retain a finite exact path, use an overlapping
   summary. Summary operations may lose guarantees; they cannot erase obligations.
 - A guarded alternative pairs a possible location with a set of
@@ -201,6 +218,14 @@ before semantic dataflow. SSA availability is required at Standard as well as
 Full, including disconnected components. Do not assume that computing
 dominators validates operand availability. Malformed IR must receive diagnostics
 before any semantic transfer uses unchecked type/operand information.
+
+Calls can introduce local obligations without a caller-side enum query. The
+eligibility scan includes functions with calls whose typed object graph can
+contain enums, including values outside the call's own signature and enums
+behind aggregate/reference fields. Traverse each type once to bound recursive
+holders. Include typed call operands such as `undef`, which need not have a
+defining instruction. Functions without enum queries or enum-bearing types do
+not need the object analysis.
 
 Retain the shared CFG policy: real entry plus virtual entries into every block
 of a disconnected source SCC; dead-to-live edges do not affect live analysis.
