@@ -103,7 +103,10 @@ pub(super) fn verify(verifier: &mut FunctionVerifier<'_>) {
             continue;
         };
         for inst in verifier.block_to_insts[&block].clone() {
-            if let Proof::Unproved(reason) = transfer::instruction(verifier, &mut state, inst) {
+            let Some(proof) = transfer::instruction(verifier, &mut state, inst) else {
+                break;
+            };
+            if let Proof::Unproved(reason) = proof {
                 verifier.emit(Diagnostic::error(
                     DiagnosticCode::InstOperandTypeMismatch,
                     reason,
@@ -130,11 +133,13 @@ fn solve(verifier: &FunctionVerifier<'_>) -> BTreeMap<BlockId, State> {
             queued.insert(block);
         }
     }
-    while let Some(block) = pending.pop_front() {
+    'worklist: while let Some(block) = pending.pop_front() {
         queued.remove(&block);
         let mut state = entries[&block].clone();
         for &inst in &verifier.block_to_insts[&block] {
-            transfer::instruction(verifier, &mut state, inst);
+            if transfer::instruction(verifier, &mut state, inst).is_none() {
+                continue 'worklist;
+            }
         }
         for &succ in cfg.succs.get(&block).into_iter().flatten() {
             let Some(mut edge) = edge(verifier, &state, block, succ) else {

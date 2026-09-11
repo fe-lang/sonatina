@@ -1,4 +1,4 @@
-use super::{FunctionVerifier, solve};
+use super::{FunctionVerifier, objects::State, solve, transfer};
 use crate::VerifierConfig;
 use sonatina_ir::{Type, ValueId};
 use sonatina_parser::parse_module;
@@ -89,6 +89,7 @@ fn worklist_order_does_not_change_the_solution() {
     for source in [
         include_str!("../../../../tests/fixtures/enum_contract/phi-unwritten-scalar.sntn"),
         include_str!("../../../../tests/fixtures/enum_contract/private-container.sntn"),
+        include_str!("../../../../tests/fixtures/enum_contract/assertion-revisit.sntn"),
         r#"
 target = "evm-ethereum-osaka"
 type @E = enum { #None, #Some(i256) };
@@ -190,5 +191,68 @@ block0:
                 equivalent(&after_join, &after_join.join(ctx, &after_a));
             }
         }
+    }
+}
+
+#[test]
+fn assertion_reachability_is_monotone() {
+    for variant in ["#None", "#Some"] {
+        let source = format!(
+            r#"
+target = "evm-ethereum-osaka"
+type @E = enum {{ #None, #Some(i256) }};
+func private %entry(v0.@E, v1.objref<@E>) {{
+block0:
+ enum.assert_variant v0 {variant};
+ v2.objref<@E> = enum.assert_variant_ref v1 {variant};
+ return;
+}}
+"#
+        );
+        let parsed = parse_module(&source).unwrap();
+        let ctx = &parsed.module.ctx;
+        let cfg = VerifierConfig::default();
+        let func = parsed.module.funcs()[0];
+        parsed.module.func_store.view(func, |body| {
+            let mut verifier = FunctionVerifier::new(ctx, func, body, &cfg, None);
+            verifier.run();
+            let ty = body.dfg.value_ty(body.arg_values[0]);
+            let states: Vec<_> = [false, true]
+                .into_iter()
+                .flat_map(|complete| {
+                    [None, Some(vec![0]), Some(vec![1]), Some(vec![0, 1])]
+                        .into_iter()
+                        .map(|tags| {
+                            let mut value = ValueState::new(ty, complete);
+                            value.tags = tags.map(|tags| tags.into_iter().collect());
+                            let mut state = State::boundary(&verifier);
+                            state.values.insert(body.arg_values[0], value.clone());
+                            let refs = state.reference(&verifier, body.arg_values[1]);
+                            state.write(ctx, &refs, ty, false, |target| *target = value.clone());
+                            state
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .collect();
+            for a in &states {
+                for b in &states {
+                    for &inst in verifier.block_to_insts[&verifier.block_order[0]]
+                        .iter()
+                        .take(2)
+                    {
+                        let mut lower = a.clone();
+                        let mut upper = a.join(ctx, b);
+                        let lower_flows =
+                            transfer::instruction(&verifier, &mut lower, inst).is_some();
+                        let upper_flows =
+                            transfer::instruction(&verifier, &mut upper, inst).is_some();
+                        assert!(
+                            !lower_flows || upper_flows,
+                            "joining cannot turn a feasible assertion into NoFlow"
+                        );
+                    }
+                }
+            }
+        });
     }
 }

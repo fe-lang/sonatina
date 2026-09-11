@@ -241,7 +241,13 @@ Retain the shared CFG policy: real entry plus virtual entries into every block
 of a disconnected source SCC; dead-to-live edges do not affect live analysis.
 Each entry receives its boundary state. Other blocks start at `NoFlow`. Join
 actual edge states and iterate monotone transfers. Assertions restrict admissible
-states; they are not memory writes. Emit read diagnostics only after convergence.
+states; they are not memory writes. A proven contradiction with the asserted
+variant produces instruction-level `NoFlow` for both object and immutable
+assertions. Stop subsequent transfers, successor propagation and read diagnostics
+on that path. An unknown tag or missing initialization proof is not a proven
+contradiction. Structural/type/SSA checks still cover the entire function, and
+read diagnostics before the assertion remain. Emit read diagnostics only after
+convergence.
 
 Every covered use receives one of:
 

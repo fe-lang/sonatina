@@ -57,7 +57,12 @@ fn project(
     );
 }
 
-pub(super) fn instruction(verifier: &FunctionVerifier<'_>, state: &mut State, id: InstId) -> Proof {
+// None is NoFlow: no admissible execution reaches the next instruction.
+pub(super) fn instruction(
+    verifier: &FunctionVerifier<'_>,
+    state: &mut State,
+    id: InstId,
+) -> Option<Proof> {
     let ctx = verifier.ctx;
     let inst = verifier.func.dfg.inst(id);
     let is = ctx.inst_set;
@@ -141,6 +146,12 @@ pub(super) fn instruction(verifier: &FunctionVerifier<'_>, state: &mut State, id
         let ty = verifier
             .objref_ty(verifier.func.dfg.value_ty(*assertion.object()))
             .unwrap();
+        if !state
+            .contents(ctx, &refs, ty)
+            .possible(assertion.variant().index())
+        {
+            return None;
+        }
         state.write(ctx, &refs, ty, true, |value| {
             value.assert_variant(ctx, assertion.variant().index())
         });
@@ -248,6 +259,9 @@ pub(super) fn instruction(verifier: &FunctionVerifier<'_>, state: &mut State, id
             .insert(result, (*test.value(), Some(test.variant().index())));
     } else if let Some(assertion) = downcast::<&data::EnumAssertVariant>(is, inst) {
         let mut value = state.value(verifier, *assertion.value());
+        if !value.possible(assertion.variant().index()) {
+            return None;
+        }
         value.assert_variant(ctx, assertion.variant().index());
         state.values.insert(*assertion.value(), value);
     } else if let Some(insert) = downcast::<&data::InsertValue>(is, inst) {
@@ -333,7 +347,7 @@ pub(super) fn instruction(verifier: &FunctionVerifier<'_>, state: &mut State, id
             }
         }
     }
-    proof
+    Some(proof)
 }
 
 fn raw_write(verifier: &FunctionVerifier<'_>, id: InstId) -> bool {
