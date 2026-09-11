@@ -315,9 +315,21 @@ impl ValueState {
         if self.ty.is_obj_ref(ctx) {
             self.references = source.references.clone();
         }
-        for (&step, child) in &source.children {
-            let mut target = self.child(ctx, step);
-            target.copy_references(ctx, child);
+        // A sparse source summary replaces reference provenance in existing
+        // concrete/symbolic cells too; stale overrides must not shadow it.
+        let keys: BTreeSet<_> = self
+            .children
+            .keys()
+            .chain(source.children.keys())
+            .copied()
+            .collect();
+        for step in keys {
+            let (mut target, child) = if step == Step::Index(Index::Unknown) {
+                (self.array_default(ctx), source.array_default(ctx))
+            } else {
+                (self.child(ctx, step), source.child(ctx, step))
+            };
+            target.copy_references(ctx, &child);
             self.children.insert(step, target);
         }
     }
@@ -355,18 +367,6 @@ impl ValueState {
         }
     }
 
-    pub fn references_of_type(&self, ctx: &ModuleCtx, ty: Type) -> References {
-        let mut result = if self.ty == ty && ty.is_obj_ref(ctx) {
-            self.references.clone()
-        } else {
-            References::default()
-        };
-        for child in self.children.values() {
-            result = result.join(&child.references_of_type(ctx, ty));
-        }
-        result
-    }
-
     pub fn captured(&self, ctx: &ModuleCtx) -> References {
         let mut references = References::default();
         match self.ty.resolve_compound(ctx) {
@@ -391,7 +391,7 @@ impl ValueState {
                     }
                 }
             }
-            Some(CompoundType::Array { elem, len }) => {
+            Some(CompoundType::Array { len, .. }) => {
                 for child in self.children.values() {
                     references = references.join(&child.captured(ctx));
                 }
@@ -402,7 +402,7 @@ impl ValueState {
                     .count()
                     < len
                 {
-                    references = references.join(&Self::new(elem, self.complete).captured(ctx));
+                    references = references.join(&self.array_default(ctx).captured(ctx));
                 }
             }
             _ => {}

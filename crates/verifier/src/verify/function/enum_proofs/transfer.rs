@@ -1,5 +1,5 @@
 use sonatina_ir::{
-    InstId, Type, ValueId,
+    InstId, ValueId,
     effects::{AccessKind, AccessLoc},
     inst::{control_flow, data, downcast},
     types::CompoundType,
@@ -7,10 +7,11 @@ use sonatina_ir::{
 
 use super::{
     FunctionVerifier, Proof,
+    calls::{CallEffects, opaque},
     objects::{State, ViewFact},
     read,
     value_state::ValueState,
-    views::{Index, References, Root, Step},
+    views::{Index, Root, Step},
 };
 use crate::verify::function::refs::collect_inst_refs;
 
@@ -287,18 +288,14 @@ pub(super) fn instruction(verifier: &FunctionVerifier<'_>, state: &mut State, id
                 state.expose(ctx, &state.value(verifier, value).captured(ctx));
             }
         }
-        let unknown_call_input = call
-            && (collect_inst_refs(inst)
-                .values
-                .iter()
-                .any(|&value| state.value(verifier, value).captured(ctx).unknown)
-                || state.exposed.iter().any(|root| {
-                    state
-                        .objects
-                        .get(root)
-                        .is_some_and(|value| value.captured(ctx).unknown)
-                }));
-        if call {
+        let call_effects = downcast::<&control_flow::Call>(is, inst).map(|call| {
+            CallEffects::new(
+                ctx,
+                state,
+                call.args().iter().map(|&arg| state.value(verifier, arg)),
+            )
+        });
+        if let Some(effects) = &call_effects {
             // A call can replace reference cells as well as return references.
             // Their contents are interface imports with retained possible local
             // aliases/guards, not unsupported local producers. Save candidates
@@ -306,38 +303,16 @@ pub(super) fn instruction(verifier: &FunctionVerifier<'_>, state: &mut State, id
             let objects: Vec<_> = state
                 .objects
                 .iter()
-                .map(|(&root, value)| {
-                    (
-                        root,
-                        opaque(
-                            verifier,
-                            state,
-                            Root::External,
-                            value.ty,
-                            true,
-                            unknown_call_input,
-                        ),
-                    )
-                })
+                .filter(|(root, _)| root.externally_accessible(&state.exposed))
+                .map(|(&root, value)| (root, effects.value(ctx, Root::External, value.ty)))
                 .collect();
             let views: Vec<_> = state
                 .views
                 .iter()
-                .map(|(&id, fact)| {
-                    (
-                        id,
-                        opaque(
-                            verifier,
-                            state,
-                            Root::External,
-                            fact.value.ty,
-                            true,
-                            unknown_call_input,
-                        ),
-                    )
-                })
+                .filter(|(_, fact)| fact.references.externally_accessible(&state.exposed))
+                .map(|(&id, fact)| (id, effects.value(ctx, Root::External, fact.value.ty)))
                 .collect();
-            state.havoc(ctx, false);
+            state.havoc(ctx);
             for (root, value) in objects {
                 state
                     .objects
@@ -355,76 +330,19 @@ pub(super) fn instruction(verifier: &FunctionVerifier<'_>, state: &mut State, id
             }
             state.close_exposure(ctx);
         } else if raw_write(verifier, id) {
-            state.havoc(ctx, true);
+            state.havoc(ctx);
         }
         for &result in results {
             let ty = verifier.func.dfg.value_ty(result);
             // Scalar operations and constant addressing cannot carry objrefs.
             // All other producers use a conservative typed opaque shape. A call
             // is an interface import, but can return a locally guarded alias.
-            let value = opaque(
-                verifier,
-                state,
-                Root::Opaque(result),
-                ty,
-                call,
-                unknown_call_input,
-            );
+            let value = opaque(ctx, Root::Opaque(result), ty, call_effects.as_ref());
             state.bind(ctx, result, value, None);
+            state.expose(ctx, &state.value(verifier, result).captured(ctx));
         }
     }
     proof
-}
-
-fn opaque(
-    verifier: &FunctionVerifier<'_>,
-    state: &State,
-    root: Root,
-    ty: Type,
-    imported: bool,
-    unresolved: bool,
-) -> ValueState {
-    let ctx = verifier.ctx;
-    let mut value = ValueState::new(
-        ty,
-        imported || !matches!(ty.resolve_compound(ctx), Some(CompoundType::Enum(_))),
-    );
-    match ty.resolve_compound(ctx) {
-        Some(CompoundType::ObjRef(_)) => {
-            let mut refs = References::root(root);
-            refs.unknown = !imported || unresolved;
-            for source in state.values.values().chain(state.objects.values()) {
-                refs.views.extend(source.references_of_type(ctx, ty).views);
-            }
-            value.references = refs;
-        }
-        Some(CompoundType::Struct(record)) => {
-            for (i, &ty) in record.fields.iter().enumerate() {
-                value.children.insert(
-                    Step::Index(Index::Constant(i)),
-                    opaque(verifier, state, root, ty, imported, unresolved),
-                );
-            }
-        }
-        Some(CompoundType::Array { elem, len }) if len != 0 => {
-            value.children.insert(
-                Step::Index(Index::Unknown),
-                opaque(verifier, state, root, elem, imported, unresolved),
-            );
-        }
-        Some(CompoundType::Enum(enumeration)) => {
-            for (v, variant) in enumeration.variants.iter().enumerate() {
-                for (i, &ty) in variant.fields.iter().enumerate() {
-                    value.children.insert(
-                        Step::Payload(v as u32, i),
-                        opaque(verifier, state, root, ty, imported, unresolved),
-                    );
-                }
-            }
-        }
-        _ => {}
-    }
-    value
 }
 
 fn raw_write(verifier: &FunctionVerifier<'_>, id: InstId) -> bool {

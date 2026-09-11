@@ -2,6 +2,7 @@
 //! objects, and exposure. Local typing and SSA availability are prerequisites.
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
+use rustc_hash::FxHashSet;
 use sonatina_ir::{
     BlockId, Type,
     inst::{control_flow, data, downcast},
@@ -14,6 +15,7 @@ use objects::State;
 use value_state::ValueState;
 use views::{Anchor, References};
 
+mod calls;
 mod objects;
 #[cfg(test)]
 mod tests;
@@ -65,15 +67,68 @@ fn read(
 }
 
 pub(super) fn verify(verifier: &mut FunctionVerifier<'_>) {
-    // Enum projection is the only source of a local ancestor obligation.
-    // Imported references have no hidden guard under the interface contract.
-    if !verifier.block_to_insts.values().flatten().any(|&id| {
+    // Calls can recover references to previously published local objects even
+    // through scalar/raw ABIs. Eligibility depends on the function's typed
+    // values, not just the call signature or the presence of a local projection.
+    let mut query = false;
+    let mut call = false;
+    let mut types: Vec<_> = verifier
+        .func
+        .arg_values
+        .iter()
+        .map(|&arg| verifier.func.dfg.value_ty(arg))
+        .collect();
+    for &id in verifier.block_to_insts.values().flatten() {
         let inst = verifier.func.dfg.inst(id);
-        downcast::<&data::EnumProj>(verifier.ctx.inst_set, inst).is_some()
+        query |= downcast::<&data::EnumProj>(verifier.ctx.inst_set, inst).is_some()
             || downcast::<&data::EnumExtract>(verifier.ctx.inst_set, inst).is_some()
-            || downcast::<&data::EnumGetTag>(verifier.ctx.inst_set, inst).is_some()
-    }) {
-        return;
+            || downcast::<&data::EnumGetTag>(verifier.ctx.inst_set, inst).is_some();
+        if let Some(invoke) = downcast::<&control_flow::Call>(verifier.ctx.inst_set, inst) {
+            call = true;
+            // Undef/immediate operands need not have a defining instruction.
+            types.extend(
+                invoke
+                    .args()
+                    .iter()
+                    .map(|&value| verifier.func.dfg.value_ty(value)),
+            );
+        }
+        types.extend(
+            verifier
+                .func
+                .dfg
+                .inst_results(id)
+                .iter()
+                .map(|&value| verifier.func.dfg.value_ty(value)),
+        );
+    }
+    if !query {
+        if !call {
+            return;
+        }
+        // A locally derivable payload requires an enum in the typed object
+        // graph. Traverse reference types once, including recursive holders.
+        let mut seen = FxHashSet::default();
+        let mut enumeration = false;
+        while let Some(ty) = types.pop() {
+            if !seen.insert(ty) {
+                continue;
+            }
+            match ty.resolve_compound(verifier.ctx) {
+                Some(CompoundType::Enum(_)) => {
+                    enumeration = true;
+                    break;
+                }
+                Some(CompoundType::Struct(record)) => types.extend(record.fields),
+                Some(CompoundType::ObjRef(elem) | CompoundType::Array { elem, .. }) => {
+                    types.push(elem);
+                }
+                _ => {}
+            }
+        }
+        if !enumeration {
+            return;
+        }
     }
     let entries = solve(verifier);
     for block in verifier.block_order.clone() {

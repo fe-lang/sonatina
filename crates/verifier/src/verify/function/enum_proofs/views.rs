@@ -13,6 +13,10 @@ pub(super) enum Root {
 }
 
 impl Root {
+    pub fn externally_accessible(self, exposed: &BTreeSet<Self>) -> bool {
+        !matches!(self, Self::Recent(_) | Self::Summary(_)) || exposed.contains(&self)
+    }
+
     pub fn single(self) -> bool {
         matches!(self, Self::Incoming(_) | Self::Recent(_))
     }
@@ -139,6 +143,14 @@ pub(super) struct References {
 }
 
 impl References {
+    pub fn externally_accessible(&self, exposed: &BTreeSet<Root>) -> bool {
+        self.unknown
+            || self
+                .views
+                .iter()
+                .any(|view| view.place.root.externally_accessible(exposed))
+    }
+
     pub fn root(root: Root) -> Self {
         Self {
             views: BTreeSet::from([View {
@@ -157,11 +169,17 @@ impl References {
     }
 
     pub fn join(&self, other: &Self) -> Self {
-        Self {
-            views: self.views.union(&other.views).cloned().collect(),
-            unknown: self.unknown || other.unknown,
-            anchors: self.anchors.intersection(&other.anchors).cloned().collect(),
-            cache: (self.cache == other.cache).then_some(self.cache).flatten(),
+        let mut result = self.clone();
+        result.join_with(other);
+        result
+    }
+
+    pub fn join_with(&mut self, other: &Self) {
+        self.views.extend(other.views.iter().cloned());
+        self.unknown |= other.unknown;
+        self.anchors.retain(|anchor| other.anchors.contains(anchor));
+        if self.cache != other.cache {
+            self.cache = None;
         }
     }
 

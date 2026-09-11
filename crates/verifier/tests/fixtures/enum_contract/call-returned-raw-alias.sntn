@@ -1,0 +1,19 @@
+target = "evm-ethereum-osaka"
+type @E = enum { #None, #Some(i256) };
+func private %get() -> (objref<@E>, *@E) {
+block0:
+ v0.objref<@E> = obj.alloc @E;
+ enum.write_variant v0 #Some (17.i256);
+ v1.*@E = obj.materialize.heap v0;
+ return (v0, v1);
+}
+
+func private %entry() -> i256 {
+block0:
+ (v0.objref<@E>, v100.*@E) = call %get;
+ v1.objref<@E> = enum.assert_variant_ref v0 #Some;
+ v2.objref<i256> = enum.proj v1 #Some 0.i8;
+ mstore v100 0.i256 i256;
+ v3.i256 = obj.load v2;
+ return v3;
+}

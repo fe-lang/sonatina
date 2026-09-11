@@ -391,24 +391,34 @@ impl State {
                 if captures.unknown {
                     pending.extend(self.objects.keys().filter(|root| !seen.contains(root)));
                 }
+            } else {
+                // Imported opaque roots can have symbolic pointee state without
+                // a concrete heap entry. Stores through those views also publish
+                // their contained references, even before another call occurs.
+                for fact in self.views.values().filter(|fact| {
+                    fact.references
+                        .views
+                        .iter()
+                        .any(|view| view.place.root == root)
+                }) {
+                    let captures = fact.value.captured(ctx);
+                    pending.extend(captures.views.iter().map(|view| view.place.root));
+                    if captures.unknown {
+                        pending.extend(self.objects.keys().filter(|root| !seen.contains(root)));
+                    }
+                }
             }
         }
     }
 
-    pub fn havoc(&mut self, ctx: &ModuleCtx, raw_only: bool) {
+    pub fn havoc(&mut self, ctx: &ModuleCtx) {
         for (&root, value) in &mut self.objects {
-            if !raw_only || self.exposed.contains(&root) {
+            if root.externally_accessible(&self.exposed) {
                 value.forget(ctx);
             }
         }
         for fact in self.views.values_mut() {
-            if fact.references.unknown
-                || fact
-                    .references
-                    .views
-                    .iter()
-                    .any(|view| !raw_only || self.exposed.contains(&view.place.root))
-            {
+            if fact.references.externally_accessible(&self.exposed) {
                 fact.value.forget(ctx);
             }
             if fact
@@ -416,19 +426,13 @@ impl State {
                 .views
                 .iter()
                 .flat_map(|view| &view.guards)
-                .any(|guard| !raw_only || self.exposed.contains(&guard.place.root))
+                .any(|guard| guard.place.root.externally_accessible(&self.exposed))
             {
                 fact.guards = false;
             }
         }
-        self.observations.retain(|_, refs| {
-            raw_only
-                && !refs.unknown
-                && refs
-                    .views
-                    .iter()
-                    .all(|view| !self.exposed.contains(&view.place.root))
-        });
+        self.observations
+            .retain(|_, refs| !refs.externally_accessible(&self.exposed));
     }
 
     pub fn write(
