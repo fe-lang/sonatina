@@ -2,34 +2,12 @@
 //!
 //! Concrete executions independently check rejection and required acceptance at
 //! both semantic verification levels. Exploration exhaustion is not a proof.
-#[path = "support/enum_concrete.rs"]
-mod concrete;
+#[path = "support/enum_contract.rs"]
+mod contract;
 
+use contract::{concrete, execute};
 use sonatina_parser::parse_module;
-use sonatina_verifier::{Location, VerificationLevel, VerifierConfig, verify_module};
-
-fn execute(source: &str, limit: usize) -> concrete::Execution {
-    let run = concrete::execute(source, limit);
-    if run.exhausted == 0 {
-        let parsed = parse_module(source).expect("valid fixture syntax");
-        for level in [VerificationLevel::Standard, VerificationLevel::Full] {
-            let report = verify_module(&parsed.module, &VerifierConfig::for_level(level));
-            for (&(func, inst), &readable) in &run.reads {
-                let rejected = report.errors().any(|diagnostic| matches!(diagnostic.primary, Location::Inst { func: at_func, inst: at, .. } if at_func == func && at == inst));
-                assert_eq!(
-                    rejected, !readable,
-                    "{level:?} read {inst:?}: {source}\n{report}\n{run:?}"
-                );
-            }
-            assert_eq!(
-                report.is_ok(),
-                run.invalid_reads() == 0,
-                "{level:?}: {source}\n{report}\n{run:?}"
-            );
-        }
-    }
-    run
-}
+use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module};
 
 const CASES: &[(&str, &str, usize)] = &[
     (

@@ -7,7 +7,7 @@ use sonatina_ir::{
 
 use super::{
     FunctionVerifier, Proof,
-    calls::{CallEffects, opaque},
+    imports::{ImportSources, Source},
     objects::{State, ViewFact},
     read,
     value_state::ValueState,
@@ -279,8 +279,20 @@ pub(super) fn instruction(verifier: &FunctionVerifier<'_>, state: &mut State, id
             None,
         );
     } else {
-        let call = downcast::<&control_flow::Call>(is, inst).is_some();
-        let publish = call
+        let call = downcast::<&control_flow::Call>(is, inst);
+        let raw_load = downcast::<&data::Mload>(is, inst).is_some_and(|load| {
+            matches!(
+                load.ty().resolve_compound(ctx),
+                Some(
+                    CompoundType::ObjRef(_)
+                        | CompoundType::Struct(_)
+                        | CompoundType::Array { .. }
+                        | CompoundType::Enum(_)
+                )
+            )
+        });
+        let clobber = call.is_some() || raw_write(verifier, id);
+        let publish = call.is_some()
             || downcast::<&control_flow::Return>(is, inst).is_some()
             || inst.declared_effect_hint().has_write_effect();
         if publish {
@@ -288,58 +300,37 @@ pub(super) fn instruction(verifier: &FunctionVerifier<'_>, state: &mut State, id
                 state.expose(ctx, &state.value(verifier, value).captured(ctx));
             }
         }
-        let call_effects = downcast::<&control_flow::Call>(is, inst).map(|call| {
-            CallEffects::new(
+        // Snapshot capabilities before mutation. Both raw writes and calls can
+        // replace reference cells with aliases derived from accessible roots.
+        let sources = (clobber || raw_load).then(|| {
+            ImportSources::new(
                 ctx,
                 state,
-                call.args().iter().map(|&arg| state.value(verifier, arg)),
+                call.into_iter()
+                    .flat_map(|call| call.args())
+                    .map(|&arg| state.value(verifier, arg)),
             )
         });
-        if let Some(effects) = &call_effects {
-            // A call can replace reference cells as well as return references.
-            // Their contents are interface imports with retained possible local
-            // aliases/guards, not unsupported local producers. Save candidates
-            // before invalidating their mutable pointees.
-            let objects: Vec<_> = state
-                .objects
-                .iter()
-                .filter(|(root, _)| root.externally_accessible(&state.exposed))
-                .map(|(&root, value)| (root, effects.value(ctx, Root::External, value.ty)))
-                .collect();
-            let views: Vec<_> = state
-                .views
-                .iter()
-                .filter(|(_, fact)| fact.references.externally_accessible(&state.exposed))
-                .map(|(&id, fact)| (id, effects.value(ctx, Root::External, fact.value.ty)))
-                .collect();
-            state.havoc(ctx);
-            for (root, value) in objects {
-                state
-                    .objects
-                    .get_mut(&root)
-                    .unwrap()
-                    .copy_references(ctx, &value);
-            }
-            for (id, value) in views {
-                state
-                    .views
-                    .get_mut(&id)
-                    .unwrap()
-                    .value
-                    .copy_references(ctx, &value);
-            }
-            state.close_exposure(ctx);
-        } else if raw_write(verifier, id) {
-            state.havoc(ctx);
+        if clobber {
+            state.havoc(ctx, sources.as_ref().unwrap());
         }
+        let source = match sources.as_ref() {
+            Some(sources) if call.is_some() => Source::Call(sources),
+            Some(sources) if raw_load => Source::RawLoad(sources),
+            _ => Source::Unsupported,
+        };
         for &result in results {
-            let ty = verifier.func.dfg.value_ty(result);
-            // Scalar operations and constant addressing cannot carry objrefs.
-            // All other producers use a conservative typed opaque shape. A call
-            // is an interface import, but can return a locally guarded alias.
-            let value = opaque(ctx, Root::Opaque(result), ty, call_effects.as_ref());
+            let root = Root::Opaque(result);
+            let value = source.value(ctx, root, verifier.func.dfg.value_ty(result));
+            let imported =
+                !matches!(source, Source::Unsupported) && !value.captured(ctx).views.is_empty();
             state.bind(ctx, result, value, None);
-            state.expose(ctx, &state.value(verifier, result).captured(ctx));
+            if imported {
+                // The external alternative is accessible, but computing the
+                // result does not publish any unrelated local allocation.
+                state.exposed.insert(root);
+                state.close_exposure(ctx);
+            }
         }
     }
     proof

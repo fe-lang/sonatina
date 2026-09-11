@@ -1,5 +1,5 @@
-//! Typed capabilities available at an opaque call boundary. A callee can form
-//! subobject references even when the caller has never named those projections.
+//! Typed references recoverable from externally accessible memory. Calls and raw
+//! loads share this vocabulary; only calls import initialized enum values.
 use std::collections::BTreeSet;
 
 use rustc_hash::FxHashMap;
@@ -12,13 +12,13 @@ use super::{
     views::{Index, References, Root, Step},
 };
 
-pub(super) struct CallEffects {
+pub(super) struct ImportSources {
     // Keyed by pointee type, with arrays represented by a single index summary.
     candidates: FxHashMap<Type, References>,
     unresolved: bool,
 }
 
-impl CallEffects {
+impl ImportSources {
     pub fn new(ctx: &ModuleCtx, state: &State, args: impl Iterator<Item = ValueState>) -> Self {
         let mut effects = Self {
             candidates: FxHashMap::default(),
@@ -90,53 +90,61 @@ impl CallEffects {
             _ => {}
         }
     }
-
-    pub fn value(&self, ctx: &ModuleCtx, root: Root, ty: Type) -> ValueState {
-        opaque(ctx, root, ty, Some(self))
-    }
 }
 
-pub(super) fn opaque(
-    ctx: &ModuleCtx,
-    root: Root,
-    ty: Type,
-    call: Option<&CallEffects>,
-) -> ValueState {
-    let mut value = ValueState::new(
-        ty,
-        call.is_some() || !matches!(ty.resolve_compound(ctx), Some(CompoundType::Enum(_))),
-    );
-    match ty.resolve_compound(ctx) {
-        Some(CompoundType::ObjRef(elem)) => {
-            let mut refs = References::root(root);
-            refs.unknown = call.is_none_or(|call| call.unresolved);
-            if let Some(candidates) = call.and_then(|call| call.candidates.get(&elem)) {
-                refs = refs.join(candidates);
+#[derive(Clone, Copy)]
+pub(super) enum Source<'a> {
+    Call(&'a ImportSources),
+    RawLoad(&'a ImportSources),
+    Unsupported,
+}
+
+impl Source<'_> {
+    pub fn value(self, ctx: &ModuleCtx, root: Root, ty: Type) -> ValueState {
+        let mut value = ValueState::new(
+            ty,
+            matches!(self, Self::Call(_))
+                || !matches!(ty.resolve_compound(ctx), Some(CompoundType::Enum(_))),
+        );
+        match ty.resolve_compound(ctx) {
+            Some(CompoundType::ObjRef(elem)) => {
+                value.references = match self {
+                    Self::Call(sources) | Self::RawLoad(sources) => {
+                        let mut refs = References::root(root);
+                        refs.unknown = sources.unresolved;
+                        if let Some(candidates) = sources.candidates.get(&elem) {
+                            refs.join_with(candidates);
+                        }
+                        refs
+                    }
+                    // Missing local provenance cannot masquerade as an external
+                    // allocation or infect unrelated imports before publication.
+                    Self::Unsupported => References::unknown(),
+                };
             }
-            value.references = refs;
-        }
-        Some(CompoundType::Struct(record)) => {
-            for (i, &ty) in record.fields.iter().enumerate() {
-                value
-                    .children
-                    .insert(Step::Index(Index::Constant(i)), opaque(ctx, root, ty, call));
-            }
-        }
-        Some(CompoundType::Array { elem, len }) if len != 0 => {
-            value
-                .children
-                .insert(Step::Index(Index::Unknown), opaque(ctx, root, elem, call));
-        }
-        Some(CompoundType::Enum(enumeration)) => {
-            for (v, variant) in enumeration.variants.iter().enumerate() {
-                for (i, &ty) in variant.fields.iter().enumerate() {
+            Some(CompoundType::Struct(record)) => {
+                for (i, &ty) in record.fields.iter().enumerate() {
                     value
                         .children
-                        .insert(Step::Payload(v as u32, i), opaque(ctx, root, ty, call));
+                        .insert(Step::Index(Index::Constant(i)), self.value(ctx, root, ty));
                 }
             }
+            Some(CompoundType::Array { elem, len }) if len != 0 => {
+                value
+                    .children
+                    .insert(Step::Index(Index::Unknown), self.value(ctx, root, elem));
+            }
+            Some(CompoundType::Enum(enumeration)) => {
+                for (v, variant) in enumeration.variants.iter().enumerate() {
+                    for (i, &ty) in variant.fields.iter().enumerate() {
+                        value
+                            .children
+                            .insert(Step::Payload(v as u32, i), self.value(ctx, root, ty));
+                    }
+                }
+            }
+            _ => {}
         }
-        _ => {}
+        value
     }
-    value
 }

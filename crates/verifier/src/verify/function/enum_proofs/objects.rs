@@ -4,6 +4,7 @@ use sonatina_ir::{Type, Value, ValueId, module::ModuleCtx, types::CompoundType};
 
 use super::{
     super::FunctionVerifier,
+    imports::{ImportSources, Source},
     value_state::ValueState,
     views::{Index, Place, References, Relation, Root, Step},
 };
@@ -411,15 +412,23 @@ impl State {
         }
     }
 
-    pub fn havoc(&mut self, ctx: &ModuleCtx) {
+    pub fn havoc(&mut self, ctx: &ModuleCtx, sources: &ImportSources) {
         for (&root, value) in &mut self.objects {
             if root.externally_accessible(&self.exposed) {
                 value.forget(ctx);
+                value.copy_references(
+                    ctx,
+                    &Source::RawLoad(sources).value(ctx, Root::External, value.ty),
+                );
             }
         }
         for fact in self.views.values_mut() {
             if fact.references.externally_accessible(&self.exposed) {
                 fact.value.forget(ctx);
+                fact.value.copy_references(
+                    ctx,
+                    &Source::RawLoad(sources).value(ctx, Root::External, fact.value.ty),
+                );
             }
             if fact
                 .references
@@ -433,6 +442,9 @@ impl State {
         }
         self.observations
             .retain(|_, refs| !refs.externally_accessible(&self.exposed));
+        // Interference can replace reference cells, but cannot discover a
+        // private allocation absent from its pre-effect capabilities.
+        self.close_exposure(ctx);
     }
 
     pub fn write(

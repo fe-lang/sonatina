@@ -80,6 +80,16 @@ local proof. Passing a not-yet-initialized field to an initializing helper is
 permitted; ordinary signatures do not express the stronger contract needed to
 check such a call interprocedurally.
 
+Raw loads recover references only from externally accessible typed objects and
+retained aliases, using the same finite subobject vocabulary as calls. They do
+not import initialized enum values. Computing a recovered or unsupported value
+does not publish an unrelated private allocation. An unsupported producer keeps
+unknown local provenance until proven otherwise; it is not an imported root.
+Calls and interfering raw writes reconstruct possible reference-cell contents
+from the capabilities available before the effect, keeping guards and private
+allocation separation. Imported holders remain externally accessible, so later
+stores into them publish contained references.
+
 Materialization exposes the entire allocation, including siblings. Raw accesses
 remain subject to the existing raw-memory contract. A checked bounded write
 directly into an independent raw allocation is disjoint. Derived pointers and
@@ -219,13 +229,13 @@ Full, including disconnected components. Do not assume that computing
 dominators validates operand availability. Malformed IR must receive diagnostics
 before any semantic transfer uses unchecked type/operand information.
 
-Calls can introduce local obligations without a caller-side enum query. The
-eligibility scan includes functions with calls whose typed object graph can
-contain enums, including values outside the call's own signature and enums
-behind aggregate/reference fields. Traverse each type once to bound recursive
-holders. Include typed call operands such as `undef`, which need not have a
-defining instruction. Functions without enum queries or enum-bearing types do
-not need the object analysis.
+Analysis eligibility depends on the function's validated value types, including
+arguments, instruction results and typed constants/undef values. Traverse each
+type once, following by-value fields and object references. If any of these
+types can contain an enum, run the analysis regardless of the instruction that
+recovers a reference. Calls, raw loads and future carriers can introduce local
+obligations without a local enum projection or tag query. Functions whose typed
+object graph contains no enums do not need the object analysis.
 
 Retain the shared CFG policy: real entry plus virtual entries into every block
 of a disconnected source SCC; dead-to-live edges do not affect live analysis.

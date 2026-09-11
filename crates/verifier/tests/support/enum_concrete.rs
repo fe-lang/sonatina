@@ -222,6 +222,7 @@ impl Node {
 struct Object {
     value: Node,
     raw_bytes: Option<usize>,
+    raw_value_ty: Option<Type>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -245,7 +246,11 @@ struct Caller {
 impl World {
     fn allocate(&mut self, value: Node, raw_bytes: Option<usize>) -> View {
         let object = self.objects.len();
-        self.objects.push(Object { value, raw_bytes });
+        self.objects.push(Object {
+            value,
+            raw_bytes,
+            raw_value_ty: None,
+        });
         View {
             location: Location {
                 object,
@@ -587,10 +592,28 @@ fn execute_block(
                 initialized: true,
                 data: Data::RawPointer(Some(object)),
             })
+        } else if let Some(load) = downcast::<&data::Mload>(is, data) {
+            let Data::RawPointer(Some(object)) = value(*load.addr()).data else {
+                panic!("concrete raw loads require a supplied allocation");
+            };
+            let object = &world.objects[object];
+            assert_eq!(object.raw_bytes, func.ctx().size_of(*load.ty()).ok());
+            assert_eq!(
+                object.raw_value_ty,
+                Some(*load.ty()),
+                "raw type-punning is outside the concrete oracle"
+            );
+            assert!(object.value.readable(), "undefined concrete raw load");
+            Some(object.value.clone())
         } else if let Some(store) = downcast::<&data::Mstore>(is, data) {
             let Data::RawPointer(target) = value(*store.addr()).data else {
                 panic!("raw pointer required");
             };
+            let stored = value(*store.value());
+            let mut published = vec![];
+            stored.references(&mut published);
+            world.exposed.extend(published);
+            world.close_exposure();
             let affected: Vec<_> = target.map_or_else(
                 || world.exposed.iter().copied().collect(),
                 |target| vec![target],
@@ -604,6 +627,15 @@ fn execute_block(
                         func.ctx().size_of(*store.ty()).expect("raw write size") <= bytes,
                         "out-of-bounds raw writes are outside this concrete oracle"
                     );
+                    // The bounded typed raw cells used by import tests store a
+                    // whole value. Other raw writes remain opaque interference.
+                    if func.ctx().size_of(*store.ty()).ok() == Some(bytes) {
+                        world.objects[object].value = stored.clone();
+                        world.objects[object].raw_value_ty = Some(*store.ty());
+                    } else {
+                        world.objects[object].raw_value_ty = None;
+                        world.objects[object].value.clear_readability();
+                    }
                 } else {
                     let mut changed = world.clone();
                     changed.objects[object].value.clear_readability();
