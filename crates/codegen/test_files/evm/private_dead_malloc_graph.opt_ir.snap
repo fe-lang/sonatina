@@ -1,0 +1,22 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: opt_ir_snapshot
+input_file: test_files/evm/private_dead_malloc_graph.sntn
+---
+target = "evm-ethereum-osaka"
+
+func public %main() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i256;
+        v6.*i8 = evm_malloc 32.i256;
+        v7.i256 = ptr_to_int v6 i256;
+        mstore v7 v0 i256;
+        evm_return v7 32.i256;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %main;
+    }
+}
