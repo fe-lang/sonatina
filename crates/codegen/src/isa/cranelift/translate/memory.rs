@@ -11,6 +11,22 @@ use sonatina_ir::{
 
 use super::{load_i256_limb, resize_int_value, resolve_value};
 
+pub(super) fn storage_chunks(size: u32) -> impl Iterator<Item = (i32, clif::Type)> {
+    let mut offset = 0;
+    std::iter::from_fn(move || {
+        let (bytes, ty) = match size - offset {
+            0 => return None,
+            1 => (1, clif::types::I8),
+            2..=3 => (2, clif::types::I16),
+            4..=7 => (4, clif::types::I32),
+            _ => (8, clif::types::I64),
+        };
+        let chunk = (offset as i32, ty);
+        offset += bytes;
+        Some(chunk)
+    })
+}
+
 pub(super) fn translate_aggregate_projection(
     ctx: &ModuleCtx,
     function: &Function,
@@ -61,7 +77,7 @@ pub(super) fn translate_gep(
         };
         match compound {
             CompoundType::Ptr(elem) | CompoundType::Array { elem, .. } => {
-                let index = resolve_gep_index(function, idx_value, value_map, builder)?;
+                let index = resolve_index(function, idx_value, true, value_map, builder)?;
                 let elem_size = builder
                     .ins()
                     .iconst(clif::types::I64, i64::from(value_storage_size(elem, ctx)?));
@@ -87,9 +103,10 @@ pub(super) fn translate_gep(
     Ok(addr)
 }
 
-pub(super) fn resolve_gep_index(
+pub(super) fn resolve_index(
     function: &Function,
     value: ValueId,
+    signed: bool,
     value_map: &HashMap<ValueId, clif::Value>,
     builder: &mut FunctionBuilder,
 ) -> Result<clif::Value, String> {
@@ -100,7 +117,7 @@ pub(super) fn resolve_gep_index(
     } else {
         value
     };
-    Ok(resize_int_value(value, clif::types::I64, true, builder))
+    Ok(resize_int_value(value, clif::types::I64, signed, builder))
 }
 
 pub(super) fn materialize_gv_initializer(

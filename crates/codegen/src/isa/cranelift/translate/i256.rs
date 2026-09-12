@@ -6,7 +6,10 @@ use cranelift_codegen::ir::{
 use cranelift_frontend::FunctionBuilder;
 use sonatina_ir::{Function, Immediate, Type, Value, ValueId, module::ModuleCtx};
 
-use super::{memory::stack_slot_data, sonatina_scalar_type_to_clif_or_err};
+use super::{
+    memory::{stack_slot_data, storage_chunks},
+    sonatina_scalar_type_to_clif_or_err,
+};
 
 const I256_LIMBS: usize = 4;
 const I256_PRODUCT_LIMBS: usize = I256_LIMBS * 2;
@@ -62,22 +65,9 @@ pub(super) fn copy_bytes(
     size: u32,
     builder: &mut FunctionBuilder,
 ) {
-    let mut offset = 0;
-    for (chunk, ty) in [
-        (8, clif::types::I64),
-        (4, clif::types::I32),
-        (2, clif::types::I16),
-        (1, clif::types::I8),
-    ] {
-        while offset + chunk <= size {
-            let value = builder
-                .ins()
-                .load(ty, MemFlagsData::new(), src, offset as i32);
-            builder
-                .ins()
-                .store(MemFlagsData::new(), value, dst, offset as i32);
-            offset += chunk;
-        }
+    for (offset, ty) in storage_chunks(size) {
+        let value = builder.ins().load(ty, MemFlagsData::new(), src, offset);
+        builder.ins().store(MemFlagsData::new(), value, dst, offset);
     }
 }
 

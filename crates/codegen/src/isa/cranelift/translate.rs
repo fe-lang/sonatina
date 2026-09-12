@@ -17,6 +17,7 @@ use sonatina_ir::{
     isa::native::inst_set as native_inst_set,
     module::FuncRef,
 };
+use sonatina_verifier::{VerifierConfig, verify_function_signature};
 
 use self::{abi::*, i256::*, memory::*, scalar::*};
 
@@ -30,6 +31,10 @@ pub(super) fn translate_module(
     let funcs = module.funcs();
 
     for &func_ref in &funcs {
+        let report = verify_function_signature(&module.ctx, func_ref, &VerifierConfig::default());
+        if report.has_errors() {
+            return Err(report.to_string());
+        }
         let (name, sig) = module.ctx.func_sig(func_ref, |sig| -> Result<_, String> {
             validate_cranelift_signature(&module.ctx, sig)?;
             let name = sig.name().to_string();
@@ -143,6 +148,7 @@ fn translate_function(
     }
 
     let inst_set = function.inst_set();
+    let mut indirect_phi_stores: HashMap<BlockId, Vec<_>> = HashMap::new();
 
     for &block in &block_order {
         let clif_block = block_map[&block];
@@ -158,9 +164,21 @@ fn translate_function(
                     .inst_result(inst_id)
                     .ok_or("phi has no result")?;
                 let ty = function.dfg.value_ty(result);
-                let clif_ty = sonatina_type_to_clif_or_err(ty, pointer_type)?;
-                let param = builder.append_block_param(clif_block, clif_ty);
-                value_map.insert(result, param);
+                if uses_indirect_value_representation(&module.ctx, ty) {
+                    let addr = create_stack_slot_for_type(ty, &module.ctx, &mut builder)?;
+                    value_map.insert(result, addr);
+                    for (offset, chunk_ty) in storage_chunks(value_storage_size(ty, &module.ctx)?) {
+                        let param = builder.append_block_param(clif_block, chunk_ty);
+                        indirect_phi_stores
+                            .entry(block)
+                            .or_default()
+                            .push((addr, param, offset));
+                    }
+                } else {
+                    let clif_ty = sonatina_type_to_clif_or_err(ty, pointer_type)?;
+                    let param = builder.append_block_param(clif_block, clif_ty);
+                    value_map.insert(result, param);
+                }
             } else {
                 break;
             }
@@ -171,6 +189,16 @@ fn translate_function(
         let clif_block = block_map[&block];
         if block != entry {
             builder.switch_to_block(clif_block);
+        }
+        // Incoming contents are SSA block parameters, not pointers into a
+        // previous iteration's reusable result slots. Capture all phi inputs
+        // on the edge before writing any destination, including phi swaps.
+        if let Some(stores) = indirect_phi_stores.get(&block) {
+            for &(addr, param, offset) in stores {
+                builder
+                    .ins()
+                    .store(MemFlagsData::new(), param, addr, offset);
+            }
         }
 
         for inst_id in function.layout.iter_inst(block) {
@@ -1458,8 +1486,13 @@ fn translate_function(
                 NativeInstKind::ObjIndex(obj_index) => {
                     let base =
                         resolve_value(function, *obj_index.object(), &value_map, &mut builder)?;
-                    let index =
-                        resolve_gep_index(function, *obj_index.index(), &value_map, &mut builder)?;
+                    let index = resolve_index(
+                        function,
+                        *obj_index.index(),
+                        false,
+                        &value_map,
+                        &mut builder,
+                    )?;
                     if let Some(result) = function.dfg.inst_result(inst_id) {
                         let obj_ty = function.dfg.value_ty(*obj_index.object());
                         let elem_size = compute_element_size(obj_ty, &module.ctx)?;
@@ -1512,9 +1545,10 @@ fn translate_function(
                 NativeInstKind::ConstIndex(const_index) => {
                     let base =
                         resolve_value(function, *const_index.object(), &value_map, &mut builder)?;
-                    let index = resolve_gep_index(
+                    let index = resolve_index(
                         function,
                         *const_index.index(),
+                        false,
                         &value_map,
                         &mut builder,
                     )?;
@@ -1689,7 +1723,20 @@ fn collect_phi_args_for_block(
             for &(value, from_block) in phi.args() {
                 if from_block == source_block {
                     let clif_val = resolve_value(function, value, value_map, builder)?;
-                    args.push(BlockArg::Value(clif_val));
+                    let ty = function.dfg.value_ty(value);
+                    if uses_indirect_value_representation(function.ctx(), ty) {
+                        for (offset, chunk_ty) in
+                            storage_chunks(value_storage_size(ty, function.ctx())?)
+                        {
+                            let chunk =
+                                builder
+                                    .ins()
+                                    .load(chunk_ty, MemFlagsData::new(), clif_val, offset);
+                            args.push(BlockArg::Value(chunk));
+                        }
+                    } else {
+                        args.push(BlockArg::Value(clif_val));
+                    }
                     break;
                 }
             }

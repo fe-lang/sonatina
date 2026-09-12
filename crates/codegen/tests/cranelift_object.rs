@@ -1,6 +1,9 @@
 use object::{Object, ObjectSection, ObjectSymbol};
+#[cfg(feature = "cranelift-jit")]
+use sonatina_codegen::isa::cranelift::CraneliftJitBackend;
 use sonatina_codegen::{
     Compile,
+    backend::{Backend, BackendOptions},
     compile::OptLevel,
     isa::cranelift::{CraneliftError, CraneliftObjectBackend},
 };
@@ -82,6 +85,60 @@ fn generic_pipeline_emits_a_host_object() {
         assert_macos_platform_metadata(bytes);
     } else if cfg!(target_os = "linux") {
         assert_eq!(object.format(), object::BinaryFormat::Elf);
+    }
+}
+
+#[test]
+fn native_backends_reject_public_and_external_object_reference_signatures() {
+    let triple = native_isa(host_architecture()).triple();
+    let mut sources = vec![
+        r#"
+func public %escape() -> objref<i64> {
+block0:
+    v0.objref<i64> = obj.alloc i64;
+    obj.store v0 42.i64;
+    return v0;
+}
+"#
+        .to_string(),
+    ];
+    for ty in [
+        "objref<i64>",
+        "constref<i64>",
+        "[objref<i64>; 2]",
+        "*objref<i64>",
+    ] {
+        sources.push(format!("declare external %consume({ty});"));
+        sources.push(format!("declare external %produce() -> {ty};"));
+        sources.push(format!(
+            r#"
+func public %identity(v0.{ty}) -> {ty} {{
+block0:
+    return v0;
+}}
+"#
+        ));
+    }
+    for source in sources {
+        let module = sonatina_parser::parse_module(&format!("target = \"{triple}\"\n{source}"))
+            .expect("reference signatures should parse")
+            .module;
+        let errors = CraneliftObjectBackend::new()
+            .compile_module(&module, &BackendOptions::default())
+            .expect_err("object backend must reject reference escape");
+        assert!(errors.iter().any(|error| matches!(error,
+            CraneliftError::Translation(message) if message.contains("signatures must not expose object references")
+        )), "{errors:?}");
+        #[cfg(feature = "cranelift-jit")]
+        {
+            let errors = CraneliftJitBackend::new()
+                .compile_module(&module, &BackendOptions::default())
+                .err()
+                .expect("JIT backend must reject reference escape");
+            assert!(errors.iter().any(|error| matches!(error,
+                CraneliftError::Translation(message) if message.contains("signatures must not expose object references")
+            )), "{errors:?}");
+        }
     }
 }
 

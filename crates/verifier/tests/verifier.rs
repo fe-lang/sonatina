@@ -3,14 +3,14 @@ use sonatina_ir::{
     builder::ModuleBuilder,
     inst::{arith::Add, control_flow::BrTable, data::Gep},
     isa::evm::Evm,
-    module::ModuleCtx,
+    module::{FuncRef, ModuleCtx},
     types::CompoundTypeRef,
 };
 use sonatina_parser::parse_module;
 use sonatina_triple::TargetTriple;
 use sonatina_verifier::{
     ModuleBuilderVerifyExt, ParseVerifyError, VerificationLevel, VerifierConfig, build_and_verify,
-    parse_and_verify_module, verify_module, verify_module_invariants,
+    parse_and_verify_module, verify_function_signature, verify_module, verify_module_invariants,
 };
 
 fn has_code(report: &sonatina_verifier::VerificationReport, code: &str) -> bool {
@@ -69,6 +69,29 @@ fn parse_and_verify_module_reports_parse_errors() {
         Err(err) => err,
     };
     assert!(matches!(err, ParseVerifyError::Parse(_)));
+}
+
+#[test]
+fn standalone_signature_verification_enforces_the_module_abi_rules() {
+    let module = parse_module(
+        r#"
+target = "evm-ethereum-osaka"
+declare external %consume(objref<i64>);
+"#,
+    )
+    .unwrap()
+    .module;
+    let function = module.funcs()[0];
+    let config = VerifierConfig::default();
+    let signature = verify_function_signature(&module.ctx, function, &config);
+    let whole_module = verify_module_invariants(&module, &config);
+    assert!(signature.has_errors());
+    assert_eq!(
+        diagnostic_fingerprint(&signature),
+        diagnostic_fingerprint(&whole_module)
+    );
+    let missing = verify_function_signature(&module.ctx, FuncRef::from_u32(u32::MAX - 1), &config);
+    assert!(has_message(&missing, "function has no declared signature"));
 }
 
 #[test]

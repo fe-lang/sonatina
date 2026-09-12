@@ -1,7 +1,11 @@
 #![allow(clippy::crosspointer_transmute)]
 
+#[path = "cranelift/memory.rs"]
+mod memory;
 #[path = "cranelift/scalar.rs"]
 mod scalar;
+#[path = "cranelift/control_flow.rs"]
+mod wide_control_flow;
 
 use sonatina_codegen::{
     Compile,
@@ -32,6 +36,12 @@ fn native_isa() -> Native {
         Vendor::Unknown,
         OperatingSystem::Native,
     ))
+}
+
+fn parse_native_module(source: &str) -> sonatina_ir::Module {
+    sonatina_parser::parse_module(&format!("target = \"{}\"\n{source}", native_isa().triple()))
+        .expect("native IR should parse")
+        .module
 }
 
 fn compile_add() -> CraneliftJitArtifact {
@@ -121,7 +131,7 @@ fn memzero_accepts_pointer_destinations() {
     let isa = native_isa();
     let instructions = isa.inst_set();
     let builder = ModuleBuilder::new(ModuleCtx::new(&isa));
-    let pointer_type = builder.objref_type(Type::I8);
+    let pointer_type = builder.ptr_type(Type::I8);
     let function = builder
         .declare_function(Signature::new_unit(
             "zero_memory",
