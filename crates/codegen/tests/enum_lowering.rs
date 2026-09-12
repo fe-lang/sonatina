@@ -13,7 +13,7 @@ use sonatina_ir::{
     func_cursor::InstInserter,
     global_variable::{GlobalVariableData, GvInitializer},
     inst::{
-        control_flow::BrTable,
+        control_flow::{BrTable, Return},
         data::{EnumAssertVariantRef, EnumGetTag, EnumProj, EnumSetTag, ObjAlloc, ObjLoad},
         downcast, evm,
     },
@@ -149,6 +149,78 @@ fn enum_tag_global_initializers_follow_lowered_types() {
             ]
         );
     });
+}
+
+#[test]
+fn enum_tag_initializers_use_original_shared_struct_fields() {
+    let isa = Evm::new(TargetTriple::new(
+        Architecture::Evm,
+        Vendor::Ethereum,
+        OperatingSystem::Evm(EvmVersion::Osaka),
+    ));
+    let builder = ModuleBuilder::new(ModuleCtx::new(&isa));
+    let Type::Compound(enum_ty) = builder.declare_enum_type(
+        "Flag",
+        &["Off", "On"].map(|name| VariantData {
+            name: name.to_string(),
+            explicit_discriminant: None,
+            fields: vec![],
+        }),
+        EnumReprHint::Default,
+    ) else {
+        unreachable!();
+    };
+    let inner = builder.declare_struct_type("Inner", &[Type::EnumTag(enum_ty)], false);
+    let array = builder.declare_array_type(inner, 2);
+    let outer = builder.declare_struct_type("Outer", &[array, inner], false);
+    let tag = GvInitializer::make_struct(vec![GvInitializer::Immediate(Immediate::EnumTag {
+        enum_ty,
+        value: I256::from(1),
+    })]);
+    let initializer = GvInitializer::make_struct(vec![
+        GvInitializer::make_array(vec![tag.clone(), tag.clone()]),
+        tag,
+    ]);
+    for name in ["first", "second"] {
+        builder.declare_gv(GlobalVariableData::constant(
+            name.to_string(),
+            outer,
+            Linkage::Private,
+            initializer.clone(),
+        ));
+    }
+    let function = builder
+        .declare_function(Signature::new_unit(
+            "accept_outer",
+            Linkage::Private,
+            &[builder.ptr_type(outer)],
+        ))
+        .unwrap();
+    let mut fb = builder.func_builder::<InstInserter>(function);
+    let entry = fb.append_block();
+    fb.switch_to_block(entry);
+    fb.insert_inst_no_result(Return::new_unit(isa.inst_set()));
+    fb.seal_all();
+    fb.finish();
+    let module = builder.build();
+    let config = VerifierConfig::for_level(VerificationLevel::Standard);
+    let before = verify_module(&module, &config);
+    assert!(!before.has_errors(), "{before}");
+
+    assert!(EnumLowerToProduct.run(&module));
+    let after = verify_module(&module, &config);
+    assert!(!after.has_errors(), "{after}");
+    let tag = GvInitializer::make_struct(vec![GvInitializer::make_imm(true)]);
+    let expected = GvInitializer::make_struct(vec![
+        GvInitializer::make_array(vec![tag.clone(), tag.clone()]),
+        tag,
+    ]);
+    module.ctx.with_gv_store(|store| {
+        for global in store.all_gv_refs() {
+            assert_eq!(store.gv_data(global).initializer.as_ref(), Some(&expected));
+        }
+    });
+    assert!(!EnumLowerToProduct.run(&module));
 }
 
 #[test]

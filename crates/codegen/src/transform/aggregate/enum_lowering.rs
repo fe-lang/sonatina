@@ -6,7 +6,7 @@ use sonatina_ir::{
     global_variable::GvInitializer,
     inst::{cmp, data, downcast},
     module::ModuleCtx,
-    types::{CompoundType, CompoundTypeRef, EnumData, EnumVariantRef},
+    types::{CompoundType, CompoundTypeRef, EnumData, EnumVariantRef, TypeStore},
     visitor::VisitorMut,
 };
 
@@ -197,9 +197,12 @@ pub struct EnumLowerToProduct;
 
 impl EnumLowerToProduct {
     pub fn run(&mut self, module: &Module) -> bool {
+        // Named structs are rewritten in place. Initializers must still be
+        // interpreted using their original field types, across all globals.
+        let original_types = module.ctx.with_ty_store(Clone::clone);
         let mut lowerer = EnumTypeLowerer::default();
         let mut changed = rewrite_declared_signatures(module, &mut lowerer);
-        changed |= rewrite_global_types(module, &mut lowerer);
+        changed |= rewrite_global_types(module, &mut lowerer, &original_types);
 
         for func_ref in module.funcs() {
             changed |= module.func_store.modify(func_ref, |function| {
@@ -256,7 +259,11 @@ fn rewrite_declared_signatures(module: &Module, lowerer: &mut EnumTypeLowerer) -
     changed
 }
 
-fn rewrite_global_types(module: &Module, lowerer: &mut EnumTypeLowerer) -> bool {
+fn rewrite_global_types(
+    module: &Module,
+    lowerer: &mut EnumTypeLowerer,
+    original_types: &TypeStore,
+) -> bool {
     let globals: Vec<_> = module
         .ctx
         .with_gv_store(|store| store.all_gv_refs().collect());
@@ -267,8 +274,13 @@ fn rewrite_global_types(module: &Module, lowerer: &mut EnumTypeLowerer) -> bool 
             continue;
         };
         let (new_ty, new_initializer) = if let Some(initializer) = gv_data.initializer.clone() {
-            let (new_ty, initializer) =
-                rewrite_global_initializer(&module.ctx, lowerer, gv_data.ty, initializer);
+            let (new_ty, initializer) = rewrite_global_initializer(
+                &module.ctx,
+                lowerer,
+                original_types,
+                gv_data.ty,
+                initializer,
+            );
             (new_ty, Some(initializer))
         } else {
             (lowerer.rewrite_type(&module.ctx, gv_data.ty), None)
@@ -289,10 +301,14 @@ fn rewrite_global_types(module: &Module, lowerer: &mut EnumTypeLowerer) -> bool 
 fn rewrite_global_initializer(
     ctx: &ModuleCtx,
     lowerer: &mut EnumTypeLowerer,
+    original_types: &TypeStore,
     ty: Type,
     initializer: GvInitializer,
 ) -> (Type, GvInitializer) {
-    let compound = ty.resolve_compound(ctx);
+    let compound = match ty {
+        Type::Compound(compound) => Some(original_types.resolve_compound(compound)),
+        _ => None,
+    };
     let new_ty = lowerer.rewrite_type(ctx, ty);
     let initializer = match (ty, compound, initializer) {
         (
@@ -309,7 +325,7 @@ fn rewrite_global_initializer(
         ) => GvInitializer::Array(
             items
                 .into_iter()
-                .map(|item| rewrite_global_initializer(ctx, lowerer, elem, item).1)
+                .map(|item| rewrite_global_initializer(ctx, lowerer, original_types, *elem, item).1)
                 .collect(),
         ),
         (Type::Compound(_), Some(CompoundType::Struct(data)), GvInitializer::Struct(fields)) => {
@@ -319,7 +335,14 @@ fn rewrite_global_initializer(
                     .enumerate()
                     .map(|(index, field)| {
                         if let Some(field_ty) = data.fields.get(index) {
-                            rewrite_global_initializer(ctx, lowerer, *field_ty, field).1
+                            rewrite_global_initializer(
+                                ctx,
+                                lowerer,
+                                original_types,
+                                *field_ty,
+                                field,
+                            )
+                            .1
                         } else {
                             field
                         }
