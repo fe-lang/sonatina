@@ -211,17 +211,18 @@ pub(super) fn store_little_endian_words(
     offset: i32,
     builder: &mut FunctionBuilder,
 ) -> Result<(), String> {
-    for (index, bytes) in bytes.chunks_exact(8).enumerate() {
-        let bytes: [u8; 8] = bytes
-            .try_into()
-            .map_err(|_| "wide immediate contains an incomplete word".to_string())?;
+    let (words, remainder) = bytes.as_chunks::<8>();
+    if !remainder.is_empty() {
+        return Err("wide immediate contains an incomplete word".to_string());
+    }
+    for (index, bytes) in words.iter().enumerate() {
         let word_offset = i32::try_from(index * 8)
             .ok()
             .and_then(|word_offset| offset.checked_add(word_offset))
             .ok_or_else(|| "wide immediate offset overflows i32".to_string())?;
         let value = builder
             .ins()
-            .iconst(clif::types::I64, u64::from_le_bytes(bytes) as i64);
+            .iconst(clif::types::I64, u64::from_le_bytes(*bytes) as i64);
         builder
             .ins()
             .store(MemFlagsData::new(), value, base, word_offset);
