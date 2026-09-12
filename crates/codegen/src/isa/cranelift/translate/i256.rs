@@ -265,7 +265,7 @@ pub(super) fn abs_i256_limbs(
 }
 
 pub(super) fn add_to_wide_limbs(
-    limbs: &mut [clif::Value; I256_PRODUCT_LIMBS],
+    limbs: &mut [clif::Value],
     start: usize,
     value: clif::Value,
     builder: &mut FunctionBuilder,
@@ -288,11 +288,20 @@ pub(super) fn mul_i256_limbs_full(
     rhs: [clif::Value; I256_LIMBS],
     builder: &mut FunctionBuilder,
 ) -> [clif::Value; I256_PRODUCT_LIMBS] {
-    let zero = builder.ins().iconst(clif::types::I64, 0);
-    let mut result = [zero; I256_PRODUCT_LIMBS];
+    mul_limbs_full(&lhs, &rhs, builder)
+}
 
-    for (lhs_idx, lhs_limb) in lhs.into_iter().enumerate() {
-        for (rhs_idx, rhs_limb) in rhs.into_iter().enumerate() {
+pub(super) fn mul_limbs_full<const N: usize>(
+    lhs: &[clif::Value],
+    rhs: &[clif::Value],
+    builder: &mut FunctionBuilder,
+) -> [clif::Value; N] {
+    assert_eq!(N, lhs.len() + rhs.len());
+    let zero = builder.ins().iconst(clif::types::I64, 0);
+    let mut result = [zero; N];
+
+    for (lhs_idx, &lhs_limb) in lhs.iter().enumerate() {
+        for (rhs_idx, &rhs_limb) in rhs.iter().enumerate() {
             let result_idx = lhs_idx + rhs_idx;
             let product_low = builder.ins().imul(lhs_limb, rhs_limb);
             let product_high = builder.ins().umulhi(lhs_limb, rhs_limb);
@@ -446,12 +455,13 @@ pub(super) fn i256_set_bit_if(
 pub(super) fn unsigned_div_rem_i256_limbs(
     numerator: [clif::Value; I256_LIMBS],
     denominator: [clif::Value; I256_LIMBS],
+    bits: usize,
     builder: &mut FunctionBuilder,
 ) -> ([clif::Value; I256_LIMBS], [clif::Value; I256_LIMBS]) {
     let mut quotient = zero_i256_limbs(builder);
     let mut remainder = zero_i256_limbs(builder);
 
-    for bit in (0..I256_BITS as usize).rev() {
+    for bit in (0..bits).rev() {
         let next_bit = i256_limb_bit(numerator, bit, builder);
         remainder = i256_shl_one_with_bit(remainder, next_bit, builder);
         let remainder_lt_denominator = emit_i256_unsigned_lt_limbs(remainder, denominator, builder);
@@ -476,7 +486,8 @@ pub(super) fn emit_i256_div_rem(
     let rhs = load_i256_limbs(resolve_value(function, rhs, value_map, builder)?, builder);
     let result = match kind {
         I256DivRemKind::Udiv | I256DivRemKind::Umod => {
-            let (quotient, remainder) = unsigned_div_rem_i256_limbs(lhs, rhs, builder);
+            let (quotient, remainder) =
+                unsigned_div_rem_i256_limbs(lhs, rhs, I256_BITS as usize, builder);
             match kind {
                 I256DivRemKind::Udiv => quotient,
                 I256DivRemKind::Umod => remainder,
@@ -488,7 +499,8 @@ pub(super) fn emit_i256_div_rem(
             let rhs_negative = i256_sign_bit(rhs, builder);
             let lhs_abs = abs_i256_limbs(lhs, builder);
             let rhs_abs = abs_i256_limbs(rhs, builder);
-            let (quotient, remainder) = unsigned_div_rem_i256_limbs(lhs_abs, rhs_abs, builder);
+            let (quotient, remainder) =
+                unsigned_div_rem_i256_limbs(lhs_abs, rhs_abs, I256_BITS as usize, builder);
             let quotient_negative = bool_xor(lhs_negative, rhs_negative, builder);
             let quotient = select_i256_limbs(
                 quotient_negative,
@@ -1165,46 +1177,6 @@ pub(super) fn insert_clif_results(
     for (ir_result, clif_result) in function.dfg.inst_results(inst_id).iter().zip(values) {
         value_map.insert(*ir_result, clif_result);
     }
-}
-
-pub(super) fn unsigned_max_value(ty: clif::Type, builder: &mut FunctionBuilder) -> clif::Value {
-    builder.ins().iconst(ty, -1)
-}
-
-pub(super) fn signed_min_value(
-    ty: clif::Type,
-    builder: &mut FunctionBuilder,
-) -> Result<clif::Value, String> {
-    let bits = ty.bits();
-    if bits > i64::BITS {
-        return Err(format!(
-            "signed minimum constant for {bits}-bit Cranelift integers is unsupported"
-        ));
-    }
-    let value = if bits == i64::BITS {
-        i64::MIN
-    } else {
-        1i64 << (bits - 1)
-    };
-    Ok(builder.ins().iconst(ty, value))
-}
-
-pub(super) fn signed_max_value(
-    ty: clif::Type,
-    builder: &mut FunctionBuilder,
-) -> Result<clif::Value, String> {
-    let bits = ty.bits();
-    if bits > i64::BITS {
-        return Err(format!(
-            "signed maximum constant for {bits}-bit Cranelift integers is unsupported"
-        ));
-    }
-    let value = if bits == i64::BITS {
-        i64::MAX
-    } else {
-        (1i64 << (bits - 1)) - 1
-    };
-    Ok(builder.ins().iconst(ty, value))
 }
 
 pub(super) fn resolve_value(

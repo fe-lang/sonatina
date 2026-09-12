@@ -1,5 +1,8 @@
 #![allow(clippy::crosspointer_transmute)]
 
+#[path = "cranelift/scalar.rs"]
+mod scalar;
+
 use sonatina_codegen::{
     Compile,
     isa::cranelift::{CraneliftError, CraneliftJitArtifact, CraneliftJitBackend},

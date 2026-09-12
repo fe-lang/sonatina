@@ -1,6 +1,7 @@
 mod abi;
 mod i256;
 mod memory;
+mod scalar;
 
 use std::collections::HashMap;
 
@@ -17,7 +18,7 @@ use sonatina_ir::{
     module::FuncRef,
 };
 
-use self::{abi::*, i256::*, memory::*};
+use self::{abi::*, i256::*, memory::*, scalar::*};
 
 pub(super) fn translate_module(
     module: &Module,
@@ -255,7 +256,7 @@ fn translate_function(
                     } else {
                         let lhs = resolve_value(function, *div.lhs(), &value_map, &mut builder)?;
                         let rhs = resolve_value(function, *div.rhs(), &value_map, &mut builder)?;
-                        builder.ins().sdiv(lhs, rhs)
+                        emit_scalar_sdiv(lhs, rhs, &mut builder)
                     };
                     if let Some(result) = function.dfg.inst_result(inst_id) {
                         value_map.insert(result, result_val);
@@ -312,7 +313,13 @@ fn translate_function(
                     } else {
                         let val = resolve_value(function, *shl.value(), &value_map, &mut builder)?;
                         let bits = resolve_value(function, *shl.bits(), &value_map, &mut builder)?;
-                        builder.ins().ishl(val, bits)
+                        emit_scalar_shift(
+                            val,
+                            bits,
+                            function.dfg.value_ty(*shl.value()),
+                            ScalarShift::Shl,
+                            &mut builder,
+                        )
                     };
                     if let Some(result) = function.dfg.inst_result(inst_id) {
                         value_map.insert(result, result_val);
@@ -331,7 +338,13 @@ fn translate_function(
                     } else {
                         let val = resolve_value(function, *shr.value(), &value_map, &mut builder)?;
                         let bits = resolve_value(function, *shr.bits(), &value_map, &mut builder)?;
-                        builder.ins().ushr(val, bits)
+                        emit_scalar_shift(
+                            val,
+                            bits,
+                            function.dfg.value_ty(*shr.value()),
+                            ScalarShift::Shr,
+                            &mut builder,
+                        )
                     };
                     if let Some(result) = function.dfg.inst_result(inst_id) {
                         value_map.insert(result, result_val);
@@ -350,7 +363,13 @@ fn translate_function(
                     } else {
                         let val = resolve_value(function, *sar.value(), &value_map, &mut builder)?;
                         let bits = resolve_value(function, *sar.bits(), &value_map, &mut builder)?;
-                        builder.ins().sshr(val, bits)
+                        emit_scalar_shift(
+                            val,
+                            bits,
+                            function.dfg.value_ty(*sar.value()),
+                            ScalarShift::Sar,
+                            &mut builder,
+                        )
                     };
                     if let Some(result) = function.dfg.inst_result(inst_id) {
                         value_map.insert(result, result_val);
@@ -418,7 +437,11 @@ fn translate_function(
                         emit_i256_not(function, *not.arg(), &value_map, &mut builder)?
                     } else {
                         let val = resolve_value(function, *not.arg(), &value_map, &mut builder)?;
-                        builder.ins().bnot(val)
+                        if function.dfg.value_ty(*not.arg()) == Type::I1 {
+                            builder.ins().bxor_imm_s(val, 1)
+                        } else {
+                            builder.ins().bnot(val)
+                        }
                     };
                     if let Some(result) = function.dfg.inst_result(inst_id) {
                         value_map.insert(result, result_val);
@@ -977,7 +1000,8 @@ fn translate_function(
                     } else {
                         let lhs = resolve_value(function, *umulo.lhs(), &value_map, &mut builder)?;
                         let rhs = resolve_value(function, *umulo.rhs(), &value_map, &mut builder)?;
-                        let (result_val, overflow) = builder.ins().umul_overflow(lhs, rhs);
+                        let (result_val, overflow) =
+                            emit_scalar_mul_overflow(lhs, rhs, false, &mut builder);
                         insert_clif_results(
                             function,
                             inst_id,
@@ -1004,7 +1028,8 @@ fn translate_function(
                     } else {
                         let lhs = resolve_value(function, *smulo.lhs(), &value_map, &mut builder)?;
                         let rhs = resolve_value(function, *smulo.rhs(), &value_map, &mut builder)?;
-                        let (result_val, overflow) = builder.ins().smul_overflow(lhs, rhs);
+                        let (result_val, overflow) =
+                            emit_scalar_mul_overflow(lhs, rhs, true, &mut builder);
                         insert_clif_results(
                             function,
                             inst_id,
@@ -1027,7 +1052,7 @@ fn translate_function(
                         let val = resolve_value(function, *snego.arg(), &value_map, &mut builder)?;
                         let result_val = builder.ins().ineg(val);
                         let ty = builder.func.dfg.value_type(val);
-                        let min = signed_min_value(ty, &mut builder)?;
+                        let min = signed_min_value(ty, &mut builder);
                         let overflow = builder.ins().icmp(IntCC::Equal, val, min);
                         insert_clif_results(
                             function,
@@ -1078,10 +1103,10 @@ fn translate_function(
                             resolve_value(function, *saddsat.rhs(), &value_map, &mut builder)?;
                         let (raw, overflow) = builder.ins().sadd_overflow(lhs, rhs);
                         let ty = builder.func.dfg.value_type(lhs);
-                        let zero = builder.ins().iconst(ty, 0);
+                        let zero = scalar_constant(ty, 0, &mut builder);
                         let lhs_neg = builder.ins().icmp(IntCC::SignedLessThan, lhs, zero);
-                        let min = signed_min_value(ty, &mut builder)?;
-                        let max = signed_max_value(ty, &mut builder)?;
+                        let min = signed_min_value(ty, &mut builder);
+                        let max = signed_max_value(ty, &mut builder);
                         let sat = builder.ins().select(lhs_neg, min, max);
                         builder.ins().select(overflow, sat, raw)
                     };
@@ -1106,7 +1131,7 @@ fn translate_function(
                             resolve_value(function, *usubsat.rhs(), &value_map, &mut builder)?;
                         let (raw, overflow) = builder.ins().usub_overflow(lhs, rhs);
                         let ty = builder.func.dfg.value_type(lhs);
-                        let zero = builder.ins().iconst(ty, 0);
+                        let zero = scalar_constant(ty, 0, &mut builder);
                         builder.ins().select(overflow, zero, raw)
                     };
                     if let Some(result) = function.dfg.inst_result(inst_id) {
@@ -1130,10 +1155,10 @@ fn translate_function(
                             resolve_value(function, *ssubsat.rhs(), &value_map, &mut builder)?;
                         let (raw, overflow) = builder.ins().ssub_overflow(lhs, rhs);
                         let ty = builder.func.dfg.value_type(lhs);
-                        let zero = builder.ins().iconst(ty, 0);
+                        let zero = scalar_constant(ty, 0, &mut builder);
                         let lhs_neg = builder.ins().icmp(IntCC::SignedLessThan, lhs, zero);
-                        let min = signed_min_value(ty, &mut builder)?;
-                        let max = signed_max_value(ty, &mut builder)?;
+                        let min = signed_min_value(ty, &mut builder);
+                        let max = signed_max_value(ty, &mut builder);
                         let sat = builder.ins().select(lhs_neg, min, max);
                         builder.ins().select(overflow, sat, raw)
                     };
@@ -1156,7 +1181,8 @@ fn translate_function(
                             resolve_value(function, *umulsat.lhs(), &value_map, &mut builder)?;
                         let rhs =
                             resolve_value(function, *umulsat.rhs(), &value_map, &mut builder)?;
-                        let (raw, overflow) = builder.ins().umul_overflow(lhs, rhs);
+                        let (raw, overflow) =
+                            emit_scalar_mul_overflow(lhs, rhs, false, &mut builder);
                         let max =
                             unsigned_max_value(builder.func.dfg.value_type(lhs), &mut builder);
                         builder.ins().select(overflow, max, raw)
@@ -1180,14 +1206,15 @@ fn translate_function(
                             resolve_value(function, *smulsat.lhs(), &value_map, &mut builder)?;
                         let rhs =
                             resolve_value(function, *smulsat.rhs(), &value_map, &mut builder)?;
-                        let (raw, overflow) = builder.ins().smul_overflow(lhs, rhs);
+                        let (raw, overflow) =
+                            emit_scalar_mul_overflow(lhs, rhs, true, &mut builder);
                         let ty = builder.func.dfg.value_type(lhs);
-                        let zero = builder.ins().iconst(ty, 0);
+                        let zero = scalar_constant(ty, 0, &mut builder);
                         let lhs_neg = builder.ins().icmp(IntCC::SignedLessThan, lhs, zero);
                         let rhs_neg = builder.ins().icmp(IntCC::SignedLessThan, rhs, zero);
                         let same_sign = builder.ins().icmp(IntCC::Equal, lhs_neg, rhs_neg);
-                        let min = signed_min_value(ty, &mut builder)?;
-                        let max = signed_max_value(ty, &mut builder)?;
+                        let min = signed_min_value(ty, &mut builder);
+                        let max = signed_max_value(ty, &mut builder);
                         let sat = builder.ins().select(same_sign, max, min);
                         builder.ins().select(overflow, sat, raw)
                     };
