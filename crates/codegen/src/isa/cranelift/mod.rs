@@ -21,11 +21,12 @@ use cranelift_module::FuncId;
 use cranelift_object::{ObjectBuilder, ObjectModule};
 use sonatina_ir::Module;
 use sonatina_triple::{Architecture, OperatingSystem, TargetTriple, Vendor};
+use sonatina_verifier::{VerifierConfig, verify_function_signature};
 
 use crate::{
     backend::{Backend, BackendOptions},
     compile::OptLevel,
-    transform::aggregate::{EnumLowerToProduct, ObjectReturnOutParam},
+    transform::aggregate::{EnumLowerToProduct, object_abi::legalize_native_object_returns},
 };
 
 #[derive(Debug)]
@@ -152,7 +153,7 @@ impl Backend for CraneliftJitBackend {
         ensure_host_native_target(module.ctx.triple).map_err(|error| vec![error])?;
 
         let module = module.clone_for_funcs(&module.funcs());
-        legalize_module(&module);
+        legalize_module(&module).map_err(|error| vec![CraneliftError::Translation(error)])?;
 
         let flags = CraneliftObjectBackend::flags(options, false).map_err(|error| vec![error])?;
         let isa = build_native_isa(flags).map_err(|error| vec![error])?;
@@ -192,7 +193,7 @@ impl Backend for CraneliftObjectBackend {
         ensure_host_native_target(module.ctx.triple).map_err(|error| vec![error])?;
 
         let module = module.clone_for_funcs(&module.funcs());
-        legalize_module(&module);
+        legalize_module(&module).map_err(|error| vec![CraneliftError::Translation(error)])?;
 
         let isa = Self::build_isa(module.ctx.triple, options).map_err(|error| vec![error])?;
         let builder =
@@ -211,9 +212,15 @@ impl Backend for CraneliftObjectBackend {
     }
 }
 
-fn legalize_module(module: &Module) {
+fn legalize_module(module: &Module) -> Result<(), String> {
     EnumLowerToProduct.run(module);
-    ObjectReturnOutParam.run(module);
+    for func in module.funcs() {
+        let report = verify_function_signature(&module.ctx, func, &VerifierConfig::default());
+        if report.has_errors() {
+            return Err(report.to_string());
+        }
+    }
+    legalize_native_object_returns(module)
 }
 
 fn cranelift_opt_level(level: OptLevel) -> &'static str {

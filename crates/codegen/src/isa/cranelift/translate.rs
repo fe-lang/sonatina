@@ -17,7 +17,6 @@ use sonatina_ir::{
     isa::native::inst_set as native_inst_set,
     module::FuncRef,
 };
-use sonatina_verifier::{VerifierConfig, verify_function_signature};
 
 use self::{abi::*, i256::*, memory::*, scalar::*};
 
@@ -31,10 +30,6 @@ pub(super) fn translate_module(
     let funcs = module.funcs();
 
     for &func_ref in &funcs {
-        let report = verify_function_signature(&module.ctx, func_ref, &VerifierConfig::default());
-        if report.has_errors() {
-            return Err(report.to_string());
-        }
         let (name, sig) = module.ctx.func_sig(func_ref, |sig| -> Result<_, String> {
             validate_cranelift_signature(&module.ctx, sig)?;
             let name = sig.name().to_string();

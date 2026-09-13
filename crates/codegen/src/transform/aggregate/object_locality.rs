@@ -6,7 +6,7 @@ use sonatina_ir::{
 };
 use std::ops::ControlFlow;
 
-use super::{ObjectEffectSummaryMap, ObjectReturnEffect, compute_object_effect_summaries};
+use super::{ObjectEffectSummaryMap, compute_object_effect_summaries};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RootInit {
@@ -447,6 +447,13 @@ fn walk_object_root_uses_impl<T>(
                 continue;
             }
 
+            if let Some(init) =
+                downcast::<&data::ObjInitConst>(function.inst_set(), function.dfg.inst(user))
+                && *init.object() == value
+            {
+                continue;
+            }
+
             if let Some(enum_get_tag) =
                 downcast::<&data::EnumGetTag>(function.inst_set(), function.dfg.inst(user))
                 && *enum_get_tag.object() == value
@@ -517,7 +524,7 @@ fn walk_object_root_uses_impl<T>(
                     call,
                 });
                 if let Some(result) =
-                    call_same_root_result(function, user, call, value, object_effects)
+                    call_borrowed_root_result(function, user, call, value, object_effects)
                 {
                     worklist.push(result);
                 }
@@ -583,18 +590,15 @@ fn call_root_preserves_locality(
         let Some(result) = function.dfg.inst_result(inst) else {
             return false;
         };
-        match summary.ret_effect {
-            ObjectReturnEffect::SameAsArg { index }
-            | ObjectReturnEffect::DerivedFromArg { index }
-                if index == idx && is_allowed_root_value(result) => {}
-            _ => return false,
+        if !summary.ret_effect.borrows_arg(idx) || !is_allowed_root_value(result) {
+            return false;
         }
     }
 
     saw_value
 }
 
-fn call_same_root_result(
+fn call_borrowed_root_result(
     function: &Function,
     inst: sonatina_ir::InstId,
     call: &control_flow::Call,
@@ -607,14 +611,8 @@ fn call_same_root_result(
         if arg != value {
             continue;
         }
-        match summary.ret_effect {
-            ObjectReturnEffect::SameAsArg { index }
-            | ObjectReturnEffect::DerivedFromArg { index }
-                if index == idx =>
-            {
-                return Some(result);
-            }
-            _ => {}
+        if summary.ret_effect.borrows_arg(idx) {
+            return Some(result);
         }
     }
     None

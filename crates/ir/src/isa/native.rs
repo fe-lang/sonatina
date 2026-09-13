@@ -115,6 +115,9 @@ impl TypeLayout for NativeTypeLayout {
                         size.next_multiple_of(struct_align)
                     }
                     CompoundType::Ptr(_) | CompoundType::ObjRef(_) | CompoundType::ConstRef(_) => 8,
+                    CompoundType::Func { .. } => {
+                        return Err(TypeLayoutError::UnrepresentableType(ty));
+                    }
                     _ => return Err(TypeLayoutError::UnsupportedType(ty)),
                 }
             }
@@ -145,6 +148,9 @@ impl TypeLayout for NativeTypeLayout {
                         align
                     }
                     CompoundType::Ptr(_) | CompoundType::ObjRef(_) | CompoundType::ConstRef(_) => 8,
+                    CompoundType::Func { .. } => {
+                        return Err(TypeLayoutError::UnrepresentableType(ty));
+                    }
                     _ => return Err(TypeLayoutError::UnsupportedType(ty)),
                 }
             }
@@ -166,7 +172,7 @@ mod tests {
     use sonatina_triple::{Architecture, OperatingSystem, TargetTriple, Vendor};
 
     use super::Native;
-    use crate::{Module, Type};
+    use crate::{Module, Type, isa::TypeLayoutError};
 
     fn native_isa() -> Native {
         Native::new(TargetTriple::new(
@@ -197,5 +203,23 @@ mod tests {
         assert_eq!(module.ctx.align_of_unchecked(structure), 8);
         assert!(module.ctx.size_of(packed).is_err());
         assert!(module.ctx.align_of(packed).is_err());
+    }
+
+    #[test]
+    fn native_function_types_are_abstract_not_unsupported() {
+        let module = Module::new(&native_isa());
+        let function = module
+            .ctx
+            .with_ty_store_mut(|store| store.make_func(&[Type::I64], &[Type::I64]));
+        for layout in [module.ctx.size_of(function), module.ctx.align_of(function)] {
+            assert!(
+                matches!(layout, Err(TypeLayoutError::UnrepresentableType(ty)) if ty == function)
+            );
+        }
+        let pointer = module
+            .ctx
+            .with_ty_store_mut(|store| store.make_ptr(function));
+        assert_eq!(module.ctx.size_of(pointer).unwrap(), 8);
+        assert_eq!(module.ctx.align_of(pointer).unwrap(), 8);
     }
 }

@@ -4,6 +4,8 @@
 mod casts;
 #[path = "cranelift/memory.rs"]
 mod memory;
+#[path = "cranelift/references.rs"]
+mod references;
 #[path = "cranelift/scalar.rs"]
 mod scalar;
 #[path = "cranelift/control_flow.rs"]
@@ -616,41 +618,20 @@ fn i128_immediates_preserve_their_upper_half() {
 
 #[test]
 fn native_pointer_casts_round_trip() {
-    let isa = native_isa();
-    let instructions = isa.inst_set();
-    let builder = ModuleBuilder::new(ModuleCtx::new(&isa));
-    let object_ref_type = builder.objref_type(Type::I64);
-    let function = builder
-        .declare_function(Signature::new_single(
-            "cast_round_trip",
-            Linkage::Public,
-            &[],
-            Type::I64,
-        ))
-        .unwrap();
-    let mut function_builder = builder.func_builder::<InstInserter>(function);
-    let entry = function_builder.append_block();
-    function_builder.switch_to_block(entry);
-    let object = function_builder.insert_inst(
-        data::ObjAlloc::new(instructions, Type::I64),
-        object_ref_type,
+    let module = parse_verified_native_module(
+        r#"
+func public %cast_round_trip() -> i64 {
+block0:
+    v0.*i64 = alloca i64;
+    v1.i64 = ptr_to_int v0 i64;
+    v2.*i64 = int_to_ptr v1 *i64;
+    mstore v2 123.i64 i64;
+    v3.i64 = mload v2 i64;
+    return v3;
+}
+"#,
     );
-    let address = function_builder.insert_inst(
-        cast::PtrToInt::new(instructions, object, Type::I64),
-        Type::I64,
-    );
-    let pointer = function_builder.insert_inst(
-        cast::IntToPtr::new(instructions, address, object_ref_type),
-        object_ref_type,
-    );
-    let value = function_builder.make_imm_value(123i64);
-    function_builder.insert_inst_no_result(data::ObjStore::new(instructions, pointer, value));
-    let loaded = function_builder.insert_inst(data::ObjLoad::new(instructions, pointer), Type::I64);
-    function_builder.insert_inst_no_result(control_flow::Return::new_single(instructions, loaded));
-    function_builder.seal_all();
-    function_builder.finish();
-
-    let artifact = Compile::new(builder.build(), CraneliftJitBackend::new())
+    let artifact = Compile::new(module, CraneliftJitBackend::new())
         .compile()
         .expect("pointer casts should compile");
     let address = artifact.function_address("cast_round_trip").unwrap();
