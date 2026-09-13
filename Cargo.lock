@@ -2447,6 +2447,7 @@ dependencies = [
  "sonatina-parser",
  "sonatina-triple",
  "sonatina-verifier",
+ "tempfile",
  "tracing",
  "vec-collections",
 ]

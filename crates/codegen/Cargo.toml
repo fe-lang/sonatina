@@ -43,6 +43,7 @@ derive_more = { version = "1", default-features = false, features = ["full"] }
 revm = { version = "18.0.0", default-features = false, features = ["std"] }
 sonatina-parser = { path = "../parser", version = "0.0.3-alpha" }
 object = { version = "0.39.1", default-features = false, features = ["read", "std"] }
+tempfile = "3.23"
 
 [features]
 cranelift = [

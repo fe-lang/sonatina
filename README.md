@@ -74,6 +74,13 @@ Sonatina currently performs the following optimizations:
 - Stack layout is determined via symbolic execution. Unreachable values are spilled to memory as needed.
 - Memory planner and memory reuse optimization: shared ephemeral memory region for short-lived values, stable regions with static offsets for non-recursive code, dynamic call frames for recursive code.
 
+## Host-native Backend
+
+The optional `sonatina-codegen/cranelift` feature provides host-native object
+codegen for x86_64 and AArch64 using upstream Cranelift. `cranelift-jit` adds
+in-process execution. See the [native support and ABI guide](crates/codegen/docs/native.md)
+for platform coverage, calling conventions and integration boundaries.
+
 ## CLI
 
 ```sh

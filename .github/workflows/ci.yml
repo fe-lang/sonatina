@@ -19,7 +19,7 @@ jobs:
         with:
           toolchain: stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo doc --no-deps
+      - run: cargo doc --workspace --all-features --no-deps
 
   fmt:
     name: Rustfmt
@@ -94,7 +94,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Test host-native object and JIT backends
+      - name: Test object-only feature and linked C executables
+        run: cargo test -p sonatina-codegen --features cranelift --test cranelift_object
+      - name: Test host-native JIT and object backends
         run: cargo test -p sonatina-codegen --features cranelift-jit --test cranelift_object --test cranelift_jit
 
   cranelift_windows_check:

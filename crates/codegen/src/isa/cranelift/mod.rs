@@ -1,7 +1,4 @@
-//! Host-native code generation through upstream Cranelift.
-//!
-//! This module is available with the `cranelift` feature, which follows
-//! Cranelift 0.135's Rust 1.95 minimum supported Rust version.
+#![doc = include_str!("../../../docs/native.md")]
 
 mod translate;
 
@@ -126,7 +123,11 @@ impl CraneliftJitArtifact {
     /// Returns the address of a finalized function while this artifact lives.
     ///
     /// Calling the address is unsafe: the caller must use the exact native ABI
-    /// corresponding to the Sonatina function signature.
+    /// corresponding to the Sonatina function signature, provide valid argument
+    /// storage, and keep this artifact alive throughout the call. In particular,
+    /// indirect results use a platform-specific hidden return buffer, not an
+    /// ordinary C struct result. Prefer public scalar/pointer wrappers; see the
+    /// [module's ABI contract](crate::isa::cranelift) for the supported C subset.
     pub fn function_address(&self, name: &str) -> Option<*const u8> {
         self.functions
             .get(name)

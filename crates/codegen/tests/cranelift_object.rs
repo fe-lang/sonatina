@@ -1,6 +1,10 @@
 #[cfg(feature = "cranelift-jit")]
 use std::{hint::black_box, time::Instant};
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[path = "cranelift/linked.rs"]
+mod linked;
+
 use object::{Object, ObjectSection, ObjectSymbol};
 #[cfg(feature = "cranelift-jit")]
 use sonatina_codegen::isa::cranelift::CraneliftJitBackend;
