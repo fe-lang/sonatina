@@ -50,31 +50,7 @@ pub(super) fn collect_module_invariants(
             );
         }
 
-        let Some(sig) = module.ctx.get_sig(*func_ref) else {
-            continue;
-        };
-
-        for (index, arg_ty) in sig.args().iter().enumerate() {
-            verify_signature_type(
-                &module.ctx,
-                *func_ref,
-                *arg_ty,
-                format!("signature arg {index}"),
-                cfg,
-                report,
-            );
-        }
-
-        for (index, ret_ty) in sig.ret_tys().iter().enumerate() {
-            verify_signature_type(
-                &module.ctx,
-                *func_ref,
-                *ret_ty,
-                format!("signature return {index}"),
-                cfg,
-                report,
-            );
-        }
+        collect_signature_invariants(&module.ctx, *func_ref, cfg, report);
     }
 
     let mut store_refs = module.func_store.funcs();
@@ -650,6 +626,37 @@ pub(crate) fn has_by_value_function_type_in_signature(ctx: &ModuleCtx, ty: Type)
     }
 
     false
+}
+
+pub(super) fn collect_signature_invariants(
+    ctx: &ModuleCtx,
+    func_ref: FuncRef,
+    cfg: &VerifierConfig,
+    report: &mut VerificationReport,
+) {
+    let Some(sig) = ctx.get_sig(func_ref) else {
+        report.push(
+            Diagnostic::error(
+                DiagnosticCode::InvalidSignature,
+                "function has no declared signature",
+                Location::Function(func_ref),
+            ),
+            cfg.max_diagnostics,
+        );
+        return;
+    };
+    for (role, types) in [("arg", sig.args()), ("return", sig.ret_tys())] {
+        for (index, &ty) in types.iter().enumerate() {
+            verify_signature_type(
+                ctx,
+                func_ref,
+                ty,
+                format!("signature {role} {index}"),
+                cfg,
+                report,
+            );
+        }
+    }
 }
 
 fn has_obj_ref_in_signature(ctx: &ModuleCtx, ty: Type) -> bool {

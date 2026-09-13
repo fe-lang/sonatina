@@ -1,0 +1,24 @@
+target = "$NATIVE_TARGET"
+
+func private %double(v0.i64) -> i64 {
+    block0:
+        v1.i64 = add v0 v0;
+        return v1;
+}
+
+func public %native_fixture(v0.i64) -> i64 {
+    block0:
+        v1.*[i64; 2] = alloca [i64; 2];
+        v2.*i64 = gep v1 0.i8 1.i8;
+        v3.i64 = call %double v0;
+        mstore v2 v3 i64;
+        v4.i64 = mload v2 i64;
+        v5.i1 = gt v4 20.i64;
+        br v5 block1 block2;
+
+    block1:
+        return v4;
+
+    block2:
+        return 0.i64;
+}

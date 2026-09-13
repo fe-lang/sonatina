@@ -19,7 +19,7 @@ jobs:
         with:
           toolchain: stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo doc --no-deps
+      - run: cargo doc --workspace --all-features --no-deps
 
   fmt:
     name: Rustfmt
@@ -61,6 +61,53 @@ jobs:
           crate: cargo-udeps
 
       - run: cargo +nightly udeps
+
+  cranelift_feature_off:
+    name: Cranelift feature off
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check -p sonatina-codegen --no-default-features
+      - name: Check that Cranelift dependencies do not leak
+        shell: bash
+        run: |
+          if cargo tree -p sonatina-codegen --no-default-features -e normal | grep -q 'cranelift-\(codegen\|frontend\|module\|native\|object\|jit\)'; then
+            echo 'Cranelift dependencies are active without the cranelift feature'
+            exit 1
+          fi
+
+  cranelift_native:
+    name: Cranelift native (${{ matrix.arch }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            arch: x86_64-linux
+          - os: macos-15
+            arch: aarch64-macos
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Test object-only feature and linked C executables
+        run: cargo test -p sonatina-codegen --features cranelift --test cranelift_object
+      - name: Test host-native JIT and object backends
+        run: cargo test -p sonatina-codegen --features cranelift-jit --test cranelift_object --test cranelift_jit
+
+  cranelift_windows_check:
+    name: Cranelift Windows compile check
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check -p sonatina-codegen --features cranelift-jit --all-targets
 
   test:
     name: Test

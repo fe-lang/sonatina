@@ -1,10 +1,12 @@
 pub mod analysis;
+pub mod backend;
 mod bitset;
 pub mod cfg_edit;
 pub mod cfg_scc;
 pub mod compile;
 
-pub use compile::{EvmCompile, OptInstId, OptLevel};
+pub use backend::{Backend, BackendOptions};
+pub use compile::{Compile, EvmCompile, EvmCompiler, OptInstId, OptLevel};
 pub mod critical_edge;
 pub mod domtree;
 pub mod isa;

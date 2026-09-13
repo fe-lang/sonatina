@@ -19,6 +19,11 @@ use super::{
 };
 use crate::cfg_scc::CfgSccAnalysis;
 
+#[cfg(feature = "cranelift")]
+mod native;
+#[cfg(feature = "cranelift")]
+pub(crate) use native::legalize_native_object_returns;
+
 #[derive(Clone, Copy)]
 enum RewriteRoot {
     LocalAlloc {
@@ -429,7 +434,9 @@ impl ObjectReturnOutParam {
                 function.erase_inst(root.inst());
             }
         }
-        self.rewrite_returns(function);
+        if plan.new_ret_tys.is_empty() {
+            self.rewrite_returns(function);
+        }
     }
 
     fn is_fresh_return_call_candidate(
@@ -666,6 +673,19 @@ impl ObjectReturnOutParam {
         let new_args = std::iter::once(out_arg)
             .chain(call.args().iter().copied())
             .collect();
+        if !callee_plan.new_ret_tys.is_empty() {
+            // Native mixed returns retain the actual reference, which may
+            // borrow an original argument instead of the fresh out-buffer.
+            function.dfg.replace_inst(
+                inst,
+                Box::new(control_flow::Call::new_unchecked(
+                    function.inst_set(),
+                    *call.callee(),
+                    new_args,
+                )),
+            );
+            return;
+        }
         let new_call = cursor.insert_inst_data_from(
             function,
             inst,
