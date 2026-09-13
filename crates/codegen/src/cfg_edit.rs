@@ -808,7 +808,7 @@ impl<'f> CfgEditor<'f> {
 
     /// Replace successor `old_to` with `new_to`.
     ///
-    /// Unlike [`replace_succ`], this variant allows retargeting to a destination that
+    /// Unlike [`Self::replace_succ`], this variant allows retargeting to a destination that
     /// already has `from` as a predecessor. In that case, `phi_inputs` must be empty.
     pub fn replace_succ_allow_existing_pred(
         &mut self,
