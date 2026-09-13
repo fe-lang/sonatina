@@ -258,14 +258,14 @@ fn translate_function(
                             function,
                             *div.lhs(),
                             *div.rhs(),
-                            I256DivRemKind::Udiv,
+                            DivRemKind::Udiv,
                             &value_map,
                             &mut builder,
                         )?
                     } else {
                         let lhs = resolve_value(function, *div.lhs(), &value_map, &mut builder)?;
                         let rhs = resolve_value(function, *div.rhs(), &value_map, &mut builder)?;
-                        builder.ins().udiv(lhs, rhs)
+                        emit_scalar_div_rem(lhs, rhs, DivRemKind::Udiv, &mut builder)
                     };
                     if let Some(result) = function.dfg.inst_result(inst_id) {
                         value_map.insert(result, result_val);
@@ -277,14 +277,14 @@ fn translate_function(
                             function,
                             *div.lhs(),
                             *div.rhs(),
-                            I256DivRemKind::Sdiv,
+                            DivRemKind::Sdiv,
                             &value_map,
                             &mut builder,
                         )?
                     } else {
                         let lhs = resolve_value(function, *div.lhs(), &value_map, &mut builder)?;
                         let rhs = resolve_value(function, *div.rhs(), &value_map, &mut builder)?;
-                        emit_scalar_sdiv(lhs, rhs, &mut builder)
+                        emit_scalar_div_rem(lhs, rhs, DivRemKind::Sdiv, &mut builder)
                     };
                     if let Some(result) = function.dfg.inst_result(inst_id) {
                         value_map.insert(result, result_val);
@@ -296,14 +296,14 @@ fn translate_function(
                             function,
                             *rem.lhs(),
                             *rem.rhs(),
-                            I256DivRemKind::Umod,
+                            DivRemKind::Umod,
                             &value_map,
                             &mut builder,
                         )?
                     } else {
                         let lhs = resolve_value(function, *rem.lhs(), &value_map, &mut builder)?;
                         let rhs = resolve_value(function, *rem.rhs(), &value_map, &mut builder)?;
-                        builder.ins().urem(lhs, rhs)
+                        emit_scalar_div_rem(lhs, rhs, DivRemKind::Umod, &mut builder)
                     };
                     if let Some(result) = function.dfg.inst_result(inst_id) {
                         value_map.insert(result, result_val);
@@ -315,14 +315,14 @@ fn translate_function(
                             function,
                             *rem.lhs(),
                             *rem.rhs(),
-                            I256DivRemKind::Smod,
+                            DivRemKind::Smod,
                             &value_map,
                             &mut builder,
                         )?
                     } else {
                         let lhs = resolve_value(function, *rem.lhs(), &value_map, &mut builder)?;
                         let rhs = resolve_value(function, *rem.rhs(), &value_map, &mut builder)?;
-                        builder.ins().srem(lhs, rhs)
+                        emit_scalar_div_rem(lhs, rhs, DivRemKind::Smod, &mut builder)
                     };
                     if let Some(result) = function.dfg.inst_result(inst_id) {
                         value_map.insert(result, result_val);

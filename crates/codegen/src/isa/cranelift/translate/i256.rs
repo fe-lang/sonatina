@@ -7,6 +7,7 @@ use cranelift_frontend::FunctionBuilder;
 use sonatina_ir::{Function, Immediate, Type, Value, ValueId, module::ModuleCtx};
 
 use super::{
+    DivRemKind,
     memory::{stack_slot_data, storage_chunks},
     sonatina_scalar_type_to_clif_or_err,
 };
@@ -388,13 +389,6 @@ pub(super) fn emit_i256_neg(
     ))
 }
 
-pub(super) enum I256DivRemKind {
-    Udiv,
-    Sdiv,
-    Umod,
-    Smod,
-}
-
 pub(super) fn i256_limb_bit(
     limbs: [clif::Value; I256_LIMBS],
     bit: usize,
@@ -468,23 +462,23 @@ pub(super) fn emit_i256_div_rem(
     function: &Function,
     lhs: ValueId,
     rhs: ValueId,
-    kind: I256DivRemKind,
+    kind: DivRemKind,
     value_map: &HashMap<ValueId, clif::Value>,
     builder: &mut FunctionBuilder,
 ) -> Result<clif::Value, String> {
     let lhs = load_i256_limbs(resolve_value(function, lhs, value_map, builder)?, builder);
     let rhs = load_i256_limbs(resolve_value(function, rhs, value_map, builder)?, builder);
     let result = match kind {
-        I256DivRemKind::Udiv | I256DivRemKind::Umod => {
+        DivRemKind::Udiv | DivRemKind::Umod => {
             let (quotient, remainder) =
                 unsigned_div_rem_i256_limbs(lhs, rhs, I256_BITS as usize, builder);
             match kind {
-                I256DivRemKind::Udiv => quotient,
-                I256DivRemKind::Umod => remainder,
-                I256DivRemKind::Sdiv | I256DivRemKind::Smod => unreachable!(),
+                DivRemKind::Udiv => quotient,
+                DivRemKind::Umod => remainder,
+                DivRemKind::Sdiv | DivRemKind::Smod => unreachable!(),
             }
         }
-        I256DivRemKind::Sdiv | I256DivRemKind::Smod => {
+        DivRemKind::Sdiv | DivRemKind::Smod => {
             let lhs_negative = i256_sign_bit(lhs, builder);
             let rhs_negative = i256_sign_bit(rhs, builder);
             let lhs_abs = abs_i256_limbs(lhs, builder);
@@ -505,9 +499,9 @@ pub(super) fn emit_i256_div_rem(
                 builder,
             );
             match kind {
-                I256DivRemKind::Sdiv => quotient,
-                I256DivRemKind::Smod => remainder,
-                I256DivRemKind::Udiv | I256DivRemKind::Umod => unreachable!(),
+                DivRemKind::Sdiv => quotient,
+                DivRemKind::Smod => remainder,
+                DivRemKind::Udiv | DivRemKind::Umod => unreachable!(),
             }
         }
     };

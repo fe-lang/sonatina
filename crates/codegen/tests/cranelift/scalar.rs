@@ -1,3 +1,6 @@
+#[cfg(unix)]
+use std::{env, os::unix::process::ExitStatusExt, process::Command};
+
 use sonatina_codegen::{Compile, compile::OptLevel, isa::cranelift::CraneliftJitBackend};
 use sonatina_ir::{I256, Immediate, Type, U256, isa::Isa, module::ModuleCtx};
 
@@ -194,5 +197,120 @@ fn signed_i128_edge_operations_compile_and_execute() {
             }
         }
         check_scalar_cases(op, Type::I128, &cases);
+    }
+}
+
+#[test]
+fn i128_division_and_remainder_preserve_all_bits() {
+    let mut values = vec![
+        0u128,
+        1,
+        2,
+        3,
+        (1 << 63) - 1,
+        1 << 63,
+        (1 << 64) - 1,
+        1 << 64,
+        (1 << 64) + 1,
+        (1 << 96) + 17,
+        i128::MAX as u128,
+        i128::MIN as u128,
+        (i128::MIN + 1) as u128,
+        u128::MAX - 1,
+        u128::MAX,
+    ];
+    let mut state = 0x9e37_79b9_7f4a_7c15_a076_1d64_78bd_642fu128;
+    values.extend((0..32).map(|_| {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        state
+    }));
+    for op in ["udiv", "sdiv", "umod", "smod"] {
+        let mut cases = Vec::new();
+        for &lhs in &values {
+            for &rhs in values.iter().filter(|&&rhs| rhs != 0) {
+                let expected = match op {
+                    "udiv" => (lhs / rhs) as i128,
+                    "umod" => (lhs % rhs) as i128,
+                    "sdiv" => (lhs as i128).wrapping_div(rhs as i128),
+                    "smod" => (lhs as i128).wrapping_rem(rhs as i128),
+                    _ => unreachable!(),
+                };
+                cases.push((
+                    (lhs as i128).into(),
+                    (rhs as i128).into(),
+                    expected.into(),
+                    false,
+                ));
+            }
+        }
+        check_scalar_cases(op, Type::I128, &cases);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn i128_division_by_zero_traps() {
+    const CHILD_CASE: &str = "SONATINA_I128_ZERO_DIVISOR_CASE";
+    if let Ok(case) = env::var(CHILD_CASE) {
+        let (op, level) = case.split_once(':').unwrap();
+        let level = match level {
+            "O0" => OptLevel::O0,
+            "O2" => OptLevel::O2,
+            _ => unreachable!(),
+        };
+        let triple = native_isa().triple();
+        let source = format!(
+            r#"target = "{triple}"
+func public %divide(v0.*i128, v1.*i128, v2.*i128) {{
+block0:
+    v3.i128 = mload v0 i128;
+    v4.i128 = mload v1 i128;
+    v5.i128 = {op} v3 v4;
+    mstore v2 v5 i128;
+    return;
+}}
+"#
+        );
+        let module = sonatina_parser::parse_module(&source).unwrap().module;
+        let artifact = Compile::new(module, CraneliftJitBackend::new())
+            .with_opt_level(level)
+            .compile()
+            .expect("zero-divisor test should compile");
+        let divide: unsafe extern "C" fn(*const u8, *const u8, *mut u8) =
+            unsafe { std::mem::transmute(artifact.function_address("divide").unwrap()) };
+        let mut result = [0u8; 16];
+        unsafe {
+            divide(
+                1u128.to_le_bytes().as_ptr(),
+                [0u8; 16].as_ptr(),
+                result.as_mut_ptr(),
+            )
+        };
+        return;
+    }
+
+    // A native trap terminates the process. Isolate it from the test runner
+    // and distinguish the expected trap signal from a Rust assertion failure.
+    for op in ["udiv", "sdiv", "umod", "smod"] {
+        for level in [OptLevel::O0, OptLevel::O2] {
+            let output = Command::new(env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "scalar::i128_division_by_zero_traps",
+                    "--nocapture",
+                ])
+                .env(CHILD_CASE, format!("{op}:{level:?}"))
+                .output()
+                .expect("trap subprocess should run");
+            assert!(
+                matches!(output.status.signal(), Some(4 | 5 | 8)),
+                "{op} {level:?}: expected a trap, got {}\n{}\n{}",
+                output.status,
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
     }
 }
