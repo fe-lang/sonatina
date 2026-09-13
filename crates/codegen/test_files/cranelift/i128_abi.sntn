@@ -1,0 +1,37 @@
+func inline(never) public %mix(v0.i128, v1.i128, v2.i128, v3.i128, v4.i128, v5.i128) -> i128 {
+block0:
+    v6.i128 = sub v0 v1;
+    v7.i128 = mul v2 3.i128;
+    v8.i128 = add v6 v7;
+    v9.i128 = mul v3 5.i128;
+    v10.i128 = sub v8 v9;
+    v11.i128 = mul v4 7.i128;
+    v12.i128 = add v10 v11;
+    v13.i128 = sub v12 v5;
+    return v13;
+}
+
+func inline(never) private %forward(v0.i128, v1.i128, v2.i128, v3.i128, v4.i128, v5.i128) -> i128 {
+block0:
+    v6.i128 = call %mix v0 v1 v2 v3 v4 v5;
+    return v6;
+}
+
+func public %via_pointers(v0.*[i128; 6], v1.*i128) {
+block0:
+    v2.*i128 = gep v0 0.i64 0.i64;
+    v3.*i128 = gep v0 0.i64 1.i64;
+    v4.*i128 = gep v0 0.i64 2.i64;
+    v5.*i128 = gep v0 0.i64 3.i64;
+    v6.*i128 = gep v0 0.i64 4.i64;
+    v7.*i128 = gep v0 0.i64 5.i64;
+    v8.i128 = mload v2 i128;
+    v9.i128 = mload v3 i128;
+    v10.i128 = mload v4 i128;
+    v11.i128 = mload v5 i128;
+    v12.i128 = mload v6 i128;
+    v13.i128 = mload v7 i128;
+    v14.i128 = call %forward v8 v9 v10 v11 v12 v13;
+    mstore v1 v14 i128;
+    return;
+}

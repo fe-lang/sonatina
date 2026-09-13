@@ -148,9 +148,27 @@ impl ObjectArgEffect {
 pub(crate) enum ObjectReturnEffect {
     None,
     FreshObject,
-    SameAsArg { index: usize },
-    DerivedFromArg { index: usize },
+    SameAsArg {
+        index: usize,
+    },
+    DerivedFromArg {
+        index: usize,
+    },
+    /// The result borrows one of these arguments, possibly through a projection.
+    BorrowedArgs {
+        indices: SmallVec<[usize; 4]>,
+    },
     Unknown,
+}
+
+impl ObjectReturnEffect {
+    pub(crate) fn borrows_arg(&self, arg: usize) -> bool {
+        match self {
+            Self::SameAsArg { index } | Self::DerivedFromArg { index } => *index == arg,
+            Self::BorrowedArgs { indices } => indices.contains(&arg),
+            _ => false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -293,12 +311,13 @@ impl ObjectArgEffect {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum ReturnClass {
     None,
     FreshObject,
     SameAsArg(usize),
     DerivedFromArg(usize),
+    BorrowedArgs(BTreeSet<usize>),
     Unknown,
 }
 
@@ -670,12 +689,7 @@ fn compute_summary_for_func(
         for idx in 0..summary.arg_effects.len() {
             summary.arg_effects[idx].local_only = !summary.arg_effects[idx]
                 .needs_unknown_object_barrier()
-                && !matches!(
-                    summary.ret_effect,
-                    ObjectReturnEffect::SameAsArg { index }
-                        | ObjectReturnEffect::DerivedFromArg { index }
-                        if index == idx
-                );
+                && !summary.ret_effect.borrows_arg(idx);
         }
         summary
     })
@@ -823,6 +837,9 @@ fn analyze_returns(
         ReturnClass::FreshObject => ObjectReturnEffect::FreshObject,
         ReturnClass::SameAsArg(index) => ObjectReturnEffect::SameAsArg { index },
         ReturnClass::DerivedFromArg(index) => ObjectReturnEffect::DerivedFromArg { index },
+        ReturnClass::BorrowedArgs(indices) => ObjectReturnEffect::BorrowedArgs {
+            indices: indices.into_iter().collect(),
+        },
         ReturnClass::Unknown => ObjectReturnEffect::Unknown,
     };
     if ret_effect != ObjectReturnEffect::FreshObject {
@@ -886,6 +903,13 @@ fn classify_return_value(
             }
         }
         Some(CompleteRootSet::Multiple(roots)) => {
+            if let Some(indices) = roots
+                .iter()
+                .map(|root| arg_roots.get(&root).copied())
+                .collect::<Option<BTreeSet<_>>>()
+            {
+                return (ReturnClass::BorrowedArgs(indices), Vec::new());
+            }
             if roots.iter().any(|root| arg_roots.contains_key(&root)) {
                 return (ReturnClass::Unknown, Vec::new());
             }
@@ -953,7 +977,19 @@ fn join_return_class(lhs: ReturnClass, rhs: ReturnClass) -> ReturnClass {
         {
             ReturnClass::DerivedFromArg(lhs)
         }
-        _ => ReturnClass::Unknown,
+        (lhs, rhs) => {
+            let mut indices = BTreeSet::new();
+            for class in [lhs, rhs] {
+                match class {
+                    ReturnClass::SameAsArg(index) | ReturnClass::DerivedFromArg(index) => {
+                        indices.insert(index);
+                    }
+                    ReturnClass::BorrowedArgs(args) => indices.extend(args),
+                    _ => return ReturnClass::Unknown,
+                }
+            }
+            ReturnClass::BorrowedArgs(indices)
+        }
     }
 }
 

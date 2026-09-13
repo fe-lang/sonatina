@@ -1,0 +1,60 @@
+type @Pair = {i64, i64};
+
+global public i64 $sonatina_counter = 10;
+global public i64 $sonatina_bss;
+global public const i64 $sonatina_constant = -77;
+global external i64 $host_counter;
+
+declare external %host_mix(i64, i64) -> i64;
+declare external %host_offset(*i64, i64) -> *i64;
+declare external %host_xor32(i32, i32) -> i32;
+
+func public %sonatina_update(v0.*i64, v1.i64) -> *i64 {
+block0:
+    v2.i64 = mload v0 i64;
+    v3.i64 = call %host_mix v2 v1;
+    v4.*i64 = call %host_offset v0 1.i64;
+    mstore v4 v3 i64;
+    v5.i64 = mload $host_counter i64;
+    v6.i64 = mload $sonatina_counter i64;
+    v7.i64 = add v5 v6;
+    mstore $sonatina_counter v7 i64;
+    v8.i64 = add v5 1.i64;
+    mstore $host_counter v8 i64;
+    mstore $sonatina_bss v3 i64;
+    return v4;
+}
+
+func public %sonatina_xor32(v0.i32, v1.i32) -> i32 {
+block0:
+    v2.i32 = call %host_xor32 v0 v1;
+    return v2;
+}
+
+func inline(never) private %make_pair(v0.i64, v1.i64) -> @Pair {
+block0:
+    v2.@Pair = insert_value undef.@Pair 0.i64 v0;
+    v3.@Pair = insert_value v2 1.i64 v1;
+    return v3;
+}
+
+func inline(never) private %reverse_pair(v0.@Pair) -> @Pair {
+block0:
+    v1.i64 = extract_value v0 0.i64;
+    v2.i64 = extract_value v0 1.i64;
+    v3.@Pair = insert_value v0 0.i64 v2;
+    v4.@Pair = insert_value v3 1.i64 v1;
+    return v4;
+}
+
+func public %sonatina_aggregate_wrapper(v0.i64, v1.i64, v2.*i64) -> i64 {
+block0:
+    v3.@Pair = call %make_pair v0 v1;
+    v4.@Pair = call %reverse_pair v3;
+    v5.i64 = extract_value v3 0.i64;
+    v6.i64 = extract_value v4 0.i64;
+    v7.i64 = extract_value v4 1.i64;
+    mstore v2 v6 i64;
+    v8.i64 = sub v5 v7;
+    return v8;
+}

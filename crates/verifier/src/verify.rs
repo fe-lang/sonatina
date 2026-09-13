@@ -65,6 +65,18 @@ pub fn verify_module_invariants(module: &Module, cfg: &VerifierConfig) -> Verifi
     report
 }
 
+/// Check a declared function's ABI types, including restrictions on references
+/// in public and external signatures.
+pub fn verify_function_signature(
+    ctx: &ModuleCtx,
+    func_ref: FuncRef,
+    cfg: &VerifierConfig,
+) -> VerificationReport {
+    let mut report = VerificationReport::default();
+    module_invariants::collect_signature_invariants(ctx, func_ref, cfg, &mut report);
+    report
+}
+
 pub fn verify_function(
     ctx: &ModuleCtx,
     func_ref: FuncRef,

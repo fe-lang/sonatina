@@ -11,8 +11,8 @@ pub use pipeline::{
 };
 pub use report::VerificationReport;
 pub use verify::{
-    verify_function, verify_function_or_panic, verify_module, verify_module_invariants,
-    verify_module_or_panic,
+    verify_function, verify_function_or_panic, verify_function_signature, verify_module,
+    verify_module_invariants, verify_module_or_panic,
 };
 
 #[macro_export]

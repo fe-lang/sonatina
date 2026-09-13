@@ -66,12 +66,16 @@ impl Display for TargetTriple {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Architecture {
     Evm,
+    X86_64,
+    Aarch64,
 }
 
 impl Architecture {
     fn parse(s: &str) -> Result<Self, InvalidTriple> {
         match s {
             "evm" => Ok(Self::Evm),
+            "x86_64" => Ok(Self::X86_64),
+            "aarch64" => Ok(Self::Aarch64),
             _ => Err(InvalidTriple::ArchitectureNotSupported),
         }
     }
@@ -81,6 +85,8 @@ impl Display for Architecture {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Evm => write!(f, "evm"),
+            Self::X86_64 => write!(f, "x86_64"),
+            Self::Aarch64 => write!(f, "aarch64"),
         }
     }
 }
@@ -88,12 +94,14 @@ impl Display for Architecture {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Vendor {
     Ethereum,
+    Unknown,
 }
 
 impl Vendor {
     fn parse(s: &str) -> Result<Self, InvalidTriple> {
         match s {
             "ethereum" => Ok(Vendor::Ethereum),
+            "unknown" => Ok(Vendor::Unknown),
             _ => Err(InvalidTriple::VendorNotSupported),
         }
     }
@@ -103,6 +111,7 @@ impl Display for Vendor {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Vendor::Ethereum => write!(f, "ethereum"),
+            Vendor::Unknown => write!(f, "unknown"),
         }
     }
 }
@@ -110,6 +119,7 @@ impl Display for Vendor {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OperatingSystem {
     Evm(EvmVersion),
+    Native,
 }
 
 impl OperatingSystem {
@@ -132,6 +142,11 @@ impl OperatingSystem {
                 };
                 Ok(Self::Evm(evm_version))
             }
+            (Architecture::X86_64 | Architecture::Aarch64, Vendor::Unknown) => match s {
+                "native" => Ok(Self::Native),
+                _ => Err(InvalidTriple::OsNotSupported),
+            },
+            _ => Err(InvalidTriple::InvalidCombination),
         }
     }
 }
@@ -140,6 +155,7 @@ impl Display for OperatingSystem {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Evm(evm_version) => write!(f, "{evm_version}"),
+            Self::Native => write!(f, "native"),
         }
     }
 }
@@ -212,6 +228,31 @@ mod tests {
             assert_eq!(triple.vendor, Vendor::Ethereum);
             assert_eq!(triple.operating_system, OperatingSystem::Evm(want));
             assert_eq!(target, triple.to_string());
+        }
+    }
+
+    #[test]
+    fn native_triples_round_trip() {
+        for (target, architecture) in [
+            ("x86_64-unknown-native", Architecture::X86_64),
+            ("aarch64-unknown-native", Architecture::Aarch64),
+        ] {
+            let triple = TargetTriple::parse(target).unwrap();
+            assert_eq!(triple.architecture, architecture);
+            assert_eq!(triple.vendor, Vendor::Unknown);
+            assert_eq!(triple.operating_system, OperatingSystem::Native);
+            assert_eq!(target, triple.to_string());
+        }
+    }
+
+    #[test]
+    fn invalid_native_combinations_are_rejected() {
+        for target in [
+            "evm-unknown-native",
+            "x86_64-ethereum-osaka",
+            "aarch64-unknown-osaka",
+        ] {
+            assert!(TargetTriple::parse(target).is_err(), "accepted {target}");
         }
     }
 }

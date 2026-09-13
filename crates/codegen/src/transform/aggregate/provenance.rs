@@ -123,6 +123,17 @@ pub(crate) enum CompleteRootSet<'a> {
 }
 
 impl<'a> CompleteRootSet<'a> {
+    #[cfg(feature = "cranelift")]
+    pub(crate) fn iter(self) -> impl Iterator<Item = RootValue> + 'a {
+        let (single, multiple) = match self {
+            Self::Single(root) => (Some(root), None),
+            Self::Multiple(roots) => (None, Some(roots)),
+        };
+        single
+            .into_iter()
+            .chain(multiple.into_iter().flat_map(KnownRoots::iter))
+    }
+
     pub(crate) fn contains(self, root: RootValue) -> bool {
         match self {
             Self::Single(candidate) => candidate == root,
@@ -318,11 +329,12 @@ enum ProjectionTransferInst<'a> {
 }
 
 #[derive(Clone, Copy)]
-enum CallReturnTransferKind {
+enum CallReturnTransferKind<'a> {
     Arg {
         index: usize,
         exact_projection: bool,
     },
+    BorrowedArgs(&'a [usize]),
     FreshObject,
     Unknown,
 }
@@ -748,6 +760,13 @@ fn call_possible_root_transfer(
             .get(index)
             .copied()
             .map(|source| PossibleRootTransfer::source(result, source)),
+        CallReturnTransferKind::BorrowedArgs(indices) => {
+            let sources = indices
+                .iter()
+                .map(|&index| call.args().get(index).copied())
+                .collect::<Option<SmallVec<[_; 4]>>>()?;
+            Some(PossibleRootTransfer::sources(result, sources))
+        }
         CallReturnTransferKind::FreshObject => Some(PossibleRootTransfer::fresh_root(result)),
         CallReturnTransferKind::Unknown => {
             reference_element_ty(func.ctx(), func.dfg.value_ty(result))
@@ -1698,6 +1717,8 @@ fn derive_call_exact_state(
             fresh_call_root_projection(func, result, inst, object_effects, layout_cache)
                 .map_or(ExactState::Blocked, ExactState::Exact)
         }
+        // A union identifies possible roots, never an exact alias or field.
+        CallReturnTransferKind::BorrowedArgs(_) => ExactState::Blocked,
         CallReturnTransferKind::Unknown => {
             exact_state_or_unknown(exact_states, possible_roots, maybe_unknown, result)
         }
@@ -1769,6 +1790,22 @@ fn derive_call_possible_projections(
             fresh_call_root_projection(func, result, inst, object_effects, layout_cache)
                 .into_iter()
                 .collect()
+        }
+        CallReturnTransferKind::BorrowedArgs(indices) => {
+            let projections: Vec<_> = indices
+                .iter()
+                .filter_map(|&index| call.args().get(index))
+                .flat_map(|&arg| possible_projections[arg].iter().copied())
+                .collect();
+            map_projection_candidates_for_result(
+                func,
+                result,
+                root_value,
+                possible_roots,
+                maybe_unknown,
+                &projections,
+                Some,
+            )
         }
         CallReturnTransferKind::Unknown => Vec::new(),
     }
@@ -1929,7 +1966,7 @@ fn offset_projection(projection: Projection, sub: shape::AggregateSlice) -> Proj
 fn call_return_transfer_kind(
     object_effects: Option<&ObjectEffectSummaryMap>,
     callee: FuncRef,
-) -> Option<CallReturnTransferKind> {
+) -> Option<CallReturnTransferKind<'_>> {
     let summary = object_effects?.get(&callee)?;
     Some(match summary.ret_effect {
         ObjectReturnEffect::SameAsArg { index } => CallReturnTransferKind::Arg {
@@ -1940,6 +1977,9 @@ fn call_return_transfer_kind(
             index,
             exact_projection: false,
         },
+        ObjectReturnEffect::BorrowedArgs { ref indices } => {
+            CallReturnTransferKind::BorrowedArgs(indices)
+        }
         ObjectReturnEffect::FreshObject => CallReturnTransferKind::FreshObject,
         ObjectReturnEffect::None | ObjectReturnEffect::Unknown => CallReturnTransferKind::Unknown,
     })

@@ -1,15 +1,14 @@
 //! High-level compilation entrypoint that bundles the optimization pipeline
-//! and EVM codegen into a single API.
+//! and backend codegen into a single API.
 //!
-//! Frontends typically only need [`EvmCompile`]: hand it a lowered [`Module`]
-//! plus an [`OptLevel`], optionally inspect the optimized IR via
-//! [`EvmCompile::optimize`], then produce object artifacts via
-//! [`EvmCompile::compile`].
+//! [`Compile`] is the generic entry point. [`EvmCompile`] preserves the
+//! existing EVM-specific convenience API.
 
 use sonatina_ir::{InstId, Module, isa::evm::Evm, module::FuncRef};
 use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
 
 use crate::{
+    backend::{Backend, BackendOptions},
     isa::evm::{EvmBackend, ImmediateMaterializationMode, LateCleanupProfile},
     object::{CompileOptions, ObjectArtifact, ObjectCompileError, compile_all_objects},
     optim::Pipeline,
@@ -41,41 +40,26 @@ impl OptInstId {
     }
 }
 
-pub struct EvmCompile {
+/// Generic shared-optimization and backend-codegen pipeline.
+pub struct Compile<B> {
     module: Module,
-    opt_level: OptLevel,
-    emit_symbol_table: bool,
-    emit_observability: bool,
+    options: BackendOptions,
+    backend: B,
     optimized: bool,
 }
 
-impl EvmCompile {
-    pub fn new(module: Module) -> Self {
+impl<B> Compile<B> {
+    pub fn new(module: Module, backend: B) -> Self {
         Self {
             module,
-            opt_level: OptLevel::default(),
-            emit_symbol_table: false,
-            emit_observability: false,
+            options: BackendOptions::default(),
+            backend,
             optimized: false,
         }
     }
 
     pub fn with_opt_level(mut self, level: OptLevel) -> Self {
-        self.opt_level = level;
-        self
-    }
-
-    pub fn with_observability(mut self, on: bool) -> Self {
-        self.emit_observability = on;
-        self
-    }
-
-    /// Include linker symbol tables in the compiled object artifacts.
-    ///
-    /// Symbol tables are diagnostic metadata only and do not affect emitted
-    /// section bytes. They are omitted by default.
-    pub fn with_symbol_table(mut self, on: bool) -> Self {
-        self.emit_symbol_table = on;
+        self.options.opt_level = level;
         self
     }
 
@@ -83,7 +67,7 @@ impl EvmCompile {
     /// the optimized module for inspection or IR dumping.
     pub fn optimize(&mut self) -> &Module {
         if !self.optimized {
-            match self.opt_level {
+            match self.options.opt_level {
                 OptLevel::O0 => {}
                 OptLevel::O1 => Pipeline::speed().run(&mut self.module),
                 OptLevel::Os => Pipeline::size().run(&mut self.module),
@@ -152,16 +136,117 @@ impl EvmCompile {
         }
     }
 
-    /// Optimize (if not already) and compile every object in the module.
-    pub fn compile(mut self) -> Result<Vec<ObjectArtifact>, Vec<ObjectCompileError>> {
+    pub fn opt_level(&self) -> OptLevel {
+        self.options.opt_level
+    }
+
+    pub fn module(&self) -> &Module {
+        &self.module
+    }
+
+    pub fn backend(&self) -> &B {
+        &self.backend
+    }
+}
+
+impl<B: Backend> Compile<B> {
+    pub fn compile(mut self) -> Result<B::Artifact, Vec<B::Error>> {
         self.optimize();
-        let backend = evm_backend_for_module(&self.module, self.opt_level)?;
+        self.backend.compile_module(&self.module, &self.options)
+    }
+}
+
+/// EVM backend adapter for the generic compilation pipeline.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct EvmCompiler {
+    emit_symbol_table: bool,
+    emit_observability: bool,
+}
+
+impl EvmCompiler {
+    pub fn with_symbol_table(mut self, on: bool) -> Self {
+        self.emit_symbol_table = on;
+        self
+    }
+
+    pub fn with_observability(mut self, on: bool) -> Self {
+        self.emit_observability = on;
+        self
+    }
+}
+
+impl Backend for EvmCompiler {
+    type Artifact = Vec<ObjectArtifact>;
+    type Error = ObjectCompileError;
+
+    fn compile_module(
+        &self,
+        module: &Module,
+        options: &BackendOptions,
+    ) -> Result<Self::Artifact, Vec<Self::Error>> {
+        let backend = evm_backend_for_module(module, options.opt_level)?;
         let opts = CompileOptions {
             emit_symtab: self.emit_symbol_table,
             emit_observability: self.emit_observability,
             ..CompileOptions::default()
         };
-        compile_all_objects(&self.module, &backend, &opts)
+        compile_all_objects(module, &backend, &opts)
+    }
+}
+
+/// Convenience wrapper preserving the existing EVM compilation API.
+pub struct EvmCompile {
+    inner: Compile<EvmCompiler>,
+}
+
+impl EvmCompile {
+    pub fn new(module: Module) -> Self {
+        Self {
+            inner: Compile::new(module, EvmCompiler::default()),
+        }
+    }
+
+    pub fn with_opt_level(mut self, level: OptLevel) -> Self {
+        self.inner = self.inner.with_opt_level(level);
+        self
+    }
+
+    pub fn with_observability(mut self, on: bool) -> Self {
+        self.inner.backend = self.inner.backend.with_observability(on);
+        self
+    }
+
+    /// Include linker symbol tables in the compiled object artifacts.
+    ///
+    /// Symbol tables are diagnostic metadata only and do not affect emitted
+    /// section bytes. They are omitted by default.
+    pub fn with_symbol_table(mut self, on: bool) -> Self {
+        self.inner.backend = self.inner.backend.with_symbol_table(on);
+        self
+    }
+
+    pub fn optimize(&mut self) -> &Module {
+        self.inner.optimize()
+    }
+
+    pub fn stamp_post_opt_provenance(
+        &mut self,
+        func: FuncRef,
+        inst: OptInstId,
+        provenance: impl Into<String>,
+    ) -> Result<(), String> {
+        self.inner.stamp_post_opt_provenance(func, inst, provenance)
+    }
+
+    pub fn stamp_all_post_opt_provenance(
+        &mut self,
+        f: impl FnMut(FuncRef, OptInstId) -> Option<String>,
+    ) {
+        self.inner.stamp_all_post_opt_provenance(f);
+    }
+
+    pub fn compile(self) -> Result<Vec<ObjectArtifact>, Vec<ObjectCompileError>> {
+        self.inner.compile()
     }
 }
 
@@ -224,8 +309,28 @@ mod tests {
     use sonatina_parser::parse_module;
     use sonatina_triple::{EvmVersion, OperatingSystem, TargetTriple};
 
+    use crate::{
+        backend::{Backend, BackendOptions},
+        compile::{Compile, OptLevel},
+        object::SymbolId,
+    };
+
     use super::{EvmCompile, ObjectCompileError, OptInstId, evm_osaka_triple};
-    use crate::object::SymbolId;
+
+    struct OptionsBackend;
+
+    impl Backend for OptionsBackend {
+        type Artifact = OptLevel;
+        type Error = ();
+
+        fn compile_module(
+            &self,
+            _module: &Module,
+            options: &BackendOptions,
+        ) -> Result<Self::Artifact, Vec<Self::Error>> {
+            Ok(options.opt_level)
+        }
+    }
 
     fn module_for_evm(version: EvmVersion) -> Module {
         let triple = evm_osaka_triple();
@@ -323,5 +428,15 @@ object @Contract {
                 .any(|symbol| matches!(symbol, SymbolId::Embed(_))),
             "symbol table must contain the required runtime embed symbol"
         );
+    }
+
+    #[test]
+    fn generic_compile_passes_optimization_level_to_backend() {
+        let module = module_for_evm(EvmVersion::Osaka);
+        let level = Compile::new(module, OptionsBackend)
+            .with_opt_level(OptLevel::O2)
+            .compile()
+            .unwrap();
+        assert_eq!(level, OptLevel::O2);
     }
 }
