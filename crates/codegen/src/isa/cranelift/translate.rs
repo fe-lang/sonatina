@@ -704,8 +704,14 @@ fn translate_function(
                 }
                 NativeInstKind::Bitcast(bitcast) => {
                     let val = resolve_value(function, *bitcast.from(), &value_map, &mut builder)?;
-                    let to_ty = sonatina_type_to_clif_or_err(*bitcast.ty(), pointer_type)?;
-                    let result_val = translate_bitcast(val, to_ty, &mut builder)?;
+                    let result_val = translate_bitcast(
+                        val,
+                        function.dfg.value_ty(*bitcast.from()),
+                        *bitcast.ty(),
+                        &module.ctx,
+                        pointer_type,
+                        &mut builder,
+                    )?;
                     if let Some(result) = function.dfg.inst_result(inst_id) {
                         value_map.insert(result, result_val);
                     }

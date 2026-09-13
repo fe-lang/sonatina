@@ -1111,23 +1111,6 @@ pub(super) fn bool_to_int_value(
     builder.ins().select(value, set, zero)
 }
 
-pub(super) fn translate_bitcast(
-    value: clif::Value,
-    to_ty: clif::Type,
-    builder: &mut FunctionBuilder,
-) -> Result<clif::Value, String> {
-    let from_ty = builder.func.dfg.value_type(value);
-    if from_ty == to_ty {
-        Ok(value)
-    } else if from_ty.bits() == to_ty.bits() {
-        Ok(builder.ins().bitcast(to_ty, MemFlagsData::new(), value))
-    } else {
-        Err(format!(
-            "cannot bitcast Cranelift value from {from_ty} to {to_ty}"
-        ))
-    }
-}
-
 pub(super) fn insert_clif_results(
     function: &Function,
     inst_id: sonatina_ir::inst::InstId,

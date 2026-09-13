@@ -3,6 +3,77 @@ use sonatina_ir::{I256, Immediate, Type, U256};
 
 use super::{parse_native_module, parse_verified_native_module};
 
+#[test]
+fn bitcasts_preserve_contents_across_native_representations() {
+    for (from, to, size) in [
+        ("i1", "[i8; 1]", 1),
+        ("i8", "[i8; 1]", 1),
+        ("i16", "[i8; 2]", 2),
+        ("i32", "[i8; 4]", 4),
+        ("i64", "[i64; 1]", 8),
+        ("i128", "[i8; 16]", 16),
+        ("i256", "[i8; 32]", 32),
+        ("i64", "@Word", 8),
+        ("i128", "@Pair", 16),
+        ("*i8", "@Word", 8),
+        ("*i8", "i64", 8),
+        ("*i8", "*i64", 8),
+        ("[i8; 16]", "[i128; 1]", 16),
+        ("[i8; 32]", "@Padded", 32),
+        ("[i8; 48]", "[@Pair; 3]", 48),
+        ("[i8; 0]", "[i128; 0]", 0),
+    ] {
+        for (from, to) in [(from, to), (to, from)] {
+            let source = format!(
+                r#"
+type @Word = {{i64}};
+type @Pair = {{i64, i64}};
+type @Padded = {{i8, i128}};
+func private %cast(v0.{from}) -> {to} {{
+block0:
+    v1.{to} = bitcast v0 {to};
+    return v1;
+}}
+func public %apply(v0.*{from}, v1.*{to}) {{
+block0:
+    v2.{from} = mload v0 {from};
+    v3.{to} = call %cast v2;
+    mstore v1 v3 {to};
+    return;
+}}
+"#
+            );
+            for level in [OptLevel::O0, OptLevel::O2] {
+                let artifact = Compile::new(
+                    parse_verified_native_module(&source),
+                    CraneliftJitBackend::new(),
+                )
+                .with_opt_level(level)
+                .compile()
+                .unwrap_or_else(|errors| panic!("{from} -> {to} {level:?}: {errors:?}"));
+                let apply: unsafe extern "C" fn(*const u8, *mut u8) =
+                    unsafe { std::mem::transmute(artifact.function_address("apply").unwrap()) };
+                for seed in [0u8, 1, 2, 3, 127, 255] {
+                    let input: [u8; 64] =
+                        std::array::from_fn(|index| seed.wrapping_add(index as u8));
+                    let mut expected = input;
+                    if from == "i1" || to == "i1" {
+                        expected[0] &= 1;
+                    }
+                    let mut output = [0xa5; 64];
+                    unsafe { apply(input.as_ptr(), output.as_mut_ptr()) };
+                    assert_eq!(
+                        &output[..size],
+                        &expected[..size],
+                        "{from} -> {to} {level:?} {seed}"
+                    );
+                    assert!(output[size..].iter().all(|&byte| byte == 0xa5));
+                }
+            }
+        }
+    }
+}
+
 fn check_cast(op: &str, from: Type, to: Type, inputs: &[Immediate]) {
     let from_name = format!("{from:?}").to_lowercase();
     let to_name = format!("{to:?}").to_lowercase();

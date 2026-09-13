@@ -9,7 +9,49 @@ use sonatina_ir::{
     types::CompoundType,
 };
 
-use super::{load_i256_limb, resize_int_value, resolve_value, signed_scalar};
+use super::{
+    copy_bytes, create_stack_slot_for_type, load_i256_limb, resize_int_value, resolve_value,
+    signed_scalar, sonatina_type_to_clif_or_err, uses_indirect_value_representation,
+};
+
+pub(super) fn translate_bitcast(
+    value: clif::Value,
+    from_ty: Type,
+    to_ty: Type,
+    ctx: &ModuleCtx,
+    pointer_type: clif::Type,
+    builder: &mut FunctionBuilder,
+) -> Result<clif::Value, String> {
+    let size = value_storage_size(from_ty, ctx)?;
+    if size != value_storage_size(to_ty, ctx)? {
+        return Err(format!(
+            "bitcast requires equal-sized types: {from_ty:?} to {to_ty:?}"
+        ));
+    }
+    let from_indirect = uses_indirect_value_representation(ctx, from_ty);
+    if uses_indirect_value_representation(ctx, to_ty) {
+        // A cast creates a value, not an alias to its source storage. Allocate
+        // for the destination layout, which may require stronger alignment.
+        let dest = create_stack_slot_for_type(to_ty, ctx, builder)?;
+        if from_indirect {
+            copy_bytes(value, dest, size, builder);
+        } else {
+            builder.ins().store(MemFlagsData::new(), value, dest, 0);
+        }
+        Ok(dest)
+    } else {
+        let clif_ty = sonatina_type_to_clif_or_err(to_ty, pointer_type)?;
+        if from_indirect {
+            Ok(builder.ins().load(clif_ty, MemFlagsData::new(), value, 0))
+        } else if builder.func.dfg.value_type(value) == clif_ty {
+            Ok(value)
+        } else {
+            Err(format!(
+                "unsupported scalar bitcast: {from_ty:?} to {to_ty:?}"
+            ))
+        }
+    }
+}
 
 pub(super) fn storage_chunks(size: u32) -> impl Iterator<Item = (i32, clif::Type)> {
     let mut offset = 0;
