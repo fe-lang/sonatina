@@ -144,6 +144,7 @@ fn translate_function(
     let arg_offset = if has_sret { 1 } else { 0 };
     for (idx, &arg_value) in function.arg_values.iter().enumerate() {
         let param = builder.block_params(clif_entry)[idx + arg_offset];
+        let param = normalize_scalar(param, function.dfg.value_ty(arg_value), &mut builder);
         value_map.insert(arg_value, param);
     }
 
@@ -265,7 +266,13 @@ fn translate_function(
                     } else {
                         let lhs = resolve_value(function, *div.lhs(), &value_map, &mut builder)?;
                         let rhs = resolve_value(function, *div.rhs(), &value_map, &mut builder)?;
-                        emit_scalar_div_rem(lhs, rhs, DivRemKind::Udiv, &mut builder)
+                        emit_scalar_div_rem(
+                            lhs,
+                            rhs,
+                            function.dfg.value_ty(*div.lhs()),
+                            DivRemKind::Udiv,
+                            &mut builder,
+                        )
                     };
                     if let Some(result) = function.dfg.inst_result(inst_id) {
                         value_map.insert(result, result_val);
@@ -284,7 +291,13 @@ fn translate_function(
                     } else {
                         let lhs = resolve_value(function, *div.lhs(), &value_map, &mut builder)?;
                         let rhs = resolve_value(function, *div.rhs(), &value_map, &mut builder)?;
-                        emit_scalar_div_rem(lhs, rhs, DivRemKind::Sdiv, &mut builder)
+                        emit_scalar_div_rem(
+                            lhs,
+                            rhs,
+                            function.dfg.value_ty(*div.lhs()),
+                            DivRemKind::Sdiv,
+                            &mut builder,
+                        )
                     };
                     if let Some(result) = function.dfg.inst_result(inst_id) {
                         value_map.insert(result, result_val);
@@ -303,7 +316,13 @@ fn translate_function(
                     } else {
                         let lhs = resolve_value(function, *rem.lhs(), &value_map, &mut builder)?;
                         let rhs = resolve_value(function, *rem.rhs(), &value_map, &mut builder)?;
-                        emit_scalar_div_rem(lhs, rhs, DivRemKind::Umod, &mut builder)
+                        emit_scalar_div_rem(
+                            lhs,
+                            rhs,
+                            function.dfg.value_ty(*rem.lhs()),
+                            DivRemKind::Umod,
+                            &mut builder,
+                        )
                     };
                     if let Some(result) = function.dfg.inst_result(inst_id) {
                         value_map.insert(result, result_val);
@@ -322,7 +341,13 @@ fn translate_function(
                     } else {
                         let lhs = resolve_value(function, *rem.lhs(), &value_map, &mut builder)?;
                         let rhs = resolve_value(function, *rem.rhs(), &value_map, &mut builder)?;
-                        emit_scalar_div_rem(lhs, rhs, DivRemKind::Smod, &mut builder)
+                        emit_scalar_div_rem(
+                            lhs,
+                            rhs,
+                            function.dfg.value_ty(*rem.lhs()),
+                            DivRemKind::Smod,
+                            &mut builder,
+                        )
                     };
                     if let Some(result) = function.dfg.inst_result(inst_id) {
                         value_map.insert(result, result_val);
@@ -592,7 +617,7 @@ fn translate_function(
                             sonatina_type_to_clif(val_ty, pointer_type).ok_or_else(|| {
                                 format!("unsupported is_zero operand type: {val_ty:?}")
                             })?;
-                        let zero = builder.ins().iconst(clif_ty, 0);
+                        let zero = scalar_constant(clif_ty, 0, &mut builder);
                         builder.ins().icmp(IntCC::Equal, val, zero)
                     };
                     if let Some(result) = function.dfg.inst_result(inst_id) {
@@ -672,11 +697,6 @@ fn translate_function(
                         builder.ins().load(to_ty, MemFlagsData::new(), val, 0)
                     } else {
                         resize_int_value(val, to_ty, false, &mut builder)
-                    };
-                    let result_val = if *trunc.ty() == Type::I1 {
-                        builder.ins().band_imm_s(result_val, 1)
-                    } else {
-                        result_val
                     };
                     if let Some(result) = function.dfg.inst_result(inst_id) {
                         value_map.insert(result, result_val);
@@ -925,7 +945,14 @@ fn translate_function(
                     } else {
                         let lhs = resolve_value(function, *uaddo.lhs(), &value_map, &mut builder)?;
                         let rhs = resolve_value(function, *uaddo.rhs(), &value_map, &mut builder)?;
-                        let (result_val, overflow) = builder.ins().uadd_overflow(lhs, rhs);
+                        let (result_val, overflow) = emit_scalar_overflow(
+                            lhs,
+                            rhs,
+                            function.dfg.value_ty(*uaddo.lhs()),
+                            ScalarArithmetic::Add,
+                            false,
+                            &mut builder,
+                        );
                         insert_clif_results(
                             function,
                             inst_id,
@@ -952,7 +979,14 @@ fn translate_function(
                     } else {
                         let lhs = resolve_value(function, *saddo.lhs(), &value_map, &mut builder)?;
                         let rhs = resolve_value(function, *saddo.rhs(), &value_map, &mut builder)?;
-                        let (result_val, overflow) = builder.ins().sadd_overflow(lhs, rhs);
+                        let (result_val, overflow) = emit_scalar_overflow(
+                            lhs,
+                            rhs,
+                            function.dfg.value_ty(*saddo.lhs()),
+                            ScalarArithmetic::Add,
+                            true,
+                            &mut builder,
+                        );
                         insert_clif_results(
                             function,
                             inst_id,
@@ -979,7 +1013,14 @@ fn translate_function(
                     } else {
                         let lhs = resolve_value(function, *usubo.lhs(), &value_map, &mut builder)?;
                         let rhs = resolve_value(function, *usubo.rhs(), &value_map, &mut builder)?;
-                        let (result_val, overflow) = builder.ins().usub_overflow(lhs, rhs);
+                        let (result_val, overflow) = emit_scalar_overflow(
+                            lhs,
+                            rhs,
+                            function.dfg.value_ty(*usubo.lhs()),
+                            ScalarArithmetic::Sub,
+                            false,
+                            &mut builder,
+                        );
                         insert_clif_results(
                             function,
                             inst_id,
@@ -1006,7 +1047,14 @@ fn translate_function(
                     } else {
                         let lhs = resolve_value(function, *ssubo.lhs(), &value_map, &mut builder)?;
                         let rhs = resolve_value(function, *ssubo.rhs(), &value_map, &mut builder)?;
-                        let (result_val, overflow) = builder.ins().ssub_overflow(lhs, rhs);
+                        let (result_val, overflow) = emit_scalar_overflow(
+                            lhs,
+                            rhs,
+                            function.dfg.value_ty(*ssubo.lhs()),
+                            ScalarArithmetic::Sub,
+                            true,
+                            &mut builder,
+                        );
                         insert_clif_results(
                             function,
                             inst_id,
@@ -1033,8 +1081,14 @@ fn translate_function(
                     } else {
                         let lhs = resolve_value(function, *umulo.lhs(), &value_map, &mut builder)?;
                         let rhs = resolve_value(function, *umulo.rhs(), &value_map, &mut builder)?;
-                        let (result_val, overflow) =
-                            emit_scalar_mul_overflow(lhs, rhs, false, &mut builder);
+                        let (result_val, overflow) = emit_scalar_overflow(
+                            lhs,
+                            rhs,
+                            function.dfg.value_ty(*umulo.lhs()),
+                            ScalarArithmetic::Mul,
+                            false,
+                            &mut builder,
+                        );
                         insert_clif_results(
                             function,
                             inst_id,
@@ -1061,8 +1115,14 @@ fn translate_function(
                     } else {
                         let lhs = resolve_value(function, *smulo.lhs(), &value_map, &mut builder)?;
                         let rhs = resolve_value(function, *smulo.rhs(), &value_map, &mut builder)?;
-                        let (result_val, overflow) =
-                            emit_scalar_mul_overflow(lhs, rhs, true, &mut builder);
+                        let (result_val, overflow) = emit_scalar_overflow(
+                            lhs,
+                            rhs,
+                            function.dfg.value_ty(*smulo.lhs()),
+                            ScalarArithmetic::Mul,
+                            true,
+                            &mut builder,
+                        );
                         insert_clif_results(
                             function,
                             inst_id,
@@ -1083,10 +1143,16 @@ fn translate_function(
                         );
                     } else {
                         let val = resolve_value(function, *snego.arg(), &value_map, &mut builder)?;
-                        let result_val = builder.ins().ineg(val);
                         let ty = builder.func.dfg.value_type(val);
-                        let min = signed_min_value(ty, &mut builder);
-                        let overflow = builder.ins().icmp(IntCC::Equal, val, min);
+                        let zero = scalar_constant(ty, 0, &mut builder);
+                        let (result_val, overflow) = emit_scalar_overflow(
+                            zero,
+                            val,
+                            function.dfg.value_ty(*snego.arg()),
+                            ScalarArithmetic::Sub,
+                            true,
+                            &mut builder,
+                        );
                         insert_clif_results(
                             function,
                             inst_id,
@@ -1618,6 +1684,13 @@ fn translate_function(
                     ));
                 }
             }
+            // Canonicalize every producer, including loads, casts, and call
+            // results. Phi inputs are already canonical on their incoming edges.
+            for &result in function.dfg.inst_results(inst_id) {
+                let value = value_map[&result];
+                let value = normalize_scalar(value, function.dfg.value_ty(result), &mut builder);
+                value_map.insert(result, value);
+            }
         }
     }
 
@@ -1697,10 +1770,20 @@ fn translate_icmp(
         let rhs_val = resolve_value(function, rhs, value_map, builder)?;
         emit_i256_icmp(cc, lhs_val, rhs_val, builder)?
     } else {
-        let lhs_val =
+        let mut lhs_val =
             resolve_scalar_value(module, function, lhs, value_map, pointer_type, builder)?;
-        let rhs_val =
+        let mut rhs_val =
             resolve_scalar_value(module, function, rhs, value_map, pointer_type, builder)?;
+        if matches!(
+            cc,
+            IntCC::SignedLessThan
+                | IntCC::SignedGreaterThan
+                | IntCC::SignedLessThanOrEqual
+                | IntCC::SignedGreaterThanOrEqual
+        ) {
+            lhs_val = signed_scalar(lhs_val, lhs_ty, builder);
+            rhs_val = signed_scalar(rhs_val, rhs_ty, builder);
+        }
         builder.ins().icmp(cc, lhs_val, rhs_val)
     };
     if let Some(result) = function.dfg.inst_result(inst_id) {

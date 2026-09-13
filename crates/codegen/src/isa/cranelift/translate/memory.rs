@@ -9,7 +9,7 @@ use sonatina_ir::{
     types::CompoundType,
 };
 
-use super::{load_i256_limb, resize_int_value, resolve_value};
+use super::{load_i256_limb, resize_int_value, resolve_value, signed_scalar};
 
 pub(super) fn storage_chunks(size: u32) -> impl Iterator<Item = (i32, clif::Type)> {
     let mut offset = 0;
@@ -114,6 +114,11 @@ pub(super) fn resolve_index(
     let value = resolve_value(function, value, value_map, builder)?;
     let value = if ty == Type::I256 {
         load_i256_limb(value, 0, builder)
+    } else {
+        value
+    };
+    let value = if signed {
+        signed_scalar(value, ty, builder)
     } else {
         value
     };

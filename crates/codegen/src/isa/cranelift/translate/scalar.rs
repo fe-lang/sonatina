@@ -4,6 +4,80 @@ use sonatina_ir::Type;
 
 use super::{mul_limbs_full, unsigned_div_rem_i256_limbs};
 
+/// Sonatina's one-bit values use an I8 register, but only bit zero is data.
+pub(super) fn normalize_scalar(
+    value: clif::Value,
+    ty: Type,
+    builder: &mut FunctionBuilder,
+) -> clif::Value {
+    if ty == Type::I1 {
+        builder.ins().band_imm_s(value, 1)
+    } else {
+        value
+    }
+}
+
+pub(super) fn signed_scalar(
+    value: clif::Value,
+    ty: Type,
+    builder: &mut FunctionBuilder,
+) -> clif::Value {
+    if ty == Type::I1 {
+        builder.ins().ineg(value)
+    } else {
+        value
+    }
+}
+
+pub(super) enum ScalarArithmetic {
+    Add,
+    Sub,
+    Mul,
+}
+
+pub(super) fn emit_scalar_overflow(
+    lhs: clif::Value,
+    rhs: clif::Value,
+    ty: Type,
+    op: ScalarArithmetic,
+    signed: bool,
+    builder: &mut FunctionBuilder,
+) -> (clif::Value, clif::Value) {
+    if ty == Type::I1 {
+        let (lhs, rhs) = if signed {
+            (
+                signed_scalar(lhs, ty, builder),
+                signed_scalar(rhs, ty, builder),
+            )
+        } else {
+            (lhs, rhs)
+        };
+        let raw = match op {
+            ScalarArithmetic::Add => builder.ins().iadd(lhs, rhs),
+            ScalarArithmetic::Sub => builder.ins().isub(lhs, rhs),
+            ScalarArithmetic::Mul => builder.ins().imul(lhs, rhs),
+        };
+        // Shift the signed range [-1, 0] to [0, 1]. Every out-of-range
+        // result, including negative results, then compares unsigned > 1.
+        let range_value = if signed {
+            builder.ins().iadd_imm_s(raw, 1)
+        } else {
+            raw
+        };
+        let overflow = builder
+            .ins()
+            .icmp_imm_s(IntCC::UnsignedGreaterThan, range_value, 1);
+        return (raw, overflow);
+    }
+    match (op, signed) {
+        (ScalarArithmetic::Add, false) => builder.ins().uadd_overflow(lhs, rhs),
+        (ScalarArithmetic::Add, true) => builder.ins().sadd_overflow(lhs, rhs),
+        (ScalarArithmetic::Sub, false) => builder.ins().usub_overflow(lhs, rhs),
+        (ScalarArithmetic::Sub, true) => builder.ins().ssub_overflow(lhs, rhs),
+        (ScalarArithmetic::Mul, signed) => emit_scalar_mul_overflow(lhs, rhs, signed, builder),
+    }
+}
+
 pub(super) fn scalar_constant(
     ty: clif::Type,
     value: i128,
@@ -83,9 +157,18 @@ pub(super) fn emit_scalar_shift(
 pub(super) fn emit_scalar_div_rem(
     lhs: clif::Value,
     rhs: clif::Value,
+    source_ty: Type,
     kind: DivRemKind,
     builder: &mut FunctionBuilder,
 ) -> clif::Value {
+    let (lhs, rhs) = if matches!(kind, DivRemKind::Sdiv | DivRemKind::Smod) {
+        (
+            signed_scalar(lhs, source_ty, builder),
+            signed_scalar(rhs, source_ty, builder),
+        )
+    } else {
+        (lhs, rhs)
+    };
     let ty = builder.func.dfg.value_type(lhs);
     if ty != clif::types::I128 {
         return match kind {

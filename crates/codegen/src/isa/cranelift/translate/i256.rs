@@ -875,7 +875,7 @@ pub(super) fn resolve_i256_shift_amount(
     }
 
     let high_bits = builder.ins().ushr_imm_s(raw, I256_LIMB_BITS);
-    let zero_raw = builder.ins().iconst(raw_ty, 0);
+    let zero_raw = scalar_constant(raw_ty, 0, builder);
     let high_bits_nonzero = builder.ins().icmp(IntCC::NotEqual, high_bits, zero_raw);
     Ok((shift, bool_or(high_bits_nonzero, shift_too_large, builder)))
 }

@@ -1,6 +1,6 @@
 use sonatina_codegen::{Compile, compile::OptLevel, isa::cranelift::CraneliftJitBackend};
 
-use super::parse_native_module;
+use super::{parse_native_module, parse_verified_native_module};
 
 #[test]
 fn object_and_constant_indices_zero_extend_narrow_integers() {
@@ -70,5 +70,32 @@ block0:
         let values = [11i64, 22, 33];
         assert_eq!(unsafe { read(values.as_ptr().add(1), -1) }, 11);
         assert_eq!(unsafe { read(values.as_ptr().add(1), 1) }, 33);
+    }
+}
+
+#[test]
+fn gep_treats_true_as_signed_negative_one() {
+    let source = r#"
+func public %read(v0.*i64, v1.*i1) -> i64 {
+block0:
+    v2.i1 = mload v1 i1;
+    v3.*i64 = gep v0 v2;
+    v4.i64 = mload v3 i64;
+    return v4;
+}
+"#;
+    for level in [OptLevel::O0, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap();
+        let read: unsafe extern "C" fn(*const i64, *const u8) -> i64 =
+            unsafe { std::mem::transmute(artifact.function_address("read").unwrap()) };
+        let values = [11i64, 22, 33];
+        assert_eq!(unsafe { read(values.as_ptr().add(1), &1) }, 11);
+        assert_eq!(unsafe { read(values.as_ptr().add(1), &0) }, 22);
     }
 }

@@ -1,7 +1,7 @@
 use sonatina_codegen::{Compile, compile::OptLevel, isa::cranelift::CraneliftJitBackend};
 use sonatina_ir::{I256, Immediate, Type, U256};
 
-use super::parse_native_module;
+use super::{parse_native_module, parse_verified_native_module};
 
 fn check_cast(op: &str, from: Type, to: Type, inputs: &[Immediate]) {
     let from_name = format!("{from:?}").to_lowercase();
@@ -18,7 +18,7 @@ block0:
 "#
     );
     for level in [OptLevel::O0, OptLevel::O2] {
-        let module = parse_native_module(&source);
+        let module = parse_verified_native_module(&source);
         let size = module.ctx.size_of(to).unwrap();
         let artifact = Compile::new(module, CraneliftJitBackend::new())
             .with_opt_level(level)
@@ -31,6 +31,7 @@ block0:
                 "sext" => input.sext(to),
                 "zext" => input.zext(to),
                 "trunc" => input.trunc(to),
+                "bitcast" => input.bitcast(to),
                 _ => unreachable!(),
             }
             .zext(Type::I256)
@@ -50,6 +51,43 @@ block0:
                 "{op} {input:?} -> {to:?} {level:?}"
             );
             assert!(result[size..].iter().all(|&byte| byte == 0xa5));
+        }
+    }
+}
+
+#[test]
+fn boolean_bitcasts_keep_only_the_low_bit() {
+    let bytes: Vec<_> = (i8::MIN..=i8::MAX).map(Immediate::I8).collect();
+    check_cast("bitcast", Type::I8, Type::I1, &bytes);
+    check_cast("bitcast", Type::I1, Type::I8, &[false.into(), true.into()]);
+}
+
+#[test]
+fn pointer_to_boolean_keeps_only_the_low_bit() {
+    let source = r#"
+func public %low_bit(v0.*i8) -> i8 {
+block0:
+    v1.i1 = ptr_to_int v0 i1;
+    v2.i8 = zext v1 i8;
+    return v2;
+}
+"#;
+    for level in [OptLevel::O0, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap();
+        let low_bit: unsafe extern "C" fn(*const u8) -> u8 =
+            unsafe { std::mem::transmute(artifact.function_address("low_bit").unwrap()) };
+        for address in [0usize, 1, 2, 3, 255, 256, 257, 258, usize::MAX] {
+            assert_eq!(
+                unsafe { low_bit(address as *const u8) },
+                (address & 1) as u8,
+                "{address:#x} {level:?}"
+            );
         }
     }
 }

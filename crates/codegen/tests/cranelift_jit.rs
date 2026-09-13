@@ -24,6 +24,7 @@ use sonatina_ir::{
     types::{EnumReprHint, EnumVariantRef, VariantData},
 };
 use sonatina_triple::{Architecture, OperatingSystem, TargetTriple, Vendor};
+use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module};
 
 fn native_isa() -> Native {
     let architecture = if cfg!(target_arch = "x86_64") {
@@ -44,6 +45,13 @@ fn parse_native_module(source: &str) -> sonatina_ir::Module {
     sonatina_parser::parse_module(&format!("target = \"{}\"\n{source}", native_isa().triple()))
         .expect("native IR should parse")
         .module
+}
+
+fn parse_verified_native_module(source: &str) -> sonatina_ir::Module {
+    let module = parse_native_module(source);
+    let report = verify_module(&module, &VerifierConfig::for_level(VerificationLevel::Full));
+    assert!(!report.has_errors(), "{report}");
+    module
 }
 
 fn compile_add() -> CraneliftJitArtifact {

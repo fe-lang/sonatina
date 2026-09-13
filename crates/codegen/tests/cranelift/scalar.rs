@@ -2,51 +2,57 @@
 use std::{env, os::unix::process::ExitStatusExt, process::Command};
 
 use sonatina_codegen::{Compile, compile::OptLevel, isa::cranelift::CraneliftJitBackend};
-use sonatina_ir::{I256, Immediate, Type, U256, isa::Isa, module::ModuleCtx};
+use sonatina_ir::{I256, Immediate, Type, U256};
 
-use super::native_isa;
+use super::parse_verified_native_module;
 
 fn check_scalar_cases(op: &str, ty: Type, cases: &[(Immediate, Immediate, Immediate, bool)]) {
     let ty_name = format!("{ty:?}").to_lowercase();
+    let overflow_op = matches!(
+        op,
+        "uaddo" | "saddo" | "usubo" | "ssubo" | "umulo" | "smulo" | "snego"
+    );
+    let result_ty = if matches!(
+        op,
+        "eq" | "ne" | "lt" | "gt" | "le" | "ge" | "slt" | "sgt" | "sle" | "sge" | "is_zero"
+    ) {
+        Type::I1
+    } else {
+        ty
+    };
+    let result_name = format!("{result_ty:?}").to_lowercase();
     let expression = match op {
         "snego" => format!("(v5.{ty_name}, v6.i1) = snego v3;"),
-        "smulo" | "umulo" => format!("(v5.{ty_name}, v6.i1) = {op} v3 v4;"),
-        "not" => format!("v5.{ty_name} = not v3;"),
+        _ if overflow_op => format!("(v5.{ty_name}, v6.i1) = {op} v3 v4;"),
+        "not" | "neg" | "is_zero" => format!("v5.{result_name} = {op} v3;"),
         "shl" | "shr" | "sar" => format!("v5.{ty_name} = {op} v4 v3;"),
-        _ => format!("v5.{ty_name} = {op} v3 v4;"),
+        _ => format!("v5.{result_name} = {op} v3 v4;"),
     };
-    let status = if matches!(op, "snego" | "smulo" | "umulo") {
+    let status = if overflow_op {
         "v7.i8 = zext v6 i8;\n    return v7;"
     } else {
         "return 0.i8;"
     };
-    let triple = native_isa().triple();
     let source = format!(
-        r#"target = "{triple}"
-func public %apply(v0.*{ty_name}, v1.*{ty_name}, v2.*{ty_name}) -> i8 {{
+        r#"func public %apply(v0.*{ty_name}, v1.*{ty_name}, v2.*{result_name}) -> i8 {{
 block0:
     v3.{ty_name} = mload v0 {ty_name};
     v4.{ty_name} = mload v1 {ty_name};
     {expression}
-    mstore v2 v5 {ty_name};
+    mstore v2 v5 {result_name};
     {status}
 }}
 "#
     );
     for level in [OptLevel::O0, OptLevel::O2] {
-        let module = sonatina_parser::parse_module(&source)
-            .expect("scalar IR should parse")
-            .module;
+        let module = parse_verified_native_module(&source);
+        let size = module.ctx.size_of(result_ty).unwrap();
         let artifact = Compile::new(module, CraneliftJitBackend::new())
             .with_opt_level(level)
             .compile()
             .unwrap_or_else(|errors| panic!("{op} {ty_name} {level:?}: {errors:?}"));
         let apply: unsafe extern "C" fn(*const u8, *const u8, *mut u8) -> u8 =
             unsafe { std::mem::transmute(artifact.function_address("apply").unwrap()) };
-        let size = native_isa()
-            .type_layout()
-            .size_of(ty, &ModuleCtx::new(&native_isa()))
-            .unwrap();
         for &(lhs, rhs, expected, overflow) in cases {
             let lhs_bytes = lhs.zext(Type::I256).as_i256().to_u256().to_little_endian();
             let rhs_bytes = rhs.zext(Type::I256).as_i256().to_u256().to_little_endian();
@@ -64,6 +70,161 @@ block0:
                 "{op} {lhs:?} {rhs:?} {level:?}"
             );
             assert_eq!(status, u8::from(overflow), "{op} {lhs:?} {rhs:?} {level:?}");
+            assert!(result[size..].iter().all(|&byte| byte == 0xa5));
+        }
+    }
+}
+
+#[test]
+fn integer_operations_match_ir_at_every_width() {
+    for ty in [
+        Type::I1,
+        Type::I8,
+        Type::I16,
+        Type::I32,
+        Type::I64,
+        Type::I128,
+        Type::I256,
+    ] {
+        let mut values = vec![
+            Immediate::zero(ty),
+            Immediate::one(ty),
+            Immediate::all_one(ty),
+            Immediate::signed_min(ty),
+            Immediate::signed_max(ty),
+        ];
+        if ty != Type::I1 {
+            values.extend([2, -2, 17, -17].map(|n| Immediate::from_i256(I256::from(n), ty)));
+            let mut state = 0x7ab9_63d2_108e_f541u64;
+            for _ in 0..8 {
+                let bytes: [u8; 32] = std::array::from_fn(|_| {
+                    state ^= state << 13;
+                    state ^= state >> 7;
+                    state ^= state << 17;
+                    state as u8
+                });
+                values.push(Immediate::from_i256(
+                    I256::from(U256::from_little_endian(&bytes)),
+                    ty,
+                ));
+            }
+        }
+        for op in [
+            "add", "sub", "mul", "neg", "not", "and", "or", "xor", "udiv", "sdiv", "umod", "smod",
+            "eq", "ne", "lt", "gt", "le", "ge", "slt", "sgt", "sle", "sge", "is_zero", "uaddo",
+            "saddo", "usubo", "ssubo", "umulo", "smulo", "snego", "uaddsat", "saddsat", "usubsat",
+            "ssubsat", "umulsat", "smulsat",
+        ] {
+            if ty == Type::I1 && op.ends_with("sat") {
+                continue;
+            }
+            let mut cases = Vec::new();
+            for &lhs in &values {
+                for &rhs in &values {
+                    if matches!(op, "udiv" | "sdiv" | "umod" | "smod") && rhs.is_zero() {
+                        continue;
+                    }
+                    let expected = match op {
+                        "uaddo" => lhs.overflowing_uadd(rhs),
+                        "saddo" => lhs.overflowing_sadd(rhs),
+                        "usubo" => lhs.overflowing_usub(rhs),
+                        "ssubo" => lhs.overflowing_ssub(rhs),
+                        "umulo" => lhs.overflowing_umul(rhs),
+                        "smulo" => lhs.overflowing_smul(rhs),
+                        "snego" => lhs.overflowing_sneg(),
+                        _ => (
+                            match op {
+                                "add" => lhs + rhs,
+                                "sub" => lhs - rhs,
+                                "mul" => lhs * rhs,
+                                "neg" => -lhs,
+                                "not" => !lhs,
+                                "and" => lhs & rhs,
+                                "or" => lhs | rhs,
+                                "xor" => lhs ^ rhs,
+                                "udiv" => lhs.udiv(rhs),
+                                "sdiv" => lhs.sdiv(rhs),
+                                "umod" => lhs.urem(rhs),
+                                "smod" => lhs.srem(rhs),
+                                "eq" => lhs.imm_eq(rhs),
+                                "ne" => lhs.imm_ne(rhs),
+                                "lt" => lhs.lt(rhs),
+                                "gt" => lhs.gt(rhs),
+                                "le" => lhs.le(rhs),
+                                "ge" => lhs.ge(rhs),
+                                "slt" => lhs.slt(rhs),
+                                "sgt" => lhs.sgt(rhs),
+                                "sle" => lhs.sle(rhs),
+                                "sge" => lhs.sge(rhs),
+                                "is_zero" => lhs.is_zero().into(),
+                                "uaddsat" => lhs.saturating_uadd(rhs),
+                                "saddsat" => lhs.saturating_sadd(rhs),
+                                "usubsat" => lhs.saturating_usub(rhs),
+                                "ssubsat" => lhs.saturating_ssub(rhs),
+                                "umulsat" => lhs.saturating_umul(rhs),
+                                "smulsat" => lhs.saturating_smul(rhs),
+                                _ => unreachable!(),
+                            },
+                            false,
+                        ),
+                    };
+                    cases.push((lhs, rhs, expected.0, expected.1));
+                }
+            }
+            check_scalar_cases(op, ty, &cases);
+        }
+    }
+}
+
+#[test]
+fn boolean_producers_remain_canonical_through_calls_and_control_flow() {
+    let source = r#"
+func private %identity(v0.i1) -> i1 {
+block0:
+    return v0;
+}
+func public %apply(v0.*i1, v1.*i1, v2.*i1) -> i8 {
+block0:
+    v3.i1 = mload v0 i1;
+    v4.i1 = mload v1 i1;
+    v5.i1 = add v3 v4;
+    v6.i1 = call %identity v5;
+    v7.i1 = eq v6 0.i1;
+    br v6 block1 block2;
+block1:
+    jump block3;
+block2:
+    jump block3;
+block3:
+    v8.i1 = phi (1.i1 block1) (0.i1 block2);
+    mstore v2 v6 i1;
+    v9.i1 = eq v8 v6;
+    v10.i8 = zext v7 i8;
+    v11.i8 = zext v9 i8;
+    v12.i8 = mul v11 2.i8;
+    v13.i8 = add v12 v10;
+    return v13;
+}
+"#;
+    for level in [OptLevel::O0, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap();
+        let apply: unsafe extern "C" fn(*const u8, *const u8, *mut u8) -> u8 =
+            unsafe { std::mem::transmute(artifact.function_address("apply").unwrap()) };
+        // Noncanonical memory bytes must be truncated to their low bit on load.
+        for lhs in [0u8, 1, 2, 3, 254, 255] {
+            for rhs in [0u8, 1, 2, 3, 254, 255] {
+                let expected = (lhs ^ rhs) & 1;
+                let mut stored = 0xa5;
+                let status = unsafe { apply(&lhs, &rhs, &mut stored) };
+                assert_eq!(stored, expected, "{lhs} {rhs} {level:?}");
+                assert_eq!(status, 2 + (1 - expected), "{lhs} {rhs} {level:?}");
+            }
         }
     }
 }
@@ -260,10 +421,8 @@ fn i128_division_by_zero_traps() {
             "O2" => OptLevel::O2,
             _ => unreachable!(),
         };
-        let triple = native_isa().triple();
         let source = format!(
-            r#"target = "{triple}"
-func public %divide(v0.*i128, v1.*i128, v2.*i128) {{
+            r#"func public %divide(v0.*i128, v1.*i128, v2.*i128) {{
 block0:
     v3.i128 = mload v0 i128;
     v4.i128 = mload v1 i128;
@@ -273,7 +432,7 @@ block0:
 }}
 "#
         );
-        let module = sonatina_parser::parse_module(&source).unwrap().module;
+        let module = parse_verified_native_module(&source);
         let artifact = Compile::new(module, CraneliftJitBackend::new())
             .with_opt_level(level)
             .compile()
