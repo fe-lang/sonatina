@@ -79,6 +79,11 @@ impl CraneliftObjectBackend {
         builder
             .set("is_pic", if is_pic { "true" } else { "false" })
             .map_err(|error| CraneliftError::Compilation(error.to_string()))?;
+        // The native ABI passes i128 scalars directly. Cranelift's x86_64
+        // calling conventions require LLVM ABI extensions for these values.
+        builder
+            .set("enable_llvm_abi_extensions", "true")
+            .map_err(|error| CraneliftError::Compilation(error.to_string()))?;
         Ok(settings::Flags::new(builder))
     }
 
@@ -261,8 +266,19 @@ fn host_architecture() -> Option<Architecture> {
 
 #[cfg(test)]
 mod tests {
-    use super::cranelift_opt_level;
-    use crate::compile::OptLevel;
+    use super::{CraneliftObjectBackend, cranelift_opt_level};
+    use crate::{backend::BackendOptions, compile::OptLevel};
+
+    #[test]
+    fn object_and_jit_flags_enable_direct_i128_signatures() {
+        for opt_level in [OptLevel::O0, OptLevel::O2] {
+            for is_pic in [false, true] {
+                let flags =
+                    CraneliftObjectBackend::flags(&BackendOptions { opt_level }, is_pic).unwrap();
+                assert!(flags.enable_llvm_abi_extensions());
+            }
+        }
+    }
 
     #[test]
     fn sonatina_opt_levels_map_to_cranelift_opt_levels() {

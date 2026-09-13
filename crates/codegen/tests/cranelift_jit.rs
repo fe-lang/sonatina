@@ -1,5 +1,7 @@
 #![allow(clippy::crosspointer_transmute)]
 
+#[path = "cranelift/abi.rs"]
+mod abi;
 #[path = "cranelift/casts.rs"]
 mod casts;
 #[path = "cranelift/globals.rs"]

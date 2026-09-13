@@ -90,6 +90,33 @@ fn generic_pipeline_emits_a_host_object() {
 }
 
 #[test]
+fn object_backend_compiles_direct_i128_signatures_and_calls() {
+    let triple = native_isa(host_architecture()).triple();
+    let source = include_str!("../test_files/cranelift/i128_abi.sntn");
+    for level in [OptLevel::O0, OptLevel::O2] {
+        let module = sonatina_parser::parse_module(&format!("target = \"{triple}\"\n{source}"))
+            .unwrap()
+            .module;
+        let report = verify_module(&module, &VerifierConfig::for_level(VerificationLevel::Full));
+        assert!(!report.has_errors(), "{report}");
+        let artifact = Compile::new(module, CraneliftObjectBackend::new())
+            .with_opt_level(level)
+            .compile()
+            .unwrap();
+        let object = object::File::parse(artifact.as_bytes()).unwrap();
+        for name in ["mix", "forward", "via_pointers"] {
+            assert!(
+                object.symbols().any(|symbol| !symbol.is_undefined()
+                    && symbol
+                        .name()
+                        .is_ok_and(|s| s.trim_start_matches('_') == name)),
+                "missing {name} at {level:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn object_globals_preserve_linkage_storage_and_relocations() {
     let triple = native_isa(host_architecture()).triple();
     let source = format!(
