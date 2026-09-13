@@ -1,4 +1,5 @@
 mod abi;
+mod globals;
 mod i256;
 mod memory;
 mod scalar;
@@ -12,13 +13,13 @@ use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use cranelift_module::{FuncId, Linkage, Module as ClifModule};
 
 use sonatina_ir::{
-    BlockId, ControlFlowGraph, Function, Linkage as SonatinaLinkage, Module, Type, ValueId,
+    BlockId, ControlFlowGraph, Function, Linkage as SonatinaLinkage, Module, Type, Value, ValueId,
     inst::{inst_set::InstSetExt, native::inst_set::NativeInstKind},
     isa::native::inst_set as native_inst_set,
     module::FuncRef,
 };
 
-use self::{abi::*, i256::*, memory::*, scalar::*};
+use self::{abi::*, globals::*, i256::*, memory::*, scalar::*};
 
 pub(super) fn translate_module(
     module: &Module,
@@ -26,6 +27,7 @@ pub(super) fn translate_module(
 ) -> Result<HashMap<String, FuncId>, String> {
     let mut defined_func_map: HashMap<String, FuncId> = HashMap::new();
     let mut func_id_map: HashMap<FuncRef, FuncId> = HashMap::new();
+    let data_ids = define_globals(&module.ctx, clif_module)?;
 
     let funcs = module.funcs();
 
@@ -37,11 +39,7 @@ pub(super) fn translate_module(
             Ok((name, clif_sig))
         })?;
 
-        let linkage = match module.ctx.func_linkage(func_ref) {
-            SonatinaLinkage::Public => Linkage::Export,
-            SonatinaLinkage::Private => Linkage::Local,
-            SonatinaLinkage::External => Linkage::Import,
-        };
+        let linkage = translate_linkage(module.ctx.func_linkage(func_ref));
         let func_id = clif_module
             .declare_function(&name, linkage, &sig)
             .map_err(|e| format!("failed to declare function {name}: {e}"))?;
@@ -67,6 +65,7 @@ pub(super) fn translate_module(
                     func_ref,
                     func_id,
                     &func_id_map,
+                    &data_ids,
                     clif_module,
                 )?;
                 Ok(true)
@@ -89,12 +88,21 @@ fn emit_trap(builder: &mut FunctionBuilder, code: TrapCode) {
     builder.ins().trap(code);
 }
 
+fn translate_linkage(linkage: SonatinaLinkage) -> Linkage {
+    match linkage {
+        SonatinaLinkage::Public => Linkage::Export,
+        SonatinaLinkage::Private => Linkage::Local,
+        SonatinaLinkage::External => Linkage::Import,
+    }
+}
+
 fn translate_function(
     module: &Module,
     function: &Function,
     func_ref: FuncRef,
     func_id: FuncId,
     func_id_map: &HashMap<FuncRef, FuncId>,
+    data_ids: &GlobalDataMap,
     clif_module: &mut impl ClifModule,
 ) -> Result<(), String> {
     let target_config = clif_module.target_config();
@@ -141,6 +149,17 @@ fn translate_function(
         let param = builder.block_params(clif_entry)[idx + arg_offset];
         let param = normalize_scalar(param, function.dfg.value_ty(arg_value), &mut builder);
         value_map.insert(arg_value, param);
+    }
+
+    // Materialize global addresses in the entry block so they dominate all
+    // uses, including phi edges. const.ref uses these same module definitions.
+    for (value_id, value) in function.dfg.values_iter() {
+        if let Value::Global { gv, .. } = value
+            && function.dfg.users(value_id).next().is_some()
+        {
+            let address = global_address(*gv, data_ids, clif_module, &mut builder)?;
+            value_map.insert(value_id, address);
+        }
     }
 
     let inst_set = function.inst_set();
@@ -1376,16 +1395,13 @@ fn translate_function(
                     let result_ty = function.dfg.value_ty(result);
                     let result_addr =
                         create_stack_slot_for_type(result_ty, &module.ctx, &mut builder)?;
-                    if !is_undef_value(function, *insert.dest()) {
-                        let source =
-                            resolve_value(function, *insert.dest(), &value_map, &mut builder)?;
-                        copy_bytes(
-                            source,
-                            result_addr,
-                            value_storage_size(result_ty, &module.ctx)?,
-                            &mut builder,
-                        );
-                    }
+                    let source = resolve_value(function, *insert.dest(), &value_map, &mut builder)?;
+                    copy_bytes(
+                        source,
+                        result_addr,
+                        value_storage_size(result_ty, &module.ctx)?,
+                        &mut builder,
+                    );
 
                     let idx = constant_value_index(function, *insert.idx(), "insert_value")?;
                     let (offset, elem_ty) = aggregate_elem_offset(&module.ctx, result_ty, idx)?;
@@ -1578,26 +1594,12 @@ fn translate_function(
                 }
                 NativeInstKind::ConstRef(const_ref) => {
                     if let Some(result) = function.dfg.inst_result(inst_id) {
-                        let gv_ref = const_ref.global().gv();
-                        let result_ty = function.dfg.value_ty(result);
-                        let slot = builder.create_sized_stack_slot(
-                            referenced_value_stack_slot_data(result_ty, &module.ctx)?,
-                        );
-                        let addr = builder.ins().stack_addr(pointer_type, slot, 0);
-                        let init_data = module
-                            .ctx
-                            .with_gv_store(|store| store.init_data(gv_ref).cloned());
-                        if let Some(init) = init_data {
-                            let gv_ty = module.ctx.with_gv_store(|store| store.ty(gv_ref));
-                            materialize_gv_initializer(
-                                &init,
-                                gv_ty,
-                                addr,
-                                0,
-                                &module.ctx,
-                                &mut builder,
-                            )?;
-                        }
+                        let addr = global_address(
+                            const_ref.global().gv(),
+                            data_ids,
+                            clif_module,
+                            &mut builder,
+                        )?;
                         value_map.insert(result, addr);
                     }
                 }

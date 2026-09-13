@@ -4,10 +4,7 @@ use cranelift_codegen::ir::{
     self as clif, InstBuilder, MemFlagsData, StackSlotData, StackSlotKind,
 };
 use cranelift_frontend::FunctionBuilder;
-use sonatina_ir::{
-    Function, Immediate, Type, Value, ValueId, global_variable::GvInitializer, module::ModuleCtx,
-    types::CompoundType,
-};
+use sonatina_ir::{Function, Type, ValueId, module::ModuleCtx, types::CompoundType};
 
 use super::{
     copy_bytes, create_stack_slot_for_type, load_i256_limb, resize_int_value, resolve_value,
@@ -167,133 +164,6 @@ pub(super) fn resolve_index(
     Ok(resize_int_value(value, clif::types::I64, signed, builder))
 }
 
-pub(super) fn materialize_gv_initializer(
-    init: &GvInitializer,
-    ty: Type,
-    base: clif::Value,
-    offset: i32,
-    ctx: &ModuleCtx,
-    builder: &mut FunctionBuilder,
-) -> Result<(), String> {
-    match init {
-        GvInitializer::Immediate(imm) => {
-            let matches_type = imm.ty() == ty
-                || (ty.is_pointer(ctx) && imm.ty() == ctx.type_layout.pointer_repl());
-            if !matches_type {
-                return Err(format!(
-                    "global initializer type mismatch: expected {ty:?}, found {:?}",
-                    imm.ty()
-                ));
-            }
-
-            match imm {
-                Immediate::I1(v) => {
-                    let val = builder.ins().iconst(clif::types::I8, i64::from(*v));
-                    builder.ins().store(MemFlagsData::new(), val, base, offset);
-                }
-                Immediate::I8(v) => {
-                    let val = builder.ins().iconst(clif::types::I8, i64::from(*v));
-                    builder.ins().store(MemFlagsData::new(), val, base, offset);
-                }
-                Immediate::I16(v) => {
-                    let val = builder.ins().iconst(clif::types::I16, i64::from(*v));
-                    builder.ins().store(MemFlagsData::new(), val, base, offset);
-                }
-                Immediate::I32(v) => {
-                    let val = builder.ins().iconst(clif::types::I32, i64::from(*v));
-                    builder.ins().store(MemFlagsData::new(), val, base, offset);
-                }
-                Immediate::I64(v) => {
-                    let val = builder.ins().iconst(clif::types::I64, *v);
-                    builder.ins().store(MemFlagsData::new(), val, base, offset);
-                }
-                Immediate::I128(v) => {
-                    store_little_endian_words(&v.to_le_bytes(), base, offset, builder)?;
-                }
-                Immediate::I256(v) => {
-                    store_little_endian_words(
-                        &v.to_u256().to_little_endian(),
-                        base,
-                        offset,
-                        builder,
-                    )?;
-                }
-                Immediate::EnumTag { .. } => {
-                    return Err("enum-tag global initializer survived legalization".to_string());
-                }
-            }
-        }
-        GvInitializer::Array(elems) => {
-            let Some(CompoundType::Array { elem, len }) = ty.resolve_compound(ctx) else {
-                return Err(format!("array initializer used for non-array type {ty:?}"));
-            };
-            if elems.len() != len {
-                return Err(format!(
-                    "array initializer length mismatch: expected {len}, found {}",
-                    elems.len()
-                ));
-            }
-            let elem_size = value_storage_size(elem, ctx)?;
-            for (index, elem_init) in elems.iter().enumerate() {
-                let elem_offset = u32::try_from(index)
-                    .ok()
-                    .and_then(|index| index.checked_mul(elem_size))
-                    .and_then(|offset| i32::try_from(offset).ok())
-                    .and_then(|elem_offset| offset.checked_add(elem_offset))
-                    .ok_or_else(|| "array initializer offset overflows i32".to_string())?;
-                materialize_gv_initializer(elem_init, elem, base, elem_offset, ctx, builder)?;
-            }
-        }
-        GvInitializer::Struct(fields) => {
-            let Some(CompoundType::Struct(data)) = ty.resolve_compound(ctx) else {
-                return Err(format!(
-                    "struct initializer used for non-struct type {ty:?}"
-                ));
-            };
-            if fields.len() != data.fields.len() {
-                return Err(format!(
-                    "struct initializer field count mismatch: expected {}, found {}",
-                    data.fields.len(),
-                    fields.len()
-                ));
-            }
-            for (index, (field_init, field_ty)) in fields.iter().zip(data.fields).enumerate() {
-                let (field_offset, _) = aggregate_elem_offset(ctx, ty, index)?;
-                let field_offset = offset
-                    .checked_add(field_offset)
-                    .ok_or_else(|| "struct initializer offset overflows i32".to_string())?;
-                materialize_gv_initializer(field_init, field_ty, base, field_offset, ctx, builder)?;
-            }
-        }
-    }
-    Ok(())
-}
-
-pub(super) fn store_little_endian_words(
-    bytes: &[u8],
-    base: clif::Value,
-    offset: i32,
-    builder: &mut FunctionBuilder,
-) -> Result<(), String> {
-    let (words, remainder) = bytes.as_chunks::<8>();
-    if !remainder.is_empty() {
-        return Err("wide immediate contains an incomplete word".to_string());
-    }
-    for (index, bytes) in words.iter().enumerate() {
-        let word_offset = i32::try_from(index * 8)
-            .ok()
-            .and_then(|word_offset| offset.checked_add(word_offset))
-            .ok_or_else(|| "wide immediate offset overflows i32".to_string())?;
-        let value = builder
-            .ins()
-            .iconst(clif::types::I64, u64::from_le_bytes(*bytes) as i64);
-        builder
-            .ins()
-            .store(MemFlagsData::new(), value, base, word_offset);
-    }
-    Ok(())
-}
-
 pub(super) fn value_storage_size(ty: Type, ctx: &ModuleCtx) -> Result<u32, String> {
     let size = ctx
         .size_of(ty)
@@ -301,7 +171,7 @@ pub(super) fn value_storage_size(ty: Type, ctx: &ModuleCtx) -> Result<u32, Strin
     u32::try_from(size).map_err(|_| format!("type {ty:?} is too large for Cranelift"))
 }
 
-pub(super) fn stack_slot_data(ty: Type, ctx: &ModuleCtx) -> Result<StackSlotData, String> {
+pub(super) fn value_storage_alignment(ty: Type, ctx: &ModuleCtx) -> Result<u64, String> {
     let alignment = ctx
         .align_of(ty)
         .map_err(|error| format!("cannot align type {ty:?}: {error:?}"))?;
@@ -310,6 +180,11 @@ pub(super) fn stack_slot_data(ty: Type, ctx: &ModuleCtx) -> Result<StackSlotData
             "type {ty:?} has non-power-of-two alignment {alignment}"
         ));
     }
+    Ok(alignment as u64)
+}
+
+pub(super) fn stack_slot_data(ty: Type, ctx: &ModuleCtx) -> Result<StackSlotData, String> {
+    let alignment = value_storage_alignment(ty, ctx)?;
     let align_shift = u8::try_from(alignment.trailing_zeros())
         .map_err(|_| format!("type {ty:?} alignment {alignment} is too large for Cranelift"))?;
     Ok(StackSlotData::new(
@@ -323,20 +198,6 @@ pub(super) fn referenced_value_storage_size(ty: Type, ctx: &ModuleCtx) -> Result
     match ty.resolve_compound(ctx) {
         Some(CompoundType::ObjRef(inner) | CompoundType::ConstRef(inner)) => {
             value_storage_size(inner, ctx)
-        }
-        _ => Err(format!(
-            "expected object or constant reference type, got {ty:?}"
-        )),
-    }
-}
-
-pub(super) fn referenced_value_stack_slot_data(
-    ty: Type,
-    ctx: &ModuleCtx,
-) -> Result<StackSlotData, String> {
-    match ty.resolve_compound(ctx) {
-        Some(CompoundType::ObjRef(inner) | CompoundType::ConstRef(inner)) => {
-            stack_slot_data(inner, ctx)
         }
         _ => Err(format!(
             "expected object or constant reference type, got {ty:?}"
@@ -378,10 +239,6 @@ pub(super) fn constant_value_index(
         .value_imm(value_id)
         .and_then(|imm| imm.to_nonnegative_usize())
         .ok_or_else(|| format!("{inst_name} index must be a nonnegative constant"))
-}
-
-pub(super) fn is_undef_value(function: &Function, value_id: ValueId) -> bool {
-    matches!(function.dfg.value(value_id), Value::Undef { .. })
 }
 
 pub(super) fn compute_element_size(obj_ty: Type, ctx: &ModuleCtx) -> Result<usize, String> {

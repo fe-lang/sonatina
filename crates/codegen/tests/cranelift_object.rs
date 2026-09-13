@@ -16,6 +16,7 @@ use sonatina_ir::{
     module::ModuleCtx,
 };
 use sonatina_triple::{Architecture, OperatingSystem, TargetTriple, Vendor};
+use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module};
 
 fn host_architecture() -> Architecture {
     if cfg!(target_arch = "x86_64") {
@@ -85,6 +86,79 @@ fn generic_pipeline_emits_a_host_object() {
         assert_macos_platform_metadata(bytes);
     } else if cfg!(target_os = "linux") {
         assert_eq!(object.format(), object::BinaryFormat::Elf);
+    }
+}
+
+#[test]
+fn object_globals_preserve_linkage_storage_and_relocations() {
+    let triple = native_isa(host_architecture()).triple();
+    let source = format!(
+        r#"
+target = "{triple}"
+type @Aligned = {{i8, i128}};
+global public const @Aligned $table = {{7, -1}};
+global private i64 $counter = 42;
+global public i256 $zero;
+global external i64 $imported;
+func public %read() -> i64 {{
+block0:
+    v0.i64 = mload $imported i64;
+    v1.i64 = mload $counter i64;
+    v2.i64 = add v0 v1;
+    return v2;
+}}
+"#
+    );
+    for level in [OptLevel::O0, OptLevel::O2] {
+        let module = sonatina_parser::parse_module(&source).unwrap().module;
+        let report = verify_module(&module, &VerifierConfig::for_level(VerificationLevel::Full));
+        assert!(!report.has_errors(), "{report}");
+        let artifact = Compile::new(module, CraneliftObjectBackend::new())
+            .with_opt_level(level)
+            .compile()
+            .unwrap();
+        let object = object::File::parse(artifact.as_bytes()).unwrap();
+        for (name, public, kind, alignment) in [
+            ("table", true, object::SectionKind::ReadOnlyData, 16),
+            ("counter", false, object::SectionKind::Data, 8),
+            ("zero", true, object::SectionKind::UninitializedData, 16),
+        ] {
+            let symbols: Vec<_> = object
+                .symbols()
+                .filter(|symbol| {
+                    symbol
+                        .name()
+                        .is_ok_and(|s| s.trim_start_matches('_') == name)
+                })
+                .collect();
+            assert_eq!(symbols.len(), 1, "{name} must have one shared definition");
+            let symbol = &symbols[0];
+            assert_eq!(symbol.is_global(), public, "{name}");
+            assert!(!symbol.is_undefined(), "{name}");
+            let section = object
+                .section_by_index(symbol.section_index().unwrap())
+                .unwrap();
+            assert_eq!(section.kind(), kind, "{name}");
+            assert!(section.align() >= alignment, "{name}");
+            assert_eq!(symbol.address() % alignment, 0, "{name}");
+            if name == "table" {
+                let bytes = section.data_range(symbol.address(), 32).unwrap().unwrap();
+                assert_eq!(bytes[0], 7);
+                assert!(bytes[1..16].iter().all(|&byte| byte == 0));
+                assert!(bytes[16..32].iter().all(|&byte| byte == 255));
+            }
+        }
+        assert!(object.symbols().any(|symbol| {
+            symbol.is_undefined()
+                && symbol
+                    .name()
+                    .is_ok_and(|name| name.trim_start_matches('_') == "imported")
+        }));
+        assert!(
+            object
+                .sections()
+                .any(|section| section.relocations().next().is_some())
+        );
     }
 }
 

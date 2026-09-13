@@ -2,6 +2,8 @@
 
 #[path = "cranelift/casts.rs"]
 mod casts;
+#[path = "cranelift/globals.rs"]
+mod globals;
 #[path = "cranelift/memory.rs"]
 mod memory;
 #[path = "cranelift/references.rs"]

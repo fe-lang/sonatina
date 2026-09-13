@@ -9,7 +9,8 @@ use sonatina_ir::{Function, Immediate, Type, Value, ValueId, module::ModuleCtx};
 use super::{
     DivRemKind,
     memory::{stack_slot_data, storage_chunks},
-    scalar_constant, sonatina_scalar_type_to_clif_or_err,
+    scalar_constant, sonatina_scalar_type_to_clif_or_err, sonatina_type_to_clif_or_err,
+    uses_indirect_value_representation, value_storage_size,
 };
 
 const I256_LIMBS: usize = 4;
@@ -1131,9 +1132,6 @@ pub(super) fn resolve_value(
     if let Some(&clif_val) = value_map.get(&value_id) {
         return Ok(clif_val);
     }
-    // Check if there's a Variable for this (phi values in loops)
-    // Variables are looked up via the FunctionBuilder's SSA system
-
     let value = function.dfg.value(value_id);
     match value {
         Value::Immediate { imm, ty } => match imm {
@@ -1146,7 +1144,34 @@ pub(super) fn resolve_value(
                 Ok(val)
             }
         },
-        _ => Err(format!("unresolved value v{}", value_id.0)),
+        Value::Undef { ty } => {
+            // This is a backend choice for surviving undef values, not an IR
+            // promise that optimizations must preserve zero.
+            let ctx = function.ctx();
+            let size = value_storage_size(*ty, ctx)?;
+            if uses_indirect_value_representation(ctx, *ty) {
+                let address = create_stack_slot_for_type(*ty, ctx, builder)?;
+                for (offset, chunk_ty) in storage_chunks(size) {
+                    let zero = scalar_constant(chunk_ty, 0, builder);
+                    builder
+                        .ins()
+                        .store(MemFlagsData::new(), zero, address, offset);
+                }
+                Ok(address)
+            } else {
+                let pointer_ty =
+                    sonatina_scalar_type_to_clif_or_err(ctx.type_layout.pointer_repl())?;
+                let clif_ty = sonatina_type_to_clif_or_err(*ty, pointer_ty)?;
+                Ok(scalar_constant(clif_ty, 0, builder))
+            }
+        }
+        Value::Global { gv, .. } => Err(format!(
+            "unresolved global address {gv:?} at v{}",
+            value_id.0
+        )),
+        Value::Arg { .. } | Value::Inst { .. } => {
+            Err(format!("unresolved SSA value v{}: {value:?}", value_id.0))
+        }
     }
 }
 
