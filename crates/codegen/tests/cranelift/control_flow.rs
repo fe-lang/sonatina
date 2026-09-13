@@ -1,7 +1,83 @@
 use sonatina_codegen::{Compile, compile::OptLevel, isa::cranelift::CraneliftJitBackend};
-use sonatina_ir::U256;
+use sonatina_ir::{I256, Immediate, Type, U256};
 
-use super::parse_native_module;
+use super::{parse_native_module, parse_verified_native_module};
+
+#[test]
+fn wide_division_loops_compose_with_each_other_and_sonatina_phi_edges() {
+    for (width, ty) in [(128, Type::I128), (256, Type::I256)] {
+        for (div, rem) in [("udiv", "umod"), ("sdiv", "smod")] {
+            let source = format!(
+                r#"
+func public %iterate(v0.*i{width}, v1.*i{width}, v2.i64, v3.*i{width}) {{
+block0:
+    v4.i{width} = mload v0 i{width};
+    v5.i{width} = mload v1 i{width};
+    jump block1;
+block1:
+    v6.i{width} = phi (v4 block0) (v10 block1);
+    v7.i64 = phi (0.i64 block0) (v11 block1);
+    v8.i{width} = {div} v6 v5;
+    v9.i{width} = {rem} v6 v5;
+    v10.i{width} = add v8 v9;
+    v11.i64 = add v7 1.i64;
+    v12.i1 = lt v11 v2;
+    br v12 block1 block2;
+block2:
+    mstore v3 v10 i{width};
+    return;
+}}
+"#
+            );
+            for level in [OptLevel::O0, OptLevel::O2] {
+                let artifact = Compile::new(
+                    parse_verified_native_module(&source),
+                    CraneliftJitBackend::new(),
+                )
+                .with_opt_level(level)
+                .compile()
+                .unwrap();
+                let iterate: unsafe extern "C" fn(*const u8, *const u8, i64, *mut u8) =
+                    unsafe { std::mem::transmute(artifact.function_address("iterate").unwrap()) };
+                for lhs in [
+                    Immediate::signed_min(ty),
+                    Immediate::all_one(ty),
+                    Immediate::signed_max(ty),
+                ] {
+                    for rhs in [3, -7, -1].map(|n| Immediate::from_i256(I256::from(n), ty)) {
+                        for count in [1, 2, 5] {
+                            let mut expected = lhs;
+                            for _ in 0..count {
+                                expected = if div == "sdiv" {
+                                    expected.sdiv(rhs) + expected.srem(rhs)
+                                } else {
+                                    expected.udiv(rhs) + expected.urem(rhs)
+                                };
+                            }
+                            let lhs = lhs.zext(Type::I256).as_i256().to_u256().to_little_endian();
+                            let rhs = rhs.zext(Type::I256).as_i256().to_u256().to_little_endian();
+                            let expected = expected
+                                .zext(Type::I256)
+                                .as_i256()
+                                .to_u256()
+                                .to_little_endian();
+                            let mut output = [0xa5; 32];
+                            unsafe {
+                                iterate(lhs.as_ptr(), rhs.as_ptr(), count, output.as_mut_ptr())
+                            };
+                            assert_eq!(
+                                &output[..width / 8],
+                                &expected[..width / 8],
+                                "i{width} {div} {level:?} {count}"
+                            );
+                            assert!(output[width / 8..].iter().all(|&byte| byte == 0xa5));
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
 
 #[test]
 fn loop_carried_i256_survives_next_result_slot_write() {

@@ -1,3 +1,6 @@
+#[cfg(feature = "cranelift-jit")]
+use std::{hint::black_box, time::Instant};
+
 use object::{Object, ObjectSection, ObjectSymbol};
 #[cfg(feature = "cranelift-jit")]
 use sonatina_codegen::isa::cranelift::CraneliftJitBackend;
@@ -55,6 +58,115 @@ fn return_constant_module(isa: &Native) -> sonatina_ir::Module {
     function_builder.seal_all();
     function_builder.finish();
     builder.build()
+}
+
+fn wide_division_module(width: usize, op: &str) -> sonatina_ir::Module {
+    let triple = native_isa(host_architecture()).triple();
+    let source = format!(
+        r#"target = "{triple}"
+func public %divide(v0.*i{width}, v1.*i{width}, v2.*i{width}) {{
+block0:
+    v3.i{width} = mload v0 i{width};
+    v4.i{width} = mload v1 i{width};
+    v5.i{width} = {op} v3 v4;
+    mstore v2 v5 i{width};
+    return;
+}}
+"#
+    );
+    let module = sonatina_parser::parse_module(&source).unwrap().module;
+    let report = verify_module(&module, &VerifierConfig::for_level(VerificationLevel::Full));
+    assert!(!report.has_errors(), "{report}");
+    module
+}
+
+#[test]
+fn wide_division_stays_within_text_budget() {
+    for width in [128, 256] {
+        for op in ["udiv", "umod", "sdiv", "smod"] {
+            for level in [OptLevel::O0, OptLevel::O2] {
+                let artifact = Compile::new(
+                    wide_division_module(width, op),
+                    CraneliftObjectBackend::new(),
+                )
+                .with_opt_level(level)
+                .compile()
+                .unwrap();
+                let object = object::File::parse(artifact.as_bytes()).unwrap();
+                let text_size: u64 = object
+                    .sections()
+                    .filter(|section| section.kind() == object::SectionKind::Text)
+                    .map(|section| section.size())
+                    .sum();
+                assert!(
+                    text_size > 0 && text_size < 16 * 1024,
+                    "i{width} {op} {level:?} emitted {text_size} text bytes"
+                );
+            }
+        }
+    }
+}
+
+#[cfg(feature = "cranelift-jit")]
+#[test]
+#[ignore = "manual release-profile compile/runtime measurement; run with --release --ignored --nocapture"]
+fn wide_division_release_profile() {
+    if cfg!(debug_assertions) {
+        panic!("measure a release-built compiler");
+    }
+    for width in [128, 256] {
+        for level in [OptLevel::O0, OptLevel::O2] {
+            let module = wide_division_module(width, "udiv");
+            let mut compile_times = Vec::new();
+            let mut text_size = 0;
+            for _ in 0..5 {
+                let compiler = Compile::new(
+                    module.clone_for_funcs(&module.funcs()),
+                    CraneliftObjectBackend::new(),
+                )
+                .with_opt_level(level);
+                let start = Instant::now();
+                let artifact = compiler.compile().unwrap();
+                compile_times.push(start.elapsed());
+                text_size = object::File::parse(artifact.as_bytes())
+                    .unwrap()
+                    .sections()
+                    .filter(|section| section.kind() == object::SectionKind::Text)
+                    .map(|section| section.size())
+                    .sum::<u64>();
+            }
+            compile_times.sort_unstable();
+            let artifact = Compile::new(module, CraneliftJitBackend::new())
+                .with_opt_level(level)
+                .compile()
+                .unwrap();
+            let divide: unsafe extern "C" fn(*const u8, *const u8, *mut u8) =
+                unsafe { std::mem::transmute(artifact.function_address("divide").unwrap()) };
+            let lhs = [0xfdu8; 32];
+            let mut rhs = [0u8; 32];
+            rhs[0] = 7;
+            let mut output = [0u8; 32];
+            // A warmed, fixed-input microbenchmark isolates generated divider
+            // throughput. It is not an application-level performance claim.
+            unsafe { divide(lhs.as_ptr(), rhs.as_ptr(), output.as_mut_ptr()) };
+            let start = Instant::now();
+            for _ in 0..10_000 {
+                unsafe {
+                    divide(
+                        black_box(lhs.as_ptr()),
+                        black_box(rhs.as_ptr()),
+                        output.as_mut_ptr(),
+                    )
+                };
+                black_box(output);
+            }
+            eprintln!(
+                "i{width} {level:?}: text={text_size} bytes, median compile={:?}, 10000 divisions={:?}",
+                compile_times[2],
+                start.elapsed()
+            );
+        }
+    }
 }
 
 #[test]

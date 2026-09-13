@@ -2,6 +2,7 @@ use std::{cmp::Ordering, collections::HashMap};
 
 use cranelift_codegen::ir::{
     self as clif, InstBuilder, MemFlagsData, StackSlotData, StackSlotKind, condcodes::IntCC,
+    instructions::BlockArg,
 };
 use cranelift_frontend::FunctionBuilder;
 use sonatina_ir::{Function, Immediate, Type, Value, ValueId, module::ModuleCtx};
@@ -377,22 +378,7 @@ pub(super) fn emit_i256_neg(
     ))
 }
 
-pub(super) fn i256_limb_bit(
-    limbs: [clif::Value; I256_LIMBS],
-    bit: usize,
-    builder: &mut FunctionBuilder,
-) -> clif::Value {
-    let limb = limbs[bit / I256_LIMB_BITS as usize];
-    let shifted = builder
-        .ins()
-        .ushr_imm_s(limb, (bit % I256_LIMB_BITS as usize) as i64);
-    let one = builder.ins().iconst(clif::types::I64, 1);
-    let bit = builder.ins().band(shifted, one);
-    let zero = builder.ins().iconst(clif::types::I64, 0);
-    builder.ins().icmp(IntCC::NotEqual, bit, zero)
-}
-
-pub(super) fn i256_shl_one_with_bit(
+fn i256_shl_one_with_bit(
     limbs: [clif::Value; I256_LIMBS],
     bit: clif::Value,
     builder: &mut FunctionBuilder,
@@ -410,40 +396,65 @@ pub(super) fn i256_shl_one_with_bit(
     })
 }
 
-pub(super) fn i256_set_bit_if(
-    mut limbs: [clif::Value; I256_LIMBS],
-    bit: usize,
-    condition: clif::Value,
-    builder: &mut FunctionBuilder,
-) -> [clif::Value; I256_LIMBS] {
-    let limb_idx = bit / I256_LIMB_BITS as usize;
-    let mask = 1u64 << (bit % I256_LIMB_BITS as usize);
-    let mask = builder.ins().iconst(clif::types::I64, mask as i64);
-    let with_bit = builder.ins().bor(limbs[limb_idx], mask);
-    limbs[limb_idx] = builder.ins().select(condition, with_bit, limbs[limb_idx]);
-    limbs
-}
-
 pub(super) fn unsigned_div_rem_i256_limbs(
     numerator: [clif::Value; I256_LIMBS],
     denominator: [clif::Value; I256_LIMBS],
     bits: usize,
     builder: &mut FunctionBuilder,
 ) -> ([clif::Value; I256_LIMBS], [clif::Value; I256_LIMBS]) {
-    let mut quotient = zero_i256_limbs(builder);
-    let mut remainder = zero_i256_limbs(builder);
+    debug_assert!(matches!(bits, 128 | 256));
+    // Restoring division consumes the numerator from high bit to low bit.
+    // Carry quotient/remainder contents through a counted CLIF loop instead
+    // of emitting 128/256 copies of the body at every division site.
+    let header = builder.create_block();
+    let exit = builder.create_block();
+    let [bit, q0, q1, q2, q3, r0, r1, r2, r3] =
+        std::array::from_fn(|_| builder.append_block_param(header, clif::types::I64));
+    let results: [clif::Value; I256_LIMBS * 2] =
+        std::array::from_fn(|_| builder.append_block_param(exit, clif::types::I64));
+    let initial_bit = builder.ins().iconst(clif::types::I64, (bits - 1) as i64);
+    let zero = builder.ins().iconst(clif::types::I64, 0);
+    builder.ins().jump(
+        header,
+        &[initial_bit, zero, zero, zero, zero, zero, zero, zero, zero].map(BlockArg::from),
+    );
+    builder.switch_to_block(header);
 
-    for bit in (0..bits).rev() {
-        let next_bit = i256_limb_bit(numerator, bit, builder);
-        remainder = i256_shl_one_with_bit(remainder, next_bit, builder);
-        let remainder_lt_denominator = emit_i256_unsigned_lt_limbs(remainder, denominator, builder);
-        let should_subtract = bool_not(remainder_lt_denominator, builder);
-        let subtracted = sub_i256_limbs(remainder, denominator, builder).0;
-        remainder = select_i256_limbs(should_subtract, subtracted, remainder, builder);
-        quotient = i256_set_bit_if(quotient, bit, should_subtract, builder);
+    let limb_index = builder.ins().ushr_imm_s(bit, 6);
+    let mut limb = numerator[0];
+    for (index, &candidate) in numerator.iter().take(bits / 64).enumerate().skip(1) {
+        let matches = builder
+            .ins()
+            .icmp_imm_s(IntCC::Equal, limb_index, index as i64);
+        limb = builder.ins().select(matches, candidate, limb);
     }
+    let shift = builder.ins().band_imm_s(bit, 63);
+    let shifted = builder.ins().ushr(limb, shift);
+    let next_bit = builder.ins().band_imm_s(shifted, 1);
+    let next_bit = builder.ins().icmp_imm_s(IntCC::NotEqual, next_bit, 0);
+    let remainder = i256_shl_one_with_bit([r0, r1, r2, r3], next_bit, builder);
+    // The shifted remainder cannot overflow: it is at most the numerator
+    // prefix consumed so far, which still fits in `bits` bits.
+    let less = emit_i256_unsigned_lt_limbs(remainder, denominator, builder);
+    let should_subtract = bool_not(less, builder);
+    let subtracted = sub_i256_limbs(remainder, denominator, builder).0;
+    let remainder = select_i256_limbs(should_subtract, subtracted, remainder, builder);
+    let quotient = i256_shl_one_with_bit([q0, q1, q2, q3], should_subtract, builder);
+    let next_bit = builder.ins().iadd_imm_s(bit, -1);
+    let done = builder.ins().icmp_imm_s(IntCC::Equal, bit, 0);
+    let [q0, q1, q2, q3] = quotient;
+    let [r0, r1, r2, r3] = remainder;
+    builder.ins().brif(
+        done,
+        exit,
+        &[q0, q1, q2, q3, r0, r1, r2, r3].map(BlockArg::from),
+        header,
+        &[next_bit, q0, q1, q2, q3, r0, r1, r2, r3].map(BlockArg::from),
+    );
+    builder.switch_to_block(exit);
 
-    (quotient, remainder)
+    let [q0, q1, q2, q3, r0, r1, r2, r3] = results;
+    ([q0, q1, q2, q3], [r0, r1, r2, r3])
 }
 
 pub(super) fn emit_i256_div_rem(
