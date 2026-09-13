@@ -1,5 +1,7 @@
 #![allow(clippy::crosspointer_transmute)]
 
+#[path = "cranelift/casts.rs"]
+mod casts;
 #[path = "cranelift/memory.rs"]
 mod memory;
 #[path = "cranelift/scalar.rs"]
@@ -704,7 +706,7 @@ fn i256_addresses_and_boolean_extensions_round_trip() {
         .function_address("i256_address_round_trip")
         .unwrap();
     let function: unsafe extern "C" fn() -> i32 = unsafe { std::mem::transmute(address) };
-    assert_eq!(unsafe { function() }, 13);
+    assert_eq!(unsafe { function() }, 11);
 }
 
 #[test]

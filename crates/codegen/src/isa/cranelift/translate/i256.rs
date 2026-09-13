@@ -9,7 +9,7 @@ use sonatina_ir::{Function, Immediate, Type, Value, ValueId, module::ModuleCtx};
 use super::{
     DivRemKind,
     memory::{stack_slot_data, storage_chunks},
-    sonatina_scalar_type_to_clif_or_err,
+    scalar_constant, sonatina_scalar_type_to_clif_or_err,
 };
 
 const I256_LIMBS: usize = 4;
@@ -78,33 +78,20 @@ pub(super) fn materialize_scalar_as_i256(
     signed: bool,
     builder: &mut FunctionBuilder,
 ) -> clif::Value {
-    let result = create_i256_slot(builder);
-    let value_ty = builder.func.dfg.value_type(value);
-    let low = if !value_ty.is_int() {
-        bool_to_int_value(value, clif::types::I64, builder)
+    // Extend to two scalar words before materializing the four-word value.
+    // Reducing directly to I64 would discard the upper half of an I128 input.
+    let wide = if source_ty == Type::I1 {
+        bool_to_int_value(value, clif::types::I128, signed, builder)
     } else {
-        resize_int_value(value, clif::types::I64, signed, builder)
+        resize_int_value(value, clif::types::I128, signed, builder)
     };
-    store_i256_limb(result, 0, low, builder);
-
-    let zero = builder.ins().iconst(clif::types::I64, 0);
+    let (low, high) = builder.ins().isplit(wide);
     let fill = if signed {
-        let sign = if !value_ty.is_int() || source_ty == Type::I1 {
-            bool_const(false, builder)
-        } else {
-            let sign_zero = builder.ins().iconst(value_ty, 0);
-            builder.ins().icmp(IntCC::SignedLessThan, value, sign_zero)
-        };
-        let minus_one = builder.ins().iconst(clif::types::I64, -1);
-        builder.ins().select(sign, minus_one, zero)
+        builder.ins().sshr_imm_s(high, 63)
     } else {
-        zero
+        builder.ins().iconst(clif::types::I64, 0)
     };
-
-    for limb in 1..I256_LIMBS {
-        store_i256_limb(result, limb, fill, builder);
-    }
-    result
+    store_i256_limbs([low, high, fill, fill], builder)
 }
 
 pub(super) fn load_i256_limbs(
@@ -1105,11 +1092,6 @@ pub(super) fn resize_int_value(
     builder: &mut FunctionBuilder,
 ) -> clif::Value {
     let from_ty = builder.func.dfg.value_type(value);
-    if !from_ty.is_int() && to_ty.is_int() {
-        let zero = builder.ins().iconst(to_ty, 0);
-        let one = builder.ins().iconst(to_ty, 1);
-        return builder.ins().select(value, one, zero);
-    }
     match from_ty.bits().cmp(&to_ty.bits()) {
         Ordering::Equal => value,
         Ordering::Less if signed => builder.ins().sextend(to_ty, value),
@@ -1121,18 +1103,12 @@ pub(super) fn resize_int_value(
 pub(super) fn bool_to_int_value(
     value: clif::Value,
     to_ty: clif::Type,
+    signed: bool,
     builder: &mut FunctionBuilder,
 ) -> clif::Value {
-    let value_ty = builder.func.dfg.value_type(value);
-    let cond = if value_ty.is_int() {
-        let zero = builder.ins().iconst(value_ty, 0);
-        builder.ins().icmp(IntCC::NotEqual, value, zero)
-    } else {
-        value
-    };
-    let zero = builder.ins().iconst(to_ty, 0);
-    let one = builder.ins().iconst(to_ty, 1);
-    builder.ins().select(cond, one, zero)
+    let zero = scalar_constant(to_ty, 0, builder);
+    let set = scalar_constant(to_ty, if signed { -1 } else { 1 }, builder);
+    builder.ins().select(value, set, zero)
 }
 
 pub(super) fn translate_bitcast(
@@ -1178,13 +1154,7 @@ pub(super) fn resolve_value(
     let value = function.dfg.value(value_id);
     match value {
         Value::Immediate { imm, ty } => match imm {
-            Immediate::I128(value) => {
-                let low = builder.ins().iconst(clif::types::I64, *value as i64);
-                let high = builder
-                    .ins()
-                    .iconst(clif::types::I64, (*value >> 64) as i64);
-                Ok(builder.ins().iconcat(low, high))
-            }
+            Immediate::I128(value) => Ok(scalar_constant(clif::types::I128, *value, builder)),
             Immediate::I256(value) => Ok(emit_i256_immediate(value, builder)),
             _ => {
                 let clif_ty = sonatina_scalar_type_to_clif_or_err(*ty)?;

@@ -636,7 +636,7 @@ fn translate_function(
                             &mut builder,
                         )
                     } else if function.dfg.value_ty(*sext.from()) == Type::I1 {
-                        bool_to_int_value(val, to_ty, &mut builder)
+                        bool_to_int_value(val, to_ty, true, &mut builder)
                     } else {
                         resize_int_value(val, to_ty, true, &mut builder)
                     };
@@ -655,7 +655,7 @@ fn translate_function(
                             &mut builder,
                         )
                     } else if function.dfg.value_ty(*zext.from()) == Type::I1 {
-                        bool_to_int_value(val, to_ty, &mut builder)
+                        bool_to_int_value(val, to_ty, false, &mut builder)
                     } else {
                         resize_int_value(val, to_ty, false, &mut builder)
                     };
@@ -671,7 +671,12 @@ fn translate_function(
                         // i256 values are pointers — load the target-sized value from the pointer
                         builder.ins().load(to_ty, MemFlagsData::new(), val, 0)
                     } else {
-                        builder.ins().ireduce(to_ty, val)
+                        resize_int_value(val, to_ty, false, &mut builder)
+                    };
+                    let result_val = if *trunc.ty() == Type::I1 {
+                        builder.ins().band_imm_s(result_val, 1)
+                    } else {
+                        result_val
                     };
                     if let Some(result) = function.dfg.inst_result(inst_id) {
                         value_map.insert(result, result_val);
