@@ -61,6 +61,12 @@ reference recovered later from a holder or opaque call may alias a fresh local
 allocation. These are different origins. An unresolved local origin is never
 silently reclassified as an imported reference without an obligation.
 
+Object references have no implicit raw representation. `bitcast` rejects them
+in either operand/result type, including references nested by value in structs,
+arrays and enum payloads. An aggregate wrapper cannot bypass materialization
+and create a raw alias to a private allocation. The check follows value fields,
+not raw-pointer pointees, and does not enumerate array elements.
+
 Calls publish their reference-bearing arguments and can mutate the objects
 reachable from those arguments or prior external exposure. Preserve facts and
 reference cells in fresh private objects that the call cannot reach. Incoming
@@ -124,7 +130,8 @@ An unsupported producer yields unknown local provenance, not an empty view.
 | `const.ref`, `const.proj`, `const.index`, `const.load` | Transport typed constant shapes; do not fabricate mutable local aliases. |
 | `obj.materialize.stack`, `obj.materialize.heap` | Seed exposure, followed by containment closure. |
 | `call`, `return` | Publish reachable reference-bearing values at the interface boundary; calls invalidate mutable guarantees. |
-| Raw loads, casts and other opaque producers | Retain possible local aliases/guards in reference-bearing results. |
+| `bitcast` | Reject by-value object-reference contents before semantic analysis; raw pointers retain their ordinary cast rules. |
+| Raw loads and other opaque producers | Retain possible local aliases/guards in reference-bearing results. |
 | Raw stores/copies and other memory writes | Publish reference-bearing stored values and invalidate potentially affected facts. |
 | Other instructions | Require explicit proof of irrelevance to enum state/reference transport, or apply the conservative opaque rule. |
 

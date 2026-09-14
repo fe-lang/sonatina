@@ -1,0 +1,25 @@
+target = "evm-ethereum-osaka"
+type @E = enum { #None, #Some(i256) };
+type @Holder = { objref<@E> };
+func private %entry() -> i256 {
+block0:
+ v0.objref<@E> = obj.alloc @E;
+ enum.write_variant v0 #Some (17.i256);
+ v1.objref<i256> = enum.proj v0 #Some 0.i8;
+ v2.@Holder = insert_value undef.@Holder 0.i8 v0;
+ v3.*@E = bitcast v2 *@E;
+ mstore v3 0.i256 i256;
+ v4.i256 = obj.load v1;
+ return v4;
+}
+func private %runtime() {
+block0:
+ v0.i256 = call %entry;
+ mstore 0.i256 v0 i256;
+ evm_return 0.i256 32.i256;
+}
+object @Test {
+ section runtime {
+  entry %runtime;
+ }
+}

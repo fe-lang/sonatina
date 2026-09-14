@@ -800,7 +800,38 @@ impl VerifyInst for cast::Bitcast {
                 location.clone(),
             ));
         }
-        if verifier.objref_ty(from_ty).is_some() || verifier.objref_ty(to_ty).is_some() {
+        // Object references have no implicit raw representation. Applying this
+        // only at the top level lets an aggregate wrapper bypass the rule.
+        let contains_object_reference = |ty| {
+            let mut pending = vec![ty];
+            let mut seen = FxHashSet::default();
+            while let Some(ty) = pending.pop() {
+                let Type::Compound(id) = ty else { continue };
+                if !seen.insert(id) {
+                    continue;
+                }
+                let Some(compound) = verifier
+                    .ctx
+                    .with_ty_store(|store| store.get_compound(id).cloned())
+                else {
+                    continue;
+                };
+                match compound {
+                    CompoundType::ObjRef(_) => return true,
+                    CompoundType::Array { elem, .. } => pending.push(elem),
+                    CompoundType::Struct(record) => pending.extend(record.fields),
+                    CompoundType::Enum(enumeration) => pending.extend(
+                        enumeration
+                            .variants
+                            .into_iter()
+                            .flat_map(|variant| variant.fields),
+                    ),
+                    _ => {}
+                }
+            }
+            false
+        };
+        if contains_object_reference(from_ty) || contains_object_reference(to_ty) {
             verifier.emit(Diagnostic::error(
                 DiagnosticCode::InstOperandTypeMismatch,
                 "bitcast does not allow object-reference types",
