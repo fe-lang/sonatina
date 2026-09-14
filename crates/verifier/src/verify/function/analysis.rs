@@ -27,124 +27,165 @@ pub(super) fn compute_reachable(
     seen
 }
 
-pub(super) fn compute_idom(
-    root: BlockId,
+/// Verification uses a virtual entry for disconnected code. Its edges reach
+/// every block of each source SCC: a DAG starts at its source blocks, while a
+/// closed source cycle has no privileged first block. Dead-to-live edges are
+/// excluded so unreachable code cannot change executable dominance or proofs.
+#[derive(Default)]
+pub(super) struct AnalysisCfg {
+    pub blocks: Vec<BlockId>,
+    pub entries: FxHashSet<BlockId>,
+    pub preds: FxHashMap<BlockId, Vec<BlockId>>,
+    pub succs: FxHashMap<BlockId, Vec<BlockId>>,
+}
+
+impl AnalysisCfg {
+    pub fn new(
+        entry: Option<BlockId>,
+        blocks: &[BlockId],
+        succs: &FxHashMap<BlockId, Vec<BlockId>>,
+        reachable: &FxHashSet<BlockId>,
+    ) -> Self {
+        let nodes: FxHashSet<_> = blocks.iter().copied().collect();
+        let mut cfg = Self {
+            blocks: blocks.to_vec(),
+            ..Self::default()
+        };
+        for &block in blocks {
+            for &succ in succs.get(&block).into_iter().flatten() {
+                if nodes.contains(&succ)
+                    && (reachable.contains(&block) || !reachable.contains(&succ))
+                {
+                    cfg.succs.entry(block).or_default().push(succ);
+                    cfg.preds.entry(succ).or_default().push(block);
+                }
+            }
+        }
+        cfg.entries
+            .extend(entry.filter(|entry| nodes.contains(entry)));
+        let dead: FxHashSet<_> = nodes.difference(reachable).copied().collect();
+        let order = postorder(blocks, &dead, &cfg.succs);
+        let mut component = FxHashMap::default();
+        for block in order.into_iter().rev() {
+            if component.contains_key(&block) {
+                continue;
+            }
+            let mut pending = vec![block];
+            component.insert(block, block);
+            while let Some(node) = pending.pop() {
+                for &pred in cfg.preds.get(&node).into_iter().flatten() {
+                    if dead.contains(&pred) && !component.contains_key(&pred) {
+                        component.insert(pred, block);
+                        pending.push(pred);
+                    }
+                }
+            }
+        }
+        let mut non_sources = FxHashSet::default();
+        for (&block, &source) in &component {
+            for succ in cfg.succs.get(&block).into_iter().flatten() {
+                if let Some(&target) = component.get(succ)
+                    && target != source
+                {
+                    non_sources.insert(target);
+                }
+            }
+        }
+        cfg.entries.extend(
+            component
+                .iter()
+                .filter_map(|(&block, source)| (!non_sources.contains(source)).then_some(block)),
+        );
+        cfg
+    }
+}
+
+fn postorder(
+    roots: &[BlockId],
     nodes: &FxHashSet<BlockId>,
     succs: &FxHashMap<BlockId, Vec<BlockId>>,
-    preds: &FxHashMap<BlockId, Vec<BlockId>>,
-    block_order: &FxHashMap<BlockId, usize>,
-) -> FxHashMap<BlockId, BlockId> {
-    let mut rpo = compute_rpo(root, nodes, succs, block_order);
-    if rpo.is_empty() {
-        rpo.push(root);
+) -> Vec<BlockId> {
+    let mut order = Vec::new();
+    let mut seen = FxHashSet::default();
+    for &root in roots {
+        let mut pending = vec![(root, false)];
+        while let Some((block, expanded)) = pending.pop() {
+            if !nodes.contains(&block) {
+                continue;
+            }
+            if expanded {
+                order.push(block);
+                continue;
+            }
+            if !seen.insert(block) {
+                continue;
+            }
+            pending.push((block, true));
+            pending.extend(
+                succs
+                    .get(&block)
+                    .into_iter()
+                    .flatten()
+                    .map(|&succ| (succ, false)),
+            );
+        }
     }
+    order
+}
 
-    let rpo_index: FxHashMap<_, _> = rpo
+pub(super) fn compute_idom(
+    cfg: &AnalysisCfg,
+    nodes: &FxHashSet<BlockId>,
+) -> FxHashMap<BlockId, BlockId> {
+    let roots: Vec<_> = cfg
+        .blocks
         .iter()
-        .enumerate()
-        .map(|(idx, block)| (*block, idx))
+        .copied()
+        .filter(|b| cfg.entries.contains(b))
         .collect();
-
-    let mut idom = FxHashMap::default();
-    idom.insert(root, root);
-
+    let mut rpo = postorder(&roots, nodes, &cfg.succs);
+    rpo.reverse();
+    // Index zero is an internal virtual entry, never an IR entity.
+    let index: FxHashMap<_, _> = rpo.iter().enumerate().map(|(i, &b)| (b, i + 1)).collect();
+    let mut parents = vec![None; rpo.len() + 1];
+    parents[0] = Some(0);
     let mut changed = true;
     while changed {
         changed = false;
-
-        for block in rpo.iter().copied().skip(1) {
-            let mut pred_candidates: Vec<_> = preds
-                .get(&block)
-                .into_iter()
-                .flatten()
-                .copied()
-                .filter(|pred| nodes.contains(pred) && idom.contains_key(pred))
-                .collect();
-            pred_candidates.sort_by_key(|pred| pred.as_u32());
-
-            let Some(mut new_idom) = pred_candidates.first().copied() else {
-                continue;
+        for &block in &rpo {
+            let next = if cfg.entries.contains(&block) {
+                Some(0)
+            } else {
+                cfg.preds
+                    .get(&block)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|p| index.get(p).copied())
+                    .filter(|&p| parents[p].is_some())
+                    .reduce(|mut lhs, mut rhs| {
+                        while lhs != rhs {
+                            if lhs > rhs {
+                                lhs = parents[lhs].expect("known dominator");
+                            } else {
+                                rhs = parents[rhs].expect("known dominator");
+                            }
+                        }
+                        lhs
+                    })
             };
-
-            for pred in pred_candidates.into_iter().skip(1) {
-                new_idom = intersect_idom(pred, new_idom, &idom, &rpo_index);
-            }
-
-            if idom.get(&block).copied() != Some(new_idom) {
-                idom.insert(block, new_idom);
+            let slot = &mut parents[index[&block]];
+            if *slot != next {
+                *slot = next;
                 changed = true;
             }
         }
     }
-
-    idom
-}
-
-fn compute_rpo(
-    root: BlockId,
-    nodes: &FxHashSet<BlockId>,
-    succs: &FxHashMap<BlockId, Vec<BlockId>>,
-    block_order: &FxHashMap<BlockId, usize>,
-) -> Vec<BlockId> {
-    let mut order = Vec::new();
-    let mut seen = FxHashSet::default();
-    let mut stack = vec![(root, false)];
-
-    while let Some((block, expanded)) = stack.pop() {
-        if !nodes.contains(&block) {
-            continue;
-        }
-
-        if expanded {
-            order.push(block);
-            continue;
-        }
-
-        if !seen.insert(block) {
-            continue;
-        }
-
-        stack.push((block, true));
-
-        let mut children = succs.get(&block).cloned().unwrap_or_default();
-        children.retain(|child| nodes.contains(child));
-        children.sort_by_key(|child| {
-            (
-                block_order.get(child).copied().unwrap_or(usize::MAX),
-                child.as_u32(),
-            )
-        });
-
-        for child in children.into_iter().rev() {
-            stack.push((child, false));
-        }
-    }
-
-    order.reverse();
-    order
-}
-
-fn intersect_idom(
-    mut lhs: BlockId,
-    mut rhs: BlockId,
-    idom: &FxHashMap<BlockId, BlockId>,
-    rpo_index: &FxHashMap<BlockId, usize>,
-) -> BlockId {
-    while lhs != rhs {
-        while rpo_index.get(&lhs).copied().unwrap_or(usize::MAX)
-            > rpo_index.get(&rhs).copied().unwrap_or(usize::MAX)
-        {
-            lhs = idom[&lhs];
-        }
-
-        while rpo_index.get(&rhs).copied().unwrap_or(usize::MAX)
-            > rpo_index.get(&lhs).copied().unwrap_or(usize::MAX)
-        {
-            rhs = idom[&rhs];
-        }
-    }
-
-    lhs
+    rpo.iter()
+        .filter_map(|&block| {
+            parents[index[&block]]
+                .map(|parent| (block, if parent == 0 { block } else { rpo[parent - 1] }))
+        })
+        .collect()
 }
 
 pub(super) fn dominates(

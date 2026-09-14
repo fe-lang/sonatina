@@ -1,0 +1,12 @@
+# Required enum contract: accept
+target = "evm-ethereum-osaka"
+type @Choice = enum { #None, #Some(i256) };
+func private %entry(v100.objref<i256>) -> i256 {
+block0:
+ v0.objref<@Choice> = obj.alloc @Choice;
+ enum.write_variant v0 #Some (17.i256);
+ v1.objref<i256> = enum.proj v0 #Some 0.i8;
+ obj.store v100 99.i256;
+ v2.i256 = obj.load v1;
+ return v2;
+}

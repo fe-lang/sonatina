@@ -1,0 +1,13 @@
+# Required enum contract: reject
+target = "evm-ethereum-osaka"
+type @Inner = enum { #None, #Some(i256), #Other(i256,i256) };
+type @Outer = enum { #None, #Some(@Inner) };
+func private %entry(v0.objref<@Outer>) -> @Inner {
+block0:
+ v1.objref<@Outer> = enum.assert_variant_ref v0 #Some;
+ v2.objref<@Inner> = enum.proj v1 #Some 0.i8;
+ v3.objref<@Inner> = enum.assert_variant_ref v2 #Some;
+ enum.set_tag v3 #Other;
+ v4.@Inner = obj.load v2;
+ return v4;
+}
