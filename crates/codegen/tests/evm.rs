@@ -18,7 +18,7 @@ use sonatina_codegen::{
         lower::{LoweredFunction, SectionCodeUnit, SectionWorkModule},
         vcode::{Label, VCodeFixup, section_code_unit_label_name},
     },
-    object::{CompileOptions, compile_all_objects},
+    object::{CompileOptions, compile_all_objects, compile_object},
     optim::{
         dead_func::{collect_object_roots, run_dead_func_elim},
         pipeline::Pipeline,
@@ -115,6 +115,94 @@ fn parse_sona(content: &str) -> ParsedModule {
                 err.print(&mut w, "[test]", content, true).unwrap();
             }
             panic!("Failed to parse test file. See errors above.")
+        }
+    }
+}
+
+#[test]
+fn evm_exp_wraps_to_declared_width() {
+    for bits in [1, 8, 16, 32, 64, 128, 256] {
+        let operation = if bits == 256 {
+            "v5.i256 = evm_exp v0 v1;".to_string()
+        } else {
+            format!(
+                "v2.i{bits} = trunc v0 i{bits};
+                 v3.i{bits} = trunc v1 i{bits};
+                 v4.i{bits} = evm_exp v2 v3;
+                 v5.i256 = zext v4 i256;"
+            )
+        };
+        let source = format!(
+            r#"
+target = "evm-ethereum-osaka"
+
+func public %entry() {{
+    block0:
+        v0.i256 = evm_calldata_load 0.i256;
+        v1.i256 = evm_calldata_load 32.i256;
+        {operation}
+        mstore 0.i256 v5 i256;
+        evm_return 0.i256 32.i256;
+}}
+
+object @Contract {{
+    section runtime {{
+        entry %entry;
+    }}
+}}
+"#
+        );
+        let mask = IrU256::MAX >> (256 - bits);
+        let cases = [
+            (IrU256::zero(), IrU256::zero()),
+            (2.into(), bits.into()),
+            (3.into(), 5.into()),
+            (200.into(), IrU256::one()),
+            (mask, mask),
+            (mask, mask - IrU256::one()),
+            (2.into(), mask),
+        ];
+        for optimized in [false, true] {
+            let mut parsed = parse_sona(&source);
+            if optimized {
+                Pipeline::speed().run(&mut parsed.module);
+            }
+            let backend = EvmBackend::new(Evm::new(parsed.module.ctx.triple))
+                .with_late_cleanup_profile(if optimized {
+                    LateCleanupProfile::Speed
+                } else {
+                    LateCleanupProfile::Off
+                });
+            let artifact = compile_object(
+                &parsed.module,
+                &backend,
+                "Contract",
+                &CompileOptions::default(),
+            )
+            .expect("exponentiation should compile");
+            let runtime = artifact
+                .sections
+                .iter()
+                .find(|(name, _)| name.0 == "runtime")
+                .expect("missing runtime section");
+            let mut harness = EvmHarness::from_runtime(&runtime.1.bytes);
+            for (base, exponent) in cases {
+                let calldata = [base.to_big_endian(), exponent.to_big_endian()].concat();
+                let expected = (base & mask).overflowing_pow(exponent & mask).0 & mask;
+                let result = harness.call(&calldata);
+                let ExecutionResult::Success {
+                    output: Output::Call(actual),
+                    ..
+                } = result
+                else {
+                    panic!("i{bits}, optimized={optimized}: {result:?}");
+                };
+                assert_eq!(
+                    actual.as_ref(),
+                    expected.to_big_endian(),
+                    "i{bits}, optimized={optimized}, base={base}, exponent={exponent}"
+                );
+            }
         }
     }
 }
