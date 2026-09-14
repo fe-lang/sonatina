@@ -1,6 +1,7 @@
 use cranelift_codegen::ir::{self as clif, ArgumentPurpose};
 use cranelift_module::Module as ClifModule;
 use sonatina_ir::{Signature, Type, module::ModuleCtx, types::CompoundType};
+use sonatina_triple::TargetTriple;
 
 pub(super) fn uses_indirect_value_representation(ctx: &ModuleCtx, ty: Type) -> bool {
     ty == Type::I256
@@ -69,18 +70,29 @@ pub(super) fn sonatina_sig_to_clif(
 
     for &arg_ty in sig.args() {
         if let Some(clif_ty) = sonatina_type_to_clif(arg_ty, pointer_type) {
-            clif_sig.params.push(clif::AbiParam::new(clif_ty));
+            clif_sig.params.push(scalar_abi_param(ctx, clif_ty));
         }
     }
 
     if !returns_indirect(ctx, sig) {
         for &ret_ty in sig.ret_tys() {
             if let Some(clif_ty) = sonatina_type_to_clif(ret_ty, pointer_type) {
-                clif_sig.returns.push(clif::AbiParam::new(clif_ty));
+                clif_sig.returns.push(scalar_abi_param(ctx, clif_ty));
             }
         }
     }
     clif_sig
+}
+
+fn scalar_abi_param(ctx: &ModuleCtx, ty: clif::Type) -> clif::AbiParam {
+    let param = clif::AbiParam::new(ty);
+    if ctx.triple == TargetTriple::SP1 && ty == clif::types::I32 {
+        // The RV64 C ABI sign-extends all 32-bit arguments and results,
+        // including unsigned values. Native host behavior is unchanged.
+        param.sext()
+    } else {
+        param
+    }
 }
 
 pub(super) fn sonatina_type_to_clif(ty: Type, pointer_type: clif::Type) -> Option<clif::Type> {
