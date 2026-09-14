@@ -9,6 +9,7 @@ pub(crate) mod const_eval;
 pub(crate) mod constref_specialize;
 pub mod dead_arg;
 pub mod dead_func;
+mod dead_malloc;
 pub mod gvn;
 pub mod inliner;
 pub mod known_bits_simplify;

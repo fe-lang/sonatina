@@ -1,4 +1,4 @@
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 use sonatina_ir::{
     BlockId, InstId, Value,
     inst::{control_flow, downcast},
@@ -8,41 +8,24 @@ use crate::diagnostic::{Diagnostic, DiagnosticCode, Location};
 
 use super::{
     FunctionVerifier,
-    analysis::{compute_idom, compute_reachable, dominates},
+    analysis::{AnalysisCfg, compute_idom, dominates},
     refs::collect_inst_refs,
 };
 
 impl FunctionVerifier<'_> {
     pub(super) fn compute_dominance_info(&mut self) {
-        let mut covered = FxHashSet::default();
-        let mut components = Vec::new();
-
-        if let Some(entry) = self.func.layout.entry_block()
-            && self.block_order.contains(&entry)
-        {
-            let nodes = compute_reachable(entry, &self.succs);
-            covered.extend(nodes.iter().copied());
-            components.push((entry, nodes));
-        }
-
-        if self.cfg.should_run_deep_sanity() {
-            let blocks = self.block_order.clone();
-            for block in blocks {
-                if covered.contains(&block) {
-                    continue;
-                }
-                let nodes = compute_reachable(block, &self.succs);
-                covered.extend(nodes.iter().copied());
-                components.push((block, nodes));
-            }
-        }
-
-        self.idom.clear();
-        let block_order_index = self.block_position_map();
-        for (root, nodes) in components {
-            let local = compute_idom(root, &nodes, &self.succs, &self.preds, &block_order_index);
-            self.idom.extend(local);
-        }
+        self.analysis_cfg = AnalysisCfg::new(
+            self.func.layout.entry_block(),
+            &self.block_order,
+            &self.succs,
+            &self.reachable,
+        );
+        let nodes = if self.cfg.should_check_types() || self.cfg.should_run_deep_sanity() {
+            self.block_order.iter().copied().collect()
+        } else {
+            self.reachable.clone()
+        };
+        self.idom = compute_idom(&self.analysis_cfg, &nodes);
     }
 
     pub(super) fn check_dominance_rules(&mut self) {

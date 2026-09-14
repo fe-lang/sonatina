@@ -14,8 +14,8 @@ use sonatina_ir::{
         data::{Alloca, MemAllocDynamic, Mload, Mstore},
         downcast,
         evm::{
-            EvmMalloc, EvmSaddsat, EvmSdiv, EvmSdivo, EvmSmod, EvmSmodo, EvmSmulsat, EvmSsubsat,
-            EvmUaddsat, EvmUdiv, EvmUdivo, EvmUmod, EvmUmodo, EvmUmulsat, EvmUsubsat,
+            EvmExp, EvmMalloc, EvmSaddsat, EvmSdiv, EvmSdivo, EvmSmod, EvmSmodo, EvmSmulsat,
+            EvmSsubsat, EvmUaddsat, EvmUdiv, EvmUdivo, EvmUmod, EvmUmodo, EvmUmulsat, EvmUsubsat,
         },
         logic::{self, And, Or, Xor},
     },
@@ -368,6 +368,22 @@ impl<'a> FunctionLegalizer<'a> {
             downcast::<&arith::Smulo>(is, self.func.dfg.inst(inst)).map(|i| (*i.lhs(), *i.rhs()))
         {
             self.rewrite_signed_overflow_binary(inst, lhs, rhs, SignedOverflowKind::Mul);
+            return;
+        }
+        if let Some((base, exponent)) =
+            downcast::<&EvmExp>(is, self.func.dfg.inst(inst)).map(|i| (*i.base(), *i.exponent()))
+            && let Some(width @ ScalarWidth::Narrow(_)) = self.single_result_width(inst)
+        {
+            // EXP wraps at 256 bits; restore the declared width. Boolean
+            // exponentiation already produces a canonical zero or one.
+            let raw = self.insert_before_one(
+                inst,
+                EvmExp::new(is, base, exponent),
+                Type::I256,
+                Some(ScalarWidth::Full256),
+            );
+            let result = self.normalize_and_retag_width(inst, raw, width);
+            self.replace_with_aliases(inst, &[result]);
             return;
         }
         if let Some((lhs, rhs)) =

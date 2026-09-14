@@ -112,7 +112,7 @@ fn imm_to_u256(imm: Immediate) -> U256 {
     imm.as_i256().to_u256() & type_mask(imm.ty())
 }
 
-pub(crate) fn shift_amount_for_pow2_mul(imm: Immediate) -> Option<usize> {
+pub(crate) fn nontrivial_pow2_shift(imm: Immediate) -> Option<usize> {
     let bit_width = integral_bit_width(imm.ty())?;
     let mut value = imm_to_u256(imm);
     if value == U256::zero() || value & (value - U256::one()) != U256::zero() {

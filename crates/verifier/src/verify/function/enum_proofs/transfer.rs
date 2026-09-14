@@ -1,0 +1,389 @@
+use sonatina_ir::{
+    InstId, ValueId,
+    effects::{AccessKind, AccessLoc},
+    inst::{control_flow, data, downcast},
+    types::CompoundType,
+};
+
+use super::{
+    FunctionVerifier, Proof,
+    imports::{ImportSources, Source},
+    objects::{State, ViewFact},
+    read,
+    value_state::ValueState,
+    views::{Index, Root, Step},
+};
+use crate::verify::function::refs::collect_inst_refs;
+
+fn index(verifier: &FunctionVerifier<'_>, value: ValueId) -> Step {
+    Step::Index(
+        verifier
+            .value_imm(value)
+            .and_then(|n| n.to_nonnegative_usize())
+            .map_or(Index::Symbol(value), Index::Constant),
+    )
+}
+
+fn project(
+    verifier: &FunctionVerifier<'_>,
+    state: &mut State,
+    result: ValueId,
+    object: ValueId,
+    steps: impl IntoIterator<Item = Step>,
+) {
+    let mut refs = state.reference(verifier, object);
+    let ty = verifier
+        .objref_ty(verifier.func.dfg.value_ty(object))
+        .expect("validated object reference");
+    let mut value = state.contents(verifier.ctx, &refs, ty);
+    let mut guards = state.guards_hold(verifier.ctx, &refs);
+    for step in steps {
+        if let Step::Payload(variant, _) = step {
+            guards &= value.active(variant);
+        }
+        value = value.child(verifier.ctx, step);
+        refs = refs.project(step);
+    }
+    let fact = ViewFact {
+        references: refs.clone(),
+        value,
+        guards,
+    };
+    state.bind(
+        verifier.ctx,
+        result,
+        ValueState::reference(verifier.func.dfg.value_ty(result), refs),
+        Some(fact),
+    );
+}
+
+// None is NoFlow: no admissible execution reaches the next instruction.
+pub(super) fn instruction(
+    verifier: &FunctionVerifier<'_>,
+    state: &mut State,
+    id: InstId,
+) -> Option<Proof> {
+    let ctx = verifier.ctx;
+    let inst = verifier.func.dfg.inst(id);
+    let is = ctx.inst_set;
+    let results = verifier.func.dfg.inst_results(id);
+    let result = results.first().copied();
+    let mut proof = Proof::NoLocalEnumObligation;
+    if downcast::<&control_flow::Phi>(is, inst).is_some() {
+        // Phis were simultaneously substituted on the predecessor edge.
+    } else if let Some(alloc) = downcast::<&data::ObjAlloc>(is, inst) {
+        let result = result.expect("validated allocation result");
+        let refs = state.allocate(ctx, result, *alloc.ty());
+        state.bind(
+            ctx,
+            result,
+            ValueState::reference(verifier.func.dfg.value_ty(result), refs),
+            None,
+        );
+    } else if let Some(proj) = downcast::<&data::EnumProj>(is, inst) {
+        project(
+            verifier,
+            state,
+            result.unwrap(),
+            *proj.object(),
+            [Step::Payload(
+                proj.variant().index(),
+                verifier
+                    .value_imm(*proj.field())
+                    .unwrap()
+                    .to_nonnegative_usize()
+                    .unwrap(),
+            )],
+        );
+    } else if let Some(proj) = downcast::<&data::ObjProj>(is, inst) {
+        project(
+            verifier,
+            state,
+            result.unwrap(),
+            proj.values()[0],
+            proj.values()[1..].iter().map(|&v| index(verifier, v)),
+        );
+    } else if let Some(proj) = downcast::<&data::ObjIndex>(is, inst) {
+        project(
+            verifier,
+            state,
+            result.unwrap(),
+            *proj.object(),
+            [index(verifier, *proj.index())],
+        );
+    } else if let Some(load) = downcast::<&data::ObjLoad>(is, inst) {
+        let result = result.unwrap();
+        let ty = verifier.func.dfg.value_ty(result);
+        let refs = state.reference(verifier, *load.object());
+        proof = read(state, verifier, &refs, ty, false);
+        let mut value = state.contents(ctx, &refs, ty);
+        if !matches!(
+            ty.resolve_compound(ctx),
+            Some(CompoundType::Struct(_) | CompoundType::Array { .. } | CompoundType::Enum(_))
+        ) {
+            // Scalar SSA definedness is outside the enum contract. The load's
+            // guarded read was checked above; aggregate copies retain their
+            // source subtree facts, including unwritten nested enum payloads.
+            value.complete = true;
+        }
+        state.bind(ctx, result, value, None);
+    } else if let Some(tag) = downcast::<&data::EnumGetTag>(is, inst) {
+        let result = result.unwrap();
+        let ty = verifier
+            .objref_ty(verifier.func.dfg.value_ty(*tag.object()))
+            .unwrap();
+        let refs = state.reference(verifier, *tag.object());
+        proof = read(state, verifier, &refs, ty, true);
+        state.bind(
+            ctx,
+            result,
+            ValueState::new(verifier.func.dfg.value_ty(result), true),
+            None,
+        );
+        state.observations.insert(result, refs);
+    } else if let Some(assertion) = downcast::<&data::EnumAssertVariantRef>(is, inst) {
+        let refs = state.reference(verifier, *assertion.object());
+        let ty = verifier
+            .objref_ty(verifier.func.dfg.value_ty(*assertion.object()))
+            .unwrap();
+        if !state
+            .contents(ctx, &refs, ty)
+            .possible(assertion.variant().index())
+        {
+            return None;
+        }
+        state.write(ctx, &refs, ty, true, |value| {
+            value.assert_variant(ctx, assertion.variant().index())
+        });
+        state.bind(
+            ctx,
+            result.unwrap(),
+            ValueState::reference(verifier.func.dfg.value_ty(result.unwrap()), refs),
+            None,
+        );
+    } else if let Some(store) = downcast::<&data::ObjStore>(is, inst) {
+        let refs = state.reference(verifier, *store.object());
+        let value = state.value(verifier, *store.value());
+        state.write(ctx, &refs, value.ty, false, |target| {
+            *target = value.clone()
+        });
+    } else if let Some(init) = downcast::<&data::ObjInitConst>(is, inst) {
+        let refs = state.reference(verifier, *init.object());
+        let ty = verifier
+            .objref_ty(verifier.func.dfg.value_ty(*init.object()))
+            .unwrap();
+        state.write(ctx, &refs, ty, false, |target| {
+            *target = ValueState::new(ty, true)
+        });
+    } else if let Some(tag) = downcast::<&data::EnumSetTag>(is, inst) {
+        let refs = state.reference(verifier, *tag.object());
+        let ty = verifier
+            .objref_ty(verifier.func.dfg.value_ty(*tag.object()))
+            .unwrap();
+        state.write(ctx, &refs, ty, false, |value| {
+            value.set_tag(ctx, tag.variant().index())
+        });
+    } else if let Some(write) = downcast::<&data::EnumWriteVariant>(is, inst) {
+        let refs = state.reference(verifier, *write.object());
+        let ty = verifier
+            .objref_ty(verifier.func.dfg.value_ty(*write.object()))
+            .unwrap();
+        let fields: Vec<_> = write
+            .values()
+            .iter()
+            .map(|&v| state.value(verifier, v))
+            .collect();
+        state.write(ctx, &refs, ty, false, |value| {
+            value.refine(write.variant().index());
+            for (i, field) in fields.iter().enumerate() {
+                value.update(
+                    ctx,
+                    &[Step::Payload(write.variant().index(), i)],
+                    true,
+                    &|target| *target = field.clone(),
+                );
+            }
+        });
+    } else if let Some(make) = downcast::<&data::EnumMake>(is, inst) {
+        let mut value = ValueState::new(*make.ty(), false);
+        value.refine(make.variant().index());
+        for (i, &field) in make.values().iter().enumerate() {
+            value.children.insert(
+                Step::Payload(make.variant().index(), i),
+                state.value(verifier, field),
+            );
+        }
+        state.bind(ctx, result.unwrap(), value, None);
+    } else if let Some(extract) = downcast::<&data::EnumExtract>(is, inst) {
+        let value = state.value(verifier, *extract.value());
+        let field = value.child(
+            ctx,
+            Step::Payload(
+                extract.variant().index(),
+                verifier
+                    .value_imm(*extract.field())
+                    .unwrap()
+                    .to_nonnegative_usize()
+                    .unwrap(),
+            ),
+        );
+        proof = if !value.active(extract.variant().index()) {
+            Proof::Unproved("enum.extract requires a proven active variant at the use site")
+        } else if !field.readable(ctx) {
+            Proof::Unproved("enum.extract requires an initialized payload subtree")
+        } else {
+            Proof::Proven
+        };
+        state.bind(ctx, result.unwrap(), field, None);
+    } else if let Some(tag) = downcast::<&data::EnumTag>(is, inst) {
+        let result = result.unwrap();
+        state.bind(
+            ctx,
+            result,
+            ValueState::new(verifier.func.dfg.value_ty(result), true),
+            None,
+        );
+        state
+            .value_observations
+            .insert(result, (*tag.value(), None));
+    } else if let Some(test) = downcast::<&data::EnumIsVariant>(is, inst) {
+        let result = result.unwrap();
+        state.bind(
+            ctx,
+            result,
+            ValueState::new(verifier.func.dfg.value_ty(result), true),
+            None,
+        );
+        state
+            .value_observations
+            .insert(result, (*test.value(), Some(test.variant().index())));
+    } else if let Some(assertion) = downcast::<&data::EnumAssertVariant>(is, inst) {
+        let mut value = state.value(verifier, *assertion.value());
+        if !value.possible(assertion.variant().index()) {
+            return None;
+        }
+        value.assert_variant(ctx, assertion.variant().index());
+        state.values.insert(*assertion.value(), value);
+    } else if let Some(insert) = downcast::<&data::InsertValue>(is, inst) {
+        let mut value = state.value(verifier, *insert.dest());
+        let field = state.value(verifier, *insert.value());
+        value.update(ctx, &[index(verifier, *insert.idx())], true, &|target| {
+            *target = field.clone()
+        });
+        state.bind(ctx, result.unwrap(), value, None);
+    } else if let Some(extract) = downcast::<&data::ExtractValue>(is, inst) {
+        let value = state
+            .value(verifier, *extract.dest())
+            .child(ctx, index(verifier, *extract.idx()));
+        state.bind(ctx, result.unwrap(), value, None);
+    } else if let Some(mat) = downcast::<&data::ObjMaterializeStack>(is, inst) {
+        state.expose(ctx, &state.reference(verifier, *mat.object()));
+        state.bind(
+            ctx,
+            result.unwrap(),
+            ValueState::new(verifier.func.dfg.value_ty(result.unwrap()), true),
+            None,
+        );
+    } else if let Some(mat) = downcast::<&data::ObjMaterializeHeap>(is, inst) {
+        state.expose(ctx, &state.reference(verifier, *mat.object()));
+        state.bind(
+            ctx,
+            result.unwrap(),
+            ValueState::new(verifier.func.dfg.value_ty(result.unwrap()), true),
+            None,
+        );
+    } else {
+        let call = downcast::<&control_flow::Call>(is, inst);
+        let raw_load = downcast::<&data::Mload>(is, inst).is_some_and(|load| {
+            matches!(
+                load.ty().resolve_compound(ctx),
+                Some(
+                    CompoundType::ObjRef(_)
+                        | CompoundType::Struct(_)
+                        | CompoundType::Array { .. }
+                        | CompoundType::Enum(_)
+                )
+            )
+        });
+        let clobber = call.is_some() || raw_write(verifier, id);
+        let publish = call.is_some()
+            || downcast::<&control_flow::Return>(is, inst).is_some()
+            || inst.declared_effect_hint().has_write_effect();
+        if publish {
+            for value in collect_inst_refs(inst).values {
+                state.expose(ctx, &state.value(verifier, value).captured(ctx));
+            }
+        }
+        // Snapshot capabilities before mutation. Both raw writes and calls can
+        // replace reference cells with aliases derived from accessible roots.
+        let sources = (clobber || raw_load).then(|| {
+            ImportSources::new(
+                ctx,
+                state,
+                call.into_iter()
+                    .flat_map(|call| call.args())
+                    .map(|&arg| state.value(verifier, arg)),
+            )
+        });
+        if clobber {
+            state.havoc(ctx, sources.as_ref().unwrap());
+        }
+        let source = match sources.as_ref() {
+            Some(sources) if call.is_some() => Source::Call(sources),
+            Some(sources) if raw_load => Source::RawLoad(sources),
+            _ => Source::Unsupported,
+        };
+        for &result in results {
+            let root = Root::Imported(result);
+            let value = source.value(ctx, root, verifier.func.dfg.value_ty(result));
+            let imported =
+                !matches!(source, Source::Unsupported) && !value.captured(ctx).views.is_empty();
+            state.bind(ctx, result, value, None);
+            if imported {
+                // The external alternative is accessible, but computing the
+                // result does not publish any unrelated local allocation.
+                state.exposed.insert(root);
+                state.close_exposure(ctx);
+            }
+        }
+    }
+    Some(proof)
+}
+
+fn raw_write(verifier: &FunctionVerifier<'_>, id: InstId) -> bool {
+    let separate = |addr, bytes| {
+        bytes == 0
+            || verifier
+                .func
+                .dfg
+                .value_inst(addr)
+                .and_then(|id| {
+                    downcast::<&data::Alloca>(verifier.ctx.inst_set, verifier.func.dfg.inst(id))
+                })
+                .and_then(|alloc| verifier.type_size(*alloc.ty()))
+                .is_some_and(|size| bytes <= size)
+    };
+    let inst = verifier.func.dfg.inst(id);
+    if let Some(store) = downcast::<&data::Mstore>(verifier.ctx.inst_set, inst) {
+        return !verifier
+            .type_size(*store.ty())
+            .is_some_and(|bytes| separate(*store.addr(), bytes));
+    }
+    inst.declared_effect_hint().has_write_effect()
+        && verifier.func.dfg.effects(id).accesses.iter().any(|access| {
+            if access.kind != AccessKind::Write
+                || access.space != verifier.ctx.address_spaces().default_space()
+            {
+                return false;
+            }
+            let range = match &access.loc {
+                AccessLoc::LinearExact { addr, bytes, .. } => Some((*addr, *bytes as usize)),
+                AccessLoc::LinearRange { addr, len } => verifier
+                    .value_imm(*len)
+                    .and_then(|len| len.to_nonnegative_usize())
+                    .map(|len| (*addr, len)),
+                _ => None,
+            };
+            !range.is_some_and(|(addr, bytes)| separate(addr, bytes))
+        })
+}
