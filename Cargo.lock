@@ -2521,6 +2521,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "sonatina-sp1"
+version = "0.0.3-alpha"
+dependencies = [
+ "object",
+ "tempfile",
+ "thiserror 2.0.17",
+]
+
+[[package]]
 name = "sonatina-triple"
 version = "0.0.3-alpha"
 dependencies = [

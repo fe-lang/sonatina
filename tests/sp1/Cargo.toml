@@ -1,0 +1,22 @@
+[workspace]
+
+[package]
+name = "sonatina-sp1-integration"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+sonatina-codegen = { path = "../../crates/codegen", features = ["sp1"] }
+sonatina-ir = { path = "../../crates/ir" }
+sonatina-parser = { path = "../../crates/parser" }
+sonatina-sp1 = { path = "../../crates/sp1" }
+sonatina-triple = { path = "../../crates/triple" }
+sonatina-verifier = { path = "../../crates/verifier" }
+sp1-sdk = { version = "=6.8.0", default-features = false, features = ["blocking"] }
+
+[dev-dependencies]
+object = { version = "0.39.1", default-features = false, features = ["write", "std"] }
+
+[profile.release]
+debug = 1

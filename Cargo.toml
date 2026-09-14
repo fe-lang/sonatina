@@ -10,7 +10,9 @@ members = [
     "crates/macros",
     "crates/interpreter",
     "crates/verifier",
+    "crates/sp1",
 ]
+exclude = ["tests/sp1"]
 
 [workspace.package]
 edition = "2024"
