@@ -729,6 +729,7 @@ fn prepare_machine_section_after_pipeline(
             &machine_schedule,
             backend,
             &machine_isa,
+            &placement,
         )?;
         // Recompute fixed-slot effects from the current machine allocation. Final spills selected
         // for fixed slots are added below, after optional spill placement has been chosen.

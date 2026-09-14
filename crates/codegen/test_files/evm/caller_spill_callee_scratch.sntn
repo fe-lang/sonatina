@@ -1,0 +1,64 @@
+#! evm.config: { stack_reach: 4, mem_plan_detail: true }
+#! evm.case: nonzero
+#!   calldata: u256(42) u256(43) u256(44) u256(45) u256(46) u256(47) u256(48) u256(49)
+#!   expect: return u256(434)
+
+target = "evm-ethereum-osaka"
+
+func public %entry() {
+block0:
+    v0.i256 = evm_calldata_load 0.i256;
+    v1.i256 = evm_calldata_load 32.i256;
+    v2.i256 = evm_calldata_load 64.i256;
+    v3.i256 = evm_calldata_load 96.i256;
+    v4.i256 = evm_calldata_load 128.i256;
+    v5.i256 = evm_calldata_load 160.i256;
+    v6.i256 = evm_calldata_load 192.i256;
+    v7.i256 = evm_calldata_load 224.i256;
+    mstore 0.i256 60.i256 i256;
+    mstore 32.i256 10.i256 i256;
+    v8.i256 = call %clobber;
+    v9.i256 = add v0 v1;
+    v10.i256 = add v9 v2;
+    v11.i256 = add v10 v3;
+    v12.i256 = add v11 v4;
+    v13.i256 = add v12 v5;
+    v14.i256 = add v13 v6;
+    v15.i256 = add v14 v7;
+    v16.i256 = mload 0.i256 i256;
+    v17.i256 = add v15 v16;
+    v18.i256 = mload 32.i256 i256;
+    v19.i256 = add v17 v18;
+    mstore 0.i256 v19 i256;
+    evm_return 0.i256 32.i256;
+}
+
+func private %clobber() -> i256 {
+block0:
+    v0.*[i256; 8] = alloca [i256; 8];
+    v1.i256 = ptr_to_int v0 i256;
+    v2.i256 = add v1 0.i256;
+    mstore v2 0.i256 i256;
+    v3.i256 = add v1 32.i256;
+    mstore v3 0.i256 i256;
+    v4.i256 = add v1 64.i256;
+    mstore v4 0.i256 i256;
+    v5.i256 = add v1 96.i256;
+    mstore v5 0.i256 i256;
+    v6.i256 = add v1 128.i256;
+    mstore v6 0.i256 i256;
+    v7.i256 = add v1 160.i256;
+    mstore v7 0.i256 i256;
+    v8.i256 = add v1 192.i256;
+    mstore v8 0.i256 i256;
+    v9.i256 = add v1 224.i256;
+    mstore v9 0.i256 i256;
+    v10.i256 = evm_keccak256 v1 256.i256;
+    return v10;
+}
+
+object @Contract {
+    section runtime {
+        entry %entry;
+    }
+}
