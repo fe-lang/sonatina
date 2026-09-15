@@ -1,0 +1,16 @@
+[package]
+name = "sonatina-sp1"
+version = "0.0.3-alpha"
+edition.workspace = true
+license = "Apache-2.0"
+description = "Pinned guest runtime and static ELF linking for Sonatina SP1 objects"
+repository = "https://github.com/fe-lang/sonatina"
+include = ["src/**", "runtime/**", "README.md", "install-toolchain.sh"]
+
+[dependencies]
+object = { version = "0.39.1", default-features = false, features = ["read", "std"] }
+tempfile = "3.23"
+thiserror = "2"
+
+[dev-dependencies]
+object = { version = "0.39.1", default-features = false, features = ["write", "std"] }

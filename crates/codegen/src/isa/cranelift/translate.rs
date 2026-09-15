@@ -18,6 +18,7 @@ use sonatina_ir::{
     isa::native::inst_set as native_inst_set,
     module::FuncRef,
 };
+use sonatina_triple::TargetTriple;
 
 use self::{abi::*, globals::*, i256::*, memory::*, scalar::*};
 
@@ -1699,6 +1700,21 @@ fn translate_function(
 
     builder.seal_all_blocks();
     builder.finalize(clif_module.target_config());
+
+    if module.ctx.triple == TargetTriple::SP1 {
+        // SP1 objects are statically linked within PC-relative relocation range.
+        // Far RV64 references embed address literals in executable text, which
+        // SP1 would decode as instructions. Include frontend-created libcalls
+        // and imported globals, not just explicit Sonatina call instructions.
+        for data in ctx.func.dfg.ext_funcs.values_mut() {
+            data.colocated = true;
+        }
+        for data in ctx.func.global_values.values_mut() {
+            if let clif::GlobalValueData::Symbol { colocated, .. } = data {
+                *colocated = true;
+            }
+        }
+    }
 
     if std::env::var("DUMP_CLIF").is_ok() {
         let name = module.ctx.func_sig(func_ref, |sig| sig.name().to_string());

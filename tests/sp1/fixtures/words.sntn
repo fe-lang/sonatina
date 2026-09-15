@@ -1,0 +1,43 @@
+declare external %sys_sp1_read_u64() -> i64;
+declare external %sys_sp1_commit_u32(i32);
+declare external %sys_sp1_commit_u64(i64);
+
+func private %read_wide() -> i256 {
+block0:
+    v0.*i256 = alloca i256;
+    v1.*i64 = bitcast v0 *i64;
+    v2.i64 = call %sys_sp1_read_u64;
+    v3.i64 = call %sys_sp1_read_u64;
+    v4.i64 = call %sys_sp1_read_u64;
+    v5.i64 = call %sys_sp1_read_u64;
+    v6.*i64 = gep v1 1.i64;
+    v7.*i64 = gep v1 2.i64;
+    v8.*i64 = gep v1 3.i64;
+    mstore v1 v2 i64;
+    mstore v6 v3 i64;
+    mstore v7 v4 i64;
+    mstore v8 v5 i64;
+    v9.i256 = mload v0 i256;
+    return v9;
+}
+
+func private %commit_wide(v0.i256, v1.i1) {
+block0:
+    v2.*i256 = alloca i256;
+    mstore v2 v0 i256;
+    v3.*i64 = bitcast v2 *i64;
+    v4.*i64 = gep v3 1.i64;
+    v5.*i64 = gep v3 2.i64;
+    v6.*i64 = gep v3 3.i64;
+    v7.i64 = mload v3 i64;
+    v8.i64 = mload v4 i64;
+    v9.i64 = mload v5 i64;
+    v10.i64 = mload v6 i64;
+    call %sys_sp1_commit_u64 v7;
+    call %sys_sp1_commit_u64 v8;
+    call %sys_sp1_commit_u64 v9;
+    call %sys_sp1_commit_u64 v10;
+    v11.i32 = zext v1 i32;
+    call %sys_sp1_commit_u32 v11;
+    return;
+}

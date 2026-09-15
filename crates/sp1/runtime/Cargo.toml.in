@@ -1,0 +1,17 @@
+[package]
+name = "sonatina-sp1-runtime"
+version = "0.0.3-alpha"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["staticlib"]
+
+[dependencies]
+sp1-zkvm = { version = "=6.8.0", default-features = false }
+sp1-primitives = "=6.8.0"
+
+[workspace]
+
+[profile.release]
+panic = "abort"

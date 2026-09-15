@@ -1,5 +1,7 @@
 #![doc = include_str!("../../../docs/native.md")]
 
+#[cfg(feature = "sp1")]
+mod sp1;
 mod translate;
 
 use std::sync::Arc;
@@ -68,7 +70,10 @@ impl CraneliftObjectBackend {
         Self
     }
 
-    fn flags(options: &BackendOptions, is_pic: bool) -> Result<settings::Flags, CraneliftError> {
+    fn flag_builder(
+        options: &BackendOptions,
+        is_pic: bool,
+    ) -> Result<settings::Builder, CraneliftError> {
         let mut builder = settings::builder();
         builder
             .set("opt_level", cranelift_opt_level(options.opt_level))
@@ -81,22 +86,26 @@ impl CraneliftObjectBackend {
         builder
             .set("enable_llvm_abi_extensions", "true")
             .map_err(|error| CraneliftError::Compilation(error.to_string()))?;
-        Ok(settings::Flags::new(builder))
+        Ok(builder)
     }
 
     fn build_isa(
         triple: TargetTriple,
         options: &BackendOptions,
     ) -> Result<Arc<dyn clif_isa::TargetIsa>, CraneliftError> {
+        #[cfg(feature = "sp1")]
+        if triple == TargetTriple::SP1 {
+            return sp1::build_isa(options);
+        }
         ensure_host_native_target(triple)?;
-        let flags = Self::flags(options, true)?;
+        let flags = settings::Flags::new(Self::flag_builder(options, true)?);
 
         #[cfg(target_os = "macos")]
         {
             let name = match triple.architecture {
                 Architecture::X86_64 => "x86_64-apple-macosx",
                 Architecture::Aarch64 => "aarch64-apple-macosx",
-                Architecture::Evm => unreachable!("target validation rejected EVM"),
+                Architecture::Evm | Architecture::Riscv64im => unreachable!("not a native target"),
             };
             let mut builder = clif_isa::lookup_by_name(name)
                 .map_err(|error| CraneliftError::UnsupportedTarget(error.to_string()))?;
@@ -161,7 +170,9 @@ impl Backend for CraneliftJitBackend {
         let module = module.clone_for_funcs(&module.funcs());
         legalize_module(&module).map_err(|error| vec![CraneliftError::Translation(error)])?;
 
-        let flags = CraneliftObjectBackend::flags(options, false).map_err(|error| vec![error])?;
+        let flags = settings::Flags::new(
+            CraneliftObjectBackend::flag_builder(options, false).map_err(|error| vec![error])?,
+        );
         let isa = build_native_isa(flags).map_err(|error| vec![error])?;
         let builder = JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
         let mut jit = JITModule::new(builder);
@@ -196,12 +207,11 @@ impl Backend for CraneliftObjectBackend {
         module: &Module,
         options: &BackendOptions,
     ) -> Result<Self::Artifact, Vec<Self::Error>> {
-        ensure_host_native_target(module.ctx.triple).map_err(|error| vec![error])?;
+        let isa = Self::build_isa(module.ctx.triple, options).map_err(|error| vec![error])?;
 
         let module = module.clone_for_funcs(&module.funcs());
         legalize_module(&module).map_err(|error| vec![CraneliftError::Translation(error)])?;
 
-        let isa = Self::build_isa(module.ctx.triple, options).map_err(|error| vec![error])?;
         let builder =
             ObjectBuilder::new(isa, "sonatina", cranelift_module::default_libcall_names())
                 .map_err(|error| vec![CraneliftError::Compilation(error.to_string())])?;
@@ -267,6 +277,8 @@ fn host_architecture() -> Option<Architecture> {
 
 #[cfg(test)]
 mod tests {
+    use cranelift_codegen::settings::Flags;
+
     use super::{CraneliftObjectBackend, cranelift_opt_level};
     use crate::{backend::BackendOptions, compile::OptLevel};
 
@@ -274,8 +286,10 @@ mod tests {
     fn object_and_jit_flags_enable_direct_i128_signatures() {
         for opt_level in [OptLevel::O0, OptLevel::O2] {
             for is_pic in [false, true] {
-                let flags =
-                    CraneliftObjectBackend::flags(&BackendOptions { opt_level }, is_pic).unwrap();
+                let flags = Flags::new(
+                    CraneliftObjectBackend::flag_builder(&BackendOptions { opt_level }, is_pic)
+                        .unwrap(),
+                );
                 assert!(flags.enable_llvm_abi_extensions());
             }
         }

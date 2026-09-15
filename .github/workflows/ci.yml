@@ -33,6 +33,8 @@ jobs:
           components: rustfmt
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all -- --check
+      - run: rustfmt --edition 2024 crates/sp1/runtime/src/lib.rs --check
+      - run: cargo fmt --manifest-path tests/sp1/Cargo.toml -- --check
 
   clippy:
     name: Clippy
@@ -108,6 +110,33 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo check -p sonatina-codegen --features cranelift-jit --all-targets
+
+  sp1:
+    name: SP1 RV64IM (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-15]
+    env:
+      SONATINA_SP1_TOOLCHAIN: ${{ runner.temp }}/sonatina-sp1-toolchain
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+            tests/sp1 -> target
+      - name: Test SP1 objects without the Succinct toolchain
+        run: cargo test --locked -p sonatina-codegen --features sp1,cranelift-jit --test cranelift_sp1
+      - name: Install checksum-pinned Succinct toolchain
+        run: bash crates/sp1/install-toolchain.sh "$SONATINA_SP1_TOOLCHAIN"
+      - name: Lint dedicated SDK harness
+        run: cargo clippy --locked --release --manifest-path tests/sp1/Cargo.toml --all-targets -- -D warnings
+      - name: Execute guests and verify a CPU core proof
+        run: cargo test --locked --release --manifest-path tests/sp1/Cargo.toml -- --include-ignored
 
   test:
     name: Test

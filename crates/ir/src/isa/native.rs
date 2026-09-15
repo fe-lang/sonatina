@@ -44,14 +44,16 @@ pub struct Native {
 
 impl Native {
     pub fn new(triple: TargetTriple) -> Self {
-        assert!(matches!(
-            (triple.architecture, triple.vendor, triple.operating_system),
-            (
-                Architecture::X86_64 | Architecture::Aarch64,
-                Vendor::Unknown,
-                OperatingSystem::Native
-            )
-        ));
+        assert!(
+            matches!(
+                (triple.architecture, triple.vendor, triple.operating_system),
+                (
+                    Architecture::X86_64 | Architecture::Aarch64,
+                    Vendor::Unknown,
+                    OperatingSystem::Native
+                )
+            ) || triple == TargetTriple::SP1
+        );
         Self { triple }
     }
 }

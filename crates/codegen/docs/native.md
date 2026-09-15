@@ -1,14 +1,15 @@
 # Host-native Cranelift backend
 
 The optional `sonatina-codegen/cranelift` feature emits native object files
-through released upstream Cranelift 0.135 (Rust 1.95 or newer). The separate
+through Cranelift 0.135 (Rust 1.95 or newer). This branch pins a temporary
+fe-lang fork of 0.135.2 shared with the optional SP1 target. The separate
 `cranelift-jit` feature enables in-process execution and includes `cranelift`.
 Neither feature is enabled by default; EVM users do not need the Cranelift
 code generator or JIT dependencies.
 
 ## Targets and artifacts
 
-Only `x86_64-unknown-native` and `aarch64-unknown-native` are accepted, and the
+The native targets are `x86_64-unknown-native` and `aarch64-unknown-native`, and the
 architecture must match the compiler's host. The host determines the real
 operating system, object format and calling convention. CPU features are
 inferred from the local CPU: these are host-tuned artifacts, not portable
@@ -21,7 +22,9 @@ baseline binaries or cross-compilation targets.
 | Windows | Compilation-only CI; runtime support is not promised |
 
 Other OS/architecture combinations have no runtime guarantee in this slice.
-SP1, RISC-V, wasm and EVM instruction emulation are outside its scope.
+The separate `sp1` feature supports RV64IM objects and static SP1 executables;
+see the [SP1 runtime guide](https://github.com/fe-lang/sonatina/blob/main/crates/sp1/README.md). Other RISC-V targets, wasm,
+and EVM instruction emulation are outside this backend's scope.
 
 Use `Compile` with `CraneliftObjectBackend` for object bytes. Linking them,
 providing imports and selecting an executable entry point are the caller's

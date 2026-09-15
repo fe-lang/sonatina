@@ -64,6 +64,16 @@ fn return_constant_module(isa: &Native) -> sonatina_ir::Module {
     builder.build()
 }
 
+#[cfg(not(feature = "sp1"))]
+#[test]
+fn sp1_requires_its_explicit_feature() {
+    let module = return_constant_module(&Native::new(TargetTriple::SP1));
+    let errors = CraneliftObjectBackend::new()
+        .compile_module(&module, &BackendOptions::default())
+        .unwrap_err();
+    assert!(matches!(&errors[0], CraneliftError::UnsupportedTarget(_)));
+}
+
 fn wide_division_module(width: usize, op: &str) -> sonatina_ir::Module {
     let triple = native_isa(host_architecture()).triple();
     let source = format!(
@@ -188,7 +198,7 @@ fn generic_pipeline_emits_a_host_object() {
         match host_architecture() {
             Architecture::X86_64 => object::Architecture::X86_64,
             Architecture::Aarch64 => object::Architecture::Aarch64,
-            Architecture::Evm => unreachable!(),
+            Architecture::Evm | Architecture::Riscv64im => unreachable!(),
         }
     );
     assert!(object.symbols().any(|symbol| {
@@ -364,7 +374,7 @@ fn object_backend_rejects_a_non_host_native_target() {
     let architecture = match host_architecture() {
         Architecture::X86_64 => Architecture::Aarch64,
         Architecture::Aarch64 => Architecture::X86_64,
-        Architecture::Evm => unreachable!(),
+        Architecture::Evm | Architecture::Riscv64im => unreachable!(),
     };
     let isa = native_isa(architecture);
     let errors = Compile::new(return_constant_module(&isa), CraneliftObjectBackend::new())

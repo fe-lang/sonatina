@@ -1,0 +1,87 @@
+global public i64 $host_counter = 41;
+global external i64 $sonatina_counter;
+global external i64 $sonatina_bss;
+declare external %sonatina_update(*i64, i64) -> *i64;
+declare external %sonatina_aggregate_wrapper(i64, i64, *i64) -> i64;
+declare external %sys_sp1_read_u64() -> i64;
+declare external %sys_sp1_commit_u64(i64);
+
+func public %host_mix(v0.i64, v1.i64) -> i64 {
+block0:
+    v2.i64 = mul v0 3.i64;
+    v3.i64 = add v2 v1;
+    return v3;
+}
+
+func public %host_offset(v0.*i64, v1.i64) -> *i64 {
+block0:
+    v2.*i64 = gep v0 v1;
+    return v2;
+}
+
+func public %host_xor32(v0.i32, v1.i32) -> i32 {
+block0:
+    v2.i32 = xor v0 v1;
+    return v2;
+}
+
+func inline(never) private %choose(v0.i1, v1.objref<i64>) -> objref<i64> {
+block0:
+    br v0 block1 block2;
+block1:
+    return v1;
+block2:
+    v2.objref<i64> = obj.alloc i64;
+    obj.store v2 77.i64;
+    return v2;
+}
+
+func public %main() -> i32 {
+block0:
+    v0.*[i64; 2] = alloca [i64; 2];
+    v1.*i8 = bitcast v0 *i8;
+    v2.i64 = call %sys_sp1_read_u64;
+    v3.i1 = eq v2 16.i64;
+    br v3 block1 block5;
+block1:
+    memzero v1 v2;
+    v4.*i64 = gep v0 0.i64 0.i64;
+    v5.i64 = mload v4 i64;
+    call %sys_sp1_commit_u64 v5;
+    mstore v4 5.i64 i64;
+    v6.*i64 = call %sonatina_update v4 2.i64;
+    v7.i64 = mload v6 i64;
+    call %sys_sp1_commit_u64 v7;
+    v8.i64 = mload $sonatina_counter i64;
+    v9.i64 = mload $host_counter i64;
+    v10.i64 = mload $sonatina_bss i64;
+    call %sys_sp1_commit_u64 v8;
+    call %sys_sp1_commit_u64 v9;
+    call %sys_sp1_commit_u64 v10;
+    v11.i64 = call %sonatina_aggregate_wrapper 11.i64 23.i64 v4;
+    v12.i64 = mload v4 i64;
+    call %sys_sp1_commit_u64 v11;
+    call %sys_sp1_commit_u64 v12;
+    v13.objref<i64> = obj.alloc i64;
+    obj.store v13 10.i64;
+    v14.objref<i64> = call %choose 1.i1 v13;
+    v15.objref<i64> = call %choose 0.i1 v13;
+    obj.store v14 42.i64;
+    v16.i64 = obj.load v13;
+    v17.i64 = obj.load v15;
+    call %sys_sp1_commit_u64 v16;
+    call %sys_sp1_commit_u64 v17;
+    v18.i64 = call %sys_sp1_read_u64;
+    br_table v18 block4 (0.i64 block2) (1.i64 block3);
+block2:
+    call %sys_sp1_commit_u64 100.i64;
+    return 0.i32;
+block3:
+    call %sys_sp1_commit_u64 200.i64;
+    return 0.i32;
+block4:
+    call %sys_sp1_commit_u64 300.i64;
+    return 0.i32;
+block5:
+    unreachable;
+}

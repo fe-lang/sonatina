@@ -1,0 +1,18 @@
+declare external %sys_sp1_read_u32() -> i32;
+declare external %sys_sp1_read_u64() -> i64;
+declare external %sys_sp1_commit_u32(i32);
+declare external %sys_sp1_commit_u64(i64);
+
+func public %main() -> i32 {
+block0:
+    v0.i32 = call %sys_sp1_read_u32;
+    v1.i64 = call %sys_sp1_read_u64;
+    (v2.i32, v3.i1) = uaddo v0 1.i32;
+    br v3 block2 block1;
+block1:
+    call %sys_sp1_commit_u32 v2;
+    call %sys_sp1_commit_u64 v1;
+    return 0.i32;
+block2:
+    unreachable;
+}
