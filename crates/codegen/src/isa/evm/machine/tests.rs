@@ -1,3 +1,5 @@
+use std::{collections::BTreeSet, sync::Arc};
+
 use sonatina_ir::{
     I256, Immediate, Linkage, Signature, Type,
     builder::ModuleBuilder,
@@ -5,7 +7,7 @@ use sonatina_ir::{
     inst::{
         arith::Add,
         cmp::{IsZero, Lt},
-        control_flow::{Br, BranchKind, Jump, Return},
+        control_flow::{Br, BrTable, BranchKind, Jump, Phi, Return},
         data::Alloca,
         evm::{EvmMload, EvmMstore},
         logic::And,
@@ -19,9 +21,13 @@ use sonatina_ir::{
 };
 use sonatina_parser::parse_module;
 use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
+use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_function};
 
 use super::{
-    branch::canonicalize_machine_branch_conditions, pipeline::run_machine_opt_pipeline,
+    super::{LateCleanupProfile, SwitchLoweringStrategy},
+    branch::canonicalize_machine_branch_conditions,
+    pipeline::run_machine_opt_pipeline,
+    switch::lower_switches,
     verify::verify_machine_function,
 };
 
@@ -35,6 +41,158 @@ fn evm_triple() -> TargetTriple {
 
 fn machine_builder() -> ModuleBuilder {
     ModuleBuilder::new(ModuleCtx::new(&EvmMachine::new(evm_triple())))
+}
+
+#[test]
+fn machine_switch_tree_preserves_phi_inputs_and_attribution() {
+    let mb = machine_builder();
+    let func_ref = mb
+        .declare_function(Signature::new_single(
+            "switch_phi",
+            Linkage::Public,
+            &[Type::I256],
+            Type::I256,
+        ))
+        .unwrap();
+    let machine = EvmMachine::new(mb.triple());
+    let is = machine.inst_set();
+    let mut builder = mb.func_builder::<InstInserter>(func_ref);
+    let entry = builder.append_block();
+    let root = builder.append_block();
+    let other = builder.append_block();
+    let shared = builder.append_block();
+    let input = builder.func.arg_values[0];
+    let zero = builder.make_imm_value(Immediate::zero(Type::I256));
+    let one = builder.make_imm_value(Immediate::one(Type::I256));
+    builder.switch_to_block(entry);
+    builder.insert_inst_no_result(Jump::new(is, root));
+    builder.switch_to_block(root);
+    let carried = builder.insert_inst(Phi::new(is, vec![(input, entry)]), Type::I256);
+    let next = builder.insert_inst(Add::new(is, carried, one), Type::I256);
+    let root_phi = builder.func.dfg.value_inst(carried).unwrap();
+    builder.func.dfg.replace_inst(
+        root_phi,
+        Box::new(Phi::new(is, vec![(input, entry), (next, root)])),
+    );
+    let cases = (0..16)
+        .map(|key| {
+            let value = builder.make_imm_value(Immediate::from_i256(key.into(), Type::I256));
+            let dest = match key % 3 {
+                0 => root,
+                1 => shared,
+                _ => other,
+            };
+            (value, dest)
+        })
+        .collect();
+    builder.insert_inst_no_result(BrTable::new(is, input, Some(shared), cases));
+    let term = builder.func.layout.last_inst_of(root).unwrap();
+    builder
+        .func
+        .set_inst_frontend_origin(term, Arc::from("selector-source"));
+    builder
+        .func
+        .set_inst_provenance(term, "selector-provenance".into());
+    builder.switch_to_block(other);
+    builder.insert_inst_no_result(Jump::new(is, shared));
+    builder.switch_to_block(shared);
+    let merged = builder.insert_inst(Phi::new(is, vec![(next, root), (zero, other)]), Type::I256);
+    builder.insert_inst_no_result(Return::new_single(is, merged));
+    builder.seal_all();
+    builder.finish();
+    let module = mb.build();
+    module.func_store.modify(func_ref, |func| {
+        let old_insts: BTreeSet<_> = func
+            .layout
+            .iter_block()
+            .flat_map(|block| func.layout.iter_inst(block))
+            .collect();
+        lower_switches(func);
+        verify_machine_function(func_ref, func).unwrap();
+        // General SSA/dominance/user checks apply to machine IR too; its target-specific
+        // word result types are checked above instead of using high-level type rules.
+        let cfg = VerifierConfig {
+            level: VerificationLevel::Fast,
+            ..VerifierConfig::for_level(VerificationLevel::Full)
+        };
+        let report = verify_function(&module.ctx, func_ref, func, &cfg);
+        assert!(!report.has_errors(), "{report:?}");
+        let phi = func.dfg.cast_phi(root_phi).unwrap();
+        assert!(
+            phi.args()
+                .iter()
+                .any(|&(value, pred)| value == input && pred == entry)
+        );
+        assert!(
+            phi.args()
+                .iter()
+                .filter(|&&(_, pred)| pred != entry)
+                .all(|&(value, pred)| value == next && pred != root)
+        );
+        let shared_phi = func
+            .dfg
+            .cast_phi(func.dfg.value_inst(merged).unwrap())
+            .unwrap();
+        assert!(
+            shared_phi
+                .args()
+                .iter()
+                .filter(|&&(_, pred)| pred != other)
+                .all(|&(value, pred)| value == next && pred != root)
+        );
+        for inst in func
+            .layout
+            .iter_block()
+            .flat_map(|block| func.layout.iter_inst(block))
+            .filter(|inst| !old_insts.contains(inst))
+        {
+            assert_eq!(func.inst_frontend_origin(inst), Some("selector-source"));
+            assert_eq!(func.inst_provenance(inst), Some("selector-provenance"));
+        }
+        let once = FuncWriter::new(func_ref, func).dump_string();
+        lower_switches(func);
+        assert_eq!(FuncWriter::new(func_ref, func).dump_string(), once);
+    });
+}
+
+#[test]
+fn machine_switch_without_default_is_unchanged() {
+    let mb = machine_builder();
+    let func_ref = mb
+        .declare_function(Signature::new_single(
+            "switch_no_default",
+            Linkage::Public,
+            &[Type::I256],
+            Type::I256,
+        ))
+        .unwrap();
+    let machine = EvmMachine::new(mb.triple());
+    let is = machine.inst_set();
+    let mut builder = mb.func_builder::<InstInserter>(func_ref);
+    let entry = builder.append_block();
+    let left = builder.append_block();
+    let right = builder.append_block();
+    builder.switch_to_block(entry);
+    let input = builder.func.arg_values[0];
+    let cases = (0..16)
+        .map(|key| {
+            let value = builder.make_imm_value(Immediate::from_i256(key.into(), Type::I256));
+            (value, if key % 2 == 0 { left } else { right })
+        })
+        .collect();
+    builder.insert_inst_no_result(BrTable::new(is, input, None, cases));
+    for block in [left, right] {
+        builder.switch_to_block(block);
+        builder.insert_inst_no_result(Return::new_single(is, input));
+    }
+    builder.seal_all();
+    builder.finish();
+    let module = mb.build();
+    module.func_store.modify(func_ref, |func| {
+        let before = FuncWriter::new(func_ref, func).dump_string();
+        lower_switches(func);
+        assert_eq!(FuncWriter::new(func_ref, func).dump_string(), before);
+    });
 }
 
 fn expect_machine_rejects(src: &str) {
@@ -202,8 +360,13 @@ fn machine_gvn_folds_word_bool_constant_without_zext() {
     builder.finish();
 
     let module = mb.build();
-    run_machine_opt_pipeline(&module, &[func_ref], false)
-        .expect("GVN should fold word bool constants without panicking");
+    run_machine_opt_pipeline(
+        &module,
+        &[func_ref],
+        LateCleanupProfile::Off,
+        SwitchLoweringStrategy::Auto,
+    )
+    .expect("GVN should fold word bool constants without panicking");
     module.func_store.view(func_ref, |function| {
         let dumped = FuncWriter::new(func_ref, function).dump_string();
         assert!(dumped.contains("return 1.i256;"), "{dumped}");
@@ -276,8 +439,13 @@ fn machine_gvn_accepts_truthy_word_branch_condition() {
     builder.finish();
 
     let module = mb.build();
-    run_machine_opt_pipeline(&module, &[func_ref], false)
-        .expect("GVN should accept truthy word branch conditions");
+    run_machine_opt_pipeline(
+        &module,
+        &[func_ref],
+        LateCleanupProfile::Off,
+        SwitchLoweringStrategy::Auto,
+    )
+    .expect("GVN should accept truthy word branch conditions");
 }
 
 #[test]

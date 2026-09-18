@@ -3,7 +3,12 @@ use tracing::debug_span;
 
 use crate::optim::pipeline::{FuncPassOverrides, Pass, run_function_pass_round};
 
-use super::{branch::canonicalize_machine_branch_conditions, verify::verify_machine_module};
+use super::{
+    super::{LateCleanupProfile, SwitchLoweringStrategy},
+    branch::canonicalize_machine_branch_conditions,
+    switch::lower_switches,
+    verify::verify_machine_module,
+};
 
 const MACHINE_PASSES: &[Pass] = &[
     Pass::CfgCleanup,
@@ -19,7 +24,8 @@ const MACHINE_PASSES: &[Pass] = &[
 pub(crate) fn run_machine_opt_pipeline(
     module: &Module,
     funcs: &[FuncRef],
-    canonicalize_word_branches: bool,
+    profile: LateCleanupProfile,
+    switch_strategy: SwitchLoweringStrategy,
 ) -> Result<(), String> {
     let _span = debug_span!(
         "sonatina.codegen.evm.machine.pipeline",
@@ -38,12 +44,20 @@ pub(crate) fn run_machine_opt_pipeline(
             object_effects: None,
         },
     );
-    if canonicalize_word_branches {
-        for &func in funcs {
-            module
-                .func_store
-                .modify(func, canonicalize_machine_branch_conditions);
-        }
+    let use_tree = match switch_strategy {
+        SwitchLoweringStrategy::Auto => profile == LateCleanupProfile::Speed,
+        SwitchLoweringStrategy::Linear => false,
+        SwitchLoweringStrategy::Tree => true,
+    };
+    for &func in funcs {
+        module.func_store.modify(func, |function| {
+            if use_tree {
+                lower_switches(function);
+            }
+            if profile == LateCleanupProfile::Size {
+                canonicalize_machine_branch_conditions(function);
+            }
+        });
     }
     verify_machine_module(module, funcs)
 }

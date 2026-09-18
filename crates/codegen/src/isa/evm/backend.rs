@@ -43,6 +43,18 @@ pub enum LateCleanupProfile {
     Size,
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum SwitchLoweringStrategy {
+    /// Use comparison trees for speed optimization and linear chains otherwise.
+    #[default]
+    Auto,
+    /// Retain linear equality chains for all switches.
+    Linear,
+    /// Use balanced comparison trees with small linear leaves, regardless of profile.
+    /// Only constant switches with an explicit default are eligible.
+    Tree,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ImmediateMaterializationMode {
     Gas,
@@ -56,6 +68,7 @@ pub struct EvmBackend {
     pub(crate) stackify_search_profile: StackifySearchProfile,
     pub(crate) arena_cost_model: ArenaCostModel,
     pub(crate) late_cleanup_profile: LateCleanupProfile,
+    pub(crate) switch_lowering_strategy: SwitchLoweringStrategy,
     pub(crate) immediate_materialization_mode: ImmediateMaterializationMode,
     pub(crate) capture_stackify_trace: bool,
 }
@@ -76,6 +89,7 @@ impl EvmBackend {
             stackify_search_profile: StackifySearchProfile::Exact,
             arena_cost_model: ArenaCostModel::default(),
             late_cleanup_profile: LateCleanupProfile::Off,
+            switch_lowering_strategy: SwitchLoweringStrategy::Auto,
             immediate_materialization_mode: ImmediateMaterializationMode::Gas,
             capture_stackify_trace: false,
         }
@@ -92,6 +106,11 @@ impl EvmBackend {
 
     pub fn with_late_cleanup_profile(mut self, profile: LateCleanupProfile) -> Self {
         self.late_cleanup_profile = profile;
+        self
+    }
+
+    pub fn with_switch_lowering_strategy(mut self, strategy: SwitchLoweringStrategy) -> Self {
+        self.switch_lowering_strategy = strategy;
         self
     }
 
