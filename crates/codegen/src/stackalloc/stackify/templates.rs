@@ -2,7 +2,11 @@ use cranelift_entity::SecondaryMap;
 use smallvec::SmallVec;
 use sonatina_ir::{BlockId, Function, ValueId, cfg::ControlFlowGraph};
 
-use crate::{bitset::BitSet, domtree::DomTree, liveness::Liveness};
+use crate::{
+    bitset::BitSet,
+    domtree::DomTree,
+    liveness::{Liveness, phi_args_for_edge},
+};
 
 use super::{
     builder::StackifyContext,
@@ -299,21 +303,4 @@ pub(super) fn compute_phi_out_sources(
         sets[block] = set;
     }
     sets
-}
-
-pub(super) fn phi_args_for_edge(
-    func: &Function,
-    pred: BlockId,
-    succ: BlockId,
-) -> SmallVec<[ValueId; 4]> {
-    func.layout
-        .iter_inst(succ)
-        .map_while(|inst| {
-            func.dfg.cast_phi(inst).and_then(|phi| {
-                phi.args()
-                    .iter()
-                    .find_map(|(val, block)| (*block == pred).then_some(*val))
-            })
-        })
-        .collect()
 }

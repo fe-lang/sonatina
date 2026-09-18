@@ -11,7 +11,7 @@ use super::{
 };
 use crate::{
     cfg_scc::CfgSccAnalysis,
-    liveness::Liveness,
+    liveness::{Liveness, phi_args_for_edge},
     module_analysis::{CallGraph, SccBuilder},
     transform::aggregate::{
         ObjectEffectSummaryMap, compute_object_effect_summaries, object_locality,
@@ -223,6 +223,16 @@ fn check_lifetimes(function: &Function, effects: &ObjectEffectSummaryMap) -> Res
         liveness.compute(function, &cfg);
         for block in cfg.post_order() {
             let mut live = liveness.block_live_outs(block).clone();
+            // Phi inputs are uses at the predecessor's tail. Block liveness
+            // can omit inputs defined here, including aliases carried only
+            // along a backedge, so seed them before scanning allocations.
+            for &succ in cfg.succs_of(block) {
+                for value in phi_args_for_edge(function, block, succ) {
+                    if !function.dfg.value_is_imm(value) {
+                        live.insert(value);
+                    }
+                }
+            }
             let insts: Vec<_> = function.layout.iter_inst(block).collect();
             for inst in insts.into_iter().rev() {
                 for &result in function.dfg.inst_results(inst) {
@@ -669,9 +679,11 @@ block2:
 
     #[test]
     fn loop_carried_reference_two_iterations_old_is_still_live() {
-        let module = verified_module(
-            r#"
-func public %run(v0.i64) -> i64 {
+        for reads_before_allocation in [true, false] {
+            let read = "v9.i64 = obj.load v6;";
+            let source = format!(
+                r#"
+func public %run(v0.i64) -> i64 {{
 block0:
     v1.objref<i64> = obj.alloc i64;
     obj.store v1 42.i64;
@@ -681,20 +693,25 @@ block1:
     v6.objref<i64> = phi (v1 block0) (v2 block1);
     v3.i64 = phi (0.i64 block0) (v5 block1);
     v8.i64 = obj.load v2;
+    {before}
     v4.objref<i64> = obj.alloc i64;
     obj.store v4 v3;
-    v9.i64 = obj.load v6;
+    {after}
     v5.i64 = add v3 1.i64;
     v7.i1 = lt v5 v0;
     br v7 block1 block2;
 block2:
     v10.i64 = add v8 v9;
     return v10;
-}
+}}
 "#,
-        );
-        let error = legalize_native_object_returns(&module).unwrap_err();
-        assert!(error.contains("loop-carried fresh object"), "{error}");
+                before = if reads_before_allocation { read } else { "" },
+                after = if reads_before_allocation { "" } else { read },
+            );
+            let module = verified_module(&source);
+            let error = legalize_native_object_returns(&module).expect_err(&source);
+            assert!(error.contains("loop-carried fresh object"), "{error}");
+        }
     }
 
     #[test]

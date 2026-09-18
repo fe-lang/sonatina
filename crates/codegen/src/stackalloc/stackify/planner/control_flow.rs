@@ -1,13 +1,10 @@
 use smallvec::SmallVec;
 use sonatina_ir::{BlockId, InstId, ValueId};
 
-use crate::{bitset::BitSet, stackalloc::Action};
+use crate::{bitset::BitSet, liveness::phi_args_for_edge, stackalloc::Action};
 
 use super::{
-    super::{
-        sym_stack::StackItem,
-        templates::{BlockTemplate, phi_args_for_edge},
-    },
+    super::{sym_stack::StackItem, templates::BlockTemplate},
     Planner,
 };
 
