@@ -414,9 +414,45 @@ pub(super) fn unsigned_div_rem_i256_limbs(
         std::array::from_fn(|_| builder.append_block_param(exit, clif::types::I64));
     let initial_bit = builder.ins().iconst(clif::types::I64, (bits - 1) as i64);
     let zero = builder.ins().iconst(clif::types::I64, 0);
-    builder.ins().jump(
+
+    // Avoid the bitwise loop for a zero quotient and for scalar-sized inputs.
+    // Signed callers apply this to magnitudes, then restore the result signs.
+    let scalar_check = builder.create_block();
+    let scalar = builder.create_block();
+    let smaller = emit_i256_unsigned_lt_limbs(numerator, denominator, builder);
+    let [n0, n1, n2, n3] = numerator;
+    builder.ins().brif(
+        smaller,
+        exit,
+        &[zero, zero, zero, zero, n0, n1, n2, n3].map(BlockArg::from),
+        scalar_check,
+        &[],
+    );
+    builder.switch_to_block(scalar_check);
+    let mut high = zero;
+    for &limb in numerator[1..bits / 64]
+        .iter()
+        .chain(&denominator[1..bits / 64])
+    {
+        high = builder.ins().bor(high, limb);
+    }
+    let fits_scalar = builder.ins().icmp_imm_s(IntCC::Equal, high, 0);
+    let nonzero = builder.ins().icmp_imm_s(IntCC::NotEqual, denominator[0], 0);
+    let use_scalar = builder.ins().band(fits_scalar, nonzero);
+    builder.ins().brif(
+        use_scalar,
+        scalar,
+        &[],
         header,
         &[initial_bit, zero, zero, zero, zero, zero, zero, zero, zero].map(BlockArg::from),
+    );
+    builder.switch_to_block(scalar);
+    let quotient = builder.ins().udiv(numerator[0], denominator[0]);
+    let product = builder.ins().imul(quotient, denominator[0]);
+    let remainder = builder.ins().isub(numerator[0], product);
+    builder.ins().jump(
+        exit,
+        &[quotient, zero, zero, zero, remainder, zero, zero, zero].map(BlockArg::from),
     );
     builder.switch_to_block(header);
 
