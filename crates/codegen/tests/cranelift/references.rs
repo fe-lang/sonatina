@@ -134,3 +134,54 @@ block0:
         }
     }
 }
+
+#[test]
+fn loop_carried_value_snapshot_precedes_fresh_storage_reuse() {
+    let source = r#"
+func private %read(v0.objref<[i64; 2]>) -> i64 {
+block0:
+    v1.objref<i64> = obj.index v0 1.i64;
+    v2.i64 = obj.load v1;
+    return v2;
+}
+func public %exercise(v0.i64) -> i64 {
+block0:
+    v1.objref<[i64; 2]> = obj.alloc [i64; 2];
+    v2.objref<i64> = obj.index v1 1.i64;
+    obj.store v2 37.i64;
+    jump block1;
+block1:
+    v3.objref<[i64; 2]> = phi (v1 block0) (v8 block1);
+    v4.i64 = phi (0.i64 block0) (v11 block1);
+    v5.i64 = call %read v3;
+    v6.i64 = add v5 3.i64;
+    v8.objref<[i64; 2]> = obj.alloc [i64; 2];
+    v9.objref<i64> = obj.index v8 1.i64;
+    obj.store v9 v6;
+    v11.i64 = add v4 1.i64;
+    v12.i1 = lt v11 v0;
+    br v12 block1 block2;
+block2:
+    v13.i64 = call %read v8;
+    return v13;
+}
+"#;
+    for level in [OptLevel::O0, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap();
+        let exercise: unsafe extern "C" fn(i64) -> i64 =
+            unsafe { std::mem::transmute(artifact.function_address("exercise").unwrap()) };
+        for iterations in [1, 2, 3, 17, 64] {
+            assert_eq!(
+                unsafe { exercise(iterations) },
+                37 + 3 * iterations,
+                "{level:?}"
+            );
+        }
+    }
+}

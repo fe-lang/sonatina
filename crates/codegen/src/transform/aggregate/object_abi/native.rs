@@ -11,10 +11,14 @@ use super::{
 };
 use crate::{
     cfg_scc::CfgSccAnalysis,
+    liveness::Liveness,
     module_analysis::{CallGraph, SccBuilder},
     transform::aggregate::{
         ObjectEffectSummaryMap, compute_object_effect_summaries, object_locality,
-        object_tracking::AggregateFacts, private_abi, provenance::ProvenanceSnapshot, shape,
+        object_tracking::AggregateFacts,
+        private_abi,
+        provenance::{ProvenanceSnapshot, RootValue},
+        shape,
     },
 };
 
@@ -165,6 +169,7 @@ fn check_lifetimes(function: &Function, effects: &ObjectEffectSummaryMap) -> Res
     cfg.compute(function);
     let mut sccs = CfgSccAnalysis::new();
     sccs.compute(&cfg);
+    let mut loop_roots = FxHashMap::default();
     for block in function.layout.iter_block() {
         for inst in function.layout.iter_inst(block) {
             if downcast::<&control_flow::Phi>(function.inst_set(), function.dfg.inst(inst))
@@ -173,18 +178,14 @@ fn check_lifetimes(function: &Function, effects: &ObjectEffectSummaryMap) -> Res
                 && let Some(scc) = sccs
                     .scc_of(block)
                     .filter(|&scc| sccs.scc_data(scc).is_cycle)
-                && facts.may().may_roots(result).observed().iter().any(|root| {
-                    function
-                        .dfg
-                        .value_inst(root.value())
-                        .is_some_and(|root_inst| {
-                            sccs.scc_of(function.layout.inst_block(root_inst)) == Some(scc)
-                        })
-                })
             {
-                return Err(format!(
-                    "unproven loop-carried fresh object at {inst:?}; a static stack slot cannot preserve distinct iterations"
-                ));
+                for root in facts.may().may_roots(result).observed().iter() {
+                    if let Some(root_inst) = function.dfg.value_inst(root.value())
+                        && sccs.scc_of(function.layout.inst_block(root_inst)) == Some(scc)
+                    {
+                        loop_roots.insert(root_inst, root.value());
+                    }
+                }
             }
             let Some(ret) =
                 downcast::<&control_flow::Return>(function.inst_set(), function.dfg.inst(inst))
@@ -208,6 +209,40 @@ fn check_lifetimes(function: &Function, effects: &ObjectEffectSummaryMap) -> Res
                 {
                     return Err(format!(
                         "unproven object-reference return at {inst:?}; stack-only native returns must borrow caller storage"
+                    ));
+                }
+            }
+        }
+    }
+    if !loop_roots.is_empty() {
+        // A cyclic allocation can reuse one stack slot only after every alias
+        // of its previous instance has died. A phi alone does not imply overlap:
+        // value loops commonly read the old object before constructing the next.
+        // Check before the allocation, excluding its newly defined result.
+        let mut liveness = Liveness::new();
+        liveness.compute(function, &cfg);
+        for block in cfg.post_order() {
+            let mut live = liveness.block_live_outs(block).clone();
+            let insts: Vec<_> = function.layout.iter_inst(block).collect();
+            for inst in insts.into_iter().rev() {
+                for &result in function.dfg.inst_results(inst) {
+                    live.remove(result);
+                }
+                if !function.dfg.is_phi(inst) {
+                    function.dfg.inst(inst).for_each_value(&mut |value| {
+                        if !function.dfg.value_is_imm(value) {
+                            live.insert(value);
+                        }
+                    });
+                }
+                if let Some(&root) = loop_roots.get(&inst)
+                    && let Some(alias) = live.iter().find(|&value| {
+                        let roots = facts.may().may_roots(value);
+                        roots.has_unknown() || roots.observed().contains(RootValue::new(root))
+                    })
+                {
+                    return Err(format!(
+                        "unproven loop-carried fresh object at {inst:?}: {alias:?} remains live when {root:?} is allocated again; a static stack slot cannot preserve distinct iterations"
                     ));
                 }
             }
@@ -474,6 +509,86 @@ block1:
     br v7 block1 block2;
 block2:
     return v6;
+}
+"#,
+        );
+        let error = legalize_native_object_returns(&module).unwrap_err();
+        assert!(error.contains("loop-carried fresh object"), "{error}");
+    }
+
+    #[test]
+    fn loop_carried_projected_alias_must_die_before_reallocation() {
+        for reads_before_allocation in [true, false] {
+            let read = "v9.i64 = obj.load v8;";
+            let source = format!(
+                r#"
+func private %borrow(v0.objref<[i64; 2]>) -> objref<i64> {{
+block0:
+    v1.objref<i64> = obj.index v0 1.i64;
+    return v1;
+}}
+func public %run(v0.i64) -> i64 {{
+block0:
+    v1.objref<[i64; 2]> = obj.alloc [i64; 2];
+    v6.objref<i64> = obj.index v1 1.i64;
+    obj.store v6 42.i64;
+    jump block1;
+block1:
+    v2.objref<[i64; 2]> = phi (v1 block0) (v4 block1);
+    v3.i64 = phi (0.i64 block0) (v5 block1);
+    v8.objref<i64> = call %borrow v2;
+    {before}
+    v4.objref<[i64; 2]> = obj.alloc [i64; 2];
+    v10.objref<i64> = obj.index v4 1.i64;
+    obj.store v10 v3;
+    {after}
+    v5.i64 = add v3 1.i64;
+    v7.i1 = lt v5 v0;
+    br v7 block1 block2;
+block2:
+    return v9;
+}}
+"#,
+                before = if reads_before_allocation { read } else { "" },
+                after = if reads_before_allocation { "" } else { read },
+            );
+            let module = verified_module(&source);
+            let result = legalize_native_object_returns(&module);
+            if reads_before_allocation {
+                result.unwrap();
+                let report =
+                    verify_module(&module, &VerifierConfig::for_level(VerificationLevel::Full));
+                assert!(!report.has_errors(), "{report}");
+            } else {
+                let error = result.unwrap_err();
+                assert!(error.contains("loop-carried fresh object"), "{error}");
+            }
+        }
+    }
+
+    #[test]
+    fn loop_carried_reference_two_iterations_old_is_still_live() {
+        let module = verified_module(
+            r#"
+func public %run(v0.i64) -> i64 {
+block0:
+    v1.objref<i64> = obj.alloc i64;
+    obj.store v1 42.i64;
+    jump block1;
+block1:
+    v2.objref<i64> = phi (v1 block0) (v4 block1);
+    v6.objref<i64> = phi (v1 block0) (v2 block1);
+    v3.i64 = phi (0.i64 block0) (v5 block1);
+    v8.i64 = obj.load v2;
+    v4.objref<i64> = obj.alloc i64;
+    obj.store v4 v3;
+    v9.i64 = obj.load v6;
+    v5.i64 = add v3 1.i64;
+    v7.i1 = lt v5 v0;
+    br v7 block1 block2;
+block2:
+    v10.i64 = add v8 v9;
+    return v10;
 }
 "#,
         );
