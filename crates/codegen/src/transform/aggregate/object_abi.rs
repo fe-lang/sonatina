@@ -398,11 +398,9 @@ impl ObjectReturnOutParam {
         let Some(&root_slice) = root_slices.get(&root) else {
             return false;
         };
-        let root_ty = function.dfg.value_ty(root);
         object_locality::object_root_stays_local_with_effects(
             function,
             root,
-            root_ty,
             object_effects,
             |value| {
                 self.root_value_is_allowed(

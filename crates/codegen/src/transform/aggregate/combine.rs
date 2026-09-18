@@ -998,13 +998,7 @@ fn collect_local_object_roots(func: &Function) -> FxHashSet<ValueId> {
 }
 fn object_root_stays_local(func: &Function, root: ValueId) -> bool {
     let local_object_args = FxHashMap::default();
-    object_locality::object_root_stays_local(
-        func,
-        root,
-        func.dfg.value_ty(root),
-        &local_object_args,
-        false,
-    )
+    object_locality::object_root_stays_local(func, root, &local_object_args, false)
 }
 fn kill_pending_enum_writes_for_root(pending_enum_writes: &mut PendingEnumWrites, root: RootValue) {
     pending_enum_writes.retain(|slice, _| slice.root() != root);
