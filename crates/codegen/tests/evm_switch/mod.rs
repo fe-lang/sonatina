@@ -2,9 +2,12 @@ use std::fmt::Write;
 
 use revm::primitives::{AccountInfo, Address, Bytes, Env, TransactTo, U256 as EvmU256, keccak256};
 use sonatina_codegen::{
-    isa::evm::{EvmBackend, LateCleanupProfile, SwitchLoweringStrategy},
+    compile::{EvmCompile, OptLevel},
+    isa::evm::{
+        EvmBackend, ImmediateMaterializationMode, LateCleanupProfile, SwitchLoweringStrategy,
+    },
     object::{CompileOptions, compile_all_objects},
-    optim::pipeline::Pipeline,
+    stackalloc::StackifySearchProfile,
 };
 use sonatina_ir::{U256, isa::evm::Evm};
 
@@ -12,22 +15,51 @@ use super::{
     EvmHarness, ExecutionResult, Output, execution_gas_used, initial_tx_gas_for_call, parse_sona,
 };
 
-fn compile_switch(
-    source: &str,
-    strategy: SwitchLoweringStrategy,
-    profile: LateCleanupProfile,
-) -> Vec<u8> {
-    let mut parsed = parse_sona(source);
-    match profile {
-        LateCleanupProfile::Speed => Pipeline::speed().run(&mut parsed.module),
-        LateCleanupProfile::Size => Pipeline::size().run(&mut parsed.module),
-        LateCleanupProfile::Off => {}
-    }
-    let backend = EvmBackend::new(Evm::new(parsed.module.ctx.triple))
+fn compile_switch(source: &str, strategy: SwitchLoweringStrategy, level: OptLevel) -> Vec<u8> {
+    let mut compiler = EvmCompile::new(parse_sona(source).module).with_opt_level(level);
+    let module = compiler.optimize();
+    // Configure the override using the complete public optimization profile, and
+    // cross-check Auto against EvmCompile below so profile drift fails the tests.
+    let (profile, search, mode) = match level {
+        OptLevel::O0 => (
+            LateCleanupProfile::Off,
+            StackifySearchProfile::Fast,
+            ImmediateMaterializationMode::Gas,
+        ),
+        OptLevel::O1 => (
+            LateCleanupProfile::Speed,
+            StackifySearchProfile::GreedyWide,
+            ImmediateMaterializationMode::Gas,
+        ),
+        OptLevel::O2 => (
+            LateCleanupProfile::Speed,
+            StackifySearchProfile::Exact,
+            ImmediateMaterializationMode::Balanced,
+        ),
+        OptLevel::Os => (
+            LateCleanupProfile::Size,
+            StackifySearchProfile::Exact,
+            ImmediateMaterializationMode::Size,
+        ),
+    };
+    let backend = EvmBackend::new(Evm::new(module.ctx.triple))
         .with_late_cleanup_profile(profile)
+        .with_stackify_search_profile(search)
+        .with_immediate_materialization_mode(mode)
         .with_switch_lowering_strategy(strategy);
-    let artifacts = compile_all_objects(&parsed.module, &backend, &CompileOptions::default())
+    let artifacts = compile_all_objects(module, &backend, &CompileOptions::default())
         .expect("switch should compile");
+    if strategy == SwitchLoweringStrategy::Auto {
+        let public = compiler.compile().expect("public compiler should succeed");
+        assert_eq!(artifacts.len(), public.len());
+        assert_eq!(artifacts[0].sections.len(), public[0].sections.len());
+        for ((name, manual), (public_name, public_section)) in
+            artifacts[0].sections.iter().zip(&public[0].sections)
+        {
+            assert_eq!(name, public_name);
+            assert_eq!(manual.bytes, public_section.bytes);
+        }
+    }
     assert_eq!(artifacts.len(), 1);
     let artifact = artifacts.into_iter().next().unwrap();
     artifact
@@ -105,7 +137,7 @@ fn switch_lowering_scaling() {
         let source = switch_source(&keys, 32);
         let mut means = Vec::new();
         for strategy in [SwitchLoweringStrategy::Linear, SwitchLoweringStrategy::Tree] {
-            let bytes = compile_switch(&source, strategy, LateCleanupProfile::Speed);
+            let bytes = compile_switch(&source, strategy, OptLevel::O2);
             let mut harness = EvmHarness::from_runtime(&bytes);
             let gas: Vec<_> = keys
                 .iter()
@@ -162,13 +194,9 @@ fn switch_lowering_unsigned_words_and_narrow_values() {
             max - U256::one(),
         ];
         let source = switch_source(&keys, bits);
-        for profile in [
-            LateCleanupProfile::Off,
-            LateCleanupProfile::Speed,
-            LateCleanupProfile::Size,
-        ] {
+        for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2, OptLevel::Os] {
             for strategy in [SwitchLoweringStrategy::Linear, SwitchLoweringStrategy::Tree] {
-                let bytes = compile_switch(&source, strategy, profile);
+                let bytes = compile_switch(&source, strategy, level);
                 let mut harness = EvmHarness::from_runtime(&bytes);
                 let inputs = keys.iter().copied().chain([
                     1.into(),
@@ -200,14 +228,15 @@ fn switch_lowering_unsigned_words_and_narrow_values() {
 fn switch_lowering_automatic_profile_selection() {
     let keys: Vec<_> = (0..16).map(|index| U256::from(index * 3)).collect();
     let source = switch_source(&keys, 256);
-    for (profile, expected) in [
-        (LateCleanupProfile::Off, SwitchLoweringStrategy::Linear),
-        (LateCleanupProfile::Size, SwitchLoweringStrategy::Linear),
-        (LateCleanupProfile::Speed, SwitchLoweringStrategy::Tree),
+    for (level, expected) in [
+        (OptLevel::O0, SwitchLoweringStrategy::Linear),
+        (OptLevel::Os, SwitchLoweringStrategy::Linear),
+        (OptLevel::O1, SwitchLoweringStrategy::Tree),
+        (OptLevel::O2, SwitchLoweringStrategy::Tree),
     ] {
         assert_eq!(
-            compile_switch(&source, SwitchLoweringStrategy::Auto, profile),
-            compile_switch(&source, expected, profile)
+            compile_switch(&source, SwitchLoweringStrategy::Auto, level),
+            compile_switch(&source, expected, level)
         );
     }
 }
@@ -223,16 +252,8 @@ fn switch_lowering_keeps_linear_when_pivot_materialization_is_expensive() {
         pivot + U256::from(2),
     ];
     let source = switch_source(&keys, 256);
-    let linear = compile_switch(
-        &source,
-        SwitchLoweringStrategy::Linear,
-        LateCleanupProfile::Speed,
-    );
-    let tree = compile_switch(
-        &source,
-        SwitchLoweringStrategy::Tree,
-        LateCleanupProfile::Speed,
-    );
+    let linear = compile_switch(&source, SwitchLoweringStrategy::Linear, OptLevel::O2);
+    let tree = compile_switch(&source, SwitchLoweringStrategy::Tree, OptLevel::O2);
     assert_eq!(linear, tree);
     let mut harness = EvmHarness::from_runtime(&tree);
     for (index, key) in keys.into_iter().enumerate() {
@@ -245,7 +266,16 @@ fn switch_lowering_fe_dispatch_64() {
     let source = include_str!("../fixtures/fe_dispatch_64.sntn");
     let mut measurements = String::from("strategy bytes min_gas mean_gas max_gas unknown_gas\n");
     for strategy in [SwitchLoweringStrategy::Linear, SwitchLoweringStrategy::Tree] {
-        let bytes = compile_switch(source, strategy, LateCleanupProfile::Speed);
+        let bytes = compile_switch(source, strategy, OptLevel::O2);
+        assert_eq!(bytes, compile_switch(source, strategy, OptLevel::O1));
+        if strategy == SwitchLoweringStrategy::Tree {
+            for level in [OptLevel::O1, OptLevel::O2] {
+                assert_eq!(
+                    bytes,
+                    compile_switch(source, SwitchLoweringStrategy::Auto, level)
+                );
+            }
+        }
         let mut harness = EvmHarness::from_runtime(&bytes);
         let gas: Vec<_> = (0..64)
             .map(|index| {
@@ -301,6 +331,154 @@ fn switch_lowering_fe_dispatch_64() {
 }
 
 #[test]
+fn switch_lowering_under_stack_pressure() {
+    // Each bit selects one of 18 independent calldata words, preserving the
+    // distinct per-edge live sets from the cost-model regression reproducers.
+    let mixed_keys = (0..7)
+        .map(|index| {
+            if index < 3 {
+                (U256::one() << (120 + index)) - U256::one()
+            } else {
+                (U256::one() << 140) + U256::from(index)
+            }
+        })
+        .collect::<Vec<_>>();
+    let boundary_keys = (0..9)
+        .rev()
+        .map(|index| {
+            if index < 4 {
+                U256::from(index + 1)
+            } else {
+                (U256::one() << 200) - U256::one() + U256::from(index - 4)
+            }
+        })
+        .collect::<Vec<_>>();
+    let examples: [(&str, Vec<U256>, &[u32]); 4] = [
+        (
+            "six",
+            (1..=6).map(U256::from).collect(),
+            &[0x3b7cf, 0x3b7cf, 0x2f68c, 0x22625, 0x349f2, 0x2b00e],
+        ),
+        (
+            "mixed",
+            mixed_keys,
+            &[
+                0x39e34, 0x244ed, 0x26e29, 0x31317, 0x2a494, 0x2aa31, 0x35a83,
+            ],
+        ),
+        (
+            "subtree",
+            boundary_keys,
+            &[
+                0x2b0f1, 0x3f972, 0x3f144, 0x24e52, 0x2c998, 0x3b870, 0x37db1, 0x37d29, 0x35bd3,
+            ],
+        ),
+        (
+            "large",
+            (1..=32).map(U256::from).collect(),
+            &[
+                0x2727c, 0x2161c, 0x2c83c, 0x3b2b7, 0x3bc5e, 0x33512, 0x3c5d1, 0x29370, 0x37f38,
+                0x2936c, 0x23546, 0x2384a, 0x3eb63, 0x25f81, 0x3249d, 0x3686b, 0x220cd, 0x3d440,
+                0x23896, 0x2ec85, 0x2c7bf, 0x3284e, 0x26c62, 0x327aa, 0x35e8f, 0x2f762, 0x28c38,
+                0x2f103, 0x32ee5, 0x28d30, 0x331af, 0x22ebb,
+            ],
+        ),
+    ];
+    let mut measurements = String::from("example level strategy bytes mean_gas max_gas\n");
+    for (name, keys, masks) in examples {
+        let mut source = String::from(
+            "target = \"evm-ethereum-osaka\"\nfunc public %entry() {\nblock0:\n\
+             v0.i256 = evm_calldata_load 0.i256;\n",
+        );
+        let payload: Vec<_> = (1..=18).map(|index| U256::from(index * 17)).collect();
+        for (index, _) in payload.iter().enumerate() {
+            writeln!(
+                source,
+                "v{}.i256 = evm_calldata_load {}.i256;",
+                index + 1,
+                (index + 1) * 32
+            )
+            .unwrap();
+        }
+        source.push_str("br_table v0 block1");
+        for (index, key) in keys.iter().enumerate() {
+            write!(source, " (0x{key:x}.i256 block{})", index + 2).unwrap();
+        }
+        source.push_str(";\nblock1:\nevm_revert 0.i256 0.i256;\n");
+        let mut next_value = payload.len() + 1;
+        for (index, mask) in masks.iter().enumerate() {
+            writeln!(source, "block{}:", index + 2).unwrap();
+            let mut sum = format!("{}.i256", index + 1);
+            for (word, _) in payload.iter().enumerate() {
+                if mask & (1 << word) != 0 {
+                    writeln!(source, "v{next_value}.i256 = add {sum} v{};", word + 1).unwrap();
+                    sum = format!("v{next_value}");
+                    next_value += 1;
+                }
+            }
+            writeln!(
+                source,
+                "mstore 0.i256 {sum} i256;\nevm_return 0.i256 32.i256;"
+            )
+            .unwrap();
+        }
+        source.push_str("}\nobject @Contract { section runtime { entry %entry; } }\n");
+        for level in [OptLevel::O1, OptLevel::O2] {
+            let linear = compile_switch(&source, SwitchLoweringStrategy::Linear, level);
+            let auto = compile_switch(&source, SwitchLoweringStrategy::Auto, level);
+            if keys.len() <= 8 {
+                assert_eq!(auto, linear, "{name} {level:?} should remain linear");
+            } else {
+                assert_ne!(auto, linear, "{name} {level:?} should still split");
+            }
+            let mut total_gas = Vec::new();
+            for (strategy, bytes) in [("Linear", linear), ("Auto", auto)] {
+                let mut harness = EvmHarness::from_runtime(&bytes);
+                let gas: Vec<_> = keys
+                    .iter()
+                    .zip(masks)
+                    .enumerate()
+                    .map(|(index, (key, mask))| {
+                        let calldata: Vec<_> = [*key]
+                            .iter()
+                            .chain(&payload)
+                            .flat_map(|word| word.to_big_endian())
+                            .collect();
+                        let expected = payload
+                            .iter()
+                            .enumerate()
+                            .filter(|(word, _)| mask & (1 << word) != 0)
+                            .fold(U256::from(index + 1), |sum, (_, value)| sum + value);
+                        check_call(&mut harness, &calldata, expected)
+                    })
+                    .collect();
+                for unknown in [U256::zero(), U256::MAX] {
+                    assert!(matches!(
+                        harness.call(&unknown.to_big_endian()),
+                        ExecutionResult::Revert { .. }
+                    ));
+                }
+                let sum: u64 = gas.iter().sum();
+                total_gas.push(sum);
+                writeln!(
+                    measurements,
+                    "{name} {level:?} {strategy} {} {:.2} {}",
+                    bytes.len(),
+                    sum as f64 / keys.len() as f64,
+                    gas.iter().max().unwrap()
+                )
+                .unwrap();
+            }
+            assert!(total_gas[1] <= total_gas[0], "{name} {level:?}");
+            if name == "large" {
+                assert!(total_gas[1] * 3 < total_gas[0] * 2);
+            }
+        }
+    }
+    insta::assert_snapshot!("switch_lowering_under_stack_pressure", measurements);
+}
+
+#[test]
 fn switch_lowering_preserves_shared_phi_edges_and_loops() {
     let source = r#"
 target = "evm-ethereum-osaka"
@@ -325,9 +503,9 @@ block3:
 }
 object @Contract { section runtime { entry %entry; } }
 "#;
-    for profile in [LateCleanupProfile::Off, LateCleanupProfile::Speed] {
+    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2] {
         for strategy in [SwitchLoweringStrategy::Linear, SwitchLoweringStrategy::Tree] {
-            let bytes = compile_switch(source, strategy, profile);
+            let bytes = compile_switch(source, strategy, level);
             let mut harness = EvmHarness::from_runtime(&bytes);
             for input in 0..20 {
                 let expected = match input {

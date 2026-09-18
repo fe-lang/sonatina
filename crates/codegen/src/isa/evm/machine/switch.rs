@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use sonatina_ir::{
-    BlockId, Function, InstId, Type, ValueId,
+    BlockId, ControlFlowGraph, Function, InstId, Type, ValueId,
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
     inst::{
         cmp::Lt,
@@ -10,17 +10,23 @@ use sonatina_ir::{
     isa::{Isa, evm::EvmMachine},
 };
 
-use crate::cfg_edit::{copy_phi_incoming_block, remove_phi_incoming_from};
+use crate::{
+    cfg_edit::{copy_phi_incoming_block, remove_phi_incoming_from},
+    liveness::{Liveness, phi_args_for_edge},
+};
 
 use super::super::immediate_materialization_cost_i256;
 
 // An extra pivot comparison only reduces the average number of comparisons above four
 // uniformly likely cases. Small leaves also avoid paying for extra branch destinations.
 const LINEAR_LEAF_SIZE: usize = 4;
+// Small comparison savings are less reliable when branching changes stack shuffles
+// or spills. Larger leaves conservatively amortize that cost under stack pressure.
+const PRESSURED_LINEAR_LEAF_SIZE: usize = 8;
 
 /// Expand switches before stack allocation: BrTable's allocator and emitter jointly
 /// implement a linear chain, so a tree must have explicit CFG edges at this boundary.
-pub(crate) fn lower_switches(func: &mut Function) {
+pub(crate) fn lower_switches(func: &mut Function, reach_depth: u8) {
     let switches: Vec<_> = func
         .layout
         .iter_block()
@@ -48,12 +54,47 @@ pub(crate) fn lower_switches(func: &mut Function) {
                 .into_iter()
                 .map(|(_, value, dest)| (value, dest))
                 .collect();
-            split_index(func, &cases)?;
+            split_index(func, &cases, LINEAR_LEAF_SIZE)?;
             Some((term, *table.scrutinee(), default, cases))
         })
         .collect();
+    if switches.is_empty() {
+        return;
+    }
 
-    for (term, scrutinee, default, cases) in switches {
+    let mut cfg = ControlFlowGraph::default();
+    cfg.compute(func);
+    let mut liveness = Liveness::default();
+    liveness.compute(func, &cfg);
+    // Classify every original switch before changing any edges or phi inputs.
+    let switches: Vec<_> = switches
+        .into_iter()
+        .filter_map(|(term, scrutinee, default, cases)| {
+            let root = func.layout.inst_block(term);
+            // Block live-outs omit locally defined phi-edge sources. The scrutinee
+            // also needs a slot even when it is dead on every outgoing edge.
+            let live: BTreeSet<_> = liveness
+                .block_live_outs(root)
+                .iter()
+                .chain(
+                    cfg.succs_of(root)
+                        .flat_map(|&succ| phi_args_for_edge(func, root, succ)),
+                )
+                .chain([scrutinee])
+                .filter(|&value| !func.dfg.value_is_imm(value))
+                .collect();
+            // Reserve two transient comparison/branch slots. This is a pressure
+            // heuristic, not a prediction of the allocator's actual stack height.
+            let leaf_size = if live.len() + 2 > usize::from(reach_depth) {
+                PRESSURED_LINEAR_LEAF_SIZE
+            } else {
+                LINEAR_LEAF_SIZE
+            };
+            (cases.len() > leaf_size).then_some((term, scrutinee, default, cases, leaf_size))
+        })
+        .collect();
+
+    for (term, scrutinee, default, cases, leaf_size) in switches {
         let root = func.layout.inst_block(term);
         let destinations: BTreeSet<_> = cases
             .iter()
@@ -67,6 +108,7 @@ pub(crate) fn lower_switches(func: &mut Function) {
             root,
             scrutinee,
             default,
+            leaf_size,
         }
         .emit(root, &cases);
         // Every old edge is now owned by a leaf. Copy its phi input once per leaf
@@ -78,8 +120,8 @@ pub(crate) fn lower_switches(func: &mut Function) {
     }
 }
 
-fn split_index(func: &Function, cases: &[(ValueId, BlockId)]) -> Option<usize> {
-    if cases.len() <= LINEAR_LEAF_SIZE {
+fn split_index(func: &Function, cases: &[(ValueId, BlockId)], leaf_size: usize) -> Option<usize> {
+    if cases.len() <= leaf_size {
         return None;
     }
     // DUP, EQ/LT, destination PUSH, and JUMPI cost 19 gas, in addition to
@@ -105,6 +147,9 @@ struct SwitchTree<'a> {
     root: BlockId,
     scrutinee: ValueId,
     default: BlockId,
+    // Keep the original pressure classification throughout the tree; estimating
+    // each subtree's allocation would make this inexpensive heuristic much heavier.
+    leaf_size: usize,
 }
 
 impl SwitchTree<'_> {
@@ -112,7 +157,7 @@ impl SwitchTree<'_> {
         let machine = EvmMachine::new(self.func.ctx().triple);
         let is = machine.inst_set();
         let mut cursor = InstInserter::at_location(CursorLocation::BlockBottom(block));
-        let Some(mid) = split_index(self.func, cases) else {
+        let Some(mid) = split_index(self.func, cases, self.leaf_size) else {
             cursor.insert_inst_data_from(
                 self.func,
                 self.term,

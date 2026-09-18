@@ -50,8 +50,9 @@ pub enum SwitchLoweringStrategy {
     Auto,
     /// Retain linear equality chains for all switches.
     Linear,
-    /// Use balanced comparison trees with small linear leaves, regardless of profile.
-    /// Only constant switches with an explicit default are eligible.
+    /// Consider balanced comparison trees regardless of profile. Only constant
+    /// switches with an explicit default are eligible. Profitability assumes
+    /// equally likely case hits; small switches and pressured leaves stay linear.
     Tree,
 }
 

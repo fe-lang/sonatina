@@ -26,6 +26,7 @@ pub(crate) fn run_machine_opt_pipeline(
     funcs: &[FuncRef],
     profile: LateCleanupProfile,
     switch_strategy: SwitchLoweringStrategy,
+    reach_depth: u8,
 ) -> Result<(), String> {
     let _span = debug_span!(
         "sonatina.codegen.evm.machine.pipeline",
@@ -52,7 +53,7 @@ pub(crate) fn run_machine_opt_pipeline(
     for &func in funcs {
         module.func_store.modify(func, |function| {
             if use_tree {
-                lower_switches(function);
+                lower_switches(function, reach_depth);
             }
             if profile == LateCleanupProfile::Size {
                 canonicalize_machine_branch_conditions(function);

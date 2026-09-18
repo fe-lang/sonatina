@@ -1,6 +1,11 @@
 #! Fe f440d29ae, -O 2 --emit ir, from evm-compiler-bench dfbc21ec282a27f66db7d4c81254075f1262e5a5.
 #! Workload: scale_dispatch_64 (64 fNNN() getters, sink(), setSink(uint256)).
 #! Keep the same frontend IR for comparisons between backend switch strategies.
+#! Regenerate using https://github.com/banteg/evm-compiler-bench at the revision above:
+#!   cargo run -p evm-compiler-bench -- generate --benchmark scale_dispatch_64
+#! From that checkout, using https://github.com/ethereum/fe with local commit f440d29ae:
+#!   fe build target/bench-generated/implementations/dispatch_N/64/fe/ScaleDispatch64.fe -O 2 --emit ir --out-dir /tmp/fe-dispatch-64
+#! Copy /tmp/fe-dispatch-64/ScaleDispatch64.sona here, retaining this provenance header.
 target = "evm-ethereum-osaka"
 
 type @layout_0 = {i256, i256, i256};

@@ -107,7 +107,7 @@ fn machine_switch_tree_preserves_phi_inputs_and_attribution() {
             .iter_block()
             .flat_map(|block| func.layout.iter_inst(block))
             .collect();
-        lower_switches(func);
+        lower_switches(func, 16);
         verify_machine_function(func_ref, func).unwrap();
         // General SSA/dominance/user checks apply to machine IR too; its target-specific
         // word result types are checked above instead of using high-level type rules.
@@ -150,9 +150,88 @@ fn machine_switch_tree_preserves_phi_inputs_and_attribution() {
             assert_eq!(func.inst_provenance(inst), Some("selector-provenance"));
         }
         let once = FuncWriter::new(func_ref, func).dump_string();
-        lower_switches(func);
+        lower_switches(func, 16);
         assert_eq!(FuncWriter::new(func_ref, func).dump_string(), once);
     });
+}
+
+#[test]
+fn machine_switch_pressure_includes_phi_edges_and_respects_reach() {
+    // Payloads are defined in the switch block and used only through successor
+    // phis, so ordinary block live-outs alone cannot detect their pressure.
+    for (payload_count, reach, keep_input_live, cases, expected_pivots) in [
+        (13, 16, false, 6, 1),
+        (14, 16, false, 6, 0),
+        (13, 15, false, 6, 0),
+        (13, 16, true, 6, 1),
+        (13, 16, false, 9, 2),
+        (14, 16, false, 9, 1),
+    ] {
+        let mb = machine_builder();
+        let func_ref = mb
+            .declare_function(Signature::new_single(
+                "switch_pressure",
+                Linkage::Public,
+                &[Type::I256],
+                Type::I256,
+            ))
+            .unwrap();
+        let machine = EvmMachine::new(mb.triple());
+        let is = machine.inst_set();
+        let mut builder = mb.func_builder::<InstInserter>(func_ref);
+        let root = builder.append_block();
+        let destinations = [builder.append_block(), builder.append_block()];
+        let input = builder.func.arg_values[0];
+        let one = builder.make_imm_value(Immediate::one(Type::I256));
+        builder.switch_to_block(root);
+        let payloads: Vec<_> = (0..payload_count)
+            .map(|index| {
+                let offset = builder.make_imm_value(Immediate::from_i256(index.into(), Type::I256));
+                builder.insert_inst(Add::new(is, input, offset), Type::I256)
+            })
+            .collect();
+        let table = (0..cases)
+            .map(|key| {
+                let value = builder.make_imm_value(Immediate::from_i256(key.into(), Type::I256));
+                (value, destinations[key as usize % destinations.len()])
+            })
+            .collect();
+        builder.insert_inst_no_result(BrTable::new(is, input, Some(destinations[0]), table));
+        for dest in destinations {
+            builder.switch_to_block(dest);
+            // Repeated sources across destinations and immediate phi inputs must
+            // not inflate the distinct live-word count.
+            let merged: Vec<_> = payloads
+                .iter()
+                .copied()
+                .chain([one])
+                .map(|value| builder.insert_inst(Phi::new(is, vec![(value, root)]), Type::I256))
+                .collect();
+            let mut sum = if keep_input_live { input } else { one };
+            for value in merged {
+                sum = builder.insert_inst(Add::new(is, sum, value), Type::I256);
+            }
+            builder.insert_inst_no_result(Return::new_single(is, sum));
+        }
+        builder.seal_all();
+        builder.finish();
+        let module = mb.build();
+        module.func_store.modify(func_ref, |func| {
+            lower_switches(func, reach);
+            verify_machine_function(func_ref, func).unwrap();
+            let pivots = func
+                .layout
+                .iter_block()
+                .filter_map(|block| func.layout.last_inst_of(block))
+                .filter_map(|inst| func.dfg.branch_info(inst))
+                .filter(|branch| matches!(branch.branch_kind(), BranchKind::Br(_)))
+                .count();
+            assert_eq!(
+                pivots, expected_pivots,
+                "payloads={payload_count}, reach={reach}, live_input={keep_input_live}, cases={cases}"
+            );
+        });
+    }
 }
 
 #[test]
@@ -190,7 +269,7 @@ fn machine_switch_without_default_is_unchanged() {
     let module = mb.build();
     module.func_store.modify(func_ref, |func| {
         let before = FuncWriter::new(func_ref, func).dump_string();
-        lower_switches(func);
+        lower_switches(func, 16);
         assert_eq!(FuncWriter::new(func_ref, func).dump_string(), before);
     });
 }
@@ -365,6 +444,7 @@ fn machine_gvn_folds_word_bool_constant_without_zext() {
         &[func_ref],
         LateCleanupProfile::Off,
         SwitchLoweringStrategy::Auto,
+        16,
     )
     .expect("GVN should fold word bool constants without panicking");
     module.func_store.view(func_ref, |function| {
@@ -444,6 +524,7 @@ fn machine_gvn_accepts_truthy_word_branch_condition() {
         &[func_ref],
         LateCleanupProfile::Off,
         SwitchLoweringStrategy::Auto,
+        16,
     )
     .expect("GVN should accept truthy word branch conditions");
 }
