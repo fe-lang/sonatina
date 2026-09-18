@@ -185,3 +185,76 @@ block2:
         }
     }
 }
+
+#[test]
+fn overlapping_materialized_loop_pointers_fail_lifetime_legalization() {
+    // Safe stack materialization is not translated by the native backend yet.
+    // Unsafe forms must fail the lifetime proof before reaching that boundary.
+    for raw_pointer_phi in [false, true] {
+        let source = format!(
+            r#"
+func public %exercise(v0.i64) -> i64 {{
+block0:
+    v1.objref<[i64; 2]> = obj.alloc [i64; 2];
+    v2.objref<i64> = obj.index v1 1.i64;
+    obj.store v2 37.i64;
+    {initial_pointer}
+    jump block1;
+block1:
+    {phi}
+    v4.i64 = phi (0.i64 block0) (v11 block1);
+    {materialize}
+    v14.*i64 = gep v13 0.i64 1.i64;
+    v15.*i8 = bitcast v14 *i8;
+    v16.*i64 = bitcast v15 *i64;
+    v8.objref<[i64; 2]> = obj.alloc [i64; 2];
+    v9.objref<i64> = obj.index v8 1.i64;
+    obj.store v9 v4;
+    {next_pointer}
+    v5.i64 = mload v16 i64;
+    v11.i64 = add v4 1.i64;
+    v12.i1 = lt v11 v0;
+    br v12 block1 block2;
+block2:
+    return v5;
+}}
+"#,
+            initial_pointer = if raw_pointer_phi {
+                "v17.*[i64; 2] = obj.materialize.stack v1;"
+            } else {
+                ""
+            },
+            phi = if raw_pointer_phi {
+                "v13.*[i64; 2] = phi (v17 block0) (v18 block1);"
+            } else {
+                "v3.objref<[i64; 2]> = phi (v1 block0) (v8 block1);"
+            },
+            materialize = if raw_pointer_phi {
+                ""
+            } else {
+                "v13.*[i64; 2] = obj.materialize.stack v3;"
+            },
+            next_pointer = if raw_pointer_phi {
+                "v18.*[i64; 2] = obj.materialize.stack v8;"
+            } else {
+                ""
+            },
+        );
+        for level in [OptLevel::O0, OptLevel::O2] {
+            let errors = Compile::new(
+                parse_verified_native_module(&source),
+                CraneliftJitBackend::new(),
+            )
+            .with_opt_level(level)
+            .compile()
+            .err()
+            .expect("overlapping pointer must be rejected");
+            assert!(
+                errors
+                    .iter()
+                    .any(|error| error.to_string().contains("loop-carried fresh object")),
+                "{raw_pointer_phi} {level:?}: {errors:?}"
+            );
+        }
+    }
+}

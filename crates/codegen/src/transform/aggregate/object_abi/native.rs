@@ -567,6 +567,107 @@ block2:
     }
 
     #[test]
+    fn loop_carried_materialized_alias_must_die_before_reallocation() {
+        for (alias, address, backedge) in [
+            ("v8.*i64 = obj.materialize.stack v2;", "v8", "block1"),
+            (
+                "v8.*i64 = obj.materialize.stack v2;\n\
+                 v10.*i8 = bitcast v8 *i8;\n\
+                 v11.*i8 = gep v10 0.i64;\n\
+                 v12.*i64 = bitcast v11 *i64;",
+                "v12",
+                "block1",
+            ),
+            (
+                "v8.*i64 = obj.materialize.stack v2;\n\
+                 jump block3;\n\
+                 block3:\n\
+                 v10.*i64 = phi (v8 block1);",
+                "v10",
+                "block3",
+            ),
+        ] {
+            for reads_before_allocation in [true, false] {
+                let read = format!("v9.i64 = mload {address} i64;");
+                let source = format!(
+                    r#"
+func public %run(v0.i64) -> i64 {{
+block0:
+    v1.objref<i64> = obj.alloc i64;
+    obj.store v1 42.i64;
+    jump block1;
+block1:
+    v2.objref<i64> = phi (v1 block0) (v4 {backedge});
+    v3.i64 = phi (0.i64 block0) (v5 {backedge});
+    {alias}
+    {before}
+    v4.objref<i64> = obj.alloc i64;
+    obj.store v4 v3;
+    {after}
+    v5.i64 = add v3 1.i64;
+    v7.i1 = lt v5 v0;
+    br v7 block1 block2;
+block2:
+    return v9;
+}}
+"#,
+                    before = if reads_before_allocation { &read } else { "" },
+                    after = if reads_before_allocation { "" } else { &read },
+                );
+                let module = verified_module(&source);
+                let result = legalize_native_object_returns(&module);
+                if reads_before_allocation {
+                    result.unwrap();
+                } else {
+                    let error = result.expect_err(&source);
+                    assert!(error.contains("loop-carried fresh object"), "{error}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn loop_carried_raw_pointer_identifies_repeated_allocation() {
+        for reads_before_allocation in [true, false] {
+            let read = "v9.i64 = mload v2 i64;";
+            let source = format!(
+                r#"
+func public %run(v0.i64) -> i64 {{
+block0:
+    v1.objref<i64> = obj.alloc i64;
+    obj.store v1 42.i64;
+    v6.*i64 = obj.materialize.stack v1;
+    jump block1;
+block1:
+    v2.*i64 = phi (v6 block0) (v8 block1);
+    v3.i64 = phi (0.i64 block0) (v5 block1);
+    {before}
+    v4.objref<i64> = obj.alloc i64;
+    obj.store v4 v3;
+    v8.*i64 = obj.materialize.stack v4;
+    {after}
+    v5.i64 = add v3 1.i64;
+    v7.i1 = lt v5 v0;
+    br v7 block1 block2;
+block2:
+    return v9;
+}}
+"#,
+                before = if reads_before_allocation { read } else { "" },
+                after = if reads_before_allocation { "" } else { read },
+            );
+            let module = verified_module(&source);
+            let result = legalize_native_object_returns(&module);
+            if reads_before_allocation {
+                result.unwrap();
+            } else {
+                let error = result.expect_err(&source);
+                assert!(error.contains("loop-carried fresh object"), "{error}");
+            }
+        }
+    }
+
+    #[test]
     fn loop_carried_reference_two_iterations_old_is_still_live() {
         let module = verified_module(
             r#"
