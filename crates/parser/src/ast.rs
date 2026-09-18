@@ -4,7 +4,7 @@ use std::str::FromStr;
 // code locations differ on windows vs *nix, which breaks the ast tests.
 use derive_more::Debug as Dbg;
 use either::Either;
-use hex::FromHex;
+use hex::decode_to_slice;
 use ir::{EmbedSymbol, I256, ObjectName, U256};
 pub use ir::{Immediate, InlineHint, Linkage};
 use pest::Parser as _;
@@ -856,6 +856,7 @@ macro_rules! parse_hex {
         if let Some(bytes) = hex_bytes($node.txt) {
             ValueKind::Immediate($imm(<$ity>::from_be_bytes(bytes)))
         } else {
+            $node.error(Error::NumberOutOfBounds($node.span));
             ValueKind::Error
         }
     };
@@ -1022,16 +1023,19 @@ where
     imm.into()
 }
 
-fn hex_bytes<const N: usize>(mut s: &str) -> Option<[u8; N]> {
-    s = s.strip_prefix("0x").unwrap();
-    let bytes = Vec::<u8>::from_hex(s).unwrap();
-
-    if bytes.len() > N {
+fn hex_bytes<const N: usize>(s: &str) -> Option<[u8; N]> {
+    let digits = s.strip_prefix("0x")?;
+    let byte_len = digits.len().div_ceil(2);
+    if byte_len > N {
         return None;
     }
 
     let mut out = [0; N];
-    out[N - bytes.len()..].copy_from_slice(&bytes);
+    let (head, tail) = digits.split_at(digits.len() % 2);
+    if !head.is_empty() {
+        out[N - byte_len] = u8::from_str_radix(head, 16).ok()?;
+    }
+    decode_to_slice(tail, &mut out[N - tail.len() / 2..]).ok()?;
     Some(out)
 }
 
