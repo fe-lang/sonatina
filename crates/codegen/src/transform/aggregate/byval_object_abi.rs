@@ -748,7 +748,6 @@ impl ObjectAggregateAbi {
         object_locality::object_root_stays_local_with_effects(
             function,
             root,
-            function.dfg.value_ty(root),
             rewrite_ctx.object_effects,
             |value| self.return_root_value_is_allowed(function, value, root, rewrite_ctx),
             true,
@@ -1549,7 +1548,6 @@ impl ObjectAggregateAbi {
         object_locality::object_root_stays_local_with_effects(
             function,
             root,
-            function.dfg.value_ty(root),
             object_effects,
             |value| value == root,
             false,

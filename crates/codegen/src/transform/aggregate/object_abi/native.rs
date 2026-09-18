@@ -220,7 +220,6 @@ fn check_lifetimes(function: &Function, effects: &ObjectEffectSummaryMap) -> Res
             && !object_locality::object_root_stays_local_with_effects(
                 function,
                 root,
-                function.dfg.value_ty(root),
                 effects,
                 |_| true,
                 false,
@@ -248,6 +247,39 @@ mod tests {
         let report = verify_module(&module, &VerifierConfig::for_level(VerificationLevel::Full));
         assert!(!report.has_errors(), "{report}");
         module
+    }
+
+    #[test]
+    fn accepts_local_projected_arguments_through_borrowing_calls() {
+        let module = verified_module(
+            r#"
+type @pair = { i64, i64 };
+type @nested = { [@pair; 2] };
+func private %borrow(v0.objref<i64>) -> objref<i64> {
+block0:
+    return v0;
+}
+func private %write(v0.objref<i64>) {
+block0:
+    obj.store v0 42.i64;
+    return;
+}
+func public %run() -> i64 {
+block0:
+    v0.objref<@nested> = obj.alloc @nested;
+    v1.objref<[@pair; 2]> = obj.proj v0 0.i64;
+    v2.objref<@pair> = obj.index v1 1.i64;
+    v3.objref<i64> = obj.proj v2 1.i64;
+    v4.objref<i64> = call %borrow v3;
+    call %write v4;
+    v5.i64 = obj.load v3;
+    return v5;
+}
+"#,
+        );
+        legalize_native_object_returns(&module).unwrap();
+        let report = verify_module(&module, &VerifierConfig::for_level(VerificationLevel::Full));
+        assert!(!report.has_errors(), "{report}");
     }
 
     #[test]
@@ -316,6 +348,31 @@ block0:
     #[test]
     fn rejects_unproven_stack_only_return_shapes() {
         for source in [
+            // A callee capture remains an escape even when it has an exact
+            // summary instead of an unknown-object barrier.
+            r#"func private %retain(v0.objref<i64>, v1.objref<objref<i64>>) {
+block0:
+    obj.store v1 v0;
+    return;
+}
+func private %escape(v0.objref<objref<i64>>) {
+block0:
+    v1.objref<i64> = obj.alloc i64;
+    call %retain v1 v0;
+    return;
+}"#,
+            r#"func private %retain(v0.objref<i64>, v1.objref<objref<i64>>) {
+block0:
+    obj.store v1 v0;
+    return;
+}
+func private %escape(v0.objref<objref<i64>>) {
+block0:
+    v1.objref<[i64; 2]> = obj.alloc [i64; 2];
+    v2.objref<i64> = obj.index v1 1.i64;
+    call %retain v2 v0;
+    return;
+}"#,
             // A fresh projected field cannot fit the whole allocation into
             // storage sized for the returned scalar.
             r#"func private %escape() -> objref<i64> {
