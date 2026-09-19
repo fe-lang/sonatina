@@ -3,9 +3,12 @@ use smallvec::SmallVec;
 use sonatina_ir::{BlockId, Function, ValueId, cfg::ControlFlowGraph};
 use std::collections::BTreeSet;
 
-use crate::{bitset::BitSet, liveness::Liveness};
+use crate::{
+    bitset::BitSet,
+    liveness::{Liveness, phi_args_for_edge},
+};
 
-use super::{spill::SpilledValueId, templates::phi_args_for_edge};
+use super::spill::SpilledValueId;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct PhiEdgePoint(u32);

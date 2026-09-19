@@ -26,6 +26,7 @@ use std::collections::BTreeMap;
 
 use crate::bitset::BitSet;
 use cranelift_entity::SecondaryMap;
+use smallvec::SmallVec;
 use sonatina_ir::{BlockId, Function, InstId, ValueId, cfg::ControlFlowGraph};
 
 #[derive(Default)]
@@ -232,6 +233,26 @@ pub fn value_uses_in_block_matching_predicate(
         }
     });
     counts
+}
+
+/// Phi inputs consumed on `pred -> succ`, in successor phi order.
+/// These predecessor-tail uses may be absent from `block_live_outs` when the
+/// input is defined in `pred`, so reverse instruction scans must add them.
+pub(crate) fn phi_args_for_edge(
+    func: &Function,
+    pred: BlockId,
+    succ: BlockId,
+) -> SmallVec<[ValueId; 4]> {
+    func.layout
+        .iter_inst(succ)
+        .map_while(|inst| {
+            func.dfg.cast_phi(inst).and_then(|phi| {
+                phi.args()
+                    .iter()
+                    .find_map(|(val, block)| (*block == pred).then_some(*val))
+            })
+        })
+        .collect()
 }
 
 fn for_each_use(func: &Function, block: BlockId, mut f: impl FnMut(ValueId, Option<BlockId>)) {

@@ -699,6 +699,14 @@ fn possible_root_transfer_for_inst(
         return Some(PossibleRootTransfer::source(result, *bitcast.from()));
     }
 
+    // Stack materialization exposes the same storage. Preserve its possible
+    // roots so raw-pointer GEPs, casts, and phis remain visible to alias checks.
+    if let Some(materialize) =
+        downcast::<&data::ObjMaterializeStack>(func.inst_set(), func.dfg.inst(inst))
+    {
+        return Some(PossibleRootTransfer::source(result, *materialize.object()));
+    }
+
     if let Some(obj_proj) = downcast::<&data::ObjProj>(func.inst_set(), func.dfg.inst(inst)) {
         return obj_proj
             .values()
@@ -2241,6 +2249,66 @@ block0:
             assert_eq!(provenance.complete().complete_roots(extracted), None);
             assert_known_and_unknown(provenance.may().may_roots(extracted), &[]);
         });
+    }
+
+    #[test]
+    fn materialized_stack_pointer_preserves_known_and_unknown_roots() {
+        for unknown_source in [false, true] {
+            let source = format!(
+                r#"
+target = "evm-ethereum-osaka"
+declare external %unknown() -> objref<[i64; 2]>;
+func private %f(v0.i1, v1.objref<[i64; 2]>, v2.objref<[i64; 2]>) -> *i64 {{
+block0:
+    br v0 block1 block2;
+block1:
+    jump block3;
+block2:
+    {unknown}
+    jump block3;
+block3:
+    v4.objref<[i64; 2]> = phi (v1 block1) ({other} block2);
+    v5.*[i64; 2] = obj.materialize.stack v4;
+    v6.*i64 = gep v5 0.i64 1.i64;
+    v7.*i8 = bitcast v6 *i8;
+    v8.*i64 = bitcast v7 *i64;
+    return v8;
+}}
+"#,
+                unknown = if unknown_source {
+                    "v3.objref<[i64; 2]> = call %unknown;"
+                } else {
+                    ""
+                },
+                other = if unknown_source { "v3" } else { "v2" },
+            );
+            let module = parse_test_module(&source);
+            module.func_store.view(lookup_func(&module, "f"), |func| {
+                let mut cache = shape::AggregateLayoutCache::default();
+                let roots = collect_root_slices_with_arg_roots(func, &mut cache);
+                let provenance =
+                    collect_root_provenance(func, func.ctx(), &roots, &mut cache, None);
+                for inst in func
+                    .layout
+                    .iter_block()
+                    .flat_map(|block| func.layout.iter_inst(block))
+                {
+                    let inst_data = func.dfg.inst(inst);
+                    if downcast::<&data::ObjMaterializeStack>(func.inst_set(), inst_data).is_some()
+                        || downcast::<&data::Gep>(func.inst_set(), inst_data).is_some()
+                        || downcast::<&cast::Bitcast>(func.inst_set(), inst_data).is_some()
+                    {
+                        let result = func.dfg.inst_result(inst).unwrap();
+                        let roots = provenance.may().may_roots(result);
+                        if unknown_source {
+                            assert_known_and_unknown(roots, &[func.arg_values[1]]);
+                        } else {
+                            assert_known_only(roots, &func.arg_values[1..]);
+                        }
+                    }
+                }
+            });
+        }
     }
 
     #[test]
