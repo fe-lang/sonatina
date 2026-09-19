@@ -473,3 +473,43 @@ block0:
         }
     }
 }
+
+#[test]
+fn wide_division_operand_classes_preserve_signed_and_unsigned_results() {
+    for (ty, width) in [(Type::I128, 128), (Type::I256, 256)] {
+        let mut values = vec![
+            Immediate::zero(ty),
+            Immediate::one(ty),
+            Immediate::all_one(ty),
+            Immediate::signed_min(ty),
+            Immediate::signed_max(ty),
+        ];
+        for bit in [
+            1, 2, 62, 63, 64, 65, 126, 127, 128, 129, 190, 191, 192, 193, 254, 255,
+        ] {
+            if bit < width {
+                let value = U256::one() << bit;
+                values.extend(
+                    [value - 1, value, value + 1]
+                        .map(|value| Immediate::from_i256(I256::from(value), ty)),
+                );
+            }
+        }
+        for op in ["udiv", "umod", "sdiv", "smod"] {
+            let mut cases = Vec::new();
+            for &lhs in &values {
+                for &rhs in values.iter().filter(|rhs| !rhs.is_zero()) {
+                    let expected = match op {
+                        "udiv" => lhs.udiv(rhs),
+                        "umod" => lhs.urem(rhs),
+                        "sdiv" => lhs.sdiv(rhs),
+                        "smod" => lhs.srem(rhs),
+                        _ => unreachable!(),
+                    };
+                    cases.push((lhs, rhs, expected, false));
+                }
+            }
+            check_scalar_cases(op, ty, &cases);
+        }
+    }
+}
