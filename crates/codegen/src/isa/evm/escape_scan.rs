@@ -89,6 +89,25 @@ pub(crate) struct EscapeScanCtx<'a> {
     pub(crate) arg_mem: &'a [Provenance],
 }
 
+pub(crate) fn escape_source_may_be_heap_derived(
+    function: &Function,
+    ctx: EscapeScanCtx<'_>,
+    source: EscapeSource<'_>,
+) -> bool {
+    match source {
+        EscapeSource::Value(value) => {
+            ctx.prov[value].malloc_insts().next().is_some()
+                || ctx.prov[value].is_unknown_ptr()
+                || (function.dfg.value_ty(value).is_pointer(ctx.module)
+                    && ctx.prov[value].has_no_known_bases())
+        }
+        EscapeSource::LocalMem { stored, .. } => {
+            stored.is_unknown_ptr() || stored.malloc_insts().next().is_some()
+        }
+        EscapeSource::UnknownCopy => true,
+    }
+}
+
 pub(crate) fn for_each_ptr_transfer_at_inst<'a>(
     function: &'a Function,
     inst: InstId,

@@ -164,6 +164,66 @@ return v0;
 }
 
 #[test]
+fn heap_publication_propagates_through_recursive_calls() {
+    let (summaries, _) = compute(
+        r#"
+target = "evm-ethereum-osaka"
+
+func private %publish(v0.**i8) {
+block0:
+v1.*i8 = evm_malloc 32.i256;
+mstore v0 v1 *i8;
+return;
+}
+
+func private %first(v0.**i8, v1.i1) {
+block0:
+br v1 block1 block2;
+block1:
+call %second v0 0.i1;
+return;
+block2:
+call %publish v0;
+return;
+}
+
+func private %second(v0.**i8, v1.i1) {
+block0:
+call %first v0 v1;
+return;
+}
+
+func private %private_scratch() -> i256 {
+block0:
+v0.*i8 = evm_malloc 32.i256;
+mstore v0 7.i256 i256;
+return 7.i256;
+}
+
+func private %return_only() -> *i8 {
+block0:
+v0.*i8 = evm_malloc 32.i256;
+return v0;
+}
+
+func private %discard_return() {
+block0:
+v0.*i8 = call %return_only;
+return;
+}
+"#,
+    );
+
+    for name in ["publish", "first", "second"] {
+        assert!(summaries[name].may_publish_heap, "{name}");
+    }
+    for name in ["private_scratch", "return_only", "discard_return"] {
+        assert!(!summaries[name].may_publish_heap, "{name}");
+    }
+    assert!(summaries["return_only"].return_may_be_non_arg_pointer(0));
+}
+
+#[test]
 fn ptr_escape_propagates_through_calls() {
     let (summaries, _) = compute(
         r#"
@@ -370,6 +430,7 @@ return 0.i256;
         .expect("function exists");
 
     let summary = PtrEscapeSummary::conservative_unknown_ctx(&parsed.module.ctx, f);
+    assert!(summary.may_publish_heap);
     assert!(!summary.return_may_be_non_arg_pointer(0));
     assert_eq!(ret_args(&summary, 0), Vec::<u32>::new());
 }
