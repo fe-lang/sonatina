@@ -719,7 +719,9 @@ fn prepare_machine_section_after_pipeline(
         run_machine_opt_pipeline(
             machine.work.module(),
             &funcs,
-            backend.late_cleanup_profile == LateCleanupProfile::Size,
+            backend.late_cleanup_profile,
+            backend.switch_lowering_strategy,
+            backend.stackify_reach_depth,
         )?;
 
         let machine_isa = EvmMachine::new(machine.work.module().ctx.triple);

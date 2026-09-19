@@ -6,8 +6,8 @@ input_file: test_files/evm/chz_castling_rights_gvn_regression.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 1176 bytes
-  total: 1176 bytes
+  section runtime: 1200 bytes
+  total: 1200 bytes
 
 functions:
   mem: global_dyn_base=0x4c0 arena_base=0xa0 scratch_peak_words=1 stable_chain_peak_words=32
@@ -19,7 +19,7 @@ functions:
     mem: scratch_words=1 stable_words=0 stable_mode=None entry_abs_words=33 abs_words_end=1
   main_root: ir_blocks=1 ir_insts=5 vcode_ops=16 fixups=2 imm_bytes=3
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=1 abs_words_end=0
-  validate_rook_capture: ir_blocks=25 ir_insts=83 vcode_ops=315 fixups=25 imm_bytes=80
+  validate_rook_capture: ir_blocks=29 ir_insts=88 vcode_ops=332 fixups=29 imm_bytes=81
     mem: scratch_words=0 stable_words=25 stable_mode=StableAbs(base=0xc0) entry_abs_words=1 abs_words_end=26
 
 evm:
@@ -605,17 +605,13 @@ validate_rook_capture:
     PUSH0
     PUSH2 0x140 (320)
     MSTORE
-    PUSH0  // br_table v15 block18 (v9 block19) (v48 block20) (v51 block21) (v53 block22) (v11 block23);
+    PUSH1 0x2 (2)  // v177.i256 = lt v15 v51;
     DUP2
-    EQ
-    PUSH1 block19
+    LT
+    PUSH1 block26  // br v177 block26 block25;
     JUMPI
-    PUSH1 0x1 (1)
-    DUP2
-    EQ
-    PUSH1 block20
-    JUMPI
-    PUSH1 0x2 (2)
+  block25:
+    PUSH1 0x2 (2)  // br_table v15 block30 (v51 block21) (v53 block22) (v11 block23);
     DUP2
     EQ
     PUSH1 block21
@@ -630,23 +626,7 @@ validate_rook_capture:
     EQ
     PUSH1 block23
     JUMPI
-  block18:
-    INVALID  // unreachable;
-  block19:
-    JUMPDEST
-    POP  // evm_mstore v169 v9;
-    PUSH0
-    PUSH2 0x160 (352)
-    MSTORE
-    PUSH1 block14  // jump block14;
-    JUMP
-  block20:
-    JUMPDEST
-    POP  // evm_mstore v169 v48;
-    PUSH1 0x1 (1)
-    PUSH2 0x160 (352)
-    MSTORE
-    PUSH1 block14  // jump block14;
+    PUSH1 block30
     JUMP
   block21:
     JUMPDEST
@@ -672,6 +652,47 @@ validate_rook_capture:
     MSTORE
     PUSH1 block14  // jump block14;
     JUMP
+  block30:
+    JUMPDEST
+    POP  // jump block18;
+    PUSH1 block18
+    JUMP
+  block26:
+    JUMPDEST
+    PUSH0  // br_table v15 block31 (v9 block19) (v48 block20);
+    DUP2
+    EQ
+    PUSH1 block19
+    JUMPI
+    PUSH1 0x1 (1)
+    DUP2
+    EQ
+    PUSH1 block20
+    JUMPI
+    PUSH1 block31
+    JUMP
+  block19:
+    JUMPDEST
+    POP  // evm_mstore v169 v9;
+    PUSH0
+    PUSH2 0x160 (352)
+    MSTORE
+    PUSH1 block14  // jump block14;
+    JUMP
+  block20:
+    JUMPDEST
+    POP  // evm_mstore v169 v48;
+    PUSH1 0x1 (1)
+    PUSH2 0x160 (352)
+    MSTORE
+    PUSH1 block14  // jump block14;
+    JUMP
+  block31:
+    JUMPDEST
+    POP  // jump block18;
+  block18:
+    JUMPDEST
+    INVALID  // unreachable;
   block17:
     JUMPDEST
     PUSH1 0x1 (1)  // evm_mstore v4 v48;
@@ -757,9 +778,9 @@ validate_rook_capture:
     JUMP
   block3:
     JUMPDEST
-    DUP1  // br v79 block4 block25;
+    DUP1  // br v79 block4 block27;
     ISZERO
-    PUSH1 block25
+    PUSH1 block27
     JUMPI
   block4:
     PUSH1 0xff (255)  // v83.i256 = xor v79 v82;
@@ -776,7 +797,7 @@ validate_rook_capture:
     POP
     PUSH1 block6
     JUMP
-  block25:
+  block27:
     JUMPDEST
     POP  // jump block6;
     POP
@@ -820,25 +841,25 @@ validate_rook_capture:
     OR
   block9:
     JUMPDEST
-    PUSH2 0x3a0 (928)  // br v73 block26 block13;
+    PUSH2 0x3a0 (928)  // br v73 block28 block13;
     MLOAD
-    PUSH1 block26
+    PUSH1 block28
     JUMPI
   block13:
-    PUSH2 0x380 (896)  // br v70 block27 block24;
+    PUSH2 0x380 (896)  // br v70 block29 block24;
     MLOAD
-    PUSH1 block27
+    PUSH1 block29
     JUMPI
   block24:
     PUSH1 0x1 (1)  // jump block12;
     PUSH1 block12
     JUMP
-  block27:
+  block29:
     JUMPDEST
     PUSH0  // jump block12;
     PUSH1 block12
     JUMP
-  block26:
+  block28:
     JUMPDEST
     PUSH0  // jump block12;
   block12:
