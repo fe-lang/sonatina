@@ -16,7 +16,10 @@ use sonatina_ir::{
 use crate::{bitset::BitSet, liveness::InstLiveness, module_analysis::CallGraphSchedule};
 
 use super::{
-    escape_scan::{EscapeScanCtx, EscapeSink, EscapeSource, for_each_escape_event_at_inst},
+    escape_scan::{
+        EscapeScanCtx, EscapeSink, EscapeSource, escape_source_may_be_heap_derived,
+        for_each_escape_event_at_inst,
+    },
     memory_plan::SemanticFuncPlan,
     ptr_escape::PtrEscapeSummary,
     ptr_provenance::{Provenance, ProvenanceInfo},
@@ -89,6 +92,14 @@ pub(crate) fn should_restore_free_ptr_on_internal_returns(
     for block in function.layout.iter_block() {
         for inst in function.layout.iter_inst(block) {
             let data = isa.inst_set().resolve_inst(function.dfg.inst(inst));
+            if let EvmInstKind::Call(call) = data
+                && PtrEscapeSummary::get_or_conservative(ptr_escape, module, *call.callee())
+                    .may_publish_heap
+            {
+                // Restoring the entry cursor also frees allocations published
+                // by callees, even when no caller-owned pointer escapes.
+                return false;
+            }
             if matches!(data, EvmInstKind::Return(_)) {
                 has_internal_return = true;
             }
@@ -117,15 +128,8 @@ pub(crate) fn should_restore_free_ptr_on_internal_returns(
     for block in function.layout.iter_block() {
         for inst in function.layout.iter_inst(block) {
             let mut escapes_heap = false;
-            for_each_escape_event_at_inst(function, inst, scan_ctx, |event| match event.source {
-                EscapeSource::Value(value) => {
-                    escapes_heap |= value_may_be_heap_derived(function, module, value, prov);
-                }
-                EscapeSource::LocalMem { stored, .. } => {
-                    escapes_heap |=
-                        stored.is_unknown_ptr() || stored.malloc_insts().next().is_some();
-                }
-                EscapeSource::UnknownCopy => escapes_heap = true,
+            for_each_escape_event_at_inst(function, inst, scan_ctx, |event| {
+                escapes_heap |= escape_source_may_be_heap_derived(function, scan_ctx, event.source);
             });
             if escapes_heap {
                 return false;
@@ -496,15 +500,4 @@ fn compute_malloc_escape_kinds(
     }
 
     escape_kinds
-}
-
-fn value_may_be_heap_derived(
-    function: &Function,
-    module: &ModuleCtx,
-    value: ValueId,
-    prov: &SecondaryMap<ValueId, Provenance>,
-) -> bool {
-    prov[value].malloc_insts().next().is_some()
-        || prov[value].is_unknown_ptr()
-        || (function.dfg.value_ty(value).is_pointer(module) && prov[value].has_no_known_bases())
 }

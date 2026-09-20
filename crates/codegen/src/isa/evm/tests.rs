@@ -181,6 +181,35 @@ fn test_backend() -> EvmBackend {
     }))
 }
 
+#[test]
+fn free_ptr_restore_preserves_heap_published_by_a_callee() {
+    let parsed = parse_module(include_str!(
+        "../../../test_files/evm/callee_heap_escape_free_ptr.sntn"
+    ))
+    .expect("module parses");
+    let backend = test_backend();
+    let summaries =
+        compute_ptr_escape_summaries(&parsed.module, &parsed.module.funcs(), &backend.isa);
+    let forward = find_func(&parsed.module, "forward");
+    parsed.module.func_store.modify(forward, |function| {
+        let before = function
+            .layout
+            .iter_block()
+            .flat_map(|block| function.layout.iter_inst(block))
+            .count();
+        prepare_free_ptr_restore(function, &parsed.module.ctx, &backend, &summaries);
+        let after = function
+            .layout
+            .iter_block()
+            .flat_map(|block| function.layout.iter_inst(block))
+            .count();
+        assert_eq!(
+            before, after,
+            "callee's published allocation prevents heap restoration"
+        );
+    });
+}
+
 fn first_memory_op(lowered: &LoweredFunction<OpCode>) -> Option<u8> {
     lowered
         .block_order

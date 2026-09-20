@@ -12,7 +12,9 @@ use crate::module_analysis::CallGraphSchedule;
 
 use super::{
     escape_scan::{
-        EscapeScanCtx, PtrTransferEvent, PtrTransferSource, for_each_ptr_transfer_at_inst,
+        EscapeScanCtx, EscapeSink, PtrTransferEvent, PtrTransferSource,
+        escape_source_may_be_heap_derived, for_each_escape_event_at_inst,
+        for_each_ptr_transfer_at_inst,
     },
     ptr_provenance::{Provenance, compute_provenance, type_can_carry_pointer_provenance},
 };
@@ -92,11 +94,13 @@ impl PtrReturnEscape {
     }
 }
 
-/// Summary of direct pointer escape effects at a function boundary.
+/// Summary of pointer escape effects at a function boundary.
 ///
-/// All facts are callee-local: [`PtrArgEscape::arg_store_targets`] records only
+/// Argument store edges are callee-local: [`PtrArgEscape::arg_store_targets`] records only
 /// direct writes within the callee body (including single-level callee summary
-/// application during SCC fixpoint iteration). No transitive closure is taken.
+/// application during SCC fixpoint iteration). No store-edge transitive closure
+/// is taken. Heap publication propagates through callees independently of these
+/// argument-derived edges.
 ///
 /// Effects that depend on caller context (e.g., whether a destination arg is
 /// backed by local memory vs nonlocal memory) must be derived at call sites,
@@ -106,6 +110,11 @@ impl PtrReturnEscape {
 pub(crate) struct PtrEscapeSummary {
     pub(crate) args: Vec<PtrArgEscape>,
     pub(crate) returns: Vec<PtrReturnEscape>,
+    /// May publish newly allocated or unknown heap storage through memory,
+    /// including allocations made by callees. Returned pointers are tracked
+    /// separately: a caller may discard them without publishing their storage.
+    /// This is conservative for writes through caller-local output arguments.
+    pub(crate) may_publish_heap: bool,
 }
 
 impl PtrEscapeSummary {
@@ -113,6 +122,7 @@ impl PtrEscapeSummary {
         Self {
             args: vec![PtrArgEscape::default(); arg_count],
             returns: vec![PtrReturnEscape::default(); ret_count],
+            may_publish_heap: false,
         }
     }
 
@@ -124,6 +134,8 @@ impl PtrEscapeSummary {
         let (arg_count, ret_count) =
             module.func_sig(func, |sig| (sig.args().len(), sig.ret_tys().len()));
         let mut out = Self::new(arg_count, ret_count);
+        // An unknown body can allocate and publish memory even without args.
+        out.may_publish_heap = true;
         module.func_sig(func, |sig| {
             for (ret_idx, &ret_ty) in sig.ret_tys().iter().enumerate() {
                 if ret_ty.is_pointer(module) {
@@ -651,6 +663,24 @@ impl<'a> SummaryComputer<'a> {
                 for_each_ptr_transfer_at_inst(self.function, inst, self.scan_ctx, |event| {
                     self.record_event(event);
                 });
+                if !self.summary.may_publish_heap {
+                    for_each_escape_event_at_inst(self.function, inst, self.scan_ctx, |event| {
+                        self.summary.may_publish_heap |= !matches!(event.sink, EscapeSink::Return)
+                            && escape_source_may_be_heap_derived(
+                                self.function,
+                                self.scan_ctx,
+                                event.source,
+                            );
+                    });
+                    if let Some(call) = self.function.dfg.call_info(inst) {
+                        self.summary.may_publish_heap |= PtrEscapeSummary::get_or_conservative(
+                            self.scan_ctx.ptr_escape,
+                            self.scan_ctx.module,
+                            call.callee(),
+                        )
+                        .may_publish_heap;
+                    }
+                }
             }
         }
         self.summary
