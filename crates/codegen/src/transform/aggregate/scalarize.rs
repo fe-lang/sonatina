@@ -2,7 +2,7 @@ use cranelift_entity::SecondaryMap;
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{
-    BlockId, Function, I256, Immediate, InstId, Type, Value, ValueId,
+    BlockId, ControlFlowGraph, Function, I256, Immediate, InstId, Type, Value, ValueId,
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
     global_variable::GvInitializer,
     inst::{cast, cmp, control_flow, data, downcast},
@@ -155,8 +155,12 @@ impl AggregateScalarize {
             .map(|root| (root.root_value, root))
             .collect();
 
-        let blocks: Vec<_> = func.layout.iter_block().collect();
-        for block in blocks {
+        // Aggregate leaves must be available before rewriting their non-phi uses.
+        // Layout order need not follow dominance; phi placeholders handle loop edges.
+        let mut cfg = ControlFlowGraph::new();
+        cfg.compute(func);
+        let blocks: Vec<_> = cfg.post_order().collect();
+        for block in blocks.into_iter().rev() {
             let insts: Vec<_> = func.layout.iter_inst(block).collect();
             for inst in insts {
                 if !func.layout.is_inst_inserted(inst) {
@@ -3063,6 +3067,7 @@ mod tests {
     use super::*;
     use sonatina_ir::{InstDowncast, Module, inst::cast, ir_writer::FuncWriter, module::FuncRef};
     use sonatina_parser::parse_module;
+    use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module};
 
     fn parse_test_module(src: &str) -> Module {
         parse_module(src).expect("parse should succeed").module
@@ -3144,6 +3149,57 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn scalarize_aggregate_phi_with_definitions_later_in_layout() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+type @pair = { i256, i256 };
+func private %f(v0.i1, v1.i1, v2.i256, v3.i256) -> i256 {
+    block0:
+        br v0 block2 block4;
+    block1:
+        v5.@pair = insert_value v4 1.i8 v3;
+        jump block3;
+    block2:
+        v4.@pair = insert_value undef.@pair 0.i8 v2;
+        br v1 block1 block4;
+    block3:
+        v8.@pair = phi (v5 block1) (v7 block4);
+        v9.i256 = extract_value v8 0.i8;
+        return v9;
+    block4:
+        v6.@pair = insert_value undef.@pair 0.i8 v3;
+        v7.@pair = insert_value v6 1.i8 v2;
+        jump block3;
+}
+"#,
+        );
+        let config = VerifierConfig::for_level(VerificationLevel::Standard);
+        let report = verify_module(&module, &config);
+        assert!(!report.has_errors(), "input should be valid: {report}");
+        let func_ref = lookup_func(&module, "f");
+        module.func_store.modify(func_ref, |func| {
+            AggregateScalarize::default().run(func);
+            assert_no_promoted_aggregate_artifacts(func, &module.ctx);
+            for block in func.layout.iter_block() {
+                for inst in func.layout.iter_inst(block) {
+                    if downcast::<&control_flow::Phi>(func.inst_set(), func.dfg.inst(inst))
+                        .is_some()
+                        && let Some(result) = func.dfg.inst_result(inst)
+                    {
+                        assert_eq!(func.dfg.value_ty(result), Type::I256);
+                    }
+                }
+            }
+        });
+        let report = verify_module(&module, &config);
+        assert!(
+            !report.has_errors(),
+            "scalarized IR should be valid: {report}"
+        );
     }
 
     #[test]
