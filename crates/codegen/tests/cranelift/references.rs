@@ -3,6 +3,93 @@ use sonatina_codegen::{Compile, compile::OptLevel, isa::cranelift::CraneliftJitB
 use super::parse_verified_native_module;
 
 #[test]
+fn heap_exports_preserve_projected_aliases_across_returns() {
+    let source = r#"
+declare external %free(*[i64; 2]);
+func private %export(v0.objref<i64>) -> *i64 {
+block0:
+    v1.*i64 = obj.materialize.heap v0;
+    return v1;
+}
+func private %make(v0.i64) -> *[i64; 2] {
+block0:
+    v1.objref<[i64; 2]> = obj.alloc [i64; 2];
+    v2.objref<i64> = obj.index v1 1.i64;
+    obj.store v2 v0;
+    v3.*i64 = call %export v2;
+    mstore v3 40.i64 i64;
+    v4.i64 = obj.load v2;
+    v5.i64 = add v4 2.i64;
+    obj.store v2 v5;
+    v6.*[i64; 2] = obj.materialize.stack v1;
+    return v6;
+}
+func public %exercise() -> i64 {
+block0:
+    v0.*[i64; 2] = call %make 11.i64;
+    v1.*[i64; 2] = call %make 22.i64;
+    v2.*i64 = gep v0 0.i64 1.i64;
+    v3.*i64 = gep v1 0.i64 1.i64;
+    mstore v2 17.i64 i64;
+    v4.i64 = mload v2 i64;
+    v5.i64 = mload v3 i64;
+    v6.i64 = mul v4 100.i64;
+    v7.i64 = add v6 v5;
+    call %free v0;
+    call %free v1;
+    return v7;
+}
+"#;
+    for level in [OptLevel::O0, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap();
+        let exercise: unsafe extern "C" fn() -> i64 =
+            unsafe { std::mem::transmute(artifact.function_address("exercise").unwrap()) };
+        assert_eq!(unsafe { exercise() }, 1742, "{level:?}");
+    }
+}
+
+#[test]
+fn dynamic_allocations_are_distinct_and_support_wide_sizes() {
+    let source = r#"
+declare external %free(*i64);
+func public %exercise(v0.i64) -> i64 {
+block0:
+    v1.i256 = zext v0 i256;
+    v2.*i64 = mem.alloc_dynamic v1;
+    v3.i128 = zext v0 i128;
+    v4.*i64 = mem.alloc_dynamic v3;
+    mstore v2 17.i64 i64;
+    mstore v4 42.i64 i64;
+    v5.i64 = mload v2 i64;
+    v6.i64 = mload v4 i64;
+    v7.i64 = mul v5 100.i64;
+    v8.i64 = add v7 v6;
+    call %free v2;
+    call %free v4;
+    return v8;
+}
+"#;
+    for level in [OptLevel::O0, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap();
+        let exercise: unsafe extern "C" fn(u64) -> i64 =
+            unsafe { std::mem::transmute(artifact.function_address("exercise").unwrap()) };
+        assert_eq!(unsafe { exercise(8) }, 1742, "{level:?}");
+    }
+}
+
+#[test]
 fn selecting_between_borrowed_arguments_preserves_mutation_aliases() {
     let source = r#"
 func private %choose(v0.i1, v1.objref<i64>, v2.objref<i64>) -> objref<i64> {
@@ -187,9 +274,9 @@ block2:
 }
 
 #[test]
-fn overlapping_materialized_loop_pointers_fail_lifetime_legalization() {
-    // Safe stack materialization is not translated by the native backend yet.
-    // Unsafe forms must fail the lifetime proof before reaching that boundary.
+fn overlapping_materialized_loop_pointers_require_heap_storage() {
+    // An explicit heap export preserves distinct iterations. A stack export
+    // must still fail when an older alias overlaps the next allocation.
     for raw_pointer_phi in [false, true] {
         let source = format!(
             r#"
@@ -255,6 +342,30 @@ block2:
                     .any(|error| error.to_string().contains("loop-carried fresh object")),
                 "{raw_pointer_phi} {level:?}: {errors:?}"
             );
+            let heap_source = format!(
+                "declare external %free(*[i64; 2]);\n{}",
+                source
+                    .replace("obj.materialize.stack", "obj.materialize.heap")
+                    .replace("v5.i64 = mload v16 i64;", "v5.i64 = mload v16 i64;\n    call %free v13;")
+                    .replace("return v5;", "v19.*[i64; 2] = obj.materialize.heap v8;\n    call %free v19;\n    return v5;")
+            );
+            let artifact = Compile::new(
+                parse_verified_native_module(&heap_source),
+                CraneliftJitBackend::new(),
+            )
+            .with_opt_level(level)
+            .compile()
+            .unwrap();
+            let exercise: unsafe extern "C" fn(i64) -> i64 =
+                unsafe { std::mem::transmute(artifact.function_address("exercise").unwrap()) };
+            for iterations in [1, 2, 3, 17] {
+                let expected = if iterations == 1 { 37 } else { iterations - 2 };
+                assert_eq!(
+                    unsafe { exercise(iterations) },
+                    expected,
+                    "{raw_pointer_phi} {level:?}"
+                );
+            }
         }
     }
 }
