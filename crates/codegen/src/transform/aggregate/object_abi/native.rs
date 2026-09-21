@@ -1,8 +1,10 @@
+use std::ops::ControlFlow;
+
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{
     ControlFlowGraph, Function, Module, Signature, Value, ValueId,
-    inst::{control_flow, downcast},
+    inst::{control_flow, data, downcast},
 };
 
 use super::{
@@ -14,7 +16,8 @@ use crate::{
     liveness::{Liveness, phi_args_for_edge},
     module_analysis::{CallGraph, SccBuilder},
     transform::aggregate::{
-        ObjectEffectSummaryMap, compute_object_effect_summaries, object_locality,
+        ObjectEffectSummaryMap, compute_object_effect_summaries,
+        object_locality::{self, SpecialObjectUse},
         object_tracking::AggregateFacts,
         private_abi,
         provenance::{ProvenanceSnapshot, RootValue},
@@ -22,8 +25,9 @@ use crate::{
     },
 };
 
-/// Native objects use stack storage. Promote proven fresh return roots into
-/// caller storage, but keep the reference result to preserve borrowed aliases.
+/// Promote proven fresh stack return roots into caller storage, but keep the
+/// reference result to preserve borrowed aliases. Explicit heap exports retain
+/// their original allocation instead.
 pub(crate) fn legalize_native_object_returns(module: &Module) -> Result<(), String> {
     let sccs = SccBuilder::new().compute_scc(&CallGraph::build_graph(module));
     loop {
@@ -124,7 +128,11 @@ fn collect_plan(
     }
     let mut fresh: Vec<ValueId> = fresh.into_iter().collect();
     fresh.sort_unstable();
-    if fresh.is_empty() || !fresh_root_blocks_are_pairwise_unreachable(function, &fresh) {
+    let heap_roots = native_heap_object_roots(function, effects);
+    if fresh.is_empty()
+        || fresh.iter().any(|root| heap_roots.contains(root))
+        || !fresh_root_blocks_are_pairwise_unreachable(function, &fresh)
+    {
         return None;
     }
     let mut roots = SmallVec::new();
@@ -161,7 +169,48 @@ fn collect_plan(
     })
 }
 
+/// Heap materialization exports the original object, including its aliases.
+/// Propagate that requirement through callee summaries before choosing storage;
+/// allocating a copy at the export would break mutations through existing views.
+pub(crate) fn native_heap_object_roots(
+    function: &Function,
+    effects: &ObjectEffectSummaryMap,
+) -> FxHashSet<ValueId> {
+    function
+        .layout
+        .iter_block()
+        .flat_map(|block| function.layout.iter_inst(block))
+        .filter(|&inst| {
+            downcast::<&data::ObjAlloc>(function.inst_set(), function.dfg.inst(inst)).is_some()
+        })
+        .filter_map(|inst| function.dfg.inst_result(inst))
+        .filter(|&root| {
+            object_locality::walk_object_root_uses_with_effects(function, root, effects, |usage| {
+                match usage {
+                    SpecialObjectUse::MaterializeHeap => ControlFlow::Break(()),
+                    SpecialObjectUse::Call { value, call, .. }
+                        if effects.get(call.callee()).is_some_and(|summary| {
+                            call.args().iter().enumerate().any(|(index, arg)| {
+                                *arg == value
+                                    && summary
+                                        .arg_effects
+                                        .get(index)
+                                        .is_some_and(|effect| effect.materializes_heap)
+                            })
+                        }) =>
+                    {
+                        ControlFlow::Break(())
+                    }
+                    _ => ControlFlow::Continue(()),
+                }
+            })
+            .is_some()
+        })
+        .collect()
+}
+
 fn check_lifetimes(function: &Function, effects: &ObjectEffectSummaryMap) -> Result<(), String> {
+    let heap_roots = native_heap_object_roots(function, effects);
     let mut layout_cache = shape::AggregateLayoutCache::default();
     let mut snapshot = ProvenanceSnapshot::new(function, Some(effects));
     let facts = AggregateFacts::for_all_objref_args(function, &mut layout_cache, &mut snapshot);
@@ -181,6 +230,7 @@ fn check_lifetimes(function: &Function, effects: &ObjectEffectSummaryMap) -> Res
             {
                 for root in facts.may().may_roots(result).observed().iter() {
                     if let Some(root_inst) = function.dfg.value_inst(root.value())
+                        && !heap_roots.contains(&root.value())
                         && sccs.scc_of(function.layout.inst_block(root_inst)) == Some(scc)
                     {
                         loop_roots.insert(root_inst, root.value());
@@ -204,6 +254,7 @@ fn check_lifetimes(function: &Function, effects: &ObjectEffectSummaryMap) -> Res
                         || !facts.complete().complete_roots(value).is_some_and(|roots| {
                             roots.iter().all(|root| {
                                 matches!(function.dfg.value(root.value()), Value::Arg { .. })
+                                    || heap_roots.contains(&root.value())
                             })
                         }))
                 {
@@ -262,6 +313,7 @@ fn check_lifetimes(function: &Function, effects: &ObjectEffectSummaryMap) -> Res
     // checking only the syntactic return operands misses those escape paths.
     for &root in facts.root_slices().keys() {
         if !matches!(function.dfg.value(root), Value::Arg { .. })
+            && !heap_roots.contains(&root)
             && !object_locality::object_root_stays_local_with_effects(
                 function,
                 root,

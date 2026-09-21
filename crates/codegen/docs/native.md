@@ -108,11 +108,25 @@ retaining the actual reference result. Thus a function can return a fresh
 object on one path and a borrowed alias on another without copying the
 borrowed object or losing its mutation semantics.
 
-The stack-only proof is conservative. Unproven fresh projections, captured
+The stack lifetime proof is conservative. Unproven fresh projections, captured
 local references, reference-bearing aggregate returns, recursive fresh
-escapes and loop-carried fresh objects are rejected. There is no heap/arena
-fallback. This private ABI may change during legalization; do not call
-private reference-bearing functions directly from foreign code.
+escapes and overlapping loop-carried stack objects are rejected. An explicit
+`obj.materialize.heap` allocates the original object on the host heap, including
+when the export occurs through a callee or projected alias. All aliases retain
+that allocation's identity; export does not copy the referent. Each execution
+of a heap object allocation creates distinct storage. Objects without a heap
+export continue to require the stack lifetime proof. This private ABI may change
+during legalization; do not call private reference-bearing functions directly
+from foreign code.
+
+`mem.alloc_dynamic` allocates host memory through `malloc`. Sizes that exceed
+the native pointer width and allocation failures trap. Zero-sized allocations
+request one byte so they also have non-null, distinct live addresses. Allocations
+are uninitialized and use the host allocator's alignment. There is no implicit
+reclamation: the caller or runtime owns their lifetime and can release the whole
+allocation through a compatible host `free` import after all aliases are dead.
+The `malloc` symbol must resolve to the host allocator; a module definition with
+that name is rejected when heap allocation is required.
 
 ## Calling from C or a JIT host
 
@@ -164,8 +178,8 @@ value. Unresolved SSA values are compilation errors, not implicit undef.
 The native instruction set includes integer arithmetic, comparisons, casts,
 control flow, direct calls, memory and aggregate/object operations. Enum
 operations must disappear during legalization. `get_function_ptr`,
-`sym_addr` and `sym_size` are unsupported; dynamic allocation and object
-materialization instructions must be lowered before native translation.
+`sym_addr` and `sym_size` are unsupported. Dynamic allocation and object
+materialization use the allocation and lifetime rules above.
 There are no first-class function values, indirect calls, varargs, floating
 point operations or EVM-specific runtime services in this slice. Division
 by zero is undefined at the IR level; callers must not rely on an EVM-style

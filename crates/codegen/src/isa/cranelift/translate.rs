@@ -11,6 +11,7 @@ use cranelift_codegen::ir::{
 };
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use cranelift_module::{FuncId, Linkage, Module as ClifModule};
+use rustc_hash::FxHashSet;
 
 use sonatina_ir::{
     BlockId, ControlFlowGraph, Function, Linkage as SonatinaLinkage, Module, Type, Value, ValueId,
@@ -19,6 +20,10 @@ use sonatina_ir::{
     module::FuncRef,
 };
 use sonatina_triple::TargetTriple;
+
+use crate::transform::aggregate::{
+    compute_object_effect_summaries, object_abi::native_heap_object_roots,
+};
 
 use self::{abi::*, globals::*, i256::*, memory::*, scalar::*};
 
@@ -31,6 +36,7 @@ pub(super) fn translate_module(
     let data_ids = define_globals(&module.ctx, clif_module)?;
 
     let funcs = module.funcs();
+    let object_effects = compute_object_effect_summaries(module);
 
     for &func_ref in &funcs {
         let (name, sig) = module.ctx.func_sig(func_ref, |sig| -> Result<_, String> {
@@ -59,12 +65,12 @@ pub(super) fn translate_module(
                 if function.layout.entry_block().is_none() {
                     return Ok(false);
                 }
-                let func_id = func_id_map[&func_ref];
+                let heap_roots = native_heap_object_roots(function, &object_effects);
                 translate_function(
                     module,
                     function,
                     func_ref,
-                    func_id,
+                    &heap_roots,
                     &func_id_map,
                     &data_ids,
                     clif_module,
@@ -101,7 +107,7 @@ fn translate_function(
     module: &Module,
     function: &Function,
     func_ref: FuncRef,
-    func_id: FuncId,
+    heap_roots: &FxHashSet<ValueId>,
     func_id_map: &HashMap<FuncRef, FuncId>,
     data_ids: &GlobalDataMap,
     clif_module: &mut impl ClifModule,
@@ -1534,11 +1540,17 @@ fn translate_function(
                 }
                 NativeInstKind::ObjAlloc(obj_alloc) => {
                     if let Some(result) = function.dfg.inst_result(inst_id) {
-                        let slot = builder.create_sized_stack_slot(stack_slot_data(
-                            *obj_alloc.ty(),
-                            &module.ctx,
-                        )?);
-                        let addr = builder.ins().stack_addr(pointer_type, slot, 0);
+                        let addr = if heap_roots.contains(&result) {
+                            let size = value_storage_size(*obj_alloc.ty(), &module.ctx)?;
+                            let size = builder.ins().iconst(pointer_type, i64::from(size));
+                            heap_allocate(module, size, clif_module, &mut builder)?
+                        } else {
+                            let slot = builder.create_sized_stack_slot(stack_slot_data(
+                                *obj_alloc.ty(),
+                                &module.ctx,
+                            )?);
+                            builder.ins().stack_addr(pointer_type, slot, 0)
+                        };
                         value_map.insert(result, addr);
                     }
                 }
@@ -1679,13 +1691,42 @@ fn translate_function(
                         inst_data.kind()
                     ));
                 }
-                NativeInstKind::ObjMaterializeStack(_)
-                | NativeInstKind::ObjMaterializeHeap(_)
-                | NativeInstKind::MemAllocDynamic(_) => {
-                    return Err(format!(
-                        "allocation instruction {:?} requires lowering before host-native Cranelift translation",
-                        inst_data.kind()
-                    ));
+                NativeInstKind::ObjMaterializeStack(materialize) => {
+                    let value =
+                        resolve_value(function, *materialize.object(), &value_map, &mut builder)?;
+                    if let Some(result) = function.dfg.inst_result(inst_id) {
+                        value_map.insert(result, value);
+                    }
+                }
+                NativeInstKind::ObjMaterializeHeap(materialize) => {
+                    let value =
+                        resolve_value(function, *materialize.object(), &value_map, &mut builder)?;
+                    if let Some(result) = function.dfg.inst_result(inst_id) {
+                        value_map.insert(result, value);
+                    }
+                }
+                NativeInstKind::MemAllocDynamic(allocate) => {
+                    let size = resolve_value(function, *allocate.size(), &value_map, &mut builder)?;
+                    let size = if function.dfg.value_ty(*allocate.size()) == Type::I256 {
+                        let [low, high, upper, top] = load_i256_limbs(size, &mut builder);
+                        let high = builder.ins().bor(high, upper);
+                        let high = builder.ins().bor(high, top);
+                        builder.ins().trapnz(high, TrapCode::user(2).unwrap());
+                        low
+                    } else {
+                        if builder.func.dfg.value_type(size).bits() > pointer_type.bits() {
+                            let high = builder
+                                .ins()
+                                .ushr_imm_u(size, i64::from(pointer_type.bits()));
+                            let overflow = builder.ins().icmp_imm_u(IntCC::NotEqual, high, 0);
+                            builder.ins().trapnz(overflow, TrapCode::user(2).unwrap());
+                        }
+                        resize_int_value(size, pointer_type, false, &mut builder)
+                    };
+                    let address = heap_allocate(module, size, clif_module, &mut builder)?;
+                    if let Some(result) = function.dfg.inst_result(inst_id) {
+                        value_map.insert(result, address);
+                    }
                 }
             }
             // Canonicalize every producer, including loads, casts, and call
@@ -1721,12 +1762,46 @@ fn translate_function(
         eprintln!("[cranelift] CLIF IR for {name}:\n{}", ctx.func.display());
     }
 
-    if let Err(e) = clif_module.define_function(func_id, &mut ctx) {
+    if let Err(e) = clif_module.define_function(func_id_map[&func_ref], &mut ctx) {
         eprintln!("[cranelift] CLIF IR (error):\n{}", ctx.func.display());
         return Err(format!("cranelift define_function failed: {e}"));
     }
 
     Ok(())
+}
+
+fn heap_allocate(
+    module: &Module,
+    size: clif::Value,
+    clif_module: &mut impl ClifModule,
+    builder: &mut FunctionBuilder,
+) -> Result<clif::Value, String> {
+    if module.ctx.triple == TargetTriple::SP1 {
+        return Err("host heap allocation is unavailable on SP1".into());
+    }
+    if module.funcs().iter().any(|&func| {
+        module.ctx.func_sig(func, |sig| {
+            sig.name() == "malloc" && !sig.linkage().is_external()
+        })
+    }) {
+        return Err("native heap allocation requires the host malloc symbol".into());
+    }
+    let pointer_type = clif_module.target_config().pointer_type();
+    let mut signature = clif_module.make_signature();
+    signature.params.push(clif::AbiParam::new(pointer_type));
+    signature.returns.push(clif::AbiParam::new(pointer_type));
+    let allocator = clif_module
+        .declare_function("malloc", Linkage::Import, &signature)
+        .map_err(|error| format!("failed to declare native allocator: {error}"))?;
+    let allocator = clif_module.declare_func_in_func(allocator, builder.func);
+    // Give even zero-sized allocations an address and trap on allocation failure.
+    let empty = builder.ins().icmp_imm_u(IntCC::Equal, size, 0);
+    let one = builder.ins().iconst(pointer_type, 1);
+    let size = builder.ins().select(empty, one, size);
+    let call = builder.ins().call(allocator, &[size]);
+    let address = builder.inst_results(call)[0];
+    builder.ins().trapz(address, TrapCode::user(2).unwrap());
+    Ok(address)
 }
 
 fn resolve_scalar_value(

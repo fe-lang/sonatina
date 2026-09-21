@@ -22,7 +22,7 @@ use crate::cfg_scc::CfgSccAnalysis;
 #[cfg(feature = "cranelift")]
 mod native;
 #[cfg(feature = "cranelift")]
-pub(crate) use native::legalize_native_object_returns;
+pub(crate) use native::{legalize_native_object_returns, native_heap_object_roots};
 
 #[derive(Clone, Copy)]
 enum RewriteRoot {
