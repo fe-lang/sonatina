@@ -1,0 +1,21 @@
+---
+source: crates/codegen/tests/evm_switch/mod.rs
+expression: measurements
+---
+example level strategy bytes mean_gas max_gas
+six O1 Linear 404 324.67 371
+six O1 Auto 404 324.67 371
+six O2 Linear 387 317.83 354
+six O2 Auto 387 317.83 354
+mixed O1 Linear 521 349.00 433
+mixed O1 Auto 521 349.00 433
+mixed O2 Linear 505 343.29 425
+mixed O2 Auto 505 343.29 425
+subtree O1 Linear 653 368.33 485
+subtree O1 Auto 675 362.33 403
+subtree O2 Linear 632 363.11 478
+subtree O2 Auto 651 356.22 396
+large O1 Linear 1872 636.28 1017
+large O1 Auto 1916 397.28 498
+large O2 Linear 1727 625.41 1000
+large O2 Auto 1771 386.41 484

@@ -1,4 +1,5 @@
 mod evm_directives;
+mod evm_switch;
 
 use dir_test::{Fixture, dir_test};
 

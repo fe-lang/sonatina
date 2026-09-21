@@ -1029,7 +1029,7 @@ fn replace_phi_incoming_block(
     }
 }
 
-fn copy_phi_incoming_block(
+pub(crate) fn copy_phi_incoming_block(
     func: &mut Function,
     block: BlockId,
     old_pred: BlockId,

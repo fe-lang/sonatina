@@ -24,7 +24,10 @@ pub(crate) mod static_arena_alloc;
 pub mod test_util;
 mod verify;
 
-pub use backend::{EvmBackend, ImmediateMaterializationMode, LateCleanupProfile, PushWidthPolicy};
+pub use backend::{
+    EvmBackend, ImmediateMaterializationMode, LateCleanupProfile, PushWidthPolicy,
+    SwitchLoweringStrategy,
+};
 pub use prepare::EvmPreparedSection;
 
 pub(crate) use dyn_sp::DynSpInitKind;
