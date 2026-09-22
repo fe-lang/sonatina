@@ -124,19 +124,19 @@ func private %__Bench_runtime() {
         jump block44;
 
     block44:
-        v78.i256 = phi (v74 block10) (v83 block45);
+        v121.i256 = phi (v74 block10) (v83 block45);
         v80.i256 = phi (0.i256 block10) (v119 block45);
         v81.i1 = lt v80 v73;
         br v81 block45 block42;
 
     block45:
         v82.i256 = xor v74 v80;
-        v83.i256 = xor v78 v82;
+        v83.i256 = xor v121 v82;
         v119.i256 = add v80 1.i256;
         jump block44;
 
     block42:
-        mstore 0.i256 v78 i256;
+        mstore 0.i256 v121 i256;
         evm_return 0.i256 32.i256;
 
     block11:
@@ -153,8 +153,8 @@ func private %__Bench_runtime() {
 
     block50:
         v87.i256 = phi (0.i256 block13) (v89 block51);
-        v88.i1 = lt v87 v31;
-        br v88 block51 block48;
+        v122.i1 = lt v87 v31;
+        br v122 block51 block48;
 
     block51:
         v89.i256 = add 1.i256 v87;
@@ -177,18 +177,18 @@ func private %__Bench_runtime() {
         jump block55;
 
     block55:
-        v91.i256 = phi (0.i256 block16) (v96 block56);
-        v93.i256 = phi (1.i256 block16) (v97 block56);
-        v94.i1 = gt v93 v37;
-        br v94 block53 block56;
+        v123.i256 = phi (0.i256 block16) (v126 block56);
+        v124.i256 = phi (1.i256 block16) (v97 block56);
+        v125.i1 = gt v124 v37;
+        br v125 block53 block56;
 
     block56:
-        v96.i256 = add v91 v93;
-        v97.i256 = add 1.i256 v93;
+        v126.i256 = add v123 v124;
+        v97.i256 = add 1.i256 v124;
         jump block55;
 
     block53:
-        mstore 0.i256 v91 i256;
+        mstore 0.i256 v123 i256;
         evm_return 0.i256 32.i256;
 
     block17:

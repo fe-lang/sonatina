@@ -11,8 +11,8 @@ func private %i8_h1bb527fe1af58754_saturatingmul_hf2bc6be7b84ff8f7_saturating_mu
         br v46 block16 block3;
 
     block2:
-        v35.i1 = eq v0 -128.i8;
-        br v35 block7 block6;
+        v56.i1 = eq v0 -128.i8;
+        br v56 block7 block6;
 
     block3:
         v47.i1 = is_zero v1;

@@ -319,8 +319,8 @@ func private %__Vault_recv_0_0(v0.i256, v1.i256) -> i256 {
     block0:
         v4.i1 = is_zero v0;
         v5.i256 = zext v4 i256;
-        v29.i1 = is_zero v5;
-        br v29 block2 block1;
+        v44.i1 = is_zero v5;
+        br v44 block2 block1;
 
     block1:
         return 0.i256;
@@ -341,11 +341,11 @@ func private %__Vault_recv_0_0(v0.i256, v1.i256) -> i256 {
         evm_sstore v9 v30;
         v32.i256 = evm_caller;
         v33.*i8 = evm_malloc 0.i256;
-        v34.i256 = ptr_to_int v33 i256;
-        mstore v34 v32 i256;
-        v36.i256 = add v34 32.i256;
+        v45.i256 = ptr_to_int v33 i256;
+        mstore v45 v32 i256;
+        v36.i256 = add v45 32.i256;
         mstore v36 0.i256 i256;
-        v38.i256 = evm_keccak256 v34 64.i256;
+        v38.i256 = evm_keccak256 v45 64.i256;
         v39.i256 = evm_sload v38;
         v34.i256 = add v39 v23;
         v40.*i8 = evm_malloc 0.i256;
@@ -368,8 +368,8 @@ func private %__Vault_recv_0_1(v0.i256, v1.i256) -> i256 {
     block0:
         v4.i1 = is_zero v0;
         v5.i256 = zext v4 i256;
-        v30.i1 = is_zero v5;
-        br v30 block2 block1;
+        v46.i1 = is_zero v5;
+        br v46 block2 block1;
 
     block1:
         return 0.i256;
@@ -388,16 +388,16 @@ func private %__Vault_recv_0_1(v0.i256, v1.i256) -> i256 {
     block4:
         v14.i256 = evm_caller;
         v35.*i8 = evm_malloc 0.i256;
-        v36.i256 = ptr_to_int v35 i256;
-        mstore v36 v14 i256;
-        v38.i256 = add v36 32.i256;
+        v48.i256 = ptr_to_int v35 i256;
+        mstore v48 v14 i256;
+        v38.i256 = add v48 32.i256;
         mstore v38 0.i256 i256;
-        v40.i256 = evm_keccak256 v36 64.i256;
+        v40.i256 = evm_keccak256 v48 64.i256;
         v41.i256 = evm_sload v40;
         v18.i1 = gt v0 v41;
         v19.i256 = zext v18 i256;
-        v32.i1 = is_zero v19;
-        br v32 block6 block5;
+        v47.i1 = is_zero v19;
+        br v47 block6 block5;
 
     block5:
         return 0.i256;
@@ -430,8 +430,8 @@ func private %__Vault_init() {
         v6.i256 = add v2 v3;
         v7.i1 = lt v4 v6;
         v8.i256 = zext v7 i256;
-        v29.i1 = is_zero v8;
-        br v29 block2 block1;
+        v32.i1 = is_zero v8;
+        br v32 block2 block1;
 
     block1:
         evm_revert 0.i256 0.i256;
@@ -707,9 +707,9 @@ func private %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__ProxyDepos
 func private %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__GetTotalAssets_h830b2520704d49fc__947e7051a757f184(v1.i256, v2.i256, v3.i256) -> i256 {
     block0:
         v24.i256 = call %solencoder_h1b9228b90dad6928_new;
-        v25.i256 = call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head v24 4.i256;
-        mstore v25 107839786668602559178668060348078522694548577690162289924414440996864.i256 i256;
-        v27.i256 = add v25 4.i256;
+        v35.i256 = call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head v24 4.i256;
+        mstore v35 107839786668602559178668060348078522694548577690162289924414440996864.i256 i256;
+        v27.i256 = add v35 4.i256;
         v28.*@__fe_SolEncoder_4 = int_to_ptr v24 *@__fe_SolEncoder_4;
         v29.*i256 = gep v28 0.i256 1.i256;
         mstore v29 v27 i256;
@@ -739,14 +739,14 @@ func private %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__GetTotalAs
 
 func private %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__GetTotalShares_hbe2278c3233da528__5145d089cb2da672(v1.i256, v2.i256, v3.i256) -> i256 {
     block0:
-        v25.i256 = call %solencoder_h1b9228b90dad6928_new;
-        v26.i256 = call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head v25 4.i256;
+        v36.i256 = call %solencoder_h1b9228b90dad6928_new;
+        v26.i256 = call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head v36 4.i256;
         mstore v26 134799733335753198973335075435098153368185722112702862405518051246080.i256 i256;
         v28.i256 = add v26 4.i256;
-        v29.*@__fe_SolEncoder_4 = int_to_ptr v25 *@__fe_SolEncoder_4;
+        v29.*@__fe_SolEncoder_4 = int_to_ptr v36 *@__fe_SolEncoder_4;
         v30.*i256 = gep v29 0.i256 1.i256;
         mstore v30 v28 i256;
-        v31.i256 = call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish v25;
+        v31.i256 = call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish v36;
         v7.*@__fe_tuple_5 = int_to_ptr v31 *@__fe_tuple_5;
         v8.*i256 = bitcast v7 *i256;
         v9.i256 = mload v8 i256;
@@ -852,14 +852,14 @@ func private %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__Withdraw_h
 
 func private %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor__GetMyShares_h4b85c900112aeed6__1df2a8280dde4872(v1.i256, v2.i256, v3.i256) -> i256 {
     block0:
-        v25.i256 = call %solencoder_h1b9228b90dad6928_new;
-        v26.i256 = call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head v25 4.i256;
+        v36.i256 = call %solencoder_h1b9228b90dad6928_new;
+        v26.i256 = call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head v36 4.i256;
         mstore v26 161759680002903838768002090522117784041822866535243434886621661495296.i256 i256;
         v28.i256 = add v26 4.i256;
-        v29.*@__fe_SolEncoder_4 = int_to_ptr v25 *@__fe_SolEncoder_4;
+        v29.*@__fe_SolEncoder_4 = int_to_ptr v36 *@__fe_SolEncoder_4;
         v30.*i256 = gep v29 0.i256 1.i256;
         mstore v30 v28 i256;
-        v31.i256 = call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish v25;
+        v31.i256 = call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish v36;
         v7.*@__fe_tuple_5 = int_to_ptr v31 *@__fe_tuple_5;
         v8.*i256 = bitcast v7 *i256;
         v9.i256 = mload v8 i256;
@@ -1002,8 +1002,8 @@ func private %decode_returndata__u256__3271ca15373d4483(v0.i256, v1.i256) -> i25
     block0:
         v4.i1 = lt v1 32.i256;
         v5.i256 = zext v4 i256;
-        v14.i1 = is_zero v5;
-        br v14 block2 block1;
+        v37.i1 = is_zero v5;
+        br v37 block2 block1;
 
     block1:
         evm_revert 0.i256 0.i256;

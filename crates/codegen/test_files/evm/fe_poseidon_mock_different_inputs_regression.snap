@@ -195,20 +195,20 @@ sigma_full:
     DUP6
     DUP1
     MULMOD
-    DUP3  // v14.i256 = evm_mul_mod v16 v16 v12;
+    DUP3  // v21.i256 = evm_mul_mod v16 v16 v12;
     SWAP1
     DUP1
     MULMOD
-    SWAP5  // v15.i256 = evm_mul_mod v14 v10 v12;
+    SWAP5  // v22.i256 = evm_mul_mod v21 v10 v12;
     DUP3
     SWAP2
     SWAP6
     MULMOD
-    DUP2  // v16.i256 = evm_mul_mod v6 v6 v12;
+    DUP2  // v23.i256 = evm_mul_mod v6 v6 v12;
     DUP4
     DUP1
     MULMOD
-    DUP3  // v17.i256 = evm_mul_mod v16 v16 v12;
+    DUP3  // v17.i256 = evm_mul_mod v23 v23 v12;
     SWAP1
     DUP1
     MULMOD
@@ -222,7 +222,7 @@ sigma_full:
     PUSH1 0x20 (32)  // v19.i256 = add v0 v7;
     DUP3
     ADD
-    MSTORE  // evm_mstore v19 v15;
+    MSTORE  // evm_mstore v19 v22;
     PUSH1 0x40 (64)  // v20.i256 = add v0 v3;
     ADD
     MSTORE  // evm_mstore v20 v18;

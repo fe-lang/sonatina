@@ -281,8 +281,8 @@ func private %__Coin_init() {
 
 func private %__Coin_runtime() {
     block0:
-        v19.i256 = evm_calldata_size;
-        v22.i1 = lt v19 4.i256;
+        v113.i256 = evm_calldata_size;
+        v22.i1 = lt v113 4.i256;
         v23.i256 = zext v22 i256;
         v89.i1 = is_zero v23;
         br v89 block12 block11;
@@ -553,8 +553,8 @@ func public %alloc(v0.i256) -> i256 {
         v3.i256 = mload 64.i256 i256;
         v4.i1 = is_zero v3;
         v5.i256 = zext v4 i256;
-        v15.i1 = is_zero v5;
-        br v15 block2 block1;
+        v20.i1 = is_zero v5;
+        br v20 block2 block1;
 
     block1:
         v7.i256 = evm_msize;
@@ -600,8 +600,8 @@ func private %decode_returndata__u256__3271ca15373d4483(v0.i256, v1.i256) -> i25
     block0:
         v4.i1 = lt v1 32.i256;
         v5.i256 = zext v4 i256;
-        v17.i1 = is_zero v5;
-        br v17 block2 block1;
+        v40.i1 = is_zero v5;
+        br v40 block2 block1;
 
     block1:
         evm_revert 0.i256 0.i256;
