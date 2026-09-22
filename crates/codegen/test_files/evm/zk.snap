@@ -1444,7 +1444,7 @@ leanimt_root_from_calldata:
     MSTORE
     PUSH1 0x20 (32)  // evm_mstore v14 v23;
     MSTORE
-    PUSH1 0x40 (64)  // v19.i256 = evm_keccak256 v19 v33;
+    PUSH1 0x40 (64)  // v24.i256 = evm_keccak256 v19 v33;
     PUSH0
     KECCAK256
   block7:
@@ -1553,7 +1553,7 @@ leanimt_update_root_from_calldata:
     SWAP3  // v28.i256 = add v74 v57;
     PUSH1 0x1 (1)
     ADD
-    SWAP2  // v29.i256 = shr v74 v59;
+    SWAP2  // v32.i256 = shr v74 v59;
     PUSH1 0x1 (1)
     SHR
     SWAP2  // jump block3;
@@ -1742,7 +1742,7 @@ smt_root_from_calldata:
     SWAP3  // v44.i256 = add v88 v75;
     PUSH1 0x1 (1)
     ADD
-    SWAP1  // v45.i256 = shr v88 v79;
+    SWAP1  // v48.i256 = shr v88 v79;
     PUSH1 0x1 (1)
     SHR
     SWAP2  // v46.i256 = add v92 v77;
@@ -1980,7 +1980,7 @@ smt_update_root_from_calldata:
     SWAP2  // v56.i256 = shr v124 v101;
     PUSH1 0x1 (1)
     SHR
-    SWAP3  // v57.i256 = add v169 v99;
+    SWAP3  // v60.i256 = add v169 v99;
     PUSH1 0x20 (32)
     ADD
     SWAP3  // jump block3;
@@ -2188,17 +2188,17 @@ runtime__StorPtr_Evm___207f35a85ac4062e:
     PUSH1 __evm_shared_tail_0
     JUMPI
   block12:
-    PUSH1 0x4 (4)  // v51.i256 = evm_calldata_load v13;
+    PUSH1 0x4 (4)  // v66.i256 = evm_calldata_load v13;
     CALLDATALOAD
-    PUSH1 0x24 (36)  // v52.i256 = evm_calldata_load v15;
+    PUSH1 0x24 (36)  // v67.i256 = evm_calldata_load v15;
     CALLDATALOAD
-    PUSH1 0x44 (68)  // v53.i256 = evm_calldata_load v59;
+    PUSH1 0x44 (68)  // v68.i256 = evm_calldata_load v59;
     CALLDATALOAD
-    PUSH1 0x64 (100)  // v54.i256 = evm_calldata_load v20;
+    PUSH1 0x64 (100)  // v69.i256 = evm_calldata_load v20;
     CALLDATALOAD
-    PUSH1 0x84 (132)  // v55.i256 = evm_calldata_load v30;
+    PUSH1 0x84 (132)  // v70.i256 = evm_calldata_load v30;
     CALLDATALOAD
-    SWAP2  // v56.i256 = call %smt_update_root_from_calldata v51 v52 v53 v54 v55 v40;
+    SWAP2  // v71.i256 = call %smt_update_root_from_calldata v66 v67 v68 v69 v70 v40;
     PUSH1 0xa4 (164)
     SWAP4
     PUSH1 `pc + (4)`
@@ -2206,7 +2206,7 @@ runtime__StorPtr_Evm___207f35a85ac4062e:
     PUSH1 FuncRef(5)
     JUMP
     JUMPDEST
-    PUSH0  // evm_mstore v51 v56;
+    PUSH0  // evm_mstore v51 v71;
     MSTORE
     PUSH1 0x20 (32)  // evm_return v51 v22;
     PUSH0

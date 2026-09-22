@@ -313,10 +313,10 @@ apply_rook:
     PUSH0  // evm_mstore v85 v18;
     SWAP1
     MSTORE
-    PUSH1 0xc0 (192)  // v87.i256 = add v0 192.i256;
+    PUSH1 0xc0 (192)  // v93.i256 = add v0 192.i256;
     DUP3
     ADD
-    PUSH0  // evm_mstore v87 v18;
+    PUSH0  // evm_mstore v93 v18;
     SWAP1
     MSTORE
     PUSH1 0xe0 (224)  // v89.i256 = add v0 224.i256;

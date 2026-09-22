@@ -33,8 +33,8 @@ func public %entry() {
         v7.*i256 = bitcast v30 *i256;
         v26.i256 = mload v7 i256;
         v29.i1 = eq v3 5.i256;
-        v30.i1 = eq v26 99.i256;
-        v32.i1 = and v29 v30;
+        v45.i1 = eq v26 99.i256;
+        v32.i1 = and v29 v45;
         br v32 block16 block17;
 
     block16:

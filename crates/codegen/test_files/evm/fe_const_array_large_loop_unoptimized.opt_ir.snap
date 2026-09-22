@@ -1046,8 +1046,8 @@ func private %test_const_array_loop() {
 
     block14:
         v1184.objref<i256> = obj.index v1 v1154;
-        v1185.i256 = obj.load v1184;
-        (v1161.i256, v1162.i1) = uaddo v1194 v1185;
+        v1200.i256 = obj.load v1184;
+        (v1161.i256, v1162.i1) = uaddo v1194 v1200;
         br v1162 block9 block3;
 
     block3:
@@ -1082,8 +1082,8 @@ func private %test_const_array_loop() {
         evm_revert 0.i256 0.i256;
 
     block28:
-        v1194.i1 = eq v1204 8256.i256;
-        br v1194 block32 block34;
+        v1201.i1 = eq v1204 8256.i256;
+        br v1201 block32 block34;
 
     block34:
         evm_revert 0.i256 0.i256;

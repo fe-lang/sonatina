@@ -30,8 +30,8 @@ func public %entry() {
         jump block10;
 
     block10:
-        v30.i1 = phi (0.i1 block11) (1.i1 block13);
-        br v30 block8 block4;
+        v50.i1 = phi (0.i1 block11) (1.i1 block13);
+        br v50 block8 block4;
 
     block4:
         v40.i256 = mload 512.i256 i256;
@@ -46,10 +46,10 @@ func public %entry() {
 
     block16:
         v39.*i8 = evm_malloc 64.i256;
-        v40.*@pair = bitcast v39 *@pair;
-        v41.*i256 = bitcast v40 *i256;
-        mstore v41 1.i256 i256;
-        v42.*i256 = gep v40 0.i256 1.i256;
+        v51.*@pair = bitcast v39 *@pair;
+        v52.*i256 = bitcast v51 *i256;
+        mstore v52 1.i256 i256;
+        v42.*i256 = gep v51 0.i256 1.i256;
         mstore v42 42.i256 i256;
         jump block14;
 
@@ -63,8 +63,8 @@ func public %entry() {
         jump block14;
 
     block14:
-        v49.*i256 = phi (v41 block16) (v46 block17);
-        v48.*@pair = phi (v40 block16) (v45 block17);
+        v49.*i256 = phi (v52 block16) (v46 block17);
+        v48.*@pair = phi (v51 block16) (v45 block17);
         v10.i256 = mload v49 i256;
         v11.i1 = eq v10 1.i256;
         br v11 block5 block8;

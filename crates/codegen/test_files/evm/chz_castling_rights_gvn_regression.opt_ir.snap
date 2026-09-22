@@ -353,16 +353,16 @@ func private %validate_rook_capture() -> @layout_5 {
         v389.i256 = zext v224 i256;
         v390.i256 = and v389 15.i256;
         v391.i256 = shl 1.i256 v390;
-        v392.i256 = or v388 v391;
+        v490.i256 = or v388 v391;
         v160.i1 = extract_value v149 4.i256;
         br v160 block61 block62;
 
     block61:
-        v396.i256 = and v392 -481.i256;
+        v396.i256 = and v490 -481.i256;
         jump block63;
 
     block62:
-        v401.i256 = and v392 -481.i256;
+        v401.i256 = and v490 -481.i256;
         v405.i256 = or v401 480.i256;
         jump block63;
 
