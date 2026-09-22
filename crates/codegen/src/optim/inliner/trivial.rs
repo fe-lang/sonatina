@@ -14,7 +14,7 @@ use crate::{
     optim::call_purity::is_nonmutating_returning_call,
 };
 
-use super::{InlineStats, InlinerConfig};
+use super::{CallChanges, InlineStats, InlinerConfig};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ValueTemplate {
@@ -404,18 +404,15 @@ pub(super) fn apply_plan(
     call_inst_id: InstId,
     plan: InlinePlan,
     stats: &mut InlineStats,
-) -> bool {
+) -> Option<CallChanges> {
     if !caller.layout.is_inst_inserted(call_inst_id) {
-        return false;
+        return None;
     }
 
     let is = caller.inst_set();
-    let Some((call_args, original_callee)) =
+    let (call_args, original_callee) =
         <&control_flow::Call as InstDowncast>::downcast(is, caller.dfg.inst(call_inst_id))
-            .map(|call_inst| (call_inst.args().clone(), *call_inst.callee()))
-    else {
-        return false;
-    };
+            .map(|call_inst| (call_inst.args().clone(), *call_inst.callee()))?;
     let call_results: ReturnedValues = caller
         .dfg
         .inst_results(call_inst_id)
@@ -423,16 +420,44 @@ pub(super) fn apply_plan(
         .copied()
         .collect();
 
-    match plan {
+    let mut call_changes = CallChanges::default();
+    if matches!(plan, InlinePlan::SpliceSingleBlockTerminator(_)) {
+        // A terminating splice drops the entire tail, including its calls.
+        let mut next = Some(call_inst_id);
+        while let Some(inst) = next {
+            if let Some(call) = caller.dfg.call_info(inst) {
+                call_changes.removed.push(call.callee());
+            }
+            next = caller.layout.next_inst_of(inst);
+        }
+    } else {
+        call_changes.removed.push(original_callee);
+    }
+    let body = match &plan {
+        InlinePlan::RewriteCall { new_callee, .. } => {
+            call_changes.added.push(*new_callee);
+            &[][..]
+        }
+        InlinePlan::RemoveCall { .. } => &[][..],
+        InlinePlan::SpliceSingleBlock(plan) => plan.body.as_slice(),
+        InlinePlan::SpliceSingleBlockTerminator(plan) => plan.body.as_slice(),
+    };
+    for template in body {
+        if let Some(call) =
+            <&control_flow::Call as InstDowncast>::downcast(is, template.inst.as_ref())
+        {
+            call_changes.added.push(*call.callee());
+        }
+    }
+
+    let changed = match plan {
         InlinePlan::RemoveCall { returned } => {
             if call_results.len() != returned.len() {
-                return false;
+                return None;
             }
 
             for (&call_res, tpl) in call_results.iter().zip(returned.iter()) {
-                let Some(alias) = materialize(tpl, caller, &call_args) else {
-                    return false;
-                };
+                let alias = materialize(tpl, caller, &call_args)?;
                 debug_assert_alias_type_match(caller, call_res, alias);
                 caller.dfg.change_to_alias(call_res, alias);
             }
@@ -446,15 +471,12 @@ pub(super) fn apply_plan(
             new_callee,
             new_args,
         } => {
-            let Some(args) = new_args
+            let args = new_args
                 .iter()
                 .map(|tpl| materialize(tpl, caller, &call_args))
-                .collect::<Option<SmallVec<[ValueId; 8]>>>()
-            else {
-                return false;
-            };
+                .collect::<Option<SmallVec<[ValueId; 8]>>>()?;
             if original_callee == new_callee && call_args.as_slice() == args.as_slice() {
-                return false;
+                return None;
             }
 
             let has_call = caller
@@ -484,7 +506,8 @@ pub(super) fn apply_plan(
                 stats,
             )
         }
-    }
+    };
+    changed.then_some(call_changes)
 }
 
 fn apply_splice_single_block(

@@ -14,35 +14,35 @@ type @CallData = {i256, i256};
 func public %entry() {
     block0:
         v0.i256 = evm_calldata_size;
-        v13.i1 = is_zero v0;
-        br v13 block1 block2;
+        v56.i1 = is_zero v0;
+        br v56 block1 block2;
 
     block1:
         v3.i256 = evm_address;
-        v22.*i8 = evm_malloc 4.i256;
-        v23.i256 = ptr_to_int v22 i256;
-        mstore v23 -21855552483912501284291303069055441188061847755248476274203343518395480932352.i256 i256;
-        v26.i256 = evm_call 100000.i256 v3 0.i256 v23 4.i256 0.i256 0.i256;
-        v27.i256 = evm_return_data_size;
-        v28.*i8 = evm_malloc v27;
-        v29.i256 = ptr_to_int v28 i256;
-        evm_return_data_copy v29 0.i256 v27;
-        v30.i1 = is_zero v26;
-        br v30 block5 block6;
+        v20.*i8 = evm_malloc 4.i256;
+        v21.i256 = ptr_to_int v20 i256;
+        mstore v21 -21855552483912501284291303069055441188061847755248476274203343518395480932352.i256 i256;
+        v35.i256 = evm_call 100000.i256 v3 0.i256 v21 4.i256 0.i256 0.i256;
+        v36.i256 = evm_return_data_size;
+        v37.*i8 = evm_malloc v36;
+        v38.i256 = ptr_to_int v37 i256;
+        evm_return_data_copy v38 0.i256 v36;
+        v57.i1 = is_zero v35;
+        br v57 block11 block14;
 
-    block5:
-        evm_revert v29 v27;
+    block11:
+        evm_revert v38 v36;
 
-    block6:
-        v32.i1 = lt v27 32.i256;
-        br v32 block7 block8;
+    block14:
+        v41.i1 = lt v36 32.i256;
+        br v41 block15 block20;
 
-    block7:
+    block15:
         evm_revert 0.i256 0.i256;
 
-    block8:
-        v58.i256 = mload v29 i256;
-        mstore 0.i32 v58 i256;
+    block20:
+        v126.i256 = mload v38 i256;
+        mstore 0.i32 v126 i256;
         evm_return 0.i8 32.i8;
 
     block2:

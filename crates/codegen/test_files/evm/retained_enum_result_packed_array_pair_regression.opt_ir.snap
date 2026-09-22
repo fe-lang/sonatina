@@ -15,184 +15,178 @@ type @__fe_layout_0 = enum {
 
 func private %__fe_test_root_local_tuple_pack_then_verify_like_twice() {
     block0:
-        call %local_tuple_pack_then_verify_like_twice;
-        evm_stop;
-}
-
-func private %local_tuple_pack_then_verify_like_twice() {
-    block0:
-        v13.objref<[i8; 5]> = obj.alloc [i8; 5];
-        v14.objref<i8> = obj.index v13 0.i256;
-        obj.store v14 0.i8;
-        v16.objref<i8> = obj.index v13 2.i256;
-        obj.store v16 0.i8;
-        v17.objref<i8> = obj.index v13 3.i256;
-        obj.store v17 0.i8;
-        v18.objref<i8> = obj.index v13 4.i256;
-        obj.store v18 0.i8;
-        v20.objref<i8> = obj.index v13 1.i256;
-        obj.store v20 1.i8;
-        v28.objref<[i256; 5]> = obj.alloc [i256; 5];
-        v29.objref<i256> = obj.index v28 0.i256;
-        obj.store v29 0.i256;
-        v31.objref<i256> = obj.index v28 2.i256;
-        obj.store v31 0.i256;
-        v32.objref<i256> = obj.index v28 3.i256;
-        obj.store v32 0.i256;
-        v33.objref<i256> = obj.index v28 4.i256;
-        obj.store v33 0.i256;
-        v35.objref<i256> = obj.index v28 1.i256;
-        obj.store v35 1.i256;
-        v36.[i256; 5] = obj.load v28;
-        v37.[i8; 5] = obj.load v13;
-        v38.objref<@__fe_layout_2> = obj.alloc @__fe_layout_2;
-        v39.objref<[i256; 5]> = obj.proj v38 0.i256;
-        v40.objref<i256> = obj.index v39 0.i256;
-        v41.i256 = extract_value v36 0.i256;
+        v0.objref<[i8; 5]> = obj.alloc [i8; 5];
+        v2.objref<i8> = obj.index v0 0.i256;
+        obj.store v2 0.i8;
+        v5.objref<i8> = obj.index v0 2.i256;
+        obj.store v5 0.i8;
+        v7.objref<i8> = obj.index v0 3.i256;
+        obj.store v7 0.i8;
+        v9.objref<i8> = obj.index v0 4.i256;
+        obj.store v9 0.i8;
+        v11.objref<i8> = obj.index v0 1.i256;
+        obj.store v11 1.i8;
+        v13.objref<[i256; 5]> = obj.alloc [i256; 5];
+        v14.objref<i256> = obj.index v13 0.i256;
+        obj.store v14 0.i256;
+        v15.objref<i256> = obj.index v13 2.i256;
+        obj.store v15 0.i256;
+        v16.objref<i256> = obj.index v13 3.i256;
+        obj.store v16 0.i256;
+        v17.objref<i256> = obj.index v13 4.i256;
+        obj.store v17 0.i256;
+        v18.objref<i256> = obj.index v13 1.i256;
+        obj.store v18 1.i256;
+        v19.[i256; 5] = obj.load v13;
+        v20.[i8; 5] = obj.load v0;
+        v21.objref<@__fe_layout_2> = obj.alloc @__fe_layout_2;
+        v22.objref<[i256; 5]> = obj.proj v21 0.i256;
+        v23.objref<i256> = obj.index v22 0.i256;
+        v24.i256 = extract_value v19 0.i256;
+        obj.store v23 v24;
+        v25.objref<i256> = obj.index v22 1.i256;
+        v26.i256 = extract_value v19 1.i256;
+        obj.store v25 v26;
+        v27.objref<i256> = obj.index v22 2.i256;
+        v28.i256 = extract_value v19 2.i256;
+        obj.store v27 v28;
+        v29.objref<i256> = obj.index v22 3.i256;
+        v30.i256 = extract_value v19 3.i256;
+        obj.store v29 v30;
+        v31.objref<i256> = obj.index v22 4.i256;
+        v32.i256 = extract_value v19 4.i256;
+        obj.store v31 v32;
+        v33.objref<[i8; 5]> = obj.proj v21 1.i256;
+        v34.objref<i8> = obj.index v33 0.i256;
+        v35.i8 = extract_value v20 0.i256;
+        obj.store v34 v35;
+        v36.objref<i8> = obj.index v33 1.i256;
+        v37.i8 = extract_value v20 1.i256;
+        obj.store v36 v37;
+        v38.objref<i8> = obj.index v33 2.i256;
+        v39.i8 = extract_value v20 2.i256;
+        obj.store v38 v39;
+        v40.objref<i8> = obj.index v33 3.i256;
+        v41.i8 = extract_value v20 3.i256;
         obj.store v40 v41;
-        v42.objref<i256> = obj.index v39 1.i256;
-        v43.i256 = extract_value v36 1.i256;
+        v42.objref<i8> = obj.index v33 4.i256;
+        v43.i8 = extract_value v20 4.i256;
         obj.store v42 v43;
-        v44.objref<i256> = obj.index v39 2.i256;
-        v45.i256 = extract_value v36 2.i256;
-        obj.store v44 v45;
-        v46.objref<i256> = obj.index v39 3.i256;
-        v47.i256 = extract_value v36 3.i256;
-        obj.store v46 v47;
-        v48.objref<i256> = obj.index v39 4.i256;
-        v49.i256 = extract_value v36 4.i256;
+        v44.@__fe_layout_2 = obj.load v21;
+        v45.objref<@__fe_layout_2> = obj.alloc @__fe_layout_2;
+        v46.objref<[i256; 5]> = obj.proj v45 0.i256;
+        v47.[i256; 5] = extract_value v44 0.i256;
+        v48.objref<i256> = obj.index v46 0.i256;
+        v49.i256 = extract_value v47 0.i256;
         obj.store v48 v49;
-        v50.objref<[i8; 5]> = obj.proj v38 1.i256;
-        v51.objref<i8> = obj.index v50 0.i256;
-        v52.i8 = extract_value v37 0.i256;
-        obj.store v51 v52;
-        v53.objref<i8> = obj.index v50 1.i256;
-        v54.i8 = extract_value v37 1.i256;
-        obj.store v53 v54;
-        v55.objref<i8> = obj.index v50 2.i256;
-        v56.i8 = extract_value v37 2.i256;
-        obj.store v55 v56;
-        v57.objref<i8> = obj.index v50 3.i256;
-        v58.i8 = extract_value v37 3.i256;
-        obj.store v57 v58;
-        v59.objref<i8> = obj.index v50 4.i256;
-        v60.i8 = extract_value v37 4.i256;
-        obj.store v59 v60;
-        v61.@__fe_layout_2 = obj.load v38;
-        v62.objref<@__fe_layout_2> = obj.alloc @__fe_layout_2;
-        v63.objref<[i256; 5]> = obj.proj v62 0.i256;
-        v64.[i256; 5] = extract_value v61 0.i256;
-        v65.objref<i256> = obj.index v63 0.i256;
-        v66.i256 = extract_value v64 0.i256;
-        obj.store v65 v66;
-        v67.objref<i256> = obj.index v63 1.i256;
-        v68.i256 = extract_value v64 1.i256;
-        obj.store v67 v68;
-        v69.objref<i256> = obj.index v63 2.i256;
-        v70.i256 = extract_value v64 2.i256;
-        obj.store v69 v70;
-        v71.objref<i256> = obj.index v63 3.i256;
-        v72.i256 = extract_value v64 3.i256;
-        obj.store v71 v72;
-        v73.objref<i256> = obj.index v63 4.i256;
-        v74.i256 = extract_value v64 4.i256;
-        obj.store v73 v74;
-        v75.objref<[i8; 5]> = obj.proj v62 1.i256;
-        v76.[i8; 5] = extract_value v61 1.i256;
-        v77.objref<i8> = obj.index v75 0.i256;
-        v78.i8 = extract_value v76 0.i256;
-        obj.store v77 v78;
-        v79.objref<i8> = obj.index v75 1.i256;
-        v80.i8 = extract_value v76 1.i256;
-        obj.store v79 v80;
-        v81.objref<i8> = obj.index v75 2.i256;
-        v82.i8 = extract_value v76 2.i256;
-        obj.store v81 v82;
-        v83.objref<i8> = obj.index v75 3.i256;
-        v84.i8 = extract_value v76 3.i256;
-        obj.store v83 v84;
-        v85.objref<i8> = obj.index v75 4.i256;
-        v86.i8 = extract_value v76 4.i256;
-        obj.store v85 v86;
-        v88.[i256; 5] = obj.load v63;
-        v90.[i8; 5] = obj.load v75;
-        v91.@__fe_layout_1 = call %verify_like v88 v90 2.i256;
-        v92.objref<@__fe_layout_1> = obj.alloc @__fe_layout_1;
-        v95.objref<@__fe_layout_0> = obj.proj v92 1.i256;
-        v96.@__fe_layout_0 = extract_value v91 1.i256;
-        v97.enumtag(@__fe_layout_0) = enum.tag v96;
-        br_table v97 block8 (0.enumtag(@__fe_layout_0) block9) (1.enumtag(@__fe_layout_0) block10) (2.enumtag(@__fe_layout_0) block11);
+        v50.objref<i256> = obj.index v46 1.i256;
+        v51.i256 = extract_value v47 1.i256;
+        obj.store v50 v51;
+        v52.objref<i256> = obj.index v46 2.i256;
+        v53.i256 = extract_value v47 2.i256;
+        obj.store v52 v53;
+        v54.objref<i256> = obj.index v46 3.i256;
+        v55.i256 = extract_value v47 3.i256;
+        obj.store v54 v55;
+        v56.objref<i256> = obj.index v46 4.i256;
+        v57.i256 = extract_value v47 4.i256;
+        obj.store v56 v57;
+        v58.objref<[i8; 5]> = obj.proj v45 1.i256;
+        v59.[i8; 5] = extract_value v44 1.i256;
+        v60.objref<i8> = obj.index v58 0.i256;
+        v61.i8 = extract_value v59 0.i256;
+        obj.store v60 v61;
+        v62.objref<i8> = obj.index v58 1.i256;
+        v63.i8 = extract_value v59 1.i256;
+        obj.store v62 v63;
+        v64.objref<i8> = obj.index v58 2.i256;
+        v65.i8 = extract_value v59 2.i256;
+        obj.store v64 v65;
+        v66.objref<i8> = obj.index v58 3.i256;
+        v67.i8 = extract_value v59 3.i256;
+        obj.store v66 v67;
+        v68.objref<i8> = obj.index v58 4.i256;
+        v69.i8 = extract_value v59 4.i256;
+        obj.store v68 v69;
+        v70.[i256; 5] = obj.load v46;
+        v71.[i8; 5] = obj.load v58;
+        v72.@__fe_layout_1 = call %verify_like v70 v71 2.i256;
+        v73.objref<@__fe_layout_1> = obj.alloc @__fe_layout_1;
+        v75.objref<@__fe_layout_0> = obj.proj v73 1.i256;
+        v76.@__fe_layout_0 = extract_value v72 1.i256;
+        v77.enumtag(@__fe_layout_0) = enum.tag v76;
+        br_table v77 block20 (0.enumtag(@__fe_layout_0) block21) (1.enumtag(@__fe_layout_0) block22) (2.enumtag(@__fe_layout_0) block23);
 
-    block1:
-        v109.@__fe_layout_1 = call %verify_like v88 v90 2.i256;
-        v110.objref<@__fe_layout_1> = obj.alloc @__fe_layout_1;
-        v113.objref<@__fe_layout_0> = obj.proj v110 1.i256;
-        v114.@__fe_layout_0 = extract_value v109 1.i256;
-        v115.enumtag(@__fe_layout_0) = enum.tag v114;
-        br_table v115 block13 (0.enumtag(@__fe_layout_0) block14) (1.enumtag(@__fe_layout_0) block15) (2.enumtag(@__fe_layout_0) block16);
+    block3:
+        v84.@__fe_layout_1 = call %verify_like v70 v71 2.i256;
+        v85.objref<@__fe_layout_1> = obj.alloc @__fe_layout_1;
+        v87.objref<@__fe_layout_0> = obj.proj v85 1.i256;
+        v88.@__fe_layout_0 = extract_value v84 1.i256;
+        v89.enumtag(@__fe_layout_0) = enum.tag v88;
+        br_table v89 block29 (0.enumtag(@__fe_layout_0) block30) (1.enumtag(@__fe_layout_0) block31) (2.enumtag(@__fe_layout_0) block32);
 
-    block19:
+    block6:
         evm_revert 0.i256 0.i256;
-
-    block4:
-        return;
-
-    block23:
-        evm_revert 0.i256 0.i256;
-
-    block7:
-        v104.@__fe_layout_0 = obj.load v95;
-        v94.i1 = extract_value v91 0.i256;
-        br v94 block25 block27;
-
-    block27:
-        evm_revert 0.i256 0.i256;
-
-    block25:
-        v106.enumtag(@__fe_layout_0) = enum.tag v104;
-        br_table v106 block19 (0.enumtag(@__fe_layout_0) block1);
-
-    block8:
-        unreachable;
-
-    block9:
-        enum.set_tag v95 #None;
-        jump block7;
-
-    block10:
-        enum.set_tag v95 #BadIndex;
-        jump block7;
-
-    block11:
-        enum.set_tag v95 #BadSibling;
-        jump block7;
 
     block12:
-        v119.@__fe_layout_0 = obj.load v113;
-        v112.i1 = extract_value v109 0.i256;
-        br v112 block29 block31;
-
-    block31:
         evm_revert 0.i256 0.i256;
 
-    block29:
-        v121.enumtag(@__fe_layout_0) = enum.tag v119;
-        br_table v121 block23 (0.enumtag(@__fe_layout_0) block4);
+    block15:
+        v81.@__fe_layout_0 = obj.load v75;
+        v74.i1 = extract_value v72 0.i256;
+        br v74 block19 block17;
 
-    block13:
+    block17:
+        evm_revert 0.i256 0.i256;
+
+    block19:
+        v82.enumtag(@__fe_layout_0) = enum.tag v81;
+        br_table v82 block6 (0.enumtag(@__fe_layout_0) block3);
+
+    block20:
         unreachable;
 
-    block14:
-        enum.set_tag v113 #None;
-        jump block12;
+    block21:
+        enum.set_tag v75 #None;
+        jump block15;
 
-    block15:
-        enum.set_tag v113 #BadIndex;
-        jump block12;
+    block22:
+        enum.set_tag v75 #BadIndex;
+        jump block15;
 
-    block16:
-        enum.set_tag v113 #BadSibling;
-        jump block12;
+    block23:
+        enum.set_tag v75 #BadSibling;
+        jump block15;
+
+    block24:
+        v90.@__fe_layout_0 = obj.load v87;
+        v86.i1 = extract_value v84 0.i256;
+        br v86 block28 block26;
+
+    block26:
+        evm_revert 0.i256 0.i256;
+
+    block28:
+        v91.enumtag(@__fe_layout_0) = enum.tag v90;
+        br_table v91 block12 (0.enumtag(@__fe_layout_0) block1);
+
+    block29:
+        unreachable;
+
+    block30:
+        enum.set_tag v87 #None;
+        jump block24;
+
+    block31:
+        enum.set_tag v87 #BadIndex;
+        jump block24;
+
+    block32:
+        enum.set_tag v87 #BadSibling;
+        jump block24;
+
+    block1:
+        evm_stop;
 }
 
 func private %verify_like(v0.[i256; 5], v1.[i8; 5], v2.i256) -> @__fe_layout_1 {

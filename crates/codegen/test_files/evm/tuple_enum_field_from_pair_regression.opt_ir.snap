@@ -21,28 +21,28 @@ func public %entry() {
         obj.store v7 9.i256;
         v9.objref<@E> = obj.proj v1 1.i256;
         enum.set_tag v9 #None;
-        v10.@Pair = obj.load v1;
-        v11.@E = extract_value v10 1.i256;
-        v12.enumtag(@E) = enum.tag v11;
-        br_table v12 block4 (0.enumtag(@E) block5) (1.enumtag(@E) block3);
+        v11.@Pair = obj.load v1;
+        v13.@E = extract_value v11 1.i256;
+        v14.enumtag(@E) = enum.tag v13;
+        br_table v14 block11 (0.enumtag(@E) block12) (1.enumtag(@E) block10);
 
-    block3:
-        jump block5;
+    block10:
+        jump block12;
 
-    block4:
+    block11:
         unreachable;
 
-    block5:
-        v17.i1 = phi (1.i1 block0) (0.i1 block3);
-        v18.[i256; 2] = extract_value v10 0.i256;
-        v19.i256 = extract_value v18 0.i256;
-        br v17 block6 block8;
+    block12:
+        v23.i1 = phi (1.i1 block0) (0.i1 block10);
+        v12.[i256; 2] = extract_value v11 0.i256;
+        v18.i256 = extract_value v12 0.i256;
+        br v23 block13 block15;
 
-    block6:
-        v20.i1 = eq v19 5.i256;
-        br v20 block1 block8;
+    block13:
+        v20.i1 = eq v18 5.i256;
+        br v20 block1 block15;
 
-    block8:
+    block15:
         evm_revert 0.i256 0.i256;
 
     block1:

@@ -5,69 +5,8 @@ input_file: test_files/evm/fe_saturating_signed_i8.sntn
 ---
 target = "evm-ethereum-osaka"
 
-func private %i8_h1bb527fe1af58754_saturatingmul_hf2bc6be7b84ff8f7_saturating_mul(v0.i8, v1.i8) -> i8 {
-    block0:
-        v46.i1 = is_zero v0;
-        br v46 block16 block3;
-
-    block2:
-        v56.i1 = eq v0 -128.i8;
-        br v56 block7 block6;
-
-    block3:
-        v47.i1 = is_zero v1;
-        br v47 block16 block2;
-
-    block5:
-        v17.i8 = mul v0 v1;
-        (v18.i8, v19.i1) = evm_sdivo v17 v0;
-        br v19 block17 block19;
-
-    block6:
-        v37.i1 = eq v1 -128.i8;
-        br v37 block8 block5;
-
-    block7:
-        v38.i1 = eq v1 -1.i8;
-        br v38 block16 block6;
-
-    block8:
-        v39.i1 = eq v0 -1.i8;
-        br v39 block16 block5;
-
-    block9:
-        v40.i256 = sext v0 i256;
-        v41.i256 = sext v1 i256;
-        v34.i256 = xor v40 v41;
-        v35.i256 = and v34 128.i256;
-        v48.i1 = is_zero v35;
-        br v48 block12 block16;
-
-    block12:
-        jump block16;
-
-    block16:
-        v45.i8 = phi (0.i8 block0) (0.i8 block3) (-128.i8 block9) (v17 block19) (127.i8 block12) (127.i8 block7) (127.i8 block8);
-        return v45;
-
-    block17:
-        evm_revert 0.i256 0.i256;
-
-    block19:
-        v44.i1 = eq v18 v1;
-        br v44 block16 block9;
-}
-
 func private %__fe_sonatina_entry() {
     block0:
-        v2.i8 = call %i8_h1bb527fe1af58754_saturatingmul_hf2bc6be7b84ff8f7_saturating_mul 64.i8 4.i8;
-        v4.i1 = eq v2 127.i8;
-        br v4 block1 block3;
-
-    block3:
-        evm_revert 0.i256 0.i256;
-
-    block1:
         evm_stop;
 }
 

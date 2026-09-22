@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 
 use rustc_hash::{FxHashMap, FxHashSet};
+use smallvec::SmallVec;
 use sonatina_ir::{
     BlockId, ControlFlowGraph, Function, InstDowncast, InstId, Module, Value,
     inst::control_flow,
@@ -9,8 +10,9 @@ use sonatina_ir::{
 
 use crate::{analysis::func_behavior::blocks_that_may_reach_commit, module_analysis};
 
-use super::aggregate::{
-    collect_local_object_arg_info_with_effects, compute_object_effect_summaries,
+use super::{
+    aggregate::{collect_local_object_arg_info_with_effects, compute_object_effect_summaries},
+    dead_func::{collect_object_roots, non_call_func_ref},
 };
 
 mod cost;
@@ -27,6 +29,23 @@ struct CallSite {
     returns_to_caller: bool,
     callee_may_commit: bool,
     continuation_may_commit: bool,
+}
+
+#[derive(Default)]
+struct CallChanges {
+    removed: SmallVec<[FuncRef; 1]>,
+    added: SmallVec<[FuncRef; 1]>,
+}
+
+impl CallChanges {
+    fn apply(self, counts: &mut FxHashMap<FuncRef, usize>) {
+        for callee in self.removed {
+            *counts.get_mut(&callee).expect("call was counted") -= 1;
+        }
+        for callee in self.added {
+            *counts.entry(callee).or_default() += 1;
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -48,7 +67,9 @@ pub struct InlinerConfig {
     pub max_inline_depth: usize,
     pub allow_inline_recursive: bool,
 
-    pub always_inline_single_use: bool,
+    /// Prefer removable single-use callees up to this resulting caller size.
+    /// Zero disables the preference. Growth budgets charge only net module growth.
+    pub max_single_use_caller_insts: usize,
 
     pub inline_threshold: i32,
     pub inline_threshold_cold: i32,
@@ -91,7 +112,7 @@ impl Default for InlinerConfig {
             max_inline_depth: 8,
             allow_inline_recursive: false,
 
-            always_inline_single_use: true,
+            max_single_use_caller_insts: 1024,
 
             inline_threshold: 24,
             inline_threshold_cold: 12,
@@ -162,10 +183,25 @@ impl Inliner {
         let mut growth_by_caller: FxHashMap<FuncRef, usize> = FxHashMap::default();
         let mut forced_recursive_callers: FxHashSet<FuncRef> = FxHashSet::default();
 
+        // Inlining can copy these references, but cannot introduce a new target.
+        // Keep even references in dead bodies conservatively until ordinary DFE.
+        let mut retained_funcs: FxHashSet<_> = collect_object_roots(module).into_iter().collect();
+        for func_ref in module.funcs() {
+            module.func_store.view(func_ref, |func| {
+                for block in func.layout.iter_block() {
+                    for inst in func.layout.iter_inst(block) {
+                        if let Some(target) = non_call_func_ref(func, inst) {
+                            retained_funcs.insert(target);
+                        }
+                    }
+                }
+            });
+        }
+
         let mut iter = 0;
         while iter < MAX_ITERS {
             let funcs = module.funcs();
-            let (sites_by_caller, call_counts) = collect_iteration_call_data(module, &funcs);
+            let (sites_by_caller, mut call_counts) = collect_iteration_call_data(module, &funcs);
             let analysis = module_analysis::analyze_module(module);
             let object_effects = self
                 .config
@@ -176,6 +212,18 @@ impl Inliner {
                 .map(|effects| collect_local_object_arg_info_with_effects(module, effects));
             let caller_order = caller_order_bottom_up_scc(&funcs, &analysis);
             let recursive_snapshots = collect_recursive_snapshots(module, &funcs, &analysis);
+            // A frozen recursive body may reintroduce a call after the live
+            // body's last call was inlined. It cannot earn definition-removal
+            // credit while that snapshot remains available for cloning.
+            for snapshot in recursive_snapshots.values() {
+                for block in snapshot.layout.iter_block() {
+                    for inst in snapshot.layout.iter_inst(block) {
+                        if let Some(call) = snapshot.dfg.call_info(inst) {
+                            retained_funcs.insert(call.callee());
+                        }
+                    }
+                }
+            }
             let depth_at_iter_start = inline_depth_by_func.clone();
             let mut inlinee_summaries: FxHashMap<cost::SummaryKey, cost::InlineeSummary> =
                 FxHashMap::default();
@@ -245,7 +293,7 @@ impl Inliner {
                     let trivial_plan_changes_cfg = trivial_plan
                         .as_ref()
                         .is_some_and(trivial::summary_changes_cfg);
-                    let did_trivial = if let Some(plan_summary) = trivial_plan {
+                    let trivial_changes = if let Some(plan_summary) = trivial_plan {
                         let plan = snapshot_callee.map_or_else(
                             || {
                                 module.func_store.view(site.callee, |callee| {
@@ -258,10 +306,12 @@ impl Inliner {
                             trivial::apply_plan(caller, site.call_inst, plan, &mut stats)
                         })
                     } else {
-                        false
+                        None
                     };
-                    if did_trivial {
+                    if let Some(changes) = trivial_changes {
                         changed = true;
+                        changes.apply(&mut call_counts);
+                        inlinee_summaries.remove(&cost::SummaryKey::Live(caller_ref));
                         forced_recursive_inline_succeeded |= recursive_callsite && always_inline;
                         // Most trivial plans don't change CFG reachability.
                         // Terminator splicing can make reachable blocks unreachable.
@@ -274,6 +324,11 @@ impl Inliner {
                     if !self.config.enable_full_inliner {
                         continue;
                     }
+
+                    let callee_removable = callee_calls == 1
+                        && module.ctx.func_linkage(site.callee).is_private()
+                        && !retained_funcs.contains(&site.callee)
+                        && !recursive_callsite;
 
                     let decision = cost::decide_inline(
                         module,
@@ -288,6 +343,17 @@ impl Inliner {
                         cost::InlineRequest {
                             callee_ref: site.callee,
                             callee_call_count: callee_calls,
+                            callee_removable,
+                            caller_insts: if callee_removable {
+                                module.func_store.view(caller_ref, |func| {
+                                    func.layout
+                                        .iter_block()
+                                        .map(|block| func.layout.iter_inst(block).count())
+                                        .sum()
+                                })
+                            } else {
+                                0
+                            },
                             caller_growth: growth_by_caller.get(&caller_ref).copied().unwrap_or(0),
                             total_growth,
                             callee_depth: if recursive_callsite {
@@ -332,23 +398,19 @@ impl Inliner {
                     let full_result = if let Some(callee) = snapshot_callee {
                         full::try_inline_callsite_full(
                             module,
-                            caller_ref,
                             &mut caller_func,
                             site.call_inst,
                             site.callee,
                             callee,
-                            &self.config,
                         )
                     } else {
                         module.func_store.view(site.callee, |callee| {
                             full::try_inline_callsite_full(
                                 module,
-                                caller_ref,
                                 &mut caller_func,
                                 site.call_inst,
                                 site.callee,
                                 callee,
-                                &self.config,
                             )
                         })
                     };
@@ -357,7 +419,8 @@ impl Inliner {
                     match full_result {
                         Ok(result) => {
                             changed = true;
-                            let _ = (plan.summary.blocks, plan.predicted_growth, plan.score);
+                            result.call_changes.apply(&mut call_counts);
+                            inlinee_summaries.remove(&cost::SummaryKey::Live(caller_ref));
                             forced_recursive_inline_succeeded |=
                                 recursive_callsite && always_inline;
 
@@ -366,8 +429,9 @@ impl Inliner {
                             stats.full_insts_cloned += result.insts_cloned;
                             stats.full_phi_fixups += result.phi_fixups;
 
-                            *growth_by_caller.entry(caller_ref).or_insert(0) += result.net_growth;
-                            total_growth += result.net_growth;
+                            let growth = result.net_growth.saturating_sub(plan.removed_insts);
+                            *growth_by_caller.entry(caller_ref).or_insert(0) += growth;
+                            total_growth += growth;
 
                             let callee_depth =
                                 inline_depth_by_func.get(&site.callee).copied().unwrap_or(0);
@@ -375,8 +439,6 @@ impl Inliner {
                                 inline_depth_by_func.get(&caller_ref).copied().unwrap_or(0);
                             inline_depth_by_func
                                 .insert(caller_ref, caller_depth.max(callee_depth + 1));
-
-                            let _ = plan.forced;
 
                             // Full inlining always splits the callsite block. If the callee
                             // can return, keep the cache and mark the continuation reachable
@@ -607,4 +669,83 @@ fn caller_order_bottom_up_scc(
         ordered_funcs.extend(funcs_by_scc.get(&scc_ref).into_iter().flatten().copied());
     }
     ordered_funcs
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{InlineStats, InlinerConfig, collect_iteration_call_data, trivial};
+    use crate::analysis::func_behavior;
+    use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module};
+
+    #[test]
+    fn trivial_call_changes_match_rewritten_ir() {
+        for (callee, call) in [
+            (
+                "func private %callee() {\nblock0:\n    return;\n}",
+                "call %callee;",
+            ),
+            (
+                "func private %callee(v0.i256) -> i256 {\nblock0:\n    return v0;\n}",
+                "v1.i256 = call %callee v0;",
+            ),
+            (
+                "func private %callee(v0.i256) -> i256 {\nblock0:\n    v1.i256 = call %target v0;\n    return v1;\n}",
+                "v1.i256 = call %callee v0;",
+            ),
+            (
+                "func private %callee(v0.i256) -> i256 {\nblock0:\n    v1.i256 = add v0 1.i256;\n    v2.i256 = call %target v1;\n    v3.i256 = add v2 2.i256;\n    return v3;\n}",
+                "v1.i256 = call %callee v0;",
+            ),
+            (
+                "func private %callee(v0.i256) {\nblock0:\n    v1.i256 = call %target v0;\n    evm_revert 0.i256 0.i256;\n}",
+                "call %callee v0;",
+            ),
+        ] {
+            let source = format!(
+                r#"
+target = "evm-ethereum-osaka"
+func private %target(v0.i256) -> i256 {{
+    block0:
+        return v0;
+}}
+{callee}
+func public %caller(v0.i256) {{
+    block0:
+        {call}
+        v2.i256 = call %target v0;
+        return;
+}}
+"#
+            );
+            let module = sonatina_parser::parse_module(&source).unwrap().module;
+            func_behavior::analyze_module(&module);
+            let funcs = module.funcs();
+            let (sites, mut counts) = collect_iteration_call_data(&module, &funcs);
+            let caller = *funcs.last().unwrap();
+            let site = sites[&caller][0];
+            let mut stats = InlineStats::default();
+            let plan = module.func_store.view(site.callee, |callee| {
+                let summary = trivial::analyze_callee(
+                    &module,
+                    site.callee,
+                    callee,
+                    counts[&site.callee],
+                    &InlinerConfig::default(),
+                    &mut stats,
+                )
+                .expect("fixture should admit a trivial rewrite");
+                trivial::materialize_plan(callee, &summary)
+            });
+            let changes = module.func_store.modify(caller, |func| {
+                trivial::apply_plan(func, site.call_inst, plan, &mut stats).unwrap()
+            });
+            changes.apply(&mut counts);
+            counts.retain(|_, count| *count != 0);
+            let (_, actual_counts) = collect_iteration_call_data(&module, &funcs);
+            assert_eq!(counts, actual_counts, "{source}");
+            let report =
+                verify_module(&module, &VerifierConfig::for_level(VerificationLevel::Full));
+            assert!(!report.has_errors(), "{report}");
+        }
+    }
 }

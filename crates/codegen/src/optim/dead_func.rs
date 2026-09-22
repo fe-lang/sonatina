@@ -1,6 +1,6 @@
 use rustc_hash::FxHashSet;
 use sonatina_ir::{
-    InstDowncast, Module,
+    Function, InstDowncast, InstId, Module,
     inst::data::{GetFunctionPtr, SymAddr, SymSize, SymbolRef},
     module::FuncRef,
     object::Directive,
@@ -60,6 +60,24 @@ pub fn collect_object_roots(module: &Module) -> Vec<FuncRef> {
     let mut roots: Vec<_> = roots.into_iter().collect();
     roots.sort_unstable();
     roots
+}
+
+/// Function references that keep a definition alive independently of direct calls.
+pub(crate) fn non_call_func_ref(func: &Function, inst: InstId) -> Option<FuncRef> {
+    let is = func.inst_set();
+    let inst = func.dfg.inst(inst);
+    if let Some(ptr) = <&GetFunctionPtr as InstDowncast>::downcast(is, inst) {
+        return Some(*ptr.func());
+    }
+    let symbol = if let Some(sym) = <&SymAddr as InstDowncast>::downcast(is, inst) {
+        sym.sym()
+    } else {
+        <&SymSize as InstDowncast>::downcast(is, inst)?.sym()
+    };
+    match symbol {
+        SymbolRef::Func(func_ref) => Some(*func_ref),
+        _ => None,
+    }
 }
 
 pub fn run_dead_func_elim(
@@ -133,7 +151,6 @@ fn collect_reachable(
         }
 
         module.func_store.view(func_ref, |func| {
-            let is = func.inst_set();
             for block in func.layout.iter_block() {
                 for inst_id in func.layout.iter_inst(block) {
                     if let Some(call) = func.dfg.call_info(inst_id) {
@@ -145,23 +162,8 @@ fn collect_reachable(
                         );
                     }
 
-                    let inst = func.dfg.inst(inst_id);
-                    if let Some(ptr) = <&GetFunctionPtr as InstDowncast>::downcast(is, inst)
-                        && enqueue_func(module, *ptr.func(), &mut reachability.funcs, &mut worklist)
-                    {
-                        reachability.addr_taken_roots += 1;
-                    }
-
-                    if let Some(sym) = <&SymAddr as InstDowncast>::downcast(is, inst)
-                        && let SymbolRef::Func(func_ref) = sym.sym()
-                        && enqueue_func(module, *func_ref, &mut reachability.funcs, &mut worklist)
-                    {
-                        reachability.addr_taken_roots += 1;
-                    }
-
-                    if let Some(sym) = <&SymSize as InstDowncast>::downcast(is, inst)
-                        && let SymbolRef::Func(func_ref) = sym.sym()
-                        && enqueue_func(module, *func_ref, &mut reachability.funcs, &mut worklist)
+                    if let Some(func_ref) = non_call_func_ref(func, inst_id)
+                        && enqueue_func(module, func_ref, &mut reachability.funcs, &mut worklist)
                     {
                         reachability.addr_taken_roots += 1;
                     }
