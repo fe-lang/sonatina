@@ -165,17 +165,17 @@ ark:
     SWAP3  // evm_mstore v63 v25;
     DUP4
     MSTORE
-    PUSH1 0x20 (32)  // v48.i256 = add v63 v18;
+    PUSH1 0x20 (32)  // v55.i256 = add v63 v18;
     DUP4
     ADD
-    SWAP1  // evm_mstore v48 v42;
+    SWAP1  // evm_mstore v55 v42;
     SWAP2
     SWAP1
     MSTORE
-    PUSH1 0x40 (64)  // v49.i256 = add v63 v4;
+    PUSH1 0x40 (64)  // v57.i256 = add v63 v4;
     DUP3
     ADD
-    MSTORE  // evm_mstore v49 v58;
+    MSTORE  // evm_mstore v57 v58;
     SWAP1  // return v63;
     JUMP
 
@@ -218,21 +218,21 @@ sigma_full:
     PUSH1 0x40 (64)
     ADD
     MLOAD  // v18.i256 = evm_mload v17;
-    DUP3  // v15.i256 = evm_mul_mod v18 v18 v3;
+    DUP3  // v29.i256 = evm_mul_mod v18 v18 v3;
     DUP2
     DUP1
     MULMOD
-    DUP4  // v16.i256 = evm_mul_mod v15 v15 v3;
+    DUP4  // v30.i256 = evm_mul_mod v29 v29 v3;
     SWAP1
     DUP1
     MULMOD
-    SWAP3  // v17.i256 = evm_mul_mod v16 v18 v3;
+    SWAP3  // v31.i256 = evm_mul_mod v30 v18 v3;
     SWAP2
     SWAP3
     MULMOD
-    PUSH1 0x40 (64)  // v18.i256 = evm_mload v16;
+    PUSH1 0x40 (64)  // v32.i256 = evm_mload v16;
     MLOAD
-    PUSH1 0x9f (159)  // v21.i256 = gt v18 159.i256;
+    PUSH1 0x9f (159)  // v21.i256 = gt v32 159.i256;
     DUP2
     GT
     PUSH1 block3  // br v21 block4 block2;
@@ -260,7 +260,7 @@ sigma_full:
     PUSH1 0x40 (64)  // v26.i256 = add v22 v16;
     DUP2
     ADD
-    SWAP1  // evm_mstore v26 v17;
+    SWAP1  // evm_mstore v26 v31;
     SWAP2
     SWAP1
     MSTORE
@@ -483,16 +483,16 @@ poseidon_mock:
     PUSH1 FuncRef(3)
     JUMP
     JUMPDEST
-    PUSH1 0x3 (3)  // v45.i256 = add v3 v19;
+    PUSH1 0x3 (3)  // v48.i256 = add v3 v19;
     DUP3
     ADD
-    SWAP2  // v46.i256 = lt v45 v3;
+    SWAP2  // v46.i256 = lt v48 v3;
     DUP3
     LT
     PUSH1 __evm_shared_tail_0  // br v46 block19 block3;
     JUMPI
   block3:
-    SWAP2  // v47.i256 = add v66 v23;
+    SWAP2  // v50.i256 = add v66 v23;
     PUSH1 0x1 (1)
     ADD
     SWAP2  // jump block1;

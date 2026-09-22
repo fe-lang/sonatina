@@ -63,22 +63,22 @@ test_enum__StorPtr_Evm___207f35a85ac4062e:
     DUP2  // v8.i256 = add v13 v2;
     DUP2
     ADD
-    DUP2  // v9.i256 = lt v8 v13;
+    DUP2  // v84.i256 = lt v8 v13;
     SWAP1
     LT
-    PUSH1 __evm_shared_tail_0  // br v9 block2 block3;
+    PUSH1 __evm_shared_tail_0  // br v84 block2 block3;
     JUMPI
   block3:
-    PUSH0  // v11.i256 = evm_create2 0.i256 v13 v2 0.i256;
+    PUSH0  // v85.i256 = evm_create2 0.i256 v13 v2 0.i256;
     SWAP2
     SWAP1
     PUSH0
     CREATE2
-    DUP1  // br v11 block4 block1;
+    DUP1  // br v85 block4 block1;
     PUSH1 block4
     JUMPI
   block1:
-    POP  // v13.i256 = evm_return_data_size;
+    POP  // v86.i256 = evm_return_data_size;
     RETURNDATASIZE
     PUSH1 0x40 (64)  // v14.i256 = evm_mload v6;
     MLOAD
@@ -92,11 +92,11 @@ test_enum__StorPtr_Evm___207f35a85ac4062e:
     PUSH2 0x100 (256)
   block44:
     JUMPDEST
-    DUP2  // evm_return_data_copy v16 0.i256 v13;
+    DUP2  // evm_return_data_copy v16 0.i256 v86;
     PUSH0
     DUP3
     RETURNDATACOPY
-    REVERT  // evm_revert v16 v13;
+    REVERT  // evm_revert v16 v86;
   block4:
     JUMPDEST
     PUSH0  // evm_mstore 160.i256 0.i256;
@@ -147,7 +147,7 @@ test_enum__StorPtr_Evm___207f35a85ac4062e:
     PUSH1 __evm_shared_tail_0  // br v32 block9 block10;
     JUMPI
   block10:
-    PUSH0  // v34.i256 = evm_call 100000.i256 v11 0.i256 v28 v31 0.i256 0.i256;
+    PUSH0  // v34.i256 = evm_call 100000.i256 v85 0.i256 v28 v31 0.i256 0.i256;
     SWAP1
     PUSH0
     SWAP3
@@ -242,7 +242,7 @@ test_enum__StorPtr_Evm___207f35a85ac4062e:
     PUSH1 __evm_shared_tail_0  // br v54 block21 block22;
     JUMPI
   block22:
-    PUSH0  // v55.i256 = evm_call 100000.i256 v11 0.i256 v50 v53 0.i256 0.i256;
+    PUSH0  // v55.i256 = evm_call 100000.i256 v85 0.i256 v50 v53 0.i256 0.i256;
     SWAP1
     PUSH0
     SWAP3
@@ -324,7 +324,7 @@ test_enum__StorPtr_Evm___207f35a85ac4062e:
     PUSH1 __evm_shared_tail_0  // br v73 block31 block32;
     JUMPI
   block32:
-    PUSH0  // v74.i256 = evm_call 100000.i256 v11 0.i256 v69 v72 0.i256 0.i256;
+    PUSH0  // v74.i256 = evm_call 100000.i256 v85 0.i256 v69 v72 0.i256 0.i256;
     SWAP2
     PUSH0
     PUSH0
@@ -395,9 +395,9 @@ solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head:
     PUSH1 0x1f (31)  // v17.i256 = and v19 v20;
     NOT
     AND
-    DUP2  // v14.i256 = add v13 v17;
+    DUP2  // v23.i256 = add v13 v17;
     ADD
-    PUSH1 0x40 (64)  // evm_mstore v5 v14;
+    PUSH1 0x40 (64)  // evm_mstore v5 v23;
     MSTORE
     DUP1  // evm_mstore v0 v13;
     DUP3
@@ -408,20 +408,20 @@ solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head:
     DUP2  // evm_mstore v16 v13;
     SWAP1
     MSTORE
-    SWAP2  // v17.i256 = add v13 v1;
+    SWAP2  // v24.i256 = add v13 v1;
     DUP3
     ADD
-    SWAP2  // v18.i256 = lt v17 v13;
+    SWAP2  // v18.i256 = lt v24 v13;
     DUP3
     LT
     PUSH1 __evm_shared_tail_0  // br v18 block4 block5;
     JUMPI
   block5:
     JUMPDEST
-    PUSH1 0x40 (64)  // v20.i256 = add v0 v5;
+    PUSH1 0x40 (64)  // v25.i256 = add v0 v5;
     DUP2
     ADD
-    SWAP1  // evm_mstore v20 v17;
+    SWAP1  // evm_mstore v25 v24;
     SWAP2
     SWAP1
     MSTORE

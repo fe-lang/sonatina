@@ -30,6 +30,50 @@ fn test_opt_pipeline(fixture: Fixture<&str>) {
 }
 
 #[test]
+fn optimized_ir_roundtrips_with_debug_names_after_inlining() {
+    let source = r#"
+target = "evm-ethereum-osaka"
+
+func inline(always) private %checked_add(v0.i256, v1.i256) -> i256 {
+    block0:
+        (v2.i256, v3.i1) = uaddo v0 v1;
+        br v3 block1 block2;
+    block1:
+        evm_revert 0.i256 0.i256;
+    block2:
+        return v2;
+}
+
+func public %entry(v3.i256, v4.i256) -> i256 {
+    block0:
+        v5.i256 = call %checked_add v3 v4;
+        return v5;
+}
+"#;
+    for pipeline in [Pipeline::size(), Pipeline::speed()] {
+        let mut parsed = parse_module(source).unwrap();
+        pipeline.run(&mut parsed.module);
+        let text = ModuleWriter::with_debug_provider(&parsed.module, &parsed.debug).dump_string();
+        assert!(!text.contains("call %checked_add"), "{text}");
+        assert!(text.contains("uaddo"), "{text}");
+        let reparsed = parse_module(&text)
+            .unwrap_or_else(|errors| panic!("optimized output should parse: {errors:?}\n{text}"));
+        let cfg = VerifierConfig::for_level(VerificationLevel::Full);
+        assert!(verify_module(&parsed.module, &cfg).is_ok());
+        assert!(verify_module(&reparsed.module, &cfg).is_ok());
+        let canonical = parse_module(&ModuleWriter::new(&parsed.module).dump_string()).unwrap();
+        assert_eq!(
+            ModuleWriter::new(&reparsed.module).dump_string(),
+            ModuleWriter::new(&canonical.module).dump_string()
+        );
+        assert_eq!(
+            ModuleWriter::with_debug_provider(&reparsed.module, &reparsed.debug).dump_string(),
+            text
+        );
+    }
+}
+
+#[test]
 fn sccp_folds_constant_uaddo_results() {
     let (module, func_ref) = parse_test_module(
         r#"

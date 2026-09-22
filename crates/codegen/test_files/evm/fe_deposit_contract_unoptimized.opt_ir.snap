@@ -163,8 +163,8 @@ func private %__DepositContract_recv_0_0(v0.@layout_0, v1.@layout_0, v2.@layout_
         v242.i256 = shr 128.i256 v567;
         v243.i256 = shl 128.i256 v242;
         mstore v520 v243 i256;
-        v246.i256 = evm_gas;
-        v249.i256 = evm_static_call v246 2.i256 v215 64.i256 v215 32.i256;
+        v691.i256 = evm_gas;
+        v249.i256 = evm_static_call v691 2.i256 v215 64.i256 v215 32.i256;
         v501.i1 = is_zero v249;
         br v501 block124 block126;
 
@@ -195,16 +195,16 @@ func private %__DepositContract_recv_0_0(v0.@layout_0, v1.@layout_0, v2.@layout_
         v285.i256 = shr 16.i256 v279;
         v286.i256 = and v285 281470681808895.i256;
         v287.i256 = or v284 v286;
-        v289.i256 = shl 32.i256 v287;
+        v692.i256 = shl 32.i256 v287;
         v290.i256 = shr 32.i256 v287;
-        v291.i256 = or v289 v290;
+        v291.i256 = or v692 v290;
         v292.i256 = shl 192.i256 v291;
         v295.i256 = extract_value v2 0.i256;
-        v296.i256 = add v295 32.i256;
+        v693.i256 = add v295 32.i256;
         v297.*i8 = evm_malloc 64.i256;
         v298.i256 = ptr_to_int v297 i256;
-        v301.i256 = evm_gas;
-        v304.i256 = evm_static_call v301 2.i256 v296 64.i256 v298 32.i256;
+        v694.i256 = evm_gas;
+        v304.i256 = evm_static_call v694 2.i256 v693 64.i256 v298 32.i256;
         v502.i1 = is_zero v304;
         br v502 block159 block161;
 
@@ -221,7 +221,7 @@ func private %__DepositContract_recv_0_0(v0.@layout_0, v1.@layout_0, v2.@layout_
 
     block164:
         v309.i256 = mload v298 i256;
-        (v318.i256, v319.i1) = uaddo v296 64.i256;
+        (v318.i256, v319.i1) = uaddo v693 64.i256;
         br v319 block173 block174;
 
     block173:
@@ -244,16 +244,16 @@ func private %__DepositContract_recv_0_0(v0.@layout_0, v1.@layout_0, v2.@layout_
 
     block184:
         v331.i256 = evm_return_data_size;
-        v332.i1 = lt v331 32.i256;
-        br v332 block185 block187;
+        v695.i1 = lt v331 32.i256;
+        br v695 block185 block187;
 
     block185:
         evm_revert 0.i256 0.i256;
 
     block187:
-        v334.i256 = mload v298 i256;
+        v696.i256 = mload v298 i256;
         mstore v298 v309 i256;
-        mstore v523 v334 i256;
+        mstore v523 v696 i256;
         v339.i256 = evm_gas;
         v342.i256 = evm_static_call v339 2.i256 v298 64.i256 v298 32.i256;
         v504.i1 = is_zero v342;
@@ -610,16 +610,16 @@ func private %__DepositContract_recv_0_1(v0.i256) -> i256 {
         v64.i256 = shl 8.i256 v62;
         v65.i256 = shr 8.i256 v60;
         v66.i256 = and v65 71777214294589695.i256;
-        v67.i256 = or v64 v66;
-        v70.i256 = and v67 281470681808895.i256;
+        v155.i256 = or v64 v66;
+        v70.i256 = and v155 281470681808895.i256;
         v72.i256 = shl 16.i256 v70;
-        v73.i256 = shr 16.i256 v67;
+        v73.i256 = shr 16.i256 v155;
         v74.i256 = and v73 281470681808895.i256;
         v75.i256 = or v72 v74;
         v77.i256 = shl 32.i256 v75;
         v78.i256 = shr 32.i256 v75;
-        v79.i256 = or v77 v78;
-        v81.i256 = shl 192.i256 v79;
+        v156.i256 = or v77 v78;
+        v81.i256 = shl 192.i256 v156;
         v85.*i8 = evm_malloc 64.i256;
         v86.i256 = ptr_to_int v85 i256;
         mstore v86 v71 i256;
@@ -710,8 +710,8 @@ func private %__DepositContract_recv_0_1(v0.i256) -> i256 {
 
 func private %contract_init_root_DepositContract() {
     block0:
-        v3.i256 = evm_call_value;
-        v6.i1 = is_zero v3;
+        v32.i256 = evm_call_value;
+        v6.i1 = is_zero v32;
         br v6 block9 block5;
 
     block5:

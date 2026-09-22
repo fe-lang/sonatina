@@ -254,9 +254,9 @@ func private %__Vault_recv_0_0(v0.i256, v1.i256) -> i256 {
         evm_sstore v7 v31;
         v35.i256 = evm_caller;
         v37.*i8 = evm_malloc 0.i256;
-        v38.i256 = ptr_to_int v37 i256;
-        mstore v38 v35 i256;
-        (v40.i256, v41.i1) = uaddo v38 32.i256;
+        v50.i256 = ptr_to_int v37 i256;
+        mstore v50 v35 i256;
+        (v40.i256, v41.i1) = uaddo v50 32.i256;
         br v41 block14 block15;
 
     block14:
@@ -264,9 +264,9 @@ func private %__Vault_recv_0_0(v0.i256, v1.i256) -> i256 {
 
     block15:
         mstore v40 0.i256 i256;
-        v43.i256 = evm_keccak256 v38 64.i256;
-        v31.i256 = evm_sload v43;
-        (v38.i256, v39.i1) = uaddo v31 v21;
+        v43.i256 = evm_keccak256 v50 64.i256;
+        v49.i256 = evm_sload v43;
+        (v38.i256, v39.i1) = uaddo v49 v21;
         br v39 block6 block17;
 
     block17:
@@ -288,8 +288,8 @@ func private %__Vault_recv_0_0(v0.i256, v1.i256) -> i256 {
 
 func private %__Vault_recv_0_1(v0.i256, v1.i256) -> i256 {
     block0:
-        v34.i1 = is_zero v0;
-        br v34 block1 block2;
+        v52.i1 = is_zero v0;
+        br v52 block1 block2;
 
     block1:
         return 0.i256;
@@ -297,18 +297,18 @@ func private %__Vault_recv_0_1(v0.i256, v1.i256) -> i256 {
     block2:
         v7.i256 = add v1 1.i256;
         v8.i256 = evm_sload v7;
-        v35.i1 = is_zero v8;
-        br v35 block3 block4;
+        v53.i1 = is_zero v8;
+        br v53 block3 block4;
 
     block3:
         return 0.i256;
 
     block4:
         v10.i256 = evm_caller;
-        v39.*i8 = evm_malloc 0.i256;
-        v40.i256 = ptr_to_int v39 i256;
-        mstore v40 v10 i256;
-        (v42.i256, v43.i1) = uaddo v40 32.i256;
+        v54.*i8 = evm_malloc 0.i256;
+        v55.i256 = ptr_to_int v54 i256;
+        mstore v55 v10 i256;
+        (v42.i256, v43.i1) = uaddo v55 32.i256;
         br v43 block15 block16;
 
     block15:
@@ -316,10 +316,10 @@ func private %__Vault_recv_0_1(v0.i256, v1.i256) -> i256 {
 
     block16:
         mstore v42 0.i256 i256;
-        v45.i256 = evm_keccak256 v40 64.i256;
+        v45.i256 = evm_keccak256 v55 64.i256;
         v31.i256 = evm_sload v45;
-        v32.i1 = gt v0 v31;
-        br v32 block5 block6;
+        v51.i1 = gt v0 v31;
+        br v51 block5 block6;
 
     block5:
         return 0.i256;
@@ -486,9 +486,9 @@ func private %__VaultUser_runtime() {
         evm_revert 0.i256 0.i256;
 
     block2:
-        v13.i256 = call %soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563 v34;
+        v46.i256 = call %soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563 v34;
         v14.i256 = call %soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563 v34;
-        v23.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Deposit_h19f638fdcaab3cd__dbfe67dc81c33b5b v13 100000.i256 0.i256 v14;
+        v23.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Deposit_h19f638fdcaab3cd__dbfe67dc81c33b5b v46 100000.i256 0.i256 v14;
         call %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f v23;
         unreachable;
 
