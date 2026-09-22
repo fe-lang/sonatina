@@ -114,6 +114,102 @@ block2:
 }
 
 #[test]
+fn aggregate_construction_repeats_a_preheader_insert_consumer() {
+    // The preheader result has one static consumer that executes on every iteration.
+    let source = r#"
+func public %iterate(v0.i64, v1.i64, v2.*[i64; 2]) {
+block0:
+    v3.[i64; 2] = insert_value undef.[i64; 2] 0.i64 v0;
+    v4.[i64; 2] = insert_value v3 1.i64 7.i64;
+    jump block1;
+block1:
+    v5.i64 = phi (0.i64 block0) (v8 block1);
+    v6.i64 = add v0 v5;
+    v7.[i64; 2] = insert_value v4 0.i64 v6;
+    mstore v2 v7 [i64; 2];
+    v8.i64 = add v5 1.i64;
+    v9.i1 = lt v8 v1;
+    br v9 block1 block2;
+block2:
+    return;
+}
+"#;
+    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap();
+        let iterate: unsafe extern "C" fn(i64, i64, *mut i64) =
+            unsafe { std::mem::transmute(artifact.function_address("iterate").unwrap()) };
+        for seed in [-19, 0, 23] {
+            for count in [1, 2, 5] {
+                let mut output = [0; 2];
+                unsafe { iterate(seed, count, output.as_mut_ptr()) };
+                assert_eq!(output, [seed + count - 1, 7], "{level:?}, {seed}, {count}");
+            }
+        }
+    }
+}
+
+#[test]
+fn aggregate_updates_preserve_loaded_wide_snapshots_and_views() {
+    let source = r#"
+type @Wide = { i256, i256 };
+func public %update(v0.*@Wide, v1.*i256, v2.*[i256; 4]) {
+block0:
+    v3.@Wide = mload v0 @Wide;
+    v4.i256 = extract_value v3 0.i64;
+    v5.i256 = mload v1 i256;
+    v6.@Wide = insert_value v3 0.i64 v5;
+    v7.i256 = extract_value v6 0.i64;
+    v8.@Wide = insert_value v6 0.i64 v4;
+    v9.@Wide = insert_value v8 1.i64 v5;
+    mstore v0 v9 @Wide;
+    v10.i256 = extract_value v3 1.i64;
+    v11.i256 = extract_value v9 1.i64;
+    v12.[i256; 4] = insert_value undef.[i256; 4] 0.i64 v4;
+    v13.[i256; 4] = insert_value v12 1.i64 v10;
+    v14.[i256; 4] = insert_value v13 2.i64 v7;
+    v15.[i256; 4] = insert_value v14 3.i64 v11;
+    mstore v2 v15 [i256; 4];
+    return;
+}
+"#;
+    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap();
+        let update: unsafe extern "C" fn(*mut u64, *const u64, *mut u64) =
+            unsafe { std::mem::transmute(artifact.function_address("update").unwrap()) };
+        let original = [[11, 22, 33, 44], [55, 66, 77, 88]];
+        for replacement in [[91, 92, 93, 94], [u64::MAX, 0, 1 << 63, 7]] {
+            let mut input = original;
+            let mut output = [[0; 4]; 4];
+            unsafe {
+                update(
+                    input.as_mut_ptr().cast(),
+                    replacement.as_ptr(),
+                    output.as_mut_ptr().cast(),
+                )
+            };
+            assert_eq!(input, [original[0], replacement], "{level:?}");
+            assert_eq!(
+                output,
+                [original[0], original[1], replacement, replacement],
+                "{level:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn object_and_constant_indices_zero_extend_narrow_integers() {
     let values = (0..256)
         .map(|i| (1000 + i).to_string())
