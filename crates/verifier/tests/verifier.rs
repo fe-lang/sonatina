@@ -2,6 +2,7 @@ use sonatina_ir::{
     InstDowncastMut, Linkage, Signature, Type, Value, ValueId,
     builder::ModuleBuilder,
     inst::{arith::Add, control_flow::BrTable, data::Gep},
+    ir_writer::ModuleWriter,
     isa::evm::Evm,
     module::{FuncRef, ModuleCtx},
     types::CompoundTypeRef,
@@ -69,6 +70,42 @@ fn parse_and_verify_module_reports_parse_errors() {
         Err(err) => err,
     };
     assert!(matches!(err, ParseVerifyError::Parse(_)));
+}
+
+#[test]
+fn sparse_block_ids_parse_verify_and_roundtrip() {
+    let source = include_str!("fixtures/sparse_blocks.sntn");
+    for target in ["evm-ethereum-london", "aarch64-unknown-native"] {
+        let source = source.replace("evm-ethereum-london", target);
+        for level in [VerificationLevel::Standard, VerificationLevel::Full] {
+            let cfg = VerifierConfig::for_level(level);
+            let parsed = parse_and_verify_module(&source, &cfg)
+                .unwrap_or_else(|err| panic!("sparse blocks should verify for {target}: {err:?}"));
+            for (func_ref, expected) in parsed
+                .module
+                .funcs()
+                .into_iter()
+                .zip([vec![7, 42, 19, 90, 63], vec![11, 3, 40, 27]])
+            {
+                parsed.module.func_store.view(func_ref, |func| {
+                    let blocks: Vec<_> = func
+                        .layout
+                        .iter_block()
+                        .map(|block| block.as_u32())
+                        .collect();
+                    assert_eq!(blocks, expected);
+                    assert_eq!(func.dfg.block_ids().count(), blocks.len());
+                });
+            }
+            let text =
+                ModuleWriter::with_debug_provider(&parsed.module, &parsed.debug).dump_string();
+            let reparsed = parse_and_verify_module(&text, &cfg).expect("roundtrip should verify");
+            assert_eq!(
+                ModuleWriter::with_debug_provider(&reparsed.module, &reparsed.debug).dump_string(),
+                text
+            );
+        }
+    }
 }
 
 #[test]

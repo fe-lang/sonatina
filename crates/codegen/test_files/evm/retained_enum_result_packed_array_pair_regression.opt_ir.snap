@@ -19,17 +19,6 @@ func private %__fe_test_root_local_tuple_pack_then_verify_like_twice() {
         evm_stop;
 }
 
-func private %assert(v0.i1) {
-    block0:
-        br v0 block3 block1;
-
-    block1:
-        evm_revert 0.i256 0.i256;
-
-    block3:
-        return;
-}
-
 func private %local_tuple_pack_then_verify_like_twice() {
     block0:
         v13.objref<[i8; 5]> = obj.alloc [i8; 5];
@@ -142,23 +131,26 @@ func private %local_tuple_pack_then_verify_like_twice() {
         v115.enumtag(@__fe_layout_0) = enum.tag v114;
         br_table v115 block13 (0.enumtag(@__fe_layout_0) block14) (1.enumtag(@__fe_layout_0) block15) (2.enumtag(@__fe_layout_0) block16);
 
-    block3:
-        call %assert 0.i1;
-        jump block1;
+    block19:
+        evm_revert 0.i256 0.i256;
 
     block4:
         return;
 
-    block6:
-        call %assert 0.i1;
-        jump block4;
+    block23:
+        evm_revert 0.i256 0.i256;
 
     block7:
         v104.@__fe_layout_0 = obj.load v95;
         v94.i1 = extract_value v91 0.i256;
-        call %assert v94;
+        br v94 block25 block27;
+
+    block27:
+        evm_revert 0.i256 0.i256;
+
+    block25:
         v106.enumtag(@__fe_layout_0) = enum.tag v104;
-        br_table v106 block3 (0.enumtag(@__fe_layout_0) block1);
+        br_table v106 block19 (0.enumtag(@__fe_layout_0) block1);
 
     block8:
         unreachable;
@@ -178,9 +170,14 @@ func private %local_tuple_pack_then_verify_like_twice() {
     block12:
         v119.@__fe_layout_0 = obj.load v113;
         v112.i1 = extract_value v109 0.i256;
-        call %assert v112;
+        br v112 block29 block31;
+
+    block31:
+        evm_revert 0.i256 0.i256;
+
+    block29:
         v121.enumtag(@__fe_layout_0) = enum.tag v119;
-        br_table v121 block6 (0.enumtag(@__fe_layout_0) block4);
+        br_table v121 block23 (0.enumtag(@__fe_layout_0) block4);
 
     block13:
         unreachable;

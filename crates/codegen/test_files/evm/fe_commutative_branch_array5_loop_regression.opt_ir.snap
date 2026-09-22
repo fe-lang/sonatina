@@ -56,45 +56,39 @@ func private %verify_checked(v0.i256, v1.i256, v2.[i8; 5], v3.[i256; 5]) -> i1 {
         evm_revert 0.i256 0.i256;
 }
 
-func private %run() {
+func public %entry() {
     block0:
-        v13.objref<[i8; 5]> = obj.alloc [i8; 5];
-        v14.objref<i8> = obj.index v13 0.i256;
-        obj.store v14 0.i8;
-        v15.objref<i8> = obj.index v13 1.i256;
-        obj.store v15 0.i8;
-        v16.objref<i8> = obj.index v13 2.i256;
-        obj.store v16 0.i8;
-        v17.objref<i8> = obj.index v13 3.i256;
-        obj.store v17 0.i8;
-        v18.objref<i8> = obj.index v13 4.i256;
-        obj.store v18 0.i8;
-        v19.[i8; 5] = obj.load v13;
-        v27.objref<[i256; 5]> = obj.alloc [i256; 5];
-        v28.objref<i256> = obj.index v27 0.i256;
-        obj.store v28 11.i256;
-        v29.objref<i256> = obj.index v27 1.i256;
-        obj.store v29 0.i256;
-        v30.objref<i256> = obj.index v27 2.i256;
-        obj.store v30 0.i256;
-        v31.objref<i256> = obj.index v27 3.i256;
-        obj.store v31 0.i256;
-        v32.objref<i256> = obj.index v27 4.i256;
-        obj.store v32 0.i256;
-        v38.[i256; 5] = obj.load v27;
-        v39.i1 = call %verify_checked 18.i256 7.i256 v19 v38;
-        br v39 block1 block3;
+        v1.objref<[i8; 5]> = obj.alloc [i8; 5];
+        v3.objref<i8> = obj.index v1 0.i256;
+        obj.store v3 0.i8;
+        v5.objref<i8> = obj.index v1 1.i256;
+        obj.store v5 0.i8;
+        v7.objref<i8> = obj.index v1 2.i256;
+        obj.store v7 0.i8;
+        v9.objref<i8> = obj.index v1 3.i256;
+        obj.store v9 0.i8;
+        v11.objref<i8> = obj.index v1 4.i256;
+        obj.store v11 0.i8;
+        v12.[i8; 5] = obj.load v1;
+        v13.objref<[i256; 5]> = obj.alloc [i256; 5];
+        v14.objref<i256> = obj.index v13 0.i256;
+        obj.store v14 11.i256;
+        v16.objref<i256> = obj.index v13 1.i256;
+        obj.store v16 0.i256;
+        v17.objref<i256> = obj.index v13 2.i256;
+        obj.store v17 0.i256;
+        v18.objref<i256> = obj.index v13 3.i256;
+        obj.store v18 0.i256;
+        v19.objref<i256> = obj.index v13 4.i256;
+        obj.store v19 0.i256;
+        v20.[i256; 5] = obj.load v13;
+        v23.i1 = call %verify_checked 18.i256 7.i256 v12 v20;
+        br v23 block1 block3;
 
     block3:
         evm_revert 0.i256 0.i256;
 
     block1:
-        return;
-}
-
-func public %entry() {
-    block0:
-        call %run;
         evm_return 0.i8 0.i8;
 }
 
