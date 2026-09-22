@@ -8,7 +8,7 @@ use sonatina_verifier::{VerifierConfig, verify_function};
 
 use crate::cfg_edit::{CfgEditor, CleanupMode};
 
-use super::{InlinerConfig, rewrite::OperandRewriter};
+use super::{CallChanges, rewrite::OperandRewriter};
 
 #[derive(Debug, Clone, Copy)]
 pub(super) enum FullInlineFail {
@@ -20,7 +20,6 @@ pub(super) enum FullInlineFail {
     MalformedCallee,
 }
 
-#[derive(Debug, Clone, Copy)]
 pub(super) struct FullInlineResult {
     pub blocks_cloned: usize,
     pub insts_cloned: usize,
@@ -28,6 +27,7 @@ pub(super) struct FullInlineResult {
     pub net_growth: usize,
     pub cont_block: BlockId,
     pub cont_reachable: bool,
+    pub call_changes: CallChanges,
 }
 
 #[derive(Debug, Clone)]
@@ -45,12 +45,10 @@ struct PhiFixupRecord {
 
 pub(super) fn try_inline_callsite_full(
     module: &Module,
-    _caller_ref: FuncRef,
     caller: &mut Function,
     call_inst: InstId,
     callee_ref: FuncRef,
     callee: &Function,
-    _config: &InlinerConfig,
 ) -> Result<FullInlineResult, FullInlineFail> {
     if !caller.layout.is_inst_inserted(call_inst) {
         return Err(FullInlineFail::CallGone);
@@ -149,6 +147,8 @@ pub(super) fn try_inline_callsite_full(
     let mut phi_fixups = Vec::new();
     let mut returns = Vec::new();
     let mut inserted_insts = 0usize;
+    let mut call_changes = CallChanges::default();
+    call_changes.removed.push(callee_ref);
 
     for old_block in rpo {
         let new_block = block_map[&old_block];
@@ -161,6 +161,9 @@ pub(super) fn try_inline_callsite_full(
         let body = &inst_ids[..inst_ids.len() - 1];
 
         for &old_inst in body {
+            if let Some(call) = callee.dfg.call_info(old_inst) {
+                call_changes.added.push(call.callee());
+            }
             let old_results = callee.dfg.inst_results(old_inst);
             let result_tys: SmallVec<[Type; 2]> = old_results
                 .iter()
@@ -338,9 +341,11 @@ pub(super) fn try_inline_callsite_full(
         blocks_cloned: block_map.len(),
         insts_cloned: inserted_insts,
         phi_fixups: phi_fixups.len(),
-        net_growth: inserted_insts.saturating_sub(1),
+        // split_block_at added a jump and we removed the original call.
+        net_growth: inserted_insts,
         cont_block,
         cont_reachable,
+        call_changes,
     })
 }
 

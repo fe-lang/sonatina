@@ -7,8 +7,10 @@ target = "evm-ethereum-osaka"
 func public %entry() {
     block0:
         v0.i256 = evm_calldata_load 0.i32;
-        v1.i8 = shr 248.i32 v0;
-        v2.i32 = shr 224.i32 v0;
+        v4.i256 = shr 248.i256 v0;
+        v1.i8 = trunc v4 i8;
+        v5.i256 = shr 224.i256 v0;
+        v2.i32 = trunc v5 i32;
         v3.i32 = call %dispatch v1 v2;
 
         mstore 0.i32 v3 i32;

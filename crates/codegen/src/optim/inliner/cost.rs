@@ -29,10 +29,7 @@ pub(super) enum InlineDecision {
 
 #[derive(Debug, Clone, Copy)]
 pub(super) struct InlinePlan {
-    pub summary: InlineeSummary,
-    pub score: i32,
-    pub predicted_growth: usize,
-    pub forced: bool,
+    pub removed_insts: usize,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -95,6 +92,8 @@ impl ScalarizationBenefitSummary {
 pub(super) struct InlineRequest {
     pub callee_ref: FuncRef,
     pub callee_call_count: usize,
+    pub callee_removable: bool,
+    pub caller_insts: usize,
     pub caller_growth: usize,
     pub total_growth: usize,
     pub callee_depth: usize,
@@ -157,29 +156,37 @@ pub(super) fn decide_inline(
         return InlineDecision::Skip(InlineSkipReason::NoBody);
     }
 
-    let mut predicted_growth = summary.insts.saturating_sub(1);
-    if request.call_result_count > 0 && summary.returns > 1 {
-        predicted_growth = predicted_growth.saturating_add(1);
-    }
+    // The split-block jump replaces the call. Each result needs a merge phi
+    // when there are multiple returns; the remaining growth is the cloned body.
+    let predicted_growth = summary.insts.saturating_add(if summary.returns > 1 {
+        request.call_result_count
+    } else {
+        0
+    });
 
     if hints.contains(FuncHints::ALWAYSINLINE) {
-        return InlineDecision::Inline(InlinePlan {
-            summary,
-            score: i32::MIN,
-            predicted_growth,
-            forced: true,
-        });
+        return InlineDecision::Inline(InlinePlan { removed_insts: 0 });
     }
 
-    if exceeds_budget(
-        request.caller_growth,
-        predicted_growth,
-        config.max_growth_per_caller,
-    ) || exceeds_budget(
-        request.total_growth,
-        predicted_growth,
-        config.max_total_growth,
-    ) {
+    let removable_single_use = request.callee_removable
+        && config.max_single_use_caller_insts > 0
+        && request.caller_insts.saturating_add(predicted_growth)
+            <= config.max_single_use_caller_insts
+        && summary.blocks > 1
+        && (request.call_continuation_may_commit
+            || (!request.call_returns_to_caller && request.call_callee_may_commit));
+    // DFE removes the now-unreferenced private definition. Do not count moving
+    // that body into its only caller as duplication, or refund earlier growth.
+    let removed_insts = if removable_single_use {
+        summary.insts
+    } else {
+        0
+    };
+    let growth = predicted_growth.saturating_sub(removed_insts);
+
+    if exceeds_budget(request.caller_growth, growth, config.max_growth_per_caller)
+        || exceeds_budget(request.total_growth, growth, config.max_total_growth)
+    {
         return InlineDecision::Skip(InlineSkipReason::Budget);
     }
 
@@ -187,16 +194,15 @@ pub(super) fn decide_inline(
         return InlineDecision::Skip(InlineSkipReason::Budget);
     }
 
+    if removable_single_use {
+        return InlineDecision::Inline(InlinePlan { removed_insts });
+    }
+
     // A plain inline hint is a strong preference: bypass the local inlinee and
     // cost heuristics once the callsite has cleared hard legality, recursion,
     // growth, and depth constraints.
     if hints.contains(FuncHints::INLINEHINT) {
-        return InlineDecision::Inline(InlinePlan {
-            summary,
-            score: i32::MIN + 2,
-            predicted_growth,
-            forced: true,
-        });
+        return InlineDecision::Inline(InlinePlan { removed_insts: 0 });
     }
 
     if exceeds_cap(summary.blocks, config.max_inlinee_blocks)
@@ -205,33 +211,13 @@ pub(super) fn decide_inline(
         return InlineDecision::Skip(InlineSkipReason::Budget);
     }
 
-    let should_force_single_use = config.always_inline_single_use
-        && request.callee_call_count == 1
-        && summary.blocks > 1
-        && (request.call_continuation_may_commit
-            || (!request.call_returns_to_caller && request.call_callee_may_commit));
-
-    if should_force_single_use {
-        return InlineDecision::Inline(InlinePlan {
-            summary,
-            score: i32::MIN + 1,
-            predicted_growth,
-            forced: true,
-        });
-    }
-
     let should_force_small_cleanup_helper = request.call_continuation_may_commit
         && is_multi_block_small_leaf_helper(summary, config)
         && (request.known_arg_mask != 0
             || (config.scalarization_bonus_cap > 0 && summary.scalarization.has_opportunity()));
 
     if should_force_small_cleanup_helper {
-        return InlineDecision::Inline(InlinePlan {
-            summary,
-            score: i32::MIN + 2,
-            predicted_growth,
-            forced: true,
-        });
+        return InlineDecision::Inline(InlinePlan { removed_insts: 0 });
     }
 
     let is_leaf = ctx
@@ -301,12 +287,7 @@ pub(super) fn decide_inline(
     if score > threshold {
         InlineDecision::Skip(InlineSkipReason::Cost)
     } else {
-        InlineDecision::Inline(InlinePlan {
-            summary,
-            score,
-            predicted_growth,
-            forced: false,
-        })
+        InlineDecision::Inline(InlinePlan { removed_insts: 0 })
     }
 }
 
