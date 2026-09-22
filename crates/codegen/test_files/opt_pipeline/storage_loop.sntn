@@ -63,13 +63,13 @@ func private %__Foo_runtime() {
 
 func private %__Foo_init_code_offset() -> i256 {
     block0:
-        v1.i256 = sym_addr &__Foo_init;
+        v1.i256 = sym_addr %__Foo_init;
         return v1;
 }
 
 func private %__Foo_init_code_len() -> i256 {
     block0:
-        v1.i256 = sym_size &__Foo_init;
+        v1.i256 = sym_size %__Foo_init;
         return v1;
 }
 
@@ -212,7 +212,8 @@ func public %soldecoder_i__ha12a03fcb5ba844b_with_base__CallData_hf71d505b6ff5dc
     block0:
         v3.i256 = call %cursor_i__h140a998c67d6d59c_new__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563 v0;
         v4.i256 = call %cursor_i__h140a998c67d6d59c_fork__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563 v3 v1;
-        v6.i256 = evm_malloc 96.i256;
+        v5.*i8 = evm_malloc 96.i256;
+        v6.i256 = ptr_to_int v5 i256;
         v7.i256 = mload v4 i256;
         mstore v6 v7 i256;
         v9.i256 = add v4 32.i256;
@@ -236,7 +237,8 @@ func private %u32_h20aa0c10687491ad_intword_h9a147c8c32b1323c_from_word(v0.i256)
 
 func public %cursor_i__h140a998c67d6d59c_new__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563(v0.i256) -> i256 {
     block0:
-        v3.i256 = evm_malloc 64.i256;
+        v2.*i8 = evm_malloc 64.i256;
+        v3.i256 = ptr_to_int v2 i256;
         mstore v3 v0 i256;
         v5.i256 = add v3 32.i256;
         mstore v5 0.i256 i256;
@@ -246,7 +248,8 @@ func public %cursor_i__h140a998c67d6d59c_new__CallData_hf71d505b6ff5dc81__e6d5f0
 func public %cursor_i__h140a998c67d6d59c_fork__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563(v0.i256, v1.i256) -> i256 {
     block0:
         v3.i256 = mload v0 i256;
-        v5.i256 = evm_malloc 64.i256;
+        v4.*i8 = evm_malloc 64.i256;
+        v5.i256 = ptr_to_int v4 i256;
         mstore v5 v3 i256;
         v7.i256 = add v5 32.i256;
         mstore v7 v1 i256;

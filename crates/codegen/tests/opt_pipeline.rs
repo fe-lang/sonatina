@@ -15,7 +15,7 @@ use sonatina_ir::{
     module::FuncRef,
 };
 use sonatina_parser::parse_module;
-use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module};
+use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module, verify_module_or_panic};
 
 #[dir_test(
     dir: "$CARGO_MANIFEST_DIR/test_files/opt_pipeline/",
@@ -23,7 +23,10 @@ use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module};
 )]
 fn test_opt_pipeline(fixture: Fixture<&str>) {
     let mut parsed = common::parse_module(fixture.path());
+    let verifier_cfg = VerifierConfig::for_level(VerificationLevel::Full);
+    verify_module_or_panic(&parsed.module, &verifier_cfg);
     Pipeline::size().run(&mut parsed.module);
+    verify_module_or_panic(&parsed.module, &verifier_cfg);
 
     let mut writer = ModuleWriter::with_debug_provider(&parsed.module, &parsed.debug);
     snap_test!(writer.dump_string(), fixture.path());

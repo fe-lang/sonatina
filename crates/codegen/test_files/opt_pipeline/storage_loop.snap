@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/opt_pipeline.rs
-assertion_line: 29
 input_file: test_files/opt_pipeline/storage_loop.sntn
 ---
 target = "evm-ethereum-osaka"
@@ -32,15 +31,15 @@ func private %__Foo_runtime() {
         evm_revert 0.i256 0.i256;
 
     block16:
-        v37.i256 = phi (0.i256 block6) (v42 block17);
-        v38.i1 = lt v37 20.i256;
-        br v38 block17 block7;
+        v40.i256 = phi (0.i256 block6) (v45 block17);
+        v41.i1 = lt v40 20.i256;
+        br v41 block17 block7;
 
     block17:
-        v40.i256 = evm_sload 0.i256;
-        v41.i256 = add v40 1.i256;
-        evm_sstore 0.i256 v41;
-        v42.i256 = add v37 1.i256;
+        v43.i256 = evm_sload 0.i256;
+        v44.i256 = add v43 1.i256;
+        evm_sstore 0.i256 v44;
+        v45.i256 = add v40 1.i256;
         jump block16;
 
     block7:
@@ -49,15 +48,18 @@ func private %__Foo_runtime() {
 
 func public %soldecoder_i__ha12a03fcb5ba844b_with_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563(v0.i256, v1.i256) -> i256 {
     block0:
-        v14.i256 = evm_malloc 64.i256;
-        mstore v14 v0 i256;
-        v15.i256 = add v14 32.i256;
-        mstore v15 0.i256 i256;
-        v17.i256 = evm_malloc 64.i256;
-        mstore v17 v0 i256;
-        v18.i256 = add v17 32.i256;
-        mstore v18 v1 i256;
-        v6.i256 = evm_malloc 96.i256;
+        v15.*i8 = evm_malloc 64.i256;
+        v16.i256 = ptr_to_int v15 i256;
+        mstore v16 v0 i256;
+        v17.i256 = add v16 32.i256;
+        mstore v17 0.i256 i256;
+        v19.*i8 = evm_malloc 64.i256;
+        v20.i256 = ptr_to_int v19 i256;
+        mstore v20 v0 i256;
+        v21.i256 = add v20 32.i256;
+        mstore v21 v1 i256;
+        v5.*i8 = evm_malloc 96.i256;
+        v6.i256 = ptr_to_int v5 i256;
         mstore v6 v0 i256;
         v11.i256 = add v6 32.i256;
         mstore v11 v1 i256;
@@ -68,7 +70,8 @@ func public %soldecoder_i__ha12a03fcb5ba844b_with_base__CallData_hf71d505b6ff5dc
 
 func public %cursor_i__h140a998c67d6d59c_new__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563(v0.i256) -> i256 {
     block0:
-        v3.i256 = evm_malloc 64.i256;
+        v2.*i8 = evm_malloc 64.i256;
+        v3.i256 = ptr_to_int v2 i256;
         mstore v3 v0 i256;
         v5.i256 = add v3 32.i256;
         mstore v5 0.i256 i256;
@@ -78,7 +81,8 @@ func public %cursor_i__h140a998c67d6d59c_new__CallData_hf71d505b6ff5dc81__e6d5f0
 func public %cursor_i__h140a998c67d6d59c_fork__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563(v0.i256, v1.i256) -> i256 {
     block0:
         v3.i256 = mload v0 i256;
-        v5.i256 = evm_malloc 64.i256;
+        v4.*i8 = evm_malloc 64.i256;
+        v5.i256 = ptr_to_int v4 i256;
         mstore v5 v3 i256;
         v7.i256 = add v5 32.i256;
         mstore v7 v1 i256;
