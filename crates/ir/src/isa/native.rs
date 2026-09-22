@@ -117,10 +117,9 @@ impl TypeLayout for NativeTypeLayout {
                         size.next_multiple_of(struct_align)
                     }
                     CompoundType::Ptr(_) | CompoundType::ObjRef(_) | CompoundType::ConstRef(_) => 8,
-                    CompoundType::Func { .. } => {
+                    CompoundType::Enum(_) | CompoundType::Func { .. } => {
                         return Err(TypeLayoutError::UnrepresentableType(ty));
                     }
-                    _ => return Err(TypeLayoutError::UnsupportedType(ty)),
                 }
             }
         };
@@ -150,10 +149,9 @@ impl TypeLayout for NativeTypeLayout {
                         align
                     }
                     CompoundType::Ptr(_) | CompoundType::ObjRef(_) | CompoundType::ConstRef(_) => 8,
-                    CompoundType::Func { .. } => {
+                    CompoundType::Enum(_) | CompoundType::Func { .. } => {
                         return Err(TypeLayoutError::UnrepresentableType(ty));
                     }
-                    _ => return Err(TypeLayoutError::UnsupportedType(ty)),
                 }
             }
         };
@@ -174,7 +172,11 @@ mod tests {
     use sonatina_triple::{Architecture, OperatingSystem, TargetTriple, Vendor};
 
     use super::Native;
-    use crate::{Module, Type, isa::TypeLayoutError};
+    use crate::{
+        Module, Type,
+        isa::TypeLayoutError,
+        types::{EnumReprHint, VariantData},
+    };
 
     fn native_isa() -> Native {
         Native::new(TargetTriple::new(
@@ -203,8 +205,52 @@ mod tests {
         assert_eq!(module.ctx.align_of_unchecked(Type::I256), 16);
         assert_eq!(module.ctx.size_of_unchecked(structure), 16);
         assert_eq!(module.ctx.align_of_unchecked(structure), 8);
-        assert!(module.ctx.size_of(packed).is_err());
-        assert!(module.ctx.align_of(packed).is_err());
+        for layout in [module.ctx.size_of(packed), module.ctx.align_of(packed)] {
+            assert!(matches!(layout, Err(TypeLayoutError::UnsupportedType(ty)) if ty == packed));
+        }
+    }
+
+    #[test]
+    fn native_enum_layouts_remain_abstract_through_nested_aggregates() {
+        let module = Module::new(&native_isa());
+        let (enumeration, array, structure, references) = module.ctx.with_ty_store_mut(|store| {
+            let enumeration = store.make_enum(
+                "OptionI64",
+                &[
+                    VariantData {
+                        name: "None".into(),
+                        explicit_discriminant: None,
+                        fields: vec![],
+                    },
+                    VariantData {
+                        name: "Some".into(),
+                        explicit_discriminant: None,
+                        fields: vec![Type::I64],
+                    },
+                ],
+                EnumReprHint::Default,
+            );
+            let array = store.make_array(enumeration, 2);
+            let structure = store.make_struct("Options", &[Type::I8, array], false);
+            let references = [
+                store.make_ptr(enumeration),
+                store.make_obj_ref(enumeration),
+                store.make_const_ref(structure),
+            ];
+            (enumeration, array, structure, references)
+        });
+        for ty in [enumeration, array, structure] {
+            for layout in [module.ctx.size_of(ty), module.ctx.align_of(ty)] {
+                assert!(
+                    matches!(layout, Err(TypeLayoutError::UnrepresentableType(inner)) if inner == enumeration),
+                    "{ty:?}: {layout:?}"
+                );
+            }
+        }
+        for reference in references {
+            assert_eq!(module.ctx.size_of(reference).unwrap(), 8);
+            assert_eq!(module.ctx.align_of(reference).unwrap(), 8);
+        }
     }
 
     #[test]
