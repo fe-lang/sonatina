@@ -856,7 +856,7 @@ func public %caller(v0.i1) -> i32 {
 
     let cfg = InlinerConfig {
         enable_full_inliner: true,
-        always_inline_single_use: false,
+        max_single_use_caller_insts: 0,
         max_growth_per_caller: 1,
         max_inlinee_blocks: 64,
         max_inlinee_insts: 256,
@@ -1210,7 +1210,7 @@ func public %caller(v0.i1, v1.i32) -> i32 {
 
     let cfg = InlinerConfig {
         enable_full_inliner: true,
-        always_inline_single_use: false,
+        max_single_use_caller_insts: 0,
         max_inlinee_blocks: 8,
         max_inlinee_insts: 32,
         max_growth_per_caller: 64,
@@ -1251,7 +1251,7 @@ func public %caller(v0.i1, v1.i32) -> i32 {
 
     let mut budgeted_inliner = Inliner::new(InlinerConfig {
         enable_full_inliner: true,
-        always_inline_single_use: false,
+        max_single_use_caller_insts: 0,
         max_inlinee_blocks: 8,
         max_inlinee_insts: 32,
         max_growth_per_caller: 1,
@@ -1317,7 +1317,7 @@ func public %caller(v0.i1, v1.i32) -> i32 {
 }
 
 #[test]
-fn full_inliner_single_use_multi_block_respects_size_and_growth_caps() {
+fn full_inliner_single_use_multi_block_respects_caller_size_cap() {
     let source = r#"
 target = "evm-ethereum-london"
 
@@ -1345,6 +1345,7 @@ func public %caller(v0.i1, v1.i32) -> i32 {
     let module = &mut parsed.module;
 
     let mut cfg = full_only_inliner_test_config();
+    cfg.max_single_use_caller_insts = 1;
     cfg.max_inlinee_blocks = 1;
     cfg.max_inlinee_insts = 1;
     cfg.max_growth_per_caller = 1;
@@ -1359,7 +1360,7 @@ func public %caller(v0.i1, v1.i32) -> i32 {
     let dumped = dump_module(module);
     assert!(
         dumped.contains("call %once"),
-        "single-use multi-block callee should respect size/growth caps:\n{dumped}"
+        "single-use multi-block callee should respect the caller size cap:\n{dumped}"
     );
     assert_eq!(stats.full_calls_inlined, 0);
     assert!(stats.skipped_budget > 0);
@@ -1673,7 +1674,7 @@ func private %leaf(v0.i1, v1.i32) -> i32 {
     let module = &mut parsed.module;
 
     let mut cfg = full_only_inliner_test_config();
-    cfg.always_inline_single_use = false;
+    cfg.max_single_use_caller_insts = 0;
     cfg.max_growth_per_caller = 5;
     cfg.max_total_growth = 64;
     cfg.inline_threshold = 1000;
@@ -1732,7 +1733,7 @@ func public %caller(v0.i1, v1.i32) -> i32 {
     let module = &mut parsed.module;
 
     let mut cfg = full_only_inliner_test_config();
-    cfg.always_inline_single_use = false;
+    cfg.max_single_use_caller_insts = 0;
     cfg.max_growth_per_caller = 3;
     cfg.max_total_growth = 64;
     cfg.inline_threshold = 1000;
@@ -1780,7 +1781,7 @@ func public %caller(v0.i1, v1.i32) -> i32 {
     let module = &mut parsed.module;
 
     let mut cfg = full_only_inliner_test_config();
-    cfg.always_inline_single_use = false;
+    cfg.max_single_use_caller_insts = 0;
     cfg.max_growth_per_caller = 3;
     cfg.max_total_growth = 64;
     cfg.inline_threshold = 1000;
@@ -1842,6 +1843,7 @@ func public %caller(v0.i1, v1.i32, v2.i32) -> i32 {
     let module = &mut parsed.module;
 
     let mut cfg = full_only_inliner_test_config();
+    cfg.max_single_use_caller_insts = 0;
     cfg.max_growth_per_caller = 7;
     cfg.max_total_growth = 64;
     cfg.inline_threshold = 1000;
@@ -1969,7 +1971,7 @@ fn object_aware_full_inliner_test_config() -> InlinerConfig {
         enable_wrapper_rewrite: false,
         enable_single_block_splice: false,
         enable_full_inliner: true,
-        always_inline_single_use: false,
+        max_single_use_caller_insts: 0,
         max_inlinee_blocks: 64,
         max_inlinee_insts: 1024,
         max_growth_per_caller: 4096,

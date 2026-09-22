@@ -22,7 +22,8 @@ func public %runtime__StorPtr_Evm___207f35a85ac4062e() {
 
     block1:
         v7.i256 = evm_calldata_load 4.i256;
-        v9.i256 = evm_malloc 64.i256;
+        v8.*i8 = evm_malloc 64.i256;
+        v9.i256 = ptr_to_int v8 i256;
         mstore v9 1.i256 i256;
         v12.i256 = add v9 32.i256;
         mstore v12 v7 i256;

@@ -11,66 +11,6 @@ type @__fe_obj_MemoryBytes_2 = {i256, i256};
 type @__fe_obj_Cursor_3 = {@__fe_obj_MemoryBytes_2, i256};
 type @__fe_obj_SolDecoder_4 = {@__fe_obj_Cursor_3, i256};
 
-func private %test_counter__StorPtr_Evm___207f35a85ac4062e() {
-    block0:
-        v9.i256 = sym_size &__Counter_init;
-        v10.i256 = sym_addr &__Counter_init;
-        v13.*i8 = evm_malloc v9;
-        v14.i256 = ptr_to_int v13 i256;
-        evm_code_copy v14 v10 v9;
-        (v15.i256, v16.i1) = uaddo v14 v9;
-        br v16 block5 block8;
-
-    block3:
-        v21.i256 = evm_return_data_size;
-        v22.*i8 = evm_malloc v21;
-        v23.i256 = ptr_to_int v22 i256;
-        evm_return_data_copy v23 0.i256 v21;
-        evm_revert v23 v21;
-
-    block5:
-        evm_revert 0.i256 0.i256;
-
-    block8:
-        v19.i256 = evm_create2 0.i256 v14 v9 0.i256;
-        v31.i1 = is_zero v19;
-        br v31 block3 block1;
-
-    block1:
-        v5.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Get_h3927684624c88c53__624197e0d5a47bbd v19 100000.i256 0.i256;
-        v33.i1 = is_zero v5;
-        br v33 block22 block15;
-
-    block15:
-        evm_revert 0.i256 0.i256;
-
-    block22:
-        v38.*i8 = evm_malloc 4.i256;
-        v39.i256 = ptr_to_int v38 i256;
-        mstore v39 -21432072031172259149098304932151112453092825142662437103785846030156425068544.i256 i256;
-        v41.i256 = evm_call 100000.i256 v19 0.i256 v39 4.i256 0.i256 0.i256;
-        v42.i256 = evm_return_data_size;
-        v43.*i8 = evm_malloc v42;
-        v44.i256 = ptr_to_int v43 i256;
-        evm_return_data_copy v44 0.i256 v42;
-        v45.i1 = is_zero v41;
-        br v45 block23 block21;
-
-    block23:
-        evm_revert v44 v42;
-
-    block21:
-        v7.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Get_h3927684624c88c53__624197e0d5a47bbd v19 100000.i256 0.i256;
-        v29.i1 = eq v7 1.i256;
-        br v29 block17 block19;
-
-    block19:
-        evm_revert 0.i256 0.i256;
-
-    block17:
-        return;
-}
-
 func private %__Counter_init() {
     block0:
         v0.i256 = evm_call_value;
@@ -107,8 +47,8 @@ func private %__Counter_runtime() {
 
     block2:
         v5.i256 = evm_call_value;
-        v28.i1 = is_zero v5;
-        br v28 block17 block3;
+        v57.i1 = is_zero v5;
+        br v57 block17 block3;
 
     block3:
         evm_revert 0.i256 0.i256;
@@ -127,8 +67,8 @@ func private %__Counter_runtime() {
 
     block5:
         v9.i256 = evm_call_value;
-        v29.i1 = is_zero v9;
-        br v29 block7 block6;
+        v58.i1 = is_zero v9;
+        br v58 block7 block6;
 
     block6:
         evm_revert 0.i256 0.i256;
@@ -141,35 +81,89 @@ func private %__Counter_runtime() {
 
 func private %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Get_h3927684624c88c53__624197e0d5a47bbd(v0.i256, v1.i256, v2.i256) -> i256 {
     block0:
-        v25.*i8 = evm_malloc 4.i256;
-        v26.i256 = ptr_to_int v25 i256;
-        mstore v26 49437969891755755400450161744656089009884903607872082989584577758955590123520.i256 i256;
-        v13.i256 = evm_call v1 v0 v2 v26 4.i256 0.i256 0.i256;
+        v24.*i8 = evm_malloc 4.i256;
+        v25.i256 = ptr_to_int v24 i256;
+        mstore v25 49437969891755755400450161744656089009884903607872082989584577758955590123520.i256 i256;
+        v13.i256 = evm_call v1 v0 v2 v25 4.i256 0.i256 0.i256;
         v14.i256 = evm_return_data_size;
         v15.*i8 = evm_malloc v14;
         v16.i256 = ptr_to_int v15 i256;
         evm_return_data_copy v16 0.i256 v14;
-        v18.i1 = is_zero v13;
-        br v18 block1 block8;
+        v81.i1 = is_zero v13;
+        br v81 block1 block17;
 
     block1:
         evm_revert v16 v14;
 
-    block8:
-        v33.i1 = lt v14 32.i256;
-        br v33 block9 block10;
+    block17:
+        v53.i1 = lt v14 32.i256;
+        br v53 block18 block19;
 
-    block9:
+    block18:
         evm_revert 0.i256 0.i256;
 
-    block10:
-        v50.i256 = mload v16 i256;
-        return v50;
+    block19:
+        v78.i256 = mload v16 i256;
+        return v78;
 }
 
 func public %entry() {
     block0:
-        call %test_counter__StorPtr_Evm___207f35a85ac4062e;
+        v3.i256 = sym_size &__Counter_init;
+        v4.i256 = sym_addr &__Counter_init;
+        v5.*i8 = evm_malloc v3;
+        v6.i256 = ptr_to_int v5 i256;
+        evm_code_copy v6 v4 v3;
+        (v7.i256, v8.i1) = uaddo v6 v3;
+        br v8 block4 block5;
+
+    block3:
+        v34.i256 = evm_return_data_size;
+        v35.*i8 = evm_malloc v34;
+        v36.i256 = ptr_to_int v35 i256;
+        evm_return_data_copy v36 0.i256 v34;
+        evm_revert v36 v34;
+
+    block4:
+        evm_revert 0.i256 0.i256;
+
+    block5:
+        v9.i256 = evm_create2 0.i256 v6 v3 0.i256;
+        v10.i1 = is_zero v9;
+        br v10 block3 block6;
+
+    block6:
+        v12.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Get_h3927684624c88c53__624197e0d5a47bbd v9 100000.i256 0.i256;
+        v13.i1 = is_zero v12;
+        br v13 block8 block7;
+
+    block7:
+        evm_revert 0.i256 0.i256;
+
+    block8:
+        v15.*i8 = evm_malloc 4.i256;
+        v16.i256 = ptr_to_int v15 i256;
+        mstore v16 -21432072031172259149098304932151112453092825142662437103785846030156425068544.i256 i256;
+        v23.i256 = evm_call 100000.i256 v9 0.i256 v16 4.i256 0.i256 0.i256;
+        v24.i256 = evm_return_data_size;
+        v25.*i8 = evm_malloc v24;
+        v26.i256 = ptr_to_int v25 i256;
+        evm_return_data_copy v26 0.i256 v24;
+        v27.i1 = is_zero v23;
+        br v27 block11 block12;
+
+    block11:
+        evm_revert v26 v24;
+
+    block12:
+        v32.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Get_h3927684624c88c53__624197e0d5a47bbd v9 100000.i256 0.i256;
+        v33.i1 = eq v32 1.i256;
+        br v33 block1 block13;
+
+    block13:
+        evm_revert 0.i256 0.i256;
+
+    block1:
         mstore 0.i256 1.i256 i256;
         evm_return 0.i256 32.i256;
 }

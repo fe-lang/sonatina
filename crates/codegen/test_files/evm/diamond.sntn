@@ -7,7 +7,8 @@ target = "evm-ethereum-osaka"
 func public %entry() {
     block0:
         v0.i256 = evm_calldata_load 0.i32;
-        v1.i32 = shr 224.i32 v0;
+        v6.i256 = shr 224.i256 v0;
+        v1.i32 = trunc v6 i32;
         v2.i1 = gt v1 0.i32;
         br v2 block1 block2;
 

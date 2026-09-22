@@ -46,67 +46,61 @@ func private %vals_b() -> [i256; 5] {
         return v6;
 }
 
-func private %run() {
-    block0:
-        v24.objref<@Big> = obj.alloc @Big;
-        v25.objref<i1> = obj.proj v24 0.i256;
-        obj.store v25 1.i1;
-        v26.objref<[i256; 5]> = obj.proj v24 1.i256;
-        v27.objref<i256> = obj.index v26 0.i256;
-        obj.store v27 0.i256;
-        v28.objref<i256> = obj.index v26 1.i256;
-        obj.store v28 0.i256;
-        v29.objref<i256> = obj.index v26 2.i256;
-        obj.store v29 0.i256;
-        v30.objref<i256> = obj.index v26 3.i256;
-        obj.store v30 0.i256;
-        v31.objref<i256> = obj.index v26 4.i256;
-        obj.store v31 0.i256;
-        v32.@Big = obj.load v24;
-        v1.[i256; 5] = call %vals_a;
-        v2.[i256; 5] = call %vals_b;
-        v33.i1 = extract_value v32 0.i8;
-        v35.i256 = extract_value v1 1.i8;
-        v37.i1 = eq v35 7.i256;
-        v38.i1 = and v33 v37;
-        v40.i256 = extract_value v2 2.i8;
-        v42.i1 = eq v40 9.i256;
-        v43.i1 = and v38 v42;
-        v44.objref<@Ret> = obj.alloc @Ret;
-        v45.objref<i1> = obj.proj v44 0.i256;
-        obj.store v45 v43;
-        v46.objref<@MyErr> = obj.proj v44 1.i256;
-        enum.set_tag v46 #None;
-        v47.@Ret = obj.load v44;
-        v4.[i256; 5] = call %vals_a;
-        v5.[i256; 5] = call %vals_b;
-        v49.i256 = extract_value v4 1.i8;
-        v50.i1 = eq v49 7.i256;
-        v51.i1 = and v33 v50;
-        v52.i256 = extract_value v5 2.i8;
-        v53.i1 = eq v52 9.i256;
-        v54.i1 = and v51 v53;
-        v55.objref<@Ret> = obj.alloc @Ret;
-        v56.objref<i1> = obj.proj v55 0.i256;
-        obj.store v56 v54;
-        v57.objref<@MyErr> = obj.proj v55 1.i256;
-        enum.set_tag v57 #None;
-        v58.@Ret = obj.load v55;
-        v7.i1 = extract_value v47 0.i8;
-        v8.i1 = extract_value v58 0.i8;
-        v11.i1 = and v7 v8;
-        br v11 block1 block2;
-
-    block1:
-        return;
-
-    block2:
-        evm_revert 0.i256 0.i256;
-}
-
 func public %entry() {
     block0:
-        call %run;
+        v13.objref<@Big> = obj.alloc @Big;
+        v14.objref<i1> = obj.proj v13 0.i256;
+        obj.store v14 1.i1;
+        v16.objref<[i256; 5]> = obj.proj v13 1.i256;
+        v17.objref<i256> = obj.index v16 0.i256;
+        obj.store v17 0.i256;
+        v18.objref<i256> = obj.index v16 1.i256;
+        obj.store v18 0.i256;
+        v19.objref<i256> = obj.index v16 2.i256;
+        obj.store v19 0.i256;
+        v20.objref<i256> = obj.index v16 3.i256;
+        obj.store v20 0.i256;
+        v21.objref<i256> = obj.index v16 4.i256;
+        obj.store v21 0.i256;
+        v22.@Big = obj.load v13;
+        v23.[i256; 5] = call %vals_a;
+        v24.[i256; 5] = call %vals_b;
+        v25.i1 = extract_value v22 0.i8;
+        v27.i256 = extract_value v23 1.i8;
+        v29.i1 = eq v27 7.i256;
+        v30.i1 = and v25 v29;
+        v32.i256 = extract_value v24 2.i8;
+        v34.i1 = eq v32 9.i256;
+        v35.i1 = and v30 v34;
+        v36.objref<@Ret> = obj.alloc @Ret;
+        v37.objref<i1> = obj.proj v36 0.i256;
+        obj.store v37 v35;
+        v38.objref<@MyErr> = obj.proj v36 1.i256;
+        enum.set_tag v38 #None;
+        v39.@Ret = obj.load v36;
+        v40.[i256; 5] = call %vals_a;
+        v41.[i256; 5] = call %vals_b;
+        v43.i256 = extract_value v40 1.i8;
+        v44.i1 = eq v43 7.i256;
+        v45.i1 = and v25 v44;
+        v46.i256 = extract_value v41 2.i8;
+        v47.i1 = eq v46 9.i256;
+        v48.i1 = and v45 v47;
+        v49.objref<@Ret> = obj.alloc @Ret;
+        v50.objref<i1> = obj.proj v49 0.i256;
+        obj.store v50 v48;
+        v51.objref<@MyErr> = obj.proj v49 1.i256;
+        enum.set_tag v51 #None;
+        v52.@Ret = obj.load v49;
+        v53.i1 = extract_value v39 0.i8;
+        v54.i1 = extract_value v52 0.i8;
+        v55.i1 = and v53 v54;
+        br v55 block1 block6;
+
+    block6:
+        evm_revert 0.i256 0.i256;
+
+    block1:
         evm_return 0.i8 0.i8;
 }
 

@@ -33,7 +33,7 @@ use sonatina_ir::{
 };
 use sonatina_parser::{ParsedModule, parse_module};
 use sonatina_triple::{Architecture, OperatingSystem, Vendor};
-use sonatina_verifier::{VerificationLevel, VerifierConfig};
+use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module_or_panic};
 use std::{
     collections::HashMap,
     fmt,
@@ -232,6 +232,8 @@ fn prune_unreachable_funcs_for_optimized_evm_snapshots(
 )]
 fn test_evm(fixture: Fixture<&str>) {
     let mut parsed = parse_sona(fixture.content());
+    let verifier_cfg = VerifierConfig::for_level(VerificationLevel::Full);
+    verify_module_or_panic(&parsed.module, &verifier_cfg);
     let cfg = evm_directives::parse_evm_config(&parsed.debug.module_comments)
         .unwrap_or_else(|e| panic!("{}: {e}", fixture.path()));
     let stackify_reach_depth = cfg.stack_reach.unwrap_or(16);
@@ -248,6 +250,7 @@ fn test_evm(fixture: Fixture<&str>) {
 
     run_opt_pipeline(&mut parsed.module, opt_pipeline);
     prune_unreachable_funcs_for_optimized_evm_snapshots(&mut parsed.module, opt_pipeline);
+    verify_module_or_panic(&parsed.module, &verifier_cfg);
     let opt_ir_snapshot = (opt_pipeline != EvmOptPipeline::O0).then(|| {
         let mut writer = ModuleWriter::with_debug_provider(&parsed.module, &parsed.debug);
         writer.dump_string()
