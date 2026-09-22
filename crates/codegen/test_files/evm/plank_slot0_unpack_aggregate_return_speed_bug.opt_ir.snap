@@ -17,41 +17,6 @@ func public %init() {
         evm_return v2 v0;
 }
 
-func private %unpack(v0.i256) -> @Slot0 {
-    block0:
-        v2.i256 = shr 160.i256 v0;
-        v4.i256 = and v2 16777215.i256;
-        v48.i1 = lt v4 8388608.i256;
-        br v48 block3 block2;
-
-    block2:
-        v9.i256 = or v4 -16777216.i256;
-        jump block3;
-
-    block3:
-        v11.i256 = phi (v9 block2) (v4 block0);
-        v14.i256 = shr 184.i256 v0;
-        v16.i256 = and v14 65535.i256;
-        v18.i256 = shr 200.i256 v0;
-        v19.i256 = and v18 65535.i256;
-        v21.i256 = shr 216.i256 v0;
-        v22.i256 = and v21 65535.i256;
-        v24.i256 = shr 232.i256 v0;
-        v26.i256 = and v24 255.i256;
-        v28.i256 = shr 240.i256 v0;
-        v30.i256 = and v28 1.i256;
-        v32.i1 = gt v30 0.i256;
-        v34.i256 = and v0 1461501637330902918203684832716283019655932542975.i256;
-        v36.@Slot0 = insert_value undef.@Slot0 0.i256 v34;
-        v37.@Slot0 = insert_value v36 1.i256 v11;
-        v39.@Slot0 = insert_value v37 2.i256 v16;
-        v41.@Slot0 = insert_value v39 3.i256 v19;
-        v43.@Slot0 = insert_value v41 4.i256 v22;
-        v45.@Slot0 = insert_value v43 5.i256 v26;
-        v47.@Slot0 = insert_value v45 6.i256 v32;
-        return v47;
-}
-
 func public %run() {
     block0:
         v1.i256 = evm_calldata_load 0.i256;
@@ -77,34 +42,49 @@ func public %run() {
 
     block4:
         v20.i256 = evm_sload 6.i256;
-        v21.@Slot0 = call %unpack v20;
+        v53.i256 = shr 160.i256 v20;
+        v55.i256 = and v53 16777215.i256;
+        v57.i1 = lt v55 8388608.i256;
+        br v57 block13 block12;
+
+    block12:
+        v59.i256 = or v55 -16777216.i256;
+        jump block13;
+
+    block13:
+        v60.i256 = phi (v59 block12) (v55 block4);
+        v62.i256 = shr 184.i256 v20;
+        v64.i256 = and v62 65535.i256;
+        v66.i256 = shr 200.i256 v20;
+        v67.i256 = and v66 65535.i256;
+        v69.i256 = shr 216.i256 v20;
+        v70.i256 = and v69 65535.i256;
+        v72.i256 = shr 232.i256 v20;
+        v74.i256 = and v72 255.i256;
+        v76.i256 = shr 240.i256 v20;
+        v77.i256 = and v76 1.i256;
+        v79.i256 = and v20 1461501637330902918203684832716283019655932542975.i256;
         v22.*i8 = evm_malloc 224.i256;
         v23.i256 = ptr_to_int v22 i256;
-        v24.i256 = extract_value v21 0.i256;
-        mstore v23 v24 i256;
+        mstore v23 v79 i256;
         v26.i256 = add v23 32.i256;
-        v27.i256 = extract_value v21 1.i256;
-        mstore v26 v27 i256;
+        mstore v26 v60 i256;
         v29.i256 = add v23 64.i256;
-        v31.i256 = extract_value v21 2.i256;
-        mstore v29 v31 i256;
+        mstore v29 v64 i256;
         v33.i256 = add v23 96.i256;
-        v35.i256 = extract_value v21 3.i256;
-        mstore v33 v35 i256;
+        mstore v33 v67 i256;
         v37.i256 = add v23 128.i256;
-        v38.i256 = extract_value v21 4.i256;
-        mstore v37 v38 i256;
+        mstore v37 v70 i256;
         v40.i256 = add v23 160.i256;
-        v42.i256 = extract_value v21 5.i256;
-        mstore v40 v42 i256;
-        v45.i1 = extract_value v21 6.i256;
-        br v45 block6 block7;
+        mstore v40 v74 i256;
+        v88.i1 = is_zero v77;
+        br v88 block7 block6;
 
     block6:
         jump block7;
 
     block7:
-        v46.i256 = phi (1.i256 block6) (0.i256 block4);
+        v46.i256 = phi (1.i256 block6) (0.i256 block13);
         v44.i256 = add v23 192.i256;
         mstore v44 v46 i256;
         evm_return v23 224.i256;

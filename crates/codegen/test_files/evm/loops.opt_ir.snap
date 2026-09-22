@@ -12,66 +12,6 @@ type @__fe_obj_SolDecoder_3 = {@__fe_obj_Cursor_2, i256};
 type @__fe_obj_SolEncoder_4 = {i256, i256, i256};
 type @__fe_obj_tuple_5 = {i256, i256};
 
-func private %__Bench_recv_0_3(v0.i256) -> i256 {
-    block0:
-        jump block3;
-
-    block3:
-        v4.i256 = phi (0.i256 block0) (v7 block4);
-        v5.i1 = lt v4 v0;
-        br v5 block4 block1;
-
-    block4:
-        v7.i256 = add 1.i256 v4;
-        jump block3;
-
-    block1:
-        return v4;
-}
-
-func private %__Bench_recv_0_4(v0.i256) -> i256 {
-    block0:
-        jump block3;
-
-    block3:
-        v4.i256 = phi (0.i256 block0) (v10 block4);
-        v7.i256 = phi (1.i256 block0) (v11 block4);
-        v16.i1 = gt v7 v0;
-        br v16 block1 block4;
-
-    block4:
-        v10.i256 = add v4 v7;
-        v11.i256 = add 1.i256 v7;
-        jump block3;
-
-    block1:
-        return v4;
-}
-
-func private %__Bench_recv_0_5(v0.objref<@__fe_obj_XorLoopUnchecked_1>) -> i256 {
-    block0:
-        v31.objref<i256> = obj.proj v0 1.i256;
-        v32.i256 = obj.load v31;
-        v29.objref<i256> = obj.proj v0 0.i256;
-        v30.i256 = obj.load v29;
-        jump block3;
-
-    block3:
-        v9.i256 = phi (v32 block0) (v14 block4);
-        v11.i256 = phi (0.i256 block0) (v15 block4);
-        v12.i1 = lt v11 v30;
-        br v12 block4 block1;
-
-    block4:
-        v27.i256 = xor v11 v32;
-        v14.i256 = xor v9 v27;
-        v15.i256 = add 1.i256 v11;
-        jump block3;
-
-    block1:
-        return v9;
-}
-
 func private %__Bench_init() {
     block0:
         v0.i256 = evm_call_value;
@@ -114,8 +54,8 @@ func private %__Bench_runtime() {
 
     block2:
         v8.i256 = evm_call_value;
-        v86.i1 = is_zero v8;
-        br v86 block4 block3;
+        v110.i1 = is_zero v8;
+        br v110 block4 block3;
 
     block3:
         evm_revert 0.i256 0.i256;
@@ -125,12 +65,12 @@ func private %__Bench_runtime() {
         jump block26;
 
     block26:
-        v69.i256 = phi (0.i256 block4) (v94 block27);
+        v69.i256 = phi (0.i256 block4) (v118 block27);
         v70.i1 = lt v69 v13;
         br v70 block27 block24;
 
     block27:
-        v94.i256 = add v69 1.i256;
+        v118.i256 = add v69 1.i256;
         jump block26;
 
     block24:
@@ -139,8 +79,8 @@ func private %__Bench_runtime() {
 
     block5:
         v15.i256 = evm_call_value;
-        v87.i1 = is_zero v15;
-        br v87 block7 block6;
+        v111.i1 = is_zero v15;
+        br v111 block7 block6;
 
     block6:
         evm_revert 0.i256 0.i256;
@@ -172,8 +112,8 @@ func private %__Bench_runtime() {
 
     block8:
         v21.i256 = evm_call_value;
-        v88.i1 = is_zero v21;
-        br v88 block10 block9;
+        v112.i1 = is_zero v21;
+        br v112 block10 block9;
 
     block9:
         evm_revert 0.i256 0.i256;
@@ -185,14 +125,14 @@ func private %__Bench_runtime() {
 
     block44:
         v78.i256 = phi (v74 block10) (v83 block45);
-        v80.i256 = phi (0.i256 block10) (v95 block45);
+        v80.i256 = phi (0.i256 block10) (v119 block45);
         v81.i1 = lt v80 v73;
         br v81 block45 block42;
 
     block45:
         v82.i256 = xor v74 v80;
         v83.i256 = xor v78 v82;
-        v95.i256 = add v80 1.i256;
+        v119.i256 = add v80 1.i256;
         jump block44;
 
     block42:
@@ -201,36 +141,60 @@ func private %__Bench_runtime() {
 
     block11:
         v27.i256 = evm_call_value;
-        v89.i1 = is_zero v27;
-        br v89 block13 block12;
+        v113.i1 = is_zero v27;
+        br v113 block13 block12;
 
     block12:
         evm_revert 0.i256 0.i256;
 
     block13:
         v31.i256 = call %u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98 v58;
-        v32.i256 = call %__Bench_recv_0_3 v31;
-        mstore 0.i256 v32 i256;
+        jump block50;
+
+    block50:
+        v87.i256 = phi (0.i256 block13) (v89 block51);
+        v88.i1 = lt v87 v31;
+        br v88 block51 block48;
+
+    block51:
+        v89.i256 = add 1.i256 v87;
+        jump block50;
+
+    block48:
+        mstore 0.i256 v87 i256;
         evm_return 0.i256 32.i256;
 
     block14:
         v33.i256 = evm_call_value;
-        v90.i1 = is_zero v33;
-        br v90 block16 block15;
+        v114.i1 = is_zero v33;
+        br v114 block16 block15;
 
     block15:
         evm_revert 0.i256 0.i256;
 
     block16:
         v37.i256 = call %u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98 v58;
-        v38.i256 = call %__Bench_recv_0_4 v37;
-        mstore 0.i256 v38 i256;
+        jump block55;
+
+    block55:
+        v91.i256 = phi (0.i256 block16) (v96 block56);
+        v93.i256 = phi (1.i256 block16) (v97 block56);
+        v94.i1 = gt v93 v37;
+        br v94 block53 block56;
+
+    block56:
+        v96.i256 = add v91 v93;
+        v97.i256 = add 1.i256 v93;
+        jump block55;
+
+    block53:
+        mstore 0.i256 v91 i256;
         evm_return 0.i256 32.i256;
 
     block17:
         v39.i256 = evm_call_value;
-        v91.i1 = is_zero v39;
-        br v91 block19 block18;
+        v115.i1 = is_zero v39;
+        br v115 block19 block18;
 
     block18:
         evm_revert 0.i256 0.i256;
@@ -238,13 +202,22 @@ func private %__Bench_runtime() {
     block19:
         v78.i256 = call %u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98 v58;
         v79.i256 = call %u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98 v58;
-        v80.objref<@__fe_obj_XorLoopUnchecked_1> = obj.alloc @__fe_obj_XorLoopUnchecked_1;
-        v81.objref<i256> = obj.proj v80 0.i256;
-        obj.store v81 v78;
-        v82.objref<i256> = obj.proj v80 1.i256;
-        obj.store v82 v79;
-        v44.i256 = call %__Bench_recv_0_5 v80;
-        mstore 0.i256 v44 i256;
+        jump block60;
+
+    block60:
+        v103.i256 = phi (v79 block19) (v108 block61);
+        v105.i256 = phi (0.i256 block19) (v109 block61);
+        v106.i1 = lt v105 v78;
+        br v106 block61 block58;
+
+    block61:
+        v107.i256 = xor v105 v79;
+        v108.i256 = xor v103 v107;
+        v109.i256 = add 1.i256 v105;
+        jump block60;
+
+    block58:
+        mstore 0.i256 v103 i256;
         evm_return 0.i256 32.i256;
 }
 

@@ -294,7 +294,11 @@ impl BuildCtx {
             .extend(func.blocks.iter().map(|b| ir::BlockId(b.id())));
         if let Some(max) = self.blocks.iter().max() {
             while fb.func.dfg.blocks.len() <= max.0 as usize {
-                fb.cursor.make_block(&mut fb.func);
+                let block = fb.cursor.make_block(&mut fb.func);
+                // Reserve textual IDs without introducing live blocks for gaps.
+                if !self.blocks.contains(&block) {
+                    fb.func.dfg.delete_block(block);
+                }
             }
         }
 
@@ -717,6 +721,35 @@ fn module_ctx_from_triple(triple: TargetTriple) -> ModuleCtx {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn missing_blocks_within_reserved_slots_are_undefined() {
+        for inst in [
+            "jump block3;",
+            "br 1.i1 block9 block3;",
+            "br_table 0.i32 block9 (1.i32 block3);",
+            "v0.i32 = phi (1.i32 block3);\n        jump block9;",
+        ] {
+            let source = format!(
+                r#"
+target = "evm-ethereum-london"
+func public %f() {{
+    block1:
+        {inst}
+    block9:
+        return;
+}}
+"#
+            );
+            let errors = parse_module(&source).err().expect("block3 is not declared");
+            assert_eq!(errors.len(), 1, "{errors:?}");
+            let Error::Undefined(UndefinedKind::Block(block), span) = &errors[0] else {
+                panic!("expected an undefined block diagnostic: {errors:?}");
+            };
+            assert_eq!(block.as_u32(), 3);
+            assert_eq!(&source[span.0 as usize..span.1 as usize], "block3");
+        }
+    }
 
     fn inst_arity_error(input: &str) -> (ir::InstArity, usize) {
         let errors = match parse_module(input) {

@@ -42,20 +42,6 @@ func private %smt_store_zero_table() {
         return;
 }
 
-func private %abi_return_bool(v0.i256) {
-    block0:
-        v3.i1 = eq 1.i256 v0;
-        br v3 block3 block4;
-
-    block3:
-        v5.i256 = phi (1.i256 block0) (0.i256 block4);
-        mstore 0.i256 v5 i256;
-        evm_return 0.i256 32.i256;
-
-    block4:
-        jump block3;
-}
-
 func private %leanimt_root_from_calldata(v0.i256, v1.i256, v2.i256, v3.i256) -> i256 {
     block0:
         v6.i1 = gt v2 32.i256;
@@ -409,9 +395,15 @@ func private %runtime__StorPtr_Evm___207f35a85ac4062e() {
         v15.i256 = evm_calldata_load 100.i256;
         v17.i256 = call %leanimt_root_from_calldata v13 v14 v15 132.i256;
         v59.i1 = eq v12 v17;
-        v19.i256 = zext v59 i256;
-        call %abi_return_bool v19;
-        unreachable;
+        br v59 block16 block17;
+
+    block16:
+        v64.i256 = phi (1.i256 block2) (0.i256 block17);
+        mstore 0.i256 v64 i256;
+        evm_return 0.i256 32.i256;
+
+    block17:
+        jump block16;
 
     block3:
         v20.i256 = evm_calldata_load 4.i256;
@@ -438,9 +430,15 @@ func private %runtime__StorPtr_Evm___207f35a85ac4062e() {
         v34.i256 = evm_calldata_load 100.i256;
         v35.i256 = call %smt_root_from_calldata v32 v33 v34 132.i256;
         v60.i1 = eq v31 v35;
-        v37.i256 = zext v60 i256;
-        call %abi_return_bool v37;
-        unreachable;
+        br v60 block20 block21;
+
+    block20:
+        v66.i256 = phi (1.i256 block5) (0.i256 block21);
+        mstore 0.i256 v66 i256;
+        evm_return 0.i256 32.i256;
+
+    block21:
+        jump block20;
 
     block6:
         v38.i256 = evm_calldata_load 4.i256;
