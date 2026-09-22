@@ -5,57 +5,6 @@ input_file: test_files/evm/fe_commutative_branch_array5_loop_regression.sntn
 ---
 target = "evm-ethereum-osaka"
 
-func private %verify_checked(v0.i256, v1.i256, v2.[i8; 5], v3.[i256; 5]) -> i1 {
-    block0:
-        v7.*i256 = alloca i256;
-        v8.objref<[i8; 5]> = obj.alloc [i8; 5];
-        v9.objref<[i256; 5]> = obj.alloc [i256; 5];
-        v11.objref<[i256; 5]> = obj.alloc [i256; 5];
-        mstore v7 0.i256 i256;
-        v43.i256 = ptr_to_int v7 i256;
-        jump block1;
-
-    block1:
-        v48.i256 = phi (v1 block0) (v52 block6);
-        v16.i256 = mload v7 i256;
-        v17.i1 = lt v16 1.i256;
-        br v17 block2 block3;
-
-    block2:
-        obj.store v8 v2;
-        v20.objref<i8> = obj.index v8 v16;
-        v21.i8 = obj.load v20;
-        v45.i1 = is_zero v21;
-        br v45 block4 block5;
-
-    block3:
-        v26.i1 = eq v48 v0;
-        return v26;
-
-    block4:
-        obj.store v9 v3;
-        v29.objref<i256> = obj.index v9 v16;
-        v30.i256 = obj.load v29;
-        (v32.i256, v33.i1) = uaddo v48 v30;
-        br v33 block7 block6;
-
-    block5:
-        obj.store v11 v3;
-        v37.objref<i256> = obj.index v11 v16;
-        v38.i256 = obj.load v37;
-        (v40.i256, v41.i1) = uaddo v38 v48;
-        br v41 block7 block6;
-
-    block6:
-        v52.i256 = phi (v32 block4) (v40 block5);
-        v47.i256 = add v16 1.i256;
-        mstore v43 v47 i256;
-        jump block1;
-
-    block7:
-        evm_revert 0.i256 0.i256;
-}
-
 func public %entry() {
     block0:
         v1.objref<[i8; 5]> = obj.alloc [i8; 5];
@@ -82,10 +31,55 @@ func public %entry() {
         v19.objref<i256> = obj.index v13 4.i256;
         obj.store v19 0.i256;
         v20.[i256; 5] = obj.load v13;
-        v23.i1 = call %verify_checked 18.i256 7.i256 v12 v20;
-        br v23 block1 block3;
+        v24.*i256 = alloca i256;
+        v25.objref<[i8; 5]> = obj.alloc [i8; 5];
+        v26.objref<[i256; 5]> = obj.alloc [i256; 5];
+        v28.objref<[i256; 5]> = obj.alloc [i256; 5];
+        mstore v24 0.i256 i256;
+        v56.i256 = ptr_to_int v24 i256;
+        jump block4;
 
-    block3:
+    block4:
+        v33.i256 = phi (7.i256 block0) (v55 block9);
+        v34.i256 = mload v24 i256;
+        v35.i1 = lt v34 1.i256;
+        br v35 block5 block6;
+
+    block5:
+        obj.store v25 v12;
+        v38.objref<i8> = obj.index v25 v34;
+        v39.i8 = obj.load v38;
+        v62.i1 = is_zero v39;
+        br v62 block7 block8;
+
+    block6:
+        v61.i1 = eq v33 18.i256;
+        br v61 block1 block15;
+
+    block7:
+        obj.store v26 v20;
+        v43.objref<i256> = obj.index v26 v34;
+        v44.i256 = obj.load v43;
+        (v45.i256, v46.i1) = uaddo v33 v44;
+        br v46 block10 block9;
+
+    block8:
+        obj.store v28 v20;
+        v50.objref<i256> = obj.index v28 v34;
+        v51.i256 = obj.load v50;
+        (v52.i256, v53.i1) = uaddo v51 v33;
+        br v53 block10 block9;
+
+    block9:
+        v55.i256 = phi (v45 block7) (v52 block8);
+        v64.i256 = add v34 1.i256;
+        mstore v56 v64 i256;
+        jump block4;
+
+    block10:
+        evm_revert 0.i256 0.i256;
+
+    block15:
         evm_revert 0.i256 0.i256;
 
     block1:

@@ -1,0 +1,399 @@
+#! evm.config: { opt: 2, vcode: false, stackify_trace: false, bytecode_hex: false }
+#! evm.case: sum
+#!   calldata: u32be(315382844) u256(1) u256(2) u256(3) u256(4) u256(5) u256(6) u256(7) u256(8) u256(9) u256(10) u256(11) u256(12) u256(13) u256(14) u256(15) u256(16) u256(17) u256(18) u256(19) u256(20) u256(21) u256(22) u256(23) u256(24) u256(25) u256(26) u256(27) u256(28) u256(29) u256(30) u256(31) u256(32)
+#!   expect: return u256(528)
+#! evm.case: maximum_sum
+#!   calldata: u32be(315382844) u256(0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff) u256(0) u256(0) u256(0) u256(0) u256(0) u256(0) u256(0) u256(0) u256(0) u256(0) u256(0) u256(0) u256(0) u256(0) u256(0) u256(0) u256(0) u256(0) u256(0) u256(0) u256(0) u256(0) u256(0) u256(0) u256(0) u256(0) u256(0) u256(0) u256(0) u256(0) u256(0)
+#!   expect: return u256(0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff)
+#! evm.case: overflow
+#!   calldata: u32be(315382844) u256(0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff) u256(1) u256(0) u256(0) u256(0) u256(0) u256(0) u256(0) u256(0) u256(0) u256(0) u256(0) u256(0) u256(0) u256(0) u256(0) u256(0) u256(0) u256(0) u256(0) u256(0) u256(0) u256(0) u256(0) u256(0) u256(0) u256(0) u256(0) u256(0) u256(0) u256(0) u256(0)
+#!   expect: revert 0x4e487b71 u256(17)
+#! evm.case: truncated
+#!   calldata: u32be(315382844) u256(1)
+#!   expect: revert
+#! evm.case: unknown_selector
+#!   calldata: 0xffffffff
+#!   expect: revert
+#! evm.case: short_calldata
+#!   calldata: 0x12
+#!   expect: revert
+
+# Fe 9c9840ce4 O2 output for evm-compiler-bench scale_abi_args_32.
+# Single-use inlining removes the packed argument object before EVM lowering.
+# Keep checked addition and the ABI decoder in the regression.
+
+target = "evm-ethereum-osaka"
+
+type @__ScaleAbiArgs32_recv_0_0__args = {i256, i256, i256, i256, i256, i256, i256, i256, i256, i256, i256, i256, i256, i256, i256, i256, i256, i256, i256, i256, i256, i256, i256, i256, i256, i256, i256, i256, i256, i256, i256, i256};
+type @layout_0 = {i256};
+type @layout_1 = {i256, i256, i256};
+type @layout_2 = {i256};
+type @layout_3 = {i256, i256, i256, i256, i256, i256, i256, i256, i256, i256, i256, i256, i256, i256, i256, i256, i256, i256, i256, i256, i256, i256, i256, i256, i256, i256, i256, i256, i256, i256, i256, i256};
+type @layout_4 = {};
+type @layout_5 = {@layout_4};
+type @layout_6 = {i256, i256};
+
+global private const @layout_2 $const_region_0 = {0};
+
+func private %__ScaleAbiArgs32_recv_0_0(v0.objref<@__ScaleAbiArgs32_recv_0_0__args>) -> i256 {
+    block0:
+        v2.objref<i256> = obj.proj v0 0.i256;
+        v3.i256 = obj.load v2;
+        v5.objref<i256> = obj.proj v0 1.i256;
+        v6.i256 = obj.load v5;
+        v8.objref<i256> = obj.proj v0 2.i256;
+        v9.i256 = obj.load v8;
+        v11.objref<i256> = obj.proj v0 3.i256;
+        v12.i256 = obj.load v11;
+        v14.objref<i256> = obj.proj v0 4.i256;
+        v15.i256 = obj.load v14;
+        v17.objref<i256> = obj.proj v0 5.i256;
+        v18.i256 = obj.load v17;
+        v20.objref<i256> = obj.proj v0 6.i256;
+        v21.i256 = obj.load v20;
+        v23.objref<i256> = obj.proj v0 7.i256;
+        v24.i256 = obj.load v23;
+        v26.objref<i256> = obj.proj v0 8.i256;
+        v27.i256 = obj.load v26;
+        v29.objref<i256> = obj.proj v0 9.i256;
+        v30.i256 = obj.load v29;
+        v32.objref<i256> = obj.proj v0 10.i256;
+        v33.i256 = obj.load v32;
+        v35.objref<i256> = obj.proj v0 11.i256;
+        v36.i256 = obj.load v35;
+        v38.objref<i256> = obj.proj v0 12.i256;
+        v39.i256 = obj.load v38;
+        v41.objref<i256> = obj.proj v0 13.i256;
+        v42.i256 = obj.load v41;
+        v44.objref<i256> = obj.proj v0 14.i256;
+        v45.i256 = obj.load v44;
+        v47.objref<i256> = obj.proj v0 15.i256;
+        v48.i256 = obj.load v47;
+        v50.objref<i256> = obj.proj v0 16.i256;
+        v51.i256 = obj.load v50;
+        v53.objref<i256> = obj.proj v0 17.i256;
+        v54.i256 = obj.load v53;
+        v56.objref<i256> = obj.proj v0 18.i256;
+        v57.i256 = obj.load v56;
+        v59.objref<i256> = obj.proj v0 19.i256;
+        v60.i256 = obj.load v59;
+        v62.objref<i256> = obj.proj v0 20.i256;
+        v63.i256 = obj.load v62;
+        v65.objref<i256> = obj.proj v0 21.i256;
+        v66.i256 = obj.load v65;
+        v68.objref<i256> = obj.proj v0 22.i256;
+        v69.i256 = obj.load v68;
+        v71.objref<i256> = obj.proj v0 23.i256;
+        v72.i256 = obj.load v71;
+        v74.objref<i256> = obj.proj v0 24.i256;
+        v75.i256 = obj.load v74;
+        v77.objref<i256> = obj.proj v0 25.i256;
+        v78.i256 = obj.load v77;
+        v80.objref<i256> = obj.proj v0 26.i256;
+        v81.i256 = obj.load v80;
+        v83.objref<i256> = obj.proj v0 27.i256;
+        v84.i256 = obj.load v83;
+        v86.objref<i256> = obj.proj v0 28.i256;
+        v87.i256 = obj.load v86;
+        v89.objref<i256> = obj.proj v0 29.i256;
+        v90.i256 = obj.load v89;
+        v92.objref<i256> = obj.proj v0 30.i256;
+        v93.i256 = obj.load v92;
+        v95.objref<i256> = obj.proj v0 31.i256;
+        v96.i256 = obj.load v95;
+        (v99.i256, v100.i1) = uaddo v3 v6;
+        br v100 block2 block3;
+
+    block2:
+        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
+        mstore 4.i256 17.i256 i256;
+        evm_revert 0.i256 36.i256;
+
+    block3:
+        (v104.i256, v105.i1) = uaddo v99 v9;
+        br v105 block2 block4;
+
+    block4:
+        (v107.i256, v108.i1) = uaddo v104 v12;
+        br v108 block2 block5;
+
+    block5:
+        (v110.i256, v111.i1) = uaddo v107 v15;
+        br v111 block2 block6;
+
+    block6:
+        (v113.i256, v114.i1) = uaddo v110 v18;
+        br v114 block2 block7;
+
+    block7:
+        (v116.i256, v117.i1) = uaddo v113 v21;
+        br v117 block2 block8;
+
+    block8:
+        (v119.i256, v120.i1) = uaddo v116 v24;
+        br v120 block2 block9;
+
+    block9:
+        (v122.i256, v123.i1) = uaddo v119 v27;
+        br v123 block2 block10;
+
+    block10:
+        (v125.i256, v126.i1) = uaddo v122 v30;
+        br v126 block2 block11;
+
+    block11:
+        (v128.i256, v129.i1) = uaddo v125 v33;
+        br v129 block2 block12;
+
+    block12:
+        (v131.i256, v132.i1) = uaddo v128 v36;
+        br v132 block2 block13;
+
+    block13:
+        (v134.i256, v135.i1) = uaddo v131 v39;
+        br v135 block2 block14;
+
+    block14:
+        (v137.i256, v138.i1) = uaddo v134 v42;
+        br v138 block2 block15;
+
+    block15:
+        (v140.i256, v141.i1) = uaddo v137 v45;
+        br v141 block2 block16;
+
+    block16:
+        (v143.i256, v144.i1) = uaddo v140 v48;
+        br v144 block2 block17;
+
+    block17:
+        (v146.i256, v147.i1) = uaddo v143 v51;
+        br v147 block2 block18;
+
+    block18:
+        (v149.i256, v150.i1) = uaddo v146 v54;
+        br v150 block2 block19;
+
+    block19:
+        (v152.i256, v153.i1) = uaddo v149 v57;
+        br v153 block2 block20;
+
+    block20:
+        (v155.i256, v156.i1) = uaddo v152 v60;
+        br v156 block2 block21;
+
+    block21:
+        (v158.i256, v159.i1) = uaddo v155 v63;
+        br v159 block2 block22;
+
+    block22:
+        (v161.i256, v162.i1) = uaddo v158 v66;
+        br v162 block2 block23;
+
+    block23:
+        (v164.i256, v165.i1) = uaddo v161 v69;
+        br v165 block2 block24;
+
+    block24:
+        (v167.i256, v168.i1) = uaddo v164 v72;
+        br v168 block2 block25;
+
+    block25:
+        (v170.i256, v171.i1) = uaddo v167 v75;
+        br v171 block2 block26;
+
+    block26:
+        (v173.i256, v174.i1) = uaddo v170 v78;
+        br v174 block2 block27;
+
+    block27:
+        (v176.i256, v177.i1) = uaddo v173 v81;
+        br v177 block2 block28;
+
+    block28:
+        (v179.i256, v180.i1) = uaddo v176 v84;
+        br v180 block2 block29;
+
+    block29:
+        (v182.i256, v183.i1) = uaddo v179 v87;
+        br v183 block2 block30;
+
+    block30:
+        (v185.i256, v186.i1) = uaddo v182 v90;
+        br v186 block2 block31;
+
+    block31:
+        (v188.i256, v189.i1) = uaddo v185 v93;
+        br v189 block2 block32;
+
+    block32:
+        (v191.i256, v192.i1) = uaddo v188 v96;
+        br v192 block2 block33;
+
+    block33:
+        return v191;
+}
+
+func private %contract_init_root_ScaleAbiArgs32() {
+    block0:
+        v5.i256 = evm_call_value;
+        v8.i1 = is_zero v5;
+        br v8 block2 block5;
+
+    block5:
+        evm_revert 0.i256 0.i256;
+
+    block2:
+        v2.i256 = sym_addr &ScaleAbiArgs32_runtime;
+        v3.i256 = sym_size &ScaleAbiArgs32_runtime;
+        evm_code_copy 0.i256 v2 v3;
+        evm_return 0.i256 v3;
+}
+
+func private %contract_runtime_root_ScaleAbiArgs32() {
+    block0:
+        v1.i256 = evm_calldata_size;
+        v2.i1 = lt v1 4.i256;
+        br v2 block3 block2;
+
+    block2:
+        v4.i256 = evm_calldata_load 0.i256;
+        v6.i256 = shr 224.i256 v4;
+        v7.i32 = trunc v6 i32;
+        br_table v7 block3 (315382844.i32 block7);
+
+    block3:
+        evm_revert 0.i256 0.i256;
+
+    block7:
+        v9.i256 = evm_call_value;
+        v1929.i1 = is_zero v9;
+        br v1929 block9 block8;
+
+    block8:
+        evm_revert 0.i256 0.i256;
+
+    block9:
+        v15.i256 = evm_calldata_size;
+        v29.i256 = sub v15 4.i256;
+        v30.i1 = slt v29 1024.i256;
+        br v30 block31 block39;
+
+    block31:
+        evm_revert 0.i256 0.i256;
+
+    block39:
+        v61.i256 = evm_calldata_load 4.i256;
+        v88.i256 = evm_calldata_load 36.i256;
+        v116.i256 = evm_calldata_load 68.i256;
+        v146.i256 = evm_calldata_load 100.i256;
+        v178.i256 = evm_calldata_load 132.i256;
+        v212.i256 = evm_calldata_load 164.i256;
+        v248.i256 = evm_calldata_load 196.i256;
+        v286.i256 = evm_calldata_load 228.i256;
+        v326.i256 = evm_calldata_load 260.i256;
+        v368.i256 = evm_calldata_load 292.i256;
+        v412.i256 = evm_calldata_load 324.i256;
+        v458.i256 = evm_calldata_load 356.i256;
+        v506.i256 = evm_calldata_load 388.i256;
+        v556.i256 = evm_calldata_load 420.i256;
+        v608.i256 = evm_calldata_load 452.i256;
+        v662.i256 = evm_calldata_load 484.i256;
+        v718.i256 = evm_calldata_load 516.i256;
+        v776.i256 = evm_calldata_load 548.i256;
+        v836.i256 = evm_calldata_load 580.i256;
+        v898.i256 = evm_calldata_load 612.i256;
+        v962.i256 = evm_calldata_load 644.i256;
+        v1028.i256 = evm_calldata_load 676.i256;
+        v1096.i256 = evm_calldata_load 708.i256;
+        v1166.i256 = evm_calldata_load 740.i256;
+        v1238.i256 = evm_calldata_load 772.i256;
+        v1312.i256 = evm_calldata_load 804.i256;
+        v1388.i256 = evm_calldata_load 836.i256;
+        v1466.i256 = evm_calldata_load 868.i256;
+        v1546.i256 = evm_calldata_load 900.i256;
+        v1628.i256 = evm_calldata_load 932.i256;
+        v1712.i256 = evm_calldata_load 964.i256;
+        v1798.i256 = evm_calldata_load 996.i256;
+        v1895.objref<@__ScaleAbiArgs32_recv_0_0__args> = obj.alloc @__ScaleAbiArgs32_recv_0_0__args;
+        v1896.objref<i256> = obj.proj v1895 0.i256;
+        obj.store v1896 v61;
+        v1897.objref<i256> = obj.proj v1895 1.i256;
+        obj.store v1897 v88;
+        v1898.objref<i256> = obj.proj v1895 2.i256;
+        obj.store v1898 v116;
+        v1899.objref<i256> = obj.proj v1895 3.i256;
+        obj.store v1899 v146;
+        v1900.objref<i256> = obj.proj v1895 4.i256;
+        obj.store v1900 v178;
+        v1901.objref<i256> = obj.proj v1895 5.i256;
+        obj.store v1901 v212;
+        v1902.objref<i256> = obj.proj v1895 6.i256;
+        obj.store v1902 v248;
+        v1903.objref<i256> = obj.proj v1895 7.i256;
+        obj.store v1903 v286;
+        v1904.objref<i256> = obj.proj v1895 8.i256;
+        obj.store v1904 v326;
+        v1905.objref<i256> = obj.proj v1895 9.i256;
+        obj.store v1905 v368;
+        v1906.objref<i256> = obj.proj v1895 10.i256;
+        obj.store v1906 v412;
+        v1907.objref<i256> = obj.proj v1895 11.i256;
+        obj.store v1907 v458;
+        v1908.objref<i256> = obj.proj v1895 12.i256;
+        obj.store v1908 v506;
+        v1909.objref<i256> = obj.proj v1895 13.i256;
+        obj.store v1909 v556;
+        v1910.objref<i256> = obj.proj v1895 14.i256;
+        obj.store v1910 v608;
+        v1911.objref<i256> = obj.proj v1895 15.i256;
+        obj.store v1911 v662;
+        v1912.objref<i256> = obj.proj v1895 16.i256;
+        obj.store v1912 v718;
+        v1913.objref<i256> = obj.proj v1895 17.i256;
+        obj.store v1913 v776;
+        v1914.objref<i256> = obj.proj v1895 18.i256;
+        obj.store v1914 v836;
+        v1915.objref<i256> = obj.proj v1895 19.i256;
+        obj.store v1915 v898;
+        v1916.objref<i256> = obj.proj v1895 20.i256;
+        obj.store v1916 v962;
+        v1917.objref<i256> = obj.proj v1895 21.i256;
+        obj.store v1917 v1028;
+        v1918.objref<i256> = obj.proj v1895 22.i256;
+        obj.store v1918 v1096;
+        v1919.objref<i256> = obj.proj v1895 23.i256;
+        obj.store v1919 v1166;
+        v1920.objref<i256> = obj.proj v1895 24.i256;
+        obj.store v1920 v1238;
+        v1921.objref<i256> = obj.proj v1895 25.i256;
+        obj.store v1921 v1312;
+        v1922.objref<i256> = obj.proj v1895 26.i256;
+        obj.store v1922 v1388;
+        v1923.objref<i256> = obj.proj v1895 27.i256;
+        obj.store v1923 v1466;
+        v1924.objref<i256> = obj.proj v1895 28.i256;
+        obj.store v1924 v1546;
+        v1925.objref<i256> = obj.proj v1895 29.i256;
+        obj.store v1925 v1628;
+        v1926.objref<i256> = obj.proj v1895 30.i256;
+        obj.store v1926 v1712;
+        v1927.objref<i256> = obj.proj v1895 31.i256;
+        obj.store v1927 v1798;
+        v1928.i256 = call %__ScaleAbiArgs32_recv_0_0 v1895;
+        v2462.*i8 = evm_malloc 32.i256;
+        v2463.i256 = ptr_to_int v2462 i256;
+        mstore v2463 v1928 i256;
+        evm_return v2463 32.i256;
+}
+
+
+object @Contract {
+    section init {
+        entry %contract_init_root_ScaleAbiArgs32;
+        embed .runtime as &ScaleAbiArgs32_runtime;
+    }
+    section runtime {
+        entry %contract_runtime_root_ScaleAbiArgs32;
+        data $const_region_0;
+    }
+}
