@@ -23,8 +23,8 @@ global private const [i256; 285] $const_region_3 = [7511745149465107256748700652
 
 func private %contract_init_root_PoseidonBench() {
     block0:
-        v3.i256 = evm_call_value;
-        v4.i1 = is_zero v3;
+        v7.i256 = evm_call_value;
+        v4.i1 = is_zero v7;
         br v4 block2 block4;
 
     block4:

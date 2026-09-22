@@ -286,11 +286,11 @@ entry:
     SWAP1
     POP
     JUMPDEST
-    SWAP1  // v45.i256 = and v46 v43;
+    SWAP1  // v66.i256 = and v46 v43;
     POP
     PUSH1 0xff (255)
     AND
-    PUSH1 0x80 (128)  // v47.i256 = eq v45 128.i256;
+    PUSH1 0x80 (128)  // v47.i256 = eq v66 128.i256;
     EQ
     PUSH1 block30  // br v47 block52 block53;
     JUMPI

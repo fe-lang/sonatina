@@ -151,13 +151,13 @@ func private %mix(v0.objref<[i256; 3]>) -> objref<[i256; 3]> {
 
 func private %poseidon_mock(v0.i256, v1.i256) -> i256 {
     block0:
-        v55.i256 = evm_umod v0 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
-        v57.i256 = evm_umod v1 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
+        v64.i256 = evm_umod v0 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
+        v65.i256 = evm_umod v1 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
         v9.objref<[i256; 3]> = obj.alloc [i256; 3];
         v11.objref<i256> = obj.index v9 0.i256;
-        obj.store v11 v55;
+        obj.store v11 v64;
         v13.objref<i256> = obj.index v9 1.i256;
-        obj.store v13 v57;
+        obj.store v13 v65;
         v15.objref<i256> = obj.index v9 2.i256;
         obj.store v15 0.i256;
         jump block1;

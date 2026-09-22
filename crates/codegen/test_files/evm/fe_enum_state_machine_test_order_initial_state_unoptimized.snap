@@ -43,32 +43,32 @@ test_order_initial_state__StorPtr_Evm___207f35a85ac4062e:
     PUSH0 0x0 (0)  // v3.i256 = sym_addr &__Order_init;
     PUSH1 0x40 (64)  // v6.i256 = evm_mload v5;
     MLOAD
-    PUSH1 0xff (255)  // v6.i256 = gt v6 v8;
+    PUSH1 0xff (255)  // v59.i256 = gt v6 v8;
     DUP2
     GT
-    PUSH1 block27  // br v6 block37 block26;
+    PUSH1 block27  // br v59 block37 block26;
     JUMPI
   block26:
     POP  // jump block27;
     PUSH2 0x100 (256)
   block27:
     JUMPDEST
-    DUP3  // evm_code_copy v7 v3 v2;
+    DUP3  // evm_code_copy v60 v3 v2;
     SWAP1
     SWAP2
     DUP3
     CODECOPY
-    DUP2  // v8.i256 = add v7 v2;
+    DUP2  // v61.i256 = add v60 v2;
     DUP2
     ADD
-    DUP2  // v9.i256 = lt v8 v7;
+    DUP2  // v9.i256 = lt v61 v60;
     SWAP1
     LT
     PUSH1 __evm_shared_tail_0  // br v9 block2 block3;
     JUMPI
   block3:
     JUMPDEST
-    PUSH0  // v11.i256 = evm_create2 0.i256 v7 v2 0.i256;
+    PUSH0  // v11.i256 = evm_create2 0.i256 v60 v2 0.i256;
     SWAP2
     SWAP1
     PUSH0
@@ -284,9 +284,9 @@ solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head:
     PUSH1 0x1f (31)  // v17.i256 = and v19 v20;
     NOT
     AND
-    DUP2  // v14.i256 = add v13 v17;
+    DUP2  // v23.i256 = add v13 v17;
     ADD
-    PUSH1 0x40 (64)  // evm_mstore v5 v14;
+    PUSH1 0x40 (64)  // evm_mstore v5 v23;
     MSTORE
     DUP1  // evm_mstore v0 v13;
     DUP3
@@ -297,20 +297,20 @@ solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head:
     DUP2  // evm_mstore v16 v13;
     SWAP1
     MSTORE
-    SWAP2  // v17.i256 = add v13 v1;
+    SWAP2  // v24.i256 = add v13 v1;
     DUP3
     ADD
-    SWAP2  // v18.i256 = lt v17 v13;
+    SWAP2  // v18.i256 = lt v24 v13;
     DUP3
     LT
     PUSH1 __evm_shared_tail_0  // br v18 block4 block5;
     JUMPI
   block5:
     JUMPDEST
-    PUSH1 0x40 (64)  // v20.i256 = add v0 v5;
+    PUSH1 0x40 (64)  // v25.i256 = add v0 v5;
     DUP2
     ADD
-    SWAP1  // evm_mstore v20 v17;
+    SWAP1  // evm_mstore v25 v24;
     SWAP2
     SWAP1
     MSTORE
@@ -351,11 +351,11 @@ __Order_runtime:
     PUSH1 block3  // br v7 block1 block2;
     JUMPI
   block2:
-    PUSH0  // v9.i256 = evm_calldata_load 0.i256;
+    PUSH0  // v21.i256 = evm_calldata_load 0.i256;
     CALLDATALOAD
-    PUSH1 0xe0 (224)  // v11.i256 = shr 224.i256 v9;
+    PUSH1 0xe0 (224)  // v22.i256 = shr 224.i256 v21;
     SHR
-    PUSH1 0x1 (1)  // br_table v11 block3 (1.i256 block4) (2.i256 block8) (3.i256 block12) (v17 block16) (5.i256 block21);
+    PUSH1 0x1 (1)  // br_table v22 block3 (1.i256 block4) (2.i256 block8) (3.i256 block12) (v17 block16) (5.i256 block21);
     DUP2
     EQ
     PUSH1 block4
@@ -417,10 +417,10 @@ __Order_runtime:
     INVALID  // unreachable;
   block8:
     JUMPDEST
-    POP  // v17.i256 = evm_sload 0.i256;
+    POP  // v23.i256 = evm_sload 0.i256;
     PUSH0
     SLOAD
-    PUSH1 0x1 (1)  // br_table v17 block30 (1.i256 block9);
+    PUSH1 0x1 (1)  // br_table v23 block30 (1.i256 block9);
     DUP2
     EQ
     PUSH1 block9

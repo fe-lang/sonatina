@@ -1,5 +1,6 @@
-use std::io;
+use std::{borrow::Cow, io};
 
+use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::{Array, SmallVec};
 
 use super::{BlockId, Function};
@@ -122,7 +123,7 @@ impl<'a> ModuleWriter<'a> {
 pub struct FuncWriteCtx<'a> {
     pub func: &'a Function,
     pub func_ref: FuncRef,
-    pub dbg: &'a dyn DebugProvider,
+    value_names: FxHashMap<ValueId, Cow<'a, str>>,
 }
 
 impl AsRef<ModuleCtx> for FuncWriteCtx<'_> {
@@ -137,10 +138,43 @@ impl<'a> FuncWriteCtx<'a> {
         func_ref: FuncRef,
         dbg: &'a dyn DebugProvider,
     ) -> Self {
+        let mut value_names = FxHashMap::default();
+        let mut reserved = FxHashSet::default();
+        // Reserve preferred names first, including names of later definitions.
+        for value in func.dfg.value_ids() {
+            if let Some(name) = dbg.value_name(func, func_ref, value)
+                && reserved.insert(Cow::Borrowed(name))
+            {
+                value_names.insert(value, Cow::Borrowed(name));
+            }
+        }
+
+        if !reserved.is_empty() {
+            // Fresh names start above every default v<id>, so resolving one
+            // collision cannot steal another unnamed value's default name.
+            let mut next_name = func.dfg.num_values();
+            for (value, data) in func.dfg.values_iter() {
+                if !matches!(data, Value::Arg { .. } | Value::Inst { .. })
+                    || value_names.contains_key(&value)
+                    || !reserved.contains(format!("v{}", value.as_u32()).as_str())
+                {
+                    continue;
+                }
+                let name = loop {
+                    let name = format!("v{next_name}");
+                    next_name += 1;
+                    if reserved.insert(Cow::Owned(name.clone())) {
+                        break name;
+                    }
+                };
+                value_names.insert(value, Cow::Owned(name));
+            }
+        }
+
         Self {
             func,
             func_ref,
-            dbg,
+            value_names,
         }
     }
 
@@ -154,6 +188,10 @@ impl<'a> FuncWriteCtx<'a> {
 
     pub fn module_ctx(&self) -> &ModuleCtx {
         self.func.ctx()
+    }
+
+    pub(crate) fn value_name(&self, value: ValueId) -> Option<&str> {
+        self.value_names.get(&value).map(|name| name.as_ref())
     }
 }
 
@@ -493,6 +531,8 @@ impl IrWrite<FuncWriteCtx<'_>> for InstStatement {
 }
 
 pub trait DebugProvider {
+    /// A preferred value name, using the IR's value-name syntax.
+    /// The writer disambiguates collisions per function.
     #[allow(unused)]
     fn value_name(&self, func: &Function, func_ref: FuncRef, value: ValueId) -> Option<&str> {
         None

@@ -69,10 +69,10 @@ test_view_param_local_ref_take_reverse:
     PUSH1 0x5 (5)  // evm_mstore v35 5.i256;
     SWAP1
     MSTORE
-    PUSH1 0xa0 (160)  // v26.i256 = add v18 160.i256;
+    PUSH1 0xa0 (160)  // v62.i256 = add v18 160.i256;
     DUP2
     ADD
-    PUSH1 0x6 (6)  // evm_mstore v26 6.i256;
+    PUSH1 0x6 (6)  // evm_mstore v62 6.i256;
     SWAP1
     MSTORE
     PUSH1 0xc0 (192)  // v29.i256 = add v18 192.i256;
@@ -81,20 +81,20 @@ test_view_param_local_ref_take_reverse:
     PUSH1 0x7 (7)  // evm_mstore v29 7.i256;
     SWAP1
     MSTORE
-    PUSH1 0xe0 (224)  // v32.i256 = add v18 224.i256;
+    PUSH1 0xe0 (224)  // v63.i256 = add v18 224.i256;
     DUP2
     ADD
-    PUSH1 0x8 (8)  // evm_mstore v32 8.i256;
+    PUSH1 0x8 (8)  // evm_mstore v63 8.i256;
     DUP2
     MSTORE
-    PUSH1 0x40 (64)  // v34.i256 = evm_mload v11;
+    PUSH1 0x40 (64)  // v64.i256 = evm_mload v11;
     MLOAD
-    PUSH1 0x4 (4)  // evm_mstore v34 v32;
+    PUSH1 0x4 (4)  // evm_mstore v64 v32;
     DUP2
     MSTORE
-    PUSH1 0x20 (32)  // v35.i256 = add v34 v24;
+    PUSH1 0x20 (32)  // v65.i256 = add v64 v24;
     ADD
-    DUP3  // evm_mstore v35 v18;
+    DUP3  // evm_mstore v65 v18;
     SWAP1
     MSTORE
     PUSH0  // jump block1;

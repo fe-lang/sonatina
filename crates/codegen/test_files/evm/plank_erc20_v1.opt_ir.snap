@@ -48,8 +48,8 @@ func public %run() {
 
     block2:
         v7.i256 = evm_calldata_load 4.i256;
-        v29.i256 = shr 160.i256 v7;
-        v42.i1 = is_zero v29;
+        v46.i256 = shr 160.i256 v7;
+        v42.i1 = is_zero v46;
         br v42 block10 block13;
 
     block13:
@@ -58,10 +58,10 @@ func public %run() {
     block10:
         v10.i256 = evm_calldata_load 36.i256;
         v11.i256 = evm_caller;
-        v31.*i8 = evm_malloc 32.i256;
-        v32.i256 = ptr_to_int v31 i256;
-        mstore v32 v11 i256;
-        v33.i256 = evm_keccak256 v32 32.i256;
+        v47.*i8 = evm_malloc 32.i256;
+        v48.i256 = ptr_to_int v47 i256;
+        mstore v48 v11 i256;
+        v33.i256 = evm_keccak256 v48 32.i256;
         v13.i256 = evm_sload v33;
         v14.i1 = lt v13 v10;
         br v14 block5 block6;

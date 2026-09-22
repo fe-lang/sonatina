@@ -21,7 +21,7 @@ impl IrWrite<FuncWriteCtx<'_>> for ValueId {
     where
         W: io::Write,
     {
-        if let Some(name) = ctx.dbg.value_name(ctx.func, ctx.func_ref, *self) {
+        if let Some(name) = ctx.value_name(*self) {
             write!(w, "{name}")
         } else {
             match ctx.func.dfg.value(*self) {

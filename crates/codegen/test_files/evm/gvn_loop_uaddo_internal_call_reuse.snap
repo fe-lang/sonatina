@@ -345,10 +345,10 @@ entry:
   block7:
     PUSH1 0x40 (64)  // v29.i256 = evm_mload v3;
     MLOAD
-    PUSH2 0x21f (543)  // v30.i256 = gt v29 v6;
+    PUSH2 0x21f (543)  // v45.i256 = gt v29 v6;
     DUP2
     GT
-    PUSH1 block20  // br v30 block27 block19;
+    PUSH1 block20  // br v45 block27 block19;
     JUMPI
   block19:
     POP  // jump block20;
@@ -399,8 +399,8 @@ entry:
     PUSH1 block13
     JUMPI
   block10:
-    MLOAD  // v41.i256 = evm_mload v44;
-    PUSH0  // evm_mstore v11 v41;
+    MLOAD  // v46.i256 = evm_mload v44;
+    PUSH0  // evm_mstore v11 v46;
     MSTORE
     PUSH1 0x6 (6)  // v43.i256 = add v0 6.i256;
     ADD

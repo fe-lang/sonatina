@@ -268,7 +268,7 @@ entry:
     DUP1
     PUSH2 0x940 (2368)
     MSTORE
-    PUSH2 0x100 (256)  // v131.i256 = evm_mload v23;
+    PUSH2 0x100 (256)  // v223.i256 = evm_mload v23;
     MLOAD
     DUP1
     PUSH2 0x960 (2400)
@@ -395,7 +395,7 @@ entry:
     MLOAD
     PUSH2 0x4e0 (1248)
     MSTORE
-    PUSH2 0x960 (2400)  // evm_mstore 1280.i256 v131;
+    PUSH2 0x960 (2400)  // evm_mstore 1280.i256 v223;
     MLOAD
     PUSH2 0x500 (1280)
     MSTORE
