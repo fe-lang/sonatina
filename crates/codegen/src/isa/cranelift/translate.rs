@@ -1400,15 +1400,38 @@ fn translate_function(
                         continue;
                     };
                     let result_ty = function.dfg.value_ty(result);
-                    let result_addr =
-                        create_stack_slot_for_type(result_ty, &module.ctx, &mut builder)?;
-                    let source = resolve_value(function, *insert.dest(), &value_map, &mut builder)?;
-                    copy_bytes(
-                        source,
-                        result_addr,
-                        value_storage_size(result_ty, &module.ctx)?,
-                        &mut builder,
-                    );
+                    let source_value = *insert.dest();
+                    let source = resolve_value(function, source_value, &value_map, &mut builder)?;
+                    // An insert result owns its storage. Its sole consumer can
+                    // continue construction in that storage without changing an
+                    // observable SSA snapshot. Stay in the same block: a use in
+                    // a nested loop can execute repeatedly for one definition.
+                    // Other sources (including extracted views and arguments)
+                    // do not carry this ownership guarantee.
+                    let reuse = function
+                        .dfg
+                        .value_inst(source_value)
+                        .is_some_and(|source_inst| {
+                            function.layout.inst_block(source_inst) == block
+                                && function.dfg.users(source_value).copied().eq([inst_id])
+                                && matches!(
+                                    native_inst_set().resolve_inst(function.dfg.inst(source_inst)),
+                                    NativeInstKind::InsertValue(_)
+                                )
+                        });
+                    let result_addr = if reuse {
+                        source
+                    } else {
+                        let address =
+                            create_stack_slot_for_type(result_ty, &module.ctx, &mut builder)?;
+                        copy_bytes(
+                            source,
+                            address,
+                            value_storage_size(result_ty, &module.ctx)?,
+                            &mut builder,
+                        );
+                        address
+                    };
 
                     let idx = constant_value_index(function, *insert.idx(), "insert_value")?;
                     let (offset, elem_ty) = aggregate_elem_offset(&module.ctx, result_ty, idx)?;

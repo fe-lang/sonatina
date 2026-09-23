@@ -121,6 +121,69 @@ fn wide_division_stays_within_text_budget() {
     }
 }
 
+#[test]
+fn aggregate_construction_has_linear_code_size_and_executes_large_arrays() {
+    for length in [64, 4096] {
+        let inserts = (0..length)
+            .map(|index| {
+                let source = if index == 0 {
+                    format!("undef.[i8; {length}]")
+                } else {
+                    format!("v{}", index * 2 + 1)
+                };
+                format!(
+                    "v{}.i8 = add v1 {}.i8;\nv{}.[i8; {length}] = insert_value {source} {index}.i64 v{};\n",
+                    index * 2 + 2, index % 251, index * 2 + 3, index * 2 + 2,
+                )
+            })
+            .collect::<String>();
+        let triple = native_isa(host_architecture()).triple();
+        let last = length * 2 + 1;
+        let source = format!(
+            "target = \"{triple}\"\nfunc public %construct(v0.*[i8; {length}], v1.i8) {{\nblock0:\n{inserts}mstore v0 v{last} [i8; {length}];\nreturn;\n}}"
+        );
+        for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2] {
+            let module = sonatina_parser::parse_module(&source).unwrap().module;
+            let report =
+                verify_module(&module, &VerifierConfig::for_level(VerificationLevel::Full));
+            assert!(!report.has_errors(), "{report}");
+            let artifact = Compile::new(
+                module.clone_for_funcs(&module.funcs()),
+                CraneliftObjectBackend::new(),
+            )
+            .with_opt_level(level)
+            .compile()
+            .unwrap();
+            let object = object::File::parse(artifact.as_bytes()).unwrap();
+            let text_size: u64 = object
+                .sections()
+                .filter(|section| section.kind() == object::SectionKind::Text)
+                .map(|section| section.size())
+                .sum();
+            assert!(
+                text_size > 0 && text_size < length * 64 + 4096,
+                "{length}-byte construction at {level:?} emitted {text_size} text bytes"
+            );
+            #[cfg(feature = "cranelift-jit")]
+            {
+                let artifact = Compile::new(module, CraneliftJitBackend::new())
+                    .with_opt_level(level)
+                    .compile()
+                    .unwrap();
+                let construct: unsafe extern "C" fn(*mut u8, u8) =
+                    unsafe { std::mem::transmute(artifact.function_address("construct").unwrap()) };
+                for seed in [0u8, 1, 127, 255] {
+                    let mut output = vec![0xa5; length as usize];
+                    unsafe { construct(output.as_mut_ptr(), seed) };
+                    for (index, byte) in output.into_iter().enumerate() {
+                        assert_eq!(byte, seed.wrapping_add((index % 251) as u8));
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[cfg(feature = "cranelift-jit")]
 #[test]
 #[ignore = "manual release-profile compile/runtime measurement; run with --release --ignored --nocapture"]
