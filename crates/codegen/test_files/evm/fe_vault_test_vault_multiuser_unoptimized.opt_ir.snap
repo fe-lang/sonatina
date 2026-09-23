@@ -537,10 +537,6 @@ func private %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_s
 
 func private %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__ProxyWithdraw_h1ed1c85115544221__ae5519407fcbbd72(v0.i256, v1.i256, v2.i256, v3.objref<@__fe_obj_ProxyWithdraw_1>) -> i256 {
     block0:
-        v77.objref<i256> = obj.proj v3 1.i256;
-        v78.i256 = obj.load v77;
-        v75.objref<i256> = obj.proj v3 0.i256;
-        v76.i256 = obj.load v75;
         v22.objref<@__fe_obj_SolEncoder_5> = call %solencoder_h1b9228b90dad6928_new;
         v23.i256 = call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head v22 68.i256;
         mstore v23 458319093341560876509339256479333721451831455183189732178761374236672.i256 i256;
@@ -551,17 +547,21 @@ func private %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_s
         evm_revert 0.i256 0.i256;
 
     block7:
-        mstore v27 v76 i256;
-        (v63.i256, v64.i1) = uaddo v27 32.i256;
-        br v64 block14 block15;
+        v30.objref<i256> = obj.proj v3 0.i256;
+        v31.i256 = obj.load v30;
+        mstore v27 v31 i256;
+        (v55.i256, v56.i1) = uaddo v27 32.i256;
+        br v56 block14 block15;
 
     block14:
         evm_revert 0.i256 0.i256;
 
     block15:
-        mstore v63 v78 i256;
-        (v67.i256, v68.i1) = uaddo v63 32.i256;
-        br v68 block18 block19;
+        v32.objref<i256> = obj.proj v3 1.i256;
+        v33.i256 = obj.load v32;
+        mstore v55 v33 i256;
+        (v59.i256, v60.i1) = uaddo v55 32.i256;
+        br v60 block18 block19;
 
     block18:
         evm_revert 0.i256 0.i256;
@@ -590,15 +590,15 @@ func private %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_s
         evm_revert v16 v14;
 
     block21:
-        v81.i1 = lt v14 32.i256;
-        br v81 block22 block23;
+        v61.i1 = lt v14 32.i256;
+        br v61 block22 block23;
 
     block22:
         evm_revert 0.i256 0.i256;
 
     block23:
-        v82.i256 = mload v16 i256;
-        return v82;
+        v62.i256 = mload v16 i256;
+        return v62;
 }
 
 func private %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f(v0.i256) {

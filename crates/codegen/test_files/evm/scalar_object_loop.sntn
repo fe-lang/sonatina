@@ -1,0 +1,58 @@
+#! evm.config: { opt: 2 }
+#! evm.case: empty
+#!   calldata: u256(0) u256(7)
+#!   expect: return u256(7)
+#! evm.case: one
+#!   calldata: u256(1) u256(7)
+#!   expect: return u256(7)
+#! evm.case: two
+#!   calldata: u256(2) u256(7)
+#!   expect: return u256(8)
+#! evm.case: sixteen
+#!   calldata: u256(16) u256(0)
+#!   expect: return u256(120)
+#! evm.case: sixty_four
+#!   calldata: u256(64) u256(0)
+#!   expect: return u256(2016)
+#! evm.case: maximum_without_overflow
+#!   calldata: u256(1) u256(115792089237316195423570985008687907853269984665640564039457584007913129639935)
+#!   expect: return u256(115792089237316195423570985008687907853269984665640564039457584007913129639935)
+#! evm.case: overflow
+#!   calldata: u256(2) u256(115792089237316195423570985008687907853269984665640564039457584007913129639935)
+#!   expect: revert
+
+target = "evm-ethereum-osaka"
+
+# A nonescaping scalar accumulator must stay in SSA across the checked loop.
+func public %entry() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i256;
+        v1.i256 = evm_calldata_load 32.i256;
+        v2.objref<i256> = obj.alloc i256;
+        obj.store v2 v1;
+        jump block1;
+    block1:
+        v3.i256 = phi (0.i256 block0) (v8 block3);
+        v4.i1 = lt v3 v0;
+        br v4 block2 block4;
+    block2:
+        v5.i256 = obj.load v2;
+        (v6.i256, v7.i1) = uaddo v5 v3;
+        br v7 block5 block3;
+    block3:
+        obj.store v2 v6;
+        v8.i256 = add v3 1.i256;
+        jump block1;
+    block4:
+        v9.i256 = obj.load v2;
+        mstore 0.i256 v9 i256;
+        evm_return 0.i256 32.i256;
+    block5:
+        evm_revert 0.i256 0.i256;
+}
+
+object @Contract {
+    section runtime {
+        entry %entry;
+    }
+}

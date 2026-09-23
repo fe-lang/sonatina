@@ -11,6 +11,7 @@ pub(crate) mod object;
 pub(crate) mod object_abi;
 mod object_access;
 mod object_alias;
+pub(crate) mod object_arg_invariance;
 pub(crate) mod object_effects;
 mod object_facts;
 mod object_initialization;

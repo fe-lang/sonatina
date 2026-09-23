@@ -299,6 +299,34 @@ impl ObjectMemoryAnalysis {
         self.read_states.get(&inst).copied()
     }
 
+    pub(crate) fn slice_initialized_before_inst(
+        &self,
+        func: &Function,
+        inst: InstId,
+        slice: ObjectSlice,
+    ) -> bool {
+        self.inst_pre_states
+            .get(&inst)
+            .is_some_and(|state| slice_initialization(func, state, slice).defined(func.ctx()))
+    }
+
+    /// A must-entry proof for this exact read, not equality with another load.
+    /// The ordinary mode never replaces a read's entry token with its SSA value.
+    /// Writes and disagreeing reachable predecessors lose that token permanently;
+    /// an unvisited loop predecessor is resolved by the enclosing fixed point.
+    pub(crate) fn read_observes_entry_contents(&self, inst: InstId, expected: ObjectSlice) -> bool {
+        !self.promote_loaded_values
+            && self.read_states.get(&inst).is_some_and(|read| {
+                read.read_slice == expected
+                    && matches!(read.key, ObjectReadGvnKey::Memory {
+                        token: ObjectMemToken::LiveIn { root }, carrier_slice, ..
+                    } if root == expected.root && carrier_slice.root == root
+                        && carrier_slice.first_leaf <= expected.first_leaf
+                        && expected.first_leaf + expected.leaf_count
+                            <= carrier_slice.first_leaf + carrier_slice.leaf_count)
+            })
+    }
+
     pub(crate) fn value_matches_current_object_slice_before_inst(
         &self,
         inst: InstId,
@@ -964,7 +992,7 @@ mod tests {
             collect_local_object_arg_info_with_effects, compute_object_effect_summaries,
         },
     };
-    use sonatina_ir::{Module, module::FuncRef};
+    use sonatina_ir::{Module, Type, module::FuncRef};
     use sonatina_parser::parse_module;
     use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module};
 
@@ -1102,6 +1130,123 @@ block0:
                 .collect();
             check(func, &memory, &loads);
         });
+    }
+
+    #[test]
+    fn entry_contents_proof_is_per_read_and_never_restored_by_a_store() {
+        for (effect, after_is_entry) in [
+            ("", true),
+            ("call %readonly v1;", true),
+            ("obj.store v1 22.i256;", false),
+            ("call %write v1;", false),
+            ("call %opaque;", false),
+            ("mstore 0.i256 22.i256 i256;", false),
+            ("obj.store v0 v2;", false),
+        ] {
+            check_memory(
+                &format!(
+                    r#"
+target = "evm-ethereum-osaka"
+declare external %opaque();
+func private %readonly(v0.objref<i256>) {{
+block0:
+    v1.i256 = obj.load v0;
+    return;
+}}
+func private %write(v0.objref<i256>) {{
+block0:
+    obj.store v0 22.i256;
+    return;
+}}
+func private %f(v0.objref<i256>, v1.objref<i256>) -> i256 {{
+block0:
+    v2.i256 = obj.load v0;
+    {effect}
+    v3.i256 = obj.load v0;
+    return v3;
+}}
+"#
+                ),
+                &[0],
+                |func, memory, loads| {
+                    let expected = ObjectSlice {
+                        root: func.arg_values[0],
+                        ty: Type::I256,
+                        first_leaf: 0,
+                        leaf_count: 1,
+                        total_leaves: 1,
+                    };
+                    assert!(
+                        memory.read_observes_entry_contents(loads[0], expected),
+                        "{effect}"
+                    );
+                    assert_eq!(
+                        memory.read_observes_entry_contents(loads[1], expected),
+                        after_is_entry,
+                        "{effect}"
+                    );
+                    assert!(!memory.read_observes_entry_contents(
+                        loads[0],
+                        ObjectSlice {
+                            root: func.arg_values[1],
+                            ..expected
+                        }
+                    ));
+                },
+            );
+        }
+    }
+
+    #[test]
+    fn entry_contents_proof_intersects_loop_backedges_and_diamond_paths() {
+        for (looping, write) in [(false, false), (false, true), (true, false), (true, true)] {
+            let effect = if write { "obj.store v1 22.i256;" } else { "" };
+            let edge = if looping {
+                "jump block1;"
+            } else {
+                "jump block3;"
+            };
+            check_memory(
+                &format!(
+                    r#"
+target = "evm-ethereum-osaka"
+func private %f(v0.objref<i256>, v1.objref<i256>, v2.i1) -> i256 {{
+block0:
+    v3.i256 = obj.load v0;
+    jump block1;
+block1:
+    v4.i256 = obj.load v0;
+    br v2 block2 block3;
+block2:
+    {effect}
+    {edge}
+block3:
+    v5.i256 = obj.load v0;
+    return v5;
+}}
+"#
+                ),
+                &[0],
+                |func, memory, loads| {
+                    let expected = ObjectSlice {
+                        root: func.arg_values[0],
+                        ty: Type::I256,
+                        first_leaf: 0,
+                        leaf_count: 1,
+                        total_leaves: 1,
+                    };
+                    let actual: Vec<_> = loads
+                        .iter()
+                        .map(|&load| memory.read_observes_entry_contents(load, expected))
+                        .collect();
+                    assert_eq!(
+                        actual,
+                        vec![true, !(looping && write), !write],
+                        "looping={looping}, write={write}"
+                    );
+                },
+            );
+        }
     }
 
     #[test]

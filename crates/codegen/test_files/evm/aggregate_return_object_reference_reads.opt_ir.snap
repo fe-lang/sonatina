@@ -26,8 +26,8 @@ func inline(never) private %forward(v0.objref<[i256; 2]>, v1.i256) -> @Nested {
 
 func inline(never) private %read(v0.objref<i256>) -> i256 {
     block0:
-        v1.i256 = obj.load v0;
-        return v1;
+        v4.i256 = obj.load v0;
+        return v4;
 }
 
 func inline(never) private %overwrite(v0.objref<i256>) {

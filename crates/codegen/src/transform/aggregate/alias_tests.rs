@@ -603,6 +603,30 @@ block0:
 }
 
 #[test]
+fn t01_scalar_promotion_keeps_read_after_alias_write() {
+    let text = run_pass(
+        r#"
+target = "evm-ethereum-osaka"
+func inline(never) private %f(v0.objref<i256>, v1.objref<i256>) -> i256 {
+block0:
+    obj.store v1 22.i256;
+    v2.i256 = obj.load v0;
+    return v2;
+}
+"#,
+        Pass::AggregateScalarize,
+    );
+    let write = text
+        .find("obj.store")
+        .expect("caller-visible write remains");
+    let read = text.find("obj.load").expect("incoming read remains");
+    assert!(
+        write < read,
+        "I9: alias write must precede the read: {text}"
+    );
+}
+
+#[test]
 fn t03_forwarding_invalidates_other_incoming_root() {
     let text = run_pass(
         r#"
@@ -762,6 +786,28 @@ block0:
         "I12: fresh allocation separation should retain forwarding: {text}"
     );
     assert!(!text.contains("obj.load"), "{text}");
+}
+
+#[test]
+fn p05_read_only_incoming_scalar_still_promotes() {
+    let text = run_pass(
+        r#"
+target = "evm-ethereum-osaka"
+func private %f(v0.objref<i256>) -> i256 {
+block0:
+    v1.i256 = obj.load v0;
+    v2.i256 = obj.load v0;
+    v3.i256 = add v1 v2;
+    return v3;
+}
+"#,
+        Pass::AggregateScalarize,
+    );
+    assert_eq!(
+        text.matches("obj.load").count(),
+        1,
+        "I12: one legal entry load should seed both reads: {text}"
+    );
 }
 
 #[test]
