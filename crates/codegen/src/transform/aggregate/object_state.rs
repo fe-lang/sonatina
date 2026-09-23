@@ -1,39 +1,123 @@
-use rustc_hash::{FxHashMap, FxHashSet};
+use std::{mem, ops::Range};
+
+use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 use sonatina_ir::{ValueId, inst::data, module::ModuleCtx};
 
 use super::object_tracking::{ObjectSlice, enum_tag_object_slice, enum_variant_field_object_slice};
 
-pub(crate) type LiveLeafMap = FxHashMap<ValueId, FxHashSet<usize>>;
+/// Exact demand in root-relative coordinates. Sorted, nonempty intervals never
+/// overlap or touch, so equality is independent of insertion/predecessor order.
+/// Endpoints come only from IR accesses and root extents: space and transfer work
+/// depend on those boundaries, never on the number of leaves in a large array.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct LiveLeaves {
+    ranges: SmallVec<[Range<usize>; 2]>,
+}
+
+impl LiveLeaves {
+    pub(crate) fn ranges(&self) -> &[Range<usize>] {
+        &self.ranges
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.ranges.is_empty()
+    }
+
+    fn insert(&mut self, mut range: Range<usize>) {
+        if range.is_empty() {
+            return;
+        }
+        let first = self.ranges.partition_point(|old| old.end < range.start);
+        let end = self.ranges.partition_point(|old| old.start <= range.end);
+        if first == end {
+            self.ranges.insert(first, range);
+        } else {
+            range.start = range.start.min(self.ranges[first].start);
+            range.end = range.end.max(self.ranges[end - 1].end);
+            self.ranges[first] = range;
+            self.ranges.drain(first + 1..end);
+        }
+    }
+
+    pub(crate) fn remove(&mut self, range: Range<usize>) {
+        if range.is_empty() {
+            return;
+        }
+        let first = self.ranges.partition_point(|old| old.end <= range.start);
+        let end = self.ranges.partition_point(|old| old.start < range.end);
+        if first == end {
+            return;
+        }
+        let start_leaf = self.ranges[first].start;
+        let end_leaf = self.ranges[end - 1].end;
+        self.ranges.drain(first..end);
+        if end_leaf > range.end {
+            self.ranges.insert(first, range.end..end_leaf);
+        }
+        if start_leaf < range.start {
+            self.ranges.insert(first, start_leaf..range.start);
+        }
+    }
+
+    fn overlaps(&self, range: Range<usize>) -> bool {
+        !range.is_empty()
+            && self
+                .ranges
+                .get(self.ranges.partition_point(|old| old.end <= range.start))
+                .is_some_and(|old| old.start < range.end)
+    }
+
+    fn union_with(&mut self, other: &Self) {
+        let previous = mem::take(&mut self.ranges);
+        let mut left = previous.into_iter().peekable();
+        let mut right = other.ranges.iter().cloned().peekable();
+        while let Some(range) = match (left.peek(), right.peek()) {
+            (Some(a), Some(b)) if a.start <= b.start => left.next(),
+            (Some(_), Some(_)) | (None, Some(_)) => right.next(),
+            (Some(_), None) => left.next(),
+            (None, None) => None,
+        } {
+            if let Some(last) = self.ranges.last_mut()
+                && range.start <= last.end
+            {
+                last.end = last.end.max(range.end);
+            } else {
+                self.ranges.push(range);
+            }
+        }
+    }
+}
+
+pub(crate) type LiveLeafMap = FxHashMap<ValueId, LiveLeaves>;
 pub(crate) type ObjectSliceList = SmallVec<[ObjectSlice; 4]>;
 pub(crate) fn union_live_leaf_maps(states: impl Iterator<Item = LiveLeafMap>) -> LiveLeafMap {
     let mut out = LiveLeafMap::default();
     for state in states {
         for (root, leaves) in state {
-            out.entry(root).or_default().extend(leaves);
+            out.entry(root).or_default().union_with(&leaves);
         }
     }
     out
 }
 
 pub(crate) fn mark_root_live(live: &mut LiveLeafMap, root: ValueId, total_leaves: usize) {
-    let entry = live.entry(root).or_default();
-    for leaf in 0..total_leaves {
-        entry.insert(leaf);
+    if total_leaves != 0 {
+        live.entry(root).or_default().insert(0..total_leaves);
     }
 }
 
 pub(crate) fn mark_live_slice(live: &mut LiveLeafMap, slice: ObjectSlice) {
-    let entry = live.entry(slice.root).or_default();
-    for leaf in slice.first_leaf..slice.first_leaf + slice.leaf_count {
-        entry.insert(leaf);
+    if slice.leaf_count != 0 {
+        live.entry(slice.root)
+            .or_default()
+            .insert(slice.first_leaf..slice.first_leaf + slice.leaf_count);
     }
 }
 
 pub(crate) fn slice_has_live_leaf(live: &LiveLeafMap, slice: ObjectSlice) -> bool {
-    live.get(&slice.root).is_some_and(|entry| {
-        (slice.first_leaf..slice.first_leaf + slice.leaf_count).any(|leaf| entry.contains(&leaf))
-    })
+    live.get(&slice.root)
+        .is_some_and(|entry| entry.overlaps(slice.first_leaf..slice.first_leaf + slice.leaf_count))
 }
 
 pub(crate) fn enum_write_variant_slices(
@@ -63,6 +147,8 @@ pub(crate) fn enum_write_variant_slices(
 
 #[cfg(test)]
 mod tests {
+    use std::slice;
+
     use super::*;
     use crate::transform::aggregate::{
         object_access::ObjectAccessFacts,
@@ -83,6 +169,74 @@ mod tests {
             .into_iter()
             .find(|&func_ref| module.ctx.func_sig(func_ref, |sig| sig.name() == name))
             .expect("function should exist")
+    }
+
+    fn leaves_from_mask(mask: u8) -> LiveLeaves {
+        let mut leaves = LiveLeaves::default();
+        for leaf in (0..6).rev().filter(|leaf| mask & (1 << leaf) != 0) {
+            leaves.insert(leaf..leaf + 1);
+        }
+        leaves
+    }
+
+    fn assert_live_mask(leaves: &LiveLeaves, expected: u8) {
+        let actual = (0..6).fold(0, |mask, leaf| {
+            mask | (u8::from(leaves.overlaps(leaf..leaf + 1)) << leaf)
+        });
+        assert_eq!(actual, expected, "{leaves:?}");
+        assert!(leaves.ranges().iter().all(|range| !range.is_empty()));
+        assert!(
+            leaves
+                .ranges()
+                .windows(2)
+                .all(|pair| pair[0].end < pair[1].start),
+            "noncanonical demand: {leaves:?}"
+        );
+        assert_eq!(*leaves, leaves_from_mask(expected));
+    }
+
+    #[test]
+    fn interval_liveness_matches_dense_set_operations() {
+        // Exhaust every small set and range, including empty/touching ranges,
+        // split subtraction, and overlapping or differently ordered unions.
+        for mask in 0..64 {
+            let leaves = leaves_from_mask(mask);
+            for start in 0..=6 {
+                for end in start..=6 {
+                    let range_mask = (start..end).fold(0, |mask, leaf| mask | (1 << leaf));
+                    assert_eq!(leaves.overlaps(start..end), mask & range_mask != 0);
+                    let mut inserted = leaves.clone();
+                    inserted.insert(start..end);
+                    assert_live_mask(&inserted, mask | range_mask);
+                    let mut removed = leaves.clone();
+                    removed.remove(start..end);
+                    assert_live_mask(&removed, mask & !range_mask);
+                }
+            }
+            for other in 0..64 {
+                let mut joined = leaves.clone();
+                joined.union_with(&leaves_from_mask(other));
+                assert_live_mask(&joined, mask | other);
+            }
+        }
+    }
+
+    #[test]
+    fn whole_root_liveness_is_bounded_by_access_boundaries() {
+        let root = ValueId::from_u32(0);
+        let mut live = LiveLeafMap::default();
+        mark_root_live(&mut live, root, usize::MAX);
+        let leaves = live.get_mut(&root).unwrap();
+        assert_eq!(leaves.ranges(), slice::from_ref(&(0..usize::MAX)));
+        leaves.remove(1..usize::MAX - 1);
+        assert_eq!(leaves.ranges(), &[0..1, usize::MAX - 1..usize::MAX]);
+        leaves.insert(1..usize::MAX - 1);
+        assert_eq!(leaves.ranges(), slice::from_ref(&(0..usize::MAX)));
+        leaves.remove(0..usize::MAX);
+        assert!(leaves.is_empty());
+        let mut empty = LiveLeafMap::default();
+        mark_root_live(&mut empty, root, 0);
+        assert!(empty.is_empty());
     }
 
     #[test]

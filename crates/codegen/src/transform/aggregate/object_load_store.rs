@@ -528,13 +528,13 @@ pub(crate) fn transfer_backward_effects(
     for (destinations, sources) in &effects.captures {
         if live.iter().any(|(&root, leaves)| {
             whole_root_slice_for_value(tracked, root).is_some_and(|root| {
-                leaves.iter().any(|&leaf| {
+                leaves.ranges().iter().any(|range| {
                     destinations.iter().any(|&destination| {
                         accesses.may_overlap(
                             destination,
                             ObjectSlice {
-                                first_leaf: leaf,
-                                leaf_count: 1,
+                                first_leaf: range.start,
+                                leaf_count: range.end - range.start,
                                 ..root
                             },
                         )
@@ -545,23 +545,17 @@ pub(crate) fn transfer_backward_effects(
             captured_reads.extend(sources.iter().copied());
         }
     }
-    live.retain(|&root, leaves| {
-        if let Some(root) = whole_root_slice_for_value(tracked, root) {
-            leaves.retain(|&leaf| {
-                !effects.overwrites.iter().any(|&write| {
-                    accesses.write_covers(
-                        write,
-                        ObjectSlice {
-                            first_leaf: leaf,
-                            leaf_count: 1,
-                            ..root
-                        },
-                    )
-                })
-            });
+    for &write in &effects.overwrites {
+        let slice = accesses.write_slice(write);
+        // Only the exact destination's single dynamic instance loses demand.
+        // Subtracting its interval preserves every unwritten part of live ranges.
+        if accesses.write_covers(write, slice)
+            && let Some(leaves) = live.get_mut(&slice.root)
+        {
+            leaves.remove(slice.first_leaf..slice.first_leaf + slice.leaf_count);
         }
-        !leaves.is_empty()
-    });
+    }
+    live.retain(|_, leaves| !leaves.is_empty());
     for access in effects.reads.iter().copied().chain(captured_reads) {
         mark_access_live(func, tracked, accesses, access, live);
     }
@@ -664,9 +658,13 @@ fn ends_with_return(func: &Function, block: BlockId) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::slice;
+
     use super::*;
+    use crate::transform::aggregate::compute_object_effect_summaries;
     use sonatina_ir::{ir_writer::FuncWriter, module::FuncRef};
     use sonatina_parser::parse_module;
+    use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module};
 
     fn parse_test_module(src: &str) -> sonatina_ir::Module {
         parse_module(src).expect("parse should succeed").module
@@ -681,7 +679,7 @@ mod tests {
     }
 
     fn run_with_effects(module: &sonatina_ir::Module, func_ref: FuncRef) {
-        let object_effects = crate::transform::aggregate::compute_object_effect_summaries(module);
+        let object_effects = compute_object_effect_summaries(module);
         let local_object_args = crate::transform::aggregate::collect_local_object_arg_info(module);
         module.func_store.modify(func_ref, |func| {
             ObjectLoadStore::default().run_for_func(
@@ -690,6 +688,73 @@ mod tests {
                 &local_object_args,
                 &object_effects,
             );
+        });
+    }
+
+    #[test]
+    fn sparse_liveness_preserves_capture_demand_and_only_kills_exact_writes() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+func private %maybe_write(v0.objref<objref<i256>>, v1.objref<i256>, v2.i1) {
+block0:
+    br v2 block1 block2;
+block1:
+    obj.store v0 v1;
+    jump block2;
+block2:
+    return;
+}
+func private %f(v0.objref<[objref<i256>; 1000000000]>, v1.objref<objref<i256>>, v2.i1) {
+block0:
+    v3.objref<i256> = obj.alloc i256;
+    v4.objref<objref<i256>> = obj.index v0 500000000.i64;
+    obj.store v4 v3;
+    call %maybe_write v4 v3 v2;
+    return;
+}
+"#,
+        );
+        let report = verify_module(&module, &VerifierConfig::for_level(VerificationLevel::Full));
+        assert!(report.is_ok(), "{report}");
+        let summaries = compute_object_effect_summaries(&module);
+        module.func_store.view(lookup_func(&module, "f"), |func| {
+            let accesses = ObjectAccessFacts::new(func, Some(&summaries));
+            let tracked = accesses.tracked_all(func, &mut shape::AggregateLayoutCache::default());
+            let insts: Vec<_> = func
+                .layout
+                .iter_inst(func.layout.entry_block().unwrap())
+                .collect();
+            let source = func.dfg.inst_result(insts[0]).unwrap();
+            let root = func.arg_values[0];
+            let alias = func.arg_values[1];
+            let store = accesses.effects(func, insts[2], Some(&summaries));
+            let call = accesses.effects(func, insts[3], Some(&summaries));
+            let mut live = LiveLeafMap::default();
+            mark_root_live(&mut live, root, 1000000000);
+            mark_root_live(&mut live, alias, 1);
+
+            transfer_backward_effects(func, &tracked, &accesses, &call, &mut live);
+            assert_eq!(live[&root].ranges(), slice::from_ref(&(0..1000000000)));
+            assert_eq!(live[&alias].ranges(), slice::from_ref(&(0..1)));
+            // Clear the source demand to test the direct capture independently.
+            live.remove(&source);
+            transfer_backward_effects(func, &tracked, &accesses, &store, &mut live);
+            assert_eq!(live[&root].ranges(), &[0..500000000, 500000001..1000000000]);
+            assert_eq!(live[&alias].ranges(), slice::from_ref(&(0..1)));
+            assert_eq!(live[&source].ranges(), slice::from_ref(&(0..1)));
+
+            let mut sibling = LiveLeafMap::default();
+            mark_live_slice(
+                &mut sibling,
+                ObjectSlice {
+                    leaf_count: 1,
+                    ..whole_root_slice_for_value(&tracked, root).unwrap()
+                },
+            );
+            transfer_backward_effects(func, &tracked, &accesses, &store, &mut sibling);
+            assert_eq!(sibling.len(), 1);
+            assert_eq!(sibling[&root].ranges(), slice::from_ref(&(0..1)));
         });
     }
 

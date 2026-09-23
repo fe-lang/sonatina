@@ -40,6 +40,73 @@ fn lookup(module: &Module, name: &str) -> FuncRef {
 }
 
 #[test]
+fn large_incoming_roots_preserve_alias_observations_across_joins() {
+    let text = run_pass(
+        r#"
+target = "evm-ethereum-osaka"
+func private %f(v0.objref<[i256; 1000000000]>, v1.objref<i256>, v2.i1) -> i256 {
+block0:
+    v3.objref<i256> = obj.index v0 0.i64;
+    v4.objref<i256> = obj.index v0 999999999.i64;
+    obj.store v3 11.i256;
+    obj.store v4 12.i256;
+    br v2 block1 block2;
+block1:
+    v5.i256 = obj.load v1;
+    jump block3;
+block2:
+    v6.i256 = obj.load v4;
+    jump block3;
+block3:
+    v7.i256 = phi (v5 block1) (v6 block2);
+    obj.store v3 33.i256;
+    obj.store v4 44.i256;
+    return v7;
+}
+"#,
+        Pass::ObjectLoadStore,
+    );
+    assert_eq!(text.matches("obj.store").count(), 4, "{text}");
+    assert!(text.contains("obj.load v1"), "{text}");
+    assert!(text.contains("12.i256 block2"), "{text}");
+}
+
+#[test]
+fn large_enum_payload_liveness_keeps_precise_sibling_dse() {
+    for pass in [Pass::ObjectLoadStore, Pass::AggregateCombine] {
+        let text = run_pass(
+            r#"
+target = "evm-ethereum-osaka"
+type @Huge = enum { #Some([i256; 1000000],i256), #None };
+func private %f(v0.[i256; 1000000], v1.[i256; 1000000], v2.i1) -> [i256; 1000000] {
+block0:
+    v3.objref<@Huge> = obj.alloc @Huge;
+    enum.set_tag v3 #Some;
+    v4.objref<[i256; 1000000]> = enum.proj v3 #Some 0.i8;
+    v5.objref<i256> = enum.proj v3 #Some 1.i8;
+    obj.store v4 v0;
+    obj.store v5 11.i256;
+    br v2 block1 block2;
+block1:
+    obj.store v4 v1;
+    jump block3;
+block2:
+    jump block3;
+block3:
+    v6.[i256; 1000000] = obj.load v4;
+    return v6;
+}
+"#,
+            pass,
+        );
+        assert_eq!(text.matches("obj.store").count(), 2, "{pass:?}: {text}");
+        assert!(!text.contains("11.i256"), "{pass:?}: {text}");
+        assert!(text.contains("enum.set_tag"), "{pass:?}: {text}");
+        assert!(text.contains("obj.load"), "{pass:?}: {text}");
+    }
+}
+
+#[test]
 fn unsupported_pointer_alternatives_survive_provenance_joins() {
     for producer in [
         "v4.*i256 = mload v2 *i256;",
