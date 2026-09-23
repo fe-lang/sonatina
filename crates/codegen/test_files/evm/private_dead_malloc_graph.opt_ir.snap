@@ -7,9 +7,9 @@ target = "evm-ethereum-osaka"
 
 func public %main() {
     block0:
-        v0.i256 = evm_calldata_load 0.i256;
         v6.*i8 = evm_malloc 32.i256;
         v7.i256 = ptr_to_int v6 i256;
+        v0.i256 = evm_calldata_load 0.i256;
         mstore v7 v0 i256;
         evm_return v7 32.i256;
 }

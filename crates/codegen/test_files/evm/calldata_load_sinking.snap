@@ -1,0 +1,24 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: "String::from_utf8(out).unwrap()"
+input_file: test_files/evm/calldata_load_sinking.sntn
+---
+evm.config: stack_reach=16 vcode=false bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
+
+object: Contract
+  section runtime: 72 bytes
+  total: 72 bytes
+
+functions:
+  mem: global_dyn_base=0x20 arena_base=0x20 scratch_peak_words=0 stable_chain_peak_words=0
+  entry: ir_blocks=5 ir_insts=18 vcode_ops=49 fixups=4 imm_bytes=10
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
+  clobber: ir_blocks=1 ir_insts=2 vcode_ops=5 fixups=0 imm_bytes=1
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
+
+evm:
+  case calldata_survives_memory_write_and_call: calldata_len=96 success reason=Return gas_used=21536 gas_refunded=0 logs=0 output=call len=32 tx_gas=21408 runtime_gas=128
+  case out_of_range_loads_are_zero: calldata_len=0 success reason=Return gas_used=21128 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=128
+  case partial_word_is_zero_padded: calldata_len=33 success reason=Return gas_used=21272 gas_refunded=0 logs=0 output=call len=32 tx_gas=21144 runtime_gas=128
+  case overflow: calldata_len=96 revert gas_used=21913 output_len=36 tx_gas=21780 runtime_gas=133
+  case earlier_guard_wins_over_overflow: calldata_len=96 revert gas_used=21815 output_len=0 tx_gas=21792 runtime_gas=23

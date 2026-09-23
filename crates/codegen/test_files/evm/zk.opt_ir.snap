@@ -208,11 +208,11 @@ func private %runtime__StorPtr_Evm___207f35a85ac4062e() {
         evm_return 0.i256 32.i256;
 
     block2:
-        v12.i256 = evm_calldata_load 4.i256;
         v13.i256 = evm_calldata_load 36.i256;
         v14.i256 = evm_calldata_load 68.i256;
         v15.i256 = evm_calldata_load 100.i256;
         v17.i256 = call %leanimt_root_from_calldata v13 v14 v15 132.i256;
+        v12.i256 = evm_calldata_load 4.i256;
         v59.i1 = eq v12 v17;
         br v59 block16 block17;
 
@@ -225,12 +225,11 @@ func private %runtime__StorPtr_Evm___207f35a85ac4062e() {
         jump block16;
 
     block3:
-        v20.i256 = evm_calldata_load 4.i256;
+        v24.i256 = evm_calldata_load 132.i256;
+        v65.i1 = gt v24 32.i256;
         v21.i256 = evm_calldata_load 36.i256;
         v22.i256 = evm_calldata_load 68.i256;
         v23.i256 = evm_calldata_load 100.i256;
-        v24.i256 = evm_calldata_load 132.i256;
-        v65.i1 = gt v24 32.i256;
         br v65 block20 block21;
 
     block20:
@@ -253,6 +252,7 @@ func private %runtime__StorPtr_Evm___207f35a85ac4062e() {
         br v79 block24 block26;
 
     block23:
+        v20.i256 = evm_calldata_load 4.i256;
         v89.i1 = eq v20 v69;
         br v89 block18 block27;
 
@@ -295,11 +295,11 @@ func private %runtime__StorPtr_Evm___207f35a85ac4062e() {
         evm_return 0.i256 32.i256;
 
     block5:
-        v31.i256 = evm_calldata_load 4.i256;
         v32.i256 = evm_calldata_load 36.i256;
         v33.i256 = evm_calldata_load 68.i256;
         v34.i256 = evm_calldata_load 100.i256;
         v35.i256 = call %smt_root_from_calldata v32 v33 v34 132.i256;
+        v31.i256 = evm_calldata_load 4.i256;
         v60.i1 = eq v31 v35;
         br v60 block31 block32;
 
@@ -312,12 +312,12 @@ func private %runtime__StorPtr_Evm___207f35a85ac4062e() {
         jump block31;
 
     block6:
+        v42.i256 = evm_calldata_load 132.i256;
+        v94.i1 = eq 4294967295.i256 v42;
         v38.i256 = evm_calldata_load 4.i256;
         v39.i256 = evm_calldata_load 36.i256;
         v40.i256 = evm_calldata_load 68.i256;
         v41.i256 = evm_calldata_load 100.i256;
-        v42.i256 = evm_calldata_load 132.i256;
-        v94.i1 = eq 4294967295.i256 v42;
         br v94 block36 block35;
 
     block35:

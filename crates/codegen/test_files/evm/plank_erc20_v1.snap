@@ -6,19 +6,19 @@ input_file: test_files/evm/plank_erc20_v1.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 102 bytes
-  section init: 144 bytes
-  total: 246 bytes
+  section runtime: 103 bytes
+  section init: 145 bytes
+  total: 248 bytes
 
 functions:
   mem: global_dyn_base=0x0 arena_base=0x0 scratch_peak_words=0 stable_chain_peak_words=0
   init: ir_blocks=3 ir_insts=14 vcode_ops=34 fixups=4 imm_bytes=7
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  run: ir_blocks=11 ir_insts=36 vcode_ops=92 fixups=5 imm_bytes=12
+  run: ir_blocks=11 ir_insts=36 vcode_ops=93 fixups=5 imm_bytes=12
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  deploy: success reason=Return gas_used=78051 gas_refunded=0 logs=0 output=create len=102 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
+  deploy: success reason=Return gas_used=78267 gas_refunded=0 logs=0 output=create len=103 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
   case balance-zero: calldata_len=36 success reason=Return gas_used=23432 gas_refunded=0 logs=0 output=call len=32 tx_gas=21192 runtime_gas=2240
 
 
@@ -109,39 +109,40 @@ run:
     PUSH1 __evm_shared_tail_0  // br v28 block3 block4;
     JUMPI
   block4:
-    PUSH1 0x24 (36)  // v32.i256 = evm_calldata_load v31;
-    CALLDATALOAD
-    CALLER  // v30.i256 = evm_caller;
-    PUSH0  // evm_mstore v1 v30;
+    CALLER  // v31.i256 = evm_caller;
+    PUSH0  // evm_mstore v1 v31;
     MSTORE
-    PUSH1 0x20 (32)  // v33.i256 = evm_keccak256 v1 v21;
+    PUSH1 0x20 (32)  // v32.i256 = evm_keccak256 v1 v21;
     PUSH0
     KECCAK256
-    DUP1  // v23.i256 = evm_sload v33;
+    DUP1  // v30.i256 = evm_sload v32;
     SLOAD
-    DUP3  // v24.i256 = lt v23 v32;
-    DUP2
+    PUSH1 0x24 (36)  // v23.i256 = evm_calldata_load 36.i256;
+    CALLDATALOAD
+    DUP1  // v24.i256 = lt v30 v23;
+    DUP3
     LT
     PUSH1 __evm_shared_tail_0  // br v24 block5 block6;
     JUMPI
   block6:
-    DUP3  // v34.i256 = sub v23 v32;
-    SWAP1
+    DUP1  // v33.i256 = sub v30 v23;
+    SWAP2
     SUB
-    SWAP1  // evm_sstore v33 v34;
+    SWAP1  // evm_sstore v32 v33;
+    SWAP2
     SSTORE
     SWAP1  // evm_mstore v1 v27;
     PUSH0
     MSTORE
-    PUSH1 0x20 (32)  // v35.i256 = evm_keccak256 v1 v21;
+    PUSH1 0x20 (32)  // v34.i256 = evm_keccak256 v1 v21;
     PUSH0
     KECCAK256
-    DUP1  // v36.i256 = evm_sload v35;
+    DUP1  // v35.i256 = evm_sload v34;
     SLOAD
-    SWAP1  // v37.i256 = add v36 v32;
+    SWAP1  // v36.i256 = add v35 v23;
     SWAP2
     ADD
-    SWAP1  // evm_sstore v35 v37;
+    SWAP1  // evm_sstore v34 v36;
     SSTORE
     STOP  // evm_stop;
 

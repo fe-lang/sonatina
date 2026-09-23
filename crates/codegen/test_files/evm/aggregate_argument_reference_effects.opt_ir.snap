@@ -49,10 +49,10 @@ func inline(never) private %forward(v0.@Choice, v1.i256) {
 
 func public %entry() {
     block0:
-        v0.i256 = evm_calldata_load 0.i256;
         v1.objref<i256> = obj.alloc i256;
         v2.@Wrapper = insert_value undef.@Wrapper 0.i8 v1;
         v3.@Choice = enum.make @Choice #Some 7.i256 v2;
+        v0.i256 = evm_calldata_load 0.i256;
         obj.store v1 v0;
         v4.i256 = call %read_struct v2;
         v5.i256 = add v0 22.i256;

@@ -75,7 +75,9 @@ impl SinkFacts {
 
         for block in func.layout.iter_block() {
             for inst in func.layout.iter_inst(block) {
-                if func.dfg.can_speculate(inst) && !func.dfg.inst_results(inst).is_empty() {
+                if (func.dfg.can_speculate(inst) || is_constant_calldata_load(func, inst))
+                    && !func.dfg.inst_results(inst).is_empty()
+                {
                     facts.sink_candidates.insert(inst);
                 }
             }
@@ -143,6 +145,11 @@ fn is_normal_exit_block(func: &Function, block: BlockId) -> bool {
         || downcast::<&evm::EvmSelfDestruct>(func.inst_set(), inst).is_some()
 }
 
+fn is_constant_calldata_load(func: &Function, inst: InstId) -> bool {
+    downcast::<&evm::EvmCalldataLoad>(func.inst_set(), func.dfg.inst(inst))
+        .is_some_and(|load| func.dfg.value_is_imm(*load.data_offset()))
+}
+
 fn plan_sink_inst(
     func: &Function,
     cfg: &ControlFlowGraph,
@@ -158,15 +165,38 @@ fn plan_sink_inst(
     }
     let dest_block = nearest_common_dominator(domtree, use_sites.iter().map(|site| site.block))?;
 
-    if dest_block == source_block
-        || !domtree.dominates(source_block, dest_block)
+    // Calldata is immutable and its loads do not trap on out-of-range offsets.
+    // Constant offsets also avoid extending an address operand's live range.
+    // Keep the read effect intact; other memory reads are not safe to move here.
+    let calldata_load = is_constant_calldata_load(func, inst);
+    if !domtree.dominates(source_block, dest_block)
         || lpt.loop_of_block(source_block) != lpt.loop_of_block(dest_block)
-        || crosses_cold_guard_to_hot_continuation(cfg, domtree, facts, source_block, dest_block)
+        || (!calldata_load
+            && (dest_block == source_block
+                || crosses_cold_guard_to_hot_continuation(
+                    cfg,
+                    domtree,
+                    facts,
+                    source_block,
+                    dest_block,
+                )))
     {
         return None;
     }
 
-    let before = insertion_anchor(func, dest_block, use_sites)?;
+    let mut before = insertion_anchor(func, dest_block, use_sites)?;
+    if calldata_load {
+        // Keep adjacent loads at a use in a stable order. Moving each one past
+        // its neighbors would keep changing the layout on subsequent runs.
+        while let Some(prev) = func.layout.prev_inst_of(before)
+            && is_constant_calldata_load(func, prev)
+        {
+            if prev == inst {
+                return None;
+            }
+            before = prev;
+        }
+    }
     if operands_available_at(func, domtree, inst, dest_block, before) {
         Some(SinkPlan { inst, before })
     } else {

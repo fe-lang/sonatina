@@ -1,0 +1,235 @@
+target = "evm-ethereum-osaka"
+
+# sameln: func public %sink_in_block() -> i256 {
+# check: block0:
+# nextln: mstore 0.i256 99.i256 i256;
+# nextln: v0.i256 = evm_calldata_load 0.i256;
+# nextln: v1.i256 = evm_calldata_load 32.i256;
+# nextln: v2.i256 = add v0 v1;
+func public %sink_in_block() -> i256 {
+    block0:
+        v0.i256 = evm_calldata_load 0.i256;
+        v1.i256 = evm_calldata_load 32.i256;
+        mstore 0.i256 99.i256 i256;
+        v2.i256 = add v0 v1;
+        return v2;
+}
+
+# sameln: func public %sink_through_guards(v0.i1, v1.i1) -> i256 {
+# check: block0:
+# nextln: br v0 block1 block3;
+# check: block1:
+# nextln: br v1 block2 block3;
+# check: block2:
+# nextln: v2.i256 = evm_calldata_load 64.i256;
+# nextln: return v2;
+func public %sink_through_guards(v0.i1, v1.i1) -> i256 {
+    block0:
+        v2.i256 = evm_calldata_load 64.i256;
+        br v0 block1 block3;
+    block1:
+        br v1 block2 block3;
+    block2:
+        return v2;
+    block3:
+        evm_revert 0.i256 0.i256;
+}
+
+# sameln: func public %sink_before_first_use(v0.i1) -> i256 {
+# check: block0:
+# nextln: br v0 block1 block2;
+# check: block1:
+# nextln: v1.i256 = evm_calldata_load 0.i256;
+# nextln: v2.i256 = add v1 1.i256;
+# nextln: v3.i256 = add v2 v1;
+func public %sink_before_first_use(v0.i1) -> i256 {
+    block0:
+        v1.i256 = evm_calldata_load 0.i256;
+        br v0 block1 block2;
+    block1:
+        v2.i256 = add v1 1.i256;
+        v3.i256 = add v2 v1;
+        return v3;
+    block2:
+        evm_revert 0.i256 0.i256;
+}
+
+# sameln: func public %keep_shared_branch_load(v0.i1) -> i256 {
+# check: block0:
+# nextln: v1.i256 = evm_calldata_load 0.i256;
+# nextln: br v0 block1 block2;
+func public %keep_shared_branch_load(v0.i1) -> i256 {
+    block0:
+        v1.i256 = evm_calldata_load 0.i256;
+        br v0 block1 block2;
+    block1:
+        return v1;
+    block2:
+        v2.i256 = add v1 1.i256;
+        return v2;
+}
+
+# sameln: func public %sink_phi_edge(v0.i1) -> i256 {
+# check: block0:
+# nextln: br v0 block1 block3;
+# check: block1:
+# nextln: v1.i256 = evm_calldata_load 32.i256;
+# nextln: jump block3;
+func public %sink_phi_edge(v0.i1) -> i256 {
+    block0:
+        v1.i256 = evm_calldata_load 32.i256;
+        br v0 block1 block2;
+    block1:
+        jump block3;
+    block2:
+        jump block3;
+    block3:
+        v2.i256 = phi (v1 block1) (7.i256 block2);
+        return v2;
+}
+
+# sameln: func public %keep_preheader_load(v0.i256) -> i256 {
+# check: block0:
+# nextln: v1.i256 = evm_calldata_load 0.i256;
+# nextln: jump block1;
+func public %keep_preheader_load(v0.i256) -> i256 {
+    block0:
+        v1.i256 = evm_calldata_load 0.i256;
+        jump block1;
+    block1:
+        v2.i256 = phi (0.i256 block0) (v5 block2);
+        v3.i1 = lt v2 v0;
+        br v3 block2 block3;
+    block2:
+        v4.i256 = add v2 v1;
+        v5.i256 = add v4 1.i256;
+        jump block1;
+    block3:
+        return v2;
+}
+
+# sameln: func public %keep_dynamic_offset(v0.i256, v1.i1) -> i256 {
+# check: block0:
+# nextln: v2.i256 = evm_calldata_load v0;
+# nextln: mstore 0.i256 99.i256 i256;
+# nextln: br v1 block1 block2;
+func public %keep_dynamic_offset(v0.i256, v1.i1) -> i256 {
+    block0:
+        v2.i256 = evm_calldata_load v0;
+        mstore 0.i256 99.i256 i256;
+        br v1 block1 block2;
+    block1:
+        return v2;
+    block2:
+        evm_revert 0.i256 0.i256;
+}
+
+# sameln: func private %keep_mutable_reads(v0.objref<i256>) -> i256 {
+# check: block0:
+# nextln: v1.i256 = mload 0.i256 i256;
+# nextln: v2.i256 = obj.load v0;
+# nextln: v3.i256 = evm_return_data_size;
+# nextln: mstore 0.i256 99.i256 i256;
+# nextln: obj.store v0 99.i256;
+# nextln: call %clobber;
+func private %keep_mutable_reads(v0.objref<i256>) -> i256 {
+    block0:
+        v1.i256 = mload 0.i256 i256;
+        v2.i256 = obj.load v0;
+        v3.i256 = evm_return_data_size;
+        mstore 0.i256 99.i256 i256;
+        obj.store v0 99.i256;
+        call %clobber;
+        v4.i256 = add v1 v2;
+        v5.i256 = add v4 v3;
+        return v5;
+}
+
+# sameln: func public %sink_after_call() -> i256 {
+# check: block0:
+# nextln: call %clobber;
+# nextln: v0.i256 = evm_calldata_load -1.i256;
+# nextln: return v0;
+func public %sink_after_call() -> i256 {
+    block0:
+        v0.i256 = evm_calldata_load -1.i256;
+        call %clobber;
+        return v0;
+}
+
+# sameln: func public %sink_before_validation_use() -> i256 {
+# check: block0:
+# nextln: mstore 0.i256 99.i256 i256;
+# nextln: v0.i256 = evm_calldata_load 0.i256;
+# nextln: v1.i1 = is_zero v0;
+# nextln: br v1 block1 block2;
+func public %sink_before_validation_use() -> i256 {
+    block0:
+        v0.i256 = evm_calldata_load 0.i256;
+        mstore 0.i256 99.i256 i256;
+        v1.i1 = is_zero v0;
+        br v1 block1 block2;
+    block1:
+        return v0;
+    block2:
+        evm_revert 0.i256 0.i256;
+}
+
+# Adjacent loads already at their first use must keep their order across runs.
+# sameln: func public %keep_adjacent_loads() -> i256 {
+# check: block0:
+# nextln: v0.i256 = evm_calldata_load 0.i256;
+# nextln: v1.i256 = evm_calldata_load 32.i256;
+# nextln: v2.i256 = add v0 v1;
+func public %keep_adjacent_loads() -> i256 {
+    block0:
+        v0.i256 = evm_calldata_load 0.i256;
+        v1.i256 = evm_calldata_load 32.i256;
+        v2.i256 = add v0 v1;
+        return v2;
+}
+
+# sameln: func public %keep_unused_load() -> i256 {
+# check: block0:
+# nextln: v0.i256 = evm_calldata_load 0.i256;
+# nextln: return 7.i256;
+func public %keep_unused_load() -> i256 {
+    block0:
+        v0.i256 = evm_calldata_load 0.i256;
+        return 7.i256;
+}
+
+# sameln: func private %clobber() {
+# check: block0:
+# nextln: mstore 0.i256 99.i256 i256;
+# nextln: return;
+func private %clobber() {
+    block0:
+        mstore 0.i256 99.i256 i256;
+        return;
+}
+
+# sameln: func public %sink_within_loop(v0.i256) -> i256 {
+# check: block1:
+# nextln: v1.i256 = phi (0.i256 block0) (v5 block2);
+# nextln: v3.i1 = lt v1 v0;
+# check: block2:
+# nextln: mstore 0.i256 v1 i256;
+# nextln: v2.i256 = evm_calldata_load 32.i256;
+# nextln: v4.i256 = add v1 v2;
+func public %sink_within_loop(v0.i256) -> i256 {
+    block0:
+        jump block1;
+    block1:
+        v1.i256 = phi (0.i256 block0) (v5 block2);
+        v2.i256 = evm_calldata_load 32.i256;
+        v3.i1 = lt v1 v0;
+        br v3 block2 block3;
+    block2:
+        mstore 0.i256 v1 i256;
+        v4.i256 = add v1 v2;
+        v5.i256 = add v4 1.i256;
+        jump block1;
+    block3:
+        return v1;
+}

@@ -1,0 +1,49 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: opt_ir_snapshot
+input_file: test_files/evm/calldata_load_sinking.sntn
+---
+target = "evm-ethereum-osaka"
+
+func public %entry() {
+    block0:
+        v3.i256 = evm_calldata_load 0.i256;
+        v4.i1 = is_zero v3;
+        br v4 block1 block4;
+
+    block1:
+        mstore 0.i256 7.i256 i256;
+        call %clobber;
+        v0.i256 = evm_calldata_load 32.i256;
+        v1.i256 = evm_calldata_load 64.i256;
+        (v6.i256, v7.i1) = uaddo v0 v1;
+        br v7 block3 block2;
+
+    block2:
+        v2.i256 = evm_calldata_load -1.i256;
+        v8.i256 = add v6 v2;
+        v9.i256 = add v8 7.i256;
+        mstore 0.i256 v9 i256;
+        evm_return 0.i256 32.i256;
+
+    block3:
+        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
+        mstore 4.i256 17.i256 i256;
+        evm_revert 0.i256 36.i256;
+
+    block4:
+        evm_revert 0.i256 0.i256;
+}
+
+func inline(never) private %clobber() {
+    block0:
+        mstore 0.i256 99.i256 i256;
+        return;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %entry;
+    }
+}

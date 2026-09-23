@@ -7,22 +7,22 @@ input_file: test_files/evm/fe_wide_abi32_sum.sntn
 evm.config: stack_reach=16 vcode=false bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section init: 653 bytes
-  section runtime: 633 bytes
-  total: 1286 bytes
+  section init: 496 bytes
+  section runtime: 476 bytes
+  total: 972 bytes
 
 functions:
-  mem: global_dyn_base=0x260 arena_base=0xa0 scratch_peak_words=0 stable_chain_peak_words=14
+  mem: global_dyn_base=0xa0 arena_base=0xa0 scratch_peak_words=0 stable_chain_peak_words=0
   contract_init_root_ScaleAbiArgs32: ir_blocks=3 ir_insts=7 vcode_ops=16 fixups=3 imm_bytes=2
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  contract_runtime_root_ScaleAbiArgs32: ir_blocks=73 ir_insts=178 vcode_ops=449 fixups=36 imm_bytes=75
-    mem: scratch_words=0 stable_words=14 stable_mode=StableAbs(base=0xa0) entry_abs_words=0 abs_words_end=14
+  contract_runtime_root_ScaleAbiArgs32: ir_blocks=73 ir_insts=178 vcode_ops=342 fixups=36 imm_bytes=45
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
-  deploy: success reason=Return gas_used=190188 gas_refunded=0 logs=0 output=create len=633 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
-  case sum: calldata_len=1028 success reason=Return gas_used=27081 gas_refunded=0 logs=0 output=call len=32 tx_gas=25544 runtime_gas=1537
-  case maximum_sum: calldata_len=1028 success reason=Return gas_used=27081 gas_refunded=0 logs=0 output=call len=32 tx_gas=25544 runtime_gas=1537
-  case overflow: calldata_len=1028 revert gas_used=26118 output_len=36 tx_gas=25556 runtime_gas=562
+  deploy: success reason=Return gas_used=156284 gas_refunded=0 logs=0 output=create len=476 addr=0xbd770416a3345f91e4b34576cb804a576fa48eb1
+  case sum: calldata_len=1028 success reason=Return gas_used=26729 gas_refunded=0 logs=0 output=call len=32 tx_gas=25544 runtime_gas=1185
+  case maximum_sum: calldata_len=1028 success reason=Return gas_used=26729 gas_refunded=0 logs=0 output=call len=32 tx_gas=25544 runtime_gas=1185
+  case overflow: calldata_len=1028 revert gas_used=25743 output_len=36 tx_gas=25556 runtime_gas=187
   case truncated: calldata_len=36 revert gas_used=21321 output_len=0 tx_gas=21204 runtime_gas=117
   case unknown_selector: calldata_len=4 revert gas_used=21137 output_len=0 tx_gas=21064 runtime_gas=73
   case short_calldata: calldata_len=1 revert gas_used=21045 output_len=0 tx_gas=21016 runtime_gas=29
