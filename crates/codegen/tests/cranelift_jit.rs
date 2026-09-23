@@ -1,5 +1,7 @@
 #![allow(clippy::crosspointer_transmute)]
 
+mod alias_execution;
+
 #[path = "cranelift/abi.rs"]
 mod abi;
 #[path = "cranelift/casts.rs"]

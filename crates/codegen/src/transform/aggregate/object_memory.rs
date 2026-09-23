@@ -1279,6 +1279,63 @@ block0:
     }
 
     #[test]
+    fn inactive_or_blocked_writer_still_clobbers_an_active_alias() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+func private %f(v0.objref<i256>, v1.objref<i256>) -> i256 {
+block0:
+    v2.i256 = obj.load v0;
+    obj.store v1 22.i256;
+    v3.i256 = obj.load v0;
+    return v3;
+}
+"#,
+        );
+        let summaries = compute_object_effect_summaries(&module);
+        module.func_store.view(lookup_func(&module, "f"), |func| {
+            let accesses = ObjectAccessFacts::new(func, Some(&summaries));
+            let tracked = accesses.tracked_all(func, &mut shape::AggregateLayoutCache::default());
+            let relevant_slices = collect_relevant_slices(func, &tracked);
+            let insts: Vec<_> = func
+                .layout
+                .iter_inst(func.layout.entry_block().unwrap())
+                .collect();
+            let effects = insts
+                .iter()
+                .map(|&inst| (inst, accesses.effects(func, inst, Some(&summaries))))
+                .collect();
+            let ctx = TransferCtx {
+                func,
+                tracked: &tracked,
+                accesses: &accesses,
+                effects: &effects,
+                relevant_slices: &relevant_slices,
+                promote_loaded_values: false,
+            };
+            // Consumer eligibility is independent of the instruction's effect.
+            // Exercise both states directly, without depending on which future
+            // profitability or instance rule caused this writer to be disabled.
+            for blocked in [false, true] {
+                let mut state = initial_state(func, None, &tracked, &relevant_slices, true);
+                if blocked {
+                    state.blocked_roots.insert(func.arg_values[1]);
+                } else {
+                    state.active_roots.remove(&func.arg_values[1]);
+                }
+                let mut memory = ObjectMemoryAnalysis::default();
+                for &inst in &insts {
+                    transfer_inst(&ctx, inst, &mut state, &mut Some(&mut memory));
+                }
+                let before = memory.read_state(insts[0]).unwrap();
+                let after = memory.read_state(insts[2]).unwrap();
+                assert_ne!(before.key(), after.key());
+                assert!(memory.inst_clobbers_slice(insts[1], before.read_slice()));
+            }
+        });
+    }
+
+    #[test]
     fn conditional_call_neither_establishes_nor_preserves_initialization() {
         for initial in ["", "obj.store v1 11.i256;"] {
             check_memory(

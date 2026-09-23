@@ -17,7 +17,7 @@ use super::{
     },
     object_tracking::{
         ObjectSlice, TrackedObject, enum_tag_object_slice, enum_variant_field_object_slice,
-        slice_is_covered_by, whole_root_slice_for_value,
+        same_base_slice_covers, whole_root_slice_for_value,
     },
     provenance::{MayProvenance, MayRootSet, RootValue},
     reconstruct::AggregateValueReconstructor,
@@ -176,7 +176,7 @@ impl ObjectLoadStore {
         available: &AvailableMap,
     ) -> Option<ValueId> {
         for (&available_slice, &value) in available {
-            if available_slice.root != slice.root || !slice_is_covered_by(available_slice, slice) {
+            if !same_base_slice_covers(available_slice, slice) {
                 continue;
             }
             if available_slice == slice && func.dfg.value_ty(value) == slice.ty {

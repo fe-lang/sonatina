@@ -602,6 +602,47 @@ mod tests {
     }
 
     #[test]
+    fn widened_call_effects_remain_may_writes_without_initialization() {
+        check(
+            r#"
+target = "evm-ethereum-osaka"
+func private %write_first(v0.objref<[i256; 128]>) {
+block0:
+    v1.objref<i256> = obj.index v0 0.i8;
+    obj.store v1 22.i256;
+    return;
+}
+func private %f(v0.objref<[i256; 128]>) -> i256 {
+block0:
+    v1.objref<i256> = obj.index v0 127.i8;
+    call %write_first v0;
+    v2.i256 = obj.load v1;
+    return v2;
+}
+"#,
+            |func, accesses, summaries| {
+                let call = func
+                    .layout
+                    .iter_inst(func.layout.entry_block().unwrap())
+                    .find(|&inst| {
+                        downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(inst))
+                            .is_some()
+                    })
+                    .unwrap();
+                let effects = accesses.effects(func, call, Some(summaries));
+                assert!(
+                    effects
+                        .writes
+                        .iter()
+                        .any(|&write| accesses.may_overlap(write, location(accesses, 1)))
+                );
+                assert!(effects.overwrites.is_empty());
+                assert!(effects.initialization.is_empty());
+            },
+        );
+    }
+
+    #[test]
     fn publishing_unresolved_pointer_cannot_leave_an_empty_alternative() {
         check(
             r#"

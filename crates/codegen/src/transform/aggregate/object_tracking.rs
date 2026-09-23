@@ -334,10 +334,11 @@ pub(crate) fn whole_root_slice_for_value(
 
 // Exact coordinate coverage for extracting an already available SSA value.
 // This is not a semantic alias or definite-overwrite proof.
-pub(crate) fn slice_is_covered_by(lhs: ObjectSlice, rhs: ObjectSlice) -> bool {
-    lhs.root == rhs.root
-        && lhs.first_leaf <= rhs.first_leaf
-        && rhs.first_leaf + rhs.leaf_count <= lhs.first_leaf + lhs.leaf_count
+pub(crate) fn same_base_slice_covers(container: ObjectSlice, contained: ObjectSlice) -> bool {
+    container.root == contained.root
+        && container.first_leaf <= contained.first_leaf
+        && contained.first_leaf + contained.leaf_count
+            <= container.first_leaf + container.leaf_count
 }
 
 pub(crate) fn enum_tag_object_slice(ctx: &ModuleCtx, base: ObjectSlice) -> Option<ObjectSlice> {

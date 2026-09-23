@@ -629,6 +629,37 @@ block0:
     }
 
     #[test]
+    fn callee_created_capture_cannot_certify_unchanged_contents() {
+        check(
+            r#"
+target = "evm-ethereum-osaka"
+type @holder = { objref<i256> };
+func inline(never) private %f(v0.objref<i256>, v1.objref<@holder>, v2.objref<@holder>) -> i256 {
+block0:
+    v3.objref<objref<i256>> = obj.proj v1 0.i8;
+    obj.store v3 v0;
+    v4.objref<objref<i256>> = obj.proj v2 0.i8;
+    v5.objref<i256> = obj.load v4;
+    obj.store v5 22.i256;
+    v6.i256 = obj.load v0;
+    return v6;
+}
+func public %caller() -> i256 {
+block0:
+    v0.objref<i256> = obj.alloc i256;
+    v1.objref<@holder> = obj.alloc @holder;
+    obj.store v0 11.i256;
+    v2.i256 = call %f v0 v1 v1;
+    return v2;
+}
+"#,
+            false,
+            false,
+            false,
+        );
+    }
+
+    #[test]
     fn incomplete_and_repeating_actuals_are_rejected() {
         let callee = r#"
 target = "evm-ethereum-osaka"
