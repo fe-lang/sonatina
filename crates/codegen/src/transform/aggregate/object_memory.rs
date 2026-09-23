@@ -10,7 +10,7 @@ use crate::loop_analysis::{Loop, LoopTree};
 use super::{
     LocalObjectArgInfo, ObjectEffectSummaryMap, RootInit,
     object_access::{
-        ObjectAccess, ObjectAccessFacts, ObjectInitializationSource, ObjectInstEffects,
+        ObjectAccess, ObjectAccessFacts, ObjectGuard, ObjectInitializationSource, ObjectInstEffects,
     },
     object_initialization::{InitializedValue, value_initialization},
     object_tracking::{
@@ -315,6 +315,22 @@ impl ObjectMemoryAnalysis {
         })
     }
 
+    pub(crate) fn guards_hold_before_inst(
+        &self,
+        func: &Function,
+        inst: InstId,
+        guards: &[ObjectGuard],
+    ) -> bool {
+        // Guard validity is separate from scalar definedness. A readable snapshot
+        // containing undef can still share storage while its ancestor tags hold.
+        guards.is_empty()
+            || self.inst_pre_states.get(&inst).is_some_and(|state| {
+                guards.iter().all(|guard| {
+                    slice_initialization(func, state, guard.object).variant() == Some(guard.variant)
+                })
+            })
+    }
+
     pub(crate) fn read_is_loop_invariant(
         &self,
         func: &Function,
@@ -425,7 +441,7 @@ fn initial_state(
             };
             let init = local_object_args
                 .and_then(|args| args.get(&idx))
-                .map(|info| info.init)
+                .and_then(|info| info.init(func, idx))
                 .unwrap_or(RootInit::LoadLiveIn);
             let token = match init {
                 RootInit::LoadLiveIn => ObjectMemToken::LiveIn { root },
@@ -453,18 +469,21 @@ fn initial_state(
     };
 
     for (&idx, info) in local_object_args {
+        let Some(init) = info.init(func, idx) else {
+            continue;
+        };
         let Some(&root) = func.arg_values.get(idx) else {
             continue;
         };
         let Some(root_slice) = whole_root_slice_for_value(tracked, root) else {
             continue;
         };
-        let token = match info.init {
+        let token = match init {
             RootInit::LoadLiveIn => ObjectMemToken::LiveIn { root },
             RootInit::UndefFresh => ObjectMemToken::FreshEntry { root },
         };
         activate_root(&mut state, root_slice, token, relevant_slices);
-        if info.init == RootInit::LoadLiveIn {
+        if init == RootInit::LoadLiveIn {
             mark_slice_initialized(
                 func,
                 &mut state,
@@ -653,12 +672,26 @@ fn transfer_inst(
             .then_some(slice)
         })
         .collect();
+    let invalidated: Vec<_> = effects
+        .writes
+        .iter()
+        .chain(effects.unreadable.iter().filter(|access| {
+            !preserved.iter().any(|slice| {
+                matches!(access, ObjectAccess::Exact(projection)
+                    if projection.root_value.value() == slice.root
+                        && projection.slice.first_leaf == slice.first_leaf
+                        && projection.slice.leaf_count == slice.leaf_count)
+            })
+        }))
+        .copied()
+        .collect();
 
     // Writers need not be tracked, active, or eligible for value propagation.
+    // Logical invalidation also breaks snapshot equality: restoring a tag does
+    // not restore the old payload's readability, even if its bytes survived.
     for slices in ctx.relevant_slices.values() {
         for &slice in slices {
-            if effects
-                .writes
+            if invalidated
                 .iter()
                 .any(|&write| ctx.accesses.may_overlap(write, slice))
             {
@@ -681,18 +714,7 @@ fn transfer_inst(
         let Some(root_slice) = whole_root_slice_for_value(ctx.tracked, root) else {
             continue;
         };
-        for &access in effects
-            .writes
-            .iter()
-            .chain(effects.unreadable.iter().filter(|access| {
-                !preserved.iter().any(|slice| {
-                    matches!(access, ObjectAccess::Exact(projection)
-                if projection.root_value.value() == slice.root
-                    && projection.slice.first_leaf == slice.first_leaf
-                    && projection.slice.leaf_count == slice.leaf_count)
-                })
-            }))
-        {
+        for &access in &invalidated {
             if !ctx.accesses.may_overlap(access, root_slice) {
                 continue;
             }
@@ -1065,15 +1087,7 @@ block0:
         let summaries = compute_object_effect_summaries(&module);
         let selected = selected_args
             .iter()
-            .map(|&index| {
-                (
-                    index,
-                    LocalObjectArgInfo {
-                        init: RootInit::LoadLiveIn,
-                        fresh_result_out: false,
-                    },
-                )
-            })
+            .map(|&index| (index, LocalObjectArgInfo::Borrowed))
             .collect();
         module.func_store.view(lookup_func(&module, "f"), |func| {
             let mut memory = ObjectMemoryAnalysis::default();

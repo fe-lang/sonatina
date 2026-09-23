@@ -434,6 +434,9 @@ impl AggregateScalarize {
 
         if let Some(local_object_args) = local_object_args {
             for (&idx, &info) in local_object_args {
+                if !info.is_valid_for(func, idx) {
+                    continue;
+                }
                 let Some(&root_value) = func.arg_values.get(idx) else {
                     continue;
                 };
@@ -446,7 +449,7 @@ impl AggregateScalarize {
                 if shape.leaves.len() > 4 {
                     continue;
                 }
-                let kind = if info.fresh_result_out {
+                let kind = if info.output_contract(func, idx).is_some() {
                     RootKind::SyntheticOutArg { index: idx }
                 } else {
                     RootKind::Arg { index: idx }
@@ -3065,6 +3068,7 @@ fn is_promoted_path_inst(func: &Function, inst: InstId) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::transform::aggregate::{ObjectMemoryAnalysis, ObjectReturnOutParam};
     use sonatina_ir::{InstDowncast, Module, inst::cast, ir_writer::FuncWriter, module::FuncRef};
     use sonatina_parser::parse_module;
     use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module};
@@ -3755,6 +3759,80 @@ func private %f(v0.objref<[i256; 3]>) -> i256 {
     }
 
     #[test]
+    fn output_contract_binding_requires_explicit_argument_remapping() {
+        for remap in [false, true] {
+            let module = parse_test_module(
+                r#"
+target = "evm-ethereum-osaka"
+type @one = { i256 };
+func private %make(v0.objref<@one>) -> objref<@one> {
+block0:
+    v1.objref<@one> = obj.alloc @one;
+    v2.@one = obj.load v0;
+    obj.store v1 v2;
+    return v1;
+}
+"#,
+            );
+            let func_ref = lookup_func(&module, "make");
+            let mut outputs = ObjectReturnOutParam.run_with_synthetic_out_args(&module);
+            module.func_store.modify(func_ref, |func| {
+                // Same-typed parameters leave the declaration valid, but index zero
+                // now denotes the borrowed input instead of the compiler's output.
+                func.arg_values.swap(0, 1);
+                for (idx, &arg) in func.arg_values.iter().enumerate() {
+                    func.dfg.values[arg] = Value::Arg {
+                        ty: func.dfg.value_ty(arg),
+                        idx,
+                    };
+                }
+            });
+            let config = VerifierConfig::for_level(VerificationLevel::Full);
+            let report = verify_module(&module, &config);
+            assert!(report.is_ok(), "{report}");
+            if remap {
+                let args = outputs.get_mut(&func_ref).unwrap();
+                let output = args.remove(&0).unwrap();
+                args.insert(1, output);
+            }
+            module.func_store.modify(func_ref, |func| {
+                let mut memory = ObjectMemoryAnalysis::default();
+                memory.compute_with_loaded_value_carriers(func, outputs.get(&func_ref), None);
+                let load = func
+                    .layout
+                    .iter_block()
+                    .flat_map(|block| func.layout.iter_inst(block))
+                    .find(|&inst| {
+                        downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst)).is_some()
+                    })
+                    .unwrap();
+                assert!(
+                    memory
+                        .read_state(load)
+                        .is_none_or(|read| !read.may_be_undef())
+                );
+                AggregateScalarize::default().run_for_func(func_ref, func, &outputs);
+                let text = FuncWriter::new(func_ref, func).dump_string();
+                assert!(
+                    text.contains("obj.load"),
+                    "borrowed input must remain live-in:\n{text}"
+                );
+                assert!(
+                    !text.contains("undef.i256"),
+                    "stale output fact must not seed the input:\n{text}"
+                );
+                assert_eq!(
+                    text.contains("obj.proj"),
+                    remap,
+                    "only a correctly remapped output should scalarize:\n{text}"
+                );
+            });
+            let report = verify_module(&module, &config);
+            assert!(report.is_ok(), "{report}");
+        }
+    }
+
+    #[test]
     fn scalarize_promotes_synthetic_out_arg_with_undef_init() {
         let module = parse_test_module(
             r#"
@@ -3777,6 +3855,7 @@ func private %make(v0.i256) -> objref<@one> {
         let synthetic_out_args =
             crate::transform::aggregate::ObjectReturnOutParam.run_with_synthetic_out_args(&module);
         crate::transform::aggregate::merge_local_object_arg_info(
+            &module,
             &mut local_object_args,
             &synthetic_out_args,
         );
@@ -3837,6 +3916,7 @@ func private %choose_pair(v0.i1, v1.i256, v2.i256) -> objref<@pair> {
         let synthetic_out_args =
             crate::transform::aggregate::ObjectReturnOutParam.run_with_synthetic_out_args(&module);
         crate::transform::aggregate::merge_local_object_arg_info(
+            &module,
             &mut local_object_args,
             &synthetic_out_args,
         );

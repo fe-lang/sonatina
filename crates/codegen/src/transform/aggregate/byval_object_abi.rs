@@ -15,19 +15,20 @@ use sonatina_ir::{
 use crate::liveness::{InstLiveness, Liveness};
 
 use super::{
-    LocalObjectArgInfo, ObjectEffectSummaryMap, ObjectMemoryAnalysis,
+    LocalObjectArgInfo, ModuleObjectFacts, ObjectEffectSummaryMap, ObjectLowerToMemory,
+    ObjectMemoryAnalysis,
     abi::abi_leaf_count,
-    collect_local_object_arg_info_with_effects, compute_object_effect_summaries,
-    object_abi::{fresh_root_blocks_are_pairwise_unreachable, whole_object_slice},
+    compute_object_effect_summaries,
+    object_abi::{
+        OutputBufferContract, fresh_root_blocks_are_pairwise_unreachable, whole_object_slice,
+    },
+    object_access::{AccessSet, ObjectAccess, ObjectAccessFacts, ObjectGuard},
+    object_effects::{ObjectEffectSummary, object_effect_scc_order, update_object_effect_scc},
+    object_load_store::ObjectLoadStore,
     object_locality,
-    object_tracking::{
-        AggregateFacts, AggregateObjectFacts, ObjectSlice, TrackedObject,
-        object_slice_overlaps_effect, slices_overlap,
-    },
+    object_tracking::{AggregateFacts, AggregateObjectFacts, ObjectSlice, TrackedObject},
     private_abi::{self, PrivateAbiPlan},
-    provenance::{
-        CompleteProvenance, CompleteRootSet, ProvenanceFacts, ProvenanceSnapshot, RootValue,
-    },
+    provenance::{CompleteProvenance, CompleteRootSet, ProvenanceSnapshot, RootValue},
     shape,
 };
 
@@ -102,6 +103,15 @@ struct RewrittenArg {
     original_ty: Type,
 }
 
+// Records only instructions created by the initial, semantics-preserving ABI
+// rewrite. Elision reads their current operands after every prior transformation.
+struct LoweredCall {
+    inst: InstId,
+    input_copies: Vec<Option<InstId>>,
+    output_loads: Vec<Option<InstId>>,
+    output_stores: Vec<Option<InstId>>,
+}
+
 #[derive(Clone, Copy, Default)]
 enum RetLowering {
     #[default]
@@ -132,11 +142,12 @@ enum SourceOwnership {
     BorrowedLiveIn,
     OwnedByValueCopy,
     FreshLocal,
+    PrivateOutput,
 }
 
 struct CallerElisionFacts {
     inst_liveness: InstLiveness,
-    provenance: ProvenanceFacts,
+    accesses: ObjectAccessFacts,
     tracked: SecondaryMap<ValueId, Option<TrackedObject>>,
     object_memory: ObjectMemoryAnalysis,
     local_object_args: Option<FxHashMap<usize, LocalObjectArgInfo>>,
@@ -150,6 +161,7 @@ struct ByValueCandidate {
     effect: super::object_effects::ObjectArgEffect,
     source_obj: ValueId,
     source_slice: ObjectSlice,
+    guards: SmallVec<[ObjectGuard; 2]>,
     leaf_count: usize,
     can_share: bool,
     can_move: bool,
@@ -161,6 +173,7 @@ struct ReturnCandidate {
     effect: super::object_effects::ObjectArgEffect,
     dest_obj: ValueId,
     dest_slice: ObjectSlice,
+    guards: SmallVec<[ObjectGuard; 2]>,
     store_inst: InstId,
     leaf_count: usize,
 }
@@ -169,6 +182,7 @@ struct ReturnCandidate {
 struct PlannerCandidate {
     key: PlannerCandidateKey,
     participant: CallParticipant,
+    guards: SmallVec<[ObjectGuard; 2]>,
     leaf_count: usize,
     modes: SmallVec<[PlannerMode; 3]>,
 }
@@ -187,8 +201,13 @@ enum PlannerMode {
 
 #[derive(Clone)]
 struct CallParticipant {
-    effect: super::object_effects::ObjectArgEffect,
-    location: ParticipantLocation,
+    reads: AccessSet,
+    writes: AccessSet,
+    exposed: AccessSet,
+}
+
+struct CallElisionPlanner<'a> {
+    accesses: &'a ObjectAccessFacts,
 }
 
 #[derive(Clone, Copy)]
@@ -211,14 +230,6 @@ struct ReturnCandidateRequest {
     out_index: usize,
     original_ty: Type,
     effect: super::object_effects::ObjectArgEffect,
-}
-
-#[derive(Clone)]
-enum ParticipantLocation {
-    Exact(ObjectSlice),
-    RootUnknown { root: ValueId },
-    MaybeRoots(rustc_hash::FxHashSet<ValueId>),
-    Unknown,
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
@@ -248,7 +259,31 @@ impl ObjectAggregateAbi {
             .any(|(_, args)| !args.is_empty())
     }
 
-    pub(crate) fn run_with_synthetic_out_args(
+    /// Keep output guarantees inside their producer/consumer interval. The only
+    /// intervening rewrite is ObjectLoadStore: its alias-aware forwarding/DSE
+    /// removes redundant accesses without adding calls, changing formals, or
+    /// exposing output storage. It preserves the ABI's private-result guarantee.
+    /// Recompute inferred facts afterward, then consume the guarantees during
+    /// object lowering. No contract survives the signature/type cutover.
+    pub(crate) fn lower_to_memory(&mut self, module: &Module, cleanup: bool) -> Result<(), String> {
+        let outputs = self.run_with_synthetic_out_args(module)?;
+        let mut facts = ModuleObjectFacts::compute(module).with_outputs(module, &outputs);
+        if cleanup {
+            module.func_store.par_for_each(|func_ref, func| {
+                ObjectLoadStore::default().run_for_func(
+                    func_ref,
+                    func,
+                    facts.local_args(),
+                    facts.effects(),
+                );
+            });
+            facts = ModuleObjectFacts::compute(module).with_outputs(module, &outputs);
+        }
+        ObjectLowerToMemory.run_with_local_object_args(module, facts.local_args());
+        Ok(())
+    }
+
+    pub(super) fn run_with_synthetic_out_args(
         &mut self,
         module: &Module,
     ) -> Result<super::LocalObjectArgMap, String> {
@@ -264,44 +299,77 @@ impl ObjectAggregateAbi {
         let old_sigs = private_abi::rewrite_declared_signatures(module, &plans);
         shift_synthetic_out_args(&mut synthetic_out_args, &plans);
         for (&func, plan) in &plans {
-            let args = synthetic_out_args.entry(func).or_default();
-            for idx in 0..plan.hidden_out_tys.len() {
-                args.insert(
-                    idx,
-                    LocalObjectArgInfo {
-                        init: super::RootInit::UndefFresh,
-                        fresh_result_out: true,
-                    },
-                );
-            }
-        }
-
-        for (&func, plan) in &plans {
             module.func_store.modify(func, |function| {
                 self.rewrite_function(function, plan, &original_object_effects);
                 function.rebuild_users();
+                synthetic_out_args
+                    .entry(func)
+                    .or_default()
+                    .extend(hidden_out_local_object_args(
+                        function,
+                        plan.hidden_out_tys.len(),
+                    ));
             });
         }
 
-        let object_effects = compute_object_effect_summaries(module);
-        let mut local_object_args =
-            collect_local_object_arg_info_with_effects(module, &object_effects);
-        super::merge_local_object_arg_info(&mut local_object_args, &synthetic_out_args);
-
+        // Complete the signature/call cutover before any new effect inference.
+        let mut calls = FxHashMap::default();
         for func in module.funcs() {
             module.func_store.modify(func, |function| {
-                self.rewrite_calls_with_elision(
-                    function,
-                    plans.get(&func),
-                    &plans,
-                    &object_effects,
-                    local_object_args.get(&func),
-                );
+                calls.insert(func, self.rewrite_calls(function, &plans));
                 function.rebuild_users();
             });
         }
-
         private_abi::propagate_private_abi_types(module, &old_sigs);
+
+        let mut object_effects = ObjectEffectSummaryMap::default();
+        let mut layout_cache = shape::AggregateLayoutCache::default();
+        for scc in object_effect_scc_order(module) {
+            if scc.is_cycle {
+                // No partially rewritten member can promise effects for another
+                // member of the same recursive group.
+                for &func in &scc.funcs {
+                    object_effects.insert(
+                        func,
+                        ObjectEffectSummary::conservative_unknown(
+                            &module.ctx,
+                            func,
+                            &mut layout_cache,
+                        ),
+                    );
+                }
+            } else {
+                update_object_effect_scc(module, &scc, &mut object_effects, &mut layout_cache);
+            }
+            for &func in &scc.funcs {
+                let mut local_args =
+                    object_locality::local_object_arg_info(module, func, &object_effects);
+                if let Some(outputs) = synthetic_out_args.get(&func) {
+                    local_args.extend(outputs.iter().map(|(&idx, &info)| (idx, info)));
+                }
+                module.func_store.modify(func, |function| {
+                    for site in &calls[&func] {
+                        let callee = *downcast::<&control_flow::Call>(
+                            function.inst_set(),
+                            function.dfg.inst(site.inst),
+                        )
+                        .unwrap()
+                        .callee();
+                        let facts = self.collect_caller_elision_facts(
+                            function,
+                            plans.get(&func),
+                            &object_effects,
+                            Some(&local_args),
+                        );
+                        self.elide_call(function, site, &plans[&callee], &object_effects, &facts);
+                    }
+                });
+            }
+            // A move or forwarded output can change a function's formal effects.
+            // Its callers see only the final body, in callee-first SCC order.
+            update_object_effect_scc(module, &scc, &mut object_effects, &mut layout_cache);
+        }
+
         Ok(synthetic_out_args)
     }
 
@@ -794,7 +862,7 @@ impl ObjectAggregateAbi {
         if plan.hidden_out_tys.is_empty() {
             return;
         }
-        let local_object_args = hidden_out_local_object_args(plan.hidden_out_tys.len());
+        let local_object_args = hidden_out_local_object_args(function, plan.hidden_out_tys.len());
         let mut object_memory = ObjectMemoryAnalysis::default();
         object_memory.compute_with_loaded_value_carriers(function, Some(&local_object_args), None);
         let blocks: Vec<_> = function.layout.iter_block().collect();
@@ -998,43 +1066,75 @@ impl ObjectAggregateAbi {
         first_user == Some(store_inst) && whole_store_count == 1
     }
 
-    fn rewrite_calls_with_elision(
+    fn rewrite_calls(
         &self,
         function: &mut Function,
-        current_plan: Option<&FuncPlan>,
         plans: &FxHashMap<FuncRef, FuncPlan>,
-        object_effects: &ObjectEffectSummaryMap,
-        local_object_args: Option<&FxHashMap<usize, LocalObjectArgInfo>>,
-    ) {
-        if !function_has_planned_call(function, plans) {
-            return;
-        }
-
-        let blocks: Vec<_> = function.layout.iter_block().collect();
-        for block in blocks {
-            let insts: Vec<_> = function.layout.iter_inst(block).collect();
-            for inst in insts {
-                if !function.layout.is_inst_inserted(inst) {
-                    continue;
-                }
-                let Some(call) =
+    ) -> Vec<LoweredCall> {
+        let mut cfg = ControlFlowGraph::new();
+        cfg.compute(function);
+        let reachable = cfg.reachable_blocks();
+        let mut blocks: Vec<_> = cfg.post_order().collect();
+        blocks.reverse();
+        blocks.extend(
+            function
+                .layout
+                .iter_block()
+                .filter(|&block| !reachable[block]),
+        );
+        // Elision follows this order too: forwarding a producer's output must
+        // precede proving that a consumer can share the resulting storage.
+        let calls: Vec<_> = blocks
+            .into_iter()
+            .flat_map(|block| function.layout.iter_inst(block))
+            .filter_map(|inst| {
+                let call =
+                    downcast::<&control_flow::Call>(function.inst_set(), function.dfg.inst(inst))?;
+                let plan = plans.get(call.callee())?;
+                let following = function.layout.next_inst_of(inst);
+                // Record original stores before generated copy initializers can
+                // become additional users, including in non-topological layouts.
+                let stores = function
+                    .dfg
+                    .inst_results(inst)
+                    .iter()
+                    .zip(&plan.rets)
+                    .filter(|(_, ret)| ret.kind == RetAbiKind::OutObject)
+                    .map(|(&result, _)| {
+                        following.filter(|&store| {
+                            downcast::<&data::ObjStore>(
+                                function.inst_set(),
+                                function.dfg.inst(store),
+                            )
+                            .is_some_and(|store| *store.value() == result)
+                                && function
+                                    .dfg
+                                    .users(result)
+                                    .filter(|&&user| {
+                                        downcast::<&data::ObjStore>(
+                                            function.inst_set(),
+                                            function.dfg.inst(user),
+                                        )
+                                        .is_some_and(|store| *store.value() == result)
+                                    })
+                                    .count()
+                                    == 1
+                        })
+                    })
+                    .collect();
+                Some((inst, stores))
+            })
+            .collect();
+        calls
+            .into_iter()
+            .map(|(inst, stores)| {
+                let call =
                     downcast::<&control_flow::Call>(function.inst_set(), function.dfg.inst(inst))
-                        .cloned()
-                else {
-                    continue;
-                };
-                let Some(plan) = plans.get(call.callee()) else {
-                    continue;
-                };
-                let facts = self.collect_caller_elision_facts(
-                    function,
-                    current_plan,
-                    object_effects,
-                    local_object_args,
-                );
-                self.rewrite_call_with_elision(function, inst, &call, plan, object_effects, &facts);
-            }
-        }
+                        .unwrap()
+                        .clone();
+                self.rewrite_call(function, inst, &call, &plans[call.callee()], stores)
+            })
+            .collect()
     }
 
     fn collect_caller_elision_facts(
@@ -1068,11 +1168,12 @@ impl ObjectAggregateAbi {
             &facts,
             true,
         );
-        let (provenance, tracked) = facts.into_provenance_and_tracked();
+        let (_, tracked) = facts.into_provenance_and_tracked();
+        let accesses = ObjectAccessFacts::new(function, Some(object_effects));
 
         CallerElisionFacts {
             inst_liveness,
-            provenance,
+            accesses,
             tracked,
             object_memory,
             local_object_args: local_object_args.cloned(),
@@ -1093,94 +1194,62 @@ impl ObjectAggregateAbi {
         }
     }
 
-    fn rewrite_call_with_elision(
+    fn rewrite_call(
         &self,
         function: &mut Function,
         inst: InstId,
         call: &control_flow::Call,
         plan: &FuncPlan,
-        object_effects: &ObjectEffectSummaryMap,
-        facts: &CallerElisionFacts,
-    ) {
-        let (arg_lowerings, ret_lowerings) =
-            self.plan_call_lowerings(function, inst, call, plan, object_effects, facts);
-        let summary = object_effects.get(call.callee());
+        output_stores: Vec<Option<InstId>>,
+    ) -> LoweredCall {
+        let mut input_copies = vec![None; plan.args.len()];
+        let mut output_loads = vec![None; plan.hidden_out_tys.len()];
         let loc = function.layout.prev_inst_of(inst).map_or(
             CursorLocation::BlockTop(function.layout.inst_block(inst)),
             CursorLocation::At,
         );
         let mut pre_call = InstInserter::at_location(loc);
         let mut new_args = SmallVec::<[ValueId; 8]>::new();
-        let mut readonly_copy_cache = FxHashMap::<ValueId, ValueId>::default();
         let old_results = function.dfg.inst_results(inst).to_vec();
         let mut out_roots = SmallVec::<[ValueId; 4]>::new();
 
-        for (&out_ty, &lowering) in plan.hidden_out_tys.iter().zip(&ret_lowerings) {
-            match lowering {
-                RetLowering::Temp => {
-                    let alloc_inst = pre_call.insert_inst_data_from(
-                        function,
-                        inst,
-                        data::ObjAlloc::new_unchecked(
-                            function.inst_set(),
-                            objref_element_ty(function.ctx(), out_ty)
-                                .expect("hidden out arg should be objref"),
-                        ),
-                    );
-                    let object = pre_call.make_result(function, alloc_inst, out_ty);
-                    pre_call.attach_result(function, alloc_inst, object);
-                    pre_call.set_location(CursorLocation::At(alloc_inst));
-                    out_roots.push(object);
-                    new_args.push(object);
-                }
-                RetLowering::ForwardDest { dest_obj, .. } => {
-                    out_roots.push(dest_obj);
-                    new_args.push(dest_obj);
-                }
-            }
+        for &out_ty in &plan.hidden_out_tys {
+            let alloc_inst = pre_call.insert_inst_data_from(
+                function,
+                inst,
+                data::ObjAlloc::new_unchecked(
+                    function.inst_set(),
+                    objref_element_ty(function.ctx(), out_ty)
+                        .expect("hidden out arg should be objref"),
+                ),
+            );
+            let object = pre_call.make_result(function, alloc_inst, out_ty);
+            pre_call.attach_result(function, alloc_inst, object);
+            pre_call.set_location(CursorLocation::At(alloc_inst));
+            out_roots.push(object);
+            new_args.push(object);
         }
-
         for (idx, (&arg, arg_plan)) in call.args().iter().zip(&plan.args).enumerate() {
-            match arg_plan.kind {
-                ArgAbiKind::Direct => new_args.push(arg),
-                ArgAbiKind::ByValueObject => match arg_lowerings[idx] {
-                    ByValueArgLowering::Copy => {
-                        let can_reuse_copy = summary
-                            .and_then(|summary| {
-                                summary.arg_effects.get(plan.hidden_out_tys.len() + idx)
-                            })
-                            .is_some_and(|effect| effect.writes.is_empty() && effect.local_only);
-                        if can_reuse_copy && let Some(&cached_copy) = readonly_copy_cache.get(&arg)
-                        {
-                            new_args.push(cached_copy);
-                            continue;
-                        }
-                        let alloc_inst = pre_call.insert_inst_data_from(
-                            function,
-                            inst,
-                            data::ObjAlloc::new_unchecked(
-                                function.inst_set(),
-                                arg_plan.original_ty,
-                            ),
-                        );
-                        let object = pre_call.make_result(function, alloc_inst, arg_plan.new_ty);
-                        pre_call.attach_result(function, alloc_inst, object);
-                        pre_call.set_location(CursorLocation::At(alloc_inst));
-                        let store_inst = pre_call.insert_inst_data_from(
-                            function,
-                            inst,
-                            data::ObjStore::new_unchecked(function.inst_set(), object, arg),
-                        );
-                        pre_call.set_location(CursorLocation::At(store_inst));
-                        if can_reuse_copy {
-                            readonly_copy_cache.insert(arg, object);
-                        }
-                        new_args.push(object);
-                    }
-                    ByValueArgLowering::Share { source_obj, .. }
-                    | ByValueArgLowering::Move { source_obj, .. } => new_args.push(source_obj),
-                },
+            if arg_plan.kind == ArgAbiKind::Direct {
+                new_args.push(arg);
+                continue;
             }
+            let alloc_inst = pre_call.insert_inst_data_from(
+                function,
+                inst,
+                data::ObjAlloc::new_unchecked(function.inst_set(), arg_plan.original_ty),
+            );
+            let object = pre_call.make_result(function, alloc_inst, arg_plan.new_ty);
+            pre_call.attach_result(function, alloc_inst, object);
+            pre_call.set_location(CursorLocation::At(alloc_inst));
+            let store_inst = pre_call.insert_inst_data_from(
+                function,
+                inst,
+                data::ObjStore::new_unchecked(function.inst_set(), object, arg),
+            );
+            pre_call.set_location(CursorLocation::At(store_inst));
+            input_copies[idx] = Some(store_inst);
+            new_args.push(object);
         }
 
         let new_call = pre_call.insert_inst_data_from(
@@ -1225,26 +1294,11 @@ impl ObjectAggregateAbi {
                 }
                 RetAbiKind::OutObject => {
                     let out_root = out_roots[out_idx];
-                    let ret_lowering = ret_lowerings[out_idx];
-                    let remaining_users = function
-                        .dfg
-                        .users(old_result)
-                        .filter(|&&user| {
-                            !matches!(
-                                ret_lowering,
-                                RetLowering::ForwardDest { store_inst, .. } if user == store_inst
-                            )
-                        })
-                        .count();
-                    out_idx += 1;
-                    if let RetLowering::ForwardDest { store_inst, .. } = ret_lowering {
-                        function.layout.remove_inst(store_inst);
-                        function.erase_inst(store_inst);
-                    }
-                    if remaining_users == 0 {
+                    if function.dfg.users_num(old_result) == 0 {
                         function.dfg.values[old_result] = Value::Undef {
                             ty: ret_plan.original_ty,
                         };
+                        out_idx += 1;
                         continue;
                     }
                     let load_inst = post_call.insert_inst_data_from(
@@ -1256,23 +1310,141 @@ impl ObjectAggregateAbi {
                     post_call.attach_result(function, load_inst, loaded);
                     post_call.set_location(CursorLocation::At(load_inst));
                     function.dfg.change_to_alias(old_result, loaded);
+                    output_loads[out_idx] = Some(load_inst);
+                    out_idx += 1;
                 }
             }
         }
 
         function.layout.remove_inst(inst);
         function.erase_inst(inst);
+        LoweredCall {
+            inst: new_call,
+            input_copies,
+            output_loads,
+            output_stores,
+        }
+    }
+
+    fn elide_call(
+        &self,
+        function: &mut Function,
+        site: &LoweredCall,
+        plan: &FuncPlan,
+        object_effects: &ObjectEffectSummaryMap,
+        facts: &CallerElisionFacts,
+    ) {
+        let call =
+            downcast::<&control_flow::Call>(function.inst_set(), function.dfg.inst(site.inst))
+                .unwrap()
+                .clone();
+        let original_args: SmallVec<[ValueId; 8]> = site
+            .input_copies
+            .iter()
+            .zip(call.args().iter().skip(plan.hidden_out_tys.len()))
+            .map(|(copy, &arg)| {
+                copy.map_or(arg, |copy| {
+                    *downcast::<&data::ObjStore>(function.inst_set(), function.dfg.inst(copy))
+                        .unwrap()
+                        .value()
+                })
+            })
+            .collect();
+        // This view is for the planner only. All actual IR calls already use the
+        // new signature, so provenance, memory, and effect analysis are coherent.
+        let original_call =
+            control_flow::Call::new_unchecked(function.inst_set(), *call.callee(), original_args);
+        let (arg_lowerings, ret_lowerings) =
+            self.plan_call_lowerings(function, site, &original_call, plan, object_effects, facts);
+        let mut new_args: SmallVec<[ValueId; 8]> = call.args().iter().copied().collect();
+        let mut redundant = Vec::new();
+        let mut readonly_copies = FxHashMap::default();
+        let summary = object_effects.get(call.callee());
+        for (idx, (copy, lowering)) in site.input_copies.iter().zip(arg_lowerings).enumerate() {
+            let Some(copy) = *copy else {
+                continue;
+            };
+            let arg_index = plan.hidden_out_tys.len() + idx;
+            let replacement = match lowering {
+                ByValueArgLowering::Share { source_obj, .. }
+                | ByValueArgLowering::Move { source_obj, .. } => Some(source_obj),
+                ByValueArgLowering::Copy => {
+                    if summary
+                        .and_then(|summary| summary.arg_effects.get(arg_index))
+                        .is_some_and(|effect| effect.local_only && effect.writes.is_empty())
+                    {
+                        let actual = original_call.args()[idx];
+                        let previous = readonly_copies.get(&actual).copied();
+                        readonly_copies.entry(actual).or_insert(new_args[arg_index]);
+                        previous
+                    } else {
+                        None
+                    }
+                }
+            };
+            if let Some(replacement) = replacement {
+                redundant.push((copy, new_args[arg_index]));
+                new_args[arg_index] = replacement;
+            }
+        }
+        for (idx, lowering) in ret_lowerings.iter().enumerate() {
+            if let RetLowering::ForwardDest {
+                dest_obj,
+                store_inst,
+                ..
+            } = *lowering
+            {
+                let old_root = new_args[idx];
+                function.dfg.change_to_alias(old_root, dest_obj);
+                new_args[idx] = dest_obj;
+                function.layout.remove_inst(store_inst);
+                function.erase_inst(store_inst);
+                let alloc = function
+                    .dfg
+                    .value_inst(old_root)
+                    .expect("output temporary allocation");
+                function.layout.remove_inst(alloc);
+                function.erase_inst(alloc);
+                if let Some(load) = site.output_loads[idx]
+                    && let Some(value) = function.dfg.inst_result(load)
+                    && function.dfg.users_num(value) == 0
+                {
+                    function.layout.remove_inst(load);
+                    function.erase_inst(load);
+                }
+            }
+        }
+        function.dfg.replace_inst(
+            site.inst,
+            Box::new(control_flow::Call::new_unchecked(
+                function.inst_set(),
+                *call.callee(),
+                new_args,
+            )),
+        );
+        for (copy, root) in redundant {
+            function.layout.remove_inst(copy);
+            function.erase_inst(copy);
+            let alloc = function
+                .dfg
+                .value_inst(root)
+                .expect("input copy allocation");
+            function.layout.remove_inst(alloc);
+            function.erase_inst(alloc);
+        }
+        function.rebuild_users();
     }
 
     fn plan_call_lowerings(
         &self,
         function: &Function,
-        inst: InstId,
+        site: &LoweredCall,
         call: &control_flow::Call,
         plan: &FuncPlan,
         object_effects: &ObjectEffectSummaryMap,
         facts: &CallerElisionFacts,
     ) -> (Vec<ByValueArgLowering>, Vec<RetLowering>) {
+        let inst = site.inst;
         let mut arg_lowerings = vec![ByValueArgLowering::Copy; plan.args.len()];
         let mut ret_lowerings = vec![RetLowering::Temp; plan.hidden_out_tys.len()];
         let Some(summary) = object_effects.get(call.callee()) else {
@@ -1286,8 +1458,11 @@ impl ObjectAggregateAbi {
         let candidates =
             self.collect_byvalue_candidates(function, inst, call, plan, object_effects, facts);
         let return_candidates =
-            self.collect_return_candidates(function, inst, plan, summary, facts);
-        let chosen = self.choose_candidate_lowerings(&candidates, &return_candidates, &fixed);
+            self.collect_return_candidates(function, site, plan, summary, facts);
+        let chosen = CallElisionPlanner {
+            accesses: &facts.accesses,
+        }
+        .choose_candidate_lowerings(&candidates, &return_candidates, &fixed);
         for (candidate, mode) in chosen {
             match (candidate, mode) {
                 (PlannerCandidateKey::Arg(arg_index), PlannerMode::Arg(lowering)) => {
@@ -1337,9 +1512,16 @@ impl ObjectAggregateAbi {
             else {
                 continue;
             };
+            fixed.push(CallParticipant::new(arg, &effect, &facts.accesses));
+        }
+        for (location, effect) in [
+            (ObjectAccess::External, summary.non_arg.external),
+            (ObjectAccess::Unknown, summary.non_arg.unknown),
+        ] {
             fixed.push(CallParticipant {
-                effect,
-                location: self.participant_location(arg, facts),
+                reads: effect.reads.then_some(location).into_iter().collect(),
+                writes: effect.writes.then_some(location).into_iter().collect(),
+                exposed: AccessSet::new(),
             });
         }
         fixed
@@ -1377,17 +1559,29 @@ impl ObjectAggregateAbi {
             let can_share = effect.writes.is_empty() && effect.local_only;
             let can_move = self
                 .source_ownership_kind(function, source_slice, facts)
-                .is_some_and(|ownership| ownership != SourceOwnership::BorrowedLiveIn)
+                // Output storage remains observable at return even when its
+                // reference has no later SSA uses. Moving it would require a
+                // separate proof that subsequent writes restore the result.
+                .is_some_and(|ownership| {
+                    matches!(
+                        ownership,
+                        SourceOwnership::FreshLocal | SourceOwnership::OwnedByValueCopy
+                    )
+                })
                 && self.source_can_move(function, source_slice, object_effects)
                 && !self.move_has_live_alias_after_call(function, inst, source_slice, facts);
             if !can_share && !can_move {
                 continue;
             }
+            let Some(guards) = facts.current_ancestor_guards(function, inst, source_slice) else {
+                continue;
+            };
             candidates.push(ByValueCandidate {
                 arg_index: idx,
                 effect,
                 source_obj,
                 source_slice,
+                guards,
                 leaf_count: source_slice.leaf_count,
                 can_share,
                 can_move,
@@ -1399,55 +1593,45 @@ impl ObjectAggregateAbi {
     fn collect_return_candidates(
         &self,
         function: &Function,
-        inst: InstId,
+        site: &LoweredCall,
         plan: &FuncPlan,
         summary: &super::object_effects::ObjectEffectSummary,
         facts: &CallerElisionFacts,
     ) -> Vec<ReturnCandidate> {
-        let mut candidates = Vec::new();
-        let old_results = function.dfg.inst_results(inst).to_vec();
-        let mut out_idx = 0usize;
-        for (&old_result, ret_plan) in old_results.iter().zip(&plan.rets) {
-            if ret_plan.kind != RetAbiKind::OutObject {
-                continue;
-            }
-            let candidate = summary
-                .arg_effects
-                .get(out_idx)
-                .cloned()
-                .and_then(|effect| {
-                    self.forwarded_return_candidate(
-                        function,
-                        inst,
-                        old_result,
-                        ReturnCandidateRequest {
-                            out_index: out_idx,
-                            original_ty: ret_plan.original_ty,
-                            effect,
-                        },
-                        facts,
-                    )
-                });
-            if let Some(candidate) = candidate {
-                candidates.push(candidate);
-            }
-            out_idx += 1;
-        }
-        candidates
+        site.output_loads
+            .iter()
+            .zip(&site.output_stores)
+            .zip(&plan.hidden_out_tys)
+            .enumerate()
+            .filter_map(|(out_index, ((&load, &store), &ty))| {
+                let load = load?;
+                let store = store?;
+                let value = function.dfg.inst_result(load)?;
+                self.forwarded_return_candidate(
+                    function,
+                    site.inst,
+                    store,
+                    value,
+                    ReturnCandidateRequest {
+                        out_index,
+                        original_ty: objref_element_ty(function.ctx(), ty)?,
+                        effect: summary.arg_effects.get(out_index)?.clone(),
+                    },
+                    facts,
+                )
+            })
+            .collect()
     }
 
     fn forwarded_return_candidate(
         &self,
         function: &Function,
-        inst: InstId,
+        call_inst: InstId,
+        store_inst: InstId,
         old_result: ValueId,
         request: ReturnCandidateRequest,
         facts: &CallerElisionFacts,
     ) -> Option<ReturnCandidate> {
-        let store_inst = function.layout.next_inst_of(inst)?;
-        if function.layout.inst_block(store_inst) != function.layout.inst_block(inst) {
-            return None;
-        }
         let store =
             downcast::<&data::ObjStore>(function.inst_set(), function.dfg.inst(store_inst))?;
         if *store.value() != old_result {
@@ -1463,22 +1647,12 @@ impl ObjectAggregateAbi {
         {
             return None;
         }
-        let whole_store_count = function
-            .dfg
-            .users(old_result)
-            .filter(|&&user| {
-                downcast::<&data::ObjStore>(function.inst_set(), function.dfg.inst(user))
-                    .is_some_and(|candidate_store| *candidate_store.value() == old_result)
-            })
-            .count();
-        if whole_store_count != 1 {
-            return None;
-        }
         Some(ReturnCandidate {
             out_index: request.out_index,
             effect: request.effect,
             dest_obj,
             dest_slice,
+            guards: facts.current_ancestor_guards(function, call_inst, dest_slice)?,
             store_inst,
             leaf_count: dest_slice.leaf_count,
         })
@@ -1521,9 +1695,10 @@ impl ObjectAggregateAbi {
                 .local_object_args
                 .as_ref()
                 .and_then(|args| args.get(&arg_index))
-                .is_some_and(|info| info.init == super::RootInit::UndefFresh)
+                .and_then(|info| info.output_contract(function, arg_index))
+                .is_some()
             {
-                return Some(SourceOwnership::FreshLocal);
+                return Some(SourceOwnership::PrivateOutput);
             }
             return Some(SourceOwnership::BorrowedLiveIn);
         }
@@ -1564,58 +1739,35 @@ impl ObjectAggregateAbi {
         facts.inst_liveness.live_out(inst).iter().any(|value| {
             let ty = function.dfg.value_ty(value);
             (ty.is_obj_ref(function.ctx())
-                && self
-                    .participant_location(value, facts)
-                    .may_overlap_move_source(source_slice))
+                && facts
+                    .accesses
+                    .access(value, None)
+                    .iter()
+                    .any(|&access| facts.accesses.may_overlap(access, source_slice)))
                 || (!ty.is_obj_ref(function.ctx()) && has_nested_objref(function.ctx(), ty))
         })
     }
+}
 
-    fn participant_location(
+impl CallerElisionFacts {
+    fn current_ancestor_guards(
         &self,
-        value: ValueId,
-        facts: &CallerElisionFacts,
-    ) -> ParticipantLocation {
-        if let Some(tracked) = facts.tracked[value] {
-            return match tracked {
-                TrackedObject::Exact(slice) => ParticipantLocation::Exact(slice),
-                TrackedObject::RootUnknown { root, .. } => {
-                    ParticipantLocation::RootUnknown { root }
-                }
-            };
-        }
-
-        match facts.provenance.complete().exact_projection(value) {
-            Some(projection) => facts
-                .root_total_leaves
-                .get(&projection.root_value.value())
-                .copied()
-                .map_or(
-                    ParticipantLocation::RootUnknown {
-                        root: projection.root_value.value(),
-                    },
-                    |total_leaves| {
-                        ParticipantLocation::Exact(ObjectSlice {
-                            root: projection.root_value.value(),
-                            ty: projection.slice.ty,
-                            first_leaf: projection.slice.first_leaf,
-                            leaf_count: projection.slice.leaf_count,
-                            total_leaves,
-                        })
-                    },
-                ),
-            None => match facts.provenance.complete().complete_roots(value) {
-                Some(CompleteRootSet::Single(root)) => {
-                    ParticipantLocation::RootUnknown { root: root.value() }
-                }
-                Some(CompleteRootSet::Multiple(roots)) => {
-                    ParticipantLocation::MaybeRoots(roots.iter().map(RootValue::value).collect())
-                }
-                None => ParticipantLocation::Unknown,
-            },
-        }
+        function: &Function,
+        inst: InstId,
+        slice: ObjectSlice,
+    ) -> Option<SmallVec<[ObjectGuard; 2]>> {
+        let guards = self.accesses.ancestor_guards(
+            function,
+            slice,
+            &mut shape::AggregateLayoutCache::default(),
+        )?;
+        self.object_memory
+            .guards_hold_before_inst(function, inst, &guards)
+            .then_some(guards)
     }
+}
 
+impl CallElisionPlanner<'_> {
     fn choose_candidate_lowerings(
         &self,
         byvalue_candidates: &[ByValueCandidate],
@@ -1639,7 +1791,12 @@ impl ObjectAggregateAbi {
             .iter()
             .map(|candidate| PlannerCandidate {
                 key: PlannerCandidateKey::Arg(candidate.arg_index),
-                participant: candidate.participant(),
+                participant: CallParticipant::new(
+                    candidate.source_obj,
+                    &candidate.effect,
+                    self.accesses,
+                ),
+                guards: candidate.guards.clone(),
                 leaf_count: candidate.leaf_count,
                 modes: self
                     .candidate_modes(candidate)
@@ -1649,7 +1806,12 @@ impl ObjectAggregateAbi {
             })
             .chain(return_candidates.iter().map(|candidate| PlannerCandidate {
                 key: PlannerCandidateKey::Ret(candidate.out_index),
-                participant: candidate.participant(),
+                participant: CallParticipant::new(
+                    candidate.dest_obj,
+                    &candidate.effect,
+                    self.accesses,
+                ),
+                guards: candidate.guards.clone(),
                 leaf_count: candidate.leaf_count,
                 modes: smallvec::smallvec![
                     PlannerMode::Ret(RetLowering::ForwardDest {
@@ -1799,11 +1961,11 @@ impl ObjectAggregateAbi {
             return true;
         };
         let new_participant = &candidates[new_idx].participant;
+        let new_guards = &candidates[new_idx].guards;
 
-        if fixed
-            .iter()
-            .any(|participant| self.lowering_conflicts(new_mode, new_source_slice, participant))
-        {
+        if fixed.iter().any(|participant| {
+            self.lowering_conflicts(new_mode, new_source_slice, new_guards, participant)
+        }) {
             return false;
         }
 
@@ -1815,8 +1977,13 @@ impl ObjectAggregateAbi {
                 continue;
             };
             let other_participant = &candidates[other_idx].participant;
-            if self.lowering_conflicts(new_mode, new_source_slice, other_participant)
-                || self.lowering_conflicts(other_mode, other_source_slice, new_participant)
+            if self.lowering_conflicts(new_mode, new_source_slice, new_guards, other_participant)
+                || self.lowering_conflicts(
+                    other_mode,
+                    other_source_slice,
+                    &candidates[other_idx].guards,
+                    new_participant,
+                )
             {
                 return false;
             }
@@ -1829,44 +1996,56 @@ impl ObjectAggregateAbi {
         &self,
         lowering: PlannerMode,
         source_slice: ObjectSlice,
+        guards: &[ObjectGuard],
         participant: &CallParticipant,
     ) -> bool {
+        // Physically disjoint writes to a parent tag can still invalidate reads
+        // through a shared, moved, or forwarded payload reference.
+        if participant.writes.iter().any(|&access| {
+            guards
+                .iter()
+                .any(|guard| self.accesses.may_overlap(access, guard.tag))
+        }) {
+            return true;
+        }
+        let overlaps = |effects: &AccessSet| {
+            effects
+                .iter()
+                .any(|&access| self.accesses.may_overlap(access, source_slice))
+        };
         match lowering {
             PlannerMode::Arg(ByValueArgLowering::Copy) | PlannerMode::Ret(RetLowering::Temp) => {
                 false
             }
-            PlannerMode::Arg(ByValueArgLowering::Share { .. }) => {
-                participant.location.may_overlap(source_slice)
-                    && effect_may_overlap_slice(
-                        source_slice,
-                        &participant.location,
-                        &participant.effect.writes,
-                    )
-            }
+            PlannerMode::Arg(ByValueArgLowering::Share { .. }) => overlaps(&participant.writes),
             PlannerMode::Arg(ByValueArgLowering::Move { .. })
             | PlannerMode::Ret(RetLowering::ForwardDest { .. }) => {
-                participant.location.may_overlap(source_slice)
-                    && (!participant.effect.local_only
-                        || effect_may_overlap_slice(
-                            source_slice,
-                            &participant.location,
-                            &participant.effect.reads,
-                        )
-                        || effect_may_overlap_slice(
-                            source_slice,
-                            &participant.location,
-                            &participant.effect.writes,
-                        ))
+                overlaps(&participant.reads)
+                    || overlaps(&participant.writes)
+                    || overlaps(&participant.exposed)
             }
         }
     }
 }
 
-impl ReturnCandidate {
-    fn participant(&self) -> CallParticipant {
-        CallParticipant {
-            effect: self.effect.clone(),
-            location: ParticipantLocation::Exact(self.dest_slice),
+impl CallParticipant {
+    fn new(
+        value: ValueId,
+        effect: &super::object_effects::ObjectArgEffect,
+        accesses: &ObjectAccessFacts,
+    ) -> Self {
+        let mut reads = accesses.summary_access(value, &effect.reads);
+        if effect.needs_unknown_object_barrier() {
+            reads.extend(accesses.reachable_access(value));
+        }
+        Self {
+            reads,
+            writes: accesses.summary_access(value, &effect.writes),
+            exposed: if effect.local_only {
+                AccessSet::new()
+            } else {
+                accesses.access(value, None)
+            },
         }
     }
 }
@@ -1909,74 +2088,6 @@ impl ByValueArgLowering {
     }
 }
 
-impl ByValueCandidate {
-    fn participant(&self) -> CallParticipant {
-        CallParticipant {
-            effect: self.effect.clone(),
-            location: ParticipantLocation::Exact(self.source_slice),
-        }
-    }
-}
-
-impl ParticipantLocation {
-    fn may_overlap(&self, source_slice: ObjectSlice) -> bool {
-        match self {
-            Self::Exact(slice) => slices_overlap(*slice, source_slice),
-            Self::RootUnknown { root } => *root == source_slice.root,
-            Self::MaybeRoots(roots) => roots.contains(&source_slice.root),
-            Self::Unknown => true,
-        }
-    }
-
-    fn may_overlap_move_source(&self, source_slice: ObjectSlice) -> bool {
-        self.may_overlap(source_slice)
-    }
-}
-
-fn effect_may_overlap_slice(
-    source_slice: ObjectSlice,
-    location: &ParticipantLocation,
-    effect: &super::SliceSet,
-) -> bool {
-    match location {
-        ParticipantLocation::Exact(base_slice) => {
-            slice_set_may_overlap(source_slice, *base_slice, effect)
-        }
-        ParticipantLocation::RootUnknown { root } => {
-            *root == source_slice.root && !effect.is_empty()
-        }
-        ParticipantLocation::MaybeRoots(roots) => {
-            roots.contains(&source_slice.root) && !effect.is_empty()
-        }
-        ParticipantLocation::Unknown => !effect.is_empty(),
-    }
-}
-
-fn slice_set_may_overlap(
-    source_slice: ObjectSlice,
-    base_slice: ObjectSlice,
-    effect: &super::SliceSet,
-) -> bool {
-    if effect.is_empty() || !slices_overlap(source_slice, base_slice) {
-        return false;
-    }
-    if effect.is_whole_root() {
-        return true;
-    }
-    effect
-        .exact_leaves()
-        .is_none_or(|leaves| object_slice_overlaps_effect(source_slice, base_slice, leaves))
-}
-
-fn function_has_planned_call(function: &Function, plans: &FxHashMap<FuncRef, FuncPlan>) -> bool {
-    function.layout.iter_block().any(|block| {
-        function.layout.iter_inst(block).any(|inst| {
-            downcast::<&control_flow::Call>(function.inst_set(), function.dfg.inst(inst))
-                .is_some_and(|call| plans.contains_key(call.callee()))
-        })
-    })
-}
-
 fn shift_synthetic_out_args(
     synthetic_out_args: &mut super::LocalObjectArgMap,
     plans: &FxHashMap<FuncRef, FuncPlan>,
@@ -1997,15 +2108,17 @@ fn shift_synthetic_out_args(
     }
 }
 
-fn hidden_out_local_object_args(count: usize) -> FxHashMap<usize, LocalObjectArgInfo> {
+fn hidden_out_local_object_args(
+    function: &Function,
+    count: usize,
+) -> FxHashMap<usize, LocalObjectArgInfo> {
     (0..count)
         .map(|idx| {
             (
                 idx,
-                LocalObjectArgInfo {
-                    init: super::RootInit::UndefFresh,
-                    fresh_result_out: true,
-                },
+                LocalObjectArgInfo::Output(OutputBufferContract::for_rewritten_output(
+                    function, idx,
+                )),
             )
         })
         .collect()
@@ -2089,6 +2202,7 @@ mod tests {
     use crate::{
         isa::evm::{EvmBackend, PushWidthPolicy, test_util::prepare_root},
         object::{CompileOptions, compile_all_objects},
+        transform::aggregate::collect_local_object_arg_info_with_effects,
     };
     use sonatina_ir::{
         Function, Module, ValueId,
@@ -2502,6 +2616,710 @@ block0:
         });
     }
 
+    fn verify_full(module: &Module) {
+        let report = verify_module(module, &VerifierConfig::for_level(VerificationLevel::Full));
+        assert!(report.is_ok(), "{report}");
+    }
+
+    #[test]
+    fn byvalue_snapshot_sharing_preserves_ancestor_guards() {
+        for (before_call, during_call, expected_allocs) in [
+            ("", "", 1),
+            ("enum.set_tag v0 #Some;", "", 1),
+            (
+                "",
+                "v5.objref<i256> = enum.proj v1 #Some 1.i8;\n    obj.store v5 9.i256;",
+                1,
+            ),
+            ("", "enum.set_tag v1 #None;", 2),
+            ("enum.set_tag v0 #None;", "", 2),
+            ("enum.set_tag v0 #None;\n    enum.set_tag v0 #Some;", "", 2),
+        ] {
+            let source = format!(
+                r#"
+target = "evm-ethereum-osaka"
+type @Choice = enum {{ #None, #Some([i256; 8],i256) }};
+func private %read(v0.[i256; 8], v1.objref<@Choice>) -> i256 {{
+block0:
+    {during_call}
+    v2.i256 = extract_value v0 0.i8;
+    return v2;
+}}
+func private %caller() -> i256 {{
+block0:
+    v0.objref<@Choice> = obj.alloc @Choice;
+    v1.[i256; 8] = insert_value undef.[i256; 8] 0.i8 7.i256;
+    enum.write_variant v0 #Some (v1, 11.i256);
+    v2.objref<[i256; 8]> = enum.proj v0 #Some 0.i8;
+    v3.[i256; 8] = obj.load v2;
+    {before_call}
+    v4.i256 = call %read v3 v0;
+    return v4;
+}}
+"#
+            );
+            let module = parse_test_module(&source);
+            verify_full(&module);
+            run_byvalue_arg_abi(&module);
+            verify_full(&module);
+            let text = dump_func(&module, "caller");
+            assert_eq!(
+                count_obj_allocs(&module, "caller"),
+                expected_allocs,
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn forwarded_payload_destination_preserves_ancestor_guards() {
+        for (initial_tag, during_call, expected_allocs) in [
+            ("Some", "", 1),
+            ("None", "", 2),
+            ("Some", "enum.set_tag v0 #None;", 2),
+        ] {
+            let source = format!(
+                r#"
+target = "evm-ethereum-osaka"
+type @Choice = enum {{ #None, #Some([i256; 20]) }};
+func private %make(v0.objref<@Choice>) -> [i256; 20] {{
+block0:
+    v1.objref<[i256; 20]> = obj.alloc [i256; 20];
+    v2.[i256; 20] = insert_value undef.[i256; 20] 0.i8 7.i256;
+    obj.store v1 v2;
+    {during_call}
+    v3.[i256; 20] = obj.load v1;
+    return v3;
+}}
+func private %caller() {{
+block0:
+    v0.objref<@Choice> = obj.alloc @Choice;
+    enum.set_tag v0 #{initial_tag};
+    v1.objref<[i256; 20]> = enum.proj v0 #Some 0.i8;
+    v2.[i256; 20] = call %make v0;
+    obj.store v1 v2;
+    return;
+}}
+"#
+            );
+            let module = parse_test_module(&source);
+            verify_full(&module);
+            run_byvalue_arg_abi(&module);
+            verify_full(&module);
+            let text = dump_func(&module, "caller");
+            assert_eq!(
+                count_obj_allocs(&module, "caller"),
+                expected_allocs,
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn moving_nested_payload_preserves_all_ancestor_guards() {
+        for (during_call, expected_allocs) in [
+            ("", 1),
+            ("enum.set_tag v1 #Off;", 2),
+            ("enum.set_tag v2 #None;", 2),
+        ] {
+            let source = format!(
+                r#"
+target = "evm-ethereum-osaka"
+type @Choice = enum {{ #None, #Some([i256; 8]) }};
+type @Outer = enum {{ #Off, #On(@Choice) }};
+func private %mutate(v0.[i256; 8], v1.objref<@Outer>) -> i256 {{
+block0:
+    v2.objref<@Choice> = enum.proj v1 #On 0.i8;
+    v3.objref<[i256; 8]> = obj.alloc [i256; 8];
+    obj.store v3 v0;
+    v4.objref<i256> = obj.index v3 1.i8;
+    obj.store v4 99.i256;
+    {during_call}
+    v5.objref<i256> = obj.index v3 0.i8;
+    v6.i256 = obj.load v5;
+    return v6;
+}}
+func private %caller() -> i256 {{
+block0:
+    v0.objref<@Outer> = obj.alloc @Outer;
+    v1.[i256; 8] = insert_value undef.[i256; 8] 0.i8 7.i256;
+    v2.@Choice = enum.make @Choice #Some (v1);
+    enum.write_variant v0 #On (v2);
+    v3.objref<@Choice> = enum.proj v0 #On 0.i8;
+    v4.objref<[i256; 8]> = enum.proj v3 #Some 0.i8;
+    v5.[i256; 8] = obj.load v4;
+    v6.i256 = call %mutate v5 v0;
+    return v6;
+}}
+"#
+            );
+            let module = parse_test_module(&source);
+            verify_full(&module);
+            run_byvalue_arg_abi(&module);
+            verify_full(&module);
+            let text = dump_func(&module, "caller");
+            assert_eq!(
+                count_obj_allocs(&module, "caller"),
+                expected_allocs,
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn output_guarantees_do_not_cross_separate_abi_invocations() {
+        for cleanup in [false, true] {
+            let module = parse_test_module(
+                r#"
+target = "evm-ethereum-osaka"
+func private %make(v0.objref<i256>) -> objref<i256> {
+block0:
+    v1.objref<i256> = obj.alloc i256;
+    obj.store v1 22.i256;
+    v2.i256 = obj.load v0;
+    obj.store v1 v2;
+    return v1;
+}
+func public %caller() -> i256 {
+block0:
+    v0.objref<i256> = obj.alloc i256;
+    obj.store v0 11.i256;
+    v1.objref<i256> = call %make v0;
+    v2.i256 = obj.load v1;
+    return v2;
+}
+"#,
+            );
+            let config = VerifierConfig::for_level(VerificationLevel::Full);
+            assert!(verify_module(&module, &config).is_ok());
+            let mut abi = ObjectAggregateAbi::default();
+            assert!(abi.run(&module));
+            let make = lookup_func(&module, "make");
+            let caller = lookup_func(&module, "caller");
+            // Mutate the call without changing any formal's identity/type. The
+            // former private-output guarantee no longer holds: its first write
+            // is now observable through the input reference. No guarantee from
+            // the completed ABI invocation may be reused by the next one.
+            module.func_store.modify(caller, |func| {
+                let call_inst = func
+                    .layout
+                    .iter_inst(func.layout.entry_block().unwrap())
+                    .find(|&inst| {
+                        downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(inst))
+                            .is_some()
+                    })
+                    .unwrap();
+                let call =
+                    downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(call_inst))
+                        .unwrap();
+                let mut args = call.args().clone();
+                args[1] = args[0];
+                let call = control_flow::Call::new_unchecked(func.inst_set(), make, args);
+                func.dfg.replace_inst(call_inst, Box::new(call));
+                func.rebuild_users();
+            });
+            assert!(verify_module(&module, &config).is_ok());
+            abi.lower_to_memory(&module, cleanup).unwrap();
+            assert!(verify_module(&module, &config).is_ok());
+            module.func_store.view(make, |func| {
+                let text = FuncWriter::new(make, func).dump_string();
+                let load = text.find("mload").expect("aliased input read remains");
+                let initial_write = text
+                    .find("22.i256")
+                    .expect("first output write is observed");
+                assert!(initial_write < load, "cleanup={cleanup}: {text}");
+                assert!(!text.contains("objref"), "{text}");
+            });
+        }
+    }
+
+    #[test]
+    fn synthetic_output_remains_observable_after_last_reference_use() {
+        for writes in [false, true] {
+            let source = r#"
+target = "evm-ethereum-osaka"
+func private %mutate(v0.[i256; 8]) -> i256 {
+block0:
+    v1.objref<[i256; 8]> = obj.alloc [i256; 8];
+    obj.store v1 v0;
+    v2.objref<i256> = obj.index v1 0.i8;
+    obj.store v2 99.i256;
+    v3.i256 = obj.load v2;
+    return v3;
+}
+func private %make() -> objref<[i256; 8]> {
+block0:
+    v0.objref<[i256; 8]> = obj.alloc [i256; 8];
+    v1.[i256; 8] = insert_value undef.[i256; 8] 0.i8 7.i256;
+    obj.store v0 v1;
+    v2.[i256; 8] = obj.load v0;
+    v3.i256 = call %mutate v2;
+    return v0;
+}
+func private %caller() -> i256 {
+block0:
+    v0.objref<[i256; 8]> = call %make;
+    v1.objref<i256> = obj.index v0 0.i8;
+    v2.i256 = obj.load v1;
+    return v2;
+}
+"#;
+            let source = source.replace(
+                "    obj.store v2 99.i256;",
+                if writes {
+                    "    obj.store v2 99.i256;"
+                } else {
+                    ""
+                },
+            );
+            let module = parse_test_module(&source);
+            verify_full(&module);
+            run_byvalue_arg_abi(&module);
+            verify_full(&module);
+            let text = dump_func(&module, "make");
+            assert_eq!(
+                count_obj_allocs(&module, "make"),
+                usize::from(writes),
+                "result must retain 7, not the copy's 99:\n{text}"
+            );
+            let args = first_call_args(&module, "make", "mutate");
+            module
+                .func_store
+                .view(lookup_func(&module, "make"), |function| {
+                    assert_eq!(
+                        args[0] == function.arg_values[0],
+                        !writes,
+                        "readonly output sharing must remain available:\n{text}"
+                    );
+                });
+        }
+    }
+
+    #[test]
+    fn aliased_incoming_writer_forces_byvalue_snapshot_copy() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+func private %mix(v0.[i256; 8], v1.objref<i256>) -> i256 {
+block0:
+    obj.store v1 7.i256;
+    v2.i256 = extract_value v0 0.i8;
+    return v2;
+}
+func private %caller(v0.objref<[i256; 8]>, v1.objref<i256>) -> i256 {
+block0:
+    v2.[i256; 8] = obj.load v0;
+    v3.i256 = call %mix v2 v1;
+    return v3;
+}
+"#,
+        );
+        verify_full(&module);
+        run_byvalue_arg_abi(&module);
+        verify_full(&module);
+        let text = dump_func(&module, "caller");
+        assert_eq!(count_obj_allocs(&module, "caller"), 1, "{text}");
+    }
+
+    #[test]
+    fn ambient_writer_copies_exposed_snapshot_but_shares_private_snapshot() {
+        for (signature, allocation, expected_allocs) in [
+            ("v0.objref<[i256; 8]>", "", 1),
+            ("", "v0.objref<[i256; 8]> = obj.alloc [i256; 8];", 1),
+        ] {
+            let source = format!(
+                r#"
+target = "evm-ethereum-osaka"
+func private %mix(v0.[i256; 8]) -> i256 {{
+block0:
+    mstore 0.i256 7.i256 i256;
+    v1.i256 = extract_value v0 0.i8;
+    return v1;
+}}
+func private %caller({signature}) -> i256 {{
+block0:
+    {allocation}
+    v2.[i256; 8] = obj.load v0;
+    v3.i256 = call %mix v2;
+    return v3;
+}}
+"#
+            );
+            let module = parse_test_module(&source);
+            verify_full(&module);
+            run_byvalue_arg_abi(&module);
+            verify_full(&module);
+            let text = dump_func(&module, "caller");
+            assert_eq!(
+                count_obj_allocs(&module, "caller"),
+                expected_allocs,
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn forwarded_destination_cannot_alias_an_input_read() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+func private %make(v0.objref<i256>) -> [i256; 20] {
+block0:
+    v1.objref<[i256; 20]> = obj.alloc [i256; 20];
+    v2.objref<i256> = obj.index v1 0.i8;
+    obj.store v2 7.i256;
+    v3.i256 = obj.load v0;
+    v4.objref<i256> = obj.index v1 1.i8;
+    obj.store v4 v3;
+    v5.[i256; 20] = obj.load v1;
+    return v5;
+}
+func private %caller(v0.objref<[i256; 20]>, v1.objref<i256>) {
+block0:
+    v2.[i256; 20] = call %make v1;
+    obj.store v0 v2;
+    return;
+}
+"#,
+        );
+        verify_full(&module);
+        run_byvalue_arg_abi(&module);
+        verify_full(&module);
+        let text = dump_func(&module, "caller");
+        assert_eq!(count_obj_allocs(&module, "caller"), 1, "{text}");
+        assert!(text.contains("obj.store v0"), "{text}");
+    }
+
+    #[test]
+    fn aliased_write_before_call_invalidates_snapshot_source() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+func private %read(v0.[i256; 8]) -> i256 {
+block0:
+    v1.i256 = extract_value v0 0.i8;
+    return v1;
+}
+func private %caller(v0.objref<[i256; 8]>, v1.objref<i256>) -> i256 {
+block0:
+    v2.[i256; 8] = obj.load v0;
+    obj.store v1 7.i256;
+    v3.i256 = call %read v2;
+    return v3;
+}
+"#,
+        );
+        verify_full(&module);
+        run_byvalue_arg_abi(&module);
+        verify_full(&module);
+        assert_eq!(
+            count_obj_allocs(&module, "caller"),
+            1,
+            "{}",
+            dump_func(&module, "caller")
+        );
+    }
+
+    #[test]
+    fn ambient_access_blocks_exposed_output_forwarding_but_not_private_output() {
+        for access in ["v1.i256 = mload 0.i256 i256;", "mstore 0.i256 7.i256 i256;"] {
+            for (signature, allocation, expected_allocs) in [
+                ("v0.objref<[i256; 20]>", "", 1),
+                ("", "v0.objref<[i256; 20]> = obj.alloc [i256; 20];", 1),
+            ] {
+                let module = parse_test_module(&format!(
+                    r#"
+target = "evm-ethereum-osaka"
+func private %make() -> [i256; 20] {{
+block0:
+    {access}
+    v0.[i256; 20] = insert_value undef.[i256; 20] 0.i8 7.i256;
+    return v0;
+}}
+func private %caller({signature}) {{
+block0:
+    {allocation}
+    v1.[i256; 20] = call %make;
+    obj.store v0 v1;
+    return;
+}}
+"#
+                ));
+                verify_full(&module);
+                run_byvalue_arg_abi(&module);
+                verify_full(&module);
+                let text = dump_func(&module, "caller");
+                assert_eq!(
+                    count_obj_allocs(&module, "caller"),
+                    expected_allocs,
+                    "{text}"
+                );
+                assert_eq!(
+                    text.contains("obj.store v0"),
+                    allocation.is_empty(),
+                    "{text}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn forwarded_destination_can_be_disjoint_from_an_input_in_the_same_root() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+func private %make(v0.objref<[i256; 20]>) -> [i256; 20] {
+block0:
+    v1.[i256; 20] = obj.load v0;
+    return v1;
+}
+func private %caller(v0.objref<[[i256; 20]; 2]>) {
+block0:
+    v1.objref<[i256; 20]> = obj.index v0 0.i8;
+    v2.objref<[i256; 20]> = obj.index v0 1.i8;
+    v3.[i256; 20] = call %make v2;
+    obj.store v1 v3;
+    return;
+}
+"#,
+        );
+        verify_full(&module);
+        run_byvalue_arg_abi(&module);
+        verify_full(&module);
+        let text = dump_func(&module, "caller");
+        assert_eq!(count_obj_allocs(&module, "caller"), 0, "{text}");
+        assert!(!text.contains("obj.store"), "{text}");
+    }
+
+    #[test]
+    fn hidden_output_insertion_preserves_wrapper_write_effects() {
+        let source = r#"
+target = "evm-ethereum-osaka"
+func private %make(v0.objref<i256>, v1.objref<i256>) -> [i256; 20] {
+block0:
+    obj.store v1 7.i256;
+    return undef.[i256; 20];
+}
+func private %wrapper(v0.objref<i256>, v1.objref<i256>) {
+block0:
+    v2.[i256; 20] = call %make v0 v1;
+    return;
+}
+func private %read(v0.[i256; 8]) -> i256 {
+block0:
+    v1.i256 = extract_value v0 0.i8;
+    return v1;
+}
+func private %caller(v0.objref<[i256; 8]>, v1.objref<i256>) -> i256 {
+block0:
+    v2.objref<i256> = obj.alloc i256;
+    v3.[i256; 8] = obj.load v0;
+    call %wrapper v2 v1;
+    v4.i256 = call %read v3;
+    return v4;
+}
+"#;
+        let (target, bodies) = source.split_once("func private").unwrap();
+        let bodies: Vec<_> = bodies.split("func private").collect();
+        for order in [[0, 1, 2, 3], [3, 2, 1, 0], [1, 3, 0, 2]] {
+            let reordered = format!(
+                "{target}{}",
+                order
+                    .iter()
+                    .map(|&idx| format!("func private{}", bodies[idx]))
+                    .collect::<String>()
+            );
+            let module = parse_test_module(&reordered);
+            verify_full(&module);
+            run_byvalue_arg_abi(&module);
+            verify_full(&module);
+            let text = dump_func(&module, "caller");
+            assert_eq!(count_obj_allocs(&module, "caller"), 2, "{text}");
+        }
+    }
+
+    #[test]
+    fn chained_mixed_results_use_rewritten_call_values() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+func private %make() -> (i256, [i256; 20]) {
+block0:
+    v0.[i256; 20] = insert_value undef.[i256; 20] 0.i8 7.i256;
+    return (3.i256, v0);
+}
+func private %consume(v0.[i256; 20], v1.i256) -> i256 {
+block0:
+    v2.i256 = extract_value v0 0.i8;
+    v3.i256 = add v2 v1;
+    return v3;
+}
+func private %caller() -> i256 {
+block0:
+    (v0.i256, v1.[i256; 20]) = call %make;
+    v2.i256 = call %consume v1 v0;
+    return v2;
+}
+"#,
+        );
+        verify_full(&module);
+        run_byvalue_arg_abi(&module);
+        verify_full(&module);
+        let text = dump_func(&module, "caller");
+        assert_eq!(count_obj_allocs(&module, "caller"), 1, "{text}");
+        let make_args = first_call_args(&module, "caller", "make");
+        let consume_args = first_call_args(&module, "caller", "consume");
+        assert_eq!(make_args[0], consume_args[0], "{text}");
+    }
+
+    #[test]
+    fn generated_input_copy_does_not_block_original_output_forwarding() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+func private %make() -> [i256; 20] {
+block0:
+    v0.[i256; 20] = insert_value undef.[i256; 20] 0.i8 7.i256;
+    return v0;
+}
+func private %consume(v0.[i256; 20]) -> i256 {
+block0:
+    v1.i256 = extract_value v0 0.i8;
+    return v1;
+}
+func private %caller(v0.objref<[i256; 20]>) -> i256 {
+block0:
+    v1.[i256; 20] = call %make;
+    obj.store v0 v1;
+    v2.i256 = call %consume v1;
+    return v2;
+}
+"#,
+        );
+        verify_full(&module);
+        run_byvalue_arg_abi(&module);
+        verify_full(&module);
+        let text = dump_func(&module, "caller");
+        assert_eq!(count_obj_allocs(&module, "caller"), 0, "{text}");
+        assert!(!text.contains("obj.store"), "{text}");
+        assert_eq!(
+            first_call_args(&module, "caller", "make"),
+            first_call_args(&module, "caller", "consume")
+        );
+    }
+
+    #[test]
+    fn elision_processes_dominating_producers_before_layout_earlier_consumers() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+func private %make() -> [i256; 20] {
+block0:
+    v0.[i256; 20] = insert_value undef.[i256; 20] 0.i8 7.i256;
+    return v0;
+}
+func private %consume(v0.[i256; 20]) -> i256 {
+block0:
+    v1.i256 = extract_value v0 0.i8;
+    return v1;
+}
+func private %caller(v0.objref<[i256; 20]>) -> i256 {
+block0:
+    jump block2;
+block1:
+    v3.i256 = call %consume v1;
+    return v3;
+block2:
+    v1.[i256; 20] = call %make;
+    obj.store v0 v1;
+    v2.objref<i256> = obj.index v0 0.i8;
+    obj.store v2 99.i256;
+    jump block1;
+}
+"#,
+        );
+        verify_full(&module);
+        run_byvalue_arg_abi(&module);
+        verify_full(&module);
+        let text = dump_func(&module, "caller");
+        assert_eq!(count_obj_allocs(&module, "caller"), 1, "{text}");
+        let maker = first_call_args(&module, "caller", "make");
+        let consumer = first_call_args(&module, "caller", "consume");
+        assert_ne!(
+            maker[0], consumer[0],
+            "the second call needs the old snapshot: {text}"
+        );
+    }
+
+    #[test]
+    fn recursive_hidden_outputs_keep_calls_and_effects_coherent() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+func private %make(v0.i1, v1.objref<i256>) -> [i256; 20] {
+block0:
+    br v0 block1 block2;
+block1:
+    v2.[i256; 20] = call %make 0.i1 v1;
+    return v2;
+block2:
+    v3.i256 = obj.load v1;
+    v4.[i256; 20] = insert_value undef.[i256; 20] 0.i8 v3;
+    return v4;
+}
+func private %caller(v0.objref<[i256; 20]>, v1.objref<i256>) {
+block0:
+    v2.[i256; 20] = call %make 1.i1 v1;
+    obj.store v0 v2;
+    return;
+}
+"#,
+        );
+        verify_full(&module);
+        run_byvalue_arg_abi(&module);
+        verify_full(&module);
+        let text = dump_func(&module, "caller");
+        assert_eq!(count_obj_allocs(&module, "caller"), 1, "{text}");
+        assert!(text.contains("obj.store v0"), "{text}");
+        assert_eq!(first_call_args(&module, "make", "make").len(), 3);
+    }
+
+    #[test]
+    fn callee_move_updates_effects_before_caller_sharing() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+func private %mutate(v0.[i256; 8]) -> i256 {
+block0:
+    v1.objref<[i256; 8]> = obj.alloc [i256; 8];
+    obj.store v1 v0;
+    v2.objref<i256> = obj.index v1 0.i8;
+    obj.store v2 7.i256;
+    v3.i256 = obj.load v2;
+    return v3;
+}
+func private %forward(v0.[i256; 8]) -> i256 {
+block0:
+    v1.i256 = call %mutate v0;
+    return v1;
+}
+func private %caller(v0.objref<[i256; 8]>) -> i256 {
+block0:
+    v1.[i256; 8] = obj.load v0;
+    v2.i256 = call %forward v1;
+    v3.[i256; 8] = obj.load v0;
+    v4.i256 = extract_value v3 0.i8;
+    return v4;
+}
+"#,
+        );
+        verify_full(&module);
+        run_byvalue_arg_abi(&module);
+        verify_full(&module);
+        let text = dump_func(&module, "caller");
+        assert_eq!(count_obj_allocs(&module, "caller"), 1, "{text}");
+    }
+
     #[test]
     fn explicit_objref_writer_forces_byvalue_copy() {
         let module = parse_test_module(
@@ -2743,15 +3561,15 @@ block0:
             let [src_obj, sibling_obj] = indexed.as_slice() else {
                 panic!("expected exactly two obj.index values in caller");
             };
-            let ParticipantLocation::Exact(_source_slice) =
-                pass.participant_location(*src_obj, &facts)
+            let [ObjectAccess::Exact(_source_slice)] =
+                facts.accesses.access(*src_obj, None).as_slice()
             else {
                 panic!("source projection should stay exact");
             };
             assert!(
                 matches!(
-                    pass.participant_location(*sibling_obj, &facts),
-                    ParticipantLocation::Exact(_)
+                    facts.accesses.access(*sibling_obj, None).as_slice(),
+                    [ObjectAccess::Exact(_)]
                 ),
                 "sibling projection should stay exact"
             );

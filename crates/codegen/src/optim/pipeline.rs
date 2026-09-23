@@ -25,9 +25,8 @@ use crate::{
 use super::{
     adce::{AdceCallPolicy, AdceSolver},
     aggregate::{
-        AggregateCombine, AggregateScalarize, LocalObjectArgMap, ObjectEffectSummaryMap,
-        ObjectLoadStore, ObjectMemoryAnalysis, collect_local_object_arg_info,
-        collect_local_object_arg_info_with_effects, compute_object_effect_summaries,
+        AggregateCombine, AggregateScalarize, LocalObjectArgMap, ModuleObjectFacts,
+        ObjectEffectSummaryMap, ObjectLoadStore, ObjectMemoryAnalysis,
     },
     branch_canonicalize::BranchCanonicalize,
     cfg_cleanup::CfgCleanup,
@@ -584,8 +583,6 @@ impl Default for Pipeline {
 #[derive(Default, Clone, Copy)]
 pub(crate) struct FuncPassOverrides<'a> {
     pub(crate) funcs: Option<&'a [FuncRef]>,
-    pub(crate) local_object_args: Option<&'a LocalObjectArgMap>,
-    pub(crate) object_effects: Option<&'a ObjectEffectSummaryMap>,
 }
 
 pub(crate) fn run_function_pass_round(
@@ -613,14 +610,12 @@ pub(crate) fn run_function_pass_round(
 
 #[derive(Default)]
 struct RoundFacts {
-    object_effects: Option<ObjectEffectSummaryMap>,
-    local_object_args: Option<LocalObjectArgMap>,
+    objects: Option<ModuleObjectFacts>,
 }
 
 impl RoundFacts {
     fn clear(&mut self) {
-        self.object_effects = None;
-        self.local_object_args = None;
+        self.objects = None;
     }
 }
 
@@ -648,24 +643,16 @@ fn run_module_pass(
     round_facts: &mut RoundFacts,
 ) -> PassResult {
     let _span = debug_span!("sonatina.optim.pipeline.pass_round", pass = pass.as_str()).entered();
-    if pass.needs_object_facts() && overrides.object_effects.is_none() {
+    if pass.needs_object_facts() {
         round_facts
-            .object_effects
-            .get_or_insert_with(|| compute_object_effect_summaries(module));
+            .objects
+            .get_or_insert_with(|| ModuleObjectFacts::compute(module));
     }
-    let object_effects = overrides
-        .object_effects
-        .or(round_facts.object_effects.as_ref());
-    if pass.needs_object_facts() && overrides.local_object_args.is_none() {
-        round_facts.local_object_args.get_or_insert_with(|| {
-            object_effects
-                .map(|effects| collect_local_object_arg_info_with_effects(module, effects))
-                .unwrap_or_else(|| collect_local_object_arg_info(module))
-        });
-    }
-    let local_object_args = overrides
-        .local_object_args
-        .or(round_facts.local_object_args.as_ref());
+    let object_effects = round_facts.objects.as_ref().map(ModuleObjectFacts::effects);
+    let local_object_args = round_facts
+        .objects
+        .as_ref()
+        .map(ModuleObjectFacts::local_args);
     let changed = AtomicBool::new(false);
     if let Some(funcs) = overrides.funcs {
         funcs.par_iter().copied().for_each(|func_ref| {
@@ -2871,7 +2858,6 @@ block2:
             &mut func_behavior_dirty,
             FuncPassOverrides {
                 funcs: Some(&[selected]),
-                ..FuncPassOverrides::default()
             },
         );
 

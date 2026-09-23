@@ -370,46 +370,65 @@ enum ReturnClass {
     Unknown,
 }
 
-pub(crate) fn compute_object_effect_summaries(module: &Module) -> ObjectEffectSummaryMap {
-    let mut summaries = ObjectEffectSummaryMap::default();
-    let mut layout_cache = shape::AggregateLayoutCache::default();
+pub(crate) struct ObjectEffectScc {
+    pub funcs: Vec<FuncRef>,
+    pub is_cycle: bool,
+}
+
+pub(crate) fn object_effect_scc_order(module: &Module) -> Vec<ObjectEffectScc> {
     let funcs = defined_object_effect_funcs(module);
     if funcs.is_empty() {
-        return summaries;
+        return Vec::new();
     }
-
     let func_set = funcs.iter().copied().collect();
     let call_graph = CallGraph::build_graph_subset(module, &func_set);
     let sccs = SccBuilder::new().compute_scc(&call_graph);
-    let topo = topo_sort_object_effect_sccs(&func_set, &call_graph, &sccs);
+    topo_sort_object_effect_sccs(&func_set, &call_graph, &sccs)
+        .into_iter()
+        .rev()
+        .map(|scc| ObjectEffectScc {
+            funcs: sorted_scc_funcs(&sccs, scc),
+            is_cycle: sccs.scc_info(scc).is_cycle,
+        })
+        .collect()
+}
 
-    for scc_ref in topo.iter().rev().copied() {
-        let funcs = sorted_scc_funcs(&sccs, scc_ref);
-        if !sccs.scc_info(scc_ref).is_cycle {
-            for func in funcs {
-                let next = compute_summary_for_func(module, func, &summaries, &mut layout_cache);
-                summaries.insert(func, next);
-            }
-            continue;
+pub(crate) fn compute_object_effect_summaries(module: &Module) -> ObjectEffectSummaryMap {
+    let mut summaries = ObjectEffectSummaryMap::default();
+    let mut layout_cache = shape::AggregateLayoutCache::default();
+    for scc in object_effect_scc_order(module) {
+        update_object_effect_scc(module, &scc, &mut summaries, &mut layout_cache);
+    }
+    summaries
+}
+
+pub(crate) fn update_object_effect_scc(
+    module: &Module,
+    scc: &ObjectEffectScc,
+    summaries: &mut ObjectEffectSummaryMap,
+    layout_cache: &mut shape::AggregateLayoutCache,
+) {
+    if !scc.is_cycle {
+        for &func in &scc.funcs {
+            let next = compute_summary_for_func(module, func, summaries, layout_cache);
+            summaries.insert(func, next);
         }
-
-        initialize_object_effect_scc(module, &funcs, &mut summaries, &mut layout_cache);
-        loop {
-            let mut changed = false;
-            for &func in &funcs {
-                let next = compute_summary_for_func(module, func, &summaries, &mut layout_cache);
-                if summaries.get(&func) != Some(&next) {
-                    summaries.insert(func, next);
-                    changed = true;
-                }
+        return;
+    }
+    initialize_object_effect_scc(module, &scc.funcs, summaries, layout_cache);
+    loop {
+        let mut changed = false;
+        for &func in &scc.funcs {
+            let next = compute_summary_for_func(module, func, summaries, layout_cache);
+            if summaries.get(&func) != Some(&next) {
+                summaries.insert(func, next);
+                changed = true;
             }
-            if !changed {
-                break;
-            }
+        }
+        if !changed {
+            break;
         }
     }
-
-    summaries
 }
 
 fn defined_object_effect_funcs(module: &Module) -> Vec<FuncRef> {

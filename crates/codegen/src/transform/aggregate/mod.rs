@@ -12,6 +12,7 @@ pub(crate) mod object_abi;
 mod object_access;
 mod object_alias;
 pub(crate) mod object_effects;
+mod object_facts;
 mod object_initialization;
 pub(crate) mod object_load_store;
 pub(crate) mod object_locality;
@@ -39,8 +40,11 @@ pub use object_abi::ObjectReturnOutParam;
 pub(crate) use object_effects::{
     ObjectEffectSummaryMap, ObjectReturnEffect, SliceSet, compute_object_effect_summaries,
 };
+pub(crate) use object_facts::ModuleObjectFacts;
+#[cfg(test)]
+pub(crate) use object_locality::collect_local_object_arg_info;
 pub(crate) use object_locality::{
-    LocalObjectArgInfo, LocalObjectArgMap, RootInit, collect_local_object_arg_info,
-    collect_local_object_arg_info_with_effects, merge_local_object_arg_info,
+    LocalObjectArgInfo, LocalObjectArgMap, RootInit, collect_local_object_arg_info_with_effects,
+    merge_local_object_arg_info,
 };
 pub(crate) use object_memory::{ObjectMemoryAnalysis, ObjectReadGvnKey};

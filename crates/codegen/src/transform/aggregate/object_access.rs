@@ -15,7 +15,9 @@ use super::{
     LocalObjectArgInfo, ObjectEffectSummaryMap, SliceSet,
     object_effects::{ObjectCaptureDestination, ObjectEffectSummary},
     object_reachability::{ObjectReachability, raw_access_may_reach_objects, reference_bearing},
-    object_tracking::{AggregateFacts, ObjectSlice, TrackedObject, collect_tracked_objects},
+    object_tracking::{
+        AggregateFacts, ObjectSlice, TrackedObject, collect_tracked_objects, enum_tag_object_slice,
+    },
     provenance::{MayProvenance, Projection, ProvenanceSnapshot, RootValue},
     shape::{self, AggregateLayoutCache, AggregateSlice},
 };
@@ -28,7 +30,15 @@ pub(crate) enum ObjectAccess {
     Unknown,
 }
 
-type AccessSet = SmallVec<[ObjectAccess; 4]>;
+pub(crate) type AccessSet = SmallVec<[ObjectAccess; 4]>;
+
+/// Reading a projected payload requires each ancestor enum to retain its variant.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ObjectGuard {
+    pub object: ObjectSlice,
+    pub tag: ObjectSlice,
+    pub variant: EnumVariantRef,
+}
 
 /// Only direct typed writes construct this type. May-write summaries cannot.
 #[derive(Clone, Copy, Debug)]
@@ -82,8 +92,9 @@ impl ObjectAccessFacts {
         if let Some(local_args) = local_args {
             eligible.extend(
                 local_args
-                    .keys()
-                    .filter_map(|&index| func.arg_values.get(index).copied()),
+                    .iter()
+                    .filter(|&(&index, info)| info.is_valid_for(func, index))
+                    .filter_map(|(&index, _)| func.arg_values.get(index).copied()),
             );
         }
         self.tracked_for_roots(func, &eligible, cache)
@@ -117,48 +128,73 @@ impl ObjectAccessFacts {
         collect_tracked_objects(func, self.facts.complete(), cache)
     }
 
-    fn ancestor_tag_reads(
+    pub(crate) fn ancestor_guards(
         &self,
         func: &Function,
-        projection: Projection,
+        slice: ObjectSlice,
         cache: &mut AggregateLayoutCache,
-    ) -> AccessSet {
-        let mut ancestors = AccessSet::new();
-        let mut current = self.facts.root_slices()[&projection.root_value.value()];
+    ) -> Option<SmallVec<[ObjectGuard; 2]>> {
+        let mut ancestors = SmallVec::new();
+        let mut current = *self.facts.root_slices().get(&slice.root)?;
         for _ in 0..64 {
-            if current.first_leaf == projection.slice.first_leaf
-                && current.leaf_count == projection.slice.leaf_count
-            {
-                return ancestors;
+            // Effect subranges may retain the enclosing type. Matching bounds
+            // discharge this path without requiring a second type identity.
+            if current.first_leaf == slice.first_leaf && current.leaf_count == slice.leaf_count {
+                return Some(ancestors);
             }
             let relative = AggregateSlice {
-                first_leaf: projection.slice.first_leaf - current.first_leaf,
-                ..projection.slice
+                ty: slice.ty,
+                first_leaf: slice.first_leaf.checked_sub(current.first_leaf)?,
+                leaf_count: slice.leaf_count,
             };
-            let Some((index, child)) =
-                cache.child_containing_slice(func.ctx(), current.ty, relative)
-            else {
-                return smallvec![ObjectAccess::Root(projection.root_value)];
-            };
-            if index != 0
-                && func.ctx().with_ty_store(|types| types.is_enum(current.ty))
-                && let Some(tag) = shape::enum_tag_slice(func.ctx(), current.ty)
+            let (index, child) = cache.child_containing_slice(func.ctx(), current.ty, relative)?;
+            if let Some(shape::EnumSlotInfo::VariantField { variant, .. }) =
+                shape::enum_slot_info(func.ctx(), current.ty, index)
             {
-                ancestors.push(ObjectAccess::Exact(Projection {
-                    root_value: projection.root_value,
-                    slice: AggregateSlice {
-                        first_leaf: current.first_leaf + tag.first_leaf,
-                        ..tag
-                    },
-                }));
+                let object = ObjectSlice {
+                    ty: current.ty,
+                    first_leaf: current.first_leaf,
+                    leaf_count: current.leaf_count,
+                    ..slice
+                };
+                ancestors.push(ObjectGuard {
+                    object,
+                    tag: enum_tag_object_slice(func.ctx(), object)?,
+                    variant,
+                });
             }
             current = AggregateSlice {
                 first_leaf: current.first_leaf + child.first_leaf,
                 ..child
             };
         }
-        // An analysis limit may broaden an observation, never remove it.
-        smallvec![ObjectAccess::Root(projection.root_value)]
+        None
+    }
+
+    fn ancestor_tag_reads(
+        &self,
+        func: &Function,
+        projection: Projection,
+        cache: &mut AggregateLayoutCache,
+    ) -> AccessSet {
+        let Some(guards) = self.ancestor_guards(func, self.projection_slice(projection), cache)
+        else {
+            // An analysis limit may broaden an observation, never remove it.
+            return smallvec![ObjectAccess::Root(projection.root_value)];
+        };
+        guards
+            .iter()
+            .map(|guard| {
+                ObjectAccess::Exact(Projection {
+                    root_value: projection.root_value,
+                    slice: AggregateSlice {
+                        ty: guard.tag.ty,
+                        first_leaf: guard.tag.first_leaf,
+                        leaf_count: guard.tag.leaf_count,
+                    },
+                })
+            })
+            .collect()
     }
 
     pub(crate) fn single_instance(&self, root: RootValue) -> bool {
@@ -234,7 +270,7 @@ impl ObjectAccessFacts {
         )
     }
 
-    fn access(&self, value: ValueId, relative: Option<AggregateSlice>) -> AccessSet {
+    pub(crate) fn access(&self, value: ValueId, relative: Option<AggregateSlice>) -> AccessSet {
         if let Some(mut exact) = self.facts.complete().exact_projection(value) {
             if let Some(relative) = relative {
                 if relative
@@ -281,7 +317,7 @@ impl ObjectAccessFacts {
         effects.writes.extend(accesses);
     }
 
-    fn summary_access(&self, value: ValueId, slices: &SliceSet) -> AccessSet {
+    pub(crate) fn summary_access(&self, value: ValueId, slices: &SliceSet) -> AccessSet {
         if slices.is_empty() {
             return AccessSet::new();
         }
@@ -309,7 +345,7 @@ impl ObjectAccessFacts {
             .collect()
     }
 
-    fn reachable_access(&self, value: ValueId) -> AccessSet {
+    pub(crate) fn reachable_access(&self, value: ValueId) -> AccessSet {
         let refs = self.reachability.reachable(value);
         let mut out: AccessSet = refs.roots.into_iter().map(ObjectAccess::Root).collect();
         if refs.external {

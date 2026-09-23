@@ -8,6 +8,8 @@ mod casts;
 mod globals;
 #[path = "cranelift/memory.rs"]
 mod memory;
+#[path = "cranelift/object_alias.rs"]
+mod object_alias;
 #[path = "cranelift/references.rs"]
 mod references;
 #[path = "cranelift/scalar.rs"]

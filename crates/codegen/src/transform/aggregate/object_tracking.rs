@@ -149,8 +149,9 @@ pub(crate) fn collect_root_slices(
     let mut root_slices = FxHashMap::default();
 
     if let Some(local_object_args) = local_object_args {
-        for &idx in local_object_args.keys() {
-            if let Some(&root) = func.arg_values.get(idx)
+        for (&idx, info) in local_object_args {
+            if info.is_valid_for(func, idx)
+                && let Some(&root) = func.arg_values.get(idx)
                 && let Some(root_ty) = objref_element_ty(func.ctx(), func.dfg.value_ty(root))
             {
                 root_slices.insert(root, whole_root_slice(layout_cache, func.ctx(), root_ty));
@@ -331,26 +332,8 @@ pub(crate) fn whole_root_slice_for_value(
         })
 }
 
-pub(crate) fn object_slice_overlaps_effect(
-    slice: ObjectSlice,
-    base_slice: ObjectSlice,
-    effect_leaves: &rustc_hash::FxHashSet<usize>,
-) -> bool {
-    if slice.root != base_slice.root {
-        return false;
-    }
-    effect_leaves.iter().copied().any(|leaf| {
-        let leaf = base_slice.first_leaf + leaf;
-        leaf >= slice.first_leaf && leaf < slice.first_leaf + slice.leaf_count
-    })
-}
-
-pub(crate) fn slices_overlap(lhs: ObjectSlice, rhs: ObjectSlice) -> bool {
-    lhs.root == rhs.root
-        && lhs.first_leaf < rhs.first_leaf + rhs.leaf_count
-        && rhs.first_leaf < lhs.first_leaf + lhs.leaf_count
-}
-
+// Exact coordinate coverage for extracting an already available SSA value.
+// This is not a semantic alias or definite-overwrite proof.
 pub(crate) fn slice_is_covered_by(lhs: ObjectSlice, rhs: ObjectSlice) -> bool {
     lhs.root == rhs.root
         && lhs.first_leaf <= rhs.first_leaf
