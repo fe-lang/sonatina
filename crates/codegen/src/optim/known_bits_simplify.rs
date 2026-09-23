@@ -1,13 +1,14 @@
 use std::cell::RefCell;
 
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 use sonatina_ir::{
-    ControlFlowGraph, Function, Immediate, InstId, Value, ValueId,
+    ControlFlowGraph, Function, Immediate, InstId, ValueId,
     inst::{BinaryInstKind, InstClassKind},
 };
 
 use crate::{
     analysis::{
+        definedness::value_may_be_undef,
         known_bits::{KnownBits, type_mask},
         scalar_facts::ScalarFacts,
     },
@@ -74,51 +75,7 @@ impl ExprFactProvider for LocalExprFacts<'_, '_> {
     }
 
     fn may_be_undef(&self, v: ValueId) -> bool {
-        if let Some(may_be_undef) = self.may_be_undef.borrow().get(&v).copied() {
-            return may_be_undef;
-        }
-
-        let mut cache = self.may_be_undef.borrow_mut();
-        let mut visiting = FxHashSet::default();
-        let mut stack = vec![(v, false)];
-        while let Some((value, post_order)) = stack.pop() {
-            if cache.contains_key(&value) {
-                continue;
-            }
-
-            if post_order {
-                visiting.remove(&value);
-                let may_be_undef = match self.func.dfg.value(value) {
-                    Value::Undef { .. } => true,
-                    Value::Immediate { .. } | Value::Arg { .. } | Value::Global { .. } => false,
-                    Value::Inst { inst, .. } => inst_result_may_be_undef(self.func, *inst, &cache),
-                };
-                cache.insert(value, may_be_undef);
-                continue;
-            }
-
-            if !visiting.insert(value) {
-                cache.insert(value, true);
-                continue;
-            }
-
-            stack.push((value, true));
-            if let Value::Inst { inst, .. } = self.func.dfg.value(value) {
-                for used in self.func.dfg.inst(*inst).collect_values().into_iter().rev() {
-                    if cache.contains_key(&used) {
-                        continue;
-                    }
-
-                    if visiting.contains(&used) {
-                        cache.insert(used, true);
-                    } else {
-                        stack.push((used, false));
-                    }
-                }
-            }
-        }
-
-        cache.get(&v).copied().unwrap_or(true)
+        value_may_be_undef(self.func, v, &mut self.may_be_undef.borrow_mut(), |_| None)
     }
 }
 
@@ -355,39 +312,6 @@ fn simplify_copy_when_only_undemanded_bits_change(
     let changed = affected_bits(ty, imm);
     (facts.scalar_facts.demanded_bits(result) & changed == sonatina_ir::U256::zero())
         .then_some(value)
-}
-
-fn inst_result_may_be_undef(
-    func: &Function,
-    inst: InstId,
-    cache: &FxHashMap<ValueId, bool>,
-) -> bool {
-    let inst_data = func.dfg.inst(inst);
-    let values = inst_data.collect_values();
-    if values
-        .iter()
-        .copied()
-        .any(|value| cache.get(&value).copied().unwrap_or(true))
-    {
-        return true;
-    }
-
-    if let InstClassKind::Binary(kind) = inst_data.kind()
-        && matches!(
-            kind,
-            BinaryInstKind::Udiv
-                | BinaryInstKind::Sdiv
-                | BinaryInstKind::Umod
-                | BinaryInstKind::Smod
-        )
-    {
-        let [_, rhs] = values.as_slice() else {
-            return true;
-        };
-        return func.dfg.value_imm(*rhs).is_none_or(Immediate::is_zero);
-    }
-
-    false
 }
 
 fn resolve_replacements(plans: &[RewritePlan]) -> FxHashMap<ValueId, ResolvedReplacement> {

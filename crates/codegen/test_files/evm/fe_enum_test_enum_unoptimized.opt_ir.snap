@@ -69,9 +69,12 @@ func private %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4
         v12.objref<@__fe_obj_SolEncoder_3> = obj.alloc @__fe_obj_SolEncoder_3;
         v13.objref<i256> = obj.proj v12 0.i256;
         obj.store v13 0.i256;
+        v14.objref<i256> = obj.proj v12 1.i256;
+        obj.store v14 0.i256;
+        v15.objref<i256> = obj.proj v12 2.i256;
+        obj.store v15 0.i256;
         v4.i256 = call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head v12 32.i256;
-        v27.objref<i256> = obj.proj v12 1.i256;
-        v28.i256 = obj.load v27;
+        v28.i256 = obj.load v14;
         mstore v28 v0 i256;
         (v29.i256, v30.i1) = uaddo v28 32.i256;
         br v30 block7 block8;
@@ -81,8 +84,7 @@ func private %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4
 
     block8:
         v17.i256 = obj.load v13;
-        v18.objref<i256> = obj.proj v12 2.i256;
-        v19.i256 = obj.load v18;
+        v19.i256 = obj.load v15;
         (v20.i256, v21.i1) = usubo v19 v17;
         br v21 block3 block4;
 
@@ -196,34 +198,35 @@ func public %entry() {
         v11.objref<@__fe_obj_SolEncoder_3> = obj.alloc @__fe_obj_SolEncoder_3;
         v12.objref<i256> = obj.proj v11 0.i256;
         obj.store v12 0.i256;
-        v14.i256 = call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head v11 36.i256;
-        mstore v14 49003137872591469486919699677048325398361854054715499843502194152310271115264.i256 i256;
-        (v17.i256, v18.i1) = uaddo v14 4.i256;
-        br v18 block7 block8;
+        v14.objref<i256> = obj.proj v11 2.i256;
+        obj.store v14 0.i256;
+        v16.i256 = call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head v11 36.i256;
+        mstore v16 49003137872591469486919699677048325398361854054715499843502194152310271115264.i256 i256;
+        (v19.i256, v20.i1) = uaddo v16 4.i256;
+        br v20 block7 block8;
 
     block7:
         evm_revert 0.i256 0.i256;
 
     block8:
-        mstore v17 42.i256 i256;
-        (v23.i256, v24.i1) = uaddo v17 32.i256;
-        br v24 block10 block11;
+        mstore v19 42.i256 i256;
+        (v25.i256, v26.i1) = uaddo v19 32.i256;
+        br v26 block10 block11;
 
     block10:
         evm_revert 0.i256 0.i256;
 
     block11:
-        v25.i256 = obj.load v12;
-        v27.objref<i256> = obj.proj v11 2.i256;
-        v28.i256 = obj.load v27;
-        (v29.i256, v30.i1) = usubo v28 v25;
+        v27.i256 = obj.load v12;
+        v28.i256 = obj.load v14;
+        (v29.i256, v30.i1) = usubo v28 v27;
         br v30 block13 block14;
 
     block13:
         evm_revert 0.i256 0.i256;
 
     block14:
-        v32.i256 = evm_call 100000.i256 v9 0.i256 v25 v29 0.i256 0.i256;
+        v32.i256 = evm_call 100000.i256 v9 0.i256 v27 v29 0.i256 0.i256;
         v33.i256 = evm_return_data_size;
         v34.*i8 = evm_malloc v33;
         v35.i256 = ptr_to_int v34 i256;
@@ -253,34 +256,35 @@ func public %entry() {
         v40.objref<@__fe_obj_SolEncoder_3> = obj.alloc @__fe_obj_SolEncoder_3;
         v41.objref<i256> = obj.proj v40 0.i256;
         obj.store v41 0.i256;
-        v42.i256 = call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head v40 36.i256;
-        mstore v42 -19479681221441210686320150100176307435043235690442009417734788562406650937344.i256 i256;
-        (v44.i256, v45.i1) = uaddo v42 4.i256;
-        br v45 block23 block24;
+        v42.objref<i256> = obj.proj v40 2.i256;
+        obj.store v42 0.i256;
+        v43.i256 = call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head v40 36.i256;
+        mstore v43 -19479681221441210686320150100176307435043235690442009417734788562406650937344.i256 i256;
+        (v45.i256, v46.i1) = uaddo v43 4.i256;
+        br v46 block23 block24;
 
     block23:
         evm_revert 0.i256 0.i256;
 
     block24:
-        mstore v44 99.i256 i256;
-        (v50.i256, v51.i1) = uaddo v44 32.i256;
-        br v51 block26 block27;
+        mstore v45 99.i256 i256;
+        (v51.i256, v52.i1) = uaddo v45 32.i256;
+        br v52 block26 block27;
 
     block26:
         evm_revert 0.i256 0.i256;
 
     block27:
-        v52.i256 = obj.load v41;
-        v53.objref<i256> = obj.proj v40 2.i256;
-        v54.i256 = obj.load v53;
-        (v55.i256, v56.i1) = usubo v54 v52;
+        v53.i256 = obj.load v41;
+        v54.i256 = obj.load v42;
+        (v55.i256, v56.i1) = usubo v54 v53;
         br v56 block29 block30;
 
     block29:
         evm_revert 0.i256 0.i256;
 
     block30:
-        v57.i256 = evm_call 100000.i256 v9 0.i256 v52 v55 0.i256 0.i256;
+        v57.i256 = evm_call 100000.i256 v9 0.i256 v53 v55 0.i256 0.i256;
         v58.i256 = evm_return_data_size;
         v59.*i8 = evm_malloc v58;
         v60.i256 = ptr_to_int v59 i256;
@@ -310,26 +314,27 @@ func public %entry() {
         v65.objref<@__fe_obj_SolEncoder_3> = obj.alloc @__fe_obj_SolEncoder_3;
         v66.objref<i256> = obj.proj v65 0.i256;
         obj.store v66 0.i256;
-        v67.i256 = call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head v65 4.i256;
-        mstore v67 31375362698142810071693338840885679545176626209085102383094335935879449673728.i256 i256;
-        (v69.i256, v70.i1) = uaddo v67 4.i256;
-        br v70 block39 block40;
+        v67.objref<i256> = obj.proj v65 2.i256;
+        obj.store v67 0.i256;
+        v68.i256 = call %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head v65 4.i256;
+        mstore v68 31375362698142810071693338840885679545176626209085102383094335935879449673728.i256 i256;
+        (v70.i256, v71.i1) = uaddo v68 4.i256;
+        br v71 block39 block40;
 
     block39:
         evm_revert 0.i256 0.i256;
 
     block40:
-        v71.i256 = obj.load v66;
-        v72.objref<i256> = obj.proj v65 2.i256;
-        v73.i256 = obj.load v72;
-        (v74.i256, v75.i1) = usubo v73 v71;
+        v72.i256 = obj.load v66;
+        v73.i256 = obj.load v67;
+        (v74.i256, v75.i1) = usubo v73 v72;
         br v75 block41 block42;
 
     block41:
         evm_revert 0.i256 0.i256;
 
     block42:
-        v76.i256 = evm_call 100000.i256 v9 0.i256 v71 v74 0.i256 0.i256;
+        v76.i256 = evm_call 100000.i256 v9 0.i256 v72 v74 0.i256 0.i256;
         v77.i256 = evm_return_data_size;
         v78.*i8 = evm_malloc v77;
         v79.i256 = ptr_to_int v78 i256;

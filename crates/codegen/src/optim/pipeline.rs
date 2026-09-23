@@ -208,7 +208,11 @@ impl Pass {
     const fn needs_object_facts(self) -> bool {
         matches!(
             self,
-            Pass::ObjectLoadStore | Pass::AggregateScalarize | Pass::Licm | Pass::Gvn
+            Pass::AggregateCombine
+                | Pass::ObjectLoadStore
+                | Pass::AggregateScalarize
+                | Pass::Licm
+                | Pass::Gvn
         )
     }
 
@@ -745,7 +749,7 @@ fn run_pass(
         }
         Pass::AggregateCombine => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.aggregate_combine").entered();
-            AggregateCombine::default().run(func)
+            AggregateCombine::default().run_with_effects(func, object_effects)
         }
         Pass::BranchCanonicalize => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.branch_canonicalize").entered();

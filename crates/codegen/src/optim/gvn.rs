@@ -23,7 +23,10 @@ use sonatina_ir::{
 };
 
 use crate::{
-    analysis::known_bits::{KnownBits, KnownBitsQuery},
+    analysis::{
+        definedness::value_may_be_undef,
+        known_bits::{KnownBits, KnownBitsQuery},
+    },
     cfg_edit::{CfgEditor, CleanupMode},
     domtree::{DomTree, DominatorTreeTraversable},
     optim::{
@@ -647,9 +650,9 @@ impl GvnSolver {
                 carrier_slice,
                 read_slice,
             } => {
-                if self.may_be_undef(func, value) {
-                    return None;
-                }
+                // ObjectMemory proves the demanded contents defined, including
+                // reconstructed aggregates and immutable load snapshots. Its
+                // covering carrier proof is stronger than the generic SSA walk.
                 if carrier_slice == read_slice
                     && func.dfg.value_ty(value) == func.dfg.value_ty(inst_result)
                 {
@@ -1166,87 +1169,12 @@ impl GvnSolver {
     }
 
     fn may_be_undef(&self, func: &Function, value: ValueId) -> bool {
-        if let Some(may_be_undef) = self.may_be_undef_cache.borrow().get(&value).copied() {
-            return may_be_undef;
-        }
-
-        let mut cache = self.may_be_undef_cache.borrow_mut();
-        let mut visiting = FxHashSet::default();
-        let mut stack = vec![(value, false)];
-        while let Some((value, post_order)) = stack.pop() {
-            if cache.contains_key(&value) {
-                continue;
-            }
-
-            if post_order {
-                visiting.remove(&value);
-                let may_be_undef = match func.dfg.value(value) {
-                    Value::Undef { .. } => true,
-                    Value::Immediate { .. } | Value::Arg { .. } | Value::Global { .. } => false,
-                    Value::Inst { inst, .. } => self.inst_result_may_be_undef(func, *inst, &cache),
-                };
-                cache.insert(value, may_be_undef);
-                continue;
-            }
-
-            if !visiting.insert(value) {
-                // Be conservative for cyclic value definitions.
-                cache.insert(value, true);
-                continue;
-            }
-
-            stack.push((value, true));
-            if let Value::Inst { inst, .. } = func.dfg.value(value) {
-                for used in func.dfg.inst(*inst).collect_values().into_iter().rev() {
-                    if cache.contains_key(&used) {
-                        continue;
-                    }
-
-                    if visiting.contains(&used) {
-                        // Be conservative for cyclic value definitions.
-                        cache.insert(used, true);
-                    } else {
-                        stack.push((used, false));
-                    }
-                }
-            }
-        }
-
-        cache.get(&value).copied().unwrap_or(true)
-    }
-
-    fn inst_result_may_be_undef(
-        &self,
-        func: &Function,
-        inst: InstId,
-        cache: &FxHashMap<ValueId, bool>,
-    ) -> bool {
-        let inst_data = func.dfg.inst(inst);
-        let values = inst_data.collect_values();
-        if values
-            .iter()
-            .copied()
-            .any(|value| cache.get(&value).copied().unwrap_or(true))
-        {
-            return true;
-        }
-
-        if let InstClassKind::Binary(kind) = inst_data.kind()
-            && matches!(
-                kind,
-                BinaryInstKind::Udiv
-                    | BinaryInstKind::Sdiv
-                    | BinaryInstKind::Umod
-                    | BinaryInstKind::Smod
-            )
-        {
-            let [_, rhs] = values.as_slice() else {
-                return true;
-            };
-            return func.dfg.value_imm(*rhs).is_none_or(Immediate::is_zero);
-        }
-
-        false
+        value_may_be_undef(
+            func,
+            value,
+            &mut self.may_be_undef_cache.borrow_mut(),
+            |_| None,
+        )
     }
 
     fn simplified_result_to_gvn(

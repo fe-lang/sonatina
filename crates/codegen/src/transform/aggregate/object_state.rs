@@ -1,77 +1,11 @@
-use cranelift_entity::SecondaryMap;
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
-use sonatina_ir::{
-    Function, InstId, ValueId,
-    inst::{cast, control_flow, data, downcast},
-    module::ModuleCtx,
-};
+use sonatina_ir::{ValueId, inst::data, module::ModuleCtx};
 
-use super::{
-    object_tracking::{
-        ObjectSlice, TrackedObject, enum_tag_object_slice, enum_variant_field_object_slice,
-    },
-    provenance::MayProvenance,
-};
+use super::object_tracking::{ObjectSlice, enum_tag_object_slice, enum_variant_field_object_slice};
 
 pub(crate) type LiveLeafMap = FxHashMap<ValueId, FxHashSet<usize>>;
 pub(crate) type ObjectSliceList = SmallVec<[ObjectSlice; 4]>;
-pub(crate) type ObservedRoots = SmallVec<[ValueId; 4]>;
-
-pub(crate) fn is_pure_object_address_inst(func: &Function, inst: InstId) -> bool {
-    downcast::<&data::ObjAlloc>(func.inst_set(), func.dfg.inst(inst)).is_some()
-        || downcast::<&data::Gep>(func.inst_set(), func.dfg.inst(inst)).is_some()
-        || downcast::<&cast::Bitcast>(func.inst_set(), func.dfg.inst(inst)).is_some()
-        || downcast::<&data::ObjProj>(func.inst_set(), func.dfg.inst(inst)).is_some()
-        || downcast::<&data::ObjIndex>(func.inst_set(), func.dfg.inst(inst)).is_some()
-        || downcast::<&data::EnumProj>(func.inst_set(), func.dfg.inst(inst)).is_some()
-        || downcast::<&control_flow::Phi>(func.inst_set(), func.dfg.inst(inst)).is_some()
-}
-
-pub(crate) fn observed_roots(
-    func: &Function,
-    inst: InstId,
-    provenance: MayProvenance<'_>,
-    skip: &[ValueId],
-) -> (ObservedRoots, bool) {
-    let mut roots = FxHashSet::default();
-    let mut observed_unknown = false;
-    for value in func.dfg.inst(inst).collect_values() {
-        if skip.contains(&value) {
-            continue;
-        }
-        let root_set = provenance.may_roots(value);
-        observed_unknown |= root_set.has_unknown();
-        for root in root_set.observed().iter() {
-            roots.insert(root.value());
-        }
-    }
-    (roots.into_iter().collect(), observed_unknown)
-}
-
-pub(crate) fn observed_roots_ignoring_pure_address_ops(
-    func: &Function,
-    inst: InstId,
-    provenance: MayProvenance<'_>,
-    skip: &[ValueId],
-) -> (ObservedRoots, bool) {
-    if is_pure_object_address_inst(func, inst) {
-        return (ObservedRoots::new(), false);
-    }
-    observed_roots(func, inst, provenance, skip)
-}
-
-pub(crate) fn tracked_root_total_leaves(
-    tracked: &SecondaryMap<ValueId, Option<TrackedObject>>,
-    root: ValueId,
-) -> usize {
-    tracked[root]
-        .as_ref()
-        .copied()
-        .map(TrackedObject::total_leaves)
-        .expect("tracked root should exist")
-}
-
 pub(crate) fn union_live_leaf_maps(states: impl Iterator<Item = LiveLeafMap>) -> LiveLeafMap {
     let mut out = LiveLeafMap::default();
     for state in states {
@@ -93,27 +27,6 @@ pub(crate) fn mark_live_slice(live: &mut LiveLeafMap, slice: ObjectSlice) {
     let entry = live.entry(slice.root).or_default();
     for leaf in slice.first_leaf..slice.first_leaf + slice.leaf_count {
         entry.insert(leaf);
-    }
-}
-
-pub(crate) fn mark_live_tracked_object(live: &mut LiveLeafMap, tracked: TrackedObject) {
-    match tracked {
-        TrackedObject::Exact(slice) => mark_live_slice(live, slice),
-        TrackedObject::RootUnknown { root, total_leaves } => {
-            mark_root_live(live, root, total_leaves)
-        }
-    }
-}
-
-pub(crate) fn clear_live_slice(live: &mut LiveLeafMap, slice: ObjectSlice) {
-    let Some(entry) = live.get_mut(&slice.root) else {
-        return;
-    };
-    for leaf in slice.first_leaf..slice.first_leaf + slice.leaf_count {
-        entry.remove(&leaf);
-    }
-    if entry.is_empty() {
-        live.remove(&slice.root);
     }
 }
 
@@ -152,11 +65,12 @@ pub(crate) fn enum_write_variant_slices(
 mod tests {
     use super::*;
     use crate::transform::aggregate::{
+        object_access::ObjectAccessFacts,
         object_tracking::{collect_root_slices, objref_element_ty},
         provenance::collect_root_provenance,
         shape,
     };
-    use sonatina_ir::module::FuncRef;
+    use sonatina_ir::{inst::downcast, module::FuncRef};
     use sonatina_parser::parse_module;
 
     fn parse_test_module(src: &str) -> sonatina_ir::Module {
@@ -190,10 +104,6 @@ block0:
 
         let func_ref = lookup_func(&module, "f");
         module.func_store.view(func_ref, |func| {
-            let mut layout_cache = shape::AggregateLayoutCache::default();
-            let root_slices = collect_root_slices(func, None, &mut layout_cache);
-            let provenance =
-                collect_root_provenance(func, func.ctx(), &root_slices, &mut layout_cache, None);
             let obj_proj = func
                 .layout
                 .iter_block()
@@ -203,16 +113,13 @@ block0:
                 })
                 .expect("obj.proj should exist");
 
-            let (roots, observed_unknown) =
-                observed_roots_ignoring_pure_address_ops(func, obj_proj, provenance.may(), &[]);
+            let accesses = ObjectAccessFacts::new(func, None);
+            let effects = accesses.effects(func, obj_proj, None);
             assert!(
-                roots.is_empty(),
-                "pure address ops should not observe roots"
+                effects.reads.is_empty(),
+                "pure projections must not observe memory"
             );
-            assert!(
-                !observed_unknown,
-                "pure address ops should not report unknown roots"
-            );
+            assert!(effects.writes.is_empty());
         });
     }
 
@@ -257,24 +164,13 @@ block0:
                     downcast::<&data::ObjStore>(func.inst_set(), func.dfg.inst(inst)).is_some()
                 })
                 .expect("obj.store should exist");
-            let projection = func
-                .layout
-                .iter_block()
-                .flat_map(|block| func.layout.iter_inst(block))
-                .find_map(|inst| {
-                    downcast::<&data::ObjProj>(func.inst_set(), func.dfg.inst(inst))
-                        .and_then(|_| func.dfg.inst_result(inst))
-                })
-                .expect("obj.proj result should exist");
-
-            let (roots, observed_unknown) = observed_roots_ignoring_pure_address_ops(
-                func,
-                store,
-                provenance.may(),
-                &[projection],
+            let store = downcast::<&data::ObjStore>(func.inst_set(), func.dfg.inst(store)).unwrap();
+            let roots = provenance.may().may_roots(*store.value());
+            assert!(roots.observed().is_empty());
+            assert!(
+                roots.has_unknown(),
+                "unknown contributors must remain visible"
             );
-            assert!(roots.is_empty(), "only skipped known roots should remain");
-            assert!(observed_unknown, "unknown contributors must remain visible");
         });
     }
 

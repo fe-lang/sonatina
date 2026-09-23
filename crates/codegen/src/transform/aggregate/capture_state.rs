@@ -6,10 +6,12 @@ use sonatina_ir::{
     BlockId, Function, InstId,
     cfg::ControlFlowGraph,
     inst::{control_flow, data, downcast},
+    module::ModuleCtx,
+    types::EnumVariantRef,
 };
 
 use super::{
-    object_effects::SliceSet,
+    object_alias::ObjectAliasFacts,
     provenance::{Projection, RootValue, exact_capture_destination},
     shape,
 };
@@ -20,34 +22,9 @@ pub(crate) trait RootCapturePayload: Copy + Eq + Hash {
     fn dst_slice(self) -> shape::AggregateSlice;
 }
 
-pub(crate) trait CaptureSliceSet {
-    fn is_empty(&self) -> bool;
-    fn is_whole_root(&self) -> bool;
-    fn total_leaves(&self) -> usize;
-    fn exact_leaves(&self) -> Option<Vec<usize>>;
-}
-
-impl CaptureSliceSet for SliceSet {
-    fn is_empty(&self) -> bool {
-        self.is_empty()
-    }
-
-    fn is_whole_root(&self) -> bool {
-        self.is_whole_root()
-    }
-
-    fn total_leaves(&self) -> usize {
-        self.total_leaves()
-    }
-
-    fn exact_leaves(&self) -> Option<Vec<usize>> {
-        self.exact_leaves()
-            .map(|leaves| leaves.iter().copied().collect())
-    }
-}
-
 pub(crate) enum CaptureRelevantInst<'a> {
     ObjStore(&'a data::ObjStore),
+    ObjInitConst(&'a data::ObjInitConst),
     EnumSetTag(&'a data::EnumSetTag),
     EnumWriteVariant(&'a data::EnumWriteVariant),
     Call,
@@ -60,6 +37,9 @@ pub(crate) fn capture_relevant_inst<'a>(
     let inst_data = function.dfg.inst(inst);
     if let Some(obj_store) = downcast::<&data::ObjStore>(function.inst_set(), inst_data) {
         return Some(CaptureRelevantInst::ObjStore(obj_store));
+    }
+    if let Some(init) = downcast::<&data::ObjInitConst>(function.inst_set(), inst_data) {
+        return Some(CaptureRelevantInst::ObjInitConst(init));
     }
     if let Some(enum_set_tag) = downcast::<&data::EnumSetTag>(function.inst_set(), inst_data) {
         return Some(CaptureRelevantInst::EnumSetTag(enum_set_tag));
@@ -77,6 +57,7 @@ pub(crate) fn compute_capture_states_for_blocks<C: RootCapturePayload>(
     function: &Function,
     cfg: &ControlFlowGraph,
     reachable: &SecondaryMap<BlockId, bool>,
+    initial_captures: &RootCaptureMap<C>,
     mut transfer_inst: impl FnMut(InstId, &mut RootCaptureMap<C>),
 ) -> (SecondaryMap<BlockId, RootCaptureMap<C>>, RootCaptureMap<C>) {
     let mut block_entry_captures = SecondaryMap::default();
@@ -90,7 +71,11 @@ pub(crate) fn compute_capture_states_for_blocks<C: RootCapturePayload>(
                 continue;
             }
 
-            let mut entry_captures = RootCaptureMap::default();
+            let mut entry_captures = if Some(block) == cfg.entry() {
+                initial_captures.clone()
+            } else {
+                RootCaptureMap::default()
+            };
             for &pred in cfg.preds_of(block) {
                 if reachable[pred] {
                     merge_root_capture_maps(&mut entry_captures, &block_exit_captures[pred]);
@@ -158,62 +143,54 @@ pub(crate) fn dedup_root_capture_map<C: RootCapturePayload>(root_captures: &mut 
 
 pub(crate) fn kill_capture_access<C: RootCapturePayload>(
     root_captures: &mut RootCaptureMap<C>,
+    aliases: &ObjectAliasFacts,
     projection: Option<Projection>,
     relative_slice: Option<shape::AggregateSlice>,
 ) {
-    if let Some((root, access_slice)) = exact_capture_destination(projection, relative_slice) {
-        kill_capture_root_slice(root_captures, root, Some(access_slice));
+    let Some((root, slice)) = exact_capture_destination(projection, relative_slice) else {
+        return;
+    };
+    let write = Projection {
+        root_value: root,
+        slice,
+    };
+    if let Some(captures) = root_captures.get_mut(&root) {
+        captures.retain(|capture| {
+            !aliases.exact_write_covers(
+                write,
+                Projection {
+                    root_value: root,
+                    slice: capture.dst_slice(),
+                },
+            )
+        });
+        if captures.is_empty() {
+            root_captures.remove(&root);
+        }
     }
 }
 
-pub(crate) fn kill_capture_slice_set<C: RootCapturePayload, S: CaptureSliceSet>(
+pub(crate) fn kill_enum_variant_captures<C: RootCapturePayload>(
     root_captures: &mut RootCaptureMap<C>,
-    exact_base: Option<(RootValue, shape::AggregateSlice)>,
-    slices: &S,
+    aliases: &ObjectAliasFacts,
+    ctx: &ModuleCtx,
+    projection: Option<Projection>,
+    variant: EnumVariantRef,
+    fields: usize,
 ) {
-    if slices.is_empty() {
+    let Some(projection) = projection else {
         return;
+    };
+    // Selecting a variant does not erase the inactive reference slots (I11).
+    if let Some(tag) = shape::enum_tag_slice(ctx, projection.slice.ty) {
+        kill_capture_access(root_captures, aliases, Some(projection), Some(tag));
     }
-    let Some((root, base_slice)) = exact_base else {
-        return;
-    };
-    if slices.is_whole_root() || base_slice.leaf_count != slices.total_leaves() {
-        kill_capture_root_slice(root_captures, root, Some(base_slice));
-        return;
-    }
-    let Some(exact_leaves) = slices.exact_leaves() else {
-        kill_capture_root_slice(root_captures, root, Some(base_slice));
-        return;
-    };
-
-    for leaf in exact_leaves {
-        kill_capture_root_slice(
-            root_captures,
-            root,
-            Some(shape::AggregateSlice {
-                ty: base_slice.ty,
-                first_leaf: base_slice.first_leaf + leaf,
-                leaf_count: 1,
-            }),
-        );
-    }
-}
-
-pub(crate) fn kill_capture_root_slice<C: RootCapturePayload>(
-    root_captures: &mut RootCaptureMap<C>,
-    root: RootValue,
-    access_slice: Option<shape::AggregateSlice>,
-) {
-    let Some(captures) = root_captures.get_mut(&root) else {
-        return;
-    };
-    let Some(access_slice) = access_slice else {
-        root_captures.remove(&root);
-        return;
-    };
-    captures.retain(|capture| !slices_overlap_relative(access_slice, capture.dst_slice()));
-    if captures.is_empty() {
-        root_captures.remove(&root);
+    for field in (0..fields).filter_map(|field| u32::try_from(field).ok()) {
+        if let Some(slice) =
+            shape::enum_variant_field_slice(ctx, projection.slice.ty, variant, field)
+        {
+            kill_capture_access(root_captures, aliases, Some(projection), Some(slice));
+        }
     }
 }
 

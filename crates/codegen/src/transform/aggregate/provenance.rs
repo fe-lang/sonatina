@@ -18,19 +18,22 @@ use smallvec::SmallVec;
 use sonatina_ir::{
     BlockId, Function, InstId, Type, ValueId,
     cfg::ControlFlowGraph,
+    effects::AccessKind,
     inst::{cast, control_flow, data, downcast},
     module::{FuncRef, ModuleCtx},
     types::CompoundType,
 };
 
 use super::{
-    ObjectEffectSummaryMap, ObjectReturnEffect, SliceSet,
+    ObjectEffectSummaryMap, ObjectReturnEffect,
     capture_state::{
         CaptureRelevantInst, RootCaptureMap as SharedRootCaptureMap, RootCapturePayload,
         capture_relevant_inst, compute_capture_states_for_blocks as compute_block_capture_states,
-        kill_capture_access as kill_capture_projection_access,
-        kill_capture_slice_set as kill_capture_exact_slice_set, slices_overlap_relative,
+        kill_capture_access as kill_capture_projection_access, kill_enum_variant_captures,
     },
+    object_alias::ObjectAliasFacts,
+    object_effects::ObjectEffectSummary,
+    object_reachability::{ObjectReachability, raw_access_may_reach_objects, reference_bearing},
     shape,
 };
 
@@ -113,7 +116,8 @@ pub(crate) struct CompleteProvenance<'a> {
 
 #[derive(Clone, Copy)]
 pub(crate) struct MayProvenance<'a> {
-    facts: &'a ProvenanceFacts,
+    possible_roots: &'a SecondaryMap<ValueId, FxHashSet<ValueId>>,
+    maybe_unknown: &'a SecondaryMap<ValueId, bool>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -224,7 +228,10 @@ impl ProvenanceFacts {
     }
 
     pub(crate) fn may(&self) -> MayProvenance<'_> {
-        MayProvenance { facts: self }
+        MayProvenance {
+            possible_roots: &self.possible_roots,
+            maybe_unknown: &self.maybe_unknown,
+        }
     }
 
     pub(crate) fn into_exact_projection_map(mut self) -> ExactProjectionMap {
@@ -297,8 +304,8 @@ impl<'a> CompleteProvenance<'a> {
 impl<'a> MayProvenance<'a> {
     pub(crate) fn may_roots(self, value: ValueId) -> MayRootSet<'a> {
         MayRootSet {
-            roots: KnownRoots(&self.facts.possible_roots[value]),
-            has_unknown: self.facts.maybe_unknown[value],
+            roots: KnownRoots(&self.possible_roots[value]),
+            has_unknown: self.maybe_unknown[value],
         }
     }
 }
@@ -312,6 +319,8 @@ enum ExactState {
 
 #[derive(Clone, Copy)]
 struct CaptureStateView<'a> {
+    reachability: &'a ObjectReachability,
+    aliases: &'a ObjectAliasFacts,
     exact_states: &'a SecondaryMap<ValueId, Option<ExactState>>,
     possible_roots: &'a SecondaryMap<ValueId, FxHashSet<ValueId>>,
     maybe_unknown: &'a SecondaryMap<ValueId, bool>,
@@ -364,6 +373,7 @@ fn secondary_value_map<V: Clone + Default>(value_capacity: usize) -> SecondaryMa
 }
 
 pub(crate) struct ProvenanceSnapshot<'a> {
+    aliases: ObjectAliasFacts,
     value_capacity: usize,
     single_result_insts: Vec<(InstId, ValueId)>,
     possible_root_transfers: PossibleRootTransfers,
@@ -386,6 +396,7 @@ impl<'a> ProvenanceSnapshot<'a> {
         cfg.compute(func);
         let reachable = cfg.reachable_blocks();
         Self {
+            aliases: ObjectAliasFacts::new(func, object_effects),
             value_capacity,
             single_result_insts,
             possible_root_transfers,
@@ -430,6 +441,19 @@ impl<'a> ProvenanceSnapshot<'a> {
                 .entry(ty)
                 .or_insert_with(|| shape::is_reference_aggregate(module, ty))
             {
+                provenance.maybe_unknown[value] = true;
+            }
+            if reference_element_ty(module, ty).is_some()
+                && !root_slices.contains_key(&value)
+                && func.dfg.value_inst(value).is_none_or(|inst| {
+                    self.possible_root_transfers[value].is_none()
+                        && downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst))
+                            .is_none()
+                })
+            {
+                // Missing origins and unsupported producers are contributors,
+                // not an exhaustive empty set. Loads are refined below from
+                // point-sensitive capture state before unresolved bottom widens.
                 provenance.maybe_unknown[value] = true;
             }
         }
@@ -914,11 +938,37 @@ fn refine_possible_roots_from_objref_loads(
     possible_roots: &mut SecondaryMap<ValueId, FxHashSet<ValueId>>,
     maybe_unknown: &mut SecondaryMap<ValueId, bool>,
 ) {
+    let has_reference_load = snapshot.single_result_insts.iter().any(|&(inst, result)| {
+        reference_element_ty(func.ctx(), func.dfg.value_ty(result)).is_some()
+            && downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst)).is_some()
+    });
+    if !has_reference_load {
+        if widen_unresolved_references(func, possible_roots, maybe_unknown) {
+            compute_possible_roots(
+                func,
+                &snapshot.possible_root_transfers,
+                &snapshot.possible_root_users,
+                possible_roots,
+                maybe_unknown,
+            );
+        }
+        return;
+    }
     loop {
         let mut changed = false;
         let possible_roots_snapshot = possible_roots.clone();
         let maybe_unknown_snapshot = maybe_unknown.clone();
+        let reachability = ObjectReachability::new(
+            func,
+            snapshot.object_effects,
+            MayProvenance {
+                possible_roots: &possible_roots_snapshot,
+                maybe_unknown: &maybe_unknown_snapshot,
+            },
+        );
         let capture_state = CaptureStateView {
+            reachability: &reachability,
+            aliases: &snapshot.aliases,
             exact_states,
             possible_roots: &possible_roots_snapshot,
             maybe_unknown: &maybe_unknown_snapshot,
@@ -958,9 +1008,8 @@ fn refine_possible_roots_from_objref_loads(
 
                 if let Some(obj_load) =
                     downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst))
-                    && reference_element_ty(func.ctx(), func.dfg.value_ty(*obj_load.object()))
-                        .is_some()
                     && let Some(result) = single_result_value(func, inst)
+                    && reference_element_ty(func.ctx(), func.dfg.value_ty(result)).is_some()
                     && union_capture_roots_for_value(
                         *obj_load.object(),
                         capture_state,
@@ -983,9 +1032,33 @@ fn refine_possible_roots_from_objref_loads(
         }
 
         if !changed {
-            return;
+            // A closed reference cycle or an integer-to-pointer source chain
+            // can settle at bottom. Widen its unresolved direct references and
+            // propagate again so a join cannot silently discard an alternative.
+            changed = widen_unresolved_references(func, possible_roots, maybe_unknown);
+            if !changed {
+                return;
+            }
         }
     }
+}
+
+fn widen_unresolved_references(
+    func: &Function,
+    possible_roots: &SecondaryMap<ValueId, FxHashSet<ValueId>>,
+    maybe_unknown: &mut SecondaryMap<ValueId, bool>,
+) -> bool {
+    let mut changed = false;
+    for value in func.dfg.value_ids() {
+        if reference_element_ty(func.ctx(), func.dfg.value_ty(value)).is_some()
+            && possible_roots[value].is_empty()
+            && !maybe_unknown[value]
+        {
+            maybe_unknown[value] = true;
+            changed = true;
+        }
+    }
+    changed
 }
 
 fn compute_capture_states_for_blocks(
@@ -995,10 +1068,39 @@ fn compute_capture_states_for_blocks(
     cfg: &ControlFlowGraph,
     reachable: &SecondaryMap<BlockId, bool>,
 ) -> SecondaryMap<BlockId, RootCaptureMap> {
-    let (block_entry_captures, _) =
-        compute_block_capture_states(func, cfg, reachable, |inst, exit_captures| {
+    // I7: absence of a store on a predecessor is an unknown alternative,
+    // not an exhaustive empty reference set. Seed only demanded cells; exact
+    // covering stores can replace these entries without enumerating shapes.
+    let mut initial_captures = RootCaptureMap::default();
+    for block in func.layout.iter_block().filter(|&block| reachable[block]) {
+        for inst in func.layout.iter_inst(block) {
+            if let Some(load) = downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst))
+                && let Some(result) = single_result_value(func, inst)
+                && reference_element_ty(func.ctx(), func.dfg.value_ty(result)).is_some()
+            {
+                for (root, dst_slice) in
+                    capture_destinations_for_value(*load.object(), None, capture_state)
+                {
+                    initial_captures
+                        .entry(root)
+                        .or_default()
+                        .push(RootCaptureSource {
+                            dst_slice,
+                            src_root: None,
+                        });
+                }
+            }
+        }
+    }
+    let (block_entry_captures, _) = compute_block_capture_states(
+        func,
+        cfg,
+        reachable,
+        &initial_captures,
+        |inst, exit_captures| {
             apply_inst_capture_transfer(func, inst, capture_state, object_effects, exit_captures);
-        });
+        },
+    );
     block_entry_captures
 }
 
@@ -1015,8 +1117,13 @@ fn apply_inst_capture_transfer(
 
     match capture_relevant_inst(func, inst) {
         Some(CaptureRelevantInst::ObjStore(obj_store)) => {
+            if !reference_bearing(func, *obj_store.value())
+                || capture_state.maybe_unknown[*obj_store.object()]
+            {
+                widen_typed_capture_write(root_captures, *obj_store.object(), None, capture_state);
+            }
             kill_capture_access(root_captures, *obj_store.object(), None, capture_state);
-            if reference_element_ty(func.ctx(), func.dfg.value_ty(*obj_store.value())).is_some() {
+            if reference_bearing(func, *obj_store.value()) {
                 record_root_capture_sources(
                     root_captures,
                     capture_destinations_for_value(*obj_store.object(), None, capture_state),
@@ -1025,7 +1132,16 @@ fn apply_inst_capture_transfer(
                 );
             }
         }
+        Some(CaptureRelevantInst::ObjInitConst(init)) => {
+            // Const data contains no references, but an unrelated incoming
+            // coordinate system may describe bytes of a captured-reference cell.
+            widen_typed_capture_write(root_captures, *init.object(), None, capture_state);
+            kill_capture_access(root_captures, *init.object(), None, capture_state);
+        }
         Some(CaptureRelevantInst::EnumSetTag(enum_set_tag)) => {
+            let tag = reference_element_ty(func.ctx(), func.dfg.value_ty(*enum_set_tag.object()))
+                .and_then(|ty| shape::enum_tag_slice(func.ctx(), ty));
+            widen_typed_capture_write(root_captures, *enum_set_tag.object(), tag, capture_state);
             kill_capture_access(
                 root_captures,
                 *enum_set_tag.object(),
@@ -1034,11 +1150,34 @@ fn apply_inst_capture_transfer(
             );
         }
         Some(CaptureRelevantInst::EnumWriteVariant(enum_write_variant)) => {
-            kill_capture_access(
+            let object = *enum_write_variant.object();
+            let enum_ty = reference_element_ty(func.ctx(), func.dfg.value_ty(object));
+            let tag = enum_ty.and_then(|ty| shape::enum_tag_slice(func.ctx(), ty));
+            widen_typed_capture_write(root_captures, object, tag, capture_state);
+            for (index, &value) in enum_write_variant.values().iter().enumerate() {
+                if !reference_bearing(func, value) || capture_state.maybe_unknown[object] {
+                    let field = enum_ty.and_then(|ty| {
+                        shape::enum_variant_field_slice(
+                            func.ctx(),
+                            ty,
+                            *enum_write_variant.variant(),
+                            u32::try_from(index).ok()?,
+                        )
+                    });
+                    widen_typed_capture_write(root_captures, object, field, capture_state);
+                }
+            }
+            kill_enum_variant_captures(
                 root_captures,
-                *enum_write_variant.object(),
-                None,
-                capture_state,
+                capture_state.aliases,
+                func.ctx(),
+                exact_projection_of(
+                    capture_state.exact_states,
+                    capture_state.maybe_unknown,
+                    *enum_write_variant.object(),
+                ),
+                *enum_write_variant.variant(),
+                enum_write_variant.values().len(),
             );
             record_enum_variant_capture_sources(
                 func,
@@ -1050,9 +1189,145 @@ fn apply_inst_capture_transfer(
             );
         }
         Some(CaptureRelevantInst::Call) => {
+            widen_interfering_captures(func, inst, capture_state, object_effects, root_captures);
             merge_call_capture_roots(func, inst, capture_state, object_effects, root_captures);
         }
-        None => {}
+        None => {
+            widen_interfering_captures(func, inst, capture_state, object_effects, root_captures)
+        }
+    }
+}
+
+fn widen_typed_capture_write(
+    captures: &mut RootCaptureMap,
+    object: ValueId,
+    relative: Option<shape::AggregateSlice>,
+    state: CaptureStateView<'_>,
+) {
+    let destinations = capture_destinations_for_value(object, relative, state);
+    let unresolved = state.maybe_unknown[object] || destinations.is_empty();
+    for (&root, sources) in captures.iter_mut() {
+        let mut unknowns = Vec::new();
+        for source in sources.iter() {
+            let target = Projection {
+                root_value: root,
+                slice: source.dst_slice,
+            };
+            if unresolved && state.reachability.may_reach(object, root)
+                || destinations.iter().any(|&(root_value, slice)| {
+                    state
+                        .aliases
+                        .may_overlap(Projection { root_value, slice }, target)
+                })
+            {
+                unknowns.push(RootCaptureSource {
+                    dst_slice: source.dst_slice,
+                    src_root: None,
+                });
+            }
+        }
+        for unknown in unknowns {
+            if !sources.contains(&unknown) {
+                sources.push(unknown);
+            }
+        }
+    }
+}
+
+fn widen_interfering_captures(
+    func: &Function,
+    inst: InstId,
+    state: CaptureStateView<'_>,
+    summaries: Option<&ObjectEffectSummaryMap>,
+    captures: &mut RootCaptureMap,
+) {
+    let call = downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(inst));
+    let fallback;
+    let summary = if let Some(call) = call {
+        Some(
+            if let Some(summary) = summaries.and_then(|summaries| summaries.get(call.callee())) {
+                summary
+            } else {
+                fallback = ObjectEffectSummary::conservative_unknown(
+                    func.ctx(),
+                    *call.callee(),
+                    &mut shape::AggregateLayoutCache::default(),
+                );
+                &fallback
+            },
+        )
+    } else {
+        None
+    };
+    let raw_write = summary.is_none()
+        && func.dfg.effects(inst).accesses.iter().any(|access| {
+            access.kind == AccessKind::Write && raw_access_may_reach_objects(func, access)
+        });
+    if summary.is_none() && !raw_write {
+        return;
+    }
+    for (&root, sources) in captures.iter_mut() {
+        let mut unknowns = Vec::new();
+        for capture in sources.iter() {
+            let target = Projection {
+                root_value: root,
+                slice: capture.dst_slice,
+            };
+            let interferes = if let Some((call, summary)) = call.zip(summary) {
+                summary.non_arg.unknown.writes
+                    || summary.non_arg.external.writes && state.reachability.exposed(root)
+                    || call
+                        .args()
+                        .iter()
+                        .zip(&summary.arg_effects)
+                        .any(|(&arg, effect)| {
+                            if effect.writes.is_empty() || !state.reachability.may_reach(arg, root)
+                            {
+                                return false;
+                            }
+                            let Some(projection) =
+                                exact_projection_of(state.exact_states, state.maybe_unknown, arg)
+                            else {
+                                return true;
+                            };
+                            if effect.writes.is_whole_root()
+                                || effect.writes.total_leaves() != projection.slice.leaf_count
+                            {
+                                return state.aliases.may_overlap(projection, target);
+                            }
+                            effect.writes.exact_leaves().is_none_or(|leaves| {
+                                leaves.iter().any(|&leaf| {
+                                    state.aliases.may_overlap(
+                                        Projection {
+                                            root_value: projection.root_value,
+                                            slice: shape::AggregateSlice {
+                                                first_leaf: projection.slice.first_leaf + leaf,
+                                                leaf_count: 1,
+                                                ty: projection.slice.ty,
+                                            },
+                                        },
+                                        target,
+                                    )
+                                })
+                            })
+                        })
+            } else {
+                raw_write && state.reachability.exposed(root)
+            };
+            if interferes {
+                unknowns.push(RootCaptureSource {
+                    dst_slice: capture.dst_slice,
+                    src_root: None,
+                });
+            }
+        }
+        // I6/I7: may-writes add an unknown replacement; old alternatives survive.
+        // Summary captures are observed replacements, not a completeness proof.
+        for unknown in unknowns {
+            if !sources.contains(&unknown) {
+                sources.push(unknown);
+            }
+        }
     }
 }
 
@@ -1069,13 +1344,7 @@ fn merge_call_capture_roots(
         return;
     };
 
-    for (idx, &arg) in call.args().iter().enumerate() {
-        let Some(effect) = summary.arg_effects.get(idx) else {
-            continue;
-        };
-        kill_capture_slice_set(root_captures, arg, &effect.writes, capture_state);
-    }
-
+    // I6: callee writes are may-effects, so old containment survives.
     let call_result = single_result_value(func, inst);
     for capture in &summary.captures {
         let Some(&src_arg) = call.args().get(capture.src_arg) else {
@@ -1118,7 +1387,7 @@ fn record_root_capture_sources(
             }
             entry.push(capture);
         }
-        if src_maybe_unknown {
+        if src_maybe_unknown || src_roots.is_empty() {
             let entry = root_captures.entry(root).or_default();
             let capture = RootCaptureSource {
                 dst_slice,
@@ -1145,7 +1414,7 @@ fn record_enum_variant_capture_sources(
     };
     let mut layout_cache = shape::AggregateLayoutCache::default();
     for (field_idx, &value) in values.iter().enumerate() {
-        if reference_element_ty(func.ctx(), func.dfg.value_ty(value)).is_none() {
+        if !reference_bearing(func, value) {
             continue;
         }
         let Some(field_slice) = layout_cache.enum_variant_field_slice(
@@ -1183,19 +1452,11 @@ fn kill_capture_access(
             leaf_count,
         })
     });
-    kill_capture_projection_access(root_captures, projection, relative_slice);
-}
-
-fn kill_capture_slice_set(
-    root_captures: &mut RootCaptureMap,
-    value: ValueId,
-    slices: &SliceSet,
-    capture_state: CaptureStateView<'_>,
-) {
-    kill_capture_exact_slice_set(
+    kill_capture_projection_access(
         root_captures,
-        exact_capture_destination_for_value(value, None, capture_state),
-        slices,
+        capture_state.aliases,
+        projection,
+        relative_slice,
     );
 }
 
@@ -1226,21 +1487,6 @@ fn capture_destinations_for_value(
     .collect()
 }
 
-fn exact_capture_destination_for_value(
-    value: ValueId,
-    relative_slice: Option<shape::AggregateSlice>,
-    capture_state: CaptureStateView<'_>,
-) -> Option<(RootValue, shape::AggregateSlice)> {
-    exact_capture_destination(
-        exact_projection_of(
-            capture_state.exact_states,
-            capture_state.maybe_unknown,
-            value,
-        ),
-        relative_slice,
-    )
-}
-
 fn union_capture_roots_for_value(
     value: ValueId,
     capture_state: CaptureStateView<'_>,
@@ -1252,12 +1498,22 @@ fn union_capture_roots_for_value(
     let old_unknown = *dst_maybe_unknown;
     *dst_maybe_unknown |= capture_state.maybe_unknown[value];
 
-    for (root, access_slice) in capture_destinations_for_value(value, None, capture_state) {
-        let Some(captures) = root_captures.get(&root) else {
-            continue;
-        };
+    let destinations = capture_destinations_for_value(value, None, capture_state);
+    let unknown_destination = capture_state.maybe_unknown[value] || destinations.is_empty();
+    *dst_maybe_unknown |= unknown_destination;
+    for (&root, captures) in root_captures {
         for capture in captures {
-            if slices_overlap_relative(access_slice, capture.dst_slice) {
+            let target = Projection {
+                root_value: root,
+                slice: capture.dst_slice,
+            };
+            if unknown_destination
+                || destinations.iter().any(|&(root_value, slice)| {
+                    capture_state
+                        .aliases
+                        .may_overlap(Projection { root_value, slice }, target)
+                })
+            {
                 if let Some(src_root) = capture.src_root {
                     dst_roots.insert(src_root.value());
                 } else {
@@ -1756,8 +2012,8 @@ fn fresh_call_root_projection(
             ty: pointee_ty,
             first_leaf: 0,
             leaf_count: layout_cache
-                .shape(func.ctx(), pointee_ty)
-                .map_or(1, |shape| shape.leaves.len()),
+                .shape_leaf_count(func.ctx(), pointee_ty)
+                .unwrap_or(1),
         },
     })
 }
@@ -2706,7 +2962,7 @@ block0:
     }
 
     #[test]
-    fn call_write_kills_stale_captured_root_provenance() {
+    fn call_may_write_retains_old_captured_root_provenance() {
         let module = parse_test_module(
             r#"
 target = "evm-ethereum-osaka"
@@ -2769,15 +3025,11 @@ block0:
                         .filter(|&result| func.dfg.value_ty(result) == func.dfg.value_ty(*loaded))
                 })
                 .collect();
-            let [_, overwritten_root] = roots.as_slice() else {
-                panic!("expected exactly two array roots");
-            };
-
-            let complete = provenance.complete();
-            assert_eq!(
-                complete.complete_roots(*loaded),
-                Some(CompleteRootSet::Single(RootValue::new(*overwritten_root)))
-            );
+            assert_eq!(roots.len(), 2);
+            // Summaries are may-effects, even when this helper happens to write
+            // unconditionally. No must-write proof authorizes removing the old root,
+            // and observed captures do not certify exhaustive replacement contents.
+            assert_known_and_unknown(provenance.may().may_roots(*loaded), &roots);
         });
     }
 
@@ -2850,7 +3102,9 @@ block3:
             let expected = vec![func.arg_values[1], func.arg_values[2]];
             let may = provenance.may();
 
-            assert_known_only(may.may_roots(loaded), &expected);
+            // Capture summaries enumerate possibilities, not a must-initialized
+            // cell. Weak stores cannot remove its unknown incoming alternative.
+            assert_known_and_unknown(may.may_roots(loaded), &expected);
         });
     }
 
@@ -3034,7 +3288,9 @@ block3:
             let expected = vec![func.arg_values[1], func.arg_values[2]];
             let may = provenance.may();
 
-            assert_known_only(may.may_roots(loaded), &expected);
+            // Capture summaries enumerate possibilities, not a must-initialized
+            // cell. Weak stores cannot remove its unknown incoming alternative.
+            assert_known_and_unknown(may.may_roots(loaded), &expected);
         });
     }
 

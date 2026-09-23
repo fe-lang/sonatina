@@ -49,16 +49,7 @@ impl AggregateFacts {
         }
     }
 
-    pub(crate) fn for_local_objects(
-        func: &Function,
-        local_object_args: Option<&FxHashMap<usize, LocalObjectArgInfo>>,
-        layout_cache: &mut shape::AggregateLayoutCache,
-        snapshot: &mut ProvenanceSnapshot<'_>,
-    ) -> Self {
-        let root_slices = collect_root_slices(func, local_object_args, layout_cache);
-        Self::from_root_slices(func, func.ctx(), root_slices, layout_cache, snapshot)
-    }
-
+    #[cfg(any(feature = "cranelift", test))]
     pub(crate) fn for_all_objref_args(
         func: &Function,
         layout_cache: &mut shape::AggregateLayoutCache,
@@ -77,6 +68,21 @@ impl AggregateFacts {
             .object_effects()
             .expect("call planner facts require object effects");
         let root_slices = collect_call_planner_root_slices(func, object_effects, layout_cache);
+        Self::from_root_slices(func, func.ctx(), root_slices, layout_cache, snapshot)
+    }
+
+    pub(crate) fn for_accesses(
+        func: &Function,
+        layout_cache: &mut shape::AggregateLayoutCache,
+        snapshot: &mut ProvenanceSnapshot<'_>,
+    ) -> Self {
+        let mut root_slices = collect_all_objref_arg_root_slices(func, layout_cache);
+        insert_produced_object_root_slices(
+            func,
+            &mut root_slices,
+            layout_cache,
+            snapshot.object_effects(),
+        );
         Self::from_root_slices(func, func.ctx(), root_slices, layout_cache, snapshot)
     }
 
@@ -112,26 +118,6 @@ impl AggregateObjectFacts {
         Self { facts, tracked }
     }
 
-    pub(crate) fn for_local_objects(
-        func: &Function,
-        local_object_args: Option<&FxHashMap<usize, LocalObjectArgInfo>>,
-        layout_cache: &mut shape::AggregateLayoutCache,
-        snapshot: &mut ProvenanceSnapshot<'_>,
-    ) -> Self {
-        let facts =
-            AggregateFacts::for_local_objects(func, local_object_args, layout_cache, snapshot);
-        Self::from_facts(func, facts, layout_cache)
-    }
-
-    pub(crate) fn for_all_objref_args(
-        func: &Function,
-        layout_cache: &mut shape::AggregateLayoutCache,
-        snapshot: &mut ProvenanceSnapshot<'_>,
-    ) -> Self {
-        let facts = AggregateFacts::for_all_objref_args(func, layout_cache, snapshot);
-        Self::from_facts(func, facts, layout_cache)
-    }
-
     pub(crate) fn for_call_planner(
         func: &Function,
         layout_cache: &mut shape::AggregateLayoutCache,
@@ -143,14 +129,6 @@ impl AggregateObjectFacts {
 
     pub(crate) fn root_slices(&self) -> &FxHashMap<ValueId, shape::AggregateSlice> {
         self.facts.root_slices()
-    }
-
-    pub(crate) fn tracked(&self) -> &SecondaryMap<ValueId, Option<TrackedObject>> {
-        &self.tracked
-    }
-
-    pub(crate) fn may(&self) -> MayProvenance<'_> {
-        self.facts.may()
     }
 
     pub(crate) fn into_provenance_and_tracked(
@@ -337,9 +315,7 @@ pub(crate) fn root_leaf_count_for_ty(
     if ty == Type::Unit {
         return 0;
     }
-    layout_cache
-        .shape(ctx, ty)
-        .map_or(1, |shape| shape.leaves.len())
+    layout_cache.shape_leaf_count(ctx, ty).unwrap_or(1)
 }
 
 pub(crate) fn whole_root_slice_for_value(
@@ -420,13 +396,6 @@ impl TrackedObject {
         match self {
             Self::Exact(slice) => Some(slice),
             Self::RootUnknown { .. } => None,
-        }
-    }
-
-    pub(crate) fn total_leaves(self) -> usize {
-        match self {
-            Self::Exact(slice) => slice.total_leaves,
-            Self::RootUnknown { total_leaves, .. } => total_leaves,
         }
     }
 }
