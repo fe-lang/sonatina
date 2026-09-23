@@ -7,8 +7,8 @@ target = "evm-ethereum-osaka"
 
 func public %entry() {
     block0:
-        v0.i256 = evm_calldata_load 0.i256;
         v7.*i8 = evm_malloc 32.i256;
+        v0.i256 = evm_calldata_load 0.i256;
         mstore v7 v0 i256;
         evm_return v7 32.i256;
 }

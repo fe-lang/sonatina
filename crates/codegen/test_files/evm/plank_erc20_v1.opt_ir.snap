@@ -56,13 +56,13 @@ func public %run() {
         evm_revert 0.i256 0.i256;
 
     block10:
-        v10.i256 = evm_calldata_load 36.i256;
         v11.i256 = evm_caller;
         v47.*i8 = evm_malloc 32.i256;
         v48.i256 = ptr_to_int v47 i256;
         mstore v48 v11 i256;
         v33.i256 = evm_keccak256 v48 32.i256;
         v13.i256 = evm_sload v33;
+        v10.i256 = evm_calldata_load 36.i256;
         v14.i1 = lt v13 v10;
         br v14 block5 block6;
 

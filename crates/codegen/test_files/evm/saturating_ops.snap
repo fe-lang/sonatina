@@ -34,9 +34,9 @@ entry:
   block0:
     PUSH0  // v1.i256 = evm_calldata_load v0;
     CALLDATALOAD
-    PUSH1 0x20 (32)  // v3.i256 = evm_calldata_load v2;
+    PUSH1 0x20 (32)  // v4.i256 = evm_calldata_load v3;
     CALLDATALOAD
-    PUSH1 0x40 (64)  // v5.i256 = evm_calldata_load v4;
+    PUSH1 0x40 (64)  // v6.i256 = evm_calldata_load v5;
     CALLDATALOAD
     DUP3  // br v1 block1 block10;
     ISZERO
@@ -98,7 +98,7 @@ entry:
     PUSH1 block42
     JUMPI
   block19:
-    PUSH1 0xff (255)  // v21.i256 = evm_umulsat v3 v5 i8;
+    PUSH1 0xff (255)  // v21.i256 = evm_umulsat v4 v6 i8;
     AND
     SWAP1
     PUSH1 0xff (255)
@@ -120,7 +120,7 @@ entry:
     JUMP
   block18:
     JUMPDEST
-    SWAP1  // v23.i256 = evm_usubsat v3 v5 i8;
+    SWAP1  // v23.i256 = evm_usubsat v4 v6 i8;
     PUSH1 0xff (255)
     AND
     SWAP1
@@ -145,7 +145,7 @@ entry:
     JUMP
   block17:
     JUMPDEST
-    SWAP1  // v25.i256 = evm_uaddsat v3 v5 i8;
+    SWAP1  // v25.i256 = evm_uaddsat v4 v6 i8;
     PUSH1 0xff (255)
     AND
     SWAP1
@@ -170,7 +170,7 @@ entry:
     JUMP
   block16:
     JUMPDEST
-    SWAP1  // v27.i256 = evm_ssubsat v3 v5 i8;
+    SWAP1  // v27.i256 = evm_ssubsat v4 v6 i8;
     PUSH0
     SIGNEXTEND
     SWAP1
@@ -205,7 +205,7 @@ entry:
     JUMP
   block15:
     JUMPDEST
-    PUSH0  // v31.i256 = and v3 v30;
+    PUSH0  // v31.i256 = and v4 v30;
     NOT
     PUSH1 0x80 (128)
     SHR
@@ -214,7 +214,7 @@ entry:
     SWAP2
     SWAP3
     AND
-    SWAP2  // v32.i256 = and v5 v30;
+    SWAP2  // v32.i256 = and v6 v30;
     DUP2
     AND
     SWAP1  // v36.i256 = evm_smulsat v31 v32 i128;
@@ -256,10 +256,10 @@ entry:
     JUMP
   block14:
     JUMPDEST
-    SWAP1  // v44.i256 = and v3 v43;
+    SWAP1  // v44.i256 = and v4 v43;
     PUSH1 0xff (255)
     AND
-    SWAP1  // v45.i256 = and v5 v43;
+    SWAP1  // v45.i256 = and v6 v43;
     PUSH1 0xff (255)
     AND
     SWAP1  // v46.i256 = evm_ssubsat v44 v45 i8;
@@ -298,10 +298,10 @@ entry:
     JUMP
   block13:
     JUMPDEST
-    SWAP1  // v48.i256 = and v3 v43;
+    SWAP1  // v48.i256 = and v4 v43;
     PUSH1 0xff (255)
     AND
-    SWAP1  // v49.i256 = and v5 v43;
+    SWAP1  // v49.i256 = and v6 v43;
     PUSH1 0xff (255)
     AND
     SWAP1  // v50.i256 = evm_saddsat v48 v49 i8;
@@ -340,7 +340,7 @@ entry:
     JUMP
   block12:
     JUMPDEST
-    PUSH0  // v54.i256 = and v3 v30;
+    PUSH0  // v54.i256 = and v4 v30;
     NOT
     PUSH1 0x80 (128)
     SHR
@@ -349,7 +349,7 @@ entry:
     SWAP2
     SWAP3
     AND
-    SWAP2  // v55.i256 = and v5 v30;
+    SWAP2  // v55.i256 = and v6 v30;
     DUP2
     AND
     SWAP1  // v56.i256 = evm_umulsat v54 v55 i128;
@@ -379,10 +379,10 @@ entry:
     JUMP
   block11:
     JUMPDEST
-    SWAP1  // v58.i256 = and v3 v43;
+    SWAP1  // v58.i256 = and v4 v43;
     PUSH1 0xff (255)
     AND
-    SWAP1  // v59.i256 = and v5 v43;
+    SWAP1  // v59.i256 = and v6 v43;
     PUSH1 0xff (255)
     AND
     SWAP1  // v60.i256 = evm_usubsat v58 v59 i8;
@@ -410,10 +410,10 @@ entry:
     JUMP
   block10:
     JUMPDEST
-    SWAP1  // v62.i256 = and v3 v43;
+    SWAP1  // v62.i256 = and v4 v43;
     PUSH1 0xff (255)
     AND
-    SWAP1  // v63.i256 = and v5 v43;
+    SWAP1  // v63.i256 = and v6 v43;
     PUSH1 0xff (255)
     AND
     SWAP1  // v64.i256 = evm_uaddsat v62 v63 i8;
@@ -445,7 +445,7 @@ entry:
     PUSH1 0x1 (1)  // evm_mstore v0 v7;
     PUSH0
     MSTORE
-    PUSH1 0x20 (32)  // evm_return v0 v2;
+    PUSH1 0x20 (32)  // evm_return v0 v3;
     PUSH0
     RETURN
   block42:
@@ -453,6 +453,6 @@ entry:
     PUSH0  // evm_mstore v0 v0;
     PUSH0
     MSTORE
-    PUSH1 0x20 (32)  // evm_return v0 v2;
+    PUSH1 0x20 (32)  // evm_return v0 v3;
     PUSH0
     RETURN

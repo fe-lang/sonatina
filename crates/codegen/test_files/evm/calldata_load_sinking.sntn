@@ -1,0 +1,57 @@
+#! evm.config: { opt: 2, vcode: false, stackify_trace: false, bytecode_hex: false }
+#! evm.case: calldata_survives_memory_write_and_call
+#!   calldata: u256(0) u256(1) u256(2)
+#!   expect: return u256(10)
+#! evm.case: out_of_range_loads_are_zero
+#!   calldata:
+#!   expect: return u256(7)
+#! evm.case: partial_word_is_zero_padded
+#!   calldata: u256(0) 0x01
+#!   expect: return u256(0x0100000000000000000000000000000000000000000000000000000000000007)
+#! evm.case: overflow
+#!   calldata: u256(0) u256(0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff) u256(1)
+#!   expect: revert 0x4e487b71 u256(17)
+#! evm.case: earlier_guard_wins_over_overflow
+#!   calldata: u256(1) u256(0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff) u256(1)
+#!   expect: revert
+
+target = "evm-ethereum-osaka"
+
+func public %entry() {
+    block0:
+        v0.i256 = evm_calldata_load 32.i256;
+        v1.i256 = evm_calldata_load 64.i256;
+        v2.i256 = evm_calldata_load -1.i256;
+        v3.i256 = evm_calldata_load 0.i256;
+        v4.i1 = is_zero v3;
+        br v4 block1 block4;
+    block1:
+        mstore 0.i256 7.i256 i256;
+        v5.i256 = mload 0.i256 i256;
+        call %clobber;
+        (v6.i256, v7.i1) = uaddo v0 v1;
+        br v7 block3 block2;
+    block2:
+        v8.i256 = add v6 v2;
+        v9.i256 = add v8 v5;
+        mstore 0.i256 v9 i256;
+        evm_return 0.i256 32.i256;
+    block3:
+        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
+        mstore 4.i256 17.i256 i256;
+        evm_revert 0.i256 36.i256;
+    block4:
+        evm_revert 0.i256 0.i256;
+}
+
+func inline(never) private %clobber() {
+    block0:
+        mstore 0.i256 99.i256 i256;
+        return;
+}
+
+object @Contract {
+    section runtime {
+        entry %entry;
+    }
+}

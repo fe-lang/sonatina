@@ -24,15 +24,15 @@ evm:
 // func public %entry()
 entry:
   block0:
-    PUSH0  // v2.i256 = evm_calldata_load v1;
-    CALLDATALOAD
     PUSH1 0xa (10)  // evm_mstore v1 10.i256;
     PUSH0
     MSTORE
     PUSH1 0x14 (20)  // evm_mstore 32.i256 20.i256;
     PUSH1 0x20 (32)
     MSTORE
-    ISZERO  // br v2 block2 block4;
+    PUSH0  // v6.i256 = evm_calldata_load v1;
+    CALLDATALOAD
+    ISZERO  // br v6 block2 block4;
     PUSH1 block4
     JUMPI
   block2:

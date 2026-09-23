@@ -25,7 +25,7 @@ entry:
   block0:
     PUSH0  // v2.i256 = evm_calldata_load v1;
     CALLDATALOAD
-    PUSH1 0x20 (32)  // v4.i256 = evm_calldata_load v3;
+    PUSH1 0x20 (32)  // v5.i256 = evm_calldata_load v4;
     CALLDATALOAD
     DUP2  // br v2 block2 block4;
     PUSH1 block2
@@ -39,11 +39,11 @@ entry:
     DUP1  // jump block3;
   block3:
     JUMPDEST
-    SWAP2  // v6.i256 = add v2 v4;
+    SWAP2  // v6.i256 = add v2 v5;
     ADD
     ADD  // v7.i256 = add v6 v0;
     PUSH0  // evm_mstore v1 v7;
     MSTORE
-    PUSH1 0x20 (32)  // evm_return v1 v3;
+    PUSH1 0x20 (32)  // evm_return v1 v4;
     PUSH0
     RETURN

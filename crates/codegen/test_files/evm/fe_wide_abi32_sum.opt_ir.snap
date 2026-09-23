@@ -68,36 +68,6 @@ func private %contract_runtime_root_ScaleAbiArgs32() {
     block39:
         v61.i256 = evm_calldata_load 4.i256;
         v88.i256 = evm_calldata_load 36.i256;
-        v116.i256 = evm_calldata_load 68.i256;
-        v146.i256 = evm_calldata_load 100.i256;
-        v178.i256 = evm_calldata_load 132.i256;
-        v212.i256 = evm_calldata_load 164.i256;
-        v248.i256 = evm_calldata_load 196.i256;
-        v286.i256 = evm_calldata_load 228.i256;
-        v326.i256 = evm_calldata_load 260.i256;
-        v368.i256 = evm_calldata_load 292.i256;
-        v412.i256 = evm_calldata_load 324.i256;
-        v458.i256 = evm_calldata_load 356.i256;
-        v506.i256 = evm_calldata_load 388.i256;
-        v556.i256 = evm_calldata_load 420.i256;
-        v608.i256 = evm_calldata_load 452.i256;
-        v662.i256 = evm_calldata_load 484.i256;
-        v718.i256 = evm_calldata_load 516.i256;
-        v776.i256 = evm_calldata_load 548.i256;
-        v836.i256 = evm_calldata_load 580.i256;
-        v898.i256 = evm_calldata_load 612.i256;
-        v962.i256 = evm_calldata_load 644.i256;
-        v1028.i256 = evm_calldata_load 676.i256;
-        v1096.i256 = evm_calldata_load 708.i256;
-        v1166.i256 = evm_calldata_load 740.i256;
-        v1238.i256 = evm_calldata_load 772.i256;
-        v1312.i256 = evm_calldata_load 804.i256;
-        v1388.i256 = evm_calldata_load 836.i256;
-        v1466.i256 = evm_calldata_load 868.i256;
-        v1546.i256 = evm_calldata_load 900.i256;
-        v1628.i256 = evm_calldata_load 932.i256;
-        v1712.i256 = evm_calldata_load 964.i256;
-        v1798.i256 = evm_calldata_load 996.i256;
         (v209.i256, v210.i1) = uaddo v61 v88;
         br v210 block42 block43;
 
@@ -107,122 +77,152 @@ func private %contract_runtime_root_ScaleAbiArgs32() {
         evm_revert 0.i256 36.i256;
 
     block43:
+        v116.i256 = evm_calldata_load 68.i256;
         (v211.i256, v274.i1) = uaddo v209 v116;
         br v274 block42 block44;
 
     block44:
+        v146.i256 = evm_calldata_load 100.i256;
         (v213.i256, v214.i1) = uaddo v211 v146;
         br v214 block42 block45;
 
     block45:
+        v178.i256 = evm_calldata_load 132.i256;
         (v215.i256, v216.i1) = uaddo v213 v178;
         br v216 block42 block46;
 
     block46:
+        v212.i256 = evm_calldata_load 164.i256;
         (v217.i256, v218.i1) = uaddo v215 v212;
         br v218 block42 block47;
 
     block47:
+        v248.i256 = evm_calldata_load 196.i256;
         (v219.i256, v220.i1) = uaddo v217 v248;
         br v220 block42 block48;
 
     block48:
+        v286.i256 = evm_calldata_load 228.i256;
         (v221.i256, v222.i1) = uaddo v219 v286;
         br v222 block42 block49;
 
     block49:
+        v326.i256 = evm_calldata_load 260.i256;
         (v223.i256, v224.i1) = uaddo v221 v326;
         br v224 block42 block50;
 
     block50:
+        v368.i256 = evm_calldata_load 292.i256;
         (v225.i256, v226.i1) = uaddo v223 v368;
         br v226 block42 block51;
 
     block51:
+        v412.i256 = evm_calldata_load 324.i256;
         (v227.i256, v228.i1) = uaddo v225 v412;
         br v228 block42 block52;
 
     block52:
+        v458.i256 = evm_calldata_load 356.i256;
         (v229.i256, v230.i1) = uaddo v227 v458;
         br v230 block42 block53;
 
     block53:
+        v506.i256 = evm_calldata_load 388.i256;
         (v231.i256, v232.i1) = uaddo v229 v506;
         br v232 block42 block54;
 
     block54:
+        v556.i256 = evm_calldata_load 420.i256;
         (v233.i256, v234.i1) = uaddo v231 v556;
         br v234 block42 block55;
 
     block55:
+        v608.i256 = evm_calldata_load 452.i256;
         (v235.i256, v236.i1) = uaddo v233 v608;
         br v236 block42 block56;
 
     block56:
+        v662.i256 = evm_calldata_load 484.i256;
         (v237.i256, v238.i1) = uaddo v235 v662;
         br v238 block42 block57;
 
     block57:
+        v718.i256 = evm_calldata_load 516.i256;
         (v239.i256, v240.i1) = uaddo v237 v718;
         br v240 block42 block58;
 
     block58:
+        v776.i256 = evm_calldata_load 548.i256;
         (v241.i256, v242.i1) = uaddo v239 v776;
         br v242 block42 block59;
 
     block59:
+        v836.i256 = evm_calldata_load 580.i256;
         (v243.i256, v244.i1) = uaddo v241 v836;
         br v244 block42 block60;
 
     block60:
+        v898.i256 = evm_calldata_load 612.i256;
         (v245.i256, v246.i1) = uaddo v243 v898;
         br v246 block42 block61;
 
     block61:
+        v962.i256 = evm_calldata_load 644.i256;
         (v247.i256, v275.i1) = uaddo v245 v962;
         br v275 block42 block62;
 
     block62:
+        v1028.i256 = evm_calldata_load 676.i256;
         (v249.i256, v250.i1) = uaddo v247 v1028;
         br v250 block42 block63;
 
     block63:
+        v1096.i256 = evm_calldata_load 708.i256;
         (v251.i256, v252.i1) = uaddo v249 v1096;
         br v252 block42 block64;
 
     block64:
+        v1166.i256 = evm_calldata_load 740.i256;
         (v253.i256, v254.i1) = uaddo v251 v1166;
         br v254 block42 block65;
 
     block65:
+        v1238.i256 = evm_calldata_load 772.i256;
         (v255.i256, v256.i1) = uaddo v253 v1238;
         br v256 block42 block66;
 
     block66:
+        v1312.i256 = evm_calldata_load 804.i256;
         (v257.i256, v258.i1) = uaddo v255 v1312;
         br v258 block42 block67;
 
     block67:
+        v1388.i256 = evm_calldata_load 836.i256;
         (v259.i256, v260.i1) = uaddo v257 v1388;
         br v260 block42 block68;
 
     block68:
+        v1466.i256 = evm_calldata_load 868.i256;
         (v261.i256, v262.i1) = uaddo v259 v1466;
         br v262 block42 block69;
 
     block69:
+        v1546.i256 = evm_calldata_load 900.i256;
         (v263.i256, v264.i1) = uaddo v261 v1546;
         br v264 block42 block70;
 
     block70:
+        v1628.i256 = evm_calldata_load 932.i256;
         (v265.i256, v266.i1) = uaddo v263 v1628;
         br v266 block42 block71;
 
     block71:
+        v1712.i256 = evm_calldata_load 964.i256;
         (v267.i256, v268.i1) = uaddo v265 v1712;
         br v268 block42 block72;
 
     block72:
+        v1798.i256 = evm_calldata_load 996.i256;
         (v269.i256, v270.i1) = uaddo v267 v1798;
         br v270 block42 block40;
 
