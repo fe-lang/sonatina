@@ -16,8 +16,9 @@ mod scalar;
 mod wide_control_flow;
 
 use sonatina_codegen::{
-    Compile,
+    Compile, OptLevel,
     isa::cranelift::{CraneliftError, CraneliftJitArtifact, CraneliftJitBackend},
+    transform::aggregate::EnumLowerToProduct,
 };
 use sonatina_ir::{
     I256, Immediate, Linkage, Signature, Type, U256,
@@ -362,6 +363,62 @@ fn enum_instructions_are_legalized_before_translation() {
     let address = artifact.function_address("enum_branch").unwrap();
     let function: unsafe extern "C" fn() -> i64 = unsafe { std::mem::transmute(address) };
     assert_eq!(unsafe { function() }, 22);
+}
+
+#[test]
+fn nested_enums_verify_before_lowering_and_execute_afterward() {
+    let source = r#"
+type @OptionI64 = enum { #None, #Some(i64) };
+type @Options = { [@OptionI64; 2] };
+func private %read(v0.@Options) -> i64 {
+block0:
+    v1.[@OptionI64; 2] = extract_value v0 0.i64;
+    v2.@OptionI64 = extract_value v1 1.i64;
+    v3.i1 = enum.is_variant v2 #Some;
+    br v3 block1 block2;
+block1:
+    v4.i64 = enum.extract v2 #Some 0.i8;
+    return v4;
+block2:
+    return 7.i64;
+}
+func public %roundtrip(v0.i64, v1.i1) -> i64 {
+block0:
+    br v1 block1 block2;
+block1:
+    v2.@OptionI64 = enum.make @OptionI64 #Some (v0);
+    jump block3;
+block2:
+    v3.@OptionI64 = enum.make @OptionI64 #None;
+    jump block3;
+block3:
+    v4.@OptionI64 = phi (v2 block1) (v3 block2);
+    v5.@OptionI64 = enum.make @OptionI64 #None;
+    v6.[@OptionI64; 2] = insert_value undef.[@OptionI64; 2] 0.i64 v5;
+    v7.[@OptionI64; 2] = insert_value v6 1.i64 v4;
+    v8.@Options = insert_value undef.@Options 0.i64 v7;
+    v9.i64 = call %read v8;
+    return v9;
+}
+"#;
+    let config = VerifierConfig::for_level(VerificationLevel::Full);
+    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2] {
+        let module = parse_verified_native_module(source);
+        let lowered = parse_native_module(source);
+        assert!(EnumLowerToProduct.run(&lowered));
+        let report = verify_module(&lowered, &config);
+        assert!(!report.has_errors(), "{report}");
+        let mut compile = Compile::new(module, CraneliftJitBackend::new()).with_opt_level(level);
+        let report = verify_module(compile.optimize(), &config);
+        assert!(!report.has_errors(), "{level:?}: {report}");
+        let artifact = compile.compile().unwrap();
+        let roundtrip: unsafe extern "C" fn(i64, bool) -> i64 =
+            unsafe { std::mem::transmute(artifact.function_address("roundtrip").unwrap()) };
+        for value in [0, 42, -1, i64::MIN, i64::MAX] {
+            assert_eq!(unsafe { roundtrip(value, true) }, value, "{level:?}");
+            assert_eq!(unsafe { roundtrip(value, false) }, 7, "{level:?}");
+        }
+    }
 }
 
 #[test]
