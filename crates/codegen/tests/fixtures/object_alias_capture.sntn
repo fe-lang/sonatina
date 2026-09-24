@@ -2,6 +2,7 @@
 # deliberately rejects these stack references.
 type @Holder = { objref<i64> };
 type @Slot = enum { #Empty, #Full(objref<i64>) };
+type @Boxed = enum { #Empty, #Full(@Holder) };
 
 func inline(never) private %capture_then_write(v0.objref<i64>, v1.objref<@Holder>, v2.objref<@Holder>) -> i64 {
 block0:
@@ -200,4 +201,35 @@ block0:
     v4.i64 = extract_value v2 19.i8;
     v5.i64 = add v3 v4;
     return v5;
+}
+
+func inline(never) private %stash_holder(v0.objref<@Boxed>, v1.objref<i64>) {
+block0:
+    v2.objref<@Holder> = obj.alloc @Holder;
+    v3.objref<objref<i64>> = obj.proj v2 0.i8;
+    obj.store v3 v1;
+    v4.@Holder = obj.load v2;
+    enum.write_variant v0 #Full (v4);
+    return;
+}
+
+func inline(never) private %write_stashed(v0.objref<@Boxed>) -> i64 {
+block0:
+    v1.objref<i64> = obj.alloc i64;
+    obj.store v1 11.i64;
+    call %stash_holder v0 v1;
+    v2.objref<@Boxed> = enum.assert_variant_ref v0 #Full;
+    v3.objref<@Holder> = enum.proj v2 #Full 0.i8;
+    v4.objref<objref<i64>> = obj.proj v3 0.i8;
+    v5.objref<i64> = obj.load v4;
+    obj.store v5 22.i64;
+    v6.i64 = obj.load v1;
+    return v6;
+}
+
+func inline(never) public %stashed_payload() -> i64 {
+block0:
+    v0.objref<@Boxed> = obj.alloc @Boxed;
+    v1.i64 = call %write_stashed v0;
+    return v1;
 }

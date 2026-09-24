@@ -138,6 +138,7 @@ fn object_alias_execution_matrix_at_all_optimization_levels() {
                 ("picked_snapshot", 7),
                 ("recovered_slot", 14),
                 ("stored_into_result", 12),
+                ("stashed_payload", 22),
             ][..],
             0,
             false,

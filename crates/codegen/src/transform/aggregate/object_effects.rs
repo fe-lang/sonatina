@@ -1474,7 +1474,7 @@ fn record_enum_variant_captures(
     variant: sonatina_ir::types::EnumVariantRef,
 ) {
     for (field_idx, &value) in values.iter().enumerate() {
-        if objref_element_ty(function.ctx(), function.dfg.value_ty(value)).is_none() {
+        if !reference_bearing(function, value) {
             continue;
         }
         let Some(field_slice) = shape::enum_variant_field_slice(
@@ -1889,11 +1889,7 @@ fn record_unmapped_publication(
         return;
     }
     for &value in values {
-        let ty = function.dfg.value_ty(value);
-        if ty.is_obj_ref(function.ctx())
-            || ty.is_pointer(function.ctx())
-            || shape::is_reference_aggregate(function.ctx(), ty)
-        {
+        if reference_bearing(function, value) {
             summary.non_arg.unknown.publishes = true;
             for (src_arg, _) in capture_source_slices(root_captures, capture_ctx, value, None) {
                 summary.arg_effects[src_arg].escapes = true;
