@@ -278,8 +278,13 @@ impl ObjectReachability {
                         }
                     }
                     _ => {
+                        // An unclassified result can be any reference the
+                        // callee reaches through its actuals.
+                        for &arg in call.args() {
+                            next.union_with(&self.reachable(arg));
+                        }
                         next.external = true;
-                        next.unknown = self.unknown_published;
+                        next.unknown |= self.unknown_published;
                     }
                 }
             } else if downcast::<&data::Mload>(is, data).is_some() {

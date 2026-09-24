@@ -1,5 +1,7 @@
-# EVM execution control; native deliberately rejects this captured stack reference.
+# EVM execution controls for references retained or returned by helpers; native
+# deliberately rejects these stack references.
 type @Holder = { objref<i64> };
+type @Slot = enum { #Empty, #Full(objref<i64>) };
 
 func inline(never) private %capture_then_write(v0.objref<i64>, v1.objref<@Holder>, v2.objref<@Holder>) -> i64 {
 block0:
@@ -19,4 +21,164 @@ block0:
     obj.store v0 11.i64;
     v2.i64 = call %capture_then_write v0 v1 v1;
     return v2;
+}
+
+func inline(never) private %recover(v0.objref<@Holder>) -> objref<i64> {
+block0:
+    v1.objref<objref<i64>> = obj.proj v0 0.i8;
+    v2.objref<i64> = obj.load v1;
+    return v2;
+}
+
+func inline(never) private %copy_holder(v0.objref<@Holder>) -> @Holder {
+block0:
+    v1.@Holder = obj.load v0;
+    return v1;
+}
+
+func inline(never) private %pick(v0.i1, v1.objref<i64>) -> objref<i64> {
+block0:
+    br v0 block1 block2;
+block1:
+    v2.objref<i64> = obj.alloc i64;
+    obj.store v2 5.i64;
+    jump block2;
+block2:
+    v3.objref<i64> = phi (v1 block0) (v2 block1);
+    return v3;
+}
+
+func inline(never) private %wrap(v0.i1, v1.objref<@Holder>, v2.objref<i64>) -> objref<@Holder> {
+block0:
+    v3.objref<@Holder> = obj.alloc @Holder;
+    v4.objref<objref<i64>> = obj.proj v3 0.i8;
+    obj.store v4 v2;
+    br v0 block1 block2;
+block1:
+    jump block2;
+block2:
+    v5.objref<@Holder> = phi (v3 block0) (v1 block1);
+    return v5;
+}
+
+func inline(never) private %pick_array(v0.i1, v1.objref<[i64; 8]>) -> objref<[i64; 8]> {
+block0:
+    br v0 block1 block2;
+block1:
+    v2.objref<[i64; 8]> = obj.alloc [i64; 8];
+    jump block2;
+block2:
+    v3.objref<[i64; 8]> = phi (v1 block0) (v2 block1);
+    return v3;
+}
+
+func inline(never) private %first(v0.[i64; 8]) -> i64 {
+block0:
+    v1.i64 = extract_value v0 0.i8;
+    return v1;
+}
+
+func inline(never) private %flag() -> i1 {
+block0:
+    return 1.i1;
+}
+
+func inline(never) private %recover_slot(v0.objref<@Slot>) -> objref<i64> {
+block0:
+    v1.objref<@Slot> = enum.assert_variant_ref v0 #Full;
+    v2.objref<objref<i64>> = enum.proj v1 #Full 0.i8;
+    v3.objref<i64> = obj.load v2;
+    return v3;
+}
+
+func inline(never) public %recovered_holder() -> i64 {
+block0:
+    v0.objref<i64> = obj.alloc i64;
+    v1.objref<@Holder> = obj.alloc @Holder;
+    v2.objref<objref<i64>> = obj.proj v1 0.i8;
+    obj.store v0 11.i64;
+    obj.store v2 v0;
+    v3.objref<i64> = call %recover v1;
+    obj.store v3 22.i64;
+    v4.i64 = obj.load v0;
+    return v4;
+}
+
+func inline(never) public %copied_holder() -> i64 {
+block0:
+    v0.objref<i64> = obj.alloc i64;
+    v1.objref<@Holder> = obj.alloc @Holder;
+    v2.objref<objref<i64>> = obj.proj v1 0.i8;
+    obj.store v0 11.i64;
+    obj.store v2 v0;
+    v3.@Holder = call %copy_holder v1;
+    v4.objref<i64> = extract_value v3 0.i8;
+    obj.store v4 22.i64;
+    v5.i64 = obj.load v0;
+    return v5;
+}
+
+func inline(never) public %picked_write() -> i64 {
+block0:
+    v0.objref<i64> = obj.alloc i64;
+    obj.store v0 11.i64;
+    v1.objref<i64> = call %pick 0.i1 v0;
+    obj.store v1 22.i64;
+    v2.i64 = obj.load v0;
+    return v2;
+}
+
+func inline(never) public %picked_read() -> i64 {
+block0:
+    v0.objref<i64> = obj.alloc i64;
+    obj.store v0 33.i64;
+    v1.objref<i64> = call %pick 0.i1 v0;
+    v2.i64 = obj.load v1;
+    return v2;
+}
+
+func inline(never) public %wrapped() -> i64 {
+block0:
+    v0.objref<i64> = obj.alloc i64;
+    v1.objref<@Holder> = obj.alloc @Holder;
+    obj.store v0 11.i64;
+    v2.objref<@Holder> = call %wrap 0.i1 v1 v0;
+    v3.objref<objref<i64>> = obj.proj v2 0.i8;
+    v4.objref<i64> = obj.load v3;
+    obj.store v4 22.i64;
+    v5.i64 = obj.load v0;
+    return v5;
+}
+
+func inline(never) public %picked_snapshot() -> i64 {
+block0:
+    v0.objref<[i64; 8]> = obj.alloc [i64; 8];
+    v1.[i64; 8] = insert_value undef.[i64; 8] 0.i8 7.i64;
+    obj.store v0 v1;
+    v2.[i64; 8] = obj.load v0;
+    v3.objref<[i64; 8]> = call %pick_array 0.i1 v0;
+    v4.objref<i64> = obj.index v3 0.i8;
+    obj.store v4 99.i64;
+    v5.i64 = call %first v2;
+    return v5;
+}
+
+func inline(never) public %recovered_slot() -> i64 {
+block0:
+    v0.objref<i64> = obj.alloc i64;
+    v1.objref<@Slot> = obj.alloc @Slot;
+    v2.objref<@Slot> = obj.alloc @Slot;
+    v3.i1 = call %flag;
+    br v3 block1 block2;
+block1:
+    jump block3;
+block2:
+    jump block3;
+block3:
+    v4.objref<@Slot> = phi (v1 block1) (v2 block2);
+    obj.store v0 14.i64;
+    enum.write_variant v4 #Full (v0);
+    v5.objref<i64> = call %recover_slot v4;
+    v6.i64 = obj.load v5;
+    return v6;
 }

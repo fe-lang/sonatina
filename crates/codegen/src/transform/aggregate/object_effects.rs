@@ -22,6 +22,7 @@ use super::{
         slices_overlap_relative,
     },
     object_alias::ObjectAliasFacts,
+    object_reachability::reference_bearing,
     object_tracking::AggregateFacts,
     provenance::{
         CompleteProvenance, CompleteRootSet, MayProvenance, Projection, ProvenanceSnapshot,
@@ -726,6 +727,29 @@ fn compute_summary_for_func(
                         *mat_heap.object(),
                         true,
                     );
+                    continue;
+                }
+
+                if let Some(ret) =
+                    downcast::<&control_flow::Return>(function.inst_set(), function.dfg.inst(inst))
+                {
+                    // Callers cannot relate a reference returned under an
+                    // unclassified effect to its argument, so it escapes.
+                    let unclassified = matches!(
+                        return_analysis.ret_effect,
+                        ObjectReturnEffect::None | ObjectReturnEffect::Unknown
+                    );
+                    for &value in ret
+                        .args()
+                        .iter()
+                        .filter(|&&value| unclassified && reference_bearing(function, value))
+                    {
+                        for (src_arg, _) in
+                            capture_source_slices(&root_captures, effect_provenance, value, None)
+                        {
+                            summary.arg_effects[src_arg].escapes = true;
+                        }
+                    }
                     continue;
                 }
 
