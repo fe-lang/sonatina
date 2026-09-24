@@ -137,6 +137,7 @@ fn object_alias_execution_matrix_at_all_optimization_levels() {
                 ("wrapped", 22),
                 ("picked_snapshot", 7),
                 ("recovered_slot", 14),
+                ("stored_into_result", 12),
             ][..],
             0,
             false,

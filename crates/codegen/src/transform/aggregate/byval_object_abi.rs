@@ -1638,7 +1638,10 @@ impl ObjectAggregateAbi {
             return None;
         }
         let dest_obj = *store.object();
-        if function.dfg.value_ty(dest_obj) != objref_ty(function.ctx(), request.original_ty) {
+        // The call cannot write its output into storage it produces itself.
+        if function.dfg.value_inst(dest_obj) == Some(call_inst)
+            || function.dfg.value_ty(dest_obj) != objref_ty(function.ctx(), request.original_ty)
+        {
             return None;
         }
         let dest_slice = facts.tracked[dest_obj].and_then(TrackedObject::exact)?;

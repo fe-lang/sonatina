@@ -182,3 +182,22 @@ block3:
     v6.i64 = obj.load v5;
     return v6;
 }
+
+func inline(never) private %make_pair(v0.i64) -> (objref<[i64; 20]>, [i64; 20]) {
+block0:
+    v1.objref<[i64; 20]> = obj.alloc [i64; 20];
+    v2.[i64; 20] = insert_value undef.[i64; 20] 0.i8 v0;
+    v3.[i64; 20] = insert_value v2 19.i8 5.i64;
+    return (v1, v3);
+}
+
+func inline(never) public %stored_into_result() -> i64 {
+block0:
+    (v0.objref<[i64; 20]>, v1.[i64; 20]) = call %make_pair 7.i64;
+    obj.store v0 v1;
+    v2.[i64; 20] = obj.load v0;
+    v3.i64 = extract_value v2 0.i8;
+    v4.i64 = extract_value v2 19.i8;
+    v5.i64 = add v3 v4;
+    return v5;
+}
