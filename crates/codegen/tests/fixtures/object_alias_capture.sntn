@@ -272,3 +272,23 @@ block0:
     v1.i64 = call %entry_loop v0;
     return v1;
 }
+
+func inline(never) private %wrap_pair(v0.objref<i64>) -> (objref<@Holder>, i64) {
+block0:
+    v1.objref<@Holder> = obj.alloc @Holder;
+    v2.objref<objref<i64>> = obj.proj v1 0.i8;
+    obj.store v2 v0;
+    return (v1, 3.i64);
+}
+
+func inline(never) public %wrapped_pair() -> i64 {
+block0:
+    v0.objref<i64> = obj.alloc i64;
+    obj.store v0 5.i64;
+    (v1.objref<@Holder>, v2.i64) = call %wrap_pair v0;
+    v3.objref<objref<i64>> = obj.proj v1 0.i8;
+    v4.objref<i64> = obj.load v3;
+    v5.i64 = obj.load v4;
+    v6.i64 = add v5 v2;
+    return v6;
+}

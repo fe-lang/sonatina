@@ -141,6 +141,7 @@ fn object_alias_execution_matrix_at_all_optimization_levels() {
                 ("stashed_payload", 22),
                 ("entry_loop_aliased", 5),
                 ("entry_loop_reload", 5),
+                ("wrapped_pair", 8),
             ][..],
             0,
             false,

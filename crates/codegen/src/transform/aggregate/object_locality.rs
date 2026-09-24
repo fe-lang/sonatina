@@ -650,7 +650,7 @@ fn call_root_preserves_locality(
             continue;
         }
 
-        let Some(result) = function.dfg.inst_result(inst) else {
+        let &[result] = function.dfg.inst_results(inst) else {
             return false;
         };
         if !summary.ret_effect.borrows_arg(idx) || !is_allowed_root_value(result) {
@@ -668,7 +668,9 @@ fn call_borrowed_root_result(
     value: ValueId,
     object_effects: Option<&ObjectEffectSummaryMap>,
 ) -> Option<ValueId> {
-    let result = function.dfg.inst_result(inst)?;
+    let &[result] = function.dfg.inst_results(inst) else {
+        return None;
+    };
     let summary = object_effects.and_then(|effects| effects.get(call.callee()))?;
     for (idx, &arg) in call.args().iter().enumerate() {
         if arg != value {
