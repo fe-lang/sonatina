@@ -1569,6 +1569,10 @@ impl ObjectAggregateAbi {
                     )
                 })
                 && self.source_can_move(function, source_slice, object_effects)
+                // A snapshot live after the call, e.g. passed again when a loop
+                // repeats the call, must keep matching the source that the
+                // callee would mutate after a Move.
+                && !facts.inst_liveness.live_out(inst).contains(arg)
                 && !self.move_has_live_alias_after_call(function, inst, source_slice, facts);
             if !can_share && !can_move {
                 continue;
