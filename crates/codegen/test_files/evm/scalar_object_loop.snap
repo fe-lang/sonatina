@@ -1,0 +1,24 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: "String::from_utf8(out).unwrap()"
+input_file: test_files/evm/scalar_object_loop.sntn
+---
+evm.config: stack_reach=16 vcode=false bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
+
+object: Contract
+  section runtime: 46 bytes
+  total: 46 bytes
+
+functions:
+  mem: global_dyn_base=0x0 arena_base=0x0 scratch_peak_words=0 stable_chain_peak_words=0
+  entry: ir_blocks=6 ir_insts=15 vcode_ops=40 fixups=3 imm_bytes=3
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
+
+evm:
+  case empty: calldata_len=64 success reason=Return gas_used=21331 gas_refunded=0 logs=0 output=call len=32 tx_gas=21268 runtime_gas=63
+  case one: calldata_len=64 success reason=Return gas_used=21423 gas_refunded=0 logs=0 output=call len=32 tx_gas=21280 runtime_gas=143
+  case two: calldata_len=64 success reason=Return gas_used=21503 gas_refunded=0 logs=0 output=call len=32 tx_gas=21280 runtime_gas=223
+  case sixteen: calldata_len=64 success reason=Return gas_used=22611 gas_refunded=0 logs=0 output=call len=32 tx_gas=21268 runtime_gas=1343
+  case sixty_four: calldata_len=64 success reason=Return gas_used=26451 gas_refunded=0 logs=0 output=call len=32 tx_gas=21268 runtime_gas=5183
+  case maximum_without_overflow: calldata_len=64 success reason=Return gas_used=21795 gas_refunded=0 logs=0 output=call len=32 tx_gas=21652 runtime_gas=143
+  case overflow: calldata_len=64 revert gas_used=21810 output_len=0 tx_gas=21652 runtime_gas=158

@@ -8,30 +8,23 @@ use sonatina_ir::{
 };
 
 use super::{
-    LocalObjectArgInfo, LocalObjectArgMap, ObjectEffectSummaryMap, SliceSet,
+    LocalObjectArgInfo, LocalObjectArgMap, ObjectEffectSummaryMap,
     cleanup::DeadPureInstCleanup,
+    object_access::{ObjectAccess, ObjectAccessFacts, ObjectInstEffects},
     object_state::{
-        LiveLeafMap, clear_live_slice, enum_write_variant_slices, mark_live_slice,
-        mark_live_tracked_object, mark_root_live, observed_roots_ignoring_pure_address_ops,
-        slice_has_live_leaf, tracked_root_total_leaves, union_live_leaf_maps,
+        LiveLeafMap, enum_write_variant_slices, mark_live_slice, mark_root_live,
+        slice_has_live_leaf, union_live_leaf_maps,
     },
     object_tracking::{
-        AggregateObjectFacts, ObjectSlice, TrackedObject, enum_tag_object_slice,
-        enum_variant_field_object_slice, object_slice_overlaps_effect, slice_is_covered_by,
-        slices_overlap, whole_root_slice_for_value,
+        ObjectSlice, TrackedObject, enum_tag_object_slice, enum_variant_field_object_slice,
+        same_base_slice_covers, whole_root_slice_for_value,
     },
-    provenance::{MayProvenance, MayRootSet, ProvenanceSnapshot},
+    provenance::{MayProvenance, MayRootSet, RootValue},
     reconstruct::AggregateValueReconstructor,
     shape,
 };
 
 type AvailableMap = FxHashMap<ObjectSlice, ValueId>;
-
-struct CallCaptureEndpoint<'a> {
-    tracked: Option<TrackedObject>,
-    roots: MayRootSet<'a>,
-    slice: shape::AggregateSlice,
-}
 
 #[derive(Default)]
 pub struct ObjectLoadStore {
@@ -67,19 +60,34 @@ impl ObjectLoadStore {
 
         loop {
             func.rebuild_users();
-            let mut snapshot = ProvenanceSnapshot::new(func, object_effects);
-            let facts = AggregateObjectFacts::for_local_objects(
+            // There can be no object-memory optimization target without an
+            // object reference. Preserve the pass's ordinary dead-pure cleanup
+            // without building an access universe for raw/scalar-only code.
+            if !func
+                .dfg
+                .value_ids()
+                .any(|value| func.dfg.value_ty(value).is_obj_ref(func.ctx()))
+            {
+                self.changed |= self.dead_pure_cleanup.run_with_current_users(func);
+                if self.changed {
+                    func.rebuild_users();
+                }
+                return self.changed;
+            }
+            let accesses = ObjectAccessFacts::new(func, object_effects);
+            let tracked = accesses.tracked(func, local_object_args, &mut self.layout_cache);
+            let tracked = &tracked;
+            let may = accesses.may();
+            let live_out_roots = self.collect_live_out_roots(tracked, func, &accesses);
+            let mut iter_changed = self.run_forward(func, tracked, &accesses, object_effects);
+            iter_changed |= self.run_backward(
                 func,
-                local_object_args,
-                &mut self.layout_cache,
-                &mut snapshot,
+                tracked,
+                may,
+                &accesses,
+                &live_out_roots,
+                object_effects,
             );
-            let tracked = facts.tracked();
-            let may = facts.may();
-            let live_out_roots = self.collect_live_out_roots(tracked, func, local_object_args);
-
-            let mut iter_changed = self.run_forward(func, tracked, may, object_effects);
-            iter_changed |= self.run_backward(func, tracked, may, &live_out_roots, object_effects);
 
             if iter_changed {
                 func.rebuild_users();
@@ -100,7 +108,7 @@ impl ObjectLoadStore {
         &mut self,
         func: &mut Function,
         tracked: &SecondaryMap<ValueId, Option<TrackedObject>>,
-        provenance: MayProvenance<'_>,
+        accesses: &ObjectAccessFacts,
         object_effects: Option<&ObjectEffectSummaryMap>,
     ) -> bool {
         let mut cfg = ControlFlowGraph::new();
@@ -144,7 +152,7 @@ impl ObjectLoadStore {
                         func,
                         inst,
                         tracked,
-                        provenance,
+                        accesses,
                         &mut available,
                         object_effects,
                     );
@@ -168,7 +176,7 @@ impl ObjectLoadStore {
         available: &AvailableMap,
     ) -> Option<ValueId> {
         for (&available_slice, &value) in available {
-            if available_slice.root != slice.root || !slice_is_covered_by(available_slice, slice) {
+            if !same_base_slice_covers(available_slice, slice) {
                 continue;
             }
             if available_slice == slice && func.dfg.value_ty(value) == slice.ty {
@@ -198,170 +206,94 @@ impl ObjectLoadStore {
         None
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn transfer_forward(
         &mut self,
         func: &mut Function,
         inst: InstId,
         tracked: &SecondaryMap<ValueId, Option<TrackedObject>>,
-        provenance: MayProvenance<'_>,
+        accesses: &ObjectAccessFacts,
         available: &mut AvailableMap,
         object_effects: Option<&ObjectEffectSummaryMap>,
     ) -> bool {
-        if let Some(obj_load) = downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst)) {
-            kill_observed_available(func, inst, provenance, available, &[*obj_load.object()]);
-            if let Some(slice) = tracked[*obj_load.object()]
-                .as_ref()
-                .copied()
-                .and_then(TrackedObject::exact)
-                && let Some(replacement) = self.replacement_for_load(func, inst, slice, available)
-                && let Some(result) = func.dfg.inst_result(inst)
+        let effects = accesses.effects(func, inst, object_effects);
+        let exact = |value| tracked[value].and_then(TrackedObject::exact);
+        let read =
+            if let Some(load) = downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst)) {
+                exact(*load.object())
+            } else if let Some(load) =
+                downcast::<&data::EnumGetTag>(func.inst_set(), func.dfg.inst(inst))
             {
-                func.dfg.change_to_alias(result, replacement);
-                InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
-                return true;
-            }
-            return false;
+                exact(*load.object()).and_then(|slice| enum_tag_object_slice(func.ctx(), slice))
+            } else {
+                None
+            };
+        if let Some(slice) = read
+            && let Some(replacement) = self.replacement_for_load(func, inst, slice, available)
+            && let Some(result) = func.dfg.inst_result(inst)
+        {
+            func.dfg.change_to_alias(result, replacement);
+            InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+            return true;
         }
 
-        if let Some(enum_get_tag) =
-            downcast::<&data::EnumGetTag>(func.inst_set(), func.dfg.inst(inst))
+        let mut written = Vec::new();
+        if let Some(store) = downcast::<&data::ObjStore>(func.inst_set(), func.dfg.inst(inst)) {
+            if let Some(slice) = exact(*store.object()) {
+                written.push((slice, *store.value()));
+            }
+        } else if let Some(store) =
+            downcast::<&data::EnumSetTag>(func.inst_set(), func.dfg.inst(inst)).copied()
         {
-            kill_observed_available(func, inst, provenance, available, &[*enum_get_tag.object()]);
-            if let Some(slice) = tracked[*enum_get_tag.object()]
-                .as_ref()
-                .copied()
-                .and_then(TrackedObject::exact)
-                .and_then(|slice| enum_tag_object_slice(func.ctx(), slice))
-                && let Some(replacement) = self.replacement_for_load(func, inst, slice, available)
-                && let Some(result) = func.dfg.inst_result(inst)
+            if let Some(slice) =
+                exact(*store.object()).and_then(|slice| enum_tag_object_slice(func.ctx(), slice))
             {
-                func.dfg.change_to_alias(result, replacement);
-                InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
-                return true;
+                written.push((
+                    slice,
+                    func.dfg
+                        .make_imm_value(enum_variant_tag_imm(*store.variant(), slice.ty)),
+                ));
             }
-            return false;
-        }
-
-        if let Some(enum_assert_ref) =
-            downcast::<&data::EnumAssertVariantRef>(func.inst_set(), func.dfg.inst(inst))
-            && tracked[*enum_assert_ref.object()].is_some()
-        {
-            return false;
-        }
-
-        if let Some(obj_store) = downcast::<&data::ObjStore>(func.inst_set(), func.dfg.inst(inst)) {
-            kill_observed_available(func, inst, provenance, available, &[*obj_store.object()]);
-
-            let Some(tracked_object) = tracked[*obj_store.object()].as_ref().copied() else {
-                kill_possible_roots_available(available, provenance.may_roots(*obj_store.object()));
-                return false;
-            };
-            let Some(slice) = tracked_object.exact() else {
-                kill_possible_roots_available(available, provenance.may_roots(*obj_store.object()));
-                return false;
-            };
-            if available.get(&slice) == Some(obj_store.value()) {
-                InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
-                return true;
-            }
-            kill_overlapping_available(available, slice);
-            available.insert(slice, *obj_store.value());
-            return false;
-        }
-
-        if let Some(enum_set_tag) =
-            downcast::<&data::EnumSetTag>(func.inst_set(), func.dfg.inst(inst))
-        {
-            kill_observed_available(func, inst, provenance, available, &[*enum_set_tag.object()]);
-            let Some(tracked_object) = tracked[*enum_set_tag.object()].as_ref().copied() else {
-                kill_possible_roots_available(
-                    available,
-                    provenance.may_roots(*enum_set_tag.object()),
-                );
-                return false;
-            };
-            let Some(slice) = tracked_object
-                .exact()
-                .and_then(|slice| enum_tag_object_slice(func.ctx(), slice))
-            else {
-                kill_possible_roots_available(
-                    available,
-                    provenance.may_roots(*enum_set_tag.object()),
-                );
-                return false;
-            };
-            let tag = func
-                .dfg
-                .make_imm_value(enum_variant_tag_imm(*enum_set_tag.variant(), slice.ty));
-            if available.get(&slice) == Some(&tag) {
-                InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
-                return true;
-            }
-            kill_overlapping_available(available, slice);
-            available.insert(slice, tag);
-            return false;
-        }
-
-        if let Some(enum_write_variant) =
+        } else if let Some(store) =
             downcast::<&data::EnumWriteVariant>(func.inst_set(), func.dfg.inst(inst)).cloned()
+            && let Some(base) = exact(*store.object())
         {
-            kill_observed_available(
-                func,
-                inst,
-                provenance,
-                available,
-                &[*enum_write_variant.object()],
-            );
-            let Some(tracked_object) = tracked[*enum_write_variant.object()].as_ref().copied()
-            else {
-                kill_possible_roots_available(
-                    available,
-                    provenance.may_roots(*enum_write_variant.object()),
-                );
-                return false;
-            };
-            let Some(base_slice) = tracked_object.exact() else {
-                kill_possible_roots_available(
-                    available,
-                    provenance.may_roots(*enum_write_variant.object()),
-                );
-                return false;
-            };
-            for (field_idx, &value) in enum_write_variant.values().iter().enumerate() {
-                let Some(field_idx) = u32::try_from(field_idx).ok() else {
-                    continue;
-                };
-                let Some(field_slice) = enum_variant_field_object_slice(
-                    func.ctx(),
-                    base_slice,
-                    *enum_write_variant.variant(),
-                    field_idx,
-                ) else {
-                    continue;
-                };
-                kill_overlapping_available(available, field_slice);
-                available.insert(field_slice, value);
+            for (index, &value) in store.values().iter().enumerate() {
+                if let Some(slice) = u32::try_from(index).ok().and_then(|index| {
+                    enum_variant_field_object_slice(func.ctx(), base, *store.variant(), index)
+                }) {
+                    written.push((slice, value));
+                }
             }
-            let Some(tag_slice) = enum_tag_object_slice(func.ctx(), base_slice) else {
-                return false;
-            };
-            kill_overlapping_available(available, tag_slice);
-            available.insert(
-                tag_slice,
-                func.dfg.make_imm_value(enum_variant_tag_imm(
-                    *enum_write_variant.variant(),
-                    tag_slice.ty,
-                )),
-            );
-            return false;
+            if let Some(slice) = enum_tag_object_slice(func.ctx(), base) {
+                written.push((
+                    slice,
+                    func.dfg
+                        .make_imm_value(enum_variant_tag_imm(*store.variant(), slice.ty)),
+                ));
+            }
         }
-
-        if handle_call_forward(func, inst, tracked, provenance, available, object_effects) {
-            return false;
+        written.retain(|(slice, _)| {
+            effects
+                .overwrites
+                .iter()
+                .any(|&write| accesses.write_covers(write, *slice))
+        });
+        // Check redundancy against the old contents, before invalidating aliases.
+        if !written.is_empty()
+            && written
+                .iter()
+                .all(|(slice, value)| available.get(slice) == Some(value))
+        {
+            InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+            return true;
         }
-
-        kill_observed_available(func, inst, provenance, available, &[]);
+        available.retain(|slice, _| {
+            !effects
+                .writes
+                .iter()
+                .any(|&effect| accesses.may_overlap(effect, *slice))
+        });
+        available.extend(written);
         false
     }
 
@@ -370,6 +302,7 @@ impl ObjectLoadStore {
         func: &mut Function,
         tracked: &SecondaryMap<ValueId, Option<TrackedObject>>,
         provenance: MayProvenance<'_>,
+        accesses: &ObjectAccessFacts,
         live_out_roots: &FxHashMap<ValueId, usize>,
         object_effects: Option<&ObjectEffectSummaryMap>,
     ) -> bool {
@@ -420,7 +353,7 @@ impl ObjectLoadStore {
                         func,
                         inst,
                         tracked,
-                        provenance,
+                        accesses,
                         &mut live,
                         object_effects,
                     );
@@ -454,7 +387,7 @@ impl ObjectLoadStore {
                 if removed {
                     continue;
                 }
-                transfer_backward_live(func, inst, tracked, provenance, &mut live, object_effects);
+                transfer_backward_live(func, inst, tracked, accesses, &mut live, object_effects);
             }
         }
 
@@ -509,21 +442,15 @@ impl ObjectLoadStore {
         &self,
         tracked: &SecondaryMap<ValueId, Option<TrackedObject>>,
         func: &Function,
-        local_object_args: Option<&FxHashMap<usize, LocalObjectArgInfo>>,
+        accesses: &ObjectAccessFacts,
     ) -> FxHashMap<ValueId, usize> {
         let mut live_out_roots = FxHashMap::default();
-        let Some(local_object_args) = local_object_args else {
-            return live_out_roots;
-        };
-
-        for &idx in local_object_args.keys() {
-            let Some(&root) = func.arg_values.get(idx) else {
-                continue;
-            };
-            let Some(tracked_root) = tracked[root].as_ref().copied() else {
-                continue;
-            };
-            live_out_roots.insert(root, tracked_root.total_leaves());
+        for value in func.dfg.value_ids() {
+            if let Some(root) = whole_root_slice_for_value(tracked, value)
+                && accesses.exposed(RootValue::new(root.root))
+            {
+                live_out_roots.insert(root.root, root.total_leaves);
+            }
         }
 
         live_out_roots
@@ -544,333 +471,35 @@ fn meet_forward(states: impl Iterator<Item = AvailableMap>) -> AvailableMap {
     out
 }
 
-fn kill_possible_roots_available(available: &mut AvailableMap, possible_roots: MayRootSet<'_>) {
-    let Some(possible_roots) = possible_roots.exhaustive_known_roots() else {
-        available.clear();
-        return;
-    };
-    for root in possible_roots.iter() {
-        kill_root_available(available, root.value());
-    }
-}
-
-fn kill_observed_available(
-    func: &Function,
-    inst: InstId,
-    provenance: MayProvenance<'_>,
-    available: &mut AvailableMap,
-    skip: &[ValueId],
-) {
-    let (roots, observed_unknown) =
-        observed_roots_ignoring_pure_address_ops(func, inst, provenance, skip);
-    if observed_unknown {
-        available.clear();
-        return;
-    }
-    for root in roots {
-        kill_root_available(available, root);
-    }
-}
-
-fn mark_all_tracked_roots_live(
+fn mark_access_live(
     func: &Function,
     tracked: &SecondaryMap<ValueId, Option<TrackedObject>>,
+    accesses: &ObjectAccessFacts,
+    access: ObjectAccess,
     live: &mut LiveLeafMap,
 ) {
     for value in func.dfg.value_ids() {
-        if let Some(root_slice) = whole_root_slice_for_value(tracked, value) {
-            mark_root_live(live, root_slice.root, root_slice.total_leaves);
-        }
-    }
-}
-
-fn handle_call_forward(
-    func: &Function,
-    inst: InstId,
-    tracked: &SecondaryMap<ValueId, Option<TrackedObject>>,
-    provenance: MayProvenance<'_>,
-    available: &mut AvailableMap,
-    object_effects: Option<&ObjectEffectSummaryMap>,
-) -> bool {
-    let Some(call) = downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(inst)) else {
-        return false;
-    };
-    let Some(summary) = object_effects.and_then(|effects| effects.get(call.callee())) else {
-        kill_observed_available(func, inst, provenance, available, &[]);
-        return true;
-    };
-
-    for (idx, &arg) in call.args().iter().enumerate() {
-        let Some(effect) = summary.arg_effects.get(idx) else {
+        let Some(root) = whole_root_slice_for_value(tracked, value) else {
             continue;
         };
-        apply_call_forward_effect(
-            available,
-            tracked[arg],
-            provenance.may_roots(arg),
-            &effect.writes,
-            effect.needs_unknown_object_barrier(),
-        );
-    }
-    true
-}
-
-fn apply_call_forward_effect(
-    available: &mut AvailableMap,
-    tracked_object: Option<TrackedObject>,
-    possible_roots: MayRootSet<'_>,
-    writes: &SliceSet,
-    escapes: bool,
-) {
-    if escapes {
-        kill_possible_roots_available(available, possible_roots);
-        return;
-    }
-    if writes.is_empty() {
-        return;
-    }
-    let Some(tracked_object) = tracked_object else {
-        kill_possible_roots_available(available, possible_roots);
-        return;
-    };
-    let Some(base_slice) = tracked_object.exact() else {
-        kill_possible_roots_available(available, possible_roots);
-        return;
-    };
-    kill_available_slice_set(available, base_slice, writes);
-}
-
-fn kill_available_slice_set(
-    available: &mut AvailableMap,
-    base_slice: ObjectSlice,
-    slices: &SliceSet,
-) {
-    if slices.is_empty() {
-        return;
-    }
-    if slices.is_whole_root() || base_slice.leaf_count != slices.total_leaves() {
-        kill_overlapping_available(available, base_slice);
-        return;
-    }
-    let Some(leaves) = slices.exact_leaves() else {
-        kill_overlapping_available(available, base_slice);
-        return;
-    };
-    available.retain(|slice, _| !object_slice_overlaps_effect(*slice, base_slice, leaves));
-}
-
-fn handle_call_backward(
-    func: &Function,
-    inst: InstId,
-    tracked: &SecondaryMap<ValueId, Option<TrackedObject>>,
-    provenance: MayProvenance<'_>,
-    live: &mut LiveLeafMap,
-    object_effects: Option<&ObjectEffectSummaryMap>,
-) -> bool {
-    let Some(call) = downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(inst)) else {
-        return false;
-    };
-    let Some(summary) = object_effects.and_then(|effects| effects.get(call.callee())) else {
-        mark_observed_roots_live(func, inst, tracked, provenance, live, &[]);
-        return true;
-    };
-    let call_result = single_result_value(func, inst);
-
-    for capture in &summary.captures {
-        let Some(&src_arg) = call.args().get(capture.src_arg) else {
-            continue;
-        };
-        let dst = match capture.dst {
-            super::object_effects::ObjectCaptureDestination::Arg { index, slice } => {
-                let Some(&dst_arg) = call.args().get(index) else {
-                    continue;
-                };
-                CallCaptureEndpoint {
-                    tracked: tracked[dst_arg],
-                    roots: provenance.may_roots(dst_arg),
-                    slice,
-                }
-            }
-            super::object_effects::ObjectCaptureDestination::Return { slice } => {
-                let Some(result) = call_result else {
-                    continue;
-                };
-                CallCaptureEndpoint {
-                    tracked: tracked[result],
-                    roots: provenance.may_roots(result),
-                    slice,
-                }
-            }
-        };
-        let src = CallCaptureEndpoint {
-            tracked: tracked[src_arg],
-            roots: provenance.may_roots(src_arg),
-            slice: capture.src_slice,
-        };
-        if dst.roots.has_unknown() || src.roots.has_unknown() {
-            mark_all_tracked_roots_live(func, tracked, live);
+        if !accesses.may_overlap(access, root) {
             continue;
         }
-        apply_call_backward_capture(live, tracked, &dst, &src);
-    }
-
-    for (idx, &arg) in call.args().iter().enumerate() {
-        let Some(effect) = summary.arg_effects.get(idx) else {
-            continue;
-        };
-        apply_call_backward_effect(
-            func,
-            live,
-            tracked,
-            tracked[arg],
-            provenance.may_roots(arg),
-            &effect.reads,
-            &effect.writes,
-            effect.needs_unknown_object_barrier(),
-        );
-    }
-    true
-}
-
-fn apply_call_backward_capture(
-    live: &mut LiveLeafMap,
-    tracked: &SecondaryMap<ValueId, Option<TrackedObject>>,
-    dst: &CallCaptureEndpoint<'_>,
-    src: &CallCaptureEndpoint<'_>,
-) {
-    if !capture_destination_has_live(live, dst) {
-        return;
-    }
-
-    if let Some(slice) = src
-        .tracked
-        .and_then(|tracked| map_capture_slice(tracked, src.slice))
-    {
-        mark_live_slice(live, slice);
-        return;
-    }
-
-    for root in src.roots.observed().iter() {
-        mark_root_live(
-            live,
-            root.value(),
-            tracked_root_total_leaves(tracked, root.value()),
-        );
-    }
-}
-
-fn capture_destination_has_live(live: &LiveLeafMap, dst: &CallCaptureEndpoint<'_>) -> bool {
-    if dst.roots.has_unknown() {
-        return true;
-    }
-    let Some(tracked) = dst.tracked else {
-        return dst
-            .roots
-            .observed()
-            .iter()
-            .any(|root| root_has_live(live, root.value()));
-    };
-    if let Some(slice) = map_capture_slice(tracked, dst.slice) {
-        return slice_has_live_leaf(live, slice);
-    }
-    tracked.exact().is_none()
-        && dst
-            .roots
-            .observed()
-            .iter()
-            .any(|root| root_has_live(live, root.value()))
-}
-
-#[allow(clippy::too_many_arguments)]
-fn apply_call_backward_effect(
-    func: &Function,
-    live: &mut LiveLeafMap,
-    tracked: &SecondaryMap<ValueId, Option<TrackedObject>>,
-    tracked_object: Option<TrackedObject>,
-    possible_roots: MayRootSet<'_>,
-    reads: &SliceSet,
-    writes: &SliceSet,
-    escapes: bool,
-) {
-    if escapes {
-        mark_live_may_roots(func, live, tracked, possible_roots);
-        return;
-    }
-    let Some(tracked_object) = tracked_object else {
-        if !reads.is_empty() || !writes.is_empty() {
-            mark_live_may_roots(func, live, tracked, possible_roots);
+        if let ObjectAccess::Exact(projection) = access
+            && projection.root_value.value() == root.root
+        {
+            mark_live_slice(
+                live,
+                ObjectSlice {
+                    ty: projection.slice.ty,
+                    first_leaf: projection.slice.first_leaf,
+                    leaf_count: projection.slice.leaf_count,
+                    ..root
+                },
+            );
+        } else {
+            mark_root_live(live, root.root, root.total_leaves);
         }
-        return;
-    };
-    let Some(base_slice) = tracked_object.exact() else {
-        if !reads.is_empty() || !writes.is_empty() {
-            mark_live_may_roots(func, live, tracked, possible_roots);
-        }
-        return;
-    };
-    clear_live_slice_set(live, base_slice, writes);
-    mark_live_slice_set(live, base_slice, reads);
-}
-
-fn mark_live_slice_set(live: &mut LiveLeafMap, base_slice: ObjectSlice, slices: &SliceSet) {
-    if slices.is_empty() {
-        return;
-    }
-    if slices.is_whole_root() || base_slice.leaf_count != slices.total_leaves() {
-        clear_or_mark_live_slice(live, base_slice, true);
-        return;
-    }
-    let Some(leaves) = slices.exact_leaves() else {
-        clear_or_mark_live_slice(live, base_slice, true);
-        return;
-    };
-    let root_live = live.entry(base_slice.root).or_default();
-    root_live.extend(leaves.iter().map(|leaf| base_slice.first_leaf + *leaf));
-}
-
-fn clear_live_slice_set(live: &mut LiveLeafMap, base_slice: ObjectSlice, slices: &SliceSet) {
-    if slices.is_empty() {
-        return;
-    }
-    if slices.is_whole_root() || base_slice.leaf_count != slices.total_leaves() {
-        clear_or_mark_live_slice(live, base_slice, false);
-        return;
-    }
-    let Some(leaves) = slices.exact_leaves() else {
-        clear_or_mark_live_slice(live, base_slice, false);
-        return;
-    };
-    if let Some(root_live) = live.get_mut(&base_slice.root) {
-        for leaf in leaves {
-            root_live.remove(&(base_slice.first_leaf + leaf));
-        }
-    }
-}
-
-fn clear_or_mark_live_slice(live: &mut LiveLeafMap, base_slice: ObjectSlice, mark: bool) {
-    if mark {
-        mark_live_slice(live, base_slice);
-    } else {
-        clear_live_slice(live, base_slice);
-    }
-}
-
-fn mark_observed_roots_live(
-    func: &Function,
-    inst: InstId,
-    tracked: &SecondaryMap<ValueId, Option<TrackedObject>>,
-    provenance: MayProvenance<'_>,
-    live: &mut LiveLeafMap,
-    skip: &[ValueId],
-) {
-    let (roots, observed_unknown) =
-        observed_roots_ignoring_pure_address_ops(func, inst, provenance, skip);
-    if observed_unknown {
-        mark_all_tracked_roots_live(func, tracked, live);
-        return;
-    }
-    for root in roots {
-        mark_root_live(live, root, tracked_root_total_leaves(tracked, root));
     }
 }
 
@@ -878,178 +507,58 @@ fn transfer_backward_live(
     func: &Function,
     inst: InstId,
     tracked: &SecondaryMap<ValueId, Option<TrackedObject>>,
-    provenance: MayProvenance<'_>,
+    accesses: &ObjectAccessFacts,
     live: &mut LiveLeafMap,
     object_effects: Option<&ObjectEffectSummaryMap>,
 ) {
-    if let Some(obj_load) = downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst)) {
-        if let Some(tracked_object) = tracked[*obj_load.object()].as_ref().copied() {
-            mark_live_tracked_object(live, tracked_object);
-        } else {
-            mark_live_may_roots(
-                func,
-                live,
-                tracked,
-                provenance.may_roots(*obj_load.object()),
-            );
+    let effects = accesses.effects(func, inst, object_effects);
+    transfer_backward_effects(func, tracked, accesses, &effects, live);
+}
+
+pub(crate) fn transfer_backward_effects(
+    func: &Function,
+    tracked: &SecondaryMap<ValueId, Option<TrackedObject>>,
+    accesses: &ObjectAccessFacts,
+    effects: &ObjectInstEffects,
+    live: &mut LiveLeafMap,
+) {
+    let mut captured_reads = Vec::new();
+    // Capture observations are conditional on the destination's future demand,
+    // evaluated before a direct overwrite removes that demand.
+    for (destinations, sources) in &effects.captures {
+        if live.iter().any(|(&root, leaves)| {
+            whole_root_slice_for_value(tracked, root).is_some_and(|root| {
+                leaves.ranges().iter().any(|range| {
+                    destinations.iter().any(|&destination| {
+                        accesses.may_overlap(
+                            destination,
+                            ObjectSlice {
+                                first_leaf: range.start,
+                                leaf_count: range.end - range.start,
+                                ..root
+                            },
+                        )
+                    })
+                })
+            })
+        }) {
+            captured_reads.extend(sources.iter().copied());
         }
-        mark_observed_roots_live(func, inst, tracked, provenance, live, &[*obj_load.object()]);
-        return;
     }
-
-    if let Some(obj_store) = downcast::<&data::ObjStore>(func.inst_set(), func.dfg.inst(inst)) {
-        mark_observed_roots_live(
-            func,
-            inst,
-            tracked,
-            provenance,
-            live,
-            &[*obj_store.object()],
-        );
-
-        let Some(tracked_object) = tracked[*obj_store.object()].as_ref().copied() else {
-            mark_live_may_roots(
-                func,
-                live,
-                tracked,
-                provenance.may_roots(*obj_store.object()),
-            );
-            return;
-        };
-        if let Some(slice) = tracked_object.exact() {
-            clear_live_slice(live, slice);
-        } else {
-            mark_live_may_roots(
-                func,
-                live,
-                tracked,
-                provenance.may_roots(*obj_store.object()),
-            );
-        }
-        return;
-    }
-
-    if let Some(enum_get_tag) = downcast::<&data::EnumGetTag>(func.inst_set(), func.dfg.inst(inst))
-    {
-        if let Some(tracked_object) = tracked[*enum_get_tag.object()].as_ref().copied() {
-            if let Some(slice) = tracked_object
-                .exact()
-                .and_then(|slice| enum_tag_object_slice(func.ctx(), slice))
-            {
-                mark_live_slice(live, slice);
-            } else {
-                mark_live_tracked_object(live, tracked_object);
-            }
-        } else {
-            mark_live_may_roots(
-                func,
-                live,
-                tracked,
-                provenance.may_roots(*enum_get_tag.object()),
-            );
-        }
-        mark_observed_roots_live(
-            func,
-            inst,
-            tracked,
-            provenance,
-            live,
-            &[*enum_get_tag.object()],
-        );
-        return;
-    }
-
-    if let Some(enum_assert_ref) =
-        downcast::<&data::EnumAssertVariantRef>(func.inst_set(), func.dfg.inst(inst))
-    {
-        if let Some(tracked_object) = tracked[*enum_assert_ref.object()].as_ref().copied() {
-            if let Some(slice) = tracked_object
-                .exact()
-                .and_then(|slice| enum_tag_object_slice(func.ctx(), slice))
-            {
-                mark_live_slice(live, slice);
-            } else {
-                mark_live_tracked_object(live, tracked_object);
-            }
-        }
-        return;
-    }
-
-    if let Some(enum_set_tag) = downcast::<&data::EnumSetTag>(func.inst_set(), func.dfg.inst(inst))
-    {
-        mark_observed_roots_live(
-            func,
-            inst,
-            tracked,
-            provenance,
-            live,
-            &[*enum_set_tag.object()],
-        );
-        let Some(tracked_object) = tracked[*enum_set_tag.object()].as_ref().copied() else {
-            mark_live_may_roots(
-                func,
-                live,
-                tracked,
-                provenance.may_roots(*enum_set_tag.object()),
-            );
-            return;
-        };
-        if let Some(slice) = tracked_object
-            .exact()
-            .and_then(|slice| enum_tag_object_slice(func.ctx(), slice))
+    for &write in &effects.overwrites {
+        let slice = accesses.write_slice(write);
+        // Only the exact destination's single dynamic instance loses demand.
+        // Subtracting its interval preserves every unwritten part of live ranges.
+        if accesses.write_covers(write, slice)
+            && let Some(leaves) = live.get_mut(&slice.root)
         {
-            clear_live_slice(live, slice);
-        } else {
-            mark_live_may_roots(
-                func,
-                live,
-                tracked,
-                provenance.may_roots(*enum_set_tag.object()),
-            );
+            leaves.remove(slice.first_leaf..slice.first_leaf + slice.leaf_count);
         }
-        return;
     }
-
-    if let Some(enum_write_variant) =
-        downcast::<&data::EnumWriteVariant>(func.inst_set(), func.dfg.inst(inst))
-    {
-        mark_observed_roots_live(
-            func,
-            inst,
-            tracked,
-            provenance,
-            live,
-            &[*enum_write_variant.object()],
-        );
-        let Some(tracked_object) = tracked[*enum_write_variant.object()].as_ref().copied() else {
-            mark_live_may_roots(
-                func,
-                live,
-                tracked,
-                provenance.may_roots(*enum_write_variant.object()),
-            );
-            return;
-        };
-        let Some(base_slice) = tracked_object.exact() else {
-            mark_live_may_roots(
-                func,
-                live,
-                tracked,
-                provenance.may_roots(*enum_write_variant.object()),
-            );
-            return;
-        };
-        for slice in enum_write_variant_slices(func.ctx(), base_slice, enum_write_variant) {
-            clear_live_slice(live, slice);
-        }
-        return;
+    live.retain(|_, leaves| !leaves.is_empty());
+    for access in effects.reads.iter().copied().chain(captured_reads) {
+        mark_access_live(func, tracked, accesses, access, live);
     }
-
-    if handle_call_backward(func, inst, tracked, provenance, live, object_effects) {
-        return;
-    }
-
-    mark_observed_roots_live(func, inst, tracked, provenance, live, &[]);
 }
 
 fn try_remove_dead_store(
@@ -1120,62 +629,11 @@ fn try_remove_dead_store(
     true
 }
 
-fn mark_live_may_roots(
-    func: &Function,
-    live: &mut LiveLeafMap,
-    tracked: &SecondaryMap<ValueId, Option<TrackedObject>>,
-    roots: MayRootSet<'_>,
-) {
-    if roots.has_unknown() {
-        mark_all_tracked_roots_live(func, tracked, live);
-        return;
-    }
-    for root in roots.observed().iter() {
-        mark_root_live(
-            live,
-            root.value(),
-            tracked_root_total_leaves(tracked, root.value()),
-        );
-    }
-}
-
 fn roots_have_live(live: &LiveLeafMap, roots: MayRootSet<'_>) -> bool {
     let Some(roots) = roots.exhaustive_known_roots() else {
         return true;
     };
     roots.iter().any(|root| root_has_live(live, root.value()))
-}
-
-fn single_result_value(func: &Function, inst: InstId) -> Option<ValueId> {
-    let [result] = func.dfg.inst_results(inst) else {
-        return None;
-    };
-    Some(*result)
-}
-
-fn map_capture_slice(
-    tracked: TrackedObject,
-    capture: shape::AggregateSlice,
-) -> Option<ObjectSlice> {
-    match tracked {
-        TrackedObject::Exact(base) => (capture.first_leaf + capture.leaf_count <= base.leaf_count)
-            .then_some(ObjectSlice {
-                root: base.root,
-                ty: capture.ty,
-                first_leaf: base.first_leaf + capture.first_leaf,
-                leaf_count: capture.leaf_count,
-                total_leaves: base.total_leaves,
-            }),
-        TrackedObject::RootUnknown { .. } => None,
-    }
-}
-
-fn kill_overlapping_available(available: &mut AvailableMap, slice: ObjectSlice) {
-    available.retain(|other, _| other.root != slice.root || !slices_overlap(*other, slice));
-}
-
-fn kill_root_available(available: &mut AvailableMap, root: ValueId) {
-    available.retain(|slice, _| slice.root != root);
 }
 
 fn root_has_live(live: &LiveLeafMap, root: ValueId) -> bool {
@@ -1200,9 +658,13 @@ fn ends_with_return(func: &Function, block: BlockId) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::slice;
+
     use super::*;
+    use crate::transform::aggregate::compute_object_effect_summaries;
     use sonatina_ir::{ir_writer::FuncWriter, module::FuncRef};
     use sonatina_parser::parse_module;
+    use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module};
 
     fn parse_test_module(src: &str) -> sonatina_ir::Module {
         parse_module(src).expect("parse should succeed").module
@@ -1217,7 +679,7 @@ mod tests {
     }
 
     fn run_with_effects(module: &sonatina_ir::Module, func_ref: FuncRef) {
-        let object_effects = crate::transform::aggregate::compute_object_effect_summaries(module);
+        let object_effects = compute_object_effect_summaries(module);
         let local_object_args = crate::transform::aggregate::collect_local_object_arg_info(module);
         module.func_store.modify(func_ref, |func| {
             ObjectLoadStore::default().run_for_func(
@@ -1226,6 +688,73 @@ mod tests {
                 &local_object_args,
                 &object_effects,
             );
+        });
+    }
+
+    #[test]
+    fn sparse_liveness_preserves_capture_demand_and_only_kills_exact_writes() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+func private %maybe_write(v0.objref<objref<i256>>, v1.objref<i256>, v2.i1) {
+block0:
+    br v2 block1 block2;
+block1:
+    obj.store v0 v1;
+    jump block2;
+block2:
+    return;
+}
+func private %f(v0.objref<[objref<i256>; 1000000000]>, v1.objref<objref<i256>>, v2.i1) {
+block0:
+    v3.objref<i256> = obj.alloc i256;
+    v4.objref<objref<i256>> = obj.index v0 500000000.i64;
+    obj.store v4 v3;
+    call %maybe_write v4 v3 v2;
+    return;
+}
+"#,
+        );
+        let report = verify_module(&module, &VerifierConfig::for_level(VerificationLevel::Full));
+        assert!(report.is_ok(), "{report}");
+        let summaries = compute_object_effect_summaries(&module);
+        module.func_store.view(lookup_func(&module, "f"), |func| {
+            let accesses = ObjectAccessFacts::new(func, Some(&summaries));
+            let tracked = accesses.tracked_all(func, &mut shape::AggregateLayoutCache::default());
+            let insts: Vec<_> = func
+                .layout
+                .iter_inst(func.layout.entry_block().unwrap())
+                .collect();
+            let source = func.dfg.inst_result(insts[0]).unwrap();
+            let root = func.arg_values[0];
+            let alias = func.arg_values[1];
+            let store = accesses.effects(func, insts[2], Some(&summaries));
+            let call = accesses.effects(func, insts[3], Some(&summaries));
+            let mut live = LiveLeafMap::default();
+            mark_root_live(&mut live, root, 1000000000);
+            mark_root_live(&mut live, alias, 1);
+
+            transfer_backward_effects(func, &tracked, &accesses, &call, &mut live);
+            assert_eq!(live[&root].ranges(), slice::from_ref(&(0..1000000000)));
+            assert_eq!(live[&alias].ranges(), slice::from_ref(&(0..1)));
+            // Clear the source demand to test the direct capture independently.
+            live.remove(&source);
+            transfer_backward_effects(func, &tracked, &accesses, &store, &mut live);
+            assert_eq!(live[&root].ranges(), &[0..500000000, 500000001..1000000000]);
+            assert_eq!(live[&alias].ranges(), slice::from_ref(&(0..1)));
+            assert_eq!(live[&source].ranges(), slice::from_ref(&(0..1)));
+
+            let mut sibling = LiveLeafMap::default();
+            mark_live_slice(
+                &mut sibling,
+                ObjectSlice {
+                    leaf_count: 1,
+                    ..whole_root_slice_for_value(&tracked, root).unwrap()
+                },
+            );
+            transfer_backward_effects(func, &tracked, &accesses, &store, &mut sibling);
+            assert_eq!(sibling.len(), 1);
+            assert_eq!(sibling[&root].ranges(), slice::from_ref(&(0..1)));
         });
     }
 

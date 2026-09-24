@@ -1,4 +1,6 @@
 pub(crate) mod abi;
+#[cfg(test)]
+mod alias_tests;
 pub(crate) mod byval_object_abi;
 mod capture_state;
 mod cleanup;
@@ -7,10 +9,16 @@ pub(crate) mod enum_lowering;
 pub(crate) mod legalize;
 pub(crate) mod object;
 pub(crate) mod object_abi;
+mod object_access;
+mod object_alias;
+pub(crate) mod object_arg_invariance;
 pub(crate) mod object_effects;
+mod object_facts;
+mod object_initialization;
 pub(crate) mod object_load_store;
 pub(crate) mod object_locality;
 pub(crate) mod object_memory;
+mod object_reachability;
 mod object_state;
 mod object_tracking;
 pub(crate) mod private_abi;
@@ -33,9 +41,11 @@ pub use object_abi::ObjectReturnOutParam;
 pub(crate) use object_effects::{
     ObjectEffectSummaryMap, ObjectReturnEffect, SliceSet, compute_object_effect_summaries,
 };
+pub(crate) use object_facts::ModuleObjectFacts;
+#[cfg(test)]
+pub(crate) use object_locality::collect_local_object_arg_info;
 pub(crate) use object_locality::{
-    LocalObjectArgInfo, LocalObjectArgMap, RootInit, collect_local_object_arg_info,
-    collect_local_object_arg_info_with_effects, merge_local_object_arg_info,
+    LocalObjectArgInfo, LocalObjectArgMap, RootInit, collect_local_object_arg_info_with_effects,
+    merge_local_object_arg_info,
 };
 pub(crate) use object_memory::{ObjectMemoryAnalysis, ObjectReadGvnKey};
-pub(crate) use provenance::Projection;

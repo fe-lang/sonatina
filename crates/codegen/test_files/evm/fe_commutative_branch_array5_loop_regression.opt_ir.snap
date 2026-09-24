@@ -72,8 +72,8 @@ func public %entry() {
 
     block9:
         v55.i256 = phi (v45 block7) (v52 block8);
-        v64.i256 = add v34 1.i256;
-        mstore v56 v64 i256;
+        v70.i256 = add v34 1.i256;
+        mstore v56 v70 i256;
         jump block4;
 
     block10:

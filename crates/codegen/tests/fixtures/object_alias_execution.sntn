@@ -1,0 +1,225 @@
+# Defined-value execution controls shared by the EVM and native suites.
+type @Pair = { i64, [i64; 2] };
+type @Flag = enum { #A, #B };
+
+func inline(never) private %read_after_write(v0.objref<i64>, v1.objref<i64>) -> i64 {
+block0:
+    obj.store v1 22.i64;
+    v2.i64 = obj.load v0;
+    return v2;
+}
+func inline(never) private %forward(v0.objref<i64>, v1.objref<i64>) -> i64 {
+block0:
+    obj.store v0 11.i64;
+    obj.store v1 22.i64;
+    v2.i64 = obj.load v0;
+    return v2;
+}
+func inline(never) private %observed_store(v0.objref<i64>, v1.objref<i64>) -> i64 {
+block0:
+    obj.store v0 11.i64;
+    v2.i64 = obj.load v1;
+    obj.store v0 33.i64;
+    v3.i64 = obj.load v1;
+    v4.i64 = add v2 v3;
+    return v4;
+}
+func inline(never) private %two_reads(v0.objref<i64>, v1.objref<i64>) -> i64 {
+block0:
+    v2.i64 = obj.load v0;
+    obj.store v1 22.i64;
+    v3.i64 = obj.load v0;
+    v4.i64 = sub v3 v2;
+    return v4;
+}
+func inline(never) private %diamond(v0.objref<i64>, v1.objref<i64>, v2.i1) -> i64 {
+block0:
+    br v2 block1 block2;
+block1:
+    obj.store v1 22.i64;
+    jump block2;
+block2:
+    v3.i64 = obj.load v0;
+    return v3;
+}
+func inline(never) private %loop_reads(v0.objref<i64>, v1.objref<i64>) -> i64 {
+block0:
+    jump block1;
+block1:
+    v2.i64 = phi (0.i64 block0) (v6 block1);
+    v3.i64 = phi (0.i64 block0) (v5 block1);
+    v4.i64 = obj.load v0;
+    v5.i64 = add v3 v4;
+    obj.store v1 22.i64;
+    v6.i64 = add v2 1.i64;
+    v7.i1 = lt v6 2.i64;
+    br v7 block1 block2;
+block2:
+    return v5;
+}
+func inline(never) private %conditional_write(v0.objref<i64>, v1.i1) {
+block0:
+    br v1 block1 block2;
+block1:
+    obj.store v0 22.i64;
+    jump block2;
+block2:
+    return;
+}
+func inline(never) private %conditional_observer(v0.objref<i64>, v1.i1) -> i64 {
+block0:
+    obj.store v0 11.i64;
+    call %conditional_write v0 v1;
+    v2.i64 = obj.load v0;
+    return v2;
+}
+func inline(never) private %nested(v0.objref<@Pair>, v1.objref<i64>) -> i64 {
+block0:
+    obj.store v1 22.i64;
+    v2.objref<[i64; 2]> = obj.proj v0 1.i8;
+    v3.objref<i64> = obj.index v2 1.i8;
+    v4.i64 = obj.load v3;
+    return v4;
+}
+func inline(never) private %saved_tag(v0.objref<@Flag>, v1.objref<@Flag>) -> i64 {
+block0:
+    enum.set_tag v0 #A;
+    v2.enumtag(@Flag) = enum.get_tag v1;
+    enum.set_tag v0 #B;
+    br_table v2 block2 (0.enumtag(@Flag) block1);
+block1:
+    v3.enumtag(@Flag) = enum.get_tag v1;
+    v4.i1 = eq v3 1.enumtag(@Flag);
+    v5.i64 = zext v4 i64;
+    return v5;
+block2:
+    return 99.i64;
+}
+
+func inline(never) public %aliased() -> i64 {
+block0:
+    v0.objref<i64> = obj.alloc i64;
+    v1.objref<i64> = obj.alloc i64;
+    obj.store v0 11.i64;
+    obj.store v1 33.i64;
+    v2.i64 = call %read_after_write v0 v0;
+    return v2;
+}
+
+func inline(never) public %distinct() -> i64 {
+block0:
+    v0.objref<i64> = obj.alloc i64;
+    v1.objref<i64> = obj.alloc i64;
+    obj.store v0 11.i64;
+    obj.store v1 33.i64;
+    v2.i64 = call %read_after_write v0 v1;
+    return v2;
+}
+
+func inline(never) public %forwarded() -> i64 {
+block0:
+    v0.objref<i64> = obj.alloc i64;
+    v1.objref<i64> = obj.alloc i64;
+    obj.store v0 11.i64;
+    obj.store v1 33.i64;
+    v2.i64 = call %forward v0 v0;
+    return v2;
+}
+
+func inline(never) public %observed() -> i64 {
+block0:
+    v0.objref<i64> = obj.alloc i64;
+    v1.objref<i64> = obj.alloc i64;
+    obj.store v0 11.i64;
+    obj.store v1 33.i64;
+    v2.i64 = call %observed_store v0 v0;
+    return v2;
+}
+
+func inline(never) public %reread() -> i64 {
+block0:
+    v0.objref<i64> = obj.alloc i64;
+    v1.objref<i64> = obj.alloc i64;
+    obj.store v0 11.i64;
+    obj.store v1 33.i64;
+    v2.i64 = call %two_reads v0 v0;
+    return v2;
+}
+
+func inline(never) public %diamond_false() -> i64 {
+block0:
+    v0.objref<i64> = obj.alloc i64;
+    v1.objref<i64> = obj.alloc i64;
+    obj.store v0 11.i64;
+    obj.store v1 33.i64;
+    v2.i64 = call %diamond v0 v0 0.i1;
+    return v2;
+}
+
+func inline(never) public %diamond_true() -> i64 {
+block0:
+    v0.objref<i64> = obj.alloc i64;
+    v1.objref<i64> = obj.alloc i64;
+    obj.store v0 11.i64;
+    obj.store v1 33.i64;
+    v2.i64 = call %diamond v0 v0 1.i1;
+    return v2;
+}
+
+func inline(never) public %backedge() -> i64 {
+block0:
+    v0.objref<i64> = obj.alloc i64;
+    v1.objref<i64> = obj.alloc i64;
+    obj.store v0 11.i64;
+    obj.store v1 33.i64;
+    v2.i64 = call %loop_reads v0 v0;
+    return v2;
+}
+
+func inline(never) public %conditional_false() -> i64 {
+block0:
+    v0.objref<i64> = obj.alloc i64;
+    v1.objref<i64> = obj.alloc i64;
+    obj.store v0 11.i64;
+    obj.store v1 33.i64;
+    v2.i64 = call %conditional_observer v0 0.i1;
+    return v2;
+}
+
+func inline(never) public %conditional_true() -> i64 {
+block0:
+    v0.objref<i64> = obj.alloc i64;
+    v1.objref<i64> = obj.alloc i64;
+    obj.store v0 11.i64;
+    obj.store v1 33.i64;
+    v2.i64 = call %conditional_observer v0 1.i1;
+    return v2;
+}
+
+func inline(never) public %nested_alias() -> i64 {
+block0:
+    v0.objref<@Pair> = obj.alloc @Pair;
+    v1.objref<[i64; 2]> = obj.proj v0 1.i8;
+    v2.objref<i64> = obj.index v1 1.i8;
+    obj.store v2 11.i64;
+    v3.i64 = call %nested v0 v2;
+    return v3;
+}
+func inline(never) public %siblings() -> i64 {
+block0:
+    v0.objref<@Pair> = obj.alloc @Pair;
+    v1.objref<[i64; 2]> = obj.proj v0 1.i8;
+    v2.objref<i64> = obj.index v1 0.i8;
+    v3.objref<i64> = obj.index v1 1.i8;
+    obj.store v2 11.i64;
+    obj.store v3 33.i64;
+    v4.i64 = call %read_after_write v2 v3;
+    return v4;
+}
+func inline(never) public %enum_alias() -> i64 {
+block0:
+    v0.objref<@Flag> = obj.alloc @Flag;
+    enum.set_tag v0 #A;
+    v1.i64 = call %saved_tag v0 v0;
+    return v1;
+}

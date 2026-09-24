@@ -9,6 +9,7 @@ use smallvec::SmallVec;
 use sonatina_ir::{
     BlockId, Function, Module, Type, ValueId,
     cfg::ControlFlowGraph,
+    effects::AccessKind,
     inst::{control_flow, data, downcast},
     module::{FuncRef, ModuleCtx},
 };
@@ -17,13 +18,14 @@ use super::{
     capture_state::{
         CaptureRelevantInst, RootCaptureMap as SharedRootCaptureMap, RootCapturePayload,
         capture_relevant_inst, compute_capture_states_for_blocks as compute_block_capture_states,
-        kill_capture_access as kill_capture_projection_access,
-        kill_capture_slice_set as kill_capture_exact_slice_set, slices_overlap_relative,
+        kill_capture_access as kill_capture_projection_access, kill_enum_variant_captures,
+        slices_overlap_relative,
     },
+    object_alias::ObjectAliasFacts,
     object_tracking::AggregateFacts,
     provenance::{
-        CompleteProvenance, CompleteRootSet, MayProvenance, ProvenanceSnapshot, RootValue,
-        exact_capture_destination, observed_root_slices,
+        CompleteProvenance, CompleteRootSet, MayProvenance, Projection, ProvenanceSnapshot,
+        RootValue, exact_capture_destination, observed_root_slices,
     },
     shape,
 };
@@ -35,8 +37,35 @@ pub(crate) type ObjectEffectSummaryMap = FxHashMap<FuncRef, ObjectEffectSummary>
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ObjectEffectSummary {
     pub arg_effects: Vec<ObjectArgEffect>,
+    /// Effects independent of the direct formal-relative slices below.
+    pub non_arg: NonArgObjectEffects,
     pub captures: Vec<ObjectCaptureEffect>,
     pub ret_effect: ObjectReturnEffect,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ObjectMayEffects {
+    pub reads: bool,
+    pub writes: bool,
+    pub publishes: bool,
+}
+
+impl ObjectMayEffects {
+    fn union_with(&mut self, other: Self) {
+        self.reads |= other.reads;
+        self.writes |= other.writes;
+        self.publishes |= other.publishes;
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct NonArgObjectEffects {
+    /// Incoming memory and allocations reachable through publication or raw
+    /// materialization. This domain excludes unreachable private allocations.
+    pub external: ObjectMayEffects,
+    /// Unresolved local provenance can also designate private allocations.
+    /// Never interpret this component as merely an external alternative.
+    pub unknown: ObjectMayEffects,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -81,14 +110,26 @@ struct ReturnAnalysis {
 
 #[derive(Clone, Copy)]
 struct EffectProvenance<'a> {
+    aliases: &'a ObjectAliasFacts,
     complete: CompleteProvenance<'a>,
     may: MayProvenance<'a>,
     arg_roots: &'a FxHashMap<RootValue, usize>,
 }
 
 impl<'a> EffectProvenance<'a> {
-    fn exact_projection(self, value: ValueId) -> Option<super::Projection> {
+    fn exact_projection(self, value: ValueId) -> Option<Projection> {
         self.complete.exact_projection(value)
+    }
+
+    fn has_unmapped_alternative(self, value: ValueId) -> bool {
+        let is_mapped = |root| self.arg_roots.contains_key(&root) || self.aliases.is_fresh(root);
+        if let Some(projection) = self.exact_projection(value) {
+            return !is_mapped(projection.root_value);
+        }
+        let roots = self.may.may_roots(value);
+        roots.has_unknown()
+            || roots.observed().is_empty()
+            || roots.observed().iter().any(|root| !is_mapped(root))
     }
 
     fn arg_root_indices_for_observation(self, value: ValueId) -> SmallVec<[usize; 4]> {
@@ -132,7 +173,9 @@ impl RootCapturePayload for RootCaptureEffect {
 pub(crate) struct ObjectArgEffect {
     pub local_only: bool,
     pub escapes: bool,
+    /// May-read slices, relative only to this formal argument.
     pub reads: SliceSet,
+    /// May-write slices; these never establish overwrite or initialization.
     pub writes: SliceSet,
     pub materializes_stack: bool,
     pub materializes_heap: bool,
@@ -263,6 +306,7 @@ impl ObjectEffectSummary {
             .unwrap_or_default();
         Self {
             arg_effects,
+            non_arg: NonArgObjectEffects::default(),
             captures: Vec::new(),
             ret_effect: ObjectReturnEffect::None,
         }
@@ -274,6 +318,11 @@ impl ObjectEffectSummary {
         layout_cache: &mut shape::AggregateLayoutCache,
     ) -> Self {
         let mut summary = Self::new(module, func, layout_cache);
+        summary.non_arg.external = ObjectMayEffects {
+            reads: true,
+            writes: true,
+            publishes: true,
+        };
         for (idx, effect) in summary.arg_effects.iter_mut().enumerate() {
             let Some(sig) = module.get_sig(func) else {
                 break;
@@ -321,46 +370,65 @@ enum ReturnClass {
     Unknown,
 }
 
-pub(crate) fn compute_object_effect_summaries(module: &Module) -> ObjectEffectSummaryMap {
-    let mut summaries = ObjectEffectSummaryMap::default();
-    let mut layout_cache = shape::AggregateLayoutCache::default();
+pub(crate) struct ObjectEffectScc {
+    pub funcs: Vec<FuncRef>,
+    pub is_cycle: bool,
+}
+
+pub(crate) fn object_effect_scc_order(module: &Module) -> Vec<ObjectEffectScc> {
     let funcs = defined_object_effect_funcs(module);
     if funcs.is_empty() {
-        return summaries;
+        return Vec::new();
     }
-
     let func_set = funcs.iter().copied().collect();
     let call_graph = CallGraph::build_graph_subset(module, &func_set);
     let sccs = SccBuilder::new().compute_scc(&call_graph);
-    let topo = topo_sort_object_effect_sccs(&func_set, &call_graph, &sccs);
+    topo_sort_object_effect_sccs(&func_set, &call_graph, &sccs)
+        .into_iter()
+        .rev()
+        .map(|scc| ObjectEffectScc {
+            funcs: sorted_scc_funcs(&sccs, scc),
+            is_cycle: sccs.scc_info(scc).is_cycle,
+        })
+        .collect()
+}
 
-    for scc_ref in topo.iter().rev().copied() {
-        let funcs = sorted_scc_funcs(&sccs, scc_ref);
-        if !sccs.scc_info(scc_ref).is_cycle {
-            for func in funcs {
-                let next = compute_summary_for_func(module, func, &summaries, &mut layout_cache);
-                summaries.insert(func, next);
-            }
-            continue;
+pub(crate) fn compute_object_effect_summaries(module: &Module) -> ObjectEffectSummaryMap {
+    let mut summaries = ObjectEffectSummaryMap::default();
+    let mut layout_cache = shape::AggregateLayoutCache::default();
+    for scc in object_effect_scc_order(module) {
+        update_object_effect_scc(module, &scc, &mut summaries, &mut layout_cache);
+    }
+    summaries
+}
+
+pub(crate) fn update_object_effect_scc(
+    module: &Module,
+    scc: &ObjectEffectScc,
+    summaries: &mut ObjectEffectSummaryMap,
+    layout_cache: &mut shape::AggregateLayoutCache,
+) {
+    if !scc.is_cycle {
+        for &func in &scc.funcs {
+            let next = compute_summary_for_func(module, func, summaries, layout_cache);
+            summaries.insert(func, next);
         }
-
-        initialize_object_effect_scc(module, &funcs, &mut summaries, &mut layout_cache);
-        loop {
-            let mut changed = false;
-            for &func in &funcs {
-                let next = compute_summary_for_func(module, func, &summaries, &mut layout_cache);
-                if summaries.get(&func) != Some(&next) {
-                    summaries.insert(func, next);
-                    changed = true;
-                }
+        return;
+    }
+    initialize_object_effect_scc(module, &scc.funcs, summaries, layout_cache);
+    loop {
+        let mut changed = false;
+        for &func in &scc.funcs {
+            let next = compute_summary_for_func(module, func, summaries, layout_cache);
+            if summaries.get(&func) != Some(&next) {
+                summaries.insert(func, next);
+                changed = true;
             }
-            if !changed {
-                break;
-            }
+        }
+        if !changed {
+            break;
         }
     }
-
-    summaries
 }
 
 fn defined_object_effect_funcs(module: &Module) -> Vec<FuncRef> {
@@ -493,7 +561,9 @@ fn compute_summary_for_func(
             layout_cache,
             &mut snapshot,
         );
+        let aliases = ObjectAliasFacts::new(function, Some(summaries));
         let effect_provenance = EffectProvenance {
+            aliases: &aliases,
             complete: facts.complete(),
             may: facts.may(),
             arg_roots: &arg_roots,
@@ -568,6 +638,14 @@ fn compute_summary_for_func(
                 if let Some(obj_store) =
                     downcast::<&data::ObjStore>(function.inst_set(), function.dfg.inst(inst))
                 {
+                    record_unmapped_publication(
+                        function,
+                        &mut summary,
+                        &root_captures,
+                        effect_provenance,
+                        *obj_store.object(),
+                        slice::from_ref(obj_store.value()),
+                    );
                     record_write(
                         &mut summary,
                         &mut root_captures,
@@ -579,6 +657,18 @@ fn compute_summary_for_func(
                         effect_provenance,
                         *obj_store.object(),
                         *obj_store.value(),
+                    );
+                    continue;
+                }
+
+                if let Some(init) =
+                    downcast::<&data::ObjInitConst>(function.inst_set(), function.dfg.inst(inst))
+                {
+                    record_write(
+                        &mut summary,
+                        &mut root_captures,
+                        effect_provenance,
+                        *init.object(),
                     );
                     continue;
                 }
@@ -674,6 +764,19 @@ fn compute_summary_for_func(
                         summaries,
                         layout_cache,
                     );
+                    continue;
+                }
+
+                // Raw byte ranges have no established mapping into typed leaf
+                // coordinates. The target's address-space classification keeps
+                // storage/calldata effects separate from object backing memory.
+                for access in function.dfg.effects(inst).accesses {
+                    if access.space == function.ctx().address_spaces().default_space() {
+                        match access.kind {
+                            AccessKind::Read => summary.non_arg.external.reads = true,
+                            AccessKind::Write => summary.non_arg.external.writes = true,
+                        }
+                    }
                 }
             }
         }
@@ -706,16 +809,22 @@ fn compute_capture_states_for_blocks(
     cranelift_entity::SecondaryMap<BlockId, RootCaptureMap>,
     RootCaptureMap,
 ) {
-    compute_block_capture_states(function, cfg, reachable, |inst, exit_captures| {
-        apply_inst_capture_transfer(
-            function,
-            inst,
-            exit_captures,
-            effect_provenance,
-            summaries,
-            layout_cache,
-        );
-    })
+    compute_block_capture_states(
+        function,
+        cfg,
+        reachable,
+        &RootCaptureMap::default(),
+        |inst, exit_captures| {
+            apply_inst_capture_transfer(
+                function,
+                inst,
+                exit_captures,
+                effect_provenance,
+                summaries,
+                layout_cache,
+            );
+        },
+    )
 }
 
 fn apply_inst_capture_transfer(
@@ -740,6 +849,11 @@ fn apply_inst_capture_transfer(
                 *obj_store.value(),
             );
         }
+        Some(CaptureRelevantInst::ObjInitConst(init)) => {
+            // Verified const data cannot contain references. Its actual subtree
+            // overwrite removes old named containment only with exact coverage.
+            kill_capture_access(root_captures, effect_provenance, *init.object(), None);
+        }
         Some(CaptureRelevantInst::EnumSetTag(enum_set_tag)) => {
             kill_capture_access(
                 root_captures,
@@ -749,11 +863,13 @@ fn apply_inst_capture_transfer(
             );
         }
         Some(CaptureRelevantInst::EnumWriteVariant(enum_write_variant)) => {
-            kill_capture_access(
+            kill_enum_variant_captures(
                 root_captures,
-                effect_provenance,
-                *enum_write_variant.object(),
-                None,
+                effect_provenance.aliases,
+                function.ctx(),
+                effect_provenance.exact_projection(*enum_write_variant.object()),
+                *enum_write_variant.variant(),
+                enum_write_variant.values().len(),
             );
             record_enum_variant_captures(
                 function,
@@ -1126,18 +1242,34 @@ fn merge_call_effects(
     let callee_summary = call_effect_summary(function, call, summaries, layout_cache);
     let pre_call_captures = root_captures.clone();
 
+    summary
+        .non_arg
+        .external
+        .union_with(callee_summary.non_arg.external);
+    summary
+        .non_arg
+        .unknown
+        .union_with(callee_summary.non_arg.unknown);
     for (callee_idx, &arg) in call.args().iter().enumerate() {
         let Some(callee_effect) = callee_summary.arg_effects.get(callee_idx) else {
             continue;
         };
-        merge_call_arg_effect(
-            summary,
-            &pre_call_captures,
-            root_captures,
-            capture_ctx,
-            arg,
-            callee_effect,
-        );
+        merge_call_arg_effect(summary, &pre_call_captures, capture_ctx, arg, callee_effect);
+    }
+    for capture in &callee_summary.captures {
+        if let ObjectCaptureDestination::Arg { index, .. } = capture.dst
+            && let Some(&object) = call.args().get(index)
+            && let Some(value) = call.args().get(capture.src_arg)
+        {
+            record_unmapped_publication(
+                function,
+                summary,
+                &pre_call_captures,
+                capture_ctx,
+                object,
+                slice::from_ref(value),
+            );
+        }
     }
     merge_call_capture_effects(
         function,
@@ -1163,12 +1295,7 @@ fn apply_call_capture_transfer(
     let callee_summary = call_effect_summary(function, call, summaries, layout_cache);
     let pre_call_captures = root_captures.clone();
 
-    for (callee_idx, &arg) in call.args().iter().enumerate() {
-        let Some(callee_effect) = callee_summary.arg_effects.get(callee_idx) else {
-            continue;
-        };
-        kill_capture_slice_set(root_captures, capture_ctx, arg, &callee_effect.writes);
-    }
+    // I6: a union of possible writes cannot strongly replace old captures.
     merge_call_capture_effects(
         function,
         inst,
@@ -1194,7 +1321,6 @@ fn call_effect_summary(
 fn merge_call_arg_effect(
     summary: &mut ObjectEffectSummary,
     capture_sources: &RootCaptureMap,
-    root_captures: &mut RootCaptureMap,
     capture_ctx: EffectProvenance<'_>,
     value: ValueId,
     callee_effect: &ObjectArgEffect,
@@ -1204,6 +1330,14 @@ fn merge_call_arg_effect(
         && !callee_effect.needs_unknown_object_barrier()
     {
         return;
+    }
+
+    if capture_ctx.has_unmapped_alternative(value) {
+        summary.non_arg.unknown.union_with(ObjectMayEffects {
+            reads: !callee_effect.reads.is_empty(),
+            writes: !callee_effect.writes.is_empty(),
+            publishes: callee_effect.needs_unknown_object_barrier(),
+        });
     }
 
     if let Some(projection) = capture_ctx.exact_projection(value)
@@ -1235,7 +1369,6 @@ fn merge_call_arg_effect(
             summary.arg_effects[src_arg].materializes_heap |= callee_effect.materializes_heap;
         }
     }
-    kill_capture_slice_set(root_captures, capture_ctx, value, &callee_effect.writes);
 }
 
 fn merge_effect_into_arg(
@@ -1358,7 +1491,13 @@ fn capture_source_slices(
         if let Some(&idx) = capture_ctx.arg_roots.get(&root) {
             src_slices.push((idx, access_slice));
         }
-        extend_capture_sources_for_root(&mut src_slices, root_captures, root, Some(access_slice));
+        extend_capture_sources_for_root(
+            &mut src_slices,
+            root_captures,
+            capture_ctx.aliases,
+            root,
+            Some(access_slice),
+        );
         dedup_capture_source_slices(&mut src_slices);
         return src_slices;
     }
@@ -1367,9 +1506,36 @@ fn capture_source_slices(
         if let Some(&idx) = capture_ctx.arg_roots.get(&root) {
             src_slices.push((idx, slice));
         }
-        extend_capture_sources_for_root(&mut src_slices, root_captures, root, None);
+        extend_capture_sources_for_root(
+            &mut src_slices,
+            root_captures,
+            capture_ctx.aliases,
+            root,
+            None,
+        );
     }
 
+    let roots = capture_ctx.may.may_roots(value);
+    if roots.has_unknown() {
+        // I7: an unresolved contributor can carry an argument or a reference
+        // currently held in an aliased object; observed IDs are only a lower bound.
+        for (&root, &index) in capture_ctx.arg_roots {
+            if capture_ctx.aliases.may_roots_overlap(roots, root)
+                && let Some(slice) = capture_ctx.complete.exact_root_slice(root)
+            {
+                src_slices.push((index, slice));
+            }
+        }
+        for (&root, captures) in root_captures {
+            if capture_ctx.aliases.may_roots_overlap(roots, root) {
+                src_slices.extend(
+                    captures
+                        .iter()
+                        .map(|capture| (capture.src_arg, capture.src_slice)),
+                );
+            }
+        }
+    }
     dedup_capture_source_slices(&mut src_slices);
     src_slices
 }
@@ -1413,19 +1579,31 @@ fn capture_source_slices_for_slice_set(
 fn extend_capture_sources_for_root(
     src_slices: &mut Vec<(usize, shape::AggregateSlice)>,
     root_captures: &RootCaptureMap,
+    aliases: &ObjectAliasFacts,
     root: RootValue,
     access_slice: Option<shape::AggregateSlice>,
 ) {
-    let Some(captures) = root_captures.get(&root) else {
-        return;
-    };
-    for capture in captures {
-        if let Some(access_slice) = access_slice
-            && !slices_overlap_relative(access_slice, capture.dst_slice)
-        {
-            continue;
+    for (&captured_root, captures) in root_captures {
+        for capture in captures {
+            let overlaps = access_slice.map_or_else(
+                || aliases.roots_may_overlap(root, captured_root),
+                |slice| {
+                    aliases.may_overlap(
+                        Projection {
+                            root_value: root,
+                            slice,
+                        },
+                        Projection {
+                            root_value: captured_root,
+                            slice: capture.dst_slice,
+                        },
+                    )
+                },
+            );
+            if overlaps {
+                src_slices.push((capture.src_arg, capture.src_slice));
+            }
         }
-        src_slices.push((capture.src_arg, capture.src_slice));
     }
 }
 
@@ -1458,19 +1636,11 @@ fn kill_capture_access(
             leaf_count,
         })
     });
-    kill_capture_projection_access(root_captures, projection, relative_slice);
-}
-
-fn kill_capture_slice_set(
-    root_captures: &mut RootCaptureMap,
-    capture_ctx: EffectProvenance<'_>,
-    value: ValueId,
-    slices: &SliceSet,
-) {
-    kill_capture_exact_slice_set(
+    kill_capture_projection_access(
         root_captures,
-        exact_capture_destination(capture_ctx.exact_projection(value), None),
-        slices,
+        capture_ctx.aliases,
+        projection,
+        relative_slice,
     );
 }
 
@@ -1622,8 +1792,23 @@ fn record_enum_write_variant(
     variant: sonatina_ir::types::EnumVariantRef,
     values: &[ValueId],
 ) {
+    record_unmapped_publication(
+        function,
+        summary,
+        root_captures,
+        capture_ctx,
+        object,
+        values,
+    );
     record_enum_tag_write(summary, root_captures, capture_ctx, object);
-    kill_capture_access(root_captures, capture_ctx, object, None);
+    kill_enum_variant_captures(
+        root_captures,
+        capture_ctx.aliases,
+        function.ctx(),
+        capture_ctx.exact_projection(object),
+        variant,
+        values.len(),
+    );
     if let Some(projection) = capture_ctx.exact_projection(object)
         && let Some(&idx) = capture_ctx.arg_roots.get(&projection.root_value)
     {
@@ -1668,6 +1853,31 @@ fn record_enum_write_variant(
     );
 }
 
+fn record_unmapped_publication(
+    function: &Function,
+    summary: &mut ObjectEffectSummary,
+    root_captures: &RootCaptureMap,
+    capture_ctx: EffectProvenance<'_>,
+    object: ValueId,
+    values: &[ValueId],
+) {
+    if !capture_ctx.has_unmapped_alternative(object) {
+        return;
+    }
+    for &value in values {
+        let ty = function.dfg.value_ty(value);
+        if ty.is_obj_ref(function.ctx())
+            || ty.is_pointer(function.ctx())
+            || shape::is_reference_aggregate(function.ctx(), ty)
+        {
+            summary.non_arg.unknown.publishes = true;
+            for (src_arg, _) in capture_source_slices(root_captures, capture_ctx, value, None) {
+                summary.arg_effects[src_arg].escapes = true;
+            }
+        }
+    }
+}
+
 fn record_materialize(
     summary: &mut ObjectEffectSummary,
     root_captures: &RootCaptureMap,
@@ -1675,6 +1885,9 @@ fn record_materialize(
     object: ValueId,
     heap: bool,
 ) {
+    if capture_ctx.has_unmapped_alternative(object) {
+        summary.non_arg.unknown.publishes = true;
+    }
     for root_idx in capture_ctx.arg_root_indices_for_observation(object) {
         summary.arg_effects[root_idx].materializes_stack |= !heap;
         summary.arg_effects[root_idx].materializes_heap |= heap;
@@ -1698,6 +1911,10 @@ fn record_slice_access(
     write: bool,
     fixed_slice: Option<(usize, usize)>,
 ) {
+    if effect_provenance.has_unmapped_alternative(object) {
+        summary.non_arg.unknown.reads |= !write;
+        summary.non_arg.unknown.writes |= write;
+    }
     if let Some(projection) = effect_provenance.exact_projection(object)
         && let Some(&idx) = effect_provenance.arg_roots.get(&projection.root_value)
     {
@@ -1752,9 +1969,7 @@ pub(crate) fn whole_root_slice(
     shape::AggregateSlice {
         ty: pointee_ty,
         first_leaf: 0,
-        leaf_count: layout_cache
-            .shape(ctx, pointee_ty)
-            .map_or(1, |shape| shape.leaves.len()),
+        leaf_count: layout_cache.shape_leaf_count(ctx, pointee_ty).unwrap_or(1),
     }
 }
 

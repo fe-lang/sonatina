@@ -91,7 +91,7 @@ func private %contract_runtime_root_PoseidonBench() {
         v55.i256 = phi (v47 block9) (v205 block12);
         v57.i256 = phi (0.i256 block9) (v61 block12);
         v59.i1 = lt v57 3.i256;
-        br v59 block12 block13;
+        br v59 block12 block65;
 
     block12:
         v61.i256 = add v57 1.i256;
@@ -133,7 +133,7 @@ func private %contract_runtime_root_PoseidonBench() {
         v205.i256 = evm_add_mod v195 v201 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
         jump block11;
 
-    block13:
+    block65:
         v210.i256 = evm_mul_mod v51 v51 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
         v214.i256 = evm_mul_mod v210 v210 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
         v218.i256 = evm_mul_mod v214 v51 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
@@ -165,14 +165,14 @@ func private %contract_runtime_root_PoseidonBench() {
         jump block14;
 
     block14:
-        v338.i256 = phi (v283 block13) (v403 block15);
-        v340.i256 = phi (v309 block13) (v416 block15);
-        v342.i256 = phi (v335 block13) (v429 block15);
-        v344.i256 = phi (0.i256 block13) (v430 block15);
+        v338.i256 = phi (v283 block65) (v403 block158);
+        v340.i256 = phi (v309 block65) (v416 block158);
+        v342.i256 = phi (v335 block65) (v429 block158);
+        v344.i256 = phi (0.i256 block65) (v430 block158);
         v346.i1 = lt v344 57.i256;
-        br v346 block15 block16;
+        br v346 block158 block16;
 
-    block15:
+    block158:
         v351.i256 = evm_mul_mod v338 v338 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
         v355.i256 = evm_mul_mod v351 v351 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
         v359.i256 = evm_mul_mod v355 v338 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
@@ -211,7 +211,7 @@ func private %contract_runtime_root_PoseidonBench() {
         v436.i256 = phi (v342 block14) (v575 block17);
         v438.i256 = phi (0.i256 block14) (v576 block17);
         v439.i1 = lt v438 3.i256;
-        br v439 block17 block18;
+        br v439 block17 block176;
 
     block17:
         v441.i256 = mul v438 3.i256;
@@ -254,7 +254,7 @@ func private %contract_runtime_root_PoseidonBench() {
         v576.i256 = add v438 1.i256;
         jump block16;
 
-    block18:
+    block176:
         v580.i256 = evm_mul_mod v432 v432 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
         v584.i256 = evm_mul_mod v580 v580 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;
         v588.i256 = evm_mul_mod v584 v432 21888242871839275222246405745257275088548364400416034343698204186575808495617.i256;

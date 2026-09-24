@@ -1,0 +1,22 @@
+# EVM execution control; native deliberately rejects this captured stack reference.
+type @Holder = { objref<i64> };
+
+func inline(never) private %capture_then_write(v0.objref<i64>, v1.objref<@Holder>, v2.objref<@Holder>) -> i64 {
+block0:
+    v3.objref<objref<i64>> = obj.proj v1 0.i8;
+    obj.store v3 v0;
+    v4.objref<objref<i64>> = obj.proj v2 0.i8;
+    v5.objref<i64> = obj.load v4;
+    obj.store v5 22.i64;
+    v6.i64 = obj.load v0;
+    return v6;
+}
+
+func inline(never) public %captured_alias() -> i64 {
+block0:
+    v0.objref<i64> = obj.alloc i64;
+    v1.objref<@Holder> = obj.alloc @Holder;
+    obj.store v0 11.i64;
+    v2.i64 = call %capture_then_write v0 v1 v1;
+    return v2;
+}

@@ -32,11 +32,7 @@ pub(crate) fn run_machine_opt_pipeline(
         module,
         MACHINE_PASSES,
         &mut func_behavior_dirty,
-        FuncPassOverrides {
-            funcs: Some(funcs),
-            local_object_args: None,
-            object_effects: None,
-        },
+        FuncPassOverrides { funcs: Some(funcs) },
     );
     if canonicalize_word_branches {
         for &func in funcs {

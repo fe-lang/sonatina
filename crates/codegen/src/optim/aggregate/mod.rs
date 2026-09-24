@@ -3,7 +3,7 @@ pub use crate::transform::aggregate::{
 };
 
 pub(crate) use crate::transform::aggregate::{
-    LocalObjectArgMap, ObjectEffectSummaryMap, ObjectMemoryAnalysis, ObjectReadGvnKey,
-    ObjectReturnEffect, collect_local_object_arg_info, collect_local_object_arg_info_with_effects,
+    LocalObjectArgMap, ModuleObjectFacts, ObjectEffectSummaryMap, ObjectMemoryAnalysis,
+    ObjectReadGvnKey, ObjectReturnEffect, collect_local_object_arg_info_with_effects,
     compute_object_effect_summaries,
 };

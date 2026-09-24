@@ -1,3 +1,4 @@
+pub(crate) mod definedness;
 pub mod demanded_bits;
 pub mod func_behavior;
 pub mod induction;

@@ -1,3 +1,4 @@
+mod alias_execution;
 mod evm_directives;
 
 use dir_test::{Fixture, dir_test};
@@ -13,6 +14,8 @@ use revm::{
 };
 
 use sonatina_codegen::{
+    Compile,
+    compile::{EvmCompiler, OptLevel},
     isa::evm::{EvmBackend, ImmediateMaterializationMode, LateCleanupProfile, PushWidthPolicy},
     machinst::{
         lower::{LoweredFunction, SectionCodeUnit, SectionWorkModule},
@@ -33,7 +36,7 @@ use sonatina_ir::{
 };
 use sonatina_parser::{ParsedModule, parse_module};
 use sonatina_triple::{Architecture, OperatingSystem, Vendor};
-use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module_or_panic};
+use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module, verify_module_or_panic};
 use std::{
     collections::HashMap,
     fmt,
@@ -115,6 +118,81 @@ fn parse_sona(content: &str) -> ParsedModule {
                 err.print(&mut w, "[test]", content, true).unwrap();
             }
             panic!("Failed to parse test file. See errors above.")
+        }
+    }
+}
+
+#[test]
+fn object_alias_execution_matrix_at_all_optimization_levels() {
+    for (body, cases, expected_calls, expect_promotion) in [
+        (alias_execution::SOURCE, alias_execution::CASES, 3, false),
+        (
+            alias_execution::CAPTURE_SOURCE,
+            &[("captured_alias", 22)][..],
+            0,
+            false,
+        ),
+        (
+            alias_execution::DISJOINT_SOURCE,
+            &[("disjoint_only", 11)][..],
+            1,
+            true,
+        ),
+    ] {
+        let mut source =
+            format!("target = \"evm-ethereum-osaka\"\n{body}\nfunc public %entry() {{\nblock0:\n");
+        for (index, &(name, _)) in cases.iter().enumerate() {
+            let result = index * 2;
+            let extended = result + 1;
+            let offset = index * 32;
+            source.push_str(&format!("v{result}.i64 = call %{name};\nv{extended}.i256 = zext v{result} i256;\nmstore {offset}.i256 v{extended} i256;\n"));
+        }
+        let size = cases.len() * 32;
+        source.push_str(&format!("evm_return 0.i256 {size}.i256;\n}}\nobject @Contract {{ section runtime {{ entry %entry; }} }}\n"));
+        let config = VerifierConfig::for_level(VerificationLevel::Full);
+        for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2] {
+            let module = parse_sona(&source).module;
+            let report = verify_module(&module, &config);
+            assert!(report.is_ok(), "{report}");
+            let mut compiler = Compile::new(module, EvmCompiler::default()).with_opt_level(level);
+            let module = compiler.optimize();
+            let report = verify_module(module, &config);
+            assert!(report.is_ok(), "{level:?}: {report}");
+            let text = ModuleWriter::new(module).dump_string();
+            assert_eq!(
+                text.matches("call %read_after_write").count(),
+                expected_calls,
+                "{text}"
+            );
+            if expect_promotion && level != OptLevel::O0 {
+                assert!(
+                    text.find("obj.load").unwrap() < text.find("obj.store").unwrap(),
+                    "{text}"
+                );
+            }
+            let artifacts = compiler.compile().expect("alias matrix should compile");
+            let runtime = artifacts[0]
+                .sections
+                .iter()
+                .find(|(name, _)| name.0 == "runtime")
+                .unwrap();
+            let mut harness = EvmHarness::from_runtime(&runtime.1.bytes);
+            let result = harness.call(&[]);
+            let ExecutionResult::Success {
+                output: Output::Call(actual),
+                ..
+            } = result
+            else {
+                panic!("{level:?}: {result:?}");
+            };
+            assert_eq!(actual.len(), size);
+            for (bytes, &(name, expected)) in actual.as_chunks::<32>().0.iter().zip(cases) {
+                assert_eq!(
+                    *bytes,
+                    IrU256::from(expected as u64).to_big_endian(),
+                    "{level:?}: {name}"
+                );
+            }
         }
     }
 }

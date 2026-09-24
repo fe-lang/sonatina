@@ -1,5 +1,7 @@
 #![allow(clippy::crosspointer_transmute)]
 
+mod alias_execution;
+
 #[path = "cranelift/abi.rs"]
 mod abi;
 #[path = "cranelift/casts.rs"]
@@ -8,6 +10,8 @@ mod casts;
 mod globals;
 #[path = "cranelift/memory.rs"]
 mod memory;
+#[path = "cranelift/object_alias.rs"]
+mod object_alias;
 #[path = "cranelift/references.rs"]
 mod references;
 #[path = "cranelift/scalar.rs"]

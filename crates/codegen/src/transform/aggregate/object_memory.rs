@@ -8,14 +8,16 @@ use sonatina_ir::{
 use crate::loop_analysis::{Loop, LoopTree};
 
 use super::{
-    LocalObjectArgInfo, ObjectEffectSummaryMap, RootInit, SliceSet,
-    object_state::{is_pure_object_address_inst, observed_roots_ignoring_pure_address_ops},
+    LocalObjectArgInfo, ObjectEffectSummaryMap, RootInit,
+    object_access::{
+        ObjectAccess, ObjectAccessFacts, ObjectGuard, ObjectInitializationSource, ObjectInstEffects,
+    },
+    object_initialization::{InitializedValue, value_initialization},
     object_tracking::{
         AggregateObjectFacts, ObjectSlice, TrackedObject, enum_tag_object_slice,
-        enum_variant_field_object_slice, object_slice_overlaps_effect, slice_is_covered_by,
-        slices_overlap, whole_root_slice_for_value,
+        whole_root_slice_for_value,
     },
-    provenance::{MayProvenance, MayRootSet, ProvenanceSnapshot},
+    provenance::RootValue,
     shape,
 };
 
@@ -74,20 +76,12 @@ impl ObjectReadState {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum ObjectClobber {
-    Slice(ObjectSlice),
-    LeafSet {
-        base_slice: ObjectSlice,
-        leaves: FxHashSet<usize>,
-    },
-    Root(ValueId),
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 struct MemoryState {
     carriers: FxHashMap<ObjectSlice, MemoryCarrier>,
-    initialized_leaves: FxHashMap<ValueId, FxHashSet<usize>>,
+    initialized: FxHashMap<ValueId, InitializedValue>,
+    // Loaded SSA values retain their initialization evidence after memory changes.
+    initialized_values: FxHashMap<ValueId, InitializedValue>,
     active_roots: FxHashSet<ValueId>,
     blocked_roots: FxHashSet<ValueId>,
 }
@@ -95,9 +89,9 @@ struct MemoryState {
 struct TransferCtx<'a> {
     func: &'a Function,
     tracked: &'a SecondaryMap<ValueId, Option<TrackedObject>>,
-    provenance: MayProvenance<'a>,
+    accesses: &'a ObjectAccessFacts,
+    effects: &'a FxHashMap<InstId, ObjectInstEffects>,
     relevant_slices: &'a FxHashMap<ValueId, Vec<ObjectSlice>>,
-    object_effects: Option<&'a ObjectEffectSummaryMap>,
     promote_loaded_values: bool,
 }
 
@@ -105,8 +99,9 @@ struct TransferCtx<'a> {
 pub(crate) struct ObjectMemoryAnalysis {
     layout_cache: shape::AggregateLayoutCache,
     read_states: FxHashMap<InstId, ObjectReadState>,
-    clobbers: FxHashMap<InstId, Vec<ObjectClobber>>,
+    clobbers: FxHashMap<InstId, Vec<ObjectSlice>>,
     inst_pre_states: FxHashMap<InstId, MemoryState>,
+    block_entry_states: SecondaryMap<BlockId, MemoryState>,
     promote_loaded_values: bool,
 }
 
@@ -117,15 +112,7 @@ impl ObjectMemoryAnalysis {
         local_object_args: Option<&FxHashMap<usize, LocalObjectArgInfo>>,
         object_effects: Option<&ObjectEffectSummaryMap>,
     ) {
-        self.reset(false);
-        let mut snapshot = ProvenanceSnapshot::new(func, object_effects);
-        let facts = AggregateObjectFacts::for_local_objects(
-            func,
-            local_object_args,
-            &mut self.layout_cache,
-            &mut snapshot,
-        );
-        self.compute_from_facts(func, local_object_args, object_effects, &facts);
+        self.compute_internal(func, local_object_args, object_effects, None, false);
     }
 
     pub(crate) fn compute_with_loaded_value_carriers(
@@ -134,15 +121,7 @@ impl ObjectMemoryAnalysis {
         local_object_args: Option<&FxHashMap<usize, LocalObjectArgInfo>>,
         object_effects: Option<&ObjectEffectSummaryMap>,
     ) {
-        self.reset(true);
-        let mut snapshot = ProvenanceSnapshot::new(func, object_effects);
-        let facts = AggregateObjectFacts::for_local_objects(
-            func,
-            local_object_args,
-            &mut self.layout_cache,
-            &mut snapshot,
-        );
-        self.compute_from_facts(func, local_object_args, object_effects, &facts);
+        self.compute_internal(func, local_object_args, object_effects, None, true);
     }
 
     pub(crate) fn compute_with_facts(
@@ -153,8 +132,42 @@ impl ObjectMemoryAnalysis {
         facts: &AggregateObjectFacts,
         promote_loaded_values: bool,
     ) {
+        self.compute_internal(
+            func,
+            local_object_args,
+            object_effects,
+            Some(facts),
+            promote_loaded_values,
+        );
+    }
+
+    fn compute_internal(
+        &mut self,
+        func: &Function,
+        local_object_args: Option<&FxHashMap<usize, LocalObjectArgInfo>>,
+        object_effects: Option<&ObjectEffectSummaryMap>,
+        selected: Option<&AggregateObjectFacts>,
+        promote_loaded_values: bool,
+    ) {
         self.reset(promote_loaded_values);
-        self.compute_from_facts(func, local_object_args, object_effects, facts);
+        if !func
+            .dfg
+            .value_ids()
+            .any(|value| func.dfg.value_ty(value).is_obj_ref(func.ctx()))
+        {
+            return;
+        }
+        let accesses = ObjectAccessFacts::new(func, object_effects);
+        let tracked = if let Some(selected) = selected {
+            accesses.tracked_for_roots(
+                func,
+                &selected.root_slices().keys().copied().collect(),
+                &mut self.layout_cache,
+            )
+        } else {
+            accesses.tracked(func, local_object_args, &mut self.layout_cache)
+        };
+        self.compute_from_accesses(func, local_object_args, object_effects, &accesses, &tracked);
     }
 
     fn reset(&mut self, promote_loaded_values: bool) {
@@ -162,23 +175,29 @@ impl ObjectMemoryAnalysis {
         self.read_states.clear();
         self.clobbers.clear();
         self.inst_pre_states.clear();
+        self.block_entry_states.clear();
         self.promote_loaded_values = promote_loaded_values;
     }
 
-    fn compute_from_facts(
+    fn compute_from_accesses(
         &mut self,
         func: &Function,
         local_object_args: Option<&FxHashMap<usize, LocalObjectArgInfo>>,
         object_effects: Option<&ObjectEffectSummaryMap>,
-        facts: &AggregateObjectFacts,
+        accesses: &ObjectAccessFacts,
+        tracked: &SecondaryMap<ValueId, Option<TrackedObject>>,
     ) {
-        let tracked = facts.tracked();
-        let may = facts.may();
         let relevant_slices = collect_relevant_slices(func, tracked);
         if relevant_slices.is_empty() {
             return;
         }
 
+        let effects: FxHashMap<_, _> = func
+            .layout
+            .iter_block()
+            .flat_map(|block| func.layout.iter_inst(block))
+            .map(|inst| (inst, accesses.effects(func, inst, object_effects)))
+            .collect();
         let mut cfg = ControlFlowGraph::new();
         cfg.compute(func);
         let reachable = cfg.reachable_blocks();
@@ -212,6 +231,7 @@ impl ObjectMemoryAnalysis {
                     initial_state.clone()
                 } else {
                     meet_memory_states(
+                        func,
                         block,
                         cfg.preds_of(block)
                             .copied()
@@ -230,9 +250,9 @@ impl ObjectMemoryAnalysis {
                 let transfer_ctx = TransferCtx {
                     func,
                     tracked,
-                    provenance: may,
+                    accesses,
+                    effects: &effects,
                     relevant_slices: &relevant_slices,
-                    object_effects,
                     promote_loaded_values: self.promote_loaded_values,
                 };
                 for inst in func.layout.iter_inst(block) {
@@ -259,9 +279,9 @@ impl ObjectMemoryAnalysis {
             let transfer_ctx = TransferCtx {
                 func,
                 tracked,
-                provenance: may,
+                accesses,
+                effects: &effects,
                 relevant_slices: &relevant_slices,
-                object_effects,
                 promote_loaded_values: self.promote_loaded_values,
             };
             for inst in func.layout.iter_inst(block) {
@@ -272,10 +292,39 @@ impl ObjectMemoryAnalysis {
                 transfer_inst(&transfer_ctx, inst, &mut state, &mut record);
             }
         }
+        self.block_entry_states = in_states;
     }
 
     pub(crate) fn read_state(&self, inst: InstId) -> Option<ObjectReadState> {
         self.read_states.get(&inst).copied()
+    }
+
+    pub(crate) fn slice_initialized_before_inst(
+        &self,
+        func: &Function,
+        inst: InstId,
+        slice: ObjectSlice,
+    ) -> bool {
+        self.inst_pre_states
+            .get(&inst)
+            .is_some_and(|state| slice_initialization(func, state, slice).defined(func.ctx()))
+    }
+
+    /// A must-entry proof for this exact read, not equality with another load.
+    /// The ordinary mode never replaces a read's entry token with its SSA value.
+    /// Writes and disagreeing reachable predecessors lose that token permanently;
+    /// an unvisited loop predecessor is resolved by the enclosing fixed point.
+    pub(crate) fn read_observes_entry_contents(&self, inst: InstId, expected: ObjectSlice) -> bool {
+        !self.promote_loaded_values
+            && self.read_states.get(&inst).is_some_and(|read| {
+                read.read_slice == expected
+                    && matches!(read.key, ObjectReadGvnKey::Memory {
+                        token: ObjectMemToken::LiveIn { root }, carrier_slice, ..
+                    } if root == expected.root && carrier_slice.root == root
+                        && carrier_slice.first_leaf <= expected.first_leaf
+                        && expected.first_leaf + expected.leaf_count
+                            <= carrier_slice.first_leaf + carrier_slice.leaf_count)
+            })
     }
 
     pub(crate) fn value_matches_current_object_slice_before_inst(
@@ -294,6 +343,22 @@ impl ObjectMemoryAnalysis {
         })
     }
 
+    pub(crate) fn guards_hold_before_inst(
+        &self,
+        func: &Function,
+        inst: InstId,
+        guards: &[ObjectGuard],
+    ) -> bool {
+        // Guard validity is separate from scalar definedness. A readable snapshot
+        // containing undef can still share storage while its ancestor tags hold.
+        guards.is_empty()
+            || self.inst_pre_states.get(&inst).is_some_and(|state| {
+                guards.iter().all(|guard| {
+                    slice_initialization(func, state, guard.object).variant() == Some(guard.variant)
+                })
+            })
+    }
+
     pub(crate) fn read_is_loop_invariant(
         &self,
         func: &Function,
@@ -305,7 +370,16 @@ impl ObjectMemoryAnalysis {
         let Some(read) = self.read_state(inst) else {
             return false;
         };
-        if read.may_be_undef() {
+        // Facts established inside the loop cannot justify a preheader read.
+        // This also checks ancestor enum guards in the sparse subtree state.
+        if read.may_be_undef()
+            || !slice_initialization(
+                func,
+                &self.block_entry_states[lpt.loop_header(lp)],
+                read.read_slice(),
+            )
+            .defined(func.ctx())
+        {
             return false;
         }
 
@@ -323,11 +397,10 @@ impl ObjectMemoryAnalysis {
     }
 
     fn inst_clobbers_slice(&self, inst: InstId, slice: ObjectSlice) -> bool {
-        self.clobbers.get(&inst).is_some_and(|effects| {
-            effects
-                .iter()
-                .any(|effect| clobber_overlaps_slice(effect, slice))
-        })
+        // Clobbers already use the precise coordinates of each relevant read.
+        self.clobbers
+            .get(&inst)
+            .is_some_and(|effects| effects.contains(&slice))
     }
 }
 
@@ -396,7 +469,7 @@ fn initial_state(
             };
             let init = local_object_args
                 .and_then(|args| args.get(&idx))
-                .map(|info| info.init)
+                .and_then(|info| info.init(func, idx))
                 .unwrap_or(RootInit::LoadLiveIn);
             let token = match init {
                 RootInit::LoadLiveIn => ObjectMemToken::LiveIn { root },
@@ -404,9 +477,16 @@ fn initial_state(
             };
             activate_root(&mut state, root_slice, token, relevant_slices);
             if init == RootInit::LoadLiveIn {
-                mark_slice_initialized(&mut state, root_slice);
+                mark_slice_initialized(
+                    func,
+                    &mut state,
+                    root_slice,
+                    InitializedValue::new(root_slice.ty, true),
+                );
             } else {
-                state.initialized_leaves.entry(root).or_default();
+                state
+                    .initialized
+                    .insert(root, InitializedValue::new(root_slice.ty, false));
             }
         }
         return state;
@@ -417,21 +497,31 @@ fn initial_state(
     };
 
     for (&idx, info) in local_object_args {
+        let Some(init) = info.init(func, idx) else {
+            continue;
+        };
         let Some(&root) = func.arg_values.get(idx) else {
             continue;
         };
         let Some(root_slice) = whole_root_slice_for_value(tracked, root) else {
             continue;
         };
-        let token = match info.init {
+        let token = match init {
             RootInit::LoadLiveIn => ObjectMemToken::LiveIn { root },
             RootInit::UndefFresh => ObjectMemToken::FreshEntry { root },
         };
         activate_root(&mut state, root_slice, token, relevant_slices);
-        if info.init == RootInit::LoadLiveIn {
-            mark_slice_initialized(&mut state, root_slice);
+        if init == RootInit::LoadLiveIn {
+            mark_slice_initialized(
+                func,
+                &mut state,
+                root_slice,
+                InitializedValue::new(root_slice.ty, true),
+            );
         } else {
-            state.initialized_leaves.entry(root).or_default();
+            state
+                .initialized
+                .insert(root, InitializedValue::new(root_slice.ty, false));
         }
     }
 
@@ -439,6 +529,7 @@ fn initial_state(
 }
 
 fn meet_memory_states<'a>(
+    func: &Function,
     block: BlockId,
     mut preds: impl Iterator<Item = &'a MemoryState>,
     relevant_slices: &FxHashMap<ValueId, Vec<ObjectSlice>>,
@@ -449,9 +540,18 @@ fn meet_memory_states<'a>(
     let rest: Vec<_> = preds.collect();
     let mut state = MemoryState {
         active_roots: first.active_roots.clone(),
+        initialized_values: first.initialized_values.clone(),
         ..MemoryState::default()
     };
     for pred in &rest {
+        state.initialized_values.retain(|value, facts| {
+            if let Some(other) = pred.initialized_values.get(value) {
+                *facts = facts.join(func.ctx(), other);
+                true
+            } else {
+                false
+            }
+        });
         state
             .active_roots
             .retain(|root| pred.active_roots.contains(root));
@@ -468,19 +568,13 @@ fn meet_memory_states<'a>(
         if state.blocked_roots.contains(&root) {
             continue;
         }
-        let mut initialized = first
-            .initialized_leaves
-            .get(&root)
-            .cloned()
-            .unwrap_or_default();
-        for pred in &rest {
-            if let Some(pred_initialized) = pred.initialized_leaves.get(&root) {
-                initialized.retain(|leaf| pred_initialized.contains(leaf));
-            } else {
-                initialized.clear();
-            }
+        if let Some(initialized) = first.initialized.get(&root)
+            && let Some(initialized) = rest.iter().try_fold(initialized.clone(), |facts, pred| {
+                Some(facts.join(func.ctx(), pred.initialized.get(&root)?))
+            })
+        {
+            state.initialized.insert(root, initialized);
         }
-        state.initialized_leaves.insert(root, initialized);
     }
 
     for slices in relevant_slices.values() {
@@ -517,155 +611,215 @@ fn transfer_inst(
     state: &mut MemoryState,
     record: &mut Option<&mut ObjectMemoryAnalysis>,
 ) {
-    if let Some(call) =
-        downcast::<&control_flow::Call>(ctx.func.inst_set(), ctx.func.dfg.inst(inst))
-    {
-        record_inst_pre_state(inst, state, record);
-        apply_call_transfer(ctx, inst, call, state, record);
-        activate_defined_root(ctx.func, inst, ctx.tracked, ctx.relevant_slices, state);
-        return;
-    }
-    if downcast::<&control_flow::Return>(ctx.func.inst_set(), ctx.func.dfg.inst(inst)).is_some() {
+    let data = ctx.func.dfg.inst(inst);
+    let is = ctx.func.inst_set();
+    let is_call = downcast::<&control_flow::Call>(is, data).is_some();
+    if is_call || downcast::<&control_flow::Return>(is, data).is_some() {
         record_inst_pre_state(inst, state, record);
     }
+    if !is_call {
+        activate_defined_root(ctx, inst, state);
+    }
 
-    activate_defined_root(ctx.func, inst, ctx.tracked, ctx.relevant_slices, state);
-
-    if let Some(obj_load) = downcast::<&data::ObjLoad>(ctx.func.inst_set(), ctx.func.dfg.inst(inst))
-    {
-        record_read_state(inst, ctx.tracked[*obj_load.object()], state, record);
-        if ctx.promote_loaded_values {
-            promote_loaded_value_to_carrier(ctx.func, inst, ctx.tracked[*obj_load.object()], state);
+    let read = if let Some(load) = downcast::<&data::ObjLoad>(is, data) {
+        ctx.tracked[*load.object()]
+    } else if let Some(tag) = downcast::<&data::EnumGetTag>(is, data) {
+        ctx.tracked[*tag.object()]
+            .and_then(TrackedObject::exact)
+            .and_then(|slice| enum_tag_object_slice(ctx.func.ctx(), slice))
+            .map(TrackedObject::Exact)
+    } else {
+        None
+    };
+    if let Some(read) = read {
+        record_read_state(ctx.func, inst, Some(read), state, record);
+        if let Some(result) = single_result_value(ctx.func, inst) {
+            let facts = read
+                .exact()
+                .map(|slice| slice_initialization(ctx.func, state, slice))
+                .unwrap_or_else(|| InitializedValue::new(ctx.func.dfg.value_ty(result), false));
+            state.initialized_values.insert(result, facts);
         }
-        return;
+
+        if ctx.promote_loaded_values && downcast::<&data::ObjLoad>(is, data).is_some() {
+            promote_loaded_value_to_carrier(ctx.func, inst, Some(read), state);
+        }
     }
 
-    if let Some(enum_get_tag) =
-        downcast::<&data::EnumGetTag>(ctx.func.inst_set(), ctx.func.dfg.inst(inst))
-    {
-        let tracked_tag = ctx.tracked[*enum_get_tag.object()]
-            .as_ref()
-            .copied()
-            .and_then(TrackedObject::exact)
-            .and_then(|slice| enum_tag_object_slice(ctx.func.ctx(), slice))
-            .map(TrackedObject::Exact);
-        record_read_state(inst, tracked_tag, state, record);
-        return;
-    }
-
-    if downcast::<&data::EnumAssertVariantRef>(ctx.func.inst_set(), ctx.func.dfg.inst(inst))
-        .is_some()
-    {
-        return;
-    }
-
-    if let Some(obj_store) =
-        downcast::<&data::ObjStore>(ctx.func.inst_set(), ctx.func.dfg.inst(inst))
-    {
-        apply_exact_value_write(
-            inst,
-            ctx.tracked[*obj_store.object()],
-            ctx.provenance.may_roots(*obj_store.object()),
-            ctx.relevant_slices,
-            *obj_store.value(),
-            state,
-            record,
-        );
-        return;
-    }
-
-    if let Some(enum_set_tag) =
-        downcast::<&data::EnumSetTag>(ctx.func.inst_set(), ctx.func.dfg.inst(inst))
-    {
-        if let Some(tag_slice) = ctx.tracked[*enum_set_tag.object()]
-            .as_ref()
-            .copied()
-            .and_then(TrackedObject::exact)
-            .and_then(|slice| enum_tag_object_slice(ctx.func.ctx(), slice))
-        {
-            apply_unknown_slice_write(inst, tag_slice, ctx.relevant_slices, state, record);
+    let effects = &ctx.effects[&inst];
+    for &(value, variant) in &effects.variant_assumptions {
+        if ctx.func.dfg.value_ty(value).is_obj_ref(ctx.func.ctx()) {
+            if let Some(slice) = ctx.tracked[value].and_then(TrackedObject::exact)
+                && state.active_roots.contains(&slice.root)
+                && !state.blocked_roots.contains(&slice.root)
+            {
+                let mut facts = slice_initialization(ctx.func, state, slice);
+                facts.assume_variant(variant);
+                mark_slice_initialized(ctx.func, state, slice, facts);
+            }
         } else {
-            block_possible_roots(
-                state,
-                ctx.provenance.may_roots(*enum_set_tag.object()),
-                inst,
-                record,
+            let mut facts = value_initialization(
+                ctx.func,
+                value,
+                &state.initialized_values,
+                &mut shape::AggregateLayoutCache::default(),
             );
+            facts.assume_variant(variant);
+            state.initialized_values.insert(value, facts);
+        }
+    }
+    if effects.writes.is_empty() && effects.unreadable.is_empty() {
+        if is_call {
+            activate_defined_root(ctx, inst, state);
         }
         return;
     }
+    // Evaluate sources in the pre-write state, including partial/self copies.
+    let mut layout = shape::AggregateLayoutCache::default();
+    let initialized: Vec<_> = effects
+        .initialization
+        .iter()
+        .map(|write| {
+            let slice = ctx.accesses.write_slice(write.destination);
+            let value = match write.source {
+                ObjectInitializationSource::Intrinsic => InitializedValue::new(slice.ty, true),
+                ObjectInitializationSource::Value(value) => {
+                    value_initialization(ctx.func, value, &state.initialized_values, &mut layout)
+                }
+            };
+            (write, value)
+        })
+        .collect();
+    let preserved: Vec<_> = effects
+        .tag_selections
+        .iter()
+        .filter_map(|&(projection, variant)| {
+            let slice = ctx.accesses.projection_slice(projection);
+            (ctx.accesses.single_instance(projection.root_value)
+                && slice_initialization(ctx.func, state, slice).variant() == Some(variant))
+            .then_some(slice)
+        })
+        .collect();
+    let invalidated: Vec<_> = effects
+        .writes
+        .iter()
+        .chain(effects.unreadable.iter().filter(|access| {
+            !preserved.iter().any(|slice| {
+                matches!(access, ObjectAccess::Exact(projection)
+                    if projection.root_value.value() == slice.root
+                        && projection.slice.first_leaf == slice.first_leaf
+                        && projection.slice.leaf_count == slice.leaf_count)
+            })
+        }))
+        .copied()
+        .collect();
 
-    if let Some(enum_write_variant) =
-        downcast::<&data::EnumWriteVariant>(ctx.func.inst_set(), ctx.func.dfg.inst(inst))
-    {
-        let Some(base_slice) = ctx.tracked[*enum_write_variant.object()]
-            .as_ref()
-            .copied()
-            .and_then(TrackedObject::exact)
-        else {
-            block_possible_roots(
-                state,
-                ctx.provenance.may_roots(*enum_write_variant.object()),
-                inst,
-                record,
-            );
-            return;
+    // Writers need not be tracked, active, or eligible for value propagation.
+    // Logical invalidation also breaks snapshot equality: restoring a tag does
+    // not restore the old payload's readability, even if its bytes survived.
+    for slices in ctx.relevant_slices.values() {
+        for &slice in slices {
+            if invalidated
+                .iter()
+                .any(|&write| ctx.accesses.may_overlap(write, slice))
+            {
+                record_clobber(record, inst, slice);
+                if state.active_roots.contains(&slice.root)
+                    && !state.blocked_roots.contains(&slice.root)
+                {
+                    state.carriers.insert(
+                        slice,
+                        MemoryCarrier::Token {
+                            token: ObjectMemToken::Inst { inst },
+                            slice,
+                        },
+                    );
+                }
+            }
+        }
+    }
+    for (&root, value) in &mut state.initialized {
+        let Some(root_slice) = whole_root_slice_for_value(ctx.tracked, root) else {
+            continue;
         };
-
-        if let Some(tag_slice) = enum_tag_object_slice(ctx.func.ctx(), base_slice) {
-            apply_unknown_slice_write(inst, tag_slice, ctx.relevant_slices, state, record);
-        }
-        for (field_idx, &value) in enum_write_variant.values().iter().enumerate() {
-            let Some(field_idx) = u32::try_from(field_idx).ok() else {
+        for &access in &invalidated {
+            if !ctx.accesses.may_overlap(access, root_slice) {
                 continue;
-            };
-            let Some(field_slice) = enum_variant_field_object_slice(
-                ctx.func.ctx(),
-                base_slice,
-                *enum_write_variant.variant(),
-                field_idx,
-            ) else {
-                continue;
-            };
-            apply_known_slice_write(inst, field_slice, value, ctx.relevant_slices, state, record);
+            }
+            if let ObjectAccess::Exact(projection) = access
+                && projection.root_value.value() == root
+            {
+                value.forget(ctx.func.ctx(), projection.slice, &mut layout);
+            } else {
+                *value = InitializedValue::new(root_slice.ty, false);
+            }
         }
-        return;
     }
-
-    if is_pure_object_address_inst(ctx.func, inst) {
-        return;
+    for &(projection, variant) in &effects.tag_selections {
+        let slice = ctx.accesses.projection_slice(projection);
+        if state.active_roots.contains(&slice.root)
+            && !state.blocked_roots.contains(&slice.root)
+            && ctx.accesses.single_instance(projection.root_value)
+        {
+            let mut facts = slice_initialization(ctx.func, state, slice);
+            facts.select(ctx.func.ctx(), variant);
+            mark_slice_initialized(ctx.func, state, slice, facts);
+        }
     }
-
-    block_observed_roots(ctx.func, inst, ctx.provenance, state, record);
+    for (write, value) in initialized {
+        let slice = ctx.accesses.write_slice(write.destination);
+        if !state.active_roots.contains(&slice.root)
+            || state.blocked_roots.contains(&slice.root)
+            || !ctx.accesses.write_covers(write.destination, slice)
+        {
+            continue;
+        }
+        let defined = value.defined(ctx.func.ctx());
+        mark_slice_initialized(ctx.func, state, slice, value);
+        if defined && let ObjectInitializationSource::Value(value) = write.source {
+            for &relevant in ctx.relevant_slices.get(&slice.root).into_iter().flatten() {
+                if ctx.accesses.write_covers(write.destination, relevant) {
+                    state
+                        .carriers
+                        .insert(relevant, MemoryCarrier::Value { value, slice });
+                }
+            }
+        }
+    }
+    if is_call {
+        activate_defined_root(ctx, inst, state);
+    }
 }
 
-fn activate_defined_root(
-    func: &Function,
-    inst: InstId,
-    tracked: &SecondaryMap<ValueId, Option<TrackedObject>>,
-    relevant_slices: &FxHashMap<ValueId, Vec<ObjectSlice>>,
-    state: &mut MemoryState,
-) {
-    let Some(result) = single_result_value(func, inst) else {
+fn activate_defined_root(ctx: &TransferCtx<'_>, inst: InstId, state: &mut MemoryState) {
+    let Some(result) = single_result_value(ctx.func, inst) else {
         return;
     };
-    let Some(root_slice) = whole_root_slice_for_value(tracked, result) else {
+    let Some(root_slice) = whole_root_slice_for_value(ctx.tracked, result) else {
         return;
     };
     if state.active_roots.contains(&root_slice.root) {
         return;
     }
-
     activate_root(
         state,
         root_slice,
         ObjectMemToken::Inst { inst },
-        relevant_slices,
+        ctx.relevant_slices,
     );
-    state.initialized_leaves.entry(root_slice.root).or_default();
+    state
+        .initialized
+        .insert(root_slice.root, InitializedValue::new(root_slice.ty, false));
+    if !ctx
+        .accesses
+        .single_instance(RootValue::new(root_slice.root))
+    {
+        state.blocked_roots.insert(root_slice.root);
+    }
 }
 
 fn record_read_state(
+    func: &Function,
     inst: InstId,
     tracked_object: Option<TrackedObject>,
     state: &MemoryState,
@@ -707,7 +861,7 @@ fn record_read_state(
         ObjectReadState {
             read_slice: slice,
             key,
-            may_be_undef: !slice_is_fully_initialized(state, slice),
+            may_be_undef: !slice_initialization(func, state, slice).defined(func.ctx()),
         },
     );
 }
@@ -746,168 +900,6 @@ fn promote_loaded_value_to_carrier(
     );
 }
 
-#[allow(clippy::too_many_arguments)]
-fn apply_exact_value_write(
-    inst: InstId,
-    tracked_object: Option<TrackedObject>,
-    possible_roots: MayRootSet<'_>,
-    relevant_slices: &FxHashMap<ValueId, Vec<ObjectSlice>>,
-    value: ValueId,
-    state: &mut MemoryState,
-    record: &mut Option<&mut ObjectMemoryAnalysis>,
-) {
-    if let Some(slice) = tracked_object.and_then(TrackedObject::exact) {
-        apply_known_slice_write(inst, slice, value, relevant_slices, state, record);
-    } else {
-        block_possible_roots(state, possible_roots, inst, record);
-    }
-}
-
-fn apply_known_slice_write(
-    inst: InstId,
-    slice: ObjectSlice,
-    value: ValueId,
-    relevant_slices: &FxHashMap<ValueId, Vec<ObjectSlice>>,
-    state: &mut MemoryState,
-    record: &mut Option<&mut ObjectMemoryAnalysis>,
-) {
-    if !state.active_roots.contains(&slice.root) || state.blocked_roots.contains(&slice.root) {
-        return;
-    }
-
-    for &relevant in relevant_slices.get(&slice.root).into_iter().flatten() {
-        if !slices_overlap(relevant, slice) {
-            continue;
-        }
-        let carrier = if slice_is_covered_by(slice, relevant) {
-            MemoryCarrier::Value { value, slice }
-        } else {
-            MemoryCarrier::Token {
-                token: ObjectMemToken::Inst { inst },
-                slice: relevant,
-            }
-        };
-        state.carriers.insert(relevant, carrier);
-    }
-    mark_slice_initialized(state, slice);
-    record_clobber(record, inst, ObjectClobber::Slice(slice));
-}
-
-fn apply_call_transfer(
-    ctx: &TransferCtx<'_>,
-    inst: InstId,
-    call: &control_flow::Call,
-    state: &mut MemoryState,
-    record: &mut Option<&mut ObjectMemoryAnalysis>,
-) {
-    let Some(summary) = ctx
-        .object_effects
-        .and_then(|effects| effects.get(call.callee()))
-    else {
-        block_observed_roots(ctx.func, inst, ctx.provenance, state, record);
-        return;
-    };
-
-    for (idx, &arg) in call.args().iter().enumerate() {
-        let Some(effect) = summary.arg_effects.get(idx) else {
-            continue;
-        };
-        if effect.needs_unknown_object_barrier() {
-            block_possible_roots(state, ctx.provenance.may_roots(arg), inst, record);
-            continue;
-        }
-
-        if let Some(slice) = ctx.tracked[arg].and_then(TrackedObject::exact) {
-            apply_slice_set_write(
-                inst,
-                slice,
-                &effect.writes,
-                ctx.relevant_slices,
-                state,
-                record,
-            );
-        } else if !effect.writes.is_empty() {
-            block_possible_roots(state, ctx.provenance.may_roots(arg), inst, record);
-        }
-    }
-}
-
-fn apply_slice_set_write(
-    inst: InstId,
-    base_slice: ObjectSlice,
-    writes: &SliceSet,
-    relevant_slices: &FxHashMap<ValueId, Vec<ObjectSlice>>,
-    state: &mut MemoryState,
-    record: &mut Option<&mut ObjectMemoryAnalysis>,
-) {
-    if writes.is_empty()
-        || !state.active_roots.contains(&base_slice.root)
-        || state.blocked_roots.contains(&base_slice.root)
-    {
-        return;
-    }
-
-    if writes.is_whole_root() || base_slice.leaf_count != writes.total_leaves() {
-        apply_unknown_slice_write(inst, base_slice, relevant_slices, state, record);
-        return;
-    }
-
-    let Some(leaves) = writes.exact_leaves() else {
-        apply_unknown_slice_write(inst, base_slice, relevant_slices, state, record);
-        return;
-    };
-
-    for &relevant in relevant_slices.get(&base_slice.root).into_iter().flatten() {
-        if !object_slice_overlaps_effect(relevant, base_slice, leaves) {
-            continue;
-        }
-        state.carriers.insert(
-            relevant,
-            MemoryCarrier::Token {
-                token: ObjectMemToken::Inst { inst },
-                slice: relevant,
-            },
-        );
-    }
-    mark_effect_leaves_initialized(state, base_slice, leaves);
-    record_clobber(
-        record,
-        inst,
-        ObjectClobber::LeafSet {
-            base_slice,
-            leaves: leaves.clone(),
-        },
-    );
-}
-
-fn apply_unknown_slice_write(
-    inst: InstId,
-    slice: ObjectSlice,
-    relevant_slices: &FxHashMap<ValueId, Vec<ObjectSlice>>,
-    state: &mut MemoryState,
-    record: &mut Option<&mut ObjectMemoryAnalysis>,
-) {
-    for &relevant in relevant_slices.get(&slice.root).into_iter().flatten() {
-        if !slices_overlap(relevant, slice) {
-            continue;
-        }
-        let carrier_slice = if slice_is_covered_by(slice, relevant) {
-            slice
-        } else {
-            relevant
-        };
-        state.carriers.insert(
-            relevant,
-            MemoryCarrier::Token {
-                token: ObjectMemToken::Inst { inst },
-                slice: carrier_slice,
-            },
-        );
-    }
-    mark_slice_initialized(state, slice);
-    record_clobber(record, inst, ObjectClobber::Slice(slice));
-}
-
 fn activate_root(
     state: &mut MemoryState,
     root_slice: ObjectSlice,
@@ -926,90 +918,60 @@ fn activate_root(
     }
 }
 
-fn block_all_active_roots(
-    state: &mut MemoryState,
-    inst: InstId,
-    record: &mut Option<&mut ObjectMemoryAnalysis>,
-) {
-    for root in state.active_roots.iter().copied().collect::<Vec<_>>() {
-        state.blocked_roots.insert(root);
-        record_clobber(record, inst, ObjectClobber::Root(root));
-    }
-}
-
-fn block_possible_roots(
-    state: &mut MemoryState,
-    roots: MayRootSet<'_>,
-    inst: InstId,
-    record: &mut Option<&mut ObjectMemoryAnalysis>,
-) {
-    let Some(roots) = roots.exhaustive_known_roots() else {
-        block_all_active_roots(state, inst, record);
-        return;
-    };
-    for root in roots.iter() {
-        state.blocked_roots.insert(root.value());
-        record_clobber(record, inst, ObjectClobber::Root(root.value()));
-    }
-}
-
-fn block_observed_roots(
-    func: &Function,
-    inst: InstId,
-    provenance: MayProvenance<'_>,
-    state: &mut MemoryState,
-    record: &mut Option<&mut ObjectMemoryAnalysis>,
-) {
-    let (roots, observed_unknown) =
-        observed_roots_ignoring_pure_address_ops(func, inst, provenance, &[]);
-    if observed_unknown {
-        block_all_active_roots(state, inst, record);
-        return;
-    }
-    for root in roots {
-        state.blocked_roots.insert(root);
-        record_clobber(record, inst, ObjectClobber::Root(root));
-    }
-}
-
 fn record_clobber(
     record: &mut Option<&mut ObjectMemoryAnalysis>,
     inst: InstId,
-    clobber: ObjectClobber,
+    clobber: ObjectSlice,
 ) {
     if let Some(record) = record.as_deref_mut() {
         record.clobbers.entry(inst).or_default().push(clobber);
     }
 }
 
-fn mark_slice_initialized(state: &mut MemoryState, slice: ObjectSlice) {
-    state
-        .initialized_leaves
-        .entry(slice.root)
-        .or_default()
-        .extend(slice.first_leaf..slice.first_leaf + slice.leaf_count);
-}
-
-fn mark_effect_leaves_initialized(
+fn mark_slice_initialized(
+    func: &Function,
     state: &mut MemoryState,
-    base_slice: ObjectSlice,
-    leaves: &FxHashSet<usize>,
+    slice: ObjectSlice,
+    value: InitializedValue,
 ) {
-    state
-        .initialized_leaves
-        .entry(base_slice.root)
-        .or_default()
-        .extend(leaves.iter().map(|leaf| base_slice.first_leaf + *leaf));
+    if let Some(root) = state.initialized.get_mut(&slice.root) {
+        root.put(
+            func.ctx(),
+            shape::AggregateSlice {
+                ty: slice.ty,
+                first_leaf: slice.first_leaf,
+                leaf_count: slice.leaf_count,
+            },
+            value,
+            &mut shape::AggregateLayoutCache::default(),
+        );
+    } else {
+        state.initialized.insert(slice.root, value);
+    }
 }
 
-fn slice_is_fully_initialized(state: &MemoryState, slice: ObjectSlice) -> bool {
-    state
-        .initialized_leaves
-        .get(&slice.root)
-        .is_some_and(|initialized| {
-            (slice.first_leaf..slice.first_leaf + slice.leaf_count)
-                .all(|leaf| initialized.contains(&leaf))
-        })
+fn slice_initialization(
+    func: &Function,
+    state: &MemoryState,
+    slice: ObjectSlice,
+) -> InitializedValue {
+    if !state.active_roots.contains(&slice.root) || state.blocked_roots.contains(&slice.root) {
+        return InitializedValue::new(slice.ty, false);
+    }
+    state.initialized.get(&slice.root).map_or_else(
+        || InitializedValue::new(slice.ty, false),
+        |value| {
+            value.at(
+                func.ctx(),
+                shape::AggregateSlice {
+                    ty: slice.ty,
+                    first_leaf: slice.first_leaf,
+                    leaf_count: slice.leaf_count,
+                },
+                &mut shape::AggregateLayoutCache::default(),
+            )
+        },
+    )
 }
 
 fn single_result_value(func: &Function, inst: InstId) -> Option<ValueId> {
@@ -1021,27 +983,24 @@ fn single_result_value(func: &Function, inst: InstId) -> Option<ValueId> {
     }
 }
 
-fn clobber_overlaps_slice(effect: &ObjectClobber, slice: ObjectSlice) -> bool {
-    match effect {
-        ObjectClobber::Slice(effect_slice) => slices_overlap(*effect_slice, slice),
-        ObjectClobber::LeafSet { base_slice, leaves } => {
-            object_slice_overlaps_effect(slice, *base_slice, leaves)
-        }
-        ObjectClobber::Root(root) => *root == slice.root,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::transform::aggregate::{
-        collect_local_object_arg_info_with_effects, compute_object_effect_summaries,
+    use crate::{
+        domtree::DomTree,
+        transform::aggregate::{
+            collect_local_object_arg_info_with_effects, compute_object_effect_summaries,
+        },
     };
-    use sonatina_ir::{Module, module::FuncRef};
+    use sonatina_ir::{Module, Type, module::FuncRef};
     use sonatina_parser::parse_module;
+    use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module};
 
     fn parse_test_module(src: &str) -> Module {
-        parse_module(src).expect("parse should succeed").module
+        let module = parse_module(src).expect("parse should succeed").module;
+        let report = verify_module(&module, &VerifierConfig::for_level(VerificationLevel::Full));
+        assert!(report.is_ok(), "{report}");
+        module
     }
 
     fn lookup_func(module: &Module, name: &str) -> FuncRef {
@@ -1098,7 +1057,7 @@ func private %f(v0.objref<@pair>, v1.i256) -> i256 {
 block0:
     v2.objref<i256> = obj.proj v0 0.i8;
     obj.store v2 v1;
-    call %peek v0;
+    v4.i256 = call %peek v0;
     v3.i256 = obj.load v2;
     return v3;
 }
@@ -1144,6 +1103,765 @@ block0:
         assert!(
             analyzed_read_key(&module, "f").is_none(),
             "stack-materializing helper summary should block tracked object reads entirely"
+        );
+    }
+
+    fn check_memory(
+        source: &str,
+        selected_args: &[usize],
+        check: impl FnOnce(&Function, &ObjectMemoryAnalysis, &[InstId]),
+    ) {
+        let module = parse_test_module(source);
+        let summaries = compute_object_effect_summaries(&module);
+        let selected = selected_args
+            .iter()
+            .map(|&index| (index, LocalObjectArgInfo::Borrowed))
+            .collect();
+        module.func_store.view(lookup_func(&module, "f"), |func| {
+            let mut memory = ObjectMemoryAnalysis::default();
+            memory.compute(func, Some(&selected), Some(&summaries));
+            let loads: Vec<_> = func
+                .layout
+                .iter_block()
+                .flat_map(|block| func.layout.iter_inst(block))
+                .filter(|&inst| {
+                    downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst)).is_some()
+                })
+                .collect();
+            check(func, &memory, &loads);
+        });
+    }
+
+    #[test]
+    fn entry_contents_proof_is_per_read_and_never_restored_by_a_store() {
+        for (effect, after_is_entry) in [
+            ("", true),
+            ("call %readonly v1;", true),
+            ("obj.store v1 22.i256;", false),
+            ("call %write v1;", false),
+            ("call %opaque;", false),
+            ("mstore 0.i256 22.i256 i256;", false),
+            ("obj.store v0 v2;", false),
+        ] {
+            check_memory(
+                &format!(
+                    r#"
+target = "evm-ethereum-osaka"
+declare external %opaque();
+func private %readonly(v0.objref<i256>) {{
+block0:
+    v1.i256 = obj.load v0;
+    return;
+}}
+func private %write(v0.objref<i256>) {{
+block0:
+    obj.store v0 22.i256;
+    return;
+}}
+func private %f(v0.objref<i256>, v1.objref<i256>) -> i256 {{
+block0:
+    v2.i256 = obj.load v0;
+    {effect}
+    v3.i256 = obj.load v0;
+    return v3;
+}}
+"#
+                ),
+                &[0],
+                |func, memory, loads| {
+                    let expected = ObjectSlice {
+                        root: func.arg_values[0],
+                        ty: Type::I256,
+                        first_leaf: 0,
+                        leaf_count: 1,
+                        total_leaves: 1,
+                    };
+                    assert!(
+                        memory.read_observes_entry_contents(loads[0], expected),
+                        "{effect}"
+                    );
+                    assert_eq!(
+                        memory.read_observes_entry_contents(loads[1], expected),
+                        after_is_entry,
+                        "{effect}"
+                    );
+                    assert!(!memory.read_observes_entry_contents(
+                        loads[0],
+                        ObjectSlice {
+                            root: func.arg_values[1],
+                            ..expected
+                        }
+                    ));
+                },
+            );
+        }
+    }
+
+    #[test]
+    fn entry_contents_proof_intersects_loop_backedges_and_diamond_paths() {
+        for (looping, write) in [(false, false), (false, true), (true, false), (true, true)] {
+            let effect = if write { "obj.store v1 22.i256;" } else { "" };
+            let edge = if looping {
+                "jump block1;"
+            } else {
+                "jump block3;"
+            };
+            check_memory(
+                &format!(
+                    r#"
+target = "evm-ethereum-osaka"
+func private %f(v0.objref<i256>, v1.objref<i256>, v2.i1) -> i256 {{
+block0:
+    v3.i256 = obj.load v0;
+    jump block1;
+block1:
+    v4.i256 = obj.load v0;
+    br v2 block2 block3;
+block2:
+    {effect}
+    {edge}
+block3:
+    v5.i256 = obj.load v0;
+    return v5;
+}}
+"#
+                ),
+                &[0],
+                |func, memory, loads| {
+                    let expected = ObjectSlice {
+                        root: func.arg_values[0],
+                        ty: Type::I256,
+                        first_leaf: 0,
+                        leaf_count: 1,
+                        total_leaves: 1,
+                    };
+                    let actual: Vec<_> = loads
+                        .iter()
+                        .map(|&load| memory.read_observes_entry_contents(load, expected))
+                        .collect();
+                    assert_eq!(
+                        actual,
+                        vec![true, !(looping && write), !write],
+                        "looping={looping}, write={write}"
+                    );
+                },
+            );
+        }
+    }
+
+    #[test]
+    fn excluded_writer_invalidates_active_alias_and_records_clobber() {
+        check_memory(
+            r#"
+target = "evm-ethereum-osaka"
+func private %f(v0.objref<i256>, v1.objref<i256>) -> i256 {
+block0:
+    v2.i256 = obj.load v0;
+    obj.store v1 22.i256;
+    v3.i256 = obj.load v0;
+    v4.i256 = add v2 v3;
+    return v4;
+}
+"#,
+            &[0],
+            |func, memory, loads| {
+                let before = memory.read_state(loads[0]).unwrap();
+                let after = memory.read_state(loads[1]).unwrap();
+                assert_ne!(before.key(), after.key());
+                assert!(
+                    after.may_be_undef(),
+                    "an aliased coordinate does not prove initialization"
+                );
+                let store = func.layout.next_inst_of(loads[0]).unwrap();
+                assert!(memory.inst_clobbers_slice(store, before.read_slice()));
+            },
+        );
+    }
+
+    #[test]
+    fn inactive_or_blocked_writer_still_clobbers_an_active_alias() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+func private %f(v0.objref<i256>, v1.objref<i256>) -> i256 {
+block0:
+    v2.i256 = obj.load v0;
+    obj.store v1 22.i256;
+    v3.i256 = obj.load v0;
+    return v3;
+}
+"#,
+        );
+        let summaries = compute_object_effect_summaries(&module);
+        module.func_store.view(lookup_func(&module, "f"), |func| {
+            let accesses = ObjectAccessFacts::new(func, Some(&summaries));
+            let tracked = accesses.tracked_all(func, &mut shape::AggregateLayoutCache::default());
+            let relevant_slices = collect_relevant_slices(func, &tracked);
+            let insts: Vec<_> = func
+                .layout
+                .iter_inst(func.layout.entry_block().unwrap())
+                .collect();
+            let effects = insts
+                .iter()
+                .map(|&inst| (inst, accesses.effects(func, inst, Some(&summaries))))
+                .collect();
+            let ctx = TransferCtx {
+                func,
+                tracked: &tracked,
+                accesses: &accesses,
+                effects: &effects,
+                relevant_slices: &relevant_slices,
+                promote_loaded_values: false,
+            };
+            // Consumer eligibility is independent of the instruction's effect.
+            // Exercise both states directly, without depending on which future
+            // profitability or instance rule caused this writer to be disabled.
+            for blocked in [false, true] {
+                let mut state = initial_state(func, None, &tracked, &relevant_slices, true);
+                if blocked {
+                    state.blocked_roots.insert(func.arg_values[1]);
+                } else {
+                    state.active_roots.remove(&func.arg_values[1]);
+                }
+                let mut memory = ObjectMemoryAnalysis::default();
+                for &inst in &insts {
+                    transfer_inst(&ctx, inst, &mut state, &mut Some(&mut memory));
+                }
+                let before = memory.read_state(insts[0]).unwrap();
+                let after = memory.read_state(insts[2]).unwrap();
+                assert_ne!(before.key(), after.key());
+                assert!(memory.inst_clobbers_slice(insts[1], before.read_slice()));
+            }
+        });
+    }
+
+    #[test]
+    fn conditional_call_neither_establishes_nor_preserves_initialization() {
+        for initial in ["", "obj.store v1 11.i256;"] {
+            check_memory(
+                &format!(
+                    r#"
+target = "evm-ethereum-osaka"
+func private %maybe_write(v0.objref<i256>, v1.i1) {{
+block0:
+    br v1 block1 block2;
+block1:
+    obj.store v0 22.i256;
+    jump block2;
+block2:
+    return;
+}}
+func private %f(v0.i1) -> i256 {{
+block0:
+    v1.objref<i256> = obj.alloc i256;
+    {initial}
+    call %maybe_write v1 v0;
+    v2.i256 = obj.load v1;
+    obj.store v1 33.i256;
+    v3.i256 = obj.load v1;
+    v4.i256 = add v2 v3;
+    return v4;
+}}
+"#
+                ),
+                &[],
+                |_, memory, loads| {
+                    assert!(memory.read_state(loads[0]).unwrap().may_be_undef());
+                    assert!(!memory.read_state(loads[1]).unwrap().may_be_undef());
+                },
+            );
+        }
+    }
+
+    #[test]
+    fn copied_load_keeps_its_own_initialization_snapshot() {
+        for (initial, expected_undef) in [("", true), ("obj.store v0 11.i256;", false)] {
+            check_memory(
+                &format!(
+                    r#"
+target = "evm-ethereum-osaka"
+func private %f() -> i256 {{
+block0:
+    v0.objref<i256> = obj.alloc i256;
+    v1.objref<i256> = obj.alloc i256;
+    {initial}
+    v2.i256 = obj.load v0;
+    obj.store v0 undef.i256;
+    obj.store v1 v2;
+    v3.i256 = obj.load v1;
+    return v3;
+}}
+"#
+                ),
+                &[],
+                |_, memory, loads| {
+                    assert_eq!(
+                        memory.read_state(loads[0]).unwrap().may_be_undef(),
+                        expected_undef
+                    );
+                    assert_eq!(
+                        memory.read_state(loads[1]).unwrap().may_be_undef(),
+                        expected_undef
+                    );
+                },
+            );
+        }
+    }
+
+    #[test]
+    fn sibling_write_preserves_read_key_initialization_and_clobber_precision() {
+        check_memory(
+            r#"
+target = "evm-ethereum-osaka"
+type @Pair = { i256, i256 };
+func private %f(v0.objref<@Pair>) -> i256 {
+block0:
+    v1.objref<i256> = obj.proj v0 0.i8;
+    v2.objref<i256> = obj.proj v0 1.i8;
+    v3.i256 = obj.load v1;
+    obj.store v2 22.i256;
+    v4.i256 = obj.load v1;
+    v5.i256 = add v3 v4;
+    return v5;
+}
+"#,
+            &[0],
+            |func, memory, loads| {
+                let before = memory.read_state(loads[0]).unwrap();
+                let after = memory.read_state(loads[1]).unwrap();
+                assert_eq!(before.key(), after.key());
+                assert!(!after.may_be_undef());
+                let store = func.layout.next_inst_of(loads[0]).unwrap();
+                assert!(!memory.inst_clobbers_slice(store, before.read_slice()));
+            },
+        );
+    }
+    #[test]
+    fn ambient_write_clobbers_incoming_but_preserves_private_fresh_memory() {
+        for write in ["call %opaque;", "mstore 0.i256 22.i256 i256;"] {
+            check_memory(
+                &format!(
+                    r#"
+target = "evm-ethereum-osaka"
+declare external %opaque();
+func private %f(v0.objref<i256>) -> i256 {{
+block0:
+    v1.objref<i256> = obj.alloc i256;
+    obj.store v1 11.i256;
+    v2.i256 = obj.load v0;
+    v3.i256 = obj.load v1;
+    {write}
+    v4.i256 = obj.load v0;
+    v5.i256 = obj.load v1;
+    v6.i256 = add v2 v3;
+    v7.i256 = add v4 v5;
+    v8.i256 = add v6 v7;
+    return v8;
+}}
+"#
+                ),
+                &[0],
+                |_, memory, loads| {
+                    let reads: Vec<_> = loads
+                        .iter()
+                        .map(|&load| memory.read_state(load).unwrap())
+                        .collect();
+                    assert_ne!(reads[0].key(), reads[2].key());
+                    assert!(reads[2].may_be_undef());
+                    assert_eq!(reads[1].key(), reads[3].key());
+                    assert!(!reads[3].may_be_undef());
+                },
+            );
+        }
+    }
+
+    #[test]
+    fn loop_alias_write_blocks_invariance_but_sibling_write_does_not() {
+        for (destination, invariant) in [("v1", false), ("v4", true)] {
+            check_memory(
+                &format!(
+                    r#"
+target = "evm-ethereum-osaka"
+type @Pair = {{ i256, i256 }};
+func private %f(v0.objref<@Pair>, v1.objref<i256>, v2.i1) -> i256 {{
+block0:
+    v3.objref<i256> = obj.proj v0 0.i8;
+    v4.objref<i256> = obj.proj v0 1.i8;
+    jump block1;
+block1:
+    v5.i256 = obj.load v3;
+    obj.store {destination} 22.i256;
+    br v2 block1 block2;
+block2:
+    return v5;
+}}
+"#
+                ),
+                &[0],
+                |func, memory, loads| {
+                    let mut cfg = ControlFlowGraph::new();
+                    cfg.compute(func);
+                    let mut domtree = DomTree::new();
+                    domtree.compute(&cfg);
+                    let mut loops = LoopTree::new();
+                    loops.compute(&cfg, &domtree);
+                    let lp = loops.loops().next().unwrap();
+                    assert_eq!(
+                        memory.read_is_loop_invariant(func, &cfg, &loops, lp, loads[0]),
+                        invariant
+                    );
+                },
+            );
+        }
+    }
+    #[test]
+    fn repeating_allocation_site_does_not_supply_single_instance_read_facts() {
+        check_memory(
+            r#"
+target = "evm-ethereum-osaka"
+func private %f(v0.i1) -> i256 {
+block0:
+    jump block1;
+block1:
+    v1.objref<i256> = obj.alloc i256;
+    obj.store v1 11.i256;
+    v2.i256 = obj.load v1;
+    br v0 block1 block2;
+block2:
+    return v2;
+}
+"#,
+            &[],
+            |_, memory, loads| {
+                assert!(memory.read_state(loads[0]).is_none());
+            },
+        );
+    }
+    #[test]
+    fn enum_tag_selection_preserves_only_the_same_active_payload() {
+        for (variant, defined) in [("Some", true), ("Other", false), ("None", true)] {
+            check_memory(
+                &format!(
+                    r#"
+target = "evm-ethereum-osaka"
+type @Choice = enum {{ #None, #Some(i256), #Other(i256) }};
+func private %observe(v0.objref<@Choice>) {{
+block0:
+    return;
+}}
+func private %f() {{
+block0:
+    v0.objref<@Choice> = obj.alloc @Choice;
+    enum.write_variant v0 #Some (11.i256);
+    enum.set_tag v0 #{variant};
+    call %observe v0;
+    return;
+}}
+"#
+                ),
+                &[],
+                |func, memory, _| {
+                    let call = func
+                        .layout
+                        .iter_block()
+                        .flat_map(|b| func.layout.iter_inst(b))
+                        .find(|&inst| {
+                            downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(inst))
+                                .is_some()
+                        })
+                        .unwrap();
+                    let state = &memory.inst_pre_states[&call];
+                    assert_eq!(
+                        state
+                            .initialized
+                            .values()
+                            .next()
+                            .unwrap()
+                            .defined(func.ctx()),
+                        defined
+                    );
+                },
+            );
+        }
+    }
+
+    #[test]
+    fn enum_snapshot_copies_active_payload_without_requiring_inactive_slots() {
+        check_memory(
+            r#"
+target = "evm-ethereum-osaka"
+type @Choice = enum { #None, #Some(i256), #Other(i256) };
+func private %f() -> @Choice {
+block0:
+    v0.objref<@Choice> = obj.alloc @Choice;
+    v1.objref<@Choice> = obj.alloc @Choice;
+    enum.write_variant v0 #Some (11.i256);
+    v2.@Choice = obj.load v0;
+    enum.set_tag v0 #Other;
+    obj.store v1 v2;
+    v3.@Choice = obj.load v1;
+    return v3;
+}
+"#,
+            &[],
+            |_, memory, loads| {
+                assert_eq!(loads.len(), 2);
+                for &load in loads {
+                    assert!(!memory.read_state(load).unwrap().may_be_undef());
+                }
+            },
+        );
+    }
+
+    #[test]
+    fn aggregate_construction_and_partial_snapshot_preserve_field_definedness() {
+        for (field, undefined) in [("11.i256", false), ("undef.i256", true)] {
+            check_memory(
+                &format!(
+                    r#"
+target = "evm-ethereum-osaka"
+type @Pair = {{ i256, i256 }};
+func private %f() -> i256 {{
+block0:
+    v0.objref<@Pair> = obj.alloc @Pair;
+    v1.objref<@Pair> = obj.alloc @Pair;
+    v2.@Pair = insert_value undef.@Pair 0.i8 {field};
+    v3.@Pair = insert_value v2 1.i8 22.i256;
+    obj.store v0 v3;
+    v4.@Pair = obj.load v0;
+    obj.store v0 undef.@Pair;
+    obj.store v1 v4;
+    v5.objref<i256> = obj.proj v1 0.i8;
+    v6.objref<i256> = obj.proj v1 1.i8;
+    v7.i256 = obj.load v5;
+    v8.i256 = obj.load v6;
+    v9.i256 = add v7 v8;
+    return v9;
+}}
+"#
+                ),
+                &[],
+                |_, memory, loads| {
+                    assert_eq!(
+                        memory.read_state(loads[0]).unwrap().may_be_undef(),
+                        undefined
+                    );
+                    assert_eq!(
+                        memory.read_state(loads[1]).unwrap().may_be_undef(),
+                        undefined
+                    );
+                    assert!(!memory.read_state(loads[2]).unwrap().may_be_undef());
+                },
+            );
+        }
+    }
+
+    #[test]
+    fn scalar_computation_from_defined_field_ignores_undefined_sibling() {
+        check_memory(
+            r#"
+target = "evm-ethereum-osaka"
+type @Pair = { i256, i256 };
+func private %f() -> i256 {
+block0:
+    v0.objref<i256> = obj.alloc i256;
+    v1.@Pair = insert_value undef.@Pair 0.i8 11.i256;
+    v2.i256 = extract_value v1 0.i8;
+    v3.i256 = add v2 1.i256;
+    obj.store v0 v3;
+    v4.i256 = obj.load v0;
+    return v4;
+}
+"#,
+            &[],
+            |_, memory, loads| {
+                assert!(!memory.read_state(loads[0]).unwrap().may_be_undef());
+            },
+        );
+    }
+
+    #[test]
+    fn million_element_array_initialization_uses_sparse_subtrees() {
+        check_memory(
+            r#"
+target = "evm-ethereum-osaka"
+func private %f(v0.objref<[i256; 1000000]>) -> i256 {
+block0:
+    v1.objref<i256> = obj.index v0 123456.i256;
+    v2.objref<i256> = obj.index v0 999999.i256;
+    obj.store v1 undef.i256;
+    v3.i256 = obj.load v1;
+    v4.i256 = obj.load v2;
+    v5.i256 = add v3 v4;
+    return v5;
+}
+"#,
+            &[0],
+            |_, memory, loads| {
+                assert!(memory.read_state(loads[0]).unwrap().may_be_undef());
+                assert!(!memory.read_state(loads[1]).unwrap().may_be_undef());
+            },
+        );
+    }
+    #[test]
+    fn variant_assertion_refines_tag_without_defining_scalar_payload() {
+        for (allocate, args, selected, undefined) in [
+            ("v0.objref<@Choice> = obj.alloc @Choice;", "", &[][..], true),
+            ("", "v0.objref<@Choice>", &[0][..], false),
+        ] {
+            check_memory(
+                &format!(
+                    r#"
+target = "evm-ethereum-osaka"
+type @Choice = enum {{ #None, #Some(i256) }};
+func private %f({args}) -> i256 {{
+block0:
+    {allocate}
+    v1.objref<@Choice> = enum.assert_variant_ref v0 #Some;
+    v2.objref<i256> = enum.proj v1 #Some 0.i8;
+    v3.i256 = obj.load v2;
+    return v3;
+}}
+"#
+                ),
+                selected,
+                |func, memory, loads| {
+                    let read = memory.read_state(loads[0]).unwrap();
+                    assert_eq!(read.may_be_undef(), undefined);
+                    let assertion = func
+                        .layout
+                        .iter_block()
+                        .flat_map(|b| func.layout.iter_inst(b))
+                        .find(|&inst| {
+                            downcast::<&data::EnumAssertVariantRef>(
+                                func.inst_set(),
+                                func.dfg.inst(inst),
+                            )
+                            .is_some()
+                        })
+                        .unwrap();
+                    assert!(!memory.inst_clobbers_slice(assertion, read.read_slice()));
+                },
+            );
+        }
+    }
+
+    #[test]
+    fn variant_value_assumption_does_not_define_undefined_scalar() {
+        for (payload, undefined) in [("11.i256", false), ("undef.i256", true)] {
+            check_memory(
+                &format!(
+                    r#"
+target = "evm-ethereum-osaka"
+type @Choice = enum {{ #None, #Some(i256) }};
+func private %f() -> i256 {{
+block0:
+    v0.@Choice = enum.make @Choice #Some ({payload});
+    enum.assert_variant v0 #Some;
+    v1.i256 = enum.extract v0 #Some 0.i8;
+    v2.objref<i256> = obj.alloc i256;
+    obj.store v2 v1;
+    v3.i256 = obj.load v2;
+    return v3;
+}}
+"#
+                ),
+                &[],
+                |_, memory, loads| {
+                    assert_eq!(
+                        memory.read_state(loads[0]).unwrap().may_be_undef(),
+                        undefined
+                    );
+                },
+            );
+        }
+    }
+
+    #[test]
+    fn different_initialized_variants_join_as_a_defined_enum() {
+        check_memory(
+            r#"
+target = "evm-ethereum-osaka"
+type @Choice = enum { #None, #Some(i256), #Other(i256) };
+func private %f(v0.i1) -> @Choice {
+block0:
+    v1.objref<@Choice> = obj.alloc @Choice;
+    br v0 block1 block2;
+block1:
+    enum.write_variant v1 #Some (11.i256);
+    jump block3;
+block2:
+    enum.write_variant v1 #Other (22.i256);
+    jump block3;
+block3:
+    v2.@Choice = obj.load v1;
+    return v2;
+}
+"#,
+            &[],
+            |_, memory, loads| {
+                assert!(!memory.read_state(loads[0]).unwrap().may_be_undef());
+            },
+        );
+    }
+    #[test]
+    fn trusted_variant_assumption_does_not_initialize_an_undefined_tag() {
+        check_memory(
+            r#"
+target = "evm-ethereum-osaka"
+type @Choice = enum { #None, #Some(i256) };
+func private %f() -> enumtag(@Choice) {
+block0:
+    v0.objref<@Choice> = obj.alloc @Choice;
+    v1.objref<@Choice> = enum.assert_variant_ref v0 #None;
+    v2.enumtag(@Choice) = enum.get_tag v1;
+    return v2;
+}
+"#,
+            &[],
+            |func, memory, _| {
+                let tag = func
+                    .layout
+                    .iter_block()
+                    .flat_map(|b| func.layout.iter_inst(b))
+                    .find(|&inst| {
+                        downcast::<&data::EnumGetTag>(func.inst_set(), func.dfg.inst(inst))
+                            .is_some()
+                    })
+                    .unwrap();
+                assert!(memory.read_state(tag).unwrap().may_be_undef());
+            },
+        );
+    }
+    #[test]
+    fn value_analysis_limit_keeps_initialization_conservative() {
+        let inserts: String = (2..=300)
+            .map(|index| {
+                let previous = index - 1;
+                format!("    v{index}.@Pair = insert_value v{previous} 0.i8 11.i256;\n")
+            })
+            .collect();
+        check_memory(
+            &format!(
+                r#"
+target = "evm-ethereum-osaka"
+type @Pair = {{ i256, i256 }};
+func private %f() -> @Pair {{
+block0:
+    v0.objref<@Pair> = obj.alloc @Pair;
+    v1.@Pair = insert_value undef.@Pair 0.i8 11.i256;
+{inserts}
+    v301.@Pair = insert_value v300 1.i8 22.i256;
+    obj.store v0 v301;
+    v302.@Pair = obj.load v0;
+    return v302;
+}}
+"#
+            ),
+            &[],
+            |_, memory, loads| {
+                assert!(memory.read_state(loads[0]).unwrap().may_be_undef());
+            },
         );
     }
 }

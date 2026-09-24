@@ -45,12 +45,13 @@ impl ObjectLowerToMemory {
         self.run_with_local_object_arg_set(module, &local_object_args)
     }
 
-    pub(crate) fn run_with_local_object_args(
+    pub(super) fn run_with_local_object_args(
         &mut self,
         module: &Module,
         local_object_args: &LocalObjectArgMap,
     ) -> bool {
-        let local_object_args = object_locality::info_to_local_object_args(local_object_args);
+        let local_object_args =
+            object_locality::info_to_local_object_args(module, local_object_args);
         self.run_with_local_object_arg_set(module, &local_object_args)
     }
 

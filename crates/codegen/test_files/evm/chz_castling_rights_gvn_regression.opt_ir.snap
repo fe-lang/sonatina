@@ -27,253 +27,226 @@ type @layout_5 = enum {
 func private %main_root() {
     block0:
         v8.objref<@layout_2> = obj.alloc @layout_2;
-        v10.*i8 = alloca i8;
-        v11.*i8 = alloca i8;
-        v12.*i8 = alloca i8;
-        v16.*i16 = alloca i16;
-        v17.*i16 = alloca i16;
-        v202.*i8 = alloca i8;
-        mstore v202 7.i8 i8;
-        v230.i256 = ptr_to_int v202 i256;
-        jump block41;
+        v149.*i8 = alloca i8;
+        mstore v149 7.i8 i8;
+        v151.i256 = ptr_to_int v149 i256;
+        jump block32;
 
-    block35:
-        v236.i256 = mload v230 i256;
-        v237.i8 = trunc v236 i8;
-        (v238.i8, v239.i1) = usubo v237 1.i8;
-        br v239 block36 block42;
+    block30:
+        v155.i256 = mload v151 i256;
+        v156.i8 = trunc v155 i8;
+        (v157.i8, v158.i1) = usubo v156 1.i8;
+        br v158 block31 block33;
 
-    block36:
+    block31:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
         mstore 4.i256 17.i256 i256;
         evm_revert 0.i256 36.i256;
 
+    block32:
+        v152.i8 = mload v149 i8;
+        v154.i1 = gt v152 1.i8;
+        br v154 block30 block36;
+
+    block33:
+        v159.i256 = zext v157 i256;
+        mstore v151 v159 i256;
+        v160.i8 = mload v149 i8;
+        (v161.i8, v162.i1) = umulo v160 8.i8;
+        br v162 block31 block35;
+
+    block35:
+        v168.i256 = zext v161 i256;
+        v169.i256 = shl 2.i256 v168;
+        v170.i256 = shr v169 24736182426257386421843701014581903457152858201991735900572260061420060676.i256;
+        v171.i256 = and v170 15.i256;
+        v172.i8 = trunc v171 i8;
+        v173.i1 = is_zero v172;
+        br v173 block32 block36;
+
+    block36:
+        v175.i1 = phi (0.i1 block35) (1.i1 block32);
+        br v175 block41 block37;
+
+    block37:
+        v176.@layout_0 = enum.make @layout_0 #BlockedPath;
+        v177.@layout_2 = enum.make @layout_2 #Err v176;
+        jump block46;
+
     block41:
-        v234.i8 = mload v202 i8;
-        v235.i1 = gt v234 1.i8;
-        br v235 block35 block45;
-
-    block42:
-        v240.i256 = zext v238 i256;
-        mstore v230 v240 i256;
-        v243.i8 = mload v202 i8;
-        (v244.i8, v245.i1) = umulo v243 8.i8;
-        br v245 block36 block44;
-
-    block44:
-        v251.i256 = zext v244 i256;
-        v252.i256 = shl 2.i256 v251;
-        v253.i256 = shr v252 24736182426257386421843701014581903457152858201991735900572260061420060676.i256;
-        v254.i256 = and v253 15.i256;
-        v255.i8 = trunc v254 i8;
-        v256.i1 = is_zero v255;
-        br v256 block41 block45;
-
-    block45:
-        v258.i1 = phi (0.i1 block44) (1.i1 block41);
-        br v258 block49 block46;
+        v188.objref<@layout_1> = obj.alloc @layout_1;
+        v189.objref<i256> = obj.proj v188 0.i256;
+        obj.store v189 24735858906897380614166165010400859221584774556258665413702486818097070092.i256;
+        v190.objref<i256> = obj.proj v188 1.i256;
+        obj.store v190 33019708703206.i256;
+        v191.objref<i1> = obj.proj v188 2.i256;
+        obj.store v191 1.i1;
+        v193.objref<i1> = obj.proj v188 3.i256;
+        obj.store v193 0.i1;
+        v194.objref<i1> = obj.proj v188 4.i256;
+        obj.store v194 0.i1;
+        v195.objref<i8> = obj.proj v188 5.i256;
+        obj.store v195 8.i8;
+        v197.objref<i1> = obj.proj v188 6.i256;
+        obj.store v197 0.i1;
+        v198.@layout_1 = obj.load v188;
+        v199.@layout_2 = enum.make @layout_2 #Ok v198;
+        jump block46;
 
     block46:
-        v259.@layout_0 = enum.make @layout_0 #BlockedPath;
-        v260.@layout_2 = enum.make @layout_2 #Err v259;
-        jump block55;
+        v200.@layout_2 = phi (v177 block37) (v199 block41);
+        v201.enumtag(@layout_2) = enum.tag v200;
+        br_table v201 block86 (0.enumtag(@layout_2) block87) (1.enumtag(@layout_2) block88);
 
-    block49:
-        v281.objref<@layout_1> = obj.alloc @layout_1;
-        v282.objref<i256> = obj.proj v281 0.i256;
-        obj.store v282 24735858906897380614166165010400859221584774556258665413702486818097070092.i256;
-        v283.objref<i256> = obj.proj v281 1.i256;
-        obj.store v283 33019708703206.i256;
-        v284.objref<i1> = obj.proj v281 2.i256;
-        obj.store v284 1.i1;
-        v286.objref<i1> = obj.proj v281 3.i256;
-        obj.store v286 0.i1;
-        v287.objref<i1> = obj.proj v281 4.i256;
-        obj.store v287 0.i1;
-        v288.objref<i8> = obj.proj v281 5.i256;
-        obj.store v288 8.i8;
-        v290.objref<i1> = obj.proj v281 6.i256;
-        obj.store v290 0.i1;
-        v291.@layout_1 = obj.load v281;
-        v292.@layout_2 = enum.make @layout_2 #Ok v291;
-        jump block55;
+    block54:
+        v230.@layout_2 = obj.load v8;
+        enum.assert_variant v230 #Err;
+        v231.@layout_0 = enum.extract v230 #Err 0.i256;
+        v232.@layout_5 = enum.make @layout_5 #Err v231;
+        jump block2;
 
     block55:
-        v293.@layout_2 = phi (v260 block46) (v292 block49);
-        v294.enumtag(@layout_2) = enum.tag v293;
-        br_table v294 block95 (0.enumtag(@layout_2) block96) (1.enumtag(@layout_2) block97);
+        v233.@layout_2 = obj.load v8;
+        enum.assert_variant v233 #Ok;
+        v234.@layout_1 = enum.extract v233 #Ok 0.i256;
+        v248.i8 = extract_value v234 5.i256;
+        v249.i1 = is_zero v248;
+        br v249 block61 block60;
 
-    block63:
-        v323.@layout_2 = obj.load v8;
-        enum.assert_variant v323 #Err;
-        v324.@layout_0 = enum.extract v323 #Err 0.i256;
-        v325.@layout_5 = enum.make @layout_5 #Err v324;
+    block60:
+        v250.i8 = not v248;
+        v251.i8 = and 3.i8 v250;
+        v252.i256 = bitcast v251 i256;
+        v253.i8 = trunc v252 i8;
+        jump block61;
+
+    block61:
+        v254.i8 = phi (v253 block60) (3.i8 block55);
+        v259.i8 = and v254 -3.i8;
+        v260.i256 = bitcast v259 i256;
+        v261.i8 = trunc v260 i8;
+        v278.i256 = extract_value v234 1.i256;
+        v279.i256 = and v278 -31.i256;
+        v280.i256 = zext v261 i256;
+        v281.i256 = and v280 15.i256;
+        v282.i256 = shl 1.i256 v281;
+        v283.i256 = or v279 v282;
+        v284.i1 = extract_value v234 4.i256;
+        br v284 block73 block74;
+
+    block73:
+        v286.i256 = and v283 -481.i256;
+        jump block75;
+
+    block74:
+        v291.i256 = and v283 -481.i256;
+        v293.i256 = or v291 480.i256;
+        jump block75;
+
+    block75:
+        v294.i256 = phi (v286 block73) (v293 block74);
+        v295.i1 = extract_value v234 3.i256;
+        br v295 block77 block78;
+
+    block77:
+        v304.i16 = phi (1.i16 block96) (0.i16 block75) (0.i16 block78);
+        v314.i256 = and v294 -130561.i256;
+        v315.i256 = zext v304 i256;
+        v317.i256 = shl 9.i256 v315;
+        v318.i256 = or v314 v317;
+        v319.i256 = and v318 -8589803521.i256;
+        v322.i256 = or v319 262144.i256;
+        v325.i256 = and v322 -2.i256;
+        v326.i256 = or v325 1.i256;
+        v327.i256 = extract_value v234 0.i256;
+        v329.@layout_4 = insert_value undef.@layout_4 0.i256 v327;
+        v330.@layout_4 = insert_value v329 1.i256 v326;
+        v331.@layout_5 = enum.make @layout_5 #Ok v330;
         jump block2;
 
-    block64:
-        v326.@layout_2 = obj.load v8;
-        enum.assert_variant v326 #Ok;
-        v327.@layout_1 = enum.extract v326 #Ok 0.i256;
-        v328.i1 = extract_value v327 6.i256;
-        br v328 block68 block66;
+    block78:
+        v296.i1 = extract_value v234 2.i256;
+        br v296 block77 block96;
 
-    block66:
-        v340.i8 = phi (3.i8 block64) (v339 block68);
-        v341.i8 = extract_value v327 5.i256;
-        v342.i1 = is_zero v341;
-        br v342 block70 block69;
-
-    block68:
-        mstore v10 3.i8 i8;
-        v338.i256 = mload v10 i256;
-        v339.i8 = trunc v338 i8;
-        jump block66;
-
-    block69:
-        v343.i8 = not v341;
-        v344.i8 = and v340 v343;
-        mstore v11 v344 i8;
-        v345.i256 = mload v11 i256;
-        v346.i8 = trunc v345 i8;
-        jump block70;
-
-    block70:
-        v347.i8 = phi (v346 block69) (v340 block66);
-        v353.i8 = and v347 -3.i8;
-        mstore v12 v353 i8;
-        v354.i256 = mload v12 i256;
-        v355.i8 = trunc v354 i8;
-        v372.i256 = extract_value v327 1.i256;
-        v373.i256 = and v372 -31.i256;
-        v374.i256 = zext v355 i256;
-        v375.i256 = and v374 15.i256;
-        v376.i256 = shl 1.i256 v375;
-        v377.i256 = or v373 v376;
-        v378.i1 = extract_value v327 4.i256;
-        br v378 block82 block83;
-
-    block82:
-        v380.i256 = and v377 -481.i256;
-        jump block84;
-
-    block83:
-        v385.i256 = and v377 -481.i256;
-        v387.i256 = or v385 480.i256;
-        jump block84;
-
-    block84:
-        v388.i256 = phi (v380 block82) (v387 block83);
-        v389.i1 = extract_value v327 3.i256;
-        br v389 block86 block87;
+    block85:
+        v228.@layout_2 = obj.load v8;
+        v229.enumtag(@layout_2) = enum.tag v228;
+        br_table v229 (0.enumtag(@layout_2) block54) (1.enumtag(@layout_2) block55);
 
     block86:
-        v398.i16 = phi (v397 block105) (0.i16 block84) (0.i16 block87);
-        mstore v17 2.i16 i16;
-        v405.i256 = mload v17 i256;
-        v406.i16 = trunc v405 i16;
-        v408.i256 = and v388 -130561.i256;
-        v409.i256 = zext v398 i256;
-        v410.i256 = and v409 255.i256;
-        v411.i256 = shl 9.i256 v410;
-        v412.i256 = or v408 v411;
-        v413.i256 = and v412 -8589803521.i256;
-        v414.i256 = zext v406 i256;
-        v415.i256 = shl 17.i256 v414;
-        v416.i256 = or v413 v415;
-        v419.i256 = and v416 -2.i256;
-        v420.i256 = or v419 1.i256;
-        v421.i256 = extract_value v327 0.i256;
-        v423.@layout_4 = insert_value undef.@layout_4 0.i256 v421;
-        v424.@layout_4 = insert_value v423 1.i256 v420;
-        v425.@layout_5 = enum.make @layout_5 #Ok v424;
-        jump block2;
+        unreachable;
 
     block87:
-        v390.i1 = extract_value v327 2.i256;
-        br v390 block86 block105;
+        enum.set_tag v8 #Err;
+        enum.assert_variant v200 #Err;
+        v204.objref<@layout_0> = enum.proj v8 #Err 0.i256;
+        v205.@layout_0 = enum.extract v200 #Err 0.i256;
+        v206.enumtag(@layout_0) = enum.tag v205;
+        br_table v206 block89 (0.enumtag(@layout_0) block90) (1.enumtag(@layout_0) block91) (2.enumtag(@layout_0) block92) (3.enumtag(@layout_0) block93) (4.enumtag(@layout_0) block94);
+
+    block88:
+        enum.set_tag v8 #Ok;
+        enum.assert_variant v200 #Ok;
+        v212.objref<@layout_1> = enum.proj v8 #Ok 0.i256;
+        v213.@layout_1 = enum.extract v200 #Ok 0.i256;
+        v214.objref<i256> = obj.proj v212 0.i256;
+        v215.i256 = extract_value v213 0.i256;
+        obj.store v214 v215;
+        v216.objref<i256> = obj.proj v212 1.i256;
+        v217.i256 = extract_value v213 1.i256;
+        obj.store v216 v217;
+        v218.objref<i1> = obj.proj v212 2.i256;
+        v219.i1 = extract_value v213 2.i256;
+        obj.store v218 v219;
+        v220.objref<i1> = obj.proj v212 3.i256;
+        v221.i1 = extract_value v213 3.i256;
+        obj.store v220 v221;
+        v222.objref<i1> = obj.proj v212 4.i256;
+        v223.i1 = extract_value v213 4.i256;
+        obj.store v222 v223;
+        v224.objref<i8> = obj.proj v212 5.i256;
+        v225.i8 = extract_value v213 5.i256;
+        obj.store v224 v225;
+        v226.objref<i1> = obj.proj v212 6.i256;
+        v227.i1 = extract_value v213 6.i256;
+        obj.store v226 v227;
+        jump block85;
+
+    block89:
+        unreachable;
+
+    block90:
+        enum.set_tag v204 #NoPieceAtSource;
+        jump block85;
+
+    block91:
+        enum.set_tag v204 #WrongSideToMove;
+        jump block85;
+
+    block92:
+        enum.set_tag v204 #FriendlyOccupiedDestination;
+        jump block85;
+
+    block93:
+        enum.set_tag v204 #BadGeometry;
+        jump block85;
 
     block94:
-        v321.@layout_2 = obj.load v8;
-        v322.enumtag(@layout_2) = enum.tag v321;
-        br_table v322 (0.enumtag(@layout_2) block63) (1.enumtag(@layout_2) block64);
-
-    block95:
-        unreachable;
+        enum.set_tag v204 #BlockedPath;
+        jump block85;
 
     block96:
-        enum.set_tag v8 #Err;
-        enum.assert_variant v293 #Err;
-        v297.objref<@layout_0> = enum.proj v8 #Err 0.i256;
-        v298.@layout_0 = enum.extract v293 #Err 0.i256;
-        v299.enumtag(@layout_0) = enum.tag v298;
-        br_table v299 block98 (0.enumtag(@layout_0) block99) (1.enumtag(@layout_0) block100) (2.enumtag(@layout_0) block101) (3.enumtag(@layout_0) block102) (4.enumtag(@layout_0) block103);
-
-    block97:
-        enum.set_tag v8 #Ok;
-        enum.assert_variant v293 #Ok;
-        v305.objref<@layout_1> = enum.proj v8 #Ok 0.i256;
-        v306.@layout_1 = enum.extract v293 #Ok 0.i256;
-        v307.objref<i256> = obj.proj v305 0.i256;
-        v308.i256 = extract_value v306 0.i256;
-        obj.store v307 v308;
-        v309.objref<i256> = obj.proj v305 1.i256;
-        v310.i256 = extract_value v306 1.i256;
-        obj.store v309 v310;
-        v311.objref<i1> = obj.proj v305 2.i256;
-        v312.i1 = extract_value v306 2.i256;
-        obj.store v311 v312;
-        v313.objref<i1> = obj.proj v305 3.i256;
-        v314.i1 = extract_value v306 3.i256;
-        obj.store v313 v314;
-        v315.objref<i1> = obj.proj v305 4.i256;
-        v316.i1 = extract_value v306 4.i256;
-        obj.store v315 v316;
-        v317.objref<i8> = obj.proj v305 5.i256;
-        v318.i8 = extract_value v306 5.i256;
-        obj.store v317 v318;
-        v319.objref<i1> = obj.proj v305 6.i256;
-        v320.i1 = extract_value v306 6.i256;
-        obj.store v319 v320;
-        jump block94;
-
-    block98:
-        unreachable;
-
-    block99:
-        enum.set_tag v297 #NoPieceAtSource;
-        jump block94;
-
-    block100:
-        enum.set_tag v297 #WrongSideToMove;
-        jump block94;
-
-    block101:
-        enum.set_tag v297 #FriendlyOccupiedDestination;
-        jump block94;
-
-    block102:
-        enum.set_tag v297 #BadGeometry;
-        jump block94;
-
-    block103:
-        enum.set_tag v297 #BlockedPath;
-        jump block94;
-
-    block105:
-        mstore v16 1.i16 i16;
-        v396.i256 = mload v16 i256;
-        v397.i16 = trunc v396 i16;
-        jump block86;
+        jump block77;
 
     block2:
-        v429.@layout_5 = phi (v325 block63) (v425 block86);
-        enum.assert_variant v429 #Ok;
-        v1.@layout_4 = enum.extract v429 #Ok 0.i256;
+        v335.@layout_5 = phi (v232 block54) (v331 block77);
+        enum.assert_variant v335 #Ok;
+        v1.@layout_4 = enum.extract v335 #Ok 0.i256;
         v2.i256 = extract_value v1 1.i256;
-        v430.i256 = shr 1.i256 v2;
-        v431.i256 = and v430 15.i256;
-        v432.i8 = trunc v431 i8;
-        v4.i256 = zext v432 i256;
+        v336.i256 = shr 1.i256 v2;
+        v337.i256 = and v336 15.i256;
+        v338.i8 = trunc v337 i8;
+        v4.i256 = zext v338 i256;
         mstore 0.i256 v4 i256;
         evm_return 0.i256 32.i256;
 }

@@ -19,15 +19,18 @@ use sonatina_ir::{
 use tracing::{debug_span, info_span, trace_span};
 
 use crate::{
-    analysis::func_behavior, cfg_edit::CleanupMode, domtree::DomTree, loop_analysis::LoopTree,
+    analysis::func_behavior,
+    cfg_edit::CleanupMode,
+    domtree::DomTree,
+    loop_analysis::LoopTree,
+    transform::aggregate::object_arg_invariance::{FunctionArgInvariance, compute_arg_invariance},
 };
 
 use super::{
     adce::{AdceCallPolicy, AdceSolver},
     aggregate::{
-        AggregateCombine, AggregateScalarize, LocalObjectArgMap, ObjectEffectSummaryMap,
-        ObjectLoadStore, ObjectMemoryAnalysis, collect_local_object_arg_info,
-        collect_local_object_arg_info_with_effects, compute_object_effect_summaries,
+        AggregateCombine, AggregateScalarize, LocalObjectArgMap, ModuleObjectFacts,
+        ObjectEffectSummaryMap, ObjectLoadStore, ObjectMemoryAnalysis,
     },
     branch_canonicalize::BranchCanonicalize,
     cfg_cleanup::CfgCleanup,
@@ -208,7 +211,11 @@ impl Pass {
     const fn needs_object_facts(self) -> bool {
         matches!(
             self,
-            Pass::ObjectLoadStore | Pass::AggregateScalarize | Pass::Licm | Pass::Gvn
+            Pass::AggregateCombine
+                | Pass::ObjectLoadStore
+                | Pass::AggregateScalarize
+                | Pass::Licm
+                | Pass::Gvn
         )
     }
 
@@ -580,8 +587,6 @@ impl Default for Pipeline {
 #[derive(Default, Clone, Copy)]
 pub(crate) struct FuncPassOverrides<'a> {
     pub(crate) funcs: Option<&'a [FuncRef]>,
-    pub(crate) local_object_args: Option<&'a LocalObjectArgMap>,
-    pub(crate) object_effects: Option<&'a ObjectEffectSummaryMap>,
 }
 
 pub(crate) fn run_function_pass_round(
@@ -609,14 +614,12 @@ pub(crate) fn run_function_pass_round(
 
 #[derive(Default)]
 struct RoundFacts {
-    object_effects: Option<ObjectEffectSummaryMap>,
-    local_object_args: Option<LocalObjectArgMap>,
+    objects: Option<ModuleObjectFacts>,
 }
 
 impl RoundFacts {
     fn clear(&mut self) {
-        self.object_effects = None;
-        self.local_object_args = None;
+        self.objects = None;
     }
 }
 
@@ -644,24 +647,20 @@ fn run_module_pass(
     round_facts: &mut RoundFacts,
 ) -> PassResult {
     let _span = debug_span!("sonatina.optim.pipeline.pass_round", pass = pass.as_str()).entered();
-    if pass.needs_object_facts() && overrides.object_effects.is_none() {
+    if pass.needs_object_facts() {
         round_facts
-            .object_effects
-            .get_or_insert_with(|| compute_object_effect_summaries(module));
+            .objects
+            .get_or_insert_with(|| ModuleObjectFacts::compute(module));
     }
-    let object_effects = overrides
-        .object_effects
-        .or(round_facts.object_effects.as_ref());
-    if pass.needs_object_facts() && overrides.local_object_args.is_none() {
-        round_facts.local_object_args.get_or_insert_with(|| {
-            object_effects
-                .map(|effects| collect_local_object_arg_info_with_effects(module, effects))
-                .unwrap_or_else(|| collect_local_object_arg_info(module))
-        });
-    }
-    let local_object_args = overrides
-        .local_object_args
-        .or(round_facts.local_object_args.as_ref());
+    let object_effects = round_facts.objects.as_ref().map(ModuleObjectFacts::effects);
+    let local_object_args = round_facts
+        .objects
+        .as_ref()
+        .map(ModuleObjectFacts::local_args);
+    // Infer from the complete baseline before any caller/callee is scalarized.
+    // This map is owned by this one batch, never by the reusable round cache.
+    let arg_invariance = (pass == Pass::AggregateScalarize)
+        .then(|| compute_arg_invariance(module, round_facts.objects.as_ref().unwrap()));
     let changed = AtomicBool::new(false);
     if let Some(funcs) = overrides.funcs {
         funcs.par_iter().copied().for_each(|func_ref| {
@@ -679,6 +678,9 @@ fn run_module_pass(
                     &mut ctx,
                     local_object_args,
                     object_effects,
+                    arg_invariance
+                        .as_ref()
+                        .and_then(|proofs| proofs.get(&func_ref)),
                 )
                 .changed
                 {
@@ -701,6 +703,9 @@ fn run_module_pass(
                 &mut ctx,
                 local_object_args,
                 object_effects,
+                arg_invariance
+                    .as_ref()
+                    .and_then(|proofs| proofs.get(&func_ref)),
             )
             .changed
             {
@@ -732,6 +737,7 @@ fn run_pass(
     ctx: &mut PassContext,
     local_object_args: Option<&LocalObjectArgMap>,
     object_effects: Option<&ObjectEffectSummaryMap>,
+    arg_invariance: Option<&FunctionArgInvariance>,
 ) -> PassResult {
     let _span = trace_span!("sonatina.optim.pipeline.pass", pass = pass.as_str()).entered();
     let changed = match pass {
@@ -745,7 +751,7 @@ fn run_pass(
         }
         Pass::AggregateCombine => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.aggregate_combine").entered();
-            AggregateCombine::default().run(func)
+            AggregateCombine::default().run_with_effects(func, object_effects)
         }
         Pass::BranchCanonicalize => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.branch_canonicalize").entered();
@@ -768,8 +774,16 @@ fn run_pass(
         }
         Pass::AggregateScalarize => {
             let _span = trace_span!("sonatina.optim.pipeline.pass.aggregate_scalarize").entered();
-            if let (Some(func_ref), Some(local_object_args)) = (func_ref, local_object_args) {
-                AggregateScalarize::default().run_for_func(func_ref, func, local_object_args)
+            if let (Some(func_ref), Some(local_object_args), Some(object_effects)) =
+                (func_ref, local_object_args, object_effects)
+            {
+                AggregateScalarize::default().run_for_func(
+                    func_ref,
+                    func,
+                    local_object_args,
+                    object_effects,
+                    arg_invariance,
+                )
             } else {
                 AggregateScalarize::default().run(func)
             }
@@ -993,15 +1007,21 @@ fn run_pass(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use smallvec::smallvec;
     use sonatina_ir::{
         Type,
         builder::test_util::*,
-        inst::{arith::Add, control_flow::Return},
+        inst::{
+            arith::Add,
+            control_flow::{Call, Return},
+            downcast,
+        },
         ir_writer::FuncWriter,
         module::{FuncHints, InlineHint},
         prelude::*,
     };
     use sonatina_parser::parse_module;
+    use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module};
 
     /// Build a module with a single function: `fn test(i32) -> i32 { arg0 + 1 }`.
     fn build_test_module() -> sonatina_ir::module::Module {
@@ -1026,6 +1046,142 @@ mod tests {
         let mut pipeline = Pipeline::new();
         pipeline.add_step(Step::FuncPasses(passes.to_vec()));
         pipeline.run(module);
+    }
+
+    #[test]
+    fn object_facts_are_recomputed_after_same_signature_call_changes() {
+        for change_call in [false, true] {
+            let module = parse_module(
+                r#"
+target = "evm-ethereum-osaka"
+func private %read(v0.objref<i256>) {
+block0:
+    v1.i256 = obj.load v0;
+    return;
+}
+func private %write(v0.objref<i256>) {
+block0:
+    obj.store v0 22.i256;
+    return;
+}
+func private %helper(v0.objref<i256>) {
+block0:
+    call %read v0;
+    return;
+}
+func private %f(v0.objref<i256>, v1.objref<i256>) -> i256 {
+block0:
+    v2.i256 = obj.load v0;
+    call %helper v1;
+    v3.i256 = obj.load v0;
+    v4.i256 = add v2 v3;
+    return v4;
+}
+"#,
+            )
+            .unwrap()
+            .module;
+            let lookup = |name| {
+                module
+                    .funcs()
+                    .into_iter()
+                    .find(|&func| module.ctx.func_sig(func, |sig| sig.name() == name))
+                    .unwrap()
+            };
+            let helper = lookup("helper");
+            let observer = lookup("f");
+            let writer = lookup("write");
+            let config = VerifierConfig::for_level(VerificationLevel::Full);
+            assert!(verify_module(&module, &config).is_ok());
+
+            // Warm the module analyses without rewriting the observer. The round
+            // owns its snapshot; it cannot be supplied to the next round.
+            let mut behavior_dirty = true;
+            run_function_pass_round(
+                &module,
+                &[Pass::AggregateCombine],
+                &mut behavior_dirty,
+                FuncPassOverrides {
+                    funcs: Some(&[helper]),
+                },
+            );
+            if change_call {
+                module.func_store.modify(helper, |func| {
+                    let inst = func
+                        .layout
+                        .iter_inst(func.layout.entry_block().unwrap())
+                        .find(|&inst| {
+                            downcast::<&Call>(func.inst_set(), func.dfg.inst(inst)).is_some()
+                        })
+                        .unwrap();
+                    let call =
+                        Call::new_unchecked(func.inst_set(), writer, smallvec![func.arg_values[0]]);
+                    func.dfg.replace_inst(inst, Box::new(call));
+                    func.rebuild_users();
+                });
+            }
+            run_function_pass_round(
+                &module,
+                &[Pass::AggregateScalarize],
+                &mut behavior_dirty,
+                FuncPassOverrides {
+                    funcs: Some(&[observer]),
+                },
+            );
+            assert!(verify_module(&module, &config).is_ok());
+            module.func_store.view(observer, |func| {
+                let text = FuncWriter::new(observer, func).dump_string();
+                assert_eq!(
+                    text.matches("obj.load").count(),
+                    if change_call { 2 } else { 1 },
+                    "{text}"
+                );
+            });
+        }
+    }
+
+    #[test]
+    fn object_facts_refresh_within_a_round_after_cfg_rewrites() {
+        let mut module = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+func private %helper(v0.objref<i256>) {
+block0:
+    br 0.i1 block1 block2;
+block1:
+    obj.store v0 22.i256;
+    return;
+block2:
+    return;
+}
+func private %f(v0.objref<i256>, v1.objref<i256>) -> i256 {
+block0:
+    v2.i256 = obj.load v0;
+    call %helper v1;
+    v3.i256 = obj.load v0;
+    v4.i256 = add v2 v3;
+    return v4;
+}
+"#,
+        )
+        .unwrap()
+        .module;
+        let config = VerifierConfig::for_level(VerificationLevel::Full);
+        assert!(verify_module(&module, &config).is_ok());
+        run_test_func_passes(
+            &mut module,
+            &[Pass::AggregateCombine, Pass::Sccp, Pass::AggregateScalarize],
+        );
+        assert!(verify_module(&module, &config).is_ok());
+        let observer = module
+            .funcs()
+            .into_iter()
+            .find(|&func| module.ctx.func_sig(func, |sig| sig.name() == "f"))
+            .unwrap();
+        module.func_store.view(observer, |func| {
+            let text = FuncWriter::new(observer, func).dump_string();
+            assert_eq!(text.matches("obj.load").count(), 1, "{text}");
+        });
     }
 
     #[test]
@@ -2867,7 +3023,6 @@ block2:
             &mut func_behavior_dirty,
             FuncPassOverrides {
                 funcs: Some(&[selected]),
-                ..FuncPassOverrides::default()
             },
         );
 

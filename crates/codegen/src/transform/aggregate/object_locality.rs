@@ -6,7 +6,9 @@ use sonatina_ir::{
 };
 use std::ops::ControlFlow;
 
-use super::{ObjectEffectSummaryMap, compute_object_effect_summaries};
+use super::{
+    ObjectEffectSummaryMap, compute_object_effect_summaries, object_abi::OutputBufferContract,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RootInit {
@@ -15,9 +17,38 @@ pub(crate) enum RootInit {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct LocalObjectArgInfo {
-    pub init: RootInit,
-    pub fresh_result_out: bool,
+pub(crate) enum LocalObjectArgInfo {
+    Borrowed,
+    Output(OutputBufferContract),
+}
+
+impl LocalObjectArgInfo {
+    pub(crate) fn output_contract(
+        self,
+        function: &Function,
+        index: usize,
+    ) -> Option<OutputBufferContract> {
+        match self {
+            Self::Output(contract) if contract.matches(function, index) => Some(contract),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn is_valid_for(self, function: &Function, index: usize) -> bool {
+        match self {
+            Self::Borrowed => function.arg_values.get(index).is_some_and(|&argument| {
+                function.dfg.value_ty(argument).is_obj_ref(function.ctx())
+            }),
+            Self::Output(contract) => contract.matches(function, index),
+        }
+    }
+
+    pub(crate) fn init(self, function: &Function, index: usize) -> Option<RootInit> {
+        self.is_valid_for(function, index).then_some(match self {
+            Self::Borrowed => RootInit::LoadLiveIn,
+            Self::Output(_) => RootInit::UndefFresh,
+        })
+    }
 }
 
 pub(crate) type LocalObjectArgMap = FxHashMap<FuncRef, FxHashMap<usize, LocalObjectArgInfo>>;
@@ -48,59 +79,84 @@ pub(crate) fn collect_local_object_arg_info_with_effects(
     module: &Module,
     object_effects: &ObjectEffectSummaryMap,
 ) -> LocalObjectArgMap {
-    let mut local_object_args = LocalObjectArgMap::default();
-    for func in module.funcs() {
-        let Some(sig) = module.ctx.get_sig(func) else {
-            continue;
-        };
-        let Some(summary) = object_effects.get(&func) else {
-            continue;
-        };
+    module
+        .funcs()
+        .into_iter()
+        .filter_map(|func| {
+            let args = local_object_arg_info(module, func, object_effects);
+            (!args.is_empty()).then_some((func, args))
+        })
+        .collect()
+}
+
+pub(crate) fn local_object_arg_info(
+    module: &Module,
+    func: FuncRef,
+    object_effects: &ObjectEffectSummaryMap,
+) -> FxHashMap<usize, LocalObjectArgInfo> {
+    let mut args = FxHashMap::default();
+    if let Some(sig) = module.ctx.get_sig(func)
+        && let Some(summary) = object_effects.get(&func)
+    {
         for (idx, &root_ty) in sig.args().iter().enumerate() {
-            if !root_ty.is_obj_ref(&module.ctx)
-                || !summary
+            if root_ty.is_obj_ref(&module.ctx)
+                && summary
                     .arg_effects
                     .get(idx)
                     .is_some_and(|effect| effect.local_only)
-                || summary
+                && !summary
                     .captures
                     .iter()
                     .any(|capture| capture.src_arg == idx)
             {
-                continue;
+                args.insert(idx, LocalObjectArgInfo::Borrowed);
             }
-            local_object_args.entry(func).or_default().insert(
-                idx,
-                LocalObjectArgInfo {
-                    init: RootInit::LoadLiveIn,
-                    fresh_result_out: false,
-                },
-            );
         }
     }
-    local_object_args
+    args
 }
 
 pub(crate) fn collect_local_object_args(module: &Module) -> LocalObjectArgs {
-    info_to_local_object_args(&collect_local_object_arg_info(module))
+    info_to_local_object_args(module, &collect_local_object_arg_info(module))
 }
 
-pub(crate) fn info_to_local_object_args(local_object_args: &LocalObjectArgMap) -> LocalObjectArgs {
-    local_object_args
-        .iter()
-        .map(|(&func, args)| (func, args.keys().copied().collect()))
+pub(crate) fn info_to_local_object_args(
+    module: &Module,
+    local_object_args: &LocalObjectArgMap,
+) -> LocalObjectArgs {
+    module
+        .funcs()
+        .into_iter()
+        .filter_map(|func| {
+            let args = local_object_args.get(&func)?;
+            let valid = module.func_store.view(func, |function| {
+                args.iter()
+                    .filter_map(|(&index, info)| {
+                        info.is_valid_for(function, index).then_some(index)
+                    })
+                    .collect()
+            });
+            Some((func, valid))
+        })
         .collect()
 }
 
 pub(crate) fn merge_local_object_arg_info(
+    module: &Module,
     local_object_args: &mut LocalObjectArgMap,
     extra: &LocalObjectArgMap,
 ) {
-    for (&func, args) in extra {
-        local_object_args
-            .entry(func)
-            .or_default()
-            .extend(args.iter().map(|(&idx, &info)| (idx, info)));
+    for func in module.funcs() {
+        if let Some(args) = extra.get(&func) {
+            module.func_store.view(func, |function| {
+                local_object_args
+                    .entry(func)
+                    .or_default()
+                    .extend(args.iter().filter_map(|(&index, &info)| {
+                        info.is_valid_for(function, index).then_some((index, info))
+                    }));
+            });
+        }
     }
 }
 
@@ -735,10 +791,7 @@ block0:
         let local = collect_local_object_arg_info(&module);
         assert_eq!(
             local.get(&func).and_then(|args| args.get(&0)),
-            Some(&LocalObjectArgInfo {
-                init: RootInit::LoadLiveIn,
-                fresh_result_out: false,
-            })
+            Some(&LocalObjectArgInfo::Borrowed)
         );
     }
 

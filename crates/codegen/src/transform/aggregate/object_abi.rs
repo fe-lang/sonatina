@@ -11,7 +11,7 @@ use sonatina_ir::{
 
 use super::{
     ObjectEffectSummaryMap, ObjectReturnEffect, compute_object_effect_summaries,
-    object_locality::{self, LocalObjectArgInfo, LocalObjectArgMap, RootInit},
+    object_locality::{self, LocalObjectArgInfo, LocalObjectArgMap},
     object_tracking::AggregateFacts,
     private_abi::{self, PrivateAbiPlan},
     provenance::{CompleteProvenance, CompleteRootSet, ProvenanceSnapshot, RootValue},
@@ -23,6 +23,39 @@ use crate::cfg_scc::CfgSccAnalysis;
 mod native;
 #[cfg(feature = "cranelift")]
 pub(crate) use native::{legalize_native_object_returns, native_heap_object_roots};
+
+/// Compiler-owned output storage, equivalent to a private result buffer during
+/// the callee's execution. It need not be a physically fresh allocation.
+///
+/// ABI producers establish this by lowering every call to a private temporary,
+/// or by proving that forwarded storage cannot interfere with other inputs,
+/// ambient effects, or observations of the destination before result commit.
+/// The body starts with no observable prior contents and preserves return-path
+/// writeback. Only those ABI rewrites may create this contract.
+///
+/// The binding prevents an unremapped index or changed pointee type from gaining
+/// output privileges. Call-site/body changes must separately preserve or discard
+/// the contract; matching this binding is not a new separation proof.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct OutputBufferContract {
+    argument: ValueId,
+    ty: Type,
+}
+
+impl OutputBufferContract {
+    pub(super) fn for_rewritten_output(function: &Function, index: usize) -> Self {
+        let argument = function.arg_values[index];
+        let ty = function.dfg.value_ty(argument);
+        assert!(ty.is_obj_ref(function.ctx()));
+        Self { argument, ty }
+    }
+
+    pub(crate) fn matches(self, function: &Function, index: usize) -> bool {
+        function.arg_values.get(index) == Some(&self.argument)
+            && matches!(function.dfg.values[self.argument], Value::Arg { ty, idx }
+                if ty == self.ty && idx == index)
+    }
+}
 
 #[derive(Clone, Copy)]
 enum RewriteRoot {
@@ -101,7 +134,7 @@ impl ObjectReturnOutParam {
         !self.run_with_synthetic_out_args(module).is_empty()
     }
 
-    pub(crate) fn run_with_synthetic_out_args(&mut self, module: &Module) -> LocalObjectArgMap {
+    pub(super) fn run_with_synthetic_out_args(&mut self, module: &Module) -> LocalObjectArgMap {
         let mut synthetic_out_args = LocalObjectArgMap::default();
 
         loop {
@@ -112,20 +145,16 @@ impl ObjectReturnOutParam {
             }
             let old_sigs = private_abi::rewrite_declared_signatures(module, &plans);
 
-            for &func in plans.keys() {
-                synthetic_out_args.entry(func).or_default().insert(
-                    0,
-                    LocalObjectArgInfo {
-                        init: RootInit::UndefFresh,
-                        fresh_result_out: true,
-                    },
-                );
-            }
-
             for (&func, plan) in &plans {
                 module.func_store.modify(func, |function| {
                     self.rewrite_function(function, plan);
                     function.rebuild_users();
+                    synthetic_out_args.entry(func).or_default().insert(
+                        0,
+                        LocalObjectArgInfo::Output(OutputBufferContract::for_rewritten_output(
+                            function, 0,
+                        )),
+                    );
                 });
             }
 
@@ -800,12 +829,50 @@ fn block_reaches(cfg: &ControlFlowGraph, from: BlockId, to: BlockId) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sonatina_ir::{Module, ir_writer::FuncWriter, module::FuncRef};
+    use sonatina_ir::{Module, Signature, ir_writer::FuncWriter, module::FuncRef};
     use sonatina_parser::parse_module;
     use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module};
 
     fn parse_test_module(src: &str) -> Module {
         parse_module(src).expect("parse should succeed").module
+    }
+
+    #[test]
+    fn changed_output_type_discards_contract_without_losing_borrowed_facts() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+func private %make() -> objref<i256> {
+block0:
+    v0.objref<i256> = obj.alloc i256;
+    return v0;
+}
+"#,
+        );
+        let outputs = ObjectReturnOutParam.run_with_synthetic_out_args(&module);
+        let func = lookup_func(&module, "make");
+        let info = outputs[&func][&0];
+        module.func_store.view(func, |function| {
+            assert!(info.output_contract(function, 0).is_some());
+        });
+        let ty = module
+            .ctx
+            .with_ty_store_mut(|types| types.make_obj_ref(Type::I128));
+        let sig = module.ctx.get_sig(func).unwrap();
+        *module.ctx.declared_funcs.get_mut(&func).unwrap() =
+            Signature::new_unit(sig.name(), sig.linkage(), &[ty]);
+        module.func_store.modify(func, |function| {
+            let arg = function.arg_values[0];
+            function.dfg.values[arg] = Value::Arg { ty, idx: 0 };
+            assert!(info.init(function, 0).is_none());
+            assert!(info.output_contract(function, 0).is_none());
+        });
+        let report = verify_module(&module, &VerifierConfig::for_level(VerificationLevel::Full));
+        assert!(report.is_ok(), "{report}");
+        let mut local = object_locality::collect_local_object_arg_info(&module);
+        object_locality::merge_local_object_arg_info(&module, &mut local, &outputs);
+        assert_eq!(local[&func][&0], LocalObjectArgInfo::Borrowed);
+        assert!(object_locality::info_to_local_object_args(&module, &outputs)[&func].is_empty());
     }
 
     fn lookup_func(module: &Module, name: &str) -> FuncRef {
