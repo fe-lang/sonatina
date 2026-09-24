@@ -122,6 +122,7 @@ impl ObjectLoadStore {
             .collect();
         let mut in_states = SecondaryMap::<BlockId, AvailableMap>::new();
         let mut out_states = SecondaryMap::<BlockId, AvailableMap>::new();
+        let entry = func.layout.entry_block();
         let mut dataflow_changed = true;
         let mut changed = false;
 
@@ -132,12 +133,18 @@ impl ObjectLoadStore {
                     continue;
                 }
 
-                let in_state = meet_forward(
-                    cfg.preds_of(block)
-                        .copied()
-                        .filter(|pred| reachable[*pred])
-                        .map(|pred| out_states[pred].clone()),
-                );
+                // Nothing is available on the function-entry edge, even when
+                // the entry block is a loop header.
+                let in_state = if Some(block) == entry {
+                    AvailableMap::default()
+                } else {
+                    meet_forward(
+                        cfg.preds_of(block)
+                            .copied()
+                            .filter(|pred| reachable[*pred])
+                            .map(|pred| out_states[pred].clone()),
+                    )
+                };
                 if in_state != in_states[block] {
                     in_states[block] = in_state.clone();
                     dataflow_changed = true;

@@ -227,20 +227,22 @@ impl ObjectMemoryAnalysis {
                     continue;
                 }
 
-                let in_state = if Some(block) == entry {
-                    initial_state.clone()
-                } else {
-                    meet_memory_states(
-                        func,
-                        block,
-                        cfg.preds_of(block)
-                            .copied()
-                            .filter(|pred| reachable[*pred])
-                            .filter(|pred| out_valid[*pred])
-                            .map(|pred| &out_states[pred]),
-                        &relevant_slices,
-                    )
-                };
+                // Function entry is an extra predecessor of the entry block,
+                // which can also be a loop header.
+                let in_state = meet_memory_states(
+                    func,
+                    block,
+                    (Some(block) == entry)
+                        .then_some(&initial_state)
+                        .into_iter()
+                        .chain(
+                            cfg.preds_of(block)
+                                .copied()
+                                .filter(|pred| reachable[*pred] && out_valid[*pred])
+                                .map(|pred| &out_states[pred]),
+                        ),
+                    &relevant_slices,
+                );
                 if in_states[block] != in_state {
                     in_states[block] = in_state.clone();
                     dataflow_changed = true;
@@ -1198,17 +1200,15 @@ block0:
     }
 
     #[test]
-    fn entry_contents_proof_intersects_loop_backedges_and_diamond_paths() {
-        for (looping, write) in [(false, false), (false, true), (true, false), (true, true)] {
-            let effect = if write { "obj.store v1 22.i256;" } else { "" };
-            let edge = if looping {
-                "jump block1;"
-            } else {
-                "jump block3;"
-            };
-            check_memory(
-                &format!(
-                    r#"
+    fn entry_contents_proof_intersects_backedges_and_diamond_paths() {
+        // block3 joins a diamond, block1 is a loop header, and block0 is both
+        // the entry block and a loop header.
+        for target in ["block3", "block1", "block0"] {
+            for write in [false, true] {
+                let effect = if write { "obj.store v1 22.i256;" } else { "" };
+                check_memory(
+                    &format!(
+                        r#"
 target = "evm-ethereum-osaka"
 func private %f(v0.objref<i256>, v1.objref<i256>, v2.i1) -> i256 {{
 block0:
@@ -1219,33 +1219,38 @@ block1:
     br v2 block2 block3;
 block2:
     {effect}
-    {edge}
+    jump {target};
 block3:
     v5.i256 = obj.load v0;
     return v5;
 }}
 "#
-                ),
-                &[0],
-                |func, memory, loads| {
-                    let expected = ObjectSlice {
-                        root: func.arg_values[0],
-                        ty: Type::I256,
-                        first_leaf: 0,
-                        leaf_count: 1,
-                        total_leaves: 1,
-                    };
-                    let actual: Vec<_> = loads
-                        .iter()
-                        .map(|&load| memory.read_observes_entry_contents(load, expected))
-                        .collect();
-                    assert_eq!(
-                        actual,
-                        vec![true, !(looping && write), !write],
-                        "looping={looping}, write={write}"
-                    );
-                },
-            );
+                    ),
+                    &[0],
+                    |func, memory, loads| {
+                        let expected = ObjectSlice {
+                            root: func.arg_values[0],
+                            ty: Type::I256,
+                            first_leaf: 0,
+                            leaf_count: 1,
+                            total_leaves: 1,
+                        };
+                        let actual: Vec<_> = loads
+                            .iter()
+                            .map(|&load| memory.read_observes_entry_contents(load, expected))
+                            .collect();
+                        assert_eq!(
+                            actual,
+                            vec![
+                                !(write && target == "block0"),
+                                !(write && target != "block3"),
+                                !write
+                            ],
+                            "target={target}, write={write}"
+                        );
+                    },
+                );
+            }
         }
     }
 
