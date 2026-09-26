@@ -1020,12 +1020,10 @@ impl AggregateScalarize {
 
         for value in func.dfg.value_ids() {
             let ty = func.dfg.value_ty(value);
-            if !shape::is_supported_scalar_shape_ty(module, ty) {
-                continue;
-            }
-            if self
-                .aggregate_shape(module, ty)
-                .is_some_and(|shape| shape.leaves.len() > MAX_SCALARIZABLE_VALUE_LEAVES)
+            if !self
+                .layout_cache
+                .shape_leaf_count(module, ty)
+                .is_some_and(|count| count <= MAX_SCALARIZABLE_VALUE_LEAVES)
             {
                 continue;
             }
@@ -4688,6 +4686,57 @@ func private %f(v0.i256, v1.i256, v2.i256) -> i256 {
 
         module.func_store.view(func_ref, |func| {
             assert_no_promoted_aggregate_artifacts(func, &ctx);
+        });
+    }
+
+    #[test]
+    fn scalarization_budget_counts_nested_and_zero_sized_leaves() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+type @Empty = {};
+type @Sixteen = { [i256; 16], @Empty, [i256; 0] };
+type @Seventeen = { @Sixteen, i8 };
+type @ZeroSizedLeaves = { [@Empty; 1000000], [i256; 0] };
+type @Large = { [i8; 1000000] };
+type @Choice = enum { #None, #Some([i256; 15]) };
+type @Fits = { @Choice };
+type @TooWide = { @Choice, i8 };
+func private %f() {
+block0:
+    return;
+}
+"#,
+        );
+        let config = VerifierConfig::for_level(VerificationLevel::Full);
+        assert!(verify_module(&module, &config).is_ok());
+        module.func_store.modify(lookup_func(&module, "f"), |func| {
+            let values: Vec<_> = [
+                ("Empty", true),
+                ("Sixteen", true),
+                ("Seventeen", false),
+                ("ZeroSizedLeaves", true),
+                ("Large", false),
+                ("Fits", true),
+                ("TooWide", false),
+            ]
+            .into_iter()
+            .map(|(name, expected)| {
+                let ty = module
+                    .ctx
+                    .with_ty_store(|types| Type::Compound(types.lookup_struct(name).unwrap()));
+                (name, func.dfg.make_undef_value(ty), expected)
+            })
+            .collect();
+            let mut pass = AggregateScalarize::default();
+            let const_paths = analyze_const_paths(func, &collect_constref_value_tys(func));
+            let (_, projections) =
+                pass.find_promotable_roots(func, &module.ctx, None, None, None, &const_paths);
+            let scalarizable =
+                pass.compute_scalarizable_aggregates(func, &module.ctx, &projections);
+            for (name, value, expected) in values {
+                assert_eq!(scalarizable[value], expected, "{name}");
+            }
         });
     }
 
