@@ -1404,7 +1404,7 @@ impl GvnSolver {
         self.values[value].class = class;
 
         // Remove `value` from `old` class.
-        self.classes[old_class].values.remove(&(value_rank, value));
+        let removed = self.classes[old_class].values.remove(&(value_rank, value));
 
         let old_leader_after = self.class_leader_if_nonempty(old_class);
         let new_leader_after = self.class_leader_if_nonempty(class);
@@ -1416,8 +1416,9 @@ impl GvnSolver {
             (Some(before), Some(after)) if before != after
         );
 
-        // Remove all stale indexes that still point to the emptied class.
-        if self.classes[old_class].values.is_empty() {
+        // Only a transition to empty invalidates indexes. The initial class
+        // has no members, so first assignments must not scan both tables.
+        if removed && self.classes[old_class].values.is_empty() {
             self.insn_table
                 .retain(|_, mapped_class| *mapped_class != old_class);
             self.value_phi_table
