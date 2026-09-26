@@ -365,8 +365,37 @@ impl SccpSolver {
         inst.for_each_value(&mut |value| {
             operand_may_be_undef |= self.may_be_undef_of(func, value);
         });
-        let result_may_divide_by_zero = self.is_arith_div_or_rem_by_zero(func, inst_id);
+        if let Some(insert) = downcast::<&data::InsertValue>(func.inst_set(), inst) {
+            // The scalar lattice cannot retain aggregate fields. Match the
+            // interpreter's operand lookups without allocating an aggregate.
+            let mut state = CellState::new(&self.lattice, &func.dfg);
+            state.lookup_val(*insert.dest());
+            let index = state
+                .lookup_val(*insert.idx())
+                .as_imm()
+                .and_then(Immediate::to_nonnegative_usize);
+            let Type::Compound(compound) = func.dfg.value_ty(*insert.dest()) else {
+                unreachable!("insert_value requires an aggregate destination");
+            };
+            let count = func
+                .ctx()
+                .with_ty_store(|types| match types.resolve_compound(compound) {
+                    CompoundType::Array { len, .. } => *len,
+                    CompoundType::Struct(data) => data.fields.len(),
+                    _ => unreachable!("insert_value requires an array or struct"),
+                });
+            let in_bounds = index.is_some_and(|index| index < count);
+            if in_bounds {
+                state.lookup_val(*insert.value());
+            }
+            let cell = state.nonconst_result_cell();
+            let may_be_undef = operand_may_be_undef || !in_bounds && !state.used_has_top;
+            self.set_lattice_cell(inst_results[0], cell);
+            self.set_may_be_undef(inst_results[0], may_be_undef);
+            return;
+        }
 
+        let result_may_divide_by_zero = self.is_arith_div_or_rem_by_zero(func, inst_id);
         {
             let mut cell_state = CellState::new(&self.lattice, &func.dfg);
             let value = InstDowncast::map(func.inst_set(), inst, |i: &dyn Interpret| {
@@ -1188,6 +1217,7 @@ mod tests {
         },
     };
     use sonatina_parser::parse_module;
+    use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module_or_panic};
 
     use crate::analysis::known_bits::count_query_news_for_test;
 
@@ -1206,6 +1236,95 @@ mod tests {
 
         fn pick<T>(self, values: &[T]) -> usize {
             (self.0 as usize) % values.len()
+        }
+    }
+
+    #[test]
+    fn insert_transfer_matches_concrete_interpretation() {
+        let mut cases = Vec::new();
+        for base in [LatticeCell::Bot, LatticeCell::Top] {
+            for index in [
+                LatticeCell::Bot,
+                LatticeCell::Top,
+                LatticeCell::Const(Immediate::I256(I256::from(0))),
+                LatticeCell::Const(Immediate::I256(I256::from(1))),
+                LatticeCell::Const(Immediate::I256(I256::from(-1))),
+            ] {
+                for field in [
+                    LatticeCell::Bot,
+                    LatticeCell::Top,
+                    LatticeCell::Const(Immediate::I256(I256::from(7))),
+                ] {
+                    cases.extend((0..8).map(|undef| ([base, index, field], undef)));
+                }
+            }
+        }
+        for (ty, index, other_index) in [
+            ("[i256; 2]", "v4", "undef.i256"),
+            ("@Pair", "0.i256", "1.i256"),
+            ("@Packed", "1.i256", "0.i256"),
+        ] {
+            let source = format!(
+                r#"
+ target = "evm-ethereum-osaka"
+ type @Pair = {{ i256, i256 }};
+ type @Packed = <{{ i256, i256 }}>;
+ func private %f(v0.{ty}, v1.i256, v2.i256) -> {ty} {{
+ block0:
+     jump block1;
+ block1:
+     v3.{ty} = phi (v0 block0);
+     v4.i256 = phi (v1 block0);
+     v5.i256 = phi (v2 block0);
+     v6.{ty} = insert_value v3 {index} v5;
+     v7.{ty} = insert_value undef.{ty} {index} v5;
+     v8.{ty} = insert_value v3 {other_index} v5;
+     v9.{ty} = insert_value v3 {index} undef.i256;
+     v10.{ty} = insert_value undef.{ty} {other_index} undef.i256;
+     return v6;
+ }}
+ "#
+            );
+            let module = parse_module(&source).unwrap().module;
+            verify_module_or_panic(&module, &VerifierConfig::for_level(VerificationLevel::Full));
+            module.func_store.view(module.funcs()[0], |func| {
+                let const_paths = analyze_const_paths(func, &collect_constref_value_tys(func));
+                let known_bits = KnownBitsQuery::new(func);
+                for &(cells, undef) in &cases {
+                    let mut solver = SccpSolver::new();
+                    for (idx, cell) in cells.into_iter().enumerate() {
+                        let value = ValueId::from_u32(idx as u32 + 3);
+                        solver.lattice[value] = cell;
+                        solver.may_be_undef[value] = undef & (1 << idx) != 0;
+                    }
+                    for block in func.layout.iter_block() {
+                        for inst in func.layout.iter_inst(block) {
+                            let Some(insert) = downcast::<&data::InsertValue>(
+                                func.inst_set(),
+                                func.dfg.inst(inst),
+                            ) else {
+                                continue;
+                            };
+                            let operand_undef = [*insert.dest(), *insert.idx(), *insert.value()]
+                                .into_iter()
+                                .any(|value| solver.may_be_undef_of(func, value));
+                            let mut state = CellState::new(&solver.lattice, &func.dfg);
+                            let concrete = insert.interpret(&mut state);
+                            assert!(concrete[0].as_imm().is_none());
+                            let expected_cell = state.nonconst_result_cell();
+                            let expected_undef =
+                                operand_undef || concrete[0].is_undef() && !state.used_has_top;
+                            solver.eval_inst(func, inst, &const_paths, &known_bits);
+                            let result = func.dfg.inst_result(inst).unwrap();
+                            assert_eq!(
+                                (solver.lattice[result], solver.may_be_undef[result]),
+                                (expected_cell, expected_undef),
+                                "{ty}, {inst:?}, {cells:?}, undef mask {undef}"
+                            );
+                        }
+                    }
+                }
+            });
         }
     }
 
