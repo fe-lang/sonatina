@@ -1,0 +1,135 @@
+target = "evm-ethereum-osaka"
+
+global private const [i256; 6] $indices = [1, 0, 3, 2, 5, 4];
+global private const [i256; 6] $values = [11, 42, 7, 99, 5, 31];
+global private const [i256; 2] $affine_indices = [1, 0];
+global private const [[i256; 2]; 6] $pairs = [[11, 42], [7, 99], [5, 31], [17, 23], [13, 19], [29, 37]];
+
+func private %static_index() -> i256 {
+    block0:
+        v0.constref<[i256; 6]> = const.ref $indices;
+        v1.constref<i256> = const.index v0 0.i256;
+        v2.i256 = const.load v1;
+        v3.constref<i256> = const.index v0 v2;
+        v4.i256 = const.load v3;
+        v5.constref<[i256; 6]> = const.ref $values;
+        v6.constref<i256> = const.index v5 v4;
+        v7.i256 = const.load v6;
+        return v7;
+}
+
+func private %dynamic_index(v0.i256) -> i256 {
+    block0:
+        v1.constref<[i256; 6]> = const.ref $indices;
+        v2.constref<i256> = const.index v1 v0;
+        v3.i256 = const.load v2;
+        v4.constref<[i256; 6]> = const.ref $values;
+        v5.constref<i256> = const.index v4 v3;
+        v6.i256 = const.load v5;
+        return v6;
+}
+
+func private %affine_index(v0.i256) -> i256 {
+    block0:
+        v1.constref<[i256; 2]> = const.ref $affine_indices;
+        v2.constref<i256> = const.index v1 v0;
+        v3.i256 = const.load v2;
+        v4.constref<[i256; 6]> = const.ref $values;
+        v5.constref<i256> = const.index v4 v3;
+        v6.i256 = const.load v5;
+        return v6;
+}
+
+# The consumer precedes the index definition in layout order.
+func private %reordered_blocks(v0.i256) -> i256 {
+    block0:
+        jump block1;
+    block2:
+        v4.constref<[i256; 6]> = const.ref $values;
+        v5.constref<i256> = const.index v4 v3;
+        v6.i256 = const.load v5;
+        return v6;
+    block1:
+        v1.constref<[i256; 6]> = const.ref $indices;
+        v2.constref<i256> = const.index v1 v0;
+        v3.i256 = const.load v2;
+        jump block2;
+}
+
+# Both row-copy groups are planned before the first group's loads are replaced.
+# The last block also consumes a replaced index while collecting new candidates.
+func private %nested_rows(v0.i256) -> i256 {
+    block0:
+        v1.constref<[i256; 6]> = const.ref $indices;
+        v2.constref<i256> = const.index v1 v0;
+        v3.i256 = const.load v2;
+        v4.i256 = add v0 1.i256;
+        v5.constref<i256> = const.index v1 v4;
+        v6.i256 = const.load v5;
+        v7.i256 = add v0 2.i256;
+        v8.constref<i256> = const.index v1 v7;
+        v9.i256 = const.load v8;
+        v10.constref<[i256; 6]> = const.ref $values;
+        v11.constref<i256> = const.index v10 v3;
+        v12.i256 = const.load v11;
+        v13.i256 = add v3 1.i256;
+        v14.constref<i256> = const.index v10 v13;
+        v15.i256 = const.load v14;
+        v16.i256 = add v3 2.i256;
+        v17.constref<i256> = const.index v10 v16;
+        v18.i256 = const.load v17;
+        v19.i256 = add v12 v15;
+        v20.i256 = add v19 v18;
+        v21.i256 = add v20 v9;
+        jump block1;
+    block1:
+        v22.constref<i256> = const.index v10 v6;
+        v23.i256 = const.load v22;
+        v24.i256 = add v21 v23;
+        return v24;
+}
+
+func private %init_pair(v0.i256) -> i256 {
+    block0:
+        v1.constref<[i256; 6]> = const.ref $indices;
+        v2.constref<i256> = const.index v1 v0;
+        v3.i256 = const.load v2;
+        v4.constref<[[i256; 2]; 6]> = const.ref $pairs;
+        v5.constref<[i256; 2]> = const.index v4 v3;
+        v6.objref<[i256; 2]> = obj.alloc [i256; 2];
+        obj.init.const v6 v5;
+        v7.objref<i256> = obj.index v6 1.i256;
+        v8.i256 = obj.load v7;
+        return v8;
+}
+
+func private %static_init_pair() -> i256 {
+    block0:
+        v0.constref<[i256; 6]> = const.ref $indices;
+        v1.constref<i256> = const.index v0 0.i256;
+        v2.i256 = const.load v1;
+        v3.constref<[[i256; 2]; 6]> = const.ref $pairs;
+        v4.constref<[i256; 2]> = const.index v3 v2;
+        v5.objref<[i256; 2]> = obj.alloc [i256; 2];
+        obj.init.const v5 v4;
+        v6.objref<i256> = obj.index v5 1.i256;
+        v7.i256 = obj.load v6;
+        return v7;
+}
+
+func private %escape_index(v0.i256) -> constref<i256> {
+    block0:
+        v1.constref<[i256; 6]> = const.ref $indices;
+        v2.constref<i256> = const.index v1 v0;
+        v3.i256 = const.load v2;
+        v4.constref<[i256; 6]> = const.ref $values;
+        v5.constref<i256> = const.index v4 v3;
+        return v5;
+}
+
+func private %load_escaped_index(v0.i256) -> i256 {
+    block0:
+        v1.constref<i256> = call %escape_index v0;
+        v2.i256 = const.load v1;
+        return v2;
+}
