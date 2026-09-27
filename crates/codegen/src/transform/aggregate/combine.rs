@@ -26,9 +26,14 @@ use super::{
     shape,
 };
 
+mod value_facts;
+
+use value_facts::AggregateValueFacts;
+
 #[derive(Default)]
 pub struct AggregateCombine {
     changed: bool,
+    replacements: FxHashMap<ValueId, ValueId>,
     layout_cache: shape::AggregateLayoutCache,
 }
 
@@ -133,7 +138,8 @@ impl AggregateCombine {
 
         loop {
             let mut iter_changed = false;
-            let definitely_non_undef = compute_definitely_non_undef_aggregates(func);
+            self.replacements.clear();
+            let value_facts = AggregateValueFacts::compute(func);
             let accesses = ObjectAccessFacts::new(func, object_effects);
             let tracked = accesses.tracked_all(func, &mut self.layout_cache);
             let effects = func
@@ -167,7 +173,7 @@ impl AggregateCombine {
                     if !func.layout.is_inst_inserted(inst) {
                         continue;
                     }
-                    iter_changed |= self.try_rewrite_inst(func, inst, &definitely_non_undef);
+                    iter_changed |= self.try_rewrite_inst(func, inst, &value_facts);
                 }
             }
             if iter_changed {
@@ -183,6 +189,20 @@ impl AggregateCombine {
         }
 
         self.changed
+    }
+
+    fn replace_with_alias(
+        &mut self,
+        func: &mut Function,
+        inst: InstId,
+        result: ValueId,
+        replacement: ValueId,
+    ) {
+        // Cached reconstruction sources refer to the immutable SSA snapshots
+        // from the start of this round, including values erased by earlier rewrites.
+        self.replacements.insert(result, replacement);
+        func.dfg.change_to_alias(result, replacement);
+        InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
     }
 
     fn try_rewrite_enum_object_inst(
@@ -262,8 +282,7 @@ impl AggregateCombine {
         if let Some(value) = replacement
             && let Some(result) = func.dfg.inst_result(inst)
         {
-            func.dfg.change_to_alias(result, value);
-            InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+            self.replace_with_alias(func, inst, result, value);
             return true;
         }
         removed
@@ -285,7 +304,7 @@ impl AggregateCombine {
         &mut self,
         func: &mut Function,
         inst: InstId,
-        definitely_non_undef: &SecondaryMap<ValueId, bool>,
+        facts: &AggregateValueFacts,
     ) -> bool {
         if downcast::<&data::EnumTag>(func.inst_set(), func.dfg.inst(inst)).is_some() {
             self.try_rewrite_enum_tag(func, inst)
@@ -296,9 +315,9 @@ impl AggregateCombine {
         } else if downcast::<&data::ExtractValue>(func.inst_set(), func.dfg.inst(inst)).is_some() {
             self.try_rewrite_extract(func, inst)
         } else if downcast::<&data::InsertValue>(func.inst_set(), func.dfg.inst(inst)).is_some() {
-            self.try_rewrite_insert(func, inst, definitely_non_undef)
+            self.try_rewrite_insert(func, inst, facts)
         } else if downcast::<&control_flow::Phi>(func.inst_set(), func.dfg.inst(inst)).is_some() {
-            self.try_rewrite_phi(func, inst, definitely_non_undef)
+            self.try_rewrite_phi(func, inst, &facts.definitely_non_undef)
         } else {
             false
         }
@@ -319,8 +338,7 @@ impl AggregateCombine {
             enum_ty: enum_make.variant().enum_ty(),
             value: I256::from(u64::from(enum_make.variant().index())),
         });
-        func.dfg.change_to_alias(result, tag);
-        InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+        self.replace_with_alias(func, inst, result, tag);
         true
     }
 
@@ -339,8 +357,7 @@ impl AggregateCombine {
         let folded = func
             .dfg
             .make_imm_value(*enum_make.variant() == *enum_is_variant.variant());
-        func.dfg.change_to_alias(result, folded);
-        InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+        self.replace_with_alias(func, inst, result, folded);
         true
     }
 
@@ -368,8 +385,7 @@ impl AggregateCombine {
         if func.dfg.value_ty(payload) != func.dfg.value_ty(result) {
             return false;
         }
-        func.dfg.change_to_alias(result, payload);
-        InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+        self.replace_with_alias(func, inst, result, payload);
         true
     }
 
@@ -393,8 +409,7 @@ impl AggregateCombine {
                         func, inst, &extract, result, target_idx,
                     );
                 }
-                func.dfg.change_to_alias(result, found);
-                InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+                self.replace_with_alias(func, inst, result, found);
                 true
             }
             AggregateFieldLookup::BaseNeedsExtract(base) if base != *extract.dest() => {
@@ -408,8 +423,7 @@ impl AggregateCombine {
                     return false;
                 }
                 let undef = func.dfg.make_undef_value(field_ty);
-                func.dfg.change_to_alias(result, undef);
-                InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+                self.replace_with_alias(func, inst, result, undef);
                 true
             }
             AggregateFieldLookup::BaseNeedsExtract(_) | AggregateFieldLookup::Unknown => self
@@ -485,8 +499,7 @@ impl AggregateCombine {
         if func.dfg.value_ty(replacement) != func.dfg.value_ty(result) {
             return false;
         }
-        func.dfg.change_to_alias(result, replacement);
-        InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+        self.replace_with_alias(func, inst, result, replacement);
         true
     }
 
@@ -494,7 +507,7 @@ impl AggregateCombine {
         &mut self,
         func: &mut Function,
         inst: InstId,
-        definitely_non_undef: &SecondaryMap<ValueId, bool>,
+        facts: &AggregateValueFacts,
     ) -> bool {
         let Some(insert) = downcast::<&data::InsertValue>(func.inst_set(), func.dfg.inst(inst))
         else {
@@ -506,12 +519,11 @@ impl AggregateCombine {
         };
 
         // AC5: insert identical field back into aggregate.
-        if is_identical_field_reinsert(func, &insert, definitely_non_undef) {
+        if is_identical_field_reinsert(func, &insert, &facts.definitely_non_undef) {
             if func.dfg.value_ty(*insert.dest()) != func.dfg.value_ty(result) {
                 return false;
             }
-            func.dfg.change_to_alias(result, *insert.dest());
-            InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+            self.replace_with_alias(func, inst, result, *insert.dest());
             return true;
         }
 
@@ -532,12 +544,16 @@ impl AggregateCombine {
         }
 
         // AC6: full reconstruction reuse.
-        if let Some(source) = try_reconstruct_original_aggregate(func, result) {
-            if func.dfg.value_ty(source) != func.dfg.value_ty(result) {
+        if let Some(mut source) = facts.reconstructed[result] {
+            while let Some(&replacement) = self.replacements.get(&source) {
+                source = replacement;
+            }
+            if is_explicit_undef(func, source)
+                || func.dfg.value_ty(source) != func.dfg.value_ty(result)
+            {
                 return false;
             }
-            func.dfg.change_to_alias(result, source);
-            InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+            self.replace_with_alias(func, inst, result, source);
             return true;
         }
 
@@ -611,8 +627,7 @@ impl AggregateCombine {
             res_ty,
         );
 
-        func.dfg.change_to_alias(result, new_extract);
-        InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+        self.replace_with_alias(func, inst, result, new_extract);
         true
     }
 
@@ -689,8 +704,7 @@ impl AggregateCombine {
             result_ty,
         );
 
-        func.dfg.change_to_alias(result, new_insert);
-        InstInserter::at_location(CursorLocation::At(inst)).remove_inst(func);
+        self.replace_with_alias(func, inst, result, new_insert);
         true
     }
 }
@@ -1366,108 +1380,6 @@ fn is_explicit_undef(func: &Function, v: ValueId) -> bool {
     matches!(func.dfg.value(v), Value::Undef { .. })
 }
 
-fn compute_definitely_non_undef_aggregates(func: &Function) -> SecondaryMap<ValueId, bool> {
-    let mut definitely_non_undef = SecondaryMap::default();
-    for value in func.dfg.value_ids() {
-        let ty = func.dfg.value_ty(value);
-        if shape::is_supported_aggregate_ty(func.ctx(), ty) {
-            definitely_non_undef[value] = !is_explicit_undef(func, value);
-        }
-    }
-
-    loop {
-        let mut changed = false;
-        for value in func.dfg.value_ids() {
-            let ty = func.dfg.value_ty(value);
-            if !shape::is_supported_aggregate_ty(func.ctx(), ty) {
-                continue;
-            }
-
-            let next = aggregate_is_definitely_non_undef(func, value, &definitely_non_undef);
-            if definitely_non_undef[value] != next {
-                definitely_non_undef[value] = next;
-                changed = true;
-            }
-        }
-        if !changed {
-            return definitely_non_undef;
-        }
-    }
-}
-
-fn aggregate_is_definitely_non_undef(
-    func: &Function,
-    value: ValueId,
-    definitely_non_undef: &SecondaryMap<ValueId, bool>,
-) -> bool {
-    if is_explicit_undef(func, value) {
-        return false;
-    }
-
-    let ty = func.dfg.value_ty(value);
-    let Some(inst) = func.dfg.value_inst(value) else {
-        return true;
-    };
-
-    if let Some(insert) = downcast::<&data::InsertValue>(func.inst_set(), func.dfg.inst(inst)) {
-        if value_is_definitely_non_undef(func, *insert.dest(), definitely_non_undef) {
-            return true;
-        }
-
-        let Some(field_count) = shape::aggregate_child_count(func.ctx(), ty) else {
-            return false;
-        };
-        let Some(assignments) = collect_insert_assignments(func, value) else {
-            return false;
-        };
-        return assignments.len() == field_count
-            && (0..field_count).all(|idx| {
-                let Some(idx_u32) = u32::try_from(idx).ok() else {
-                    return false;
-                };
-                let Some(field) = assignments.get(&idx_u32).copied() else {
-                    return false;
-                };
-                let Some(field_ty) = shape::aggregate_child_ty(func.ctx(), ty, idx_u32) else {
-                    return false;
-                };
-                func.dfg.value_ty(field) == field_ty
-                    && value_is_definitely_non_undef(func, field, definitely_non_undef)
-            });
-    }
-
-    if let Some(phi) = downcast::<&control_flow::Phi>(func.inst_set(), func.dfg.inst(inst)) {
-        return phi.args().iter().any(|&(arg, _)| arg != value)
-            && phi.args().iter().all(|&(arg, _)| {
-                func.dfg.value_ty(arg) == ty
-                    && value_is_definitely_non_undef(func, arg, definitely_non_undef)
-            });
-    }
-
-    if let Some(extract) = downcast::<&data::ExtractValue>(func.inst_set(), func.dfg.inst(inst)) {
-        return value_is_definitely_non_undef(func, *extract.dest(), definitely_non_undef);
-    }
-
-    if let Some(bitcast) = downcast::<&cast::Bitcast>(func.inst_set(), func.dfg.inst(inst)) {
-        return value_is_definitely_non_undef(func, *bitcast.from(), definitely_non_undef);
-    }
-
-    false
-}
-
-fn value_is_definitely_non_undef(
-    func: &Function,
-    value: ValueId,
-    definitely_non_undef: &SecondaryMap<ValueId, bool>,
-) -> bool {
-    let ty = func.dfg.value_ty(value);
-    if shape::is_supported_aggregate_ty(func.ctx(), ty) {
-        definitely_non_undef[value]
-    } else {
-        !is_explicit_undef(func, value)
-    }
-}
-
 fn is_identical_field_reinsert(
     func: &Function,
     insert: &data::InsertValue,
@@ -1524,95 +1436,6 @@ fn walk_insert_chain_for_field(
         return AggregateFieldLookup::Found(*insert.value());
     }
     walk_insert_chain_for_field(func, *insert.dest(), target_idx)
-}
-
-fn try_reconstruct_original_aggregate(func: &Function, value: ValueId) -> Option<ValueId> {
-    let agg_ty = func.dfg.value_ty(value);
-    let field_count = shape::aggregate_child_count(func.ctx(), agg_ty)?;
-    if field_count == 0 {
-        return None;
-    }
-
-    let assignments = collect_insert_assignments(func, value)?;
-    if assignments.len() != field_count {
-        return None;
-    }
-
-    let mut source: Option<ValueId> = None;
-    for idx in 0..field_count {
-        let idx_u32 = u32::try_from(idx).ok()?;
-        let field_val = *assignments.get(&idx_u32)?;
-        let mut path = vec![idx_u32];
-        let field_source = source_for_path_value(func, field_val, &mut path)?;
-        if source.is_none() {
-            source = Some(field_source);
-        } else if source != Some(field_source) {
-            return None;
-        }
-    }
-
-    let source = source?;
-    (!is_explicit_undef(func, source) && func.dfg.value_ty(source) == agg_ty).then_some(source)
-}
-
-fn collect_insert_assignments(func: &Function, value: ValueId) -> Option<FxHashMap<u32, ValueId>> {
-    let mut assignments: FxHashMap<u32, ValueId> = FxHashMap::default();
-    let mut current = value;
-    while let Some(inst) = func.dfg.value_inst(current) {
-        let Some(insert) = downcast::<&data::InsertValue>(func.inst_set(), func.dfg.inst(inst))
-        else {
-            break;
-        };
-        let idx = inst_const_index(func, *insert.idx())?;
-        assignments.entry(idx).or_insert(*insert.value());
-        current = *insert.dest();
-    }
-    Some(assignments)
-}
-
-fn source_for_path_value(func: &Function, value: ValueId, path: &mut Vec<u32>) -> Option<ValueId> {
-    if let Some(source) = extract_chain_source(func, value, path) {
-        return Some(source);
-    }
-
-    let value_ty = func.dfg.value_ty(value);
-    let child_count = shape::aggregate_child_count(func.ctx(), value_ty)?;
-    if child_count == 0 {
-        return None;
-    }
-
-    let assignments = collect_insert_assignments(func, value)?;
-    if assignments.len() != child_count {
-        return None;
-    }
-
-    let mut source: Option<ValueId> = None;
-    for idx in 0..child_count {
-        let idx_u32 = u32::try_from(idx).ok()?;
-        let field_val = *assignments.get(&idx_u32)?;
-        path.push(idx_u32);
-        let field_source = source_for_path_value(func, field_val, path)?;
-        path.pop();
-        if source.is_none() {
-            source = Some(field_source);
-        } else if source != Some(field_source) {
-            return None;
-        }
-    }
-
-    source
-}
-
-fn extract_chain_source(func: &Function, mut value: ValueId, path: &[u32]) -> Option<ValueId> {
-    for &idx in path.iter().rev() {
-        let inst = func.dfg.value_inst(value)?;
-        let extract = downcast::<&data::ExtractValue>(func.inst_set(), func.dfg.inst(inst))?;
-        if inst_const_index(func, *extract.idx()) != Some(idx) {
-            return None;
-        }
-        value = *extract.dest();
-    }
-    Some(value)
 }
 
 #[cfg(test)]
