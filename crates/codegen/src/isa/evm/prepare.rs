@@ -13,10 +13,13 @@ use crate::{
     stackalloc::StackifyAlloc,
 };
 use sonatina_ir::{
-    AccessKind, AccessLoc, Function, GlobalVariableRef, InstId, InstSetExt, MemoryAccess, Module,
-    ValueId,
+    AccessKind, AccessLoc, Function, GlobalVariableRef, InstDowncast, InstId, InstSetExt,
+    MemoryAccess, Module, ValueId,
     cfg::ControlFlowGraph,
-    inst::evm::{inst_set::EvmInstKind, machine_inst_set::EvmMachineInstKind},
+    inst::evm::{
+        EvmReturn, EvmRevert, inst_set::EvmInstKind, machine_inst_set::EvmMachineInstKind,
+    },
+    ir_writer::{FuncWriteCtx, InstStatement, IrWrite},
     isa::{
         Isa,
         evm::{EvmMachine, space::MEMORY},
@@ -39,7 +42,7 @@ use super::{
         final_spills::{
             FinalSpillAllocationInput, FinalSpillChoiceCtx, FinalSpillObjects,
             FixedMemoryWriteRange, MachineFinalSpillInput, OptionalFinalSpillPlacement,
-            allocate_final_spills,
+            allocate_final_spills, validate_dynamic_terminal_payload_spills,
         },
         lazy_frame::{FrameSummary, compute_frame_summary, compute_machine_frame_roots},
         lower::lower_section_to_machine,
@@ -321,37 +324,54 @@ impl SectionMemoryLayout {
     }
 }
 
+/// A fixed-address access whose length is not a compile-time constant. The source
+/// claims the upward-unbounded range `[start, ..)`, which no placement of
+/// compiler-managed memory (static arena or heap) can avoid.
+struct UnboundedFixedAccess {
+    start: u32,
+}
+
 fn memory_layout_reservation_for_addr_len(
     function: &Function,
     addr: ValueId,
     len: MemoryAccessLen,
     prov: &SecondaryMap<ValueId, Provenance>,
-) -> MemoryLayoutReservation {
+) -> Result<MemoryLayoutReservation, UnboundedFixedAccess> {
     if len.is_zero(function) {
-        return MemoryLayoutReservation::None;
+        return Ok(MemoryLayoutReservation::None);
     }
 
     if function.dfg.value_is_imm(addr) {
-        return match (value_imm_u32(function, addr), len.as_u32(function)) {
-            (Some(start), Some(len)) => MemoryLayoutReservation::Reserve { start, len },
-            _ => MemoryLayoutReservation::ConservativeFloor,
+        let Some(start) = value_imm_u32(function, addr) else {
+            return Ok(MemoryLayoutReservation::ConservativeFloor);
+        };
+        return match len {
+            MemoryAccessLen::Value(len) if !function.dfg.value_is_imm(len) => {
+                Err(UnboundedFixedAccess { start })
+            }
+            // An immediate length beyond `u32` can only exhaust gas.
+            _ => Ok(len
+                .as_u32(function)
+                .map_or(MemoryLayoutReservation::ConservativeFloor, |len| {
+                    MemoryLayoutReservation::Reserve { start, len }
+                })),
         };
     }
 
-    if addr_is_allocator_managed(&prov[addr]) {
+    Ok(if addr_is_allocator_managed(&prov[addr]) {
         MemoryLayoutReservation::None
     } else {
         MemoryLayoutReservation::ConservativeFloor
-    }
+    })
 }
 
 fn memory_layout_reservation_from_effect(
     function: &Function,
     access: &MemoryAccess,
     prov: &SecondaryMap<ValueId, Provenance>,
-) -> MemoryLayoutReservation {
+) -> Result<MemoryLayoutReservation, UnboundedFixedAccess> {
     if access.space != MEMORY {
-        return MemoryLayoutReservation::None;
+        return Ok(MemoryLayoutReservation::None);
     }
 
     match &access.loc {
@@ -361,18 +381,20 @@ fn memory_layout_reservation_from_effect(
             MemoryAccessLen::Known(*bytes),
             prov,
         ),
-        AccessLoc::LinearExactImm { addr, bytes, .. } => immediate_u32(*addr)
+        AccessLoc::LinearExactImm { addr, bytes, .. } => Ok(immediate_u32(*addr)
             .map_or(MemoryLayoutReservation::ConservativeFloor, |start| {
                 MemoryLayoutReservation::Reserve { start, len: *bytes }
-            }),
+            })),
         AccessLoc::LinearRange { addr, len } => memory_layout_reservation_for_addr_len(
             function,
             *addr,
             MemoryAccessLen::Value(*len),
             prov,
         ),
-        AccessLoc::WholeSpace | AccessLoc::Unknown => MemoryLayoutReservation::ConservativeFloor,
-        AccessLoc::KeyedExact { .. } => MemoryLayoutReservation::None,
+        AccessLoc::WholeSpace | AccessLoc::Unknown => {
+            Ok(MemoryLayoutReservation::ConservativeFloor)
+        }
+        AccessLoc::KeyedExact { .. } => Ok(MemoryLayoutReservation::None),
     }
 }
 
@@ -389,6 +411,50 @@ fn immediate_memory_access_range(function: &Function, access: &MemoryAccess) -> 
 
     let end = start.checked_add(len)?;
     Some((start, end))
+}
+
+/// A terminal `evm_return`/`evm_revert` of `[start, start + len)` with a dynamic `len`,
+/// whose payload is produced entirely by the immediately preceding instruction: a
+/// single memory write of the same range, e.g. `evm_code_copy 0 off len` before
+/// `evm_return 0 len`. Nothing executes between the write and the terminal, so the
+/// write needs no layout reservation; the only value live across it is `len`.
+pub(crate) struct DynamicTerminalPayload {
+    pub(crate) write: InstId,
+    pub(crate) start: u32,
+    pub(crate) len: ValueId,
+}
+
+/// Recognizes a [`DynamicTerminalPayload`] ending at `terminal`. Works on both the
+/// source and the machine instruction sets.
+pub(crate) fn dynamic_terminal_payload(
+    function: &Function,
+    terminal: InstId,
+) -> Option<DynamicTerminalPayload> {
+    let is = function.inst_set();
+    let data = function.dfg.inst(terminal);
+    let (addr, len) = match <&EvmReturn as InstDowncast>::downcast(is, data) {
+        Some(ret) => (*ret.addr(), *ret.len()),
+        None => {
+            let revert = <&EvmRevert as InstDowncast>::downcast(is, data)?;
+            (*revert.addr(), *revert.len())
+        }
+    };
+    let start = value_imm_u32(function, addr)?;
+    if function.dfg.value_is_imm(len) {
+        return None;
+    }
+    let write = function.layout.prev_inst_of(terminal)?;
+    let effects = function.dfg.effects(write);
+    let mut memory_accesses = effects
+        .accesses
+        .iter()
+        .filter(|access| access.space == MEMORY);
+    let access = memory_accesses.next()?;
+    let covers = memory_accesses.next().is_none()
+        && access.kind == AccessKind::Write
+        && matches!(access.loc, AccessLoc::LinearRange { addr: write_addr, len: write_len }
+            if write_len == len && value_imm_u32(function, write_addr) == Some(start));
+    covers.then_some(DynamicTerminalPayload { write, start, len })
 }
 
 fn terminal_payload_range(
@@ -454,6 +520,10 @@ fn terminal_payload_scratch_insts(function: &Function, backend: &EvmBackend) -> 
         let Some(&terminal) = insts.last() else {
             continue;
         };
+        if let Some(payload) = dynamic_terminal_payload(function, terminal) {
+            out.extend([payload.write, terminal]);
+            continue;
+        }
         let Some((payload_start, payload_end)) =
             terminal_payload_range(function, backend, terminal)
         else {
@@ -498,10 +568,11 @@ fn terminal_payload_scratch_insts(function: &Function, backend: &EvmBackend) -> 
 
 fn reserve_function_memory_layout(
     layout: &mut SectionMemoryLayout,
+    func: FuncRef,
     function: &Function,
     backend: &EvmBackend,
     prov: &SecondaryMap<ValueId, Provenance>,
-) {
+) -> Result<(), String> {
     let terminal_payload_scratch = terminal_payload_scratch_insts(function, backend);
 
     for block in function.layout.iter_block() {
@@ -517,12 +588,24 @@ fn reserve_function_memory_layout(
             }
 
             for access in &function.dfg.effects(inst).accesses {
-                layout.apply(memory_layout_reservation_from_effect(
-                    function, access, prov,
-                ));
+                let reservation = memory_layout_reservation_from_effect(function, access, prov)
+                    .map_err(|access| {
+                        let name = function.ctx().func_sig(func, |sig| sig.name().to_string());
+                        let mut text = Vec::new();
+                        InstStatement(inst)
+                            .write(&mut text, &FuncWriteCtx::new(function, func))
+                            .expect("writing to a Vec cannot fail");
+                        format!(
+                            "EVM memory access at fixed address 0x{:x} in %{name} has a dynamic length: `{}`. Compiler-managed memory cannot be kept out of an unbounded fixed range; allocate the buffer with `evm_malloc`, use a constant length, or write the payload of the immediately following `evm_return`/`evm_revert`",
+                            access.start,
+                            String::from_utf8_lossy(&text).trim(),
+                        )
+                    })?;
+                layout.apply(reservation);
             }
         }
     }
+    Ok(())
 }
 
 fn machine_fixed_memory_write_ranges(
@@ -629,15 +712,21 @@ pub(crate) fn scan_fixed_reservations(
     funcs: &[FuncRef],
     backend: &EvmBackend,
     analyses: &FxHashMap<FuncRef, memory_plan::FuncPreAnalysis>,
-) -> SectionMemoryLayout {
+) -> Result<SectionMemoryLayout, String> {
     let mut layout = SectionMemoryLayout::default();
     for &func in funcs {
         let analysis = expect_func_entry(analyses, func, "pre-analysis");
         module.func_store.view(func, |function| {
-            reserve_function_memory_layout(&mut layout, function, backend, &analysis.prov.value);
-        });
+            reserve_function_memory_layout(
+                &mut layout,
+                func,
+                function,
+                backend,
+                &analysis.prov.value,
+            )
+        })?;
     }
-    layout
+    Ok(layout)
 }
 
 pub(crate) fn choose_arena_base(
@@ -699,7 +788,8 @@ fn prepare_machine_section_after_pipeline(
     let source_module = work.module();
     let pre_analyses = compute_high_evm_pre_analyses(source_module, &funcs, backend, &ptr_escape);
     let schedule = CallGraphSchedule::compute(source_module, &funcs);
-    let fixed_reservations = scan_fixed_reservations(source_module, &funcs, backend, &pre_analyses);
+    let fixed_reservations =
+        scan_fixed_reservations(source_module, &funcs, backend, &pre_analyses)?;
     let mut fixed_slot_effects = FxHashSet::default();
     let mut backend_spill_reserves: FxHashMap<FuncRef, BackendSpillReserve> = FxHashMap::default();
     let mut last_convergence_error = None;
@@ -1008,6 +1098,17 @@ fn prepare_machine_section_after_pipeline(
                 );
             }
             validate_committed_final_spill_section(&section_plan, &function_plans)?;
+            for &func in &funcs {
+                let plan = expect_func_entry(&function_plans, func, "function plan");
+                machine.work.module().func_store.view(func, |function| {
+                    validate_dynamic_terminal_payload_spills(
+                        func,
+                        function,
+                        &plan.alloc,
+                        &plan.mem_plan,
+                    )
+                })?;
+            }
             let mut globals: Vec<_> = membership.globals.iter().copied().collect();
             globals.sort_unstable();
             return Ok(EvmPreparedSection {

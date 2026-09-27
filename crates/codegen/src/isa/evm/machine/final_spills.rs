@@ -30,7 +30,9 @@ use super::{
             self, BackendSpillReserve, FinalScratchReserveRange, MachineStackifyAnalysis,
             StableMode, WORD_BYTES,
         },
-        prepare::{ArenaBaseFacts, SectionMemoryLayout, choose_arena_base},
+        prepare::{
+            ArenaBaseFacts, SectionMemoryLayout, choose_arena_base, dynamic_terminal_payload,
+        },
         static_arena_alloc::StackObjId,
     },
     placement::EvmMemoryPlacementPlan,
@@ -1067,6 +1069,54 @@ fn validate_final_spills_disjoint_from_fixed_writes(
         }
     }
 
+    Ok(())
+}
+
+/// A [`dynamic_terminal_payload`] write is exempt from layout reservations, so it
+/// may overwrite any compiler-managed memory from its start upward. The terminal
+/// still needs `len` after the write; if `len` is spilled there, the terminal would
+/// reload clobbered bytes.
+pub(crate) fn validate_dynamic_terminal_payload_spills(
+    func: FuncRef,
+    function: &Function,
+    alloc: &StackifyAlloc,
+    mem_plan: &MachineFuncPlan,
+) -> Result<(), String> {
+    for block in function.layout.iter_block() {
+        let Some(payload) = function
+            .layout
+            .last_inst_of(block)
+            .and_then(|terminal| dynamic_terminal_payload(function, terminal))
+        else {
+            continue;
+        };
+        let spill_range = if let Some(slot) = alloc.scratch_slot(payload.len) {
+            Some((slot * WORD_BYTES, (slot + 1) * WORD_BYTES))
+        } else if let Some(obj) = alloc.spill_obj(payload.len) {
+            let loc = mem_plan.obj_loc.get(&obj).copied().ok_or_else(|| {
+                format!(
+                    "missing spill location in func {} for obj {}",
+                    func.as_u32(),
+                    obj.as_u32()
+                )
+            })?;
+            // Dynamic-frame spills have no static address, so assume the write reaches them.
+            absolute_byte_range_for_loc(mem_plan, loc)?
+        } else {
+            continue;
+        };
+        if spill_range.is_none_or(|(_, end)| end > payload.start) {
+            let name = function.ctx().func_sig(func, |sig| sig.name().to_string());
+            return Err(format!(
+                "EVM terminal payload in %{name} reloads its length v{} from spill memory at {} after the payload write at 0x{:x} overwrites it",
+                payload.len.as_u32(),
+                spill_range.map_or("a dynamic frame".to_string(), |(start, _)| format!(
+                    "0x{start:x}"
+                )),
+                payload.start,
+            ));
+        }
+    }
     Ok(())
 }
 

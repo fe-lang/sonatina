@@ -57,7 +57,6 @@ impl StackifyAlloc {
         self.spill_storage[value]
     }
 
-    #[cfg(test)]
     pub(crate) fn spill_obj(&self, value: ValueId) -> Option<StackObjId> {
         match self.spill_storage[value] {
             Some(SpillStorage::Object(obj)) => Some(obj),
