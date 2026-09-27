@@ -1262,13 +1262,13 @@ mod tests {
         for (ty, index, other_index) in [
             ("[i256; 2]", "v4", "undef.i256"),
             ("@Pair", "0.i256", "1.i256"),
-            ("@Packed", "1.i256", "0.i256"),
+            ("@Triple", "2.i256", "0.i256"),
         ] {
             let source = format!(
                 r#"
  target = "evm-ethereum-osaka"
  type @Pair = {{ i256, i256 }};
- type @Packed = <{{ i256, i256 }}>;
+ type @Triple = {{ i256, i256, i256 }};
  func private %f(v0.{ty}, v1.i256, v2.i256) -> {ty} {{
  block0:
      jump block1;
