@@ -1,7 +1,14 @@
 use std::{hint::black_box, time::Instant};
 
-use sonatina_codegen::optim::aggregate::AggregateCombine;
-use sonatina_ir::{Module, ir_writer::ModuleWriter};
+use sonatina_codegen::{
+    domtree::DomTree,
+    optim::{
+        aggregate::{AggregateCombine, AggregateScalarize},
+        gvn::GvnSolver,
+        sccp::SccpSolver,
+    },
+};
+use sonatina_ir::{ControlFlowGraph, Module, ir_writer::ModuleWriter};
 use sonatina_parser::parse_module;
 use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module_or_panic};
 
@@ -80,7 +87,10 @@ fn insertion_chain_scaling() {
     if cfg!(debug_assertions) {
         panic!("measure a release-built compiler");
     }
-    for reconstruct in [false, true] {
+    for (pass, reconstruct) in ["combine", "sccp", "scalarize", "gvn"]
+        .into_iter()
+        .flat_map(|pass| [false, true].map(|reconstruct| (pass, reconstruct)))
+    {
         for length in [64, 256, 1024, 4096] {
             let mut samples = Vec::new();
             for sample in 0..6 {
@@ -88,7 +98,15 @@ fn insertion_chain_scaling() {
                 let start = Instant::now();
                 for func_ref in module.funcs() {
                     module.func_store.modify(func_ref, |func| {
-                        black_box(AggregateCombine::default().run(func));
+                        let mut cfg = ControlFlowGraph::default();
+                        cfg.compute(func);
+                        black_box(match pass {
+                            "combine" => AggregateCombine::default().run(func),
+                            "sccp" => SccpSolver::new().run(func, &mut cfg),
+                            "scalarize" => AggregateScalarize::default().run(func),
+                            "gvn" => GvnSolver::new().run(func, &mut cfg, &mut DomTree::default()),
+                            _ => unreachable!(),
+                        });
                     });
                 }
                 if sample != 0 {
@@ -97,7 +115,7 @@ fn insertion_chain_scaling() {
             }
             samples.sort();
             println!(
-                "reconstruct={reconstruct}, elements={length}, median={:?}",
+                "pass={pass}, reconstruct={reconstruct}, elements={length}, median={:?}",
                 samples[samples.len() / 2]
             );
         }
