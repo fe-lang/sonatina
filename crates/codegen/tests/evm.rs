@@ -198,6 +198,64 @@ fn object_alias_execution_matrix_at_all_optimization_levels() {
 }
 
 #[test]
+fn nested_const_indices_execute_at_all_optimization_levels() {
+    let mut source = include_str!("../test_files/const_data/nested_indices.sntn").to_string();
+    source.push_str("\nfunc public %entry() {\nblock0:\nv0.i256 = evm_calldata_load 0.i256;\n");
+    let cases = [
+        ("static_index", false, [11, 11]),
+        ("dynamic_index", true, [42, 11]),
+        ("affine_index", true, [42, 11]),
+        ("reordered_blocks", true, [42, 11]),
+        ("nested_rows", true, [162, 161]),
+        ("init_pair", true, [99, 42]),
+        ("static_init_pair", false, [99, 99]),
+        ("load_escaped_index", true, [42, 11]),
+    ];
+    for (index, (name, takes_index, _)) in cases.iter().enumerate() {
+        let result = index + 1;
+        let offset = index * 32;
+        let args = if *takes_index { " v0" } else { "" };
+        source.push_str(&format!(
+            "v{result}.i256 = call %{name}{args};\nmstore {offset}.i256 v{result} i256;\n"
+        ));
+    }
+    let size = cases.len() * 32;
+    source.push_str(&format!("evm_return 0.i256 {size}.i256;\n}}\nobject @Contract {{ section runtime {{ entry %entry; }} }}\n"));
+    let config = VerifierConfig::for_level(VerificationLevel::Full);
+    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2] {
+        let module = parse_sona(&source).module;
+        verify_module_or_panic(&module, &config);
+        let mut compiler = Compile::new(module, EvmCompiler::default()).with_opt_level(level);
+        verify_module_or_panic(compiler.optimize(), &config);
+        let artifacts = compiler.compile().expect("nested indices should compile");
+        let runtime = artifacts[0]
+            .sections
+            .iter()
+            .find(|(name, _)| name.0 == "runtime")
+            .unwrap();
+        let mut harness = EvmHarness::from_runtime(&runtime.1.bytes);
+        for input in [0, 1] {
+            let result = harness.call(&IrU256::from(input).to_big_endian());
+            let ExecutionResult::Success {
+                output: Output::Call(actual),
+                ..
+            } = result
+            else {
+                panic!("{level:?}, input={input}: {result:?}");
+            };
+            assert_eq!(actual.len(), size);
+            for (bytes, (name, _, expected)) in actual.as_chunks::<32>().0.iter().zip(&cases) {
+                assert_eq!(
+                    *bytes,
+                    IrU256::from(expected[input] as u64).to_big_endian(),
+                    "{level:?}, input={input}, {name}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn evm_exp_wraps_to_declared_width() {
     for bits in [1, 8, 16, 32, 64, 128, 256] {
         let operation = if bits == 256 {

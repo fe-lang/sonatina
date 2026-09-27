@@ -11,6 +11,7 @@ use sonatina_ir::{
 };
 use sonatina_parser::parse_module;
 use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
+use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module_or_panic};
 
 fn parse(src: &str) -> sonatina_parser::ParsedModule {
     parse_module(src).unwrap_or_else(|errs| panic!("parse failed: {errs:?}"))
@@ -1373,4 +1374,27 @@ object @Contract {
     let opts = CompileOptions::default();
     compile_all_objects(&parsed.module, &test_backend(), &opts)
         .expect("looped dynamic const loads should lower before object compile");
+}
+
+#[test]
+fn nested_const_indices_remain_valid_after_lowering() {
+    let parsed = parse(include_str!(
+        "../../../../test_files/const_data/nested_indices.sntn"
+    ));
+    let config = VerifierConfig::for_level(VerificationLevel::Full);
+    verify_module_or_panic(&parsed.module, &config);
+    ConstDataLower::default().run(&parsed.module);
+    verify_module_or_panic(&parsed.module, &config);
+
+    let static_index = find_func_ref(&parsed, "static_index");
+    let dumped = parsed.module.func_store.view(static_index, |func| {
+        FuncWriter::new(static_index, func).dump_string()
+    });
+    assert!(dumped.contains("return 11.i256;"), "{dumped}");
+
+    let nested_rows = find_func_ref(&parsed, "nested_rows");
+    let dumped = parsed.module.func_store.view(nested_rows, |func| {
+        FuncWriter::new(nested_rows, func).dump_string()
+    });
+    assert_eq!(dumped.matches("alloca [i256; 3]").count(), 2, "{dumped}");
 }

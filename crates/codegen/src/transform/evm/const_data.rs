@@ -47,6 +47,37 @@ use object_init::{
 struct ConstRewriteInfo<'a> {
     constref_value_tys: &'a FxHashMap<ValueId, Type>,
     const_paths: &'a ConstPathAnalysis,
+    replacements: FxHashMap<ValueId, ValueId>,
+}
+
+impl ConstRewriteInfo<'_> {
+    fn resolve_value(&self, mut value: ValueId) -> ValueId {
+        while let Some(&replacement) = self.replacements.get(&value) {
+            value = replacement;
+        }
+        value
+    }
+
+    fn path(&self, value: ValueId) -> Option<ConstPath> {
+        let mut path = self.const_paths.path(value)?.clone();
+        for step in &mut path.steps {
+            if let ConstPathStep::IndexValue(index) = step {
+                *index = self.resolve_value(*index);
+            }
+        }
+        Some(path)
+    }
+
+    fn replace_with_alias(&mut self, func: &mut Function, inst: InstId, replacement: ValueId) {
+        let result = func
+            .dfg
+            .inst_result(inst)
+            .expect("instruction must have a result");
+        // IR aliases do not update the indices in cached const paths or row plans.
+        self.replacements.insert(result, replacement);
+        func.dfg.change_to_alias(result, replacement);
+        remove_inst(func, inst);
+    }
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -145,11 +176,12 @@ impl ConstDataLower {
         let constref_value_tys = collect_constref_value_tys(func);
         let const_paths = analyze_const_paths(func, &constref_value_tys);
         let mut changed = rewrite_function_types(func, types);
-        let info = ConstRewriteInfo {
+        let mut info = ConstRewriteInfo {
             constref_value_tys: &constref_value_tys,
             const_paths: &const_paths,
+            replacements: FxHashMap::default(),
         };
-        changed |= self.rewrite_const_load_rows(module, func, &info);
+        changed |= self.rewrite_const_load_rows(module, func, &mut info);
         let blocks: Vec<_> = func.layout.iter_block().collect();
         for block in blocks {
             let insts: Vec<_> = func.layout.iter_inst(block).collect();
@@ -157,14 +189,14 @@ impl ConstDataLower {
                 if !func.layout.is_inst_inserted(inst) {
                     continue;
                 }
-                changed |= self.rewrite_inst(module, func, inst, &info);
+                changed |= self.rewrite_inst(module, func, inst, &mut info);
             }
         }
 
         if changed {
             func.rebuild_users();
         }
-        changed |= self.cleanup_const_carriers(module, func, &info);
+        changed |= self.cleanup_const_carriers(module, func, &mut info);
         assert_no_const_ops(func);
         changed
     }
@@ -173,7 +205,7 @@ impl ConstDataLower {
         &mut self,
         module: &Module,
         func: &mut Function,
-        info: &ConstRewriteInfo<'_>,
+        info: &mut ConstRewriteInfo<'_>,
     ) -> bool {
         let mut changed = false;
         let blocks: Vec<_> = func.layout.iter_block().collect();
@@ -189,10 +221,11 @@ impl ConstDataLower {
                 {
                     segment.push(candidate);
                 } else if const_load_row_barrier(func, inst) {
-                    changed |= self.rewrite_const_load_row_segment(module, func, &mut segment);
+                    changed |=
+                        self.rewrite_const_load_row_segment(module, func, &mut segment, info);
                 }
             }
-            changed |= self.rewrite_const_load_row_segment(module, func, &mut segment);
+            changed |= self.rewrite_const_load_row_segment(module, func, &mut segment, info);
         }
         changed
     }
@@ -202,6 +235,7 @@ impl ConstDataLower {
         module: &Module,
         func: &mut Function,
         segment: &mut Vec<ConstLoadRowCandidate>,
+        info: &mut ConstRewriteInfo<'_>,
     ) -> bool {
         let mut groups = Vec::<ConstLoadRowGroup>::new();
         for candidate in segment.drain(..) {
@@ -217,7 +251,7 @@ impl ConstDataLower {
 
         let mut changed = false;
         for group in groups {
-            changed |= self.rewrite_const_load_row_group(module, func, group);
+            changed |= self.rewrite_const_load_row_group(module, func, group, info);
         }
         changed
     }
@@ -227,6 +261,7 @@ impl ConstDataLower {
         module: &Module,
         func: &mut Function,
         mut group: ConstLoadRowGroup,
+        info: &mut ConstRewriteInfo<'_>,
     ) -> bool {
         group
             .candidates
@@ -236,7 +271,7 @@ impl ConstDataLower {
         let mut run = Vec::new();
         let mut last_offset: Option<u32> = None;
         let mut unique_offsets = 0usize;
-        let key = group.key;
+        let mut key = group.key;
         for candidate in group.candidates {
             match last_offset {
                 Some(offset)
@@ -244,8 +279,14 @@ impl ConstDataLower {
                         .checked_add(1)
                         .is_some_and(|next_offset| candidate.word_offset > next_offset) =>
                 {
-                    changed |=
-                        self.rewrite_const_load_row_run(module, func, &key, &run, unique_offsets);
+                    changed |= self.rewrite_const_load_row_run(
+                        module,
+                        func,
+                        &mut key,
+                        &run,
+                        unique_offsets,
+                        info,
+                    );
                     run.clear();
                     unique_offsets = 1;
                 }
@@ -255,7 +296,8 @@ impl ConstDataLower {
             last_offset = Some(candidate.word_offset);
             run.push(candidate);
         }
-        changed |= self.rewrite_const_load_row_run(module, func, &key, &run, unique_offsets);
+        changed |=
+            self.rewrite_const_load_row_run(module, func, &mut key, &run, unique_offsets, info);
         changed
     }
 
@@ -263,9 +305,10 @@ impl ConstDataLower {
         &mut self,
         module: &Module,
         func: &mut Function,
-        key: &ConstLoadRowKey,
+        key: &mut ConstLoadRowKey,
         candidates: &[ConstLoadRowCandidate],
         unique_offsets: usize,
+        info: &mut ConstRewriteInfo<'_>,
     ) -> bool {
         if unique_offsets < MIN_ROW_COPY_WORDS {
             return false;
@@ -290,6 +333,9 @@ impl ConstDataLower {
             .min_by_key(|candidate| candidate.order)
             .expect("row run must be non-empty")
             .inst;
+        for (value, _) in &mut key.dynamic_terms {
+            *value = info.resolve_value(*value);
+        }
         let row_ptr = self.emit_const_load_row_copy(module, func, before, key, min_word, row_words);
         for candidate in candidates {
             let ptr = gep_word_offset(
@@ -304,7 +350,7 @@ impl ConstDataLower {
                 data::Mload::new_unchecked(func.inst_set(), ptr, candidate.result_ty),
                 candidate.result_ty,
             );
-            replace_with_alias(func, candidate.inst, replacement);
+            info.replace_with_alias(func, candidate.inst, replacement);
         }
         true
     }
@@ -396,12 +442,12 @@ impl ConstDataLower {
         module: &Module,
         func: &mut Function,
         inst: InstId,
-        info: &ConstRewriteInfo<'_>,
+        info: &mut ConstRewriteInfo<'_>,
     ) -> bool {
         if let Some(load) =
             downcast::<&data::ConstLoad>(func.inst_set(), func.dfg.inst(inst)).cloned()
         {
-            return self.rewrite_const_load(module, func, inst, *load.object(), info.const_paths);
+            return self.rewrite_const_load(module, func, inst, *load.object(), info);
         }
         if let Some(init) =
             downcast::<&data::ObjInitConst>(func.inst_set(), func.dfg.inst(inst)).cloned()
@@ -415,7 +461,7 @@ impl ConstDataLower {
         &mut self,
         module: &Module,
         func: &mut Function,
-        info: &ConstRewriteInfo<'_>,
+        info: &mut ConstRewriteInfo<'_>,
     ) -> bool {
         let mut changed = false;
         loop {
@@ -476,7 +522,7 @@ impl ConstDataLower {
         module: &Module,
         func: &mut Function,
         inst: InstId,
-        info: &ConstRewriteInfo<'_>,
+        info: &mut ConstRewriteInfo<'_>,
     ) -> bool {
         if let Some(const_ref) =
             downcast::<&data::ConstRef>(func.inst_set(), func.dfg.inst(inst)).cloned()
@@ -489,7 +535,7 @@ impl ConstDataLower {
                 steps: Vec::new(),
             };
             let replacement = self.materialize_const_path_addr(module, func, inst, &path);
-            replace_with_alias(func, inst, replacement);
+            info.replace_with_alias(func, inst, replacement);
             return true;
         }
         if let Some(proj) =
@@ -522,15 +568,15 @@ impl ConstDataLower {
         inst: InstId,
         base: ValueId,
         indices: &[ValueId],
-        info: &ConstRewriteInfo<'_>,
+        info: &mut ConstRewriteInfo<'_>,
     ) -> bool {
         let result = func
             .dfg
             .inst_result(inst)
             .expect("const subreference must have a result");
-        if let Some(path) = info.const_paths.path(result) {
-            let replacement = self.materialize_const_path_addr(module, func, inst, path);
-            replace_with_alias(func, inst, replacement);
+        if let Some(path) = info.path(result) {
+            let replacement = self.materialize_const_path_addr(module, func, inst, &path);
+            info.replace_with_alias(func, inst, replacement);
             return true;
         }
 
@@ -565,7 +611,7 @@ impl ConstDataLower {
         let replacement =
             const_addr_with_offset(func, inst, base, const_offset_bytes, dynamic_terms, true);
         debug_assert_eq!(ty, info.constref_value_tys[&result]);
-        replace_with_alias(func, inst, replacement);
+        info.replace_with_alias(func, inst, replacement);
         true
     }
 
@@ -575,36 +621,36 @@ impl ConstDataLower {
         func: &mut Function,
         inst: InstId,
         object: ValueId,
-        const_paths: &ConstPathAnalysis,
+        info: &mut ConstRewriteInfo<'_>,
     ) -> bool {
         let result_ty = func
             .dfg
             .inst_result(inst)
             .map(|result| func.dfg.value_ty(result))
             .expect("const.load must have a result");
-        let addr = if let Some(path) = const_paths.path(object) {
-            if let Some(imm) = eval_const_path_domain_immediate(&module.ctx, path, |value| {
+        let addr = if let Some(path) = info.path(object) {
+            if let Some(imm) = eval_const_path_domain_immediate(&module.ctx, &path, |value| {
                 func.dfg.value_imm(value)
             }) {
                 let replacement = func.dfg.make_imm_value(imm);
-                replace_with_alias(func, inst, replacement);
+                info.replace_with_alias(func, inst, replacement);
                 return true;
             }
 
             if let Some(replacement) =
-                self.rewrite_dynamic_domain_load(module, func, inst, path, result_ty)
+                self.rewrite_dynamic_domain_load(module, func, inst, &path, result_ty)
             {
-                replace_with_alias(func, inst, replacement);
+                info.replace_with_alias(func, inst, replacement);
                 return true;
             }
 
-            self.materialize_const_path_addr(module, func, inst, path)
+            self.materialize_const_path_addr(module, func, inst, &path)
         } else {
             object
         };
 
         let replacement = emit_const_load_from_addr(func, inst, addr, result_ty, None);
-        replace_with_alias(func, inst, replacement);
+        info.replace_with_alias(func, inst, replacement);
         true
     }
 
@@ -627,14 +673,14 @@ impl ConstDataLower {
                     inst.as_u32()
                 )
             });
-        if let Some(path) = info.const_paths.path(value) {
+        if let Some(path) = info.path(value) {
             if let Some((ty, subtree_init)) =
-                eval_const_path_subtree(&module.ctx, path, |value| func.dfg.value_imm(value))
+                eval_const_path_subtree(&module.ctx, &path, |value| func.dfg.value_imm(value))
             {
                 debug_assert_eq!(ty, path.ty);
-                self.emit_known_obj_init(module, func, inst, *init.object(), path, &subtree_init);
+                self.emit_known_obj_init(module, func, inst, *init.object(), &path, &subtree_init);
             } else {
-                let addr = self.materialize_const_path_addr(module, func, inst, path);
+                let addr = self.materialize_const_path_addr(module, func, inst, &path);
                 if !path.ty.is_integral()
                     && let Some(copy_len_bytes) = word_blob_copy_len_bytes(func.ctx(), path.ty)
                 {
@@ -1090,14 +1136,14 @@ fn const_load_row_candidate(
         return None;
     }
 
-    let path = info.const_paths.path(*load.object())?;
-    if eval_const_path_domain_immediate(&module.ctx, path, |value| func.dfg.value_imm(value))
+    let path = info.path(*load.object())?;
+    if eval_const_path_domain_immediate(&module.ctx, &path, |value| func.dfg.value_imm(value))
         .is_some()
     {
         return None;
     }
     if let Some((index, values)) =
-        eval_const_path_dynamic_domain_immediates(&module.ctx, path, |value| {
+        eval_const_path_dynamic_domain_immediates(&module.ctx, &path, |value| {
             func.dfg.value_imm(value)
         })
     {
@@ -1363,15 +1409,6 @@ pub(super) fn insert_before_no_result<I: sonatina_ir::Inst>(
 fn remove_inst(func: &mut Function, inst: InstId) {
     func.layout.remove_inst(inst);
     func.erase_inst(inst);
-}
-
-fn replace_with_alias(func: &mut Function, inst: InstId, replacement: ValueId) {
-    let result = func
-        .dfg
-        .inst_result(inst)
-        .expect("instruction must have a result");
-    func.dfg.change_to_alias(result, replacement);
-    remove_inst(func, inst);
 }
 
 pub(super) fn imm_i256(func: &mut Function, value: u32) -> ValueId {
