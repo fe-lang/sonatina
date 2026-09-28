@@ -22,6 +22,7 @@ use super::{
         slices_overlap_relative,
     },
     object_alias::ObjectAliasFacts,
+    object_locality::object_root_stays_local_with_effects,
     object_reachability::reference_bearing,
     object_tracking::AggregateFacts,
     provenance::{
@@ -191,6 +192,9 @@ impl ObjectArgEffect {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ObjectReturnEffect {
     None,
+    /// A new object that only the returned reference reaches when the callee
+    /// returns. Callers treat it as unexposed, so the callee must neither
+    /// publish it nor leak a raw pointer to it.
     FreshObject,
     SameAsArg {
         index: usize,
@@ -577,6 +581,7 @@ fn compute_summary_for_func(
             &reachable,
             &arg_roots,
             facts.complete(),
+            summaries,
             layout_cache,
         );
         let (block_entry_captures, exit_root_captures) = compute_capture_states_for_blocks(
@@ -923,6 +928,7 @@ fn analyze_returns(
     reachable: &cranelift_entity::SecondaryMap<BlockId, bool>,
     arg_roots: &FxHashMap<RootValue, usize>,
     provenance: CompleteProvenance<'_>,
+    summaries: &ObjectEffectSummaryMap,
     layout_cache: &mut shape::AggregateLayoutCache,
 ) -> ReturnAnalysis {
     let mut combined = ReturnClass::None;
@@ -974,7 +980,22 @@ fn analyze_returns(
 
     let ret_effect = match combined {
         ReturnClass::None => ObjectReturnEffect::None,
-        ReturnClass::FreshObject => ObjectReturnEffect::FreshObject,
+        // Publication inside the callee is invisible to callers, so a fresh
+        // root must stay local apart from the return itself.
+        ReturnClass::FreshObject
+            if returned_fresh_slices.iter().all(|returned| {
+                object_root_stays_local_with_effects(
+                    function,
+                    returned.root_value.value(),
+                    summaries,
+                    |_| true,
+                    true,
+                )
+            }) =>
+        {
+            ObjectReturnEffect::FreshObject
+        }
+        ReturnClass::FreshObject => ObjectReturnEffect::Unknown,
         ReturnClass::SameAsArg(index) => ObjectReturnEffect::SameAsArg { index },
         ReturnClass::DerivedFromArg(index) => ObjectReturnEffect::DerivedFromArg { index },
         ReturnClass::BorrowedArgs(indices) => ObjectReturnEffect::BorrowedArgs {

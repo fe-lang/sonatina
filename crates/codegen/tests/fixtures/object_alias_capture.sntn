@@ -292,3 +292,133 @@ block0:
     v6.i64 = add v5 v2;
     return v6;
 }
+
+func inline(never) private %publish_fresh(v0.objref<@Holder>) -> objref<i64> {
+block0:
+    v1.objref<i64> = obj.alloc i64;
+    v2.objref<objref<i64>> = obj.proj v0 0.i8;
+    obj.store v2 v1;
+    return v1;
+}
+
+func inline(never) private %write_published(v0.objref<@Holder>) -> i64 {
+block0:
+    v1.objref<i64> = call %publish_fresh v0;
+    obj.store v1 11.i64;
+    v2.objref<objref<i64>> = obj.proj v0 0.i8;
+    v3.objref<i64> = obj.load v2;
+    obj.store v3 22.i64;
+    v4.i64 = obj.load v1;
+    return v4;
+}
+
+func inline(never) public %published_result() -> i64 {
+block0:
+    v0.objref<@Holder> = obj.alloc @Holder;
+    v1.i64 = call %write_published v0;
+    return v1;
+}
+
+func inline(never) private %link(v0.objref<@Holder>, v1.objref<i64>) {
+block0:
+    v2.objref<objref<i64>> = obj.proj v0 0.i8;
+    obj.store v2 v1;
+    return;
+}
+
+func inline(never) private %link_fresh(v0.objref<@Holder>) -> objref<i64> {
+block0:
+    v1.objref<i64> = obj.alloc i64;
+    call %link v0 v1;
+    return v1;
+}
+
+func inline(never) private %write_linked(v0.objref<@Holder>) -> i64 {
+block0:
+    v1.objref<i64> = call %link_fresh v0;
+    obj.store v1 11.i64;
+    v2.objref<objref<i64>> = obj.proj v0 0.i8;
+    v3.objref<i64> = obj.load v2;
+    obj.store v3 22.i64;
+    v4.i64 = obj.load v1;
+    return v4;
+}
+
+func inline(never) public %linked_result() -> i64 {
+block0:
+    v0.objref<@Holder> = obj.alloc @Holder;
+    v1.i64 = call %write_linked v0;
+    return v1;
+}
+
+func inline(never) private %forward_published(v0.objref<@Holder>) -> objref<i64> {
+block0:
+    v1.objref<i64> = call %publish_fresh v0;
+    return v1;
+}
+
+func inline(never) private %write_forwarded(v0.objref<@Holder>) -> i64 {
+block0:
+    v1.objref<i64> = call %forward_published v0;
+    obj.store v1 11.i64;
+    v2.objref<objref<i64>> = obj.proj v0 0.i8;
+    v3.objref<i64> = obj.load v2;
+    obj.store v3 22.i64;
+    v4.i64 = obj.load v1;
+    return v4;
+}
+
+func inline(never) public %forwarded_result() -> i64 {
+block0:
+    v0.objref<@Holder> = obj.alloc @Holder;
+    v1.i64 = call %write_forwarded v0;
+    return v1;
+}
+
+func inline(never) private %leak_stack(v0.objref<i256>) -> objref<i256> {
+block0:
+    v1.objref<i256> = obj.alloc i256;
+    v2.*i256 = obj.materialize.stack v1;
+    v3.i256 = ptr_to_int v2 i256;
+    obj.store v0 v3;
+    return v1;
+}
+
+func inline(never) private %leak_heap(v0.objref<i256>) -> objref<i256> {
+block0:
+    v1.objref<i256> = obj.alloc i256;
+    v2.*i256 = obj.materialize.heap v1;
+    v3.i256 = ptr_to_int v2 i256;
+    obj.store v0 v3;
+    return v1;
+}
+
+func inline(never) private %write_leaked(v0.objref<i256>) {
+block0:
+    v1.i256 = obj.load v0;
+    v2.*i256 = int_to_ptr v1 *i256;
+    mstore v2 22.i256 i256;
+    return;
+}
+
+func inline(never) public %stack_leaked_result() -> i64 {
+block0:
+    v0.objref<i256> = obj.alloc i256;
+    v1.objref<i256> = call %leak_stack v0;
+    obj.store v1 11.i256;
+    call %write_leaked v0;
+    v2.i256 = obj.load v1;
+    v3.i64 = trunc v2 i64;
+    return v3;
+}
+
+func inline(never) public %heap_leaked_result() -> i64 {
+block0:
+    v0.objref<i256> = obj.alloc i256;
+    v1.objref<i256> = call %leak_heap v0;
+    obj.store v1 11.i256;
+    call %write_leaked v0;
+    v2.i256 = obj.load v1;
+    v3.i64 = trunc v2 i64;
+    return v3;
+}

@@ -670,6 +670,97 @@ block0:
 }
 
 #[test]
+fn fresh_returns_published_by_the_callee_are_not_fresh() {
+    let module = verified_module(
+        r#"
+target = "evm-ethereum-osaka"
+type @Holder = { objref<i256> };
+type @Outer = { objref<@Holder> };
+type @Pair = { i256, i256 };
+func private %link(v0.objref<@Holder>, v1.objref<i256>) {
+block0:
+    v2.objref<objref<i256>> = obj.proj v0 0.i8;
+    obj.store v2 v1;
+    return;
+}
+func private %fill(v0.objref<@Pair>, v1.i256) {
+block0:
+    v2.objref<i256> = obj.proj v0 0.i8;
+    obj.store v2 v1;
+    return;
+}
+func private %stored(v0.objref<@Holder>) -> objref<i256> {
+block0:
+    v1.objref<i256> = obj.alloc i256;
+    v2.objref<objref<i256>> = obj.proj v0 0.i8;
+    obj.store v2 v1;
+    return v1;
+}
+func private %linked(v0.objref<@Holder>) -> objref<i256> {
+block0:
+    v1.objref<i256> = obj.alloc i256;
+    call %link v0 v1;
+    return v1;
+}
+func private %forwarded(v0.objref<@Holder>) -> objref<i256> {
+block0:
+    v1.objref<i256> = call %stored v0;
+    return v1;
+}
+func private %leaked(v0.objref<i256>) -> objref<i256> {
+block0:
+    v1.objref<i256> = obj.alloc i256;
+    v2.*i256 = obj.materialize.stack v1;
+    v3.i256 = ptr_to_int v2 i256;
+    obj.store v0 v3;
+    return v1;
+}
+func private %payload(v0.objref<@Outer>, v1.objref<i256>) -> objref<@Holder> {
+block0:
+    v2.objref<@Holder> = obj.alloc @Holder;
+    v3.objref<objref<i256>> = obj.proj v2 0.i8;
+    obj.store v3 v1;
+    v4.objref<objref<@Holder>> = obj.proj v0 0.i8;
+    obj.store v4 v2;
+    return v2;
+}
+func private %filled(v0.i256) -> objref<@Pair> {
+block0:
+    v1.objref<@Pair> = obj.alloc @Pair;
+    call %fill v1 v0;
+    return v1;
+}
+func private %local_pointer(v0.i256) -> objref<@Pair> {
+block0:
+    v1.objref<@Pair> = obj.alloc @Pair;
+    v2.*@Pair = obj.materialize.stack v1;
+    v3.*i256 = gep v2 0.i64 1.i8;
+    mstore v3 v0 i256;
+    return v1;
+}
+"#,
+    );
+    let summaries = compute_object_effect_summaries(&module);
+    let summary = |name| &summaries[&lookup(&module, name)];
+    for name in ["stored", "linked", "forwarded", "leaked", "payload"] {
+        assert_eq!(
+            summary(name).ret_effect,
+            ObjectReturnEffect::Unknown,
+            "{name}"
+        );
+    }
+    // Callers cannot relate the demoted result to the argument stored in it.
+    assert!(summary("payload").arg_effects[1].escapes);
+    for name in ["filled", "local_pointer"] {
+        assert_eq!(
+            summary(name).ret_effect,
+            ObjectReturnEffect::FreshObject,
+            "{name}"
+        );
+    }
+}
+
+#[test]
 fn t01_scalar_promotion_keeps_read_after_alias_write() {
     let text = run_pass(
         r#"
