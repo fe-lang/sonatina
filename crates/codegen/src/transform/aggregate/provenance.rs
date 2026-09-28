@@ -1682,7 +1682,21 @@ fn derive_possible_projections(
 
     downcast::<&control_flow::Phi>(func.inst_set(), func.dfg.inst(inst))
         .map(|phi| {
-            derive_phi_projection_candidates(func, result, phi, possible_projections, root_value)
+            let candidates = join_projection_candidates(
+                phi.args().iter().map(|&(arg, _)| arg),
+                possible_projections,
+                possible_roots,
+                root_value,
+            );
+            map_projection_candidates_for_result(
+                func,
+                result,
+                root_value,
+                possible_roots,
+                maybe_unknown,
+                &candidates,
+                Some,
+            )
         })
         .unwrap_or_default()
 }
@@ -1764,22 +1778,23 @@ fn derive_phi_state(
     }
 }
 
-fn derive_phi_projection_candidates(
-    func: &Function,
-    result: ValueId,
-    phi: &control_flow::Phi,
+/// Joins the candidates of every alternative that may designate `root_value`.
+/// An alternative without candidates can designate any slice of the root.
+fn join_projection_candidates(
+    alternatives: impl IntoIterator<Item = ValueId>,
     possible_projections: &SecondaryMap<ValueId, Vec<Projection>>,
+    possible_roots: &SecondaryMap<ValueId, FxHashSet<ValueId>>,
     root_value: ValueId,
 ) -> Vec<Projection> {
-    let result_ty = func.dfg.value_ty(result);
     let mut candidates = Vec::new();
-    for &(arg, _) in phi.args() {
-        for &projection in &possible_projections[arg] {
-            if projection.root_value != RootValue::new(root_value)
-                || !projection_value_ty_matches(result_ty, projection.slice.ty, func.ctx())
-            {
-                continue;
-            }
+    for value in alternatives {
+        if !possible_roots[value].contains(&root_value) {
+            continue;
+        }
+        if possible_projections[value].is_empty() {
+            return Vec::new();
+        }
+        for &projection in &possible_projections[value] {
             push_unique_projection(&mut candidates, projection);
         }
     }
@@ -2056,11 +2071,14 @@ fn derive_call_possible_projections(
                 .collect()
         }
         CallReturnTransferKind::BorrowedArgs(indices) => {
-            let projections: Vec<_> = indices
-                .iter()
-                .filter_map(|&index| call.args().get(index))
-                .flat_map(|&arg| possible_projections[arg].iter().copied())
-                .collect();
+            let projections = join_projection_candidates(
+                indices
+                    .iter()
+                    .filter_map(|&index| call.args().get(index).copied()),
+                possible_projections,
+                possible_roots,
+                root_value,
+            );
             map_projection_candidates_for_result(
                 func,
                 result,
@@ -2090,15 +2108,15 @@ fn map_projection_candidates_for_result(
     let result_ty = func.dfg.value_ty(result);
     let mut mapped = Vec::new();
     for &projection in projections {
-        let Some(mapped_projection) = map(projection) else {
-            continue;
+        // Candidates must be exhaustive: an alternative that cannot be mapped
+        // leaves no list, so consumers fall back to the whole root.
+        let Some(mapped_projection) = map(projection).filter(|mapped_projection| {
+            mapped_projection.root_value == RootValue::new(root_value)
+                && possible_roots[result].contains(&mapped_projection.root_value.value())
+                && projection_value_ty_matches(result_ty, mapped_projection.slice.ty, func.ctx())
+        }) else {
+            return Vec::new();
         };
-        if mapped_projection.root_value != RootValue::new(root_value)
-            || !possible_roots[result].contains(&mapped_projection.root_value.value())
-            || !projection_value_ty_matches(result_ty, mapped_projection.slice.ty, func.ctx())
-        {
-            continue;
-        }
         push_unique_projection(&mut mapped, mapped_projection);
     }
     mapped
@@ -3548,5 +3566,95 @@ block0:
             assert_eq!(complete.complete_roots(call_result), None);
             assert_known_and_unknown(may.may_roots(call_result), &[]);
         });
+    }
+
+    #[test]
+    fn unmapped_alternative_leaves_no_partial_projection_candidates() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @S = { objref<i256>, [objref<i256>; 2] };
+
+func private %choose(v0.i1, v1.objref<objref<i256>>, v2.objref<objref<i256>>) -> objref<objref<i256>> {
+block0:
+    br v0 block1 block2;
+block1:
+    jump block2;
+block2:
+    v3.objref<objref<i256>> = phi (v1 block0) (v2 block1);
+    return v3;
+}
+
+func private %phi_alternative(v0.i256, v1.i1) -> objref<objref<i256>> {
+block0:
+    v2.objref<@S> = obj.alloc @S;
+    v3.objref<[objref<i256>; 2]> = obj.proj v2 1.i8;
+    v4.objref<objref<i256>> = obj.index v3 v0;
+    v5.objref<objref<i256>> = obj.proj v2 0.i8;
+    br v1 block1 block2;
+block1:
+    jump block2;
+block2:
+    v6.objref<objref<i256>> = phi (v4 block0) (v5 block1);
+    return v6;
+}
+
+func private %borrowed_alternative(v0.i256, v1.i1) -> objref<objref<i256>> {
+block0:
+    v2.objref<@S> = obj.alloc @S;
+    v3.objref<[objref<i256>; 2]> = obj.proj v2 1.i8;
+    v4.objref<objref<i256>> = obj.index v3 v0;
+    v5.objref<objref<i256>> = obj.proj v2 0.i8;
+    v6.objref<objref<i256>> = call %choose v1 v4 v5;
+    return v6;
+}
+"#,
+        );
+
+        let object_effects = compute_object_effect_summaries(&module);
+        for name in ["phi_alternative", "borrowed_alternative"] {
+            module.func_store.view(lookup_func(&module, name), |func| {
+                let mut layout_cache = shape::AggregateLayoutCache::default();
+                let root_slices = collect_root_slices(func, None, &mut layout_cache);
+                let provenance = collect_root_provenance(
+                    func,
+                    func.ctx(),
+                    &root_slices,
+                    &mut layout_cache,
+                    Some(&object_effects),
+                );
+                let insts: Vec<_> = func
+                    .layout
+                    .iter_block()
+                    .flat_map(|block| func.layout.iter_inst(block))
+                    .collect();
+                let root = insts
+                    .iter()
+                    .find_map(|&inst| {
+                        downcast::<&data::ObjAlloc>(func.inst_set(), func.dfg.inst(inst))
+                            .and_then(|_| func.dfg.inst_result(inst))
+                    })
+                    .expect("alloc root should exist");
+                let returned = insts
+                    .iter()
+                    .find_map(|&inst| {
+                        downcast::<&control_flow::Return>(func.inst_set(), func.dfg.inst(inst))
+                            .and_then(|ret| ret.arg().copied())
+                    })
+                    .expect("returned value should exist");
+
+                // The dynamic index can designate any element, so the one
+                // mapped alternative must not stand for the whole set.
+                assert_eq!(
+                    provenance
+                        .complete()
+                        .possible_slices_for_root(returned, RootValue::new(root))
+                        .as_deref(),
+                    Some(&[root_slices[&root]][..]),
+                    "{name}"
+                );
+            });
+        }
     }
 }

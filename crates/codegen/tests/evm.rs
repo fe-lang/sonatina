@@ -153,6 +153,8 @@ fn object_alias_execution_matrix_at_all_optimization_levels() {
                 ("copied_arg_then_cleared", 22),
                 ("copied_empty_then_filled", 22),
                 ("copied_picked_then_cleared", 22),
+                ("indexed_result", 22),
+                ("borrowed_indexed_result", 22),
             ][..],
             0,
             false,
