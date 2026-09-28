@@ -166,3 +166,65 @@ block2:
         }
     }
 }
+
+#[test]
+fn looping_entry_blocks_enter_through_a_prologue() {
+    let source = r#"
+type @Pair = { i256, i256 };
+func inline(never) private %triple(v0.*i256, v1.*i64) -> @Pair {
+block0:
+    v2.i64 = mload v1 i64;
+    v3.i64 = add v2 1.i64;
+    mstore v1 v3 i64;
+    v4.i256 = mload v0 i256;
+    v5.i256 = mul v4 3.i256;
+    mstore v0 v5 i256;
+    v6.i1 = lt v3 4.i64;
+    br v6 block0 block1;
+block1:
+    v7.i1 = gt v5 100.i256;
+    br v7 block2 block3;
+block2:
+    jump block3;
+block3:
+    v8.i256 = phi (v5 block1) (v4 block2);
+    v9.@Pair = insert_value undef.@Pair 0.i8 v8;
+    v10.@Pair = insert_value v9 1.i8 v5;
+    return v10;
+}
+func public %run(v0.*i256, v1.*i64, v2.*i256) {
+block0:
+    v3.@Pair = call %triple v0 v1;
+    v4.i256 = extract_value v3 0.i8;
+    v5.i256 = extract_value v3 1.i8;
+    v6.i256 = sub v5 v4;
+    mstore v2 v6 i256;
+    return;
+}
+"#;
+    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2] {
+        let artifact = Compile::new(
+            parse_verified_native_module(source),
+            CraneliftJitBackend::new(),
+        )
+        .with_opt_level(level)
+        .compile()
+        .unwrap();
+        let run: unsafe extern "C" fn(*mut u8, *mut i64, *mut u8) =
+            unsafe { std::mem::transmute(artifact.function_address("run").unwrap()) };
+        // Four iterations triple the value; the last two exceed 100.
+        for (initial, expected) in [(1u64, 0u64), (5, 405 - 135)] {
+            let mut value = U256::from(initial).to_little_endian();
+            let mut counter = 0i64;
+            let mut output = [0xa5; 32];
+            unsafe { run(value.as_mut_ptr(), &mut counter, output.as_mut_ptr()) };
+            assert_eq!(counter, 4, "{level:?}");
+            assert_eq!(
+                value,
+                U256::from(initial * 81).to_little_endian(),
+                "{level:?}"
+            );
+            assert_eq!(output, U256::from(expected).to_little_endian(), "{level:?}");
+        }
+    }
+}

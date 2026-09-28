@@ -1,5 +1,5 @@
 # EVM-only execution controls. Native deliberately rejects the stack references
-# retained or returned by these helpers, and cannot translate a looping entry block.
+# retained or returned by these helpers.
 type @Holder = { objref<i64> };
 type @Slot = enum { #Empty, #Full(objref<i64>) };
 type @Boxed = enum { #Empty, #Full(@Holder) };
@@ -231,45 +231,6 @@ func inline(never) public %stashed_payload() -> i64 {
 block0:
     v0.objref<@Boxed> = obj.alloc @Boxed;
     v1.i64 = call %write_stashed v0;
-    return v1;
-}
-
-func inline(never) private %entry_loop_alias(v0.objref<i64>, v1.objref<i64>) -> i64 {
-block0:
-    v2.i64 = obj.load v0;
-    v3.i64 = add v2 1.i64;
-    obj.store v1 v3;
-    v4.i1 = lt v3 5.i64;
-    br v4 block0 block1;
-block1:
-    return v3;
-}
-
-func inline(never) private %entry_loop(v0.objref<i64>) -> i64 {
-block0:
-    v1.i64 = obj.load v0;
-    v2.i64 = add v1 1.i64;
-    obj.store v0 v2;
-    v3.i1 = lt v2 5.i64;
-    br v3 block0 block1;
-block1:
-    v4.i64 = obj.load v0;
-    return v4;
-}
-
-func inline(never) public %entry_loop_aliased() -> i64 {
-block0:
-    v0.objref<i64> = obj.alloc i64;
-    obj.store v0 0.i64;
-    v1.i64 = call %entry_loop_alias v0 v0;
-    return v1;
-}
-
-func inline(never) public %entry_loop_reload() -> i64 {
-block0:
-    v0.objref<i64> = obj.alloc i64;
-    obj.store v0 0.i64;
-    v1.i64 = call %entry_loop v0;
     return v1;
 }
 

@@ -141,7 +141,13 @@ fn translate_function(
         .func_sig(func_ref, |sig| returns_indirect(&module.ctx, sig));
 
     let entry = function.layout.entry_block().ok_or("no entry block")?;
-    let clif_entry = block_map[&entry];
+    // Cranelift forbids branches to its entry block, so a Sonatina entry block
+    // that is also a loop header is entered through a separate prologue.
+    let clif_entry = if cfg.preds_of(entry).any(|pred| block_map.contains_key(pred)) {
+        builder.create_block()
+    } else {
+        block_map[&entry]
+    };
     builder.append_block_params_for_function_params(clif_entry);
     builder.switch_to_block(clif_entry);
 
@@ -207,9 +213,13 @@ fn translate_function(
         }
     }
 
+    if clif_entry != block_map[&entry] {
+        builder.ins().jump(block_map[&entry], &[]);
+    }
+
     for &block in &block_order {
         let clif_block = block_map[&block];
-        if block != entry {
+        if clif_block != clif_entry {
             builder.switch_to_block(clif_block);
         }
         // Incoming contents are SSA block parameters, not pointers into a

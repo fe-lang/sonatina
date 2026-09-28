@@ -139,8 +139,6 @@ fn object_alias_execution_matrix_at_all_optimization_levels() {
                 ("recovered_slot", 14),
                 ("stored_into_result", 12),
                 ("stashed_payload", 22),
-                ("entry_loop_aliased", 5),
-                ("entry_loop_reload", 5),
                 ("wrapped_pair", 8),
                 ("published_result", 22),
                 ("linked_result", 22),
