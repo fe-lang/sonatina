@@ -14,7 +14,7 @@ use crate::cfg_scc::CfgSccAnalysis;
 
 use super::{
     ObjectEffectSummaryMap, ObjectReturnEffect,
-    provenance::{MayRootSet, Projection, RootValue},
+    provenance::{Projection, RootValue},
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -87,15 +87,6 @@ impl ObjectAliasFacts {
                 Some(ObjectOrigin::Fresh { .. })
             )
         )
-    }
-
-    pub(crate) fn may_roots_overlap(&self, roots: MayRootSet<'_>, target: RootValue) -> bool {
-        // I2/I7: observed roots are not exhaustive in the presence of unknowns.
-        roots.has_unknown()
-            || roots
-                .observed()
-                .iter()
-                .any(|root| self.roots_may_overlap(root, target))
     }
 
     pub(crate) fn may_overlap(&self, lhs: Projection, rhs: Projection) -> bool {
@@ -247,9 +238,16 @@ block2:
                     panic!("four reference results expected")
                 };
                 let target = RootValue::new(*unrelated);
-                assert!(!aliases.may_roots_overlap(facts.may().may_roots(*known), target));
-                assert!(aliases.may_roots_overlap(facts.may().may_roots(*opaque), target));
-                assert!(aliases.may_roots_overlap(facts.may().may_roots(*merged), target));
+                let known = facts.may().may_roots(*known);
+                // I2/I7: observed roots are not exhaustive in the presence of unknowns.
+                assert!(!known.has_unknown());
+                assert!(
+                    known
+                        .observed()
+                        .iter()
+                        .all(|root| !aliases.roots_may_overlap(root, target))
+                );
+                assert!(facts.may().may_roots(*opaque).has_unknown());
                 assert!(facts.may().may_roots(*merged).has_unknown());
                 assert!(facts.complete().exact_projection(*merged).is_none());
             },

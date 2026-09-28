@@ -3,6 +3,7 @@
 type @Holder = { objref<i64> };
 type @Slot = enum { #Empty, #Full(objref<i64>) };
 type @Boxed = enum { #Empty, #Full(@Holder) };
+type @Nest = { objref<@Holder> };
 
 func inline(never) private %capture_then_write(v0.objref<i64>, v1.objref<@Holder>, v2.objref<@Holder>) -> i64 {
 block0:
@@ -421,4 +422,62 @@ block0:
     v2.i256 = obj.load v1;
     v3.i64 = trunc v2 i64;
     return v3;
+}
+
+func inline(never) private %link_then_fill(v0.objref<@Nest>, v1.objref<i64>) {
+block0:
+    v2.objref<@Holder> = obj.alloc @Holder;
+    v3.objref<objref<@Holder>> = obj.proj v0 0.i8;
+    obj.store v3 v2;
+    v4.objref<objref<i64>> = obj.proj v2 0.i8;
+    obj.store v4 v1;
+    return;
+}
+
+func inline(never) private %write_nested(v0.objref<@Nest>) {
+block0:
+    v1.objref<objref<@Holder>> = obj.proj v0 0.i8;
+    v2.objref<@Holder> = obj.load v1;
+    v3.objref<objref<i64>> = obj.proj v2 0.i8;
+    v4.objref<i64> = obj.load v3;
+    obj.store v4 22.i64;
+    return;
+}
+
+func inline(never) private %write_linked_first(v0.objref<@Nest>) -> i64 {
+block0:
+    v1.objref<i64> = obj.alloc i64;
+    obj.store v1 11.i64;
+    call %link_then_fill v0 v1;
+    call %write_nested v0;
+    v2.i64 = obj.load v1;
+    return v2;
+}
+
+func inline(never) public %linked_then_filled() -> i64 {
+block0:
+    v0.objref<@Nest> = obj.alloc @Nest;
+    v1.i64 = call %write_linked_first v0;
+    return v1;
+}
+
+func inline(never) private %return_linked_first(v0.objref<i64>) -> objref<@Nest> {
+block0:
+    v1.objref<@Nest> = obj.alloc @Nest;
+    v2.objref<@Holder> = obj.alloc @Holder;
+    v3.objref<objref<@Holder>> = obj.proj v1 0.i8;
+    obj.store v3 v2;
+    v4.objref<objref<i64>> = obj.proj v2 0.i8;
+    obj.store v4 v0;
+    return v1;
+}
+
+func inline(never) public %returned_then_filled() -> i64 {
+block0:
+    v0.objref<i64> = obj.alloc i64;
+    obj.store v0 11.i64;
+    v1.objref<@Nest> = call %return_linked_first v0;
+    call %write_nested v1;
+    v2.i64 = obj.load v0;
+    return v2;
 }
