@@ -759,10 +759,17 @@ fn prepare_machine_section_after_pipeline(
                     .get(&func)
                     .copied()
                     .unwrap_or_default();
-                let spills = FinalSpillObjects::compute(
+                let mut spills = FinalSpillObjects::compute(
                     &analysis.alloc,
                     &analysis.stable_final_spill_values,
                 );
+                machine
+                    .work
+                    .module()
+                    .func_store
+                    .view(func, |machine_function| {
+                        spills.share_disjoint_objects(machine_function, &analysis.alloc)
+                    });
                 MachineFinalSpillInput {
                     func,
                     analysis,

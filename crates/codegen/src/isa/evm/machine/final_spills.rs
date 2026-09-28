@@ -2,9 +2,19 @@ use cranelift_entity::EntityRef;
 use rustc_hash::{FxHashMap, FxHashSet};
 #[cfg(debug_assertions)]
 use sonatina_ir::Module;
-use sonatina_ir::{InstId, ValueId, module::FuncRef};
+use sonatina_ir::{
+    BlockId, Function, InstId, InstSetExt, ValueId,
+    cfg::ControlFlowGraph,
+    inst::evm::machine_inst_set::EvmMachineInstKind,
+    isa::{Isa, evm::EvmMachine},
+    module::FuncRef,
+};
 
-use crate::{bitset::BitSet, module_analysis::CallGraphSchedule, stackalloc::StackifyAlloc};
+use crate::{
+    bitset::BitSet,
+    module_analysis::CallGraphSchedule,
+    stackalloc::{Action, Allocator, StackifyAlloc},
+};
 
 use crate::isa::evm::memory_plan::align_up_to_word;
 
@@ -61,7 +71,11 @@ pub(crate) enum OptionalFinalSpillPlacement {
 #[derive(Default)]
 pub(crate) struct FinalSpillObjects {
     spilled_values: Vec<(ValueId, StackObjId)>,
+    /// One entry per final spill word: a representative stackify object and
+    /// whether its word must be stable.
     objs: Vec<(StackObjId, bool)>,
+    /// Stackify objects that share a representative's word.
+    shared: FxHashMap<StackObjId, StackObjId>,
 }
 
 impl FinalSpillObjects {
@@ -88,7 +102,38 @@ impl FinalSpillObjects {
         Self {
             spilled_values,
             objs,
+            shared: FxHashMap::default(),
         }
+    }
+
+    /// Lets stackify objects whose stored values are never live at the same
+    /// time share a word. Stackify gives every spilled value its own object,
+    /// so without this a function's final spill words grow with its total spill
+    /// count rather than its peak spill pressure. Must-stable and optional
+    /// objects are packed separately, since optional placement is chosen later.
+    pub(crate) fn share_disjoint_objects(&mut self, function: &Function, alloc: &StackifyAlloc) {
+        if self.objs.len() < 2 {
+            return;
+        }
+        let conflicts = SpillObjectConflicts::compute(function, alloc);
+        // Each word's representative and every object assigned to it.
+        let mut words: Vec<(StackObjId, bool, Vec<StackObjId>)> = Vec::new();
+        for &(obj, must_stable) in &self.objs {
+            let word = words.iter_mut().find(|(_, stable, members)| {
+                *stable == must_stable && members.iter().all(|&m| !conflicts.conflict(obj, m))
+            });
+            match word {
+                Some((rep, _, members)) => {
+                    members.push(obj);
+                    self.shared.insert(obj, *rep);
+                }
+                None => words.push((obj, must_stable, vec![obj])),
+            }
+        }
+        self.objs = words
+            .into_iter()
+            .map(|(rep, must_stable, _)| (rep, must_stable))
+            .collect();
     }
 
     fn is_empty(&self) -> bool {
@@ -445,6 +490,11 @@ pub(crate) fn allocate_final_spills(
             obj
         });
     }
+    let mut final_objs: Vec<_> = remap.values().copied().collect();
+    final_objs.sort_unstable();
+    for (&old_obj, rep) in &spills.shared {
+        remap.insert(old_obj, remap[rep]);
+    }
 
     let mut scratch_objs = Vec::new();
     let mut stable_objs = Vec::new();
@@ -480,7 +530,6 @@ pub(crate) fn allocate_final_spills(
         &fixed_writes,
     );
     let used_fallback = scratch_fallback || stable_fallback;
-    let final_objs: Vec<_> = remap.values().copied().collect();
     validate_final_spill_absolute_disjointness(func, &mem_plan, &final_objs)?;
     validate_final_spills_disjoint_from_fixed_writes(func, &mem_plan, &final_objs, &fixed_writes)?;
     validate_final_spill_regions(
@@ -508,6 +557,138 @@ pub(crate) fn allocate_final_spills(
         stack_obj_remap: remap,
         used_fallback,
     })
+}
+
+/// Pairs of stackify spill objects that must not share a word: one is stored
+/// while the other holds a value a later load reads.
+struct SpillObjectConflicts {
+    conflicts: FxHashMap<StackObjId, BitSet<StackObjId>>,
+}
+
+/// A spill object access in execution order within a block.
+#[derive(Clone, Copy)]
+enum SpillObjectAccess {
+    Load(StackObjId),
+    /// `kills` is false for stores that may not run before every later access
+    /// in the block: `br_table` actions, which emit replays per case, and
+    /// actions after a block's terminator.
+    Store {
+        obj: StackObjId,
+        kills: bool,
+    },
+}
+
+impl SpillObjectConflicts {
+    fn compute(function: &Function, alloc: &StackifyAlloc) -> Self {
+        let mut cfg = ControlFlowGraph::default();
+        cfg.compute(function);
+        let blocks: Vec<BlockId> = function.layout.iter_block().collect();
+        let accesses: FxHashMap<BlockId, Vec<SpillObjectAccess>> = blocks
+            .iter()
+            .map(|&block| (block, block_spill_object_accesses(function, alloc, block)))
+            .collect();
+
+        let live_out = |live_in: &FxHashMap<BlockId, BitSet<StackObjId>>, block| {
+            let mut live = BitSet::default();
+            for succ in cfg.succs_of(block) {
+                if let Some(succ_live) = live_in.get(succ) {
+                    live.union_with(succ_live);
+                }
+            }
+            live
+        };
+
+        let mut live_in: FxHashMap<BlockId, BitSet<StackObjId>> = FxHashMap::default();
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for &block in blocks.iter().rev() {
+                let mut live = live_out(&live_in, block);
+                for access in accesses[&block].iter().rev() {
+                    match *access {
+                        SpillObjectAccess::Load(obj) => {
+                            live.insert(obj);
+                        }
+                        SpillObjectAccess::Store { obj, kills } => {
+                            if kills {
+                                live.remove(obj);
+                            }
+                        }
+                    }
+                }
+                if live_in.get(&block) != Some(&live) {
+                    live_in.insert(block, live);
+                    changed = true;
+                }
+            }
+        }
+
+        let mut conflicts: FxHashMap<StackObjId, BitSet<StackObjId>> = FxHashMap::default();
+        for &block in &blocks {
+            let mut live = live_out(&live_in, block);
+            for access in accesses[&block].iter().rev() {
+                match *access {
+                    SpillObjectAccess::Load(obj) => {
+                        live.insert(obj);
+                    }
+                    SpillObjectAccess::Store { obj, kills } => {
+                        for other in live.iter().filter(|&other| other != obj) {
+                            conflicts.entry(obj).or_default().insert(other);
+                            conflicts.entry(other).or_default().insert(obj);
+                        }
+                        if kills {
+                            live.remove(obj);
+                        }
+                    }
+                }
+            }
+        }
+        Self { conflicts }
+    }
+
+    fn conflict(&self, a: StackObjId, b: StackObjId) -> bool {
+        a == b
+            || self
+                .conflicts
+                .get(&a)
+                .is_some_and(|conflicts| conflicts.contains(b))
+    }
+}
+
+fn block_spill_object_accesses(
+    function: &Function,
+    alloc: &StackifyAlloc,
+    block: BlockId,
+) -> Vec<SpillObjectAccess> {
+    let mut accesses = Vec::new();
+    let mut push = |actions: &[Action], kills: bool| {
+        for action in actions {
+            match *action {
+                Action::MemLoadObj(obj) => accesses.push(SpillObjectAccess::Load(obj)),
+                Action::MemStoreObj(obj) => accesses.push(SpillObjectAccess::Store { obj, kills }),
+                _ => {}
+            }
+        }
+    };
+    if function.layout.entry_block() == Some(block) {
+        push(&alloc.enter_function(function), true);
+    }
+    let machine_isa = EvmMachine::new(function.dfg.ctx.triple);
+    let last_inst = function.layout.last_inst_of(block);
+    for inst in function.layout.iter_inst(block) {
+        if let EvmMachineInstKind::BrTable(br) =
+            machine_isa.inst_set().resolve_inst(function.dfg.inst(inst))
+        {
+            push(alloc.pre_inst(inst), false);
+            for case_idx in 0..br.table().len() {
+                push(alloc.br_table_case(inst, case_idx), false);
+            }
+        } else {
+            push(alloc.pre_inst(inst), true);
+        }
+        push(alloc.post_inst(inst), Some(inst) != last_inst);
+    }
+    accesses
 }
 
 fn final_spilled_values(alloc: &StackifyAlloc) -> Vec<(ValueId, StackObjId)> {

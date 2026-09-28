@@ -1,0 +1,39 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: "String::from_utf8(out).unwrap()"
+input_file: test_files/evm/final_spill_disjoint_lifetimes_share_words.sntn
+---
+evm.config: stack_reach=16 vcode=false bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false mem_plan_detail=true
+
+object: Contract
+  section runtime: 384 bytes
+  total: 384 bytes
+
+functions:
+  mem: global_dyn_base=0xe0 arena_base=0x0 scratch_peak_words=2 stable_chain_peak_words=5
+  entry: ir_blocks=1 ir_insts=4 vcode_ops=12 fixups=2 imm_bytes=1
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=2 abs_words_end=0
+  phases: ir_blocks=1 ir_insts=83 vcode_ops=293 fixups=4 imm_bytes=60
+    mem: scratch_words=0 stable_words=5 stable_mode=StableAbs(base=0x40) entry_abs_words=2 abs_words_end=7
+  one: ir_blocks=1 ir_insts=3 vcode_ops=8 fixups=0 imm_bytes=1
+    mem: scratch_words=2 stable_words=0 stable_mode=None entry_abs_words=7 abs_words_end=2
+
+mem plan detail:
+evm mem plan: global_dyn_base=0xe0 arena_base=0x0 scratch_peak_words=2 stable_chain_peak_words=5
+evm mem plan: entry scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=2 abs_words_end=0
+evm mem plan: phases scratch_words=0 stable_words=5 stable_mode=StableAbs(base=0x40) entry_abs_words=2 abs_words_end=7
+  spill v2 offset_words=0 loc=StableAbs(0) addr=0x40
+  spill v4 offset_words=1 loc=StableAbs(1) addr=0x60
+  spill v6 offset_words=2 loc=StableAbs(2) addr=0x80
+  spill v8 offset_words=3 loc=StableAbs(3) addr=0xa0
+  spill v32 offset_words=4 loc=StableAbs(4) addr=0xc0
+  spill v62 offset_words=0 loc=StableAbs(0) addr=0x40
+  spill v63 offset_words=1 loc=StableAbs(1) addr=0x60
+  spill v64 offset_words=2 loc=StableAbs(2) addr=0x80
+  spill v65 offset_words=3 loc=StableAbs(3) addr=0xa0
+  spill v77 offset_words=4 loc=StableAbs(4) addr=0xc0
+evm mem plan: one scratch_words=2 stable_words=0 stable_mode=None entry_abs_words=7 abs_words_end=2
+
+
+evm:
+  case ok: calldata_len=32 success reason=Return gas_used=22100 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=960
