@@ -16,6 +16,8 @@ pub const CASES: &[(&str, i64)] = &[
     ("enum_alias", 1),
     ("moved_param_loop", 6),
     ("moved_local_loop", 6),
+    ("entry_loop_aliased", 5),
+    ("entry_loop_reload", 5),
 ];
 
 pub const DISJOINT_SOURCE: &str = r#"
