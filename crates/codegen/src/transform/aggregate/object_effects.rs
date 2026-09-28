@@ -22,6 +22,8 @@ use super::{
         slices_overlap_relative,
     },
     object_alias::ObjectAliasFacts,
+    object_locality::object_root_stays_local_with_effects,
+    object_reachability::reference_bearing,
     object_tracking::AggregateFacts,
     provenance::{
         CompleteProvenance, CompleteRootSet, MayProvenance, Projection, ProvenanceSnapshot,
@@ -190,6 +192,9 @@ impl ObjectArgEffect {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ObjectReturnEffect {
     None,
+    /// A new object that only the returned reference reaches when the callee
+    /// returns. Callers treat it as unexposed, so the callee must neither
+    /// publish it nor leak a raw pointer to it.
     FreshObject,
     SameAsArg {
         index: usize,
@@ -576,6 +581,7 @@ fn compute_summary_for_func(
             &reachable,
             &arg_roots,
             facts.complete(),
+            summaries,
             layout_cache,
         );
         let (block_entry_captures, exit_root_captures) = compute_capture_states_for_blocks(
@@ -726,6 +732,29 @@ fn compute_summary_for_func(
                         *mat_heap.object(),
                         true,
                     );
+                    continue;
+                }
+
+                if let Some(ret) =
+                    downcast::<&control_flow::Return>(function.inst_set(), function.dfg.inst(inst))
+                {
+                    // Callers cannot relate a reference returned under an
+                    // unclassified effect to its argument, so it escapes.
+                    let unclassified = matches!(
+                        return_analysis.ret_effect,
+                        ObjectReturnEffect::None | ObjectReturnEffect::Unknown
+                    );
+                    for &value in ret
+                        .args()
+                        .iter()
+                        .filter(|&&value| unclassified && reference_bearing(function, value))
+                    {
+                        for (src_arg, _) in
+                            capture_source_slices(&root_captures, effect_provenance, value, None)
+                        {
+                            summary.arg_effects[src_arg].escapes = true;
+                        }
+                    }
                     continue;
                 }
 
@@ -899,6 +928,7 @@ fn analyze_returns(
     reachable: &cranelift_entity::SecondaryMap<BlockId, bool>,
     arg_roots: &FxHashMap<RootValue, usize>,
     provenance: CompleteProvenance<'_>,
+    summaries: &ObjectEffectSummaryMap,
     layout_cache: &mut shape::AggregateLayoutCache,
 ) -> ReturnAnalysis {
     let mut combined = ReturnClass::None;
@@ -950,7 +980,22 @@ fn analyze_returns(
 
     let ret_effect = match combined {
         ReturnClass::None => ObjectReturnEffect::None,
-        ReturnClass::FreshObject => ObjectReturnEffect::FreshObject,
+        // Publication inside the callee is invisible to callers, so a fresh
+        // root must stay local apart from the return itself.
+        ReturnClass::FreshObject
+            if returned_fresh_slices.iter().all(|returned| {
+                object_root_stays_local_with_effects(
+                    function,
+                    returned.root_value.value(),
+                    summaries,
+                    |_| true,
+                    true,
+                )
+            }) =>
+        {
+            ObjectReturnEffect::FreshObject
+        }
+        ReturnClass::FreshObject => ObjectReturnEffect::Unknown,
         ReturnClass::SameAsArg(index) => ObjectReturnEffect::SameAsArg { index },
         ReturnClass::DerivedFromArg(index) => ObjectReturnEffect::DerivedFromArg { index },
         ReturnClass::BorrowedArgs(indices) => ObjectReturnEffect::BorrowedArgs {
@@ -1450,7 +1495,7 @@ fn record_enum_variant_captures(
     variant: sonatina_ir::types::EnumVariantRef,
 ) {
     for (field_idx, &value) in values.iter().enumerate() {
-        if objref_element_ty(function.ctx(), function.dfg.value_ty(value)).is_none() {
+        if !reference_bearing(function, value) {
             continue;
         }
         let Some(field_slice) = shape::enum_variant_field_slice(
@@ -1865,11 +1910,7 @@ fn record_unmapped_publication(
         return;
     }
     for &value in values {
-        let ty = function.dfg.value_ty(value);
-        if ty.is_obj_ref(function.ctx())
-            || ty.is_pointer(function.ctx())
-            || shape::is_reference_aggregate(function.ctx(), ty)
-        {
+        if reference_bearing(function, value) {
             summary.non_arg.unknown.publishes = true;
             for (src_arg, _) in capture_source_slices(root_captures, capture_ctx, value, None) {
                 summary.arg_effects[src_arg].escapes = true;

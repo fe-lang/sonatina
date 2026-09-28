@@ -128,7 +128,26 @@ fn object_alias_execution_matrix_at_all_optimization_levels() {
         (alias_execution::SOURCE, alias_execution::CASES, 3, false),
         (
             alias_execution::CAPTURE_SOURCE,
-            &[("captured_alias", 22)][..],
+            &[
+                ("captured_alias", 22),
+                ("recovered_holder", 22),
+                ("copied_holder", 22),
+                ("picked_write", 22),
+                ("picked_read", 33),
+                ("wrapped", 22),
+                ("picked_snapshot", 7),
+                ("recovered_slot", 14),
+                ("stored_into_result", 12),
+                ("stashed_payload", 22),
+                ("entry_loop_aliased", 5),
+                ("entry_loop_reload", 5),
+                ("wrapped_pair", 8),
+                ("published_result", 22),
+                ("linked_result", 22),
+                ("forwarded_result", 22),
+                ("stack_leaked_result", 22),
+                ("heap_leaked_result", 22),
+            ][..],
             0,
             false,
         ),
@@ -141,12 +160,19 @@ fn object_alias_execution_matrix_at_all_optimization_levels() {
     ] {
         let mut source =
             format!("target = \"evm-ethereum-osaka\"\n{body}\nfunc public %entry() {{\nblock0:\n");
+        let mut stores = String::new();
         for (index, &(name, _)) in cases.iter().enumerate() {
             let result = index * 2;
             let extended = result + 1;
             let offset = index * 32;
-            source.push_str(&format!("v{result}.i64 = call %{name};\nv{extended}.i256 = zext v{result} i256;\nmstore {offset}.i256 v{extended} i256;\n"));
+            source.push_str(&format!(
+                "v{result}.i64 = call %{name};\nv{extended}.i256 = zext v{result} i256;\n"
+            ));
+            stores.push_str(&format!("mstore {offset}.i256 v{extended} i256;\n"));
         }
+        // Store after the last call: the backend reserves low memory for
+        // spills and the free and dynamic stack pointers.
+        source.push_str(&stores);
         let size = cases.len() * 32;
         source.push_str(&format!("evm_return 0.i256 {size}.i256;\n}}\nobject @Contract {{ section runtime {{ entry %entry; }} }}\n"));
         let config = VerifierConfig::for_level(VerificationLevel::Full);

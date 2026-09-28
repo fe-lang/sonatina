@@ -1569,6 +1569,10 @@ impl ObjectAggregateAbi {
                     )
                 })
                 && self.source_can_move(function, source_slice, object_effects)
+                // A snapshot live after the call, e.g. passed again when a loop
+                // repeats the call, must keep matching the source that the
+                // callee would mutate after a Move.
+                && !facts.inst_liveness.live_out(inst).contains(arg)
                 && !self.move_has_live_alias_after_call(function, inst, source_slice, facts);
             if !can_share && !can_move {
                 continue;
@@ -1638,7 +1642,10 @@ impl ObjectAggregateAbi {
             return None;
         }
         let dest_obj = *store.object();
-        if function.dfg.value_ty(dest_obj) != objref_ty(function.ctx(), request.original_ty) {
+        // The call cannot write its output into storage it produces itself.
+        if function.dfg.value_inst(dest_obj) == Some(call_inst)
+            || function.dfg.value_ty(dest_obj) != objref_ty(function.ctx(), request.original_ty)
+        {
             return None;
         }
         let dest_slice = facts.tracked[dest_obj].and_then(TrackedObject::exact)?;
