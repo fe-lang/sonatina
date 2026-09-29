@@ -528,6 +528,26 @@ mod tests {
         }
     }
 
+    /// Compiles object `@O` from `source` at `level`, leaving the outcome for
+    /// the caller to assert on.
+    fn try_compile_o(
+        source: &str,
+        level: VerificationLevel,
+    ) -> Result<crate::object::artifact::ObjectArtifact, Vec<ObjectCompileError>> {
+        let parsed = parse_module(source).unwrap();
+        compile_object(
+            &parsed.module,
+            &osaka_backend(),
+            "O",
+            &compile_opts(
+                PushWidthPolicy::Push4,
+                false,
+                false,
+                VerifierConfig::for_level(level),
+            ),
+        )
+    }
+
     fn compile_fixture(
         source: &str,
         object: &str,
@@ -1073,7 +1093,7 @@ object @Contract {
 
     #[test]
     fn compile_object_reports_verifier_failures_before_codegen() {
-        let parsed = parse_module(
+        let errs = try_compile_o(
             r#"
 target = "evm-ethereum-osaka"
 
@@ -1088,18 +1108,7 @@ object @O {
   }
 }
 "#,
-        )
-        .unwrap();
-        let errs = compile_object(
-            &parsed.module,
-            &osaka_backend(),
-            "O",
-            &compile_opts(
-                PushWidthPolicy::Push4,
-                false,
-                false,
-                VerifierConfig::for_level(VerificationLevel::Standard),
-            ),
+            VerificationLevel::Standard,
         )
         .expect_err("invalid IR should fail verifier preflight");
         assert!(matches!(
@@ -1166,7 +1175,7 @@ object @O {
 
     #[test]
     fn compile_object_fast_rejects_bad_uaddo_result_shape() {
-        let parsed = parse_module(
+        let errs = try_compile_o(
             r#"
 target = "evm-ethereum-osaka"
 
@@ -1182,18 +1191,7 @@ object @O {
   }
 }
 "#,
-        )
-        .unwrap();
-        let errs = compile_object(
-            &parsed.module,
-            &osaka_backend(),
-            "O",
-            &compile_opts(
-                PushWidthPolicy::Push4,
-                false,
-                false,
-                VerifierConfig::for_level(VerificationLevel::Fast),
-            ),
+            VerificationLevel::Fast,
         )
         .expect_err("bad multi-result IR should fail verifier preflight");
         let [ObjectCompileError::VerifierFailed { report }] = errs.as_slice() else {
@@ -1209,7 +1207,7 @@ object @O {
 
     #[test]
     fn compile_object_fast_rejects_bad_snego_result_shape() {
-        let parsed = parse_module(
+        let errs = try_compile_o(
             r#"
 target = "evm-ethereum-osaka"
 
@@ -1225,18 +1223,7 @@ object @O {
   }
 }
 "#,
-        )
-        .unwrap();
-        let errs = compile_object(
-            &parsed.module,
-            &osaka_backend(),
-            "O",
-            &compile_opts(
-                PushWidthPolicy::Push4,
-                false,
-                false,
-                VerifierConfig::for_level(VerificationLevel::Fast),
-            ),
+            VerificationLevel::Fast,
         )
         .expect_err("bad checked-overflow IR should fail verifier preflight");
         let [ObjectCompileError::VerifierFailed { report }] = errs.as_slice() else {
@@ -1252,7 +1239,7 @@ object @O {
 
     #[test]
     fn compile_object_rejects_multi_return_section_entry_for_evm() {
-        let parsed = parse_module(
+        let errs = try_compile_o(
             r#"
 target = "evm-ethereum-osaka"
 
@@ -1268,18 +1255,7 @@ object @O {
   }
 }
 "#,
-        )
-        .unwrap();
-        let errs = compile_object(
-            &parsed.module,
-            &osaka_backend(),
-            "O",
-            &compile_opts(
-                PushWidthPolicy::Push4,
-                false,
-                false,
-                VerifierConfig::for_level(VerificationLevel::Standard),
-            ),
+            VerificationLevel::Standard,
         )
         .expect_err("must reject multi-return");
         assert!(errs.iter().any(|err| matches!(
@@ -1291,7 +1267,7 @@ object @O {
 
     #[test]
     fn compile_object_rejects_declaration_only_section_entry() {
-        let parsed = parse_module(
+        let errs = try_compile_o(
             r#"
 target = "evm-ethereum-osaka"
 
@@ -1303,18 +1279,7 @@ object @O {
   }
 }
 "#,
-        )
-        .unwrap();
-        let errs = compile_object(
-            &parsed.module,
-            &osaka_backend(),
-            "O",
-            &compile_opts(
-                PushWidthPolicy::Push4,
-                false,
-                false,
-                VerifierConfig::for_level(VerificationLevel::Fast),
-            ),
+            VerificationLevel::Fast,
         )
         .expect_err("declaration-only section entry must fail verifier preflight");
         let [ObjectCompileError::VerifierFailed { report }] = errs.as_slice() else {
@@ -1376,7 +1341,7 @@ object @O {
 
     #[test]
     fn compile_object_rejects_external_calls_for_evm() {
-        let parsed = parse_module(
+        let errs = try_compile_o(
             r#"
 target = "evm-ethereum-osaka"
 
@@ -1394,18 +1359,7 @@ object @O {
   }
 }
 "#,
-        )
-        .unwrap();
-        let errs = compile_object(
-            &parsed.module,
-            &osaka_backend(),
-            "O",
-            &compile_opts(
-                PushWidthPolicy::Push4,
-                false,
-                false,
-                VerifierConfig::for_level(VerificationLevel::Standard),
-            ),
+            VerificationLevel::Standard,
         )
         .expect_err("must reject external call");
         assert!(errs.iter().any(|err| matches!(
