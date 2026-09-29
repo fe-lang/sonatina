@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::{cmp::Reverse, collections::BinaryHeap};
 
 use cranelift_entity::{
     EntityRef, PrimaryMap, SecondaryMap, entity_impl, packed_option::PackedOption,
@@ -92,6 +92,7 @@ impl CfgSccAnalysis {
         }
 
         let mut visited = SecondaryMap::<BlockId, bool>::default();
+        let mut stack = Vec::new();
 
         for &root in &self.cfg_rpo {
             if visited[root] {
@@ -99,7 +100,7 @@ impl CfgSccAnalysis {
             }
 
             let scc = self.sccs.push(SccData::new());
-            let mut stack = vec![root];
+            stack.push(root);
             visited[root] = true;
 
             while let Some(node) = stack.pop() {
@@ -123,16 +124,16 @@ impl CfgSccAnalysis {
             self.sccs[scc].blocks_rpo.push(block);
         }
 
-        let scc_count = self.sccs.len();
-        let mut succ_sets = vec![BTreeSet::<SccId>::new(); scc_count];
-        let mut pred_sets = vec![BTreeSet::<SccId>::new(); scc_count];
-        let mut entry_sets = vec![BTreeSet::<BlockId>::new(); scc_count];
-        let mut exit_sets = vec![BTreeSet::<BlockId>::new(); scc_count];
-        let mut has_self_loop = vec![false; scc_count];
+        // Collect each relation as (scc, item) pairs; sorting and deduplicating
+        // them lists every SCC's items in ascending order.
+        let mut entries = Vec::new();
+        let mut exits = Vec::new();
+        let mut succs = Vec::new();
+        let mut preds = Vec::new();
+        let mut has_self_loop = vec![false; self.sccs.len()];
 
         for &block in self.cfg_rpo.iter().rev() {
             let from_scc = self.scc_of(block).unwrap();
-            let from_idx = from_scc.index();
 
             if block == entry
                 || cfg
@@ -140,7 +141,7 @@ impl CfgSccAnalysis {
                     .filter(|&&pred| reachable[pred])
                     .any(|&pred| self.scc_of(pred).unwrap() != from_scc)
             {
-                entry_sets[from_idx].insert(block);
+                entries.push((from_scc, block));
             }
 
             let mut is_exit = false;
@@ -152,28 +153,40 @@ impl CfgSccAnalysis {
                 let to_scc = self.scc_of(succ).unwrap();
                 if to_scc != from_scc {
                     is_exit = true;
-                    succ_sets[from_idx].insert(to_scc);
-                    pred_sets[to_scc.index()].insert(from_scc);
+                    succs.push((from_scc, to_scc));
+                    preds.push((to_scc, from_scc));
                 } else if succ == block {
-                    has_self_loop[from_idx] = true;
+                    has_self_loop[from_scc.index()] = true;
                 }
             }
 
             if is_exit {
-                exit_sets[from_idx].insert(block);
+                exits.push((from_scc, block));
             }
         }
 
-        for scc in self.sccs.keys() {
-            let idx = scc.index();
-            let data = &mut self.sccs[scc];
-
-            data.entry_blocks = entry_sets[idx].iter().copied().collect();
-            data.exit_blocks = exit_sets[idx].iter().copied().collect();
-            data.succ_sccs = succ_sets[idx].iter().copied().collect();
-            data.pred_sccs = pred_sets[idx].iter().copied().collect();
-
-            data.is_cycle = data.blocks_rpo.len() > 1 || has_self_loop[idx];
+        for pairs in [&mut entries, &mut exits] {
+            pairs.sort_unstable();
+            pairs.dedup();
+        }
+        for pairs in [&mut succs, &mut preds] {
+            pairs.sort_unstable();
+            pairs.dedup();
+        }
+        for &(scc, block) in &entries {
+            self.sccs[scc].entry_blocks.push(block);
+        }
+        for &(scc, block) in &exits {
+            self.sccs[scc].exit_blocks.push(block);
+        }
+        for &(scc, succ) in &succs {
+            self.sccs[scc].succ_sccs.push(succ);
+        }
+        for &(scc, pred) in &preds {
+            self.sccs[scc].pred_sccs.push(pred);
+        }
+        for (scc, data) in self.sccs.iter_mut() {
+            data.is_cycle = data.blocks_rpo.len() > 1 || has_self_loop[scc.index()];
         }
 
         self.compute_topo_order();
@@ -221,24 +234,25 @@ impl CfgSccAnalysis {
         }
 
         let mut indegree = vec![0u32; scc_count];
-        let mut ready = BTreeSet::<(BlockId, SccId)>::new();
+        // Pops the ready SCC with the smallest (tiebreak block, id) first.
+        let mut ready = BinaryHeap::<Reverse<(BlockId, SccId)>>::new();
 
         for scc in self.sccs.keys() {
             let idx = scc.index();
             indegree[idx] = self.sccs[scc].pred_sccs.len() as u32;
             if indegree[idx] == 0 {
-                ready.insert((self.sccs[scc].topo_tiebreak_key(), scc));
+                ready.push(Reverse((self.sccs[scc].topo_tiebreak_key(), scc)));
             }
         }
 
-        while let Some((_rep, scc)) = ready.pop_first() {
+        while let Some(Reverse((_rep, scc))) = ready.pop() {
             self.topo_order.push(scc);
 
             for &succ in &self.sccs[scc].succ_sccs {
                 let succ_idx = succ.index();
                 indegree[succ_idx] -= 1;
                 if indegree[succ_idx] == 0 {
-                    ready.insert((self.sccs[succ].topo_tiebreak_key(), succ));
+                    ready.push(Reverse((self.sccs[succ].topo_tiebreak_key(), succ)));
                 }
             }
         }
