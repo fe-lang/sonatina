@@ -30,7 +30,7 @@ use crate::{
     cfg_edit::{CfgEditor, CleanupMode},
     domtree::{DomTree, DominatorTreeTraversable},
     optim::{
-        aggregate::{ObjectMemoryAnalysis, ObjectReadGvnKey},
+        aggregate::{CarrierSource, ObjectMemoryAnalysis, ObjectReadGvnKey},
         simplify_expr::{
             ExprFactProvider, SimplifiedResult, nontrivial_pow2_shift, simplify_key_with_facts,
         },
@@ -644,29 +644,17 @@ impl GvnSolver {
             return None;
         }
 
-        match read.key() {
-            ObjectReadGvnKey::ValueCarrier {
-                value,
-                carrier_slice,
-                read_slice,
-            } => {
-                // ObjectMemory proves the demanded contents defined, including
-                // reconstructed aggregates and immutable load snapshots. Its
-                // covering carrier proof is stronger than the generic SSA walk.
-                if carrier_slice == read_slice
-                    && func.dfg.value_ty(value) == func.dfg.value_ty(inst_result)
-                {
-                    Some(GvnInsn::Value(value))
-                } else {
-                    Some(GvnInsn::ObjectRead(ObjectReadGvnKey::ValueCarrier {
-                        value,
-                        carrier_slice,
-                        read_slice,
-                    }))
-                }
-            }
-            key @ ObjectReadGvnKey::Memory { .. } => Some(GvnInsn::ObjectRead(key)),
+        // ObjectMemory proves the demanded contents defined, including
+        // reconstructed aggregates and immutable load snapshots. Its covering
+        // carrier proof is stronger than the generic SSA walk.
+        let key = read.key();
+        if let CarrierSource::Value(value) = key.source
+            && key.carrier_slice == key.read_slice
+            && func.dfg.value_ty(value) == func.dfg.value_ty(inst_result)
+        {
+            return Some(GvnInsn::Value(value));
         }
+        Some(GvnInsn::ObjectRead(key))
     }
 
     /// Perform value phi computation for the value.

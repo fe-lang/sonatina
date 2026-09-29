@@ -48,4 +48,4 @@ pub(crate) use object_locality::{
     LocalObjectArgInfo, LocalObjectArgMap, RootInit, collect_local_object_arg_info_with_effects,
     merge_local_object_arg_info,
 };
-pub(crate) use object_memory::{ObjectMemoryAnalysis, ObjectReadGvnKey};
+pub(crate) use object_memory::{CarrierSource, ObjectMemoryAnalysis, ObjectReadGvnKey};
