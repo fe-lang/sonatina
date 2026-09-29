@@ -487,12 +487,11 @@ fn zext_before(func: &mut Function, before: InstId, value: ValueId, ty: Type) ->
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{super::byval_object_abi::has_nested_objref, *};
     use crate::{
         isa::evm::{EvmBackend, PushWidthPolicy, test_util::prepare_root},
         object::{CompileOptions, compile_all_objects},
     };
-    use rustc_hash::FxHashSet;
     use sonatina_ir::{
         Module,
         inst::{control_flow, data, evm},
@@ -502,39 +501,6 @@ mod tests {
     use sonatina_parser::parse_module;
     use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
     use sonatina_verifier::{VerificationLevel, VerifierConfig};
-
-    fn has_nested_objref(ctx: &ModuleCtx, ty: Type) -> bool {
-        let mut visited = FxHashSet::default();
-        let mut worklist = vec![ty];
-
-        while let Some(current) = worklist.pop() {
-            let Type::Compound(compound) = current else {
-                continue;
-            };
-            if !visited.insert(compound) {
-                continue;
-            }
-
-            match ctx.with_ty_store(|store| store.resolve_compound(compound).clone()) {
-                CompoundType::Array { elem, .. }
-                | CompoundType::Ptr(elem)
-                | CompoundType::ConstRef(elem) => worklist.push(elem),
-                CompoundType::ObjRef(_) => return true,
-                CompoundType::Struct(data) => worklist.extend(data.fields),
-                CompoundType::Enum(data) => {
-                    for variant in data.variants {
-                        worklist.extend(variant.fields);
-                    }
-                }
-                CompoundType::Func { args, ret_tys } => {
-                    worklist.extend(args);
-                    worklist.extend(ret_tys);
-                }
-            }
-        }
-
-        false
-    }
 
     fn parse_test_module(src: &str) -> Module {
         parse_module(src).expect("parse should succeed").module

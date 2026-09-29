@@ -34,6 +34,7 @@ use super::{
     object_alias::ObjectAliasFacts,
     object_effects::ObjectEffectSummary,
     object_reachability::{ObjectReachability, raw_access_may_reach_objects, reference_bearing},
+    object_tracking::single_result_value,
     shape,
 };
 
@@ -2296,13 +2297,6 @@ fn push_unique_projection(projections: &mut Vec<Projection>, projection: Project
     if !projections.contains(&projection) {
         projections.push(projection);
     }
-}
-
-fn single_result_value(func: &Function, inst: InstId) -> Option<ValueId> {
-    let [result] = func.dfg.inst_results(inst) else {
-        return None;
-    };
-    Some(*result)
 }
 
 fn dfs_postorder(

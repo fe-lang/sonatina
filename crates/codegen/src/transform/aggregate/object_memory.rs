@@ -15,7 +15,7 @@ use super::{
     object_initialization::{InitializedValue, value_initialization},
     object_tracking::{
         AggregateObjectFacts, ObjectSlice, TrackedObject, enum_tag_object_slice,
-        whole_root_slice_for_value,
+        single_result_value, whole_root_slice_for_value,
     },
     provenance::RootValue,
     shape,
@@ -969,15 +969,6 @@ fn slice_initialization(
             )
         },
     )
-}
-
-fn single_result_value(func: &Function, inst: InstId) -> Option<ValueId> {
-    let results = func.dfg.inst_results(inst);
-    if results.len() == 1 {
-        Some(results[0])
-    } else {
-        None
-    }
 }
 
 #[cfg(test)]

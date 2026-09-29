@@ -21,7 +21,7 @@ use super::{
     LocalObjectArgInfo, LocalObjectArgMap, ObjectEffectSummaryMap, ObjectMemoryAnalysis, RootInit,
     cleanup::DeadPureInstCleanup,
     object_arg_invariance::FunctionArgInvariance,
-    object_tracking::{AggregateFacts, ObjectSlice},
+    object_tracking::{AggregateFacts, ObjectSlice, objref_element_ty},
     promotion::SsaBuilder,
     provenance::{CompleteProvenance, ExactProjectionMap, ProvenanceSnapshot, RootValue},
     reconstruct::{
@@ -2994,13 +2994,6 @@ impl PromotableRoot {
     fn root_inst(&self) -> Option<InstId> {
         self.root_kind.inst()
     }
-}
-
-fn objref_element_ty(ctx: &sonatina_ir::module::ModuleCtx, ty: Type) -> Option<Type> {
-    let sonatina_ir::types::CompoundType::ObjRef(elem) = ty.resolve_compound(ctx)? else {
-        return None;
-    };
-    Some(elem)
 }
 
 fn record_modified_leaves(

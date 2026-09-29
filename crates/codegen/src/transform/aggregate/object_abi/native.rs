@@ -9,7 +9,7 @@ use sonatina_ir::{
 
 use super::{
     FuncPlan, ObjectReturnOutParam, RewriteRoot, fresh_root_blocks_are_pairwise_unreachable,
-    objref_element_ty, whole_object_slice,
+    whole_object_slice,
 };
 use crate::{
     cfg_scc::CfgSccAnalysis,
@@ -18,7 +18,7 @@ use crate::{
     transform::aggregate::{
         ObjectEffectSummaryMap, compute_object_effect_summaries,
         object_locality::{self, SpecialObjectUse},
-        object_tracking::AggregateFacts,
+        object_tracking::{AggregateFacts, objref_element_ty},
         private_abi,
         provenance::{ProvenanceSnapshot, RootValue},
         shape,

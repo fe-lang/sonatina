@@ -1,7 +1,7 @@
 use cranelift_entity::SecondaryMap;
 use rustc_hash::FxHashMap;
 use sonatina_ir::{
-    BlockId, ControlFlowGraph, Function, I256, Immediate, InstId, Type, ValueId,
+    BlockId, ControlFlowGraph, Function, InstId, ValueId,
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
     inst::{control_flow, data, downcast},
     module::FuncRef,
@@ -21,6 +21,7 @@ use super::{
     },
     provenance::{MayProvenance, MayRootSet, RootValue},
     reconstruct::AggregateValueReconstructor,
+    scalarize::enum_variant_tag_imm,
     shape,
 };
 
@@ -645,16 +646,6 @@ fn roots_have_live(live: &LiveLeafMap, roots: MayRootSet<'_>) -> bool {
 
 fn root_has_live(live: &LiveLeafMap, root: ValueId) -> bool {
     live.get(&root).is_some_and(|entry| !entry.is_empty())
-}
-
-fn enum_variant_tag_imm(variant: sonatina_ir::types::EnumVariantRef, ty: Type) -> Immediate {
-    match ty {
-        Type::EnumTag(enum_ty) => Immediate::EnumTag {
-            enum_ty,
-            value: I256::from(u64::from(variant.index())),
-        },
-        _ => Immediate::from_i256(I256::from(u64::from(variant.index())), ty),
-    }
 }
 
 fn ends_with_return(func: &Function, block: BlockId) -> bool {

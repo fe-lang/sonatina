@@ -6,13 +6,12 @@ use sonatina_ir::{
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
     inst::{control_flow, data, downcast},
     module::{FuncRef, ModuleCtx},
-    types::CompoundType,
 };
 
 use super::{
     ObjectEffectSummaryMap, ObjectReturnEffect, compute_object_effect_summaries,
     object_locality::{self, LocalObjectArgInfo, LocalObjectArgMap},
-    object_tracking::AggregateFacts,
+    object_tracking::{AggregateFacts, objref_element_ty},
     private_abi::{self, PrivateAbiPlan},
     provenance::{CompleteProvenance, CompleteRootSet, ProvenanceSnapshot, RootValue},
     shape,
@@ -734,13 +733,6 @@ impl ObjectReturnOutParam {
         function.layout.remove_inst(inst);
         function.erase_inst(inst);
     }
-}
-
-fn objref_element_ty(ctx: &ModuleCtx, ty: Type) -> Option<Type> {
-    let CompoundType::ObjRef(elem) = ty.resolve_compound(ctx)? else {
-        return None;
-    };
-    Some(elem)
 }
 
 pub(crate) fn whole_object_slice(

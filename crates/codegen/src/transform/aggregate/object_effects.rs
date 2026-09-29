@@ -24,7 +24,7 @@ use super::{
     object_alias::ObjectAliasFacts,
     object_locality::object_root_stays_local_with_effects,
     object_reachability::reference_bearing,
-    object_tracking::AggregateFacts,
+    object_tracking::{AggregateFacts, objref_element_ty, single_result_value},
     provenance::{
         CompleteProvenance, CompleteRootSet, MayProvenance, Projection, ProvenanceSnapshot,
         RootValue, exact_capture_destination, observed_root_slices,
@@ -1735,13 +1735,6 @@ fn dedup_capture_effects(captures: &mut Vec<ObjectCaptureEffect>) {
     captures.retain(|capture| seen.insert(*capture));
 }
 
-fn single_result_value(func: &Function, inst: sonatina_ir::InstId) -> Option<ValueId> {
-    let [result] = func.dfg.inst_results(inst) else {
-        return None;
-    };
-    Some(*result)
-}
-
 fn map_into_slice_set(
     dst: &mut SliceSet,
     base_slice: Option<shape::AggregateSlice>,
@@ -1990,13 +1983,6 @@ pub(crate) fn is_fresh_root(function: &Function, value: ValueId) -> bool {
     };
     downcast::<&data::ObjAlloc>(function.inst_set(), function.dfg.inst(inst)).is_some()
         || downcast::<&control_flow::Call>(function.inst_set(), function.dfg.inst(inst)).is_some()
-}
-
-pub(crate) fn objref_element_ty(module: &ModuleCtx, ty: Type) -> Option<Type> {
-    match ty.resolve_compound(module)? {
-        sonatina_ir::types::CompoundType::ObjRef(elem) => Some(elem),
-        _ => None,
-    }
 }
 
 pub(crate) fn whole_root_slice(

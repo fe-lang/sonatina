@@ -26,7 +26,9 @@ use super::{
     object_effects::{ObjectEffectSummary, object_effect_scc_order, update_object_effect_scc},
     object_load_store::ObjectLoadStore,
     object_locality,
-    object_tracking::{AggregateFacts, AggregateObjectFacts, ObjectSlice, TrackedObject},
+    object_tracking::{
+        AggregateFacts, AggregateObjectFacts, ObjectSlice, TrackedObject, objref_element_ty,
+    },
     private_abi::{self, PrivateAbiPlan},
     provenance::{CompleteProvenance, CompleteRootSet, ProvenanceSnapshot, RootValue},
     shape,
@@ -2131,7 +2133,7 @@ fn hidden_out_local_object_args(
         .collect()
 }
 
-fn has_nested_objref(ctx: &ModuleCtx, ty: Type) -> bool {
+pub(crate) fn has_nested_objref(ctx: &ModuleCtx, ty: Type) -> bool {
     let mut seen = rustc_hash::FxHashSet::default();
     let mut worklist = vec![ty];
 
@@ -2196,13 +2198,6 @@ fn objref_ty(ctx: &ModuleCtx, ty: Type) -> Type {
 }
 
 #[allow(dead_code)]
-fn objref_element_ty(ctx: &ModuleCtx, ty: Type) -> Option<Type> {
-    let CompoundType::ObjRef(elem) = ty.resolve_compound(ctx)? else {
-        return None;
-    };
-    Some(elem)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
