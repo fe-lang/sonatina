@@ -4,6 +4,7 @@ type @Holder = { objref<i64> };
 type @Slot = enum { #Empty, #Full(objref<i64>) };
 type @Boxed = enum { #Empty, #Full(@Holder) };
 type @Nest = { objref<@Holder> };
+type @Slots = { objref<i64>, [objref<i64>; 2] };
 
 func inline(never) private %capture_then_write(v0.objref<i64>, v1.objref<@Holder>, v2.objref<@Holder>) -> i64 {
 block0:
@@ -567,6 +568,66 @@ block0:
     v1.i1 = call %flag;
     v2.objref<@Holder> = call %copy_picked_then_clear v0 v1;
     call %write_held v2;
+    v3.i64 = obj.load v0;
+    return v3;
+}
+
+func inline(never) private %pick_slot(v0.objref<i64>, v1.i64, v2.i1) -> objref<objref<i64>> {
+block0:
+    v3.objref<@Slots> = obj.alloc @Slots;
+    v4.objref<[objref<i64>; 2]> = obj.proj v3 1.i8;
+    v5.objref<objref<i64>> = obj.index v4 1.i64;
+    obj.store v5 v0;
+    v6.objref<objref<i64>> = obj.index v4 v1;
+    v7.objref<objref<i64>> = obj.proj v3 0.i8;
+    br v2 block1 block2;
+block1:
+    jump block2;
+block2:
+    v8.objref<objref<i64>> = phi (v6 block0) (v7 block1);
+    return v8;
+}
+
+func inline(never) public %indexed_result() -> i64 {
+block0:
+    v0.objref<i64> = obj.alloc i64;
+    obj.store v0 11.i64;
+    v1.objref<objref<i64>> = call %pick_slot v0 1.i64 0.i1;
+    v2.objref<i64> = obj.load v1;
+    obj.store v2 22.i64;
+    v3.i64 = obj.load v0;
+    return v3;
+}
+
+func inline(never) private %choose_slot(v0.i1, v1.objref<objref<i64>>, v2.objref<objref<i64>>) -> objref<objref<i64>> {
+block0:
+    br v0 block1 block2;
+block1:
+    jump block2;
+block2:
+    v3.objref<objref<i64>> = phi (v1 block0) (v2 block1);
+    return v3;
+}
+
+func inline(never) private %borrow_slot(v0.objref<i64>, v1.i64, v2.i1) -> objref<objref<i64>> {
+block0:
+    v3.objref<@Slots> = obj.alloc @Slots;
+    v4.objref<[objref<i64>; 2]> = obj.proj v3 1.i8;
+    v5.objref<objref<i64>> = obj.index v4 1.i64;
+    obj.store v5 v0;
+    v6.objref<objref<i64>> = obj.index v4 v1;
+    v7.objref<objref<i64>> = obj.proj v3 0.i8;
+    v8.objref<objref<i64>> = call %choose_slot v2 v6 v7;
+    return v8;
+}
+
+func inline(never) public %borrowed_indexed_result() -> i64 {
+block0:
+    v0.objref<i64> = obj.alloc i64;
+    obj.store v0 11.i64;
+    v1.objref<objref<i64>> = call %borrow_slot v0 1.i64 0.i1;
+    v2.objref<i64> = obj.load v1;
+    obj.store v2 22.i64;
     v3.i64 = obj.load v0;
     return v3;
 }
