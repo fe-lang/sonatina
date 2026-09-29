@@ -1,0 +1,41 @@
+name: SP1 proof
+
+# Proving takes much longer than executing guests, so pull requests only
+# execute them (see the SP1 job in ci.yml). This workflow also lints the
+# dedicated harness and proves on both hosts.
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+jobs:
+  sp1-proof:
+    name: SP1 RV64IM proof (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-15]
+    steps:
+      # The runner context is only available to steps, not job-level env.
+      - name: Locate the Succinct toolchain directory
+        run: echo "SONATINA_SP1_TOOLCHAIN=$RUNNER_TEMP/sonatina-sp1-toolchain" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+            tests/sp1 -> target
+      - name: Install checksum-pinned Succinct toolchain
+        run: bash crates/sp1/install-toolchain.sh "$SONATINA_SP1_TOOLCHAIN"
+      # The SDK's prover types are generated from protobuf definitions.
+      - uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Lint dedicated SDK harness
+        run: cargo clippy --locked --release --manifest-path tests/sp1/Cargo.toml --all-targets -- -D warnings
+      - name: Execute guests and verify a CPU core proof
+        run: cargo test --locked --release --manifest-path tests/sp1/Cargo.toml -- --include-ignored

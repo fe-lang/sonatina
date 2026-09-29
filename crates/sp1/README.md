@@ -95,3 +95,7 @@ cargo test --locked --release --manifest-path tests/sp1/Cargo.toml --test execut
 Missing prerequisites fail these tests; there are no silent skips. The second
 command runs the CPU core-proof check. Recursive proofs, precompile APIs,
 unconstrained execution, and performance tuning are outside this slice.
+
+Pull request CI runs the first command on Linux. The `SP1 proof` workflow
+also lints the harness and runs the proof on Linux and macOS, weekly or on
+demand.
