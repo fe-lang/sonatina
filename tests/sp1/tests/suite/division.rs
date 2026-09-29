@@ -1,11 +1,11 @@
 use sonatina_codegen::compile::OptLevel;
 use sonatina_ir::{I256, Immediate, Type};
-use sonatina_sp1_integration::link;
-use sp1_sdk::blocking::{Prover, ProverClient, SP1Stdin};
+use sonatina_sp1_integration::{link, prover};
+use sp1_sdk::blocking::{Prover, SP1Stdin};
 
 #[test]
 fn wide_division_and_remainder_compose_with_phi_loops() {
-    let client = ProverClient::builder().cpu().build();
+    let client = prover();
     for (width, ty) in [(128, Type::I128), (256, Type::I256)] {
         for (div, rem) in [("udiv", "umod"), ("sdiv", "smod")] {
             let (inputs, lhs, rhs, output, result) = if width == 256 {

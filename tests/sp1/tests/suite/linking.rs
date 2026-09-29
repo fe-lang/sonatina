@@ -4,15 +4,15 @@ use object::{
 };
 use sonatina_codegen::compile::OptLevel;
 use sonatina_sp1::Sp1Error;
-use sonatina_sp1_integration::{compile, runtime};
+use sonatina_sp1_integration::{compile, prover, runtime};
 use sp1_sdk::{
     Elf,
-    blocking::{Prover, ProverClient, SP1Stdin},
+    blocking::{Prover, SP1Stdin},
 };
 
 #[test]
 fn separate_objects_share_globals_calls_aggregates_and_references() {
-    let client = ProverClient::builder().cpu().build();
+    let client = prover();
     for level in [OptLevel::O0, OptLevel::O2] {
         let library = compile(
             include_str!("../../../../crates/codegen/test_files/cranelift/linked_abi.sntn"),

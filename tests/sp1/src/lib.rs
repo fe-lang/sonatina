@@ -8,11 +8,21 @@ use sonatina_codegen::{Compile, compile::OptLevel, isa::cranelift::CraneliftObje
 use sonatina_sp1::{Sp1Runtime, Sp1Toolchain};
 use sonatina_triple::TargetTriple;
 use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module};
-use sp1_sdk::Elf;
+use sp1_sdk::{
+    Elf,
+    blocking::{CpuProver, ProverClient},
+};
 
 pub fn runtime() -> &'static Sp1Runtime {
     static RUNTIME: OnceLock<Sp1Runtime> = OnceLock::new();
     RUNTIME.get_or_init(|| Sp1Runtime::build(Sp1Toolchain::from_env().unwrap()).unwrap())
+}
+
+/// Each CPU prover is a local prover node holding several gigabytes, so tests
+/// running in parallel share one.
+pub fn prover() -> &'static CpuProver {
+    static PROVER: OnceLock<CpuProver> = OnceLock::new();
+    PROVER.get_or_init(|| ProverClient::builder().cpu().build())
 }
 
 pub fn compile(source: &str, level: OptLevel) -> Vec<u8> {

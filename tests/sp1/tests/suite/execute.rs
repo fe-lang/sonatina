@@ -1,8 +1,8 @@
 use sonatina_codegen::compile::OptLevel;
-use sonatina_sp1_integration::link;
+use sonatina_sp1_integration::{link, prover};
 use sp1_sdk::{
     ProvingKey,
-    blocking::{ProveRequest, Prover, ProverClient, SP1Stdin},
+    blocking::{ProveRequest, Prover, SP1Stdin},
 };
 
 const IO: &str = include_str!("../../fixtures/io.sntn");
@@ -16,7 +16,7 @@ fn input(value: u32, wide: u64) -> SP1Stdin {
 
 #[test]
 fn input_checked_arithmetic_and_public_values() {
-    let client = ProverClient::builder().cpu().build();
+    let client = prover();
     for level in [OptLevel::O0, OptLevel::O2] {
         let elf = link(IO, level);
         for value in [0, 41, i32::MAX as u32, u32::MAX - 1] {
@@ -39,7 +39,7 @@ fn input_checked_arithmetic_and_public_values() {
 
 #[test]
 fn missing_and_malformed_inputs_fail() {
-    let client = ProverClient::builder().cpu().build();
+    let client = prover();
     let elf = link(IO, OptLevel::O2);
     let (values, report) = client.execute(elf.clone(), SP1Stdin::new()).run().unwrap();
     assert_eq!(report.exit_code, 1);
@@ -57,7 +57,7 @@ fn missing_and_malformed_inputs_fail() {
 #[test]
 #[ignore = "CPU core proof; run explicitly in the SP1 proof job"]
 fn proves_and_verifies_checked_input_program() {
-    let client = ProverClient::builder().cpu().build();
+    let client = prover();
     let pk = client.setup(link(IO, OptLevel::O2)).unwrap();
     let proof = client.prove(&pk, input(41, u64::MAX)).core().run().unwrap();
     let expected = [42u32.to_le_bytes().as_slice(), &u64::MAX.to_le_bytes()].concat();

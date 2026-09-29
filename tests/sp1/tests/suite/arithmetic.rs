@@ -2,8 +2,8 @@ use std::fmt::Write;
 
 use sonatina_codegen::compile::OptLevel;
 use sonatina_ir::{I256, Immediate, Type};
-use sonatina_sp1_integration::link;
-use sp1_sdk::blocking::{Prover, ProverClient, SP1Stdin};
+use sonatina_sp1_integration::{link, prover};
+use sp1_sdk::blocking::{Prover, SP1Stdin};
 
 const TYPES: [Type; 7] = [
     Type::I1,
@@ -57,7 +57,7 @@ block0:
     }
     source.push_str(&main);
     source.push_str("    return 0.i32;\n}\n");
-    let client = ProverClient::builder().cpu().build();
+    let client = prover();
     let mut cases = vec![I256::zero(), I256::one(), I256::from(-1)];
     for ty in TYPES {
         cases.push(Immediate::signed_min(ty).zext(Type::I256).as_i256());
