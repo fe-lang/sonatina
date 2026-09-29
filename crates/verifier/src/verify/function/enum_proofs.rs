@@ -146,14 +146,19 @@ fn solve(verifier: &FunctionVerifier<'_>) -> BTreeMap<BlockId, State> {
                 continue;
             };
             phis(verifier, &mut edge, Some(block), succ);
-            let next = entries
-                .get(&succ)
-                .map_or_else(|| edge.clone(), |old| old.join(verifier.ctx, &edge));
-            if entries.get(&succ) != Some(&next) {
-                entries.insert(succ, next);
-                if queued.insert(succ) {
-                    pending.push_back(succ);
+            let next = match entries.get(&succ) {
+                Some(old) => {
+                    let next = old.join(verifier.ctx, &edge);
+                    if *old == next {
+                        continue;
+                    }
+                    next
                 }
+                None => edge,
+            };
+            entries.insert(succ, next);
+            if queued.insert(succ) {
+                pending.push_back(succ);
             }
         }
     }
