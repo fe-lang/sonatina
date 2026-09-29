@@ -570,8 +570,7 @@ block0:
 
     fn find_const_load_inst(func: &Function) -> InstId {
         func.layout
-            .iter_block()
-            .flat_map(|block| func.layout.iter_inst(block))
+            .iter_all_insts()
             .find(|&inst| {
                 downcast::<&data::ConstLoad>(func.inst_set(), func.dfg.inst(inst)).is_some()
             })

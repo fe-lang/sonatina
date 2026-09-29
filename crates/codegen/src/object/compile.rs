@@ -910,8 +910,7 @@ object @Contract {
         parsed.module.func_store.modify(func, |function| {
             let const_load = function
                 .layout
-                .iter_block()
-                .flat_map(|block| function.layout.iter_inst(block))
+                .iter_all_insts()
                 .find(|&inst| function.dfg.inst(inst).as_text() == "const.load")
                 .expect("fixture should contain const.load");
             function.set_inst_provenance(const_load, "post-opt:const-load".to_string());
@@ -975,8 +974,7 @@ object @Contract {
         parsed.module.func_store.modify(func, |function| {
             let const_load = function
                 .layout
-                .iter_block()
-                .flat_map(|block| function.layout.iter_inst(block))
+                .iter_all_insts()
                 .find(|&inst| function.dfg.inst(inst).as_text() == "const.load")
                 .expect("fixture should contain const.load");
             function.set_inst_provenance(const_load, "post-opt:const-load".to_string());

@@ -734,8 +734,7 @@ object @Contract {
         prepared_module.func_store.view(make_pair, |func| {
             assert!(
                 func.layout
-                    .iter_block()
-                    .flat_map(|block| func.layout.iter_inst(block))
+                    .iter_all_insts()
                     .all(
                         |inst| downcast::<&evm::EvmMalloc>(func.inst_set(), func.dfg.inst(inst))
                             .is_none()
@@ -746,8 +745,7 @@ object @Contract {
         prepared_module.func_store.view(forward_pair, |func| {
             assert!(
                 func.layout
-                    .iter_block()
-                    .flat_map(|block| func.layout.iter_inst(block))
+                    .iter_all_insts()
                     .all(
                         |inst| downcast::<&evm::EvmMalloc>(func.inst_set(), func.dfg.inst(inst))
                             .is_none()
@@ -758,29 +756,25 @@ object @Contract {
         prepared_module.func_store.view(entry, |func| {
             let mut saw_forward_pair = false;
             assert!(
-                func.layout
-                    .iter_block()
-                    .flat_map(|block| func.layout.iter_inst(block))
-                    .all(|inst| {
+                func.layout.iter_all_insts().all(|inst| {
+                    assert!(
+                        downcast::<&evm::EvmMalloc>(func.inst_set(), func.dfg.inst(inst)).is_none(),
+                        "entry should keep the returned object caller-local"
+                    );
+                    let Some(call) =
+                        downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(inst))
+                    else {
+                        return true;
+                    };
+                    if *call.callee() == forward_pair {
+                        saw_forward_pair = true;
                         assert!(
-                            downcast::<&evm::EvmMalloc>(func.inst_set(), func.dfg.inst(inst))
-                                .is_none(),
-                            "entry should keep the returned object caller-local"
+                            func.dfg.inst_results(inst).is_empty(),
+                            "rewritten forward_pair call should return through the out arg"
                         );
-                        let Some(call) =
-                            downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(inst))
-                        else {
-                            return true;
-                        };
-                        if *call.callee() == forward_pair {
-                            saw_forward_pair = true;
-                            assert!(
-                                func.dfg.inst_results(inst).is_empty(),
-                                "rewritten forward_pair call should return through the out arg"
-                            );
-                        }
-                        true
-                    }),
+                    }
+                    true
+                }),
                 "entry should still contain lowered calls"
             );
             assert!(saw_forward_pair, "entry should still call forward_pair");

@@ -898,8 +898,7 @@ mod tests {
         module.func_store.view(caller_ref, |caller| {
             let inlined_add = caller
                 .layout
-                .iter_block()
-                .flat_map(|block| caller.layout.iter_inst(block))
+                .iter_all_insts()
                 .find(|&inst| caller.dfg.inst(inst).as_text() == "add")
                 .expect("callee add should be spliced into caller");
 

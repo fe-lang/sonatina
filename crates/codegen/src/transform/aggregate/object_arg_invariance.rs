@@ -282,8 +282,7 @@ mod tests {
 
     fn first_argument_read(func: &Function, accesses: &ObjectAccessFacts) -> (usize, ObjectSlice) {
         func.layout
-            .iter_block()
-            .flat_map(|block| func.layout.iter_inst(block))
+            .iter_all_insts()
             .enumerate()
             .find_map(|(order, inst)| {
                 let load = downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst))?;
@@ -340,8 +339,7 @@ mod tests {
             let (read, _) = first_argument_read(func, &accesses);
             let write = func
                 .layout
-                .iter_block()
-                .flat_map(|block| func.layout.iter_inst(block))
+                .iter_all_insts()
                 .position(|inst| {
                     downcast::<&data::ObjStore>(func.inst_set(), func.dfg.inst(inst)).is_some()
                 })

@@ -83,8 +83,7 @@ fn call_arg_may_escape_from_src(src: &str, func_name: &str, arg_index: usize) ->
         .value;
         let call_inst = function
             .layout
-            .iter_block()
-            .flat_map(|block| function.layout.iter_inst(block))
+            .iter_all_insts()
             .find(|&inst| function.dfg.call_info(inst).is_some())
             .expect("call exists");
         let EvmInstKind::Call(call) = isa.inst_set().resolve_inst(function.dfg.inst(call_inst))
