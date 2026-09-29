@@ -97,9 +97,9 @@ pub(super) fn verify(verifier: &mut FunctionVerifier<'_>) {
     if !enumeration {
         return;
     }
-    let entries = solve(verifier);
+    let mut entries = solve(verifier);
     for block in verifier.block_order.clone() {
-        let Some(mut state) = entries.get(&block).cloned() else {
+        let Some(mut state) = entries.remove(&block) else {
             continue;
         };
         for inst in verifier.block_to_insts[&block].clone() {
@@ -141,8 +141,17 @@ fn solve(verifier: &FunctionVerifier<'_>) -> BTreeMap<BlockId, State> {
                 continue 'worklist;
             }
         }
-        for &succ in cfg.succs.get(&block).into_iter().flatten() {
-            let Some(mut edge) = edge(verifier, &state, block, succ) else {
+        let succs = cfg.succs.get(&block).map_or(&[][..], Vec::as_slice);
+        let mut state = Some(state);
+        for (index, &succ) in succs.iter().enumerate() {
+            // The last successor takes the block's exit state instead of a copy.
+            let exit = if index + 1 == succs.len() {
+                state.take()
+            } else {
+                state.clone()
+            };
+            let Some(mut edge) = edge(verifier, exit.expect("block exit state"), block, succ)
+            else {
                 continue;
             };
             phis(verifier, &mut edge, Some(block), succ);
@@ -257,11 +266,10 @@ fn phis(verifier: &FunctionVerifier<'_>, state: &mut State, pred: Option<BlockId
 
 fn edge(
     verifier: &FunctionVerifier<'_>,
-    state: &State,
+    mut next: State,
     pred: BlockId,
     succ: BlockId,
 ) -> Option<State> {
-    let mut next = state.clone();
     let inst = verifier
         .func
         .dfg
@@ -274,15 +282,15 @@ fn edge(
     let Some(scrutinee) = scrutinee else {
         return Some(next);
     };
-    let refs = state.observations.get(&scrutinee);
-    let immutable = state.value_observations.get(&scrutinee);
-    let value = if let Some(refs) = refs {
+    let refs = next.observations.get(&scrutinee).cloned();
+    let immutable = next.value_observations.get(&scrutinee).copied();
+    let value = if let Some(refs) = &refs {
         let Type::EnumTag(ty) = verifier.func.dfg.value_ty(scrutinee) else {
             unreachable!("object tag observation")
         };
-        state.contents(verifier.ctx, refs, Type::Compound(ty))
-    } else if let Some(&(value, _)) = immutable {
-        state.value(verifier, value)
+        next.contents(verifier.ctx, refs, Type::Compound(ty))
+    } else if let Some((value, _)) = immutable {
+        next.value(verifier, value)
     } else {
         return Some(next);
     };
@@ -295,7 +303,7 @@ fn edge(
         .enumerate()
         .filter_map(|(index, _)| {
             let case_index = immutable
-                .and_then(|(_, predicate)| *predicate)
+                .and_then(|(_, predicate)| predicate)
                 .map_or(index, |variant| usize::from(index as u32 == variant));
             let reaches = if let Some(table) = table {
                 let mut explicit = false;
@@ -312,7 +320,7 @@ fn edge(
                 }
                 reaches || !explicit && *table.default() == Some(succ)
             } else if let Some(branch) = branch
-                && let Some(&(_, Some(variant))) = immutable
+                && let Some((_, Some(variant))) = immutable
             {
                 (index as u32 == variant && *branch.nz_dest() == succ)
                     || (index as u32 != variant && *branch.z_dest() == succ)
@@ -329,9 +337,9 @@ fn edge(
         value.tags = Some(tags.clone());
         value.tag_initialized = true;
     };
-    if let Some(refs) = refs {
+    if let Some(refs) = &refs {
         next.write(verifier.ctx, refs, value.ty, true, refine);
-    } else if let Some(&(id, _)) = immutable {
+    } else if let Some((id, _)) = immutable {
         let mut value = value;
         refine(&mut value);
         next.values.insert(id, value);
