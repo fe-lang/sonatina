@@ -60,7 +60,9 @@ impl AdceSolver {
     fn run_dce(&mut self, func: &mut Function) -> bool {
         self.clear();
 
-        let divergent_blocks = divergent_blocks(func);
+        let mut cfg = ControlFlowGraph::new();
+        cfg.compute(func);
+        let divergent_blocks = divergent_blocks(&cfg);
         self.post_domtree
             .compute_with_extra_exits(func, &divergent_blocks);
         let pdf_set = self.post_domtree.compute_df();
@@ -245,12 +247,10 @@ impl AdceSolver {
     }
 }
 
-fn divergent_blocks(func: &Function) -> Vec<BlockId> {
-    let mut cfg = ControlFlowGraph::new();
-    cfg.compute(func);
-
+/// Returns entry-reachable blocks with no path to a CFG exit.
+pub(crate) fn divergent_blocks(cfg: &ControlFlowGraph) -> Vec<BlockId> {
     let mut sccs = CfgSccAnalysis::new();
-    sccs.compute(&cfg);
+    sccs.compute(cfg);
 
     let mut reaches_real_exit = SecondaryMap::<SccId, bool>::with_capacity(sccs.scc_count());
     for &scc in sccs.topo_order().iter().rev() {

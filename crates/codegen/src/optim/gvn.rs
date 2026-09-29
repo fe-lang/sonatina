@@ -33,6 +33,7 @@ use crate::{
     cfg_edit::{CfgEditor, CleanupMode},
     domtree::{DomTree, DominatorTreeTraversable},
     optim::{
+        adce::divergent_blocks,
         aggregate::{CarrierSource, ObjectMemoryAnalysis, ObjectReadGvnKey},
         simplify_expr::{
             ExprFactProvider, SimplifiedResult, nontrivial_pow2_shift, simplify_key_with_facts,
@@ -2349,7 +2350,7 @@ impl<'a> RedundantCodeRemover<'a> {
         // Resolve value phis in the function.
         let mut next_block = Some(entry);
         while let Some(block) = next_block {
-            self.resolve_value_phi_in_block(func, block);
+            self.resolve_value_phi_in_block(func, cfg, block);
             next_block = func.layout.next_block_of(block);
         }
         self.changed
@@ -2442,7 +2443,12 @@ impl<'a> RedundantCodeRemover<'a> {
     }
 
     /// Resolve value phis in the block.
-    fn resolve_value_phi_in_block(&mut self, func: &mut Function, block: BlockId) {
+    fn resolve_value_phi_in_block(
+        &mut self,
+        func: &mut Function,
+        cfg: &ControlFlowGraph,
+        block: BlockId,
+    ) {
         let mut inserter = InstInserter::at_location(CursorLocation::BlockTop(block));
         loop {
             match inserter.loc() {
@@ -2466,7 +2472,8 @@ impl<'a> RedundantCodeRemover<'a> {
                         if let Some(value_phi) = &self.solver.classes[class].value_phi {
                             let ty = func.dfg.value_ty(inst_result);
                             if self.is_value_phi_resolvable(value_phi, block)
-                                && self.pushes_constants_only_where_used(func, value_phi, block)
+                                && self
+                                    .pushes_constants_only_where_used(func, cfg, value_phi, block)
                             {
                                 let value = self.resolve_value_phi(
                                     func,
@@ -2532,15 +2539,15 @@ impl<'a> RedundantCodeRemover<'a> {
         }
     }
 
-    /// Returns `false` if resolving `value_phi` for an instruction in `block` would push
-    /// constants on paths that never reach `block`.
+    /// Returns `false` if a new constant phi has a path to an exit that bypasses `block`.
     ///
     /// A constant argument is pushed on the edge into its phi's block, but the instruction the
-    /// phi replaces only runs in `block`. The phi only pays for itself if every path through
-    /// the phi's block continues to `block`.
+    /// phi replaces only runs in `block`. Treat blocks that cannot reach a CFG exit as extra
+    /// exits. Loops with an exit path do not by themselves prevent folding.
     fn pushes_constants_only_where_used(
         &self,
         func: &Function,
+        cfg: &ControlFlowGraph,
         value_phi: &ValuePhi,
         block: BlockId,
     ) -> bool {
@@ -2559,8 +2566,9 @@ impl<'a> RedundantCodeRemover<'a> {
                 && !self
                     .post_domtree
                     .get_or_init(|| {
+                        let divergent_blocks = divergent_blocks(cfg);
                         let mut post_domtree = PostDomTree::new();
-                        post_domtree.compute(func);
+                        post_domtree.compute_with_extra_exits(func, &divergent_blocks);
                         post_domtree
                     })
                     .post_dominates(block, phi_insn.block)
