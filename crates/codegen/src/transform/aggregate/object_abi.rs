@@ -821,13 +821,10 @@ fn block_reaches(cfg: &ControlFlowGraph, from: BlockId, to: BlockId) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sonatina_ir::{Module, Signature, ir_writer::FuncWriter, module::FuncRef};
-    use sonatina_parser::parse_module;
-    use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module};
+    use crate::test_support::{dump_func, lookup_func, parse_test_module};
+    use sonatina_ir::{Module, Signature, module::FuncRef};
 
-    fn parse_test_module(src: &str) -> Module {
-        parse_module(src).expect("parse should succeed").module
-    }
+    use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module};
 
     #[test]
     fn changed_output_type_discards_contract_without_losing_borrowed_facts() {
@@ -865,20 +862,6 @@ block0:
         object_locality::merge_local_object_arg_info(&module, &mut local, &outputs);
         assert_eq!(local[&func][&0], LocalObjectArgInfo::Borrowed);
         assert!(object_locality::info_to_local_object_args(&module, &outputs)[&func].is_empty());
-    }
-
-    fn lookup_func(module: &Module, name: &str) -> FuncRef {
-        module
-            .funcs()
-            .into_iter()
-            .find(|&func_ref| module.ctx.func_sig(func_ref, |sig| sig.name() == name))
-            .expect("function should exist")
-    }
-
-    fn dump_func(module: &Module, func_ref: FuncRef) -> String {
-        module.func_store.view(func_ref, |func| {
-            FuncWriter::new(func_ref, func).dump_string()
-        })
     }
 
     fn verify_rewritten_module(module: &Module) {

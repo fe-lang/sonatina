@@ -2204,6 +2204,7 @@ mod tests {
     use crate::{
         isa::evm::{EvmBackend, PushWidthPolicy, test_util::prepare_root},
         object::{CompileOptions, compile_all_objects},
+        test_support::{dump_func_by_name, lookup_func, parse_test_module},
         transform::aggregate::collect_local_object_arg_info_with_effects,
     };
     use sonatina_ir::{
@@ -2212,21 +2213,9 @@ mod tests {
         ir_writer::FuncWriter,
         isa::evm::Evm,
     };
-    use sonatina_parser::parse_module;
+
     use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
     use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module};
-
-    fn parse_test_module(src: &str) -> Module {
-        parse_module(src).expect("parse should succeed").module
-    }
-
-    fn lookup_func(module: &Module, name: &str) -> FuncRef {
-        module
-            .funcs()
-            .into_iter()
-            .find(|&func_ref| module.ctx.func_sig(func_ref, |sig| sig.name() == name))
-            .expect("function should exist")
-    }
 
     fn run_byvalue_arg_abi(module: &Module) {
         let _ = run_object_aggregate_abi(module);
@@ -2246,13 +2235,6 @@ mod tests {
             "module should verify after rewrite:\n{report}"
         );
         synthetic_out_args
-    }
-
-    fn dump_func(module: &Module, name: &str) -> String {
-        let func_ref = lookup_func(module, name);
-        module.func_store.view(func_ref, |func| {
-            FuncWriter::new(func_ref, func).dump_string()
-        })
     }
 
     fn count_obj_allocs(module: &Module, name: &str) -> usize {
@@ -2453,7 +2435,7 @@ block0:
 
         let source_root = first_obj_alloc_result(&module, "caller");
         let call_args = first_call_args(&module, "caller", "readonly");
-        let dumped = dump_func(&module, "caller");
+        let dumped = dump_func_by_name(&module, "caller");
         assert_eq!(
             count_obj_allocs(&module, "caller"),
             1,
@@ -2499,7 +2481,7 @@ block0:
 
         let source_root = first_obj_alloc_result(&module, "caller");
         let call_args = first_call_args(&module, "caller", "mutate");
-        let dumped = dump_func(&module, "caller");
+        let dumped = dump_func_by_name(&module, "caller");
         assert_eq!(
             count_obj_allocs(&module, "caller"),
             1,
@@ -2548,7 +2530,7 @@ block0:
 
         let source_root = first_obj_alloc_result(&module, "caller");
         let call_args = first_call_args(&module, "caller", "pair_read");
-        let dumped = dump_func(&module, "caller");
+        let dumped = dump_func_by_name(&module, "caller");
         assert_eq!(
             count_obj_allocs(&module, "caller"),
             1,
@@ -2600,7 +2582,7 @@ block0:
         let caller_ref = lookup_func(&module, "caller");
         let source_root = first_obj_alloc_result(&module, "caller");
         let call_args = first_call_args(&module, "caller", "mix");
-        let dumped = dump_func(&module, "caller");
+        let dumped = dump_func_by_name(&module, "caller");
         assert_eq!(
             count_obj_allocs(&module, "caller"),
             2,
@@ -2664,7 +2646,7 @@ block0:
             verify_full(&module);
             run_byvalue_arg_abi(&module);
             verify_full(&module);
-            let text = dump_func(&module, "caller");
+            let text = dump_func_by_name(&module, "caller");
             assert_eq!(
                 count_obj_allocs(&module, "caller"),
                 expected_allocs,
@@ -2708,7 +2690,7 @@ block0:
             verify_full(&module);
             run_byvalue_arg_abi(&module);
             verify_full(&module);
-            let text = dump_func(&module, "caller");
+            let text = dump_func_by_name(&module, "caller");
             assert_eq!(
                 count_obj_allocs(&module, "caller"),
                 expected_allocs,
@@ -2759,7 +2741,7 @@ block0:
             verify_full(&module);
             run_byvalue_arg_abi(&module);
             verify_full(&module);
-            let text = dump_func(&module, "caller");
+            let text = dump_func_by_name(&module, "caller");
             assert_eq!(
                 count_obj_allocs(&module, "caller"),
                 expected_allocs,
@@ -2878,7 +2860,7 @@ block0:
             verify_full(&module);
             run_byvalue_arg_abi(&module);
             verify_full(&module);
-            let text = dump_func(&module, "make");
+            let text = dump_func_by_name(&module, "make");
             assert_eq!(
                 count_obj_allocs(&module, "make"),
                 usize::from(writes),
@@ -2919,7 +2901,7 @@ block0:
         verify_full(&module);
         run_byvalue_arg_abi(&module);
         verify_full(&module);
-        let text = dump_func(&module, "caller");
+        let text = dump_func_by_name(&module, "caller");
         assert_eq!(count_obj_allocs(&module, "caller"), 1, "{text}");
     }
 
@@ -2951,7 +2933,7 @@ block0:
             verify_full(&module);
             run_byvalue_arg_abi(&module);
             verify_full(&module);
-            let text = dump_func(&module, "caller");
+            let text = dump_func_by_name(&module, "caller");
             assert_eq!(
                 count_obj_allocs(&module, "caller"),
                 expected_allocs,
@@ -2987,7 +2969,7 @@ block0:
         verify_full(&module);
         run_byvalue_arg_abi(&module);
         verify_full(&module);
-        let text = dump_func(&module, "caller");
+        let text = dump_func_by_name(&module, "caller");
         assert_eq!(count_obj_allocs(&module, "caller"), 1, "{text}");
         assert!(text.contains("obj.store v0"), "{text}");
     }
@@ -3018,7 +3000,7 @@ block0:
             count_obj_allocs(&module, "caller"),
             1,
             "{}",
-            dump_func(&module, "caller")
+            dump_func_by_name(&module, "caller")
         );
     }
 
@@ -3050,7 +3032,7 @@ block0:
                 verify_full(&module);
                 run_byvalue_arg_abi(&module);
                 verify_full(&module);
-                let text = dump_func(&module, "caller");
+                let text = dump_func_by_name(&module, "caller");
                 assert_eq!(
                     count_obj_allocs(&module, "caller"),
                     expected_allocs,
@@ -3088,7 +3070,7 @@ block0:
         verify_full(&module);
         run_byvalue_arg_abi(&module);
         verify_full(&module);
-        let text = dump_func(&module, "caller");
+        let text = dump_func_by_name(&module, "caller");
         assert_eq!(count_obj_allocs(&module, "caller"), 0, "{text}");
         assert!(!text.contains("obj.store"), "{text}");
     }
@@ -3135,7 +3117,7 @@ block0:
             verify_full(&module);
             run_byvalue_arg_abi(&module);
             verify_full(&module);
-            let text = dump_func(&module, "caller");
+            let text = dump_func_by_name(&module, "caller");
             assert_eq!(count_obj_allocs(&module, "caller"), 2, "{text}");
         }
     }
@@ -3167,7 +3149,7 @@ block0:
         verify_full(&module);
         run_byvalue_arg_abi(&module);
         verify_full(&module);
-        let text = dump_func(&module, "caller");
+        let text = dump_func_by_name(&module, "caller");
         assert_eq!(count_obj_allocs(&module, "caller"), 1, "{text}");
         let make_args = first_call_args(&module, "caller", "make");
         let consume_args = first_call_args(&module, "caller", "consume");
@@ -3201,7 +3183,7 @@ block0:
         verify_full(&module);
         run_byvalue_arg_abi(&module);
         verify_full(&module);
-        let text = dump_func(&module, "caller");
+        let text = dump_func_by_name(&module, "caller");
         assert_eq!(count_obj_allocs(&module, "caller"), 0, "{text}");
         assert!(!text.contains("obj.store"), "{text}");
         assert_eq!(
@@ -3243,7 +3225,7 @@ block2:
         verify_full(&module);
         run_byvalue_arg_abi(&module);
         verify_full(&module);
-        let text = dump_func(&module, "caller");
+        let text = dump_func_by_name(&module, "caller");
         assert_eq!(count_obj_allocs(&module, "caller"), 1, "{text}");
         let maker = first_call_args(&module, "caller", "make");
         let consumer = first_call_args(&module, "caller", "consume");
@@ -3280,7 +3262,7 @@ block0:
         verify_full(&module);
         run_byvalue_arg_abi(&module);
         verify_full(&module);
-        let text = dump_func(&module, "caller");
+        let text = dump_func_by_name(&module, "caller");
         assert_eq!(count_obj_allocs(&module, "caller"), 1, "{text}");
         assert!(text.contains("obj.store v0"), "{text}");
         assert_eq!(first_call_args(&module, "make", "make").len(), 3);
@@ -3318,7 +3300,7 @@ block0:
         verify_full(&module);
         run_byvalue_arg_abi(&module);
         verify_full(&module);
-        let text = dump_func(&module, "caller");
+        let text = dump_func_by_name(&module, "caller");
         assert_eq!(count_obj_allocs(&module, "caller"), 1, "{text}");
     }
 
@@ -3356,7 +3338,7 @@ block0:
         let caller_ref = lookup_func(&module, "caller");
         let source_root = first_obj_alloc_result(&module, "caller");
         let call_args = first_call_args(&module, "caller", "mix");
-        let dumped = dump_func(&module, "caller");
+        let dumped = dump_func_by_name(&module, "caller");
         assert_eq!(
             count_obj_allocs(&module, "caller"),
             2,
@@ -3410,7 +3392,7 @@ block0:
         let caller_ref = lookup_func(&module, "caller");
         let source_root = first_obj_alloc_result(&module, "caller");
         let call_args = first_call_args(&module, "caller", "readonly");
-        let dumped = dump_func(&module, "caller");
+        let dumped = dump_func_by_name(&module, "caller");
         assert_eq!(
             count_obj_allocs(&module, "caller"),
             2,
@@ -3453,7 +3435,7 @@ block0:
 
         let forward_ref = lookup_func(&module, "forward");
         let call_args = first_call_args(&module, "forward", "readonly");
-        let dumped = dump_func(&module, "forward");
+        let dumped = dump_func_by_name(&module, "forward");
         module.func_store.view(forward_ref, |func| {
             assert_eq!(
                 count_func_obj_allocs(func),
@@ -3590,7 +3572,7 @@ block0:
             );
         });
         let call_args = first_call_args(&module, "caller", "disjoint");
-        let dumped = dump_func(&module, "caller");
+        let dumped = dump_func_by_name(&module, "caller");
         assert_eq!(
             count_obj_allocs(&module, "caller"),
             1,
@@ -3634,7 +3616,7 @@ block0:
 
         let caller_ref = lookup_func(&module, "caller");
         let call_args = first_call_args(&module, "caller", "mutate");
-        let dumped = dump_func(&module, "caller");
+        let dumped = dump_func_by_name(&module, "caller");
         assert_eq!(
             count_obj_allocs(&module, "caller"),
             1,
@@ -3710,7 +3692,7 @@ block2:
         run_byvalue_arg_abi(&module);
         let caller_ref = lookup_func(&module, "main");
         let callee_ref = lookup_func(&module, "check");
-        let dumped = dump_func(&module, "main");
+        let dumped = dump_func_by_name(&module, "main");
         assert_eq!(
             count_obj_allocs(&module, "main"),
             3,
@@ -3786,7 +3768,7 @@ block0:
 
         let caller_ref = lookup_func(&module, "caller");
         let call_args = first_call_args(&module, "caller", "readonly");
-        let dumped = dump_func(&module, "caller");
+        let dumped = dump_func_by_name(&module, "caller");
         assert_eq!(
             count_obj_allocs(&module, "caller"),
             0,
@@ -3854,7 +3836,7 @@ block2:
 
         let caller_ref = lookup_func(&module, "caller");
         let call_args = first_call_args(&module, "caller", "element_get");
-        let dumped = dump_func(&module, "caller");
+        let dumped = dump_func_by_name(&module, "caller");
         assert_eq!(
             count_obj_allocs(&module, "caller"),
             0,
@@ -3926,7 +3908,7 @@ block2:
 
         let caller_ref = lookup_func(&module, "caller");
         let call_args = first_call_args(&module, "caller", "element_get");
-        let dumped = dump_func(&module, "caller");
+        let dumped = dump_func_by_name(&module, "caller");
         assert_eq!(
             count_obj_allocs(&module, "caller"),
             0,
@@ -3978,7 +3960,7 @@ block2:
 
         let caller_ref = lookup_func(&module, "caller");
         let call_args = first_call_args(&module, "caller", "readonly");
-        let dumped = dump_func(&module, "caller");
+        let dumped = dump_func_by_name(&module, "caller");
         assert_eq!(
             count_obj_allocs(&module, "caller"),
             0,
@@ -4034,7 +4016,7 @@ block0:
 
         let caller_ref = lookup_func(&module, "caller");
         let call_args = first_call_args(&module, "caller", "mutate");
-        let dumped = dump_func(&module, "caller");
+        let dumped = dump_func_by_name(&module, "caller");
         assert_eq!(
             count_obj_allocs(&module, "caller"),
             2,
@@ -4088,7 +4070,7 @@ block0:
 
         let caller_ref = lookup_func(&module, "caller");
         let call_args = first_call_args(&module, "caller", "mutate");
-        let dumped = dump_func(&module, "caller");
+        let dumped = dump_func_by_name(&module, "caller");
         assert_eq!(
             count_obj_allocs(&module, "caller"),
             2,
@@ -4142,7 +4124,7 @@ block0:
         let caller_ref = lookup_func(&module, "caller");
         let source_root = first_obj_alloc_result(&module, "caller");
         let call_args = first_call_args(&module, "caller", "pair_read");
-        let dumped = dump_func(&module, "caller");
+        let dumped = dump_func_by_name(&module, "caller");
         assert_eq!(
             count_obj_allocs(&module, "caller"),
             2,
@@ -4193,7 +4175,7 @@ block0:
         let caller_ref = lookup_func(&module, "caller");
         let source_root = first_obj_alloc_result(&module, "caller");
         let call_args = first_call_args(&module, "caller", "mix");
-        let dumped = dump_func(&module, "caller");
+        let dumped = dump_func_by_name(&module, "caller");
         assert_eq!(
             count_obj_allocs(&module, "caller"),
             2,
@@ -4254,7 +4236,7 @@ block0:
         );
 
         let call_args = first_call_args(&module, "caller", "empty");
-        let dumped = dump_func(&module, "caller");
+        let dumped = dump_func_by_name(&module, "caller");
         assert_eq!(
             call_args.len(),
             1,
@@ -4300,7 +4282,7 @@ block0:
 
         let dest_root = first_obj_alloc_result(&module, "caller");
         let call_args = first_call_args(&module, "caller", "make");
-        let dumped = dump_func(&module, "caller");
+        let dumped = dump_func_by_name(&module, "caller");
         assert_eq!(
             call_args,
             vec![dest_root],
@@ -4342,7 +4324,7 @@ block0:
 
         let caller_ref = lookup_func(&module, "caller");
         let call_args = first_call_args(&module, "caller", "make");
-        let dumped = dump_func(&module, "caller");
+        let dumped = dump_func_by_name(&module, "caller");
         assert_eq!(
             count_obj_allocs(&module, "caller"),
             0,
@@ -4375,7 +4357,7 @@ block0:
 
         run_byvalue_arg_abi(&module);
 
-        let dumped = dump_func(&module, "make");
+        let dumped = dump_func_by_name(&module, "make");
         assert_eq!(
             count_obj_allocs(&module, "make"),
             0,
@@ -4414,7 +4396,7 @@ block0:
 
         run_byvalue_arg_abi(&module);
 
-        let dumped = dump_func(&module, "caller");
+        let dumped = dump_func_by_name(&module, "caller");
         assert_eq!(
             dumped.matches("obj.load").count(),
             0,

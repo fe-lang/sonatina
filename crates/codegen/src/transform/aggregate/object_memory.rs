@@ -976,11 +976,12 @@ mod tests {
     use super::*;
     use crate::{
         domtree::DomTree,
+        test_support::lookup_func,
         transform::aggregate::{
             collect_local_object_arg_info_with_effects, compute_object_effect_summaries,
         },
     };
-    use sonatina_ir::{Module, Type, module::FuncRef};
+    use sonatina_ir::{Module, Type};
     use sonatina_parser::parse_module;
     use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module};
 
@@ -989,14 +990,6 @@ mod tests {
         let report = verify_module(&module, &VerifierConfig::for_level(VerificationLevel::Full));
         assert!(report.is_ok(), "{report}");
         module
-    }
-
-    fn lookup_func(module: &Module, name: &str) -> FuncRef {
-        module
-            .funcs()
-            .into_iter()
-            .find(|&func_ref| module.ctx.func_sig(func_ref, |sig| sig.name() == name))
-            .expect("function should exist")
     }
 
     fn analyzed_read_key(module: &Module, func_name: &str) -> Option<ObjectReadGvnKey> {

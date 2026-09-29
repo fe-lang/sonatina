@@ -1166,10 +1166,11 @@ pub fn prune_phi_to_preds(
 
 #[cfg(test)]
 mod tests {
+    use crate::test_support::parse_test_module;
     use std::collections::BTreeSet;
 
     use sonatina_ir::{
-        Immediate, Module, Type, Value,
+        Immediate, Type, Value,
         builder::test_util::{dump_func, test_func_builder, test_module_builder},
         inst::{
             arith::{Add, Sub},
@@ -1178,13 +1179,8 @@ mod tests {
         },
         isa::Isa,
     };
-    use sonatina_parser::parse_module;
 
     use super::{CfgEditor, CleanupMode, simplify_trivial_phis_in_block};
-
-    fn parse_test_module(src: &str) -> Module {
-        parse_module(src).expect("parse should succeed").module
-    }
 
     #[test]
     fn replace_succ_allow_existing_pred_does_not_duplicate_phi_inputs() {

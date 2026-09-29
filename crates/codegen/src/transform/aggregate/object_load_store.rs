@@ -656,25 +656,14 @@ fn ends_with_return(func: &Function, block: BlockId) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use crate::test_support::{lookup_func, parse_test_module};
     use std::slice;
 
     use super::*;
     use crate::transform::aggregate::compute_object_effect_summaries;
     use sonatina_ir::{ir_writer::FuncWriter, module::FuncRef};
-    use sonatina_parser::parse_module;
+
     use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module};
-
-    fn parse_test_module(src: &str) -> sonatina_ir::Module {
-        parse_module(src).expect("parse should succeed").module
-    }
-
-    fn lookup_func(module: &sonatina_ir::Module, name: &str) -> FuncRef {
-        module
-            .funcs()
-            .into_iter()
-            .find(|&func_ref| module.ctx.func_sig(func_ref, |sig| sig.name() == name))
-            .expect("function should exist")
-    }
 
     fn run_with_effects(module: &sonatina_ir::Module, func_ref: FuncRef) {
         let object_effects = compute_object_effect_summaries(module);

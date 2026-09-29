@@ -1414,26 +1414,8 @@ fn walk_insert_chain_for_field(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sonatina_ir::{Module, inst::control_flow, ir_writer::FuncWriter, module::FuncRef};
-    use sonatina_parser::parse_module;
-
-    fn parse_test_module(src: &str) -> Module {
-        parse_module(src).expect("parse should succeed").module
-    }
-
-    fn lookup_func(module: &Module, name: &str) -> FuncRef {
-        module
-            .funcs()
-            .into_iter()
-            .find(|&func_ref| module.ctx.func_sig(func_ref, |sig| sig.name() == name))
-            .expect("function should exist")
-    }
-
-    fn dump_func(module: &Module, func_ref: FuncRef) -> String {
-        module.func_store.view(func_ref, |func| {
-            FuncWriter::new(func_ref, func).dump_string()
-        })
-    }
+    use crate::test_support::{dump_func, lookup_func, parse_test_module};
+    use sonatina_ir::inst::control_flow;
 
     #[test]
     fn combine_rewrites_extracts_through_compatible_aggregate_bitcasts() {

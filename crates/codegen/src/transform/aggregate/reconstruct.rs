@@ -618,20 +618,7 @@ fn insert_value_before_inst(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sonatina_ir::{Module, module::FuncRef};
-    use sonatina_parser::parse_module;
-
-    fn parse_test_module(src: &str) -> Module {
-        parse_module(src).expect("parse should succeed").module
-    }
-
-    fn lookup_func(module: &Module, name: &str) -> FuncRef {
-        module
-            .funcs()
-            .into_iter()
-            .find(|&func_ref| module.ctx.func_sig(func_ref, |sig| sig.name() == name))
-            .expect("function should exist")
-    }
+    use crate::test_support::{lookup_func, parse_test_module};
 
     #[test]
     fn rebuilds_compatible_aggregate_bitcast_slices() {

@@ -147,6 +147,7 @@ pub(crate) fn enum_write_variant_slices(
 
 #[cfg(test)]
 mod tests {
+    use crate::test_support::{lookup_func, parse_test_module};
     use std::slice;
 
     use super::*;
@@ -156,20 +157,7 @@ mod tests {
         provenance::collect_root_provenance,
         shape,
     };
-    use sonatina_ir::{inst::downcast, module::FuncRef};
-    use sonatina_parser::parse_module;
-
-    fn parse_test_module(src: &str) -> sonatina_ir::Module {
-        parse_module(src).expect("parse should succeed").module
-    }
-
-    fn lookup_func(module: &sonatina_ir::Module, name: &str) -> FuncRef {
-        module
-            .funcs()
-            .into_iter()
-            .find(|&func_ref| module.ctx.func_sig(func_ref, |sig| sig.name() == name))
-            .expect("function should exist")
-    }
+    use sonatina_ir::inst::downcast;
 
     fn leaves_from_mask(mask: u8) -> LiveLeaves {
         let mut leaves = LiveLeaves::default();

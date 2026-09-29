@@ -2000,20 +2000,7 @@ pub(crate) fn whole_root_slice(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sonatina_ir::module::FuncRef;
-    use sonatina_parser::parse_module;
-
-    fn parse_test_module(src: &str) -> Module {
-        parse_module(src).expect("parse should succeed").module
-    }
-
-    fn lookup_func(module: &Module, name: &str) -> FuncRef {
-        module
-            .funcs()
-            .into_iter()
-            .find(|&func_ref| module.ctx.func_sig(func_ref, |sig| sig.name() == name))
-            .expect("function should exist")
-    }
+    use crate::test_support::{lookup_func, parse_test_module};
 
     fn has_arg_capture(
         summary: &ObjectEffectSummary,

@@ -79,20 +79,8 @@ fn inst_operands(func: &Function, inst: InstId) -> SmallVec<[ValueId; 8]> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sonatina_ir::{InstDowncast, Module, module::FuncRef};
-    use sonatina_parser::parse_module;
-
-    fn parse_test_module(src: &str) -> Module {
-        parse_module(src).expect("parse should succeed").module
-    }
-
-    fn lookup_func(module: &Module, name: &str) -> FuncRef {
-        module
-            .funcs()
-            .into_iter()
-            .find(|&func_ref| module.ctx.func_sig(func_ref, |sig| sig.name() == name))
-            .expect("function should exist")
-    }
+    use crate::test_support::{lookup_func, parse_test_module};
+    use sonatina_ir::InstDowncast;
 
     #[test]
     fn dead_pure_cleanup_requeues_transitively_dead_defs() {
