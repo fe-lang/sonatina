@@ -29,30 +29,27 @@ pub(crate) enum ObjectMemToken {
     Phi { block: BlockId, slice: ObjectSlice },
 }
 
+/// What proves a carried slice's contents: an SSA value that holds them, or
+/// the memory token they were last established under.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-enum MemoryCarrier {
-    Value {
-        value: ValueId,
-        slice: ObjectSlice,
-    },
-    Token {
-        token: ObjectMemToken,
-        slice: ObjectSlice,
-    },
+pub(crate) enum CarrierSource {
+    Value(ValueId),
+    Memory(ObjectMemToken),
 }
 
+/// `source` proves the contents of `slice`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum ObjectReadGvnKey {
-    ValueCarrier {
-        value: ValueId,
-        carrier_slice: ObjectSlice,
-        read_slice: ObjectSlice,
-    },
-    Memory {
-        token: ObjectMemToken,
-        carrier_slice: ObjectSlice,
-        read_slice: ObjectSlice,
-    },
+struct MemoryCarrier {
+    source: CarrierSource,
+    slice: ObjectSlice,
+}
+
+/// A read of `read_slice` answered by the carrier that covers `carrier_slice`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct ObjectReadGvnKey {
+    pub(crate) source: CarrierSource,
+    pub(crate) carrier_slice: ObjectSlice,
+    pub(crate) read_slice: ObjectSlice,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -315,12 +312,14 @@ impl ObjectMemoryAnalysis {
         !self.promote_loaded_values
             && self.read_states.get(&inst).is_some_and(|read| {
                 read.read_slice == expected
-                    && matches!(read.key, ObjectReadGvnKey::Memory {
-                        token: ObjectMemToken::LiveIn { root }, carrier_slice, ..
-                    } if root == expected.root && carrier_slice.root == root
-                        && carrier_slice.first_leaf <= expected.first_leaf
-                        && expected.first_leaf + expected.leaf_count
-                            <= carrier_slice.first_leaf + carrier_slice.leaf_count)
+                    && matches!(read.key.source,
+                        CarrierSource::Memory(ObjectMemToken::LiveIn { root })
+                        if root == expected.root
+                            && read.key.carrier_slice.root == root
+                            && read.key.carrier_slice.first_leaf <= expected.first_leaf
+                            && expected.first_leaf + expected.leaf_count
+                                <= read.key.carrier_slice.first_leaf
+                                    + read.key.carrier_slice.leaf_count)
             })
     }
 
@@ -335,7 +334,7 @@ impl ObjectMemoryAnalysis {
                 && !state.blocked_roots.contains(&slice.root)
                 && matches!(
                     state.carriers.get(&slice),
-                    Some(MemoryCarrier::Value { value: current, .. }) if *current == value
+                    Some(MemoryCarrier { source: CarrierSource::Value(current), .. }) if *current == value
                 )
         })
     }
@@ -590,8 +589,8 @@ fn meet_memory_states<'a>(
             {
                 first_carrier
             } else {
-                MemoryCarrier::Token {
-                    token: ObjectMemToken::Phi { block, slice },
+                MemoryCarrier {
+                    source: CarrierSource::Memory(ObjectMemToken::Phi { block, slice }),
                     slice,
                 }
             };
@@ -726,8 +725,8 @@ fn transfer_inst(
                 {
                     state.carriers.insert(
                         slice,
-                        MemoryCarrier::Token {
-                            token: ObjectMemToken::Inst { inst },
+                        MemoryCarrier {
+                            source: CarrierSource::Memory(ObjectMemToken::Inst { inst }),
                             slice,
                         },
                     );
@@ -776,9 +775,13 @@ fn transfer_inst(
         if defined && let ObjectInitializationSource::Value(value) = write.source {
             for &relevant in ctx.relevant_slices.get(&slice.root).into_iter().flatten() {
                 if ctx.accesses.write_covers(write.destination, relevant) {
-                    state
-                        .carriers
-                        .insert(relevant, MemoryCarrier::Value { value, slice });
+                    state.carriers.insert(
+                        relevant,
+                        MemoryCarrier {
+                            source: CarrierSource::Value(value),
+                            slice,
+                        },
+                    );
                 }
             }
         }
@@ -835,23 +838,10 @@ fn record_read_state(
         return;
     };
 
-    let key = match carrier {
-        MemoryCarrier::Value {
-            value,
-            slice: carrier_slice,
-        } => ObjectReadGvnKey::ValueCarrier {
-            value,
-            carrier_slice,
-            read_slice: slice,
-        },
-        MemoryCarrier::Token {
-            token,
-            slice: carrier_slice,
-        } => ObjectReadGvnKey::Memory {
-            token,
-            carrier_slice,
-            read_slice: slice,
-        },
+    let key = ObjectReadGvnKey {
+        source: carrier.source,
+        carrier_slice: carrier.slice,
+        read_slice: slice,
     };
     record.read_states.insert(
         inst,
@@ -890,8 +880,8 @@ fn promote_loaded_value_to_carrier(
     }
     state.carriers.insert(
         slice,
-        MemoryCarrier::Value {
-            value: result,
+        MemoryCarrier {
+            source: CarrierSource::Value(result),
             slice,
         },
     );
@@ -907,8 +897,8 @@ fn activate_root(
     for &relevant in relevant_slices.get(&root_slice.root).into_iter().flatten() {
         state.carriers.insert(
             relevant,
-            MemoryCarrier::Token {
-                token,
+            MemoryCarrier {
+                source: CarrierSource::Memory(token),
                 slice: root_slice,
             },
         );
@@ -1048,7 +1038,10 @@ block0:
         assert!(
             matches!(
                 analyzed_read_key(&module, "f"),
-                Some(ObjectReadGvnKey::ValueCarrier { .. })
+                Some(ObjectReadGvnKey {
+                    source: CarrierSource::Value(_),
+                    ..
+                })
             ),
             "read-only helper summary should preserve the value carrier"
         );
