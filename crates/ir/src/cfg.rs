@@ -32,7 +32,12 @@ impl ControlFlowGraph {
     }
 
     pub fn compute(&mut self, func: &Function) {
-        self.clear();
+        // CFG edits recompute the whole graph, so keep each block's storage.
+        for node in self.blocks.values_mut() {
+            node.clear();
+        }
+        self.edges.clear();
+        self.exits.clear();
 
         self.entry = func.layout.entry_block().into();
 
@@ -248,6 +253,13 @@ impl Default for BlockNode {
 }
 
 impl BlockNode {
+    fn clear(&mut self) {
+        self.preds.retain(|_| false);
+        self.succs.retain(|_| false);
+        self.in_edges.clear();
+        self.out_edges.clear();
+    }
+
     fn push_pred(&mut self, pred: BlockId) {
         self.preds.insert(pred);
     }
