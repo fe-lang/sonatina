@@ -248,8 +248,7 @@ block0:
         module.func_store.view(func_ref, |func| {
             let obj_proj = func
                 .layout
-                .iter_block()
-                .flat_map(|block| func.layout.iter_inst(block))
+                .iter_all_insts()
                 .find(|&inst| {
                     downcast::<&data::ObjProj>(func.inst_set(), func.dfg.inst(inst)).is_some()
                 })
@@ -300,8 +299,7 @@ block0:
             );
             let store = func
                 .layout
-                .iter_block()
-                .flat_map(|block| func.layout.iter_inst(block))
+                .iter_all_insts()
                 .find(|&inst| {
                     downcast::<&data::ObjStore>(func.inst_set(), func.dfg.inst(inst)).is_some()
                 })
@@ -342,8 +340,7 @@ block0:
             let root_slices = collect_root_slices(func, None, &mut layout_cache);
             let enum_root = func
                 .layout
-                .iter_block()
-                .flat_map(|block| func.layout.iter_inst(block))
+                .iter_all_insts()
                 .find_map(|inst| {
                     downcast::<&data::ObjAlloc>(func.inst_set(), func.dfg.inst(inst))
                         .and_then(|_| func.dfg.inst_result(inst))
@@ -351,8 +348,7 @@ block0:
                 .expect("enum alloc should exist");
             let enum_write_variant = func
                 .layout
-                .iter_block()
-                .flat_map(|block| func.layout.iter_inst(block))
+                .iter_all_insts()
                 .find_map(|inst| {
                     downcast::<&data::EnumWriteVariant>(func.inst_set(), func.dfg.inst(inst))
                 })

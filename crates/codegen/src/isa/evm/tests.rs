@@ -192,17 +192,9 @@ fn free_ptr_restore_preserves_heap_published_by_a_callee() {
         compute_ptr_escape_summaries(&parsed.module, &parsed.module.funcs(), &backend.isa);
     let forward = find_func(&parsed.module, "forward");
     parsed.module.func_store.modify(forward, |function| {
-        let before = function
-            .layout
-            .iter_block()
-            .flat_map(|block| function.layout.iter_inst(block))
-            .count();
+        let before = function.layout.iter_all_insts().count();
         prepare_free_ptr_restore(function, &parsed.module.ctx, &backend, &summaries);
-        let after = function
-            .layout
-            .iter_block()
-            .flat_map(|block| function.layout.iter_inst(block))
-            .count();
+        let after = function.layout.iter_all_insts().count();
         assert_eq!(
             before, after,
             "callee's published allocation prevents heap restoration"
@@ -1717,8 +1709,7 @@ block0:
     let malloc = parsed.module.func_store.view(mk, |function| {
         function
             .layout
-            .iter_block()
-            .flat_map(|block| function.layout.iter_inst(block))
+            .iter_all_insts()
             .find(|&inst| {
                 matches!(
                     backend.isa.inst_set().resolve_inst(function.dfg.inst(inst)),
@@ -1812,8 +1803,7 @@ block0:
     let malloc = parsed.module.func_store.view(clobber, |function| {
         function
             .layout
-            .iter_block()
-            .flat_map(|block| function.layout.iter_inst(block))
+            .iter_all_insts()
             .find(|&inst| {
                 matches!(
                     backend.isa.inst_set().resolve_inst(function.dfg.inst(inst)),
@@ -1897,8 +1887,7 @@ block0:
     let malloc = parsed.module.func_store.view(scratch, |function| {
         function
             .layout
-            .iter_block()
-            .flat_map(|block| function.layout.iter_inst(block))
+            .iter_all_insts()
             .find(|&inst| {
                 matches!(
                     backend.isa.inst_set().resolve_inst(function.dfg.inst(inst)),
@@ -1973,8 +1962,7 @@ block0:
     let call_inst = parsed.module.func_store.view(caller, |function| {
         function
             .layout
-            .iter_block()
-            .flat_map(|block| function.layout.iter_inst(block))
+            .iter_all_insts()
             .find_map(|inst| function.dfg.cast_call(inst).map(|_| inst))
             .expect("missing call inst")
     });
@@ -3641,11 +3629,7 @@ object @Contract {
     let runtime = find_func(&parsed.module, "runtime");
 
     parsed.module.func_store.modify(runtime, |function| {
-        let insts: Vec<_> = function
-            .layout
-            .iter_block()
-            .flat_map(|block| function.layout.iter_inst(block))
-            .collect();
+        let insts: Vec<_> = function.layout.iter_all_insts().collect();
         let mut add_count = 0;
         let mut le_count = 0;
         for inst in insts {
@@ -3667,11 +3651,7 @@ object @Contract {
 
     Pipeline::speed().run(&mut parsed.module);
     parsed.module.func_store.modify(runtime, |function| {
-        let insts: Vec<_> = function
-            .layout
-            .iter_block()
-            .flat_map(|block| function.layout.iter_inst(block))
-            .collect();
+        let insts: Vec<_> = function.layout.iter_all_insts().collect();
         let mut stamped_add = false;
         let mut stamped_le = false;
         for inst in insts {
@@ -3700,11 +3680,7 @@ object @Contract {
         prepared.module().func_store.view(runtime, |function| {
             let mut exact = FxHashSet::default();
             let mut glue = FxHashSet::default();
-            for inst in function
-                .layout
-                .iter_block()
-                .flat_map(|block| function.layout.iter_inst(block))
-            {
+            for inst in function.layout.iter_all_insts() {
                 match function.inst_frontend_origin(inst) {
                     Some("frontend:add") => {
                         assert_eq!(function.inst_provenance(inst), Some("post-opt:add"));

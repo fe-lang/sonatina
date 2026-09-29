@@ -6,7 +6,7 @@ use crate::{
     optim::{
         constref_specialize::specialize_private_constrefs,
         dead_arg::{DeadArgElimConfig, run_dead_arg_elim},
-        pipeline::{FuncPassOverrides, Pass, run_function_pass_round},
+        pipeline::{Pass, run_function_pass_round},
         uniform_const_arg::run_uniform_const_arg_binding,
     },
     transform::{
@@ -147,9 +147,7 @@ impl EvmPipelineContext<'_> {
             self.work.module(),
             passes,
             &mut self.func_behavior_dirty,
-            FuncPassOverrides {
-                funcs: Some(self.funcs.as_slice()),
-            },
+            Some(self.funcs.as_slice()),
         );
     }
 

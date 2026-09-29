@@ -24,24 +24,14 @@ fn calldata_sinking_preserves_effects_and_is_idempotent() {
             domtree.compute(&cfg);
             let mut loops = LoopTree::new();
             loops.compute(&cfg, &domtree);
-            let instructions = func
-                .layout
-                .iter_block()
-                .flat_map(|block| func.layout.iter_inst(block))
-                .count();
+            let instructions = func.layout.iter_all_insts().count();
             let mut sink = CodeSink::new();
             sink.run(func, &cfg, &domtree, &loops);
             assert!(
                 !sink.run(func, &cfg, &domtree, &loops),
                 "sinking must converge in one run"
             );
-            assert_eq!(
-                instructions,
-                func.layout
-                    .iter_block()
-                    .flat_map(|block| func.layout.iter_inst(block))
-                    .count()
-            );
+            assert_eq!(instructions, func.layout.iter_all_insts().count());
             for block in func.layout.iter_block() {
                 for inst in func.layout.iter_inst(block) {
                     if downcast::<&EvmCalldataLoad>(func.inst_set(), func.dfg.inst(inst)).is_some()

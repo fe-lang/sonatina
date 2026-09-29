@@ -1114,10 +1114,7 @@ fn rewrite_function_types(func: &mut Function, types: &mut ConstRefTypeLowerer) 
 }
 
 fn inserted_insts(func: &Function) -> Vec<InstId> {
-    func.layout
-        .iter_block()
-        .flat_map(|block| func.layout.iter_inst(block))
-        .collect()
+    func.layout.iter_all_insts().collect()
 }
 
 fn const_load_row_candidate(

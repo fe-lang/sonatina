@@ -408,8 +408,7 @@ block0:
 
             let call_inst = function
                 .layout
-                .iter_block()
-                .flat_map(|b| function.layout.iter_inst(b))
+                .iter_all_insts()
                 .find(|&inst| function.dfg.call_info(inst).is_some())
                 .expect("missing call inst");
 

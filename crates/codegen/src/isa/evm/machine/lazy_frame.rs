@@ -1142,8 +1142,7 @@ block3:
         parsed.module.func_store.view(func_ref, |function| {
             let term = function
                 .layout
-                .iter_block()
-                .flat_map(|block| function.layout.iter_inst(block))
+                .iter_all_insts()
                 .find(|&inst| function.dfg.cast_br_table(inst).is_some())
                 .expect("missing br_table terminator");
             let case_count = function
