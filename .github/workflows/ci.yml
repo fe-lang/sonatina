@@ -8,6 +8,9 @@ on:
     branches:
       - "**"
 
+# Only main saves Rust caches. A pull request's caches are visible to that pull
+# request alone, and saving them on every push evicts main's caches under the
+# repository's 10 GB limit.
 jobs:
   doc:
     name: Doc
@@ -19,6 +22,8 @@ jobs:
         with:
           toolchain: stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo doc --workspace --all-features --no-deps
 
   fmt:
@@ -31,7 +36,6 @@ jobs:
         with:
           toolchain: nightly
           components: rustfmt
-      - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all -- --check
       - run: rustfmt --edition 2024 crates/sp1/runtime/src/lib.rs --check
       - run: cargo fmt --manifest-path tests/sp1/Cargo.toml -- --check
@@ -46,6 +50,8 @@ jobs:
         with:
           toolchain: stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo clippy --workspace --all-features --all-targets -- -D clippy::all
 
   unused_deps:
@@ -72,6 +78,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo check -p sonatina-codegen --no-default-features
       - name: Check that Cranelift dependencies do not leak
         shell: bash
@@ -96,6 +104,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Test object-only feature and linked C executables
         run: cargo test -p sonatina-codegen --features cranelift --test cranelift_object
       - name: Test host-native JIT and object backends
@@ -109,6 +119,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo check -p sonatina-codegen --features cranelift-jit --all-targets
 
   sp1:
@@ -122,6 +134,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           workspaces: |
             . -> target
             tests/sp1 -> target
@@ -160,6 +173,8 @@ jobs:
           toolchain: ${{ matrix.rust }}
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Test
         run: cargo test --workspace --all-targets --no-fail-fast
