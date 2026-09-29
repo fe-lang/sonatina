@@ -1327,7 +1327,7 @@ fn prepare_section_error(src: &str) -> String {
     let parsed = parse_module(src).expect("module parses");
     let funcs = parsed.module.funcs();
     let entry = find_func(&parsed.module, "entry");
-    test_backend()
+    osaka_backend()
         .prepare_section(work_module_with_entry(&parsed.module, &funcs, entry))
         .err()
         .expect("prepare should fail")
@@ -1456,7 +1456,7 @@ object @Contract {
     let funcs = parsed.module.funcs();
     let callee = find_func(&parsed.module, "callee");
     let entry = find_func(&parsed.module, "entry");
-    let prepared = test_backend()
+    let prepared = osaka_backend()
         .prepare_section(work_module_with_entry(&parsed.module, &funcs, entry))
         .expect("prepare should succeed");
 
