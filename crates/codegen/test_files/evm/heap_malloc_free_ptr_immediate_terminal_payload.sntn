@@ -1,0 +1,58 @@
+#! evm.case: small_heap_base
+#!   calldata: u256(0)
+#!   expect: return u256(1)
+
+# The unexecuted revert payload writes the free-pointer slot. It must not force the
+# malloc to read that slot, where %scribble's frame may lie.
+
+target = "evm-ethereum-osaka"
+
+func private %scribble() -> i256 {
+    block0:
+        v0.*[i256; 4] = alloca [i256; 4];
+        v1.*i256 = gep v0 0.i256 0.i256;
+        v2.*i256 = gep v0 0.i256 1.i256;
+        v3.*i256 = gep v0 0.i256 2.i256;
+        v4.*i256 = gep v0 0.i256 3.i256;
+        mstore v1 0x8000.i256 i256;
+        mstore v2 0x8000.i256 i256;
+        mstore v3 0x8000.i256 i256;
+        mstore v4 0x8000.i256 i256;
+        v5.i256 = mload v1 i256;
+        v6.i256 = mload v2 i256;
+        v7.i256 = mload v3 i256;
+        v8.i256 = mload v4 i256;
+        v9.i256 = add v5 v6;
+        v10.i256 = add v7 v8;
+        v11.i256 = add v9 v10;
+        return v11;
+}
+
+func public %entry() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i256;
+        v9.i1 = gt v0 0.i256;
+        br v9 block1 block2;
+    block1:
+        mstore 0.i256 1.i256 i256;
+        mstore 32.i256 2.i256 i256;
+        mstore 64.i256 3.i256 i256;
+        evm_revert 0.i256 96.i256;
+    block2:
+        v2.i256 = call %scribble;
+        v3.i256 = evm_calldata_size;
+        v4.*i8 = evm_malloc v3;
+        v5.i256 = ptr_to_int v4 i256;
+        v6.i1 = lt v5 0x1000.i256;
+        v7.i256 = zext v6 i256;
+        mstore v4 v7 i256;
+        v8.i256 = mload v4 i256;
+        mstore v4 v8 i256;
+        evm_return v5 32.i256;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}

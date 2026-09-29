@@ -48,7 +48,7 @@ pub(crate) struct EvmMemoryPlacementPlan {
     pub(crate) global_dyn_base: u32,
     pub(crate) scratch_peak_words: u32,
     pub(crate) stable_chain_peak_words: u32,
-    pub(crate) has_persistent_mallocs: bool,
+    pub(crate) has_heap_mallocs: bool,
     pub(crate) funcs: FxHashMap<FuncRef, EvmFuncPlacementPlan>,
 }
 
@@ -274,13 +274,37 @@ pub(crate) fn compute_semantic_memory_placement(
         }
     }
 
+    let placement_rules = MallocPlacementRules {
+        isa: &backend.isa,
+        module: &module.ctx,
+        section_entry: section.entry,
+        has_persistent_mallocs,
+        free_ptr_slot_may_be_touched,
+        private_static_mallocs: &private_static_mallocs,
+    };
+    let malloc_rules: FxHashMap<_, _> = funcs
+        .iter()
+        .copied()
+        .map(|func| {
+            let func_plan = expect_func_entry(&semantic_plan.funcs, func, "semantic plan");
+            let rules = module.func_store.view(func, |function| {
+                placement_rules.compute_func_rules(function, func, &heap_facts[&func], func_plan)
+            });
+            (func, rules)
+        })
+        .collect();
+    let has_heap_mallocs = malloc_rules
+        .values()
+        .flat_map(FxHashMap::values)
+        .any(|rule| matches!(rule, MallocPlacementRule::Heap { .. }));
+
     let arena_base = choose_arena_base(
         section.fixed_reservations,
         ArenaBaseFacts {
             has_dynamic_frames,
             has_stackify_fixed_slot_spills: !fixed_slot_effects.is_empty(),
             backend_spill_scratch_reserve_words: backend_spill_scratch_reserve_peak,
-            has_persistent_mallocs,
+            has_heap_mallocs,
         },
     );
     if has_dynamic_frames {
@@ -314,29 +338,35 @@ pub(crate) fn compute_semantic_memory_placement(
         }
     }
 
-    let placement_ctx = MallocPlacementCtx {
-        isa: &backend.isa,
-        module: &module.ctx,
-        global_dyn_base: semantic_plan.global_dyn_base,
-        backend_spill_reserve_peak: backend_spill_scratch_reserve_peak,
-        section_entry: section.entry,
-        has_persistent_mallocs,
-        free_ptr_slot_may_be_touched,
-        private_static_mallocs: &private_static_mallocs,
-    };
     let malloc_placements: FxHashMap<_, _> = funcs
         .iter()
         .copied()
         .map(|func| {
             let func_plan = expect_func_entry(&semantic_plan.funcs, func, "semantic plan");
-            let malloc_placements = module.func_store.view(func, |function| {
-                placement_ctx.compute_func_malloc_placements(
-                    function,
-                    func,
-                    &heap_facts[&func],
-                    func_plan,
-                )
-            });
+            let needs_dyn_sp_clamp = heap_facts[&func].needs_dyn_sp_clamp;
+            let malloc_placements = malloc_rules[&func]
+                .iter()
+                .map(|(&inst, &rule)| {
+                    let min_base = malloc_min_base(
+                        func_plan,
+                        semantic_plan.global_dyn_base,
+                        backend_spill_scratch_reserve_peak,
+                        inst,
+                    );
+                    let placement = match rule {
+                        MallocPlacementRule::MinBase => MallocPlacement::Fixed { base: min_base },
+                        MallocPlacementRule::PrivateStatic { word } => MallocPlacement::Fixed {
+                            base: func_plan.abs_addr_for_word(word),
+                        },
+                        MallocPlacementRule::Heap { update_free_ptr } => MallocPlacement::Heap {
+                            min_base,
+                            needs_dyn_sp_clamp,
+                            update_free_ptr,
+                        },
+                    };
+                    (inst, placement)
+                })
+                .collect();
             (func, malloc_placements)
         })
         .collect();
@@ -381,7 +411,7 @@ pub(crate) fn compute_semantic_memory_placement(
         global_dyn_base: semantic_plan.global_dyn_base,
         scratch_peak_words: semantic_plan.scratch_peak_words,
         stable_chain_peak_words: semantic_plan.stable_chain_peak_words,
-        has_persistent_mallocs,
+        has_heap_mallocs,
         funcs: func_placements,
     }
 }
@@ -431,29 +461,37 @@ fn compute_func_heap_facts(
     }
 }
 
-struct MallocPlacementCtx<'a> {
+/// How a malloc is placed. The rule is independent of the arena base, which only
+/// sets concrete addresses, so arena selection can see which mallocs read the
+/// free-pointer slot.
+#[derive(Clone, Copy)]
+enum MallocPlacementRule {
+    /// Fixed at the malloc's minimum base.
+    MinBase,
+    /// Fixed in the function's private static malloc words.
+    PrivateStatic { word: u32 },
+    /// Allocated from the free pointer.
+    Heap { update_free_ptr: bool },
+}
+
+struct MallocPlacementRules<'a> {
     isa: &'a Evm,
     module: &'a ModuleCtx,
-    global_dyn_base: u32,
-    backend_spill_reserve_peak: u32,
     section_entry: FuncRef,
     has_persistent_mallocs: bool,
     free_ptr_slot_may_be_touched: bool,
     private_static_mallocs: &'a PrivateStaticMallocProgramPlan,
 }
 
-impl MallocPlacementCtx<'_> {
-    fn compute_func_malloc_placements(
+impl MallocPlacementRules<'_> {
+    fn compute_func_rules(
         &self,
         function: &Function,
         func: FuncRef,
         heap_facts: &FuncHeapFacts,
         func_plan: &memory_plan::SemanticFuncPlan,
-    ) -> FxHashMap<InstId, MallocPlacement> {
+    ) -> FxHashMap<InstId, MallocPlacementRule> {
         let mut out = FxHashMap::default();
-        let needs_dyn_sp_clamp = heap_facts.needs_dyn_sp_clamp;
-        let exact_heap_base_before_malloc = &heap_facts.exact_heap_base_before_malloc;
-        let terminal_private_mallocs = &heap_facts.terminal_private_mallocs;
         for block in function.layout.iter_block() {
             for inst in function.layout.iter_inst(block) {
                 if !matches!(
@@ -464,20 +502,15 @@ impl MallocPlacementCtx<'_> {
                 }
 
                 let transient = func_plan.transient_mallocs.contains(&inst);
-                let min_base = malloc_min_base(
-                    func_plan,
-                    self.global_dyn_base,
-                    self.backend_spill_reserve_peak,
-                    inst,
-                );
-                let exact_heap_base = exact_heap_base_before_malloc
+                let exact_heap_base = heap_facts
+                    .exact_heap_base_before_malloc
                     .get(&inst)
                     .copied()
                     .unwrap_or(false);
                 let fixed_by_terminal_or_program_rule = transient
-                    && (terminal_private_mallocs.contains(&inst)
+                    && (heap_facts.terminal_private_mallocs.contains(&inst)
                         || (!self.free_ptr_slot_may_be_touched
-                            && !needs_dyn_sp_clamp
+                            && !heap_facts.needs_dyn_sp_clamp
                             && !self.has_persistent_mallocs));
                 let fixed_by_exact_entry_rule = !fixed_by_terminal_or_program_rule
                     && transient
@@ -491,26 +524,24 @@ impl MallocPlacementCtx<'_> {
                         inst,
                         exact_heap_base,
                     );
-                let private_static_base = self
+                let private_static_word = self
                     .private_static_mallocs
                     .funcs
                     .get(&func)
                     .and_then(|plan| plan.word_offsets.get(&inst))
-                    .map(|&word| func_plan.abs_addr_for_word(word));
-                let placement = if fixed_by_terminal_or_program_rule {
-                    MallocPlacement::Fixed { base: min_base }
-                } else if transient && let Some(base) = private_static_base {
-                    MallocPlacement::Fixed { base }
+                    .copied();
+                let rule = if fixed_by_terminal_or_program_rule {
+                    MallocPlacementRule::MinBase
+                } else if transient && let Some(word) = private_static_word {
+                    MallocPlacementRule::PrivateStatic { word }
                 } else if fixed_by_exact_entry_rule {
-                    MallocPlacement::Fixed { base: min_base }
+                    MallocPlacementRule::MinBase
                 } else {
-                    MallocPlacement::Heap {
-                        min_base,
-                        needs_dyn_sp_clamp,
+                    MallocPlacementRule::Heap {
                         update_free_ptr: !transient,
                     }
                 };
-                out.insert(inst, placement);
+                out.insert(inst, rule);
             }
         }
         out

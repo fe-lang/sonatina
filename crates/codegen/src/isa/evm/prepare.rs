@@ -251,14 +251,18 @@ pub(crate) fn function_free_ptr_slot_facts(
     backend: &EvmBackend,
     prov: &SecondaryMap<ValueId, Provenance>,
 ) -> FreePtrSlotFacts {
+    // Only its own terminal reads a terminal payload, so no malloc can observe it.
+    let terminal_payload_scratch = terminal_payload_scratch_insts(function, backend);
     let mut facts = FreePtrSlotFacts::default();
     for block in function.layout.iter_block() {
         for inst in function.layout.iter_inst(block) {
             // Section callees are scanned directly; call summaries only expose whole-space writes.
-            if matches!(
-                backend.isa.inst_set().resolve_inst(function.dfg.inst(inst)),
-                EvmInstKind::Call(_) | EvmInstKind::EvmMalloc(_)
-            ) {
+            if terminal_payload_scratch.contains(&inst)
+                || matches!(
+                    backend.isa.inst_set().resolve_inst(function.dfg.inst(inst)),
+                    EvmInstKind::Call(_) | EvmInstKind::EvmMalloc(_)
+                )
+            {
                 continue;
             }
 
@@ -611,7 +615,9 @@ pub(crate) struct ArenaBaseFacts {
     pub(crate) has_dynamic_frames: bool,
     pub(crate) has_stackify_fixed_slot_spills: bool,
     pub(crate) backend_spill_scratch_reserve_words: u32,
-    pub(crate) has_persistent_mallocs: bool,
+    /// Some malloc lowers through the heap path, which reads the free-pointer
+    /// slot, so compiler-owned memory must stay out of it.
+    pub(crate) has_heap_mallocs: bool,
 }
 
 /// The loop-invariant part of arena-base selection: fixed-address memory
@@ -648,7 +654,7 @@ pub(crate) fn choose_arena_base(
         facts.backend_spill_scratch_reserve_words
     };
     layout.reserve_len(0, spill_reserve_words * WORD_BYTES);
-    if facts.has_persistent_mallocs {
+    if facts.has_heap_mallocs {
         layout.reserve_len(FREE_PTR_SLOT_START, WORD_BYTES);
     }
     if facts.has_dynamic_frames {
