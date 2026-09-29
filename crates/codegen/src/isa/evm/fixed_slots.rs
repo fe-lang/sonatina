@@ -340,8 +340,7 @@ block2:
         let result = parsed.module.func_store.view(*caller, |function| {
             function
                 .layout
-                .iter_block()
-                .flat_map(|block| function.layout.iter_inst(block))
+                .iter_all_insts()
                 .find_map(|inst| {
                     function
                         .dfg

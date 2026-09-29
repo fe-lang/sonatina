@@ -289,12 +289,9 @@ object @Contract {
     for func_ref in [entry, make_some] {
         prepared.module().func_store.view(func_ref, |func| {
             assert!(
-                func.layout
-                    .iter_block()
-                    .flat_map(|block| func.layout.iter_inst(block))
-                    .all(|inst| {
-                        downcast::<&evm::EvmMalloc>(func.inst_set(), func.dfg.inst(inst)).is_none()
-                    }),
+                func.layout.iter_all_insts().all(|inst| {
+                    downcast::<&evm::EvmMalloc>(func.inst_set(), func.dfg.inst(inst)).is_none()
+                }),
                 "enum helper chain should not force heap materialization",
             );
         });

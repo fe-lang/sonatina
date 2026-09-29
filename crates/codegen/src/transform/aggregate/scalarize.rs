@@ -464,12 +464,7 @@ impl AggregateScalarize {
         }
 
         let mut inst_order = FxHashMap::default();
-        for (idx, inst) in func
-            .layout
-            .iter_block()
-            .flat_map(|block| func.layout.iter_inst(block))
-            .enumerate()
-        {
+        for (idx, inst) in func.layout.iter_all_insts().enumerate() {
             inst_order.insert(inst, idx);
         }
         promoted_roots.sort_by_key(|promoted| {
@@ -4424,8 +4419,7 @@ block0:
                 memory.compute_with_loaded_value_carriers(func, outputs.get(&func_ref), None);
                 let load = func
                     .layout
-                    .iter_block()
-                    .flat_map(|block| func.layout.iter_inst(block))
+                    .iter_all_insts()
                     .find(|&inst| {
                         downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst)).is_some()
                     })

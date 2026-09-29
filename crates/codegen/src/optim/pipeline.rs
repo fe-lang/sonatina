@@ -1854,8 +1854,7 @@ func private %entry(v0.i256, v1.i1) -> i256 {
             lpt.compute(&cfg, &domtree);
             let load = func
                 .layout
-                .iter_block()
-                .flat_map(|block| func.layout.iter_inst(block))
+                .iter_all_insts()
                 .find(|&inst| {
                     sonatina_ir::inst::downcast::<&sonatina_ir::inst::data::ObjLoad>(
                         func.inst_set(),

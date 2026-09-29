@@ -178,8 +178,7 @@ pub(crate) fn native_heap_object_roots(
 ) -> FxHashSet<ValueId> {
     function
         .layout
-        .iter_block()
-        .flat_map(|block| function.layout.iter_inst(block))
+        .iter_all_insts()
         .filter(|&inst| {
             downcast::<&data::ObjAlloc>(function.inst_set(), function.dfg.inst(inst)).is_some()
         })

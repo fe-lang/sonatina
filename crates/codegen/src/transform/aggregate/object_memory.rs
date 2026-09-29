@@ -997,8 +997,7 @@ mod tests {
 
             let load_inst = func
                 .layout
-                .iter_block()
-                .flat_map(|block| func.layout.iter_inst(block))
+                .iter_all_insts()
                 .find(|&inst| {
                     downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst)).is_some()
                 })
@@ -1096,8 +1095,7 @@ block0:
             memory.compute(func, Some(&selected), Some(&summaries));
             let loads: Vec<_> = func
                 .layout
-                .iter_block()
-                .flat_map(|block| func.layout.iter_inst(block))
+                .iter_all_insts()
                 .filter(|&inst| {
                     downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst)).is_some()
                 })
@@ -1540,8 +1538,7 @@ block0:
                 |func, memory, _| {
                     let call = func
                         .layout
-                        .iter_block()
-                        .flat_map(|b| func.layout.iter_inst(b))
+                        .iter_all_insts()
                         .find(|&inst| {
                             downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(inst))
                                 .is_some()
@@ -1707,8 +1704,7 @@ block0:
                     assert_eq!(read.may_be_undef(), undefined);
                     let assertion = func
                         .layout
-                        .iter_block()
-                        .flat_map(|b| func.layout.iter_inst(b))
+                        .iter_all_insts()
                         .find(|&inst| {
                             downcast::<&data::EnumAssertVariantRef>(
                                 func.inst_set(),
@@ -1799,8 +1795,7 @@ block0:
             |func, memory, _| {
                 let tag = func
                     .layout
-                    .iter_block()
-                    .flat_map(|b| func.layout.iter_inst(b))
+                    .iter_all_insts()
                     .find(|&inst| {
                         downcast::<&data::EnumGetTag>(func.inst_set(), func.dfg.inst(inst))
                             .is_some()

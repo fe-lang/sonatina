@@ -1870,8 +1870,7 @@ func private %entry(v0.i256) {
         module.func_store.view(func_ref, |func| {
             let inst = func
                 .layout
-                .iter_block()
-                .flat_map(|block| func.layout.iter_inst(block))
+                .iter_all_insts()
                 .find(|&inst| {
                     matches!(
                         func.dfg.inst(inst).kind(),
