@@ -125,6 +125,7 @@ jobs:
 
   sp1:
     name: SP1 RV64IM
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       # The runner context is only available to steps, not job-level env.

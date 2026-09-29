@@ -97,6 +97,6 @@ form one target so that each run builds the guest runtime once. The second
 command runs only the CPU core-proof check. Recursive proofs, precompile APIs,
 unconstrained execution, and performance tuning are outside this slice.
 
-Pull request CI runs the first command on Linux. The `SP1 proof` workflow
+CI runs the first command on Linux only on pushes to `main`. The `SP1 proof` workflow
 lints the harness and runs the proof on Linux. It runs only on demand, so
 start it when changing the SP1 SDK, the Succinct toolchain, or the SP1 runtime.

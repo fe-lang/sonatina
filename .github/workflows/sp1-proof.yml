@@ -1,7 +1,7 @@
 name: SP1 proof
 
-# Proving takes much longer than executing guests, so pull requests only
-# execute them (see the SP1 job in ci.yml). The SP1 SDK and toolchain are
+# Proving takes much longer than executing guests, which CI runs on pushes
+# to main (see the SP1 job in ci.yml). The SP1 SDK and toolchain are
 # pinned, so run this when changing them or the SP1 runtime. It also lints the
 # dedicated harness.
 on:
