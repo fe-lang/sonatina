@@ -1,0 +1,237 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: "String::from_utf8(out).unwrap()"
+input_file: test_files/evm/final_spill_share_entry_loop.sntn
+---
+evm.config: stack_reach=4 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false mem_plan_detail=true
+
+object: Contract
+  section runtime: 238 bytes
+  total: 238 bytes
+
+functions:
+  mem: global_dyn_base=0x180 arena_base=0xa0 scratch_peak_words=2 stable_chain_peak_words=5
+  entry: ir_blocks=1 ir_insts=9 vcode_ops=37 fixups=2 imm_bytes=7
+    mem: scratch_words=0 stable_words=1 stable_mode=StableAbs(base=0xe0) entry_abs_words=2 abs_words_end=3
+  spin: ir_blocks=3 ir_insts=39 vcode_ops=136 fixups=6 imm_bytes=25
+    mem: scratch_words=0 stable_words=4 stable_mode=StableAbs(base=0x100) entry_abs_words=3 abs_words_end=7
+  one: ir_blocks=1 ir_insts=3 vcode_ops=8 fixups=0 imm_bytes=3
+    mem: scratch_words=2 stable_words=0 stable_mode=None entry_abs_words=7 abs_words_end=2
+
+mem plan detail:
+evm mem plan: global_dyn_base=0x180 arena_base=0xa0 scratch_peak_words=2 stable_chain_peak_words=5
+evm mem plan: entry scratch_words=0 stable_words=1 stable_mode=StableAbs(base=0xe0) entry_abs_words=2 abs_words_end=3
+  scratch_spill v1 slot=0 addr=0x0
+evm mem plan: spin scratch_words=0 stable_words=4 stable_mode=StableAbs(base=0x100) entry_abs_words=3 abs_words_end=7
+  scratch_spill v18 slot=0 addr=0x0
+  scratch_spill v20 slot=1 addr=0x20
+  spill v2 offset_words=0 loc=StableAbs(0) addr=0x100
+  spill v3 offset_words=1 loc=StableAbs(1) addr=0x120
+  spill v4 offset_words=2 loc=StableAbs(2) addr=0x140
+  spill v5 offset_words=3 loc=StableAbs(3) addr=0x160
+  spill v22 offset_words=0 loc=StableAbs(0) addr=0x100
+  spill v24 offset_words=1 loc=StableAbs(1) addr=0x120
+  spill v30 offset_words=2 loc=StableAbs(2) addr=0x140
+evm mem plan: one scratch_words=2 stable_words=0 stable_mode=None entry_abs_words=7 abs_words_end=2
+
+
+evm:
+  case ok: calldata_len=32 success reason=Return gas_used=22264 gas_refunded=0 logs=0 output=call len=32 tx_gas=21140 runtime_gas=1124
+
+
+--------------- DEBUG ---------------
+
+// func public %entry()
+entry:
+  block0:
+    PUSH0  // v1.i256 = evm_calldata_load v0;
+    CALLDATALOAD
+    DUP1
+    PUSH0
+    MSTORE
+    PUSH0  // evm_mstore v2 v0;
+    PUSH1 0xe0 (224)
+    MSTORE
+    PUSH1 0x1 (1)  // v4.i256 = add v1 v3;
+    DUP2
+    ADD
+    PUSH1 0x2 (2)  // v6.i256 = add v1 v5;
+    DUP3
+    ADD
+    PUSH1 0x3 (3)  // v8.i256 = add v1 3.i256;
+    DUP4
+    ADD
+    DUP4  // v10.i256 = add v1 4.i256;
+    PUSH1 0x4 (4)
+    ADD
+    SWAP2  // v11.i256 = call %spin v2 v1 v4 v6 v8 v10;
+    PUSH1 0xe0 (224)
+    SWAP4
+    PUSH0
+    MLOAD
+    PUSH1 `pc + (4)`
+    SWAP6
+    PUSH1 FuncRef(2)
+    JUMP
+    JUMPDEST
+    SWAP1  // evm_mstore v0 v11;
+    POP
+    PUSH0
+    MSTORE
+    PUSH1 0x20 (32)  // evm_return v0 32.i256;
+    PUSH0
+    RETURN
+
+// func private %spin(v0.i256, v1.i256, v2.i256, v3.i256, v4.i256, v5.i256) -> i256
+spin:
+  block0:
+    JUMPDEST
+    DUP3
+    PUSH2 0x100 (256)
+    MSTORE
+    DUP4
+    PUSH2 0x120 (288)
+    MSTORE
+    DUP5
+    PUSH2 0x140 (320)
+    MSTORE
+    DUP6
+    PUSH2 0x160 (352)
+    MSTORE
+    DUP1  // v6.i256 = evm_mload v0;
+    MLOAD
+    PUSH1 `pc + (3)`  // v7.i256 = call %one;
+    PUSH1 FuncRef(1)
+    JUMP
+    JUMPDEST
+    PUSH2 0x160 (352)  // v28.i256 = add v5 v7;
+    MLOAD
+    ADD
+    PUSH2 0x140 (320)  // v29.i256 = add v28 v4;
+    MLOAD
+    ADD
+    PUSH2 0x120 (288)  // v30.i256 = add v29 v3;
+    MLOAD
+    ADD
+    PUSH2 0x100 (256)  // v31.i256 = add v30 v2;
+    MLOAD
+    ADD
+    DUP4  // v32.i256 = add v31 v1;
+    ADD
+    ADD  // v8.i256 = add v6 v32;
+    DUP1  // evm_mstore v0 v8;
+    DUP3
+    MSTORE
+    PUSH1 0xc8 (200)  // v14.i256 = lt v8 v9;
+    DUP2
+    LT
+    PUSH1 block2  // br v14 block2 block1;
+    JUMPI
+  block1:
+    SWAP1  // v15.i256 = add v8 v1;
+    POP
+    ADD
+    SWAP4  // v17.i256 = add v15 v16;
+    POP
+    POP
+    POP
+    POP
+    PUSH1 0x1 (1)
+    DUP2
+    ADD
+    DUP1
+    PUSH0
+    MSTORE
+    PUSH1 0x2 (2)  // v19.i256 = add v15 v18;
+    DUP3
+    ADD
+    DUP1
+    PUSH1 0x20 (32)
+    MSTORE
+    PUSH1 0x3 (3)  // v10.i256 = add v15 v20;
+    DUP4
+    ADD
+    DUP1
+    PUSH2 0x100 (256)
+    MSTORE
+    DUP4  // v21.i256 = add v15 v11;
+    PUSH1 0x4 (4)
+    ADD
+    DUP1
+    PUSH2 0x120 (288)
+    MSTORE
+    SWAP4  // v23.i256 = add v15 v22;
+    DUP1
+    PUSH1 0x5 (5)
+    ADD
+    PUSH1 0x6 (6)  // v25.i256 = add v15 v24;
+    DUP3
+    ADD
+    PUSH1 0x7 (7)  // v27.i256 = add v15 v26;
+    DUP4
+    ADD
+    DUP1
+    PUSH2 0x140 (320)
+    MSTORE
+    SWAP3  // v13.i256 = add v15 v12;
+    PUSH1 0x8 (8)
+    ADD
+    PUSH1 `pc + (3)`  // v33.i256 = call %one;
+    PUSH1 FuncRef(1)
+    JUMP
+    JUMPDEST
+    PUSH0  // v34.i256 = add v33 v17;
+    MLOAD
+    ADD
+    PUSH1 0x20 (32)  // v35.i256 = add v34 v19;
+    MLOAD
+    ADD
+    PUSH2 0x100 (256)  // v36.i256 = add v35 v10;
+    MLOAD
+    ADD
+    PUSH2 0x120 (288)  // v37.i256 = add v36 v21;
+    MLOAD
+    ADD
+    DUP4  // v38.i256 = add v37 v23;
+    ADD
+    DUP3  // v39.i256 = add v38 v25;
+    ADD
+    PUSH2 0x140 (320)  // v40.i256 = add v39 v27;
+    MLOAD
+    ADD
+    DUP2  // v41.i256 = add v40 v13;
+    ADD
+    XOR  // v42.i256 = xor v41 v13;
+    SWAP1  // v43.i256 = xor v42 v27;
+    SWAP2
+    SWAP3
+    XOR
+    XOR  // v44.i256 = xor v43 v25;
+    XOR  // v45.i256 = xor v44 v23;
+    SWAP1  // v46.i256 = xor v45 v21;
+    SWAP2
+    SWAP3
+    SWAP4
+    XOR
+    XOR  // v47.i256 = xor v46 v10;
+    XOR  // v48.i256 = xor v47 v19;
+    XOR  // v49.i256 = xor v48 v17;
+    SWAP1  // return v49;
+    JUMP
+  block2:
+    JUMPDEST
+    POP  // jump block0;
+    PUSH1 block0
+    JUMP
+
+// func private %one() -> i256
+one:
+  block0:
+    JUMPDEST
+    PUSH1 0x1 (1)  // evm_mstore v0 v1;
+    PUSH1 0xa0 (160)
+    MSTORE
+    PUSH1 0xa0 (160)  // v2.i256 = evm_mload v0;
+    MLOAD
+    SWAP1  // return v2;
+    JUMP

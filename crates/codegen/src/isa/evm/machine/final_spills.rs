@@ -1,10 +1,20 @@
-use cranelift_entity::EntityRef;
+use cranelift_entity::{EntityRef, SecondaryMap};
 use rustc_hash::{FxHashMap, FxHashSet};
 #[cfg(debug_assertions)]
 use sonatina_ir::Module;
-use sonatina_ir::{InstId, ValueId, module::FuncRef};
+use sonatina_ir::{
+    BlockId, Function, InstId, InstSetExt, ValueId,
+    cfg::ControlFlowGraph,
+    inst::evm::machine_inst_set::EvmMachineInstKind,
+    isa::{Isa, evm::EvmMachine},
+    module::FuncRef,
+};
 
-use crate::{bitset::BitSet, module_analysis::CallGraphSchedule, stackalloc::StackifyAlloc};
+use crate::{
+    bitset::BitSet,
+    module_analysis::CallGraphSchedule,
+    stackalloc::{Action, Allocator, StackifyAlloc},
+};
 
 use crate::isa::evm::memory_plan::align_up_to_word;
 
@@ -61,7 +71,12 @@ pub(crate) enum OptionalFinalSpillPlacement {
 #[derive(Default)]
 pub(crate) struct FinalSpillObjects {
     spilled_values: Vec<(ValueId, StackObjId)>,
+    /// Final spill words, each as a representative stackify object and whether
+    /// the word must be stable. Every object is its own word until
+    /// [`Self::share_disjoint_objects`] merges objects into shared words.
     objs: Vec<(StackObjId, bool)>,
+    /// Stackify objects that share a representative's word.
+    shared: FxHashMap<StackObjId, StackObjId>,
 }
 
 impl FinalSpillObjects {
@@ -88,7 +103,94 @@ impl FinalSpillObjects {
         Self {
             spilled_values,
             objs,
+            shared: FxHashMap::default(),
         }
+    }
+
+    /// Lets stackify objects whose stored values are never live at the same
+    /// time share a word. Stackify gives every spilled value its own object,
+    /// so without this a function's final spill words grow with its total spill
+    /// count rather than its peak spill pressure. Must-stable and optional
+    /// objects are packed separately, since optional placement is chosen later.
+    pub(crate) fn share_disjoint_objects(&mut self, function: &Function, alloc: &StackifyAlloc) {
+        if self.objs.len() < 2 {
+            return;
+        }
+
+        // Object accesses at the action sites emission runs, in execution order.
+        let machine_isa = EvmMachine::new(function.dfg.ctx.triple);
+        let entry = function.layout.entry_block();
+        let mut accesses: SecondaryMap<BlockId, Vec<SpillObjectAccess>> = SecondaryMap::new();
+        let push = |accesses: &mut Vec<SpillObjectAccess>, actions: &[Action], kills: bool| {
+            accesses.extend(actions.iter().filter_map(|action| match *action {
+                Action::MemLoadObj(obj) => Some(SpillObjectAccess::Load(obj)),
+                Action::MemStoreObj(obj) => Some(SpillObjectAccess::Store { obj, kills }),
+                _ => None,
+            }));
+        };
+        let mut entry_accesses = 0;
+        for block in function.layout.iter_block() {
+            let block_accesses = &mut accesses[block];
+            if entry == Some(block) {
+                push(block_accesses, &alloc.enter_function(function), true);
+                entry_accesses = block_accesses.len();
+            }
+            let last_inst = function.layout.last_inst_of(block);
+            for inst in function.layout.iter_inst(block) {
+                push(block_accesses, alloc.pre_inst(inst), true);
+                // Case actions run in order until a case matches, so only the
+                // first case's actions run on every path through the dispatch.
+                if let EvmMachineInstKind::BrTable(br) =
+                    machine_isa.inst_set().resolve_inst(function.dfg.inst(inst))
+                {
+                    for case_idx in 0..br.table().len() {
+                        let actions = alloc.br_table_case(inst, case_idx);
+                        push(block_accesses, actions, case_idx == 0);
+                    }
+                }
+                push(
+                    block_accesses,
+                    alloc.post_inst(inst),
+                    Some(inst) != last_inst,
+                );
+            }
+        }
+        debug_assert_eq!(
+            accesses.values().map(Vec::len).sum::<usize>() - entry_accesses,
+            {
+                let mut stored = 0;
+                alloc.for_each_action(|action| {
+                    stored += usize::from(matches!(
+                        action,
+                        Action::MemLoadObj(_) | Action::MemStoreObj(_)
+                    ));
+                });
+                stored
+            },
+            "spill word sharing must see every stored object action"
+        );
+
+        let mut cfg = ControlFlowGraph::default();
+        cfg.compute(function);
+        let conflicts = spill_object_conflicts(&cfg, &accesses);
+        // Each word's representative, whether it is stable, and the union of
+        // its members' conflicts.
+        let mut words: Vec<(StackObjId, bool, BitSet<StackObjId>)> = Vec::new();
+        for &(obj, must_stable) in &self.objs {
+            match words.iter_mut().find(|(_, stable, word_conflicts)| {
+                *stable == must_stable && !word_conflicts.contains(obj)
+            }) {
+                Some((rep, _, word_conflicts)) => {
+                    word_conflicts.union_with(&conflicts[obj]);
+                    self.shared.insert(obj, *rep);
+                }
+                None => words.push((obj, must_stable, conflicts[obj].clone())),
+            }
+        }
+        self.objs = words
+            .into_iter()
+            .map(|(rep, must_stable, _)| (rep, must_stable))
+            .collect();
     }
 
     fn is_empty(&self) -> bool {
@@ -445,6 +547,11 @@ pub(crate) fn allocate_final_spills(
             obj
         });
     }
+    let mut final_objs: Vec<_> = remap.values().copied().collect();
+    final_objs.sort_unstable();
+    for (&old_obj, rep) in &spills.shared {
+        remap.insert(old_obj, remap[rep]);
+    }
 
     let mut scratch_objs = Vec::new();
     let mut stable_objs = Vec::new();
@@ -480,7 +587,6 @@ pub(crate) fn allocate_final_spills(
         &fixed_writes,
     );
     let used_fallback = scratch_fallback || stable_fallback;
-    let final_objs: Vec<_> = remap.values().copied().collect();
     validate_final_spill_absolute_disjointness(func, &mem_plan, &final_objs)?;
     validate_final_spills_disjoint_from_fixed_writes(func, &mem_plan, &final_objs, &fixed_writes)?;
     validate_final_spill_regions(
@@ -508,6 +614,63 @@ pub(crate) fn allocate_final_spills(
         stack_obj_remap: remap,
         used_fallback,
     })
+}
+
+/// A spill object access in execution order within a block.
+#[derive(Clone, Copy)]
+enum SpillObjectAccess {
+    Load(StackObjId),
+    /// `kills` is false for stores that may not run before every later access
+    /// in the block: `br_table` case actions after the first, and actions after
+    /// a block's terminator.
+    Store {
+        obj: StackObjId,
+        kills: bool,
+    },
+}
+
+/// Pairs of spill objects that must not share a word: one is stored while the
+/// other holds a value that a later load reads.
+fn spill_object_conflicts(
+    cfg: &ControlFlowGraph,
+    accesses: &SecondaryMap<BlockId, Vec<SpillObjectAccess>>,
+) -> SecondaryMap<StackObjId, BitSet<StackObjId>> {
+    let blocks: Vec<BlockId> = cfg.post_order().collect();
+    let mut live_in: SecondaryMap<BlockId, BitSet<StackObjId>> = SecondaryMap::new();
+    let mut conflicts: SecondaryMap<StackObjId, BitSet<StackObjId>> = SecondaryMap::new();
+    // Live sets only grow, so conflicts recorded before the fixpoint are a
+    // subset of the final ones.
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for &block in &blocks {
+            let mut live = BitSet::default();
+            for &succ in cfg.succs_of(block) {
+                live.union_with(&live_in[succ]);
+            }
+            for access in accesses[block].iter().rev() {
+                match *access {
+                    SpillObjectAccess::Load(obj) => {
+                        live.insert(obj);
+                    }
+                    SpillObjectAccess::Store { obj, kills } => {
+                        for other in live.iter().filter(|&other| other != obj) {
+                            conflicts[obj].insert(other);
+                            conflicts[other].insert(obj);
+                        }
+                        if kills {
+                            live.remove(obj);
+                        }
+                    }
+                }
+            }
+            if live_in[block] != live {
+                live_in[block] = live;
+                changed = true;
+            }
+        }
+    }
+    conflicts
 }
 
 fn final_spilled_values(alloc: &StackifyAlloc) -> Vec<(ValueId, StackObjId)> {
@@ -1030,11 +1193,13 @@ fn validate_final_spill_regions(
 mod tests {
     use cranelift_entity::{EntityRef, SecondaryMap};
     use rustc_hash::FxHashMap;
-    use sonatina_ir::{InstId, ValueId, module::FuncRef};
+    use sonatina_ir::{InstId, ValueId, cfg::ControlFlowGraph, module::FuncRef};
+    use sonatina_parser::parse_module;
 
     use super::{
         FinalSpillAllocation, FinalSpillAllocationInput, FinalSpillObjects, FixedMemoryWriteRange,
-        OptionalFinalSpillPlacement, allocate_final_spills as alloc_final_spills,
+        OptionalFinalSpillPlacement, SpillObjectAccess,
+        allocate_final_spills as alloc_final_spills, spill_object_conflicts,
         validate_final_spill_absolute_disjointness,
         validate_final_spills_disjoint_from_fixed_writes,
     };
@@ -1614,5 +1779,46 @@ mod tests {
         .expect_err("fixed write overlap should be rejected");
 
         assert!(err.contains("fixed memory write overlap"));
+    }
+
+    #[test]
+    fn loop_carried_spill_objects_conflict_across_the_back_edge() {
+        let parsed = parse_module(
+            "target = \"evm-ethereum-osaka\"
+            func private %f(v0.i1) {
+                block0:
+                    jump block1;
+                block1:
+                    br v0 block1 block2;
+                block2:
+                    return;
+            }",
+        )
+        .unwrap();
+        let mut cfg = ControlFlowGraph::default();
+        let blocks: Vec<_> = parsed
+            .module
+            .func_store
+            .view(parsed.module.funcs()[0], |function| {
+                cfg.compute(function);
+                function.layout.iter_block().collect()
+            });
+        let [a, b, c, d] = [0, 1, 2, 3].map(StackObjId::new);
+        let load = SpillObjectAccess::Load;
+        let store = |obj| SpillObjectAccess::Store { obj, kills: true };
+        // `a` lives through the loop, `b` and `d` within one iteration, and `c`
+        // is carried around the back edge, so `d`, stored after `c`, only
+        // conflicts with it through the back edge.
+        let mut accesses = SecondaryMap::new();
+        accesses[blocks[0]] = vec![store(a), store(c)];
+        accesses[blocks[1]] = vec![load(c), store(b), load(b), store(c), store(d), load(d)];
+        accesses[blocks[2]] = vec![load(a)];
+
+        let conflicts = spill_object_conflicts(&cfg, &accesses);
+        let conflicts_of = |obj| conflicts[obj].iter().collect::<Vec<_>>();
+        assert_eq!(conflicts_of(a), [b, c, d]);
+        assert_eq!(conflicts_of(b), [a]);
+        assert_eq!(conflicts_of(c), [a, d]);
+        assert_eq!(conflicts_of(d), [a, c]);
     }
 }
