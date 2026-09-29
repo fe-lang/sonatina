@@ -1,0 +1,37 @@
+name: SP1 proof
+
+# Proving takes much longer than executing guests, which CI runs on pushes
+# to main (see the SP1 job in ci.yml). The SP1 SDK and toolchain are
+# pinned, so run this when changing them or the SP1 runtime. It also lints the
+# dedicated harness.
+on:
+  workflow_dispatch:
+
+jobs:
+  sp1-proof:
+    name: SP1 RV64IM proof
+    runs-on: ubuntu-latest
+    steps:
+      # The runner context is only available to steps, not job-level env.
+      - name: Locate the Succinct toolchain directory
+        run: echo "SONATINA_SP1_TOOLCHAIN=$RUNNER_TEMP/sonatina-sp1-toolchain" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          workspaces: |
+            . -> target
+            tests/sp1 -> target
+      - name: Install checksum-pinned Succinct toolchain
+        run: bash crates/sp1/install-toolchain.sh "$SONATINA_SP1_TOOLCHAIN"
+      # The SDK's prover types are generated from protobuf definitions.
+      - uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Lint dedicated SDK harness
+        run: cargo clippy --locked --release --manifest-path tests/sp1/Cargo.toml --all-targets -- -D warnings
+      - name: Execute guests and verify a CPU core proof
+        run: cargo test --locked --release --manifest-path tests/sp1/Cargo.toml -- --include-ignored

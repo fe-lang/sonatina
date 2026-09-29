@@ -4,21 +4,21 @@ use object::{
 };
 use sonatina_codegen::compile::OptLevel;
 use sonatina_sp1::Sp1Error;
-use sonatina_sp1_integration::{compile, runtime};
+use sonatina_sp1_integration::{compile, prover, runtime};
 use sp1_sdk::{
     Elf,
-    blocking::{Prover, ProverClient, SP1Stdin},
+    blocking::{Prover, SP1Stdin},
 };
 
 #[test]
 fn separate_objects_share_globals_calls_aggregates_and_references() {
-    let client = ProverClient::builder().cpu().build();
+    let client = prover();
     for level in [OptLevel::O0, OptLevel::O2] {
         let library = compile(
-            include_str!("../../../crates/codegen/test_files/cranelift/linked_abi.sntn"),
+            include_str!("../../../../crates/codegen/test_files/cranelift/linked_abi.sntn"),
             level,
         );
-        let main = compile(include_str!("../fixtures/linked.sntn"), level);
+        let main = compile(include_str!("../../fixtures/linked.sntn"), level);
         let elf = Elf::from(runtime().link_objects(&[&main, &library]).unwrap());
         for (branch, answer) in [(0u64, 100u64), (1, 200), (2, 300), (u64::MAX, 300)] {
             let mut stdin = SP1Stdin::new();

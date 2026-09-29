@@ -83,13 +83,20 @@ of default builds, not Git dependencies out of Cargo's resolution process.
 
 ## Dedicated integration suite
 
-The excluded `tests/sp1` workspace pins SDK 6.8.0 separately from the compiler:
+The excluded `tests/sp1` workspace pins SDK 6.8.0 separately from the compiler.
+Building the SDK needs the Protocol Buffers compiler, `protoc`, on `PATH` or
+named by `PROTOC`:
 
 ```sh
 cargo test --locked --release --manifest-path tests/sp1/Cargo.toml
-cargo test --locked --release --manifest-path tests/sp1/Cargo.toml --test execute -- --ignored
+cargo test --locked --release --manifest-path tests/sp1/Cargo.toml -- --ignored
 ```
 
-Missing prerequisites fail these tests; there are no silent skips. The second
-command runs the CPU core-proof check. Recursive proofs, precompile APIs,
+Missing prerequisites fail these tests; there are no silent skips. The tests
+form one target so that each run builds the guest runtime once. The second
+command runs only the CPU core-proof check. Recursive proofs, precompile APIs,
 unconstrained execution, and performance tuning are outside this slice.
+
+CI runs the first command on Linux only on pushes to `main`. The `SP1 proof` workflow
+lints the harness and runs the proof on Linux. It runs only on demand, so
+start it when changing the SP1 SDK, the Succinct toolchain, or the SP1 runtime.

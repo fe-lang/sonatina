@@ -17,6 +17,3 @@ sp1-sdk = { version = "=6.8.0", default-features = false, features = ["blocking"
 
 [dev-dependencies]
 object = { version = "0.39.1", default-features = false, features = ["write", "std"] }
-
-[profile.release]
-debug = 1
