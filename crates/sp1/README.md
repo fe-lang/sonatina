@@ -83,7 +83,9 @@ of default builds, not Git dependencies out of Cargo's resolution process.
 
 ## Dedicated integration suite
 
-The excluded `tests/sp1` workspace pins SDK 6.8.0 separately from the compiler:
+The excluded `tests/sp1` workspace pins SDK 6.8.0 separately from the compiler.
+Building the SDK needs the Protocol Buffers compiler, `protoc`, on `PATH` or
+named by `PROTOC`:
 
 ```sh
 cargo test --locked --release --manifest-path tests/sp1/Cargo.toml

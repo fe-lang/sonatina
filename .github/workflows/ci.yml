@@ -134,6 +134,10 @@ jobs:
         run: cargo test --locked -p sonatina-codegen --features sp1,cranelift-jit --test cranelift_sp1
       - name: Install checksum-pinned Succinct toolchain
         run: bash crates/sp1/install-toolchain.sh "$SONATINA_SP1_TOOLCHAIN"
+      # The SDK's prover types are generated from protobuf definitions.
+      - uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Lint dedicated SDK harness
         run: cargo clippy --locked --release --manifest-path tests/sp1/Cargo.toml --all-targets -- -D warnings
       - name: Execute guests and verify a CPU core proof
