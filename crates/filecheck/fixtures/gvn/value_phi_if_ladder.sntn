@@ -1,0 +1,61 @@
+#! Each step of an if-ladder adds a constant on one path. A value phi for the
+#! final `add` would need a separate phi in `block2` for each path through the
+#! later joins, i.e. one phi per path through the ladder, so GVN keeps the add.
+
+target = "evm-ethereum-london"
+
+# regex: VALUE=\bv\d+\b
+# check:  block2:
+# nextln:     $(sum=$VALUE).i256 = phi (2.i256 block0) (6.i256 block1);
+# nextln:     v3.i256 = phi (0.i256 block0) (4.i256 block1);
+# nextln:     v4.i256 = phi (v0 block0) (v2 block1);
+# nextln:     v5.i1 = lt v4 4.i256;
+# nextln:     br v5 block4 block3;
+# nextln: 
+# nextln: block3:
+# nextln:     v6.i256 = shr 2.i256 v4;
+# nextln:     jump block4;
+# nextln: 
+# nextln: block4:
+# nextln:     v8.i256 = phi (v3 block2) ($sum block3);
+# nextln:     v9.i256 = phi (v4 block2) (v6 block3);
+# nextln:     v10.i1 = lt v9 2.i256;
+# nextln:     br v10 block6 block5;
+# nextln: 
+# nextln: block5:
+# nextln:     v11.i256 = add v8 1.i256;
+# nextln:     jump block6;
+func public %msb_ladder(v0.i256) -> i256 {
+    block0:
+        v1.i1 = lt v0 16.i256;
+        br v1 block2 block1;
+
+    block1:
+        v2.i256 = shr 4.i256 v0;
+        jump block2;
+
+    block2:
+        v3.i256 = phi (0.i256 block0) (4.i256 block1);
+        v4.i256 = phi (v0 block0) (v2 block1);
+        v5.i1 = lt v4 4.i256;
+        br v5 block4 block3;
+
+    block3:
+        v6.i256 = shr 2.i256 v4;
+        v7.i256 = add v3 2.i256;
+        jump block4;
+
+    block4:
+        v8.i256 = phi (v3 block2) (v7 block3);
+        v9.i256 = phi (v4 block2) (v6 block3);
+        v10.i1 = lt v9 2.i256;
+        br v10 block6 block5;
+
+    block5:
+        v11.i256 = add v8 1.i256;
+        jump block6;
+
+    block6:
+        v12.i256 = phi (v8 block4) (v11 block5);
+        return v12;
+}
