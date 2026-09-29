@@ -34,6 +34,7 @@ use super::{
     object_alias::ObjectAliasFacts,
     object_effects::ObjectEffectSummary,
     object_reachability::{ObjectReachability, raw_access_may_reach_objects, reference_bearing},
+    object_tracking::single_result_value,
     shape,
 };
 
@@ -2298,13 +2299,6 @@ fn push_unique_projection(projections: &mut Vec<Projection>, projection: Project
     }
 }
 
-fn single_result_value(func: &Function, inst: InstId) -> Option<ValueId> {
-    let [result] = func.dfg.inst_results(inst) else {
-        return None;
-    };
-    Some(*result)
-}
-
 fn dfs_postorder(
     node: ValueId,
     edges: &FxHashMap<ValueId, Vec<ValueId>>,
@@ -2418,23 +2412,12 @@ fn projection_view_leaf_tys(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::transform::aggregate::compute_object_effect_summaries;
-    use sonatina_ir::{Module, module::FuncRef};
-    use sonatina_parser::parse_module;
+    use crate::{
+        test_support::{lookup_func, parse_test_module},
+        transform::aggregate::compute_object_effect_summaries,
+    };
 
     use super::super::object_tracking::{collect_root_slices, whole_root_slice};
-
-    fn parse_test_module(src: &str) -> Module {
-        parse_module(src).expect("parse should succeed").module
-    }
-
-    fn lookup_func(module: &Module, name: &str) -> FuncRef {
-        module
-            .funcs()
-            .into_iter()
-            .find(|&func_ref| module.ctx.func_sig(func_ref, |sig| sig.name() == name))
-            .expect("function should exist")
-    }
 
     fn sorted_known_roots(roots: KnownRoots<'_>) -> Vec<ValueId> {
         let mut roots: Vec<_> = roots.iter().map(RootValue::value).collect();

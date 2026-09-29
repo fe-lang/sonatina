@@ -2222,6 +2222,7 @@ mod tests {
     use crate::{
         isa::evm::{EvmBackend, PushWidthPolicy},
         object::{CompileOptions, compile_all_objects},
+        test_support::{dump_func_by_name, lookup_func, parse_test_module},
     };
     use revm::{
         Context, EvmContext, Handler,
@@ -2230,29 +2231,10 @@ mod tests {
             TransactTo, U256,
         },
     };
-    use sonatina_ir::{Module, ir_writer::FuncWriter, isa::evm::Evm, module::FuncRef};
-    use sonatina_parser::parse_module;
+    use sonatina_ir::{Module, isa::evm::Evm};
+
     use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
     use sonatina_verifier::{VerificationLevel, VerifierConfig};
-
-    fn parse_test_module(src: &str) -> Module {
-        parse_module(src).expect("parse should succeed").module
-    }
-
-    fn lookup_func(module: &Module, name: &str) -> FuncRef {
-        module
-            .funcs()
-            .into_iter()
-            .find(|&func_ref| module.ctx.func_sig(func_ref, |sig| sig.name() == name))
-            .expect("function should exist")
-    }
-
-    fn dump_func(module: &Module, name: &str) -> String {
-        let func_ref = lookup_func(module, name);
-        module.func_store.view(func_ref, |func| {
-            FuncWriter::new(func_ref, func).dump_string()
-        })
-    }
 
     fn count_aggregate_allocas(func: &Function, ctx: &ModuleCtx) -> usize {
         let mut count = 0;
@@ -2557,7 +2539,7 @@ func private %f(v0.i256, v1.i256, v2.i256, v3.i256, v4.i256, v5.i256, v6.i256, v
             AggregateLowerToMemoryLegalize::default().run(func, &ctx);
         });
 
-        let dumped = dump_func(&module, "f");
+        let dumped = dump_func_by_name(&module, "f");
         module.func_store.view(func_ref, |func| {
             assert_aggregate_legalized(func, &ctx);
             assert_eq!(
@@ -2712,7 +2694,7 @@ object @Contract {
             AggregateLowerToMemoryLegalize::default().run(func, &ctx);
         });
 
-        let dumped = dump_func(&module, "entry");
+        let dumped = dump_func_by_name(&module, "entry");
         module.func_store.view(func_ref, |func| {
             assert_aggregate_legalized(func, &ctx);
             assert_eq!(
@@ -2747,7 +2729,7 @@ func private %f(v0.i256) {
             AggregateLowerToMemoryLegalize::default().run(func, &ctx);
         });
 
-        let dumped = dump_func(&module, "f");
+        let dumped = dump_func_by_name(&module, "f");
         module.func_store.view(func_ref, |func| {
             assert_aggregate_legalized(func, &ctx);
             assert_eq!(
@@ -2785,7 +2767,7 @@ func private %f() {
             AggregateLowerToMemoryLegalize::default().run(func, &ctx);
         });
 
-        let dumped = dump_func(&module, "f");
+        let dumped = dump_func_by_name(&module, "f");
         module.func_store.view(func_ref, |func| {
             assert_aggregate_legalized(func, &ctx);
             assert_no_mloads(func, &dumped);
@@ -2815,7 +2797,7 @@ func private %f(v0.i256) {
             AggregateLowerToMemoryLegalize::default().run(func, &ctx);
         });
 
-        let dumped = dump_func(&module, "f");
+        let dumped = dump_func_by_name(&module, "f");
         module.func_store.view(func_ref, |func| {
             assert_aggregate_legalized(func, &ctx);
             assert_eq!(

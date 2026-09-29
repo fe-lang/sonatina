@@ -1,7 +1,7 @@
 use cranelift_entity::SecondaryMap;
 use rustc_hash::FxHashMap;
 use sonatina_ir::{
-    BlockId, ControlFlowGraph, Function, I256, Immediate, InstId, Type, ValueId,
+    BlockId, ControlFlowGraph, Function, InstId, ValueId,
     func_cursor::{CursorLocation, FuncCursor, InstInserter},
     inst::{control_flow, data, downcast},
     module::FuncRef,
@@ -21,6 +21,7 @@ use super::{
     },
     provenance::{MayProvenance, MayRootSet, RootValue},
     reconstruct::AggregateValueReconstructor,
+    scalarize::enum_variant_tag_imm,
     shape,
 };
 
@@ -647,16 +648,6 @@ fn root_has_live(live: &LiveLeafMap, root: ValueId) -> bool {
     live.get(&root).is_some_and(|entry| !entry.is_empty())
 }
 
-fn enum_variant_tag_imm(variant: sonatina_ir::types::EnumVariantRef, ty: Type) -> Immediate {
-    match ty {
-        Type::EnumTag(enum_ty) => Immediate::EnumTag {
-            enum_ty,
-            value: I256::from(u64::from(variant.index())),
-        },
-        _ => Immediate::from_i256(I256::from(u64::from(variant.index())), ty),
-    }
-}
-
 fn ends_with_return(func: &Function, block: BlockId) -> bool {
     func.layout.last_inst_of(block).is_some_and(|inst| {
         downcast::<&control_flow::Return>(func.inst_set(), func.dfg.inst(inst)).is_some()
@@ -665,25 +656,14 @@ fn ends_with_return(func: &Function, block: BlockId) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use crate::test_support::{lookup_func, parse_test_module};
     use std::slice;
 
     use super::*;
     use crate::transform::aggregate::compute_object_effect_summaries;
     use sonatina_ir::{ir_writer::FuncWriter, module::FuncRef};
-    use sonatina_parser::parse_module;
+
     use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module};
-
-    fn parse_test_module(src: &str) -> sonatina_ir::Module {
-        parse_module(src).expect("parse should succeed").module
-    }
-
-    fn lookup_func(module: &sonatina_ir::Module, name: &str) -> FuncRef {
-        module
-            .funcs()
-            .into_iter()
-            .find(|&func_ref| module.ctx.func_sig(func_ref, |sig| sig.name() == name))
-            .expect("function should exist")
-    }
 
     fn run_with_effects(module: &sonatina_ir::Module, func_ref: FuncRef) {
         let object_effects = compute_object_effect_summaries(module);

@@ -19,5 +19,7 @@ pub mod optim;
 pub mod post_domtree;
 pub mod range_analysis;
 pub mod stackalloc;
+#[cfg(test)]
+pub(crate) mod test_support;
 pub mod transform;
 pub(crate) mod type_rewrite;

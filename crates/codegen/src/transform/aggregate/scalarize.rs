@@ -21,7 +21,7 @@ use super::{
     LocalObjectArgInfo, LocalObjectArgMap, ObjectEffectSummaryMap, ObjectMemoryAnalysis, RootInit,
     cleanup::DeadPureInstCleanup,
     object_arg_invariance::FunctionArgInvariance,
-    object_tracking::{AggregateFacts, ObjectSlice},
+    object_tracking::{AggregateFacts, ObjectSlice, objref_element_ty},
     promotion::SsaBuilder,
     provenance::{CompleteProvenance, ExactProjectionMap, ProvenanceSnapshot, RootValue},
     reconstruct::{
@@ -2996,13 +2996,6 @@ impl PromotableRoot {
     }
 }
 
-fn objref_element_ty(ctx: &sonatina_ir::module::ModuleCtx, ty: Type) -> Option<Type> {
-    let sonatina_ir::types::CompoundType::ObjRef(elem) = ty.resolve_compound(ctx)? else {
-        return None;
-    };
-    Some(elem)
-}
-
 fn record_modified_leaves(
     modified_leaves: &mut FxHashMap<ValueId, FxHashSet<usize>>,
     root_value: ValueId,
@@ -3257,22 +3250,13 @@ fn is_promoted_path_inst(func: &Function, inst: InstId) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::transform::aggregate::{ObjectReturnOutParam, compute_object_effect_summaries};
+    use crate::{
+        test_support::{lookup_func, parse_test_module},
+        transform::aggregate::{ObjectReturnOutParam, compute_object_effect_summaries},
+    };
     use sonatina_ir::{InstDowncast, Module, inst::cast, ir_writer::FuncWriter, module::FuncRef};
-    use sonatina_parser::parse_module;
+
     use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module};
-
-    fn parse_test_module(src: &str) -> Module {
-        parse_module(src).expect("parse should succeed").module
-    }
-
-    fn lookup_func(module: &Module, name: &str) -> FuncRef {
-        module
-            .funcs()
-            .into_iter()
-            .find(|&func_ref| module.ctx.func_sig(func_ref, |sig| sig.name() == name))
-            .expect("function should exist")
-    }
 
     fn run_scalarize_with_local_args(module: &Module, func_ref: FuncRef) {
         let local_object_args = crate::transform::aggregate::collect_local_object_arg_info(module);

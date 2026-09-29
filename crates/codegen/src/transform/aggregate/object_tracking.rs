@@ -1,7 +1,7 @@
 use cranelift_entity::SecondaryMap;
 use rustc_hash::FxHashMap;
 use sonatina_ir::{
-    Function, Type, ValueId,
+    Function, InstId, Type, ValueId,
     inst::{control_flow, data, downcast},
     module::ModuleCtx,
 };
@@ -366,6 +366,13 @@ pub(crate) fn enum_variant_field_object_slice(
         leaf_count: field_slice.leaf_count,
         total_leaves: base.total_leaves,
     })
+}
+
+pub(crate) fn single_result_value(func: &Function, inst: InstId) -> Option<ValueId> {
+    let [result] = func.dfg.inst_results(inst) else {
+        return None;
+    };
+    Some(*result)
 }
 
 pub(crate) fn objref_element_ty(ctx: &ModuleCtx, ty: Type) -> Option<Type> {

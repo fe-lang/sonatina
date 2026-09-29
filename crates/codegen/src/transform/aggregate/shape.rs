@@ -1525,22 +1525,18 @@ pub fn enum_variant_field_slice(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::parse_test_module;
     use sonatina_ir::{
         DataFlowGraph, Type, ValueId,
-        module::Module,
         types::{EnumReprHint, VariantData},
     };
-    use sonatina_parser::parse_module;
+
     use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module};
 
     use crate::transform::aggregate::{
         compute_object_effect_summaries, object_tracking::AggregateFacts,
         provenance::ProvenanceSnapshot,
     };
-
-    fn parse_test_module(src: &str) -> Module {
-        parse_module(src).expect("parse should succeed").module
-    }
 
     #[test]
     fn large_object_access_facts_do_not_materialize_leaf_layouts() {

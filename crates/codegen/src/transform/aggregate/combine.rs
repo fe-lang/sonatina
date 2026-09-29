@@ -23,6 +23,7 @@ use super::{
     },
     provenance::RootValue,
     reconstruct::AggregateValueReconstructor,
+    scalarize::enum_variant_tag_imm,
     shape,
 };
 
@@ -272,7 +273,10 @@ impl AggregateCombine {
         }
         transfer_enum_object_facts(func, inst, aliases, state);
         if let Some(variant) = tag_variant {
-            replacement = Some(func.dfg.make_imm_value(enum_variant_tag_imm(variant)));
+            replacement = Some(func.dfg.make_imm_value(enum_variant_tag_imm(
+                variant,
+                Type::EnumTag(variant.enum_ty()),
+            )));
         }
         if let Some(value) = replacement
             && let Some(result) = func.dfg.inst_result(inst)
@@ -993,7 +997,7 @@ fn edge_enum_object_facts(
         && let Some((object, variant)) =
             br_table_edge_variant(func, br_table, succ, &out_state.observations)
     {
-        update_enum_assert_fact(func, &mut edge_state.facts, object, variant);
+        update_known_enum_variant_fact(func, &mut edge_state.facts, object, variant);
         return edge_state;
     }
 
@@ -1124,11 +1128,11 @@ fn transfer_enum_object_facts(
     if let Some(assertion) = downcast::<&data::EnumAssertVariantRef>(is, data)
         && let Some(object) = aliases.exact_enum(func, *assertion.object())
     {
-        update_enum_assert_fact(func, &mut state.facts, object, *assertion.variant());
+        update_known_enum_variant_fact(func, &mut state.facts, object, *assertion.variant());
     } else if let Some(tag) = tag
         && let Some(object) = target
     {
-        update_enum_set_tag_fact(func, &mut state.facts, object, *tag.variant());
+        update_known_enum_variant_fact(func, &mut state.facts, object, *tag.variant());
     } else if let Some(write) = write
         && let Some(object) = target
     {
@@ -1143,21 +1147,7 @@ fn transfer_enum_object_facts(
     }
 }
 
-fn update_enum_assert_fact(
-    func: &Function,
-    enum_facts: &mut EnumObjectFacts,
-    object: ExactEnumSlice,
-    variant: EnumVariantRef,
-) {
-    let payloads = enum_facts
-        .get(&object)
-        .filter(|state| state.variant == variant)
-        .map(|state| state.payloads.clone())
-        .unwrap_or_else(|| unknown_variant_payloads(func, variant));
-    enum_facts.insert(object, KnownEnumObjectState { variant, payloads });
-}
-
-fn update_enum_set_tag_fact(
+fn update_known_enum_variant_fact(
     func: &Function,
     enum_facts: &mut EnumObjectFacts,
     object: ExactEnumSlice,
@@ -1287,13 +1277,6 @@ fn enum_variant_count(
     enum_ty: sonatina_ir::types::CompoundTypeRef,
 ) -> Option<usize> {
     ctx.with_ty_store(|store| store.enum_data(enum_ty).map(|data| data.variants.len()))
-}
-
-fn enum_variant_tag_imm(variant: EnumVariantRef) -> Immediate {
-    Immediate::EnumTag {
-        enum_ty: variant.enum_ty(),
-        value: I256::from(u64::from(variant.index())),
-    }
 }
 
 fn enum_proj_of_value(func: &Function, value: ValueId) -> Option<data::EnumProj> {
@@ -1431,26 +1414,8 @@ fn walk_insert_chain_for_field(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sonatina_ir::{Module, inst::control_flow, ir_writer::FuncWriter, module::FuncRef};
-    use sonatina_parser::parse_module;
-
-    fn parse_test_module(src: &str) -> Module {
-        parse_module(src).expect("parse should succeed").module
-    }
-
-    fn lookup_func(module: &Module, name: &str) -> FuncRef {
-        module
-            .funcs()
-            .into_iter()
-            .find(|&func_ref| module.ctx.func_sig(func_ref, |sig| sig.name() == name))
-            .expect("function should exist")
-    }
-
-    fn dump_func(module: &Module, func_ref: FuncRef) -> String {
-        module.func_store.view(func_ref, |func| {
-            FuncWriter::new(func_ref, func).dump_string()
-        })
-    }
+    use crate::test_support::{dump_func, lookup_func, parse_test_module};
+    use sonatina_ir::inst::control_flow;
 
     #[test]
     fn combine_rewrites_extracts_through_compatible_aggregate_bitcasts() {
