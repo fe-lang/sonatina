@@ -558,6 +558,25 @@ impl EffectSink for SummaryEffectSink {
 fn classify_inst_effects_with<S: EffectSink>(
     dfg: &DataFlowGraph,
     inst_id: InstId,
+    sink: S,
+) -> S::Output {
+    // Every instruction kind with modeled effects declares a side effect, so a
+    // declared-pure instruction matches none of them and records nothing.
+    // Most instructions are pure; skip testing them against every kind.
+    if dfg.inst(inst_id).declared_effect_hint() == SideEffect::None {
+        debug_assert_eq!(
+            classify_declared_effects_with(dfg, inst_id, DetailedEffectSink::default()),
+            InstEffects::default(),
+            "an instruction with modeled effects declares no side effect",
+        );
+        return sink.finish();
+    }
+    classify_declared_effects_with(dfg, inst_id, sink)
+}
+
+fn classify_declared_effects_with<S: EffectSink>(
+    dfg: &DataFlowGraph,
+    inst_id: InstId,
     mut sink: S,
 ) -> S::Output {
     let inst = dfg.inst(inst_id);
