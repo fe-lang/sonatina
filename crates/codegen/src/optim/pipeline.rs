@@ -804,7 +804,7 @@ fn run_pass(
                 {
                     let _span =
                         trace_span!("sonatina.optim.pipeline.checked_arith_elim.solve").entered();
-                    CheckedArithElim::new().run(func, &ctx.cfg, &ctx.lpt)
+                    CheckedArithElim::new().run(func, &ctx.cfg, &ctx.domtree, &ctx.lpt)
                 }
             }
         }

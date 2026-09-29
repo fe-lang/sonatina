@@ -508,6 +508,87 @@ object @Contract {{ section runtime {{ entry %entry; }} }}
 }
 
 #[test]
+fn guarded_subtraction_preserves_values_and_overflow_at_all_optimization_levels() {
+    let source = r#"
+target = "evm-ethereum-osaka"
+func private %subtract(v0.i256, v1.i256) -> (i256, i1) {
+block0:
+    v2.i1 = lt v0 v1;
+    br v2 block1 block2;
+block1:
+    (v3.i256, v4.i1) = usubo v0 v1;
+    return (v3, v4);
+block2:
+    (v5.i256, v6.i1) = usubo v0 v1;
+    return (v5, v6);
+}
+func public %entry() {
+block0:
+    v0.i256 = evm_calldata_load 0.i256;
+    v1.i256 = evm_calldata_load 32.i256;
+    (v2.i256, v3.i1) = call %subtract v0 v1;
+    v4.i256 = zext v3 i256;
+    evm_mstore 0.i256 v2;
+    evm_mstore 32.i256 v4;
+    evm_return 0.i256 64.i256;
+}
+object @Contract { section runtime { entry %entry; } }
+"#;
+    let words = [
+        IrU256::zero(),
+        IrU256::one(),
+        IrU256::from(255),
+        IrU256::one() << 128,
+        (IrU256::one() << 255) - IrU256::one(),
+        IrU256::one() << 255,
+        IrU256::MAX - IrU256::one(),
+        IrU256::MAX,
+    ];
+    let config = VerifierConfig::for_level(VerificationLevel::Full);
+    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2, OptLevel::Os] {
+        let module = parse_sona(source).module;
+        verify_module_or_panic(&module, &config);
+        let subtract = module
+            .funcs()
+            .into_iter()
+            .find(|&func| module.ctx.func_sig(func, |sig| sig.name() == "subtract"))
+            .unwrap();
+        module.ctx.set_inline_hint(subtract, InlineHint::Never);
+        let mut compiler = Compile::new(module, EvmCompiler::default()).with_opt_level(level);
+        verify_module_or_panic(compiler.optimize(), &config);
+        let artifacts = compiler
+            .compile()
+            .expect("guarded subtraction should compile");
+        let runtime = artifacts[0]
+            .sections
+            .iter()
+            .find(|(name, _)| name.0 == "runtime")
+            .unwrap();
+        let mut harness = EvmHarness::from_runtime(&runtime.1.bytes);
+        for lhs in words {
+            for rhs in words {
+                let calldata = [lhs.to_big_endian(), rhs.to_big_endian()].concat();
+                let (difference, overflow) = lhs.overflowing_sub(rhs);
+                let expected = [
+                    difference.to_big_endian(),
+                    IrU256::from(u8::from(overflow)).to_big_endian(),
+                ]
+                .concat();
+                let result = harness.call(&calldata);
+                let ExecutionResult::Success {
+                    output: Output::Call(actual),
+                    ..
+                } = result
+                else {
+                    panic!("{level:?}, lhs={lhs}, rhs={rhs}: {result:?}");
+                };
+                assert_eq!(actual.as_ref(), expected, "{level:?}, lhs={lhs}, rhs={rhs}");
+            }
+        }
+    }
+}
+
+#[test]
 fn terminal_word_buffers_preserve_return_and_revert_payloads() {
     let source = r#"
 target = "evm-ethereum-osaka"
