@@ -8,7 +8,7 @@ use sonatina_verifier::{VerifierConfig, verify_function};
 
 use crate::cfg_edit::{CfgEditor, CleanupMode};
 
-use super::{CallChanges, rewrite::OperandRewriter};
+use super::{CallChanges, cost::SummaryKey, rewrite::OperandRewriter};
 
 #[derive(Debug, Clone, Copy)]
 pub(super) enum FullInlineFail {
@@ -43,13 +43,17 @@ struct PhiFixupRecord {
     old_value: ValueId,
 }
 
+/// `validated_callees` holds callee bodies already known to be rewriteable;
+/// the caller must remove a function's key whenever it edits that function.
 pub(super) fn try_inline_callsite_full(
     module: &Module,
     caller: &mut Function,
     call_inst: InstId,
     callee_ref: FuncRef,
-    callee: &Function,
+    callee: (SummaryKey, &Function),
+    validated_callees: &mut FxHashSet<SummaryKey>,
 ) -> Result<FullInlineResult, FullInlineFail> {
+    let (callee_key, callee) = callee;
     if !caller.layout.is_inst_inserted(call_inst) {
         return Err(FullInlineFail::CallGone);
     }
@@ -109,7 +113,10 @@ pub(super) fn try_inline_callsite_full(
     }
 
     let reachable: FxHashSet<BlockId> = rpo.iter().copied().collect();
-    validate_full_inline_callee_rewriteability(module, callee_ref, callee, &rpo, &reachable)?;
+    if !validated_callees.contains(&callee_key) {
+        validate_full_inline_callee_rewriteability(module, callee_ref, callee, &rpo, &reachable)?;
+        validated_callees.insert(callee_key);
+    }
 
     let mut editor = CfgEditor::new(caller, CleanupMode::Strict);
     let (callsite_block, cont_block) = editor.split_block_at(call_inst);
