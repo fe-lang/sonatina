@@ -2220,7 +2220,7 @@ pub fn cleanup_dead_aggregate_alloca_trees(function: &mut Function, module: &Mod
 mod tests {
     use super::*;
     use crate::{
-        isa::evm::{EvmBackend, PushWidthPolicy},
+        isa::evm::{PushWidthPolicy, test_util::osaka_backend},
         object::{CompileOptions, compile_all_objects},
         test_support::{dump_func_by_name, lookup_func, parse_test_module},
     };
@@ -2231,9 +2231,8 @@ mod tests {
             TransactTo, U256,
         },
     };
-    use sonatina_ir::{Module, isa::evm::Evm};
+    use sonatina_ir::Module;
 
-    use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
     use sonatina_verifier::{VerificationLevel, VerifierConfig};
 
     fn count_aggregate_allocas(func: &Function, ctx: &ModuleCtx) -> usize {
@@ -2281,15 +2280,6 @@ mod tests {
         }
     }
 
-    fn test_backend() -> EvmBackend {
-        let triple = TargetTriple::new(
-            Architecture::Evm,
-            Vendor::Ethereum,
-            OperatingSystem::Evm(EvmVersion::Osaka),
-        );
-        EvmBackend::new(Evm::new(triple))
-    }
-
     fn test_compile_opts() -> CompileOptions {
         CompileOptions {
             fixup_policy: PushWidthPolicy::MinimalRelax,
@@ -2300,7 +2290,7 @@ mod tests {
     }
 
     fn run_contract(module: &Module) -> U256 {
-        let artifacts = compile_all_objects(module, &test_backend(), &test_compile_opts())
+        let artifacts = compile_all_objects(module, &osaka_backend(), &test_compile_opts())
             .expect("compile should succeed");
         let artifact = artifacts
             .iter()
@@ -2384,7 +2374,7 @@ object @Contract {
             emit_observability: false,
             verifier_cfg: VerifierConfig::for_level(VerificationLevel::Fast),
         };
-        compile_all_objects(&module, &test_backend(), &opts).expect("compile should succeed");
+        compile_all_objects(&module, &osaka_backend(), &opts).expect("compile should succeed");
     }
 
     #[test]

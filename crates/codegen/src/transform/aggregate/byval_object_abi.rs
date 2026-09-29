@@ -2202,7 +2202,10 @@ fn objref_ty(ctx: &ModuleCtx, ty: Type) -> Type {
 mod tests {
     use super::*;
     use crate::{
-        isa::evm::{EvmBackend, PushWidthPolicy, test_util::prepare_root},
+        isa::evm::{
+            PushWidthPolicy,
+            test_util::{osaka_backend, prepare_root},
+        },
         object::{CompileOptions, compile_all_objects},
         test_support::{dump_func_by_name, lookup_func, parse_test_module},
         transform::aggregate::collect_local_object_arg_info_with_effects,
@@ -2211,10 +2214,8 @@ mod tests {
         Function, Module, ValueId,
         inst::{control_flow, data, downcast},
         ir_writer::FuncWriter,
-        isa::evm::Evm,
     };
 
-    use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
     use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module};
 
     fn run_byvalue_arg_abi(module: &Module) {
@@ -2318,15 +2319,6 @@ mod tests {
 
     fn value_is_arg(func: &Function, value: ValueId) -> bool {
         matches!(func.dfg.values[value], Value::Arg { .. })
-    }
-
-    fn test_backend() -> EvmBackend {
-        let triple = TargetTriple::new(
-            Architecture::Evm,
-            Vendor::Ethereum,
-            OperatingSystem::Evm(EvmVersion::Osaka),
-        );
-        EvmBackend::new(Evm::new(triple))
     }
 
     #[test]
@@ -4505,7 +4497,7 @@ object @Contract {
 "#,
         );
 
-        let backend = test_backend();
+        let backend = osaka_backend();
         let opts = CompileOptions {
             fixup_policy: PushWidthPolicy::MinimalRelax,
             emit_symtab: false,
@@ -4531,7 +4523,7 @@ object @Contract {
             "../../../test_files/evm/fe_large_by_value_array_args.sntn"
         ));
 
-        let backend = test_backend();
+        let backend = osaka_backend();
         let opts = CompileOptions {
             fixup_policy: PushWidthPolicy::MinimalRelax,
             emit_symtab: false,

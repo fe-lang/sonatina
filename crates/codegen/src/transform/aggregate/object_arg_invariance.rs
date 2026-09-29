@@ -20,17 +20,16 @@ use super::{
     shape::{self, AggregateLayoutCache, AggregateSlice},
 };
 
-/// A separate proof that the actual region is allocated, initialized, and has
-/// no enum guard at every call. This is not implied by unchanged contents.
-struct EntryReadValidity;
-
 struct ArgMemoryInvariantCertificate {
     index: usize,
     argument: ValueId,
     argument_ty: Type,
     slice: AggregateSlice,
     total_leaves: usize,
-    entry_validity: Option<EntryReadValidity>,
+    /// A separate proof that the actual region is allocated, initialized, and
+    /// has no enum guard at every call. This is not implied by unchanged
+    /// contents.
+    entry_valid: bool,
 }
 
 pub(crate) struct FunctionArgInvariance {
@@ -67,7 +66,7 @@ impl FunctionArgInvariance {
 
     pub(crate) fn permits_entry_read(&self, func: &Function, slice: ObjectSlice) -> bool {
         self.certificate(func, slice)
-            .is_some_and(|proof| proof.entry_validity.is_some())
+            .is_some_and(|proof| proof.entry_valid)
     }
 }
 
@@ -169,7 +168,7 @@ pub(crate) fn compute_arg_invariance(
                             argument_ty: func.dfg.value_ty(argument),
                             slice: projection.slice,
                             total_leaves: root.slice.leaf_count,
-                            entry_validity: None,
+                            entry_valid: false,
                         },
                         invariant: true,
                         entry_valid: true,
@@ -256,8 +255,7 @@ pub(crate) fn compute_arg_invariance(
                     if !candidate.called || !candidate.invariant {
                         return None;
                     }
-                    candidate.proof.entry_validity =
-                        candidate.entry_valid.then_some(EntryReadValidity);
+                    candidate.proof.entry_valid = candidate.entry_valid;
                     Some(candidate.proof)
                 })
                 .collect();

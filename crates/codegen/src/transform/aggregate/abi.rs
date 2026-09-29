@@ -516,13 +516,15 @@ fn insert_value_before_inst(
 mod tests {
     use super::*;
     use crate::{
-        isa::evm::{EvmBackend, PushWidthPolicy, test_util::prepare_root},
+        isa::evm::{
+            PushWidthPolicy,
+            test_util::{osaka_backend, prepare_root},
+        },
         object::{CompileOptions, compile_all_objects},
         test_support::{lookup_func, parse_test_module},
     };
-    use sonatina_ir::{Module, isa::evm::Evm, types::CompoundType};
+    use sonatina_ir::{Module, types::CompoundType};
 
-    use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
     use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module};
 
     fn lookup_declared_func(module: &Module, name: &str) -> FuncRef {
@@ -532,15 +534,6 @@ mod tests {
             .iter()
             .find_map(|entry| (entry.value().name() == name).then_some(*entry.key()))
             .expect("declared function should exist")
-    }
-
-    fn test_backend() -> EvmBackend {
-        let triple = TargetTriple::new(
-            Architecture::Evm,
-            Vendor::Ethereum,
-            OperatingSystem::Evm(EvmVersion::Osaka),
-        );
-        EvmBackend::new(Evm::new(triple))
     }
 
     #[test]
@@ -649,7 +642,7 @@ object @Contract {
 "#,
         );
 
-        let backend = test_backend();
+        let backend = osaka_backend();
         let opts = CompileOptions {
             fixup_policy: PushWidthPolicy::MinimalRelax,
             emit_symtab: false,
@@ -771,7 +764,7 @@ object @Contract {
             emit_observability: false,
             verifier_cfg: VerifierConfig::for_level(VerificationLevel::Fast),
         };
-        compile_all_objects(&module, &test_backend(), &opts).expect("compile should succeed");
+        compile_all_objects(&module, &osaka_backend(), &opts).expect("compile should succeed");
     }
 
     #[test]

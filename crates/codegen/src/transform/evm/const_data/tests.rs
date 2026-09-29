@@ -1,16 +1,14 @@
 use super::ConstDataLower;
 use crate::{
-    isa::evm::EvmBackend,
+    isa::evm::test_util::osaka_backend,
     object::{CompileOptions, SymbolId, compile_all_objects},
 };
 use sonatina_ir::{
     global_variable::GvInitializer,
     ir_writer::{FuncWriter, ModuleWriter},
-    isa::evm::Evm,
     module::FuncRef,
 };
 use sonatina_parser::parse_module;
-use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
 use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module_or_panic};
 
 fn parse(src: &str) -> sonatina_parser::ParsedModule {
@@ -29,15 +27,6 @@ fn find_func_ref(parsed: &sonatina_parser::ParsedModule, name: &str) -> FuncRef 
                 .func_sig(func_ref, |sig| sig.name() == name)
         })
         .unwrap_or_else(|| panic!("function `{name}` should exist"))
-}
-
-fn test_backend() -> EvmBackend {
-    let triple = TargetTriple::new(
-        Architecture::Evm,
-        Vendor::Ethereum,
-        OperatingSystem::Evm(EvmVersion::Osaka),
-    );
-    EvmBackend::new(Evm::new(triple))
 }
 
 fn global_symbols_with_prefix(parsed: &sonatina_parser::ParsedModule, prefix: &str) -> Vec<String> {
@@ -1051,7 +1040,7 @@ object @Contract {
     );
 
     let opts = CompileOptions::default();
-    compile_all_objects(&parsed.module, &test_backend(), &opts)
+    compile_all_objects(&parsed.module, &osaka_backend(), &opts)
         .expect("object compilation should include backend-synthesized const blobs");
 }
 
@@ -1082,7 +1071,7 @@ object @Contract {
         emit_symtab: true,
         ..Default::default()
     };
-    let artifacts = compile_all_objects(&parsed.module, &test_backend(), &opts)
+    let artifacts = compile_all_objects(&parsed.module, &osaka_backend(), &opts)
         .expect("object compilation should drop dead private const data");
     let runtime = artifacts[0]
         .sections
@@ -1127,7 +1116,7 @@ object @Contract {
         emit_symtab: true,
         ..Default::default()
     };
-    let artifacts = compile_all_objects(&parsed.module, &test_backend(), &opts)
+    let artifacts = compile_all_objects(&parsed.module, &osaka_backend(), &opts)
         .expect("object compilation should preserve section-size-observed data");
     let runtime = artifacts[0]
         .sections
@@ -1172,7 +1161,7 @@ object @Contract {
         emit_symtab: true,
         ..Default::default()
     };
-    let artifacts = compile_all_objects(&parsed.module, &test_backend(), &opts)
+    let artifacts = compile_all_objects(&parsed.module, &osaka_backend(), &opts)
         .expect("object compilation should preserve code-size-observed data");
     let runtime = artifacts[0]
         .sections
@@ -1218,7 +1207,7 @@ object @Contract {
         emit_symtab: true,
         ..Default::default()
     };
-    let artifacts = compile_all_objects(&parsed.module, &test_backend(), &opts)
+    let artifacts = compile_all_objects(&parsed.module, &osaka_backend(), &opts)
         .expect("object compilation should reuse compatible explicit data");
     let runtime = artifacts[0]
         .sections
@@ -1261,7 +1250,7 @@ object @Contract {
     );
 
     let opts = CompileOptions::default();
-    compile_all_objects(&parsed.module, &test_backend(), &opts)
+    compile_all_objects(&parsed.module, &osaka_backend(), &opts)
         .expect("object compilation should succeed with colliding synthesized blob symbols");
 }
 
@@ -1318,7 +1307,7 @@ object @Contract {
     );
 
     let opts = CompileOptions::default();
-    compile_all_objects(&parsed.module, &test_backend(), &opts)
+    compile_all_objects(&parsed.module, &osaka_backend(), &opts)
         .expect("constref helper calls should lower before object compile");
 }
 
@@ -1372,7 +1361,7 @@ object @Contract {
     );
 
     let opts = CompileOptions::default();
-    compile_all_objects(&parsed.module, &test_backend(), &opts)
+    compile_all_objects(&parsed.module, &osaka_backend(), &opts)
         .expect("looped dynamic const loads should lower before object compile");
 }
 

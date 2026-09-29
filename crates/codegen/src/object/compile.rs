@@ -506,23 +506,13 @@ fn topo_sort_sections(program: &ResolvedProgram<'_>) -> Vec<SectionId> {
 mod tests {
     use super::*;
     use crate::{
-        isa::evm::{EvmBackend, PushWidthPolicy},
+        isa::evm::{PushWidthPolicy, test_util::osaka_backend},
         object::{CompileOptions, OBSERVABILITY_SCHEMA_VERSION, PcAttribution, artifact::SymbolId},
     };
-    use sonatina_ir::{
-        InstDowncastMut, Type, inst::arith::Add, ir_writer::ModuleWriter, isa::evm::Evm,
-    };
+    use sonatina_ir::{InstDowncastMut, Type, inst::arith::Add, ir_writer::ModuleWriter};
     use sonatina_parser::parse_module;
-    use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
-    use sonatina_verifier::{VerificationLevel, VerifierConfig};
 
-    fn test_backend() -> EvmBackend {
-        EvmBackend::new(Evm::new(TargetTriple {
-            architecture: Architecture::Evm,
-            vendor: Vendor::Ethereum,
-            operating_system: OperatingSystem::Evm(EvmVersion::Osaka),
-        }))
-    }
+    use sonatina_verifier::{VerificationLevel, VerifierConfig};
 
     fn compile_opts(
         fixup_policy: PushWidthPolicy,
@@ -538,13 +528,33 @@ mod tests {
         }
     }
 
+    /// Compiles object `@O` from `source` at `level`, leaving the outcome for
+    /// the caller to assert on.
+    fn try_compile_o(
+        source: &str,
+        level: VerificationLevel,
+    ) -> Result<crate::object::artifact::ObjectArtifact, Vec<ObjectCompileError>> {
+        let parsed = parse_module(source).unwrap();
+        compile_object(
+            &parsed.module,
+            &osaka_backend(),
+            "O",
+            &compile_opts(
+                PushWidthPolicy::Push4,
+                false,
+                false,
+                VerifierConfig::for_level(level),
+            ),
+        )
+    }
+
     fn compile_fixture(
         source: &str,
         object: &str,
         opts: &CompileOptions,
     ) -> crate::object::artifact::ObjectArtifact {
         let parsed = parse_module(source).unwrap();
-        compile_object(&parsed.module, &test_backend(), object, opts).unwrap()
+        compile_object(&parsed.module, &osaka_backend(), object, opts).unwrap()
     }
 
     fn section<'a>(
@@ -732,7 +742,7 @@ object @Contract {
         });
         let artifact = compile_object(
             &parsed.module,
-            &test_backend(),
+            &osaka_backend(),
             "Contract",
             &compile_opts(
                 PushWidthPolicy::Push4,
@@ -918,7 +928,7 @@ object @Contract {
 
         let artifact = compile_object(
             &parsed.module,
-            &test_backend(),
+            &osaka_backend(),
             "Contract",
             &compile_opts(
                 PushWidthPolicy::Push4,
@@ -982,7 +992,7 @@ object @Contract {
 
         let artifact = compile_object(
             &parsed.module,
-            &test_backend(),
+            &osaka_backend(),
             "Contract",
             &compile_opts(
                 PushWidthPolicy::Push4,
@@ -1083,7 +1093,7 @@ object @Contract {
 
     #[test]
     fn compile_object_reports_verifier_failures_before_codegen() {
-        let parsed = parse_module(
+        let errs = try_compile_o(
             r#"
 target = "evm-ethereum-osaka"
 
@@ -1098,18 +1108,7 @@ object @O {
   }
 }
 "#,
-        )
-        .unwrap();
-        let errs = compile_object(
-            &parsed.module,
-            &test_backend(),
-            "O",
-            &compile_opts(
-                PushWidthPolicy::Push4,
-                false,
-                false,
-                VerifierConfig::for_level(VerificationLevel::Standard),
-            ),
+            VerificationLevel::Standard,
         )
         .expect_err("invalid IR should fail verifier preflight");
         assert!(matches!(
@@ -1158,7 +1157,7 @@ object @O {
         verifier_cfg.check_users = true;
         let errs = compile_object(
             &module,
-            &test_backend(),
+            &osaka_backend(),
             "O",
             &compile_opts(PushWidthPolicy::Push4, false, false, verifier_cfg),
         )
@@ -1176,7 +1175,7 @@ object @O {
 
     #[test]
     fn compile_object_fast_rejects_bad_uaddo_result_shape() {
-        let parsed = parse_module(
+        let errs = try_compile_o(
             r#"
 target = "evm-ethereum-osaka"
 
@@ -1192,18 +1191,7 @@ object @O {
   }
 }
 "#,
-        )
-        .unwrap();
-        let errs = compile_object(
-            &parsed.module,
-            &test_backend(),
-            "O",
-            &compile_opts(
-                PushWidthPolicy::Push4,
-                false,
-                false,
-                VerifierConfig::for_level(VerificationLevel::Fast),
-            ),
+            VerificationLevel::Fast,
         )
         .expect_err("bad multi-result IR should fail verifier preflight");
         let [ObjectCompileError::VerifierFailed { report }] = errs.as_slice() else {
@@ -1219,7 +1207,7 @@ object @O {
 
     #[test]
     fn compile_object_fast_rejects_bad_snego_result_shape() {
-        let parsed = parse_module(
+        let errs = try_compile_o(
             r#"
 target = "evm-ethereum-osaka"
 
@@ -1235,18 +1223,7 @@ object @O {
   }
 }
 "#,
-        )
-        .unwrap();
-        let errs = compile_object(
-            &parsed.module,
-            &test_backend(),
-            "O",
-            &compile_opts(
-                PushWidthPolicy::Push4,
-                false,
-                false,
-                VerifierConfig::for_level(VerificationLevel::Fast),
-            ),
+            VerificationLevel::Fast,
         )
         .expect_err("bad checked-overflow IR should fail verifier preflight");
         let [ObjectCompileError::VerifierFailed { report }] = errs.as_slice() else {
@@ -1262,7 +1239,7 @@ object @O {
 
     #[test]
     fn compile_object_rejects_multi_return_section_entry_for_evm() {
-        let parsed = parse_module(
+        let errs = try_compile_o(
             r#"
 target = "evm-ethereum-osaka"
 
@@ -1278,18 +1255,7 @@ object @O {
   }
 }
 "#,
-        )
-        .unwrap();
-        let errs = compile_object(
-            &parsed.module,
-            &test_backend(),
-            "O",
-            &compile_opts(
-                PushWidthPolicy::Push4,
-                false,
-                false,
-                VerifierConfig::for_level(VerificationLevel::Standard),
-            ),
+            VerificationLevel::Standard,
         )
         .expect_err("must reject multi-return");
         assert!(errs.iter().any(|err| matches!(
@@ -1301,7 +1267,7 @@ object @O {
 
     #[test]
     fn compile_object_rejects_declaration_only_section_entry() {
-        let parsed = parse_module(
+        let errs = try_compile_o(
             r#"
 target = "evm-ethereum-osaka"
 
@@ -1313,18 +1279,7 @@ object @O {
   }
 }
 "#,
-        )
-        .unwrap();
-        let errs = compile_object(
-            &parsed.module,
-            &test_backend(),
-            "O",
-            &compile_opts(
-                PushWidthPolicy::Push4,
-                false,
-                false,
-                VerifierConfig::for_level(VerificationLevel::Fast),
-            ),
+            VerificationLevel::Fast,
         )
         .expect_err("declaration-only section entry must fail verifier preflight");
         let [ObjectCompileError::VerifierFailed { report }] = errs.as_slice() else {
@@ -1372,7 +1327,7 @@ object @O {
         .unwrap();
         compile_object(
             &parsed.module,
-            &test_backend(),
+            &osaka_backend(),
             "O",
             &compile_opts(
                 PushWidthPolicy::Push4,
@@ -1386,7 +1341,7 @@ object @O {
 
     #[test]
     fn compile_object_rejects_external_calls_for_evm() {
-        let parsed = parse_module(
+        let errs = try_compile_o(
             r#"
 target = "evm-ethereum-osaka"
 
@@ -1404,18 +1359,7 @@ object @O {
   }
 }
 "#,
-        )
-        .unwrap();
-        let errs = compile_object(
-            &parsed.module,
-            &test_backend(),
-            "O",
-            &compile_opts(
-                PushWidthPolicy::Push4,
-                false,
-                false,
-                VerifierConfig::for_level(VerificationLevel::Standard),
-            ),
+            VerificationLevel::Standard,
         )
         .expect_err("must reject external call");
         assert!(errs.iter().any(|err| matches!(
@@ -1462,7 +1406,7 @@ object @O {
         let original = ModuleWriter::new(&parsed.module).dump_string();
         compile_object(
             &parsed.module,
-            &test_backend(),
+            &osaka_backend(),
             "O",
             &compile_opts(
                 PushWidthPolicy::Push4,
@@ -1528,7 +1472,7 @@ object @O {{
         let parsed = parse_module(&source).unwrap();
         let errs = compile_object(
             &parsed.module,
-            &test_backend(),
+            &osaka_backend(),
             "O",
             &compile_opts(
                 PushWidthPolicy::Push4,

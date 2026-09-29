@@ -1,4 +1,4 @@
-use super::*;
+use super::{test_util::osaka_backend, *};
 use crate::{
     analysis::func_behavior,
     critical_edge::CriticalEdgeSplitter,
@@ -173,21 +173,13 @@ fn work_module(module: &Module, funcs: &[FuncRef]) -> SectionWorkModule {
     work_module_with_entry(module, funcs, funcs[0])
 }
 
-fn test_backend() -> EvmBackend {
-    EvmBackend::new(Evm::new(TargetTriple {
-        architecture: Architecture::Evm,
-        vendor: Vendor::Ethereum,
-        operating_system: OperatingSystem::Evm(EvmVersion::Osaka),
-    }))
-}
-
 #[test]
 fn free_ptr_restore_preserves_heap_published_by_a_callee() {
     let parsed = parse_module(include_str!(
         "../../../test_files/evm/callee_heap_escape_free_ptr.sntn"
     ))
     .expect("module parses");
-    let backend = test_backend();
+    let backend = osaka_backend();
     let summaries =
         compute_ptr_escape_summaries(&parsed.module, &parsed.module.funcs(), &backend.isa);
     let forward = find_func(&parsed.module, "forward");
@@ -714,7 +706,7 @@ block2:
     .unwrap();
 
     let f = find_func(&parsed.module, "f");
-    let backend = test_backend();
+    let backend = osaka_backend();
     let prepared = backend
         .prepare_section(work_module_with_entry(&parsed.module, &[f], f))
         .expect("prepare should succeed");
@@ -759,7 +751,7 @@ object @Contract {
     .unwrap();
 
     let entry = find_func(&parsed.module, "entry");
-    let backend = test_backend();
+    let backend = osaka_backend();
     let prepared = backend
         .prepare_section(work_module_with_entry(&parsed.module, &[entry], entry))
         .expect("prepare should succeed");
@@ -819,7 +811,7 @@ object @Contract {
     .unwrap();
 
     let f = find_func(&parsed.module, "f");
-    let backend = test_backend();
+    let backend = osaka_backend();
     let prepared = backend
         .prepare_section(work_module_with_entry(&parsed.module, &[f], f))
         .expect("prepare should succeed");
@@ -861,7 +853,7 @@ block0:
     .unwrap();
 
     let entry = find_func(&parsed.module, "entry");
-    let backend = test_backend();
+    let backend = osaka_backend();
     let prepared = backend
         .prepare_section(work_module_with_entry(&parsed.module, &[entry], entry))
         .expect("prepare should succeed");
@@ -924,7 +916,7 @@ block0:
     .unwrap();
 
     let entry = find_func(&parsed.module, "entry");
-    let backend = test_backend();
+    let backend = osaka_backend();
     let prepared = backend
         .prepare_section(work_module_with_entry(&parsed.module, &[entry], entry))
         .expect("prepare should succeed");
@@ -973,7 +965,7 @@ fn prepared_func_dump(src: &str, func_name: &str) -> String {
     let parsed = parse_module(src).expect("module parses");
     let funcs = parsed.module.funcs();
     let entry = find_func(&parsed.module, func_name);
-    let backend = test_backend();
+    let backend = osaka_backend();
     let prepared = backend
         .prepare_section(work_module_with_entry(&parsed.module, &funcs, entry))
         .expect("prepare should succeed");
@@ -1275,7 +1267,7 @@ object @Contract {
     let funcs = parsed.module.funcs();
     let callee = find_func(&parsed.module, "callee");
     let entry = find_func(&parsed.module, "entry");
-    let backend = test_backend();
+    let backend = osaka_backend();
     let prepared = backend
         .prepare_section(work_module_with_entry(&parsed.module, &funcs, entry))
         .expect("prepare should succeed");
@@ -1323,7 +1315,7 @@ object @Contract {
 
     let funcs = parsed.module.funcs();
     let entry = find_func(&parsed.module, "entry");
-    let backend = test_backend();
+    let backend = osaka_backend();
     let prepared = backend
         .prepare_section(work_module_with_entry(&parsed.module, &funcs, entry))
         .expect("prepare should succeed");
@@ -1335,7 +1327,7 @@ fn prepare_section_error(src: &str) -> String {
     let parsed = parse_module(src).expect("module parses");
     let funcs = parsed.module.funcs();
     let entry = find_func(&parsed.module, "entry");
-    test_backend()
+    osaka_backend()
         .prepare_section(work_module_with_entry(&parsed.module, &funcs, entry))
         .err()
         .expect("prepare should fail")
@@ -1464,7 +1456,7 @@ object @Contract {
     let funcs = parsed.module.funcs();
     let callee = find_func(&parsed.module, "callee");
     let entry = find_func(&parsed.module, "entry");
-    let prepared = test_backend()
+    let prepared = osaka_backend()
         .prepare_section(work_module_with_entry(&parsed.module, &funcs, entry))
         .expect("prepare should succeed");
 
@@ -1648,7 +1640,7 @@ block0:
     )
     .expect("module parses");
     let funcs = parsed.module.funcs();
-    let backend = test_backend();
+    let backend = osaka_backend();
     let ptr_escape = compute_ptr_escape_summaries(&parsed.module, &funcs, &backend.isa);
 
     let mut analyses = FxHashMap::default();
@@ -1766,7 +1758,7 @@ block0:
     )
     .expect("module parses");
     let funcs = parsed.module.funcs();
-    let backend = test_backend();
+    let backend = osaka_backend();
     let ptr_escape = compute_ptr_escape_summaries(&parsed.module, &funcs, &backend.isa);
 
     let mut analyses = FxHashMap::default();
@@ -1850,7 +1842,7 @@ block0:
     )
     .expect("module parses");
     let funcs = parsed.module.funcs();
-    let backend = test_backend();
+    let backend = osaka_backend();
     let ptr_escape = compute_ptr_escape_summaries(&parsed.module, &funcs, &backend.isa);
 
     let mut analyses = FxHashMap::default();
@@ -2426,7 +2418,7 @@ object @Contract {
     let funcs = parsed.module.funcs();
     let verify = find_func(&parsed.module, "verify");
     let entry = find_func(&parsed.module, "entry");
-    let backend = test_backend().with_late_cleanup_profile(LateCleanupProfile::Speed);
+    let backend = osaka_backend().with_late_cleanup_profile(LateCleanupProfile::Speed);
     let prepared = backend
         .prepare_section(work_module_with_entry(&parsed.module, &funcs, entry))
         .expect("prepare should succeed");
@@ -2479,7 +2471,7 @@ object @Contract {
     let funcs = parsed.module.funcs();
     let verify = find_func(&parsed.module, "verify");
     let entry = find_func(&parsed.module, "entry");
-    let backend = test_backend().with_late_cleanup_profile(LateCleanupProfile::Speed);
+    let backend = osaka_backend().with_late_cleanup_profile(LateCleanupProfile::Speed);
     let prepared = backend
         .prepare_section(work_module_with_entry(&parsed.module, &funcs, entry))
         .expect("prepare should succeed");
@@ -2593,7 +2585,7 @@ block0:
     .unwrap();
     let funcs = parsed.module.funcs();
     let entry = find_func(&parsed.module, "entry");
-    let prepared = test_backend()
+    let prepared = osaka_backend()
         .with_late_cleanup_profile(LateCleanupProfile::Off)
         .prepare_section(work_module_with_entry(&parsed.module, &funcs, entry))
         .expect("zero-sized callee-visible alloca should lower without optional cleanup");
@@ -3020,7 +3012,7 @@ object @Contract {
 "#,
         ),
     ];
-    let backend = test_backend();
+    let backend = osaka_backend();
     for (label, source) in sources {
         let parsed = parse_module(source).unwrap();
         let func = parsed.module.funcs()[0];
@@ -3671,7 +3663,7 @@ object @Contract {
         assert!(stamped_le);
     });
 
-    let backend = test_backend().with_late_cleanup_profile(LateCleanupProfile::Off);
+    let backend = osaka_backend().with_late_cleanup_profile(LateCleanupProfile::Off);
     let prepared = backend
         .prepare_section(work_module_with_entry(&parsed.module, &[runtime], runtime))
         .expect("prepare should succeed");
@@ -3843,7 +3835,7 @@ block2:
 "#,
     )
     .expect("module parses");
-    let backend = test_backend().with_late_cleanup_profile(LateCleanupProfile::Speed);
+    let backend = osaka_backend().with_late_cleanup_profile(LateCleanupProfile::Speed);
     let entry = find_func(&parsed.module, "main");
     let prepared = backend
         .prepare_section(work_module_with_entry(&parsed.module, &[entry], entry))
@@ -3940,7 +3932,7 @@ fn caller_spills_survive_transitive_scratch_arena_clobbers() {
         let parsed = parse_module(&source).expect("module parses");
         let entry = find_func(&parsed.module, "entry");
         let clobber = find_func(&parsed.module, "clobber");
-        let backend = test_backend().with_stackify_reach_depth(4);
+        let backend = osaka_backend().with_stackify_reach_depth(4);
         let prepared = backend
             .prepare_section(work_module_with_entry(
                 &parsed.module,

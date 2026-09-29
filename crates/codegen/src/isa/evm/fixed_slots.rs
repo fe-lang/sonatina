@@ -176,6 +176,7 @@ pub(crate) fn machine_inst_is_fixed_slot_clobber(
 
 #[cfg(test)]
 mod tests {
+    use crate::isa::evm::test_util::osaka_triple;
     use rustc_hash::FxHashSet;
     use smallvec::smallvec;
     use sonatina_ir::{
@@ -191,22 +192,13 @@ mod tests {
         module::{FuncRef, ModuleCtx},
     };
     use sonatina_parser::parse_module;
-    use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
 
     use crate::liveness::Liveness;
 
     use super::*;
 
-    fn evm_triple() -> TargetTriple {
-        TargetTriple::new(
-            Architecture::Evm,
-            Vendor::Ethereum,
-            OperatingSystem::Evm(EvmVersion::Osaka),
-        )
-    }
-
     fn machine_builder() -> ModuleBuilder {
-        ModuleBuilder::new(ModuleCtx::new(&EvmMachine::new(evm_triple())))
+        ModuleBuilder::new(ModuleCtx::new(&EvmMachine::new(osaka_triple())))
     }
 
     fn i256(builder: &mut FunctionBuilder<InstInserter>, val: i64) -> ValueId {
