@@ -98,5 +98,5 @@ command runs only the CPU core-proof check. Recursive proofs, precompile APIs,
 unconstrained execution, and performance tuning are outside this slice.
 
 Pull request CI runs the first command on Linux. The `SP1 proof` workflow
-also lints the harness and runs the proof on Linux and macOS, weekly or on
-demand.
+lints the harness and runs the proof on Linux. It runs only on demand, so
+start it when changing the SP1 SDK, the Succinct toolchain, or the SP1 runtime.

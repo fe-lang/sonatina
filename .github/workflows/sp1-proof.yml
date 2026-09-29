@@ -1,21 +1,16 @@
 name: SP1 proof
 
 # Proving takes much longer than executing guests, so pull requests only
-# execute them (see the SP1 job in ci.yml). This workflow also lints the
-# dedicated harness and proves on both hosts.
+# execute them (see the SP1 job in ci.yml). The SP1 SDK and toolchain are
+# pinned, so run this when changing them or the SP1 runtime. It also lints the
+# dedicated harness.
 on:
-  schedule:
-    - cron: "0 6 * * 1"
   workflow_dispatch:
 
 jobs:
   sp1-proof:
-    name: SP1 RV64IM proof (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-15]
+    name: SP1 RV64IM proof
+    runs-on: ubuntu-latest
     steps:
       # The runner context is only available to steps, not job-level env.
       - name: Locate the Succinct toolchain directory
