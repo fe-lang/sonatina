@@ -357,6 +357,27 @@ impl ObjectAccessFacts {
         out
     }
 
+    /// The effects of every instruction in `func`'s layout.
+    pub(crate) fn effects_by_inst(
+        &self,
+        func: &Function,
+        summaries: Option<&ObjectEffectSummaryMap>,
+    ) -> FxHashMap<InstId, ObjectInstEffects> {
+        let insts: Vec<_> = func
+            .layout
+            .iter_block()
+            .flat_map(|block| func.layout.iter_inst(block))
+            .collect();
+        // Entries are large; size the table once instead of moving them while it grows.
+        let mut effects = FxHashMap::with_capacity_and_hasher(insts.len(), Default::default());
+        effects.extend(
+            insts
+                .into_iter()
+                .map(|inst| (inst, self.effects(func, inst, summaries))),
+        );
+        effects
+    }
+
     pub(crate) fn effects(
         &self,
         func: &Function,

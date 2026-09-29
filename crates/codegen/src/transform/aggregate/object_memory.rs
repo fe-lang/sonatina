@@ -192,12 +192,7 @@ impl ObjectMemoryAnalysis {
             return;
         }
 
-        let effects: FxHashMap<_, _> = func
-            .layout
-            .iter_block()
-            .flat_map(|block| func.layout.iter_inst(block))
-            .map(|inst| (inst, accesses.effects(func, inst, object_effects)))
-            .collect();
+        let effects = accesses.effects_by_inst(func, object_effects);
         let mut cfg = ControlFlowGraph::new();
         cfg.compute(func);
         let reachable = cfg.reachable_blocks();
