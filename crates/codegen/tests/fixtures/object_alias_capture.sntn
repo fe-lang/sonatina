@@ -3,6 +3,7 @@
 type @Holder = { objref<i64> };
 type @Slot = enum { #Empty, #Full(objref<i64>) };
 type @Boxed = enum { #Empty, #Full(@Holder) };
+type @Nest = { objref<@Holder> };
 
 func inline(never) private %capture_then_write(v0.objref<i64>, v1.objref<@Holder>, v2.objref<@Holder>) -> i64 {
 block0:
@@ -381,5 +382,191 @@ block0:
     call %write_leaked v0;
     v2.i256 = obj.load v1;
     v3.i64 = trunc v2 i64;
+    return v3;
+}
+
+func inline(never) private %link_then_fill(v0.objref<@Nest>, v1.objref<i64>) {
+block0:
+    v2.objref<@Holder> = obj.alloc @Holder;
+    v3.objref<objref<@Holder>> = obj.proj v0 0.i8;
+    obj.store v3 v2;
+    v4.objref<objref<i64>> = obj.proj v2 0.i8;
+    obj.store v4 v1;
+    return;
+}
+
+func inline(never) private %write_nested(v0.objref<@Nest>) {
+block0:
+    v1.objref<objref<@Holder>> = obj.proj v0 0.i8;
+    v2.objref<@Holder> = obj.load v1;
+    v3.objref<objref<i64>> = obj.proj v2 0.i8;
+    v4.objref<i64> = obj.load v3;
+    obj.store v4 22.i64;
+    return;
+}
+
+func inline(never) private %write_linked_first(v0.objref<@Nest>) -> i64 {
+block0:
+    v1.objref<i64> = obj.alloc i64;
+    obj.store v1 11.i64;
+    call %link_then_fill v0 v1;
+    call %write_nested v0;
+    v2.i64 = obj.load v1;
+    return v2;
+}
+
+func inline(never) public %linked_then_filled() -> i64 {
+block0:
+    v0.objref<@Nest> = obj.alloc @Nest;
+    v1.i64 = call %write_linked_first v0;
+    return v1;
+}
+
+func inline(never) private %return_linked_first(v0.objref<i64>) -> objref<@Nest> {
+block0:
+    v1.objref<@Nest> = obj.alloc @Nest;
+    v2.objref<@Holder> = obj.alloc @Holder;
+    v3.objref<objref<@Holder>> = obj.proj v1 0.i8;
+    obj.store v3 v2;
+    v4.objref<objref<i64>> = obj.proj v2 0.i8;
+    obj.store v4 v0;
+    return v1;
+}
+
+func inline(never) public %returned_then_filled() -> i64 {
+block0:
+    v0.objref<i64> = obj.alloc i64;
+    obj.store v0 11.i64;
+    v1.objref<@Nest> = call %return_linked_first v0;
+    call %write_nested v1;
+    v2.i64 = obj.load v0;
+    return v2;
+}
+
+func inline(never) private %copy_slot(v0.objref<@Holder>, v1.objref<@Holder>) {
+block0:
+    v2.objref<objref<i64>> = obj.proj v0 0.i8;
+    v3.objref<i64> = obj.load v2;
+    v4.objref<objref<i64>> = obj.proj v1 0.i8;
+    obj.store v4 v3;
+    return;
+}
+
+func inline(never) private %write_held(v0.objref<@Holder>) {
+block0:
+    v1.objref<objref<i64>> = obj.proj v0 0.i8;
+    v2.objref<i64> = obj.load v1;
+    obj.store v2 22.i64;
+    return;
+}
+
+func inline(never) private %copy_then_clear(v0.objref<i64>) -> objref<@Holder> {
+block0:
+    v1.objref<@Holder> = obj.alloc @Holder;
+    v2.objref<objref<i64>> = obj.proj v1 0.i8;
+    obj.store v2 v0;
+    v3.objref<@Holder> = obj.alloc @Holder;
+    call %copy_slot v1 v3;
+    v4.objref<i64> = obj.alloc i64;
+    obj.store v2 v4;
+    return v3;
+}
+
+func inline(never) public %copied_then_cleared() -> i64 {
+block0:
+    v0.objref<i64> = obj.alloc i64;
+    obj.store v0 11.i64;
+    v1.objref<@Holder> = call %copy_then_clear v0;
+    v2.objref<objref<i64>> = obj.proj v1 0.i8;
+    v3.objref<i64> = obj.load v2;
+    obj.store v3 22.i64;
+    v4.i64 = obj.load v0;
+    return v4;
+}
+
+func inline(never) private %copy_into_then_clear(v0.objref<i64>, v1.objref<@Holder>) {
+block0:
+    v2.objref<@Holder> = obj.alloc @Holder;
+    v3.objref<objref<i64>> = obj.proj v2 0.i8;
+    obj.store v3 v0;
+    call %copy_slot v2 v1;
+    v4.objref<i64> = obj.alloc i64;
+    obj.store v3 v4;
+    return;
+}
+
+func inline(never) public %copied_arg_then_cleared() -> i64 {
+block0:
+    v0.objref<i64> = obj.alloc i64;
+    obj.store v0 11.i64;
+    v1.objref<@Holder> = obj.alloc @Holder;
+    call %copy_into_then_clear v0 v1;
+    call %write_held v1;
+    v2.i64 = obj.load v0;
+    return v2;
+}
+
+func inline(never) private %copy_nest_slot(v0.objref<@Nest>, v1.objref<@Nest>) {
+block0:
+    v2.objref<objref<@Holder>> = obj.proj v0 0.i8;
+    v3.objref<@Holder> = obj.load v2;
+    v4.objref<objref<@Holder>> = obj.proj v1 0.i8;
+    obj.store v4 v3;
+    return;
+}
+
+func inline(never) private %copy_empty_then_fill(v0.objref<i64>) -> objref<@Nest> {
+block0:
+    v1.objref<@Nest> = obj.alloc @Nest;
+    v2.objref<@Holder> = obj.alloc @Holder;
+    v3.objref<objref<@Holder>> = obj.proj v1 0.i8;
+    obj.store v3 v2;
+    v4.objref<@Nest> = obj.alloc @Nest;
+    call %copy_nest_slot v1 v4;
+    v5.objref<@Holder> = obj.alloc @Holder;
+    obj.store v3 v5;
+    v6.objref<objref<i64>> = obj.proj v2 0.i8;
+    obj.store v6 v0;
+    return v4;
+}
+
+func inline(never) public %copied_empty_then_filled() -> i64 {
+block0:
+    v0.objref<i64> = obj.alloc i64;
+    obj.store v0 11.i64;
+    v1.objref<@Nest> = call %copy_empty_then_fill v0;
+    call %write_nested v1;
+    v2.i64 = obj.load v0;
+    return v2;
+}
+
+func inline(never) private %copy_picked_then_clear(v0.objref<i64>, v1.i1) -> objref<@Holder> {
+block0:
+    v2.objref<@Holder> = obj.alloc @Holder;
+    v3.objref<objref<i64>> = obj.proj v2 0.i8;
+    obj.store v3 v0;
+    v4.objref<i64> = obj.alloc i64;
+    v5.objref<@Holder> = obj.alloc @Holder;
+    v6.objref<objref<i64>> = obj.proj v5 0.i8;
+    obj.store v6 v4;
+    br v1 block1 block2;
+block1:
+    jump block2;
+block2:
+    v7.objref<@Holder> = phi (v5 block0) (v2 block1);
+    v8.objref<@Holder> = obj.alloc @Holder;
+    call %copy_slot v7 v8;
+    obj.store v3 v4;
+    return v8;
+}
+
+func inline(never) public %copied_picked_then_cleared() -> i64 {
+block0:
+    v0.objref<i64> = obj.alloc i64;
+    obj.store v0 11.i64;
+    v1.i1 = call %flag;
+    v2.objref<@Holder> = call %copy_picked_then_clear v0 v1;
+    call %write_held v2;
+    v3.i64 = obj.load v0;
     return v3;
 }
