@@ -223,7 +223,8 @@ impl ObjectAccessFacts {
         let mut cache = AggregateLayoutCache::default();
         let mut snapshot = ProvenanceSnapshot::new(func, summaries);
         let facts = AggregateFacts::for_accesses(func, &mut cache, &mut snapshot);
-        let reachability = ObjectReachability::new(func, summaries, facts.may());
+        let (aliases, ..) = snapshot.into_parts();
+        let reachability = ObjectReachability::new(func, summaries, aliases, facts.may());
         Self {
             facts,
             reachability,

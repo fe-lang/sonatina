@@ -23,22 +23,26 @@ enum ObjectOrigin {
     Fresh { repeating: bool },
 }
 
+#[derive(Clone)]
 pub(crate) struct ObjectAliasFacts {
     origins: FxHashMap<ValueId, ObjectOrigin>,
 }
 
 impl ObjectAliasFacts {
-    pub(crate) fn new(func: &Function, effects: Option<&ObjectEffectSummaryMap>) -> Self {
+    /// `cfg` must be computed from `func`.
+    pub(crate) fn new(
+        func: &Function,
+        cfg: &ControlFlowGraph,
+        effects: Option<&ObjectEffectSummaryMap>,
+    ) -> Self {
         let mut origins = FxHashMap::default();
         for &arg in &func.arg_values {
             if func.dfg.value_ty(arg).is_obj_ref(func.ctx()) {
                 origins.insert(arg, ObjectOrigin::Incoming);
             }
         }
-        let mut cfg = ControlFlowGraph::new();
-        cfg.compute(func);
         let mut sccs = CfgSccAnalysis::new();
-        sccs.compute(&cfg);
+        sccs.compute(cfg);
         for block in func.layout.iter_block() {
             // Disconnected code has no dynamic-instance proof from this CFG.
             let repeating = sccs
@@ -151,7 +155,9 @@ mod tests {
             .find(|&f| module.ctx.func_sig(f, |sig| sig.name() == "f"))
             .unwrap();
         module.func_store.view(f, |func| {
-            let aliases = ObjectAliasFacts::new(func, Some(&effects));
+            let mut cfg = ControlFlowGraph::new();
+            cfg.compute(func);
+            let aliases = ObjectAliasFacts::new(func, &cfg, Some(&effects));
             let mut snapshot = ProvenanceSnapshot::new(func, Some(&effects));
             let facts = AggregateFacts::for_all_objref_args(
                 func,

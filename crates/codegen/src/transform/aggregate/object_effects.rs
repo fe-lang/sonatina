@@ -566,16 +566,13 @@ fn compute_summary_for_func(
             layout_cache,
             &mut snapshot,
         );
-        let aliases = ObjectAliasFacts::new(function, Some(summaries));
+        let (aliases, cfg, reachable) = snapshot.into_parts();
         let effect_provenance = EffectProvenance {
             aliases: &aliases,
             complete: facts.complete(),
             may: facts.may(),
             arg_roots: &arg_roots,
         };
-        let mut cfg = ControlFlowGraph::default();
-        cfg.compute(function);
-        let reachable = cfg.reachable_blocks();
         let return_analysis = analyze_returns(
             function,
             &reachable,
