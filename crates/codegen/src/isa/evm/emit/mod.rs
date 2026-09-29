@@ -165,11 +165,6 @@ impl<'a> EvmMachineFunctionLowering<'a> {
             {
                 self.emit_frame_enter(ctx, frame_layout);
             }
-            if self.lazy_frame_plan_matches(|plan| plan.exit_before_action(site, index))
-                && let Some(frame_layout) = frame_layout
-            {
-                leave_frame(ctx, frame_layout);
-            }
             perform_action(ctx, action, frame_layout);
             if self.lazy_frame_plan_matches(|plan| plan.exit_after_action(site, index))
                 && let Some(frame_layout) = frame_layout

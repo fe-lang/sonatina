@@ -1,0 +1,52 @@
+#! evm.config: { stack_reach: 4, vcode: true }
+#! evm.case: ok
+#!   calldata: u256(3)
+#!   expect: return u256(86)
+
+target = "evm-ethereum-osaka"
+
+func public %entry() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i32;
+        v1.i256 = call %rec v0;
+        mstore 0.i256 v1 i256;
+        evm_return 0.i256 32.i256;
+}
+
+func private %rec(v0.i256) -> i256 {
+    block0:
+        v1.i1 = eq v0 0.i256;
+        br v1 block1 block2;
+
+    block1:
+        return 0.i256;
+
+    block2:
+        v2.i256 = add v0 1.i256;
+        v3.i256 = add v0 2.i256;
+        v4.i256 = add v0 3.i256;
+        v5.i256 = add v0 4.i256;
+        v6.i256 = add v0 5.i256;
+        v7.i256 = add v0 6.i256;
+        v8.i256 = sub v0 1.i256;
+        v9.i256 = call %rec v8;
+        v10.i256 = add v9 v2;
+        v11.i256 = add v10 v3;
+        v12.i256 = add v11 v4;
+        v13.i256 = add v12 v5;
+        v14.i256 = add v13 v6;
+        v15.i256 = add v14 v7;
+        v16.i256 = xor v15 v7;
+        v17.i256 = xor v16 v6;
+        v18.i256 = xor v17 v5;
+        v19.i256 = xor v18 v4;
+        v20.i256 = xor v19 v3;
+        v21.i256 = xor v20 v2;
+        return v21;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}

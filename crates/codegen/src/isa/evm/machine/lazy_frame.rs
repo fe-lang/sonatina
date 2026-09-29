@@ -60,13 +60,6 @@ impl LazyFramePlan {
             .any(|point| point == FrameInjectionPoint::BeforeSite(site))
     }
 
-    pub(crate) fn exit_before_action(&self, site: FrameSite, action_index: usize) -> bool {
-        self.exits
-            .iter()
-            .copied()
-            .any(|point| point == FrameInjectionPoint::BeforeAction { site, action_index })
-    }
-
     pub(crate) fn exit_after_action(&self, site: FrameSite, action_index: usize) -> bool {
         self.exits
             .iter()
@@ -108,9 +101,17 @@ enum PostNode {
     DummyEntry(BlockId),
 }
 
+/// A stretch of lowered code that needs the dynamic frame: the frame must be
+/// entered no later than `enter` and left no earlier than `exit`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct DepPoint {
     block: BlockId,
+    enter: OrderedPoint,
+    exit: OrderedPoint,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct OrderedPoint {
     order: PointOrder,
     point: FrameInjectionPoint,
 }
@@ -265,7 +266,7 @@ fn compute_lazy_frame_plan_inner(
         PostNode::DummyExit(_) => {
             let mut return_blocks: Vec<BlockId> = dep_points
                 .iter()
-                .filter_map(|point| match point.point {
+                .filter_map(|point| match point.exit.point {
                     FrameInjectionPoint::AfterSite(FrameSite::PreInst(inst))
                         if function.dfg.is_return(inst) =>
                     {
@@ -307,8 +308,10 @@ fn compute_active_pre_insts(
     let mut cfg = ControlFlowGraph::default();
     cfg.compute(function);
     let entry_block = function.layout.entry_block()?;
+    let mut entry_active = false;
+    apply_enter_function_state(function, alloc, plan, &mut entry_active);
     let mut active_at_entry: FxHashMap<BlockId, bool> = FxHashMap::default();
-    active_at_entry.insert(entry_block, false);
+    active_at_entry.insert(entry_block, entry_active);
     let mut worklist = vec![entry_block];
     let mut active_pre_insts = FxHashSet::default();
     let machine_isa = sonatina_ir::isa::evm::EvmMachine::new(function.dfg.ctx.triple);
@@ -375,13 +378,15 @@ fn compute_active_pre_insts(
                         }
                     }
                 }
-                _ => apply_actions_state(
-                    plan,
-                    FrameSite::PreInst(inst),
-                    alloc.pre_inst(inst),
-                    0,
-                    &mut active,
-                ),
+                _ => {
+                    apply_actions_state(
+                        plan,
+                        FrameSite::PreInst(inst),
+                        alloc.pre_inst(inst),
+                        0,
+                        &mut active,
+                    );
+                }
             }
 
             apply_site_state(plan, FrameSite::Inst(inst), &mut active);
@@ -425,8 +430,10 @@ fn validate_lazy_frame_activity(
     let mut cfg = ControlFlowGraph::default();
     cfg.compute(function);
     let entry_block = function.layout.entry_block()?;
+    let mut entry_active = false;
+    let mut covered = apply_enter_function_state(function, alloc, plan, &mut entry_active);
     let mut active_at_entry: FxHashMap<BlockId, bool> = FxHashMap::default();
-    active_at_entry.insert(entry_block, false);
+    active_at_entry.insert(entry_block, entry_active);
     let mut worklist = vec![entry_block];
 
     while let Some(block) = worklist.pop() {
@@ -441,8 +448,9 @@ fn validate_lazy_frame_activity(
             if let Some((prefix, suffix, prefix_len)) =
                 split_call_actions(alloc.pre_inst(inst).clone())
             {
-                apply_actions_state(plan, FrameSite::PreInst(inst), &prefix, 0, &mut active);
-                apply_actions_state(
+                covered &=
+                    apply_actions_state(plan, FrameSite::PreInst(inst), &prefix, 0, &mut active);
+                covered &= apply_actions_state(
                     plan,
                     FrameSite::PreInst(inst),
                     &suffix,
@@ -450,7 +458,7 @@ fn validate_lazy_frame_activity(
                     &mut active,
                 );
             } else {
-                apply_actions_state(
+                covered &= apply_actions_state(
                     plan,
                     FrameSite::PreInst(inst),
                     alloc.pre_inst(inst),
@@ -463,7 +471,7 @@ fn validate_lazy_frame_activity(
             apply_after_site_state(plan, FrameSite::Inst(inst), &mut active);
 
             apply_site_state(plan, FrameSite::PostInst(inst), &mut active);
-            apply_actions_state(
+            covered &= apply_actions_state(
                 plan,
                 FrameSite::PostInst(inst),
                 alloc.post_inst(inst),
@@ -486,7 +494,29 @@ fn validate_lazy_frame_activity(
         }
     }
 
-    Some(())
+    // Every frame slot access must run inside the frame; otherwise it would
+    // address the caller's frame through the restored dynamic SP.
+    covered.then_some(())
+}
+
+/// Applies the plan's transitions for the function prologue, returning whether
+/// its frame-touching actions run while the frame is active.
+fn apply_enter_function_state(
+    function: &Function,
+    alloc: &dyn Allocator,
+    plan: &LazyFramePlan,
+    active: &mut bool,
+) -> bool {
+    apply_site_state(plan, FrameSite::EnterFunction, active);
+    let covered = apply_actions_state(
+        plan,
+        FrameSite::EnterFunction,
+        &alloc.enter_function(function),
+        0,
+        active,
+    );
+    apply_after_site_state(plan, FrameSite::EnterFunction, active);
+    covered
 }
 
 fn split_call_actions(
@@ -518,27 +548,29 @@ fn apply_after_site_state(plan: &LazyFramePlan, site: FrameSite, active: &mut bo
     }
 }
 
+/// Applies the plan's transitions around `actions`, returning whether every
+/// frame-touching action runs while the frame is active.
 fn apply_actions_state(
     plan: &LazyFramePlan,
     site: FrameSite,
     actions: &[Action],
     action_index_offset: usize,
     active: &mut bool,
-) {
-    for (index, _) in fold_stack_actions(actions).iter().enumerate() {
+) -> bool {
+    let mut covered = true;
+    for (index, action) in fold_stack_actions(actions).iter().enumerate() {
         let index = action_index_offset
             .checked_add(index)
             .expect("lazy frame action index overflow");
         if plan.enter_before_action(site, index) {
             *active = true;
         }
-        if plan.exit_before_action(site, index) {
-            *active = false;
-        }
+        covered &= *active || !action_touches_frame(action);
         if plan.exit_after_action(site, index) {
             *active = false;
         }
     }
+    covered
 }
 
 fn collect_dep_points(
@@ -648,6 +680,7 @@ fn collect_dep_points(
                     &order,
                     block,
                     FrameInjectionPoint::BeforeSite(FrameSite::PreInst(inst)),
+                    FrameInjectionPoint::BeforeSite(FrameSite::PostInst(inst)),
                 );
             }
 
@@ -734,7 +767,7 @@ fn collect_root_use_dep_points(
     inst: InstId,
     data: &EvmMachineInstKind,
     out: &mut Vec<DepPoint>,
-    seen: &mut FxHashSet<FrameInjectionPoint>,
+    seen: &mut FxHashSet<(FrameInjectionPoint, FrameInjectionPoint)>,
 ) {
     let rooted_operands: FxHashSet<ValueId> = function
         .dfg
@@ -753,6 +786,7 @@ fn collect_root_use_dep_points(
             seen,
             root_use.order,
             block,
+            FrameInjectionPoint::BeforeSite(FrameSite::PreInst(inst)),
             FrameInjectionPoint::BeforeSite(FrameSite::PostInst(inst)),
         );
     }
@@ -764,6 +798,7 @@ fn collect_root_use_dep_points(
                 seen,
                 root_use.order,
                 ret_block,
+                FrameInjectionPoint::BeforeSite(FrameSite::PreInst(ret_inst)),
                 FrameInjectionPoint::AfterSite(FrameSite::PreInst(ret_inst)),
             );
         }
@@ -837,7 +872,7 @@ fn compute_reachable_returns(
 
 fn collect_action_dep_points(
     out: &mut Vec<DepPoint>,
-    seen: &mut FxHashSet<FrameInjectionPoint>,
+    seen: &mut FxHashSet<(FrameInjectionPoint, FrameInjectionPoint)>,
     order: &PointOrderTable,
     block: BlockId,
     site: FrameSite,
@@ -846,53 +881,54 @@ fn collect_action_dep_points(
 ) {
     let folded = fold_stack_actions(actions);
     for (index, action) in folded.iter().enumerate() {
-        if matches!(
-            action,
-            Action::MemLoadFrameSlot(_)
-                | Action::MemStoreFrameSlot(_)
-                | Action::PushFrameAddr { .. }
-        ) {
+        if action_touches_frame(action) {
+            let action_index = action_index_offset
+                .checked_add(index)
+                .expect("frame action index overflow");
             push_dep_point(
                 out,
                 seen,
                 order,
                 block,
-                FrameInjectionPoint::BeforeAction {
-                    site,
-                    action_index: action_index_offset
-                        .checked_add(index)
-                        .expect("frame action index overflow"),
-                },
+                FrameInjectionPoint::BeforeAction { site, action_index },
+                FrameInjectionPoint::AfterAction { site, action_index },
             );
         }
     }
 }
 
+/// Frame slot accesses address the frame through the current dynamic SP, so
+/// they must run while the frame is entered.
+fn action_touches_frame(action: &Action) -> bool {
+    matches!(
+        action,
+        Action::MemLoadFrameSlot(_) | Action::MemStoreFrameSlot(_) | Action::PushFrameAddr { .. }
+    )
+}
+
 fn actions_touch_frame(actions: &[Action]) -> bool {
-    fold_stack_actions(actions).iter().any(|action| {
-        matches!(
-            action,
-            Action::MemLoadFrameSlot(_)
-                | Action::MemStoreFrameSlot(_)
-                | Action::PushFrameAddr { .. }
-        )
-    })
+    fold_stack_actions(actions).iter().any(action_touches_frame)
 }
 
 fn push_dep_point(
     out: &mut Vec<DepPoint>,
-    seen: &mut FxHashSet<FrameInjectionPoint>,
+    seen: &mut FxHashSet<(FrameInjectionPoint, FrameInjectionPoint)>,
     order: &PointOrderTable,
     block: BlockId,
-    point: FrameInjectionPoint,
+    enter: FrameInjectionPoint,
+    exit: FrameInjectionPoint,
 ) {
-    if !seen.insert(point) {
+    if !seen.insert((enter, exit)) {
         return;
     }
-    out.push(DepPoint {
-        block,
+    let ordered = |point| OrderedPoint {
         order: order.key(block, point),
         point,
+    };
+    out.push(DepPoint {
+        block,
+        enter: ordered(enter),
+        exit: ordered(exit),
     });
 }
 
@@ -900,16 +936,18 @@ fn earliest_point_in_block(points: &[DepPoint], block: BlockId) -> Option<FrameI
     points
         .iter()
         .filter(|point| point.block == block)
-        .min_by_key(|point| point.order)
-        .map(|point| point.point)
+        .map(|point| point.enter)
+        .min_by_key(|enter| enter.order)
+        .map(|enter| enter.point)
 }
 
 fn latest_point_in_block(points: &[DepPoint], block: BlockId) -> Option<FrameInjectionPoint> {
     points
         .iter()
         .filter(|point| point.block == block)
-        .max_by_key(|point| point.order)
-        .map(|point| point.point)
+        .map(|point| point.exit)
+        .max_by_key(|exit| exit.order)
+        .map(|exit| exit.point)
 }
 
 fn latest_point_in_block_or_entry(points: &[DepPoint], block: BlockId) -> FrameInjectionPoint {
@@ -1113,6 +1151,118 @@ mod tests {
         fn br_table_case(&self, inst: InstId, case_index: usize) -> &Actions {
             &self.cases[inst][case_index]
         }
+    }
+
+    /// `block2` stores a frame slot and reloads it, then returns.
+    fn frame_slot_round_trip() -> (sonatina_parser::ParsedModule, [InstId; 2]) {
+        const SRC: &str = r#"
+target = "evm-ethereum-osaka"
+
+func public %f(v0.i1, v1.i256) -> i256 {
+block0:
+    br v0 block1 block2;
+
+block1:
+    return 0.i256;
+
+block2:
+    v2.i256 = add v1 1.i256;
+    v3.i256 = add v2 2.i256;
+    return v3;
+}
+"#;
+
+        let parsed = parse_module(SRC).expect("module parses");
+        let func_ref = parsed.debug.func_order[0];
+        let insts = parsed.module.func_store.view(func_ref, |function| {
+            let inst = |name| {
+                let value = parsed.debug.value(func_ref, name).expect("value exists");
+                function
+                    .dfg
+                    .value_inst(value)
+                    .expect("value should be instruction-defined")
+            };
+            [inst("v2"), inst("v3")]
+        });
+        (parsed, insts)
+    }
+
+    #[test]
+    fn lazy_frame_exit_follows_the_last_frame_slot_access() {
+        let (parsed, [store_inst, load_inst]) = frame_slot_round_trip();
+        let func_ref = parsed.debug.func_order[0];
+        parsed.module.func_store.view(func_ref, |function| {
+            let mut alloc = TestAlloc::for_function(function);
+            alloc.pre[store_inst].push(Action::MemStoreFrameSlot(0));
+            alloc.pre[load_inst].push(Action::MemLoadFrameSlot(0));
+
+            let plan =
+                compute_lazy_frame_plan_inner(function, &alloc, &MachineFrameRoots::default())
+                    .expect("frame slot accesses should produce a lazy frame plan");
+            assert!(plan.enter_before_action(FrameSite::PreInst(store_inst), 0));
+            assert_eq!(
+                plan.exits,
+                vec![FrameInjectionPoint::AfterAction {
+                    site: FrameSite::PreInst(load_inst),
+                    action_index: 0,
+                }],
+                "the frame must be left after the final reload, not before it"
+            );
+            assert!(validate_lazy_frame_activity(function, &alloc, &plan).is_some());
+        });
+    }
+
+    #[test]
+    fn lazy_frame_validation_rejects_frame_slot_access_after_exit() {
+        let (parsed, [store_inst, load_inst]) = frame_slot_round_trip();
+        let func_ref = parsed.debug.func_order[0];
+        parsed.module.func_store.view(func_ref, |function| {
+            let mut alloc = TestAlloc::for_function(function);
+            alloc.pre[store_inst].push(Action::MemStoreFrameSlot(0));
+            alloc.pre[load_inst].push(Action::MemLoadFrameSlot(0));
+
+            let plan = LazyFramePlan {
+                enter: FrameInjectionPoint::BeforeAction {
+                    site: FrameSite::PreInst(store_inst),
+                    action_index: 0,
+                },
+                exits: vec![FrameInjectionPoint::BeforeSite(FrameSite::PreInst(
+                    load_inst,
+                ))],
+            };
+            assert!(validate_lazy_frame_activity(function, &alloc, &plan).is_none());
+        });
+    }
+
+    #[test]
+    fn lazy_frame_activity_starts_after_the_function_prologue() {
+        let (parsed, [_, load_inst]) = frame_slot_round_trip();
+        let func_ref = parsed.debug.func_order[0];
+        parsed.module.func_store.view(func_ref, |function| {
+            let mut alloc = TestAlloc::for_function(function);
+            alloc.enter.push(Action::MemStoreFrameSlot(0));
+            alloc.pre[load_inst].push(Action::MemLoadFrameSlot(0));
+
+            let plan = LazyFramePlan {
+                enter: FrameInjectionPoint::BeforeAction {
+                    site: FrameSite::EnterFunction,
+                    action_index: 0,
+                },
+                exits: vec![
+                    FrameInjectionPoint::BeforeSite(FrameSite::BlockEntry(
+                        function.layout.iter_block().nth(1).expect("block1 exists"),
+                    )),
+                    FrameInjectionPoint::AfterAction {
+                        site: FrameSite::PreInst(load_inst),
+                        action_index: 0,
+                    },
+                ],
+            };
+            assert!(
+                validate_lazy_frame_activity(function, &alloc, &plan).is_some(),
+                "an enter in the prologue makes the body's frame accesses active"
+            );
+        });
     }
 
     #[test]
