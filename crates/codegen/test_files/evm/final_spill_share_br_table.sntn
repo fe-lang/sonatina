@@ -1,0 +1,94 @@
+#! evm.config: { stack_reach: 4, mem_plan_detail: true }
+#! evm.case: case_zero
+#!   calldata: u256(8)
+#!   expect: return u256(172)
+#! evm.case: case_one
+#!   calldata: u256(9)
+#!   expect: return u256(184)
+#! evm.case: case_two
+#!   calldata: u256(10)
+#!   expect: return u256(196)
+#! evm.case: default
+#!   calldata: u256(11)
+#!   expect: return u256(208)
+
+# The br_table scrutinee v1 is spilled across the call, and every case reloads
+# it before its compare. Its word is dead in the destinations, so a spill live
+# across the call in block5 may reuse it.
+
+target = "evm-ethereum-osaka"
+
+func public %entry() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i32;
+        v1.i256 = call %dispatch v0;
+        mstore 0.i256 v1 i256;
+        evm_return 0.i256 32.i256;
+}
+
+func private %one() -> i256 {
+    block0:
+        v0.*[i256; 2] = alloca [i256; 2];
+        v1.i256 = ptr_to_int v0 i256;
+        mstore v1 1.i256 i256;
+        v2.i256 = mload v1 i256;
+        return v2;
+}
+
+func private %dispatch(v0.i256) -> i256 {
+    block0:
+        v1.i256 = and v0 3.i256;
+        v2.i256 = add v0 1.i256;
+        v3.i256 = add v0 2.i256;
+        v4.i256 = add v0 3.i256;
+        v5.i256 = add v0 4.i256;
+        v25.i256 = add v0 5.i256;
+        v26.i256 = add v0 6.i256;
+        v27.i256 = add v0 7.i256;
+        v28.i256 = add v0 8.i256;
+        v6.i256 = call %one;
+        br_table v1 block4 (0.i256 block1) (1.i256 block2) (2.i256 block3);
+
+    block1:
+        v29.i256 = add v2 v28;
+        v7.i256 = mul v29 v6;
+        jump block5;
+
+    block2:
+        v30.i256 = add v3 v27;
+        v8.i256 = mul v30 v6;
+        jump block5;
+
+    block3:
+        v31.i256 = add v4 v26;
+        v9.i256 = mul v31 v6;
+        jump block5;
+
+    block4:
+        v32.i256 = add v5 v25;
+        v10.i256 = mul v32 v6;
+        jump block5;
+
+    block5:
+        v11.i256 = phi (v7 block1) (v8 block2) (v9 block3) (v10 block4);
+        v12.i256 = add v11 1.i256;
+        v13.i256 = add v11 2.i256;
+        v14.i256 = add v11 3.i256;
+        v15.i256 = add v11 4.i256;
+        v16.i256 = add v11 5.i256;
+        v17.i256 = add v11 6.i256;
+        v18.i256 = call %one;
+        v19.i256 = add v18 v12;
+        v20.i256 = add v19 v13;
+        v21.i256 = add v20 v14;
+        v22.i256 = add v21 v15;
+        v23.i256 = add v22 v16;
+        v24.i256 = add v23 v17;
+        return v24;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}
