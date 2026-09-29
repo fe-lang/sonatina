@@ -19,7 +19,7 @@ use super::{
         CaptureRelevantInst, RootCaptureMap as SharedRootCaptureMap, RootCapturePayload,
         capture_relevant_inst, compute_capture_states_for_blocks as compute_block_capture_states,
         kill_capture_access as kill_capture_projection_access, kill_enum_variant_captures,
-        slices_overlap_relative,
+        merge_root_capture_maps, slices_overlap_relative,
     },
     object_alias::ObjectAliasFacts,
     object_locality::object_root_stays_local_with_effects,
@@ -91,7 +91,9 @@ pub(crate) struct ObjectCaptureEffect {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct RootCaptureEffect {
     dst_slice: shape::AggregateSlice,
-    /// The stored reference's target; `None` is an unresolved reference.
+    /// A target the slice may reach directly: a stored reference's target, or
+    /// anything an imported call capture's source reached before the call.
+    /// `None` is an unresolved reference.
     src: Option<Projection>,
 }
 
@@ -1443,11 +1445,20 @@ fn merge_call_capture_effects(
     callee_captures: &[ObjectCaptureEffect],
 ) {
     let call_result = single_result_value(function, inst);
+    // A summary capture is a may-reach fact, not a link to the source holder:
+    // the destination may hold references copied out of it. Link everything the
+    // source reaches before the call, so that overwriting the holder afterwards
+    // keeps those copies. Every import sees the same pre-call captures.
+    let mut imported = RootCaptureMap::default();
     for capture in callee_captures {
         let Some(&src_arg) = call.args().get(capture.src_arg) else {
             continue;
         };
-        let targets = capture_targets(capture_ctx, src_arg, Some(capture.src_slice));
+        let targets = reachable_capture_targets(
+            root_captures,
+            capture_ctx,
+            capture_targets(capture_ctx, src_arg, Some(capture.src_slice)),
+        );
         let dst_roots = match capture.dst {
             ObjectCaptureDestination::Arg { index, slice } => call
                 .args()
@@ -1458,8 +1469,9 @@ fn merge_call_capture_effects(
                 .map(|result| map_capture_slice_into_roots(capture_ctx, result, slice))
                 .unwrap_or_default(),
         };
-        record_root_capture_effects(root_captures, &dst_roots, &targets);
+        record_root_capture_effects(&mut imported, &dst_roots, &targets);
     }
+    merge_root_capture_maps(root_captures, &imported);
 }
 
 fn record_capture(
@@ -1536,34 +1548,58 @@ fn capture_targets(
     targets
 }
 
-/// Closes over the current captures, so a holder linked into an object before it
-/// is filled still carries what it receives later.
+/// Argument slices among the [`reachable_capture_targets`] of `targets`.
 fn reachable_arg_slices(
     root_captures: &RootCaptureMap,
     capture_ctx: EffectProvenance<'_>,
     targets: impl IntoIterator<Item = Option<Projection>>,
 ) -> Vec<(usize, shape::AggregateSlice)> {
     let mut src_slices = Vec::new();
+    for target in reachable_capture_targets(root_captures, capture_ctx, targets) {
+        match target {
+            // I7: an unresolved contributor can carry any argument; observed IDs
+            // are only a lower bound.
+            None => {
+                src_slices.extend(capture_ctx.arg_roots.iter().filter_map(|(&root, &index)| {
+                    capture_ctx
+                        .complete
+                        .exact_root_slice(root)
+                        .map(|slice| (index, slice))
+                }))
+            }
+            Some(target) => {
+                if let Some(&index) = capture_ctx.arg_roots.get(&target.root_value) {
+                    src_slices.push((index, target.slice));
+                }
+            }
+        }
+    }
+    dedup_capture_source_slices(&mut src_slices);
+    src_slices
+}
+
+/// `targets` and everything they reach through the current captures. Closing at
+/// query time means a holder linked into an object before it is filled still
+/// carries what it receives later.
+fn reachable_capture_targets(
+    root_captures: &RootCaptureMap,
+    capture_ctx: EffectProvenance<'_>,
+    targets: impl IntoIterator<Item = Option<Projection>>,
+) -> Vec<Option<Projection>> {
+    let mut reached = Vec::new();
     let mut worklist: Vec<_> = targets.into_iter().collect();
     let mut seen = FxHashSet::default();
     while let Some(target) = worklist.pop() {
         if !seen.insert(target) {
             continue;
         }
+        reached.push(target);
         let Some(target) = target else {
-            // I7: an unresolved contributor can carry an argument or a reference
-            // currently held in any object; observed IDs are only a lower bound.
-            for (&root, &index) in capture_ctx.arg_roots {
-                if let Some(slice) = capture_ctx.complete.exact_root_slice(root) {
-                    src_slices.push((index, slice));
-                }
-            }
+            // I7: an unresolved contributor can carry a reference currently held
+            // in any object.
             worklist.extend(root_captures.values().flatten().map(|capture| capture.src));
             continue;
         };
-        if let Some(&index) = capture_ctx.arg_roots.get(&target.root_value) {
-            src_slices.push((index, target.slice));
-        }
         for (&root_value, captures) in root_captures {
             worklist.extend(
                 captures
@@ -1581,8 +1617,7 @@ fn reachable_arg_slices(
             );
         }
     }
-    dedup_capture_source_slices(&mut src_slices);
-    src_slices
+    reached
 }
 
 fn capture_source_slices_for_slice_set(
@@ -2514,6 +2549,99 @@ block0:
         ] {
             assert_eq!(summary(linked_first), summary(filled_first));
         }
+    }
+
+    #[test]
+    fn copied_call_captures_survive_source_holder_overwrite() {
+        let module = parse_test_module(
+            r#"
+target = "evm-ethereum-osaka"
+
+type @Holder = { objref<i256> };
+type @Nest = { objref<@Holder> };
+
+func private %copy_slot(v0.objref<@Holder>, v1.objref<@Holder>) {
+block0:
+    v2.objref<objref<i256>> = obj.proj v0 0.i8;
+    v3.objref<i256> = obj.load v2;
+    v4.objref<objref<i256>> = obj.proj v1 0.i8;
+    obj.store v4 v3;
+    return;
+}
+
+func private %copy_into_then_clear(v0.objref<i256>, v1.objref<@Holder>) {
+block0:
+    v2.objref<@Holder> = obj.alloc @Holder;
+    v3.objref<objref<i256>> = obj.proj v2 0.i8;
+    obj.store v3 v0;
+    call %copy_slot v2 v1;
+    v4.objref<i256> = obj.alloc i256;
+    obj.store v3 v4;
+    return;
+}
+
+func private %copy_then_clear(v0.objref<i256>) -> objref<@Holder> {
+block0:
+    v1.objref<@Holder> = obj.alloc @Holder;
+    v2.objref<objref<i256>> = obj.proj v1 0.i8;
+    obj.store v2 v0;
+    v3.objref<@Holder> = obj.alloc @Holder;
+    call %copy_slot v1 v3;
+    v4.objref<i256> = obj.alloc i256;
+    obj.store v2 v4;
+    return v3;
+}
+
+func private %copy_nest_slot(v0.objref<@Nest>, v1.objref<@Nest>) {
+block0:
+    v2.objref<objref<@Holder>> = obj.proj v0 0.i8;
+    v3.objref<@Holder> = obj.load v2;
+    v4.objref<objref<@Holder>> = obj.proj v1 0.i8;
+    obj.store v4 v3;
+    return;
+}
+
+func private %copy_empty_into_then_fill(v0.objref<i256>, v1.objref<@Nest>) {
+block0:
+    v2.objref<@Nest> = obj.alloc @Nest;
+    v3.objref<@Holder> = obj.alloc @Holder;
+    v4.objref<objref<@Holder>> = obj.proj v2 0.i8;
+    obj.store v4 v3;
+    call %copy_nest_slot v2 v1;
+    v5.objref<@Holder> = obj.alloc @Holder;
+    obj.store v4 v5;
+    v6.objref<objref<i256>> = obj.proj v3 0.i8;
+    obj.store v6 v0;
+    return;
+}
+"#,
+        );
+
+        let summaries = compute_object_effect_summaries(&module);
+        let summary = |name| &summaries[&lookup_func(&module, name)];
+        assert!(has_arg_capture(summary("copy_slot"), 1, 0, 1, 0, 0, 1));
+        assert!(has_arg_capture(
+            summary("copy_into_then_clear"),
+            1,
+            0,
+            1,
+            0,
+            0,
+            1
+        ));
+        let copy_then_clear = summary("copy_then_clear");
+        assert_eq!(copy_then_clear.ret_effect, ObjectReturnEffect::Unknown);
+        assert!(copy_then_clear.arg_effects[0].escapes);
+        assert!(!copy_then_clear.arg_effects[0].local_only);
+        assert!(has_arg_capture(
+            summary("copy_empty_into_then_fill"),
+            1,
+            0,
+            1,
+            0,
+            0,
+            1
+        ));
     }
 
     #[test]
