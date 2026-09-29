@@ -1,7 +1,8 @@
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use bitflags::bitflags;
 use cranelift_entity::entity_impl;
+use crossbeam_utils::sync::ShardedLock;
 use dashmap::{DashMap, ReadOnlyView};
 use parking_lot::RwLock;
 use rayon::{iter::IntoParallelIterator, prelude::ParallelIterator};
@@ -262,7 +263,9 @@ pub struct ModuleCtx {
     pub declared_funcs: Arc<DashMap<FuncRef, Signature>>,
     func_effects: Arc<RwLock<FxHashMap<FuncRef, FuncEffectSummary>>>,
     func_hints: Arc<RwLock<FxHashMap<FuncRef, FuncHints>>>,
-    type_store: Arc<RwLock<TypeStore>>,
+    /// Function passes on every Rayon worker query types constantly and rarely
+    /// intern new ones. A sharded lock keeps those readers from contending.
+    type_store: Arc<ShardedLock<TypeStore>>,
     gv_store: Arc<RwLock<GlobalVariableStore>>,
 }
 impl AsRef<ModuleCtx> for ModuleCtx {
@@ -278,7 +281,7 @@ impl ModuleCtx {
             inst_set: isa.inst_set(),
             type_layout: isa.type_layout(),
             address_spaces: isa.address_spaces(),
-            type_store: Arc::new(RwLock::new(TypeStore::default())),
+            type_store: Arc::new(ShardedLock::new(TypeStore::default())),
             declared_funcs: Arc::new(DashMap::new()),
             func_effects: Arc::new(RwLock::new(FxHashMap::default())),
             func_hints: Arc::new(RwLock::new(FxHashMap::default())),
@@ -312,7 +315,7 @@ impl ModuleCtx {
             declared_funcs: Arc::new(declared_funcs),
             func_effects: Arc::new(RwLock::new(func_effects)),
             func_hints: Arc::new(RwLock::new(func_hints)),
-            type_store: Arc::new(RwLock::new(self.type_store.read().clone())),
+            type_store: Arc::new(ShardedLock::new(self.with_ty_store(TypeStore::clone))),
             gv_store: Arc::new(RwLock::new(self.gv_store.read().clone())),
         }
     }
@@ -332,7 +335,7 @@ impl ModuleCtx {
             declared_funcs: Arc::new(DashMap::new()),
             func_effects: Arc::new(RwLock::new(FxHashMap::default())),
             func_hints: Arc::new(RwLock::new(FxHashMap::default())),
-            type_store: Arc::new(RwLock::new(self.type_store.read().clone())),
+            type_store: Arc::new(ShardedLock::new(self.with_ty_store(TypeStore::clone))),
             gv_store: Arc::new(RwLock::new(self.gv_store.read().clone())),
         }
     }
@@ -534,14 +537,20 @@ impl ModuleCtx {
     where
         F: FnOnce(&TypeStore) -> R,
     {
-        f(&self.type_store.read())
+        f(&self
+            .type_store
+            .read()
+            .unwrap_or_else(PoisonError::into_inner))
     }
 
     pub fn with_ty_store_mut<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut TypeStore) -> R,
     {
-        f(&mut self.type_store.write())
+        f(&mut self
+            .type_store
+            .write()
+            .unwrap_or_else(PoisonError::into_inner))
     }
 
     pub fn with_gv_store<F, R>(&self, f: F) -> R

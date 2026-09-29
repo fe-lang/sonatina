@@ -2471,6 +2471,7 @@ dependencies = [
  "bit-set",
  "bitflags 2.10.0",
  "cranelift-entity 0.126.1",
+ "crossbeam-utils",
  "dashmap",
  "dot2",
  "dyn-clone",
