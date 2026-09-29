@@ -198,6 +198,9 @@ impl Inliner {
             });
         }
 
+        // Callee bodies found rewriteable for full inlining. Only callers are
+        // edited, and each edit drops that caller's entry.
+        let mut validated_callees: FxHashSet<cost::SummaryKey> = FxHashSet::default();
         let mut iter = 0;
         while iter < MAX_ITERS {
             let funcs = module.funcs();
@@ -227,6 +230,8 @@ impl Inliner {
             let depth_at_iter_start = inline_depth_by_func.clone();
             let mut inlinee_summaries: FxHashMap<cost::SummaryKey, cost::InlineeSummary> =
                 FxHashMap::default();
+            // Recursive snapshots are taken afresh each iteration.
+            validated_callees.retain(|key| matches!(key, cost::SummaryKey::Live(_)));
 
             let mut changed = false;
             for caller_ref in caller_order {
@@ -312,6 +317,7 @@ impl Inliner {
                         changed = true;
                         changes.apply(&mut call_counts);
                         inlinee_summaries.remove(&cost::SummaryKey::Live(caller_ref));
+                        validated_callees.remove(&cost::SummaryKey::Live(caller_ref));
                         forced_recursive_inline_succeeded |= recursive_callsite && always_inline;
                         // Most trivial plans don't change CFG reachability.
                         // Terminator splicing can make reachable blocks unreachable.
@@ -401,7 +407,8 @@ impl Inliner {
                             &mut caller_func,
                             site.call_inst,
                             site.callee,
-                            callee,
+                            (cost::SummaryKey::Snapshot(site.callee), callee),
+                            &mut validated_callees,
                         )
                     } else {
                         module.func_store.view(site.callee, |callee| {
@@ -410,7 +417,8 @@ impl Inliner {
                                 &mut caller_func,
                                 site.call_inst,
                                 site.callee,
-                                callee,
+                                (cost::SummaryKey::Live(site.callee), callee),
+                                &mut validated_callees,
                             )
                         })
                     };
@@ -421,6 +429,7 @@ impl Inliner {
                             changed = true;
                             result.call_changes.apply(&mut call_counts);
                             inlinee_summaries.remove(&cost::SummaryKey::Live(caller_ref));
+                            validated_callees.remove(&cost::SummaryKey::Live(caller_ref));
                             forced_recursive_inline_succeeded |=
                                 recursive_callsite && always_inline;
 

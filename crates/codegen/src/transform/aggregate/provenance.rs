@@ -396,7 +396,7 @@ impl<'a> ProvenanceSnapshot<'a> {
         cfg.compute(func);
         let reachable = cfg.reachable_blocks();
         Self {
-            aliases: ObjectAliasFacts::new(func, object_effects),
+            aliases: ObjectAliasFacts::new(func, &cfg, object_effects),
             value_capacity,
             single_result_insts,
             possible_root_transfers,
@@ -411,6 +411,17 @@ impl<'a> ProvenanceSnapshot<'a> {
 
     pub(crate) fn object_effects(&self) -> Option<&'a ObjectEffectSummaryMap> {
         self.object_effects
+    }
+
+    /// The alias facts, CFG, and reachable blocks of the snapshot's function.
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        ObjectAliasFacts,
+        ControlFlowGraph,
+        SecondaryMap<BlockId, bool>,
+    ) {
+        (self.aliases, self.cfg, self.reachable)
     }
 
     pub(crate) fn collect_root_provenance(
@@ -961,6 +972,7 @@ fn refine_possible_roots_from_objref_loads(
         let reachability = ObjectReachability::new(
             func,
             snapshot.object_effects,
+            snapshot.aliases.clone(),
             MayProvenance {
                 possible_roots: &possible_roots_snapshot,
                 maybe_unknown: &maybe_unknown_snapshot,

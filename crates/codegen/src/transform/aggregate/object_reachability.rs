@@ -47,9 +47,9 @@ impl ObjectReachability {
     pub(crate) fn new(
         func: &Function,
         summaries: Option<&ObjectEffectSummaryMap>,
+        aliases: ObjectAliasFacts,
         may: MayProvenance<'_>,
     ) -> Self {
-        let aliases = ObjectAliasFacts::new(func, summaries);
         let roots: FxHashSet<_> = func
             .dfg
             .value_ids()

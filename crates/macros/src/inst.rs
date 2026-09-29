@@ -437,23 +437,22 @@ impl InstStruct {
         quote! {
             impl<'a> crate::InstDowncast<'a> for &'a #struct_name {
                 fn downcast(isb: &dyn crate::InstSetBase, inst: &'a dyn crate::Inst) -> Option<Self> {
-                    let hi = isb.#has_inst_method()?;
-                    if hi.is(inst) {
-                        unsafe { Some(&*(inst as *const dyn crate::Inst as *const #struct_name)) }
-                    } else {
-                        None
+                    // Most downcasts fail, so compare the type before asking the ISA.
+                    if inst.type_id() != ::std::any::TypeId::of::<#struct_name>() {
+                        return None;
                     }
+                    isb.#has_inst_method()?;
+                    unsafe { Some(&*(inst as *const dyn crate::Inst as *const #struct_name)) }
                 }
             }
 
             impl<'a> crate::InstDowncastMut<'a> for &'a mut #struct_name {
                 fn downcast_mut(isb: &dyn crate::InstSetBase, inst: &'a mut dyn crate::Inst) -> Option<Self> {
-                    let hi = isb.#has_inst_method()?;
-                    if hi.is(inst) {
-                        unsafe { Some(&mut *(inst as *mut dyn crate::Inst as *mut #struct_name)) }
-                    } else {
-                        None
+                    if inst.type_id() != ::std::any::TypeId::of::<#struct_name>() {
+                        return None;
                     }
+                    isb.#has_inst_method()?;
+                    unsafe { Some(&mut *(inst as *mut dyn crate::Inst as *mut #struct_name)) }
                 }
             }
         }
