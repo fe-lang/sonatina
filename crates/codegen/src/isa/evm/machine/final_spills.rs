@@ -306,7 +306,7 @@ impl FinalSpillChoiceCtx<'_> {
                 has_dynamic_frames,
                 has_stackify_fixed_slot_spills,
                 backend_spill_scratch_reserve_words: reserve_scratch_peak,
-                has_persistent_mallocs: self.base_placement.has_persistent_mallocs,
+                has_heap_mallocs: self.base_placement.has_heap_mallocs,
             },
         );
         let global_dyn_base = arena_base
