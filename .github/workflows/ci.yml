@@ -117,9 +117,10 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, macos-15]
-    env:
-      SONATINA_SP1_TOOLCHAIN: ${{ runner.temp }}/sonatina-sp1-toolchain
     steps:
+      # The runner context is only available to steps, not job-level env.
+      - name: Locate the Succinct toolchain directory
+        run: echo "SONATINA_SP1_TOOLCHAIN=$RUNNER_TEMP/sonatina-sp1-toolchain" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
