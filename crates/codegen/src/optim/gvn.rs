@@ -2192,6 +2192,11 @@ impl ValuePhiInsn {
     }
 
     /// Canonicalize the value phi insn and convert into value phi.
+    ///
+    /// Returns `None` if resolving the value phi would need two different phi insns in one
+    /// block. Such a value phi tells apart the paths through a chain of joins, e.g. an if-ladder
+    /// that accumulates constants, and resolving it can insert a phi for every path:
+    /// exponentially many in the length of the chain.
     fn canonicalize(mut self) -> Option<ValuePhi> {
         let first_arg = &self.args.first()?.0;
 
@@ -2205,8 +2210,27 @@ impl ValuePhiInsn {
         } else {
             // Sort arguments in block order.
             self.args.sort_by_key(|(_, block)| *block);
-            Some(ValuePhi::PhiInsn(self))
+            self.places_one_phi_per_block()
+                .then_some(ValuePhi::PhiInsn(self))
         }
+    }
+
+    /// Returns `true` if no two different phi insns of this value phi share a block. Equal phi
+    /// insns are resolved to a single phi.
+    fn places_one_phi_per_block(&self) -> bool {
+        let mut placed = FxHashMap::default();
+        let mut pending = vec![self];
+        while let Some(insn) = pending.pop() {
+            match placed.insert(insn.block, insn) {
+                Some(placed_insn) if placed_insn != insn => return false,
+                Some(_) => {}
+                None => pending.extend(insn.args.iter().filter_map(|(arg, _)| match arg {
+                    ValuePhi::PhiInsn(insn) => Some(insn),
+                    ValuePhi::Value(_) => None,
+                })),
+            }
+        }
+        true
     }
 }
 
@@ -2647,7 +2671,7 @@ mod tests {
         domtree::DomTree,
     };
     use sonatina_ir::{
-        ControlFlowGraph, Function, Immediate, Type, ValueId,
+        BlockId, ControlFlowGraph, Function, Immediate, Type, ValueId,
         inst::{CastInstKind, OwnedInstKey},
         ir_writer::FuncWriter,
     };
@@ -3421,5 +3445,37 @@ func private %entry() -> i256 {
             );
             assert_eq!(func.dfg.value_imm(folded), Some(Immediate::one(Type::I256)));
         });
+    }
+
+    #[test]
+    fn value_phi_needs_at_most_one_phi_per_block() {
+        let value = |value| ValuePhi::Value(ValueId::from_u32(value));
+        let join = |lhs, rhs| {
+            ValuePhiInsn {
+                block: BlockId::from_u32(1),
+                args: vec![
+                    (value(lhs), BlockId::from_u32(2)),
+                    (value(rhs), BlockId::from_u32(3)),
+                ],
+            }
+            .canonicalize()
+            .unwrap()
+        };
+        let top = |lhs, rhs| {
+            ValuePhiInsn {
+                block: BlockId::from_u32(4),
+                args: vec![
+                    (lhs, BlockId::from_u32(1)),
+                    (rhs, BlockId::from_u32(5)),
+                    (value(9), BlockId::from_u32(6)),
+                ],
+            }
+            .canonicalize()
+        };
+
+        // The same phi in `block1` reached over two edges resolves to one phi.
+        assert!(top(join(10, 11), join(10, 11)).is_some());
+        // Two different phis in `block1` tell apart the paths through both joins.
+        assert_eq!(top(join(10, 11), join(12, 13)), None);
     }
 }
