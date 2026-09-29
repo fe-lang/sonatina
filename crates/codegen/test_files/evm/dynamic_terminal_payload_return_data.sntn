@@ -1,0 +1,25 @@
+#! evm.config: { vcode: true, bytecode_hex: false, stackify_trace: false, evm_trace: false }
+#! evm.case: echo
+#!   calldata: 0x00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+#!   expect: return 0x00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+
+target = "evm-ethereum-osaka"
+
+func public %entry() {
+    block0:
+        v0.i256 = evm_calldata_size;
+        v1.*i8 = evm_malloc v0;
+        v2.i256 = ptr_to_int v1 i256;
+        evm_calldata_copy v2 0.i256 v0;
+        v3.i256 = evm_gas;
+        v4.i256 = evm_static_call v3 4.i256 v2 v0 0.i256 0.i256;
+        v5.i256 = evm_return_data_size;
+        evm_return_data_copy 0.i256 0.i256 v5;
+        evm_return 0.i256 v5;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}

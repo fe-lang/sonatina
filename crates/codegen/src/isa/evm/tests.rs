@@ -1339,6 +1339,183 @@ object @Contract {
     assert_eq!(prepared.section_plan().arena_base, 0x20);
 }
 
+fn prepare_section_error(src: &str) -> String {
+    let parsed = parse_module(src).expect("module parses");
+    let funcs = parsed.module.funcs();
+    let entry = find_func(&parsed.module, "entry");
+    test_backend()
+        .prepare_section(work_module_with_entry(&parsed.module, &funcs, entry))
+        .err()
+        .expect("prepare should fail")
+}
+
+#[test]
+fn fixed_start_dynamic_length_accesses_are_rejected() {
+    let cases = [
+        // A compiler-owned frame word at 0x200 is live across the copy.
+        (
+            r#"
+target = "evm-ethereum-osaka"
+type @Frame = {i256, i256, i256, i256, i256, i256, i256, i256, i256, i256, i256, i256};
+func public %entry() {
+block0:
+    v0.*@Frame = alloca @Frame;
+    v1.*i256 = gep v0 0.i256 11.i256;
+    mstore v1 7.i256 i256;
+    v2.i256 = evm_calldata_load 0.i32;
+    evm_calldata_copy 512.i256 32.i256 v2;
+    v3.i256 = mload v1 i256;
+    mstore 0.i32 v3 i256;
+    evm_return 0.i8 32.i8;
+}
+object @Contract { section runtime { entry %entry; } }
+"#,
+            "fixed address 0x200 in %entry has a dynamic length: `evm_calldata_copy 512.i256 32.i256 v2;`",
+        ),
+        // Heap memory sits above the arena, so no layout keeps it below the copy.
+        (
+            r#"
+target = "evm-ethereum-osaka"
+func public %entry() {
+block0:
+    v0.*i8 = evm_malloc 32.i256;
+    v1.*i256 = bitcast v0 *i256;
+    mstore v1 7.i256 i256;
+    v2.i256 = evm_calldata_load 0.i32;
+    evm_calldata_copy 160.i256 32.i256 v2;
+    v3.i256 = mload v1 i256;
+    mstore 0.i32 v3 i256;
+    evm_return 0.i8 32.i8;
+}
+object @Contract { section runtime { entry %entry; } }
+"#,
+            "fixed address 0xa0 in %entry has a dynamic length",
+        ),
+        // The buffer outlives its writer, so any function running before the
+        // reader could overwrite it.
+        (
+            r#"
+target = "evm-ethereum-osaka"
+func inline(never) private %writer(v0.i256) {
+block0:
+    evm_calldata_copy 512.i256 32.i256 v0;
+    return;
+}
+func inline(never) private %reader(v0.i256) {
+block0:
+    evm_return 512.i256 v0;
+}
+func public %entry() {
+block0:
+    v0.i256 = evm_calldata_load 0.i32;
+    call %writer v0;
+    call %reader v0;
+    evm_stop;
+}
+object @Contract { section runtime { entry %entry; } }
+"#,
+            "fixed address 0x200 in %",
+        ),
+        // A payload that the preceding write does not produce reads unreserved memory.
+        (
+            r#"
+target = "evm-ethereum-osaka"
+func public %entry() {
+block0:
+    mstore 0.i32 7.i256 i256;
+    v0.i256 = evm_calldata_load 0.i32;
+    evm_return 0.i256 v0;
+}
+object @Contract { section runtime { entry %entry; } }
+"#,
+            "fixed address 0x0 in %entry has a dynamic length: `evm_return 0.i256 v0;`",
+        ),
+    ];
+
+    for (src, expected) in cases {
+        let err = prepare_section_error(src);
+        assert!(err.contains(expected), "expected `{expected}` in: {err}");
+    }
+}
+
+#[test]
+fn dynamic_terminal_payload_write_does_not_reserve_arena_base() {
+    let parsed = parse_module(
+        r#"
+target = "evm-ethereum-osaka"
+
+func private %callee() -> i256 {
+block0:
+    v0.*i256 = alloca i256;
+    mstore v0 3.i256 i256;
+    v1.i256 = mload v0 i256;
+    return v1;
+}
+
+func public %entry() {
+block0:
+    v0.i256 = call %callee;
+    v1.i256 = evm_return_data_size;
+    evm_return_data_copy 0.i256 0.i256 v1;
+    evm_revert 0.i256 v1;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}
+"#,
+    )
+    .unwrap();
+
+    let funcs = parsed.module.funcs();
+    let callee = find_func(&parsed.module, "callee");
+    let entry = find_func(&parsed.module, "entry");
+    let prepared = test_backend()
+        .prepare_section(work_module_with_entry(&parsed.module, &funcs, entry))
+        .expect("prepare should succeed");
+
+    assert_eq!(prepared.section_plan().arena_base, 0);
+    assert_eq!(
+        prepared
+            .function_plan(callee)
+            .expect("missing callee plan")
+            .mem_plan
+            .scratch_words,
+        1
+    );
+}
+
+#[test]
+fn dynamic_terminal_payload_rejects_clobbered_spilled_length() {
+    // `v0` is used below 20 later values, so it is spilled, and the terminal
+    // would reload it after the copy overwrote its slot.
+    let loads: String = (0..=20)
+        .map(|i| format!("    v{i}.i256 = evm_calldata_load {}.i32;\n", i * 32))
+        .collect();
+    let sums: String = (1..20)
+        .rev()
+        .map(|i| format!("    v{}.i256 = add v{} v{i};\n", 41 - i, 40 - i))
+        .collect();
+    let err = prepare_section_error(&format!(
+        r#"
+target = "evm-ethereum-osaka"
+func public %entry() {{
+block0:
+{loads}    v21.i256 = add v0 v20;
+{sums}    evm_code_copy 0.i256 v40 v0;
+    evm_return 0.i256 v0;
+}}
+object @Contract {{ section runtime {{ entry %entry; }} }}
+"#
+    ));
+    assert!(
+        err.contains("EVM terminal payload in %entry reloads its length"),
+        "{err}"
+    );
+}
+
 #[test]
 fn return_escape_clamp_uses_caller_transitive_clobber_bound() {
     let ctx = plan_test_ctx_from_src(
@@ -1510,7 +1687,8 @@ block0:
     )]);
     let schedule = crate::module_analysis::CallGraphSchedule::compute(&parsed.module, &funcs);
     let fixed_reservations =
-        prepare::scan_fixed_reservations(&parsed.module, &funcs, &backend, &analyses);
+        prepare::scan_fixed_reservations(&parsed.module, &funcs, &backend, &analyses)
+            .expect("fixed reservations");
     let placement = machine::placement::compute_semantic_memory_placement(
         &parsed.module,
         machine::placement::MemoryPlacementSection {
@@ -1614,7 +1792,8 @@ block0:
     let entry = find_func(&parsed.module, "entry");
     let schedule = crate::module_analysis::CallGraphSchedule::compute(&parsed.module, &funcs);
     let fixed_reservations =
-        prepare::scan_fixed_reservations(&parsed.module, &funcs, &backend, &analyses);
+        prepare::scan_fixed_reservations(&parsed.module, &funcs, &backend, &analyses)
+            .expect("fixed reservations");
     let placement = machine::placement::compute_semantic_memory_placement(
         &parsed.module,
         machine::placement::MemoryPlacementSection {
@@ -1698,7 +1877,8 @@ block0:
     let scratch = find_func(&parsed.module, "scratch");
     let schedule = crate::module_analysis::CallGraphSchedule::compute(&parsed.module, &funcs);
     let fixed_reservations =
-        prepare::scan_fixed_reservations(&parsed.module, &funcs, &backend, &analyses);
+        prepare::scan_fixed_reservations(&parsed.module, &funcs, &backend, &analyses)
+            .expect("fixed reservations");
     let placement = machine::placement::compute_semantic_memory_placement(
         &parsed.module,
         machine::placement::MemoryPlacementSection {
