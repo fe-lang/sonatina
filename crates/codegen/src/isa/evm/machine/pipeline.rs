@@ -1,7 +1,7 @@
 use sonatina_ir::{Module, module::FuncRef};
 use tracing::debug_span;
 
-use crate::optim::pipeline::{FuncPassOverrides, Pass, run_function_pass_round};
+use crate::optim::pipeline::{Pass, run_function_pass_round};
 
 use super::{branch::canonicalize_machine_branch_conditions, verify::verify_machine_module};
 
@@ -32,7 +32,7 @@ pub(crate) fn run_machine_opt_pipeline(
         module,
         MACHINE_PASSES,
         &mut func_behavior_dirty,
-        FuncPassOverrides { funcs: Some(funcs) },
+        Some(funcs),
     );
     if canonicalize_word_branches {
         for &func in funcs {
