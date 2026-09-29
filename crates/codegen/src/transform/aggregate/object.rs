@@ -489,7 +489,10 @@ fn zext_before(func: &mut Function, before: InstId, value: ValueId, ty: Type) ->
 mod tests {
     use super::{super::byval_object_abi::has_nested_objref, *};
     use crate::{
-        isa::evm::{EvmBackend, PushWidthPolicy, test_util::prepare_root},
+        isa::evm::{
+            PushWidthPolicy,
+            test_util::{osaka_backend, prepare_root},
+        },
         object::{CompileOptions, compile_all_objects},
         test_support::{lookup_func, parse_test_module},
     };
@@ -497,20 +500,9 @@ mod tests {
         Module,
         inst::{control_flow, data, evm},
         ir_writer::FuncWriter,
-        isa::evm::Evm,
     };
 
-    use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
     use sonatina_verifier::{VerificationLevel, VerifierConfig};
-
-    fn test_backend() -> EvmBackend {
-        let triple = TargetTriple::new(
-            Architecture::Evm,
-            Vendor::Ethereum,
-            OperatingSystem::Evm(EvmVersion::Osaka),
-        );
-        EvmBackend::new(Evm::new(triple))
-    }
 
     fn assert_no_object_ir(module: &Module) {
         for func_ref in module.funcs() {
@@ -702,7 +694,7 @@ object @Contract {
 "#,
         );
 
-        let backend = test_backend();
+        let backend = osaka_backend();
         let opts = CompileOptions {
             fixup_policy: PushWidthPolicy::MinimalRelax,
             emit_symtab: false,
@@ -814,7 +806,7 @@ object @Contract {
 "#,
         );
 
-        let backend = test_backend();
+        let backend = osaka_backend();
         let opts = CompileOptions {
             fixup_policy: PushWidthPolicy::MinimalRelax,
             emit_symtab: false,
@@ -872,7 +864,7 @@ object @Contract {
 "#,
         );
 
-        let backend = test_backend();
+        let backend = osaka_backend();
         let opts = CompileOptions {
             fixup_policy: PushWidthPolicy::MinimalRelax,
             emit_symtab: false,

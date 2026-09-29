@@ -1489,6 +1489,7 @@ fn compute_high_evm_pre_analyses(
 
 #[cfg(test)]
 mod tests {
+    use crate::isa::evm::test_util::osaka_triple;
     use sonatina_ir::{
         I256, Immediate, Linkage, Signature, Type,
         builder::{FunctionBuilder, ModuleBuilder},
@@ -1503,20 +1504,11 @@ mod tests {
         isa::{Isa, evm::EvmMachine},
         module::ModuleCtx,
     };
-    use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
 
     use super::{FixedMemoryWriteRange, machine_fixed_memory_write_ranges};
 
-    fn evm_triple() -> TargetTriple {
-        TargetTriple::new(
-            Architecture::Evm,
-            Vendor::Ethereum,
-            OperatingSystem::Evm(EvmVersion::Osaka),
-        )
-    }
-
     fn machine_builder() -> ModuleBuilder {
-        ModuleBuilder::new(ModuleCtx::new(&EvmMachine::new(evm_triple())))
+        ModuleBuilder::new(ModuleCtx::new(&EvmMachine::new(osaka_triple())))
     }
 
     fn word(builder: &mut FunctionBuilder<InstInserter>, val: i64) -> sonatina_ir::ValueId {

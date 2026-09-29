@@ -1,3 +1,4 @@
+use crate::isa::evm::test_util::osaka_triple;
 use sonatina_ir::{
     I256, Immediate, Linkage, Signature, Type,
     builder::ModuleBuilder,
@@ -18,23 +19,14 @@ use sonatina_ir::{
     module::ModuleCtx,
 };
 use sonatina_parser::parse_module;
-use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
 
 use super::{
     branch::canonicalize_machine_branch_conditions, pipeline::run_machine_opt_pipeline,
     verify::verify_machine_function,
 };
 
-fn evm_triple() -> TargetTriple {
-    TargetTriple::new(
-        Architecture::Evm,
-        Vendor::Ethereum,
-        OperatingSystem::Evm(EvmVersion::Osaka),
-    )
-}
-
 fn machine_builder() -> ModuleBuilder {
-    ModuleBuilder::new(ModuleCtx::new(&EvmMachine::new(evm_triple())))
+    ModuleBuilder::new(ModuleCtx::new(&EvmMachine::new(osaka_triple())))
 }
 
 fn expect_machine_rejects(src: &str) {

@@ -506,23 +506,13 @@ fn topo_sort_sections(program: &ResolvedProgram<'_>) -> Vec<SectionId> {
 mod tests {
     use super::*;
     use crate::{
-        isa::evm::{EvmBackend, PushWidthPolicy},
+        isa::evm::{PushWidthPolicy, test_util::osaka_backend},
         object::{CompileOptions, OBSERVABILITY_SCHEMA_VERSION, PcAttribution, artifact::SymbolId},
     };
-    use sonatina_ir::{
-        InstDowncastMut, Type, inst::arith::Add, ir_writer::ModuleWriter, isa::evm::Evm,
-    };
+    use sonatina_ir::{InstDowncastMut, Type, inst::arith::Add, ir_writer::ModuleWriter};
     use sonatina_parser::parse_module;
-    use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
-    use sonatina_verifier::{VerificationLevel, VerifierConfig};
 
-    fn test_backend() -> EvmBackend {
-        EvmBackend::new(Evm::new(TargetTriple {
-            architecture: Architecture::Evm,
-            vendor: Vendor::Ethereum,
-            operating_system: OperatingSystem::Evm(EvmVersion::Osaka),
-        }))
-    }
+    use sonatina_verifier::{VerificationLevel, VerifierConfig};
 
     fn compile_opts(
         fixup_policy: PushWidthPolicy,
@@ -544,7 +534,7 @@ mod tests {
         opts: &CompileOptions,
     ) -> crate::object::artifact::ObjectArtifact {
         let parsed = parse_module(source).unwrap();
-        compile_object(&parsed.module, &test_backend(), object, opts).unwrap()
+        compile_object(&parsed.module, &osaka_backend(), object, opts).unwrap()
     }
 
     fn section<'a>(
@@ -732,7 +722,7 @@ object @Contract {
         });
         let artifact = compile_object(
             &parsed.module,
-            &test_backend(),
+            &osaka_backend(),
             "Contract",
             &compile_opts(
                 PushWidthPolicy::Push4,
@@ -918,7 +908,7 @@ object @Contract {
 
         let artifact = compile_object(
             &parsed.module,
-            &test_backend(),
+            &osaka_backend(),
             "Contract",
             &compile_opts(
                 PushWidthPolicy::Push4,
@@ -982,7 +972,7 @@ object @Contract {
 
         let artifact = compile_object(
             &parsed.module,
-            &test_backend(),
+            &osaka_backend(),
             "Contract",
             &compile_opts(
                 PushWidthPolicy::Push4,
@@ -1102,7 +1092,7 @@ object @O {
         .unwrap();
         let errs = compile_object(
             &parsed.module,
-            &test_backend(),
+            &osaka_backend(),
             "O",
             &compile_opts(
                 PushWidthPolicy::Push4,
@@ -1158,7 +1148,7 @@ object @O {
         verifier_cfg.check_users = true;
         let errs = compile_object(
             &module,
-            &test_backend(),
+            &osaka_backend(),
             "O",
             &compile_opts(PushWidthPolicy::Push4, false, false, verifier_cfg),
         )
@@ -1196,7 +1186,7 @@ object @O {
         .unwrap();
         let errs = compile_object(
             &parsed.module,
-            &test_backend(),
+            &osaka_backend(),
             "O",
             &compile_opts(
                 PushWidthPolicy::Push4,
@@ -1239,7 +1229,7 @@ object @O {
         .unwrap();
         let errs = compile_object(
             &parsed.module,
-            &test_backend(),
+            &osaka_backend(),
             "O",
             &compile_opts(
                 PushWidthPolicy::Push4,
@@ -1282,7 +1272,7 @@ object @O {
         .unwrap();
         let errs = compile_object(
             &parsed.module,
-            &test_backend(),
+            &osaka_backend(),
             "O",
             &compile_opts(
                 PushWidthPolicy::Push4,
@@ -1317,7 +1307,7 @@ object @O {
         .unwrap();
         let errs = compile_object(
             &parsed.module,
-            &test_backend(),
+            &osaka_backend(),
             "O",
             &compile_opts(
                 PushWidthPolicy::Push4,
@@ -1372,7 +1362,7 @@ object @O {
         .unwrap();
         compile_object(
             &parsed.module,
-            &test_backend(),
+            &osaka_backend(),
             "O",
             &compile_opts(
                 PushWidthPolicy::Push4,
@@ -1408,7 +1398,7 @@ object @O {
         .unwrap();
         let errs = compile_object(
             &parsed.module,
-            &test_backend(),
+            &osaka_backend(),
             "O",
             &compile_opts(
                 PushWidthPolicy::Push4,
@@ -1462,7 +1452,7 @@ object @O {
         let original = ModuleWriter::new(&parsed.module).dump_string();
         compile_object(
             &parsed.module,
-            &test_backend(),
+            &osaka_backend(),
             "O",
             &compile_opts(
                 PushWidthPolicy::Push4,
@@ -1528,7 +1518,7 @@ object @O {{
         let parsed = parse_module(&source).unwrap();
         let errs = compile_object(
             &parsed.module,
-            &test_backend(),
+            &osaka_backend(),
             "O",
             &compile_opts(
                 PushWidthPolicy::Push4,

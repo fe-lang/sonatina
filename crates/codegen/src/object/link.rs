@@ -790,23 +790,14 @@ fn classify_unmapped_reason<Op>(
 mod tests {
     use super::*;
     use crate::{
-        isa::evm::opcode::OpCode,
+        isa::evm::{opcode::OpCode, test_util::osaka_backend},
         machinst::{
             lower::SectionCodeUnit,
             vcode::{SectionCodeUnitId, VCode},
         },
     };
     use smallvec::smallvec;
-    use sonatina_ir::{isa::evm::Evm, module::FuncRef};
-    use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
-
-    fn test_backend() -> EvmBackend {
-        EvmBackend::new(Evm::new(TargetTriple {
-            architecture: Architecture::Evm,
-            vendor: Vendor::Ethereum,
-            operating_system: OperatingSystem::Evm(EvmVersion::Osaka),
-        }))
-    }
+    use sonatina_ir::module::FuncRef;
 
     #[test]
     fn synthetic_unit_identities_are_unique_across_objects_and_sections() {
@@ -834,7 +825,7 @@ mod tests {
 
     #[test]
     fn apply_sym_fixups_updates_section_unit_immediates() {
-        let backend = test_backend();
+        let backend = osaka_backend();
         let func = FuncRef::from_u32(0);
         let gv = GlobalVariableRef::from_u32(0);
         let unit_id = SectionCodeUnitId(0);
@@ -915,7 +906,7 @@ mod tests {
 
     #[test]
     fn apply_sym_fixups_reports_section_unit_context() {
-        let backend = test_backend();
+        let backend = osaka_backend();
         let func = FuncRef::from_u32(0);
         let gv = GlobalVariableRef::from_u32(0);
         let unit_id = SectionCodeUnitId(0);
