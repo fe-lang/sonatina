@@ -45,7 +45,7 @@ block2:
     return 0.i32;
 }}
 "#,
-                include_str!("../fixtures/words.sntn")
+                include_str!("../../fixtures/words.sntn")
             );
             for level in [OptLevel::O0, OptLevel::O2] {
                 let elf = link(&source, level);

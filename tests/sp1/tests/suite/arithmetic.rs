@@ -18,7 +18,7 @@ const OPS: [&str; 6] = ["uaddo", "saddo", "usubo", "ssubo", "umulo", "smulo"];
 
 #[test]
 fn checked_arithmetic_matches_ir_at_every_width() {
-    let mut source = include_str!("../fixtures/words.sntn").to_string();
+    let mut source = include_str!("../../fixtures/words.sntn").to_string();
     let mut main = String::from(
         "func public %main() -> i32 {\nblock0:\n    v0.i256 = call %read_wide;\n    v1.i256 = call %read_wide;\n",
     );

@@ -5,7 +5,7 @@ use sp1_sdk::{
     blocking::{ProveRequest, Prover, ProverClient, SP1Stdin},
 };
 
-const IO: &str = include_str!("../fixtures/io.sntn");
+const IO: &str = include_str!("../../fixtures/io.sntn");
 
 fn input(value: u32, wide: u64) -> SP1Stdin {
     let mut stdin = SP1Stdin::new();
