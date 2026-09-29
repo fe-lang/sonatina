@@ -39,13 +39,7 @@ impl DomTree {
     /// Returns the block depth in the dominator tree.
     /// Returns None if the block is unreachable from the entry block.
     pub fn depth_of(&self, block: BlockId) -> Option<u32> {
-        if self.rpo.first().is_some_and(|&entry| entry == block)
-            || self.doms.get(block).is_some_and(PackedOption::is_some)
-        {
-            Some(self.depths[block])
-        } else {
-            None
-        }
+        self.is_reachable(block).then(|| self.depths[block])
     }
 
     /// Returns `true` if block1 strictly dominates block2.
@@ -151,9 +145,10 @@ impl DomTree {
         df
     }
 
-    /// Returns `true` if block is reachable from the entry block.
+    /// Returns `true` if block is reachable from the entry block, including the
+    /// entry block itself.
     pub fn is_reachable(&self, block: BlockId) -> bool {
-        self.idom_of(block).is_some()
+        self.doms[block].is_some()
     }
 
     /// Returns blocks in RPO.
@@ -342,6 +337,7 @@ mod tests {
         let (dom_tree, df) = module.func_store.view(func_ref, calc_dom);
 
         assert_eq!(dom_tree.idom_of(a), None);
+        assert!(dom_tree.is_reachable(a));
         assert_eq!(dom_tree.idom_of(b), Some(a));
         assert_eq!(dom_tree.idom_of(c), Some(a));
         assert_eq!(dom_tree.idom_of(d), None);

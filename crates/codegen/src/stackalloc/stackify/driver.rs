@@ -71,7 +71,7 @@ impl<'a, 'ctx, O: StackifyObserver> FunctionPlanner<'a, 'ctx, O> {
 
     pub(super) fn plan_blocks(&mut self) {
         for &block in self.ctx.dom.rpo() {
-            if block != self.ctx.entry && !self.ctx.dom.is_reachable(block) {
+            if !self.ctx.dom.is_reachable(block) {
                 continue;
             }
 

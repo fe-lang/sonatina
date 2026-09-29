@@ -1235,29 +1235,42 @@ block2:
     }
 
     #[test]
-    fn lazy_frame_activity_starts_after_the_function_prologue() {
-        let (parsed, [_, load_inst]) = frame_slot_round_trip();
+    fn lazy_frame_plan_enters_in_the_prologue_for_entry_block_dependencies() {
+        const SRC: &str = r#"
+target = "evm-ethereum-osaka"
+
+func public %f(v0.i256) -> i256 {
+block0:
+    v1.i256 = add v0 1.i256;
+    return v1;
+}
+"#;
+
+        let parsed = parse_module(SRC).expect("module parses");
         let func_ref = parsed.debug.func_order[0];
         parsed.module.func_store.view(func_ref, |function| {
+            let value = parsed.debug.value(func_ref, "v1").expect("v1 exists");
+            let load_inst = function
+                .dfg
+                .value_inst(value)
+                .expect("v1 should be instruction-defined");
+            // The argument is spilled to the frame in the prologue and reloaded
+            // in the entry block.
             let mut alloc = TestAlloc::for_function(function);
             alloc.enter.push(Action::MemStoreFrameSlot(0));
             alloc.pre[load_inst].push(Action::MemLoadFrameSlot(0));
 
-            let plan = LazyFramePlan {
-                enter: FrameInjectionPoint::BeforeAction {
-                    site: FrameSite::EnterFunction,
+            let plan =
+                compute_lazy_frame_plan_inner(function, &alloc, &MachineFrameRoots::default())
+                    .expect("entry-block frame accesses should produce a lazy frame plan");
+            assert!(plan.enter_before_action(FrameSite::EnterFunction, 0));
+            assert_eq!(
+                plan.exits,
+                vec![FrameInjectionPoint::AfterAction {
+                    site: FrameSite::PreInst(load_inst),
                     action_index: 0,
-                },
-                exits: vec![
-                    FrameInjectionPoint::BeforeSite(FrameSite::BlockEntry(
-                        function.layout.iter_block().nth(1).expect("block1 exists"),
-                    )),
-                    FrameInjectionPoint::AfterAction {
-                        site: FrameSite::PreInst(load_inst),
-                        action_index: 0,
-                    },
-                ],
-            };
+                }]
+            );
             assert!(
                 validate_lazy_frame_activity(function, &alloc, &plan).is_some(),
                 "an enter in the prologue makes the body's frame accesses active"
