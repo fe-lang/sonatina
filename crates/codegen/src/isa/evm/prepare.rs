@@ -741,20 +741,12 @@ fn prepare_machine_section_after_pipeline(
             compute_function_entry_jump_targets(machine.work.module(), &funcs);
 
         let mut machine_final_spill_inputs: Vec<_> = machine_analyses
-            .into_iter()
+            .into_par_iter()
             .map(|(func, analysis)| {
                 let func_placement = expect_func_entry(&placement.funcs, func, "placement");
                 let func_map =
                     expect_func_entry(&machine.source_to_machine.funcs, func, "source map");
                 let mem_plan = MachineFuncPlan::from_semantic(&func_placement.mem_plan, func_map);
-                let fixed_writes =
-                    machine
-                        .work
-                        .module()
-                        .func_store
-                        .view(func, |machine_function| {
-                            machine_fixed_memory_write_ranges(machine_function, &machine_isa)
-                        });
                 let reserve = backend_spill_reserves
                     .get(&func)
                     .copied()
@@ -763,13 +755,15 @@ fn prepare_machine_section_after_pipeline(
                     &analysis.alloc,
                     &analysis.stable_final_spill_values,
                 );
-                machine
-                    .work
-                    .module()
-                    .func_store
-                    .view(func, |machine_function| {
-                        spills.share_disjoint_objects(machine_function, &analysis.alloc)
-                    });
+                let fixed_writes =
+                    machine
+                        .work
+                        .module()
+                        .func_store
+                        .view(func, |machine_function| {
+                            spills.share_disjoint_objects(machine_function, &analysis.alloc);
+                            machine_fixed_memory_write_ranges(machine_function, &machine_isa)
+                        });
                 MachineFinalSpillInput {
                     func,
                     analysis,
