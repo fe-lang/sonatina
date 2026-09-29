@@ -326,69 +326,11 @@ impl Interpret for Sar {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
 
-    use crate::{
-        DataFlowGraph, HasInst, Immediate, Type,
-        builder::test_util::test_isa,
-        interpret::EvalResults,
-        module::{FuncRef, ModuleCtx},
-    };
+    use crate::Immediate;
 
     use super::*;
-
-    struct TestHasInst;
-    impl<I: crate::Inst> HasInst<I> for TestHasInst {}
-
-    struct TestState {
-        dfg: DataFlowGraph,
-        values: HashMap<crate::ValueId, EvalValue>,
-    }
-
-    impl TestState {
-        fn new(values: impl IntoIterator<Item = (crate::ValueId, EvalValue)>) -> Self {
-            let isa = test_isa();
-            let dfg = DataFlowGraph::new(ModuleCtx::new(&isa));
-            Self {
-                dfg,
-                values: values.into_iter().collect(),
-            }
-        }
-    }
-
-    impl State for TestState {
-        fn lookup_val(&mut self, value: crate::ValueId) -> EvalValue {
-            self.values.get(&value).cloned().unwrap_or_default()
-        }
-
-        fn call_func(&mut self, _func: FuncRef, _args: Vec<EvalValue>) -> EvalResults {
-            unreachable!()
-        }
-
-        fn set_action(&mut self, action: Action) {
-            assert_eq!(action, Action::Continue);
-        }
-
-        fn prev_block(&mut self) -> crate::BlockId {
-            unreachable!()
-        }
-
-        fn load(&mut self, _addr: EvalValue, _ty: Type) -> EvalValue {
-            unreachable!()
-        }
-
-        fn store(&mut self, _addr: EvalValue, _value: EvalValue, _ty: Type) -> EvalValue {
-            unreachable!()
-        }
-
-        fn alloca(&mut self, _ty: Type) -> EvalValue {
-            unreachable!()
-        }
-
-        fn dfg(&self) -> &DataFlowGraph {
-            &self.dfg
-        }
-    }
+    use crate::interpret::test_state::{TestHasInst, TestState};
 
     #[test]
     fn div_mod_by_zero_returns_undef() {

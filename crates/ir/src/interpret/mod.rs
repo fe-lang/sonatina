@@ -12,6 +12,8 @@ mod control_flow;
 mod data;
 mod evm;
 mod logic;
+#[cfg(test)]
+mod test_state;
 
 pub type EvalResults = SmallVec<[EvalValue; 1]>;
 

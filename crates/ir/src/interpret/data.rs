@@ -251,69 +251,16 @@ fn nonnegative_imm_usize(imm: Immediate) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
 
     use smallvec::smallvec;
 
     use super::*;
     use crate::{
-        DataFlowGraph, HasInst, Type, Value, ValueId,
+        DataFlowGraph, Type, Value,
         builder::test_util::test_isa,
-        interpret::EvalResults,
-        module::{FuncRef, ModuleCtx},
+        interpret::test_state::{TestHasInst, TestState},
+        module::ModuleCtx,
     };
-
-    struct TestHasInst;
-
-    impl<I: crate::Inst> HasInst<I> for TestHasInst {}
-
-    struct TestState {
-        dfg: DataFlowGraph,
-        values: HashMap<ValueId, EvalValue>,
-    }
-
-    impl TestState {
-        fn new(dfg: DataFlowGraph, values: impl IntoIterator<Item = (ValueId, EvalValue)>) -> Self {
-            Self {
-                dfg,
-                values: values.into_iter().collect(),
-            }
-        }
-    }
-
-    impl State for TestState {
-        fn lookup_val(&mut self, value: ValueId) -> EvalValue {
-            self.values.get(&value).cloned().unwrap_or_default()
-        }
-
-        fn call_func(&mut self, _func: FuncRef, _args: Vec<EvalValue>) -> EvalResults {
-            unreachable!()
-        }
-
-        fn set_action(&mut self, action: Action) {
-            assert_eq!(action, Action::Continue);
-        }
-
-        fn prev_block(&mut self) -> crate::BlockId {
-            unreachable!()
-        }
-
-        fn load(&mut self, _addr: EvalValue, _ty: Type) -> EvalValue {
-            unreachable!()
-        }
-
-        fn store(&mut self, _addr: EvalValue, _value: EvalValue, _ty: Type) -> EvalValue {
-            unreachable!()
-        }
-
-        fn alloca(&mut self, _ty: Type) -> EvalValue {
-            unreachable!()
-        }
-
-        fn dfg(&self) -> &DataFlowGraph {
-            &self.dfg
-        }
-    }
 
     #[test]
     fn gep_pointer_indices_use_signed_offsets() {
@@ -327,7 +274,7 @@ mod tests {
             ty: Type::I32,
             idx: 1,
         });
-        let mut state = TestState::new(
+        let mut state = TestState::with_dfg(
             dfg,
             [
                 (base, EvalValue::Imm(Immediate::I256(I256::from(64)))),
@@ -367,7 +314,7 @@ mod tests {
             ],
             ty: array_ty,
         };
-        let mut state = TestState::new(
+        let mut state = TestState::with_dfg(
             dfg,
             [
                 (dest, aggregate),
