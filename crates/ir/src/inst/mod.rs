@@ -10,10 +10,7 @@ pub mod inst_set;
 pub mod logic;
 pub mod native;
 
-use std::{
-    any::{Any, TypeId},
-    io,
-};
+use std::{any::Any, io};
 
 use dyn_clone::DynClone;
 use macros::inst_prop;
@@ -105,13 +102,8 @@ impl IrWrite<FuncWriteCtx<'_>> for InstId {
 }
 
 /// This trait works as a "proof" that a specific ISA contains `I`,
-/// and then allows a construction and reflection of type `I` in that specific
-/// ISA context.
-pub trait HasInst<I: Inst> {
-    fn is(&self, inst: &dyn Inst) -> bool {
-        inst.type_id() == TypeId::of::<I>()
-    }
-}
+/// and then allows a construction of type `I` in that specific ISA context.
+pub trait HasInst<I: Inst> {}
 
 pub trait InstDowncast<'a>: Sized {
     fn downcast(isb: &dyn InstSetBase, inst: &'a dyn Inst) -> Option<Self>;
