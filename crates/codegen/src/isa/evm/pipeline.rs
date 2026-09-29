@@ -6,6 +6,8 @@ use crate::{
     optim::{
         constref_specialize::specialize_private_constrefs,
         dead_arg::{DeadArgElimConfig, run_dead_arg_elim},
+        dead_ret::{DeadRetElimConfig, run_dead_ret_elim},
+        forwarded_ret::{ForwardedRetElimConfig, run_forwarded_ret_elim},
         pipeline::{Pass, run_function_pass_round},
         uniform_const_arg::run_uniform_const_arg_binding,
     },
@@ -230,6 +232,15 @@ impl EvmPipelineContext<'_> {
         );
         run_uniform_const_arg_binding(self.work.module(), &self.funcs);
         run_dead_arg_elim(self.work.module(), DeadArgElimConfig::default());
+        // Return lanes that only echo an argument, or that no caller reads, are
+        // the result-side twin of dead arguments. Dropping them can leave
+        // arguments dead again, so dead-argument elimination runs once more.
+        let forwarded =
+            run_forwarded_ret_elim(self.work.module(), ForwardedRetElimConfig::default());
+        let dead = run_dead_ret_elim(self.work.module(), DeadRetElimConfig::default());
+        if forwarded.removed_rets + dead.removed_rets > 0 {
+            run_dead_arg_elim(self.work.module(), DeadArgElimConfig::default());
+        }
         self.func_behavior_dirty = true;
         self.run_pass_round(
             "default",

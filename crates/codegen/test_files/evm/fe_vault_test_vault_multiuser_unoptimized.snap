@@ -6,13 +6,13 @@ input_file: test_files/evm/fe_vault_test_vault_multiuser_unoptimized.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 3137 bytes
-  total: 3137 bytes
+  section runtime: 3130 bytes
+  total: 3130 bytes
 
 object: Vault
-  section init: 777 bytes
-  section runtime: 759 bytes
-  total: 1536 bytes
+  section init: 770 bytes
+  section runtime: 752 bytes
+  total: 1522 bytes
 
 object: VaultUser
   section init: 749 bytes
@@ -53,7 +53,7 @@ functions:
     mem: scratch_words=0 stable_words=3 stable_mode=StableAbs(base=0xa0) entry_abs_words=0 abs_words_end=3
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=424892 gas_refunded=79600 logs=0 output=call len=32 tx_gas=21000 runtime_gas=403892
+  case ok: calldata_len=0 success reason=Return gas_used=423232 gas_refunded=79600 logs=0 output=call len=32 tx_gas=21000 runtime_gas=402232
 
 
 --------------- DEBUG ---------------

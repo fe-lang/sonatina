@@ -1,7 +1,8 @@
 use rustc_hash::{FxHashMap, FxHashSet};
+use smallvec::SmallVec;
 use sonatina_ir::{
-    Function, Signature, Type, Value,
-    inst::{data, downcast},
+    Function, Signature, Type, Value, ValueId,
+    inst::{control_flow, data, downcast},
     module::{FuncRef, Module, ModuleCtx},
     types::{CompoundType, CompoundTypeRef},
 };
@@ -19,6 +20,43 @@ pub(crate) trait SignatureRewritePlan {
 
 pub(crate) fn is_owned_private_signature_func(sig: &Signature) -> bool {
     sig.linkage().is_private()
+}
+
+pub(crate) fn retain_function_returns(function: &mut Function, keep_rets: &[bool]) {
+    let blocks = function.layout.iter_block().collect::<Vec<_>>();
+    for block in blocks {
+        let insts = function.layout.iter_inst(block).collect::<Vec<_>>();
+        for inst in insts {
+            let Some(args) =
+                downcast::<&control_flow::Return>(function.inst_set(), function.dfg.inst(inst))
+                    .map(|ret| {
+                        ret.args()
+                            .iter()
+                            .copied()
+                            .collect::<SmallVec<[ValueId; 2]>>()
+                    })
+            else {
+                continue;
+            };
+            assert_eq!(
+                args.len(),
+                keep_rets.len(),
+                "return arity must match the rewritten function signature"
+            );
+            let retained = args
+                .into_iter()
+                .zip(keep_rets.iter().copied())
+                .filter_map(|(value, keep)| keep.then_some(value))
+                .collect::<SmallVec<[ValueId; 2]>>();
+            function.dfg.replace_inst_preserving_results(
+                inst,
+                Box::new(control_flow::Return::new_unchecked(
+                    function.inst_set(),
+                    control_flow::ReturnArgs::from(retained),
+                )),
+            );
+        }
+    }
 }
 
 pub(crate) fn rewrite_declared_signatures<P: SignatureRewritePlan>(
