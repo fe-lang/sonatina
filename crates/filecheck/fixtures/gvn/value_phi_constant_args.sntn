@@ -1,0 +1,83 @@
+#! A value phi with constant arguments pushes a constant on every edge into its
+#! block. It replaces the instruction only if every path through that block
+#! reaches the instruction.
+
+target = "evm-ethereum-london"
+
+# regex: VALUE=\bv\d+\b
+# check:  block3:
+# nextln:     $(sum=$VALUE).i256 = phi (11.i256 block0) (12.i256 block2);
+# nextln:     v1.i256 = phi (1.i256 block0) (2.i256 block2);
+# nextln:     return $sum;
+func public %at_join(v0.i1) -> i256 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        jump block3;
+
+    block2:
+        jump block3;
+
+    block3:
+        v1.i256 = phi (1.i256 block1) (2.i256 block2);
+        v2.i256 = add v1 10.i256;
+        return v2;
+}
+
+# regex: VALUE=\bv\d+\b
+# check:  block3:
+# nextln:     $(sum=$VALUE).i256 = phi (11.i256 block0) (12.i256 block2);
+# nextln:     v2.i256 = phi (1.i256 block0) (2.i256 block2);
+# nextln:     v3.i256 = add v1 v2;
+# nextln:     v5.i256 = add v3 $sum;
+# nextln:     return v5;
+func public %after_join_on_every_path(v0.i1, v1.i256) -> i256 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        jump block3;
+
+    block2:
+        jump block3;
+
+    block3:
+        v2.i256 = phi (1.i256 block1) (2.i256 block2);
+        v3.i256 = add v1 v2;
+        jump block4;
+
+    block4:
+        v4.i256 = add v2 10.i256;
+        v5.i256 = add v3 v4;
+        return v5;
+}
+
+# check:  block3:
+# nextln:     v2.i256 = phi (1.i256 block0) (2.i256 block2);
+# nextln:     br v1 block4 block5;
+# nextln: 
+# nextln: block4:
+# nextln:     v3.i256 = add v2 10.i256;
+# nextln:     return v3;
+func public %after_join_on_one_path(v0.i1, v1.i1) -> i256 {
+    block0:
+        br v0 block1 block2;
+
+    block1:
+        jump block3;
+
+    block2:
+        jump block3;
+
+    block3:
+        v2.i256 = phi (1.i256 block1) (2.i256 block2);
+        br v1 block4 block5;
+
+    block4:
+        v3.i256 = add v2 10.i256;
+        return v3;
+
+    block5:
+        return v2;
+}

@@ -7,7 +7,10 @@
 //! Rekha R. Pai.: Detection of Redundant Expressions: A Complete and Polynomial-Time Algorithm in SSA:
 //! APLAS 2015 pp49-65: <https://link.springer.com/chapter/10.1007/978-3-319-26529-2_4>
 
-use std::{cell::RefCell, collections::BTreeSet};
+use std::{
+    cell::{OnceCell, RefCell},
+    collections::BTreeSet,
+};
 
 use cranelift_entity::{PrimaryMap, SecondaryMap, entity_impl, packed_option::PackedOption};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -35,6 +38,7 @@ use crate::{
             ExprFactProvider, SimplifiedResult, nontrivial_pow2_shift, simplify_key_with_facts,
         },
     },
+    post_domtree::PostDomTree,
 };
 
 ///  An initial class that assigned to all values.
@@ -2241,6 +2245,10 @@ struct RedundantCodeRemover<'a> {
     /// Record resolved value phis.
     resolved_value_phis: FxHashMap<ValuePhi, ValueId>,
 
+    /// Computed on demand when resolving a value phi of constants. Inserting phis doesn't
+    /// change the CFG, so it stays valid while value phis are resolved.
+    post_domtree: OnceCell<PostDomTree>,
+
     renames: FxHashMap<ValueId, ValueId>,
     changed: bool,
 }
@@ -2251,6 +2259,7 @@ impl<'a> RedundantCodeRemover<'a> {
             solver,
             avail_set: SecondaryMap::default(),
             resolved_value_phis: FxHashMap::default(),
+            post_domtree: OnceCell::new(),
             renames: FxHashMap::default(),
             changed: false,
         }
@@ -2456,7 +2465,9 @@ impl<'a> RedundantCodeRemover<'a> {
                         let class = self.solver.value_class(inst_result);
                         if let Some(value_phi) = &self.solver.classes[class].value_phi {
                             let ty = func.dfg.value_ty(inst_result);
-                            if self.is_value_phi_resolvable(value_phi, block) {
+                            if self.is_value_phi_resolvable(value_phi, block)
+                                && self.pushes_constants_only_where_used(func, value_phi, block)
+                            {
                                 let value = self.resolve_value_phi(
                                     func,
                                     &mut inserter,
@@ -2519,6 +2530,46 @@ impl<'a> RedundantCodeRemover<'a> {
                 true
             }
         }
+    }
+
+    /// Returns `false` if resolving `value_phi` for an instruction in `block` would push
+    /// constants on paths that never reach `block`.
+    ///
+    /// A constant argument is pushed on the edge into its phi's block, but the instruction the
+    /// phi replaces only runs in `block`. The phi only pays for itself if every path through
+    /// the phi's block continues to `block`.
+    fn pushes_constants_only_where_used(
+        &self,
+        func: &Function,
+        value_phi: &ValuePhi,
+        block: BlockId,
+    ) -> bool {
+        let mut pending = vec![value_phi];
+        while let Some(value_phi) = pending.pop() {
+            let ValuePhi::PhiInsn(phi_insn) = value_phi else {
+                continue;
+            };
+            if self.resolved_value_phis.contains_key(value_phi) {
+                continue;
+            }
+            let pushes_constant = phi_insn.args.iter().any(
+                |(arg, _)| matches!(arg, ValuePhi::Value(value) if func.dfg.value_is_imm(*value)),
+            );
+            if pushes_constant
+                && !self
+                    .post_domtree
+                    .get_or_init(|| {
+                        let mut post_domtree = PostDomTree::new();
+                        post_domtree.compute(func);
+                        post_domtree
+                    })
+                    .post_dominates(block, phi_insn.block)
+            {
+                return false;
+            }
+            pending.extend(phi_insn.args.iter().map(|(arg, _)| arg));
+        }
+        true
     }
 
     /// Insert phi insn to appropriate location and returns the value that defined by

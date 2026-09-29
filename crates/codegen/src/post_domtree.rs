@@ -78,6 +78,11 @@ impl PostDomTree {
         }
     }
 
+    /// Returns `true` if every path from `block2` to an exit passes through `block1`.
+    pub fn post_dominates(&self, block1: BlockId, block2: BlockId) -> bool {
+        self.domtree.dominates(block1, block2)
+    }
+
     pub fn clear(&mut self) {
         self.rcfg.clear();
         self.domtree.clear();
