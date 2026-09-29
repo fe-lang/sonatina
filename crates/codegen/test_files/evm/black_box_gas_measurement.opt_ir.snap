@@ -1,0 +1,29 @@
+---
+source: crates/codegen/tests/evm.rs
+expression: opt_ir_snapshot
+input_file: test_files/evm/black_box_gas_measurement.sntn
+---
+target = "evm-ethereum-osaka"
+
+func public %entry() {
+    block0:
+        v0.i256 = evm_gas;
+        v1.i256 = black_box 5.i256;
+        v13.i256 = mul v1 v1;
+        v14.i256 = add v13 3.i256;
+        v3.i256 = black_box v14;
+        v4.i256 = evm_gas;
+        v5.i256 = sub v0 v4;
+        v6.i256 = evm_calldata_load 0.i256;
+        v7.i256 = black_box v6;
+        mstore 0.i256 v5 i256;
+        mstore 32.i256 v7 i256;
+        evm_return 0.i256 64.i256;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %entry;
+    }
+}

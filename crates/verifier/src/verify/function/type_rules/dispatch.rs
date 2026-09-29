@@ -43,6 +43,7 @@ macro_rules! impl_unary_integral_same_rule {
 impl_unary_integral_same_rule!(
     arith::Neg => "neg",
     logic::Not => "not",
+    data::BlackBox => "black_box",
 );
 
 macro_rules! impl_binary_integral_same_rule {

@@ -1759,6 +1759,31 @@ func public %caller() -> unit {
 }
 
 #[test]
+fn black_box_accepts_each_integer_width() {
+    let cfg = VerifierConfig::for_level(VerificationLevel::Full);
+    for ty in ["i1", "i8", "i16", "i32", "i64", "i128", "i256"] {
+        let src = format!(
+            "target = \"evm-ethereum-osaka\"\nfunc public %identity(v0.{ty}) -> {ty} {{\nblock0:\nv1.{ty} = black_box v0;\nreturn v1;\n}}"
+        );
+        parse_and_verify_module(&src, &cfg)
+            .unwrap_or_else(|err| panic!("black_box should accept {ty}: {err:?}"));
+    }
+}
+
+#[test]
+fn black_box_rejects_noninteger_operands_and_mismatched_results() {
+    let cfg = VerifierConfig::for_level(VerificationLevel::Full);
+    for (arg_ty, result_ty, code) in [("*i8", "*i8", "IR0600"), ("i32", "i64", "IR0601")] {
+        let src = format!(
+            "target = \"evm-ethereum-osaka\"\nfunc public %invalid(v0.{arg_ty}) -> {result_ty} {{\nblock0:\nv1.{result_ty} = black_box v0;\nreturn v1;\n}}"
+        );
+        let parsed = parse_module(&src).expect("module should parse");
+        let report = verify_module(&parsed.module, &cfg);
+        assert!(has_code(&report, code), "expected {code}, got {report}");
+    }
+}
+
+#[test]
 fn shift_operand_width_mismatch_is_rejected() {
     let src = r#"
 target = "evm-ethereum-london"

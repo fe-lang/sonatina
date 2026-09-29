@@ -1,0 +1,34 @@
+#! evm.config: { opt: 2, vcode: true, stackify_trace: false, bytecode_hex: false }
+#! evm.case: measured_work_stays_between_gas_reads
+#!   calldata: u256(9)
+#!   expect: return u256(21) u256(9)
+
+target = "evm-ethereum-osaka"
+
+func private %work(v0.i256) -> i256 {
+    block0:
+        v1.i256 = mul v0 v0;
+        v2.i256 = add v1 3.i256;
+        return v2;
+}
+
+func public %entry() {
+    block0:
+        v0.i256 = evm_gas;
+        v1.i256 = black_box 5.i256;
+        v2.i256 = call %work v1;
+        v3.i256 = black_box v2;
+        v4.i256 = evm_gas;
+        v5.i256 = sub v0 v4;
+        v6.i256 = evm_calldata_load 0.i256;
+        v7.i256 = black_box v6;
+        mstore 0.i256 v5 i256;
+        mstore 32.i256 v7 i256;
+        evm_return 0.i256 64.i256;
+}
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}

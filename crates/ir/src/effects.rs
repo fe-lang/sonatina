@@ -625,6 +625,11 @@ fn classify_declared_effects_with<S: EffectSink>(
         return sink.finish();
     }
 
+    if <&data::BlackBox as InstDowncast>::downcast(is, inst).is_some() {
+        sink.add_other(OtherEffects::OBSERVE | OtherEffects::MUTATE);
+        return sink.finish();
+    }
+
     if <&data::EnumGetTag as InstDowncast>::downcast(is, inst).is_some() {
         sink.add_other(OtherEffects::OBSERVE);
         return sink.finish();
@@ -1036,7 +1041,7 @@ mod tests {
         builder::test_util::*,
         inst::{
             control_flow::Return,
-            data::{Alloca, ObjAlloc, ObjLoad, ObjStore},
+            data::{Alloca, BlackBox, ObjAlloc, ObjLoad, ObjStore},
             evm::{EvmMalloc, EvmMload, EvmMstore, EvmSelfDestruct},
         },
         isa::{Isa, evm::Evm},
@@ -1397,6 +1402,29 @@ mod tests {
         let store_effects = effects_for_inst::<ObjStore>(&func);
         assert!(store_effects.accesses.is_empty());
         assert_eq!(store_effects.other, OtherEffects::MUTATE);
+    }
+
+    #[test]
+    fn black_box_is_opaque_without_accessing_memory() {
+        let mb = test_module_builder();
+        let (evm, mut builder) = test_func_builder(&mb, &[], Type::I32);
+        let is = evm.inst_set();
+        let block = builder.append_block();
+        builder.switch_to_block(block);
+        let input = builder.make_imm_value(1i32);
+        let output = builder.insert_inst_with(|| BlackBox::new(is, input), Type::I32);
+        builder.insert_inst_no_result_with(|| Return::new_single(is, output));
+        builder.seal_all();
+
+        let func = builder.func;
+        let inst = inst_id_for::<BlackBox>(&func);
+        let effects = func.dfg.effects(inst);
+        assert!(effects.accesses.is_empty());
+        assert_eq!(effects.other, OtherEffects::OBSERVE | OtherEffects::MUTATE);
+        assert_eq!(func.dfg.effect_summary(inst), effects.summary());
+        assert!(!func.dfg.has_value_semantics(inst));
+        assert!(!func.dfg.can_drop_if_unused(inst));
+        assert!(!func.dfg.can_speculate(inst));
     }
 
     #[test]

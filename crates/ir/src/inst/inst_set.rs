@@ -63,6 +63,7 @@ define_inst_set_base! {
         data::Mload,
         data::Mstore,
         data::Memzero,
+        data::BlackBox,
         data::Gep,
         data::GetFunctionPtr,
         data::SymAddr,

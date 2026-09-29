@@ -30,6 +30,7 @@ pub struct EvmMachineInstSet(
     data::GetFunctionPtr,
     data::SymAddr,
     data::SymSize,
+    data::BlackBox,
     evm::EvmUdiv,
     evm::EvmSdiv,
     evm::EvmUmod,

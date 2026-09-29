@@ -121,6 +121,17 @@ pub struct Memzero {
     len: ValueId,
 }
 
+/// Returns `arg` unchanged, but hides the value from the optimizer.
+///
+/// The instruction observes and mutates opaque state, so it is never removed
+/// and stays ordered with respect to other effects. Benchmarks use it to keep
+/// the measured computation alive between two gas reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(side_effect(super::SideEffect::Write))]
+pub struct BlackBox {
+    arg: ValueId,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Inst)]
 #[inst(arity(at_least(2)))]
 pub struct Gep {
