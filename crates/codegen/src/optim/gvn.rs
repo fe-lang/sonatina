@@ -2908,8 +2908,7 @@ func private %entry(v0.i32, v1.i32) -> i32 {
         module.func_store.modify(func_ref, |func| {
             let add_inst = func
                 .layout
-                .iter_block()
-                .flat_map(|block| func.layout.iter_inst(block))
+                .iter_all_insts()
                 .find(|&inst| {
                     matches!(
                         inst_to_gvn_key(func, inst).kind(),
@@ -2985,8 +2984,7 @@ func private %entry(v0.i1) -> i32 {
 
             let phi_inst = func
                 .layout
-                .iter_block()
-                .flat_map(|block| func.layout.iter_inst(block))
+                .iter_all_insts()
                 .find(|&inst| func.dfg.is_phi(inst))
                 .expect("test function should contain a phi instruction");
             let phi_value = func
@@ -3050,8 +3048,7 @@ func private %entry(v0.i1) -> i32 {
 
             let phi_inst = func
                 .layout
-                .iter_block()
-                .flat_map(|block| func.layout.iter_inst(block))
+                .iter_all_insts()
                 .find(|&inst| func.dfg.is_phi(inst))
                 .expect("test function should contain a phi instruction");
             let phi_value = func
@@ -3170,8 +3167,7 @@ func private %entry(v0.i256, v1.i256) -> i256 {
 
             let uaddo_inst = func
                 .layout
-                .iter_block()
-                .flat_map(|block| func.layout.iter_inst(block))
+                .iter_all_insts()
                 .find(|&inst| {
                     matches!(
                         inst_to_gvn_key(func, inst).kind(),
@@ -3228,8 +3224,7 @@ func private %entry(v0.i32, v9.i1) -> i32 {
 
             let arg_plus_one: Vec<_> = func
                 .layout
-                .iter_block()
-                .flat_map(|block| func.layout.iter_inst(block))
+                .iter_all_insts()
                 .filter(|&inst| {
                     matches!(
                         inst_to_gvn_key(func, inst).kind(),
@@ -3311,8 +3306,7 @@ func private %entry() -> i8 {
         module.func_store.modify(func_ref, |func| {
             let shr_inst = func
                 .layout
-                .iter_block()
-                .flat_map(|block| func.layout.iter_inst(block))
+                .iter_all_insts()
                 .find(|&inst| {
                     matches!(
                         inst_to_gvn_key(func, inst).kind(),
@@ -3350,8 +3344,7 @@ func private %entry() -> i8 {
         module.func_store.modify(func_ref, |func| {
             let sar_inst = func
                 .layout
-                .iter_block()
-                .flat_map(|block| func.layout.iter_inst(block))
+                .iter_all_insts()
                 .find(|&inst| {
                     matches!(
                         inst_to_gvn_key(func, inst).kind(),
@@ -3389,8 +3382,7 @@ func private %entry() -> i256 {
         module.func_store.modify(func_ref, |func| {
             let bitcast_inst = func
                 .layout
-                .iter_block()
-                .flat_map(|block| func.layout.iter_inst(block))
+                .iter_all_insts()
                 .find(|&inst| {
                     matches!(
                         inst_to_gvn_key(func, inst).kind(),

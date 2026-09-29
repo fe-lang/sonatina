@@ -364,11 +364,7 @@ impl ObjectAccessFacts {
         func: &Function,
         summaries: Option<&ObjectEffectSummaryMap>,
     ) -> FxHashMap<InstId, ObjectInstEffects> {
-        let insts: Vec<_> = func
-            .layout
-            .iter_block()
-            .flat_map(|block| func.layout.iter_inst(block))
-            .collect();
+        let insts: Vec<_> = func.layout.iter_all_insts().collect();
         // Entries are large; size the table once instead of moving them while it grows.
         let mut effects = FxHashMap::with_capacity_and_hasher(insts.len(), Default::default());
         effects.extend(
@@ -701,8 +697,7 @@ block0:
             |func, facts, summaries| {
                 let call = func
                     .layout
-                    .iter_block()
-                    .flat_map(|block| func.layout.iter_inst(block))
+                    .iter_all_insts()
                     .find(|&inst| func.dfg.call_info(inst).is_some())
                     .unwrap();
                 let effects = facts.effects(func, call, Some(summaries));
@@ -748,8 +743,7 @@ block0:
             |func, facts, summaries| {
                 let store = func
                     .layout
-                    .iter_block()
-                    .flat_map(|block| func.layout.iter_inst(block))
+                    .iter_all_insts()
                     .find(|&inst| {
                         downcast::<&data::ObjStore>(func.inst_set(), func.dfg.inst(inst))
                             .is_some_and(|store| *store.object() == ValueId::from_u32(3))

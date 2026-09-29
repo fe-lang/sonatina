@@ -139,8 +139,7 @@ block3:
             );
             let joined = func
                 .layout
-                .iter_block()
-                .flat_map(|block| func.layout.iter_inst(block))
+                .iter_all_insts()
                 .find_map(|inst| {
                     downcast::<&control_flow::Phi>(func.inst_set(), func.dfg.inst(inst))
                         .and_then(|_| func.dfg.inst_result(inst))
@@ -191,8 +190,7 @@ block3:
             AggregateFacts::from_root_slices(func, func.ctx(), roots, &mut cache, &mut snapshot);
         let joined = func
             .layout
-            .iter_block()
-            .flat_map(|block| func.layout.iter_inst(block))
+            .iter_all_insts()
             .find_map(|inst| {
                 downcast::<&control_flow::Phi>(func.inst_set(), func.dfg.inst(inst))
                     .and_then(|_| func.dfg.inst_result(inst))
@@ -854,8 +852,7 @@ block0:
         memory.compute(func, local.get(&f), Some(&effects));
         let keys: Vec<_> = func
             .layout
-            .iter_block()
-            .flat_map(|b| func.layout.iter_inst(b))
+            .iter_all_insts()
             .filter(|&inst| {
                 downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst)).is_some()
             })
@@ -1027,8 +1024,7 @@ block0:
         );
         let loaded = func
             .layout
-            .iter_block()
-            .flat_map(|block| func.layout.iter_inst(block))
+            .iter_all_insts()
             .find_map(|inst| {
                 downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst))
                     .and_then(|_| func.dfg.inst_result(inst))
@@ -1095,8 +1091,7 @@ block2:
         );
         let loaded = func
             .layout
-            .iter_block()
-            .flat_map(|block| func.layout.iter_inst(block))
+            .iter_all_insts()
             .find_map(|inst| {
                 downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst))
                     .and_then(|_| func.dfg.inst_result(inst))

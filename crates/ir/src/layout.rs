@@ -201,6 +201,11 @@ impl Layout {
         }
     }
 
+    /// Iterates every inserted instruction, block by block, in layout order.
+    pub fn iter_all_insts(&self) -> impl Iterator<Item = InstId> + '_ {
+        self.iter_block().flat_map(|block| self.iter_inst(block))
+    }
+
     pub fn append_block(&mut self, block: BlockId) {
         debug_assert!(!self.is_block_inserted(block));
 

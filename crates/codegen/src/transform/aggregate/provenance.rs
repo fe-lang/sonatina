@@ -2472,8 +2472,7 @@ block0:
                 collect_root_provenance(func, func.ctx(), &root_slices, &mut layout_cache, None);
             let extracted = func
                 .layout
-                .iter_block()
-                .flat_map(|block| func.layout.iter_inst(block))
+                .iter_all_insts()
                 .find_map(|inst| {
                     downcast::<&data::ExtractValue>(func.inst_set(), func.dfg.inst(inst))
                         .and_then(|_| func.dfg.inst_result(inst))
@@ -2508,8 +2507,7 @@ block0:
                 collect_root_provenance(func, func.ctx(), &root_slices, &mut layout_cache, None);
             let extracted = func
                 .layout
-                .iter_block()
-                .flat_map(|block| func.layout.iter_inst(block))
+                .iter_all_insts()
                 .find_map(|inst| {
                     downcast::<&data::EnumExtract>(func.inst_set(), func.dfg.inst(inst))
                         .and_then(|_| func.dfg.inst_result(inst))
@@ -2557,11 +2555,7 @@ block3:
                 let roots = collect_root_slices_with_arg_roots(func, &mut cache);
                 let provenance =
                     collect_root_provenance(func, func.ctx(), &roots, &mut cache, None);
-                for inst in func
-                    .layout
-                    .iter_block()
-                    .flat_map(|block| func.layout.iter_inst(block))
-                {
+                for inst in func.layout.iter_all_insts() {
                     let inst_data = func.dfg.inst(inst);
                     if downcast::<&data::ObjMaterializeStack>(func.inst_set(), inst_data).is_some()
                         || downcast::<&data::Gep>(func.inst_set(), inst_data).is_some()
@@ -2604,8 +2598,7 @@ block0:
             let may = provenance.may();
             let root = func
                 .layout
-                .iter_block()
-                .flat_map(|block| func.layout.iter_inst(block))
+                .iter_all_insts()
                 .find_map(|inst| {
                     downcast::<&data::ObjAlloc>(func.inst_set(), func.dfg.inst(inst))
                         .and_then(|_| func.dfg.inst_result(inst))
@@ -2662,8 +2655,7 @@ block0:
 
             let loaded = func
                 .layout
-                .iter_block()
-                .flat_map(|block| func.layout.iter_inst(block))
+                .iter_all_insts()
                 .find_map(|inst| {
                     downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst))
                         .and_then(|_| func.dfg.inst_result(inst))
@@ -2672,8 +2664,7 @@ block0:
 
             let source_root = func
                 .layout
-                .iter_block()
-                .flat_map(|block| func.layout.iter_inst(block))
+                .iter_all_insts()
                 .find_map(|inst| {
                     downcast::<&data::ObjAlloc>(func.inst_set(), func.dfg.inst(inst))
                         .and_then(|_| func.dfg.inst_result(inst))
@@ -2732,8 +2723,7 @@ block2:
 
             let loaded = func
                 .layout
-                .iter_block()
-                .flat_map(|block| func.layout.iter_inst(block))
+                .iter_all_insts()
                 .find_map(|inst| {
                     downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst))
                         .and_then(|_| func.dfg.inst_result(inst))
@@ -2785,8 +2775,7 @@ block0:
 
             let loads: Vec<_> = func
                 .layout
-                .iter_block()
-                .flat_map(|block| func.layout.iter_inst(block))
+                .iter_all_insts()
                 .filter_map(|inst| {
                     downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst))
                         .and_then(|_| func.dfg.inst_result(inst))
@@ -2797,8 +2786,7 @@ block0:
             };
             let roots: Vec<_> = func
                 .layout
-                .iter_block()
-                .flat_map(|block| func.layout.iter_inst(block))
+                .iter_all_insts()
                 .filter_map(|inst| {
                     downcast::<&data::ObjAlloc>(func.inst_set(), func.dfg.inst(inst))
                         .and_then(|_| func.dfg.inst_result(inst))
@@ -2863,8 +2851,7 @@ block3:
 
             let loaded = func
                 .layout
-                .iter_block()
-                .flat_map(|block| func.layout.iter_inst(block))
+                .iter_all_insts()
                 .find_map(|inst| {
                     downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst))
                         .and_then(|_| func.dfg.inst_result(inst))
@@ -2872,8 +2859,7 @@ block3:
                 .expect("load result should exist");
             let roots: FxHashSet<_> = func
                 .layout
-                .iter_block()
-                .flat_map(|block| func.layout.iter_inst(block))
+                .iter_all_insts()
                 .filter_map(|inst| {
                     downcast::<&data::ObjAlloc>(func.inst_set(), func.dfg.inst(inst))
                         .and_then(|_| func.dfg.inst_result(inst))
@@ -2942,8 +2928,7 @@ block0:
 
             let loads: Vec<_> = func
                 .layout
-                .iter_block()
-                .flat_map(|block| func.layout.iter_inst(block))
+                .iter_all_insts()
                 .filter_map(|inst| {
                     downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst))
                         .and_then(|_| func.dfg.inst_result(inst))
@@ -2954,8 +2939,7 @@ block0:
             };
             let roots: Vec<_> = func
                 .layout
-                .iter_block()
-                .flat_map(|block| func.layout.iter_inst(block))
+                .iter_all_insts()
                 .filter_map(|inst| {
                     downcast::<&data::ObjAlloc>(func.inst_set(), func.dfg.inst(inst))
                         .and_then(|_| func.dfg.inst_result(inst))
@@ -3018,8 +3002,7 @@ block0:
 
             let loads: Vec<_> = func
                 .layout
-                .iter_block()
-                .flat_map(|block| func.layout.iter_inst(block))
+                .iter_all_insts()
                 .filter_map(|inst| {
                     downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst))
                         .and_then(|_| func.dfg.inst_result(inst))
@@ -3030,8 +3013,7 @@ block0:
             };
             let roots: Vec<_> = func
                 .layout
-                .iter_block()
-                .flat_map(|block| func.layout.iter_inst(block))
+                .iter_all_insts()
                 .filter_map(|inst| {
                     downcast::<&data::ObjAlloc>(func.inst_set(), func.dfg.inst(inst))
                         .and_then(|_| func.dfg.inst_result(inst))
@@ -3102,8 +3084,7 @@ block3:
             );
             let loaded = func
                 .layout
-                .iter_block()
-                .flat_map(|block| func.layout.iter_inst(block))
+                .iter_all_insts()
                 .find_map(|inst| {
                     downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst))
                         .and_then(|_| func.dfg.inst_result(inst))
@@ -3157,8 +3138,7 @@ block0:
             );
             let [projected, call_result] = func
                 .layout
-                .iter_block()
-                .flat_map(|block| func.layout.iter_inst(block))
+                .iter_all_insts()
                 .filter_map(|inst| func.dfg.inst_result(inst))
                 .filter(|&result| {
                     func.dfg.value_ty(result) != func.dfg.value_ty(func.arg_values[0])
@@ -3211,8 +3191,7 @@ block0:
             );
             let call_result = func
                 .layout
-                .iter_block()
-                .flat_map(|block| func.layout.iter_inst(block))
+                .iter_all_insts()
                 .find_map(|inst| {
                     downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(inst))
                         .and_then(|_| func.dfg.inst_result(inst))
@@ -3288,8 +3267,7 @@ block3:
             );
             let loaded = func
                 .layout
-                .iter_block()
-                .flat_map(|block| func.layout.iter_inst(block))
+                .iter_all_insts()
                 .find_map(|inst| {
                     downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst))
                         .and_then(|_| func.dfg.inst_result(inst))
@@ -3358,8 +3336,7 @@ block3:
             );
             let loaded = func
                 .layout
-                .iter_block()
-                .flat_map(|block| func.layout.iter_inst(block))
+                .iter_all_insts()
                 .find_map(|inst| {
                     downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst))
                         .and_then(|_| func.dfg.inst_result(inst))
@@ -3410,8 +3387,7 @@ block3:
                 collect_root_provenance(func, func.ctx(), &root_slices, &mut layout_cache, None);
             let projected = func
                 .layout
-                .iter_block()
-                .flat_map(|block| func.layout.iter_inst(block))
+                .iter_all_insts()
                 .find_map(|inst| {
                     downcast::<&data::ObjProj>(func.inst_set(), func.dfg.inst(inst))
                         .and_then(|_| func.dfg.inst_result(inst))
@@ -3419,8 +3395,7 @@ block3:
                 .expect("projection result should exist");
             let phi_result = func
                 .layout
-                .iter_block()
-                .flat_map(|block| func.layout.iter_inst(block))
+                .iter_all_insts()
                 .find_map(|inst| {
                     downcast::<&control_flow::Phi>(func.inst_set(), func.dfg.inst(inst))
                         .and_then(|_| func.dfg.inst_result(inst))
@@ -3489,8 +3464,7 @@ block3:
 
             let phi_result = func
                 .layout
-                .iter_block()
-                .flat_map(|block| func.layout.iter_inst(block))
+                .iter_all_insts()
                 .find_map(|inst| {
                     downcast::<&control_flow::Phi>(func.inst_set(), func.dfg.inst(inst))
                         .and_then(|_| func.dfg.inst_result(inst))
@@ -3498,8 +3472,7 @@ block3:
                 .expect("phi result should exist");
             let known_root = func
                 .layout
-                .iter_block()
-                .flat_map(|block| func.layout.iter_inst(block))
+                .iter_all_insts()
                 .find_map(|inst| {
                     downcast::<&data::ObjAlloc>(func.inst_set(), func.dfg.inst(inst))
                         .and_then(|_| func.dfg.inst_result(inst))
@@ -3548,8 +3521,7 @@ block0:
             );
             let call_result = func
                 .layout
-                .iter_block()
-                .flat_map(|block| func.layout.iter_inst(block))
+                .iter_all_insts()
                 .find_map(|inst| {
                     downcast::<&control_flow::Call>(func.inst_set(), func.dfg.inst(inst))
                         .and_then(|_| func.dfg.inst_result(inst))

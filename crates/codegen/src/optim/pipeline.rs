@@ -554,12 +554,7 @@ impl Pipeline {
                         pass_count = passes.len()
                     )
                     .entered();
-                    run_function_pass_round(
-                        module,
-                        passes,
-                        &mut func_behavior_dirty,
-                        FuncPassOverrides::default(),
-                    );
+                    run_function_pass_round(module, passes, &mut func_behavior_dirty, None);
                 }
                 Step::DeadArgElim => {
                     let _span = debug_span!("sonatina.optim.pipeline.dead_arg_elim").entered();
@@ -584,16 +579,11 @@ impl Default for Pipeline {
     }
 }
 
-#[derive(Default, Clone, Copy)]
-pub(crate) struct FuncPassOverrides<'a> {
-    pub(crate) funcs: Option<&'a [FuncRef]>,
-}
-
 pub(crate) fn run_function_pass_round(
     module: &Module,
     passes: &[Pass],
     func_behavior_dirty: &mut bool,
-    overrides: FuncPassOverrides<'_>,
+    funcs: Option<&[FuncRef]>,
 ) {
     let mut round_facts = RoundFacts::default();
     for &pass in passes {
@@ -602,7 +592,7 @@ pub(crate) fn run_function_pass_round(
             func_behavior::analyze_module(module);
             *func_behavior_dirty = false;
         }
-        let result = run_module_pass(pass, module, overrides, &mut round_facts);
+        let result = run_module_pass(pass, module, funcs, &mut round_facts);
         if result.changed && result.invalidates_func_behavior {
             *func_behavior_dirty = true;
         }
@@ -643,7 +633,7 @@ impl PassResult {
 fn run_module_pass(
     pass: Pass,
     module: &Module,
-    overrides: FuncPassOverrides<'_>,
+    funcs: Option<&[FuncRef]>,
     round_facts: &mut RoundFacts,
 ) -> PassResult {
     let _span = debug_span!("sonatina.optim.pipeline.pass_round", pass = pass.as_str()).entered();
@@ -662,56 +652,36 @@ fn run_module_pass(
     let arg_invariance = (pass == Pass::AggregateScalarize)
         .then(|| compute_arg_invariance(module, round_facts.objects.as_ref().unwrap()));
     let changed = AtomicBool::new(false);
-    if let Some(funcs) = overrides.funcs {
-        funcs.par_iter().copied().for_each(|func_ref| {
-            module.func_store.modify(func_ref, |func| {
-                let _span = debug_span!(
-                    "sonatina.optim.pipeline.function",
-                    func_ref = func_ref.as_u32()
-                )
-                .entered();
-                let mut ctx = PassContext::default();
-                if run_pass(
-                    pass,
-                    Some(func_ref),
-                    func,
-                    &mut ctx,
-                    local_object_args,
-                    object_effects,
-                    arg_invariance
-                        .as_ref()
-                        .and_then(|proofs| proofs.get(&func_ref)),
-                )
-                .changed
-                {
-                    changed.store(true, Ordering::Relaxed);
-                }
-            });
-        });
-    } else {
-        module.func_store.par_for_each(|func_ref, func| {
-            let _span = debug_span!(
-                "sonatina.optim.pipeline.function",
-                func_ref = func_ref.as_u32()
-            )
-            .entered();
-            let mut ctx = PassContext::default();
-            if run_pass(
-                pass,
-                Some(func_ref),
-                func,
-                &mut ctx,
-                local_object_args,
-                object_effects,
-                arg_invariance
-                    .as_ref()
-                    .and_then(|proofs| proofs.get(&func_ref)),
-            )
-            .changed
-            {
-                changed.store(true, Ordering::Relaxed);
-            }
-        });
+    let run_on = |func_ref: FuncRef, func: &mut Function| {
+        let _span = debug_span!(
+            "sonatina.optim.pipeline.function",
+            func_ref = func_ref.as_u32()
+        )
+        .entered();
+        let mut ctx = PassContext::default();
+        if run_pass(
+            pass,
+            Some(func_ref),
+            func,
+            &mut ctx,
+            local_object_args,
+            object_effects,
+            arg_invariance
+                .as_ref()
+                .and_then(|proofs| proofs.get(&func_ref)),
+        )
+        .changed
+        {
+            changed.store(true, Ordering::Relaxed);
+        }
+    };
+    match funcs {
+        Some(funcs) => funcs.par_iter().copied().for_each(|func_ref| {
+            module
+                .func_store
+                .modify(func_ref, |func| run_on(func_ref, func));
+        }),
+        None => module.func_store.par_for_each(run_on),
     }
     PassResult::new(pass, changed.load(Ordering::Relaxed))
 }
@@ -1101,9 +1071,7 @@ block0:
                 &module,
                 &[Pass::AggregateCombine],
                 &mut behavior_dirty,
-                FuncPassOverrides {
-                    funcs: Some(&[helper]),
-                },
+                Some(&[helper]),
             );
             if change_call {
                 module.func_store.modify(helper, |func| {
@@ -1124,9 +1092,7 @@ block0:
                 &module,
                 &[Pass::AggregateScalarize],
                 &mut behavior_dirty,
-                FuncPassOverrides {
-                    funcs: Some(&[observer]),
-                },
+                Some(&[observer]),
             );
             assert!(verify_module(&module, &config).is_ok());
             module.func_store.view(observer, |func| {
@@ -1888,8 +1854,7 @@ func private %entry(v0.i256, v1.i1) -> i256 {
             lpt.compute(&cfg, &domtree);
             let load = func
                 .layout
-                .iter_block()
-                .flat_map(|block| func.layout.iter_inst(block))
+                .iter_all_insts()
                 .find(|&inst| {
                     sonatina_ir::inst::downcast::<&sonatina_ir::inst::data::ObjLoad>(
                         func.inst_set(),
@@ -3021,9 +2986,7 @@ block2:
             &module,
             &[Pass::Sccp, Pass::CfgCleanup],
             &mut func_behavior_dirty,
-            FuncPassOverrides {
-                funcs: Some(&[selected]),
-            },
+            Some(&[selected]),
         );
 
         module.func_store.view(selected, |func| {

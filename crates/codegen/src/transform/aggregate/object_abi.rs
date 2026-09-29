@@ -1216,11 +1216,7 @@ block0:
                 "helper out arg should come from an obj.alloc:\n{dumped}"
             );
 
-            let order: Vec<_> = func
-                .layout
-                .iter_block()
-                .flat_map(|block| func.layout.iter_inst(block))
-                .collect();
+            let order: Vec<_> = func.layout.iter_all_insts().collect();
             let alloc_pos = order
                 .iter()
                 .position(|&inst| inst == alloc_inst)
