@@ -7,10 +7,10 @@ target = "evm-ethereum-london"
 # nextln:         v0.i32 = evm_keccak256 0.i32 0.i32;
 # nextln:         v1.i1 = ne v0 0.i32;
 # nextln:         br v1 block1 block2;
-# nextln: 
+# nextln:
 # nextln:     block1:
 # nextln:         return 1.i32;
-# nextln: 
+# nextln:
 # nextln:     block2:
 # nextln:         return 2.i32;
 func public %branch_on_evm_keccak256() -> i32 {

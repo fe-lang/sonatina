@@ -24,11 +24,11 @@ func public %unreachable_edge2(v0.i8) -> i8 {
 # nextln:   v1.i8 = add v0 1.i8;
 # nextln:   v2.i1 = trunc v1 i1;
 # nextln:   br v2 block3 block4;
-# nextln: 
+# nextln:
 # nextln: block3:
 # nextln:   v4.i8 = add v0 3.i8;
 # nextln:   jump block4;
-# nextln: 
+# nextln:
 # nextln: block4:
 # nextln:   v5.i8 = phi (v1 block0) (v4 block3);
 # nextln:   return v5;

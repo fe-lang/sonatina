@@ -3,13 +3,13 @@ target = "evm-ethereum-london"
 # check:  block0:
 # nextln:      v3.i32 = add v0 v1;
 # nextln:      jump block1;
-# nextln: 
+# nextln:
 # nextln:  block1:
 # nextln:      v2.i32 = phi (0.i32 block0) (v4 block1);
 # nextln:      v4.i32 = add v2 v3;
 # nextln:      v5.i1 = slt v2 10.i32;
 # nextln:      br v5 block1 block3;
-# nextln: 
+# nextln:
 # nextln:  block3:
 # nextln:      return;
 func public %basic(v0.i32, v1.i32) -> unit {

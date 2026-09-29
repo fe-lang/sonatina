@@ -11,17 +11,17 @@ target = "evm-ethereum-london"
 # nextln:     v4.i256 = phi (v0 block0) (v2 block1);
 # nextln:     v5.i1 = lt v4 4.i256;
 # nextln:     br v5 block4 block3;
-# nextln: 
+# nextln:
 # nextln: block3:
 # nextln:     v6.i256 = shr 2.i256 v4;
 # nextln:     jump block4;
-# nextln: 
+# nextln:
 # nextln: block4:
 # nextln:     v8.i256 = phi (v3 block2) ($sum block3);
 # nextln:     v9.i256 = phi (v4 block2) (v6 block3);
 # nextln:     v10.i1 = lt v9 2.i256;
 # nextln:     br v10 block6 block5;
-# nextln: 
+# nextln:
 # nextln: block5:
 # nextln:     v11.i256 = add v8 1.i256;
 # nextln:     jump block6;

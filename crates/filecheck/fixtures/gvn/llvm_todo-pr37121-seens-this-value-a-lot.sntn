@@ -6,13 +6,13 @@ target = "evm-ethereum-london"
 # check:  block0:
 # nextln:     v0.i8 = mload v101 i8;
 # nextln:     jump block1;
-# nextln: 
+# nextln:
 # nextln: block1:
 # nextln:     v1.i8 = phi (v2 block1) (v0 block0);
 # nextln:     v2.i8 = xor v1 v100;
 # nextln:     jump block1;
-# nextln: 
-# nextln: 
+# nextln:
+# nextln:
 func public %llvm_foo(v100.i8, v101.*i8) -> unit {
     block0:
         v0.i8 = mload v101 i8;

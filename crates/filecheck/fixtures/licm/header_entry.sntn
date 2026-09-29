@@ -4,10 +4,10 @@ target = "evm-ethereum-london"
 # nextln:     v2.i32 = add v0 1.i32;
 # nextln:     v3.i32 = sub v2 1.i32;
 # nextln:     jump block0;
-# nextln: 
+# nextln:
 # nextln: block0:
 # nextln:     br v1 block0 block2;
-# nextln: 
+# nextln:
 # nextln: block2:
 # nextln:     return v3;
 func public %header_entry(v0.i32, v1.i1) -> i32 {
