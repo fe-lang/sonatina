@@ -2442,6 +2442,7 @@ dependencies = [
  "insta",
  "object",
  "rayon",
+ "rpds",
  "revm",
  "rustc-hash",
  "smallvec",

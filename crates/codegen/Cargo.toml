@@ -24,6 +24,7 @@ cranelift-object = { git = "https://github.com/fe-lang/wasmtime", rev = "29e2978
 cranelift-jit = { git = "https://github.com/fe-lang/wasmtime", rev = "29e29784e9b6363675513398a606bcc5bdad41fe", optional = true }
 smallvec = "1.15.1"
 rustc-hash = "2.0.0"
+rpds = "1.2.1"
 sonatina-ir = { path = "../ir", version = "0.0.3-alpha" }
 sonatina-triple = { path = "../triple", version = "0.0.3-alpha" }
 sonatina-macros = { path = "../macros", version = "0.0.3-alpha" }

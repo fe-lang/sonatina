@@ -1,6 +1,7 @@
 //! Sparse definedness of typed values and object subtrees. This is stronger than
 //! verifier readability: a trusted payload assumption cannot define scalar undef.
 
+use rpds::RedBlackTreeMapSync;
 use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
     Function, Type, Value, ValueId,
@@ -22,7 +23,9 @@ pub(crate) struct InitializedValue {
     ty: Type,
     default_defined: bool,
     variant: Option<EnumVariantRef>,
-    children: FxHashMap<u32, Self>,
+    // Snapshots share unchanged entries; a write copies only its map path.
+    // Empty scalar leaves need no allocation.
+    children: RedBlackTreeMapSync<u32, Self>,
 }
 
 impl InitializedValue {
@@ -31,7 +34,7 @@ impl InitializedValue {
             ty,
             default_defined: defined,
             variant: None,
-            children: FxHashMap::default(),
+            children: RedBlackTreeMapSync::new_sync(),
         }
     }
 
@@ -70,7 +73,7 @@ impl InitializedValue {
         }
         match shape::aggregate_child_count(ctx, self.ty) {
             Some(count) => {
-                (self.default_defined || self.children.len() == count)
+                (self.default_defined || self.children.size() == count)
                     && self.children.values().all(|child| child.defined(ctx))
             }
             None => self.default_defined,
@@ -141,7 +144,7 @@ impl InitializedValue {
                 value,
                 cache,
             );
-            self.children.insert(index, child);
+            self.children.insert_mut(index, child);
         }
     }
 
@@ -172,7 +175,7 @@ impl InitializedValue {
                 },
                 cache,
             );
-            self.children.insert(index, child);
+            self.children.insert_mut(index, child);
         }
     }
 
@@ -188,7 +191,7 @@ impl InitializedValue {
     pub(crate) fn select(&mut self, ctx: &ModuleCtx, variant: EnumVariantRef) {
         self.variant = Some(variant);
         if let Some(ty) = shape::enum_tag_ty(self.ty) {
-            self.children.insert(0, Self::new(ty, true));
+            self.children.insert_mut(0, Self::new(ty, true));
         }
         debug_assert!(matches!(
             self.ty.resolve_compound(ctx),
@@ -209,7 +212,7 @@ impl InitializedValue {
             if let Some(a) = self.child(ctx, index)
                 && let Some(b) = other.child(ctx, index)
             {
-                result.children.insert(index, a.join(ctx, &b));
+                result.children.insert_mut(index, a.join(ctx, &b));
             }
         }
         result
@@ -279,7 +282,7 @@ impl ValueInitialization<'_> {
             let mut base = self.value(*insert.dest());
             if let Some(index) = shape::const_u32(&func.dfg, *insert.idx()) {
                 let field = self.value(*insert.value());
-                base.children.insert(index, field);
+                base.children.insert_mut(index, field);
                 return base;
             }
         } else if let Some(extract) = downcast::<&data::ExtractValue>(is, data) {
@@ -350,9 +353,137 @@ impl ValueInitialization<'_> {
 
 #[cfg(test)]
 mod tests {
+    use std::ptr;
+
     use super::*;
     use sonatina_parser::parse_module;
     use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module};
+
+    #[test]
+    fn snapshots_share_subtrees_and_isolate_partial_writes() {
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+type @Pair = { i256, i256 };
+type @Nested = { @Pair, @Pair };
+func private %f(v0.@Nested) {
+block0:
+    return;
+}
+"#,
+        )
+        .unwrap();
+        let ctx = &parsed.module.ctx;
+        let ty = ctx.func_sig(parsed.module.funcs()[0], |sig| sig.args()[0]);
+        let mut layout = AggregateLayoutCache::default();
+        let mut value = InitializedValue::new(ty, false);
+        for path in [[0, 0], [0, 1], [1, 0], [1, 1]] {
+            let slice = shape::aggregate_slice_for_path(ctx, ty, &path).unwrap();
+            value.put(
+                ctx,
+                slice,
+                InitializedValue::new(slice.ty, true),
+                &mut layout,
+            );
+        }
+        assert!(value.defined(ctx));
+        let retained = value.clone();
+        assert!(value.children.ptr_eq(&retained.children));
+        let left = shape::aggregate_slice_for_path(ctx, ty, &[0]).unwrap();
+        let projected = value.at(ctx, left, &mut layout);
+        assert!(projected.children.ptr_eq(&value.children[&0].children));
+
+        let first = shape::aggregate_slice_for_path(ctx, ty, &[0, 0]).unwrap();
+        value.put(
+            ctx,
+            first,
+            InitializedValue::new(first.ty, false),
+            &mut layout,
+        );
+        assert!(!value.defined(ctx));
+        assert!(retained.defined(ctx));
+        assert!(projected.defined(ctx));
+        assert!(ptr::eq(&value.children[&1], &retained.children[&1]));
+        assert!(
+            value.children[&1]
+                .children
+                .ptr_eq(&retained.children[&1].children)
+        );
+        assert!(
+            !value.children[&0]
+                .children
+                .ptr_eq(&retained.children[&0].children)
+        );
+        let right = shape::aggregate_slice_for_path(ctx, ty, &[1]).unwrap();
+        let before_forget = value.clone();
+        value.forget(ctx, right, &mut layout);
+        assert!(!value.at(ctx, right, &mut layout).defined(ctx));
+        assert!(before_forget.at(ctx, right, &mut layout).defined(ctx));
+        assert!(retained.defined(ctx));
+        assert!(!retained.join(ctx, &value).defined(ctx));
+    }
+
+    #[test]
+    fn shared_enum_snapshots_preserve_tag_and_payload_definedness() {
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+type @E = enum { #None, #Some(i256) };
+func private %f(v0.@E) {
+block0:
+    return;
+}
+"#,
+        )
+        .unwrap();
+        let ctx = &parsed.module.ctx;
+        let ty = ctx.func_sig(parsed.module.funcs()[0], |sig| sig.args()[0]);
+        let Type::Compound(enum_ty) = ty else {
+            panic!("expected enum");
+        };
+        let some = EnumVariantRef::new(enum_ty, 1);
+        let none = EnumVariantRef::new(enum_ty, 0);
+        let payload = shape::enum_variant_field_slice(ctx, ty, some, 0).unwrap();
+        let tag = shape::enum_tag_slice(ctx, ty).unwrap();
+        let mut layout = AggregateLayoutCache::default();
+        let mut value = InitializedValue::new(ty, false);
+        value.select(ctx, some);
+        assert!(
+            !value.defined(ctx),
+            "selecting a tag does not define its payload"
+        );
+        value.put(
+            ctx,
+            payload,
+            InitializedValue::new(payload.ty, true),
+            &mut layout,
+        );
+        assert!(value.defined(ctx));
+        let retained = value.clone();
+        value.forget(ctx, payload, &mut layout);
+        value.assume_variant(some);
+        assert!(
+            !value.defined(ctx),
+            "trusted assumptions cannot define scalar undef"
+        );
+        assert!(retained.defined(ctx));
+        value.select(ctx, none);
+        assert!(
+            value.defined(ctx),
+            "inactive undefined payloads do not count"
+        );
+        assert_eq!(retained.variant(), Some(some));
+        let joined = retained.join(ctx, &value);
+        assert!(joined.defined(ctx));
+        assert_eq!(joined.variant(), None);
+        value.forget(ctx, tag, &mut layout);
+        value.assume_variant(none);
+        assert!(
+            !value.defined(ctx),
+            "an assumption cannot define a forgotten tag"
+        );
+        assert!(retained.defined(ctx));
+    }
 
     #[test]
     fn object_reads_need_point_specific_snapshots() {
