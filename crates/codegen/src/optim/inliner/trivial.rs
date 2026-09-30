@@ -14,7 +14,7 @@ use crate::{
     optim::call_purity::is_nonmutating_returning_call,
 };
 
-use super::{CallChanges, InlineStats, InlinerConfig};
+use super::{CallChanges, InlineStats, InlinerConfig, cost::loaded_field_reconstruction_count};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ValueTemplate {
@@ -308,7 +308,10 @@ fn collect_splice_body(
     body_insts: &[InstId],
 ) -> Option<CollectedSpliceBody> {
     let is_single_use = callee_call_count == 1;
-    if !is_single_use && body_insts.len() > config.splice_max_insts {
+    if !is_single_use
+        && body_insts.len() - loaded_field_reconstruction_count(callee, body_insts)
+            > config.splice_max_insts
+    {
         stats.skipped_too_large += 1;
         return None;
     }
