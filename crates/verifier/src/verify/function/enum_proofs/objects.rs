@@ -95,14 +95,14 @@ impl State {
             }
             Some(CompoundType::Struct(record)) => {
                 for (i, &ty) in record.fields.iter().enumerate() {
-                    value.children.insert(
+                    value.insert_child(
                         Step::Index(Index::Constant(i)),
                         Self::imported(ctx, owner, ty, complete),
                     );
                 }
             }
             Some(CompoundType::Array { elem, len }) if len != 0 => {
-                value.children.insert(
+                value.insert_child(
                     Step::Index(Index::Unknown),
                     Self::imported(ctx, owner, elem, complete),
                 );
@@ -110,7 +110,7 @@ impl State {
             Some(CompoundType::Enum(enumeration)) => {
                 for (v, variant) in enumeration.variants.iter().enumerate() {
                     for (i, &ty) in variant.fields.iter().enumerate() {
-                        value.children.insert(
+                        value.insert_child(
                             Step::Payload(v as u32, i),
                             Self::imported(ctx, owner, ty, complete),
                         );
@@ -133,7 +133,7 @@ impl State {
     }
 
     pub fn reference(&self, verifier: &FunctionVerifier<'_>, id: ValueId) -> References {
-        self.value(verifier, id).references
+        self.value(verifier, id).references.clone()
     }
 
     pub fn contents(&self, ctx: &ModuleCtx, refs: &References, ty: Type) -> ValueState {
@@ -147,15 +147,20 @@ impl State {
         }) {
             return value;
         }
-        self.heap_contents(ctx, refs, ty)
+        Self::heap_contents(&self.objects, ctx, refs, ty)
     }
 
-    fn heap_contents(&self, ctx: &ModuleCtx, refs: &References, ty: Type) -> ValueState {
+    fn heap_contents(
+        objects: &BTreeMap<Root, ValueState>,
+        ctx: &ModuleCtx,
+        refs: &References,
+        ty: Type,
+    ) -> ValueState {
         let mut values = refs
             .views
             .iter()
             .map(|view| {
-                self.objects.get(&view.place.root).map_or_else(
+                objects.get(&view.place.root).map_or_else(
                     || ValueState::new(ty, false),
                     |root| root.at(ctx, &view.place.path),
                 )
@@ -407,18 +412,20 @@ impl State {
         for (&root, value) in &mut self.objects {
             if root.externally_accessible(&self.exposed) {
                 value.forget(ctx);
+                let ty = value.ty;
                 value.copy_references(
                     ctx,
-                    &Source::RawLoad(sources).value(ctx, Root::External, value.ty),
+                    &Source::RawLoad(sources).value(ctx, Root::External, ty),
                 );
             }
         }
         for fact in self.views.values_mut() {
             if fact.references.externally_accessible(&self.exposed) {
                 fact.value.forget(ctx);
+                let ty = fact.value.ty;
                 fact.value.copy_references(
                     ctx,
-                    &Source::RawLoad(sources).value(ctx, Root::External, fact.value.ty),
+                    &Source::RawLoad(sources).value(ctx, Root::External, ty),
                 );
             }
             if fact
@@ -465,8 +472,7 @@ impl State {
                 }
             }
         }
-        let facts = std::mem::take(&mut self.views);
-        for (id, mut fact) in facts {
+        for fact in self.views.values_mut() {
             if let Some((relation, path)) = target.relation(&fact.references) {
                 match relation {
                     Relation::Equal => fact.value = post.clone(),
@@ -497,7 +503,8 @@ impl State {
                             })
                         }))
             {
-                fact.value = self.heap_contents(ctx, &fact.references, fact.value.ty);
+                fact.value =
+                    Self::heap_contents(&self.objects, ctx, &fact.references, fact.value.ty);
             }
             if !assertion
                 && (target.unknown
@@ -516,7 +523,6 @@ impl State {
             {
                 fact.guards = false;
             }
-            self.views.insert(id, fact);
         }
         if !assertion {
             self.observations.retain(|_, refs| {

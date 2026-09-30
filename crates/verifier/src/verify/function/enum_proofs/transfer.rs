@@ -208,7 +208,7 @@ pub(super) fn instruction(
         let mut value = ValueState::new(*make.ty(), false);
         value.refine(make.variant().index());
         for (i, &field) in make.values().iter().enumerate() {
-            value.children.insert(
+            value.insert_child(
                 Step::Payload(make.variant().index(), i),
                 state.value(verifier, field),
             );
