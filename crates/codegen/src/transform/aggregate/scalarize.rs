@@ -22,7 +22,7 @@ use super::{
     cleanup::DeadPureInstCleanup,
     object_arg_invariance::FunctionArgInvariance,
     object_tracking::{AggregateFacts, ObjectSlice, objref_element_ty},
-    promotion::SsaBuilder,
+    promotion::{SsaBuilder, unconditional_read_prefix},
     provenance::{CompleteProvenance, ExactProjectionMap, ProvenanceSnapshot, RootValue},
     reconstruct::{
         AggregateValueReconstructor, bitcast_before_inst, rebuild_scalar_shape_from_leaf_values,
@@ -134,23 +134,11 @@ impl IncomingPromotionPlan {
                     .fill(Some(inst));
             }
         }
-        let mut block = func.layout.entry_block()?;
-        let mut visited = FxHashSet::default();
-        'prefix: while visited.insert(block) {
-            for inst in func.layout.iter_inst(block) {
-                if let Some(slice) = reads.get(&inst) {
-                    entry_leaf_reads[slice.first_leaf..slice.first_leaf + slice.leaf_count]
-                        .fill(Some(inst));
-                } else if let Some(jump) =
-                    downcast::<&control_flow::Jump>(func.inst_set(), func.dfg.inst(inst))
-                {
-                    block = *jump.dest();
-                    continue 'prefix;
-                } else if !func.dfg.can_speculate(inst) {
-                    break 'prefix;
-                }
-            }
-            break;
+        func.layout.entry_block()?;
+        for inst in unconditional_read_prefix(func, |inst| reads.contains_key(&inst)) {
+            let slice = reads[&inst];
+            entry_leaf_reads[slice.first_leaf..slice.first_leaf + slice.leaf_count]
+                .fill(Some(inst));
         }
         // Sufficient placement proof for non-enum scalar/product roots: every
         // demanded leaf has either caller-proven entry validity or an
@@ -2964,7 +2952,7 @@ impl AggregateScalarize {
     }
 }
 
-fn insert_object_child_ref(
+pub(crate) fn insert_object_child_ref(
     func: &mut Function,
     cursor: &mut InstInserter,
     module: &sonatina_ir::module::ModuleCtx,

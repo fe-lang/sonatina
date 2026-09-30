@@ -1,6 +1,7 @@
 pub(crate) mod abi;
 #[cfg(test)]
 mod alias_tests;
+mod arg_promotion;
 pub(crate) mod byval_object_abi;
 mod capture_state;
 mod cleanup;
@@ -29,6 +30,7 @@ pub(crate) mod scalarize;
 pub mod shape;
 
 pub use abi::AggregateExpandAbi;
+pub use arg_promotion::{ObjectArgPromotion, ObjectArgPromotionStats};
 pub use byval_object_abi::{
     ObjectAggregateAbi, ObjectAggregateAbiConfig, ObjectByValueArgAbi, ObjectByValueArgAbiConfig,
 };
