@@ -6,18 +6,18 @@ input_file: test_files/evm/scratch_spill_same_block_overlap_regression.sntn
 evm.config: stack_reach=8 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 882 bytes
-  total: 882 bytes
+  section runtime: 209 bytes
+  total: 209 bytes
 
 functions:
-  mem: global_dyn_base=0xae0 arena_base=0x40 scratch_peak_words=0 stable_chain_peak_words=85
-  entry: ir_blocks=1 ir_insts=131 vcode_ops=499 fixups=0 imm_bytes=218
-    mem: scratch_words=0 stable_words=85 stable_mode=StableAbs(base=0x40) entry_abs_words=0 abs_words_end=85
+  mem: global_dyn_base=0x800 arena_base=0x0 scratch_peak_words=0 stable_chain_peak_words=64
+  entry: ir_blocks=1 ir_insts=37 vcode_ops=111 fixups=0 imm_bytes=68
+    mem: scratch_words=0 stable_words=64 stable_mode=StableAbs(base=0x0) entry_abs_words=0 abs_words_end=64
   touch: ir_blocks=1 ir_insts=1 vcode_ops=2 fixups=0 imm_bytes=0
-    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=85 abs_words_end=0
+    mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=64 abs_words_end=0
 
 evm:
-  case copy_first_word: calldata_len=0 success reason=Return gas_used=22727 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=1727
+  case copy_first_word: calldata_len=0 success reason=Return gas_used=21669 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=669
 
 
 --------------- DEBUG ---------------
@@ -26,502 +26,114 @@ evm:
 entry:
   block0:
     PUSH1 0x1 (1)  // evm_mstore v0 v2;
+    PUSH0
+    MSTORE
+    PUSH1 0x2 (2)  // evm_mstore v3 v5;
+    PUSH1 0x20 (32)
+    MSTORE
+    PUSH1 0x3 (3)  // evm_mstore v6 v8;
     PUSH1 0x40 (64)
     MSTORE
-    PUSH1 0x2 (2)  // evm_mstore v8 v5;
+    PUSH1 0x4 (4)  // evm_mstore v9 v11;
     PUSH1 0x60 (96)
     MSTORE
-    PUSH1 0x3 (3)  // evm_mstore v11 v7;
+    PUSH1 0x5 (5)  // evm_mstore v12 v14;
     PUSH1 0x80 (128)
     MSTORE
-    PUSH1 0x4 (4)  // evm_mstore v14 v10;
+    PUSH1 0x6 (6)  // evm_mstore v15 v17;
     PUSH1 0xa0 (160)
     MSTORE
-    PUSH1 0x5 (5)  // evm_mstore v17 v13;
+    PUSH1 0x7 (7)  // evm_mstore v18 v20;
     PUSH1 0xc0 (192)
     MSTORE
-    PUSH1 0x6 (6)  // evm_mstore v20 v16;
+    PUSH1 0x8 (8)  // evm_mstore v21 v23;
     PUSH1 0xe0 (224)
     MSTORE
-    PUSH1 0x7 (7)  // evm_mstore v23 v19;
+    PUSH1 0x9 (9)  // evm_mstore v24 v26;
     PUSH2 0x100 (256)
     MSTORE
-    PUSH1 0x8 (8)  // evm_mstore v26 v22;
+    PUSH1 0xa (10)  // evm_mstore v27 v29;
     PUSH2 0x120 (288)
     MSTORE
-    PUSH1 0x9 (9)  // evm_mstore v29 v25;
+    PUSH1 0xb (11)  // evm_mstore v30 v32;
     PUSH2 0x140 (320)
     MSTORE
-    PUSH1 0xa (10)  // evm_mstore v32 v28;
+    PUSH1 0xc (12)  // evm_mstore v33 v101;
     PUSH2 0x160 (352)
     MSTORE
-    PUSH1 0xb (11)  // evm_mstore v101 v31;
+    PUSH1 0xd (13)  // evm_mstore v102 v104;
     PUSH2 0x180 (384)
     MSTORE
-    PUSH1 0xc (12)  // evm_mstore v104 v100;
+    PUSH1 0xe (14)  // evm_mstore v105 v107;
     PUSH2 0x1a0 (416)
     MSTORE
-    PUSH1 0xd (13)  // evm_mstore v107 v103;
+    PUSH1 0xf (15)  // evm_mstore v108 v110;
     PUSH2 0x1c0 (448)
     MSTORE
-    PUSH1 0xe (14)  // evm_mstore v110 v106;
+    PUSH1 0x10 (16)  // evm_mstore v111 v113;
     PUSH2 0x1e0 (480)
     MSTORE
-    PUSH1 0xf (15)  // evm_mstore v113 v109;
+    PUSH1 0x11 (17)  // evm_mstore v114 v116;
     PUSH2 0x200 (512)
     MSTORE
-    PUSH1 0x10 (16)  // evm_mstore v116 v112;
+    PUSH1 0x12 (18)  // evm_mstore v117 v119;
     PUSH2 0x220 (544)
     MSTORE
-    PUSH1 0x11 (17)  // evm_mstore v119 v115;
+    PUSH1 0x13 (19)  // evm_mstore v120 v122;
     PUSH2 0x240 (576)
     MSTORE
-    PUSH1 0x12 (18)  // evm_mstore v122 v118;
+    PUSH1 0x14 (20)  // evm_mstore v123 v125;
     PUSH2 0x260 (608)
     MSTORE
-    PUSH1 0x13 (19)  // evm_mstore v125 v121;
+    PUSH1 0x15 (21)  // evm_mstore v126 v128;
     PUSH2 0x280 (640)
     MSTORE
-    PUSH1 0x14 (20)  // evm_mstore v128 v124;
+    PUSH1 0x16 (22)  // evm_mstore v129 v131;
     PUSH2 0x2a0 (672)
     MSTORE
-    PUSH1 0x15 (21)  // evm_mstore v131 v127;
+    PUSH1 0x17 (23)  // evm_mstore v34 v36;
     PUSH2 0x2c0 (704)
     MSTORE
-    PUSH1 0x16 (22)  // evm_mstore v36 v130;
+    PUSH1 0x18 (24)  // evm_mstore v37 v39;
     PUSH2 0x2e0 (736)
     MSTORE
-    PUSH1 0x17 (23)  // evm_mstore v39 v35;
+    PUSH1 0x19 (25)  // evm_mstore v40 v42;
     PUSH2 0x300 (768)
     MSTORE
-    PUSH1 0x18 (24)  // evm_mstore v42 v38;
+    PUSH1 0x1a (26)  // evm_mstore v43 v45;
     PUSH2 0x320 (800)
     MSTORE
-    PUSH1 0x19 (25)  // evm_mstore v45 v41;
+    PUSH1 0x1b (27)  // evm_mstore v46 v48;
     PUSH2 0x340 (832)
     MSTORE
-    PUSH1 0x1a (26)  // evm_mstore v48 v44;
+    PUSH1 0x1c (28)  // evm_mstore v49 v51;
     PUSH2 0x360 (864)
     MSTORE
-    PUSH1 0x1b (27)  // evm_mstore v51 v47;
+    PUSH1 0x1d (29)  // evm_mstore v52 v54;
     PUSH2 0x380 (896)
     MSTORE
-    PUSH1 0x1c (28)  // evm_mstore v54 v50;
+    PUSH1 0x1e (30)  // evm_mstore v55 v57;
     PUSH2 0x3a0 (928)
     MSTORE
-    PUSH1 0x1d (29)  // evm_mstore v57 v53;
+    PUSH1 0x1f (31)  // evm_mstore v58 v60;
     PUSH2 0x3c0 (960)
     MSTORE
-    PUSH1 0x1e (30)  // evm_mstore v60 v56;
+    PUSH1 0x20 (32)  // evm_mstore v61 v3;
     PUSH2 0x3e0 (992)
     MSTORE
-    PUSH1 0x1f (31)  // evm_mstore 1024.i256 v59;
+    PUSH2 0x200 (512)  // evm_mcopy v1 v0 v114;
+    PUSH0
     PUSH2 0x400 (1024)
-    MSTORE
-    PUSH1 0x20 (32)  // evm_mstore 1056.i256 v3;
-    PUSH2 0x420 (1056)
-    MSTORE
-    PUSH1 0x40 (64)  // v62.i256 = evm_mload v0;
-    MLOAD
-    DUP1
+    MCOPY
+    PUSH2 0x400 (1024)  // evm_mcopy v1 v0 v1;
     PUSH0
-    MSTORE
-    PUSH1 0x60 (96)  // v63.i256 = evm_mload v8;
-    MLOAD
-    DUP1
-    PUSH1 0x20 (32)
-    MSTORE
-    PUSH1 0x80 (128)  // v64.i256 = evm_mload v11;
-    MLOAD
-    DUP1
-    PUSH2 0x840 (2112)
-    MSTORE
-    PUSH1 0xa0 (160)  // v65.i256 = evm_mload v14;
-    MLOAD
-    DUP1
-    PUSH2 0x860 (2144)
-    MSTORE
-    PUSH1 0xc0 (192)  // v66.i256 = evm_mload v17;
-    MLOAD
-    DUP1
-    PUSH2 0x880 (2176)
-    MSTORE
-    PUSH1 0xe0 (224)  // v67.i256 = evm_mload v20;
-    MLOAD
-    DUP1
-    PUSH2 0x8a0 (2208)
-    MSTORE
-    PUSH2 0x100 (256)  // v68.i256 = evm_mload v23;
-    MLOAD
-    DUP1
-    PUSH2 0x8c0 (2240)
-    MSTORE
-    PUSH2 0x120 (288)  // v69.i256 = evm_mload v26;
-    MLOAD
-    PUSH2 0x140 (320)  // v70.i256 = evm_mload v29;
-    MLOAD
-    PUSH2 0x160 (352)  // v71.i256 = evm_mload v32;
-    MLOAD
-    PUSH2 0x180 (384)  // v72.i256 = evm_mload v101;
-    MLOAD
-    PUSH2 0x1a0 (416)  // v73.i256 = evm_mload v104;
-    MLOAD
-    PUSH2 0x1c0 (448)  // v74.i256 = evm_mload v107;
-    MLOAD
-    PUSH2 0x1e0 (480)  // v75.i256 = evm_mload v110;
-    MLOAD
-    PUSH2 0x200 (512)  // v76.i256 = evm_mload v113;
-    MLOAD
-    PUSH2 0x220 (544)  // v77.i256 = evm_mload v116;
-    MLOAD
-    PUSH0  // evm_mstore v1 v62;
-    MLOAD
-    PUSH2 0x440 (1088)
-    MSTORE
-    PUSH1 0x20 (32)  // evm_mstore 1120.i256 v63;
-    MLOAD
-    PUSH2 0x460 (1120)
-    MSTORE
-    PUSH2 0x840 (2112)  // evm_mstore 1152.i256 v64;
-    MLOAD
-    PUSH2 0x480 (1152)
-    MSTORE
-    PUSH2 0x860 (2144)  // evm_mstore 1184.i256 v65;
-    MLOAD
-    PUSH2 0x4a0 (1184)
-    MSTORE
-    PUSH2 0x880 (2176)  // evm_mstore 1216.i256 v66;
-    MLOAD
-    PUSH2 0x4c0 (1216)
-    MSTORE
-    PUSH2 0x8a0 (2208)  // evm_mstore 1248.i256 v67;
-    MLOAD
-    PUSH2 0x4e0 (1248)
-    MSTORE
-    PUSH2 0x8c0 (2240)  // evm_mstore 1280.i256 v68;
-    MLOAD
-    PUSH2 0x500 (1280)
-    MSTORE
-    SWAP8  // evm_mstore 1312.i256 v69;
-    DUP1
-    PUSH2 0x520 (1312)
-    MSTORE
-    POP  // evm_mstore 1344.i256 v70;
-    DUP7
-    PUSH2 0x540 (1344)
-    MSTORE
-    DUP6  // evm_mstore 1376.i256 v71;
-    PUSH2 0x560 (1376)
-    MSTORE
-    SWAP4  // evm_mstore 1408.i256 v72;
-    PUSH2 0x580 (1408)
-    MSTORE
-    SWAP2  // evm_mstore 1440.i256 v73;
-    PUSH2 0x5a0 (1440)
-    MSTORE
-    PUSH2 0x5c0 (1472)  // evm_mstore 1472.i256 v74;
-    MSTORE
-    PUSH2 0x5e0 (1504)  // evm_mstore 1504.i256 v75;
-    MSTORE
-    SWAP2  // evm_mstore 1536.i256 v76;
-    POP
-    POP
-    PUSH2 0x600 (1536)
-    MSTORE
-    SWAP7  // evm_mstore 1568.i256 v77;
-    POP
-    POP
-    POP
-    POP
-    POP
-    POP
-    POP
-    PUSH2 0x620 (1568)
-    MSTORE
-    PUSH1 0x40 (64)  // v93.i256 = evm_mload v0;
-    MLOAD
-    DUP1
-    PUSH0
-    MSTORE
-    PUSH1 0x60 (96)  // v94.i256 = evm_mload v8;
-    MLOAD
-    DUP1
-    PUSH1 0x20 (32)
-    MSTORE
-    PUSH1 0x80 (128)  // v95.i256 = evm_mload v11;
-    MLOAD
-    DUP1
-    PUSH2 0x840 (2112)
-    MSTORE
-    PUSH1 0xa0 (160)  // v96.i256 = evm_mload v14;
-    MLOAD
-    DUP1
-    PUSH2 0x860 (2144)
-    MSTORE
-    PUSH1 0xc0 (192)  // v97.i256 = evm_mload v17;
-    MLOAD
-    DUP1
-    PUSH2 0x880 (2176)
-    MSTORE
-    PUSH1 0xe0 (224)  // v98.i256 = evm_mload v20;
-    MLOAD
-    DUP1
-    PUSH2 0x8a0 (2208)
-    MSTORE
-    PUSH2 0x100 (256)  // v223.i256 = evm_mload v23;
-    MLOAD
-    DUP1
-    PUSH2 0x8c0 (2240)
-    MSTORE
-    PUSH2 0x120 (288)  // v132.i256 = evm_mload v26;
-    MLOAD
-    DUP1
-    PUSH2 0x8e0 (2272)
-    MSTORE
-    PUSH2 0x140 (320)  // v133.i256 = evm_mload v29;
-    MLOAD
-    DUP1
-    PUSH2 0x900 (2304)
-    MSTORE
-    PUSH2 0x160 (352)  // v134.i256 = evm_mload v32;
-    MLOAD
-    DUP1
-    PUSH2 0x920 (2336)
-    MSTORE
-    PUSH2 0x180 (384)  // v135.i256 = evm_mload v101;
-    MLOAD
-    DUP1
-    PUSH2 0x940 (2368)
-    MSTORE
-    PUSH2 0x1a0 (416)  // v136.i256 = evm_mload v104;
-    MLOAD
-    DUP1
-    PUSH2 0x960 (2400)
-    MSTORE
-    PUSH2 0x1c0 (448)  // v137.i256 = evm_mload v107;
-    MLOAD
-    DUP1
-    PUSH2 0x980 (2432)
-    MSTORE
-    PUSH2 0x1e0 (480)  // v138.i256 = evm_mload v110;
-    MLOAD
-    DUP1
-    PUSH2 0x9a0 (2464)
-    MSTORE
-    PUSH2 0x200 (512)  // v139.i256 = evm_mload v113;
-    MLOAD
-    DUP1
-    PUSH2 0x9c0 (2496)
-    MSTORE
-    PUSH2 0x220 (544)  // v140.i256 = evm_mload v116;
-    MLOAD
-    DUP1
-    PUSH2 0x9e0 (2528)
-    MSTORE
-    PUSH2 0x240 (576)  // v141.i256 = evm_mload v119;
-    MLOAD
-    DUP1
-    PUSH2 0xa00 (2560)
-    MSTORE
-    PUSH2 0x260 (608)  // v142.i256 = evm_mload v122;
-    MLOAD
-    DUP1
-    PUSH2 0xa20 (2592)
-    MSTORE
-    PUSH2 0x280 (640)  // v143.i256 = evm_mload v125;
-    MLOAD
-    DUP1
-    PUSH2 0xa40 (2624)
-    MSTORE
-    PUSH2 0x2a0 (672)  // v144.i256 = evm_mload v128;
-    MLOAD
-    DUP1
-    PUSH2 0xa60 (2656)
-    MSTORE
-    PUSH2 0x2c0 (704)  // v145.i256 = evm_mload v131;
-    MLOAD
-    DUP1
-    PUSH2 0xa80 (2688)
-    MSTORE
-    PUSH2 0x2e0 (736)  // v146.i256 = evm_mload v36;
-    MLOAD
-    DUP1
-    PUSH2 0xaa0 (2720)
-    MSTORE
-    PUSH2 0x300 (768)  // v147.i256 = evm_mload v39;
-    MLOAD
-    DUP1
-    PUSH2 0xac0 (2752)
-    MSTORE
-    PUSH2 0x320 (800)  // v148.i256 = evm_mload v42;
-    MLOAD
-    PUSH2 0x340 (832)  // v149.i256 = evm_mload v45;
-    MLOAD
-    PUSH2 0x360 (864)  // v150.i256 = evm_mload v48;
-    MLOAD
-    PUSH2 0x380 (896)  // v151.i256 = evm_mload v51;
-    MLOAD
-    PUSH2 0x3a0 (928)  // v152.i256 = evm_mload v54;
-    MLOAD
-    PUSH2 0x3c0 (960)  // v153.i256 = evm_mload v57;
-    MLOAD
-    PUSH2 0x3e0 (992)  // v154.i256 = evm_mload v60;
-    MLOAD
-    PUSH2 0x400 (1024)  // v155.i256 = evm_mload 1024.i256;
-    MLOAD
-    PUSH2 0x420 (1056)  // v156.i256 = evm_mload 1056.i256;
-    MLOAD
-    PUSH0  // evm_mstore v1 v93;
-    MLOAD
-    PUSH2 0x440 (1088)
-    MSTORE
-    PUSH1 0x20 (32)  // evm_mstore 1120.i256 v94;
-    MLOAD
-    PUSH2 0x460 (1120)
-    MSTORE
-    PUSH2 0x840 (2112)  // evm_mstore 1152.i256 v95;
-    MLOAD
-    PUSH2 0x480 (1152)
-    MSTORE
-    PUSH2 0x860 (2144)  // evm_mstore 1184.i256 v96;
-    MLOAD
-    PUSH2 0x4a0 (1184)
-    MSTORE
-    PUSH2 0x880 (2176)  // evm_mstore 1216.i256 v97;
-    MLOAD
-    PUSH2 0x4c0 (1216)
-    MSTORE
-    PUSH2 0x8a0 (2208)  // evm_mstore 1248.i256 v98;
-    MLOAD
-    PUSH2 0x4e0 (1248)
-    MSTORE
-    PUSH2 0x8c0 (2240)  // evm_mstore 1280.i256 v223;
-    MLOAD
-    PUSH2 0x500 (1280)
-    MSTORE
-    PUSH2 0x8e0 (2272)  // evm_mstore 1312.i256 v132;
-    MLOAD
-    PUSH2 0x520 (1312)
-    MSTORE
-    PUSH2 0x900 (2304)  // evm_mstore 1344.i256 v133;
-    MLOAD
-    PUSH2 0x540 (1344)
-    MSTORE
-    PUSH2 0x920 (2336)  // evm_mstore 1376.i256 v134;
-    MLOAD
-    PUSH2 0x560 (1376)
-    MSTORE
-    PUSH2 0x940 (2368)  // evm_mstore 1408.i256 v135;
-    MLOAD
-    PUSH2 0x580 (1408)
-    MSTORE
-    PUSH2 0x960 (2400)  // evm_mstore 1440.i256 v136;
-    MLOAD
-    PUSH2 0x5a0 (1440)
-    MSTORE
-    PUSH2 0x980 (2432)  // evm_mstore 1472.i256 v137;
-    MLOAD
-    PUSH2 0x5c0 (1472)
-    MSTORE
-    PUSH2 0x9a0 (2464)  // evm_mstore 1504.i256 v138;
-    MLOAD
-    PUSH2 0x5e0 (1504)
-    MSTORE
-    PUSH2 0x9c0 (2496)  // evm_mstore 1536.i256 v139;
-    MLOAD
-    PUSH2 0x600 (1536)
-    MSTORE
-    PUSH2 0x9e0 (2528)  // evm_mstore 1568.i256 v140;
-    MLOAD
-    PUSH2 0x620 (1568)
-    MSTORE
-    PUSH2 0xa00 (2560)  // evm_mstore 1600.i256 v141;
-    MLOAD
-    PUSH2 0x640 (1600)
-    MSTORE
-    PUSH2 0xa20 (2592)  // evm_mstore 1632.i256 v142;
-    MLOAD
-    PUSH2 0x660 (1632)
-    MSTORE
-    PUSH2 0xa40 (2624)  // evm_mstore 1664.i256 v143;
-    MLOAD
-    PUSH2 0x680 (1664)
-    MSTORE
-    PUSH2 0xa60 (2656)  // evm_mstore 1696.i256 v144;
-    MLOAD
-    PUSH2 0x6a0 (1696)
-    MSTORE
-    PUSH2 0xa80 (2688)  // evm_mstore 1728.i256 v145;
-    MLOAD
-    PUSH2 0x6c0 (1728)
-    MSTORE
-    PUSH2 0xaa0 (2720)  // evm_mstore 1760.i256 v146;
-    MLOAD
-    PUSH2 0x6e0 (1760)
-    MSTORE
-    PUSH2 0xac0 (2752)  // evm_mstore 1792.i256 v147;
-    MLOAD
-    PUSH2 0x700 (1792)
-    MSTORE
-    SWAP8  // evm_mstore 1824.i256 v148;
-    DUP1
-    PUSH2 0x720 (1824)
-    MSTORE
-    POP  // evm_mstore 1856.i256 v149;
-    DUP7
-    PUSH2 0x740 (1856)
-    MSTORE
-    DUP6  // evm_mstore 1888.i256 v150;
-    PUSH2 0x760 (1888)
-    MSTORE
-    SWAP4  // evm_mstore 1920.i256 v151;
-    PUSH2 0x780 (1920)
-    MSTORE
-    SWAP2  // evm_mstore 1952.i256 v152;
-    PUSH2 0x7a0 (1952)
-    MSTORE
-    PUSH2 0x7c0 (1984)  // evm_mstore 1984.i256 v153;
-    MSTORE
-    PUSH2 0x7e0 (2016)  // evm_mstore 2016.i256 v154;
-    MSTORE
-    SWAP2  // evm_mstore 2048.i256 v155;
-    POP
-    POP
-    PUSH2 0x800 (2048)
-    MSTORE
-    SWAP8  // evm_mstore 2080.i256 v156;
-    POP
-    POP
-    POP
-    POP
-    POP
-    POP
-    POP
-    POP
-    SWAP8
-    POP
-    POP
-    POP
-    POP
-    POP
-    POP
-    POP
-    POP
-    SWAP7
-    POP
-    POP
-    POP
-    POP
-    POP
-    POP
-    POP
-    PUSH2 0x820 (2080)
-    MSTORE
-    PUSH2 0x440 (1088)  // v188.i256 = evm_mload v1;
+    DUP2
+    MCOPY
+    PUSH2 0x400 (1024)  // v189.i256 = evm_mload v1;
     MLOAD
-    PUSH0  // evm_mstore 0.i256 v188;
+    PUSH0  // evm_mstore v0 v189;
     MSTORE
-    PUSH1 0x20 (32)  // evm_return 0.i256 v3;
+    PUSH1 0x20 (32)  // evm_return v0 v3;
     PUSH0
     RETURN
 
