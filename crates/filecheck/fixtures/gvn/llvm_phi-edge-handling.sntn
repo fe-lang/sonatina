@@ -5,10 +5,10 @@ target = "evm-ethereum-london"
 
 # check:  block0:
 # nextln:     br v0 block3 block4;
-# nextln: 
+# nextln:
 # nextln: block3:
 # nextln:     return 1.i16;
-# nextln: 
+# nextln:
 # nextln: block4:
 # nextln:     return 0.i16;
 func public %llvm_hoge(v0.i1) -> i16 {

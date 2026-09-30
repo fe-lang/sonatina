@@ -4,15 +4,15 @@ target = "evm-ethereum-london"
 # check:    block3:
 # nextln:        v31.i8 = add 3.i8 v2;
 # nextln:        jump block6;
-# nextln: 
+# nextln:
 # nextln:    block4:
 # nextln:        v41.i8 = add 4.i8 v2;
 # nextln:        jump block6;
-# nextln: 
+# nextln:
 # nextln:    block5:
 # nextln:        v51.i8 = add 5.i8 v2;
 # nextln:        jump block6;
-# nextln: 
+# nextln:
 # nextln:    block6:
 # nextln:        $(var=$VALUE).i8 = phi (v31 block3) (v41 block4) (v51 block5);
 # nextln:        v60.i8 = phi (3.i8 block3) (4.i8 block4) (5.i8 block5);

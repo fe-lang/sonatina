@@ -3,22 +3,22 @@ target = "evm-ethereum-london"
 # check:    block0:
 # nextln:        v1.i32 = add v100 v101;
 # nextln:        jump block1;
-# nextln: 
+# nextln:
 # nextln:    block1:
 # nextln:        v10.i32 = phi (v100 block0) (v30 block3);
 # nextln:        v11.i32 = add v10 v101;
 # nextln:        br v102 block3 block4;
-# nextln: 
+# nextln:
 # nextln:    block3:
 # nextln:        v30.i32 = add v10 v104;
 # nextln:        v31.i32 = add v30 v101;
 # nextln:        br v103 block5 block1;
-# nextln: 
+# nextln:
 # nextln:    block4:
 # nextln:        v40.i32 = add v10 v105;
 # nextln:        v42.i32 = sub v40 v101;
 # nextln:        jump block5;
-# nextln: 
+# nextln:
 # nextln:    block5:
 # nextln:        v50.i32 = phi (v11 block3) (v40 block4);
 # nextln:        v51.i32 = sub v50 v101;

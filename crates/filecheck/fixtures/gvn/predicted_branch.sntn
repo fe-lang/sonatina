@@ -2,10 +2,10 @@ target = "evm-ethereum-london"
 
 # check: block0:
 # nextln:   br v0 block4 block2;
-# nextln: 
+# nextln:
 # check: block2:
 # nextln:   return 0.i1;
-# nextln: 
+# nextln:
 # nextln: block4:
 # nextln:   return 1.i1;
 func public %predicted_branch(v0.i1) -> i1 {

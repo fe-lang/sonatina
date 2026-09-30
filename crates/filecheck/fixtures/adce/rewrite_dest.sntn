@@ -41,10 +41,10 @@ func public %rewrite_dest2(v0.i32) -> i32 {
 # nextln:     v1.i32 = add v0 1.i32;
 # nextln:     v2.i32 = add v0 2.i32;
 # nextln:     br_table v0 block3 (1.i32 block2) (2.i32 block3);
-# nextln: 
+# nextln:
 # nextln: block2:
 # nextln:     return v2;
-# nextln: 
+# nextln:
 # nextln: block3:
 # nextln:     return v1;
 func public %rewrite_dest3(v0.i32) -> i32 {

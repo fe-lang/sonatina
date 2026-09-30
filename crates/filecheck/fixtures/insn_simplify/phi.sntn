@@ -3,10 +3,10 @@ target = "evm-ethereum-london"
 # sameln: func public %phi(v0.i8) -> i8 {
 # nextln:     block0:
 # nextln:         jump block1;
-# nextln: 
+# nextln:
 # nextln:     block1:
 # nextln:         br v0 block1 block2;
-# nextln: 
+# nextln:
 # nextln:     block2:
 # nextln:       return v0;
 func public %phi(v0.i8) -> i8 {

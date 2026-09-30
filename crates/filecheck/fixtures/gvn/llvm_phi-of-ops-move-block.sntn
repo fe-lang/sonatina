@@ -5,28 +5,28 @@ target = "evm-ethereum-london"
 
 # check:  block0:
 # nextln:     jump block1;
-# nextln: 
+# nextln:
 # nextln: block1:
 # nextln:     v1.i32 = phi (0.i32 block0) (v8 block4);
 # nextln:     evm_sstore v0 v1;
 # nextln:     v2.i1 = eq v1 0.i32;
 # nextln:     br v2 block2 block4;
-# nextln: 
+# nextln:
 # nextln: block2:
 # nextln:     v3.i64 = mload v100 i64;
 # nextln:     v4.i1 = eq v3 0.i64;
 # nextln:     br v4 block3 block4;
-# nextln: 
+# nextln:
 # nextln: block3:
 # nextln:     jump block3;
-# nextln: 
+# nextln:
 # nextln: block4:
 # nextln:     v15.i1 = phi (0.i1 block1) (1.i1 block2);
 # nextln:     v5.i32 = phi (0.i32 block1) (-1.i32 block2);
 # nextln:     v7.i1 = or v2 v15;
 # nextln:     v8.i32 = add v1 -1.i32;
 # nextln:     br v7 block1 block5;
-# nextln: 
+# nextln:
 # nextln: block5:
 # nextln:     return;
 func public %llvm_test(v0.*i32, v100.*i64) -> unit {
@@ -60,25 +60,25 @@ func public %llvm_test(v0.*i32, v100.*i64) -> unit {
 
 # check:    block0:
 # nextln:       jump block1;
-# nextln: 
+# nextln:
 # nextln:   block1:
 # nextln:       v1.i32 = phi (0.i32 block0) (v6 block5);
 # nextln:       v2.i1 = eq v1 0.i32;
 # nextln:       br v2 block2 block5;
-# nextln: 
+# nextln:
 # nextln:   block2:
 # nextln:       br v0 block5 block4;
-# nextln: 
+# nextln:
 # nextln:   block4:
 # nextln:       jump block5;
-# nextln: 
+# nextln:
 # nextln:   block5:
 # nextln:       v3.i32 = phi (0.i32 block1) (-1.i32 block2) (-1.i32 block4);
 # nextln:       v4.i1 = ne v3 0.i32;
 # nextln:       v5.i1 = or v2 v4;
 # nextln:       v6.i32 = add v1 -1.i32;
 # nextln:       br v5 block1 block6;
-# nextln: 
+# nextln:
 # nextln:   block6:
 # nextln:       return;
 func public %llvm_test2(v0.i1) -> unit {

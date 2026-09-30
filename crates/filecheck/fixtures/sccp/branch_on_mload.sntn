@@ -7,10 +7,10 @@ target = "evm-ethereum-london"
 # nextln:         v1.i64 = mload v0 i64;
 # nextln:         v2.i1 = ne v1 0.i64;
 # nextln:         br v2 block1 block2;
-# nextln: 
+# nextln:
 # nextln:     block1:
 # nextln:         return 1.i32;
-# nextln: 
+# nextln:
 # nextln:     block2:
 # nextln:         return 2.i32;
 func public %branch_on_mload(v0.*i64) -> i32 {

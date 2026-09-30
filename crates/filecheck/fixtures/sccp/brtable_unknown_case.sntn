@@ -6,10 +6,10 @@ target = "evm-ethereum-london"
 # nextln:     block0:
 # nextln:         v1.i32 = mload v0 i32;
 # nextln:         br_table v1 block2 (1.i32 block1);
-# nextln: 
+# nextln:
 # nextln:     block1:
 # nextln:         return 11.i32;
-# nextln: 
+# nextln:
 # nextln:     block2:
 # nextln:         return 22.i32;
 func public %brtable_unknown_case(v0.*i32) -> i32 {

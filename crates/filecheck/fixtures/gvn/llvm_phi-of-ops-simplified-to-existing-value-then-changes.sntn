@@ -5,27 +5,27 @@ target = "evm-ethereum-london"
 
 # check:  block0:
 # nextln:    jump block1;
-# nextln: 
+# nextln:
 # nextln: block1:
 # nextln:     v1.i32 = phi (-2022207984.i32 block0) (0.i32 block7);
 # nextln:     br v0 block3 block2;
-# nextln: 
+# nextln:
 # nextln: block2:
 # nextln:     jump block3;
-# nextln: 
+# nextln:
 # nextln: block3:
 # nextln:     v2.i32 = phi (-1.i32 block2) (v1 block1);
 # nextln:     v3.i1 = eq v2 0.i32;
 # nextln:     br v3 block6 block7;
-# nextln: 
+# nextln:
 # nextln: block6:
 # nextln:     jump block7;
-# nextln: 
+# nextln:
 # nextln: block7:
 # nextln:     v11.i1 = phi (v3 block3) (1.i1 block6);
 # nextln:     v4.i32 = phi (v2 block3) (0.i32 block6);
 # nextln:     br v11 block8 block1;
-# nextln: 
+# nextln:
 # nextln: block8:
 # nextln:     return;
 func public %llvm_pr36501(v0.i1) -> unit {
@@ -59,18 +59,18 @@ func public %llvm_pr36501(v0.i1) -> unit {
 # regex: VALUE=\bv\d+\b
 # check:  block0
 # nextln:     jump block1;
-# nextln: 
+# nextln:
 # nextln: block1:
 # nextln:     v3.i32 = phi (0.i32 block0) (v0 block1);
 # nextln:     br v1 block2 block1;
-# nextln: 
+# nextln:
 # nextln: block2:
 # nextln:     br v2 block16 block11;
-# nextln: 
+# nextln:
 # nextln: block16:
 # nextln:     v4.i32 = add v3 1.i32;
 # nextln:     jump block11;
-# nextln: 
+# nextln:
 # nextln: block11:
 # nextln:     v5.i32 = phi (v4 block16) (0.i32 block2);
 # nextln:     v6.i1 = eq v5 0.i32;
@@ -78,10 +78,10 @@ func public %llvm_pr36501(v0.i1) -> unit {
 # nextln:     v7.i1 = eq v3 0.i32;
 # nextln:     v8.i1 = not v7;
 # nextln:     br v8 block18 block19;
-# nextln: 
+# nextln:
 # nextln: block18:
 # nextln:     jump block19;
-# nextln: 
+# nextln:
 # nextln: block19:
 # nextln:     $(var=$VALUE).i1 = phi (v6 block11) (0.i1 block18);
 # nextln:     v9.i32 = phi (v5 block11) (1.i32 block18);

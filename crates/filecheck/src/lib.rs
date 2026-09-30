@@ -229,7 +229,19 @@ impl<'a> FileChecker<'a> {
     fn build_checker(&self, directives: &[String]) -> filecheck::Checker {
         let mut builder = filecheck::CheckerBuilder::new();
         for d in directives {
-            if !builder.directive(d).unwrap() && d.contains("nextln") {
+            // `filecheck` requires whitespace after a directive's colon. Supply it
+            // for empty-pattern directives, so fixtures can assert a following
+            // (typically blank) line with a bare `# nextln:` instead of trailing
+            // whitespace.
+            let d = if ["check:", "nextln:", "sameln:"]
+                .iter()
+                .any(|cmd| d.ends_with(cmd))
+            {
+                format!("{d} ")
+            } else {
+                d.clone()
+            };
+            if !builder.directive(&d).unwrap() && d.contains("nextln") {
                 panic!("not a directive: `{d}`");
             }
         }
