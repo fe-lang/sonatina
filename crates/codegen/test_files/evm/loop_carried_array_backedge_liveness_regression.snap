@@ -6,8 +6,8 @@ input_file: test_files/evm/loop_carried_array_backedge_liveness_regression.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 431 bytes
-  total: 431 bytes
+  section runtime: 395 bytes
+  total: 395 bytes
 
 functions:
   mem: global_dyn_base=0x500 arena_base=0xa0 scratch_peak_words=30 stable_chain_peak_words=5
@@ -15,13 +15,13 @@ functions:
     mem: scratch_words=30 stable_words=0 stable_mode=None entry_abs_words=35 abs_words_end=30
   assert: ir_blocks=3 ir_insts=3 vcode_ops=8 fixups=1 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=35 abs_words_end=0
-  test_run: ir_blocks=1 ir_insts=27 vcode_ops=75 fixups=12 imm_bytes=21
+  test_run: ir_blocks=1 ir_insts=18 vcode_ops=57 fixups=12 imm_bytes=13
     mem: scratch_words=0 stable_words=5 stable_mode=StableAbs(base=0x460) entry_abs_words=30 abs_words_end=35
   __repro_runtime_entry: ir_blocks=1 ir_insts=2 vcode_ops=7 fixups=2 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=30 abs_words_end=0
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=22451 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=1451
+  case ok: calldata_len=0 success reason=Return gas_used=22412 gas_refunded=0 logs=0 output=call len=0 tx_gas=21000 runtime_gas=1412
 
 
 --------------- DEBUG ---------------
@@ -223,28 +223,10 @@ test_run:
     PUSH1 FuncRef(0)
     JUMP
     JUMPDEST
-    PUSH2 0x460 (1120)  // v1.i256 = evm_mload v0;
-    MLOAD
-    PUSH2 0x480 (1152)  // v4.i256 = evm_mload 1152.i256;
-    MLOAD
-    PUSH2 0x4a0 (1184)  // v7.i256 = evm_mload 1184.i256;
-    MLOAD
-    PUSH2 0x4c0 (1216)  // v10.i256 = evm_mload 1216.i256;
-    MLOAD
-    PUSH2 0x4e0 (1248)  // v13.i256 = evm_mload 1248.i256;
-    MLOAD
-    SWAP4  // evm_mstore v0 v1;
+    PUSH1 0xa0 (160)  // evm_mcopy v0 v0 160.i256;
     PUSH2 0x460 (1120)
-    MSTORE
-    SWAP2  // evm_mstore 1152.i256 v4;
-    PUSH2 0x480 (1152)
-    MSTORE
-    PUSH2 0x4a0 (1184)  // evm_mstore 1184.i256 v7;
-    MSTORE
-    PUSH2 0x4c0 (1216)  // evm_mstore 1216.i256 v10;
-    MSTORE
-    PUSH2 0x4e0 (1248)  // evm_mstore 1248.i256 v13;
-    MSTORE
+    DUP1
+    MCOPY
     PUSH2 0x460 (1120)  // v18.i256 = evm_mload v0;
     MLOAD
     PUSH1 0x1e (30)  // v20.i256 = eq v18 30.i256;
