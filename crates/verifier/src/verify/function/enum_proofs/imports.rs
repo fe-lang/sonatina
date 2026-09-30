@@ -53,6 +53,9 @@ impl ImportSources {
     }
 
     fn contents(&mut self, ctx: &ModuleCtx, value: &ValueState, exposed: &BTreeSet<Root>) {
+        if !value.has_stored_references(ctx) {
+            return;
+        }
         if let Some(CompoundType::ObjRef(elem)) = value.ty.resolve_compound(ctx) {
             let mut refs = value.references.clone();
             refs.views

@@ -3,7 +3,7 @@ use std::{
     ops::{Deref, DerefMut},
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU8, Ordering},
     },
 };
 
@@ -11,6 +11,9 @@ use rpds::RedBlackTreeMapSync;
 use sonatina_ir::{Type, ValueId, module::ModuleCtx, types::CompoundType};
 
 use super::views::{Index, References, Step};
+
+const NO_REFERENCES: u8 = 1;
+const NO_SYMBOLIC_INDICES: u8 = 2;
 
 /// A whole-subtree certificate plus sparse typed overrides. References carry
 /// locations/guards; they never recursively contain their mutable pointee state.
@@ -36,11 +39,15 @@ struct ValueStateData {
     // A self-join may first materialize implicit enum payload facts. Record an
     // identity only after evaluating it and comparing the exact result.
     self_join_identity: AtomicBool,
+    // Negative certificates for stored nodes only. Implicit typed children can
+    // still contain references and are handled by captured/copy_references.
+    subtree_absences: AtomicU8,
 }
 
 impl ValueStateData {
     fn facts_mut(&mut self) -> &mut ValueStateFacts {
         *self.self_join_identity.get_mut() = false;
+        *self.subtree_absences.get_mut() = 0;
         &mut self.facts
     }
 }
@@ -50,6 +57,7 @@ impl Clone for ValueStateData {
         Self {
             facts: self.facts.clone(),
             self_join_identity: AtomicBool::new(false),
+            subtree_absences: AtomicU8::new(0),
         }
     }
 }
@@ -92,6 +100,14 @@ impl ValueState {
                 },
             },
             self_join_identity: AtomicBool::new(false),
+            subtree_absences: AtomicU8::new(
+                NO_SYMBOLIC_INDICES
+                    | if matches!(ty, Type::Compound(_)) {
+                        0
+                    } else {
+                        NO_REFERENCES
+                    },
+            ),
         }))
     }
 
@@ -105,7 +121,53 @@ impl ValueState {
         // Rebuilding an equal entry discards sharing between SSA snapshots.
         // Keep absent keys distinct from explicit default facts.
         if self.children.get(&step) != Some(&child) {
-            self.children.insert_mut(step, child);
+            // Keep proven absence across scalar-array inserts instead of
+            // rescanning all retained prefixes after every new element.
+            let mut absences = self.0.subtree_absences.load(Ordering::Relaxed)
+                & child.0.subtree_absences.load(Ordering::Relaxed);
+            if matches!(step, Step::Index(Index::Symbol(_))) {
+                absences &= !NO_SYMBOLIC_INDICES;
+            }
+            let data = Arc::make_mut(&mut self.0);
+            data.facts_mut().children.insert_mut(step, child);
+            *data.subtree_absences.get_mut() = absences;
+        }
+    }
+
+    /// Includes uninitialized and inactive reference nodes, but does not
+    /// materialize implicit typed children.
+    pub fn has_stored_references(&self, ctx: &ModuleCtx) -> bool {
+        if self.0.subtree_absences.load(Ordering::Relaxed) & NO_REFERENCES != 0 {
+            false
+        } else if self.ty.is_obj_ref(ctx)
+            || self
+                .children
+                .values()
+                .any(|child| child.has_stored_references(ctx))
+        {
+            true
+        } else {
+            // Shared facts are immutable. Concurrent readers only publish
+            // independently proven absence bits; no other data is published.
+            self.0
+                .subtree_absences
+                .fetch_or(NO_REFERENCES, Ordering::Relaxed);
+            false
+        }
+    }
+
+    fn has_symbolic_indices(&self) -> bool {
+        if self.0.subtree_absences.load(Ordering::Relaxed) & NO_SYMBOLIC_INDICES != 0 {
+            false
+        } else if self.children.iter().any(|(step, child)| {
+            matches!(step, Step::Index(Index::Symbol(_))) || child.has_symbolic_indices()
+        }) {
+            true
+        } else {
+            self.0
+                .subtree_absences
+                .fetch_or(NO_SYMBOLIC_INDICES, Ordering::Relaxed);
+            false
         }
     }
 
@@ -450,6 +512,9 @@ impl ValueState {
     }
 
     pub fn visit_references(&mut self, ctx: &ModuleCtx, f: &mut impl FnMut(&mut References)) {
+        if !self.has_stored_references(ctx) {
+            return;
+        }
         if self.ty.is_obj_ref(ctx) {
             if let Some(data) = Arc::get_mut(&mut self.0) {
                 f(&mut data.facts_mut().references);
@@ -481,6 +546,9 @@ impl ValueState {
     }
 
     pub fn forget_index(&mut self, ctx: &ModuleCtx, id: ValueId) {
+        if !self.has_symbolic_indices() {
+            return;
+        }
         let symbol = Step::Index(Index::Symbol(id));
         if let Some(old) = self.children.get(&symbol) {
             let summary = self.array_default(ctx).join(ctx, old);
@@ -603,6 +671,8 @@ block0:
         let ctx = &parsed.module.ctx;
         let ty = ctx.func_sig(parsed.module.funcs()[0], |sig| sig.args()[0]);
         let mut value = ValueState::new(ty, false);
+        assert!(!value.has_stored_references(ctx));
+        assert!(!value.has_symbolic_indices());
         let mut snapshots = vec![value.clone()];
         // Retain every intermediate aggregate, as the verifier does for SSA
         // insert_value results. Copying each map would retain a quadratic
@@ -612,6 +682,12 @@ block0:
             value.update(ctx, &[step], true, &|child| {
                 *child = ValueState::new(Type::I256, true);
             });
+            // Known absence must survive insertion: recomputing a summary
+            // for every retained prefix would reintroduce quadratic scans.
+            assert_eq!(
+                value.0.subtree_absences.load(Ordering::Relaxed),
+                NO_REFERENCES | NO_SYMBOLIC_INDICES
+            );
             let previous = snapshots.last().unwrap();
             assert!(!previous.child(ctx, step).readable(ctx));
             assert!(value.child(ctx, step).readable(ctx));
@@ -642,6 +718,138 @@ block0:
                 assert!(ptr::eq(child, joined.children.get(key).unwrap()));
             }
         }
+    }
+
+    #[test]
+    fn reference_summaries_preserve_implicit_and_inactive_uninitialized_cells() {
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+type @E = enum { #None, #Some(objref<i256>) };
+func private %entry(v0.@E) {
+block0:
+ return;
+}
+"#,
+        )
+        .unwrap();
+        let ctx = &parsed.module.ctx;
+        let ty = ctx.func_sig(parsed.module.funcs()[0], |sig| sig.args()[0]);
+        let payload = Step::Payload(1, 0);
+        let mut value = ValueState::new(ty, true);
+        value.refine(0);
+        assert!(!value.has_stored_references(ctx));
+        // An absent stored reference does not prove absence in implicit typed
+        // payloads, even when the payload is currently inactive.
+        assert!(value.captured(ctx).unknown);
+        let mut same_facts = ValueState::new(ty, true);
+        same_facts.refine(0);
+        assert_eq!(value, same_facts, "absence caches do not affect equality");
+        let sparse = value.clone();
+        let reference = ValueState::new(value.child_ty(ctx, payload), false);
+        value.insert_child(payload, reference);
+        assert!(value.has_stored_references(ctx));
+        assert!(!sparse.has_stored_references(ctx));
+        assert!(value.active(0));
+        assert!(!value.child(ctx, payload).complete);
+
+        let id = ValueId::from_u32(12);
+        let mut visited = 0;
+        value.visit_references(ctx, &mut |refs| {
+            visited += 1;
+            refs.cache = Some(id);
+        });
+        assert_eq!(
+            visited, 1,
+            "uninitialized inactive cells still get callbacks"
+        );
+        assert_eq!(value.child(ctx, payload).references.cache, Some(id));
+
+        let retained = value.clone();
+        value.children.remove_mut(&payload);
+        assert!(!value.has_stored_references(ctx));
+        assert!(retained.has_stored_references(ctx));
+        let absent = value.clone();
+        // Direct fact mutations must invalidate the certificate as well as
+        // writes through insert_child; the old snapshot keeps its own facts.
+        value
+            .children
+            .insert_mut(payload, retained.child(ctx, payload));
+        assert!(value.has_stored_references(ctx));
+        assert!(!absent.has_stored_references(ctx));
+        assert_eq!(value, retained, "cache state is not semantic equality");
+    }
+
+    #[test]
+    fn symbolic_index_summaries_follow_nested_changes_and_preserve_snapshots() {
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+type @Pair = { [i256; 4], [i256; 4] };
+func private %entry(v0.@Pair) {
+block0:
+ return;
+}
+"#,
+        )
+        .unwrap();
+        let ctx = &parsed.module.ctx;
+        let ty = ctx.func_sig(parsed.module.funcs()[0], |sig| sig.args()[0]);
+        let left = Step::Index(Index::Constant(0));
+        let first = ValueId::from_u32(10);
+        let second = ValueId::from_u32(11);
+        let mut value = ValueState::new(ty, true);
+        assert!(!value.has_symbolic_indices());
+        let empty = value.clone();
+        let mut array = value.child(ctx, left);
+        for (id, complete) in [(first, false), (second, true)] {
+            array.insert_child(
+                Step::Index(Index::Symbol(id)),
+                ValueState::new(Type::I256, complete),
+            );
+        }
+        value.insert_child(left, array);
+        assert!(value.has_symbolic_indices());
+        assert!(!empty.has_symbolic_indices());
+        let retained = value.clone();
+        assert!(retained.child(ctx, left).child(ctx, left).complete);
+
+        value.forget_index(ctx, first);
+        let array = value.child(ctx, left);
+        assert!(
+            !array
+                .children
+                .contains_key(&Step::Index(Index::Symbol(first)))
+        );
+        assert!(
+            array
+                .children
+                .contains_key(&Step::Index(Index::Symbol(second)))
+        );
+        assert!(
+            !array.child(ctx, left).complete,
+            "forgotten symbolic facts join the default"
+        );
+        assert!(value.has_symbolic_indices());
+        value.forget_index(ctx, second);
+        assert!(!value.has_symbolic_indices());
+        assert!(retained.has_symbolic_indices());
+        assert!(retained.child(ctx, left).child(ctx, left).complete);
+        let no_symbols = value.clone();
+        value.forget_index(ctx, first);
+        assert!(Arc::ptr_eq(&value.0, &no_symbols.0));
+
+        value.children.insert_mut(left, retained.child(ctx, left));
+        assert!(value.has_symbolic_indices());
+        assert!(!no_symbols.has_symbolic_indices());
+
+        let mut unique = ValueState::new(ty, true);
+        assert!(!unique.has_symbolic_indices());
+        unique.children.insert_mut(left, retained.child(ctx, left));
+        assert!(
+            unique.has_symbolic_indices(),
+            "unique mutations invalidate too"
+        );
     }
 
     #[test]
