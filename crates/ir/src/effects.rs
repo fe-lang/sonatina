@@ -11,11 +11,11 @@ use crate::{
         evm::{
             EvmAddress, EvmBalance, EvmBaseFee, EvmBlobBaseFee, EvmBlobHash, EvmBlockHash, EvmCall,
             EvmCallCode, EvmCallValue, EvmCalldataCopy, EvmCalldataLoad, EvmCalldataSize,
-            EvmCaller, EvmChainId, EvmCodeCopy, EvmCodeSize, EvmCoinBase, EvmCreate, EvmCreate2,
-            EvmDelegateCall, EvmExtCodeCopy, EvmExtCodeHash, EvmExtCodeSize, EvmGas, EvmGasLimit,
-            EvmGasPrice, EvmInvalid, EvmKeccak256, EvmLog0, EvmLog1, EvmLog2, EvmLog3, EvmLog4,
-            EvmMalloc, EvmMcopy, EvmMload, EvmMsize, EvmMstore, EvmMstore8, EvmNumber, EvmOrigin,
-            EvmPrevRandao, EvmReturn, EvmReturnDataCopy, EvmReturnDataSize, EvmRevert,
+            EvmCaller, EvmChainId, EvmCodeCopy, EvmCodeLoad, EvmCodeSize, EvmCoinBase, EvmCreate,
+            EvmCreate2, EvmDelegateCall, EvmExtCodeCopy, EvmExtCodeHash, EvmExtCodeSize, EvmGas,
+            EvmGasLimit, EvmGasPrice, EvmInvalid, EvmKeccak256, EvmLog0, EvmLog1, EvmLog2, EvmLog3,
+            EvmLog4, EvmMalloc, EvmMcopy, EvmMload, EvmMsize, EvmMstore, EvmMstore8, EvmNumber,
+            EvmOrigin, EvmPrevRandao, EvmReturn, EvmReturnDataCopy, EvmReturnDataSize, EvmRevert,
             EvmSelfBalance, EvmSelfDestruct, EvmSload, EvmSstore, EvmStaticCall, EvmStop,
             EvmTimestamp, EvmTload, EvmTstore,
         },
@@ -683,6 +683,11 @@ fn classify_declared_effects_with<S: EffectSink>(
             .map(|value| dfg.value_ty(value))
             .unwrap_or(Type::I256);
         sink.read_exact(CALLDATA, *calldata_load.data_offset(), EVM_WORD_BYTES, ty);
+        return sink.finish();
+    }
+
+    if let Some(code_load) = <&EvmCodeLoad as InstDowncast>::downcast(is, inst) {
+        sink.read_exact(CODE, *code_load.code_offset(), EVM_WORD_BYTES, Type::I256);
         return sink.finish();
     }
 

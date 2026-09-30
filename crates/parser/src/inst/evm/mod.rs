@@ -32,6 +32,7 @@ super::impl_inst_build! {EvmCalldataLoad, (data_offset: ValueId)}
 super::impl_inst_build! {EvmCalldataCopy, (dst_addr: ValueId, data_offset: ValueId, len: ValueId)}
 super::impl_inst_build! {EvmCalldataSize, ()}
 super::impl_inst_build! {EvmCodeSize, ()}
+super::impl_inst_build! {EvmCodeLoad, (code_offset: ValueId)}
 super::impl_inst_build! {EvmCodeCopy, (dst_addr: ValueId, code_offset: ValueId, len: ValueId)}
 super::impl_inst_build! {EvmGasPrice, ()}
 super::impl_inst_build! {EvmExtCodeSize, (ext_addr: ValueId)}

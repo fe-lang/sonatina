@@ -8,8 +8,8 @@ use sonatina_ir::{
         control_flow,
         data::{Alloca, Mload, Mstore},
         evm::{
-            EvmCalldataLoad, EvmInvalid, EvmMstore8, EvmReturn, EvmRevert, EvmSelfDestruct,
-            EvmSload, EvmSstore, EvmStop, EvmTload, EvmTstore,
+            EvmCalldataLoad, EvmCodeLoad, EvmInvalid, EvmMstore8, EvmReturn, EvmRevert,
+            EvmSelfDestruct, EvmSload, EvmSstore, EvmStop, EvmTload, EvmTstore,
         },
     },
 };
@@ -916,6 +916,7 @@ fn forwardable_read_key(
         && <&EvmSload as InstDowncast>::downcast(is, inst_data).is_none()
         && <&EvmTload as InstDowncast>::downcast(is, inst_data).is_none()
         && <&EvmCalldataLoad as InstDowncast>::downcast(is, inst_data).is_none()
+        && <&EvmCodeLoad as InstDowncast>::downcast(is, inst_data).is_none()
     {
         return None;
     }

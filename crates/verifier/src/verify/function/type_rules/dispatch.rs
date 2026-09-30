@@ -2244,6 +2244,13 @@ impl_evm_arithmetic_rule!(
     evm::EvmSignExtend,
 );
 
+impl VerifyInst for evm::EvmCodeLoad {
+    fn verify_inst(&self, verifier: &mut FunctionVerifier<'_>, inst_id: InstId) {
+        verifier.verify_evm_rule_common(inst_id, &self.collect_values(), false);
+        verifier.expect_result_ty(inst_id, Type::I256, verifier.inst_location(inst_id));
+    }
+}
+
 impl VerifyInst for evm::EvmMalloc {
     fn verify_inst(&self, verifier: &mut FunctionVerifier<'_>, inst_id: InstId) {
         verifier.verify_evm_rule_common(inst_id, &self.collect_values(), false);

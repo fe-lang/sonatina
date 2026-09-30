@@ -212,6 +212,16 @@ pub struct EvmCalldataCopy {
 #[inst(side_effect(crate::inst::SideEffect::Read))]
 pub struct EvmCodeSize {}
 
+/// Read a big-endian 256-bit word from the executing code, padding past its end
+/// with zero. This semantic instruction has no observable memory writes; EVM
+/// legalization supplies private scratch memory for CODECOPY and MLOAD.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
+#[inst(side_effect(crate::inst::SideEffect::Read))]
+pub struct EvmCodeLoad {
+    #[inst(value)]
+    code_offset: ValueId,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 #[inst(side_effect(crate::inst::SideEffect::Write))]
 pub struct EvmCodeCopy {

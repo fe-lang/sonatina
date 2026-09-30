@@ -230,6 +230,71 @@ fn object_alias_execution_matrix_at_all_optimization_levels() {
 }
 
 #[test]
+fn code_word_loads_preserve_memory_and_zero_pad_code_tails() {
+    let source = r#"
+target = "evm-ethereum-osaka"
+global private const [i8; 3] $payload = [17, 34, 51];
+
+func private %read(v0.i256) -> i256 {
+block0:
+    v1.i256 = evm_code_load v0;
+    return v1;
+}
+
+func public %entry() {
+block0:
+    mstore 128.i256 99.i256 i256;
+    v0.i256 = evm_calldata_load 0.i256;
+    v1.i256 = sym_addr $payload;
+    v2.i256 = add v0 v1;
+    v3.i256 = call %read v2;
+    v4.i256 = evm_code_load -1.i256;
+    v5.i256 = mload 128.i256 i256;
+    mstore 0.i256 v3 i256;
+    mstore 32.i256 v5 i256;
+    mstore 64.i256 v4 i256;
+    evm_return 0.i256 96.i256;
+}
+
+object @Contract {
+    section runtime {
+        entry %entry;
+        data $payload;
+    }
+}
+"#;
+    let config = VerifierConfig::for_level(VerificationLevel::Full);
+    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2, OptLevel::Os] {
+        let module = parse_sona(source).module;
+        verify_module_or_panic(&module, &config);
+        let mut compiler = Compile::new(module, EvmCompiler::default()).with_opt_level(level);
+        verify_module_or_panic(compiler.optimize(), &config);
+        let artifacts = compiler.compile().expect("code loads should compile");
+        let runtime = artifacts[0]
+            .sections
+            .iter()
+            .find(|(name, _)| name.0 == "runtime")
+            .unwrap();
+        let mut harness = EvmHarness::from_runtime(&runtime.1.bytes);
+        for offset in [0, 1, 2, 3, 32] {
+            let result = harness.call(&IrU256::from(offset as u64).to_big_endian());
+            let ExecutionResult::Success {
+                output: Output::Call(actual),
+                ..
+            } = result
+            else {
+                panic!("{level:?}, offset={offset}: {result:?}");
+            };
+            let mut expected = [0; 96];
+            let tail = [17, 34, 51].get(offset..).unwrap_or_default();
+            expected[..tail.len()].copy_from_slice(tail);
+            expected[63] = 99;
+            assert_eq!(actual.as_ref(), expected, "{level:?}, offset={offset}");
+        }
+    }
+}
+
+#[test]
 fn nested_const_indices_execute_at_all_optimization_levels() {
     let mut source = include_str!("../test_files/const_data/nested_indices.sntn").to_string();
     source.push_str("\nfunc public %entry() {\nblock0:\nv0.i256 = evm_calldata_load 0.i256;\n");

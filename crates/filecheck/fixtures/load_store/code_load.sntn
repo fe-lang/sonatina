@@ -1,0 +1,15 @@
+target = "evm-ethereum-osaka"
+
+# sameln: func public %code_read_survives_memory_write(v0.i256) -> i256 {
+# check: v1.i256 = evm_code_load v0;
+# check: mstore 0.i256 99.i256 i256;
+# not: evm_code_load
+# check: v3.i256 = add v1 v1;
+func public %code_read_survives_memory_write(v0.i256) -> i256 {
+block0:
+    v1.i256 = evm_code_load v0;
+    mstore 0.i256 99.i256 i256;
+    v2.i256 = evm_code_load v0;
+    v3.i256 = add v1 v2;
+    return v3;
+}
