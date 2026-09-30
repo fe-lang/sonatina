@@ -147,15 +147,20 @@ impl State {
         }) {
             return value;
         }
-        self.heap_contents(ctx, refs, ty)
+        Self::heap_contents(&self.objects, ctx, refs, ty)
     }
 
-    fn heap_contents(&self, ctx: &ModuleCtx, refs: &References, ty: Type) -> ValueState {
+    fn heap_contents(
+        objects: &BTreeMap<Root, ValueState>,
+        ctx: &ModuleCtx,
+        refs: &References,
+        ty: Type,
+    ) -> ValueState {
         let mut values = refs
             .views
             .iter()
             .map(|view| {
-                self.objects.get(&view.place.root).map_or_else(
+                objects.get(&view.place.root).map_or_else(
                     || ValueState::new(ty, false),
                     |root| root.at(ctx, &view.place.path),
                 )
@@ -467,8 +472,7 @@ impl State {
                 }
             }
         }
-        let facts = std::mem::take(&mut self.views);
-        for (id, mut fact) in facts {
+        for fact in self.views.values_mut() {
             if let Some((relation, path)) = target.relation(&fact.references) {
                 match relation {
                     Relation::Equal => fact.value = post.clone(),
@@ -499,7 +503,8 @@ impl State {
                             })
                         }))
             {
-                fact.value = self.heap_contents(ctx, &fact.references, fact.value.ty);
+                fact.value =
+                    Self::heap_contents(&self.objects, ctx, &fact.references, fact.value.ty);
             }
             if !assertion
                 && (target.unknown
@@ -518,7 +523,6 @@ impl State {
             {
                 fact.guards = false;
             }
-            self.views.insert(id, fact);
         }
         if !assertion {
             self.observations.retain(|_, refs| {
