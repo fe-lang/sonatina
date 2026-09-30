@@ -36,7 +36,7 @@ dyn:
     PUSH1 0x80 (128)
     MSTORE
     JUMPDEST
-    PUSH1 0x80 (128)
+    PUSH1 0x80 (128)  // v2.i256 = evm_mload v1;
     MLOAD
     DUP1
     PUSH1 0x40 (64)
@@ -60,7 +60,7 @@ dyn:
     POP
     PUSH1 0x80 (128)
     MSTORE
-    POP  // v2.i256 = evm_mload v1;
+    POP
     PUSH1 0x40 (64)  // v4.i256 = sub v2 64.i256;
     PUSH1 0x80 (128)  // v2.i256 = evm_mload v1;
     MLOAD
