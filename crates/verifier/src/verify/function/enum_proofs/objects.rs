@@ -133,7 +133,7 @@ impl State {
     }
 
     pub fn reference(&self, verifier: &FunctionVerifier<'_>, id: ValueId) -> References {
-        self.value(verifier, id).references
+        self.value(verifier, id).references.clone()
     }
 
     pub fn contents(&self, ctx: &ModuleCtx, refs: &References, ty: Type) -> ValueState {
@@ -407,18 +407,20 @@ impl State {
         for (&root, value) in &mut self.objects {
             if root.externally_accessible(&self.exposed) {
                 value.forget(ctx);
+                let ty = value.ty;
                 value.copy_references(
                     ctx,
-                    &Source::RawLoad(sources).value(ctx, Root::External, value.ty),
+                    &Source::RawLoad(sources).value(ctx, Root::External, ty),
                 );
             }
         }
         for fact in self.views.values_mut() {
             if fact.references.externally_accessible(&self.exposed) {
                 fact.value.forget(ctx);
+                let ty = fact.value.ty;
                 fact.value.copy_references(
                     ctx,
-                    &Source::RawLoad(sources).value(ctx, Root::External, fact.value.ty),
+                    &Source::RawLoad(sources).value(ctx, Root::External, ty),
                 );
             }
             if fact

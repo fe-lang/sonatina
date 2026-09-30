@@ -320,7 +320,8 @@ block0:
         let holder = state.reference(&verifier, holder);
         let captured = state
             .contents(ctx, &holder, body.dfg.value_ty(result))
-            .references;
+            .references
+            .clone();
         assert!(state.contents(ctx, &captured, ty).active(1));
     });
 }

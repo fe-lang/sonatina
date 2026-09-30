@@ -1,4 +1,8 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    ops::{Deref, DerefMut},
+    sync::Arc,
+};
 
 use sonatina_ir::{Type, ValueId, module::ModuleCtx, types::CompoundType};
 
@@ -7,18 +11,37 @@ use super::views::{Index, References, Step};
 /// A whole-subtree certificate plus sparse typed overrides. References carry
 /// locations/guards; they never recursively contain their mutable pointee state.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct ValueState {
+pub(super) struct ValueState(Arc<ValueStateData>);
+
+// Snapshots share unchanged subtrees. Mutating a node copies only its own facts
+// and child handles; descendants are copied only along the affected paths.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct ValueStateData {
     pub ty: Type,
     pub complete: bool,
     pub tag_initialized: bool,
     pub tags: Option<BTreeSet<u32>>,
-    pub children: BTreeMap<Step, Self>,
+    pub children: BTreeMap<Step, ValueState>,
     pub references: References,
+}
+
+impl Deref for ValueState {
+    type Target = ValueStateData;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for ValueState {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        Arc::make_mut(&mut self.0)
+    }
 }
 
 impl ValueState {
     pub fn new(ty: Type, complete: bool) -> Self {
-        Self {
+        Self(Arc::new(ValueStateData {
             ty,
             complete,
             tag_initialized: complete,
@@ -29,14 +52,13 @@ impl ValueState {
             } else {
                 References::default()
             },
-        }
+        }))
     }
 
     pub fn reference(ty: Type, references: References) -> Self {
-        Self {
-            references,
-            ..Self::new(ty, true)
-        }
+        let mut value = Self::new(ty, true);
+        value.references = references;
+        value
     }
 
     pub fn child_ty(&self, ctx: &ModuleCtx, step: Step) -> Type {
@@ -338,8 +360,10 @@ impl ValueState {
         if self.ty.is_obj_ref(ctx) {
             f(&mut self.references);
         }
-        for child in self.children.values_mut() {
-            child.visit_references(ctx, f);
+        if !self.children.is_empty() {
+            for child in self.children.values_mut() {
+                child.visit_references(ctx, f);
+            }
         }
     }
 
@@ -357,6 +381,9 @@ impl ValueState {
     }
 
     pub fn forget_index(&mut self, ctx: &ModuleCtx, id: ValueId) {
+        if self.children.is_empty() {
+            return;
+        }
         if let Some(old) = self.children.remove(&Step::Index(Index::Symbol(id))) {
             let step = Step::Index(Index::Unknown);
             let summary = self.array_default(ctx).join(ctx, &old);
@@ -408,5 +435,70 @@ impl ValueState {
             _ => {}
         }
         references
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::verify::function::enum_proofs::views::Root;
+    use sonatina_parser::parse_module;
+
+    #[test]
+    fn snapshots_isolate_nested_writes_and_share_unchanged_subtrees() {
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+type @E = enum { #None, #Some(objref<i256>) };
+type @Pair = { @E, @E };
+func private %entry(v0.@Pair) {
+block0:
+ return;
+}
+"#,
+        )
+        .unwrap();
+        let ctx = &parsed.module.ctx;
+        let ty = ctx.func_sig(parsed.module.funcs()[0], |sig| sig.args()[0]);
+        let left = Step::Index(Index::Constant(0));
+        let right = Step::Index(Index::Constant(1));
+        let payload = Step::Payload(1, 0);
+        let old_refs = References::root(Root::Recent(ValueId::from_u32(10)));
+        let new_refs = References::root(Root::Recent(ValueId::from_u32(11)));
+        let mut original = ValueState::new(ty, false);
+        for step in [left, right] {
+            original.update(ctx, &[step], true, &|value| value.refine(1));
+            original.update(ctx, &[step, payload], true, &|value| {
+                *value = ValueState::reference(value.ty, old_refs.clone());
+            });
+        }
+        let mut updated = original.clone();
+        assert!(Arc::ptr_eq(&original.0, &updated.0));
+        let read = updated.at(ctx, &[left, payload]);
+        assert!(Arc::ptr_eq(
+            &read.0,
+            &original.children[&left].children[&payload].0
+        ));
+
+        updated.update(ctx, &[left, payload], true, &|value| {
+            value.references = new_refs.clone();
+        });
+        assert_eq!(original.at(ctx, &[left, payload]).references, old_refs);
+        assert_eq!(updated.at(ctx, &[left, payload]).references, new_refs);
+        assert!(Arc::ptr_eq(
+            &original.children[&right].0,
+            &updated.children[&right].0
+        ));
+        updated.update(ctx, &[left], true, &|value| value.set_tag(ctx, 0));
+        assert!(original.child(ctx, left).active(1));
+        assert!(updated.child(ctx, left).active(0));
+        assert!(original.readable(ctx));
+        assert!(updated.readable(ctx));
+
+        let scalar = ValueState::new(Type::I256, true);
+        let mut copy = scalar.clone();
+        copy.forget_index(ctx, ValueId::from_u32(10));
+        copy.visit_references(ctx, &mut |_| panic!("scalar has no references"));
+        assert!(Arc::ptr_eq(&scalar.0, &copy.0));
     }
 }
