@@ -1,7 +1,10 @@
 use std::{
     collections::BTreeSet,
     ops::{Deref, DerefMut},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use rpds::RedBlackTreeMapSync;
@@ -18,7 +21,7 @@ pub(super) struct ValueState(Arc<ValueStateData>);
 // and shares the persistent child map; only affected map paths and value paths
 // are copied. Retaining a chain of aggregate inserts must not copy every prefix.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct ValueStateData {
+pub(super) struct ValueStateFacts {
     pub ty: Type,
     pub complete: bool,
     pub tag_initialized: bool,
@@ -27,33 +30,68 @@ pub(super) struct ValueStateData {
     pub references: References,
 }
 
+#[derive(Debug)]
+struct ValueStateData {
+    facts: ValueStateFacts,
+    // A self-join may first materialize implicit enum payload facts. Record an
+    // identity only after evaluating it and comparing the exact result.
+    self_join_identity: AtomicBool,
+}
+
+impl ValueStateData {
+    fn facts_mut(&mut self) -> &mut ValueStateFacts {
+        *self.self_join_identity.get_mut() = false;
+        &mut self.facts
+    }
+}
+
+impl Clone for ValueStateData {
+    fn clone(&self) -> Self {
+        Self {
+            facts: self.facts.clone(),
+            self_join_identity: AtomicBool::new(false),
+        }
+    }
+}
+
+impl PartialEq for ValueStateData {
+    fn eq(&self, other: &Self) -> bool {
+        self.facts == other.facts
+    }
+}
+
+impl Eq for ValueStateData {}
+
 impl Deref for ValueState {
-    type Target = ValueStateData;
+    type Target = ValueStateFacts;
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        &self.0.facts
     }
 }
 
 impl DerefMut for ValueState {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        Arc::make_mut(&mut self.0)
+        Arc::make_mut(&mut self.0).facts_mut()
     }
 }
 
 impl ValueState {
     pub fn new(ty: Type, complete: bool) -> Self {
         Self(Arc::new(ValueStateData {
-            ty,
-            complete,
-            tag_initialized: complete,
-            tags: None,
-            children: RedBlackTreeMapSync::new_sync(),
-            references: if complete {
-                References::unknown()
-            } else {
-                References::default()
+            facts: ValueStateFacts {
+                ty,
+                complete,
+                tag_initialized: complete,
+                tags: None,
+                children: RedBlackTreeMapSync::new_sync(),
+                references: if complete {
+                    References::unknown()
+                } else {
+                    References::default()
+                },
             },
+            self_join_identity: AtomicBool::new(false),
         }))
     }
 
@@ -272,6 +310,10 @@ impl ValueState {
 
     pub fn join(&self, ctx: &ModuleCtx, other: &Self) -> Self {
         debug_assert_eq!(self.ty, other.ty);
+        let same = Arc::ptr_eq(&self.0, &other.0);
+        if same && self.0.self_join_identity.load(Ordering::Relaxed) {
+            return self.clone();
+        }
         let mut result = self.clone();
         let complete = self.complete && other.complete;
         let tag_initialized = self.tag_initialized && other.tag_initialized;
@@ -285,7 +327,7 @@ impl ValueState {
             || result.tags != tags
             || result.references != references
         {
-            let data = Arc::make_mut(&mut result.0);
+            let data = Arc::make_mut(&mut result.0).facts_mut();
             data.complete = complete;
             data.tag_initialized = tag_initialized;
             data.tags = tags;
@@ -328,6 +370,11 @@ impl ValueState {
             // Keep the finite union of queried cells, selected-view guarantees
             // and physical default summaries distinct through the join.
             result.insert_child(step, child);
+        }
+        if same && self == &result {
+            // Facts are immutable while shared. This cache publishes no data
+            // and owns no values; every mutation invalidates it via facts_mut.
+            self.0.self_join_identity.store(true, Ordering::Relaxed);
         }
         result
     }
@@ -405,7 +452,7 @@ impl ValueState {
     pub fn visit_references(&mut self, ctx: &ModuleCtx, f: &mut impl FnMut(&mut References)) {
         if self.ty.is_obj_ref(ctx) {
             if let Some(data) = Arc::get_mut(&mut self.0) {
-                f(&mut data.references);
+                f(&mut data.facts_mut().references);
             } else {
                 let mut references = self.references.clone();
                 f(&mut references);
@@ -494,6 +541,52 @@ mod tests {
     use super::*;
     use crate::verify::function::enum_proofs::views::Root;
     use sonatina_parser::parse_module;
+
+    #[test]
+    fn self_join_reuse_preserves_enum_materialization_and_invalidates_on_mutation() {
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+type @Inner = enum { #None, #Some(i256) };
+type @Outer = enum { #None, #Some(@Inner) };
+func private %entry(v0.@Outer, v1.objref<i256>) {
+block0:
+ return;
+}
+"#,
+        )
+        .unwrap();
+        let ctx = &parsed.module.ctx;
+        let args = ctx.func_sig(parsed.module.funcs()[0], |sig| sig.args().to_vec());
+        let initial = ValueState::new(args[0], true);
+        let canonical = initial.join(ctx, &initial);
+        assert_ne!(
+            initial, canonical,
+            "self-join materializes implicit payloads"
+        );
+        assert!(!initial.0.self_join_identity.load(Ordering::Relaxed));
+        assert!(canonical.readable(ctx));
+        assert_eq!(canonical.join(ctx, &canonical), canonical);
+        assert!(canonical.0.self_join_identity.load(Ordering::Relaxed));
+        assert!(Arc::ptr_eq(
+            &canonical.0,
+            &canonical.join(ctx, &canonical).0
+        ));
+
+        let mut changed = canonical.clone();
+        changed.children.remove_mut(&Step::Payload(1, 0));
+        assert!(!changed.0.self_join_identity.load(Ordering::Relaxed));
+        assert!(canonical.0.self_join_identity.load(Ordering::Relaxed));
+        assert_eq!(changed.join(ctx, &changed), canonical);
+        assert!(!changed.0.self_join_identity.load(Ordering::Relaxed));
+
+        let mut reference = ValueState::reference(args[1], References::unknown());
+        assert_eq!(reference.join(ctx, &reference), reference);
+        assert!(reference.0.self_join_identity.load(Ordering::Relaxed));
+        reference.visit_references(ctx, &mut |refs| refs.unknown = false);
+        assert!(!reference.0.self_join_identity.load(Ordering::Relaxed));
+        assert!(!reference.references.unknown);
+    }
 
     #[test]
     fn aggregate_insert_snapshots_share_unchanged_map_entries() {
