@@ -32,7 +32,7 @@ block0:
             let mut value = ValueState::new(ty, initialized);
             value.set_tag(ctx, tag);
             cases.push(value.clone());
-            value.children.insert(
+            value.insert_child(
                 Step::Payload(1, 0),
                 ValueState::new(Type::I256, initialized),
             );
@@ -320,7 +320,8 @@ block0:
         let holder = state.reference(&verifier, holder);
         let captured = state
             .contents(ctx, &holder, body.dfg.value_ty(result))
-            .references;
+            .references
+            .clone();
         assert!(state.contents(ctx, &captured, ty).active(1));
     });
 }
