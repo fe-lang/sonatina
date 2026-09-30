@@ -264,31 +264,24 @@ fn compute_lazy_frame_plan_inner(
             vec![latest_point_in_block_or_entry(&dep_points, exit_block)]
         }
         PostNode::DummyExit(_) => {
-            let mut return_blocks: Vec<BlockId> = dep_points
-                .iter()
-                .filter_map(|point| match point.exit.point {
-                    FrameInjectionPoint::AfterSite(FrameSite::PreInst(inst))
-                        if function.dfg.is_return(inst) =>
-                    {
-                        Some(point.block)
-                    }
-                    _ => None,
+            // Every return reached with the frame active must restore the caller's SP,
+            // including paths with no frame dependency of their own.
+            let mut return_blocks: Vec<BlockId> = cfg
+                .post_order()
+                .filter_map(|block| {
+                    let term = function.layout.last_inst_of(block)?;
+                    (function.dfg.is_return(term) && dom.dominates(entry_block, block))
+                        .then_some(block)
                 })
                 .collect();
             return_blocks.sort_unstable_by_key(|block| block.as_u32());
-            return_blocks.dedup();
-            if return_blocks.is_empty()
-                || return_blocks
-                    .iter()
-                    .any(|&block| !dom.dominates(entry_block, block))
-            {
+            if return_blocks.is_empty() {
                 return None;
             }
-            return return_blocks
+            return_blocks
                 .into_iter()
-                .map(|block| latest_point_in_block(&dep_points, block))
-                .collect::<Option<Vec<_>>>()
-                .map(|exits| LazyFramePlan { enter, exits });
+                .map(|block| latest_point_in_block_or_entry(&dep_points, block))
+                .collect()
         }
         PostNode::Real(_) | PostNode::DummyEntry(_) => return None,
     };
@@ -389,6 +382,7 @@ fn compute_active_pre_insts(
                 }
             }
 
+            apply_after_site_state(plan, FrameSite::PreInst(inst), &mut active);
             apply_site_state(plan, FrameSite::Inst(inst), &mut active);
             if matches!(data, EvmMachineInstKind::Call(_)) && active {
                 active_pre_insts.insert(inst);
@@ -467,7 +461,11 @@ fn validate_lazy_frame_activity(
                 );
             }
 
+            apply_after_site_state(plan, FrameSite::PreInst(inst), &mut active);
             apply_site_state(plan, FrameSite::Inst(inst), &mut active);
+            if function.dfg.is_return(inst) && active {
+                return None;
+            }
             apply_after_site_state(plan, FrameSite::Inst(inst), &mut active);
 
             apply_site_state(plan, FrameSite::PostInst(inst), &mut active);
@@ -1110,7 +1108,7 @@ fn scalar_bit_width(ty: Type, module: &sonatina_ir::module::ModuleCtx) -> Option
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::stackalloc::Actions;
+    use crate::{isa::evm::memory_plan::StableMode, stackalloc::Actions};
     use cranelift_entity::SecondaryMap;
     use sonatina_parser::parse_module;
 
@@ -1231,6 +1229,125 @@ block2:
                 ))],
             };
             assert!(validate_lazy_frame_activity(function, &alloc, &plan).is_none());
+        });
+    }
+
+    #[test]
+    fn lazy_frame_plan_exits_on_returns_without_frame_dependencies() {
+        const SRC: &str = r#"
+target = "evm-ethereum-osaka"
+
+func public %f(v0.i1, v1.i1, v2.i256) -> i256 {
+block0:
+    br v0 block1 block2;
+
+block1:
+    return 0.i256;
+
+block2:
+    v3.i256 = add v2 1.i256;
+    br v1 block3 block4;
+
+block3:
+    return 0.i256;
+
+block4:
+    evm_mstore 0.i256 v3;
+    return 1.i256;
+}
+"#;
+
+        for (shared_return, prologue_spill) in [(false, false), (true, false), (false, true)] {
+            let source = if shared_return {
+                SRC.replace("block3:\n    return 0.i256;", "block3:\n    jump block1;")
+            } else {
+                SRC.to_owned()
+            };
+            let parsed = parse_module(&source).expect("module parses");
+            let func_ref = parsed.debug.func_order[0];
+            parsed.module.func_store.view(func_ref, |function| {
+                let root = parsed.debug.value(func_ref, "v3").expect("v3 exists");
+                let root_def = function.dfg.value_inst(root).expect("root is defined");
+                let mut roots = MachineFrameRoots::default();
+                roots.root_def_insts.insert(root_def);
+                roots.rooted_values.insert(root);
+                let returns: Vec<_> = function
+                    .layout
+                    .iter_block()
+                    .filter(|&block| {
+                        function
+                            .layout
+                            .last_inst_of(block)
+                            .is_some_and(|inst| function.dfg.is_return(inst))
+                    })
+                    .collect();
+                let mut alloc = TestAlloc::for_function(function);
+                if prologue_spill {
+                    alloc.enter.push(Action::MemStoreFrameSlot(0));
+                    let ret = function.layout.last_inst_of(returns[0]).unwrap();
+                    alloc.pre[ret].push(Action::MemLoadFrameSlot(0));
+                }
+                let plan = compute_lazy_frame_plan_inner(function, &alloc, &roots)
+                    .expect("escaping root should produce a lazy frame plan");
+                let escape_ret = function
+                    .layout
+                    .last_inst_of(*returns.last().unwrap())
+                    .unwrap();
+                assert!(plan.exit_after_site(FrameSite::PreInst(escape_ret)));
+                if !shared_return {
+                    assert_eq!(plan.exits.len(), if prologue_spill { 3 } else { 2 });
+                    assert!(!plan.exit_before_site(FrameSite::BlockEntry(returns[0])));
+                    assert!(plan.exit_before_site(FrameSite::BlockEntry(returns[1])));
+                }
+                assert_eq!(
+                    validate_lazy_frame_activity(function, &alloc, &plan).is_none(),
+                    shared_return
+                );
+                let mem_plan = MachineFuncPlan {
+                    arena_base: 0xa0,
+                    scratch_words: 0,
+                    stable_words: 1,
+                    stable_mode: StableMode::DynamicFrame,
+                    entry_abs_words: 0,
+                    obj_loc: FxHashMap::default(),
+                    alloca_loc: FxHashMap::default(),
+                    spill_obj: SecondaryMap::new(),
+                    call_preserve: FxHashMap::default(),
+                };
+                let summary = compute_frame_summary(function, &alloc, &mem_plan, &roots);
+                assert_eq!(summary.lowering.is_none(), shared_return);
+                assert_eq!(summary.full_body_active, shared_return);
+                if prologue_spill {
+                    assert!(plan.enter_before_action(FrameSite::EnterFunction, 0));
+                }
+            });
+        }
+    }
+
+    #[test]
+    fn lazy_frame_validation_requires_an_exit_before_return() {
+        let (parsed, [store_inst, load_inst]) = frame_slot_round_trip();
+        let func_ref = parsed.debug.func_order[0];
+        parsed.module.func_store.view(func_ref, |function| {
+            let mut alloc = TestAlloc::for_function(function);
+            alloc.pre[store_inst].push(Action::MemStoreFrameSlot(0));
+            alloc.pre[load_inst].push(Action::MemLoadFrameSlot(0));
+            let mut plan = LazyFramePlan {
+                enter: FrameInjectionPoint::BeforeAction {
+                    site: FrameSite::PreInst(store_inst),
+                    action_index: 0,
+                },
+                exits: Vec::new(),
+            };
+            assert!(validate_lazy_frame_activity(function, &alloc, &plan).is_none());
+
+            let ret = function
+                .layout
+                .last_inst_of(function.layout.inst_block(load_inst))
+                .expect("return exists");
+            plan.exits
+                .push(FrameInjectionPoint::AfterSite(FrameSite::PreInst(ret)));
+            assert!(validate_lazy_frame_activity(function, &alloc, &plan).is_some());
         });
     }
 
