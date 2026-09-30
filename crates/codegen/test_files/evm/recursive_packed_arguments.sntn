@@ -1,0 +1,372 @@
+#! evm.case: depth0
+#!   calldata: u256(0)
+#!   expect: return u256(1496)
+#! evm.case: depth1
+#!   calldata: u256(1)
+#!   expect: return u256(3128)
+#! evm.case: depth2
+#!   calldata: u256(2)
+#!   expect: return u256(4896)
+
+# Fe packs depth and sixteen live arguments into an object passed recursively.
+# The base-case return must restore the caller frame before it reloads spills.
+target = "evm-ethereum-osaka"
+
+type @recursive__args = {i256, i256, i256, i256, i256, i256, i256, i256, i256, i256, i256, i256, i256, i256, i256, i256, i256};
+
+func public %entry() {
+    block0:
+        v0.i256 = evm_calldata_load 0.i32;
+        jump block1;
+
+    block1:
+        v16.objref<@recursive__args> = obj.alloc @recursive__args;
+        v18.objref<i256> = obj.proj v16 0.i256;
+        obj.store v18 v0;
+        v19.objref<i256> = obj.proj v16 1.i256;
+        obj.store v19 1.i256;
+        v20.objref<i256> = obj.proj v16 2.i256;
+        obj.store v20 2.i256;
+        v21.objref<i256> = obj.proj v16 3.i256;
+        obj.store v21 3.i256;
+        v22.objref<i256> = obj.proj v16 4.i256;
+        obj.store v22 4.i256;
+        v23.objref<i256> = obj.proj v16 5.i256;
+        obj.store v23 5.i256;
+        v24.objref<i256> = obj.proj v16 6.i256;
+        obj.store v24 6.i256;
+        v25.objref<i256> = obj.proj v16 7.i256;
+        obj.store v25 7.i256;
+        v26.objref<i256> = obj.proj v16 8.i256;
+        obj.store v26 8.i256;
+        v27.objref<i256> = obj.proj v16 9.i256;
+        obj.store v27 9.i256;
+        v28.objref<i256> = obj.proj v16 10.i256;
+        obj.store v28 10.i256;
+        v29.objref<i256> = obj.proj v16 11.i256;
+        obj.store v29 11.i256;
+        v30.objref<i256> = obj.proj v16 12.i256;
+        obj.store v30 12.i256;
+        v31.objref<i256> = obj.proj v16 13.i256;
+        obj.store v31 13.i256;
+        v32.objref<i256> = obj.proj v16 14.i256;
+        obj.store v32 14.i256;
+        v33.objref<i256> = obj.proj v16 15.i256;
+        obj.store v33 15.i256;
+        v34.objref<i256> = obj.proj v16 16.i256;
+        obj.store v34 16.i256;
+        v35.i256 = call %recursive v16;
+        mstore 0.i256 v35 i256;
+        evm_return 0.i256 32.i256;
+}
+
+func inline(never) private %recursive(v0.objref<@recursive__args>) -> i256 {
+    block0:
+        v2.objref<i256> = obj.proj v0 0.i256;
+        v3.i256 = obj.load v2;
+        v5.objref<i256> = obj.proj v0 1.i256;
+        v6.i256 = obj.load v5;
+        v8.objref<i256> = obj.proj v0 2.i256;
+        v9.i256 = obj.load v8;
+        v11.objref<i256> = obj.proj v0 3.i256;
+        v12.i256 = obj.load v11;
+        v14.objref<i256> = obj.proj v0 4.i256;
+        v15.i256 = obj.load v14;
+        v17.objref<i256> = obj.proj v0 5.i256;
+        v18.i256 = obj.load v17;
+        v20.objref<i256> = obj.proj v0 6.i256;
+        v21.i256 = obj.load v20;
+        v23.objref<i256> = obj.proj v0 7.i256;
+        v24.i256 = obj.load v23;
+        v26.objref<i256> = obj.proj v0 8.i256;
+        v27.i256 = obj.load v26;
+        v29.objref<i256> = obj.proj v0 9.i256;
+        v30.i256 = obj.load v29;
+        v32.objref<i256> = obj.proj v0 10.i256;
+        v33.i256 = obj.load v32;
+        v35.objref<i256> = obj.proj v0 11.i256;
+        v36.i256 = obj.load v35;
+        v38.objref<i256> = obj.proj v0 12.i256;
+        v39.i256 = obj.load v38;
+        v41.objref<i256> = obj.proj v0 13.i256;
+        v42.i256 = obj.load v41;
+        v44.objref<i256> = obj.proj v0 14.i256;
+        v45.i256 = obj.load v44;
+        v47.objref<i256> = obj.proj v0 15.i256;
+        v48.i256 = obj.load v47;
+        v50.objref<i256> = obj.proj v0 16.i256;
+        v51.i256 = obj.load v50;
+        jump block1;
+
+    block1:
+        v53.i1 = eq v3 0.i256;
+        br v53 block2 block3;
+
+    block2:
+        v70.i256 = call %weighted16 v6 v9 v12 v15 v18 v21 v24 v27 v30 v33 v36 v39 v42 v45 v48 v51;
+        return v70;
+
+    block3:
+        jump block4;
+
+    block4:
+        (v72.i256, v73.i1) = usubo v3 1.i256;
+        br v73 block5 block6;
+
+    block5:
+        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
+        mstore 4.i256 17.i256 i256;
+        evm_revert 0.i256 36.i256;
+
+    block6:
+        (v78.i256, v79.i1) = uaddo v6 1.i256;
+        br v79 block5 block7;
+
+    block7:
+        (v81.i256, v82.i1) = uaddo v9 1.i256;
+        br v82 block5 block8;
+
+    block8:
+        (v84.i256, v85.i1) = uaddo v12 1.i256;
+        br v85 block5 block9;
+
+    block9:
+        (v87.i256, v88.i1) = uaddo v15 1.i256;
+        br v88 block5 block10;
+
+    block10:
+        (v90.i256, v91.i1) = uaddo v18 1.i256;
+        br v91 block5 block11;
+
+    block11:
+        (v93.i256, v94.i1) = uaddo v21 1.i256;
+        br v94 block5 block12;
+
+    block12:
+        (v96.i256, v97.i1) = uaddo v24 1.i256;
+        br v97 block5 block13;
+
+    block13:
+        (v99.i256, v100.i1) = uaddo v27 1.i256;
+        br v100 block5 block14;
+
+    block14:
+        (v102.i256, v103.i1) = uaddo v30 1.i256;
+        br v103 block5 block15;
+
+    block15:
+        (v105.i256, v106.i1) = uaddo v33 1.i256;
+        br v106 block5 block16;
+
+    block16:
+        (v108.i256, v109.i1) = uaddo v36 1.i256;
+        br v109 block5 block17;
+
+    block17:
+        (v111.i256, v112.i1) = uaddo v39 1.i256;
+        br v112 block5 block18;
+
+    block18:
+        (v114.i256, v115.i1) = uaddo v42 1.i256;
+        br v115 block5 block19;
+
+    block19:
+        (v117.i256, v118.i1) = uaddo v45 1.i256;
+        br v118 block5 block20;
+
+    block20:
+        (v120.i256, v121.i1) = uaddo v48 1.i256;
+        br v121 block5 block21;
+
+    block21:
+        (v123.i256, v124.i1) = uaddo v51 1.i256;
+        br v124 block5 block22;
+
+    block22:
+        v125.objref<@recursive__args> = obj.alloc @recursive__args;
+        v127.objref<i256> = obj.proj v125 0.i256;
+        obj.store v127 v72;
+        v129.objref<i256> = obj.proj v125 1.i256;
+        obj.store v129 v78;
+        v131.objref<i256> = obj.proj v125 2.i256;
+        obj.store v131 v81;
+        v133.objref<i256> = obj.proj v125 3.i256;
+        obj.store v133 v84;
+        v135.objref<i256> = obj.proj v125 4.i256;
+        obj.store v135 v87;
+        v137.objref<i256> = obj.proj v125 5.i256;
+        obj.store v137 v90;
+        v139.objref<i256> = obj.proj v125 6.i256;
+        obj.store v139 v93;
+        v141.objref<i256> = obj.proj v125 7.i256;
+        obj.store v141 v96;
+        v143.objref<i256> = obj.proj v125 8.i256;
+        obj.store v143 v99;
+        v145.objref<i256> = obj.proj v125 9.i256;
+        obj.store v145 v102;
+        v147.objref<i256> = obj.proj v125 10.i256;
+        obj.store v147 v105;
+        v149.objref<i256> = obj.proj v125 11.i256;
+        obj.store v149 v108;
+        v151.objref<i256> = obj.proj v125 12.i256;
+        obj.store v151 v111;
+        v153.objref<i256> = obj.proj v125 13.i256;
+        obj.store v153 v114;
+        v155.objref<i256> = obj.proj v125 14.i256;
+        obj.store v155 v117;
+        v157.objref<i256> = obj.proj v125 15.i256;
+        obj.store v157 v120;
+        v158.objref<i256> = obj.proj v125 16.i256;
+        obj.store v158 v123;
+        v159.i256 = call %recursive v125;
+        v176.i256 = call %weighted16 v6 v9 v12 v15 v18 v21 v24 v27 v30 v33 v36 v39 v42 v45 v48 v51;
+        (v177.i256, v178.i1) = uaddo v159 v176;
+        br v178 block5 block23;
+
+    block23:
+        return v177;
+}
+
+func inline(never) private %weighted16(v0.i256, v1.i256, v2.i256, v3.i256, v4.i256, v5.i256, v6.i256, v7.i256, v8.i256, v9.i256, v10.i256, v11.i256, v12.i256, v13.i256, v14.i256, v15.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        (v18.i256, v19.i1) = umulo v0 1.i256;
+        br v19 block2 block3;
+
+    block2:
+        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
+        mstore 4.i256 17.i256 i256;
+        evm_revert 0.i256 36.i256;
+
+    block3:
+        (v27.i256, v28.i1) = umulo v1 2.i256;
+        br v28 block2 block4;
+
+    block4:
+        (v30.i256, v31.i1) = uaddo v18 v27;
+        br v31 block2 block5;
+
+    block5:
+        (v34.i256, v35.i1) = umulo v2 3.i256;
+        br v35 block2 block6;
+
+    block6:
+        (v37.i256, v38.i1) = uaddo v30 v34;
+        br v38 block2 block7;
+
+    block7:
+        (v40.i256, v41.i1) = umulo v3 4.i256;
+        br v41 block2 block8;
+
+    block8:
+        (v43.i256, v44.i1) = uaddo v37 v40;
+        br v44 block2 block9;
+
+    block9:
+        (v47.i256, v48.i1) = umulo v4 5.i256;
+        br v48 block2 block10;
+
+    block10:
+        (v50.i256, v51.i1) = uaddo v43 v47;
+        br v51 block2 block11;
+
+    block11:
+        (v54.i256, v55.i1) = umulo v5 6.i256;
+        br v55 block2 block12;
+
+    block12:
+        (v57.i256, v58.i1) = uaddo v50 v54;
+        br v58 block2 block13;
+
+    block13:
+        (v61.i256, v62.i1) = umulo v6 7.i256;
+        br v62 block2 block14;
+
+    block14:
+        (v64.i256, v65.i1) = uaddo v57 v61;
+        br v65 block2 block15;
+
+    block15:
+        (v68.i256, v69.i1) = umulo v7 8.i256;
+        br v69 block2 block16;
+
+    block16:
+        (v71.i256, v72.i1) = uaddo v64 v68;
+        br v72 block2 block17;
+
+    block17:
+        (v75.i256, v76.i1) = umulo v8 9.i256;
+        br v76 block2 block18;
+
+    block18:
+        (v78.i256, v79.i1) = uaddo v71 v75;
+        br v79 block2 block19;
+
+    block19:
+        (v82.i256, v83.i1) = umulo v9 10.i256;
+        br v83 block2 block20;
+
+    block20:
+        (v85.i256, v86.i1) = uaddo v78 v82;
+        br v86 block2 block21;
+
+    block21:
+        (v89.i256, v90.i1) = umulo v10 11.i256;
+        br v90 block2 block22;
+
+    block22:
+        (v92.i256, v93.i1) = uaddo v85 v89;
+        br v93 block2 block23;
+
+    block23:
+        (v96.i256, v97.i1) = umulo v11 12.i256;
+        br v97 block2 block24;
+
+    block24:
+        (v99.i256, v100.i1) = uaddo v92 v96;
+        br v100 block2 block25;
+
+    block25:
+        (v103.i256, v104.i1) = umulo v12 13.i256;
+        br v104 block2 block26;
+
+    block26:
+        (v106.i256, v107.i1) = uaddo v99 v103;
+        br v107 block2 block27;
+
+    block27:
+        (v110.i256, v111.i1) = umulo v13 14.i256;
+        br v111 block2 block28;
+
+    block28:
+        (v113.i256, v114.i1) = uaddo v106 v110;
+        br v114 block2 block29;
+
+    block29:
+        (v117.i256, v118.i1) = umulo v14 15.i256;
+        br v118 block2 block30;
+
+    block30:
+        (v120.i256, v121.i1) = uaddo v113 v117;
+        br v121 block2 block31;
+
+    block31:
+        (v124.i256, v125.i1) = umulo v15 16.i256;
+        br v125 block2 block32;
+
+    block32:
+        (v127.i256, v128.i1) = uaddo v120 v124;
+        br v128 block2 block33;
+
+    block33:
+        return v127;
+}
+
+
+object @Contract {
+  section runtime {
+    entry %entry;
+  }
+}

@@ -34,7 +34,7 @@ f:
     PUSH1 0x80 (128)
     MSTORE
     JUMPDEST
-    PUSH1 0x80 (128)
+    PUSH1 0x80 (128)  // v2.i256 = evm_mload v1;
     MLOAD
     DUP1
     PUSH1 0x40 (64)
@@ -81,27 +81,27 @@ f:
     JUMPDEST
     SWAP1  // v10.i256 = evm_mload v4;
     MLOAD
-    ADD  // v11.i256 = add v9 v10;
-    PUSH1 0x20 (32)  // return v11;
+    PUSH1 0x20 (32)
     PUSH1 0x80 (128)
     MLOAD
     SUB
     MLOAD
     PUSH1 0x80 (128)
     MSTORE
-    SWAP1
+    ADD  // v11.i256 = add v9 v10;
+    SWAP1  // return v11;
     JUMP
   block2:
     JUMPDEST
     MLOAD  // v12.i256 = evm_mload v4;
-    PUSH1 0x20 (32)  // return v12;
+    PUSH1 0x20 (32)
     PUSH1 0x80 (128)
     MLOAD
     SUB
     MLOAD
     PUSH1 0x80 (128)
     MSTORE
-    SWAP1
+    SWAP1  // return v12;
     JUMP
 
 // func public %entry()
