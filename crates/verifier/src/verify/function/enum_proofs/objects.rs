@@ -95,14 +95,14 @@ impl State {
             }
             Some(CompoundType::Struct(record)) => {
                 for (i, &ty) in record.fields.iter().enumerate() {
-                    value.children.insert(
+                    value.insert_child(
                         Step::Index(Index::Constant(i)),
                         Self::imported(ctx, owner, ty, complete),
                     );
                 }
             }
             Some(CompoundType::Array { elem, len }) if len != 0 => {
-                value.children.insert(
+                value.insert_child(
                     Step::Index(Index::Unknown),
                     Self::imported(ctx, owner, elem, complete),
                 );
@@ -110,7 +110,7 @@ impl State {
             Some(CompoundType::Enum(enumeration)) => {
                 for (v, variant) in enumeration.variants.iter().enumerate() {
                     for (i, &ty) in variant.fields.iter().enumerate() {
-                        value.children.insert(
+                        value.insert_child(
                             Step::Payload(v as u32, i),
                             Self::imported(ctx, owner, ty, complete),
                         );

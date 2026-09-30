@@ -124,22 +124,16 @@ impl Source<'_> {
             }
             Some(CompoundType::Struct(record)) => {
                 for (i, &ty) in record.fields.iter().enumerate() {
-                    value
-                        .children
-                        .insert(Step::Index(Index::Constant(i)), self.value(ctx, root, ty));
+                    value.insert_child(Step::Index(Index::Constant(i)), self.value(ctx, root, ty));
                 }
             }
             Some(CompoundType::Array { elem, len }) if len != 0 => {
-                value
-                    .children
-                    .insert(Step::Index(Index::Unknown), self.value(ctx, root, elem));
+                value.insert_child(Step::Index(Index::Unknown), self.value(ctx, root, elem));
             }
             Some(CompoundType::Enum(enumeration)) => {
                 for (v, variant) in enumeration.variants.iter().enumerate() {
                     for (i, &ty) in variant.fields.iter().enumerate() {
-                        value
-                            .children
-                            .insert(Step::Payload(v as u32, i), self.value(ctx, root, ty));
+                        value.insert_child(Step::Payload(v as u32, i), self.value(ctx, root, ty));
                     }
                 }
             }

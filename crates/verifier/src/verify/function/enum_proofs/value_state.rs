@@ -1,9 +1,10 @@
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeSet,
     ops::{Deref, DerefMut},
     sync::Arc,
 };
 
+use rpds::RedBlackTreeMapSync;
 use sonatina_ir::{Type, ValueId, module::ModuleCtx, types::CompoundType};
 
 use super::views::{Index, References, Step};
@@ -14,14 +15,15 @@ use super::views::{Index, References, Step};
 pub(super) struct ValueState(Arc<ValueStateData>);
 
 // Snapshots share unchanged subtrees. Mutating a node copies only its own facts
-// and child handles; descendants are copied only along the affected paths.
+// and shares the persistent child map; only affected map paths and value paths
+// are copied. Retaining a chain of aggregate inserts must not copy every prefix.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct ValueStateData {
     pub ty: Type,
     pub complete: bool,
     pub tag_initialized: bool,
     pub tags: Option<BTreeSet<u32>>,
-    pub children: BTreeMap<Step, ValueState>,
+    pub children: RedBlackTreeMapSync<Step, ValueState>,
     pub references: References,
 }
 
@@ -46,7 +48,7 @@ impl ValueState {
             complete,
             tag_initialized: complete,
             tags: None,
-            children: BTreeMap::new(),
+            children: RedBlackTreeMapSync::new_sync(),
             references: if complete {
                 References::unknown()
             } else {
@@ -59,6 +61,14 @@ impl ValueState {
         let mut value = Self::new(ty, true);
         value.references = references;
         value
+    }
+
+    pub fn insert_child(&mut self, step: Step, child: Self) {
+        // Rebuilding an equal entry discards sharing between SSA snapshots.
+        // Keep absent keys distinct from explicit default facts.
+        if self.children.get(&step) != Some(&child) {
+            self.children.insert_mut(step, child);
+        }
     }
 
     pub fn child_ty(&self, ctx: &ModuleCtx, step: Step) -> Type {
@@ -147,21 +157,21 @@ impl ValueState {
             if !matches!(step, Step::Index(Index::Constant(_))) {
                 let mut default = self.array_default(ctx);
                 default.update(ctx, rest, false, write);
-                self.children.insert(Step::Index(Index::Unknown), default);
+                self.insert_child(Step::Index(Index::Unknown), default);
             }
-            for (&other, node) in &mut self.children {
+            self.update_children(|other, node| {
                 if other != step && other != Step::Index(Index::Unknown) && !step.disjoint(other) {
                     node.update(ctx, rest, false, write);
                 }
-            }
+            });
             if step != Step::Index(Index::Unknown) {
-                self.children.insert(step, child);
+                self.insert_child(step, child);
             }
             return;
         }
         // Symbolic indices can alias other indices. Update overlapping children
         // weakly, while the exact symbolic view receives the strong postcondition.
-        for (&other, node) in &mut self.children {
+        self.update_children(|other, node| {
             if other != step && !step.disjoint(other) {
                 if matches!((other, step), (Step::Payload(a, _), Step::Payload(b, _)) if a != b) {
                     node.clear_readability();
@@ -169,8 +179,8 @@ impl ValueState {
                     node.update(ctx, rest, false, write);
                 }
             }
-        }
-        self.children.insert(step, child);
+        });
+        self.insert_child(step, child);
     }
 
     pub fn possible(&self, variant: u32) -> bool {
@@ -206,7 +216,7 @@ impl ValueState {
                 let mut child = self.child(ctx, step);
                 child.clear_readability();
                 debug_assert_eq!(child.ty, ty);
-                self.children.insert(step, child);
+                self.insert_child(step, child);
             }
         }
         self.refine(variant);
@@ -227,7 +237,7 @@ impl ValueState {
             // An assumption establishes readability, not a new reference value.
             let old = self.child(ctx, step);
             certified.copy_references(ctx, &old);
-            self.children.insert(step, certified);
+            self.insert_child(step, certified);
         }
     }
 
@@ -262,13 +272,25 @@ impl ValueState {
 
     pub fn join(&self, ctx: &ModuleCtx, other: &Self) -> Self {
         debug_assert_eq!(self.ty, other.ty);
-        let mut result = Self::new(self.ty, self.complete && other.complete);
-        result.tag_initialized = self.tag_initialized && other.tag_initialized;
-        result.tags = match (&self.tags, &other.tags) {
+        let mut result = self.clone();
+        let complete = self.complete && other.complete;
+        let tag_initialized = self.tag_initialized && other.tag_initialized;
+        let tags = match (&self.tags, &other.tags) {
             (Some(a), Some(b)) => Some(a.union(b).copied().collect()),
             _ => None,
         };
-        result.references = self.references.join(&other.references);
+        let references = self.references.join(&other.references);
+        if result.complete != complete
+            || result.tag_initialized != tag_initialized
+            || result.tags != tags
+            || result.references != references
+        {
+            let data = Arc::make_mut(&mut result.0);
+            data.complete = complete;
+            data.tag_initialized = tag_initialized;
+            data.tags = tags;
+            data.references = references;
+        }
         let mut keys: BTreeSet<_> = self
             .children
             .keys()
@@ -305,31 +327,24 @@ impl ValueState {
             child.merge_references(ctx, &b);
             // Keep the finite union of queried cells, selected-view guarantees
             // and physical default summaries distinct through the join.
-            result.children.insert(step, child);
+            result.insert_child(step, child);
         }
         result
     }
 
-    // Visit shared children without copying their parent unless a child changes.
-    // Unique parents can keep updating their children directly.
-    fn update_children(&mut self, mut update: impl FnMut(&mut Self)) {
-        if let Some(data) = Arc::get_mut(&mut self.0) {
-            for child in data.children.values_mut() {
-                update(child);
-            }
-            return;
-        }
+    // Visit without copying shared map entries unless their values change.
+    fn update_children(&mut self, mut update: impl FnMut(Step, &mut Self)) {
         let changed: Vec<_> = self
             .children
             .iter()
             .filter_map(|(&step, child)| {
                 let mut next = child.clone();
-                update(&mut next);
+                update(step, &mut next);
                 (!Arc::ptr_eq(&child.0, &next.0)).then_some((step, next))
             })
             .collect();
-        if !changed.is_empty() {
-            self.children.extend(changed);
+        for (step, child) in changed {
+            self.insert_child(step, child);
         }
     }
 
@@ -339,7 +354,7 @@ impl ValueState {
             self.tag_initialized = false;
             self.tags = None;
         }
-        self.update_children(Self::clear_readability);
+        self.update_children(|_, child| child.clear_readability());
     }
 
     pub fn forget(&mut self, ctx: &ModuleCtx) {
@@ -361,11 +376,11 @@ impl ValueState {
                 self.references.anchors.clear();
             }
         }
-        self.update_children(|child| child.forget(ctx));
+        self.update_children(|_, child| child.forget(ctx));
     }
 
     pub fn copy_references(&mut self, ctx: &ModuleCtx, source: &Self) {
-        if self.ty.is_obj_ref(ctx) {
+        if self.ty.is_obj_ref(ctx) && self.references != source.references {
             self.references = source.references.clone();
         }
         // A sparse source summary replaces reference provenance in existing
@@ -383,7 +398,7 @@ impl ValueState {
                 (self.child(ctx, step), source.child(ctx, step))
             };
             target.copy_references(ctx, &child);
-            self.children.insert(step, target);
+            self.insert_child(step, target);
         }
     }
 
@@ -399,19 +414,22 @@ impl ValueState {
                 }
             }
         }
-        self.update_children(|child| child.visit_references(ctx, f));
+        self.update_children(|_, child| child.visit_references(ctx, f));
     }
 
     // Conditional readability cannot discard references in physically retained
     // inactive payload cells. Reference alternatives always join by union.
     fn merge_references(&mut self, ctx: &ModuleCtx, source: &Self) {
         if self.ty.is_obj_ref(ctx) {
-            self.references = self.references.join(&source.references);
+            let references = self.references.join(&source.references);
+            if self.references != references {
+                self.references = references;
+            }
         }
         for (&step, child) in &source.children {
             let mut target = self.child(ctx, step);
             target.merge_references(ctx, child);
-            self.children.insert(step, target);
+            self.insert_child(step, target);
         }
     }
 
@@ -419,10 +437,10 @@ impl ValueState {
         let symbol = Step::Index(Index::Symbol(id));
         if let Some(old) = self.children.get(&symbol) {
             let summary = self.array_default(ctx).join(ctx, old);
-            self.children.remove(&symbol);
-            self.children.insert(Step::Index(Index::Unknown), summary);
+            self.children.remove_mut(&symbol);
+            self.insert_child(Step::Index(Index::Unknown), summary);
         }
-        self.update_children(|child| child.forget_index(ctx, id));
+        self.update_children(|_, child| child.forget_index(ctx, id));
     }
 
     pub fn captured(&self, ctx: &ModuleCtx) -> References {
@@ -471,9 +489,67 @@ impl ValueState {
 
 #[cfg(test)]
 mod tests {
+    use std::ptr;
+
     use super::*;
     use crate::verify::function::enum_proofs::views::Root;
     use sonatina_parser::parse_module;
+
+    #[test]
+    fn aggregate_insert_snapshots_share_unchanged_map_entries() {
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+func private %entry(v0.[i256; 256]) {
+block0:
+ return;
+}
+"#,
+        )
+        .unwrap();
+        let ctx = &parsed.module.ctx;
+        let ty = ctx.func_sig(parsed.module.funcs()[0], |sig| sig.args()[0]);
+        let mut value = ValueState::new(ty, false);
+        let mut snapshots = vec![value.clone()];
+        // Retain every intermediate aggregate, as the verifier does for SSA
+        // insert_value results. Copying each map would retain a quadratic
+        // number of entries even if the entries' values shared allocations.
+        for index in 0..256 {
+            let step = Step::Index(Index::Constant(index));
+            value.update(ctx, &[step], true, &|child| {
+                *child = ValueState::new(Type::I256, true);
+            });
+            let previous = snapshots.last().unwrap();
+            assert!(!previous.child(ctx, step).readable(ctx));
+            assert!(value.child(ctx, step).readable(ctx));
+            for (key, child) in &previous.children {
+                assert!(ptr::eq(child, value.children.get(key).unwrap()));
+            }
+            snapshots.push(value.clone());
+        }
+        assert!(value.readable(ctx));
+        assert!(snapshots[..256].iter().all(|value| !value.readable(ctx)));
+        for snapshot in &snapshots {
+            let joined = snapshot.join(ctx, snapshot);
+            assert!(Arc::ptr_eq(&snapshot.0, &joined.0));
+            let mut copied = snapshot.clone();
+            copied.copy_references(ctx, snapshot);
+            assert!(Arc::ptr_eq(&snapshot.0, &copied.0));
+        }
+
+        let first = Step::Index(Index::Constant(0));
+        value.update(ctx, &[first], true, &|child| child.forget(ctx));
+        assert!(!value.readable(ctx));
+        assert!(snapshots.last().unwrap().readable(ctx));
+        let joined = snapshots.last().unwrap().join(ctx, &value);
+        assert!(!joined.readable(ctx));
+        for (key, child) in &snapshots.last().unwrap().children {
+            if *key != first {
+                assert!(ptr::eq(child, value.children.get(key).unwrap()));
+                assert!(ptr::eq(child, joined.children.get(key).unwrap()));
+            }
+        }
+    }
 
     #[test]
     fn snapshots_isolate_nested_writes_and_share_unchanged_subtrees() {
@@ -536,7 +612,14 @@ block0:
         let read = updated.at(ctx, &[left, payload]);
         assert!(Arc::ptr_eq(
             &read.0,
-            &original.children[&left].children[&payload].0
+            &original
+                .children
+                .get(&left)
+                .unwrap()
+                .children
+                .get(&payload)
+                .unwrap()
+                .0
         ));
 
         updated.update(ctx, &[left, payload], true, &|value| {
@@ -545,8 +628,8 @@ block0:
         assert_eq!(original.at(ctx, &[left, payload]).references, old_refs);
         assert_eq!(updated.at(ctx, &[left, payload]).references, new_refs);
         assert!(Arc::ptr_eq(
-            &original.children[&right].0,
-            &updated.children[&right].0
+            &original.children.get(&right).unwrap().0,
+            &updated.children.get(&right).unwrap().0
         ));
         updated.update(ctx, &[left], true, &|value| value.set_tag(ctx, 0));
         assert!(original.child(ctx, left).active(1));
