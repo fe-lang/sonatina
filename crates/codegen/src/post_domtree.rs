@@ -1,5 +1,6 @@
 //! This module contains implementation of `Post Dominator Tree`.
 
+use rustc_hash::FxHashSet;
 use sonatina_ir::{BlockId, ControlFlowGraph, Function};
 
 use super::domtree::{DFSet, DomTree};
@@ -76,6 +77,48 @@ impl PostDomTree {
             block if block == self.exit => Some(PDTIdom::DummyExit(self.exit)),
             other => Some(PDTIdom::Real(other)),
         }
+    }
+
+    /// Returns `true` if every path from `block2` to an exit passes through `block1`.
+    pub fn post_dominates(&self, block1: BlockId, block2: BlockId) -> bool {
+        self.domtree.dominates(block1, block2)
+    }
+
+    /// Returns whether every path from `block` to a real or extra exit crosses one of `edges`.
+    /// Edges use the original CFG direction. Cycles need not terminate, just as for block
+    /// postdominance. The walk is linear in the region reachable without crossing these edges.
+    pub(crate) fn edges_post_dominate(
+        &self,
+        edges: &FxHashSet<(BlockId, BlockId)>,
+        block: BlockId,
+    ) -> bool {
+        if !self.is_reachable(block) {
+            return false;
+        }
+        if edges.len() == 1 {
+            let &(pred, succ) = edges.iter().next().unwrap();
+            if self.rcfg.preds_as_slice(pred) == [succ] {
+                return self.post_dominates(pred, block);
+            }
+        }
+        let mut pending = vec![block];
+        let mut seen = FxHashSet::default();
+        while let Some(block) = pending.pop() {
+            if block == self.exit {
+                return false;
+            }
+            if seen.insert(block) {
+                // Predecessors in the reverse CFG are successors in the original CFG,
+                // including the synthetic edges to the common exit.
+                pending.extend(
+                    self.rcfg
+                        .preds_of(block)
+                        .copied()
+                        .filter(|&succ| !edges.contains(&(block, succ))),
+                );
+            }
+        }
+        true
     }
 
     pub fn clear(&mut self) {
@@ -163,6 +206,8 @@ mod tests {
         prelude::*,
     };
 
+    use sonatina_parser::parse_module;
+
     use super::*;
 
     fn calc_dom(func: &Function) -> (PostDomTree, PDFSet) {
@@ -184,6 +229,45 @@ mod tests {
         }
 
         true
+    }
+
+    #[test]
+    fn consuming_edges_respect_alternatives_loops_and_extra_exits() {
+        let module = parse_module(
+            r#"
+target = "evm-ethereum-london"
+func public %edges(v0.i1, v1.i1) {
+    block0:
+        br v0 block1 block2;
+    block1:
+        br v1 block1 block3;
+    block2:
+        jump block3;
+    block3:
+        return;
+}
+"#,
+        )
+        .unwrap()
+        .module;
+        module.func_store.view(module.funcs()[0], |func| {
+            let mut post_domtree = PostDomTree::new();
+            post_domtree.compute(func);
+            let from_loop = FxHashSet::from_iter([(BlockId(1), BlockId(3))]);
+            // An ordinary loop with an exit edge does not prevent placement.
+            assert!(post_domtree.edges_post_dominate(&from_loop, BlockId(1)));
+            assert!(!post_domtree.edges_post_dominate(&from_loop, BlockId(0)));
+            let both = FxHashSet::from_iter([(BlockId(1), BlockId(3)), (BlockId(2), BlockId(3))]);
+            assert!(post_domtree.edges_post_dominate(&both, BlockId(0)));
+            // Reaching the consuming predecessor does not guarantee taking its edge.
+            let conditional = FxHashSet::from_iter([(BlockId(0), BlockId(1))]);
+            assert!(!post_domtree.edges_post_dominate(&conditional, BlockId(0)));
+
+            post_domtree.compute_with_extra_exits(func, &[BlockId(1)]);
+            assert!(!post_domtree.edges_post_dominate(&from_loop, BlockId(1)));
+            assert!(!post_domtree.edges_post_dominate(&both, BlockId(0)));
+            assert!(post_domtree.edges_post_dominate(&both, BlockId(2)));
+        });
     }
 
     #[test]

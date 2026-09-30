@@ -7,7 +7,10 @@
 //! Rekha R. Pai.: Detection of Redundant Expressions: A Complete and Polynomial-Time Algorithm in SSA:
 //! APLAS 2015 pp49-65: <https://link.springer.com/chapter/10.1007/978-3-319-26529-2_4>
 
-use std::{cell::RefCell, collections::BTreeSet};
+use std::{
+    cell::{OnceCell, RefCell},
+    collections::BTreeSet,
+};
 
 use cranelift_entity::{PrimaryMap, SecondaryMap, entity_impl, packed_option::PackedOption};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -30,11 +33,13 @@ use crate::{
     cfg_edit::{CfgEditor, CleanupMode},
     domtree::{DomTree, DominatorTreeTraversable},
     optim::{
+        adce::divergent_blocks,
         aggregate::{CarrierSource, ObjectMemoryAnalysis, ObjectReadGvnKey},
         simplify_expr::{
             ExprFactProvider, SimplifiedResult, nontrivial_pow2_shift, simplify_key_with_facts,
         },
     },
+    post_domtree::PostDomTree,
 };
 
 ///  An initial class that assigned to all values.
@@ -2241,6 +2246,10 @@ struct RedundantCodeRemover<'a> {
     /// Record resolved value phis.
     resolved_value_phis: FxHashMap<ValuePhi, ValueId>,
 
+    /// Computed on demand when resolving a value phi of constants. Inserting phis doesn't
+    /// change the CFG, so it stays valid while value phis are resolved.
+    post_domtree: OnceCell<PostDomTree>,
+
     renames: FxHashMap<ValueId, ValueId>,
     changed: bool,
 }
@@ -2251,6 +2260,7 @@ impl<'a> RedundantCodeRemover<'a> {
             solver,
             avail_set: SecondaryMap::default(),
             resolved_value_phis: FxHashMap::default(),
+            post_domtree: OnceCell::new(),
             renames: FxHashMap::default(),
             changed: false,
         }
@@ -2340,7 +2350,7 @@ impl<'a> RedundantCodeRemover<'a> {
         // Resolve value phis in the function.
         let mut next_block = Some(entry);
         while let Some(block) = next_block {
-            self.resolve_value_phi_in_block(func, block);
+            self.resolve_value_phi_in_block(func, cfg, block);
             next_block = func.layout.next_block_of(block);
         }
         self.changed
@@ -2433,7 +2443,12 @@ impl<'a> RedundantCodeRemover<'a> {
     }
 
     /// Resolve value phis in the block.
-    fn resolve_value_phi_in_block(&mut self, func: &mut Function, block: BlockId) {
+    fn resolve_value_phi_in_block(
+        &mut self,
+        func: &mut Function,
+        cfg: &ControlFlowGraph,
+        block: BlockId,
+    ) {
         let mut inserter = InstInserter::at_location(CursorLocation::BlockTop(block));
         loop {
             match inserter.loc() {
@@ -2456,7 +2471,10 @@ impl<'a> RedundantCodeRemover<'a> {
                         let class = self.solver.value_class(inst_result);
                         if let Some(value_phi) = &self.solver.classes[class].value_phi {
                             let ty = func.dfg.value_ty(inst_result);
-                            if self.is_value_phi_resolvable(value_phi, block) {
+                            if self.is_value_phi_resolvable(value_phi, block)
+                                && self
+                                    .pushes_constants_only_where_used(func, cfg, value_phi, block)
+                            {
                                 let value = self.resolve_value_phi(
                                     func,
                                     &mut inserter,
@@ -2519,6 +2537,72 @@ impl<'a> RedundantCodeRemover<'a> {
                 true
             }
         }
+    }
+
+    /// Require each new constant phi to be consumed on every path to an exit.
+    ///
+    /// Nested phis are consumed on their parents' incoming edges, not just by reaching the
+    /// final instruction's block. Check shared phis against all their consuming edges together,
+    /// and follow their results through intermediate phis even if those have no immediate args.
+    /// Blocks that cannot reach a CFG exit remain extra exits; loops with exit paths may fold.
+    fn pushes_constants_only_where_used(
+        &self,
+        func: &Function,
+        cfg: &ControlFlowGraph,
+        value_phi: &ValuePhi,
+        block: BlockId,
+    ) -> bool {
+        let mut pending = vec![value_phi];
+        let mut seen = FxHashSet::default();
+        let mut uses = FxHashMap::<BlockId, FxHashSet<(BlockId, BlockId)>>::default();
+        let mut needs_check = Vec::new();
+        while let Some(value_phi) = pending.pop() {
+            let ValuePhi::PhiInsn(phi_insn) = value_phi else {
+                continue;
+            };
+            // Canonical value phis place at most one distinct phi in each block.
+            if self.resolved_value_phis.contains_key(value_phi) || !seen.insert(phi_insn.block) {
+                continue;
+            }
+            if phi_insn.args.iter().any(
+                |(arg, _)| matches!(arg, ValuePhi::Value(value) if func.dfg.value_is_imm(*value)),
+            ) {
+                needs_check.push(phi_insn.block);
+            }
+            for (arg, pred) in &phi_insn.args {
+                if let ValuePhi::PhiInsn(child) = arg
+                    && !self.resolved_value_phis.contains_key(arg)
+                {
+                    uses.entry(child.block)
+                        .or_default()
+                        .insert((*pred, phi_insn.block));
+                    pending.push(arg);
+                }
+            }
+        }
+
+        seen.clear();
+        while let Some(phi_block) = needs_check.pop() {
+            if !seen.insert(phi_block) {
+                continue;
+            }
+            let post_domtree = self.post_domtree.get_or_init(|| {
+                let divergent_blocks = divergent_blocks(cfg);
+                let mut post_domtree = PostDomTree::new();
+                post_domtree.compute_with_extra_exits(func, &divergent_blocks);
+                post_domtree
+            });
+            if let Some(edges) = uses.get(&phi_block) {
+                if !post_domtree.edges_post_dominate(edges, phi_block) {
+                    return false;
+                }
+                // Consuming a constant in another phi only pays if that result is used too.
+                needs_check.extend(edges.iter().map(|(_, parent)| *parent));
+            } else if !post_domtree.post_dominates(block, phi_block) {
+                return false;
+            }
+        }
+        true
     }
 
     /// Insert phi insn to appropriate location and returns the value that defined by
@@ -2651,8 +2735,9 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::{
-        BinaryInstKind, CanonicalRetouch, ClassData, GvnInsn, GvnSolver, InstClassKind, ValuePhi,
-        ValuePhiFinder, ValuePhiInsn, inst_to_gvn_key, make_gvn_binary_key,
+        BinaryInstKind, CanonicalRetouch, ClassData, GvnInsn, GvnSolver, InstClassKind,
+        RedundantCodeRemover, ValuePhi, ValuePhiFinder, ValuePhiInsn, inst_to_gvn_key,
+        make_gvn_binary_key,
     };
     use crate::{
         analysis::known_bits::{KnownBitsQuery, count_query_news_for_test},
@@ -2664,6 +2749,7 @@ mod tests {
         ir_writer::FuncWriter,
     };
     use sonatina_parser::parse_module;
+    use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module_or_panic};
 
     fn run_gvn(source: &str) -> String {
         let module = parse_module(source).expect("parse should succeed").module;
@@ -3424,6 +3510,131 @@ func private %entry() -> i256 {
                 "bitcast constant folding should succeed",
             );
             assert_eq!(func.dfg.value_imm(folded), Some(Immediate::one(Type::I256)));
+        });
+    }
+
+    // Construct the candidate directly so these tests cover placement independently of GVN's
+    // ability to discover nested value phis at unbalanced joins.
+    fn phi_tree(func: &Function, value: ValueId) -> ValuePhi {
+        if let Some(inst) = func.dfg.value_inst(value)
+            && let Some(args) = inst_to_gvn_key(func, inst).phi_args()
+        {
+            ValuePhiInsn {
+                block: func.layout.inst_block(inst),
+                args: args
+                    .iter()
+                    .map(|&(arg, pred)| (phi_tree(func, arg), pred))
+                    .collect(),
+            }
+            .canonicalize()
+            .unwrap()
+        } else {
+            ValuePhi::Value(value)
+        }
+    }
+
+    #[test]
+    fn constant_phi_placement_collects_shared_consuming_edges() {
+        let module = parse_module(
+            r#"
+target = "evm-ethereum-london"
+func public %shared(v0.i1, v1.i1, v2.i1, v3.i256) -> i256 {
+    block0:
+        br v0 block1 block2;
+    block1:
+        br v1 block3 block4;
+    block2:
+        jump block8;
+    block3:
+        jump block5;
+    block4:
+        jump block5;
+    block5:
+        v4.i256 = phi (1.i256 block3) (2.i256 block4);
+        br v2 block6 block7;
+    block6:
+        jump block8;
+    block7:
+        jump block8;
+    block8:
+        v5.i256 = phi (v3 block2) (v4 block6) (v4 block7);
+        return v5;
+}
+"#,
+        )
+        .unwrap()
+        .module;
+        verify_module_or_panic(&module, &VerifierConfig::for_level(VerificationLevel::Full));
+        module.func_store.view(module.funcs()[0], |func| {
+            let mut cfg = ControlFlowGraph::new();
+            cfg.compute(func);
+            let solver = GvnSolver::new();
+            let mut remover = RedundantCodeRemover::new(&solver);
+            let block = BlockId(8);
+            let shared = phi_tree(func, ValueId(5));
+            assert!(remover.pushes_constants_only_where_used(func, &cfg, &shared, block));
+
+            let mut partial = shared.clone();
+            let ValuePhi::PhiInsn(parent) = &mut partial else {
+                panic!("expected outer phi");
+            };
+            let inner = parent.args[1].0.clone();
+            parent.args[1].0 = ValuePhi::Value(ValueId(3));
+            assert!(!remover.pushes_constants_only_where_used(func, &cfg, &partial, block));
+
+            // An existing inner phi has no new materialization cost, even on the unused edge.
+            remover.resolved_value_phis.insert(inner, ValueId(4));
+            assert!(remover.pushes_constants_only_where_used(func, &cfg, &partial, block));
+        });
+    }
+
+    #[test]
+    fn constant_phi_placement_follows_nonconstant_parent_results() {
+        let module = parse_module(
+            r#"
+target = "evm-ethereum-london"
+func public %intermediate(v0.i1, v1.i1, v2.i1, v3.i256) -> i256 {
+    block0:
+        br v0 block1 block2;
+    block1:
+        br v1 block3 block4;
+    block2:
+        jump block6;
+    block3:
+        jump block5;
+    block4:
+        jump block5;
+    block5:
+        v4.i256 = phi (1.i256 block3) (2.i256 block4);
+        jump block6;
+    block6:
+        v5.i256 = phi (v3 block2) (v4 block5);
+        br v2 block7 block8;
+    block7:
+        jump block9;
+    block8:
+        jump block9;
+    block9:
+        v6.i256 = phi (v5 block7) (v3 block8);
+        return v6;
+}
+"#,
+        )
+        .unwrap()
+        .module;
+        verify_module_or_panic(&module, &VerifierConfig::for_level(VerificationLevel::Full));
+        module.func_store.view(module.funcs()[0], |func| {
+            let mut cfg = ControlFlowGraph::new();
+            cfg.compute(func);
+            let solver = GvnSolver::new();
+            let remover = RedundantCodeRemover::new(&solver);
+            let block = BlockId(9);
+            let intermediate = phi_tree(func, ValueId(5));
+            // The inner constant phi is always consumed by the intermediate phi.
+            assert!(remover.pushes_constants_only_where_used(func, &cfg, &intermediate, block));
+            // But the outer phi can discard that intermediate result.
+            let outer = phi_tree(func, ValueId(6));
+            assert!(!remover.pushes_constants_only_where_used(func, &cfg, &outer, block));
         });
     }
 
