@@ -310,27 +310,58 @@ impl ValueState {
         result
     }
 
-    fn clear_readability(&mut self) {
-        self.complete = false;
-        self.tag_initialized = false;
-        self.tags = None;
-        for child in self.children.values_mut() {
-            child.clear_readability();
+    // Visit shared children without copying their parent unless a child changes.
+    // Unique parents can keep updating their children directly.
+    fn update_children(&mut self, mut update: impl FnMut(&mut Self)) {
+        if let Some(data) = Arc::get_mut(&mut self.0) {
+            for child in data.children.values_mut() {
+                update(child);
+            }
+            return;
+        }
+        let changed: Vec<_> = self
+            .children
+            .iter()
+            .filter_map(|(&step, child)| {
+                let mut next = child.clone();
+                update(&mut next);
+                (!Arc::ptr_eq(&child.0, &next.0)).then_some((step, next))
+            })
+            .collect();
+        if !changed.is_empty() {
+            self.children.extend(changed);
         }
     }
 
+    fn clear_readability(&mut self) {
+        if self.complete || self.tag_initialized || self.tags.is_some() {
+            self.complete = false;
+            self.tag_initialized = false;
+            self.tags = None;
+        }
+        self.update_children(Self::clear_readability);
+    }
+
     pub fn forget(&mut self, ctx: &ModuleCtx) {
-        self.complete = false;
-        self.tag_initialized = false;
-        self.tags = None;
-        if self.ty.is_obj_ref(ctx) {
-            self.references.unknown = true;
-            self.references.cache = None;
-            self.references.anchors.clear();
+        let reference = self.ty.is_obj_ref(ctx);
+        if self.complete
+            || self.tag_initialized
+            || self.tags.is_some()
+            || reference
+                && (!self.references.unknown
+                    || self.references.cache.is_some()
+                    || !self.references.anchors.is_empty())
+        {
+            self.complete = false;
+            self.tag_initialized = false;
+            self.tags = None;
+            if reference {
+                self.references.unknown = true;
+                self.references.cache = None;
+                self.references.anchors.clear();
+            }
         }
-        for child in self.children.values_mut() {
-            child.forget(ctx);
-        }
+        self.update_children(|child| child.forget(ctx));
     }
 
     pub fn copy_references(&mut self, ctx: &ModuleCtx, source: &Self) {
@@ -358,13 +389,17 @@ impl ValueState {
 
     pub fn visit_references(&mut self, ctx: &ModuleCtx, f: &mut impl FnMut(&mut References)) {
         if self.ty.is_obj_ref(ctx) {
-            f(&mut self.references);
-        }
-        if !self.children.is_empty() {
-            for child in self.children.values_mut() {
-                child.visit_references(ctx, f);
+            if let Some(data) = Arc::get_mut(&mut self.0) {
+                f(&mut data.references);
+            } else {
+                let mut references = self.references.clone();
+                f(&mut references);
+                if references != self.references {
+                    self.references = references;
+                }
             }
         }
+        self.update_children(|child| child.visit_references(ctx, f));
     }
 
     // Conditional readability cannot discard references in physically retained
@@ -381,17 +416,13 @@ impl ValueState {
     }
 
     pub fn forget_index(&mut self, ctx: &ModuleCtx, id: ValueId) {
-        if self.children.is_empty() {
-            return;
+        let symbol = Step::Index(Index::Symbol(id));
+        if let Some(old) = self.children.get(&symbol) {
+            let summary = self.array_default(ctx).join(ctx, old);
+            self.children.remove(&symbol);
+            self.children.insert(Step::Index(Index::Unknown), summary);
         }
-        if let Some(old) = self.children.remove(&Step::Index(Index::Symbol(id))) {
-            let step = Step::Index(Index::Unknown);
-            let summary = self.array_default(ctx).join(ctx, &old);
-            self.children.insert(step, summary);
-        }
-        for child in self.children.values_mut() {
-            child.forget_index(ctx, id);
-        }
+        self.update_children(|child| child.forget_index(ctx, id));
     }
 
     pub fn captured(&self, ctx: &ModuleCtx) -> References {
@@ -472,6 +503,34 @@ block0:
                 *value = ValueState::reference(value.ty, old_refs.clone());
             });
         }
+        let mut unchanged = original.clone();
+        unchanged.forget_index(ctx, ValueId::from_u32(12));
+        let mut visited = 0;
+        unchanged.visit_references(ctx, &mut |refs| {
+            visited += 1;
+            refs.rewrite(|_| {}, Some(ValueId::from_u32(12)));
+        });
+        assert_eq!(visited, 2);
+        assert!(Arc::ptr_eq(&original.0, &unchanged.0));
+
+        let mut forgotten = original.clone();
+        forgotten.forget(ctx);
+        assert!(!forgotten.readable(ctx));
+        assert!(original.readable(ctx));
+        let mut forgotten_again = forgotten.clone();
+        forgotten_again.forget(ctx);
+        assert!(Arc::ptr_eq(&forgotten.0, &forgotten_again.0));
+        assert!(forgotten.at(ctx, &[left, payload]).references.unknown);
+        assert_eq!(original.at(ctx, &[left, payload]).references, old_refs);
+
+        let mut cleared = original.clone();
+        cleared.clear_readability();
+        let mut cleared_again = cleared.clone();
+        cleared_again.clear_readability();
+        assert!(Arc::ptr_eq(&cleared.0, &cleared_again.0));
+        assert!(!cleared.readable(ctx));
+        assert_eq!(cleared.at(ctx, &[left, payload]).references, old_refs);
+
         let mut updated = original.clone();
         assert!(Arc::ptr_eq(&original.0, &updated.0));
         let read = updated.at(ctx, &[left, payload]);
