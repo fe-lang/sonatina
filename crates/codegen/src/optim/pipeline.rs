@@ -245,7 +245,7 @@ pub enum Step {
     FuncPasses(Vec<Pass>),
     /// Remove dead formal arguments from rewritable functions and update direct callsites.
     DeadArgElim,
-    /// Pass small private object arguments as their unconditionally read scalar fields.
+    /// Pass private object arguments as bounded sets of unconditionally read scalar fields.
     PromoteObjectArgs,
     /// Remove unreachable function definitions rooted at object `entry`/`include` directives.
     DeadFuncElim,

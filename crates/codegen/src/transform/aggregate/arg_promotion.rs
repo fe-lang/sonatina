@@ -1,4 +1,4 @@
-//! Pass small private object arguments as the scalars read at callee entry.
+//! Pass private object arguments as a bounded set of scalars read at callee entry.
 
 use std::{cmp::Reverse, collections::BTreeMap, slice};
 
@@ -24,6 +24,7 @@ use super::{
     abi::abi_leaf_count,
     objref_element_ty,
     promotion::unconditional_read_prefix,
+    reconstruct::rebuild_scalar_shape_from_leaf_values,
     scalarize::insert_object_child_ref,
     shape::{self, AggregateLayoutCache, FieldPath},
 };
@@ -37,14 +38,24 @@ pub struct ObjectArgPromotionStats {
 struct Field {
     path: FieldPath,
     ty: Type,
-    loads: Vec<InstId>,
+}
+
+struct Load {
+    inst: InstId,
+    ty: Type,
+    paths: Vec<FieldPath>,
+}
+
+struct Reads {
+    fields: Vec<Field>,
+    loads: Vec<Load>,
+    projections: Vec<InstId>,
 }
 
 struct Plan {
     arg_index: usize,
     root_ty: Type,
-    fields: Vec<Field>,
-    projections: Vec<InstId>,
+    reads: Reads,
     new_arg_tys: SmallVec<[Type; 8]>,
     ret_tys: SmallVec<[Type; 2]>,
 }
@@ -125,22 +136,23 @@ impl ObjectArgPromotion {
             let Some(shape) = self.layouts.shape(func.ctx(), root_ty) else {
                 continue;
             };
-            if shape.leaves.len() > limits.inline_leaf_limit
-                || !shape.leaves.iter().all(|leaf| leaf.ty.is_integral())
-            {
+            if !shape.leaves.iter().all(|leaf| leaf.ty.is_integral()) {
                 continue;
             }
-            let Some((fields, projections)) = collect_reads(func, argument, root_ty) else {
+            let Some(reads) = collect_reads(
+                func,
+                argument,
+                root_ty,
+                &mut self.layouts,
+                limits.inline_leaf_limit,
+            ) else {
                 continue;
             };
-            let loads: FxHashSet<_> = fields
-                .iter()
-                .flat_map(|field| field.loads.iter().copied())
-                .collect();
+            let loads: FxHashSet<_> = reads.loads.iter().map(|load| load.inst).collect();
             // All reads of this argument must execute in the unchanged entry
             // prefix. Other memory accesses, calls, allocations and branches are
             // barriers, so this needs no no-alias or all-callers initialization assumption.
-            if loads.is_empty()
+            if reads.fields.is_empty()
                 || unconditional_read_prefix(func, |inst| loads.contains(&inst)).len()
                     != loads.len()
             {
@@ -149,7 +161,7 @@ impl ObjectArgPromotion {
             let mut new_arg_tys = SmallVec::new();
             for (index, &arg) in func.arg_values.iter().enumerate() {
                 if index == arg_index {
-                    new_arg_tys.extend(fields.iter().map(|field| field.ty));
+                    new_arg_tys.extend(reads.fields.iter().map(|field| field.ty));
                 } else {
                     new_arg_tys.push(func.dfg.value_ty(arg));
                 }
@@ -163,8 +175,7 @@ impl ObjectArgPromotion {
             return Some(Plan {
                 arg_index,
                 root_ty,
-                fields,
-                projections,
+                reads,
                 new_arg_tys,
                 ret_tys: SmallVec::from_slice(ret_tys),
             });
@@ -177,8 +188,11 @@ fn collect_reads(
     func: &Function,
     argument: ValueId,
     root_ty: Type,
-) -> Option<(Vec<Field>, Vec<InstId>)> {
+    layouts: &mut AggregateLayoutCache,
+    leaf_limit: usize,
+) -> Option<Reads> {
     let mut fields = BTreeMap::<FieldPath, Field>::new();
+    let mut loads = Vec::new();
     let mut projections = Vec::new();
     let mut pending = vec![(argument, FieldPath::new())];
     let mut seen = FxHashSet::default();
@@ -195,18 +209,38 @@ fn collect_reads(
             {
                 let result = func.dfg.inst_result(inst)?;
                 let ty = func.dfg.value_ty(result);
-                if !ty.is_integral() {
-                    return None;
+                let leaves = if ty.is_integral() {
+                    vec![(path.clone(), ty)]
+                } else {
+                    if !shape::is_leaf_reifiable_ty(func.ctx(), ty) {
+                        return None;
+                    }
+                    let loaded_shape = layouts.shape(func.ctx(), ty)?;
+                    if loaded_shape.leaves.len() > leaf_limit {
+                        return None;
+                    }
+                    loaded_shape
+                        .leaves
+                        .iter()
+                        .map(|leaf| {
+                            let mut leaf_path = path.clone();
+                            leaf_path.extend_from_slice(&leaf.path);
+                            (leaf_path, leaf.ty)
+                        })
+                        .collect()
+                };
+                let mut paths = Vec::new();
+                for (path, ty) in leaves {
+                    if !ty.is_integral() {
+                        return None;
+                    }
+                    paths.push(path.clone());
+                    fields.entry(path.clone()).or_insert(Field { path, ty });
+                    if fields.len() > leaf_limit {
+                        return None;
+                    }
                 }
-                fields
-                    .entry(path.clone())
-                    .or_insert_with(|| Field {
-                        path: path.clone(),
-                        ty,
-                        loads: Vec::new(),
-                    })
-                    .loads
-                    .push(inst);
+                loads.push(Load { inst, ty, paths });
                 continue;
             }
             let indices = if let Some(projection) =
@@ -232,28 +266,26 @@ fn collect_reads(
         }
     }
     projections.sort_unstable_by_key(|&(inst, depth)| (Reverse(depth), inst));
-    Some((
-        fields.into_values().collect(),
-        projections.into_iter().map(|(inst, _)| inst).collect(),
-    ))
+    Some(Reads {
+        fields: fields.into_values().collect(),
+        loads,
+        projections: projections.into_iter().map(|(inst, _)| inst).collect(),
+    })
 }
 
 fn rewrite_function(func: &mut Function, plan: &Plan) {
     let old_args = func.arg_values.clone();
     let mut args = SmallVec::new();
+    let mut field_values = BTreeMap::new();
     for (index, &argument) in old_args.iter().enumerate() {
         if index == plan.arg_index {
-            for field in &plan.fields {
+            for field in &plan.reads.fields {
                 let value = func.dfg.make_value(Value::Arg {
                     ty: field.ty,
                     idx: args.len(),
                 });
                 args.push(value);
-                for &load in &field.loads {
-                    let result = func.dfg.inst_result(load).expect("planned scalar load");
-                    func.dfg.change_to_alias(result, value);
-                    InstInserter::at_location(CursorLocation::At(load)).remove_inst(func);
-                }
+                field_values.insert(field.path.clone(), value);
             }
         } else {
             func.dfg.values[argument] = Value::Arg {
@@ -263,7 +295,20 @@ fn rewrite_function(func: &mut Function, plan: &Plan) {
             args.push(argument);
         }
     }
-    for &projection in &plan.projections {
+    let module = func.ctx().clone();
+    for load in &plan.reads.loads {
+        let values: Vec<_> = load.paths.iter().map(|path| field_values[path]).collect();
+        let value = if load.ty.is_integral() {
+            values[0]
+        } else {
+            rebuild_scalar_shape_from_leaf_values(func, load.inst, &module, load.ty, &values)
+                .expect("planned leaf-reifiable load")
+        };
+        let result = func.dfg.inst_result(load.inst).expect("planned load");
+        func.dfg.change_to_alias(result, value);
+        InstInserter::at_location(CursorLocation::At(load.inst)).remove_inst(func);
+    }
+    for &projection in &plan.reads.projections {
         InstInserter::at_location(CursorLocation::At(projection)).remove_inst(func);
     }
     let old_arg = old_args[plan.arg_index];
@@ -298,7 +343,7 @@ fn rewrite_calls(func: &mut Function, plans: &FxHashMap<FuncRef, Plan>) -> usize
                 args.push(arg);
                 continue;
             }
-            for field in &plan.fields {
+            for field in &plan.reads.fields {
                 let mut object = arg;
                 let mut ty = plan.root_ty;
                 for &index in &field.path {
