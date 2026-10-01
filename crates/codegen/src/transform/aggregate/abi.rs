@@ -440,6 +440,16 @@ fn collect_abi_runtime_leaf_slices(
     Some(())
 }
 
+/// Count actual operands after AggregateExpandAbi. Scalar unit formals remain
+/// one operand even though they occupy no runtime bytes; empty aggregates expand away.
+pub(crate) fn abi_arg_operand_count(module: &ModuleCtx, ty: Type) -> Option<usize> {
+    if shape::is_supported_aggregate_ty(module, ty) {
+        abi_leaf_count(module, ty)
+    } else {
+        Some(1)
+    }
+}
+
 pub(crate) fn abi_leaf_count(module: &ModuleCtx, ty: Type) -> Option<usize> {
     if shape::runtime_size_bytes(module, ty)? == 0 {
         return Some(0);

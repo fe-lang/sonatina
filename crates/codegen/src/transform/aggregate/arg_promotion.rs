@@ -14,14 +14,15 @@ use sonatina_ir::{
 use crate::{
     analysis::func_behavior,
     optim::{
+        aggregate::compute_object_effect_summaries,
         dead_func::{collect_object_roots, non_call_func_ref},
         signature_rewrite::{SignatureRewritePlan, rewrite_declared_signatures},
     },
 };
 
 use super::{
-    ObjectAggregateAbiConfig,
-    abi::abi_leaf_count,
+    ObjectAggregateAbi, ObjectAggregateAbiConfig, ObjectReturnOutParam,
+    abi::abi_arg_operand_count,
     objref_element_ty,
     promotion::{ReadPrefixRequirement, unconditional_read_prefix},
     reconstruct::rebuild_scalar_shape_from_leaf_values,
@@ -92,6 +93,12 @@ impl ObjectArgPromotion {
         loop {
             // Complete each signature/call cutover before rebuilding any facts.
             func_behavior::analyze_module(module);
+            let object_effects = compute_object_effect_summaries(module);
+            // Promotion can split an exposed signature class and enable a
+            // previously blocked output rewrite. Reserve candidate outputs
+            // before filtering plans against the current signature classes.
+            let synthetic_outputs =
+                ObjectReturnOutParam.collect_candidate_plans(module, &object_effects);
             let mut plans = FxHashMap::default();
             for func_ref in module.funcs() {
                 if blocked.contains(&func_ref) || !module.ctx.func_linkage(func_ref).is_private() {
@@ -99,9 +106,9 @@ impl ObjectArgPromotion {
                 }
                 module.func_store.modify(func_ref, Function::rebuild_users);
                 let ret_tys = module.ctx.func_sig(func_ref, |sig| sig.ret_tys().to_vec());
-                let plan = module
-                    .func_store
-                    .view(func_ref, |func| self.plan(func, &ret_tys));
+                let plan = module.func_store.view(func_ref, |func| {
+                    self.plan(func, &ret_tys, synthetic_outputs.contains_key(&func_ref))
+                });
                 if let Some(plan) = plan {
                     plans.insert(func_ref, plan);
                 }
@@ -127,8 +134,11 @@ impl ObjectArgPromotion {
         stats
     }
 
-    fn plan(&mut self, func: &Function, ret_tys: &[Type]) -> Option<Plan> {
+    fn plan(&mut self, func: &Function, ret_tys: &[Type], synthetic_output: bool) -> Option<Plan> {
         let limits = ObjectAggregateAbiConfig::default();
+        let hidden_returns = ObjectAggregateAbi::new(limits)
+            .hidden_return_arg_count(func.ctx(), ret_tys)?
+            + usize::from(synthetic_output);
         for (arg_index, &argument) in func.arg_values.iter().enumerate() {
             let Some(root_ty) = objref_element_ty(func.ctx(), func.dfg.value_ty(argument)) else {
                 continue;
@@ -169,10 +179,13 @@ impl ObjectArgPromotion {
                     new_arg_tys.push(func.dfg.value_ty(arg));
                 }
             }
-            let words = new_arg_tys.iter().try_fold(0usize, |words, &ty| {
-                abi_leaf_count(func.ctx(), ty).map(|count| words + count)
-            });
-            if !words.is_some_and(|words| words <= limits.max_direct_arg_words) {
+            let operands = new_arg_tys
+                .iter()
+                .try_fold(hidden_returns, |operands, &ty| {
+                    abi_arg_operand_count(func.ctx(), ty)
+                        .and_then(|count| operands.checked_add(count))
+                });
+            if !operands.is_some_and(|operands| operands <= limits.max_direct_arg_words) {
                 continue;
             }
             return Some(Plan {
@@ -387,4 +400,177 @@ fn rewrite_calls(func: &mut Function, plans: &FxHashMap<FuncRef, Plan>) -> usize
         rewritten += 1;
     }
     rewritten
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::transform::aggregate::AggregateExpandAbi;
+    use sonatina_parser::parse_module;
+    use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module_or_panic};
+
+    #[test]
+    fn reserves_fresh_object_outputs_and_counts_unit_operands() {
+        for (extra_ty, extra_count, fresh_return, exposed_sibling, promoted) in [
+            ("i256", 11, true, false, 1),
+            ("i256", 12, true, false, 0),
+            ("unit", 12, false, false, 1),
+            ("unit", 13, false, false, 0),
+            ("i256", 11, true, true, 1),
+            ("i256", 12, true, true, 0),
+        ] {
+            let extra_args = (20..20 + extra_count)
+                .map(|index| format!(", v{index}.{extra_ty}"))
+                .collect::<String>();
+            let (declaration, keep_args) = if extra_ty == "unit" {
+                let types = vec!["unit"; extra_count].join(", ");
+                let values = (20..20 + extra_count)
+                    .map(|index| format!("v{index}"))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                (
+                    format!("declare external %consume_units({types});"),
+                    format!("call %consume_units {values};"),
+                )
+            } else {
+                (
+                    String::new(),
+                    (20..20 + extra_count)
+                        .map(|index| format!("evm_sstore {index}.i256 v{index};\n"))
+                        .collect::<String>(),
+                )
+            };
+            let sibling = if exposed_sibling {
+                let pointer_args =
+                    format!("objref<@Four>, {}", vec![extra_ty; extra_count].join(", "));
+                format!(
+                    r#"
+func private %borrow(v0.objref<@Four>{extra_args}) -> objref<i256> {{
+block0:
+    v1.objref<i256> = obj.proj v0 0.i8;
+    return v1;
+}}
+func private %consume(v0.*({pointer_args}) -> objref<i256>) {{
+block0:
+    return;
+}}
+func private %register() {{
+block0:
+    v0.*({pointer_args}) -> objref<i256> = get_function_ptr %borrow;
+    call %consume v0;
+    return;
+}}
+"#
+                )
+            } else {
+                String::new()
+            };
+            let (ret_ty, tail) = if fresh_return {
+                (
+                    "objref<i256>",
+                    "v12.objref<i256> = obj.alloc i256;\n    obj.store v12 v11;\n    return v12;",
+                )
+            } else {
+                ("i256", "return v11;")
+            };
+            let source = format!(
+                r#"
+target = "evm-ethereum-osaka"
+type @Four = {{ i256, i256, i256, i256 }};
+{declaration}
+{sibling}
+func private %read(v0.objref<@Four>{extra_args}) -> {ret_ty} {{
+block0:
+    v1.objref<i256> = obj.proj v0 0.i8;
+    v2.i256 = obj.load v1;
+    v3.objref<i256> = obj.proj v0 1.i8;
+    v4.i256 = obj.load v3;
+    v5.objref<i256> = obj.proj v0 2.i8;
+    v6.i256 = obj.load v5;
+    v7.objref<i256> = obj.proj v0 3.i8;
+    v8.i256 = obj.load v7;
+    v9.i256 = add v2 v4;
+    v10.i256 = add v6 v8;
+    v11.i256 = add v9 v10;
+    {keep_args}
+    {tail}
+}}
+"#
+            );
+            let module = parse_module(&source).unwrap().module;
+            let config = VerifierConfig::for_level(VerificationLevel::Full);
+            verify_module_or_panic(&module, &config);
+            assert_eq!(
+                ObjectArgPromotion::default().run(&module).promoted_args,
+                promoted,
+                "{extra_count} {extra_ty}, fresh_return={fresh_return}, exposed_sibling={exposed_sibling}"
+            );
+            verify_module_or_panic(&module, &config);
+            ObjectAggregateAbi::new(ObjectAggregateAbiConfig::default())
+                .lower_to_memory(&module, false)
+                .unwrap();
+            AggregateExpandAbi::default().run(&module);
+            verify_module_or_panic(&module, &config);
+            let read = module
+                .funcs()
+                .into_iter()
+                .find(|&function| module.ctx.func_sig(function, |sig| sig.name() == "read"))
+                .unwrap();
+            let args = module.ctx.func_sig(read, |sig| sig.args().len());
+            assert_eq!(
+                args,
+                extra_count
+                    + if promoted == 1 { 4 } else { 1 }
+                    + usize::from(fresh_return && (!exposed_sibling || promoted == 1))
+            );
+            assert!(args <= 16);
+        }
+    }
+
+    #[test]
+    fn reserves_hidden_return_arguments_at_the_direct_operand_limit() {
+        for (hidden_returns, promoted) in [(12, 1), (13, 0)] {
+            let ret_tys = vec!["[i256; 5]"; hidden_returns].join(", ");
+            let returns = vec!["v13"; hidden_returns].join(", ");
+            let source = format!(
+                r#"
+target = "evm-ethereum-osaka"
+type @Four = {{ i256, i256, i256, i256 }};
+func private %read(v0.objref<@Four>) -> ({ret_tys}) {{
+block0:
+    v1.objref<i256> = obj.proj v0 0.i8;
+    v2.i256 = obj.load v1;
+    v3.objref<i256> = obj.proj v0 1.i8;
+    v4.i256 = obj.load v3;
+    v5.objref<i256> = obj.proj v0 2.i8;
+    v6.i256 = obj.load v5;
+    v7.objref<i256> = obj.proj v0 3.i8;
+    v8.i256 = obj.load v7;
+    v9.[i256; 5] = insert_value undef.[i256; 5] 0.i8 v2;
+    v10.[i256; 5] = insert_value v9 1.i8 v4;
+    v11.[i256; 5] = insert_value v10 2.i8 v6;
+    v12.[i256; 5] = insert_value v11 3.i8 v8;
+    v13.[i256; 5] = insert_value v12 4.i8 0.i256;
+    return ({returns});
+}}
+"#
+            );
+            let module = parse_module(&source).unwrap().module;
+            let config = VerifierConfig::for_level(VerificationLevel::Full);
+            verify_module_or_panic(&module, &config);
+            assert_eq!(
+                ObjectArgPromotion::default().run(&module).promoted_args,
+                promoted
+            );
+            verify_module_or_panic(&module, &config);
+            ObjectAggregateAbi::new(ObjectAggregateAbiConfig::default())
+                .lower_to_memory(&module, false)
+                .unwrap();
+            verify_module_or_panic(&module, &config);
+            let args = module
+                .ctx
+                .func_sig(module.funcs()[0], |sig| sig.args().len());
+            assert_eq!(args, if promoted == 1 { 16 } else { 14 });
+        }
+    }
 }
