@@ -14,8 +14,9 @@ use sonatina_ir::{
         data::{Alloca, MemAllocDynamic, Mload, Mstore},
         downcast,
         evm::{
-            EvmExp, EvmMalloc, EvmSaddsat, EvmSdiv, EvmSdivo, EvmSmod, EvmSmodo, EvmSmulsat,
-            EvmSsubsat, EvmUaddsat, EvmUdiv, EvmUdivo, EvmUmod, EvmUmodo, EvmUmulsat, EvmUsubsat,
+            EvmCodeLoad, EvmExp, EvmMalloc, EvmSaddsat, EvmSdiv, EvmSdivo, EvmSmod, EvmSmodo,
+            EvmSmulsat, EvmSsubsat, EvmUaddsat, EvmUdiv, EvmUdivo, EvmUmod, EvmUmodo, EvmUmulsat,
+            EvmUsubsat,
         },
         logic::{self, And, Or, Xor},
     },
@@ -25,7 +26,7 @@ use sonatina_ir::{
 };
 use sonatina_triple::Architecture;
 
-use super::scalar_words::legalize_evm_scalar_immediate;
+use super::{const_data::emit_const_load_from_addr, scalar_words::legalize_evm_scalar_immediate};
 use crate::optim::adce::AdceSolver;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -458,6 +459,13 @@ impl<'a> FunctionLegalizer<'a> {
             downcast::<&cast::IntToPtr>(is, self.func.dfg.inst(inst)).map(|i| (*i.from(), *i.ty()))
         {
             self.rewrite_int_to_ptr(inst, from, ty);
+            return;
+        }
+        if let Some(offset) =
+            downcast::<&EvmCodeLoad>(is, self.func.dfg.inst(inst)).map(|i| *i.code_offset())
+        {
+            let value = emit_const_load_from_addr(self.func, inst, offset, Type::I256, None);
+            self.replace_with_aliases(inst, &[value]);
             return;
         }
         if let Some((addr, ty)) =
