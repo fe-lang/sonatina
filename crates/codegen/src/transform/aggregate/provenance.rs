@@ -167,6 +167,7 @@ impl<'a> MayRootSet<'a> {
     }
 }
 
+#[derive(Default)]
 pub(crate) struct ExactProjectionMap(SecondaryMap<ValueId, Option<Projection>>);
 
 impl ExactProjectionMap {

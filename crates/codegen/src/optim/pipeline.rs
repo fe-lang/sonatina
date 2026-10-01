@@ -325,6 +325,7 @@ const POST_DEAD_ARG_CLEANUP_PASSES: &[Pass] = &[
 const POST_INLINE_CLEANUP_PASSES: &[Pass] = &[
     Pass::CfgCleanup,
     Pass::AggregateCombine,
+    Pass::AggregateScalarize,
     Pass::BranchCanonicalize,
     Pass::Sccp,
     Pass::ScalarCanonicalize,
@@ -1148,6 +1149,43 @@ block0:
             let text = FuncWriter::new(observer, func).dump_string();
             assert_eq!(text.matches("obj.load").count(), 1, "{text}");
         });
+    }
+
+    #[test]
+    fn final_inline_cleanup_scalarizes_reconstructed_aggregate_stores() {
+        let mut module = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+type @Pair = { i256, i256 };
+func private %entry(v0.objref<@Pair>, v1.i256) -> i256 {
+block0:
+    v2.objref<i256> = obj.proj v0 0.i8;
+    v3.i256 = obj.load v2;
+    v4.@Pair = insert_value undef.@Pair 0.i8 v3;
+    v5.@Pair = insert_value v4 1.i8 v1;
+    v6.objref<@Pair> = obj.alloc @Pair;
+    obj.store v6 v5;
+    v7.objref<i256> = obj.proj v6 0.i8;
+    v8.i256 = obj.load v7;
+    return v8;
+}
+"#,
+        )
+        .unwrap()
+        .module;
+        let config = VerifierConfig::for_level(VerificationLevel::Full);
+        let report = verify_module(&module, &config);
+        assert!(report.is_ok(), "{report:?}");
+        run_test_func_passes(&mut module, POST_INLINE_CLEANUP_PASSES);
+        let report = verify_module(&module, &config);
+        assert!(report.is_ok(), "{report:?}");
+        let function = module.funcs()[0];
+        let text = module.func_store.view(function, |func| {
+            FuncWriter::new(function, func).dump_string()
+        });
+        assert!(!text.contains("insert_value"), "{text}");
+        assert!(!text.contains("obj.alloc"), "{text}");
+        assert_eq!(text.matches("obj.load").count(), 1, "{text}");
     }
 
     #[test]

@@ -8,7 +8,10 @@ use sonatina_ir::{
     module::{FuncHints, FuncRef},
 };
 
-use crate::{analysis::func_behavior::blocks_that_may_reach_commit, module_analysis};
+use crate::{
+    analysis::func_behavior::blocks_that_may_reach_commit, module_analysis,
+    transform::aggregate::scalarize::AggregateScalarize,
+};
 
 use super::{
     aggregate::{collect_local_object_arg_info_with_effects, compute_object_effect_summaries},
@@ -274,12 +277,43 @@ impl Inliner {
                         callsite_known_arg_mask(caller, site.call_inst)
                     });
 
+                    // Caller uses and callee definitions constrain each other:
+                    // a second, non-scalarizable result can keep a shared use alive.
+                    let mut scalarizable_returns = vec![true; site.result_count];
+                    let reconstruction_insts = loop {
+                        let (count, eligible_returns) = snapshot_callee.map_or_else(
+                            || {
+                                module.func_store.view(site.callee, |callee| {
+                                    cost::loaded_field_reconstruction(callee, &scalarizable_returns)
+                                })
+                            },
+                            |callee| {
+                                cost::loaded_field_reconstruction(callee, &scalarizable_returns)
+                            },
+                        );
+                        if count == 0 {
+                            break 0;
+                        }
+                        let closed_returns = module.func_store.view(caller_ref, |caller| {
+                            AggregateScalarize::default().scalarizable_call_results(
+                                caller,
+                                site.call_inst,
+                                &eligible_returns,
+                            )
+                        });
+                        if closed_returns == scalarizable_returns {
+                            break count;
+                        }
+                        scalarizable_returns = closed_returns;
+                    };
+
                     let trivial_plan = if let Some(callee) = snapshot_callee {
                         trivial::analyze_callee(
                             module,
                             site.callee,
                             callee,
                             callee_calls,
+                            reconstruction_insts,
                             &self.config,
                             &mut stats,
                         )
@@ -290,6 +324,7 @@ impl Inliner {
                                 site.callee,
                                 callee,
                                 callee_calls,
+                                reconstruction_insts,
                                 &self.config,
                                 &mut stats,
                             )
@@ -369,6 +404,7 @@ impl Inliner {
                             },
                             call_arg_count: site.arg_count,
                             call_result_count: site.result_count,
+                            reconstruction_insts,
                             call_returns_to_caller: site.returns_to_caller,
                             call_callee_may_commit: site.callee_may_commit,
                             call_continuation_may_commit: site.continuation_may_commit,
@@ -739,6 +775,7 @@ func public %caller(v0.i256) {{
                     site.callee,
                     callee,
                     counts[&site.callee],
+                    0,
                     &InlinerConfig::default(),
                     &mut stats,
                 )

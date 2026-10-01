@@ -1,6 +1,6 @@
 use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
-    BlockId, ControlFlowGraph, Function, InstId, Linkage, Module,
+    BlockId, ControlFlowGraph, Function, Linkage, Module,
     inst::{control_flow, data, downcast},
     module::{FuncHints, FuncRef},
 };
@@ -8,7 +8,7 @@ use sonatina_ir::{
 use crate::{
     cfg_scc::CfgSccAnalysis,
     module_analysis::ModuleInfo,
-    transform::aggregate::{objref_element_ty, shape},
+    transform::aggregate::{objref_element_ty, scalarize::AggregateScalarize, shape},
 };
 
 use super::{
@@ -41,7 +41,6 @@ pub(super) struct InlineeSummary {
     pub has_body: bool,
     pub blocks: usize,
     pub insts: usize,
-    pub reconstruction_insts: usize,
     pub calls: usize,
     pub phis: usize,
     pub returns: usize,
@@ -104,6 +103,7 @@ pub(super) struct InlineRequest {
     pub callee_depth: usize,
     pub call_arg_count: usize,
     pub call_result_count: usize,
+    pub reconstruction_insts: usize,
     pub call_returns_to_caller: bool,
     pub call_callee_may_commit: bool,
     pub call_continuation_may_commit: bool,
@@ -242,7 +242,7 @@ pub(super) fn decide_inline(
         config.inline_threshold
     };
 
-    let mut score = summary.base_cost;
+    let mut score = summary.base_cost - request.reconstruction_insts as i32;
     score += summary.phis as i32;
     score += summary.returns.saturating_sub(1) as i32;
     if summary.has_loop {
@@ -269,7 +269,7 @@ pub(super) fn decide_inline(
     if request.callee_call_count > 1 {
         score += summary
             .insts
-            .saturating_sub(summary.reconstruction_insts)
+            .saturating_sub(request.reconstruction_insts)
             .saturating_sub(config.multi_use_inst_free_allowance) as i32
             * request.callee_call_count.saturating_sub(1) as i32
             * config.multi_use_excess_inst_penalty;
@@ -463,7 +463,6 @@ fn compute_inlinee_summary(
 
     let mut blocks = 0usize;
     let mut insts = 0usize;
-    let mut reachable_insts = Vec::new();
     let mut calls = 0usize;
     let mut phis = 0usize;
     let mut returns = 0usize;
@@ -484,7 +483,6 @@ fn compute_inlinee_summary(
         blocks += 1;
         for inst_id in func.layout.iter_inst(block) {
             insts += 1;
-            reachable_insts.push(inst_id);
 
             if downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst_id)).is_some() {
                 scalarization.object_load_count += 1;
@@ -555,14 +553,11 @@ fn compute_inlinee_summary(
         .iter()
         .any(|&scc| cfg_scc.scc_data(scc).is_cycle);
     scalarization.score = compute_scalarization_benefit_score(scalarization);
-    let reconstruction_insts = loaded_field_reconstruction_count(func, &reachable_insts);
-    base_cost -= reconstruction_insts as i32;
 
     InlineeSummary {
         has_body: true,
         blocks,
         insts,
-        reconstruction_insts,
         calls,
         phis,
         returns,
@@ -575,16 +570,45 @@ fn compute_inlinee_summary(
 /// Scalarization can eliminate repacking a loaded scalar into the same field.
 /// Keep charging for the load and projection, and credit each
 /// load only once so repeated inserts cannot hide an arbitrarily large body.
-pub(super) fn loaded_field_reconstruction_count(func: &Function, insts: &[InstId]) -> usize {
+pub(super) fn loaded_field_reconstruction(
+    func: &Function,
+    scalarizable_returns: &[bool],
+) -> (usize, Vec<bool>) {
+    let mut cfg = ControlFlowGraph::new();
+    cfg.compute(func);
+    let insts: Vec<_> = cfg
+        .post_order()
+        .flat_map(|block| func.layout.iter_inst(block))
+        .collect();
     let mut loads: FxHashSet<_> = insts
         .iter()
         .copied()
         .filter(|&inst| downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst)).is_some())
         .collect();
-    insts
+    if loads.is_empty()
+        || !insts.iter().any(|&inst| {
+            downcast::<&data::InsertValue>(func.inst_set(), func.dfg.inst(inst)).is_some()
+        })
+    {
+        return (0, Vec::new());
+    }
+    let scalarizable =
+        AggregateScalarize::default().scalarizable_values_for_inlining(func, scalarizable_returns);
+    let mut eligible_returns = scalarizable_returns.to_vec();
+    for &inst in &insts {
+        if let Some(ret) = downcast::<&control_flow::Return>(func.inst_set(), func.dfg.inst(inst)) {
+            for (eligible, &value) in eligible_returns.iter_mut().zip(ret.args().iter()) {
+                *eligible &= !is_scalarizable_aggregate_value(func, value) || scalarizable[value];
+            }
+        }
+    }
+    let count = insts
         .iter()
         .filter_map(|&inst| {
             let insert = downcast::<&data::InsertValue>(func.inst_set(), func.dfg.inst(inst))?;
+            if !scalarizable[func.dfg.inst_result(inst)?] {
+                return None;
+            }
             let aggregate_ty = func.dfg.value_ty(*insert.dest());
             if !func.dfg.value_ty(*insert.value()).is_integral()
                 || !shape::is_supported_aggregate_ty(func.ctx(), aggregate_ty)
@@ -605,7 +629,8 @@ pub(super) fn loaded_field_reconstruction_count(func: &Function, insts: &[InstId
                 && loads.remove(&load_inst))
             .then_some(())
         })
-        .count()
+        .count();
+    (count, eligible_returns)
 }
 
 fn is_scalarizable_aggregate_value(func: &Function, value: sonatina_ir::ValueId) -> bool {
