@@ -11,7 +11,7 @@ use sonatina_ir::{
 };
 
 use crate::{
-    analysis::definedness::value_may_be_undef,
+    analysis::definedness::{requires_definedness_evidence, value_may_be_undef},
     domtree::{DomTree, DominatorTreeTraversable},
     loop_analysis::LoopTree,
     range_analysis::{RangeAnalysis, checked_value_fact, transfer_inst},
@@ -207,7 +207,11 @@ fn edge_guard_relations(
     // An undef choice cannot establish a reusable relation. Include intrinsic
     // undef producers (such as generic division by a possibly zero divisor),
     // transitive dependencies, and cyclic phis via the shared definedness analysis.
-    if value_may_be_undef(func, condition, definedness, |_| None) {
+    // Calls and reads need evidence this edge-local proof does not have.
+    if value_may_be_undef(func, condition, definedness, |value| {
+        let inst = func.dfg.value_inst(value)?;
+        requires_definedness_evidence(func, inst).then_some(true)
+    }) {
         return SmallVec::new();
     }
     // Deliberately unsigned and pairwise, with exact SSA operand identity.
@@ -521,6 +525,38 @@ func public %test(v0.i256, v1.i256) -> i1 {{
                     "{operation} {divisor}: {text}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn guarded_subtraction_requires_defined_call_and_read_results() {
+        for producer in [
+            "v2.i256 = call %source;",
+            "v7.objref<i256> = obj.alloc i256;\n  v2.i256 = obj.load v7;",
+            "v7.*i256 = alloca i256;\n  v2.i256 = mload v7 i256;",
+        ] {
+            let text = optimized(&format!(
+                r#"
+target = "evm-ethereum-osaka"
+func public %test(v0.i256) -> i1 {{
+ block0:
+  {producer}
+  v3.i256 = add v2 1.i256;
+  v4.i1 = ge v0 v3;
+  br v4 block1 block2;
+ block1:
+  (v5.i256, v6.i1) = usubo v0 v3;
+  return v6;
+ block2:
+  return 0.i1;
+}}
+func private %source() -> i256 {{
+ block0:
+  return undef.i256;
+}}
+"#
+            ));
+            assert!(text.contains("usubo"), "{producer}: {text}");
         }
     }
 
