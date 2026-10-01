@@ -32,7 +32,7 @@ use sonatina_ir::{
     BlockId, U256 as IrU256,
     ir_writer::{FuncWriteCtx, FunctionSignature, IrWrite, ModuleWriter},
     isa::evm::Evm,
-    module::Module,
+    module::{InlineHint, Module},
 };
 use sonatina_parser::{ParsedModule, parse_module};
 use sonatina_triple::{Architecture, OperatingSystem, Vendor};
@@ -290,6 +290,83 @@ object @Contract {
             expected[..tail.len()].copy_from_slice(tail);
             expected[63] = 99;
             assert_eq!(actual.as_ref(), expected, "{level:?}, offset={offset}");
+        }
+    }
+}
+
+#[test]
+fn terminal_word_buffers_preserve_return_and_revert_payloads() {
+    let source = r#"
+target = "evm-ethereum-osaka"
+
+func private %read(v0.*i256) -> i256 {
+block0:
+    v1.i256 = mload v0 i256;
+    return v1;
+}
+
+func public %entry() {
+block0:
+    v0.i256 = evm_calldata_load 0.i256;
+    v1.i256 = evm_calldata_load 32.i256;
+    mstore 0.i256 v1 i256;
+    v2.*i256 = alloca i256;
+    mstore v2 v0 i256;
+    v3.i256 = call %read v2;
+    v4.*i8 = evm_malloc 32.i256;
+    v5.i256 = ptr_to_int v4 i256;
+    v6.i256 = mload 0.i256 i256;
+    v7.i256 = xor v6 v3;
+    v8.i1 = eq v0 0.i256;
+    br v8 block1 block2;
+block1:
+    mstore v5 v7 i256;
+    evm_return v5 32.i256;
+block2:
+    mstore v5 v7 i256;
+    evm_revert v5 32.i256;
+}
+
+object @Contract { section runtime { entry %entry; } }
+"#;
+    let config = VerifierConfig::for_level(VerificationLevel::Full);
+    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2, OptLevel::Os] {
+        let module = parse_sona(source).module;
+        verify_module_or_panic(&module, &config);
+        let read = module
+            .funcs()
+            .into_iter()
+            .find(|&func| module.ctx.func_sig(func, |sig| sig.name() == "read"))
+            .unwrap();
+        module.ctx.set_inline_hint(read, InlineHint::Never);
+        let compiler = Compile::new(module, EvmCompiler::default()).with_opt_level(level);
+        let artifacts = compiler.compile().expect("terminal buffers should compile");
+        let runtime = artifacts[0]
+            .sections
+            .iter()
+            .find(|(name, _)| name.0 == "runtime")
+            .unwrap();
+        let mut harness = EvmHarness::from_runtime(&runtime.1.bytes);
+        for mode in [0u64, 1] {
+            for word in [
+                IrU256::zero(),
+                IrU256::one(),
+                IrU256::MAX,
+                IrU256::one() << 255,
+            ] {
+                let mut calldata = IrU256::from(mode).to_big_endian().to_vec();
+                calldata.extend_from_slice(&word.to_big_endian());
+                let result = harness.call(&calldata);
+                let actual = match result {
+                    ExecutionResult::Success {
+                        output: Output::Call(bytes),
+                        ..
+                    } if mode == 0 => bytes,
+                    ExecutionResult::Revert { output, .. } if mode == 1 => output,
+                    _ => panic!("{level:?}, mode={mode}: {result:?}"),
+                };
+                assert_eq!(actual.as_ref(), (word ^ IrU256::from(mode)).to_big_endian());
+            }
         }
     }
 }

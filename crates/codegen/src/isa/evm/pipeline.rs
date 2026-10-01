@@ -14,7 +14,7 @@ use crate::{
             AggregateExpandAbi, AggregateLowerToMemoryLegalize, ObjectAggregateAbi,
             assert_aggregate_legalized, cleanup_dead_aggregate_alloca_trees,
         },
-        evm::{ConstDataLower, legalize_evm_section},
+        evm::{ConstDataLower, legalize_evm_section, reuse_terminal_word_buffers},
     },
 };
 use sonatina_ir::{Module, module::FuncRef};
@@ -345,6 +345,7 @@ impl EvmPipelineContext<'_> {
                 Pass::CfgCleanup,
             ],
         );
+        let mut terminal_payloads_changed = false;
         {
             let module = self.module();
             let module_ctx = &module.ctx;
@@ -354,11 +355,21 @@ impl EvmPipelineContext<'_> {
                     func_ref = func.as_u32()
                 )
                 .entered();
-                module.func_store.modify(func, |function| {
+                terminal_payloads_changed |= module.func_store.modify(func, |function| {
                     cleanup_dead_aggregate_alloca_trees(function, module_ctx);
                     assert_aggregate_legalized(function, module_ctx);
+                    reuse_terminal_word_buffers(function)
                 });
             }
+        }
+        if terminal_payloads_changed {
+            self.func_behavior_dirty = true;
+            self.run_pass_round("terminal_payload", &[Pass::Sccp, Pass::LoadStore]);
+            self.ptr_escape = Some(compute_ptr_escape_summaries(
+                self.module(),
+                &self.funcs,
+                &self.backend.isa,
+            ));
         }
         Ok(())
     }
