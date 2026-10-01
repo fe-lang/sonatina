@@ -278,3 +278,56 @@ block0:
     let config = VerifierConfig::for_level(VerificationLevel::Full);
     assert!(sonatina_verifier::verify_module(prepared.module(), &config).is_ok());
 }
+
+#[test]
+fn late_return_cleanup_preserves_private_root_arguments() {
+    let module = parse_module(
+        r#"
+target = "evm-ethereum-osaka"
+func private %echo(v0.i256) -> i256 {
+block0:
+    evm_sstore 0.i256 1.i256;
+    return v0;
+}
+func private %entry(v0.i256) {
+block0:
+    v1.i256 = call %echo v0;
+    return;
+}
+func private %included(v0.i256) {
+block0:
+    v1.i256 = call %echo v0;
+    return;
+}
+"#,
+    )
+    .unwrap()
+    .module;
+    let entry = find_func(&module, "entry");
+    let included = find_func(&module, "included");
+    let helper = find_func(&module, "echo");
+    let prepared = evm_backend()
+        .with_late_cleanup_optimizations(true)
+        .prepare_section(SectionWorkModule::from_roots(
+            &module,
+            entry,
+            &[included],
+            &[],
+        ))
+        .unwrap();
+    for root in [entry, included] {
+        assert_eq!(
+            prepared.module().ctx.func_sig(root, |sig| sig.args().len()),
+            1
+        );
+    }
+    assert_eq!(
+        prepared
+            .module()
+            .ctx
+            .func_sig(helper, |sig| (sig.args().len(), sig.ret_tys().len())),
+        (0, 0)
+    );
+    let config = VerifierConfig::for_level(VerificationLevel::Full);
+    assert!(sonatina_verifier::verify_module(prepared.module(), &config).is_ok());
+}

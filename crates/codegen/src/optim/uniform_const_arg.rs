@@ -284,7 +284,7 @@ block0:
         assert_eq!(stats.rewritten_funcs, 1);
         assert_eq!(stats.bound_args, 1);
 
-        let dead_arg = run_dead_arg_elim(&parsed.module, DeadArgElimConfig::default());
+        let dead_arg = run_dead_arg_elim(&parsed.module, &[], DeadArgElimConfig::default());
         assert_eq!(dead_arg.removed_args, 1);
         assert_sig(&parsed.module, "helper", 1, 1);
 
@@ -440,7 +440,7 @@ block0:
         assert_eq!(stats.rewritten_funcs, 1);
         assert_eq!(stats.bound_args, 2);
 
-        let dead_arg = run_dead_arg_elim(&parsed.module, DeadArgElimConfig::default());
+        let dead_arg = run_dead_arg_elim(&parsed.module, &[], DeadArgElimConfig::default());
         assert_eq!(dead_arg.removed_args, 2);
         assert_sig(&parsed.module, "helper", 1, 1);
 

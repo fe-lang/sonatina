@@ -20,9 +20,9 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   __Counter_runtime: ir_blocks=12 ir_insts=24 vcode_ops=71 fixups=6 imm_bytes=6
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Get_h3927684624c88c53__624197e0d5a47bbd: ir_blocks=5 ir_insts=11 vcode_ops=39 fixups=2 imm_bytes=5
+  evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Get_h3927684624c88c53__624197e0d5a47bbd: ir_blocks=5 ir_insts=11 vcode_ops=42 fixups=2 imm_bytes=5
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  entry: ir_blocks=9 ir_insts=23 vcode_ops=80 fixups=10 imm_bytes=9
+  entry: ir_blocks=9 ir_insts=23 vcode_ops=84 fixups=10 imm_bytes=11
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:
@@ -114,16 +114,19 @@ __Counter_runtime:
     PUSH0
     RETURN
 
-// func private %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Get_h3927684624c88c53__624197e0d5a47bbd(v0.i256) -> i256
+// func private %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Get_h3927684624c88c53__624197e0d5a47bbd(v0.i256, v1.i256, v2.i256) -> i256
 evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Get_h3927684624c88c53__624197e0d5a47bbd:
   block0:
     JUMPDEST
-    PUSH4 0x1b53398f (458439055)  // evm_mstore v1 v2;
+    SWAP2  // evm_mstore v6 v8;
+    POP
+    POP
+    PUSH4 0x1b53398f (458439055)
     PUSH1 0xe2 (226)
     SHL
     PUSH0
     MSTORE
-    PUSH0  // v9.i256 = evm_call v6 v0 v1 v1 v8 v1 v1;
+    PUSH0  // v12.i256 = evm_call v9 v0 v6 v6 v11 v6 v6;
     PUSH1 0x4 (4)
     PUSH0
     PUSH0
@@ -131,29 +134,29 @@ evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Get_h3927
     SWAP5
     PUSH3 0x186a0 (100000)
     CALL
-    RETURNDATASIZE  // v11.i256 = evm_return_data_size;
-    DUP1  // evm_return_data_copy v1 v1 v11;
+    RETURNDATASIZE  // v13.i256 = evm_return_data_size;
+    DUP1  // evm_return_data_copy v6 v6 v13;
     PUSH0
     PUSH0
     RETURNDATACOPY
-    SWAP1  // br v9 block2 block1;
+    SWAP1  // br v12 block2 block1;
     PUSH1 block2
     JUMPI
   block1:
-    PUSH0  // evm_revert v1 v11;
+    PUSH0  // evm_revert v6 v13;
     REVERT
   block2:
     JUMPDEST
-    PUSH1 0x20 (32)  // v14.i256 = lt v11 v13;
+    PUSH1 0x20 (32)  // v16.i256 = lt v13 v15;
     SWAP1
     LT
-    PUSH1 __evm_shared_tail_0  // br v14 block3 block4;
+    PUSH1 __evm_shared_tail_0  // br v16 block3 block4;
     JUMPI
   block4:
     JUMPDEST
-    PUSH0  // v15.i256 = evm_mload v1;
+    PUSH0  // v17.i256 = evm_mload v6;
     MLOAD
-    SWAP1  // return v15;
+    SWAP1  // return v17;
     JUMP
 
 // func public %entry()
@@ -183,13 +186,15 @@ entry:
     REVERT
   block4:
     JUMPDEST
-    DUP1  // v8.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Get_h3927684624c88c53__624197e0d5a47bbd v5;
+    DUP1  // v9.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Get_h3927684624c88c53__624197e0d5a47bbd v5 100000.i256 0.i256;
+    PUSH0
+    PUSH3 0x186a0 (100000)
     PUSH1 `pc + (4)`
-    SWAP1
+    SWAP3
     PUSH1 FuncRef(10)
     JUMP
     JUMPDEST
-    PUSH1 __evm_shared_tail_0  // br v8 block5 block6;
+    PUSH1 __evm_shared_tail_0  // br v9 block5 block6;
     JUMPI
   block6:
     PUSH4 0x684ef045 (1750003781)  // evm_mstore 0.i256 -21432072031172259149098304932151112453092825142662437103785846030156425068544.i256;
@@ -218,9 +223,11 @@ entry:
     REVERT
   block8:
     JUMPDEST
-    POP  // v16.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Get_h3927684624c88c53__624197e0d5a47bbd v5;
+    POP  // v16.i256 = call %evm_hef0af3106e109414_call_h2e84dd1b94aea876_call_stor_arg0_root_stor__Get_h3927684624c88c53__624197e0d5a47bbd v5 100000.i256 0.i256;
+    PUSH0
+    PUSH3 0x186a0 (100000)
     PUSH1 `pc + (4)`
-    SWAP1
+    SWAP3
     PUSH1 FuncRef(10)
     JUMP
     JUMPDEST
