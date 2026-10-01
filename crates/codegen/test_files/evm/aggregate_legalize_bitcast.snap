@@ -6,16 +6,16 @@ input_file: test_files/evm/aggregate_legalize_bitcast.sntn
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false
 
 object: Contract
-  section runtime: 32 bytes
-  total: 32 bytes
+  section runtime: 26 bytes
+  total: 26 bytes
 
 functions:
   mem: global_dyn_base=0x80 arena_base=0x0 scratch_peak_words=4 stable_chain_peak_words=0
-  entry: ir_blocks=1 ir_insts=11 vcode_ops=24 fixups=0 imm_bytes=8
+  entry: ir_blocks=1 ir_insts=8 vcode_ops=20 fixups=0 imm_bytes=6
     mem: scratch_words=4 stable_words=0 stable_mode=None entry_abs_words=4 abs_words_end=4
 
 evm:
-  case ok: calldata_len=64 success reason=Return gas_used=21357 gas_refunded=0 logs=0 output=call len=32 tx_gas=21280 runtime_gas=77
+  case ok: calldata_len=64 success reason=Return gas_used=21351 gas_refunded=0 logs=0 output=call len=32 tx_gas=21280 runtime_gas=71
 
 
 --------------- DEBUG ---------------
@@ -32,14 +32,10 @@ entry:
     MSTORE
     PUSH1 0x60 (96)  // evm_mstore 96.i256 v4;
     MSTORE
-    PUSH1 0x40 (64)  // v6.i256 = evm_mload v1;
-    MLOAD
-    PUSH0  // evm_mstore v0 v6;
-    MSTORE
-    PUSH1 0x60 (96)  // v8.i256 = evm_mload 96.i256;
-    MLOAD
-    PUSH1 0x20 (32)  // evm_mstore v3 v8;
-    MSTORE
+    PUSH1 0x40 (64)  // evm_mcopy v0 v1 v1;
+    DUP1
+    PUSH0
+    MCOPY
     PUSH1 0x20 (32)  // v11.i256 = evm_mload v3;
     MLOAD
     PUSH0  // evm_mstore v0 v11;

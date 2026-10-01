@@ -3,7 +3,10 @@ use tracing::debug_span;
 
 use crate::optim::pipeline::{Pass, run_function_pass_round};
 
-use super::{branch::canonicalize_machine_branch_conditions, verify::verify_machine_module};
+use super::{
+    branch::canonicalize_machine_branch_conditions, copy::coalesce_machine_copies,
+    verify::verify_machine_module,
+};
 
 const MACHINE_PASSES: &[Pass] = &[
     Pass::CfgCleanup,
@@ -40,6 +43,9 @@ pub(crate) fn run_machine_opt_pipeline(
                 .func_store
                 .modify(func, canonicalize_machine_branch_conditions);
         }
+    }
+    for &func in funcs {
+        module.func_store.modify(func, coalesce_machine_copies);
     }
     verify_machine_module(module, funcs)
 }

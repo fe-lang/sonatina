@@ -295,6 +295,219 @@ object @Contract {
 }
 
 #[test]
+fn machine_snapshot_copies_preserve_dynamic_aliases_and_wrapping_failures() {
+    for (words, interleaved) in [(2, false), (6, false), (18, false), (6, true)] {
+        let offsets: Vec<_> = (0..words * 32).step_by(32).collect();
+        let mut body = String::new();
+        let mut stores = String::new();
+        for (word, offset) in offsets.iter().enumerate() {
+            let addr = word * 3 + 3;
+            let value = addr + 1;
+            let dest = addr + 2;
+            body.push_str(&format!(
+                "v{addr}.i256 = add v2 {offset}.i256;\nv{value}.i256 = evm_mload v{addr};\n"
+            ));
+            let store =
+                format!("v{dest}.i256 = add v1 {offset}.i256;\nevm_mstore v{dest} v{value};\n");
+            if interleaved {
+                body.push_str(&store);
+            } else {
+                stores.push_str(&store);
+            }
+        }
+        body.push_str(&stores);
+        let source = format!(
+            r#"target = "evm-ethereum-osaka"
+func public %entry() {{
+block0:
+    evm_calldata_copy 256.i256 64.i256 2048.i256;
+    v0.i256 = evm_calldata_load 0.i256;
+    v1.i256 = evm_calldata_load 32.i256;
+    v2.i256 = sub v0 64.i256;
+    {body}
+    evm_return 256.i256 2048.i256;
+}}
+object @Contract {{ section runtime {{ entry %entry; }} }}
+"#
+        );
+        for profile in [
+            LateCleanupProfile::Off,
+            LateCleanupProfile::Speed,
+            LateCleanupProfile::Size,
+        ] {
+            let parsed = parse_sona(&source);
+            let backend = EvmBackend::new(Evm::new(parsed.module.ctx.triple))
+                .with_late_cleanup_profile(profile);
+            let artifact = compile_object(
+                &parsed.module,
+                &backend,
+                "Contract",
+                &CompileOptions::default(),
+            )
+            .expect("dynamic word copies should compile");
+            let runtime = artifact
+                .sections
+                .iter()
+                .find(|(name, _)| name.0 == "runtime")
+                .unwrap();
+            let mut harness = EvmHarness::from_runtime(&runtime.1.bytes);
+            for (src, dst) in [
+                (256, 1536),
+                (1024, 256),
+                (512, 512),
+                (512, 513),
+                (513, 512),
+                (512, 544),
+                (544, 512),
+            ] {
+                for seed in [0u8, 1, 127, 255] {
+                    let data: Vec<_> = (0..2048)
+                        .map(|i| seed.wrapping_add((i * 37) as u8))
+                        .collect();
+                    let mut expected = data.clone();
+                    let (src, dst) = (src - 256, dst - 256);
+                    if interleaved {
+                        for &offset in &offsets {
+                            let loaded = expected[src + offset..src + offset + 32].to_vec();
+                            expected[dst + offset..dst + offset + 32].copy_from_slice(&loaded);
+                        }
+                    } else {
+                        let loaded = expected[src..src + words * 32].to_vec();
+                        expected[dst..dst + words * 32].copy_from_slice(&loaded);
+                    }
+                    let mut calldata = IrU256::from(src + 256 + 64).to_big_endian().to_vec();
+                    calldata.extend_from_slice(&IrU256::from(dst + 256).to_big_endian());
+                    calldata.extend_from_slice(&data);
+                    let result = harness.call(&calldata);
+                    let ExecutionResult::Success {
+                        output: Output::Call(actual),
+                        ..
+                    } = result
+                    else {
+                        panic!(
+                            "src={src}, dst={dst}, words={words}, interleaved={interleaved}, profile={profile:?}: {result:?}"
+                        );
+                    };
+                    assert_eq!(
+                        actual.as_ref(),
+                        expected,
+                        "src={src}, dst={dst}, words={words}, interleaved={interleaved}, profile={profile:?}"
+                    );
+                }
+            }
+            for (src, dst) in [
+                (IrU256::zero(), IrU256::from(512)),
+                (IrU256::from(63), IrU256::from(512)),
+                (IrU256::from(576), IrU256::MAX - IrU256::from(31)),
+                (IrU256::from(576), IrU256::one() << 255),
+            ] {
+                let calldata = [src.to_big_endian(), dst.to_big_endian()].concat();
+                assert!(
+                    matches!(harness.call(&calldata), ExecutionResult::Halt { .. }),
+                    "wrapping or unpayable memory range must halt"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn machine_copies_preserve_words_guards_and_overlap_semantics() {
+    for (src, dst, words, interleaved) in [
+        (256, 1024, 18, false),
+        (257, 1025, 6, true),
+        (256, 288, 6, true),
+        (288, 256, 6, false),
+    ] {
+        let len = words * 32;
+        let offsets: Vec<_> = (0..len).step_by(32).collect();
+        let mut body = String::new();
+        let mut stores = String::new();
+        for (word, offset) in offsets.iter().enumerate() {
+            let source = src + offset;
+            let dest = dst + offset;
+            body.push_str(&format!("v{word}.i256 = evm_mload {source}.i256;\n"));
+            let store = format!("evm_mstore {dest}.i256 v{word};\n");
+            if interleaved {
+                body.push_str(&store);
+            } else {
+                stores.push_str(&store);
+            }
+        }
+        body.push_str(&stores);
+        let before = dst - 32;
+        let after = dst + len;
+        let return_len = len + 64;
+        let source = format!(
+            r#"target = "evm-ethereum-osaka"
+func public %entry() {{
+block0:
+    evm_calldata_copy {src}.i256 0.i256 {len}.i256;
+    evm_mstore {before}.i256 123.i256;
+    evm_mstore {after}.i256 456.i256;
+    {body}
+    evm_return {before}.i256 {return_len}.i256;
+}}
+object @Contract {{ section runtime {{ entry %entry; }} }}
+"#
+        );
+        for profile in [
+            LateCleanupProfile::Off,
+            LateCleanupProfile::Speed,
+            LateCleanupProfile::Size,
+        ] {
+            let parsed = parse_sona(&source);
+            let backend = EvmBackend::new(Evm::new(parsed.module.ctx.triple))
+                .with_late_cleanup_profile(profile);
+            let artifact = compile_object(
+                &parsed.module,
+                &backend,
+                "Contract",
+                &CompileOptions::default(),
+            )
+            .expect("word copies should compile");
+            let runtime = artifact
+                .sections
+                .iter()
+                .find(|(name, _)| name.0 == "runtime")
+                .unwrap();
+            let mut harness = EvmHarness::from_runtime(&runtime.1.bytes);
+            for seed in [0u8, 1, 127, 255] {
+                let calldata: Vec<_> = (0..len)
+                    .map(|i| seed.wrapping_add((i * 37) as u8))
+                    .collect();
+                let mut memory = vec![0; (src + len).max(after + 32)];
+                memory[src..src + len].copy_from_slice(&calldata);
+                memory[before..dst].copy_from_slice(&IrU256::from(123).to_big_endian());
+                memory[after..after + 32].copy_from_slice(&IrU256::from(456).to_big_endian());
+                if interleaved {
+                    for offset in &offsets {
+                        let loaded = memory[src + offset..src + offset + 32].to_vec();
+                        memory[dst + offset..dst + offset + 32].copy_from_slice(&loaded);
+                    }
+                } else {
+                    let loaded = memory[src..src + len].to_vec();
+                    memory[dst..after].copy_from_slice(&loaded);
+                }
+                let result = harness.call(&calldata);
+                let ExecutionResult::Success {
+                    output: Output::Call(actual),
+                    ..
+                } = result
+                else {
+                    panic!("src={src}, dst={dst}, words={words}, profile={profile:?}: {result:?}");
+                };
+                assert_eq!(
+                    actual.as_ref(),
+                    &memory[before..after + 32],
+                    "src={src}, dst={dst}, words={words}, profile={profile:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn terminal_word_buffers_preserve_return_and_revert_payloads() {
     let source = r#"
 target = "evm-ethereum-osaka"
