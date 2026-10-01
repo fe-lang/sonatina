@@ -269,6 +269,38 @@ impl DataFlowGraph {
         self.attach_results(inst_id, &[value_id]);
     }
 
+    /// Retains selected results of an instruction and compacts their result indices.
+    ///
+    /// Removed results must have no users. The instruction itself is preserved, so
+    /// this is suitable for signature rewrites that remove dead call result lanes
+    /// without discarding the instruction's effects.
+    pub fn retain_inst_results(&mut self, inst_id: InstId, keep: &[bool]) {
+        assert_eq!(
+            self.inst_results(inst_id).len(),
+            keep.len(),
+            "result retention mask must match the instruction result count"
+        );
+
+        let old_results = std::mem::take(&mut self.inst_results[inst_id]);
+        let mut retained = SmallVec::<[ValueId; 1]>::new();
+        for (value_id, keep_result) in old_results.into_iter().zip(keep.iter().copied()) {
+            if keep_result {
+                let result_idx = u16::try_from(retained.len())
+                    .expect("instruction result count must fit in u16");
+                let ty = self.value_ty(value_id);
+                self.values[value_id] = Value::Inst {
+                    inst: inst_id,
+                    result_idx,
+                    ty,
+                };
+                retained.push(value_id);
+            } else {
+                self.delete_value(value_id);
+            }
+        }
+        self.inst_results[inst_id] = retained;
+    }
+
     pub fn make_arg_value(&mut self, ty: Type, idx: usize) -> Value {
         Value::Arg { ty, idx }
     }
@@ -993,5 +1025,31 @@ mod tests {
         dfg.attach_result(consumer, consumer_result);
 
         dfg.delete_inst(producer);
+    }
+
+    #[test]
+    fn retain_inst_results_compacts_indices_and_removes_dead_values() {
+        let isa = test_isa();
+        let mut dfg = DataFlowGraph::new(ModuleCtx::new(&isa));
+        let lhs = dfg.make_imm_value(Immediate::I32(1));
+        let rhs = dfg.make_imm_value(Immediate::I32(2));
+        let inst = dfg.make_inst(Uaddo::new_unchecked(dfg.inst_set(), lhs, rhs));
+        let sum = dfg.make_value(Value::Inst {
+            inst,
+            result_idx: 0,
+            ty: Type::I32,
+        });
+        let overflow = dfg.make_value(Value::Inst {
+            inst,
+            result_idx: 1,
+            ty: Type::I1,
+        });
+        dfg.attach_results(inst, &[sum, overflow]);
+
+        dfg.retain_inst_results(inst, &[false, true]);
+
+        assert!(!dfg.has_value(sum));
+        assert_eq!(dfg.inst_results(inst), &[overflow]);
+        assert_eq!(dfg.value_inst_result(overflow), Some((inst, 0)));
     }
 }

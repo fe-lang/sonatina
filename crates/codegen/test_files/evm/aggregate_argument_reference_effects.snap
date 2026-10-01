@@ -15,13 +15,13 @@ functions:
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
   overwrite_struct: ir_blocks=1 ir_insts=2 vcode_ops=3 fixups=0 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  read_enum: ir_blocks=1 ir_insts=2 vcode_ops=8 fixups=2 imm_bytes=0
+  read_enum: ir_blocks=1 ir_insts=2 vcode_ops=10 fixups=2 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  overwrite_enum: ir_blocks=1 ir_insts=2 vcode_ops=8 fixups=2 imm_bytes=0
+  overwrite_enum: ir_blocks=1 ir_insts=2 vcode_ops=10 fixups=2 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  forward: ir_blocks=1 ir_insts=2 vcode_ops=8 fixups=2 imm_bytes=0
+  forward: ir_blocks=1 ir_insts=2 vcode_ops=10 fixups=2 imm_bytes=0
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
-  entry: ir_blocks=4 ir_insts=21 vcode_ops=61 fixups=9 imm_bytes=6
+  entry: ir_blocks=4 ir_insts=21 vcode_ops=65 fixups=9 imm_bytes=10
     mem: scratch_words=0 stable_words=0 stable_mode=None entry_abs_words=0 abs_words_end=0
 
 evm:

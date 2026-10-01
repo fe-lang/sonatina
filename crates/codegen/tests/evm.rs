@@ -508,6 +508,101 @@ object @Contract {{ section runtime {{ entry %entry; }} }}
 }
 
 #[test]
+fn private_return_lanes_preserve_values_storage_and_reverts() {
+    let source = r#"
+target = "evm-ethereum-osaka"
+func private %mixed(v0.i256, v1.i256) -> (i256, i256, i256, i256) {
+block0:
+    evm_sstore 0.i256 v0;
+    v2.i256 = xor v0 v1;
+    v3.i256 = add v0 v1;
+    return (v1, v2, v3, v0);
+}
+func private %effects_only(v0.i256, v1.i256) -> i256 {
+block0:
+    v2.i1 = is_zero v1;
+    br v2 block1 block2;
+block1:
+    evm_mstore 0.i256 v0;
+    evm_revert 0.i256 32.i256;
+block2:
+    evm_sstore 1.i256 v1;
+    return v0;
+}
+func public %entry() {
+block0:
+    v0.i256 = evm_calldata_load 0.i256;
+    v1.i256 = evm_calldata_load 32.i256;
+    (v2.i256, v3.i256, v4.i256, v5.i256) = call %mixed v0 v1;
+    v6.i256 = call %effects_only v0 v1;
+    v7.i256 = evm_sload 0.i256;
+    v8.i256 = evm_sload 1.i256;
+    evm_mstore 0.i256 v2;
+    evm_mstore 32.i256 v3;
+    evm_mstore 64.i256 v5;
+    evm_mstore 96.i256 v7;
+    evm_mstore 128.i256 v8;
+    evm_return 0.i256 160.i256;
+}
+object @Contract { section runtime { entry %entry; } }
+"#;
+    let pairs = [
+        (IrU256::zero(), IrU256::one()),
+        (IrU256::one(), IrU256::zero()),
+        (IrU256::MAX, IrU256::one()),
+        (IrU256::one() << 255, IrU256::MAX),
+        (IrU256::MAX, IrU256::MAX),
+        (IrU256::zero(), IrU256::zero()),
+        (IrU256::MAX, IrU256::zero()),
+        (IrU256::one(), IrU256::one() << 128),
+    ];
+    let config = VerifierConfig::for_level(VerificationLevel::Full);
+    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2, OptLevel::Os] {
+        let module = parse_sona(source).module;
+        verify_module_or_panic(&module, &config);
+        for func in module.funcs() {
+            if module.ctx.func_sig(func, |sig| sig.linkage().is_private()) {
+                module.ctx.set_inline_hint(func, InlineHint::Never);
+            }
+        }
+        let mut compiler = Compile::new(module, EvmCompiler::default()).with_opt_level(level);
+        verify_module_or_panic(compiler.optimize(), &config);
+        let artifacts = compiler
+            .compile()
+            .expect("private return lanes should compile");
+        let runtime = artifacts[0]
+            .sections
+            .iter()
+            .find(|(name, _)| name.0 == "runtime")
+            .unwrap();
+        let mut harness = EvmHarness::from_runtime(&runtime.1.bytes);
+        for (lhs, rhs) in pairs {
+            let calldata = [lhs.to_big_endian(), rhs.to_big_endian()].concat();
+            let result = harness.call(&calldata);
+            if rhs.is_zero() {
+                let ExecutionResult::Revert { output, .. } = result else {
+                    panic!("{level:?}, lhs={lhs}, rhs={rhs}: {result:?}");
+                };
+                assert_eq!(output.as_ref(), lhs.to_big_endian());
+            } else {
+                let ExecutionResult::Success {
+                    output: Output::Call(output),
+                    ..
+                } = result
+                else {
+                    panic!("{level:?}, lhs={lhs}, rhs={rhs}: {result:?}");
+                };
+                let expected = [rhs, lhs ^ rhs, lhs, lhs, rhs]
+                    .into_iter()
+                    .flat_map(|word| word.to_big_endian())
+                    .collect::<Vec<_>>();
+                assert_eq!(output.as_ref(), expected, "{level:?}, lhs={lhs}, rhs={rhs}");
+            }
+        }
+    }
+}
+
+#[test]
 fn guarded_subtraction_preserves_values_and_overflow_at_all_optimization_levels() {
     let source = r#"
 target = "evm-ethereum-osaka"

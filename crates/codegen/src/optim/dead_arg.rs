@@ -8,9 +8,12 @@ use sonatina_ir::{
 
 use crate::{analysis::func_behavior, module_analysis::CallGraph};
 
-use super::signature_rewrite::{
-    SignatureRewritePlan, propagate_signature_rewrite_types, retain_higher_order_safe_plans,
-    rewrite_declared_signatures,
+use super::{
+    dead_func::collect_object_roots,
+    signature_rewrite::{
+        SignatureRewritePlan, propagate_signature_rewrite_types, retain_higher_order_safe_plans,
+        rewrite_declared_signatures,
+    },
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,9 +62,19 @@ impl SignatureRewritePlan for FuncPlan {
     }
 }
 
-pub fn run_dead_arg_elim(module: &Module, config: DeadArgElimConfig) -> DeadArgElimStats {
+/// Preserve the arguments of explicit section roots and object entry/include directives.
+pub fn run_dead_arg_elim(
+    module: &Module,
+    roots: &[FuncRef],
+    config: DeadArgElimConfig,
+) -> DeadArgElimStats {
     func_behavior::analyze_module(module);
-    let initial_candidate = collect_candidate_funcs(module, config);
+    let roots: FxHashSet<_> = collect_object_roots(module)
+        .into_iter()
+        .chain(roots.iter().copied())
+        .collect();
+    let mut initial_candidate = collect_candidate_funcs(module, config);
+    initial_candidate.retain(|func| !roots.contains(func));
     let mut stats = DeadArgElimStats {
         eligible_funcs: initial_candidate.len(),
         ..DeadArgElimStats::default()
@@ -446,6 +459,37 @@ mod tests {
     }
 
     #[test]
+    fn preserves_object_directive_root_arguments() {
+        let parsed = parse_module(
+            r#"
+target = "evm-ethereum-osaka"
+func private %helper(v0.i256) {
+block0:
+    evm_sstore 0.i256 1.i256;
+    return;
+}
+func private %entry(v0.i256) {
+block0:
+    call %helper v0;
+    return;
+}
+func private %included(v0.i256) {
+block0:
+    return;
+}
+object @Contract { section runtime { entry %entry; include %included; } }
+"#,
+        );
+        assert_verified(&parsed.module);
+        let stats = run_dead_arg_elim(&parsed.module, &[], DeadArgElimConfig::default());
+        assert_eq!(stats.removed_args, 1);
+        assert_sig(&parsed.module, "entry", 1, 0);
+        assert_sig(&parsed.module, "included", 1, 0);
+        assert_sig(&parsed.module, "helper", 0, 0);
+        assert_verified(&parsed.module);
+    }
+
+    #[test]
     fn removes_simple_acyclic_unused_param() {
         let parsed = parse_module(
             r#"
@@ -464,7 +508,7 @@ func public %entry(v0.i256) -> i256 {
 "#,
         );
 
-        let stats = run_dead_arg_elim(&parsed.module, DeadArgElimConfig::default());
+        let stats = run_dead_arg_elim(&parsed.module, &[], DeadArgElimConfig::default());
 
         assert_eq!(stats.rewritten_funcs, 1);
         assert_eq!(stats.removed_args, 1);
@@ -500,7 +544,7 @@ func public %entry(v0.i256) -> i256 {
 "#,
         );
 
-        let stats = run_dead_arg_elim(&parsed.module, DeadArgElimConfig::default());
+        let stats = run_dead_arg_elim(&parsed.module, &[], DeadArgElimConfig::default());
 
         assert_eq!(stats.rewritten_funcs, 2);
         assert_eq!(stats.removed_args, 2);
@@ -538,7 +582,7 @@ func public %entry() -> i256 {
 "#,
         );
 
-        let stats = run_dead_arg_elim(&parsed.module, DeadArgElimConfig::default());
+        let stats = run_dead_arg_elim(&parsed.module, &[], DeadArgElimConfig::default());
 
         assert_eq!(stats.rewritten_funcs, 1);
         assert_sig(&parsed.module, "self", 1, 1);
@@ -586,7 +630,7 @@ func public %entry() -> i256 {
 "#,
         );
 
-        let stats = run_dead_arg_elim(&parsed.module, DeadArgElimConfig::default());
+        let stats = run_dead_arg_elim(&parsed.module, &[], DeadArgElimConfig::default());
 
         assert_eq!(stats.rewritten_funcs, 2);
         assert_sig(&parsed.module, "even", 1, 1);
@@ -622,7 +666,7 @@ func public %entry(v0.i256) -> i256 {
 "#,
         );
 
-        let stats = run_dead_arg_elim(&parsed.module, DeadArgElimConfig::default());
+        let stats = run_dead_arg_elim(&parsed.module, &[], DeadArgElimConfig::default());
 
         assert_eq!(stats.rewritten_funcs, 1);
         assert_eq!(stats.removed_args, 1);
@@ -659,7 +703,7 @@ func public %entry(v0.i256) -> i256 {
 "#,
         );
 
-        let stats = run_dead_arg_elim(&parsed.module, DeadArgElimConfig::default());
+        let stats = run_dead_arg_elim(&parsed.module, &[], DeadArgElimConfig::default());
 
         assert_eq!(stats.rewritten_funcs, 2);
         assert_eq!(stats.removed_args, 2);
@@ -692,7 +736,7 @@ func public %entry(v0.i256) -> i256 {
 "#,
         );
 
-        let stats = run_dead_arg_elim(&parsed.module, DeadArgElimConfig::default());
+        let stats = run_dead_arg_elim(&parsed.module, &[], DeadArgElimConfig::default());
 
         assert_eq!(stats.rewritten_funcs, 0);
         assert_eq!(stats.removed_args, 0);
@@ -728,7 +772,7 @@ func public %entry(v0.i256) -> i256 {
 "#,
         );
 
-        let stats = run_dead_arg_elim(&parsed.module, DeadArgElimConfig::default());
+        let stats = run_dead_arg_elim(&parsed.module, &[], DeadArgElimConfig::default());
 
         assert_eq!(stats.rewritten_funcs, 0);
         assert_eq!(stats.removed_args, 0);
@@ -768,7 +812,7 @@ func public %entry(v0.i256) -> i256 {
 "#,
         );
 
-        let stats = run_dead_arg_elim(&parsed.module, DeadArgElimConfig::default());
+        let stats = run_dead_arg_elim(&parsed.module, &[], DeadArgElimConfig::default());
 
         assert_eq!(stats.eligible_funcs, 1);
         assert_eq!(stats.rewritten_funcs, 1);
@@ -814,7 +858,7 @@ func public %entry(v0.i256) -> i256 {
 "#,
         );
 
-        let stats = run_dead_arg_elim(&parsed.module, DeadArgElimConfig::default());
+        let stats = run_dead_arg_elim(&parsed.module, &[], DeadArgElimConfig::default());
 
         assert_eq!(stats.rewritten_funcs, 0);
         assert_sig(&parsed.module, "a", 2, 1);
@@ -858,7 +902,7 @@ func public %entry(v0.i256) -> i256 {
 "#,
         );
 
-        let stats = run_dead_arg_elim(&parsed.module, DeadArgElimConfig::default());
+        let stats = run_dead_arg_elim(&parsed.module, &[], DeadArgElimConfig::default());
 
         assert_eq!(stats.blocked_higher_order_funcs, 1);
         assert_eq!(stats.rewritten_funcs, 0);
@@ -887,7 +931,7 @@ func public %entry(v0.i256) -> i256 {
 "#,
         );
 
-        let stats = run_dead_arg_elim(&parsed.module, DeadArgElimConfig::default());
+        let stats = run_dead_arg_elim(&parsed.module, &[], DeadArgElimConfig::default());
 
         assert_eq!(stats.rewritten_funcs, 1);
         assert_sig(&parsed.module, "pair", 1, 2);
@@ -910,7 +954,7 @@ func private %drop_first(v0.i256, v1.i256) -> i256 {
 "#,
         );
 
-        run_dead_arg_elim(&parsed.module, DeadArgElimConfig::default());
+        run_dead_arg_elim(&parsed.module, &[], DeadArgElimConfig::default());
 
         let dumped = dump_function(&parsed.module, "drop_first");
         assert!(dumped.contains("v2.i256 = add undef.i256 1.i256;"));

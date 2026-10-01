@@ -558,7 +558,7 @@ impl Pipeline {
                 }
                 Step::DeadArgElim => {
                     let _span = debug_span!("sonatina.optim.pipeline.dead_arg_elim").entered();
-                    run_dead_arg_elim(module, DeadArgElimConfig::default());
+                    run_dead_arg_elim(module, &[], DeadArgElimConfig::default());
                     func_behavior_dirty = true;
                 }
                 Step::DeadFuncElim => {

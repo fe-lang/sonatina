@@ -1,3 +1,5 @@
+use std::iter;
+
 use rustc_hash::FxHashMap;
 use tracing::{debug_span, info_span, trace_span};
 
@@ -6,6 +8,8 @@ use crate::{
     optim::{
         constref_specialize::specialize_private_constrefs,
         dead_arg::{DeadArgElimConfig, run_dead_arg_elim},
+        dead_ret::{DeadRetElimConfig, run_dead_ret_elim},
+        forwarded_ret::{ForwardedRetElimConfig, run_forwarded_ret_elim},
         pipeline::{Pass, run_function_pass_round},
         uniform_const_arg::run_uniform_const_arg_binding,
     },
@@ -37,6 +41,7 @@ struct EvmPipelineContext<'a> {
     backend: &'a EvmBackend,
     work: &'a SectionWorkModule,
     funcs: Vec<FuncRef>,
+    roots: Vec<FuncRef>,
     func_behavior_dirty: bool,
     ptr_escape: Option<FxHashMap<FuncRef, PtrEscapeSummary>>,
 }
@@ -51,6 +56,9 @@ impl<'a> EvmPipeline<'a> {
             backend: self.backend,
             work,
             funcs: work.module().funcs(),
+            roots: iter::once(work.entry())
+                .chain(work.includes().iter().copied())
+                .collect(),
             func_behavior_dirty: true,
             ptr_escape: None,
         };
@@ -177,7 +185,7 @@ impl EvmPipelineContext<'_> {
         crate::transform::aggregate::EnumLowerToProduct.run(self.module());
         let stats = specialize_private_constrefs(self.module(), &self.funcs);
         if stats.changed {
-            run_dead_arg_elim(self.module(), DeadArgElimConfig::default());
+            run_dead_arg_elim(self.module(), &self.roots, DeadArgElimConfig::default());
             self.refresh_section_funcs();
             self.func_behavior_dirty = true;
             self.run_pass_round("constref_specialize", &[Pass::Sccp, Pass::CfgCleanup]);
@@ -229,7 +237,31 @@ impl EvmPipelineContext<'_> {
             ],
         );
         run_uniform_const_arg_binding(self.work.module(), &self.funcs);
-        run_dead_arg_elim(self.work.module(), DeadArgElimConfig::default());
+        run_dead_arg_elim(
+            self.work.module(),
+            &self.roots,
+            DeadArgElimConfig::default(),
+        );
+        // Return lanes that only echo an argument, or that no caller reads, are
+        // the result-side twin of dead arguments. Dropping them can leave
+        // arguments dead again, so dead-argument elimination runs once more.
+        let forwarded = run_forwarded_ret_elim(
+            self.work.module(),
+            &self.roots,
+            ForwardedRetElimConfig::default(),
+        );
+        let dead = run_dead_ret_elim(
+            self.work.module(),
+            &self.roots,
+            DeadRetElimConfig::default(),
+        );
+        if forwarded.removed_rets + dead.removed_rets > 0 {
+            run_dead_arg_elim(
+                self.work.module(),
+                &self.roots,
+                DeadArgElimConfig::default(),
+            );
+        }
         self.func_behavior_dirty = true;
         self.run_pass_round(
             "default",

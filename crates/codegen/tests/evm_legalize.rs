@@ -1,5 +1,6 @@
 use sonatina_codegen::{
     isa::evm::{EvmBackend, PushWidthPolicy, test_util::prepare_root},
+    machinst::lower::SectionWorkModule,
     object::{CompileOptions, compile_object},
 };
 use sonatina_ir::{Module, ir_writer::ModuleWriter, isa::evm::Evm, module::FuncRef};
@@ -239,4 +240,94 @@ object @O {
 
     compile_object(&parsed.module, &backend, "O", &opts)
         .expect("object compilation should legalize checked EVM div/mod and overflow ops");
+}
+
+#[test]
+fn late_return_cleanup_preserves_private_section_roots() {
+    let module = parse_module(
+        r#"
+target = "evm-ethereum-osaka"
+func private %entry() -> i256 {
+block0:
+    return 42.i256;
+}
+func private %included(v0.i256) -> i256 {
+block0:
+    return v0;
+}
+"#,
+    )
+    .unwrap()
+    .module;
+    let entry = find_func(&module, "entry");
+    let included = find_func(&module, "included");
+    let work = SectionWorkModule::from_roots(&module, entry, &[included], &[]);
+    let prepared = evm_backend()
+        .with_late_cleanup_optimizations(true)
+        .prepare_section(work)
+        .unwrap();
+    for function in [entry, included] {
+        assert_eq!(
+            prepared
+                .module()
+                .ctx
+                .func_sig(function, |sig| sig.ret_tys().len()),
+            1
+        );
+    }
+    let config = VerifierConfig::for_level(VerificationLevel::Full);
+    assert!(sonatina_verifier::verify_module(prepared.module(), &config).is_ok());
+}
+
+#[test]
+fn late_return_cleanup_preserves_private_root_arguments() {
+    let module = parse_module(
+        r#"
+target = "evm-ethereum-osaka"
+func private %echo(v0.i256) -> i256 {
+block0:
+    evm_sstore 0.i256 1.i256;
+    return v0;
+}
+func private %entry(v0.i256) {
+block0:
+    v1.i256 = call %echo v0;
+    return;
+}
+func private %included(v0.i256) {
+block0:
+    v1.i256 = call %echo v0;
+    return;
+}
+"#,
+    )
+    .unwrap()
+    .module;
+    let entry = find_func(&module, "entry");
+    let included = find_func(&module, "included");
+    let helper = find_func(&module, "echo");
+    let prepared = evm_backend()
+        .with_late_cleanup_optimizations(true)
+        .prepare_section(SectionWorkModule::from_roots(
+            &module,
+            entry,
+            &[included],
+            &[],
+        ))
+        .unwrap();
+    for root in [entry, included] {
+        assert_eq!(
+            prepared.module().ctx.func_sig(root, |sig| sig.args().len()),
+            1
+        );
+    }
+    assert_eq!(
+        prepared
+            .module()
+            .ctx
+            .func_sig(helper, |sig| (sig.args().len(), sig.ret_tys().len())),
+        (0, 0)
+    );
+    let config = VerifierConfig::for_level(VerificationLevel::Full);
+    assert!(sonatina_verifier::verify_module(prepared.module(), &config).is_ok());
 }

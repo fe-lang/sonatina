@@ -6,13 +6,13 @@ input_file: test_files/evm/fe_enum_state_machine_test_order_initial_state_unopti
 evm.config: stack_reach=16 vcode=true bytecode_hex=false stackify_trace=false evm_trace=false emit_observability=false opt=2
 
 object: Contract
-  section runtime: 792 bytes
-  total: 792 bytes
+  section runtime: 785 bytes
+  total: 785 bytes
 
 object: Order
-  section init: 448 bytes
-  section runtime: 434 bytes
-  total: 882 bytes
+  section init: 441 bytes
+  section runtime: 427 bytes
+  total: 868 bytes
 
 functions:
   mem: global_dyn_base=0x100 arena_base=0xa0 scratch_peak_words=0 stable_chain_peak_words=3
@@ -28,7 +28,7 @@ functions:
     mem: scratch_words=0 stable_words=3 stable_mode=StableAbs(base=0xa0) entry_abs_words=0 abs_words_end=3
 
 evm:
-  case ok: calldata_len=0 success reason=Return gas_used=164658 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=143658
+  case ok: calldata_len=0 success reason=Return gas_used=163218 gas_refunded=0 logs=0 output=call len=32 tx_gas=21000 runtime_gas=142218
 
 
 --------------- DEBUG ---------------

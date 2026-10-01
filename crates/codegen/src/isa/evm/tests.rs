@@ -2224,7 +2224,8 @@ target = "evm-ethereum-osaka"
 
 func private %helper(v0.i256, v1.i256) -> i256 {
 block0:
-    return v1;
+    v2.i256 = add v1 1.i256;
+    return v2;
 }
 
 func public %entry(v0.i256) -> i256 {
