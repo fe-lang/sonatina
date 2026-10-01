@@ -213,8 +213,11 @@ pub struct EvmCalldataCopy {
 pub struct EvmCodeSize {}
 
 /// Read a big-endian 256-bit word from the executing code, padding past its end
-/// with zero. This semantic instruction has no observable memory writes; EVM
-/// legalization supplies private scratch memory for CODECOPY and MLOAD.
+/// with zero. It does not modify program-addressable memory. EVM legalization
+/// supplies compiler-owned scratch memory for CODECOPY and MLOAD; those accesses
+/// may expand physical EVM memory and affect `evm_msize` and `evm_gas` observations.
+/// Eliminating or combining code loads can therefore change those observations,
+/// as with other compiler-generated memory accesses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 #[inst(side_effect(crate::inst::SideEffect::Read))]
 pub struct EvmCodeLoad {
@@ -348,6 +351,9 @@ pub struct EvmSstore {
     val: ValueId,
 }
 
+/// Observe the physical EVM memory high-water mark, including compiler-owned
+/// scratch space and spills. Its value depends on memory layout and optimization;
+/// it is not a stable measure of program allocations or an allocation frontier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Inst)]
 #[inst(side_effect(crate::inst::SideEffect::Read))]
 pub struct EvmMsize {}
