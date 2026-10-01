@@ -207,10 +207,13 @@ fn edge_guard_relations(
     // An undef choice cannot establish a reusable relation. Include intrinsic
     // undef producers (such as generic division by a possibly zero divisor),
     // transitive dependencies, and cyclic phis via the shared definedness analysis.
-    // Calls and reads need evidence this edge-local proof does not have.
+    // Parameters, calls, and reads need evidence this edge-local proof does not have.
     if value_may_be_undef(func, condition, definedness, |value| {
-        let inst = func.dfg.value_inst(value)?;
-        requires_definedness_evidence(func, inst).then_some(true)
+        match func.dfg.value(value) {
+            Value::Arg { .. } => Some(true),
+            Value::Inst { inst, .. } => requires_definedness_evidence(func, *inst).then_some(true),
+            _ => None,
+        }
     }) {
         return SmallVec::new();
     }
@@ -408,8 +411,12 @@ mod tests {
             let text = optimized(&format!(
                 r#"
 target = "evm-ethereum-osaka"
-func public %test(v0.i32, v1.i32) -> i1 {{
+func public %test() -> i1 {{
  block0:
+  v20.i256 = evm_call_value;
+  v0.i32 = trunc v20 i32;
+  v21.i256 = evm_gas_price;
+  v1.i32 = trunc v21 i32;
   v2.i1 = {comparison} {operands};
   br v2 {destinations};
  block1:
@@ -433,8 +440,12 @@ func public %test(v0.i32, v1.i32) -> i1 {{
         let text = optimized(
             r#"
 target = "evm-ethereum-osaka"
-func public %test(v0.i32, v1.i32) -> i1 {
+func public %test() -> i1 {
  block0:
+  v20.i256 = evm_call_value;
+  v0.i32 = trunc v20 i32;
+  v21.i256 = evm_gas_price;
+  v1.i32 = trunc v21 i32;
   v2.i1 = lt v1 v0;
   br v2 block1 block2;
  block1:
@@ -455,8 +466,12 @@ func public %test(v0.i32, v1.i32) -> i1 {
         let text = optimized(
             r#"
 target = "evm-ethereum-osaka"
-func public %test(v0.i32, v1.i32) -> i1 {
+func public %test() -> i1 {
  block0:
+  v20.i256 = evm_call_value;
+  v0.i32 = trunc v20 i32;
+  v21.i256 = evm_gas_price;
+  v1.i32 = trunc v21 i32;
   v2.i1 = lt v1 v0;
   br v2 block1 block4;
  block1:
@@ -481,8 +496,10 @@ func public %test(v0.i32, v1.i32) -> i1 {
         let text = optimized(
             r#"
 target = "evm-ethereum-osaka"
-func public %test(v0.i32) -> i1 {
+func public %test() -> i1 {
  block0:
+  v20.i256 = evm_call_value;
+  v0.i32 = trunc v20 i32;
   v1.i32 = add undef.i32 v0;
   v2.i1 = lt v1 v0;
   br v2 block1 block2;
@@ -505,8 +522,10 @@ func public %test(v0.i32) -> i1 {
                 let text = optimized(&format!(
                     r#"
 target = "evm-ethereum-osaka"
-func public %test(v0.i256, v1.i256) -> i1 {{
+func public %test() -> i1 {{
  block0:
+  v0.i256 = evm_call_value;
+  v1.i256 = evm_gas_price;
   v2.i256 = {operation} v0 {divisor};
   v3.i1 = ge v0 v2;
   br v3 block1 block2;
@@ -529,6 +548,36 @@ func public %test(v0.i256, v1.i256) -> i1 {{
     }
 
     #[test]
+    fn guarded_subtraction_requires_defined_parameters() {
+        for linkage in ["private", "public"] {
+            for (args, rhs) in [("undef.i256 7.i256", "v1"), ("7.i256 undef.i256", "v2")] {
+                let text = optimized(&format!(
+                    r#"
+target = "evm-ethereum-osaka"
+func {linkage} %test(v0.i256, v1.i256) -> i1 {{
+ block0:
+  v2.i256 = add v1 1.i256;
+  v3.i1 = ge v0 {rhs};
+  br v3 block1 block2;
+ block1:
+  (v4.i256, v5.i1) = usubo v0 {rhs};
+  return v5;
+ block2:
+  return 0.i1;
+}}
+func public %caller() -> i1 {{
+ block0:
+  v0.i1 = call %test {args};
+  return v0;
+}}
+"#
+                ));
+                assert!(text.contains("usubo"), "{linkage}, {args}: {text}");
+            }
+        }
+    }
+
+    #[test]
     fn guarded_subtraction_requires_defined_call_and_read_results() {
         for producer in [
             "v2.i256 = call %source;",
@@ -538,8 +587,9 @@ func public %test(v0.i256, v1.i256) -> i1 {{
             let text = optimized(&format!(
                 r#"
 target = "evm-ethereum-osaka"
-func public %test(v0.i256) -> i1 {{
+func public %test() -> i1 {{
  block0:
+  v0.i256 = evm_call_value;
   {producer}
   v3.i256 = add v2 1.i256;
   v4.i1 = ge v0 v3;
@@ -565,8 +615,12 @@ func private %source() -> i256 {{
         let text = optimized(
             r#"
 target = "evm-ethereum-osaka"
-func public %test(v0.i32, v1.i32) -> i1 {
+func public %test() -> i1 {
  block0:
+  v20.i256 = evm_call_value;
+  v0.i32 = trunc v20 i32;
+  v21.i256 = evm_gas_price;
+  v1.i32 = trunc v21 i32;
   v2.i1 = ge v0 v1;
   br v2 block1 block4;
  block1:
@@ -592,8 +646,12 @@ func public %test(v0.i32, v1.i32) -> i1 {
         let mut source = String::from(
             r#"
 target = "evm-ethereum-osaka"
-func public %test(v0.i32, v1.i32) -> i1 {
+func public %test() -> i1 {
  block0:
+  v20.i256 = evm_call_value;
+  v0.i32 = trunc v20 i32;
+  v21.i256 = evm_gas_price;
+  v1.i32 = trunc v21 i32;
   v2.i1 = ge v0 v1;
   br v2 block1 block2050;
 "#,
