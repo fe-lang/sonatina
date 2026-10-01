@@ -3,9 +3,12 @@ mod common;
 use dir_test::{Fixture, dir_test};
 use sonatina_codegen::{
     analysis::func_behavior,
-    optim::inliner::{Inliner, InlinerConfig},
+    optim::{
+        Pass, Pipeline, Step,
+        inliner::{Inliner, InlinerConfig},
+    },
 };
-use sonatina_ir::{InlineHint, ir_writer::FuncWriter, module::FuncHints};
+use sonatina_ir::{InlineHint, Module, ir_writer::FuncWriter, module::FuncHints};
 use sonatina_parser::ParsedModule;
 use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module};
 
@@ -1992,4 +1995,262 @@ fn find_func(module: &sonatina_ir::Module, name: &str) -> sonatina_ir::module::F
         .into_iter()
         .find(|func_ref| module.ctx.func_sig(*func_ref, |sig| sig.name() == name))
         .unwrap_or_else(|| panic!("function %{name} not found"))
+}
+
+fn loaded_triple_module() -> String {
+    let mut source = String::from(
+        r#"
+target = "evm-ethereum-london"
+
+type @triple = { i256, i256, i256 };
+
+func private %read(v0.objref<@triple>) -> @triple {
+    block0:
+        v1.objref<i256> = obj.proj v0 0.i8;
+        v2.i256 = obj.load v1;
+        v3.objref<i256> = obj.proj v0 1.i8;
+        v4.i256 = obj.load v3;
+        v5.objref<i256> = obj.proj v0 2.i8;
+        v6.i256 = obj.load v5;
+        v7.@triple = insert_value undef.@triple 0.i256 v2;
+        v8.@triple = insert_value v7 1.i256 v4;
+        v9.@triple = insert_value v8 2.i256 v6;
+        return v9;
+}
+"#,
+    );
+    for index in 0..7 {
+        source.push_str(&format!(
+            r#"
+func private %caller{index}(v0.objref<@triple>, v1.i256) -> i256 {{
+    block0:
+        v2.@triple = call %read v0;
+        v3.objref<i256> = obj.proj v0 0.i8;
+        obj.store v3 v1;
+        v4.i256 = extract_value v2 0.i8;
+        return v4;
+}}
+"#
+        ));
+    }
+    source
+}
+
+#[test]
+fn loaded_aggregate_reconstruction_inlines_in_trivial_and_full_modes() {
+    for config in [
+        InlinerConfig::default(),
+        InlinerConfig {
+            enable_single_block_splice: false,
+            ..Pipeline::size().inliner_config
+        },
+    ] {
+        let mut parsed = sonatina_parser::parse_module(&loaded_triple_module()).unwrap();
+        assert_module_verified(&parsed.module);
+        func_behavior::analyze_module(&parsed.module);
+        let stats = Inliner::new(config).run(&mut parsed.module);
+        assert_module_verified(&parsed.module);
+        let dumped = dump_module(&parsed.module);
+        assert!(!dumped.contains("call %read"), "{dumped}");
+        assert_eq!(stats.calls_spliced + stats.full_calls_inlined, 7);
+        for index in 0..7 {
+            let caller = find_func(&parsed.module, &format!("caller{index}"));
+            let body = parsed
+                .module
+                .func_store
+                .view(caller, |func| FuncWriter::new(caller, func).dump_string());
+            assert_eq!(body.matches("obj.load").count(), 3, "{body}");
+            assert!(
+                body.rfind("obj.load").unwrap() < body.find("obj.store").unwrap(),
+                "{body}"
+            );
+        }
+        assert_reconstruction_cleanup(&mut parsed.module);
+    }
+}
+
+#[test]
+fn loaded_aggregate_reconstruction_preserves_full_growth_limits() {
+    let mut parsed = sonatina_parser::parse_module(&loaded_triple_module()).unwrap();
+    let config = InlinerConfig {
+        enable_single_block_splice: false,
+        max_growth_per_caller: 9,
+        ..Pipeline::size().inliner_config
+    };
+    let stats = Inliner::new(config).run(&mut parsed.module);
+    assert_module_verified(&parsed.module);
+    assert_eq!(stats.full_calls_inlined, 0);
+    assert_eq!(stats.skipped_budget, 7);
+    assert_eq!(dump_module(&parsed.module).matches("call %read").count(), 7);
+}
+
+#[test]
+fn loaded_aggregate_reconstruction_only_discounts_distinct_matching_scalar_loads() {
+    let source = loaded_triple_module();
+    for (name, source) in [
+        (
+            "aggregate argument destination",
+            source
+                .replace(
+                    "%read(v0.objref<@triple>)",
+                    "%read(v0.objref<@triple>, v10.@triple)",
+                )
+                .replace("insert_value undef.@triple", "insert_value v10")
+                .replace("call %read v0;", "call %read v0 undef.@triple;"),
+        ),
+        (
+            "aggregate call destination",
+            source
+                .replace(
+                    "func private %read",
+                    "declare external %unknown() -> @triple;\nfunc private %read",
+                )
+                .replace(
+                    "v7.@triple = insert_value undef.@triple",
+                    "v10.@triple = call %unknown;\n        v7.@triple = insert_value v10",
+                ),
+        ),
+        (
+            "different field",
+            source.replace("insert_value v8 2.i256 v6", "insert_value v8 0.i256 v6"),
+        ),
+        (
+            "repeated load",
+            source.replace(
+                "return v9;",
+                "v10.@triple = insert_value v9 2.i256 v6;\n        return v10;",
+            ),
+        ),
+        (
+            "different aggregate",
+            source
+                .replace(
+                    "type @triple = { i256, i256, i256 };",
+                    "type @triple = { i256, i256, i256 };\ntype @other = { i256, i256, i256 };",
+                )
+                .replace("objref<@triple>", "objref<@other>"),
+        ),
+        (
+            "aggregate load",
+            source
+                .replace(
+                    "type @triple = { i256, i256, i256 };",
+                    "type @triple = { [i256; 2], [i256; 2], [i256; 2] };",
+                )
+                .replace("objref<i256>", "objref<[i256; 2]>")
+                .replace(".i256 = obj.load", ".[i256; 2] = obj.load")
+                .replace("v1.i256) -> i256", "v1.[i256; 2]) -> [i256; 2]")
+                .replace("v4.i256 = extract_value", "v4.[i256; 2] = extract_value"),
+        ),
+    ] {
+        let mut parsed = sonatina_parser::parse_module(&source).unwrap();
+        assert_module_verified(&parsed.module);
+        let stats = Inliner::new(InlinerConfig::default()).run(&mut parsed.module);
+        assert_module_verified(&parsed.module);
+        assert_eq!(stats.calls_spliced, 0, "{name}");
+        assert_eq!(
+            dump_module(&parsed.module).matches("call %read").count(),
+            7,
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn loaded_reconstruction_discounts_require_scalarizable_callsite_uses() {
+    let source = loaded_triple_module();
+    for source in [
+        source.replace(
+            "v4.i256 = extract_value v2 0.i8;",
+            "v4.i256 = call %consume v2;",
+        ),
+        source.replace(
+            "v4.i256 = extract_value v2 0.i8;",
+            "v5.@triple = insert_value v2 1.i8 v1;\n        v4.i256 = call %consume v5;",
+        ),
+        source
+            .replace("v1.i256) -> i256", "v1.i256) -> @triple")
+            .replace("v4.i256 = extract_value v2 0.i8;", "")
+            .replace("return v4;", "return v2;"),
+        source
+            .replace("type @triple = { i256, i256, i256 };", "type @triple = { i256, i256, i256 };\ntype @pair = { @triple, @triple };")
+            .replace("%read(v0.objref<@triple>) -> @triple", "%read(v0.objref<@triple>, v10.@triple) -> (@triple, @triple)")
+            .replace("return v9;", "return (v9, v10);")
+            .replace("v1.i256) -> i256", "v1.i256, v5.@triple) -> i256")
+            .replace("v2.@triple = call %read v0;", "(v2.@triple, v6.@triple) = call %read v0 v5;")
+            .replace("v4.i256 = extract_value v2 0.i8;", "v7.@pair = insert_value undef.@pair 0.i8 v2;\n        v8.@pair = insert_value v7 1.i8 v6;\n        v9.@triple = extract_value v8 0.i8;\n        v4.i256 = extract_value v9 0.i8;"),
+    ] {
+        let source = source.replace(
+            "func private %read",
+            "declare external %consume(@triple) -> i256;\nfunc private %read",
+        );
+        for config in [
+            InlinerConfig::default(),
+            InlinerConfig {
+                enable_single_block_splice: false,
+                ..Pipeline::size().inliner_config
+            },
+        ] {
+            let mut parsed = sonatina_parser::parse_module(&source).unwrap();
+            assert_module_verified(&parsed.module);
+            func_behavior::analyze_module(&parsed.module);
+            let stats = Inliner::new(config).run(&mut parsed.module);
+            assert_module_verified(&parsed.module);
+            assert_eq!(stats.calls_spliced + stats.full_calls_inlined, 0);
+            assert_eq!(dump_module(&parsed.module).matches("call %read").count(), 7);
+        }
+    }
+}
+
+#[test]
+fn reconstruction_scalarizes_with_live_scalar_arithmetic_users() {
+    let source = loaded_triple_module()
+        .replace(
+            "%read(v0.objref<@triple>) -> @triple",
+            "%read(v0.objref<@triple>) -> (@triple, i256)",
+        )
+        .replace(
+            "return v9;",
+            "v10.i256 = add v2 v4;\n        return (v9, v10);",
+        )
+        .replace(
+            "v2.@triple = call %read v0;",
+            "(v2.@triple, v5.i256) = call %read v0;",
+        )
+        .replace("return v4;", "v6.i256 = add v4 v5;\n        return v6;");
+    let mut parsed = sonatina_parser::parse_module(&source).unwrap();
+    assert_module_verified(&parsed.module);
+    let config = InlinerConfig {
+        splice_max_insts: 7,
+        ..Default::default()
+    };
+    assert_eq!(
+        Inliner::new(config).run(&mut parsed.module).calls_spliced,
+        7
+    );
+    assert_reconstruction_cleanup(&mut parsed.module);
+    for index in 0..7 {
+        let caller = find_func(&parsed.module, &format!("caller{index}"));
+        parsed.module.func_store.view(caller, |func| {
+            let text = FuncWriter::new(caller, func).dump_string();
+            assert!(text.contains(" = add "), "{text}");
+        });
+    }
+}
+
+fn assert_reconstruction_cleanup(module: &mut Module) {
+    let mut pipeline = Pipeline::new();
+    pipeline.add_step(Step::FuncPasses(vec![
+        Pass::CfgCleanup,
+        Pass::AggregateScalarize,
+    ]));
+    pipeline.run(module);
+    assert_module_verified(module);
+    for index in 0..7 {
+        let caller = find_func(module, &format!("caller{index}"));
+        module.func_store.view(caller, |func| {
+            let text = FuncWriter::new(caller, func).dump_string();
+            assert!(!text.contains("insert_value"), "{text}");
+        });
+    }
 }

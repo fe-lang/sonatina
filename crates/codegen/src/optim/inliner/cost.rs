@@ -1,11 +1,15 @@
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
     BlockId, ControlFlowGraph, Function, Linkage, Module,
     inst::{control_flow, data, downcast},
     module::{FuncHints, FuncRef},
 };
 
-use crate::{cfg_scc::CfgSccAnalysis, module_analysis::ModuleInfo, transform::aggregate::shape};
+use crate::{
+    cfg_scc::CfgSccAnalysis,
+    module_analysis::ModuleInfo,
+    transform::aggregate::{objref_element_ty, scalarize::AggregateScalarize, shape},
+};
 
 use super::{
     super::aggregate::{LocalObjectArgMap, ObjectEffectSummaryMap, ObjectReturnEffect},
@@ -99,6 +103,7 @@ pub(super) struct InlineRequest {
     pub callee_depth: usize,
     pub call_arg_count: usize,
     pub call_result_count: usize,
+    pub reconstruction_insts: usize,
     pub call_returns_to_caller: bool,
     pub call_callee_may_commit: bool,
     pub call_continuation_may_commit: bool,
@@ -237,7 +242,7 @@ pub(super) fn decide_inline(
         config.inline_threshold
     };
 
-    let mut score = summary.base_cost;
+    let mut score = summary.base_cost - request.reconstruction_insts as i32;
     score += summary.phis as i32;
     score += summary.returns.saturating_sub(1) as i32;
     if summary.has_loop {
@@ -264,6 +269,7 @@ pub(super) fn decide_inline(
     if request.callee_call_count > 1 {
         score += summary
             .insts
+            .saturating_sub(request.reconstruction_insts)
             .saturating_sub(config.multi_use_inst_free_allowance) as i32
             * request.callee_call_count.saturating_sub(1) as i32
             * config.multi_use_excess_inst_penalty;
@@ -559,6 +565,72 @@ fn compute_inlinee_summary(
         base_cost,
         scalarization,
     }
+}
+
+/// Scalarization can eliminate repacking a loaded scalar into the same field.
+/// Keep charging for the load and projection, and credit each
+/// load only once so repeated inserts cannot hide an arbitrarily large body.
+pub(super) fn loaded_field_reconstruction(
+    func: &Function,
+    scalarizable_returns: &[bool],
+) -> (usize, Vec<bool>) {
+    let mut cfg = ControlFlowGraph::new();
+    cfg.compute(func);
+    let insts: Vec<_> = cfg
+        .post_order()
+        .flat_map(|block| func.layout.iter_inst(block))
+        .collect();
+    let mut loads: FxHashSet<_> = insts
+        .iter()
+        .copied()
+        .filter(|&inst| downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(inst)).is_some())
+        .collect();
+    if loads.is_empty()
+        || !insts.iter().any(|&inst| {
+            downcast::<&data::InsertValue>(func.inst_set(), func.dfg.inst(inst)).is_some()
+        })
+    {
+        return (0, Vec::new());
+    }
+    let scalarizable =
+        AggregateScalarize::default().scalarizable_values_for_inlining(func, scalarizable_returns);
+    let mut eligible_returns = scalarizable_returns.to_vec();
+    for &inst in &insts {
+        if let Some(ret) = downcast::<&control_flow::Return>(func.inst_set(), func.dfg.inst(inst)) {
+            for (eligible, &value) in eligible_returns.iter_mut().zip(ret.args().iter()) {
+                *eligible &= !is_scalarizable_aggregate_value(func, value) || scalarizable[value];
+            }
+        }
+    }
+    let count = insts
+        .iter()
+        .filter_map(|&inst| {
+            let insert = downcast::<&data::InsertValue>(func.inst_set(), func.dfg.inst(inst))?;
+            if !scalarizable[func.dfg.inst_result(inst)?] {
+                return None;
+            }
+            let aggregate_ty = func.dfg.value_ty(*insert.dest());
+            if !func.dfg.value_ty(*insert.value()).is_integral()
+                || !shape::is_supported_aggregate_ty(func.ctx(), aggregate_ty)
+            {
+                return None;
+            }
+            let load_inst = func.dfg.value_inst(*insert.value())?;
+            let load = downcast::<&data::ObjLoad>(func.inst_set(), func.dfg.inst(load_inst))?;
+            let projection_inst = func.dfg.value_inst(*load.object())?;
+            let projection =
+                downcast::<&data::ObjProj>(func.inst_set(), func.dfg.inst(projection_inst))?;
+            let [object, index] = projection.values().as_slice() else {
+                return None;
+            };
+            let field = shape::const_u32(&func.dfg, *index)?;
+            (shape::const_u32(&func.dfg, *insert.idx()) == Some(field)
+                && objref_element_ty(func.ctx(), func.dfg.value_ty(*object)) == Some(aggregate_ty)
+                && loads.remove(&load_inst))
+            .then_some(())
+        })
+        .count();
+    (count, eligible_returns)
 }
 
 fn is_scalarizable_aggregate_value(func: &Function, value: sonatina_ir::ValueId) -> bool {

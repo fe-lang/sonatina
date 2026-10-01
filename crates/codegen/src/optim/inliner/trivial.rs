@@ -114,6 +114,7 @@ pub(super) fn analyze_callee(
     callee_ref: FuncRef,
     callee: &Function,
     callee_call_count: usize,
+    reconstruction_insts: usize,
     config: &InlinerConfig,
     stats: &mut InlineStats,
 ) -> Option<InlinePlanSummary> {
@@ -159,6 +160,7 @@ pub(super) fn analyze_callee(
         return analyze_terminator_splice(
             callee,
             callee_call_count,
+            reconstruction_insts,
             config,
             stats,
             term_inst_id,
@@ -199,6 +201,7 @@ pub(super) fn analyze_callee(
             return analyze_splice(
                 callee,
                 callee_call_count,
+                reconstruction_insts,
                 config,
                 stats,
                 &ret_values,
@@ -229,6 +232,7 @@ pub(super) fn analyze_callee(
     analyze_splice(
         callee,
         callee_call_count,
+        reconstruction_insts,
         config,
         stats,
         &ret_values,
@@ -239,6 +243,7 @@ pub(super) fn analyze_callee(
 fn analyze_splice(
     callee: &Function,
     callee_call_count: usize,
+    reconstruction_insts: usize,
     config: &InlinerConfig,
     stats: &mut InlineStats,
     ret_values: &[ValueId],
@@ -249,7 +254,14 @@ fn analyze_splice(
     }
 
     let (_, body_insts) = insts.split_last()?;
-    let mut collected = collect_splice_body(callee, callee_call_count, config, stats, body_insts)?;
+    let mut collected = collect_splice_body(
+        callee,
+        callee_call_count,
+        reconstruction_insts,
+        config,
+        stats,
+        body_insts,
+    )?;
 
     for &ret_value in ret_values {
         if let Some(tpl) = classify_value_template(callee, ret_value) {
@@ -271,6 +283,7 @@ fn analyze_splice(
 fn analyze_terminator_splice(
     callee: &Function,
     callee_call_count: usize,
+    reconstruction_insts: usize,
     config: &InlinerConfig,
     stats: &mut InlineStats,
     term_inst_id: InstId,
@@ -286,7 +299,14 @@ fn analyze_terminator_splice(
     }
 
     let (_, body_insts) = insts.split_last()?;
-    let mut collected = collect_splice_body(callee, callee_call_count, config, stats, body_insts)?;
+    let mut collected = collect_splice_body(
+        callee,
+        callee_call_count,
+        reconstruction_insts,
+        config,
+        stats,
+        body_insts,
+    )?;
 
     extend_const_values_from_inst_operands(callee, term_inst_id, &mut collected.const_values);
     let callee_args: Vec<ValueId> = callee.arg_values.iter().copied().collect();
@@ -303,12 +323,15 @@ fn analyze_terminator_splice(
 fn collect_splice_body(
     callee: &Function,
     callee_call_count: usize,
+    reconstruction_insts: usize,
     config: &InlinerConfig,
     stats: &mut InlineStats,
     body_insts: &[InstId],
 ) -> Option<CollectedSpliceBody> {
     let is_single_use = callee_call_count == 1;
-    if !is_single_use && body_insts.len() > config.splice_max_insts {
+    if !is_single_use
+        && body_insts.len().saturating_sub(reconstruction_insts) > config.splice_max_insts
+    {
         stats.skipped_too_large += 1;
         return None;
     }

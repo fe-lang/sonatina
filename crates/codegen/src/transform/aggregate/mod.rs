@@ -49,3 +49,4 @@ pub(crate) use object_locality::{
     merge_local_object_arg_info,
 };
 pub(crate) use object_memory::{CarrierSource, ObjectMemoryAnalysis, ObjectReadGvnKey};
+pub(crate) use object_tracking::objref_element_ty;

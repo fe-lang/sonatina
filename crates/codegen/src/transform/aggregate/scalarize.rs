@@ -224,7 +224,8 @@ impl AggregateScalarize {
             &const_paths,
         );
         let scalarizable = loop {
-            let scalarizable = self.compute_scalarizable_aggregates(func, &module, &projection_of);
+            let scalarizable =
+                self.compute_scalarizable_aggregates(func, &module, &projection_of, &[], &[]);
             let changed = self.filter_promotable_roots(
                 func,
                 &module,
@@ -1005,11 +1006,63 @@ impl AggregateScalarize {
         true
     }
 
+    /// Prove the caller's uses assuming the call results are replaced by
+    /// scalarizable definitions. Other producers still require their own proof.
+    pub(crate) fn scalarizable_call_results(
+        &mut self,
+        func: &Function,
+        call: InstId,
+        candidate_results: &[bool],
+    ) -> Vec<bool> {
+        let results = func.dfg.inst_results(call);
+        if !results
+            .iter()
+            .any(|&value| shape::is_supported_scalar_shape_ty(func.ctx(), func.dfg.value_ty(value)))
+        {
+            return vec![false; results.len()];
+        }
+        let substituted: Vec<_> = results
+            .iter()
+            .zip(candidate_results)
+            .filter_map(|(&value, &candidate)| candidate.then_some(value))
+            .collect();
+        let scalarizable = self.compute_scalarizable_aggregates(
+            func,
+            func.ctx(),
+            &ExactProjectionMap::default(),
+            &substituted,
+            &[],
+        );
+        results
+            .iter()
+            .zip(candidate_results)
+            .map(|(&value, &candidate)| candidate && scalarizable[value])
+            .collect()
+    }
+
+    /// Prove callee definitions and uses, allowing only return lanes whose
+    /// corresponding callsite uses were separately proved scalarizable.
+    pub(crate) fn scalarizable_values_for_inlining(
+        &mut self,
+        func: &Function,
+        scalarizable_returns: &[bool],
+    ) -> SecondaryMap<ValueId, bool> {
+        self.compute_scalarizable_aggregates(
+            func,
+            func.ctx(),
+            &ExactProjectionMap::default(),
+            &[],
+            scalarizable_returns,
+        )
+    }
+
     fn compute_scalarizable_aggregates(
         &mut self,
         func: &Function,
         module: &sonatina_ir::module::ModuleCtx,
         projection_of: &ExactProjectionMap,
+        substituted_values: &[ValueId],
+        scalarizable_returns: &[bool],
     ) -> SecondaryMap<ValueId, bool> {
         let mut scalarizable: SecondaryMap<ValueId, bool> = SecondaryMap::default();
 
@@ -1023,6 +1076,7 @@ impl AggregateScalarize {
                 continue;
             }
             let ok = match func.dfg.value(value) {
+                _ if substituted_values.contains(&value) => true,
                 Value::Undef { .. } => true,
                 Value::Arg { .. } => false,
                 Value::Immediate { .. } | Value::Global { .. } => false,
@@ -1085,19 +1139,23 @@ impl AggregateScalarize {
                 if !scalarizable[value] {
                     continue;
                 }
-                if !self.scalarizable_definition_is_closed(
-                    func,
-                    module,
-                    projection_of,
-                    &scalarizable,
-                    value,
-                ) || !self.scalarizable_uses_are_closed(
-                    func,
-                    module,
-                    projection_of,
-                    &scalarizable,
-                    value,
-                ) {
+                if !substituted_values.contains(&value)
+                    && !self.scalarizable_definition_is_closed(
+                        func,
+                        module,
+                        projection_of,
+                        &scalarizable,
+                        value,
+                    )
+                    || !self.scalarizable_uses_are_closed(
+                        func,
+                        module,
+                        projection_of,
+                        &scalarizable,
+                        value,
+                        scalarizable_returns,
+                    )
+                {
                     scalarizable[value] = false;
                     changed = true;
                 }
@@ -1281,6 +1339,7 @@ impl AggregateScalarize {
         projection_of: &ExactProjectionMap,
         scalarizable: &SecondaryMap<ValueId, bool>,
         value: ValueId,
+        scalarizable_returns: &[bool],
     ) -> bool {
         for &user in func.dfg.users(value) {
             if !func.layout.is_inst_inserted(user) {
@@ -1402,6 +1461,14 @@ impl AggregateScalarize {
                 continue;
             }
 
+            if let Some(ret) =
+                downcast::<&control_flow::Return>(func.inst_set(), func.dfg.inst(user))
+                && ret.args().iter().enumerate().all(|(index, &arg)| {
+                    arg != value || scalarizable_returns.get(index).copied().unwrap_or(false)
+                })
+            {
+                continue;
+            }
             return false;
         }
         true
@@ -4711,7 +4778,7 @@ block0:
             let (_, projections) =
                 pass.find_promotable_roots(func, &module.ctx, None, None, None, &const_paths);
             let scalarizable =
-                pass.compute_scalarizable_aggregates(func, &module.ctx, &projections);
+                pass.compute_scalarizable_aggregates(func, &module.ctx, &projections, &[], &[]);
             for (name, value, expected) in values {
                 assert_eq!(scalarizable[value], expected, "{name}");
             }
