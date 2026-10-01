@@ -1437,7 +1437,7 @@ func public %const_base() -> i256 {
         domtree.compute(&cfg);
         let mut lpt = LoopTree::default();
         lpt.compute(&cfg, &domtree);
-        CheckedArithElim::new().run(func, &cfg, &lpt);
+        CheckedArithElim::new().run(func, &cfg, &domtree, &lpt);
 
         cfg.compute(func);
         SccpSolver::new().run(func, &mut cfg);

@@ -5,13 +5,12 @@ use rpds::RedBlackTreeMapSync;
 use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
     Function, Type, Value, ValueId,
-    effects::AccessKind,
     inst::{control_flow, data, downcast},
     module::ModuleCtx,
     types::{CompoundType, EnumVariantRef},
 };
 
-use crate::analysis::definedness::value_may_be_undef;
+use crate::analysis::definedness::{requires_definedness_evidence, value_may_be_undef};
 
 use super::{
     object_tracking::root_leaf_count_for_ty,
@@ -324,16 +323,7 @@ impl ValueInitialization<'_> {
                 .map(|&(value, _)| self.value(value))
                 .reduce(|a, b| a.join(func.ctx(), &b))
                 .unwrap_or_else(|| InitializedValue::new(ty, false));
-        } else if downcast::<&control_flow::Call>(is, data).is_none()
-            && downcast::<&data::ObjLoad>(is, data).is_none()
-            && downcast::<&data::EnumGetTag>(is, data).is_none()
-            && !func
-                .dfg
-                .effects(inst)
-                .accesses
-                .iter()
-                .any(|access| access.kind == AccessKind::Read)
-        {
+        } else if !requires_definedness_evidence(func, inst) {
             // Both raw and high-level object reads were excluded above. Only
             // a point-specific snapshot can establish a memory read's definedness.
             for used in data.collect_values() {

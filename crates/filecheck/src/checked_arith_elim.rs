@@ -29,7 +29,7 @@ impl FuncTransform for CheckedArithElimTransform {
         self.cfg.compute(func);
         self.domtree.compute(&self.cfg);
         self.lpt.compute(&self.cfg, &self.domtree);
-        CheckedArithElim::new().run(func, &self.cfg, &self.lpt);
+        CheckedArithElim::new().run(func, &self.cfg, &self.domtree, &self.lpt);
 
         self.cfg.compute(func);
         SccpSolver::new().run(func, &mut self.cfg);

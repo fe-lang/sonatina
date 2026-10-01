@@ -1,0 +1,52 @@
+#! Unsigned pairwise guards prove only the selected subtraction direction.
+
+target = "evm-ethereum-osaka"
+
+# check: func public %safe_false_edge() -> i256 {
+# check: sub v0 v1;
+# not: usubo
+# not: 999.i256
+func public %safe_false_edge() -> i256 {
+block0:
+    v0.i256 = evm_call_value;
+    v1.i256 = evm_gas_price;
+    v2.i1 = lt v0 v1;
+    br v2 block1 block2;
+block1:
+    return 0.i256;
+block2:
+    (v3.i256, v4.i1) = usubo v0 v1;
+    br v4 block3 block4;
+block3:
+    return 999.i256;
+block4:
+    return v3;
+}
+
+# check: func public %reversed_operands_still_overflow() -> i1 {
+# check: usubo v1 v0;
+func public %reversed_operands_still_overflow() -> i1 {
+block0:
+    v0.i256 = evm_call_value;
+    v1.i256 = evm_gas_price;
+    v2.i1 = gt v0 v1;
+    br v2 block1 block2;
+block1:
+    (v3.i256, v4.i1) = usubo v1 v0;
+    return v4;
+block2:
+    return 0.i1;
+}
+
+# check: func public %same_destination_has_no_guard() -> i1 {
+# check: usubo v0 v1;
+func public %same_destination_has_no_guard() -> i1 {
+block0:
+    v0.i256 = evm_call_value;
+    v1.i256 = evm_gas_price;
+    v2.i1 = ge v0 v1;
+    br v2 block1 block1;
+block1:
+    (v3.i256, v4.i1) = usubo v0 v1;
+    return v4;
+}
