@@ -98,19 +98,16 @@ pub(crate) fn retain_higher_order_safe_plans<P: SignatureRewritePlan>(
     let ctx = &module.ctx;
     let planned_types = collect_planned_func_types(ctx, plans);
     let live_get_fn_uses = collect_live_get_function_ptr_uses(module, &planned_types);
-    if live_get_fn_uses.is_empty() {
-        return;
-    }
-
-    let exposed_types = collect_non_owned_exposed_func_types(module, &planned_types);
+    // Structural types can escape through declarations or globals even when no
+    // get_function_ptr names a function in the rewrite class.
+    let mut blocked_types = collect_non_owned_exposed_func_types(module, &planned_types);
     let class_info = collect_rewrite_class_info(ctx, plans);
-    let mut blocked_types = FxHashSet::default();
 
     for old_ty in live_get_fn_uses {
         let Some(info) = class_info.get(&old_ty) else {
             continue;
         };
-        if !info.fully_rewritten || !info.consistent_new_shape || exposed_types.contains(&old_ty) {
+        if !info.fully_rewritten || !info.consistent_new_shape {
             blocked_types.insert(old_ty);
         }
     }

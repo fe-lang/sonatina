@@ -1,3 +1,5 @@
+use std::iter;
+
 use rustc_hash::FxHashMap;
 use tracing::{debug_span, info_span, trace_span};
 
@@ -235,9 +237,15 @@ impl EvmPipelineContext<'_> {
         // Return lanes that only echo an argument, or that no caller reads, are
         // the result-side twin of dead arguments. Dropping them can leave
         // arguments dead again, so dead-argument elimination runs once more.
-        let forwarded =
-            run_forwarded_ret_elim(self.work.module(), ForwardedRetElimConfig::default());
-        let dead = run_dead_ret_elim(self.work.module(), DeadRetElimConfig::default());
+        let roots: Vec<_> = iter::once(self.work.entry())
+            .chain(self.work.includes().iter().copied())
+            .collect();
+        let forwarded = run_forwarded_ret_elim(
+            self.work.module(),
+            &roots,
+            ForwardedRetElimConfig::default(),
+        );
+        let dead = run_dead_ret_elim(self.work.module(), &roots, DeadRetElimConfig::default());
         if forwarded.removed_rets + dead.removed_rets > 0 {
             run_dead_arg_elim(self.work.module(), DeadArgElimConfig::default());
         }

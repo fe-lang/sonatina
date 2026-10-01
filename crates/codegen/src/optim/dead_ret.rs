@@ -1,13 +1,16 @@
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 use sonatina_ir::{
     Function, Type,
     module::{FuncRef, Module},
 };
 
-use super::signature_rewrite::{
-    SignatureRewritePlan, propagate_signature_rewrite_types, retain_function_returns,
-    retain_higher_order_safe_plans, rewrite_declared_signatures,
+use super::{
+    dead_func::collect_object_roots,
+    signature_rewrite::{
+        SignatureRewritePlan, propagate_signature_rewrite_types, retain_function_returns,
+        retain_higher_order_safe_plans, rewrite_declared_signatures,
+    },
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -61,8 +64,18 @@ impl SignatureRewritePlan for FuncPlan {
 /// The rewrite runs to a fixed point so removing a dead wrapper result can expose
 /// the corresponding result of a deeper callee. Calls themselves remain in place,
 /// preserving effects even when all of their result lanes disappear.
-pub fn run_dead_ret_elim(module: &Module, config: DeadRetElimConfig) -> DeadRetElimStats {
+/// Explicit section roots and object entry/include directives retain every return lane.
+pub fn run_dead_ret_elim(
+    module: &Module,
+    roots: &[FuncRef],
+    config: DeadRetElimConfig,
+) -> DeadRetElimStats {
     let mut stats = DeadRetElimStats::default();
+    let roots: FxHashSet<_> = collect_object_roots(module)
+        .into_iter()
+        .chain(roots.iter().copied())
+        .collect();
+    let mut blocked = FxHashSet::default();
 
     loop {
         for func_ref in module.funcs() {
@@ -70,10 +83,11 @@ pub fn run_dead_ret_elim(module: &Module, config: DeadRetElimConfig) -> DeadRetE
         }
 
         let mut plans = collect_plans(module, config);
+        plans.retain(|func, _| !roots.contains(func));
         if config.require_higher_order_safe {
-            let before = plans.len();
+            let before: Vec<_> = plans.keys().copied().collect();
             retain_higher_order_safe_plans(module, &mut plans);
-            stats.blocked_higher_order_funcs += before - plans.len();
+            blocked.extend(before.into_iter().filter(|func| !plans.contains_key(func)));
         }
         if plans.is_empty() {
             break;
@@ -104,6 +118,7 @@ pub fn run_dead_ret_elim(module: &Module, config: DeadRetElimConfig) -> DeadRetE
         propagate_signature_rewrite_types(module, &old_sigs);
     }
 
+    stats.blocked_higher_order_funcs = blocked.len();
     stats
 }
 
@@ -249,7 +264,7 @@ func public %entry(v0.i32) -> i32 {
 "#,
         );
 
-        let stats = run_dead_ret_elim(&parsed.module, DeadRetElimConfig::default());
+        let stats = run_dead_ret_elim(&parsed.module, &[], DeadRetElimConfig::default());
 
         assert_eq!(stats.removed_rets, 1);
         assert_eq!(stats.removed_call_results, 1);
@@ -281,7 +296,7 @@ func public %entry(v0.i32) -> i32 {
 "#,
         );
 
-        let stats = run_dead_ret_elim(&parsed.module, DeadRetElimConfig::default());
+        let stats = run_dead_ret_elim(&parsed.module, &[], DeadRetElimConfig::default());
 
         assert_eq!(stats.removed_rets, 0);
         assert!(
@@ -319,7 +334,7 @@ func public %entry(v0.i32) -> i32 {
 "#,
         );
 
-        let stats = run_dead_ret_elim(&parsed.module, DeadRetElimConfig::default());
+        let stats = run_dead_ret_elim(&parsed.module, &[], DeadRetElimConfig::default());
 
         assert_eq!(stats.rounds, 2);
         assert_eq!(stats.removed_rets, 2);

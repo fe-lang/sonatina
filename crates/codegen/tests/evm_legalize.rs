@@ -1,5 +1,6 @@
 use sonatina_codegen::{
     isa::evm::{EvmBackend, PushWidthPolicy, test_util::prepare_root},
+    machinst::lower::SectionWorkModule,
     object::{CompileOptions, compile_object},
 };
 use sonatina_ir::{Module, ir_writer::ModuleWriter, isa::evm::Evm, module::FuncRef};
@@ -239,4 +240,41 @@ object @O {
 
     compile_object(&parsed.module, &backend, "O", &opts)
         .expect("object compilation should legalize checked EVM div/mod and overflow ops");
+}
+
+#[test]
+fn late_return_cleanup_preserves_private_section_roots() {
+    let module = parse_module(
+        r#"
+target = "evm-ethereum-osaka"
+func private %entry() -> i256 {
+block0:
+    return 42.i256;
+}
+func private %included(v0.i256) -> i256 {
+block0:
+    return v0;
+}
+"#,
+    )
+    .unwrap()
+    .module;
+    let entry = find_func(&module, "entry");
+    let included = find_func(&module, "included");
+    let work = SectionWorkModule::from_roots(&module, entry, &[included], &[]);
+    let prepared = evm_backend()
+        .with_late_cleanup_optimizations(true)
+        .prepare_section(work)
+        .unwrap();
+    for function in [entry, included] {
+        assert_eq!(
+            prepared
+                .module()
+                .ctx
+                .func_sig(function, |sig| sig.ret_tys().len()),
+            1
+        );
+    }
+    let config = VerifierConfig::for_level(VerificationLevel::Full);
+    assert!(sonatina_verifier::verify_module(prepared.module(), &config).is_ok());
 }
