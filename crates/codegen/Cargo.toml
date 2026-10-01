@@ -15,7 +15,7 @@ keywords = ["compiler", "evm", "wasm", "smart-contract"]
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-cranelift-entity = "0.126"
+cranelift-entity = "0.136.1"
 cranelift-codegen = { git = "https://github.com/fe-lang/wasmtime", rev = "29e29784e9b6363675513398a606bcc5bdad41fe", default-features = false, features = ["std", "unwind", "host-arch"], optional = true }
 cranelift-frontend = { git = "https://github.com/fe-lang/wasmtime", rev = "29e29784e9b6363675513398a606bcc5bdad41fe", optional = true }
 cranelift-module = { git = "https://github.com/fe-lang/wasmtime", rev = "29e29784e9b6363675513398a606bcc5bdad41fe", optional = true }

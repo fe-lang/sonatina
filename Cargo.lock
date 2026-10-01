@@ -686,21 +686,24 @@ version = "0.135.2"
 source = "git+https://github.com/fe-lang/wasmtime?rev=29e29784e9b6363675513398a606bcc5bdad41fe#29e29784e9b6363675513398a606bcc5bdad41fe"
 dependencies = [
  "cranelift-entity 0.135.2",
- "wasmtime-internal-core",
+ "wasmtime-internal-core 48.0.2",
 ]
-
-[[package]]
-name = "cranelift-bitset"
-version = "0.126.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "98b92d481b77a7dc9d07c96e24a16f29e0c9c27d042828fdf7e49e54ee9819bf"
 
 [[package]]
 name = "cranelift-bitset"
 version = "0.135.2"
 source = "git+https://github.com/fe-lang/wasmtime?rev=29e29784e9b6363675513398a606bcc5bdad41fe#29e29784e9b6363675513398a606bcc5bdad41fe"
 dependencies = [
- "wasmtime-internal-core",
+ "wasmtime-internal-core 48.0.2",
+]
+
+[[package]]
+name = "cranelift-bitset"
+version = "0.136.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "76b63a4b0cfea80610150fffda11b1a9c3dc5a835403d9f381bf7d1a2874b4d7"
+dependencies = [
+ "wasmtime-internal-core 49.0.1",
 ]
 
 [[package]]
@@ -726,7 +729,7 @@ dependencies = [
  "serde",
  "smallvec",
  "target-lexicon",
- "wasmtime-internal-core",
+ "wasmtime-internal-core 48.0.2",
 ]
 
 [[package]]
@@ -755,20 +758,21 @@ dependencies = [
 
 [[package]]
 name = "cranelift-entity"
-version = "0.126.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "063b83448b1343e79282c3c7cbda7ed5f0816f0b763a4c15f7cecb0a17d87ea6"
-dependencies = [
- "cranelift-bitset 0.126.1",
-]
-
-[[package]]
-name = "cranelift-entity"
 version = "0.135.2"
 source = "git+https://github.com/fe-lang/wasmtime?rev=29e29784e9b6363675513398a606bcc5bdad41fe#29e29784e9b6363675513398a606bcc5bdad41fe"
 dependencies = [
  "cranelift-bitset 0.135.2",
- "wasmtime-internal-core",
+ "wasmtime-internal-core 48.0.2",
+]
+
+[[package]]
+name = "cranelift-entity"
+version = "0.136.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e73c65538d460b1062cb9a97428ee6bb4b616f5cb17be3b3ac0a3e4f1f789166"
+dependencies = [
+ "cranelift-bitset 0.136.1",
+ "wasmtime-internal-core 49.0.1",
 ]
 
 [[package]]
@@ -2428,7 +2432,7 @@ version = "0.0.3-alpha"
 dependencies = [
  "bit-set",
  "cranelift-codegen",
- "cranelift-entity 0.126.1",
+ "cranelift-entity 0.136.1",
  "cranelift-frontend",
  "cranelift-jit",
  "cranelift-module",
@@ -2442,8 +2446,8 @@ dependencies = [
  "insta",
  "object",
  "rayon",
- "rpds",
  "revm",
+ "rpds",
  "rustc-hash",
  "smallvec",
  "sonatina-ir",
@@ -2474,7 +2478,7 @@ name = "sonatina-interpreter"
 version = "0.0.3-alpha"
 dependencies = [
  "byteorder",
- "cranelift-entity 0.126.1",
+ "cranelift-entity 0.136.1",
  "dashmap",
  "dir-test",
  "dyn-clone",
@@ -2490,7 +2494,7 @@ version = "0.0.3-alpha"
 dependencies = [
  "bit-set",
  "bitflags 2.10.0",
- "cranelift-entity 0.126.1",
+ "cranelift-entity 0.136.1",
  "crossbeam-utils",
  "dashmap",
  "dot2",
@@ -2524,7 +2528,7 @@ version = "0.0.3-alpha"
 dependencies = [
  "annotate-snippets",
  "bimap",
- "cranelift-entity 0.126.1",
+ "cranelift-entity 0.136.1",
  "derive_more 2.0.1",
  "dir-test",
  "either",
@@ -2561,7 +2565,7 @@ dependencies = [
 name = "sonatina-verifier"
 version = "0.0.3-alpha"
 dependencies = [
- "cranelift-entity 0.126.1",
+ "cranelift-entity 0.136.1",
  "rayon",
  "rpds",
  "rustc-hash",
@@ -2975,12 +2979,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "wasmtime-internal-core"
+version = "49.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "64b67114739063bb72bb8ed2b4994b8b22809d354432db68553ad529850f9536"
+dependencies = [
+ "hashbrown 0.17.1",
+ "libm",
+]
+
+[[package]]
 name = "wasmtime-internal-jit-icache-coherence"
 version = "48.0.2"
 source = "git+https://github.com/fe-lang/wasmtime?rev=29e29784e9b6363675513398a606bcc5bdad41fe#29e29784e9b6363675513398a606bcc5bdad41fe"
 dependencies = [
  "libc",
- "wasmtime-internal-core",
+ "wasmtime-internal-core 48.0.2",
  "windows-sys 0.61.2",
 ]
 
