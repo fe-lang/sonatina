@@ -23,7 +23,7 @@ use super::{
     ObjectAggregateAbiConfig,
     abi::abi_leaf_count,
     objref_element_ty,
-    promotion::unconditional_read_prefix,
+    promotion::{ReadPrefixRequirement, unconditional_read_prefix},
     reconstruct::rebuild_scalar_shape_from_leaf_values,
     scalarize::insert_object_child_ref,
     shape::{self, AggregateLayoutCache, FieldPath},
@@ -153,7 +153,10 @@ impl ObjectArgPromotion {
             // prefix. Other memory accesses, calls, allocations and branches are
             // barriers, so this needs no no-alias or all-callers initialization assumption.
             if reads.fields.is_empty()
-                || unconditional_read_prefix(func, |inst| loads.contains(&inst)).len()
+                || unconditional_read_prefix(func, ReadPrefixRequirement::SingleExecution, |inst| {
+                    loads.contains(&inst)
+                })
+                .len()
                     != loads.len()
             {
                 continue;

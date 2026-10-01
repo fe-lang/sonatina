@@ -22,7 +22,7 @@ use super::{
     cleanup::DeadPureInstCleanup,
     object_arg_invariance::FunctionArgInvariance,
     object_tracking::{AggregateFacts, ObjectSlice, objref_element_ty},
-    promotion::{SsaBuilder, unconditional_read_prefix},
+    promotion::{ReadPrefixRequirement, SsaBuilder, unconditional_read_prefix},
     provenance::{CompleteProvenance, ExactProjectionMap, ProvenanceSnapshot, RootValue},
     reconstruct::{
         AggregateValueReconstructor, bitcast_before_inst, rebuild_scalar_shape_from_leaf_values,
@@ -135,7 +135,9 @@ impl IncomingPromotionPlan {
             }
         }
         func.layout.entry_block()?;
-        for inst in unconditional_read_prefix(func, |inst| reads.contains_key(&inst)) {
+        for inst in unconditional_read_prefix(func, ReadPrefixRequirement::Unconditional, |inst| {
+            reads.contains_key(&inst)
+        }) {
             let slice = reads[&inst];
             entry_leaf_reads[slice.first_leaf..slice.first_leaf + slice.leaf_count]
                 .fill(Some(inst));

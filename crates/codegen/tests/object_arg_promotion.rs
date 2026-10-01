@@ -55,6 +55,50 @@ fn promotes_entry_fields_and_rewrites_every_call() {
 }
 
 #[test]
+fn promotes_reads_along_single_entry_jump_chains() {
+    let source = PAIR
+        .replacen("block0:", "block0:\n    jump block1;\nblock1:", 1)
+        .replace(
+            "    v4.i256 = obj.load v3;",
+            "    jump block2;\nblock2:\n    v4.i256 = obj.load v3;",
+        );
+    let module = checked(&source);
+    assert_eq!(ObjectArgPromotion::default().run(&module).promoted_args, 1);
+    verify_module_or_panic(&module, &VerifierConfig::for_level(VerificationLevel::Full));
+    assert_eq!(argument_types(&module, "sum"), [Type::I256, Type::I256]);
+}
+
+#[test]
+fn keeps_reads_in_loop_headers_including_function_entry() {
+    let source = PAIR
+        .replace(
+            "%sum(v0.objref<@Pair>)",
+            "%sum(v0.objref<@Pair>, v6.objref<i256>)",
+        )
+        .replace("call %sum v2;", "call %sum v2 v3;")
+        .replacen(
+            "    return v5;\n}",
+            "    v7.i1 = eq v2 22.i256;\n    br v7 block2 block3;\nblock2:\n    return v5;\nblock3:\n    obj.store v6 22.i256;\n    jump block0;\n}",
+            1,
+        );
+    for preheader in [false, true] {
+        let source = if preheader {
+            source.replace("jump block0;", "jump block1;").replacen(
+                "block0:",
+                "block0:\n    jump block1;\nblock1:",
+                1,
+            )
+        } else {
+            source.clone()
+        };
+        let module = checked(&source);
+        let before = ModuleWriter::new(&module).dump_string();
+        assert_eq!(ObjectArgPromotion::default().run(&module).promoted_args, 0);
+        assert_eq!(before, ModuleWriter::new(&module).dump_string());
+    }
+}
+
+#[test]
 fn keeps_conditional_reads_writes_and_escaped_objects() {
     for body in [
         "v1.objref<i256> = obj.proj v0 0.i8;\n    obj.store v1 7.i256;\n    v2.i256 = obj.load v1;\n    return v2;",

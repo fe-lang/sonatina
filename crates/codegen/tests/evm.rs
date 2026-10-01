@@ -1748,6 +1748,80 @@ object @Contract { section runtime { entry %entry; } }
 }
 
 #[test]
+fn object_argument_promotion_preserves_repeated_loop_reads() {
+    let source = r#"
+target = "evm-ethereum-osaka"
+type @Pair = { i256, i256 };
+func inline(never) private %read_loop(v0.objref<@Pair>, v1.objref<i256>, v2.objref<i1>) -> i256 {
+block0:
+    jump block1;
+block1:
+    v3.objref<i256> = obj.proj v0 0.i8;
+    v4.i256 = obj.load v3;
+    v5.i1 = obj.load v2;
+    br v5 block3 block2;
+block2:
+    obj.store v1 22.i256;
+    obj.store v2 1.i1;
+    jump block1;
+block3:
+    return v4;
+}
+func public %entry() {
+block0:
+    v0.objref<@Pair> = obj.alloc @Pair;
+    v1.objref<i256> = obj.proj v0 0.i8;
+    v2.objref<i256> = obj.proj v0 1.i8;
+    obj.store v1 11.i256;
+    obj.store v2 33.i256;
+    v4.objref<i1> = obj.alloc i1;
+    obj.store v4 0.i1;
+    v3.i256 = call %read_loop v0 v1 v4;
+    evm_mstore 0.i256 v3;
+    evm_return 0.i256 32.i256;
+}
+object @Contract { section runtime { entry %entry; } }
+"#;
+    let config = VerifierConfig::for_level(VerificationLevel::Full);
+    for aliased in [true, false] {
+        let source = if aliased {
+            source.to_owned()
+        } else {
+            source.replace("call %read_loop v0 v1", "call %read_loop v0 v2")
+        };
+        for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2, OptLevel::Os] {
+            let module = parse_sona(&source).module;
+            verify_module_or_panic(&module, &config);
+            ObjectArgPromotion::default().run(&module);
+            verify_module_or_panic(&module, &config);
+            let mut compiler = Compile::new(module, EvmCompiler::default()).with_opt_level(level);
+            verify_module_or_panic(compiler.optimize(), &config);
+            let artifacts = compiler.compile().expect("loop reads should compile");
+            let runtime = artifacts[0]
+                .sections
+                .iter()
+                .find(|(name, _)| name.0 == "runtime")
+                .unwrap();
+            let mut harness = EvmHarness::from_runtime(&runtime.1.bytes);
+            let result = harness.call(&[]);
+            let ExecutionResult::Success {
+                output: Output::Call(output),
+                ..
+            } = result
+            else {
+                panic!("{level:?}, aliased={aliased}: {result:?}");
+            };
+            let expected = IrU256::from(if aliased { 22 } else { 11 });
+            assert_eq!(
+                output.as_ref(),
+                expected.to_big_endian(),
+                "{level:?}, aliased={aliased}"
+            );
+        }
+    }
+}
+
+#[test]
 fn promoted_object_arguments_preserve_alias_snapshots_and_reverts() {
     let source = r#"
 target = "evm-ethereum-osaka"
