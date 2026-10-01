@@ -1,4 +1,5 @@
-use rustc_hash::FxHashSet;
+use rustc_hash::FxHashMap;
+use smallvec::{SmallVec, smallvec};
 use sonatina_ir::{
     BlockId, ControlFlowGraph, Function, Immediate, InstId, Type, Value, ValueId,
     inst::{
@@ -10,13 +11,14 @@ use sonatina_ir::{
 };
 
 use crate::{
-    domtree::DomTree,
+    analysis::definedness::value_may_be_undef,
+    domtree::{DomTree, DominatorTreeTraversable},
     loop_analysis::LoopTree,
     range_analysis::{RangeAnalysis, checked_value_fact, transfer_inst},
 };
 
 pub struct CheckedArithElim {
-    plans: Vec<RewritePlan>,
+    plans: FxHashMap<InstId, PlainOpKind>,
 }
 
 #[derive(Clone, Copy)]
@@ -39,7 +41,9 @@ struct RewritePlan {
 
 impl CheckedArithElim {
     pub fn new() -> Self {
-        Self { plans: Vec::new() }
+        Self {
+            plans: FxHashMap::default(),
+        }
     }
 
     pub fn run(
@@ -54,35 +58,47 @@ impl CheckedArithElim {
         }
 
         self.plans.clear();
-        func.rebuild_users();
-        // An undef choice cannot establish a reusable relation, so guards that
-        // depend on undef (including through phi cycles) prove nothing.
-        let undef_dependent = undef_dependent_values(func);
-
+        let mut definedness = FxHashMap::default();
         let mut analysis = RangeAnalysis::default();
         analysis.compute(func, cfg, lpt);
-
-        let blocks: Vec<_> = func.layout.iter_block().collect();
-        for block in blocks {
+        let mut tree = DominatorTreeTraversable::default();
+        tree.compute(dom);
+        let mut guards = FxHashMap::<(ValueId, ValueId), usize>::default();
+        let mut pending = Vec::new();
+        if let Some(entry) = func.layout.entry_block() {
+            pending.push((entry, None));
+        }
+        // Enter and leave each dominator subtree once. Reference counts retain
+        // repeated facts established by both an ancestor and a nested branch.
+        while let Some((block, exiting)) = pending.pop() {
+            if let Some(relations) = exiting {
+                for relation in relations {
+                    let count = guards.get_mut(&relation).unwrap();
+                    *count -= 1;
+                    if *count == 0 {
+                        guards.remove(&relation);
+                    }
+                }
+                continue;
+            }
             if !analysis.is_reachable(block) {
                 continue;
             }
+            let relations = edge_guard_relations(func, cfg, dom, block, &mut definedness);
+            for &relation in &relations {
+                *guards.entry(relation).or_default() += 1;
+            }
+            pending.push((block, Some(relations)));
+            pending.extend(tree.children_of(block).iter().map(|&child| (child, None)));
 
             let mut env = analysis.entry_env(block).clone();
-            let guards: Vec<_> = dominating_guards(func, cfg, dom, block)
-                .into_iter()
-                .filter(|(condition, _)| !undef_dependent.contains(condition))
-                .collect();
-            let insts: Vec<_> = func.layout.iter_inst(block).collect();
-            for inst in insts {
+            for inst in func.layout.iter_inst(block) {
                 if func.dfg.is_phi(inst) {
                     continue;
                 }
-
                 if let Some(plan) = self.plan_inst(func, &env, &guards, inst) {
-                    self.plans.push(plan);
+                    self.plans.insert(plan.inst, plan.kind);
                 }
-
                 transfer_inst(func, &mut env, inst);
             }
         }
@@ -91,7 +107,19 @@ impl CheckedArithElim {
             return false;
         }
 
-        for plan in self.plans.drain(..) {
+        // Preserve layout-order rewriting and stable value numbering even
+        // though proofs are collected in dominator-tree order.
+        let plans: Vec<_> = func
+            .layout
+            .iter_block()
+            .flat_map(|block| func.layout.iter_inst(block))
+            .filter_map(|inst| {
+                self.plans
+                    .remove(&inst)
+                    .map(|kind| RewritePlan { inst, kind })
+            })
+            .collect();
+        for plan in plans {
             apply_plan(func, plan);
         }
 
@@ -102,7 +130,7 @@ impl CheckedArithElim {
         &self,
         func: &Function,
         env: &crate::range_analysis::RangeEnv,
-        guards: &[(ValueId, bool)],
+        guards: &FxHashMap<(ValueId, ValueId), usize>,
         inst: InstId,
     ) -> Option<RewritePlan> {
         let kind = match func.dfg.inst(inst).kind() {
@@ -127,9 +155,7 @@ impl CheckedArithElim {
             let [lhs, rhs] = args.as_slice() else {
                 return None;
             };
-            if !guards.iter().any(|&(condition, truth)| {
-                guard_proves_unsigned_ge(func, condition, truth, *lhs, *rhs)
-            }) {
+            if !guards.contains_key(&(*lhs, *rhs)) {
                 return None;
             }
         }
@@ -138,87 +164,61 @@ impl CheckedArithElim {
     }
 }
 
-/// Conservative forward taint from undef values, including phi cycles. Each
-/// value is queued once. Partial aggregate initialization may overtaint later
-/// extracts, which only costs a missed proof.
-fn undef_dependent_values(func: &Function) -> FxHashSet<ValueId> {
-    let mut tainted: FxHashSet<_> = func
-        .dfg
-        .values_iter()
-        .filter_map(|(id, value)| matches!(value, Value::Undef { .. }).then_some(id))
-        .collect();
-    let mut pending: Vec<_> = tainted.iter().copied().collect();
-    while let Some(value) = pending.pop() {
-        for &user in func.dfg.users(value) {
-            for &result in func.dfg.inst_results(user) {
-                if tainted.insert(result) {
-                    pending.push(result);
-                }
-            }
-        }
-    }
-    tainted
-}
-
-/// Collect branch facts only where the selected edge dominates this block.
-/// A single-predecessor dominator child certifies that edge without a second
-/// graph traversal. Ordinary merges and loop headers with backedges do not
-/// create facts. SSA operand identity prevents reuse for a changed value.
-fn dominating_guards(
+/// A single-predecessor dominator child certifies the selected branch edge.
+/// Ordinary merges and loop headers with backedges do not create facts.
+fn edge_guard_relations(
     func: &Function,
     cfg: &ControlFlowGraph,
     dom: &DomTree,
-    mut child: BlockId,
-) -> Vec<(ValueId, bool)> {
-    let mut guards = Vec::new();
-    while let Some(parent) = dom.idom_of(child) {
-        let mut predecessors = cfg.preds_of(child).copied();
-        if predecessors.next() == Some(parent)
-            && predecessors.next().is_none()
-            && let Some(branch) = func
-                .layout
-                .last_inst_of(parent)
-                .and_then(|term| func.dfg.branch_info(term))
-            && let BranchKind::Br(br) = branch.branch_kind()
-            && br.nz_dest() != br.z_dest()
-        {
-            guards.push((*br.cond(), *br.nz_dest() == child));
-        }
-        child = parent;
+    child: BlockId,
+    definedness: &mut FxHashMap<ValueId, bool>,
+) -> SmallVec<[(ValueId, ValueId); 2]> {
+    let Some(parent) = dom.idom_of(child) else {
+        return SmallVec::new();
+    };
+    let mut predecessors = cfg.preds_of(child).copied();
+    if predecessors.next() != Some(parent) || predecessors.next().is_some() {
+        return SmallVec::new();
     }
-    guards
-}
-
-/// Deliberately unsigned and pairwise: overlapping independent intervals may
-/// lose `lhs >= rhs`, but a dominating comparison of these exact values proves
-/// subtraction safe. No transitivity, signed reinterpretation or loop-carried
-/// relational environment is assumed.
-fn guard_proves_unsigned_ge(
-    func: &Function,
-    condition: ValueId,
-    truth: bool,
-    lhs: ValueId,
-    rhs: ValueId,
-) -> bool {
+    let Some(branch) = func
+        .layout
+        .last_inst_of(parent)
+        .and_then(|term| func.dfg.branch_info(term))
+    else {
+        return SmallVec::new();
+    };
+    let BranchKind::Br(br) = branch.branch_kind() else {
+        return SmallVec::new();
+    };
+    if br.nz_dest() == br.z_dest() {
+        return SmallVec::new();
+    }
+    let condition = *br.cond();
     let Some(inst) = func.dfg.value_inst(condition) else {
-        return false;
+        return SmallVec::new();
     };
     let InstClassKind::Binary(kind) = func.dfg.inst(inst).kind() else {
-        return false;
+        return SmallVec::new();
     };
     let args = func.dfg.inst(inst).collect_values();
     let [a, b] = args.as_slice() else {
-        return false;
+        return SmallVec::new();
     };
-    let forward = *a == lhs && *b == rhs;
-    let reverse = *a == rhs && *b == lhs;
-    match (kind, truth) {
+    // An undef choice cannot establish a reusable relation. Include intrinsic
+    // undef producers (such as generic division by a possibly zero divisor),
+    // transitive dependencies, and cyclic phis via the shared definedness analysis.
+    if value_may_be_undef(func, condition, definedness, |_| None) {
+        return SmallVec::new();
+    }
+    // Deliberately unsigned and pairwise, with exact SSA operand identity.
+    // No transitivity, signed reinterpretation or changed loop operands.
+    match (kind, *br.nz_dest() == child) {
         (BinaryInstKind::Lt | BinaryInstKind::Le, true)
-        | (BinaryInstKind::Gt | BinaryInstKind::Ge, false) => reverse,
+        | (BinaryInstKind::Gt | BinaryInstKind::Ge, false) => smallvec![(*b, *a)],
         (BinaryInstKind::Lt | BinaryInstKind::Le, false)
-        | (BinaryInstKind::Gt | BinaryInstKind::Ge, true) => forward,
-        (BinaryInstKind::Eq, true) | (BinaryInstKind::Ne, false) => forward || reverse,
-        _ => false,
+        | (BinaryInstKind::Gt | BinaryInstKind::Ge, true) => smallvec![(*a, *b)],
+        (BinaryInstKind::Eq, true) | (BinaryInstKind::Ne, false) => smallvec![(*a, *b), (*b, *a)],
+        _ => SmallVec::new(),
     }
 }
 
@@ -491,5 +491,91 @@ func public %test(v0.i32) -> i1 {
 "#,
         );
         assert!(text.contains("usubo"), "{text}");
+    }
+    #[test]
+    fn guarded_subtraction_checks_intrinsic_definedness() {
+        for operation in [
+            "udiv", "sdiv", "umod", "smod", "evm_udiv", "evm_sdiv", "evm_umod", "evm_smod",
+        ] {
+            for divisor in ["v1", "0.i256", "7.i256"] {
+                let text = optimized(&format!(
+                    r#"
+target = "evm-ethereum-osaka"
+func public %test(v0.i256, v1.i256) -> i1 {{
+ block0:
+  v2.i256 = {operation} v0 {divisor};
+  v3.i1 = ge v0 v2;
+  br v3 block1 block2;
+ block1:
+  (v4.i256, v5.i1) = usubo v0 v2;
+  return v5;
+ block2:
+  return 0.i1;
+}}
+"#
+                ));
+                let defined = operation.starts_with("evm_") || divisor == "7.i256";
+                assert_eq!(
+                    !text.contains("usubo"),
+                    defined,
+                    "{operation} {divisor}: {text}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn guarded_subtraction_restores_outer_facts_after_nested_duplicate() {
+        let text = optimized(
+            r#"
+target = "evm-ethereum-osaka"
+func public %test(v0.i32, v1.i32) -> i1 {
+ block0:
+  v2.i1 = ge v0 v1;
+  br v2 block1 block4;
+ block1:
+  v3.i1 = ge v0 v1;
+  br v3 block2 block3;
+ block2:
+  (v4.i32, v5.i1) = usubo v0 v1;
+  return v5;
+ block3:
+  (v6.i32, v7.i1) = usubo v0 v1;
+  return v7;
+ block4:
+  (v8.i32, v9.i1) = usubo v0 v1;
+  return v9;
+}
+"#,
+        );
+        assert_eq!(text.matches("usubo").count(), 1, "{text}");
+    }
+
+    #[test]
+    fn guarded_subtraction_carries_facts_through_a_long_block_chain() {
+        let mut source = String::from(
+            r#"
+target = "evm-ethereum-osaka"
+func public %test(v0.i32, v1.i32) -> i1 {
+ block0:
+  v2.i1 = ge v0 v1;
+  br v2 block1 block2050;
+"#,
+        );
+        for block in 1..2048 {
+            source.push_str(&format!(" block{block}:\n  jump block{};\n", block + 1));
+        }
+        source.push_str(
+            r#"
+ block2048:
+  (v3.i32, v4.i1) = usubo v0 v1;
+  return v4;
+ block2050:
+  return 0.i1;
+}
+"#,
+        );
+        let text = optimized(&source);
+        assert!(!text.contains("usubo"), "{text}");
     }
 }
