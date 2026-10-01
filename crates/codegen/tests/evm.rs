@@ -27,6 +27,7 @@ use sonatina_codegen::{
         pipeline::Pipeline,
     },
     stackalloc::StackifySearchProfile,
+    transform::aggregate::ObjectArgPromotion,
 };
 use sonatina_ir::{
     BlockId, U256 as IrU256,
@@ -1671,5 +1672,323 @@ fn summarize_output(output: &Output) -> String {
             Some(addr) => format!("create len={} addr={addr:?}", bytes.len()),
             None => format!("create len={} addr=<none>", bytes.len()),
         },
+    }
+}
+
+#[test]
+fn promoted_aggregate_fields_preserve_snapshots_of_larger_objects() {
+    let source = r#"
+target = "evm-ethereum-osaka"
+type @Pair = { i256, [i256; 1] };
+type @Large = { [i256; 12], @Pair };
+func inline(never) private %snapshot(v0.objref<@Large>, v1.objref<i256>) -> @Pair {
+block0:
+    v2.objref<@Pair> = obj.proj v0 1.i8;
+    v3.@Pair = obj.load v2;
+    obj.store v1 22.i256;
+    return v3;
+}
+func public %entry() {
+block0:
+    v0.i256 = evm_calldata_load 0.i256;
+    v1.i256 = evm_calldata_load 32.i256;
+    v2.objref<@Large> = obj.alloc @Large;
+    v3.objref<i256> = obj.proj v2 1.i8 0.i8;
+    v4.objref<[i256; 1]> = obj.proj v2 1.i8 1.i8;
+    v5.objref<i256> = obj.index v4 0.i8;
+    obj.store v3 v0;
+    obj.store v5 v1;
+    v6.@Pair = call %snapshot v2 v3;
+    v7.i256 = extract_value v6 0.i8;
+    v8.[i256; 1] = extract_value v6 1.i8;
+    v9.i256 = extract_value v8 0.i8;
+    v10.i256 = obj.load v3;
+    evm_mstore 0.i256 v7;
+    evm_mstore 32.i256 v9;
+    evm_mstore 64.i256 v10;
+    evm_return 0.i256 96.i256;
+}
+object @Contract { section runtime { entry %entry; } }
+"#;
+    let config = VerifierConfig::for_level(VerificationLevel::Full);
+    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2, OptLevel::Os] {
+        let module = parse_sona(source).module;
+        verify_module_or_panic(&module, &config);
+        assert_eq!(ObjectArgPromotion::default().run(&module).promoted_args, 1);
+        verify_module_or_panic(&module, &config);
+        let mut compiler = Compile::new(module, EvmCompiler::default()).with_opt_level(level);
+        verify_module_or_panic(compiler.optimize(), &config);
+        let artifacts = compiler.compile().expect("aggregate fields should compile");
+        let runtime = artifacts[0]
+            .sections
+            .iter()
+            .find(|(name, _)| name.0 == "runtime")
+            .unwrap();
+        let mut harness = EvmHarness::from_runtime(&runtime.1.bytes);
+        for (lhs, rhs) in [
+            (IrU256::zero(), IrU256::one()),
+            (IrU256::MAX, IrU256::one()),
+            (IrU256::one() << 255, IrU256::MAX),
+        ] {
+            let result = harness.call(&[lhs.to_big_endian(), rhs.to_big_endian()].concat());
+            let ExecutionResult::Success {
+                output: Output::Call(output),
+                ..
+            } = result
+            else {
+                panic!("{level:?}, lhs={lhs}, rhs={rhs}: {result:?}");
+            };
+            let expected = [lhs, rhs, IrU256::from(22)]
+                .into_iter()
+                .flat_map(|word| word.to_big_endian())
+                .collect::<Vec<_>>();
+            assert_eq!(output.as_ref(), expected, "{level:?}");
+        }
+    }
+}
+
+#[test]
+fn object_argument_promotion_preserves_repeated_loop_reads() {
+    let source = r#"
+target = "evm-ethereum-osaka"
+type @Pair = { i256, i256 };
+func inline(never) private %read_loop(v0.objref<@Pair>, v1.objref<i256>, v2.objref<i1>) -> i256 {
+block0:
+    jump block1;
+block1:
+    v3.objref<i256> = obj.proj v0 0.i8;
+    v4.i256 = obj.load v3;
+    v5.i1 = obj.load v2;
+    br v5 block3 block2;
+block2:
+    obj.store v1 22.i256;
+    obj.store v2 1.i1;
+    jump block1;
+block3:
+    return v4;
+}
+func public %entry() {
+block0:
+    v0.objref<@Pair> = obj.alloc @Pair;
+    v1.objref<i256> = obj.proj v0 0.i8;
+    v2.objref<i256> = obj.proj v0 1.i8;
+    obj.store v1 11.i256;
+    obj.store v2 33.i256;
+    v4.objref<i1> = obj.alloc i1;
+    obj.store v4 0.i1;
+    v3.i256 = call %read_loop v0 v1 v4;
+    evm_mstore 0.i256 v3;
+    evm_return 0.i256 32.i256;
+}
+object @Contract { section runtime { entry %entry; } }
+"#;
+    let config = VerifierConfig::for_level(VerificationLevel::Full);
+    for aliased in [true, false] {
+        let source = if aliased {
+            source.to_owned()
+        } else {
+            source.replace("call %read_loop v0 v1", "call %read_loop v0 v2")
+        };
+        for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2, OptLevel::Os] {
+            let module = parse_sona(&source).module;
+            verify_module_or_panic(&module, &config);
+            ObjectArgPromotion::default().run(&module);
+            verify_module_or_panic(&module, &config);
+            let mut compiler = Compile::new(module, EvmCompiler::default()).with_opt_level(level);
+            verify_module_or_panic(compiler.optimize(), &config);
+            let artifacts = compiler.compile().expect("loop reads should compile");
+            let runtime = artifacts[0]
+                .sections
+                .iter()
+                .find(|(name, _)| name.0 == "runtime")
+                .unwrap();
+            let mut harness = EvmHarness::from_runtime(&runtime.1.bytes);
+            let result = harness.call(&[]);
+            let ExecutionResult::Success {
+                output: Output::Call(output),
+                ..
+            } = result
+            else {
+                panic!("{level:?}, aliased={aliased}: {result:?}");
+            };
+            let expected = IrU256::from(if aliased { 22 } else { 11 });
+            assert_eq!(
+                output.as_ref(),
+                expected.to_big_endian(),
+                "{level:?}, aliased={aliased}"
+            );
+        }
+    }
+}
+
+#[test]
+fn promoted_object_arguments_preserve_alias_snapshots_and_reverts() {
+    let source = r#"
+target = "evm-ethereum-osaka"
+type @Pair = { i256, i256 };
+func inline(never) private %snapshot(v0.objref<@Pair>, v1.objref<i256>) -> i256 {
+block0:
+    v2.objref<i256> = obj.proj v0 0.i8;
+    v3.i256 = obj.load v2;
+    v4.objref<i256> = obj.proj v0 1.i8;
+    v5.i256 = obj.load v4;
+    v6.i1 = is_zero v5;
+    br v6 block1 block2;
+block1:
+    evm_mstore 0.i256 v3;
+    evm_revert 0.i256 32.i256;
+block2:
+    obj.store v1 22.i256;
+    v7.i256 = xor v3 v5;
+    evm_sstore 0.i256 v7;
+    return v7;
+}
+func public %entry() {
+block0:
+    v0.i256 = evm_calldata_load 0.i256;
+    v1.i256 = evm_calldata_load 32.i256;
+    v2.objref<@Pair> = obj.alloc @Pair;
+    v3.objref<i256> = obj.proj v2 0.i8;
+    v4.objref<i256> = obj.proj v2 1.i8;
+    obj.store v3 v0;
+    obj.store v4 v1;
+    v5.objref<i256> = obj.alloc i256;
+    obj.store v5 33.i256;
+    v6.i256 = call %snapshot v2 v3;
+    v7.i256 = obj.load v3;
+    v8.i256 = evm_sload 0.i256;
+    evm_mstore 0.i256 v6;
+    evm_mstore 32.i256 v7;
+    evm_mstore 64.i256 v8;
+    evm_return 0.i256 96.i256;
+}
+object @Contract { section runtime { entry %entry; } }
+"#;
+    let pairs = [
+        (IrU256::zero(), IrU256::one()),
+        (IrU256::MAX, IrU256::one()),
+        (IrU256::one() << 255, IrU256::MAX),
+        (IrU256::one(), IrU256::zero()),
+        (IrU256::MAX, IrU256::zero()),
+    ];
+    let config = VerifierConfig::for_level(VerificationLevel::Full);
+    for aliased in [true, false] {
+        let source = if aliased {
+            source.to_owned()
+        } else {
+            source.replace("call %snapshot v2 v3", "call %snapshot v2 v5")
+        };
+        for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2, OptLevel::Os] {
+            let module = parse_sona(&source).module;
+            verify_module_or_panic(&module, &config);
+            assert_eq!(ObjectArgPromotion::default().run(&module).promoted_args, 1);
+            verify_module_or_panic(&module, &config);
+            let mut compiler = Compile::new(module, EvmCompiler::default()).with_opt_level(level);
+            verify_module_or_panic(compiler.optimize(), &config);
+            let artifacts = compiler
+                .compile()
+                .expect("promoted object args should compile");
+            let runtime = artifacts[0]
+                .sections
+                .iter()
+                .find(|(name, _)| name.0 == "runtime")
+                .unwrap();
+            let mut harness = EvmHarness::from_runtime(&runtime.1.bytes);
+            for (lhs, rhs) in pairs {
+                let result = harness.call(&[lhs.to_big_endian(), rhs.to_big_endian()].concat());
+                if rhs.is_zero() {
+                    let ExecutionResult::Revert { output, .. } = result else {
+                        panic!("{level:?}, aliased={aliased}, lhs={lhs}, rhs={rhs}: {result:?}");
+                    };
+                    assert_eq!(output.as_ref(), lhs.to_big_endian());
+                } else {
+                    let ExecutionResult::Success {
+                        output: Output::Call(output),
+                        ..
+                    } = result
+                    else {
+                        panic!("{level:?}, aliased={aliased}, lhs={lhs}, rhs={rhs}: {result:?}");
+                    };
+                    let after = if aliased { IrU256::from(22) } else { lhs };
+                    let expected = [lhs ^ rhs, after, lhs ^ rhs]
+                        .into_iter()
+                        .flat_map(|word| word.to_big_endian())
+                        .collect::<Vec<_>>();
+                    assert_eq!(output.as_ref(), expected, "{level:?}, aliased={aliased}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn promoted_object_arguments_keep_materialized_pointees_alive() {
+    let source = r#"
+target = "evm-ethereum-osaka"
+type @Pair = { i256, i256 };
+func inline(never) private %read(v0.objref<@Pair>) -> i256 {
+block0:
+    v1.objref<i256> = obj.proj v0 0.i8;
+    v2.i256 = obj.load v1;
+    v3.objref<i256> = obj.proj v0 1.i8;
+    v4.i256 = obj.load v3;
+    v5.i256 = add v2 32.i256;
+    v6.i256 = evm_mload v5;
+    v7.i256 = add v6 v4;
+    return v7;
+}
+func public %entry() {
+block0:
+    v0.i256 = evm_calldata_load 0.i256;
+    v1.objref<@Pair> = obj.alloc @Pair;
+    v2.objref<i256> = obj.proj v1 0.i8;
+    v3.objref<i256> = obj.proj v1 1.i8;
+    obj.store v2 0.i256;
+    obj.store v3 v0;
+    v4.*@Pair = obj.materialize.stack v1;
+    v5.i256 = ptr_to_int v4 i256;
+    obj.store v2 v5;
+    v6.i256 = call %read v1;
+    evm_mstore 0.i256 v6;
+    evm_return 0.i256 32.i256;
+}
+object @Contract { section runtime { entry %entry; } }
+"#;
+    let config = VerifierConfig::for_level(VerificationLevel::Full);
+    for promote in [false, true] {
+        for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2, OptLevel::Os] {
+            let module = parse_sona(source).module;
+            verify_module_or_panic(&module, &config);
+            if promote {
+                assert_eq!(ObjectArgPromotion::default().run(&module).promoted_args, 1);
+                verify_module_or_panic(&module, &config);
+            }
+            let mut compiler = Compile::new(module, EvmCompiler::default()).with_opt_level(level);
+            verify_module_or_panic(compiler.optimize(), &config);
+            let artifacts = compiler
+                .compile()
+                .expect("materialized object args should compile");
+            let runtime = artifacts[0]
+                .sections
+                .iter()
+                .find(|(name, _)| name.0 == "runtime")
+                .unwrap();
+            let mut harness = EvmHarness::from_runtime(&runtime.1.bytes);
+            for input in [IrU256::zero(), IrU256::from(17), IrU256::MAX] {
+                let result = harness.call(&input.to_big_endian());
+                let ExecutionResult::Success {
+                    output: Output::Call(output),
+                    ..
+                } = result
+                else {
+                    panic!("{level:?}, promote={promote}, input={input}: {result:?}");
+                };
+                assert_eq!(
+                    output.as_ref(),
+                    input.overflowing_mul(IrU256::from(2)).0.to_big_endian(),
+                    "{level:?}, promote={promote}, input={input}"
+                );
+            }
+        }
     }
 }

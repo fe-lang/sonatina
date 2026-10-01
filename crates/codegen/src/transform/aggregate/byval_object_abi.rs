@@ -17,7 +17,7 @@ use crate::liveness::{InstLiveness, Liveness};
 use super::{
     LocalObjectArgInfo, ModuleObjectFacts, ObjectEffectSummaryMap, ObjectLowerToMemory,
     ObjectMemoryAnalysis,
-    abi::abi_leaf_count,
+    abi::{abi_arg_operand_count, abi_leaf_count},
     compute_object_effect_summaries,
     object_abi::{
         OutputBufferContract, fresh_root_blocks_are_pairwise_unreachable, whole_object_slice,
@@ -386,43 +386,12 @@ impl ObjectAggregateAbi {
                 continue;
             }
 
-            let mut rets: Vec<_> = sig
-                .ret_tys()
-                .iter()
-                .copied()
-                .map(|ty| self.initial_ret_plan(&module.ctx, ty))
-                .collect();
-            let mut total_direct_ret_words = rets
-                .iter()
-                .filter(|ret| ret.kind == RetAbiKind::Direct)
-                .map(|ret| ret.direct_words)
-                .sum::<usize>();
-            if total_direct_ret_words > self.cfg.max_direct_ret_words {
-                let mut rewrite_order: Vec<_> = rets
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, ret)| {
-                        ret.kind == RetAbiKind::Direct && self.can_rewrite_ret_as_object(ret)
-                    })
-                    .map(|(idx, ret)| (idx, ret.direct_words))
-                    .collect();
-                rewrite_order.sort_unstable_by_key(|&(idx, savings)| (Reverse(savings), idx));
-                for (idx, savings) in rewrite_order {
-                    if total_direct_ret_words <= self.cfg.max_direct_ret_words {
-                        break;
-                    }
-                    rets[idx].kind = RetAbiKind::OutObject;
-                    rets[idx].out_arg_ty = Some(objref_ty(&module.ctx, rets[idx].original_ty));
-                    total_direct_ret_words -= savings;
-                }
-            }
-            if total_direct_ret_words > self.cfg.max_direct_ret_words {
-                return Err(format!(
+            let rets = self.plan_returns(&module.ctx, sig.ret_tys()).map_err(|words| {
+                format!(
                     "cannot lower {} for EVM: {} direct return words remain after rewriting all eligible aggregate returns",
-                    sig.name(),
-                    total_direct_ret_words
-                ));
-            }
+                    sig.name(), words
+                )
+            })?;
 
             let hidden_out_tys: SmallVec<[Type; 4]> = rets
                 .iter()
@@ -506,6 +475,57 @@ impl ObjectAggregateAbi {
         Ok(plans)
     }
 
+    /// Share the exact return ABI decision with argument promotion, which must
+    /// reserve these operands before expanding an object reference into scalars.
+    pub(super) fn hidden_return_arg_count(
+        &self,
+        ctx: &ModuleCtx,
+        ret_tys: &[Type],
+    ) -> Option<usize> {
+        self.plan_returns(ctx, ret_tys).ok().map(|rets| {
+            rets.iter()
+                .filter(|ret| ret.kind == RetAbiKind::OutObject)
+                .count()
+        })
+    }
+
+    fn plan_returns(&self, ctx: &ModuleCtx, ret_tys: &[Type]) -> Result<Vec<RetPlan>, usize> {
+        let mut rets: Vec<_> = ret_tys
+            .iter()
+            .copied()
+            .map(|ty| self.initial_ret_plan(ctx, ty))
+            .collect();
+        let mut total_direct_ret_words = rets
+            .iter()
+            .filter(|ret| ret.kind == RetAbiKind::Direct)
+            .map(|ret| ret.direct_words)
+            .sum::<usize>();
+        if total_direct_ret_words > self.cfg.max_direct_ret_words {
+            let mut rewrite_order: Vec<_> = rets
+                .iter()
+                .enumerate()
+                .filter(|(_, ret)| {
+                    ret.kind == RetAbiKind::Direct && self.can_rewrite_ret_as_object(ret)
+                })
+                .map(|(idx, ret)| (idx, ret.direct_words))
+                .collect();
+            rewrite_order.sort_unstable_by_key(|&(idx, savings)| (Reverse(savings), idx));
+            for (idx, savings) in rewrite_order {
+                if total_direct_ret_words <= self.cfg.max_direct_ret_words {
+                    break;
+                }
+                rets[idx].kind = RetAbiKind::OutObject;
+                rets[idx].out_arg_ty = Some(objref_ty(ctx, rets[idx].original_ty));
+                total_direct_ret_words -= savings;
+            }
+        }
+        if total_direct_ret_words > self.cfg.max_direct_ret_words {
+            Err(total_direct_ret_words)
+        } else {
+            Ok(rets)
+        }
+    }
+
     fn initial_ret_plan(&self, ctx: &ModuleCtx, ty: Type) -> RetPlan {
         let direct_words = direct_word_count(ctx, ty).unwrap_or(1);
         let kind = if direct_words <= 1
@@ -526,7 +546,7 @@ impl ObjectAggregateAbi {
     }
 
     fn initial_arg_plan(&self, ctx: &ModuleCtx, ty: Type) -> ArgPlan {
-        let direct_words = direct_word_count(ctx, ty).unwrap_or(1);
+        let direct_words = abi_arg_operand_count(ctx, ty).unwrap_or(1);
         let kind = if direct_words <= 1
             || shape::runtime_size_bytes(ctx, ty).is_some_and(|size| size == 0)
             || !shape::is_supported_aggregate_ty(ctx, ty)

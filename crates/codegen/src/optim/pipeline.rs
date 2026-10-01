@@ -23,7 +23,10 @@ use crate::{
     cfg_edit::CleanupMode,
     domtree::DomTree,
     loop_analysis::LoopTree,
-    transform::aggregate::object_arg_invariance::{FunctionArgInvariance, compute_arg_invariance},
+    transform::aggregate::{
+        ObjectArgPromotion,
+        object_arg_invariance::{FunctionArgInvariance, compute_arg_invariance},
+    },
 };
 
 use super::{
@@ -242,6 +245,8 @@ pub enum Step {
     FuncPasses(Vec<Pass>),
     /// Remove dead formal arguments from rewritable functions and update direct callsites.
     DeadArgElim,
+    /// Pass private object arguments as bounded sets of unconditionally read scalar fields.
+    PromoteObjectArgs,
     /// Remove unreachable function definitions rooted at object `entry`/`include` directives.
     DeadFuncElim,
 }
@@ -252,6 +257,7 @@ impl Step {
             Step::Inline => "inline",
             Step::FuncPasses(_) => "func_passes",
             Step::DeadArgElim => "dead_arg_elim",
+            Step::PromoteObjectArgs => "promote_object_args",
             Step::DeadFuncElim => "dead_func_elim",
         }
     }
@@ -413,6 +419,7 @@ impl Pipeline {
         p.add_step(Step::DeadArgElim);
         p.add_step(Step::FuncPasses(POST_DEAD_ARG_CLEANUP_PASSES.to_vec()));
         p.add_step(Step::DeadFuncElim);
+        p.add_step(Step::PromoteObjectArgs);
         p.add_step(Step::Inline);
         p.add_step(Step::FuncPasses(SECONDARY_FUNC_PASSES.to_vec()));
         p.add_step(Step::Inline);
@@ -560,6 +567,12 @@ impl Pipeline {
                 Step::DeadArgElim => {
                     let _span = debug_span!("sonatina.optim.pipeline.dead_arg_elim").entered();
                     run_dead_arg_elim(module, &[], DeadArgElimConfig::default());
+                    func_behavior_dirty = true;
+                }
+                Step::PromoteObjectArgs => {
+                    let _span =
+                        debug_span!("sonatina.optim.pipeline.promote_object_args").entered();
+                    ObjectArgPromotion::default().run(module);
                     func_behavior_dirty = true;
                 }
                 Step::DeadFuncElim => {
@@ -2564,6 +2577,7 @@ func private %entry(v0.i32, v1.i32) -> i32 {
             match (size_step, speed_step) {
                 (Step::Inline, Step::Inline)
                 | (Step::DeadArgElim, Step::DeadArgElim)
+                | (Step::PromoteObjectArgs, Step::PromoteObjectArgs)
                 | (Step::DeadFuncElim, Step::DeadFuncElim) => {}
                 (Step::FuncPasses(size_passes), Step::FuncPasses(speed_passes)) => {
                     assert_eq!(size_passes, speed_passes);

@@ -95,7 +95,7 @@ impl RewriteRoot {
 }
 
 #[derive(Clone)]
-struct FuncPlan {
+pub(super) struct FuncPlan {
     out_ty: Type,
     out_elem_ty: Type,
     roots: SmallVec<[RewriteRoot; 4]>,
@@ -205,7 +205,7 @@ impl ObjectReturnOutParam {
         plans
     }
 
-    fn collect_candidate_plans(
+    pub(super) fn collect_candidate_plans(
         &self,
         module: &Module,
         object_effects: &ObjectEffectSummaryMap,
