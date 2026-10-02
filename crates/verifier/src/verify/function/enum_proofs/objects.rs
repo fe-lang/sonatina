@@ -288,20 +288,32 @@ impl State {
         self.value_observations
             .retain(|&key, (value, _)| key != id && *value != id);
         if symbolic || verifier.func.dfg.value_ty(id).is_obj_ref(ctx) {
-            self.rewrite_references(ctx, &mut |refs| refs.without_binding(id));
+            let candidates = self.view_index.binding_candidates(id);
+            self.rewrite_references(ctx, Some(&candidates), &mut |refs| refs.without_binding(id));
         }
     }
 
     fn rewrite_references(
         &mut self,
         ctx: &ModuleCtx,
+        candidates: Option<&BTreeSet<ValueId>>,
         f: &mut impl FnMut(&References) -> Option<References>,
     ) {
-        for value in self.values.values_mut().chain(self.objects.values_mut()) {
+        // Reference SSA values and their view facts have identical References
+        // after installation and every rewrite. The index covers both copies.
+        // Aggregate/cell contents and observations still need their own walks.
+        for (&id, value) in &mut self.values {
+            if !value.ty.is_obj_ref(ctx) || candidates.is_none_or(|ids| ids.contains(&id)) {
+                value.visit_references(ctx, f);
+            }
+        }
+        for value in self.objects.values_mut() {
             value.visit_references(ctx, f);
         }
         for (&id, fact) in &mut self.views {
-            if let Some(references) = f(&fact.references) {
+            if candidates.is_none_or(|ids| ids.contains(&id))
+                && let Some(references) = f(&fact.references)
+            {
                 self.view_index.update(id, &fact.references, false);
                 self.view_index.update(id, &references, true);
                 fact.references = references;
@@ -324,7 +336,7 @@ impl State {
                 .remove(&summary)
                 .map_or(old.clone(), |summary| summary.join(ctx, &old));
             self.objects.insert(summary, old);
-            self.rewrite_references(ctx, &mut |refs| {
+            self.rewrite_references(ctx, None, &mut |refs| {
                 if !refs.views.iter().any(|view| {
                     view.place.root == recent
                         || view.guards.iter().any(|guard| guard.place.root == recent)

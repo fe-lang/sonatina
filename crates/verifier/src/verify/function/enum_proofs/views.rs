@@ -339,6 +339,34 @@ impl References {
         self.anchors.extend(added);
     }
 
+    pub fn bindings(&self) -> BTreeSet<ValueId> {
+        let anchors = self.anchors.iter().chain(
+            self.views
+                .iter()
+                .flat_map(|view| &view.guards)
+                .filter_map(|guard| guard.anchor.as_ref()),
+        );
+        let mut bindings: BTreeSet<_> = self.cache.into_iter().collect();
+        bindings.extend(anchors.clone().map(|anchor| anchor.value));
+        bindings.extend(
+            self.views
+                .iter()
+                .flat_map(|view| &view.guards)
+                .filter_map(|guard| guard.witness),
+        );
+        let paths = anchors
+            .map(|anchor| anchor.path.as_slice())
+            .chain(self.views.iter().flat_map(|view| {
+                std::iter::once(view.place.path.as_slice())
+                    .chain(view.guards.iter().map(|guard| guard.place.path.as_slice()))
+            }));
+        bindings.extend(paths.flatten().filter_map(|step| match step {
+            Step::Index(Index::Symbol(id)) => Some(*id),
+            _ => None,
+        }));
+        bindings
+    }
+
     pub fn without_binding(&self, id: ValueId) -> Option<Self> {
         let indexed = |path: &[Step]| path.contains(&Step::Index(Index::Symbol(id)));
         let anchored = |anchor: &Anchor| anchor.value == id || indexed(&anchor.path);
