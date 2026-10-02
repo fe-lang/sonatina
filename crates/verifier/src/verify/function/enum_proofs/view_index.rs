@@ -102,10 +102,25 @@ fn update_paths<K: Copy + Ord>(
 pub(super) struct ViewIndex {
     places: BTreeMap<Root, Paths>,
     anchors: BTreeMap<ValueId, Paths>,
+    bindings: BTreeMap<ValueId, BTreeSet<ValueId>>,
 }
 
 impl ViewIndex {
+    pub fn binding_candidates(&self, binding: ValueId) -> BTreeSet<ValueId> {
+        self.bindings.get(&binding).cloned().unwrap_or_default()
+    }
+
     pub fn update(&mut self, id: ValueId, refs: &References, insert: bool) {
+        for binding in refs.bindings() {
+            if insert {
+                self.bindings.entry(binding).or_default().insert(id);
+            } else if let Some(values) = self.bindings.get_mut(&binding) {
+                values.remove(&id);
+                if values.is_empty() {
+                    self.bindings.remove(&binding);
+                }
+            }
+        }
         for view in &refs.views {
             for place in std::iter::once(&view.place).chain(view.guards.iter().map(|g| &g.place)) {
                 update_paths(&mut self.places, place.root, &place.path, id, insert);

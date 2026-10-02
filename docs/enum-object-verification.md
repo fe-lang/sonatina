@@ -222,6 +222,11 @@ enum variant can be disjoint; symbolic/unknown indices and different variants
 must remain possible overlaps. Unknown targets visit every fact. Maintain the
 indexes when installing or retiring bindings, rewriting references, and joining
 states; an index entry is never an independent proof of initialization or identity.
+A reverse binding index also selects the reference SSA/view-fact pairs that name
+a retired value in caches, anchors, guards or symbolic paths. Those pairs share
+the same reference facts after installation, joins and rewrites. Aggregate and
+object contents and saved observations are traversed separately; they may retain
+references after their original SSA names stop being used.
 
 Before a repeated allocation, simultaneously rename its previous `Recent` into
 `Summary` everywhere: object facts, view alternatives, cell contents, equalities,

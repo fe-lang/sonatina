@@ -10,6 +10,7 @@ use sonatina_parser::parse_module;
 
 use super::{
     value_state::ValueState,
+    view_index::ViewIndex,
     views::{Anchor, Guard, Index, Place, References, Root, Step},
 };
 
@@ -354,6 +355,11 @@ fn retiring_a_binding_preserves_unrelated_roots_and_invalidates_each_proof_posit
         path: vec![Step::Index(Index::Symbol(ValueId::from_u32(39)))],
     });
     refs.cache = Some(ValueId::from_u32(40));
+    assert_eq!(refs.bindings(), (33..=40).map(ValueId::from_u32).collect());
+    let owner = ValueId::from_u32(50);
+    let mut index = ViewIndex::default();
+    index.update(owner, &refs, true);
+    assert!(index.binding_candidates(ValueId::from_u32(29)).is_empty());
     // Allocation identities survive SSA rebinding; allocation itself handles
     // recent-to-summary promotion. An absent proof name needs no new snapshot.
     assert!(refs.without_binding(ValueId::from_u32(29)).is_none());
@@ -374,8 +380,16 @@ fn retiring_a_binding_preserves_unrelated_roots_and_invalidates_each_proof_posit
         }
         view.guards = BTreeSet::from([guard]);
         expected.views = BTreeSet::from([view]);
-        let rewritten = refs.without_binding(ValueId::from_u32(id)).unwrap();
-        assert_eq!(rewritten, expected, "binding {id}");
-        assert!(rewritten.without_binding(ValueId::from_u32(id)).is_none());
+        let id = ValueId::from_u32(id);
+        assert_eq!(index.binding_candidates(id), BTreeSet::from([owner]));
+        let rewritten = refs.without_binding(id).unwrap();
+        assert_eq!(rewritten, expected, "binding {id:?}");
+        assert!(rewritten.without_binding(id).is_none());
+        let mut updated = index.clone();
+        updated.update(owner, &refs, false);
+        updated.update(owner, &rewritten, true);
+        assert!(updated.binding_candidates(id).is_empty());
+        updated.update(owner, &rewritten, false);
+        assert_eq!(updated, ViewIndex::default());
     }
 }
