@@ -169,7 +169,6 @@ fn lower_function(
     ctx.create_phi_stubs()?;
     ctx.lower_non_phi_insts()?;
     ctx.patch_phi_args()?;
-    ctx.machine.rebuild_users();
 
     Ok((ctx.machine, ctx.map))
 }
@@ -255,21 +254,16 @@ impl FuncLowerCtx<'_> {
             else {
                 return Err("pending phi was not a source phi".to_string());
             };
-            let mut args = Vec::with_capacity(phi.args().len());
-            for &(value, pred) in phi.args() {
-                let value = self.lower_value(value)?;
-                let pred = self.machine_pred_block(pred)?;
-                args.push((value, pred));
-            }
-            let machine_phi =
-                <&mut control_flow::Phi as sonatina_ir::InstDowncastMut>::downcast_mut(
-                    self.machine.inst_set(),
-                    self.machine.dfg.inst_mut(machine_inst),
-                )
-                .expect("machine phi downcast failed");
-            for (value, pred) in args {
-                machine_phi.append_phi_arg(value, pred);
-            }
+            let args = phi
+                .args()
+                .iter()
+                .map(|&(value, pred)| {
+                    Ok((self.lower_value(value)?, self.machine_pred_block(pred)?))
+                })
+                .collect::<Result<control_flow::PhiArgs, String>>()?;
+            self.machine
+                .dfg
+                .edit_phi(machine_inst, |phi| *phi.args_mut() = args);
         }
         Ok(())
     }
