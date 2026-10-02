@@ -107,6 +107,17 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo check -p sonatina-codegen --features cranelift-jit --all-targets
 
+  sp1_lockfile:
+    name: SP1 lockfile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # This excluded workspace shares local crates with the root workspace.
+      # Resolve its dependencies on PRs without building the SDK or guests.
+      - name: Check SDK harness lockfile
+        run: cargo metadata --locked --manifest-path tests/sp1/Cargo.toml --format-version 1 > /dev/null
+
   sp1:
     name: SP1 RV64IM
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
