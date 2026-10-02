@@ -232,7 +232,7 @@ impl SsaBuilder {
         alias: ValueId,
     ) -> SmallVec<[InstId; 4]> {
         self.aliases.insert(value, alias);
-        func.dfg.change_to_alias_and_get_modified(value, alias)
+        func.dfg.change_to_alias(value, alias)
     }
 }
 

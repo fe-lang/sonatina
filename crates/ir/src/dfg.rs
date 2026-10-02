@@ -579,44 +579,28 @@ impl DataFlowGraph {
         Jump::new(self.inst_set().jump(), to)
     }
 
-    pub(crate) fn change_to_alias_and_get_modified(
-        &mut self,
-        value: ValueId,
-        alias: ValueId,
-    ) -> SmallVec<[InstId; 4]> {
-        if value == alias {
-            return SmallVec::new();
-        }
-
+    /// Rewrites every use of `value` to `alias` and returns the rewritten instructions.
+    pub fn change_to_alias(&mut self, value: ValueId, alias: ValueId) -> SmallVec<[InstId; 4]> {
         let users = std::mem::take(&mut self.users[value]);
         let mut modified = SmallVec::new();
-        for inst in users.iter() {
-            if !self.has_inst(*inst) {
+        for &inst in users.iter() {
+            if !self.has_inst(inst) {
                 continue;
             }
 
             let mut uses_value = false;
-            self.insts[*inst].for_each_value(&mut |user_value| {
-                uses_value |= user_value == value;
-            });
-            if !uses_value {
-                continue;
-            }
-
-            self.untrack_inst(*inst);
-            self.insts[*inst].for_each_value_mut(&mut |user_value| {
+            self.insts[inst].for_each_value_mut(&mut |user_value| {
                 if *user_value == value {
                     *user_value = alias;
+                    uses_value = true;
                 }
             });
-            self.attach_user(*inst);
-            modified.push(*inst);
+            if uses_value {
+                self.users[alias].insert(inst);
+                modified.push(inst);
+            }
         }
         modified
-    }
-
-    pub fn change_to_alias(&mut self, value: ValueId, alias: ValueId) {
-        self.change_to_alias_and_get_modified(value, alias);
     }
 
     pub fn delete_inst(&mut self, inst_id: InstId) {
