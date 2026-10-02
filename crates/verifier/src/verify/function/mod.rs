@@ -60,6 +60,7 @@ pub(super) struct FunctionVerifier<'a> {
     pub(super) reachable: FxHashSet<BlockId>,
     pub(super) idom: FxHashMap<BlockId, BlockId>,
     analysis_cfg: analysis::AnalysisCfg,
+    pub(super) enum_index_bindings: FxHashSet<ValueId>,
 }
 
 trait FunctionPass {
@@ -161,6 +162,7 @@ impl<'a> FunctionVerifier<'a> {
             reachable: FxHashSet::default(),
             idom: FxHashMap::default(),
             analysis_cfg: analysis::AnalysisCfg::default(),
+            enum_index_bindings: FxHashSet::default(),
         }
     }
 

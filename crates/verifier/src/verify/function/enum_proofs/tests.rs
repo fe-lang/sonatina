@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use super::{FunctionVerifier, objects::State, solve, transfer};
 use crate::VerifierConfig;
 use sonatina_ir::{
@@ -8,7 +10,7 @@ use sonatina_parser::parse_module;
 
 use super::{
     value_state::ValueState,
-    views::{Index, References, Root, Step},
+    views::{Anchor, Guard, Index, Place, References, Root, Step},
 };
 
 #[test]
@@ -324,4 +326,56 @@ block0:
             .clone();
         assert!(state.contents(ctx, &captured, ty).active(1));
     });
+}
+
+#[test]
+fn retiring_a_binding_preserves_unrelated_roots_and_invalidates_each_proof_position() {
+    let root = Root::Recent(ValueId::from_u32(29));
+    let mut refs = References::root(root);
+    let mut view = refs.views.pop_first().unwrap();
+    view.place
+        .path
+        .push(Step::Index(Index::Symbol(ValueId::from_u32(33))));
+    view.guards.insert(Guard {
+        place: Place {
+            root,
+            path: vec![Step::Index(Index::Symbol(ValueId::from_u32(34)))],
+        },
+        variant: 1,
+        witness: Some(ValueId::from_u32(35)),
+        anchor: Some(Anchor {
+            value: ValueId::from_u32(36),
+            path: vec![Step::Index(Index::Symbol(ValueId::from_u32(37)))],
+        }),
+    });
+    refs.views.insert(view);
+    refs.anchors.insert(Anchor {
+        value: ValueId::from_u32(38),
+        path: vec![Step::Index(Index::Symbol(ValueId::from_u32(39)))],
+    });
+    refs.cache = Some(ValueId::from_u32(40));
+    // Allocation identities survive SSA rebinding; allocation itself handles
+    // recent-to-summary promotion. An absent proof name needs no new snapshot.
+    assert!(refs.without_binding(ValueId::from_u32(29)).is_none());
+    assert!(refs.without_binding(ValueId::from_u32(41)).is_none());
+    for id in [33, 34, 35, 36, 37, 38, 39, 40] {
+        let mut expected = refs.clone();
+        let mut view = expected.views.pop_first().unwrap();
+        let mut guard = view.guards.pop_first().unwrap();
+        match id {
+            33 => view.place.path = vec![Step::Index(Index::Unknown)],
+            34 => guard.place.path = vec![Step::Index(Index::Unknown)],
+            35 => guard.witness = None,
+            36 => guard.anchor = None,
+            37 => guard.anchor.as_mut().unwrap().path = vec![Step::Index(Index::Unknown)],
+            38 | 39 => expected.anchors.clear(),
+            40 => expected.cache = None,
+            _ => unreachable!(),
+        }
+        view.guards = BTreeSet::from([guard]);
+        expected.views = BTreeSet::from([view]);
+        let rewritten = refs.without_binding(ValueId::from_u32(id)).unwrap();
+        assert_eq!(rewritten, expected, "binding {id}");
+        assert!(rewritten.without_binding(ValueId::from_u32(id)).is_none());
+    }
 }

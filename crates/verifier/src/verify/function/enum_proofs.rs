@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use rustc_hash::FxHashSet;
 use sonatina_ir::{
     BlockId, Type,
-    inst::{control_flow, downcast},
+    inst::{control_flow, data, downcast},
     types::CompoundType,
 };
 
@@ -96,6 +96,25 @@ pub(super) fn verify(verifier: &mut FunctionVerifier<'_>) {
     }
     if !enumeration {
         return;
+    }
+    // Only these operands can become symbolic paths in `transfer::index`.
+    // Read the validated instructions directly: Standard verification does not
+    // require a valid cached DFG user list.
+    verifier.enum_index_bindings.clear();
+    for &id in verifier.block_to_insts.values().flatten() {
+        let inst = verifier.func.dfg.inst(id);
+        let is = verifier.ctx.inst_set;
+        if let Some(proj) = downcast::<&data::ObjProj>(is, inst) {
+            verifier
+                .enum_index_bindings
+                .extend(proj.values().iter().skip(1));
+        } else if let Some(proj) = downcast::<&data::ObjIndex>(is, inst) {
+            verifier.enum_index_bindings.insert(*proj.index());
+        } else if let Some(insert) = downcast::<&data::InsertValue>(is, inst) {
+            verifier.enum_index_bindings.insert(*insert.idx());
+        } else if let Some(extract) = downcast::<&data::ExtractValue>(is, inst) {
+            verifier.enum_index_bindings.insert(*extract.idx());
+        }
     }
     let mut entries = solve(verifier);
     for block in verifier.block_order.clone() {
@@ -231,20 +250,27 @@ fn phis(verifier: &FunctionVerifier<'_>, state: &mut State, pred: Option<BlockId
         for &old in &ids {
             value.forget_index(ctx, old);
         }
-        value.visit_references(ctx, &mut |refs| refs.substitute(&ids, &aliases, &named));
+        value.visit_references(ctx, &mut |refs| {
+            let mut rewritten = refs.clone();
+            rewritten.substitute(&ids, &aliases, &named);
+            (rewritten != *refs).then_some(rewritten)
+        });
         if let Some(fact) = fact {
             for &old in &ids {
                 fact.value.forget_index(ctx, old);
             }
-            fact.value
-                .visit_references(ctx, &mut |refs| refs.substitute(&ids, &aliases, &named));
+            fact.value.visit_references(ctx, &mut |refs| {
+                let mut rewritten = refs.clone();
+                rewritten.substitute(&ids, &aliases, &named);
+                (rewritten != *refs).then_some(rewritten)
+            });
         }
     }
     for (_, refs, _) in &mut observations {
         refs.substitute(&ids, &aliases, &named);
     }
     for &id in &ids {
-        state.prepare_binding(ctx, id);
+        state.prepare_binding(verifier, id);
     }
     for (id, _, mut value, fact) in incoming {
         if fact.is_some() {
